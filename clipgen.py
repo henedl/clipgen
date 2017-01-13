@@ -9,6 +9,9 @@ REENCODING = False
 FILEFORMAT = '.mp4'
 VERSIONNUM = '0.2.3'
 
+# What is this?
+# This script will help quickly cut out video snippets in user reserach videos, based on researcher's timestamps in a spreadsheet!
+
 # TODO
 # Quality of life:
 # 	- Allow for comma separation and not just + for multiple timestamps in the same cell
