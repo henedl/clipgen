@@ -22,6 +22,7 @@ VERSIONNUM = '0.2.3'
 #	- There are many other types of name list interactions possible, perhaps generate a numerically sorted list and allow selection by just giving a number?
 #	- Case insensitivity for sheet name entry
 #	- Stop requiring spaces between multiple clips (a + should be enough)
+#	- Being able to change participant column names (to accomodate stuff like day01 day02 etc) - see clipgen_macgyver version, or lines with userNum
 # Programming stuff:
 # 	- Probably break out input-parsing to a separate method (just pass it a list of what to accept, what to not accept and error messages?)
 # 	- It would be much faster to just dump all the contents of the sheet in to a list and work with that (also supported by gspread)
