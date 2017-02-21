@@ -190,7 +190,7 @@ def clean_issue(issue):
 		if unparsedTimes[i] == '':
 			pass
 		elif unparsedTimes[i].find('interview') != -1:
-			issue['interview'] = len(timeStamps)
+			issue['interview'] = 'yes' #TODO Change this to a boolean, dirty fix imported from spaghetti-land
 			# The reason we use i+1 everywhere in this block is because of us doing the advancing at the end. Should probably still work if we moved the next() up top here.
 			if unparsedTimes[i+1].find('-') >= 0:
 				if unparsedTimes[i+1][unparsedTimes[i+1].find('-')-1].isdigit():
@@ -403,7 +403,7 @@ def main():
 							ipair = ipairList[k]
 							#print ipair
 						#print '{0},{1},{2}'.format(ipairList[k],timesList[i]['participant'],ipairList[k].find(timesList[i]['participant']))
-					if timesList[i]['interview'] == j:
+					if timesList[i]['interview'] == 'yes':
 						baseVideo = timesList[i]['study'] + '_interview_p' + ipair  + FILEFORMAT
 					else:
 						baseVideo = timesList[i]['study'] + '_p' + timesList[i]['participant']  + FILEFORMAT
