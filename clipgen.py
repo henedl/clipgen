@@ -34,6 +34,7 @@ VERSIONNUM = '0.2.3'
 #	- Except connection timeouts (probably except gspread.exceptions.HTTPError on line 29?)
 #	- Logging of which timestamps are discarded
 #	- Gracefully handle connection timeouts (look into gspread code)
+#	- Debug mode (with multiple levels?) throughout the code
 # Batch improvements:
 # 	- Implement the special character to select only one video to be rendered, out of several
 # 	- Add support for special tokens like * for starred video clip (this can be added to the dict as 'starred' and then read in the main loop)
@@ -190,7 +191,7 @@ def clean_issue(issue):
 		if unparsedTimes[i] == '':
 			pass
 		elif unparsedTimes[i].find('interview') != -1:
-			issue['interview'] = 'yes' #TODO Change this to a boolean, dirty fix imported from spaghetti-land
+			issue['interview'] = True
 			# The reason we use i+1 everywhere in this block is because of us doing the advancing at the end. Should probably still work if we moved the next() up top here.
 			if unparsedTimes[i+1].find('-') >= 0:
 				if unparsedTimes[i+1][unparsedTimes[i+1].find('-')-1].isdigit():
@@ -403,7 +404,7 @@ def main():
 							ipair = ipairList[k]
 							#print ipair
 						#print '{0},{1},{2}'.format(ipairList[k],timesList[i]['participant'],ipairList[k].find(timesList[i]['participant']))
-					if timesList[i]['interview'] == 'yes':
+					if timesList[i]['interview']:
 						baseVideo = timesList[i]['study'] + '_interview_p' + ipair  + FILEFORMAT
 					else:
 						baseVideo = timesList[i]['study'] + '_p' + timesList[i]['participant']  + FILEFORMAT
