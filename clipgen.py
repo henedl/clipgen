@@ -7,7 +7,8 @@ from oauth2client.service_account import ServiceAccountCredentials
 # Constants 
 REENCODING = False
 FILEFORMAT = '.mp4'
-VERSIONNUM = '0.2.3'
+VERSIONNUM = '0.2.4'
+DEBUGGING  = False
 
 # What is this?
 # This script will help quickly cut out video snippets in user reserach videos, based on researcher's timestamps in a spreadsheet!
@@ -190,7 +191,7 @@ def clean_issue(issue):
 		if unparsedTimes[i] == '':
 			pass
 		elif unparsedTimes[i].find('interview') != -1:
-			issue['interview'] = 'yes' #TODO Change this to a boolean, dirty fix imported from spaghetti-land
+			issue['interview'] = True
 			# The reason we use i+1 everywhere in this block is because of us doing the advancing at the end. Should probably still work if we moved the next() up top here.
 			if unparsedTimes[i+1].find('-') >= 0:
 				if unparsedTimes[i+1][unparsedTimes[i+1].find('-')-1].isdigit():
@@ -387,7 +388,7 @@ def main():
 			# - study 			String, name of the study
 			# - participant 	String, participant ID (without prefix)
 			# - times 			List, contains one timestamp pair (as a tuple) per index
-			# - interview 		
+			# - interview 		Boolean
 			# Note that the 'times' entry in the dict is generated during the clean_issue method call.
 
 			timesList[i] = clean_issue(timesList[i])
@@ -403,7 +404,7 @@ def main():
 							ipair = ipairList[k]
 							#print ipair
 						#print '{0},{1},{2}'.format(ipairList[k],timesList[i]['participant'],ipairList[k].find(timesList[i]['participant']))
-					if timesList[i]['interview'] == 'yes':
+					if timesList[i]['interview']:
 						baseVideo = timesList[i]['study'] + '_interview_p' + ipair  + FILEFORMAT
 					else:
 						baseVideo = timesList[i]['study'] + '_p' + timesList[i]['participant']  + FILEFORMAT
