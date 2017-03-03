@@ -18,7 +18,6 @@ DEBUGGING  = False
 # 	- Allow for comma separation and not just + for multiple timestamps in the same cell
 # 	- Settings, at least the ability to change fileformat, reencoding and other overarching options, without editing code
 #	- Project names with spaces: attempt to resolve files as both "xystonPike" and "xyston_pike"?
-#	- Add a "latest" entry for name, just gather the name list of available documents and submit the first one!
 #	- Autocompletion for name list stuff?
 #	- There are many other types of name list interactions possible, perhaps generate a numerically sorted list and allow selection by just giving a number?
 #	- Case insensitivity for sheet name entry
@@ -35,6 +34,8 @@ DEBUGGING  = False
 #	- Except connection timeouts (probably except gspread.exceptions.HTTPError on line 29?)
 #	- Logging of which timestamps are discarded
 #	- Gracefully handle connection timeouts (look into gspread code)
+#	- Upgrade to Python 3
+#	- gspread should reauthorize (either after an extended time when it fails out, or whenever a new loop begins)
 # Batch improvements:
 # 	- Implement the special character to select only one video to be rendered, out of several
 # 	- Add support for special tokens like * for starred video clip (this can be added to the dict as 'starred' and then read in the main loop)
@@ -327,7 +328,7 @@ def main():
 	inputFileFails = 0
 
 	while True:
-		inputName = raw_input('Please enter the name, URL or key of the spreadsheet (\'all\' for list):\n>> ')
+		inputName = raw_input('Please enter the name, URL or key of the spreadsheet (\'all\' for list, \'last\' for latest'):\n>> ')
 		# TODO
 		# Refactor this try statement to be much smaller
 		try:
@@ -336,6 +337,9 @@ def main():
 				break
 			elif inputName[:3] == 'all':
 				print '\nAvailable documents: {0}\n'.format(get_alldocs(gc))
+			elif inputName[:4] == 'last':
+				worksheet = gc.open(get_alldocs(gc).split(',')[0])
+				break
 			elif inputName.find(' ') == -1:
 				worksheet = gc.open_by_key(inputName).sheet1
 				break
