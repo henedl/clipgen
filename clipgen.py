@@ -328,7 +328,7 @@ def main():
 	inputFileFails = 0
 
 	while True:
-		inputName = raw_input('Please enter the name, URL or key of the spreadsheet (\'all\' for list, \'last\' for latest'):\n>> ')
+		inputName = raw_input('Please enter the name, URL or key of the spreadsheet (\'all\' for list,\n 						      \'last\' for latest):\n>> ')
 		# TODO
 		# Refactor this try statement to be much smaller
 		try:
@@ -338,7 +338,9 @@ def main():
 			elif inputName[:3] == 'all':
 				print '\nAvailable documents: {0}\n'.format(get_alldocs(gc))
 			elif inputName[:4] == 'last':
-				worksheet = gc.open(get_alldocs(gc).split(',')[0])
+				latest = get_alldocs(gc).split(',')[0]
+				print 'Opening {0}'.format(latest)
+				worksheet = gc.open(latest)
 				break
 			elif inputName.find(' ') == -1:
 				worksheet = gc.open_by_key(inputName).sheet1
