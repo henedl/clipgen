@@ -7,7 +7,8 @@ from oauth2client.service_account import ServiceAccountCredentials
 # Constants 
 REENCODING = False
 FILEFORMAT = '.mp4'
-VERSIONNUM = '0.2.3'
+VERSIONNUM = '0.2.4'
+DEBUGGING  = False
 
 # What is this?
 # This script will help quickly cut out video snippets in user reserach videos, based on researcher's timestamps in a spreadsheet!
