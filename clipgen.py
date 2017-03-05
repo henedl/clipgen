@@ -7,7 +7,7 @@ from oauth2client.service_account import ServiceAccountCredentials
 # Constants 
 REENCODING = False
 FILEFORMAT = '.mp4'
-VERSIONNUM = '0.2.4'
+VERSIONNUM = '0.2.5'
 DEBUGGING  = False
 
 # What is this?
@@ -23,6 +23,7 @@ DEBUGGING  = False
 #	- Case insensitivity for sheet name entry
 #	- Stop requiring spaces between multiple clips (a + should be enough)
 #	- Being able to change participant column names (to accomodate stuff like day01 day02 etc) - see clipgen_macgyver version, or lines with userNum
+#	- Sanity checking video length (videos longer than X seconds are not likely, so ping the user before cutting - or in post cut presentation?)
 # Programming stuff:
 # 	- Probably break out input-parsing to a separate method (just pass it a list of what to accept, what to not accept and error messages?)
 # 	- It would be much faster to just dump all the contents of the sheet in to a list and work with that (also supported by gspread)
@@ -37,6 +38,7 @@ DEBUGGING  = False
 #	- Debug mode (with multiple levels?) throughout the code
 #	- Upgrade to Python 3
 #	- gspread should reauthorize (either after an extended time when it fails out, or whenever a new loop begins)
+#	- Refactor try statements to be smaller
 # Batch improvements:
 # 	- Implement the special character to select only one video to be rendered, out of several
 # 	- Add support for special tokens like * for starred video clip (this can be added to the dict as 'starred' and then read in the main loop)
@@ -48,7 +50,7 @@ DEBUGGING  = False
 #	- Cropping and timelapsing! For example generate a timelapse of the minimap in TWY or EU.
 
 # Goes through sheet, bundles values from timestamp columns and descriptions columns into tuples.
-def generate_list(sheet, mode):
+def generate_list(sheet, mode, type='Default'):
 	numRow = sheet.row_count
 	numCol = sheet.col_count
 	p = sheet.find('Participants') # Find pariticpant listing coords.
@@ -79,27 +81,30 @@ def generate_list(sheet, mode):
 
 	if mode == 'batch':
 		latestCategory = ''
-		for j in range(p.col, p.col + numUsers):	
-			for i in range(p.row + 2, numRow - p.col):
-				if sheet.cell(i, m.col).value == 'T':
-					latestCategory = sheet.cell(i, s.col).value
-					print '+ Found category \'{0}\' on line {1}.'.format(latestCategory, i)
-				val = sheet.cell(i, j)
-				if val.value is None:
-					# Discard empty cells.
-					pass
-				elif val.value == '':
-					# Discard empty cells.
-					pass
-				else:
-					# TODO
-					# Probably rename issue to something better
-					# Clear up userNum assignment so that the code is easier to understand (and rename j)
-					userNum = double_digits(str(j-p.col+1))
-					issue = { 'cell': val, 'desc': sheet.cell(i, s.col).value, 'study': studyName, 'participant': userNum, 'category': latestCategory }
-					times.append(issue)
-					print '+ Found timestamp: {0}'.format(val.value)
+		if type == 'Default':
+			for j in range(p.col, p.col + numUsers):	
+				for i in range(p.row + 2, numRow - p.col):
+					if sheet.cell(i, m.col).value == 'T':
+						latestCategory = sheet.cell(i, s.col).value
+						print '+ Found category \'{0}\' on line {1}.'.format(latestCategory, i)
+					val = sheet.cell(i, j)
+					if val.value is None:
+						# Discard empty cells.
+						pass
+					elif val.value == '':
+						# Discard empty cells.
+						pass
+					else:
+						# TODO
+						# Clear up userNum assignment so that the code is easier to understand (and rename j)
+						userNum = double_digits(str(j-p.col+1))
+						issue = { 'cell': val, 'desc': sheet.cell(i, s.col).value, 'study': studyName, 'participant': userNum, 'category': latestCategory }
+						times.append(issue)
+						print '+ Found timestamp: {0}'.format(val.value)
+		elif type == 'Positive':
+			pass
 	elif mode == 'line':
+		# This mode generates videos for a single line/row number.
 		latestCategory = ''
 		while True:
 			try:
@@ -141,6 +146,41 @@ def generate_list(sheet, mode):
 				times.append(issue)
 				print '+ Found timestamp: {0}'.format(val.value.replace('\n',' '))
 	elif mode == 'range':
+		# This mode generates videos for all issues found in a range or span of issues.
+		latestCategory = ''
+		while True:
+			try:
+				startLineSelect = int(raw_input('\nWhich starting line (row number only)?\n>> '))
+				endLineSelect = int(raw_input('\nWhich ending line (row number only)?\n>> '))
+			except ValueError:
+				lineSelect = int(raw_input('\nTry again. Integer only.\n>> '))
+			print 'Lines selected: {0}'.format(sheet.cell(lineSelect, s.col).value)
+			yn = raw_input('Is this correct? y/n\n>> ')
+			if yn == 'y':
+				break
+			else:
+				pass
+		for j in range(p.col, p.col + numUsers):
+			for i in range(startLineSelect, endLineSelect):
+				if sheet.cell(i, m.col).value == 'T':
+					latestCategory = sheet.cell(i, s.col).value
+					print '+ Found category \'{0}\' on line {1}.'.format(latestCategory, i)
+				val = sheet.cell(i, j)
+				if val.value is None:
+					# Discard empty cells.
+					pass
+				elif val.value == '':
+					# Discard empty cells.
+					pass
+				else:
+					# TODO
+					# Clear up userNum assignment so that the code is easier to understand (and rename j)
+					userNum = double_digits(str(j-p.col+1))
+					issue = { 'cell': val, 'desc': sheet.cell(i, s.col).value, 'study': studyName, 'participant': userNum, 'category': latestCategory }
+					times.append(issue)
+					print '+ Found timestamp: {0}'.format(val.value)
+	elif mode == 'select':
+		# This mode generates a list of non-completed issues and lets user select from those.
 		pass
 
 	return times
@@ -238,6 +278,7 @@ def ffmpeg(inputfile, outputfile, startpos, outpos, reencode):
 	# TODO
 	# Protect against negative duration
 	# Protect against videos that have an outtime beyond base video length
+	# Protect against unreasonably long clips
 
 	# DEBUG
 	# Just makes the clip a minute long if we didn't get an in-time
@@ -291,16 +332,11 @@ def add_duration(intime):
 		return double_digits(str(intimeDatetime.hour)) + ':' + double_digits(str(intimeDatetime.minute+1)) + ':' + double_digits(str(intimeDatetime.second))
 
 # Comma-separated list of all accesible Google Spreadsheets
-def get_alldocs(connection, style='csv'):
+def get_alldocs(connection):
 	docs = []
 	for doc in connection.openall():
 		docs.append(doc.title)
-	if style == 'csv':
-		return ', '.join(docs)
-	elif style == 'bullet':
-		# TODO
-		# Build a bullet list generator
-		return None
+	return ', '.join(docs)
 
 def main():
 	# Change working directory to place of python script.
@@ -329,15 +365,21 @@ def main():
 	inputFileFails = 0
 
 	while True:
-		inputName = raw_input('Please enter the name, URL or key of the spreadsheet (\'all\' for list,\n 						      \'last\' for latest):\n>> ')
-		# TODO
-		# Refactor this try statement to be much smaller
+		inputName = raw_input('Please enter the name, URL or key of the spreadsheet (\'all\' for list,\'new\' for list of newest\n 						      \'last\' for latest):\n>> ')
 		try:
 			if inputName[:4] == 'http':
 				worksheet = gc.open_by_url(inputName).sheet1
 				break
 			elif inputName[:3] == 'all':
-				print '\nAvailable documents: {0}\n'.format(get_alldocs(gc))
+				docList = get_alldocs(gc)
+				print '\nAvailable documents:\n'
+				for i in len(docList):
+					print '* {0}\n'.format(docList[i-1])
+			elif inputName[:3] == 'new':
+				docList = get_alldocs(gc)
+				print '\nAvailable documents:\n'
+				for i in range(5):
+					print '* {0}\n'.format(docList[i-1])
 			elif inputName[:4] == 'last':
 				latest = get_alldocs(gc).split(',')[0]
 				print 'Opening {0}'.format(latest)
@@ -355,7 +397,7 @@ def main():
 				print '\nDid not find spreadsheet. Please try again.'
 			else:
 				print '\n###############################################################################'
-				print 'Remember that you need to share the spreadsheet you want to parse. Share it with the user listed in the json-file, as the value of client_email.'
+				print 'Remember that you need to share the spreadsheet you want to parse. Share it with the user listed in the json-file (value of client_email).'
 				print '\nThis needs to be done on a per-document basis.'
 				print '\nAvailable documents: {0}'.format(get_alldocs(gc))
 				print '###############################################################################\n'
@@ -365,7 +407,7 @@ def main():
 
 	while True:
 		while True:
-			inputMode = raw_input('\nSelect mode: (b)atch or (l)ine\n>> ')
+			inputMode = raw_input('\nSelect mode: (b)atch, (r)ange or (l)ine\n>> ')
 			try:
 				if inputMode[0] == 'b' or inputMode == 'batch':
 					timesList = generate_list(worksheet, 'batch')
@@ -373,6 +415,12 @@ def main():
 				elif inputMode[0] == 'l' or inputMode == 'line':
 					timesList = generate_list(worksheet, 'line')
 					break
+				elif inputMode[0] == 'r' or inputMode == 'range':
+					timesList = generate_list(worksheet, 'range')
+					break
+				#elif inputMode[0] == 's' or inputMode == 'select':
+				#	timesList = generate_list(worksheet, 'select')
+				#	break
 				elif inputMode == 'karl':
 					plogo()
 			except IndexError as e:
