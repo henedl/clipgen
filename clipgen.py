@@ -375,11 +375,11 @@ def main():
 					print '{0}. {1}'.format(i+1, docList[i].strip())
 			elif inputName[:4] == 'last':
 				latest = get_alldocs(gc).split(',')[0]
-				worksheet = gc.open(latest)
+				worksheet = gc.open(latest).sheet1
   				break
   			elif inputName[0].isdigit():
   				i = int(inputName)-1
-  				worksheet = gc.open(get_alldocs(gc).split(',')[i].strip())
+  				worksheet = gc.open(get_alldocs(gc).split(',')[i].strip()).sheet1
   				break
 			elif inputName.find(' ') == -1:
 				worksheet = gc.open_by_key(inputName).sheet1
