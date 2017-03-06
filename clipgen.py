@@ -7,7 +7,7 @@ from oauth2client.service_account import ServiceAccountCredentials
 # Constants 
 REENCODING = False
 FILEFORMAT = '.mp4'
-VERSIONNUM = '0.2.5'
+VERSIONNUM = '0.2.6'
 DEBUGGING  = False
 
 # What is this?
@@ -22,7 +22,6 @@ DEBUGGING  = False
 #	- There are many other types of name list interactions possible, perhaps generate a numerically sorted list and allow selection by just giving a number?
 #	- Case insensitivity for sheet name entry
 #	- Stop requiring spaces between multiple clips (a + should be enough)
-#	- Being able to change participant column names (to accomodate stuff like day01 day02 etc) - see clipgen_macgyver version, or lines with userNum
 #	- Sanity checking video length (videos longer than X seconds are not likely, so ping the user before cutting - or in post cut presentation?)
 # Programming stuff:
 # 	- Probably break out input-parsing to a separate method (just pass it a list of what to accept, what to not accept and error messages?)
@@ -95,10 +94,7 @@ def generate_list(sheet, mode, type='Default'):
 						# Discard empty cells.
 						pass
 					else:
-						# TODO
-						# Clear up userNum assignment so that the code is easier to understand (and rename j)
-						userNum = double_digits(str(j-p.col+1))
-						issue = { 'cell': val, 'desc': sheet.cell(i, s.col).value, 'study': studyName, 'participant': userNum, 'category': latestCategory }
+						issue = { 'cell': val, 'desc': sheet.cell(i, s.col).value, 'study': studyName, 'participant': sheet.cell(j, i).value, 'category': latestCategory }
 						times.append(issue)
 						print '+ Found timestamp: {0}'.format(val.value)
 		elif type == 'Positive':
@@ -141,8 +137,7 @@ def generate_list(sheet, mode, type='Default'):
 				# Discard empty cells.
 				pass
 			else:
-				userNum = double_digits(str(j-p.col+1))
-				issue = { 'cell': val, 'desc': sheet.cell(lineSelect, s.col).value, 'study': studyName, 'participant': userNum, 'category': latestCategory }
+				issue = { 'cell': val, 'desc': sheet.cell(lineSelect, s.col).value, 'study': studyName, 'participant': sheet.cell(j, i).value, 'category': latestCategory }
 				times.append(issue)
 				print '+ Found timestamp: {0}'.format(val.value.replace('\n',' '))
 	elif mode == 'range':
@@ -173,10 +168,7 @@ def generate_list(sheet, mode, type='Default'):
 					# Discard empty cells.
 					pass
 				else:
-					# TODO
-					# Clear up userNum assignment so that the code is easier to understand (and rename j)
-					userNum = double_digits(str(j-p.col+1))
-					issue = { 'cell': val, 'desc': sheet.cell(i, s.col).value, 'study': studyName, 'participant': userNum, 'category': latestCategory }
+					issue = { 'cell': val, 'desc': sheet.cell(i, s.col).value, 'study': studyName, 'participant': sheet.cell(j, i).value, 'category': latestCategory }
 					times.append(issue)
 					print '+ Found timestamp: {0}'.format(val.value)
 	elif mode == 'select':
