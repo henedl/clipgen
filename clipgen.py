@@ -358,7 +358,7 @@ def main():
 	inputFileFails = 0
 
 	while True:
-		inputName = raw_input('\nPlease enter the name, URL or key of the spreadsheet (\'all\' for list, \'new\' for list of newest, \'last\' for latest):\n>> ')
+		inputName = raw_input('\nPlease enter the index, name, URL or key of the spreadsheet (\'all\' for list,    \'new\' for list of newest, \'last\' to immediately open latest):\n>> ')
 		try:
 			if inputName[:4] == 'http':
 				worksheet = gc.open_by_url(inputName).sheet1
@@ -367,20 +367,19 @@ def main():
 				docList = get_alldocs(gc).split(',')
 				print '\nAvailable documents:'
 				for i in range(len(docList)):
-					print '* {0}'.format(docList[i].strip())
+					print '{0}. {1}'.format(i+1, docList[i].strip())
 			elif inputName[:3] == 'new':
 				docList = get_alldocs(gc).split(',')
 				print '\nNewest documents:'
-				for i in range(5):
+				for i in range(3):
 					print '{0}. {1}'.format(i+1, docList[i].strip())
-				# TODO
-				# Add an additional input here so that you don't have to type in the whole Sheet name.
-				# The underlying issue is that break doesn't work if we put it in another, nested, loop - need to refactor this input chain.
-				# additionalInput = raw_input('\nUse any of these? (int only)\n>> ')
 			elif inputName[:4] == 'last':
 				latest = get_alldocs(gc).split(',')[0]
-				print 'Opening {0}'.format(latest)
 				worksheet = gc.open(latest)
+  				break
+  			elif inputName[0].isdigit():
+  				i = int(inputName)-1
+  				worksheet = gc.open(get_alldocs(gc).split(',')[i].strip())
   				break
 			elif inputName.find(' ') == -1:
 				worksheet = gc.open_by_key(inputName).sheet1
@@ -399,7 +398,7 @@ def main():
 				print '\nAvailable documents: {0}'.format(get_alldocs(gc))
 				print '###############################################################################\n'
 
-	print 'Connected to Google Drive!'
+	print 'Connected to Google Drive! Using Sheet: {0}'.format(worksheet.title)
 	inputModeFails = 0
 
 	while True:
