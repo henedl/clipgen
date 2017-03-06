@@ -291,8 +291,9 @@ def ffmpeg(inputfile, outputfile, startpos, outpos, reencode):
 		subprocess.call(['ffmpeg', '-y', '-loglevel', '16', '-ss', startpos, '-i', inputfile, '-t', str(duration), outputfile])
 	print '+ Generated video \'{0}\' successfully.\n File size: {1}\n Expected duration: {2} s\n'.format(outputfile,filesize(os.path.getsize(outputfile)), duration)
 
+# Returns the duration of a clip as seconds
 def get_duration(intime, outtime):
-	dur = 0
+	duration = 0
 	try:
 		intimeDatetime = datetime.strptime(intime,'%H:%M:%S')
 		outtimeDatetime = datetime.strptime(outtime,'%H:%M:%S')
@@ -311,9 +312,9 @@ def get_duration(intime, outtime):
 	hDelta = (outtimeDatetime.hour - intimeDatetime.hour)*60*60
 	mDelta = (outtimeDatetime.minute - intimeDatetime.minute)*60
 	sDelta = (outtimeDatetime.second - intimeDatetime.second)
-	dur = hDelta + mDelta + sDelta
+	duration = hDelta + mDelta + sDelta
 
-	return dur
+	return duration
 
 # Just adds a minute
 def add_duration(intime):
@@ -323,7 +324,7 @@ def add_duration(intime):
 	else:	
 		return double_digits(str(intimeDatetime.hour)) + ':' + double_digits(str(intimeDatetime.minute+1)) + ':' + double_digits(str(intimeDatetime.second))
 
-# Comma-separated list of all accesible Google Spreadsheets
+# Comma-separated list of all accessible Google Spreadsheets
 def get_alldocs(connection):
 	docs = []
 	for doc in connection.openall():
