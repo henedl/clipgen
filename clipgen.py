@@ -335,7 +335,7 @@ def main():
 	# Change working directory to place of python script.
 	os.chdir(os.path.dirname(os.path.abspath(__file__)))
 	print '-------------------------------------------------------------------------------'
-	print 'Welcome to clipgen v{1}, for use by Paradox User Research\n\nWorking directory: {0}\nPlace video files and the oauth.json file in this directory.\n'.format(os.getcwd(), VERSIONNUM)
+	print 'Welcome to clipgen v{1}, for use by Paradox User Research\n\nWorking directory: {0}\nPlace video files and the oauth.json file in this directory.'.format(os.getcwd(), VERSIONNUM)
 	
 	# Remember that documents need to be shared to the email found in the json-file for OAuth-ing to work.
 	# Each user of this program should also have their own, unique json-file (generate this on the Google Developer API website).
@@ -358,21 +358,25 @@ def main():
 	inputFileFails = 0
 
 	while True:
-		inputName = raw_input('Please enter the name, URL or key of the spreadsheet (\'all\' for list,\'new\' for list of newest\n 						      \'last\' for latest):\n>> ')
+		inputName = raw_input('\nPlease enter the name, URL or key of the spreadsheet (\'all\' for list, \'new\' for list of newest, \'last\' for latest):\n>> ')
 		try:
 			if inputName[:4] == 'http':
 				worksheet = gc.open_by_url(inputName).sheet1
 				break
 			elif inputName[:3] == 'all':
-				docList = get_alldocs(gc)
-				print '\nAvailable documents:\n'
-				for i in len(docList):
-					print '* {0}\n'.format(docList[i-1])
+				docList = get_alldocs(gc).split(',')
+				print '\nAvailable documents:'
+				for i in range(len(docList)):
+					print '* {0}'.format(docList[i].strip())
 			elif inputName[:3] == 'new':
-				docList = get_alldocs(gc)
-				print '\nAvailable documents:\n'
+				docList = get_alldocs(gc).split(',')
+				print '\nNewest documents:'
 				for i in range(5):
-					print '* {0}\n'.format(docList[i-1])
+					print '{0}. {1}'.format(i+1, docList[i].strip())
+				# TODO
+				# Add an additional input here so that you don't have to type in the whole Sheet name.
+				# The underlying issue is that break doesn't work if we put it in another, nested, loop - need to refactor this input chain.
+				# additionalInput = raw_input('\nUse any of these? (int only)\n>> ')
 			elif inputName[:4] == 'last':
 				latest = get_alldocs(gc).split(',')[0]
 				print 'Opening {0}'.format(latest)
