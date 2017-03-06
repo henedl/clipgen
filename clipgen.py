@@ -7,8 +7,10 @@ from oauth2client.service_account import ServiceAccountCredentials
 # Constants 
 REENCODING = False
 FILEFORMAT = '.mp4'
-VERSIONNUM = '0.2.6'
+VERSIONNUM = '0.2.7'
+SHEET_NAME = 'data set'
 DEBUGGING  = False
+
 
 # What is this?
 # This script will help quickly cut out video snippets in user reserach videos, based on researcher's timestamps in a spreadsheet!
@@ -20,16 +22,13 @@ DEBUGGING  = False
 #	- Project names with spaces: attempt to resolve files as both "xystonPike" and "xyston_pike"?
 #	- Autocompletion for name list stuff?
 #	- There are many other types of name list interactions possible, perhaps generate a numerically sorted list and allow selection by just giving a number?
-#	- Case insensitivity for sheet name entry
 #	- Stop requiring spaces between multiple clips (a + should be enough)
 #	- Sanity checking video length (videos longer than X seconds are not likely, so ping the user before cutting - or in post cut presentation?)
 # Programming stuff:
 # 	- Probably break out input-parsing to a separate method (just pass it a list of what to accept, what to not accept and error messages?)
 # 	- It would be much faster to just dump all the contents of the sheet in to a list and work with that (also supported by gspread)
-# 	- We should check for file name length, max 255 (including suffix)
 # 	- Cleaner variable names (even for things relating to iterators - ipairList, really?)
 #	- Also, naming consistency, currently there is some camel case and some underscores, etc
-#	- Make sure that the script does its work on the sheet named "data set" (+ support for selecting other tabs)
 #	- Except ffmpeg crashes/errors
 #	- Except connection timeouts (probably except gspread.exceptions.HTTPError on line 29?)
 #	- Logging of which timestamps are discarded
@@ -50,8 +49,6 @@ DEBUGGING  = False
 
 # Goes through sheet, bundles values from timestamp columns and descriptions columns into tuples.
 def generate_list(sheet, mode, type='Default'):
-	numRow = sheet.row_count
-	numCol = sheet.col_count
 	p = sheet.find('Participants') # Find pariticpant listing coords.
 	m = sheet.find('Meta') # Find the meta tag coords.
 	s = sheet.find('Summary')
@@ -72,7 +69,7 @@ def generate_list(sheet, mode, type='Default'):
 	# Figure out how many users we have in the sheet (assumes every user is indicated by a 'PXX' identifier)
 	numUsers = 0
 	userList = sheet.row_values(p.row+1)
-	for j in range(0, numCol-p.col):
+	for j in range(0, sheet.col_count - p.col):
 		if len(userList[j]) > 0:
 			if userList[j][0] == 'P':
 				numUsers += 1
@@ -82,7 +79,7 @@ def generate_list(sheet, mode, type='Default'):
 		latestCategory = ''
 		if type == 'Default':
 			for j in range(p.col, p.col + numUsers):	
-				for i in range(p.row + 2, numRow - p.col):
+				for i in range(p.row + 2, sheet.row_count - p.col):
 					if sheet.cell(i, m.col).value == 'T':
 						latestCategory = sheet.cell(i, s.col).value
 						print '+ Found category \'{0}\' on line {1}.'.format(latestCategory, i)
@@ -209,8 +206,13 @@ def check_filename(filename):
 				filename = filename[0:dashPos] + '-' + str(step) + FILEFORMAT
 			step += 1
 		else:
+			# This might not be the right place to check for filename length, and this might not be the best way to do it...
+			if len(filename) > 255:
+				if step > 1:
+					filename = filename[0:255-(1+len(str(step))+len(FILEFORMAT))] + '-' + str(step) + FILEFORMAT
+				else:
+					filename = filename[0:255-(len(FILEFORMAT))] + FILEFORMAT
 			break
-
 	return filename
 
 def clean_issue(issue):
@@ -361,7 +363,7 @@ def main():
 		inputName = raw_input('\nPlease enter the index, name, URL or key of the spreadsheet (\'all\' for list,    \'new\' for list of newest, \'last\' to immediately open latest):\n>> ')
 		try:
 			if inputName[:4] == 'http':
-				worksheet = gc.open_by_url(inputName).sheet1
+				worksheet = gc.open_by_url(inputName).worksheet(SHEET_NAME)
 				break
 			elif inputName[:3] == 'all':
 				docList = get_alldocs(gc).split(',')
@@ -375,17 +377,24 @@ def main():
 					print '{0}. {1}'.format(i+1, docList[i].strip())
 			elif inputName[:4] == 'last':
 				latest = get_alldocs(gc).split(',')[0]
-				worksheet = gc.open(latest).sheet1
+				worksheet = gc.open(latest).worksheet(SHEET_NAME)
   				break
   			elif inputName[0].isdigit():
   				i = int(inputName)-1
-  				worksheet = gc.open(get_alldocs(gc).split(',')[i].strip()).sheet1
+  				worksheet = gc.open(get_alldocs(gc).split(',')[i].strip()).worksheet(SHEET_NAME)
   				break
 			elif inputName.find(' ') == -1:
-				worksheet = gc.open_by_key(inputName).sheet1
+				worksheet = gc.open_by_key(inputName).worksheet(SHEET_NAME)
 				break
 			else:
-				worksheet = gc.open(inputName).sheet1
+				# First we put in whatever the user typed, but then we look for better matches.
+				worksheet = gc.open(inputName).worksheet(SHEET_NAME)
+				# As we have some sort of free text entry, we will try to match it to a Sheet name regardless of case and then open that Sheet.
+				inputName = inputName.strip().lower()
+				docList = get_alldocs(gc).split(',')
+				for i in range(len(docList)):
+					if docList[i].strip().lower() == inputName:
+						worksheet = gc.open(docList[i]).worksheet(SHEET_NAME)
 				break
 		except gspread.SpreadsheetNotFound:
 			inputFileFails += 1
@@ -439,7 +448,7 @@ def main():
 			# - study 			String, name of the study
 			# - participant 	String, participant ID (without prefix)
 			# - times 			List, contains one timestamp pair (as a tuple) per index
-			# - interview 		
+			# - interview 		Boolean
 			# Note that the 'times' entry in the dict is generated during the clean_issue method call.
 
 			timesList[i] = clean_issue(timesList[i])
