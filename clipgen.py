@@ -222,12 +222,13 @@ def clean_issue(issue):
 	# which continue won't do.)
 	lines = iter(range(0,len(unparsedTimes)))
 	issue['interview'] = []
+
 	for i in lines:
 		unparsedTimes[i] = unparsedTimes[i].strip().rstrip(',').rstrip('-')
 		if unparsedTimes[i] == '':
 			pass
 		elif unparsedTimes[i].find('interview') != -1:
-			issue['interview'].append(i)
+			issue['interview'].append(len(timeStamps))
 			# The reason we use i+1 everywhere in this block is because of us doing the advancing at the end. Should probably still work if we moved the next() up top here.
 			if unparsedTimes[i+1].find('-') >= 0:
 				if unparsedTimes[i+1][unparsedTimes[i+1].find('-')-1].isdigit():
@@ -285,12 +286,15 @@ def ffmpeg(inputfile, outputfile, startpos, outpos, reencode):
 			return None
 
 	print 'Cutting {0} from {1} to {2}.'.format(inputfile, startpos, outpos)
-	#if not reencode:
-	#	subprocess.call(['ffmpeg', '-y', '-loglevel', '16', '-ss', startpos, '-i', inputfile, '-t', str(duration), '-c', 'copy', '-avoid_negative_ts', '1', outputfile])
-	#else:
-	#	# If we do this, we will re-encode the video, but resolve all issues with with iframes early and late.
-	#	subprocess.call(['ffmpeg', '-y', '-loglevel', '16', '-ss', startpos, '-i', inputfile, '-t', str(duration), outputfile])
-	#print '+ Generated video \'{0}\' successfully.\n File size: {1}\n Expected duration: {2} s\n'.format(outputfile,filesize(os.path.getsize(outputfile)), duration)
+	if DEBUGGING:
+		print 'Debugging enabled, not generating any output files.'
+	else:
+		if not reencode:
+			subprocess.call(['ffmpeg', '-y', '-loglevel', '16', '-ss', startpos, '-i', inputfile, '-t', str(duration), '-c', 'copy', '-avoid_negative_ts', '1', outputfile])
+		else:
+			# If we do this, we will re-encode the video, but resolve all issues with with iframes early and late.
+			subprocess.call(['ffmpeg', '-y', '-loglevel', '16', '-ss', startpos, '-i', inputfile, '-t', str(duration), outputfile])
+		print '+ Generated video \'{0}\' successfully.\n File size: {1}\n Expected duration: {2} s\n'.format(outputfile,filesize(os.path.getsize(outputfile)), duration)
 
 # Returns the duration of a clip as seconds
 def get_duration(intime, outtime):
@@ -455,15 +459,14 @@ def main():
 			for j in range(0,len(timesList[i]['times'])):
 				vidIn, vidOut = timesList[i]['times'][j]
 				vidName = check_filename('[Study ' + filter(str.isdigit, timesList[i]['study']) + '][' + timesList[i]['category'] + '] ' + timesList[i]['desc'] + FILEFORMAT)
-				#print timesList
-				print timesList[i]['interview']
-				print 'i: {0}, j: {1}'.format(i, j)
+
 				if timesList[i]['interview'].count(j) > 0:
 					print 'True'
 					baseVideo = timesList[i]['study'] + '_interview_' + timesList[i]['participant'] + FILEFORMAT
 				else:
 					print 'False'
 					baseVideo = timesList[i]['study'] + '_' + timesList[i]['participant']  + FILEFORMAT
+				
 				ffmpeg(inputfile=baseVideo, outputfile=vidName, startpos=vidIn, outpos=vidOut, reencode=REENCODING)
 				videosGenerated += 1
 
