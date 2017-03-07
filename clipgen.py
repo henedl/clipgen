@@ -202,14 +202,16 @@ def check_filename(filename):
 				filename = filename[0:dashPos] + '-' + str(step) + FILEFORMAT
 			step += 1
 		else:
-			# This might not be the right place to check for filename length, and this might not be the best way to do it...
-			# Maybe just break this out to be its own method?
-			if len(filename) > 255:
-				if step > 1:
-					filename = filename[0:255-(1+len(str(step))+len(FILEFORMAT))] + '-' + str(step) + FILEFORMAT
-				else:
-					filename = filename[0:255-(len(FILEFORMAT))] + FILEFORMAT
+			filename = check_filename_length(filename, step)
 			break
+	return filename
+
+def check_filename_length(filename, step=1):
+	if len(filename) > 255:
+		if step > 1:
+			filename = filename[0:255-(1+len(str(step))+len(FILEFORMAT))] + '-' + str(step) + FILEFORMAT
+		else:
+			filename = filename[0:255-(len(FILEFORMAT))] + FILEFORMAT
 	return filename
 
 def clean_issue(issue):
@@ -366,33 +368,37 @@ def main():
 		inputName = raw_input('\nPlease enter the index, name, URL or key of the spreadsheet (\'all\' for list,    \'new\' for list of newest, \'last\' to immediately open latest):\n>> ')
 		try:
 			if inputName[:4] == 'http':
+				# In case user copies a URL, we can handle that.
 				worksheet = gc.open_by_url(inputName).worksheet(SHEET_NAME)
 				break
 			elif inputName[:3] == 'all':
+				# Lists all Sheets, prefixed by a number.
 				docList = get_alldocs(gc).split(',')
 				print '\nAvailable documents:'
 				for i in range(len(docList)):
 					print '{0}. {1}'.format(i+1, docList[i].strip())
 			elif inputName[:3] == 'new':
+				# Typing 'new' shows the three latest Sheets (handy in case we have dozens of Sheets later).
 				docList = get_alldocs(gc).split(',')
 				print '\nNewest documents:'
 				for i in range(3):
 					print '{0}. {1}'.format(i+1, docList[i].strip())
 			elif inputName[:4] == 'last':
+				# This is equivalent to opening the Sheet numbered 1 in the 'all' list.
 				latest = get_alldocs(gc).split(',')[0]
 				worksheet = gc.open(latest).worksheet(SHEET_NAME)
   				break
   			elif inputName[0].isdigit():
+  				# If user enters a number, we open the Sheet of that number from the 'all' list.
   				i = int(inputName)-1
   				worksheet = gc.open(get_alldocs(gc).split(',')[i].strip()).worksheet(SHEET_NAME)
   				break
 			elif inputName.find(' ') == -1:
+				# If user has entered text that has no spaces (and hasn't been caught as a number, per above) we try to open it as a GID key.
 				worksheet = gc.open_by_key(inputName).worksheet(SHEET_NAME)
 				break
 			else:
-				# First we put in whatever the user typed, but then we look for better matches.
-				#worksheet = gc.open(inputName).worksheet(SHEET_NAME)
-				# As we have some sort of free text entry, we will try to match it to a Sheet name regardless of case and then open that Sheet.
+				# As we have free text entry, we match it to a Sheet name (regardless of case) and then open that Sheet.
 				inputName = inputName.strip().lower()
 				docList = get_alldocs(gc).split(',')
 				for i in range(len(docList)):
@@ -451,7 +457,7 @@ def main():
 			# - study 			String, name of the study
 			# - participant 	String, participant ID (without prefix)
 			# - times 			List, contains one timestamp pair (as a tuple) per index
-			# - interview 		Boolean
+			# - interview 		List, contains indices of timestamps that are from interviews
 			# - category 		String, category heading found over issue
 			# Note that the 'times' entry in the dict is generated during the clean_issue method call.
 
@@ -461,10 +467,9 @@ def main():
 				vidName = check_filename('[Study ' + filter(str.isdigit, timesList[i]['study']) + '][' + timesList[i]['category'] + '] ' + timesList[i]['desc'] + FILEFORMAT)
 
 				if timesList[i]['interview'].count(j) > 0:
-					print 'True'
+					if DEBUGGING: print 'Timestamp had interview'
 					baseVideo = timesList[i]['study'] + '_interview_' + timesList[i]['participant'] + FILEFORMAT
 				else:
-					print 'False'
 					baseVideo = timesList[i]['study'] + '_' + timesList[i]['participant']  + FILEFORMAT
 				
 				ffmpeg(inputfile=baseVideo, outputfile=vidName, startpos=vidIn, outpos=vidOut, reencode=REENCODING)
