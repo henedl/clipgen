@@ -11,19 +11,15 @@ VERSIONNUM = '0.2.7'
 SHEET_NAME = 'data set'
 DEBUGGING  = False
 
-
 # What is this?
 # This script will help quickly cut out video snippets in user reserach videos, based on researcher's timestamps in a spreadsheet!
 
 # TODO
 # Quality of life:
-# 	- Allow for comma separation and not just + for multiple timestamps in the same cell
 # 	- Settings, at least the ability to change fileformat, reencoding and other overarching options, without editing code
 #	- Project names with spaces: attempt to resolve files as both "xystonPike" and "xyston_pike"?
 #	- Autocompletion for name list stuff?
 #	- There are many other types of name list interactions possible, perhaps generate a numerically sorted list and allow selection by just giving a number?
-#	- Stop requiring spaces between multiple clips (a + should be enough)
-#	- Sanity checking video length (videos longer than X seconds are not likely, so ping the user before cutting - or in post cut presentation?)
 # Programming stuff:
 # 	- Probably break out input-parsing to a separate method (just pass it a list of what to accept, what to not accept and error messages?)
 # 	- It would be much faster to just dump all the contents of the sheet in to a list and work with that (also supported by gspread)
@@ -207,6 +203,7 @@ def check_filename(filename):
 			step += 1
 		else:
 			# This might not be the right place to check for filename length, and this might not be the best way to do it...
+			# Maybe just break this out to be its own method?
 			if len(filename) > 255:
 				if step > 1:
 					filename = filename[0:255-(1+len(str(step))+len(FILEFORMAT))] + '-' + str(step) + FILEFORMAT
@@ -218,12 +215,14 @@ def check_filename(filename):
 def clean_issue(issue):
 	timeStamps = []
 	unparsedTimes = issue['cell'].value.lower().split()
+	if unparsedTimes == issue['cell'].value:
+		unparsedTimes = unparsedTimes.split('+').split(',')
 	
 	# Using own iterator here, instead of letting the for-loop set this up. Otherwise we can't manually advance the iterator (we need to step twice
 	# which continue won't do.)
 	lines = iter(range(0,len(unparsedTimes)))
 	for i in lines:
-		unparsedTimes[i] = unparsedTimes[i].strip()
+		unparsedTimes[i] = unparsedTimes[i].strip().rstrip(',').rstrip('-')
 		if unparsedTimes[i] == '':
 			pass
 		elif unparsedTimes[i].find('interview') != -1:
@@ -256,16 +255,11 @@ def clean_issue(issue):
 	# Are there other characters that will mess up file names? If so, add them here.
 	# TODO: This should be reasonable to do with a dictionary/list loop instead of multiple replaces
 	issue['desc'] = issue['desc'][ issue['desc'].rfind(']')+1: ].strip()
+	issue['desc'] = issue['desc'].replace('\\','-')
 	issue['desc'] = issue['desc'].replace('/','-')
 	issue['desc'] = issue['desc'].replace('?','_')
-	issue['desc'] = issue['desc'].replace('\\','-')
-	issue['desc'] = issue['desc'].replace('\"','')
-	issue['desc'] = issue['desc'].replace('\'','')
-	issue['desc'] = issue['desc'].replace('.','')
-	issue['desc'] = issue['desc'].replace('<','')
-	issue['desc'] = issue['desc'].replace('>','')
-	issue['desc'] = issue['desc'].replace('|','')
-
+	issue['desc'] = issue['desc'].translate(None,'\"\'.><|')
+	
 	return issue
 
 def ffmpeg(inputfile, outputfile, startpos, outpos, reencode):
@@ -284,6 +278,10 @@ def ffmpeg(inputfile, outputfile, startpos, outpos, reencode):
 	if duration < 0:
 		print 'Can\'t work with negative duration for videos, exiting.'
 		sys.exit(0)
+	elif duration > 60*5:
+		yn = raw_input('This video is over 5 minutes long, do you want to still generate it? (y/n)\n>> ')
+		if yn == 'n':
+			return None
 
 	print 'Cutting {0} from {1} to {2}.'.format(inputfile, startpos, outpos)
 	if not reencode:
@@ -388,7 +386,7 @@ def main():
 				break
 			else:
 				# First we put in whatever the user typed, but then we look for better matches.
-				worksheet = gc.open(inputName).worksheet(SHEET_NAME)
+				#worksheet = gc.open(inputName).worksheet(SHEET_NAME)
 				# As we have some sort of free text entry, we will try to match it to a Sheet name regardless of case and then open that Sheet.
 				inputName = inputName.strip().lower()
 				docList = get_alldocs(gc).split(',')
@@ -407,7 +405,7 @@ def main():
 				print '\nAvailable documents: {0}'.format(get_alldocs(gc))
 				print '###############################################################################\n'
 
-	print 'Connected to Google Drive! Using Sheet: {0}'.format(worksheet.title)
+	print 'Connected to Google Drive!'
 	inputModeFails = 0
 
 	while True:
