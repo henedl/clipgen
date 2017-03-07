@@ -87,7 +87,7 @@ def generate_list(sheet, mode, type='Default'):
 						# Discard empty cells.
 						pass
 					else:
-						issue = { 'cell': val, 'desc': sheet.cell(i, s.col).value, 'study': studyName, 'participant': sheet.cell(j, i).value, 'category': latestCategory }
+						issue = { 'cell': val, 'desc': sheet.cell(i, s.col).value, 'study': studyName, 'participant': sheet.cell(p.row+1, j).value, 'category': latestCategory }
 						times.append(issue)
 						print '+ Found timestamp: {0}'.format(val.value)
 		elif type == 'Positive':
@@ -130,7 +130,7 @@ def generate_list(sheet, mode, type='Default'):
 				# Discard empty cells.
 				pass
 			else:
-				issue = { 'cell': val, 'desc': sheet.cell(lineSelect, s.col).value, 'study': studyName, 'participant': sheet.cell(j, i).value, 'category': latestCategory }
+				issue = { 'cell': val, 'desc': sheet.cell(lineSelect, s.col).value, 'study': studyName, 'participant': sheet.cell(p.row+1, j).value, 'category': latestCategory }
 				times.append(issue)
 				print '+ Found timestamp: {0}'.format(val.value.replace('\n',' '))
 	elif mode == 'range':
@@ -161,7 +161,7 @@ def generate_list(sheet, mode, type='Default'):
 					# Discard empty cells.
 					pass
 				else:
-					issue = { 'cell': val, 'desc': sheet.cell(i, s.col).value, 'study': studyName, 'participant': sheet.cell(j, i).value, 'category': latestCategory }
+					issue = { 'cell': val, 'desc': sheet.cell(i, s.col).value, 'study': studyName, 'participant': sheet.cell(p.row+1, j).value, 'category': latestCategory }
 					times.append(issue)
 					print '+ Found timestamp: {0}'.format(val.value)
 	elif mode == 'select':
@@ -221,12 +221,13 @@ def clean_issue(issue):
 	# Using own iterator here, instead of letting the for-loop set this up. Otherwise we can't manually advance the iterator (we need to step twice
 	# which continue won't do.)
 	lines = iter(range(0,len(unparsedTimes)))
+	issue['interview'] = []
 	for i in lines:
 		unparsedTimes[i] = unparsedTimes[i].strip().rstrip(',').rstrip('-')
 		if unparsedTimes[i] == '':
 			pass
 		elif unparsedTimes[i].find('interview') != -1:
-			issue['interview'] = True
+			issue['interview'].append(i)
 			# The reason we use i+1 everywhere in this block is because of us doing the advancing at the end. Should probably still work if we moved the next() up top here.
 			if unparsedTimes[i+1].find('-') >= 0:
 				if unparsedTimes[i+1][unparsedTimes[i+1].find('-')-1].isdigit():
@@ -284,12 +285,12 @@ def ffmpeg(inputfile, outputfile, startpos, outpos, reencode):
 			return None
 
 	print 'Cutting {0} from {1} to {2}.'.format(inputfile, startpos, outpos)
-	if not reencode:
-		subprocess.call(['ffmpeg', '-y', '-loglevel', '16', '-ss', startpos, '-i', inputfile, '-t', str(duration), '-c', 'copy', '-avoid_negative_ts', '1', outputfile])
-	else:
-		# If we do this, we will re-encode the video, but resolve all issues with with iframes early and late.
-		subprocess.call(['ffmpeg', '-y', '-loglevel', '16', '-ss', startpos, '-i', inputfile, '-t', str(duration), outputfile])
-	print '+ Generated video \'{0}\' successfully.\n File size: {1}\n Expected duration: {2} s\n'.format(outputfile,filesize(os.path.getsize(outputfile)), duration)
+	#if not reencode:
+	#	subprocess.call(['ffmpeg', '-y', '-loglevel', '16', '-ss', startpos, '-i', inputfile, '-t', str(duration), '-c', 'copy', '-avoid_negative_ts', '1', outputfile])
+	#else:
+	#	# If we do this, we will re-encode the video, but resolve all issues with with iframes early and late.
+	#	subprocess.call(['ffmpeg', '-y', '-loglevel', '16', '-ss', startpos, '-i', inputfile, '-t', str(duration), outputfile])
+	#print '+ Generated video \'{0}\' successfully.\n File size: {1}\n Expected duration: {2} s\n'.format(outputfile,filesize(os.path.getsize(outputfile)), duration)
 
 # Returns the duration of a clip as seconds
 def get_duration(intime, outtime):
@@ -447,27 +448,22 @@ def main():
 			# - participant 	String, participant ID (without prefix)
 			# - times 			List, contains one timestamp pair (as a tuple) per index
 			# - interview 		Boolean
+			# - category 		String, category heading found over issue
 			# Note that the 'times' entry in the dict is generated during the clean_issue method call.
 
 			timesList[i] = clean_issue(timesList[i])
 			for j in range(0,len(timesList[i]['times'])):
 				vidIn, vidOut = timesList[i]['times'][j]
 				vidName = check_filename('[Study ' + filter(str.isdigit, timesList[i]['study']) + '][' + timesList[i]['category'] + '] ' + timesList[i]['desc'] + FILEFORMAT)
-				if 'interview' in timesList[i]:
-					#print '{0},{1},{2}'.format(i,j,timesList[i]['interview'])
-					for k in range(0,len(ipairList)):
-						if ipairList[k].find(timesList[i]['participant']) >= 0:
-							#print 'Participant match {0},{1}'.format(ipairList[k],timesList[i]['participant'])
-							ipairList[k] = ipairList[k].replace('+', 'p')
-							ipair = ipairList[k]
-							#print ipair
-						#print '{0},{1},{2}'.format(ipairList[k],timesList[i]['participant'],ipairList[k].find(timesList[i]['participant']))
-					if timesList[i]['interview']:
-						baseVideo = timesList[i]['study'] + '_interview_p' + ipair  + FILEFORMAT
-					else:
-						baseVideo = timesList[i]['study'] + '_p' + timesList[i]['participant']  + FILEFORMAT
+				#print timesList
+				print timesList[i]['interview']
+				print 'i: {0}, j: {1}'.format(i, j)
+				if timesList[i]['interview'].count(j) > 0:
+					print 'True'
+					baseVideo = timesList[i]['study'] + '_interview_' + timesList[i]['participant'] + FILEFORMAT
 				else:
-					baseVideo = timesList[i]['study'] + '_p' + timesList[i]['participant']  + FILEFORMAT
+					print 'False'
+					baseVideo = timesList[i]['study'] + '_' + timesList[i]['participant']  + FILEFORMAT
 				ffmpeg(inputfile=baseVideo, outputfile=vidName, startpos=vidIn, outpos=vidOut, reencode=REENCODING)
 				videosGenerated += 1
 
