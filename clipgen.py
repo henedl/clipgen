@@ -9,7 +9,7 @@ REENCODING = False
 FILEFORMAT = '.mp4'
 VERSIONNUM = '0.2.7'
 SHEET_NAME = 'data set'
-DEBUGGING  = False
+DEBUGGING  = True
 
 # What is this?
 # This script will help quickly cut out video snippets in user reserach videos, based on researcher's timestamps in a spreadsheet!
@@ -17,10 +17,8 @@ DEBUGGING  = False
 # TODO
 # Quality of life:
 # 	- Settings, at least the ability to change fileformat, reencoding and other overarching options, without editing code
-#	- Project names with spaces: attempt to resolve files as both "xystonPike" and "xyston_pike"?
-#	- Autocompletion for name list stuff?
-#	- There are many other types of name list interactions possible, perhaps generate a numerically sorted list and allow selection by just giving a number?
-#	- Timestamp cleaning can't handle this situation "H:M:S-H:M:S+interview H:M:S" because of spaces between interview and subsequent timestamp, but not before.
+#	- Timestamp cleaning can't handle this situation: "H:M:S-H:M:S+interview H:M:S" because of spaces between interview and subsequent timestamp, but not before.
+#	- Command to open the current Sheet in Chrome from the commandline?
 # Programming stuff:
 # 	- Probably break out input-parsing to a separate method (just pass it a list of what to accept, what to not accept and error messages?)
 # 	- It would be much faster to just dump all the contents of the sheet in to a list and work with that (also supported by gspread)
@@ -58,9 +56,10 @@ def generate_list(sheet, mode, type='Default'):
 	print 'Beginning work on {0}.'.format(studyName)
 	
 	# Just some name formatting, after we announced everything up top.
-	studyName = studyName.lower() 
+	studyName = studyName.lower()
 	studyName = studyName.replace('study ', 'study')
-	studyName = studyName.replace(' ', '_') # Replace whitespace with underscore.
+	studyName = studyName[0:studyName.find('study')].replace(' ', '') + '_' + studyName[studyName.find('study'):]
+	studyName = studyName.replace(' ', '_') # Replace any leftover whitespace with underscore.
 	# It should now look like this: 'thundercats_study5'
 
 	# Figure out how many users we have in the sheet (assumes every user is indicated by a 'PXX' identifier)
@@ -76,7 +75,7 @@ def generate_list(sheet, mode, type='Default'):
 		latestCategory = ''
 		passedOverTitle = False
 		if type == 'Default':
-			for j in range(p.col, p.col + numUsers):
+			for i in range(p.row + 2, sheet.row_count - p.col):
 				if not passedOverTitle:
 					if sheet.cell(i, m.col).value == 'T':
 						latestCategory = sheet.cell(i, s.col).value
@@ -84,7 +83,7 @@ def generate_list(sheet, mode, type='Default'):
 						passedOverTitle = True
 					elif not passedOverTitle:
 						latestCategory = get_category(sheet, i, p.row, m.col, s.col)	
-				for i in range(p.row + 2, sheet.row_count - p.col):
+				for j in range(p.col, p.col + numUsers):
 					val = sheet.cell(i, j)
 					if val.value is None:
 						# Discard empty cells.
@@ -97,7 +96,7 @@ def generate_list(sheet, mode, type='Default'):
 						times.append(issue)
 						print '+ Found timestamp: {0}'.format(val.value)
 		elif type == 'Positive':
-			pass
+			generate_positive(sheet, p, m, s, numUsers)
 	elif mode == 'line':
 		# This mode generates videos for a single line/row number.
 		latestCategory = ''
@@ -173,6 +172,28 @@ def generate_list(sheet, mode, type='Default'):
 
 	return times
 
+def generate_positive(sheet, p, m, s, numUsers)
+	times = []
+	positive = sheet.find('Positive')
+	if sheet.cell(positive.row, m.col).value == 'T':
+		print '+ Found category \'Positive\' on line {0}.'.format(positive.row)
+		for i in range(positive.row+1, sheet.row_count - p.col):
+			for j in range(p.col, p.col + numUsers):
+				if sheet.cell(i, m.col).value != 'T':
+					print sheet.cell(i, j)
+					val = sheet.cell(i, j)
+					if val.value is None:
+						# Discard empty cells.
+						pass
+					elif val.value == '':
+						# Discard empty cells.
+						pass
+					else:
+						issue = { 'cell': val, 'desc': sheet.cell(i, s.col).value, 'study': studyName, 'participant': sheet.cell(p.row+1, j).value, 'category': 'Positive' }
+						times.append(issue)
+						print '+ Found timestamp: {0}'.format(val.value)
+				else:
+					return times
 def get_category(sheet, startingRow, pRow, mCol, sCol):
 	category = ''
 	while category == '':
@@ -286,9 +307,7 @@ def clean_issue(issue):
 
 def ffmpeg(inputfile, outputfile, startpos, outpos, reencode):
 	# TODO
-	# Protect against negative duration
 	# Protect against videos that have an outtime beyond base video length
-	# Protect against unreasonably long clips
 
 	# DEBUG
 	# Just makes the clip a minute long if we didn't get an in-time
@@ -449,6 +468,9 @@ def main():
 					break
 				elif inputMode[0] == 'r' or inputMode == 'range':
 					timesList = generate_list(worksheet, 'range')
+					break
+				elif inputMode == 'positive':
+					timesList = generate_list(worksheet, 'batch', 'Positive')
 					break
 				#elif inputMode[0] == 's' or inputMode == 'select':
 				#	timesList = generate_list(worksheet, 'select')
