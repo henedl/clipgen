@@ -20,6 +20,7 @@ DEBUGGING  = False
 #	- Project names with spaces: attempt to resolve files as both "xystonPike" and "xyston_pike"?
 #	- Autocompletion for name list stuff?
 #	- There are many other types of name list interactions possible, perhaps generate a numerically sorted list and allow selection by just giving a number?
+#	- Timestamp cleaning can't handle this situation "H:M:S-H:M:S+interview H:M:S" because of spaces between interview and subsequent timestamp, but not before.
 # Programming stuff:
 # 	- Probably break out input-parsing to a separate method (just pass it a list of what to accept, what to not accept and error messages?)
 # 	- It would be much faster to just dump all the contents of the sheet in to a list and work with that (also supported by gspread)
@@ -73,12 +74,17 @@ def generate_list(sheet, mode, type='Default'):
 
 	if mode == 'batch':
 		latestCategory = ''
+		passedOverTitle = False
 		if type == 'Default':
-			for j in range(p.col, p.col + numUsers):	
-				for i in range(p.row + 2, sheet.row_count - p.col):
+			for j in range(p.col, p.col + numUsers):
+				if not passedOverTitle:
 					if sheet.cell(i, m.col).value == 'T':
 						latestCategory = sheet.cell(i, s.col).value
 						print '+ Found category \'{0}\' on line {1}.'.format(latestCategory, i)
+						passedOverTitle = True
+					elif not passedOverTitle:
+						latestCategory = get_category(sheet, i, p.row, m.col, s.col)	
+				for i in range(p.row + 2, sheet.row_count - p.col):
 					val = sheet.cell(i, j)
 					if val.value is None:
 						# Discard empty cells.
@@ -110,16 +116,7 @@ def generate_list(sheet, mode, type='Default'):
 			else:
 				pass
 
-		# Go up until we find the category we are headed under.
-		while latestCategory == '':
-			try:
-				for i in range(lineSelect, p.row, -1):
-					if sheet.cell(i, m.col).value == 'T':
-						latestCategory = sheet.cell(i, s.col).value
-						print '+ Found category \'{0}\' on line {1}.'.format(latestCategory, i)
-						break # Exit the for loop so we don't keep going up.
-			except IndexError:
-				break
+		latestCategory = get_category(sheet, lineSelect, p.row, m.col, s.col)
 
 		for j in range(p.col, p.col + numUsers):
 			val = sheet.cell(lineSelect, j)
@@ -135,24 +132,30 @@ def generate_list(sheet, mode, type='Default'):
 				print '+ Found timestamp: {0}'.format(val.value.replace('\n',' '))
 	elif mode == 'range':
 		# This mode generates videos for all issues found in a range or span of issues.
-		latestCategory = ''
 		while True:
 			try:
 				startLineSelect = int(raw_input('\nWhich starting line (row number only)?\n>> '))
 				endLineSelect = int(raw_input('\nWhich ending line (row number only)?\n>> '))
 			except ValueError:
-				lineSelect = int(raw_input('\nTry again. Integer only.\n>> '))
-			print 'Lines selected: {0}'.format(sheet.cell(lineSelect, s.col).value)
+				startLineSelect = int(raw_input('\nTry again. Starting line (row number only)?\n>> '))
+				endLineSelect = int(raw_input('\nTry again. Ending line (row number only)?\n>> '))
+			print 'Lines selected: {0} to {1}'.format(sheet.cell(startLineSelect, s.col).value, sheet.cell(endLineSelect, s.col).value)
 			yn = raw_input('Is this correct? y/n\n>> ')
 			if yn == 'y':
 				break
 			else:
 				pass
-		for j in range(p.col, p.col + numUsers):
-			for i in range(startLineSelect, endLineSelect):
+		
+		passedOverTitle = False
+		for i in range(startLineSelect, endLineSelect+1):
+			if not passedOverTitle:
 				if sheet.cell(i, m.col).value == 'T':
 					latestCategory = sheet.cell(i, s.col).value
 					print '+ Found category \'{0}\' on line {1}.'.format(latestCategory, i)
+					passedOverTitle = True
+				elif not passedOverTitle:
+					latestCategory = get_category(sheet, i, p.row, m.col, s.col)
+			for j in range(p.col, p.col + numUsers):
 				val = sheet.cell(i, j)
 				if val.value is None:
 					# Discard empty cells.
@@ -169,6 +172,19 @@ def generate_list(sheet, mode, type='Default'):
 		pass
 
 	return times
+
+def get_category(sheet, startingRow, pRow, mCol, sCol):
+	category = ''
+	while category == '':
+		try:
+			for i in range(startingRow, pRow, -1):
+				if sheet.cell(i, mCol).value == 'T':
+					category = sheet.cell(i, sCol).value
+					print '+ Found category \'{0}\' on line {1}.'.format(category, i)
+					break # Exit the for loop so we don't keep going up.
+		except IndexError:
+			break
+	return category
 
 # Takes a string, returns a double digit number
 def double_digits(number):
@@ -209,6 +225,7 @@ def check_filename(filename):
 def check_filename_length(filename, step=1):
 	if len(filename) > 255:
 		if step > 1:
+			if DEBUGGING: print '! Filename was longer than 255 chars ({0}, length {1})'.format(filename, len(filename))
 			filename = filename[0:255-(1+len(str(step))+len(FILEFORMAT))] + '-' + str(step) + FILEFORMAT
 		else:
 			filename = filename[0:255-(len(FILEFORMAT))] + FILEFORMAT
@@ -226,6 +243,7 @@ def clean_issue(issue):
 	issue['interview'] = []
 
 	for i in lines:
+		if DEBUGGING: print '! Cleaning timestamp {0}'.format(unparsedTimes[i])
 		unparsedTimes[i] = unparsedTimes[i].strip().rstrip(',').rstrip('-')
 		if unparsedTimes[i] == '':
 			pass
@@ -289,7 +307,7 @@ def ffmpeg(inputfile, outputfile, startpos, outpos, reencode):
 
 	print 'Cutting {0} from {1} to {2}.'.format(inputfile, startpos, outpos)
 	if DEBUGGING:
-		print 'Debugging enabled, not generating any output files.'
+		print '! Debugging enabled, not generating any output files.'
 	else:
 		if not reencode:
 			subprocess.call(['ffmpeg', '-y', '-loglevel', '16', '-ss', startpos, '-i', inputfile, '-t', str(duration), '-c', 'copy', '-avoid_negative_ts', '1', outputfile])
@@ -467,7 +485,7 @@ def main():
 				vidName = check_filename('[Study ' + filter(str.isdigit, timesList[i]['study']) + '][' + timesList[i]['category'] + '] ' + timesList[i]['desc'] + FILEFORMAT)
 
 				if timesList[i]['interview'].count(j) > 0:
-					if DEBUGGING: print 'Timestamp had interview'
+					if DEBUGGING: print '! Timestamp had interview'
 					baseVideo = timesList[i]['study'] + '_interview_' + timesList[i]['participant'] + FILEFORMAT
 				else:
 					baseVideo = timesList[i]['study'] + '_' + timesList[i]['participant']  + FILEFORMAT
