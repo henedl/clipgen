@@ -9,7 +9,7 @@ REENCODING = False
 FILEFORMAT = '.mp4'
 VERSIONNUM = '0.2.7'
 SHEET_NAME = 'data set'
-DEBUGGING  = True
+DEBUGGING  = False
 
 # What is this?
 # This script will help quickly cut out video snippets in user reserach videos, based on researcher's timestamps in a spreadsheet!
@@ -19,23 +19,22 @@ DEBUGGING  = True
 # 	- Settings, at least the ability to change fileformat, reencoding and other overarching options, without editing code
 #	- Timestamp cleaning can't handle this situation: "H:M:S-H:M:S+interview H:M:S" because of spaces between interview and subsequent timestamp, but not before.
 #	- Command to open the current Sheet in Chrome from the commandline?
+#	- Created composite videos with clips from multiple participants?
+#	- Title/ending cards?
 # Programming stuff:
-# 	- Probably break out input-parsing to a separate method (just pass it a list of what to accept, what to not accept and error messages?)
-# 	- It would be much faster to just dump all the contents of the sheet in to a list and work with that (also supported by gspread)
+#	- Command line arguments to run everything from a prompt instead of interactively.
+# 	- It would be much faster to just dump all the contents of the sheet into a list and work with that (easily supported by gspread)
 # 	- Cleaner variable names (even for things relating to iterators - ipairList, really?)
 #	- Also, naming consistency, currently there is some camel case and some underscores, etc
 #	- Except ffmpeg crashes/errors
-#	- Except connection timeouts (probably except gspread.exceptions.HTTPError on line 29?)
 #	- Logging of which timestamps are discarded
-#	- Gracefully handle connection timeouts (look into gspread code)
-#	- Debug mode (with multiple levels?) throughout the code
+#	- Expand debug mode (with multiple levels?)
 #	- Upgrade to Python 3
-#	- gspread should reauthorize (either after an extended time when it fails out, or whenever a new loop begins)
 #	- Refactor try statements to be smaller
 # Batch improvements:
 # 	- Implement the special character to select only one video to be rendered, out of several
 # 	- Add support for special tokens like * for starred video clip (this can be added to the dict as 'starred' and then read in the main loop)
-# 	- Start using the meta field for checking which issues are already processesed and what the grouping is
+# 	- Start using the meta fields for checking which issues are already processesed and what the grouping is
 # Major new features:
 # 	- GUI
 #	- Cropping and timelapsing! For example generate a timelapse of the minimap in TWY or EU.
@@ -107,7 +106,7 @@ def generate_list(sheet, mode, type='Default'):
 				# This should not be set up this way, make it loop
 				lineSelect = int(raw_input('\nTry again. Integer only.\n>> '))
 
-			print 'Issue titled: {0}'.format(sheet.cell(lineSelect, s.col).value)
+			print '\nIssue titled: {0}\n'.format(sheet.cell(lineSelect, s.col).value)
 			yn = raw_input('Is this the correct issue? y/n\n>> ')
 			if yn == 'y':
 				break
@@ -383,7 +382,7 @@ def main():
 	os.chdir(os.path.dirname(os.path.abspath(__file__)))
 	print '-------------------------------------------------------------------------------'
 	print 'Welcome to clipgen v{1}, for use by Paradox User Research\n\nWorking directory: {0}\nPlace video files and the oauth.json file in this directory.'.format(os.getcwd(), VERSIONNUM)
-	
+	if DEBUGGING: print '! Debug mode is ON. Several limitations apply and more things will be printed.'
 	# Remember that documents need to be shared to the email found in the json-file for OAuth-ing to work.
 	# Each user of this program should also have their own, unique json-file (generate this on the Google Developer API website).
 	scope = ['https://spreadsheets.google.com/feeds']
@@ -401,7 +400,7 @@ def main():
 		print e
 		print 'Could not authenticate.'
 		sys.exit(0)
-	
+
 	inputFileFails = 0
 
 	while True:
@@ -483,18 +482,18 @@ def main():
 				#	break
 				elif inputMode == 'karl':
 					plogo()
-			except IndexError as e:
+			except (IndexError, gspread.HTTPError) as e:
 				inputModeFails += 1
+				try:
+					gc = gspread.authorize(credentials)
+				except gspread.AuthenticationError as e:
+					print e
+					print 'Could not authenticate.'
+					sys.exit(0)
 
 		print '\n* ffmpeg is set to never prompt for input and will always overwrite.\n  Only warns if close to crashing.\n'
 		videosGenerated = 0
 
-		try:
-			ipairPos = worksheet.find('Interview pairs')
-			ipairList = worksheet.cell(ipairPos.row+1, ipairPos.col).value.split(',')
-		except gspread.exceptions.CellNotFound:
-			pass
-		
 		for i in range(0, len(timesList)):
 			# timesList is a list containing issues, one per index
 			# issues are dicts that hold:
