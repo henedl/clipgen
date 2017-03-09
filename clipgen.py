@@ -36,8 +36,6 @@ DEBUGGING  = True
 # 	- Implement the special character to select only one video to be rendered, out of several
 # 	- Add support for special tokens like * for starred video clip (this can be added to the dict as 'starred' and then read in the main loop)
 # 	- Start using the meta field for checking which issues are already processesed and what the grouping is
-#	- Generate all positive moments as a batch call
-#	- Generate all issues of a certain category as a batch call?
 # Major new features:
 # 	- GUI
 #	- Cropping and timelapsing! For example generate a timelapse of the minimap in TWY or EU.
@@ -95,8 +93,9 @@ def generate_list(sheet, mode, type='Default'):
 						issue = { 'cell': val, 'desc': sheet.cell(i, s.col).value, 'study': studyName, 'participant': sheet.cell(p.row+1, j).value, 'category': latestCategory }
 						times.append(issue)
 						print '+ Found timestamp: {0}'.format(val.value)
-		elif type == 'Positive':
-			generate_positive(sheet, p, m, s, numUsers)
+		else:
+			category = raw_input('Which category would you like to work in?\n>> ')
+			times = generate_category(sheet, p, m, s, numUsers, studyName, category)
 	elif mode == 'line':
 		# This mode generates videos for a single line/row number.
 		latestCategory = ''
@@ -172,15 +171,17 @@ def generate_list(sheet, mode, type='Default'):
 
 	return times
 
-def generate_positive(sheet, p, m, s, numUsers)
+def generate_category(sheet, p, m, s, numUsers, studyName, category):
+	# TODO
+	# Case-insensitive category matching.
 	times = []
-	positive = sheet.find('Positive')
-	if sheet.cell(positive.row, m.col).value == 'T':
-		print '+ Found category \'Positive\' on line {0}.'.format(positive.row)
-		for i in range(positive.row+1, sheet.row_count - p.col):
+	catCell = sheet.find(category)
+	if sheet.cell(catCell.row, m.col).value == 'T':
+		print '+ Found category \'{1}\' on line {0}.'.format(catCell.row, category)
+		for i in range(catCell.row+1, sheet.row_count - p.col):
 			for j in range(p.col, p.col + numUsers):
 				if sheet.cell(i, m.col).value != 'T':
-					print sheet.cell(i, j)
+					if DEBUGGING: print '! {0}'.format(sheet.cell(i, j))
 					val = sheet.cell(i, j)
 					if val.value is None:
 						# Discard empty cells.
@@ -189,11 +190,13 @@ def generate_positive(sheet, p, m, s, numUsers)
 						# Discard empty cells.
 						pass
 					else:
-						issue = { 'cell': val, 'desc': sheet.cell(i, s.col).value, 'study': studyName, 'participant': sheet.cell(p.row+1, j).value, 'category': 'Positive' }
+						issue = { 'cell': val, 'desc': sheet.cell(i, s.col).value, 'study': studyName, 'participant': sheet.cell(p.row+1, j).value, 'category': category }
 						times.append(issue)
 						print '+ Found timestamp: {0}'.format(val.value)
 				else:
+					if DEBUGGING: print '! Encountered other category, stopping category batch call'
 					return times
+
 def get_category(sheet, startingRow, pRow, mCol, sCol):
 	category = ''
 	while category == '':
@@ -458,7 +461,7 @@ def main():
 
 	while True:
 		while True:
-			inputMode = raw_input('\nSelect mode: (b)atch, (r)ange or (l)ine\n>> ')
+			inputMode = raw_input('\nSelect mode: (b)atch, (r)ange, (c)ategory or (l)ine\n>> ')
 			try:
 				if inputMode[0] == 'b' or inputMode == 'batch':
 					timesList = generate_list(worksheet, 'batch')
@@ -468,6 +471,9 @@ def main():
 					break
 				elif inputMode[0] == 'r' or inputMode == 'range':
 					timesList = generate_list(worksheet, 'range')
+					break
+				elif inputMode[0] == 'c' or inputMode == 'cat' or inputMode == 'category':
+					timesList = generate_list(worksheet, 'batch', 'category')
 					break
 				elif inputMode == 'positive':
 					timesList = generate_list(worksheet, 'batch', 'Positive')
