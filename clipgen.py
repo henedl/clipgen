@@ -304,7 +304,7 @@ def clean_issue(issue):
 	issue['desc'] = issue['desc'].replace('\\','-')
 	issue['desc'] = issue['desc'].replace('/','-')
 	issue['desc'] = issue['desc'].replace('?','_')
-	issue['desc'] = issue['desc'].translate(None,'\"\'.><|')
+	issue['desc'] = issue['desc'].translate(None,'\"\'.><|:')
 	
 	return issue
 
