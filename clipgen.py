@@ -19,6 +19,7 @@ DEBUGGING  = False
 # 	- Settings, at least the ability to change fileformat, reencoding and other overarching options, without editing code
 #	- Timestamp cleaning can't handle this situation: "H:M:S-H:M:S+interview H:M:S" because of spaces between interview and subsequent timestamp, but not before.
 #	- Timestamp cleaning doesn't handle: " +H:M:S" either, strip + prefixes?
+#	- Timestamp cleaning can't handle: "H:M:S + interview"
 #	- Command to open the current Sheet in Chrome from the commandline?
 #	- Created composite videos with clips from multiple participants?
 #	- Title/ending cards?
