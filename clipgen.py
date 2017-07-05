@@ -23,6 +23,7 @@ DEBUGGING  = False
 #	- Command to open the current Sheet in Chrome from the commandline?
 #	- Created composite videos with clips from multiple participants?
 #	- Title/ending cards?
+#	- Being able to select multiple non-continous lines
 # Programming stuff:
 #	- Command line arguments to run everything from a prompt instead of interactively.
 # 	- It would be much faster to just dump all the contents of the sheet into a list and work with that (easily supported by gspread)
@@ -33,6 +34,7 @@ DEBUGGING  = False
 #	- Expand debug mode (with multiple levels?)
 #	- Upgrade to Python 3
 #	- Refactor try statements to be smaller
+#	- Support other data formats (Excel, CSV) - would need to re-write parsing backend and refactor code heavily
 # Batch improvements:
 # 	- Implement the special character to select only one video to be rendered, out of several
 # 	- Add support for special tokens like * for starred video clip (this can be added to the dict as 'starred' and then read in the main loop)
