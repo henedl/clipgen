@@ -277,6 +277,7 @@ def clean_issue(issue):
 		elif unparsedTimes[i].find('interview') != -1:
 			issue['interview'].append(len(timeStamps))
 			# The reason we use i+1 everywhere in this block is because of us doing the advancing at the end. Should probably still work if we moved the next() up top here.
+			# TODO this goes out of index if we do i+1 and there is only one occurence/timestamp available to check
 			if unparsedTimes[i+1].find('-') >= 0:
 				if unparsedTimes[i+1][unparsedTimes[i+1].find('-')-1].isdigit():
 					timePair = unparsedTimes[i+1][0:unparsedTimes[i+1].find('-')], unparsedTimes[i+1][unparsedTimes[i+1].find('-')+1:]
