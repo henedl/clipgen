@@ -24,6 +24,7 @@ DEBUGGING  = False
 #	- Created composite videos with clips from multiple participants?
 #	- Title/ending cards?
 #	- Being able to select multiple non-continous lines
+#	- Add ability to target only one cell. Proposed syntax "P01.11". Should also be batchable, i.e. "P01.11 + P03.11 + P03.09". Should be available directly at (current) mode select stage.
 # Programming stuff:
 #	- Command line arguments to run everything from a prompt instead of interactively.
 # 	- It would be much faster to just dump all the contents of the sheet into a list and work with that (easily supported by gspread)
