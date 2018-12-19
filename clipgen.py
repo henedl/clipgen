@@ -184,7 +184,7 @@ def generate_category(sheet, p, m, s, numUsers, studyName, category):
 		for i in range(catCell.row+1, sheet.row_count - p.col):
 			for j in range(p.col, p.col + numUsers):
 				if sheet.cell(i, m.col).value != 'T':
-					if DEBUGGING: print '! {0}'.format(sheet.cell(i, j))
+					if DEBUGGING: print '! DEBUG {0}'.format(sheet.cell(i, j))
 					val = sheet.cell(i, j)
 					if val.value is None:
 						# Discard empty cells.
@@ -197,7 +197,7 @@ def generate_category(sheet, p, m, s, numUsers, studyName, category):
 						times.append(issue)
 						print '+ Found timestamp: {0}'.format(val.value)
 				else:
-					if DEBUGGING: print '! Encountered other category, stopping category batch call'
+					if DEBUGGING: print '! DEBUG Encountered other category, stopping category batch call'
 					return times
 
 def get_category(sheet, startingRow, pRow, mCol, sCol):
@@ -252,7 +252,7 @@ def check_filename(filename):
 def check_filename_length(filename, step=1):
 	if len(filename) > 255:
 		if step > 1:
-			if DEBUGGING: print '! Filename was longer than 255 chars ({0}, length {1})'.format(filename, len(filename))
+			if DEBUGGING: print '! DEBUG Filename was longer than 255 chars ({0}, length {1})'.format(filename, len(filename))
 			filename = filename[0:255-(1+len(str(step))+len(FILEFORMAT))] + '-' + str(step) + FILEFORMAT
 		else:
 			filename = filename[0:255-(len(FILEFORMAT))] + FILEFORMAT
@@ -270,7 +270,7 @@ def clean_issue(issue):
 	issue['interview'] = []
 
 	for i in lines:
-		if DEBUGGING: print '! Cleaning timestamp {0}'.format(unparsedTimes[i])
+		if DEBUGGING: print '! DEBUG Cleaning timestamp {0}'.format(unparsedTimes[i])
 		unparsedTimes[i] = unparsedTimes[i].strip().rstrip(',').rstrip('-')
 		if unparsedTimes[i] == '':
 			pass
@@ -333,7 +333,7 @@ def ffmpeg(inputfile, outputfile, startpos, outpos, reencode):
 
 	print 'Cutting {0} from {1} to {2}.'.format(inputfile, startpos, outpos)
 	if DEBUGGING:
-		print '! Debugging enabled, not attempting to call ffmpeg or output any files.'
+		print '! DEBUG Debugging enabled, not attempting to call ffmpeg or output any files.'
 	else:
 		try:
 			if not reencode:
@@ -390,7 +390,7 @@ def main():
 	os.chdir(os.path.dirname(os.path.abspath(__file__)))
 	print '-------------------------------------------------------------------------------'
 	print 'Welcome to clipgen v{1}, for use by Paradox User Research\n\nWorking directory: {0}\nPlace video files and the oauth.json file in this directory.'.format(os.getcwd(), VERSIONNUM)
-	if DEBUGGING: print '! Debug mode is ON. Several limitations apply and more things will be printed.'
+	if DEBUGGING: print '! DEBUG Debug mode is ON. Several limitations apply and more things will be printed.'
 	# Remember that documents need to be shared to the email found in the json-file for OAuth-ing to work.
 	# Each user of this program should also have their own, unique json-file (generate this on the Google Developer API website).
 	scope = ['https://spreadsheets.google.com/feeds',
@@ -521,7 +521,7 @@ def main():
 				vidName = check_filename('[Study ' + filter(unicode.isdigit, timesList[i]['study']) + '][' + timesList[i]['category'] + '] ' + timesList[i]['desc'] + FILEFORMAT)
 
 				if timesList[i]['interview'].count(j) > 0:
-					if DEBUGGING: print '! Timestamp had interview'
+					if DEBUGGING: print '! DEBUG Timestamp had interview'
 					baseVideo = timesList[i]['study'] + '_interview_' + timesList[i]['participant'] + FILEFORMAT
 				else:
 					baseVideo = timesList[i]['study'] + '_' + timesList[i]['participant']  + FILEFORMAT
