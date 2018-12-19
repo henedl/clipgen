@@ -7,7 +7,7 @@ from oauth2client.service_account import ServiceAccountCredentials
 # Constants 
 REENCODING = False
 FILEFORMAT = '.mp4'
-VERSIONNUM = '0.2.7'
+VERSIONNUM = '0.2.8'
 SHEET_NAME = 'data set'
 DEBUGGING  = False
 
