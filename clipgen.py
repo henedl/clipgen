@@ -1,5 +1,5 @@
 import gspread
-import os, sys
+import os, sys, string
 import subprocess
 from datetime import datetime
 from oauth2client.service_account import ServiceAccountCredentials
@@ -30,10 +30,9 @@ DEBUGGING  = False
 # 	- It would be much faster to just dump all the contents of the sheet into a list and work with that (easily supported by gspread)
 # 	- Cleaner variable names (even for things relating to iterators - ipairList, really?)
 #	- Also, naming consistency, currently there is some camel case and some underscores, etc
-#	- Except ffmpeg crashes/errors
 #	- Logging of which timestamps are discarded
 #	- Expand debug mode (with multiple levels?)
-#	- Upgrade to Python 3
+#	- Upgrade to Python 3?
 #	- Refactor try statements to be smaller
 #	- Support other data formats (Excel, CSV) - would need to re-write parsing backend and refactor code heavily
 # Batch improvements:
@@ -309,7 +308,7 @@ def clean_issue(issue):
 	issue['desc'] = issue['desc'].replace('\\','-')
 	issue['desc'] = issue['desc'].replace('/','-')
 	issue['desc'] = issue['desc'].replace('?','_')
-	issue['desc'] = issue['desc'].translate(None,'\"\'.><|:')
+	issue['desc'] = issue['desc'].translate({ord(i):None for i in '\"\'.><|:'})
 	
 	return issue
 
@@ -334,14 +333,17 @@ def ffmpeg(inputfile, outputfile, startpos, outpos, reencode):
 
 	print 'Cutting {0} from {1} to {2}.'.format(inputfile, startpos, outpos)
 	if DEBUGGING:
-		print '! Debugging enabled, not generating any output files.'
+		print '! Debugging enabled, not attempting to call ffmpeg or output any files.'
 	else:
-		if not reencode:
-			subprocess.call(['ffmpeg', '-y', '-loglevel', '16', '-ss', startpos, '-i', inputfile, '-t', str(duration), '-c', 'copy', '-avoid_negative_ts', '1', outputfile])
-		else:
-			# If we do this, we will re-encode the video, but resolve all issues with with iframes early and late.
-			subprocess.call(['ffmpeg', '-y', '-loglevel', '16', '-ss', startpos, '-i', inputfile, '-t', str(duration), outputfile])
-		print '+ Generated video \'{0}\' successfully.\n File size: {1}\n Expected duration: {2} s\n'.format(outputfile,filesize(os.path.getsize(outputfile)), duration)
+		try:
+			if not reencode:
+				subprocess.call(['ffmpeg', '-y', '-loglevel', '16', '-ss', startpos, '-i', inputfile, '-t', str(duration), '-c', 'copy', '-avoid_negative_ts', '1', outputfile])
+			else:
+				# If we do this, we will re-encode the video, but resolve all issues with with iframes early and late.
+				subprocess.call(['ffmpeg', '-y', '-loglevel', '16', '-ss', startpos, '-i', inputfile, '-t', str(duration), outputfile])
+			print '+ Generated video \'{0}\' successfully.\n File size: {1}\n Expected duration: {2} s\n'.format(outputfile,filesize(os.path.getsize(outputfile)), duration)
+		except WindowsError as e:
+			print '\n! ERROR ffmpeg could not successfully run.\n  clipgen returned the following error:\n  {0}\n'.format(e)
 
 # Returns the duration of a clip as seconds
 def get_duration(intime, outtime):
@@ -391,7 +393,8 @@ def main():
 	if DEBUGGING: print '! Debug mode is ON. Several limitations apply and more things will be printed.'
 	# Remember that documents need to be shared to the email found in the json-file for OAuth-ing to work.
 	# Each user of this program should also have their own, unique json-file (generate this on the Google Developer API website).
-	scope = ['https://spreadsheets.google.com/feeds']
+	scope = ['https://spreadsheets.google.com/feeds',
+	 		 'https://www.googleapis.com/auth/drive']
 	try:
 		credentials = ServiceAccountCredentials.from_json_keyfile_name('oauth.json', scope)
 	except IOError as e:
@@ -410,7 +413,7 @@ def main():
 	inputFileFails = 0
 
 	while True:
-		inputName = raw_input('\nPlease enter the index, name, URL or key of the spreadsheet (\'all\' for list,    \'new\' for list of newest, \'last\' to immediately open latest):\n>> ')
+		inputName = raw_input('\nPlease enter the index, name, URL or key of the spreadsheet (\'all\' for list, \'new\' for list of newest, \'last\' to immediately open latest):\n>> ')
 		try:
 			if inputName[:4] == 'http':
 				# In case user copies a URL, we can handle that.
@@ -515,7 +518,7 @@ def main():
 			timesList[i] = clean_issue(timesList[i])
 			for j in range(0,len(timesList[i]['times'])):
 				vidIn, vidOut = timesList[i]['times'][j]
-				vidName = check_filename('[Study ' + filter(str.isdigit, timesList[i]['study']) + '][' + timesList[i]['category'] + '] ' + timesList[i]['desc'] + FILEFORMAT)
+				vidName = check_filename('[Study ' + filter(unicode.isdigit, timesList[i]['study']) + '][' + timesList[i]['category'] + '] ' + timesList[i]['desc'] + FILEFORMAT)
 
 				if timesList[i]['interview'].count(j) > 0:
 					if DEBUGGING: print '! Timestamp had interview'
