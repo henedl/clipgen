@@ -308,7 +308,9 @@ def clean_issue(issue):
 	issue['desc'] = issue['desc'].replace('\\','-')
 	issue['desc'] = issue['desc'].replace('/','-')
 	issue['desc'] = issue['desc'].replace('?','_')
-	issue['desc'] = issue['desc'].translate({ord(i):None for i in '\"\'.><|:'}) # BUG This doesn't work on Hanna's computer
+	#issue['desc'] = issue['desc'].translate({ord(i):None for i in '\"\'.><|:'}) # BUG This doesn't work on Hanna's computer
+	for w in ['\'','\"','.','>','<','|',':']:
+		issue['desc'] = issue['desc'].replace(w,'')
 	
 	return issue
 
