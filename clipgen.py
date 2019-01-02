@@ -1,5 +1,5 @@
 import gspread
-import os, sys, string
+import os, sys
 import subprocess
 from datetime import datetime
 from oauth2client.service_account import ServiceAccountCredentials
@@ -7,16 +7,17 @@ from oauth2client.service_account import ServiceAccountCredentials
 # Constants 
 REENCODING = False
 FILEFORMAT = '.mp4'
-VERSIONNUM = '0.2.8'
+VERSIONNUM = '0.3.0'
 SHEET_NAME = 'data set'
 DEBUGGING  = False
+
+SETTINGSLIST = ['REENCODING', 'FILEFORMAT', 'DEBUGGING']
 
 # What is this?
 # This script will help quickly cut out video snippets in user reserach videos, based on researcher's timestamps in a spreadsheet!
 
 # TODO
 # Quality of life:
-# 	- Settings, at least the ability to change fileformat, reencoding and other overarching options, without editing code
 #	- Timestamp cleaning can't handle this situation: "H:M:S-H:M:S+interview H:M:S" because of spaces between interview and subsequent timestamp, but not before.
 #	- Timestamp cleaning doesn't handle: " +H:M:S" either, strip + prefixes?
 #	- Timestamp cleaning can't handle: "H:M:S + interview"
@@ -52,6 +53,7 @@ def generate_list(sheet, mode, type='Default'):
 
 	# TODO 
 	# Add more processing of the title, split out the study number, and project name.
+	# Remove hardcoded location and format expectations on study name.
 	studyName = sheet.cell(1, 1).value # Find the title of the study, assuming top left in sheet.
 	studyName = studyName[0:studyName.find('Data set')-1] # Cut off the stuff we don't want.
 	print 'Beginning work on {0}.'.format(studyName)
@@ -61,6 +63,7 @@ def generate_list(sheet, mode, type='Default'):
 	studyName = studyName.replace('study ', 'study')
 	studyName = studyName[0:studyName.find('study')].replace(' ', '') + '_' + studyName[studyName.find('study'):]
 	studyName = studyName.replace(' ', '_') # Replace any leftover whitespace with underscore.
+	studyName = unicode(studyName) # Typecast to unicode string to avoid TypeErrors later
 	# It should now look like this: 'thundercats_study5'
 
 	# Figure out how many users we have in the sheet (assumes every user is indicated by a 'PXX' identifier)
@@ -174,6 +177,25 @@ def generate_list(sheet, mode, type='Default'):
 
 	return times
 
+def set_program_settings():
+	print '\nWhich setting? Available:\n'
+	print ', '.join(SETTINGSLIST)
+	settingToChange = raw_input('\n>> ')
+
+	print '* Current value for \'{1}\' is \'{0}\''.format(globals()[settingToChange], settingToChange)
+	
+	newSettingValue = raw_input('\nWhich new value?\n>> ')
+
+	print '* \'{0}\' SET TO \'{1}\''.format(settingToChange, newSettingValue)
+		# Reencoding
+
+	# As of right now we are assuming that all settings are global variables.
+	if settingToChange != '':
+		globals()[settingToChange] = newSettingValue
+		return True
+	else:
+		return False
+
 def generate_category(sheet, p, m, s, numUsers, studyName, category):
 	# TODO
 	# Case-insensitive category matching.
@@ -233,7 +255,7 @@ def filesize(size, precision=2):
     return '%.*f%s'%(precision, size, suffixes[suffixIndex])
 
 # Appends an incremeneted number to the end of files that already exist.
-def check_filename(filename):
+def set_filename(filename):
 	step = 1
 	while True:
 		if os.path.isfile(filename):
@@ -245,11 +267,11 @@ def check_filename(filename):
 				filename = filename[0:dashPos] + '-' + str(step) + FILEFORMAT
 			step += 1
 		else:
-			filename = check_filename_length(filename, step)
+			filename = set_filename_length(filename, step)
 			break
 	return filename
 
-def check_filename_length(filename, step=1):
+def set_filename_length(filename, step=1):
 	if len(filename) > 255:
 		if step > 1:
 			if DEBUGGING: print '! DEBUG Filename was longer than 255 chars ({0}, length {1})'.format(filename, len(filename))
@@ -308,9 +330,14 @@ def clean_issue(issue):
 	issue['desc'] = issue['desc'].replace('\\','-')
 	issue['desc'] = issue['desc'].replace('/','-')
 	issue['desc'] = issue['desc'].replace('?','_')
-	#issue['desc'] = issue['desc'].translate({ord(i):None for i in '\"\'.><|:'}) # BUG This doesn't work on Hanna's computer
-	for w in ['\'','\"','.','>','<','|',':']:
-		issue['desc'] = issue['desc'].replace(w,'')
+	for forbiddenCharacter in ['\'',
+			  '\"',
+			  '.',
+			  '>',
+			  '<',
+			  '|',
+			  ':']:
+		issue['desc'] = issue['desc'].replace(forbiddenCharacter,'')
 	
 	return issue
 
@@ -335,7 +362,7 @@ def ffmpeg(inputfile, outputfile, startpos, outpos, reencode):
 
 	print 'Cutting {0} from {1} to {2}.'.format(inputfile, startpos, outpos)
 	if DEBUGGING:
-		print '! DEBUG Debugging enabled, not attempting to call ffmpeg or output any files.'
+		print '! DEBUG Debugging enabled, not attempting to call ffmpeg or output any files.\n  inputfile: {0},\n  outputfile: {1}'.format(inputfile, outputfile)
 	else:
 		try:
 			if not reencode:
@@ -343,9 +370,11 @@ def ffmpeg(inputfile, outputfile, startpos, outpos, reencode):
 			else:
 				# If we do this, we will re-encode the video, but resolve all issues with with iframes early and late.
 				subprocess.call(['ffmpeg', '-y', '-loglevel', '16', '-ss', startpos, '-i', inputfile, '-t', str(duration), outputfile])
-			print '+ Generated video \'{0}\' successfully.\n File size: {1}\n Expected duration: {2} s\n'.format(outputfile,filesize(os.path.getsize(outputfile)), duration)
+			print '+ Generated video \'{0}\' successfully.\n File size: {1}\n Expected duration: {2} s\n'.format(outputfile, filesize(os.path.getsize(outputfile)), duration)
+			return True
 		except WindowsError as e:
-			print '\n! ERROR ffmpeg could not successfully run.\n  clipgen returned the following error:\n  {0}\n'.format(e)
+			print '\n! ERROR ffmpeg could not successfully run.\n  clipgen returned the following error:\n  {0}\n  - Attempted location: \'{3}\'\n  - Attemped inputfile: \'{1}\',\n  - Attempted outputfile: \'{2}\'\n'.format(e, inputfile, outputfile, os.getcwd())
+			return False
 
 # Returns the duration of a clip as seconds
 def get_duration(intime, outtime):
@@ -415,7 +444,7 @@ def main():
 	inputFileFails = 0
 
 	while True:
-		inputName = raw_input('\nPlease enter the index, name, URL or key of the spreadsheet (\'all\' for list, \'new\' for list of newest, \'last\' to immediately open latest):\n>> ')
+		inputName = raw_input('\nPlease enter the index, name, URL or key of the spreadsheet (\'all\' for list, \'new\' for list of newest, \'last\' to immediately open latest, \'settings\' to change settings):\n>> ')
 		try:
 			if inputName[:4] == 'http':
 				# In case user copies a URL, we can handle that.
@@ -443,6 +472,9 @@ def main():
   				i = int(inputName)-1
   				worksheet = gc.open(get_alldocs(gc).split(',')[i].strip()).worksheet(SHEET_NAME)
   				break
+  			elif inputName[:8] == 'settings':
+				# This mode allows users to change settings for this run of the program only
+				set_program_settings()
 			elif inputName.find(' ') == -1:
 				# If user has entered text that has no spaces (and hasn't been caught as a number, per above) we try to open it as a GID key.
 				worksheet = gc.open_by_key(inputName).worksheet(SHEET_NAME)
@@ -510,7 +542,7 @@ def main():
 			# issues are dicts that hold:
 			# - cell 			Full gspread Cell object (row, col, value)
 			# - desc 			String, summary description of the issue
-			# - study 			String, name of the study
+			# - study 			Unicode string, name of the study
 			# - participant 	String, participant ID (without prefix)
 			# - times 			List, contains one timestamp pair (as a tuple) per index
 			# - interview 		List, contains indices of timestamps that are from interviews
@@ -520,7 +552,11 @@ def main():
 			timesList[i] = clean_issue(timesList[i])
 			for j in range(0,len(timesList[i]['times'])):
 				vidIn, vidOut = timesList[i]['times'][j]
-				vidName = check_filename('[Study ' + filter(unicode.isdigit, timesList[i]['study']) + '][' + timesList[i]['category'] + '] ' + timesList[i]['desc'] + FILEFORMAT)
+				try:
+					vidName = set_filename('[Study ' + filter(unicode.isdigit, timesList[i]['study']) + '][' + timesList[i]['category'] + '] ' + timesList[i]['desc'] + FILEFORMAT)
+				except TypeError as e:
+					print '! ERROR Some character encoding nonsense occured:\n  {0}'.format(e)
+					break
 
 				if timesList[i]['interview'].count(j) > 0:
 					if DEBUGGING: print '! DEBUG Timestamp had interview'
@@ -528,8 +564,9 @@ def main():
 				else:
 					baseVideo = timesList[i]['study'] + '_' + timesList[i]['participant']  + FILEFORMAT
 				
-				ffmpeg(inputfile=baseVideo, outputfile=vidName, startpos=vidIn, outpos=vidOut, reencode=REENCODING)
-				videosGenerated += 1
+				completed = ffmpeg(inputfile=baseVideo, outputfile=vidName, startpos=vidIn, outpos=vidOut, reencode=REENCODING)
+				if completed:
+					videosGenerated += 1
 
 		if not REENCODING:
 			print '* No re-encoding done, expect:\n- inaccurate start and end timings\n- lossy frames until first keyframe\n- bad timecodes at the end\n'
