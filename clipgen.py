@@ -7,9 +7,9 @@ from oauth2client.service_account import ServiceAccountCredentials
 # Constants 
 REENCODING = False
 FILEFORMAT = '.mp4'
-VERSIONNUM = '0.3.0'
+VERSIONNUM = '0.3.1'
 SHEET_NAME = 'data set'
-DEBUGGING  = False
+DEBUGGING  = True
 
 SETTINGSLIST = ['REENCODING', 'FILEFORMAT', 'DEBUGGING']
 
@@ -76,66 +76,13 @@ def generate_list(sheet, mode, type='Default'):
 	print 'Found {0} users in total, spanning columns {1} to {2}.'.format(numUsers, p.col, numUsers+p.col)
 
 	if mode == 'batch':
-		latestCategory = ''
-		passedOverTitle = False
-		if type == 'Default':
-			for i in range(p.row + 2, sheet.row_count - p.col):
-				if not passedOverTitle:
-					if sheet.cell(i, m.col).value == 'T':
-						latestCategory = sheet.cell(i, s.col).value
-						print '+ Found category \'{0}\' on line {1}.'.format(latestCategory, i)
-						passedOverTitle = True
-					elif not passedOverTitle:
-						latestCategory = get_category(sheet, i, p.row, m.col, s.col)	
-				for j in range(p.col, p.col + numUsers):
-					val = sheet.cell(i, j)
-					if val.value is None:
-						# Discard empty cells.
-						pass
-					elif val.value == '':
-						# Discard empty cells.
-						pass
-					else:
-						issue = { 'cell': val, 'desc': sheet.cell(i, s.col).value, 'study': studyName, 'participant': sheet.cell(p.row+1, j).value, 'category': latestCategory }
-						times.append(issue)
-						print '+ Found timestamp: {0}'.format(val.value)
-		else:
-			category = raw_input('Which category would you like to work in?\n>> ')
-			times = generate_category(sheet, p, m, s, numUsers, studyName, category)
+		times = generate_batch(sheet, p, m, s, numUsers, studyName)	
+	elif mode == 'category':
+		category = raw_input('Which category would you like to work in?\n>> ')
+		times = generate_category(sheet, p, m, s, numUsers, studyName, category)
 	elif mode == 'line':
-		# This mode generates videos for a single line/row number.
-		latestCategory = ''
-		while True:
-			try:
-				lineSelect = int(raw_input('\nWhich issue (row number only)?\n>> '))
-			except ValueError:
-				# TODO
-				# This should not be set up this way, make it loop
-				lineSelect = int(raw_input('\nTry again. Integer only.\n>> '))
-
-			print '\nIssue titled: {0}\n'.format(sheet.cell(lineSelect, s.col).value)
-			yn = raw_input('Is this the correct issue? y/n\n>> ')
-			if yn == 'y':
-				break
-			else:
-				pass
-
-		latestCategory = get_category(sheet, lineSelect, p.row, m.col, s.col)
-
-		for j in range(p.col, p.col + numUsers):
-			val = sheet.cell(lineSelect, j)
-			if val.value is None:
-				# Discard empty cells.
-				pass
-			elif val.value == '':
-				# Discard empty cells.
-				pass
-			else:
-				issue = { 'cell': val, 'desc': sheet.cell(lineSelect, s.col).value, 'study': studyName, 'participant': sheet.cell(p.row+1, j).value, 'category': latestCategory }
-				times.append(issue)
-				print '+ Found timestamp: {0}'.format(val.value.replace('\n',' '))
+		times = generate_line(sheet, p, m, s, numUsers, studyName)
 	elif mode == 'range':
-		# This mode generates videos for all issues found in a range or span of issues.
 		while True:
 			try:
 				startLineSelect = int(raw_input('\nWhich starting line (row number only)?\n>> '))
@@ -149,30 +96,10 @@ def generate_list(sheet, mode, type='Default'):
 				break
 			else:
 				pass
-		
-		passedOverTitle = False
-		for i in range(startLineSelect, endLineSelect+1):
-			if not passedOverTitle:
-				if sheet.cell(i, m.col).value == 'T':
-					latestCategory = sheet.cell(i, s.col).value
-					print '+ Found category \'{0}\' on line {1}.'.format(latestCategory, i)
-					passedOverTitle = True
-				elif not passedOverTitle:
-					latestCategory = get_category(sheet, i, p.row, m.col, s.col)
-			for j in range(p.col, p.col + numUsers):
-				val = sheet.cell(i, j)
-				if val.value is None:
-					# Discard empty cells.
-					pass
-				elif val.value == '':
-					# Discard empty cells.
-					pass
-				else:
-					issue = { 'cell': val, 'desc': sheet.cell(i, s.col).value, 'study': studyName, 'participant': sheet.cell(p.row+1, j).value, 'category': latestCategory }
-					times.append(issue)
-					print '+ Found timestamp: {0}'.format(val.value)
+		times = generate_range(sheet, p, m, s, numUsers, studyName, startLineSelect, endLineSelect)
 	elif mode == 'select':
-		# This mode generates a list of non-completed issues and lets user select from those.
+		# TODO
+		# Build this mode. This mode should generate a list of non-completed issues and lets user select from those.
 		pass
 
 	return times
@@ -196,31 +123,122 @@ def set_program_settings():
 	else:
 		return False
 
+def generate_batch(sheet, p, m, s, numUsers, studyName):
+	# TODO
+	# Start using scan_line in batch calls as well.
+	times = []
+	latestCategory = ''
+	passedOverTitle = False
+	for i in range(p.row + 2, sheet.row_count - p.col):
+		if not passedOverTitle:
+			if sheet.cell(i, m.col).value == 'T':
+				latestCategory = sheet.cell(i, s.col).value
+				print '+ Found category \'{0}\' on line {1}.'.format(latestCategory, i)
+				passedOverTitle = True
+			elif not passedOverTitle:
+				latestCategory = get_category(sheet, i, p.row, m.col, s.col)	
+		for j in range(p.col, p.col + numUsers):
+			val = sheet.cell(i, j)
+			if val.value is None:
+				# Discard empty cells.
+				pass
+			elif val.value == '':
+				# Discard empty cells.
+				pass
+			else:
+				issue = { 'cell': val, 'desc': sheet.cell(i, s.col).value, 'study': studyName, 'participant': sheet.cell(p.row+1, j).value, 'category': latestCategory }
+				times.append(issue)
+				print '+ Found timestamp: {0}'.format(val.value)
+	return times
+
 def generate_category(sheet, p, m, s, numUsers, studyName, category):
 	# TODO
 	# Case-insensitive category matching.
+	# Fix connection drops (or whatever is happening) after a few rows.
 	times = []
 	catCell = sheet.find(category)
+
+	# If the category line is labeled correctly (in the meta column), we proceed.
 	if sheet.cell(catCell.row, m.col).value == 'T':
 		print '+ Found category \'{1}\' on line {0}.'.format(catCell.row, category)
-		for i in range(catCell.row+1, sheet.row_count - p.col):
-			for j in range(p.col, p.col + numUsers):
-				if sheet.cell(i, m.col).value != 'T':
-					if DEBUGGING: print '! DEBUG {0}'.format(sheet.cell(i, j))
-					val = sheet.cell(i, j)
-					if val.value is None:
-						# Discard empty cells.
-						pass
-					elif val.value == '':
-						# Discard empty cells.
-						pass
-					else:
-						issue = { 'cell': val, 'desc': sheet.cell(i, s.col).value, 'study': studyName, 'participant': sheet.cell(p.row+1, j).value, 'category': category }
-						times.append(issue)
-						print '+ Found timestamp: {0}'.format(val.value)
-				else:
-					if DEBUGGING: print '! DEBUG Encountered other category, stopping category batch call'
-					return times
+		# For each row below the category line, we look for timestamps.
+		if DEBUGGING: print '\n! DEBUG Working for (up to) {0} lines, starting on line {1}'.format( sheet.row_count-(p.row+catCell.row+1), catCell.row+1 )
+		for i in range(catCell.row+1, sheet.row_count - p.row):
+			# For each column (for each row) we look for timestamps.
+			if DEBUGGING: print '! DEBUG Line {0}'.format(i)
+			if sheet.cell(i, m.col).value != 'T':
+				times = times + scan_line(sheet, p, m, s, numUsers, i, studyName, category)
+			else:
+				if DEBUGGING: print '! DEBUG Encountered other category, stopping category batch call'
+				break
+	return times
+
+def generate_line(sheet, p, m, s, numUsers, studyName):
+	# This mode generates videos for a single line/row number.
+	while True:
+		try:
+			lineSelect = int(raw_input('\nWhich issue (row number only)?\n>> '))
+		except ValueError:
+			# TODO
+			# This should not be set up this way, make it loop
+			lineSelect = int(raw_input('\nTry again. Integer only.\n>> '))
+		print '\nIssue titled: {0}\n'.format(sheet.cell(lineSelect, s.col).value)
+		yn = raw_input('Is this the correct issue? y/n\n>> ')
+		if yn == 'y':
+			break
+		else:
+			pass
+
+	latestCategory = get_category(sheet, lineSelect, p.row, m.col, s.col)
+	times = scan_line(sheet, p, m, s, numUsers, lineSelect, studyName, latestCategory)
+	return times
+
+def scan_line(sheet, p, m, s, numUsers, lineSelect, studyName, latestCategory=''):
+	times = []
+	# Step through each cell in the row, starting at the column where the participant tag was found, up through the column of the last participant.
+	for j in range(p.col, p.col + numUsers):
+		val = sheet.cell(lineSelect, j)
+		if DEBUGGING: print '! DEBUG {0}'.format(sheet.cell(lineSelect, j))
+		if val.value is None:
+			# Discard empty cells.
+			pass
+		elif val.value == '':
+			# Discard empty cells.
+			pass
+		else:
+			# When we find a non-empty cell, we file it away as a timestamp/issue.
+			issue = { 'cell': val, 'desc': sheet.cell(lineSelect, s.col).value, 'study': studyName, 'participant': sheet.cell(p.row+1, j).value, 'category': latestCategory }
+			times.append(issue)
+			print '+ Found timestamp: {0}'.format(val.value.replace('\n',' '))
+	return times
+
+def generate_range(sheet, p, m, s, numUsers, studyName, startLineSelect, endLineSelect):
+	# TODO
+	# Start using scan_line in range calls as well.
+	# This mode generates videos for all issues found in a range or span of issues.
+	times = []
+	passedOverTitle = False
+	for i in range(startLineSelect, endLineSelect+1):
+		if not passedOverTitle:
+			if sheet.cell(i, m.col).value == 'T':
+				latestCategory = sheet.cell(i, s.col).value
+				print '+ Found category \'{0}\' on line {1}.'.format(latestCategory, i)
+				passedOverTitle = True
+			elif not passedOverTitle:
+				latestCategory = get_category(sheet, i, p.row, m.col, s.col)
+		for j in range(p.col, p.col + numUsers):
+			val = sheet.cell(i, j)
+			if val.value is None:
+				# Discard empty cells.
+				pass
+			elif val.value == '':
+				# Discard empty cells.
+				pass
+			else:
+				issue = { 'cell': val, 'desc': sheet.cell(i, s.col).value, 'study': studyName, 'participant': sheet.cell(p.row+1, j).value, 'category': latestCategory }
+				times.append(issue)
+				print '+ Found timestamp: {0}'.format(val.value)
+	return times
 
 def get_category(sheet, startingRow, pRow, mCol, sCol):
 	category = ''
@@ -515,7 +533,7 @@ def main():
 					timesList = generate_list(worksheet, 'range')
 					break
 				elif inputMode[0] == 'c' or inputMode == 'cat' or inputMode == 'category':
-					timesList = generate_list(worksheet, 'batch', 'category')
+					timesList = generate_list(worksheet, 'category')
 					break
 				elif inputMode == 'positive':
 					timesList = generate_list(worksheet, 'batch', 'Positive')
@@ -525,7 +543,7 @@ def main():
 				#	break
 				elif inputMode == 'karl':
 					plogo()
-			except (IndexError, gspread.HTTPError) as e:
+			except (IndexError, gspread.exceptions.GSpreadException) as e:
 				inputModeFails += 1
 				try:
 					gc = gspread.authorize(credentials)
