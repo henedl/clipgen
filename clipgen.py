@@ -73,7 +73,7 @@ def generate_list(sheet, mode, type='Default'):
 
 	# Get number of users, an int that we'll need to efficiently loop through the worksheet.
 	userList = sheet.row_values(p.row+1)
-	numUsers = calculate_numusers(userList, p, sheet.col_count)
+	numUsers = get_numusers(userList, p, sheet.col_count)
 
 	if mode == 'batch':
 		times = generate_batch(sheet, p, m, s, numUsers, studyName)	
@@ -108,7 +108,7 @@ def generate_list(sheet, mode, type='Default'):
 # End generate_list()
 
 # Returns int numUsers, how many participant columns exist in the worksheet
-def calculate_numusers(userList, p, colCount):
+def get_numusers(userList, p, colCount):
 	# Figure out how many users we have in the sheet (assumes every user is indicated by a 'PXX' identifier)
 	numUsers = 0
 	for j in range(0, colCount - p.col):
@@ -117,7 +117,7 @@ def calculate_numusers(userList, p, colCount):
 				numUsers += 1
 	print 'Found {0} users in total, spanning columns {1} to {2}.'.format(numUsers, p.col, numUsers+p.col)
 	return numUsers	
-# End calculate_numusers()
+# End get_numusers()
 
 def set_program_settings():
 	# WIP + TODO
