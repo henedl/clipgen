@@ -51,6 +51,11 @@ def generate_list(sheet, mode, type='Default'):
 	s = sheet.find('Summary')
 	times = []
 
+	# WIP
+	# Sheet dumping to drastically reduce number of calls to Google's API
+	# - sheetDump is a list of lists, which forms a matrix
+	#sheetDump = sheet.get_all_values()
+
 	# TODO 
 	# Add more processing of the title, split out the study number, and project name.
 	# Remove hardcoded location and format expectations on study name.
@@ -66,14 +71,9 @@ def generate_list(sheet, mode, type='Default'):
 	studyName = unicode(studyName) # Typecast to unicode string to avoid TypeErrors later
 	# It should now look like this: 'thundercats_study5'
 
-	# Figure out how many users we have in the sheet (assumes every user is indicated by a 'PXX' identifier)
-	numUsers = 0
+	# Get number of users, an int that we'll need to efficiently loop through the worksheet.
 	userList = sheet.row_values(p.row+1)
-	for j in range(0, sheet.col_count - p.col):
-		if len(userList[j]) > 0:
-			if userList[j][0] == 'P':
-				numUsers += 1
-	print 'Found {0} users in total, spanning columns {1} to {2}.'.format(numUsers, p.col, numUsers+p.col)
+	numUsers = calculate_numusers(userList, p, sheet.col_count)
 
 	if mode == 'batch':
 		times = generate_batch(sheet, p, m, s, numUsers, studyName)	
@@ -100,14 +100,35 @@ def generate_list(sheet, mode, type='Default'):
 		# End while
 		times = generate_range(sheet, p, m, s, numUsers, studyName, startLineSelect, endLineSelect)
 	elif mode == 'select':
-		# TODO
+		# WIP + TODO
 		# Build this mode. This mode should generate a list of non-completed issues and lets user select from those.
 		pass
 
 	return times
 # End generate_list()
 
+# Returns int numUsers, how many participant columns exist in the worksheet
+def calculate_numusers(userList, p, colCount):
+	# Figure out how many users we have in the sheet (assumes every user is indicated by a 'PXX' identifier)
+	numUsers = 0
+	for j in range(0, colCount - p.col):
+		if len(userList[j]) > 0:
+			if userList[j][0] == 'P':
+				numUsers += 1
+	print 'Found {0} users in total, spanning columns {1} to {2}.'.format(numUsers, p.col, numUsers+p.col)
+	return numUsers	
+# End calculate_numusers()
+
 def set_program_settings():
+	# WIP + TODO
+	# Options available, as dicts. Each dicts contains:
+	# - name 			The name of the setting, as a string
+	# - default 		The default value of the setting, with varying types of values
+	# - options 		The available options for the setting, as a list of values
+	fileformatOptions = {'name': 'FILEFORMAT', 'default': 'mp4', 'options': ['mp4','flv']}
+	reencodingOptions = {'name': 'REENCODING', 'default': False, 'options': [True, False]}
+	debuggingOptions  = {'name': 'DEBUGGING', 'default': False, 'options': [True, False]}
+
 	print '\nWhich setting? Available:\n'
 	print ', '.join(SETTINGSLIST)
 	settingToChange = raw_input('\n>> ')
@@ -329,7 +350,7 @@ def filesize(size, precision=2):
     return '%.*f%s'%(precision, size, suffixes[suffixIndex])
 # End filesize()
 
-# Appends an incremeneted number to the end of files that already exist.
+# Appends an incremeneted number to the end of files that already exist, if necessary to prevent overwriting clips.
 def set_filename(filename):
 	step = 1
 	while True:
@@ -346,8 +367,10 @@ def set_filename(filename):
 			break
 	# End while
 	return filename
+# End set_filename()
 
 def set_filename_length(filename, step=1):
+	# Atleast in Windows, filenames should not exceed 255 characters. This method cuts off filenames that might be too long.
 	if len(filename) > 255:
 		if step > 1:
 			if DEBUGGING: print '! DEBUG Filename was longer than 255 chars ({0}, length {1})'.format(filename, len(filename))
@@ -680,6 +703,7 @@ def main():
 def plogo():
 	print '                                          ;.\n	                                  ###:   ######@.\n	                                  ;###   #########\n 	                          .###;    ###   #########@\n	                          +####\'   ###;  ##########\n	                           #####   @##@  ##########    .\n 	                     \'      #####  @###,\'#########@    #@\'\n	                    +##+     ##### ###############@   ######\n	                    +###;    \'#####################  #######\n 	                     ####     ##############################@\n	                      ####   \'###############################\'\n	                       ####.,################################@\n 	                ;#,    :#####################################\n	               @####;  :################,    .@############@\n	               #######@###############+         ###########\n 	                ;#####################           ##########    ,\n	                 :###################@           ###########+@###;\n	                 \'####################           +################\n 	                 \'########, ##########:          #################\'\n	                 #########  @##########      @#########@ #########:\n	                :#########  ;#########;     @##########  .####+.,\';\n 	                @#########+ ##########     \'##########+   @###\n	                \'######@#############      ###########    .###\'\n	                 ###@    \'#####@\'+#;      .###########     ####\'\n 	                :###       ###@            ###########     ######@\n	          ,##@::###@       @##+            @##########@\'   ########\n	          @#########,      ####\'           \'#######################\n 	          ###########;     #####@           #############+@#######@\n	          .###########     +###@##@         #@\'########+    ######,\n	           ###########       ## \'###        #\' #\'@#####     ,#####\n 	           ####\'@###,        ##  @##;      :#, #+ ####:      #####\n	           ###   ;##         ##   ##.      @#\' #@ ,###       @#####\n	           ##+    ##\' :     \'###  ##       ##  ##  @##       @#####@\n 	          .##@    #####.     +######,     \'##  @#   ##       @#####\'\n	           ###,  ######+      @###@##     +##  ,#.  :@       @#####\n	           @###########\'      @#@#\'.#     ###   #@           #####@\n 	           ,###########,      @\' #@       ###  ,##           #####\'\n	           .###@  #####       ,\' ,#       ####,###\'         +#####\'\n	            ##@   #####                   #########         ######\n 	            +\'   @####@                @######+   :        @######\'\n	               @######@              \'######@            ;#######;\n	             \'########@             @######             #########\n 	             \'#########            .@,#####             ########,\n	              @########.             :####.             #######@\n	               @#######@             @####              ######+\n 	                :#######             #. @@             ,###:\n	                  ######\'            \'  :@             ####,\n	                   #####\'                @            #####+\n 	                   #####\'                           \'######\'\n	                    ####:                         \'#######\' \n	                    ####                         #######@\n 	                    ####                        ,######:\n	                    ###:                     ,\',#####@\n	                   \'##@                    ,########:\n	                   @#@                   \'######  \' \n 	                                       \'@######\n	                                        @##@@.'
 	print '\n	 /$$$$$$$                                    /$$\n 	| $$__  $$                                  | $$                    \n 	| $$  \ $$ /$$$$$$   /$$$$$$  /$$$$$$   /$$$$$$$  /$$$$$$  /$$   /$$\n 	| $$$$$$$/|____  $$ /$$__  $$|____  $$ /$$__  $$ /$$__  $$|  $$ /$$/\n 	| $$____/  /$$$$$$$| $$  \__/ /$$$$$$$| $$  | $$| $$  \ $$ \  $$$$/ \n 	| $$      /$$__  $$| $$      /$$__  $$| $$  | $$| $$  | $$  >$$  $$ \n 	| $$     |  $$$$$$$| $$     |  $$$$$$$|  $$$$$$$|  $$$$$$/ /$$/\  $$\n 	|__/      \_______/|__/      \_______/ \_______/ \______/ |__/  \__/'
+# End plogo()
 
 if __name__ == '__main__':
     try:
@@ -691,4 +715,4 @@ if __name__ == '__main__':
     	except SystemExit:
     		os._exit(0)
 	# End try/except
-# End plogo()
+# End __init__
