@@ -90,12 +90,14 @@ def generate_list(sheet, mode, type='Default'):
 			except ValueError:
 				startLineSelect = int(raw_input('\nTry again. Starting line (row number only)?\n>> '))
 				endLineSelect = int(raw_input('\nTry again. Ending line (row number only)?\n>> '))
+			# End try/except
 			print 'Lines selected: {0} to {1}'.format(sheet.cell(startLineSelect, s.col).value, sheet.cell(endLineSelect, s.col).value)
 			yn = raw_input('Is this correct? y/n\n>> ')
 			if yn == 'y':
 				break
 			else:
 				pass
+		# End while
 		times = generate_range(sheet, p, m, s, numUsers, studyName, startLineSelect, endLineSelect)
 	elif mode == 'select':
 		# TODO
@@ -103,6 +105,7 @@ def generate_list(sheet, mode, type='Default'):
 		pass
 
 	return times
+# End generate_list()
 
 def set_program_settings():
 	print '\nWhich setting? Available:\n'
@@ -122,6 +125,7 @@ def set_program_settings():
 		return True
 	else:
 		return False
+# End set_program_settings()
 
 def generate_batch(sheet, p, m, s, numUsers, studyName):
 	# TODO
@@ -149,7 +153,10 @@ def generate_batch(sheet, p, m, s, numUsers, studyName):
 				issue = { 'cell': val, 'desc': sheet.cell(i, s.col).value, 'study': studyName, 'participant': sheet.cell(p.row+1, j).value, 'category': latestCategory }
 				times.append(issue)
 				print '+ Found timestamp: {0}'.format(val.value)
+		# End for
+	# End for
 	return times
+# End generate_batch()
 
 def generate_category(sheet, p, m, s, numUsers, studyName, category):
 	# TODO
@@ -170,7 +177,9 @@ def generate_category(sheet, p, m, s, numUsers, studyName, category):
 			else:
 				if DEBUGGING: print '\n! DEBUG Encountered other category, stopping category batch call'
 				break
+		# End for
 	return times
+# End generate_category()
 
 def generate_line(sheet, p, m, s, numUsers, studyName):
 	# This mode generates videos for a single line/row number.
@@ -187,10 +196,12 @@ def generate_line(sheet, p, m, s, numUsers, studyName):
 			break
 		else:
 			pass
+	# End while
 
 	latestCategory = get_category(sheet, lineSelect, p.row, m.col, s.col)
 	times = get_line_new(sheet, p, m, s, numUsers, lineSelect, studyName, latestCategory)
 	return times
+# End generate_line()
 
 def scan_line(sheet, p, m, s, numUsers, lineSelect, studyName, latestCategory=''):
 	times = []
@@ -213,8 +224,12 @@ def scan_line(sheet, p, m, s, numUsers, lineSelect, studyName, latestCategory=''
 			print '\n'
 			times.append(issue)
 			print '+ Found timestamp: {0}'.format(val.value.replace('\n',' '))
-	return times
+	# End for
 
+	return times
+# End scan_line()
+
+# This method might be a useful refactor of scan_line()
 def get_line_new(sheet, p, m, s, numUsers, lineSelect, studyName, latestCategory=''):
 	if DEBUGGING: print '\n! DEBUG Starting line {0}'.format(lineSelect)
 
@@ -241,9 +256,11 @@ def get_line_new(sheet, p, m, s, numUsers, lineSelect, studyName, latestCategory
 			issue = { 'cell': sheet.cell(lineSelect, i), 'desc': sheet.cell(lineSelect, s.col).value, 'study': studyName, 'participant': sheet.cell(p.row+1, i).value, 'category': latestCategory}
 			times.append(issue)
 			print '+ Found timestamp: {0}'.format(value.replace('\n',' '))
-	
+	# End for
+
 	if DEBUGGING: print '\n! DEBUG Line completed, method get_line_new returning list of {0} potential timestamps found'.format(len(times))
 	return times
+# End get_line_new()
 
 def generate_range(sheet, p, m, s, numUsers, studyName, startLineSelect, endLineSelect):
 	# TODO
@@ -271,7 +288,10 @@ def generate_range(sheet, p, m, s, numUsers, studyName, startLineSelect, endLine
 				issue = { 'cell': val, 'desc': sheet.cell(i, s.col).value, 'study': studyName, 'participant': sheet.cell(p.row+1, j).value, 'category': latestCategory }
 				times.append(issue)
 				print '+ Found timestamp: {0}'.format(val.value)
+		# End for
+	# End for
 	return times
+# End generate_range()
 
 def get_category(sheet, startingRow, pRow, mCol, sCol):
 	category = ''
@@ -285,6 +305,7 @@ def get_category(sheet, startingRow, pRow, mCol, sCol):
 		except IndexError:
 			break
 	return category
+# End get_category()
 
 # Takes a string, returns a double digit number
 def double_digits(number):
@@ -297,6 +318,7 @@ def double_digits(number):
 		# If we can't typecast, we give up
 		return number
 	# End try/except
+# End double_digits()
 
 def filesize(size, precision=2):
     suffixes = ['B','KB','MB','GB','TB']
@@ -305,6 +327,7 @@ def filesize(size, precision=2):
         suffixIndex += 1 
         size = size / 1024.0
     return '%.*f%s'%(precision, size, suffixes[suffixIndex])
+# End filesize()
 
 # Appends an incremeneted number to the end of files that already exist.
 def set_filename(filename):
@@ -402,8 +425,7 @@ def ffmpeg(inputfile, outputfile, startpos, outpos, reencode):
 	# TODO
 	# Protect against videos that have an outtime beyond base video length
 
-	# DEBUG
-	# Just makes the clip a minute long if we didn't get an in-time
+	# Makes the clip a minute long if we didn't get an out-time
 	if outpos == '00:00:00':
 		outpos = add_duration(startpos)
 
@@ -652,6 +674,7 @@ def main():
 			break
 		else:
 			pass
+	# End while
 # End main()
 
 def plogo():
@@ -667,4 +690,5 @@ if __name__ == '__main__':
     		sys.exit(0)
     	except SystemExit:
     		os._exit(0)
+	# End try/except
 # End plogo()
