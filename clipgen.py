@@ -7,7 +7,7 @@ from oauth2client.service_account import ServiceAccountCredentials
 # Constants 
 REENCODING = False
 FILEFORMAT = '.mp4'
-VERSIONNUM = '0.3.1'
+VERSIONNUM = '0.3.2'
 SHEET_NAME = 'data set'
 DEBUGGING  = True
 
@@ -125,7 +125,7 @@ def set_program_settings():
 
 def generate_batch(sheet, p, m, s, numUsers, studyName):
 	# TODO
-	# Start using scan_line in batch calls as well.
+	# Start using scan_line/get_line_new in batch calls as well.
 	times = []
 	latestCategory = ''
 	passedOverTitle = False
@@ -165,11 +165,10 @@ def generate_category(sheet, p, m, s, numUsers, studyName, category):
 		if DEBUGGING: print '\n! DEBUG Working for (up to) {0} lines, starting on line {1}'.format( sheet.row_count-(p.row+catCell.row+1), catCell.row+1 )
 		for i in range(catCell.row+1, sheet.row_count - p.row):
 			# For each column (for each row) we look for timestamps.
-			if DEBUGGING: print '! DEBUG Line {0}'.format(i)
 			if sheet.cell(i, m.col).value != 'T':
-				times = times + scan_line(sheet, p, m, s, numUsers, i, studyName, category)
+				times = times + get_line_new(sheet, p, m, s, numUsers, i, studyName, category)
 			else:
-				if DEBUGGING: print '! DEBUG Encountered other category, stopping category batch call'
+				if DEBUGGING: print '\n! DEBUG Encountered other category, stopping category batch call'
 				break
 	return times
 
@@ -190,7 +189,7 @@ def generate_line(sheet, p, m, s, numUsers, studyName):
 			pass
 
 	latestCategory = get_category(sheet, lineSelect, p.row, m.col, s.col)
-	times = scan_line(sheet, p, m, s, numUsers, lineSelect, studyName, latestCategory)
+	times = get_line_new(sheet, p, m, s, numUsers, lineSelect, studyName, latestCategory)
 	return times
 
 def scan_line(sheet, p, m, s, numUsers, lineSelect, studyName, latestCategory=''):
@@ -208,8 +207,42 @@ def scan_line(sheet, p, m, s, numUsers, lineSelect, studyName, latestCategory=''
 		else:
 			# When we find a non-empty cell, we file it away as a timestamp/issue.
 			issue = { 'cell': val, 'desc': sheet.cell(lineSelect, s.col).value, 'study': studyName, 'participant': sheet.cell(p.row+1, j).value, 'category': latestCategory }
+			print value
+			print '\n'
+			print issue
+			print '\n'
 			times.append(issue)
 			print '+ Found timestamp: {0}'.format(val.value.replace('\n',' '))
+	return times
+
+def get_line_new(sheet, p, m, s, numUsers, lineSelect, studyName, latestCategory=''):
+	if DEBUGGING: print '\n! DEBUG Starting line {0}'.format(lineSelect)
+
+	times = []
+	values_list = sheet.row_values(lineSelect)
+	# Remove the column items that aren't potential timestamps.
+	for j in range(p.col-1):
+		del values_list[0]
+	# Step through each value in the row, starting at the column where the participant tag was found, up through the column of the last participant.
+	for i, value in enumerate(values_list):
+		if DEBUGGING: print '! DEBUG Item {0} with value {1} being processesed'.format(i, value)
+		if i == p.col+numUsers-1:
+			# Stop iterating once we have gone through all the participants.
+			if DEBUGGING: print '! DEBUG Exit for-loop in method get_line_new, reached final column.\n'
+			break
+		elif value is None:
+			# Discard empty cells.
+			pass
+		elif value == '':
+			# Discard empty cells.
+			pass
+		else:
+			# When we find a non-empty cell, we file it away as a timestamp/issue.
+			issue = { 'cell': sheet.cell(lineSelect, i), 'desc': sheet.cell(lineSelect, s.col).value, 'study': studyName, 'participant': sheet.cell(p.row+1, i).value, 'category': latestCategory}
+			times.append(issue)
+			print '+ Found timestamp: {0}'.format(value.replace('\n',' '))
+	
+	if DEBUGGING: print '\n! DEBUG Line completed, method get_line_new returning list of {0} potential timestamps found'.format(len(times))
 	return times
 
 def generate_range(sheet, p, m, s, numUsers, studyName, startLineSelect, endLineSelect):
@@ -263,6 +296,7 @@ def double_digits(number):
 	except TypeError:
 		# If we can't typecast, we give up
 		return number
+	# End try/except
 
 def filesize(size, precision=2):
     suffixes = ['B','KB','MB','GB','TB']
@@ -287,6 +321,7 @@ def set_filename(filename):
 		else:
 			filename = set_filename_length(filename, step)
 			break
+	# End while
 	return filename
 
 def set_filename_length(filename, step=1):
@@ -297,6 +332,7 @@ def set_filename_length(filename, step=1):
 		else:
 			filename = filename[0:255-(len(FILEFORMAT))] + FILEFORMAT
 	return filename
+# End set_filename_length()
 
 def clean_issue(issue):
 	timeStamps = []
@@ -339,6 +375,7 @@ def clean_issue(issue):
 				timeStamps.append(timePair)
 		else:
 			pass
+	# End for
 
 	issue['times'] = timeStamps
 
@@ -358,7 +395,9 @@ def clean_issue(issue):
 		issue['desc'] = issue['desc'].replace(forbiddenCharacter,'')
 	
 	return issue
+# End clean_issue()
 
+# Calls ffmpeg to cut a video clip - requires ffmpeg to be added to system or user Path
 def ffmpeg(inputfile, outputfile, startpos, outpos, reencode):
 	# TODO
 	# Protect against videos that have an outtime beyond base video length
@@ -393,6 +432,8 @@ def ffmpeg(inputfile, outputfile, startpos, outpos, reencode):
 		except WindowsError as e:
 			print '\n! ERROR ffmpeg could not successfully run.\n  clipgen returned the following error:\n  {0}\n  - Attempted location: \'{3}\'\n  - Attemped inputfile: \'{1}\',\n  - Attempted outputfile: \'{2}\'\n'.format(e, inputfile, outputfile, os.getcwd())
 			return False
+		# End try/except
+# End ffmpeg()
 
 # Returns the duration of a clip as seconds
 def get_duration(intime, outtime):
@@ -411,6 +452,7 @@ def get_duration(intime, outtime):
 			print '* Timestamp formats need to match each other.'
 			print e
 			sys.exit(0)
+	# End try/except
 
 	hDelta = (outtimeDatetime.hour - intimeDatetime.hour)*60*60
 	mDelta = (outtimeDatetime.minute - intimeDatetime.minute)*60
@@ -418,6 +460,7 @@ def get_duration(intime, outtime):
 	duration = hDelta + mDelta + sDelta
 
 	return duration
+# End get_duration()
 
 # Just adds a minute
 def add_duration(intime):
@@ -426,6 +469,7 @@ def add_duration(intime):
 		return double_digits(str(intimeDatetime.hour+1)) + ':00:' + double_digits(str(intimeDatetime.second))
 	else:	
 		return double_digits(str(intimeDatetime.hour)) + ':' + double_digits(str(intimeDatetime.minute+1)) + ':' + double_digits(str(intimeDatetime.second))
+# End add_duration()
 
 # Comma-separated list of all accessible Google Spreadsheets
 def get_alldocs(connection):
@@ -433,6 +477,7 @@ def get_alldocs(connection):
 	for doc in connection.openall():
 		docs.append(doc.title)
 	return ', '.join(docs)
+# End get_alldocs()
 
 def main():
 	# Change working directory to place of python script.
@@ -447,16 +492,16 @@ def main():
 	try:
 		credentials = ServiceAccountCredentials.from_json_keyfile_name('oauth.json', scope)
 	except IOError as e:
-		print e
-		print 'Could not find credentials (oauth.json).'
+		print '{0}\nCould not find credentials (oauth.json).'.format(e)
 		# TODO
 		# Here we could have an interactive method that asks the user for the right directory to work in. Same for video files (would require some new code)
 		sys.exit(0)
 	try:
+		if DEBUGGING: print '\n! DEBUG Attempting login...'
 		gc = gspread.authorize(credentials)
-	except gspread.AuthenticationError as e:
-		print e
-		print 'Could not authenticate.'
+		if DEBUGGING: '! DEBUG Login successful!\n'
+	except gspread.exceptions.GSpreadException as e:
+		print '{0}\n! ERROR Could not authenticate.\n'.format(e)
 		sys.exit(0)
 
 	inputFileFails = 0
@@ -515,6 +560,8 @@ def main():
 				print '\nThis needs to be done on a per-document basis.'
 				print '\nAvailable documents: {0}'.format(get_alldocs(gc))
 				print '###############################################################################\n'
+		# End try/except
+	# End while
 
 	print 'Connected to Google Drive!'
 	inputModeFails = 0
@@ -524,21 +571,27 @@ def main():
 			inputMode = raw_input('\nSelect mode: (b)atch, (r)ange, (c)ategory or (l)ine\n>> ')
 			try:
 				if inputMode[0] == 'b' or inputMode == 'batch':
+					gc.login()
 					timesList = generate_list(worksheet, 'batch')
 					break
 				elif inputMode[0] == 'l' or inputMode == 'line':
+					gc.login()
 					timesList = generate_list(worksheet, 'line')
 					break
 				elif inputMode[0] == 'r' or inputMode == 'range':
+					gc.login()
 					timesList = generate_list(worksheet, 'range')
 					break
 				elif inputMode[0] == 'c' or inputMode == 'cat' or inputMode == 'category':
+					gc.login()
 					timesList = generate_list(worksheet, 'category')
 					break
 				elif inputMode == 'positive':
+					gc.login()
 					timesList = generate_list(worksheet, 'batch', 'Positive')
 					break
 				#elif inputMode[0] == 's' or inputMode == 'select':
+				#	gc.login()
 				#	timesList = generate_list(worksheet, 'select')
 				#	break
 				elif inputMode == 'karl':
@@ -546,11 +599,13 @@ def main():
 			except (IndexError, gspread.exceptions.GSpreadException) as e:
 				inputModeFails += 1
 				try:
-					gc = gspread.authorize(credentials)
+					if DEBUGGING: print '! ERROR {0}\n! DEBUG Attempting reconnect\n'.format(e)
+					gc.login()
 				except gspread.AuthenticationError as e:
-					print e
-					print 'Could not authenticate.'
+					print '{0}\nCould not authenticate.'.format(e)
 					sys.exit(0)
+			# End try/except
+		# End while
 
 		print '\n* ffmpeg is set to never prompt for input and will always overwrite.\n  Only warns if close to crashing.\n'
 		videosGenerated = 0
@@ -585,6 +640,7 @@ def main():
 				completed = ffmpeg(inputfile=baseVideo, outputfile=vidName, startpos=vidIn, outpos=vidOut, reencode=REENCODING)
 				if completed:
 					videosGenerated += 1
+		# End for
 
 		if not REENCODING:
 			print '* No re-encoding done, expect:\n- inaccurate start and end timings\n- lossy frames until first keyframe\n- bad timecodes at the end\n'
@@ -596,6 +652,7 @@ def main():
 			break
 		else:
 			pass
+# End main()
 
 def plogo():
 	print '                                          ;.\n	                                  ###:   ######@.\n	                                  ;###   #########\n 	                          .###;    ###   #########@\n	                          +####\'   ###;  ##########\n	                           #####   @##@  ##########    .\n 	                     \'      #####  @###,\'#########@    #@\'\n	                    +##+     ##### ###############@   ######\n	                    +###;    \'#####################  #######\n 	                     ####     ##############################@\n	                      ####   \'###############################\'\n	                       ####.,################################@\n 	                ;#,    :#####################################\n	               @####;  :################,    .@############@\n	               #######@###############+         ###########\n 	                ;#####################           ##########    ,\n	                 :###################@           ###########+@###;\n	                 \'####################           +################\n 	                 \'########, ##########:          #################\'\n	                 #########  @##########      @#########@ #########:\n	                :#########  ;#########;     @##########  .####+.,\';\n 	                @#########+ ##########     \'##########+   @###\n	                \'######@#############      ###########    .###\'\n	                 ###@    \'#####@\'+#;      .###########     ####\'\n 	                :###       ###@            ###########     ######@\n	          ,##@::###@       @##+            @##########@\'   ########\n	          @#########,      ####\'           \'#######################\n 	          ###########;     #####@           #############+@#######@\n	          .###########     +###@##@         #@\'########+    ######,\n	           ###########       ## \'###        #\' #\'@#####     ,#####\n 	           ####\'@###,        ##  @##;      :#, #+ ####:      #####\n	           ###   ;##         ##   ##.      @#\' #@ ,###       @#####\n	           ##+    ##\' :     \'###  ##       ##  ##  @##       @#####@\n 	          .##@    #####.     +######,     \'##  @#   ##       @#####\'\n	           ###,  ######+      @###@##     +##  ,#.  :@       @#####\n	           @###########\'      @#@#\'.#     ###   #@           #####@\n 	           ,###########,      @\' #@       ###  ,##           #####\'\n	           .###@  #####       ,\' ,#       ####,###\'         +#####\'\n	            ##@   #####                   #########         ######\n 	            +\'   @####@                @######+   :        @######\'\n	               @######@              \'######@            ;#######;\n	             \'########@             @######             #########\n 	             \'#########            .@,#####             ########,\n	              @########.             :####.             #######@\n	               @#######@             @####              ######+\n 	                :#######             #. @@             ,###:\n	                  ######\'            \'  :@             ####,\n	                   #####\'                @            #####+\n 	                   #####\'                           \'######\'\n	                    ####:                         \'#######\' \n	                    ####                         #######@\n 	                    ####                        ,######:\n	                    ###:                     ,\',#####@\n	                   \'##@                    ,########:\n	                   @#@                   \'######  \' \n 	                                       \'@######\n	                                        @##@@.'
@@ -610,3 +667,4 @@ if __name__ == '__main__':
     		sys.exit(0)
     	except SystemExit:
     		os._exit(0)
+# End plogo()
