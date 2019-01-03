@@ -54,7 +54,13 @@ def generate_list(sheet, mode, type='Default'):
 	# WIP
 	# Sheet dumping to drastically reduce number of calls to Google's API
 	# - sheetDump is a list of lists, which forms a matrix
-	#sheetDump = sheet.get_all_values()
+	sheetDump = sheet.get_all_values()
+
+	#k = 0
+	#while k < 10:
+	#	for row in sheetDump:
+	#		print '! TEST {0}\n{1}'.format(k,row)
+	#	k += 1
 
 	# TODO 
 	# Add more processing of the title, split out the study number, and project name.
@@ -76,12 +82,12 @@ def generate_list(sheet, mode, type='Default'):
 	numUsers = get_numusers(userList, p, sheet.col_count)
 
 	if mode == 'batch':
-		times = generate_batch(sheet, p, m, s, numUsers, studyName)	
+		times = generate_batch(sheet, p, m, s, numUsers, studyName)
 	elif mode == 'category':
 		category = raw_input('Which category would you like to work in?\n>> ')
 		times = generate_category(sheet, p, m, s, numUsers, studyName, category)
 	elif mode == 'line':
-		times = generate_line(sheet, p, m, s, numUsers, studyName)
+		times = generate_line(sheet, p, m, s, numUsers, studyName, sheetDump)
 	elif mode == 'range':
 		while True:
 			try:
@@ -202,7 +208,7 @@ def generate_category(sheet, p, m, s, numUsers, studyName, category):
 	return times
 # End generate_category()
 
-def generate_line(sheet, p, m, s, numUsers, studyName):
+def generate_line(sheet, p, m, s, numUsers, studyName, sheetDump):
 	# This mode generates videos for a single line/row number.
 	while True:
 		try:
@@ -221,6 +227,10 @@ def generate_line(sheet, p, m, s, numUsers, studyName):
 
 	latestCategory = get_category(sheet, lineSelect, p.row, m.col, s.col)
 	times = get_line_new(sheet, p, m, s, numUsers, lineSelect, studyName, latestCategory)
+	if DEBUGGING: print times
+	if DEBUGGING: print '\n\n\n'
+	if DEBUGGING: print get_dumpedline(sheetDump, p, m, s, numUsers, lineSelect, studyName, latestCategory)
+	if DEBUGGING: print '\n\n\n'
 	return times
 # End generate_line()
 
@@ -264,7 +274,7 @@ def get_line_new(sheet, p, m, s, numUsers, lineSelect, studyName, latestCategory
 		if DEBUGGING: print '! DEBUG Item {0} with value {1} being processesed'.format(i, value)
 		if i == p.col+numUsers-1:
 			# Stop iterating once we have gone through all the participants.
-			if DEBUGGING: print '! DEBUG Exit for-loop in method get_line_new, reached final column.\n'
+			if DEBUGGING: print '! DEBUG Exit for-loop in method get_line_new, reached final column ({0} with index start 0).\n'.format(i)
 			break
 		elif value is None:
 			# Discard empty cells.
@@ -282,6 +292,40 @@ def get_line_new(sheet, p, m, s, numUsers, lineSelect, studyName, latestCategory
 	if DEBUGGING: print '\n! DEBUG Line completed, method get_line_new returning list of {0} potential timestamps found'.format(len(times))
 	return times
 # End get_line_new()
+
+# WIP
+def get_dumpedline(sheetDump, p, m, s, numUsers, lineSelect, studyName, latestCategory=''):
+	if DEBUGGING: print '! DEBUG Running method get_dumpedline\n! DEBUG Starting line {0}'.format(lineSelect)
+
+	times = []
+
+	for i, value in enumerate(sheetDump[lineSelect]):
+		if DEBUGGING: print '! DEBUG Item {0} with value \'{1}\' being processesed.'.format(i, value)
+		if i <= p.col-1:
+			# Don't touch the first 4 columns.
+			if DEBUGGING: print '! DEBUG Skipping item {0} with value \'{1}\''.format(i, value)
+			pass
+		elif i == p.col+numUsers-1:
+			# Stop iterating once we have gone through all the participants.
+			if DEBUGGING: print '! DEBUG Exit for-loop in method get_dumpedline, reached final column ({0} with index start 0).\n'.format(i)
+			break
+		elif value is None:
+			# Discard empty cells.
+			pass
+		elif value == '':
+			# Discard empty cells.
+			pass
+		else:
+			cell = gspread.models.Cell(lineSelect,i+p.col-1, value)
+			if DEBUGGING: print '! DEBUG Found something at step {0}'.format(i)
+			issue = { 'cell': cell, 'desc': sheetDump[lineSelect-1][s.col-1], 'study': studyName, 'participant': sheetDump[p.row][i+p.col-2], 'category': latestCategory}
+			times.append(issue)
+			print '+ Found timestamp: {0}'.format(value.replace('\n',' ')) 
+	# End for
+
+	if DEBUGGING: print '\n! DEBUG Line completed, method get_line_new returning list of {0} potential timestamps'.format(len(times))
+	return times
+# End get_dumpedline()
 
 def generate_range(sheet, p, m, s, numUsers, studyName, startLineSelect, endLineSelect):
 	# TODO
@@ -325,6 +369,8 @@ def get_category(sheet, startingRow, pRow, mCol, sCol):
 					break # Exit the for loop so we don't keep going up.
 		except IndexError:
 			break
+		# End try/except
+	# End while
 	return category
 # End get_category()
 
@@ -641,10 +687,13 @@ def main():
 				#	break
 				elif inputMode == 'karl':
 					plogo()
+				elif inputMode == 'test':
+					timesList = generate_list(worksheet, 'test')
+					break
 			except (IndexError, gspread.exceptions.GSpreadException) as e:
 				inputModeFails += 1
 				try:
-					if DEBUGGING: print '! ERROR {0}\n! DEBUG Attempting reconnect\n'.format(e)
+					if DEBUGGING: print '! ERROR Message \'{0}\'\n! DEBUG Attempting reconnect\n'.format(e)
 					gc.login()
 				except gspread.AuthenticationError as e:
 					print '{0}\nCould not authenticate.'.format(e)
