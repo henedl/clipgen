@@ -35,6 +35,7 @@ SETTINGSLIST = ['REENCODING', 'FILEFORMAT', 'DEBUGGING']
 #	- Refactor try statements to be smaller
 #	- Support other data formats (Excel, CSV) - would need to re-write parsing backend and refactor code heavily
 #	- Rename "generate"-methods to more clearly indicate that they return timestamps to clip (for generate_list(), this method should have a completely different name)
+#	- Rename "dumped"-methods once all timestamps are generated from a dumped sheet instead of a live sheet
 # Batch improvements:
 # 	- Implement the special character to select only one video to be rendered, out of several
 # 	- Add support for special tokens like * for starred video clip (this can be added to the dict as 'starred' and then read in the main loop)
@@ -50,7 +51,6 @@ def generate_list(sheet, mode, type='Default'):
 	s = sheet.find('Summary')
 	times = []
 
-	# WIP
 	# Sheet dumping to drastically reduce number of calls to Google's API
 	# - sheetDump[][] is a list of lists, which forms a matrix
 	#             ^    The first list is rows from the Sheet (index starts at 0, which is off by 1 compared to the "real" view)
@@ -77,7 +77,11 @@ def generate_list(sheet, mode, type='Default'):
 	numUsers = get_numusers(userList, p, sheet.col_count)
 
 	if mode == 'batch':
-		times = generate_batch(sheet, p, m, s, numUsers, studyName)
+		yn = raw_input('\nWarning: This will generate all possible clips. Do you want to proceed? y/n\n>> ')
+		if yn == 'y':
+			times = generate_dumpedbatch(sheetDump, p, m, s, numUsers, studyName)
+		else:
+			pass
 	elif mode == 'category':
 		category = raw_input('Which category would you like to work in?\n>> ')
 		# TODO
@@ -103,7 +107,7 @@ def generate_list(sheet, mode, type='Default'):
 			else:
 				pass
 		# End while
-		times = generate_range(sheet, p, m, s, numUsers, studyName, startLineSelect, endLineSelect)
+		times = generate_dumpedrange(sheetDump, p, m, s, numUsers, studyName, startLineSelect, endLineSelect)
 	elif mode == 'select':
 		# WIP + TODO
 		# Build this mode. This mode should generate a list of non-completed issues and lets user select from those.
@@ -153,36 +157,15 @@ def set_program_settings():
 		return False
 # End set_program_settings()
 
-def generate_batch(sheet, p, m, s, numUsers, studyName):
-	# TODO
-	# Start using scan_line/get_line_new in batch calls as well.
+def generate_dumpedbatch(sheetDump, p, m, s, numUsers, studyName):
+	if DEBUGGING: print '! DEBUG Running method generate_dumpedbatch()'
 	times = []
 	latestCategory = ''
-	passedOverTitle = False
-	for i in range(p.row + 2, sheet.row_count - p.col):
-		if not passedOverTitle:
-			if sheet.cell(i, m.col).value == 'T':
-				latestCategory = sheet.cell(i, s.col).value
-				print '+ Found category \'{0}\' on line {1}.'.format(latestCategory, i)
-				passedOverTitle = True
-			elif not passedOverTitle:
-				latestCategory = get_category(sheet, i, p.row, m.col, s.col)	
-		for j in range(p.col, p.col + numUsers):
-			val = sheet.cell(i, j)
-			if val.value is None:
-				# Discard empty cells.
-				pass
-			elif val.value == '':
-				# Discard empty cells.
-				pass
-			else:
-				issue = { 'cell': val, 'desc': sheet.cell(i, s.col).value, 'study': studyName, 'participant': sheet.cell(p.row+1, j).value, 'category': latestCategory }
-				times.append(issue)
-				print '+ Found timestamp: {0}'.format(val.value)
-		# End for
-	# End for
+	for i in range(p.row+1, len(sheetDump)):
+		if DEBUGGING: print '! DEBUG Batching on line {0} (real sheet line {1})\n'.format(i, i+1)
+		times = times + get_dumpedline(sheetDump, p, m, s, numUsers, i, studyName)
 	return times
-# End generate_batch()
+# End generate_dumpedbatch()
 
 def generate_dumpedcategory(sheetDump, p, m, s, numUsers, studyName, categoryCell):
 	if DEBUGGING: print '! DEBUG Starting method generate_dumpedcategory()'
@@ -192,11 +175,11 @@ def generate_dumpedcategory(sheetDump, p, m, s, numUsers, studyName, categoryCel
 	if DEBUGGING: print '! DEBUG Comparing meta column value \'{0}\' to \'T\''.format(sheetDump[categoryCell.row-1][m.col-1])
 	if sheetDump[categoryCell.row-1][m.col-1] == 'T':
 		print '+ Found category \'{1}\' on line {0}.'.format(categoryCell.row, sheetDump[categoryCell.row-1][categoryCell.col-1])
-		for i in range(categoryCell.row+1, len(sheetDump)-p.row):
+		for i in range(categoryCell.row, len(sheetDump)-p.row):
 			if sheetDump[i][m.col-1] != 'T':
 				times = times + get_dumpedline(sheetDump, p, m, s, numUsers, i, studyName, categoryCell.value)
 			else:
-				if DEBUGGING: print '\n! DEBUG Encountered other category, stopping category batch call'
+				if DEBUGGING: print '\n! DEBUG Encountered category \'{0}\', stopping category batch call'.format(sheetDump[i][s.col-1])
 				break
 		# End for
 	return times
@@ -219,65 +202,28 @@ def generate_line(sheetDump, p, m, s, numUsers, studyName):
 			pass
 	# End while
 
+	if DEBUGGING: print '\n! DEBUG Calling get_dumpedline() from generate_line()'
 	latestCategory = get_dumpedcategory(sheetDump, lineSelect, p.row, m.col, s.col)
 	times = get_dumpedline(sheetDump, p, m, s, numUsers, lineSelect, studyName, latestCategory)
-	# Uncommenting this block won't work because we stopped passing the gspread sheet to this method
-	#print get_category(sheet, lineSelect, p.row, m.col, s.col)
-	#print get_dumpedcategory(sheetDump, lineSelect, p.row, m.col, s.col)
-	#if DEBUGGING: print '\n! DEBUG Running and printing return of get_line_new()'
-	#if DEBUGGING: print get_line_new(sheet, p, m, s, numUsers, lineSelect, studyName, latestCategory)
-	#if DEBUGGING: print '\n! DEBUG Running and printing return of get_dumpedline()'
-	#if DEBUGGING: print get_dumpedline(sheetDump, p, m, s, numUsers, lineSelect, studyName, latestCategory)
+	if DEBUGGING: print '\n! DEBUG Printing return of get_dumpedline() in generate_line()'
+	if DEBUGGING: print times
 	
 	return times
 # End generate_line()
 
-# This method might be a useful refactor of scan_line()
-def get_line_new(sheet, p, m, s, numUsers, lineSelect, studyName, latestCategory=''):
-	if DEBUGGING: print '\n! DEBUG Starting line {0}'.format(lineSelect)
-
-	times = []
-	values_list = sheet.row_values(lineSelect)
-	# Remove the column items that aren't potential timestamps.
-	for j in range(p.col-1):
-		del values_list[0]
-	# Step through each value in the row, starting at the column where the participant tag was found, up through the column of the last participant.
-	for i, value in enumerate(values_list):
-		if DEBUGGING: print '! DEBUG Item {0} with value {1} being processesed'.format(i, value)
-		if i == p.col+numUsers-1:
-			# Stop iterating once we have gone through all the participants.
-			if DEBUGGING: print '! DEBUG Exit for-loop in method get_line_new, reached final column ({0} with index start 0).\n'.format(i)
-			break
-		elif value is None:
-			# Discard empty cells.
-			pass
-		elif value == '':
-			# Discard empty cells.
-			pass
-		else:
-			# When we find a non-empty cell, we file it away as a timestamp/issue.
-			issue = { 'cell': sheet.cell(lineSelect, i), 'desc': sheet.cell(lineSelect, s.col).value, 'study': studyName, 'participant': sheet.cell(p.row+1, i).value, 'category': latestCategory}
-			times.append(issue)
-			print '+ Found timestamp: {0}'.format(value.replace('\n',' '))
-	# End for
-
-	if DEBUGGING: print '! DEBUG Line completed, method get_line_new returning list of {0} potential timestamps found'.format(len(times))
-	return times
-# End get_line_new()
-
-# WIP
 def get_dumpedline(sheetDump, p, m, s, numUsers, lineSelect, studyName, latestCategory=''):
 	if DEBUGGING: print '! DEBUG Running method get_dumpedline\n! DEBUG Starting line {0}'.format(lineSelect)
 
 	times = []
-
+	if latestCategory == '':
+		latestCategory = get_dumpedcategory(sheetDump, lineSelect, p.row, m.col, s.col)
 	for i, value in enumerate(sheetDump[lineSelect]):
 		if DEBUGGING: print '! DEBUG Item {0} with value \'{1}\' being processesed.'.format(i, value)
 		if i <= p.col-1:
 			# Don't touch the first 4 columns.
 			if DEBUGGING: print '! DEBUG Skipping item {0} with value \'{1}\''.format(i, value)
 			pass
-		elif i == p.col+numUsers-1:
+		elif i == p.col-1+numUsers-1:
 			# Stop iterating once we have gone through all the participants.
 			if DEBUGGING: print '! DEBUG Exit for-loop in method get_dumpedline, reached final column ({0} with index start 0).\n'.format(i)
 			break
@@ -295,56 +241,17 @@ def get_dumpedline(sheetDump, p, m, s, numUsers, lineSelect, studyName, latestCa
 			print '+ Found timestamp: {0}'.format(value.replace('\n',' ')) 
 	# End for
 
-	if DEBUGGING: print '! DEBUG Line completed, method get_line_new returning list of {0} potential timestamps'.format(len(times))
+	if DEBUGGING: print '! DEBUG Line completed, method get_dumpedline returning list of {0} potential timestamps.\n---'.format(len(times))
 	return times
 # End get_dumpedline()
 
-def generate_range(sheet, p, m, s, numUsers, studyName, startLineSelect, endLineSelect):
-	# TODO
-	# Start using scan_line in range calls as well.
-	# This mode generates videos for all issues found in a range or span of issues.
+def generate_dumpedrange(sheetDump, p, m, s, numUsers, studyName, startLineSelect, endLineSelect):
 	times = []
-	passedOverTitle = False
-	for i in range(startLineSelect, endLineSelect+1):
-		if not passedOverTitle:
-			if sheet.cell(i, m.col).value == 'T':
-				latestCategory = sheet.cell(i, s.col).value
-				print '+ Found category \'{0}\' on line {1}.'.format(latestCategory, i)
-				passedOverTitle = True
-			elif not passedOverTitle:
-				latestCategory = get_category(sheet, i, p.row, m.col, s.col)
-		for j in range(p.col, p.col + numUsers):
-			val = sheet.cell(i, j)
-			if val.value is None:
-				# Discard empty cells.
-				pass
-			elif val.value == '':
-				# Discard empty cells.
-				pass
-			else:
-				issue = { 'cell': val, 'desc': sheet.cell(i, s.col).value, 'study': studyName, 'participant': sheet.cell(p.row+1, j).value, 'category': latestCategory }
-				times.append(issue)
-				print '+ Found timestamp: {0}'.format(val.value)
-		# End for
-	# End for
+	for i in range(startLineSelect-1, endLineSelect):
+		if DEBUGGING: print '! DEBUG Batching on line {0}\n'.format(i)
+		times = times + get_dumpedline(sheetDump, p, m, s, numUsers, i, studyName)
 	return times
-# End generate_range()
-
-def get_category(sheet, startingRow, pRow, mCol, sCol):
-	category = ''
-	while category == '':
-		try:
-			for i in range(startingRow, pRow, -1):
-				if sheet.cell(i, mCol).value == 'T':
-					category = sheet.cell(i, sCol).value
-					print '+ Found category \'{0}\' on line {1}.'.format(category, i)
-					break # Exit the for loop so we don't keep going up.
-		except IndexError:
-			break
-		# End try/except
-	# End while
-	return category
-# End get_category()
+# End generate_dumpedrange()
 
 def get_dumpedcategory(sheetDump, startingRow, pRow, mCol, sCol):
 	category = ''
