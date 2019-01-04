@@ -18,9 +18,7 @@ SETTINGSLIST = ['REENCODING', 'FILEFORMAT', 'DEBUGGING']
 
 # TODO
 # Quality of life:
-#	- Timestamp cleaning can't handle this situation: "H:M:S-H:M:S+interview H:M:S" because of spaces between interview and subsequent timestamp, but not before.
 #	- Timestamp cleaning doesn't handle: " +H:M:S" either, strip + prefixes?
-#	- Timestamp cleaning can't handle: "H:M:S + interview"
 #	- Command to open the current Sheet in Chrome from the commandline?
 #	- Created composite videos with clips from multiple participants?
 #	- Title/ending cards?
@@ -36,6 +34,7 @@ SETTINGSLIST = ['REENCODING', 'FILEFORMAT', 'DEBUGGING']
 #	- Upgrade to Python 3?
 #	- Refactor try statements to be smaller
 #	- Support other data formats (Excel, CSV) - would need to re-write parsing backend and refactor code heavily
+#	- Rename "generate"-methods to more clearly indicate that they return timestamps to clip (for generate_list(), this method should have a completely different name)
 # Batch improvements:
 # 	- Implement the special character to select only one video to be rendered, out of several
 # 	- Add support for special tokens like * for starred video clip (this can be added to the dict as 'starred' and then read in the main loop)
@@ -53,19 +52,15 @@ def generate_list(sheet, mode, type='Default'):
 
 	# WIP
 	# Sheet dumping to drastically reduce number of calls to Google's API
-	# - sheetDump is a list of lists, which forms a matrix
+	# - sheetDump[][] is a list of lists, which forms a matrix
+	#             ^    The first list is rows from the Sheet (index starts at 0, which is off by 1 compared to the "real" view)
+	#               ^  The second list is columns from the Sheet (index starts at 0, which is off by 1 compared to the "real" view)
 	sheetDump = sheet.get_all_values()
-
-	#k = 0
-	#while k < 10:
-	#	for row in sheetDump:
-	#		print '! TEST {0}\n{1}'.format(k,row)
-	#	k += 1
 
 	# TODO 
 	# Add more processing of the title, split out the study number, and project name.
 	# Remove hardcoded location and format expectations on study name.
-	studyName = sheet.cell(1, 1).value # Find the title of the study, assuming top left in sheet.
+	studyName = sheetDump[0][0] # Find the title of the study, assuming top left in sheet.
 	studyName = studyName[0:studyName.find('Data set')-1] # Cut off the stuff we don't want.
 	print 'Beginning work on {0}.'.format(studyName)
 	
@@ -85,9 +80,13 @@ def generate_list(sheet, mode, type='Default'):
 		times = generate_batch(sheet, p, m, s, numUsers, studyName)
 	elif mode == 'category':
 		category = raw_input('Which category would you like to work in?\n>> ')
-		times = generate_category(sheet, p, m, s, numUsers, studyName, category)
+		# TODO
+		# Wrap the sheet.find() call in a try/except
+		# Could also replace the sheet.find() with something similar to the get_dumpedcategory()
+		categoryCell = sheet.find(category)
+		times = generate_dumpedcategory(sheetDump, p, m, s, numUsers, studyName, categoryCell)
 	elif mode == 'line':
-		times = generate_line(sheet, p, m, s, numUsers, studyName, sheetDump)
+		times = generate_line(sheetDump, p, m, s, numUsers, studyName)
 	elif mode == 'range':
 		while True:
 			try:
@@ -185,30 +184,25 @@ def generate_batch(sheet, p, m, s, numUsers, studyName):
 	return times
 # End generate_batch()
 
-def generate_category(sheet, p, m, s, numUsers, studyName, category):
-	# TODO
-	# Case-insensitive category matching.
-	# Fix connection drops (or whatever is happening) after a few rows.
-	times = []
-	catCell = sheet.find(category)
+def generate_dumpedcategory(sheetDump, p, m, s, numUsers, studyName, categoryCell):
+	if DEBUGGING: print '! DEBUG Starting method generate_dumpedcategory()'
 
-	# If the category line is labeled correctly (in the meta column), we proceed.
-	if sheet.cell(catCell.row, m.col).value == 'T':
-		print '+ Found category \'{1}\' on line {0}.'.format(catCell.row, category)
-		# For each row below the category line, we look for timestamps.
-		if DEBUGGING: print '\n! DEBUG Working for (up to) {0} lines, starting on line {1}'.format( sheet.row_count-(p.row+catCell.row+1), catCell.row+1 )
-		for i in range(catCell.row+1, sheet.row_count - p.row):
-			# For each column (for each row) we look for timestamps.
-			if sheet.cell(i, m.col).value != 'T':
-				times = times + get_line_new(sheet, p, m, s, numUsers, i, studyName, category)
+	times = []
+	if DEBUGGING: print '! DEBUG Category cell is {0}'.format(categoryCell)
+	if DEBUGGING: print '! DEBUG Comparing meta column value \'{0}\' to \'T\''.format(sheetDump[categoryCell.row-1][m.col-1])
+	if sheetDump[categoryCell.row-1][m.col-1] == 'T':
+		print '+ Found category \'{1}\' on line {0}.'.format(categoryCell.row, sheetDump[categoryCell.row-1][categoryCell.col-1])
+		for i in range(categoryCell.row+1, len(sheetDump)-p.row):
+			if sheetDump[i][m.col-1] != 'T':
+				times = times + get_dumpedline(sheetDump, p, m, s, numUsers, i, studyName, categoryCell.value)
 			else:
 				if DEBUGGING: print '\n! DEBUG Encountered other category, stopping category batch call'
 				break
 		# End for
 	return times
-# End generate_category()
+# End generate_dumpedcategory()
 
-def generate_line(sheet, p, m, s, numUsers, studyName, sheetDump):
+def generate_line(sheetDump, p, m, s, numUsers, studyName):
 	# This mode generates videos for a single line/row number.
 	while True:
 		try:
@@ -216,8 +210,8 @@ def generate_line(sheet, p, m, s, numUsers, studyName, sheetDump):
 		except ValueError:
 			# TODO
 			# This should not be set up this way, make it loop
-			lineSelect = int(raw_input('\nTry again. Integer only.\n>> '))
-		print '\nIssue titled: {0}\n'.format(sheet.cell(lineSelect, s.col).value)
+			lineSelect = int(raw_input('\nTry again. Issue expressed as row number, as integer only.\n>> '))
+		print '\nIssue titled: {0}\n'.format(sheetDump[lineSelect-1][s.col-1])
 		yn = raw_input('Is this the correct issue? y/n\n>> ')
 		if yn == 'y':
 			break
@@ -225,40 +219,18 @@ def generate_line(sheet, p, m, s, numUsers, studyName, sheetDump):
 			pass
 	# End while
 
-	latestCategory = get_category(sheet, lineSelect, p.row, m.col, s.col)
-	times = get_line_new(sheet, p, m, s, numUsers, lineSelect, studyName, latestCategory)
-	if DEBUGGING: print times
-	if DEBUGGING: print '\n\n\n'
-	if DEBUGGING: print get_dumpedline(sheetDump, p, m, s, numUsers, lineSelect, studyName, latestCategory)
-	if DEBUGGING: print '\n\n\n'
+	latestCategory = get_dumpedcategory(sheetDump, lineSelect, p.row, m.col, s.col)
+	times = get_dumpedline(sheetDump, p, m, s, numUsers, lineSelect, studyName, latestCategory)
+	# Uncommenting this block won't work because we stopped passing the gspread sheet to this method
+	#print get_category(sheet, lineSelect, p.row, m.col, s.col)
+	#print get_dumpedcategory(sheetDump, lineSelect, p.row, m.col, s.col)
+	#if DEBUGGING: print '\n! DEBUG Running and printing return of get_line_new()'
+	#if DEBUGGING: print get_line_new(sheet, p, m, s, numUsers, lineSelect, studyName, latestCategory)
+	#if DEBUGGING: print '\n! DEBUG Running and printing return of get_dumpedline()'
+	#if DEBUGGING: print get_dumpedline(sheetDump, p, m, s, numUsers, lineSelect, studyName, latestCategory)
+	
 	return times
 # End generate_line()
-
-def scan_line(sheet, p, m, s, numUsers, lineSelect, studyName, latestCategory=''):
-	times = []
-	# Step through each cell in the row, starting at the column where the participant tag was found, up through the column of the last participant.
-	for j in range(p.col, p.col + numUsers):
-		val = sheet.cell(lineSelect, j)
-		if DEBUGGING: print '! DEBUG {0}'.format(sheet.cell(lineSelect, j))
-		if val.value is None:
-			# Discard empty cells.
-			pass
-		elif val.value == '':
-			# Discard empty cells.
-			pass
-		else:
-			# When we find a non-empty cell, we file it away as a timestamp/issue.
-			issue = { 'cell': val, 'desc': sheet.cell(lineSelect, s.col).value, 'study': studyName, 'participant': sheet.cell(p.row+1, j).value, 'category': latestCategory }
-			print value
-			print '\n'
-			print issue
-			print '\n'
-			times.append(issue)
-			print '+ Found timestamp: {0}'.format(val.value.replace('\n',' '))
-	# End for
-
-	return times
-# End scan_line()
 
 # This method might be a useful refactor of scan_line()
 def get_line_new(sheet, p, m, s, numUsers, lineSelect, studyName, latestCategory=''):
@@ -289,7 +261,7 @@ def get_line_new(sheet, p, m, s, numUsers, lineSelect, studyName, latestCategory
 			print '+ Found timestamp: {0}'.format(value.replace('\n',' '))
 	# End for
 
-	if DEBUGGING: print '\n! DEBUG Line completed, method get_line_new returning list of {0} potential timestamps found'.format(len(times))
+	if DEBUGGING: print '! DEBUG Line completed, method get_line_new returning list of {0} potential timestamps found'.format(len(times))
 	return times
 # End get_line_new()
 
@@ -323,7 +295,7 @@ def get_dumpedline(sheetDump, p, m, s, numUsers, lineSelect, studyName, latestCa
 			print '+ Found timestamp: {0}'.format(value.replace('\n',' ')) 
 	# End for
 
-	if DEBUGGING: print '\n! DEBUG Line completed, method get_line_new returning list of {0} potential timestamps'.format(len(times))
+	if DEBUGGING: print '! DEBUG Line completed, method get_line_new returning list of {0} potential timestamps'.format(len(times))
 	return times
 # End get_dumpedline()
 
@@ -373,6 +345,22 @@ def get_category(sheet, startingRow, pRow, mCol, sCol):
 	# End while
 	return category
 # End get_category()
+
+def get_dumpedcategory(sheetDump, startingRow, pRow, mCol, sCol):
+	category = ''
+	while category == '':
+		try:
+			for i in range(startingRow, pRow, -1):
+				if sheetDump[i][mCol-1] == 'T': # mCol is a "real" coordinate in the sheet, and is off by one
+					category = sheetDump[i][sCol-1] # sCol is a "real" coordinate in the sheet, and is off by one
+					print '+ Found category \'{0}\' on line {1}.'.format(category, i+1) # i is accurate to sheetDump but is off by one relative to "real" rows
+					break # Exit the for loop so we don't keep going up.
+		except IndexError:
+			break
+		# End try/except
+	# End while
+	return category
+# End get_dumpecdategory()
 
 # Takes a string, returns a double digit number
 def double_digits(number):
@@ -432,30 +420,14 @@ def clean_issue(issue):
 	if unparsedTimes == issue['cell'].value:
 		unparsedTimes = unparsedTimes.split('+').split(',')
 	
-	# Using own iterator here, instead of letting the for-loop set this up. Otherwise we can't manually advance the iterator (we need to step twice
-	# which continue won't do.)
+	# Using own iterator here, instead of letting the for-loop set this up. Otherwise we can't manually advance the iterator (we need to step twice which continue won't do.)
 	lines = iter(range(0,len(unparsedTimes)))
-	issue['interview'] = []
 
 	for i in lines:
 		if DEBUGGING: print '! DEBUG Cleaning timestamp {0}'.format(unparsedTimes[i])
 		unparsedTimes[i] = unparsedTimes[i].strip().rstrip(',').rstrip('-')
 		if unparsedTimes[i] == '':
 			pass
-		elif unparsedTimes[i].find('interview') != -1:
-			issue['interview'].append(len(timeStamps))
-			# The reason we use i+1 everywhere in this block is because of us doing the advancing at the end. Should probably still work if we moved the next() up top here.
-			# TODO this goes out of index if we do i+1 and there is only one occurence/timestamp available to check
-			if unparsedTimes[i+1].find('-') >= 0:
-				if unparsedTimes[i+1][unparsedTimes[i+1].find('-')-1].isdigit():
-					timePair = unparsedTimes[i+1][0:unparsedTimes[i+1].find('-')], unparsedTimes[i+1][unparsedTimes[i+1].find('-')+1:]
-					timeStamps.append(timePair)
-			elif unparsedTimes[i+1].find(':') >= 0: 
-				if unparsedTimes[i+1][unparsedTimes[i+1].find(':')-1].isdigit():
-					timePair = unparsedTimes[i+1], '00:00:00' # We add the zero time so that we will later fire the add_duration for this timestamp
-					timeStamps.append(timePair)
-			next(lines, None)
-			continue
 		elif unparsedTimes[i].find('-') >= 0:
 			if unparsedTimes[i][unparsedTimes[i].find('-')-1].isdigit():
 				# Slice the timestamp until the dash, and then from after the dash.
@@ -712,7 +684,6 @@ def main():
 			# - study 			Unicode string, name of the study
 			# - participant 	String, participant ID (without prefix)
 			# - times 			List, contains one timestamp pair (as a tuple) per index
-			# - interview 		List, contains indices of timestamps that are from interviews
 			# - category 		String, category heading found over issue
 			# Note that the 'times' entry in the dict is generated during the clean_issue method call.
 
@@ -725,11 +696,7 @@ def main():
 					print '! ERROR Some character encoding nonsense occured:\n  {0}'.format(e)
 					break
 
-				if timesList[i]['interview'].count(j) > 0:
-					if DEBUGGING: print '! DEBUG Timestamp had interview'
-					baseVideo = timesList[i]['study'] + '_interview_' + timesList[i]['participant'] + FILEFORMAT
-				else:
-					baseVideo = timesList[i]['study'] + '_' + timesList[i]['participant']  + FILEFORMAT
+				baseVideo = timesList[i]['study'] + '_' + timesList[i]['participant']  + FILEFORMAT
 				
 				completed = ffmpeg(inputfile=baseVideo, outputfile=vidName, startpos=vidIn, outpos=vidOut, reencode=REENCODING)
 				if completed:
