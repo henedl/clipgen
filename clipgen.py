@@ -390,8 +390,8 @@ def ffmpeg(inputfile, outputfile, startpos, outpos, reencode):
 	if duration < 0:
 		print 'Can\'t work with negative duration for videos, exiting.'
 		sys.exit(0)
-	elif duration > 60*5:
-		yn = raw_input('This video is over 5 minutes long, do you want to still generate it? (y/n)\n>> ')
+	elif duration > 60*10:
+		yn = raw_input('This video is over 10 minutes long, do you want to still generate it? (y/n)\n>> ')
 		if yn == 'n':
 			return None
 
