@@ -9,7 +9,7 @@ REENCODING = False
 FILEFORMAT = '.mp4'
 VERSIONNUM = '0.3.3'
 SHEET_NAME = 'data set'
-DEBUGGING  = True
+DEBUGGING  = False
 
 SETTINGSLIST = ['REENCODING', 'FILEFORMAT', 'DEBUGGING']
 
@@ -360,6 +360,7 @@ def clean_issue(issue):
 	issue['desc'] = issue['desc'].replace('\\','-')
 	issue['desc'] = issue['desc'].replace('/','-')
 	issue['desc'] = issue['desc'].replace('?','_')
+	issue['category'] = issue['category'].replace('/','-')
 	for forbiddenCharacter in ['\'',
 			  '\"',
 			  '.',
@@ -368,6 +369,8 @@ def clean_issue(issue):
 			  '|',
 			  ':']:
 		issue['desc'] = issue['desc'].replace(forbiddenCharacter,'')
+		issue['category'] = issue['category'].replace(forbiddenCharacter,'')
+	# End for
 	
 	return issue
 # End clean_issue()
