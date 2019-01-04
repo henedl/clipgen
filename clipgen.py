@@ -7,9 +7,9 @@ from oauth2client.service_account import ServiceAccountCredentials
 # Constants 
 REENCODING = False
 FILEFORMAT = '.mp4'
-VERSIONNUM = '0.3.2'
+VERSIONNUM = '0.3.3'
 SHEET_NAME = 'data set'
-DEBUGGING  = True
+DEBUGGING  = False
 
 SETTINGSLIST = ['REENCODING', 'FILEFORMAT', 'DEBUGGING']
 
@@ -26,9 +26,6 @@ SETTINGSLIST = ['REENCODING', 'FILEFORMAT', 'DEBUGGING']
 #	- Add ability to target only one cell. Proposed syntax "P01.11". Should also be batchable, i.e. "P01.11 + P03.11 + P03.09". Should be available directly at (current) mode select stage.
 # Programming stuff:
 #	- Command line arguments to run everything from a prompt instead of interactively.
-# 	- It would be much faster to just dump all the contents of the sheet into a list and work with that (easily supported by gspread)
-# 	- Cleaner variable names (even for things relating to iterators - ipairList, really?)
-#	- Also, naming consistency, currently there is some camel case and some underscores, etc
 #	- Logging of which timestamps are discarded
 #	- Expand debug mode (with multiple levels?)
 #	- Upgrade to Python 3?
@@ -100,7 +97,7 @@ def generate_list(sheet, mode, type='Default'):
 				startLineSelect = int(raw_input('\nTry again. Starting line (row number only)?\n>> '))
 				endLineSelect = int(raw_input('\nTry again. Ending line (row number only)?\n>> '))
 			# End try/except
-			print 'Lines selected: {0} to {1}'.format(sheet.cell(startLineSelect, s.col).value, sheet.cell(endLineSelect, s.col).value)
+			print 'Lines selected: {0} to {1}'.format(sheetDump[startLineSelect-1][s.col-1], sheetDump[endLineSelect-1][s.col-1])
 			yn = raw_input('Is this correct? y/n\n>> ')
 			if yn == 'y':
 				break
