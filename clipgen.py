@@ -9,7 +9,7 @@ REENCODING = False
 FILEFORMAT = '.mp4'
 VERSIONNUM = '0.3.3'
 SHEET_NAME = 'data set'
-DEBUGGING  = False
+DEBUGGING  = True
 
 SETTINGSLIST = ['REENCODING', 'FILEFORMAT', 'DEBUGGING']
 
@@ -53,13 +53,15 @@ def generate_list(sheet, mode, type='Default'):
 	#             ^    The first list is rows from the Sheet (index starts at 0, which is off by 1 compared to the "real" view)
 	#               ^  The second list is columns from the Sheet (index starts at 0, which is off by 1 compared to the "real" view)
 	sheetDump = sheet.get_all_values()
+	realTime = get_current_time()
+	if DEBUGGING: print '! DEBUG Sheet dumped into memory at {0}'.format(realTime)
 
 	# TODO 
 	# Add more processing of the title, split out the study number, and project name.
 	# Remove hardcoded location and format expectations on study name.
 	studyName = sheetDump[0][0] # Find the title of the study, assuming top left in sheet.
 	studyName = studyName[0:studyName.find('Data set')-1] # Cut off the stuff we don't want.
-	print 'Beginning work on {0}.'.format(studyName)
+	print '\nBeginning work on {0}.'.format(studyName)
 	
 	# Just some name formatting, after we announced everything up top.
 	studyName = studyName.lower()
@@ -124,6 +126,11 @@ def get_numusers(userList, p, colCount):
 	print 'Found {0} users in total, spanning columns {1} to {2}.'.format(numUsers, p.col, numUsers+p.col)
 	return numUsers	
 # End get_numusers()
+
+def get_current_time():
+	st = str(datetime.now()).split('.')[0]
+	return st
+# End get_current_time()
 
 def set_program_settings():
 	# WIP + TODO
@@ -200,8 +207,8 @@ def generate_line(sheetDump, p, m, s, numUsers, studyName):
 	# End while
 
 	if DEBUGGING: print '\n! DEBUG Calling get_dumpedline() from generate_line()'
-	latestCategory = get_dumpedcategory(sheetDump, lineSelect, p.row, m.col, s.col)
-	times = get_dumpedline(sheetDump, p, m, s, numUsers, lineSelect, studyName, latestCategory)
+	latestCategory = get_dumpedcategory(sheetDump, lineSelect-1, p.row, m.col, s.col)
+	times = get_dumpedline(sheetDump, p, m, s, numUsers, lineSelect-1, studyName, latestCategory)
 	if DEBUGGING: print '\n! DEBUG Printing return of get_dumpedline() in generate_line()'
 	if DEBUGGING: print times
 	
@@ -209,7 +216,7 @@ def generate_line(sheetDump, p, m, s, numUsers, studyName):
 # End generate_line()
 
 def get_dumpedline(sheetDump, p, m, s, numUsers, lineSelect, studyName, latestCategory=''):
-	if DEBUGGING: print '! DEBUG Running method get_dumpedline\n! DEBUG Starting line {0}'.format(lineSelect)
+	if DEBUGGING: print '! DEBUG Running method get_dumpedline\n! DEBUG Starting line {0} (real sheet line {1})'.format(lineSelect, lineSelect+1)
 
 	times = []
 	if latestCategory == '':
@@ -222,7 +229,7 @@ def get_dumpedline(sheetDump, p, m, s, numUsers, lineSelect, studyName, latestCa
 			pass
 		elif i == p.col-1+numUsers-1:
 			# Stop iterating once we have gone through all the participants.
-			if DEBUGGING: print '! DEBUG Exit for-loop in method get_dumpedline, reached final column ({0} with index start 0).\n'.format(i)
+			if DEBUGGING: print '! DEBUG Exit for-loop in method get_dumpedline, reached final column {0} (real sheet column {1}).\n'.format(i, i+1)
 			break
 		elif value is None:
 			# Discard empty cells.
