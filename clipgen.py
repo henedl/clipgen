@@ -164,7 +164,6 @@ def set_program_settings():
 def generate_dumpedbatch(sheetDump, p, m, s, numUsers, studyName):
 	if DEBUGGING: print '! DEBUG Running method generate_dumpedbatch()'
 	times = []
-	latestCategory = ''
 	for i in range(p.row+1, len(sheetDump)):
 		if DEBUGGING: print '! DEBUG Batching on line {0} (real sheet line {1})\n'.format(i, i+1)
 		times = times + get_dumpedline(sheetDump, p, m, s, numUsers, i, studyName)
@@ -178,7 +177,6 @@ def generate_dumpedcategory(sheetDump, p, m, s, numUsers, studyName, categoryCel
 	if DEBUGGING: print '! DEBUG Category cell is {0}'.format(categoryCell)
 	if DEBUGGING: print '! DEBUG Comparing meta column value \'{0}\' to \'T\''.format(sheetDump[categoryCell.row-1][m.col-1])
 	if sheetDump[categoryCell.row-1][m.col-1] == 'T':
-		print '+ Found category \'{1}\' on line {0}.'.format(categoryCell.row, sheetDump[categoryCell.row-1][categoryCell.col-1])
 		for i in range(categoryCell.row, len(sheetDump)-p.row):
 			if sheetDump[i][m.col-1] != 'T':
 				times = times + get_dumpedline(sheetDump, p, m, s, numUsers, i, studyName, categoryCell.value)
@@ -207,8 +205,7 @@ def generate_line(sheetDump, p, m, s, numUsers, studyName):
 	# End while
 
 	if DEBUGGING: print '\n! DEBUG Calling get_dumpedline() from generate_line()'
-	latestCategory = get_dumpedcategory(sheetDump, lineSelect-1, p.row, m.col, s.col)
-	times = get_dumpedline(sheetDump, p, m, s, numUsers, lineSelect-1, studyName, latestCategory)
+	times = get_dumpedline(sheetDump, p, m, s, numUsers, lineSelect-1, studyName)
 	if DEBUGGING: print '\n! DEBUG Printing return of get_dumpedline() in generate_line()'
 	if DEBUGGING: print times
 	
@@ -223,11 +220,11 @@ def get_dumpedline(sheetDump, p, m, s, numUsers, lineSelect, studyName, latestCa
 		latestCategory = get_dumpedcategory(sheetDump, lineSelect, p.row, m.col, s.col)
 	for i, value in enumerate(sheetDump[lineSelect]):
 		if DEBUGGING: print '! DEBUG Item {0} with value \'{1}\' being processesed.'.format(i, value)
-		if i <= p.col-1:
+		if i < p.col-1:
 			# Don't touch the first 4 columns.
 			if DEBUGGING: print '! DEBUG Skipping item {0} with value \'{1}\''.format(i, value)
 			pass
-		elif i == p.col-1+numUsers-1:
+		elif i == p.col-1+numUsers:
 			# Stop iterating once we have gone through all the participants.
 			if DEBUGGING: print '! DEBUG Exit for-loop in method get_dumpedline, reached final column {0} (real sheet column {1}).\n'.format(i, i+1)
 			break
@@ -238,9 +235,13 @@ def get_dumpedline(sheetDump, p, m, s, numUsers, lineSelect, studyName, latestCa
 			# Discard empty cells.
 			pass
 		else:
-			cell = gspread.models.Cell(lineSelect,i+p.col-1, value)
+			cell = gspread.models.Cell(lineSelect+1,i+1, value)
 			if DEBUGGING: print '! DEBUG Found something at step {0}'.format(i)
-			issue = { 'cell': cell, 'desc': sheetDump[lineSelect-1][s.col-1], 'study': studyName, 'participant': sheetDump[p.row][i+p.col-2], 'category': latestCategory}
+			issue = { 'cell': cell, 'desc': sheetDump[lineSelect][s.col-1], 'study': studyName, 'participant': sheetDump[p.row][i], 'category': latestCategory}
+			if DEBUGGING: print '\n\n! DEBUG Coordinate indices start at 0 (off by one compared to real sheet)\n! DEBUG Participant ID at R{0},C{1} -> \'{2}\''.format(p.row,i, sheetDump[p.row][i])
+			if DEBUGGING: print '! DEBUG Description at R{0},C{1} -> \'{2}\''.format(lineSelect, s.col-1,sheetDump[lineSelect][s.col-1])
+			if DEBUGGING: print '! DEBUG Timestamp at R{0},C{1} -> \'{2}\''.format(cell.row-1,cell.col-1,cell.value)
+			if DEBUGGING: print '! DEBUG Actual cell {0} at actual address {1}'.format(cell, gspread.utils.rowcol_to_a1(cell.row,cell.col))
 			times.append(issue)
 			print '+ Found timestamp: {0}'.format(value.replace('\n',' ')) 
 	# End for
