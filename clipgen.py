@@ -7,7 +7,7 @@ from oauth2client.service_account import ServiceAccountCredentials
 # Constants 
 REENCODING = False
 FILEFORMAT = '.mp4'
-VERSIONNUM = '0.3.3'
+VERSIONNUM = '0.3.4'
 SHEET_NAME = 'data set'
 DEBUGGING  = False
 
@@ -457,6 +457,31 @@ def get_alldocs(connection):
 	return ', '.join(docs)
 # End get_alldocs()
 
+def check_sheetname_freetext(inputName, docList):
+	# Checks free text input, trying to find a matching Google Sheet name
+	# Returns the index of matching sheet, as found in docList
+	if DEBUGGING: print '! DEBUG Running method check_sheetname_freetext()'
+	inputName = inputName.strip().lstrip().lower()
+	inputNameGuess = inputName + ' data set'
+	if DEBUGGING: print '! DEBUG Using inputname \'{1}\'\n! DEBUG Assigned inputNameGuess value \'{0}\''.format(inputNameGuess, inputName)
+	for i in range(len(docList)):
+		docName = docList[i].strip().lstrip().lower()
+		if DEBUGGING: print '! DEBUG Attempting match with \'{0}\', with formatting adjusted to \'{1}\''.format(docList[i], docName)
+		if docName == inputName:
+			if DEBUGGING: print '! DEBUG Matched sheet \'{1}\' with input \'{0}\''.format(inputName, docName)
+			if DEBUGGING: print '! DEBUG Method check_sheetname_freetext() returning value \'{0}\''.format(i)
+			return i
+		elif docName == inputNameGuess:
+			nameFixed = docName
+			if DEBUGGING: print '! DEBUG Matched sheet \'{1}\' with input \'{0}\''.format(inputNameGuess, docName)
+			if DEBUGGING: print '! DEBUG Method check_sheetname_freetext() returning value \'{0}\''.format(i)
+			return i
+		else:
+			if DEBUGGING: print '! DEBUG Found nothing at step {0}'.format(i)
+	# End for
+	return -1
+# End check_sheetname_freetext()
+
 def main():
 	# Change working directory to place of python script.
 	os.chdir(os.path.dirname(os.path.abspath(__file__)))
@@ -483,6 +508,8 @@ def main():
 		sys.exit(0)
 
 	inputFileFails = 0
+	chosenDocumentIndex = 0
+	docList = get_alldocs(gc).split(',')
 
 	while True:
 		inputName = raw_input('\nPlease enter the index, name, URL or key of the spreadsheet (\'all\' for list, \'new\' for list of newest, \'last\' to immediately open latest, \'settings\' to change settings):\n>> ')
@@ -493,14 +520,12 @@ def main():
 				break
 			elif inputName[:3] == 'all':
 				# Lists all Sheets, prefixed by a number.
-				docList = get_alldocs(gc).split(',')
 				print '\nAvailable documents:'
 				for i in range(len(docList)):
 					print '{0}. {1}'.format(i+1, docList[i].strip())
 			elif inputName[:3] == 'new':
 				# Typing 'new' shows the three latest Sheets (handy in case we have dozens of Sheets later).
-				docList = get_alldocs(gc).split(',')
-				print '\nNewest documents:'
+				print '\nNewest documents: (modified or opened most recently)'
 				for i in range(3):
 					print '{0}. {1}'.format(i+1, docList[i].strip())
 			elif inputName[:4] == 'last':
@@ -510,8 +535,8 @@ def main():
   				break
   			elif inputName[0].isdigit():
   				# If user enters a number, we open the Sheet of that number from the 'all' list.
-  				i = int(inputName)-1
-  				worksheet = gc.open(get_alldocs(gc).split(',')[i].strip()).worksheet(SHEET_NAME)
+  				chosenDocumentIndex = int(inputName)-1
+  				worksheet = gc.open(get_alldocs(gc).split(',')[chosenDocumentIndex].strip()).worksheet(SHEET_NAME)
   				break
   			elif inputName[:8] == 'settings':
 				# This mode allows users to change settings for this run of the program only
@@ -522,26 +547,24 @@ def main():
 				break
 			else:
 				# As we have free text entry, we match it to a Sheet name (regardless of case) and then open that Sheet.
-				inputName = inputName.strip().lower()
-				docList = get_alldocs(gc).split(',')
-				for i in range(len(docList)):
-					if docList[i].strip().lower() == inputName:
-						worksheet = gc.open(docList[i]).worksheet(SHEET_NAME)
+				chosenDocumentIndex = check_sheetname_freetext(inputName, docList)
+				if chosenDocumentIndex:
+  					worksheet = gc.open(get_alldocs(gc).split(',')[chosenDocumentIndex].strip().lstrip()).worksheet(SHEET_NAME)
 				break
-		except gspread.SpreadsheetNotFound:
+		except (gspread.SpreadsheetNotFound, gspread.exceptions.APIError, gspread.exceptions.GSpreadException) as e:
 			inputFileFails += 1
 			if inputFileFails <= 1 or inputFileFails >= 3:
 				print '\nDid not find spreadsheet. Please try again.'
 			else:
-				print '\n###############################################################################'
-				print 'Remember that you need to share the spreadsheet you want to parse. Share it with the user listed in the json-file (value of client_email).'
-				print '\nThis needs to be done on a per-document basis.'
-				print '\nAvailable documents: {0}'.format(get_alldocs(gc))
-				print '###############################################################################\n'
+				print '\n###'
+				print 'Did not find spreadsheet. Please try again.\n\nRemember that you need to share the spreadsheet you want to parse.\nShare it with the user listed in the json-file (value of client_email).'
+				print 'This needs to be done on a per-document basis.\n\nSee available documents by typing \'all\' or \'new\''
+				#for i in range(len(docList)):
+				#	print '{0}. {1}'.format(i+1, docList[i].strip())
+				print '###\n'
 		# End try/except
 	# End while
-
-	print 'Connected to Google Drive!'
+	print '\nConnected to Google Drive!'
 	inputModeFails = 0
 
 	while True:
