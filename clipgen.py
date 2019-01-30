@@ -7,7 +7,7 @@ from oauth2client.service_account import ServiceAccountCredentials
 # Constants 
 REENCODING = False
 FILEFORMAT = '.mp4'
-VERSIONNUM = '0.3.0'
+VERSIONNUM = '0.3.4'
 SHEET_NAME = 'data set'
 DEBUGGING  = False
 
@@ -18,24 +18,22 @@ SETTINGSLIST = ['REENCODING', 'FILEFORMAT', 'DEBUGGING']
 
 # TODO
 # Quality of life:
-#	- Timestamp cleaning can't handle this situation: "H:M:S-H:M:S+interview H:M:S" because of spaces between interview and subsequent timestamp, but not before.
-#	- Timestamp cleaning doesn't handle: " +H:M:S" either, strip + prefixes?
-#	- Timestamp cleaning can't handle: "H:M:S + interview"
+#	- Timestamp cleaning doesn't handle: " +H:M:S", strip + prefixes?
+# 	- Timestamp cleaning doesn't handle any prefix characters
 #	- Command to open the current Sheet in Chrome from the commandline?
-#	- Created composite videos with clips from multiple participants?
+#	- Created composite highlight videos with clips from multiple participants?
 #	- Title/ending cards?
 #	- Being able to select multiple non-continous lines
-#	- Add ability to target only one cell. Proposed syntax "P01.11". Should also be batchable, i.e. "P01.11 + P03.11 + P03.09". Should be available directly at (current) mode select stage.
+#	- Add ability to target only one cell. Proposed syntax: "P01.11". Should also be batchable, i.e. "P01.11 + P03.11 + P03.09". Should be available directly at (current) mode select stage.
 # Programming stuff:
 #	- Command line arguments to run everything from a prompt instead of interactively.
-# 	- It would be much faster to just dump all the contents of the sheet into a list and work with that (easily supported by gspread)
-# 	- Cleaner variable names (even for things relating to iterators - ipairList, really?)
-#	- Also, naming consistency, currently there is some camel case and some underscores, etc
 #	- Logging of which timestamps are discarded
 #	- Expand debug mode (with multiple levels?)
 #	- Upgrade to Python 3?
 #	- Refactor try statements to be smaller
 #	- Support other data formats (Excel, CSV) - would need to re-write parsing backend and refactor code heavily
+#	- Rename "generate"-methods to more clearly indicate that they return timestamps to clip (for generate_list(), this method should have a completely different name)
+#	- Rename "dumped"-methods once all timestamps are generated from a dumped sheet instead of a live sheet
 # Batch improvements:
 # 	- Implement the special character to select only one video to be rendered, out of several
 # 	- Add support for special tokens like * for starred video clip (this can be added to the dict as 'starred' and then read in the main loop)
@@ -43,6 +41,7 @@ SETTINGSLIST = ['REENCODING', 'FILEFORMAT', 'DEBUGGING']
 # Major new features:
 # 	- GUI
 #	- Cropping and timelapsing! For example generate a timelapse of the minimap in TWY or EU.
+#	- Add computer vision detection of text in videos to support real time time-stamps?
 
 # Goes through sheet, bundles values from timestamp columns and descriptions columns into tuples.
 def generate_list(sheet, mode, type='Default'):
@@ -51,12 +50,20 @@ def generate_list(sheet, mode, type='Default'):
 	s = sheet.find('Summary')
 	times = []
 
+	# Sheet dumping to drastically reduce number of calls to Google's API
+	# - sheetDump[][] is a list of lists, which forms a matrix
+	#             ^    The first list is rows from the Sheet (index starts at 0, which is off by 1 compared to the "real" view)
+	#               ^  The second list is columns from the Sheet (index starts at 0, which is off by 1 compared to the "real" view)
+	sheetDump = sheet.get_all_values()
+	realTime = get_current_time()
+	if DEBUGGING: print '! DEBUG Sheet dumped into memory at {0}'.format(realTime)
+
 	# TODO 
 	# Add more processing of the title, split out the study number, and project name.
 	# Remove hardcoded location and format expectations on study name.
-	studyName = sheet.cell(1, 1).value # Find the title of the study, assuming top left in sheet.
+	studyName = sheetDump[0][0] # Find the title of the study, assuming top left in sheet.
 	studyName = studyName[0:studyName.find('Data set')-1] # Cut off the stuff we don't want.
-	print 'Beginning work on {0}.'.format(studyName)
+	print '\nBeginning work on {0}.'.format(studyName)
 	
 	# Just some name formatting, after we announced everything up top.
 	studyName = studyName.lower()
@@ -66,76 +73,26 @@ def generate_list(sheet, mode, type='Default'):
 	studyName = unicode(studyName) # Typecast to unicode string to avoid TypeErrors later
 	# It should now look like this: 'thundercats_study5'
 
-	# Figure out how many users we have in the sheet (assumes every user is indicated by a 'PXX' identifier)
-	numUsers = 0
+	# Get number of users, an int that we'll need to efficiently loop through the worksheet.
 	userList = sheet.row_values(p.row+1)
-	for j in range(0, sheet.col_count - p.col):
-		if len(userList[j]) > 0:
-			if userList[j][0] == 'P':
-				numUsers += 1
-	print 'Found {0} users in total, spanning columns {1} to {2}.'.format(numUsers, p.col, numUsers+p.col)
+	numUsers = get_numusers(userList, p, sheet.col_count)
 
 	if mode == 'batch':
-		latestCategory = ''
-		passedOverTitle = False
-		if type == 'Default':
-			for i in range(p.row + 2, sheet.row_count - p.col):
-				if not passedOverTitle:
-					if sheet.cell(i, m.col).value == 'T':
-						latestCategory = sheet.cell(i, s.col).value
-						print '+ Found category \'{0}\' on line {1}.'.format(latestCategory, i)
-						passedOverTitle = True
-					elif not passedOverTitle:
-						latestCategory = get_category(sheet, i, p.row, m.col, s.col)	
-				for j in range(p.col, p.col + numUsers):
-					val = sheet.cell(i, j)
-					if val.value is None:
-						# Discard empty cells.
-						pass
-					elif val.value == '':
-						# Discard empty cells.
-						pass
-					else:
-						issue = { 'cell': val, 'desc': sheet.cell(i, s.col).value, 'study': studyName, 'participant': sheet.cell(p.row+1, j).value, 'category': latestCategory }
-						times.append(issue)
-						print '+ Found timestamp: {0}'.format(val.value)
+		yn = raw_input('\nWarning: This will generate all possible clips. Do you want to proceed? y/n\n>> ')
+		if yn == 'y':
+			times = generate_dumpedbatch(sheetDump, p, m, s, numUsers, studyName)
 		else:
-			category = raw_input('Which category would you like to work in?\n>> ')
-			times = generate_category(sheet, p, m, s, numUsers, studyName, category)
+			pass
+	elif mode == 'category':
+		category = raw_input('Which category would you like to work in?\n>> ')
+		# TODO
+		# Wrap the sheet.find() call in a try/except
+		# Could also replace the sheet.find() with something similar to the get_dumpedcategory()
+		categoryCell = sheet.find(category)
+		times = generate_dumpedcategory(sheetDump, p, m, s, numUsers, studyName, categoryCell)
 	elif mode == 'line':
-		# This mode generates videos for a single line/row number.
-		latestCategory = ''
-		while True:
-			try:
-				lineSelect = int(raw_input('\nWhich issue (row number only)?\n>> '))
-			except ValueError:
-				# TODO
-				# This should not be set up this way, make it loop
-				lineSelect = int(raw_input('\nTry again. Integer only.\n>> '))
-
-			print '\nIssue titled: {0}\n'.format(sheet.cell(lineSelect, s.col).value)
-			yn = raw_input('Is this the correct issue? y/n\n>> ')
-			if yn == 'y':
-				break
-			else:
-				pass
-
-		latestCategory = get_category(sheet, lineSelect, p.row, m.col, s.col)
-
-		for j in range(p.col, p.col + numUsers):
-			val = sheet.cell(lineSelect, j)
-			if val.value is None:
-				# Discard empty cells.
-				pass
-			elif val.value == '':
-				# Discard empty cells.
-				pass
-			else:
-				issue = { 'cell': val, 'desc': sheet.cell(lineSelect, s.col).value, 'study': studyName, 'participant': sheet.cell(p.row+1, j).value, 'category': latestCategory }
-				times.append(issue)
-				print '+ Found timestamp: {0}'.format(val.value.replace('\n',' '))
+		times = generate_line(sheetDump, p, m, s, numUsers, studyName)
 	elif mode == 'range':
-		# This mode generates videos for all issues found in a range or span of issues.
 		while True:
 			try:
 				startLineSelect = int(raw_input('\nWhich starting line (row number only)?\n>> '))
@@ -143,41 +100,50 @@ def generate_list(sheet, mode, type='Default'):
 			except ValueError:
 				startLineSelect = int(raw_input('\nTry again. Starting line (row number only)?\n>> '))
 				endLineSelect = int(raw_input('\nTry again. Ending line (row number only)?\n>> '))
-			print 'Lines selected: {0} to {1}'.format(sheet.cell(startLineSelect, s.col).value, sheet.cell(endLineSelect, s.col).value)
+			# End try/except
+			print 'Lines selected: {0} to {1}'.format(sheetDump[startLineSelect-1][s.col-1], sheetDump[endLineSelect-1][s.col-1])
 			yn = raw_input('Is this correct? y/n\n>> ')
 			if yn == 'y':
 				break
 			else:
 				pass
-		
-		passedOverTitle = False
-		for i in range(startLineSelect, endLineSelect+1):
-			if not passedOverTitle:
-				if sheet.cell(i, m.col).value == 'T':
-					latestCategory = sheet.cell(i, s.col).value
-					print '+ Found category \'{0}\' on line {1}.'.format(latestCategory, i)
-					passedOverTitle = True
-				elif not passedOverTitle:
-					latestCategory = get_category(sheet, i, p.row, m.col, s.col)
-			for j in range(p.col, p.col + numUsers):
-				val = sheet.cell(i, j)
-				if val.value is None:
-					# Discard empty cells.
-					pass
-				elif val.value == '':
-					# Discard empty cells.
-					pass
-				else:
-					issue = { 'cell': val, 'desc': sheet.cell(i, s.col).value, 'study': studyName, 'participant': sheet.cell(p.row+1, j).value, 'category': latestCategory }
-					times.append(issue)
-					print '+ Found timestamp: {0}'.format(val.value)
+		# End while
+		times = generate_dumpedrange(sheetDump, p, m, s, numUsers, studyName, startLineSelect, endLineSelect)
 	elif mode == 'select':
-		# This mode generates a list of non-completed issues and lets user select from those.
+		# WIP + TODO
+		# Build this mode. This mode should generate a list of non-completed issues and lets user select from those.
 		pass
 
 	return times
+# End generate_list()
+
+# Returns int numUsers, how many participant columns exist in the worksheet
+def get_numusers(userList, p, colCount):
+	# Figure out how many users we have in the sheet (assumes every user is indicated by a 'PXX' identifier)
+	numUsers = 0
+	for j in range(0, colCount - p.col):
+		if len(userList[j]) > 0:
+			if userList[j][0] == 'P':
+				numUsers += 1
+	print 'Found {0} users in total, spanning columns {1} to {2}.'.format(numUsers, p.col, numUsers+p.col)
+	return numUsers	
+# End get_numusers()
+
+def get_current_time():
+	st = str(datetime.now()).split('.')[0]
+	return st
+# End get_current_time()
 
 def set_program_settings():
+	# WIP + TODO
+	# Options available, as dicts. Each dicts contains:
+	# - name 			The name of the setting, as a string
+	# - default 		The default value of the setting, with varying types of values
+	# - options 		The available options for the setting, as a list of values
+	fileformatOptions = {'name': 'FILEFORMAT', 'default': 'mp4', 'options': ['mp4','flv']}
+	reencodingOptions = {'name': 'REENCODING', 'default': False, 'options': [True, False]}
+	debuggingOptions  = {'name': 'DEBUGGING', 'default': False, 'options': [True, False]}
+
 	print '\nWhich setting? Available:\n'
 	print ', '.join(SETTINGSLIST)
 	settingToChange = raw_input('\n>> ')
@@ -195,45 +161,120 @@ def set_program_settings():
 		return True
 	else:
 		return False
+# End set_program_settings()
 
-def generate_category(sheet, p, m, s, numUsers, studyName, category):
-	# TODO
-	# Case-insensitive category matching.
+def generate_dumpedbatch(sheetDump, p, m, s, numUsers, studyName):
+	if DEBUGGING: print '! DEBUG Running method generate_dumpedbatch()'
 	times = []
-	catCell = sheet.find(category)
-	if sheet.cell(catCell.row, m.col).value == 'T':
-		print '+ Found category \'{1}\' on line {0}.'.format(catCell.row, category)
-		for i in range(catCell.row+1, sheet.row_count - p.col):
-			for j in range(p.col, p.col + numUsers):
-				if sheet.cell(i, m.col).value != 'T':
-					if DEBUGGING: print '! DEBUG {0}'.format(sheet.cell(i, j))
-					val = sheet.cell(i, j)
-					if val.value is None:
-						# Discard empty cells.
-						pass
-					elif val.value == '':
-						# Discard empty cells.
-						pass
-					else:
-						issue = { 'cell': val, 'desc': sheet.cell(i, s.col).value, 'study': studyName, 'participant': sheet.cell(p.row+1, j).value, 'category': category }
-						times.append(issue)
-						print '+ Found timestamp: {0}'.format(val.value)
-				else:
-					if DEBUGGING: print '! DEBUG Encountered other category, stopping category batch call'
-					return times
+	for i in range(p.row+1, len(sheetDump)):
+		if DEBUGGING: print '! DEBUG Batching on line {0} (real sheet line {1})\n'.format(i, i+1)
+		times = times + get_dumpedline(sheetDump, p, m, s, numUsers, i, studyName)
+	return times
+# End generate_dumpedbatch()
 
-def get_category(sheet, startingRow, pRow, mCol, sCol):
+def generate_dumpedcategory(sheetDump, p, m, s, numUsers, studyName, categoryCell):
+	if DEBUGGING: print '! DEBUG Starting method generate_dumpedcategory()'
+
+	times = []
+	if DEBUGGING: print '! DEBUG Category cell is {0}'.format(categoryCell)
+	if DEBUGGING: print '! DEBUG Comparing meta column value \'{0}\' to \'T\''.format(sheetDump[categoryCell.row-1][m.col-1])
+	if sheetDump[categoryCell.row-1][m.col-1] == 'T':
+		for i in range(categoryCell.row, len(sheetDump)-p.row):
+			if sheetDump[i][m.col-1] != 'T':
+				times = times + get_dumpedline(sheetDump, p, m, s, numUsers, i, studyName, categoryCell.value)
+			else:
+				if DEBUGGING: print '\n! DEBUG Encountered category \'{0}\', stopping category batch call'.format(sheetDump[i][s.col-1])
+				break
+		# End for
+	return times
+# End generate_dumpedcategory()
+
+def generate_line(sheetDump, p, m, s, numUsers, studyName):
+	# This mode generates videos for a single line/row number.
+	while True:
+		try:
+			lineSelect = int(raw_input('\nWhich issue (row number only)?\n>> '))
+		except ValueError:
+			# TODO
+			# This should not be set up this way, make it loop
+			lineSelect = int(raw_input('\nTry again. Issue expressed as row number, as integer only.\n>> '))
+		print '\nIssue titled: {0}\n'.format(sheetDump[lineSelect-1][s.col-1])
+		yn = raw_input('Is this the correct issue? y/n\n>> ')
+		if yn == 'y':
+			break
+		else:
+			pass
+	# End while
+
+	if DEBUGGING: print '\n! DEBUG Calling get_dumpedline() from generate_line()'
+	times = get_dumpedline(sheetDump, p, m, s, numUsers, lineSelect-1, studyName)
+	if DEBUGGING: print '\n! DEBUG Printing return of get_dumpedline() in generate_line()'
+	if DEBUGGING: print times
+	
+	return times
+# End generate_line()
+
+def get_dumpedline(sheetDump, p, m, s, numUsers, lineSelect, studyName, latestCategory=''):
+	if DEBUGGING: print '! DEBUG Running method get_dumpedline\n! DEBUG Starting line {0} (real sheet line {1})'.format(lineSelect, lineSelect+1)
+
+	times = []
+	if latestCategory == '':
+		latestCategory = get_dumpedcategory(sheetDump, lineSelect, p.row, m.col, s.col)
+	for i, value in enumerate(sheetDump[lineSelect]):
+		if DEBUGGING: print '! DEBUG Item {0} with value \'{1}\' being processesed.'.format(i, value)
+		if i < p.col-1:
+			# Don't touch the first 4 columns.
+			if DEBUGGING: print '! DEBUG Skipping item {0} with value \'{1}\''.format(i, value)
+			pass
+		elif i == p.col-1+numUsers:
+			# Stop iterating once we have gone through all the participants.
+			if DEBUGGING: print '! DEBUG Exit for-loop in method get_dumpedline, reached final column {0} (real sheet column {1}).\n'.format(i, i+1)
+			break
+		elif value is None:
+			# Discard empty cells.
+			pass
+		elif value == '':
+			# Discard empty cells.
+			pass
+		else:
+			cell = gspread.models.Cell(lineSelect+1,i+1, value)
+			if DEBUGGING: print '! DEBUG Found something at step {0}'.format(i)
+			issue = { 'cell': cell, 'desc': sheetDump[lineSelect][s.col-1], 'study': studyName, 'participant': sheetDump[p.row][i], 'category': latestCategory}
+			if DEBUGGING: print '\n\n! DEBUG Coordinate indices start at 0 (off by one compared to real sheet)\n! DEBUG Participant ID at R{0},C{1} -> \'{2}\''.format(p.row,i, sheetDump[p.row][i])
+			if DEBUGGING: print '! DEBUG Description at R{0},C{1} -> \'{2}\''.format(lineSelect, s.col-1,sheetDump[lineSelect][s.col-1])
+			if DEBUGGING: print '! DEBUG Timestamp at R{0},C{1} -> \'{2}\''.format(cell.row-1,cell.col-1,cell.value)
+			if DEBUGGING: print '! DEBUG Actual cell {0} at actual address {1}'.format(cell, gspread.utils.rowcol_to_a1(cell.row,cell.col))
+			times.append(issue)
+			print '+ Found timestamp: {0}'.format(value.replace('\n',' ')) 
+	# End for
+
+	if DEBUGGING: print '! DEBUG Line completed, method get_dumpedline returning list of {0} potential timestamps.\n---'.format(len(times))
+	return times
+# End get_dumpedline()
+
+def generate_dumpedrange(sheetDump, p, m, s, numUsers, studyName, startLineSelect, endLineSelect):
+	times = []
+	for i in range(startLineSelect-1, endLineSelect):
+		if DEBUGGING: print '! DEBUG Batching on line {0}\n'.format(i)
+		times = times + get_dumpedline(sheetDump, p, m, s, numUsers, i, studyName)
+	return times
+# End generate_dumpedrange()
+
+def get_dumpedcategory(sheetDump, startingRow, pRow, mCol, sCol):
 	category = ''
 	while category == '':
 		try:
 			for i in range(startingRow, pRow, -1):
-				if sheet.cell(i, mCol).value == 'T':
-					category = sheet.cell(i, sCol).value
-					print '+ Found category \'{0}\' on line {1}.'.format(category, i)
+				if sheetDump[i][mCol-1] == 'T': # mCol is a "real" coordinate in the sheet, and is off by one
+					category = sheetDump[i][sCol-1] # sCol is a "real" coordinate in the sheet, and is off by one
+					print '+ Found category \'{0}\' on line {1}.'.format(category, i+1) # i is accurate to sheetDump but is off by one relative to "real" rows
 					break # Exit the for loop so we don't keep going up.
 		except IndexError:
 			break
+		# End try/except
+	# End while
 	return category
+# End get_dumpecdategory()
 
 # Takes a string, returns a double digit number
 def double_digits(number):
@@ -245,6 +286,8 @@ def double_digits(number):
 	except TypeError:
 		# If we can't typecast, we give up
 		return number
+	# End try/except
+# End double_digits()
 
 def filesize(size, precision=2):
     suffixes = ['B','KB','MB','GB','TB']
@@ -253,8 +296,9 @@ def filesize(size, precision=2):
         suffixIndex += 1 
         size = size / 1024.0
     return '%.*f%s'%(precision, size, suffixes[suffixIndex])
+# End filesize()
 
-# Appends an incremeneted number to the end of files that already exist.
+# Appends an incremeneted number to the end of files that already exist, if necessary to prevent overwriting clips.
 def set_filename(filename):
 	step = 1
 	while True:
@@ -269,9 +313,12 @@ def set_filename(filename):
 		else:
 			filename = set_filename_length(filename, step)
 			break
+	# End while
 	return filename
+# End set_filename()
 
 def set_filename_length(filename, step=1):
+	# Atleast in Windows, filenames should not exceed 255 characters. This method cuts off filenames that might be too long.
 	if len(filename) > 255:
 		if step > 1:
 			if DEBUGGING: print '! DEBUG Filename was longer than 255 chars ({0}, length {1})'.format(filename, len(filename))
@@ -279,6 +326,7 @@ def set_filename_length(filename, step=1):
 		else:
 			filename = filename[0:255-(len(FILEFORMAT))] + FILEFORMAT
 	return filename
+# End set_filename_length()
 
 def clean_issue(issue):
 	timeStamps = []
@@ -286,30 +334,14 @@ def clean_issue(issue):
 	if unparsedTimes == issue['cell'].value:
 		unparsedTimes = unparsedTimes.split('+').split(',')
 	
-	# Using own iterator here, instead of letting the for-loop set this up. Otherwise we can't manually advance the iterator (we need to step twice
-	# which continue won't do.)
+	# Using own iterator here, instead of letting the for-loop set this up. Otherwise we can't manually advance the iterator (we need to step twice which continue won't do.)
 	lines = iter(range(0,len(unparsedTimes)))
-	issue['interview'] = []
 
 	for i in lines:
 		if DEBUGGING: print '! DEBUG Cleaning timestamp {0}'.format(unparsedTimes[i])
 		unparsedTimes[i] = unparsedTimes[i].strip().rstrip(',').rstrip('-')
 		if unparsedTimes[i] == '':
 			pass
-		elif unparsedTimes[i].find('interview') != -1:
-			issue['interview'].append(len(timeStamps))
-			# The reason we use i+1 everywhere in this block is because of us doing the advancing at the end. Should probably still work if we moved the next() up top here.
-			# TODO this goes out of index if we do i+1 and there is only one occurence/timestamp available to check
-			if unparsedTimes[i+1].find('-') >= 0:
-				if unparsedTimes[i+1][unparsedTimes[i+1].find('-')-1].isdigit():
-					timePair = unparsedTimes[i+1][0:unparsedTimes[i+1].find('-')], unparsedTimes[i+1][unparsedTimes[i+1].find('-')+1:]
-					timeStamps.append(timePair)
-			elif unparsedTimes[i+1].find(':') >= 0: 
-				if unparsedTimes[i+1][unparsedTimes[i+1].find(':')-1].isdigit():
-					timePair = unparsedTimes[i+1], '00:00:00' # We add the zero time so that we will later fire the add_duration for this timestamp
-					timeStamps.append(timePair)
-			next(lines, None)
-			continue
 		elif unparsedTimes[i].find('-') >= 0:
 			if unparsedTimes[i][unparsedTimes[i].find('-')-1].isdigit():
 				# Slice the timestamp until the dash, and then from after the dash.
@@ -321,6 +353,7 @@ def clean_issue(issue):
 				timeStamps.append(timePair)
 		else:
 			pass
+	# End for
 
 	issue['times'] = timeStamps
 
@@ -330,6 +363,7 @@ def clean_issue(issue):
 	issue['desc'] = issue['desc'].replace('\\','-')
 	issue['desc'] = issue['desc'].replace('/','-')
 	issue['desc'] = issue['desc'].replace('?','_')
+	issue['category'] = issue['category'].replace('/','-')
 	for forbiddenCharacter in ['\'',
 			  '\"',
 			  '.',
@@ -338,15 +372,18 @@ def clean_issue(issue):
 			  '|',
 			  ':']:
 		issue['desc'] = issue['desc'].replace(forbiddenCharacter,'')
+		issue['category'] = issue['category'].replace(forbiddenCharacter,'')
+	# End for
 	
 	return issue
+# End clean_issue()
 
+# Calls ffmpeg to cut a video clip - requires ffmpeg to be added to system or user Path
 def ffmpeg(inputfile, outputfile, startpos, outpos, reencode):
 	# TODO
 	# Protect against videos that have an outtime beyond base video length
 
-	# DEBUG
-	# Just makes the clip a minute long if we didn't get an in-time
+	# Makes the clip a minute long if we didn't get an out-time
 	if outpos == '00:00:00':
 		outpos = add_duration(startpos)
 
@@ -355,8 +392,8 @@ def ffmpeg(inputfile, outputfile, startpos, outpos, reencode):
 	if duration < 0:
 		print 'Can\'t work with negative duration for videos, exiting.'
 		sys.exit(0)
-	elif duration > 60*5:
-		yn = raw_input('This video is over 5 minutes long, do you want to still generate it? (y/n)\n>> ')
+	elif duration > 60*10:
+		yn = raw_input('This video is over 10 minutes long, do you want to still generate it? (y/n)\n>> ')
 		if yn == 'n':
 			return None
 
@@ -375,6 +412,8 @@ def ffmpeg(inputfile, outputfile, startpos, outpos, reencode):
 		except WindowsError as e:
 			print '\n! ERROR ffmpeg could not successfully run.\n  clipgen returned the following error:\n  {0}\n  - Attempted location: \'{3}\'\n  - Attemped inputfile: \'{1}\',\n  - Attempted outputfile: \'{2}\'\n'.format(e, inputfile, outputfile, os.getcwd())
 			return False
+		# End try/except
+# End ffmpeg()
 
 # Returns the duration of a clip as seconds
 def get_duration(intime, outtime):
@@ -393,6 +432,7 @@ def get_duration(intime, outtime):
 			print '* Timestamp formats need to match each other.'
 			print e
 			sys.exit(0)
+	# End try/except
 
 	hDelta = (outtimeDatetime.hour - intimeDatetime.hour)*60*60
 	mDelta = (outtimeDatetime.minute - intimeDatetime.minute)*60
@@ -400,6 +440,7 @@ def get_duration(intime, outtime):
 	duration = hDelta + mDelta + sDelta
 
 	return duration
+# End get_duration()
 
 # Just adds a minute
 def add_duration(intime):
@@ -408,6 +449,7 @@ def add_duration(intime):
 		return double_digits(str(intimeDatetime.hour+1)) + ':00:' + double_digits(str(intimeDatetime.second))
 	else:	
 		return double_digits(str(intimeDatetime.hour)) + ':' + double_digits(str(intimeDatetime.minute+1)) + ':' + double_digits(str(intimeDatetime.second))
+# End add_duration()
 
 # Comma-separated list of all accessible Google Spreadsheets
 def get_alldocs(connection):
@@ -415,6 +457,32 @@ def get_alldocs(connection):
 	for doc in connection.openall():
 		docs.append(doc.title)
 	return ', '.join(docs)
+# End get_alldocs()
+
+def check_sheetname_freetext(inputName, docList):
+	# Checks free text input, trying to find a matching Google Sheet name
+	# Returns the index of matching sheet, as found in docList
+	if DEBUGGING: print '! DEBUG Running method check_sheetname_freetext()'
+	inputName = inputName.strip().lstrip().lower()
+	inputNameGuess = inputName + ' data set'
+	if DEBUGGING: print '! DEBUG Using inputname \'{1}\'\n! DEBUG Assigned inputNameGuess value \'{0}\''.format(inputNameGuess, inputName)
+	for i in range(len(docList)):
+		docName = docList[i].strip().lstrip().lower()
+		if DEBUGGING: print '! DEBUG Attempting match with \'{0}\', with formatting adjusted to \'{1}\''.format(docList[i], docName)
+		if docName == inputName:
+			if DEBUGGING: print '! DEBUG Matched sheet \'{1}\' with input \'{0}\''.format(inputName, docName)
+			if DEBUGGING: print '! DEBUG Method check_sheetname_freetext() returning value \'{0}\''.format(i)
+			return i
+		elif docName == inputNameGuess:
+			nameFixed = docName
+			if DEBUGGING: print '! DEBUG Matched sheet \'{1}\' with input \'{0}\''.format(inputNameGuess, docName)
+			if DEBUGGING: print '! DEBUG Method check_sheetname_freetext() returning value \'{0}\''.format(i)
+			return i
+		else:
+			if DEBUGGING: print '! DEBUG Found nothing at step {0}'.format(i)
+	# End for
+	return -1
+# End check_sheetname_freetext()
 
 def main():
 	# Change working directory to place of python script.
@@ -429,19 +497,21 @@ def main():
 	try:
 		credentials = ServiceAccountCredentials.from_json_keyfile_name('oauth.json', scope)
 	except IOError as e:
-		print e
-		print 'Could not find credentials (oauth.json).'
+		print '{0}\nCould not find credentials (oauth.json).'.format(e)
 		# TODO
 		# Here we could have an interactive method that asks the user for the right directory to work in. Same for video files (would require some new code)
 		sys.exit(0)
 	try:
+		if DEBUGGING: print '\n! DEBUG Attempting login...'
 		gc = gspread.authorize(credentials)
-	except gspread.AuthenticationError as e:
-		print e
-		print 'Could not authenticate.'
+		if DEBUGGING: '! DEBUG Login successful!\n'
+	except gspread.exceptions.GSpreadException as e:
+		print '{0}\n! ERROR Could not authenticate.\n'.format(e)
 		sys.exit(0)
 
 	inputFileFails = 0
+	chosenDocumentIndex = 0
+	docList = get_alldocs(gc).split(',')
 
 	while True:
 		inputName = raw_input('\nPlease enter the index, name, URL or key of the spreadsheet (\'all\' for list, \'new\' for list of newest, \'last\' to immediately open latest, \'settings\' to change settings):\n>> ')
@@ -452,14 +522,12 @@ def main():
 				break
 			elif inputName[:3] == 'all':
 				# Lists all Sheets, prefixed by a number.
-				docList = get_alldocs(gc).split(',')
 				print '\nAvailable documents:'
 				for i in range(len(docList)):
 					print '{0}. {1}'.format(i+1, docList[i].strip())
 			elif inputName[:3] == 'new':
 				# Typing 'new' shows the three latest Sheets (handy in case we have dozens of Sheets later).
-				docList = get_alldocs(gc).split(',')
-				print '\nNewest documents:'
+				print '\nNewest documents: (modified or opened most recently)'
 				for i in range(3):
 					print '{0}. {1}'.format(i+1, docList[i].strip())
 			elif inputName[:4] == 'last':
@@ -469,8 +537,8 @@ def main():
   				break
   			elif inputName[0].isdigit():
   				# If user enters a number, we open the Sheet of that number from the 'all' list.
-  				i = int(inputName)-1
-  				worksheet = gc.open(get_alldocs(gc).split(',')[i].strip()).worksheet(SHEET_NAME)
+  				chosenDocumentIndex = int(inputName)-1
+  				worksheet = gc.open(get_alldocs(gc).split(',')[chosenDocumentIndex].strip()).worksheet(SHEET_NAME)
   				break
   			elif inputName[:8] == 'settings':
 				# This mode allows users to change settings for this run of the program only
@@ -481,24 +549,24 @@ def main():
 				break
 			else:
 				# As we have free text entry, we match it to a Sheet name (regardless of case) and then open that Sheet.
-				inputName = inputName.strip().lower()
-				docList = get_alldocs(gc).split(',')
-				for i in range(len(docList)):
-					if docList[i].strip().lower() == inputName:
-						worksheet = gc.open(docList[i]).worksheet(SHEET_NAME)
+				chosenDocumentIndex = check_sheetname_freetext(inputName, docList)
+				if chosenDocumentIndex:
+  					worksheet = gc.open(get_alldocs(gc).split(',')[chosenDocumentIndex].strip().lstrip()).worksheet(SHEET_NAME)
 				break
-		except gspread.SpreadsheetNotFound:
+		except (gspread.SpreadsheetNotFound, gspread.exceptions.APIError, gspread.exceptions.GSpreadException) as e:
 			inputFileFails += 1
 			if inputFileFails <= 1 or inputFileFails >= 3:
 				print '\nDid not find spreadsheet. Please try again.'
 			else:
-				print '\n###############################################################################'
-				print 'Remember that you need to share the spreadsheet you want to parse. Share it with the user listed in the json-file (value of client_email).'
-				print '\nThis needs to be done on a per-document basis.'
-				print '\nAvailable documents: {0}'.format(get_alldocs(gc))
-				print '###############################################################################\n'
-
-	print 'Connected to Google Drive!'
+				print '\n###'
+				print 'Did not find spreadsheet. Please try again.\n\nRemember that you need to share the spreadsheet you want to parse.\nShare it with the user listed in the json-file (value of client_email).'
+				print 'This needs to be done on a per-document basis.\n\nSee available documents by typing \'all\' or \'new\''
+				#for i in range(len(docList)):
+				#	print '{0}. {1}'.format(i+1, docList[i].strip())
+				print '###\n'
+		# End try/except
+	# End while
+	print '\nConnected to Google Drive!'
 	inputModeFails = 0
 
 	while True:
@@ -506,33 +574,44 @@ def main():
 			inputMode = raw_input('\nSelect mode: (b)atch, (r)ange, (c)ategory or (l)ine\n>> ')
 			try:
 				if inputMode[0] == 'b' or inputMode == 'batch':
+					gc.login()
 					timesList = generate_list(worksheet, 'batch')
 					break
 				elif inputMode[0] == 'l' or inputMode == 'line':
+					gc.login()
 					timesList = generate_list(worksheet, 'line')
 					break
 				elif inputMode[0] == 'r' or inputMode == 'range':
+					gc.login()
 					timesList = generate_list(worksheet, 'range')
 					break
 				elif inputMode[0] == 'c' or inputMode == 'cat' or inputMode == 'category':
-					timesList = generate_list(worksheet, 'batch', 'category')
+					gc.login()
+					timesList = generate_list(worksheet, 'category')
 					break
 				elif inputMode == 'positive':
+					gc.login()
 					timesList = generate_list(worksheet, 'batch', 'Positive')
 					break
 				#elif inputMode[0] == 's' or inputMode == 'select':
+				#	gc.login()
 				#	timesList = generate_list(worksheet, 'select')
 				#	break
 				elif inputMode == 'karl':
 					plogo()
-			except (IndexError, gspread.HTTPError) as e:
+				elif inputMode == 'test':
+					timesList = generate_list(worksheet, 'test')
+					break
+			except (IndexError, gspread.exceptions.GSpreadException) as e:
 				inputModeFails += 1
 				try:
-					gc = gspread.authorize(credentials)
+					if DEBUGGING: print '! ERROR Message \'{0}\'\n! DEBUG Attempting reconnect\n'.format(e)
+					gc.login()
 				except gspread.AuthenticationError as e:
-					print e
-					print 'Could not authenticate.'
+					print '{0}\nCould not authenticate.'.format(e)
 					sys.exit(0)
+			# End try/except
+		# End while
 
 		print '\n* ffmpeg is set to never prompt for input and will always overwrite.\n  Only warns if close to crashing.\n'
 		videosGenerated = 0
@@ -545,7 +624,6 @@ def main():
 			# - study 			Unicode string, name of the study
 			# - participant 	String, participant ID (without prefix)
 			# - times 			List, contains one timestamp pair (as a tuple) per index
-			# - interview 		List, contains indices of timestamps that are from interviews
 			# - category 		String, category heading found over issue
 			# Note that the 'times' entry in the dict is generated during the clean_issue method call.
 
@@ -558,15 +636,12 @@ def main():
 					print '! ERROR Some character encoding nonsense occured:\n  {0}'.format(e)
 					break
 
-				if timesList[i]['interview'].count(j) > 0:
-					if DEBUGGING: print '! DEBUG Timestamp had interview'
-					baseVideo = timesList[i]['study'] + '_interview_' + timesList[i]['participant'] + FILEFORMAT
-				else:
-					baseVideo = timesList[i]['study'] + '_' + timesList[i]['participant']  + FILEFORMAT
+				baseVideo = timesList[i]['study'] + '_' + timesList[i]['participant']  + FILEFORMAT
 				
 				completed = ffmpeg(inputfile=baseVideo, outputfile=vidName, startpos=vidIn, outpos=vidOut, reencode=REENCODING)
 				if completed:
 					videosGenerated += 1
+		# End for
 
 		if not REENCODING:
 			print '* No re-encoding done, expect:\n- inaccurate start and end timings\n- lossy frames until first keyframe\n- bad timecodes at the end\n'
@@ -578,10 +653,13 @@ def main():
 			break
 		else:
 			pass
+	# End while
+# End main()
 
 def plogo():
 	print '                                          ;.\n	                                  ###:   ######@.\n	                                  ;###   #########\n 	                          .###;    ###   #########@\n	                          +####\'   ###;  ##########\n	                           #####   @##@  ##########    .\n 	                     \'      #####  @###,\'#########@    #@\'\n	                    +##+     ##### ###############@   ######\n	                    +###;    \'#####################  #######\n 	                     ####     ##############################@\n	                      ####   \'###############################\'\n	                       ####.,################################@\n 	                ;#,    :#####################################\n	               @####;  :################,    .@############@\n	               #######@###############+         ###########\n 	                ;#####################           ##########    ,\n	                 :###################@           ###########+@###;\n	                 \'####################           +################\n 	                 \'########, ##########:          #################\'\n	                 #########  @##########      @#########@ #########:\n	                :#########  ;#########;     @##########  .####+.,\';\n 	                @#########+ ##########     \'##########+   @###\n	                \'######@#############      ###########    .###\'\n	                 ###@    \'#####@\'+#;      .###########     ####\'\n 	                :###       ###@            ###########     ######@\n	          ,##@::###@       @##+            @##########@\'   ########\n	          @#########,      ####\'           \'#######################\n 	          ###########;     #####@           #############+@#######@\n	          .###########     +###@##@         #@\'########+    ######,\n	           ###########       ## \'###        #\' #\'@#####     ,#####\n 	           ####\'@###,        ##  @##;      :#, #+ ####:      #####\n	           ###   ;##         ##   ##.      @#\' #@ ,###       @#####\n	           ##+    ##\' :     \'###  ##       ##  ##  @##       @#####@\n 	          .##@    #####.     +######,     \'##  @#   ##       @#####\'\n	           ###,  ######+      @###@##     +##  ,#.  :@       @#####\n	           @###########\'      @#@#\'.#     ###   #@           #####@\n 	           ,###########,      @\' #@       ###  ,##           #####\'\n	           .###@  #####       ,\' ,#       ####,###\'         +#####\'\n	            ##@   #####                   #########         ######\n 	            +\'   @####@                @######+   :        @######\'\n	               @######@              \'######@            ;#######;\n	             \'########@             @######             #########\n 	             \'#########            .@,#####             ########,\n	              @########.             :####.             #######@\n	               @#######@             @####              ######+\n 	                :#######             #. @@             ,###:\n	                  ######\'            \'  :@             ####,\n	                   #####\'                @            #####+\n 	                   #####\'                           \'######\'\n	                    ####:                         \'#######\' \n	                    ####                         #######@\n 	                    ####                        ,######:\n	                    ###:                     ,\',#####@\n	                   \'##@                    ,########:\n	                   @#@                   \'######  \' \n 	                                       \'@######\n	                                        @##@@.'
 	print '\n	 /$$$$$$$                                    /$$\n 	| $$__  $$                                  | $$                    \n 	| $$  \ $$ /$$$$$$   /$$$$$$  /$$$$$$   /$$$$$$$  /$$$$$$  /$$   /$$\n 	| $$$$$$$/|____  $$ /$$__  $$|____  $$ /$$__  $$ /$$__  $$|  $$ /$$/\n 	| $$____/  /$$$$$$$| $$  \__/ /$$$$$$$| $$  | $$| $$  \ $$ \  $$$$/ \n 	| $$      /$$__  $$| $$      /$$__  $$| $$  | $$| $$  | $$  >$$  $$ \n 	| $$     |  $$$$$$$| $$     |  $$$$$$$|  $$$$$$$|  $$$$$$/ /$$/\  $$\n 	|__/      \_______/|__/      \_______/ \_______/ \______/ |__/  \__/'
+# End plogo()
 
 if __name__ == '__main__':
     try:
@@ -592,3 +670,5 @@ if __name__ == '__main__':
     		sys.exit(0)
     	except SystemExit:
     		os._exit(0)
+	# End try/except
+# End __init__
