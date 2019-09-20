@@ -7,7 +7,7 @@ from oauth2client.service_account import ServiceAccountCredentials
 # Constants 
 REENCODING = False
 FILEFORMAT = '.mp4'
-VERSIONNUM = '0.3.4'
+VERSIONNUM = '0.3.5'
 SHEET_NAME = 'data set'
 DEBUGGING  = False
 
@@ -25,6 +25,8 @@ SETTINGSLIST = ['REENCODING', 'FILEFORMAT', 'DEBUGGING']
 #	- Title/ending cards?
 #	- Being able to select multiple non-continous lines
 #	- Add ability to target only one cell. Proposed syntax: "P01.11". Should also be batchable, i.e. "P01.11 + P03.11 + P03.09". Should be available directly at (current) mode select stage.
+#	- Add Tag-based clip generation (e.g. every clip that affects Bus Routes)
+#	- Detect folder name and match to shared project - autoselect project to work in if match
 # Programming stuff:
 #	- Command line arguments to run everything from a prompt instead of interactively.
 #	- Logging of which timestamps are discarded
