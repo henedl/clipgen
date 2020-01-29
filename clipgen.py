@@ -28,6 +28,7 @@ SETTINGSLIST = ['REENCODING', 'FILEFORMAT', 'DEBUGGING']
 #	- Add Tag-based clip generation (e.g. every clip that affects Bus Routes)
 #	- Detect folder name and match to shared project - autoselect project to work in if match
 # Programming stuff:
+#	- Accept sheets regardless of capitalization (sheets named 'data set' are accepted, but 'Data set' aren't)
 #	- Command line arguments to run everything from a prompt instead of interactively.
 #	- Logging of which timestamps are discarded
 #	- Expand debug mode (with multiple levels?)
