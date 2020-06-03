@@ -7,7 +7,7 @@ from oauth2client.service_account import ServiceAccountCredentials
 # Constants 
 REENCODING = False
 FILEFORMAT = '.mp4'
-VERSIONNUM = '0.3.5'
+VERSIONNUM = '0.3.6'
 SHEET_NAME = 'data set'
 DEBUGGING  = False
 
@@ -18,8 +18,7 @@ SETTINGSLIST = ['REENCODING', 'FILEFORMAT', 'DEBUGGING']
 
 # TODO
 # Quality of life:
-#	- Timestamp cleaning doesn't handle: " +H:M:S", strip + prefixes?
-# 	- Timestamp cleaning doesn't handle any prefix characters
+# 	- Timestamp cleaning doesn't handle prefix/separator characters besides + , ;
 #	- Command to open the current Sheet in Chrome from the commandline?
 #	- Created composite highlight videos with clips from multiple participants?
 #	- Title/ending cards?
@@ -32,7 +31,7 @@ SETTINGSLIST = ['REENCODING', 'FILEFORMAT', 'DEBUGGING']
 #	- Command line arguments to run everything from a prompt instead of interactively.
 #	- Logging of which timestamps are discarded
 #	- Expand debug mode (with multiple levels?)
-#	- Upgrade to Python 3?
+#	- Upgrade to Python 3
 #	- Refactor try statements to be smaller
 #	- Support other data formats (Excel, CSV) - would need to re-write parsing backend and refactor code heavily
 #	- Rename "generate"-methods to more clearly indicate that they return timestamps to clip (for generate_list(), this method should have a completely different name)
@@ -333,17 +332,19 @@ def set_filename_length(filename, step=1):
 
 def clean_issue(issue):
 	timeStamps = []
-	unparsedTimes = issue['cell'].value.lower().split()
-	if unparsedTimes == issue['cell'].value:
-		unparsedTimes = unparsedTimes.split('+').split(',')
-	
+	if DEBUGGING: print '! DEBUG clean_issue() received issue with cell contents {0}\n! DEBUG Will attempt to split the cell contents'.format(issue['cell'].value)
+	unparsedTimes = issue['cell'].value.lower().replace('+',' ').replace(';',' ').replace(',',' ').split()
+	if DEBUGGING: print '! DEBUG unparsedTimes content after split is {0}'.format(unparsedTimes)
+
 	# Using own iterator here, instead of letting the for-loop set this up. Otherwise we can't manually advance the iterator (we need to step twice which continue won't do.)
 	lines = iter(range(0,len(unparsedTimes)))
+	if DEBUGGING: print '! DEBUG Timestamp list unparsedTimes is {0} entries long'.format(len(unparsedTimes))
 
 	for i in lines:
 		if DEBUGGING: print '! DEBUG Cleaning timestamp {0}'.format(unparsedTimes[i])
 		unparsedTimes[i] = unparsedTimes[i].strip().rstrip(',').rstrip('-')
 		if unparsedTimes[i] == '':
+			if DEBUGGING: print '! DEBUG Found blank timestamp {0}'.format(unparsedTimes[i])
 			pass
 		elif unparsedTimes[i].find('-') >= 0:
 			if unparsedTimes[i][unparsedTimes[i].find('-')-1].isdigit():
