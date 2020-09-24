@@ -426,7 +426,7 @@ def get_duration(intime, outtime):
 		intimeDatetime = datetime.strptime(intime,'%H:%M:%S')
 		outtimeDatetime = datetime.strptime(outtime,'%H:%M:%S')
 	except ValueError as e:
-		print '* Timestamp formatting error was caught.'
+		print '* Timestamp formatting error was caught while running get_duration().'
 		print e
 		try:
 			intimeDatetime = datetime.strptime(intime,'%H:%M:%S.%f')
@@ -448,11 +448,17 @@ def get_duration(intime, outtime):
 
 # Just adds a minute
 def add_duration(intime):
-	intimeDatetime = datetime.strptime(intime,'%H:%M:%S')
-	if intimeDatetime.minute == 59:
-		return double_digits(str(intimeDatetime.hour+1)) + ':00:' + double_digits(str(intimeDatetime.second))
-	else:	
-		return double_digits(str(intimeDatetime.hour)) + ':' + double_digits(str(intimeDatetime.minute+1)) + ':' + double_digits(str(intimeDatetime.second))
+	try:
+		intimeDatetime = datetime.strptime(intime,'%H:%M:%S')
+		if intimeDatetime.minute == 59:
+			return double_digits(str(intimeDatetime.hour+1)) + ':00:' + double_digits(str(intimeDatetime.second))
+		else:	
+			return double_digits(str(intimeDatetime.hour)) + ':' + double_digits(str(intimeDatetime.minute+1)) + ':' + double_digits(str(intimeDatetime.second))
+	except ValueError as e:
+		print '* Timestamp formatting error was caught while running add_duration().\n  Returning -1 instead of timestamp'
+		print e
+		return -1
+	#End try/except
 # End add_duration()
 
 # Comma-separated list of all accessible Google Spreadsheets
