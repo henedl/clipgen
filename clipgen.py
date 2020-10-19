@@ -21,38 +21,6 @@ SETTINGSLIST = ['REENCODING', 'FILEFORMAT', 'DEBUGGING']
 # What is this?
 # This script will help quickly cut out video snippets in user reserach videos, based on researcher's timestamps in a spreadsheet!
 
-# TODO
-# Quality of life:
-# 	- Timestamp cleaning doesn't handle prefix/separator characters besides + , ;
-#	- Command to open the current Sheet in Chrome from the commandline?
-#	- Created composite highlight videos with clips from multiple participants?
-#	- Title/ending cards?
-#	- Being able to select multiple non-continous lines
-#	- Add ability to target only one cell. Proposed syntax: "P01.11". Should also be batchable, i.e. "P01.11 + P03.11 + P03.09". Should be available directly at (current) mode select stage.
-#	- Add Tag-based clip generation (e.g. every clip that affects Bus Routes)
-#	- Detect folder name and match to shared project - autoselect project to work in if match
-#	- Pre-defining file size limits, e.g. if user sets 50MB max limit in app settings, all videos are compressed below that limit
-# Programming stuff:
-#	- Convert all data processing and printing to unicode
-#	- Accept sheets regardless of capitalization (sheets named 'data set' are accepted, but 'Data set' aren't)
-#	- Command line arguments to run everything from a prompt instead of interactively.
-#	- Logging of which timestamps are discarded
-#	- Expand debug mode (with multiple levels?)
-#	- Upgrade to Python 3
-#	- Refactor try statements to be smaller
-#	- Support other data formats (Excel, CSV) - would need to re-write parsing backend and refactor code heavily
-#	- Rename "generate"-methods to more clearly indicate that they return timestamps to clip (for generate_list(), this method should have a completely different name)
-#	- Rename "dumped"-methods once all timestamps are generated from a dumped sheet instead of a live sheet
-#	- Rename "users" to "participants" (variables, method names)
-# Batch improvements:
-# 	- Implement the special character to select only one video to be rendered, out of several
-# 	- Add support for special tokens like * for starred video clip (this can be added to the dict as 'starred' and then read in the main loop)
-# 	- Start using the meta fields for checking which issues are already processesed and what the grouping is
-# Major new features:
-# 	- GUI
-#	- Cropping and timelapsing! For example generate a timelapse of the minimap in TWY or EU.
-#	- Add computer vision detection of text in videos to support real time time-stamps?
-
 # Goes through sheet, bundles values from timestamp columns and descriptions columns into tuples.
 def generate_list(sheet, mode, type='Default'):
 	p = sheet.find('Participants') # Find pariticpant listing coords.
