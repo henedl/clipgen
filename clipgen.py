@@ -1,13 +1,18 @@
+# encoding=utf8
 import gspread
 import os, sys
 import subprocess
 from datetime import datetime
 from oauth2client.service_account import ServiceAccountCredentials
 
+# Dirty unicode encoding fix
+reload(sys)
+sys.setdefaultencoding('utf8')
+
 # Constants 
 REENCODING = False
 FILEFORMAT = '.mp4'
-VERSIONNUM = '0.3.6'
+VERSIONNUM = '0.3.7'
 SHEET_NAME = 'data set'
 DEBUGGING  = False
 
@@ -26,7 +31,9 @@ SETTINGSLIST = ['REENCODING', 'FILEFORMAT', 'DEBUGGING']
 #	- Add ability to target only one cell. Proposed syntax: "P01.11". Should also be batchable, i.e. "P01.11 + P03.11 + P03.09". Should be available directly at (current) mode select stage.
 #	- Add Tag-based clip generation (e.g. every clip that affects Bus Routes)
 #	- Detect folder name and match to shared project - autoselect project to work in if match
+#	- Pre-defining file size limits, e.g. if user sets 50MB max limit in app settings, all videos are compressed below that limit
 # Programming stuff:
+#	- Convert all data processing and printing to unicode
 #	- Accept sheets regardless of capitalization (sheets named 'data set' are accepted, but 'Data set' aren't)
 #	- Command line arguments to run everything from a prompt instead of interactively.
 #	- Logging of which timestamps are discarded
@@ -36,6 +43,7 @@ SETTINGSLIST = ['REENCODING', 'FILEFORMAT', 'DEBUGGING']
 #	- Support other data formats (Excel, CSV) - would need to re-write parsing backend and refactor code heavily
 #	- Rename "generate"-methods to more clearly indicate that they return timestamps to clip (for generate_list(), this method should have a completely different name)
 #	- Rename "dumped"-methods once all timestamps are generated from a dumped sheet instead of a live sheet
+#	- Rename "users" to "participants" (variables, method names)
 # Batch improvements:
 # 	- Implement the special character to select only one video to be rendered, out of several
 # 	- Add support for special tokens like * for starred video clip (this can be added to the dict as 'starred' and then read in the main loop)
@@ -126,6 +134,10 @@ def get_numusers(userList, p, colCount):
 	for j in range(0, colCount - p.col):
 		if len(userList[j]) > 0:
 			if userList[j][0] == 'P':
+				# For every user (named "P##" we increase the total participant counter)
+				numUsers += 1
+			elif userList[j][0] == 'g':
+				# If there are users named "group##" this then this will capture them and increase the total participant counter correctly
 				numUsers += 1
 	print 'Found {0} users in total, spanning columns {1} to {2}.'.format(numUsers, p.col, numUsers+p.col)
 	return numUsers	
