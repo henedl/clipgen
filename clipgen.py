@@ -20,6 +20,7 @@ SETTINGSLIST = ['REENCODING', 'FILEFORMAT', 'DEBUGGING']
 
 # What is this?
 # This script will help quickly cut out video snippets in user reserach videos, based on researcher's timestamps in a spreadsheet!
+# Check out README.md for more detailed information about clipgen.
 
 # Goes through sheet, bundles values from timestamp columns and descriptions columns into tuples.
 def generate_list(sheet, mode, type='Default'):
