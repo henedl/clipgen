@@ -12,7 +12,7 @@ sys.setdefaultencoding('utf8')
 # Constants 
 REENCODING = False
 FILEFORMAT = '.mp4'
-VERSIONNUM = '0.3.7'
+VERSIONNUM = '0.3.8'
 SHEET_NAME = 'data set'
 DEBUGGING  = False
 
@@ -108,6 +108,11 @@ def get_numusers(userList, p, colCount):
 			elif userList[j][0] == 'g':
 				# If there are users named "group##" this then this will capture them and increase the total participant counter correctly
 				numUsers += 1
+			elif userList[j] != 'Notes':
+				numUsers += 1
+			elif userList[j] == 'Notes':
+				# If we reach the Notes column, let's not count anything
+				break
 	print 'Found {0} users in total, spanning columns {1} to {2}.'.format(numUsers, p.col, numUsers+p.col)
 	return numUsers	
 # End get_numusers()
