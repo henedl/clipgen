@@ -278,12 +278,12 @@ def double_digits(number):
 # End double_digits()
 
 def filesize(size, precision=2):
-    suffixes = ['B','KB','MB','GB','TB']
-    suffixIndex = 0
-    while size > 1024 and suffixIndex < 4:
-        suffixIndex += 1 
-        size = size / 1024.0
-    return '%.*f%s'%(precision, size, suffixes[suffixIndex])
+	suffixes = ['B','KB','MB','GB','TB']
+	suffixIndex = 0
+	while size > 1024 and suffixIndex < 4:
+		suffixIndex += 1 
+		size = size / 1024.0
+	return '%.*f%s'%(precision, size, suffixes[suffixIndex])
 # End filesize()
 
 # Appends an incremeneted number to the end of files that already exist, if necessary to prevent overwriting clips.
@@ -355,12 +355,12 @@ def clean_issue(issue):
 	issue['desc'] = issue['desc'].replace('?','_')
 	issue['category'] = issue['category'].replace('/','-')
 	for forbiddenCharacter in ['\'',
-			  '\"',
-			  '.',
-			  '>',
-			  '<',
-			  '|',
-			  ':']:
+			'\"',
+			'.',
+			'>',
+			'<',
+			'|',
+			':']:
 		issue['desc'] = issue['desc'].replace(forbiddenCharacter,'')
 		issue['category'] = issue['category'].replace(forbiddenCharacter,'')
 	# End for
@@ -530,13 +530,13 @@ def main():
 				# This is equivalent to opening the Sheet numbered 1 in the 'all' list.
 				latest = get_alldocs(gc).split(',')[0]
 				worksheet = gc.open(latest).worksheet(SHEET_NAME)
-  				break
-  			elif inputName[0].isdigit():
-  				# If user enters a number, we open the Sheet of that number from the 'all' list.
-  				chosenDocumentIndex = int(inputName)-1
-  				worksheet = gc.open(get_alldocs(gc).split(',')[chosenDocumentIndex].strip()).worksheet(SHEET_NAME)
-  				break
-  			elif inputName[:8] == 'settings':
+				break
+			elif inputName[0].isdigit():
+				# If user enters a number, we open the Sheet of that number from the 'all' list.
+				chosenDocumentIndex = int(inputName)-1
+				worksheet = gc.open(get_alldocs(gc).split(',')[chosenDocumentIndex].strip()).worksheet(SHEET_NAME)
+				break
+			elif inputName[:8] == 'settings':
 				# This mode allows users to change settings for this run of the program only
 				set_program_settings()
 			elif inputName.find(' ') == -1:
@@ -547,7 +547,7 @@ def main():
 				# As we have free text entry, we match it to a Sheet name (regardless of case) and then open that Sheet.
 				chosenDocumentIndex = check_sheetname_freetext(inputName, docList)
 				if chosenDocumentIndex:
-  					worksheet = gc.open(get_alldocs(gc).split(',')[chosenDocumentIndex].strip().lstrip()).worksheet(SHEET_NAME)
+					worksheet = gc.open(get_alldocs(gc).split(',')[chosenDocumentIndex].strip().lstrip()).worksheet(SHEET_NAME)
 				break
 		except (gspread.SpreadsheetNotFound, gspread.exceptions.APIError, gspread.exceptions.GSpreadException) as e:
 			inputFileFails += 1
@@ -651,13 +651,13 @@ def main():
 # End main()
 
 if __name__ == '__main__':
-    try:
-    	main()
-    except KeyboardInterrupt:
-    	print '\nInterrupted by user'
-    	try:
-    		sys.exit(0)
-    	except SystemExit:
-    		os._exit(0)
+	try:
+		main()
+	except KeyboardInterrupt:
+		print '\nInterrupted by user'
+		try:
+			sys.exit(0)
+		except SystemExit:
+			os._exit(0)
 	# End try/except
 # End __init__
