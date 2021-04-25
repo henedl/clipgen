@@ -399,7 +399,7 @@ def ffmpeg(inputfile, outputfile, startpos, outpos, reencode):
 				subprocess.call(['ffmpeg', '-y', '-loglevel', '16', '-ss', startpos, '-i', inputfile, '-t', str(duration), outputfile])
 			print '+ Generated video \'{0}\' successfully.\n File size: {1}\n Expected duration: {2} s\n'.format(outputfile, filesize(os.path.getsize(outputfile)), duration)
 			return True
-		except WindowsError as e:
+		except OSError as e:
 			print '\n! ERROR ffmpeg could not successfully run.\n  clipgen returned the following error:\n  {0}\n  - Attempted location: \'{3}\'\n  - Attemped inputfile: \'{1}\',\n  - Attempted outputfile: \'{2}\'\n'.format(e, inputfile, outputfile, os.getcwd())
 			return False
 		# End try/except
