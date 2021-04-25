@@ -1,2 +1,9 @@
 # Security keys
 *.json
+
+# Python requirements
+requirements.txt
+
+# Python bytecode
+*.py[cod]
+__pycache__/
