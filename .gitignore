@@ -4,6 +4,6 @@
 # Python requirements
 requirements.txt
 
-# Python bytecode
+# Python byte code
 *.py[cod]
 __pycache__/
