@@ -1,6 +1,7 @@
 # encoding=utf8
 import gspread
-import os, sys
+import os
+import sys
 import subprocess
 from datetime import datetime
 from oauth2client.service_account import ServiceAccountCredentials
@@ -9,7 +10,7 @@ from oauth2client.service_account import ServiceAccountCredentials
 reload(sys)
 sys.setdefaultencoding('utf8')
 
-# Constants 
+# Constants
 REENCODING = False
 FILEFORMAT = '.mp4'
 VERSIONNUM = '0.3.8'
@@ -22,10 +23,11 @@ SETTINGSLIST = ['REENCODING', 'FILEFORMAT', 'DEBUGGING']
 # This script will help quickly cut out video snippets in user reserach videos, based on researcher's timestamps in a spreadsheet!
 # Check out README.md for more detailed information about clipgen.
 
+
 # Goes through sheet, bundles values from timestamp columns and descriptions columns into tuples.
 def generate_list(sheet, mode, type='Default'):
-	p = sheet.find('Participants') # Find pariticpant listing coords.
-	m = sheet.find('Meta') # Find the meta tag coords.
+	p = sheet.find('Participants')  # Find pariticpant listing coords.
+	m = sheet.find('Meta')  # Find the meta tag coords.
 	s = sheet.find('Summary')
 	times = []
 
@@ -37,23 +39,23 @@ def generate_list(sheet, mode, type='Default'):
 	realTime = get_current_time()
 	if DEBUGGING: print '! DEBUG Sheet dumped into memory at {0}'.format(realTime)
 
-	# TODO 
+	# TODO
 	# Add more processing of the title, split out the study number, and project name.
 	# Remove hardcoded location and format expectations on study name.
-	studyName = sheetDump[0][0] # Find the title of the study, assuming top left in sheet.
-	studyName = studyName[0:studyName.find('Data set')-1] # Cut off the stuff we don't want.
+	studyName = sheetDump[0][0]  # Find the title of the study, assuming top left in sheet.
+	studyName = studyName[0:studyName.find('Data set')-1]  # Cut off the stuff we don't want.
 	print '\nBeginning work on {0}.'.format(studyName)
-	
+
 	# Just some name formatting, after we announced everything up top.
 	studyName = studyName.lower()
 	studyName = studyName.replace('study ', 'study')
 	studyName = studyName[0:studyName.find('study')].replace(' ', '') + '_' + studyName[studyName.find('study'):]
-	studyName = studyName.replace(' ', '_') # Replace any leftover whitespace with underscore.
-	studyName = unicode(studyName) # Typecast to unicode string to avoid TypeErrors later
+	studyName = studyName.replace(' ', '_')  # Replace any leftover whitespace with underscore.
+	studyName = unicode(studyName)  # Typecast to unicode string to avoid TypeErrors later
 	# It should now look like this: 'thundercats_study5'
 
 	# Get number of users, an int that we'll need to efficiently loop through the worksheet.
-	userList = sheet.row_values(p.row+1)
+	userList = sheet.row_values(p.row + 1)
 	numUsers = get_numusers(userList, p, sheet.col_count)
 
 	if mode == 'batch':
@@ -80,7 +82,7 @@ def generate_list(sheet, mode, type='Default'):
 				startLineSelect = int(raw_input('\nTry again. Starting line (row number only)?\n>> '))
 				endLineSelect = int(raw_input('\nTry again. Ending line (row number only)?\n>> '))
 			# End try/except
-			print 'Lines selected: {0} to {1}'.format(sheetDump[startLineSelect-1][s.col-1], sheetDump[endLineSelect-1][s.col-1])
+			print 'Lines selected: {0} to {1}'.format(sheetDump[startLineSelect - 1][s.col - 1], sheetDump[endLineSelect - 1][s.col - 1])
 			yn = raw_input('Is this correct? y/n\n>> ')
 			if yn == 'y':
 				break
@@ -95,6 +97,7 @@ def generate_list(sheet, mode, type='Default'):
 
 	return times
 # End generate_list()
+
 
 # Returns int numUsers, how many participant columns exist in the worksheet
 def get_numusers(userList, p, colCount):
@@ -113,14 +116,16 @@ def get_numusers(userList, p, colCount):
 			elif userList[j] == 'Notes':
 				# If we reach the Notes column, let's not count anything
 				break
-	print 'Found {0} users in total, spanning columns {1} to {2}.'.format(numUsers, p.col, numUsers+p.col)
-	return numUsers	
+	print 'Found {0} users in total, spanning columns {1} to {2}.'.format(numUsers, p.col, numUsers + p.col)
+	return numUsers
 # End get_numusers()
+
 
 def get_current_time():
 	st = str(datetime.now()).split('.')[0]
 	return st
 # End get_current_time()
+
 
 def set_program_settings():
 	# WIP + TODO
@@ -128,7 +133,7 @@ def set_program_settings():
 	# - name 			The name of the setting, as a string
 	# - default 		The default value of the setting, with varying types of values
 	# - options 		The available options for the setting, as a list of values
-	fileformatOptions = {'name': 'FILEFORMAT', 'default': 'mp4', 'options': ['mp4','flv']}
+	fileformatOptions = {'name': 'FILEFORMAT', 'default': 'mp4', 'options': ['mp4', 'flv']}
 	reencodingOptions = {'name': 'REENCODING', 'default': False, 'options': [True, False]}
 	debuggingOptions  = {'name': 'DEBUGGING', 'default': False, 'options': [True, False]}
 
@@ -137,11 +142,11 @@ def set_program_settings():
 	settingToChange = raw_input('\n>> ')
 
 	print '* Current value for \'{1}\' is \'{0}\''.format(globals()[settingToChange], settingToChange)
-	
+
 	newSettingValue = raw_input('\nWhich new value?\n>> ')
 
 	print '* \'{0}\' SET TO \'{1}\''.format(settingToChange, newSettingValue)
-		# Reencoding
+	# Re-encoding
 
 	# As of right now we are assuming that all settings are global variables.
 	if settingToChange != '':
@@ -151,14 +156,16 @@ def set_program_settings():
 		return False
 # End set_program_settings()
 
+
 def generate_dumpedbatch(sheetDump, p, m, s, numUsers, studyName):
 	if DEBUGGING: print '! DEBUG Running method generate_dumpedbatch()'
 	times = []
-	for i in range(p.row+1, len(sheetDump)):
-		if DEBUGGING: print '! DEBUG Batching on line {0} (real sheet line {1})\n'.format(i, i+1)
+	for i in range(p.row + 1, len(sheetDump)):
+		if DEBUGGING: print '! DEBUG Batching on line {0} (real sheet line {1})\n'.format(i, i + 1)
 		times = times + get_dumpedline(sheetDump, p, m, s, numUsers, i, studyName)
 	return times
 # End generate_dumpedbatch()
+
 
 def generate_dumpedcategory(sheetDump, p, m, s, numUsers, studyName, categoryCell):
 	if DEBUGGING: print '! DEBUG Starting method generate_dumpedcategory()'
@@ -198,7 +205,7 @@ def generate_line(sheetDump, p, m, s, numUsers, studyName):
 	times = get_dumpedline(sheetDump, p, m, s, numUsers, lineSelect-1, studyName)
 	if DEBUGGING: print '\n! DEBUG Printing return of get_dumpedline() in generate_line()'
 	if DEBUGGING: print times
-	
+
 	return times
 # End generate_line()
 
@@ -233,12 +240,13 @@ def get_dumpedline(sheetDump, p, m, s, numUsers, lineSelect, studyName, latestCa
 			if DEBUGGING: print '! DEBUG Timestamp at R{0},C{1} -> \'{2}\''.format(cell.row-1,cell.col-1,cell.value)
 			if DEBUGGING: print '! DEBUG Actual cell {0} at actual address {1}'.format(cell, gspread.utils.rowcol_to_a1(cell.row,cell.col))
 			times.append(issue)
-			print '+ Found timestamp: {0}'.format(value.replace('\n',' ')) 
+			print '+ Found timestamp: {0}'.format(value.replace('\n',' '))
 	# End for
 
 	if DEBUGGING: print '! DEBUG Line completed, method get_dumpedline returning list of {0} potential timestamps.\n---'.format(len(times))
 	return times
 # End get_dumpedline()
+
 
 def generate_dumpedrange(sheetDump, p, m, s, numUsers, studyName, startLineSelect, endLineSelect):
 	times = []
@@ -247,6 +255,7 @@ def generate_dumpedrange(sheetDump, p, m, s, numUsers, studyName, startLineSelec
 		times = times + get_dumpedline(sheetDump, p, m, s, numUsers, i, studyName)
 	return times
 # End generate_dumpedrange()
+
 
 def get_dumpedcategory(sheetDump, startingRow, pRow, mCol, sCol):
 	category = ''
@@ -264,6 +273,7 @@ def get_dumpedcategory(sheetDump, startingRow, pRow, mCol, sCol):
 	return category
 # End get_dumpecdategory()
 
+
 # Takes a string, returns a double digit number
 def double_digits(number):
 	try:
@@ -277,14 +287,16 @@ def double_digits(number):
 	# End try/except
 # End double_digits()
 
+
 def filesize(size, precision=2):
 	suffixes = ['B','KB','MB','GB','TB']
 	suffixIndex = 0
 	while size > 1024 and suffixIndex < 4:
-		suffixIndex += 1 
+		suffixIndex += 1
 		size = size / 1024.0
 	return '%.*f%s'%(precision, size, suffixes[suffixIndex])
 # End filesize()
+
 
 # Appends an incremeneted number to the end of files that already exist, if necessary to prevent overwriting clips.
 def set_filename(filename):
@@ -305,6 +317,7 @@ def set_filename(filename):
 	return filename
 # End set_filename()
 
+
 def set_filename_length(filename, step=1):
 	# Atleast in Windows, filenames should not exceed 255 characters. This method cuts off filenames that might be too long.
 	if len(filename) > 255:
@@ -315,6 +328,7 @@ def set_filename_length(filename, step=1):
 			filename = filename[0:255-(len(FILEFORMAT))] + FILEFORMAT
 	return filename
 # End set_filename_length()
+
 
 def clean_issue(issue):
 	timeStamps = []
@@ -364,9 +378,10 @@ def clean_issue(issue):
 		issue['desc'] = issue['desc'].replace(forbiddenCharacter,'')
 		issue['category'] = issue['category'].replace(forbiddenCharacter,'')
 	# End for
-	
+
 	return issue
 # End clean_issue()
+
 
 # Calls ffmpeg to cut a video clip - requires ffmpeg to be added to system or user Path
 def ffmpeg(inputfile, outputfile, startpos, outpos, reencode):
@@ -405,6 +420,7 @@ def ffmpeg(inputfile, outputfile, startpos, outpos, reencode):
 		# End try/except
 # End ffmpeg()
 
+
 # Returns the duration of a clip as seconds
 def get_duration(intime, outtime):
 	duration = 0
@@ -432,13 +448,14 @@ def get_duration(intime, outtime):
 	return duration
 # End get_duration()
 
+
 # Just adds a minute
 def add_duration(intime):
 	try:
 		intimeDatetime = datetime.strptime(intime,'%H:%M:%S')
 		if intimeDatetime.minute == 59:
 			return double_digits(str(intimeDatetime.hour+1)) + ':00:' + double_digits(str(intimeDatetime.second))
-		else:	
+		else:
 			return double_digits(str(intimeDatetime.hour)) + ':' + double_digits(str(intimeDatetime.minute+1)) + ':' + double_digits(str(intimeDatetime.second))
 	except ValueError as e:
 		print '* Timestamp formatting error was caught while running add_duration().\n  Returning -1 instead of timestamp'
@@ -447,6 +464,7 @@ def add_duration(intime):
 	#End try/except
 # End add_duration()
 
+
 # Comma-separated list of all accessible Google Spreadsheets
 def get_alldocs(connection):
 	docs = []
@@ -454,6 +472,7 @@ def get_alldocs(connection):
 		docs.append(doc.title)
 	return ', '.join(docs)
 # End get_alldocs()
+
 
 def check_sheetname_freetext(inputName, docList):
 	# Checks free text input, trying to find a matching Google Sheet name
@@ -479,6 +498,7 @@ def check_sheetname_freetext(inputName, docList):
 	# End for
 	return -1
 # End check_sheetname_freetext()
+
 
 def main():
 	# Change working directory to place of python script.
@@ -631,7 +651,7 @@ def main():
 					break
 
 				baseVideo = timesList[i]['study'] + '_' + timesList[i]['participant']  + FILEFORMAT
-				
+
 				completed = ffmpeg(inputfile=baseVideo, outputfile=vidName, startpos=vidIn, outpos=vidOut, reencode=REENCODING)
 				if completed:
 					videosGenerated += 1
@@ -649,6 +669,7 @@ def main():
 			pass
 	# End while
 # End main()
+
 
 if __name__ == '__main__':
 	try:
