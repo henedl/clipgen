@@ -370,13 +370,7 @@ def clean_issue(issue):
 	issue['desc'] = issue['desc'].replace('/', '-')
 	issue['desc'] = issue['desc'].replace('?', '_')
 	issue['category'] = issue['category'].replace('/', '-')
-	for forbiddenCharacter in ['\'',
-			'\"',
-			'.',
-			'>',
-			'<',
-			'|',
-			':']:
+	for forbiddenCharacter in ['\'', '\"', '.', '>', '<', '|', ':']:
 		issue['desc'] = issue['desc'].replace(forbiddenCharacter, '')
 		issue['category'] = issue['category'].replace(forbiddenCharacter, '')
 	# End for
