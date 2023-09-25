@@ -4,6 +4,13 @@
 # Python requirements
 requirements.txt
 
+# Language server settings
+pyrightconfig.json
+
+# Mac stuff
+*.DS_FILE
+Icon
+
 # Python byte code
 *.py[cod]
 __pycache__/
