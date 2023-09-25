@@ -10,6 +10,7 @@ pyrightconfig.json
 # Mac stuff
 *.DS_FILE
 Icon?
+.nova
 
 # Python byte code
 *.py[cod]
