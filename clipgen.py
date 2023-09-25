@@ -300,7 +300,7 @@ def filesize(size, precision=2):
 # End filesize()
 
 
-# Appends an incremeneted number to the end of files that already exist, if necessary to prevent overwriting clips.
+# Appends an incremented number to the end of files that already exist, if necessary to prevent overwriting clips.
 def set_filename(filename):
 	step = 1
 	while True:
