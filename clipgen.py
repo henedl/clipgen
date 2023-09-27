@@ -5,24 +5,19 @@ import subprocess
 from datetime import datetime
 from oauth2client.service_account import ServiceAccountCredentials
 
-# Dirty unicode encoding fix
-# importlib.reload(sys)
-# sys.setdefaultencoding('utf8')
-
 # Constants
 REENCODING = False
 FILEFORMAT = '.mp4'
 VERSIONNUM = '0.4.0'
 SHEET_NAME = 'data set'
 DEBUGGING  = False
-
 SETTINGSLIST = ['REENCODING', 'FILEFORMAT', 'DEBUGGING']
 
-# What is this?
-# This script will help quickly cut out video snippets in user research videos, based on researcher's timestamps in a spreadsheet!
+# What is this program?
+# This script will help quickly cut out video snippets from longer videos, based on timestamps in a spreadsheet!
 # Check out README.md for more detailed information about clipgen.
 
-# Goes through sheet, bundles values from timestamp columns and descriptions columns into tuples.
+# Goes through a sheet, bundles values from timestamp columns and descriptions columns into tuples.
 def generate_list(sheet, mode, type='Default'):
 	p = sheet.find('Participants') # Find participant listing coords.
 	m = sheet.find('Meta') # Find the meta tag coords.
@@ -31,8 +26,8 @@ def generate_list(sheet, mode, type='Default'):
 
 	# Sheet dumping to drastically reduce number of calls to Google's API
 	# - sheetDump[][] is a list of lists, which forms a matrix
-	#             ^    The first list is rows from the Sheet (index starts at 0, which is off by 1 compared to the "real" view)
-	#               ^  The second list is columns from the Sheet (index starts at 0, which is off by 1 compared to the "real" view)
+	#             ^    The first list is rows from the Sheet (index starts at 0, while the real spreadsheet starts at 1)
+	#               ^  The second list is columns from the Sheet (index starts at 0, while the real spreadsheet starts at 1)
 	sheetDump = sheet.get_all_values()
 	realTime = get_current_time()
 	if DEBUGGING: print('! DEBUG Sheet dumped into memory at {0}'.format(realTime))
@@ -469,7 +464,7 @@ def check_sheetname_freetext(inputName, docList):
 			if DEBUGGING: print('! DEBUG Method check_sheetname_freetext() returning value \'{0}\''.format(i))
 			return i
 		elif docName == inputNameGuess:
-			nameFixed = docName
+			# nameFixed = docName
 			if DEBUGGING: print('! DEBUG Matched sheet \'{1}\' with input \'{0}\''.format(inputNameGuess, docName))
 			if DEBUGGING: print('! DEBUG Method check_sheetname_freetext() returning value \'{0}\''.format(i))
 			return i
