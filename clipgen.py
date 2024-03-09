@@ -1,6 +1,5 @@
 # encoding=utf8
 import gspread
-#import ffmpeg <- Not before we rename our method ffmpeg() in this document
 import os, sys
 import subprocess
 from datetime import datetime
@@ -367,20 +366,21 @@ def clean_issue(issue):
 
 # Calls ffmpeg to cut a video clip - requires ffmpeg to be added to system or user Path
 def ffmpeg(inputfile, outputfile, startpos, outpos, reencode):
-	# TODO
-	# Protect against videos that have an outtime beyond base video length
-
 	# Makes the clip a minute long if we didn't get an out-time
 	if outpos == '00:00:00':
 		outpos = add_duration(startpos)
 
 	duration = get_duration(startpos, outpos)
+	file_length = get_file_duration(inputfile)
 
 	if duration < 0:
-		print('Can\'t work with negative duration for videos, exiting.')
-		sys.exit(0)
+		print('Can\'t work with negative duration for videos. Skipping.')
+		return None
+	elif duration > file_length:
+		print('Timestamp duration longer than actual video file. Skipping.')
+		return None
 	elif duration > 60*10:
-		yn = input('This video is over 10 minutes long, do you want to still generate it? (y/n)\n>> ')
+		yn = input('The generated video will be over 10 minutes long, do you want to still generate it? (y/n)\n>> ')
 		if yn == 'n':
 			return None
 
@@ -390,6 +390,7 @@ def ffmpeg(inputfile, outputfile, startpos, outpos, reencode):
 	else:
 		try:
 			if not reencode:
+				# TODO change call() to run()
 				subprocess.call(['ffmpeg', '-y', '-loglevel', '16', '-ss', startpos, '-i', inputfile, '-t', str(duration), '-c', 'copy', '-avoid_negative_ts', '1', outputfile])
 			else:
 				# If we do this, we will re-encode the video, but resolve all issues with with iframes early and late.
@@ -401,6 +402,12 @@ def ffmpeg(inputfile, outputfile, startpos, outpos, reencode):
 			return False
 		# End try/except
 # End ffmpeg()
+
+# Calls ffprobe, returns duration of video container in
+def get_file_duration(file):
+	file_length = subprocess.check_output(['ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1', file], shell=True)
+	return int(file_length)
+# End get_file_duration()
 
 # Returns the duration of a clip as seconds
 def get_duration(intime, outtime):
