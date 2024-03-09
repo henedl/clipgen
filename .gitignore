@@ -12,6 +12,9 @@ pyrightconfig.json
 Icon?
 .nova
 
+# Working docs
+Upgrade\ notes.md
+
 # Python byte code
 *.py[cod]
 __pycache__/

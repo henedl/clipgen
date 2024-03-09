@@ -1,5 +1,6 @@
 # encoding=utf8
 import gspread
+#import ffmpeg <- Not before we rename our method ffmpeg() in this document
 import os, sys
 import subprocess
 from datetime import datetime
@@ -8,17 +9,16 @@ from oauth2client.service_account import ServiceAccountCredentials
 # Constants
 REENCODING = False
 FILEFORMAT = '.mp4'
-VERSIONNUM = '0.4.0'
+VERSIONNUM = '0.4.1'
 SHEET_NAME = 'data set'
 DEBUGGING  = False
-SETTINGSLIST = ['REENCODING', 'FILEFORMAT', 'DEBUGGING']
 
 # What is this program?
-# This script will help quickly cut out video snippets from longer videos, based on timestamps in a spreadsheet!
+# This script will help quickly create video snippets from longer video files, based on timestamps in a spreadsheet!
 # Check out README.md for more detailed information about clipgen.
 
 # Goes through a sheet, bundles values from timestamp columns and descriptions columns into tuples.
-def generate_list(sheet, mode, type='Default'):
+def generate_list(sheet, mode):
 	p = sheet.find('Participants') # Find participant listing coords.
 	m = sheet.find('Meta') # Find the meta tag coords.
 	s = sheet.find('Summary')
@@ -122,9 +122,12 @@ def set_program_settings():
 	# - name 			The name of the setting, as a string
 	# - default 		The default value of the setting, with varying types of values
 	# - options 		The available options for the setting, as a list of values
-	fileformatOptions = {'name': 'FILEFORMAT', 'default': 'mp4', 'options': ['mp4','flv']}
-	reencodingOptions = {'name': 'REENCODING', 'default': False, 'options': [True, False]}
-	debuggingOptions  = {'name': 'DEBUGGING', 'default': False, 'options': [True, False]}
+
+	#fileformatOptions = {'name': 'FILEFORMAT', 'default': 'mp4', 'options': ['mp4','flv']}
+	#reencodingOptions = {'name': 'REENCODING', 'default': False, 'options': [True, False]}
+	#debuggingOptions  = {'name': 'DEBUGGING', 'default': False, 'options': [True, False]}
+
+	SETTINGSLIST = ['REENCODING', 'FILEFORMAT', 'DEBUGGING']
 
 	print('\nWhich setting? Available:\n')
 	print(', '.join(SETTINGSLIST))
@@ -280,7 +283,7 @@ def filesize(size, precision=2):
 	return '%.*f%s'%(precision, size, suffixes[suffixIndex])
 # End filesize()
 
-# Appends an incremeneted number to the end of files that already exist, if necessary to prevent overwriting clips.
+# Appends an incremented number to the end of files that already exist, if necessary to prevent overwriting clips.
 def set_filename(filename):
 	step = 1
 	while True:
@@ -478,7 +481,7 @@ def main():
 	# Change working directory to place of python script.
 	os.chdir(os.path.dirname(os.path.abspath(__file__)))
 	print('-------------------------------------------------------------------------------')
-	print('Welcome to clipgen v{1}, for use by Paradox User Research\n\nWorking directory: {0}\nPlace video files and the oauth.json file in this directory.'.format(os.getcwd(), VERSIONNUM))
+	print('Welcome to clipgen v{1}\nWorking directory: {0}\nPlace video files and the oauth.json file in this directory.'.format(os.getcwd(), VERSIONNUM))
 	if DEBUGGING: print('! DEBUG Debug mode is ON. Several limitations apply and more things will be printed.')
 	# Remember that documents need to be shared to the email found in the json-file for OAuth-ing to work.
 	# Each user of this program should also have their own, unique json-file (generate this on the Google Developer API website).
@@ -507,7 +510,7 @@ def main():
 		inputName = input('\nPlease enter the index, name, URL or key of the spreadsheet (\'all\' for list, \'new\' for list of newest, \'last\' to immediately open latest, \'settings\' to change settings):\n>> ')
 		try:
 			if inputName[:4] == 'http':
-				# In case user copies a URL, we can handle that.
+				# If user enters/pastes a URL, we can handle that.
 				worksheet = gc.open_by_url(inputName).worksheet(SHEET_NAME)
 				break
 			elif inputName[:3] == 'all':
@@ -579,10 +582,10 @@ def main():
 					gc.login()
 					timesList = generate_list(worksheet, 'category')
 					break
-				elif inputMode == 'positive':
-					gc.login()
-					timesList = generate_list(worksheet, 'batch', 'Positive')
-					break
+				#elif inputMode == 'positive':
+				#	gc.login()
+				#	timesList = generate_list(worksheet, 'batch', 'Positive') # No third argument is currently accepted in generate_list()
+				#	break
 				#elif inputMode[0] == 's' or inputMode == 'select':
 				#	gc.login()
 				#	timesList = generate_list(worksheet, 'select')
@@ -595,7 +598,7 @@ def main():
 				try:
 					if DEBUGGING: print('! ERROR Message \'{0}\'\n! DEBUG Attempting reconnect\n'.format(e))
 					gc.login()
-				except gspread.AuthenticationError as e:
+				except gspread.GSpreadException as e:
 					print('{0}\nCould not authenticate.'.format(e))
 					sys.exit(0)
 			# End try/except
