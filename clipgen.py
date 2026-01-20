@@ -221,7 +221,7 @@ def get_dumpedline(sheetDump, p, m, s, numUsers, lineSelect, studyName, latestCa
 			# Discard empty cells.
 			pass
 		else:
-			cell = gspread.models.Cell(lineSelect+1,i+1, value)
+			cell = gspread.cell.Cell(lineSelect+1,i+1, value)
 			if DEBUGGING: print('! DEBUG Found something at step {0}'.format(i))
 			issue = { 'cell': cell, 'desc': sheetDump[lineSelect][s.col-1], 'study': studyName, 'participant': sheetDump[p.row][i], 'category': latestCategory}
 			if DEBUGGING: print('\n\n! DEBUG Coordinate indices start at 0 (off by one compared to real sheet)\n! DEBUG Participant ID at R{0},C{1} -> \'{2}\''.format(p.row,i, sheetDump[p.row][i]))
@@ -456,6 +456,7 @@ def get_alldocs(connection):
 	docs = []
 	for doc in connection.openall():
 		docs.append(doc.title)
+	# TODO: Doesn't handle file names with commas in them.
 	return ', '.join(docs)
 # End get_alldocs()
 
@@ -484,26 +485,28 @@ def check_sheetname_freetext(inputName, docList):
 	return -1
 # End check_sheetname_freetext()
 
+def connect_to_google_service_account():
+	scopes = ['https://spreadsheets.google.com/feeds',
+	 		 'https://www.googleapis.com/auth/drive']
+	try:
+		credentials = ServiceAccountCredentials.from_json_keyfile_name('credentials.json', scopes=scopes)
+	except IOError as e:
+		print('{0}\nCould not find credentials (credentials.json).'.format(e))
+		sys.exit(0)
+	return credentials
+# End connect_to_google_service_account()
+
 def main():
 	# Change working directory to place of python script.
 	os.chdir(os.path.dirname(os.path.abspath(__file__)))
 	print('-------------------------------------------------------------------------------')
-	print('Welcome to clipgen v{1}\nWorking directory: {0}\nPlace video files and the oauth.json file in this directory.'.format(os.getcwd(), VERSIONNUM))
+	print('Welcome to clipgen v{1}\nWorking directory: {0}\nPlace video files and the credentials.json file in this directory.'.format(os.getcwd(), VERSIONNUM))
 	if DEBUGGING: print('! DEBUG Debug mode is ON. Several limitations apply and more things will be printed.')
 	# Remember that documents need to be shared to the email found in the json-file for OAuth-ing to work.
 	# Each user of this program should also have their own, unique json-file (generate this on the Google Developer API website).
-	scope = ['https://spreadsheets.google.com/feeds',
-	 		 'https://www.googleapis.com/auth/drive']
-	try:
-		credentials = ServiceAccountCredentials.from_json_keyfile_name('oauth.json', scope)
-	except IOError as e:
-		print('{0}\nCould not find credentials (oauth.json).'.format(e))
-		# TODO
-		# Here we could have an interactive method that asks the user for the right directory to work in. Same for video files (would require some new code)
-		sys.exit(0)
 	try:
 		if DEBUGGING: print('\n! DEBUG Attempting login...')
-		gc = gspread.authorize(credentials)
+		gc = gspread.oauth(credentials_filename='credentials.json')
 		if DEBUGGING: '! DEBUG Login successful!\n'
 	except gspread.exceptions.GSpreadException as e:
 		print('{0}\n! ERROR Could not authenticate.\n'.format(e))
@@ -574,19 +577,15 @@ def main():
 			inputMode = input('\nSelect mode: (b)atch, (r)ange, (c)ategory or (l)ine\n>> ')
 			try:
 				if inputMode[0] == 'b' or inputMode == 'batch':
-					gc.login()
 					timesList = generate_list(worksheet, 'batch')
 					break
 				elif inputMode[0] == 'l' or inputMode == 'line':
-					gc.login()
 					timesList = generate_list(worksheet, 'line')
 					break
 				elif inputMode[0] == 'r' or inputMode == 'range':
-					gc.login()
 					timesList = generate_list(worksheet, 'range')
 					break
 				elif inputMode[0] == 'c' or inputMode == 'cat' or inputMode == 'category':
-					gc.login()
 					timesList = generate_list(worksheet, 'category')
 					break
 				#elif inputMode == 'positive':
@@ -604,7 +603,7 @@ def main():
 				inputModeFails += 1
 				try:
 					if DEBUGGING: print('! ERROR Message \'{0}\'\n! DEBUG Attempting reconnect\n'.format(e))
-					gc.login()
+					#gc.login() #Previously we used to need to re-connect to Google, but this is no longer needed(?).
 				except gspread.GSpreadException as e:
 					print('{0}\nCould not authenticate.'.format(e))
 					sys.exit(0)
