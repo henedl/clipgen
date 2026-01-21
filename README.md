@@ -25,7 +25,6 @@ The script was created to speed up data processing during playtests and is provi
 * Rename "users" to "participants" (variables, method names)
 ## Batch improvements:
 * Implement a way to select only one video to be rendered, out of several possible clips
-* Start using the meta fields for checking which issues are already processed and what the grouping is
 * Add Tag-based clip generation (e.g. every clip that affects Bus Routes)
 * Being able to select multiple non-continuous lines
  ## Major new features:

@@ -27,7 +27,6 @@ DEBUGGING  = False
 ID_HEADER = 'ID'
 OBSERVATION_HEADER = 'Observation'
 CATEGORY_HEADER = 'Category'
-CATEGORY_MARKER = 'T'
 PARTICIPANT_PREFIXES = ('P', 'G')  # 'P' for individual, 'G' for group
 NOTES_COLUMN = 'Notes'
 
@@ -254,11 +253,7 @@ def collect_categories(sheet_data, id_cell, category_cell):
 	category_col = category_cell.col - 1  # Convert from 1-indexed to 0-indexed
 	
 	# Start from the row after the category header
-	for i in range(category_cell.row, len(sheet_data)):
-		# Skip category marker rows (rows where ID column has 'T')
-		if sheet_data[i][id_cell.col-1] == CATEGORY_MARKER:
-			continue
-		
+	for i in range(category_cell.row, len(sheet_data)):		
 		category = sheet_data[i][category_col].strip()
 		if category and category not in categories:
 			categories.append(category)
@@ -273,10 +268,6 @@ def generate_category_timestamps(sheet_data, id_cell, observation_cell, category
 	
 	# Start from the row after the category header
 	for i in range(category_cell.row, len(sheet_data)):
-		# Skip category marker rows
-		if sheet_data[i][id_cell.col-1] == CATEGORY_MARKER:
-			continue
-		
 		row_category = sheet_data[i][category_col].strip()
 		if row_category in selected_categories:
 			debug_print(f"Row {i+1} matches category '{row_category}'")
@@ -367,20 +358,6 @@ def generate_range_timestamps(sheet_data, id_cell, observation_cell, num_partici
 		debug_print(f'Batching on line {i}')
 		timestamps.extend(get_line_timestamps(sheet_data, id_cell, observation_cell, num_participants, i, study_name))
 	return timestamps
-
-def find_category_name(sheet_data, starting_row, id_row, marker_col, observation_col):
-	"""Search upward from starting_row to find the category name."""
-	category = ''
-	while category == '':
-		try:
-			for i in range(starting_row, id_row, -1):
-				if sheet_data[i][marker_col-1] == CATEGORY_MARKER:
-					category = sheet_data[i][observation_col-1]
-					print(f"+ Found category '{category}' on line {i+1}.")
-					break
-		except IndexError:
-			break
-	return category
 
 # ============================================================================
 # File Operations
