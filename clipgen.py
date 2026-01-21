@@ -1,4 +1,13 @@
-# encoding=utf8
+# -*- coding: utf-8 -*-
+"""clipgen - Video clip generator from Google Sheets timestamps.
+
+This script supports full unicode/UTF-8 for international characters in:
+- Study names
+- Participant IDs  
+- Category names
+- Descriptions
+- File paths
+"""
 import os
 import sys
 import subprocess
@@ -41,19 +50,26 @@ def debug_print(message):
 		print(f'! DEBUG {message}')
 
 def normalize_study_name(raw_name):
-	"""Convert study name to a filesystem-safe format."""
-	name = raw_name.lower()
+	"""Convert study name to a filesystem-safe format.
+	Preserves unicode characters for international study names."""
+	# Ensure we're working with a string
+	name = str(raw_name)
+	name = name.lower()
 	name = name.replace('study ', 'study')
 	name = name.replace(' ', '_')
-	return str(name)
+	return name
 
 def sanitize_filename(text):
-	"""Remove or replace characters that are unsafe for filenames."""
+	"""Remove or replace characters that are unsafe for filenames.
+	Preserves unicode characters to support international filenames."""
+	# Ensure text is a string and handle unicode properly
+	text = str(text)
+	
 	# Characters that need special replacement
 	text = text.replace('\\', '-')
 	text = text.replace('/', '-')
 	text = text.replace('?', '_')
-	# Characters to remove entirely
+	# Characters to remove entirely (filesystem-unsafe characters)
 	for char in ['\'', '\"', '.', '>', '<', '|', ':']:
 		text = text.replace(char, '')
 	return text
@@ -371,11 +387,12 @@ def run_ffmpeg(input_file, output_file, start_pos, end_pos, reencode):
 
 	try:
 		if not reencode:
-			ffmpeg_command = f"ffmpeg -y -loglevel 16 -ss {start_pos} -i {input_file} -t {duration} -c copy -avoid_negative_ts 1 '{output_file}'"
-			debug_print(f"ffmpeg_command is '{ffmpeg_command}'")
-			subprocess.run(ffmpeg_command, shell=True)
+			# Use list form to properly handle unicode in filenames
+			ffmpeg_command = ['ffmpeg', '-y', '-loglevel', '16', '-ss', start_pos, '-i', input_file, '-t', str(duration), '-c', 'copy', '-avoid_negative_ts', '1', output_file]
+			debug_print(f"ffmpeg_command is '{' '.join(ffmpeg_command)}'")
+			subprocess.run(ffmpeg_command, encoding='utf-8')
 		else:
-			subprocess.run(['ffmpeg', '-y', '-loglevel', '16', '-ss', start_pos, '-i', input_file, '-t', str(duration), output_file], shell=True)
+			subprocess.run(['ffmpeg', '-y', '-loglevel', '16', '-ss', start_pos, '-i', input_file, '-t', str(duration), output_file], encoding='utf-8')
 		print(f"+ Generated video '{output_file}' successfully.\n File size: {format_filesize(os.path.getsize(output_file))}\n Expected duration: {duration} s\n")
 		return True
 	except OSError as e:
@@ -384,9 +401,9 @@ def run_ffmpeg(input_file, output_file, start_pos, end_pos, reencode):
 
 def get_file_duration(filepath):
 	"""Calls ffprobe, returns duration of video container in seconds."""
-	probe_command = f'ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 {filepath}'
-	debug_print(f'probe_command is {probe_command}')
-	file_length = float(subprocess.check_output(probe_command, shell=True))
+	probe_command = ['ffprobe', '-v', 'error', '-show_entries', 'format=duration', '-of', 'default=noprint_wrappers=1:nokey=1', filepath]
+	debug_print(f"probe_command is {' '.join(probe_command)}")
+	file_length = float(subprocess.check_output(probe_command, encoding='utf-8'))
 	return int(file_length)
 
 def get_duration(start_time, end_time):
@@ -539,11 +556,13 @@ def process_clips(clips_list):
 		
 		for vid_in, vid_out in clip['times']:
 			try:
+				# Ensure all components are strings and handle unicode properly
 				vid_name = get_unique_filename(
-					f"[{clip['category']}]_{clip['study']}_{clip['participant']}_{clip['desc']}{FILEFORMAT}"
+					f"[{clip['category']}] {clip['study']} {clip['participant']} {clip['desc']}{FILEFORMAT}"
 				)
-			except TypeError as e:
-				print(f'! ERROR Some character encoding nonsense occured:\n  {e}')
+			except (TypeError, UnicodeEncodeError, UnicodeDecodeError) as e:
+				print(f'! ERROR Character encoding issue occurred:\n  {e}')
+				print(f"  Category: {clip['category']}, Study: {clip['study']}, Participant: {clip['participant']}")
 				break
 
 			base_video = f"{clip['study']}_{clip['participant']}{FILEFORMAT}"
@@ -561,6 +580,12 @@ def process_clips(clips_list):
 	return videos_generated
 
 def main():
+	# Ensure UTF-8 encoding for stdout/stderr to handle unicode properly
+	if sys.stdout.encoding.lower() != 'utf-8':
+		import io
+		sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
+		sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
+	
 	# Change working directory to place of python script
 	os.chdir(os.path.dirname(os.path.abspath(__file__)))
 	print('-------------------------------------------------------------------------------')
