@@ -2,7 +2,7 @@
 import os
 import sys
 import subprocess
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
@@ -18,7 +18,7 @@ DEBUGGING  = False
 ID_HEADER = 'ID'
 OBSERVATION_HEADER = 'Observation'
 CATEGORY_MARKER = 'T'
-PARTICIPANT_PREFIXES = ('P', 'g')  # 'P' for individual, 'g' for group
+PARTICIPANT_PREFIXES = ('P', 'G')  # 'P' for individual, 'G' for group
 NOTES_COLUMN = 'Notes'
 
 # File and Duration Constants
@@ -89,6 +89,24 @@ def parse_timestamps(cell_value):
 
 	return parsed_timestamps
 
+def set_program_settings():
+	SETTINGSLIST = ['REENCODING', 'FILEFORMAT', 'DEBUGGING']
+
+	print('\nWhich setting? Available:\n')
+	print(', '.join(SETTINGSLIST))
+	setting_to_change = input('\n>> ')
+
+	print(f"* Current value for '{setting_to_change}' is '{globals()[setting_to_change]}'")
+
+	new_value = input('\nWhich new value?\n>> ')
+
+	print(f"* '{setting_to_change}' SET TO '{new_value}'")
+
+	if setting_to_change != '':
+		globals()[setting_to_change] = new_value
+		return True
+	return False
+
 # ============================================================================
 # Spreadsheet Functions
 # ============================================================================
@@ -156,32 +174,14 @@ def get_num_participants(header_row, id_cell, col_count):
 	return num_participants
 
 def get_current_time():
-	return str(datetime.now()).split('.')[0]
-
-def set_program_settings():
-	SETTINGSLIST = ['REENCODING', 'FILEFORMAT', 'DEBUGGING']
-
-	print('\nWhich setting? Available:\n')
-	print(', '.join(SETTINGSLIST))
-	setting_to_change = input('\n>> ')
-
-	print(f"* Current value for '{setting_to_change}' is '{globals()[setting_to_change]}'")
-
-	new_value = input('\nWhich new value?\n>> ')
-
-	print(f"* '{setting_to_change}' SET TO '{new_value}'")
-
-	if setting_to_change != '':
-		globals()[setting_to_change] = new_value
-		return True
-	return False
+	return datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
 def generate_batch_timestamps(sheet_data, id_cell, observation_cell, num_participants, study_name):
 	debug_print('Running method generate_batch_timestamps()')
 	timestamps = []
 	for i in range(id_cell.row+1, len(sheet_data)):
 		debug_print(f'Batching on line {i} (real sheet line {i+1})')
-		timestamps = timestamps + get_line_timestamps(sheet_data, id_cell, observation_cell, num_participants, i, study_name)
+		timestamps.extend(get_line_timestamps(sheet_data, id_cell, observation_cell, num_participants, i, study_name))
 	return timestamps
 
 def generate_category_timestamps(sheet_data, id_cell, observation_cell, num_participants, study_name, category_cell):
@@ -191,7 +191,7 @@ def generate_category_timestamps(sheet_data, id_cell, observation_cell, num_part
 	if sheet_data[category_cell.row-1][id_cell.col-1] == CATEGORY_MARKER:
 		for i in range(category_cell.row, len(sheet_data)-id_cell.row):
 			if sheet_data[i][id_cell.col-1] != CATEGORY_MARKER:
-				timestamps = timestamps + get_line_timestamps(sheet_data, id_cell, observation_cell, num_participants, i, study_name)
+				timestamps.extend(get_line_timestamps(sheet_data, id_cell, observation_cell, num_participants, i, study_name))
 			else:
 				debug_print(f"Encountered category '{sheet_data[i][observation_cell.col-1]}', stopping category batch call")
 				break
@@ -254,7 +254,7 @@ def generate_range_timestamps(sheet_data, id_cell, observation_cell, num_partici
 	timestamps = []
 	for i in range(start_line-1, end_line):
 		debug_print(f'Batching on line {i}')
-		timestamps = timestamps + get_line_timestamps(sheet_data, id_cell, observation_cell, num_participants, i, study_name)
+		timestamps.extend(get_line_timestamps(sheet_data, id_cell, observation_cell, num_participants, i, study_name))
 	return timestamps
 
 def find_category_name(sheet_data, starting_row, id_row, marker_col, observation_col):
@@ -406,18 +406,14 @@ def get_duration(start_time, end_time):
 			print(e)
 			sys.exit(0)
 
-	hours_delta = (end_datetime.hour - start_datetime.hour) * 60 * 60
-	minutes_delta = (end_datetime.minute - start_datetime.minute) * 60
-	seconds_delta = end_datetime.second - start_datetime.second
-	return hours_delta + minutes_delta + seconds_delta
+	return int((end_datetime - start_datetime).total_seconds())
 
 def add_duration(start_time):
 	"""Adds one minute to the given timestamp."""
 	try:
 		start_datetime = datetime.strptime(start_time, '%H:%M:%S')
-		if start_datetime.minute == 59:
-			return f'{double_digits(str(start_datetime.hour+1))}:00:{double_digits(str(start_datetime.second))}'
-		return f'{double_digits(str(start_datetime.hour))}:{double_digits(str(start_datetime.minute+1))}:{double_digits(str(start_datetime.second))}'
+		new_time = start_datetime + timedelta(minutes=1)
+		return new_time.strftime('%H:%M:%S')
 	except ValueError as e:
 		print('* Timestamp formatting error was caught while running add_duration().\n  Returning -1 instead of timestamp')
 		print(e)
@@ -439,13 +435,13 @@ def find_spreadsheet_by_name(search_name, doc_list):
 	"""Find a matching Google Sheet name from doc_list.
 	Returns the index of matching sheet, or -1 if not found."""
 	debug_print('Running method find_spreadsheet_by_name()')
-	search_name = search_name.strip().lstrip().lower()
+	search_name = search_name.strip().lower()
 	search_name_guess = search_name + ' data set'
 	debug_print(f"Using search_name '{search_name}', search_name_guess '{search_name_guess}'")
 	
-	for i in range(len(doc_list)):
-		doc_name = doc_list[i].strip().lstrip().lower()
-		debug_print(f"Attempting match with '{doc_list[i]}', formatted as '{doc_name}'")
+	for i, doc in enumerate(doc_list):
+		doc_name = doc.strip().lower()
+		debug_print(f"Attempting match with '{doc}', formatted as '{doc_name}'")
 		if doc_name == search_name:
 			debug_print(f"Matched sheet '{doc_name}' with input '{search_name}'")
 			return i
