@@ -32,9 +32,9 @@ def generate_list(sheet, mode):
 
 	# TODO
 	# Add more processing of the title, split out the study number, and project name.
-	# Remove hardcoded location and format expectations on study name.
 	studyName = sheetDump[0][0] # Find the title of the study, assuming top left in sheet.
-	#studyName = studyName[0:studyName.find('Data set')-1] # Cut off the stuff we don't want.
+	if studyName == '':
+		studyName = sheet.spreadsheet.title # If the study name is empty, use the spreadsheet title.
 	print('\nBeginning work on {0}.'.format(studyName))
 
 	# Just some name formatting, after we announced everything up top.
@@ -160,7 +160,7 @@ def generate_dumpedcategory(sheetDump, p, s, numUsers, studyName, categoryCell):
 	if sheetDump[categoryCell.row-1][m.col-1] == 'T':
 		for i in range(categoryCell.row, len(sheetDump)-p.row):
 			if sheetDump[i][m.col-1] != 'T':
-				times = times + get_dumpedline(sheetDump, p, s, numUsers, i, studyName, categoryCell.value)
+				times = times + get_dumpedline(sheetDump, p, s, numUsers, i, studyName) #Previously we sent categoryCell.value here, but we will now extract that from each row.
 			else:
 				if DEBUGGING: print('\n! DEBUG Encountered category \'{0}\', stopping category batch call'.format(sheetDump[i][s.col-1]))
 				break
@@ -193,14 +193,10 @@ def generate_line(sheetDump, p, s, numUsers, studyName):
 	return times
 # End generate_line()
 
-def get_dumpedline(sheetDump, p, s, numUsers, lineSelect, studyName, latestCategory=''):
+def get_dumpedline(sheetDump, p, s, numUsers, lineSelect, studyName):
 	if DEBUGGING: print('! DEBUG Running method get_dumpedline\n! DEBUG Starting line index {0} (real sheet line {1})'.format(lineSelect, lineSelect+1))
 
 	times = []
-	if latestCategory == '':
-		print(s)
-		latestCategory = sheetDump[lineSelect][s.col]
-		print(latestCategory)
 	for i, value in enumerate(sheetDump[lineSelect]):
 		if DEBUGGING: print('! DEBUG Item {0} with value \'{1}\' being processesed.'.format(i, value))
 		if i < p.col:
@@ -221,7 +217,7 @@ def get_dumpedline(sheetDump, p, s, numUsers, lineSelect, studyName, latestCateg
 			cell = gspread.cell.Cell(lineSelect+1,i+1, value)
 			if DEBUGGING: print('! DEBUG Found something at step {0}'.format(i))
 			if DEBUGGING: print('! DEBUG studyName is {0}'.format(studyName))
-			issue = { 'cell': cell, 'desc': sheetDump[lineSelect][s.col-1], 'study': studyName, 'participant': sheetDump[p.row-1][i], 'category': latestCategory}
+			issue = { 'cell': cell, 'desc': sheetDump[lineSelect][s.col-1], 'study': studyName, 'participant': sheetDump[p.row-1][i], 'category': sheetDump[lineSelect][s.col-2]}
 			if DEBUGGING: print('\n\n! DEBUG Coordinate indices start at 0 (off by one compared to real sheet)\n! DEBUG Participant ID at R{0},C{1} -> \'{2}\''.format(p.row,i, sheetDump[p.row][i]))
 			if DEBUGGING: print('! DEBUG Description at R{0},C{1} -> \'{2}\''.format(lineSelect, s.col-1,sheetDump[lineSelect][s.col-1]))
 			if DEBUGGING: print('! DEBUG Timestamp at R{0},C{1} -> \'{2}\''.format(cell.row-1,cell.col-1,cell.value))
@@ -632,7 +628,7 @@ def main():
 			for j in range(0,len(timesList[i]['times'])):
 				vidIn, vidOut = timesList[i]['times'][j]
 				try:
-					vidName = set_filename(timesList[i]['study'] + '_' + timesList[i]['participant'] + '_' + timesList[i]['desc'] + FILEFORMAT)
+					vidName = set_filename('['+timesList[i]['category'] + f']_' + timesList[i]['study'] + '_' + timesList[i]['participant'] + '_' + timesList[i]['desc'] + FILEFORMAT)
 				except TypeError as e:
 					print('! ERROR Some character encoding nonsense occured:\n  {0}'.format(e))
 					break
