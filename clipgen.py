@@ -26,6 +26,7 @@ DEBUGGING  = False
 # Spreadsheet Structure Constants
 ID_HEADER = 'ID'
 OBSERVATION_HEADER = 'Observation'
+CATEGORY_HEADER = 'Category'
 CATEGORY_MARKER = 'T'
 PARTICIPANT_PREFIXES = ('P', 'G')  # 'P' for individual, 'G' for group
 NOTES_COLUMN = 'Notes'
@@ -33,7 +34,6 @@ NOTES_COLUMN = 'Notes'
 # File and Duration Constants
 MAX_FILENAME_LENGTH = 255
 MAX_CLIP_DURATION_SECONDS = 600  # 10 minutes
-BYTES_PER_KB = 1024
 DEFAULT_TIMESTAMP = '00:00:00'
 
 # What is this program?
@@ -131,6 +131,7 @@ def generate_list(sheet, mode):
 	"""Goes through a sheet, bundles values from timestamp columns and descriptions columns into tuples."""
 	id_cell = sheet.find(ID_HEADER)
 	observation_cell = sheet.find(OBSERVATION_HEADER)
+	category_cell = sheet.find(CATEGORY_HEADER)
 	timestamps = []
 
 	# Sheet data is a list of lists, which forms a matrix
@@ -138,6 +139,7 @@ def generate_list(sheet, mode):
 	sheet_data = sheet.get_all_values()
 	debug_print(f'Sheet dumped into memory at {get_current_time()}')
 
+	# Determine the study name.
 	study_name = sheet_data[0][0]
 	if study_name == '':
 		study_name = sheet.spreadsheet.title
@@ -149,14 +151,60 @@ def generate_list(sheet, mode):
 	# Get number of participants needed to loop through the worksheet
 	num_participants = get_num_participants(sheet.row_values(id_cell.row), id_cell, sheet.col_count)
 
+	# Generate the timestamps, according to the selected mode.
 	if mode == 'batch':
 		yn = input('\nWarning: This will generate all possible clips. Do you want to proceed? y/n\n>> ')
 		if yn == 'y':
 			timestamps = generate_batch_timestamps(sheet_data, id_cell, observation_cell, num_participants, study_name)
 	elif mode == 'category':
-		category = input('Which category would you like to work in?\n>> ')
-		category_cell = sheet.find(category)
-		timestamps = generate_category_timestamps(sheet_data, id_cell, observation_cell, num_participants, study_name, category_cell)
+		# Collect all unique categories from the sheet
+		categories = collect_categories(sheet_data, id_cell, category_cell)
+		
+		if not categories:
+			print('\nNo categories found in the spreadsheet.')
+			return []
+		
+		# Display categories with numbered options
+		print('\nAvailable categories:')
+		for i, cat in enumerate(categories, 1):
+			print(f'  {i}. {cat}')
+		
+		# Get user selection
+		while True:
+			selection = input('\nEnter category numbers (comma-separated, e.g., "1,3,5") or "all":\n>> ')
+			
+			if selection.lower() == 'all':
+				selected_categories = categories
+				break
+			
+			try:
+				indices = [int(x.strip()) for x in selection.split(',')]
+				selected_categories = []
+				invalid_indices = []
+				
+				for idx in indices:
+					if 1 <= idx <= len(categories):
+						if categories[idx-1] not in selected_categories:
+							selected_categories.append(categories[idx-1])
+					else:
+						invalid_indices.append(idx)
+				
+				if invalid_indices:
+					print(f'  Invalid index(es): {", ".join(str(i) for i in invalid_indices)}')
+				
+				if selected_categories:
+					print('\nSelected categories:')
+					for cat in selected_categories:
+						print(f'  - {cat}')
+					yn = input('\nIs this correct? y/n\n>> ')
+					if yn == 'y':
+						break
+				else:
+					print('No valid categories selected. Please try again.')
+			except ValueError:
+				print('Please enter valid numbers separated by commas.')
+		
+		timestamps = generate_category_timestamps(sheet_data, id_cell, observation_cell, category_cell, num_participants, study_name, selected_categories)
 	elif mode == 'line':
 		timestamps = generate_line_timestamps(sheet_data, id_cell, observation_cell, num_participants, study_name)
 	elif mode == 'range':
@@ -200,34 +248,81 @@ def generate_batch_timestamps(sheet_data, id_cell, observation_cell, num_partici
 		timestamps.extend(get_line_timestamps(sheet_data, id_cell, observation_cell, num_participants, i, study_name))
 	return timestamps
 
-def generate_category_timestamps(sheet_data, id_cell, observation_cell, num_participants, study_name, category_cell):
+def collect_categories(sheet_data, id_cell, category_cell):
+	"""Scan sheet and return unique categories in order of first appearance."""
+	categories = []
+	category_col = category_cell.col - 1  # Convert from 1-indexed to 0-indexed
+	
+	# Start from the row after the category header
+	for i in range(category_cell.row, len(sheet_data)):
+		# Skip category marker rows (rows where ID column has 'T')
+		if sheet_data[i][id_cell.col-1] == CATEGORY_MARKER:
+			continue
+		
+		category = sheet_data[i][category_col].strip()
+		if category and category not in categories:
+			categories.append(category)
+	
+	return categories
+
+def generate_category_timestamps(sheet_data, id_cell, observation_cell, category_cell, num_participants, study_name, selected_categories):
+	"""Generate timestamps for all rows matching any of the selected categories."""
 	debug_print('Starting method generate_category_timestamps()')
 	timestamps = []
-	debug_print(f'Category cell is {category_cell}')
-	if sheet_data[category_cell.row-1][id_cell.col-1] == CATEGORY_MARKER:
-		for i in range(category_cell.row, len(sheet_data)-id_cell.row):
-			if sheet_data[i][id_cell.col-1] != CATEGORY_MARKER:
-				timestamps.extend(get_line_timestamps(sheet_data, id_cell, observation_cell, num_participants, i, study_name))
-			else:
-				debug_print(f"Encountered category '{sheet_data[i][observation_cell.col-1]}', stopping category batch call")
-				break
+	category_col = category_cell.col - 1  # Convert from 1-indexed to 0-indexed
+	
+	# Start from the row after the category header
+	for i in range(category_cell.row, len(sheet_data)):
+		# Skip category marker rows
+		if sheet_data[i][id_cell.col-1] == CATEGORY_MARKER:
+			continue
+		
+		row_category = sheet_data[i][category_col].strip()
+		if row_category in selected_categories:
+			debug_print(f"Row {i+1} matches category '{row_category}'")
+			timestamps.extend(get_line_timestamps(sheet_data, id_cell, observation_cell, num_participants, i, study_name))
+	
 	return timestamps
 
 def generate_line_timestamps(sheet_data, id_cell, observation_cell, num_participants, study_name):
-	"""Generate videos for a single line/row number."""
+	"""Generate videos for one or more line/row numbers (comma-separated)."""
 	while True:
 		try:
-			line_select = int(input('\nWhich issue (row number only)?\n>> '))
+			line_input = input('\nWhich issue(s)? Enter row number(s), comma-separated for multiple.\n>> ')
+			# Parse comma-separated line numbers
+			line_numbers = [int(num.strip()) for num in line_input.split(',')]
 		except ValueError:
-			line_select = int(input('\nTry again. Issue expressed as row number, as integer only.\n>> '))
-		print(f'\nIssue titled: {sheet_data[line_select-1][observation_cell.col-1]}\n')
-		yn = input('Is this the correct issue? y/n\n>> ')
+			print('\nTry again. Enter row numbers as integers, separated by commas.')
+			continue
+		
+		# Preview all selected lines
+		print('\nSelected issues:')
+		valid_lines = []
+		for line_num in line_numbers:
+			if line_num < 1 or line_num > len(sheet_data):
+				print(f'  Line {line_num}: [INVALID - out of range]')
+			else:
+				desc = sheet_data[line_num-1][observation_cell.col-1]
+				print(f'  Line {line_num}: {desc}')
+				valid_lines.append(line_num)
+		
+		if not valid_lines:
+			print('\nNo valid lines selected. Please try again.')
+			continue
+		
+		print()
+		yn = input('Are these the correct issues? y/n\n>> ')
 		if yn == 'y':
 			break
 
-	debug_print('Calling get_line_timestamps() from generate_line_timestamps()')
-	timestamps = get_line_timestamps(sheet_data, id_cell, observation_cell, num_participants, line_select-1, study_name)
-	debug_print('Printing return of get_line_timestamps() in generate_line_timestamps()')
+	# Collect timestamps from all valid lines
+	timestamps = []
+	for line_num in valid_lines:
+		debug_print(f'Calling get_line_timestamps() from generate_line_timestamps() for line {line_num}')
+		line_timestamps = get_line_timestamps(sheet_data, id_cell, observation_cell, num_participants, line_num-1, study_name)
+		timestamps.extend(line_timestamps)
+	
+	debug_print(f'Printing return of get_line_timestamps() in generate_line_timestamps(): {len(timestamps)} total timestamps')
 	debug_print(str(timestamps))
 
 	return timestamps
@@ -304,9 +399,9 @@ def format_filesize(size_bytes, precision=2):
 	"""Format byte size as human-readable string."""
 	suffixes = ['B', 'KB', 'MB', 'GB', 'TB']
 	suffix_index = 0
-	while size_bytes > BYTES_PER_KB and suffix_index < 4:
+	while size_bytes > 1024 and suffix_index < 4:
 		suffix_index += 1
-		size_bytes = size_bytes / BYTES_PER_KB
+		size_bytes = size_bytes / 1024
 	return f'{size_bytes:.{precision}f}{suffixes[suffix_index]}'
 
 def get_unique_filename(filename):
