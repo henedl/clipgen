@@ -14,6 +14,10 @@ Icon?
 
 # Working docs
 Upgrade\ notes.md
+*.mp4
+*.flv
+*.mov
+*.mkv
 
 # Python byte code
 *.py[cod]
