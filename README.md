@@ -1,5 +1,5 @@
 # clipgen
-clipgen is a Python script that uses the GSpread library and ffmpeg to quickly generate video snippets based on timestamps in a Google Sheet.
+clipgen is a Python script that uses the [GSpread library](https://docs.gspread.org) and [ffmpeg](https://www.ffmpeg.org) to quickly generate video snippets based on timestamps in a Google Sheet.
 
 The script was created to speed up data processing during playtests and is provided as-is, without promise of support.
 
@@ -25,9 +25,7 @@ The script was created to speed up data processing during playtests and is provi
 * Rename "users" to "participants" (variables, method names)
 ## Batch improvements:
 * Implement a way to select only one video to be rendered, out of several possible clips
-* Add Tag-based clip generation (e.g. every clip that affects Bus Routes)
-* Being able to select multiple non-continuous lines
- ## Major new features:
+ ## Major new features a.k.a. maybe at some point:
 * GUI
 * Airtable support
 * Excel support
