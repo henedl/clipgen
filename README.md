@@ -11,7 +11,6 @@ The script was created to speed up data processing during playtests and is provi
 * Title/ending cards
 * Watermarking
 * Add ability to target only one cell. Proposed syntax: "P01.11". Should also be batchable, i.e. "P01.11 + P03.11 + P03.09". Should be available directly at (current) mode select stage.
-* Detect folder name and match to shared project - auto-select project to work in if match
 * File size output limits (e.g. if user sets 50MB max limit in app settings, all videos are compressed below that limit)
 ## Programming stuff:
 * Convert all data processing and printing to unicode

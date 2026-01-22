@@ -19,7 +19,7 @@ from oauth2client.service_account import ServiceAccountCredentials
 # Configuration Constants
 REENCODING = False
 FILEFORMAT = '.mp4'
-VERSIONNUM = '0.4.2'
+VERSIONNUM = '0.4.3'
 SHEET_NAME = 'Sheet1'
 DEBUGGING  = False
 
@@ -581,8 +581,6 @@ def select_spreadsheet(gc, doc_list):
 				return gc.open(doc_list[chosen_index].strip()).worksheet(SHEET_NAME)
 			elif input_name[:8] == 'settings':
 				set_program_settings()
-			elif ' ' not in input_name:
-				return gc.open_by_key(input_name).worksheet(SHEET_NAME)
 			else:
 				chosen_index = find_spreadsheet_by_name(input_name, doc_list)
 				if chosen_index >= 0:
@@ -675,7 +673,16 @@ def main():
 
 	# Get document list and select spreadsheet
 	doc_list = get_all_spreadsheets(gc).split(',')
-	worksheet = select_spreadsheet(gc, doc_list)
+
+	# Auto-connect if working directory name matches a spreadsheet
+	cwd_name = os.path.basename(os.getcwd())
+	auto_match_index = find_spreadsheet_by_name(cwd_name, doc_list)
+	if auto_match_index >= 0:
+		matched_name = doc_list[auto_match_index].strip()
+		print(f'\nAuto-connecting to spreadsheet: {matched_name}')
+		worksheet = gc.open(matched_name).worksheet(SHEET_NAME)
+	else:
+		worksheet = select_spreadsheet(gc, doc_list)
 	print('\nConnected to Google Drive!')
 
 	# Main processing loop
