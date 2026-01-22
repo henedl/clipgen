@@ -19,7 +19,7 @@ from oauth2client.service_account import ServiceAccountCredentials
 # Configuration Constants
 REENCODING = False
 FILEFORMAT = '.mp4'
-VERSIONNUM = '0.4.3'
+VERSIONNUM = '0.4.4'
 SHEET_NAME = 'Sheet1'
 DEBUGGING  = False
 
@@ -33,7 +33,7 @@ NOTES_COLUMN = 'Notes'
 # File and Duration Constants
 MAX_FILENAME_LENGTH = 255
 MAX_CLIP_DURATION_SECONDS = 600  # 10 minutes
-DEFAULT_TIMESTAMP = '00:00:00'
+DEFAULT_DURATION_SECONDS = 60
 
 # What is this program?
 # This script will help quickly create video snippets from longer video files, based on timestamps in a spreadsheet!
@@ -85,11 +85,17 @@ def parse_timestamps(cell_value):
 
 	for i in range(len(raw_times)):
 		debug_print(f'Cleaning timestamp {raw_times[i]}')
+		# Remove trailing commas and dashes.
 		raw_times[i] = raw_times[i].strip().rstrip(',').rstrip('-')
+
+		# Change . to : for the timestamp.
+		raw_times[i] = raw_times[i].replace('.', ':')
 		
 		if raw_times[i] == '':
+			# We don't need to do anything with blank timestamps.
 			debug_print(f'Found blank timestamp {raw_times[i]}')
 		elif '-' in raw_times[i]:
+			# We have a dash which should mean we have two timestamps, so we need to split it into two timestamps.
 			dash_pos = raw_times[i].find('-')
 			if dash_pos > 0 and raw_times[i][dash_pos-1].isdigit():
 				# Slice the timestamp until the dash, and then from after the dash
@@ -99,7 +105,7 @@ def parse_timestamps(cell_value):
 			colon_pos = raw_times[i].find(':')
 			if colon_pos > 0 and raw_times[i][colon_pos-1].isdigit():
 				# Single timestamp - add default end time to trigger add_duration later
-				time_pair = (raw_times[i], DEFAULT_TIMESTAMP)
+				time_pair = (raw_times[i], add_duration(raw_times[i]))
 				parsed_timestamps.append(time_pair)
 
 	return parsed_timestamps
@@ -434,10 +440,6 @@ def run_ffmpeg(input_file, output_file, start_pos, end_pos, reencode):
 	
 	Returns True if video was generated successfully, False otherwise.
 	"""
-	# Makes the clip a minute long if we didn't get an out-time
-	if end_pos == DEFAULT_TIMESTAMP:
-		end_pos = add_duration(start_pos)
-
 	duration = get_duration(start_pos, end_pos)
 	file_length = get_file_duration(input_file)
 
@@ -481,17 +483,22 @@ def get_file_duration(filepath):
 def get_duration(start_time, end_time):
 	"""Returns the duration of a clip as seconds."""
 	try:
-		start_datetime = datetime.strptime(start_time, '%H:%M:%S')
-		end_datetime = datetime.strptime(end_time, '%H:%M:%S')
+		print(f'start_time is {start_time} with length {len(start_time)}, end_time is {end_time}')
+		if len(start_time) <= 5:
+			start_datetime = datetime.strptime(str(start_time), '%M:%S')
+			end_datetime = datetime.strptime(str(end_time), '%M:%S')
+		else:
+			start_datetime = datetime.strptime(start_time, '%H:%M:%S')
+			end_datetime = datetime.strptime(end_time, '%H:%M:%S')
 	except ValueError as e:
-		print('* Timestamp formatting error was caught while running get_duration().')
+		print('* Timestamp formatting error was caught while running get_duration(). Making a best guess.')
 		print(e)
 		try:
-			start_datetime = datetime.strptime(start_time, '%H:%M:%S.%f')
-			end_datetime = datetime.strptime(end_time, '%H:%M:%S.%f')
+			start_datetime = datetime.strptime(start_time, '%H:%M:%S')
+			end_datetime = datetime.strptime(end_time, '%H:%M:%S')
 		except ValueError as e:
-			print('* Further timestamp formatting error was caught, exiting.')
-			print('* Timestamp formats need to match each other.')
+			print('* Timestamp formatting error was caught while running get_duration(). Exiting the program.')
+			print('* Timestamp formats need to match each other, either in HH:MM:SS, MM:SS, or M:SS format.')
 			print(e)
 			sys.exit(0)
 
@@ -500,9 +507,14 @@ def get_duration(start_time, end_time):
 def add_duration(start_time):
 	"""Adds one minute to the given timestamp."""
 	try:
-		start_datetime = datetime.strptime(start_time, '%H:%M:%S')
-		new_time = start_datetime + timedelta(minutes=1)
-		return new_time.strftime('%H:%M:%S')
+		if len(start_time) <= 5:
+			start_datetime = datetime.strptime(str(start_time), '%M:%S')
+			new_time = start_datetime + timedelta(seconds=DEFAULT_DURATION_SECONDS)
+			return new_time.strftime('%M:%S')
+		else:
+			start_datetime = datetime.strptime(start_time, '%H:%M:%S')
+			new_time = start_datetime + timedelta(seconds=DEFAULT_DURATION_SECONDS)
+			return new_time.strftime('%H:%M:%S')
 	except ValueError as e:
 		print('* Timestamp formatting error was caught while running add_duration().\n  Returning -1 instead of timestamp')
 		print(e)
