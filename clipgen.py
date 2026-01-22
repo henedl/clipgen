@@ -218,8 +218,8 @@ def generate_list(sheet, mode):
 				start_line = int(input('\nWhich starting line (row number only)?\n>> '))
 				end_line = int(input('\nWhich ending line (row number only)?\n>> '))
 			except ValueError:
-				start_line = int(input('\nTry again. Starting line (row number only)?\n>> '))
-				end_line = int(input('\nTry again. Ending line (row number only)?\n>> '))
+				print('\nInvalid input. Please enter row numbers as integers.')
+				continue
 			print(f'Lines selected: {sheet_data[start_line-1][observation_cell.col-1]} to {sheet_data[end_line-1][observation_cell.col-1]}')
 			yn = input('Is this correct? y/n\n>> ')
 			if yn == 'y':
@@ -482,27 +482,21 @@ def get_file_duration(filepath):
 
 def get_duration(start_time, end_time):
 	"""Returns the duration of a clip as seconds."""
-	try:
-		print(f'start_time is {start_time} with length {len(start_time)}, end_time is {end_time}')
-		if len(start_time) <= 5:
-			start_datetime = datetime.strptime(str(start_time), '%M:%S')
-			end_datetime = datetime.strptime(str(end_time), '%M:%S')
-		else:
-			start_datetime = datetime.strptime(start_time, '%H:%M:%S')
-			end_datetime = datetime.strptime(end_time, '%H:%M:%S')
-	except ValueError as e:
-		print('* Timestamp formatting error was caught while running get_duration(). Making a best guess.')
-		print(e)
+	debug_print(f'start_time is {start_time} with length {len(start_time)}, end_time is {end_time}')
+	
+	formats = ['%M:%S', '%H:%M:%S'] if len(start_time) <= 5 else ['%H:%M:%S', '%M:%S']
+	
+	for fmt in formats:
 		try:
-			start_datetime = datetime.strptime(start_time, '%H:%M:%S')
-			end_datetime = datetime.strptime(end_time, '%H:%M:%S')
-		except ValueError as e:
-			print('* Timestamp formatting error was caught while running get_duration(). Exiting the program.')
-			print('* Timestamp formats need to match each other, either in HH:MM:SS, MM:SS, or M:SS format.')
-			print(e)
-			sys.exit(0)
-
-	return int((end_datetime - start_datetime).total_seconds())
+			start_datetime = datetime.strptime(str(start_time), fmt)
+			end_datetime = datetime.strptime(str(end_time), fmt)
+			return int((end_datetime - start_datetime).total_seconds())
+		except ValueError:
+			continue
+	
+	print('* Timestamp formatting error in get_duration(). Exiting.')
+	print('* Formats must match: HH:MM:SS, MM:SS, or M:SS')
+	sys.exit(0)
 
 def add_duration(start_time):
 	"""Adds one minute to the given timestamp."""
@@ -715,7 +709,4 @@ if __name__ == '__main__':
 		main()
 	except KeyboardInterrupt:
 		print('\nInterrupted by user')
-		try:
-			sys.exit(0)
-		except SystemExit:
-			os._exit(0)
+		sys.exit(0)

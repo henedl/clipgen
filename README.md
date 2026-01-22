@@ -15,7 +15,6 @@ The script was created to speed up data processing during playtests and is provi
 * Command line arguments to run everything from a prompt instead of interactively.
 * Logging of which timestamps are discarded
 * Better error messages
-* Refactor try statements to be more efficient
 * Rename "generate"-methods to more clearly indicate that they return timestamps to clip (for generate_list(), this method should have a completely different name)
 * Rename "dumped"-methods once all timestamps are generated from a dumped sheet instead of a live sheet
 * Rename "users" to "participants" (variables, method names)
