@@ -12,7 +12,6 @@ The script was created to speed up data processing during playtests and is provi
 
 ## Programming stuff:
 * Try Sheet1, Data, data, Observations, Data set, data set, and other typical worksheet names. If none of those match, just go with the zeroth index worksheet.
-* Command line arguments to run everything from a prompt instead of interactively.
 * Logging of which timestamps are discarded
 * Better error messages
 * Rename "generate"-methods to more clearly indicate that they return timestamps to clip (for generate_list(), this method should have a completely different name)

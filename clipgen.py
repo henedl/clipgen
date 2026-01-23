@@ -8,6 +8,7 @@ This script supports full unicode/UTF-8 for international characters in:
 - Descriptions
 - File paths
 """
+import argparse
 import os
 import sys
 import subprocess
@@ -19,7 +20,7 @@ from oauth2client.service_account import ServiceAccountCredentials
 # Configuration Constants
 REENCODING = False
 FILEFORMAT = '.mp4'
-VERSIONNUM = '0.4.4'
+VERSIONNUM = '0.5.0'
 SHEET_NAME = 'Sheet1'
 DEBUGGING  = False
 
@@ -42,6 +43,42 @@ DEFAULT_DURATION_SECONDS = 60
 # ============================================================================
 # Utility Functions
 # ============================================================================
+
+def parse_arguments():
+	"""Parse command-line arguments for non-interactive mode."""
+	parser = argparse.ArgumentParser(
+		description='clipgen - Video clip generator from Google Sheets timestamps.',
+		formatter_class=argparse.RawDescriptionHelpFormatter,
+		epilog='''
+Examples:
+  python clipgen.py                    Interactive mode (default)
+  python clipgen.py -b                 Batch mode - generate all clips
+  python clipgen.py -l 5               Single line mode - line 5
+  python clipgen.py -l 1+4+5           Multi-line mode - lines 1, 4, and 5
+  python clipgen.py -l 1,4,5           Multi-line mode (comma separator)
+  python clipgen.py -r 1-10            Range mode - lines 1 through 10
+  python clipgen.py -b -s "Study Name" Batch mode with specific spreadsheet
+  python clipgen.py -l 5 -y            Line mode, skip confirmation prompts
+'''
+	)
+	
+	# Mode arguments (mutually exclusive)
+	mode_group = parser.add_mutually_exclusive_group()
+	mode_group.add_argument('-b', '--batch', action='store_true',
+		help='Batch mode: generate all possible clips')
+	mode_group.add_argument('-l', '--lines', type=str, metavar='LINES',
+		help='Line mode: specify line numbers separated by + or , (e.g., 1+4+5 or 1,4,5)')
+	mode_group.add_argument('-r', '--range', type=str, metavar='RANGE',
+		help='Range mode: specify start-end line range (e.g., 1-10)')
+	
+	# Optional arguments
+	parser.add_argument('-s', '--spreadsheet', type=str, metavar='NAME',
+		help='Spreadsheet name, URL, or index number')
+	parser.add_argument('-y', '--yes', action='store_true',
+		help='Skip confirmation prompts (auto-confirm)')
+	
+	return parser.parse_args()
+
 
 def debug_print(message):
 	"""Print debug messages when DEBUGGING is enabled."""
@@ -132,8 +169,17 @@ def set_program_settings():
 # Spreadsheet Functions
 # ============================================================================
 
-def generate_list(sheet, mode):
-	"""Goes through a sheet, bundles values from timestamp columns and descriptions columns into tuples."""
+def generate_list(sheet, mode, line_numbers=None, range_start=None, range_end=None, skip_prompts=False):
+	"""Goes through a sheet, bundles values from timestamp columns and descriptions columns into tuples.
+	
+	Args:
+		sheet: The gspread worksheet object
+		mode: One of 'batch', 'line', 'range', 'category', 'select'
+		line_numbers: Optional list of line numbers for 'line' mode (CLI)
+		range_start: Optional start line for 'range' mode (CLI)
+		range_end: Optional end line for 'range' mode (CLI)
+		skip_prompts: If True, skip confirmation prompts (CLI -y flag)
+	"""
 	id_cell = sheet.find(ID_HEADER)
 	observation_cell = sheet.find(OBSERVATION_HEADER)
 	category_cell = sheet.find(CATEGORY_HEADER)
@@ -158,9 +204,13 @@ def generate_list(sheet, mode):
 
 	# Generate the timestamps, according to the selected mode.
 	if mode == 'batch':
-		yn = input('\nWarning: This will generate all possible clips. Do you want to proceed? y/n\n>> ')
-		if yn == 'y':
+		if skip_prompts:
+			print('Batch mode: generating all possible clips...')
 			timestamps = generate_batch_timestamps(sheet_data, id_cell, observation_cell, num_participants, study_name)
+		else:
+			yn = input('\nWarning: This will generate all possible clips. Do you want to proceed? y/n\n>> ')
+			if yn == 'y':
+				timestamps = generate_batch_timestamps(sheet_data, id_cell, observation_cell, num_participants, study_name)
 	elif mode == 'category':
 		# Collect all unique categories from the sheet
 		categories = collect_categories(sheet_data, id_cell, category_cell)
@@ -211,20 +261,27 @@ def generate_list(sheet, mode):
 		
 		timestamps = generate_category_timestamps(sheet_data, id_cell, observation_cell, category_cell, num_participants, study_name, selected_categories)
 	elif mode == 'line':
-		timestamps = generate_line_timestamps(sheet_data, id_cell, observation_cell, num_participants, study_name)
+		timestamps = generate_line_timestamps(sheet_data, id_cell, observation_cell, num_participants, study_name, line_numbers, skip_prompts)
 	elif mode == 'range':
-		while True:
-			try:
-				start_line = int(input('\nWhich starting line (row number only)?\n>> '))
-				end_line = int(input('\nWhich ending line (row number only)?\n>> '))
-			except ValueError:
-				print('\nInvalid input. Please enter row numbers as integers.')
-				continue
-			print(f'Lines selected: {sheet_data[start_line-1][observation_cell.col-1]} to {sheet_data[end_line-1][observation_cell.col-1]}')
-			yn = input('Is this correct? y/n\n>> ')
-			if yn == 'y':
-				break
-		timestamps = generate_range_timestamps(sheet_data, id_cell, observation_cell, num_participants, study_name, start_line, end_line)
+		if range_start is not None and range_end is not None:
+			# CLI mode - use provided range
+			print(f'Range mode: lines {range_start} to {range_end}')
+			print(f'Lines selected: {sheet_data[range_start-1][observation_cell.col-1]} to {sheet_data[range_end-1][observation_cell.col-1]}')
+			timestamps = generate_range_timestamps(sheet_data, id_cell, observation_cell, num_participants, study_name, range_start, range_end)
+		else:
+			# Interactive mode
+			while True:
+				try:
+					start_line = int(input('\nWhich starting line (row number only)?\n>> '))
+					end_line = int(input('\nWhich ending line (row number only)?\n>> '))
+				except ValueError:
+					print('\nInvalid input. Please enter row numbers as integers.')
+					continue
+				print(f'Lines selected: {sheet_data[start_line-1][observation_cell.col-1]} to {sheet_data[end_line-1][observation_cell.col-1]}')
+				yn = input('Is this correct? y/n\n>> ')
+				if yn == 'y':
+					break
+			timestamps = generate_range_timestamps(sheet_data, id_cell, observation_cell, num_participants, study_name, start_line, end_line)
 	elif mode == 'select':
 		pass
 
@@ -281,21 +338,25 @@ def generate_category_timestamps(sheet_data, id_cell, observation_cell, category
 	
 	return timestamps
 
-def generate_line_timestamps(sheet_data, id_cell, observation_cell, num_participants, study_name):
-	"""Generate videos for one or more line/row numbers (comma-separated)."""
-	while True:
-		try:
-			line_input = input('\nWhich issue(s)? Enter row number(s), comma-separated for multiple.\n>> ')
-			# Parse comma-separated line numbers
-			line_numbers = [int(num.strip()) for num in line_input.split(',')]
-		except ValueError:
-			print('\nTry again. Enter row numbers as integers, separated by commas.')
-			continue
-		
-		# Preview all selected lines
+def generate_line_timestamps(sheet_data, id_cell, observation_cell, num_participants, study_name, cli_line_numbers=None, skip_prompts=False):
+	"""Generate videos for one or more line/row numbers.
+	
+	Args:
+		sheet_data: The sheet data matrix
+		id_cell: The ID header cell
+		observation_cell: The observation header cell
+		num_participants: Number of participant columns
+		study_name: Normalized study name
+		cli_line_numbers: Optional list of line numbers from CLI (skips interactive input)
+		skip_prompts: If True, skip confirmation prompts
+	"""
+	valid_lines = []
+	
+	if cli_line_numbers is not None:
+		# CLI mode - use provided line numbers
+		print(f'\nLine mode: processing lines {", ".join(str(n) for n in cli_line_numbers)}')
 		print('\nSelected issues:')
-		valid_lines = []
-		for line_num in line_numbers:
+		for line_num in cli_line_numbers:
 			if line_num < 1 or line_num > len(sheet_data):
 				print(f'  Line {line_num}: [INVALID - out of range]')
 			else:
@@ -304,13 +365,38 @@ def generate_line_timestamps(sheet_data, id_cell, observation_cell, num_particip
 				valid_lines.append(line_num)
 		
 		if not valid_lines:
-			print('\nNo valid lines selected. Please try again.')
-			continue
-		
-		print()
-		yn = input('Are these the correct issues? y/n\n>> ')
-		if yn == 'y':
-			break
+			print('\nNo valid lines found. Exiting.')
+			return []
+	else:
+		# Interactive mode
+		while True:
+			try:
+				line_input = input('\nWhich issue(s)? Enter row number(s), comma-separated for multiple.\n>> ')
+				# Parse comma-separated line numbers
+				line_numbers = [int(num.strip()) for num in line_input.split(',')]
+			except ValueError:
+				print('\nTry again. Enter row numbers as integers, separated by commas.')
+				continue
+			
+			# Preview all selected lines
+			print('\nSelected issues:')
+			valid_lines = []
+			for line_num in line_numbers:
+				if line_num < 1 or line_num > len(sheet_data):
+					print(f'  Line {line_num}: [INVALID - out of range]')
+				else:
+					desc = sheet_data[line_num-1][observation_cell.col-1]
+					print(f'  Line {line_num}: {desc}')
+					valid_lines.append(line_num)
+			
+			if not valid_lines:
+				print('\nNo valid lines selected. Please try again.')
+				continue
+			
+			print()
+			yn = input('Are these the correct issues? y/n\n>> ')
+			if yn == 'y':
+				break
 
 	# Collect timestamps from all valid lines
 	timestamps = []
@@ -662,6 +748,40 @@ def main():
 		sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
 		sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
 	
+	# Parse command-line arguments
+	args = parse_arguments()
+	
+	# Determine if running in CLI mode (any mode argument provided)
+	cli_mode = args.batch or args.lines or args.range
+	
+	# Parse CLI arguments for line and range modes
+	cli_line_numbers = None
+	cli_range_start = None
+	cli_range_end = None
+	
+	if args.lines:
+		try:
+			# Support both + and , as separators
+			line_str = args.lines.replace(',', '+')
+			cli_line_numbers = [int(num.strip()) for num in line_str.split('+')]
+		except ValueError:
+			print(f'Error: Invalid line numbers "{args.lines}". Use format: 1+4+5 or 1,4,5')
+			sys.exit(1)
+	
+	if args.range:
+		try:
+			parts = args.range.split('-')
+			if len(parts) != 2:
+				raise ValueError('Range must have exactly two parts')
+			cli_range_start = int(parts[0].strip())
+			cli_range_end = int(parts[1].strip())
+			if cli_range_start > cli_range_end:
+				print(f'Error: Range start ({cli_range_start}) must be less than or equal to end ({cli_range_end})')
+				sys.exit(1)
+		except ValueError as e:
+			print(f'Error: Invalid range "{args.range}". Use format: 1-10')
+			sys.exit(1)
+	
 	# Change working directory to place of python script
 	os.chdir(os.path.dirname(os.path.abspath(__file__)))
 	print('-------------------------------------------------------------------------------')
@@ -680,29 +800,76 @@ def main():
 	# Get document list and select spreadsheet
 	doc_list = get_all_spreadsheets(gc).split(',')
 
-	# Auto-connect if working directory name matches a spreadsheet
-	cwd_name = os.path.basename(os.getcwd())
-	auto_match_index = find_spreadsheet_by_name(cwd_name, doc_list)
-	if auto_match_index >= 0:
-		matched_name = doc_list[auto_match_index].strip()
-		print(f'\nAuto-connecting to spreadsheet: {matched_name}')
-		worksheet = gc.open(matched_name).worksheet(SHEET_NAME)
+	# Spreadsheet selection
+	worksheet = None
+	if args.spreadsheet:
+		# CLI-specified spreadsheet
+		try:
+			if args.spreadsheet.startswith('http'):
+				worksheet = gc.open_by_url(args.spreadsheet).worksheet(SHEET_NAME)
+			elif args.spreadsheet.isdigit():
+				chosen_index = int(args.spreadsheet) - 1
+				print(f'Opening document: {doc_list[chosen_index].strip()}')
+				worksheet = gc.open(doc_list[chosen_index].strip()).worksheet(SHEET_NAME)
+			else:
+				chosen_index = find_spreadsheet_by_name(args.spreadsheet, doc_list)
+				if chosen_index >= 0:
+					matched_name = doc_list[chosen_index].strip()
+					print(f'Opening document: {matched_name}')
+					worksheet = gc.open(matched_name).worksheet(SHEET_NAME)
+				else:
+					print(f'Error: Could not find spreadsheet "{args.spreadsheet}"')
+					sys.exit(1)
+		except (gspread.SpreadsheetNotFound, gspread.exceptions.APIError, gspread.exceptions.GSpreadException) as e:
+			print(f'Error: Could not open spreadsheet "{args.spreadsheet}": {e}')
+			sys.exit(1)
 	else:
-		worksheet = select_spreadsheet(gc, doc_list)
+		# Auto-connect if working directory name matches a spreadsheet
+		cwd_name = os.path.basename(os.getcwd())
+		auto_match_index = find_spreadsheet_by_name(cwd_name, doc_list)
+		if auto_match_index >= 0:
+			matched_name = doc_list[auto_match_index].strip()
+			print(f'\nAuto-connecting to spreadsheet: {matched_name}')
+			worksheet = gc.open(matched_name).worksheet(SHEET_NAME)
+		elif cli_mode:
+			# CLI mode requires a spreadsheet - can't prompt interactively
+			print('Error: No spreadsheet found matching working directory name.')
+			print('Use -s to specify a spreadsheet name, URL, or index.')
+			sys.exit(1)
+		else:
+			worksheet = select_spreadsheet(gc, doc_list)
+	
 	print('\nConnected to Google Drive!')
 
-	# Main processing loop
-	while True:
-		clips_list = select_mode_and_generate(worksheet)
+	if cli_mode:
+		# CLI mode - run once and exit
+		skip_prompts = args.yes
+		
+		if args.batch:
+			clips_list = generate_list(worksheet, 'batch', skip_prompts=skip_prompts)
+		elif args.lines:
+			clips_list = generate_list(worksheet, 'line', line_numbers=cli_line_numbers, skip_prompts=skip_prompts)
+		elif args.range:
+			clips_list = generate_list(worksheet, 'range', range_start=cli_range_start, range_end=cli_range_end, skip_prompts=skip_prompts)
+		
 		videos_generated = process_clips(clips_list)
-
+		
 		if not REENCODING:
 			print('* No re-encoding done, expect:\n- inaccurate start and end timings\n- lossy frames until first keyframe\n- bad timecodes at the end\n')
 		print(f'All done, created {videos_generated} videos!\nFiles are in {os.getcwd()}\n')
-		
-		yn = input('Continue working (y) or quit the program (n)? y/n\n>> ')
-		if yn == 'n':
-			break
+	else:
+		# Interactive mode - main processing loop
+		while True:
+			clips_list = select_mode_and_generate(worksheet)
+			videos_generated = process_clips(clips_list)
+
+			if not REENCODING:
+				print('* No re-encoding done, expect:\n- inaccurate start and end timings\n- lossy frames until first keyframe\n- bad timecodes at the end\n')
+			print(f'All done, created {videos_generated} videos!\nFiles are in {os.getcwd()}\n')
+			
+			yn = input('Continue working (y) or quit the program (n)? y/n\n>> ')
+			if yn == 'n':
+				break
 
 if __name__ == '__main__':
 	try:
