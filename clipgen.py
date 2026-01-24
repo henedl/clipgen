@@ -20,7 +20,7 @@ from oauth2client.service_account import ServiceAccountCredentials
 # Configuration Constants
 REENCODING = False
 FILEFORMAT = '.mp4'
-VERSIONNUM = '0.5.0'
+VERSIONNUM = '0.5.1'
 SHEET_NAME = 'Sheet1'
 DEBUGGING  = False
 VERBOSE    = True  # Set to False in CLI mode unless -v flag is used

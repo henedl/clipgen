@@ -6,17 +6,12 @@ The script was created to speed up data processing during playtests and is provi
 # TODO a.k.a. upcoming features
 ## Quality of life:
 * Timestamp cleaning/parsing doesn't handle prefix/separator characters besides + , ;
-* Open the current Sheet in Chrome from the command line
+* Open the current Sheet in browser, from the command line
 * Add ability to target only one cell. Proposed syntax: "P01.11". Should also be batchable, i.e. "P01.11 + P03.11 + P03.09". Should be available directly at (current) mode select stage.
 * File size output limits (e.g. if user sets 50MB max limit in app settings, all videos are compressed below that limit)
 
 ## Programming stuff:
 * Try Sheet1, Data, data, Observations, Data set, data set, and other typical worksheet names. If none of those match, just go with the zeroth index worksheet.
-* Logging of which timestamps are discarded
-* Better error messages
-* Rename "generate"-methods to more clearly indicate that they return timestamps to clip (for generate_list(), this method should have a completely different name)
-* Rename "dumped"-methods once all timestamps are generated from a dumped sheet instead of a live sheet
-* Rename "users" to "participants" (variables, method names)
 
 ## Batch improvements:
 * Implement a way to select only one video to be rendered, out of several possible clips
