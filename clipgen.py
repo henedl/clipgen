@@ -23,6 +23,7 @@ FILEFORMAT = '.mp4'
 VERSIONNUM = '0.5.0'
 SHEET_NAME = 'Sheet1'
 DEBUGGING  = False
+VERBOSE    = True  # Set to False in CLI mode unless -v flag is used
 
 # Spreadsheet Structure Constants
 ID_HEADER = 'ID'
@@ -59,6 +60,10 @@ Examples:
   python clipgen.py -r 1-10            Range mode - lines 1 through 10
   python clipgen.py -b -s "Study Name" Batch mode with specific spreadsheet
   python clipgen.py -l 5 -y            Line mode, skip confirmation prompts
+  python clipgen.py -b -v              Batch mode with verbose output
+
+Note: Non-interactive mode (using -b, -l, or -r) is silent by default,
+      only showing errors and the final summary. Use -v for full output.
 '''
 	)
 	
@@ -76,6 +81,8 @@ Examples:
 		help='Spreadsheet name, URL, or index number')
 	parser.add_argument('-y', '--yes', action='store_true',
 		help='Skip confirmation prompts (auto-confirm)')
+	parser.add_argument('-v', '--verbose', action='store_true',
+		help='Enable verbose output in non-interactive mode (shows all messages)')
 	
 	return parser.parse_args()
 
@@ -84,6 +91,15 @@ def debug_print(message):
 	"""Print debug messages when DEBUGGING is enabled."""
 	if DEBUGGING:
 		print(f'! DEBUG {message}')
+
+def verbose_print(message):
+	"""Print informational messages when VERBOSE is enabled.
+	
+	In interactive mode, VERBOSE is always True.
+	In CLI mode, VERBOSE is False unless -v flag is used.
+	"""
+	if VERBOSE:
+		print(message)
 
 def normalize_study_name(raw_name):
 	"""Convert study name to a filesystem-safe format.
@@ -110,12 +126,17 @@ def sanitize_filename(text):
 		text = text.replace(char, '')
 	return text
 
-def parse_timestamps(cell_value):
+def parse_timestamps(cell_value, cell_ref=None):
 	"""Parse timestamp pairs from a cell value string.
+	
+	Args:
+		cell_value: The raw cell value containing timestamps
+		cell_ref: Optional cell reference (e.g., 'B5') for error messages
 	
 	Returns a list of (start_time, end_time) tuples.
 	"""
 	parsed_timestamps = []
+	skipped_timestamps = []
 	raw_times = cell_value.lower().replace('+', ' ').replace(';', ' ').replace(',', ' ').split()
 	debug_print(f'raw_times content after split is {raw_times}')
 	debug_print(f'Timestamp list raw_times is {len(raw_times)} entries long')
@@ -138,12 +159,32 @@ def parse_timestamps(cell_value):
 				# Slice the timestamp until the dash, and then from after the dash
 				time_pair = (raw_times[i][:dash_pos], raw_times[i][dash_pos+1:])
 				parsed_timestamps.append(time_pair)
+			else:
+				skipped_timestamps.append(raw_times[i])
 		elif ':' in raw_times[i]:
 			colon_pos = raw_times[i].find(':')
 			if colon_pos > 0 and raw_times[i][colon_pos-1].isdigit():
-				# Single timestamp - add default end time to trigger add_duration later
-				time_pair = (raw_times[i], add_duration(raw_times[i]))
-				parsed_timestamps.append(time_pair)
+				# Single timestamp - add default end time
+				end_time = add_duration(raw_times[i])
+				if end_time != -1:
+					time_pair = (raw_times[i], end_time)
+					parsed_timestamps.append(time_pair)
+				# If -1, warning already printed by add_duration()
+			else:
+				skipped_timestamps.append(raw_times[i])
+		elif raw_times[i]:
+			# Non-empty but doesn't match expected patterns
+			skipped_timestamps.append(raw_times[i])
+	
+	# Report skipped timestamps if any
+	if skipped_timestamps:
+		cell_info = f" in cell {cell_ref}" if cell_ref else ""
+		print(f"! WARNING Skipped {len(skipped_timestamps)} unparseable timestamp(s){cell_info}:")
+		for ts in skipped_timestamps[:3]:  # Show first 3
+			print(f"    '{ts}'")
+		if len(skipped_timestamps) > 3:
+			print(f"    ... and {len(skipped_timestamps) - 3} more")
+		print("  Expected formats: MM:SS-MM:SS, HH:MM:SS-HH:MM:SS, or single timestamps like MM:SS")
 
 	return parsed_timestamps
 
@@ -180,32 +221,61 @@ def generate_list(sheet, mode, line_numbers=None, range_start=None, range_end=No
 		range_end: Optional end line for 'range' mode (CLI)
 		skip_prompts: If True, skip confirmation prompts (CLI -y flag)
 	"""
+	# Find required headers
 	id_cell = sheet.find(ID_HEADER)
 	observation_cell = sheet.find(OBSERVATION_HEADER)
 	category_cell = sheet.find(CATEGORY_HEADER)
 	timestamps = []
+	
+	# Validate required headers exist
+	missing_headers = []
+	if id_cell is None:
+		missing_headers.append(f"'{ID_HEADER}'")
+	if observation_cell is None:
+		missing_headers.append(f"'{OBSERVATION_HEADER}'")
+	if category_cell is None:
+		missing_headers.append(f"'{CATEGORY_HEADER}'")
+	
+	if missing_headers:
+		print(f"! ERROR Required header(s) not found in spreadsheet: {', '.join(missing_headers)}")
+		print(f"  The spreadsheet must contain columns with these exact headers: {ID_HEADER}, {OBSERVATION_HEADER}, {CATEGORY_HEADER}")
+		print(f"  Please check your spreadsheet structure.")
+		return []
 
 	# Sheet data is a list of lists, which forms a matrix
 	# - sheet_data[row][col] where indices start at 0 (real spreadsheet starts at 1)
 	sheet_data = sheet.get_all_values()
 	debug_print(f'Sheet dumped into memory at {get_current_time()}')
+	
+	# Check if sheet is empty or has only headers
+	if len(sheet_data) <= 1:
+		print("! ERROR Spreadsheet appears to be empty (no data rows found).")
+		print(f"  The spreadsheet only has {len(sheet_data)} row(s).")
+		return []
 
 	# Determine the study name.
 	study_name = sheet_data[0][0]
 	if study_name == '':
 		study_name = sheet.spreadsheet.title
-	print(f'\nBeginning work on {study_name}.')
+	verbose_print(f'\nBeginning work on {study_name}.')
 
 	# Normalize study name for filesystem use
 	study_name = normalize_study_name(study_name)
 
 	# Get number of participants needed to loop through the worksheet
 	num_participants = get_num_participants(sheet.row_values(id_cell.row), id_cell, sheet.col_count)
+	
+	# Warn if no participants found
+	if num_participants == 0:
+		print(f"! WARNING No participant columns found in the spreadsheet.")
+		print(f"  Looking for columns starting with: {', '.join(PARTICIPANT_PREFIXES)}")
+		print(f"  Check that participant column headers start with 'P' or 'G' (e.g., P01, P02, G01).")
+		return []
 
 	# Generate the timestamps, according to the selected mode.
 	if mode == 'batch':
 		if skip_prompts:
-			print('Batch mode: generating all possible clips...')
+			verbose_print('Batch mode: generating all possible clips...')
 			timestamps = generate_batch_timestamps(sheet_data, id_cell, observation_cell, num_participants, study_name)
 		else:
 			yn = input('\nWarning: This will generate all possible clips. Do you want to proceed? y/n\n>> ')
@@ -264,12 +334,24 @@ def generate_list(sheet, mode, line_numbers=None, range_start=None, range_end=No
 		timestamps = generate_line_timestamps(sheet_data, id_cell, observation_cell, num_participants, study_name, line_numbers, skip_prompts)
 	elif mode == 'range':
 		if range_start is not None and range_end is not None:
-			# CLI mode - use provided range
-			print(f'Range mode: lines {range_start} to {range_end}')
-			print(f'Lines selected: {sheet_data[range_start-1][observation_cell.col-1]} to {sheet_data[range_end-1][observation_cell.col-1]}')
+			# CLI mode - use provided range with bounds validation
+			max_row = len(sheet_data)
+			if range_start < 1 or range_end < 1:
+				print(f"! ERROR Line numbers must be positive. Got start={range_start}, end={range_end}")
+				return []
+			if range_start > max_row or range_end > max_row:
+				print(f"! ERROR Line number(s) out of range. Spreadsheet has {max_row} rows.")
+				print(f"  Requested: lines {range_start} to {range_end}")
+				return []
+			if range_start > range_end:
+				print(f"! ERROR Start line ({range_start}) must be less than or equal to end line ({range_end}).")
+				return []
+			verbose_print(f'Range mode: lines {range_start} to {range_end}')
+			verbose_print(f'Lines selected: {sheet_data[range_start-1][observation_cell.col-1]} to {sheet_data[range_end-1][observation_cell.col-1]}')
 			timestamps = generate_range_timestamps(sheet_data, id_cell, observation_cell, num_participants, study_name, range_start, range_end)
 		else:
 			# Interactive mode
+			max_row = len(sheet_data)
 			while True:
 				try:
 					start_line = int(input('\nWhich starting line (row number only)?\n>> '))
@@ -277,6 +359,18 @@ def generate_list(sheet, mode, line_numbers=None, range_start=None, range_end=No
 				except ValueError:
 					print('\nInvalid input. Please enter row numbers as integers.')
 					continue
+				
+				# Validate bounds
+				if start_line < 1 or end_line < 1:
+					print(f'\n! ERROR Line numbers must be positive (got {start_line} and {end_line}).')
+					continue
+				if start_line > max_row or end_line > max_row:
+					print(f'\n! ERROR Line number out of range. Spreadsheet has {max_row} rows.')
+					continue
+				if start_line > end_line:
+					print(f'\n! ERROR Start line ({start_line}) must be less than or equal to end line ({end_line}).')
+					continue
+				
 				print(f'Lines selected: {sheet_data[start_line-1][observation_cell.col-1]} to {sheet_data[end_line-1][observation_cell.col-1]}')
 				yn = input('Is this correct? y/n\n>> ')
 				if yn == 'y':
@@ -296,7 +390,7 @@ def get_num_participants(header_row, id_cell, col_count):
 				num_participants += 1
 			elif header_row[j] == NOTES_COLUMN:
 				break
-	print(f'Found {num_participants} participants in total, spanning columns {id_cell.col+1} to {num_participants+id_cell.col+1}.')
+	verbose_print(f'Found {num_participants} participants in total, spanning columns {id_cell.col+1} to {num_participants+id_cell.col+1}.')
 	return num_participants
 
 def get_current_time():
@@ -354,14 +448,14 @@ def generate_line_timestamps(sheet_data, id_cell, observation_cell, num_particip
 	
 	if cli_line_numbers is not None:
 		# CLI mode - use provided line numbers
-		print(f'\nLine mode: processing lines {", ".join(str(n) for n in cli_line_numbers)}')
-		print('\nSelected issues:')
+		verbose_print(f'\nLine mode: processing lines {", ".join(str(n) for n in cli_line_numbers)}')
+		verbose_print('\nSelected issues:')
 		for line_num in cli_line_numbers:
 			if line_num < 1 or line_num > len(sheet_data):
-				print(f'  Line {line_num}: [INVALID - out of range]')
+				verbose_print(f'  Line {line_num}: [INVALID - out of range]')
 			else:
 				desc = sheet_data[line_num-1][observation_cell.col-1]
-				print(f'  Line {line_num}: {desc}')
+				verbose_print(f'  Line {line_num}: {desc}')
 				valid_lines.append(line_num)
 		
 		if not valid_lines:
@@ -412,34 +506,69 @@ def generate_line_timestamps(sheet_data, id_cell, observation_cell, num_particip
 
 def get_line_timestamps(sheet_data, id_cell, observation_cell, num_participants, line_index, study_name):
 	debug_print(f'Running method get_line_timestamps, starting line index {line_index} (real sheet line {line_index+1})')
+	
+	# Bounds checking
+	if line_index < 0 or line_index >= len(sheet_data):
+		print(f"! ERROR Line index {line_index} (row {line_index+1}) is out of bounds.")
+		print(f"  Spreadsheet has {len(sheet_data)} rows.")
+		return []
 
 	timestamps = []
-	for col_index, value in enumerate(sheet_data[line_index]):
-		debug_print(f"Item {col_index} with value '{value}' being processed.")
-		if col_index < id_cell.col:
-			debug_print(f"Skipping item {col_index} with value '{value}'")
-		elif col_index == id_cell.col + num_participants:
-			debug_print(f'Exit for-loop, reached final column {col_index} (real sheet column {col_index+1}).')
-			break
-		elif value is None or value == '':
-			pass
-		else:
-			cell = gspread.cell.Cell(line_index+1, col_index+1, value)
-			debug_print(f'Found something at step {col_index}')
-			debug_print(f'study_name is {study_name}')
-			issue = {
-				'cell': cell,
-				'desc': sheet_data[line_index][observation_cell.col-1],
-				'study': study_name,
-				'participant': sheet_data[id_cell.row-1][col_index],
-				'category': sheet_data[line_index][observation_cell.col-2]
-			}
-			debug_print(f"Participant ID at R{id_cell.row},C{col_index} -> '{sheet_data[id_cell.row][col_index]}'")
-			debug_print(f"Description at R{line_index},C{observation_cell.col-1} -> '{sheet_data[line_index][observation_cell.col-1]}'")
-			debug_print(f"Timestamp at R{cell.row-1},C{cell.col-1} -> '{cell.value}'")
-			debug_print(f'Actual cell {cell} at actual address {gspread.utils.rowcol_to_a1(cell.row, cell.col)}')
-			timestamps.append(issue)
-			print(f"+ Found timestamp: {value.replace(chr(10), ' ')}")
+	try:
+		for col_index, value in enumerate(sheet_data[line_index]):
+			debug_print(f"Item {col_index} with value '{value}' being processed.")
+			if col_index < id_cell.col:
+				debug_print(f"Skipping item {col_index} with value '{value}'")
+			elif col_index == id_cell.col + num_participants:
+				debug_print(f'Exit for-loop, reached final column {col_index} (real sheet column {col_index+1}).')
+				break
+			elif value is None or value == '':
+				pass
+			else:
+				cell = gspread.cell.Cell(line_index+1, col_index+1, value)
+				debug_print(f'Found something at step {col_index}')
+				debug_print(f'study_name is {study_name}')
+				
+				# Safely access array indices with bounds checking
+				desc_col = observation_cell.col - 1
+				category_col = observation_cell.col - 2
+				participant_row = id_cell.row - 1
+				
+				# Get description with bounds check
+				desc = ''
+				if desc_col >= 0 and desc_col < len(sheet_data[line_index]):
+					desc = sheet_data[line_index][desc_col]
+				else:
+					print(f"! WARNING Could not read description at row {line_index+1}, column {desc_col+1}")
+				
+				# Get participant with bounds check
+				participant = ''
+				if participant_row >= 0 and participant_row < len(sheet_data) and col_index < len(sheet_data[participant_row]):
+					participant = sheet_data[participant_row][col_index]
+				else:
+					print(f"! WARNING Could not read participant ID at row {participant_row+1}, column {col_index+1}")
+				
+				# Get category with bounds check
+				category = ''
+				if category_col >= 0 and category_col < len(sheet_data[line_index]):
+					category = sheet_data[line_index][category_col]
+				
+				issue = {
+					'cell': cell,
+					'desc': desc,
+					'study': study_name,
+					'participant': participant,
+					'category': category
+				}
+				debug_print(f"Participant ID at R{id_cell.row},C{col_index} -> '{participant}'")
+				debug_print(f"Description at R{line_index},C{observation_cell.col-1} -> '{desc}'")
+				debug_print(f"Timestamp at R{cell.row-1},C{cell.col-1} -> '{cell.value}'")
+				debug_print(f'Actual cell {cell} at actual address {gspread.utils.rowcol_to_a1(cell.row, cell.col)}')
+				timestamps.append(issue)
+				verbose_print(f"+ Found timestamp: {value.replace(chr(10), ' ')}")
+	except IndexError as e:
+		print(f"! ERROR Index error while reading row {line_index+1}: {e}")
+		print("  The spreadsheet structure may be malformed.")
 
 	debug_print(f'Line completed, returning list of {len(timestamps)} potential timestamps.')
 	return timestamps
@@ -505,15 +634,32 @@ def clean_issue(issue):
 	debug_print(f"clean_issue() received issue with cell contents {issue['cell'].value}")
 	debug_print('Will attempt to split the cell contents')
 	
+	# Get cell reference for error messages
+	cell_ref = gspread.utils.rowcol_to_a1(issue['cell'].row, issue['cell'].col)
+	
 	# Parse timestamps from cell value
-	issue['times'] = parse_timestamps(issue['cell'].value)
+	issue['times'] = parse_timestamps(issue['cell'].value, cell_ref=cell_ref)
+	
+	# Warn if no valid timestamps were parsed
+	if not issue['times']:
+		print(f"! WARNING No valid timestamps found in cell {cell_ref}")
+		print(f"  Cell contents: '{issue['cell'].value}'")
+		print(f"  Participant: {issue['participant']}, Description: {issue['desc'][:50]}...")
 
 	# Clean description: remove bracketed prefix and sanitize
-	desc = issue['desc'][issue['desc'].rfind(']')+1:].strip()
+	# Handle case where description doesn't contain ']'
+	bracket_pos = issue['desc'].rfind(']')
+	if bracket_pos >= 0:
+		desc = issue['desc'][bracket_pos+1:].strip()
+	else:
+		desc = issue['desc'].strip()
 	issue['desc'] = sanitize_filename(desc)
 	
-	# Sanitize category
-	issue['category'] = sanitize_filename(issue['category'])
+	# Sanitize category (handle None/empty)
+	if issue['category']:
+		issue['category'] = sanitize_filename(issue['category'])
+	else:
+		issue['category'] = 'uncategorized'
 
 	return issue
 
@@ -526,21 +672,39 @@ def run_ffmpeg(input_file, output_file, start_pos, end_pos, reencode):
 	
 	Returns True if video was generated successfully, False otherwise.
 	"""
+	# Check if input file exists before processing
+	if not os.path.isfile(input_file):
+		print(f"! ERROR Input video file not found: '{input_file}'")
+		print(f"  Expected location: {os.path.join(os.getcwd(), input_file)}")
+		print("  Skipping this clip.")
+		return False
+	
 	duration = get_duration(start_pos, end_pos)
+	if duration is None:
+		# Error already printed by get_duration
+		return False
+	
 	file_length = get_file_duration(input_file)
+	if file_length is None:
+		# Error already printed by get_file_duration
+		return False
 
 	if duration < 0:
-		print("Can't work with negative duration for videos. Skipping.")
+		print(f"! ERROR Negative duration calculated for video clip. Skipping.")
+		print(f"  Start: {start_pos}, End: {end_pos}, Duration: {duration}s")
+		print("  The end timestamp must be after the start timestamp.")
 		return False
 	if duration > file_length:
-		print('Timestamp duration longer than actual video file. Skipping.')
+		print(f"! ERROR Timestamp duration ({duration}s) exceeds video file length ({file_length}s). Skipping.")
+		print(f"  Start: {start_pos}, End: {end_pos}")
+		print(f"  Video file: '{input_file}'")
 		return False
 	if duration > MAX_CLIP_DURATION_SECONDS:
-		yn = input('The generated video will be over 10 minutes long, do you want to still generate it? (y/n)\n>> ')
-		if yn == 'n':
+		yn = input(f'The generated video will be {duration}s ({duration//60}m {duration%60}s), over 10 minutes long. Generate anyway? (y/n)\n>> ')
+		if yn != 'y':
 			return False
 
-	print(f'Cutting {input_file} from {start_pos} to {end_pos}.')
+	verbose_print(f'Cutting {input_file} from {start_pos} to {end_pos}.')
 	if DEBUGGING:
 		debug_print(f'Debugging enabled, not calling ffmpeg.\n  input_file: {input_file},\n  output_file: {output_file}')
 		return False
@@ -550,27 +714,83 @@ def run_ffmpeg(input_file, output_file, start_pos, end_pos, reencode):
 			# Use list form to properly handle unicode in filenames
 			ffmpeg_command = ['ffmpeg', '-y', '-loglevel', '16', '-ss', start_pos, '-i', input_file, '-t', str(duration), '-c', 'copy', '-avoid_negative_ts', '1', output_file]
 			debug_print(f"ffmpeg_command is '{' '.join(ffmpeg_command)}'")
-			subprocess.run(ffmpeg_command, encoding='utf-8')
+			result = subprocess.run(ffmpeg_command, encoding='utf-8', capture_output=True)
 		else:
-			subprocess.run(['ffmpeg', '-y', '-loglevel', '16', '-ss', start_pos, '-i', input_file, '-t', str(duration), output_file], encoding='utf-8')
-		print(f"+ Generated video '{output_file}' successfully.\n File size: {format_filesize(os.path.getsize(output_file))}\n Expected duration: {duration} s\n")
+			result = subprocess.run(['ffmpeg', '-y', '-loglevel', '16', '-ss', start_pos, '-i', input_file, '-t', str(duration), output_file], encoding='utf-8', capture_output=True)
+		
+		# Check if ffmpeg succeeded
+		if result.returncode != 0:
+			print(f"! ERROR ffmpeg failed with exit code {result.returncode}")
+			print(f"  Input: '{input_file}', Output: '{output_file}'")
+			print(f"  Timestamps: {start_pos} to {end_pos}")
+			if result.stderr:
+				print(f"  ffmpeg error: {result.stderr.strip()}")
+			return False
+		
+		# Verify output file was created
+		if not os.path.isfile(output_file):
+			print(f"! ERROR ffmpeg completed but output file was not created: '{output_file}'")
+			return False
+		
+		verbose_print(f"+ Generated video '{output_file}' successfully.\n File size: {format_filesize(os.path.getsize(output_file))}\n Expected duration: {duration} s\n")
 		return True
+	except FileNotFoundError:
+		print("! ERROR ffmpeg is not installed or not found in system PATH.")
+		print("  Please install ffmpeg and ensure it's in your PATH.")
+		print("  Download from: https://www.ffmpeg.org/download.html")
+		return False
 	except OSError as e:
-		print(f"\n! ERROR ffmpeg could not successfully run.\n  clipgen returned the following error:\n  {e}\n  - Attempted location: '{os.getcwd()}'\n  - Attemped input_file: '{input_file}',\n  - Attempted output_file: '{output_file}'\n")
+		print(f"! ERROR ffmpeg could not successfully run.")
+		print(f"  Error: {e}")
+		print(f"  Working directory: '{os.getcwd()}'")
+		print(f"  Input file: '{input_file}'")
+		print(f"  Output file: '{output_file}'")
 		return False
 
 def get_file_duration(filepath):
-	"""Calls ffprobe, returns duration of video container in seconds."""
+	"""Calls ffprobe, returns duration of video container in seconds.
+	
+	Returns the duration in seconds, or None if the file cannot be probed.
+	"""
+	# Check if file exists before attempting to probe
+	if not os.path.isfile(filepath):
+		print(f"! ERROR Video file not found: '{filepath}'")
+		print(f"  Expected location: {os.path.join(os.getcwd(), filepath)}")
+		print("  Please ensure the video file exists in the working directory.")
+		return None
+	
 	probe_command = ['ffprobe', '-v', 'error', '-show_entries', 'format=duration', '-of', 'default=noprint_wrappers=1:nokey=1', filepath]
 	debug_print(f"probe_command is {' '.join(probe_command)}")
-	file_length = float(subprocess.check_output(probe_command, encoding='utf-8'))
-	return int(file_length)
+	
+	try:
+		file_length = float(subprocess.check_output(probe_command, encoding='utf-8'))
+		return int(file_length)
+	except FileNotFoundError:
+		print("! ERROR ffprobe is not installed or not found in system PATH.")
+		print("  Please install ffmpeg (which includes ffprobe) and ensure it's in your PATH.")
+		print("  Download from: https://www.ffmpeg.org/download.html")
+		return None
+	except subprocess.CalledProcessError as e:
+		print(f"! ERROR ffprobe failed to read video file: '{filepath}'")
+		print(f"  ffprobe exit code: {e.returncode}")
+		print("  The file may be corrupted, not a valid video, or in an unsupported format.")
+		return None
+	except ValueError as e:
+		print(f"! ERROR Could not parse duration from video file: '{filepath}'")
+		print(f"  ffprobe returned unexpected output. Error: {e}")
+		return None
 
 def get_duration(start_time, end_time):
-	"""Returns the duration of a clip as seconds."""
+	"""Returns the duration of a clip as seconds, or None if timestamps are invalid."""
 	debug_print(f'start_time is {start_time} with length {len(start_time)}, end_time is {end_time}')
 	
-	formats = ['%M:%S', '%H:%M:%S'] if len(start_time) <= 5 else ['%H:%M:%S', '%M:%S']
+	# Handle case where add_duration() returned -1 (error)
+	if end_time == -1:
+		print(f"! ERROR Invalid end timestamp (derived from start: '{start_time}')")
+		print("  Could not calculate end time. Check the timestamp format.")
+		return None
+	
+	formats = ['%M:%S', '%H:%M:%S'] if len(str(start_time)) <= 5 else ['%H:%M:%S', '%M:%S']
 	
 	for fmt in formats:
 		try:
@@ -580,12 +800,16 @@ def get_duration(start_time, end_time):
 		except ValueError:
 			continue
 	
-	print('* Timestamp formatting error in get_duration(). Exiting.')
-	print('* Formats must match: HH:MM:SS, MM:SS, or M:SS')
-	sys.exit(0)
+	print(f"! ERROR Timestamp formatting error in get_duration().")
+	print(f"  Start time: '{start_time}', End time: '{end_time}'")
+	print("  Accepted formats: HH:MM:SS, MM:SS, or M:SS (e.g., 1:23:45, 12:34, 1:23)")
+	return None
 
 def add_duration(start_time):
-	"""Adds one minute to the given timestamp."""
+	"""Adds one minute to the given timestamp.
+	
+	Returns the new timestamp string, or -1 if the timestamp format is invalid.
+	"""
 	try:
 		if len(start_time) <= 5:
 			start_datetime = datetime.strptime(str(start_time), '%M:%S')
@@ -595,9 +819,10 @@ def add_duration(start_time):
 			start_datetime = datetime.strptime(start_time, '%H:%M:%S')
 			new_time = start_datetime + timedelta(seconds=DEFAULT_DURATION_SECONDS)
 			return new_time.strftime('%H:%M:%S')
-	except ValueError as e:
-		print('* Timestamp formatting error was caught while running add_duration().\n  Returning -1 instead of timestamp')
-		print(e)
+	except ValueError:
+		print(f"! WARNING Could not parse single timestamp '{start_time}' to add default duration.")
+		print(f"  Expected format: MM:SS or HH:MM:SS (e.g., 12:34 or 1:23:45)")
+		print("  This timestamp will be skipped.")
 		return -1
 
 # ============================================================================
@@ -636,11 +861,16 @@ def find_spreadsheet_by_name(search_name, doc_list):
 def connect_to_google_service_account():
 	scopes = ['https://spreadsheets.google.com/feeds',
 	 		 'https://www.googleapis.com/auth/drive']
+	credentials_path = os.path.join(os.getcwd(), 'credentials.json')
 	try:
 		credentials = ServiceAccountCredentials.from_json_keyfile_name('credentials.json', scopes=scopes)  # pyright: ignore[reportArgumentType]
 	except IOError as e:
-		print(f'{e}\nCould not find credentials (credentials.json).')
-		sys.exit(0)
+		print(f"! ERROR Could not find credentials file.")
+		print(f"  Expected location: {credentials_path}")
+		print("  Please ensure 'credentials.json' is in the same directory as clipgen.py.")
+		print("  See Google's documentation for creating service account credentials:")
+		print("  https://docs.gspread.org/en/latest/oauth2.html#service-account")
+		sys.exit(1)
 	return credentials
 
 # ============================================================================
@@ -679,14 +909,20 @@ def select_spreadsheet(gc, doc_list):
 					return gc.open(get_all_spreadsheets(gc).split(',')[chosen_index].strip().lstrip()).worksheet(SHEET_NAME)
 		except (gspread.SpreadsheetNotFound, gspread.exceptions.APIError, gspread.exceptions.GSpreadException) as e:
 			input_file_fails += 1
-			if input_file_fails <= 1 or input_file_fails >= 3:
-				print(e)
-				print('\nDid not find spreadsheet. Please try again.')
+			if input_file_fails == 1:
+				print(f"\n! ERROR Could not access spreadsheet: {e}")
+				print("  Please try again. Type 'all' to see available documents.")
+			elif input_file_fails == 2:
+				print("\n! ERROR Spreadsheet not found or not accessible.")
+				print("  Common causes:")
+				print("  - The spreadsheet name is misspelled")
+				print("  - The spreadsheet hasn't been shared with your service account")
+				print("    (Share it with the email in credentials.json 'client_email' field)")
+				print("  - The spreadsheet doesn't have a worksheet named 'Sheet1'")
+				print("\n  Type 'all' to see accessible documents, or 'new' for recent ones.")
 			else:
-				print('\n###')
-				print("Did not find spreadsheet. Please try again.\n\nRemember that you need to share the spreadsheet you want to parse.\nShare it with the user listed in the json-file (value of client_email).")
-				print("This needs to be done on a per-document basis.\n\nSee available documents by typing 'all' or 'new'")
-				print('###\n')
+				print(f"\n! ERROR {e}")
+				print("  Tip: Use the document index number (1, 2, 3...) from the 'all' list.")
 
 def select_mode_and_generate(worksheet):
 	"""Interactive mode selection. Returns the clips list for processing."""
@@ -699,22 +935,55 @@ def select_mode_and_generate(worksheet):
 	}
 	
 	while True:
-		input_mode = input('\nSelect mode: (b)atch, (r)ange, (c)ategory or (l)ine\n>> ')
+		input_mode = input('\nSelect mode: (b)atch, (r)ange, (c)ategory or (l)ine\n>> ').strip().lower()
+		
+		if not input_mode:
+			print("  Please enter a mode (b, r, c, or l).")
+			continue
+		
 		try:
 			# Check first character or full word
 			mode = mode_map.get(input_mode[0]) or mode_map.get(input_mode)
 			if mode:
 				return generate_list(worksheet, mode)
-		except (IndexError, gspread.exceptions.GSpreadException) as e:
+			else:
+				print(f"  Unknown mode '{input_mode}'. Available modes:")
+				print("    b or batch   - Generate all clips in the spreadsheet")
+				print("    r or range   - Generate clips from a range of rows")
+				print("    c or category - Generate clips by category")
+				print("    l or line    - Generate clips from specific line(s)")
+		except gspread.exceptions.GSpreadException as e:
+			print(f"! ERROR Google Sheets API error: {e}")
 			debug_print(f"ERROR Message '{e}', Attempting reconnect")
 
 def process_clips(clips_list):
 	"""Process and generate video clips from the clips list. Returns count of videos generated."""
-	print('\n* ffmpeg is set to never prompt for input and will always overwrite.\n  Only warns if close to crashing.\n')
+	# Check if clips_list is empty
+	if not clips_list:
+		print("! WARNING No clips to process. No timestamps were found or selected.")
+		return 0
+	
+	verbose_print('\n* ffmpeg is set to never prompt for input and will always overwrite.\n  Only warns if close to crashing.\n')
 	videos_generated = 0
+	videos_skipped = 0
+	missing_videos = set()  # Track unique missing video files
 
 	for clip in clips_list:
 		clip = clean_issue(clip)
+		
+		# Skip if no valid timestamps were parsed
+		if not clip['times']:
+			videos_skipped += 1
+			continue
+		
+		base_video = f"{clip['study']}_{clip['participant']}{FILEFORMAT}"
+		
+		# Check if base video exists (only warn once per unique file)
+		if not os.path.isfile(base_video) and base_video not in missing_videos:
+			missing_videos.add(base_video)
+			print(f"! ERROR Source video file not found: '{base_video}'")
+			print(f"  Expected location: {os.path.join(os.getcwd(), base_video)}")
+			print(f"  Clips for participant '{clip['participant']}' in study '{clip['study']}' will be skipped.")
 		
 		for vid_in, vid_out in clip['times']:
 			try:
@@ -724,10 +993,10 @@ def process_clips(clips_list):
 				)
 			except (TypeError, UnicodeEncodeError, UnicodeDecodeError) as e:
 				print(f'! ERROR Character encoding issue occurred:\n  {e}')
-				print(f"  Category: {clip['category']}, Study: {clip['study']}, Participant: {clip['participant']}")
+				print(f"  Category: '{clip['category']}', Study: '{clip['study']}', Participant: '{clip['participant']}'")
+				print("  Try simplifying the description or category names to use only ASCII characters.")
+				videos_skipped += 1
 				break
-
-			base_video = f"{clip['study']}_{clip['participant']}{FILEFORMAT}"
 
 			completed = run_ffmpeg(
 				input_file=base_video,
@@ -738,6 +1007,14 @@ def process_clips(clips_list):
 			)
 			if completed:
 				videos_generated += 1
+			else:
+				videos_skipped += 1
+	
+	# Report summary if any videos were skipped
+	if videos_skipped > 0:
+		verbose_print(f"\n* Summary: {videos_generated} video(s) generated, {videos_skipped} skipped due to errors.")
+	if missing_videos:
+		verbose_print(f"* Missing source video files: {len(missing_videos)}")
 
 	return videos_generated
 
@@ -753,6 +1030,10 @@ def main():
 	
 	# Determine if running in CLI mode (any mode argument provided)
 	cli_mode = args.batch or args.lines or args.range
+	
+	# Set verbose mode: silent by default in CLI mode, verbose in interactive mode
+	global VERBOSE
+	VERBOSE = not cli_mode or args.verbose
 	
 	# Parse CLI arguments for line and range modes
 	cli_line_numbers = None
@@ -784,8 +1065,8 @@ def main():
 	
 	# Change working directory to place of python script
 	os.chdir(os.path.dirname(os.path.abspath(__file__)))
-	print('-------------------------------------------------------------------------------')
-	print(f'Welcome to clipgen v{VERSIONNUM}\nWorking directory: {os.getcwd()}\nPlace video files and the credentials.json file in this directory.')
+	verbose_print('-------------------------------------------------------------------------------')
+	verbose_print(f'Welcome to clipgen v{VERSIONNUM}\nWorking directory: {os.getcwd()}\nPlace video files and the credentials.json file in this directory.')
 	debug_print('Debug mode is ON. Several limitations apply and more things will be printed.')
 	
 	# Authenticate with Google
@@ -794,8 +1075,15 @@ def main():
 		gc = gspread.oauth(credentials_filename='credentials.json')
 		debug_print('Login successful!')
 	except gspread.exceptions.GSpreadException as e:
-		print(f'{e}\n! ERROR Could not authenticate.\n')
-		sys.exit(0)
+		print(f"! ERROR Could not authenticate with Google.")
+		print(f"  Error details: {e}")
+		print(f"  Credentials file location: {os.path.join(os.getcwd(), 'credentials.json')}")
+		print("\n  Troubleshooting steps:")
+		print("  1. Ensure 'credentials.json' exists in the working directory")
+		print("  2. Verify the credentials file is valid JSON")
+		print("  3. Check that the service account has access to Google Sheets API")
+		print("  4. For OAuth flow, delete any existing token files and re-authenticate")
+		sys.exit(1)
 
 	# Get document list and select spreadsheet
 	doc_list = get_all_spreadsheets(gc).split(',')
@@ -809,13 +1097,13 @@ def main():
 				worksheet = gc.open_by_url(args.spreadsheet).worksheet(SHEET_NAME)
 			elif args.spreadsheet.isdigit():
 				chosen_index = int(args.spreadsheet) - 1
-				print(f'Opening document: {doc_list[chosen_index].strip()}')
+				verbose_print(f'Opening document: {doc_list[chosen_index].strip()}')
 				worksheet = gc.open(doc_list[chosen_index].strip()).worksheet(SHEET_NAME)
 			else:
 				chosen_index = find_spreadsheet_by_name(args.spreadsheet, doc_list)
 				if chosen_index >= 0:
 					matched_name = doc_list[chosen_index].strip()
-					print(f'Opening document: {matched_name}')
+					verbose_print(f'Opening document: {matched_name}')
 					worksheet = gc.open(matched_name).worksheet(SHEET_NAME)
 				else:
 					print(f'Error: Could not find spreadsheet "{args.spreadsheet}"')
@@ -829,7 +1117,7 @@ def main():
 		auto_match_index = find_spreadsheet_by_name(cwd_name, doc_list)
 		if auto_match_index >= 0:
 			matched_name = doc_list[auto_match_index].strip()
-			print(f'\nAuto-connecting to spreadsheet: {matched_name}')
+			verbose_print(f'\nAuto-connecting to spreadsheet: {matched_name}')
 			worksheet = gc.open(matched_name).worksheet(SHEET_NAME)
 		elif cli_mode:
 			# CLI mode requires a spreadsheet - can't prompt interactively
@@ -839,7 +1127,7 @@ def main():
 		else:
 			worksheet = select_spreadsheet(gc, doc_list)
 	
-	print('\nConnected to Google Drive!')
+	verbose_print('\nConnected to Google Drive!')
 
 	if cli_mode:
 		# CLI mode - run once and exit
@@ -855,7 +1143,7 @@ def main():
 		videos_generated = process_clips(clips_list)
 		
 		if not REENCODING:
-			print('* No re-encoding done, expect:\n- inaccurate start and end timings\n- lossy frames until first keyframe\n- bad timecodes at the end\n')
+			verbose_print('* No re-encoding done, expect:\n- inaccurate start and end timings\n- lossy frames until first keyframe\n- bad timecodes at the end\n')
 		print(f'All done, created {videos_generated} videos!\nFiles are in {os.getcwd()}\n')
 	else:
 		# Interactive mode - main processing loop
