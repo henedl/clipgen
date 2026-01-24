@@ -1,6 +1,9 @@
 # -*- coding: utf-8 -*-
 """clipgen - Video clip generator from Google Sheets timestamps.
 
+This program will help quickly create video snippets from longer video files, based on timestamps in a spreadsheet!
+Check out README.md for more detailed information about setting up and using clipgen.
+
 This script supports full unicode/UTF-8 for international characters in:
 - Study names
 - Participant IDs  
@@ -36,10 +39,6 @@ NOTES_COLUMN = 'Notes'
 MAX_FILENAME_LENGTH = 255
 MAX_CLIP_DURATION_SECONDS = 600  # 10 minutes
 DEFAULT_DURATION_SECONDS = 60
-
-# What is this program?
-# This script will help quickly create video snippets from longer video files, based on timestamps in a spreadsheet!
-# Check out README.md for more detailed information about clipgen.
 
 # ============================================================================
 # Utility Functions
@@ -85,7 +84,6 @@ Note: Non-interactive mode (using -b, -l, or -r) is silent by default,
 		help='Enable verbose output in non-interactive mode (shows all messages)')
 	
 	return parser.parse_args()
-
 
 def debug_print(message):
 	"""Print debug messages when DEBUGGING is enabled."""
