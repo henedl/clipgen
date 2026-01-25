@@ -14,9 +14,9 @@ VERBOSE = True  # Set to False in CLI mode unless -v flag is used
 
 # Configure Icecream debugging
 if DEBUGGING:
-	ic.configureOutput(prefix='! DEBUG ic| ', includeContext=False)
+    ic.configureOutput(prefix='! DEBUG ic| ', includeContext=False)
 else:
-	ic.disable()
+    ic.disable()
 
 # Spreadsheet Structure Constants
 ID_HEADER = 'ID'
@@ -32,3 +32,11 @@ DEFAULT_DURATION_SECONDS = 60
 
 # Browse Mode Constants
 BROWSE_LINES_TO_DISPLAY = 5  # Number of rows to show at once when browsing
+
+# Spreadsheet Selection Commands
+COMMAND_LIST_ALL = 'all'
+COMMAND_LIST_NEW = 'new'
+COMMAND_OPEN_LAST = 'last'
+COMMAND_SETTINGS = 'settings'
+COMMAND_HTTP_PREFIX = 'http'
+NUM_NEWEST_DOCS_TO_SHOW = 3  # Number of newest documents to show when using 'new' command
