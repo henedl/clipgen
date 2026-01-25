@@ -24,8 +24,9 @@ from icecream import ic
 # Configuration Constants
 REENCODING = False
 FILEFORMAT = '.mp4'
-VERSIONNUM = '0.6.1'
-SHEET_NAME = 'Sheet1'
+VERSIONNUM = '0.6.2'
+SHEET_NAME = 'Sheet1'  # Deprecated: use get_worksheet() instead
+WORKSHEET_PRIORITY = ['Sheet1', 'Data', 'data', 'Observations', 'Data set', 'data set']
 DEBUGGING  = False
 VERBOSE    = True  # Set to False in CLI mode unless -v flag is used
 
@@ -1030,6 +1031,39 @@ def add_duration(start_time):
 # Google Sheets API
 # ============================================================================
 
+def get_worksheet(spreadsheet):
+	"""Get a worksheet from a spreadsheet using priority-based name matching.
+
+	Tries to find a worksheet matching names in WORKSHEET_PRIORITY order.
+	If no match is found, returns the first worksheet (index 0).
+
+	Args:
+		spreadsheet: A gspread Spreadsheet object
+
+	Returns:
+		A gspread Worksheet object
+	"""
+	# Get all worksheet titles from the spreadsheet
+	worksheets = spreadsheet.worksheets()
+	worksheet_titles = [ws.title for ws in worksheets]
+
+	debug_print(f'Available worksheets: {worksheet_titles}')
+
+	# Try each name in priority order
+	for priority_name in WORKSHEET_PRIORITY:
+		if priority_name in worksheet_titles:
+			verbose_print(f'Using worksheet: {priority_name}')
+			return spreadsheet.worksheet(priority_name)
+
+	# No match found - use first worksheet
+	if worksheets:
+		first_sheet = worksheets[0]
+		verbose_print(f'No matching worksheet found. Using first worksheet: {first_sheet.title}')
+		return first_sheet
+
+	# This shouldn't happen, but handle empty spreadsheet case
+	raise gspread.WorksheetNotFound('Spreadsheet contains no worksheets')
+
 def get_all_spreadsheets(connection):
 	"""Returns comma-separated list of all accessible Google Spreadsheets."""
 	docs = []
@@ -1091,7 +1125,7 @@ def select_spreadsheet(gc, doc_list):
 		input_name = input("\nPlease enter the index, name, URL or key of the spreadsheet ('all' for list, 'new' for list of newest, 'last' to immediately open latest, 'settings' to change settings):\n>> ")
 		try:
 			if input_name[:4] == 'http':
-				return gc.open_by_url(input_name).worksheet(SHEET_NAME)
+				return get_worksheet(gc.open_by_url(input_name))
 			elif input_name[:3] == 'all':
 				print('\nAvailable documents:')
 				for i, doc in enumerate(doc_list):
@@ -1102,17 +1136,17 @@ def select_spreadsheet(gc, doc_list):
 					print(f'{i+1}. {doc_list[i].strip()}')
 			elif input_name[:4] == 'last':
 				latest = get_all_spreadsheets(gc).split(',')[0]
-				return gc.open(latest).worksheet(SHEET_NAME)
+				return get_worksheet(gc.open(latest))
 			elif input_name[0].isdigit():
 				chosen_index = int(input_name) - 1
 				print(f'Opening document: {doc_list[chosen_index].strip()}')
-				return gc.open(doc_list[chosen_index].strip()).worksheet(SHEET_NAME)
+				return get_worksheet(gc.open(doc_list[chosen_index].strip()))
 			elif input_name[:8] == 'settings':
 				set_program_settings()
 			else:
 				chosen_index = find_spreadsheet_by_name(input_name, doc_list)
 				if chosen_index >= 0:
-					return gc.open(get_all_spreadsheets(gc).split(',')[chosen_index].strip().lstrip()).worksheet(SHEET_NAME)
+					return get_worksheet(gc.open(get_all_spreadsheets(gc).split(',')[chosen_index].strip().lstrip()))
 		except (gspread.SpreadsheetNotFound, gspread.exceptions.APIError, gspread.exceptions.GSpreadException) as e:
 			input_file_fails += 1
 			if input_file_fails == 1:
@@ -1124,7 +1158,7 @@ def select_spreadsheet(gc, doc_list):
 				print("  - The spreadsheet name is misspelled")
 				print("  - The spreadsheet hasn't been shared with your service account")
 				print("    (Share it with the email in credentials.json 'client_email' field)")
-				print("  - The spreadsheet doesn't have a worksheet named 'Sheet1'")
+				print("  - The spreadsheet doesn't contain any worksheets")
 				print("\n  Type 'all' to see accessible documents, or 'new' for recent ones.")
 			else:
 				print(f"\n! ERROR {e}")
@@ -1311,17 +1345,17 @@ def main():
 		# CLI-specified spreadsheet
 		try:
 			if args.spreadsheet.startswith('http'):
-				worksheet = gc.open_by_url(args.spreadsheet).worksheet(SHEET_NAME)
+				worksheet = get_worksheet(gc.open_by_url(args.spreadsheet))
 			elif args.spreadsheet.isdigit():
 				chosen_index = int(args.spreadsheet) - 1
 				verbose_print(f'Opening document: {doc_list[chosen_index].strip()}')
-				worksheet = gc.open(doc_list[chosen_index].strip()).worksheet(SHEET_NAME)
+				worksheet = get_worksheet(gc.open(doc_list[chosen_index].strip()))
 			else:
 				chosen_index = find_spreadsheet_by_name(args.spreadsheet, doc_list)
 				if chosen_index >= 0:
 					matched_name = doc_list[chosen_index].strip()
 					verbose_print(f'Opening document: {matched_name}')
-					worksheet = gc.open(matched_name).worksheet(SHEET_NAME)
+					worksheet = get_worksheet(gc.open(matched_name))
 				else:
 					print(f'Error: Could not find spreadsheet "{args.spreadsheet}"')
 					sys.exit(1)
@@ -1335,7 +1369,7 @@ def main():
 		if auto_match_index >= 0:
 			matched_name = doc_list[auto_match_index].strip()
 			verbose_print(f'\nAuto-connecting to spreadsheet: {matched_name}')
-			worksheet = gc.open(matched_name).worksheet(SHEET_NAME)
+			worksheet = get_worksheet(gc.open(matched_name))
 		elif cli_mode:
 			# CLI mode requires a spreadsheet - can't prompt interactively
 			print('Error: No spreadsheet found matching working directory name.')

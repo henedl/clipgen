@@ -27,14 +27,15 @@ The program was created to speed up data processing during playtests and is prov
 ## About the spreadsheet
 clipgen assumes that you are using a spreadsheet with a particular layout. A reference spreadsheet is [available here](#) - feel free to make a copy and use it in your studies.
 
+Timestamps must be separated by characters ```+ , ;```
+Ranges must be separated by character ```-```
+
 # TODO-list a.k.a. remaining work
 * Clean up and share the example spreadsheet.
-* Timestamp cleaning/parsing doesn't handle prefix/separator characters besides + , ;
 * Open the current Sheet in browser, from the command line.
 * Add ability to target only one cell. Proposed syntax: "P01.11". Should also be batchable, i.e. "P01.11 + P03.11 + P03.09". Should be available directly at (current) mode select stage.
 * File size output limits (e.g. if user sets 50MB max limit in app settings, all videos are compressed below that limit).
 * Implement a way to select only one video to be rendered, out of several possible clips.
-* Try Sheet1, Data, data, Observations, Data set, data set, and other typical worksheet names. If none of those match, just go with the zeroth index worksheet.
 
 ## Major new features a.k.a. maybe at some point
 * GUI
