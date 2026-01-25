@@ -15,6 +15,7 @@ import argparse
 import os
 import sys
 import subprocess
+import webbrowser
 from datetime import datetime, timedelta
 
 import gspread
@@ -24,7 +25,7 @@ from icecream import ic
 # Configuration Constants
 REENCODING = False
 FILEFORMAT = '.mp4'
-VERSIONNUM = '0.6.2'
+VERSIONNUM = '0.6.3'
 SHEET_NAME = 'Sheet1'  # Deprecated: use get_worksheet() instead
 WORKSHEET_PRIORITY = ['Sheet1', 'Data', 'data', 'Observations', 'Data set', 'data set']
 DEBUGGING  = False
@@ -664,7 +665,7 @@ def browse_spreadsheet(sheet):
 	print(f'\n=== Browse Mode ===')
 	print(f'Total data rows: {total_data_rows} (rows {first_data_row + 1} to {last_data_row + 1})')
 	print(f'Participants: {", ".join(participant_headers)}')
-	print(f'\nCommands: up/u, down/d, pageup/pu, pagedown/pd, jump/j <row>, quit/q')
+	print(f'\nCommands: up/u, down/d, pageup/pu, pagedown/pd, jump/j <row>, open/o, quit/q')
 	print(f'Press Enter to move down one row.\n')
 	
 	def display_rows(start_row, num_rows):
@@ -768,8 +769,20 @@ def browse_spreadsheet(sheet):
 					print('Usage: jump <row_number> or j <row_number>')
 			except ValueError:
 				print('Invalid row number. Usage: jump <row_number> or j <row_number>')
+		elif user_input in ('open', 'o'):
+			try:
+				spreadsheet_url = sheet.spreadsheet.url
+				print(f'Opening spreadsheet in browser: {sheet.spreadsheet.title}')
+				webbrowser.open(spreadsheet_url)
+				print('Spreadsheet opened in your default browser.')
+			except AttributeError as e:
+				print('! ERROR Could not retrieve spreadsheet URL.')
+				print(f'  Error: {e}')
+			except Exception as e:
+				print('! ERROR Could not open browser.')
+				print(f'  Error: {e}')
 		else:
-			print('Unknown command. Available: up/u, down/d, pageup/pu, pagedown/pd, jump/j <row>, quit/q')
+			print('Unknown command. Available: up/u, down/d, pageup/pu, pagedown/pd, jump/j <row>, open/o, quit/q')
 			print('Press Enter to move down one row.')
 
 # ============================================================================
