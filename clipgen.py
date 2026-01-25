@@ -23,7 +23,7 @@ from oauth2client.service_account import ServiceAccountCredentials
 # Configuration Constants
 REENCODING = False
 FILEFORMAT = '.mp4'
-VERSIONNUM = '0.5.1'
+VERSIONNUM = '0.6.0'
 SHEET_NAME = 'Sheet1'
 DEBUGGING  = False
 VERBOSE    = True  # Set to False in CLI mode unless -v flag is used
@@ -39,6 +39,9 @@ NOTES_COLUMN = 'Notes'
 MAX_FILENAME_LENGTH = 255
 MAX_CLIP_DURATION_SECONDS = 600  # 10 minutes
 DEFAULT_DURATION_SECONDS = 60
+
+# Browse Mode Constants
+BROWSE_LINES_TO_DISPLAY = 5  # Number of rows to show at once when browsing
 
 # ============================================================================
 # Utility Functions
@@ -578,6 +581,175 @@ def generate_range_timestamps(sheet_data, id_cell, observation_cell, num_partici
 		timestamps.extend(get_line_timestamps(sheet_data, id_cell, observation_cell, num_participants, i, study_name))
 	return timestamps
 
+def browse_spreadsheet(sheet):
+	"""Interactive browse mode for viewing spreadsheet rows line by line.
+	
+	Allows users to navigate through the spreadsheet to inspect issues
+	before generating clips. Shows row number, category, description,
+	and participant/group timestamps for each row.
+	"""
+	# Find required headers
+	id_cell = sheet.find(ID_HEADER)
+	observation_cell = sheet.find(OBSERVATION_HEADER)
+	category_cell = sheet.find(CATEGORY_HEADER)
+	
+	# Validate required headers exist
+	missing_headers = []
+	if id_cell is None:
+		missing_headers.append(f"'{ID_HEADER}'")
+	if observation_cell is None:
+		missing_headers.append(f"'{OBSERVATION_HEADER}'")
+	if category_cell is None:
+		missing_headers.append(f"'{CATEGORY_HEADER}'")
+	
+	if missing_headers:
+		print(f"! ERROR Required header(s) not found in spreadsheet: {', '.join(missing_headers)}")
+		print(f"  The spreadsheet must contain columns with these exact headers: {ID_HEADER}, {OBSERVATION_HEADER}, {CATEGORY_HEADER}")
+		return
+	
+	# Load sheet data
+	sheet_data = sheet.get_all_values()
+	debug_print(f'Sheet dumped into memory at {get_current_time()}')
+	
+	# Check if sheet is empty or has only headers
+	if len(sheet_data) <= 1:
+		print("! ERROR Spreadsheet appears to be empty (no data rows found).")
+		return
+	
+	# Get participant info
+	header_row = sheet.row_values(id_cell.row)
+	num_participants = get_num_participants(header_row, id_cell, sheet.col_count)
+	
+	if num_participants == 0:
+		print(f"! WARNING No participant columns found in the spreadsheet.")
+		print(f"  Looking for columns starting with: {', '.join(PARTICIPANT_PREFIXES)}")
+		return
+	
+	# Calculate bounds for data rows (after header)
+	first_data_row = id_cell.row  # 0-indexed, this is the first row after the header
+	last_data_row = len(sheet_data) - 1  # 0-indexed
+	total_data_rows = last_data_row - first_data_row + 1
+	
+	# Current position (0-indexed into sheet_data)
+	current_row = first_data_row
+	
+	# Get participant column headers for display
+	participant_headers = []
+	for col_idx in range(id_cell.col, id_cell.col + num_participants):
+		if col_idx < len(header_row):
+			participant_headers.append(header_row[col_idx])
+	
+	print(f'\n=== Browse Mode ===')
+	print(f'Total data rows: {total_data_rows} (rows {first_data_row + 1} to {last_data_row + 1})')
+	print(f'Participants: {", ".join(participant_headers)}')
+	print(f'\nCommands: up/u, down/d, pageup/pu, pagedown/pd, jump/j <row>, quit/q')
+	print(f'Press Enter to move down one row.\n')
+	
+	def display_rows(start_row, num_rows):
+		"""Display num_rows starting from start_row (0-indexed)."""
+		print('-' * 60)
+		for i in range(num_rows):
+			row_idx = start_row + i
+			if row_idx > last_data_row:
+				break
+			
+			row_data = sheet_data[row_idx]
+			row_num = row_idx + 1  # 1-indexed for display
+			
+			# Get category
+			category_col = category_cell.col - 1  # 0-indexed
+			category = row_data[category_col] if category_col < len(row_data) else ''
+			
+			# Get description (observation)
+			desc_col = observation_cell.col - 1  # 0-indexed
+			description = row_data[desc_col] if desc_col < len(row_data) else ''
+			
+			print(f'Row {row_num}')
+			print(f'  Category: {category if category else "(empty)"}')
+			print(f'  Description: {description if description else "(empty)"}')
+			
+			# Get participant timestamps
+			has_timestamps = False
+			participant_data = []
+			for j, participant_id in enumerate(participant_headers):
+				col_idx = id_cell.col + j  # 0-indexed
+				if col_idx < len(row_data):
+					timestamp_value = row_data[col_idx]
+					if timestamp_value and timestamp_value.strip():
+						# Replace newlines with commas for display
+						timestamp_display = timestamp_value.replace('\n', ', ').replace('\r', '')
+						participant_data.append(f'    {participant_id}: {timestamp_display}')
+						has_timestamps = True
+			
+			if has_timestamps:
+				print('  Participants:')
+				for p_data in participant_data:
+					print(p_data)
+			else:
+				print('  Participants: (no timestamps)')
+			
+			print('  ---')
+		
+		# Show position info
+		displayed_end = min(start_row + num_rows, last_data_row + 1)
+		print(f'\nShowing rows {start_row + 1}-{displayed_end} of {last_data_row + 1}')
+	
+	# Initial display
+	display_rows(current_row, BROWSE_LINES_TO_DISPLAY)
+	
+	# Navigation loop
+	while True:
+		user_input = input('\n>> ').strip().lower()
+		
+		if user_input in ('quit', 'q'):
+			print('Exiting browse mode.')
+			break
+		elif user_input in ('up', 'u'):
+			if current_row > first_data_row:
+				current_row -= 1
+				display_rows(current_row, BROWSE_LINES_TO_DISPLAY)
+			else:
+				print('Already at the first row.')
+		elif user_input in ('down', 'd', ''):
+			if current_row < last_data_row:
+				current_row += 1
+				display_rows(current_row, BROWSE_LINES_TO_DISPLAY)
+			else:
+				print('Already at the last row.')
+		elif user_input in ('pageup', 'pu'):
+			new_row = max(first_data_row, current_row - BROWSE_LINES_TO_DISPLAY)
+			if new_row != current_row:
+				current_row = new_row
+				display_rows(current_row, BROWSE_LINES_TO_DISPLAY)
+			else:
+				print('Already at the first row.')
+		elif user_input in ('pagedown', 'pd'):
+			new_row = min(last_data_row, current_row + BROWSE_LINES_TO_DISPLAY)
+			if new_row != current_row:
+				current_row = new_row
+				display_rows(current_row, BROWSE_LINES_TO_DISPLAY)
+			else:
+				print('Already at the last row.')
+		elif user_input.startswith('jump ') or user_input.startswith('j '):
+			try:
+				parts = user_input.split()
+				if len(parts) >= 2:
+					target_row = int(parts[1]) - 1  # Convert to 0-indexed
+					if target_row < first_data_row:
+						print(f'Row number must be at least {first_data_row + 1}.')
+					elif target_row > last_data_row:
+						print(f'Row number must be at most {last_data_row + 1}.')
+					else:
+						current_row = target_row
+						display_rows(current_row, BROWSE_LINES_TO_DISPLAY)
+				else:
+					print('Usage: jump <row_number> or j <row_number>')
+			except ValueError:
+				print('Invalid row number. Usage: jump <row_number> or j <row_number>')
+		else:
+			print('Unknown command. Available: up/u, down/d, pageup/pu, pagedown/pd, jump/j <row>, quit/q')
+			print('Press Enter to move down one row.')
+
 # ============================================================================
 # File Operations
 # ============================================================================
@@ -929,20 +1101,25 @@ def select_mode_and_generate(worksheet):
 		'l': 'line', 'line': 'line',
 		'r': 'range', 'range': 'range',
 		'c': 'category', 'cat': 'category', 'category': 'category',
+		'br': 'browse', 'browse': 'browse',
 		'test': 'test'
 	}
 	
 	while True:
-		input_mode = input('\nSelect mode: (b)atch, (r)ange, (c)ategory or (l)ine\n>> ').strip().lower()
+		input_mode = input('\nSelect mode: (b)atch, (r)ange, (c)ategory, (l)ine, or (br)owse\n>> ').strip().lower()
 		
 		if not input_mode:
-			print("  Please enter a mode (b, r, c, or l).")
+			print("  Please enter a mode (b, r, c, l, or br).")
 			continue
 		
 		try:
-			# Check first character or full word
-			mode = mode_map.get(input_mode[0]) or mode_map.get(input_mode)
-			if mode:
+			# Check for two-character modes first (like 'br' for browse)
+			mode = mode_map.get(input_mode[:2]) or mode_map.get(input_mode[0]) or mode_map.get(input_mode)
+			if mode == 'browse':
+				# Browse mode doesn't generate clips, just displays data
+				browse_spreadsheet(worksheet)
+				return []
+			elif mode:
 				return generate_list(worksheet, mode)
 			else:
 				print(f"  Unknown mode '{input_mode}'. Available modes:")
@@ -950,6 +1127,7 @@ def select_mode_and_generate(worksheet):
 				print("    r or range   - Generate clips from a range of rows")
 				print("    c or category - Generate clips by category")
 				print("    l or line    - Generate clips from specific line(s)")
+				print("    br or browse - Browse spreadsheet rows interactively")
 		except gspread.exceptions.GSpreadException as e:
 			print(f"! ERROR Google Sheets API error: {e}")
 			debug_print(f"ERROR Message '{e}', Attempting reconnect")
