@@ -1,5 +1,6 @@
 # clipgen
 clipgen is a Python program that uses the [gspread library](https://docs.gspread.org) and [ffmpeg](https://www.ffmpeg.org) to quickly generate video snippets based on timestamps in a Google Sheet.
+clipgen is a Python program that uses the [gspread library](https://docs.gspread.org) and [ffmpeg](https://www.ffmpeg.org) to quickly generate video snippets based on timestamps in a Google Sheet.
 
 The program was created to speed up data processing during playtests and is provided as-is, without promise of support. The target audience of this program are User Experience Researchers and UX professionals who prefer to manage their videos locally rather than in the cloud.
 
@@ -10,7 +11,8 @@ The program was created to speed up data processing during playtests and is prov
 3. Configure your Google Authentication per [gspread's setup guide](https://docs.gspread.org/en/master/oauth2.html); clipgen requires you to have a Google Cloud project with API access, with a OAuth credentials file on your system.
 
 ## Using clipgen
-- Put clipgen.py in a folder with video recordings and your credentials.json file.
+- Put clipgen.py in a folder with video recordings.
+- Your Google credentials.json file should either be in the working directory, or in ~/.gspread
 - Launch clipgen either interactively or through command-line arguments.
 - Point it to your Google Sheet and enjoy quick video clip generation based on your timestamped notes.
 
