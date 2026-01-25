@@ -456,7 +456,7 @@ def get_line_timestamps(sheet_data: List[List[str]], id_cell: Any, observation_c
                 utils.debug_print(f"Timestamp at R{cell.row-1},C{cell.col-1} -> '{cell.value}'")
                 utils.debug_print(f'Actual cell {cell} at actual address {gspread.utils.rowcol_to_a1(cell.row, cell.col)}')
                 timestamps.append(issue)
-                utils.verbose_print(f"+ Found timestamp: {value.replace(chr(10), ' ')}")
+                utils.verbose_print(f"+ Found timestamp: {value.replace(chr(10), ' ')} at address {gspread.utils.rowcol_to_a1(cell.row, cell.col)}")
     except IndexError as e:
         ic(e, line_index)
         utils.error_print(f"Index error while reading row {line_index+1}: {e}",
