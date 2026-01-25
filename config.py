@@ -5,8 +5,9 @@ from icecream import ic
 
 # Configuration Constants
 REENCODING = False
+AUDIO_NORMALIZE = False
 FILEFORMAT = '.mp4'
-VERSIONNUM = '0.6.3'
+VERSIONNUM = '0.6.4'
 SHEET_NAME = 'Sheet1'  # Deprecated: use get_worksheet() instead
 WORKSHEET_PRIORITY = ['Sheet1', 'Data', 'data', 'Observations', 'Data set', 'data set']
 DEBUGGING = False

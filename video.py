@@ -68,11 +68,24 @@ def run_ffmpeg(input_file: str, output_file: str, start_pos: str, end_pos: str, 
     try:
         if not reencode:
             # Use list form to properly handle unicode in filenames
-            ffmpeg_command = ['ffmpeg', '-y', '-loglevel', '16', '-ss', start_pos, '-i', input_file, '-t', str(duration), '-c', 'copy', '-avoid_negative_ts', '1', output_file]
+            if config.AUDIO_NORMALIZE:
+                # Copy video stream, re-encode audio with normalization
+                ffmpeg_command = ['ffmpeg', '-y', '-loglevel', '16', '-ss', start_pos, '-i', input_file, '-t', str(duration), '-c:v', 'copy', '-c:a', 'aac', '-af', 'loudnorm=I=-16:TP=-1.5:LRA=11', '-avoid_negative_ts', '1', output_file]
+            else:
+                # Copy all streams
+                ffmpeg_command = ['ffmpeg', '-y', '-loglevel', '16', '-ss', start_pos, '-i', input_file, '-t', str(duration), '-c', 'copy', '-avoid_negative_ts', '1', output_file]
             utils.debug_print(f"ffmpeg_command is '{' '.join(ffmpeg_command)}'")
             result = subprocess.run(ffmpeg_command, encoding='utf-8', capture_output=True)
         else:
-            result = subprocess.run(['ffmpeg', '-y', '-loglevel', '16', '-ss', start_pos, '-i', input_file, '-t', str(duration), output_file], encoding='utf-8', capture_output=True)
+            # Re-encode case
+            if config.AUDIO_NORMALIZE:
+                # Re-encode with audio normalization
+                ffmpeg_command = ['ffmpeg', '-y', '-loglevel', '16', '-ss', start_pos, '-i', input_file, '-t', str(duration), '-af', 'loudnorm=I=-16:TP=-1.5:LRA=11', output_file]
+            else:
+                # Re-encode without normalization
+                ffmpeg_command = ['ffmpeg', '-y', '-loglevel', '16', '-ss', start_pos, '-i', input_file, '-t', str(duration), output_file]
+            utils.debug_print(f"ffmpeg_command is '{' '.join(ffmpeg_command)}'")
+            result = subprocess.run(ffmpeg_command, encoding='utf-8', capture_output=True)
         
         # Check if ffmpeg succeeded
         if result.returncode != 0:
