@@ -5,7 +5,7 @@ The program was created to speed up data processing during playtests and is prov
 
 # How to use
 ## Pre-requisites
-1. Install the required Python dependencies; gspread and oauth2client.
+1. Install the required Python dependencies; gspread, oauth2client, and icecream.
 2. Install ffmpeg and ensure it is available via your PATH. Alternatively, put ffmpeg in the same directory as clipgen.py.
 3. Configure your Google Authentication per [gspread's setup guide](https://docs.gspread.org/en/master/oauth2.html); clipgen requires you to have a Google Cloud project with API access, with a OAuth credentials file on your system.
 

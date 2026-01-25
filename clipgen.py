@@ -19,14 +19,21 @@ from datetime import datetime, timedelta
 
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
+from icecream import ic
 
 # Configuration Constants
 REENCODING = False
 FILEFORMAT = '.mp4'
-VERSIONNUM = '0.6.0'
+VERSIONNUM = '0.6.1'
 SHEET_NAME = 'Sheet1'
 DEBUGGING  = False
 VERBOSE    = True  # Set to False in CLI mode unless -v flag is used
+
+# Configure Icecream debugging
+if DEBUGGING:
+	ic.configureOutput(prefix='! DEBUG ic| ', includeContext=False)
+else:
+	ic.disable()
 
 # Spreadsheet Structure Constants
 ID_HEADER = 'ID'
@@ -136,9 +143,11 @@ def parse_timestamps(cell_value, cell_ref=None):
 	
 	Returns a list of (start_time, end_time) tuples.
 	"""
+	ic(cell_value, cell_ref)
 	parsed_timestamps = []
 	skipped_timestamps = []
 	raw_times = cell_value.lower().replace('+', ' ').replace(';', ' ').replace(',', ' ').split()
+	ic(raw_times)
 	debug_print(f'raw_times content after split is {raw_times}')
 	debug_print(f'Timestamp list raw_times is {len(raw_times)} entries long')
 
@@ -159,6 +168,7 @@ def parse_timestamps(cell_value, cell_ref=None):
 			if dash_pos > 0 and raw_times[i][dash_pos-1].isdigit():
 				# Slice the timestamp until the dash, and then from after the dash
 				time_pair = (raw_times[i][:dash_pos], raw_times[i][dash_pos+1:])
+				ic(raw_times[i], time_pair)
 				parsed_timestamps.append(time_pair)
 			else:
 				skipped_timestamps.append(raw_times[i])
@@ -169,6 +179,7 @@ def parse_timestamps(cell_value, cell_ref=None):
 				end_time = add_duration(raw_times[i])
 				if end_time != -1:
 					time_pair = (raw_times[i], end_time)
+					ic(time_pair)
 					parsed_timestamps.append(time_pair)
 				# If -1, warning already printed by add_duration()
 			else:
@@ -179,6 +190,7 @@ def parse_timestamps(cell_value, cell_ref=None):
 	
 	# Report skipped timestamps if any
 	if skipped_timestamps:
+		ic(skipped_timestamps)
 		cell_info = f" in cell {cell_ref}" if cell_ref else ""
 		print(f"! WARNING Skipped {len(skipped_timestamps)} unparseable timestamp(s){cell_info}:")
 		for ts in skipped_timestamps[:3]:  # Show first 3
@@ -187,6 +199,7 @@ def parse_timestamps(cell_value, cell_ref=None):
 			print(f"    ... and {len(skipped_timestamps) - 3} more")
 		print("  Expected formats: MM:SS-MM:SS, HH:MM:SS-HH:MM:SS, or single timestamps like MM:SS")
 
+	ic(parsed_timestamps)
 	return parsed_timestamps
 
 def set_program_settings():
@@ -222,10 +235,12 @@ def generate_list(sheet, mode, line_numbers=None, range_start=None, range_end=No
 		range_end: Optional end line for 'range' mode (CLI)
 		skip_prompts: If True, skip confirmation prompts (CLI -y flag)
 	"""
+	ic(mode, line_numbers, range_start, range_end)
 	# Find required headers
 	id_cell = sheet.find(ID_HEADER)
 	observation_cell = sheet.find(OBSERVATION_HEADER)
 	category_cell = sheet.find(CATEGORY_HEADER)
+	ic(id_cell, observation_cell, category_cell)
 	timestamps = []
 	
 	# Validate required headers exist
@@ -506,10 +521,12 @@ def generate_line_timestamps(sheet_data, id_cell, observation_cell, num_particip
 	return timestamps
 
 def get_line_timestamps(sheet_data, id_cell, observation_cell, num_participants, line_index, study_name):
+	ic(line_index, num_participants, study_name)
 	debug_print(f'Running method get_line_timestamps, starting line index {line_index} (real sheet line {line_index+1})')
 	
 	# Bounds checking
 	if line_index < 0 or line_index >= len(sheet_data):
+		ic(line_index, len(sheet_data))
 		print(f"! ERROR Line index {line_index} (row {line_index+1}) is out of bounds.")
 		print(f"  Spreadsheet has {len(sheet_data)} rows.")
 		return []
@@ -554,6 +571,7 @@ def get_line_timestamps(sheet_data, id_cell, observation_cell, num_participants,
 				if category_col >= 0 and category_col < len(sheet_data[line_index]):
 					category = sheet_data[line_index][category_col]
 				
+				ic(participant, desc, category)
 				issue = {
 					'cell': cell,
 					'desc': desc,
@@ -561,6 +579,7 @@ def get_line_timestamps(sheet_data, id_cell, observation_cell, num_participants,
 					'participant': participant,
 					'category': category
 				}
+				ic(issue)
 				debug_print(f"Participant ID at R{id_cell.row},C{col_index} -> '{participant}'")
 				debug_print(f"Description at R{line_index},C{observation_cell.col-1} -> '{desc}'")
 				debug_print(f"Timestamp at R{cell.row-1},C{cell.col-1} -> '{cell.value}'")
@@ -568,10 +587,12 @@ def get_line_timestamps(sheet_data, id_cell, observation_cell, num_participants,
 				timestamps.append(issue)
 				verbose_print(f"+ Found timestamp: {value.replace(chr(10), ' ')}")
 	except IndexError as e:
+		ic(e, line_index)
 		print(f"! ERROR Index error while reading row {line_index+1}: {e}")
 		print("  The spreadsheet structure may be malformed.")
 
 	debug_print(f'Line completed, returning list of {len(timestamps)} potential timestamps.')
+	ic(timestamps)
 	return timestamps
 
 def generate_range_timestamps(sheet_data, id_cell, observation_cell, num_participants, study_name, start_line, end_line):
@@ -801,6 +822,7 @@ def truncate_filename(filename, step=1):
 
 def clean_issue(issue):
 	"""Parse timestamps and sanitize description/category for filename use."""
+	ic(issue)
 	debug_print(f"clean_issue() received issue with cell contents {issue['cell'].value}")
 	debug_print('Will attempt to split the cell contents')
 	
@@ -809,6 +831,7 @@ def clean_issue(issue):
 	
 	# Parse timestamps from cell value
 	issue['times'] = parse_timestamps(issue['cell'].value, cell_ref=cell_ref)
+	ic(issue['times'])
 	
 	# Warn if no valid timestamps were parsed
 	if not issue['times']:
@@ -824,13 +847,16 @@ def clean_issue(issue):
 	else:
 		desc = issue['desc'].strip()
 	issue['desc'] = sanitize_filename(desc)
+	ic(issue['desc'])
 	
 	# Sanitize category (handle None/empty)
 	if issue['category']:
 		issue['category'] = sanitize_filename(issue['category'])
 	else:
 		issue['category'] = 'uncategorized'
+	ic(issue['category'])
 
+	ic(issue)
 	return issue
 
 # ============================================================================
@@ -842,6 +868,7 @@ def run_ffmpeg(input_file, output_file, start_pos, end_pos, reencode):
 	
 	Returns True if video was generated successfully, False otherwise.
 	"""
+	ic(input_file, output_file, start_pos, end_pos)
 	# Check if input file exists before processing
 	if not os.path.isfile(input_file):
 		print(f"! ERROR Input video file not found: '{input_file}'")
@@ -869,6 +896,7 @@ def run_ffmpeg(input_file, output_file, start_pos, end_pos, reencode):
 		print(f"  Start: {start_pos}, End: {end_pos}")
 		print(f"  Video file: '{input_file}'")
 		return False
+	ic(duration, file_length)
 	if duration > MAX_CLIP_DURATION_SECONDS:
 		yn = input(f'The generated video will be {duration}s ({duration//60}m {duration%60}s), over 10 minutes long. Generate anyway? (y/n)\n>> ')
 		if yn != 'y':
@@ -952,6 +980,7 @@ def get_file_duration(filepath):
 
 def get_duration(start_time, end_time):
 	"""Returns the duration of a clip as seconds, or None if timestamps are invalid."""
+	ic(start_time, end_time)
 	debug_print(f'start_time is {start_time} with length {len(start_time)}, end_time is {end_time}')
 	
 	# Handle case where add_duration() returned -1 (error)
@@ -966,7 +995,9 @@ def get_duration(start_time, end_time):
 		try:
 			start_datetime = datetime.strptime(str(start_time), fmt)
 			end_datetime = datetime.strptime(str(end_time), fmt)
-			return int((end_datetime - start_datetime).total_seconds())
+			duration = int((end_datetime - start_datetime).total_seconds())
+			ic(duration)
+			return duration
 		except ValueError:
 			continue
 	
@@ -1010,6 +1041,7 @@ def get_all_spreadsheets(connection):
 def find_spreadsheet_by_name(search_name, doc_list):
 	"""Find a matching Google Sheet name from doc_list.
 	Returns the index of matching sheet, or -1 if not found."""
+	ic(search_name)
 	debug_print('Running method find_spreadsheet_by_name()')
 	search_name = search_name.strip().lower()
 	search_name_guess = search_name + ' data set'
@@ -1017,15 +1049,19 @@ def find_spreadsheet_by_name(search_name, doc_list):
 	
 	for i, doc in enumerate(doc_list):
 		doc_name = doc.strip().lower()
+		ic(doc_name, search_name)
 		debug_print(f"Attempting match with '{doc}', formatted as '{doc_name}'")
 		if doc_name == search_name:
 			debug_print(f"Matched sheet '{doc_name}' with input '{search_name}'")
+			ic(i)
 			return i
 		elif doc_name == search_name_guess:
 			debug_print(f"Matched sheet '{doc_name}' with guess '{search_name_guess}'")
+			ic(i)
 			return i
 		else:
 			debug_print(f'Found nothing at step {i}')
+	ic(-1)
 	return -1
 
 def connect_to_google_service_account():
@@ -1134,6 +1170,7 @@ def select_mode_and_generate(worksheet):
 
 def process_clips(clips_list):
 	"""Process and generate video clips from the clips list. Returns count of videos generated."""
+	ic(len(clips_list))
 	# Check if clips_list is empty
 	if not clips_list:
 		print("! WARNING No clips to process. No timestamps were found or selected.")
@@ -1145,6 +1182,7 @@ def process_clips(clips_list):
 	missing_videos = set()  # Track unique missing video files
 
 	for clip in clips_list:
+		ic(clip)
 		clip = clean_issue(clip)
 		
 		# Skip if no valid timestamps were parsed
@@ -1167,7 +1205,9 @@ def process_clips(clips_list):
 				vid_name = get_unique_filename(
 					f"[{clip['category']}] {clip['study']} {clip['participant']} {clip['desc']}{FILEFORMAT}"
 				)
+				ic(vid_name)
 			except (TypeError, UnicodeEncodeError, UnicodeDecodeError) as e:
+				ic(e, clip)
 				print(f'! ERROR Character encoding issue occurred:\n  {e}')
 				print(f"  Category: '{clip['category']}', Study: '{clip['study']}', Participant: '{clip['participant']}'")
 				print("  Try simplifying the description or category names to use only ASCII characters.")
@@ -1203,6 +1243,7 @@ def main():
 	
 	# Parse command-line arguments
 	args = parse_arguments()
+	ic(args)
 	
 	# Determine if running in CLI mode (any mode argument provided)
 	cli_mode = args.batch or args.lines or args.range
@@ -1303,6 +1344,8 @@ def main():
 		else:
 			worksheet = select_spreadsheet(gc, doc_list)
 	
+	if worksheet:
+		ic(worksheet.title)
 	verbose_print('\nConnected to Google Drive!')
 
 	if cli_mode:
