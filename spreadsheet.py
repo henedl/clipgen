@@ -43,16 +43,17 @@ def validate_spreadsheet_headers(sheet: Any) -> Optional[Tuple[Any, Any, Any]]:
     return (id_cell, observation_cell, category_cell)
 
 
-def generate_list(sheet: Any, mode: str, line_numbers: Optional[List[int]] = None, range_start: Optional[int] = None, range_end: Optional[int] = None, skip_prompts: bool = False) -> List[Any]:
+def generate_list(sheet: Any, mode: str, line_numbers: Optional[List[int]] = None, range_start: Optional[int] = None, range_end: Optional[int] = None, skip_prompts: bool = False, cell_specs: Optional[List[Tuple[str, int]]] = None) -> List[Any]:
     """Goes through a sheet, bundles values from timestamp columns and descriptions columns into tuples.
     
     Args:
         sheet: The gspread worksheet object
-        mode: One of 'batch', 'line', 'range', 'category', 'select'
+        mode: One of 'batch', 'line', 'range', 'category', 'cell', 'select'
         line_numbers: Optional list of line numbers for 'line' mode (CLI)
         range_start: Optional start line for 'range' mode (CLI)
         range_end: Optional end line for 'range' mode (CLI)
         skip_prompts: If True, skip confirmation prompts (CLI -y flag)
+        cell_specs: Optional list of (participant_id, row_number) tuples for 'cell' mode (CLI)
         
     Returns:
         List of clip issue dictionaries
@@ -201,6 +202,65 @@ def generate_list(sheet: Any, mode: str, line_numbers: Optional[List[int]] = Non
                 if yn == 'y':
                     break
             timestamps = generate_range_timestamps(sheet_data, id_cell, observation_cell, num_participants, study_name, start_line, end_line)
+    elif mode == 'cell':
+        if cell_specs is not None:
+            # CLI mode - use provided cell specifications
+            utils.verbose_print(f'Cell mode: processing {len(cell_specs)} cell(s)')
+            timestamps = generate_cell_timestamps(sheet_data, id_cell, observation_cell, study_name, cell_specs)
+        else:
+            # Interactive mode
+            while True:
+                try:
+                    cell_input = input('\nEnter cell specification(s) (e.g., P01.11 or P01.11 + P03.11):\n>> ')
+                    if not cell_input.strip():
+                        utils.info_print('Please enter at least one cell specification.')
+                        continue
+                    
+                    # Parse cell specifications
+                    try:
+                        parsed_specs = parse_cell_specifications(cell_input)
+                    except ValueError as e:
+                        utils.info_print(f'Invalid format: {e}')
+                        utils.info_print('Expected format: P01.11 or P01.11 + P03.11')
+                        continue
+                    
+                    # Preview selected cells
+                    utils.info_print('\nSelected cells:')
+                    header_row = sheet_data[id_cell.row - 1] if id_cell.row > 0 else []
+                    valid_specs = []
+                    for participant_id, row_number in parsed_specs:
+                        col_idx = find_participant_column(header_row, id_cell, participant_id)
+                        if col_idx is None:
+                            utils.info_print(f'  {participant_id}.{row_number}: [INVALID - participant not found]')
+                        elif row_number < 1 or row_number > len(sheet_data):
+                            utils.info_print(f'  {participant_id}.{row_number}: [INVALID - row out of range]')
+                        else:
+                            row_idx = row_number - 1
+                            cell_value = ''
+                            if col_idx < len(sheet_data[row_idx]):
+                                cell_value = sheet_data[row_idx][col_idx]
+                            desc = ''
+                            desc_col = observation_cell.col - 1
+                            if desc_col >= 0 and desc_col < len(sheet_data[row_idx]):
+                                desc = sheet_data[row_idx][desc_col]
+                            if cell_value and cell_value.strip():
+                                utils.info_print(f'  {participant_id}.{row_number}: {cell_value.replace(chr(10), " ")} (row: {desc[:50] if desc else "N/A"})')
+                            else:
+                                utils.info_print(f'  {participant_id}.{row_number}: [EMPTY]')
+                            valid_specs.append((participant_id, row_number))
+                    
+                    if not valid_specs:
+                        utils.info_print('\nNo valid cells found. Please try again.')
+                        continue
+                    
+                    utils.info_print('')
+                    yn = input('Are these the correct cells? y/n\n>> ')
+                    if yn == 'y':
+                        timestamps = generate_cell_timestamps(sheet_data, id_cell, observation_cell, study_name, valid_specs)
+                        break
+                except KeyboardInterrupt:
+                    utils.info_print('\nCancelled by user.')
+                    return []
     elif mode == 'select':
         pass
 
@@ -229,6 +289,164 @@ def get_num_participants(header_row: List[str], id_cell: Any, col_count: int) ->
                 break
     utils.verbose_print(f'Found {num_participants} participants in total, spanning columns {id_cell.col+1} to {num_participants+id_cell.col+1}.')
     return num_participants
+
+def parse_cell_specifications(cell_input: str) -> List[Tuple[str, int]]:
+    """Parse cell specification string into list of (participant_id, row_number) tuples.
+    
+    Args:
+        cell_input: String like "P01.11" or "P01.11 + P03.11 + P03.09"
+        
+    Returns:
+        List of (participant_id, row_number) tuples
+        
+    Raises:
+        ValueError: If format is invalid
+    """
+    # Support both + and , as separators
+    cell_str = cell_input.replace(',', '+')
+    specs = []
+    
+    for spec in cell_str.split('+'):
+        spec = spec.strip()
+        if not spec:
+            continue
+            
+        # Split by dot to get participant_id and row_number
+        if '.' not in spec:
+            raise ValueError(f'Invalid cell specification "{spec}". Expected format: P01.11')
+        
+        parts = spec.split('.', 1)
+        if len(parts) != 2:
+            raise ValueError(f'Invalid cell specification "{spec}". Expected format: P01.11')
+        
+        participant_id = parts[0].strip()
+        row_str = parts[1].strip()
+        
+        # Validate participant ID format (should start with P or G)
+        if not participant_id or participant_id[0] not in config.PARTICIPANT_PREFIXES:
+            raise ValueError(f'Invalid participant ID "{participant_id}". Must start with {", ".join(config.PARTICIPANT_PREFIXES)}')
+        
+        # Validate row number
+        try:
+            row_number = int(row_str)
+            if row_number < 1:
+                raise ValueError(f'Row number must be positive. Got: {row_number}')
+        except ValueError as e:
+            if 'invalid literal' in str(e):
+                raise ValueError(f'Invalid row number "{row_str}". Must be a positive integer.')
+            raise
+        
+        specs.append((participant_id, row_number))
+    
+    return specs
+
+def find_participant_column(header_row: List[str], id_cell: Any, participant_id: str) -> Optional[int]:
+    """Find the column index for a given participant ID.
+    
+    Args:
+        header_row: List of header cell values
+        id_cell: The ID header cell object
+        participant_id: Participant ID to find (e.g., "P01")
+        
+    Returns:
+        Column index (0-based) if found, None otherwise
+    """
+    # Search starting from the ID column
+    for col_idx in range(id_cell.col - 1, len(header_row)):
+        header_value = header_row[col_idx].strip()
+        # Case-insensitive matching
+        if header_value.lower() == participant_id.lower():
+            return col_idx
+        # Also check if it starts with the participant prefix and matches
+        if header_value and header_value[0] in config.PARTICIPANT_PREFIXES:
+            if header_value.lower() == participant_id.lower():
+                return col_idx
+            # Stop if we hit the NOTES column
+            if header_value == config.NOTES_COLUMN:
+                break
+    
+    return None
+
+def generate_cell_timestamps(sheet_data: List[List[str]], id_cell: Any, observation_cell: Any, study_name: str, cell_specs: List[Tuple[str, int]]) -> List[Any]:
+    """Generate timestamps for specific cells.
+    
+    Args:
+        sheet_data: The sheet data matrix
+        id_cell: The ID header cell
+        observation_cell: The observation header cell
+        study_name: Normalized study name
+        cell_specs: List of (participant_id, row_number) tuples
+        
+    Returns:
+        List of clip issue dictionaries
+    """
+    utils.debug_print('Starting method generate_cell_timestamps()')
+    timestamps = []
+    header_row = sheet_data[id_cell.row - 1] if id_cell.row > 0 else []
+    
+    for participant_id, row_number in cell_specs:
+        # Find the column for this participant
+        col_idx = find_participant_column(header_row, id_cell, participant_id)
+        if col_idx is None:
+            utils.warning_print(f"Participant '{participant_id}' not found in spreadsheet headers.",
+                [f"Available participants start with: {', '.join(config.PARTICIPANT_PREFIXES)}"])
+            continue
+        
+        # Validate row number (convert to 0-based index)
+        row_idx = row_number - 1
+        if row_idx < 0 or row_idx >= len(sheet_data):
+            utils.warning_print(f"Row {row_number} is out of range.",
+                [f"Spreadsheet has {len(sheet_data)} rows (valid range: 1-{len(sheet_data)})."])
+            continue
+        
+        # Get the cell value
+        if col_idx >= len(sheet_data[row_idx]):
+            utils.warning_print(f"Column index {col_idx + 1} is out of range for row {row_number}.")
+            continue
+        
+        cell_value = sheet_data[row_idx][col_idx]
+        
+        # Skip empty cells
+        if not cell_value or cell_value.strip() == '':
+            utils.verbose_print(f"Cell {participant_id}.{row_number} is empty, skipping.")
+            continue
+        
+        # Create cell object
+        cell = gspread.cell.Cell(row_idx + 1, col_idx + 1, cell_value)
+        
+        # Get description, category, and participant ID from surrounding cells
+        desc_col = observation_cell.col - 1
+        category_col = observation_cell.col - 2
+        participant_row = id_cell.row - 1
+        
+        # Get description with bounds check
+        desc = ''
+        if desc_col >= 0 and desc_col < len(sheet_data[row_idx]):
+            desc = sheet_data[row_idx][desc_col]
+        
+        # Get participant ID from header
+        participant = participant_id
+        if participant_row >= 0 and participant_row < len(sheet_data) and col_idx < len(sheet_data[participant_row]):
+            # Use the actual header value for consistency
+            participant = sheet_data[participant_row][col_idx] or participant_id
+        
+        # Get category with bounds check
+        category = ''
+        if category_col >= 0 and category_col < len(sheet_data[row_idx]):
+            category = sheet_data[row_idx][category_col]
+        
+        issue = {
+            'cell': cell,
+            'desc': desc,
+            'study': study_name,
+            'participant': participant,
+            'category': category
+        }
+        
+        timestamps.append(issue)
+        utils.verbose_print(f"+ Found timestamp: {cell_value.replace(chr(10), ' ')} at cell {participant_id}.{row_number} ({gspread.utils.rowcol_to_a1(cell.row, cell.col)})")
+    
+    return timestamps
 
 def generate_batch_timestamps(sheet_data: List[List[str]], id_cell: Any, observation_cell: Any, num_participants: int, study_name: str) -> List[Any]:
     """Generate timestamps for all rows in batch mode.

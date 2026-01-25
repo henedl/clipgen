@@ -32,9 +32,8 @@ Ranges must be separated by character ```-```
 
 # TODO-list a.k.a. remaining work
 * Clean up and share the example spreadsheet.
-* Add ability to target only one cell. Proposed syntax: "P01.11". Should also be batchable, i.e. "P01.11 + P03.11 + P03.09". Should be available directly at (current) mode select stage.
+* Make all modes available implicitly from anywhere in the program.
 * File size output limits (e.g. if user sets 50MB max limit in app settings, all videos are compressed below that limit).
-* Implement a way to select only one video to be rendered, out of several possible clips.
 
 ## Major new features a.k.a. maybe at some point
 * GUI

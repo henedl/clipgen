@@ -23,11 +23,13 @@ Examples:
   python clipgen.py -l 1+4+5           Multi-line mode - lines 1, 4, and 5
   python clipgen.py -l 1,4,5           Multi-line mode (comma separator)
   python clipgen.py -r 1-10            Range mode - lines 1 through 10
+  python clipgen.py -c "P01.11"        Cell mode - single cell (participant P01, row 11)
+  python clipgen.py -c "P01.11 + P03.11" Cell mode - multiple cells
   python clipgen.py -b -s "Study Name" Batch mode with specific spreadsheet
   python clipgen.py -l 5 -y            Line mode, skip confirmation prompts
   python clipgen.py -b -v              Batch mode with verbose output
 
-Note: Non-interactive mode (using -b, -l, or -r) is silent by default,
+Note: Non-interactive mode (using -b, -l, -r, or -c) is silent by default,
       only showing errors and the final summary. Use -v for full output.
 '''
     )
@@ -40,6 +42,8 @@ Note: Non-interactive mode (using -b, -l, or -r) is silent by default,
         help='Line mode: specify line numbers separated by + or , (e.g., 1+4+5 or 1,4,5)')
     mode_group.add_argument('-r', '--range', type=str, metavar='RANGE',
         help='Range mode: specify start-end line range (e.g., 1-10)')
+    mode_group.add_argument('-c', '--cell', type=str, metavar='CELLS',
+        help='Cell mode: specify cells as participant.row (e.g., P01.11 or P01.11 + P03.11)')
     
     # Optional arguments
     parser.add_argument('-s', '--spreadsheet', type=str, metavar='NAME',

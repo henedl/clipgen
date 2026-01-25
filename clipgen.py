@@ -180,12 +180,13 @@ def select_mode_and_generate(worksheet: Any) -> List[Any]:
         'l': 'line', 'line': 'line',
         'r': 'range', 'range': 'range',
         'c': 'category', 'cat': 'category', 'category': 'category',
+        'ce': 'cell', 'cell': 'cell',
         'br': 'browse', 'browse': 'browse',
         'test': 'test'
     }
     
     while True:
-        input_mode = input('\nSelect mode: (b)atch, (r)ange, (c)ategory, (l)ine, or (br)owse\n>> ').strip().lower()
+        input_mode = input('\nSelect mode: (b)atch, (r)ange, (c)ategory, (l)ine, (ce)ll, or (br)owse\n>> ').strip().lower()
         
         if not input_mode:
             utils.info_print("  Please enter a mode (b, r, c, l, or br).")
@@ -206,6 +207,7 @@ def select_mode_and_generate(worksheet: Any) -> List[Any]:
                 utils.info_print("    r or range   - Generate clips from a range of rows")
                 utils.info_print("    c or category - Generate clips by category")
                 utils.info_print("    l or line    - Generate clips from specific line(s)")
+                utils.info_print("    ce or cell   - Generate clips from specific cell(s) (e.g., P01.11)")
                 utils.info_print("    br or browse - Browse spreadsheet rows interactively")
         except gspread.exceptions.GSpreadException as e:
             utils.error_print(f"Google Sheets API error: {e}")
@@ -283,18 +285,19 @@ def setup_encoding() -> None:
         sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
         sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
 
-def parse_cli_mode_args(args: Any) -> Tuple[Optional[List[int]], Optional[int], Optional[int]]:
-    """Parse CLI arguments for line and range modes.
+def parse_cli_mode_args(args: Any) -> Tuple[Optional[List[int]], Optional[int], Optional[int], Optional[List[Tuple[str, int]]]]:
+    """Parse CLI arguments for line, range, and cell modes.
     
     Args:
         args: Parsed command-line arguments
         
     Returns:
-        tuple: (cli_line_numbers, cli_range_start, cli_range_end)
+        tuple: (cli_line_numbers, cli_range_start, cli_range_end, cli_cell_specs)
     """
     cli_line_numbers = None
     cli_range_start = None
     cli_range_end = None
+    cli_cell_specs = None
     
     if args.lines:
         try:
@@ -319,7 +322,14 @@ def parse_cli_mode_args(args: Any) -> Tuple[Optional[List[int]], Optional[int], 
             utils.error_print(f'Invalid range "{args.range}". Use format: 1-10')
             sys.exit(1)
     
-    return (cli_line_numbers, cli_range_start, cli_range_end)
+    if args.cell:
+        try:
+            cli_cell_specs = spreadsheet.parse_cell_specifications(args.cell)
+        except ValueError as e:
+            utils.error_print(f'Invalid cell specification: {e}')
+            sys.exit(1)
+    
+    return (cli_line_numbers, cli_range_start, cli_range_end, cli_cell_specs)
 
 def authenticate_google() -> Any:
     """Authenticate with Google Sheets API.
@@ -388,7 +398,7 @@ def select_worksheet(gc: Any, doc_list: List[str], args: Any, cli_mode: bool) ->
     utils.verbose_print('\nConnected to Google Drive!')
     return worksheet
 
-def run_cli_mode(worksheet: Any, args: Any, cli_line_numbers: Optional[List[int]], cli_range_start: Optional[int], cli_range_end: Optional[int]) -> None:
+def run_cli_mode(worksheet: Any, args: Any, cli_line_numbers: Optional[List[int]], cli_range_start: Optional[int], cli_range_end: Optional[int], cli_cell_specs: Optional[List[Tuple[str, int]]]) -> None:
     """Execute CLI mode - run once and exit.
     
     Args:
@@ -397,6 +407,7 @@ def run_cli_mode(worksheet: Any, args: Any, cli_line_numbers: Optional[List[int]
         cli_line_numbers: Parsed line numbers (if line mode)
         cli_range_start: Range start (if range mode)
         cli_range_end: Range end (if range mode)
+        cli_cell_specs: Parsed cell specifications (if cell mode)
     """
     skip_prompts = args.yes
     
@@ -406,6 +417,8 @@ def run_cli_mode(worksheet: Any, args: Any, cli_line_numbers: Optional[List[int]
         clips_list = spreadsheet.generate_list(worksheet, 'line', line_numbers=cli_line_numbers, skip_prompts=skip_prompts)
     elif args.range:
         clips_list = spreadsheet.generate_list(worksheet, 'range', range_start=cli_range_start, range_end=cli_range_end, skip_prompts=skip_prompts)
+    elif args.cell:
+        clips_list = spreadsheet.generate_list(worksheet, 'cell', cell_specs=cli_cell_specs, skip_prompts=skip_prompts)
     
     videos_generated = process_clips(clips_list)
     
@@ -440,13 +453,13 @@ def main() -> None:
     ic(args)
     
     # Determine if running in CLI mode (any mode argument provided)
-    cli_mode = args.batch or args.lines or args.range
+    cli_mode = args.batch or args.lines or args.range or args.cell
     
     # Set verbose mode: silent by default in CLI mode, verbose in interactive mode
     config.VERBOSE = not cli_mode or args.verbose
     
-    # Parse CLI arguments for line and range modes
-    cli_line_numbers, cli_range_start, cli_range_end = parse_cli_mode_args(args)
+    # Parse CLI arguments for line, range, and cell modes
+    cli_line_numbers, cli_range_start, cli_range_end, cli_cell_specs = parse_cli_mode_args(args)
     
     # Change working directory to place of python script
     os.chdir(os.path.dirname(os.path.abspath(__file__)))
@@ -463,7 +476,7 @@ def main() -> None:
 
     # Execute based on mode
     if cli_mode:
-        run_cli_mode(worksheet, args, cli_line_numbers, cli_range_start, cli_range_end)
+        run_cli_mode(worksheet, args, cli_line_numbers, cli_range_start, cli_range_end, cli_cell_specs)
     else:
         run_interactive_mode(worksheet)
 
