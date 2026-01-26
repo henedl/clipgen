@@ -7,7 +7,7 @@ from icecream import ic
 REENCODING = False
 AUDIO_NORMALIZE = False
 FILEFORMAT = '.mp4'
-VERSIONNUM = '0.6.4'
+VERSIONNUM = '0.6.5'
 WORKSHEET_PRIORITY = ['Sheet1', 'Data', 'data', 'Observations', 'Data set', 'data set']
 DEBUGGING = False
 VERBOSE = True  # Set to False in CLI mode unless -v flag is used
