@@ -232,7 +232,7 @@ def set_program_settings() -> bool:
     Returns:
         True if a setting was changed, False otherwise.
     """
-    SETTINGSLIST = ['REENCODING', 'FILEFORMAT', 'DEBUGGING']
+    SETTINGSLIST = ['REENCODING', 'FILEFORMAT', 'DEBUGGING', 'MAX_FILESIZE_MB']
 
     info_print('\nWhich setting? Available:\n')
     info_print(', '.join(SETTINGSLIST))

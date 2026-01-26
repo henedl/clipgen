@@ -29,6 +29,7 @@ NOTES_COLUMN = 'Notes'
 MAX_FILENAME_LENGTH = 255
 MAX_CLIP_DURATION_SECONDS = 600  # 10 minutes
 DEFAULT_DURATION_SECONDS = 60
+MAX_FILESIZE_MB = 0  # Maximum output file size in MB (0 = disabled)
 
 # Browse Mode Constants
 BROWSE_LINES_TO_DISPLAY = 5  # Number of rows to show at once when browsing

@@ -100,7 +100,13 @@ def run_ffmpeg(input_file: str, output_file: str, start_pos: str, end_pos: str, 
         if not os.path.isfile(output_file):
             utils.error_print(f"ffmpeg completed but output file was not created: '{output_file}'")
             return False
-        
+
+        # Check filesize limit and compress if needed
+        if config.MAX_FILESIZE_MB and config.MAX_FILESIZE_MB > 0:
+            if not compress_to_size(output_file, config.MAX_FILESIZE_MB):
+                utils.warning_print(f"Could not compress '{output_file}' to target size")
+                # Continue anyway - file was generated, just not compressed
+
         utils.verbose_print(f"+ Generated video '{output_file}' successfully.\n File size: {files.format_filesize(os.path.getsize(output_file))}\n Expected duration: {duration} s\n")
         return True
     except FileNotFoundError:
@@ -188,3 +194,149 @@ def get_duration(start_time: str, end_time: str) -> Optional[int]:
         [f"Start time: '{start_time}', End time: '{end_time}'",
          "Accepted formats: HH:MM:SS, MM:SS, or M:SS (e.g., 1:23:45, 12:34, 1:23)"])
     return None
+
+
+def calculate_target_bitrate(target_size_mb: float, duration_seconds: int, audio_bitrate_kbps: int = 128) -> int:
+    """Calculate video bitrate needed to achieve target filesize.
+
+    Args:
+        target_size_mb: Target file size in megabytes
+        duration_seconds: Video duration in seconds
+        audio_bitrate_kbps: Audio bitrate in kbps (default: 128)
+
+    Returns:
+        Target video bitrate in kbps, or 100 if calculated value is too low
+    """
+    if duration_seconds <= 0:
+        return 100
+
+    target_size_bytes = target_size_mb * 1024 * 1024
+    total_bitrate_kbps = (target_size_bytes * 8) / duration_seconds / 1000
+
+    # Subtract audio bitrate to get video-only bitrate
+    video_bitrate_kbps = int(total_bitrate_kbps - audio_bitrate_kbps)
+
+    # Ensure minimum viable bitrate (100 kbps minimum)
+    return max(video_bitrate_kbps, 100)
+
+
+def compress_to_size(filepath: str, target_size_mb: float) -> bool:
+    """Recompress video to fit within target filesize using two-pass encoding.
+
+    Args:
+        filepath: Path to the video file to compress
+        target_size_mb: Maximum file size in megabytes
+
+    Returns:
+        True if compression succeeded or was unnecessary, False on error
+    """
+    # Get current file size
+    current_size_bytes = os.path.getsize(filepath)
+    target_size_bytes = target_size_mb * 1024 * 1024
+
+    # Check if compression is needed
+    if current_size_bytes <= target_size_bytes:
+        utils.debug_print(f"File already within size limit: {files.format_filesize(current_size_bytes)}")
+        return True
+
+    # Get video duration for bitrate calculation
+    duration = get_file_duration(filepath)
+    if duration is None or duration <= 0:
+        utils.error_print(f"Cannot compress: unable to determine duration of '{filepath}'")
+        return False
+
+    # Calculate target bitrate (with 5% safety margin)
+    target_bitrate = calculate_target_bitrate(target_size_mb * 0.95, duration)
+
+    if target_bitrate <= 100:
+        utils.warning_print(f"Target bitrate very low ({target_bitrate} kbps) for {duration}s video.",
+            [f"Target size: {target_size_mb}MB, Duration: {duration}s",
+             "Quality may be significantly reduced."])
+
+    utils.verbose_print(f"Compressing video to fit within {target_size_mb}MB...")
+    utils.verbose_print(f"  Current size: {files.format_filesize(current_size_bytes)}")
+    utils.verbose_print(f"  Target bitrate: {target_bitrate} kbps (video) + 128 kbps (audio)")
+
+    # Create temporary output file
+    temp_output = filepath + '.temp.mp4'
+    passlog_base = filepath + '.passlog'
+
+    try:
+        # Two-pass encoding for better quality at target bitrate
+        # Pass 1: Analysis pass
+        null_output = '/dev/null' if os.name != 'nt' else 'NUL'
+        pass1_command = [
+            'ffmpeg', '-y', '-loglevel', '16',
+            '-i', filepath,
+            '-c:v', 'libx264', '-b:v', f'{target_bitrate}k',
+            '-pass', '1', '-passlogfile', passlog_base,
+            '-an',  # No audio in first pass
+            '-f', 'null', null_output
+        ]
+
+        utils.debug_print(f"Pass 1 command: {' '.join(pass1_command)}")
+        result1 = subprocess.run(pass1_command, encoding='utf-8', capture_output=True)
+
+        if result1.returncode != 0:
+            utils.error_print("Compression pass 1 failed",
+                [result1.stderr.strip() if result1.stderr else "Unknown error"])
+            return False
+
+        # Pass 2: Actual encoding
+        pass2_command = [
+            'ffmpeg', '-y', '-loglevel', '16',
+            '-i', filepath,
+            '-c:v', 'libx264', '-b:v', f'{target_bitrate}k',
+            '-pass', '2', '-passlogfile', passlog_base,
+            '-c:a', 'aac', '-b:a', '128k',
+            temp_output
+        ]
+
+        utils.debug_print(f"Pass 2 command: {' '.join(pass2_command)}")
+        result2 = subprocess.run(pass2_command, encoding='utf-8', capture_output=True)
+
+        if result2.returncode != 0:
+            utils.error_print("Compression pass 2 failed",
+                [result2.stderr.strip() if result2.stderr else "Unknown error"])
+            return False
+
+        # Verify output was created
+        if not os.path.isfile(temp_output):
+            utils.error_print("Compression failed: output file not created")
+            return False
+
+        new_size = os.path.getsize(temp_output)
+
+        # Replace original with compressed version
+        os.replace(temp_output, filepath)
+
+        utils.verbose_print(f"  Compressed: {files.format_filesize(current_size_bytes)} -> {files.format_filesize(new_size)}")
+
+        # Warn if still over target (can happen with very low bitrate requirements)
+        if new_size > target_size_bytes:
+            utils.warning_print(f"Compressed file still exceeds target ({files.format_filesize(new_size)} > {target_size_mb}MB)",
+                ["The video may need a higher size limit or shorter duration."])
+
+        return True
+
+    except FileNotFoundError:
+        utils.error_print("ffmpeg not found during compression")
+        return False
+    except OSError as e:
+        utils.error_print(f"Compression failed: {e}")
+        return False
+    finally:
+        # Cleanup pass log files
+        for ext in ['-0.log', '-0.log.mbtree', '']:
+            log_file = passlog_base + ext
+            if os.path.exists(log_file):
+                try:
+                    os.remove(log_file)
+                except OSError:
+                    pass
+        # Cleanup temp file if it exists
+        if os.path.exists(temp_output):
+            try:
+                os.remove(temp_output)
+            except OSError:
+                pass
