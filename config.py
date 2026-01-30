@@ -23,7 +23,6 @@ ID_HEADER = 'ID'
 OBSERVATION_HEADER = 'Observation'
 CATEGORY_HEADER = 'Category'
 PARTICIPANT_PREFIXES = ('P', 'G')  # 'P' for individual, 'G' for group
-NOTES_COLUMN = 'Notes'
 
 # File and Duration Constants
 MAX_FILENAME_LENGTH = 255

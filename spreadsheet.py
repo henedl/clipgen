@@ -285,8 +285,6 @@ def get_num_participants(header_row: List[str], id_cell: Any, col_count: int) ->
         if len(header_row[j]) > 0:
             if header_row[j][0] in config.PARTICIPANT_PREFIXES:
                 num_participants += 1
-            elif header_row[j] == config.NOTES_COLUMN:
-                break
     utils.verbose_print(f'Found {num_participants} participants in total, spanning columns {id_cell.col+1} to {num_participants+id_cell.col+1}.')
     return num_participants
 
@@ -361,9 +359,6 @@ def find_participant_column(header_row: List[str], id_cell: Any, participant_id:
         if header_value and header_value[0] in config.PARTICIPANT_PREFIXES:
             if header_value.lower() == participant_id.lower():
                 return col_idx
-            # Stop if we hit the NOTES column
-            if header_value == config.NOTES_COLUMN:
-                break
     
     return None
 
