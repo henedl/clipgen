@@ -1,9 +1,6 @@
 # Security keys
 *.json
 
-# Python requirements
-requirements.txt
-
 # Language server settings
 pyrightconfig.json
 
