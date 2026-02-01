@@ -26,10 +26,10 @@ The program was created to speed up data processing during playtests and is prov
 
 - Can be used interactively or non-interactively, via command line argument calls.
 - Several modes of generating timestamps are supported:
--- Batch
--- Single or multiple lines
--- Ranges
--- Categories
+  - Batch
+  - Single or multiple lines
+  - Ranges
+  - Categories
 - Sheets can be browsed interactively through the program; no need to have a web browser always open.
 - Clipgen can also generate highlight reels based on your input, combining multiple clips into a single video file.
 
