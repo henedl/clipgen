@@ -3,8 +3,9 @@
 
 import os
 import subprocess
+import tempfile
 from datetime import datetime
-from typing import Optional
+from typing import List, Optional
 
 from icecream import ic
 
@@ -338,5 +339,93 @@ def compress_to_size(filepath: str, target_size_mb: float) -> bool:
         if os.path.exists(temp_output):
             try:
                 os.remove(temp_output)
+            except OSError:
+                pass
+
+
+def concatenate_clips(clip_paths: List[str], output_file: str, reencode_on_fail: bool = True) -> bool:
+    """Concatenate multiple video clips into a single file using ffmpeg concat demuxer.
+
+    Writes a temporary file list for ffmpeg, runs concat demuxer with stream copy,
+    and optionally falls back to re-encoding if stream copy fails (e.g. codec mismatch).
+
+    Args:
+        clip_paths: List of paths to clip files (order preserved)
+        output_file: Path for the concatenated output file
+        reencode_on_fail: If True, retry with re-encoding when stream copy fails
+
+    Returns:
+        True if concatenation succeeded, False otherwise.
+    """
+    if not clip_paths:
+        utils.error_print("No clips to concatenate.", ["clip_paths must not be empty."])
+        return False
+
+    for path in clip_paths:
+        if not os.path.isfile(path):
+            utils.error_print(f"Clip file not found: '{path}'",
+                ["Ensure all clips were generated successfully before concatenating."])
+            return False
+
+    # Concat file format: one line per file, "file 'path'"
+    # Use absolute paths so ffmpeg finds clips regardless of where the list file lives (e.g. in TMPDIR)
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False, encoding='utf-8') as f:
+        list_path = f.name
+        for path in clip_paths:
+            abs_path = os.path.abspath(path)
+            # Escape single quotes in path for ffmpeg
+            escaped = abs_path.replace("'", "'\\''")
+            f.write(f"file '{escaped}'\n")
+
+    try:
+        # Try stream copy first (fast, no re-encoding)
+        ffmpeg_command = [
+            'ffmpeg', '-y', '-loglevel', '16',
+            '-f', 'concat', '-safe', '0', '-i', list_path,
+            '-c', 'copy',
+            output_file,
+        ]
+        utils.verbose_print(f'Concatenating {len(clip_paths)} clips into {output_file}.')
+        utils.debug_print(f"ffmpeg concat command: {' '.join(ffmpeg_command)}")
+        if config.DEBUGGING:
+            utils.debug_print('Debugging enabled, not calling ffmpeg for concat.')
+            return False
+
+        result = subprocess.run(ffmpeg_command, encoding='utf-8', capture_output=True)
+
+        if result.returncode != 0 and reencode_on_fail:
+            utils.warning_print("Stream copy concat failed (e.g. codec mismatch), retrying with re-encoding.")
+            ffmpeg_command_reencode = [
+                'ffmpeg', '-y', '-loglevel', '16',
+                '-f', 'concat', '-safe', '0', '-i', list_path,
+                '-c:v', 'libx264', '-c:a', 'aac',
+                output_file,
+            ]
+            result = subprocess.run(ffmpeg_command_reencode, encoding='utf-8', capture_output=True)
+
+        if result.returncode != 0:
+            error_details = [f"Output: '{output_file}'", f"Clips: {len(clip_paths)} files"]
+            if result.stderr:
+                error_details.append(f"ffmpeg error: {result.stderr.strip()}")
+            utils.error_print("ffmpeg concat failed.", error_details)
+            return False
+
+        if not os.path.isfile(output_file):
+            utils.error_print(f"Concat completed but output file was not created: '{output_file}'")
+            return False
+
+        utils.verbose_print(f"+ Generated reel '{output_file}' successfully.")
+        return True
+    except FileNotFoundError:
+        utils.error_print("ffmpeg is not installed or not found in system PATH.",
+            ["Please install ffmpeg and ensure it's in your PATH."])
+        return False
+    except OSError as e:
+        utils.error_print(f"Concatenation failed: {e}")
+        return False
+    finally:
+        if os.path.exists(list_path):
+            try:
+                os.remove(list_path)
             except OSError:
                 pass

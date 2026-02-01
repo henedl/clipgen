@@ -1,8 +1,9 @@
 # -*- coding: utf-8 -*-
 """Spreadsheet data processing for clipgen."""
 
+import re
 import webbrowser
-from typing import Any, List, Optional, Tuple
+from typing import Any, List, Optional, Set, Tuple
 
 import gspread
 from icecream import ic
@@ -43,18 +44,19 @@ def validate_spreadsheet_headers(sheet: Any) -> Optional[Tuple[Any, Any, Any]]:
     return (id_cell, observation_cell, category_cell)
 
 
-def generate_list(sheet: Any, mode: str, line_numbers: Optional[List[int]] = None, range_start: Optional[int] = None, range_end: Optional[int] = None, skip_prompts: bool = False, cell_specs: Optional[List[Tuple[str, int]]] = None, participant_id: Optional[str] = None) -> List[Any]:
+def generate_list(sheet: Any, mode: str, line_numbers: Optional[List[int]] = None, range_start: Optional[int] = None, range_end: Optional[int] = None, skip_prompts: bool = False, cell_specs: Optional[List[Tuple[str, int]]] = None, participant_id: Optional[str] = None, reel_input: Optional[str] = None) -> List[Any]:
     """Goes through a sheet, bundles values from timestamp columns and descriptions columns into tuples.
     
     Args:
         sheet: The gspread worksheet object
-        mode: One of 'batch', 'line', 'range', 'category', 'cell', 'participant', 'select'
+        mode: One of 'batch', 'line', 'range', 'category', 'cell', 'participant', 'reel', 'select'
         line_numbers: Optional list of line numbers for 'line' mode (CLI)
         range_start: Optional start line for 'range' mode (CLI)
         range_end: Optional end line for 'range' mode (CLI)
         skip_prompts: If True, skip confirmation prompts (CLI -y flag)
         cell_specs: Optional list of (participant_id, row_number) tuples for 'cell' mode (CLI)
         participant_id: Optional participant ID for 'participant' mode (CLI)
+        reel_input: Optional reel selector string for 'reel' mode (e.g. '11, 13-16, P01, "Observations"')
         
     Returns:
         List of clip issue dictionaries
@@ -333,6 +335,20 @@ def generate_list(sheet: Any, mode: str, line_numbers: Optional[List[int]] = Non
                     for pid in unique_ids:
                         timestamps.extend(generate_participant_timestamps(sheet_data, id_cell, observation_cell, study_name, pid))
                     break
+    elif mode == 'reel':
+        if reel_input is None or not reel_input.strip():
+            utils.info_print('\nReel mode: no input provided.')
+            return []
+        utils.verbose_print('Reel mode: parsing selectors and collecting timestamps...')
+        timestamps = generate_reel_timestamps(
+            sheet_data,
+            id_cell,
+            observation_cell,
+            category_cell,
+            num_participants,
+            study_name,
+            reel_input.strip(),
+        )
     elif mode == 'select':
         pass
 
@@ -443,6 +459,94 @@ def parse_cell_specifications(cell_input: str) -> List[Tuple[str, int]]:
         specs.append((participant_id, row_number))
     
     return specs
+
+
+def parse_reel_input(input_string: str) -> dict:
+    """Parse mixed reel selector input into structured selectors.
+
+    Supports: batch, lines (e.g. 11, 12), ranges (e.g. 13-16), categories (quoted),
+    cells (e.g. P01.11), participants (e.g. P01, P02).
+
+    Args:
+        input_string: Raw user input (e.g. '11, 13-16, P01, P02.15, "Observations"')
+
+    Returns:
+        Dict with keys: batch (bool), lines (list of int), ranges (list of (int,int)),
+        categories (list of str), cells (list of (str,int)), participants (list of str)
+    """
+    import re
+    result = {
+        'batch': False,
+        'lines': [],
+        'ranges': [],
+        'categories': [],
+        'cells': [],
+        'participants': [],
+    }
+    if not input_string or not input_string.strip():
+        return result
+
+    # Extract quoted strings (categories) first so commas inside don't split
+    rest = input_string.strip()
+    while True:
+        match = re.search(r'"([^"]*)"', rest)
+        if not match:
+            break
+        result['categories'].append(match.group(1).strip())
+        rest = rest[:match.start()] + ' ' + rest[match.end():]
+
+    # Split remaining by comma, then by space for tokens that might be space-separated
+    parts = [p.strip() for p in rest.split(',') if p.strip()]
+    seen_lines = set()
+    seen_ranges = set()
+    seen_cells = set()
+    seen_participants = set()
+
+    for part in parts:
+        token = part.strip()
+        if not token:
+            continue
+        # Batch keyword
+        if token.lower() == 'batch':
+            result['batch'] = True
+            continue
+        # Range: digits-digits
+        range_match = re.match(r'^(\d+)\s*-\s*(\d+)$', token)
+        if range_match:
+            start, end = int(range_match.group(1)), int(range_match.group(2))
+            if start <= end and (start, end) not in seen_ranges:
+                seen_ranges.add((start, end))
+                result['ranges'].append((start, end))
+            continue
+        # Single line number
+        if token.isdigit():
+            line_num = int(token)
+            if line_num not in seen_lines:
+                seen_lines.add(line_num)
+                result['lines'].append(line_num)
+            continue
+        # Cell: P##.## or G##.## (participant.row)
+        if '.' in token:
+            cell_match = re.match(r'^([PG]\w*)\.(\d+)$', token, re.IGNORECASE)
+            if cell_match:
+                pid, row_str = cell_match.group(1), cell_match.group(2)
+                if pid[0].upper() in config.PARTICIPANT_PREFIXES:
+                    row_num = int(row_str)
+                    if row_num >= 1:
+                        key = (pid.upper() if len(pid) <= 3 else pid, row_num)
+                        if key not in seen_cells:
+                            seen_cells.add(key)
+                            result['cells'].append((pid, row_num))
+            continue
+        # Participant only: P## or G## (no dot, valid participant-like token)
+        if token[0].upper() in config.PARTICIPANT_PREFIXES and '.' not in token:
+            key = token.upper() if len(token) <= 3 else token
+            if key not in seen_participants:
+                seen_participants.add(key)
+                result['participants'].append(token)
+
+    return result
+
 
 def find_participant_column(header_row: List[str], id_cell: Any, participant_id: str) -> Optional[int]:
     """Find the column index for a given participant ID.
@@ -848,6 +952,129 @@ def generate_range_timestamps(sheet_data: List[List[str]], id_cell: Any, observa
         utils.debug_print(f'Batching on line {i}')
         timestamps.extend(get_line_timestamps(sheet_data, id_cell, observation_cell, num_participants, i, study_name))
     return timestamps
+
+
+def generate_reel_timestamps(
+    sheet_data: List[List[str]],
+    id_cell: Any,
+    observation_cell: Any,
+    category_cell: Any,
+    num_participants: int,
+    study_name: str,
+    reel_input_string: str,
+) -> List[Any]:
+    """Generate timestamps for reel mode by combining multiple selector types and deduplicating.
+
+    Parses reel input (batch, lines, ranges, categories, cells, participants), collects
+    timestamps from each selector, deduplicates by cell (row, col), and returns a single
+    ordered list of issue dicts.
+
+    Args:
+        sheet_data: The sheet data matrix
+        id_cell: The ID header cell
+        observation_cell: The observation header cell
+        category_cell: The category header cell
+        num_participants: Number of participant columns
+        study_name: Normalized study name
+        reel_input_string: Raw user input (e.g. '11, 13-16, P01, "Observations"')
+
+    Returns:
+        List of clip issue dictionaries, deduplicated by cell and sorted by row then column
+    """
+    selectors = parse_reel_input(reel_input_string)
+    has_any = (
+        selectors['batch']
+        or selectors['lines']
+        or selectors['ranges']
+        or selectors['categories']
+        or selectors['cells']
+        or selectors['participants']
+    )
+    if not has_any:
+        return []
+
+    all_issues: List[Any] = []
+
+    if selectors['batch']:
+        all_issues.extend(
+            generate_batch_timestamps(sheet_data, id_cell, observation_cell, num_participants, study_name)
+        )
+
+    if selectors['lines']:
+        all_issues.extend(
+            generate_line_timestamps(
+                sheet_data,
+                id_cell,
+                observation_cell,
+                num_participants,
+                study_name,
+                cli_line_numbers=selectors['lines'],
+                skip_prompts=True,
+            )
+        )
+
+    for start_line, end_line in selectors['ranges']:
+        all_issues.extend(
+            generate_range_timestamps(
+                sheet_data,
+                id_cell,
+                observation_cell,
+                num_participants,
+                study_name,
+                start_line,
+                end_line,
+            )
+        )
+
+    if selectors['categories']:
+        all_issues.extend(
+            generate_category_timestamps(
+                sheet_data,
+                id_cell,
+                observation_cell,
+                category_cell,
+                num_participants,
+                study_name,
+                selectors['categories'],
+            )
+        )
+
+    if selectors['cells']:
+        all_issues.extend(
+            generate_cell_timestamps(
+                sheet_data,
+                id_cell,
+                observation_cell,
+                study_name,
+                selectors['cells'],
+            )
+        )
+
+    for participant_id in selectors['participants']:
+        all_issues.extend(
+            generate_participant_timestamps(
+                sheet_data,
+                id_cell,
+                observation_cell,
+                study_name,
+                participant_id,
+            )
+        )
+
+    # Deduplicate by cell (row, col) so each timestamp is included once
+    seen: Set[Tuple[int, int]] = set()
+    deduped: List[Any] = []
+    for issue in all_issues:
+        key = (issue['cell'].row, issue['cell'].col)
+        if key not in seen:
+            seen.add(key)
+            deduped.append(issue)
+
+    # Sort by row then column for logical playback order
+    deduped.sort(key=lambda issue: (issue['cell'].row, issue['cell'].col))
+
+    return deduped
+
 
 def browse_spreadsheet(sheet: Any) -> None:
     """Interactive browse mode for viewing spreadsheet rows line by line.

@@ -30,8 +30,9 @@ Examples:
   python clipgen.py -b -s "Study Name" Batch mode with specific spreadsheet
   python clipgen.py -l 5 -y            Line mode, skip confirmation prompts
   python clipgen.py -b -v              Batch mode with verbose output
+  python clipgen.py -R "11, 13-16, P01, \\"Observations\\""  Reel mode - one combined video
 
-Note: Non-interactive mode (using -b, -l, -r, -c, or -p) is silent by default,
+Note: Non-interactive mode (using -b, -l, -r, -c, -p, or -R) is silent by default,
       only showing errors and the final summary. Use -v for full output.
 '''
     )
@@ -48,6 +49,8 @@ Note: Non-interactive mode (using -b, -l, -r, -c, or -p) is silent by default,
         help='Cell mode: specify cells as participant.row (e.g., P01.11 or P01.11 + P03.11)')
     mode_group.add_argument('-p', '--participant', type=str, metavar='ID',
         help='Participant mode: generate all clips for one or more participants (e.g., P01 or P01,P03)')
+    mode_group.add_argument('-R', '--reel', type=str, metavar='SELECTORS',
+        help='Reel mode: combine selectors (e.g. "11, 13-16, P01, \\"Observations\\"") into one video')
     
     # Optional arguments
     parser.add_argument('-s', '--spreadsheet', type=str, metavar='NAME',

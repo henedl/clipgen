@@ -28,6 +28,7 @@ The program was created to speed up data processing during playtests and is prov
 -- Ranges
 -- Categories
 - Sheets can be browsed interactively through the program; no need to have a web browser always open.
+- Clipgen can also generate highlight reels based on your input, combining multiple clips into a single video file.
 
 ### About the spreadsheet
 
@@ -47,7 +48,6 @@ Ranges must be separated by character ```-```
 - Airtable support
 - Excel support
 - CSV support
-- Composite highlight videos, with clips from multiple participants.
 - Title/ending cards
 - Watermarking
 - Cropping and time-lapsing! For example generate a time-lapse of part of the screen, such as the minimap in a strategy game.
