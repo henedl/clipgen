@@ -49,7 +49,6 @@ Ranges must be separated by character ```-```
 
 - GUI
 - Airtable support
-- CSV support
 - Title/ending cards
 - Watermarking
 - Cropping and time-lapsing! For example generate a time-lapse of part of the screen, such as the minimap in a strategy game.

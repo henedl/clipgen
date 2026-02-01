@@ -8,7 +8,7 @@ REENCODING = False
 AUDIO_NORMALIZE = False
 FILEFORMAT = '.mp4'
 VERSIONNUM = '0.7.2'
-WORKSHEET_PRIORITY = ['Sheet1', 'Data', 'data', 'Observations', 'Data set', 'data set']
+WORKSHEET_PRIORITY = ['Sheet1', 'Data', 'data', 'Observations', 'Data set', 'data set', 'dataset', 'Dataset']
 DEBUGGING = False
 VERBOSE = True  # Set to False in CLI mode unless -v flag is used
 
