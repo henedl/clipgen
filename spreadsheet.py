@@ -43,17 +43,18 @@ def validate_spreadsheet_headers(sheet: Any) -> Optional[Tuple[Any, Any, Any]]:
     return (id_cell, observation_cell, category_cell)
 
 
-def generate_list(sheet: Any, mode: str, line_numbers: Optional[List[int]] = None, range_start: Optional[int] = None, range_end: Optional[int] = None, skip_prompts: bool = False, cell_specs: Optional[List[Tuple[str, int]]] = None) -> List[Any]:
+def generate_list(sheet: Any, mode: str, line_numbers: Optional[List[int]] = None, range_start: Optional[int] = None, range_end: Optional[int] = None, skip_prompts: bool = False, cell_specs: Optional[List[Tuple[str, int]]] = None, participant_id: Optional[str] = None) -> List[Any]:
     """Goes through a sheet, bundles values from timestamp columns and descriptions columns into tuples.
     
     Args:
         sheet: The gspread worksheet object
-        mode: One of 'batch', 'line', 'range', 'category', 'cell', 'select'
+        mode: One of 'batch', 'line', 'range', 'category', 'cell', 'participant', 'select'
         line_numbers: Optional list of line numbers for 'line' mode (CLI)
         range_start: Optional start line for 'range' mode (CLI)
         range_end: Optional end line for 'range' mode (CLI)
         skip_prompts: If True, skip confirmation prompts (CLI -y flag)
         cell_specs: Optional list of (participant_id, row_number) tuples for 'cell' mode (CLI)
+        participant_id: Optional participant ID for 'participant' mode (CLI)
         
     Returns:
         List of clip issue dictionaries
@@ -261,6 +262,77 @@ def generate_list(sheet: Any, mode: str, line_numbers: Optional[List[int]] = Non
                 except KeyboardInterrupt:
                     utils.info_print('\nCancelled by user.')
                     return []
+    elif mode == 'participant':
+        header_row = sheet_data[id_cell.row - 1] if id_cell.row > 0 else []
+        available_list = get_participant_list(header_row, id_cell, num_participants)
+        if participant_id is not None:
+            # CLI mode - parse and validate participant ID(s)
+            participant_ids = parse_participant_selection(participant_id)
+            if not participant_ids:
+                utils.error_print("No participant ID(s) provided.",
+                    ['Use format: P01 or P01+P03 or P01, P03'])
+                return []
+            invalid = []
+            for pid in participant_ids:
+                if find_participant_column(header_row, id_cell, pid) is None:
+                    invalid.append(pid)
+            if invalid:
+                utils.error_print(f"Participant(s) not found in spreadsheet headers: {', '.join(invalid)}",
+                    [f"Available participants: {', '.join(available_list)}"])
+                return []
+            utils.verbose_print(f'Participant mode: generating all clips for {", ".join(participant_ids)}')
+            timestamps = []
+            for pid in participant_ids:
+                timestamps.extend(generate_participant_timestamps(sheet_data, id_cell, observation_cell, study_name, pid))
+        else:
+            # Interactive mode
+            if not available_list:
+                utils.info_print('\nNo participants found in the spreadsheet.')
+                return []
+            utils.info_print('\nAvailable participants:')
+            for i, pid in enumerate(available_list, 1):
+                utils.info_print(f'  {i}. {pid}')
+            while True:
+                selection = input('\nEnter participant number(s) or ID(s), separated by + or , (e.g., 1, 3 or P01, P03):\n>> ').strip()
+                if not selection:
+                    utils.info_print('Please enter one or more participant numbers or IDs.')
+                    continue
+                tokens = parse_participant_selection(selection)
+                if not tokens:
+                    utils.info_print('No valid participant(s) entered. Use + or , as separator.')
+                    continue
+                chosen_ids = []
+                invalid_tokens = []
+                for token in tokens:
+                    if token.isdigit():
+                        idx = int(token)
+                        if 1 <= idx <= len(available_list):
+                            chosen_ids.append(available_list[idx - 1])
+                        else:
+                            invalid_tokens.append(token)
+                    else:
+                        col_idx = find_participant_column(header_row, id_cell, token)
+                        if col_idx is not None:
+                            chosen_ids.append(header_row[col_idx] if col_idx < len(header_row) else token)
+                        else:
+                            invalid_tokens.append(token)
+                if invalid_tokens:
+                    utils.info_print(f"Not found: {', '.join(invalid_tokens)}. Available: {', '.join(available_list)}")
+                    continue
+                # Dedupe preserving order
+                seen = set()
+                unique_ids = []
+                for pid in chosen_ids:
+                    if pid not in seen:
+                        seen.add(pid)
+                        unique_ids.append(pid)
+                utils.info_print(f'\nSelected participant(s): {", ".join(unique_ids)}')
+                yn = input('Generate all clips for these participants? y/n\n>> ')
+                if yn == 'y':
+                    timestamps = []
+                    for pid in unique_ids:
+                        timestamps.extend(generate_participant_timestamps(sheet_data, id_cell, observation_cell, study_name, pid))
+                    break
     elif mode == 'select':
         pass
 
@@ -287,6 +359,40 @@ def get_num_participants(header_row: List[str], id_cell: Any, col_count: int) ->
                 num_participants += 1
     utils.verbose_print(f'Found {num_participants} participants in total, spanning columns {id_cell.col+1} to {num_participants+id_cell.col+1}.')
     return num_participants
+
+def get_participant_list(header_row: List[str], id_cell: Any, num_participants: int) -> List[str]:
+    """Return list of participant IDs from the header row.
+
+    Args:
+        header_row: List of header cell values
+        id_cell: The ID header cell object
+        num_participants: Number of participant columns
+
+    Returns:
+        List of participant IDs (e.g. ['P01', 'P02', 'G01'])
+    """
+    participants = []
+    for j in range(id_cell.col, id_cell.col + num_participants):
+        if j < len(header_row) and header_row[j].strip():
+            participants.append(header_row[j].strip())
+    return participants
+
+def parse_participant_selection(input_str: str) -> List[str]:
+    """Parse a participant selection string into a list of IDs.
+
+    Splits on + or , and returns non-empty stripped tokens.
+
+    Args:
+        input_str: User input (e.g. "P01 + P03" or "P01, P03" or "1, 3")
+
+    Returns:
+        List of participant ID strings (e.g. ['P01', 'P03'])
+    """
+    if not input_str or not input_str.strip():
+        return []
+    # Support both + and , as separators
+    combined = input_str.replace(',', '+')
+    return [s.strip() for s in combined.split('+') if s.strip()]
 
 def parse_cell_specifications(cell_input: str) -> List[Tuple[str, int]]:
     """Parse cell specification string into list of (participant_id, row_number) tuples.
@@ -361,6 +467,49 @@ def find_participant_column(header_row: List[str], id_cell: Any, participant_id:
                 return col_idx
     
     return None
+
+def generate_participant_timestamps(sheet_data: List[List[str]], id_cell: Any, observation_cell: Any, study_name: str, participant_id: str) -> List[Any]:
+    """Generate timestamps for all rows in a single participant's column.
+
+    Args:
+        sheet_data: The sheet data matrix
+        id_cell: The ID header cell
+        observation_cell: The observation header cell
+        study_name: Normalized study name
+        participant_id: Participant ID (e.g. P01)
+
+    Returns:
+        List of clip issue dictionaries
+    """
+    utils.debug_print('Starting method generate_participant_timestamps()')
+    header_row = sheet_data[id_cell.row - 1] if id_cell.row > 0 else []
+    col_idx = find_participant_column(header_row, id_cell, participant_id)
+    if col_idx is None:
+        return []
+    participant_row = id_cell.row - 1
+    participant_display = header_row[col_idx] if col_idx < len(header_row) else participant_id
+    timestamps = []
+    desc_col = observation_cell.col - 1
+    category_col = observation_cell.col - 2
+    for row_idx in range(id_cell.row, len(sheet_data)):
+        if col_idx >= len(sheet_data[row_idx]):
+            continue
+        cell_value = sheet_data[row_idx][col_idx]
+        if not cell_value or not cell_value.strip():
+            continue
+        cell = gspread.cell.Cell(row_idx + 1, col_idx + 1, cell_value)
+        desc = sheet_data[row_idx][desc_col] if desc_col < len(sheet_data[row_idx]) else ''
+        category = sheet_data[row_idx][category_col] if category_col < len(sheet_data[row_idx]) else ''
+        issue = {
+            'cell': cell,
+            'desc': desc,
+            'study': study_name,
+            'participant': participant_display,
+            'category': category
+        }
+        timestamps.append(issue)
+        utils.verbose_print(f"+ Found timestamp: {cell_value.replace(chr(10), ' ')} at row {row_idx + 1} ({gspread.utils.rowcol_to_a1(cell.row, cell.col)})")
+    return timestamps
 
 def generate_cell_timestamps(sheet_data: List[List[str]], id_cell: Any, observation_cell: Any, study_name: str, cell_specs: List[Tuple[str, int]]) -> List[Any]:
     """Generate timestamps for specific cells.

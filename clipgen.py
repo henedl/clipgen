@@ -181,15 +181,16 @@ def select_mode_and_generate(worksheet: Any) -> List[Any]:
         'r': 'range', 'range': 'range',
         'c': 'category', 'cat': 'category', 'category': 'category',
         'ce': 'cell', 'cell': 'cell',
+        'p': 'participant', 'participant': 'participant',
         'br': 'browse', 'browse': 'browse',
         'test': 'test'
     }
     
     while True:
-        input_mode = input('\nSelect mode: (b)atch, (r)ange, (c)ategory, (l)ine, (ce)ll, or (br)owse\n>> ').strip().lower()
+        input_mode = input('\nSelect mode: (b)atch, (r)ange, (c)ategory, (l)ine, (ce)ll, (p)articipant, or (br)owse\n>> ').strip().lower()
         
         if not input_mode:
-            utils.info_print("  Please enter a mode (b, r, c, l, or br).")
+            utils.info_print("  Please enter a mode (b, r, c, l, ce, p, or br).")
             continue
         
         try:
@@ -208,6 +209,7 @@ def select_mode_and_generate(worksheet: Any) -> List[Any]:
                 utils.info_print("    c or category - Generate clips by category")
                 utils.info_print("    l or line    - Generate clips from specific line(s)")
                 utils.info_print("    ce or cell   - Generate clips from specific cell(s) (e.g., P01.11)")
+                utils.info_print("    p or participant - Generate all clips for one participant")
                 utils.info_print("    br or browse - Browse spreadsheet rows interactively")
         except gspread.exceptions.GSpreadException as e:
             utils.error_print(f"Google Sheets API error: {e}")
@@ -419,6 +421,8 @@ def run_cli_mode(worksheet: Any, args: Any, cli_line_numbers: Optional[List[int]
         clips_list = spreadsheet.generate_list(worksheet, 'range', range_start=cli_range_start, range_end=cli_range_end, skip_prompts=skip_prompts)
     elif args.cell:
         clips_list = spreadsheet.generate_list(worksheet, 'cell', cell_specs=cli_cell_specs, skip_prompts=skip_prompts)
+    elif args.participant:
+        clips_list = spreadsheet.generate_list(worksheet, 'participant', participant_id=args.participant, skip_prompts=skip_prompts)
     
     videos_generated = process_clips(clips_list)
     
@@ -453,7 +457,7 @@ def main() -> None:
     ic(args)
     
     # Determine if running in CLI mode (any mode argument provided)
-    cli_mode = args.batch or args.lines or args.range or args.cell
+    cli_mode = args.batch or args.lines or args.range or args.cell or args.participant
     
     # Set verbose mode: silent by default in CLI mode, verbose in interactive mode
     config.VERBOSE = not cli_mode or args.verbose

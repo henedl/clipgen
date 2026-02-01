@@ -25,11 +25,13 @@ Examples:
   python clipgen.py -r 1-10            Range mode - lines 1 through 10
   python clipgen.py -c "P01.11"        Cell mode - single cell (participant P01, row 11)
   python clipgen.py -c "P01.11 + P03.11" Cell mode - multiple cells
+  python clipgen.py -p P01             Participant mode - all clips for participant P01
+  python clipgen.py -p "P01,P03"       Participant mode - all clips for P01 and P03
   python clipgen.py -b -s "Study Name" Batch mode with specific spreadsheet
   python clipgen.py -l 5 -y            Line mode, skip confirmation prompts
   python clipgen.py -b -v              Batch mode with verbose output
 
-Note: Non-interactive mode (using -b, -l, -r, or -c) is silent by default,
+Note: Non-interactive mode (using -b, -l, -r, -c, or -p) is silent by default,
       only showing errors and the final summary. Use -v for full output.
 '''
     )
@@ -44,6 +46,8 @@ Note: Non-interactive mode (using -b, -l, -r, or -c) is silent by default,
         help='Range mode: specify start-end line range (e.g., 1-10)')
     mode_group.add_argument('-c', '--cell', type=str, metavar='CELLS',
         help='Cell mode: specify cells as participant.row (e.g., P01.11 or P01.11 + P03.11)')
+    mode_group.add_argument('-p', '--participant', type=str, metavar='ID',
+        help='Participant mode: generate all clips for one or more participants (e.g., P01 or P01,P03)')
     
     # Optional arguments
     parser.add_argument('-s', '--spreadsheet', type=str, metavar='NAME',
