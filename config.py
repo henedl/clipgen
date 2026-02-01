@@ -22,6 +22,7 @@ else:
 ID_HEADER = 'ID'
 OBSERVATION_HEADER = 'Observation'
 CATEGORY_HEADER = 'Category'
+REALTIME_HEADER = 'Time'
 PARTICIPANT_PREFIXES = ('P', 'G')  # 'P' for individual, 'G' for group
 
 # File and Duration Constants

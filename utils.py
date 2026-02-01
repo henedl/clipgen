@@ -161,6 +161,54 @@ def add_duration(start_time: str) -> Union[str, int]:
              "This timestamp will be skipped."])
         return -1
 
+
+def _parse_time_for_realtime(s: str) -> Optional[datetime]:
+    """Parse a time string (HH:MM:SS, HH:MM, or MM:SS) as datetime on a reference date.
+    Returns None if invalid.
+    """
+    s = (s or "").strip()
+    if not s:
+        return None
+    ref = datetime(2000, 1, 1)
+    for fmt in ('%H:%M:%S', '%H:%M', '%M:%S'):
+        try:
+            parsed = datetime.strptime(s, fmt)
+            return ref.replace(hour=parsed.hour, minute=parsed.minute, second=parsed.second, microsecond=0)
+        except ValueError:
+            continue
+    return None
+
+
+def convert_to_relative_time(timestamp: str, realtime_start: str) -> Optional[str]:
+    """Convert an absolute timestamp to relative based on recording start time.
+
+    Args:
+        timestamp: Absolute time (e.g., "14:15" or "14:15:30")
+        realtime_start: Recording start time (e.g., "14:00:00")
+
+    Returns:
+        Relative timestamp as MM:SS or HH:MM:SS (e.g., "15:00" or "1:15:30"),
+        or None if parsing failed.
+    """
+    if not realtime_start or not timestamp:
+        return None
+    start_dt = _parse_time_for_realtime(realtime_start)
+    ts_dt = _parse_time_for_realtime(timestamp)
+    if start_dt is None or ts_dt is None:
+        return None
+    if ts_dt < start_dt:
+        ts_dt += timedelta(days=1)
+    delta = ts_dt - start_dt
+    total_seconds = int(delta.total_seconds())
+    if total_seconds < 0:
+        return None
+    hours, remainder = divmod(total_seconds, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    if hours > 0:
+        return f"{hours}:{minutes:02d}:{seconds:02d}"
+    return f"{minutes}:{seconds:02d}"
+
+
 def _parse_single_timestamp_token(token: str) -> Optional[Tuple[str, str]]:
     """Parse one token into a (start_time, end_time) pair, or None if invalid/skip.
     
@@ -183,18 +231,22 @@ def _parse_single_timestamp_token(token: str) -> Optional[Tuple[str, str]]:
     return None
 
 
-def parse_timestamps(cell_value: str, cell_ref: Optional[str] = None) -> List[Tuple[str, str]]:
+def parse_timestamps(cell_value: str, cell_ref: Optional[str] = None, realtime_start: str = "") -> List[Tuple[str, str]]:
     """Parse timestamp pairs from a cell value string.
     
+    When realtime_start is set (e.g. recording start time from REALTIME_HEADER),
+    absolute timestamps in the cell are converted to relative times.
+
     Args:
         cell_value: The raw cell value containing timestamps
         cell_ref: Optional cell reference (e.g., 'B5') for error messages
-    
+        realtime_start: Optional recording start time (e.g., "14:00:00"); if set, timestamps are treated as absolute and converted to relative
+
     Returns:
-        A list of (start_time, end_time) tuples.
+        A list of (start_time, end_time) tuples (relative to recording start).
     """
     if config.DEBUGGING:
-        ic(cell_value, cell_ref)
+        ic(cell_value, cell_ref, realtime_start)
     parsed_timestamps = []
     skipped_timestamps = []
     raw_times = cell_value.lower().replace('+', ' ').replace(';', ' ').replace(',', ' ').split()
@@ -203,9 +255,51 @@ def parse_timestamps(cell_value: str, cell_ref: Optional[str] = None) -> List[Tu
     debug_print(f'raw_times content after split is {raw_times}')
     debug_print(f'Timestamp list raw_times is {len(raw_times)} entries long')
 
+    # When realtime_start is set, convert absolute tokens to relative before parsing
+    # so that add_duration (for single times) is applied to relative times.
+    if realtime_start and realtime_start.strip() and _parse_time_for_realtime(realtime_start) is not None:
+        for i in range(len(raw_times)):
+            t = raw_times[i].strip().rstrip(',').rstrip('-').replace('.', ':')
+            if not t:
+                continue
+            if '-' in t and t.find('-') > 0 and t[t.find('-') - 1].isdigit():
+                dash_pos = t.find('-')
+                left, right = t[:dash_pos].strip(), t[dash_pos + 1:].strip()
+                rel_left = convert_to_relative_time(left, realtime_start)
+                rel_right = convert_to_relative_time(right, realtime_start)
+                if rel_left is not None and rel_right is not None:
+                    raw_times[i] = rel_left + '-' + rel_right
+                elif rel_left is None or rel_right is None:
+                    cell_info = f" in cell {cell_ref}" if cell_ref else ""
+                    warning_print(
+                        f"Skipped timestamp (before recording start or unparseable){cell_info}: {t}",
+                        ["Recording start: " + realtime_start],
+                    )
+                    raw_times[i] = ""
+            else:
+                rel = convert_to_relative_time(t, realtime_start)
+                if rel is not None:
+                    raw_times[i] = rel
+                else:
+                    cell_info = f" in cell {cell_ref}" if cell_ref else ""
+                    warning_print(
+                        f"Skipped timestamp (before recording start or unparseable){cell_info}: {t}",
+                        ["Recording start: " + realtime_start],
+                    )
+                    raw_times[i] = ""
+    # If realtime_start invalid, warn once
+    elif realtime_start and realtime_start.strip():
+        if _parse_time_for_realtime(realtime_start) is None:
+            warning_print(
+                f"Invalid realtime start '{realtime_start}'{f' in cell {cell_ref}' if cell_ref else ''}; treating timestamps as relative.",
+                ["Expected format: HH:MM:SS or HH:MM (e.g., 14:00:00)."],
+            )
+
     for i in range(len(raw_times)):
         debug_print(f'Cleaning timestamp {raw_times[i]}')
         raw_times[i] = raw_times[i].strip().rstrip(',').rstrip('-').replace('.', ':')
+        if not raw_times[i]:
+            continue
         pair = _parse_single_timestamp_token(raw_times[i])
         if pair is not None:
             if config.DEBUGGING and len(pair) == 2:
@@ -213,7 +307,7 @@ def parse_timestamps(cell_value: str, cell_ref: Optional[str] = None) -> List[Tu
             parsed_timestamps.append(pair)
         elif raw_times[i]:
             skipped_timestamps.append(raw_times[i])
-    
+
     # Report skipped timestamps if any
     if skipped_timestamps:
         if config.DEBUGGING:

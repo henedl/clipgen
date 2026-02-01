@@ -114,8 +114,12 @@ def prepare_clip(clip: Dict[str, Any]) -> Dict[str, Any]:
     # Get cell reference for error messages
     cell_ref = gspread.utils.rowcol_to_a1(clip['cell'].row, clip['cell'].col)
     
-    # Parse timestamps from cell value
-    clip['times'] = utils.parse_timestamps(clip['cell'].value, cell_ref=cell_ref)
+    # Parse timestamps from cell value (convert absolute to relative when realtime is set)
+    clip['times'] = utils.parse_timestamps(
+        clip['cell'].value,
+        cell_ref=cell_ref,
+        realtime_start=clip.get('realtime', ''),
+    )
     if config.DEBUGGING:
         ic(clip['times'])
     

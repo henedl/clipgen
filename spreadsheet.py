@@ -13,19 +13,21 @@ import google_api
 import utils
 
 
-def validate_spreadsheet_headers(sheet: Any) -> Optional[Tuple[Any, Any, Any]]:
+def validate_spreadsheet_headers(sheet: Any) -> Optional[Tuple[Any, Any, Any, Any]]:
     """Validate that required headers exist in the spreadsheet.
     
     Args:
         sheet: The gspread worksheet object
         
     Returns:
-        tuple: (id_cell, observation_cell, category_cell) if all headers found, 
-               None if any header is missing
+        tuple: (id_cell, observation_cell, category_cell, time_cell) if all required headers found.
+               time_cell may be None (REALTIME_HEADER is optional).
+               None if any required header is missing.
     """
     id_cell = sheet.find(config.ID_HEADER)
     observation_cell = sheet.find(config.OBSERVATION_HEADER)
     category_cell = sheet.find(config.CATEGORY_HEADER)
+    time_cell = sheet.find(config.REALTIME_HEADER)  # Optional; may be None
     
     missing_headers = []
     if id_cell is None:
@@ -41,7 +43,7 @@ def validate_spreadsheet_headers(sheet: Any) -> Optional[Tuple[Any, Any, Any]]:
              "Please check your spreadsheet structure."])
         return None
     
-    return (id_cell, observation_cell, category_cell)
+    return (id_cell, observation_cell, category_cell, time_cell)
 
 
 def _validate_row_range(start_line: int, end_line: int, max_row: int) -> Optional[Tuple[int, int]]:
@@ -112,6 +114,7 @@ def _make_clip_record(
     observation_cell: Any,
     study_name: str,
     cell_value: str,
+    time_cell: Optional[Any] = None,
 ) -> Dict[str, Any]:
     """Build one clip record dict for a cell at (row_idx, col_idx).
     
@@ -123,9 +126,10 @@ def _make_clip_record(
         observation_cell: Observation header cell
         study_name: Normalized study name
         cell_value: Value of the timestamp cell (sheet_data[row_idx][col_idx])
+        time_cell: Optional REALTIME_HEADER cell; if set, realtime value for this column is extracted
         
     Returns:
-        Dict with keys: cell, desc, study, participant, category
+        Dict with keys: cell, desc, study, participant, category, realtime
     """
     cell = gspread.cell.Cell(row_idx + 1, col_idx + 1, cell_value)
     desc_col = observation_cell.col - 1
@@ -140,12 +144,18 @@ def _make_clip_record(
     category = ""
     if 0 <= category_col < len(sheet_data[row_idx]):
         category = sheet_data[row_idx][category_col]
+    realtime = ""
+    if time_cell is not None:
+        time_row_idx = time_cell.row - 1
+        if 0 <= time_row_idx < len(sheet_data) and col_idx < len(sheet_data[time_row_idx]):
+            realtime = (sheet_data[time_row_idx][col_idx] or "").strip()
     return {
         "cell": cell,
         "desc": desc,
         "study": study_name,
         "participant": participant,
         "category": category,
+        "realtime": realtime,
     }
 
 
@@ -173,9 +183,9 @@ def generate_list(sheet: Any, mode: str, line_numbers: Optional[List[int]] = Non
     if header_result is None:
         return []
     
-    id_cell, observation_cell, category_cell = header_result
+    id_cell, observation_cell, category_cell, time_cell = header_result
     if config.DEBUGGING:
-        ic(id_cell, observation_cell, category_cell)
+        ic(id_cell, observation_cell, category_cell, time_cell)
     clips = []
 
     # Sheet data is a list of lists, which forms a matrix
@@ -213,11 +223,11 @@ def generate_list(sheet: Any, mode: str, line_numbers: Optional[List[int]] = Non
     if mode == 'batch':
         if skip_prompts:
             utils.verbose_print('Batch mode: generating all possible clips...')
-            clips = generate_batch_timestamps(sheet_data, id_cell, observation_cell, num_participants, study_name)
+            clips = generate_batch_timestamps(sheet_data, id_cell, observation_cell, num_participants, study_name, time_cell=time_cell)
         else:
             yn = input('\nWarning: This will generate all possible clips. Do you want to proceed? y/n\n>> ')
             if yn == 'y':
-                clips = generate_batch_timestamps(sheet_data, id_cell, observation_cell, num_participants, study_name)
+                clips = generate_batch_timestamps(sheet_data, id_cell, observation_cell, num_participants, study_name, time_cell=time_cell)
     # --- Category mode ---
     elif mode == 'category':
         categories = collect_categories(sheet_data, id_cell, category_cell)
@@ -225,10 +235,10 @@ def generate_list(sheet: Any, mode: str, line_numbers: Optional[List[int]] = Non
             utils.info_print('\nNo categories found in the spreadsheet.')
             return []
         selected_categories = _interactive_category_selection(categories)
-        clips = generate_category_timestamps(sheet_data, id_cell, observation_cell, category_cell, num_participants, study_name, selected_categories)
+        clips = generate_category_timestamps(sheet_data, id_cell, observation_cell, category_cell, num_participants, study_name, selected_categories, time_cell=time_cell)
     # --- Line mode ---
     elif mode == 'line':
-        clips = generate_line_timestamps(sheet_data, id_cell, observation_cell, num_participants, study_name, line_numbers, skip_prompts)
+        clips = generate_line_timestamps(sheet_data, id_cell, observation_cell, num_participants, study_name, line_numbers, skip_prompts, time_cell=time_cell)
     # --- Range mode ---
     elif mode == 'range':
         max_row = len(sheet_data)
@@ -240,7 +250,7 @@ def generate_list(sheet: Any, mode: str, line_numbers: Optional[List[int]] = Non
             range_start, range_end = valid
             utils.verbose_print(f'Range mode: lines {range_start} to {range_end}')
             utils.verbose_print(f'Lines selected: {sheet_data[range_start-1][observation_cell.col-1]} to {sheet_data[range_end-1][observation_cell.col-1]}')
-            clips = generate_range_timestamps(sheet_data, id_cell, observation_cell, num_participants, study_name, range_start, range_end)
+            clips = generate_range_timestamps(sheet_data, id_cell, observation_cell, num_participants, study_name, range_start, range_end, time_cell=time_cell)
         else:
             # Interactive mode
             while True:
@@ -256,13 +266,13 @@ def generate_list(sheet: Any, mode: str, line_numbers: Optional[List[int]] = Non
                 yn = input('Is this correct? y/n\n>> ')
                 if yn == 'y':
                     break
-            clips = generate_range_timestamps(sheet_data, id_cell, observation_cell, num_participants, study_name, start_line, end_line)
+            clips = generate_range_timestamps(sheet_data, id_cell, observation_cell, num_participants, study_name, start_line, end_line, time_cell=time_cell)
     # --- Cell mode ---
     elif mode == 'cell':
         if cell_specs is not None:
             # CLI mode - use provided cell specifications
             utils.verbose_print(f'Cell mode: processing {len(cell_specs)} cell(s)')
-            clips = generate_cell_timestamps(sheet_data, id_cell, observation_cell, study_name, cell_specs)
+            clips = generate_cell_timestamps(sheet_data, id_cell, observation_cell, study_name, cell_specs, time_cell=time_cell)
         else:
             # Interactive mode
             while True:
@@ -312,7 +322,7 @@ def generate_list(sheet: Any, mode: str, line_numbers: Optional[List[int]] = Non
                     utils.info_print('')
                     yn = input('Are these the correct cells? y/n\n>> ')
                     if yn == 'y':
-                        clips = generate_cell_timestamps(sheet_data, id_cell, observation_cell, study_name, valid_specs)
+                        clips = generate_cell_timestamps(sheet_data, id_cell, observation_cell, study_name, valid_specs, time_cell=time_cell)
                         break
                 except KeyboardInterrupt:
                     utils.info_print('\nCancelled by user.')
@@ -339,7 +349,7 @@ def generate_list(sheet: Any, mode: str, line_numbers: Optional[List[int]] = Non
             utils.verbose_print(f'Participant mode: generating all clips for {", ".join(participant_ids)}')
             clips = []
             for pid in participant_ids:
-                clips.extend(generate_participant_timestamps(sheet_data, id_cell, observation_cell, study_name, pid))
+                clips.extend(generate_participant_timestamps(sheet_data, id_cell, observation_cell, study_name, pid, time_cell=time_cell))
         else:
             # Interactive mode
             if not available_list:
@@ -387,7 +397,7 @@ def generate_list(sheet: Any, mode: str, line_numbers: Optional[List[int]] = Non
                 if yn == 'y':
                     clips = []
                     for pid in unique_ids:
-                        clips.extend(generate_participant_timestamps(sheet_data, id_cell, observation_cell, study_name, pid))
+                        clips.extend(generate_participant_timestamps(sheet_data, id_cell, observation_cell, study_name, pid, time_cell=time_cell))
                     break
     # --- Reel mode ---
     elif mode == 'reel':
@@ -403,6 +413,7 @@ def generate_list(sheet: Any, mode: str, line_numbers: Optional[List[int]] = Non
             num_participants,
             study_name,
             reel_input.strip(),
+            time_cell=time_cell,
         )
     elif mode == 'select':
         pass
@@ -621,7 +632,7 @@ def find_participant_column(header_row: List[str], id_cell: Any, participant_id:
             return col_idx
     return None
 
-def generate_participant_timestamps(sheet_data: List[List[str]], id_cell: Any, observation_cell: Any, study_name: str, participant_id: str) -> List[Any]:
+def generate_participant_timestamps(sheet_data: List[List[str]], id_cell: Any, observation_cell: Any, study_name: str, participant_id: str, time_cell: Optional[Any] = None) -> List[Any]:
     """Generate timestamps for all rows in a single participant's column.
 
     Args:
@@ -630,6 +641,7 @@ def generate_participant_timestamps(sheet_data: List[List[str]], id_cell: Any, o
         observation_cell: The observation header cell
         study_name: Normalized study name
         participant_id: Participant ID (e.g. P01)
+        time_cell: Optional REALTIME_HEADER cell for absolute timestamp conversion
 
     Returns:
         List of clip issue dictionaries
@@ -646,12 +658,12 @@ def generate_participant_timestamps(sheet_data: List[List[str]], id_cell: Any, o
         cell_value = sheet_data[row_idx][col_idx]
         if not cell_value or not cell_value.strip():
             continue
-        issue = _make_clip_record(sheet_data, row_idx, col_idx, id_cell, observation_cell, study_name, cell_value)
+        issue = _make_clip_record(sheet_data, row_idx, col_idx, id_cell, observation_cell, study_name, cell_value, time_cell=time_cell)
         clips.append(issue)
         utils.verbose_print(f"+ Found timestamp: {cell_value.replace(chr(10), ' ')} at row {row_idx + 1} ({gspread.utils.rowcol_to_a1(issue['cell'].row, issue['cell'].col)})")
     return clips
 
-def generate_cell_timestamps(sheet_data: List[List[str]], id_cell: Any, observation_cell: Any, study_name: str, cell_specs: List[Tuple[str, int]]) -> List[Any]:
+def generate_cell_timestamps(sheet_data: List[List[str]], id_cell: Any, observation_cell: Any, study_name: str, cell_specs: List[Tuple[str, int]], time_cell: Optional[Any] = None) -> List[Any]:
     """Generate timestamps for specific cells.
     
     Args:
@@ -660,6 +672,7 @@ def generate_cell_timestamps(sheet_data: List[List[str]], id_cell: Any, observat
         observation_cell: The observation header cell
         study_name: Normalized study name
         cell_specs: List of (participant_id, row_number) tuples
+        time_cell: Optional REALTIME_HEADER cell for absolute timestamp conversion
         
     Returns:
         List of clip issue dictionaries
@@ -693,7 +706,7 @@ def generate_cell_timestamps(sheet_data: List[List[str]], id_cell: Any, observat
             utils.verbose_print(f"Cell {participant_id}.{row_number} is empty, skipping.")
             continue
         
-        issue = _make_clip_record(sheet_data, row_idx, col_idx, id_cell, observation_cell, study_name, cell_value)
+        issue = _make_clip_record(sheet_data, row_idx, col_idx, id_cell, observation_cell, study_name, cell_value, time_cell=time_cell)
         # Use actual header value for participant when available
         participant_row = id_cell.row - 1
         if 0 <= participant_row < len(sheet_data) and col_idx < len(sheet_data[participant_row]) and sheet_data[participant_row][col_idx]:
@@ -703,7 +716,7 @@ def generate_cell_timestamps(sheet_data: List[List[str]], id_cell: Any, observat
     
     return clips
 
-def generate_batch_timestamps(sheet_data: List[List[str]], id_cell: Any, observation_cell: Any, num_participants: int, study_name: str) -> List[Any]:
+def generate_batch_timestamps(sheet_data: List[List[str]], id_cell: Any, observation_cell: Any, num_participants: int, study_name: str, time_cell: Optional[Any] = None) -> List[Any]:
     """Generate timestamps for all rows in batch mode.
     
     Args:
@@ -712,6 +725,7 @@ def generate_batch_timestamps(sheet_data: List[List[str]], id_cell: Any, observa
         observation_cell: The observation header cell
         num_participants: Number of participant columns
         study_name: Normalized study name
+        time_cell: Optional REALTIME_HEADER cell for absolute timestamp conversion
         
     Returns:
         List of clip issue dictionaries
@@ -720,7 +734,7 @@ def generate_batch_timestamps(sheet_data: List[List[str]], id_cell: Any, observa
     clips = []
     for i in range(id_cell.row+1, len(sheet_data)):
         utils.debug_print(f'Batching on line {i} (real sheet line {i+1})')
-        clips.extend(get_line_timestamps(sheet_data, id_cell, observation_cell, num_participants, i, study_name))
+        clips.extend(get_line_timestamps(sheet_data, id_cell, observation_cell, num_participants, i, study_name, time_cell=time_cell))
     return clips
 
 def collect_categories(sheet_data: List[List[str]], id_cell: Any, category_cell: Any) -> List[str]:
@@ -745,7 +759,7 @@ def collect_categories(sheet_data: List[List[str]], id_cell: Any, category_cell:
     
     return categories
 
-def generate_category_timestamps(sheet_data: List[List[str]], id_cell: Any, observation_cell: Any, category_cell: Any, num_participants: int, study_name: str, selected_categories: List[str]) -> List[Any]:
+def generate_category_timestamps(sheet_data: List[List[str]], id_cell: Any, observation_cell: Any, category_cell: Any, num_participants: int, study_name: str, selected_categories: List[str], time_cell: Optional[Any] = None) -> List[Any]:
     """Generate timestamps for all rows matching any of the selected categories.
     
     Args:
@@ -756,6 +770,7 @@ def generate_category_timestamps(sheet_data: List[List[str]], id_cell: Any, obse
         num_participants: Number of participant columns
         study_name: Normalized study name
         selected_categories: List of category names to include
+        time_cell: Optional REALTIME_HEADER cell for absolute timestamp conversion
         
     Returns:
         List of clip issue dictionaries
@@ -769,11 +784,11 @@ def generate_category_timestamps(sheet_data: List[List[str]], id_cell: Any, obse
         row_category = sheet_data[i][category_col].strip()
         if row_category in selected_categories:
             utils.debug_print(f"Row {i+1} matches category '{row_category}'")
-            clips.extend(get_line_timestamps(sheet_data, id_cell, observation_cell, num_participants, i, study_name))
+            clips.extend(get_line_timestamps(sheet_data, id_cell, observation_cell, num_participants, i, study_name, time_cell=time_cell))
     
     return clips
 
-def generate_line_timestamps(sheet_data: List[List[str]], id_cell: Any, observation_cell: Any, num_participants: int, study_name: str, cli_line_numbers: Optional[List[int]] = None, skip_prompts: bool = False) -> List[Any]:
+def generate_line_timestamps(sheet_data: List[List[str]], id_cell: Any, observation_cell: Any, num_participants: int, study_name: str, cli_line_numbers: Optional[List[int]] = None, skip_prompts: bool = False, time_cell: Optional[Any] = None) -> List[Any]:
     """Generate videos for one or more line/row numbers.
     
     Args:
@@ -840,7 +855,7 @@ def generate_line_timestamps(sheet_data: List[List[str]], id_cell: Any, observat
     clips = []
     for line_num in valid_lines:
         utils.debug_print(f'Calling get_line_timestamps() from generate_line_timestamps() for line {line_num}')
-        line_clips = get_line_timestamps(sheet_data, id_cell, observation_cell, num_participants, line_num-1, study_name)
+        line_clips = get_line_timestamps(sheet_data, id_cell, observation_cell, num_participants, line_num-1, study_name, time_cell=time_cell)
         clips.extend(line_clips)
     
     utils.debug_print(f'Printing return of get_line_timestamps() in generate_line_timestamps(): {len(clips)} total clips')
@@ -848,7 +863,7 @@ def generate_line_timestamps(sheet_data: List[List[str]], id_cell: Any, observat
 
     return clips
 
-def get_line_timestamps(sheet_data: List[List[str]], id_cell: Any, observation_cell: Any, num_participants: int, line_index: int, study_name: str) -> List[Any]:
+def get_line_timestamps(sheet_data: List[List[str]], id_cell: Any, observation_cell: Any, num_participants: int, line_index: int, study_name: str, time_cell: Optional[Any] = None) -> List[Any]:
     """Extract timestamp data from a single row in the spreadsheet.
     
     Processes all participant columns in the specified row and creates
@@ -861,6 +876,7 @@ def get_line_timestamps(sheet_data: List[List[str]], id_cell: Any, observation_c
         num_participants: Number of participant columns
         line_index: Zero-based row index to process
         study_name: Normalized study name
+        time_cell: Optional REALTIME_HEADER cell for absolute timestamp conversion
         
     Returns:
         List of clip issue dictionaries, one per timestamp found
@@ -890,7 +906,7 @@ def get_line_timestamps(sheet_data: List[List[str]], id_cell: Any, observation_c
                 pass
             else:
                 # Build one clip record per non-empty participant cell in this row
-                issue = _make_clip_record(sheet_data, line_index, col_index, id_cell, observation_cell, study_name, value)
+                issue = _make_clip_record(sheet_data, line_index, col_index, id_cell, observation_cell, study_name, value, time_cell=time_cell)
                 if config.DEBUGGING:
                     ic(issue.get("participant"), issue.get("desc"), issue.get("category"))
                     ic(issue)
@@ -911,7 +927,7 @@ def get_line_timestamps(sheet_data: List[List[str]], id_cell: Any, observation_c
         ic(clips)
     return clips
 
-def generate_range_timestamps(sheet_data: List[List[str]], id_cell: Any, observation_cell: Any, num_participants: int, study_name: str, start_line: int, end_line: int) -> List[Any]:
+def generate_range_timestamps(sheet_data: List[List[str]], id_cell: Any, observation_cell: Any, num_participants: int, study_name: str, start_line: int, end_line: int, time_cell: Optional[Any] = None) -> List[Any]:
     """Generate timestamps for a range of rows.
     
     Args:
@@ -922,6 +938,7 @@ def generate_range_timestamps(sheet_data: List[List[str]], id_cell: Any, observa
         study_name: Normalized study name
         start_line: Starting row number (1-based)
         end_line: Ending row number (1-based, inclusive)
+        time_cell: Optional REALTIME_HEADER cell for absolute timestamp conversion
         
     Returns:
         List of clip issue dictionaries
@@ -929,7 +946,7 @@ def generate_range_timestamps(sheet_data: List[List[str]], id_cell: Any, observa
     clips = []
     for i in range(start_line-1, end_line):
         utils.debug_print(f'Batching on line {i}')
-        clips.extend(get_line_timestamps(sheet_data, id_cell, observation_cell, num_participants, i, study_name))
+        clips.extend(get_line_timestamps(sheet_data, id_cell, observation_cell, num_participants, i, study_name, time_cell=time_cell))
     return clips
 
 
@@ -941,6 +958,7 @@ def generate_reel_timestamps(
     num_participants: int,
     study_name: str,
     reel_input_string: str,
+    time_cell: Optional[Any] = None,
 ) -> List[Any]:
     """Generate timestamps for reel mode by combining multiple selector types and deduplicating.
 
@@ -976,7 +994,7 @@ def generate_reel_timestamps(
 
     if selectors['batch']:
         all_issues.extend(
-            generate_batch_timestamps(sheet_data, id_cell, observation_cell, num_participants, study_name)
+            generate_batch_timestamps(sheet_data, id_cell, observation_cell, num_participants, study_name, time_cell=time_cell)
         )
 
     if selectors['lines']:
@@ -989,6 +1007,7 @@ def generate_reel_timestamps(
                 study_name,
                 cli_line_numbers=selectors['lines'],
                 skip_prompts=True,
+                time_cell=time_cell,
             )
         )
 
@@ -1002,6 +1021,7 @@ def generate_reel_timestamps(
                 study_name,
                 start_line,
                 end_line,
+                time_cell=time_cell,
             )
         )
 
@@ -1015,6 +1035,7 @@ def generate_reel_timestamps(
                 num_participants,
                 study_name,
                 selectors['categories'],
+                time_cell=time_cell,
             )
         )
 
@@ -1026,6 +1047,7 @@ def generate_reel_timestamps(
                 observation_cell,
                 study_name,
                 selectors['cells'],
+                time_cell=time_cell,
             )
         )
 
@@ -1037,6 +1059,7 @@ def generate_reel_timestamps(
                 observation_cell,
                 study_name,
                 participant_id,
+                time_cell=time_cell,
             )
         )
 
@@ -1067,7 +1090,7 @@ def browse_spreadsheet(sheet: Any) -> None:
     if header_result is None:
         return
     
-    id_cell, observation_cell, category_cell = header_result
+    id_cell, observation_cell, category_cell, time_cell = header_result
     
     # Load sheet data
     sheet_data = sheet.get_all_values()
