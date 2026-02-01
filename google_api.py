@@ -70,7 +70,8 @@ def find_spreadsheet_by_name(search_name: str, doc_list: List[str]) -> int:
         The index of matching sheet, or -1 if not found.
     """
     from icecream import ic
-    ic(search_name)
+    if config.DEBUGGING:
+        ic(search_name)
     utils.debug_print('Running method find_spreadsheet_by_name()')
     search_name = search_name.strip().lower()
     search_name_guess = search_name + ' data set'
@@ -78,17 +79,21 @@ def find_spreadsheet_by_name(search_name: str, doc_list: List[str]) -> int:
     
     for i, doc in enumerate(doc_list):
         doc_name = doc.strip().lower()
-        ic(doc_name, search_name)
+        if config.DEBUGGING:
+            ic(doc_name, search_name)
         utils.debug_print(f"Attempting match with '{doc}', formatted as '{doc_name}'")
         if doc_name == search_name:
             utils.debug_print(f"Matched sheet '{doc_name}' with input '{search_name}'")
-            ic(i)
+            if config.DEBUGGING:
+                ic(i)
             return i
         elif doc_name == search_name_guess:
             utils.debug_print(f"Matched sheet '{doc_name}' with guess '{search_name_guess}'")
-            ic(i)
+            if config.DEBUGGING:
+                ic(i)
             return i
         else:
             utils.debug_print(f'Found nothing at step {i}')
-    ic(-1)
+    if config.DEBUGGING:
+        ic(-1)
     return -1

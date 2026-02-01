@@ -13,11 +13,13 @@ Icon?
 .nova
 
 # Working docs
-Upgrade\ notes.md
 *.mp4
 *.flv
 *.mov
 *.mkv
+*.xlsx
+.cursor
+.vscode
 
 # Python byte code
 *.py[cod]

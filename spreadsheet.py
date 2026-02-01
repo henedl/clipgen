@@ -3,7 +3,7 @@
 
 import re
 import webbrowser
-from typing import Any, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 import gspread
 from icecream import ic
@@ -44,6 +44,111 @@ def validate_spreadsheet_headers(sheet: Any) -> Optional[Tuple[Any, Any, Any]]:
     return (id_cell, observation_cell, category_cell)
 
 
+def _validate_row_range(start_line: int, end_line: int, max_row: int) -> Optional[Tuple[int, int]]:
+    """Validate row range; print error and return None if invalid.
+    
+    Args:
+        start_line: Start row (1-based)
+        end_line: End row (1-based)
+        max_row: Number of rows in sheet (len(sheet_data))
+        
+    Returns:
+        (start_line, end_line) if valid, None otherwise
+    """
+    if start_line < 1 or end_line < 1:
+        utils.error_print(f"Line numbers must be positive. Got start={start_line}, end={end_line}")
+        return None
+    if start_line > max_row or end_line > max_row:
+        utils.error_print(
+            f"Line number(s) out of range. Spreadsheet has {max_row} rows.",
+            [f"Requested: lines {start_line} to {end_line}"],
+        )
+        return None
+    if start_line > end_line:
+        utils.error_print(f"Start line ({start_line}) must be less than or equal to end line ({end_line}).")
+        return None
+    return (start_line, end_line)
+
+
+def _interactive_category_selection(categories: List[str]) -> List[str]:
+    """Interactive category selection: show numbered list, parse input, validate, confirm. Returns selected category names."""
+    utils.info_print('\nAvailable categories:')
+    for i, cat in enumerate(categories, 1):
+        utils.info_print(f'  {i}. {cat}')
+    while True:
+        selection = input('\nEnter category numbers (comma-separated, e.g., "1,3,5") or "all":\n>> ')
+        if selection.lower() == 'all':
+            return categories
+        try:
+            indices = [int(x.strip()) for x in selection.split(',')]
+            selected_categories = []
+            invalid_indices = []
+            for idx in indices:
+                if 1 <= idx <= len(categories):
+                    if categories[idx - 1] not in selected_categories:
+                        selected_categories.append(categories[idx - 1])
+                else:
+                    invalid_indices.append(idx)
+            if invalid_indices:
+                utils.info_print(f'  Invalid index(es): {", ".join(str(i) for i in invalid_indices)}')
+            if selected_categories:
+                utils.info_print('\nSelected categories:')
+                for cat in selected_categories:
+                    utils.info_print(f'  - {cat}')
+                yn = input('\nIs this correct? y/n\n>> ')
+                if yn == 'y':
+                    return selected_categories
+            else:
+                utils.info_print('No valid categories selected. Please try again.')
+        except ValueError:
+            utils.info_print('Please enter valid numbers separated by commas.')
+
+
+def _make_clip_record(
+    sheet_data: List[List[str]],
+    row_idx: int,
+    col_idx: int,
+    id_cell: Any,
+    observation_cell: Any,
+    study_name: str,
+    cell_value: str,
+) -> Dict[str, Any]:
+    """Build one clip record dict for a cell at (row_idx, col_idx).
+    
+    Args:
+        sheet_data: Sheet data matrix
+        row_idx: 0-based row index
+        col_idx: 0-based column index
+        id_cell: ID header cell
+        observation_cell: Observation header cell
+        study_name: Normalized study name
+        cell_value: Value of the timestamp cell (sheet_data[row_idx][col_idx])
+        
+    Returns:
+        Dict with keys: cell, desc, study, participant, category
+    """
+    cell = gspread.cell.Cell(row_idx + 1, col_idx + 1, cell_value)
+    desc_col = observation_cell.col - 1
+    category_col = observation_cell.col - 2
+    participant_row = id_cell.row - 1
+    desc = ""
+    if 0 <= desc_col < len(sheet_data[row_idx]):
+        desc = sheet_data[row_idx][desc_col]
+    participant = ""
+    if 0 <= participant_row < len(sheet_data) and col_idx < len(sheet_data[participant_row]):
+        participant = sheet_data[participant_row][col_idx]
+    category = ""
+    if 0 <= category_col < len(sheet_data[row_idx]):
+        category = sheet_data[row_idx][category_col]
+    return {
+        "cell": cell,
+        "desc": desc,
+        "study": study_name,
+        "participant": participant,
+        "category": category,
+    }
+
+
 def generate_list(sheet: Any, mode: str, line_numbers: Optional[List[int]] = None, range_start: Optional[int] = None, range_end: Optional[int] = None, skip_prompts: bool = False, cell_specs: Optional[List[Tuple[str, int]]] = None, participant_id: Optional[str] = None, reel_input: Optional[str] = None) -> List[Any]:
     """Goes through a sheet, bundles values from timestamp columns and descriptions columns into tuples.
     
@@ -59,17 +164,19 @@ def generate_list(sheet: Any, mode: str, line_numbers: Optional[List[int]] = Non
         reel_input: Optional reel selector string for 'reel' mode (e.g. '11, 13-16, P01, "Observations"')
         
     Returns:
-        List of clip issue dictionaries
+        List of clip records (dicts with keys: cell, desc, study, participant, category; 'times' added later by prepare_clip).
     """
-    ic(mode, line_numbers, range_start, range_end)
+    if config.DEBUGGING:
+        ic(mode, line_numbers, range_start, range_end)
     # Validate required headers exist
     header_result = validate_spreadsheet_headers(sheet)
     if header_result is None:
         return []
     
     id_cell, observation_cell, category_cell = header_result
-    ic(id_cell, observation_cell, category_cell)
-    timestamps = []
+    if config.DEBUGGING:
+        ic(id_cell, observation_cell, category_cell)
+    clips = []
 
     # Sheet data is a list of lists, which forms a matrix
     # - sheet_data[row][col] where indices start at 0 (real spreadsheet starts at 1)
@@ -101,86 +208,41 @@ def generate_list(sheet: Any, mode: str, line_numbers: Optional[List[int]] = Non
              "Check that participant column headers start with 'P' or 'G' (e.g., P01, P02, G01)."])
         return []
 
-    # Generate the timestamps, according to the selected mode.
+    # Generate clips according to the selected mode.
+    # --- Batch mode ---
     if mode == 'batch':
         if skip_prompts:
             utils.verbose_print('Batch mode: generating all possible clips...')
-            timestamps = generate_batch_timestamps(sheet_data, id_cell, observation_cell, num_participants, study_name)
+            clips = generate_batch_timestamps(sheet_data, id_cell, observation_cell, num_participants, study_name)
         else:
             yn = input('\nWarning: This will generate all possible clips. Do you want to proceed? y/n\n>> ')
             if yn == 'y':
-                timestamps = generate_batch_timestamps(sheet_data, id_cell, observation_cell, num_participants, study_name)
+                clips = generate_batch_timestamps(sheet_data, id_cell, observation_cell, num_participants, study_name)
+    # --- Category mode ---
     elif mode == 'category':
-        # Collect all unique categories from the sheet
         categories = collect_categories(sheet_data, id_cell, category_cell)
-        
         if not categories:
             utils.info_print('\nNo categories found in the spreadsheet.')
             return []
-        
-        # Display categories with numbered options
-        utils.info_print('\nAvailable categories:')
-        for i, cat in enumerate(categories, 1):
-            utils.info_print(f'  {i}. {cat}')
-        
-        # Get user selection
-        while True:
-            selection = input('\nEnter category numbers (comma-separated, e.g., "1,3,5") or "all":\n>> ')
-            
-            if selection.lower() == 'all':
-                selected_categories = categories
-                break
-            
-            try:
-                indices = [int(x.strip()) for x in selection.split(',')]
-                selected_categories = []
-                invalid_indices = []
-                
-                for idx in indices:
-                    if 1 <= idx <= len(categories):
-                        if categories[idx-1] not in selected_categories:
-                            selected_categories.append(categories[idx-1])
-                    else:
-                        invalid_indices.append(idx)
-                
-                if invalid_indices:
-                    utils.info_print(f'  Invalid index(es): {", ".join(str(i) for i in invalid_indices)}')
-                
-                if selected_categories:
-                    utils.info_print('\nSelected categories:')
-                    for cat in selected_categories:
-                        utils.info_print(f'  - {cat}')
-                    yn = input('\nIs this correct? y/n\n>> ')
-                    if yn == 'y':
-                        break
-                else:
-                    utils.info_print('No valid categories selected. Please try again.')
-            except ValueError:
-                utils.info_print('Please enter valid numbers separated by commas.')
-        
-        timestamps = generate_category_timestamps(sheet_data, id_cell, observation_cell, category_cell, num_participants, study_name, selected_categories)
+        selected_categories = _interactive_category_selection(categories)
+        clips = generate_category_timestamps(sheet_data, id_cell, observation_cell, category_cell, num_participants, study_name, selected_categories)
+    # --- Line mode ---
     elif mode == 'line':
-        timestamps = generate_line_timestamps(sheet_data, id_cell, observation_cell, num_participants, study_name, line_numbers, skip_prompts)
+        clips = generate_line_timestamps(sheet_data, id_cell, observation_cell, num_participants, study_name, line_numbers, skip_prompts)
+    # --- Range mode ---
     elif mode == 'range':
+        max_row = len(sheet_data)
         if range_start is not None and range_end is not None:
             # CLI mode - use provided range with bounds validation
-            max_row = len(sheet_data)
-            if range_start < 1 or range_end < 1:
-                utils.error_print(f"Line numbers must be positive. Got start={range_start}, end={range_end}")
+            valid = _validate_row_range(range_start, range_end, max_row)
+            if valid is None:
                 return []
-            if range_start > max_row or range_end > max_row:
-                utils.error_print(f"Line number(s) out of range. Spreadsheet has {max_row} rows.",
-                    [f"Requested: lines {range_start} to {range_end}"])
-                return []
-            if range_start > range_end:
-                utils.error_print(f"Start line ({range_start}) must be less than or equal to end line ({range_end}).")
-                return []
+            range_start, range_end = valid
             utils.verbose_print(f'Range mode: lines {range_start} to {range_end}')
             utils.verbose_print(f'Lines selected: {sheet_data[range_start-1][observation_cell.col-1]} to {sheet_data[range_end-1][observation_cell.col-1]}')
-            timestamps = generate_range_timestamps(sheet_data, id_cell, observation_cell, num_participants, study_name, range_start, range_end)
+            clips = generate_range_timestamps(sheet_data, id_cell, observation_cell, num_participants, study_name, range_start, range_end)
         else:
             # Interactive mode
-            max_row = len(sheet_data)
             while True:
                 try:
                     start_line = int(input('\nWhich starting line (row number only)?\n>> '))
@@ -188,28 +250,19 @@ def generate_list(sheet: Any, mode: str, line_numbers: Optional[List[int]] = Non
                 except ValueError:
                     utils.info_print('\nInvalid input. Please enter row numbers as integers.')
                     continue
-                
-                # Validate bounds
-                if start_line < 1 or end_line < 1:
-                    utils.error_print(f'Line numbers must be positive (got {start_line} and {end_line}).')
+                if _validate_row_range(start_line, end_line, max_row) is None:
                     continue
-                if start_line > max_row or end_line > max_row:
-                    utils.error_print(f'Line number out of range. Spreadsheet has {max_row} rows.')
-                    continue
-                if start_line > end_line:
-                    utils.error_print(f'Start line ({start_line}) must be less than or equal to end line ({end_line}).')
-                    continue
-                
                 utils.info_print(f'Lines selected: {sheet_data[start_line-1][observation_cell.col-1]} to {sheet_data[end_line-1][observation_cell.col-1]}')
                 yn = input('Is this correct? y/n\n>> ')
                 if yn == 'y':
                     break
-            timestamps = generate_range_timestamps(sheet_data, id_cell, observation_cell, num_participants, study_name, start_line, end_line)
+            clips = generate_range_timestamps(sheet_data, id_cell, observation_cell, num_participants, study_name, start_line, end_line)
+    # --- Cell mode ---
     elif mode == 'cell':
         if cell_specs is not None:
             # CLI mode - use provided cell specifications
             utils.verbose_print(f'Cell mode: processing {len(cell_specs)} cell(s)')
-            timestamps = generate_cell_timestamps(sheet_data, id_cell, observation_cell, study_name, cell_specs)
+            clips = generate_cell_timestamps(sheet_data, id_cell, observation_cell, study_name, cell_specs)
         else:
             # Interactive mode
             while True:
@@ -247,7 +300,7 @@ def generate_list(sheet: Any, mode: str, line_numbers: Optional[List[int]] = Non
                             if desc_col >= 0 and desc_col < len(sheet_data[row_idx]):
                                 desc = sheet_data[row_idx][desc_col]
                             if cell_value and cell_value.strip():
-                                utils.info_print(f'  {participant_id}.{row_number}: {cell_value.replace(chr(10), " ")} (row: {desc[:50] if desc else "N/A"})')
+                                utils.info_print(f'  {participant_id}.{row_number}: {cell_value.replace(chr(10), " ")} (row: {desc[:config.DESCRIPTION_PREVIEW_LENGTH] if desc else "N/A"})')
                             else:
                                 utils.info_print(f'  {participant_id}.{row_number}: [EMPTY]')
                             valid_specs.append((participant_id, row_number))
@@ -259,11 +312,12 @@ def generate_list(sheet: Any, mode: str, line_numbers: Optional[List[int]] = Non
                     utils.info_print('')
                     yn = input('Are these the correct cells? y/n\n>> ')
                     if yn == 'y':
-                        timestamps = generate_cell_timestamps(sheet_data, id_cell, observation_cell, study_name, valid_specs)
+                        clips = generate_cell_timestamps(sheet_data, id_cell, observation_cell, study_name, valid_specs)
                         break
                 except KeyboardInterrupt:
                     utils.info_print('\nCancelled by user.')
                     return []
+    # --- Participant mode ---
     elif mode == 'participant':
         header_row = sheet_data[id_cell.row - 1] if id_cell.row > 0 else []
         available_list = get_participant_list(header_row, id_cell, num_participants)
@@ -283,9 +337,9 @@ def generate_list(sheet: Any, mode: str, line_numbers: Optional[List[int]] = Non
                     [f"Available participants: {', '.join(available_list)}"])
                 return []
             utils.verbose_print(f'Participant mode: generating all clips for {", ".join(participant_ids)}')
-            timestamps = []
+            clips = []
             for pid in participant_ids:
-                timestamps.extend(generate_participant_timestamps(sheet_data, id_cell, observation_cell, study_name, pid))
+                clips.extend(generate_participant_timestamps(sheet_data, id_cell, observation_cell, study_name, pid))
         else:
             # Interactive mode
             if not available_list:
@@ -331,16 +385,17 @@ def generate_list(sheet: Any, mode: str, line_numbers: Optional[List[int]] = Non
                 utils.info_print(f'\nSelected participant(s): {", ".join(unique_ids)}')
                 yn = input('Generate all clips for these participants? y/n\n>> ')
                 if yn == 'y':
-                    timestamps = []
+                    clips = []
                     for pid in unique_ids:
-                        timestamps.extend(generate_participant_timestamps(sheet_data, id_cell, observation_cell, study_name, pid))
+                        clips.extend(generate_participant_timestamps(sheet_data, id_cell, observation_cell, study_name, pid))
                     break
+    # --- Reel mode ---
     elif mode == 'reel':
         if reel_input is None or not reel_input.strip():
             utils.info_print('\nReel mode: no input provided.')
             return []
-        utils.verbose_print('Reel mode: parsing selectors and collecting timestamps...')
-        timestamps = generate_reel_timestamps(
+        utils.verbose_print('Reel mode: parsing selectors and collecting clips...')
+        clips = generate_reel_timestamps(
             sheet_data,
             id_cell,
             observation_cell,
@@ -352,7 +407,7 @@ def generate_list(sheet: Any, mode: str, line_numbers: Optional[List[int]] = Non
     elif mode == 'select':
         pass
 
-    return timestamps
+    return clips
 
 def get_num_participants(header_row: List[str], id_cell: Any, col_count: int) -> int:
     """Count the number of participant columns in the worksheet.
@@ -496,6 +551,7 @@ def parse_reel_input(input_string: str) -> dict:
         rest = rest[:match.start()] + ' ' + rest[match.end():]
 
     # Split remaining by comma, then by space for tokens that might be space-separated
+    # Order of checks per token (do not reorder): batch, range, line, cell, participant
     parts = [p.strip() for p in rest.split(',') if p.strip()]
     seen_lines = set()
     seen_ranges = set()
@@ -559,17 +615,10 @@ def find_participant_column(header_row: List[str], id_cell: Any, participant_id:
     Returns:
         Column index (0-based) if found, None otherwise
     """
-    # Search starting from the ID column
     for col_idx in range(id_cell.col - 1, len(header_row)):
         header_value = header_row[col_idx].strip()
-        # Case-insensitive matching
         if header_value.lower() == participant_id.lower():
             return col_idx
-        # Also check if it starts with the participant prefix and matches
-        if header_value and header_value[0] in config.PARTICIPANT_PREFIXES:
-            if header_value.lower() == participant_id.lower():
-                return col_idx
-    
     return None
 
 def generate_participant_timestamps(sheet_data: List[List[str]], id_cell: Any, observation_cell: Any, study_name: str, participant_id: str) -> List[Any]:
@@ -590,30 +639,17 @@ def generate_participant_timestamps(sheet_data: List[List[str]], id_cell: Any, o
     col_idx = find_participant_column(header_row, id_cell, participant_id)
     if col_idx is None:
         return []
-    participant_row = id_cell.row - 1
-    participant_display = header_row[col_idx] if col_idx < len(header_row) else participant_id
-    timestamps = []
-    desc_col = observation_cell.col - 1
-    category_col = observation_cell.col - 2
+    clips = []
     for row_idx in range(id_cell.row, len(sheet_data)):
         if col_idx >= len(sheet_data[row_idx]):
             continue
         cell_value = sheet_data[row_idx][col_idx]
         if not cell_value or not cell_value.strip():
             continue
-        cell = gspread.cell.Cell(row_idx + 1, col_idx + 1, cell_value)
-        desc = sheet_data[row_idx][desc_col] if desc_col < len(sheet_data[row_idx]) else ''
-        category = sheet_data[row_idx][category_col] if category_col < len(sheet_data[row_idx]) else ''
-        issue = {
-            'cell': cell,
-            'desc': desc,
-            'study': study_name,
-            'participant': participant_display,
-            'category': category
-        }
-        timestamps.append(issue)
-        utils.verbose_print(f"+ Found timestamp: {cell_value.replace(chr(10), ' ')} at row {row_idx + 1} ({gspread.utils.rowcol_to_a1(cell.row, cell.col)})")
-    return timestamps
+        issue = _make_clip_record(sheet_data, row_idx, col_idx, id_cell, observation_cell, study_name, cell_value)
+        clips.append(issue)
+        utils.verbose_print(f"+ Found timestamp: {cell_value.replace(chr(10), ' ')} at row {row_idx + 1} ({gspread.utils.rowcol_to_a1(issue['cell'].row, issue['cell'].col)})")
+    return clips
 
 def generate_cell_timestamps(sheet_data: List[List[str]], id_cell: Any, observation_cell: Any, study_name: str, cell_specs: List[Tuple[str, int]]) -> List[Any]:
     """Generate timestamps for specific cells.
@@ -629,7 +665,7 @@ def generate_cell_timestamps(sheet_data: List[List[str]], id_cell: Any, observat
         List of clip issue dictionaries
     """
     utils.debug_print('Starting method generate_cell_timestamps()')
-    timestamps = []
+    clips = []
     header_row = sheet_data[id_cell.row - 1] if id_cell.row > 0 else []
     
     for participant_id, row_number in cell_specs:
@@ -653,48 +689,19 @@ def generate_cell_timestamps(sheet_data: List[List[str]], id_cell: Any, observat
             continue
         
         cell_value = sheet_data[row_idx][col_idx]
-        
-        # Skip empty cells
         if not cell_value or cell_value.strip() == '':
             utils.verbose_print(f"Cell {participant_id}.{row_number} is empty, skipping.")
             continue
         
-        # Create cell object
-        cell = gspread.cell.Cell(row_idx + 1, col_idx + 1, cell_value)
-        
-        # Get description, category, and participant ID from surrounding cells
-        desc_col = observation_cell.col - 1
-        category_col = observation_cell.col - 2
+        issue = _make_clip_record(sheet_data, row_idx, col_idx, id_cell, observation_cell, study_name, cell_value)
+        # Use actual header value for participant when available
         participant_row = id_cell.row - 1
-        
-        # Get description with bounds check
-        desc = ''
-        if desc_col >= 0 and desc_col < len(sheet_data[row_idx]):
-            desc = sheet_data[row_idx][desc_col]
-        
-        # Get participant ID from header
-        participant = participant_id
-        if participant_row >= 0 and participant_row < len(sheet_data) and col_idx < len(sheet_data[participant_row]):
-            # Use the actual header value for consistency
-            participant = sheet_data[participant_row][col_idx] or participant_id
-        
-        # Get category with bounds check
-        category = ''
-        if category_col >= 0 and category_col < len(sheet_data[row_idx]):
-            category = sheet_data[row_idx][category_col]
-        
-        issue = {
-            'cell': cell,
-            'desc': desc,
-            'study': study_name,
-            'participant': participant,
-            'category': category
-        }
-        
-        timestamps.append(issue)
-        utils.verbose_print(f"+ Found timestamp: {cell_value.replace(chr(10), ' ')} at cell {participant_id}.{row_number} ({gspread.utils.rowcol_to_a1(cell.row, cell.col)})")
+        if 0 <= participant_row < len(sheet_data) and col_idx < len(sheet_data[participant_row]) and sheet_data[participant_row][col_idx]:
+            issue['participant'] = sheet_data[participant_row][col_idx]
+        clips.append(issue)
+        utils.verbose_print(f"+ Found timestamp: {cell_value.replace(chr(10), ' ')} at cell {participant_id}.{row_number} ({gspread.utils.rowcol_to_a1(issue['cell'].row, issue['cell'].col)})")
     
-    return timestamps
+    return clips
 
 def generate_batch_timestamps(sheet_data: List[List[str]], id_cell: Any, observation_cell: Any, num_participants: int, study_name: str) -> List[Any]:
     """Generate timestamps for all rows in batch mode.
@@ -710,11 +717,11 @@ def generate_batch_timestamps(sheet_data: List[List[str]], id_cell: Any, observa
         List of clip issue dictionaries
     """
     utils.debug_print('Running method generate_batch_timestamps()')
-    timestamps = []
+    clips = []
     for i in range(id_cell.row+1, len(sheet_data)):
         utils.debug_print(f'Batching on line {i} (real sheet line {i+1})')
-        timestamps.extend(get_line_timestamps(sheet_data, id_cell, observation_cell, num_participants, i, study_name))
-    return timestamps
+        clips.extend(get_line_timestamps(sheet_data, id_cell, observation_cell, num_participants, i, study_name))
+    return clips
 
 def collect_categories(sheet_data: List[List[str]], id_cell: Any, category_cell: Any) -> List[str]:
     """Scan sheet and return unique categories in order of first appearance.
@@ -754,7 +761,7 @@ def generate_category_timestamps(sheet_data: List[List[str]], id_cell: Any, obse
         List of clip issue dictionaries
     """
     utils.debug_print('Starting method generate_category_timestamps()')
-    timestamps = []
+    clips = []
     category_col = category_cell.col - 1  # Convert from 1-indexed to 0-indexed
     
     # Start from the row after the category header
@@ -762,9 +769,9 @@ def generate_category_timestamps(sheet_data: List[List[str]], id_cell: Any, obse
         row_category = sheet_data[i][category_col].strip()
         if row_category in selected_categories:
             utils.debug_print(f"Row {i+1} matches category '{row_category}'")
-            timestamps.extend(get_line_timestamps(sheet_data, id_cell, observation_cell, num_participants, i, study_name))
+            clips.extend(get_line_timestamps(sheet_data, id_cell, observation_cell, num_participants, i, study_name))
     
-    return timestamps
+    return clips
 
 def generate_line_timestamps(sheet_data: List[List[str]], id_cell: Any, observation_cell: Any, num_participants: int, study_name: str, cli_line_numbers: Optional[List[int]] = None, skip_prompts: bool = False) -> List[Any]:
     """Generate videos for one or more line/row numbers.
@@ -829,17 +836,17 @@ def generate_line_timestamps(sheet_data: List[List[str]], id_cell: Any, observat
             if yn == 'y':
                 break
 
-    # Collect timestamps from all valid lines
-    timestamps = []
+    # Collect clips from all valid lines
+    clips = []
     for line_num in valid_lines:
         utils.debug_print(f'Calling get_line_timestamps() from generate_line_timestamps() for line {line_num}')
-        line_timestamps = get_line_timestamps(sheet_data, id_cell, observation_cell, num_participants, line_num-1, study_name)
-        timestamps.extend(line_timestamps)
+        line_clips = get_line_timestamps(sheet_data, id_cell, observation_cell, num_participants, line_num-1, study_name)
+        clips.extend(line_clips)
     
-    utils.debug_print(f'Printing return of get_line_timestamps() in generate_line_timestamps(): {len(timestamps)} total timestamps')
-    utils.debug_print(str(timestamps))
+    utils.debug_print(f'Printing return of get_line_timestamps() in generate_line_timestamps(): {len(clips)} total clips')
+    utils.debug_print(str(clips))
 
-    return timestamps
+    return clips
 
 def get_line_timestamps(sheet_data: List[List[str]], id_cell: Any, observation_cell: Any, num_participants: int, line_index: int, study_name: str) -> List[Any]:
     """Extract timestamp data from a single row in the spreadsheet.
@@ -858,17 +865,19 @@ def get_line_timestamps(sheet_data: List[List[str]], id_cell: Any, observation_c
     Returns:
         List of clip issue dictionaries, one per timestamp found
     """
-    ic(line_index, num_participants, study_name)
+    if config.DEBUGGING:
+        ic(line_index, num_participants, study_name)
     utils.debug_print(f'Running method get_line_timestamps, starting line index {line_index} (real sheet line {line_index+1})')
     
     # Bounds checking
     if line_index < 0 or line_index >= len(sheet_data):
-        ic(line_index, len(sheet_data))
+        if config.DEBUGGING:
+            ic(line_index, len(sheet_data))
         utils.error_print(f"Line index {line_index} (row {line_index+1}) is out of bounds.",
             [f"Spreadsheet has {len(sheet_data)} rows."])
         return []
 
-    timestamps = []
+    clips = []
     try:
         for col_index, value in enumerate(sheet_data[line_index]):
             utils.debug_print(f"Item {col_index} with value '{value}' being processed.")
@@ -880,57 +889,27 @@ def get_line_timestamps(sheet_data: List[List[str]], id_cell: Any, observation_c
             elif value is None or value == '':
                 pass
             else:
-                cell = gspread.cell.Cell(line_index+1, col_index+1, value)
-                utils.debug_print(f'Found something at step {col_index}')
-                utils.debug_print(f'study_name is {study_name}')
-                
-                # Safely access array indices with bounds checking
-                desc_col = observation_cell.col - 1
-                category_col = observation_cell.col - 2
-                participant_row = id_cell.row - 1
-                
-                # Get description with bounds check
-                desc = ''
-                if desc_col >= 0 and desc_col < len(sheet_data[line_index]):
-                    desc = sheet_data[line_index][desc_col]
-                else:
-                    utils.warning_print(f"Could not read description at row {line_index+1}, column {desc_col+1}")
-                
-                # Get participant with bounds check
-                participant = ''
-                if participant_row >= 0 and participant_row < len(sheet_data) and col_index < len(sheet_data[participant_row]):
-                    participant = sheet_data[participant_row][col_index]
-                else:
-                    utils.warning_print(f"Could not read participant ID at row {participant_row+1}, column {col_index+1}")
-                
-                # Get category with bounds check
-                category = ''
-                if category_col >= 0 and category_col < len(sheet_data[line_index]):
-                    category = sheet_data[line_index][category_col]
-                
-                ic(participant, desc, category)
-                issue = {
-                    'cell': cell,
-                    'desc': desc,
-                    'study': study_name,
-                    'participant': participant,
-                    'category': category
-                }
-                ic(issue)
-                utils.debug_print(f"Participant ID at R{id_cell.row},C{col_index} -> '{participant}'")
-                utils.debug_print(f"Description at R{line_index},C{observation_cell.col-1} -> '{desc}'")
-                utils.debug_print(f"Timestamp at R{cell.row-1},C{cell.col-1} -> '{cell.value}'")
-                utils.debug_print(f'Actual cell {cell} at actual address {gspread.utils.rowcol_to_a1(cell.row, cell.col)}')
-                timestamps.append(issue)
-                utils.verbose_print(f"+ Found timestamp: {value.replace(chr(10), ' ')} at address {gspread.utils.rowcol_to_a1(cell.row, cell.col)}")
+                # Build one clip record per non-empty participant cell in this row
+                issue = _make_clip_record(sheet_data, line_index, col_index, id_cell, observation_cell, study_name, value)
+                if config.DEBUGGING:
+                    ic(issue.get("participant"), issue.get("desc"), issue.get("category"))
+                    ic(issue)
+                utils.debug_print(f"Participant ID at R{id_cell.row},C{col_index} -> '{issue.get('participant')}'")
+                utils.debug_print(f"Description at R{line_index},C{observation_cell.col-1} -> '{issue.get('desc')}'")
+                utils.debug_print(f"Timestamp at R{issue['cell'].row-1},C{issue['cell'].col-1} -> '{issue['cell'].value}'")
+                utils.debug_print(f'Actual cell at address {gspread.utils.rowcol_to_a1(issue["cell"].row, issue["cell"].col)}')
+                clips.append(issue)
+                utils.verbose_print(f"+ Found timestamp: {value.replace(chr(10), ' ')} at address {gspread.utils.rowcol_to_a1(issue['cell'].row, issue['cell'].col)}")
     except IndexError as e:
-        ic(e, line_index)
+        if config.DEBUGGING:
+            ic(e, line_index)
         utils.error_print(f"Index error while reading row {line_index+1}: {e}",
             ["The spreadsheet structure may be malformed."])
 
-    utils.debug_print(f'Line completed, returning list of {len(timestamps)} potential timestamps.')
-    ic(timestamps)
-    return timestamps
+    utils.debug_print(f'Line completed, returning list of {len(clips)} potential clips.')
+    if config.DEBUGGING:
+        ic(clips)
+    return clips
 
 def generate_range_timestamps(sheet_data: List[List[str]], id_cell: Any, observation_cell: Any, num_participants: int, study_name: str, start_line: int, end_line: int) -> List[Any]:
     """Generate timestamps for a range of rows.
@@ -947,11 +926,11 @@ def generate_range_timestamps(sheet_data: List[List[str]], id_cell: Any, observa
     Returns:
         List of clip issue dictionaries
     """
-    timestamps = []
+    clips = []
     for i in range(start_line-1, end_line):
         utils.debug_print(f'Batching on line {i}')
-        timestamps.extend(get_line_timestamps(sheet_data, id_cell, observation_cell, num_participants, i, study_name))
-    return timestamps
+        clips.extend(get_line_timestamps(sheet_data, id_cell, observation_cell, num_participants, i, study_name))
+    return clips
 
 
 def generate_reel_timestamps(

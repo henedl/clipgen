@@ -11,8 +11,8 @@ import config
 import utils
 
 
-def double_digits(number: str) -> str:
-    """Convert a number string to double-digit format.
+def pad_number_two_digits(number: str) -> str:
+    """Pad a numeric string to two digits (e.g. '5' -> '05').
     
     Args:
         number: String representation of a number
@@ -92,53 +92,56 @@ def truncate_filename(filename: str, step: int = 1) -> str:
             filename = filename[0:config.MAX_FILENAME_LENGTH-(len(config.FILEFORMAT))] + config.FILEFORMAT
     return filename
 
-def clean_issue(issue: Dict[str, Any]) -> Dict[str, Any]:
+def prepare_clip(clip: Dict[str, Any]) -> Dict[str, Any]:
     """Parse timestamps and sanitize description/category for filename use.
     
-    Processes a clip issue dictionary by:
-    - Parsing timestamps from the cell value
-    - Cleaning and sanitizing the description
-    - Sanitizing the category (defaults to 'uncategorized' if empty)
+    Mutates the input clip dict: adds 'times' (list of (start, end) timestamp pairs)
+    and overwrites 'desc' and 'category' with sanitized values.
+    
+    Expected input keys: 'cell', 'desc', 'category', 'study', 'participant'.
     
     Args:
-        issue: Dictionary containing 'cell', 'desc', 'category', 'study', 'participant'
+        clip: Clip record dict containing 'cell', 'desc', 'category', 'study', 'participant'
         
     Returns:
-        Modified issue dictionary with 'times' added and sanitized fields
+        The same dict with 'times' added and sanitized 'desc' and 'category'
     """
-    ic(issue)
-    utils.debug_print(f"clean_issue() received issue with cell contents {issue['cell'].value}")
+    if config.DEBUGGING:
+        ic(clip)
+    utils.debug_print(f"prepare_clip() received clip with cell contents {clip['cell'].value}")
     utils.debug_print('Will attempt to split the cell contents')
     
     # Get cell reference for error messages
-    cell_ref = gspread.utils.rowcol_to_a1(issue['cell'].row, issue['cell'].col)
+    cell_ref = gspread.utils.rowcol_to_a1(clip['cell'].row, clip['cell'].col)
     
     # Parse timestamps from cell value
-    issue['times'] = utils.parse_timestamps(issue['cell'].value, cell_ref=cell_ref)
-    ic(issue['times'])
+    clip['times'] = utils.parse_timestamps(clip['cell'].value, cell_ref=cell_ref)
+    if config.DEBUGGING:
+        ic(clip['times'])
     
     # Warn if no valid timestamps were parsed
-    if not issue['times']:
+    if not clip['times']:
         utils.warning_print(f"No valid timestamps found in cell {cell_ref}",
-            [f"Cell contents: '{issue['cell'].value}'",
-             f"Participant: {issue['participant']}, Description: {issue['desc'][:50]}..."])
+            [f"Cell contents: '{clip['cell'].value}'",
+             f"Participant: {clip['participant']}, Description: {clip['desc'][:50]}..."])
 
     # Clean description: remove bracketed prefix and sanitize
     # Handle case where description doesn't contain ']'
-    bracket_pos = issue['desc'].rfind(']')
+    bracket_pos = clip['desc'].rfind(']')
     if bracket_pos >= 0:
-        desc = issue['desc'][bracket_pos+1:].strip()
+        desc = clip['desc'][bracket_pos+1:].strip()
     else:
-        desc = issue['desc'].strip()
-    issue['desc'] = utils.sanitize_filename(desc)
-    ic(issue['desc'])
+        desc = clip['desc'].strip()
+    clip['desc'] = utils.sanitize_filename(desc)
+    if config.DEBUGGING:
+        ic(clip['desc'])
     
     # Sanitize category (handle None/empty)
-    if issue['category']:
-        issue['category'] = utils.sanitize_filename(issue['category'])
+    if clip['category']:
+        clip['category'] = utils.sanitize_filename(clip['category'])
     else:
-        issue['category'] = 'uncategorized'
-    ic(issue['category'])
-
-    ic(issue)
-    return issue
+        clip['category'] = 'uncategorized'
+    if config.DEBUGGING:
+        ic(clip['category'])
+        ic(clip)
+    return clip

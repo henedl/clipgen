@@ -161,6 +161,28 @@ def add_duration(start_time: str) -> Union[str, int]:
              "This timestamp will be skipped."])
         return -1
 
+def _parse_single_timestamp_token(token: str) -> Optional[Tuple[str, str]]:
+    """Parse one token into a (start_time, end_time) pair, or None if invalid/skip.
+    
+    Handles: dash range (start-end), colon single time (add default duration), blank (None), else None.
+    """
+    if token == '':
+        return None
+    if '-' in token:
+        dash_pos = token.find('-')
+        if dash_pos > 0 and token[dash_pos - 1].isdigit():
+            return (token[:dash_pos], token[dash_pos + 1:])
+        return None
+    if ':' in token:
+        colon_pos = token.find(':')
+        if colon_pos > 0 and token[colon_pos - 1].isdigit():
+            end_time = add_duration(token)
+            if isinstance(end_time, str):
+                return (token, end_time)
+        return None
+    return None
+
+
 def parse_timestamps(cell_value: str, cell_ref: Optional[str] = None) -> List[Tuple[str, str]]:
     """Parse timestamp pairs from a cell value string.
     
@@ -171,64 +193,42 @@ def parse_timestamps(cell_value: str, cell_ref: Optional[str] = None) -> List[Tu
     Returns:
         A list of (start_time, end_time) tuples.
     """
-    ic(cell_value, cell_ref)
+    if config.DEBUGGING:
+        ic(cell_value, cell_ref)
     parsed_timestamps = []
     skipped_timestamps = []
     raw_times = cell_value.lower().replace('+', ' ').replace(';', ' ').replace(',', ' ').split()
-    ic(raw_times)
+    if config.DEBUGGING:
+        ic(raw_times)
     debug_print(f'raw_times content after split is {raw_times}')
     debug_print(f'Timestamp list raw_times is {len(raw_times)} entries long')
 
     for i in range(len(raw_times)):
         debug_print(f'Cleaning timestamp {raw_times[i]}')
-        # Remove trailing commas and dashes.
-        raw_times[i] = raw_times[i].strip().rstrip(',').rstrip('-')
-
-        # Change . to : for the timestamp.
-        raw_times[i] = raw_times[i].replace('.', ':')
-        
-        if raw_times[i] == '':
-            # We don't need to do anything with blank timestamps.
-            debug_print(f'Found blank timestamp {raw_times[i]}')
-        elif '-' in raw_times[i]:
-            # We have a dash which should mean we have two timestamps, so we need to split it into two timestamps.
-            dash_pos = raw_times[i].find('-')
-            if dash_pos > 0 and raw_times[i][dash_pos-1].isdigit():
-                # Slice the timestamp until the dash, and then from after the dash
-                time_pair = (raw_times[i][:dash_pos], raw_times[i][dash_pos+1:])
-                ic(raw_times[i], time_pair)
-                parsed_timestamps.append(time_pair)
-            else:
-                skipped_timestamps.append(raw_times[i])
-        elif ':' in raw_times[i]:
-            colon_pos = raw_times[i].find(':')
-            if colon_pos > 0 and raw_times[i][colon_pos-1].isdigit():
-                # Single timestamp - add default end time
-                end_time = add_duration(raw_times[i])
-                if end_time != -1:
-                    time_pair = (raw_times[i], end_time)
-                    ic(time_pair)
-                    parsed_timestamps.append(time_pair)
-                # If -1, warning already printed by add_duration()
-            else:
-                skipped_timestamps.append(raw_times[i])
+        raw_times[i] = raw_times[i].strip().rstrip(',').rstrip('-').replace('.', ':')
+        pair = _parse_single_timestamp_token(raw_times[i])
+        if pair is not None:
+            if config.DEBUGGING and len(pair) == 2:
+                ic(pair)
+            parsed_timestamps.append(pair)
         elif raw_times[i]:
-            # Non-empty but doesn't match expected patterns
             skipped_timestamps.append(raw_times[i])
     
     # Report skipped timestamps if any
     if skipped_timestamps:
-        ic(skipped_timestamps)
+        if config.DEBUGGING:
+            ic(skipped_timestamps)
         cell_info = f" in cell {cell_ref}" if cell_ref else ""
         details = []
-        for ts in skipped_timestamps[:3]:  # Show first 3
+        for ts in skipped_timestamps[:config.MAX_SKIPPED_TIMESTAMPS_TO_SHOW]:
             details.append(f"    '{ts}'")
-        if len(skipped_timestamps) > 3:
-            details.append(f"    ... and {len(skipped_timestamps) - 3} more")
+        if len(skipped_timestamps) > config.MAX_SKIPPED_TIMESTAMPS_TO_SHOW:
+            details.append(f"    ... and {len(skipped_timestamps) - config.MAX_SKIPPED_TIMESTAMPS_TO_SHOW} more")
         details.append("  Expected formats: MM:SS-MM:SS, HH:MM:SS-HH:MM:SS, or single timestamps like MM:SS")
         warning_print(f"Skipped {len(skipped_timestamps)} unparseable timestamp(s){cell_info}:", details)
 
-    ic(parsed_timestamps)
+    if config.DEBUGGING:
+        ic(parsed_timestamps)
     return parsed_timestamps
 
 def set_program_settings() -> bool:
@@ -239,10 +239,10 @@ def set_program_settings() -> bool:
     Returns:
         True if a setting was changed, False otherwise.
     """
-    SETTINGSLIST = ['REENCODING', 'FILEFORMAT', 'DEBUGGING', 'MAX_FILESIZE_MB']
+    SETTINGS_OPTIONS = ['REENCODING', 'FILEFORMAT', 'DEBUGGING', 'MAX_FILESIZE_MB']
 
     info_print('\nWhich setting? Available:\n')
-    info_print(', '.join(SETTINGSLIST))
+    info_print(', '.join(SETTINGS_OPTIONS))
     setting_to_change = input('\n>> ')
 
     info_print(f"* Current value for '{setting_to_change}' is '{getattr(config, setting_to_change)}'")

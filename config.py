@@ -40,3 +40,8 @@ COMMAND_OPEN_LAST = 'last'
 COMMAND_SETTINGS = 'settings'
 COMMAND_HTTP_PREFIX = 'http'
 NUM_NEWEST_DOCS_TO_SHOW = 3  # Number of newest documents to show when using 'new' command
+
+# Display / preview constants
+DESCRIPTION_PREVIEW_LENGTH = 50  # Max chars for description in previews
+REEL_PREVIEW_CLIP_COUNT = 10  # Number of clips to show in reel mode preview
+MAX_SKIPPED_TIMESTAMPS_TO_SHOW = 3  # Max skipped timestamps to list in parse_timestamps warning

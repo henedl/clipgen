@@ -14,6 +14,36 @@ import files
 import utils
 
 
+def build_ffmpeg_cut_command(
+    input_file: str,
+    output_file: str,
+    start_pos: str,
+    duration_seconds: int,
+    reencode: bool,
+    audio_normalize: bool,
+) -> List[str]:
+    """Build ffmpeg argv for cutting a clip. Caller runs subprocess.
+    
+    Args:
+        input_file: Input video path
+        output_file: Output video path
+        start_pos: Start timestamp
+        duration_seconds: Clip duration in seconds
+        reencode: If True, re-encode; if False, stream copy
+        audio_normalize: If True, apply loudnorm
+    Returns:
+        argv list for subprocess (e.g. ['ffmpeg', '-y', ...])
+    """
+    base = ['ffmpeg', '-y', '-loglevel', '16', '-ss', start_pos, '-i', input_file, '-t', str(duration_seconds)]
+    if not reencode:
+        if audio_normalize:
+            return base + ['-c:v', 'copy', '-c:a', 'aac', '-af', 'loudnorm=I=-16:TP=-1.5:LRA=11', '-avoid_negative_ts', '1', output_file]
+        return base + ['-c', 'copy', '-avoid_negative_ts', '1', output_file]
+    if audio_normalize:
+        return base + ['-af', 'loudnorm=I=-16:TP=-1.5:LRA=11', output_file]
+    return base + [output_file]
+
+
 def run_ffmpeg(input_file: str, output_file: str, start_pos: str, end_pos: str, reencode: bool) -> bool:
     """Calls ffmpeg to cut a video clip. Requires ffmpeg in system PATH.
     
@@ -27,7 +57,8 @@ def run_ffmpeg(input_file: str, output_file: str, start_pos: str, end_pos: str, 
     Returns:
         True if video was generated successfully, False otherwise.
     """
-    ic(input_file, output_file, start_pos, end_pos)
+    if config.DEBUGGING:
+        ic(input_file, output_file, start_pos, end_pos)
     # Check if input file exists before processing
     if not os.path.isfile(input_file):
         utils.error_print(f"Input video file not found: '{input_file}'",
@@ -40,8 +71,8 @@ def run_ffmpeg(input_file: str, output_file: str, start_pos: str, end_pos: str, 
         # Error already printed by get_duration
         return False
     
-    file_length = get_file_duration(input_file)
-    if file_length is None:
+    duration_seconds = get_file_duration(input_file)
+    if duration_seconds is None:
         # Error already printed by get_file_duration
         return False
 
@@ -50,12 +81,13 @@ def run_ffmpeg(input_file: str, output_file: str, start_pos: str, end_pos: str, 
             [f"Start: {start_pos}, End: {end_pos}, Duration: {duration}s",
              "The end timestamp must be after the start timestamp."])
         return False
-    if duration > file_length:
-        utils.error_print(f"Timestamp duration ({duration}s) exceeds video file length ({file_length}s). Skipping.",
+    if duration > duration_seconds:
+        utils.error_print(f"Timestamp duration ({duration}s) exceeds video file length ({duration_seconds}s). Skipping.",
             [f"Start: {start_pos}, End: {end_pos}",
              f"Video file: '{input_file}'"])
         return False
-    ic(duration, file_length)
+    if config.DEBUGGING:
+        ic(duration, duration_seconds)
     if duration > config.MAX_CLIP_DURATION_SECONDS:
         yn = input(f'The generated video will be {duration}s ({duration//60}m {duration%60}s), over 10 minutes long. Generate anyway? (y/n)\n>> ')
         if yn != 'y':
@@ -67,26 +99,11 @@ def run_ffmpeg(input_file: str, output_file: str, start_pos: str, end_pos: str, 
         return False
 
     try:
-        if not reencode:
-            # Use list form to properly handle unicode in filenames
-            if config.AUDIO_NORMALIZE:
-                # Copy video stream, re-encode audio with normalization
-                ffmpeg_command = ['ffmpeg', '-y', '-loglevel', '16', '-ss', start_pos, '-i', input_file, '-t', str(duration), '-c:v', 'copy', '-c:a', 'aac', '-af', 'loudnorm=I=-16:TP=-1.5:LRA=11', '-avoid_negative_ts', '1', output_file]
-            else:
-                # Copy all streams
-                ffmpeg_command = ['ffmpeg', '-y', '-loglevel', '16', '-ss', start_pos, '-i', input_file, '-t', str(duration), '-c', 'copy', '-avoid_negative_ts', '1', output_file]
-            utils.debug_print(f"ffmpeg_command is '{' '.join(ffmpeg_command)}'")
-            result = subprocess.run(ffmpeg_command, encoding='utf-8', capture_output=True)
-        else:
-            # Re-encode case
-            if config.AUDIO_NORMALIZE:
-                # Re-encode with audio normalization
-                ffmpeg_command = ['ffmpeg', '-y', '-loglevel', '16', '-ss', start_pos, '-i', input_file, '-t', str(duration), '-af', 'loudnorm=I=-16:TP=-1.5:LRA=11', output_file]
-            else:
-                # Re-encode without normalization
-                ffmpeg_command = ['ffmpeg', '-y', '-loglevel', '16', '-ss', start_pos, '-i', input_file, '-t', str(duration), output_file]
-            utils.debug_print(f"ffmpeg_command is '{' '.join(ffmpeg_command)}'")
-            result = subprocess.run(ffmpeg_command, encoding='utf-8', capture_output=True)
+        ffmpeg_command = build_ffmpeg_cut_command(
+            input_file, output_file, start_pos, duration, reencode, config.AUDIO_NORMALIZE
+        )
+        utils.debug_print(f"ffmpeg_command is '{' '.join(ffmpeg_command)}'")
+        result = subprocess.run(ffmpeg_command, encoding='utf-8', capture_output=True)
         
         # Check if ffmpeg succeeded
         if result.returncode != 0:
@@ -143,8 +160,8 @@ def get_file_duration(filepath: str) -> Optional[int]:
     utils.debug_print(f"probe_command is {' '.join(probe_command)}")
     
     try:
-        file_length = float(subprocess.check_output(probe_command, encoding='utf-8'))
-        return int(file_length)
+        duration_seconds = float(subprocess.check_output(probe_command, encoding='utf-8'))
+        return int(duration_seconds)
     except FileNotFoundError:
         utils.error_print("ffprobe is not installed or not found in system PATH.",
             ["Please install ffmpeg (which includes ffprobe) and ensure it's in your PATH.",
@@ -170,7 +187,8 @@ def get_duration(start_time: str, end_time: str) -> Optional[int]:
     Returns:
         Duration in seconds, or None if timestamps are invalid.
     """
-    ic(start_time, end_time)
+    if config.DEBUGGING:
+        ic(start_time, end_time)
     utils.debug_print(f'start_time is {start_time} with length {len(start_time)}, end_time is {end_time}')
     
     # Handle case where add_duration() returned -1 (error)
@@ -186,7 +204,8 @@ def get_duration(start_time: str, end_time: str) -> Optional[int]:
             start_datetime = datetime.strptime(str(start_time), fmt)
             end_datetime = datetime.strptime(str(end_time), fmt)
             duration = int((end_datetime - start_datetime).total_seconds())
-            ic(duration)
+            if config.DEBUGGING:
+                ic(duration)
             return duration
         except ValueError:
             continue
@@ -231,24 +250,19 @@ def compress_to_size(filepath: str, target_size_mb: float) -> bool:
     Returns:
         True if compression succeeded or was unnecessary, False on error
     """
-    # Get current file size
+    # --- (1) Bitrate and temp paths: size check, duration, target bitrate, temp output and passlog ---
     current_size_bytes = os.path.getsize(filepath)
     target_size_bytes = target_size_mb * 1024 * 1024
-
-    # Check if compression is needed
     if current_size_bytes <= target_size_bytes:
         utils.debug_print(f"File already within size limit: {files.format_filesize(current_size_bytes)}")
         return True
 
-    # Get video duration for bitrate calculation
     duration = get_file_duration(filepath)
     if duration is None or duration <= 0:
         utils.error_print(f"Cannot compress: unable to determine duration of '{filepath}'")
         return False
 
-    # Calculate target bitrate (with 5% safety margin)
     target_bitrate = calculate_target_bitrate(target_size_mb * 0.95, duration)
-
     if target_bitrate <= 100:
         utils.warning_print(f"Target bitrate very low ({target_bitrate} kbps) for {duration}s video.",
             [f"Target size: {target_size_mb}MB, Duration: {duration}s",
@@ -258,12 +272,11 @@ def compress_to_size(filepath: str, target_size_mb: float) -> bool:
     utils.verbose_print(f"  Current size: {files.format_filesize(current_size_bytes)}")
     utils.verbose_print(f"  Target bitrate: {target_bitrate} kbps (video) + 128 kbps (audio)")
 
-    # Create temporary output file
     temp_output = filepath + '.temp.mp4'
     passlog_base = filepath + '.passlog'
 
     try:
-        # Two-pass encoding for better quality at target bitrate
+        # --- (2) Two-pass encode: pass 1 (analysis), pass 2 (encode), then replace original ---
         # Pass 1: Analysis pass
         null_output = '/dev/null' if os.name != 'nt' else 'NUL'
         pass1_command = [
@@ -327,7 +340,7 @@ def compress_to_size(filepath: str, target_size_mb: float) -> bool:
         utils.error_print(f"Compression failed: {e}")
         return False
     finally:
-        # Cleanup pass log files
+        # --- (3) Cleanup: passlog files and temp output ---
         for ext in ['-0.log', '-0.log.mbtree', '']:
             log_file = passlog_base + ext
             if os.path.exists(log_file):
