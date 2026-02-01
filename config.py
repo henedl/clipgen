@@ -7,7 +7,7 @@ from icecream import ic
 REENCODING = False
 AUDIO_NORMALIZE = False
 FILEFORMAT = '.mp4'
-VERSIONNUM = '0.7.0'
+VERSIONNUM = '0.7.2'
 WORKSHEET_PRIORITY = ['Sheet1', 'Data', 'data', 'Observations', 'Data set', 'data set']
 DEBUGGING = False
 VERBOSE = True  # Set to False in CLI mode unless -v flag is used
@@ -39,6 +39,7 @@ COMMAND_LIST_NEW = 'new'
 COMMAND_OPEN_LAST = 'last'
 COMMAND_SETTINGS = 'settings'
 COMMAND_HTTP_PREFIX = 'http'
+COMMAND_EXCEL = 'excel'
 NUM_NEWEST_DOCS_TO_SHOW = 3  # Number of newest documents to show when using 'new' command
 
 # Display / preview constants

@@ -48,7 +48,6 @@ Ranges must be separated by character ```-```
 
 - GUI
 - Airtable support
-- Excel support
 - CSV support
 - Title/ending cards
 - Watermarking

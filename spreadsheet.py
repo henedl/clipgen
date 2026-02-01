@@ -1209,15 +1209,16 @@ def browse_spreadsheet(sheet: Any) -> None:
             except ValueError:
                 utils.info_print('Invalid row number. Usage: jump <row_number> or j <row_number>')
         elif user_input in ('open', 'o'):
-            try:
-                spreadsheet_url = sheet.spreadsheet.url
-                utils.info_print(f'Opening spreadsheet in browser: {sheet.spreadsheet.title}')
-                webbrowser.open(spreadsheet_url)
-                utils.info_print('Spreadsheet opened in your default browser.')
-            except AttributeError as e:
-                utils.error_print('Could not retrieve spreadsheet URL.', [f'Error: {e}'])
-            except Exception as e:
-                utils.error_print('Could not open browser.', [f'Error: {e}'])
+            spreadsheet_url = getattr(getattr(sheet, 'spreadsheet', None), 'url', None)
+            if not spreadsheet_url:
+                utils.info_print('Opening in browser is not available for local Excel files.')
+            else:
+                try:
+                    utils.info_print(f'Opening spreadsheet in browser: {sheet.spreadsheet.title}')
+                    webbrowser.open(spreadsheet_url)
+                    utils.info_print('Spreadsheet opened in your default browser.')
+                except Exception as e:
+                    utils.error_print('Could not open browser.', [f'Error: {e}'])
         else:
             utils.info_print('Unknown command. Available: up/u, down/d, pageup/pu, pagedown/pd, jump/j <row>, open/o, quit/q')
             utils.info_print('Press Enter to move down one row.')

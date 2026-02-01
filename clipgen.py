@@ -22,6 +22,7 @@ import gspread
 from icecream import ic
 
 import config
+import excel_io
 import files
 import google_api
 import spreadsheet
@@ -130,6 +131,9 @@ def handle_error_message(consecutive_open_failures: int, e: Exception) -> None:
 
 def _handle_spreadsheet_command(gc: Any, doc_list: List[str], input_name: str) -> Optional[Any]:
     """Handle one spreadsheet selection command. Returns worksheet when one was opened, None to show prompt again."""
+    # Handle 'excel' for local .xlsx
+    if input_name.strip().lower() == config.COMMAND_EXCEL:
+        return excel_io.select_excel_file()
     # Handle URL
     if input_name.startswith(config.COMMAND_HTTP_PREFIX):
         return open_spreadsheet_by_url(gc, input_name)
@@ -160,7 +164,7 @@ def select_spreadsheet(gc: Any, doc_list: List[str]) -> Any:
     """Interactive spreadsheet selection. Returns the selected worksheet."""
     consecutive_open_failures = 0
     while True:
-        input_name = input(f"\nPlease enter the index, name, URL or key of the spreadsheet ('{config.COMMAND_LIST_ALL}' for list, '{config.COMMAND_LIST_NEW}' for list of newest, '{config.COMMAND_OPEN_LAST}' to immediately open latest, '{config.COMMAND_SETTINGS}' to change settings):\n>> ")
+        input_name = input(f"\nPlease enter the index, name, URL, or '{config.COMMAND_EXCEL}' for local file ('{config.COMMAND_LIST_ALL}' for list, '{config.COMMAND_LIST_NEW}' for list of newest, '{config.COMMAND_OPEN_LAST}' to immediately open latest, '{config.COMMAND_SETTINGS}' to change settings):\n>> ")
         try:
             worksheet = _handle_spreadsheet_command(gc, doc_list, input_name)
             if worksheet is not None:
@@ -168,6 +172,8 @@ def select_spreadsheet(gc: Any, doc_list: List[str]) -> Any:
         except (gspread.SpreadsheetNotFound, gspread.exceptions.APIError, gspread.exceptions.GSpreadException) as e:
             consecutive_open_failures += 1
             handle_error_message(consecutive_open_failures, e)
+        except Exception as e:
+            utils.error_print(f"Could not open document: {e}")
 
 def _run_reel_mode_interactive(worksheet: Any) -> Tuple[List[Any], bool, Optional[str]]:
     """Run reel mode UI: instructions, input, generate_list, preview, confirm, output filename.
@@ -483,6 +489,12 @@ def authenticate_google() -> Any:
              "  4. For OAuth flow, delete any existing token files and re-authenticate"])
         sys.exit(1)
 
+def _is_excel_worksheet(worksheet: Any) -> bool:
+    """Return True if worksheet is the Excel adapter (local file, no URL)."""
+    spread = getattr(worksheet, 'spreadsheet', None)
+    return spread is not None and getattr(spread, 'url', None) is None
+
+
 def select_worksheet(gc: Any, doc_list: List[str], args: Any, cli_mode: bool) -> Any:
     """Select worksheet based on command-line arguments or interactive selection.
     
@@ -498,7 +510,30 @@ def select_worksheet(gc: Any, doc_list: List[str], args: Any, cli_mode: bool) ->
     worksheet = None
     if args.spreadsheet:
         # CLI-specified spreadsheet
-        if args.spreadsheet.startswith(config.COMMAND_HTTP_PREFIX):
+        raw = args.spreadsheet.strip()
+        raw_lower = raw.lower()
+        if raw_lower == config.COMMAND_EXCEL:
+            # -s excel: use single .xlsx in cwd, else error
+            paths = excel_io.list_excel_in_cwd()
+            if not paths:
+                utils.error_print('No .xlsx files found in the current directory.',
+                    ['Place an Excel file (.xlsx) in the working directory or use -s path/to/file.xlsx'])
+                sys.exit(1)
+            if len(paths) > 1:
+                utils.error_print(f'Multiple .xlsx files found ({len(paths)}). Specify one with -s path/to/file.xlsx',
+                    [os.path.basename(p) for p in paths])
+                sys.exit(1)
+            worksheet = excel_io.open_excel_workbook(paths[0])
+            if not worksheet:
+                sys.exit(1)
+        elif raw_lower.endswith('.xlsx'):
+            # -s path/to/file.xlsx
+            path = os.path.join(os.getcwd(), raw) if not os.path.isabs(raw) else raw
+            worksheet = excel_io.open_excel_workbook(path)
+            if not worksheet:
+                utils.error_print(f'Could not open Excel file "{args.spreadsheet}"')
+                sys.exit(1)
+        elif args.spreadsheet.startswith(config.COMMAND_HTTP_PREFIX):
             worksheet = open_spreadsheet_by_url(gc, args.spreadsheet)
         elif args.spreadsheet.isdigit():
             worksheet = open_spreadsheet_by_index(gc, doc_list, int(args.spreadsheet))
@@ -524,7 +559,10 @@ def select_worksheet(gc: Any, doc_list: List[str], args: Any, cli_mode: bool) ->
     
     if worksheet and config.DEBUGGING:
         ic(worksheet.title)
-    utils.verbose_print('\nConnected to Google Drive!')
+    if _is_excel_worksheet(worksheet):
+        utils.verbose_print('\nUsing local Excel file.')
+    else:
+        utils.verbose_print('\nConnected to Google Drive!')
     return worksheet
 
 def run_cli_mode(worksheet: Any, args: Any, cli_line_numbers: Optional[List[int]], cli_range_start: Optional[int], cli_range_end: Optional[int], cli_cell_specs: Optional[List[Tuple[str, int]]]) -> None:
