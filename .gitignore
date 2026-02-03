@@ -17,6 +17,7 @@ Icon?
 *.xlsx
 .cursor
 .vscode
+.conductor
 
 # Python byte code
 *.py[cod]

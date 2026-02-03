@@ -40,15 +40,11 @@ clipgen assumes that you are using a spreadsheet with a particular layout. A ref
 Timestamps must be separated by characters ```+ , ;```
 Ranges must be separated by character ```-```
 
-## TODO-list a.k.a. remaining work
-
-- Clean up and share the example spreadsheet.
-- Make all modes available implicitly from anywhere in the program.
-
-### Major new features a.k.a. maybe at some point
+## Possible future features
 
 - GUI
-- Airtable support
+- ~~Airtable support~~
 - Title/ending cards
 - Watermarking
+- Subtitling
 - Cropping and time-lapsing! For example generate a time-lapse of part of the screen, such as the minimap in a strategy game.

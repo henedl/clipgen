@@ -638,6 +638,55 @@ def parse_reel_input(input_string: str) -> dict:
     return result
 
 
+def detect_mode_from_input(input_string: str) -> Tuple[Optional[str], dict]:
+    """Detect mode from input syntax (for implicit mode selection).
+
+    Only line, range, cell, and participant modes are auto-detected. Batch, browse,
+    reel, and category require explicit mode selection. If input matches mixed types
+    (e.g. "5, P01.11"), returns (None, {}) so the user can use reel mode explicitly.
+
+    Args:
+        input_string: Raw user input after worksheet selection.
+
+    Returns:
+        (mode, kwargs_dict) where kwargs_dict contains arguments for generate_list(),
+        or (None, {}) if input does not match exactly one auto-detectable pattern.
+    """
+    if not input_string or not input_string.strip():
+        return (None, {})
+
+    parsed = parse_reel_input(input_string)
+
+    # Ignore batch and categories for auto-detection
+    has_lines = len(parsed['lines']) > 0
+    has_ranges = len(parsed['ranges']) > 0
+    has_cells = len(parsed['cells']) > 0
+    has_participants = len(parsed['participants']) > 0
+
+    types_present = sum([has_lines, has_ranges, has_cells, has_participants])
+    if types_present == 0:
+        return (None, {})
+    if types_present > 1:
+        return (None, {})
+
+    if has_lines:
+        return ('line', {'line_numbers': parsed['lines']})
+    if has_ranges:
+        # Only auto-detect range when there is exactly one range
+        if len(parsed['ranges']) != 1:
+            return (None, {})
+        start, end = parsed['ranges'][0]
+        return ('range', {'range_start': start, 'range_end': end})
+    if has_cells:
+        return ('cell', {'cell_specs': parsed['cells']})
+    if has_participants:
+        # participant_id is a string that parse_participant_selection() will parse
+        participant_id = ','.join(parsed['participants'])
+        return ('participant', {'participant_id': participant_id})
+
+    return (None, {})
+
+
 def find_participant_column(header_row: List[str], id_cell: Any, participant_id: str) -> Optional[int]:
     """Find the column index for a given participant ID.
     

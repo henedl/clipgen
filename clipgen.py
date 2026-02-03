@@ -225,12 +225,18 @@ def select_mode_and_generate(worksheet: Any) -> Tuple[List[Any], bool, Optional[
     }
 
     while True:
-        input_mode = input('\nSelect mode: (b)atch, (r)ange, (c)ategory, (l)ine, (ce)ll, (p)articipant, (re)el, or (br)owse\n>> ').strip().lower()
+        input_mode = input(
+            '\nEnter mode or input directly:\n'
+            '  Modes: (b)atch, (r)ange, (c)ategory, (l)ine, (ce)ll, (p)articipant, (re)el, (br)owse\n'
+            '  Or enter directly: line numbers (5, 7), ranges (13-16), cells (P01.11), participants (P01)\n>> '
+        ).strip()
         if not input_mode:
-            utils.info_print("  Please enter a mode (b, r, c, l, ce, p, re, or br).")
+            utils.info_print("  Please enter a mode or direct input (e.g. P01.11, 5, 7, 13-16, P01).")
             continue
+        input_lower = input_mode.strip().lower()
         try:
-            mode = mode_map.get(input_mode[:2]) or mode_map.get(input_mode[0]) or mode_map.get(input_mode)
+            # Only treat as explicit mode when input exactly matches a mode shortcut or name
+            mode = mode_map.get(input_lower)
             if mode == 'browse':
                 spreadsheet.browse_spreadsheet(worksheet)
                 return ([], False, None)
@@ -241,15 +247,34 @@ def select_mode_and_generate(worksheet: Any) -> Tuple[List[Any], bool, Optional[
                 continue
             if mode:
                 return (spreadsheet.generate_list(worksheet, mode), False, None)
-            utils.info_print(f"  Unknown mode '{input_mode}'. Available modes:")
-            utils.info_print("    b or batch   - Generate all clips in the spreadsheet")
-            utils.info_print("    r or range   - Generate clips from a range of rows")
-            utils.info_print("    c or category - Generate clips by category")
-            utils.info_print("    l or line    - Generate clips from specific line(s)")
-            utils.info_print("    ce or cell   - Generate clips from specific cell(s) (e.g., P01.11)")
-            utils.info_print("    p or participant - Generate all clips for one participant")
-            utils.info_print("    re or reel   - Combine selectors into one highlight reel video")
-            utils.info_print("    br or browse - Browse spreadsheet rows interactively")
+
+            # Try implicit mode detection from input syntax
+            detected_mode, detected_kwargs = spreadsheet.detect_mode_from_input(input_mode)
+            if detected_mode:
+                utils.verbose_print(f"  {detected_mode.capitalize()} mode detected.")
+                return (spreadsheet.generate_list(worksheet, detected_mode, **detected_kwargs), False, None)
+
+            # No mode and no detection: check for mixed input to give a helpful message
+            parsed = spreadsheet.parse_reel_input(input_mode)
+            types_present = [
+                ('lines', parsed['lines']),
+                ('ranges', parsed['ranges']),
+                ('cells', parsed['cells']),
+                ('participants', parsed['participants']),
+            ]
+            non_empty = [name for name, vals in types_present if vals]
+            if len(non_empty) > 1:
+                utils.info_print("  Mixed input types detected (" + ", ".join(non_empty) + "). Use 're' or 'reel' mode to combine selectors.")
+            else:
+                utils.info_print(f"  Unknown mode or input '{input_mode}'. Available modes:")
+                utils.info_print("    b or batch   - Generate all clips in the spreadsheet")
+                utils.info_print("    r or range   - Generate clips from a range of rows")
+                utils.info_print("    c or category - Generate clips by category")
+                utils.info_print("    l or line    - Generate clips from specific line(s)")
+                utils.info_print("    ce or cell   - Generate clips from specific cell(s) (e.g., P01.11)")
+                utils.info_print("    p or participant - Generate all clips for one participant")
+                utils.info_print("    re or reel   - Combine selectors into one highlight reel video")
+                utils.info_print("    br or browse - Browse spreadsheet rows interactively")
         except gspread.exceptions.GSpreadException as e:
             utils.error_print(f"Google Sheets API error: {e}")
             utils.debug_print(f"ERROR Message '{e}', Attempting reconnect")
