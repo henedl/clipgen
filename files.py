@@ -39,6 +39,7 @@ def format_filesize(size_bytes: float, precision: int = 2) -> str:
     """
     suffixes = ['B', 'KB', 'MB', 'GB', 'TB']
     suffix_index = 0
+    # Keep dividing by 1024 until size is under 1024 or we reach TB (index 4)
     while size_bytes > 1024 and suffix_index < 4:
         suffix_index += 1
         size_bytes = size_bytes / 1024
@@ -60,13 +61,18 @@ def get_unique_filename(filename: str) -> str:
     while True:
         if os.path.isfile(filename):
             if step < 2:
+                # First collision: insert step number before file extension
+                # "file.mp4" -> "file-1.mp4"
                 suffix_pos = filename.find(config.FILEFORMAT)
                 filename = filename[0:suffix_pos] + '-' + str(step) + config.FILEFORMAT
             else:
+                # Subsequent collisions: replace existing step number
+                # "file-1.mp4" -> "file-2.mp4"
                 dash_pos = filename.rfind('-')
                 filename = filename[0:dash_pos] + '-' + str(step) + config.FILEFORMAT
             step += 1
         else:
+            # Found a unique name; truncate if needed and return
             filename = truncate_filename(filename, step)
             break
     return filename
@@ -87,9 +93,13 @@ def truncate_filename(filename: str, step: int = 1) -> str:
     if len(filename) > config.MAX_FILENAME_LENGTH:
         if step > 1:
             utils.debug_print(f'Filename was longer than {config.MAX_FILENAME_LENGTH} chars ({filename}, length {len(filename)})')
-            filename = filename[0:config.MAX_FILENAME_LENGTH-(1+len(str(step))+len(config.FILEFORMAT))] + '-' + str(step) + config.FILEFORMAT
+            # Reserve space for: dash + step number + extension (e.g., "-2.mp4")
+            max_base_len = config.MAX_FILENAME_LENGTH - (1 + len(str(step)) + len(config.FILEFORMAT))
+            filename = filename[0:max_base_len] + '-' + str(step) + config.FILEFORMAT
         else:
-            filename = filename[0:config.MAX_FILENAME_LENGTH-(len(config.FILEFORMAT))] + config.FILEFORMAT
+            # Reserve space for extension only (e.g., ".mp4")
+            max_base_len = config.MAX_FILENAME_LENGTH - len(config.FILEFORMAT)
+            filename = filename[0:max_base_len] + config.FILEFORMAT
     return filename
 
 def prepare_clip(clip: Dict[str, Any]) -> Dict[str, Any]:
@@ -125,12 +135,14 @@ def prepare_clip(clip: Dict[str, Any]) -> Dict[str, Any]:
             [f"Cell contents: '{clip['cell'].value}'",
              f"Participant: {clip['participant']}, Description: {clip['desc'][:50]}..."])
 
-    # Clean description: remove bracketed prefix and sanitize
-    # Handle case where description doesn't contain ']'
+    # Clean description: remove bracketed prefix like "[TAG] actual description"
+    # and sanitize for use in filename
     bracket_pos = clip['desc'].rfind(']')
     if bracket_pos >= 0:
+        # Strip everything up to and including the last ']'
         desc = clip['desc'][bracket_pos+1:].strip()
     else:
+        # No bracket found; use description as-is
         desc = clip['desc'].strip()
     clip['desc'] = utils.sanitize_filename(desc)
     if config.DEBUGGING:

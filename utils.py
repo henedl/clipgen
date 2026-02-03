@@ -11,7 +11,16 @@ import config
 
 
 def parse_arguments() -> argparse.Namespace:
-    """Parse command-line arguments for non-interactive mode."""
+    """Parse command-line arguments for non-interactive mode.
+
+    Exactly one of the mode flags (-b, -l, -r, -c, -p, -R) may be given; if none
+    is given, the program runs in interactive mode. Optional flags (-s, -y, -v)
+    may be combined with any mode.
+
+    Returns:
+        argparse.Namespace with attributes: batch, lines, range, cell,
+        participant, reel (mode flags/values), spreadsheet, yes, verbose.
+    """
     parser = argparse.ArgumentParser(
         description='clipgen - Video clip generator from Google Sheets timestamps.',
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -36,8 +45,8 @@ Note: Non-interactive mode (using -b, -l, -r, -c, -p, or -R) is silent by defaul
       only showing errors and the final summary. Use -v for full output.
 '''
     )
-    
-    # Mode arguments (mutually exclusive)
+
+    # Mode arguments: only one of -b/-l/-r/-c/-p/-R may be set at a time
     mode_group = parser.add_mutually_exclusive_group()
     mode_group.add_argument('-b', '--batch', action='store_true',
         help='Batch mode: generate all possible clips')
@@ -51,8 +60,8 @@ Note: Non-interactive mode (using -b, -l, -r, -c, -p, or -R) is silent by defaul
         help='Participant mode: generate all clips for one or more participants (e.g., P01 or P01,P03)')
     mode_group.add_argument('-R', '--reel', type=str, metavar='SELECTORS',
         help='Reel mode: combine selectors (e.g. "11, 13-16, P01, \\"Observations\\"") into one video')
-    
-    # Optional arguments
+
+    # Optional arguments (can be used with any mode)
     parser.add_argument('-s', '--spreadsheet', type=str, metavar='NAME',
         help='Spreadsheet name, URL, or index number')
     parser.add_argument('-y', '--yes', action='store_true',
@@ -163,16 +172,30 @@ def add_duration(start_time: str) -> Union[str, int]:
 
 def _parse_single_timestamp_token(token: str) -> Optional[Tuple[str, str]]:
     """Parse one token into a (start_time, end_time) pair, or None if invalid/skip.
-    
-    Handles: dash range (start-end), colon single time (add default duration), blank (None), else None.
+
+    Handles: dash range (start-end), single timestamp with colon (add default
+    duration), blank token (skip), or unrecognized format (skip).
+
+    Args:
+        token: A single timestamp token, e.g. "1:23-1:45", "2:30", or "".
+
+    Returns:
+        (start_time, end_time) tuple if parseable, else None (caller skips).
+
+    Examples:
+        "1:23-1:45" -> ("1:23", "1:45"); "2:30" -> ("2:30", "2:45") with default duration.
     """
     if token == '':
         return None
+    # Dash range: "start-end". Require a digit before the dash so we don't
+    # treat a leading dash (e.g. "-5") or non-time dash as a range.
     if '-' in token:
         dash_pos = token.find('-')
         if dash_pos > 0 and token[dash_pos - 1].isdigit():
             return (token[:dash_pos], token[dash_pos + 1:])
         return None
+    # Single timestamp with colon: use as start and add default duration for end.
+    # Require a digit before the first colon so we only match time-like strings.
     if ':' in token:
         colon_pos = token.find(':')
         if colon_pos > 0 and token[colon_pos - 1].isdigit():
@@ -185,24 +208,35 @@ def _parse_single_timestamp_token(token: str) -> Optional[Tuple[str, str]]:
 
 def parse_timestamps(cell_value: str, cell_ref: Optional[str] = None) -> List[Tuple[str, str]]:
     """Parse timestamp pairs from a cell value string.
-    
+
+    Pipeline: (1) Normalize delimiters to spaces and split into tokens,
+    (2) Clean each token and parse into (start, end) pairs,
+    (3) Report any unparseable tokens as warnings.
+
+    Supported formats: "MM:SS-MM:SS", "HH:MM:SS-HH:MM:SS", or a single time
+    "MM:SS"/"HH:MM:SS" (end time is start + default duration). Delimiters
+    between multiple pairs: space, comma, semicolon, or plus.
+
     Args:
         cell_value: The raw cell value containing timestamps
         cell_ref: Optional cell reference (e.g., 'B5') for error messages
-    
+
     Returns:
-        A list of (start_time, end_time) tuples.
+        A list of (start_time, end_time) tuples. Invalid tokens are skipped
+        and reported via warning_print.
     """
     if config.DEBUGGING:
         ic(cell_value, cell_ref)
     parsed_timestamps = []
     skipped_timestamps = []
+    # Unify delimiters (+, ;, ,) to spaces so split() yields one token per time or range
     raw_times = cell_value.lower().replace('+', ' ').replace(';', ' ').replace(',', ' ').split()
     if config.DEBUGGING:
         ic(raw_times)
     debug_print(f'raw_times content after split is {raw_times}')
     debug_print(f'Timestamp list raw_times is {len(raw_times)} entries long')
 
+    # Clean each token (strip, normalize trailing punctuation, use colon for decimals) and parse
     for i in range(len(raw_times)):
         debug_print(f'Cleaning timestamp {raw_times[i]}')
         raw_times[i] = raw_times[i].strip().rstrip(',').rstrip('-').replace('.', ':')
@@ -213,8 +247,8 @@ def parse_timestamps(cell_value: str, cell_ref: Optional[str] = None) -> List[Tu
             parsed_timestamps.append(pair)
         elif raw_times[i]:
             skipped_timestamps.append(raw_times[i])
-    
-    # Report skipped timestamps if any
+
+    # Report skipped timestamps: list up to MAX_SKIPPED_TIMESTAMPS_TO_SHOW, then "... and N more"
     if skipped_timestamps:
         if config.DEBUGGING:
             ic(skipped_timestamps)

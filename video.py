@@ -34,10 +34,15 @@ def build_ffmpeg_cut_command(
     Returns:
         argv list for subprocess (e.g. ['ffmpeg', '-y', ...])
     """
+    # -y: overwrite output; -loglevel 16: errors only; -ss before -i: fast seek (input seeking)
+    # -t: duration in seconds
     base = ['ffmpeg', '-y', '-loglevel', '16', '-ss', start_pos, '-i', input_file, '-t', str(duration_seconds)]
     if not reencode:
         if audio_normalize:
+            # loudnorm: I=-16 (target LUFS), TP=-1.5 (true peak dB), LRA=11 (loudness range)
+            # -avoid_negative_ts 1: shift timestamps so output starts at 0 (avoids glitches after cut)
             return base + ['-c:v', 'copy', '-c:a', 'aac', '-af', 'loudnorm=I=-16:TP=-1.5:LRA=11', '-avoid_negative_ts', '1', output_file]
+        # Stream copy; -avoid_negative_ts 1 fixes timestamp issues when cutting
         return base + ['-c', 'copy', '-avoid_negative_ts', '1', output_file]
     if audio_normalize:
         return base + ['-af', 'loudnorm=I=-16:TP=-1.5:LRA=11', output_file]
@@ -59,18 +64,18 @@ def run_ffmpeg(input_file: str, output_file: str, start_pos: str, end_pos: str, 
     """
     if config.DEBUGGING:
         ic(input_file, output_file, start_pos, end_pos)
-    # Check if input file exists before processing
+    # Validation sequence: file exists -> timestamps parse -> within file bounds -> length confirmation
     if not os.path.isfile(input_file):
         utils.error_print(f"Input video file not found: '{input_file}'",
             [f"Expected location: {os.path.join(os.getcwd(), input_file)}",
              "Skipping this clip."])
         return False
-    
+
     duration = get_duration(start_pos, end_pos)
     if duration is None:
         # Error already printed by get_duration
         return False
-    
+
     duration_seconds = get_file_duration(input_file)
     if duration_seconds is None:
         # Error already printed by get_file_duration
@@ -88,6 +93,7 @@ def run_ffmpeg(input_file: str, output_file: str, start_pos: str, end_pos: str, 
         return False
     if config.DEBUGGING:
         ic(duration, duration_seconds)
+    # Ask user before generating very long clips (avoids accidental huge exports)
     if duration > config.MAX_CLIP_DURATION_SECONDS:
         yn = input(f'The generated video will be {duration}s ({duration//60}m {duration%60}s), over 10 minutes long. Generate anyway? (y/n)\n>> ')
         if yn != 'y':
@@ -149,13 +155,14 @@ def get_file_duration(filepath: str) -> Optional[int]:
     Returns:
         The duration in seconds, or None if the file cannot be probed.
     """
-    # Check if file exists before attempting to probe
     if not os.path.isfile(filepath):
         utils.error_print(f"Video file not found: '{filepath}'",
             [f"Expected location: {os.path.join(os.getcwd(), filepath)}",
              "Please ensure the video file exists in the working directory."])
         return None
-    
+
+    # -v error: only show errors; -show_entries format=duration: get container duration
+    # -of default=noprint_wrappers=1:nokey=1: output raw value only (no "duration=1.23" wrapper)
     probe_command = ['ffprobe', '-v', 'error', '-show_entries', 'format=duration', '-of', 'default=noprint_wrappers=1:nokey=1', filepath]
     utils.debug_print(f"probe_command is {' '.join(probe_command)}")
     
@@ -190,15 +197,15 @@ def get_duration(start_time: str, end_time: str) -> Optional[int]:
     if config.DEBUGGING:
         ic(start_time, end_time)
     utils.debug_print(f'start_time is {start_time} with length {len(start_time)}, end_time is {end_time}')
-    
-    # Handle case where add_duration() returned -1 (error)
+
     if end_time == -1:
         utils.error_print(f"Invalid end timestamp (derived from start: '{start_time}')",
             ["Could not calculate end time. Check the timestamp format."])
         return None
-    
+
+    # Try MM:SS first for short strings (e.g. "1:23"), HH:MM:SS first for longer (e.g. "1:23:45")
     formats = ['%M:%S', '%H:%M:%S'] if len(str(start_time)) <= 5 else ['%H:%M:%S', '%M:%S']
-    
+
     for fmt in formats:
         try:
             start_datetime = datetime.strptime(str(start_time), fmt)
@@ -230,13 +237,14 @@ def calculate_target_bitrate(target_size_mb: float, duration_seconds: int, audio
     if duration_seconds <= 0:
         return 100
 
+    # Target bitrate: (size in bytes * 8 bits/byte) / duration (s) / 1000 = total kbps
     target_size_bytes = target_size_mb * 1024 * 1024
     total_bitrate_kbps = (target_size_bytes * 8) / duration_seconds / 1000
 
-    # Subtract audio bitrate to get video-only bitrate
+    # Reserve audio bitrate; remainder is for video
     video_bitrate_kbps = int(total_bitrate_kbps - audio_bitrate_kbps)
 
-    # Ensure minimum viable bitrate (100 kbps minimum)
+    # Floor at 100 kbps so encoder has a usable minimum (lower values often fail or look broken)
     return max(video_bitrate_kbps, 100)
 
 
@@ -250,7 +258,6 @@ def compress_to_size(filepath: str, target_size_mb: float) -> bool:
     Returns:
         True if compression succeeded or was unnecessary, False on error
     """
-    # --- (1) Bitrate and temp paths: size check, duration, target bitrate, temp output and passlog ---
     current_size_bytes = os.path.getsize(filepath)
     target_size_bytes = target_size_mb * 1024 * 1024
     if current_size_bytes <= target_size_bytes:
@@ -262,6 +269,7 @@ def compress_to_size(filepath: str, target_size_mb: float) -> bool:
         utils.error_print(f"Cannot compress: unable to determine duration of '{filepath}'")
         return False
 
+    # Use 0.95 * target so we stay under limit (encoder overhead and container add a bit)
     target_bitrate = calculate_target_bitrate(target_size_mb * 0.95, duration)
     if target_bitrate <= 100:
         utils.warning_print(f"Target bitrate very low ({target_bitrate} kbps) for {duration}s video.",
@@ -276,15 +284,15 @@ def compress_to_size(filepath: str, target_size_mb: float) -> bool:
     passlog_base = filepath + '.passlog'
 
     try:
-        # --- (2) Two-pass encode: pass 1 (analysis), pass 2 (encode), then replace original ---
-        # Pass 1: Analysis pass
+        # Two-pass encoding: pass 1 analyzes and writes stats; pass 2 uses them for better bitrate distribution
         null_output = '/dev/null' if os.name != 'nt' else 'NUL'
+        # Pass 1: analysis only; -an drops audio, -f null discards video (we only need the stats)
         pass1_command = [
             'ffmpeg', '-y', '-loglevel', '16',
             '-i', filepath,
             '-c:v', 'libx264', '-b:v', f'{target_bitrate}k',
             '-pass', '1', '-passlogfile', passlog_base,
-            '-an',  # No audio in first pass
+            '-an',
             '-f', 'null', null_output
         ]
 
@@ -296,7 +304,7 @@ def compress_to_size(filepath: str, target_size_mb: float) -> bool:
                 [result1.stderr.strip() if result1.stderr else "Unknown error"])
             return False
 
-        # Pass 2: Actual encoding
+        # Pass 2: encode with same bitrate, using passlog; include audio (pass 1 had -an)
         pass2_command = [
             'ffmpeg', '-y', '-loglevel', '16',
             '-i', filepath,
@@ -340,7 +348,7 @@ def compress_to_size(filepath: str, target_size_mb: float) -> bool:
         utils.error_print(f"Compression failed: {e}")
         return False
     finally:
-        # --- (3) Cleanup: passlog files and temp output ---
+        # Remove passlog files (-0.log, -0.log.mbtree, base) and any leftover temp output
         for ext in ['-0.log', '-0.log.mbtree', '']:
             log_file = passlog_base + ext
             if os.path.exists(log_file):
@@ -380,8 +388,8 @@ def concatenate_clips(clip_paths: List[str], output_file: str, reencode_on_fail:
                 ["Ensure all clips were generated successfully before concatenating."])
             return False
 
-    # Concat file format: one line per file, "file 'path'"
-    # Use absolute paths so ffmpeg finds clips regardless of where the list file lives (e.g. in TMPDIR)
+    # Concat demuxer expects a text file with lines: file 'path'. Use absolute paths so ffmpeg
+    # finds clips even when the list file is in TMPDIR or another directory.
     with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False, encoding='utf-8') as f:
         list_path = f.name
         for path in clip_paths:
@@ -391,7 +399,7 @@ def concatenate_clips(clip_paths: List[str], output_file: str, reencode_on_fail:
             f.write(f"file '{escaped}'\n")
 
     try:
-        # Try stream copy first (fast, no re-encoding)
+        # -f concat: use concat demuxer; -safe 0: allow absolute paths in the list file
         ffmpeg_command = [
             'ffmpeg', '-y', '-loglevel', '16',
             '-f', 'concat', '-safe', '0', '-i', list_path,
@@ -406,6 +414,7 @@ def concatenate_clips(clip_paths: List[str], output_file: str, reencode_on_fail:
 
         result = subprocess.run(ffmpeg_command, encoding='utf-8', capture_output=True)
 
+        # Fallback: if stream copy fails (e.g. incompatible codecs across clips), re-encode to libx264/aac
         if result.returncode != 0 and reencode_on_fail:
             utils.warning_print("Stream copy concat failed (e.g. codec mismatch), retrying with re-encoding.")
             ffmpeg_command_reencode = [

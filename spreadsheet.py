@@ -1,5 +1,24 @@
 # -*- coding: utf-8 -*-
-"""Spreadsheet data processing for clipgen."""
+"""Spreadsheet data processing for clipgen.
+
+Expected spreadsheet structure:
+- Row 0 (first row): Study name in cell A1; may be empty (falls back to spreadsheet title).
+- Header cells: Contains required columns ID, Observation, Category (exact names from config).
+- Participant columns: Immediately follow the ID column; headers start with P or G (e.g. P01, P02, G01).
+  Each participant column holds timestamp values; non-empty cells become clip candidates.
+- Category column: Labels each observation row; used for category and reel selection.
+- Observation column: Human-readable description for each row; used in clip metadata.
+
+Coordinate system:
+- gspread uses 1-based row/col (e.g. Cell(row=1, col=1) is A1).
+- sheet.get_all_values() returns a list of lists with 0-based indices: sheet_data[row][col].
+- Conversions: sheet row = row_idx + 1, sheet col = col_idx + 1; header cell .row/.col are 1-based.
+
+Clip record (returned by generation functions):
+- Dict with keys: cell (gspread Cell), desc (observation text), study (normalized name),
+  participant (header value for that column), category (row category). The 'times' key
+  is added later by prepare_clip when resolving timestamps to actual time ranges.
+"""
 
 import re
 import webbrowser
@@ -114,6 +133,14 @@ def _make_clip_record(
     cell_value: str,
 ) -> Dict[str, Any]:
     """Build one clip record dict for a cell at (row_idx, col_idx).
+
+    Clip record structure (used by downstream prepare_clip/video code):
+    - cell: gspread Cell with 1-based row/col and the timestamp value.
+    - desc: Observation/description text from the same row (observation column).
+    - study: Normalized study name for output paths.
+    - participant: Participant ID from the header row for this column.
+    - category: Category label from the same row (category column).
+    'times' is added later when timestamps are resolved to [start, end] ranges.
     
     Args:
         sheet_data: Sheet data matrix
@@ -127,9 +154,12 @@ def _make_clip_record(
     Returns:
         Dict with keys: cell, desc, study, participant, category
     """
+    # gspread Cell uses 1-based coordinates; convert from 0-based list indices
     cell = gspread.cell.Cell(row_idx + 1, col_idx + 1, cell_value)
+    # observation_cell.col is 1-based; convert to 0-based for sheet_data
     desc_col = observation_cell.col - 1
     category_col = observation_cell.col - 2
+    # Header row in sheet_data is 0-based; id_cell.row is 1-based
     participant_row = id_cell.row - 1
     desc = ""
     if 0 <= desc_col < len(sheet_data[row_idx]):
@@ -209,7 +239,7 @@ def generate_list(sheet: Any, mode: str, line_numbers: Optional[List[int]] = Non
         return []
 
     # Generate clips according to the selected mode.
-    # --- Batch mode ---
+    # --- Batch mode: all non-empty timestamp cells in the sheet ---
     if mode == 'batch':
         if skip_prompts:
             utils.verbose_print('Batch mode: generating all possible clips...')
@@ -218,7 +248,7 @@ def generate_list(sheet: Any, mode: str, line_numbers: Optional[List[int]] = Non
             yn = input('\nWarning: This will generate all possible clips. Do you want to proceed? y/n\n>> ')
             if yn == 'y':
                 clips = generate_batch_timestamps(sheet_data, id_cell, observation_cell, num_participants, study_name)
-    # --- Category mode ---
+    # --- Category mode: user selects categories; include all rows matching any selected category ---
     elif mode == 'category':
         categories = collect_categories(sheet_data, id_cell, category_cell)
         if not categories:
@@ -226,10 +256,10 @@ def generate_list(sheet: Any, mode: str, line_numbers: Optional[List[int]] = Non
             return []
         selected_categories = _interactive_category_selection(categories)
         clips = generate_category_timestamps(sheet_data, id_cell, observation_cell, category_cell, num_participants, study_name, selected_categories)
-    # --- Line mode ---
+    # --- Line mode: one or more specific row numbers (e.g. lines 5, 7, 12) ---
     elif mode == 'line':
         clips = generate_line_timestamps(sheet_data, id_cell, observation_cell, num_participants, study_name, line_numbers, skip_prompts)
-    # --- Range mode ---
+    # --- Range mode: contiguous block of rows from start_line to end_line (inclusive) ---
     elif mode == 'range':
         max_row = len(sheet_data)
         if range_start is not None and range_end is not None:
@@ -257,7 +287,7 @@ def generate_list(sheet: Any, mode: str, line_numbers: Optional[List[int]] = Non
                 if yn == 'y':
                     break
             clips = generate_range_timestamps(sheet_data, id_cell, observation_cell, num_participants, study_name, start_line, end_line)
-    # --- Cell mode ---
+    # --- Cell mode: specific (participant_id, row_number) cells, e.g. P01.11 or P01.11 + P03.11 ---
     elif mode == 'cell':
         if cell_specs is not None:
             # CLI mode - use provided cell specifications
@@ -317,7 +347,7 @@ def generate_list(sheet: Any, mode: str, line_numbers: Optional[List[int]] = Non
                 except KeyboardInterrupt:
                     utils.info_print('\nCancelled by user.')
                     return []
-    # --- Participant mode ---
+    # --- Participant mode: all non-empty timestamp cells in one or more participant columns ---
     elif mode == 'participant':
         header_row = sheet_data[id_cell.row - 1] if id_cell.row > 0 else []
         available_list = get_participant_list(header_row, id_cell, num_participants)
@@ -389,7 +419,7 @@ def generate_list(sheet: Any, mode: str, line_numbers: Optional[List[int]] = Non
                     for pid in unique_ids:
                         clips.extend(generate_participant_timestamps(sheet_data, id_cell, observation_cell, study_name, pid))
                     break
-    # --- Reel mode ---
+    # --- Reel mode: mixed selector string (batch, lines, ranges, categories, cells, participants); deduped and sorted ---
     elif mode == 'reel':
         if reel_input is None or not reel_input.strip():
             utils.info_print('\nReel mode: no input provided.')
@@ -467,6 +497,10 @@ def parse_participant_selection(input_str: str) -> List[str]:
 
 def parse_cell_specifications(cell_input: str) -> List[Tuple[str, int]]:
     """Parse cell specification string into list of (participant_id, row_number) tuples.
+
+    Expected format: "P01.11" (participant_id.row_number). Multiple cells separated by
+    + or , e.g. "P01.11 + P03.11" or "P01.11, P03.09". Participant ID must start with
+    P or G; row_number must be a positive integer (1-based sheet row).
     
     Args:
         cell_input: String like "P01.11" or "P01.11 + P03.11 + P03.09"
@@ -477,16 +511,16 @@ def parse_cell_specifications(cell_input: str) -> List[Tuple[str, int]]:
     Raises:
         ValueError: If format is invalid
     """
-    # Support both + and , as separators
+    # Support both + and , as separators; normalize to + then split
     cell_str = cell_input.replace(',', '+')
     specs = []
-    
+
     for spec in cell_str.split('+'):
         spec = spec.strip()
         if not spec:
             continue
-            
-        # Split by dot to get participant_id and row_number
+
+        # Exactly one dot: participant_id.row_number (split('.', 1) avoids splitting IDs like P01.02)
         if '.' not in spec:
             raise ValueError(f'Invalid cell specification "{spec}". Expected format: P01.11')
         
@@ -541,16 +575,16 @@ def parse_reel_input(input_string: str) -> dict:
     if not input_string or not input_string.strip():
         return result
 
-    # Extract quoted strings (categories) first so commas inside don't split
+    # Extract quoted strings (categories) first so commas inside quotes don't split the string
     rest = input_string.strip()
     while True:
-        match = re.search(r'"([^"]*)"', rest)
+        match = re.search(r'"([^"]*)"', rest)  # "category name" -> group(1) is category name
         if not match:
             break
         result['categories'].append(match.group(1).strip())
         rest = rest[:match.start()] + ' ' + rest[match.end():]
 
-    # Split remaining by comma, then by space for tokens that might be space-separated
+    # Split remaining by comma; each part is one token. Token type is inferred in fixed order below.
     # Order of checks per token (do not reorder): batch, range, line, cell, participant
     parts = [p.strip() for p in rest.split(',') if p.strip()]
     seen_lines = set()
@@ -562,11 +596,11 @@ def parse_reel_input(input_string: str) -> dict:
         token = part.strip()
         if not token:
             continue
-        # Batch keyword
+        # Batch keyword: literal "batch"
         if token.lower() == 'batch':
             result['batch'] = True
             continue
-        # Range: digits-digits
+        # Range: "13-16" -> start, end (digits hyphen digits)
         range_match = re.match(r'^(\d+)\s*-\s*(\d+)$', token)
         if range_match:
             start, end = int(range_match.group(1)), int(range_match.group(2))
@@ -574,14 +608,14 @@ def parse_reel_input(input_string: str) -> dict:
                 seen_ranges.add((start, end))
                 result['ranges'].append((start, end))
             continue
-        # Single line number
+        # Single line number: plain digits (e.g. "11", "12")
         if token.isdigit():
             line_num = int(token)
             if line_num not in seen_lines:
                 seen_lines.add(line_num)
                 result['lines'].append(line_num)
             continue
-        # Cell: P##.## or G##.## (participant.row)
+        # Cell: "P01.11" or "G02.5" -> (participant_id, row_number); regex: P or G, word chars, dot, digits
         if '.' in token:
             cell_match = re.match(r'^([PG]\w*)\.(\d+)$', token, re.IGNORECASE)
             if cell_match:
@@ -594,7 +628,7 @@ def parse_reel_input(input_string: str) -> dict:
                             seen_cells.add(key)
                             result['cells'].append((pid, row_num))
             continue
-        # Participant only: P## or G## (no dot, valid participant-like token)
+        # Participant only: "P01" or "G02" (no dot) -> include all rows for that participant
         if token[0].upper() in config.PARTICIPANT_PREFIXES and '.' not in token:
             key = token.upper() if len(token) <= 3 else token
             if key not in seen_participants:
@@ -718,6 +752,7 @@ def generate_batch_timestamps(sheet_data: List[List[str]], id_cell: Any, observa
     """
     utils.debug_print('Running method generate_batch_timestamps()')
     clips = []
+    # i is 0-based row index; skip header row (id_cell.row is 1-based), so first data row at id_cell.row+1
     for i in range(id_cell.row+1, len(sheet_data)):
         utils.debug_print(f'Batching on line {i} (real sheet line {i+1})')
         clips.extend(get_line_timestamps(sheet_data, id_cell, observation_cell, num_participants, i, study_name))
@@ -735,9 +770,10 @@ def collect_categories(sheet_data: List[List[str]], id_cell: Any, category_cell:
         List of unique category names in order of first appearance
     """
     categories = []
-    category_col = category_cell.col - 1  # Convert from 1-indexed to 0-indexed
-    
-    # Start from the row after the category header
+    # category_cell.col is 1-based (gspread); convert to 0-based for sheet_data
+    category_col = category_cell.col - 1
+
+    # category_cell.row is 1-based; loop i is 0-based index into sheet_data
     for i in range(category_cell.row, len(sheet_data)):        
         category = sheet_data[i][category_col].strip()
         if category and category not in categories:
@@ -762,9 +798,10 @@ def generate_category_timestamps(sheet_data: List[List[str]], id_cell: Any, obse
     """
     utils.debug_print('Starting method generate_category_timestamps()')
     clips = []
-    category_col = category_cell.col - 1  # Convert from 1-indexed to 0-indexed
-    
-    # Start from the row after the category header
+    # category_cell.col is 1-based; convert to 0-based for sheet_data
+    category_col = category_cell.col - 1
+
+    # i is 0-based row index; get_line_timestamps expects 0-based line_index
     for i in range(category_cell.row, len(sheet_data)):
         row_category = sheet_data[i][category_col].strip()
         if row_category in selected_categories:
@@ -850,23 +887,24 @@ def generate_line_timestamps(sheet_data: List[List[str]], id_cell: Any, observat
 
 def get_line_timestamps(sheet_data: List[List[str]], id_cell: Any, observation_cell: Any, num_participants: int, line_index: int, study_name: str) -> List[Any]:
     """Extract timestamp data from a single row in the spreadsheet.
-    
+
     Processes all participant columns in the specified row and creates
     clip issue dictionaries for each timestamp found.
-    
+
     Args:
         sheet_data: The sheet data matrix
         id_cell: The ID header cell
         observation_cell: The observation header cell
         num_participants: Number of participant columns
-        line_index: Zero-based row index to process
+        line_index: Zero-based row index into sheet_data (sheet row = line_index + 1)
         study_name: Normalized study name
-        
+
     Returns:
         List of clip issue dictionaries, one per timestamp found
     """
     if config.DEBUGGING:
         ic(line_index, num_participants, study_name)
+    # line_index is 0-based; display "real sheet line" as 1-based for user-facing messages
     utils.debug_print(f'Running method get_line_timestamps, starting line index {line_index} (real sheet line {line_index+1})')
     
     # Bounds checking
@@ -927,6 +965,7 @@ def generate_range_timestamps(sheet_data: List[List[str]], id_cell: Any, observa
         List of clip issue dictionaries
     """
     clips = []
+    # start_line/end_line are 1-based inclusive; convert to 0-based for get_line_timestamps
     for i in range(start_line-1, end_line):
         utils.debug_print(f'Batching on line {i}')
         clips.extend(get_line_timestamps(sheet_data, id_cell, observation_cell, num_participants, i, study_name))
@@ -1040,7 +1079,8 @@ def generate_reel_timestamps(
             )
         )
 
-    # Deduplicate by cell (row, col) so each timestamp is included once
+    # Deduplicate by cell (row, col): the same cell can be selected by multiple selectors
+    # (e.g. line 11 and category "X" and participant P01), so we keep only one clip per cell
     seen: Set[Tuple[int, int]] = set()
     deduped: List[Any] = []
     for issue in all_issues:
@@ -1049,7 +1089,7 @@ def generate_reel_timestamps(
             seen.add(key)
             deduped.append(issue)
 
-    # Sort by row then column for logical playback order
+    # Sort by row then column so clips follow spreadsheet order (top-to-bottom, then left-to-right)
     deduped.sort(key=lambda issue: (issue['cell'].row, issue['cell'].col))
 
     return deduped
@@ -1086,16 +1126,17 @@ def browse_spreadsheet(sheet: Any) -> None:
         utils.warning_print("No participant columns found in the spreadsheet.",
             [f"Looking for columns starting with: {', '.join(config.PARTICIPANT_PREFIXES)}"])
         return
-    
-    # Calculate bounds for data rows (after header)
-    first_data_row = id_cell.row  # 0-indexed, this is the first row after the header
-    last_data_row = len(sheet_data) - 1  # 0-indexed
+
+    # Browse state: all row indices are 0-based (into sheet_data). id_cell.row is 1-based.
+    # first_data_row: index of first row we consider "data" (same convention as generate_batch_timestamps)
+    first_data_row = id_cell.row
+    last_data_row = len(sheet_data) - 1
     total_data_rows = last_data_row - first_data_row + 1
-    
-    # Current position (0-indexed into sheet_data)
+
+    # current_row: 0-based index of the row at top of current view; updated by up/down/page/jump
     current_row = first_data_row
-    
-    # Get participant column headers for display
+
+    # Participant column headers for display (id_cell.col is 1-based)
     participant_headers = []
     for col_idx in range(id_cell.col, id_cell.col + num_participants):
         if col_idx < len(header_row):
@@ -1108,22 +1149,22 @@ def browse_spreadsheet(sheet: Any) -> None:
     utils.info_print(f'Press Enter to move down one row.\n')
     
     def display_rows(start_row, num_rows):
-        """Display num_rows starting from start_row (0-indexed)."""
+        """Display num_rows starting from start_row (0-indexed into sheet_data)."""
         utils.info_print('-' * 60)
         for i in range(num_rows):
             row_idx = start_row + i
             if row_idx > last_data_row:
                 break
-            
+
             row_data = sheet_data[row_idx]
-            row_num = row_idx + 1  # 1-indexed for display
+            row_num = row_idx + 1  # Convert to 1-based for user-facing row number
             
-            # Get category
-            category_col = category_cell.col - 1  # 0-indexed
+            # Get category (gspread col is 1-based -> 0-based for sheet_data)
+            category_col = category_cell.col - 1
             category = row_data[category_col] if category_col < len(row_data) else ''
-            
+
             # Get description (observation)
-            desc_col = observation_cell.col - 1  # 0-indexed
+            desc_col = observation_cell.col - 1
             description = row_data[desc_col] if desc_col < len(row_data) else ''
             
             utils.info_print(f'Row {row_num}')
@@ -1134,7 +1175,7 @@ def browse_spreadsheet(sheet: Any) -> None:
             has_timestamps = False
             participant_data = []
             for j, participant_id in enumerate(participant_headers):
-                col_idx = id_cell.col + j  # 0-indexed
+                col_idx = id_cell.col + j  # id_cell.col is 1-based; col_idx matches sheet_data columns
                 if col_idx < len(row_data):
                     timestamp_value = row_data[col_idx]
                     if timestamp_value and timestamp_value.strip():
@@ -1152,14 +1193,14 @@ def browse_spreadsheet(sheet: Any) -> None:
             
             utils.info_print('  ---')
         
-        # Show position info
+        # Show position info (convert 0-based start_row to 1-based for display)
         displayed_end = min(start_row + num_rows, last_data_row + 1)
         utils.info_print(f'\nShowing rows {start_row + 1}-{displayed_end} of {last_data_row + 1}')
-    
-    # Initial display
+
+    # Initial display: show BROWSE_LINES_TO_DISPLAY rows starting at current_row
     display_rows(current_row, config.BROWSE_LINES_TO_DISPLAY)
-    
-    # Navigation loop
+
+    # Navigation loop: up/down move one row; pageup/pagedown move by BROWSE_LINES_TO_DISPLAY; jump goes to row
     while True:
         user_input = input('\n>> ').strip().lower()
         
