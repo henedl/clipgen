@@ -2,7 +2,7 @@
 
 clipgen is a Python program that uses the [gspread library](https://docs.gspread.org) and [ffmpeg](https://www.ffmpeg.org) to quickly generate video snippets based on timestamps in a Google Sheet or a local Excel file.
 
-**Data flow:** Timestamps entered by you → spreadsheet → clipgen reads records (descriptions, study name, participant ID, category) → ffmpeg → clips or highlight reel.
+**Data flow:** Timestamps entered by you → spreadsheet → clipgen reads timestamped records (descriptions, study name, participant IDs, categories) → ffmpeg → clips or highlight reel.
 
 The program was created to speed up data processing during playtests and is provided as-is, without promise of support. The target audience of this program are User Experience Researchers and UX professionals who prefer to manage their videos locally rather than in the cloud.
 
@@ -35,7 +35,7 @@ The program was created to speed up data processing during playtests and is prov
 
 ### About the spreadsheet
 
-clipgen assumes that you are using a spreadsheet with a particular layout. A reference spreadsheet is [available here](#) - feel free to make a copy and use it in your studies.
+clipgen assumes that you are using a spreadsheet with a particular layout. A reference spreadsheet is [available here](https://docs.google.com/spreadsheets/d/1O51wnzRrYyz63tT6qy1HlJyVzdh9RT3t6QL5NohrcPc/edit?usp=sharing) - feel free to make a copy and use it in your studies.
 
 Timestamps must be separated by characters ```+ , ;```
 Ranges must be separated by character ```-```
