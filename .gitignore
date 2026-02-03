@@ -7,7 +7,7 @@ pyrightconfig.json
 # Mac stuff
 *.DS_FILE
 Icon?
-.nova
+.nova/
 
 # Working docs
 *.mp4
@@ -15,9 +15,10 @@ Icon?
 *.mov
 *.mkv
 *.xlsx
-.cursor
-.vscode
-.conductor
+.cursor/
+.vscode/
+.conductor/
+.venv/
 
 # Python byte code
 *.py[cod]
