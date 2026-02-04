@@ -1199,7 +1199,12 @@ def browse_spreadsheet(sheet: Any) -> None:
     
     def display_rows(start_row, num_rows):
         """Display num_rows starting from start_row (0-indexed into sheet_data)."""
-        utils.info_print('-' * 60)
+        # Column indices (convert gspread 1-based to 0-based)
+        category_col = category_cell.col - 1
+        desc_col = observation_cell.col - 1
+
+        # Build structured rows_data list
+        rows_data = []
         for i in range(num_rows):
             row_idx = start_row + i
             if row_idx > last_data_row:
@@ -1207,41 +1212,37 @@ def browse_spreadsheet(sheet: Any) -> None:
 
             row_data = sheet_data[row_idx]
             row_num = row_idx + 1  # Convert to 1-based for user-facing row number
-            
-            # Get category (gspread col is 1-based -> 0-based for sheet_data)
-            category_col = category_cell.col - 1
-            category = row_data[category_col] if category_col < len(row_data) else ''
 
-            # Get description (observation)
-            desc_col = observation_cell.col - 1
+            # Get category and description
+            category = row_data[category_col] if category_col < len(row_data) else ''
             description = row_data[desc_col] if desc_col < len(row_data) else ''
-            
-            utils.info_print(f'Row {row_num}')
-            utils.info_print(f'  Category: {category if category else "(empty)"}')
-            utils.info_print(f'  Description: {description if description else "(empty)"}')
-            
+
             # Get participant timestamps
-            has_timestamps = False
-            participant_data = []
+            timestamps = {}
             for j, participant_id in enumerate(participant_headers):
                 col_idx = id_cell.col + j  # id_cell.col is 1-based; col_idx matches sheet_data columns
                 if col_idx < len(row_data):
                     timestamp_value = row_data[col_idx]
                     if timestamp_value and timestamp_value.strip():
                         # Replace newlines with commas for display
-                        timestamp_display = timestamp_value.replace('\n', ', ').replace('\r', '')
-                        participant_data.append(f'    {participant_id}: {timestamp_display}')
-                        has_timestamps = True
-            
-            if has_timestamps:
-                utils.info_print('  Participants:')
-                for p_data in participant_data:
-                    utils.info_print(p_data)
-            else:
-                utils.info_print('  Participants: (no timestamps)')
-            
-            utils.info_print('  ---')
-        
+                        timestamps[participant_id] = timestamp_value.replace('\n', ', ').replace('\r', '')
+
+            rows_data.append({
+                'row_num': row_num,
+                'category': category or '(empty)',
+                'description': description or '(empty)',
+                'timestamps': timestamps
+            })
+
+        # Display using Rich Table or plain text fallback
+        if utils._use_rich():
+            table = utils.create_browse_table(rows_data, participant_headers)
+            if table:
+                utils.console.print(table)
+        else:
+            output = utils.format_browse_rows_plain(rows_data, participant_headers)
+            print(output)
+
         # Show position info (convert 0-based start_row to 1-based for display)
         displayed_end = min(start_row + num_rows, last_data_row + 1)
         utils.info_print(f'\nShowing rows {start_row + 1}-{displayed_end} of {last_data_row + 1}')

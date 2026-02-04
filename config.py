@@ -32,6 +32,8 @@ MAX_FILESIZE_MB = 0  # Maximum output file size in MB (0 = disabled)
 
 # Browse Mode Constants
 BROWSE_LINES_TO_DISPLAY = 5  # Number of rows to show at once when browsing
+BROWSE_DESCRIPTION_MAX_WIDTH = 40  # Max width for description column in table
+BROWSE_TIMESTAMP_MAX_WIDTH = 15    # Max width for each timestamp column
 
 # Spreadsheet Selection Commands
 COMMAND_LIST_ALL = 'all'
