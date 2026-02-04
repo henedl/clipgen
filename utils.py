@@ -9,6 +9,44 @@ from icecream import ic
 
 import config
 
+# Rich library integration with graceful fallback
+try:
+    from rich.console import Console
+    from rich.panel import Panel
+    from rich.text import Text
+    from rich.theme import Theme
+    RICH_AVAILABLE = True
+except ImportError:
+    RICH_AVAILABLE = False
+
+# Custom theme for clipgen - only create if Rich is available
+_CLIPGEN_THEME = Theme({
+    "error": "bold red",
+    "error.prefix": "bold red",
+    "error.detail": "dim",
+    "warning": "bold yellow",
+    "warning.prefix": "bold yellow",
+    "warning.detail": "dim",
+    "success": "bold green",
+    "success.prefix": "bold green",
+    "info": "cyan",
+    "verbose": "dim",
+    "debug": "magenta",
+}) if RICH_AVAILABLE else None
+
+# Global console instance
+console = Console(theme=_CLIPGEN_THEME, highlight=False) if RICH_AVAILABLE else None
+
+
+def _use_rich() -> bool:
+    """Check if Rich output should be used."""
+    return RICH_AVAILABLE and console is not None and getattr(config, 'RICH_COLORS', True)
+
+
+def _use_panels() -> bool:
+    """Check if Rich panels should be used for errors/warnings/success."""
+    return getattr(config, 'RICH_PANELS', True)
+
 
 def parse_arguments() -> argparse.Namespace:
     """Parse command-line arguments for non-interactive mode.
@@ -74,48 +112,103 @@ Note: Non-interactive mode (using -b, -l, -r, -c, -p, or -R) is silent by defaul
 def debug_print(message: str) -> None:
     """Print debug messages when DEBUGGING is enabled."""
     if config.DEBUGGING:
-        print(f'! DEBUG {message}')
+        if _use_rich():
+            console.print(f"[debug]! DEBUG[/debug] {message}")
+        else:
+            print(f'! DEBUG {message}')
+
 
 def verbose_print(message: str) -> None:
     """Print informational messages when VERBOSE is enabled.
-    
+
     In interactive mode, VERBOSE is always True.
     In CLI mode, VERBOSE is False unless -v flag is used.
     """
     if config.VERBOSE:
-        print(message)
+        if _use_rich():
+            console.print(message, style="verbose")
+        else:
+            print(message)
+
 
 def error_print(message: str, details: Optional[List[str]] = None) -> None:
     """Print error messages. Always displayed regardless of verbosity.
-    
+
     Args:
         message: Primary error message
         details: Optional list of detail lines to print (indented)
     """
-    print(f"! ERROR {message}")
-    if details:
-        for detail in details:
-            print(f"  {detail}")
+    if _use_rich():
+        content = Text()
+        content.append("! ERROR ", style="error.prefix")
+        content.append(message)
+        if details:
+            for detail in details:
+                content.append(f"\n  {detail}", style="error.detail")
+        if _use_panels():
+            console.print(Panel(content, border_style="red", padding=(0, 1)))
+        else:
+            console.print(content)
+    else:
+        print(f"! ERROR {message}")
+        if details:
+            for detail in details:
+                print(f"  {detail}")
+
 
 def warning_print(message: str, details: Optional[List[str]] = None) -> None:
     """Print warning messages. Always displayed regardless of verbosity.
-    
+
     Args:
         message: Primary warning message
         details: Optional list of detail lines to print (indented)
     """
-    print(f"! WARNING {message}")
-    if details:
-        for detail in details:
-            print(f"  {detail}")
+    if _use_rich():
+        content = Text()
+        content.append("! WARNING ", style="warning.prefix")
+        content.append(message)
+        if details:
+            for detail in details:
+                content.append(f"\n  {detail}", style="warning.detail")
+        if _use_panels():
+            console.print(Panel(content, border_style="yellow", padding=(0, 1)))
+        else:
+            console.print(content)
+    else:
+        print(f"! WARNING {message}")
+        if details:
+            for detail in details:
+                print(f"  {detail}")
+
+
+def success_print(message: str) -> None:
+    """Print success/completion messages. Always displayed regardless of verbosity.
+
+    Args:
+        message: Success message
+    """
+    if _use_rich():
+        content = Text()
+        content.append("✓ ", style="success.prefix")
+        content.append(message)
+        if _use_panels():
+            console.print(Panel(content, border_style="green", padding=(0, 1)))
+        else:
+            console.print(content)
+    else:
+        print(f"✓ {message}")
+
 
 def info_print(message: str) -> None:
     """Print informational messages. Always displayed regardless of verbosity.
-    
+
     Args:
         message: Informational message
     """
-    print(message)
+    if _use_rich():
+        console.print(message, style="info")
+    else:
+        print(message)
 
 def normalize_study_name(raw_name: str) -> str:
     """Convert study name to a filesystem-safe format.
