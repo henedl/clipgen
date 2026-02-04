@@ -10,14 +10,14 @@ The program was created to speed up data processing during playtests and is prov
 
 ### Pre-requisites
 
-1. Install the required Python dependencies.
-2. Install ffmpeg and ensure it is available via your PATH. Alternatively, put the ffmpeg binary in the same directory as clipgen.py.
+1. Install the required Python dependencies: ```pip install -r requirements.txt```
+2. Install ffmpeg and ensure it is available via your `PATH`.
 3. Configure your Google Authentication per [gspread's setup guide](https://docs.gspread.org/en/master/oauth2.html); clipgen requires you to have a Google Cloud project with API access, with a OAuth credentials file on your system.
 
 ### Starting clipgen
 
-- Put clipgen.py in a folder with video recordings.
-- Your Google credentials.json file should either be in the working directory, or in ~/.gspread
+- Put `clipgen.py` in a folder with video recordings.
+- Your Google `credentials.json` file should either be in the working directory, or in `~/.gspread`
 - Launch clipgen either interactively or through command-line arguments: ```python clipgen.py``` or ```python clipgen.py --help```
 - Point clipgen to your Google Sheet and enjoy quick video clip generation based on your timestamped notes.
 - Alternatively, point clipgen to a local Excel file in the current working directory and enjoy all the same features.
