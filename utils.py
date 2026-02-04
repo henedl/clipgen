@@ -13,11 +13,13 @@ import config
 try:
     from rich.console import Console
     from rich.panel import Panel
+    from rich.progress import Progress, BarColumn, TextColumn, TimeElapsedColumn, MofNCompleteColumn, SpinnerColumn
     from rich.text import Text
     from rich.theme import Theme
     RICH_AVAILABLE = True
 except ImportError:
     RICH_AVAILABLE = False
+    Progress = None  # type: ignore
 
 # Custom theme for clipgen - only create if Rich is available
 _CLIPGEN_THEME = Theme({
@@ -46,6 +48,35 @@ def _use_rich() -> bool:
 def _use_panels() -> bool:
     """Check if Rich panels should be used for errors/warnings/success."""
     return getattr(config, 'RICH_PANELS', True)
+
+
+def _use_progress() -> bool:
+    """Check if Rich progress bars should be used."""
+    return RICH_AVAILABLE and console is not None and getattr(config, 'RICH_PROGRESS', True)
+
+
+def create_progress_bar(description: str = "Processing"):
+    """Create a Rich Progress instance configured for clipgen, or None if unavailable.
+
+    Args:
+        description: Default task description
+
+    Returns:
+        Configured Progress instance if Rich is available and enabled, else None
+    """
+    if not _use_progress():
+        return None
+
+    return Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(bar_width=40),
+        MofNCompleteColumn(),
+        TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+        TimeElapsedColumn(),
+        console=console,
+        transient=False,  # Keep progress visible after completion
+    )
 
 
 def parse_arguments() -> argparse.Namespace:
