@@ -13,6 +13,7 @@ import config
 try:
     from rich.console import Console
     from rich.panel import Panel
+    from rich.table import Table
     from rich.text import Text
     from rich.theme import Theme
     RICH_AVAILABLE = True
@@ -209,6 +210,95 @@ def info_print(message: str) -> None:
         console.print(message, style="info")
     else:
         print(message)
+
+
+def create_browse_table(
+    rows_data: List[dict],
+    participant_headers: List[str]
+) -> Optional['Table']:
+    """Create a Rich Table for browse mode display.
+
+    Args:
+        rows_data: List of dicts with keys: row_num, category, description, timestamps (dict)
+        participant_headers: List of participant IDs for column headers
+
+    Returns:
+        Rich Table object if Rich is available, None otherwise
+    """
+    if not _use_rich():
+        return None
+
+    table = Table(
+        show_header=True,
+        header_style="bold cyan",
+        border_style="dim",
+        row_styles=["", "dim"],
+        expand=False,
+    )
+
+    # Add fixed columns
+    table.add_column("Row", justify="right", style="bold", width=4)
+    table.add_column("Category", style="yellow", max_width=15, overflow="ellipsis")
+    table.add_column("Description", max_width=config.BROWSE_DESCRIPTION_MAX_WIDTH, overflow="ellipsis")
+
+    # Add participant columns
+    for p_id in participant_headers:
+        table.add_column(p_id, max_width=config.BROWSE_TIMESTAMP_MAX_WIDTH, overflow="fold")
+
+    # Add data rows
+    for row in rows_data:
+        row_values = [
+            str(row['row_num']),
+            row['category'],
+            row['description'],
+        ]
+        # Add timestamp values for each participant
+        for p_id in participant_headers:
+            ts = row['timestamps'].get(p_id, '-')
+            row_values.append(ts if ts else '-')
+
+        table.add_row(*row_values)
+
+    return table
+
+
+def format_browse_rows_plain(
+    rows_data: List[dict],
+    participant_headers: List[str]
+) -> str:
+    """Format browse rows as plain text (fallback when Rich unavailable).
+
+    Args:
+        rows_data: List of dicts with keys: row_num, category, description, timestamps (dict)
+        participant_headers: List of participant IDs
+
+    Returns:
+        Formatted plain text string
+    """
+    lines = ['-' * 60]
+
+    for row in rows_data:
+        lines.append(f"Row {row['row_num']}")
+        lines.append(f"  Category: {row['category']}")
+        lines.append(f"  Description: {row['description']}")
+
+        # Get participant timestamps
+        participant_data = []
+        for p_id in participant_headers:
+            ts = row['timestamps'].get(p_id)
+            if ts:
+                participant_data.append(f"    {p_id}: {ts}")
+
+        if participant_data:
+            lines.append('  Participants:')
+            lines.extend(participant_data)
+        else:
+            lines.append('  Participants: (no timestamps)')
+
+        lines.append('  ---')
+
+    return '\n'.join(lines)
+
 
 def normalize_study_name(raw_name: str) -> str:
     """Convert study name to a filesystem-safe format.
