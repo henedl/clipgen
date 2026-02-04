@@ -46,3 +46,7 @@ NUM_NEWEST_DOCS_TO_SHOW = 3  # Number of newest documents to show when using 'ne
 DESCRIPTION_PREVIEW_LENGTH = 50  # Max chars for description in previews
 REEL_PREVIEW_CLIP_COUNT = 10  # Number of clips to show in reel mode preview
 MAX_SKIPPED_TIMESTAMPS_TO_SHOW = 3  # Max skipped timestamps to list in parse_timestamps warning
+
+# Rich output settings
+RICH_COLORS = True    # Enable/disable colored output (set False for piped output)
+RICH_PANELS = True    # Use bordered panels for errors/warnings/success messages
