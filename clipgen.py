@@ -348,14 +348,19 @@ def process_clips(clips_list: List[Any]) -> int:
     videos_generated = 0
     videos_skipped = 0
     missing_videos: set = set()
+    total_clips = len(clips_list)
+    progress = utils.create_progress_bar()
 
-    for clip in clips_list:
+    def process_single_clip(clip, progress_task=None):
+        """Process a single clip, updating progress if available. Returns (generated, skipped)."""
+        nonlocal videos_generated, videos_skipped, missing_videos
+
         if config.DEBUGGING:
             ic(clip)
         clip = files.prepare_clip(clip)
         if not clip['times']:
-            videos_skipped += 1
-            continue
+            return (0, 1)
+
         base_video = f"{clip['study']}_{clip['participant']}{config.FILEFORMAT}"
         if not os.path.isfile(base_video):
             if base_video not in missing_videos:
@@ -367,12 +372,34 @@ def process_clips(clips_list: List[Any]) -> int:
                         f"Clips for participant '{clip['participant']}' in study '{clip['study']}' will be skipped.",
                     ],
                 )
-            videos_skipped += len(clip['times'])
-            continue
+            return (0, len(clip['times']))
+
         count, _ = _process_single_clip_segments(clip, base_video, missing_videos, collect_paths=False)
-        videos_generated += count
-        if count < len(clip['times']):
-            videos_skipped += len(clip['times']) - count
+        skipped = len(clip['times']) - count if count < len(clip['times']) else 0
+        return (count, skipped)
+
+    if progress:
+        with progress:
+            task = progress.add_task("Processing clips", total=total_clips)
+            for clip in clips_list:
+                # Update description to show current clip
+                desc_preview = (clip.get('desc') or '')[:30]
+                participant = clip.get('participant', '')
+                progress.update(task, description=f"[{participant}] {desc_preview}...")
+
+                generated, skipped = process_single_clip(clip, task)
+                videos_generated += generated
+                videos_skipped += skipped
+                progress.update(task, advance=1)
+    else:
+        # Fallback: no progress bar
+        for i, clip in enumerate(clips_list):
+            if config.VERBOSE and total_clips > 1:
+                utils.verbose_print(f"Processing clip {i+1} of {total_clips}...")
+
+            generated, skipped = process_single_clip(clip)
+            videos_generated += generated
+            videos_skipped += skipped
 
     if videos_skipped > 0:
         utils.verbose_print(f"\n* Summary: {videos_generated} video(s) generated, {videos_skipped} skipped due to errors.")
@@ -394,11 +421,16 @@ def process_reel(clips_list: List[Any], output_file: Optional[str] = None) -> in
     clip_paths: List[str] = []
     missing_videos: set = set()
     study_name: Optional[str] = None
+    total_clips = len(clips_list)
+    progress = utils.create_progress_bar()
 
-    for clip in clips_list:
+    def process_reel_clip(clip):
+        """Process a single clip for reel mode. Returns list of generated clip paths."""
+        nonlocal study_name, missing_videos
+
         clip = files.prepare_clip(clip)
         if not clip['times']:
-            continue
+            return []
         if study_name is None:
             study_name = clip['study']
         base_video = f"{clip['study']}_{clip['participant']}{config.FILEFORMAT}"
@@ -412,11 +444,28 @@ def process_reel(clips_list: List[Any], output_file: Optional[str] = None) -> in
                         f"Clips for participant '{clip['participant']}' will be skipped.",
                     ],
                 )
-            continue
+            return []
         _, paths = _process_single_clip_segments(
             clip, base_video, missing_videos, filename_prefix="_reel_part_", collect_paths=True
         )
-        clip_paths.extend(paths)
+        return paths
+
+    if progress:
+        with progress:
+            task = progress.add_task("Generating reel clips", total=total_clips)
+            for clip in clips_list:
+                desc_preview = (clip.get('desc') or '')[:30]
+                participant = clip.get('participant', '')
+                progress.update(task, description=f"[{participant}] {desc_preview}...")
+
+                paths = process_reel_clip(clip)
+                clip_paths.extend(paths)
+                progress.update(task, advance=1)
+    else:
+        # Fallback: no progress bar
+        for clip in clips_list:
+            paths = process_reel_clip(clip)
+            clip_paths.extend(paths)
 
     if missing_videos:
         utils.verbose_print(f"* Missing source video files: {list(missing_videos)}")
@@ -429,6 +478,7 @@ def process_reel(clips_list: List[Any], output_file: Optional[str] = None) -> in
     elif output_file is None:
         output_file = files.get_unique_filename(f"reel{config.FILEFORMAT}")
 
+    utils.verbose_print("Concatenating clips into final reel...")
     ok = video.concatenate_clips(clip_paths, output_file, reencode_on_fail=True)
     for path in clip_paths:
         try:

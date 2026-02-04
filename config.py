@@ -52,3 +52,4 @@ MAX_SKIPPED_TIMESTAMPS_TO_SHOW = 3  # Max skipped timestamps to list in parse_ti
 # Rich output settings
 RICH_COLORS = True    # Enable/disable colored output (set False for piped output)
 RICH_PANELS = True    # Use bordered panels for errors/warnings/success messages
+RICH_PROGRESS = True  # Show progress bars during batch/reel processing
