@@ -80,6 +80,11 @@ Reel selectors: `batch`, line numbers, ranges like `13-16`, quoted categories, c
 
 Reference spreadsheet layout is described in [README.md](README.md).
 
+## Version
+
+- The version is stored as `VERSIONNUM` in [config.py](config.py) (e.g. `'0.7.4'`).
+- **When making substantive code changes** (bug fixes or features), increment the **last segment only** (patch) in `config.py`, e.g. `0.7.4` → `0.7.5`. Do not bump for docs-only, comment-only, or refactor-only changes unless they affect user-visible behavior.
+
 ## Testing notes
 
 - There is no test suite in the repo.
