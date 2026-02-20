@@ -2,7 +2,8 @@
 """File and filename operations for clipgen."""
 
 import os
-from typing import Any, Dict
+import re
+from typing import Any, Dict, List
 
 import gspread
 from icecream import ic
@@ -157,3 +158,34 @@ def prepare_clip(clip: Dict[str, Any]) -> Dict[str, Any]:
         ic(clip['category'])
         ic(clip)
     return clip
+
+
+def is_source_video(filename: str) -> bool:
+    """Check if filename matches source video pattern (study_P01.mp4, study_G02.mp4).
+    
+    Source videos follow the naming convention {study}_{participant}.mp4 where
+    participant starts with P or G followed by digits.
+    
+    Args:
+        filename: Filename to check
+        
+    Returns:
+        True if filename matches source video pattern, False otherwise
+    """
+    return bool(re.search(r'_[PG]\d+\.mp4$', filename, re.IGNORECASE))
+
+
+def discover_clips() -> List[str]:
+    """Find generated clips in the current working directory.
+    
+    Scans for .mp4 files and excludes source videos (those matching the
+    pattern study_P01.mp4, study_G02.mp4, etc.).
+    
+    Returns:
+        Sorted list of clip filenames (alphabetically)
+    """
+    clips = []
+    for f in os.listdir('.'):
+        if f.endswith(config.FILEFORMAT) and not is_source_video(f):
+            clips.append(f)
+    return sorted(clips)

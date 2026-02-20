@@ -356,6 +356,43 @@ def sanitize_filename(text: str) -> str:
         text = text.replace(char, '')
     return text
 
+
+def index_to_letter(idx: int) -> str:
+    """Convert 0-based index to letter label (0='A', 25='Z', 26='AA', etc.).
+
+    Args:
+        idx: 0-based index
+
+    Returns:
+        Letter label (A-Z, then AA, AB, etc.)
+    """
+    result = ''
+    idx += 1  # Convert to 1-based for calculation
+    while idx > 0:
+        idx -= 1
+        result = chr(ord('A') + (idx % 26)) + result
+        idx //= 26
+    return result
+
+
+def letter_to_index(letter: str) -> int:
+    """Convert letter label to 0-based index ('A'=0, 'Z'=25, 'AA'=26, etc.).
+
+    Args:
+        letter: Letter label (case-insensitive)
+
+    Returns:
+        0-based index, or -1 if invalid
+    """
+    letter = letter.upper().strip()
+    if not letter or not letter.isalpha():
+        return -1
+    result = 0
+    for char in letter:
+        result = result * 26 + (ord(char) - ord('A') + 1)
+    return result - 1
+
+
 def add_duration(start_time: str) -> Union[str, int]:
     """Add default duration to a start timestamp.
     

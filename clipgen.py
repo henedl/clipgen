@@ -210,6 +210,95 @@ def _run_reel_mode_interactive(worksheet: Any) -> Tuple[List[Any], bool, Optiona
     return (clips_list, True, reel_output_file)
 
 
+def _parse_clip_selection(selection_input: str, num_clips: int) -> List[int]:
+    """Parse user selection input into list of clip indices.
+    
+    Supports formats: "A + B + C", "A, B, C", "A B C", or mixed.
+    
+    Args:
+        selection_input: User's selection string (e.g., "A + B" or "A, C")
+        num_clips: Total number of available clips (for validation)
+        
+    Returns:
+        List of valid 0-based indices, deduplicated and in selection order
+    """
+    # Normalize separators to spaces
+    normalized = selection_input.replace('+', ' ').replace(',', ' ')
+    tokens = normalized.split()
+    
+    indices = []
+    seen = set()
+    for token in tokens:
+        idx = utils.letter_to_index(token)
+        if idx >= 0 and idx < num_clips and idx not in seen:
+            indices.append(idx)
+            seen.add(idx)
+    return indices
+
+
+def _run_reellate_mode_interactive() -> Tuple[bool, Optional[str]]:
+    """Run reel-late mode UI: discover clips, display list, select, concatenate.
+    
+    Returns (True, output_file) when reel was generated; (False, None) otherwise.
+    """
+    clips = files.discover_clips()
+    
+    if not clips:
+        utils.info_print('\nNo clips found in the working directory.')
+        utils.info_print('  Source videos (like study_P01.mp4) are excluded.')
+        utils.info_print('  Generate some clips first, then use this mode to combine them.')
+        return (False, None)
+    
+    utils.info_print('\nReel-late mode: combine existing clips into a highlight reel.')
+    utils.info_print(f'\nFound {len(clips)} clip(s) in {os.getcwd()}:\n')
+    
+    # Display indexed list
+    for i, clip in enumerate(clips):
+        letter = utils.index_to_letter(i)
+        utils.info_print(f'  {letter}. "{clip}"')
+    
+    utils.info_print('\nSelect clips to include (order preserved). Syntax:')
+    utils.info_print('  A + B + C    - combine clips A, B, and C')
+    utils.info_print('  A, B, C      - same as above')
+    utils.info_print('  A B C        - same as above')
+    
+    selection_input = input('\nEnter clip selection:\n>> ').strip()
+    if not selection_input:
+        utils.info_print('No selection. Skipping reel.')
+        return (False, None)
+    
+    indices = _parse_clip_selection(selection_input, len(clips))
+    if not indices:
+        utils.warning_print('No valid clips selected.',
+            ['Use letters from the list above (e.g., A + B + C)'])
+        return (False, None)
+    
+    selected_clips = [clips[i] for i in indices]
+    
+    # Preview selection
+    utils.info_print(f'\nSelected {len(selected_clips)} clip(s):')
+    for i, clip in enumerate(selected_clips):
+        utils.info_print(f'  {i+1}. "{clip}"')
+    
+    yn = input('\nGenerate reel from these clips? y/n\n>> ').strip().lower()
+    if yn != 'y':
+        utils.info_print('Cancelled.')
+        return (False, None)
+    
+    output_file = input('\nOutput filename (Enter for default "reel.mp4"):\n>> ').strip()
+    if not output_file:
+        output_file = files.get_unique_filename(f'reel{config.FILEFORMAT}')
+    elif not output_file.endswith(config.FILEFORMAT):
+        output_file = output_file + config.FILEFORMAT
+    
+    utils.verbose_print(f'\nConcatenating {len(selected_clips)} clips into {output_file}...')
+    ok = video.concatenate_clips(selected_clips, output_file, reencode_on_fail=True)
+    
+    if ok:
+        return (True, output_file)
+    return (False, None)
+
+
 def select_mode_and_generate(worksheet: Any) -> Tuple[List[Any], bool, Optional[str]]:
     """Interactive mode selection. Returns (clips list, is_reel_mode, reel_output_file or None)."""
     mode_map = {
@@ -220,6 +309,7 @@ def select_mode_and_generate(worksheet: Any) -> Tuple[List[Any], bool, Optional[
         'ce': 'cell', 'cell': 'cell',
         'p': 'participant', 'participant': 'participant',
         're': 'reel', 'reel': 'reel',
+        'rl': 'reellate', 'reellate': 'reellate',
         'br': 'browse', 'browse': 'browse',
         'test': 'test'
     }
@@ -227,7 +317,7 @@ def select_mode_and_generate(worksheet: Any) -> Tuple[List[Any], bool, Optional[
     while True:
         input_mode = input(
             '\nEnter mode or input directly:\n'
-            '  Modes: (b)atch, (r)ange, (c)ategory, (l)ine, (ce)ll, (p)articipant, (re)el, (br)owse\n'
+            '  Modes: (b)atch, (r)ange, (c)ategory, (l)ine, (ce)ll, (p)articipant, (re)el, (rl) reel-late, (br)owse\n'
             '  Or enter directly: line numbers (5, 7), ranges (13-16), cells (P01.11), participants (P01)\n>> '
         ).strip()
         if not input_mode:
@@ -244,6 +334,13 @@ def select_mode_and_generate(worksheet: Any) -> Tuple[List[Any], bool, Optional[
                 result = _run_reel_mode_interactive(worksheet)
                 if result[1]:
                     return result
+                continue
+            if mode == 'reellate':
+                success, output_file = _run_reellate_mode_interactive()
+                if success:
+                    utils.info_print(f'\nReel created: {output_file}')
+                    utils.info_print(f'Files are in {os.getcwd()}\n')
+                    return ([], False, None)
                 continue
             if mode:
                 return (spreadsheet.generate_list(worksheet, mode), False, None)
@@ -274,6 +371,7 @@ def select_mode_and_generate(worksheet: Any) -> Tuple[List[Any], bool, Optional[
                 utils.info_print("    ce or cell   - Generate clips from specific cell(s) (e.g., P01.11)")
                 utils.info_print("    p or participant - Generate all clips for one participant")
                 utils.info_print("    re or reel   - Combine selectors into one highlight reel video")
+                utils.info_print("    rl or reellate - Combine existing clips into a highlight reel")
                 utils.info_print("    br or browse - Browse spreadsheet rows interactively")
         except gspread.exceptions.GSpreadException as e:
             utils.error_print(f"Google Sheets API error: {e}")
