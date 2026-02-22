@@ -13,6 +13,56 @@ import config
 import files
 import utils
 
+INVALID_END_TIMESTAMP = -1
+
+
+def _handle_ffmpeg_not_found() -> None:
+    utils.error_print(
+        "ffmpeg is not installed or not found in system PATH.",
+        [
+            "Please install ffmpeg and ensure it's in your PATH.",
+            "Download from: https://www.ffmpeg.org/download.html",
+        ],
+    )
+
+
+def _run_ffmpeg_process(
+    ffmpeg_command: List[str],
+    *,
+    input_file: str,
+    output_file: str,
+    os_error_message: str,
+) -> Optional[subprocess.CompletedProcess[str]]:
+    try:
+        return subprocess.run(ffmpeg_command, encoding='utf-8', capture_output=True)
+    except FileNotFoundError:
+        _handle_ffmpeg_not_found()
+        return None
+    except OSError as error:
+        utils.error_print(
+            os_error_message,
+            [
+                f"Error: {error}",
+                f"Working directory: '{os.getcwd()}'",
+                f"Input file: '{input_file}'",
+                f"Output file: '{output_file}'",
+            ],
+        )
+        return None
+
+
+def _add_ffmpeg_stderr(error_details: List[str], ffmpeg_result: subprocess.CompletedProcess[str]) -> List[str]:
+    if ffmpeg_result.stderr:
+        error_details.append(f"ffmpeg error: {ffmpeg_result.stderr.strip()}")
+    return error_details
+
+
+def _verify_output_file(output_file: str, operation_label: str) -> bool:
+    if os.path.isfile(output_file):
+        return True
+    utils.error_print(f"{operation_label} completed but output file was not created: '{output_file}'")
+    return False
+
 
 def build_ffmpeg_cut_command(
     input_file: str,
@@ -34,8 +84,6 @@ def build_ffmpeg_cut_command(
     Returns:
         argv list for subprocess (e.g. ['ffmpeg', '-y', ...])
     """
-    # -y: overwrite output; -loglevel 16: errors only; -ss before -i: fast seek (input seeking)
-    # -t: duration in seconds
     base = ['ffmpeg', '-y', '-loglevel', '16', '-ss', start_pos, '-i', input_file, '-t', str(duration_seconds)]
     if not reencode:
         if audio_normalize:
@@ -64,7 +112,6 @@ def run_ffmpeg(input_file: str, output_file: str, start_pos: str, end_pos: str, 
     """
     if config.DEBUGGING:
         ic(input_file, output_file, start_pos, end_pos)
-    # Validation sequence: file exists -> timestamps parse -> within file bounds -> length confirmation
     if not os.path.isfile(input_file):
         utils.error_print(f"Input video file not found: '{input_file}'",
             [f"Expected location: {os.path.join(os.getcwd(), input_file)}",
@@ -93,7 +140,6 @@ def run_ffmpeg(input_file: str, output_file: str, start_pos: str, end_pos: str, 
         return False
     if config.DEBUGGING:
         ic(duration, duration_seconds)
-    # Ask user before generating very long clips (avoids accidental huge exports)
     if duration > config.MAX_CLIP_DURATION_SECONDS:
         yn = input(f'The generated video will be {duration}s ({duration//60}m {duration%60}s), over 10 minutes long. Generate anyway? (y/n)\n>> ')
         if yn != 'y':
@@ -104,47 +150,36 @@ def run_ffmpeg(input_file: str, output_file: str, start_pos: str, end_pos: str, 
         utils.debug_print(f'Debugging enabled, not calling ffmpeg.\n  input_file: {input_file},\n  output_file: {output_file}')
         return False
 
-    try:
-        ffmpeg_command = build_ffmpeg_cut_command(
-            input_file, output_file, start_pos, duration, reencode, config.AUDIO_NORMALIZE
+    ffmpeg_command = build_ffmpeg_cut_command(
+        input_file, output_file, start_pos, duration, reencode, config.AUDIO_NORMALIZE
+    )
+    utils.debug_print(f"ffmpeg_command is '{' '.join(ffmpeg_command)}'")
+    ffmpeg_result = _run_ffmpeg_process(
+        ffmpeg_command,
+        input_file=input_file,
+        output_file=output_file,
+        os_error_message="ffmpeg could not successfully run.",
+    )
+    if ffmpeg_result is None:
+        return False
+
+    if ffmpeg_result.returncode != 0:
+        error_details = [f"Input: '{input_file}', Output: '{output_file}'", f"Timestamps: {start_pos} to {end_pos}"]
+        utils.error_print(
+            f"ffmpeg failed with exit code {ffmpeg_result.returncode}",
+            _add_ffmpeg_stderr(error_details, ffmpeg_result),
         )
-        utils.debug_print(f"ffmpeg_command is '{' '.join(ffmpeg_command)}'")
-        result = subprocess.run(ffmpeg_command, encoding='utf-8', capture_output=True)
-        
-        # Check if ffmpeg succeeded
-        if result.returncode != 0:
-            error_details = [f"Input: '{input_file}', Output: '{output_file}'",
-                f"Timestamps: {start_pos} to {end_pos}"]
-            if result.stderr:
-                error_details.append(f"ffmpeg error: {result.stderr.strip()}")
-            utils.error_print(f"ffmpeg failed with exit code {result.returncode}", error_details)
-            return False
-        
-        # Verify output file was created
-        if not os.path.isfile(output_file):
-            utils.error_print(f"ffmpeg completed but output file was not created: '{output_file}'")
-            return False
-
-        # Check filesize limit and compress if needed
-        if config.MAX_FILESIZE_MB and config.MAX_FILESIZE_MB > 0:
-            if not compress_to_size(output_file, config.MAX_FILESIZE_MB):
-                utils.warning_print(f"Could not compress '{output_file}' to target size")
-                # Continue anyway - file was generated, just not compressed
-
-        utils.verbose_print(f"+ Generated video '{output_file}' successfully.\n File size: {files.format_filesize(os.path.getsize(output_file))}\n Expected duration: {duration} s\n")
-        return True
-    except FileNotFoundError:
-        utils.error_print("ffmpeg is not installed or not found in system PATH.",
-            ["Please install ffmpeg and ensure it's in your PATH.",
-             "Download from: https://www.ffmpeg.org/download.html"])
         return False
-    except OSError as e:
-        utils.error_print("ffmpeg could not successfully run.",
-            [f"Error: {e}",
-             f"Working directory: '{os.getcwd()}'",
-             f"Input file: '{input_file}'",
-             f"Output file: '{output_file}'"])
+
+    if not _verify_output_file(output_file, "ffmpeg"):
         return False
+
+    if config.MAX_FILESIZE_MB and config.MAX_FILESIZE_MB > 0:
+        if not compress_to_size(output_file, config.MAX_FILESIZE_MB):
+            utils.warning_print(f"Could not compress '{output_file}' to target size")
+
+    utils.verbose_print(f"+ Generated video '{output_file}' successfully.\n File size: {files.format_filesize(os.path.getsize(output_file))}\n Expected duration: {duration} s\n")
+    return True
 
 
 def extract_screenshot(input_file: str, output_file: str, timestamp: str) -> bool:
@@ -179,31 +214,26 @@ def extract_screenshot(input_file: str, output_file: str, timestamp: str) -> boo
     ]
     utils.debug_print(f"ffmpeg screenshot command: {' '.join(ffmpeg_command)}")
 
-    try:
-        result = subprocess.run(ffmpeg_command, encoding='utf-8', capture_output=True)
-        if result.returncode != 0:
+    ffmpeg_result = _run_ffmpeg_process(
+        ffmpeg_command,
+        input_file=input_file,
+        output_file=output_file,
+        os_error_message="ffmpeg could not successfully run for screenshot extraction.",
+    )
+    if ffmpeg_result is None:
+        return False
+
+    if ffmpeg_result.returncode != 0:
             error_details = [f"Input: '{input_file}', Output: '{output_file}'", f"Timestamp: {timestamp}"]
-            if result.stderr:
-                error_details.append(f"ffmpeg error: {result.stderr.strip()}")
-            utils.error_print(f"ffmpeg screenshot failed with exit code {result.returncode}", error_details)
+            utils.error_print(
+                f"ffmpeg screenshot failed with exit code {ffmpeg_result.returncode}",
+                _add_ffmpeg_stderr(error_details, ffmpeg_result),
+            )
             return False
-        if not os.path.isfile(output_file):
-            utils.error_print(f"ffmpeg screenshot completed but output file was not created: '{output_file}'")
-            return False
-        utils.verbose_print(f"+ Generated screenshot '{output_file}' successfully.\n File size: {files.format_filesize(os.path.getsize(output_file))}\n")
-        return True
-    except FileNotFoundError:
-        utils.error_print("ffmpeg is not installed or not found in system PATH.",
-            ["Please install ffmpeg and ensure it's in your PATH.",
-             "Download from: https://www.ffmpeg.org/download.html"])
+    if not _verify_output_file(output_file, "ffmpeg screenshot"):
         return False
-    except OSError as e:
-        utils.error_print("ffmpeg could not successfully run for screenshot extraction.",
-            [f"Error: {e}",
-             f"Working directory: '{os.getcwd()}'",
-             f"Input file: '{input_file}'",
-             f"Output file: '{output_file}'"])
-        return False
+    utils.verbose_print(f"+ Generated screenshot '{output_file}' successfully.\n File size: {files.format_filesize(os.path.getsize(output_file))}\n")
+    return True
 
 
 def extract_gif(input_file: str, output_file: str, timestamp: str, duration_seconds: int) -> bool:
@@ -244,34 +274,29 @@ def extract_gif(input_file: str, output_file: str, timestamp: str, duration_seco
     ]
     utils.debug_print(f"ffmpeg gif command: {' '.join(ffmpeg_command)}")
 
-    try:
-        result = subprocess.run(ffmpeg_command, encoding='utf-8', capture_output=True)
-        if result.returncode != 0:
+    ffmpeg_result = _run_ffmpeg_process(
+        ffmpeg_command,
+        input_file=input_file,
+        output_file=output_file,
+        os_error_message="ffmpeg could not successfully run for GIF extraction.",
+    )
+    if ffmpeg_result is None:
+        return False
+
+    if ffmpeg_result.returncode != 0:
             error_details = [
                 f"Input: '{input_file}', Output: '{output_file}'",
                 f"Timestamp: {timestamp}, Duration: {duration_seconds}s",
             ]
-            if result.stderr:
-                error_details.append(f"ffmpeg error: {result.stderr.strip()}")
-            utils.error_print(f"ffmpeg GIF extraction failed with exit code {result.returncode}", error_details)
+            utils.error_print(
+                f"ffmpeg GIF extraction failed with exit code {ffmpeg_result.returncode}",
+                _add_ffmpeg_stderr(error_details, ffmpeg_result),
+            )
             return False
-        if not os.path.isfile(output_file):
-            utils.error_print(f"ffmpeg GIF extraction completed but output file was not created: '{output_file}'")
-            return False
-        utils.verbose_print(f"+ Generated GIF '{output_file}' successfully.\n File size: {files.format_filesize(os.path.getsize(output_file))}\n")
-        return True
-    except FileNotFoundError:
-        utils.error_print("ffmpeg is not installed or not found in system PATH.",
-            ["Please install ffmpeg and ensure it's in your PATH.",
-             "Download from: https://www.ffmpeg.org/download.html"])
+    if not _verify_output_file(output_file, "ffmpeg GIF extraction"):
         return False
-    except OSError as e:
-        utils.error_print("ffmpeg could not successfully run for GIF extraction.",
-            [f"Error: {e}",
-             f"Working directory: '{os.getcwd()}'",
-             f"Input file: '{input_file}'",
-             f"Output file: '{output_file}'"])
-        return False
+    utils.verbose_print(f"+ Generated GIF '{output_file}' successfully.\n File size: {files.format_filesize(os.path.getsize(output_file))}\n")
+    return True
 
 
 def get_file_duration(filepath: str) -> Optional[int]:
@@ -289,8 +314,6 @@ def get_file_duration(filepath: str) -> Optional[int]:
              "Please ensure the video file exists in the working directory."])
         return None
 
-    # -v error: only show errors; -show_entries format=duration: get container duration
-    # -of default=noprint_wrappers=1:nokey=1: output raw value only (no "duration=1.23" wrapper)
     probe_command = ['ffprobe', '-v', 'error', '-show_entries', 'format=duration', '-of', 'default=noprint_wrappers=1:nokey=1', filepath]
     utils.debug_print(f"probe_command is {' '.join(probe_command)}")
     
@@ -326,18 +349,17 @@ def get_duration(start_time: str, end_time: str) -> Optional[int]:
         ic(start_time, end_time)
     utils.debug_print(f'start_time is {start_time} with length {len(start_time)}, end_time is {end_time}')
 
-    if end_time == -1:
+    if end_time == INVALID_END_TIMESTAMP:
         utils.error_print(f"Invalid end timestamp (derived from start: '{start_time}')",
             ["Could not calculate end time. Check the timestamp format."])
         return None
 
-    # Try MM:SS first for short strings (e.g. "1:23"), HH:MM:SS first for longer (e.g. "1:23:45")
     formats = ['%M:%S', '%H:%M:%S'] if len(str(start_time)) <= 5 else ['%H:%M:%S', '%M:%S']
 
-    for fmt in formats:
+    for time_format in formats:
         try:
-            start_datetime = datetime.strptime(str(start_time), fmt)
-            end_datetime = datetime.strptime(str(end_time), fmt)
+            start_datetime = datetime.strptime(str(start_time), time_format)
+            end_datetime = datetime.strptime(str(end_time), time_format)
             duration = int((end_datetime - start_datetime).total_seconds())
             if config.DEBUGGING:
                 ic(duration)
@@ -397,7 +419,6 @@ def compress_to_size(filepath: str, target_size_mb: float) -> bool:
         utils.error_print(f"Cannot compress: unable to determine duration of '{filepath}'")
         return False
 
-    # Use 0.95 * target so we stay under limit (encoder overhead and container add a bit)
     target_bitrate = calculate_target_bitrate(target_size_mb * 0.95, duration)
     if target_bitrate <= 100:
         utils.warning_print(f"Target bitrate very low ({target_bitrate} kbps) for {duration}s video.",
@@ -408,13 +429,11 @@ def compress_to_size(filepath: str, target_size_mb: float) -> bool:
     utils.verbose_print(f"  Current size: {files.format_filesize(current_size_bytes)}")
     utils.verbose_print(f"  Target bitrate: {target_bitrate} kbps (video) + 128 kbps (audio)")
 
-    temp_output = filepath + '.temp.mp4'
+    compressed_temp_path = filepath + '.temp.mp4'
     passlog_base = filepath + '.passlog'
 
     try:
-        # Two-pass encoding: pass 1 analyzes and writes stats; pass 2 uses them for better bitrate distribution
         null_output = '/dev/null' if os.name != 'nt' else 'NUL'
-        # Pass 1: analysis only; -an drops audio, -f null discards video (we only need the stats)
         pass1_command = [
             'ffmpeg', '-y', '-loglevel', '16',
             '-i', filepath,
@@ -425,58 +444,67 @@ def compress_to_size(filepath: str, target_size_mb: float) -> bool:
         ]
 
         utils.debug_print(f"Pass 1 command: {' '.join(pass1_command)}")
-        result1 = subprocess.run(pass1_command, encoding='utf-8', capture_output=True)
-
-        if result1.returncode != 0:
-            utils.error_print("Compression pass 1 failed",
-                [result1.stderr.strip() if result1.stderr else "Unknown error"])
+        pass1_result = _run_ffmpeg_process(
+            pass1_command,
+            input_file=filepath,
+            output_file=null_output,
+            os_error_message="ffmpeg could not successfully run during compression pass 1.",
+        )
+        if pass1_result is None:
             return False
 
-        # Pass 2: encode with same bitrate, using passlog; include audio (pass 1 had -an)
+        if pass1_result.returncode != 0:
+            utils.error_print(
+                "Compression pass 1 failed",
+                [pass1_result.stderr.strip() if pass1_result.stderr else "Unknown error"],
+            )
+            return False
+
         pass2_command = [
             'ffmpeg', '-y', '-loglevel', '16',
             '-i', filepath,
             '-c:v', 'libx264', '-b:v', f'{target_bitrate}k',
             '-pass', '2', '-passlogfile', passlog_base,
             '-c:a', 'aac', '-b:a', '128k',
-            temp_output
+            compressed_temp_path
         ]
 
         utils.debug_print(f"Pass 2 command: {' '.join(pass2_command)}")
-        result2 = subprocess.run(pass2_command, encoding='utf-8', capture_output=True)
-
-        if result2.returncode != 0:
-            utils.error_print("Compression pass 2 failed",
-                [result2.stderr.strip() if result2.stderr else "Unknown error"])
+        pass2_result = _run_ffmpeg_process(
+            pass2_command,
+            input_file=filepath,
+            output_file=compressed_temp_path,
+            os_error_message="ffmpeg could not successfully run during compression pass 2.",
+        )
+        if pass2_result is None:
             return False
 
-        # Verify output was created
-        if not os.path.isfile(temp_output):
-            utils.error_print("Compression failed: output file not created")
+        if pass2_result.returncode != 0:
+            utils.error_print(
+                "Compression pass 2 failed",
+                [pass2_result.stderr.strip() if pass2_result.stderr else "Unknown error"],
+            )
             return False
 
-        new_size = os.path.getsize(temp_output)
+        if not _verify_output_file(compressed_temp_path, "Compression"):
+            return False
 
-        # Replace original with compressed version
-        os.replace(temp_output, filepath)
+        new_size = os.path.getsize(compressed_temp_path)
+
+        os.replace(compressed_temp_path, filepath)
 
         utils.verbose_print(f"  Compressed: {files.format_filesize(current_size_bytes)} -> {files.format_filesize(new_size)}")
 
-        # Warn if still over target (can happen with very low bitrate requirements)
         if new_size > target_size_bytes:
             utils.warning_print(f"Compressed file still exceeds target ({files.format_filesize(new_size)} > {target_size_mb}MB)",
                 ["The video may need a higher size limit or shorter duration."])
 
         return True
 
-    except FileNotFoundError:
-        utils.error_print("ffmpeg not found during compression")
-        return False
     except OSError as e:
         utils.error_print(f"Compression failed: {e}")
         return False
     finally:
-        # Remove passlog files (-0.log, -0.log.mbtree, base) and any leftover temp output
         for ext in ['-0.log', '-0.log.mbtree', '']:
             log_file = passlog_base + ext
             if os.path.exists(log_file):
@@ -484,10 +512,9 @@ def compress_to_size(filepath: str, target_size_mb: float) -> bool:
                     os.remove(log_file)
                 except OSError:
                     pass
-        # Cleanup temp file if it exists
-        if os.path.exists(temp_output):
+        if os.path.exists(compressed_temp_path):
             try:
-                os.remove(temp_output)
+                os.remove(compressed_temp_path)
             except OSError:
                 pass
 
@@ -516,21 +543,17 @@ def concatenate_clips(clip_paths: List[str], output_file: str, reencode_on_fail:
                 ["Ensure all clips were generated successfully before concatenating."])
             return False
 
-    # Concat demuxer expects a text file with lines: file 'path'. Use absolute paths so ffmpeg
-    # finds clips even when the list file is in TMPDIR or another directory.
-    with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False, encoding='utf-8') as f:
-        list_path = f.name
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False, encoding='utf-8') as file_handle:
+        concat_list_file = file_handle.name
         for path in clip_paths:
             abs_path = os.path.abspath(path)
-            # Escape single quotes in path for ffmpeg
-            escaped = abs_path.replace("'", "'\\''")
-            f.write(f"file '{escaped}'\n")
+            escaped_path = abs_path.replace("'", "'\\''")
+            file_handle.write(f"file '{escaped_path}'\n")
 
     try:
-        # -f concat: use concat demuxer; -safe 0: allow absolute paths in the list file
         ffmpeg_command = [
             'ffmpeg', '-y', '-loglevel', '16',
-            '-f', 'concat', '-safe', '0', '-i', list_path,
+            '-f', 'concat', '-safe', '0', '-i', concat_list_file,
             '-c', 'copy',
             output_file,
         ]
@@ -540,42 +563,48 @@ def concatenate_clips(clip_paths: List[str], output_file: str, reencode_on_fail:
             utils.debug_print('Debugging enabled, not calling ffmpeg for concat.')
             return False
 
-        result = subprocess.run(ffmpeg_command, encoding='utf-8', capture_output=True)
+        ffmpeg_result = _run_ffmpeg_process(
+            ffmpeg_command,
+            input_file=concat_list_file,
+            output_file=output_file,
+            os_error_message="Concatenation failed.",
+        )
+        if ffmpeg_result is None:
+            return False
 
-        # Fallback: if stream copy fails (e.g. incompatible codecs across clips), re-encode to libx264/aac
-        if result.returncode != 0 and reencode_on_fail:
+        if ffmpeg_result.returncode != 0 and reencode_on_fail:
             utils.warning_print("Stream copy concat failed (e.g. codec mismatch), retrying with re-encoding.")
             ffmpeg_command_reencode = [
                 'ffmpeg', '-y', '-loglevel', '16',
-                '-f', 'concat', '-safe', '0', '-i', list_path,
+                '-f', 'concat', '-safe', '0', '-i', concat_list_file,
                 '-c:v', 'libx264', '-c:a', 'aac',
                 output_file,
             ]
-            result = subprocess.run(ffmpeg_command_reencode, encoding='utf-8', capture_output=True)
+            ffmpeg_result = _run_ffmpeg_process(
+                ffmpeg_command_reencode,
+                input_file=concat_list_file,
+                output_file=output_file,
+                os_error_message="Concatenation failed during re-encoding fallback.",
+            )
+            if ffmpeg_result is None:
+                return False
 
-        if result.returncode != 0:
+        if ffmpeg_result.returncode != 0:
             error_details = [f"Output: '{output_file}'", f"Clips: {len(clip_paths)} files"]
-            if result.stderr:
-                error_details.append(f"ffmpeg error: {result.stderr.strip()}")
-            utils.error_print("ffmpeg concat failed.", error_details)
+            utils.error_print("ffmpeg concat failed.", _add_ffmpeg_stderr(error_details, ffmpeg_result))
             return False
 
-        if not os.path.isfile(output_file):
-            utils.error_print(f"Concat completed but output file was not created: '{output_file}'")
+        if not _verify_output_file(output_file, "Concat"):
             return False
 
         utils.verbose_print(f"+ Generated reel '{output_file}' successfully.")
         return True
-    except FileNotFoundError:
-        utils.error_print("ffmpeg is not installed or not found in system PATH.",
-            ["Please install ffmpeg and ensure it's in your PATH."])
-        return False
     except OSError as e:
         utils.error_print(f"Concatenation failed: {e}")
         return False
     finally:
-        if os.path.exists(list_path):
+        if os.path.exists(concat_list_file):
             try:
-                os.remove(list_path)
+                os.remove(concat_list_file)
             except OSError:
                 pass

@@ -11,23 +11,6 @@ from icecream import ic
 import config
 import utils
 
-
-def pad_number_two_digits(number: str) -> str:
-    """Pad a numeric string to two digits (e.g. '5' -> '05').
-    
-    Args:
-        number: String representation of a number
-        
-    Returns:
-        String with leading zero if number < 10, otherwise returns original string
-    """
-    try:
-        if int(number) < 10:
-            return '0' + number
-        return number
-    except TypeError:
-        return number
-
 def format_filesize(size_bytes: float, precision: int = 2) -> str:
     """Format byte size as human-readable string.
     
@@ -59,18 +42,18 @@ def get_unique_filename(filename: str, file_format: Optional[str] = None) -> str
     Returns:
         Unique filename that doesn't exist in the filesystem
     """
-    fmt = file_format or config.FILEFORMAT
-    step = 1
+    file_extension = file_format or config.FILEFORMAT
+    suffix_counter = 1
     while True:
         if os.path.isfile(filename):
-            if step < 2:
+            if suffix_counter < 2:
                 # First collision: insert step number before file extension
                 # "file.mp4" -> "file-1.mp4"
-                suffix_pos = filename.rfind(fmt)
+                suffix_pos = filename.rfind(file_extension)
                 if suffix_pos >= 0:
-                    filename = filename[0:suffix_pos] + '-' + str(step) + fmt
+                    filename = filename[0:suffix_pos] + '-' + str(suffix_counter) + file_extension
                 else:
-                    filename = filename + '-' + str(step)
+                    filename = filename + '-' + str(suffix_counter)
             else:
                 # Subsequent collisions: replace existing step number
                 # "file-1.mp4" -> "file-2.mp4"
@@ -78,13 +61,12 @@ def get_unique_filename(filename: str, file_format: Optional[str] = None) -> str
                 if dash_pos >= 0:
                     base = filename[0:dash_pos]
                 else:
-                    suffix_pos = filename.rfind(fmt)
+                    suffix_pos = filename.rfind(file_extension)
                     base = filename[0:suffix_pos] if suffix_pos >= 0 else filename
-                filename = base + '-' + str(step) + fmt
-            step += 1
+                filename = base + '-' + str(suffix_counter) + file_extension
+            suffix_counter += 1
         else:
-            # Found a unique name; truncate if needed and return
-            filename = truncate_filename(filename, step, fmt)
+            filename = truncate_filename(filename, suffix_counter, file_extension)
             break
     return filename
 
@@ -102,17 +84,17 @@ def truncate_filename(filename: str, step: int = 1, file_format: Optional[str] =
     Returns:
         Truncated filename that fits within max length
     """
-    fmt = file_format or config.FILEFORMAT
+    file_extension = file_format or config.FILEFORMAT
     if len(filename) > config.MAX_FILENAME_LENGTH:
         if step > 1:
             utils.debug_print(f'Filename was longer than {config.MAX_FILENAME_LENGTH} chars ({filename}, length {len(filename)})')
             # Reserve space for: dash + step number + extension (e.g., "-2.mp4")
-            max_base_len = config.MAX_FILENAME_LENGTH - (1 + len(str(step)) + len(fmt))
-            filename = filename[0:max_base_len] + '-' + str(step) + fmt
+            max_base_len = config.MAX_FILENAME_LENGTH - (1 + len(str(step)) + len(file_extension))
+            filename = filename[0:max_base_len] + '-' + str(step) + file_extension
         else:
             # Reserve space for extension only (e.g., ".mp4")
-            max_base_len = config.MAX_FILENAME_LENGTH - len(fmt)
-            filename = filename[0:max_base_len] + fmt
+            max_base_len = config.MAX_FILENAME_LENGTH - len(file_extension)
+            filename = filename[0:max_base_len] + file_extension
     return filename
 
 def prepare_clip(clip: Dict[str, Any]) -> Dict[str, Any]:
@@ -197,7 +179,7 @@ def discover_clips() -> List[str]:
         Sorted list of clip filenames (alphabetically)
     """
     clips = []
-    for f in os.listdir('.'):
-        if f.endswith(config.FILEFORMAT) and not is_source_video(f):
-            clips.append(f)
+    for filename in os.listdir('.'):
+        if filename.endswith(config.FILEFORMAT) and not is_source_video(filename):
+            clips.append(filename)
     return sorted(clips)

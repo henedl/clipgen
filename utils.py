@@ -172,6 +172,37 @@ def verbose_print(message: str) -> None:
             print(message)
 
 
+def _styled_print(
+    message: str,
+    *,
+    prefix: str = "",
+    prefix_style: Optional[str] = None,
+    message_style: Optional[str] = None,
+    details: Optional[List[str]] = None,
+    details_style: Optional[str] = None,
+    panel_border_style: Optional[str] = None,
+) -> None:
+    if _use_rich() and console is not None:
+        content = Text()
+        if prefix:
+            content.append(prefix, style=prefix_style)
+        content.append(message, style=message_style)
+        if details:
+            for detail in details:
+                content.append(f"\n  {detail}", style=details_style)
+
+        if panel_border_style and _use_panels():
+            console.print(Panel(content, border_style=panel_border_style, padding=(0, 1)))
+        else:
+            console.print(content)
+        return
+
+    print(f"{prefix}{message}")
+    if details:
+        for detail in details:
+            print(f"  {detail}")
+
+
 def error_print(message: str, details: Optional[List[str]] = None) -> None:
     """Print error messages. Always displayed regardless of verbosity.
 
@@ -179,29 +210,14 @@ def error_print(message: str, details: Optional[List[str]] = None) -> None:
         message: Primary error message
         details: Optional list of detail lines to print (indented)
     """
-    if _use_rich():
-        rich_console = console
-        if rich_console is None:
-            print(f"! ERROR {message}")
-            if details:
-                for detail in details:
-                    print(f"  {detail}")
-            return
-        content = Text()
-        content.append("! ERROR ", style="error.prefix")
-        content.append(message)
-        if details:
-            for detail in details:
-                content.append(f"\n  {detail}", style="error.detail")
-        if _use_panels():
-            rich_console.print(Panel(content, border_style="red", padding=(0, 1)))
-        else:
-            rich_console.print(content)
-    else:
-        print(f"! ERROR {message}")
-        if details:
-            for detail in details:
-                print(f"  {detail}")
+    _styled_print(
+        message,
+        prefix="! ERROR ",
+        prefix_style="error.prefix",
+        details=details,
+        details_style="error.detail",
+        panel_border_style="red",
+    )
 
 
 def warning_print(message: str, details: Optional[List[str]] = None) -> None:
@@ -211,29 +227,14 @@ def warning_print(message: str, details: Optional[List[str]] = None) -> None:
         message: Primary warning message
         details: Optional list of detail lines to print (indented)
     """
-    if _use_rich():
-        rich_console = console
-        if rich_console is None:
-            print(f"! WARNING {message}")
-            if details:
-                for detail in details:
-                    print(f"  {detail}")
-            return
-        content = Text()
-        content.append("! WARNING ", style="warning.prefix")
-        content.append(message)
-        if details:
-            for detail in details:
-                content.append(f"\n  {detail}", style="warning.detail")
-        if _use_panels():
-            rich_console.print(Panel(content, border_style="yellow", padding=(0, 1)))
-        else:
-            rich_console.print(content)
-    else:
-        print(f"! WARNING {message}")
-        if details:
-            for detail in details:
-                print(f"  {detail}")
+    _styled_print(
+        message,
+        prefix="! WARNING ",
+        prefix_style="warning.prefix",
+        details=details,
+        details_style="warning.detail",
+        panel_border_style="yellow",
+    )
 
 
 def success_print(message: str) -> None:
@@ -242,20 +243,12 @@ def success_print(message: str) -> None:
     Args:
         message: Success message
     """
-    if _use_rich():
-        rich_console = console
-        if rich_console is None:
-            print(f"✓ {message}")
-            return
-        content = Text()
-        content.append("✓ ", style="success.prefix")
-        content.append(message)
-        if _use_panels():
-            rich_console.print(Panel(content, border_style="green", padding=(0, 1)))
-        else:
-            rich_console.print(content)
-    else:
-        print(f"✓ {message}")
+    _styled_print(
+        message,
+        prefix="✓ ",
+        prefix_style="success.prefix",
+        panel_border_style="green",
+    )
 
 
 def info_print(message: str) -> None:
@@ -264,14 +257,7 @@ def info_print(message: str) -> None:
     Args:
         message: Informational message
     """
-    if _use_rich():
-        rich_console = console
-        if rich_console is not None:
-            rich_console.print(message, style="info")
-            return
-        print(message)
-    else:
-        print(message)
+    _styled_print(message, message_style="info")
 
 
 def create_browse_table(
@@ -315,9 +301,9 @@ def create_browse_table(
             row['description'],
         ]
         # Add timestamp values for each participant
-        for p_id in participant_headers:
-            ts = row['timestamps'].get(p_id, '-')
-            row_values.append(ts if ts else '-')
+        for participant_id in participant_headers:
+            timestamp = row['timestamps'].get(participant_id, '-')
+            row_values.append(timestamp if timestamp else '-')
 
         table.add_row(*row_values)
 
@@ -346,10 +332,10 @@ def format_browse_rows_plain(
 
         # Get participant timestamps
         participant_data = []
-        for p_id in participant_headers:
-            ts = row['timestamps'].get(p_id)
-            if ts:
-                participant_data.append(f"    {p_id}: {ts}")
+        for participant_id in participant_headers:
+            timestamp = row['timestamps'].get(participant_id)
+            if timestamp:
+                participant_data.append(f"    {participant_id}: {timestamp}")
 
         if participant_data:
             lines.append('  Participants:')
@@ -397,13 +383,13 @@ def index_to_letter(idx: int) -> str:
     Returns:
         Letter label (A-Z, then AA, AB, etc.)
     """
-    result = ''
+    column_label = ''
     idx += 1  # Convert to 1-based for calculation
     while idx > 0:
         idx -= 1
-        result = chr(ord('A') + (idx % 26)) + result
+        column_label = chr(ord('A') + (idx % 26)) + column_label
         idx //= 26
-    return result
+    return column_label
 
 
 def letter_to_index(letter: str) -> int:
@@ -418,10 +404,10 @@ def letter_to_index(letter: str) -> int:
     letter = letter.upper().strip()
     if not letter or not letter.isalpha():
         return -1
-    result = 0
+    column_index = 0
     for char in letter:
-        result = result * 26 + (ord(char) - ord('A') + 1)
-    return result - 1
+        column_index = column_index * 26 + (ord(char) - ord('A') + 1)
+    return column_index - 1
 
 
 def add_duration(start_time: str) -> Union[str, int]:

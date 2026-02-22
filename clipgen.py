@@ -16,7 +16,7 @@ This script supports full unicode/UTF-8 for international characters in:
 import io
 import os
 import sys
-from typing import Any, List, Optional, Tuple
+from typing import Any, Callable, List, NamedTuple, Optional, Tuple
 
 import gspread
 from icecream import ic
@@ -29,43 +29,69 @@ import spreadsheet
 import utils
 import video
 
+MODE_ALIASES = {
+    'b': 'batch', 'batch': 'batch',
+    'l': 'line', 'line': 'line',
+    'r': 'range', 'range': 'range',
+    'c': 'category', 'cat': 'category', 'category': 'category',
+    'ce': 'cell', 'cell': 'cell',
+    'p': 'participant', 'participant': 'participant',
+    's': 'screen', 'screen': 'screen',
+    'g': 'gif', 'gif': 'gif',
+    're': 'reel', 'reel': 'reel',
+    'rl': 'reellate', 'reellate': 'reellate',
+    'br': 'browse', 'browse': 'browse',
+}
 
-def _open_worksheet(gc: Any, open_fn, error_context: str):
+FORMAT_MODE_ALIASES = {
+    alias: mode for alias, mode in MODE_ALIASES.items()
+    if mode in {'batch', 'line', 'range', 'category', 'cell', 'participant'}
+}
+
+
+class CliModeArgs(NamedTuple):
+    line_numbers: Optional[List[int]]
+    range_start: Optional[int]
+    range_end: Optional[int]
+    cell_specs: Optional[List[Tuple[str, int]]]
+
+
+def _open_worksheet(gspread_client: Any, open_callable: Callable[[], Any], error_context: str):
     """Try to open a worksheet via a callable; catch gspread errors and print a consistent message.
     
     Args:
-        gc: Google client connection
-        open_fn: Callable that takes no args and returns a gspread Spreadsheet (e.g. lambda: gc.open_by_url(url))
+        gspread_client: Google client connection
+        open_callable: Callable that takes no args and returns a gspread Spreadsheet
         error_context: Short description for error message (e.g. "by URL", "at index 3")
         
     Returns:
         Worksheet object or None if error
     """
     try:
-        return google_api.get_worksheet(open_fn())
+        return google_api.get_worksheet(open_callable())
     except (gspread.SpreadsheetNotFound, gspread.exceptions.APIError, gspread.exceptions.GSpreadException) as e:
         utils.error_print(f"Could not open spreadsheet {error_context}: {e}")
         return None
 
 
-def open_spreadsheet_by_url(gc: Any, url: str) -> Optional[Any]:
+def open_spreadsheet_by_url(gspread_client: Any, url: str) -> Optional[Any]:
     """Open a spreadsheet by URL.
     
     Args:
-        gc: Google client connection
+        gspread_client: Google client connection
         url: Spreadsheet URL
         
     Returns:
         Worksheet object or None if error
     """
-    return _open_worksheet(gc, lambda: gc.open_by_url(url), "by URL")
+    return _open_worksheet(gspread_client, lambda: gspread_client.open_by_url(url), "by URL")
 
 
-def open_spreadsheet_by_index(gc: Any, doc_list: List[str], index: int) -> Optional[Any]:
+def open_spreadsheet_by_index(gspread_client: Any, doc_list: List[str], index: int) -> Optional[Any]:
     """Open a spreadsheet by index number.
     
     Args:
-        gc: Google client connection
+        gspread_client: Google client connection
         doc_list: List of spreadsheet names
         index: Index number (1-based)
         
@@ -78,14 +104,14 @@ def open_spreadsheet_by_index(gc: Any, doc_list: List[str], index: int) -> Optio
     chosen_index = index - 1
     doc_name = doc_list[chosen_index].strip()
     utils.verbose_print(f'Opening document: {doc_name}')
-    return _open_worksheet(gc, lambda: gc.open(doc_name), f"at index {index}")
+    return _open_worksheet(gspread_client, lambda: gspread_client.open(doc_name), f"at index {index}")
 
 
-def open_spreadsheet_by_name(gc: Any, doc_list: List[str], name: str) -> Optional[Any]:
+def open_spreadsheet_by_name(gspread_client: Any, doc_list: List[str], name: str) -> Optional[Any]:
     """Open a spreadsheet by name.
     
     Args:
-        gc: Google client connection
+        gspread_client: Google client connection
         doc_list: List of spreadsheet names
         name: Spreadsheet name to search for
         
@@ -96,7 +122,7 @@ def open_spreadsheet_by_name(gc: Any, doc_list: List[str], name: str) -> Optiona
     if chosen_index >= 0:
         matched_name = doc_list[chosen_index].strip()
         utils.verbose_print(f'Opening document: {matched_name}')
-        return _open_worksheet(gc, lambda: gc.open(matched_name), f"'{name}'")
+        return _open_worksheet(gspread_client, lambda: gspread_client.open(matched_name), f"'{name}'")
     return None
 
 
@@ -129,14 +155,14 @@ def handle_error_message(consecutive_open_failures: int, e: Exception) -> None:
     else:
         utils.error_print(str(e), [f"Tip: Use the document index number (1, 2, 3...) from the '{config.COMMAND_LIST_ALL}' list."])
 
-def _handle_spreadsheet_command(gc: Any, doc_list: List[str], input_name: str) -> Optional[Any]:
+def _handle_spreadsheet_command(gspread_client: Any, doc_list: List[str], input_name: str) -> Optional[Any]:
     """Handle one spreadsheet selection command. Returns worksheet when one was opened, None to show prompt again."""
     # Handle 'excel' for local .xlsx
     if input_name.strip().lower() == config.COMMAND_EXCEL:
         return excel_io.select_excel_file()
     # Handle URL
     if input_name.startswith(config.COMMAND_HTTP_PREFIX):
-        return open_spreadsheet_by_url(gc, input_name)
+        return open_spreadsheet_by_url(gspread_client, input_name)
     # Handle 'all' command
     if input_name.startswith(config.COMMAND_LIST_ALL):
         handle_list_all_command(doc_list)
@@ -147,26 +173,26 @@ def _handle_spreadsheet_command(gc: Any, doc_list: List[str], input_name: str) -
         return None
     # Handle 'last' command
     if input_name.startswith(config.COMMAND_OPEN_LAST):
-        latest = google_api.get_all_spreadsheets(gc).split(',')[0]
-        return open_spreadsheet_by_name(gc, doc_list, latest)
+        latest_spreadsheet_name = google_api.get_all_spreadsheets(gspread_client).split(',')[0]
+        return open_spreadsheet_by_name(gspread_client, doc_list, latest_spreadsheet_name)
     # Handle numeric index
     if input_name[0].isdigit():
-        return open_spreadsheet_by_index(gc, doc_list, int(input_name))
+        return open_spreadsheet_by_index(gspread_client, doc_list, int(input_name))
     # Handle 'settings' command
     if input_name.startswith(config.COMMAND_SETTINGS):
         utils.set_program_settings()
         return None
     # Handle name search
-    return open_spreadsheet_by_name(gc, doc_list, input_name)
+    return open_spreadsheet_by_name(gspread_client, doc_list, input_name)
 
 
-def select_spreadsheet(gc: Any, doc_list: List[str]) -> Any:
+def select_spreadsheet(gspread_client: Any, doc_list: List[str]) -> Any:
     """Interactive spreadsheet selection. Returns the selected worksheet."""
     consecutive_open_failures = 0
     while True:
         input_name = input(f"\nPlease enter the index, name, URL, or '{config.COMMAND_EXCEL}' for local file ('{config.COMMAND_LIST_ALL}' for list, '{config.COMMAND_LIST_NEW}' for list of newest, '{config.COMMAND_OPEN_LAST}' to immediately open latest, '{config.COMMAND_SETTINGS}' to change settings):\n>> ")
         try:
-            worksheet = _handle_spreadsheet_command(gc, doc_list, input_name)
+            worksheet = _handle_spreadsheet_command(gspread_client, doc_list, input_name)
             if worksheet is not None:
                 return worksheet
         except (gspread.SpreadsheetNotFound, gspread.exceptions.APIError, gspread.exceptions.GSpreadException) as e:
@@ -305,18 +331,10 @@ def _run_format_mode_interactive(worksheet: Any, output_format: str) -> None:
     Prompts the user for a timestamp-selection mode, generates a clip list, then renders
     screenshots/GIFs using the regular clip processing pipeline.
     """
-    mode_name = 'Screenshot' if output_format == 'screen' else 'GIF'
+    format_display_name = 'Screenshot' if output_format == 'screen' else 'GIF'
     output_label = 'screenshots' if output_format == 'screen' else 'GIFs'
-    mode_map = {
-        'b': 'batch', 'batch': 'batch',
-        'l': 'line', 'line': 'line',
-        'r': 'range', 'range': 'range',
-        'c': 'category', 'cat': 'category', 'category': 'category',
-        'ce': 'cell', 'cell': 'cell',
-        'p': 'participant', 'participant': 'participant',
-    }
 
-    utils.info_print(f'\n{mode_name} mode: choose how to select timestamps.')
+    utils.info_print(f'\n{format_display_name} mode: choose how to select timestamps.')
     while True:
         selection = input(
             '\nSelect source rows for this output:\n'
@@ -327,7 +345,7 @@ def _run_format_mode_interactive(worksheet: Any, output_format: str) -> None:
             utils.info_print("  Please enter a mode or direct input (e.g. P01.11, 5, 7, 13-16, P01).")
             continue
         selection_lower = selection.lower()
-        mode = mode_map.get(selection_lower)
+        mode = FORMAT_MODE_ALIASES.get(selection_lower)
         if mode:
             clips_list = spreadsheet.generate_list(worksheet, mode)
             break
@@ -353,21 +371,6 @@ def _run_format_mode_interactive(worksheet: Any, output_format: str) -> None:
 
 def select_mode_and_generate(worksheet: Any) -> Tuple[List[Any], bool, Optional[str]]:
     """Interactive mode selection. Returns (clips list, is_reel_mode, reel_output_file or None)."""
-    mode_map = {
-        'b': 'batch', 'batch': 'batch',
-        'l': 'line', 'line': 'line',
-        'r': 'range', 'range': 'range',
-        'c': 'category', 'cat': 'category', 'category': 'category',
-        'ce': 'cell', 'cell': 'cell',
-        'p': 'participant', 'participant': 'participant',
-        's': 'screen', 'screen': 'screen',
-        'g': 'gif', 'gif': 'gif',
-        're': 'reel', 'reel': 'reel',
-        'rl': 'reellate', 'reellate': 'reellate',
-        'br': 'browse', 'browse': 'browse',
-        'test': 'test'
-    }
-
     while True:
         input_mode = input(
             '\nEnter mode or input directly:\n'
@@ -380,14 +383,14 @@ def select_mode_and_generate(worksheet: Any) -> Tuple[List[Any], bool, Optional[
         input_lower = input_mode.strip().lower()
         try:
             # Only treat as explicit mode when input exactly matches a mode shortcut or name
-            mode = mode_map.get(input_lower)
+            mode = MODE_ALIASES.get(input_lower)
             if mode == 'browse':
                 spreadsheet.browse_spreadsheet(worksheet)
                 return ([], False, None)
             if mode == 'reel':
-                result = _run_reel_mode_interactive(worksheet)
-                if result[1]:
-                    return result
+                reel_selection_result = _run_reel_mode_interactive(worksheet)
+                if reel_selection_result[1]:
+                    return reel_selection_result
                 continue
             if mode == 'reellate':
                 success, output_file = _run_reellate_mode_interactive()
@@ -460,7 +463,7 @@ def _process_single_clip_segments(
         (number of segments successfully generated, list of output paths if collect_paths else [])
     """
     generated = 0
-    paths: List[str] = []
+    output_paths: List[str] = []
     extension_map = {
         'clip': config.FILEFORMAT,
         'screen': '.png',
@@ -469,7 +472,7 @@ def _process_single_clip_segments(
     file_extension = extension_map.get(output_format)
     if not file_extension:
         utils.error_print(f"Unsupported output format: '{output_format}'")
-        return (generated, paths)
+        return (generated, output_paths)
 
     template = f"{filename_prefix}[{clip['category']}] {clip['study']} {clip['participant']} {clip['desc']}{file_extension}"
     for start_time, end_time in clip['times']:
@@ -487,7 +490,7 @@ def _process_single_clip_segments(
                     "Try simplifying the description or category names to use only ASCII characters.",
                 ],
             )
-            return (generated, paths)
+            return (generated, output_paths)
         if output_format == 'clip':
             ok = video.run_ffmpeg(
                 input_file=base_video,
@@ -512,8 +515,71 @@ def _process_single_clip_segments(
         if ok:
             generated += 1
             if collect_paths:
-                paths.append(out_name)
-    return (generated, paths)
+                output_paths.append(out_name)
+    return (generated, output_paths)
+
+
+def _print_reencoding_warning(printer: Callable[[str], None]) -> None:
+    printer('* No re-encoding done, expect:\n- inaccurate start and end timings\n- lossy frames until first keyframe\n- bad timecodes at the end\n')
+
+
+def _print_completion_message(outputs_generated: int, output_format: str, is_reel: bool) -> None:
+    if is_reel:
+        utils.info_print(f'All done, created 1 reel!\nFiles are in {os.getcwd()}\n')
+        return
+
+    if output_format == 'screen':
+        utils.info_print(f'All done, created {outputs_generated} screenshots!\nFiles are in {os.getcwd()}\n')
+    elif output_format == 'gif':
+        utils.info_print(f'All done, created {outputs_generated} GIFs!\nFiles are in {os.getcwd()}\n')
+    else:
+        utils.info_print(f'All done, created {outputs_generated} videos!\nFiles are in {os.getcwd()}\n')
+
+
+def _check_source_video(clip: Any, missing_videos: set, skip_detail: str) -> Optional[str]:
+    base_video = f"{clip['study']}_{clip['participant']}{config.FILEFORMAT}"
+    if os.path.isfile(base_video):
+        return base_video
+
+    if base_video not in missing_videos:
+        missing_videos.add(base_video)
+        utils.error_print(
+            f"Source video file not found: '{base_video}'",
+            [
+                f"Expected location: {os.path.join(os.getcwd(), base_video)}",
+                skip_detail,
+            ],
+        )
+    return None
+
+
+def _process_with_progress(
+    clips_list: List[Any],
+    task_label: str,
+    process_fn: Callable[[Any], Any],
+    *,
+    show_fallback_counter: bool = False,
+) -> List[Any]:
+    total_clips = len(clips_list)
+    progress = utils.create_progress_bar()
+    results: List[Any] = []
+
+    if progress:
+        with progress:
+            task = progress.add_task(task_label, total=total_clips)
+            for clip in clips_list:
+                desc_preview = (clip.get('desc') or '')[:30]
+                participant = clip.get('participant', '')
+                progress.update(task, description=f"[{participant}] {desc_preview}...")
+                results.append(process_fn(clip))
+                progress.update(task, advance=1)
+        return results
+
+    for index, clip in enumerate(clips_list, start=1):
+        if show_fallback_counter and config.VERBOSE and total_clips > 1:
+            utils.verbose_print(f"Processing clip {index} of {total_clips}...")
+        results.append(process_fn(clip))
+    return results
 
 
 def process_clips(clips_list: List[Any], output_format: str = "clip") -> int:
@@ -525,33 +591,24 @@ def process_clips(clips_list: List[Any], output_format: str = "clip") -> int:
         return 0
 
     utils.verbose_print('\n* ffmpeg is set to never prompt for input and will always overwrite.\n  Only warns if close to crashing.\n')
-    videos_generated = 0
-    videos_skipped = 0
+    outputs_generated = 0
+    outputs_skipped = 0
     missing_videos: set = set()
-    total_clips = len(clips_list)
-    progress = utils.create_progress_bar()
 
-    def process_single_clip(clip, progress_task=None):
+    def process_single_clip(clip):
         """Process a single clip, updating progress if available. Returns (generated, skipped)."""
-        nonlocal videos_generated, videos_skipped, missing_videos
-
         if config.DEBUGGING:
             ic(clip)
         clip = files.prepare_clip(clip)
         if not clip['times']:
             return (0, 1)
 
-        base_video = f"{clip['study']}_{clip['participant']}{config.FILEFORMAT}"
-        if not os.path.isfile(base_video):
-            if base_video not in missing_videos:
-                missing_videos.add(base_video)
-                utils.error_print(
-                    f"Source video file not found: '{base_video}'",
-                    [
-                        f"Expected location: {os.path.join(os.getcwd(), base_video)}",
-                        f"Clips for participant '{clip['participant']}' in study '{clip['study']}' will be skipped.",
-                    ],
-                )
+        base_video = _check_source_video(
+            clip,
+            missing_videos,
+            f"Clips for participant '{clip['participant']}' in study '{clip['study']}' will be skipped.",
+        )
+        if base_video is None:
             return (0, len(clip['times']))
 
         count, _ = _process_single_clip_segments(
@@ -564,39 +621,26 @@ def process_clips(clips_list: List[Any], output_format: str = "clip") -> int:
         skipped = len(clip['times']) - count if count < len(clip['times']) else 0
         return (count, skipped)
 
-    if progress:
-        with progress:
-            task = progress.add_task("Processing clips", total=total_clips)
-            for clip in clips_list:
-                # Update description to show current clip
-                desc_preview = (clip.get('desc') or '')[:30]
-                participant = clip.get('participant', '')
-                progress.update(task, description=f"[{participant}] {desc_preview}...")
-
-                generated, skipped = process_single_clip(clip, task)
-                videos_generated += generated
-                videos_skipped += skipped
-                progress.update(task, advance=1)
-    else:
-        # Fallback: no progress bar
-        for i, clip in enumerate(clips_list):
-            if config.VERBOSE and total_clips > 1:
-                utils.verbose_print(f"Processing clip {i+1} of {total_clips}...")
-
-            generated, skipped = process_single_clip(clip)
-            videos_generated += generated
-            videos_skipped += skipped
+    results = _process_with_progress(
+        clips_list,
+        "Processing clips",
+        process_single_clip,
+        show_fallback_counter=True,
+    )
+    for generated_count, skipped_count in results:
+        outputs_generated += generated_count
+        outputs_skipped += skipped_count
 
     item_name = {
         'clip': 'video(s)',
         'screen': 'screenshot(s)',
         'gif': 'GIF(s)',
     }.get(output_format, 'file(s)')
-    if videos_skipped > 0:
-        utils.verbose_print(f"\n* Summary: {videos_generated} {item_name} generated, {videos_skipped} skipped due to errors.")
+    if outputs_skipped > 0:
+        utils.verbose_print(f"\n* Summary: {outputs_generated} {item_name} generated, {outputs_skipped} skipped due to errors.")
     if missing_videos:
         utils.verbose_print(f"* Missing source video files: {len(missing_videos)}")
-    return videos_generated
+    return outputs_generated
 
 
 def process_reel(clips_list: List[Any], output_file: Optional[str] = None) -> int:
@@ -612,8 +656,6 @@ def process_reel(clips_list: List[Any], output_file: Optional[str] = None) -> in
     clip_paths: List[str] = []
     missing_videos: set = set()
     study_name: Optional[str] = None
-    total_clips = len(clips_list)
-    progress = utils.create_progress_bar()
 
     def process_reel_clip(clip):
         """Process a single clip for reel mode. Returns list of generated clip paths."""
@@ -624,39 +666,21 @@ def process_reel(clips_list: List[Any], output_file: Optional[str] = None) -> in
             return []
         if study_name is None:
             study_name = clip['study']
-        base_video = f"{clip['study']}_{clip['participant']}{config.FILEFORMAT}"
-        if not os.path.isfile(base_video):
-            if base_video not in missing_videos:
-                missing_videos.add(base_video)
-                utils.error_print(
-                    f"Source video file not found: '{base_video}'",
-                    [
-                        f"Expected location: {os.path.join(os.getcwd(), base_video)}",
-                        f"Clips for participant '{clip['participant']}' will be skipped.",
-                    ],
-                )
+        base_video = _check_source_video(
+            clip,
+            missing_videos,
+            f"Clips for participant '{clip['participant']}' will be skipped.",
+        )
+        if base_video is None:
             return []
-        _, paths = _process_single_clip_segments(
+        _, segment_paths = _process_single_clip_segments(
             clip, base_video, missing_videos, filename_prefix="_reel_part_", collect_paths=True
         )
-        return paths
+        return segment_paths
 
-    if progress:
-        with progress:
-            task = progress.add_task("Generating reel clips", total=total_clips)
-            for clip in clips_list:
-                desc_preview = (clip.get('desc') or '')[:30]
-                participant = clip.get('participant', '')
-                progress.update(task, description=f"[{participant}] {desc_preview}...")
-
-                paths = process_reel_clip(clip)
-                clip_paths.extend(paths)
-                progress.update(task, advance=1)
-    else:
-        # Fallback: no progress bar
-        for clip in clips_list:
-            paths = process_reel_clip(clip)
-            clip_paths.extend(paths)
+    all_segment_paths = _process_with_progress(clips_list, "Generating reel clips", process_reel_clip)
+    for segment_paths in all_segment_paths:
+        clip_paths.extend(segment_paths)
 
     if missing_videos:
         utils.verbose_print(f"* Missing source video files: {list(missing_videos)}")
@@ -686,14 +710,14 @@ def setup_encoding() -> None:
         sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
         sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
 
-def parse_cli_mode_args(args: Any) -> Tuple[Optional[List[int]], Optional[int], Optional[int], Optional[List[Tuple[str, int]]]]:
+def parse_cli_mode_args(args: Any) -> CliModeArgs:
     """Parse CLI arguments for line, range, and cell modes.
     
     Args:
         args: Parsed command-line arguments
         
     Returns:
-        tuple: (cli_line_numbers, cli_range_start, cli_range_end, cli_cell_specs)
+        Parsed mode argument values as CliModeArgs
     """
     cli_line_numbers = None
     cli_range_start = None
@@ -730,7 +754,7 @@ def parse_cli_mode_args(args: Any) -> Tuple[Optional[List[int]], Optional[int], 
             utils.error_print(f'Invalid cell specification: {e}')
             sys.exit(1)
     
-    return (cli_line_numbers, cli_range_start, cli_range_end, cli_cell_specs)
+    return CliModeArgs(cli_line_numbers, cli_range_start, cli_range_end, cli_cell_specs)
 
 def authenticate_google() -> Any:
     """Authenticate with Google Sheets API.
@@ -740,9 +764,9 @@ def authenticate_google() -> Any:
     """
     try:
         utils.debug_print('Attempting login...')
-        gc = gspread.oauth(credentials_filename='credentials.json')
+        gspread_client = gspread.oauth(credentials_filename='credentials.json')
         utils.debug_print('Login successful!')
-        return gc
+        return gspread_client
     except gspread.exceptions.GSpreadException as e:
         utils.error_print("Could not authenticate with Google.",
             [f"Error details: {e}",
@@ -761,11 +785,11 @@ def _is_excel_worksheet(worksheet: Any) -> bool:
     return spread is not None and getattr(spread, 'url', None) is None
 
 
-def select_worksheet(gc: Any, doc_list: List[str], args: Any, cli_mode: bool) -> Any:
+def select_worksheet(gspread_client: Any, doc_list: List[str], args: Any, cli_mode: bool) -> Any:
     """Select worksheet based on command-line arguments or interactive selection.
     
     Args:
-        gc: Google client connection
+        gspread_client: Google client connection
         doc_list: List of available spreadsheet names
         args: Parsed command-line arguments
         cli_mode: Whether running in CLI mode
@@ -800,11 +824,11 @@ def select_worksheet(gc: Any, doc_list: List[str], args: Any, cli_mode: bool) ->
                 utils.error_print(f'Could not open Excel file "{args.spreadsheet}"')
                 sys.exit(1)
         elif args.spreadsheet.startswith(config.COMMAND_HTTP_PREFIX):
-            worksheet = open_spreadsheet_by_url(gc, args.spreadsheet)
+            worksheet = open_spreadsheet_by_url(gspread_client, args.spreadsheet)
         elif args.spreadsheet.isdigit():
-            worksheet = open_spreadsheet_by_index(gc, doc_list, int(args.spreadsheet))
+            worksheet = open_spreadsheet_by_index(gspread_client, doc_list, int(args.spreadsheet))
         else:
-            worksheet = open_spreadsheet_by_name(gc, doc_list, args.spreadsheet)
+            worksheet = open_spreadsheet_by_name(gspread_client, doc_list, args.spreadsheet)
         
         if not worksheet:
             utils.error_print(f'Could not find or open spreadsheet "{args.spreadsheet}"')
@@ -812,7 +836,7 @@ def select_worksheet(gc: Any, doc_list: List[str], args: Any, cli_mode: bool) ->
     else:
         # Auto-connect if working directory name matches a spreadsheet
         cwd_name = os.path.basename(os.getcwd())
-        worksheet = open_spreadsheet_by_name(gc, doc_list, cwd_name)
+        worksheet = open_spreadsheet_by_name(gspread_client, doc_list, cwd_name)
         if worksheet:
             utils.verbose_print(f'\nAuto-connecting to spreadsheet: {worksheet.spreadsheet.title}')
         elif cli_mode:
@@ -821,7 +845,7 @@ def select_worksheet(gc: Any, doc_list: List[str], args: Any, cli_mode: bool) ->
                 ['Use -s to specify a spreadsheet name, URL, or index.'])
             sys.exit(1)
         else:
-            worksheet = select_spreadsheet(gc, doc_list)
+            worksheet = select_spreadsheet(gspread_client, doc_list)
     
     if worksheet and config.DEBUGGING:
         ic(worksheet.title)
@@ -831,16 +855,13 @@ def select_worksheet(gc: Any, doc_list: List[str], args: Any, cli_mode: bool) ->
         utils.verbose_print('\nConnected to Google Drive!')
     return worksheet
 
-def run_cli_mode(worksheet: Any, args: Any, cli_line_numbers: Optional[List[int]], cli_range_start: Optional[int], cli_range_end: Optional[int], cli_cell_specs: Optional[List[Tuple[str, int]]]) -> None:
+def run_cli_mode(worksheet: Any, args: Any, cli_mode_args: CliModeArgs) -> None:
     """Execute CLI mode - run once and exit.
 
     Args:
         worksheet: Selected worksheet
         args: Parsed command-line arguments
-        cli_line_numbers: Parsed line numbers (if line mode)
-        cli_range_start: Range start (if range mode)
-        cli_range_end: Range end (if range mode)
-        cli_cell_specs: Parsed cell specifications (if cell mode)
+        cli_mode_args: Parsed line/range/cell arguments
     """
     skip_prompts = args.yes
     output_format = 'clip'
@@ -859,11 +880,11 @@ def run_cli_mode(worksheet: Any, args: Any, cli_line_numbers: Optional[List[int]
     if args.batch or (output_format != 'clip' and not selection_mode_set):
         clips_list = spreadsheet.generate_list(worksheet, 'batch', skip_prompts=skip_prompts)
     elif args.lines:
-        clips_list = spreadsheet.generate_list(worksheet, 'line', line_numbers=cli_line_numbers, skip_prompts=skip_prompts)
+        clips_list = spreadsheet.generate_list(worksheet, 'line', line_numbers=cli_mode_args.line_numbers, skip_prompts=skip_prompts)
     elif args.range:
-        clips_list = spreadsheet.generate_list(worksheet, 'range', range_start=cli_range_start, range_end=cli_range_end, skip_prompts=skip_prompts)
+        clips_list = spreadsheet.generate_list(worksheet, 'range', range_start=cli_mode_args.range_start, range_end=cli_mode_args.range_end, skip_prompts=skip_prompts)
     elif args.cell:
-        clips_list = spreadsheet.generate_list(worksheet, 'cell', cell_specs=cli_cell_specs, skip_prompts=skip_prompts)
+        clips_list = spreadsheet.generate_list(worksheet, 'cell', cell_specs=cli_mode_args.cell_specs, skip_prompts=skip_prompts)
     elif args.participant:
         clips_list = spreadsheet.generate_list(worksheet, 'participant', participant_id=args.participant, skip_prompts=skip_prompts)
     elif args.reel:
@@ -872,20 +893,13 @@ def run_cli_mode(worksheet: Any, args: Any, cli_line_numbers: Optional[List[int]
         clips_list = []
 
     if args.reel:
-        videos_generated = process_reel(clips_list)
+        outputs_generated = process_reel(clips_list)
     else:
-        videos_generated = process_clips(clips_list, output_format=output_format)
-    
+        outputs_generated = process_clips(clips_list, output_format=output_format)
+
     if not config.REENCODING:
-        utils.verbose_print('* No re-encoding done, expect:\n- inaccurate start and end timings\n- lossy frames until first keyframe\n- bad timecodes at the end\n')
-    if args.reel:
-        utils.info_print(f'All done, created 1 reel!\nFiles are in {os.getcwd()}\n')
-    elif output_format == 'screen':
-        utils.info_print(f'All done, created {videos_generated} screenshots!\nFiles are in {os.getcwd()}\n')
-    elif output_format == 'gif':
-        utils.info_print(f'All done, created {videos_generated} GIFs!\nFiles are in {os.getcwd()}\n')
-    else:
-        utils.info_print(f'All done, created {videos_generated} videos!\nFiles are in {os.getcwd()}\n')
+        _print_reencoding_warning(utils.verbose_print)
+    _print_completion_message(outputs_generated, output_format, is_reel=bool(args.reel))
 
 def run_interactive_mode(worksheet: Any) -> None:
     """Execute interactive mode - main processing loop.
@@ -901,16 +915,13 @@ def run_interactive_mode(worksheet: Any) -> None:
                 break
             continue
         if is_reel:
-            videos_generated = process_reel(clips_list, output_file=reel_output_file)
+            outputs_generated = process_reel(clips_list, output_file=reel_output_file)
         else:
-            videos_generated = process_clips(clips_list)
+            outputs_generated = process_clips(clips_list)
 
         if not config.REENCODING:
-            utils.info_print('* No re-encoding done, expect:\n- inaccurate start and end timings\n- lossy frames until first keyframe\n- bad timecodes at the end\n')
-        if is_reel:
-            utils.info_print(f'All done, created 1 reel!\nFiles are in {os.getcwd()}\n')
-        else:
-            utils.info_print(f'All done, created {videos_generated} videos!\nFiles are in {os.getcwd()}\n')
+            _print_reencoding_warning(utils.info_print)
+        _print_completion_message(outputs_generated, output_format='clip', is_reel=is_reel)
 
         yn = input('Continue working (y) or quit the program (n)? y/n\n>> ')
         if yn == 'n':
@@ -932,7 +943,7 @@ def main() -> None:
     config.VERBOSE = not cli_mode or args.verbose
     
     # Parse CLI arguments for line, range, and cell modes
-    cli_line_numbers, cli_range_start, cli_range_end, cli_cell_specs = parse_cli_mode_args(args)
+    cli_mode_args = parse_cli_mode_args(args)
     
     # Change working directory to place of python script
     os.chdir(os.path.dirname(os.path.abspath(__file__)))
@@ -941,15 +952,15 @@ def main() -> None:
     utils.debug_print('Debug mode is ON. Several limitations apply and more things will be printed.')
     
     # Authenticate with Google
-    gc = authenticate_google()
+    gspread_client = authenticate_google()
 
     # Get document list and select spreadsheet
-    doc_list = google_api.get_all_spreadsheets(gc).split(',')
-    worksheet = select_worksheet(gc, doc_list, args, cli_mode)
+    doc_list = google_api.get_all_spreadsheets(gspread_client).split(',')
+    worksheet = select_worksheet(gspread_client, doc_list, args, cli_mode)
 
     # Execute based on mode
     if cli_mode:
-        run_cli_mode(worksheet, args, cli_line_numbers, cli_range_start, cli_range_end, cli_cell_specs)
+        run_cli_mode(worksheet, args, cli_mode_args)
     else:
         run_interactive_mode(worksheet)
 
