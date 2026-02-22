@@ -202,21 +202,87 @@ def select_spreadsheet(gspread_client: Any, doc_list: List[str]) -> Any:
         except Exception as e:
             utils.error_print(f"Could not open document: {e}")
 
+
+def _prompt_timeline_participant_selection(worksheet: Any) -> Optional[str]:
+    """Prompt user to pick exactly one participant for timeline reels."""
+    header_result = spreadsheet.validate_spreadsheet_headers(worksheet)
+    if header_result is None:
+        return None
+
+    id_cell, _, _ = header_result
+    sheet_data = worksheet.get_all_values()
+    header_row = sheet_data[id_cell.row - 1] if id_cell.row > 0 and sheet_data else []
+    num_participants = spreadsheet.get_num_participants(header_row, id_cell, worksheet.col_count)
+    available_list = spreadsheet.get_participant_list(header_row, id_cell, num_participants)
+    if not available_list:
+        utils.info_print('\nNo participants found in the spreadsheet.')
+        return None
+
+    utils.info_print('\nTimeline requires exactly one participant.')
+    utils.info_print('Available participants:')
+    for i, pid in enumerate(available_list, 1):
+        utils.info_print(f'  {i}. {pid}')
+
+    while True:
+        selection = input('\nEnter one participant number or ID (e.g., 1 or P01):\n>> ').strip()
+        if not selection:
+            utils.info_print('Please enter one participant.')
+            continue
+        tokens = spreadsheet.parse_participant_selection(selection)
+        if len(tokens) != 1:
+            utils.info_print('Please provide exactly one participant.')
+            continue
+
+        token = tokens[0]
+        if token.isdigit():
+            idx = int(token)
+            if 1 <= idx <= len(available_list):
+                return available_list[idx - 1]
+            utils.info_print(f'Not found: {token}. Available: {", ".join(available_list)}')
+            continue
+
+        col_idx = spreadsheet.find_participant_column(header_row, id_cell, token)
+        if col_idx is None:
+            utils.info_print(f'Not found: {token}. Available: {", ".join(available_list)}')
+            continue
+        if col_idx < len(header_row):
+            return utils.normalize_participant_id(header_row[col_idx])
+        return token
+
+
 def _run_reel_mode_interactive(worksheet: Any) -> Tuple[List[Any], bool, Optional[str]]:
     """Run reel mode UI: instructions, input, generate_list, preview, confirm, output filename.
     Returns (clips_list, True, reel_output_file or None) when user confirms; caller may loop on continue.
     """
     utils.info_print('\nReel mode: combine selectors into one video. Syntax:')
     utils.info_print('  batch                    - all clips')
+    utils.info_print('  filter                   - key-marked clips only')
+    utils.info_print('  timeline                 - chronological reel (requires exactly one participant)')
     utils.info_print('  11, 12, 13-16, 18        - lines and ranges')
     utils.info_print('  "Observations", "Onboarding" - categories (quoted)')
     utils.info_print('  P01.11, P02.15           - cells (participant.row)')
     utils.info_print('  P01, P02                 - participants (all their clips)')
-    utils.info_print('  Example: 11, 13-16, P01, "Observations"')
+    utils.info_print('  Example: timeline, P01, 11, 13-16, "Observations"')
     reel_input = input('\nEnter reel selectors (combine any of the above, comma-separated):\n>> ').strip()
     if not reel_input:
         utils.info_print('No input. Skipping reel.')
         return ([], False, None)
+
+    parsed_reel = spreadsheet.parse_reel_input(reel_input)
+    if parsed_reel['timeline']:
+        if len(parsed_reel['participants']) > 1:
+            utils.error_print(
+                "Timeline selector supports only one participant.",
+                ["Please provide exactly one participant (e.g., timeline, P01)."],
+            )
+            return ([], False, None)
+        if len(parsed_reel['participants']) == 0:
+            selected_pid = _prompt_timeline_participant_selection(worksheet)
+            if not selected_pid:
+                return ([], False, None)
+            reel_input = f'{reel_input}, {selected_pid}'
+            parsed_reel['participants'] = [selected_pid]
+
     clips_list = spreadsheet.generate_list(worksheet, 'reel', reel_input=reel_input)
     if not clips_list:
         utils.info_print('No clips matched. Try different selectors.')
@@ -230,10 +296,24 @@ def _run_reel_mode_interactive(worksheet: Any) -> Tuple[List[Any], bool, Optiona
     yn = input('\nGenerate reel? y/n\n>> ')
     if yn != 'y':
         return ([], False, None)
-    output_file = input('\nOutput filename (Enter for default {study}_reel.mp4):\n>> ').strip()
+
+    study_name = clips_list[0].get('study', '').strip() if clips_list else ''
+    default_filename = f'{study_name}_reel{config.FILEFORMAT}' if study_name else f'reel{config.FILEFORMAT}'
+    if parsed_reel['timeline'] and parsed_reel['participants']:
+        timeline_pid = utils.normalize_participant_id(parsed_reel['participants'][0]).strip()
+        if study_name and timeline_pid:
+            default_filename = f'{study_name}_{timeline_pid}_timeline{config.FILEFORMAT}'
+        elif timeline_pid:
+            default_filename = f'{timeline_pid}_timeline{config.FILEFORMAT}'
+        else:
+            default_filename = f'timeline{config.FILEFORMAT}'
+
+    output_file = input(f'\nOutput filename (Enter for default {default_filename}):\n>> ').strip()
     reel_output_file = None
     if output_file:
         reel_output_file = output_file if output_file.endswith(config.FILEFORMAT) else output_file + config.FILEFORMAT
+    else:
+        reel_output_file = files.get_unique_filename(default_filename)
     return (clips_list, True, reel_output_file)
 
 
@@ -873,12 +953,12 @@ def run_cli_mode(worksheet: Any, args: Any, cli_mode_args: CliModeArgs) -> None:
     elif args.gif:
         output_format = 'gif'
 
-    if args.reel and output_format != 'clip':
-        utils.error_print("Reel mode cannot be combined with --screen or --gif.",
-            ["Use reel mode for a single .mp4 output, or use screen/gif with batch/line/range/category/cell/participant/filter selection."])
+    if (args.reel or args.timeline) and output_format != 'clip':
+        utils.error_print("Reel/timeline mode cannot be combined with --screen or --gif.",
+            ["Use reel/timeline mode for a single .mp4 output, or use screen/gif with batch/line/range/category/cell/participant/filter selection."])
         sys.exit(1)
 
-    selection_mode_set = bool(args.batch or args.lines or args.range or args.cell or args.participant or args.filter or args.reel)
+    selection_mode_set = bool(args.batch or args.lines or args.range or args.cell or args.participant or args.filter or args.reel or args.timeline)
 
     if args.batch or (output_format != 'clip' and not selection_mode_set):
         clips_list = spreadsheet.generate_list(worksheet, 'batch', skip_prompts=skip_prompts)
@@ -894,17 +974,34 @@ def run_cli_mode(worksheet: Any, args: Any, cli_mode_args: CliModeArgs) -> None:
         clips_list = spreadsheet.generate_list(worksheet, 'filter', skip_prompts=skip_prompts)
     elif args.reel:
         clips_list = spreadsheet.generate_list(worksheet, 'reel', reel_input=args.reel, skip_prompts=skip_prompts)
+    elif args.timeline:
+        clips_list = spreadsheet.generate_list(
+            worksheet,
+            'reel',
+            reel_input=f'timeline, {args.timeline}',
+            skip_prompts=skip_prompts,
+        )
     else:
         clips_list = []
 
-    if args.reel:
-        outputs_generated = process_reel(clips_list)
+    if args.reel or args.timeline:
+        reel_output_file = None
+        if args.timeline:
+            participant_id = utils.normalize_participant_id(args.timeline).strip()
+            study_name = clips_list[0].get('study', '').strip() if clips_list else ''
+            if study_name and participant_id:
+                reel_output_file = files.get_unique_filename(f'{study_name}_{participant_id}_timeline{config.FILEFORMAT}')
+            elif participant_id:
+                reel_output_file = files.get_unique_filename(f'{participant_id}_timeline{config.FILEFORMAT}')
+            else:
+                reel_output_file = files.get_unique_filename(f'timeline{config.FILEFORMAT}')
+        outputs_generated = process_reel(clips_list, output_file=reel_output_file)
     else:
         outputs_generated = process_clips(clips_list, output_format=output_format)
 
     if not config.REENCODING:
         _print_reencoding_warning(utils.verbose_print)
-    _print_completion_message(outputs_generated, output_format, is_reel=bool(args.reel))
+    _print_completion_message(outputs_generated, output_format, is_reel=bool(args.reel or args.timeline))
 
 def run_interactive_mode(worksheet: Any) -> None:
     """Execute interactive mode - main processing loop.
@@ -942,7 +1039,7 @@ def main() -> None:
         ic(args)
     
     # Determine if running in CLI mode (any mode argument provided)
-    cli_mode = args.batch or args.lines or args.range or args.cell or args.participant or args.filter or args.reel or args.screen or args.gif
+    cli_mode = args.batch or args.lines or args.range or args.cell or args.participant or args.filter or args.reel or args.timeline or args.screen or args.gif
     
     # Set verbose mode: silent by default in CLI mode, verbose in interactive mode
     config.VERBOSE = not cli_mode or args.verbose

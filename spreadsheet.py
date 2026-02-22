@@ -567,19 +567,22 @@ def parse_cell_specifications(cell_input: str) -> List[Tuple[str, int]]:
 def parse_reel_input(input_string: str) -> dict:
     """Parse mixed reel selector input into structured selectors.
 
-    Supports: batch, lines (e.g. 11, 12), ranges (e.g. 13-16), categories (quoted),
-    cells (e.g. P01.11), participants (e.g. P01, P02).
+    Supports: batch, filter, timeline, lines (e.g. 11, 12), ranges (e.g. 13-16),
+    categories (quoted), cells (e.g. P01.11), participants (e.g. P01, P02).
 
     Args:
         input_string: Raw user input (e.g. '11, 13-16, P01, P02.15, "Observations"')
 
     Returns:
-        Dict with keys: batch (bool), lines (list of int), ranges (list of (int,int)),
-        categories (list of str), cells (list of (str,int)), participants (list of str)
+        Dict with keys: batch (bool), filter (bool), timeline (bool), lines (list of int),
+        ranges (list of (int,int)), categories (list of str), cells (list of (str,int)),
+        participants (list of str)
     """
     import re
     result = {
         'batch': False,
+        'filter': False,
+        'timeline': False,
         'lines': [],
         'ranges': [],
         'categories': [],
@@ -599,7 +602,7 @@ def parse_reel_input(input_string: str) -> dict:
         rest = rest[:match.start()] + ' ' + rest[match.end():]
 
     # Split remaining by comma; each part is one token. Token type is inferred in fixed order below.
-    # Order of checks per token (do not reorder): batch, range, line, cell, participant
+    # Order of checks per token (do not reorder): batch, filter, timeline, range, line, cell, participant
     parts = [p.strip() for p in rest.split(',') if p.strip()]
     seen_lines = set()
     seen_ranges = set()
@@ -613,6 +616,14 @@ def parse_reel_input(input_string: str) -> dict:
         # Batch keyword: literal "batch"
         if token.lower() == 'batch':
             result['batch'] = True
+            continue
+        # Filter keyword: literal "filter"
+        if token.lower() == 'filter':
+            result['filter'] = True
+            continue
+        # Timeline keyword: literal "timeline"
+        if token.lower() == 'timeline':
+            result['timeline'] = True
             continue
         # Range: "13-16" -> start, end (digits hyphen digits)
         range_match = re.match(r'^(\d+)\s*-\s*(\d+)$', token)
@@ -1089,7 +1100,7 @@ def generate_reel_timestamps(
 ) -> List[Any]:
     """Generate timestamps for reel mode by combining multiple selector types and deduplicating.
 
-    Parses reel input (batch, lines, ranges, categories, cells, participants), collects
+    Parses reel input (batch, filter, timeline, lines, ranges, categories, cells, participants), collects
     timestamps from each selector, deduplicates by cell (row, col), and returns a single
     ordered list of issue dicts.
 
@@ -1103,11 +1114,24 @@ def generate_reel_timestamps(
         reel_input_string: Raw user input (e.g. '11, 13-16, P01, "Observations"')
 
     Returns:
-        List of clip issue dictionaries, deduplicated by cell and sorted by row then column
+        List of clip issue dictionaries, deduplicated by cell and sorted by row/column
+        or chronologically when timeline selector is used.
     """
     selectors = parse_reel_input(reel_input_string)
+    if selectors['timeline'] and len(selectors['participants']) != 1:
+        utils.error_print(
+            "Timeline selector requires exactly one participant.",
+            [
+                "Use timeline with one participant, e.g. 'timeline, P01'.",
+                "Timeline reels are generated per participant.",
+            ],
+        )
+        return []
+
     has_any = (
         selectors['batch']
+        or selectors['filter']
+        or selectors['timeline']
         or selectors['lines']
         or selectors['ranges']
         or selectors['categories']
@@ -1118,6 +1142,11 @@ def generate_reel_timestamps(
         return []
 
     all_issues: List[Any] = []
+
+    if selectors['filter']:
+        all_issues.extend(
+            generate_filter_timestamps(sheet_data, id_cell, observation_cell, num_participants, study_name)
+        )
 
     if selectors['batch']:
         all_issues.extend(
@@ -1195,10 +1224,40 @@ def generate_reel_timestamps(
             seen.add(key)
             deduped.append(issue)
 
-    # Sort by row then column so clips follow spreadsheet order (top-to-bottom, then left-to-right)
-    deduped.sort(key=lambda issue: (issue['cell'].row, issue['cell'].col))
+    if selectors['timeline']:
+        timeline_participant = utils.normalize_participant_id(selectors['participants'][0]).lower()
+        deduped = [
+            issue for issue in deduped
+            if utils.normalize_participant_id(issue.get('participant', '')).lower() == timeline_participant
+        ]
+        sort_clips_chronologically(deduped)
+    else:
+        # Sort by row then column so clips follow spreadsheet order (top-to-bottom, then left-to-right)
+        deduped.sort(key=lambda issue: (issue['cell'].row, issue['cell'].col))
 
     return deduped
+
+
+def sort_clips_chronologically(clips: List[Any]) -> None:
+    """Sort clip records in-place by earliest start timestamp in each clip cell.
+
+    Cells are normalized through parse_cell_annotations first, then parsed via
+    parse_timestamps. Unparseable/empty timestamps are sorted last.
+    """
+
+    def _clip_start_seconds(clip: Any) -> float:
+        cell_value = str(clip.get('cell').value if clip.get('cell') is not None else '')
+        cleaned_value, _, _ = utils.parse_cell_annotations(cell_value)
+        parsed_times = utils.parse_timestamps(cleaned_value)
+        if not parsed_times:
+            return float('inf')
+        first_start = parsed_times[0][0]
+        seconds = utils.timestamp_to_seconds(first_start)
+        if seconds is None:
+            return float('inf')
+        return seconds
+
+    clips.sort(key=_clip_start_seconds)
 
 
 def browse_spreadsheet(sheet: Any) -> None:

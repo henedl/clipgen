@@ -7,7 +7,7 @@ from icecream import ic
 REENCODING = False
 AUDIO_NORMALIZE = False
 FILEFORMAT = '.mp4'
-VERSIONNUM = '0.7.8'
+VERSIONNUM = '0.7.11'
 WORKSHEET_PRIORITY = ['Sheet1', 'Data', 'data', 'Observations', 'Data set', 'data set', 'dataset', 'Dataset']
 DEBUGGING = False
 VERBOSE = True  # Set to False in CLI mode unless -v flag is used
@@ -26,6 +26,7 @@ PARTICIPANT_PREFIXES = ('P', 'G')  # 'P' for individual, 'G' for group
 ANNOTATION_KEYPHRASES = {
     '!key': 'key',
 }
+IGNORED_TIMESTAMP_TOKENS = {'x'}
 
 # File and Duration Constants
 MAX_FILENAME_LENGTH = 255

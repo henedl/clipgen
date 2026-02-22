@@ -83,14 +83,15 @@ def create_progress_bar(description: str = "Processing"):
 def parse_arguments() -> argparse.Namespace:
     """Parse command-line arguments for non-interactive mode.
 
-    Exactly one of the mode flags (-b, -l, -r, -c, -p, -f, -R) may be given; if none
+    Exactly one of the mode flags (-b, -l, -r, -c, -p, -f, -R, -T) may be given; if none
     is given, the program runs in interactive mode. Optional flags (-s, -y, -v,
     --screen, --gif)
     may be combined with any mode.
 
     Returns:
         argparse.Namespace with attributes: batch, lines, range, cell,
-        participant, filter, reel (mode flags/values), spreadsheet, yes, verbose, screen, gif.
+        participant, filter, reel, timeline (mode flags/values), spreadsheet, yes,
+        verbose, screen, gif.
     """
     parser = argparse.ArgumentParser(
         description='clipgen - Video clip generator from Google Sheets timestamps.',
@@ -112,15 +113,16 @@ Examples:
   python clipgen.py -l 5 -y            Line mode, skip confirmation prompts
   python clipgen.py -b -v              Batch mode with verbose output
   python clipgen.py -R "11, 13-16, P01, \\"Observations\\""  Reel mode - one combined video
+  python clipgen.py -T P01             Timeline mode - chronological reel for participant P01
   python clipgen.py -b --screen        Batch mode screenshots (.png)
   python clipgen.py -l 5 --gif         Line mode GIF output (.gif)
 
-Note: Non-interactive mode (using -b, -l, -r, -c, -p, -f, or -R) is silent by default,
+Note: Non-interactive mode (using -b, -l, -r, -c, -p, -f, -R, or -T) is silent by default,
       only showing errors and the final summary. Use -v for full output.
 '''
     )
 
-    # Mode arguments: only one of -b/-l/-r/-c/-p/-f/-R may be set at a time
+    # Mode arguments: only one of -b/-l/-r/-c/-p/-f/-R/-T may be set at a time
     mode_group = parser.add_mutually_exclusive_group()
     mode_group.add_argument('-b', '--batch', action='store_true',
         help='Batch mode: generate all possible clips')
@@ -136,6 +138,8 @@ Note: Non-interactive mode (using -b, -l, -r, -c, -p, -f, or -R) is silent by de
         help='Filter mode: generate only key-marked clips/timestamps')
     mode_group.add_argument('-R', '--reel', type=str, metavar='SELECTORS',
         help='Reel mode: combine selectors (e.g. "11, 13-16, P01, \\"Observations\\"") into one video')
+    mode_group.add_argument('-T', '--timeline', type=str, metavar='PARTICIPANT',
+        help='Timeline mode: chronological reel for one participant (e.g., P01)')
 
     format_group = parser.add_mutually_exclusive_group()
     format_group.add_argument('--screen', action='store_true',
@@ -437,6 +441,17 @@ def _clean_timestamp_token(token: str) -> str:
     return token.strip().rstrip(',').rstrip('-').replace('.', ':')
 
 
+def get_ignored_timestamp_tokens() -> Set[str]:
+    """Return configured ignored non-timestamp tokens in normalized form."""
+    configured_tokens = getattr(config, 'IGNORED_TIMESTAMP_TOKENS', set())
+    normalized_tokens: Set[str] = set()
+    for token in configured_tokens:
+        cleaned = _clean_timestamp_token(str(token).strip().lower())
+        if cleaned:
+            normalized_tokens.add(cleaned)
+    return normalized_tokens
+
+
 def get_known_annotation_map() -> Dict[str, str]:
     """Return configured annotation tokens mapped to normalized annotation IDs."""
     configured_map = getattr(config, 'ANNOTATION_KEYPHRASES', {'!key': 'key'})
@@ -508,6 +523,29 @@ def add_duration(start_time: str) -> Union[str, int]:
              "This timestamp will be skipped."])
         return -1
 
+
+def timestamp_to_seconds(ts_str: str) -> Optional[float]:
+    """Convert MM:SS or HH:MM:SS timestamp string to seconds.
+
+    Args:
+        ts_str: Timestamp string in MM:SS or HH:MM:SS format
+
+    Returns:
+        Total seconds as float, or None if the timestamp cannot be parsed.
+    """
+    ts = (ts_str or '').strip()
+    if not ts:
+        return None
+
+    formats = ['%M:%S', '%H:%M:%S']
+    for fmt in formats:
+        try:
+            parsed = datetime.strptime(ts, fmt)
+            return float(parsed.hour * 3600 + parsed.minute * 60 + parsed.second)
+        except ValueError:
+            continue
+    return None
+
 def _parse_single_timestamp_token(token: str) -> Optional[Tuple[str, str]]:
     """Parse one token into a (start_time, end_time) pair, or None if invalid/skip.
 
@@ -567,6 +605,7 @@ def parse_timestamps(cell_value: str, cell_ref: Optional[str] = None) -> List[Tu
         ic(cell_value, cell_ref)
     parsed_timestamps = []
     skipped_timestamps = []
+    ignored_tokens = get_ignored_timestamp_tokens()
     # Unify delimiters (+, ;, ,) to spaces so split() yields one token per time or range
     raw_times = _split_timestamp_tokens(cell_value)
     if config.DEBUGGING:
@@ -583,7 +622,7 @@ def parse_timestamps(cell_value: str, cell_ref: Optional[str] = None) -> List[Tu
             if config.DEBUGGING and len(pair) == 2:
                 ic(pair)
             parsed_timestamps.append(pair)
-        elif raw_times[i]:
+        elif raw_times[i] and raw_times[i] not in ignored_tokens:
             skipped_timestamps.append(raw_times[i])
 
     # Report skipped timestamps: list up to MAX_SKIPPED_TIMESTAMPS_TO_SHOW, then "... and N more"
