@@ -2,19 +2,19 @@
 
 ## Project overview
 
-clipgen is a Python CLI tool that generates video clips from timestamps stored in a Google Sheet or a local Excel file. It uses **gspread** for the Google Sheets API, **openpyxl** for Excel, and **ffmpeg** for video cutting and concatenation. The target audience is UX Researchers and professionals who manage playtest videos locally.
+clipgen is a Python CLI tool that generates clips from timestamps stored in a Google Sheet or a local Excel file. It uses **gspread** for Google Sheets access, **openpyxl** for Excel, and **ffmpeg/ffprobe** for media processing. The target audience is UX Researchers and professionals who manage playtest videos locally.
 
-**Data flow:** Timestamps in spreadsheet → clipgen reads records (descriptions, study name, participant IDs, categories) → ffmpeg → individual clips or a single highlight reel.
+**Data flow:** Timestamps in spreadsheet → clipgen reads records (description, study, participant ID, category) → timestamp parsing/annotation filtering → ffmpeg → video clips, screenshots, GIFs, or a single reel.
 
 ## Architecture
 
 | File | Role |
 | ------ | ------ |
 | [clipgen.py](clipgen.py) | Main entry point, CLI parsing, spreadsheet selection, mode dispatch, clip/reel processing |
-| [spreadsheet.py](spreadsheet.py) | Spreadsheet parsing, header validation, timestamp generation for all modes (~1266 lines) |
-| [video.py](video.py) | ffmpeg operations: cut clips, concatenate, compress to target size, duration/bitrate helpers |
-| [files.py](files.py) | Filename handling (unique names, truncation), `prepare_clip()` (parse timestamps, sanitize desc/category) |
-| [utils.py](utils.py) | Timestamp parsing, argument parsing, `error_print` / `warning_print` / `verbose_print` / `info_print` |
+| [spreadsheet.py](spreadsheet.py) | Spreadsheet parsing, header validation, selector parsing (`reel` input), timestamp generation for all modes |
+| [video.py](video.py) | ffmpeg/ffprobe operations: cut clips, screenshots, GIFs, concatenate reels, optional filesize compression |
+| [files.py](files.py) | Filename handling (unique names, truncation), `prepare_clip()` (parse timestamps + annotations, sanitize desc/category), clip discovery for reel-late |
+| [utils.py](utils.py) | Timestamp parsing, cell/header annotation parsing, CLI argument parsing, rich/plain output helpers, progress bar utilities |
 | [config.py](config.py) | Global constants and settings (version, headers, limits, commands) |
 | [google_api.py](google_api.py) | Google Sheets auth, worksheet selection by priority, spreadsheet listing/search |
 | [excel_io.py](excel_io.py) | Excel adapter: `ExcelSheetAdapter` mimics gspread Worksheet interface for local .xlsx |
@@ -40,9 +40,10 @@ Source video filenames follow `{study}_{participant}.mp4` (e.g. `mystudy_P01.mp4
 
 - **Coordinates:** gspread uses **1-based** row/col. `sheet.get_all_values()` is a list of lists with **0-based** indices: `sheet_data[row_idx][col_idx]`. Conversions: sheet row = `row_idx + 1`, sheet col = `col_idx + 1`.
 - **Timestamps:** Formats `MM:SS` or `HH:MM:SS`. Ranges with `-` (e.g. `1:23-1:45`). Multiple pairs separated by `,`, `;`, `+`, or space. Single time gets end = start + `DEFAULT_DURATION_SECONDS`.
+- **Annotations:** `utils.parse_cell_annotations()` strips supported keyphrases (configured in `ANNOTATION_KEYPHRASES`, currently `!key`) before timestamp parsing. Ignored tokens (configured in `IGNORED_TIMESTAMP_TOKENS`, currently `x`) are skipped.
 - **Participant IDs:** Headers must start with `P` (individual) or `G` (group); see `config.PARTICIPANT_PREFIXES`.
-- **User feedback:** Use `utils.error_print()`, `utils.warning_print()`, `utils.verbose_print()`, `utils.info_print()`. Do not `print()` directly for user-facing messages.
-- **Debug:** Set `config.DEBUGGING = True` to enable icecream output and to skip actual ffmpeg calls in [video.py](video.py).
+- **User feedback:** Use `utils.error_print()`, `utils.warning_print()`, `utils.verbose_print()`, `utils.info_print()`. Prefer these over direct `print()` for user-facing messages.
+- **Debug:** Set `config.DEBUGGING = True` to enable icecream output and to skip ffmpeg execution paths in [video.py](video.py).
 
 ## Modes
 
@@ -54,20 +55,31 @@ Source video filenames follow `{study}_{participant}.mp4` (e.g. `mystudy_P01.mp4
 | **category** | Rows matching selected category names |
 | **cell** | Specific cells as `participant.row` (e.g. P01.11, P03.11) |
 | **participant** | All clips for one or more participants (e.g. P01, P03) |
-| **reel** | Mixed selectors (lines, ranges, categories, cells, participants) combined into one video; deduped by cell, sorted by row then col |
+| **filter** | Only key-marked clips/timestamps (`!key` annotations in header or cell content) |
+| **screen** | Generate screenshots (`.png`) instead of video clips |
+| **gif** | Generate GIFs (`.gif`) from selected timestamps |
+| **reel** | Mixed selectors (including `batch`, `filter`, `timeline`, lines/ranges/categories/cells/participants) combined into one video; deduped by cell and ordered by row/column unless timeline is used |
+| **timeline** | Chronological reel for exactly one participant (available via reel selector `timeline` or CLI `-T`) |
+| **reellate** | Build a reel from already-generated clips in the working directory |
 | **browse** | Interactive view of spreadsheet rows (no clip generation) |
 
-Reel selectors: `batch`, line numbers, ranges like `13-16`, quoted categories, cells like `P01.11`, participant IDs like `P01`.
+Reel selectors: `batch`, `filter`, `timeline`, line numbers, ranges like `13-16`, quoted categories, cells like `P01.11`, participant IDs like `P01`.
+
+CLI mode flags are mutually exclusive for selection (`-b/-l/-r/-c/-p/-f/-R/-T`) and can be combined with output format flags (`--screen` or `--gif`) except reel/timeline, which always output a single video reel.
 
 ## Important configuration ([config.py](config.py))
 
 - `WORKSHEET_PRIORITY` – Worksheet names tried first (e.g. 'Sheet1', 'Data', 'Observations')
 - `ID_HEADER`, `OBSERVATION_HEADER`, `CATEGORY_HEADER` – Required column headers
 - `PARTICIPANT_PREFIXES` – `('P', 'G')`
+- `ANNOTATION_KEYPHRASES` – maps tokens like `!key` to annotation names (`key`)
+- `IGNORED_TIMESTAMP_TOKENS` – tokens ignored during timestamp parsing (default includes `x`)
 - `FILEFORMAT` – `.mp4`
 - `MAX_CLIP_DURATION_SECONDS` – 600 (10 min); prompts before generating longer clips
 - `DEFAULT_DURATION_SECONDS` – 60 (used when only start time is given)
+- `DEFAULT_GIF_DURATION_SECONDS` – 5 (GIF extraction length)
 - `MAX_FILENAME_LENGTH` – 255
+- `MAX_FILESIZE_MB` – optional output filesize cap for generated videos (`0` disables)
 - `COMMAND_LIST_ALL`, `COMMAND_LIST_NEW`, `COMMAND_OPEN_LAST`, `COMMAND_EXCEL`, `COMMAND_HTTP_PREFIX`, `COMMAND_SETTINGS` – Interactive spreadsheet selection commands
 
 ## Spreadsheet layout
@@ -82,8 +94,8 @@ Reference spreadsheet layout is described in [README.md](README.md).
 
 ## Version
 
-- The version is stored as `VERSIONNUM` in [config.py](config.py) (e.g. `'0.7.4'`).
-- **When making substantive code changes** (bug fixes or features), increment the **last segment only** (patch) in `config.py`, e.g. `0.7.4` → `0.7.5`. Do not bump for docs-only, comment-only, or refactor-only changes unless they affect user-visible behavior.
+- The version is stored as `VERSIONNUM` in [config.py](config.py) (currently `'0.7.12'`).
+- **When making substantive code changes** (bug fixes or features), increment the **last segment only** (patch) in `config.py`, e.g. `0.7.12` → `0.7.13`. Do not bump for docs-only, comment-only, or refactor-only changes unless they affect user-visible behavior.
 
 ## Testing notes
 
