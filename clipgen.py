@@ -16,7 +16,7 @@ This script supports full unicode/UTF-8 for international characters in:
 import io
 import os
 import sys
-from typing import Any, Callable, List, NamedTuple, Optional, Tuple
+from typing import Any, Callable, List, NamedTuple, Optional, Set, Tuple
 
 import gspread
 from icecream import ic
@@ -636,6 +636,56 @@ def _check_source_video(clip: Any, missing_videos: set, skip_detail: str) -> Opt
     return None
 
 
+def _prepare_and_check_clip(clip: Any, missing_videos: Set[str]) -> Tuple[Any, Optional[str]]:
+    """Prepare one clip and validate that its source video exists.
+
+    Returns:
+        Tuple of (prepared clip dict, source video path or None).
+        When None is returned for source video, the clip should be skipped.
+    """
+    clip = files.prepare_clip(clip)
+    if not clip['times']:
+        return (clip, None)
+
+    base_video = _check_source_video(
+        clip,
+        missing_videos,
+        f"Clips for participant '{clip['participant']}' in study '{clip['study']}' will be skipped.",
+    )
+    return (clip, base_video)
+
+
+def _run_clip_pipeline(
+    clips_list: List[Any],
+    *,
+    empty_warning: str,
+    intro_message: str,
+    task_label: str,
+    per_clip_fn: Callable[[Any, Set[str]], Any],
+    show_fallback_counter: bool = False,
+) -> Tuple[List[Any], Set[str]]:
+    """Run shared clip-processing pipeline and return per-clip results."""
+    if not clips_list:
+        utils.warning_print(empty_warning)
+        return ([], set())
+
+    utils.verbose_print(intro_message)
+    missing_videos: Set[str] = set()
+
+    def wrapped_process(clip: Any) -> Any:
+        return per_clip_fn(clip, missing_videos)
+
+    results = _process_with_progress(
+        clips_list,
+        task_label,
+        wrapped_process,
+        show_fallback_counter=show_fallback_counter,
+    )
+    if missing_videos:
+        utils.verbose_print(f"* Missing source video files: {len(missing_videos)}")
+    return (results, missing_videos)
+
+
 def _process_with_progress(
     clips_list: List[Any],
     task_label: str,
@@ -669,50 +719,35 @@ def process_clips(clips_list: List[Any], output_format: str = "clip") -> int:
     """Process and generate outputs from the clips list. Returns count of files generated."""
     if config.DEBUGGING:
         ic(len(clips_list))
-    if not clips_list:
-        utils.warning_print("No clips to process. No timestamps were found or selected.")
-        return 0
 
-    utils.verbose_print('\n* ffmpeg is set to never prompt for input and will always overwrite.\n  Only warns if close to crashing.\n')
-    outputs_generated = 0
-    outputs_skipped = 0
-    missing_videos: set = set()
-
-    def process_single_clip(clip):
-        """Process a single clip, updating progress if available. Returns (generated, skipped)."""
-        if config.DEBUGGING:
-            ic(clip)
-        clip = files.prepare_clip(clip)
+    def process_single_clip(clip: Any, missing_videos: Set[str]) -> Tuple[int, int]:
+        """Process a single clip and return (generated, skipped)."""
+        clip, base_video = _prepare_and_check_clip(clip, missing_videos)
         if not clip['times']:
             return (0, 1)
-
-        base_video = _check_source_video(
-            clip,
-            missing_videos,
-            f"Clips for participant '{clip['participant']}' in study '{clip['study']}' will be skipped.",
-        )
         if base_video is None:
             return (0, len(clip['times']))
 
-        count, _ = _process_single_clip_segments(
+        generated_count, _ = _process_single_clip_segments(
             clip,
             base_video,
             missing_videos,
             output_format=output_format,
             collect_paths=False,
         )
-        skipped = len(clip['times']) - count if count < len(clip['times']) else 0
-        return (count, skipped)
+        skipped_count = len(clip['times']) - generated_count if generated_count < len(clip['times']) else 0
+        return (generated_count, skipped_count)
 
-    results = _process_with_progress(
+    results, _ = _run_clip_pipeline(
         clips_list,
-        "Processing clips",
-        process_single_clip,
+        empty_warning="No clips to process. No timestamps were found or selected.",
+        intro_message='\n* ffmpeg is set to never prompt for input and will always overwrite.\n  Only warns if close to crashing.\n',
+        task_label="Processing clips",
+        per_clip_fn=process_single_clip,
         show_fallback_counter=True,
     )
-    for generated_count, skipped_count in results:
-        outputs_generated += generated_count
-        outputs_skipped += skipped_count
+    outputs_generated = sum(generated_count for generated_count, _ in results)
+    outputs_skipped = sum(skipped_count for _, skipped_count in results)
 
     item_name = {
         'clip': 'video(s)',
@@ -721,8 +756,6 @@ def process_clips(clips_list: List[Any], output_format: str = "clip") -> int:
     }.get(output_format, 'file(s)')
     if outputs_skipped > 0:
         utils.verbose_print(f"\n* Summary: {outputs_generated} {item_name} generated, {outputs_skipped} skipped due to errors.")
-    if missing_videos:
-        utils.verbose_print(f"* Missing source video files: {len(missing_videos)}")
     return outputs_generated
 
 
@@ -735,38 +768,37 @@ def process_reel(clips_list: List[Any], output_file: Optional[str] = None) -> in
         utils.warning_print("No clips to process for reel. No timestamps were found or selected.")
         return 0
 
-    utils.verbose_print('\n* Reel mode: generating individual clips, then concatenating into one file.\n')
-    clip_paths: List[str] = []
-    missing_videos: set = set()
-    study_name: Optional[str] = None
+    study_name = next(
+        (
+            (clip.get('study') or '').strip()
+            for clip in clips_list
+            if (clip.get('study') or '').strip()
+        ),
+        None,
+    )
 
-    def process_reel_clip(clip):
-        """Process a single clip for reel mode. Returns list of generated clip paths."""
-        nonlocal study_name, missing_videos
-
-        clip = files.prepare_clip(clip)
-        if not clip['times']:
-            return []
-        if study_name is None:
-            study_name = clip['study']
-        base_video = _check_source_video(
-            clip,
-            missing_videos,
-            f"Clips for participant '{clip['participant']}' will be skipped.",
-        )
+    def process_reel_clip(clip: Any, missing_videos: Set[str]) -> List[str]:
+        """Process one clip for reel mode and return generated segment paths."""
+        clip, base_video = _prepare_and_check_clip(clip, missing_videos)
         if base_video is None:
             return []
         _, segment_paths = _process_single_clip_segments(
-            clip, base_video, missing_videos, filename_prefix="_reel_part_", collect_paths=True
+            clip,
+            base_video,
+            missing_videos,
+            filename_prefix="_reel_part_",
+            collect_paths=True,
         )
         return segment_paths
 
-    all_segment_paths = _process_with_progress(clips_list, "Generating reel clips", process_reel_clip)
-    for segment_paths in all_segment_paths:
-        clip_paths.extend(segment_paths)
-
-    if missing_videos:
-        utils.verbose_print(f"* Missing source video files: {list(missing_videos)}")
+    all_segment_paths, _ = _run_clip_pipeline(
+        clips_list,
+        empty_warning="No clips to process for reel. No timestamps were found or selected.",
+        intro_message='\n* Reel mode: generating individual clips, then concatenating into one file.\n',
+        task_label="Generating reel clips",
+        per_clip_fn=process_reel_clip,
+    )
+    clip_paths = [segment_path for segment_paths in all_segment_paths for segment_path in segment_paths]
     if not clip_paths:
         utils.warning_print("No clips were generated for the reel.")
         return 0

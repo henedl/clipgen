@@ -452,6 +452,24 @@ def get_ignored_timestamp_tokens() -> Set[str]:
     return normalized_tokens
 
 
+def has_non_ignored_timestamp_content(cell_value: str) -> bool:
+    """Return True when cell content is more than ignored timestamp tokens.
+
+    Cells containing only ignored tokens (e.g. "x") should not produce the
+    generic "No valid timestamps found" warning.
+    """
+    ignored_tokens = get_ignored_timestamp_tokens()
+    for raw_token in _split_timestamp_tokens(cell_value):
+        token = _clean_timestamp_token(raw_token)
+        if not token:
+            continue
+        if _parse_single_timestamp_token(token) is not None:
+            return True
+        if token not in ignored_tokens:
+            return True
+    return False
+
+
 def get_known_annotation_map() -> Dict[str, str]:
     """Return configured annotation tokens mapped to normalized annotation IDs."""
     configured_map = getattr(config, 'ANNOTATION_KEYPHRASES', {'!key': 'key'})

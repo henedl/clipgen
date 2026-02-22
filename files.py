@@ -131,8 +131,8 @@ def prepare_clip(clip: Dict[str, Any]) -> Dict[str, Any]:
     if config.DEBUGGING:
         ic(clip['times'])
     
-    # Warn if no valid timestamps were parsed
-    if not clip['times']:
+    # Warn if no valid timestamps were parsed, except cells with only ignored tokens (e.g. "x").
+    if not clip['times'] and utils.has_non_ignored_timestamp_content(cleaned_cell_value):
         utils.warning_print(f"No valid timestamps found in cell {cell_ref}",
             [f"Cell contents: '{clip['cell'].value}'",
              f"Participant: {clip['participant']}, Description: {clip['desc'][:50]}..."])
