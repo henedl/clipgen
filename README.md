@@ -48,3 +48,7 @@ Ranges must be separated by character ```-```
 - Watermarking
 - Subtitling
 - Cropping and time-lapsing! For example generate a time-lapse of part of the screen, such as the minimap in a strategy game.
+
+## AI Disclosure
+
+The author has used an LLM coding agent for assistance in writing parts of this program; if you want to avoid software connected to LLMs, I get it. All code in this reposity prior to 2026 was written by a human, if you would like to fork the project.
