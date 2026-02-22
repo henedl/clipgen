@@ -3,7 +3,7 @@
 
 import argparse
 from datetime import datetime, timedelta
-from typing import List, Optional, Tuple, Union
+from typing import Dict, List, Optional, Set, Tuple, Union
 
 from icecream import ic
 
@@ -83,14 +83,14 @@ def create_progress_bar(description: str = "Processing"):
 def parse_arguments() -> argparse.Namespace:
     """Parse command-line arguments for non-interactive mode.
 
-    Exactly one of the mode flags (-b, -l, -r, -c, -p, -R) may be given; if none
+    Exactly one of the mode flags (-b, -l, -r, -c, -p, -f, -R) may be given; if none
     is given, the program runs in interactive mode. Optional flags (-s, -y, -v,
     --screen, --gif)
     may be combined with any mode.
 
     Returns:
         argparse.Namespace with attributes: batch, lines, range, cell,
-        participant, reel (mode flags/values), spreadsheet, yes, verbose, screen, gif.
+        participant, filter, reel (mode flags/values), spreadsheet, yes, verbose, screen, gif.
     """
     parser = argparse.ArgumentParser(
         description='clipgen - Video clip generator from Google Sheets timestamps.',
@@ -107,6 +107,7 @@ Examples:
   python clipgen.py -c "P01.11 + P03.11" Cell mode - multiple cells
   python clipgen.py -p P01             Participant mode - all clips for participant P01
   python clipgen.py -p "P01,P03"       Participant mode - all clips for P01 and P03
+  python clipgen.py -f                 Filter mode - only key-marked clips/timestamps
   python clipgen.py -b -s "Study Name" Batch mode with specific spreadsheet
   python clipgen.py -l 5 -y            Line mode, skip confirmation prompts
   python clipgen.py -b -v              Batch mode with verbose output
@@ -114,12 +115,12 @@ Examples:
   python clipgen.py -b --screen        Batch mode screenshots (.png)
   python clipgen.py -l 5 --gif         Line mode GIF output (.gif)
 
-Note: Non-interactive mode (using -b, -l, -r, -c, -p, or -R) is silent by default,
+Note: Non-interactive mode (using -b, -l, -r, -c, -p, -f, or -R) is silent by default,
       only showing errors and the final summary. Use -v for full output.
 '''
     )
 
-    # Mode arguments: only one of -b/-l/-r/-c/-p/-R may be set at a time
+    # Mode arguments: only one of -b/-l/-r/-c/-p/-f/-R may be set at a time
     mode_group = parser.add_mutually_exclusive_group()
     mode_group.add_argument('-b', '--batch', action='store_true',
         help='Batch mode: generate all possible clips')
@@ -131,6 +132,8 @@ Note: Non-interactive mode (using -b, -l, -r, -c, -p, or -R) is silent by defaul
         help='Cell mode: specify cells as participant.row (e.g., P01.11 or P01.11 + P03.11)')
     mode_group.add_argument('-p', '--participant', type=str, metavar='ID',
         help='Participant mode: generate all clips for one or more participants (e.g., P01 or P01,P03)')
+    mode_group.add_argument('-f', '--filter', action='store_true',
+        help='Filter mode: generate only key-marked clips/timestamps')
     mode_group.add_argument('-R', '--reel', type=str, metavar='SELECTORS',
         help='Reel mode: combine selectors (e.g. "11, 13-16, P01, \\"Observations\\"") into one video')
 
@@ -374,6 +377,20 @@ def sanitize_filename(text: str) -> str:
     return text
 
 
+def normalize_participant_id(participant_value: str) -> str:
+    """Strip known annotation tokens from a participant header value."""
+    if not participant_value:
+        return ''
+
+    known_tokens = set(get_known_annotation_map().keys())
+    cleaned_parts = []
+    for part in participant_value.split():
+        token = part.strip()
+        if token and token.lower() not in known_tokens:
+            cleaned_parts.append(token)
+    return ' '.join(cleaned_parts).strip()
+
+
 def index_to_letter(idx: int) -> str:
     """Convert 0-based index to letter label (0='A', 25='Z', 26='AA', etc.).
 
@@ -408,6 +425,59 @@ def letter_to_index(letter: str) -> int:
     for char in letter:
         column_index = column_index * 26 + (ord(char) - ord('A') + 1)
     return column_index - 1
+
+
+def _split_timestamp_tokens(cell_value: str) -> List[str]:
+    """Split a cell value into normalized timestamp/annotation tokens."""
+    return cell_value.lower().replace('+', ' ').replace(';', ' ').replace(',', ' ').split()
+
+
+def _clean_timestamp_token(token: str) -> str:
+    """Normalize one token before timestamp parsing."""
+    return token.strip().rstrip(',').rstrip('-').replace('.', ':')
+
+
+def get_known_annotation_map() -> Dict[str, str]:
+    """Return configured annotation tokens mapped to normalized annotation IDs."""
+    configured_map = getattr(config, 'ANNOTATION_KEYPHRASES', {'!key': 'key'})
+    normalized_map: Dict[str, str] = {}
+    for token, annotation_id in configured_map.items():
+        normalized_map[str(token).strip().lower()] = str(annotation_id).strip().lower()
+    return normalized_map
+
+
+def parse_cell_annotations(
+    cell_value: str,
+    annotation_map: Optional[Dict[str, str]] = None
+) -> Tuple[str, Dict[str, Set[int]], Set[str]]:
+    """Extract inline annotation tokens and map them to parsed timestamp indexes.
+
+    Semantics: an annotation token marks the preceding parseable timestamp token.
+    The returned cleaned cell value has annotation tokens removed.
+    """
+    known_annotations = annotation_map or get_known_annotation_map()
+    cleaned_tokens: List[str] = []
+    segment_annotations: Dict[str, Set[int]] = {}
+    cell_annotations: Set[str] = set()
+    parsed_timestamp_count = 0
+
+    for raw_token in _split_timestamp_tokens(cell_value):
+        token = _clean_timestamp_token(raw_token)
+        if not token:
+            continue
+
+        annotation_id = known_annotations.get(token)
+        if annotation_id:
+            cell_annotations.add(annotation_id)
+            if parsed_timestamp_count > 0:
+                segment_annotations.setdefault(annotation_id, set()).add(parsed_timestamp_count - 1)
+            continue
+
+        cleaned_tokens.append(token)
+        if _parse_single_timestamp_token(token) is not None:
+            parsed_timestamp_count += 1
+
+    return (' '.join(cleaned_tokens), segment_annotations, cell_annotations)
 
 
 def add_duration(start_time: str) -> Union[str, int]:
@@ -498,7 +568,7 @@ def parse_timestamps(cell_value: str, cell_ref: Optional[str] = None) -> List[Tu
     parsed_timestamps = []
     skipped_timestamps = []
     # Unify delimiters (+, ;, ,) to spaces so split() yields one token per time or range
-    raw_times = cell_value.lower().replace('+', ' ').replace(';', ' ').replace(',', ' ').split()
+    raw_times = _split_timestamp_tokens(cell_value)
     if config.DEBUGGING:
         ic(raw_times)
     debug_print(f'raw_times content after split is {raw_times}')
@@ -507,7 +577,7 @@ def parse_timestamps(cell_value: str, cell_ref: Optional[str] = None) -> List[Tu
     # Clean each token (strip, normalize trailing punctuation, use colon for decimals) and parse
     for i in range(len(raw_times)):
         debug_print(f'Cleaning timestamp {raw_times[i]}')
-        raw_times[i] = raw_times[i].strip().rstrip(',').rstrip('-').replace('.', ':')
+        raw_times[i] = _clean_timestamp_token(raw_times[i])
         pair = _parse_single_timestamp_token(raw_times[i])
         if pair is not None:
             if config.DEBUGGING and len(pair) == 2:

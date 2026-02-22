@@ -119,8 +119,15 @@ def prepare_clip(clip: Dict[str, Any]) -> Dict[str, Any]:
     # Get cell reference for error messages
     cell_ref = gspread.utils.rowcol_to_a1(clip['cell'].row, clip['cell'].col)
     
-    # Parse timestamps from cell value
-    clip['times'] = utils.parse_timestamps(clip['cell'].value, cell_ref=cell_ref)
+    # Parse inline annotations (e.g. !key), then parse timestamps from cleaned value.
+    cleaned_cell_value, segment_annotations, cell_annotations = utils.parse_cell_annotations(clip['cell'].value)
+    clip['cell_annotations'] = sorted(cell_annotations)
+    clip['segment_annotations'] = {key: sorted(indexes) for key, indexes in segment_annotations.items()}
+    clip['times'] = utils.parse_timestamps(cleaned_cell_value, cell_ref=cell_ref)
+    selected_segment_indexes = clip.get('selected_segment_indexes')
+    if selected_segment_indexes is not None:
+        selected_set = set(selected_segment_indexes)
+        clip['times'] = [pair for index, pair in enumerate(clip['times']) if index in selected_set]
     if config.DEBUGGING:
         ic(clip['times'])
     

@@ -36,6 +36,7 @@ MODE_ALIASES = {
     'c': 'category', 'cat': 'category', 'category': 'category',
     'ce': 'cell', 'cell': 'cell',
     'p': 'participant', 'participant': 'participant',
+    'f': 'filter', 'filter': 'filter',
     's': 'screen', 'screen': 'screen',
     'g': 'gif', 'gif': 'gif',
     're': 'reel', 'reel': 'reel',
@@ -45,7 +46,7 @@ MODE_ALIASES = {
 
 FORMAT_MODE_ALIASES = {
     alias: mode for alias, mode in MODE_ALIASES.items()
-    if mode in {'batch', 'line', 'range', 'category', 'cell', 'participant'}
+    if mode in {'batch', 'line', 'range', 'category', 'cell', 'participant', 'filter'}
 }
 
 
@@ -338,7 +339,7 @@ def _run_format_mode_interactive(worksheet: Any, output_format: str) -> None:
     while True:
         selection = input(
             '\nSelect source rows for this output:\n'
-            '  Modes: (b)atch, (r)ange, (c)ategory, (l)ine, (ce)ll, (p)articipant\n'
+            '  Modes: (b)atch, (r)ange, (c)ategory, (l)ine, (ce)ll, (p)articipant, (f)ilter\n'
             '  Or enter directly: line numbers (5, 7), ranges (13-16), cells (P01.11), participants (P01)\n>> '
         ).strip()
         if not selection:
@@ -350,12 +351,12 @@ def _run_format_mode_interactive(worksheet: Any, output_format: str) -> None:
             clips_list = spreadsheet.generate_list(worksheet, mode)
             break
         detected_mode, detected_kwargs = spreadsheet.detect_mode_from_input(selection)
-        if detected_mode in ('batch', 'line', 'range', 'category', 'cell', 'participant'):
+        if detected_mode in ('batch', 'line', 'range', 'category', 'cell', 'participant', 'filter'):
             utils.verbose_print(f"  {detected_mode.capitalize()} mode detected.")
             clips_list = spreadsheet.generate_list(worksheet, detected_mode, **detected_kwargs)
             break
         if detected_mode in ('reel', 'browse'):
-            utils.info_print('  This mode is not available for screen/gif output. Choose batch/line/range/category/cell/participant.')
+            utils.info_print('  This mode is not available for screen/gif output. Choose batch/line/range/category/cell/participant/filter.')
             continue
         utils.info_print(f"  Unknown mode or input '{selection}'. Available modes:")
         utils.info_print("    b or batch   - Generate from all clips in the spreadsheet")
@@ -364,6 +365,7 @@ def _run_format_mode_interactive(worksheet: Any, output_format: str) -> None:
         utils.info_print("    l or line    - Generate from specific line(s)")
         utils.info_print("    ce or cell   - Generate from specific cell(s) (e.g., P01.11)")
         utils.info_print("    p or participant - Generate all outputs for one participant")
+        utils.info_print("    f or filter  - Generate only key-marked outputs")
 
     outputs_generated = process_clips(clips_list, output_format=output_format)
     utils.info_print(f'All done, created {outputs_generated} {output_label}!\nFiles are in {os.getcwd()}\n')
@@ -374,7 +376,7 @@ def select_mode_and_generate(worksheet: Any) -> Tuple[List[Any], bool, Optional[
     while True:
         input_mode = input(
             '\nEnter mode or input directly:\n'
-            '  Modes: (b)atch, (r)ange, (c)ategory, (l)ine, (ce)ll, (p)articipant, (s)creen, (g)if, (re)el, (rl) reel-late, (br)owse\n'
+            '  Modes: (b)atch, (r)ange, (c)ategory, (l)ine, (ce)ll, (p)articipant, (f)ilter, (s)creen, (g)if, (re)el, (rl) reel-late, (br)owse\n'
             '  Or enter directly: line numbers (5, 7), ranges (13-16), cells (P01.11), participants (P01)\n>> '
         ).strip()
         if not input_mode:
@@ -430,6 +432,7 @@ def select_mode_and_generate(worksheet: Any) -> Tuple[List[Any], bool, Optional[
                 utils.info_print("    l or line    - Generate clips from specific line(s)")
                 utils.info_print("    ce or cell   - Generate clips from specific cell(s) (e.g., P01.11)")
                 utils.info_print("    p or participant - Generate all clips for one participant")
+                utils.info_print("    f or filter  - Generate only key-marked clips/timestamps")
                 utils.info_print("    s or screen  - Generate screenshots (.png)")
                 utils.info_print("    g or gif     - Generate GIFs (.gif)")
                 utils.info_print("    re or reel   - Combine selectors into one highlight reel video")
@@ -872,10 +875,10 @@ def run_cli_mode(worksheet: Any, args: Any, cli_mode_args: CliModeArgs) -> None:
 
     if args.reel and output_format != 'clip':
         utils.error_print("Reel mode cannot be combined with --screen or --gif.",
-            ["Use reel mode for a single .mp4 output, or use screen/gif with batch/line/range/category/cell/participant selection."])
+            ["Use reel mode for a single .mp4 output, or use screen/gif with batch/line/range/category/cell/participant/filter selection."])
         sys.exit(1)
 
-    selection_mode_set = bool(args.batch or args.lines or args.range or args.cell or args.participant or args.reel)
+    selection_mode_set = bool(args.batch or args.lines or args.range or args.cell or args.participant or args.filter or args.reel)
 
     if args.batch or (output_format != 'clip' and not selection_mode_set):
         clips_list = spreadsheet.generate_list(worksheet, 'batch', skip_prompts=skip_prompts)
@@ -887,6 +890,8 @@ def run_cli_mode(worksheet: Any, args: Any, cli_mode_args: CliModeArgs) -> None:
         clips_list = spreadsheet.generate_list(worksheet, 'cell', cell_specs=cli_mode_args.cell_specs, skip_prompts=skip_prompts)
     elif args.participant:
         clips_list = spreadsheet.generate_list(worksheet, 'participant', participant_id=args.participant, skip_prompts=skip_prompts)
+    elif args.filter:
+        clips_list = spreadsheet.generate_list(worksheet, 'filter', skip_prompts=skip_prompts)
     elif args.reel:
         clips_list = spreadsheet.generate_list(worksheet, 'reel', reel_input=args.reel, skip_prompts=skip_prompts)
     else:
@@ -937,7 +942,7 @@ def main() -> None:
         ic(args)
     
     # Determine if running in CLI mode (any mode argument provided)
-    cli_mode = args.batch or args.lines or args.range or args.cell or args.participant or args.reel or args.screen or args.gif
+    cli_mode = args.batch or args.lines or args.range or args.cell or args.participant or args.filter or args.reel or args.screen or args.gif
     
     # Set verbose mode: silent by default in CLI mode, verbose in interactive mode
     config.VERBOSE = not cli_mode or args.verbose

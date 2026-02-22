@@ -166,7 +166,7 @@ def _make_clip_record(
         desc = sheet_data[row_idx][desc_col]
     participant = ""
     if 0 <= participant_row < len(sheet_data) and col_idx < len(sheet_data[participant_row]):
-        participant = sheet_data[participant_row][col_idx]
+        participant = utils.normalize_participant_id(sheet_data[participant_row][col_idx])
     category = ""
     if 0 <= category_col < len(sheet_data[row_idx]):
         category = sheet_data[row_idx][category_col]
@@ -184,7 +184,7 @@ def generate_list(sheet: Any, mode: str, line_numbers: Optional[List[int]] = Non
     
     Args:
         sheet: The gspread worksheet object
-        mode: One of 'batch', 'line', 'range', 'category', 'cell', 'participant', 'reel', 'select'
+        mode: One of 'batch', 'line', 'range', 'category', 'cell', 'participant', 'filter', 'reel', 'select'
         line_numbers: Optional list of line numbers for 'line' mode (CLI)
         range_start: Optional start line for 'range' mode (CLI)
         range_end: Optional end line for 'range' mode (CLI)
@@ -399,7 +399,10 @@ def generate_list(sheet: Any, mode: str, line_numbers: Optional[List[int]] = Non
                     else:
                         col_idx = find_participant_column(header_row, id_cell, token)
                         if col_idx is not None:
-                            chosen_ids.append(header_row[col_idx] if col_idx < len(header_row) else token)
+                            if col_idx < len(header_row):
+                                chosen_ids.append(utils.normalize_participant_id(header_row[col_idx]))
+                            else:
+                                chosen_ids.append(token)
                         else:
                             invalid_tokens.append(token)
                 if invalid_tokens:
@@ -419,6 +422,15 @@ def generate_list(sheet: Any, mode: str, line_numbers: Optional[List[int]] = Non
                     for pid in unique_ids:
                         clips.extend(generate_participant_timestamps(sheet_data, id_cell, observation_cell, study_name, pid))
                     break
+    # --- Filter mode: all key-marked segments, or all segments for key-marked participants ---
+    elif mode == 'filter':
+        if skip_prompts:
+            utils.verbose_print('Filter mode: generating key-marked clips...')
+            clips = generate_filter_timestamps(sheet_data, id_cell, observation_cell, num_participants, study_name)
+        else:
+            yn = input('\nFilter mode will include only key-marked timestamps or participants. Do you want to proceed? y/n\n>> ')
+            if yn == 'y':
+                clips = generate_filter_timestamps(sheet_data, id_cell, observation_cell, num_participants, study_name)
     # --- Reel mode: mixed selector string (batch, lines, ranges, categories, cells, participants); deduped and sorted ---
     elif mode == 'reel':
         if reel_input is None or not reel_input.strip():
@@ -474,8 +486,10 @@ def get_participant_list(header_row: List[str], id_cell: Any, num_participants: 
     """
     participants = []
     for j in range(id_cell.col, id_cell.col + num_participants):
-        if j < len(header_row) and header_row[j].strip():
-            participants.append(header_row[j].strip())
+        if j < len(header_row):
+            participant_id = utils.normalize_participant_id(header_row[j]).strip()
+            if participant_id:
+                participants.append(participant_id)
     return participants
 
 def parse_participant_selection(input_str: str) -> List[str]:
@@ -698,9 +712,10 @@ def find_participant_column(header_row: List[str], id_cell: Any, participant_id:
     Returns:
         Column index (0-based) if found, None otherwise
     """
+    normalized_target = utils.normalize_participant_id(participant_id).lower()
     for col_idx in range(id_cell.col - 1, len(header_row)):
-        header_value = header_row[col_idx].strip()
-        if header_value.lower() == participant_id.lower():
+        header_value = utils.normalize_participant_id(header_row[col_idx]).strip()
+        if header_value.lower() == normalized_target:
             return col_idx
     return None
 
@@ -780,7 +795,7 @@ def generate_cell_timestamps(sheet_data: List[List[str]], id_cell: Any, observat
         # Use actual header value for participant when available
         participant_row = id_cell.row - 1
         if 0 <= participant_row < len(sheet_data) and col_idx < len(sheet_data[participant_row]) and sheet_data[participant_row][col_idx]:
-            issue['participant'] = sheet_data[participant_row][col_idx]
+            issue['participant'] = utils.normalize_participant_id(sheet_data[participant_row][col_idx])
         clips.append(issue)
         utils.verbose_print(f"+ Found timestamp: {cell_value.replace(chr(10), ' ')} at cell {participant_id}.{row_number} ({gspread.utils.rowcol_to_a1(issue['cell'].row, issue['cell'].col)})")
     
@@ -806,6 +821,48 @@ def generate_batch_timestamps(sheet_data: List[List[str]], id_cell: Any, observa
         utils.debug_print(f'Batching on line {i} (real sheet line {i+1})')
         clips.extend(get_line_timestamps(sheet_data, id_cell, observation_cell, num_participants, i, study_name))
     return clips
+
+
+def generate_filter_timestamps(
+    sheet_data: List[List[str]],
+    id_cell: Any,
+    observation_cell: Any,
+    num_participants: int,
+    study_name: str,
+) -> List[Any]:
+    """Generate key-marked clips from the entire sheet.
+
+    - Segment-level: `!key` marks the preceding timestamp in that cell.
+    - Participant-level: `!key` in the participant header marks all that participant's segments.
+    """
+    clips = generate_batch_timestamps(sheet_data, id_cell, observation_cell, num_participants, study_name)
+    if not clips:
+        return []
+
+    participant_row = id_cell.row - 1
+    header_row = sheet_data[participant_row] if 0 <= participant_row < len(sheet_data) else []
+    participant_key_columns: Set[int] = set()
+    for col_idx in range(id_cell.col, id_cell.col + num_participants):
+        if col_idx >= len(header_row):
+            continue
+        _, _, header_annotations = utils.parse_cell_annotations(header_row[col_idx])
+        if 'key' in header_annotations:
+            participant_key_columns.add(col_idx)
+
+    filtered_clips = []
+    for clip in clips:
+        clip_col = clip['cell'].col - 1
+        if clip_col in participant_key_columns:
+            filtered_clips.append(clip)
+            continue
+
+        _, segment_annotations, _ = utils.parse_cell_annotations(clip['cell'].value)
+        key_indexes = sorted(segment_annotations.get('key', set()))
+        if key_indexes:
+            clip['selected_segment_indexes'] = key_indexes
+            filtered_clips.append(clip)
+
+    return filtered_clips
 
 def collect_categories(sheet_data: List[List[str]], id_cell: Any, category_cell: Any) -> List[str]:
     """Scan sheet and return unique categories in order of first appearance.
@@ -1237,7 +1294,7 @@ def browse_spreadsheet(sheet: Any) -> None:
         # Display using Rich Table or plain text fallback
         if utils._use_rich():
             table = utils.create_browse_table(rows_data, participant_headers)
-            if table:
+            if table and utils.console is not None:
                 utils.console.print(table)
         else:
             output = utils.format_browse_rows_plain(rows_data, participant_headers)

@@ -7,7 +7,7 @@ from icecream import ic
 REENCODING = False
 AUDIO_NORMALIZE = False
 FILEFORMAT = '.mp4'
-VERSIONNUM = '0.7.7'
+VERSIONNUM = '0.7.8'
 WORKSHEET_PRIORITY = ['Sheet1', 'Data', 'data', 'Observations', 'Data set', 'data set', 'dataset', 'Dataset']
 DEBUGGING = False
 VERBOSE = True  # Set to False in CLI mode unless -v flag is used
@@ -23,6 +23,9 @@ ID_HEADER = 'ID'
 OBSERVATION_HEADER = 'Observation'
 CATEGORY_HEADER = 'Category'
 PARTICIPANT_PREFIXES = ('P', 'G')  # 'P' for individual, 'G' for group
+ANNOTATION_KEYPHRASES = {
+    '!key': 'key',
+}
 
 # File and Duration Constants
 MAX_FILENAME_LENGTH = 255
