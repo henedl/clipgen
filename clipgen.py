@@ -950,6 +950,9 @@ def main() -> None:
     utils.verbose_print('-------------------------------------------------------------------------------')
     utils.verbose_print(f'Welcome to clipgen v{config.VERSIONNUM}\nWorking directory: {os.getcwd()}\nPlace video files and the credentials.json file in this directory.')
     utils.debug_print('Debug mode is ON. Several limitations apply and more things will be printed.')
+
+    if not video.check_ffmpeg_tools_available():
+        sys.exit(1)
     
     # Authenticate with Google
     gspread_client = authenticate_google()

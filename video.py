@@ -2,7 +2,9 @@
 """Video processing operations for clipgen."""
 
 import os
+import shutil
 import subprocess
+import sys
 import tempfile
 from datetime import datetime
 from typing import List, Optional
@@ -14,6 +16,50 @@ import files
 import utils
 
 INVALID_END_TIMESTAMP = -1
+
+
+def _ffmpeg_install_guidance_lines() -> List[str]:
+    """Return actionable install guidance based on the current platform."""
+    platform_specific = []
+    if sys.platform == 'darwin':
+        platform_specific = [
+            "macOS: install with Homebrew: brew install ffmpeg",
+        ]
+    elif sys.platform.startswith('linux'):
+        platform_specific = [
+            "Linux (Debian/Ubuntu): sudo apt update && sudo apt install ffmpeg",
+            "Linux (Fedora): sudo dnf install ffmpeg",
+        ]
+    elif sys.platform.startswith('win'):
+        platform_specific = [
+            "Windows (winget): winget install Gyan.FFmpeg",
+            "Windows (chocolatey): choco install ffmpeg",
+        ]
+    else:
+        platform_specific = [
+            "Install from: https://www.ffmpeg.org/download.html",
+        ]
+
+    return platform_specific + [
+        "Then verify in a new terminal:",
+        "  ffmpeg -version",
+        "  ffprobe -version",
+    ]
+
+
+def check_ffmpeg_tools_available() -> bool:
+    """Verify ffmpeg and ffprobe are available in PATH at startup."""
+    missing_tools = [tool for tool in ('ffmpeg', 'ffprobe') if shutil.which(tool) is None]
+    if not missing_tools:
+        return True
+
+    details = [
+        f"Missing command(s): {', '.join(missing_tools)}",
+        "clipgen requires both ffmpeg and ffprobe to cut and inspect videos.",
+    ]
+    details.extend(_ffmpeg_install_guidance_lines())
+    utils.error_print("Required video tools are missing from PATH.", details)
+    return False
 
 
 def _handle_ffmpeg_not_found() -> None:
