@@ -7,7 +7,7 @@ from icecream import ic
 REENCODING = False
 AUDIO_NORMALIZE = False
 FILEFORMAT = '.mp4'
-VERSIONNUM = '0.7.4'
+VERSIONNUM = '0.7.5'
 WORKSHEET_PRIORITY = ['Sheet1', 'Data', 'data', 'Observations', 'Data set', 'data set', 'dataset', 'Dataset']
 DEBUGGING = False
 VERBOSE = True  # Set to False in CLI mode unless -v flag is used
@@ -28,6 +28,7 @@ PARTICIPANT_PREFIXES = ('P', 'G')  # 'P' for individual, 'G' for group
 MAX_FILENAME_LENGTH = 255
 MAX_CLIP_DURATION_SECONDS = 600  # 10 minutes
 DEFAULT_DURATION_SECONDS = 60
+DEFAULT_GIF_DURATION_SECONDS = 5
 MAX_FILESIZE_MB = 0  # Maximum output file size in MB (0 = disabled)
 
 # Browse Mode Constants

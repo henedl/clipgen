@@ -299,6 +299,58 @@ def _run_reellate_mode_interactive() -> Tuple[bool, Optional[str]]:
     return (False, None)
 
 
+def _run_format_mode_interactive(worksheet: Any, output_format: str) -> None:
+    """Run interactive flow for screen/gif output formats.
+
+    Prompts the user for a timestamp-selection mode, generates a clip list, then renders
+    screenshots/GIFs using the regular clip processing pipeline.
+    """
+    mode_name = 'Screenshot' if output_format == 'screen' else 'GIF'
+    output_label = 'screenshots' if output_format == 'screen' else 'GIFs'
+    mode_map = {
+        'b': 'batch', 'batch': 'batch',
+        'l': 'line', 'line': 'line',
+        'r': 'range', 'range': 'range',
+        'c': 'category', 'cat': 'category', 'category': 'category',
+        'ce': 'cell', 'cell': 'cell',
+        'p': 'participant', 'participant': 'participant',
+    }
+
+    utils.info_print(f'\n{mode_name} mode: choose how to select timestamps.')
+    while True:
+        selection = input(
+            '\nSelect source rows for this output:\n'
+            '  Modes: (b)atch, (r)ange, (c)ategory, (l)ine, (ce)ll, (p)articipant\n'
+            '  Or enter directly: line numbers (5, 7), ranges (13-16), cells (P01.11), participants (P01)\n>> '
+        ).strip()
+        if not selection:
+            utils.info_print("  Please enter a mode or direct input (e.g. P01.11, 5, 7, 13-16, P01).")
+            continue
+        selection_lower = selection.lower()
+        mode = mode_map.get(selection_lower)
+        if mode:
+            clips_list = spreadsheet.generate_list(worksheet, mode)
+            break
+        detected_mode, detected_kwargs = spreadsheet.detect_mode_from_input(selection)
+        if detected_mode in ('batch', 'line', 'range', 'category', 'cell', 'participant'):
+            utils.verbose_print(f"  {detected_mode.capitalize()} mode detected.")
+            clips_list = spreadsheet.generate_list(worksheet, detected_mode, **detected_kwargs)
+            break
+        if detected_mode in ('reel', 'browse'):
+            utils.info_print('  This mode is not available for screen/gif output. Choose batch/line/range/category/cell/participant.')
+            continue
+        utils.info_print(f"  Unknown mode or input '{selection}'. Available modes:")
+        utils.info_print("    b or batch   - Generate from all clips in the spreadsheet")
+        utils.info_print("    r or range   - Generate from a range of rows")
+        utils.info_print("    c or category - Generate by category")
+        utils.info_print("    l or line    - Generate from specific line(s)")
+        utils.info_print("    ce or cell   - Generate from specific cell(s) (e.g., P01.11)")
+        utils.info_print("    p or participant - Generate all outputs for one participant")
+
+    outputs_generated = process_clips(clips_list, output_format=output_format)
+    utils.info_print(f'All done, created {outputs_generated} {output_label}!\nFiles are in {os.getcwd()}\n')
+
+
 def select_mode_and_generate(worksheet: Any) -> Tuple[List[Any], bool, Optional[str]]:
     """Interactive mode selection. Returns (clips list, is_reel_mode, reel_output_file or None)."""
     mode_map = {
@@ -308,6 +360,8 @@ def select_mode_and_generate(worksheet: Any) -> Tuple[List[Any], bool, Optional[
         'c': 'category', 'cat': 'category', 'category': 'category',
         'ce': 'cell', 'cell': 'cell',
         'p': 'participant', 'participant': 'participant',
+        's': 'screen', 'screen': 'screen',
+        'g': 'gif', 'gif': 'gif',
         're': 'reel', 'reel': 'reel',
         'rl': 'reellate', 'reellate': 'reellate',
         'br': 'browse', 'browse': 'browse',
@@ -317,7 +371,7 @@ def select_mode_and_generate(worksheet: Any) -> Tuple[List[Any], bool, Optional[
     while True:
         input_mode = input(
             '\nEnter mode or input directly:\n'
-            '  Modes: (b)atch, (r)ange, (c)ategory, (l)ine, (ce)ll, (p)articipant, (re)el, (rl) reel-late, (br)owse\n'
+            '  Modes: (b)atch, (r)ange, (c)ategory, (l)ine, (ce)ll, (p)articipant, (s)creen, (g)if, (re)el, (rl) reel-late, (br)owse\n'
             '  Or enter directly: line numbers (5, 7), ranges (13-16), cells (P01.11), participants (P01)\n>> '
         ).strip()
         if not input_mode:
@@ -342,6 +396,9 @@ def select_mode_and_generate(worksheet: Any) -> Tuple[List[Any], bool, Optional[
                     utils.info_print(f'Files are in {os.getcwd()}\n')
                     return ([], False, None)
                 continue
+            if mode in ('screen', 'gif'):
+                _run_format_mode_interactive(worksheet, mode)
+                return ([], False, None)
             if mode:
                 return (spreadsheet.generate_list(worksheet, mode), False, None)
 
@@ -370,6 +427,8 @@ def select_mode_and_generate(worksheet: Any) -> Tuple[List[Any], bool, Optional[
                 utils.info_print("    l or line    - Generate clips from specific line(s)")
                 utils.info_print("    ce or cell   - Generate clips from specific cell(s) (e.g., P01.11)")
                 utils.info_print("    p or participant - Generate all clips for one participant")
+                utils.info_print("    s or screen  - Generate screenshots (.png)")
+                utils.info_print("    g or gif     - Generate GIFs (.gif)")
                 utils.info_print("    re or reel   - Combine selectors into one highlight reel video")
                 utils.info_print("    rl or reellate - Combine existing clips into a highlight reel")
                 utils.info_print("    br or browse - Browse spreadsheet rows interactively")
@@ -383,6 +442,7 @@ def _process_single_clip_segments(
     missing_videos: set,
     *,
     filename_prefix: str = "",
+    output_format: str = "clip",
     collect_paths: bool = False,
 ) -> Tuple[int, List[str]]:
     """Process one clip's segments: run ffmpeg for each (start, end), optionally collect output paths.
@@ -401,12 +461,20 @@ def _process_single_clip_segments(
     """
     generated = 0
     paths: List[str] = []
-    template = (
-        f"{filename_prefix}[{clip['category']}] {clip['study']} {clip['participant']} {clip['desc']}{config.FILEFORMAT}"
-    )
+    extension_map = {
+        'clip': config.FILEFORMAT,
+        'screen': '.png',
+        'gif': '.gif',
+    }
+    file_extension = extension_map.get(output_format)
+    if not file_extension:
+        utils.error_print(f"Unsupported output format: '{output_format}'")
+        return (generated, paths)
+
+    template = f"{filename_prefix}[{clip['category']}] {clip['study']} {clip['participant']} {clip['desc']}{file_extension}"
     for start_time, end_time in clip['times']:
         try:
-            out_name = files.get_unique_filename(template)
+            out_name = files.get_unique_filename(template, file_format=file_extension)
             if config.DEBUGGING:
                 ic(out_name)
         except (TypeError, UnicodeEncodeError, UnicodeDecodeError) as e:
@@ -420,13 +488,27 @@ def _process_single_clip_segments(
                 ],
             )
             return (generated, paths)
-        ok = video.run_ffmpeg(
-            input_file=base_video,
-            output_file=out_name,
-            start_pos=start_time,
-            end_pos=end_time,
-            reencode=config.REENCODING,
-        )
+        if output_format == 'clip':
+            ok = video.run_ffmpeg(
+                input_file=base_video,
+                output_file=out_name,
+                start_pos=start_time,
+                end_pos=end_time,
+                reencode=config.REENCODING,
+            )
+        elif output_format == 'screen':
+            ok = video.extract_screenshot(
+                input_file=base_video,
+                output_file=out_name,
+                timestamp=start_time,
+            )
+        else:  # output_format == 'gif'
+            ok = video.extract_gif(
+                input_file=base_video,
+                output_file=out_name,
+                timestamp=start_time,
+                duration_seconds=config.DEFAULT_GIF_DURATION_SECONDS,
+            )
         if ok:
             generated += 1
             if collect_paths:
@@ -434,8 +516,8 @@ def _process_single_clip_segments(
     return (generated, paths)
 
 
-def process_clips(clips_list: List[Any]) -> int:
-    """Process and generate video clips from the clips list. Returns count of videos generated."""
+def process_clips(clips_list: List[Any], output_format: str = "clip") -> int:
+    """Process and generate outputs from the clips list. Returns count of files generated."""
     if config.DEBUGGING:
         ic(len(clips_list))
     if not clips_list:
@@ -472,7 +554,13 @@ def process_clips(clips_list: List[Any]) -> int:
                 )
             return (0, len(clip['times']))
 
-        count, _ = _process_single_clip_segments(clip, base_video, missing_videos, collect_paths=False)
+        count, _ = _process_single_clip_segments(
+            clip,
+            base_video,
+            missing_videos,
+            output_format=output_format,
+            collect_paths=False,
+        )
         skipped = len(clip['times']) - count if count < len(clip['times']) else 0
         return (count, skipped)
 
@@ -499,8 +587,13 @@ def process_clips(clips_list: List[Any]) -> int:
             videos_generated += generated
             videos_skipped += skipped
 
+    item_name = {
+        'clip': 'video(s)',
+        'screen': 'screenshot(s)',
+        'gif': 'GIF(s)',
+    }.get(output_format, 'file(s)')
     if videos_skipped > 0:
-        utils.verbose_print(f"\n* Summary: {videos_generated} video(s) generated, {videos_skipped} skipped due to errors.")
+        utils.verbose_print(f"\n* Summary: {videos_generated} {item_name} generated, {videos_skipped} skipped due to errors.")
     if missing_videos:
         utils.verbose_print(f"* Missing source video files: {len(missing_videos)}")
     return videos_generated
@@ -750,8 +843,20 @@ def run_cli_mode(worksheet: Any, args: Any, cli_line_numbers: Optional[List[int]
         cli_cell_specs: Parsed cell specifications (if cell mode)
     """
     skip_prompts = args.yes
+    output_format = 'clip'
+    if args.screen:
+        output_format = 'screen'
+    elif args.gif:
+        output_format = 'gif'
 
-    if args.batch:
+    if args.reel and output_format != 'clip':
+        utils.error_print("Reel mode cannot be combined with --screen or --gif.",
+            ["Use reel mode for a single .mp4 output, or use screen/gif with batch/line/range/category/cell/participant selection."])
+        sys.exit(1)
+
+    selection_mode_set = bool(args.batch or args.lines or args.range or args.cell or args.participant or args.reel)
+
+    if args.batch or (output_format != 'clip' and not selection_mode_set):
         clips_list = spreadsheet.generate_list(worksheet, 'batch', skip_prompts=skip_prompts)
     elif args.lines:
         clips_list = spreadsheet.generate_list(worksheet, 'line', line_numbers=cli_line_numbers, skip_prompts=skip_prompts)
@@ -769,12 +874,16 @@ def run_cli_mode(worksheet: Any, args: Any, cli_line_numbers: Optional[List[int]
     if args.reel:
         videos_generated = process_reel(clips_list)
     else:
-        videos_generated = process_clips(clips_list)
+        videos_generated = process_clips(clips_list, output_format=output_format)
     
     if not config.REENCODING:
         utils.verbose_print('* No re-encoding done, expect:\n- inaccurate start and end timings\n- lossy frames until first keyframe\n- bad timecodes at the end\n')
     if args.reel:
         utils.info_print(f'All done, created 1 reel!\nFiles are in {os.getcwd()}\n')
+    elif output_format == 'screen':
+        utils.info_print(f'All done, created {videos_generated} screenshots!\nFiles are in {os.getcwd()}\n')
+    elif output_format == 'gif':
+        utils.info_print(f'All done, created {videos_generated} GIFs!\nFiles are in {os.getcwd()}\n')
     else:
         utils.info_print(f'All done, created {videos_generated} videos!\nFiles are in {os.getcwd()}\n')
 
@@ -786,6 +895,11 @@ def run_interactive_mode(worksheet: Any) -> None:
     """
     while True:
         clips_list, is_reel, reel_output_file = select_mode_and_generate(worksheet)
+        if not clips_list and not is_reel:
+            yn = input('Continue working (y) or quit the program (n)? y/n\n>> ')
+            if yn == 'n':
+                break
+            continue
         if is_reel:
             videos_generated = process_reel(clips_list, output_file=reel_output_file)
         else:
@@ -812,7 +926,7 @@ def main() -> None:
         ic(args)
     
     # Determine if running in CLI mode (any mode argument provided)
-    cli_mode = args.batch or args.lines or args.range or args.cell or args.participant or args.reel
+    cli_mode = args.batch or args.lines or args.range or args.cell or args.participant or args.reel or args.screen or args.gif
     
     # Set verbose mode: silent by default in CLI mode, verbose in interactive mode
     config.VERBOSE = not cli_mode or args.verbose

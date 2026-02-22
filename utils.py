@@ -84,12 +84,13 @@ def parse_arguments() -> argparse.Namespace:
     """Parse command-line arguments for non-interactive mode.
 
     Exactly one of the mode flags (-b, -l, -r, -c, -p, -R) may be given; if none
-    is given, the program runs in interactive mode. Optional flags (-s, -y, -v)
+    is given, the program runs in interactive mode. Optional flags (-s, -y, -v,
+    --screen, --gif)
     may be combined with any mode.
 
     Returns:
         argparse.Namespace with attributes: batch, lines, range, cell,
-        participant, reel (mode flags/values), spreadsheet, yes, verbose.
+        participant, reel (mode flags/values), spreadsheet, yes, verbose, screen, gif.
     """
     parser = argparse.ArgumentParser(
         description='clipgen - Video clip generator from Google Sheets timestamps.',
@@ -110,6 +111,8 @@ Examples:
   python clipgen.py -l 5 -y            Line mode, skip confirmation prompts
   python clipgen.py -b -v              Batch mode with verbose output
   python clipgen.py -R "11, 13-16, P01, \\"Observations\\""  Reel mode - one combined video
+  python clipgen.py -b --screen        Batch mode screenshots (.png)
+  python clipgen.py -l 5 --gif         Line mode GIF output (.gif)
 
 Note: Non-interactive mode (using -b, -l, -r, -c, -p, or -R) is silent by default,
       only showing errors and the final summary. Use -v for full output.
@@ -130,6 +133,12 @@ Note: Non-interactive mode (using -b, -l, -r, -c, -p, or -R) is silent by defaul
         help='Participant mode: generate all clips for one or more participants (e.g., P01 or P01,P03)')
     mode_group.add_argument('-R', '--reel', type=str, metavar='SELECTORS',
         help='Reel mode: combine selectors (e.g. "11, 13-16, P01, \\"Observations\\"") into one video')
+
+    format_group = parser.add_mutually_exclusive_group()
+    format_group.add_argument('--screen', action='store_true',
+        help='Output screenshots (.png) instead of video clips')
+    format_group.add_argument('--gif', action='store_true',
+        help='Output animated GIFs instead of video clips')
 
     # Optional arguments (can be used with any mode)
     parser.add_argument('-s', '--spreadsheet', type=str, metavar='NAME',
@@ -157,7 +166,7 @@ def verbose_print(message: str) -> None:
     In CLI mode, VERBOSE is False unless -v flag is used.
     """
     if config.VERBOSE:
-        if _use_rich():
+        if _use_rich() and console is not None:
             console.print(message, style="verbose")
         else:
             print(message)
@@ -171,6 +180,13 @@ def error_print(message: str, details: Optional[List[str]] = None) -> None:
         details: Optional list of detail lines to print (indented)
     """
     if _use_rich():
+        rich_console = console
+        if rich_console is None:
+            print(f"! ERROR {message}")
+            if details:
+                for detail in details:
+                    print(f"  {detail}")
+            return
         content = Text()
         content.append("! ERROR ", style="error.prefix")
         content.append(message)
@@ -178,9 +194,9 @@ def error_print(message: str, details: Optional[List[str]] = None) -> None:
             for detail in details:
                 content.append(f"\n  {detail}", style="error.detail")
         if _use_panels():
-            console.print(Panel(content, border_style="red", padding=(0, 1)))
+            rich_console.print(Panel(content, border_style="red", padding=(0, 1)))
         else:
-            console.print(content)
+            rich_console.print(content)
     else:
         print(f"! ERROR {message}")
         if details:
@@ -196,6 +212,13 @@ def warning_print(message: str, details: Optional[List[str]] = None) -> None:
         details: Optional list of detail lines to print (indented)
     """
     if _use_rich():
+        rich_console = console
+        if rich_console is None:
+            print(f"! WARNING {message}")
+            if details:
+                for detail in details:
+                    print(f"  {detail}")
+            return
         content = Text()
         content.append("! WARNING ", style="warning.prefix")
         content.append(message)
@@ -203,9 +226,9 @@ def warning_print(message: str, details: Optional[List[str]] = None) -> None:
             for detail in details:
                 content.append(f"\n  {detail}", style="warning.detail")
         if _use_panels():
-            console.print(Panel(content, border_style="yellow", padding=(0, 1)))
+            rich_console.print(Panel(content, border_style="yellow", padding=(0, 1)))
         else:
-            console.print(content)
+            rich_console.print(content)
     else:
         print(f"! WARNING {message}")
         if details:
@@ -220,13 +243,17 @@ def success_print(message: str) -> None:
         message: Success message
     """
     if _use_rich():
+        rich_console = console
+        if rich_console is None:
+            print(f"✓ {message}")
+            return
         content = Text()
         content.append("✓ ", style="success.prefix")
         content.append(message)
         if _use_panels():
-            console.print(Panel(content, border_style="green", padding=(0, 1)))
+            rich_console.print(Panel(content, border_style="green", padding=(0, 1)))
         else:
-            console.print(content)
+            rich_console.print(content)
     else:
         print(f"✓ {message}")
 
@@ -238,7 +265,11 @@ def info_print(message: str) -> None:
         message: Informational message
     """
     if _use_rich():
-        console.print(message, style="info")
+        rich_console = console
+        if rich_console is not None:
+            rich_console.print(message, style="info")
+            return
+        print(message)
     else:
         print(message)
 

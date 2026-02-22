@@ -3,7 +3,7 @@
 
 import os
 import re
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 import gspread
 from icecream import ic
@@ -46,7 +46,7 @@ def format_filesize(size_bytes: float, precision: int = 2) -> str:
         size_bytes = size_bytes / 1024
     return f'{size_bytes:.{precision}f}{suffixes[suffix_index]}'
 
-def get_unique_filename(filename: str) -> str:
+def get_unique_filename(filename: str, file_format: Optional[str] = None) -> str:
     """Generate a unique filename by appending an incremented number.
     
     If a file with the given name already exists, appends '-1', '-2', etc.
@@ -54,31 +54,41 @@ def get_unique_filename(filename: str) -> str:
     
     Args:
         filename: Original filename
+        file_format: File extension to preserve (defaults to config.FILEFORMAT)
         
     Returns:
         Unique filename that doesn't exist in the filesystem
     """
+    fmt = file_format or config.FILEFORMAT
     step = 1
     while True:
         if os.path.isfile(filename):
             if step < 2:
                 # First collision: insert step number before file extension
                 # "file.mp4" -> "file-1.mp4"
-                suffix_pos = filename.find(config.FILEFORMAT)
-                filename = filename[0:suffix_pos] + '-' + str(step) + config.FILEFORMAT
+                suffix_pos = filename.rfind(fmt)
+                if suffix_pos >= 0:
+                    filename = filename[0:suffix_pos] + '-' + str(step) + fmt
+                else:
+                    filename = filename + '-' + str(step)
             else:
                 # Subsequent collisions: replace existing step number
                 # "file-1.mp4" -> "file-2.mp4"
                 dash_pos = filename.rfind('-')
-                filename = filename[0:dash_pos] + '-' + str(step) + config.FILEFORMAT
+                if dash_pos >= 0:
+                    base = filename[0:dash_pos]
+                else:
+                    suffix_pos = filename.rfind(fmt)
+                    base = filename[0:suffix_pos] if suffix_pos >= 0 else filename
+                filename = base + '-' + str(step) + fmt
             step += 1
         else:
             # Found a unique name; truncate if needed and return
-            filename = truncate_filename(filename, step)
+            filename = truncate_filename(filename, step, fmt)
             break
     return filename
 
-def truncate_filename(filename: str, step: int = 1) -> str:
+def truncate_filename(filename: str, step: int = 1, file_format: Optional[str] = None) -> str:
     """Truncate filenames that exceed maximum length.
     
     Truncates to MAX_FILENAME_LENGTH (255 chars on Windows), preserving
@@ -87,20 +97,22 @@ def truncate_filename(filename: str, step: int = 1) -> str:
     Args:
         filename: Filename to truncate
         step: Step number for unique filename generation (default: 1)
+        file_format: File extension to preserve (defaults to config.FILEFORMAT)
         
     Returns:
         Truncated filename that fits within max length
     """
+    fmt = file_format or config.FILEFORMAT
     if len(filename) > config.MAX_FILENAME_LENGTH:
         if step > 1:
             utils.debug_print(f'Filename was longer than {config.MAX_FILENAME_LENGTH} chars ({filename}, length {len(filename)})')
             # Reserve space for: dash + step number + extension (e.g., "-2.mp4")
-            max_base_len = config.MAX_FILENAME_LENGTH - (1 + len(str(step)) + len(config.FILEFORMAT))
-            filename = filename[0:max_base_len] + '-' + str(step) + config.FILEFORMAT
+            max_base_len = config.MAX_FILENAME_LENGTH - (1 + len(str(step)) + len(fmt))
+            filename = filename[0:max_base_len] + '-' + str(step) + fmt
         else:
             # Reserve space for extension only (e.g., ".mp4")
-            max_base_len = config.MAX_FILENAME_LENGTH - len(config.FILEFORMAT)
-            filename = filename[0:max_base_len] + config.FILEFORMAT
+            max_base_len = config.MAX_FILENAME_LENGTH - len(fmt)
+            filename = filename[0:max_base_len] + fmt
     return filename
 
 def prepare_clip(clip: Dict[str, Any]) -> Dict[str, Any]:

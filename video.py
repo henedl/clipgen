@@ -146,6 +146,134 @@ def run_ffmpeg(input_file: str, output_file: str, start_pos: str, end_pos: str, 
              f"Output file: '{output_file}'"])
         return False
 
+
+def extract_screenshot(input_file: str, output_file: str, timestamp: str) -> bool:
+    """Extract a single screenshot frame at the given timestamp.
+
+    Args:
+        input_file: Path to input video file
+        output_file: Path for output screenshot file (.png)
+        timestamp: Timestamp to capture (format: HH:MM:SS or MM:SS)
+
+    Returns:
+        True if screenshot was generated successfully, False otherwise.
+    """
+    if config.DEBUGGING:
+        ic(input_file, output_file, timestamp)
+    if not os.path.isfile(input_file):
+        utils.error_print(f"Input video file not found: '{input_file}'",
+            [f"Expected location: {os.path.join(os.getcwd(), input_file)}",
+             "Skipping this screenshot."])
+        return False
+
+    utils.verbose_print(f"Extracting screenshot from {input_file} at {timestamp}.")
+    if config.DEBUGGING:
+        utils.debug_print(f'Debugging enabled, not calling ffmpeg.\n  input_file: {input_file},\n  output_file: {output_file}')
+        return False
+
+    ffmpeg_command = [
+        'ffmpeg', '-y', '-loglevel', '16',
+        '-ss', timestamp, '-i', input_file,
+        '-vframes', '1', '-q:v', '2',
+        output_file,
+    ]
+    utils.debug_print(f"ffmpeg screenshot command: {' '.join(ffmpeg_command)}")
+
+    try:
+        result = subprocess.run(ffmpeg_command, encoding='utf-8', capture_output=True)
+        if result.returncode != 0:
+            error_details = [f"Input: '{input_file}', Output: '{output_file}'", f"Timestamp: {timestamp}"]
+            if result.stderr:
+                error_details.append(f"ffmpeg error: {result.stderr.strip()}")
+            utils.error_print(f"ffmpeg screenshot failed with exit code {result.returncode}", error_details)
+            return False
+        if not os.path.isfile(output_file):
+            utils.error_print(f"ffmpeg screenshot completed but output file was not created: '{output_file}'")
+            return False
+        utils.verbose_print(f"+ Generated screenshot '{output_file}' successfully.\n File size: {files.format_filesize(os.path.getsize(output_file))}\n")
+        return True
+    except FileNotFoundError:
+        utils.error_print("ffmpeg is not installed or not found in system PATH.",
+            ["Please install ffmpeg and ensure it's in your PATH.",
+             "Download from: https://www.ffmpeg.org/download.html"])
+        return False
+    except OSError as e:
+        utils.error_print("ffmpeg could not successfully run for screenshot extraction.",
+            [f"Error: {e}",
+             f"Working directory: '{os.getcwd()}'",
+             f"Input file: '{input_file}'",
+             f"Output file: '{output_file}'"])
+        return False
+
+
+def extract_gif(input_file: str, output_file: str, timestamp: str, duration_seconds: int) -> bool:
+    """Extract a GIF segment starting at timestamp.
+
+    Args:
+        input_file: Path to input video file
+        output_file: Path for output GIF file (.gif)
+        timestamp: Start timestamp (format: HH:MM:SS or MM:SS)
+        duration_seconds: GIF duration in seconds
+
+    Returns:
+        True if GIF was generated successfully, False otherwise.
+    """
+    if config.DEBUGGING:
+        ic(input_file, output_file, timestamp, duration_seconds)
+    if not os.path.isfile(input_file):
+        utils.error_print(f"Input video file not found: '{input_file}'",
+            [f"Expected location: {os.path.join(os.getcwd(), input_file)}",
+             "Skipping this GIF."])
+        return False
+    if duration_seconds <= 0:
+        utils.error_print(f"Invalid GIF duration: {duration_seconds}",
+            ["Duration must be greater than 0 seconds."])
+        return False
+
+    utils.verbose_print(f"Extracting GIF from {input_file} at {timestamp} ({duration_seconds}s).")
+    if config.DEBUGGING:
+        utils.debug_print(f'Debugging enabled, not calling ffmpeg.\n  input_file: {input_file},\n  output_file: {output_file}')
+        return False
+
+    ffmpeg_command = [
+        'ffmpeg', '-y', '-loglevel', '16',
+        '-ss', timestamp, '-t', str(duration_seconds), '-i', input_file,
+        '-vf', 'fps=10,scale=480:-1:flags=lanczos',
+        '-loop', '0',
+        output_file,
+    ]
+    utils.debug_print(f"ffmpeg gif command: {' '.join(ffmpeg_command)}")
+
+    try:
+        result = subprocess.run(ffmpeg_command, encoding='utf-8', capture_output=True)
+        if result.returncode != 0:
+            error_details = [
+                f"Input: '{input_file}', Output: '{output_file}'",
+                f"Timestamp: {timestamp}, Duration: {duration_seconds}s",
+            ]
+            if result.stderr:
+                error_details.append(f"ffmpeg error: {result.stderr.strip()}")
+            utils.error_print(f"ffmpeg GIF extraction failed with exit code {result.returncode}", error_details)
+            return False
+        if not os.path.isfile(output_file):
+            utils.error_print(f"ffmpeg GIF extraction completed but output file was not created: '{output_file}'")
+            return False
+        utils.verbose_print(f"+ Generated GIF '{output_file}' successfully.\n File size: {files.format_filesize(os.path.getsize(output_file))}\n")
+        return True
+    except FileNotFoundError:
+        utils.error_print("ffmpeg is not installed or not found in system PATH.",
+            ["Please install ffmpeg and ensure it's in your PATH.",
+             "Download from: https://www.ffmpeg.org/download.html"])
+        return False
+    except OSError as e:
+        utils.error_print("ffmpeg could not successfully run for GIF extraction.",
+            [f"Error: {e}",
+             f"Working directory: '{os.getcwd()}'",
+             f"Input file: '{input_file}'",
+             f"Output file: '{output_file}'"])
+        return False
+
+
 def get_file_duration(filepath: str) -> Optional[int]:
     """Calls ffprobe to get duration of video container.
     
