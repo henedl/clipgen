@@ -7,4 +7,4 @@
 
 ## Learned Workspace Facts
 
-- **Version bump:** When making substantive code changes (fixes or features), increment the patch (last number) of `VERSIONNUM` in [config.py](config.py); see [CLAUDE.md](CLAUDE.md) § Version.
+- When making substantive code changes (fixes or features), increment the patch (last number) of VERSIONNUM in config.py.
