@@ -9,6 +9,11 @@ pyrightconfig.json
 Icon?
 .nova/
 
+# Test artifacts
+tests/__pycache__/
+tests/.pytest_cache/
+.pytest_cache/
+
 # Working docs
 *.mp4
 *.flv
