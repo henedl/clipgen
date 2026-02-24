@@ -1,5 +1,5 @@
 # clipgen.spec
-# Build with: pyinstaller --clean --noconfirm clipgen.spec
+# Build with: pyinstaller --clean --noconfirm build/clipgen.spec
 
 from PyInstaller.utils.hooks import collect_data_files, collect_submodules
 
@@ -16,8 +16,8 @@ datas += collect_data_files("rich")
 
 
 a = Analysis(
-    ["clipgen.py"],
-    pathex=[],
+    ["../clipgen.py"],
+    pathex=[".."],
     binaries=[],
     datas=datas,
     hiddenimports=hiddenimports,

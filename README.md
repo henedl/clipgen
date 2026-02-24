@@ -43,7 +43,7 @@ clipgen can be packaged as a single-file executable with PyInstaller.
 - Install build dependency:
   - `pip install pyinstaller`
 - Build using the included spec:
-  - `pyinstaller --clean --noconfirm clipgen.spec`
+  - `pyinstaller --clean --noconfirm build/clipgen.spec`
 - Output binaries:
   - macOS: `dist/clipgen`
   - Windows: `dist/clipgen.exe`

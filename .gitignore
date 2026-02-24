@@ -30,5 +30,6 @@ tests/.pytest_cache/
 __pycache__/
 
 # PyInstaller artifacts
-build/
+build/*
+!build/clipgen.spec
 dist/
