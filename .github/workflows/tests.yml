@@ -22,4 +22,4 @@ jobs:
           pip install -r requirements.txt
 
       - name: Run smoke tests
-        run: pytest -q
+        run: pytest -c tests/pytest.ini

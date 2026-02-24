@@ -66,7 +66,7 @@ clipgen can be packaged as a single-file executable with PyInstaller.
 ## Testing
 
 - Run the smoke test suite before releases and when adding features:
-  - `pytest -q`
+  - `pytest -c tests/pytest.ini`
 - Contributor rule:
   - Every new CLI mode, flag, or selector should include at least one smoke test in the same PR.
 
