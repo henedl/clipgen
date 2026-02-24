@@ -33,6 +33,13 @@ The program was created to speed up data processing during playtests and is prov
 - Sheets can be browsed interactively through the program; no need to have a web browser always open.
 - Clipgen can also generate highlight reels based on your input, combining multiple clips into a single video file.
 
+## Testing
+
+- Run the smoke test suite before releases and when adding features:
+  - `pytest -q`
+- Contributor rule:
+  - Every new CLI mode, flag, or selector should include at least one smoke test in the same PR.
+
 ### About the spreadsheet
 
 clipgen assumes that you are using a spreadsheet with a particular layout. A reference spreadsheet is [available here](https://docs.google.com/spreadsheets/d/1O51wnzRrYyz63tT6qy1HlJyVzdh9RT3t6QL5NohrcPc/edit?usp=sharing) - feel free to make a copy and use it in your studies.

@@ -1,0 +1,107 @@
+from unittest.mock import Mock
+
+import clipgen
+
+
+def _prepared_clip(raw_clip, times):
+    prepared = dict(raw_clip)
+    prepared["times"] = list(times)
+    return prepared
+
+
+def test_process_clips_counts_generated_segments_for_all_formats(monkeypatch, make_clip):
+    raw_clip = make_clip()
+    times = [("00:10", "00:20"), ("00:30", "00:40")]
+    monkeypatch.setattr(clipgen.files, "prepare_clip", lambda clip: _prepared_clip(clip, times))
+    monkeypatch.setattr(clipgen.os.path, "isfile", lambda _path: True)
+    monkeypatch.setattr(clipgen.utils, "create_progress_bar", lambda: None)
+
+    call_counter = {"n": 0}
+
+    def unique_name(_template, file_format=None):
+        call_counter["n"] += 1
+        return f"out_{call_counter['n']}{file_format or '.mp4'}"
+
+    monkeypatch.setattr(clipgen.files, "get_unique_filename", unique_name)
+
+    run_ffmpeg = Mock(return_value=True)
+    extract_screenshot = Mock(return_value=True)
+    extract_gif = Mock(return_value=True)
+    monkeypatch.setattr(clipgen.video, "run_ffmpeg", run_ffmpeg)
+    monkeypatch.setattr(clipgen.video, "extract_screenshot", extract_screenshot)
+    monkeypatch.setattr(clipgen.video, "extract_gif", extract_gif)
+
+    assert clipgen.process_clips([raw_clip], output_format="clip") == 2
+    assert clipgen.process_clips([raw_clip], output_format="screen") == 2
+    assert clipgen.process_clips([raw_clip], output_format="gif") == 2
+
+    assert run_ffmpeg.call_count == 2
+    assert extract_screenshot.call_count == 2
+    assert extract_gif.call_count == 2
+
+
+def test_process_clips_skips_when_source_video_missing(monkeypatch, make_clip):
+    raw_clip = make_clip()
+    monkeypatch.setattr(
+        clipgen.files, "prepare_clip", lambda clip: _prepared_clip(clip, [("00:10", "00:20")])
+    )
+    monkeypatch.setattr(clipgen.os.path, "isfile", lambda _path: False)
+    monkeypatch.setattr(clipgen.utils, "create_progress_bar", lambda: None)
+    run_ffmpeg = Mock(return_value=True)
+    monkeypatch.setattr(clipgen.video, "run_ffmpeg", run_ffmpeg)
+
+    assert clipgen.process_clips([raw_clip], output_format="clip") == 0
+    run_ffmpeg.assert_not_called()
+
+
+def test_process_reel_concatenates_and_cleans_temp_parts(monkeypatch, make_clip):
+    raw_clips = [make_clip(row=3, col=2), make_clip(row=4, col=2)]
+    monkeypatch.setattr(
+        clipgen.files, "prepare_clip", lambda clip: _prepared_clip(clip, [("00:10", "00:20")])
+    )
+    monkeypatch.setattr(clipgen.utils, "create_progress_bar", lambda: None)
+
+    generated_parts = []
+
+    def unique_name(_template, file_format=None):
+        next_name = f"_reel_part_{len(generated_parts) + 1}{file_format or '.mp4'}"
+        generated_parts.append(next_name)
+        return next_name
+
+    monkeypatch.setattr(clipgen.files, "get_unique_filename", unique_name)
+    monkeypatch.setattr(clipgen.video, "run_ffmpeg", lambda **_kwargs: True)
+
+    def fake_isfile(path):
+        # Source videos should exist, and generated temp parts should be removable.
+        return path.endswith(".mp4")
+
+    monkeypatch.setattr(clipgen.os.path, "isfile", fake_isfile)
+
+    concat = Mock(return_value=True)
+    remove = Mock()
+    monkeypatch.setattr(clipgen.video, "concatenate_clips", concat)
+    monkeypatch.setattr(clipgen.os, "remove", remove)
+
+    result = clipgen.process_reel(raw_clips, output_file="reel.mp4")
+    assert result == 1
+    concat.assert_called_once()
+    concat_args = concat.call_args.args[0]
+    assert concat_args == generated_parts
+    assert remove.call_count == len(generated_parts)
+
+
+def test_process_reel_returns_zero_when_no_segments_generated(monkeypatch, make_clip):
+    raw_clips = [make_clip(row=3, col=2)]
+    monkeypatch.setattr(
+        clipgen.files, "prepare_clip", lambda clip: _prepared_clip(clip, [("00:10", "00:20")])
+    )
+    monkeypatch.setattr(clipgen.utils, "create_progress_bar", lambda: None)
+    monkeypatch.setattr(clipgen.files, "get_unique_filename", lambda *_args, **_kwargs: "_reel_part_1.mp4")
+    monkeypatch.setattr(clipgen.video, "run_ffmpeg", lambda **_kwargs: False)
+    monkeypatch.setattr(clipgen.os.path, "isfile", lambda _path: True)
+    concat = Mock(return_value=True)
+    monkeypatch.setattr(clipgen.video, "concatenate_clips", concat)
+
+    result = clipgen.process_reel(raw_clips, output_file="reel.mp4")
+    assert result == 0
+    concat.assert_not_called()
