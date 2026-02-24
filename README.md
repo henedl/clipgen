@@ -33,6 +33,36 @@ The program was created to speed up data processing during playtests and is prov
 - Sheets can be browsed interactively through the program; no need to have a web browser always open.
 - Clipgen can also generate highlight reels based on your input, combining multiple clips into a single video file.
 
+## Build single-file executable
+
+clipgen can be packaged as a single-file executable with PyInstaller.
+
+- Build each platform on that platform:
+  - Build macOS binary on macOS
+  - Build Windows `.exe` on Windows
+- Install build dependency:
+  - `pip install pyinstaller`
+- Build using the included spec:
+  - `pyinstaller --clean --noconfirm clipgen.spec`
+- Output binaries:
+  - macOS: `dist/clipgen`
+  - Windows: `dist/clipgen.exe`
+
+### Runtime expectations for distributed binaries
+
+- Place video files and `credentials.json` in the same folder as the executable.
+- `ffmpeg` and `ffprobe` must be installed and available in `PATH`.
+- The executable uses its own folder as working directory (so local files resolve consistently).
+
+### CI build artifacts
+
+- Cross-platform binaries are built by GitHub Actions workflow:
+  - `.github/workflows/build-binaries.yml`
+- Triggered on tag pushes matching `v*` and manual workflow dispatch.
+- Artifacts are uploaded as:
+  - `clipgen-macos`
+  - `clipgen-windows`
+
 ## Testing
 
 - Run the smoke test suite before releases and when adding features:

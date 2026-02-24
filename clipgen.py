@@ -825,6 +825,18 @@ def setup_encoding() -> None:
         sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
         sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
 
+
+def get_runtime_working_dir() -> str:
+    """Return the runtime working directory.
+
+    Source runs use the script directory; frozen one-file builds use the
+    executable directory so local assets resolve from where the binary lives.
+    """
+    if getattr(sys, 'frozen', False):
+        return os.path.dirname(os.path.abspath(sys.executable))
+    return os.path.dirname(os.path.abspath(__file__))
+
+
 def parse_cli_mode_args(args: Any) -> CliModeArgs:
     """Parse CLI arguments for line, range, and cell modes.
     
@@ -858,7 +870,7 @@ def parse_cli_mode_args(args: Any) -> CliModeArgs:
             if cli_range_start > cli_range_end:
                 utils.error_print(f'Range start ({cli_range_start}) must be less than or equal to end ({cli_range_end})')
                 sys.exit(1)
-        except ValueError as e:
+        except ValueError:
             utils.error_print(f'Invalid range "{args.range}". Use format: 1-10')
             sys.exit(1)
     
@@ -1079,8 +1091,8 @@ def main() -> None:
     # Parse CLI arguments for line, range, and cell modes
     cli_mode_args = parse_cli_mode_args(args)
     
-    # Change working directory to place of python script
-    os.chdir(os.path.dirname(os.path.abspath(__file__)))
+    # Change working directory to runtime location (script/executable)
+    os.chdir(get_runtime_working_dir())
     utils.verbose_print('-------------------------------------------------------------------------------')
     utils.verbose_print(f'Welcome to clipgen v{config.VERSIONNUM}\nWorking directory: {os.getcwd()}\nPlace video files and the credentials.json file in this directory.')
     utils.debug_print('Debug mode is ON. Several limitations apply and more things will be printed.')

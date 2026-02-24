@@ -23,3 +23,7 @@ Icon?
 # Python byte code
 *.py[cod]
 __pycache__/
+
+# PyInstaller artifacts
+build/
+dist/
