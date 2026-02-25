@@ -28,11 +28,10 @@ import gspread
 from icecream import ic
 
 import config
-import google_api
 import utils
 
 
-# Header validation and row-range helpers
+# ---- Header validation and row-range helpers ----
 
 def validate_spreadsheet_headers(sheet: Any) -> Optional[Tuple[Any, Any, Any]]:
     """Validate that required headers exist in the spreadsheet.
@@ -125,7 +124,7 @@ def _interactive_category_selection(categories: List[str]) -> List[str]:
             utils.info_print('Please enter valid numbers separated by commas.')
 
 
-# Clip record construction
+# ---- Clip record construction ----
 
 def _make_clip_record(
     sheet_data: List[List[str]],
@@ -1310,11 +1309,11 @@ def browse_spreadsheet(sheet: Any) -> None:
         if col_idx < len(header_row):
             participant_headers.append(header_row[col_idx])
     
-    utils.info_print(f'\n=== Browse Mode ===')
+    utils.info_print('\n=== Browse Mode ===')
     utils.info_print(f'Total data rows: {total_data_rows} (rows {first_data_row + 1} to {last_data_row + 1})')
     utils.info_print(f'Participants: {", ".join(participant_headers)}')
-    utils.info_print(f'\nCommands: up/u, down/d, pageup/pu, pagedown/pd, jump/j <row>, open/o, quit/q')
-    utils.info_print(f'Press Enter to move down one row.\n')
+    utils.info_print('\nCommands: up/u, down/d, pageup/pu, pagedown/pd, jump/j <row>, open/o, quit/q')
+    utils.info_print('Press Enter to move down one row.\n')
     
     def display_rows(start_row, num_rows):
         """Display num_rows starting from start_row (0-indexed into sheet_data)."""
