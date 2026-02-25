@@ -29,6 +29,8 @@ import spreadsheet
 import utils
 import video
 
+# ---- Mode configuration ----
+
 MODE_ALIASES = {
     'b': 'batch', 'batch': 'batch',
     'l': 'line', 'line': 'line',
@@ -50,12 +52,82 @@ FORMAT_MODE_ALIASES = {
 }
 
 
+# ---- CLI data structures and runtime utilities ----
+
 class CliModeArgs(NamedTuple):
     line_numbers: Optional[List[int]]
     range_start: Optional[int]
     range_end: Optional[int]
     cell_specs: Optional[List[Tuple[str, int]]]
 
+
+def parse_cli_mode_args(args: Any) -> CliModeArgs:
+    """Parse CLI arguments for line, range, and cell modes.
+    
+    Args:
+        args: Parsed command-line arguments
+        
+    Returns:
+        Parsed mode argument values as CliModeArgs
+    """
+    cli_line_numbers = None
+    cli_range_start = None
+    cli_range_end = None
+    cli_cell_specs = None
+    
+    if args.lines:
+        try:
+            # Support both + and , as separators
+            line_str = args.lines.replace(',', '+')
+            cli_line_numbers = [int(num.strip()) for num in line_str.split('+')]
+        except ValueError:
+            utils.error_print(f'Invalid line numbers "{args.lines}". Use format: 1+4+5 or 1,4,5')
+            sys.exit(1)
+    
+    if args.range:
+        try:
+            parts = args.range.split('-')
+            if len(parts) != 2:
+                raise ValueError('Range must have exactly two parts')
+            cli_range_start = int(parts[0].strip())
+            cli_range_end = int(parts[1].strip())
+            if cli_range_start > cli_range_end:
+                utils.error_print(f'Range start ({cli_range_start}) must be less than or equal to end ({cli_range_end})')
+                sys.exit(1)
+        except ValueError:
+            utils.error_print(f'Invalid range "{args.range}". Use format: 1-10')
+            sys.exit(1)
+    
+    if args.cell:
+        try:
+            cli_cell_specs = spreadsheet.parse_cell_specifications(args.cell)
+        except ValueError as e:
+            utils.error_print(f'Invalid cell specification: {e}')
+            sys.exit(1)
+    
+    return CliModeArgs(cli_line_numbers, cli_range_start, cli_range_end, cli_cell_specs)
+
+
+def setup_encoding() -> None:
+    """Ensure UTF-8 encoding for stdout/stderr to handle unicode properly."""
+    encoding = sys.stdout.encoding
+    if not encoding or encoding.lower() != 'utf-8':
+        sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
+        sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
+
+
+def get_runtime_working_dir() -> str:
+    """Return the runtime working directory.
+
+    Source runs use the script directory; frozen one-file builds use the
+    executable directory so local assets resolve from where the binary lives.
+    """
+    if getattr(sys, 'frozen', False):
+        return os.path.dirname(os.path.abspath(sys.executable))
+    return os.path.dirname(os.path.abspath(__file__))
+
+
+# ---- Spreadsheet opening and selection utilities ----
 
 def _open_worksheet(gspread_client: Any, open_callable: Callable[[], Any], error_context: str):
     """Try to open a worksheet via a callable; catch gspread errors and print a consistent message.
@@ -202,6 +274,8 @@ def select_spreadsheet(gspread_client: Any, doc_list: List[str]) -> Any:
         except Exception as e:
             utils.error_print(f"Could not open document: {e}")
 
+
+# ---- Interactive selection helpers (reel, reel-late, screen/gif, browse) ----
 
 def _prompt_timeline_participant_selection(worksheet: Any) -> Optional[str]:
     """Prompt user to pick exactly one participant for timeline reels."""
@@ -522,6 +596,8 @@ def select_mode_and_generate(worksheet: Any) -> Tuple[List[Any], bool, Optional[
             utils.error_print(f"Google Sheets API error: {e}")
             utils.debug_print(f"ERROR Message '{e}', Attempting reconnect")
 
+# ---- Clip processing core pipeline ----
+
 def _process_single_clip_segments(
     clip: Any,
     base_video: str,
@@ -696,7 +772,7 @@ def _process_with_progress(
     total_clips = len(clips_list)
     progress = utils.create_progress_bar()
     results: List[Any] = []
-
+    
     if progress:
         with progress:
             task = progress.add_task(task_label, total=total_clips)
@@ -707,7 +783,7 @@ def _process_with_progress(
                 results.append(process_fn(clip))
                 progress.update(task, advance=1)
         return results
-
+    
     for index, clip in enumerate(clips_list, start=1):
         if show_fallback_counter and config.VERBOSE and total_clips > 1:
             utils.verbose_print(f"Processing clip {index} of {total_clips}...")
@@ -719,7 +795,7 @@ def process_clips(clips_list: List[Any], output_format: str = "clip") -> int:
     """Process and generate outputs from the clips list. Returns count of files generated."""
     if config.DEBUGGING:
         ic(len(clips_list))
-
+    
     def process_single_clip(clip: Any, missing_videos: Set[str]) -> Tuple[int, int]:
         """Process a single clip and return (generated, skipped)."""
         clip, base_video = _prepare_and_check_clip(clip, missing_videos)
@@ -727,7 +803,7 @@ def process_clips(clips_list: List[Any], output_format: str = "clip") -> int:
             return (0, 1)
         if base_video is None:
             return (0, len(clip['times']))
-
+    
         generated_count, _ = _process_single_clip_segments(
             clip,
             base_video,
@@ -737,7 +813,7 @@ def process_clips(clips_list: List[Any], output_format: str = "clip") -> int:
         )
         skipped_count = len(clip['times']) - generated_count if generated_count < len(clip['times']) else 0
         return (generated_count, skipped_count)
-
+    
     results, _ = _run_clip_pipeline(
         clips_list,
         empty_warning="No clips to process. No timestamps were found or selected.",
@@ -748,7 +824,7 @@ def process_clips(clips_list: List[Any], output_format: str = "clip") -> int:
     )
     outputs_generated = sum(generated_count for generated_count, _ in results)
     outputs_skipped = sum(skipped_count for _, skipped_count in results)
-
+    
     item_name = {
         'clip': 'video(s)',
         'screen': 'screenshot(s)',
@@ -819,69 +895,8 @@ def process_reel(clips_list: List[Any], output_file: Optional[str] = None) -> in
     return 1 if ok else 0
 
 
-def setup_encoding() -> None:
-    """Ensure UTF-8 encoding for stdout/stderr to handle unicode properly."""
-    if sys.stdout.encoding.lower() != 'utf-8':
-        sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
-        sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
 
-
-def get_runtime_working_dir() -> str:
-    """Return the runtime working directory.
-
-    Source runs use the script directory; frozen one-file builds use the
-    executable directory so local assets resolve from where the binary lives.
-    """
-    if getattr(sys, 'frozen', False):
-        return os.path.dirname(os.path.abspath(sys.executable))
-    return os.path.dirname(os.path.abspath(__file__))
-
-
-def parse_cli_mode_args(args: Any) -> CliModeArgs:
-    """Parse CLI arguments for line, range, and cell modes.
-    
-    Args:
-        args: Parsed command-line arguments
-        
-    Returns:
-        Parsed mode argument values as CliModeArgs
-    """
-    cli_line_numbers = None
-    cli_range_start = None
-    cli_range_end = None
-    cli_cell_specs = None
-    
-    if args.lines:
-        try:
-            # Support both + and , as separators
-            line_str = args.lines.replace(',', '+')
-            cli_line_numbers = [int(num.strip()) for num in line_str.split('+')]
-        except ValueError:
-            utils.error_print(f'Invalid line numbers "{args.lines}". Use format: 1+4+5 or 1,4,5')
-            sys.exit(1)
-    
-    if args.range:
-        try:
-            parts = args.range.split('-')
-            if len(parts) != 2:
-                raise ValueError('Range must have exactly two parts')
-            cli_range_start = int(parts[0].strip())
-            cli_range_end = int(parts[1].strip())
-            if cli_range_start > cli_range_end:
-                utils.error_print(f'Range start ({cli_range_start}) must be less than or equal to end ({cli_range_end})')
-                sys.exit(1)
-        except ValueError:
-            utils.error_print(f'Invalid range "{args.range}". Use format: 1-10')
-            sys.exit(1)
-    
-    if args.cell:
-        try:
-            cli_cell_specs = spreadsheet.parse_cell_specifications(args.cell)
-        except ValueError as e:
-            utils.error_print(f'Invalid cell specification: {e}')
-            sys.exit(1)
-    
-    return CliModeArgs(cli_line_numbers, cli_range_start, cli_range_end, cli_cell_specs)
+# ---- Google authentication and worksheet selection ----
 
 def authenticate_google() -> Any:
     """Authenticate with Google Sheets API.
@@ -982,6 +997,8 @@ def select_worksheet(gspread_client: Any, doc_list: List[str], args: Any, cli_mo
         utils.verbose_print('\nConnected to Google Drive!')
     return worksheet
 
+# ---- Mode runners and entry point ----
+
 def run_cli_mode(worksheet: Any, args: Any, cli_mode_args: CliModeArgs) -> None:
     """Execute CLI mode - run once and exit.
 
@@ -991,11 +1008,7 @@ def run_cli_mode(worksheet: Any, args: Any, cli_mode_args: CliModeArgs) -> None:
         cli_mode_args: Parsed line/range/cell arguments
     """
     skip_prompts = args.yes
-    output_format = 'clip'
-    if args.screen:
-        output_format = 'screen'
-    elif args.gif:
-        output_format = 'gif'
+    output_format = 'screen' if args.screen else 'gif' if args.gif else 'clip'
 
     if (args.reel or args.timeline) and output_format != 'clip':
         utils.error_print("Reel/timeline mode cannot be combined with --screen or --gif.",
