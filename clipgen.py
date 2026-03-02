@@ -1074,14 +1074,15 @@ def run_cli_mode(worksheet: Any, args: Any, cli_mode_args: CliModeArgs) -> None:
     """
     skip_prompts = args.yes
     output_format = 'screen' if args.screen else 'gif' if args.gif else 'clip'
+    mixed_selectors = getattr(args, 'mixed', None)
 
     if (args.reel or args.timeline) and output_format != 'clip':
         utils.error_print("Reel/timeline mode cannot be combined with --screen or --gif.",
             ["Use reel/timeline mode for a single .mp4 output, or use screen/gif with batch/line/range/category/cell/participant/filter selection."])
         sys.exit(1)
 
-    if args.mixed:
-        parsed_mixed = spreadsheet.parse_reel_input(args.mixed)
+    if mixed_selectors:
+        parsed_mixed = spreadsheet.parse_reel_input(mixed_selectors)
         if parsed_mixed.get('timeline'):
             utils.error_print(
                 "Timeline selector is not supported in mixed mode.",
@@ -1099,7 +1100,7 @@ def run_cli_mode(worksheet: Any, args: Any, cli_mode_args: CliModeArgs) -> None:
         or args.cell
         or args.participant
         or args.filter
-        or args.mixed
+        or mixed_selectors
         or args.reel
         or args.timeline
     )
@@ -1116,11 +1117,11 @@ def run_cli_mode(worksheet: Any, args: Any, cli_mode_args: CliModeArgs) -> None:
         clips_list = spreadsheet.generate_list(worksheet, 'participant', participant_id=args.participant, skip_prompts=skip_prompts)
     elif args.filter:
         clips_list = spreadsheet.generate_list(worksheet, 'filter', skip_prompts=skip_prompts)
-    elif args.mixed:
+    elif mixed_selectors:
         clips_list = spreadsheet.generate_list(
             worksheet,
             'reel',
-            reel_input=args.mixed,
+            reel_input=mixed_selectors,
             skip_prompts=skip_prompts,
         )
     elif args.reel:
@@ -1190,6 +1191,7 @@ def main() -> None:
         ic(args)
     
     # Determine if running in CLI mode (any mode argument provided)
+    mixed_selectors = getattr(args, 'mixed', None)
     cli_mode = (
         args.batch
         or args.lines
@@ -1197,7 +1199,7 @@ def main() -> None:
         or args.cell
         or args.participant
         or args.filter
-        or args.mixed
+        or mixed_selectors
         or args.reel
         or args.timeline
         or args.screen
