@@ -31,7 +31,7 @@ def test_build_ffmpeg_cut_command_includes_expected_flags():
 
 
 def test_concatenate_clips_reencode_fallback(monkeypatch):
-    monkeypatch.setattr(video.os.path, "isfile", lambda _path: True)
+    monkeypatch.setattr(video.Path, "is_file", lambda self: True)
     monkeypatch.setattr(video, "_verify_output_file", lambda *_args, **_kwargs: True)
 
     captured_commands = []
