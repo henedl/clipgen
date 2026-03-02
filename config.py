@@ -60,7 +60,7 @@ RICH_PANELS = True    # Use bordered panels for errors/warnings/success messages
 RICH_PROGRESS = True  # Show progress bars during batch/reel processing
 
 # Textual TUI settings
-TEXTUAL_TUI = False    # Use Textual interactive screens (settings, browse, category selection)
+TEXTUAL_TUI = False    # Use Textual interactive screens
 
 # Settings descriptions (shown in TUI settings screen)
 SETTINGS_DESCRIPTIONS = {
