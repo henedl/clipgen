@@ -2,4 +2,5 @@ gspread>=3.7.0
 openpyxl>=3.1.5
 icecream>=2.1.10
 rich>=13.0.0
+textual>=0.80.0
 pytest

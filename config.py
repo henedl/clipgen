@@ -7,7 +7,7 @@ from icecream import ic
 REENCODING = False
 AUDIO_NORMALIZE = False
 FILEFORMAT = '.mp4'
-VERSIONNUM = '0.7.14'
+VERSIONNUM = '0.7.17'
 WORKSHEET_PRIORITY = ['Sheet1', 'Data', 'data', 'Observations', 'Data set', 'data set', 'dataset', 'Dataset']
 DEBUGGING = False
 VERBOSE = True  # Set to False in CLI mode unless -v flag is used
@@ -58,3 +58,21 @@ MAX_SKIPPED_TIMESTAMPS_TO_SHOW = 3  # Max skipped timestamps to list in parse_ti
 RICH_COLORS = True    # Enable/disable colored output (set False for piped output)
 RICH_PANELS = True    # Use bordered panels for errors/warnings/success messages
 RICH_PROGRESS = True  # Show progress bars during batch/reel processing
+
+# Textual TUI settings
+TEXTUAL_TUI = False    # Use Textual interactive screens (settings, browse, category selection)
+
+# Settings descriptions (shown in TUI settings screen)
+SETTINGS_DESCRIPTIONS = {
+    'REENCODING': 'Re-encode clips via ffmpeg instead of stream-copying. Slower but fixes some codec issues.',
+    'AUDIO_NORMALIZE': 'Normalize audio levels across generated clips for consistent volume.',
+    'FILEFORMAT': 'Output container format for generated video clips.',
+    'MAX_FILESIZE_MB': 'Compress output to stay under this size limit. Set to 0 to disable.',
+    'DEFAULT_DURATION_SECONDS': 'Clip length when only a start time is provided.',
+    'MAX_CLIP_DURATION_SECONDS': 'Prompt for confirmation before generating clips longer than this.',
+    'DEBUGGING': 'Enable debug output via icecream and skip ffmpeg execution.',
+    'RICH_COLORS': 'Use colored terminal output via Rich library.',
+    'RICH_PANELS': 'Show bordered panels for error, warning, and success messages.',
+    'RICH_PROGRESS': 'Display progress bars during batch and reel processing.',
+    'TEXTUAL_TUI': 'Use Textual interactive screens for settings, browse, and category selection.',
+}

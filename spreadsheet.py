@@ -28,6 +28,7 @@ import gspread
 from icecream import ic
 
 import config
+import tui
 import utils
 
 
@@ -92,6 +93,12 @@ def _validate_row_range(start_line: int, end_line: int, max_row: int) -> Optiona
 
 def _interactive_category_selection(categories: List[str]) -> List[str]:
     """Interactive category selection: show numbered list, parse input, validate, confirm. Returns selected category names."""
+    if tui.use_textual():
+        result = tui.run_category_select(categories)
+        if result is not None:
+            return result
+        return []
+
     utils.info_print('\nAvailable categories:')
     for i, cat in enumerate(categories, 1):
         utils.info_print(f'  {i}. {cat}')
@@ -1310,7 +1317,35 @@ def browse_spreadsheet(sheet: Any) -> None:
     for col_idx in range(id_cell.col, id_cell.col + num_participants):
         if col_idx < len(header_row):
             participant_headers.append(header_row[col_idx])
-    
+
+    # Textual TUI path: build all rows and launch interactive DataTable browser
+    if tui.use_textual():
+        category_col = category_cell.col - 1
+        desc_col = observation_cell.col - 1
+        all_rows_data = []
+        for row_idx in range(first_data_row, last_data_row + 1):
+            row_data = sheet_data[row_idx]
+            row_num = row_idx + 1
+            category = row_data[category_col] if category_col < len(row_data) else ''
+            description = row_data[desc_col] if desc_col < len(row_data) else ''
+            timestamps = {}
+            for j, participant_id in enumerate(participant_headers):
+                col = id_cell.col + j
+                if col < len(row_data):
+                    val = row_data[col]
+                    if val and val.strip():
+                        timestamps[participant_id] = val.replace('\n', ', ').replace('\r', '')
+            all_rows_data.append({
+                'row_num': row_num,
+                'category': category or '(empty)',
+                'description': description or '(empty)',
+                'timestamps': timestamps,
+            })
+        study_name = getattr(getattr(sheet, 'spreadsheet', None), 'title', '')
+        browse_title = f"Browse: {study_name}" if study_name else "Browse Mode"
+        tui.run_browse(all_rows_data, participant_headers, title=browse_title)
+        return
+
     utils.info_print('\n=== Browse Mode ===')
     utils.info_print(f'Total data rows: {total_data_rows} (rows {first_data_row + 1} to {last_data_row + 1})')
     utils.info_print(f'Participants: {", ".join(participant_headers)}')

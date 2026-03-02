@@ -666,7 +666,11 @@ class QuitProgram(Exception):
     """Signal that the user requested to quit the program from an interactive prompt."""
 
 
-class BackToTop(Exception):
+class TopToSpreadsheet(Exception):
+    """Signal that the user requested to return to spreadsheet selection."""
+
+
+class BackToModeSelection(Exception):
     """Signal that the user requested to return to the main mode selection prompt."""
 
 
@@ -675,7 +679,8 @@ def read_user_input(prompt: str) -> str:
 
     Recognizes the following keywords when they appear as the first token:
     - 'quit' / 'exit' -> quit program
-    - 'top' / 'back'  -> return to main mode selection
+    - 'top'           -> return to spreadsheet selection
+    - 'back'          -> return to main mode selection
     """
     raw = input(prompt)
     value = raw.strip()
@@ -686,9 +691,12 @@ def read_user_input(prompt: str) -> str:
     if first_token in ('quit', 'exit'):
         info_print('Exiting clipgen.')
         raise QuitProgram()
-    if first_token in ('top', 'back'):
-        info_print('Returning to top input.')
-        raise BackToTop()
+    if first_token == 'top':
+        info_print('Returning to spreadsheet selection.')
+        raise TopToSpreadsheet()
+    if first_token == 'back':
+        info_print('Returning to mode selection.')
+        raise BackToModeSelection()
 
     return value
 
