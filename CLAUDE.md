@@ -14,10 +14,11 @@ clipgen is a Python CLI tool that generates clips from timestamps stored in a Go
 | [spreadsheet.py](spreadsheet.py) | Spreadsheet parsing, header validation, selector parsing (`reel` input), timestamp generation for all modes |
 | [video.py](video.py) | ffmpeg/ffprobe operations: cut clips, screenshots, GIFs, concatenate reels, optional filesize compression |
 | [files.py](files.py) | Filename handling (unique names, truncation), `prepare_clip()` (parse timestamps + annotations, sanitize desc/category), clip discovery for reel-late |
-| [utils.py](utils.py) | Timestamp parsing, cell/header annotation parsing, CLI argument parsing, rich/plain output helpers, progress bar utilities |
+| [utils.py](utils.py) | Timestamp parsing, cell/header annotation parsing, CLI argument parsing, rich/plain output helpers, progress bar utilities, keyword-aware input helpers |
 | [config.py](config.py) | Global constants and settings (version, headers, limits, commands) |
 | [google_api.py](google_api.py) | Google Sheets auth, worksheet selection by priority, spreadsheet listing/search |
 | [excel_io.py](excel_io.py) | Excel adapter: `ExcelSheetAdapter` mimics gspread Worksheet interface for local .xlsx |
+| [tui.py](tui.py) | Optional Textual-based TUI for settings, browse, and reel building when `TEXTUAL_TUI` is enabled |
 
 ## Key data structures
 
@@ -44,6 +45,10 @@ Source video filenames follow `{study}_{participant}.mp4` (e.g. `mystudy_P01.mp4
 - **Participant IDs:** Headers must start with `P` (individual) or `G` (group); see `config.PARTICIPANT_PREFIXES`.
 - **User feedback:** Use `utils.error_print()`, `utils.warning_print()`, `utils.verbose_print()`, `utils.info_print()`. Prefer these over direct `print()` for user-facing messages.
 - **Debug:** Set `config.DEBUGGING = True` to enable icecream output and to skip ffmpeg execution paths in [video.py](video.py).
+- **Interactive keywords:** All interactive prompts go through `utils.read_user_input()`, which treats first-token commands as:
+  - `quit` / `exit` → exit clipgen
+  - `top` → return to spreadsheet selection
+  - `back` → return to mode selection (or spreadsheet selection if already at mode selection)
 
 ## Modes
 
@@ -94,8 +99,8 @@ Reference spreadsheet layout is described in [README.md](README.md).
 
 ## Version
 
-- The version is stored as `VERSIONNUM` in [config.py](config.py) (currently `'0.7.12'`).
-- **When making substantive code changes** (bug fixes or features), increment the **last segment only** (patch) in `config.py`, e.g. `0.7.12` → `0.7.13`. Do not bump for docs-only, comment-only, or refactor-only changes unless they affect user-visible behavior.
+- The version is stored as `VERSIONNUM` in [config.py](config.py) (currently `'0.7.17'`).
+- **When making substantive code changes** (bug fixes or features), increment the **last segment only** (patch) in `config.py`, e.g. `0.7.17` → `0.7.18`. Do not bump for docs-only, comment-only, or refactor-only changes unless they affect user-visible behavior.
 
 ## Testing notes
 
