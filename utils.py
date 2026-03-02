@@ -82,47 +82,47 @@ def create_progress_bar(description: str = "Processing"):
 
 def parse_arguments() -> argparse.Namespace:
     """Parse command-line arguments for non-interactive mode.
-
-    Exactly one of the mode flags (-b, -l, -r, -c, -p, -f, -R, -T) may be given; if none
-    is given, the program runs in interactive mode. Optional flags (-s, -y, -v,
-    --screen, --gif)
-    may be combined with any mode.
-
+    
+    Exactly one of the mode flags (-b, -l, -r, -c, -p, -f, -M, -R, -T) may be given;
+    if none is given, the program runs in interactive mode. Optional flags (-s, -y,
+    -v, --screen, --gif) may be combined with any mode.
+    
     Returns:
         argparse.Namespace with attributes: batch, lines, range, cell,
-        participant, filter, reel, timeline (mode flags/values), spreadsheet, yes,
-        verbose, screen, gif.
+        participant, filter, mixed, reel, timeline (mode flags/values),
+        spreadsheet, yes, verbose, screen, gif.
     """
     parser = argparse.ArgumentParser(
         description='clipgen - Video clip generator from Google Sheets timestamps.',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog='''
 Examples:
-  python clipgen.py                    Interactive mode (default)
-  python clipgen.py -b                 Batch mode - generate all clips
-  python clipgen.py -l 5               Single line mode - line 5
-  python clipgen.py -l 1+4+5           Multi-line mode - lines 1, 4, and 5
-  python clipgen.py -l 1,4,5           Multi-line mode (comma separator)
-  python clipgen.py -r 1-10            Range mode - lines 1 through 10
-  python clipgen.py -c "P01.11"        Cell mode - single cell (participant P01, row 11)
-  python clipgen.py -c "P01.11 + P03.11" Cell mode - multiple cells
-  python clipgen.py -p P01             Participant mode - all clips for participant P01
-  python clipgen.py -p "P01,P03"       Participant mode - all clips for P01 and P03
-  python clipgen.py -f                 Filter mode - only key-marked clips/timestamps
-  python clipgen.py -b -s "Study Name" Batch mode with specific spreadsheet
-  python clipgen.py -l 5 -y            Line mode, skip confirmation prompts
-  python clipgen.py -b -v              Batch mode with verbose output
+  python clipgen.py                        Interactive mode (default)
+  python clipgen.py -b                     Batch mode - generate all clips
+  python clipgen.py -l 5                   Single line mode - line 5
+  python clipgen.py -l 1+4+5               Multi-line mode - lines 1, 4, and 5
+  python clipgen.py -l 1,4,5               Multi-line mode (comma separator)
+  python clipgen.py -r 1-10                Range mode - lines 1 through 10
+  python clipgen.py -c "P01.11"            Cell mode - single cell (participant P01, row 11)
+  python clipgen.py -c "P01.11 + P03.11"   Cell mode - multiple cells
+  python clipgen.py -p P01                 Participant mode - all clips for participant P01
+  python clipgen.py -p "P01,P03"           Participant mode - all clips for P01 and P03
+  python clipgen.py -f                     Filter mode - only key-marked clips/timestamps
+  python clipgen.py -M "5, P01.11, 13-16"  Mixed mode - combine selectors for individual outputs
+  python clipgen.py -b -s "Study Name"     Batch mode with specific spreadsheet
+  python clipgen.py -l 5 -y                Line mode, skip confirmation prompts
+  python clipgen.py -b -v                  Batch mode with verbose output
   python clipgen.py -R "11, 13-16, P01, \\"Observations\\""  Reel mode - one combined video
-  python clipgen.py -T P01             Timeline mode - chronological reel for participant P01
-  python clipgen.py -b --screen        Batch mode screenshots (.png)
-  python clipgen.py -l 5 --gif         Line mode GIF output (.gif)
-
-Note: Non-interactive mode (using -b, -l, -r, -c, -p, -f, -R, or -T) is silent by default,
+  python clipgen.py -T P01                 Timeline mode - chronological reel for participant P01
+  python clipgen.py -b --screen            Batch mode screenshots (.png)
+  python clipgen.py -l 5 --gif             Line mode GIF output (.gif)
+ 
+Note: Non-interactive mode (using -b, -l, -r, -c, -p, -f, -M, -R, or -T) is silent by default,
       only showing errors and the final summary. Use -v for full output.
 '''
     )
 
-    # Mode arguments: only one of -b/-l/-r/-c/-p/-f/-R/-T may be set at a time
+    # Mode arguments: only one of -b/-l/-r/-c/-p/-f/-M/-R/-T may be set at a time
     mode_group = parser.add_mutually_exclusive_group()
     mode_group.add_argument('-b', '--batch', action='store_true',
         help='Batch mode: generate all possible clips')
@@ -136,6 +136,8 @@ Note: Non-interactive mode (using -b, -l, -r, -c, -p, -f, -R, or -T) is silent b
         help='Participant mode: generate all clips for one or more participants (e.g., P01 or P01,P03)')
     mode_group.add_argument('-f', '--filter', action='store_true',
         help='Filter mode: generate only key-marked clips/timestamps')
+    mode_group.add_argument('-M', '--mixed', type=str, metavar='SELECTORS',
+        help='Mixed mode: combine selectors (e.g. "5, P01.11, 13-16") for individual clips/screenshots/GIFs')
     mode_group.add_argument('-R', '--reel', type=str, metavar='SELECTORS',
         help='Reel mode: combine selectors (e.g. "11, 13-16, P01, \\"Observations\\"") into one video')
     mode_group.add_argument('-T', '--timeline', type=str, metavar='PARTICIPANT',

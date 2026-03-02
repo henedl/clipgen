@@ -494,7 +494,7 @@ def _run_format_mode_interactive(worksheet: Any, output_format: str) -> None:
         selection = input(
             '\nSelect source rows for this output:\n'
             '  Modes: (b)atch, (r)ange, (c)ategory, (l)ine, (ce)ll, (p)articipant, (f)ilter\n'
-            '  Or enter directly: line numbers (5, 7), ranges (13-16), cells (P01.11), participants (P01)\n>> '
+            '  Or enter mixed selectors directly: e.g. 5, P01.11, 13-16, "Observations"\n>> '
         ).strip()
         if not selection:
             utils.info_print("  Please enter a mode or direct input (e.g. P01.11, 5, 7, 13-16, P01).")
@@ -504,6 +504,7 @@ def _run_format_mode_interactive(worksheet: Any, output_format: str) -> None:
         if mode:
             clips_list = spreadsheet.generate_list(worksheet, mode)
             break
+
         detected_mode, detected_kwargs = spreadsheet.detect_mode_from_input(selection)
         if detected_mode in ('batch', 'line', 'range', 'category', 'cell', 'participant', 'filter'):
             utils.verbose_print(f"  {detected_mode.capitalize()} mode detected.")
@@ -512,14 +513,51 @@ def _run_format_mode_interactive(worksheet: Any, output_format: str) -> None:
         if detected_mode in ('reel', 'browse'):
             utils.info_print('  This mode is not available for screen/gif output. Choose batch/line/range/category/cell/participant/filter.')
             continue
-        utils.info_print(f"  Unknown mode or input '{selection}'. Available modes:")
-        utils.info_print("    b or batch   - Generate from all clips in the spreadsheet")
-        utils.info_print("    r or range   - Generate from a range of rows")
-        utils.info_print("    c or category - Generate by category")
-        utils.info_print("    l or line    - Generate from specific line(s)")
-        utils.info_print("    ce or cell   - Generate from specific cell(s) (e.g., P01.11)")
-        utils.info_print("    p or participant - Generate all outputs for one participant")
-        utils.info_print("    f or filter  - Generate only key-marked outputs")
+
+        parsed = spreadsheet.parse_reel_input(selection)
+        has_timeline = bool(parsed.get('timeline'))
+        has_batch = bool(parsed.get('batch'))
+        has_filter = bool(parsed.get('filter'))
+        has_lines = len(parsed['lines']) > 0
+        has_ranges = len(parsed['ranges']) > 0
+        has_cells = len(parsed['cells']) > 0
+        has_participants = len(parsed['participants']) > 0
+        has_categories = len(parsed['categories']) > 0
+
+        selector_types = [
+            ('batch', has_batch),
+            ('filter', has_filter),
+            ('lines', has_lines),
+            ('ranges', has_ranges),
+            ('cells', has_cells),
+            ('participants', has_participants),
+            ('categories', has_categories),
+        ]
+        non_empty_types = [name for name, present in selector_types if present]
+
+        if not non_empty_types:
+            utils.info_print(f"  Unknown mode or input '{selection}'. Available modes:")
+            utils.info_print("    b or batch   - Generate from all clips in the spreadsheet")
+            utils.info_print("    r or range   - Generate from a range of rows")
+            utils.info_print("    c or category - Generate by category")
+            utils.info_print("    l or line    - Generate from specific line(s)")
+            utils.info_print("    ce or cell   - Generate from specific cell(s) (e.g., P01.11)")
+            utils.info_print("    p or participant - Generate all outputs for one participant")
+            utils.info_print("    f or filter  - Generate only key-marked outputs")
+            continue
+
+        if has_timeline:
+            utils.info_print('  Timeline selector is only available for reel/timeline modes.')
+            utils.info_print('  Use reel/timeline for a single .mp4 output, not for screenshots/GIFs.')
+            continue
+
+        utils.verbose_print(
+            "  Mixed selectors detected ("
+            + ", ".join(non_empty_types)
+            + "). Generating individual outputs from combined selectors.",
+        )
+        clips_list = spreadsheet.generate_list(worksheet, 'reel', reel_input=selection)
+        break
 
     outputs_generated = process_clips(clips_list, output_format=output_format)
     utils.info_print(f'All done, created {outputs_generated} {output_label}!\nFiles are in {os.getcwd()}\n')
@@ -531,7 +569,7 @@ def select_mode_and_generate(worksheet: Any) -> Tuple[List[Any], bool, Optional[
         input_mode = input(
             '\nEnter mode or input directly:\n'
             '  Modes: (b)atch, (r)ange, (c)ategory, (l)ine, (ce)ll, (p)articipant, (f)ilter, (s)creen, (g)if, (re)el, (rl) reel-late, (br)owse\n'
-            '  Or enter directly: line numbers (5, 7), ranges (13-16), cells (P01.11), participants (P01)\n>> '
+            '  Or enter mixed selectors directly: e.g. 5, P01.11, 13-16, "Observations"\n>> '
         ).strip()
         if not input_mode:
             utils.info_print("  Please enter a mode or direct input (e.g. P01.11, 5, 7, 13-16, P01).")
@@ -561,24 +599,35 @@ def select_mode_and_generate(worksheet: Any) -> Tuple[List[Any], bool, Optional[
             if mode:
                 return (spreadsheet.generate_list(worksheet, mode), False, None)
 
-            # Try implicit mode detection from input syntax
+            # Try implicit mode detection from input syntax for single-type inputs
             detected_mode, detected_kwargs = spreadsheet.detect_mode_from_input(input_mode)
             if detected_mode:
                 utils.verbose_print(f"  {detected_mode.capitalize()} mode detected.")
                 return (spreadsheet.generate_list(worksheet, detected_mode, **detected_kwargs), False, None)
 
-            # No mode and no detection: check for mixed input to give a helpful message
+            # Fallback: treat as mixed selector input using reel parsing, but keep outputs as individual clips
             parsed = spreadsheet.parse_reel_input(input_mode)
-            types_present = [
-                ('lines', parsed['lines']),
-                ('ranges', parsed['ranges']),
-                ('cells', parsed['cells']),
-                ('participants', parsed['participants']),
+            has_batch = bool(parsed.get('batch'))
+            has_filter = bool(parsed.get('filter'))
+            has_timeline = bool(parsed.get('timeline'))
+            has_lines = len(parsed['lines']) > 0
+            has_ranges = len(parsed['ranges']) > 0
+            has_cells = len(parsed['cells']) > 0
+            has_participants = len(parsed['participants']) > 0
+            has_categories = len(parsed['categories']) > 0
+
+            selector_types = [
+                ('batch', has_batch),
+                ('filter', has_filter),
+                ('lines', has_lines),
+                ('ranges', has_ranges),
+                ('cells', has_cells),
+                ('participants', has_participants),
+                ('categories', has_categories),
             ]
-            non_empty = [name for name, vals in types_present if vals]
-            if len(non_empty) > 1:
-                utils.info_print("  Mixed input types detected (" + ", ".join(non_empty) + "). Use 're' or 'reel' mode to combine selectors.")
-            else:
+            non_empty_types = [name for name, present in selector_types if present]
+
+            if not non_empty_types:
                 utils.info_print(f"  Unknown mode or input '{input_mode}'. Available modes:")
                 utils.info_print("    b or batch   - Generate all clips in the spreadsheet")
                 utils.info_print("    r or range   - Generate clips from a range of rows")
@@ -592,6 +641,22 @@ def select_mode_and_generate(worksheet: Any) -> Tuple[List[Any], bool, Optional[
                 utils.info_print("    re or reel   - Combine selectors into one highlight reel video")
                 utils.info_print("    rl or reellate - Combine existing clips into a highlight reel")
                 utils.info_print("    br or browse - Browse spreadsheet rows interactively")
+                continue
+
+            if has_timeline:
+                utils.info_print(
+                    "  Timeline selector is only supported for reel/timeline modes.",
+                )
+                utils.info_print("  Use 're' or 'reel' for a combined reel video, or -T on the command line.")
+                continue
+
+            utils.verbose_print(
+                "  Mixed selectors detected ("
+                + ", ".join(non_empty_types)
+                + "). Generating individual clips from combined selectors.",
+            )
+            clips_list = spreadsheet.generate_list(worksheet, 'reel', reel_input=input_mode)
+            return (clips_list, False, None)
         except gspread.exceptions.GSpreadException as e:
             utils.error_print(f"Google Sheets API error: {e}")
             utils.debug_print(f"ERROR Message '{e}', Attempting reconnect")
@@ -1015,7 +1080,29 @@ def run_cli_mode(worksheet: Any, args: Any, cli_mode_args: CliModeArgs) -> None:
             ["Use reel/timeline mode for a single .mp4 output, or use screen/gif with batch/line/range/category/cell/participant/filter selection."])
         sys.exit(1)
 
-    selection_mode_set = bool(args.batch or args.lines or args.range or args.cell or args.participant or args.filter or args.reel or args.timeline)
+    if args.mixed:
+        parsed_mixed = spreadsheet.parse_reel_input(args.mixed)
+        if parsed_mixed.get('timeline'):
+            utils.error_print(
+                "Timeline selector is not supported in mixed mode.",
+                [
+                    "Use -T PARTICIPANT for a chronological reel,",
+                    "or use -R with timeline selectors to create a single reel video.",
+                ],
+            )
+            sys.exit(1)
+
+    selection_mode_set = bool(
+        args.batch
+        or args.lines
+        or args.range
+        or args.cell
+        or args.participant
+        or args.filter
+        or args.mixed
+        or args.reel
+        or args.timeline
+    )
 
     if args.batch or (output_format != 'clip' and not selection_mode_set):
         clips_list = spreadsheet.generate_list(worksheet, 'batch', skip_prompts=skip_prompts)
@@ -1029,6 +1116,13 @@ def run_cli_mode(worksheet: Any, args: Any, cli_mode_args: CliModeArgs) -> None:
         clips_list = spreadsheet.generate_list(worksheet, 'participant', participant_id=args.participant, skip_prompts=skip_prompts)
     elif args.filter:
         clips_list = spreadsheet.generate_list(worksheet, 'filter', skip_prompts=skip_prompts)
+    elif args.mixed:
+        clips_list = spreadsheet.generate_list(
+            worksheet,
+            'reel',
+            reel_input=args.mixed,
+            skip_prompts=skip_prompts,
+        )
     elif args.reel:
         clips_list = spreadsheet.generate_list(worksheet, 'reel', reel_input=args.reel, skip_prompts=skip_prompts)
     elif args.timeline:
@@ -1096,7 +1190,19 @@ def main() -> None:
         ic(args)
     
     # Determine if running in CLI mode (any mode argument provided)
-    cli_mode = args.batch or args.lines or args.range or args.cell or args.participant or args.filter or args.reel or args.timeline or args.screen or args.gif
+    cli_mode = (
+        args.batch
+        or args.lines
+        or args.range
+        or args.cell
+        or args.participant
+        or args.filter
+        or args.mixed
+        or args.reel
+        or args.timeline
+        or args.screen
+        or args.gif
+    )
     
     # Set verbose mode: silent by default in CLI mode, verbose in interactive mode
     config.VERBOSE = not cli_mode or args.verbose
