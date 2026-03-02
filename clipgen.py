@@ -263,7 +263,15 @@ def select_spreadsheet(gspread_client: Any, doc_list: List[str]) -> Any:
     """Interactive spreadsheet selection. Returns the selected worksheet."""
     consecutive_open_failures = 0
     while True:
-        input_name = input(f"\nPlease enter the index, name, URL, or '{config.COMMAND_EXCEL}' for local file ('{config.COMMAND_LIST_ALL}' for list, '{config.COMMAND_LIST_NEW}' for list of newest, '{config.COMMAND_OPEN_LAST}' to immediately open latest, '{config.COMMAND_SETTINGS}' to change settings):\n>> ")
+        try:
+            input_name = utils.read_user_input(
+                f"\nPlease enter the index, name, URL, or '{config.COMMAND_EXCEL}' for local file "
+                f"('{config.COMMAND_LIST_ALL}' for list, '{config.COMMAND_LIST_NEW}' for list of newest, "
+                f"'{config.COMMAND_OPEN_LAST}' to immediately open latest, '{config.COMMAND_SETTINGS}' to change settings):\n>> "
+            )
+        except utils.BackToTop:
+            # Treat 'top'/'back' at spreadsheet selection as a request to exit.
+            raise utils.QuitProgram()
         try:
             worksheet = _handle_spreadsheet_command(gspread_client, doc_list, input_name)
             if worksheet is not None:
@@ -298,7 +306,7 @@ def _prompt_timeline_participant_selection(worksheet: Any) -> Optional[str]:
         utils.info_print(f'  {i}. {pid}')
 
     while True:
-        selection = input('\nEnter one participant number or ID (e.g., 1 or P01):\n>> ').strip()
+        selection = utils.read_user_input('\nEnter one participant number or ID (e.g., 1 or P01):\n>> ')
         if not selection:
             utils.info_print('Please enter one participant.')
             continue
@@ -337,7 +345,7 @@ def _run_reel_mode_interactive(worksheet: Any) -> Tuple[List[Any], bool, Optiona
     utils.info_print('  P01.11, P02.15           - cells (participant.row)')
     utils.info_print('  P01, P02                 - participants (all their clips)')
     utils.info_print('  Example: timeline, P01, 11, 13-16, "Observations"')
-    reel_input = input('\nEnter reel selectors (combine any of the above, comma-separated):\n>> ').strip()
+    reel_input = utils.read_user_input('\nEnter reel selectors (combine any of the above, comma-separated):\n>> ')
     if not reel_input:
         utils.info_print('No input. Skipping reel.')
         return ([], False, None)
@@ -367,7 +375,7 @@ def _run_reel_mode_interactive(worksheet: Any) -> Tuple[List[Any], bool, Optiona
         utils.info_print(f"  {i+1}. [{clip.get('category', '')}] {clip.get('participant', '')} row {clip['cell'].row}: {desc}...")
     if len(clips_list) > config.REEL_PREVIEW_CLIP_COUNT:
         utils.info_print(f"  ... and {len(clips_list) - config.REEL_PREVIEW_CLIP_COUNT} more")
-    yn = input('\nGenerate reel? y/n\n>> ')
+    yn = utils.read_user_input('\nGenerate reel? y/n\n>> ')
     if yn != 'y':
         return ([], False, None)
 
@@ -382,7 +390,7 @@ def _run_reel_mode_interactive(worksheet: Any) -> Tuple[List[Any], bool, Optiona
         else:
             default_filename = f'timeline{config.FILEFORMAT}'
 
-    output_file = input(f'\nOutput filename (Enter for default {default_filename}):\n>> ').strip()
+    output_file = utils.read_user_input(f'\nOutput filename (Enter for default {default_filename}):\n>> ')
     reel_output_file = None
     if output_file:
         reel_output_file = output_file if output_file.endswith(config.FILEFORMAT) else output_file + config.FILEFORMAT
@@ -443,7 +451,7 @@ def _run_reellate_mode_interactive() -> Tuple[bool, Optional[str]]:
     utils.info_print('  A, B, C      - same as above')
     utils.info_print('  A B C        - same as above')
     
-    selection_input = input('\nEnter clip selection:\n>> ').strip()
+    selection_input = utils.read_user_input('\nEnter clip selection:\n>> ')
     if not selection_input:
         utils.info_print('No selection. Skipping reel.')
         return (False, None)
@@ -461,12 +469,12 @@ def _run_reellate_mode_interactive() -> Tuple[bool, Optional[str]]:
     for i, clip in enumerate(selected_clips):
         utils.info_print(f'  {i+1}. "{clip}"')
     
-    yn = input('\nGenerate reel from these clips? y/n\n>> ').strip().lower()
+    yn = utils.read_user_input('\nGenerate reel from these clips? y/n\n>> ').lower()
     if yn != 'y':
         utils.info_print('Cancelled.')
         return (False, None)
     
-    output_file = input('\nOutput filename (Enter for default "reel.mp4"):\n>> ').strip()
+    output_file = utils.read_user_input('\nOutput filename (Enter for default "reel.mp4"):\n>> ')
     if not output_file:
         output_file = files.get_unique_filename(f'reel{config.FILEFORMAT}')
     elif not output_file.endswith(config.FILEFORMAT):
@@ -491,11 +499,11 @@ def _run_format_mode_interactive(worksheet: Any, output_format: str) -> None:
 
     utils.info_print(f'\n{format_display_name} mode: choose how to select timestamps.')
     while True:
-        selection = input(
+        selection = utils.read_user_input(
             '\nSelect source rows for this output:\n'
             '  Modes: (b)atch, (r)ange, (c)ategory, (l)ine, (ce)ll, (p)articipant, (f)ilter\n'
             '  Or enter mixed selectors directly: e.g. 5, P01.11, 13-16, "Observations"\n>> '
-        ).strip()
+        )
         if not selection:
             utils.info_print("  Please enter a mode or direct input (e.g. P01.11, 5, 7, 13-16, P01).")
             continue
@@ -566,11 +574,11 @@ def _run_format_mode_interactive(worksheet: Any, output_format: str) -> None:
 def select_mode_and_generate(worksheet: Any) -> Tuple[List[Any], bool, Optional[str]]:
     """Interactive mode selection. Returns (clips list, is_reel_mode, reel_output_file or None)."""
     while True:
-        input_mode = input(
+        input_mode = utils.read_user_input(
             '\nEnter mode or input directly:\n'
             '  Modes: (b)atch, (r)ange, (c)ategory, (l)ine, (ce)ll, (p)articipant, (f)ilter, (s)creen, (g)if, (re)el, (rl) reel-late, (br)owse\n'
             '  Or enter mixed selectors directly: e.g. 5, P01.11, 13-16, "Observations"\n>> '
-        ).strip()
+        )
         if not input_mode:
             utils.info_print("  Please enter a mode or direct input (e.g. P01.11, 5, 7, 13-16, P01).")
             continue
@@ -1162,23 +1170,29 @@ def run_interactive_mode(worksheet: Any) -> None:
         worksheet: Selected worksheet
     """
     while True:
-        clips_list, is_reel, reel_output_file = select_mode_and_generate(worksheet)
-        if not clips_list and not is_reel:
-            yn = input('Continue working (y) or quit the program (n)? y/n\n>> ')
+        try:
+            clips_list, is_reel, reel_output_file = select_mode_and_generate(worksheet)
+            if not clips_list and not is_reel:
+                yn = utils.read_user_input('Continue working (y) or quit the program (n)? y/n\n>> ')
+                if yn == 'n':
+                    break
+                continue
+            if is_reel:
+                outputs_generated = process_reel(clips_list, output_file=reel_output_file)
+            else:
+                outputs_generated = process_clips(clips_list)
+
+            if not config.REENCODING:
+                _print_reencoding_warning(utils.info_print)
+            _print_completion_message(outputs_generated, output_format='clip', is_reel=is_reel)
+
+            yn = utils.read_user_input('Continue working (y) or quit the program (n)? y/n\n>> ')
             if yn == 'n':
                 break
+        except utils.BackToTop:
+            # Return to main mode selection prompt.
             continue
-        if is_reel:
-            outputs_generated = process_reel(clips_list, output_file=reel_output_file)
-        else:
-            outputs_generated = process_clips(clips_list)
-
-        if not config.REENCODING:
-            _print_reencoding_warning(utils.info_print)
-        _print_completion_message(outputs_generated, output_format='clip', is_reel=is_reel)
-
-        yn = input('Continue working (y) or quit the program (n)? y/n\n>> ')
-        if yn == 'n':
+        except utils.QuitProgram:
             break
 
 def main() -> None:
@@ -1232,7 +1246,10 @@ def main() -> None:
     if cli_mode:
         run_cli_mode(worksheet, args, cli_mode_args)
     else:
-        run_interactive_mode(worksheet)
+        try:
+            run_interactive_mode(worksheet)
+        except utils.QuitProgram:
+            utils.info_print('Exiting on user request.')
 
 if __name__ == '__main__':
     try:

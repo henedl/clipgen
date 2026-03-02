@@ -160,7 +160,7 @@ def select_excel_file() -> Optional[ExcelSheetAdapter]:
     for i, p in enumerate(paths, 1):
         utils.info_print(f'  {i}. {os.path.basename(p)}')
     while True:
-        choice = input('\nEnter index (1-based) or filename to open (or Enter to cancel):\n>> ').strip()
+        choice = utils.read_user_input('\nEnter index (1-based) or filename to open (or Enter to cancel):\n>> ').strip()
         if not choice:
             return None
         # Try as index

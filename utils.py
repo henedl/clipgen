@@ -662,6 +662,37 @@ def parse_timestamps(cell_value: str, cell_ref: Optional[str] = None) -> List[Tu
         ic(parsed_timestamps)
     return parsed_timestamps
 
+class QuitProgram(Exception):
+    """Signal that the user requested to quit the program from an interactive prompt."""
+
+
+class BackToTop(Exception):
+    """Signal that the user requested to return to the main mode selection prompt."""
+
+
+def read_user_input(prompt: str) -> str:
+    """Read user input and handle global control keywords.
+
+    Recognizes the following keywords when they appear as the first token:
+    - 'quit' / 'exit' -> quit program
+    - 'top' / 'back'  -> return to main mode selection
+    """
+    raw = input(prompt)
+    value = raw.strip()
+    if not value:
+        return value
+
+    first_token = value.split()[0].lower()
+    if first_token in ('quit', 'exit'):
+        info_print('Exiting clipgen.')
+        raise QuitProgram()
+    if first_token in ('top', 'back'):
+        info_print('Returning to top input.')
+        raise BackToTop()
+
+    return value
+
+
 def set_program_settings() -> bool:
     """Interactive function to change program settings.
     
@@ -674,11 +705,11 @@ def set_program_settings() -> bool:
 
     info_print('\nWhich setting? Available:\n')
     info_print(', '.join(SETTINGS_OPTIONS))
-    setting_to_change = input('\n>> ')
+    setting_to_change = read_user_input('\n>> ')
 
     info_print(f"* Current value for '{setting_to_change}' is '{getattr(config, setting_to_change)}'")
 
-    new_value = input('\nWhich new value?\n>> ')
+    new_value = read_user_input('\nWhich new value?\n>> ')
 
     info_print(f"* '{setting_to_change}' SET TO '{new_value}'")
 

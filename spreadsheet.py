@@ -96,7 +96,7 @@ def _interactive_category_selection(categories: List[str]) -> List[str]:
     for i, cat in enumerate(categories, 1):
         utils.info_print(f'  {i}. {cat}')
     while True:
-        selection = input('\nEnter category numbers (comma-separated, e.g., "1,3,5") or "all":\n>> ')
+        selection = utils.read_user_input('\nEnter category numbers (comma-separated, e.g., "1,3,5") or "all":\n>> ')
         if selection.lower() == 'all':
             return categories
         try:
@@ -115,7 +115,7 @@ def _interactive_category_selection(categories: List[str]) -> List[str]:
                 utils.info_print('\nSelected categories:')
                 for cat in selected_categories:
                     utils.info_print(f'  - {cat}')
-                yn = input('\nIs this correct? y/n\n>> ')
+                yn = utils.read_user_input('\nIs this correct? y/n\n>> ')
                 if yn == 'y':
                     return selected_categories
             else:
@@ -248,7 +248,7 @@ def generate_list(sheet: Any, mode: str, line_numbers: Optional[List[int]] = Non
             utils.verbose_print('Batch mode: generating all possible clips...')
             clips = generate_batch_timestamps(sheet_data, id_cell, observation_cell, num_participants, study_name)
         else:
-            yn = input('\nWarning: This will generate all possible clips. Do you want to proceed? y/n\n>> ')
+            yn = utils.read_user_input('\nWarning: This will generate all possible clips. Do you want to proceed? y/n\n>> ')
             if yn == 'y':
                 clips = generate_batch_timestamps(sheet_data, id_cell, observation_cell, num_participants, study_name)
     # --- Category mode: user selects categories; include all rows matching any selected category ---
@@ -278,15 +278,17 @@ def generate_list(sheet: Any, mode: str, line_numbers: Optional[List[int]] = Non
             # Interactive mode
             while True:
                 try:
-                    start_line = int(input('\nWhich starting line (row number only)?\n>> '))
-                    end_line = int(input('\nWhich ending line (row number only)?\n>> '))
+                    start_line_str = utils.read_user_input('\nWhich starting line (row number only)?\n>> ')
+                    end_line_str = utils.read_user_input('\nWhich ending line (row number only)?\n>> ')
+                    start_line = int(start_line_str)
+                    end_line = int(end_line_str)
                 except ValueError:
                     utils.info_print('\nInvalid input. Please enter row numbers as integers.')
                     continue
                 if _validate_row_range(start_line, end_line, max_row) is None:
                     continue
                 utils.info_print(f'Lines selected: {sheet_data[start_line-1][observation_cell.col-1]} to {sheet_data[end_line-1][observation_cell.col-1]}')
-                yn = input('Is this correct? y/n\n>> ')
+                yn = utils.read_user_input('Is this correct? y/n\n>> ')
                 if yn == 'y':
                     break
             clips = generate_range_timestamps(sheet_data, id_cell, observation_cell, num_participants, study_name, start_line, end_line)
@@ -300,7 +302,7 @@ def generate_list(sheet: Any, mode: str, line_numbers: Optional[List[int]] = Non
             # Interactive mode
             while True:
                 try:
-                    cell_input = input('\nEnter cell specification(s) (e.g., P01.11 or P01.11 + P03.11):\n>> ')
+                    cell_input = utils.read_user_input('\nEnter cell specification(s) (e.g., P01.11 or P01.11 + P03.11):\n>> ')
                     if not cell_input.strip():
                         utils.info_print('Please enter at least one cell specification.')
                         continue
@@ -343,7 +345,7 @@ def generate_list(sheet: Any, mode: str, line_numbers: Optional[List[int]] = Non
                         continue
                     
                     utils.info_print('')
-                    yn = input('Are these the correct cells? y/n\n>> ')
+                    yn = utils.read_user_input('Are these the correct cells? y/n\n>> ')
                     if yn == 'y':
                         clips = generate_cell_timestamps(sheet_data, id_cell, observation_cell, study_name, valid_specs)
                         break
@@ -382,7 +384,7 @@ def generate_list(sheet: Any, mode: str, line_numbers: Optional[List[int]] = Non
             for i, pid in enumerate(available_list, 1):
                 utils.info_print(f'  {i}. {pid}')
             while True:
-                selection = input('\nEnter participant number(s) or ID(s), separated by + or , (e.g., 1, 3 or P01, P03):\n>> ').strip()
+                selection = utils.read_user_input('\nEnter participant number(s) or ID(s), separated by + or , (e.g., 1, 3 or P01, P03):\n>> ').strip()
                 if not selection:
                     utils.info_print('Please enter one or more participant numbers or IDs.')
                     continue
@@ -419,7 +421,7 @@ def generate_list(sheet: Any, mode: str, line_numbers: Optional[List[int]] = Non
                         seen.add(pid)
                         unique_ids.append(pid)
                 utils.info_print(f'\nSelected participant(s): {", ".join(unique_ids)}')
-                yn = input('Generate all clips for these participants? y/n\n>> ')
+                yn = utils.read_user_input('Generate all clips for these participants? y/n\n>> ')
                 if yn == 'y':
                     clips = []
                     for pid in unique_ids:
@@ -431,7 +433,7 @@ def generate_list(sheet: Any, mode: str, line_numbers: Optional[List[int]] = Non
             utils.verbose_print('Filter mode: generating key-marked clips...')
             clips = generate_filter_timestamps(sheet_data, id_cell, observation_cell, num_participants, study_name)
         else:
-            yn = input('\nFilter mode will include only key-marked timestamps or participants. Do you want to proceed? y/n\n>> ')
+            yn = utils.read_user_input('\nFilter mode will include only key-marked timestamps or participants. Do you want to proceed? y/n\n>> ')
             if yn == 'y':
                 clips = generate_filter_timestamps(sheet_data, id_cell, observation_cell, num_participants, study_name)
     # --- Reel mode: mixed selector string (batch, lines, ranges, categories, cells, participants); deduped and sorted ---
@@ -965,7 +967,7 @@ def generate_line_timestamps(sheet_data: List[List[str]], id_cell: Any, observat
         # Interactive mode
         while True:
             try:
-                line_input = input('\nWhich issue(s)? Enter row number(s), comma-separated for multiple.\n>> ')
+                line_input = utils.read_user_input('\nWhich issue(s)? Enter row number(s), comma-separated for multiple.\n>> ')
                 # Parse comma-separated line numbers
                 line_numbers = [int(num.strip()) for num in line_input.split(',')]
             except ValueError:
@@ -988,7 +990,7 @@ def generate_line_timestamps(sheet_data: List[List[str]], id_cell: Any, observat
                 continue
             
             utils.info_print('')
-            yn = input('Are these the correct issues? y/n\n>> ')
+            yn = utils.read_user_input('Are these the correct issues? y/n\n>> ')
             if yn == 'y':
                 break
 
@@ -1370,7 +1372,7 @@ def browse_spreadsheet(sheet: Any) -> None:
 
     # Navigation loop: up/down move one row; pageup/pagedown move by BROWSE_LINES_TO_DISPLAY; jump goes to row
     while True:
-        user_input = input('\n>> ').strip().lower()
+        user_input = utils.read_user_input('\n>> ').strip().lower()
         
         if user_input in ('quit', 'q'):
             utils.info_print('Exiting browse mode.')
