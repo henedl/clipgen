@@ -7,6 +7,7 @@ import subprocess
 import sys
 import tempfile
 from datetime import datetime
+from pathlib import Path
 from typing import List, Optional
 
 from icecream import ic
@@ -16,7 +17,7 @@ import files
 import tui
 import utils
 
-INVALID_END_TIMESTAMP = -1
+INVALID_END_TIMESTAMP = None
 
 
 def _ffmpeg_install_guidance_lines() -> List[str]:
@@ -105,7 +106,7 @@ def _add_ffmpeg_stderr(error_details: List[str], ffmpeg_result: subprocess.Compl
 
 
 def _verify_output_file(output_file: str, operation_label: str) -> bool:
-    if os.path.isfile(output_file):
+    if Path(output_file).is_file():
         return True
     utils.error_print(f"{operation_label} completed but output file was not created: '{output_file}'")
     return False
@@ -131,7 +132,7 @@ def build_ffmpeg_cut_command(
     Returns:
         argv list for subprocess (e.g. ['ffmpeg', '-y', ...])
     """
-    base = ['ffmpeg', '-y', '-loglevel', '16', '-ss', start_pos, '-i', input_file, '-t', str(duration_seconds)]
+    base = ['ffmpeg', '-y', '-loglevel', config.FFMPEG_LOGLEVEL, '-ss', start_pos, '-i', input_file, '-t', str(duration_seconds)]
     if not reencode:
         if audio_normalize:
             # loudnorm: I=-16 (target LUFS), TP=-1.5 (true peak dB), LRA=11 (loudness range)
@@ -159,9 +160,9 @@ def run_ffmpeg(input_file: str, output_file: str, start_pos: str, end_pos: str, 
     """
     if config.DEBUGGING:
         ic(input_file, output_file, start_pos, end_pos)
-    if not os.path.isfile(input_file):
+    if not Path(input_file).is_file():
         utils.error_print(f"Input video file not found: '{input_file}'",
-            [f"Expected location: {os.path.join(os.getcwd(), input_file)}",
+            [f"Expected location: {Path.cwd() / input_file}",
              "Skipping this clip."])
         return False
 
@@ -232,7 +233,7 @@ def run_ffmpeg(input_file: str, output_file: str, start_pos: str, end_pos: str, 
         if not compress_to_size(output_file, config.MAX_FILESIZE_MB):
             utils.warning_print(f"Could not compress '{output_file}' to target size")
 
-    utils.verbose_print(f"+ Generated video '{output_file}' successfully.\n File size: {files.format_filesize(os.path.getsize(output_file))}\n Expected duration: {duration} s\n")
+    utils.verbose_print(f"+ Generated video '{output_file}' successfully.\n File size: {files.format_filesize(Path(output_file).stat().st_size)}\n Expected duration: {duration} s\n")
     return True
 
 
@@ -249,9 +250,9 @@ def extract_screenshot(input_file: str, output_file: str, timestamp: str) -> boo
     """
     if config.DEBUGGING:
         ic(input_file, output_file, timestamp)
-    if not os.path.isfile(input_file):
+    if not Path(input_file).is_file():
         utils.error_print(f"Input video file not found: '{input_file}'",
-            [f"Expected location: {os.path.join(os.getcwd(), input_file)}",
+            [f"Expected location: {Path.cwd() / input_file}",
              "Skipping this screenshot."])
         return False
 
@@ -261,9 +262,9 @@ def extract_screenshot(input_file: str, output_file: str, timestamp: str) -> boo
         return False
 
     ffmpeg_command = [
-        'ffmpeg', '-y', '-loglevel', '16',
+        'ffmpeg', '-y', '-loglevel', config.FFMPEG_LOGLEVEL,
         '-ss', timestamp, '-i', input_file,
-        '-vframes', '1', '-q:v', '2',
+        '-vframes', '1', '-q:v', config.FFMPEG_SCREENSHOT_QUALITY,
         output_file,
     ]
     utils.debug_print(f"ffmpeg screenshot command: {' '.join(ffmpeg_command)}")
@@ -278,15 +279,15 @@ def extract_screenshot(input_file: str, output_file: str, timestamp: str) -> boo
         return False
 
     if ffmpeg_result.returncode != 0:
-            error_details = [f"Input: '{input_file}', Output: '{output_file}'", f"Timestamp: {timestamp}"]
-            utils.error_print(
-                f"ffmpeg screenshot failed with exit code {ffmpeg_result.returncode}",
-                _add_ffmpeg_stderr(error_details, ffmpeg_result),
-            )
-            return False
+        error_details = [f"Input: '{input_file}', Output: '{output_file}'", f"Timestamp: {timestamp}"]
+        utils.error_print(
+            f"ffmpeg screenshot failed with exit code {ffmpeg_result.returncode}",
+            _add_ffmpeg_stderr(error_details, ffmpeg_result),
+        )
+        return False
     if not _verify_output_file(output_file, "ffmpeg screenshot"):
         return False
-    utils.verbose_print(f"+ Generated screenshot '{output_file}' successfully.\n File size: {files.format_filesize(os.path.getsize(output_file))}\n")
+    utils.verbose_print(f"+ Generated screenshot '{output_file}' successfully.\n File size: {files.format_filesize(Path(output_file).stat().st_size)}\n")
     return True
 
 
@@ -304,9 +305,9 @@ def extract_gif(input_file: str, output_file: str, timestamp: str, duration_seco
     """
     if config.DEBUGGING:
         ic(input_file, output_file, timestamp, duration_seconds)
-    if not os.path.isfile(input_file):
+    if not Path(input_file).is_file():
         utils.error_print(f"Input video file not found: '{input_file}'",
-            [f"Expected location: {os.path.join(os.getcwd(), input_file)}",
+            [f"Expected location: {Path.cwd() / input_file}",
              "Skipping this GIF."])
         return False
     if duration_seconds <= 0:
@@ -320,9 +321,9 @@ def extract_gif(input_file: str, output_file: str, timestamp: str, duration_seco
         return False
 
     ffmpeg_command = [
-        'ffmpeg', '-y', '-loglevel', '16',
+        'ffmpeg', '-y', '-loglevel', config.FFMPEG_LOGLEVEL,
         '-ss', timestamp, '-t', str(duration_seconds), '-i', input_file,
-        '-vf', 'fps=10,scale=480:-1:flags=lanczos',
+        '-vf', f'fps={config.GIF_FPS},scale={config.GIF_SCALE_WIDTH}:-1:flags=lanczos',
         '-loop', '0',
         output_file,
     ]
@@ -338,18 +339,18 @@ def extract_gif(input_file: str, output_file: str, timestamp: str, duration_seco
         return False
 
     if ffmpeg_result.returncode != 0:
-            error_details = [
-                f"Input: '{input_file}', Output: '{output_file}'",
-                f"Timestamp: {timestamp}, Duration: {duration_seconds}s",
-            ]
-            utils.error_print(
-                f"ffmpeg GIF extraction failed with exit code {ffmpeg_result.returncode}",
-                _add_ffmpeg_stderr(error_details, ffmpeg_result),
-            )
-            return False
+        error_details = [
+            f"Input: '{input_file}', Output: '{output_file}'",
+            f"Timestamp: {timestamp}, Duration: {duration_seconds}s",
+        ]
+        utils.error_print(
+            f"ffmpeg GIF extraction failed with exit code {ffmpeg_result.returncode}",
+            _add_ffmpeg_stderr(error_details, ffmpeg_result),
+        )
+        return False
     if not _verify_output_file(output_file, "ffmpeg GIF extraction"):
         return False
-    utils.verbose_print(f"+ Generated GIF '{output_file}' successfully.\n File size: {files.format_filesize(os.path.getsize(output_file))}\n")
+    utils.verbose_print(f"+ Generated GIF '{output_file}' successfully.\n File size: {files.format_filesize(Path(output_file).stat().st_size)}\n")
     return True
 
 
@@ -362,9 +363,9 @@ def get_file_duration(filepath: str) -> Optional[int]:
     Returns:
         The duration in seconds, or None if the file cannot be probed.
     """
-    if not os.path.isfile(filepath):
+    if not Path(filepath).is_file():
         utils.error_print(f"Video file not found: '{filepath}'",
-            [f"Expected location: {os.path.join(os.getcwd(), filepath)}",
+            [f"Expected location: {Path.cwd() / filepath}",
              "Please ensure the video file exists in the working directory."])
         return None
 
@@ -389,7 +390,7 @@ def get_file_duration(filepath: str) -> Optional[int]:
             [f"ffprobe returned unexpected output. Error: {e}"])
         return None
 
-def get_duration(start_time: str, end_time: str) -> Optional[int]:
+def get_duration(start_time: str, end_time: Optional[str]) -> Optional[int]:
     """Calculate the duration between two timestamps.
     
     Args:
@@ -403,12 +404,12 @@ def get_duration(start_time: str, end_time: str) -> Optional[int]:
         ic(start_time, end_time)
     utils.debug_print(f'start_time is {start_time} with length {len(start_time)}, end_time is {end_time}')
 
-    if end_time == INVALID_END_TIMESTAMP:
+    if end_time is INVALID_END_TIMESTAMP:
         utils.error_print(f"Invalid end timestamp (derived from start: '{start_time}')",
             ["Could not calculate end time. Check the timestamp format."])
         return None
 
-    formats = ['%M:%S', '%H:%M:%S'] if len(str(start_time)) <= 5 else ['%H:%M:%S', '%M:%S']
+    formats = ['%M:%S', '%H:%M:%S'] if len(str(start_time)) <= config.MAX_MMSS_LENGTH else ['%H:%M:%S', '%M:%S']
 
     for time_format in formats:
         try:
@@ -427,29 +428,25 @@ def get_duration(start_time: str, end_time: str) -> Optional[int]:
     return None
 
 
-def calculate_target_bitrate(target_size_mb: float, duration_seconds: int, audio_bitrate_kbps: int = 128) -> int:
+def calculate_target_bitrate(target_size_mb: float, duration_seconds: int, audio_bitrate_kbps: int = config.AUDIO_BITRATE_KBPS) -> int:
     """Calculate video bitrate needed to achieve target filesize.
 
     Args:
         target_size_mb: Target file size in megabytes
         duration_seconds: Video duration in seconds
-        audio_bitrate_kbps: Audio bitrate in kbps (default: 128)
+        audio_bitrate_kbps: Audio bitrate in kbps
 
     Returns:
-        Target video bitrate in kbps, or 100 if calculated value is too low
+        Target video bitrate in kbps, minimum MIN_VIDEO_BITRATE_KBPS
     """
     if duration_seconds <= 0:
-        return 100
+        return config.MIN_VIDEO_BITRATE_KBPS
 
-    # Target bitrate: (size in bytes * 8 bits/byte) / duration (s) / 1000 = total kbps
     target_size_bytes = target_size_mb * 1024 * 1024
     total_bitrate_kbps = (target_size_bytes * 8) / duration_seconds / 1000
 
-    # Reserve audio bitrate; remainder is for video
     video_bitrate_kbps = int(total_bitrate_kbps - audio_bitrate_kbps)
-
-    # Floor at 100 kbps so encoder has a usable minimum (lower values often fail or look broken)
-    return max(video_bitrate_kbps, 100)
+    return max(video_bitrate_kbps, config.MIN_VIDEO_BITRATE_KBPS)
 
 
 def compress_to_size(filepath: str, target_size_mb: float) -> bool:
@@ -462,7 +459,7 @@ def compress_to_size(filepath: str, target_size_mb: float) -> bool:
     Returns:
         True if compression succeeded or was unnecessary, False on error
     """
-    current_size_bytes = os.path.getsize(filepath)
+    current_size_bytes = Path(filepath).stat().st_size
     target_size_bytes = target_size_mb * 1024 * 1024
     if current_size_bytes <= target_size_bytes:
         utils.debug_print(f"File already within size limit: {files.format_filesize(current_size_bytes)}")
@@ -473,15 +470,15 @@ def compress_to_size(filepath: str, target_size_mb: float) -> bool:
         utils.error_print(f"Cannot compress: unable to determine duration of '{filepath}'")
         return False
 
-    target_bitrate = calculate_target_bitrate(target_size_mb * 0.95, duration)
-    if target_bitrate <= 100:
+    target_bitrate = calculate_target_bitrate(target_size_mb * config.COMPRESSION_SIZE_FACTOR, duration)
+    if target_bitrate <= config.MIN_VIDEO_BITRATE_KBPS:
         utils.warning_print(f"Target bitrate very low ({target_bitrate} kbps) for {duration}s video.",
             [f"Target size: {target_size_mb}MB, Duration: {duration}s",
              "Quality may be significantly reduced."])
 
     utils.verbose_print(f"Compressing video to fit within {target_size_mb}MB...")
     utils.verbose_print(f"  Current size: {files.format_filesize(current_size_bytes)}")
-    utils.verbose_print(f"  Target bitrate: {target_bitrate} kbps (video) + 128 kbps (audio)")
+    utils.verbose_print(f"  Target bitrate: {target_bitrate} kbps (video) + {config.AUDIO_BITRATE_KBPS} kbps (audio)")
 
     compressed_temp_path = filepath + '.temp.mp4'
     passlog_base = filepath + '.passlog'
@@ -489,7 +486,7 @@ def compress_to_size(filepath: str, target_size_mb: float) -> bool:
     try:
         null_output = '/dev/null' if os.name != 'nt' else 'NUL'
         pass1_command = [
-            'ffmpeg', '-y', '-loglevel', '16',
+            'ffmpeg', '-y', '-loglevel', config.FFMPEG_LOGLEVEL,
             '-i', filepath,
             '-c:v', 'libx264', '-b:v', f'{target_bitrate}k',
             '-pass', '1', '-passlogfile', passlog_base,
@@ -515,11 +512,11 @@ def compress_to_size(filepath: str, target_size_mb: float) -> bool:
             return False
 
         pass2_command = [
-            'ffmpeg', '-y', '-loglevel', '16',
+            'ffmpeg', '-y', '-loglevel', config.FFMPEG_LOGLEVEL,
             '-i', filepath,
             '-c:v', 'libx264', '-b:v', f'{target_bitrate}k',
             '-pass', '2', '-passlogfile', passlog_base,
-            '-c:a', 'aac', '-b:a', '128k',
+            '-c:a', 'aac', '-b:a', f'{config.AUDIO_BITRATE_KBPS}k',
             compressed_temp_path
         ]
 
@@ -543,7 +540,7 @@ def compress_to_size(filepath: str, target_size_mb: float) -> bool:
         if not _verify_output_file(compressed_temp_path, "Compression"):
             return False
 
-        new_size = os.path.getsize(compressed_temp_path)
+        new_size = Path(compressed_temp_path).stat().st_size
 
         os.replace(compressed_temp_path, filepath)
 
@@ -560,17 +557,18 @@ def compress_to_size(filepath: str, target_size_mb: float) -> bool:
         return False
     finally:
         for ext in ['-0.log', '-0.log.mbtree', '']:
-            log_file = passlog_base + ext
-            if os.path.exists(log_file):
+            log_path = Path(passlog_base + ext)
+            if log_path.exists():
                 try:
-                    os.remove(log_file)
-                except OSError:
-                    pass
-        if os.path.exists(compressed_temp_path):
+                    log_path.unlink()
+                except OSError as e:
+                    utils.debug_print(f"Could not remove passlog file '{log_path}': {e}")
+        temp_path = Path(compressed_temp_path)
+        if temp_path.exists():
             try:
-                os.remove(compressed_temp_path)
-            except OSError:
-                pass
+                temp_path.unlink()
+            except OSError as e:
+                utils.warning_print(f"Could not remove temp file: {compressed_temp_path}", [str(e)])
 
 
 def concatenate_clips(clip_paths: List[str], output_file: str, reencode_on_fail: bool = True) -> bool:
@@ -592,7 +590,7 @@ def concatenate_clips(clip_paths: List[str], output_file: str, reencode_on_fail:
         return False
 
     for path in clip_paths:
-        if not os.path.isfile(path):
+        if not Path(path).is_file():
             utils.error_print(f"Clip file not found: '{path}'",
                 ["Ensure all clips were generated successfully before concatenating."])
             return False
@@ -600,13 +598,13 @@ def concatenate_clips(clip_paths: List[str], output_file: str, reencode_on_fail:
     with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False, encoding='utf-8') as file_handle:
         concat_list_file = file_handle.name
         for path in clip_paths:
-            abs_path = os.path.abspath(path)
+            abs_path = str(Path(path).resolve())
             escaped_path = abs_path.replace("'", "'\\''")
             file_handle.write(f"file '{escaped_path}'\n")
 
     try:
         ffmpeg_command = [
-            'ffmpeg', '-y', '-loglevel', '16',
+            'ffmpeg', '-y', '-loglevel', config.FFMPEG_LOGLEVEL,
             '-f', 'concat', '-safe', '0', '-i', concat_list_file,
             '-c', 'copy',
             output_file,
@@ -629,7 +627,7 @@ def concatenate_clips(clip_paths: List[str], output_file: str, reencode_on_fail:
         if ffmpeg_result.returncode != 0 and reencode_on_fail:
             utils.warning_print("Stream copy concat failed (e.g. codec mismatch), retrying with re-encoding.")
             ffmpeg_command_reencode = [
-                'ffmpeg', '-y', '-loglevel', '16',
+                'ffmpeg', '-y', '-loglevel', config.FFMPEG_LOGLEVEL,
                 '-f', 'concat', '-safe', '0', '-i', concat_list_file,
                 '-c:v', 'libx264', '-c:a', 'aac',
                 output_file,
@@ -657,8 +655,9 @@ def concatenate_clips(clip_paths: List[str], output_file: str, reencode_on_fail:
         utils.error_print(f"Concatenation failed: {e}")
         return False
     finally:
-        if os.path.exists(concat_list_file):
+        concat_path = Path(concat_list_file)
+        if concat_path.exists():
             try:
-                os.remove(concat_list_file)
-            except OSError:
-                pass
+                concat_path.unlink()
+            except OSError as e:
+                utils.debug_print(f"Could not remove concat list file '{concat_list_file}': {e}")

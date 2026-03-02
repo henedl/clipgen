@@ -1,17 +1,16 @@
 # -*- coding: utf-8 -*-
 """Google Sheets API integration for clipgen."""
 
-import os
-import sys
-from typing import Any, List
+from typing import List
 
 import gspread
+from icecream import ic
 
 import config
 import utils
 
 
-def get_worksheet(spreadsheet: Any) -> Any:
+def get_worksheet(spreadsheet: gspread.Spreadsheet) -> gspread.Worksheet:
     """Get a worksheet from a spreadsheet using priority-based name matching.
 
     Tries to find a worksheet matching names in WORKSHEET_PRIORITY order.
@@ -44,7 +43,7 @@ def get_worksheet(spreadsheet: Any) -> Any:
     # This shouldn't happen, but handle empty spreadsheet case
     raise gspread.WorksheetNotFound('Spreadsheet contains no worksheets')
 
-def get_all_spreadsheets(connection: Any) -> str:
+def get_all_spreadsheets(connection: gspread.Client) -> str:
     """Returns comma-separated list of all accessible Google Spreadsheets.
     
     Args:
@@ -53,11 +52,10 @@ def get_all_spreadsheets(connection: Any) -> str:
     Returns:
         Comma-separated string of spreadsheet names
     """
-    docs = []
-    for doc in connection.list_spreadsheet_files():
+    spreadsheet_files = list(connection.list_spreadsheet_files())
+    for doc in spreadsheet_files:
         utils.debug_print(str(doc))
-        docs.append(doc['name'])
-    return ', '.join(docs)
+    return ', '.join(doc['name'] for doc in spreadsheet_files)
 
 def find_spreadsheet_by_name(search_name: str, doc_list: List[str]) -> int:
     """Find a matching Google Sheet name from doc_list.
@@ -69,7 +67,6 @@ def find_spreadsheet_by_name(search_name: str, doc_list: List[str]) -> int:
     Returns:
         The index of matching sheet, or -1 if not found.
     """
-    from icecream import ic
     if config.DEBUGGING:
         ic(search_name)
     utils.debug_print('Running method find_spreadsheet_by_name()')

@@ -4,8 +4,8 @@
 Provides a sheet adapter that matches the gspread Worksheet interface
 so spreadsheet.py and clipgen can use local Excel files the same way as Google Sheets.
 """
-import os
-from typing import Any, List, Optional
+from pathlib import Path
+from typing import Any, List, NamedTuple, Optional
 
 import openpyxl
 
@@ -20,22 +20,16 @@ def _cell_value_to_str(value: Any) -> str:
     return str(value).strip() if isinstance(value, str) else str(value)
 
 
-class _CellLike:
+class _CellLike(NamedTuple):
     """Minimal cell-like object with .row and .col (1-based) for header lookup."""
-    __slots__ = ('row', 'col')
-
-    def __init__(self, row: int, col: int) -> None:
-        self.row = row
-        self.col = col
+    row: int
+    col: int
 
 
-class _SpreadsheetLike:
+class _SpreadsheetLike(NamedTuple):
     """Minimal spreadsheet-like object with .title and .url = None for Excel."""
-    __slots__ = ('title', 'url')
-
-    def __init__(self, title: str) -> None:
-        self.title = title
-        self.url = None
+    title: str
+    url: None = None
 
 
 class ExcelSheetAdapter:
@@ -43,12 +37,12 @@ class ExcelSheetAdapter:
 
     def __init__(self, ws: Any, workbook_path: str) -> None:
         self._ws = ws
-        self.title = getattr(ws, 'title', os.path.splitext(os.path.basename(workbook_path))[0])
+        self.title = getattr(ws, 'title', Path(workbook_path).stem)
         self._workbook_path = workbook_path
         self._data: List[List[str]] = []
         self._load_data()
         self.spreadsheet = _SpreadsheetLike(
-            title=os.path.splitext(os.path.basename(workbook_path))[0]
+            title=Path(workbook_path).stem
         )
 
     def _load_data(self) -> None:
@@ -116,8 +110,8 @@ def open_excel_workbook(path: str) -> Optional[ExcelSheetAdapter]:
     Returns:
         ExcelSheetAdapter, or None on error (prints error).
     """
-    path = os.path.abspath(path)
-    if not os.path.isfile(path):
+    path = str(Path(path).resolve())
+    if not Path(path).is_file():
         utils.error_print(f"Excel file not found: {path}")
         return None
     try:
@@ -126,19 +120,17 @@ def open_excel_workbook(path: str) -> Optional[ExcelSheetAdapter]:
         adapter = ExcelSheetAdapter(ws, path)
         wb.close()
         return adapter
-    except Exception as e:
+    except (KeyError, ValueError, OSError) as e:
         utils.error_print(f"Could not open Excel file {path}: {e}")
         return None
 
 
 def list_excel_in_cwd() -> List[str]:
     """Return list of .xlsx file paths in the current working directory (case-insensitive extension)."""
-    cwd = os.getcwd()
-    result = []
-    for name in os.listdir(cwd):
-        if name.lower().endswith('.xlsx'):
-            result.append(os.path.join(cwd, name))
-    return sorted(result)
+    return sorted(
+        str(p) for p in Path.cwd().iterdir()
+        if p.suffix.lower() == '.xlsx'
+    )
 
 
 def select_excel_file() -> Optional[ExcelSheetAdapter]:
@@ -153,12 +145,12 @@ def select_excel_file() -> Optional[ExcelSheetAdapter]:
             ['Place one or more Excel files (.xlsx) in the working directory.'])
         return None
     if len(paths) == 1:
-        utils.verbose_print(f'Opening Excel file: {os.path.basename(paths[0])}')
+        utils.verbose_print(f'Opening Excel file: {Path(paths[0]).name}')
         return open_excel_workbook(paths[0])
     # Multiple files: list and prompt
     utils.info_print('\nExcel files in current directory:')
     for i, p in enumerate(paths, 1):
-        utils.info_print(f'  {i}. {os.path.basename(p)}')
+        utils.info_print(f'  {i}. {Path(p).name}')
     while True:
         choice = utils.read_user_input('\nEnter index (1-based) or filename to open (or Enter to cancel):\n>> ').strip()
         if not choice:
@@ -172,6 +164,6 @@ def select_excel_file() -> Optional[ExcelSheetAdapter]:
             continue
         # Try as filename
         for p in paths:
-            if os.path.basename(p) == choice:
+            if Path(p).name == choice:
                 return open_excel_workbook(p)
         utils.info_print(f'No file named "{choice}". Enter an index or exact filename.')

@@ -99,8 +99,8 @@ Reference spreadsheet layout is described in [README.md](README.md).
 
 ## Version
 
-- The version is stored as `VERSIONNUM` in [config.py](config.py) (currently `'0.7.17'`).
-- **When making substantive code changes** (bug fixes or features), increment the **last segment only** (patch) in `config.py`, e.g. `0.7.17` → `0.7.18`. Do not bump for docs-only, comment-only, or refactor-only changes unless they affect user-visible behavior.
+- The version is stored as `VERSIONNUM` in [config.py](config.py) (currently `'0.7.18'`).
+- **When making substantive code changes** (bug fixes or features), increment the **last segment only** (patch) in `config.py`, e.g. `0.7.18` → `0.7.19`. Do not bump for docs-only, comment-only, or refactor-only changes unless they affect user-visible behavior.
 
 ## Testing notes
 

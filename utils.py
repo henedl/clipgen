@@ -3,11 +3,52 @@
 
 import argparse
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Set, Tuple, Union
+from typing import Any, Dict, List, Optional, Set, Tuple, TypedDict, Union
 
 from icecream import ic
 
 import config
+
+
+# ---- Shared type definitions ----
+
+class ClipRecord(TypedDict, total=False):
+    """Clip record built by spreadsheet layer, enriched by prepare_clip.
+
+    Always present after _make_clip_record: cell, desc, study, participant, category.
+    Added by prepare_clip: times, cell_annotations, segment_annotations.
+    Optionally set before prepare_clip: selected_segment_indexes.
+    """
+    cell: Any  # gspread.Cell or ExcelSheetAdapter equivalent
+    desc: str
+    study: str
+    participant: str
+    category: str
+    times: List[Tuple[str, str]]
+    cell_annotations: List[str]
+    segment_annotations: Dict[str, List[int]]
+    selected_segment_indexes: List[int]
+
+
+class ReelInput(TypedDict):
+    """Parsed reel selector input from parse_reel_input."""
+    batch: bool
+    filter: bool
+    timeline: bool
+    lines: List[int]
+    ranges: List[Tuple[int, int]]
+    categories: List[str]
+    cells: List[Tuple[str, int]]
+    participants: List[str]
+
+
+class BrowseRow(TypedDict, total=False):
+    """Row data for browse mode display."""
+    row_num: int
+    category: str
+    description: str
+    timestamps: Dict[str, str]
+
 
 # Rich library integration with graceful fallback
 try:
@@ -270,7 +311,7 @@ def info_print(message: str) -> None:
 
 
 def create_browse_table(
-    rows_data: List[dict],
+    rows_data: List[BrowseRow],
     participant_headers: List[str]
 ) -> Optional['Table']:
     """Create a Rich Table for browse mode display.
@@ -320,7 +361,7 @@ def create_browse_table(
 
 
 def format_browse_rows_plain(
-    rows_data: List[dict],
+    rows_data: List[BrowseRow],
     participant_headers: List[str]
 ) -> str:
     """Format browse rows as plain text (fallback when Rich unavailable).
@@ -515,7 +556,7 @@ def parse_cell_annotations(
     return (' '.join(cleaned_tokens), segment_annotations, cell_annotations)
 
 
-def add_duration(start_time: str) -> Union[str, int]:
+def add_duration(start_time: str) -> Optional[str]:
     """Add default duration to a start timestamp.
     
     Adds DEFAULT_DURATION_SECONDS to the given start timestamp to create
@@ -525,11 +566,11 @@ def add_duration(start_time: str) -> Union[str, int]:
         start_time: Start timestamp in format MM:SS or HH:MM:SS
         
     Returns:
-        The new timestamp string with duration added, or -1 if the timestamp
+        The new timestamp string with duration added, or None if the timestamp
         format is invalid.
     """
     try:
-        if len(start_time) <= 5:
+        if len(start_time) <= config.MAX_MMSS_LENGTH:
             start_datetime = datetime.strptime(str(start_time), '%M:%S')
             new_time = start_datetime + timedelta(seconds=config.DEFAULT_DURATION_SECONDS)
             return new_time.strftime('%M:%S')
@@ -541,7 +582,7 @@ def add_duration(start_time: str) -> Union[str, int]:
         warning_print(f"Could not parse single timestamp '{start_time}' to add default duration.",
             [f"Expected format: MM:SS or HH:MM:SS (e.g., 12:34 or 1:23:45)",
              "This timestamp will be skipped."])
-        return -1
+        return None
 
 
 def timestamp_to_seconds(ts_str: str) -> Optional[float]:
@@ -561,7 +602,7 @@ def timestamp_to_seconds(ts_str: str) -> Optional[float]:
     for fmt in formats:
         try:
             parsed = datetime.strptime(ts, fmt)
-            return float(parsed.hour * 3600 + parsed.minute * 60 + parsed.second)
+            return float(parsed.hour * config.SECONDS_PER_HOUR + parsed.minute * config.SECONDS_PER_MINUTE + parsed.second)
         except ValueError:
             continue
     return None
@@ -596,7 +637,7 @@ def _parse_single_timestamp_token(token: str) -> Optional[Tuple[str, str]]:
         colon_pos = token.find(':')
         if colon_pos > 0 and token[colon_pos - 1].isdigit():
             end_time = add_duration(token)
-            if isinstance(end_time, str):
+            if end_time is not None:
                 return (token, end_time)
         return None
     return None
@@ -634,16 +675,16 @@ def parse_timestamps(cell_value: str, cell_ref: Optional[str] = None) -> List[Tu
     debug_print(f'Timestamp list raw_times is {len(raw_times)} entries long')
 
     # Clean each token (strip, normalize trailing punctuation, use colon for decimals) and parse
-    for i in range(len(raw_times)):
-        debug_print(f'Cleaning timestamp {raw_times[i]}')
-        raw_times[i] = _clean_timestamp_token(raw_times[i])
-        pair = _parse_single_timestamp_token(raw_times[i])
+    raw_times = [_clean_timestamp_token(t) for t in raw_times]
+    for token in raw_times:
+        debug_print(f'Cleaning timestamp {token}')
+        pair = _parse_single_timestamp_token(token)
         if pair is not None:
             if config.DEBUGGING and len(pair) == 2:
                 ic(pair)
             parsed_timestamps.append(pair)
-        elif raw_times[i] and raw_times[i] not in ignored_tokens:
-            skipped_timestamps.append(raw_times[i])
+        elif token and token not in ignored_tokens:
+            skipped_timestamps.append(token)
 
     # Report skipped timestamps: list up to MAX_SKIPPED_TIMESTAMPS_TO_SHOW, then "... and N more"
     if skipped_timestamps:

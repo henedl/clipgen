@@ -1,16 +1,18 @@
 # -*- coding: utf-8 -*-
 """Configuration constants for clipgen."""
 
+from typing import Dict, List, Set, Tuple
+
 from icecream import ic
 
 # Configuration Constants
-REENCODING = False
-AUDIO_NORMALIZE = False
-FILEFORMAT = '.mp4'
-VERSIONNUM = '0.7.17'
-WORKSHEET_PRIORITY = ['Sheet1', 'Data', 'data', 'Observations', 'Data set', 'data set', 'dataset', 'Dataset']
-DEBUGGING = False
-VERBOSE = True  # Set to False in CLI mode unless -v flag is used
+REENCODING: bool = False
+AUDIO_NORMALIZE: bool = False
+FILEFORMAT: str = '.mp4'
+VERSIONNUM: str = '0.7.18'
+WORKSHEET_PRIORITY: List[str] = ['Sheet1', 'Data', 'data', 'Observations', 'Data set', 'data set', 'dataset', 'Dataset']
+DEBUGGING: bool = False
+VERBOSE: bool = True  # Set to False in CLI mode unless -v flag is used
 
 # Configure Icecream debugging
 if DEBUGGING:
@@ -19,51 +21,69 @@ else:
     ic.disable()
 
 # Spreadsheet Structure Constants
-ID_HEADER = 'ID'
-OBSERVATION_HEADER = 'Observation'
-CATEGORY_HEADER = 'Category'
-PARTICIPANT_PREFIXES = ('P', 'G')  # 'P' for individual, 'G' for group
-ANNOTATION_KEYPHRASES = {
+ID_HEADER: str = 'ID'
+OBSERVATION_HEADER: str = 'Observation'
+CATEGORY_HEADER: str = 'Category'
+PARTICIPANT_PREFIXES: Tuple[str, ...] = ('P', 'G')  # 'P' for individual, 'G' for group
+ANNOTATION_KEYPHRASES: Dict[str, str] = {
     '!key': 'key',
 }
-IGNORED_TIMESTAMP_TOKENS = {'x'}
+IGNORED_TIMESTAMP_TOKENS: Set[str] = {'x'}
 
 # File and Duration Constants
-MAX_FILENAME_LENGTH = 255
-MAX_CLIP_DURATION_SECONDS = 600  # 10 minutes
-DEFAULT_DURATION_SECONDS = 60
-DEFAULT_GIF_DURATION_SECONDS = 5
-MAX_FILESIZE_MB = 0  # Maximum output file size in MB (0 = disabled)
+MAX_FILENAME_LENGTH: int = 255
+MAX_CLIP_DURATION_SECONDS: int = 600  # 10 minutes
+DEFAULT_DURATION_SECONDS: int = 60
+DEFAULT_GIF_DURATION_SECONDS: int = 5
+MAX_FILESIZE_MB: int = 0  # Maximum output file size in MB (0 = disabled)
 
 # Browse Mode Constants
-BROWSE_LINES_TO_DISPLAY = 5  # Number of rows to show at once when browsing
-BROWSE_DESCRIPTION_MAX_WIDTH = 40  # Max width for description column in table
-BROWSE_TIMESTAMP_MAX_WIDTH = 15    # Max width for each timestamp column
+BROWSE_LINES_TO_DISPLAY: int = 5  # Number of rows to show at once when browsing
+BROWSE_DESCRIPTION_MAX_WIDTH: int = 40  # Max width for description column in table
+BROWSE_TIMESTAMP_MAX_WIDTH: int = 15    # Max width for each timestamp column
 
 # Spreadsheet Selection Commands
-COMMAND_LIST_ALL = 'all'
-COMMAND_LIST_NEW = 'new'
-COMMAND_OPEN_LAST = 'last'
-COMMAND_SETTINGS = 'settings'
-COMMAND_HTTP_PREFIX = 'http'
-COMMAND_EXCEL = 'excel'
-NUM_NEWEST_DOCS_TO_SHOW = 3  # Number of newest documents to show when using 'new' command
+COMMAND_LIST_ALL: str = 'all'
+COMMAND_LIST_NEW: str = 'new'
+COMMAND_OPEN_LAST: str = 'last'
+COMMAND_SETTINGS: str = 'settings'
+COMMAND_HTTP_PREFIX: str = 'http'
+COMMAND_EXCEL: str = 'excel'
+NUM_NEWEST_DOCS_TO_SHOW: int = 3  # Number of newest documents to show when using 'new' command
 
 # Display / preview constants
-DESCRIPTION_PREVIEW_LENGTH = 50  # Max chars for description in previews
-REEL_PREVIEW_CLIP_COUNT = 10  # Number of clips to show in reel mode preview
-MAX_SKIPPED_TIMESTAMPS_TO_SHOW = 3  # Max skipped timestamps to list in parse_timestamps warning
+DESCRIPTION_PREVIEW_LENGTH: int = 50  # Max chars for description in previews
+PROGRESS_DESCRIPTION_LENGTH: int = 30  # Max chars for description in progress bar
+REEL_PREVIEW_CLIP_COUNT: int = 10  # Number of clips to show in reel mode preview
+MAX_SKIPPED_TIMESTAMPS_TO_SHOW: int = 3  # Max skipped timestamps to list in parse_timestamps warning
+
+# Timestamp format constants
+SECONDS_PER_HOUR: int = 3600
+SECONDS_PER_MINUTE: int = 60
+MAX_MMSS_LENGTH: int = 5  # Max length of an MM:SS timestamp string
+
+# ffmpeg constants
+FFMPEG_LOGLEVEL: str = '16'  # ffmpeg -loglevel value (16 = error)
+FFMPEG_SCREENSHOT_QUALITY: str = '2'  # -q:v value for screenshots (1=best, 31=worst)
+GIF_FPS: int = 10
+GIF_SCALE_WIDTH: int = 480
+AUDIO_BITRATE_KBPS: int = 128
+COMPRESSION_SIZE_FACTOR: float = 0.95  # Target 95% of max to leave headroom
+MIN_VIDEO_BITRATE_KBPS: int = 100
+
+# Source video pattern
+SOURCE_VIDEO_PATTERN: str = r'_[PG]\d+\.mp4$'
 
 # Rich output settings
-RICH_COLORS = True    # Enable/disable colored output (set False for piped output)
-RICH_PANELS = True    # Use bordered panels for errors/warnings/success messages
-RICH_PROGRESS = True  # Show progress bars during batch/reel processing
+RICH_COLORS: bool = True    # Enable/disable colored output (set False for piped output)
+RICH_PANELS: bool = True    # Use bordered panels for errors/warnings/success messages
+RICH_PROGRESS: bool = True  # Show progress bars during batch/reel processing
 
 # Textual TUI settings
-TEXTUAL_TUI = False    # Use Textual interactive screens
+TEXTUAL_TUI: bool = False    # Use Textual interactive screens
 
 # Settings descriptions (shown in TUI settings screen)
-SETTINGS_DESCRIPTIONS = {
+SETTINGS_DESCRIPTIONS: Dict[str, str] = {
     'REENCODING': 'Re-encode clips via ffmpeg instead of stream-copying. Slower but fixes some codec issues.',
     'AUDIO_NORMALIZE': 'Normalize audio levels across generated clips for consistent volume.',
     'FILEFORMAT': 'Output container format for generated video clips.',

@@ -1,15 +1,16 @@
 # -*- coding: utf-8 -*-
 """File and filename operations for clipgen."""
 
-import os
 import re
-from typing import Any, Dict, List, Optional
+from pathlib import Path
+from typing import List, Optional
 
 import gspread
 from icecream import ic
 
 import config
 import utils
+from utils import ClipRecord
 
 def format_filesize(size_bytes: float, precision: int = 2) -> str:
     """Format byte size as human-readable string.
@@ -45,7 +46,7 @@ def get_unique_filename(filename: str, file_format: Optional[str] = None) -> str
     file_extension = file_format or config.FILEFORMAT
     suffix_counter = 1
     while True:
-        if os.path.isfile(filename):
+        if Path(filename).is_file():
             if suffix_counter < 2:
                 # First collision: insert step number before file extension
                 # "file.mp4" -> "file-1.mp4"
@@ -97,7 +98,7 @@ def truncate_filename(filename: str, step: int = 1, file_format: Optional[str] =
             filename = filename[0:max_base_len] + file_extension
     return filename
 
-def prepare_clip(clip: Dict[str, Any]) -> Dict[str, Any]:
+def prepare_clip(clip: ClipRecord) -> ClipRecord:
     """Parse timestamps and sanitize description/category for filename use.
     
     Mutates the input clip dict: adds 'times' (list of (start, end) timestamp pairs)
@@ -173,7 +174,7 @@ def is_source_video(filename: str) -> bool:
     Returns:
         True if filename matches source video pattern, False otherwise
     """
-    return bool(re.search(r'_[PG]\d+\.mp4$', filename, re.IGNORECASE))
+    return bool(re.search(config.SOURCE_VIDEO_PATTERN, filename, re.IGNORECASE))
 
 
 def discover_clips() -> List[str]:
@@ -185,8 +186,7 @@ def discover_clips() -> List[str]:
     Returns:
         Sorted list of clip filenames (alphabetically)
     """
-    clips = []
-    for filename in os.listdir('.'):
-        if filename.endswith(config.FILEFORMAT) and not is_source_video(filename):
-            clips.append(filename)
-    return sorted(clips)
+    return sorted(
+        p.name for p in Path('.').iterdir()
+        if p.name.endswith(config.FILEFORMAT) and not is_source_video(p.name)
+    )

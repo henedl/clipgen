@@ -22,7 +22,7 @@ Clip record (returned by generation functions):
 
 import re
 import webbrowser
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, List, Optional, Set, Tuple
 
 import gspread
 from icecream import ic
@@ -30,6 +30,7 @@ from icecream import ic
 import config
 import tui
 import utils
+from utils import ClipRecord, ReelInput
 
 
 # ---- Header validation and row-range helpers ----
@@ -141,7 +142,7 @@ def _make_clip_record(
     observation_cell: Any,
     study_name: str,
     cell_value: str,
-) -> Dict[str, Any]:
+) -> ClipRecord:
     """Build one clip record dict for a cell at (row_idx, col_idx).
 
     Clip record structure (used by downstream prepare_clip/video code):
@@ -189,7 +190,7 @@ def _make_clip_record(
     }
 
 
-def generate_list(sheet: Any, mode: str, line_numbers: Optional[List[int]] = None, range_start: Optional[int] = None, range_end: Optional[int] = None, skip_prompts: bool = False, cell_specs: Optional[List[Tuple[str, int]]] = None, participant_id: Optional[str] = None, reel_input: Optional[str] = None) -> List[Dict[str, Any]]:
+def generate_list(sheet: Any, mode: str, line_numbers: Optional[List[int]] = None, range_start: Optional[int] = None, range_end: Optional[int] = None, skip_prompts: bool = False, cell_specs: Optional[List[Tuple[str, int]]] = None, participant_id: Optional[str] = None, reel_input: Optional[str] = None) -> List[ClipRecord]:
     """Goes through a sheet and builds clip records for timestamp cells.
     
     Args:
@@ -342,7 +343,9 @@ def generate_list(sheet: Any, mode: str, line_numbers: Optional[List[int]] = Non
                             if desc_col >= 0 and desc_col < len(sheet_data[row_idx]):
                                 desc = sheet_data[row_idx][desc_col]
                             if cell_value and cell_value.strip():
-                                utils.info_print(f'  {participant_id}.{row_number}: {cell_value.replace(chr(10), " ")} (row: {desc[:config.DESCRIPTION_PREVIEW_LENGTH] if desc else "N/A"})')
+                                display_value = cell_value.replace('\n', ' ')
+                                desc_preview = desc[:config.DESCRIPTION_PREVIEW_LENGTH] if desc else 'N/A'
+                                utils.info_print(f'  {participant_id}.{row_number}: {display_value} (row: {desc_preview})')
                             else:
                                 utils.info_print(f'  {participant_id}.{row_number}: [EMPTY]')
                             valid_specs.append((participant_id, row_number))
@@ -477,11 +480,10 @@ def get_num_participants(header_row: List[str], id_cell: Any, col_count: int) ->
     Returns:
         Number of participant columns found
     """
-    num_participants = 0
-    for j in range(0, col_count):
-        if len(header_row[j]) > 0:
-            if header_row[j][0] in config.PARTICIPANT_PREFIXES:
-                num_participants += 1
+    num_participants = sum(
+        1 for j in range(col_count)
+        if header_row[j] and header_row[j][0] in config.PARTICIPANT_PREFIXES
+    )
     utils.verbose_print(f'Found {num_participants} participants in total, spanning columns {id_cell.col+1} to {num_participants+id_cell.col+1}.')
     return num_participants
 
@@ -576,7 +578,7 @@ def parse_cell_specifications(cell_input: str) -> List[Tuple[str, int]]:
     return specs
 
 
-def parse_reel_input(input_string: str) -> dict:
+def parse_reel_input(input_string: str) -> ReelInput:
     """Parse mixed reel selector input into structured selectors.
 
     Supports: batch, filter, timeline, lines (e.g. 11, 12), ranges (e.g. 13-16),
@@ -590,7 +592,7 @@ def parse_reel_input(input_string: str) -> dict:
         ranges (list of (int,int)), categories (list of str), cells (list of (str,int)),
         participants (list of str)
     """
-    result = {
+    result: ReelInput = {
         'batch': False,
         'filter': False,
         'timeline': False,
@@ -741,7 +743,7 @@ def find_participant_column(header_row: List[str], id_cell: Any, participant_id:
             return col_idx
     return None
 
-def generate_participant_timestamps(sheet_data: List[List[str]], id_cell: Any, observation_cell: Any, study_name: str, participant_id: str) -> List[Dict[str, Any]]:
+def generate_participant_timestamps(sheet_data: List[List[str]], id_cell: Any, observation_cell: Any, study_name: str, participant_id: str) -> List[ClipRecord]:
     """Generate clip records for all rows in a single participant's column.
 
     Args:
@@ -768,10 +770,12 @@ def generate_participant_timestamps(sheet_data: List[List[str]], id_cell: Any, o
             continue
         issue = _make_clip_record(sheet_data, row_idx, col_idx, id_cell, observation_cell, study_name, cell_value)
         clips.append(issue)
-        utils.verbose_print(f"+ Found timestamp: {cell_value.replace(chr(10), ' ')} at row {row_idx + 1} ({gspread.utils.rowcol_to_a1(issue['cell'].row, issue['cell'].col)})")
+        display_value = cell_value.replace('\n', ' ')
+        cell_addr = gspread.utils.rowcol_to_a1(issue['cell'].row, issue['cell'].col)
+        utils.verbose_print(f"+ Found timestamp: {display_value} at row {row_idx + 1} ({cell_addr})")
     return clips
 
-def generate_cell_timestamps(sheet_data: List[List[str]], id_cell: Any, observation_cell: Any, study_name: str, cell_specs: List[Tuple[str, int]]) -> List[Dict[str, Any]]:
+def generate_cell_timestamps(sheet_data: List[List[str]], id_cell: Any, observation_cell: Any, study_name: str, cell_specs: List[Tuple[str, int]]) -> List[ClipRecord]:
     """Generate clip records for specific cells.
     
     Args:
@@ -819,11 +823,13 @@ def generate_cell_timestamps(sheet_data: List[List[str]], id_cell: Any, observat
         if 0 <= participant_row < len(sheet_data) and col_idx < len(sheet_data[participant_row]) and sheet_data[participant_row][col_idx]:
             issue['participant'] = utils.normalize_participant_id(sheet_data[participant_row][col_idx])
         clips.append(issue)
-        utils.verbose_print(f"+ Found timestamp: {cell_value.replace(chr(10), ' ')} at cell {participant_id}.{row_number} ({gspread.utils.rowcol_to_a1(issue['cell'].row, issue['cell'].col)})")
+        display_value = cell_value.replace('\n', ' ')
+        cell_addr = gspread.utils.rowcol_to_a1(issue['cell'].row, issue['cell'].col)
+        utils.verbose_print(f"+ Found timestamp: {display_value} at cell {participant_id}.{row_number} ({cell_addr})")
     
     return clips
 
-def generate_batch_timestamps(sheet_data: List[List[str]], id_cell: Any, observation_cell: Any, num_participants: int, study_name: str) -> List[Dict[str, Any]]:
+def generate_batch_timestamps(sheet_data: List[List[str]], id_cell: Any, observation_cell: Any, num_participants: int, study_name: str) -> List[ClipRecord]:
     """Generate clip records for all rows in batch mode.
     
     Args:
@@ -851,7 +857,7 @@ def generate_filter_timestamps(
     observation_cell: Any,
     num_participants: int,
     study_name: str,
-) -> List[Dict[str, Any]]:
+) -> List[ClipRecord]:
     """Generate key-marked clips from the entire sheet.
 
     - Segment-level: `!key` marks the preceding timestamp in that cell.
@@ -871,7 +877,7 @@ def generate_filter_timestamps(
         if 'key' in header_annotations:
             participant_key_columns.add(col_idx)
 
-    filtered_clips: List[Dict[str, Any]] = []
+    filtered_clips: List[ClipRecord] = []
     for clip in clips:
         clip_col = clip['cell'].col - 1
         if clip_col in participant_key_columns:
@@ -909,7 +915,7 @@ def collect_categories(sheet_data: List[List[str]], id_cell: Any, category_cell:
     
     return categories
 
-def generate_category_timestamps(sheet_data: List[List[str]], id_cell: Any, observation_cell: Any, category_cell: Any, num_participants: int, study_name: str, selected_categories: List[str]) -> List[Dict[str, Any]]:
+def generate_category_timestamps(sheet_data: List[List[str]], id_cell: Any, observation_cell: Any, category_cell: Any, num_participants: int, study_name: str, selected_categories: List[str]) -> List[ClipRecord]:
     """Generate clip records for all rows matching any of the selected categories.
     
     Args:
@@ -938,7 +944,7 @@ def generate_category_timestamps(sheet_data: List[List[str]], id_cell: Any, obse
     
     return clips
 
-def generate_line_timestamps(sheet_data: List[List[str]], id_cell: Any, observation_cell: Any, num_participants: int, study_name: str, cli_line_numbers: Optional[List[int]] = None, skip_prompts: bool = False) -> List[Dict[str, Any]]:
+def generate_line_timestamps(sheet_data: List[List[str]], id_cell: Any, observation_cell: Any, num_participants: int, study_name: str, cli_line_numbers: Optional[List[int]] = None, skip_prompts: bool = False) -> List[ClipRecord]:
     """Generate clip records for one or more line/row numbers.
     
     Args:
@@ -1013,7 +1019,7 @@ def generate_line_timestamps(sheet_data: List[List[str]], id_cell: Any, observat
 
     return clips
 
-def get_line_timestamps(sheet_data: List[List[str]], id_cell: Any, observation_cell: Any, num_participants: int, line_index: int, study_name: str) -> List[Dict[str, Any]]:
+def get_line_timestamps(sheet_data: List[List[str]], id_cell: Any, observation_cell: Any, num_participants: int, line_index: int, study_name: str) -> List[ClipRecord]:
     """Extract timestamp data from a single row in the spreadsheet as clip records.
 
     Processes all participant columns in the specified row and creates
@@ -1065,7 +1071,9 @@ def get_line_timestamps(sheet_data: List[List[str]], id_cell: Any, observation_c
                 utils.debug_print(f"Timestamp at R{issue['cell'].row-1},C{issue['cell'].col-1} -> '{issue['cell'].value}'")
                 utils.debug_print(f'Actual cell at address {gspread.utils.rowcol_to_a1(issue["cell"].row, issue["cell"].col)}')
                 clips.append(issue)
-                utils.verbose_print(f"+ Found timestamp: {value.replace(chr(10), ' ')} at address {gspread.utils.rowcol_to_a1(issue['cell'].row, issue['cell'].col)}")
+                display_value = value.replace('\n', ' ')
+                cell_addr = gspread.utils.rowcol_to_a1(issue['cell'].row, issue['cell'].col)
+                utils.verbose_print(f"+ Found timestamp: {display_value} at address {cell_addr}")
     except IndexError as e:
         if config.DEBUGGING:
             ic(e, line_index)
@@ -1077,7 +1085,7 @@ def get_line_timestamps(sheet_data: List[List[str]], id_cell: Any, observation_c
         ic(clips)
     return clips
 
-def generate_range_timestamps(sheet_data: List[List[str]], id_cell: Any, observation_cell: Any, num_participants: int, study_name: str, start_line: int, end_line: int) -> List[Dict[str, Any]]:
+def generate_range_timestamps(sheet_data: List[List[str]], id_cell: Any, observation_cell: Any, num_participants: int, study_name: str, start_line: int, end_line: int) -> List[ClipRecord]:
     """Generate clip records for a range of rows.
     
     Args:
@@ -1108,7 +1116,7 @@ def generate_reel_timestamps(
     num_participants: int,
     study_name: str,
     reel_input_string: str,
-) -> List[Dict[str, Any]]:
+) -> List[ClipRecord]:
     """Generate clip records for reel mode by combining multiple selector types and deduplicating.
 
     Parses reel input (batch, filter, timeline, lines, ranges, categories, cells, participants), collects
@@ -1152,7 +1160,7 @@ def generate_reel_timestamps(
     if not has_any:
         return []
 
-    all_issues: List[Dict[str, Any]] = []
+    all_issues: List[ClipRecord] = []
 
     if selectors['filter']:
         all_issues.extend(
@@ -1228,7 +1236,7 @@ def generate_reel_timestamps(
     # Deduplicate by cell (row, col): the same cell can be selected by multiple selectors
     # (e.g. line 11 and category "X" and participant P01), so we keep only one clip per cell
     seen: Set[Tuple[int, int]] = set()
-    deduped: List[Any] = []
+    deduped: List[ClipRecord] = []
     for issue in all_issues:
         key = (issue['cell'].row, issue['cell'].col)
         if key not in seen:
@@ -1249,7 +1257,7 @@ def generate_reel_timestamps(
     return deduped
 
 
-def sort_clips_chronologically(clips: List[Dict[str, Any]]) -> None:
+def sort_clips_chronologically(clips: List[ClipRecord]) -> None:
     """Sort clip records in-place by earliest start timestamp in each clip cell.
 
     Cells are normalized through parse_cell_annotations first, then parsed via
@@ -1463,7 +1471,7 @@ def browse_spreadsheet(sheet: Any) -> None:
                     utils.info_print(f'Opening spreadsheet in browser: {sheet.spreadsheet.title}')
                     webbrowser.open(spreadsheet_url)
                     utils.info_print('Spreadsheet opened in your default browser.')
-                except Exception as e:
+                except OSError as e:
                     utils.error_print('Could not open browser.', [f'Error: {e}'])
         else:
             utils.info_print('Unknown command. Available: up/u, down/d, pageup/pu, pagedown/pd, jump/j <row>, open/o, quit/q')

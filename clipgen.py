@@ -16,7 +16,10 @@ This script supports full unicode/UTF-8 for international characters in:
 import io
 import os
 import sys
+from pathlib import Path
 from typing import Any, Callable, List, NamedTuple, Optional, Set, Tuple
+
+from utils import ClipRecord
 
 import gspread
 from icecream import ic
@@ -124,13 +127,13 @@ def get_runtime_working_dir() -> str:
     executable directory so local assets resolve from where the binary lives.
     """
     if getattr(sys, 'frozen', False):
-        return os.path.dirname(os.path.abspath(sys.executable))
-    return os.path.dirname(os.path.abspath(__file__))
+        return str(Path(sys.executable).resolve().parent)
+    return str(Path(__file__).resolve().parent)
 
 
 # ---- Spreadsheet opening and selection utilities ----
 
-def _open_worksheet(gspread_client: Any, open_callable: Callable[[], Any], error_context: str):
+def _open_worksheet(gspread_client: Any, open_callable: Callable[[], Any], error_context: str) -> Optional[Any]:
     """Try to open a worksheet via a callable; catch gspread errors and print a consistent message.
     
     Args:
@@ -353,7 +356,7 @@ def _prompt_timeline_participant_selection(worksheet: Any) -> Optional[str]:
         return token
 
 
-def _run_reel_mode_interactive(worksheet: Any) -> Tuple[List[Any], bool, Optional[str]]:
+def _run_reel_mode_interactive(worksheet: Any) -> Tuple[List[ClipRecord], bool, Optional[str]]:
     """Run reel mode UI: instructions, input, generate_list, preview, confirm, output filename.
     Returns (clips_list, True, reel_output_file or None) when user confirms; caller may loop on continue.
     """
@@ -370,7 +373,7 @@ def _run_reel_mode_interactive(worksheet: Any) -> Tuple[List[Any], bool, Optiona
         participant_headers = spreadsheet.get_participant_list(header_row, id_cell, num_participants)
         categories = spreadsheet.collect_categories(sheet_data, id_cell, category_cell)
 
-        rows_data: List[dict] = []
+        rows_data: List[utils.BrowseRow] = []
         first_data_row = id_cell.row
         last_data_row = len(sheet_data) - 1
         category_col = category_cell.col - 1
@@ -617,11 +620,8 @@ def _run_format_mode_interactive(worksheet: Any, output_format: str) -> None:
             utils.info_print('  Use reel/timeline for a single .mp4 output, not for screenshots/GIFs.')
             continue
 
-        utils.verbose_print(
-            "  Mixed selectors detected ("
-            + ", ".join(non_empty_types)
-            + "). Generating individual outputs from combined selectors.",
-        )
+        selector_summary = ", ".join(non_empty_types)
+        utils.verbose_print(f"  Mixed selectors detected ({selector_summary}). Generating individual outputs from combined selectors.")
         clips_list = spreadsheet.generate_list(worksheet, 'reel', reel_input=selection)
         break
 
@@ -629,7 +629,7 @@ def _run_format_mode_interactive(worksheet: Any, output_format: str) -> None:
     utils.info_print(f'All done, created {outputs_generated} {output_label}!\nFiles are in {os.getcwd()}\n')
 
 
-def select_mode_and_generate(worksheet: Any) -> Tuple[List[Any], bool, Optional[str]]:
+def select_mode_and_generate(worksheet: Any) -> Tuple[List[ClipRecord], bool, Optional[str]]:
     """Interactive mode selection. Returns (clips list, is_reel_mode, reel_output_file or None)."""
     while True:
         input_mode: Optional[str] = None
@@ -733,11 +733,8 @@ def select_mode_and_generate(worksheet: Any) -> Tuple[List[Any], bool, Optional[
                 utils.info_print("  Use 're' or 'reel' for a combined reel video, or -T on the command line.")
                 continue
 
-            utils.verbose_print(
-                "  Mixed selectors detected ("
-                + ", ".join(non_empty_types)
-                + "). Generating individual clips from combined selectors.",
-            )
+            selector_summary = ", ".join(non_empty_types)
+            utils.verbose_print(f"  Mixed selectors detected ({selector_summary}). Generating individual clips from combined selectors.")
             clips_list = spreadsheet.generate_list(worksheet, 'reel', reel_input=input_mode)
             return (clips_list, False, None)
         except gspread.exceptions.GSpreadException as e:
@@ -747,9 +744,9 @@ def select_mode_and_generate(worksheet: Any) -> Tuple[List[Any], bool, Optional[
 # ---- Clip processing core pipeline ----
 
 def _process_single_clip_segments(
-    clip: Any,
+    clip: ClipRecord,
     base_video: str,
-    missing_videos: set,
+    missing_videos: Set[str],
     *,
     filename_prefix: str = "",
     output_format: str = "clip",
@@ -843,9 +840,9 @@ def _print_completion_message(outputs_generated: int, output_format: str, is_ree
         utils.info_print(f'All done, created {outputs_generated} videos!\nFiles are in {os.getcwd()}\n')
 
 
-def _check_source_video(clip: Any, missing_videos: set, skip_detail: str) -> Optional[str]:
+def _check_source_video(clip: ClipRecord, missing_videos: Set[str], skip_detail: str) -> Optional[str]:
     base_video = f"{clip['study']}_{clip['participant']}{config.FILEFORMAT}"
-    if os.path.isfile(base_video):
+    if Path(base_video).is_file():
         return base_video
 
     if base_video not in missing_videos:
@@ -853,14 +850,14 @@ def _check_source_video(clip: Any, missing_videos: set, skip_detail: str) -> Opt
         utils.error_print(
             f"Source video file not found: '{base_video}'",
             [
-                f"Expected location: {os.path.join(os.getcwd(), base_video)}",
+                f"Expected location: {Path.cwd() / base_video}",
                 skip_detail,
             ],
         )
     return None
 
 
-def _prepare_and_check_clip(clip: Any, missing_videos: Set[str]) -> Tuple[Any, Optional[str]]:
+def _prepare_and_check_clip(clip: ClipRecord, missing_videos: Set[str]) -> Tuple[ClipRecord, Optional[str]]:
     """Prepare one clip and validate that its source video exists.
 
     Returns:
@@ -925,7 +922,7 @@ def _process_with_progress(
         with progress:
             task = progress.add_task(task_label, total=total_clips)
             for clip in clips_list:
-                desc_preview = (clip.get('desc') or '')[:30]
+                desc_preview = (clip.get('desc') or '')[:config.PROGRESS_DESCRIPTION_LENGTH]
                 participant = clip.get('participant', '')
                 progress.update(task, description=f"[{participant}] {desc_preview}...")
                 results.append(process_fn(clip))
@@ -939,7 +936,7 @@ def _process_with_progress(
     return results
 
 
-def process_clips(clips_list: List[Any], output_format: str = "clip") -> int:
+def process_clips(clips_list: List[ClipRecord], output_format: str = "clip") -> int:
     """Process and generate outputs from the clips list. Returns count of files generated."""
     if config.DEBUGGING:
         ic(len(clips_list))
@@ -983,7 +980,7 @@ def process_clips(clips_list: List[Any], output_format: str = "clip") -> int:
     return outputs_generated
 
 
-def process_reel(clips_list: List[Any], output_file: Optional[str] = None) -> int:
+def process_reel(clips_list: List[ClipRecord], output_file: Optional[str] = None) -> int:
     """Process clips for reel mode: generate individual clips, concatenate into one video, clean up.
 
     Returns 1 if the reel was generated successfully, 0 otherwise.
@@ -1036,10 +1033,11 @@ def process_reel(clips_list: List[Any], output_file: Optional[str] = None) -> in
     ok = video.concatenate_clips(clip_paths, output_file, reencode_on_fail=True)
     for path in clip_paths:
         try:
-            if os.path.isfile(path):
-                os.remove(path)
-        except OSError:
-            pass
+            clip_path = Path(path)
+            if clip_path.is_file():
+                clip_path.unlink()
+        except OSError as e:
+            utils.warning_print(f"Could not remove temporary reel clip: {path}", [str(e)])
     return 1 if ok else 0
 
 
@@ -1060,7 +1058,7 @@ def authenticate_google() -> Any:
     except gspread.exceptions.GSpreadException as e:
         utils.error_print("Could not authenticate with Google.",
             [f"Error details: {e}",
-             f"Credentials file location: {os.path.join(os.getcwd(), 'credentials.json')}",
+             f"Credentials file location: {Path.cwd() / 'credentials.json'}",
              "",
              "Troubleshooting steps:",
              "  1. Ensure 'credentials.json' exists in the working directory",
@@ -1101,14 +1099,14 @@ def select_worksheet(gspread_client: Any, doc_list: List[str], args: Any, cli_mo
                 sys.exit(1)
             if len(paths) > 1:
                 utils.error_print(f'Multiple .xlsx files found ({len(paths)}). Specify one with -s path/to/file.xlsx',
-                    [os.path.basename(p) for p in paths])
+                    [Path(p).name for p in paths])
                 sys.exit(1)
             worksheet = excel_io.open_excel_workbook(paths[0])
             if not worksheet:
                 sys.exit(1)
         elif raw_lower.endswith('.xlsx'):
             # -s path/to/file.xlsx
-            path = os.path.join(os.getcwd(), raw) if not os.path.isabs(raw) else raw
+            path = str(Path.cwd() / raw) if not Path(raw).is_absolute() else raw
             worksheet = excel_io.open_excel_workbook(path)
             if not worksheet:
                 utils.error_print(f'Could not open Excel file "{args.spreadsheet}"')
@@ -1125,7 +1123,7 @@ def select_worksheet(gspread_client: Any, doc_list: List[str], args: Any, cli_mo
             sys.exit(1)
     else:
         # Auto-connect if working directory name matches a spreadsheet
-        cwd_name = os.path.basename(os.getcwd())
+        cwd_name = Path.cwd().name
         worksheet = open_spreadsheet_by_name(gspread_client, doc_list, cwd_name)
         if worksheet:
             utils.verbose_print(f'\nAuto-connecting to spreadsheet: {worksheet.spreadsheet.title}')
@@ -1147,6 +1145,62 @@ def select_worksheet(gspread_client: Any, doc_list: List[str], args: Any, cli_mo
 
 # ---- Mode runners and entry point ----
 
+def _generate_cli_clips(
+    worksheet: Any,
+    args: Any,
+    cli_mode_args: CliModeArgs,
+) -> List[ClipRecord]:
+    """Resolve CLI arguments into a list of clip records."""
+    skip_prompts = args.yes
+    mixed_selectors = getattr(args, 'mixed', None)
+    output_format = 'screen' if args.screen else 'gif' if args.gif else 'clip'
+
+    selection_mode_set = bool(
+        args.batch or args.lines or args.range or args.cell
+        or args.participant or args.filter or mixed_selectors
+        or args.reel or args.timeline
+    )
+
+    mode_dispatch: List[tuple] = [
+        (args.batch or (output_format != 'clip' and not selection_mode_set),
+         'batch', {}),
+        (args.lines,
+         'line', {'line_numbers': cli_mode_args.line_numbers}),
+        (args.range,
+         'range', {'range_start': cli_mode_args.range_start, 'range_end': cli_mode_args.range_end}),
+        (args.cell,
+         'cell', {'cell_specs': cli_mode_args.cell_specs}),
+        (args.participant,
+         'participant', {'participant_id': args.participant}),
+        (args.filter,
+         'filter', {}),
+        (mixed_selectors,
+         'reel', {'reel_input': mixed_selectors}),
+        (args.reel,
+         'reel', {'reel_input': args.reel}),
+        (args.timeline,
+         'reel', {'reel_input': f'timeline, {args.timeline}'}),
+    ]
+
+    for condition, mode, kwargs in mode_dispatch:
+        if condition:
+            return spreadsheet.generate_list(worksheet, mode, skip_prompts=skip_prompts, **kwargs)
+    return []
+
+
+def _resolve_timeline_output_file(args: Any, clips_list: List[ClipRecord]) -> Optional[str]:
+    """Build the output filename for timeline reel mode."""
+    if not args.timeline:
+        return None
+    participant_id = utils.normalize_participant_id(args.timeline).strip()
+    study_name = clips_list[0].get('study', '').strip() if clips_list else ''
+    if study_name and participant_id:
+        return files.get_unique_filename(f'{study_name}_{participant_id}_timeline{config.FILEFORMAT}')
+    if participant_id:
+        return files.get_unique_filename(f'{participant_id}_timeline{config.FILEFORMAT}')
+    return files.get_unique_filename(f'timeline{config.FILEFORMAT}')
+
+
 def run_cli_mode(worksheet: Any, args: Any, cli_mode_args: CliModeArgs) -> None:
     """Execute CLI mode - run once and exit.
 
@@ -1155,7 +1209,6 @@ def run_cli_mode(worksheet: Any, args: Any, cli_mode_args: CliModeArgs) -> None:
         args: Parsed command-line arguments
         cli_mode_args: Parsed line/range/cell arguments
     """
-    skip_prompts = args.yes
     output_format = 'screen' if args.screen else 'gif' if args.gif else 'clip'
     mixed_selectors = getattr(args, 'mixed', None)
 
@@ -1176,60 +1229,10 @@ def run_cli_mode(worksheet: Any, args: Any, cli_mode_args: CliModeArgs) -> None:
             )
             sys.exit(1)
 
-    selection_mode_set = bool(
-        args.batch
-        or args.lines
-        or args.range
-        or args.cell
-        or args.participant
-        or args.filter
-        or mixed_selectors
-        or args.reel
-        or args.timeline
-    )
-
-    if args.batch or (output_format != 'clip' and not selection_mode_set):
-        clips_list = spreadsheet.generate_list(worksheet, 'batch', skip_prompts=skip_prompts)
-    elif args.lines:
-        clips_list = spreadsheet.generate_list(worksheet, 'line', line_numbers=cli_mode_args.line_numbers, skip_prompts=skip_prompts)
-    elif args.range:
-        clips_list = spreadsheet.generate_list(worksheet, 'range', range_start=cli_mode_args.range_start, range_end=cli_mode_args.range_end, skip_prompts=skip_prompts)
-    elif args.cell:
-        clips_list = spreadsheet.generate_list(worksheet, 'cell', cell_specs=cli_mode_args.cell_specs, skip_prompts=skip_prompts)
-    elif args.participant:
-        clips_list = spreadsheet.generate_list(worksheet, 'participant', participant_id=args.participant, skip_prompts=skip_prompts)
-    elif args.filter:
-        clips_list = spreadsheet.generate_list(worksheet, 'filter', skip_prompts=skip_prompts)
-    elif mixed_selectors:
-        clips_list = spreadsheet.generate_list(
-            worksheet,
-            'reel',
-            reel_input=mixed_selectors,
-            skip_prompts=skip_prompts,
-        )
-    elif args.reel:
-        clips_list = spreadsheet.generate_list(worksheet, 'reel', reel_input=args.reel, skip_prompts=skip_prompts)
-    elif args.timeline:
-        clips_list = spreadsheet.generate_list(
-            worksheet,
-            'reel',
-            reel_input=f'timeline, {args.timeline}',
-            skip_prompts=skip_prompts,
-        )
-    else:
-        clips_list = []
+    clips_list = _generate_cli_clips(worksheet, args, cli_mode_args)
 
     if args.reel or args.timeline:
-        reel_output_file = None
-        if args.timeline:
-            participant_id = utils.normalize_participant_id(args.timeline).strip()
-            study_name = clips_list[0].get('study', '').strip() if clips_list else ''
-            if study_name and participant_id:
-                reel_output_file = files.get_unique_filename(f'{study_name}_{participant_id}_timeline{config.FILEFORMAT}')
-            elif participant_id:
-                reel_output_file = files.get_unique_filename(f'{participant_id}_timeline{config.FILEFORMAT}')
-            else:
-                reel_output_file = files.get_unique_filename(f'timeline{config.FILEFORMAT}')
+        reel_output_file = _resolve_timeline_output_file(args, clips_list)
         outputs_generated = process_reel(clips_list, output_file=reel_output_file)
     else:
         outputs_generated = process_clips(clips_list, output_format=output_format)

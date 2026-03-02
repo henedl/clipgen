@@ -1,9 +1,14 @@
 # -*- coding: utf-8 -*-
 """Textual TUI screens for clipgen interactive features."""
 
-from typing import List, Optional
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, List, Optional
 
 import config
+
+if TYPE_CHECKING:
+    from utils import BrowseRow
 
 try:
     from textual.app import App, ComposeResult
@@ -178,7 +183,7 @@ if TEXTUAL_AVAILABLE:
                         input_widget = self.query_one(f"#{attr}", Input)
                         setattr(config, attr, int(input_widget.value))
                     except (ValueError, TypeError):
-                        pass
+                        self.notify(f"Invalid value for {attr}, keeping current.", severity="warning")
 
     # -------------------------------------------------------------------
 
@@ -281,7 +286,7 @@ if TEXTUAL_AVAILABLE:
 
         def __init__(
             self,
-            rows_data: List[dict],
+            rows_data: List[BrowseRow],
             participant_headers: List[str],
             title: str = "",
         ):
@@ -514,7 +519,7 @@ if TEXTUAL_AVAILABLE:
 
         def __init__(
             self,
-            rows_data: List[dict],
+            rows_data: List[BrowseRow],
             participant_headers: List[str],
             categories: List[str],
         ):
@@ -711,7 +716,7 @@ def run_category_select(categories: List[str]) -> Optional[List[str]]:
     return app.run()
 
 
-def run_browse(rows_data: List[dict], participant_headers: List[str], title: str = "") -> None:
+def run_browse(rows_data: List[BrowseRow], participant_headers: List[str], title: str = "") -> None:
     """Launch interactive spreadsheet browser.
 
     No-op when Textual is unavailable.
@@ -739,7 +744,7 @@ def run_mode_select() -> Optional[str]:
 
 
 def run_reel_builder(
-    rows_data: List[dict],
+    rows_data: List[BrowseRow],
     participant_headers: List[str],
     categories: List[str],
 ) -> Optional[str]:
