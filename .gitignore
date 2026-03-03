@@ -15,17 +15,17 @@ tests/.pytest_cache/
 .pytest_cache/
 
 # Working docs
-*.mp4
-*.flv
-*.mov
-*.mkv
-*.xlsx
+/*.mp4
+/*.flv
+/*.mov
+/*.mkv
+/*.xlsx
 .cursor/
 .vscode/
 .conductor/
 .venv/
-*.html
-*.gif
+/*.html
+/*.gif
 *.png
 
 # Python byte code

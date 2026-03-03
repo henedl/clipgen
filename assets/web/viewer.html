@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>clipgen Timeline Viewer</title>
+  <link rel="stylesheet" href="viewer.css">
+</head>
+<body>
+  <header id="pageHeader">
+    <h1>clipgen <span class="header-light">Timeline Viewer</span></h1>
+    <div id="headerMeta">
+      <span id="studyName"></span>
+      <span id="generatedAt"></span>
+    </div>
+  </header>
+
+  <section id="timelinePane">
+    <div id="timelineTrack"></div>
+    <div id="timelineTicks"></div>
+    <div id="timelineLegend">
+      <span class="legend-item"><span class="legend-swatch clip"></span> Clip</span>
+      <span class="legend-item"><span class="legend-swatch screen"></span> Screenshot</span>
+      <span class="legend-item"><span class="legend-swatch gif"></span> GIF</span>
+    </div>
+  </section>
+
+  <div id="layout">
+    <aside id="sidebar">
+      <div id="filters">
+        <h3>Filters</h3>
+        <label for="filterCategory">Category</label>
+        <select id="filterCategory"><option value="">All categories</option></select>
+        <label for="filterParticipant">Participant</label>
+        <select id="filterParticipant"><option value="">All participants</option></select>
+        <fieldset id="filterType">
+          <legend>Type</legend>
+          <label><input type="checkbox" value="clip" checked> Clip</label>
+          <label><input type="checkbox" value="screen" checked> Screenshot</label>
+          <label><input type="checkbox" value="gif" checked> GIF</label>
+        </fieldset>
+      </div>
+      <h3>Artifacts <span id="artifactCount"></span></h3>
+      <ul id="artifactList"></ul>
+    </aside>
+
+    <section id="detailPane">
+      <div id="detailEmpty">
+        <p>Select an artifact from the timeline or the list to view details.</p>
+      </div>
+      <div id="detailContent" class="hidden">
+        <div id="detailHeader">
+          <span id="detailType" class="detail-badge"></span>
+          <h2 id="detailDescription"></h2>
+        </div>
+        <div id="detailMeta">
+          <dl>
+            <dt>Category</dt><dd id="detailCategory"></dd>
+            <dt>Participant</dt><dd id="detailParticipant"></dd>
+            <dt>Time</dt><dd id="detailTime"></dd>
+            <dt>Cell</dt><dd id="detailCell"></dd>
+            <dt>Source</dt><dd id="detailSource"></dd>
+            <dt>File</dt><dd id="detailFile"></dd>
+          </dl>
+        </div>
+        <div id="detailPreview"></div>
+      </div>
+    </section>
+  </div>
+
+  <div id="tooltip" class="hidden"></div>
+
+  <div id="emptyState" class="hidden">
+    <p>No artifacts were generated for this run.</p>
+  </div>
+
+  <!-- CLIPGEN_DATA_HERE -->
+  <script src="viewer.js" defer></script>
+</body>
+</html>
