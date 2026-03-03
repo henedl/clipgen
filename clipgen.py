@@ -14,10 +14,12 @@ This script supports full unicode/UTF-8 for international characters in:
 - File paths
 """
 import io
+import json
 import os
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, List, NamedTuple, Optional, Set, Tuple
+from typing import Any, Callable, Dict, List, NamedTuple, Optional, Set, Tuple
 
 from utils import ClipRecord
 
@@ -48,6 +50,7 @@ MODE_ALIASES = {
     're': 'reel', 'reel': 'reel',
     'rl': 'reellate', 'reellate': 'reellate',
     'br': 'browse', 'browse': 'browse',
+    'v': 'viewer', 'viewer': 'viewer',
 }
 
 FORMAT_MODE_ALIASES = {
@@ -625,7 +628,13 @@ def _run_format_mode_interactive(worksheet: Any, output_format: str) -> None:
         clips_list = spreadsheet.generate_list(worksheet, 'reel', reel_input=selection)
         break
 
-    outputs_generated = process_clips(clips_list, output_format=output_format)
+    outputs_generated, artifacts = process_clips(
+        clips_list,
+        output_format=output_format,
+        collect_artifacts=True,
+    )
+    if artifacts:
+        _INTERACTIVE_VIEWER_ARTIFACTS.extend(artifacts)
     utils.info_print(f'All done, created {outputs_generated} {output_label}!\nFiles are in {os.getcwd()}\n')
 
 
@@ -642,7 +651,7 @@ def select_mode_and_generate(worksheet: Any) -> Tuple[List[ClipRecord], bool, Op
         if input_mode is None:
             input_mode = utils.read_user_input(
                 '\nEnter mode or input directly:\n'
-                '  Modes: (b)atch, (r)ange, (c)ategory, (l)ine, (ce)ll, (p)articipant, (f)ilter, (s)creen, (g)if, (re)el, (rl) reel-late, (br)owse\n'
+                '  Modes: (b)atch, (r)ange, (c)ategory, (l)ine, (ce)ll, (p)articipant, (f)ilter, (s)creen, (g)if, (re)el, (rl) reel-late, (br)owse, (v)iewer\n'
                 '  Or enter mixed selectors directly: e.g. 5, P01.11, 13-16, "Observations"\n>> '
             )
         if not input_mode:
@@ -664,6 +673,25 @@ def select_mode_and_generate(worksheet: Any) -> Tuple[List[ClipRecord], bool, Op
             if mode == 'browse':
                 spreadsheet.browse_spreadsheet(worksheet)
                 return ([], False, None)
+            if mode == 'viewer':
+                if not _INTERACTIVE_VIEWER_ARTIFACTS:
+                    utils.info_print("No artifacts have been generated yet in this interactive session.")
+                    continue
+                study = _INTERACTIVE_VIEWER_ARTIFACTS[0].get('study', '')
+                participant = _INTERACTIVE_VIEWER_ARTIFACTS[0].get('participant', '')
+                data = finalize_timeline_data(
+                    _INTERACTIVE_VIEWER_ARTIFACTS,
+                    study=study,
+                    participant=participant,
+                    worksheet_title=getattr(worksheet, 'title', ''),
+                    is_excel=_is_excel_worksheet(worksheet),
+                    mode='interactive',
+                    output_format='clip',
+                )
+                viewer_path = generate_timeline_viewer(data)
+                if viewer_path:
+                    utils.info_print(f'Timeline viewer created: {viewer_path}')
+                continue
             if mode == 'reel':
                 reel_selection_result = _run_reel_mode_interactive(worksheet)
                 if reel_selection_result[1]:
@@ -751,7 +779,7 @@ def _process_single_clip_segments(
     filename_prefix: str = "",
     output_format: str = "clip",
     collect_paths: bool = False,
-) -> Tuple[int, List[str]]:
+) -> Tuple[int, List[Tuple[str, str, str]]]:
     """Process one clip's segments: run ffmpeg for each (start, end), optionally collect output paths.
 
     Caller must have already called prepare_clip(clip). Does not add to missing_videos; caller handles that.
@@ -767,7 +795,7 @@ def _process_single_clip_segments(
         (number of segments successfully generated, list of output paths if collect_paths else [])
     """
     generated = 0
-    output_paths: List[str] = []
+    output_paths: List[Tuple[str, str, str]] = []
     extension_map = {
         'clip': config.FILEFORMAT,
         'screen': '.png',
@@ -819,7 +847,7 @@ def _process_single_clip_segments(
         if ok:
             generated += 1
             if collect_paths:
-                output_paths.append(out_name)
+                output_paths.append((out_name, start_time, end_time))
     return (generated, output_paths)
 
 
@@ -936,11 +964,200 @@ def _process_with_progress(
     return results
 
 
-def process_clips(clips_list: List[ClipRecord], output_format: str = "clip") -> int:
-    """Process and generate outputs from the clips list. Returns count of files generated."""
+def _get_assets_web_dir() -> Path:
+    """Return the path to the assets/web directory containing viewer templates."""
+    return Path(get_runtime_working_dir()) / "assets" / "web"
+
+
+def build_artifact_records_for_clip(
+    clip: ClipRecord,
+    base_video: str,
+    segment_details: list,
+    output_format: str,
+) -> List[Dict[str, Any]]:
+    """Build artifact metadata records from a processed clip's successful outputs.
+
+    Args:
+        clip: Prepared clip dict with 'times', 'category', 'study', etc.
+        base_video: Source video filename
+        segment_details: List of (output_path, start_time_str, end_time_str) tuples
+        output_format: 'clip', 'screen', or 'gif'
+
+    Returns:
+        List of artifact dicts ready for JSON serialization
+    """
+    artifacts: List[Dict[str, Any]] = []
+    artifact_type = output_format if output_format in ('clip', 'screen', 'gif') else 'clip'
+
+    cell = clip.get('cell')
+    cell_row = getattr(cell, 'row', None)
+    cell_col = getattr(cell, 'col', None)
+    try:
+        cell_a1 = gspread.utils.rowcol_to_a1(cell_row, cell_col) if cell_row and cell_col else ''
+    except Exception:
+        cell_a1 = ''
+
+    annotations = list(clip.get('cell_annotations', []))
+
+    for seg_idx, (out_path, start_str, end_str) in enumerate(segment_details):
+        start_sec = utils.timestamp_to_seconds(start_str)
+        end_sec = utils.timestamp_to_seconds(end_str)
+
+        artifacts.append({
+            'id': f'a{cell_row}c{cell_col}s{seg_idx}',
+            'type': artifact_type,
+            'file': Path(out_path).name,
+            'start': start_sec,
+            'end': end_sec,
+            'thumbnail': '',
+            'study': clip.get('study', ''),
+            'participant': clip.get('participant', ''),
+            'category': clip.get('category', ''),
+            'description': clip.get('desc', ''),
+            'cellRow': cell_row,
+            'cellCol': cell_col,
+            'cellA1': cell_a1,
+            'annotations': annotations,
+            'sourceVideo': base_video,
+        })
+    return artifacts
+
+
+_INTERACTIVE_VIEWER_ARTIFACTS: List[Dict[str, Any]] = []
+
+
+def finalize_timeline_data(
+    artifacts: List[Dict[str, Any]],
+    *,
+    study: str = '',
+    participant: str = '',
+    worksheet_title: str = '',
+    is_excel: bool = False,
+    mode: str = '',
+    output_format: str = 'clip',
+) -> Dict[str, Any]:
+    """Construct the full window.CLIPGEN_DATA structure for the timeline viewer."""
+    max_time = 0.0
+    for a in artifacts:
+        end = a.get('end') or a.get('start') or 0
+        if end and end > max_time:
+            max_time = float(end)
+
+    duration = max_time * 1.05 if max_time > 0 else 0.0
+
+    return {
+        'meta': {
+            'study': study,
+            'participant': participant,
+            'generatedAt': datetime.now(timezone.utc).isoformat(),
+            'mode': mode,
+            'sourceSpreadsheet': worksheet_title,
+            'sourceFileType': 'excel' if is_excel else 'google',
+        },
+        'artifacts': artifacts,
+        'timeline': {
+            'duration': duration,
+            'startOffset': 0.0,
+        },
+    }
+
+
+_CLIPGEN_DATA_PLACEHOLDER = '<!-- CLIPGEN_DATA_HERE -->'
+
+
+def generate_timeline_viewer(
+    data: Dict[str, Any],
+    *,
+    output_basename: str = 'clips_viewer.html',
+) -> Optional[Path]:
+    """Create a per-run viewer HTML file with inlined JS/CSS.
+
+    Reads the static viewer.html template from the assets/web directory,
+    injects the serialized data as window.CLIPGEN_DATA, writes the result
+    alongside viewer.js and viewer.css into the current working directory.
+
+    Returns the path to the generated HTML, or None on failure.
+    """
+    assets_dir = _get_assets_web_dir()
+    template_path = assets_dir / 'viewer.html'
+    js_path = assets_dir / 'viewer.js'
+    css_path = assets_dir / 'viewer.css'
+
+    for required in (template_path, js_path, css_path):
+        if not required.is_file():
+            utils.warning_print(
+                f"Timeline viewer asset not found: {required}",
+                ["Viewer HTML will not be generated."],
+            )
+            return None
+
+    try:
+        template_html = template_path.read_text(encoding='utf-8')
+    except OSError as e:
+        utils.warning_print(f"Could not read viewer template: {e}")
+        return None
+
+    try:
+        css_text = css_path.read_text(encoding='utf-8')
+        js_text = js_path.read_text(encoding='utf-8')
+    except OSError as e:
+        utils.warning_print(f"Could not read viewer assets: {e}")
+        return None
+
+    # Inline CSS
+    css_link_tag = '<link rel="stylesheet" href="viewer.css">'
+    inline_css_block = f'<style>\n{css_text}\n</style>'
+    if css_link_tag in template_html:
+        template_html = template_html.replace(css_link_tag, inline_css_block)
+    elif '</head>' in template_html:
+        template_html = template_html.replace('</head>', f'{inline_css_block}\n</head>')
+
+    # Inline JS
+    js_script_tag = '<script src="viewer.js" defer></script>'
+    inline_js_block = f'<script defer>\n{js_text}\n</script>'
+    if js_script_tag in template_html:
+        template_html = template_html.replace(js_script_tag, inline_js_block)
+    elif '</body>' in template_html:
+        template_html = template_html.replace('</body>', f'{inline_js_block}\n</body>')
+
+    data_json = json.dumps(data, ensure_ascii=False, separators=(',', ':'))
+    script_block = f'<script>window.CLIPGEN_DATA={data_json};</script>'
+
+    if _CLIPGEN_DATA_PLACEHOLDER in template_html:
+        output_html = template_html.replace(_CLIPGEN_DATA_PLACEHOLDER, script_block)
+    else:
+        output_html = template_html.replace('</body>', f'{script_block}\n</body>')
+
+    out_dir = Path.cwd()
+    out_name = files.get_unique_filename(output_basename, file_format='.html')
+    out_path = out_dir / out_name
+
+    try:
+        out_path.write_text(output_html, encoding='utf-8')
+    except OSError as e:
+        utils.warning_print(f"Could not write viewer HTML: {e}")
+        return None
+
+    return out_path
+
+
+def process_clips(
+    clips_list: List[ClipRecord],
+    output_format: str = "clip",
+    *,
+    collect_artifacts: bool = False,
+) -> Any:
+    """Process and generate outputs from the clips list.
+
+    Returns:
+        Tuple of (count of files generated, list of artifact records).
+        Artifact records are only populated when collect_artifacts=True.
+    """
     if config.DEBUGGING:
         ic(len(clips_list))
-    
+
+    all_artifacts: List[Dict[str, Any]] = []
+
     def process_single_clip(clip: Any, missing_videos: Set[str]) -> Tuple[int, int]:
         """Process a single clip and return (generated, skipped)."""
         clip, base_video = _prepare_and_check_clip(clip, missing_videos)
@@ -948,17 +1165,21 @@ def process_clips(clips_list: List[ClipRecord], output_format: str = "clip") -> 
             return (0, 1)
         if base_video is None:
             return (0, len(clip['times']))
-    
-        generated_count, _ = _process_single_clip_segments(
+
+        generated_count, segment_details = _process_single_clip_segments(
             clip,
             base_video,
             missing_videos,
             output_format=output_format,
-            collect_paths=False,
+            collect_paths=collect_artifacts,
         )
+        if collect_artifacts and segment_details:
+            all_artifacts.extend(
+                build_artifact_records_for_clip(clip, base_video, segment_details, output_format)
+            )
         skipped_count = len(clip['times']) - generated_count if generated_count < len(clip['times']) else 0
         return (generated_count, skipped_count)
-    
+
     results, _ = _run_clip_pipeline(
         clips_list,
         empty_warning="No clips to process. No timestamps were found or selected.",
@@ -969,7 +1190,7 @@ def process_clips(clips_list: List[ClipRecord], output_format: str = "clip") -> 
     )
     outputs_generated = sum(generated_count for generated_count, _ in results)
     outputs_skipped = sum(skipped_count for _, skipped_count in results)
-    
+
     item_name = {
         'clip': 'video(s)',
         'screen': 'screenshot(s)',
@@ -977,17 +1198,27 @@ def process_clips(clips_list: List[ClipRecord], output_format: str = "clip") -> 
     }.get(output_format, 'file(s)')
     if outputs_skipped > 0:
         utils.verbose_print(f"\n* Summary: {outputs_generated} {item_name} generated, {outputs_skipped} skipped due to errors.")
+    if collect_artifacts:
+        return (outputs_generated, all_artifacts)
     return outputs_generated
 
 
-def process_reel(clips_list: List[ClipRecord], output_file: Optional[str] = None) -> int:
+def process_reel(
+    clips_list: List[ClipRecord],
+    output_file: Optional[str] = None,
+    *,
+    collect_artifacts: bool = False,
+) -> Any:
     """Process clips for reel mode: generate individual clips, concatenate into one video, clean up.
 
-    Returns 1 if the reel was generated successfully, 0 otherwise.
+    Returns:
+        Tuple of (1 if reel generated successfully else 0, artifact records list).
+        Artifact collection for reels is reserved for a future enhancement;
+        the artifacts list is always empty for now.
     """
     if not clips_list:
         utils.warning_print("No clips to process for reel. No timestamps were found or selected.")
-        return 0
+        return (0, []) if collect_artifacts else 0
 
     study_name = next(
         (
@@ -998,7 +1229,7 @@ def process_reel(clips_list: List[ClipRecord], output_file: Optional[str] = None
         None,
     )
 
-    def process_reel_clip(clip: Any, missing_videos: Set[str]) -> List[str]:
+    def process_reel_clip(clip: Any, missing_videos: Set[str]) -> List[Tuple[str, str, str]]:
         """Process one clip for reel mode and return generated segment paths."""
         clip, base_video = _prepare_and_check_clip(clip, missing_videos)
         if base_video is None:
@@ -1019,10 +1250,10 @@ def process_reel(clips_list: List[ClipRecord], output_file: Optional[str] = None
         task_label="Generating reel clips",
         per_clip_fn=process_reel_clip,
     )
-    clip_paths = [segment_path for segment_paths in all_segment_paths for segment_path in segment_paths]
+    clip_paths = [entry[0] for segment_paths in all_segment_paths for entry in segment_paths]
     if not clip_paths:
         utils.warning_print("No clips were generated for the reel.")
-        return 0
+        return (0, []) if collect_artifacts else 0
 
     if output_file is None and study_name:
         output_file = files.get_unique_filename(f"{study_name}_reel{config.FILEFORMAT}")
@@ -1038,6 +1269,8 @@ def process_reel(clips_list: List[ClipRecord], output_file: Optional[str] = None
                 clip_path.unlink()
         except OSError as e:
             utils.warning_print(f"Could not remove temporary reel clip: {path}", [str(e)])
+    if collect_artifacts:
+        return (1, []) if ok else (0, [])
     return 1 if ok else 0
 
 
@@ -1231,15 +1464,55 @@ def run_cli_mode(worksheet: Any, args: Any, cli_mode_args: CliModeArgs) -> None:
 
     clips_list = _generate_cli_clips(worksheet, args, cli_mode_args)
 
+    want_viewer = getattr(args, 'viewer', False)
+    artifacts: List[Dict[str, Any]] = []
+
     if args.reel or args.timeline:
         reel_output_file = _resolve_timeline_output_file(args, clips_list)
-        outputs_generated = process_reel(clips_list, output_file=reel_output_file)
+        if want_viewer:
+            outputs_generated, artifacts = process_reel(
+                clips_list,
+                output_file=reel_output_file,
+                collect_artifacts=True,
+            )
+        else:
+            outputs_generated = process_reel(
+                clips_list,
+                output_file=reel_output_file,
+            )
     else:
-        outputs_generated = process_clips(clips_list, output_format=output_format)
+        if want_viewer:
+            outputs_generated, artifacts = process_clips(
+                clips_list,
+                output_format=output_format,
+                collect_artifacts=True,
+            )
+        else:
+            outputs_generated = process_clips(
+                clips_list,
+                output_format=output_format,
+            )
 
     if not config.REENCODING:
         _print_reencoding_warning(utils.verbose_print)
     _print_completion_message(outputs_generated, output_format, is_reel=bool(args.reel or args.timeline))
+
+    if want_viewer and artifacts:
+        study = artifacts[0].get('study', '') if artifacts else ''
+        participant = artifacts[0].get('participant', '') if artifacts else ''
+        data = finalize_timeline_data(
+            artifacts,
+            study=study,
+            participant=participant,
+            worksheet_title=getattr(worksheet, 'title', ''),
+            is_excel=_is_excel_worksheet(worksheet),
+            mode=output_format if output_format != 'clip' else 'batch',
+            output_format=output_format,
+        )
+        viewer_path = generate_timeline_viewer(data)
+        if viewer_path:
+            utils.info_print(f'Timeline viewer created: {viewer_path}')
+
 
 def run_interactive_mode(worksheet: Any) -> None:
     """Execute interactive mode - main processing loop.
@@ -1247,6 +1520,8 @@ def run_interactive_mode(worksheet: Any) -> None:
     Args:
         worksheet: Selected worksheet
     """
+    _INTERACTIVE_VIEWER_ARTIFACTS.clear()
+
     while True:
         try:
             clips_list, is_reel, reel_output_file = select_mode_and_generate(worksheet)
@@ -1256,9 +1531,12 @@ def run_interactive_mode(worksheet: Any) -> None:
                     break
                 continue
             if is_reel:
-                outputs_generated = process_reel(clips_list, output_file=reel_output_file)
+                outputs_generated, artifacts = process_reel(clips_list, output_file=reel_output_file)
             else:
-                outputs_generated = process_clips(clips_list)
+                outputs_generated, artifacts = process_clips(clips_list, collect_artifacts=True)
+
+            if artifacts:
+                _INTERACTIVE_VIEWER_ARTIFACTS.extend(artifacts)
 
             if not config.REENCODING:
                 _print_reencoding_warning(utils.info_print)

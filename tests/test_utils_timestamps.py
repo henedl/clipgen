@@ -32,6 +32,14 @@ def test_timestamp_to_seconds_valid_and_invalid():
     assert utils.timestamp_to_seconds("not-a-time") is None
 
 
+def test_convert_clock_pairs_to_relative_uses_baseline_and_skips_invalid():
+    pairs = [("22:02:12", "22:02:45"), ("22:01:00", "22:01:30")]
+    baseline = "22:00"
+    converted = utils.convert_clock_pairs_to_relative(pairs, baseline, cell_ref="B5")
+    # First pair becomes 2:12-2:45, second is before baseline and is skipped.
+    assert converted == [("2:12", "2:45")]
+
+
 def test_parse_cell_annotations_splits_segment_and_cell_annotations():
     # !key should annotate the preceding timestamp and also appear as a cell-level annotation.
     cleaned, segment_annotations, cell_annotations = utils.parse_cell_annotations(

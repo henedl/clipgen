@@ -125,6 +125,9 @@ def prepare_clip(clip: ClipRecord) -> ClipRecord:
     clip['cell_annotations'] = sorted(cell_annotations)
     clip['segment_annotations'] = {key: sorted(indexes) for key, indexes in segment_annotations.items()}
     clip['times'] = utils.parse_timestamps(cleaned_cell_value, cell_ref=cell_ref)
+    timestamp_baseline = clip.get('timestamp_baseline')
+    if timestamp_baseline:
+        clip['times'] = utils.convert_clock_pairs_to_relative(clip['times'], timestamp_baseline, cell_ref=cell_ref)
     selected_segment_indexes = clip.get('selected_segment_indexes')
     if selected_segment_indexes is not None:
         selected_set = set(selected_segment_indexes)

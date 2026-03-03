@@ -24,6 +24,9 @@ tests/.pytest_cache/
 .vscode/
 .conductor/
 .venv/
+*.html
+*.gif
+*.png
 
 # Python byte code
 *.py[cod]

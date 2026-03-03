@@ -172,22 +172,31 @@ def _make_clip_record(
     category_col = observation_cell.col - 2
     # Header row in sheet_data is 0-based; id_cell.row is 1-based
     participant_row = id_cell.row - 1
+    # Optional clock baseline row is one row **above** the header row.
+    # With header at spreadsheet row 3, baseline is at row 2 (index 1 in sheet_data).
+    baseline_row = id_cell.row - 2
     desc = ""
     if 0 <= desc_col < len(sheet_data[row_idx]):
         desc = sheet_data[row_idx][desc_col]
     participant = ""
     if 0 <= participant_row < len(sheet_data) and col_idx < len(sheet_data[participant_row]):
         participant = utils.normalize_participant_id(sheet_data[participant_row][col_idx])
+    timestamp_baseline = ""
+    if 0 <= baseline_row < len(sheet_data) and col_idx < len(sheet_data[baseline_row]):
+        timestamp_baseline = sheet_data[baseline_row][col_idx].strip()
     category = ""
     if 0 <= category_col < len(sheet_data[row_idx]):
         category = sheet_data[row_idx][category_col]
-    return {
+    result: ClipRecord = {
         "cell": cell,
         "desc": desc,
         "study": study_name,
         "participant": participant,
         "category": category,
     }
+    if timestamp_baseline:
+        result["timestamp_baseline"] = timestamp_baseline
+    return result
 
 
 def generate_list(sheet: Any, mode: str, line_numbers: Optional[List[int]] = None, range_start: Optional[int] = None, range_end: Optional[int] = None, skip_prompts: bool = False, cell_specs: Optional[List[Tuple[str, int]]] = None, participant_id: Optional[str] = None, reel_input: Optional[str] = None) -> List[ClipRecord]:

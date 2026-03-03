@@ -17,13 +17,14 @@ class ClipRecord(TypedDict, total=False):
 
     Always present after _make_clip_record: cell, desc, study, participant, category.
     Added by prepare_clip: times, cell_annotations, segment_annotations.
-    Optionally set before prepare_clip: selected_segment_indexes.
+    Optionally set before prepare_clip: selected_segment_indexes, timestamp_baseline.
     """
     cell: Any  # gspread.Cell or ExcelSheetAdapter equivalent
     desc: str
     study: str
     participant: str
     category: str
+    timestamp_baseline: str
     times: List[Tuple[str, str]]
     cell_annotations: List[str]
     segment_annotations: Dict[str, List[int]]
@@ -197,7 +198,9 @@ Note: Non-interactive mode (using -b, -l, -r, -c, -p, -f, -M, -R, or -T) is sile
         help='Skip confirmation prompts (auto-confirm)')
     parser.add_argument('-v', '--verbose', action='store_true',
         help='Enable verbose output in non-interactive mode (shows all messages)')
-    
+    parser.add_argument('--viewer', action='store_true',
+        help='Generate a timeline HTML viewer file (clips_viewer.html) for this run')
+
     return parser.parse_args()
 
 def debug_print(message: str) -> None:
@@ -702,6 +705,96 @@ def parse_timestamps(cell_value: str, cell_ref: Optional[str] = None) -> List[Tu
     if config.DEBUGGING:
         ic(parsed_timestamps)
     return parsed_timestamps
+
+
+def _clock_to_seconds(ts: str) -> Optional[int]:
+    """Parse a clock-style timestamp into total seconds.
+
+    Accepts HH:MM:SS, HH:MM, or MM:SS. Returns None if parsing fails.
+    """
+    value = (ts or '').strip()
+    if not value:
+        return None
+
+    # Choose format based on number of components to avoid treating "22:00"
+    # as 22 minutes instead of 22 hours.
+    parts = value.split(':')
+    if len(parts) == 3:
+        try:
+            parsed = datetime.strptime(value, '%H:%M:%S')
+            return parsed.hour * config.SECONDS_PER_HOUR + parsed.minute * config.SECONDS_PER_MINUTE + parsed.second
+        except ValueError:
+            return None
+    if len(parts) == 2:
+        # Prefer HH:MM for clock-style values like "22:00"; fall back to MM:SS.
+        for fmt in ('%H:%M', '%M:%S'):
+            try:
+                parsed = datetime.strptime(value, fmt)
+                return parsed.hour * config.SECONDS_PER_HOUR + parsed.minute * config.SECONDS_PER_MINUTE + parsed.second
+            except ValueError:
+                continue
+        return None
+    return None
+
+
+def _seconds_to_timestamp(total_seconds: int) -> str:
+    """Format a non-negative number of seconds as H:MM:SS or M:SS."""
+    if total_seconds < 0:
+        total_seconds = 0
+    hours, rem = divmod(total_seconds, config.SECONDS_PER_HOUR)
+    minutes, seconds = divmod(rem, config.SECONDS_PER_MINUTE)
+    if hours > 0:
+        return f"{hours:d}:{minutes:02d}:{seconds:02d}"
+    return f"{minutes:d}:{seconds:02d}"
+
+
+def convert_clock_pairs_to_relative(
+    pairs: List[Tuple[str, str]],
+    baseline: str,
+    cell_ref: Optional[str] = None,
+) -> List[Tuple[str, str]]:
+    """Convert absolute clock (start, end) pairs to relative offsets using a baseline.
+
+    Returns a new list of (start, end) pairs in relative time. Invalid or
+    non-positive-length segments are skipped with warnings.
+    """
+    baseline_seconds = _clock_to_seconds(baseline)
+    if baseline_seconds is None:
+        cell_info = f" in cell {cell_ref}" if cell_ref else ""
+        warning_print(
+            f"Ignoring invalid baseline timestamp '{baseline}'{cell_info}.",
+            ["Baseline must use clock format like HH:MM:SS or MM:SS.",
+             "Timestamps in this column will be treated as relative."],
+        )
+        return pairs
+
+    result: List[Tuple[str, str]] = []
+    skipped: List[str] = []
+    for start_str, end_str in pairs:
+        start_s = _clock_to_seconds(start_str)
+        end_s = _clock_to_seconds(end_str)
+        if start_s is None or end_s is None:
+            skipped.append(f"{start_str}-{end_str}")
+            continue
+        start_rel = start_s - baseline_seconds
+        end_rel = end_s - baseline_seconds
+        if start_rel < 0 or end_rel <= 0 or end_rel <= start_rel:
+            skipped.append(f"{start_str}-{end_str}")
+            continue
+        result.append(
+            (_seconds_to_timestamp(start_rel), _seconds_to_timestamp(end_rel))
+        )
+
+    if skipped:
+        cell_info = f" in cell {cell_ref}" if cell_ref else ""
+        details = [f"    '{s}'" for s in skipped]
+        details.append("  These segments were before the baseline, invalid, or zero/negative length.")
+        warning_print(
+            f"Skipped {len(skipped)} clock-based timestamp segment(s){cell_info} when converting to relative:",
+            details,
+        )
+
+    return result
 
 class QuitProgram(Exception):
     """Signal that the user requested to quit the program from an interactive prompt."""

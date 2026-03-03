@@ -1,5 +1,7 @@
 import spreadsheet
+from typing import List
 
+from utils import ClipRecord
 
 def test_parse_reel_input_parses_mixed_selectors():
     parsed = spreadsheet.parse_reel_input('timeline, 11, 13-16, P01.5, P02, "Usability"')
@@ -80,6 +82,36 @@ def test_generate_reel_timestamps_timeline_requires_one_participant(fake_sheet_m
     assert clips == []
 
 
+def test_make_clip_record_attaches_timestamp_baseline(fake_sheet_meta):
+    # Sheet layout:
+    # Row 0: Study
+    # Row 1: Baseline row (clock times)
+    # Row 2: ID header row
+    # Row 3+: Data rows
+    sheet_data = [
+        ["Study"],
+        ["", "09:12:00", "", ""],
+        ["ID", "P01", "Observation", "Category"],
+        ["1", "09:15:00-09:16:30", "Obs one", "CatA"],
+    ]
+    # For this sheet layout, the header row is spreadsheet row 3.
+    from types import SimpleNamespace
+
+    id_cell = SimpleNamespace(row=3, col=1)
+    observation_cell = SimpleNamespace(row=3, col=4)
+    clip = spreadsheet._make_clip_record(
+        sheet_data,
+        row_idx=3,
+        col_idx=1,
+        id_cell=id_cell,
+        observation_cell=observation_cell,
+        study_name="study",
+        cell_value=sheet_data[3][1],
+    )
+    assert clip["participant"] == "P01"
+    assert clip.get("timestamp_baseline") == "09:12:00"
+
+
 def test_generate_reel_timestamps_dedupes_cells(monkeypatch, fake_sheet_meta, make_clip):
     duplicate_clip = make_clip(row=4, col=2)
 
@@ -149,7 +181,7 @@ def test_generate_filter_timestamps_honors_header_and_segment_annotations(monkey
 def test_sort_clips_chronologically_orders_by_start_time():
     import gspread
 
-    clips = [
+    clips: List[ClipRecord] = [
         {"cell": gspread.cell.Cell(3, 2, "00:30-00:40")},
         {"cell": gspread.cell.Cell(2, 2, "01:00-01:10")},
         {"cell": gspread.cell.Cell(4, 2, "invalid")},

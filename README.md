@@ -77,6 +77,36 @@ clipgen assumes that you are using a spreadsheet with a particular layout. A ref
 Timestamps must be separated by characters ```+ , ;```
 Ranges must be separated by character ```-```
 
+You can optionally add a **baseline row for clock timestamps** directly above the participant header row:
+
+- The participant header row still contains `P01`, `P02`, etc.
+- The row **above** that can contain a clock timestamp for each participant column, e.g. `09:12:00` above `P01`.
+- When a baseline cell is non-empty, all timestamps in that participant column are treated as **clock/absolute times** and are converted to **relative offsets** by subtracting the baseline time before cutting clips.
+- When a baseline cell is empty, timestamps in that participant column are treated as **relative** (the current behavior).
+
+## Timeline HTML Viewer
+
+clipgen can generate an interactive HTML timeline viewer that visualizes all artifacts (clips, screenshots, GIFs) from a run.
+
+- **CLI**: Pass `--viewer` alongside any mode flag to generate the viewer after clip processing:
+
+``` shell
+python clipgen.py -b --viewer
+python clipgen.py -l 5+7 --screen --viewer
+```
+
+- **Interactive mode**: During an interactive session, clipgen keeps track of all generated artifacts. You can choose the `viewer` mode from the mode selection prompt to generate a timeline viewer for everything created so far in that session.
+
+The viewer is a standalone `clips_viewer.html` file written to the same directory as the generated artifacts. Open it in any browser (works with `file://` — no server needed). It provides:
+
+- A horizontal timeline showing all artifacts positioned by their timestamps.
+- A filterable sidebar list sorted by time.
+- Filters by category, participant, and artifact type.
+- A detail panel with inline video/image preview.
+- Spreadsheet cell references for each artifact.
+
+The viewer assets (`viewer.js`, `viewer.css`) are copied alongside the HTML automatically.
+
 ## Possible future features
 
 - GUI

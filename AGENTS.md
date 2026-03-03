@@ -7,6 +7,7 @@
 - Prefer naming new helpers to match existing method naming patterns in the same module.
 - Never write a class when a function will do.
 - No comments on obvious code.
+- Treat spreadsheet layout and timestamp semantics as domain rules; if tests conflict with these, reconsider or adjust the tests rather than changing core semantics to satisfy them.
 
 ## Learned Workspace Facts
 

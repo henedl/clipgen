@@ -19,6 +19,7 @@ clipgen is a Python CLI tool that generates clips from timestamps stored in a Go
 | [google_api.py](google_api.py) | Google Sheets auth, worksheet selection by priority, spreadsheet listing/search |
 | [excel_io.py](excel_io.py) | Excel adapter: `ExcelSheetAdapter` mimics gspread Worksheet interface for local .xlsx |
 | [tui.py](tui.py) | Optional Textual-based TUI for settings, browse, and reel building when `TEXTUAL_TUI` is enabled |
+| [assets/web/](assets/web/) | Static HTML/JS/CSS template for the timeline viewer (`viewer.html`, `viewer.js`, `viewer.css`) |
 
 ## Key data structures
 
@@ -95,12 +96,27 @@ CLI mode flags are mutually exclusive for selection (`-b/-l/-r/-c/-p/-f/-R/-T`) 
 - Observation column: Human-readable description per row.
 - Category column: Label per row for category/reel selection.
 
+Optional clock baseline row:
+
+- A row directly **above** the participant header row can contain per-participant baseline timestamps.
+- Each non-empty baseline cell (e.g. `09:12:00` above `P01`) marks that participant column as using **clock/absolute** timestamps.
+- During `files.prepare_clip()`, all `(start, end)` pairs in that column are converted to **relative** offsets by subtracting the baseline via `utils.convert_clock_pairs_to_relative()`.
+- Empty baseline cells mean the participant column uses **relative** timestamps (no conversion applied).
+
 Reference spreadsheet layout is described in [README.md](README.md).
+
+## Timeline HTML Viewer
+
+- **Opt-in**: CLI flag `--viewer` or interactive `viewer` mode from the mode selection prompt.
+- **Assets**: Static template in [assets/web/](assets/web/) (`viewer.html`, `viewer.js`, `viewer.css`). Per-run, Python copies these into the artifact directory and injects a `<script>window.CLIPGEN_DATA={...};</script>` block replacing the `<!-- CLIPGEN_DATA_HERE -->` placeholder.
+- **Data contract** (`window.CLIPGEN_DATA`): JSON object with `meta` (study, participant, generatedAt, mode, sourceSpreadsheet, sourceFileType), `artifacts` (array of {id, type, file, start, end, study, participant, category, description, cellRow, cellCol, cellA1, annotations, sourceVideo}), and `timeline` ({duration, startOffset}).
+- **Key functions**: `build_artifact_records_for_clip()`, `finalize_timeline_data()`, `generate_timeline_viewer()` – all in [clipgen.py](clipgen.py).
+- Reel mode artifact collection is stubbed (returns empty artifacts list) for future enhancement.
 
 ## Version
 
-- The version is stored as `VERSIONNUM` in [config.py](config.py) (currently `'0.7.18'`).
-- **When making substantive code changes** (bug fixes or features), increment the **last segment only** (patch) in `config.py`, e.g. `0.7.18` → `0.7.19`. Do not bump for docs-only, comment-only, or refactor-only changes unless they affect user-visible behavior.
+- The version is stored as `VERSIONNUM` in [config.py](config.py) (currently `'0.7.20'`).
+- **When making substantive code changes** (bug fixes or features), increment the **last segment only** (patch) in `config.py`, e.g. `0.7.20` → `0.7.21`. Do not bump for docs-only, comment-only, or refactor-only changes unless they affect user-visible behavior.
 
 ## Testing notes
 

@@ -40,6 +40,26 @@ def test_process_clips_counts_generated_segments_for_all_formats(monkeypatch, ma
     assert extract_gif.call_count == 2
 
 
+def test_prepare_clip_converts_clock_timestamps_to_relative(monkeypatch, make_clip):
+    # Arrange a clip with a baseline and clock-style timestamps.
+    raw_clip = make_clip(row=3, col=2)
+    raw_clip["timestamp_baseline"] = "09:12:00"
+
+    def fake_parse_cell_annotations(value):
+        # Return cleaned value and empty annotations.
+        return value, {}, set()
+
+    monkeypatch.setattr(clipgen.utils, "parse_cell_annotations", fake_parse_cell_annotations)
+    monkeypatch.setattr(clipgen.utils, "has_non_ignored_timestamp_content", lambda _v: True)
+
+    # 09:15:00-09:16:30 should become 3:00-4:30 relative to 09:12:00 baseline.
+    raw_cell_value = "09:15:00-09:16:30"
+    raw_clip["cell"].value = raw_cell_value
+
+    prepared = clipgen.files.prepare_clip(raw_clip)
+    assert prepared["times"] == [("3:00", "4:30")]
+
+
 def test_process_clips_skips_when_source_video_missing(monkeypatch, make_clip):
     raw_clip = make_clip()
     monkeypatch.setattr(
