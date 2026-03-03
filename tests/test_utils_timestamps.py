@@ -34,10 +34,10 @@ def test_timestamp_to_seconds_valid_and_invalid():
 
 def test_convert_clock_pairs_to_relative_uses_baseline_and_skips_invalid():
     pairs = [("22:02:12", "22:02:45"), ("22:01:00", "22:01:30")]
-    baseline = "22:00"
+    baseline = "22:00"  # HH:MM = 22:00:00
     converted = utils.convert_clock_pairs_to_relative(pairs, baseline, cell_ref="B5")
-    # First pair becomes 2:12-2:45, second is before baseline and is skipped.
-    assert converted == [("2:12", "2:45")]
+    # Both pairs are after baseline; converted to relative (2:12-2:45 and 1:00-1:30).
+    assert converted == [("2:12", "2:45"), ("1:00", "1:30")]
 
 
 def test_parse_cell_annotations_splits_segment_and_cell_annotations():
