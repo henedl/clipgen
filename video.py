@@ -14,7 +14,6 @@ from icecream import ic
 
 import config
 import files
-import tui
 import utils
 
 INVALID_END_TIMESTAMP = None
@@ -189,15 +188,10 @@ def run_ffmpeg(input_file: str, output_file: str, start_pos: str, end_pos: str, 
     if config.DEBUGGING:
         ic(duration, duration_seconds)
     if duration > config.MAX_CLIP_DURATION_SECONDS:
-        proceed = False
-        if tui.use_textual():
-            proceed = tui.confirm_long_clip(duration)
-        else:
-            yn = utils.read_user_input(
-                f'The generated video will be {duration}s ({duration//60}m {duration%60}s), over 10 minutes long. Generate anyway? (y/n)\n>> '
-            )
-            proceed = yn == 'y'
-        if not proceed:
+        yn = utils.read_user_input(
+            f'The generated video will be {duration}s ({duration//60}m {duration%60}s), over 10 minutes long. Generate anyway? (y/n)\n>> '
+        )
+        if yn != 'y':
             return False
 
     utils.verbose_print(f'Cutting {input_file} from {start_pos} to {end_pos}.')

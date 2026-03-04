@@ -18,7 +18,6 @@ clipgen is a Python CLI tool that generates clips from timestamps stored in a Go
 | [config.py](config.py) | Global constants and settings (version, headers, limits, commands) |
 | [google_api.py](google_api.py) | Google Sheets auth, worksheet selection by priority, spreadsheet listing/search |
 | [excel_io.py](excel_io.py) | Excel adapter: `ExcelSheetAdapter` mimics gspread Worksheet interface for local .xlsx |
-| [tui.py](tui.py) | Optional Textual-based TUI for settings, browse, and reel building when `TEXTUAL_TUI` is enabled |
 | [assets/web/](assets/web/) | Static HTML/JS/CSS template for the timeline viewer (`viewer.html`, `viewer.js`, `viewer.css`) |
 
 ## Key data structures

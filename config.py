@@ -9,7 +9,7 @@ from icecream import ic
 REENCODING: bool = False
 AUDIO_NORMALIZE: bool = False
 FILEFORMAT: str = '.mp4'
-VERSIONNUM: str = '0.8.5'
+VERSIONNUM: str = '0.8.6'
 WORKSHEET_PRIORITY: List[str] = ['Sheet1', 'Data', 'data', 'Observations', 'Data set', 'data set', 'dataset', 'Dataset']
 DEBUGGING: bool = False
 VERBOSE: bool = True  # Set to False in CLI mode unless -v flag is used
@@ -79,10 +79,7 @@ RICH_COLORS: bool = True    # Enable/disable colored output (set False for piped
 RICH_PANELS: bool = True    # Use bordered panels for errors/warnings/success messages
 RICH_PROGRESS: bool = True  # Show progress bars during batch/reel processing
 
-# Textual TUI settings
-TEXTUAL_TUI: bool = False    # Use Textual interactive screens
-
-# Settings descriptions (shown in TUI settings screen)
+# Settings descriptions (used by interactive settings helpers)
 SETTINGS_DESCRIPTIONS: Dict[str, str] = {
     'REENCODING': 'Re-encode clips via ffmpeg instead of stream-copying. Slower but fixes some codec issues.',
     'AUDIO_NORMALIZE': 'Normalize audio levels across generated clips for consistent volume.',
@@ -94,5 +91,4 @@ SETTINGS_DESCRIPTIONS: Dict[str, str] = {
     'RICH_COLORS': 'Use colored terminal output via Rich library.',
     'RICH_PANELS': 'Show bordered panels for error, warning, and success messages.',
     'RICH_PROGRESS': 'Display progress bars during batch and reel processing.',
-    'TEXTUAL_TUI': 'Use Textual interactive screens for settings, browse, and category selection.',
 }

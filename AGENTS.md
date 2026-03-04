@@ -13,3 +13,4 @@
 
 - When making substantive code changes (fixes or features), increment the patch (last number) of VERSIONNUM in config.py.
 - Interactive prompts use a keyword-aware helper: `quit`/`exit` exit the program, `top` returns to spreadsheet selection, and `back` returns to mode selection (or spreadsheet selection when already at mode selection).
+- Textual-based TUI support (tui.py, TEXTUAL_TUI) has been removed; prefer CLI prompts and the HTML timeline viewer for interactive features.

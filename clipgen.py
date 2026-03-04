@@ -31,7 +31,6 @@ import excel_io
 import files
 import google_api
 import spreadsheet
-import tui
 import utils
 import video
 
@@ -260,10 +259,7 @@ def _handle_spreadsheet_command(gspread_client: Any, doc_list: List[str], input_
         return open_spreadsheet_by_index(gspread_client, doc_list, int(input_name))
     # Handle 'settings' command
     if input_name.startswith(config.COMMAND_SETTINGS):
-        if tui.use_textual():
-            tui.run_settings()
-        else:
-            utils.set_program_settings()
+        utils.set_program_settings()
         return None
     # Handle name search
     return open_spreadsheet_by_name(gspread_client, doc_list, input_name)
@@ -272,19 +268,6 @@ def _handle_spreadsheet_command(gspread_client: Any, doc_list: List[str], input_
 def select_spreadsheet(gspread_client: Any, doc_list: List[str]) -> Any:
     """Interactive spreadsheet selection. Returns the selected worksheet."""
     consecutive_open_failures = 0
-
-    if tui.use_textual():
-        initial_choice = tui.run_spreadsheet_select(doc_list)
-        if initial_choice:
-            try:
-                worksheet = _handle_spreadsheet_command(gspread_client, doc_list, initial_choice)
-                if worksheet is not None:
-                    return worksheet
-            except (gspread.SpreadsheetNotFound, gspread.exceptions.APIError, gspread.exceptions.GSpreadException) as e:
-                consecutive_open_failures += 1
-                handle_error_message(consecutive_open_failures, e)
-            except Exception as e:
-                utils.error_print(f"Could not open document: {e}")
 
     while True:
         try:
@@ -365,54 +348,19 @@ def _run_reel_mode_interactive(worksheet: Any) -> Tuple[List[ClipRecord], bool, 
     """
     reel_input: Optional[str] = None
 
-    if tui.use_textual():
-        header_result = spreadsheet.validate_spreadsheet_headers(worksheet)
-        if header_result is None:
-            return ([], False, None)
-        id_cell, observation_cell, category_cell = header_result
-        sheet_data = worksheet.get_all_values()
-        header_row = sheet_data[id_cell.row - 1] if id_cell.row > 0 and sheet_data else []
-        num_participants = spreadsheet.get_num_participants(header_row, id_cell, worksheet.col_count)
-        participant_headers = spreadsheet.get_participant_list(header_row, id_cell, num_participants)
-        categories = spreadsheet.collect_categories(sheet_data, id_cell, category_cell)
-
-        rows_data: List[utils.BrowseRow] = []
-        first_data_row = id_cell.row
-        last_data_row = len(sheet_data) - 1
-        category_col = category_cell.col - 1
-        desc_col = observation_cell.col - 1
-
-        for row_idx in range(first_data_row, last_data_row + 1):
-            row = sheet_data[row_idx]
-            row_num = row_idx + 1
-            category = row[category_col] if category_col < len(row) else ''
-            description = row[desc_col] if desc_col < len(row) else ''
-            rows_data.append(
-                {
-                    "row_num": row_num,
-                    "category": category or "(empty)",
-                    "description": description or "(empty)",
-                }
-            )
-
-        reel_input = tui.run_reel_builder(rows_data, participant_headers, categories)
-        if not reel_input:
-            utils.info_print('No input. Skipping reel.')
-            return ([], False, None)
-    else:
-        utils.info_print('\nReel mode: combine selectors into one video. Syntax:')
-        utils.info_print('  batch                    - all clips')
-        utils.info_print('  filter                   - key-marked clips only')
-        utils.info_print('  timeline                 - chronological reel (requires exactly one participant)')
-        utils.info_print('  11, 12, 13-16, 18        - lines and ranges')
-        utils.info_print('  "Observations", "Onboarding" - categories (quoted)')
-        utils.info_print('  P01.11, P02.15           - cells (participant.row)')
-        utils.info_print('  P01, P02                 - participants (all their clips)')
-        utils.info_print('  Example: timeline, P01, 11, 13-16, "Observations"')
-        reel_input = utils.read_user_input('\nEnter reel selectors (combine any of the above, comma-separated):\n>> ')
-        if not reel_input:
-            utils.info_print('No input. Skipping reel.')
-            return ([], False, None)
+    utils.info_print('\nReel mode: combine selectors into one video. Syntax:')
+    utils.info_print('  batch                    - all clips')
+    utils.info_print('  filter                   - key-marked clips only')
+    utils.info_print('  timeline                 - chronological reel (requires exactly one participant)')
+    utils.info_print('  11, 12, 13-16, 18        - lines and ranges')
+    utils.info_print('  "Observations", "Onboarding" - categories (quoted)')
+    utils.info_print('  P01.11, P02.15           - cells (participant.row)')
+    utils.info_print('  P01, P02                 - participants (all their clips)')
+    utils.info_print('  Example: timeline, P01, 11, 13-16, "Observations"')
+    reel_input = utils.read_user_input('\nEnter reel selectors (combine any of the above, comma-separated):\n>> ')
+    if not reel_input:
+        utils.info_print('No input. Skipping reel.')
+        return ([], False, None)
 
     parsed_reel = spreadsheet.parse_reel_input(reel_input)
     if parsed_reel['timeline']:
@@ -643,17 +591,11 @@ def select_mode_and_generate(worksheet: Any) -> Tuple[List[ClipRecord], bool, Op
     while True:
         input_mode: Optional[str] = None
 
-        if tui.use_textual():
-            chosen_mode = tui.run_mode_select()
-            if chosen_mode:
-                input_mode = chosen_mode
-
-        if input_mode is None:
-            input_mode = utils.read_user_input(
-                '\nEnter mode or input directly:\n'
-                '  Modes: (b)atch, (r)ange, (c)ategory, (l)ine, (ce)ll, (p)articipant, (f)ilter, (s)creen, (g)if, (re)el, (rl) reel-late, (br)owse, (v)iewer\n'
-                '  Or enter mixed selectors directly: e.g. 5, P01.11, 13-16, "Observations"\n>> '
-            )
+        input_mode = utils.read_user_input(
+            '\nEnter mode or input directly:\n'
+            '  Modes: (b)atch, (r)ange, (c)ategory, (l)ine, (ce)ll, (p)articipant, (f)ilter, (s)creen, (g)if, (re)el, (rl) reel-late, (br)owse, (v)iewer\n'
+            '  Or enter mixed selectors directly: e.g. 5, P01.11, 13-16, "Observations"\n>> '
+        )
         if not input_mode:
             utils.info_print("  Please enter a mode or direct input (e.g. P01.11, 5, 7, 13-16, P01).")
             continue
