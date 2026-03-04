@@ -1,6 +1,8 @@
 from types import SimpleNamespace
 
 import spreadsheet
+import files
+import utils
 
 
 def _make_cells():
@@ -141,4 +143,49 @@ def test_generate_line_and_range_timestamps_cli_paths():
         end_line=4,
     )
     assert {clip["desc"] for clip in range_clips} == {"Obs one", "Obs two"}
+
+
+def test_baseline_and_relative_timestamps_integration(monkeypatch):
+    # Sheet layout with a clock baseline row for P01 only.
+    # Row 0: Study
+    # Row 1: Baseline row (clock times)
+    # Row 2: Header row
+    # Rows 3+: Data rows
+    sheet_data = [
+        ["Study"],
+        ["", "09:12:00", "", "", ""],
+        ["ID", "P01", "P02", "Observation", "Category"],
+        ["1", "09:15:00-09:16:30", "", "Obs one", "CatA"],
+        ["2", "", "00:20-00:40", "Obs two", "CatB"],
+    ]
+
+    id_cell = SimpleNamespace(row=3, col=1)
+    observation_cell = SimpleNamespace(row=3, col=4)
+
+    # Simplify annotation parsing so we focus on timestamp + baseline behavior.
+    def fake_parse_cell_annotations(value):
+        return value, {}, set()
+
+    monkeypatch.setattr(utils, "parse_cell_annotations", fake_parse_cell_annotations)
+    monkeypatch.setattr(utils, "has_non_ignored_timestamp_content", lambda _v: True)
+
+    # Two participants (P01 has a baseline; P02 does not).
+    clips_p01 = spreadsheet.generate_participant_timestamps(
+        sheet_data, id_cell, observation_cell, study_name="study", participant_id="P01"
+    )
+    clips_p02 = spreadsheet.generate_participant_timestamps(
+        sheet_data, id_cell, observation_cell, study_name="study", participant_id="P02"
+    )
+
+    prepared_p01 = [files.prepare_clip(dict(clip)) for clip in clips_p01]
+    prepared_p02 = [files.prepare_clip(dict(clip)) for clip in clips_p02]
+
+    assert len(prepared_p01) == 1
+    assert len(prepared_p02) == 1
+
+    # P01 clip should use the baseline row (09:12:00) and convert to relative times.
+    assert prepared_p01[0]["times"] == [("3:00", "4:30")]
+
+    # P02 clip has no baseline and should remain relative as entered.
+    assert prepared_p02[0]["times"] == [("00:20", "00:40")]
 

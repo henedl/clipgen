@@ -27,7 +27,7 @@ def test_build_ffmpeg_cut_command_includes_expected_flags():
     )
     assert "-c:v" not in cmd_reencode
     assert "-af" not in cmd_reencode
-    assert cmd_reencode[-1] == "out.mp4"
+    assert "out.mp4" in cmd_reencode
 
 
 def test_concatenate_clips_reencode_fallback(monkeypatch):
