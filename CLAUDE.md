@@ -20,6 +20,37 @@ clipgen is a Python CLI tool that generates clips from timestamps stored in a Go
 | [excel_io.py](excel_io.py) | Excel adapter: `ExcelSheetAdapter` mimics gspread Worksheet interface for local .xlsx |
 | [assets/web/](assets/web/) | Static HTML/JS/CSS template for the timeline viewer (`viewer.html`, `viewer.js`, `viewer.css`) |
 
+### Architecture overview
+
+End-to-end data flow from spreadsheet input to video artifacts and optional HTML timeline viewer:
+
+```mermaid
+flowchart LR
+  user["User"] --> cli["clipgen.py (CLI)"]
+
+  cli --> sheetSource["Spreadsheet source selection"]
+  sheetSource --> googleSheets["google_api.py (Google Sheets)"]
+  sheetSource --> excelSheets["excel_io.py (Excel .xlsx)"]
+
+  googleSheets --> spreadsheetLayer["spreadsheet.py (rows, selectors)"]
+  excelSheets --> spreadsheetLayer
+
+  spreadsheetLayer --> filesLayer["files.py (prepare_clip, filenames)"]
+  filesLayer --> utilsLayer["utils.py (timestamps, annotations)"]
+  filesLayer --> videoLayer["video.py (ffmpeg/ffprobe)"]
+
+  utilsLayer --> videoLayer
+  videoLayer --> artifacts["Clips / screenshots / GIFs / reels"]
+
+  artifacts --> viewer["assets/web (timeline viewer)"]
+```
+
+1. **Input and selection**: `clipgen.py` reads CLI arguments, selects mode, and chooses a spreadsheet source (Google Sheets via `google_api.py` or local Excel via `excel_io.py`).
+2. **Spreadsheet layer**: `spreadsheet.py` parses headers, validates layout, interprets the selected mode/selector, and yields logical clip records with per-participant timestamps.
+3. **Clip preparation**: `files.py` (with `utils.py`) parses and normalizes timestamps/annotations into `times` ranges, sanitizes study/participant/category names, and generates safe output filenames.
+4. **Rendering**: `video.py` uses ffmpeg/ffprobe to cut clips, screenshots, GIFs, or reels from `{study}_{participant}.mp4`, honoring limits and other settings in `config.py`.
+5. **Optional viewer**: When requested, `clipgen.py` uses the templates in `assets/web` to build an HTML timeline viewer from the generated artifacts.
+
 ## Key data structures
 
 **Clip record** (built in spreadsheet layer, enriched in files):

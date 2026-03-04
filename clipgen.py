@@ -794,10 +794,12 @@ def _process_single_clip_segments(
 
 
 def _print_reencoding_warning(printer: Callable[[str], None]) -> None:
+    """Print a reminder about trade-offs when ffmpeg runs without re-encoding."""
     printer('* No re-encoding done, expect:\n- inaccurate start and end timings\n- lossy frames until first keyframe\n- bad timecodes at the end\n')
 
 
 def _print_completion_message(outputs_generated: int, output_format: str, is_reel: bool) -> None:
+    """Print a summary of generated outputs tailored to format and reel mode."""
     if is_reel:
         utils.info_print(f'All done, created 1 reel!\nFiles are in {os.getcwd()}\n')
         return
@@ -811,6 +813,11 @@ def _print_completion_message(outputs_generated: int, output_format: str, is_ree
 
 
 def _check_source_video(clip: ClipRecord, missing_videos: Set[str], skip_detail: str) -> Optional[str]:
+    """Return the expected source video path if it exists; log a detailed error once per missing file.
+
+    The expected filename is derived from clip['study'] and clip['participant'].
+    Paths already seen in missing_videos are not reported again.
+    """
     base_video = f"{clip['study']}_{clip['participant']}{config.FILEFORMAT}"
     if Path(base_video).is_file():
         return base_video
@@ -884,6 +891,7 @@ def _process_with_progress(
     *,
     show_fallback_counter: bool = False,
 ) -> List[Any]:
+    """Run process_fn over a list of clips with optional Rich progress bar feedback."""
     total_clips = len(clips_list)
     progress = utils.create_progress_bar()
     results: List[Any] = []

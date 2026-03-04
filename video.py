@@ -64,6 +64,7 @@ def check_ffmpeg_tools_available() -> bool:
 
 
 def _handle_ffmpeg_not_found() -> None:
+    """Print a user-facing error when the ffmpeg binary cannot be located."""
     utils.error_print(
         "ffmpeg is not installed or not found in system PATH.",
         [
@@ -80,6 +81,7 @@ def _run_ffmpeg_process(
     output_file: str,
     os_error_message: str,
 ) -> Optional[subprocess.CompletedProcess[str]]:
+    """Run an ffmpeg subprocess and wrap common OS-level failures."""
     try:
         return subprocess.run(ffmpeg_command, encoding='utf-8', capture_output=True)
     except FileNotFoundError:
@@ -99,12 +101,14 @@ def _run_ffmpeg_process(
 
 
 def _add_ffmpeg_stderr(error_details: List[str], ffmpeg_result: subprocess.CompletedProcess[str]) -> List[str]:
+    """Append trimmed ffmpeg stderr output to an error details list when available."""
     if ffmpeg_result.stderr:
         error_details.append(f"ffmpeg error: {ffmpeg_result.stderr.strip()}")
     return error_details
 
 
 def _verify_output_file(output_file: str, operation_label: str) -> bool:
+    """Return True when an expected ffmpeg output file exists, otherwise log an error."""
     if Path(output_file).is_file():
         return True
     utils.error_print(f"{operation_label} completed but output file was not created: '{output_file}'")

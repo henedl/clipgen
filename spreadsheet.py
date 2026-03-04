@@ -92,7 +92,7 @@ def _validate_row_range(start_line: int, end_line: int, max_row: int) -> Optiona
 
 
 def _interactive_category_selection(categories: List[str]) -> List[str]:
-    """Interactive category selection: show numbered list, parse input, validate, confirm. Returns selected category names."""
+    """Interactively select one or more category names from a numbered list."""
     utils.info_print('\nAvailable categories:')
     for i, cat in enumerate(categories, 1):
         utils.info_print(f'  {i}. {cat}')
