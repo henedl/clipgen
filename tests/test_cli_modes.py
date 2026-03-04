@@ -11,6 +11,7 @@ def _args(**overrides):
         batch=False,
         lines=None,
         range=None,
+        category=None,
         cell=None,
         participant=None,
         filter=False,

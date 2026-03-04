@@ -125,12 +125,12 @@ def create_progress_bar(description: str = "Processing"):
 def parse_arguments() -> argparse.Namespace:
     """Parse command-line arguments for non-interactive mode.
     
-    Exactly one of the mode flags (-b, -l, -r, -c, -p, -f, -M, -R, -T) may be given;
+    Exactly one of the mode flags (-b, -l, -r, -C, -c, -p, -f, -M, -R, -T) may be given;
     if none is given, the program runs in interactive mode. Optional flags (-s, -y,
     -v, --screen, --gif) may be combined with any mode.
     
     Returns:
-        argparse.Namespace with attributes: batch, lines, range, cell,
+        argparse.Namespace with attributes: batch, lines, range, category, cell,
         participant, filter, mixed, reel, timeline (mode flags/values),
         spreadsheet, yes, verbose, screen, gif.
     """
@@ -141,6 +141,9 @@ def parse_arguments() -> argparse.Namespace:
 Examples:
   python clipgen.py                        Interactive mode (default)
   python clipgen.py -b                     Batch mode - generate all clips
+  python clipgen.py -C "Observations"      Category mode - rows with category "Observations"
+  python clipgen.py -C "Observations,Onboarding"
+                                           Category mode - multiple categories
   python clipgen.py -l 5                   Single line mode - line 5
   python clipgen.py -l 1+4+5               Multi-line mode - lines 1, 4, and 5
   python clipgen.py -l 1,4,5               Multi-line mode (comma separator)
@@ -159,12 +162,12 @@ Examples:
   python clipgen.py -b --screen            Batch mode screenshots (.png)
   python clipgen.py -l 5 --gif             Line mode GIF output (.gif)
  
-Note: Non-interactive mode (using -b, -l, -r, -c, -p, -f, -M, -R, or -T) is silent by default,
+Note: Non-interactive mode (using -b, -l, -r, -C, -c, -p, -f, -M, -R, or -T) is silent by default,
       only showing errors and the final summary. Use -v for full output.
 '''
     )
 
-    # Mode arguments: only one of -b/-l/-r/-c/-p/-f/-M/-R/-T may be set at a time
+    # Mode arguments: only one of -b/-l/-r/-C/-c/-p/-f/-M/-R/-T may be set at a time
     mode_group = parser.add_mutually_exclusive_group()
     mode_group.add_argument('-b', '--batch', action='store_true',
         help='Batch mode: generate all possible clips')
@@ -172,6 +175,8 @@ Note: Non-interactive mode (using -b, -l, -r, -c, -p, -f, -M, -R, or -T) is sile
         help='Line mode: specify line numbers separated by + or , (e.g., 1+4+5 or 1,4,5)')
     mode_group.add_argument('-r', '--range', type=str, metavar='RANGE',
         help='Range mode: specify start-end line range (e.g., 1-10)')
+    mode_group.add_argument('-C', '--category', type=str, metavar='CATEGORIES',
+        help='Category mode: specify one or more category names (comma- or plus-separated, e.g., "Observations,Onboarding")')
     mode_group.add_argument('-c', '--cell', type=str, metavar='CELLS',
         help='Cell mode: specify cells as participant.row (e.g., P01.11 or P01.11 + P03.11)')
     mode_group.add_argument('-p', '--participant', type=str, metavar='ID',

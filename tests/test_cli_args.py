@@ -12,9 +12,11 @@ def _base_args(**overrides):
         "batch": False,
         "lines": None,
         "range": None,
+        "category": None,
         "cell": None,
         "participant": None,
         "filter": False,
+        "mixed": None,
         "reel": None,
         "timeline": None,
         "screen": False,
@@ -22,6 +24,7 @@ def _base_args(**overrides):
         "yes": False,
         "verbose": False,
         "spreadsheet": None,
+        "viewer": False,
     }
     args.update(overrides)
     return Namespace(**args)
@@ -119,6 +122,30 @@ def test_run_cli_mode_line_with_screen_output(monkeypatch, make_clip):
         skip_prompts=True,
     )
     process_clips.assert_called_once_with(clips, output_format="screen")
+    completion.assert_called_once()
+
+
+def test_run_cli_mode_category_cli_dispatch(monkeypatch, make_clip):
+    args = _base_args(category="Observations,Onboarding", yes=True)
+    clips = [make_clip()]
+    generate_list = Mock(return_value=clips)
+    process_clips = Mock(return_value=1)
+    completion = Mock()
+
+    monkeypatch.setattr(clipgen.spreadsheet, "generate_list", generate_list)
+    monkeypatch.setattr(clipgen, "process_clips", process_clips)
+    monkeypatch.setattr(clipgen, "_print_completion_message", completion)
+
+    parsed = clipgen.CliModeArgs(None, None, None, None)
+    clipgen.run_cli_mode(None, args, parsed)
+
+    generate_list.assert_called_once_with(
+        None,
+        "category",
+        skip_prompts=True,
+        categories=["Observations", "Onboarding"],
+    )
+    process_clips.assert_called_once_with(clips, output_format="clip")
     completion.assert_called_once()
 
 

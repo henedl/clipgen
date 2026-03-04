@@ -192,7 +192,7 @@ def _make_clip_record(
     return result
 
 
-def generate_list(sheet: Any, mode: str, line_numbers: Optional[List[int]] = None, range_start: Optional[int] = None, range_end: Optional[int] = None, skip_prompts: bool = False, cell_specs: Optional[List[Tuple[str, int]]] = None, participant_id: Optional[str] = None, reel_input: Optional[str] = None) -> List[ClipRecord]:
+def generate_list(sheet: Any, mode: str, line_numbers: Optional[List[int]] = None, range_start: Optional[int] = None, range_end: Optional[int] = None, skip_prompts: bool = False, cell_specs: Optional[List[Tuple[str, int]]] = None, participant_id: Optional[str] = None, reel_input: Optional[str] = None, categories: Optional[List[str]] = None) -> List[ClipRecord]:
     """Goes through a sheet and builds clip records for timestamp cells.
     
     Args:
@@ -205,6 +205,7 @@ def generate_list(sheet: Any, mode: str, line_numbers: Optional[List[int]] = Non
         cell_specs: Optional list of (participant_id, row_number) tuples for 'cell' mode (CLI)
         participant_id: Optional participant ID for 'participant' mode (CLI)
         reel_input: Optional reel selector string for 'reel' mode (e.g. '11, 13-16, P01, "Observations"')
+        categories: Optional list of category names for 'category' mode (CLI)
         
     Returns:
         List of clip records (dicts with keys: cell, desc, study, participant, category; 'times' added later by prepare_clip).
@@ -263,12 +264,31 @@ def generate_list(sheet: Any, mode: str, line_numbers: Optional[List[int]] = Non
                 clips = generate_batch_timestamps(sheet_data, id_cell, observation_cell, num_participants, study_name)
     # --- Category mode: user selects categories; include all rows matching any selected category ---
     elif mode == 'category':
-        categories = collect_categories(sheet_data, id_cell, category_cell)
-        if not categories:
-            utils.info_print('\nNo categories found in the spreadsheet.')
-            return []
-        selected_categories = _interactive_category_selection(categories)
-        clips = generate_category_timestamps(sheet_data, id_cell, observation_cell, category_cell, num_participants, study_name, selected_categories)
+        if categories:
+            clips = generate_category_timestamps(
+                sheet_data,
+                id_cell,
+                observation_cell,
+                category_cell,
+                num_participants,
+                study_name,
+                categories,
+            )
+        else:
+            all_categories = collect_categories(sheet_data, id_cell, category_cell)
+            if not all_categories:
+                utils.info_print('\nNo categories found in the spreadsheet.')
+                return []
+            selected_categories = _interactive_category_selection(all_categories)
+            clips = generate_category_timestamps(
+                sheet_data,
+                id_cell,
+                observation_cell,
+                category_cell,
+                num_participants,
+                study_name,
+                selected_categories,
+            )
     # --- Line mode: one or more specific row numbers (e.g. lines 5, 7, 12) ---
     elif mode == 'line':
         clips = generate_line_timestamps(sheet_data, id_cell, observation_cell, num_participants, study_name, line_numbers, skip_prompts)

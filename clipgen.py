@@ -1339,10 +1339,28 @@ def _generate_cli_clips(
     output_format = 'screen' if args.screen else 'gif' if args.gif else 'clip'
 
     selection_mode_set = bool(
-        args.batch or args.lines or args.range or args.cell
+        args.batch or args.lines or args.range or args.category or args.cell
         or args.participant or args.filter or mixed_selectors
         or args.reel or args.timeline
     )
+
+    def _parse_cli_categories(raw: Optional[str]) -> List[str]:
+        """Parse CLI category string into a list of category names."""
+        if not raw:
+            return []
+        combined = raw.replace(',', '+')
+        seen = set()
+        result: List[str] = []
+        for token in combined.split('+'):
+            name = token.strip()
+            if not name:
+                continue
+            if name not in seen:
+                seen.add(name)
+                result.append(name)
+        return result
+
+    cli_categories = _parse_cli_categories(getattr(args, 'category', None))
 
     mode_dispatch: List[tuple] = [
         (args.batch or (output_format != 'clip' and not selection_mode_set),
@@ -1351,6 +1369,8 @@ def _generate_cli_clips(
          'line', {'line_numbers': cli_mode_args.line_numbers}),
         (args.range,
          'range', {'range_start': cli_mode_args.range_start, 'range_end': cli_mode_args.range_end}),
+        (args.category,
+         'category', {'categories': cli_categories}),
         (args.cell,
          'cell', {'cell_specs': cli_mode_args.cell_specs}),
         (args.participant,
@@ -1519,6 +1539,7 @@ def main() -> None:
         args.batch
         or args.lines
         or args.range
+        or args.category
         or args.cell
         or args.participant
         or args.filter

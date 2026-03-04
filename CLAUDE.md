@@ -101,7 +101,13 @@ Source video filenames follow `{study}_{participant}.mp4` (e.g. `mystudy_P01.mp4
 
 Reel selectors: `batch`, `filter`, `timeline`, line numbers, ranges like `13-16`, quoted categories, cells like `P01.11`, participant IDs like `P01`.
 
-CLI mode flags are mutually exclusive for selection (`-b/-l/-r/-c/-p/-f/-R/-T`) and can be combined with output format flags (`--screen` or `--gif`) except reel/timeline, which always output a single video reel.
+CLI mode flags are mutually exclusive for selection (`-b/-l/-r/-C/-c/-p/-f/-M/-R/-T`) and can be combined with output format flags (`--screen` or `--gif`) except reel/timeline, which always output a single video reel. `-C/--category` accepts one or more category names (comma- or plus-separated, e.g. `"Observations,Onboarding"`), and `-M/--mixed` combines selectors for individual outputs.
+
+Interactive-only modes without dedicated CLI flags:
+
+- `reellate` – combine already-generated clips in the working directory into a highlight reel.
+- `browse` – interactive spreadsheet browser for inspecting rows and timestamps.
+- Interactive `viewer` – launches the HTML timeline viewer based on artifacts generated in the current interactive session (CLI uses `--viewer` instead).
 
 ## Important configuration ([config.py](config.py))
 
