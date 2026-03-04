@@ -1,5 +1,7 @@
 from types import SimpleNamespace
+from typing import cast
 
+import gspread
 import google_api
 import excel_io
 
@@ -23,7 +25,7 @@ def test_get_worksheet_prefers_priority_match(monkeypatch):
             raise KeyError(title)
 
     fake_spreadsheet = FakeSpreadsheet()
-    ws = google_api.get_worksheet(fake_spreadsheet)
+    ws = google_api.get_worksheet(cast(gspread.Spreadsheet, fake_spreadsheet))
     assert ws.title == "Sheet1"
 
 

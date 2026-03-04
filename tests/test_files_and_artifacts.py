@@ -1,8 +1,10 @@
 from pathlib import Path
+from typing import cast
 
 import files
 import clipgen
 import utils
+from utils import ClipRecord
 
 
 def test_truncate_filename_respects_max_length(monkeypatch, tmp_path):
@@ -54,7 +56,7 @@ def test_prepare_clip_sanitizes_and_sets_defaults(monkeypatch, make_clip):
 def test_build_artifact_records_for_clip_and_finalize_timeline_data(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
 
-    clip = {
+    clip: ClipRecord = {
         "cell": type("Cell", (), {"row": 4, "col": 2})(),
         "study": "study",
         "participant": "P01",

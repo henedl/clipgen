@@ -3,7 +3,7 @@
 
 import argparse
 from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional, Set, Tuple, TypedDict, Union
+from typing import Any, Dict, List, Optional, Set, Tuple, TypedDict
 
 from icecream import ic
 
@@ -207,7 +207,9 @@ def debug_print(message: str) -> None:
     """Print debug messages when DEBUGGING is enabled."""
     if config.DEBUGGING:
         if _use_rich():
-            console.print(f"[debug]! DEBUG[/debug] {message}")
+            c = console
+            if c is not None:
+                c.print(f"[debug]! DEBUG[/debug] {message}")
         else:
             print(f'! DEBUG {message}')
 
@@ -582,9 +584,13 @@ def add_duration(start_time: str) -> Optional[str]:
             new_time = start_datetime + timedelta(seconds=config.DEFAULT_DURATION_SECONDS)
             return new_time.strftime('%H:%M:%S')
     except ValueError:
-        warning_print(f"Could not parse single timestamp '{start_time}' to add default duration.",
-            [f"Expected format: MM:SS or HH:MM:SS (e.g., 12:34 or 1:23:45)",
-             "This timestamp will be skipped."])
+        warning_print(
+            f"Could not parse single timestamp '{start_time}' to add default duration.",
+            [
+                "Expected format: MM:SS or HH:MM:SS (e.g., 12:34 or 1:23:45)",
+                "This timestamp will be skipped.",
+            ],
+        )
         return None
 
 

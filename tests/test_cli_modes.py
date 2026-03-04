@@ -4,7 +4,6 @@ from unittest.mock import Mock
 import pytest
 
 import clipgen
-import spreadsheet
 
 
 def _args(**overrides):
@@ -45,15 +44,16 @@ def test_generate_cli_clips_prefers_mixed_over_batch(monkeypatch):
     args = _args(mixed="11, P01.5")
     parsed = clipgen.CliModeArgs(None, None, None, None)
 
-    def fake_generate_list(sheet, mode, **kwargs):
-        return [mode, kwargs]
+    generate_list = Mock(return_value=["dummy"])
+    monkeypatch.setattr(clipgen.spreadsheet, "generate_list", generate_list)
 
-    monkeypatch.setattr(clipgen.spreadsheet, "generate_list", fake_generate_list)
+    clipgen._generate_cli_clips(worksheet, args, parsed)
 
-    clips = clipgen._generate_cli_clips(worksheet, args, parsed)
-    # Expect reel mode with the mixed selectors as reel_input.
-    assert clips[0] == "reel"
-    assert clips[1]["reel_input"] == "11, P01.5"
+    generate_list.assert_called_once()
+    call_args = generate_list.call_args
+    assert call_args.args[0] is worksheet
+    assert call_args.args[1] == "reel"
+    assert call_args.kwargs.get("reel_input") == "11, P01.5"
 
 
 def test_run_cli_mode_timeline_reel_and_viewer(monkeypatch):

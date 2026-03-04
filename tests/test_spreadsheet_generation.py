@@ -177,8 +177,8 @@ def test_baseline_and_relative_timestamps_integration(monkeypatch):
         sheet_data, id_cell, observation_cell, study_name="study", participant_id="P02"
     )
 
-    prepared_p01 = [files.prepare_clip(dict(clip)) for clip in clips_p01]
-    prepared_p02 = [files.prepare_clip(dict(clip)) for clip in clips_p02]
+    prepared_p01 = [files.prepare_clip(clip) for clip in clips_p01]
+    prepared_p02 = [files.prepare_clip(clip) for clip in clips_p02]
 
     assert len(prepared_p01) == 1
     assert len(prepared_p02) == 1
