@@ -98,6 +98,29 @@ def truncate_filename(filename: str, step: int = 1, file_format: Optional[str] =
             filename = filename[0:max_base_len] + file_extension
     return filename
 
+
+def get_source_video_filename(study: str, participant: str, override: Optional[str] = None) -> str:
+    """Resolve the expected source video filename for a clip.
+
+    Args:
+        study: Normalized study name
+        participant: Normalized participant ID
+        override: Optional filename override from the spreadsheet
+
+    Returns:
+        Filename to use when looking for the source video.
+    """
+    if override is not None:
+        override = override.strip()
+    if override:
+        # If override includes an extension, respect it as-is.
+        suffix = Path(override).suffix
+        if suffix:
+            return override
+        # No extension present: append configured default file format.
+        return override + config.FILEFORMAT
+    return f"{study}_{participant}{config.FILEFORMAT}"
+
 def prepare_clip(clip: ClipRecord) -> ClipRecord:
     """Parse timestamps and sanitize description/category for filename use.
     

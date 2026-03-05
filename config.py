@@ -9,7 +9,7 @@ from icecream import ic
 REENCODING: bool = False
 AUDIO_NORMALIZE: bool = False
 FILEFORMAT: str = '.mp4'
-VERSIONNUM: str = '0.8.12'
+VERSIONNUM: str = '0.8.13'
 TITLECARDS_ENABLED: bool = False
 TITLECARD_DURATION_SECONDS: int = 2
 WORKSHEET_PRIORITY: List[str] = ['Sheet1', 'Data', 'data', 'Observations', 'Data set', 'data set', 'dataset', 'Dataset']
@@ -26,6 +26,7 @@ else:
 ID_HEADER: str = 'ID'
 OBSERVATION_HEADER: str = 'Observation'
 CATEGORY_HEADER: str = 'Category'
+FILENAME_HEADER: str = 'Filename'
 PARTICIPANT_PREFIXES: Tuple[str, ...] = ('P', 'G')  # 'P' for individual, 'G' for group
 ANNOTATION_KEYPHRASES: Dict[str, str] = {
     '!key': 'key',

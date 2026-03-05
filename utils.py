@@ -17,13 +17,15 @@ class ClipRecord(TypedDict, total=False):
 
     Always present after _make_clip_record: cell, desc, study, participant, category.
     Added by prepare_clip: times, cell_annotations, segment_annotations.
-    Optionally set before prepare_clip: selected_segment_indexes, timestamp_baseline.
+    Optionally set before prepare_clip: selected_segment_indexes, timestamp_baseline,
+    source_filename.
     """
     cell: Any  # gspread.Cell or ExcelSheetAdapter equivalent
     desc: str
     study: str
     participant: str
     category: str
+    source_filename: str
     timestamp_baseline: str
     times: List[Tuple[str, str]]
     cell_annotations: List[str]

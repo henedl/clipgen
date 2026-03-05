@@ -817,10 +817,12 @@ def _print_completion_message(outputs_generated: int, output_format: str, is_ree
 def _check_source_video(clip: ClipRecord, missing_videos: Set[str], skip_detail: str) -> Optional[str]:
     """Return the expected source video path if it exists; log a detailed error once per missing file.
 
-    The expected filename is derived from clip['study'] and clip['participant'].
+    The expected filename is derived from clip['study'] and clip['participant'] by default,
+    but can be overridden per-participant via an optional source_filename field.
     Paths already seen in missing_videos are not reported again.
     """
-    base_video = f"{clip['study']}_{clip['participant']}{config.FILEFORMAT}"
+    override = clip.get('source_filename')
+    base_video = files.get_source_video_filename(clip['study'], clip['participant'], override)
     if Path(base_video).is_file():
         return base_video
 
