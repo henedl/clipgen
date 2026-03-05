@@ -26,7 +26,8 @@ tests/.pytest_cache/
 .venv/
 /*.html
 /*.gif
-*.png
+/*.png
+!assets/titlecard.png
 
 # Python byte code
 *.py[cod]
