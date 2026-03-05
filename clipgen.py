@@ -563,7 +563,7 @@ def _run_format_mode_interactive(worksheet: Any, output_format: str) -> None:
             utils.info_print("    l or line    - Generate from specific line(s)")
             utils.info_print("    ce or cell   - Generate from specific cell(s) (e.g., P01.11)")
             utils.info_print("    p or participant - Generate all outputs for one participant")
-            utils.info_print("    f or filter  - Generate only key-marked outputs")
+            utils.info_print("    f or filter  - Generate only key-marked outputs (per-cell annotations)")
             continue
 
         if has_timeline:
@@ -688,7 +688,7 @@ def select_mode_and_generate(worksheet: Any) -> Tuple[List[ClipRecord], bool, Op
                 utils.info_print("    l or line    - Generate clips from specific line(s)")
                 utils.info_print("    ce or cell   - Generate clips from specific cell(s) (e.g., P01.11)")
                 utils.info_print("    p or participant - Generate all clips for one participant")
-                utils.info_print("    f or filter  - Generate only key-marked clips/timestamps")
+                utils.info_print("    f or filter  - Generate only key-marked clips/timestamps (per-cell annotations)")
                 utils.info_print("    s or screen  - Generate screenshots (.png)")
                 utils.info_print("    g or gif     - Generate GIFs (.gif)")
                 utils.info_print("    re or reel   - Combine selectors into one highlight reel video")

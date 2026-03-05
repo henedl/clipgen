@@ -91,7 +91,7 @@ Source video filenames follow `{study}_{participant}.mp4` (e.g. `mystudy_P01.mp4
 | **category** | Rows matching selected category names |
 | **cell** | Specific cells as `participant.row` (e.g. P01.11, P03.11) |
 | **participant** | All clips for one or more participants (e.g. P01, P03) |
-| **filter** | Only key-marked clips/timestamps (`!key` annotations in header or cell content) |
+| **filter** | Only key-marked clips/timestamps (`!key` annotations in timestamp cell content) |
 | **screen** | Generate screenshots (`.png`) instead of video clips |
 | **gif** | Generate GIFs (`.gif`) from selected timestamps |
 | **reel** | Mixed selectors (including `batch`, `filter`, `timeline`, lines/ranges/categories/cells/participants) combined into one video; deduped by cell and ordered by row/column unless timeline is used |

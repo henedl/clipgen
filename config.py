@@ -9,7 +9,7 @@ from icecream import ic
 REENCODING: bool = False
 AUDIO_NORMALIZE: bool = False
 FILEFORMAT: str = '.mp4'
-VERSIONNUM: str = '0.8.8'
+VERSIONNUM: str = '0.8.9'
 WORKSHEET_PRIORITY: List[str] = ['Sheet1', 'Data', 'data', 'Observations', 'Data set', 'data set', 'dataset', 'Dataset']
 DEBUGGING: bool = False
 VERBOSE: bool = True  # Set to False in CLI mode unless -v flag is used

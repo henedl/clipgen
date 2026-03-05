@@ -459,13 +459,13 @@ def generate_list(sheet: Any, mode: str, line_numbers: Optional[List[int]] = Non
                     for pid in unique_ids:
                         clips.extend(generate_participant_timestamps(sheet_data, id_cell, observation_cell, study_name, pid))
                     break
-    # --- Filter mode: all key-marked segments, or all segments for key-marked participants ---
+    # --- Filter mode: key-marked segments only (per-cell annotations) ---
     elif mode == 'filter':
         if skip_prompts:
             utils.verbose_print('Filter mode: generating key-marked clips...')
             clips = generate_filter_timestamps(sheet_data, id_cell, observation_cell, num_participants, study_name)
         else:
-            yn = utils.read_user_input('\nFilter mode will include only key-marked timestamps or participants. Do you want to proceed? y/n\n>> ')
+            yn = utils.read_user_input('\nFilter mode will include only key-marked timestamps (per-cell annotations). Do you want to proceed? y/n\n>> ')
             if yn == 'y':
                 clips = generate_filter_timestamps(sheet_data, id_cell, observation_cell, num_participants, study_name)
     # --- Reel mode: mixed selector string (batch, lines, ranges, categories, cells, participants); deduped and sorted ---
@@ -880,32 +880,20 @@ def generate_filter_timestamps(
     num_participants: int,
     study_name: str,
 ) -> List[ClipRecord]:
-    """Generate key-marked clips from the entire sheet.
+    """Generate key-marked clips from the entire sheet based on cell content.
 
-    - Segment-level: `!key` marks the preceding timestamp in that cell.
-    - Participant-level: `!key` in the participant header marks all that participant's segments.
+    Semantics:
+    - Segment-level: annotation tokens like `!key` in a timestamp cell mark the
+      preceding parseable timestamp segment(s) within that cell.
+    - Header/participant-level annotations in the header row are ignored here;
+      filter mode is driven purely by per-cell annotations.
     """
     clips = generate_batch_timestamps(sheet_data, id_cell, observation_cell, num_participants, study_name)
     if not clips:
         return []
 
-    participant_row = id_cell.row - 1
-    header_row = sheet_data[participant_row] if 0 <= participant_row < len(sheet_data) else []
-    participant_key_columns: Set[int] = set()
-    for col_idx in range(id_cell.col, id_cell.col + num_participants):
-        if col_idx >= len(header_row):
-            continue
-        _, _, header_annotations = utils.parse_cell_annotations(header_row[col_idx])
-        if 'key' in header_annotations:
-            participant_key_columns.add(col_idx)
-
     filtered_clips: List[ClipRecord] = []
     for clip in clips:
-        clip_col = clip['cell'].col - 1
-        if clip_col in participant_key_columns:
-            filtered_clips.append(clip)
-            continue
-
         _, segment_annotations, _ = utils.parse_cell_annotations(clip['cell'].value)
         key_indexes = sorted(segment_annotations.get('key', set()))
         if key_indexes:
