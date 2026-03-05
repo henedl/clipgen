@@ -16,13 +16,14 @@ The program was created to speed up data processing during playtests and is prov
 
 ### Starting clipgen
 
-- Put `clipgen.py` or the `clipgen` binary in a folder with video recordings.
-- Your Google `credentials.json` file should be in `~/.config/.gspread` or the working directory.
-- Launch clipgen either interactively or through command-line arguments: ```python clipgen.py``` or ```python clipgen.py --help```
-- Point clipgen to your Google Sheet and enjoy quick video clip generation based on your timestamped notes.
-- Alternatively, point clipgen to a local Excel file in the current working directory and enjoy all the same features.
+- Place video files in the same folder as the executable or `clipgen.py`.
+- `ffmpeg` and `ffprobe` must be installed and available in `PATH`.
+- Your Google `credentials.json` must be in `./config/gspread/`or same folder as executable.
+- The executable uses its own folder as working directory (so local files resolve consistently).
+- Launch clipgen either interactively or through command-line arguments.
+- Select the Google Sheet or local Excel document you want to work on, and enjoy quick video clip generation based on your timestamped notes.
 
-### How to use clipgen
+### Usage instructions
 
 - Can be used interactively or non-interactively, via command line argument calls.
 - Several modes of generating timestamps are supported:
@@ -32,6 +33,40 @@ The program was created to speed up data processing during playtests and is prov
   - Categories
 - Sheets can be browsed interactively through the program; no need to have a web browser always open.
 - Clipgen can also generate highlight reels based on your input, combining multiple clips into a single video file.
+
+### Timeline viewer
+
+clipgen can generate an interactive HTML timeline viewer that visualizes all artifacts (clips, screenshots, GIFs) from a run.
+
+- **CLI**: Pass `--viewer` alongside any mode flag to generate the viewer after clip processing:
+
+``` shell
+python clipgen.py -b --viewer
+python clipgen.py -l 5+7 --screen --viewer
+```
+
+- **Interactive mode**: During an interactive session, clipgen keeps track of all generated artifacts. You can choose the `viewer` mode from the mode selection prompt to generate a timeline viewer for everything created so far in that session.
+
+The viewer is a standalone `clips_viewer.html` file written to the same directory as the generated artifacts. Open it in any browser (works with `file://` — no server needed). It provides:
+
+- A timeline showing all artifacts positioned by their timestamps.
+- A filterable sidebar list sorted by time.
+- Filters by category, participant, and artifact type.
+- A detail panel with inline video/image preview.
+
+### About the spreadsheet
+
+clipgen assumes that you are using a spreadsheet with a particular layout. A reference spreadsheet is [available here](https://docs.google.com/spreadsheets/d/1O51wnzRrYyz63tT6qy1HlJyVzdh9RT3t6QL5NohrcPc/edit?usp=sharing) - feel free to make a copy and use it in your studies.
+
+Timestamps must be separated by characters ```+ , ;```
+Ranges must be separated by character ```-```
+
+You can optionally add a **baseline row for clock timestamps** directly above the participant header row:
+
+- The participant header row still contains `P01`, `P02`, etc.
+- The row **above** that can contain a clock timestamp for each participant column, e.g. `09:12:00` above `P01`.
+- When a baseline cell is non-empty, all timestamps in that participant column are treated as **clock/absolute times** and are converted to **relative offsets** by subtracting the baseline time before cutting clips.
+- When a baseline cell is empty, timestamps in that participant column are treated as **relative** (the current behavior).
 
 ## Build single-file executable
 
@@ -48,12 +83,6 @@ clipgen can be packaged as a single-file executable with PyInstaller.
   - macOS: `dist/clipgen`
   - Windows: `dist/clipgen.exe`
 
-### Runtime expectations for distributed binaries
-
-- Place video files and `credentials.json` in the same folder as the executable.
-- `ffmpeg` and `ffprobe` must be installed and available in `PATH`.
-- The executable uses its own folder as working directory (so local files resolve consistently).
-
 ### CI build artifacts
 
 - Cross-platform binaries are built by GitHub Actions workflow:
@@ -69,52 +98,6 @@ clipgen can be packaged as a single-file executable with PyInstaller.
   - `pytest -c tests/pytest.ini`
 - Contributor rule:
   - Every new CLI mode, flag, or selector should include at least one smoke test in the same PR.
-
-### About the spreadsheet
-
-clipgen assumes that you are using a spreadsheet with a particular layout. A reference spreadsheet is [available here](https://docs.google.com/spreadsheets/d/1O51wnzRrYyz63tT6qy1HlJyVzdh9RT3t6QL5NohrcPc/edit?usp=sharing) - feel free to make a copy and use it in your studies.
-
-Timestamps must be separated by characters ```+ , ;```
-Ranges must be separated by character ```-```
-
-You can optionally add a **baseline row for clock timestamps** directly above the participant header row:
-
-- The participant header row still contains `P01`, `P02`, etc.
-- The row **above** that can contain a clock timestamp for each participant column, e.g. `09:12:00` above `P01`.
-- When a baseline cell is non-empty, all timestamps in that participant column are treated as **clock/absolute times** and are converted to **relative offsets** by subtracting the baseline time before cutting clips.
-- When a baseline cell is empty, timestamps in that participant column are treated as **relative** (the current behavior).
-
-## Timeline HTML Viewer
-
-clipgen can generate an interactive HTML timeline viewer that visualizes all artifacts (clips, screenshots, GIFs) from a run.
-
-- **CLI**: Pass `--viewer` alongside any mode flag to generate the viewer after clip processing:
-
-``` shell
-python clipgen.py -b --viewer
-python clipgen.py -l 5+7 --screen --viewer
-```
-
-- **Interactive mode**: During an interactive session, clipgen keeps track of all generated artifacts. You can choose the `viewer` mode from the mode selection prompt to generate a timeline viewer for everything created so far in that session.
-
-The viewer is a standalone `clips_viewer.html` file written to the same directory as the generated artifacts. Open it in any browser (works with `file://` — no server needed). It provides:
-
-- A horizontal timeline showing all artifacts positioned by their timestamps.
-- A filterable sidebar list sorted by time.
-- Filters by category, participant, and artifact type.
-- A detail panel with inline video/image preview.
-- Spreadsheet cell references for each artifact.
-
-The viewer assets (`viewer.js`, `viewer.css`) are copied alongside the HTML automatically.
-
-## Possible future features
-
-- GUI
-- ~~Airtable support~~
-- Title/ending cards
-- Watermarking
-- Subtitling
-- Cropping and time-lapsing! For example generate a time-lapse of part of the screen, such as the minimap in a strategy game.
 
 ## AI Disclosure
 
