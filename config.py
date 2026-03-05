@@ -9,7 +9,9 @@ from icecream import ic
 REENCODING: bool = False
 AUDIO_NORMALIZE: bool = False
 FILEFORMAT: str = '.mp4'
-VERSIONNUM: str = '0.8.9'
+VERSIONNUM: str = '0.8.12'
+TITLECARDS_ENABLED: bool = False
+TITLECARD_DURATION_SECONDS: int = 2
 WORKSHEET_PRIORITY: List[str] = ['Sheet1', 'Data', 'data', 'Observations', 'Data set', 'data set', 'dataset', 'Dataset']
 DEBUGGING: bool = False
 VERBOSE: bool = True  # Set to False in CLI mode unless -v flag is used
@@ -91,4 +93,6 @@ SETTINGS_DESCRIPTIONS: Dict[str, str] = {
     'RICH_COLORS': 'Use colored terminal output via Rich library.',
     'RICH_PANELS': 'Show bordered panels for error, warning, and success messages.',
     'RICH_PROGRESS': 'Display progress bars during batch and reel processing.',
+    'TITLECARDS_ENABLED': 'Prepend a generated titlecard to each video clip.',
+    'TITLECARD_DURATION_SECONDS': 'Duration in seconds for the intro titlecard frame.',
 }

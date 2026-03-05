@@ -25,6 +25,7 @@ def _base_args(**overrides):
         "verbose": False,
         "spreadsheet": None,
         "viewer": False,
+        "titlecards": None,
     }
     args.update(overrides)
     return Namespace(**args)
@@ -42,6 +43,23 @@ def test_parse_arguments_rejects_conflicting_output_flags(monkeypatch):
     with pytest.raises(SystemExit) as exc:
         utils.parse_arguments()
     assert exc.value.code == 2
+
+
+def test_parse_arguments_titlecards_flags(monkeypatch):
+    # Default: no flag → None (use config default)
+    monkeypatch.setattr("sys.argv", ["clipgen.py"])
+    args = utils.parse_arguments()
+    assert getattr(args, "titlecards", None) is None
+
+    # --titlecards → True
+    monkeypatch.setattr("sys.argv", ["clipgen.py", "--titlecards"])
+    args = utils.parse_arguments()
+    assert args.titlecards is True
+
+    # --no-titlecards → False
+    monkeypatch.setattr("sys.argv", ["clipgen.py", "--no-titlecards"])
+    args = utils.parse_arguments()
+    assert args.titlecards is False
 
 
 def test_parse_cli_mode_args_parses_mixed_line_separators():

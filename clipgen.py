@@ -21,8 +21,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, NamedTuple, Optional, Set, Tuple
 
-from utils import ClipRecord
-
 import gspread
 from icecream import ic
 
@@ -33,6 +31,8 @@ import google_api
 import spreadsheet
 import utils
 import video
+import titlecards
+from utils import ClipRecord
 
 # ---- Mode configuration ----
 
@@ -773,6 +773,8 @@ def _process_single_clip_segments(
                 end_pos=end_time,
                 reencode=config.REENCODING,
             )
+            if ok and config.TITLECARDS_ENABLED:
+                titlecards.prepend_titlecard_to_clip(clip, out_name)
         elif output_format == 'screen':
             ok = video.extract_screenshot(
                 input_file=base_video,
@@ -1501,7 +1503,11 @@ def run_interactive_mode(worksheet: Any) -> None:
                     break
                 continue
             if is_reel:
-                outputs_generated, artifacts = process_reel(clips_list, output_file=reel_output_file)
+                outputs_generated, artifacts = process_reel(
+                    clips_list,
+                    output_file=reel_output_file,
+                    collect_artifacts=True,
+                )
             else:
                 outputs_generated, artifacts = process_clips(clips_list, collect_artifacts=True)
 
@@ -1552,6 +1558,10 @@ def main() -> None:
     
     # Set verbose mode: silent by default in CLI mode, verbose in interactive mode
     config.VERBOSE = not cli_mode or args.verbose
+
+    # Optional per-run override for titlecards setting
+    if getattr(args, 'titlecards', None) is not None:
+        config.TITLECARDS_ENABLED = bool(args.titlecards)
     
     # Parse CLI arguments for line, range, and cell modes
     cli_mode_args = parse_cli_mode_args(args)

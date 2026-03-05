@@ -206,6 +206,22 @@ Note: Non-interactive mode (using -b, -l, -r, -C, -c, -p, -f, -M, -R, or -T) is 
     parser.add_argument('--viewer', action='store_true',
         help='Generate a timeline HTML viewer file (clips_viewer.html) for this run')
 
+    titlecard_group = parser.add_mutually_exclusive_group()
+    titlecard_group.add_argument(
+        '--titlecards',
+        dest='titlecards',
+        action='store_true',
+        help='Enable titlecards for generated video clips for this run',
+    )
+    titlecard_group.add_argument(
+        '--no-titlecards',
+        dest='titlecards',
+        action='store_false',
+        help='Disable titlecards for generated video clips for this run',
+    )
+
+    parser.set_defaults(titlecards=None)
+
     return parser.parse_args()
 
 def debug_print(message: str) -> None:
