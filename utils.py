@@ -67,33 +67,39 @@ except ImportError:
     Progress = None  # type: ignore
 
 # Custom theme for clipgen - only create if Rich is available
-_CLIPGEN_THEME = Theme({
-    "error": "bold red",
-    "error.prefix": "bold red",
-    "error.detail": "dim",
-    "warning": "bold yellow",
-    "warning.prefix": "bold yellow",
-    "warning.detail": "dim",
-    "success": "bold green",
-    "success.prefix": "bold green",
-    "info": "cyan",
-    "verbose": "dim",
-    "debug": "magenta",
-    "mode.spreadsheet": "bold blue",
-    "mode.selection": "bold cyan",
-    "mode.reel": "bold green",
-    "mode.reellate": "bold magenta",
-    "mode.format": "bold yellow",
-    "mode.timeline": "bold green",
-    "mode.browse": "bold white",
-    "mode.batch": "bold cyan",
-    "mode.range": "bold orange",
-    "mode.category": "bold cyan",
-    "mode.line": "bold purple",
-    "mode.cell": "bold pink",
-    "mode.participant": "bold cyan",
-    "mode.filter": "bold cyan",
-}) if RICH_AVAILABLE else None
+_CLIPGEN_THEME = (
+    Theme(
+        {
+            "error": "bold red",
+            "error.prefix": "bold red",
+            "error.detail": "dim",
+            "warning": "bold yellow",
+            "warning.prefix": "bold yellow",
+            "warning.detail": "dim",
+            "success": "bold green",
+            "success.prefix": "bold green",
+            "info": "cyan",
+            "verbose": "dim",
+            "debug": "magenta",
+            "mode.spreadsheet": "bold blue",
+            "mode.selection": "bold cyan",
+            "mode.reel": "bold green",
+            "mode.reellate": "bold magenta",
+            "mode.format": "bold yellow",
+            "mode.timeline": "bold green",
+            "mode.browse": "bold white",
+            "mode.batch": "bold purple",
+            "mode.range": "bold plum3",
+            "mode.category": "bold cyan",
+            "mode.line": "bold orange3",
+            "mode.cell": "bold light_pink3",
+            "mode.participant": "bold cyan",
+            "mode.filter": "bold cyan",
+        }
+    )
+    if RICH_AVAILABLE
+    else None
+)
 
 # Global console instance
 console = Console(theme=_CLIPGEN_THEME, highlight=False) if RICH_AVAILABLE else None
