@@ -93,7 +93,7 @@ def _validate_row_range(start_line: int, end_line: int, max_row: int) -> Optiona
 
 def _interactive_category_selection(categories: List[str]) -> List[str]:
     """Interactively select one or more category names from a numbered list."""
-    utils.info_print('\nAvailable categories:')
+    utils.info_print('Available categories:')
     for i, cat in enumerate(categories, 1):
         utils.info_print(f'  {i}. {cat}')
     while True:
@@ -113,7 +113,7 @@ def _interactive_category_selection(categories: List[str]) -> List[str]:
             if invalid_indices:
                 utils.info_print(f'  Invalid index(es): {", ".join(str(i) for i in invalid_indices)}')
             if selected_categories:
-                utils.info_print('\nSelected categories:')
+                utils.info_print('Selected categories:')
                 for cat in selected_categories:
                     utils.info_print(f'  - {cat}')
                 yn = utils.read_user_input('\nIs this correct? y/n\n>> ')
@@ -273,11 +273,13 @@ def generate_list(sheet: Any, mode: str, line_numbers: Optional[List[int]] = Non
     if mode == 'batch':
         if skip_prompts:
             utils.verbose_print('Batch mode: generating all possible clips...')
-            clips = generate_batch_timestamps(sheet_data, id_cell, observation_cell, num_participants, study_name, filename_row_idx=filename_row_idx)
-        else:
-            yn = utils.read_user_input('\nWarning: This will generate all possible clips. Do you want to proceed? y/n\n>> ')
-            if yn == 'y':
-                clips = generate_batch_timestamps(sheet_data, id_cell, observation_cell, num_participants, study_name, filename_row_idx=filename_row_idx)
+        clips = generate_batch_timestamps(sheet_data, id_cell, observation_cell, num_participants, study_name, filename_row_idx=filename_row_idx)
+        if not skip_prompts:
+            num_data_rows = len(sheet_data) - (id_cell.row + 1) - (1 if filename_row_idx is not None else 0)
+            msg = f'\nThis will generate {len(clips)} clips (from {num_data_rows} data rows and {num_participants} participant column(s)). Proceed? y/n\n>> '
+            yn = utils.read_user_input(msg)
+            if yn != 'y':
+                clips = []
     # --- Category mode: user selects categories; include all rows matching any selected category ---
     elif mode == 'category':
         if categories:
@@ -294,7 +296,7 @@ def generate_list(sheet: Any, mode: str, line_numbers: Optional[List[int]] = Non
         else:
             all_categories = collect_categories(sheet_data, id_cell, category_cell)
             if not all_categories:
-                utils.info_print('\nNo categories found in the spreadsheet.')
+                utils.info_print('No categories found in the spreadsheet.')
                 return []
             selected_categories = _interactive_category_selection(all_categories)
             clips = generate_category_timestamps(
@@ -331,7 +333,7 @@ def generate_list(sheet: Any, mode: str, line_numbers: Optional[List[int]] = Non
                     start_line = int(start_line_str)
                     end_line = int(end_line_str)
                 except ValueError:
-                    utils.info_print('\nInvalid input. Please enter row numbers as integers.')
+                    utils.info_print('Invalid input. Please enter row numbers as integers.')
                     continue
                 if _validate_row_range(start_line, end_line, max_row) is None:
                     continue
@@ -364,7 +366,7 @@ def generate_list(sheet: Any, mode: str, line_numbers: Optional[List[int]] = Non
                         continue
                     
                     # Preview selected cells
-                    utils.info_print('\nSelected cells:')
+                    utils.info_print('Selected cells:')
                     header_row = sheet_data[id_cell.row - 1] if id_cell.row > 0 else []
                     valid_specs = []
                     for participant_id, row_number in parsed_specs:
@@ -391,7 +393,7 @@ def generate_list(sheet: Any, mode: str, line_numbers: Optional[List[int]] = Non
                             valid_specs.append((participant_id, row_number))
                     
                     if not valid_specs:
-                        utils.info_print('\nNo valid cells found. Please try again.')
+                        utils.info_print('No valid cells found. Please try again.')
                         continue
                     
                     utils.info_print('')
@@ -400,7 +402,7 @@ def generate_list(sheet: Any, mode: str, line_numbers: Optional[List[int]] = Non
                         clips = generate_cell_timestamps(sheet_data, id_cell, observation_cell, study_name, valid_specs, filename_row_idx=filename_row_idx)
                         break
                 except KeyboardInterrupt:
-                    utils.info_print('\nCancelled by user.')
+                    utils.info_print('Cancelled by user.')
                     return []
     # --- Participant mode: all non-empty timestamp cells in one or more participant columns ---
     elif mode == 'participant':
@@ -428,9 +430,9 @@ def generate_list(sheet: Any, mode: str, line_numbers: Optional[List[int]] = Non
         else:
             # Interactive mode
             if not available_list:
-                utils.info_print('\nNo participants found in the spreadsheet.')
+                utils.info_print('No participants found in the spreadsheet.')
                 return []
-            utils.info_print('\nAvailable participants:')
+            utils.info_print('Available participants:')
             for i, pid in enumerate(available_list, 1):
                 utils.info_print(f'  {i}. {pid}')
             while True:
@@ -470,7 +472,7 @@ def generate_list(sheet: Any, mode: str, line_numbers: Optional[List[int]] = Non
                     if pid not in seen:
                         seen.add(pid)
                         unique_ids.append(pid)
-                utils.info_print(f'\nSelected participant(s): {", ".join(unique_ids)}')
+                utils.info_print(f'Selected participant(s): {", ".join(unique_ids)}')
                 yn = utils.read_user_input('Generate all clips for these participants? y/n\n>> ')
                 if yn == 'y':
                     clips = []
@@ -489,7 +491,7 @@ def generate_list(sheet: Any, mode: str, line_numbers: Optional[List[int]] = Non
     # --- Reel mode: mixed selector string (batch, lines, ranges, categories, cells, participants); deduped and sorted ---
     elif mode == 'reel':
         if reel_input is None or not reel_input.strip():
-            utils.info_print('\nReel mode: no input provided.')
+            utils.info_print('Reel mode: no input provided.')
             return []
         utils.verbose_print('Reel mode: parsing selectors and collecting clips...')
         clips = generate_reel_timestamps(
@@ -1041,8 +1043,8 @@ def generate_line_timestamps(
     
     if cli_line_numbers is not None:
         # CLI mode - use provided line numbers
-        utils.verbose_print(f'\nLine mode: processing lines {", ".join(str(n) for n in cli_line_numbers)}')
-        utils.verbose_print('\nSelected issues:')
+        utils.verbose_print(f'Line mode: processing lines {", ".join(str(n) for n in cli_line_numbers)}')
+        utils.verbose_print('Selected issues:')
         for line_num in cli_line_numbers:
             if line_num < 1 or line_num > len(sheet_data):
                 utils.verbose_print(f'  Line {line_num}: [INVALID - out of range]')
@@ -1054,7 +1056,7 @@ def generate_line_timestamps(
                 valid_lines.append(line_num)
         
         if not valid_lines:
-            utils.info_print('\nNo valid lines found. Exiting.')
+            utils.info_print('No valid lines found. Exiting.')
             return []
     else:
         # Interactive mode
@@ -1064,11 +1066,11 @@ def generate_line_timestamps(
                 # Parse comma-separated line numbers
                 line_numbers = [int(num.strip()) for num in line_input.split(',')]
             except ValueError:
-                utils.info_print('\nTry again. Enter row numbers as integers, separated by commas.')
+                utils.info_print('Try again. Enter row numbers as integers, separated by commas.')
                 continue
             
             # Preview all selected lines
-            utils.info_print('\nSelected issues:')
+            utils.info_print('Selected issues:')
             valid_lines = []
             for line_num in line_numbers:
                 if line_num < 1 or line_num > len(sheet_data):
@@ -1081,7 +1083,7 @@ def generate_line_timestamps(
                     valid_lines.append(line_num)
             
             if not valid_lines:
-                utils.info_print('\nNo valid lines selected. Please try again.')
+                utils.info_print('No valid lines selected. Please try again.')
                 continue
             
             utils.info_print('')
@@ -1391,15 +1393,21 @@ def browse_spreadsheet(sheet: Any) -> None:
     before generating clips. Shows row number, category, description,
     and participant/group timestamps for each row.
     """
-    # Validate required headers exist
-    header_result = validate_spreadsheet_headers(sheet)
+    def _load_browse_data() -> tuple:
+        header_result = validate_spreadsheet_headers(sheet)
+        if header_result is None:
+            return (None, None)
+        sheet_data = sheet.get_all_values()
+        return (header_result, sheet_data)
+
+    header_result, sheet_data = (
+        utils.run_with_spinner('Loading spreadsheet...', _load_browse_data)
+        if utils._use_progress() else _load_browse_data()
+    )
     if header_result is None:
         return
-    
+
     id_cell, observation_cell, category_cell = header_result
-    
-    # Load sheet data
-    sheet_data = sheet.get_all_values()
     utils.debug_print(f'Sheet dumped into memory at {utils.get_current_time()}')
     
     # Check if sheet is empty or has only headers
@@ -1431,11 +1439,11 @@ def browse_spreadsheet(sheet: Any) -> None:
         if col_idx < len(header_row):
             participant_headers.append(header_row[col_idx])
 
-    utils.info_print('\n=== Browse Mode ===')
+    utils.print_mode_heading('Browse mode', 'mode.browse')
     utils.info_print(f'Total data rows: {total_data_rows} (rows {first_data_row + 1} to {last_data_row + 1})')
     utils.info_print(f'Participants: {", ".join(participant_headers)}')
-    utils.info_print('\nCommands: up/u, down/d, pageup/pu, pagedown/pd, jump/j <row>, open/o, quit/q')
-    utils.info_print('Press Enter to move down one row.\n')
+    utils.info_print('Commands: up/u, down/d, pageup/pu, pagedown/pd, jump/j <row>, open/o, quit/q')
+    utils.info_print('Press Enter to move down one row.')
     
     def display_rows(start_row, num_rows):
         """Display num_rows starting from start_row (0-indexed into sheet_data)."""
@@ -1485,7 +1493,7 @@ def browse_spreadsheet(sheet: Any) -> None:
 
         # Show position info (convert 0-based start_row to 1-based for display)
         displayed_end = min(start_row + num_rows, last_data_row + 1)
-        utils.info_print(f'\nShowing rows {start_row + 1}-{displayed_end} of {last_data_row + 1}')
+        utils.info_print(f'Showing rows {start_row + 1}-{displayed_end} of {last_data_row + 1}')
 
     # Initial display: show BROWSE_LINES_TO_DISPLAY rows starting at current_row
     display_rows(current_row, config.BROWSE_LINES_TO_DISPLAY)

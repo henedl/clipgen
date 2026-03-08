@@ -3,7 +3,7 @@
 
 import argparse
 from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional, Set, Tuple, TypedDict
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple, TypeVar, TypedDict
 
 from icecream import ic
 
@@ -79,6 +79,20 @@ _CLIPGEN_THEME = Theme({
     "info": "cyan",
     "verbose": "dim",
     "debug": "magenta",
+    "mode.spreadsheet": "bold blue",
+    "mode.selection": "bold cyan",
+    "mode.reel": "bold green",
+    "mode.reellate": "bold magenta",
+    "mode.format": "bold yellow",
+    "mode.timeline": "bold green",
+    "mode.browse": "bold white",
+    "mode.batch": "bold cyan",
+    "mode.range": "bold orange",
+    "mode.category": "bold cyan",
+    "mode.line": "bold purple",
+    "mode.cell": "bold pink",
+    "mode.participant": "bold cyan",
+    "mode.filter": "bold cyan",
 }) if RICH_AVAILABLE else None
 
 # Global console instance
@@ -122,6 +136,41 @@ def create_progress_bar(description: str = "Processing"):
         console=console,
         transient=False,  # Keep progress visible after completion
     )
+
+
+T = TypeVar("T")
+
+
+def run_with_spinner(message: str, callback: Callable[[], T]) -> T:
+    """Run callback with an indeterminate Rich spinner; if progress disabled, run callback only."""
+    if not _use_progress() or not RICH_AVAILABLE or console is None:
+        return callback()
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        console=console,
+        transient=False,
+    ) as progress:
+        progress.add_task(message, total=None)
+        return callback()
+
+
+def print_mode_heading(label: str, style: Optional[str] = None) -> None:
+    """Print a one-line mode heading (bold, optional color). Plain fallback when Rich unavailable.
+    style should be a theme key (e.g. 'mode.spreadsheet') so colors render correctly.
+    No-op when config.VERBOSE is False (e.g. CLI mode without -v).
+    """
+    if not getattr(config, 'VERBOSE', True):
+        return
+    if _use_rich() and console is not None and style:
+        console.print()
+        console.print(f"[{style}]{label}[/{style}]")
+    elif _use_rich() and console is not None:
+        console.print()
+        console.print(Text(label, style="bold"))
+    else:
+        print()
+        print(f"=== {label} ===")
 
 
 def parse_arguments() -> argparse.Namespace:
@@ -874,7 +923,7 @@ def set_program_settings() -> bool:
     """
     SETTINGS_OPTIONS = ['REENCODING', 'FILEFORMAT', 'DEBUGGING', 'MAX_FILESIZE_MB']
 
-    info_print('\nWhich setting? Available:\n')
+    info_print('Which setting? Available:')
     info_print(', '.join(SETTINGS_OPTIONS))
     setting_to_change = read_user_input('\n>> ')
 

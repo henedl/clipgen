@@ -153,26 +153,32 @@ def _open_worksheet(gspread_client: Any, open_callable: Callable[[], Any], error
         return None
 
 
-def open_spreadsheet_by_url(gspread_client: Any, url: str) -> Optional[Any]:
+def open_spreadsheet_by_url(gspread_client: Any, url: str, *, use_spinner: bool = False) -> Optional[Any]:
     """Open a spreadsheet by URL.
     
     Args:
         gspread_client: Google client connection
         url: Spreadsheet URL
+        use_spinner: If True, show spinner while opening (interactive path only)
         
     Returns:
         Worksheet object or None if error
     """
-    return _open_worksheet(gspread_client, lambda: gspread_client.open_by_url(url), "by URL")
+    def _open() -> Optional[Any]:
+        return _open_worksheet(gspread_client, lambda: gspread_client.open_by_url(url), "by URL")
+    if use_spinner:
+        return utils.run_with_spinner('Opening document by URL...', _open)
+    return _open()
 
 
-def open_spreadsheet_by_index(gspread_client: Any, doc_list: List[str], index: int) -> Optional[Any]:
+def open_spreadsheet_by_index(gspread_client: Any, doc_list: List[str], index: int, *, use_spinner: bool = False) -> Optional[Any]:
     """Open a spreadsheet by index number.
     
     Args:
         gspread_client: Google client connection
         doc_list: List of spreadsheet names
         index: Index number (1-based)
+        use_spinner: If True, show spinner while opening (interactive path only)
         
     Returns:
         Worksheet object or None if error
@@ -182,17 +188,24 @@ def open_spreadsheet_by_index(gspread_client: Any, doc_list: List[str], index: i
         return None
     chosen_index = index - 1
     doc_name = doc_list[chosen_index].strip()
+
+    def _open() -> Optional[Any]:
+        return _open_worksheet(gspread_client, lambda: gspread_client.open(doc_name), f"at index {index}")
+
+    if use_spinner:
+        return utils.run_with_spinner(f'Opening document: {doc_name}...', _open)
     utils.verbose_print(f'Opening document: {doc_name}')
-    return _open_worksheet(gspread_client, lambda: gspread_client.open(doc_name), f"at index {index}")
+    return _open()
 
 
-def open_spreadsheet_by_name(gspread_client: Any, doc_list: List[str], name: str) -> Optional[Any]:
+def open_spreadsheet_by_name(gspread_client: Any, doc_list: List[str], name: str, *, use_spinner: bool = False) -> Optional[Any]:
     """Open a spreadsheet by name.
     
     Args:
         gspread_client: Google client connection
         doc_list: List of spreadsheet names
         name: Spreadsheet name to search for
+        use_spinner: If True, show spinner while opening (interactive path only)
         
     Returns:
         Worksheet object or None if not found
@@ -200,20 +213,26 @@ def open_spreadsheet_by_name(gspread_client: Any, doc_list: List[str], name: str
     chosen_index = google_api.find_spreadsheet_by_name(name, doc_list)
     if chosen_index >= 0:
         matched_name = doc_list[chosen_index].strip()
+
+        def _open() -> Optional[Any]:
+            return _open_worksheet(gspread_client, lambda: gspread_client.open(matched_name), f"'{name}'")
+
+        if use_spinner:
+            return utils.run_with_spinner(f'Opening document: {matched_name}...', _open)
         utils.verbose_print(f'Opening document: {matched_name}')
-        return _open_worksheet(gspread_client, lambda: gspread_client.open(matched_name), f"'{name}'")
+        return _open()
     return None
 
 
 def handle_list_all_command(doc_list: List[str]) -> None:
     """Handle 'all' command - list all available documents."""
-    utils.info_print('\nAvailable documents:')
+    utils.info_print('Available documents:')
     for i, doc in enumerate(doc_list):
         utils.info_print(f'{i+1}. {doc.strip()}')
 
 def handle_list_new_command(doc_list: List[str]) -> None:
     """Handle 'new' command - list newest documents."""
-    utils.info_print('\nNewest documents: (modified or opened most recently)')
+    utils.info_print('Newest documents: (modified or opened most recently)')
     for i in range(min(config.NUM_NEWEST_DOCS_TO_SHOW, len(doc_list))):
         utils.info_print(f'{i+1}. {doc_list[i].strip()}')
 
@@ -241,7 +260,7 @@ def _handle_spreadsheet_command(gspread_client: Any, doc_list: List[str], input_
         return excel_io.select_excel_file()
     # Handle URL
     if input_name.startswith(config.COMMAND_HTTP_PREFIX):
-        return open_spreadsheet_by_url(gspread_client, input_name)
+        return open_spreadsheet_by_url(gspread_client, input_name, use_spinner=True)
     # Handle 'all' command
     if input_name.startswith(config.COMMAND_LIST_ALL):
         handle_list_all_command(doc_list)
@@ -253,21 +272,22 @@ def _handle_spreadsheet_command(gspread_client: Any, doc_list: List[str], input_
     # Handle 'last' command
     if input_name.startswith(config.COMMAND_OPEN_LAST):
         latest_spreadsheet_name = google_api.get_all_spreadsheets(gspread_client).split(',')[0]
-        return open_spreadsheet_by_name(gspread_client, doc_list, latest_spreadsheet_name)
+        return open_spreadsheet_by_name(gspread_client, doc_list, latest_spreadsheet_name, use_spinner=True)
     # Handle numeric index
     if input_name[0].isdigit():
-        return open_spreadsheet_by_index(gspread_client, doc_list, int(input_name))
+        return open_spreadsheet_by_index(gspread_client, doc_list, int(input_name), use_spinner=True)
     # Handle 'settings' command
     if input_name.startswith(config.COMMAND_SETTINGS):
         utils.set_program_settings()
         return None
     # Handle name search
-    return open_spreadsheet_by_name(gspread_client, doc_list, input_name)
+    return open_spreadsheet_by_name(gspread_client, doc_list, input_name, use_spinner=True)
 
 
 def select_spreadsheet(gspread_client: Any, doc_list: List[str]) -> Any:
     """Interactive spreadsheet selection. Returns the selected worksheet."""
     consecutive_open_failures = 0
+    utils.print_mode_heading('Spreadsheet selection', 'mode.spreadsheet')
 
     while True:
         try:
@@ -307,10 +327,11 @@ def _prompt_timeline_participant_selection(worksheet: Any) -> Optional[str]:
     num_participants = spreadsheet.get_num_participants(header_row, id_cell, worksheet.col_count)
     available_list = spreadsheet.get_participant_list(header_row, id_cell, num_participants)
     if not available_list:
-        utils.info_print('\nNo participants found in the spreadsheet.')
+        utils.info_print('No participants found in the spreadsheet.')
         return None
 
-    utils.info_print('\nTimeline requires exactly one participant.')
+    utils.print_mode_heading('Timeline participant', 'mode.timeline')
+    utils.info_print('Timeline requires exactly one participant.')
     utils.info_print('Available participants:')
     for i, pid in enumerate(available_list, 1):
         utils.info_print(f'  {i}. {pid}')
@@ -347,8 +368,9 @@ def _run_reel_mode_interactive(worksheet: Any) -> Tuple[List[ClipRecord], bool, 
     Returns (clips_list, True, reel_output_file or None) when user confirms; caller may loop on continue.
     """
     reel_input: Optional[str] = None
+    utils.print_mode_heading('Reel mode', 'mode.reel')
 
-    utils.info_print('\nReel mode: combine selectors into one video. Syntax:')
+    utils.info_print('Combine selectors into one video. Syntax:')
     utils.info_print('  batch                    - all clips')
     utils.info_print('  filter                   - key-marked clips only')
     utils.info_print('  timeline                 - chronological reel (requires exactly one participant)')
@@ -381,7 +403,7 @@ def _run_reel_mode_interactive(worksheet: Any) -> Tuple[List[ClipRecord], bool, 
     if not clips_list:
         utils.info_print('No clips matched. Try different selectors.')
         return ([], False, None)
-    utils.info_print(f'\nPreview: {len(clips_list)} clip(s) will be included (deduplicated by cell).')
+    utils.info_print(f'Preview: {len(clips_list)} clip(s) will be included (deduplicated by cell).')
     for i, clip in enumerate(clips_list[:config.REEL_PREVIEW_CLIP_COUNT]):
         desc = (clip.get('desc') or '')[:config.DESCRIPTION_PREVIEW_LENGTH]
         utils.info_print(f"  {i+1}. [{clip.get('category', '')}] {clip.get('participant', '')} row {clip['cell'].row}: {desc}...")
@@ -443,22 +465,23 @@ def _run_reellate_mode_interactive() -> Tuple[bool, Optional[str]]:
     Returns (True, output_file) when reel was generated; (False, None) otherwise.
     """
     clips = files.discover_clips()
-    
+    utils.print_mode_heading('Reel-late mode', 'mode.reellate')
+
     if not clips:
-        utils.info_print('\nNo clips found in the working directory.')
+        utils.info_print('No clips found in the working directory.')
         utils.info_print('  Source videos (like study_P01.mp4) are excluded.')
         utils.info_print('  Generate some clips first, then use this mode to combine them.')
         return (False, None)
-    
-    utils.info_print('\nReel-late mode: combine existing clips into a highlight reel.')
-    utils.info_print(f'\nFound {len(clips)} clip(s) in {os.getcwd()}:\n')
+
+    utils.info_print('Combine existing clips into a highlight reel.')
+    utils.info_print(f'Found {len(clips)} clip(s) in {os.getcwd()}:')
     
     # Display indexed list
     for i, clip in enumerate(clips):
         letter = utils.index_to_letter(i)
         utils.info_print(f'  {letter}. "{clip}"')
     
-    utils.info_print('\nSelect clips to include (order preserved). Syntax:')
+    utils.info_print('Select clips to include (order preserved). Syntax:')
     utils.info_print('  A + B + C    - combine clips A, B, and C')
     utils.info_print('  A, B, C      - same as above')
     utils.info_print('  A B C        - same as above')
@@ -477,7 +500,7 @@ def _run_reellate_mode_interactive() -> Tuple[bool, Optional[str]]:
     selected_clips = [clips[i] for i in indices]
     
     # Preview selection
-    utils.info_print(f'\nSelected {len(selected_clips)} clip(s):')
+    utils.info_print(f'Selected {len(selected_clips)} clip(s):')
     for i, clip in enumerate(selected_clips):
         utils.info_print(f'  {i+1}. "{clip}"')
     
@@ -492,8 +515,9 @@ def _run_reellate_mode_interactive() -> Tuple[bool, Optional[str]]:
     elif not output_file.endswith(config.FILEFORMAT):
         output_file = output_file + config.FILEFORMAT
     
-    utils.verbose_print(f'\nConcatenating {len(selected_clips)} clips into {output_file}...')
-    ok = video.concatenate_clips(selected_clips, output_file, reencode_on_fail=True)
+    def _concat_reellate() -> bool:
+        return video.concatenate_clips(selected_clips, output_file, reencode_on_fail=True)
+    ok = utils.run_with_spinner(f'Concatenating {len(selected_clips)} clips into {output_file}...', _concat_reellate) if utils._use_progress() else _concat_reellate()
     
     if ok:
         return (True, output_file)
@@ -508,8 +532,9 @@ def _run_format_mode_interactive(worksheet: Any, output_format: str) -> None:
     """
     format_display_name = 'Screenshot' if output_format == 'screen' else 'GIF'
     output_label = 'screenshots' if output_format == 'screen' else 'GIFs'
+    utils.print_mode_heading(f'{format_display_name} mode', 'mode.format')
 
-    utils.info_print(f'\n{format_display_name} mode: choose how to select timestamps.')
+    utils.info_print('Choose how to select timestamps.')
     while True:
         selection = utils.read_user_input(
             '\nSelect source rows for this output:\n'
@@ -583,13 +608,14 @@ def _run_format_mode_interactive(worksheet: Any, output_format: str) -> None:
     )
     if artifacts:
         _INTERACTIVE_VIEWER_ARTIFACTS.extend(artifacts)
-    utils.info_print(f'All done, created {outputs_generated} {output_label}!\nFiles are in {os.getcwd()}\n')
+    _print_run_summary(f'All done, created {outputs_generated} {output_label}!\nFiles are in {os.getcwd()}')
 
 
 def select_mode_and_generate(worksheet: Any) -> Tuple[List[ClipRecord], bool, Optional[str]]:
     """Interactive mode selection. Returns (clips list, is_reel_mode, reel_output_file or None)."""
     while True:
         input_mode: Optional[str] = None
+        utils.print_mode_heading('Mode selection', 'mode.selection')
 
         input_mode = utils.read_user_input(
             '\nEnter mode or input directly:\n'
@@ -642,20 +668,21 @@ def select_mode_and_generate(worksheet: Any) -> Tuple[List[ClipRecord], bool, Op
             if mode == 'reellate':
                 success, output_file = _run_reellate_mode_interactive()
                 if success:
-                    utils.info_print(f'\nReel created: {output_file}')
-                    utils.info_print(f'Files are in {os.getcwd()}\n')
+                    _print_run_summary(f'Reel created: {output_file}\nFiles are in {os.getcwd()}')
                     return ([], False, None)
                 continue
             if mode in ('screen', 'gif'):
                 _run_format_mode_interactive(worksheet, mode)
                 return ([], False, None)
             if mode:
+                utils.print_mode_heading(f'{mode.capitalize()} mode', f'mode.{mode}')
                 return (spreadsheet.generate_list(worksheet, mode), False, None)
 
             # Try implicit mode detection from input syntax for single-type inputs
             detected_mode, detected_kwargs = spreadsheet.detect_mode_from_input(input_mode)
             if detected_mode:
                 utils.verbose_print(f"  {detected_mode.capitalize()} mode detected.")
+                utils.print_mode_heading(f'{detected_mode.capitalize()} mode', f'mode.{detected_mode}')
                 return (spreadsheet.generate_list(worksheet, detected_mode, **detected_kwargs), False, None)
 
             # Fallback: treat as mixed selector input using reel parsing, but keep outputs as individual clips
@@ -705,6 +732,7 @@ def select_mode_and_generate(worksheet: Any) -> Tuple[List[ClipRecord], bool, Op
 
             selector_summary = ", ".join(non_empty_types)
             utils.verbose_print(f"  Mixed selectors detected ({selector_summary}). Generating individual clips from combined selectors.")
+            utils.print_mode_heading('Mixed selection', 'mode.selection')
             clips_list = spreadsheet.generate_list(worksheet, 'reel', reel_input=input_mode)
             return (clips_list, False, None)
         except gspread.exceptions.GSpreadException as e:
@@ -800,18 +828,26 @@ def _print_reencoding_warning(printer: Callable[[str], None]) -> None:
     printer('* No re-encoding done, expect:\n- inaccurate start and end timings\n- lossy frames until first keyframe\n- bad timecodes at the end\n')
 
 
+def _print_run_summary(message: str) -> None:
+    """Print a run summary block with newlines and a Summary header."""
+    utils.info_print('')
+    utils.print_mode_heading('Summary', 'mode.selection')
+    utils.info_print(message)
+    utils.info_print('')
+
+
 def _print_completion_message(outputs_generated: int, output_format: str, is_reel: bool) -> None:
     """Print a summary of generated outputs tailored to format and reel mode."""
     if is_reel:
-        utils.info_print(f'All done, created 1 reel!\nFiles are in {os.getcwd()}\n')
+        _print_run_summary(f'All done, created 1 reel!\nFiles are in {os.getcwd()}')
         return
 
     if output_format == 'screen':
-        utils.info_print(f'All done, created {outputs_generated} screenshots!\nFiles are in {os.getcwd()}\n')
+        _print_run_summary(f'All done, created {outputs_generated} screenshots!\nFiles are in {os.getcwd()}')
     elif output_format == 'gif':
-        utils.info_print(f'All done, created {outputs_generated} GIFs!\nFiles are in {os.getcwd()}\n')
+        _print_run_summary(f'All done, created {outputs_generated} GIFs!\nFiles are in {os.getcwd()}')
     else:
-        utils.info_print(f'All done, created {outputs_generated} videos!\nFiles are in {os.getcwd()}\n')
+        _print_run_summary(f'All done, created {outputs_generated} videos!\nFiles are in {os.getcwd()}')
 
 
 def _check_source_video(clip: ClipRecord, missing_videos: Set[str], skip_detail: str) -> Optional[str]:
@@ -1151,7 +1187,7 @@ def process_clips(
         'gif': 'GIF(s)',
     }.get(output_format, 'file(s)')
     if outputs_skipped > 0:
-        utils.verbose_print(f"\n* Summary: {outputs_generated} {item_name} generated, {outputs_skipped} skipped due to errors.")
+        utils.verbose_print(f"* Summary: {outputs_generated} {item_name} generated, {outputs_skipped} skipped due to errors.")
     if collect_artifacts:
         return (outputs_generated, all_artifacts)
     return outputs_generated
@@ -1200,7 +1236,7 @@ def process_reel(
     all_segment_paths, _ = _run_clip_pipeline(
         clips_list,
         empty_warning="No clips to process for reel. No timestamps were found or selected.",
-        intro_message='\n* Reel mode: generating individual clips, then concatenating into one file.\n',
+        intro_message='* Reel mode: generating individual clips, then concatenating into one file.',
         task_label="Generating reel clips",
         per_clip_fn=process_reel_clip,
     )
@@ -1214,8 +1250,9 @@ def process_reel(
     elif output_file is None:
         output_file = files.get_unique_filename(f"reel{config.FILEFORMAT}")
 
-    utils.verbose_print("Concatenating clips into final reel...")
-    ok = video.concatenate_clips(clip_paths, output_file, reencode_on_fail=True)
+    def _concat() -> bool:
+        return video.concatenate_clips(clip_paths, output_file, reencode_on_fail=True)
+    ok = utils.run_with_spinner('Concatenating clips into final reel...', _concat) if utils._use_progress() else _concat()
     for path in clip_paths:
         try:
             clip_path = Path(path)
@@ -1313,7 +1350,7 @@ def select_worksheet(gspread_client: Any, doc_list: List[str], args: Any, cli_mo
         cwd_name = Path.cwd().name
         worksheet = open_spreadsheet_by_name(gspread_client, doc_list, cwd_name)
         if worksheet:
-            utils.verbose_print(f'\nAuto-connecting to spreadsheet: {worksheet.spreadsheet.title}')
+            utils.verbose_print(f'Auto-connecting to spreadsheet: {worksheet.spreadsheet.title}')
         elif cli_mode:
             # CLI mode requires a spreadsheet - can't prompt interactively
             utils.error_print('No spreadsheet found matching working directory name.',
@@ -1325,9 +1362,9 @@ def select_worksheet(gspread_client: Any, doc_list: List[str], args: Any, cli_mo
     if worksheet and config.DEBUGGING:
         ic(worksheet.title)
     if _is_excel_worksheet(worksheet):
-        utils.verbose_print('\nUsing local Excel file.')
+        utils.verbose_print('Using local Excel file.')
     else:
-        utils.verbose_print('\nConnected to Google Drive!')
+        utils.verbose_print('Connected to Google Drive!')
     return worksheet
 
 # ---- Mode runners and entry point ----
@@ -1603,5 +1640,5 @@ if __name__ == '__main__':
     try:
         main()
     except KeyboardInterrupt:
-        utils.info_print('\nInterrupted by user')
+        utils.info_print('Interrupted by user')
         sys.exit(0)

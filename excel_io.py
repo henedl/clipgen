@@ -148,7 +148,7 @@ def select_excel_file() -> Optional[ExcelSheetAdapter]:
         utils.verbose_print(f'Opening Excel file: {Path(paths[0]).name}')
         return open_excel_workbook(paths[0])
     # Multiple files: list and prompt
-    utils.info_print('\nExcel files in current directory:')
+    utils.info_print('Excel files in current directory:')
     for i, p in enumerate(paths, 1):
         utils.info_print(f'  {i}. {Path(p).name}')
     while True:
