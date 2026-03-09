@@ -53,7 +53,7 @@ class BrowseRow(TypedDict, total=False):
     timestamps: Dict[str, str]
 
 
-# Rich library integration with graceful fallback
+# ---- Rich library integration with graceful fallback ----
 try:
     from rich.console import Console
     from rich.panel import Panel
@@ -66,7 +66,7 @@ except ImportError:
     RICH_AVAILABLE = False
     Progress = None  # type: ignore
 
-# Custom theme for clipgen - only create if Rich is available
+# ---- Custom theme for clipgen - only create if Rich is available ----
 _CLIPGEN_THEME = (
     Theme(
         {
@@ -101,84 +101,8 @@ _CLIPGEN_THEME = (
     else None
 )
 
-# Global console instance
-console = Console(theme=_CLIPGEN_THEME, highlight=False) if RICH_AVAILABLE else None
 
-
-def _use_rich() -> bool:
-    """Check if Rich output should be used."""
-    return RICH_AVAILABLE and console is not None and getattr(config, 'RICH_COLORS', True)
-
-
-def _use_panels() -> bool:
-    """Check if Rich panels should be used for errors/warnings/success."""
-    return getattr(config, 'RICH_PANELS', True)
-
-
-def _use_progress() -> bool:
-    """Check if Rich progress bars should be used."""
-    return RICH_AVAILABLE and console is not None and getattr(config, 'RICH_PROGRESS', True)
-
-
-def create_progress_bar(description: str = "Processing"):
-    """Create a Rich Progress instance configured for clipgen, or None if unavailable.
-
-    Args:
-        description: Default task description
-
-    Returns:
-        Configured Progress instance if Rich is available and enabled, else None
-    """
-    if not _use_progress():
-        return None
-
-    return Progress(
-        SpinnerColumn(),
-        TextColumn("[progress.description]{task.description}"),
-        BarColumn(bar_width=40),
-        MofNCompleteColumn(),
-        TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
-        TimeElapsedColumn(),
-        console=console,
-        transient=False,  # Keep progress visible after completion
-    )
-
-
-T = TypeVar("T")
-
-
-def run_with_spinner(message: str, callback: Callable[[], T]) -> T:
-    """Run callback with an indeterminate Rich spinner; if progress disabled, run callback only."""
-    if not _use_progress() or not RICH_AVAILABLE or console is None:
-        return callback()
-    with Progress(
-        SpinnerColumn(),
-        TextColumn("[progress.description]{task.description}"),
-        console=console,
-        transient=False,
-    ) as progress:
-        progress.add_task(message, total=None)
-        return callback()
-
-
-def print_mode_heading(label: str, style: Optional[str] = None) -> None:
-    """Print a one-line mode heading (bold, optional color). Plain fallback when Rich unavailable.
-    style should be a theme key (e.g. 'mode.spreadsheet') so colors render correctly.
-    No-op when config.VERBOSE is False (e.g. CLI mode without -v).
-    """
-    if not getattr(config, 'VERBOSE', True):
-        return
-    if _use_rich() and console is not None and style:
-        console.print()
-        console.print(f"[{style}]{label}[/{style}]")
-    elif _use_rich() and console is not None:
-        console.print()
-        console.print(Text(label, style="bold"))
-    else:
-        print()
-        print(f"=== {label} ===")
-
-
+# ---- CLI parsing ----
 def parse_arguments() -> argparse.Namespace:
     """Parse command-line arguments for non-interactive mode.
     
@@ -280,6 +204,11 @@ Note: Non-interactive mode (using -b, -l, -r, -C, -c, -p, -f, -M, -R, or -T) is 
     parser.set_defaults(titlecards=None)
 
     return parser.parse_args()
+
+
+# ---- Interactive decorations ----
+console = Console(theme=_CLIPGEN_THEME, highlight=False) if RICH_AVAILABLE else None
+
 
 def debug_print(message: str) -> None:
     """Print debug messages when DEBUGGING is enabled."""
@@ -481,6 +410,87 @@ def format_browse_rows_plain(
     return '\n'.join(lines)
 
 
+def _use_rich() -> bool:
+    """Check if Rich output should be used."""
+    return (
+        RICH_AVAILABLE and console is not None and getattr(config, "RICH_COLORS", True)
+    )
+
+
+def _use_panels() -> bool:
+    """Check if Rich panels should be used for errors/warnings/success."""
+    return getattr(config, "RICH_PANELS", True)
+
+
+def _use_progress() -> bool:
+    """Check if Rich progress bars should be used."""
+    return (
+        RICH_AVAILABLE
+        and console is not None
+        and getattr(config, "RICH_PROGRESS", True)
+    )
+
+
+def create_progress_bar(description: str = "Processing"):
+    """Create a Rich Progress instance configured for clipgen, or None if unavailable.
+
+    Args:
+        description: Default task description
+
+    Returns:
+        Configured Progress instance if Rich is available and enabled, else None
+    """
+    if not _use_progress():
+        return None
+
+    return Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(bar_width=40),
+        MofNCompleteColumn(),
+        TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+        TimeElapsedColumn(),
+        console=console,
+        transient=False,  # Keep progress visible after completion
+    )
+
+
+T = TypeVar("T")
+
+
+def run_with_spinner(message: str, callback: Callable[[], T]) -> T:
+    """Run callback with an indeterminate Rich spinner; if progress disabled, run callback only."""
+    if not _use_progress() or not RICH_AVAILABLE or console is None:
+        return callback()
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        console=console,
+        transient=False,
+    ) as progress:
+        progress.add_task(message, total=None)
+        return callback()
+
+
+def print_mode_heading(label: str, style: Optional[str] = None) -> None:
+    """Print a one-line mode heading (bold, optional color). Plain fallback when Rich unavailable.
+    style should be a theme key (e.g. 'mode.spreadsheet') so colors render correctly.
+    No-op when config.VERBOSE is False (e.g. CLI mode without -v).
+    """
+    if not getattr(config, "VERBOSE", True):
+        return
+    if _use_rich() and console is not None and style:
+        console.print()
+        console.print(f"[{style}]{label}[/{style}]")
+    elif _use_rich() and console is not None:
+        console.print()
+        console.print(Text(label, style="bold"))
+    else:
+        print()
+        print(f"=== {label} ===")
+
+
+# ---- Utility functions ----
 def normalize_study_name(raw_name: str) -> str:
     """Convert study name to a filesystem-safe format.
     Preserves unicode characters for international study names."""
