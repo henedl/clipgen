@@ -1,11 +1,29 @@
 from pathlib import Path
+from types import SimpleNamespace
 from typing import cast
 
 import files
 import clipgen
 import utils
 import spreadsheet
+from spreadsheet import SheetContext
 from utils import ClipRecord
+
+
+def _make_context(sheet_data, id_cell, observation_cell, category_cell=None, num_participants=2, study_name="study", baseline_row_idx=None, filename_row_idx=None):
+    """Helper to build a SheetContext for tests."""
+    if category_cell is None:
+        category_cell = SimpleNamespace(row=id_cell.row, col=5)
+    return SheetContext(
+        sheet_data=sheet_data,
+        id_cell=id_cell,
+        observation_cell=observation_cell,
+        category_cell=category_cell,
+        num_participants=num_participants,
+        study_name=study_name,
+        baseline_row_idx=baseline_row_idx,
+        filename_row_idx=filename_row_idx,
+    )
 
 
 def test_truncate_filename_respects_max_length(monkeypatch, tmp_path):
@@ -115,21 +133,24 @@ def test_baseline_row_detection_and_relative_conversion():
     ]
 
     # Dummy header cells matching the header row (row index 2 → row=3 in gspread terms)
-    id_cell = type("Cell", (), {"row": 3, "col": 1})()
-    observation_cell = type("Cell", (), {"row": 3, "col": 4})()
+    id_cell = SimpleNamespace(row=3, col=1)
+    observation_cell = SimpleNamespace(row=3, col=4)
+    category_cell = SimpleNamespace(row=3, col=5)
     baseline_row_idx = spreadsheet._detect_baseline_row(sheet_data)
     assert baseline_row_idx == 1
 
-    # Two participants: P01 and P02
-    clips = spreadsheet.get_line_timestamps(
-        sheet_data,
-        id_cell,
-        observation_cell,
+    ctx = _make_context(
+        sheet_data=sheet_data,
+        id_cell=id_cell,
+        observation_cell=observation_cell,
+        category_cell=category_cell,
         num_participants=2,
-        line_index=3,
         study_name="study",
         baseline_row_idx=baseline_row_idx,
     )
+
+    # Two participants: P01 and P02
+    clips = spreadsheet.get_line_timestamps(ctx, 3)
 
     # Expect clip records for both participants
     assert len(clips) == 2
@@ -159,20 +180,23 @@ def test_no_baseline_row_means_relative_timestamps_only():
         ["1", "09:13:00-09:14:00", "09:20:00-09:21:00", "Observation one", "CatA"],
     ]
 
-    id_cell = type("Cell", (), {"row": 3, "col": 1})()
-    observation_cell = type("Cell", (), {"row": 3, "col": 4})()
+    id_cell = SimpleNamespace(row=3, col=1)
+    observation_cell = SimpleNamespace(row=3, col=4)
+    category_cell = SimpleNamespace(row=3, col=5)
     baseline_row_idx = spreadsheet._detect_baseline_row(sheet_data)
     assert baseline_row_idx is None
 
-    clips = spreadsheet.get_line_timestamps(
-        sheet_data,
-        id_cell,
-        observation_cell,
+    ctx = _make_context(
+        sheet_data=sheet_data,
+        id_cell=id_cell,
+        observation_cell=observation_cell,
+        category_cell=category_cell,
         num_participants=2,
-        line_index=3,
         study_name="study",
         baseline_row_idx=baseline_row_idx,
     )
+
+    clips = spreadsheet.get_line_timestamps(ctx, 3)
 
     assert len(clips) == 2
     p01_clip = cast(ClipRecord, clips[0])

@@ -21,7 +21,7 @@ Clip record (returned by generation functions):
 """
 
 import re
-import webbrowser
+from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 import gspread
@@ -30,6 +30,87 @@ from icecream import ic
 import config
 import utils
 from utils import ClipRecord, ReelInput
+
+
+# ---- Sheet context and setup ----
+
+@dataclass
+class SheetContext:
+    """Bundles all sheet metadata needed by generation functions.
+
+    Created once per generate_list() call via build_sheet_context().
+    Avoids threading the same 7-8 parameters through every function.
+    """
+    sheet_data: List[List[str]]
+    id_cell: Any
+    observation_cell: Any
+    category_cell: Any
+    num_participants: int
+    study_name: str
+    baseline_row_idx: Optional[int] = None
+    filename_row_idx: Optional[int] = None
+
+    @property
+    def header_row(self) -> List[str]:
+        return self.sheet_data[self.id_cell.row - 1] if self.id_cell.row > 0 else []
+
+
+def build_sheet_context(sheet: Any) -> Optional[SheetContext]:
+    """Validate headers, load sheet data, and build a SheetContext.
+
+    Returns None if validation fails (missing headers, empty sheet, no participants).
+    """
+    header_result = validate_spreadsheet_headers(sheet)
+    if header_result is None:
+        return None
+
+    id_cell, observation_cell, category_cell = header_result
+    if config.DEBUGGING:
+        ic(id_cell, observation_cell, category_cell)
+
+    sheet_data = sheet.get_all_values()
+    utils.debug_print(f'Sheet dumped into memory at {utils.get_current_time()}')
+
+    if len(sheet_data) <= 1:
+        utils.error_print("Spreadsheet appears to be empty (no data rows found).",
+            [f"The spreadsheet only has {len(sheet_data)} row(s)."])
+        return None
+
+    baseline_row_idx = _detect_baseline_row(sheet_data)
+
+    study_name = sheet_data[0][0]
+    if study_name == '':
+        study_name = sheet.spreadsheet.title
+    utils.verbose_print(f'\nBeginning work on {study_name}.')
+    study_name = utils.normalize_study_name(study_name)
+
+    num_participants = get_num_participants(sheet.row_values(id_cell.row), id_cell, sheet.col_count)
+
+    filename_cell = None
+    filename_row_idx: Optional[int] = None
+    try:
+        filename_cell = sheet.find(config.FILENAME_HEADER)
+    except Exception:
+        filename_cell = None
+    if filename_cell is not None:
+        filename_row_idx = filename_cell.row - 1
+
+    if num_participants == 0:
+        utils.warning_print("No participant columns found in the spreadsheet.",
+            [f"Looking for columns starting with: {', '.join(config.PARTICIPANT_PREFIXES)}",
+             "Check that participant column headers start with 'P' or 'G' (e.g., P01, P02, G01)."])
+        return None
+
+    return SheetContext(
+        sheet_data=sheet_data,
+        id_cell=id_cell,
+        observation_cell=observation_cell,
+        category_cell=category_cell,
+        num_participants=num_participants,
+        study_name=study_name,
+        baseline_row_idx=baseline_row_idx,
+        filename_row_idx=filename_row_idx,
+    )
 
 
 # ---- Header validation, baseline detection, and row-range helpers ----
@@ -119,53 +200,9 @@ def _validate_row_range(start_line: int, end_line: int, max_row: int) -> Optiona
     return (start_line, end_line)
 
 
-def _interactive_category_selection(categories: List[str]) -> List[str]:
-    """Interactively select one or more category names from a numbered list."""
-    utils.info_print('Available categories:')
-    for i, cat in enumerate(categories, 1):
-        utils.info_print(f'  {i}. {cat}')
-    while True:
-        selection = utils.read_user_input('\nEnter category numbers (comma-separated, e.g., "1,3,5") or "all":\n>> ')
-        if selection.lower() == 'all':
-            return categories
-        try:
-            indices = [int(x.strip()) for x in selection.split(',')]
-            selected_categories = []
-            invalid_indices = []
-            for idx in indices:
-                if 1 <= idx <= len(categories):
-                    if categories[idx - 1] not in selected_categories:
-                        selected_categories.append(categories[idx - 1])
-                else:
-                    invalid_indices.append(idx)
-            if invalid_indices:
-                utils.info_print(f'  Invalid index(es): {", ".join(str(i) for i in invalid_indices)}')
-            if selected_categories:
-                utils.info_print('Selected categories:')
-                for cat in selected_categories:
-                    utils.info_print(f'  - {cat}')
-                yn = utils.read_user_input('\nIs this correct? y/n\n>> ')
-                if yn == 'y':
-                    return selected_categories
-            else:
-                utils.info_print('No valid categories selected. Please try again.')
-        except ValueError:
-            utils.info_print('Please enter valid numbers separated by commas.')
-
-
 # ---- Clip record construction ----
 
-def _make_clip_record(
-    sheet_data: List[List[str]],
-    row_idx: int,
-    col_idx: int,
-    id_cell: Any,
-    observation_cell: Any,
-    study_name: str,
-    cell_value: str,
-    filename_row_idx: Optional[int] = None,
-    baseline_row_idx: Optional[int] = None,
-) -> ClipRecord:
+def _make_clip_record(ctx: SheetContext, row_idx: int, col_idx: int, cell_value: str) -> ClipRecord:
     """Build one clip record dict for a cell at (row_idx, col_idx).
 
     Clip record structure (used by downstream prepare_clip/video code):
@@ -175,461 +212,150 @@ def _make_clip_record(
     - participant: Participant ID from the header row for this column.
     - category: Category label from the same row (category column).
     'times' is added later when timestamps are resolved to [start, end] ranges.
-    
-    Args:
-        sheet_data: Sheet data matrix
-        row_idx: 0-based row index
-        col_idx: 0-based column index
-        id_cell: ID header cell
-        observation_cell: Observation header cell
-        study_name: Normalized study name
-        cell_value: Value of the timestamp cell (sheet_data[row_idx][col_idx])
-        
-    Returns:
-        Dict with keys: cell, desc, study, participant, category
     """
     # gspread Cell uses 1-based coordinates; convert from 0-based list indices
     cell = gspread.cell.Cell(row_idx + 1, col_idx + 1, cell_value)
     # observation_cell.col is 1-based; convert to 0-based for sheet_data
-    desc_col = observation_cell.col - 1
-    category_col = observation_cell.col - 2
+    desc_col = ctx.observation_cell.col - 1
+    category_col = ctx.observation_cell.col - 2
     # Header row in sheet_data is 0-based; id_cell.row is 1-based
-    participant_row = id_cell.row - 1
+    participant_row = ctx.id_cell.row - 1
     desc = ""
-    if 0 <= desc_col < len(sheet_data[row_idx]):
-        desc = sheet_data[row_idx][desc_col]
+    if 0 <= desc_col < len(ctx.sheet_data[row_idx]):
+        desc = ctx.sheet_data[row_idx][desc_col]
     participant = ""
-    if 0 <= participant_row < len(sheet_data) and col_idx < len(sheet_data[participant_row]):
-        participant = utils.normalize_participant_id(sheet_data[participant_row][col_idx])
+    if 0 <= participant_row < len(ctx.sheet_data) and col_idx < len(ctx.sheet_data[participant_row]):
+        participant = utils.normalize_participant_id(ctx.sheet_data[participant_row][col_idx])
     timestamp_baseline = ""
-    if baseline_row_idx is not None:
-        if 0 <= baseline_row_idx < len(sheet_data) and col_idx < len(sheet_data[baseline_row_idx]):
-            timestamp_baseline = sheet_data[baseline_row_idx][col_idx].strip()
+    if ctx.baseline_row_idx is not None:
+        if 0 <= ctx.baseline_row_idx < len(ctx.sheet_data) and col_idx < len(ctx.sheet_data[ctx.baseline_row_idx]):
+            timestamp_baseline = ctx.sheet_data[ctx.baseline_row_idx][col_idx].strip()
     category = ""
-    if 0 <= category_col < len(sheet_data[row_idx]):
-        category = sheet_data[row_idx][category_col]
+    if 0 <= category_col < len(ctx.sheet_data[row_idx]):
+        category = ctx.sheet_data[row_idx][category_col]
     result: ClipRecord = {
         "cell": cell,
         "desc": desc,
-        "study": study_name,
+        "study": ctx.study_name,
         "participant": participant,
         "category": category,
     }
     if timestamp_baseline:
         result["timestamp_baseline"] = timestamp_baseline
-    if filename_row_idx is not None:
-        if 0 <= filename_row_idx < len(sheet_data) and col_idx < len(sheet_data[filename_row_idx]):
-            filename_override = sheet_data[filename_row_idx][col_idx].strip()
+    if ctx.filename_row_idx is not None:
+        if 0 <= ctx.filename_row_idx < len(ctx.sheet_data) and col_idx < len(ctx.sheet_data[ctx.filename_row_idx]):
+            filename_override = ctx.sheet_data[ctx.filename_row_idx][col_idx].strip()
             if filename_override:
                 result["source_filename"] = filename_override
     return result
 
 
 def generate_list(sheet: Any, mode: str, line_numbers: Optional[List[int]] = None, range_start: Optional[int] = None, range_end: Optional[int] = None, skip_prompts: bool = False, cell_specs: Optional[List[Tuple[str, int]]] = None, participant_id: Optional[str] = None, reel_input: Optional[str] = None, categories: Optional[List[str]] = None) -> List[ClipRecord]:
-    """Goes through a sheet and builds clip records for timestamp cells.
-    
+    """Generate clip records from a sheet based on mode and resolved parameters.
+
+    This function is pure: it takes resolved parameters (no interactive prompts).
+    Interactive prompts are handled by clipgen.py using functions from interactive.py.
+
     Args:
         sheet: The gspread worksheet object
-        mode: One of 'batch', 'line', 'range', 'category', 'cell', 'participant', 'filter', 'reel', 'select'
-        line_numbers: Optional list of line numbers for 'line' mode (CLI)
-        range_start: Optional start line for 'range' mode (CLI)
-        range_end: Optional end line for 'range' mode (CLI)
-        skip_prompts: If True, skip confirmation prompts (CLI -y flag)
-        cell_specs: Optional list of (participant_id, row_number) tuples for 'cell' mode (CLI)
-        participant_id: Optional participant ID for 'participant' mode (CLI)
-        reel_input: Optional reel selector string for 'reel' mode (e.g. '11, 13-16, P01, "Observations"')
-        categories: Optional list of category names for 'category' mode (CLI)
-        
+        mode: One of 'batch', 'line', 'range', 'category', 'cell', 'participant', 'filter', 'reel'
+        line_numbers: List of line numbers for 'line' mode
+        range_start: Start line for 'range' mode
+        range_end: End line for 'range' mode
+        skip_prompts: If True, skip confirmation prompts (CLI -y flag, for batch/filter)
+        cell_specs: List of (participant_id, row_number) tuples for 'cell' mode
+        participant_id: Participant ID(s) for 'participant' mode (comma/plus-separated string)
+        reel_input: Reel selector string for 'reel' mode
+        categories: List of category names for 'category' mode
+
     Returns:
-        List of clip records (dicts with keys: cell, desc, study, participant, category; 'times' added later by prepare_clip).
+        List of clip records
     """
     if config.DEBUGGING:
         ic(mode, line_numbers, range_start, range_end)
-    # Validate required headers exist
-    header_result = validate_spreadsheet_headers(sheet)
-    if header_result is None:
-        return []
-    
-    id_cell, observation_cell, category_cell = header_result
-    if config.DEBUGGING:
-        ic(id_cell, observation_cell, category_cell)
-    clips = []
 
-    # Sheet data is a list of lists, which forms a matrix
-    # - sheet_data[row][col] where indices start at 0 (real spreadsheet starts at 1)
-    sheet_data = sheet.get_all_values()
-    utils.debug_print(f'Sheet dumped into memory at {utils.get_current_time()}')
-    
-    # Check if sheet is empty or has only headers
-    if len(sheet_data) <= 1:
-        utils.error_print("Spreadsheet appears to be empty (no data rows found).",
-            [f"The spreadsheet only has {len(sheet_data)} row(s)."])
+    ctx = build_sheet_context(sheet)
+    if ctx is None:
         return []
 
-    baseline_row_idx = _detect_baseline_row(sheet_data)
-
-    # Determine the study name.
-    study_name = sheet_data[0][0]
-    if study_name == '':
-        study_name = sheet.spreadsheet.title
-    utils.verbose_print(f'\nBeginning work on {study_name}.')
-
-    # Normalize study name for filesystem use
-    study_name = utils.normalize_study_name(study_name)
-
-    # Get number of participants needed to loop through the worksheet
-    num_participants = get_num_participants(sheet.row_values(id_cell.row), id_cell, sheet.col_count)
-
-    # Optional filename row: indicated by config.FILENAME_HEADER in the ID column.
-    filename_cell = None
-    filename_row_idx: Optional[int] = None
-    try:
-        filename_cell = sheet.find(config.FILENAME_HEADER)
-    except Exception:
-        filename_cell = None
-    if filename_cell is not None:
-        filename_row_idx = filename_cell.row - 1
-    
-    # Warn if no participants found
-    if num_participants == 0:
-        utils.warning_print("No participant columns found in the spreadsheet.",
-            [f"Looking for columns starting with: {', '.join(config.PARTICIPANT_PREFIXES)}",
-             "Check that participant column headers start with 'P' or 'G' (e.g., P01, P02, G01)."])
-        return []
-
-    # Generate clips according to the selected mode.
-    # --- Batch mode: all non-empty timestamp cells in the sheet ---
+    # Generate clips according to the selected mode
     if mode == 'batch':
-        if skip_prompts:
-            utils.verbose_print('Batch mode: generating all possible clips...')
-        clips = generate_batch_timestamps(
-            sheet_data,
-            id_cell,
-            observation_cell,
-            num_participants,
-            study_name,
-            baseline_row_idx=baseline_row_idx,
-            filename_row_idx=filename_row_idx,
-        )
-        if not skip_prompts:
-            num_data_rows = len(sheet_data) - (id_cell.row + 1) - (1 if filename_row_idx is not None else 0)
-            msg = f'\nThis will generate {len(clips)} clips (from {num_data_rows} data rows and {num_participants} participant column(s)). Proceed? y/n\n>> '
-            yn = utils.read_user_input(msg)
-            if yn != 'y':
-                clips = []
-    # --- Category mode: user selects categories; include all rows matching any selected category ---
-    elif mode == 'category':
-        if categories:
-            clips = generate_category_timestamps(
-                sheet_data,
-                id_cell,
-                observation_cell,
-                category_cell,
-                num_participants,
-                study_name,
-                categories,
-                baseline_row_idx=baseline_row_idx,
-                filename_row_idx=filename_row_idx,
-            )
-        else:
-            all_categories = collect_categories(sheet_data, id_cell, category_cell)
-            if not all_categories:
-                utils.info_print('No categories found in the spreadsheet.')
-                return []
-            selected_categories = _interactive_category_selection(all_categories)
-            clips = generate_category_timestamps(
-                sheet_data,
-                id_cell,
-                observation_cell,
-                category_cell,
-                num_participants,
-                study_name,
-                selected_categories,
-                baseline_row_idx=baseline_row_idx,
-                filename_row_idx=filename_row_idx,
-            )
-    # --- Line mode: one or more specific row numbers (e.g. lines 5, 7, 12) ---
-    elif mode == 'line':
-        clips = generate_line_timestamps(
-            sheet_data,
-            id_cell,
-            observation_cell,
-            num_participants,
-            study_name,
-            line_numbers,
-            skip_prompts,
-            baseline_row_idx=baseline_row_idx,
-            filename_row_idx=filename_row_idx,
-        )
-    # --- Range mode: contiguous block of rows from start_line to end_line (inclusive) ---
-    elif mode == 'range':
-        max_row = len(sheet_data)
-        if range_start is not None and range_end is not None:
-            # CLI mode - use provided range with bounds validation
-            valid = _validate_row_range(range_start, range_end, max_row)
-            if valid is None:
-                return []
-            range_start, range_end = valid
-            utils.verbose_print(f'Range mode: lines {range_start} to {range_end}')
-            utils.verbose_print(f'Lines selected: {sheet_data[range_start-1][observation_cell.col-1]} to {sheet_data[range_end-1][observation_cell.col-1]}')
-            clips = generate_range_timestamps(
-                sheet_data,
-                id_cell,
-                observation_cell,
-                num_participants,
-                study_name,
-                range_start,
-                range_end,
-                baseline_row_idx=baseline_row_idx,
-                filename_row_idx=filename_row_idx,
-            )
-        else:
-            # Interactive mode
-            while True:
-                try:
-                    start_line_str = utils.read_user_input('\nWhich starting line (row number only)?\n>> ')
-                    end_line_str = utils.read_user_input('\nWhich ending line (row number only)?\n>> ')
-                    start_line = int(start_line_str)
-                    end_line = int(end_line_str)
-                except ValueError:
-                    utils.info_print('Invalid input. Please enter row numbers as integers.')
-                    continue
-                if _validate_row_range(start_line, end_line, max_row) is None:
-                    continue
-                utils.info_print(f'Lines selected: {sheet_data[start_line-1][observation_cell.col-1]} to {sheet_data[end_line-1][observation_cell.col-1]}')
-                yn = utils.read_user_input('Is this correct? y/n\n>> ')
-                if yn == 'y':
-                    break
-            clips = generate_range_timestamps(
-                sheet_data,
-                id_cell,
-                observation_cell,
-                num_participants,
-                study_name,
-                start_line,
-                end_line,
-                baseline_row_idx=baseline_row_idx,
-                filename_row_idx=filename_row_idx,
-            )
-    # --- Cell mode: specific (participant_id, row_number) cells, e.g. P01.11 or P01.11 + P03.11 ---
-    elif mode == 'cell':
-        if cell_specs is not None:
-            # CLI mode - use provided cell specifications
-            utils.verbose_print(f'Cell mode: processing {len(cell_specs)} cell(s)')
-            clips = generate_cell_timestamps(
-                sheet_data,
-                id_cell,
-                observation_cell,
-                study_name,
-                cell_specs,
-                baseline_row_idx=baseline_row_idx,
-                filename_row_idx=filename_row_idx,
-            )
-        else:
-            # Interactive mode
-            while True:
-                try:
-                    cell_input = utils.read_user_input('\nEnter cell specification(s) (e.g., P01.11 or P01.11 + P03.11):\n>> ')
-                    if not cell_input.strip():
-                        utils.info_print('Please enter at least one cell specification.')
-                        continue
-                    
-                    # Parse cell specifications
-                    try:
-                        parsed_specs = parse_cell_specifications(cell_input)
-                    except ValueError as e:
-                        utils.info_print(f'Invalid format: {e}')
-                        utils.info_print('Expected format: P01.11 or P01.11 + P03.11')
-                        continue
-                    
-                    # Preview selected cells
-                    utils.info_print('Selected cells:')
-                    header_row = sheet_data[id_cell.row - 1] if id_cell.row > 0 else []
-                    valid_specs = []
-                    for participant_id, row_number in parsed_specs:
-                        col_idx = find_participant_column(header_row, id_cell, participant_id)
-                        if col_idx is None:
-                            utils.info_print(f'  {participant_id}.{row_number}: [INVALID - participant not found]')
-                        elif row_number < 1 or row_number > len(sheet_data):
-                            utils.info_print(f'  {participant_id}.{row_number}: [INVALID - row out of range]')
-                        else:
-                            row_idx = row_number - 1
-                            cell_value = ''
-                            if col_idx < len(sheet_data[row_idx]):
-                                cell_value = sheet_data[row_idx][col_idx]
-                            desc = ''
-                            desc_col = observation_cell.col - 1
-                            if desc_col >= 0 and desc_col < len(sheet_data[row_idx]):
-                                desc = sheet_data[row_idx][desc_col]
-                            if cell_value and cell_value.strip():
-                                display_value = cell_value.replace('\n', ' ')
-                                desc_preview = desc[:config.DESCRIPTION_PREVIEW_LENGTH] if desc else 'N/A'
-                                utils.info_print(f'  {participant_id}.{row_number}: {display_value} (row: {desc_preview})')
-                            else:
-                                utils.info_print(f'  {participant_id}.{row_number}: [EMPTY]')
-                            valid_specs.append((participant_id, row_number))
-                    
-                    if not valid_specs:
-                        utils.info_print('No valid cells found. Please try again.')
-                        continue
-                    
-                    utils.info_print('')
-                    yn = utils.read_user_input('Are these the correct cells? y/n\n>> ')
-                    if yn == 'y':
-                        clips = generate_cell_timestamps(
-                            sheet_data,
-                            id_cell,
-                            observation_cell,
-                            study_name,
-                            valid_specs,
-                            baseline_row_idx=baseline_row_idx,
-                            filename_row_idx=filename_row_idx,
-                        )
-                        break
-                except KeyboardInterrupt:
-                    utils.info_print('Cancelled by user.')
-                    return []
-    # --- Participant mode: all non-empty timestamp cells in one or more participant columns ---
-    elif mode == 'participant':
-        header_row = sheet_data[id_cell.row - 1] if id_cell.row > 0 else []
-        available_list = get_participant_list(header_row, id_cell, num_participants)
-        if participant_id is not None:
-            # CLI mode - parse and validate participant ID(s)
-            participant_ids = parse_participant_selection(participant_id)
-            if not participant_ids:
-                utils.error_print("No participant ID(s) provided.",
-                    ['Use format: P01 or P01+P03 or P01, P03'])
-                return []
-            invalid = []
-            for pid in participant_ids:
-                if find_participant_column(header_row, id_cell, pid) is None:
-                    invalid.append(pid)
-            if invalid:
-                utils.error_print(f"Participant(s) not found in spreadsheet headers: {', '.join(invalid)}",
-                    [f"Available participants: {', '.join(available_list)}"])
-                return []
-            utils.verbose_print(f'Participant mode: generating all clips for {", ".join(participant_ids)}')
-            clips = []
-            for pid in participant_ids:
-                clips.extend(
-                    generate_participant_timestamps(
-                        sheet_data,
-                        id_cell,
-                        observation_cell,
-                        study_name,
-                        pid,
-                        baseline_row_idx=baseline_row_idx,
-                        filename_row_idx=filename_row_idx,
-                    )
-                )
-        else:
-            # Interactive mode
-            if not available_list:
-                utils.info_print('No participants found in the spreadsheet.')
-                return []
-            utils.info_print('Available participants:')
-            for i, pid in enumerate(available_list, 1):
-                utils.info_print(f'  {i}. {pid}')
-            while True:
-                selection = utils.read_user_input('\nEnter participant number(s) or ID(s), separated by + or , (e.g., 1, 3 or P01, P03):\n>> ').strip()
-                if not selection:
-                    utils.info_print('Please enter one or more participant numbers or IDs.')
-                    continue
-                tokens = parse_participant_selection(selection)
-                if not tokens:
-                    utils.info_print('No valid participant(s) entered. Use + or , as separator.')
-                    continue
-                chosen_ids = []
-                invalid_tokens = []
-                for token in tokens:
-                    if token.isdigit():
-                        idx = int(token)
-                        if 1 <= idx <= len(available_list):
-                            chosen_ids.append(available_list[idx - 1])
-                        else:
-                            invalid_tokens.append(token)
-                    else:
-                        col_idx = find_participant_column(header_row, id_cell, token)
-                        if col_idx is not None:
-                            if col_idx < len(header_row):
-                                chosen_ids.append(utils.normalize_participant_id(header_row[col_idx]))
-                            else:
-                                chosen_ids.append(token)
-                        else:
-                            invalid_tokens.append(token)
-                if invalid_tokens:
-                    utils.info_print(f"Not found: {', '.join(invalid_tokens)}. Available: {', '.join(available_list)}")
-                    continue
-                # Dedupe preserving order
-                seen = set()
-                unique_ids = []
-                for pid in chosen_ids:
-                    if pid not in seen:
-                        seen.add(pid)
-                        unique_ids.append(pid)
-                utils.info_print(f'Selected participant(s): {", ".join(unique_ids)}')
-                yn = utils.read_user_input('Generate all clips for these participants? y/n\n>> ')
-                if yn == 'y':
-                    clips = []
-                    for pid in unique_ids:
-                        clips.extend(
-                            generate_participant_timestamps(
-                                sheet_data,
-                                id_cell,
-                                observation_cell,
-                                study_name,
-                                pid,
-                                baseline_row_idx=baseline_row_idx,
-                                filename_row_idx=filename_row_idx,
-                            )
-                        )
-                    break
-    # --- Filter mode: key-marked segments only (per-cell annotations) ---
-    elif mode == 'filter':
-        if skip_prompts:
-            utils.verbose_print('Filter mode: generating key-marked clips...')
-            clips = generate_filter_timestamps(
-                sheet_data,
-                id_cell,
-                observation_cell,
-                num_participants,
-                study_name,
-                baseline_row_idx=baseline_row_idx,
-                filename_row_idx=filename_row_idx,
-            )
-        else:
-            yn = utils.read_user_input('\nFilter mode will include only key-marked timestamps (per-cell annotations). Do you want to proceed? y/n\n>> ')
-            if yn == 'y':
-                clips = generate_filter_timestamps(
-                    sheet_data,
-                    id_cell,
-                    observation_cell,
-                    num_participants,
-                    study_name,
-                    baseline_row_idx=baseline_row_idx,
-                    filename_row_idx=filename_row_idx,
-                )
-    # --- Reel mode: mixed selector string (batch, lines, ranges, categories, cells, participants); deduped and sorted ---
-    elif mode == 'reel':
+        utils.verbose_print('Batch mode: generating all possible clips...')
+        return generate_batch_timestamps(ctx)
+
+    if mode == 'category':
+        if not categories:
+            utils.error_print("Category mode requires categories list.",
+                ["Pass categories via CLI (-C) or use interactive mode."])
+            return []
+        return generate_category_timestamps(ctx, categories)
+
+    if mode == 'line':
+        if line_numbers is None:
+            utils.error_print("Line mode requires line_numbers list.",
+                ["Pass line numbers via CLI (-l) or use interactive mode."])
+            return []
+        return generate_line_timestamps(ctx, line_numbers)
+
+    if mode == 'range':
+        if range_start is None or range_end is None:
+            utils.error_print("Range mode requires range_start and range_end.",
+                ["Pass range via CLI (-r) or use interactive mode."])
+            return []
+        max_row = len(ctx.sheet_data)
+        valid = _validate_row_range(range_start, range_end, max_row)
+        if valid is None:
+            return []
+        range_start, range_end = valid
+        utils.verbose_print(f'Range mode: lines {range_start} to {range_end}')
+        utils.verbose_print(f'Lines selected: {ctx.sheet_data[range_start-1][ctx.observation_cell.col-1]} to {ctx.sheet_data[range_end-1][ctx.observation_cell.col-1]}')
+        return generate_range_timestamps(ctx, range_start, range_end)
+
+    if mode == 'cell':
+        if cell_specs is None:
+            utils.error_print("Cell mode requires cell_specs list.",
+                ["Pass cell specs via CLI (-c) or use interactive mode."])
+            return []
+        utils.verbose_print(f'Cell mode: processing {len(cell_specs)} cell(s)')
+        return generate_cell_timestamps(ctx, cell_specs)
+
+    if mode == 'participant':
+        if participant_id is None:
+            utils.error_print("Participant mode requires participant_id.",
+                ["Pass participant ID via CLI (-p) or use interactive mode."])
+            return []
+        available_list = get_participant_list(ctx.header_row, ctx.id_cell, ctx.num_participants)
+        participant_ids = parse_participant_selection(participant_id)
+        if not participant_ids:
+            utils.error_print("No participant ID(s) provided.",
+                ['Use format: P01 or P01+P03 or P01, P03'])
+            return []
+        invalid = []
+        for pid in participant_ids:
+            if find_participant_column(ctx.header_row, ctx.id_cell, pid) is None:
+                invalid.append(pid)
+        if invalid:
+            utils.error_print(f"Participant(s) not found in spreadsheet headers: {', '.join(invalid)}",
+                [f"Available participants: {', '.join(available_list)}"])
+            return []
+        utils.verbose_print(f'Participant mode: generating all clips for {", ".join(participant_ids)}')
+        clips = []
+        for pid in participant_ids:
+            clips.extend(generate_participant_timestamps(ctx, pid))
+        return clips
+
+    if mode == 'filter':
+        utils.verbose_print('Filter mode: generating key-marked clips...')
+        return generate_filter_timestamps(ctx)
+
+    if mode == 'reel':
         if reel_input is None or not reel_input.strip():
             utils.info_print('Reel mode: no input provided.')
             return []
         utils.verbose_print('Reel mode: parsing selectors and collecting clips...')
-        clips = generate_reel_timestamps(
-            sheet_data,
-            id_cell,
-            observation_cell,
-            category_cell,
-            num_participants,
-            study_name,
-            reel_input.strip(),
-            baseline_row_idx=baseline_row_idx,
-            filename_row_idx=filename_row_idx,
-        )
-    elif mode == 'select':
-        pass
+        return generate_reel_timestamps(ctx, reel_input.strip())
 
-    return clips
+    return []
 
 def get_num_participants(header_row: List[str], id_cell: Any, col_count: int) -> int:
     """Count the number of participant columns in the worksheet.
@@ -908,185 +634,91 @@ def find_participant_column(header_row: List[str], id_cell: Any, participant_id:
             return col_idx
     return None
 
-def generate_participant_timestamps(
-    sheet_data: List[List[str]],
-    id_cell: Any,
-    observation_cell: Any,
-    study_name: str,
-    participant_id: str,
-    baseline_row_idx: Optional[int] = None,
-    filename_row_idx: Optional[int] = None,
-) -> List[ClipRecord]:
-    """Generate clip records for all rows in a single participant's column.
-
-    Args:
-        sheet_data: The sheet data matrix
-        id_cell: The ID header cell
-        observation_cell: The observation header cell
-        study_name: Normalized study name
-        participant_id: Participant ID (e.g. P01)
-
-    Returns:
-        List of clip records
-    """
+def generate_participant_timestamps(ctx: SheetContext, participant_id: str) -> List[ClipRecord]:
+    """Generate clip records for all rows in a single participant's column."""
     utils.debug_print('Starting method generate_participant_timestamps()')
-    header_row = sheet_data[id_cell.row - 1] if id_cell.row > 0 else []
-    col_idx = find_participant_column(header_row, id_cell, participant_id)
+    col_idx = find_participant_column(ctx.header_row, ctx.id_cell, participant_id)
     if col_idx is None:
         return []
     clips = []
-    for row_idx in range(id_cell.row, len(sheet_data)):
-        if filename_row_idx is not None and row_idx == filename_row_idx:
+    for row_idx in range(ctx.id_cell.row, len(ctx.sheet_data)):
+        if ctx.filename_row_idx is not None and row_idx == ctx.filename_row_idx:
             continue
-        if col_idx >= len(sheet_data[row_idx]):
+        if col_idx >= len(ctx.sheet_data[row_idx]):
             continue
-        cell_value = sheet_data[row_idx][col_idx]
+        cell_value = ctx.sheet_data[row_idx][col_idx]
         if not cell_value or not cell_value.strip():
             continue
-        issue = _make_clip_record(
-            sheet_data,
-            row_idx,
-            col_idx,
-            id_cell,
-            observation_cell,
-            study_name,
-            cell_value,
-            filename_row_idx=filename_row_idx,
-            baseline_row_idx=baseline_row_idx,
-        )
+        issue = _make_clip_record(ctx, row_idx, col_idx, cell_value)
         clips.append(issue)
         display_value = cell_value.replace('\n', ' ')
         cell_addr = gspread.utils.rowcol_to_a1(issue['cell'].row, issue['cell'].col)
         utils.verbose_print(f"+ Found timestamp: {display_value} at row {row_idx + 1} ({cell_addr})")
     return clips
 
-def generate_cell_timestamps(
-    sheet_data: List[List[str]],
-    id_cell: Any,
-    observation_cell: Any,
-    study_name: str,
-    cell_specs: List[Tuple[str, int]],
-    baseline_row_idx: Optional[int] = None,
-    filename_row_idx: Optional[int] = None,
-) -> List[ClipRecord]:
+def generate_cell_timestamps(ctx: SheetContext, cell_specs: List[Tuple[str, int]]) -> List[ClipRecord]:
     """Generate clip records for specific cells.
-    
+
     Args:
-        sheet_data: The sheet data matrix
-        id_cell: The ID header cell
-        observation_cell: The observation header cell
-        study_name: Normalized study name
+        ctx: Sheet context with all metadata
         cell_specs: List of (participant_id, row_number) tuples
-        
+
     Returns:
         List of clip records
     """
     utils.debug_print('Starting method generate_cell_timestamps()')
     clips = []
-    header_row = sheet_data[id_cell.row - 1] if id_cell.row > 0 else []
-    
+
     for participant_id, row_number in cell_specs:
-        # Find the column for this participant
-        col_idx = find_participant_column(header_row, id_cell, participant_id)
+        col_idx = find_participant_column(ctx.header_row, ctx.id_cell, participant_id)
         if col_idx is None:
             utils.warning_print(f"Participant '{participant_id}' not found in spreadsheet headers.",
                 [f"Available participants start with: {', '.join(config.PARTICIPANT_PREFIXES)}"])
             continue
-        
-        # Validate row number (convert to 0-based index)
+
         row_idx = row_number - 1
-        if row_idx < 0 or row_idx >= len(sheet_data):
+        if row_idx < 0 or row_idx >= len(ctx.sheet_data):
             utils.warning_print(f"Row {row_number} is out of range.",
-                [f"Spreadsheet has {len(sheet_data)} rows (valid range: 1-{len(sheet_data)})."])
+                [f"Spreadsheet has {len(ctx.sheet_data)} rows (valid range: 1-{len(ctx.sheet_data)})."])
             continue
-        if filename_row_idx is not None and row_idx == filename_row_idx:
+        if ctx.filename_row_idx is not None and row_idx == ctx.filename_row_idx:
             utils.warning_print(f"Row {row_number} is reserved for filename overrides and will be skipped.")
             continue
-        
-        # Get the cell value
-        if col_idx >= len(sheet_data[row_idx]):
+
+        if col_idx >= len(ctx.sheet_data[row_idx]):
             utils.warning_print(f"Column index {col_idx + 1} is out of range for row {row_number}.")
             continue
-        
-        cell_value = sheet_data[row_idx][col_idx]
+
+        cell_value = ctx.sheet_data[row_idx][col_idx]
         if not cell_value or cell_value.strip() == '':
             utils.verbose_print(f"Cell {participant_id}.{row_number} is empty, skipping.")
             continue
 
-        issue = _make_clip_record(
-            sheet_data,
-            row_idx,
-            col_idx,
-            id_cell,
-            observation_cell,
-            study_name,
-            cell_value,
-            filename_row_idx=filename_row_idx,
-            baseline_row_idx=baseline_row_idx,
-        )
+        issue = _make_clip_record(ctx, row_idx, col_idx, cell_value)
         # Use actual header value for participant when available
-        participant_row = id_cell.row - 1
-        if 0 <= participant_row < len(sheet_data) and col_idx < len(sheet_data[participant_row]) and sheet_data[participant_row][col_idx]:
-            issue['participant'] = utils.normalize_participant_id(sheet_data[participant_row][col_idx])
+        participant_row = ctx.id_cell.row - 1
+        if 0 <= participant_row < len(ctx.sheet_data) and col_idx < len(ctx.sheet_data[participant_row]) and ctx.sheet_data[participant_row][col_idx]:
+            issue['participant'] = utils.normalize_participant_id(ctx.sheet_data[participant_row][col_idx])
         clips.append(issue)
         display_value = cell_value.replace('\n', ' ')
         cell_addr = gspread.utils.rowcol_to_a1(issue['cell'].row, issue['cell'].col)
         utils.verbose_print(f"+ Found timestamp: {display_value} at cell {participant_id}.{row_number} ({cell_addr})")
-    
+
     return clips
 
-def generate_batch_timestamps(
-    sheet_data: List[List[str]],
-    id_cell: Any,
-    observation_cell: Any,
-    num_participants: int,
-    study_name: str,
-    baseline_row_idx: Optional[int] = None,
-    filename_row_idx: Optional[int] = None,
-) -> List[ClipRecord]:
-    """Generate clip records for all rows in batch mode.
-    
-    Args:
-        sheet_data: The sheet data matrix
-        id_cell: The ID header cell
-        observation_cell: The observation header cell
-        num_participants: Number of participant columns
-        study_name: Normalized study name
-        
-    Returns:
-        List of clip records
-    """
+def generate_batch_timestamps(ctx: SheetContext) -> List[ClipRecord]:
+    """Generate clip records for all rows in batch mode."""
     utils.debug_print('Running method generate_batch_timestamps()')
     clips = []
-    # i is 0-based row index; skip header row (id_cell.row is 1-based), so first data row at id_cell.row+1
-    for i in range(id_cell.row+1, len(sheet_data)):
-        if filename_row_idx is not None and i == filename_row_idx:
+    for i in range(ctx.id_cell.row+1, len(ctx.sheet_data)):
+        if ctx.filename_row_idx is not None and i == ctx.filename_row_idx:
             continue
         utils.debug_print(f'Batching on line {i} (real sheet line {i+1})')
-        clips.extend(
-            get_line_timestamps(
-                sheet_data,
-                id_cell,
-                observation_cell,
-                num_participants,
-                i,
-                study_name,
-                baseline_row_idx=baseline_row_idx,
-                filename_row_idx=filename_row_idx,
-            )
-        )
+        clips.extend(get_line_timestamps(ctx, i))
     return clips
 
 
-def generate_filter_timestamps(
-    sheet_data: List[List[str]],
-    id_cell: Any,
-    observation_cell: Any,
-    num_participants: int,
-    study_name: str,
-    baseline_row_idx: Optional[int] = None,
-    filename_row_idx: Optional[int] = None,
-) -> List[ClipRecord]:
+def generate_filter_timestamps(ctx: SheetContext) -> List[ClipRecord]:
     """Generate key-marked clips from the entire sheet based on cell content.
 
     Semantics:
@@ -1095,15 +727,7 @@ def generate_filter_timestamps(
     - Header/participant-level annotations in the header row are ignored here;
       filter mode is driven purely by per-cell annotations.
     """
-    clips = generate_batch_timestamps(
-        sheet_data,
-        id_cell,
-        observation_cell,
-        num_participants,
-        study_name,
-        baseline_row_idx=baseline_row_idx,
-        filename_row_idx=filename_row_idx,
-    )
+    clips = generate_batch_timestamps(ctx)
     if not clips:
         return []
 
@@ -1117,247 +741,108 @@ def generate_filter_timestamps(
 
     return filtered_clips
 
-def collect_categories(sheet_data: List[List[str]], id_cell: Any, category_cell: Any) -> List[str]:
-    """Scan sheet and return unique categories in order of first appearance.
-    
-    Args:
-        sheet_data: The sheet data matrix
-        id_cell: The ID header cell (unused but kept for consistency)
-        category_cell: The category header cell
-        
-    Returns:
-        List of unique category names in order of first appearance
-    """
+def collect_categories(ctx: SheetContext) -> List[str]:
+    """Scan sheet and return unique categories in order of first appearance."""
     categories = []
-    # category_cell.col is 1-based (gspread); convert to 0-based for sheet_data
-    category_col = category_cell.col - 1
-
-    # category_cell.row is 1-based; loop i is 0-based index into sheet_data
-    for i in range(category_cell.row, len(sheet_data)):        
-        category = sheet_data[i][category_col].strip()
+    category_col = ctx.category_cell.col - 1
+    for i in range(ctx.category_cell.row, len(ctx.sheet_data)):
+        category = ctx.sheet_data[i][category_col].strip()
         if category and category not in categories:
             categories.append(category)
-    
     return categories
 
-def generate_category_timestamps(
-    sheet_data: List[List[str]],
-    id_cell: Any,
-    observation_cell: Any,
-    category_cell: Any,
-    num_participants: int,
-    study_name: str,
-    selected_categories: List[str],
-    baseline_row_idx: Optional[int] = None,
-    filename_row_idx: Optional[int] = None,
-) -> List[ClipRecord]:
-    """Generate clip records for all rows matching any of the selected categories.
-    
-    Args:
-        sheet_data: The sheet data matrix
-        id_cell: The ID header cell
-        observation_cell: The observation header cell
-        category_cell: The category header cell
-        num_participants: Number of participant columns
-        study_name: Normalized study name
-        selected_categories: List of category names to include
-        
-    Returns:
-        List of clip records
-    """
+def generate_category_timestamps(ctx: SheetContext, selected_categories: List[str]) -> List[ClipRecord]:
+    """Generate clip records for all rows matching any of the selected categories."""
     utils.debug_print('Starting method generate_category_timestamps()')
     clips = []
-    # category_cell.col is 1-based; convert to 0-based for sheet_data
-    category_col = category_cell.col - 1
-
-    # i is 0-based row index; get_line_timestamps expects 0-based line_index
-    for i in range(category_cell.row, len(sheet_data)):
-        if filename_row_idx is not None and i == filename_row_idx:
+    category_col = ctx.category_cell.col - 1
+    for i in range(ctx.category_cell.row, len(ctx.sheet_data)):
+        if ctx.filename_row_idx is not None and i == ctx.filename_row_idx:
             continue
-        row_category = sheet_data[i][category_col].strip()
+        row_category = ctx.sheet_data[i][category_col].strip()
         if row_category in selected_categories:
             utils.debug_print(f"Row {i+1} matches category '{row_category}'")
-            clips.extend(
-                get_line_timestamps(
-                    sheet_data,
-                    id_cell,
-                    observation_cell,
-                    num_participants,
-                    i,
-                    study_name,
-                    baseline_row_idx=baseline_row_idx,
-                    filename_row_idx=filename_row_idx,
-                )
-            )
-    
+            clips.extend(get_line_timestamps(ctx, i))
     return clips
 
-def generate_line_timestamps(
-    sheet_data: List[List[str]],
-    id_cell: Any,
-    observation_cell: Any,
-    num_participants: int,
-    study_name: str,
-    cli_line_numbers: Optional[List[int]] = None,
-    skip_prompts: bool = False,
-    baseline_row_idx: Optional[int] = None,
-    filename_row_idx: Optional[int] = None,
-) -> List[ClipRecord]:
+def generate_line_timestamps(ctx: SheetContext, line_numbers: List[int]) -> List[ClipRecord]:
     """Generate clip records for one or more line/row numbers.
-    
+
     Args:
-        sheet_data: The sheet data matrix
-        id_cell: The ID header cell
-        observation_cell: The observation header cell
-        num_participants: Number of participant columns
-        study_name: Normalized study name
-        cli_line_numbers: Optional list of line numbers from CLI (skips interactive input)
-        skip_prompts: If True, skip confirmation prompts
-        
+        ctx: Sheet context with all metadata
+        line_numbers: List of 1-based row numbers (already validated)
+
     Returns:
         List of clip records
     """
     valid_lines = []
-    
-    if cli_line_numbers is not None:
-        # CLI mode - use provided line numbers
-        utils.verbose_print(f'Line mode: processing lines {", ".join(str(n) for n in cli_line_numbers)}')
-        utils.verbose_print('Selected issues:')
-        for line_num in cli_line_numbers:
-            if line_num < 1 or line_num > len(sheet_data):
-                utils.verbose_print(f'  Line {line_num}: [INVALID - out of range]')
-            elif filename_row_idx is not None and line_num - 1 == filename_row_idx:
-                utils.verbose_print(f'  Line {line_num}: [RESERVED - filename overrides row]')
-            else:
-                desc = sheet_data[line_num-1][observation_cell.col-1]
-                utils.verbose_print(f'  Line {line_num}: {desc}')
-                valid_lines.append(line_num)
-        
-        if not valid_lines:
-            utils.info_print('No valid lines found. Exiting.')
-            return []
-    else:
-        # Interactive mode
-        while True:
-            try:
-                line_input = utils.read_user_input('\nWhich issue(s)? Enter row number(s), comma-separated for multiple.\n>> ')
-                # Parse comma-separated line numbers
-                line_numbers = [int(num.strip()) for num in line_input.split(',')]
-            except ValueError:
-                utils.info_print('Try again. Enter row numbers as integers, separated by commas.')
-                continue
-            
-            # Preview all selected lines
-            utils.info_print('Selected issues:')
-            valid_lines = []
-            for line_num in line_numbers:
-                if line_num < 1 or line_num > len(sheet_data):
-                    utils.info_print(f'  Line {line_num}: [INVALID - out of range]')
-                elif filename_row_idx is not None and line_num - 1 == filename_row_idx:
-                    utils.info_print(f'  Line {line_num}: [RESERVED - filename overrides row]')
-                else:
-                    desc = sheet_data[line_num-1][observation_cell.col-1]
-                    utils.info_print(f'  Line {line_num}: {desc}')
-                    valid_lines.append(line_num)
-            
-            if not valid_lines:
-                utils.info_print('No valid lines selected. Please try again.')
-                continue
-            
-            utils.info_print('')
-            yn = utils.read_user_input('Are these the correct issues? y/n\n>> ')
-            if yn == 'y':
-                break
+    utils.verbose_print(f'Line mode: processing lines {", ".join(str(n) for n in line_numbers)}')
+    utils.verbose_print('Selected issues:')
+    for line_num in line_numbers:
+        if line_num < 1 or line_num > len(ctx.sheet_data):
+            utils.verbose_print(f'  Line {line_num}: [INVALID - out of range]')
+        elif ctx.filename_row_idx is not None and line_num - 1 == ctx.filename_row_idx:
+            utils.verbose_print(f'  Line {line_num}: [RESERVED - filename overrides row]')
+        else:
+            desc = ctx.sheet_data[line_num-1][ctx.observation_cell.col-1]
+            utils.verbose_print(f'  Line {line_num}: {desc}')
+            valid_lines.append(line_num)
 
-    # Collect clips from all valid lines
+    if not valid_lines:
+        utils.info_print('No valid lines found. Exiting.')
+        return []
+
     clips = []
     for line_num in valid_lines:
         utils.debug_print(f'Calling get_line_timestamps() from generate_line_timestamps() for line {line_num}')
-        line_clips = get_line_timestamps(
-            sheet_data,
-            id_cell,
-            observation_cell,
-            num_participants,
-            line_num - 1,
-            study_name,
-            baseline_row_idx=baseline_row_idx,
-            filename_row_idx=filename_row_idx,
-        )
-        clips.extend(line_clips)
-    
+        clips.extend(get_line_timestamps(ctx, line_num - 1))
+
     utils.debug_print(f'Printing return of get_line_timestamps() in generate_line_timestamps(): {len(clips)} total clips')
     utils.debug_print(str(clips))
-
     return clips
 
-def get_line_timestamps(
-    sheet_data: List[List[str]],
-    id_cell: Any,
-    observation_cell: Any,
-    num_participants: int,
-    line_index: int,
-    study_name: str,
-    baseline_row_idx: Optional[int] = None,
-    filename_row_idx: Optional[int] = None,
-) -> List[ClipRecord]:
+def get_line_timestamps(ctx: SheetContext, line_index: int) -> List[ClipRecord]:
     """Extract timestamp data from a single row in the spreadsheet as clip records.
 
     Processes all participant columns in the specified row and creates
     clip issue dictionaries for each timestamp found.
 
     Args:
-        sheet_data: The sheet data matrix
-        id_cell: The ID header cell
-        observation_cell: The observation header cell
-        num_participants: Number of participant columns
+        ctx: Sheet context with all metadata
         line_index: Zero-based row index into sheet_data (sheet row = line_index + 1)
-        study_name: Normalized study name
 
     Returns:
         List of clip records, one per timestamp found
     """
     if config.DEBUGGING:
-        ic(line_index, num_participants, study_name)
-    # line_index is 0-based; display "real sheet line" as 1-based for user-facing messages
+        ic(line_index, ctx.num_participants, ctx.study_name)
     utils.debug_print(f'Running method get_line_timestamps, starting line index {line_index} (real sheet line {line_index+1})')
-    
-    # Bounds checking
-    if line_index < 0 or line_index >= len(sheet_data):
+
+    if line_index < 0 or line_index >= len(ctx.sheet_data):
         if config.DEBUGGING:
-            ic(line_index, len(sheet_data))
+            ic(line_index, len(ctx.sheet_data))
         utils.error_print(f"Line index {line_index} (row {line_index+1}) is out of bounds.",
-            [f"Spreadsheet has {len(sheet_data)} rows."])
+            [f"Spreadsheet has {len(ctx.sheet_data)} rows."])
         return []
 
     clips = []
     try:
-        for col_index, value in enumerate(sheet_data[line_index]):
+        for col_index, value in enumerate(ctx.sheet_data[line_index]):
             utils.debug_print(f"Item {col_index} with value '{value}' being processed.")
-            if col_index < id_cell.col:
+            if col_index < ctx.id_cell.col:
                 utils.debug_print(f"Skipping item {col_index} with value '{value}'")
-            elif col_index == id_cell.col + num_participants:
+            elif col_index == ctx.id_cell.col + ctx.num_participants:
                 utils.debug_print(f'Exit for-loop, reached final column {col_index} (real sheet column {col_index+1}).')
                 break
             elif value is None or value == '':
                 pass
             else:
-                # Build one clip record per non-empty participant cell in this row
-                issue = _make_clip_record(
-                    sheet_data,
-                    line_index,
-                    col_index,
-                    id_cell,
-                    observation_cell,
-                    study_name,
-                    value,
-                    filename_row_idx=filename_row_idx,
-                    baseline_row_idx=baseline_row_idx,
-                )
+                issue = _make_clip_record(ctx, line_index, col_index, value)
                 if config.DEBUGGING:
                     ic(issue.get("participant"), issue.get("desc"), issue.get("category"))
                     ic(issue)
-                utils.debug_print(f"Participant ID at R{id_cell.row},C{col_index} -> '{issue.get('participant')}'")
-                utils.debug_print(f"Description at R{line_index},C{observation_cell.col-1} -> '{issue.get('desc')}'")
+                utils.debug_print(f"Participant ID at R{ctx.id_cell.row},C{col_index} -> '{issue.get('participant')}'")
+                utils.debug_print(f"Description at R{line_index},C{ctx.observation_cell.col-1} -> '{issue.get('desc')}'")
                 utils.debug_print(f"Timestamp at R{issue['cell'].row-1},C{issue['cell'].col-1} -> '{issue['cell'].value}'")
                 utils.debug_print(f'Actual cell at address {gspread.utils.rowcol_to_a1(issue["cell"].row, issue["cell"].col)}')
                 clips.append(issue)
@@ -1375,100 +860,41 @@ def get_line_timestamps(
         ic(clips)
     return clips
 
-def generate_range_timestamps(
-    sheet_data: List[List[str]],
-    id_cell: Any,
-    observation_cell: Any,
-    num_participants: int,
-    study_name: str,
-    start_line: int,
-    end_line: int,
-    baseline_row_idx: Optional[int] = None,
-    filename_row_idx: Optional[int] = None,
-) -> List[ClipRecord]:
+def generate_range_timestamps(ctx: SheetContext, start_line: int, end_line: int) -> List[ClipRecord]:
     """Generate clip records for a range of rows.
-    
+
     Args:
-        sheet_data: The sheet data matrix
-        id_cell: The ID header cell
-        observation_cell: The observation header cell
-        num_participants: Number of participant columns
-        study_name: Normalized study name
+        ctx: Sheet context with all metadata
         start_line: Starting row number (1-based)
         end_line: Ending row number (1-based, inclusive)
-        
-    Returns:
-        List of clip records
     """
     clips = []
-    # start_line/end_line are 1-based inclusive; convert to 0-based for get_line_timestamps
     for i in range(start_line-1, end_line):
         utils.debug_print(f'Batching on line {i}')
-        clips.extend(
-            get_line_timestamps(
-                sheet_data,
-                id_cell,
-                observation_cell,
-                num_participants,
-                i,
-                study_name,
-                baseline_row_idx=baseline_row_idx,
-                filename_row_idx=filename_row_idx,
-            )
-        )
+        clips.extend(get_line_timestamps(ctx, i))
     return clips
 
 
-def generate_reel_timestamps(
-    sheet_data: List[List[str]],
-    id_cell: Any,
-    observation_cell: Any,
-    category_cell: Any,
-    num_participants: int,
-    study_name: str,
-    reel_input_string: str,
-    baseline_row_idx: Optional[int] = None,
-    filename_row_idx: Optional[int] = None,
-) -> List[ClipRecord]:
+def generate_reel_timestamps(ctx: SheetContext, reel_input_string: str) -> List[ClipRecord]:
     """Generate clip records for reel mode by combining multiple selector types and deduplicating.
 
-    Parses reel input (batch, filter, timeline, lines, ranges, categories, cells, participants), collects
-    timestamps from each selector, deduplicates by cell (row, col), and returns a single
-    ordered list of issue dicts.
-
-    Args:
-        sheet_data: The sheet data matrix
-        id_cell: The ID header cell
-        observation_cell: The observation header cell
-        category_cell: The category header cell
-        num_participants: Number of participant columns
-        study_name: Normalized study name
-        reel_input_string: Raw user input (e.g. '11, 13-16, P01, "Observations"')
-
-    Returns:
-        List of clip records, deduplicated by cell and sorted by row/column
-        or chronologically when timeline selector is used.
+    Parses reel input (batch, filter, timeline, lines, ranges, categories, cells, participants),
+    collects timestamps from each selector, deduplicates by cell (row, col), and returns a single
+    ordered list.
     """
     selectors = parse_reel_input(reel_input_string)
     if selectors['timeline'] and len(selectors['participants']) != 1:
         utils.error_print(
             "Timeline selector requires exactly one participant.",
-            [
-                "Use timeline with one participant, e.g. 'timeline, P01'.",
-                "Timeline reels are generated per participant.",
-            ],
+            ["Use timeline with one participant, e.g. 'timeline, P01'.",
+             "Timeline reels are generated per participant."],
         )
         return []
 
     has_any = (
-        selectors['batch']
-        or selectors['filter']
-        or selectors['timeline']
-        or selectors['lines']
-        or selectors['ranges']
-        or selectors['categories']
-        or selectors['cells']
-        or selectors['participants']
+        selectors['batch'] or selectors['filter'] or selectors['timeline']
+        or selectors['lines'] or selectors['ranges'] or selectors['categories']
+        or selectors['cells'] or selectors['participants']
     )
     if not has_any:
         return []
@@ -1476,104 +902,21 @@ def generate_reel_timestamps(
     all_issues: List[ClipRecord] = []
 
     if selectors['filter']:
-        all_issues.extend(
-            generate_filter_timestamps(
-                sheet_data,
-                id_cell,
-                observation_cell,
-                num_participants,
-                study_name,
-                baseline_row_idx=baseline_row_idx,
-                filename_row_idx=filename_row_idx,
-            )
-        )
-
+        all_issues.extend(generate_filter_timestamps(ctx))
     if selectors['batch']:
-        all_issues.extend(
-            generate_batch_timestamps(
-                sheet_data,
-                id_cell,
-                observation_cell,
-                num_participants,
-                study_name,
-                baseline_row_idx=baseline_row_idx,
-                filename_row_idx=filename_row_idx,
-            )
-        )
-
+        all_issues.extend(generate_batch_timestamps(ctx))
     if selectors['lines']:
-        all_issues.extend(
-            generate_line_timestamps(
-                sheet_data,
-                id_cell,
-                observation_cell,
-                num_participants,
-                study_name,
-                cli_line_numbers=selectors['lines'],
-                skip_prompts=True,
-                baseline_row_idx=baseline_row_idx,
-                filename_row_idx=filename_row_idx,
-            )
-        )
-
+        all_issues.extend(generate_line_timestamps(ctx, selectors['lines']))
     for start_line, end_line in selectors['ranges']:
-        all_issues.extend(
-            generate_range_timestamps(
-                sheet_data,
-                id_cell,
-                observation_cell,
-                num_participants,
-                study_name,
-                start_line,
-                end_line,
-                baseline_row_idx=baseline_row_idx,
-                filename_row_idx=filename_row_idx,
-            )
-        )
-
+        all_issues.extend(generate_range_timestamps(ctx, start_line, end_line))
     if selectors['categories']:
-        all_issues.extend(
-            generate_category_timestamps(
-                sheet_data,
-                id_cell,
-                observation_cell,
-                category_cell,
-                num_participants,
-                study_name,
-                selectors['categories'],
-                baseline_row_idx=baseline_row_idx,
-                filename_row_idx=filename_row_idx,
-            )
-        )
-
+        all_issues.extend(generate_category_timestamps(ctx, selectors['categories']))
     if selectors['cells']:
-        all_issues.extend(
-            generate_cell_timestamps(
-                sheet_data,
-                id_cell,
-                observation_cell,
-                study_name,
-                selectors['cells'],
-                baseline_row_idx=baseline_row_idx,
-                filename_row_idx=filename_row_idx,
-            )
-        )
-
+        all_issues.extend(generate_cell_timestamps(ctx, selectors['cells']))
     for participant_id in selectors['participants']:
-        all_issues.extend(
-            generate_participant_timestamps(
-                sheet_data,
-                id_cell,
-                observation_cell,
-                study_name,
-                participant_id,
-                baseline_row_idx=baseline_row_idx,
-                filename_row_idx=filename_row_idx,
-            )
-        )
+        all_issues.extend(generate_participant_timestamps(ctx, participant_id))
 
-    # Deduplicate by cell (row, col): the same cell can be selected by multiple selectors
-    # (e.g. line 11 and category "X" and participant P01), so we keep only one clip per cell
+    # Deduplicate by cell (row, col)
     seen: Set[Tuple[int, int]] = set()
     deduped: List[ClipRecord] = []
     for issue in all_issues:
@@ -1590,7 +933,6 @@ def generate_reel_timestamps(
         ]
         sort_clips_chronologically(deduped)
     else:
-        # Sort by row then column so clips follow spreadsheet order (top-to-bottom, then left-to-right)
         deduped.sort(key=lambda issue: (issue['cell'].row, issue['cell'].col))
 
     return deduped
@@ -1616,180 +958,3 @@ def sort_clips_chronologically(clips: List[ClipRecord]) -> None:
         return seconds
 
     clips.sort(key=_clip_start_seconds)
-
-
-def browse_spreadsheet(sheet: Any) -> None:
-    """Interactive browse mode for viewing spreadsheet rows line by line.
-    
-    Allows users to navigate through the spreadsheet to inspect issues
-    before generating clips. Shows row number, category, description,
-    and participant/group timestamps for each row.
-    """
-    def _load_browse_data() -> tuple:
-        header_result = validate_spreadsheet_headers(sheet)
-        if header_result is None:
-            return (None, None)
-        sheet_data = sheet.get_all_values()
-        return (header_result, sheet_data)
-
-    header_result, sheet_data = (
-        utils.run_with_spinner('Loading spreadsheet...', _load_browse_data)
-        if utils._use_progress() else _load_browse_data()
-    )
-    if header_result is None:
-        return
-
-    id_cell, observation_cell, category_cell = header_result
-    utils.debug_print(f'Sheet dumped into memory at {utils.get_current_time()}')
-    
-    # Check if sheet is empty or has only headers
-    if len(sheet_data) <= 1:
-        utils.error_print("Spreadsheet appears to be empty (no data rows found).")
-        return
-    
-    # Get participant info
-    header_row = sheet.row_values(id_cell.row)
-    num_participants = get_num_participants(header_row, id_cell, sheet.col_count)
-    
-    if num_participants == 0:
-        utils.warning_print("No participant columns found in the spreadsheet.",
-            [f"Looking for columns starting with: {', '.join(config.PARTICIPANT_PREFIXES)}"])
-        return
-
-    # Browse state: all row indices are 0-based (into sheet_data). id_cell.row is 1-based.
-    # first_data_row: index of first row we consider "data" (same convention as generate_batch_timestamps)
-    first_data_row = id_cell.row
-    last_data_row = len(sheet_data) - 1
-    total_data_rows = last_data_row - first_data_row + 1
-
-    # current_row: 0-based index of the row at top of current view; updated by up/down/page/jump
-    current_row = first_data_row
-
-    # Participant column headers for display (id_cell.col is 1-based)
-    participant_headers = []
-    for col_idx in range(id_cell.col, id_cell.col + num_participants):
-        if col_idx < len(header_row):
-            participant_headers.append(header_row[col_idx])
-
-    utils.print_mode_heading('Browse mode', 'mode.browse')
-    utils.info_print(f'Total data rows: {total_data_rows} (rows {first_data_row + 1} to {last_data_row + 1})')
-    utils.info_print(f'Participants: {", ".join(participant_headers)}')
-    utils.info_print('Commands: up/u, down/d, pageup/pu, pagedown/pd, jump/j <row>, open/o, quit/q')
-    utils.info_print('Press Enter to move down one row.')
-    
-    def display_rows(start_row, num_rows):
-        """Display num_rows starting from start_row (0-indexed into sheet_data)."""
-        # Column indices (convert gspread 1-based to 0-based)
-        category_col = category_cell.col - 1
-        desc_col = observation_cell.col - 1
-
-        # Build structured rows_data list
-        rows_data = []
-        for i in range(num_rows):
-            row_idx = start_row + i
-            if row_idx > last_data_row:
-                break
-
-            row_data = sheet_data[row_idx]
-            row_num = row_idx + 1  # Convert to 1-based for user-facing row number
-
-            # Get category and description
-            category = row_data[category_col] if category_col < len(row_data) else ''
-            description = row_data[desc_col] if desc_col < len(row_data) else ''
-
-            # Get participant timestamps
-            timestamps = {}
-            for j, participant_id in enumerate(participant_headers):
-                col_idx = id_cell.col + j  # id_cell.col is 1-based; col_idx matches sheet_data columns
-                if col_idx < len(row_data):
-                    timestamp_value = row_data[col_idx]
-                    if timestamp_value and timestamp_value.strip():
-                        # Replace newlines with commas for display
-                        timestamps[participant_id] = timestamp_value.replace('\n', ', ').replace('\r', '')
-
-            rows_data.append({
-                'row_num': row_num,
-                'category': category or '(empty)',
-                'description': description or '(empty)',
-                'timestamps': timestamps
-            })
-
-        # Display using Rich Table or plain text fallback
-        if utils._use_rich():
-            table = utils.create_browse_table(rows_data, participant_headers)
-            if table and utils.console is not None:
-                utils.console.print(table)
-        else:
-            output = utils.format_browse_rows_plain(rows_data, participant_headers)
-            print(output)
-
-        # Show position info (convert 0-based start_row to 1-based for display)
-        displayed_end = min(start_row + num_rows, last_data_row + 1)
-        utils.info_print(f'Showing rows {start_row + 1}-{displayed_end} of {last_data_row + 1}')
-
-    # Initial display: show BROWSE_LINES_TO_DISPLAY rows starting at current_row
-    display_rows(current_row, config.BROWSE_LINES_TO_DISPLAY)
-
-    # Navigation loop: up/down move one row; pageup/pagedown move by BROWSE_LINES_TO_DISPLAY; jump goes to row
-    while True:
-        user_input = utils.read_user_input('\n>> ').strip().lower()
-        
-        if user_input in ('quit', 'q'):
-            utils.info_print('Exiting browse mode.')
-            break
-        elif user_input in ('up', 'u'):
-            if current_row > first_data_row:
-                current_row -= 1
-                display_rows(current_row, config.BROWSE_LINES_TO_DISPLAY)
-            else:
-                utils.info_print('Already at the first row.')
-        elif user_input in ('down', 'd', ''):
-            if current_row < last_data_row:
-                current_row += 1
-                display_rows(current_row, config.BROWSE_LINES_TO_DISPLAY)
-            else:
-                utils.info_print('Already at the last row.')
-        elif user_input in ('pageup', 'pu'):
-            new_row = max(first_data_row, current_row - config.BROWSE_LINES_TO_DISPLAY)
-            if new_row != current_row:
-                current_row = new_row
-                display_rows(current_row, config.BROWSE_LINES_TO_DISPLAY)
-            else:
-                utils.info_print('Already at the first row.')
-        elif user_input in ('pagedown', 'pd'):
-            new_row = min(last_data_row, current_row + config.BROWSE_LINES_TO_DISPLAY)
-            if new_row != current_row:
-                current_row = new_row
-                display_rows(current_row, config.BROWSE_LINES_TO_DISPLAY)
-            else:
-                utils.info_print('Already at the last row.')
-        elif user_input.startswith('jump ') or user_input.startswith('j '):
-            try:
-                parts = user_input.split()
-                if len(parts) >= 2:
-                    target_row = int(parts[1]) - 1  # Convert to 0-indexed
-                    if target_row < first_data_row:
-                        utils.info_print(f'Row number must be at least {first_data_row + 1}.')
-                    elif target_row > last_data_row:
-                        utils.info_print(f'Row number must be at most {last_data_row + 1}.')
-                    else:
-                        current_row = target_row
-                        display_rows(current_row, config.BROWSE_LINES_TO_DISPLAY)
-                else:
-                    utils.info_print('Usage: jump <row_number> or j <row_number>')
-            except ValueError:
-                utils.info_print('Invalid row number. Usage: jump <row_number> or j <row_number>')
-        elif user_input in ('open', 'o'):
-            spreadsheet_url = getattr(getattr(sheet, 'spreadsheet', None), 'url', None)
-            if not spreadsheet_url:
-                utils.info_print('Opening in browser is not available for local Excel files.')
-            else:
-                try:
-                    utils.info_print(f'Opening spreadsheet in browser: {sheet.spreadsheet.title}')
-                    webbrowser.open(spreadsheet_url)
-                    utils.info_print('Spreadsheet opened in your default browser.')
-                except OSError as e:
-                    utils.error_print('Could not open browser.', [f'Error: {e}'])
-        else:
-            utils.info_print('Unknown command. Available: up/u, down/d, pageup/pu, pagedown/pd, jump/j <row>, open/o, quit/q')
-            utils.info_print('Press Enter to move down one row.')

@@ -28,6 +28,7 @@ import config
 import excel_io
 import files
 import google_api
+import interactive
 import spreadsheet
 import utils
 import video
@@ -642,7 +643,7 @@ def select_mode_and_generate(worksheet: Any) -> Tuple[List[ClipRecord], bool, Op
                     continue
                 mode = MODE_ALIASES.get(input_lower)
             if mode == 'browse':
-                spreadsheet.browse_spreadsheet(worksheet)
+                interactive.browse_spreadsheet(worksheet)
                 return ([], False, None)
             if mode == 'viewer':
                 if not _INTERACTIVE_VIEWER_ARTIFACTS:
@@ -680,6 +681,49 @@ def select_mode_and_generate(worksheet: Any) -> Tuple[List[ClipRecord], bool, Op
                 return ([], False, None)
             if mode:
                 utils.print_mode_heading(f'{mode.capitalize()} mode', f'mode.{mode}')
+                # Build context for interactive prompts
+                ctx = spreadsheet.build_sheet_context(worksheet)
+                if ctx is None:
+                    return ([], False, None)
+                # Interactive modes: prompt user then call pure generate functions
+                if mode == 'batch':
+                    if not interactive.prompt_batch_confirm(ctx):
+                        return ([], False, None)
+                    return (spreadsheet.generate_batch_timestamps(ctx), False, None)
+                if mode == 'line':
+                    line_numbers = interactive.prompt_line_selection(ctx)
+                    if line_numbers is None:
+                        return ([], False, None)
+                    return (spreadsheet.generate_line_timestamps(ctx, line_numbers), False, None)
+                if mode == 'range':
+                    range_result = interactive.prompt_range_selection(ctx)
+                    if range_result is None:
+                        return ([], False, None)
+                    start_line, end_line = range_result
+                    return (spreadsheet.generate_range_timestamps(ctx, start_line, end_line), False, None)
+                if mode == 'category':
+                    categories = interactive.prompt_category_selection(ctx)
+                    if categories is None:
+                        return ([], False, None)
+                    return (spreadsheet.generate_category_timestamps(ctx, categories), False, None)
+                if mode == 'cell':
+                    cell_specs = interactive.prompt_cell_selection(ctx)
+                    if cell_specs is None:
+                        return ([], False, None)
+                    return (spreadsheet.generate_cell_timestamps(ctx, cell_specs), False, None)
+                if mode == 'participant':
+                    participant_ids = interactive.prompt_participant_selection(ctx)
+                    if participant_ids is None:
+                        return ([], False, None)
+                    clips = []
+                    for pid in participant_ids:
+                        clips.extend(spreadsheet.generate_participant_timestamps(ctx, pid))
+                    return (clips, False, None)
+                if mode == 'filter':
+                    if not interactive.prompt_filter_confirm():
+                        return ([], False, None)
+                    return (spreadsheet.generate_filter_timestamps(ctx), False, None)
+                # Fallback for any other mode (shouldn't happen but safe)
                 return (spreadsheet.generate_list(worksheet, mode), False, None)
 
             # Try implicit mode detection from input syntax for single-type inputs

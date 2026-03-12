@@ -11,7 +11,8 @@ clipgen is a Python CLI tool that generates clips from timestamps stored in a Go
 | File | Role |
 | ------ | ------ |
 | [clipgen.py](clipgen.py) | Main entry point, CLI parsing, spreadsheet selection, mode dispatch, clip/reel processing |
-| [spreadsheet.py](spreadsheet.py) | Spreadsheet parsing, header validation, selector parsing (`reel` input), timestamp generation for all modes |
+| [spreadsheet.py](spreadsheet.py) | Spreadsheet parsing, header validation, selector parsing (`reel` input), pure timestamp generation for all modes (no prompts) |
+| [interactive.py](interactive.py) | Interactive prompt helpers for all modes (line/range/cell/category/participant selection, browse mode); keeps generation functions pure |
 | [video.py](video.py) | ffmpeg/ffprobe operations: cut clips, screenshots, GIFs, concatenate reels, optional filesize compression |
 | [files.py](files.py) | Filename handling (unique names, truncation), `prepare_clip()` (parse timestamps + annotations, sanitize desc/category), clip discovery for reel-late |
 | [utils.py](utils.py) | Timestamp parsing, cell/header annotation parsing, CLI argument parsing, rich/plain output helpers, progress bar utilities, keyword-aware input helpers |
