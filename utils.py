@@ -522,6 +522,43 @@ def get_effective_output_dir() -> Path:
     return Path.cwd()
 
 
+def validate_runtime_directories() -> None:
+    """Validate that the effective input directory exists and ensure output directory is ready.
+
+    Behavior:
+    - If the effective input directory does not exist, print a warning with guidance and exit.
+    - If the effective output directory does not exist, attempt to create it and print a message.
+    """
+    input_dir = get_effective_input_dir()
+    if not input_dir.exists():
+        warning_print(
+            "Input directory does not exist.",
+            [
+                f"Configured input directory: {input_dir}",
+                "Please create this directory, update INPUT_DIR in config.py,",
+                "or pass an existing directory via the -i/--input CLI option.",
+            ],
+        )
+        raise SystemExit(1)
+
+    output_dir = get_effective_output_dir()
+    if not output_dir.exists():
+        try:
+            output_dir.mkdir(parents=True, exist_ok=True)
+        except OSError as error:
+            error_print(
+                "Could not create output directory.",
+                [
+                    f"Target directory: {output_dir}",
+                    f"Error: {error}",
+                    "Please choose a different output directory or fix permissions,",
+                    "then rerun clipgen.",
+                ],
+            )
+            raise SystemExit(1)
+        info_print(f"Output directory did not exist and was created: {output_dir}")
+
+
 def resolve_input_path(name: str) -> Path:
     """Resolve a source filename against the effective input directory."""
     base = get_effective_input_dir()
