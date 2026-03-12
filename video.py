@@ -13,7 +13,6 @@ from typing import List, Optional
 from icecream import ic
 
 import config
-import files
 import utils
 
 INVALID_END_TIMESTAMP = None
@@ -231,7 +230,7 @@ def run_ffmpeg(input_file: str, output_file: str, start_pos: str, end_pos: str, 
         if not compress_to_size(output_file, config.MAX_FILESIZE_MB):
             utils.warning_print(f"Could not compress '{output_file}' to target size")
 
-    utils.verbose_print(f"+ Generated video '{output_file}' successfully.\n File size: {files.format_filesize(Path(output_file).stat().st_size)}\n Expected duration: {duration} s\n")
+    utils.verbose_print(f"+ Generated video '{output_file}' successfully.\n File size: {utils.format_filesize(Path(output_file).stat().st_size)}\n Expected duration: {duration} s\n")
     return True
 
 
@@ -285,7 +284,7 @@ def extract_screenshot(input_file: str, output_file: str, timestamp: str) -> boo
         return False
     if not _verify_output_file(output_file, "ffmpeg screenshot"):
         return False
-    utils.verbose_print(f"+ Generated screenshot '{output_file}' successfully.\n File size: {files.format_filesize(Path(output_file).stat().st_size)}\n")
+    utils.verbose_print(f"+ Generated screenshot '{output_file}' successfully.\n File size: {utils.format_filesize(Path(output_file).stat().st_size)}\n")
     return True
 
 
@@ -348,7 +347,7 @@ def extract_gif(input_file: str, output_file: str, timestamp: str, duration_seco
         return False
     if not _verify_output_file(output_file, "ffmpeg GIF extraction"):
         return False
-    utils.verbose_print(f"+ Generated GIF '{output_file}' successfully.\n File size: {files.format_filesize(Path(output_file).stat().st_size)}\n")
+    utils.verbose_print(f"+ Generated GIF '{output_file}' successfully.\n File size: {utils.format_filesize(Path(output_file).stat().st_size)}\n")
     return True
 
 
@@ -460,7 +459,7 @@ def compress_to_size(filepath: str, target_size_mb: float) -> bool:
     current_size_bytes = Path(filepath).stat().st_size
     target_size_bytes = target_size_mb * 1024 * 1024
     if current_size_bytes <= target_size_bytes:
-        utils.debug_print(f"File already within size limit: {files.format_filesize(current_size_bytes)}")
+        utils.debug_print(f"File already within size limit: {utils.format_filesize(current_size_bytes)}")
         return True
 
     duration = get_file_duration(filepath)
@@ -475,7 +474,7 @@ def compress_to_size(filepath: str, target_size_mb: float) -> bool:
              "Quality may be significantly reduced."])
 
     utils.verbose_print(f"Compressing video to fit within {target_size_mb}MB...")
-    utils.verbose_print(f"  Current size: {files.format_filesize(current_size_bytes)}")
+    utils.verbose_print(f"  Current size: {utils.format_filesize(current_size_bytes)}")
     utils.verbose_print(f"  Target bitrate: {target_bitrate} kbps (video) + {config.AUDIO_BITRATE_KBPS} kbps (audio)")
 
     compressed_temp_path = filepath + '.temp.mp4'
@@ -542,10 +541,10 @@ def compress_to_size(filepath: str, target_size_mb: float) -> bool:
 
         os.replace(compressed_temp_path, filepath)
 
-        utils.verbose_print(f"  Compressed: {files.format_filesize(current_size_bytes)} -> {files.format_filesize(new_size)}")
+        utils.verbose_print(f"  Compressed: {utils.format_filesize(current_size_bytes)} -> {utils.format_filesize(new_size)}")
 
         if new_size > target_size_bytes:
-            utils.warning_print(f"Compressed file still exceeds target ({files.format_filesize(new_size)} > {target_size_mb}MB)",
+            utils.warning_print(f"Compressed file still exceeds target ({utils.format_filesize(new_size)} > {target_size_mb}MB)",
                 ["The video may need a higher size limit or shorter duration."])
 
         return True

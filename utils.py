@@ -1040,9 +1040,28 @@ def set_program_settings() -> bool:
         return True
     return False
 
+def format_filesize(size_bytes: float, precision: int = 2) -> str:
+    """Format byte size as human-readable string.
+
+    Args:
+        size_bytes: Size in bytes
+        precision: Number of decimal places (default: 2)
+
+    Returns:
+        Formatted string with appropriate unit (B, KB, MB, GB, TB)
+    """
+    suffixes = ['B', 'KB', 'MB', 'GB', 'TB']
+    suffix_index = 0
+    # Keep dividing by 1024 until size is under 1024 or we reach TB (index 4)
+    while size_bytes > 1024 and suffix_index < 4:
+        suffix_index += 1
+        size_bytes = size_bytes / 1024
+    return f'{size_bytes:.{precision}f}{suffixes[suffix_index]}'
+
+
 def get_current_time() -> str:
     """Get current time as formatted string.
-    
+
     Returns:
         Current time in format 'YYYY-MM-DD HH:MM:SS'
     """

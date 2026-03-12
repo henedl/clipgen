@@ -12,89 +12,39 @@ import config
 import utils
 from utils import ClipRecord
 
-def format_filesize(size_bytes: float, precision: int = 2) -> str:
-    """Format byte size as human-readable string.
-    
-    Args:
-        size_bytes: Size in bytes
-        precision: Number of decimal places (default: 2)
-        
-    Returns:
-        Formatted string with appropriate unit (B, KB, MB, GB, TB)
-    """
-    suffixes = ['B', 'KB', 'MB', 'GB', 'TB']
-    suffix_index = 0
-    # Keep dividing by 1024 until size is under 1024 or we reach TB (index 4)
-    while size_bytes > 1024 and suffix_index < 4:
-        suffix_index += 1
-        size_bytes = size_bytes / 1024
-    return f'{size_bytes:.{precision}f}{suffixes[suffix_index]}'
-
 def get_unique_filename(filename: str, file_format: Optional[str] = None) -> str:
     """Generate a unique filename by appending an incremented number.
-    
+
     If a file with the given name already exists, appends '-1', '-2', etc.
     until a unique filename is found. Also truncates if filename exceeds max length.
-    
+
     Args:
         filename: Original filename
         file_format: File extension to preserve (defaults to config.FILEFORMAT)
-        
+
     Returns:
         Unique filename path as a string that doesn't exist in the filesystem.
     """
-    base_path = utils.resolve_output_path(filename)
     file_extension = file_format or config.FILEFORMAT
-    suffix_counter = 1
-    current_name = str(base_path)
-    while True:
-        if Path(current_name).is_file():
-            if suffix_counter < 2:
-                suffix_pos = current_name.rfind(file_extension)
-                if suffix_pos >= 0:
-                    current_name = current_name[0:suffix_pos] + '-' + str(suffix_counter) + file_extension
-                else:
-                    current_name = current_name + '-' + str(suffix_counter)
-            else:
-                dash_pos = current_name.rfind('-')
-                if dash_pos >= 0:
-                    base = current_name[0:dash_pos]
-                else:
-                    suffix_pos = current_name.rfind(file_extension)
-                    base = current_name[0:suffix_pos] if suffix_pos >= 0 else current_name
-                current_name = base + '-' + str(suffix_counter) + file_extension
-            suffix_counter += 1
-        else:
-            current_name = truncate_filename(current_name, suffix_counter, file_extension)
-            break
-    return current_name
-
-def truncate_filename(filename: str, step: int = 1, file_format: Optional[str] = None) -> str:
-    """Truncate filenames that exceed maximum length.
-    
-    Truncates to MAX_FILENAME_LENGTH (255 chars on Windows), preserving
-    file extension and step number if present.
-    
-    Args:
-        filename: Filename to truncate
-        step: Step number for unique filename generation (default: 1)
-        file_format: File extension to preserve (defaults to config.FILEFORMAT)
-        
-    Returns:
-        Truncated filename (path string) that fits within max length.
-    """
-    file_extension = file_format or config.FILEFORMAT
-    if len(filename) > config.MAX_FILENAME_LENGTH:
-        if step > 1:
-            utils.debug_print(f'Filename was longer than {config.MAX_FILENAME_LENGTH} chars ({filename}, length {len(filename)})')
-            # Reserve space for: dash + step number + extension (e.g., "-2.mp4")
-            max_base_len = config.MAX_FILENAME_LENGTH - (1 + len(str(step)) + len(file_extension))
-            filename = filename[0:max_base_len] + '-' + str(step) + file_extension
-        else:
-            # Reserve space for extension only (e.g., ".mp4")
-            max_base_len = config.MAX_FILENAME_LENGTH - len(file_extension)
-            filename = filename[0:max_base_len] + file_extension
-    return filename
+    resolved = Path(utils.resolve_output_path(filename))
+    directory = resolved.parent
+    name = resolved.name
+    # Strip extension to get base name
+    if name.endswith(file_extension):
+        base = name[:-len(file_extension)]
+    else:
+        base = name
+    # Truncate base if needed (reserve space for extension)
+    max_base = config.MAX_FILENAME_LENGTH - len(file_extension)
+    base = base[:max_base]
+    candidate = directory / (base + file_extension)
+    counter = 1
+    while candidate.is_file():
+        suffix = f"-{counter}"
+        truncated_base = base[:max_base - len(suffix)]
+        candidate = directory / (truncated_base + suffix + file_extension)
+        counter += 1
+    return str(candidate)
 
 
 def get_source_video_filename(study: str, participant: str, override: Optional[str] = None) -> str:
@@ -118,6 +68,12 @@ def get_source_video_filename(study: str, participant: str, override: Optional[s
         # No extension present: append configured default file format.
         return override + config.FILEFORMAT
     return f"{study}_{participant}{config.FILEFORMAT}"
+
+def _strip_bracket_prefix(text: str) -> str:
+    """Remove bracketed prefix like '[TAG] actual description'."""
+    bracket_pos = text.rfind(']')
+    return text[bracket_pos + 1:].strip() if bracket_pos >= 0 else text.strip()
+
 
 def prepare_clip(clip: ClipRecord) -> ClipRecord:
     """Parse timestamps and sanitize description/category for filename use.
@@ -162,16 +118,8 @@ def prepare_clip(clip: ClipRecord) -> ClipRecord:
             [f"Cell contents: '{clip['cell'].value}'",
              f"Participant: {clip['participant']}, Description: {clip['desc'][:50]}..."])
 
-    # Clean description: remove bracketed prefix like "[TAG] actual description"
-    # and sanitize for use in filename
-    bracket_pos = clip['desc'].rfind(']')
-    if bracket_pos >= 0:
-        # Strip everything up to and including the last ']'
-        desc = clip['desc'][bracket_pos+1:].strip()
-    else:
-        # No bracket found; use description as-is
-        desc = clip['desc'].strip()
-    clip['desc'] = utils.sanitize_filename(desc)
+    # Clean description: remove bracketed prefix and sanitize for use in filename
+    clip['desc'] = utils.sanitize_filename(_strip_bracket_prefix(clip['desc']))
     if config.DEBUGGING:
         ic(clip['desc'])
     

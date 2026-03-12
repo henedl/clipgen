@@ -26,18 +26,25 @@ def _make_context(sheet_data, id_cell, observation_cell, category_cell=None, num
     )
 
 
-def test_truncate_filename_respects_max_length(monkeypatch, tmp_path):
+def test_get_unique_filename_truncates_long_names(monkeypatch, tmp_path):
     monkeypatch.setattr(files.config, "MAX_FILENAME_LENGTH", 20, raising=False)
+    monkeypatch.setattr(files.config, "OUTPUT_DIR", str(tmp_path), raising=False)
     long_base = "a" * 50
-    filename = f"{long_base}.mp4"
 
-    truncated_step1 = files.truncate_filename(filename, step=1, file_format=".mp4")
-    assert len(truncated_step1) <= 20
-    assert truncated_step1.endswith(".mp4")
+    # First call: no collision, but name is truncated
+    result1 = files.get_unique_filename(f"{long_base}.mp4")
+    assert len(Path(result1).name) <= 20
+    assert result1.endswith(".mp4")
 
-    truncated_step2 = files.truncate_filename(filename, step=12, file_format=".mp4")
-    assert len(truncated_step2) <= 20
-    assert truncated_step2.endswith("-12.mp4")
+    # Create file to trigger collision
+    Path(result1).write_text("exists")
+
+    # Second call: collision, gets "-1" suffix, still within limit
+    result2 = files.get_unique_filename(f"{long_base}.mp4")
+    assert len(Path(result2).name) <= 20
+    assert result2.endswith(".mp4")
+    assert "-1" in Path(result2).name
+    assert result2 != result1
 
 
 def test_is_source_video_and_discover_clips(tmp_path, monkeypatch):
