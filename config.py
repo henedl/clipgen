@@ -9,12 +9,19 @@ from icecream import ic
 REENCODING: bool = False
 AUDIO_NORMALIZE: bool = False
 FILEFORMAT: str = '.mp4'
-VERSIONNUM: str = '0.8.16'
+VERSIONNUM: str = '0.8.17'
 TITLECARDS_ENABLED: bool = False
 TITLECARD_DURATION_SECONDS: int = 2
 WORKSHEET_PRIORITY: List[str] = ['Sheet1', 'Data', 'data', 'Observations', 'Data set', 'data set', 'dataset', 'Dataset']
 DEBUGGING: bool = False
 VERBOSE: bool = True  # Set to False in CLI mode unless -v flag is used
+
+# Directory configuration
+# When left empty, clipgen will use the current working directory for
+# both input (source videos) and output (generated artifacts), matching
+# the existing default behavior.
+INPUT_DIR: str = ''
+OUTPUT_DIR: str = ''
 
 # Configure Icecream debugging
 if DEBUGGING:

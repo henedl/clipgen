@@ -465,16 +465,17 @@ def _run_reellate_mode_interactive() -> Tuple[bool, Optional[str]]:
     Returns (True, output_file) when reel was generated; (False, None) otherwise.
     """
     clips = files.discover_clips()
+    output_dir = utils.get_effective_output_dir()
     utils.print_mode_heading('Reel-late mode', 'mode.reellate')
 
     if not clips:
-        utils.info_print('No clips found in the working directory.')
+        utils.info_print('No clips found in the output directory.')
         utils.info_print('  Source videos (like study_P01.mp4) are excluded.')
         utils.info_print('  Generate some clips first, then use this mode to combine them.')
         return (False, None)
 
     utils.info_print('Combine existing clips into a highlight reel.')
-    utils.info_print(f'Found {len(clips)} clip(s) in {os.getcwd()}:')
+    utils.info_print(f'Found {len(clips)} clip(s) in {output_dir}:')
     
     # Display indexed list
     for i, clip in enumerate(clips):
@@ -515,8 +516,10 @@ def _run_reellate_mode_interactive() -> Tuple[bool, Optional[str]]:
     elif not output_file.endswith(config.FILEFORMAT):
         output_file = output_file + config.FILEFORMAT
     
+    resolved_clips = [str(utils.resolve_output_path(name)) for name in selected_clips]
+
     def _concat_reellate() -> bool:
-        return video.concatenate_clips(selected_clips, output_file, reencode_on_fail=True)
+        return video.concatenate_clips(resolved_clips, output_file, reencode_on_fail=True)
     ok = utils.run_with_spinner(f'Concatenating {len(selected_clips)} clips into {output_file}...', _concat_reellate) if utils._use_progress() else _concat_reellate()
     
     if ok:
@@ -668,7 +671,8 @@ def select_mode_and_generate(worksheet: Any) -> Tuple[List[ClipRecord], bool, Op
             if mode == 'reellate':
                 success, output_file = _run_reellate_mode_interactive()
                 if success:
-                    _print_run_summary(f'Reel created: {output_file}\nFiles are in {os.getcwd()}')
+                    output_dir = utils.get_effective_output_dir()
+                    _print_run_summary(f'Reel created: {output_file}\nFiles are in {output_dir}')
                     return ([], False, None)
                 continue
             if mode in ('screen', 'gif'):
@@ -838,16 +842,17 @@ def _print_run_summary(message: str) -> None:
 
 def _print_completion_message(outputs_generated: int, output_format: str, is_reel: bool) -> None:
     """Print a summary of generated outputs tailored to format and reel mode."""
+    output_dir = utils.get_effective_output_dir()
     if is_reel:
-        _print_run_summary(f'All done, created 1 reel!\nFiles are in {os.getcwd()}')
+        _print_run_summary(f'All done, created 1 reel!\nFiles are in {output_dir}')
         return
 
     if output_format == 'screen':
-        _print_run_summary(f'All done, created {outputs_generated} screenshots!\nFiles are in {os.getcwd()}')
+        _print_run_summary(f'All done, created {outputs_generated} screenshots!\nFiles are in {output_dir}')
     elif output_format == 'gif':
-        _print_run_summary(f'All done, created {outputs_generated} GIFs!\nFiles are in {os.getcwd()}')
+        _print_run_summary(f'All done, created {outputs_generated} GIFs!\nFiles are in {output_dir}')
     else:
-        _print_run_summary(f'All done, created {outputs_generated} videos!\nFiles are in {os.getcwd()}')
+        _print_run_summary(f'All done, created {outputs_generated} videos!\nFiles are in {output_dir}')
 
 
 def _check_source_video(clip: ClipRecord, missing_videos: Set[str], skip_detail: str) -> Optional[str]:
@@ -858,16 +863,18 @@ def _check_source_video(clip: ClipRecord, missing_videos: Set[str], skip_detail:
     Paths already seen in missing_videos are not reported again.
     """
     override = clip.get('source_filename')
-    base_video = files.get_source_video_filename(clip['study'], clip['participant'], override)
-    if Path(base_video).is_file():
-        return base_video
+    base_name = files.get_source_video_filename(clip['study'], clip['participant'], override)
+    full_path = utils.resolve_input_path(base_name)
+    if full_path.is_file():
+        return str(full_path)
 
-    if base_video not in missing_videos:
-        missing_videos.add(base_video)
+    full_path_str = str(full_path)
+    if full_path_str not in missing_videos:
+        missing_videos.add(full_path_str)
         utils.error_print(
-            f"Source video file not found: '{base_video}'",
+            f"Source video file not found: '{base_name}'",
             [
-                f"Expected location: {Path.cwd() / base_video}",
+                f"Expected location: {full_path_str}",
                 skip_detail,
             ],
         )
@@ -1064,7 +1071,7 @@ def generate_timeline_viewer(
 
     Reads the static viewer.html template from the assets/web directory,
     injects the serialized data as window.CLIPGEN_DATA, writes the result
-    alongside viewer.js and viewer.css into the current working directory.
+    into the effective output directory.
 
     Returns the path to the generated HTML, or None on failure.
     """
@@ -1118,9 +1125,9 @@ def generate_timeline_viewer(
     else:
         output_html = template_html.replace('</body>', f'{script_block}\n</body>')
 
-    out_dir = Path.cwd()
+    # Let files.get_unique_filename resolve against the effective output directory
     out_name = files.get_unique_filename(output_basename, file_format='.html')
-    out_path = out_dir / out_name
+    out_path = Path(out_name)
 
     try:
         out_path.write_text(output_html, encoding='utf-8')
@@ -1601,6 +1608,12 @@ def main() -> None:
     # Optional per-run override for titlecards setting
     if getattr(args, 'titlecards', None) is not None:
         config.TITLECARDS_ENABLED = bool(args.titlecards)
+
+    # Optional per-run overrides for input/output directories
+    if getattr(args, 'input', None) is not None:
+        config.INPUT_DIR = args.input
+    if getattr(args, 'output', None) is not None:
+        config.OUTPUT_DIR = args.output
     
     # Parse CLI arguments for line, range, and cell modes
     cli_mode_args = parse_cli_mode_args(args)

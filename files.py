@@ -41,35 +41,33 @@ def get_unique_filename(filename: str, file_format: Optional[str] = None) -> str
         file_format: File extension to preserve (defaults to config.FILEFORMAT)
         
     Returns:
-        Unique filename that doesn't exist in the filesystem
+        Unique filename path as a string that doesn't exist in the filesystem.
     """
+    base_path = utils.resolve_output_path(filename)
     file_extension = file_format or config.FILEFORMAT
     suffix_counter = 1
+    current_name = str(base_path)
     while True:
-        if Path(filename).is_file():
+        if Path(current_name).is_file():
             if suffix_counter < 2:
-                # First collision: insert step number before file extension
-                # "file.mp4" -> "file-1.mp4"
-                suffix_pos = filename.rfind(file_extension)
+                suffix_pos = current_name.rfind(file_extension)
                 if suffix_pos >= 0:
-                    filename = filename[0:suffix_pos] + '-' + str(suffix_counter) + file_extension
+                    current_name = current_name[0:suffix_pos] + '-' + str(suffix_counter) + file_extension
                 else:
-                    filename = filename + '-' + str(suffix_counter)
+                    current_name = current_name + '-' + str(suffix_counter)
             else:
-                # Subsequent collisions: replace existing step number
-                # "file-1.mp4" -> "file-2.mp4"
-                dash_pos = filename.rfind('-')
+                dash_pos = current_name.rfind('-')
                 if dash_pos >= 0:
-                    base = filename[0:dash_pos]
+                    base = current_name[0:dash_pos]
                 else:
-                    suffix_pos = filename.rfind(file_extension)
-                    base = filename[0:suffix_pos] if suffix_pos >= 0 else filename
-                filename = base + '-' + str(suffix_counter) + file_extension
+                    suffix_pos = current_name.rfind(file_extension)
+                    base = current_name[0:suffix_pos] if suffix_pos >= 0 else current_name
+                current_name = base + '-' + str(suffix_counter) + file_extension
             suffix_counter += 1
         else:
-            filename = truncate_filename(filename, suffix_counter, file_extension)
+            current_name = truncate_filename(current_name, suffix_counter, file_extension)
             break
-    return filename
+    return current_name
 
 def truncate_filename(filename: str, step: int = 1, file_format: Optional[str] = None) -> str:
     """Truncate filenames that exceed maximum length.
@@ -83,7 +81,7 @@ def truncate_filename(filename: str, step: int = 1, file_format: Optional[str] =
         file_format: File extension to preserve (defaults to config.FILEFORMAT)
         
     Returns:
-        Truncated filename that fits within max length
+        Truncated filename (path string) that fits within max length.
     """
     file_extension = file_format or config.FILEFORMAT
     if len(filename) > config.MAX_FILENAME_LENGTH:
@@ -204,15 +202,16 @@ def is_source_video(filename: str) -> bool:
 
 
 def discover_clips() -> List[str]:
-    """Find generated clips in the current working directory.
+    """Find generated clips in the effective output directory.
     
     Scans for .mp4 files and excludes source videos (those matching the
     pattern study_P01.mp4, study_G02.mp4, etc.).
     
     Returns:
-        Sorted list of clip filenames (alphabetically)
+        Sorted list of clip filenames (relative to the output directory)
     """
+    base_dir = utils.get_effective_output_dir()
     return sorted(
-        p.name for p in Path('.').iterdir()
+        p.name for p in base_dir.iterdir()
         if p.name.endswith(config.FILEFORMAT) and not is_source_video(p.name)
     )

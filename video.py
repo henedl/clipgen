@@ -165,7 +165,7 @@ def run_ffmpeg(input_file: str, output_file: str, start_pos: str, end_pos: str, 
         ic(input_file, output_file, start_pos, end_pos)
     if not Path(input_file).is_file():
         utils.error_print(f"Input video file not found: '{input_file}'",
-            [f"Expected location: {Path.cwd() / input_file}",
+            [f"Expected location: {Path(input_file).resolve()}",
              "Skipping this clip."])
         return False
 
@@ -250,7 +250,7 @@ def extract_screenshot(input_file: str, output_file: str, timestamp: str) -> boo
         ic(input_file, output_file, timestamp)
     if not Path(input_file).is_file():
         utils.error_print(f"Input video file not found: '{input_file}'",
-            [f"Expected location: {Path.cwd() / input_file}",
+            [f"Expected location: {Path(input_file).resolve()}",
              "Skipping this screenshot."])
         return False
 
@@ -305,7 +305,7 @@ def extract_gif(input_file: str, output_file: str, timestamp: str, duration_seco
         ic(input_file, output_file, timestamp, duration_seconds)
     if not Path(input_file).is_file():
         utils.error_print(f"Input video file not found: '{input_file}'",
-            [f"Expected location: {Path.cwd() / input_file}",
+            [f"Expected location: {Path(input_file).resolve()}",
              "Skipping this GIF."])
         return False
     if duration_seconds <= 0:
@@ -363,8 +363,8 @@ def get_file_duration(filepath: str) -> Optional[int]:
     """
     if not Path(filepath).is_file():
         utils.error_print(f"Video file not found: '{filepath}'",
-            [f"Expected location: {Path.cwd() / filepath}",
-             "Please ensure the video file exists in the working directory."])
+            [f"Expected location: {Path(filepath).resolve()}",
+             "Please ensure the video file exists in the configured input directory or working directory."])
         return None
 
     probe_command = ['ffprobe', '-v', 'error', '-show_entries', 'format=duration', '-of', 'default=noprint_wrappers=1:nokey=1', filepath]

@@ -3,6 +3,7 @@
 
 import argparse
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple, TypeVar, TypedDict
 
 from icecream import ic
@@ -113,7 +114,7 @@ def parse_arguments() -> argparse.Namespace:
     Returns:
         argparse.Namespace with attributes: batch, lines, range, category, cell,
         participant, filter, mixed, reel, timeline (mode flags/values),
-        spreadsheet, yes, verbose, screen, gif.
+        spreadsheet, yes, verbose, screen, gif, input, output.
     """
     parser = argparse.ArgumentParser(
         description='clipgen - Video clip generator from Google Sheets timestamps.',
@@ -186,6 +187,20 @@ Note: Non-interactive mode (using -b, -l, -r, -C, -c, -p, -f, -M, -R, or -T) is 
         help='Enable verbose output in non-interactive mode (shows all messages)')
     parser.add_argument('--viewer', action='store_true',
         help='Generate a timeline HTML viewer file (clips_viewer.html) for this run')
+    parser.add_argument(
+        '-i',
+        '--input',
+        type=str,
+        metavar='DIR',
+        help='Input directory where source videos are located (defaults to current working directory when unset)',
+    )
+    parser.add_argument(
+        '-o',
+        '--output',
+        type=str,
+        metavar='DIR',
+        help='Output directory where generated artifacts will be written (defaults to current working directory when unset)',
+    )
 
     titlecard_group = parser.add_mutually_exclusive_group()
     titlecard_group.add_argument(
@@ -491,6 +506,40 @@ def print_mode_heading(label: str, style: Optional[str] = None) -> None:
 
 
 # ---- Utility functions ----
+def get_effective_input_dir() -> Path:
+    """Return the effective input directory for source videos."""
+    configured = getattr(config, "INPUT_DIR", "") or ""
+    if configured:
+        return Path(configured).expanduser()
+    return Path.cwd()
+
+
+def get_effective_output_dir() -> Path:
+    """Return the effective output directory for generated artifacts."""
+    configured = getattr(config, "OUTPUT_DIR", "") or ""
+    if configured:
+        return Path(configured).expanduser()
+    return Path.cwd()
+
+
+def resolve_input_path(name: str) -> Path:
+    """Resolve a source filename against the effective input directory."""
+    base = get_effective_input_dir()
+    path = Path(name)
+    if path.is_absolute():
+        return path
+    return base / path
+
+
+def resolve_output_path(name: str) -> Path:
+    """Resolve an output filename against the effective output directory."""
+    base = get_effective_output_dir()
+    path = Path(name)
+    if path.is_absolute():
+        return path
+    return base / path
+
+
 def normalize_study_name(raw_name: str) -> str:
     """Convert study name to a filesystem-safe format.
     Preserves unicode characters for international study names."""
