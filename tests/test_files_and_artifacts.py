@@ -4,6 +4,7 @@ from typing import cast
 import files
 import clipgen
 import utils
+import spreadsheet
 from utils import ClipRecord
 
 
@@ -98,4 +99,92 @@ def test_build_artifact_records_for_clip_and_finalize_timeline_data(tmp_path, mo
     assert data["meta"]["sourceSpreadsheet"] == "Sheet"
     assert data["meta"]["sourceFileType"] == "google"
     assert data["timeline"]["duration"] > artifacts[0]["end"]
+
+
+def test_baseline_row_detection_and_relative_conversion():
+    # Sheet layout:
+    # Row 0: study name
+    # Row 1: baseline marker row with 'Baseline time' label and per-participant baseline
+    # Row 2: headers: ID, P01, P02, Observation, Category
+    # Row 3: data row with clock-style timestamps for both participants
+    sheet_data = [
+        ["study", "", "", "", ""],
+        ["Baseline time", "09:12:00", "", "", ""],
+        ["ID", "P01", "P02", "Observation", "Category"],
+        ["1", "09:13:00-09:14:00", "09:20:00-09:21:00", "Observation one", "CatA"],
+    ]
+
+    # Dummy header cells matching the header row (row index 2 → row=3 in gspread terms)
+    id_cell = type("Cell", (), {"row": 3, "col": 1})()
+    observation_cell = type("Cell", (), {"row": 3, "col": 4})()
+    baseline_row_idx = spreadsheet._detect_baseline_row(sheet_data)
+    assert baseline_row_idx == 1
+
+    # Two participants: P01 and P02
+    clips = spreadsheet.get_line_timestamps(
+        sheet_data,
+        id_cell,
+        observation_cell,
+        num_participants=2,
+        line_index=3,
+        study_name="study",
+        baseline_row_idx=baseline_row_idx,
+    )
+
+    # Expect clip records for both participants
+    assert len(clips) == 2
+
+    p01_clip = cast(ClipRecord, clips[0])
+    p02_clip = cast(ClipRecord, clips[1])
+
+    # P01 column has a baseline in the marker row, P02 does not
+    assert p01_clip.get("timestamp_baseline") == "09:12:00"
+    assert "timestamp_baseline" not in p02_clip
+
+    prepared_p01 = files.prepare_clip(p01_clip)
+    prepared_p02 = files.prepare_clip(p02_clip)
+
+    # P01 times should be converted to relative offsets from 09:12:00
+    assert prepared_p01["times"] == [("1:00", "2:00")]
+    # P02 times should remain absolute clock values (no baseline applied)
+    assert prepared_p02["times"] == [("09:20:00", "09:21:00")]
+
+
+def test_no_baseline_row_means_relative_timestamps_only():
+    # Same layout as above, but without any 'Baseline time' marker row.
+    sheet_data = [
+        ["study", "", "", "", ""],
+        ["", "", "", "", ""],
+        ["ID", "P01", "P02", "Observation", "Category"],
+        ["1", "09:13:00-09:14:00", "09:20:00-09:21:00", "Observation one", "CatA"],
+    ]
+
+    id_cell = type("Cell", (), {"row": 3, "col": 1})()
+    observation_cell = type("Cell", (), {"row": 3, "col": 4})()
+    baseline_row_idx = spreadsheet._detect_baseline_row(sheet_data)
+    assert baseline_row_idx is None
+
+    clips = spreadsheet.get_line_timestamps(
+        sheet_data,
+        id_cell,
+        observation_cell,
+        num_participants=2,
+        line_index=3,
+        study_name="study",
+        baseline_row_idx=baseline_row_idx,
+    )
+
+    assert len(clips) == 2
+    p01_clip = cast(ClipRecord, clips[0])
+    p02_clip = cast(ClipRecord, clips[1])
+
+    assert "timestamp_baseline" not in p01_clip
+    assert "timestamp_baseline" not in p02_clip
+
+    prepared_p01 = files.prepare_clip(p01_clip)
+    prepared_p02 = files.prepare_clip(p02_clip)
+
+    # Without a baseline row, times remain absolute clock values
+    assert prepared_p01["times"] == [("09:13:00", "09:14:00")]
+    assert prepared_p02["times"] == [("09:20:00", "09:21:00")]
 

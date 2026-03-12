@@ -134,10 +134,11 @@ Interactive-only modes without dedicated CLI flags:
 
 Optional clock baseline row:
 
-- A row directly **above** the participant header row can contain per-participant baseline timestamps.
-- Each non-empty baseline cell (e.g. `09:12:00` above `P01`) marks that participant column as using **clock/absolute** timestamps.
-- During `files.prepare_clip()`, all `(start, end)` pairs in that column are converted to **relative** offsets by subtracting the baseline via `utils.convert_clock_pairs_to_relative()`.
-- Empty baseline cells mean the participant column uses **relative** timestamps (no conversion applied).
+- A single sheet-wide **baseline marker row** contains the label `Baseline time` in one of its cells and per-participant baseline timestamps in the participant columns.
+- Each non-empty baseline cell in that row (e.g. `09:12:00` under `P01`) marks that participant column as using **clock/absolute** timestamps.
+- During `files.prepare_clip()`, all `(start, end)` pairs in that column are converted to **relative** offsets by subtracting the per-column baseline via `utils.convert_clock_pairs_to_relative()`.
+- Empty baseline cells in the marker row mean the participant column uses **relative** timestamps (no conversion applied).
+- If no `Baseline time` marker row is present at all, all participant columns are treated as using relative timestamps.
 
 Reference spreadsheet layout is described in [README.md](README.md).
 

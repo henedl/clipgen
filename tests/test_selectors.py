@@ -90,7 +90,7 @@ def test_make_clip_record_attaches_timestamp_baseline(fake_sheet_meta):
     # Row 3+: Data rows
     sheet_data = [
         ["Study"],
-        ["", "09:12:00", "", ""],
+        ["Baseline time", "09:12:00", "", ""],
         ["ID", "P01", "Observation", "Category"],
         ["1", "09:15:00-09:16:30", "Obs one", "CatA"],
     ]
@@ -99,6 +99,7 @@ def test_make_clip_record_attaches_timestamp_baseline(fake_sheet_meta):
 
     id_cell = SimpleNamespace(row=3, col=1)
     observation_cell = SimpleNamespace(row=3, col=4)
+    baseline_row_idx = spreadsheet._detect_baseline_row(sheet_data)
     clip = spreadsheet._make_clip_record(
         sheet_data,
         row_idx=3,
@@ -107,6 +108,8 @@ def test_make_clip_record_attaches_timestamp_baseline(fake_sheet_meta):
         observation_cell=observation_cell,
         study_name="study",
         cell_value=sheet_data[3][1],
+        filename_row_idx=None,
+        baseline_row_idx=baseline_row_idx,
     )
     assert clip["participant"] == "P01"
     assert clip.get("timestamp_baseline") == "09:12:00"

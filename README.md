@@ -61,12 +61,13 @@ clipgen assumes that you are using a spreadsheet with a particular layout. A ref
 Timestamps must be separated by characters ```+ , ;```
 Ranges must be separated by character ```-```
 
-You can optionally add a **baseline row for clock timestamps** directly above the participant header row:
+You can optionally add a **baseline row for clock timestamps** using a single sheet-wide marker row:
 
-- The participant header row still contains `P01`, `P02`, etc.
-- The row **above** that can contain a clock timestamp for each participant column, e.g. `09:12:00` above `P01`.
-- When a baseline cell is non-empty, all timestamps in that participant column are treated as **clock/absolute times** and are converted to **relative offsets** by subtracting the baseline time before cutting clips.
-- When a baseline cell is empty, timestamps in that participant column are treated as **relative** (the current behavior).
+- One row in the sheet should contain the label `Baseline time` in any cell; this row is treated as the baseline marker row.
+- That same row can contain a clock timestamp for each participant column, e.g. `09:12:00` in the `P01` column.
+- When a baseline cell is non-empty in the marker row, all timestamps in that participant column are treated as **clock/absolute times** and are converted to **relative offsets** by subtracting the per-column baseline time before cutting clips.
+- When a baseline cell is empty in the marker row, timestamps in that participant column are treated as **relative**.
+- If no `Baseline time` marker row exists at all, all participant columns are interpreted as using relative timestamps.
 
 ## Build single-file executable
 

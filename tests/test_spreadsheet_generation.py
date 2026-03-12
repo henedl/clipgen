@@ -153,7 +153,7 @@ def test_baseline_and_relative_timestamps_integration(monkeypatch):
     # Rows 3+: Data rows
     sheet_data = [
         ["Study"],
-        ["", "09:12:00", "", "", ""],
+        ["Baseline time", "09:12:00", "", "", ""],
         ["ID", "P01", "P02", "Observation", "Category"],
         ["1", "09:15:00-09:16:30", "", "Obs one", "CatA"],
         ["2", "", "00:20-00:40", "Obs two", "CatB"],
@@ -161,6 +161,7 @@ def test_baseline_and_relative_timestamps_integration(monkeypatch):
 
     id_cell = SimpleNamespace(row=3, col=1)
     observation_cell = SimpleNamespace(row=3, col=4)
+    baseline_row_idx = spreadsheet._detect_baseline_row(sheet_data)
 
     # Simplify annotation parsing so we focus on timestamp + baseline behavior.
     def fake_parse_cell_annotations(value):
@@ -171,10 +172,20 @@ def test_baseline_and_relative_timestamps_integration(monkeypatch):
 
     # Two participants (P01 has a baseline; P02 does not).
     clips_p01 = spreadsheet.generate_participant_timestamps(
-        sheet_data, id_cell, observation_cell, study_name="study", participant_id="P01"
+        sheet_data,
+        id_cell,
+        observation_cell,
+        study_name="study",
+        participant_id="P01",
+        baseline_row_idx=baseline_row_idx,
     )
     clips_p02 = spreadsheet.generate_participant_timestamps(
-        sheet_data, id_cell, observation_cell, study_name="study", participant_id="P02"
+        sheet_data,
+        id_cell,
+        observation_cell,
+        study_name="study",
+        participant_id="P02",
+        baseline_row_idx=baseline_row_idx,
     )
 
     prepared_p01 = [files.prepare_clip(clip) for clip in clips_p01]
