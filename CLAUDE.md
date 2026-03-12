@@ -10,12 +10,13 @@ clipgen is a Python CLI tool that generates clips from timestamps stored in a Go
 
 | File | Role |
 | ------ | ------ |
-| [clipgen.py](clipgen.py) | Main entry point, CLI parsing, spreadsheet selection, mode dispatch, clip/reel processing |
+| [clipgen.py](clipgen.py) | Entry point (`python clipgen.py`), spreadsheet opening helpers, interactive mode dispatch, clip/reel processing, timeline viewer |
+| [cli.py](cli.py) | CLI argument parsing, CLI mode detection, setup, Google auth, worksheet selection, CLI mode dispatch, `main()` |
 | [spreadsheet.py](spreadsheet.py) | Spreadsheet parsing, header validation, selector parsing (`reel` input), pure timestamp generation for all modes (no prompts) |
 | [interactive.py](interactive.py) | Interactive prompt helpers for all modes (line/range/cell/category/participant selection, browse mode); keeps generation functions pure |
 | [video.py](video.py) | ffmpeg/ffprobe operations: cut clips, screenshots, GIFs, concatenate reels, optional filesize compression |
 | [files.py](files.py) | Filename handling (unique names, truncation), `prepare_clip()` (parse timestamps + annotations, sanitize desc/category), clip discovery for reel-late |
-| [utils.py](utils.py) | Timestamp parsing, cell/header annotation parsing, CLI argument parsing, rich/plain output helpers, progress bar utilities, keyword-aware input helpers |
+| [utils.py](utils.py) | Timestamp parsing, cell/header annotation parsing, rich/plain output helpers, progress bar utilities, keyword-aware input helpers |
 | [config.py](config.py) | Global constants and settings (version, headers, limits, commands) |
 | [google_api.py](google_api.py) | Google Sheets auth, worksheet selection by priority, spreadsheet listing/search |
 | [excel_io.py](excel_io.py) | Excel adapter: `ExcelSheetAdapter` mimics gspread Worksheet interface for local .xlsx |
@@ -27,7 +28,8 @@ End-to-end data flow from spreadsheet input to video artifacts and optional HTML
 
 ```mermaid
 flowchart LR
-  user["User"] --> cli["clipgen.py (CLI)"]
+  user["User"] --> entry["clipgen.py (entry point)"]
+  entry --> cli["cli.py (CLI parsing, setup, dispatch)"]
 
   cli --> sheetSource["Spreadsheet source selection"]
   sheetSource --> googleSheets["google_api.py (Google Sheets)"]
@@ -153,8 +155,8 @@ Reference spreadsheet layout is described in [README.md](README.md).
 
 ## Version
 
-- The version is stored as `VERSIONNUM` in [config.py](config.py) (currently `'0.7.20'`).
-- **When making substantive code changes** (bug fixes or features), increment the **last segment only** (patch) in `config.py`, e.g. `0.7.20` → `0.7.21`. Do not bump for docs-only, comment-only, or refactor-only changes unless they affect user-visible behavior.
+- The version is stored as `VERSIONNUM` in [config.py](config.py) (currently `'0.8.22'`).
+- **When making substantive code changes** (bug fixes or features), increment the **last segment only** (patch) in `config.py`, e.g. `0.8.22` → `0.8.23`. Do not bump for docs-only, comment-only, or refactor-only changes unless they affect user-visible behavior.
 
 ## Testing notes
 

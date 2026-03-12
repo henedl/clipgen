@@ -1,7 +1,6 @@
 # -*- coding: utf-8 -*-
 """Utility functions for clipgen."""
 
-import argparse
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple, TypeVar, TypedDict
@@ -101,124 +100,6 @@ _CLIPGEN_THEME = (
     if RICH_AVAILABLE
     else None
 )
-
-
-# ---- CLI parsing ----
-def parse_arguments() -> argparse.Namespace:
-    """Parse command-line arguments for non-interactive mode.
-    
-    Exactly one of the mode flags (-b, -l, -r, -C, -c, -p, -f, -M, -R, -T) may be given;
-    if none is given, the program runs in interactive mode. Optional flags (-s, -y,
-    -v, --screen, --gif) may be combined with any mode.
-    
-    Returns:
-        argparse.Namespace with attributes: batch, lines, range, category, cell,
-        participant, filter, mixed, reel, timeline (mode flags/values),
-        spreadsheet, yes, verbose, screen, gif, input, output.
-    """
-    parser = argparse.ArgumentParser(
-        description='clipgen - Video clip generator from Google Sheets timestamps.',
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog='''
-Examples:
-  python clipgen.py                        Interactive mode (default)
-  python clipgen.py -b                     Batch mode - generate all clips
-  python clipgen.py -C "Observations"      Category mode - rows with category "Observations"
-  python clipgen.py -C "Observations,Onboarding"
-                                           Category mode - multiple categories
-  python clipgen.py -l 5                   Single line mode - line 5
-  python clipgen.py -l 1+4+5               Multi-line mode - lines 1, 4, and 5
-  python clipgen.py -l 1,4,5               Multi-line mode (comma separator)
-  python clipgen.py -r 1-10                Range mode - lines 1 through 10
-  python clipgen.py -c "P01.11"            Cell mode - single cell (participant P01, row 11)
-  python clipgen.py -c "P01.11 + P03.11"   Cell mode - multiple cells
-  python clipgen.py -p P01                 Participant mode - all clips for participant P01
-  python clipgen.py -p "P01,P03"           Participant mode - all clips for P01 and P03
-  python clipgen.py -f                     Filter mode - only key-marked clips/timestamps
-  python clipgen.py -M "5, P01.11, 13-16"  Mixed mode - combine selectors for individual outputs
-  python clipgen.py -b -s "Study Name"     Batch mode with specific spreadsheet
-  python clipgen.py -l 5 -y                Line mode, skip confirmation prompts
-  python clipgen.py -b -v                  Batch mode with verbose output
-  python clipgen.py -R "11, 13-16, P01, \\"Observations\\""  Reel mode - one combined video
-  python clipgen.py -T P01                 Timeline mode - chronological reel for participant P01
-  python clipgen.py -b --screen            Batch mode screenshots (.png)
-  python clipgen.py -l 5 --gif             Line mode GIF output (.gif)
- 
-Note: Non-interactive mode (using -b, -l, -r, -C, -c, -p, -f, -M, -R, or -T) is silent by default,
-      only showing errors and the final summary. Use -v for full output.
-'''
-    )
-
-    # Mode arguments: only one of -b/-l/-r/-C/-c/-p/-f/-M/-R/-T may be set at a time
-    mode_group = parser.add_mutually_exclusive_group()
-    mode_group.add_argument('-b', '--batch', action='store_true',
-        help='Batch mode: generate all possible clips')
-    mode_group.add_argument('-l', '--lines', type=str, metavar='LINES',
-        help='Line mode: specify line numbers separated by + or , (e.g., 1+4+5 or 1,4,5)')
-    mode_group.add_argument('-r', '--range', type=str, metavar='RANGE',
-        help='Range mode: specify start-end line range (e.g., 1-10)')
-    mode_group.add_argument('-C', '--category', type=str, metavar='CATEGORIES',
-        help='Category mode: specify one or more category names (comma- or plus-separated, e.g., "Observations,Onboarding")')
-    mode_group.add_argument('-c', '--cell', type=str, metavar='CELLS',
-        help='Cell mode: specify cells as participant.row (e.g., P01.11 or P01.11 + P03.11)')
-    mode_group.add_argument('-p', '--participant', type=str, metavar='ID',
-        help='Participant mode: generate all clips for one or more participants (e.g., P01 or P01,P03)')
-    mode_group.add_argument('-f', '--filter', action='store_true',
-        help='Filter mode: generate only key-marked clips/timestamps')
-    mode_group.add_argument('-M', '--mixed', type=str, metavar='SELECTORS',
-        help='Mixed mode: combine selectors (e.g. "5, P01.11, 13-16") for individual clips/screenshots/GIFs')
-    mode_group.add_argument('-R', '--reel', type=str, metavar='SELECTORS',
-        help='Reel mode: combine selectors (e.g. "11, 13-16, P01, \\"Observations\\"") into one video')
-    mode_group.add_argument('-T', '--timeline', type=str, metavar='PARTICIPANT',
-        help='Timeline mode: chronological reel for one participant (e.g., P01)')
-
-    format_group = parser.add_mutually_exclusive_group()
-    format_group.add_argument('--screen', action='store_true',
-        help='Output screenshots (.png) instead of video clips')
-    format_group.add_argument('--gif', action='store_true',
-        help='Output animated GIFs instead of video clips')
-
-    # Optional arguments (can be used with any mode)
-    parser.add_argument('-s', '--spreadsheet', type=str, metavar='NAME',
-        help='Spreadsheet name, URL, or index number')
-    parser.add_argument('-y', '--yes', action='store_true',
-        help='Skip confirmation prompts (auto-confirm)')
-    parser.add_argument('-v', '--verbose', action='store_true',
-        help='Enable verbose output in non-interactive mode (shows all messages)')
-    parser.add_argument('--viewer', action='store_true',
-        help='Generate a timeline HTML viewer file (clips_viewer.html) for this run')
-    parser.add_argument(
-        '-i',
-        '--input',
-        type=str,
-        metavar='DIR',
-        help='Input directory where source videos are located (defaults to current working directory when unset)',
-    )
-    parser.add_argument(
-        '-o',
-        '--output',
-        type=str,
-        metavar='DIR',
-        help='Output directory where generated artifacts will be written (defaults to current working directory when unset)',
-    )
-
-    titlecard_group = parser.add_mutually_exclusive_group()
-    titlecard_group.add_argument(
-        '--titlecards',
-        dest='titlecards',
-        action='store_true',
-        help='Enable titlecards for generated video clips for this run',
-    )
-    titlecard_group.add_argument(
-        '--no-titlecards',
-        dest='titlecards',
-        action='store_false',
-        help='Disable titlecards for generated video clips for this run',
-    )
-
-    parser.set_defaults(titlecards=None)
-
-    return parser.parse_args()
 
 
 # ---- Interactive decorations ----

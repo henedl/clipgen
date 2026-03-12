@@ -13,13 +13,12 @@ This script supports full unicode/UTF-8 for international characters in:
 - Descriptions
 - File paths
 """
-import io
 import json
 import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Dict, List, NamedTuple, Optional, Set, Tuple
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 import gspread
 from icecream import ic
@@ -57,81 +56,6 @@ FORMAT_MODE_ALIASES = {
     alias: mode for alias, mode in MODE_ALIASES.items()
     if mode in {'batch', 'line', 'range', 'category', 'cell', 'participant', 'filter'}
 }
-
-
-# ---- CLI data structures and runtime utilities ----
-
-class CliModeArgs(NamedTuple):
-    line_numbers: Optional[List[int]]
-    range_start: Optional[int]
-    range_end: Optional[int]
-    cell_specs: Optional[List[Tuple[str, int]]]
-
-
-def parse_cli_mode_args(args: Any) -> CliModeArgs:
-    """Parse CLI arguments for line, range, and cell modes.
-    
-    Args:
-        args: Parsed command-line arguments
-        
-    Returns:
-        Parsed mode argument values as CliModeArgs
-    """
-    cli_line_numbers = None
-    cli_range_start = None
-    cli_range_end = None
-    cli_cell_specs = None
-    
-    if args.lines:
-        try:
-            # Support both + and , as separators
-            line_str = args.lines.replace(',', '+')
-            cli_line_numbers = [int(num.strip()) for num in line_str.split('+')]
-        except ValueError:
-            utils.error_print(f'Invalid line numbers "{args.lines}". Use format: 1+4+5 or 1,4,5')
-            sys.exit(1)
-    
-    if args.range:
-        try:
-            parts = args.range.split('-')
-            if len(parts) != 2:
-                raise ValueError('Range must have exactly two parts')
-            cli_range_start = int(parts[0].strip())
-            cli_range_end = int(parts[1].strip())
-            if cli_range_start > cli_range_end:
-                utils.error_print(f'Range start ({cli_range_start}) must be less than or equal to end ({cli_range_end})')
-                sys.exit(1)
-        except ValueError:
-            utils.error_print(f'Invalid range "{args.range}". Use format: 1-10')
-            sys.exit(1)
-    
-    if args.cell:
-        try:
-            cli_cell_specs = spreadsheet.parse_cell_specifications(args.cell)
-        except ValueError as e:
-            utils.error_print(f'Invalid cell specification: {e}')
-            sys.exit(1)
-    
-    return CliModeArgs(cli_line_numbers, cli_range_start, cli_range_end, cli_cell_specs)
-
-
-def setup_encoding() -> None:
-    """Ensure UTF-8 encoding for stdout/stderr to handle unicode properly."""
-    encoding = sys.stdout.encoding
-    if not encoding or encoding.lower() != 'utf-8':
-        sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
-        sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
-
-
-def get_runtime_working_dir() -> str:
-    """Return the runtime working directory.
-
-    Source runs use the script directory; frozen one-file builds use the
-    executable directory so local assets resolve from where the binary lives.
-    """
-    if getattr(sys, 'frozen', False):
-        return str(Path(sys.executable).resolve().parent)
-    return str(Path(__file__).resolve().parent)
 
 
 # ---- Spreadsheet opening and selection utilities ----
@@ -1009,7 +933,11 @@ def _process_with_progress(
 
 def _get_assets_web_dir() -> Path:
     """Return the path to the assets/web directory containing viewer templates."""
-    return Path(get_runtime_working_dir()) / "assets" / "web"
+    if getattr(sys, 'frozen', False):
+        base = Path(sys.executable).resolve().parent
+    else:
+        base = Path(__file__).resolve().parent
+    return base / "assets" / "web"
 
 
 def build_artifact_records_for_clip(
@@ -1319,264 +1247,13 @@ def process_reel(
 
 
 
-# ---- Google authentication and worksheet selection ----
-
-def authenticate_google() -> Any:
-    """Authenticate with Google Sheets API.
-    
-    Returns:
-        Google client connection object
-    """
-    try:
-        utils.debug_print('Attempting login...')
-        gspread_client = gspread.oauth(credentials_filename='credentials.json')
-        utils.debug_print('Login successful!')
-        return gspread_client
-    except gspread.exceptions.GSpreadException as e:
-        utils.error_print("Could not authenticate with Google.",
-            [f"Error details: {e}",
-             f"Credentials file location: {Path.cwd() / 'credentials.json'}",
-             "",
-             "Troubleshooting steps:",
-             "  1. Ensure 'credentials.json' exists in the working directory",
-             "  2. Verify the credentials file is valid JSON",
-             "  3. Check that the service account has access to Google Sheets API",
-             "  4. For OAuth flow, delete any existing token files and re-authenticate"])
-        sys.exit(1)
-
 def _is_excel_worksheet(worksheet: Any) -> bool:
     """Return True if worksheet is the Excel adapter (local file, no URL)."""
     spread = getattr(worksheet, 'spreadsheet', None)
     return spread is not None and getattr(spread, 'url', None) is None
 
 
-def select_worksheet(gspread_client: Any, doc_list: List[str], args: Any, cli_mode: bool) -> Any:
-    """Select worksheet based on command-line arguments or interactive selection.
-    
-    Args:
-        gspread_client: Google client connection
-        doc_list: List of available spreadsheet names
-        args: Parsed command-line arguments
-        cli_mode: Whether running in CLI mode
-        
-    Returns:
-        Worksheet object
-    """
-    worksheet = None
-    if args.spreadsheet:
-        # CLI-specified spreadsheet
-        raw = args.spreadsheet.strip()
-        raw_lower = raw.lower()
-        if raw_lower == config.COMMAND_EXCEL:
-            # -s excel: use single .xlsx in cwd, else error
-            paths = excel_io.list_excel_in_cwd()
-            if not paths:
-                utils.error_print('No .xlsx files found in the current directory.',
-                    ['Place an Excel file (.xlsx) in the working directory or use -s path/to/file.xlsx'])
-                sys.exit(1)
-            if len(paths) > 1:
-                utils.error_print(f'Multiple .xlsx files found ({len(paths)}). Specify one with -s path/to/file.xlsx',
-                    [Path(p).name for p in paths])
-                sys.exit(1)
-            worksheet = excel_io.open_excel_workbook(paths[0])
-            if not worksheet:
-                sys.exit(1)
-        elif raw_lower.endswith('.xlsx'):
-            # -s path/to/file.xlsx
-            path = str(Path.cwd() / raw) if not Path(raw).is_absolute() else raw
-            worksheet = excel_io.open_excel_workbook(path)
-            if not worksheet:
-                utils.error_print(f'Could not open Excel file "{args.spreadsheet}"')
-                sys.exit(1)
-        elif args.spreadsheet.startswith(config.COMMAND_HTTP_PREFIX):
-            worksheet = open_spreadsheet_by_url(gspread_client, args.spreadsheet)
-        elif args.spreadsheet.isdigit():
-            worksheet = open_spreadsheet_by_index(gspread_client, doc_list, int(args.spreadsheet))
-        else:
-            worksheet = open_spreadsheet_by_name(gspread_client, doc_list, args.spreadsheet)
-        
-        if not worksheet:
-            utils.error_print(f'Could not find or open spreadsheet "{args.spreadsheet}"')
-            sys.exit(1)
-    else:
-        # Auto-connect if working directory name matches a spreadsheet
-        cwd_name = Path.cwd().name
-        worksheet = open_spreadsheet_by_name(gspread_client, doc_list, cwd_name)
-        if worksheet:
-            utils.verbose_print(f'Auto-connecting to spreadsheet: {worksheet.spreadsheet.title}')
-        elif cli_mode:
-            # CLI mode requires a spreadsheet - can't prompt interactively
-            utils.error_print('No spreadsheet found matching working directory name.',
-                ['Use -s to specify a spreadsheet name, URL, or index.'])
-            sys.exit(1)
-        else:
-            worksheet = select_spreadsheet(gspread_client, doc_list)
-    
-    if worksheet and config.DEBUGGING:
-        ic(worksheet.title)
-    if _is_excel_worksheet(worksheet):
-        utils.verbose_print('Using local Excel file.')
-    else:
-        utils.verbose_print('Connected to Google Drive!')
-    return worksheet
-
-# ---- Mode runners and entry point ----
-
-def _generate_cli_clips(
-    worksheet: Any,
-    args: Any,
-    cli_mode_args: CliModeArgs,
-) -> List[ClipRecord]:
-    """Resolve CLI arguments into a list of clip records."""
-    skip_prompts = args.yes
-    mixed_selectors = getattr(args, 'mixed', None)
-    output_format = 'screen' if args.screen else 'gif' if args.gif else 'clip'
-
-    selection_mode_set = bool(
-        args.batch or args.lines or args.range or args.category or args.cell
-        or args.participant or args.filter or mixed_selectors
-        or args.reel or args.timeline
-    )
-
-    def _parse_cli_categories(raw: Optional[str]) -> List[str]:
-        """Parse CLI category string into a list of category names."""
-        if not raw:
-            return []
-        combined = raw.replace(',', '+')
-        seen = set()
-        result: List[str] = []
-        for token in combined.split('+'):
-            name = token.strip()
-            if not name:
-                continue
-            if name not in seen:
-                seen.add(name)
-                result.append(name)
-        return result
-
-    cli_categories = _parse_cli_categories(getattr(args, 'category', None))
-
-    mode_dispatch: List[tuple] = [
-        (args.batch or (output_format != 'clip' and not selection_mode_set),
-         'batch', {}),
-        (args.lines,
-         'line', {'line_numbers': cli_mode_args.line_numbers}),
-        (args.range,
-         'range', {'range_start': cli_mode_args.range_start, 'range_end': cli_mode_args.range_end}),
-        (args.category,
-         'category', {'categories': cli_categories}),
-        (args.cell,
-         'cell', {'cell_specs': cli_mode_args.cell_specs}),
-        (args.participant,
-         'participant', {'participant_id': args.participant}),
-        (args.filter,
-         'filter', {}),
-        (mixed_selectors,
-         'reel', {'reel_input': mixed_selectors}),
-        (args.reel,
-         'reel', {'reel_input': args.reel}),
-        (args.timeline,
-         'reel', {'reel_input': f'timeline, {args.timeline}'}),
-    ]
-
-    for condition, mode, kwargs in mode_dispatch:
-        if condition:
-            return spreadsheet.generate_list(worksheet, mode, skip_prompts=skip_prompts, **kwargs)
-    return []
-
-
-def _resolve_timeline_output_file(args: Any, clips_list: List[ClipRecord]) -> Optional[str]:
-    """Build the output filename for timeline reel mode."""
-    if not args.timeline:
-        return None
-    participant_id = utils.normalize_participant_id(args.timeline).strip()
-    study_name = clips_list[0].get('study', '').strip() if clips_list else ''
-    if study_name and participant_id:
-        return files.get_unique_filename(f'{study_name}_{participant_id}_timeline{config.FILEFORMAT}')
-    if participant_id:
-        return files.get_unique_filename(f'{participant_id}_timeline{config.FILEFORMAT}')
-    return files.get_unique_filename(f'timeline{config.FILEFORMAT}')
-
-
-def run_cli_mode(worksheet: Any, args: Any, cli_mode_args: CliModeArgs) -> None:
-    """Execute CLI mode - run once and exit.
-
-    Args:
-        worksheet: Selected worksheet
-        args: Parsed command-line arguments
-        cli_mode_args: Parsed line/range/cell arguments
-    """
-    output_format = 'screen' if args.screen else 'gif' if args.gif else 'clip'
-    mixed_selectors = getattr(args, 'mixed', None)
-
-    if (args.reel or args.timeline) and output_format != 'clip':
-        utils.error_print("Reel/timeline mode cannot be combined with --screen or --gif.",
-            ["Use reel/timeline mode for a single .mp4 output, or use screen/gif with batch/line/range/category/cell/participant/filter selection."])
-        sys.exit(1)
-
-    if mixed_selectors:
-        parsed_mixed = spreadsheet.parse_reel_input(mixed_selectors)
-        if parsed_mixed.get('timeline'):
-            utils.error_print(
-                "Timeline selector is not supported in mixed mode.",
-                [
-                    "Use -T PARTICIPANT for a chronological reel,",
-                    "or use -R with timeline selectors to create a single reel video.",
-                ],
-            )
-            sys.exit(1)
-
-    clips_list = _generate_cli_clips(worksheet, args, cli_mode_args)
-
-    want_viewer = getattr(args, 'viewer', False)
-    artifacts: List[Dict[str, Any]] = []
-
-    if args.reel or args.timeline:
-        reel_output_file = _resolve_timeline_output_file(args, clips_list)
-        if want_viewer:
-            outputs_generated, artifacts = process_reel(
-                clips_list,
-                output_file=reel_output_file,
-                collect_artifacts=True,
-            )
-        else:
-            outputs_generated = process_reel(
-                clips_list,
-                output_file=reel_output_file,
-            )
-    else:
-        if want_viewer:
-            outputs_generated, artifacts = process_clips(
-                clips_list,
-                output_format=output_format,
-                collect_artifacts=True,
-            )
-        else:
-            outputs_generated = process_clips(
-                clips_list,
-                output_format=output_format,
-            )
-
-    if not config.REENCODING:
-        _print_reencoding_warning(utils.verbose_print)
-    _print_completion_message(outputs_generated, output_format, is_reel=bool(args.reel or args.timeline))
-
-    if want_viewer and artifacts:
-        study = artifacts[0].get('study', '') if artifacts else ''
-        participant = artifacts[0].get('participant', '') if artifacts else ''
-        data = finalize_timeline_data(
-            artifacts,
-            study=study,
-            participant=participant,
-            worksheet_title=getattr(worksheet, 'title', ''),
-            is_excel=_is_excel_worksheet(worksheet),
-            mode=output_format if output_format != 'clip' else 'batch',
-            output_format=output_format,
-        )
-        viewer_path = generate_timeline_viewer(data)
-        if viewer_path:
-            utils.info_print(f'Timeline viewer created: {viewer_path}')
-
+# ---- Mode runners ----
 
 def run_interactive_mode(worksheet: Any) -> None:
     """Execute interactive mode - main processing loop.
@@ -1622,83 +1299,8 @@ def run_interactive_mode(worksheet: Any) -> None:
         except utils.QuitProgram:
             break
 
-def main() -> None:
-    """Main entry point for clipgen."""
-    setup_encoding()
-    
-    # Parse command-line arguments
-    args = utils.parse_arguments()
-    if config.DEBUGGING:
-        ic(args)
-    
-    # Determine if running in CLI mode (any mode argument provided)
-    mixed_selectors = getattr(args, 'mixed', None)
-    cli_mode = (
-        args.batch
-        or args.lines
-        or args.range
-        or args.category
-        or args.cell
-        or args.participant
-        or args.filter
-        or mixed_selectors
-        or args.reel
-        or args.timeline
-        or args.screen
-        or args.gif
-    )
-    
-    # Set verbose mode: silent by default in CLI mode, verbose in interactive mode
-    config.VERBOSE = not cli_mode or args.verbose
-
-    # Optional per-run override for titlecards setting
-    if getattr(args, 'titlecards', None) is not None:
-        config.TITLECARDS_ENABLED = bool(args.titlecards)
-
-    # Optional per-run overrides for input/output directories
-    if getattr(args, 'input', None) is not None:
-        config.INPUT_DIR = args.input
-    if getattr(args, 'output', None) is not None:
-        config.OUTPUT_DIR = args.output
-    
-    # Parse CLI arguments for line, range, and cell modes
-    cli_mode_args = parse_cli_mode_args(args)
-    
-    # Change working directory to runtime location (script/executable)
-    os.chdir(get_runtime_working_dir())
-    utils.verbose_print('-------------------------------------------------------------------------------')
-    utils.verbose_print(f'Welcome to clipgen v{config.VERSIONNUM}\nWorking directory: {os.getcwd()}\nPlace video files and the credentials.json file in this directory.')
-    utils.debug_print('Debug mode is ON. Several limitations apply and more things will be printed.')
-
-    # Sanity-check input/output directories before proceeding
-    utils.validate_runtime_directories()
-
-    if not video.check_ffmpeg_tools_available():
-        sys.exit(1)
-    
-    # Authenticate with Google (once per run)
-    gspread_client = authenticate_google()
-    doc_list = google_api.get_all_spreadsheets(gspread_client).split(',')
-
-    # Outer loop so 'top' can return to spreadsheet selection
-    while True:
-        try:
-            worksheet = select_worksheet(gspread_client, doc_list, args, cli_mode)
-
-            # Execute based on mode
-            if cli_mode:
-                run_cli_mode(worksheet, args, cli_mode_args)
-            else:
-                run_interactive_mode(worksheet)
-            break
-        except utils.TopToSpreadsheet:
-            # User requested to go back to spreadsheet selection; restart loop.
-            continue
-        except utils.QuitProgram:
-            # Keyword-aware input requested exit; helper already printed context message.
-            sys.exit(0)
-
 if __name__ == '__main__':
+    from cli import main
     try:
         main()
     except KeyboardInterrupt:

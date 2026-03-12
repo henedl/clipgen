@@ -20,14 +20,17 @@ tests/.pytest_cache/
 /*.mov
 /*.mkv
 /*.xlsx
+output/
 .cursor/
 .vscode/
 .conductor/
 .venv/
+.claude/
 /*.html
 /*.gif
 /*.png
 !assets/titlecard.png
+!assets/endcard.png
 
 # Python byte code
 *.py[cod]

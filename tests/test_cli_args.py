@@ -3,8 +3,8 @@ from unittest.mock import Mock
 
 import pytest
 
+import cli
 import clipgen
-import utils
 
 
 def _base_args(**overrides):
@@ -34,50 +34,50 @@ def _base_args(**overrides):
 def test_parse_arguments_rejects_conflicting_mode_flags(monkeypatch):
     monkeypatch.setattr("sys.argv", ["clipgen.py", "-b", "-l", "5"])
     with pytest.raises(SystemExit) as exc:
-        utils.parse_arguments()
+        cli.parse_arguments()
     assert exc.value.code == 2
 
 
 def test_parse_arguments_rejects_conflicting_output_flags(monkeypatch):
     monkeypatch.setattr("sys.argv", ["clipgen.py", "--screen", "--gif"])
     with pytest.raises(SystemExit) as exc:
-        utils.parse_arguments()
+        cli.parse_arguments()
     assert exc.value.code == 2
 
 
 def test_parse_arguments_titlecards_flags(monkeypatch):
     # Default: no flag → None (use config default)
     monkeypatch.setattr("sys.argv", ["clipgen.py"])
-    args = utils.parse_arguments()
+    args = cli.parse_arguments()
     assert getattr(args, "titlecards", None) is None
 
     # --titlecards → True
     monkeypatch.setattr("sys.argv", ["clipgen.py", "--titlecards"])
-    args = utils.parse_arguments()
+    args = cli.parse_arguments()
     assert args.titlecards is True
 
     # --no-titlecards → False
     monkeypatch.setattr("sys.argv", ["clipgen.py", "--no-titlecards"])
-    args = utils.parse_arguments()
+    args = cli.parse_arguments()
     assert args.titlecards is False
 
 
 def test_parse_cli_mode_args_parses_mixed_line_separators():
     args = _base_args(lines="1, 4+5")
-    parsed = clipgen.parse_cli_mode_args(args)
+    parsed = cli.parse_cli_mode_args(args)
     assert parsed.line_numbers == [1, 4, 5]
 
 
 def test_parse_cli_mode_args_rejects_reversed_range():
     args = _base_args(range="10-1")
     with pytest.raises(SystemExit) as exc:
-        clipgen.parse_cli_mode_args(args)
+        cli.parse_cli_mode_args(args)
     assert exc.value.code == 1
 
 
 def test_parse_cli_mode_args_accepts_valid_range():
     args = _base_args(range="5-10")
-    parsed = clipgen.parse_cli_mode_args(args)
+    parsed = cli.parse_cli_mode_args(args)
     assert parsed.range_start == 5
     assert parsed.range_end == 10
 
@@ -86,18 +86,18 @@ def test_parse_cli_mode_args_delegates_cell_parsing(monkeypatch):
     args = _base_args(cell="P01.11, P02.12")
     expected = [("P01", 11), ("P02", 12)]
     monkeypatch.setattr(
-        clipgen.spreadsheet,
+        cli.spreadsheet,
         "parse_cell_specifications",
         lambda value: expected if value == "P01.11, P02.12" else [],
     )
-    parsed = clipgen.parse_cli_mode_args(args)
+    parsed = cli.parse_cli_mode_args(args)
     assert parsed.cell_specs == expected
 
 
 def test_run_cli_mode_rejects_reel_with_gif():
     args = _base_args(reel="11, P01", gif=True)
     with pytest.raises(SystemExit) as exc:
-        clipgen.run_cli_mode(None, args, clipgen.CliModeArgs(None, None, None, None))
+        cli.run_cli_mode(None, args, cli.CliModeArgs(None, None, None, None))
     assert exc.value.code == 1
 
 
@@ -108,11 +108,11 @@ def test_run_cli_mode_batch_happy_path_dispatch(monkeypatch, make_clip):
     process_clips = Mock(return_value=1)
     completion = Mock()
 
-    monkeypatch.setattr(clipgen.spreadsheet, "generate_list", generate_list)
+    monkeypatch.setattr(cli.spreadsheet, "generate_list", generate_list)
     monkeypatch.setattr(clipgen, "process_clips", process_clips)
     monkeypatch.setattr(clipgen, "_print_completion_message", completion)
 
-    clipgen.run_cli_mode(None, args, clipgen.CliModeArgs(None, None, None, None))
+    cli.run_cli_mode(None, args, cli.CliModeArgs(None, None, None, None))
 
     generate_list.assert_called_once_with(None, "batch", skip_prompts=True)
     process_clips.assert_called_once_with(clips, output_format="clip")
@@ -126,12 +126,12 @@ def test_run_cli_mode_line_with_screen_output(monkeypatch, make_clip):
     process_clips = Mock(return_value=1)
     completion = Mock()
 
-    monkeypatch.setattr(clipgen.spreadsheet, "generate_list", generate_list)
+    monkeypatch.setattr(cli.spreadsheet, "generate_list", generate_list)
     monkeypatch.setattr(clipgen, "process_clips", process_clips)
     monkeypatch.setattr(clipgen, "_print_completion_message", completion)
 
-    parsed = clipgen.CliModeArgs(line_numbers=[5], range_start=None, range_end=None, cell_specs=None)
-    clipgen.run_cli_mode(None, args, parsed)
+    parsed = cli.CliModeArgs(line_numbers=[5], range_start=None, range_end=None, cell_specs=None)
+    cli.run_cli_mode(None, args, parsed)
 
     generate_list.assert_called_once_with(
         None,
@@ -150,12 +150,12 @@ def test_run_cli_mode_category_cli_dispatch(monkeypatch, make_clip):
     process_clips = Mock(return_value=1)
     completion = Mock()
 
-    monkeypatch.setattr(clipgen.spreadsheet, "generate_list", generate_list)
+    monkeypatch.setattr(cli.spreadsheet, "generate_list", generate_list)
     monkeypatch.setattr(clipgen, "process_clips", process_clips)
     monkeypatch.setattr(clipgen, "_print_completion_message", completion)
 
-    parsed = clipgen.CliModeArgs(None, None, None, None)
-    clipgen.run_cli_mode(None, args, parsed)
+    parsed = cli.CliModeArgs(None, None, None, None)
+    cli.run_cli_mode(None, args, parsed)
 
     generate_list.assert_called_once_with(
         None,
@@ -174,12 +174,12 @@ def test_run_cli_mode_reel_cli_dispatch(monkeypatch, make_clip):
     process_reel = Mock(return_value=1)
     completion = Mock()
 
-    monkeypatch.setattr(clipgen.spreadsheet, "generate_list", generate_list)
+    monkeypatch.setattr(cli.spreadsheet, "generate_list", generate_list)
     monkeypatch.setattr(clipgen, "process_reel", process_reel)
     monkeypatch.setattr(clipgen, "_print_completion_message", completion)
 
-    parsed = clipgen.CliModeArgs(None, None, None, None)
-    clipgen.run_cli_mode(None, args, parsed)
+    parsed = cli.CliModeArgs(None, None, None, None)
+    cli.run_cli_mode(None, args, parsed)
 
     generate_list.assert_called_once_with(None, "reel", reel_input="11, P01.5", skip_prompts=True)
     assert process_reel.call_count == 1
