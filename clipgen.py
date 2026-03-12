@@ -806,7 +806,9 @@ def _process_single_clip_segments(
                 reencode=config.REENCODING,
             )
             if ok and config.TITLECARDS_ENABLED:
-                titlecards.prepend_titlecard_to_clip(clip, out_name)
+                ok = titlecards.prepend_titlecard_to_clip(clip, out_name)
+            if ok:
+                ok = titlecards.append_endcard_to_clip(out_name)
         elif output_format == 'screen':
             ok = video.extract_screenshot(
                 input_file=base_video,
