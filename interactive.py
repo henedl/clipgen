@@ -75,7 +75,36 @@ def prompt_category_selection(ctx: SheetContext) -> Optional[List[str]]:
             else:
                 utils.info_print("No valid categories selected. Please try again.")
         except ValueError:
-            utils.info_print("Please enter valid numbers separated by commas.")
+            tokens = [t.strip() for t in selection.split(",") if t.strip()]
+            matched_categories = []
+            unmatched = []
+            for token in tokens:
+                exact = next(
+                    (c for c in all_categories if c.lower() == token.lower()), None
+                )
+                if exact:
+                    if exact not in matched_categories:
+                        matched_categories.append(exact)
+                    continue
+                suggestion = utils.suggest_close_match(token, all_categories)
+                if suggestion is not None:
+                    if suggestion not in matched_categories:
+                        matched_categories.append(suggestion)
+                else:
+                    unmatched.append(token)
+            if unmatched:
+                utils.info_print(f"Could not match: {', '.join(unmatched)}")
+            if matched_categories:
+                utils.info_print("Selected categories:")
+                for cat in matched_categories:
+                    utils.info_print(f"  - {cat}")
+                yn = utils.read_user_input("\nIs this correct? y/n\n>> ")
+                if yn == "y":
+                    return matched_categories
+            else:
+                utils.info_print(
+                    "No valid categories matched. Enter numbers (e.g. 1,3,5) or category names."
+                )
 
 
 def prompt_line_selection(ctx: SheetContext) -> Optional[List[int]]:
@@ -260,10 +289,18 @@ def prompt_participant_selection(ctx: SheetContext) -> Optional[List[str]]:
                 else:
                     invalid_tokens.append(token)
         if invalid_tokens:
-            utils.info_print(
-                f"Not found: {', '.join(invalid_tokens)}. Available: {', '.join(available_list)}"
-            )
-            continue
+            still_invalid = []
+            for token in invalid_tokens:
+                suggestion = utils.suggest_close_match(token, available_list)
+                if suggestion is not None:
+                    chosen_ids.append(suggestion)
+                else:
+                    still_invalid.append(token)
+            if still_invalid:
+                utils.info_print(
+                    f"Not found: {', '.join(still_invalid)}. Available: {', '.join(available_list)}"
+                )
+                continue
         seen = set()
         unique_ids = []
         for pid in chosen_ids:

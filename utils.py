@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """Utility functions for clipgen."""
 
+import difflib
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple, TypeVar, TypedDict
@@ -975,6 +976,31 @@ def read_user_input(prompt: str) -> str:
         raise BackToModeSelection()
 
     return value
+
+
+def suggest_close_match(
+    user_input: str,
+    valid_options: list[str],
+    *,
+    prompt_prefix: str = "Did you mean",
+    cutoff: float = 0.6,
+) -> Optional[str]:
+    """Find a fuzzy match and prompt user for confirmation. Returns matched option or None."""
+    lower_to_original: dict[str, str] = {}
+    for option in valid_options:
+        key = option.strip().lower()
+        if key not in lower_to_original:
+            lower_to_original[key] = option
+    matches = difflib.get_close_matches(
+        user_input.strip().lower(), list(lower_to_original.keys()), n=1, cutoff=cutoff
+    )
+    if not matches:
+        return None
+    original = lower_to_original[matches[0]]
+    yn = read_user_input(f"{prompt_prefix} '{original}'? y/n\n>> ")
+    if yn.strip().lower() == "y":
+        return original
+    return None
 
 
 def set_program_settings() -> bool:

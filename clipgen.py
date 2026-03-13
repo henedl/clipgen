@@ -171,7 +171,12 @@ def open_spreadsheet_by_name(
     """Open a spreadsheet by name search against the document list."""
     chosen_index = google_api.find_spreadsheet_by_name(name, doc_list)
     if chosen_index < 0:
-        return None
+        suggestion = utils.suggest_close_match(
+            name, doc_list, prompt_prefix="No exact match found. Did you mean"
+        )
+        if suggestion is None:
+            return None
+        chosen_index = doc_list.index(suggestion)
     matched_name = doc_list[chosen_index].strip()
     if not use_spinner:
         utils.standard_print(f"Opening document: {matched_name}")
@@ -1031,6 +1036,11 @@ def _run_format_mode_interactive(worksheet: Any, output_format: str) -> None:
             continue
 
         mode = FORMAT_MODE_ALIASES.get(selection.lower())
+        if mode is None and len(selection.split()) == 1 and selection.strip():
+            full_names = [k for k in FORMAT_MODE_ALIASES if len(k) > 2]
+            suggestion = utils.suggest_close_match(selection.strip(), full_names)
+            if suggestion is not None:
+                mode = FORMAT_MODE_ALIASES[suggestion]
         if mode:
             clips_list = spreadsheet.generate_list(worksheet, mode)
             break
@@ -1133,9 +1143,19 @@ def run_interactive_mode(worksheet: Any) -> None:
                 )
                 continue
 
-            result = _dispatch_interactive_mode(
-                MODE_ALIASES.get(input_mode.strip().lower()), worksheet, input_mode
-            )
+            resolved_mode = MODE_ALIASES.get(input_mode.strip().lower())
+            if (
+                resolved_mode is None
+                and len(input_mode.split()) == 1
+                and input_mode.strip()
+            ):
+                full_mode_names = [k for k in MODE_ALIASES if len(k) > 2]
+                suggestion = utils.suggest_close_match(
+                    input_mode.strip(), full_mode_names
+                )
+                if suggestion is not None:
+                    resolved_mode = MODE_ALIASES[suggestion]
+            result = _dispatch_interactive_mode(resolved_mode, worksheet, input_mode)
             if result is None:
                 continue
             clips_list, is_reel, reel_output_file = result

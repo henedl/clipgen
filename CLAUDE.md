@@ -1,5 +1,9 @@
 # clipgen – Project context for AI assistants
 
+## Additional rules availble outside this file
+
+@AGENTS.md
+
 ## Project overview
 
 clipgen is a Python CLI tool that generates clips from timestamps stored in a Google Sheet or a local Excel file. It uses **gspread** for Google Sheets access, **openpyxl** for Excel, and **ffmpeg/ffprobe** for media processing. The target audience is UX Researchers and professionals who manage playtest videos locally.
