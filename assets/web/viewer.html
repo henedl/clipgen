@@ -8,7 +8,13 @@
 </head>
 <body>
   <header id="pageHeader">
-    <h1>clipgen <span class="header-light">Timeline Viewer</span></h1>
+    <div id="pageHeaderTop">
+      <h1>clipgen <span class="header-light">Timeline Viewer</span></h1>
+      <button id="themeToggle" type="button" aria-label="Toggle dark mode" aria-pressed="false">
+        <span class="theme-toggle-icon theme-icon-sun"></span>
+        <span class="theme-toggle-icon theme-icon-moon"></span>
+      </button>
+    </div>
     <div id="headerMeta">
       <span id="studyName"></span>
       <span id="generatedAt"></span>

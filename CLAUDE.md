@@ -71,6 +71,12 @@ flowchart LR
 
 Source video filenames follow `{study}_{participant}.mp4` (e.g. `mystudy_P01.mp4`).
 
+## Development tools
+
+- **uv** – Use `uv run` instead of `python` to run scripts (e.g. `uv run clipgen.py`). Use `uv add` to add dependencies.
+- **Ruff** – Linting and formatting. A `PostToolUse` hook in `.claude/settings.json` automatically runs `ruff check --fix` and `ruff format` on every edited/written file. You can also run `ruff check` or `ruff format` manually.
+- **ty** – Use `ty check` for type checking.
+
 ## Conventions and patterns
 
 - **Coordinates:** gspread uses **1-based** row/col. `sheet.get_all_values()` is a list of lists with **0-based** indices: `sheet_data[row_idx][col_idx]`. Conversions: sheet row = `row_idx + 1`, sheet col = `col_idx + 1`.
