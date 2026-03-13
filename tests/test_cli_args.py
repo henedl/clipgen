@@ -105,7 +105,7 @@ def test_run_cli_mode_batch_happy_path_dispatch(monkeypatch, make_clip):
     args = _base_args(batch=True, yes=True)
     clips = [make_clip()]
     generate_list = Mock(return_value=clips)
-    process_clips = Mock(return_value=1)
+    process_clips = Mock(return_value=(1, []))
     completion = Mock()
 
     monkeypatch.setattr(cli.spreadsheet, "generate_list", generate_list)
@@ -123,14 +123,16 @@ def test_run_cli_mode_line_with_screen_output(monkeypatch, make_clip):
     args = _base_args(lines="5", screen=True, yes=True)
     clips = [make_clip()]
     generate_list = Mock(return_value=clips)
-    process_clips = Mock(return_value=1)
+    process_clips = Mock(return_value=(1, []))
     completion = Mock()
 
     monkeypatch.setattr(cli.spreadsheet, "generate_list", generate_list)
     monkeypatch.setattr(clipgen, "process_clips", process_clips)
     monkeypatch.setattr(clipgen, "_print_completion_message", completion)
 
-    parsed = cli.CliModeArgs(line_numbers=[5], range_start=None, range_end=None, cell_specs=None)
+    parsed = cli.CliModeArgs(
+        line_numbers=[5], range_start=None, range_end=None, cell_specs=None
+    )
     cli.run_cli_mode(None, args, parsed)
 
     generate_list.assert_called_once_with(
@@ -147,7 +149,7 @@ def test_run_cli_mode_category_cli_dispatch(monkeypatch, make_clip):
     args = _base_args(category="Observations,Onboarding", yes=True)
     clips = [make_clip()]
     generate_list = Mock(return_value=clips)
-    process_clips = Mock(return_value=1)
+    process_clips = Mock(return_value=(1, []))
     completion = Mock()
 
     monkeypatch.setattr(cli.spreadsheet, "generate_list", generate_list)
@@ -171,7 +173,7 @@ def test_run_cli_mode_reel_cli_dispatch(monkeypatch, make_clip):
     args = _base_args(reel="11, P01.5", yes=True)
     clips = [make_clip()]
     generate_list = Mock(return_value=clips)
-    process_reel = Mock(return_value=1)
+    process_reel = Mock(return_value=(1, []))
     completion = Mock()
 
     monkeypatch.setattr(cli.spreadsheet, "generate_list", generate_list)
@@ -181,7 +183,9 @@ def test_run_cli_mode_reel_cli_dispatch(monkeypatch, make_clip):
     parsed = cli.CliModeArgs(None, None, None, None)
     cli.run_cli_mode(None, args, parsed)
 
-    generate_list.assert_called_once_with(None, "reel", reel_input="11, P01.5", skip_prompts=True)
+    generate_list.assert_called_once_with(
+        None, "reel", reel_input="11, P01.5", skip_prompts=True
+    )
     assert process_reel.call_count == 1
     # First positional argument should be the clips list returned from generate_list.
     assert process_reel.call_args[0][0] is clips

@@ -3,14 +3,23 @@ from types import SimpleNamespace
 from typing import cast
 
 import files
-import clipgen
 import utils
+import viewer
 import spreadsheet
 from spreadsheet import SheetContext
 from utils import ClipRecord
 
 
-def _make_context(sheet_data, id_cell, observation_cell, category_cell=None, num_participants=2, study_name="study", baseline_row_idx=None, filename_row_idx=None):
+def _make_context(
+    sheet_data,
+    id_cell,
+    observation_cell,
+    category_cell=None,
+    num_participants=2,
+    study_name="study",
+    baseline_row_idx=None,
+    filename_row_idx=None,
+):
     """Helper to build a SheetContext for tests."""
     if category_cell is None:
         category_cell = SimpleNamespace(row=id_cell.row, col=5)
@@ -79,7 +88,9 @@ def test_prepare_clip_sanitizes_and_sets_defaults(monkeypatch, make_clip):
     assert prepared["category"] == "uncategorized"
 
 
-def test_build_artifact_records_for_clip_and_finalize_timeline_data(tmp_path, monkeypatch):
+def test_build_artifact_records_for_clip_and_finalize_timeline_data(
+    tmp_path, monkeypatch
+):
     monkeypatch.chdir(tmp_path)
 
     clip: ClipRecord = {
@@ -93,7 +104,7 @@ def test_build_artifact_records_for_clip_and_finalize_timeline_data(tmp_path, mo
     base_video = "study_P01.mp4"
     segment_details = [("out_1.mp4", "00:10", "00:20")]
 
-    artifacts = clipgen.build_artifact_records_for_clip(
+    artifacts = viewer.build_artifact_records_for_clip(
         clip,
         base_video,
         segment_details,
@@ -109,7 +120,7 @@ def test_build_artifact_records_for_clip_and_finalize_timeline_data(tmp_path, mo
     assert a["cellCol"] == 2
     assert "key" in a["annotations"]
 
-    data = clipgen.finalize_timeline_data(
+    data = viewer.finalize_timeline_data(
         artifacts,
         study="study",
         participant="P01",
@@ -218,4 +229,3 @@ def test_no_baseline_row_means_relative_timestamps_only():
     # Without a baseline row, times remain absolute clock values
     assert prepared_p01["times"] == [("09:13:00", "09:14:00")]
     assert prepared_p02["times"] == [("09:20:00", "09:21:00")]
-

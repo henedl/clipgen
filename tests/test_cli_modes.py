@@ -5,6 +5,7 @@ import pytest
 
 import cli
 import clipgen
+import viewer as viewer_mod
 
 
 def _args(**overrides):
@@ -33,7 +34,9 @@ def _args(**overrides):
 def test_run_cli_mode_rejects_timeline_in_mixed_mode(monkeypatch):
     args = _args(mixed="timeline, 11")
 
-    monkeypatch.setattr(cli.spreadsheet, "parse_reel_input", lambda value: {"timeline": True})
+    monkeypatch.setattr(
+        cli.spreadsheet, "parse_reel_input", lambda value: {"timeline": True}
+    )
 
     with pytest.raises(SystemExit) as exc:
         cli.run_cli_mode(None, args, cli.CliModeArgs(None, None, None, None))
@@ -70,10 +73,11 @@ def test_run_cli_mode_timeline_reel_and_viewer(monkeypatch):
     monkeypatch.setattr(clipgen, "process_reel", process_reel)
 
     viewer_path = "clips_viewer.html"
-    monkeypatch.setattr(clipgen, "generate_timeline_viewer", lambda _data: viewer_path)
+    monkeypatch.setattr(
+        viewer_mod, "generate_timeline_viewer", lambda _data: viewer_path
+    )
     monkeypatch.setattr(cli.utils, "info_print", lambda _msg: None)
 
     cli.run_cli_mode(worksheet, args, parsed)
 
     process_reel.assert_called_once()
-    assert process_reel.call_args.kwargs["collect_artifacts"] is True

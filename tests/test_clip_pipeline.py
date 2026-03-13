@@ -9,10 +9,14 @@ def _prepared_clip(raw_clip, times):
     return prepared
 
 
-def test_process_clips_counts_generated_segments_for_all_formats(monkeypatch, make_clip):
+def test_process_clips_counts_generated_segments_for_all_formats(
+    monkeypatch, make_clip
+):
     raw_clip = make_clip()
     times = [("00:10", "00:20"), ("00:30", "00:40")]
-    monkeypatch.setattr(clipgen.files, "prepare_clip", lambda clip: _prepared_clip(clip, times))
+    monkeypatch.setattr(
+        clipgen.files, "prepare_clip", lambda clip: _prepared_clip(clip, times)
+    )
     monkeypatch.setattr(clipgen.Path, "is_file", lambda self: True)
     monkeypatch.setattr(clipgen.utils, "create_progress_bar", lambda: None)
 
@@ -31,9 +35,9 @@ def test_process_clips_counts_generated_segments_for_all_formats(monkeypatch, ma
     monkeypatch.setattr(clipgen.video, "extract_screenshot", extract_screenshot)
     monkeypatch.setattr(clipgen.video, "extract_gif", extract_gif)
 
-    assert clipgen.process_clips([raw_clip], output_format="clip") == 2
-    assert clipgen.process_clips([raw_clip], output_format="screen") == 2
-    assert clipgen.process_clips([raw_clip], output_format="gif") == 2
+    assert clipgen.process_clips([raw_clip], output_format="clip")[0] == 2
+    assert clipgen.process_clips([raw_clip], output_format="screen")[0] == 2
+    assert clipgen.process_clips([raw_clip], output_format="gif")[0] == 2
 
     assert run_ffmpeg.call_count == 2
     assert extract_screenshot.call_count == 2
@@ -49,8 +53,12 @@ def test_prepare_clip_converts_clock_timestamps_to_relative(monkeypatch, make_cl
         # Return cleaned value and empty annotations.
         return value, {}, set()
 
-    monkeypatch.setattr(clipgen.utils, "parse_cell_annotations", fake_parse_cell_annotations)
-    monkeypatch.setattr(clipgen.utils, "has_non_ignored_timestamp_content", lambda _v: True)
+    monkeypatch.setattr(
+        clipgen.utils, "parse_cell_annotations", fake_parse_cell_annotations
+    )
+    monkeypatch.setattr(
+        clipgen.utils, "has_non_ignored_timestamp_content", lambda _v: True
+    )
 
     # 09:15:00-09:16:30 should become 3:00-4:30 relative to 09:12:00 baseline.
     raw_cell_value = "09:15:00-09:16:30"
@@ -63,21 +71,25 @@ def test_prepare_clip_converts_clock_timestamps_to_relative(monkeypatch, make_cl
 def test_process_clips_skips_when_source_video_missing(monkeypatch, make_clip):
     raw_clip = make_clip()
     monkeypatch.setattr(
-        clipgen.files, "prepare_clip", lambda clip: _prepared_clip(clip, [("00:10", "00:20")])
+        clipgen.files,
+        "prepare_clip",
+        lambda clip: _prepared_clip(clip, [("00:10", "00:20")]),
     )
     monkeypatch.setattr(clipgen.Path, "is_file", lambda self: False)
     monkeypatch.setattr(clipgen.utils, "create_progress_bar", lambda: None)
     run_ffmpeg = Mock(return_value=True)
     monkeypatch.setattr(clipgen.video, "run_ffmpeg", run_ffmpeg)
 
-    assert clipgen.process_clips([raw_clip], output_format="clip") == 0
+    assert clipgen.process_clips([raw_clip], output_format="clip")[0] == 0
     run_ffmpeg.assert_not_called()
 
 
 def test_process_reel_concatenates_and_cleans_temp_parts(monkeypatch, make_clip):
     raw_clips = [make_clip(row=3, col=2), make_clip(row=4, col=2)]
     monkeypatch.setattr(
-        clipgen.files, "prepare_clip", lambda clip: _prepared_clip(clip, [("00:10", "00:20")])
+        clipgen.files,
+        "prepare_clip",
+        lambda clip: _prepared_clip(clip, [("00:10", "00:20")]),
     )
     monkeypatch.setattr(clipgen.utils, "create_progress_bar", lambda: None)
 
@@ -101,7 +113,7 @@ def test_process_reel_concatenates_and_cleans_temp_parts(monkeypatch, make_clip)
     monkeypatch.setattr(clipgen.video, "concatenate_clips", concat)
     monkeypatch.setattr(clipgen.Path, "unlink", unlink)
 
-    result = clipgen.process_reel(raw_clips, output_file="reel.mp4")
+    result, _artifacts = clipgen.process_reel(raw_clips, output_file="reel.mp4")
     assert result == 1
     concat.assert_called_once()
     concat_args = concat.call_args.args[0]
@@ -112,15 +124,21 @@ def test_process_reel_concatenates_and_cleans_temp_parts(monkeypatch, make_clip)
 def test_process_reel_returns_zero_when_no_segments_generated(monkeypatch, make_clip):
     raw_clips = [make_clip(row=3, col=2)]
     monkeypatch.setattr(
-        clipgen.files, "prepare_clip", lambda clip: _prepared_clip(clip, [("00:10", "00:20")])
+        clipgen.files,
+        "prepare_clip",
+        lambda clip: _prepared_clip(clip, [("00:10", "00:20")]),
     )
     monkeypatch.setattr(clipgen.utils, "create_progress_bar", lambda: None)
-    monkeypatch.setattr(clipgen.files, "get_unique_filename", lambda *_args, **_kwargs: "_reel_part_1.mp4")
+    monkeypatch.setattr(
+        clipgen.files,
+        "get_unique_filename",
+        lambda *_args, **_kwargs: "_reel_part_1.mp4",
+    )
     monkeypatch.setattr(clipgen.video, "run_ffmpeg", lambda **_kwargs: False)
     monkeypatch.setattr(clipgen.Path, "is_file", lambda self: True)
     concat = Mock(return_value=True)
     monkeypatch.setattr(clipgen.video, "concatenate_clips", concat)
 
-    result = clipgen.process_reel(raw_clips, output_file="reel.mp4")
+    result, _artifacts = clipgen.process_reel(raw_clips, output_file="reel.mp4")
     assert result == 0
     concat.assert_not_called()
