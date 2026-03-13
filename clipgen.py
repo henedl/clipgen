@@ -111,7 +111,7 @@ _STANDARD_MODES = {
 }
 
 
-# ---- Spreadsheet opening and selection utilities ----
+# ---- Spreadsheet opening and selection ----
 
 
 def _open_worksheet(
@@ -129,24 +129,17 @@ def _open_worksheet(
         return None
 
 
-def _open_with_optional_spinner(
-    label: str, open_fn: Callable[[], Optional[Any]], *, use_spinner: bool
-) -> Optional[Any]:
-    """Run open_fn directly or wrapped in a spinner depending on use_spinner."""
-    if use_spinner:
-        return utils.run_with_spinner(label, open_fn)
-    return open_fn()
-
-
 def open_spreadsheet_by_url(
     gspread_client: Any, url: str, *, use_spinner: bool = False
 ) -> Optional[Any]:
     """Open a spreadsheet by URL."""
-    return _open_with_optional_spinner(
-        "Opening document by URL...",
-        lambda: _open_worksheet(lambda: gspread_client.open_by_url(url), "by URL"),
-        use_spinner=use_spinner,
-    )
+
+    def open_fn() -> Optional[Any]:
+        return _open_worksheet(lambda: gspread_client.open_by_url(url), "by URL")
+
+    if use_spinner:
+        return utils.run_with_spinner("Opening document by URL...", open_fn)
+    return open_fn()
 
 
 def open_spreadsheet_by_index(
@@ -161,13 +154,15 @@ def open_spreadsheet_by_index(
     doc_name = doc_list[index - 1].strip()
     if not use_spinner:
         utils.standard_print(f"Opening document: {doc_name}")
-    return _open_with_optional_spinner(
-        f"Opening document: {doc_name}...",
-        lambda: _open_worksheet(
+
+    def open_fn() -> Optional[Any]:
+        return _open_worksheet(
             lambda: gspread_client.open(doc_name), f"at index {index}"
-        ),
-        use_spinner=use_spinner,
-    )
+        )
+
+    if use_spinner:
+        return utils.run_with_spinner(f"Opening document: {doc_name}...", open_fn)
+    return open_fn()
 
 
 def open_spreadsheet_by_name(
@@ -180,56 +175,13 @@ def open_spreadsheet_by_name(
     matched_name = doc_list[chosen_index].strip()
     if not use_spinner:
         utils.standard_print(f"Opening document: {matched_name}")
-    return _open_with_optional_spinner(
-        f"Opening document: {matched_name}...",
-        lambda: _open_worksheet(lambda: gspread_client.open(matched_name), f"'{name}'"),
-        use_spinner=use_spinner,
-    )
 
+    def open_fn() -> Optional[Any]:
+        return _open_worksheet(lambda: gspread_client.open(matched_name), f"'{name}'")
 
-def handle_list_all_command(doc_list: List[str]) -> None:
-    """Handle 'all' command - list all available documents."""
-    utils.info_print("Available documents:")
-    for i, doc in enumerate(doc_list):
-        utils.info_print(f"{i + 1}. {doc.strip()}")
-
-
-def handle_list_new_command(doc_list: List[str]) -> None:
-    """Handle 'new' command - list newest documents."""
-    utils.info_print("Newest documents: (modified or opened most recently)")
-    for i in range(min(config.NUM_NEWEST_DOCS_TO_SHOW, len(doc_list))):
-        utils.info_print(f"{i + 1}. {doc_list[i].strip()}")
-
-
-def handle_error_message(consecutive_open_failures: int, e: Exception) -> None:
-    """Handle error messages with progressive detail based on failure count."""
-    if consecutive_open_failures == 1:
-        utils.error_print(
-            f"Could not access spreadsheet: {e}",
-            [
-                f"Please try again. Type '{config.COMMAND_LIST_ALL}' to see available documents."
-            ],
-        )
-    elif consecutive_open_failures == 2:
-        utils.error_print(
-            "Spreadsheet not found or not accessible.",
-            [
-                "Common causes:",
-                "  - The spreadsheet name is misspelled",
-                "  - The spreadsheet hasn't been shared with your service account",
-                "    (Share it with the email in credentials.json 'client_email' field)",
-                "  - The spreadsheet doesn't contain any worksheets",
-                "",
-                f"  Type '{config.COMMAND_LIST_ALL}' to see accessible documents, or '{config.COMMAND_LIST_NEW}' for recent ones.",
-            ],
-        )
-    else:
-        utils.error_print(
-            str(e),
-            [
-                f"Tip: Use the document index number (1, 2, 3...) from the '{config.COMMAND_LIST_ALL}' list."
-            ],
-        )
+    if use_spinner:
+        return utils.run_with_spinner(f"Opening document: {matched_name}...", open_fn)
+    return open_fn()
 
 
 def _handle_spreadsheet_command(
@@ -246,11 +198,15 @@ def _handle_spreadsheet_command(
         return open_spreadsheet_by_url(gspread_client, input_name, use_spinner=True)
     # Handle 'all' command
     if input_name.startswith(config.COMMAND_LIST_ALL):
-        handle_list_all_command(doc_list)
+        utils.info_print("Available documents:")
+        for i, doc in enumerate(doc_list):
+            utils.info_print(f"{i + 1}. {doc.strip()}")
         return None
     # Handle 'new' command
     if input_name.startswith(config.COMMAND_LIST_NEW):
-        handle_list_new_command(doc_list)
+        utils.info_print("Newest documents: (modified or opened most recently)")
+        for i in range(min(config.NUM_NEWEST_DOCS_TO_SHOW, len(doc_list))):
+            utils.info_print(f"{i + 1}. {doc_list[i].strip()}")
         return None
     # Handle 'last' command
     if input_name.startswith(config.COMMAND_OPEN_LAST):
@@ -305,34 +261,38 @@ def select_spreadsheet(gspread_client: Any, doc_list: List[str]) -> Any:
             gspread.exceptions.GSpreadException,
         ) as e:
             consecutive_open_failures += 1
-            handle_error_message(consecutive_open_failures, e)
+            if consecutive_open_failures == 1:
+                utils.error_print(
+                    f"Could not access spreadsheet: {e}",
+                    [
+                        f"Please try again. Type '{config.COMMAND_LIST_ALL}' to see available documents."
+                    ],
+                )
+            elif consecutive_open_failures == 2:
+                utils.error_print(
+                    "Spreadsheet not found or not accessible.",
+                    [
+                        "Common causes:",
+                        "  - The spreadsheet name is misspelled",
+                        "  - The spreadsheet hasn't been shared with your service account",
+                        "    (Share it with the email in credentials.json 'client_email' field)",
+                        "  - The spreadsheet doesn't contain any worksheets",
+                        "",
+                        f"  Type '{config.COMMAND_LIST_ALL}' to see accessible documents, or '{config.COMMAND_LIST_NEW}' for recent ones.",
+                    ],
+                )
+            else:
+                utils.error_print(
+                    str(e),
+                    [
+                        f"Tip: Use the document index number (1, 2, 3...) from the '{config.COMMAND_LIST_ALL}' list."
+                    ],
+                )
         except Exception as e:
             utils.error_print(f"Could not open document: {e}")
 
 
-# ---- Mixed selector helpers ----
-
-
-def _classify_mixed_selectors(raw_input: str) -> Tuple[List[str], bool]:
-    """Parse mixed selector input and return (non_empty_type_names, has_timeline).
-
-    Returns:
-        Tuple of (list of present selector type names like ['lines', 'cells'],
-                  whether timeline selector is present)
-    """
-    parsed = spreadsheet.parse_reel_input(raw_input)
-    selector_types = [
-        ("batch", bool(parsed.get("batch"))),
-        ("filter", bool(parsed.get("filter"))),
-        ("lines", len(parsed["lines"]) > 0),
-        ("ranges", len(parsed["ranges"]) > 0),
-        ("cells", len(parsed["cells"]) > 0),
-        ("participants", len(parsed["participants"]) > 0),
-        ("categories", len(parsed["categories"]) > 0),
-    ]
-    non_empty = [name for name, present in selector_types if present]
-    return (non_empty, bool(parsed.get("timeline")))
-
+# ---- Shared helpers ----
 
 _SELECTION_MODE_HELP = [
     "    b or batch   - Generate all clips in the spreadsheet",
@@ -353,9 +313,6 @@ _ALL_MODE_HELP = _SELECTION_MODE_HELP + [
 ]
 
 
-# ---- Shared input resolution ----
-
-
 def _resolve_unrecognized_input(
     worksheet: Any, user_input: str, *, help_lines: List[str]
 ) -> Optional[List[ClipRecord]]:
@@ -370,7 +327,19 @@ def _resolve_unrecognized_input(
         utils.standard_print(f"  {detected_mode.capitalize()} mode detected.")
         return spreadsheet.generate_list(worksheet, detected_mode, **detected_kwargs)
 
-    non_empty_types, has_timeline = _classify_mixed_selectors(user_input)
+    parsed = spreadsheet.parse_reel_input(user_input)
+    selector_types = [
+        ("batch", bool(parsed.get("batch"))),
+        ("filter", bool(parsed.get("filter"))),
+        ("lines", len(parsed["lines"]) > 0),
+        ("ranges", len(parsed["ranges"]) > 0),
+        ("cells", len(parsed["cells"]) > 0),
+        ("participants", len(parsed["participants"]) > 0),
+        ("categories", len(parsed["categories"]) > 0),
+    ]
+    non_empty_types = [name for name, present in selector_types if present]
+    has_timeline = bool(parsed.get("timeline"))
+
     if not non_empty_types:
         utils.info_print(f"  Unknown mode or input '{user_input}'. Available modes:")
         for line in help_lines:
@@ -409,7 +378,374 @@ def _run_standard_mode(mode: str, worksheet: Any) -> Optional[List[ClipRecord]]:
     return gen_fn(ctx, result)
 
 
-# ---- Interactive selection helpers (reel, reel-late, screen/gif, browse) ----
+def _print_run_summary(message: str) -> None:
+    """Print a run summary block with newlines and a Summary header."""
+    utils.info_print("")
+    utils.print_mode_heading("Summary", "mode.selection")
+    utils.info_print(message)
+    utils.info_print("")
+
+
+def _is_excel_worksheet(worksheet: Any) -> bool:
+    """Return True if worksheet is the Excel adapter (local file, no URL)."""
+    spread = getattr(worksheet, "spreadsheet", None)
+    return spread is not None and getattr(spread, "url", None) is None
+
+
+# ---- Clip processing pipeline ----
+
+
+def _check_source_video(
+    clip: ClipRecord, missing_videos: Set[str], skip_detail: str
+) -> Optional[str]:
+    """Return the expected source video path if it exists; log a detailed error once per missing file.
+
+    The expected filename is derived from clip['study'] and clip['participant'] by default,
+    but can be overridden per-participant via an optional source_filename field.
+    Paths already seen in missing_videos are not reported again.
+    """
+    override = clip.get("source_filename")
+    base_name = files.get_source_video_filename(
+        clip["study"], clip["participant"], override
+    )
+    full_path = utils.resolve_input_path(base_name)
+    if full_path.is_file():
+        return str(full_path)
+
+    full_path_str = str(full_path)
+    if full_path_str not in missing_videos:
+        missing_videos.add(full_path_str)
+        utils.error_print(
+            f"Source video file not found: '{base_name}'",
+            [
+                f"Expected location: {full_path_str}",
+                skip_detail,
+            ],
+        )
+    return None
+
+
+def _prepare_and_check_clip(
+    clip: ClipRecord, missing_videos: Set[str]
+) -> Tuple[ClipRecord, Optional[str]]:
+    """Prepare one clip and validate that its source video exists.
+
+    Returns:
+        Tuple of (prepared clip dict, source video path or None).
+        When None is returned for source video, the clip should be skipped.
+    """
+    clip = files.prepare_clip(clip)
+    if not clip["times"]:
+        return (clip, None)
+
+    base_video = _check_source_video(
+        clip,
+        missing_videos,
+        f"Clips for participant '{clip['participant']}' in study '{clip['study']}' will be skipped.",
+    )
+    return (clip, base_video)
+
+
+def _process_single_clip_segments(
+    clip: ClipRecord,
+    base_video: str,
+    missing_videos: Set[str],
+    *,
+    filename_prefix: str = "",
+    output_format: str = "clip",
+    collect_paths: bool = False,
+) -> Tuple[int, List[Tuple[str, str, str]]]:
+    """Process one clip's segments: run ffmpeg for each (start, end), optionally collect output paths.
+
+    Caller must have already called prepare_clip(clip). Does not add to missing_videos; caller handles that.
+
+    Args:
+        clip: Prepared clip dict with 'times', 'category', 'study', 'participant', 'desc'
+        base_video: Path to source video file
+        missing_videos: Set of already-reported missing paths (read-only here)
+        filename_prefix: Prefix for output filename (e.g. '_reel_part_' for reel)
+        collect_paths: If True, return list of output paths; otherwise return empty list
+
+    Returns:
+        (number of segments successfully generated, list of output paths if collect_paths else [])
+    """
+    generated = 0
+    output_paths: List[Tuple[str, str, str]] = []
+    extension_map = {
+        "clip": config.FILEFORMAT,
+        "screen": ".png",
+        "gif": ".gif",
+    }
+    file_extension = extension_map.get(output_format)
+    if not file_extension:
+        utils.error_print(f"Unsupported output format: '{output_format}'")
+        return (generated, output_paths)
+
+    template = f"{filename_prefix}[{clip['category']}] {clip['study']} {clip['participant']} {clip['desc']}{file_extension}"
+    for start_time, end_time in clip["times"]:
+        try:
+            out_name = files.get_unique_filename(template, file_format=file_extension)
+            if config.DEBUGGING:
+                ic(out_name)
+        except (TypeError, UnicodeEncodeError, UnicodeDecodeError) as e:
+            if config.DEBUGGING:
+                ic(e, clip)
+            utils.error_print(
+                f"Character encoding issue occurred: {e}",
+                [
+                    f"Category: '{clip['category']}', Study: '{clip['study']}', Participant: '{clip['participant']}'",
+                    "Try simplifying the description or category names to use only ASCII characters.",
+                ],
+            )
+            return (generated, output_paths)
+        if output_format == "clip":
+            ok = video.run_ffmpeg(
+                input_file=base_video,
+                output_file=out_name,
+                start_pos=start_time,
+                end_pos=end_time,
+                reencode=config.REENCODING,
+            )
+            if ok and config.TITLECARDS_ENABLED:
+                ok = titlecards.prepend_titlecard_to_clip(clip, out_name)
+            if ok:
+                ok = titlecards.append_endcard_to_clip(out_name)
+        elif output_format == "screen":
+            ok = video.extract_screenshot(
+                input_file=base_video,
+                output_file=out_name,
+                timestamp=start_time,
+            )
+        else:  # output_format == 'gif'
+            ok = video.extract_gif(
+                input_file=base_video,
+                output_file=out_name,
+                timestamp=start_time,
+                duration_seconds=config.DEFAULT_GIF_DURATION_SECONDS,
+            )
+        if ok:
+            generated += 1
+            if collect_paths:
+                output_paths.append((out_name, start_time, end_time))
+    return (generated, output_paths)
+
+
+def _run_clip_pipeline(
+    clips_list: List[Any],
+    *,
+    empty_warning: str,
+    intro_message: str,
+    task_label: str,
+    per_clip_fn: Callable[[Any, Set[str]], Any],
+    show_fallback_counter: bool = False,
+) -> Tuple[List[Any], Set[str]]:
+    """Run shared clip-processing pipeline and return per-clip results."""
+    if not clips_list:
+        utils.warning_print(empty_warning)
+        return ([], set())
+
+    utils.standard_print(intro_message)
+    missing_videos: Set[str] = set()
+
+    def wrapped_process(clip: Any) -> Any:
+        return per_clip_fn(clip, missing_videos)
+
+    total_clips = len(clips_list)
+    progress = utils.create_progress_bar()
+    results: List[Any] = []
+
+    if progress:
+        with progress:
+            task = progress.add_task(task_label, total=total_clips)
+            for clip in clips_list:
+                desc_preview = (clip.get("desc") or "")[
+                    : config.PROGRESS_DESCRIPTION_LENGTH
+                ]
+                participant = clip.get("participant", "")
+                progress.update(task, description=f"[{participant}] {desc_preview}...")
+                results.append(wrapped_process(clip))
+                progress.update(task, advance=1)
+    else:
+        for index, clip in enumerate(clips_list, start=1):
+            if (
+                show_fallback_counter
+                and getattr(config, "VERBOSITY", config.STANDARD) >= config.VERBOSE
+                and total_clips > 1
+            ):
+                utils.verbose_print(f"Processing clip {index} of {total_clips}...")
+            results.append(wrapped_process(clip))
+
+    if missing_videos:
+        utils.standard_print(f"* Missing source video files: {len(missing_videos)}")
+    return (results, missing_videos)
+
+
+def process_clips(
+    clips_list: List[ClipRecord],
+    output_format: str = "clip",
+) -> Tuple[int, List[Dict[str, Any]]]:
+    """Process and generate outputs from the clips list.
+
+    Returns:
+        Tuple of (count of files generated, list of artifact records).
+    """
+    if config.DEBUGGING:
+        ic(len(clips_list))
+
+    all_artifacts: List[Dict[str, Any]] = []
+
+    def process_single_clip(clip: Any, missing_videos: Set[str]) -> Tuple[int, int]:
+        """Process a single clip and return (generated, skipped)."""
+        clip, base_video = _prepare_and_check_clip(clip, missing_videos)
+        if not clip["times"]:
+            return (0, 1)
+        if base_video is None:
+            return (0, len(clip["times"]))
+
+        generated_count, segment_details = _process_single_clip_segments(
+            clip,
+            base_video,
+            missing_videos,
+            output_format=output_format,
+            collect_paths=True,
+        )
+        if segment_details:
+            all_artifacts.extend(
+                viewer.build_artifact_records_for_clip(
+                    clip, base_video, segment_details, output_format
+                )
+            )
+        skipped_count = (
+            len(clip["times"]) - generated_count
+            if generated_count < len(clip["times"])
+            else 0
+        )
+        return (generated_count, skipped_count)
+
+    results, _ = _run_clip_pipeline(
+        clips_list,
+        empty_warning="No clips to process. No timestamps were found or selected.",
+        intro_message="\n* ffmpeg is set to never prompt for input and will always overwrite.\n  Only warns if close to crashing.\n",
+        task_label="Processing clips",
+        per_clip_fn=process_single_clip,
+        show_fallback_counter=True,
+    )
+    outputs_generated = sum(generated_count for generated_count, _ in results)
+    outputs_skipped = sum(skipped_count for _, skipped_count in results)
+
+    item_name = {
+        "clip": "video(s)",
+        "screen": "screenshot(s)",
+        "gif": "GIF(s)",
+    }.get(output_format, "file(s)")
+    if outputs_skipped > 0:
+        utils.standard_print(
+            f"* Summary: {outputs_generated} {item_name} generated, {outputs_skipped} skipped due to errors."
+        )
+    return (outputs_generated, all_artifacts)
+
+
+def process_reel(
+    clips_list: List[ClipRecord],
+    output_file: Optional[str] = None,
+) -> Tuple[int, List[Dict[str, Any]]]:
+    """Process clips for reel mode: generate individual clips, concatenate into one video, clean up.
+
+    Returns:
+        Tuple of (1 if reel generated successfully else 0, artifact records list).
+        Artifact collection for reels is reserved for a future enhancement;
+        the artifacts list is always empty for now.
+    """
+    if not clips_list:
+        utils.warning_print(
+            "No clips to process for reel. No timestamps were found or selected."
+        )
+        return (0, [])
+
+    study_name = ""
+    for clip in clips_list:
+        s = (clip.get("study") or "").strip()
+        if s:
+            study_name = s
+            break
+
+    def process_reel_clip(
+        clip: Any, missing_videos: Set[str]
+    ) -> List[Tuple[str, str, str]]:
+        """Process one clip for reel mode and return generated segment paths."""
+        clip, base_video = _prepare_and_check_clip(clip, missing_videos)
+        if base_video is None:
+            return []
+        _, segment_paths = _process_single_clip_segments(
+            clip,
+            base_video,
+            missing_videos,
+            filename_prefix="_reel_part_",
+            collect_paths=True,
+        )
+        return segment_paths
+
+    all_segment_paths, _ = _run_clip_pipeline(
+        clips_list,
+        empty_warning="No clips to process for reel. No timestamps were found or selected.",
+        intro_message="* Reel mode: generating individual clips, then concatenating into one file.",
+        task_label="Generating reel clips",
+        per_clip_fn=process_reel_clip,
+    )
+    clip_paths = [
+        entry[0] for segment_paths in all_segment_paths for entry in segment_paths
+    ]
+    if not clip_paths:
+        utils.warning_print("No clips were generated for the reel.")
+        return (0, [])
+
+    if output_file is None and study_name:
+        output_file = files.get_unique_filename(f"{study_name}_reel{config.FILEFORMAT}")
+    elif output_file is None:
+        output_file = files.get_unique_filename(f"reel{config.FILEFORMAT}")
+
+    def _concat() -> bool:
+        return video.concatenate_clips(clip_paths, output_file, reencode_on_fail=True)
+
+    ok = (
+        utils.run_with_spinner("Concatenating clips into final reel...", _concat)
+        if utils.use_progress()
+        else _concat()
+    )
+    for path in clip_paths:
+        try:
+            clip_path = Path(path)
+            if clip_path.is_file():
+                clip_path.unlink()
+        except OSError as e:
+            utils.warning_print(
+                f"Could not remove temporary reel clip: {path}", [str(e)]
+            )
+    return (1, []) if ok else (0, [])
+
+
+# ---- Interactive mode flows ----
+
+
+def _print_reencoding_warning(printer: Callable[[str], None]) -> None:
+    """Print a reminder about trade-offs when ffmpeg runs without re-encoding."""
+    printer(
+        "* No re-encoding done, expect:\n- inaccurate start and end timings\n- lossy frames until first keyframe\n- bad timecodes at the end\n"
+    )
+
+
+def _print_completion_message(
+    outputs_generated: int, output_format: str, is_reel: bool
+) -> None:
+    """Print a summary of generated outputs tailored to format and reel mode."""
+    output_dir = utils.get_effective_output_dir()
+    if is_reel:
+        _print_run_summary(f"All done, created 1 reel!\nFiles are in {output_dir}")
+        return
+    noun = {"screen": "screenshots", "gif": "GIFs"}.get(output_format, "videos")
+    _print_run_summary(
+        f"All done, created {outputs_generated} {noun}!\nFiles are in {output_dir}"
+    )
 
 
 def _prompt_timeline_participant_selection(worksheet: Any) -> Optional[str]:
@@ -715,31 +1051,27 @@ def _run_format_mode_interactive(worksheet: Any, output_format: str) -> None:
     )
 
 
-def select_mode_and_generate(
-    worksheet: Any,
-) -> Tuple[List[ClipRecord], bool, Optional[str]]:
-    """Interactive mode selection. Returns (clips list, is_reel_mode, reel_output_file or None)."""
-    while True:
-        utils.print_mode_heading("Mode selection", "mode.selection")
-        input_mode = utils.read_user_input(
-            "\nEnter mode or input directly:\n"
-            "  Modes: (b)atch, (r)ange, (c)ategory, (l)ine, (ce)ll, (p)articipant, (f)ilter, (s)creen, (g)if, (re)el, (rl) reel-late, (br)owse, (v)iewer\n"
-            '  Or enter mixed selectors directly: e.g. 5, P01.11, 13-16, "Observations"\n>> '
+def _run_viewer_mode(worksheet: Any) -> None:
+    """Generate the timeline viewer from artifacts collected in this interactive session."""
+    if not viewer.INTERACTIVE_ARTIFACTS:
+        utils.info_print(
+            "No artifacts have been generated yet in this interactive session."
         )
-        if not input_mode:
-            utils.info_print(
-                "  Please enter a mode or direct input (e.g. P01.11, 5, 7, 13-16, P01)."
-            )
-            continue
-        try:
-            result = _dispatch_interactive_mode(
-                MODE_ALIASES.get(input_mode.strip().lower()), worksheet, input_mode
-            )
-            if result is not None:
-                return result
-        except gspread.exceptions.GSpreadException as e:
-            utils.error_print(f"Google Sheets API error: {e}")
-            utils.debug_print(f"ERROR Message '{e}', Attempting reconnect")
+        return
+    study = viewer.INTERACTIVE_ARTIFACTS[0].get("study", "")
+    participant = viewer.INTERACTIVE_ARTIFACTS[0].get("participant", "")
+    data = viewer.finalize_timeline_data(
+        viewer.INTERACTIVE_ARTIFACTS,
+        study=study,
+        participant=participant,
+        worksheet_title=getattr(worksheet, "title", ""),
+        is_excel=_is_excel_worksheet(worksheet),
+        mode="interactive",
+        output_format="clip",
+    )
+    viewer_path = viewer.generate_timeline_viewer(data)
+    if viewer_path:
+        utils.info_print(f"Timeline viewer created: {viewer_path}")
 
 
 def _dispatch_interactive_mode(
@@ -782,427 +1114,32 @@ def _dispatch_interactive_mode(
     return (clips, False, None)
 
 
-def _run_viewer_mode(worksheet: Any) -> None:
-    """Generate the timeline viewer from artifacts collected in this interactive session."""
-    if not viewer.INTERACTIVE_ARTIFACTS:
-        utils.info_print(
-            "No artifacts have been generated yet in this interactive session."
-        )
-        return
-    study = viewer.INTERACTIVE_ARTIFACTS[0].get("study", "")
-    participant = viewer.INTERACTIVE_ARTIFACTS[0].get("participant", "")
-    data = viewer.finalize_timeline_data(
-        viewer.INTERACTIVE_ARTIFACTS,
-        study=study,
-        participant=participant,
-        worksheet_title=getattr(worksheet, "title", ""),
-        is_excel=_is_excel_worksheet(worksheet),
-        mode="interactive",
-        output_format="clip",
-    )
-    viewer_path = viewer.generate_timeline_viewer(data)
-    if viewer_path:
-        utils.info_print(f"Timeline viewer created: {viewer_path}")
-
-
-# ---- Clip processing core pipeline ----
-
-
-def _process_single_clip_segments(
-    clip: ClipRecord,
-    base_video: str,
-    missing_videos: Set[str],
-    *,
-    filename_prefix: str = "",
-    output_format: str = "clip",
-    collect_paths: bool = False,
-) -> Tuple[int, List[Tuple[str, str, str]]]:
-    """Process one clip's segments: run ffmpeg for each (start, end), optionally collect output paths.
-
-    Caller must have already called prepare_clip(clip). Does not add to missing_videos; caller handles that.
-
-    Args:
-        clip: Prepared clip dict with 'times', 'category', 'study', 'participant', 'desc'
-        base_video: Path to source video file
-        missing_videos: Set of already-reported missing paths (read-only here)
-        filename_prefix: Prefix for output filename (e.g. '_reel_part_' for reel)
-        collect_paths: If True, return list of output paths; otherwise return empty list
-
-    Returns:
-        (number of segments successfully generated, list of output paths if collect_paths else [])
-    """
-    generated = 0
-    output_paths: List[Tuple[str, str, str]] = []
-    extension_map = {
-        "clip": config.FILEFORMAT,
-        "screen": ".png",
-        "gif": ".gif",
-    }
-    file_extension = extension_map.get(output_format)
-    if not file_extension:
-        utils.error_print(f"Unsupported output format: '{output_format}'")
-        return (generated, output_paths)
-
-    template = f"{filename_prefix}[{clip['category']}] {clip['study']} {clip['participant']} {clip['desc']}{file_extension}"
-    for start_time, end_time in clip["times"]:
-        try:
-            out_name = files.get_unique_filename(template, file_format=file_extension)
-            if config.DEBUGGING:
-                ic(out_name)
-        except (TypeError, UnicodeEncodeError, UnicodeDecodeError) as e:
-            if config.DEBUGGING:
-                ic(e, clip)
-            utils.error_print(
-                f"Character encoding issue occurred: {e}",
-                [
-                    f"Category: '{clip['category']}', Study: '{clip['study']}', Participant: '{clip['participant']}'",
-                    "Try simplifying the description or category names to use only ASCII characters.",
-                ],
-            )
-            return (generated, output_paths)
-        if output_format == "clip":
-            ok = video.run_ffmpeg(
-                input_file=base_video,
-                output_file=out_name,
-                start_pos=start_time,
-                end_pos=end_time,
-                reencode=config.REENCODING,
-            )
-            if ok and config.TITLECARDS_ENABLED:
-                ok = titlecards.prepend_titlecard_to_clip(clip, out_name)
-            if ok:
-                ok = titlecards.append_endcard_to_clip(out_name)
-        elif output_format == "screen":
-            ok = video.extract_screenshot(
-                input_file=base_video,
-                output_file=out_name,
-                timestamp=start_time,
-            )
-        else:  # output_format == 'gif'
-            ok = video.extract_gif(
-                input_file=base_video,
-                output_file=out_name,
-                timestamp=start_time,
-                duration_seconds=config.DEFAULT_GIF_DURATION_SECONDS,
-            )
-        if ok:
-            generated += 1
-            if collect_paths:
-                output_paths.append((out_name, start_time, end_time))
-    return (generated, output_paths)
-
-
-def _print_reencoding_warning(printer: Callable[[str], None]) -> None:
-    """Print a reminder about trade-offs when ffmpeg runs without re-encoding."""
-    printer(
-        "* No re-encoding done, expect:\n- inaccurate start and end timings\n- lossy frames until first keyframe\n- bad timecodes at the end\n"
-    )
-
-
-def _print_run_summary(message: str) -> None:
-    """Print a run summary block with newlines and a Summary header."""
-    utils.info_print("")
-    utils.print_mode_heading("Summary", "mode.selection")
-    utils.info_print(message)
-    utils.info_print("")
-
-
-def _print_completion_message(
-    outputs_generated: int, output_format: str, is_reel: bool
-) -> None:
-    """Print a summary of generated outputs tailored to format and reel mode."""
-    output_dir = utils.get_effective_output_dir()
-    if is_reel:
-        _print_run_summary(f"All done, created 1 reel!\nFiles are in {output_dir}")
-        return
-    noun = {"screen": "screenshots", "gif": "GIFs"}.get(output_format, "videos")
-    _print_run_summary(
-        f"All done, created {outputs_generated} {noun}!\nFiles are in {output_dir}"
-    )
-
-
-def _check_source_video(
-    clip: ClipRecord, missing_videos: Set[str], skip_detail: str
-) -> Optional[str]:
-    """Return the expected source video path if it exists; log a detailed error once per missing file.
-
-    The expected filename is derived from clip['study'] and clip['participant'] by default,
-    but can be overridden per-participant via an optional source_filename field.
-    Paths already seen in missing_videos are not reported again.
-    """
-    override = clip.get("source_filename")
-    base_name = files.get_source_video_filename(
-        clip["study"], clip["participant"], override
-    )
-    full_path = utils.resolve_input_path(base_name)
-    if full_path.is_file():
-        return str(full_path)
-
-    full_path_str = str(full_path)
-    if full_path_str not in missing_videos:
-        missing_videos.add(full_path_str)
-        utils.error_print(
-            f"Source video file not found: '{base_name}'",
-            [
-                f"Expected location: {full_path_str}",
-                skip_detail,
-            ],
-        )
-    return None
-
-
-def _prepare_and_check_clip(
-    clip: ClipRecord, missing_videos: Set[str]
-) -> Tuple[ClipRecord, Optional[str]]:
-    """Prepare one clip and validate that its source video exists.
-
-    Returns:
-        Tuple of (prepared clip dict, source video path or None).
-        When None is returned for source video, the clip should be skipped.
-    """
-    clip = files.prepare_clip(clip)
-    if not clip["times"]:
-        return (clip, None)
-
-    base_video = _check_source_video(
-        clip,
-        missing_videos,
-        f"Clips for participant '{clip['participant']}' in study '{clip['study']}' will be skipped.",
-    )
-    return (clip, base_video)
-
-
-def _run_clip_pipeline(
-    clips_list: List[Any],
-    *,
-    empty_warning: str,
-    intro_message: str,
-    task_label: str,
-    per_clip_fn: Callable[[Any, Set[str]], Any],
-    show_fallback_counter: bool = False,
-) -> Tuple[List[Any], Set[str]]:
-    """Run shared clip-processing pipeline and return per-clip results."""
-    if not clips_list:
-        utils.warning_print(empty_warning)
-        return ([], set())
-
-    utils.standard_print(intro_message)
-    missing_videos: Set[str] = set()
-
-    def wrapped_process(clip: Any) -> Any:
-        return per_clip_fn(clip, missing_videos)
-
-    results = _process_with_progress(
-        clips_list,
-        task_label,
-        wrapped_process,
-        show_fallback_counter=show_fallback_counter,
-    )
-    if missing_videos:
-        utils.standard_print(f"* Missing source video files: {len(missing_videos)}")
-    return (results, missing_videos)
-
-
-def _process_with_progress(
-    clips_list: List[Any],
-    task_label: str,
-    process_fn: Callable[[Any], Any],
-    *,
-    show_fallback_counter: bool = False,
-) -> List[Any]:
-    """Run process_fn over a list of clips with optional Rich progress bar feedback."""
-    total_clips = len(clips_list)
-    progress = utils.create_progress_bar()
-    results: List[Any] = []
-
-    if progress:
-        with progress:
-            task = progress.add_task(task_label, total=total_clips)
-            for clip in clips_list:
-                desc_preview = (clip.get("desc") or "")[
-                    : config.PROGRESS_DESCRIPTION_LENGTH
-                ]
-                participant = clip.get("participant", "")
-                progress.update(task, description=f"[{participant}] {desc_preview}...")
-                results.append(process_fn(clip))
-                progress.update(task, advance=1)
-        return results
-
-    for index, clip in enumerate(clips_list, start=1):
-        if (
-            show_fallback_counter
-            and getattr(config, "VERBOSITY", config.STANDARD) >= config.VERBOSE
-            and total_clips > 1
-        ):
-            utils.verbose_print(f"Processing clip {index} of {total_clips}...")
-        results.append(process_fn(clip))
-    return results
-
-
-def process_clips(
-    clips_list: List[ClipRecord],
-    output_format: str = "clip",
-) -> Tuple[int, List[Dict[str, Any]]]:
-    """Process and generate outputs from the clips list.
-
-    Returns:
-        Tuple of (count of files generated, list of artifact records).
-    """
-    if config.DEBUGGING:
-        ic(len(clips_list))
-
-    all_artifacts: List[Dict[str, Any]] = []
-
-    def process_single_clip(clip: Any, missing_videos: Set[str]) -> Tuple[int, int]:
-        """Process a single clip and return (generated, skipped)."""
-        clip, base_video = _prepare_and_check_clip(clip, missing_videos)
-        if not clip["times"]:
-            return (0, 1)
-        if base_video is None:
-            return (0, len(clip["times"]))
-
-        generated_count, segment_details = _process_single_clip_segments(
-            clip,
-            base_video,
-            missing_videos,
-            output_format=output_format,
-            collect_paths=True,
-        )
-        if segment_details:
-            all_artifacts.extend(
-                viewer.build_artifact_records_for_clip(
-                    clip, base_video, segment_details, output_format
-                )
-            )
-        skipped_count = (
-            len(clip["times"]) - generated_count
-            if generated_count < len(clip["times"])
-            else 0
-        )
-        return (generated_count, skipped_count)
-
-    results, _ = _run_clip_pipeline(
-        clips_list,
-        empty_warning="No clips to process. No timestamps were found or selected.",
-        intro_message="\n* ffmpeg is set to never prompt for input and will always overwrite.\n  Only warns if close to crashing.\n",
-        task_label="Processing clips",
-        per_clip_fn=process_single_clip,
-        show_fallback_counter=True,
-    )
-    outputs_generated = sum(generated_count for generated_count, _ in results)
-    outputs_skipped = sum(skipped_count for _, skipped_count in results)
-
-    item_name = {
-        "clip": "video(s)",
-        "screen": "screenshot(s)",
-        "gif": "GIF(s)",
-    }.get(output_format, "file(s)")
-    if outputs_skipped > 0:
-        utils.standard_print(
-            f"* Summary: {outputs_generated} {item_name} generated, {outputs_skipped} skipped due to errors."
-        )
-    return (outputs_generated, all_artifacts)
-
-
-def process_reel(
-    clips_list: List[ClipRecord],
-    output_file: Optional[str] = None,
-) -> Tuple[int, List[Dict[str, Any]]]:
-    """Process clips for reel mode: generate individual clips, concatenate into one video, clean up.
-
-    Returns:
-        Tuple of (1 if reel generated successfully else 0, artifact records list).
-        Artifact collection for reels is reserved for a future enhancement;
-        the artifacts list is always empty for now.
-    """
-    if not clips_list:
-        utils.warning_print(
-            "No clips to process for reel. No timestamps were found or selected."
-        )
-        return (0, [])
-
-    study_name = ""
-    for clip in clips_list:
-        s = (clip.get("study") or "").strip()
-        if s:
-            study_name = s
-            break
-
-    def process_reel_clip(
-        clip: Any, missing_videos: Set[str]
-    ) -> List[Tuple[str, str, str]]:
-        """Process one clip for reel mode and return generated segment paths."""
-        clip, base_video = _prepare_and_check_clip(clip, missing_videos)
-        if base_video is None:
-            return []
-        _, segment_paths = _process_single_clip_segments(
-            clip,
-            base_video,
-            missing_videos,
-            filename_prefix="_reel_part_",
-            collect_paths=True,
-        )
-        return segment_paths
-
-    all_segment_paths, _ = _run_clip_pipeline(
-        clips_list,
-        empty_warning="No clips to process for reel. No timestamps were found or selected.",
-        intro_message="* Reel mode: generating individual clips, then concatenating into one file.",
-        task_label="Generating reel clips",
-        per_clip_fn=process_reel_clip,
-    )
-    clip_paths = [
-        entry[0] for segment_paths in all_segment_paths for entry in segment_paths
-    ]
-    if not clip_paths:
-        utils.warning_print("No clips were generated for the reel.")
-        return (0, [])
-
-    if output_file is None and study_name:
-        output_file = files.get_unique_filename(f"{study_name}_reel{config.FILEFORMAT}")
-    elif output_file is None:
-        output_file = files.get_unique_filename(f"reel{config.FILEFORMAT}")
-
-    def _concat() -> bool:
-        return video.concatenate_clips(clip_paths, output_file, reencode_on_fail=True)
-
-    ok = (
-        utils.run_with_spinner("Concatenating clips into final reel...", _concat)
-        if utils.use_progress()
-        else _concat()
-    )
-    for path in clip_paths:
-        try:
-            clip_path = Path(path)
-            if clip_path.is_file():
-                clip_path.unlink()
-        except OSError as e:
-            utils.warning_print(
-                f"Could not remove temporary reel clip: {path}", [str(e)]
-            )
-    return (1, []) if ok else (0, [])
-
-
-def _is_excel_worksheet(worksheet: Any) -> bool:
-    """Return True if worksheet is the Excel adapter (local file, no URL)."""
-    spread = getattr(worksheet, "spreadsheet", None)
-    return spread is not None and getattr(spread, "url", None) is None
-
-
-# ---- Mode runners ----
-
-
 def run_interactive_mode(worksheet: Any) -> None:
-    """Execute interactive mode - main processing loop.
-
-    Args:
-        worksheet: Selected worksheet
-    """
+    """Execute interactive mode - main processing loop."""
     viewer.INTERACTIVE_ARTIFACTS.clear()
 
     while True:
         try:
-            clips_list, is_reel, reel_output_file = select_mode_and_generate(worksheet)
+            # Mode selection (inlined from select_mode_and_generate)
+            utils.print_mode_heading("Mode selection", "mode.selection")
+            input_mode = utils.read_user_input(
+                "\nEnter mode or input directly:\n"
+                "  Modes: (b)atch, (r)ange, (c)ategory, (l)ine, (ce)ll, (p)articipant, (f)ilter, (s)creen, (g)if, (re)el, (rl) reel-late, (br)owse, (v)iewer\n"
+                '  Or enter mixed selectors directly: e.g. 5, P01.11, 13-16, "Observations"\n>> '
+            )
+            if not input_mode:
+                utils.info_print(
+                    "  Please enter a mode or direct input (e.g. P01.11, 5, 7, 13-16, P01)."
+                )
+                continue
+
+            result = _dispatch_interactive_mode(
+                MODE_ALIASES.get(input_mode.strip().lower()), worksheet, input_mode
+            )
+            if result is None:
+                continue
+            clips_list, is_reel, reel_output_file = result
+
             if not clips_list and not is_reel:
                 yn = utils.read_user_input(
                     "Continue working (y) or quit the program (n)? y/n\n>> "
@@ -1232,6 +1169,9 @@ def run_interactive_mode(worksheet: Any) -> None:
             )
             if yn == "n":
                 break
+        except gspread.exceptions.GSpreadException as e:
+            utils.error_print(f"Google Sheets API error: {e}")
+            utils.debug_print(f"ERROR Message '{e}', Attempting reconnect")
         except utils.TopToSpreadsheet:
             # Escalate to main to trigger spreadsheet reselection.
             raise
