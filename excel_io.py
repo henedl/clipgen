@@ -4,6 +4,7 @@
 Provides a sheet adapter that matches the gspread Worksheet interface
 so spreadsheet.py and clipgen can use local Excel files the same way as Google Sheets.
 """
+
 from pathlib import Path
 from typing import Any, List, NamedTuple, Optional
 
@@ -13,21 +14,16 @@ import config
 import utils
 
 
-def _cell_value_to_str(value: Any) -> str:
-    """Convert a cell value to string for consistency with gspread."""
-    if value is None:
-        return ''
-    return str(value).strip() if isinstance(value, str) else str(value)
-
-
 class _CellLike(NamedTuple):
     """Minimal cell-like object with .row and .col (1-based) for header lookup."""
+
     row: int
     col: int
 
 
 class _SpreadsheetLike(NamedTuple):
     """Minimal spreadsheet-like object with .title and .url = None for Excel."""
+
     title: str
     url: None = None
 
@@ -37,26 +33,29 @@ class ExcelSheetAdapter:
 
     def __init__(self, ws: Any, workbook_path: str) -> None:
         self._ws = ws
-        self.title = getattr(ws, 'title', Path(workbook_path).stem)
+        self.title = getattr(ws, "title", Path(workbook_path).stem)
         self._workbook_path = workbook_path
         self._data: List[List[str]] = []
         self._load_data()
-        self.spreadsheet = _SpreadsheetLike(
-            title=Path(workbook_path).stem
-        )
+        self.spreadsheet = _SpreadsheetLike(title=Path(workbook_path).stem)
 
     def _load_data(self) -> None:
         """Load all cell values into _data as List[List[str]], padded to max column."""
         rows: List[List[str]] = []
         max_col = 0
         for row in self._ws.iter_rows(values_only=True):
-            str_row = [_cell_value_to_str(v) for v in row]
+            str_row = [
+                (str(v).strip() if isinstance(v, str) else str(v))
+                if v is not None
+                else ""
+                for v in row
+            ]
             rows.append(str_row)
             max_col = max(max_col, len(str_row))
         # Pad rows to same length
         for row in rows:
             while len(row) < max_col:
-                row.append('')
+                row.append("")
         self._data = rows
 
     def find(self, text: str) -> Optional[_CellLike]:
@@ -89,16 +88,18 @@ class ExcelSheetAdapter:
 def _get_worksheet_from_workbook(wb: Any) -> Any:
     """Pick worksheet by config.WORKSHEET_PRIORITY, else active/first."""
     sheet_names = wb.sheetnames
-    utils.debug_print(f'Available worksheets: {sheet_names}')
+    utils.debug_print(f"Available worksheets: {sheet_names}")
     for priority_name in config.WORKSHEET_PRIORITY:
         if priority_name in sheet_names:
-            utils.standard_print(f'Using worksheet: {priority_name}')
+            utils.standard_print(f"Using worksheet: {priority_name}")
             return wb[priority_name]
     if sheet_names:
         first = wb[sheet_names[0]]
-        utils.standard_print(f'No matching worksheet found. Using first worksheet: {first.title}')
+        utils.standard_print(
+            f"No matching worksheet found. Using first worksheet: {first.title}"
+        )
         return first
-    raise ValueError('Workbook contains no worksheets')
+    raise ValueError("Workbook contains no worksheets")
 
 
 def open_excel_workbook(path: str) -> Optional[ExcelSheetAdapter]:
@@ -127,10 +128,7 @@ def open_excel_workbook(path: str) -> Optional[ExcelSheetAdapter]:
 
 def list_excel_in_cwd() -> List[str]:
     """Return list of .xlsx file paths in the current working directory (case-insensitive extension)."""
-    return sorted(
-        str(p) for p in Path.cwd().iterdir()
-        if p.suffix.lower() == '.xlsx'
-    )
+    return sorted(str(p) for p in Path.cwd().iterdir() if p.suffix.lower() == ".xlsx")
 
 
 def select_excel_file() -> Optional[ExcelSheetAdapter]:
@@ -141,18 +139,22 @@ def select_excel_file() -> Optional[ExcelSheetAdapter]:
     """
     paths = list_excel_in_cwd()
     if not paths:
-        utils.error_print('No .xlsx files found in the current directory.',
-            ['Place one or more Excel files (.xlsx) in the working directory.'])
+        utils.error_print(
+            "No .xlsx files found in the current directory.",
+            ["Place one or more Excel files (.xlsx) in the working directory."],
+        )
         return None
     if len(paths) == 1:
-        utils.standard_print(f'Opening Excel file: {Path(paths[0]).name}')
+        utils.standard_print(f"Opening Excel file: {Path(paths[0]).name}")
         return open_excel_workbook(paths[0])
     # Multiple files: list and prompt
-    utils.info_print('Excel files in current directory:')
+    utils.info_print("Excel files in current directory:")
     for i, p in enumerate(paths, 1):
-        utils.info_print(f'  {i}. {Path(p).name}')
+        utils.info_print(f"  {i}. {Path(p).name}")
     while True:
-        choice = utils.read_user_input('\nEnter index (1-based) or filename to open (or Enter to cancel):\n>> ').strip()
+        choice = utils.read_user_input(
+            "\nEnter index (1-based) or filename to open (or Enter to cancel):\n>> "
+        ).strip()
         if not choice:
             return None
         # Try as index
@@ -160,7 +162,9 @@ def select_excel_file() -> Optional[ExcelSheetAdapter]:
             idx = int(choice)
             if 1 <= idx <= len(paths):
                 return open_excel_workbook(paths[idx - 1])
-            utils.info_print(f'Invalid index. Enter a number between 1 and {len(paths)}.')
+            utils.info_print(
+                f"Invalid index. Enter a number between 1 and {len(paths)}."
+            )
             continue
         # Try as filename
         for p in paths:

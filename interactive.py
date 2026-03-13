@@ -42,7 +42,40 @@ def prompt_category_selection(ctx: SheetContext) -> Optional[List[str]]:
     if not all_categories:
         utils.info_print("No categories found in the spreadsheet.")
         return None
-    return _interactive_category_selection(all_categories)
+    utils.info_print("Available categories:")
+    for i, cat in enumerate(all_categories, 1):
+        utils.info_print(f"  {i}. {cat}")
+    while True:
+        selection = utils.read_user_input(
+            '\nEnter category numbers (comma-separated, e.g., "1,3,5") or "all":\n>> '
+        )
+        if selection.lower() == "all":
+            return all_categories
+        try:
+            indices = [int(x.strip()) for x in selection.split(",")]
+            selected_categories = []
+            invalid_indices = []
+            for idx in indices:
+                if 1 <= idx <= len(all_categories):
+                    if all_categories[idx - 1] not in selected_categories:
+                        selected_categories.append(all_categories[idx - 1])
+                else:
+                    invalid_indices.append(idx)
+            if invalid_indices:
+                utils.info_print(
+                    f"  Invalid index(es): {', '.join(str(i) for i in invalid_indices)}"
+                )
+            if selected_categories:
+                utils.info_print("Selected categories:")
+                for cat in selected_categories:
+                    utils.info_print(f"  - {cat}")
+                yn = utils.read_user_input("\nIs this correct? y/n\n>> ")
+                if yn == "y":
+                    return selected_categories
+            else:
+                utils.info_print("No valid categories selected. Please try again.")
+        except ValueError:
+            utils.info_print("Please enter valid numbers separated by commas.")
 
 
 def prompt_line_selection(ctx: SheetContext) -> Optional[List[int]]:
@@ -452,44 +485,3 @@ def browse_spreadsheet(sheet: Any) -> None:
                 "Unknown command. Available: up/u, down/d, pageup/pu, pagedown/pd, jump/j <row>, open/o, quit/q"
             )
             utils.info_print("Press Enter to move down one row.")
-
-
-# ---- Internal helpers ----
-
-
-def _interactive_category_selection(categories: List[str]) -> List[str]:
-    """Interactively select one or more category names from a numbered list."""
-    utils.info_print("Available categories:")
-    for i, cat in enumerate(categories, 1):
-        utils.info_print(f"  {i}. {cat}")
-    while True:
-        selection = utils.read_user_input(
-            '\nEnter category numbers (comma-separated, e.g., "1,3,5") or "all":\n>> '
-        )
-        if selection.lower() == "all":
-            return categories
-        try:
-            indices = [int(x.strip()) for x in selection.split(",")]
-            selected_categories = []
-            invalid_indices = []
-            for idx in indices:
-                if 1 <= idx <= len(categories):
-                    if categories[idx - 1] not in selected_categories:
-                        selected_categories.append(categories[idx - 1])
-                else:
-                    invalid_indices.append(idx)
-            if invalid_indices:
-                utils.info_print(
-                    f"  Invalid index(es): {', '.join(str(i) for i in invalid_indices)}"
-                )
-            if selected_categories:
-                utils.info_print("Selected categories:")
-                for cat in selected_categories:
-                    utils.info_print(f"  - {cat}")
-                yn = utils.read_user_input("\nIs this correct? y/n\n>> ")
-                if yn == "y":
-                    return selected_categories
-            else:
-                utils.info_print("No valid categories selected. Please try again.")
-        except ValueError:
-            utils.info_print("Please enter valid numbers separated by commas.")

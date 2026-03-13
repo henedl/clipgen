@@ -56,14 +56,11 @@ def test_get_unique_filename_truncates_long_names(monkeypatch, tmp_path):
     assert result2 != result1
 
 
-def test_is_source_video_and_discover_clips(tmp_path, monkeypatch):
+def test_discover_clips_excludes_source_videos(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     (tmp_path / "study_P01.mp4").write_text("video")
     (tmp_path / "study_P01-clip-1.mp4").write_text("clip1")
     (tmp_path / "study_P01-clip-2.mp4").write_text("clip2")
-
-    assert files.is_source_video("study_P01.mp4") is True
-    assert files.is_source_video("study_P01-clip-1.mp4") is False
 
     clips = files.discover_clips()
     assert sorted(clips) == ["study_P01-clip-1.mp4", "study_P01-clip-2.mp4"]

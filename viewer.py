@@ -20,15 +20,6 @@ import utils
 INTERACTIVE_ARTIFACTS: List[Dict[str, Any]] = []
 
 
-def _get_assets_web_dir() -> Path:
-    """Return the path to the assets/web directory containing viewer templates."""
-    if getattr(sys, "frozen", False):
-        base = Path(sys.executable).resolve().parent
-    else:
-        base = Path(__file__).resolve().parent
-    return base / "assets" / "web"
-
-
 def build_artifact_records_for_clip(
     clip: utils.ClipRecord,
     base_video: str,
@@ -143,7 +134,11 @@ def generate_timeline_viewer(
 
     Returns the path to the generated HTML, or None on failure.
     """
-    assets_dir = _get_assets_web_dir()
+    if getattr(sys, "frozen", False):
+        assets_base = Path(sys.executable).resolve().parent
+    else:
+        assets_base = Path(__file__).resolve().parent
+    assets_dir = assets_base / "assets" / "web"
     template_path = assets_dir / "viewer.html"
     js_path = assets_dir / "viewer.js"
     css_path = assets_dir / "viewer.css"

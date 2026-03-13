@@ -118,6 +118,33 @@ _CLIPGEN_THEME = (
 console = Console(theme=_CLIPGEN_THEME, highlight=False) if RICH_AVAILABLE else None
 
 
+# ---- Rich output helpers (defined before print functions that use them) ----
+
+
+def _use_rich() -> bool:
+    """Check if Rich output should be used."""
+    return (
+        RICH_AVAILABLE and console is not None and getattr(config, "RICH_COLORS", True)
+    )
+
+
+def _use_panels() -> bool:
+    """Check if Rich panels should be used for errors/warnings/success."""
+    return getattr(config, "RICH_PANELS", True)
+
+
+def use_progress() -> bool:
+    """Check if Rich progress bars should be used."""
+    return (
+        RICH_AVAILABLE
+        and console is not None
+        and getattr(config, "RICH_PROGRESS", True)
+    )
+
+
+# ---- Print functions ----
+
+
 def debug_print(message: str) -> None:
     """Print debug messages when DEBUGGING is enabled."""
     if config.DEBUGGING:
@@ -214,20 +241,6 @@ def warning_print(message: str, details: Optional[List[str]] = None) -> None:
     )
 
 
-def success_print(message: str) -> None:
-    """Print success/completion messages. Always displayed regardless of verbosity.
-
-    Args:
-        message: Success message
-    """
-    _styled_print(
-        message,
-        prefix="✓ ",
-        prefix_style="success.prefix",
-        panel_border_style="green",
-    )
-
-
 def info_print(message: str) -> None:
     """Print informational messages. Always displayed regardless of verbosity.
 
@@ -235,6 +248,9 @@ def info_print(message: str) -> None:
         message: Informational message
     """
     _styled_print(message, message_style="info")
+
+
+# ---- Rich browse table and progress helpers ----
 
 
 def create_browse_table(
@@ -329,27 +345,6 @@ def format_browse_rows_plain(
     return "\n".join(lines)
 
 
-def _use_rich() -> bool:
-    """Check if Rich output should be used."""
-    return (
-        RICH_AVAILABLE and console is not None and getattr(config, "RICH_COLORS", True)
-    )
-
-
-def _use_panels() -> bool:
-    """Check if Rich panels should be used for errors/warnings/success."""
-    return getattr(config, "RICH_PANELS", True)
-
-
-def use_progress() -> bool:
-    """Check if Rich progress bars should be used."""
-    return (
-        RICH_AVAILABLE
-        and console is not None
-        and getattr(config, "RICH_PROGRESS", True)
-    )
-
-
 def create_progress_bar(description: str = "Processing"):
     """Create a Rich Progress instance configured for clipgen, or None if unavailable.
 
@@ -409,7 +404,9 @@ def print_mode_heading(label: str, style: Optional[str] = None) -> None:
         print(f"=== {label} ===")
 
 
-# ---- Utility functions ----
+# ---- Directory and path utilities ----
+
+
 def get_effective_input_dir() -> Path:
     """Return the effective input directory for source videos."""
     configured = getattr(config, "INPUT_DIR", "") or ""
@@ -481,6 +478,9 @@ def resolve_output_path(name: str) -> Path:
     return base / path
 
 
+# ---- Filename and study name helpers ----
+
+
 def normalize_study_name(raw_name: str) -> str:
     """Convert study name to a filesystem-safe format.
     Preserves unicode characters for international study names."""
@@ -508,6 +508,18 @@ def sanitize_filename(text: str) -> str:
     return text
 
 
+# ---- Annotation and participant helpers ----
+
+
+def get_known_annotation_map() -> Dict[str, str]:
+    """Return configured annotation tokens mapped to normalized annotation IDs."""
+    configured_map = getattr(config, "ANNOTATION_KEYPHRASES", {"!key": "key"})
+    normalized_map: Dict[str, str] = {}
+    for token, annotation_id in configured_map.items():
+        normalized_map[str(token).strip().lower()] = str(annotation_id).strip().lower()
+    return normalized_map
+
+
 def normalize_participant_id(participant_value: str) -> str:
     """Strip known annotation tokens from a participant header value."""
     if not participant_value:
@@ -520,6 +532,9 @@ def normalize_participant_id(participant_value: str) -> str:
         if token and token.lower() not in known_tokens:
             cleaned_parts.append(token)
     return " ".join(cleaned_parts).strip()
+
+
+# ---- Column index / letter conversion ----
 
 
 def index_to_letter(idx: int) -> str:
@@ -558,6 +573,13 @@ def letter_to_index(letter: str) -> int:
     return column_index - 1
 
 
+# ---- Timestamp parsing pipeline ----
+#
+# Reading order: token splitting/cleaning → add_duration → _parse_single_timestamp_token
+# → higher-level parsers (has_non_ignored_timestamp_content, parse_cell_annotations,
+# parse_timestamps).
+
+
 def _split_timestamp_tokens(cell_value: str) -> List[str]:
     """Split a cell value into normalized timestamp/annotation tokens."""
     return (
@@ -579,68 +601,6 @@ def get_ignored_timestamp_tokens() -> Set[str]:
         if cleaned:
             normalized_tokens.add(cleaned)
     return normalized_tokens
-
-
-def has_non_ignored_timestamp_content(cell_value: str) -> bool:
-    """Return True when cell content is more than ignored timestamp tokens.
-
-    Cells containing only ignored tokens (e.g. "x") should not produce the
-    generic "No valid timestamps found" warning.
-    """
-    ignored_tokens = get_ignored_timestamp_tokens()
-    for raw_token in _split_timestamp_tokens(cell_value):
-        token = _clean_timestamp_token(raw_token)
-        if not token:
-            continue
-        if _parse_single_timestamp_token(token) is not None:
-            return True
-        if token not in ignored_tokens:
-            return True
-    return False
-
-
-def get_known_annotation_map() -> Dict[str, str]:
-    """Return configured annotation tokens mapped to normalized annotation IDs."""
-    configured_map = getattr(config, "ANNOTATION_KEYPHRASES", {"!key": "key"})
-    normalized_map: Dict[str, str] = {}
-    for token, annotation_id in configured_map.items():
-        normalized_map[str(token).strip().lower()] = str(annotation_id).strip().lower()
-    return normalized_map
-
-
-def parse_cell_annotations(
-    cell_value: str, annotation_map: Optional[Dict[str, str]] = None
-) -> Tuple[str, Dict[str, Set[int]], Set[str]]:
-    """Extract inline annotation tokens and map them to parsed timestamp indexes.
-
-    Semantics: an annotation token marks the preceding parseable timestamp token.
-    The returned cleaned cell value has annotation tokens removed.
-    """
-    known_annotations = annotation_map or get_known_annotation_map()
-    cleaned_tokens: List[str] = []
-    segment_annotations: Dict[str, Set[int]] = {}
-    cell_annotations: Set[str] = set()
-    parsed_timestamp_count = 0
-
-    for raw_token in _split_timestamp_tokens(cell_value):
-        token = _clean_timestamp_token(raw_token)
-        if not token:
-            continue
-
-        annotation_id = known_annotations.get(token)
-        if annotation_id:
-            cell_annotations.add(annotation_id)
-            if parsed_timestamp_count > 0:
-                segment_annotations.setdefault(annotation_id, set()).add(
-                    parsed_timestamp_count - 1
-                )
-            continue
-
-        cleaned_tokens.append(token)
-        if _parse_single_timestamp_token(token) is not None:
-            parsed_timestamp_count += 1
-
-    return (" ".join(cleaned_tokens), segment_annotations, cell_annotations)
 
 
 def add_duration(start_time: str) -> Optional[str]:
@@ -680,33 +640,6 @@ def add_duration(start_time: str) -> Optional[str]:
         return None
 
 
-def timestamp_to_seconds(ts_str: str) -> Optional[float]:
-    """Convert MM:SS or HH:MM:SS timestamp string to seconds.
-
-    Args:
-        ts_str: Timestamp string in MM:SS or HH:MM:SS format
-
-    Returns:
-        Total seconds as float, or None if the timestamp cannot be parsed.
-    """
-    ts = (ts_str or "").strip()
-    if not ts:
-        return None
-
-    formats = ["%M:%S", "%H:%M:%S"]
-    for fmt in formats:
-        try:
-            parsed = datetime.strptime(ts, fmt)
-            return float(
-                parsed.hour * config.SECONDS_PER_HOUR
-                + parsed.minute * config.SECONDS_PER_MINUTE
-                + parsed.second
-            )
-        except ValueError:
-            continue
-    return None
-
-
 def _parse_single_timestamp_token(token: str) -> Optional[Tuple[str, str]]:
     """Parse one token into a (start_time, end_time) pair, or None if invalid/skip.
 
@@ -740,6 +673,86 @@ def _parse_single_timestamp_token(token: str) -> Optional[Tuple[str, str]]:
             if end_time is not None:
                 return (token, end_time)
         return None
+    return None
+
+
+def has_non_ignored_timestamp_content(cell_value: str) -> bool:
+    """Return True when cell content is more than ignored timestamp tokens.
+
+    Cells containing only ignored tokens (e.g. "x") should not produce the
+    generic "No valid timestamps found" warning.
+    """
+    ignored_tokens = get_ignored_timestamp_tokens()
+    for raw_token in _split_timestamp_tokens(cell_value):
+        token = _clean_timestamp_token(raw_token)
+        if not token:
+            continue
+        if _parse_single_timestamp_token(token) is not None:
+            return True
+        if token not in ignored_tokens:
+            return True
+    return False
+
+
+def parse_cell_annotations(
+    cell_value: str, annotation_map: Optional[Dict[str, str]] = None
+) -> Tuple[str, Dict[str, Set[int]], Set[str]]:
+    """Extract inline annotation tokens and map them to parsed timestamp indexes.
+
+    Semantics: an annotation token marks the preceding parseable timestamp token.
+    The returned cleaned cell value has annotation tokens removed.
+    """
+    known_annotations = annotation_map or get_known_annotation_map()
+    cleaned_tokens: List[str] = []
+    segment_annotations: Dict[str, Set[int]] = {}
+    cell_annotations: Set[str] = set()
+    parsed_timestamp_count = 0
+
+    for raw_token in _split_timestamp_tokens(cell_value):
+        token = _clean_timestamp_token(raw_token)
+        if not token:
+            continue
+
+        annotation_id = known_annotations.get(token)
+        if annotation_id:
+            cell_annotations.add(annotation_id)
+            if parsed_timestamp_count > 0:
+                segment_annotations.setdefault(annotation_id, set()).add(
+                    parsed_timestamp_count - 1
+                )
+            continue
+
+        cleaned_tokens.append(token)
+        if _parse_single_timestamp_token(token) is not None:
+            parsed_timestamp_count += 1
+
+    return (" ".join(cleaned_tokens), segment_annotations, cell_annotations)
+
+
+def timestamp_to_seconds(ts_str: str) -> Optional[float]:
+    """Convert MM:SS or HH:MM:SS timestamp string to seconds.
+
+    Args:
+        ts_str: Timestamp string in MM:SS or HH:MM:SS format
+
+    Returns:
+        Total seconds as float, or None if the timestamp cannot be parsed.
+    """
+    ts = (ts_str or "").strip()
+    if not ts:
+        return None
+
+    formats = ["%M:%S", "%H:%M:%S"]
+    for fmt in formats:
+        try:
+            parsed = datetime.strptime(ts, fmt)
+            return float(
+                parsed.hour * config.SECONDS_PER_HOUR
+                + parsed.minute * config.SECONDS_PER_MINUTE
+                + parsed.second
+            )
+        except ValueError:
+            continue
     return None
 
 
@@ -813,6 +826,9 @@ def parse_timestamps(
     if config.DEBUGGING:
         ic(parsed_timestamps)
     return parsed_timestamps
+
+
+# ---- Clock/baseline timestamp conversion ----
 
 
 def _clock_to_seconds(ts: str) -> Optional[int]:
@@ -919,6 +935,9 @@ def convert_clock_pairs_to_relative(
     return result
 
 
+# ---- Interactive control flow ----
+
+
 class QuitProgram(Exception):
     """Signal that the user requested to quit the program from an interactive prompt."""
 
@@ -990,6 +1009,9 @@ def set_program_settings() -> bool:
         setattr(config, setting_to_change, new_value)
         return True
     return False
+
+
+# ---- Miscellaneous utilities ----
 
 
 def format_filesize(size_bytes: float, precision: int = 2) -> str:
