@@ -31,13 +31,13 @@ def get_worksheet(spreadsheet: gspread.Spreadsheet) -> gspread.Worksheet:
     # Try each name in priority order
     for priority_name in config.WORKSHEET_PRIORITY:
         if priority_name in worksheet_titles:
-            utils.verbose_print(f'Using worksheet: {priority_name}')
+            utils.standard_print(f'Using worksheet: {priority_name}')
             return spreadsheet.worksheet(priority_name)
 
     # No match found - use first worksheet
     if worksheets:
         first_sheet = worksheets[0]
-        utils.verbose_print(f'No matching worksheet found. Using first worksheet: {first_sheet.title}')
+        utils.standard_print(f'No matching worksheet found. Using first worksheet: {first_sheet.title}')
         return first_sheet
 
     # This shouldn't happen, but handle empty spreadsheet case

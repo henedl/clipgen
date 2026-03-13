@@ -81,7 +81,7 @@ def build_sheet_context(sheet: Any) -> Optional[SheetContext]:
     study_name = sheet_data[0][0]
     if study_name == '':
         study_name = sheet.spreadsheet.title
-    utils.verbose_print(f'\nBeginning work on {study_name}.')
+    utils.standard_print(f'\nBeginning work on {study_name}.')
     study_name = utils.normalize_study_name(study_name)
 
     num_participants = get_num_participants(sheet.row_values(id_cell.row), id_cell, sheet.col_count)
@@ -280,7 +280,7 @@ def generate_list(sheet: Any, mode: str, line_numbers: Optional[List[int]] = Non
 
     # Generate clips according to the selected mode
     if mode == 'batch':
-        utils.verbose_print('Batch mode: generating all possible clips...')
+        utils.standard_print('Batch mode: generating all possible clips...')
         return generate_batch_timestamps(ctx)
 
     if mode == 'category':
@@ -307,8 +307,8 @@ def generate_list(sheet: Any, mode: str, line_numbers: Optional[List[int]] = Non
         if valid is None:
             return []
         range_start, range_end = valid
-        utils.verbose_print(f'Range mode: lines {range_start} to {range_end}')
-        utils.verbose_print(f'Lines selected: {ctx.sheet_data[range_start-1][ctx.observation_cell.col-1]} to {ctx.sheet_data[range_end-1][ctx.observation_cell.col-1]}')
+        utils.standard_print(f'Range mode: lines {range_start} to {range_end}')
+        utils.standard_print(f'Lines selected: {ctx.sheet_data[range_start-1][ctx.observation_cell.col-1]} to {ctx.sheet_data[range_end-1][ctx.observation_cell.col-1]}')
         return generate_range_timestamps(ctx, range_start, range_end)
 
     if mode == 'cell':
@@ -316,7 +316,7 @@ def generate_list(sheet: Any, mode: str, line_numbers: Optional[List[int]] = Non
             utils.error_print("Cell mode requires cell_specs list.",
                 ["Pass cell specs via CLI (-c) or use interactive mode."])
             return []
-        utils.verbose_print(f'Cell mode: processing {len(cell_specs)} cell(s)')
+        utils.standard_print(f'Cell mode: processing {len(cell_specs)} cell(s)')
         return generate_cell_timestamps(ctx, cell_specs)
 
     if mode == 'participant':
@@ -338,21 +338,21 @@ def generate_list(sheet: Any, mode: str, line_numbers: Optional[List[int]] = Non
             utils.error_print(f"Participant(s) not found in spreadsheet headers: {', '.join(invalid)}",
                 [f"Available participants: {', '.join(available_list)}"])
             return []
-        utils.verbose_print(f'Participant mode: generating all clips for {", ".join(participant_ids)}')
+        utils.standard_print(f'Participant mode: generating all clips for {", ".join(participant_ids)}')
         clips = []
         for pid in participant_ids:
             clips.extend(generate_participant_timestamps(ctx, pid))
         return clips
 
     if mode == 'filter':
-        utils.verbose_print('Filter mode: generating key-marked clips...')
+        utils.standard_print('Filter mode: generating key-marked clips...')
         return generate_filter_timestamps(ctx)
 
     if mode == 'reel':
         if reel_input is None or not reel_input.strip():
             utils.info_print('Reel mode: no input provided.')
             return []
-        utils.verbose_print('Reel mode: parsing selectors and collecting clips...')
+        utils.standard_print('Reel mode: parsing selectors and collecting clips...')
         return generate_reel_timestamps(ctx, reel_input.strip())
 
     return []
@@ -375,7 +375,7 @@ def get_num_participants(header_row: List[str], id_cell: Any, col_count: int) ->
         1 for j in range(col_count)
         if header_row[j] and header_row[j][0] in config.PARTICIPANT_PREFIXES
     )
-    utils.verbose_print(f'Found {num_participants} participants in total, spanning columns {id_cell.col+1} to {num_participants+id_cell.col+1}.')
+    utils.standard_print(f'Found {num_participants} participants in total, spanning columns {id_cell.col+1} to {num_participants+id_cell.col+1}.')
     return num_participants
 
 def get_participant_list(header_row: List[str], id_cell: Any, num_participants: int) -> List[str]:
@@ -776,16 +776,16 @@ def generate_line_timestamps(ctx: SheetContext, line_numbers: List[int]) -> List
         List of clip records
     """
     valid_lines = []
-    utils.verbose_print(f'Line mode: processing lines {", ".join(str(n) for n in line_numbers)}')
-    utils.verbose_print('Selected issues:')
+    utils.standard_print(f'Line mode: processing lines {", ".join(str(n) for n in line_numbers)}')
+    utils.standard_print('Selected issues:')
     for line_num in line_numbers:
         if line_num < 1 or line_num > len(ctx.sheet_data):
-            utils.verbose_print(f'  Line {line_num}: [INVALID - out of range]')
+            utils.standard_print(f'  Line {line_num}: [INVALID - out of range]')
         elif ctx.filename_row_idx is not None and line_num - 1 == ctx.filename_row_idx:
-            utils.verbose_print(f'  Line {line_num}: [RESERVED - filename overrides row]')
+            utils.standard_print(f'  Line {line_num}: [RESERVED - filename overrides row]')
         else:
             desc = ctx.sheet_data[line_num-1][ctx.observation_cell.col-1]
-            utils.verbose_print(f'  Line {line_num}: {desc}')
+            utils.standard_print(f'  Line {line_num}: {desc}')
             valid_lines.append(line_num)
 
     if not valid_lines:

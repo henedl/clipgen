@@ -114,9 +114,15 @@ def prepare_clip(clip: ClipRecord) -> ClipRecord:
     
     # Warn if no valid timestamps were parsed, except cells with only ignored tokens (e.g. "x").
     if not clip['times'] and utils.has_non_ignored_timestamp_content(cleaned_cell_value):
-        utils.warning_print(f"No valid timestamps found in cell {cell_ref}",
-            [f"Cell contents: '{clip['cell'].value}'",
-             f"Participant: {clip['participant']}, Description: {clip['desc'][:50]}..."])
+        # Only show this detailed per-cell warning at verbose verbosity.
+        if getattr(config, "VERBOSITY", config.STANDARD) >= config.VERBOSE:
+            utils.warning_print(
+                f"No valid timestamps found in cell {cell_ref}",
+                [
+                    f"Cell contents: '{clip['cell'].value}'",
+                    f"Participant: {clip['participant']}, Description: {clip['desc'][:50]}...",
+                ],
+            )
 
     # Clean description: remove bracketed prefix and sanitize for use in filename
     clip['desc'] = utils.sanitize_filename(_strip_bracket_prefix(clip['desc']))

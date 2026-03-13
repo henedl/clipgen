@@ -118,12 +118,17 @@ def debug_print(message: str) -> None:
 
 
 def verbose_print(message: str) -> None:
-    """Print informational messages when VERBOSE is enabled.
+    """Print informational messages when VERBOSITY is set to the highest level."""
+    if getattr(config, "VERBOSITY", config.STANDARD) >= config.VERBOSE:
+        if _use_rich() and console is not None:
+            console.print(message, style="verbose")
+        else:
+            print(message)
 
-    In interactive mode, VERBOSE is always True.
-    In CLI mode, VERBOSE is False unless -v flag is used.
-    """
-    if config.VERBOSE:
+
+def standard_print(message: str) -> None:
+    """Print informational messages for standard verbosity and above."""
+    if getattr(config, "VERBOSITY", config.STANDARD) >= config.STANDARD:
         if _use_rich() and console is not None:
             console.print(message, style="verbose")
         else:
@@ -371,9 +376,9 @@ def run_with_spinner(message: str, callback: Callable[[], T]) -> T:
 def print_mode_heading(label: str, style: Optional[str] = None) -> None:
     """Print a one-line mode heading (bold, optional color). Plain fallback when Rich unavailable.
     style should be a theme key (e.g. 'mode.spreadsheet') so colors render correctly.
-    No-op when config.VERBOSE is False (e.g. CLI mode without -v).
+    No-op when VERBOSITY is below STANDARD (e.g. CLI mode without -v).
     """
-    if not getattr(config, "VERBOSE", True):
+    if getattr(config, "VERBOSITY", config.STANDARD) < config.STANDARD:
         return
     if _use_rich() and console is not None and style:
         console.print()
@@ -754,14 +759,16 @@ def parse_timestamps(cell_value: str, cell_ref: Optional[str] = None) -> List[Tu
     if skipped_timestamps:
         if config.DEBUGGING:
             ic(skipped_timestamps)
-        cell_info = f" in cell {cell_ref}" if cell_ref else ""
-        details = []
-        for ts in skipped_timestamps[:config.MAX_SKIPPED_TIMESTAMPS_TO_SHOW]:
-            details.append(f"    '{ts}'")
-        if len(skipped_timestamps) > config.MAX_SKIPPED_TIMESTAMPS_TO_SHOW:
-            details.append(f"    ... and {len(skipped_timestamps) - config.MAX_SKIPPED_TIMESTAMPS_TO_SHOW} more")
-        details.append("  Expected formats: MM:SS-MM:SS, HH:MM:SS-HH:MM:SS, or single timestamps like MM:SS")
-        warning_print(f"Skipped {len(skipped_timestamps)} unparseable timestamp(s){cell_info}:", details)
+        # Only show detailed skipped-timestamp warnings at verbose verbosity.
+        if getattr(config, "VERBOSITY", config.STANDARD) >= config.VERBOSE:
+            cell_info = f" in cell {cell_ref}" if cell_ref else ""
+            details = []
+            for ts in skipped_timestamps[:config.MAX_SKIPPED_TIMESTAMPS_TO_SHOW]:
+                details.append(f"    '{ts}'")
+            if len(skipped_timestamps) > config.MAX_SKIPPED_TIMESTAMPS_TO_SHOW:
+                details.append(f"    ... and {len(skipped_timestamps) - config.MAX_SKIPPED_TIMESTAMPS_TO_SHOW} more")
+            details.append("  Expected formats: MM:SS-MM:SS, HH:MM:SS-HH:MM:SS, or single timestamps like MM:SS")
+            warning_print(f"Skipped {len(skipped_timestamps)} unparseable timestamp(s){cell_info}:", details)
 
     if config.DEBUGGING:
         ic(parsed_timestamps)
@@ -847,13 +854,15 @@ def convert_clock_pairs_to_relative(
         )
 
     if skipped:
-        cell_info = f" in cell {cell_ref}" if cell_ref else ""
-        details = [f"    '{s}'" for s in skipped]
-        details.append("  These segments were before the baseline, invalid, or zero/negative length.")
-        warning_print(
-            f"Skipped {len(skipped)} clock-based timestamp segment(s){cell_info} when converting to relative:",
-            details,
-        )
+        # Only show detailed skipped clock-based segment warnings at verbose verbosity.
+        if getattr(config, "VERBOSITY", config.STANDARD) >= config.VERBOSE:
+            cell_info = f" in cell {cell_ref}" if cell_ref else ""
+            details = [f"    '{s}'" for s in skipped]
+            details.append("  These segments were before the baseline, invalid, or zero/negative length.")
+            warning_print(
+                f"Skipped {len(skipped)} clock-based timestamp segment(s){cell_info} when converting to relative:",
+                details,
+            )
 
     return result
 
@@ -904,7 +913,7 @@ def set_program_settings() -> bool:
     Returns:
         True if a setting was changed, False otherwise.
     """
-    SETTINGS_OPTIONS = ['REENCODING', 'FILEFORMAT', 'DEBUGGING', 'MAX_FILESIZE_MB']
+    SETTINGS_OPTIONS = ['REENCODING', 'FILEFORMAT', 'DEBUGGING', 'MAX_FILESIZE_MB', 'VERBOSITY']
 
     info_print('Which setting? Available:')
     info_print(', '.join(SETTINGS_OPTIONS))

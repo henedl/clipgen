@@ -92,11 +92,11 @@ def _get_worksheet_from_workbook(wb: Any) -> Any:
     utils.debug_print(f'Available worksheets: {sheet_names}')
     for priority_name in config.WORKSHEET_PRIORITY:
         if priority_name in sheet_names:
-            utils.verbose_print(f'Using worksheet: {priority_name}')
+            utils.standard_print(f'Using worksheet: {priority_name}')
             return wb[priority_name]
     if sheet_names:
         first = wb[sheet_names[0]]
-        utils.verbose_print(f'No matching worksheet found. Using first worksheet: {first.title}')
+        utils.standard_print(f'No matching worksheet found. Using first worksheet: {first.title}')
         return first
     raise ValueError('Workbook contains no worksheets')
 
@@ -145,7 +145,7 @@ def select_excel_file() -> Optional[ExcelSheetAdapter]:
             ['Place one or more Excel files (.xlsx) in the working directory.'])
         return None
     if len(paths) == 1:
-        utils.verbose_print(f'Opening Excel file: {Path(paths[0]).name}')
+        utils.standard_print(f'Opening Excel file: {Path(paths[0]).name}')
         return open_excel_workbook(paths[0])
     # Multiple files: list and prompt
     utils.info_print('Excel files in current directory:')

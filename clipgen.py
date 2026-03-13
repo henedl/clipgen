@@ -191,7 +191,7 @@ def open_spreadsheet_by_index(
 
     if use_spinner:
         return utils.run_with_spinner(f"Opening document: {doc_name}...", _open)
-    utils.verbose_print(f"Opening document: {doc_name}")
+    utils.standard_print(f"Opening document: {doc_name}")
     return _open()
 
 
@@ -220,8 +220,9 @@ def open_spreadsheet_by_name(
 
         if use_spinner:
             return utils.run_with_spinner(f"Opening document: {matched_name}...", _open)
-        utils.verbose_print(f"Opening document: {matched_name}")
+        utils.standard_print(f"Opening document: {matched_name}")
         return _open()
+
     return None
 
 
@@ -686,7 +687,7 @@ def _run_format_mode_interactive(worksheet: Any, output_format: str) -> None:
             "participant",
             "filter",
         ):
-            utils.verbose_print(f"  {detected_mode.capitalize()} mode detected.")
+            utils.standard_print(f"  {detected_mode.capitalize()} mode detected.")
             clips_list = spreadsheet.generate_list(
                 worksheet, detected_mode, **detected_kwargs
             )
@@ -824,7 +825,9 @@ def select_mode_and_generate(
                 input_mode
             )
             if detected_mode:
-                utils.verbose_print(f"  {detected_mode.capitalize()} mode detected.")
+                utils.standard_print(
+                    f"  {detected_mode.capitalize()} mode detected."
+                )
                 utils.print_mode_heading(
                     f"{detected_mode.capitalize()} mode", f"mode.{detected_mode}"
                 )
@@ -868,7 +871,7 @@ def select_mode_and_generate(
                 continue
 
             selector_summary = ", ".join(non_empty_types)
-            utils.verbose_print(
+            utils.standard_print(
                 f"  Mixed selectors detected ({selector_summary}). Generating individual clips from combined selectors."
             )
             utils.print_mode_heading("Mixed selection", "mode.selection")
@@ -1062,7 +1065,7 @@ def _run_clip_pipeline(
         utils.warning_print(empty_warning)
         return ([], set())
 
-    utils.verbose_print(intro_message)
+    utils.standard_print(intro_message)
     missing_videos: Set[str] = set()
 
     def wrapped_process(clip: Any) -> Any:
@@ -1075,7 +1078,7 @@ def _run_clip_pipeline(
         show_fallback_counter=show_fallback_counter,
     )
     if missing_videos:
-        utils.verbose_print(f"* Missing source video files: {len(missing_videos)}")
+        utils.standard_print(f"* Missing source video files: {len(missing_videos)}")
     return (results, missing_videos)
 
 
@@ -1105,7 +1108,11 @@ def _process_with_progress(
         return results
 
     for index, clip in enumerate(clips_list, start=1):
-        if show_fallback_counter and config.VERBOSE and total_clips > 1:
+        if (
+            show_fallback_counter
+            and getattr(config, "VERBOSITY", config.STANDARD) >= config.VERBOSE
+            and total_clips > 1
+        ):
             utils.verbose_print(f"Processing clip {index} of {total_clips}...")
         results.append(process_fn(clip))
     return results
@@ -1170,7 +1177,7 @@ def process_clips(
         "gif": "GIF(s)",
     }.get(output_format, "file(s)")
     if outputs_skipped > 0:
-        utils.verbose_print(
+        utils.standard_print(
             f"* Summary: {outputs_generated} {item_name} generated, {outputs_skipped} skipped due to errors."
         )
     return (outputs_generated, all_artifacts)

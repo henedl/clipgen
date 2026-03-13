@@ -9,12 +9,15 @@ from icecream import ic
 REENCODING: bool = False
 AUDIO_NORMALIZE: bool = False
 FILEFORMAT: str = '.mp4'
-VERSIONNUM: str = '0.8.22'
+VERSIONNUM: str = '0.8.23'
 TITLECARDS_ENABLED: bool = False
 TITLECARD_DURATION_SECONDS: int = 2
 WORKSHEET_PRIORITY: List[str] = ['Sheet1', 'Data', 'data', 'Observations', 'Data set', 'data set', 'dataset', 'Dataset']
 DEBUGGING: bool = False
-VERBOSE: bool = True  # Set to False in CLI mode unless -v flag is used
+QUIET: int = 0
+STANDARD: int = 1
+VERBOSE: int = 2
+VERBOSITY: int = STANDARD
 
 # Directory configuration
 # When left empty, clipgen will use the current working directory for
@@ -98,6 +101,7 @@ SETTINGS_DESCRIPTIONS: Dict[str, str] = {
     'DEFAULT_DURATION_SECONDS': 'Clip length when only a start time is provided.',
     'MAX_CLIP_DURATION_SECONDS': 'Prompt for confirmation before generating clips longer than this.',
     'DEBUGGING': 'Enable debug output via icecream and skip ffmpeg execution.',
+    'VERBOSITY': 'Verbosity level: 0=quiet (CLI default), 1=standard (interactive default), 2=verbose (most detail).',
     'RICH_COLORS': 'Use colored terminal output via Rich library.',
     'RICH_PANELS': 'Show bordered panels for error, warning, and success messages.',
     'RICH_PROGRESS': 'Display progress bars during batch and reel processing.',

@@ -606,7 +606,7 @@ def concatenate_clips(clip_paths: List[str], output_file: str, reencode_on_fail:
             '-c', 'copy',
             output_file,
         ]
-        utils.verbose_print(f'Concatenating {len(clip_paths)} clips into {output_file}.')
+        utils.standard_print(f'Concatenating {len(clip_paths)} clips into {output_file}.')
         utils.debug_print(f"ffmpeg concat command: {' '.join(ffmpeg_command)}")
         if config.DEBUGGING:
             utils.debug_print('Debugging enabled, not calling ffmpeg for concat.')
@@ -646,7 +646,7 @@ def concatenate_clips(clip_paths: List[str], output_file: str, reencode_on_fail:
         if not _verify_output_file(output_file, "Concat"):
             return False
 
-        utils.verbose_print(f"+ Generated reel '{output_file}' successfully.")
+        utils.standard_print(f"+ Generated reel '{output_file}' successfully.")
         return True
     except OSError as e:
         utils.error_print(f"Concatenation failed: {e}")

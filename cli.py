@@ -185,7 +185,7 @@ Note: Non-interactive mode (using -b, -l, -r, -C, -c, -p, -f, -M, -R, or -T) is 
         "-v",
         "--verbose",
         action="store_true",
-        help="Enable verbose output in non-interactive mode (shows all messages)",
+        help="Increase verbosity (-v = verbose output; default is quiet in CLI, standard in interactive mode)",
     )
     parser.add_argument(
         "--viewer",
@@ -406,7 +406,7 @@ def select_worksheet(
         cwd_name = Path.cwd().name
         worksheet = clipgen.open_spreadsheet_by_name(gspread_client, doc_list, cwd_name)
         if worksheet:
-            utils.verbose_print(
+            utils.standard_print(
                 f"Auto-connecting to spreadsheet: {worksheet.spreadsheet.title}"
             )
         elif cli_mode:
@@ -422,9 +422,9 @@ def select_worksheet(
     if worksheet and config.DEBUGGING:
         ic(worksheet.title)
     if clipgen._is_excel_worksheet(worksheet):
-        utils.verbose_print("Using local Excel file.")
+        utils.standard_print("Using local Excel file.")
     else:
-        utils.verbose_print("Connected to Google Drive!")
+        utils.standard_print("Connected to Google Drive!")
     return worksheet
 
 
@@ -624,8 +624,11 @@ def main() -> None:
         or args.gif
     )
 
-    # Set verbose mode: silent by default in CLI mode, verbose in interactive mode
-    config.VERBOSE = not cli_mode or args.verbose
+    # Set verbosity: quiet by default in CLI mode, standard in interactive mode
+    if cli_mode:
+        config.VERBOSITY = config.VERBOSE if args.verbose else config.QUIET
+    else:
+        config.VERBOSITY = config.VERBOSE if args.verbose else config.STANDARD
 
     # Optional per-run override for titlecards setting
     if getattr(args, "titlecards", None) is not None:
@@ -642,10 +645,10 @@ def main() -> None:
 
     # Change working directory to runtime location (script/executable)
     os.chdir(get_runtime_working_dir())
-    utils.verbose_print(
+    utils.standard_print(
         "-------------------------------------------------------------------------------"
     )
-    utils.verbose_print(
+    utils.standard_print(
         f"Welcome to clipgen v{config.VERSIONNUM}\nWorking directory: {os.getcwd()}\nPlace video files and the credentials.json file in this directory."
     )
     utils.debug_print(
