@@ -12,6 +12,7 @@ import config
 
 # ---- Shared type definitions ----
 
+
 class ClipRecord(TypedDict, total=False):
     """Clip record built by spreadsheet layer, enriched by prepare_clip.
 
@@ -20,6 +21,7 @@ class ClipRecord(TypedDict, total=False):
     Optionally set before prepare_clip: selected_segment_indexes, timestamp_baseline,
     source_filename.
     """
+
     cell: Any  # gspread.Cell or ExcelSheetAdapter equivalent
     desc: str
     study: str
@@ -35,6 +37,7 @@ class ClipRecord(TypedDict, total=False):
 
 class ReelInput(TypedDict):
     """Parsed reel selector input from parse_reel_input."""
+
     batch: bool
     filter: bool
     timeline: bool
@@ -47,6 +50,7 @@ class ReelInput(TypedDict):
 
 class BrowseRow(TypedDict, total=False):
     """Row data for browse mode display."""
+
     row_num: int
     category: str
     description: str
@@ -57,10 +61,18 @@ class BrowseRow(TypedDict, total=False):
 try:
     from rich.console import Console
     from rich.panel import Panel
-    from rich.progress import Progress, BarColumn, TextColumn, TimeElapsedColumn, MofNCompleteColumn, SpinnerColumn
+    from rich.progress import (
+        Progress,
+        BarColumn,
+        TextColumn,
+        TimeElapsedColumn,
+        MofNCompleteColumn,
+        SpinnerColumn,
+    )
     from rich.table import Table
     from rich.text import Text
     from rich.theme import Theme
+
     RICH_AVAILABLE = True
 except ImportError:
     RICH_AVAILABLE = False
@@ -114,7 +126,7 @@ def debug_print(message: str) -> None:
             if c is not None:
                 c.print(f"[debug]! DEBUG[/debug] {message}")
         else:
-            print(f'! DEBUG {message}')
+            print(f"! DEBUG {message}")
 
 
 def verbose_print(message: str) -> None:
@@ -155,7 +167,9 @@ def _styled_print(
                 content.append(f"\n  {detail}", style=details_style)
 
         if panel_border_style and _use_panels():
-            console.print(Panel(content, border_style=panel_border_style, padding=(0, 1)))
+            console.print(
+                Panel(content, border_style=panel_border_style, padding=(0, 1))
+            )
         else:
             console.print(content)
         return
@@ -224,9 +238,8 @@ def info_print(message: str) -> None:
 
 
 def create_browse_table(
-    rows_data: List[BrowseRow],
-    participant_headers: List[str]
-) -> Optional['Table']:
+    rows_data: List[BrowseRow], participant_headers: List[str]
+) -> Optional["Table"]:
     """Create a Rich Table for browse mode display.
 
     Args:
@@ -250,23 +263,29 @@ def create_browse_table(
     # Add fixed columns
     table.add_column("Row", justify="right", style="bold", width=4)
     table.add_column("Category", style="yellow", max_width=15, overflow="ellipsis")
-    table.add_column("Description", max_width=config.BROWSE_DESCRIPTION_MAX_WIDTH, overflow="ellipsis")
+    table.add_column(
+        "Description",
+        max_width=config.BROWSE_DESCRIPTION_MAX_WIDTH,
+        overflow="ellipsis",
+    )
 
     # Add participant columns
     for p_id in participant_headers:
-        table.add_column(p_id, max_width=config.BROWSE_TIMESTAMP_MAX_WIDTH, overflow="fold")
+        table.add_column(
+            p_id, max_width=config.BROWSE_TIMESTAMP_MAX_WIDTH, overflow="fold"
+        )
 
     # Add data rows
     for row in rows_data:
         row_values = [
-            str(row['row_num']),
-            row['category'],
-            row['description'],
+            str(row["row_num"]),
+            row["category"],
+            row["description"],
         ]
         # Add timestamp values for each participant
         for participant_id in participant_headers:
-            timestamp = row['timestamps'].get(participant_id, '-')
-            row_values.append(timestamp if timestamp else '-')
+            timestamp = row["timestamps"].get(participant_id, "-")
+            row_values.append(timestamp if timestamp else "-")
 
         table.add_row(*row_values)
 
@@ -274,8 +293,7 @@ def create_browse_table(
 
 
 def format_browse_rows_plain(
-    rows_data: List[BrowseRow],
-    participant_headers: List[str]
+    rows_data: List[BrowseRow], participant_headers: List[str]
 ) -> str:
     """Format browse rows as plain text (fallback when Rich unavailable).
 
@@ -286,7 +304,7 @@ def format_browse_rows_plain(
     Returns:
         Formatted plain text string
     """
-    lines = ['-' * 60]
+    lines = ["-" * 60]
 
     for row in rows_data:
         lines.append(f"Row {row['row_num']}")
@@ -296,19 +314,19 @@ def format_browse_rows_plain(
         # Get participant timestamps
         participant_data = []
         for participant_id in participant_headers:
-            timestamp = row['timestamps'].get(participant_id)
+            timestamp = row["timestamps"].get(participant_id)
             if timestamp:
                 participant_data.append(f"    {participant_id}: {timestamp}")
 
         if participant_data:
-            lines.append('  Participants:')
+            lines.append("  Participants:")
             lines.extend(participant_data)
         else:
-            lines.append('  Participants: (no timestamps)')
+            lines.append("  Participants: (no timestamps)")
 
-        lines.append('  ---')
+        lines.append("  ---")
 
-    return '\n'.join(lines)
+    return "\n".join(lines)
 
 
 def _use_rich() -> bool:
@@ -323,7 +341,7 @@ def _use_panels() -> bool:
     return getattr(config, "RICH_PANELS", True)
 
 
-def _use_progress() -> bool:
+def use_progress() -> bool:
     """Check if Rich progress bars should be used."""
     return (
         RICH_AVAILABLE
@@ -341,7 +359,7 @@ def create_progress_bar(description: str = "Processing"):
     Returns:
         Configured Progress instance if Rich is available and enabled, else None
     """
-    if not _use_progress():
+    if not use_progress():
         return None
 
     return Progress(
@@ -361,7 +379,7 @@ T = TypeVar("T")
 
 def run_with_spinner(message: str, callback: Callable[[], T]) -> T:
     """Run callback with an indeterminate Rich spinner; if progress disabled, run callback only."""
-    if not _use_progress() or not RICH_AVAILABLE or console is None:
+    if not use_progress() or not RICH_AVAILABLE or console is None:
         return callback()
     with Progress(
         SpinnerColumn(),
@@ -469,30 +487,31 @@ def normalize_study_name(raw_name: str) -> str:
     # Ensure we're working with a string
     name = str(raw_name)
     name = name.lower()
-    name = name.replace('study ', 'study')
-    name = name.replace(' ', '_')
+    name = name.replace("study ", "study")
+    name = name.replace(" ", "_")
     return name
+
 
 def sanitize_filename(text: str) -> str:
     """Remove or replace characters that are unsafe for filenames.
     Preserves unicode characters to support international filenames."""
     # Ensure text is a string and handle unicode properly
     text = str(text)
-    
+
     # Characters that need special replacement
-    text = text.replace('\\', '-')
-    text = text.replace('/', '-')
-    text = text.replace('?', '_')
+    text = text.replace("\\", "-")
+    text = text.replace("/", "-")
+    text = text.replace("?", "_")
     # Characters to remove entirely (filesystem-unsafe characters)
-    for char in ['\'', '\"', '.', '>', '<', '|', ':']:
-        text = text.replace(char, '')
+    for char in ["'", '"', ".", ">", "<", "|", ":"]:
+        text = text.replace(char, "")
     return text
 
 
 def normalize_participant_id(participant_value: str) -> str:
     """Strip known annotation tokens from a participant header value."""
     if not participant_value:
-        return ''
+        return ""
 
     known_tokens = set(get_known_annotation_map().keys())
     cleaned_parts = []
@@ -500,7 +519,7 @@ def normalize_participant_id(participant_value: str) -> str:
         token = part.strip()
         if token and token.lower() not in known_tokens:
             cleaned_parts.append(token)
-    return ' '.join(cleaned_parts).strip()
+    return " ".join(cleaned_parts).strip()
 
 
 def index_to_letter(idx: int) -> str:
@@ -512,11 +531,11 @@ def index_to_letter(idx: int) -> str:
     Returns:
         Letter label (A-Z, then AA, AB, etc.)
     """
-    column_label = ''
+    column_label = ""
     idx += 1  # Convert to 1-based for calculation
     while idx > 0:
         idx -= 1
-        column_label = chr(ord('A') + (idx % 26)) + column_label
+        column_label = chr(ord("A") + (idx % 26)) + column_label
         idx //= 26
     return column_label
 
@@ -535,23 +554,25 @@ def letter_to_index(letter: str) -> int:
         return -1
     column_index = 0
     for char in letter:
-        column_index = column_index * 26 + (ord(char) - ord('A') + 1)
+        column_index = column_index * 26 + (ord(char) - ord("A") + 1)
     return column_index - 1
 
 
 def _split_timestamp_tokens(cell_value: str) -> List[str]:
     """Split a cell value into normalized timestamp/annotation tokens."""
-    return cell_value.lower().replace('+', ' ').replace(';', ' ').replace(',', ' ').split()
+    return (
+        cell_value.lower().replace("+", " ").replace(";", " ").replace(",", " ").split()
+    )
 
 
 def _clean_timestamp_token(token: str) -> str:
     """Normalize one token before timestamp parsing."""
-    return token.strip().rstrip(',').rstrip('-').replace('.', ':')
+    return token.strip().rstrip(",").rstrip("-").replace(".", ":")
 
 
 def get_ignored_timestamp_tokens() -> Set[str]:
     """Return configured ignored non-timestamp tokens in normalized form."""
-    configured_tokens = getattr(config, 'IGNORED_TIMESTAMP_TOKENS', set())
+    configured_tokens = getattr(config, "IGNORED_TIMESTAMP_TOKENS", set())
     normalized_tokens: Set[str] = set()
     for token in configured_tokens:
         cleaned = _clean_timestamp_token(str(token).strip().lower())
@@ -580,7 +601,7 @@ def has_non_ignored_timestamp_content(cell_value: str) -> bool:
 
 def get_known_annotation_map() -> Dict[str, str]:
     """Return configured annotation tokens mapped to normalized annotation IDs."""
-    configured_map = getattr(config, 'ANNOTATION_KEYPHRASES', {'!key': 'key'})
+    configured_map = getattr(config, "ANNOTATION_KEYPHRASES", {"!key": "key"})
     normalized_map: Dict[str, str] = {}
     for token, annotation_id in configured_map.items():
         normalized_map[str(token).strip().lower()] = str(annotation_id).strip().lower()
@@ -588,8 +609,7 @@ def get_known_annotation_map() -> Dict[str, str]:
 
 
 def parse_cell_annotations(
-    cell_value: str,
-    annotation_map: Optional[Dict[str, str]] = None
+    cell_value: str, annotation_map: Optional[Dict[str, str]] = None
 ) -> Tuple[str, Dict[str, Set[int]], Set[str]]:
     """Extract inline annotation tokens and map them to parsed timestamp indexes.
 
@@ -611,38 +631,44 @@ def parse_cell_annotations(
         if annotation_id:
             cell_annotations.add(annotation_id)
             if parsed_timestamp_count > 0:
-                segment_annotations.setdefault(annotation_id, set()).add(parsed_timestamp_count - 1)
+                segment_annotations.setdefault(annotation_id, set()).add(
+                    parsed_timestamp_count - 1
+                )
             continue
 
         cleaned_tokens.append(token)
         if _parse_single_timestamp_token(token) is not None:
             parsed_timestamp_count += 1
 
-    return (' '.join(cleaned_tokens), segment_annotations, cell_annotations)
+    return (" ".join(cleaned_tokens), segment_annotations, cell_annotations)
 
 
 def add_duration(start_time: str) -> Optional[str]:
     """Add default duration to a start timestamp.
-    
+
     Adds DEFAULT_DURATION_SECONDS to the given start timestamp to create
     an end timestamp. Used when only a start time is provided.
-    
+
     Args:
         start_time: Start timestamp in format MM:SS or HH:MM:SS
-        
+
     Returns:
         The new timestamp string with duration added, or None if the timestamp
         format is invalid.
     """
     try:
         if len(start_time) <= config.MAX_MMSS_LENGTH:
-            start_datetime = datetime.strptime(str(start_time), '%M:%S')
-            new_time = start_datetime + timedelta(seconds=config.DEFAULT_DURATION_SECONDS)
-            return new_time.strftime('%M:%S')
+            start_datetime = datetime.strptime(str(start_time), "%M:%S")
+            new_time = start_datetime + timedelta(
+                seconds=config.DEFAULT_DURATION_SECONDS
+            )
+            return new_time.strftime("%M:%S")
         else:
-            start_datetime = datetime.strptime(start_time, '%H:%M:%S')
-            new_time = start_datetime + timedelta(seconds=config.DEFAULT_DURATION_SECONDS)
-            return new_time.strftime('%H:%M:%S')
+            start_datetime = datetime.strptime(start_time, "%H:%M:%S")
+            new_time = start_datetime + timedelta(
+                seconds=config.DEFAULT_DURATION_SECONDS
+            )
+            return new_time.strftime("%H:%M:%S")
     except ValueError:
         warning_print(
             f"Could not parse single timestamp '{start_time}' to add default duration.",
@@ -663,18 +689,23 @@ def timestamp_to_seconds(ts_str: str) -> Optional[float]:
     Returns:
         Total seconds as float, or None if the timestamp cannot be parsed.
     """
-    ts = (ts_str or '').strip()
+    ts = (ts_str or "").strip()
     if not ts:
         return None
 
-    formats = ['%M:%S', '%H:%M:%S']
+    formats = ["%M:%S", "%H:%M:%S"]
     for fmt in formats:
         try:
             parsed = datetime.strptime(ts, fmt)
-            return float(parsed.hour * config.SECONDS_PER_HOUR + parsed.minute * config.SECONDS_PER_MINUTE + parsed.second)
+            return float(
+                parsed.hour * config.SECONDS_PER_HOUR
+                + parsed.minute * config.SECONDS_PER_MINUTE
+                + parsed.second
+            )
         except ValueError:
             continue
     return None
+
 
 def _parse_single_timestamp_token(token: str) -> Optional[Tuple[str, str]]:
     """Parse one token into a (start_time, end_time) pair, or None if invalid/skip.
@@ -691,19 +722,19 @@ def _parse_single_timestamp_token(token: str) -> Optional[Tuple[str, str]]:
     Examples:
         "1:23-1:45" -> ("1:23", "1:45"); "2:30" -> ("2:30", "2:45") with default duration.
     """
-    if token == '':
+    if token == "":
         return None
     # Dash range: "start-end". Require a digit before the dash so we don't
     # treat a leading dash (e.g. "-5") or non-time dash as a range.
-    if '-' in token:
-        dash_pos = token.find('-')
+    if "-" in token:
+        dash_pos = token.find("-")
         if dash_pos > 0 and token[dash_pos - 1].isdigit():
-            return (token[:dash_pos], token[dash_pos + 1:])
+            return (token[:dash_pos], token[dash_pos + 1 :])
         return None
     # Single timestamp with colon: use as start and add default duration for end.
     # Require a digit before the first colon so we only match time-like strings.
-    if ':' in token:
-        colon_pos = token.find(':')
+    if ":" in token:
+        colon_pos = token.find(":")
         if colon_pos > 0 and token[colon_pos - 1].isdigit():
             end_time = add_duration(token)
             if end_time is not None:
@@ -712,7 +743,9 @@ def _parse_single_timestamp_token(token: str) -> Optional[Tuple[str, str]]:
     return None
 
 
-def parse_timestamps(cell_value: str, cell_ref: Optional[str] = None) -> List[Tuple[str, str]]:
+def parse_timestamps(
+    cell_value: str, cell_ref: Optional[str] = None
+) -> List[Tuple[str, str]]:
     """Parse timestamp pairs from a cell value string.
 
     Pipeline: (1) Normalize delimiters to spaces and split into tokens,
@@ -740,13 +773,13 @@ def parse_timestamps(cell_value: str, cell_ref: Optional[str] = None) -> List[Tu
     raw_times = _split_timestamp_tokens(cell_value)
     if config.DEBUGGING:
         ic(raw_times)
-    debug_print(f'raw_times content after split is {raw_times}')
-    debug_print(f'Timestamp list raw_times is {len(raw_times)} entries long')
+    debug_print(f"raw_times content after split is {raw_times}")
+    debug_print(f"Timestamp list raw_times is {len(raw_times)} entries long")
 
     # Clean each token (strip, normalize trailing punctuation, use colon for decimals) and parse
     raw_times = [_clean_timestamp_token(t) for t in raw_times]
     for token in raw_times:
-        debug_print(f'Cleaning timestamp {token}')
+        debug_print(f"Cleaning timestamp {token}")
         pair = _parse_single_timestamp_token(token)
         if pair is not None:
             if config.DEBUGGING and len(pair) == 2:
@@ -763,12 +796,19 @@ def parse_timestamps(cell_value: str, cell_ref: Optional[str] = None) -> List[Tu
         if getattr(config, "VERBOSITY", config.STANDARD) >= config.VERBOSE:
             cell_info = f" in cell {cell_ref}" if cell_ref else ""
             details = []
-            for ts in skipped_timestamps[:config.MAX_SKIPPED_TIMESTAMPS_TO_SHOW]:
+            for ts in skipped_timestamps[: config.MAX_SKIPPED_TIMESTAMPS_TO_SHOW]:
                 details.append(f"    '{ts}'")
             if len(skipped_timestamps) > config.MAX_SKIPPED_TIMESTAMPS_TO_SHOW:
-                details.append(f"    ... and {len(skipped_timestamps) - config.MAX_SKIPPED_TIMESTAMPS_TO_SHOW} more")
-            details.append("  Expected formats: MM:SS-MM:SS, HH:MM:SS-HH:MM:SS, or single timestamps like MM:SS")
-            warning_print(f"Skipped {len(skipped_timestamps)} unparseable timestamp(s){cell_info}:", details)
+                details.append(
+                    f"    ... and {len(skipped_timestamps) - config.MAX_SKIPPED_TIMESTAMPS_TO_SHOW} more"
+                )
+            details.append(
+                "  Expected formats: MM:SS-MM:SS, HH:MM:SS-HH:MM:SS, or single timestamps like MM:SS"
+            )
+            warning_print(
+                f"Skipped {len(skipped_timestamps)} unparseable timestamp(s){cell_info}:",
+                details,
+            )
 
     if config.DEBUGGING:
         ic(parsed_timestamps)
@@ -780,25 +820,33 @@ def _clock_to_seconds(ts: str) -> Optional[int]:
 
     Accepts HH:MM:SS, HH:MM, or MM:SS. Returns None if parsing fails.
     """
-    value = (ts or '').strip()
+    value = (ts or "").strip()
     if not value:
         return None
 
     # Choose format based on number of components to avoid treating "22:00"
     # as 22 minutes instead of 22 hours.
-    parts = value.split(':')
+    parts = value.split(":")
     if len(parts) == 3:
         try:
-            parsed = datetime.strptime(value, '%H:%M:%S')
-            return parsed.hour * config.SECONDS_PER_HOUR + parsed.minute * config.SECONDS_PER_MINUTE + parsed.second
+            parsed = datetime.strptime(value, "%H:%M:%S")
+            return (
+                parsed.hour * config.SECONDS_PER_HOUR
+                + parsed.minute * config.SECONDS_PER_MINUTE
+                + parsed.second
+            )
         except ValueError:
             return None
     if len(parts) == 2:
         # Prefer HH:MM for clock-style values like "22:00"; fall back to MM:SS.
-        for fmt in ('%H:%M', '%M:%S'):
+        for fmt in ("%H:%M", "%M:%S"):
             try:
                 parsed = datetime.strptime(value, fmt)
-                return parsed.hour * config.SECONDS_PER_HOUR + parsed.minute * config.SECONDS_PER_MINUTE + parsed.second
+                return (
+                    parsed.hour * config.SECONDS_PER_HOUR
+                    + parsed.minute * config.SECONDS_PER_MINUTE
+                    + parsed.second
+                )
             except ValueError:
                 continue
         return None
@@ -831,8 +879,10 @@ def convert_clock_pairs_to_relative(
         cell_info = f" in cell {cell_ref}" if cell_ref else ""
         warning_print(
             f"Ignoring invalid baseline timestamp '{baseline}'{cell_info}.",
-            ["Baseline must use clock format like HH:MM:SS or MM:SS.",
-             "Timestamps in this column will be treated as relative."],
+            [
+                "Baseline must use clock format like HH:MM:SS or MM:SS.",
+                "Timestamps in this column will be treated as relative.",
+            ],
         )
         return pairs
 
@@ -858,13 +908,16 @@ def convert_clock_pairs_to_relative(
         if getattr(config, "VERBOSITY", config.STANDARD) >= config.VERBOSE:
             cell_info = f" in cell {cell_ref}" if cell_ref else ""
             details = [f"    '{s}'" for s in skipped]
-            details.append("  These segments were before the baseline, invalid, or zero/negative length.")
+            details.append(
+                "  These segments were before the baseline, invalid, or zero/negative length."
+            )
             warning_print(
                 f"Skipped {len(skipped)} clock-based timestamp segment(s){cell_info} when converting to relative:",
                 details,
             )
 
     return result
+
 
 class QuitProgram(Exception):
     """Signal that the user requested to quit the program from an interactive prompt."""
@@ -892,14 +945,14 @@ def read_user_input(prompt: str) -> str:
         return value
 
     first_token = value.split()[0].lower()
-    if first_token in ('quit', 'exit'):
-        info_print('Exiting clipgen.')
+    if first_token in ("quit", "exit"):
+        info_print("Exiting clipgen.")
         raise QuitProgram()
-    if first_token == 'top':
-        info_print('Returning to spreadsheet selection.')
+    if first_token == "top":
+        info_print("Returning to spreadsheet selection.")
         raise TopToSpreadsheet()
-    if first_token == 'back':
-        info_print('Returning to mode selection.')
+    if first_token == "back":
+        info_print("Returning to mode selection.")
         raise BackToModeSelection()
 
     return value
@@ -907,28 +960,37 @@ def read_user_input(prompt: str) -> str:
 
 def set_program_settings() -> bool:
     """Interactive function to change program settings.
-    
+
     Allows user to modify settings like REENCODING, FILEFORMAT, and DEBUGGING.
-    
+
     Returns:
         True if a setting was changed, False otherwise.
     """
-    SETTINGS_OPTIONS = ['REENCODING', 'FILEFORMAT', 'DEBUGGING', 'MAX_FILESIZE_MB', 'VERBOSITY']
+    SETTINGS_OPTIONS = [
+        "REENCODING",
+        "FILEFORMAT",
+        "DEBUGGING",
+        "MAX_FILESIZE_MB",
+        "VERBOSITY",
+    ]
 
-    info_print('Which setting? Available:')
-    info_print(', '.join(SETTINGS_OPTIONS))
-    setting_to_change = read_user_input('\n>> ')
+    info_print("Which setting? Available:")
+    info_print(", ".join(SETTINGS_OPTIONS))
+    setting_to_change = read_user_input("\n>> ")
 
-    info_print(f"* Current value for '{setting_to_change}' is '{getattr(config, setting_to_change)}'")
+    info_print(
+        f"* Current value for '{setting_to_change}' is '{getattr(config, setting_to_change)}'"
+    )
 
-    new_value = read_user_input('\nWhich new value?\n>> ')
+    new_value = read_user_input("\nWhich new value?\n>> ")
 
     info_print(f"* '{setting_to_change}' SET TO '{new_value}'")
 
-    if setting_to_change != '':
+    if setting_to_change != "":
         setattr(config, setting_to_change, new_value)
         return True
     return False
+
 
 def format_filesize(size_bytes: float, precision: int = 2) -> str:
     """Format byte size as human-readable string.
@@ -940,13 +1002,13 @@ def format_filesize(size_bytes: float, precision: int = 2) -> str:
     Returns:
         Formatted string with appropriate unit (B, KB, MB, GB, TB)
     """
-    suffixes = ['B', 'KB', 'MB', 'GB', 'TB']
+    suffixes = ["B", "KB", "MB", "GB", "TB"]
     suffix_index = 0
     # Keep dividing by 1024 until size is under 1024 or we reach TB (index 4)
     while size_bytes > 1024 and suffix_index < 4:
         suffix_index += 1
         size_bytes = size_bytes / 1024
-    return f'{size_bytes:.{precision}f}{suffixes[suffix_index]}'
+    return f"{size_bytes:.{precision}f}{suffixes[suffix_index]}"
 
 
 def get_current_time() -> str:
@@ -955,4 +1017,4 @@ def get_current_time() -> str:
     Returns:
         Current time in format 'YYYY-MM-DD HH:MM:SS'
     """
-    return datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")

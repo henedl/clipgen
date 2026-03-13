@@ -2,6 +2,8 @@
 
 ## Learned User Preferences
 
+- Prefer inlining functions rather than creating yet another helper.
+- Don't extract helpers unless it is called more than once.
 - Prefer placing generic index/letter conversion utilities (e.g. index_to_letter, letter_to_index) in utils.py rather than in domain-specific modules like files.py.
 - Prefer minimal, focused edits over broad rewrites.
 - Prefer naming new helpers to match existing method naming patterns in the same module.

@@ -115,18 +115,9 @@ _STANDARD_MODES = {
 
 
 def _open_worksheet(
-    gspread_client: Any, open_callable: Callable[[], Any], error_context: str
+    open_callable: Callable[[], Any], error_context: str
 ) -> Optional[Any]:
-    """Try to open a worksheet via a callable; catch gspread errors and print a consistent message.
-
-    Args:
-        gspread_client: Google client connection
-        open_callable: Callable that takes no args and returns a gspread Spreadsheet
-        error_context: Short description for error message (e.g. "by URL", "at index 3")
-
-    Returns:
-        Worksheet object or None if error
-    """
+    """Try to open a worksheet via a callable; catch gspread errors and print a consistent message."""
     try:
         return google_api.get_worksheet(open_callable())
     except (
@@ -138,92 +129,62 @@ def _open_worksheet(
         return None
 
 
+def _open_with_optional_spinner(
+    label: str, open_fn: Callable[[], Optional[Any]], *, use_spinner: bool
+) -> Optional[Any]:
+    """Run open_fn directly or wrapped in a spinner depending on use_spinner."""
+    if use_spinner:
+        return utils.run_with_spinner(label, open_fn)
+    return open_fn()
+
+
 def open_spreadsheet_by_url(
     gspread_client: Any, url: str, *, use_spinner: bool = False
 ) -> Optional[Any]:
-    """Open a spreadsheet by URL.
-
-    Args:
-        gspread_client: Google client connection
-        url: Spreadsheet URL
-        use_spinner: If True, show spinner while opening (interactive path only)
-
-    Returns:
-        Worksheet object or None if error
-    """
-
-    def _open() -> Optional[Any]:
-        return _open_worksheet(
-            gspread_client, lambda: gspread_client.open_by_url(url), "by URL"
-        )
-
-    if use_spinner:
-        return utils.run_with_spinner("Opening document by URL...", _open)
-    return _open()
+    """Open a spreadsheet by URL."""
+    return _open_with_optional_spinner(
+        "Opening document by URL...",
+        lambda: _open_worksheet(lambda: gspread_client.open_by_url(url), "by URL"),
+        use_spinner=use_spinner,
+    )
 
 
 def open_spreadsheet_by_index(
     gspread_client: Any, doc_list: List[str], index: int, *, use_spinner: bool = False
 ) -> Optional[Any]:
-    """Open a spreadsheet by index number.
-
-    Args:
-        gspread_client: Google client connection
-        doc_list: List of spreadsheet names
-        index: Index number (1-based)
-        use_spinner: If True, show spinner while opening (interactive path only)
-
-    Returns:
-        Worksheet object or None if error
-    """
+    """Open a spreadsheet by 1-based index number from the document list."""
     if index < 1 or index > len(doc_list):
         utils.error_print(
             f"Invalid index {index}. Must be between 1 and {len(doc_list)}"
         )
         return None
-    chosen_index = index - 1
-    doc_name = doc_list[chosen_index].strip()
-
-    def _open() -> Optional[Any]:
-        return _open_worksheet(
-            gspread_client, lambda: gspread_client.open(doc_name), f"at index {index}"
-        )
-
-    if use_spinner:
-        return utils.run_with_spinner(f"Opening document: {doc_name}...", _open)
-    utils.standard_print(f"Opening document: {doc_name}")
-    return _open()
+    doc_name = doc_list[index - 1].strip()
+    if not use_spinner:
+        utils.standard_print(f"Opening document: {doc_name}")
+    return _open_with_optional_spinner(
+        f"Opening document: {doc_name}...",
+        lambda: _open_worksheet(
+            lambda: gspread_client.open(doc_name), f"at index {index}"
+        ),
+        use_spinner=use_spinner,
+    )
 
 
 def open_spreadsheet_by_name(
     gspread_client: Any, doc_list: List[str], name: str, *, use_spinner: bool = False
 ) -> Optional[Any]:
-    """Open a spreadsheet by name.
-
-    Args:
-        gspread_client: Google client connection
-        doc_list: List of spreadsheet names
-        name: Spreadsheet name to search for
-        use_spinner: If True, show spinner while opening (interactive path only)
-
-    Returns:
-        Worksheet object or None if not found
-    """
+    """Open a spreadsheet by name search against the document list."""
     chosen_index = google_api.find_spreadsheet_by_name(name, doc_list)
-    if chosen_index >= 0:
-        matched_name = doc_list[chosen_index].strip()
-
-        def _open() -> Optional[Any]:
-            return _open_worksheet(
-                gspread_client, lambda: gspread_client.open(matched_name), f"'{name}'"
-            )
-
-        if use_spinner:
-            return utils.run_with_spinner(f"Opening document: {matched_name}...", _open)
+    if chosen_index < 0:
+        return None
+    matched_name = doc_list[chosen_index].strip()
+    if not use_spinner:
         utils.standard_print(f"Opening document: {matched_name}")
-        return _open()
-
-    return None
+    return _open_with_optional_spinner(
+        f"Opening document: {matched_name}...",
+        lambda: _open_worksheet(lambda: gspread_client.open(matched_name), f"'{name}'"),
+        use_spinner=use_spinner,
+    )
 
 
 def handle_list_all_command(doc_list: List[str]) -> None:
@@ -275,6 +236,8 @@ def _handle_spreadsheet_command(
     gspread_client: Any, doc_list: List[str], input_name: str
 ) -> Optional[Any]:
     """Handle one spreadsheet selection command. Returns worksheet when one was opened, None to show prompt again."""
+    if not input_name:
+        return None
     # Handle 'excel' for local .xlsx
     if input_name.strip().lower() == config.COMMAND_EXCEL:
         return excel_io.select_excel_file()
@@ -371,7 +334,7 @@ def _classify_mixed_selectors(raw_input: str) -> Tuple[List[str], bool]:
     return (non_empty, bool(parsed.get("timeline")))
 
 
-_UNKNOWN_MODE_HELP = [
+_SELECTION_MODE_HELP = [
     "    b or batch   - Generate all clips in the spreadsheet",
     "    r or range   - Generate clips from a range of rows",
     "    c or category - Generate clips by category",
@@ -381,24 +344,82 @@ _UNKNOWN_MODE_HELP = [
     "    f or filter  - Generate only key-marked clips/timestamps (per-cell annotations)",
 ]
 
+_ALL_MODE_HELP = _SELECTION_MODE_HELP + [
+    "    s or screen  - Generate screenshots (.png)",
+    "    g or gif     - Generate GIFs (.gif)",
+    "    re or reel   - Combine selectors into one highlight reel video",
+    "    rl or reellate - Combine existing clips into a highlight reel",
+    "    br or browse - Browse spreadsheet rows interactively",
+]
+
+
+# ---- Shared input resolution ----
+
+
+def _resolve_unrecognized_input(
+    worksheet: Any, user_input: str, *, help_lines: List[str]
+) -> Optional[List[ClipRecord]]:
+    """Try auto-detection and mixed-selector parsing for input that didn't match a mode alias.
+
+    Attempts, in order: single-type auto-detection (line/range/cell/participant)
+    then mixed-selector parsing. Prints appropriate messages.
+    Returns clip list on success, None to signal the caller should re-prompt.
+    """
+    detected_mode, detected_kwargs = spreadsheet.detect_mode_from_input(user_input)
+    if detected_mode:
+        utils.standard_print(f"  {detected_mode.capitalize()} mode detected.")
+        return spreadsheet.generate_list(worksheet, detected_mode, **detected_kwargs)
+
+    non_empty_types, has_timeline = _classify_mixed_selectors(user_input)
+    if not non_empty_types:
+        utils.info_print(f"  Unknown mode or input '{user_input}'. Available modes:")
+        for line in help_lines:
+            utils.info_print(line)
+        return None
+    if has_timeline:
+        utils.info_print(
+            "  Timeline selector is only supported for reel/timeline modes."
+        )
+        utils.info_print(
+            "  Use 're' or 'reel' for a combined reel video, or -T on the command line."
+        )
+        return None
+
+    selector_summary = ", ".join(non_empty_types)
+    utils.standard_print(
+        f"  Mixed selectors detected ({selector_summary}). Generating from combined selectors."
+    )
+    return spreadsheet.generate_list(worksheet, "reel", reel_input=user_input)
+
+
+def _run_standard_mode(mode: str, worksheet: Any) -> Optional[List[ClipRecord]]:
+    """Run a standard interactive mode (batch/line/range/category/cell/participant/filter).
+
+    Prompts the user for mode-specific input, then generates clips.
+    Returns clip list on success, None if the user cancels or context fails.
+    """
+    utils.print_mode_heading(f"{mode.capitalize()} mode", f"mode.{mode}")
+    ctx = spreadsheet.build_sheet_context(worksheet)
+    if ctx is None:
+        return None
+    prompt_fn, gen_fn = _STANDARD_MODES[mode]
+    result = prompt_fn(ctx)
+    if result is None or result is False:
+        return None
+    return gen_fn(ctx, result)
+
 
 # ---- Interactive selection helpers (reel, reel-late, screen/gif, browse) ----
 
 
 def _prompt_timeline_participant_selection(worksheet: Any) -> Optional[str]:
     """Prompt user to pick exactly one participant for timeline reels."""
-    header_result = spreadsheet.validate_spreadsheet_headers(worksheet)
-    if header_result is None:
+    ctx = spreadsheet.build_sheet_context(worksheet)
+    if ctx is None:
         return None
 
-    id_cell, _, _ = header_result
-    sheet_data = worksheet.get_all_values()
-    header_row = sheet_data[id_cell.row - 1] if id_cell.row > 0 and sheet_data else []
-    num_participants = spreadsheet.get_num_participants(
-        header_row, id_cell, worksheet.col_count
-    )
     available_list = spreadsheet.get_participant_list(
-        header_row, id_cell, num_participants
+        ctx.header_row, ctx.id_cell, ctx.num_participants
     )
     if not available_list:
         utils.info_print("No participants found in the spreadsheet.")
@@ -432,14 +453,16 @@ def _prompt_timeline_participant_selection(worksheet: Any) -> Optional[str]:
             )
             continue
 
-        col_idx = spreadsheet.find_participant_column(header_row, id_cell, token)
+        col_idx = spreadsheet.find_participant_column(
+            ctx.header_row, ctx.id_cell, token
+        )
         if col_idx is None:
             utils.info_print(
                 f"Not found: {token}. Available: {', '.join(available_list)}"
             )
             continue
-        if col_idx < len(header_row):
-            return utils.normalize_participant_id(header_row[col_idx])
+        if col_idx < len(ctx.header_row):
+            return utils.normalize_participant_id(ctx.header_row[col_idx])
         return token
 
 
@@ -449,7 +472,6 @@ def _run_reel_mode_interactive(
     """Run reel mode UI: instructions, input, generate_list, preview, confirm, output filename.
     Returns (clips_list, True, reel_output_file or None) when user confirms; caller may loop on continue.
     """
-    reel_input: Optional[str] = None
     utils.print_mode_heading("Reel mode", "mode.reel")
 
     utils.info_print("Combine selectors into one video. Syntax:")
@@ -640,7 +662,7 @@ def _run_reellate_mode_interactive() -> Tuple[bool, Optional[str]]:
             f"Concatenating {len(selected_clips)} clips into {output_file}...",
             _concat_reellate,
         )
-        if utils._use_progress()
+        if utils.use_progress()
         else _concat_reellate()
     )
 
@@ -671,56 +693,17 @@ def _run_format_mode_interactive(worksheet: Any, output_format: str) -> None:
                 "  Please enter a mode or direct input (e.g. P01.11, 5, 7, 13-16, P01)."
             )
             continue
-        selection_lower = selection.lower()
-        mode = FORMAT_MODE_ALIASES.get(selection_lower)
+
+        mode = FORMAT_MODE_ALIASES.get(selection.lower())
         if mode:
             clips_list = spreadsheet.generate_list(worksheet, mode)
             break
 
-        detected_mode, detected_kwargs = spreadsheet.detect_mode_from_input(selection)
-        if detected_mode in (
-            "batch",
-            "line",
-            "range",
-            "category",
-            "cell",
-            "participant",
-            "filter",
-        ):
-            utils.standard_print(f"  {detected_mode.capitalize()} mode detected.")
-            clips_list = spreadsheet.generate_list(
-                worksheet, detected_mode, **detected_kwargs
-            )
-            break
-        if detected_mode in ("reel", "browse"):
-            utils.info_print(
-                "  This mode is not available for screen/gif output. Choose batch/line/range/category/cell/participant/filter."
-            )
-            continue
-
-        non_empty_types, has_timeline = _classify_mixed_selectors(selection)
-
-        if not non_empty_types:
-            utils.info_print(f"  Unknown mode or input '{selection}'. Available modes:")
-            for line in _UNKNOWN_MODE_HELP:
-                utils.info_print(line)
-            continue
-
-        if has_timeline:
-            utils.info_print(
-                "  Timeline selector is only available for reel/timeline modes."
-            )
-            utils.info_print(
-                "  Use reel/timeline for a single .mp4 output, not for screenshots/GIFs."
-            )
-            continue
-
-        selector_summary = ", ".join(non_empty_types)
-        utils.verbose_print(
-            f"  Mixed selectors detected ({selector_summary}). Generating individual outputs from combined selectors."
+        clips_list = _resolve_unrecognized_input(
+            worksheet, selection, help_lines=_SELECTION_MODE_HELP
         )
-        clips_list = spreadsheet.generate_list(worksheet, "reel", reel_input=selection)
-        break
+        if clips_list is not None:
+            break
 
     outputs_generated, artifacts = process_clips(
         clips_list, output_format=output_format
@@ -737,9 +720,7 @@ def select_mode_and_generate(
 ) -> Tuple[List[ClipRecord], bool, Optional[str]]:
     """Interactive mode selection. Returns (clips list, is_reel_mode, reel_output_file or None)."""
     while True:
-        input_mode: Optional[str] = None
         utils.print_mode_heading("Mode selection", "mode.selection")
-
         input_mode = utils.read_user_input(
             "\nEnter mode or input directly:\n"
             "  Modes: (b)atch, (r)ange, (c)ategory, (l)ine, (ce)ll, (p)articipant, (f)ilter, (s)creen, (g)if, (re)el, (rl) reel-late, (br)owse, (v)iewer\n"
@@ -750,138 +731,78 @@ def select_mode_and_generate(
                 "  Please enter a mode or direct input (e.g. P01.11, 5, 7, 13-16, P01)."
             )
             continue
-        input_lower = input_mode.strip().lower()
         try:
-            # Only treat as explicit mode when input exactly matches a mode shortcut or name
-            mode = MODE_ALIASES.get(input_lower)
-            if mode is None and input_lower == "custom":
-                input_mode = utils.read_user_input(
-                    '\nEnter mixed selectors directly (e.g. 5, P01.11, 13-16, "Observations"):\n>> '
-                )
-                input_lower = input_mode.strip().lower() if input_mode else ""
-                if not input_mode:
-                    utils.info_print(
-                        "  Please enter some selectors or choose a different mode."
-                    )
-                    continue
-                mode = MODE_ALIASES.get(input_lower)
-            if mode == "browse":
-                interactive.browse_spreadsheet(worksheet)
-                return ([], False, None)
-            if mode == "viewer":
-                if not viewer.INTERACTIVE_ARTIFACTS:
-                    utils.info_print(
-                        "No artifacts have been generated yet in this interactive session."
-                    )
-                    continue
-                study = viewer.INTERACTIVE_ARTIFACTS[0].get("study", "")
-                participant = viewer.INTERACTIVE_ARTIFACTS[0].get("participant", "")
-                data = viewer.finalize_timeline_data(
-                    viewer.INTERACTIVE_ARTIFACTS,
-                    study=study,
-                    participant=participant,
-                    worksheet_title=getattr(worksheet, "title", ""),
-                    is_excel=_is_excel_worksheet(worksheet),
-                    mode="interactive",
-                    output_format="clip",
-                )
-                viewer_path = viewer.generate_timeline_viewer(data)
-                if viewer_path:
-                    utils.info_print(f"Timeline viewer created: {viewer_path}")
-                continue
-            if mode == "reel":
-                reel_selection_result = _run_reel_mode_interactive(worksheet)
-                if reel_selection_result[1]:
-                    return reel_selection_result
-                continue
-            if mode == "reellate":
-                success, output_file = _run_reellate_mode_interactive()
-                if success:
-                    output_dir = utils.get_effective_output_dir()
-                    _print_run_summary(
-                        f"Reel created: {output_file}\nFiles are in {output_dir}"
-                    )
-                    return ([], False, None)
-                continue
-            if mode in ("screen", "gif"):
-                _run_format_mode_interactive(worksheet, mode)
-                return ([], False, None)
-            if mode in _STANDARD_MODES:
-                utils.print_mode_heading(f"{mode.capitalize()} mode", f"mode.{mode}")
-                ctx = spreadsheet.build_sheet_context(worksheet)
-                if ctx is None:
-                    return ([], False, None)
-                prompt_fn, gen_fn = _STANDARD_MODES[mode]
-                result = prompt_fn(ctx)
-                if result is None or result is False:
-                    return ([], False, None)
-                return (gen_fn(ctx, result), False, None)
-            if mode:
-                # Fallback for any other mode (shouldn't happen but safe)
-                return (spreadsheet.generate_list(worksheet, mode), False, None)
-
-            # Try implicit mode detection from input syntax for single-type inputs
-            detected_mode, detected_kwargs = spreadsheet.detect_mode_from_input(
-                input_mode
+            result = _dispatch_interactive_mode(
+                MODE_ALIASES.get(input_mode.strip().lower()), worksheet, input_mode
             )
-            if detected_mode:
-                utils.standard_print(
-                    f"  {detected_mode.capitalize()} mode detected."
-                )
-                utils.print_mode_heading(
-                    f"{detected_mode.capitalize()} mode", f"mode.{detected_mode}"
-                )
-                return (
-                    spreadsheet.generate_list(
-                        worksheet, detected_mode, **detected_kwargs
-                    ),
-                    False,
-                    None,
-                )
-
-            # Fallback: treat as mixed selector input using reel parsing, but keep outputs as individual clips
-            non_empty_types, has_timeline = _classify_mixed_selectors(input_mode)
-
-            if not non_empty_types:
-                utils.info_print(
-                    f"  Unknown mode or input '{input_mode}'. Available modes:"
-                )
-                for line in _UNKNOWN_MODE_HELP:
-                    utils.info_print(line)
-                utils.info_print("    s or screen  - Generate screenshots (.png)")
-                utils.info_print("    g or gif     - Generate GIFs (.gif)")
-                utils.info_print(
-                    "    re or reel   - Combine selectors into one highlight reel video"
-                )
-                utils.info_print(
-                    "    rl or reellate - Combine existing clips into a highlight reel"
-                )
-                utils.info_print(
-                    "    br or browse - Browse spreadsheet rows interactively"
-                )
-                continue
-
-            if has_timeline:
-                utils.info_print(
-                    "  Timeline selector is only supported for reel/timeline modes.",
-                )
-                utils.info_print(
-                    "  Use 're' or 'reel' for a combined reel video, or -T on the command line."
-                )
-                continue
-
-            selector_summary = ", ".join(non_empty_types)
-            utils.standard_print(
-                f"  Mixed selectors detected ({selector_summary}). Generating individual clips from combined selectors."
-            )
-            utils.print_mode_heading("Mixed selection", "mode.selection")
-            clips_list = spreadsheet.generate_list(
-                worksheet, "reel", reel_input=input_mode
-            )
-            return (clips_list, False, None)
+            if result is not None:
+                return result
         except gspread.exceptions.GSpreadException as e:
             utils.error_print(f"Google Sheets API error: {e}")
             utils.debug_print(f"ERROR Message '{e}', Attempting reconnect")
+
+
+def _dispatch_interactive_mode(
+    mode: Optional[str], worksheet: Any, raw_input: str
+) -> Optional[Tuple[List[ClipRecord], bool, Optional[str]]]:
+    """Dispatch a resolved mode or raw input. Returns result tuple, or None to re-prompt."""
+    # Special modes with their own interactive flows
+    if mode == "browse":
+        interactive.browse_spreadsheet(worksheet)
+        return ([], False, None)
+    if mode == "viewer":
+        _run_viewer_mode(worksheet)
+        return None
+    if mode == "reel":
+        clips, confirmed, reel_file = _run_reel_mode_interactive(worksheet)
+        return (clips, True, reel_file) if confirmed else None
+    if mode == "reellate":
+        success, output_file = _run_reellate_mode_interactive()
+        if success:
+            _print_run_summary(
+                f"Reel created: {output_file}\nFiles are in {utils.get_effective_output_dir()}"
+            )
+            return ([], False, None)
+        return None
+    if mode in ("screen", "gif"):
+        _run_format_mode_interactive(worksheet, mode)
+        return ([], False, None)
+
+    # Standard modes with interactive prompts
+    if mode in _STANDARD_MODES:
+        clips = _run_standard_mode(mode, worksheet)
+        return (clips or [], False, None)
+    if mode:
+        return (spreadsheet.generate_list(worksheet, mode), False, None)
+
+    # No alias match -- try auto-detection and mixed selectors
+    clips = _resolve_unrecognized_input(worksheet, raw_input, help_lines=_ALL_MODE_HELP)
+    if clips is None:
+        return None
+    return (clips, False, None)
+
+
+def _run_viewer_mode(worksheet: Any) -> None:
+    """Generate the timeline viewer from artifacts collected in this interactive session."""
+    if not viewer.INTERACTIVE_ARTIFACTS:
+        utils.info_print(
+            "No artifacts have been generated yet in this interactive session."
+        )
+        return
+    study = viewer.INTERACTIVE_ARTIFACTS[0].get("study", "")
+    participant = viewer.INTERACTIVE_ARTIFACTS[0].get("participant", "")
+    data = viewer.finalize_timeline_data(
+        viewer.INTERACTIVE_ARTIFACTS,
+        study=study,
+        participant=participant,
+        worksheet_title=getattr(worksheet, "title", ""),
+        is_excel=_is_excel_worksheet(worksheet),
+        mode="interactive",
+        output_format="clip",
+    )
+    viewer_path = viewer.generate_timeline_viewer(data)
+    if viewer_path:
+        utils.info_print(f"Timeline viewer created: {viewer_path}")
 
 
 # ---- Clip processing core pipeline ----
@@ -1200,14 +1121,12 @@ def process_reel(
         )
         return (0, [])
 
-    study_name = next(
-        (
-            (clip.get("study") or "").strip()
-            for clip in clips_list
-            if (clip.get("study") or "").strip()
-        ),
-        None,
-    )
+    study_name = ""
+    for clip in clips_list:
+        s = (clip.get("study") or "").strip()
+        if s:
+            study_name = s
+            break
 
     def process_reel_clip(
         clip: Any, missing_videos: Set[str]
@@ -1249,7 +1168,7 @@ def process_reel(
 
     ok = (
         utils.run_with_spinner("Concatenating clips into final reel...", _concat)
-        if utils._use_progress()
+        if utils.use_progress()
         else _concat()
     )
     for path in clip_paths:
