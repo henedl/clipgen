@@ -11,6 +11,7 @@ resolved parameters (or None if the user cancels / enters invalid input and
 the caller should re-prompt or abort).
 """
 
+import shutil
 import sys
 import termios
 import tty
@@ -394,12 +395,6 @@ def browse_spreadsheet(sheet: Any) -> None:
         f"Total data rows: {total_data_rows} (rows {first_data_row + 1} to {last_data_row + 1})"
     )
     utils.info_print(f"Participants: {', '.join(participant_headers)}")
-    utils.info_print(
-        "Commands: \u2191/\u2193 arrows, up/u, down/d, pageup/pu, pagedown/pd, jump/j <row>, open/o, quit/q"
-    )
-    utils.info_print(
-        "Press Enter or \u2193 to move down by the configured scroll step."
-    )
 
     def display_rows(start_row, num_rows):
         """Display num_rows starting from start_row (0-indexed into sheet_data)."""
@@ -450,13 +445,74 @@ def browse_spreadsheet(sheet: Any) -> None:
             f"Showing rows {start_row + 1}-{displayed_end} of {last_data_row + 1}"
         )
 
+    def _print_search_bar_top():
+        w = max(40, min(shutil.get_terminal_size().columns - 2, 80))
+        control_label = "\u2191/\u2193 or Enter to navigate, pageup/pu, pagedown/pd, jump/j <row>, open/o, quit/q \u2014 or type to search"
+        label = " Search or command "
+        top = f"{control_label}\n\n─{label}{'─' * (w - 2 - len(label))}─"
+        if utils._use_rich() and utils.console is not None:
+            utils.console.print(f"[dim]{top}[/dim]")
+        else:
+            print(top)
+
+    def _search_rows(query, *, fuzzy=False):
+        query_lower = query.lower()
+        matches = []
+        cat_col = category_cell.col - 1
+        desc_col_idx = observation_cell.col - 1
+
+        if fuzzy:
+            from difflib import SequenceMatcher
+
+            query_words = query_lower.split()
+
+        for row_idx in range(first_data_row, last_data_row + 1):
+            row_data = sheet_data[row_idx]
+            desc = row_data[desc_col_idx] if desc_col_idx < len(row_data) else ""
+            cat = row_data[cat_col] if cat_col < len(row_data) else ""
+
+            if not fuzzy:
+                if query_lower in desc.lower():
+                    matches.append(row_idx)
+                    continue
+                if query_lower in cat.lower():
+                    matches.append(row_idx)
+                    continue
+                for j in range(num_participants):
+                    col_idx = id_cell.col + j
+                    if col_idx < len(row_data):
+                        cell_val = row_data[col_idx]
+                        if cell_val and query_lower in cell_val.lower():
+                            matches.append(row_idx)
+                            break
+            else:
+                text_words = (desc + " " + cat).lower().split()
+                if text_words and all(
+                    any(
+                        SequenceMatcher(None, qw, tw).ratio() >= 0.75
+                        for tw in text_words
+                    )
+                    for qw in query_words
+                ):
+                    matches.append(row_idx)
+
+        return matches
+
     # Initial display
     display_rows(current_row, config.BROWSE_LINES_TO_DISPLAY)
 
     _NOOP = "\x00_noop"
 
-    def _read_browse_key(prompt: str) -> str:
-        """Read arrow keys instantly or fall back to line input for text commands."""
+    def _read_browse_key() -> str:
+        """Read arrow keys instantly or fall back to line input for text commands.
+
+        Renders a search bar around the input: top border is printed before
+        reading, right edge + bottom border after the user finishes typing.
+        """
+        print()  # blank line before search bar
+        _print_search_bar_top()
+        prompt = "⌕ "
+
         if not sys.stdin.isatty():
             return utils.read_user_input(prompt)
 
@@ -470,8 +526,8 @@ def browse_spreadsheet(sheet: Any) -> None:
             ch = sys.stdin.read(1)
 
             if ch == "\x1b":
-                # Read the rest of the escape sequence (e.g., "[A" or "[B") as a unit.
                 seq = sys.stdin.read(2)
+                termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
                 sys.stdout.write("\r\n")
                 if len(seq) == 2 and seq[0] == "[":
                     if seq[1] == "A":
@@ -481,14 +537,17 @@ def browse_spreadsheet(sheet: Any) -> None:
                 return _NOOP
 
             if ch in ("\r", "\n"):
+                termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
                 sys.stdout.write("\r\n")
                 return ""
 
             if ch == "\x03":
+                termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
                 sys.stdout.write("\r\n")
                 raise KeyboardInterrupt
 
             if ch == "\x04":
+                termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
                 sys.stdout.write("\r\n")
                 raise EOFError
 
@@ -518,7 +577,7 @@ def browse_spreadsheet(sheet: Any) -> None:
 
     # Navigation loop
     while True:
-        user_input = _read_browse_key("\n>> ").strip().lower()
+        user_input = _read_browse_key().strip().lower()
 
         if user_input == _NOOP:
             continue
@@ -591,9 +650,27 @@ def browse_spreadsheet(sheet: Any) -> None:
                 except OSError as e:
                     utils.error_print("Could not open browser.", [f"Error: {e}"])
         else:
-            utils.info_print(
-                "Unknown command. Available: \u2191/\u2193 arrows, up/u, down/d, pageup/pu, pagedown/pd, jump/j <row>, open/o, quit/q"
-            )
-            utils.info_print(
-                "Press Enter or \u2193 to move down by the configured scroll step."
-            )
+            # Treat unrecognized input as a search query
+            matches = _search_rows(user_input)
+            if not matches:
+                matches = _search_rows(user_input, fuzzy=True)
+                if matches:
+                    utils.info_print(
+                        f"No exact matches for '{user_input}'. Showing approximate matches:"
+                    )
+            if matches:
+                match_row_nums = [str(m + 1) for m in matches]
+                if len(match_row_nums) > 20:
+                    shown = ", ".join(match_row_nums[:20])
+                    extra = len(match_row_nums) - 20
+                    utils.info_print(
+                        f"Found {len(matches)} matching row(s): {shown} \u2026 and {extra} more"
+                    )
+                else:
+                    utils.info_print(
+                        f"Found {len(matches)} matching row(s): {', '.join(match_row_nums)}"
+                    )
+                current_row = matches[0]
+                display_rows(current_row, config.BROWSE_LINES_TO_DISPLAY)
+            else:
+                utils.info_print(f"No rows matching '{user_input}'.")
