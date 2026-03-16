@@ -222,7 +222,7 @@ def run_ffmpeg(
         ic(duration, duration_seconds)
     if duration > config.MAX_CLIP_DURATION_SECONDS:
         yn = utils.read_user_input(
-            f"The generated video will be {duration}s ({duration // 60}m {duration % 60}s), over 10 minutes long. Generate anyway? (y/n)\n>> "
+            f"The generated video will be {duration}s ({duration // 60}m {duration % 60}s), over 10 minutes long. Generate anyway? [ y / n ]\n>> "
         )
         if yn != "y":
             return False

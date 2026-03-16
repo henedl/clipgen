@@ -410,7 +410,15 @@ def select_worksheet(
     else:
         # Auto-connect if working directory name matches a spreadsheet
         cwd_name = Path.cwd().name
-        worksheet = clipgen.open_spreadsheet_by_name(gspread_client, doc_list, cwd_name)
+        worksheet = clipgen.open_spreadsheet_by_name(
+            gspread_client,
+            doc_list,
+            cwd_name,
+            prompt_prefix=(
+                "Tried matching current working directory to existing spreadsheets, "
+                "but no exact match. \n\nDid you mean"
+            ),
+        )
         if worksheet:
             utils.standard_print(
                 f"Auto-connecting to spreadsheet: {worksheet.spreadsheet.title}"

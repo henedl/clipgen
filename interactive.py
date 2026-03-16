@@ -11,7 +11,6 @@ resolved parameters (or None if the user cancels / enters invalid input and
 the caller should re-prompt or abort).
 """
 
-import select
 import sys
 import termios
 import tty
@@ -35,7 +34,7 @@ def prompt_batch_confirm(ctx: SheetContext) -> bool:
         - (ctx.id_cell.row + 1)
         - (1 if ctx.filename_row_idx is not None else 0)
     )
-    msg = f"\nThis will generate {len(clips)} clips (from {num_data_rows} data rows and {ctx.num_participants} participant column(s)). Proceed? y/n\n>> "
+    msg = f"\nThis will generate {len(clips)} clips (from {num_data_rows} data rows and {ctx.num_participants} participant column(s)). Proceed? [ y / n ]\n>> "
     yn = utils.read_user_input(msg)
     return yn == "y"
 
@@ -73,7 +72,7 @@ def prompt_category_selection(ctx: SheetContext) -> Optional[List[str]]:
                 utils.info_print("Selected categories:")
                 for cat in selected_categories:
                     utils.info_print(f"  - {cat}")
-                yn = utils.read_user_input("\nIs this correct? y/n\n>> ")
+                yn = utils.read_user_input("\nIs this correct? [ y / n ]\n>> ")
                 if yn == "y":
                     return selected_categories
             else:
@@ -102,7 +101,7 @@ def prompt_category_selection(ctx: SheetContext) -> Optional[List[str]]:
                 utils.info_print("Selected categories:")
                 for cat in matched_categories:
                     utils.info_print(f"  - {cat}")
-                yn = utils.read_user_input("\nIs this correct? y/n\n>> ")
+                yn = utils.read_user_input("\nIs this correct? [ y / n ]\n>> ")
                 if yn == "y":
                     return matched_categories
             else:
@@ -147,7 +146,7 @@ def prompt_line_selection(ctx: SheetContext) -> Optional[List[int]]:
             utils.info_print("No valid lines selected. Please try again.")
             continue
         utils.info_print("")
-        yn = utils.read_user_input("Are these the correct issues? y/n\n>> ")
+        yn = utils.read_user_input("Are these the correct issues? [ y / n ]\n>> ")
         if yn == "y":
             return valid_lines
 
@@ -173,7 +172,7 @@ def prompt_range_selection(ctx: SheetContext) -> Optional[Tuple[int, int]]:
         utils.info_print(
             f"Lines selected: {ctx.sheet_data[start_line - 1][ctx.observation_cell.col - 1]} to {ctx.sheet_data[end_line - 1][ctx.observation_cell.col - 1]}"
         )
-        yn = utils.read_user_input("Is this correct? y/n\n>> ")
+        yn = utils.read_user_input("Is this correct? [ y / n ]\n>> ")
         if yn == "y":
             return (start_line, end_line)
 
@@ -235,7 +234,7 @@ def prompt_cell_selection(ctx: SheetContext) -> Optional[List[Tuple[str, int]]]:
                 utils.info_print("No valid cells found. Please try again.")
                 continue
             utils.info_print("")
-            yn = utils.read_user_input("Are these the correct cells? y/n\n>> ")
+            yn = utils.read_user_input("Are these the correct cells? [ y / n ]\n>> ")
             if yn == "y":
                 return valid_specs
         except KeyboardInterrupt:
@@ -313,7 +312,7 @@ def prompt_participant_selection(ctx: SheetContext) -> Optional[List[str]]:
                 unique_ids.append(pid)
         utils.info_print(f"Selected participant(s): {', '.join(unique_ids)}")
         yn = utils.read_user_input(
-            "Generate all clips for these participants? y/n\n>> "
+            "Generate all clips for these participants? [ y / n ]\n>> "
         )
         if yn == "y":
             return unique_ids
@@ -322,7 +321,7 @@ def prompt_participant_selection(ctx: SheetContext) -> Optional[List[str]]:
 def prompt_filter_confirm() -> bool:
     """Confirm filter mode. Returns True to proceed."""
     yn = utils.read_user_input(
-        "\nFilter mode will include only key-marked timestamps (per-cell annotations). Do you want to proceed? y/n\n>> "
+        "\nFilter mode will include only key-marked timestamps (per-cell annotations). Do you want to proceed? [ y / n ]\n>> "
     )
     return yn == "y"
 

@@ -997,7 +997,7 @@ def suggest_close_match(
     if not matches:
         return None
     original = lower_to_original[matches[0]]
-    yn = read_user_input(f"{prompt_prefix} '{original}'? y/n\n>> ")
+    yn = read_user_input(f"{prompt_prefix} '{original}'? [ y / n ]\n>> ")
     if yn.strip().lower() == "y":
         return original
     return None
