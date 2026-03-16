@@ -11,6 +11,10 @@ resolved parameters (or None if the user cancels / enters invalid input and
 the caller should re-prompt or abort).
 """
 
+import select
+import sys
+import termios
+import tty
 import webbrowser
 from typing import Any, List, Optional, Tuple
 
@@ -391,9 +395,9 @@ def browse_spreadsheet(sheet: Any) -> None:
     )
     utils.info_print(f"Participants: {', '.join(participant_headers)}")
     utils.info_print(
-        "Commands: up/u, down/d, pageup/pu, pagedown/pd, jump/j <row>, open/o, quit/q"
+        "Commands: \u2191/\u2193 arrows, up/u, down/d, pageup/pu, pagedown/pd, jump/j <row>, open/o, quit/q"
     )
-    utils.info_print("Press Enter to move down one row.")
+    utils.info_print("Press Enter or \u2193 to move down one row.")
 
     def display_rows(start_row, num_rows):
         """Display num_rows starting from start_row (0-indexed into sheet_data)."""
@@ -447,11 +451,79 @@ def browse_spreadsheet(sheet: Any) -> None:
     # Initial display
     display_rows(current_row, config.BROWSE_LINES_TO_DISPLAY)
 
+    _NOOP = "\x00_noop"
+
+    def _read_browse_key(prompt: str) -> str:
+        """Read arrow keys instantly or fall back to line input for text commands."""
+        if not sys.stdin.isatty():
+            return utils.read_user_input(prompt)
+
+        sys.stdout.write(prompt)
+        sys.stdout.flush()
+
+        fd = sys.stdin.fileno()
+        old_settings = termios.tcgetattr(fd)
+        try:
+            tty.setraw(fd)
+            ch = sys.stdin.read(1)
+
+            if ch == "\x1b":
+                if select.select([sys.stdin], [], [], 0.05)[0]:
+                    ch2 = sys.stdin.read(1)
+                    if ch2 == "[" and select.select([sys.stdin], [], [], 0.05)[0]:
+                        ch3 = sys.stdin.read(1)
+                        if ch3 == "A":
+                            sys.stdout.write("\r\n")
+                            return "up"
+                        elif ch3 == "B":
+                            sys.stdout.write("\r\n")
+                            return "down"
+                sys.stdout.write("\r\n")
+                return _NOOP
+
+            if ch in ("\r", "\n"):
+                sys.stdout.write("\r\n")
+                return ""
+
+            if ch == "\x03":
+                sys.stdout.write("\r\n")
+                raise KeyboardInterrupt
+
+            if ch == "\x04":
+                sys.stdout.write("\r\n")
+                raise EOFError
+
+        finally:
+            termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+
+        # Printable character: echo it and read the rest as a normal line
+        sys.stdout.write(ch)
+        sys.stdout.flush()
+        rest = input()
+        full_line = ch + rest
+
+        value = full_line.strip()
+        if not value:
+            return value
+        first_token = value.split()[0].lower()
+        if first_token in ("quit", "exit"):
+            utils.info_print("Exiting clipgen.")
+            raise utils.QuitProgram()
+        if first_token == "top":
+            utils.info_print("Returning to spreadsheet selection.")
+            raise utils.TopToSpreadsheet()
+        if first_token == "back":
+            utils.info_print("Returning to mode selection.")
+            raise utils.BackToModeSelection()
+        return value
+
     # Navigation loop
     while True:
-        user_input = utils.read_user_input("\n>> ").strip().lower()
+        user_input = _read_browse_key("\n>> ").strip().lower()
 
-        if user_input in ("quit", "q"):
+        if user_input == _NOOP:
+            continue
+        elif user_input in ("quit", "q"):
             utils.info_print("Exiting browse mode.")
             break
         elif user_input in ("up", "u"):
@@ -519,6 +591,6 @@ def browse_spreadsheet(sheet: Any) -> None:
                     utils.error_print("Could not open browser.", [f"Error: {e}"])
         else:
             utils.info_print(
-                "Unknown command. Available: up/u, down/d, pageup/pu, pagedown/pd, jump/j <row>, open/o, quit/q"
+                "Unknown command. Available: \u2191/\u2193 arrows, up/u, down/d, pageup/pu, pagedown/pd, jump/j <row>, open/o, quit/q"
             )
-            utils.info_print("Press Enter to move down one row.")
+            utils.info_print("Press Enter or \u2193 to move down one row.")
