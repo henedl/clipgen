@@ -56,6 +56,11 @@ class SheetContext:
     def header_row(self) -> List[str]:
         return self.sheet_data[self.id_cell.row - 1] if self.id_cell.row > 0 else []
 
+    @property
+    def first_data_row_idx(self) -> int:
+        """0-based index into sheet_data of the first data row (row after Observation header)."""
+        return self.observation_cell.row
+
 
 # ---- Validation and context building ----
 
@@ -816,7 +821,7 @@ def generate_batch_timestamps(ctx: SheetContext) -> List[ClipRecord]:
     """Generate clip records for all rows in batch mode."""
     utils.debug_print("Running method generate_batch_timestamps()")
     clips = []
-    for i in range(ctx.id_cell.row + 1, len(ctx.sheet_data)):
+    for i in range(ctx.first_data_row_idx, len(ctx.sheet_data)):
         if ctx.filename_row_idx is not None and i == ctx.filename_row_idx:
             continue
         utils.debug_print(f"Batching on line {i} (real sheet line {i + 1})")
@@ -852,7 +857,7 @@ def collect_categories(ctx: SheetContext) -> List[str]:
     """Scan sheet and return unique categories in order of first appearance."""
     categories = []
     category_col = ctx.category_cell.col - 1
-    for i in range(ctx.category_cell.row, len(ctx.sheet_data)):
+    for i in range(ctx.first_data_row_idx, len(ctx.sheet_data)):
         category = ctx.sheet_data[i][category_col].strip()
         if category and category not in categories:
             categories.append(category)
@@ -866,7 +871,7 @@ def generate_category_timestamps(
     utils.debug_print("Starting method generate_category_timestamps()")
     clips = []
     category_col = ctx.category_cell.col - 1
-    for i in range(ctx.category_cell.row, len(ctx.sheet_data)):
+    for i in range(ctx.first_data_row_idx, len(ctx.sheet_data)):
         if ctx.filename_row_idx is not None and i == ctx.filename_row_idx:
             continue
         row_category = ctx.sheet_data[i][category_col].strip()
@@ -949,7 +954,7 @@ def generate_participant_timestamps(
     if col_idx is None:
         return []
     clips = []
-    for row_idx in range(ctx.id_cell.row, len(ctx.sheet_data)):
+    for row_idx in range(ctx.first_data_row_idx, len(ctx.sheet_data)):
         if ctx.filename_row_idx is not None and row_idx == ctx.filename_row_idx:
             continue
         if col_idx >= len(ctx.sheet_data[row_idx]):

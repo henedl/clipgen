@@ -189,8 +189,8 @@ def test_generate_filter_timestamps_honors_header_and_segment_annotations(monkey
     clips = spreadsheet.generate_filter_timestamps(ctx)
 
     coords = {(clip["cell"].row, clip["cell"].col) for clip in clips}
-    # Only the row with a segment-level !key should be included.
-    assert coords == {(4, 3)}
+    # Both cells with segment-level !key annotations should be included.
+    assert coords == {(3, 2), (4, 3)}
     segment_indexes = [
         clip.get("selected_segment_indexes") for clip in clips if clip["cell"].col == 3
     ][0]
