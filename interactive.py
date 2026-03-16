@@ -321,7 +321,7 @@ def prompt_participant_selection(ctx: SheetContext) -> Optional[List[str]]:
 def prompt_filter_confirm() -> bool:
     """Confirm filter mode. Returns True to proceed."""
     yn = utils.read_user_input(
-        "\nFilter mode will include only key-marked timestamps (per-cell annotations). Do you want to proceed? [ y / n ]\n>> "
+        "\nFilter mode will include only key-marked timestamps (per-cell annotations). Do you want to proceed? [y/n]\n>> "
     )
     return yn == "y"
 

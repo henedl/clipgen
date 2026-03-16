@@ -166,13 +166,20 @@ def open_spreadsheet_by_index(
 
 
 def open_spreadsheet_by_name(
-    gspread_client: Any, doc_list: List[str], name: str, *, use_spinner: bool = False
+    gspread_client: Any,
+    doc_list: List[str],
+    name: str,
+    *,
+    use_spinner: bool = False,
+    prompt_prefix: str = "No exact match found. Did you mean",
 ) -> Optional[Any]:
     """Open a spreadsheet by name search against the document list."""
     chosen_index = google_api.find_spreadsheet_by_name(name, doc_list)
     if chosen_index < 0:
         suggestion = utils.suggest_close_match(
-            name, doc_list, prompt_prefix="Tried matching current working directory to existing spreadsheets, but no exact match. \n\nDid you mean"
+            name,
+            doc_list,
+            prompt_prefix=prompt_prefix,
         )
         if suggestion is None:
             return None
@@ -864,7 +871,7 @@ def _run_reel_mode_interactive(
         utils.info_print(
             f"  ... and {len(clips_list) - config.REEL_PREVIEW_CLIP_COUNT} more"
         )
-    yn = utils.read_user_input("\nGenerate reel? [ y/n ]\n>> ")
+    yn = utils.read_user_input("\nGenerate reel? [y/n]\n>> ")
     if yn != "y":
         return ([], False, None)
 
@@ -978,7 +985,7 @@ def _run_reellate_mode_interactive() -> Tuple[bool, Optional[str]]:
     for i, clip in enumerate(selected_clips):
         utils.info_print(f'  {i + 1}. "{clip}"')
 
-    yn = utils.read_user_input("\nGenerate reel from these clips? [ y/n ]\n>> ").lower()
+    yn = utils.read_user_input("\nGenerate reel from these clips? [y/n]\n>> ").lower()
     if yn != "y":
         utils.info_print("Cancelled.")
         return (False, None)
@@ -1162,7 +1169,7 @@ def run_interactive_mode(worksheet: Any) -> None:
 
             if not clips_list and not is_reel:
                 yn = utils.read_user_input(
-                    "Continue working (y) or quit the program (n)? [ y/n ]\n>> "
+                    "Continue working (y) or quit the program (n)? [y/n]\n>> "
                 )
                 if yn == "n":
                     break
@@ -1185,7 +1192,7 @@ def run_interactive_mode(worksheet: Any) -> None:
             )
 
             yn = utils.read_user_input(
-                "Continue working (y) or quit the program (n)? [ y/n ]\n>> "
+                "Continue working (y) or quit the program (n)? [y/n]\n>> "
             )
             if yn == "n":
                 break
