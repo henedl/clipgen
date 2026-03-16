@@ -468,17 +468,14 @@ def browse_spreadsheet(sheet: Any) -> None:
             ch = sys.stdin.read(1)
 
             if ch == "\x1b":
-                if select.select([sys.stdin], [], [], 0.05)[0]:
-                    ch2 = sys.stdin.read(1)
-                    if ch2 == "[" and select.select([sys.stdin], [], [], 0.05)[0]:
-                        ch3 = sys.stdin.read(1)
-                        if ch3 == "A":
-                            sys.stdout.write("\r\n")
-                            return "up"
-                        elif ch3 == "B":
-                            sys.stdout.write("\r\n")
-                            return "down"
+                # Read the rest of the escape sequence (e.g., "[A" or "[B") as a unit.
+                seq = sys.stdin.read(2)
                 sys.stdout.write("\r\n")
+                if len(seq) == 2 and seq[0] == "[":
+                    if seq[1] == "A":
+                        return "up"
+                    if seq[1] == "B":
+                        return "down"
                 return _NOOP
 
             if ch in ("\r", "\n"):
