@@ -61,6 +61,7 @@ MAX_FILESIZE_MB: int = 0  # Maximum output file size in MB (0 = disabled)
 
 # Browse Mode Constants
 BROWSE_LINES_TO_DISPLAY: int = 5  # Number of rows to show at once when browsing
+BROWSE_LINES_TO_SCROLL: int = 5  # Number of rows to move when scrolling up/down
 BROWSE_DESCRIPTION_MAX_WIDTH: int = 40  # Max width for description column in table
 BROWSE_TIMESTAMP_MAX_WIDTH: int = 15  # Max width for each timestamp column
 

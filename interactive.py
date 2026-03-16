@@ -396,7 +396,9 @@ def browse_spreadsheet(sheet: Any) -> None:
     utils.info_print(
         "Commands: \u2191/\u2193 arrows, up/u, down/d, pageup/pu, pagedown/pd, jump/j <row>, open/o, quit/q"
     )
-    utils.info_print("Press Enter or \u2193 to move down one row.")
+    utils.info_print(
+        "Press Enter or \u2193 to move down by the configured scroll step."
+    )
 
     def display_rows(start_row, num_rows):
         """Display num_rows starting from start_row (0-indexed into sheet_data)."""
@@ -524,13 +526,15 @@ def browse_spreadsheet(sheet: Any) -> None:
             break
         elif user_input in ("up", "u"):
             if current_row > first_data_row:
-                current_row -= 1
+                new_row = max(first_data_row, current_row - config.BROWSE_LINES_TO_SCROLL)
+                current_row = new_row
                 display_rows(current_row, config.BROWSE_LINES_TO_DISPLAY)
             else:
                 utils.info_print("Already at the first row.")
         elif user_input in ("down", "d", ""):
             if current_row < last_data_row:
-                current_row += 1
+                new_row = min(last_data_row, current_row + config.BROWSE_LINES_TO_SCROLL)
+                current_row = new_row
                 display_rows(current_row, config.BROWSE_LINES_TO_DISPLAY)
             else:
                 utils.info_print("Already at the last row.")
@@ -589,4 +593,6 @@ def browse_spreadsheet(sheet: Any) -> None:
             utils.info_print(
                 "Unknown command. Available: \u2191/\u2193 arrows, up/u, down/d, pageup/pu, pagedown/pd, jump/j <row>, open/o, quit/q"
             )
-            utils.info_print("Press Enter or \u2193 to move down one row.")
+            utils.info_print(
+                "Press Enter or \u2193 to move down by the configured scroll step."
+            )
