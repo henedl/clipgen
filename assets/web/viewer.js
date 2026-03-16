@@ -68,16 +68,20 @@
     var presentTypes = derivePresentTypes(state.artifacts);
     state.presentTypes = presentTypes;
 
-    initTypeLegend(presentTypes);
-    initTypeFilters(presentTypes);
-
     computeDuration();
     populateHeader();
-    populateFilters();
-    applyFilters();
-    renderTimeline();
-    renderList();
-    bindFilterEvents();
+
+    if (qs("#participantTimelines")) {
+      initParticipantTimelines(presentTypes);
+    } else {
+      initTypeLegend(presentTypes);
+      initTypeFilters(presentTypes);
+      populateFilters();
+      applyFilters();
+      renderTimeline();
+      renderList();
+      bindFilterEvents();
+    }
   });
 
   function initThemeToggle() {
@@ -165,6 +169,10 @@
     if (layout) layout.style.display = "none";
     var tp = qs("#timelinePane");
     if (tp) tp.style.display = "none";
+    var pp = qs("#playerPane");
+    if (pp) pp.style.display = "none";
+    var pt = qs("#participantTimelines");
+    if (pt) pt.style.display = "none";
   }
 
   function computeDuration() {
@@ -476,7 +484,13 @@
     }
 
     var artifact = findArtifact(id);
-    if (artifact) showDetail(artifact);
+    if (!artifact) return;
+
+    if (qs("#playerPane")) {
+      showPlayer(artifact);
+    } else {
+      showDetail(artifact);
+    }
   }
 
   function clearSelection() {
@@ -491,6 +505,10 @@
     var content = qs("#detailContent");
     if (empty) empty.classList.remove("hidden");
     if (content) content.classList.add("hidden");
+    var playerEmpty = qs("#playerEmpty");
+    var playerContent = qs("#playerContent");
+    if (playerEmpty) playerEmpty.classList.remove("hidden");
+    if (playerContent) playerContent.classList.add("hidden");
   }
 
   function findArtifact(id) {
@@ -600,5 +618,123 @@
     var div = document.createElement("div");
     div.textContent = str;
     return div.innerHTML;
+  }
+
+  // ---- Participant timeline viewer ----
+
+  function initParticipantTimelines(presentTypes) {
+    initTypeLegend(presentTypes);
+
+    var grouped = {};
+    var participantOrder = [];
+    state.artifacts.forEach(function (a) {
+      var p = a.participant || "Unknown";
+      if (!grouped[p]) {
+        grouped[p] = [];
+        participantOrder.push(p);
+      }
+      grouped[p].push(a);
+    });
+    participantOrder.sort();
+
+    var container = qs("#participantRows");
+    if (!container) return;
+    container.innerHTML = "";
+
+    participantOrder.forEach(function (pid) {
+      var row = el("div", "participant-row");
+
+      var label = el("div", "participant-label", pid);
+      row.appendChild(label);
+
+      var track = el("div", "participant-track");
+      grouped[pid].forEach(function (a) {
+        var marker = el("div", "artifact-marker " + (a.type || "clip"));
+        marker.dataset.id = a.id;
+
+        var startPct = ((a.start || 0) / state.duration) * 100;
+        var endSec = a.end || a.start || 0;
+        var widthPct = ((endSec - (a.start || 0)) / state.duration) * 100;
+        if (widthPct < 0.4) widthPct = 0.4;
+        if (a.type === "screen") widthPct = Math.max(widthPct, 0.5);
+
+        marker.style.left = startPct + "%";
+        marker.style.width = widthPct + "%";
+
+        marker.addEventListener("mouseenter", onMarkerHover);
+        marker.addEventListener("mousemove", moveTooltip);
+        marker.addEventListener("mouseleave", hideTooltip);
+        marker.addEventListener("click", function () {
+          selectArtifact(a.id);
+        });
+
+        track.appendChild(marker);
+      });
+      row.appendChild(track);
+      container.appendChild(row);
+    });
+
+    renderParticipantTicks();
+  }
+
+  function renderParticipantTicks() {
+    var container = qs("#participantTicks");
+    if (!container) return;
+    container.innerHTML = "";
+
+    var numTicks = 8;
+    var step = state.duration / numTicks;
+    for (var i = 0; i <= numTicks; i++) {
+      var tick = el("span", null, formatTime(i * step));
+      container.appendChild(tick);
+    }
+  }
+
+  function showPlayer(a) {
+    var empty = qs("#playerEmpty");
+    var content = qs("#playerContent");
+    if (empty) empty.classList.add("hidden");
+    if (content) content.classList.remove("hidden");
+
+    var badge = qs("#playerType");
+    if (badge) {
+      badge.textContent = (a.type || "clip").toUpperCase();
+      badge.className = "detail-badge " + (a.type || "clip");
+    }
+
+    setText("#playerDescription", a.description || "(no description)");
+
+    var metaEl = qs("#playerMeta");
+    if (metaEl) {
+      var parts = [];
+      if (a.participant) parts.push(escHtml(a.participant));
+      parts.push(formatTime(a.start) + (a.end != null ? " – " + formatTime(a.end) : ""));
+      if (a.category) parts.push(escHtml(a.category));
+      metaEl.innerHTML = parts.join("&ensp;·&ensp;");
+    }
+
+    var preview = qs("#playerPreview");
+    if (!preview) return;
+    preview.innerHTML = "";
+
+    if (!a.file) return;
+
+    if (a.type === "screen") {
+      var img = document.createElement("img");
+      img.src = a.file;
+      img.alt = a.description || "screenshot";
+      preview.appendChild(img);
+    } else if (a.type === "gif") {
+      var gifImg = document.createElement("img");
+      gifImg.src = a.file;
+      gifImg.alt = a.description || "gif";
+      preview.appendChild(gifImg);
+    } else {
+      var vid = document.createElement("video");
+      vid.controls = true;
+      vid.autoplay = true;
+      vid.src = a.file;
+      preview.appendChild(vid);
+    }
   }
 })();

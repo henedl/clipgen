@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>clipgen Participant Timelines</title>
+  <link rel="stylesheet" href="viewer.css">
+</head>
+<body>
+  <header id="pageHeader">
+    <div id="pageHeaderTop">
+      <h1>clipgen <span class="header-light">Participant Timelines</span></h1>
+      <button id="themeToggle" type="button" aria-label="Toggle dark mode" aria-pressed="false">
+        <span class="theme-toggle-icon theme-icon-sun"></span>
+        <span class="theme-toggle-icon theme-icon-moon"></span>
+      </button>
+    </div>
+    <div id="headerMeta">
+      <span id="studyName"></span>
+      <span id="generatedAt"></span>
+    </div>
+  </header>
+
+  <section id="playerPane">
+    <div id="playerEmpty">
+      <div id="playerPlaceholder">
+        <svg viewBox="0 0 48 48" width="48" height="48" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="4" y="8" width="40" height="32" rx="4"/>
+          <polygon points="20,16 34,24 20,32"/>
+        </svg>
+        <p>Select an artifact from the timelines</p>
+      </div>
+    </div>
+    <div id="playerContent" class="hidden">
+      <div id="playerPreview"></div>
+      <div id="playerInfo">
+        <span id="playerType" class="detail-badge"></span>
+        <h2 id="playerDescription"></h2>
+        <div id="playerMeta"></div>
+      </div>
+    </div>
+  </section>
+
+  <section id="participantTimelines">
+    <div id="timelinesHeader">
+      <h3>Participant Timelines</h3>
+      <div id="timelineLegend">
+        <span class="legend-item"><span class="legend-swatch clip"></span> Clip</span>
+        <span class="legend-item"><span class="legend-swatch screen"></span> Screenshot</span>
+        <span class="legend-item"><span class="legend-swatch gif"></span> GIF</span>
+      </div>
+    </div>
+    <div id="participantRows"></div>
+    <div id="participantTicks"></div>
+  </section>
+
+  <div id="tooltip" class="hidden"></div>
+
+  <div id="emptyState" class="hidden">
+    <p>No artifacts were generated for this run.</p>
+  </div>
+
+  <!-- CLIPGEN_DATA_HERE -->
+  <script src="viewer.js" defer></script>
+</body>
+</html>

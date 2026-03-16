@@ -80,6 +80,7 @@ Examples:
   python clipgen.py -T P01                 Timeline mode - chronological reel for participant P01
   python clipgen.py -b --screen            Batch mode screenshots (.png)
   python clipgen.py -l 5 --gif             Line mode GIF output (.gif)
+  python clipgen.py --timeline-viewer      Generate per-participant timeline viewer
 
 Note: Non-interactive mode (using -b, -l, -r, -C, -c, -p, -f, -M, -R, or -T) is silent by default,
       only showing errors and the final summary. Use -v for full output.
@@ -191,6 +192,11 @@ Note: Non-interactive mode (using -b, -l, -r, -C, -c, -p, -f, -M, -R, or -T) is 
         "--viewer",
         action="store_true",
         help="Generate a timeline HTML viewer file (clips_viewer.html) for this run",
+    )
+    parser.add_argument(
+        "--timeline-viewer",
+        action="store_true",
+        help="Batch-export all clips and generate a per-participant timeline HTML viewer",
     )
     parser.add_argument(
         "-i",
@@ -526,6 +532,39 @@ def _resolve_timeline_output_file(
 # ---- CLI mode runner ----
 
 
+def _run_timeline_viewer_mode(worksheet: Any, args: Any) -> None:
+    """Export all clips via batch mode and generate a per-participant timeline viewer."""
+    clips_list = spreadsheet.generate_list(worksheet, "batch", skip_prompts=True)
+    outputs_generated, artifacts = clipgen.process_clips(
+        clips_list, output_format="clip"
+    )
+
+    if not config.REENCODING:
+        clipgen._print_reencoding_warning(utils.verbose_print)
+    clipgen._print_completion_message(outputs_generated, "clip", is_reel=False)
+
+    if not artifacts:
+        utils.warning_print("No artifacts were generated; skipping timeline viewer.")
+        return
+
+    study = artifacts[0].get("study", "")
+    data = viewer.finalize_timeline_data(
+        artifacts,
+        study=study,
+        worksheet_title=getattr(worksheet, "title", ""),
+        is_excel=clipgen._is_excel_worksheet(worksheet),
+        mode="timeline-viewer",
+        output_format="clip",
+    )
+    viewer_path = viewer.generate_timeline_viewer(
+        data,
+        template_name="timeline-viewer.html",
+        output_basename="timeline_viewer.html",
+    )
+    if viewer_path:
+        utils.info_print(f"Participant timeline viewer created: {viewer_path}")
+
+
 def run_cli_mode(worksheet: Any, args: Any, cli_mode_args: CliModeArgs) -> None:
     """Execute CLI mode - run once and exit.
 
@@ -609,6 +648,31 @@ def main() -> None:
 
     # Determine if running in CLI mode (any mode argument provided)
     mixed_selectors = getattr(args, "mixed", None)
+    timeline_viewer = getattr(args, "timeline_viewer", False)
+
+    if timeline_viewer:
+        conflicting = [
+            args.batch,
+            args.lines,
+            args.range,
+            args.category,
+            args.cell,
+            args.participant,
+            args.filter,
+            mixed_selectors,
+            args.reel,
+            args.timeline,
+            args.screen,
+            args.gif,
+            args.viewer,
+        ]
+        if any(conflicting):
+            utils.error_print(
+                "--timeline-viewer cannot be combined with mode, format, or --viewer flags.",
+                ["Only -s (spreadsheet) and -v (verbose) may be used alongside --timeline-viewer."],
+            )
+            sys.exit(1)
+
     cli_mode = (
         args.batch
         or args.lines
@@ -622,6 +686,7 @@ def main() -> None:
         or args.timeline
         or args.screen
         or args.gif
+        or timeline_viewer
     )
 
     # Set verbosity: quiet by default in CLI mode, standard in interactive mode
@@ -671,7 +736,9 @@ def main() -> None:
             worksheet = select_worksheet(gspread_client, doc_list, args, cli_mode)
 
             # Execute based on mode
-            if cli_mode:
+            if timeline_viewer:
+                _run_timeline_viewer_mode(worksheet, args)
+            elif cli_mode:
                 run_cli_mode(worksheet, args, cli_mode_args)
             else:
                 clipgen.run_interactive_mode(worksheet)

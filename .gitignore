@@ -13,6 +13,7 @@ Icon?
 tests/__pycache__/
 tests/.pytest_cache/
 .pytest_cache/
+.ruff_cache/
 
 # Working docs
 /*.mp4

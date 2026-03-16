@@ -125,10 +125,11 @@ def generate_timeline_viewer(
     data: Dict[str, Any],
     *,
     output_basename: str = "clips_viewer.html",
+    template_name: str = "viewer.html",
 ) -> Optional[Path]:
     """Create a per-run viewer HTML file with inlined JS/CSS.
 
-    Reads the static viewer.html template from the assets/web directory,
+    Reads the static template from the assets/web directory,
     injects the serialized data as window.CLIPGEN_DATA, writes the result
     into the effective output directory.
 
@@ -139,7 +140,7 @@ def generate_timeline_viewer(
     else:
         assets_base = Path(__file__).resolve().parent
     assets_dir = assets_base / "assets" / "web"
-    template_path = assets_dir / "viewer.html"
+    template_path = assets_dir / template_name
     js_path = assets_dir / "viewer.js"
     css_path = assets_dir / "viewer.css"
 
