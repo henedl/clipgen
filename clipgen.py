@@ -1141,7 +1141,8 @@ def run_interactive_mode(worksheet: Any) -> None:
             utils.print_mode_heading("Mode selection", "mode.selection")
             input_mode = utils.read_user_input(
                 "\nEnter mode or input directly:\n"
-                "  Modes: (b)atch, (r)ange, (c)ategory, (l)ine, (ce)ll, (p)articipant, (f)ilter, (s)creen, (g)if, (re)el, (rl) reel-late, (br)owse, (v)iewer\n"
+                "  Tools: (s)creen, (g)if, (re)el, (rl) reel-late, (br)owse, (v)iewer \n"
+                "  Modes: (b)atch, (r)ange, (c)ategory, (l)ine, (ce)ll, (p)articipant, (f)ilter \n"
                 '  Or enter mixed selectors directly: e.g. 5, P01.11, 13-16, "Observations"\n>> '
             )
             if not input_mode:
