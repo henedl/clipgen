@@ -35,6 +35,10 @@ import viewer
 import titlecards
 from utils import ClipRecord
 
+# Active progress bar reference, set during clip pipeline so nested functions
+# (e.g. fuzzy match prompts) can pause/resume the live display.
+_active_progress = None
+
 # ---- Mode configuration ----
 
 MODE_ALIASES = {
@@ -461,11 +465,19 @@ def _check_source_video(
     if candidates and candidates[0][0] >= 0.7:
         best_ratio, best_size, best_path = candidates[0]
         size_gb = best_size / 1_000_000_000
+        # Pause progress bar so the prompt is visible and input is rendered
+        global _active_progress
+        paused = False
+        if _active_progress is not None:
+            _active_progress.stop()
+            paused = True
         utils.info_print(f"Source video '{base_name}' not found.")
         utils.info_print(
             f"Closest match found: '{best_path.name}' ({size_gb:.1f} GB)"
         )
         answer = utils.read_user_input("Use this file instead? [y/n]\n>> ")
+        if paused:
+            _active_progress.start()
         if answer.strip().lower() == "y":
             resolved = str(best_path)
             fuzzy_matches[full_path_str] = resolved
@@ -619,6 +631,8 @@ def _run_clip_pipeline(
     results: List[Any] = []
 
     if progress:
+        global _active_progress
+        _active_progress = progress
         with progress:
             task = progress.add_task(task_label, total=total_clips)
             for clip in clips_list:
@@ -629,6 +643,7 @@ def _run_clip_pipeline(
                 progress.update(task, description=f"[{participant}] {desc_preview}...")
                 results.append(wrapped_process(clip))
                 progress.update(task, advance=1)
+        _active_progress = None
     else:
         for index, clip in enumerate(clips_list, start=1):
             if (
