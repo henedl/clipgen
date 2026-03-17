@@ -330,12 +330,20 @@ def prompt_filter_confirm() -> bool:
 # ---- Browse mode ----
 
 
-def browse_spreadsheet(sheet: Any) -> None:
+def browse_spreadsheet(sheet: Any, *, process_fn=None) -> None:
     """Interactive browse mode for viewing spreadsheet rows line by line.
 
     Allows users to navigate through the spreadsheet to inspect issues
     before generating clips. Shows row number, category, description,
     and participant/group timestamps for each row.
+
+    When process_fn is provided, users can generate clips/screenshots/GIFs
+    directly from browse by typing selectors (line numbers, ranges, cells,
+    participants, quoted categories).
+
+    Args:
+        sheet: Worksheet object (gspread or Excel adapter).
+        process_fn: Optional callback (clips_list, output_format) -> (outputs_generated, artifacts).
     """
 
     def _load_browse_data() -> tuple:
@@ -383,6 +391,7 @@ def browse_spreadsheet(sheet: Any) -> None:
     total_data_rows = last_data_row - first_data_row + 1
 
     current_row = first_data_row
+    output_format = "clip"
 
     # Participant column headers for display (id_cell.col is 1-based)
     participant_headers = []
@@ -448,8 +457,15 @@ def browse_spreadsheet(sheet: Any) -> None:
     def _print_search_bar_top():
         w = max(40, min(shutil.get_terminal_size().columns - 2, 80))
         control_label = "\u2191/\u2193 or Enter to navigate, pageup/pu, pagedown/pd, jump/j <row>, open/o, quit/q \u2014 or type to search"
+        if process_fn is not None:
+            format_indicator = output_format.upper()
+            generate_label = (
+                f'Generate: lines, ranges, P01.11, P01, "Category"'
+                f" | Format: screen, gif, clip  [{format_indicator}]"
+            )
+            control_label = f"{control_label}\n{generate_label}"
         label = " Search or command "
-        top = f"{control_label}\n\n─{label}{'─' * (w - 2 - len(label))}─"
+        top = f"{control_label}\n\n\u2500{label}{'\u2500' * (w - 2 - len(label))}\u2500"
         if utils._use_rich() and utils.console is not None:
             utils.console.print(f"[dim]{top}[/dim]")
         else:
@@ -577,7 +593,8 @@ def browse_spreadsheet(sheet: Any) -> None:
 
     # Navigation loop
     while True:
-        user_input = _read_browse_key().strip().lower()
+        raw_input = _read_browse_key().strip()
+        user_input = raw_input.lower()
 
         if user_input == _NOOP:
             continue
@@ -649,7 +666,56 @@ def browse_spreadsheet(sheet: Any) -> None:
                     utils.info_print("Spreadsheet opened in your default browser.")
                 except OSError as e:
                     utils.error_print("Could not open browser.", [f"Error: {e}"])
+        elif user_input in ("screen", "sc"):
+            output_format = "screen"
+            utils.info_print("Switched to screenshot mode.")
+        elif user_input == "gif":
+            output_format = "gif"
+            utils.info_print("Switched to GIF mode.")
+        elif user_input == "clip":
+            output_format = "clip"
+            utils.info_print("Switched to clip mode.")
         else:
+            # Try selector parsing for artifact generation
+            if process_fn is not None:
+                parsed = spreadsheet.parse_reel_input(raw_input)
+                has_selectors = (
+                    parsed.get("batch")
+                    or parsed.get("filter")
+                    or parsed["lines"]
+                    or parsed["ranges"]
+                    or parsed["cells"]
+                    or parsed["participants"]
+                    or parsed["categories"]
+                )
+                if has_selectors:
+                    if parsed.get("timeline"):
+                        utils.info_print(
+                            "Timeline selector is not supported in browse mode."
+                        )
+                    else:
+                        clips = spreadsheet.generate_list(
+                            sheet, "reel", reel_input=raw_input
+                        )
+                        if clips:
+                            format_label = {
+                                "clip": "clip(s)",
+                                "screen": "screenshot(s)",
+                                "gif": "GIF(s)",
+                            }.get(output_format, "file(s)")
+                            utils.info_print(
+                                f"Generating {len(clips)} {format_label}..."
+                            )
+                            outputs_generated, _ = process_fn(clips, output_format)
+                            utils.info_print(
+                                f"Done! Generated {outputs_generated} {format_label}."
+                            )
+                        else:
+                            utils.info_print(
+                                "No clips found for the given selectors."
+                            )
+                    continue
+
             # Treat unrecognized input as a search query
             matches = _search_rows(user_input)
             if not matches:

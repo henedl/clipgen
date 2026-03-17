@@ -1101,7 +1101,18 @@ def _dispatch_interactive_mode(
     """Dispatch a resolved mode or raw input. Returns result tuple, or None to re-prompt."""
     # Special modes with their own interactive flows
     if mode == "browse":
-        interactive.browse_spreadsheet(worksheet)
+
+        def _browse_process_fn(clips_list, output_format):
+            outputs_generated, artifacts = process_clips(
+                clips_list, output_format=output_format
+            )
+            if artifacts:
+                viewer.INTERACTIVE_ARTIFACTS.extend(artifacts)
+            if not config.REENCODING:
+                _print_reencoding_warning(utils.info_print)
+            return (outputs_generated, artifacts)
+
+        interactive.browse_spreadsheet(worksheet, process_fn=_browse_process_fn)
         return ([], False, None)
     if mode == "viewer":
         _run_viewer_mode(worksheet)
