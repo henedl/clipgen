@@ -1005,37 +1005,82 @@ def suggest_close_match(
 
 
 def set_program_settings() -> bool:
-    """Interactive function to change program settings.
-
-    Allows user to modify settings like REENCODING, FILEFORMAT, and DEBUGGING.
+    """Interactive settings screen with grid display and type-safe value changes.
 
     Returns:
         True if a setting was changed, False otherwise.
     """
-    SETTINGS_OPTIONS = [
-        "REENCODING",
-        "FILEFORMAT",
-        "DEBUGGING",
-        "MAX_FILESIZE_MB",
-        "VERBOSITY",
-    ]
+    settings_list = list(config.SETTINGS_DESCRIPTIONS.keys())
 
-    info_print("Which setting? Available:")
-    info_print(", ".join(SETTINGS_OPTIONS))
-    setting_to_change = read_user_input("\n>> ")
+    if _use_rich() and console is not None:
+        table = Table(
+            show_header=True,
+            header_style="bold cyan",
+            border_style="dim",
+            expand=False,
+        )
+        table.add_column("#", justify="right", style="bold", width=3)
+        table.add_column("Setting", style="yellow", min_width=12)
+        table.add_column("Value", style="green", min_width=6)
+        table.add_column("Description", max_width=60, overflow="fold")
+        for i, name in enumerate(settings_list, 1):
+            table.add_row(
+                str(i),
+                name,
+                str(getattr(config, name, "?")),
+                config.SETTINGS_DESCRIPTIONS[name],
+            )
+        console.print(table)
+    else:
+        for i, name in enumerate(settings_list, 1):
+            val = getattr(config, name, "?")
+            info_print(
+                f"  {i:>2}. {name:<30} = {val!s:<10}  {config.SETTINGS_DESCRIPTIONS[name]}"
+            )
 
-    info_print(
-        f"* Current value for '{setting_to_change}' is '{getattr(config, setting_to_change)}'"
-    )
+    choice = read_user_input("\nSetting to change (number or name, or empty to go back):\n>> ")
+    if not choice:
+        return False
 
-    new_value = read_user_input("\nWhich new value?\n>> ")
+    setting_name = None
+    if choice.isdigit():
+        idx = int(choice) - 1
+        if 0 <= idx < len(settings_list):
+            setting_name = settings_list[idx]
+    else:
+        upper = choice.strip().upper()
+        if upper in config.SETTINGS_DESCRIPTIONS:
+            setting_name = upper
 
-    info_print(f"* '{setting_to_change}' SET TO '{new_value}'")
+    if setting_name is None:
+        error_print(f"Unknown setting: '{choice}'")
+        return False
 
-    if setting_to_change != "":
-        setattr(config, setting_to_change, new_value)
-        return True
-    return False
+    current_value = getattr(config, setting_name)
+    info_print(f"  Current value: {current_value!r}")
+    info_print(f"  {config.SETTINGS_DESCRIPTIONS[setting_name]}")
+
+    new_raw = read_user_input("\nNew value (empty to cancel):\n>> ")
+    if not new_raw:
+        return False
+
+    current_type = type(current_value)
+    try:
+        if current_type is bool:
+            converted = new_raw.strip().lower() in ("true", "1", "yes", "on")
+        elif current_type is int:
+            converted = int(new_raw)
+        elif current_type is float:
+            converted = float(new_raw)
+        else:
+            converted = new_raw
+    except (ValueError, TypeError):
+        error_print(f"Invalid value '{new_raw}' for type {current_type.__name__}")
+        return False
+
+    setattr(config, setting_name, converted)
+    info_print(f"  '{setting_name}' set to {converted!r}")
+    return True
 
 
 # ---- Miscellaneous utilities ----

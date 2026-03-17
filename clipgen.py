@@ -64,6 +64,8 @@ MODE_ALIASES = {
     "browse": "browse",
     "v": "viewer",
     "viewer": "viewer",
+    "se": "settings",
+    "settings": "settings",
 }
 
 FORMAT_MODE_ALIASES = {
@@ -300,6 +302,8 @@ def select_spreadsheet(gspread_client: Any, doc_list: List[str]) -> Any:
                         f"Tip: Use the document index number (1, 2, 3...) from the '{config.COMMAND_LIST_ALL}' list."
                     ],
                 )
+        except (utils.QuitProgram, utils.TopToSpreadsheet, utils.BackToModeSelection):
+            raise
         except Exception as e:
             utils.error_print(f"Could not open document: {e}")
 
@@ -1102,6 +1106,9 @@ def _dispatch_interactive_mode(
     if mode == "viewer":
         _run_viewer_mode(worksheet)
         return None
+    if mode == "settings":
+        utils.set_program_settings()
+        return None
     if mode == "reel":
         clips, confirmed, reel_file = _run_reel_mode_interactive(worksheet)
         return (clips, True, reel_file) if confirmed else None
@@ -1141,7 +1148,7 @@ def run_interactive_mode(worksheet: Any) -> None:
             utils.print_mode_heading("Mode selection", "mode.selection")
             input_mode = utils.read_user_input(
                 "\nEnter mode or input directly:\n"
-                "  Tools: (s)creen, (g)if, (re)el, (rl) reel-late, (br)owse, (v)iewer \n"
+                "  Tools: (s)creen, (g)if, (re)el, (rl) reel-late, (br)owse, (v)iewer, (se)ttings \n"
                 "  Modes: (b)atch, (r)ange, (c)ategory, (l)ine, (ce)ll, (p)articipant, (f)ilter \n"
                 '  Or enter mixed selectors directly: e.g. 5, P01.11, 13-16, "Observations"\n>> '
             )
