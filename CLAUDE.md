@@ -8,7 +8,7 @@
 
 clipgen is a Python CLI tool that generates clips from timestamps stored in a Google Sheet or a local Excel file. It uses **gspread** for Google Sheets access, **openpyxl** for Excel, and **ffmpeg/ffprobe** for media processing. The target audience is UX Researchers and professionals who manage playtest videos locally.
 
-**Data flow:** Timestamps in spreadsheet → clipgen reads records (description, study, participant ID, category) → timestamp parsing/annotation filtering → ffmpeg → video clips, screenshots, GIFs, or a single reel.
+**Data flow:** Timestamps in spreadsheet → clipgen reads records (description, study, participant ID, category) → timestamp parsing/annotation filtering → ffmpeg → video clips, screenshots, GIFs, or a single reel. Optionally, generated artifacts can be transcribed via faster-whisper to produce timestamped transcript files.
 
 ## Architecture
 
@@ -20,6 +20,7 @@ clipgen is a Python CLI tool that generates clips from timestamps stored in a Go
 | [spreadsheet.py](spreadsheet.py) | Spreadsheet parsing, header validation, selector parsing (`reel` input), pure timestamp generation for all modes (no prompts) |
 | [interactive.py](interactive.py) | Interactive prompt helpers for all modes (line/range/cell/category/participant selection, browse mode); keeps generation functions pure |
 | [video.py](video.py) | ffmpeg/ffprobe operations: cut clips, screenshots, GIFs, concatenate reels, optional filesize compression |
+| [transcripts.py](transcripts.py) | Transcription via faster-whisper: `transcribe_video()`, segment filtering, write/read transcript files (Markdown/SRT/VTT) |
 | [files.py](files.py) | Filename handling (unique names, truncation), `prepare_clip()` (parse timestamps + annotations, sanitize desc/category), clip discovery for reel-late |
 | [utils.py](utils.py) | Timestamp parsing, cell/header annotation parsing, rich/plain output helpers, progress bar utilities, keyword-aware input helpers |
 | [config.py](config.py) | Global constants and settings (version, headers, limits, commands) |
@@ -50,6 +51,9 @@ flowchart LR
   utilsLayer --> videoLayer
   videoLayer --> artifacts["Clips / screenshots / GIFs / reels"]
 
+  artifacts --> transcriptLayer["transcripts.py (faster-whisper)"]
+  transcriptLayer --> transcriptFiles["Transcript files (.md / .srt / .vtt)"]
+
   artifacts --> viewer["assets/web (timeline viewer)"]
 ```
 
@@ -57,7 +61,8 @@ flowchart LR
 2. **Spreadsheet layer**: `spreadsheet.py` parses headers, validates layout, interprets the selected mode/selector, and yields logical clip records with per-participant timestamps.
 3. **Clip preparation**: `files.py` (with `utils.py`) parses and normalizes timestamps/annotations into `times` ranges, sanitizes study/participant/category names, and generates safe output filenames.
 4. **Rendering**: `video.py` uses ffmpeg/ffprobe to cut clips, screenshots, GIFs, or reels from `{study}_{participant}.mp4`, honoring limits and other settings in `config.py`.
-5. **Optional viewer**: When requested, `clipgen.py` uses the templates in `assets/web` to build an HTML timeline viewer from the generated artifacts.
+5. **Optional transcription**: When `--transcribe` is set, `transcripts.py` uses faster-whisper to transcribe source videos (cached per video), filters segments to each clip's time range, and writes transcript files alongside artifacts.
+6. **Optional viewer**: When requested, `clipgen.py` uses the templates in `assets/web` to build an HTML timeline viewer from the generated artifacts.
 
 ## Key data structures
 
@@ -89,7 +94,7 @@ Source video filenames follow `{study}_{participant}.mp4` (e.g. `mystudy_P01.mp4
 - **Annotations:** `utils.parse_cell_annotations()` strips supported keyphrases (configured in `ANNOTATION_KEYPHRASES`, currently `!key`) before timestamp parsing. Ignored tokens (configured in `IGNORED_TIMESTAMP_TOKENS`, currently `x`) are skipped.
 - **Participant IDs:** Headers must start with `P` (individual) or `G` (group); see `config.PARTICIPANT_PREFIXES`.
 - **User feedback:** Use `utils.error_print()`, `utils.warning_print()`, `utils.verbose_print()`, `utils.info_print()`. Prefer these over direct `print()` for user-facing messages.
-- **Debug:** Set `config.DEBUGGING = True` to enable icecream output and to skip ffmpeg execution paths in [video.py](video.py).
+- **Debug:** Set `config.DEBUGGING = True` to enable icecream output, skip ffmpeg execution paths in [video.py](video.py), and return stub transcript results in [transcripts.py](transcripts.py) without loading a Whisper model.
 - **Interactive keywords:** All interactive prompts go through `utils.read_user_input()`, which treats first-token commands as:
   - `quit` / `exit` → exit clipgen
   - `top` → return to spreadsheet selection
@@ -115,7 +120,7 @@ Source video filenames follow `{study}_{participant}.mp4` (e.g. `mystudy_P01.mp4
 
 Reel selectors: `batch`, `filter`, `timeline`, line numbers, ranges like `13-16`, quoted categories, cells like `P01.11`, participant IDs like `P01`.
 
-CLI mode flags are mutually exclusive for selection (`-b/-l/-r/-C/-c/-p/-f/-M/-R/-T`) and can be combined with output format flags (`--screen` or `--gif`) except reel/timeline, which always output a single video reel. `-C/--category` accepts one or more category names (comma- or plus-separated, e.g. `"Observations,Onboarding"`), and `-M/--mixed` combines selectors for individual outputs.
+CLI mode flags are mutually exclusive for selection (`-b/-l/-r/-C/-c/-p/-f/-M/-R/-T`) and can be combined with output format flags (`--screen` or `--gif`) except reel/timeline, which always output a single video reel. `-C/--category` accepts one or more category names (comma- or plus-separated, e.g. `"Observations,Onboarding"`), and `-M/--mixed` combines selectors for individual outputs. `--transcribe` can be combined with any mode/format to generate transcript files alongside artifacts; `--transcript-format` overrides the output format (`md`, `srt`, `vtt`).
 
 Interactive-only modes without dedicated CLI flags:
 
@@ -137,6 +142,13 @@ Interactive-only modes without dedicated CLI flags:
 - `MAX_FILENAME_LENGTH` – 255
 - `MAX_FILESIZE_MB` – optional output filesize cap for generated videos (`0` disables)
 - `COMMAND_LIST_ALL`, `COMMAND_LIST_NEW`, `COMMAND_OPEN_LAST`, `COMMAND_EXCEL`, `COMMAND_HTTP_PREFIX`, `COMMAND_SETTINGS` – Interactive spreadsheet selection commands
+- `TRANSCRIBE_ENABLED` – `False`; set `True` or use `--transcribe` CLI flag to generate transcripts alongside artifacts
+- `TRANSCRIBE_MODEL` – Whisper model size: `tiny`, `base` (default), `small`, `medium`, `large-v3`
+- `TRANSCRIBE_LANGUAGE` – `None` (auto-detect) or language code like `"en"`
+- `TRANSCRIBE_COMPUTE_TYPE` – `"int8"` (fastest), `"float16"`, or `"float32"`
+- `TRANSCRIBE_FORMAT` – Output format: `"md"` (Markdown, default), `"srt"`, or `"vtt"`
+- `TRANSCRIBE_INITIAL_PROMPT` – Context prompt sent to Whisper (default: UX research session description)
+- `TRANSCRIBE_BEAM_SIZE` – Beam search width (`5` default)
 
 ## Spreadsheet layout
 
@@ -164,12 +176,26 @@ Reference spreadsheet layout is described in [README.md](README.md).
 - **Key functions**: `build_artifact_records_for_clip()`, `finalize_timeline_data()`, `generate_timeline_viewer()` – all in [viewer.py](viewer.py).
 - Reel mode artifact collection is stubbed (returns empty artifacts list) for future enhancement.
 
+## Transcription ([transcripts.py](transcripts.py))
+
+- **Opt-in**: CLI flag `--transcribe` or `config.TRANSCRIBE_ENABLED = True` via interactive settings.
+- **Engine**: [faster-whisper](https://github.com/SYSTRAN/faster-whisper) (CTranslate2-based Whisper). Model is lazy-loaded on first use and cached at module level for the session.
+- **Key functions**:
+  - `transcribe_video(video_path, *, language, initial_prompt, context_keywords)` → `TranscriptResult` with timestamped segments, detected language, source file, model name. Accepts optional `context_keywords` list appended to the initial prompt.
+  - `filter_segments(result, start_sec, end_sec, *, offset_to_zero)` → filtered `TranscriptResult` for a clip's time range; `offset_to_zero=True` shifts times so the clip starts at 0:00.
+  - `write_transcript(result, output_path, *, fmt)` → writes Markdown (`.md`), SRT (`.srt`), or WebVTT (`.vtt`).
+  - `read_transcript(filepath)` → parses any supported format back into `TranscriptResult` (for future subtitle/viewer use).
+  - `get_transcript_extension(fmt)` → returns the file extension for a format string.
+- **Data types**: `TranscriptSegment` (start, end, text) and `TranscriptResult` (segments, language, source_file, model) — both `TypedDict`.
+- **Pipeline integration**: In `clipgen.process_clips()`, `_transcribe_segments()` caches full-video transcription per source video, then filters and writes per-clip transcripts. Transcript artifacts (type `"transcript"`) are added to the artifact list for manifest tracking.
+- **Output filenames**: Match the corresponding clip filename but with the transcript extension (e.g. `[Onboarding] study P01 desc.md`).
+
 ## Version
 
-- The version is stored as `VERSIONNUM` in [config.py](config.py) (currently `'0.8.22'`).
-- **When making substantive code changes** (bug fixes or features), increment the **last segment only** (patch) in `config.py`, e.g. `0.8.22` → `0.8.23`. Do not bump for docs-only, comment-only, or refactor-only changes unless they affect user-visible behavior.
+- The version is stored as `VERSIONNUM` in [config.py](config.py) (currently `'0.9.0'`).
+- **When making substantive code changes** (bug fixes or features), increment the **last segment only** (patch) in `config.py`, e.g. `0.9.0` → `0.9.1`. Do not bump for docs-only, comment-only, or refactor-only changes unless they affect user-visible behavior.
 
 ## Testing notes
 
 - There is no test suite in the repo.
-- With `config.DEBUGGING = True`, icecream is enabled and [video.py](video.py) does not invoke ffmpeg (returns without writing files where applicable).
+- With `config.DEBUGGING = True`, icecream is enabled, [video.py](video.py) does not invoke ffmpeg, and [transcripts.py](transcripts.py) returns stub results without loading a Whisper model.

@@ -168,6 +168,20 @@ Note: Non-interactive mode (using -b, -l, -r, -C, -c, -p, -f, -M, -R, or -T) is 
         "--gif", action="store_true", help="Output animated GIFs instead of video clips"
     )
 
+    # Transcription arguments
+    parser.add_argument(
+        "--transcribe",
+        action="store_true",
+        help="Generate transcript files alongside artifacts",
+    )
+    parser.add_argument(
+        "--transcript-format",
+        type=str,
+        choices=["md", "srt", "vtt"],
+        metavar="FMT",
+        help="Transcript format: md (default), srt, or vtt",
+    )
+
     # Optional arguments (can be used with any mode)
     parser.add_argument(
         "-s",
@@ -754,6 +768,11 @@ def main() -> None:
 
     if getattr(args, "manifest", False):
         config.MANIFEST_ENABLED = True
+
+    if getattr(args, "transcribe", False):
+        config.TRANSCRIBE_ENABLED = True
+    if getattr(args, "transcript_format", None):
+        config.TRANSCRIBE_FORMAT = args.transcript_format
 
     # Parse CLI arguments for line, range, and cell modes
     cli_mode_args = parse_cli_mode_args(args)

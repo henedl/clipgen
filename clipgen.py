@@ -29,6 +29,7 @@ import files
 import google_api
 import interactive
 import spreadsheet
+import transcripts
 import utils
 import video
 import viewer
@@ -472,9 +473,7 @@ def _check_source_video(
             _active_progress.stop()
             paused = True
         utils.info_print(f"Source video '{base_name}' not found.")
-        utils.info_print(
-            f"Closest match found: '{best_path.name}' ({size_gb:.1f} GB)"
-        )
+        utils.info_print(f"Closest match found: '{best_path.name}' ({size_gb:.1f} GB)")
         answer = utils.read_user_input("Use this file instead? [y/n]\n>> ")
         if paused:
             _active_progress.start()
@@ -659,6 +658,52 @@ def _run_clip_pipeline(
     return (results, missing_videos)
 
 
+def _transcribe_segments(
+    clip: Any,
+    base_video: str,
+    segment_details: List[Tuple[str, str, str]],
+    all_artifacts: List[Dict[str, Any]],
+    transcript_cache: Dict[str, Any],
+) -> None:
+    """Transcribe segments of a clip and write transcript files."""
+    if base_video not in transcript_cache:
+        transcript_cache[base_video] = transcripts.transcribe_video(
+            str(utils.resolve_input_path(base_video))
+        )
+    full_transcript = transcript_cache[base_video]
+    if not full_transcript:
+        return
+
+    ext = transcripts.get_transcript_extension()
+    cell = clip.get("cell")
+    cell_row = getattr(cell, "row", None)
+    cell_col = getattr(cell, "col", None)
+
+    for seg_idx, (out_path, start_str, end_str) in enumerate(segment_details):
+        start_sec = utils.timestamp_to_seconds(start_str) or 0.0
+        end_sec = utils.timestamp_to_seconds(end_str) or 0.0
+        clipped = transcripts.filter_segments(
+            full_transcript, start_sec, end_sec, offset_to_zero=True
+        )
+        t_path = files.get_unique_filename(Path(out_path).stem + ext, file_format=ext)
+        if transcripts.write_transcript(clipped, t_path):
+            all_artifacts.append(
+                {
+                    "id": f"a{cell_row}c{cell_col}s{seg_idx}_transcript",
+                    "type": "transcript",
+                    "file": Path(t_path).name,
+                    "start": start_sec,
+                    "end": end_sec,
+                    "study": clip.get("study", ""),
+                    "participant": clip.get("participant", ""),
+                    "category": clip.get("category", ""),
+                    "description": clip.get("desc", ""),
+                    "sourceVideo": base_video,
+                    "transcriptFormat": config.TRANSCRIBE_FORMAT,
+                }
+            )
+
+
 def process_clips(
     clips_list: List[ClipRecord],
     output_format: str = "clip",
@@ -673,6 +718,7 @@ def process_clips(
 
     all_artifacts: List[Dict[str, Any]] = []
     fuzzy_matches: Dict[str, Optional[str]] = {}
+    transcript_cache: Dict[str, Any] = {}
 
     def process_single_clip(clip: Any, missing_videos: Set[str]) -> Tuple[int, int]:
         """Process a single clip and return (generated, skipped)."""
@@ -695,6 +741,10 @@ def process_clips(
                     clip, base_video, segment_details, output_format
                 )
             )
+            if config.TRANSCRIBE_ENABLED:
+                _transcribe_segments(
+                    clip, base_video, segment_details, all_artifacts, transcript_cache
+                )
         skipped_count = (
             len(clip["times"]) - generated_count
             if generated_count < len(clip["times"])

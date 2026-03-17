@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """Configuration constants for clipgen."""
 
-from typing import Dict, List, Set, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 
 from icecream import ic
 
@@ -9,7 +9,7 @@ from icecream import ic
 REENCODING: bool = False
 AUDIO_NORMALIZE: bool = False
 FILEFORMAT: str = ".mp4"
-VERSIONNUM: str = "0.8.34"
+VERSIONNUM: str = "0.9.0"
 TITLECARDS_ENABLED: bool = False
 TITLECARD_DURATION_SECONDS: int = 2
 WORKSHEET_PRIORITY: List[str] = [
@@ -104,6 +104,15 @@ MIN_VIDEO_BITRATE_KBPS: int = 100
 # Source video pattern
 SOURCE_VIDEO_PATTERN: str = r"_[PG]\d+\.mp4$"
 
+# Transcription constants (faster-whisper)
+TRANSCRIBE_ENABLED: bool = False
+TRANSCRIBE_MODEL: str = "base"  # tiny, base, small, medium, large-v3
+TRANSCRIBE_LANGUAGE: Optional[str] = None  # None = auto-detect
+TRANSCRIBE_COMPUTE_TYPE: str = "int8"  # int8, float16, float32
+TRANSCRIBE_FORMAT: str = "md"  # md, srt, vtt
+TRANSCRIBE_INITIAL_PROMPT: str = "This is a recorded user experience research session."
+TRANSCRIBE_BEAM_SIZE: int = 5
+
 # Rich output settings
 RICH_COLORS: bool = True  # Enable/disable colored output (set False for piped output)
 RICH_PANELS: bool = True  # Use bordered panels for errors/warnings/success messages
@@ -124,4 +133,7 @@ SETTINGS_DESCRIPTIONS: Dict[str, str] = {
     "RICH_PROGRESS": "Display progress bars during batch and reel processing.",
     "TITLECARDS_ENABLED": "Prepend a generated titlecard to each video clip.",
     "TITLECARD_DURATION_SECONDS": "Duration in seconds for the intro titlecard frame.",
+    "TRANSCRIBE_ENABLED": "Generate transcripts alongside clips using faster-whisper.",
+    "TRANSCRIBE_MODEL": "Whisper model size: tiny, base, small, medium, large-v3.",
+    "TRANSCRIBE_FORMAT": "Transcript output format: md (Markdown), srt, or vtt.",
 }
