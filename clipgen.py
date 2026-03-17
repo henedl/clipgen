@@ -14,6 +14,7 @@ This script supports full unicode/UTF-8 for international characters in:
 - File paths
 """
 
+import difflib
 import os
 import sys
 from pathlib import Path
@@ -412,12 +413,17 @@ def _is_excel_worksheet(worksheet: Any) -> bool:
 
 
 def _check_source_video(
-    clip: ClipRecord, missing_videos: Set[str], skip_detail: str
+    clip: ClipRecord,
+    missing_videos: Set[str],
+    skip_detail: str,
+    fuzzy_matches: Dict[str, Optional[str]],
 ) -> Optional[str]:
     """Return the expected source video path if it exists; log a detailed error once per missing file.
 
     The expected filename is derived from clip['study'] and clip['participant'] by default,
     but can be overridden per-participant via an optional source_filename field.
+    When no exact match is found, scans the input directory for large .mp4 files and
+    offers the closest fuzzy match for user confirmation.
     Paths already seen in missing_videos are not reported again.
     """
     override = clip.get("source_filename")
@@ -429,12 +435,51 @@ def _check_source_video(
         return str(full_path)
 
     full_path_str = str(full_path)
+
+    # Check fuzzy match cache (value may be None = user rejected or no candidate)
+    if full_path_str in fuzzy_matches:
+        return fuzzy_matches[full_path_str]
+
+    # Scan input directory for large .mp4 files as fuzzy candidates
+    input_dir = utils.get_effective_input_dir()
+    size_threshold = config.MIN_SOURCE_VIDEO_SIZE_MB * 1_000_000
+    candidates = []
+    for p in input_dir.glob(f"*{config.FILEFORMAT}"):
+        try:
+            size = p.stat().st_size
+        except OSError:
+            continue
+        if size >= size_threshold:
+            ratio = difflib.SequenceMatcher(
+                None, base_name.lower(), p.name.lower()
+            ).ratio()
+            candidates.append((ratio, size, p))
+
+    # Sort by similarity descending, then file size descending as tiebreaker
+    candidates.sort(key=lambda c: (c[0], c[1]), reverse=True)
+
+    if candidates and candidates[0][0] >= 0.7:
+        best_ratio, best_size, best_path = candidates[0]
+        size_gb = best_size / 1_000_000_000
+        utils.info_print(f"Source video '{base_name}' not found.")
+        utils.info_print(
+            f"Closest match found: '{best_path.name}' ({size_gb:.1f} GB)"
+        )
+        answer = utils.read_user_input("Use this file instead? [y/n]\n>> ")
+        if answer.strip().lower() == "y":
+            resolved = str(best_path)
+            fuzzy_matches[full_path_str] = resolved
+            return resolved
+
+    # No match or user rejected — cache and report error
+    fuzzy_matches[full_path_str] = None
     if full_path_str not in missing_videos:
         missing_videos.add(full_path_str)
         utils.error_print(
             f"Source video file not found: '{base_name}'",
             [
                 f"Expected location: {full_path_str}",
+                f"Expected format: {{study}}_{{participant}}{config.FILEFORMAT}",
                 skip_detail,
             ],
         )
@@ -442,7 +487,9 @@ def _check_source_video(
 
 
 def _prepare_and_check_clip(
-    clip: ClipRecord, missing_videos: Set[str]
+    clip: ClipRecord,
+    missing_videos: Set[str],
+    fuzzy_matches: Dict[str, Optional[str]],
 ) -> Tuple[ClipRecord, Optional[str]]:
     """Prepare one clip and validate that its source video exists.
 
@@ -458,6 +505,7 @@ def _prepare_and_check_clip(
         clip,
         missing_videos,
         f"Clips for participant '{clip['participant']}' in study '{clip['study']}' will be skipped.",
+        fuzzy_matches,
     )
     return (clip, base_video)
 
@@ -609,10 +657,11 @@ def process_clips(
         ic(len(clips_list))
 
     all_artifacts: List[Dict[str, Any]] = []
+    fuzzy_matches: Dict[str, Optional[str]] = {}
 
     def process_single_clip(clip: Any, missing_videos: Set[str]) -> Tuple[int, int]:
         """Process a single clip and return (generated, skipped)."""
-        clip, base_video = _prepare_and_check_clip(clip, missing_videos)
+        clip, base_video = _prepare_and_check_clip(clip, missing_videos, fuzzy_matches)
         if not clip["times"]:
             return (0, 1)
         if base_video is None:
@@ -685,11 +734,13 @@ def process_reel(
             study_name = s
             break
 
+    fuzzy_matches: Dict[str, Optional[str]] = {}
+
     def process_reel_clip(
         clip: Any, missing_videos: Set[str]
     ) -> List[Tuple[str, str, str]]:
         """Process one clip for reel mode and return generated segment paths."""
-        clip, base_video = _prepare_and_check_clip(clip, missing_videos)
+        clip, base_video = _prepare_and_check_clip(clip, missing_videos, fuzzy_matches)
         if base_video is None:
             return []
         _, segment_paths = _process_single_clip_segments(
