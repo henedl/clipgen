@@ -465,7 +465,8 @@ def browse_spreadsheet(sheet: Any, *, process_fn=None) -> None:
             )
             control_label = f"{control_label}\n{generate_label}"
         label = " Search or command "
-        top = f"{control_label}\n\n\u2500{label}{'\u2500' * (w - 2 - len(label))}\u2500"
+        bar = "\u2500" * (w - 2 - len(label))
+        top = f"{control_label}\n\n\u2500{label}{bar}\u2500"
         if utils._use_rich() and utils.console is not None:
             utils.console.print(f"[dim]{top}[/dim]")
         else:
