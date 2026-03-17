@@ -39,6 +39,7 @@ from utils import ClipRecord
 # Active progress bar reference, set during clip pipeline so nested functions
 # (e.g. fuzzy match prompts) can pause/resume the live display.
 _active_progress = None
+_active_secondary_task = None
 
 # ---- Mode configuration ----
 
@@ -613,6 +614,7 @@ def _run_clip_pipeline(
     task_label: str,
     per_clip_fn: Callable[[Any, Set[str]], Any],
     show_fallback_counter: bool = False,
+    secondary_task_label: Optional[str] = None,
 ) -> Tuple[List[Any], Set[str]]:
     """Run shared clip-processing pipeline and return per-clip results."""
     if not clips_list:
@@ -630,10 +632,14 @@ def _run_clip_pipeline(
     results: List[Any] = []
 
     if progress:
-        global _active_progress
+        global _active_progress, _active_secondary_task
         _active_progress = progress
         with progress:
             task = progress.add_task(task_label, total=total_clips)
+            if secondary_task_label:
+                _active_secondary_task = progress.add_task(
+                    secondary_task_label, total=total_clips
+                )
             for clip in clips_list:
                 desc_preview = (clip.get("desc") or "")[
                     : config.PROGRESS_DESCRIPTION_LENGTH
@@ -643,6 +649,7 @@ def _run_clip_pipeline(
                 results.append(wrapped_process(clip))
                 progress.update(task, advance=1)
         _active_progress = None
+        _active_secondary_task = None
     else:
         for index, clip in enumerate(clips_list, start=1):
             if (
@@ -720,12 +727,22 @@ def process_clips(
     fuzzy_matches: Dict[str, Optional[str]] = {}
     transcript_cache: Dict[str, Any] = {}
 
+    def _update_secondary(description: str) -> None:
+        if _active_progress is not None and _active_secondary_task is not None:
+            _active_progress.update(_active_secondary_task, description=description)
+
+    def _advance_secondary() -> None:
+        if _active_progress is not None and _active_secondary_task is not None:
+            _active_progress.update(_active_secondary_task, advance=1)
+
     def process_single_clip(clip: Any, missing_videos: Set[str]) -> Tuple[int, int]:
         """Process a single clip and return (generated, skipped)."""
         clip, base_video = _prepare_and_check_clip(clip, missing_videos, fuzzy_matches)
         if not clip["times"]:
+            _advance_secondary()
             return (0, 1)
         if base_video is None:
+            _advance_secondary()
             return (0, len(clip["times"]))
 
         generated_count, segment_details = _process_single_clip_segments(
@@ -742,9 +759,15 @@ def process_clips(
                 )
             )
             if config.TRANSCRIBE_ENABLED:
+                participant = clip.get("participant", "")
+                desc_preview = (clip.get("desc") or "")[
+                    : config.PROGRESS_DESCRIPTION_LENGTH
+                ]
+                _update_secondary(f"[{participant}] {desc_preview}...")
                 _transcribe_segments(
                     clip, base_video, segment_details, all_artifacts, transcript_cache
                 )
+        _advance_secondary()
         skipped_count = (
             len(clip["times"]) - generated_count
             if generated_count < len(clip["times"])
@@ -759,6 +782,7 @@ def process_clips(
         task_label="Processing clips",
         per_clip_fn=process_single_clip,
         show_fallback_counter=True,
+        secondary_task_label="Transcribing" if config.TRANSCRIBE_ENABLED else None,
     )
     outputs_generated = sum(generated_count for generated_count, _ in results)
     outputs_skipped = sum(skipped_count for _, skipped_count in results)
