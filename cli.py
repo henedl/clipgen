@@ -194,6 +194,11 @@ Note: Non-interactive mode (using -b, -l, -r, -C, -c, -p, -f, -M, -R, or -T) is 
         help="Generate a timeline HTML viewer file (clips_viewer.html) for this run",
     )
     parser.add_argument(
+        "--manifest",
+        action="store_true",
+        help="Write artifact metadata to a cumulative manifest JSON file; combine with --viewer to regenerate viewer from manifest",
+    )
+    parser.add_argument(
         "--timeline-viewer",
         action="store_true",
         help="Batch-export all clips and generate a per-participant timeline HTML viewer",
@@ -572,6 +577,18 @@ def _run_timeline_viewer_mode(worksheet: Any, args: Any) -> None:
     if viewer_path:
         utils.info_print(f"Participant timeline viewer created: {viewer_path}")
 
+    if getattr(args, "manifest", False):
+        manifest_path = viewer.save_manifest(
+            artifacts,
+            study=study,
+            worksheet_title=getattr(worksheet, "title", ""),
+            is_excel=clipgen._is_excel_worksheet(worksheet),
+            mode="timeline-viewer",
+            output_format="clip",
+        )
+        if manifest_path:
+            utils.info_print(f"Manifest updated: {manifest_path}")
+
 
 def run_cli_mode(worksheet: Any, args: Any, cli_mode_args: CliModeArgs) -> None:
     """Execute CLI mode - run once and exit.
@@ -625,21 +642,41 @@ def run_cli_mode(worksheet: Any, args: Any, cli_mode_args: CliModeArgs) -> None:
         outputs_generated, output_format, is_reel=bool(args.reel or args.timeline)
     )
 
-    if getattr(args, "viewer", False) and artifacts:
-        study = artifacts[0].get("study", "") if artifacts else ""
-        participant = artifacts[0].get("participant", "") if artifacts else ""
-        data = viewer.finalize_timeline_data(
-            artifacts,
-            study=study,
-            participant=participant,
-            worksheet_title=getattr(worksheet, "title", ""),
-            is_excel=clipgen._is_excel_worksheet(worksheet),
-            mode=output_format if output_format != "clip" else "batch",
-            output_format=output_format,
-        )
-        viewer_path = viewer.generate_timeline_viewer(data)
-        if viewer_path:
-            utils.info_print(f"Timeline viewer created: {viewer_path}")
+    if (
+        getattr(args, "viewer", False) or getattr(args, "manifest", False)
+    ) and artifacts:
+        study = artifacts[0].get("study", "")
+        participant = artifacts[0].get("participant", "")
+        ws_title = getattr(worksheet, "title", "")
+        is_excel = clipgen._is_excel_worksheet(worksheet)
+        effective_mode = output_format if output_format != "clip" else "batch"
+
+        if getattr(args, "viewer", False):
+            data = viewer.finalize_timeline_data(
+                artifacts,
+                study=study,
+                participant=participant,
+                worksheet_title=ws_title,
+                is_excel=is_excel,
+                mode=effective_mode,
+                output_format=output_format,
+            )
+            viewer_path = viewer.generate_timeline_viewer(data)
+            if viewer_path:
+                utils.info_print(f"Timeline viewer created: {viewer_path}")
+
+        if getattr(args, "manifest", False):
+            manifest_path = viewer.save_manifest(
+                artifacts,
+                study=study,
+                participant=participant,
+                worksheet_title=ws_title,
+                is_excel=is_excel,
+                mode=effective_mode,
+                output_format=output_format,
+            )
+            if manifest_path:
+                utils.info_print(f"Manifest updated: {manifest_path}")
 
 
 # ---- Main entry point ----
@@ -677,7 +714,9 @@ def main() -> None:
         if any(conflicting):
             utils.error_print(
                 "--timeline-viewer cannot be combined with mode, format, or --viewer flags.",
-                ["Only -s (spreadsheet) and -v (verbose) may be used alongside --timeline-viewer."],
+                [
+                    "Only -s (spreadsheet) and -v (verbose) may be used alongside --timeline-viewer."
+                ],
             )
             sys.exit(1)
 
@@ -713,6 +752,9 @@ def main() -> None:
     if getattr(args, "output", None) is not None:
         config.OUTPUT_DIR = args.output
 
+    if getattr(args, "manifest", False):
+        config.MANIFEST_ENABLED = True
+
     # Parse CLI arguments for line, range, and cell modes
     cli_mode_args = parse_cli_mode_args(args)
 
@@ -733,6 +775,27 @@ def main() -> None:
 
     if not video.check_ffmpeg_tools_available():
         sys.exit(1)
+
+    # Standalone manifest → viewer: regenerate viewer from saved manifest, no spreadsheet needed
+    if config.MANIFEST_ENABLED and getattr(args, "viewer", False) and not cli_mode:
+        existing_artifacts = viewer.load_manifest_artifacts()
+        if not existing_artifacts:
+            utils.error_print(
+                "No manifest found or manifest is empty.",
+                [
+                    f"Run a clip generation mode with --manifest first to create {config.MANIFEST_FILENAME}."
+                ],
+            )
+            sys.exit(1)
+        study = existing_artifacts[0].get("study", "")
+        participant = existing_artifacts[0].get("participant", "")
+        data = viewer.finalize_timeline_data(
+            existing_artifacts, study=study, participant=participant, mode="manifest"
+        )
+        viewer_path = viewer.generate_timeline_viewer(data)
+        if viewer_path:
+            utils.info_print(f"Timeline viewer created from manifest: {viewer_path}")
+        sys.exit(0)
 
     # Authenticate with Google (once per run)
     gspread_client = authenticate_google()

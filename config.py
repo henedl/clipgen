@@ -9,7 +9,7 @@ from icecream import ic
 REENCODING: bool = False
 AUDIO_NORMALIZE: bool = False
 FILEFORMAT: str = ".mp4"
-VERSIONNUM: str = "0.8.32"
+VERSIONNUM: str = "0.8.33"
 TITLECARDS_ENABLED: bool = False
 TITLECARD_DURATION_SECONDS: int = 2
 WORKSHEET_PRIORITY: List[str] = [
@@ -58,6 +58,8 @@ MAX_CLIP_DURATION_SECONDS: int = 600  # 10 minutes
 DEFAULT_DURATION_SECONDS: int = 60
 DEFAULT_GIF_DURATION_SECONDS: int = 5
 MAX_FILESIZE_MB: int = 0  # Maximum output file size in MB (0 = disabled)
+MANIFEST_FILENAME: str = "clipgen_manifest.json"
+MANIFEST_ENABLED: bool = False
 
 # Browse Mode Constants
 BROWSE_LINES_TO_DISPLAY: int = 5  # Number of rows to show at once when browsing

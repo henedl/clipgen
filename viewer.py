@@ -13,6 +13,7 @@ from typing import Any, Dict, List, Optional
 
 import gspread
 
+import config
 import files
 import utils
 
@@ -200,3 +201,57 @@ def generate_timeline_viewer(
         return None
 
     return out_path
+
+
+def load_manifest_artifacts() -> List[Dict[str, Any]]:
+    """Load artifact records from the manifest file, or return [] if unavailable."""
+    manifest_path = Path(utils.get_effective_output_dir()) / config.MANIFEST_FILENAME
+    if not manifest_path.is_file():
+        return []
+    try:
+        data = json.loads(manifest_path.read_text(encoding="utf-8"))
+        return data.get("artifacts", [])
+    except (OSError, json.JSONDecodeError, AttributeError):
+        return []
+
+
+def save_manifest(
+    new_artifacts: List[Dict[str, Any]],
+    *,
+    study: str = "",
+    participant: str = "",
+    worksheet_title: str = "",
+    is_excel: bool = False,
+    mode: str = "",
+    output_format: str = "clip",
+) -> Optional[Path]:
+    """Merge new artifacts into the manifest file and write it back.
+
+    Deduplicates by artifact ``id``; newer entries win.
+    Returns the manifest path on success, or None on failure.
+    """
+    existing = load_manifest_artifacts()
+    merged = {a["id"]: a for a in existing}
+    for a in new_artifacts:
+        merged[a["id"]] = a
+    all_artifacts = list(merged.values())
+
+    data = finalize_timeline_data(
+        all_artifacts,
+        study=study,
+        participant=participant,
+        worksheet_title=worksheet_title,
+        is_excel=is_excel,
+        mode=mode,
+        output_format=output_format,
+    )
+
+    manifest_path = Path(utils.get_effective_output_dir()) / config.MANIFEST_FILENAME
+    try:
+        manifest_path.write_text(
+            json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+        return manifest_path
+    except OSError as e:
+        utils.warning_print(f"Could not write manifest: {e}")
+        return None

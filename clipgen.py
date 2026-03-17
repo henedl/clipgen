@@ -1067,6 +1067,14 @@ def _run_format_mode_interactive(worksheet: Any, output_format: str) -> None:
     )
     if artifacts:
         viewer.INTERACTIVE_ARTIFACTS.extend(artifacts)
+        if config.MANIFEST_ENABLED:
+            viewer.save_manifest(
+                viewer.INTERACTIVE_ARTIFACTS,
+                study=artifacts[0].get("study", ""),
+                worksheet_title=getattr(worksheet, "title", ""),
+                is_excel=_is_excel_worksheet(worksheet),
+                mode="interactive",
+            )
     _print_run_summary(
         f"All done, created {outputs_generated} {output_label}!\nFiles are in {os.getcwd()}"
     )
@@ -1108,6 +1116,14 @@ def _dispatch_interactive_mode(
             )
             if artifacts:
                 viewer.INTERACTIVE_ARTIFACTS.extend(artifacts)
+                if config.MANIFEST_ENABLED:
+                    viewer.save_manifest(
+                        viewer.INTERACTIVE_ARTIFACTS,
+                        study=artifacts[0].get("study", ""),
+                        worksheet_title=getattr(worksheet, "title", ""),
+                        is_excel=_is_excel_worksheet(worksheet),
+                        mode="interactive",
+                    )
             if not config.REENCODING:
                 _print_reencoding_warning(utils.info_print)
             return (outputs_generated, artifacts)
@@ -1203,6 +1219,14 @@ def run_interactive_mode(worksheet: Any) -> None:
 
             if artifacts:
                 viewer.INTERACTIVE_ARTIFACTS.extend(artifacts)
+                if config.MANIFEST_ENABLED:
+                    viewer.save_manifest(
+                        viewer.INTERACTIVE_ARTIFACTS,
+                        study=artifacts[0].get("study", ""),
+                        worksheet_title=getattr(worksheet, "title", ""),
+                        is_excel=_is_excel_worksheet(worksheet),
+                        mode="interactive",
+                    )
 
             if not config.REENCODING:
                 _print_reencoding_warning(utils.info_print)
