@@ -1,4 +1,3 @@
-from types import SimpleNamespace
 from typing import cast
 
 import gspread
@@ -78,4 +77,3 @@ def test_excel_sheet_adapter_basic_access(tmp_path, monkeypatch):
     row2 = adapter.row_values(2)
     assert "P01" in row2
     assert adapter.col_count >= 5
-

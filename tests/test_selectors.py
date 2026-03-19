@@ -6,7 +6,16 @@ from typing import List
 from utils import ClipRecord
 
 
-def _make_context(sheet_data, id_cell, observation_cell, category_cell, num_participants=1, study_name="study", baseline_row_idx=None, filename_row_idx=None):
+def _make_context(
+    sheet_data,
+    id_cell,
+    observation_cell,
+    category_cell,
+    num_participants=1,
+    study_name="study",
+    baseline_row_idx=None,
+    filename_row_idx=None,
+):
     """Helper to build a SheetContext for tests."""
     return SheetContext(
         sheet_data=sheet_data,
@@ -21,7 +30,9 @@ def _make_context(sheet_data, id_cell, observation_cell, category_cell, num_part
 
 
 def test_parse_reel_input_parses_mixed_selectors():
-    parsed = spreadsheet.parse_reel_input('timeline, 11, 13-16, P01.5, P02, "Usability"')
+    parsed = spreadsheet.parse_reel_input(
+        'timeline, 11, 13-16, P01.5, P02, "Usability"'
+    )
     assert parsed["timeline"] is True
     assert parsed["lines"] == [11]
     assert parsed["ranges"] == [(13, 16)]
@@ -127,12 +138,16 @@ def test_make_clip_record_attaches_timestamp_baseline(fake_sheet_meta):
         baseline_row_idx=baseline_row_idx,
     )
 
-    clip = spreadsheet._make_clip_record(ctx, row_idx=3, col_idx=1, cell_value=sheet_data[3][1])
+    clip = spreadsheet._make_clip_record(
+        ctx, row_idx=3, col_idx=1, cell_value=sheet_data[3][1]
+    )
     assert clip["participant"] == "P01"
     assert clip.get("timestamp_baseline") == "09:12:00"
 
 
-def test_generate_reel_timestamps_dedupes_cells(monkeypatch, fake_sheet_meta, make_clip):
+def test_generate_reel_timestamps_dedupes_cells(
+    monkeypatch, fake_sheet_meta, make_clip
+):
     duplicate_clip = make_clip(row=4, col=2)
 
     monkeypatch.setattr(
@@ -140,7 +155,7 @@ def test_generate_reel_timestamps_dedupes_cells(monkeypatch, fake_sheet_meta, ma
         "parse_reel_input",
         lambda _input: {
             "batch": False,
-            "filter": True,
+            "keyword": True,
             "timeline": False,
             "lines": [4],
             "ranges": [],
@@ -149,8 +164,12 @@ def test_generate_reel_timestamps_dedupes_cells(monkeypatch, fake_sheet_meta, ma
             "participants": [],
         },
     )
-    monkeypatch.setattr(spreadsheet, "generate_filter_timestamps", lambda ctx: [duplicate_clip])
-    monkeypatch.setattr(spreadsheet, "generate_line_timestamps", lambda ctx, lines: [duplicate_clip])
+    monkeypatch.setattr(
+        spreadsheet, "generate_keyword_timestamps", lambda ctx: [duplicate_clip]
+    )
+    monkeypatch.setattr(
+        spreadsheet, "generate_line_timestamps", lambda ctx, lines: [duplicate_clip]
+    )
 
     ctx = _make_context(
         sheet_data=[["Study"]],
@@ -160,13 +179,15 @@ def test_generate_reel_timestamps_dedupes_cells(monkeypatch, fake_sheet_meta, ma
         num_participants=1,
         study_name="study",
     )
-    clips = spreadsheet.generate_reel_timestamps(ctx, "filter, 4")
+    clips = spreadsheet.generate_reel_timestamps(ctx, "keyword, 4")
 
     assert len(clips) == 1
     assert (clips[0]["cell"].row, clips[0]["cell"].col) == (4, 2)
 
 
-def test_generate_filter_timestamps_honors_header_and_segment_annotations(monkeypatch, fake_sheet_meta):
+def test_generate_keyword_timestamps_honors_header_and_segment_annotations(
+    monkeypatch, fake_sheet_meta
+):
     cells = fake_sheet_meta
     sheet_data = [
         ["Study"],
@@ -176,7 +197,9 @@ def test_generate_filter_timestamps_honors_header_and_segment_annotations(monkey
     ]
 
     # Use real batch generation so filter logic can inspect header and cell annotations.
-    monkeypatch.setattr(spreadsheet, "get_num_participants", lambda header_row, _id, _col_count: 2)
+    monkeypatch.setattr(
+        spreadsheet, "get_num_participants", lambda header_row, _id, _col_count: 2
+    )
 
     ctx = _make_context(
         sheet_data=sheet_data,
@@ -186,7 +209,7 @@ def test_generate_filter_timestamps_honors_header_and_segment_annotations(monkey
         num_participants=2,
         study_name="study",
     )
-    clips = spreadsheet.generate_filter_timestamps(ctx)
+    clips = spreadsheet.generate_keyword_timestamps(ctx)
 
     coords = {(clip["cell"].row, clip["cell"].col) for clip in clips}
     # Both cells with segment-level !key annotations should be included.

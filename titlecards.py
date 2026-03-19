@@ -69,9 +69,7 @@ def build_titlecard_frame(clip: ClipRecord, resolution: str) -> Optional[str]:
     use_image_background = background_path.is_file()
 
     try:
-        with tempfile.NamedTemporaryFile(
-            suffix=config.FILEFORMAT, delete=False
-        ) as tmp:
+        with tempfile.NamedTemporaryFile(suffix=config.FILEFORMAT, delete=False) as tmp:
             titlecard_path = tmp.name
     except OSError as error:
         utils.warning_print(
@@ -156,7 +154,9 @@ def build_titlecard_frame(clip: ClipRecord, resolution: str) -> Optional[str]:
     if ffmpeg_result is None or ffmpeg_result.returncode != 0:
         utils.warning_print(
             "Titlecard generation failed; clip will be used without a titlecard.",
-            [ffmpeg_result.stderr.strip()] if ffmpeg_result and ffmpeg_result.stderr else None,
+            [ffmpeg_result.stderr.strip()]
+            if ffmpeg_result and ffmpeg_result.stderr
+            else None,
         )
         try:
             Path(titlecard_path).unlink(missing_ok=True)
@@ -183,9 +183,7 @@ def build_endcard_frame(resolution: str) -> Optional[str]:
         return None
 
     try:
-        with tempfile.NamedTemporaryFile(
-            suffix=config.FILEFORMAT, delete=False
-        ) as tmp:
+        with tempfile.NamedTemporaryFile(suffix=config.FILEFORMAT, delete=False) as tmp:
             endcard_path = tmp.name
     except OSError as error:
         utils.warning_print(
@@ -248,7 +246,9 @@ def build_endcard_frame(resolution: str) -> Optional[str]:
     if ffmpeg_result is None or ffmpeg_result.returncode != 0:
         utils.warning_print(
             "Endcard generation failed; clip will be used without an endcard.",
-            [ffmpeg_result.stderr.strip()] if ffmpeg_result and ffmpeg_result.stderr else None,
+            [ffmpeg_result.stderr.strip()]
+            if ffmpeg_result and ffmpeg_result.stderr
+            else None,
         )
         try:
             Path(endcard_path).unlink(missing_ok=True)
@@ -339,7 +339,9 @@ def prepend_titlecard_to_clip(clip: ClipRecord, clip_path: str) -> bool:
         if ffmpeg_result is None or ffmpeg_result.returncode != 0:
             utils.warning_print(
                 f"Could not prepend titlecard to '{clip_path}'. Original clip will be kept.",
-                [ffmpeg_result.stderr.strip()] if ffmpeg_result and ffmpeg_result.stderr else None,
+                [ffmpeg_result.stderr.strip()]
+                if ffmpeg_result and ffmpeg_result.stderr
+                else None,
             )
             return True
 
@@ -417,8 +419,7 @@ def append_endcard_to_clip(clip_path: str) -> bool:
             output_temp_path,
         ]
         utils.debug_print(
-            "ffmpeg append endcard filter concat command: "
-            + " ".join(ffmpeg_command)
+            "ffmpeg append endcard filter concat command: " + " ".join(ffmpeg_command)
         )
         ffmpeg_result = video._run_ffmpeg_process(
             ffmpeg_command,
@@ -429,7 +430,9 @@ def append_endcard_to_clip(clip_path: str) -> bool:
         if ffmpeg_result is None or ffmpeg_result.returncode != 0:
             utils.warning_print(
                 f"Could not append endcard to '{clip_path}'. Original clip will be kept.",
-                [ffmpeg_result.stderr.strip()] if ffmpeg_result and ffmpeg_result.stderr else None,
+                [ffmpeg_result.stderr.strip()]
+                if ffmpeg_result and ffmpeg_result.stderr
+                else None,
             )
             return True
 
@@ -446,4 +449,3 @@ def append_endcard_to_clip(clip_path: str) -> bool:
                 Path(temp).unlink()
             except OSError:
                 pass
-

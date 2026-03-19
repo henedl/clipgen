@@ -57,8 +57,8 @@ MODE_ALIASES = {
     "cell": "cell",
     "p": "participant",
     "participant": "participant",
-    "f": "filter",
-    "filter": "filter",
+    "k": "keyword",
+    "keyword": "keyword",
     "s": "screen",
     "screen": "screen",
     "g": "gif",
@@ -78,7 +78,7 @@ MODE_ALIASES = {
 FORMAT_MODE_ALIASES = {
     alias: mode
     for alias, mode in MODE_ALIASES.items()
-    if mode in {"batch", "line", "range", "category", "cell", "participant", "filter"}
+    if mode in {"batch", "line", "range", "category", "cell", "participant", "keyword"}
 }
 
 # Dispatch table for standard interactive modes: mode -> (prompt_fn, generate_fn).
@@ -113,9 +113,9 @@ _STANDARD_MODES = {
             for c in spreadsheet.generate_participant_timestamps(ctx, pid)
         ],
     ),
-    "filter": (
-        lambda ctx: interactive.prompt_filter_confirm(),
-        lambda ctx, _: spreadsheet.generate_filter_timestamps(ctx),
+    "keyword": (
+        lambda ctx: interactive.prompt_keyword_confirm(),
+        lambda ctx, _: spreadsheet.generate_keyword_timestamps(ctx),
     ),
 }
 
@@ -324,7 +324,7 @@ _SELECTION_MODE_HELP = [
     "    l or line    - Generate clips from specific line(s)",
     "    ce or cell   - Generate clips from specific cell(s) (e.g., P01.11)",
     "    p or participant - Generate all clips for one participant",
-    "    f or filter  - Generate only key-marked clips/timestamps (per-cell annotations)",
+    "    k or keyword - Generate only key-marked clips/timestamps (per-cell annotations)",
 ]
 
 _ALL_MODE_HELP = _SELECTION_MODE_HELP + [
@@ -353,7 +353,7 @@ def _resolve_unrecognized_input(
     parsed = spreadsheet.parse_reel_input(user_input)
     selector_types = [
         ("batch", bool(parsed.get("batch"))),
-        ("filter", bool(parsed.get("filter"))),
+        ("keyword", bool(parsed.get("keyword"))),
         ("lines", len(parsed["lines"]) > 0),
         ("ranges", len(parsed["ranges"]) > 0),
         ("cells", len(parsed["cells"]) > 0),
@@ -385,7 +385,7 @@ def _resolve_unrecognized_input(
 
 
 def _run_standard_mode(mode: str, worksheet: Any) -> Optional[List[ClipRecord]]:
-    """Run a standard interactive mode (batch/line/range/category/cell/participant/filter).
+    """Run a standard interactive mode (batch/line/range/category/cell/participant/keyword).
 
     Prompts the user for mode-specific input, then generates clips.
     Returns clip list on success, None if the user cancels or context fails.
@@ -968,7 +968,7 @@ def _run_reel_mode_interactive(
 
     utils.info_print("Combine selectors into one video. Syntax:")
     utils.info_print("  batch                    - all clips")
-    utils.info_print("  filter                   - key-marked clips only")
+    utils.info_print("  keyword                  - key-marked clips only")
     utils.info_print(
         "  timeline                 - chronological reel (requires exactly one participant)"
     )

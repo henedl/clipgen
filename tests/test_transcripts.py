@@ -100,9 +100,7 @@ class TestFilterSegments:
 
     def test_offset_to_zero(self):
         result = _sample_result()
-        filtered = transcripts.filter_segments(
-            result, 10.0, 30.0, offset_to_zero=True
-        )
+        filtered = transcripts.filter_segments(result, 10.0, 30.0, offset_to_zero=True)
         assert len(filtered["segments"]) == 2
         # First segment started at 0.0, clipped start_sec=10.0 → max(0, 0-10)=0
         assert filtered["segments"][0]["start"] == 0.0
@@ -117,9 +115,7 @@ class TestFilterSegments:
             source_file="x.mp4",
             model="base",
         )
-        filtered = transcripts.filter_segments(
-            result, 10.0, 20.0, offset_to_zero=True
-        )
+        filtered = transcripts.filter_segments(result, 10.0, 20.0, offset_to_zero=True)
         assert filtered["segments"][0]["start"] == 0.0
         assert filtered["segments"][0]["end"] == 5.0
 
@@ -263,9 +259,7 @@ class TestWriteRead:
         assert transcripts.read_transcript("/no/such/file.md") is None
 
     def test_write_bad_path_returns_false(self):
-        assert not transcripts.write_transcript(
-            _sample_result(), "/no/such/dir/out.md"
-        )
+        assert not transcripts.write_transcript(_sample_result(), "/no/such/dir/out.md")
 
 
 # ---------------------------------------------------------------------------

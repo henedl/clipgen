@@ -329,20 +329,20 @@ def parse_cell_specifications(cell_input: str) -> List[Tuple[str, int]]:
 def parse_reel_input(input_string: str) -> ReelInput:
     """Parse mixed reel selector input into structured selectors.
 
-    Supports: batch, filter, timeline, lines (e.g. 11, 12), ranges (e.g. 13-16),
+    Supports: batch, keyword, timeline, lines (e.g. 11, 12), ranges (e.g. 13-16),
     categories (quoted), cells (e.g. P01.11), participants (e.g. P01, P02).
 
     Args:
         input_string: Raw user input (e.g. '11, 13-16, P01, P02.15, "Observations"')
 
     Returns:
-        Dict with keys: batch (bool), filter (bool), timeline (bool), lines (list of int),
+        Dict with keys: batch (bool), keyword (bool), timeline (bool), lines (list of int),
         ranges (list of (int,int)), categories (list of str), cells (list of (str,int)),
         participants (list of str)
     """
     result: ReelInput = {
         "batch": False,
-        "filter": False,
+        "keyword": False,
         "timeline": False,
         "lines": [],
         "ranges": [],
@@ -365,7 +365,7 @@ def parse_reel_input(input_string: str) -> ReelInput:
         rest = rest[: match.start()] + " " + rest[match.end() :]
 
     # Split remaining by comma; each part is one token. Token type is inferred in fixed order below.
-    # Order of checks per token (do not reorder): batch, filter, timeline, range, line, cell, participant
+    # Order of checks per token (do not reorder): batch, keyword, timeline, range, line, cell, participant
     parts = [p.strip() for p in rest.split(",") if p.strip()]
     seen_lines = set()
     seen_ranges = set()
@@ -380,9 +380,9 @@ def parse_reel_input(input_string: str) -> ReelInput:
         if token.lower() == "batch":
             result["batch"] = True
             continue
-        # Filter keyword: literal "filter"
-        if token.lower() == "filter":
-            result["filter"] = True
+        # Keyword mode: literal "keyword"
+        if token.lower() == "keyword":
+            result["keyword"] = True
             continue
         # Timeline keyword: literal "timeline"
         if token.lower() == "timeline":
@@ -697,11 +697,11 @@ def generate_list(
 
     Args:
         sheet: The gspread worksheet object
-        mode: One of 'batch', 'line', 'range', 'category', 'cell', 'participant', 'filter', 'reel'
+        mode: One of 'batch', 'line', 'range', 'category', 'cell', 'participant', 'keyword', 'reel'
         line_numbers: List of line numbers for 'line' mode
         range_start: Start line for 'range' mode
         range_end: End line for 'range' mode
-        skip_prompts: If True, skip confirmation prompts (CLI -y flag, for batch/filter)
+        skip_prompts: If True, skip confirmation prompts (CLI -y flag, for batch/keyword)
         cell_specs: List of (participant_id, row_number) tuples for 'cell' mode
         participant_id: Participant ID(s) for 'participant' mode (comma/plus-separated string)
         reel_input: Reel selector string for 'reel' mode
@@ -803,9 +803,9 @@ def generate_list(
             clips.extend(generate_participant_timestamps(ctx, pid))
         return clips
 
-    if mode == "filter":
-        utils.standard_print("Filter mode: generating key-marked clips...")
-        return generate_filter_timestamps(ctx)
+    if mode == "keyword":
+        utils.standard_print("Keyword mode: generating key-marked clips...")
+        return generate_keyword_timestamps(ctx)
 
     if mode == "reel":
         if reel_input is None or not reel_input.strip():
@@ -829,14 +829,14 @@ def generate_batch_timestamps(ctx: SheetContext) -> List[ClipRecord]:
     return clips
 
 
-def generate_filter_timestamps(ctx: SheetContext) -> List[ClipRecord]:
+def generate_keyword_timestamps(ctx: SheetContext) -> List[ClipRecord]:
     """Generate key-marked clips from the entire sheet based on cell content.
 
     Semantics:
     - Segment-level: annotation tokens like `!key` in a timestamp cell mark the
       preceding parseable timestamp segment(s) within that cell.
     - Header/participant-level annotations in the header row are ignored here;
-      filter mode is driven purely by per-cell annotations.
+      keyword mode is driven purely by per-cell annotations.
     """
     clips = generate_batch_timestamps(ctx)
     if not clips:
@@ -1074,7 +1074,7 @@ def generate_reel_timestamps(
 ) -> List[ClipRecord]:
     """Generate clip records for reel mode by combining multiple selector types and deduplicating.
 
-    Parses reel input (batch, filter, timeline, lines, ranges, categories, cells, participants),
+    Parses reel input (batch, keyword, timeline, lines, ranges, categories, cells, participants),
     collects timestamps from each selector, deduplicates by cell (row, col), and returns a single
     ordered list.
     """
@@ -1091,7 +1091,7 @@ def generate_reel_timestamps(
 
     has_any = (
         selectors["batch"]
-        or selectors["filter"]
+        or selectors["keyword"]
         or selectors["timeline"]
         or selectors["lines"]
         or selectors["ranges"]
@@ -1104,8 +1104,8 @@ def generate_reel_timestamps(
 
     all_issues: List[ClipRecord] = []
 
-    if selectors["filter"]:
-        all_issues.extend(generate_filter_timestamps(ctx))
+    if selectors["keyword"]:
+        all_issues.extend(generate_keyword_timestamps(ctx))
     if selectors["batch"]:
         all_issues.extend(generate_batch_timestamps(ctx))
     if selectors["lines"]:

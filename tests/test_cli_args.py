@@ -15,7 +15,7 @@ def _base_args(**overrides):
         "category": None,
         "cell": None,
         "participant": None,
-        "filter": False,
+        "keyword": False,
         "mixed": None,
         "reel": None,
         "timeline": None,

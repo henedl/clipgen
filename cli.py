@@ -44,13 +44,13 @@ class CliModeArgs(NamedTuple):
 def parse_arguments() -> argparse.Namespace:
     """Parse command-line arguments for non-interactive mode.
 
-    Exactly one of the mode flags (-b, -l, -r, -C, -c, -p, -f, -M, -R, -T) may be given;
+    Exactly one of the mode flags (-b, -l, -r, -C, -c, -p, -k, -M, -R, -T) may be given;
     if none is given, the program runs in interactive mode. Optional flags (-s, -y,
     -v, --screen, --gif) may be combined with any mode.
 
     Returns:
         argparse.Namespace with attributes: batch, lines, range, category, cell,
-        participant, filter, mixed, reel, timeline (mode flags/values),
+        participant, keyword, mixed, reel, timeline (mode flags/values),
         spreadsheet, yes, verbose, screen, gif, input, output.
     """
     parser = argparse.ArgumentParser(
@@ -71,7 +71,7 @@ Examples:
   python clipgen.py -c "P01.11 + P03.11"   Cell mode - multiple cells
   python clipgen.py -p P01                 Participant mode - all clips for participant P01
   python clipgen.py -p "P01,P03"           Participant mode - all clips for P01 and P03
-  python clipgen.py -f                     Filter mode - only key-marked clips/timestamps
+  python clipgen.py -k                     Keyword mode - only key-marked clips/timestamps
   python clipgen.py -M "5, P01.11, 13-16"  Mixed mode - combine selectors for individual outputs
   python clipgen.py -b -s "Study Name"     Batch mode with specific spreadsheet
   python clipgen.py -l 5 -y                Line mode, skip confirmation prompts
@@ -82,12 +82,12 @@ Examples:
   python clipgen.py -l 5 --gif             Line mode GIF output (.gif)
   python clipgen.py --timeline-viewer      Generate per-participant timeline viewer
 
-Note: Non-interactive mode (using -b, -l, -r, -C, -c, -p, -f, -M, -R, or -T) is silent by default,
+Note: Non-interactive mode (using -b, -l, -r, -C, -c, -p, -k, -M, -R, or -T) is silent by default,
       only showing errors and the final summary. Use -v for full output.
 """,
     )
 
-    # Mode arguments: only one of -b/-l/-r/-C/-c/-p/-f/-M/-R/-T may be set at a time
+    # Mode arguments: only one of -b/-l/-r/-C/-c/-p/-k/-M/-R/-T may be set at a time
     mode_group = parser.add_mutually_exclusive_group()
     mode_group.add_argument(
         "-b",
@@ -131,10 +131,10 @@ Note: Non-interactive mode (using -b, -l, -r, -C, -c, -p, -f, -M, -R, or -T) is 
         help="Participant mode: generate all clips for one or more participants (e.g., P01 or P01,P03)",
     )
     mode_group.add_argument(
-        "-f",
-        "--filter",
+        "-k",
+        "--keyword",
         action="store_true",
-        help="Filter mode: generate only key-marked clips/timestamps",
+        help="Keyword mode: generate only key-marked clips/timestamps",
     )
     mode_group.add_argument(
         "-M",
@@ -481,7 +481,7 @@ def _generate_cli_clips(
         or args.category
         or args.cell
         or args.participant
-        or args.filter
+        or args.keyword
         or mixed_selectors
         or args.reel
         or args.timeline
@@ -523,7 +523,7 @@ def _generate_cli_clips(
         (args.category, "category", {"categories": cli_categories}),
         (args.cell, "cell", {"cell_specs": cli_mode_args.cell_specs}),
         (args.participant, "participant", {"participant_id": args.participant}),
-        (args.filter, "filter", {}),
+        (args.keyword, "keyword", {}),
         (mixed_selectors, "reel", {"reel_input": mixed_selectors}),
         (args.reel, "reel", {"reel_input": args.reel}),
         (args.timeline, "reel", {"reel_input": f"timeline, {args.timeline}"}),
@@ -619,7 +619,7 @@ def run_cli_mode(worksheet: Any, args: Any, cli_mode_args: CliModeArgs) -> None:
         utils.error_print(
             "Reel/timeline mode cannot be combined with --screen or --gif.",
             [
-                "Use reel/timeline mode for a single .mp4 output, or use screen/gif with batch/line/range/category/cell/participant/filter selection."
+                "Use reel/timeline mode for a single .mp4 output, or use screen/gif with batch/line/range/category/cell/participant/keyword selection."
             ],
         )
         sys.exit(1)
@@ -717,7 +717,7 @@ def main() -> None:
             args.category,
             args.cell,
             args.participant,
-            args.filter,
+            args.keyword,
             mixed_selectors,
             args.reel,
             args.timeline,
@@ -741,7 +741,7 @@ def main() -> None:
         or args.category
         or args.cell
         or args.participant
-        or args.filter
+        or args.keyword
         or mixed_selectors
         or args.reel
         or args.timeline

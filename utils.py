@@ -40,7 +40,7 @@ class ReelInput(TypedDict):
     """Parsed reel selector input from parse_reel_input."""
 
     batch: bool
-    filter: bool
+    keyword: bool
     timeline: bool
     lines: List[int]
     ranges: List[Tuple[int, int]]
@@ -107,7 +107,7 @@ _CLIPGEN_THEME = (
             "mode.line": "bold orange3",
             "mode.cell": "bold light_pink3",
             "mode.participant": "bold cyan",
-            "mode.filter": "bold cyan",
+            "mode.keyword": "bold cyan",
         }
     )
     if RICH_AVAILABLE
@@ -1038,7 +1038,9 @@ def set_program_settings() -> bool:
                 f"  {i:>2}. {name:<30} = {val!s:<10}  {config.SETTINGS_DESCRIPTIONS[name]}"
             )
 
-    choice = read_user_input("\nSetting to change (number or name, or empty to go back):\n>> ")
+    choice = read_user_input(
+        "\nSetting to change (number or name, or empty to go back):\n>> "
+    )
     if not choice:
         return False
 

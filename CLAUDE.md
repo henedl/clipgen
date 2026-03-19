@@ -110,17 +110,17 @@ Source video filenames follow `{study}_{participant}.mp4` (e.g. `mystudy_P01.mp4
 | **category** | Rows matching selected category names |
 | **cell** | Specific cells as `participant.row` (e.g. P01.11, P03.11) |
 | **participant** | All clips for one or more participants (e.g. P01, P03) |
-| **filter** | Only key-marked clips/timestamps (`!key` annotations in timestamp cell content) |
+| **keyword** | Only key-marked clips/timestamps (`!key` annotations in timestamp cell content) |
 | **screen** | Generate screenshots (`.png`) instead of video clips |
 | **gif** | Generate GIFs (`.gif`) from selected timestamps |
-| **reel** | Mixed selectors (including `batch`, `filter`, `timeline`, lines/ranges/categories/cells/participants) combined into one video; deduped by cell and ordered by row/column unless timeline is used |
+| **reel** | Mixed selectors (including `batch`, `keyword`, `timeline`, lines/ranges/categories/cells/participants) combined into one video; deduped by cell and ordered by row/column unless timeline is used |
 | **timeline** | Chronological reel for exactly one participant (available via reel selector `timeline` or CLI `-T`) |
 | **reellate** | Build a reel from already-generated clips in the working directory |
 | **browse** | Interactive view of spreadsheet rows (no clip generation) |
 
-Reel selectors: `batch`, `filter`, `timeline`, line numbers, ranges like `13-16`, quoted categories, cells like `P01.11`, participant IDs like `P01`.
+Reel selectors: `batch`, `keyword`, `timeline`, line numbers, ranges like `13-16`, quoted categories, cells like `P01.11`, participant IDs like `P01`.
 
-CLI mode flags are mutually exclusive for selection (`-b/-l/-r/-C/-c/-p/-f/-M/-R/-T`) and can be combined with output format flags (`--screen` or `--gif`) except reel/timeline, which always output a single video reel. `-C/--category` accepts one or more category names (comma- or plus-separated, e.g. `"Observations,Onboarding"`), and `-M/--mixed` combines selectors for individual outputs. `--transcribe` can be combined with any mode/format to generate transcript files alongside artifacts; `--transcript-format` overrides the output format (`md`, `srt`, `vtt`).
+CLI mode flags are mutually exclusive for selection (`-b/-l/-r/-C/-c/-p/-k/-M/-R/-T`) and can be combined with output format flags (`--screen` or `--gif`) except reel/timeline, which always output a single video reel. `-C/--category` accepts one or more category names (comma- or plus-separated, e.g. `"Observations,Onboarding"`), `-k/--keyword` selects only key-annotated clips, and `-M/--mixed` combines selectors for individual outputs. `--transcribe` can be combined with any mode/format to generate transcript files alongside artifacts; `--transcript-format` overrides the output format (`md`, `srt`, `vtt`).
 
 Interactive-only modes without dedicated CLI flags:
 

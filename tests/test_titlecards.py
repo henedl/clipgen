@@ -1,7 +1,5 @@
 import subprocess
-from types import SimpleNamespace
 
-import pytest
 
 import titlecards
 import video
@@ -32,7 +30,9 @@ def test_build_titlecard_frame_uses_png_background_and_scaling(monkeypatch, make
     assert "drawtext=text='My description'" in joined
 
 
-def test_build_titlecard_frame_uses_black_background_when_no_asset(monkeypatch, make_clip):
+def test_build_titlecard_frame_uses_black_background_when_no_asset(
+    monkeypatch, make_clip
+):
     clip = make_clip(desc="No asset")
 
     commands = []
@@ -65,9 +65,15 @@ def test_prepend_titlecard_to_clip_respects_disabled_flag(monkeypatch, make_clip
 
     monkeypatch.setattr(titlecards.config, "TITLECARDS_ENABLED", False)
     monkeypatch.setattr(
-        titlecards, "build_titlecard_frame", lambda *_args, **_kwargs: calls.__setitem__("build", calls["build"] + 1)
+        titlecards,
+        "build_titlecard_frame",
+        lambda *_args, **_kwargs: calls.__setitem__("build", calls["build"] + 1),
     )
-    monkeypatch.setattr(video, "_run_ffmpeg_process", lambda *_args, **_kwargs: calls.__setitem__("ffmpeg", calls["ffmpeg"] + 1))
+    monkeypatch.setattr(
+        video,
+        "_run_ffmpeg_process",
+        lambda *_args, **_kwargs: calls.__setitem__("ffmpeg", calls["ffmpeg"] + 1),
+    )
 
     ok = titlecards.prepend_titlecard_to_clip(clip, "clip.mp4")
     assert ok is True
@@ -81,7 +87,9 @@ def test_prepend_titlecard_to_clip_uses_filter_concat(monkeypatch, make_clip):
     monkeypatch.setattr(titlecards.config, "TITLECARDS_ENABLED", True)
     monkeypatch.setattr(titlecards, "_get_video_resolution", lambda _path: "1280x720")
     monkeypatch.setattr(titlecards.Path, "is_file", lambda self: True)
-    monkeypatch.setattr(titlecards, "build_titlecard_frame", lambda *_args, **_kwargs: "titlecard.mp4")
+    monkeypatch.setattr(
+        titlecards, "build_titlecard_frame", lambda *_args, **_kwargs: "titlecard.mp4"
+    )
     monkeypatch.setattr(video, "_verify_output_file", lambda *_args, **_kwargs: True)
 
     commands = []
@@ -92,7 +100,11 @@ def test_prepend_titlecard_to_clip_uses_filter_concat(monkeypatch, make_clip):
 
     monkeypatch.setattr(video, "_run_ffmpeg_process", fake_run_ffmpeg_process)
     replaced = {}
-    monkeypatch.setattr(titlecards.os, "replace", lambda src, dst: replaced.update({"src": src, "dst": dst}))
+    monkeypatch.setattr(
+        titlecards.os,
+        "replace",
+        lambda src, dst: replaced.update({"src": src, "dst": dst}),
+    )
 
     ok = titlecards.prepend_titlecard_to_clip(clip, "clip.mp4")
     assert ok is True
@@ -102,4 +114,3 @@ def test_prepend_titlecard_to_clip_uses_filter_concat(monkeypatch, make_clip):
     assert "-map [v]" in joined.replace(",", " ")
     assert "clip.mp4" in joined
     assert replaced.get("dst") == "clip.mp4"
-

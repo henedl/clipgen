@@ -2,7 +2,7 @@
 """Interactive prompt helpers for clipgen.
 
 All user-facing interactive prompts (line selection, range selection, cell
-selection, participant selection, category selection, batch/filter confirmation,
+selection, participant selection, category selection, batch/keyword confirmation,
 and browse mode) live here. Generation functions in spreadsheet.py are kept pure:
 they take resolved parameters and return clip records, never prompting the user.
 
@@ -319,10 +319,10 @@ def prompt_participant_selection(ctx: SheetContext) -> Optional[List[str]]:
             return unique_ids
 
 
-def prompt_filter_confirm() -> bool:
-    """Confirm filter mode. Returns True to proceed."""
+def prompt_keyword_confirm() -> bool:
+    """Confirm keyword mode. Returns True to proceed."""
     yn = utils.read_user_input(
-        "\nFilter mode will include only key-marked timestamps (per-cell annotations). Do you want to proceed? [y/n]\n>> "
+        "\nKeyword mode will include only key-marked timestamps (per-cell annotations). Do you want to proceed? [y/n]\n>> "
     )
     return yn == "y"
 
@@ -604,14 +604,18 @@ def browse_spreadsheet(sheet: Any, *, process_fn=None) -> None:
             break
         elif user_input in ("up", "u"):
             if current_row > first_data_row:
-                new_row = max(first_data_row, current_row - config.BROWSE_LINES_TO_SCROLL)
+                new_row = max(
+                    first_data_row, current_row - config.BROWSE_LINES_TO_SCROLL
+                )
                 current_row = new_row
                 display_rows(current_row, config.BROWSE_LINES_TO_DISPLAY)
             else:
                 utils.info_print("Already at the first row.")
         elif user_input in ("down", "d", ""):
             if current_row < last_data_row:
-                new_row = min(last_data_row, current_row + config.BROWSE_LINES_TO_SCROLL)
+                new_row = min(
+                    last_data_row, current_row + config.BROWSE_LINES_TO_SCROLL
+                )
                 current_row = new_row
                 display_rows(current_row, config.BROWSE_LINES_TO_DISPLAY)
             else:
@@ -682,7 +686,7 @@ def browse_spreadsheet(sheet: Any, *, process_fn=None) -> None:
                 parsed = spreadsheet.parse_reel_input(raw_input)
                 has_selectors = (
                     parsed.get("batch")
-                    or parsed.get("filter")
+                    or parsed.get("keyword")
                     or parsed["lines"]
                     or parsed["ranges"]
                     or parsed["cells"]
@@ -712,9 +716,7 @@ def browse_spreadsheet(sheet: Any, *, process_fn=None) -> None:
                                 f"Done! Generated {outputs_generated} {format_label}."
                             )
                         else:
-                            utils.info_print(
-                                "No clips found for the given selectors."
-                            )
+                            utils.info_print("No clips found for the given selectors.")
                     continue
 
             # Treat unrecognized input as a search query

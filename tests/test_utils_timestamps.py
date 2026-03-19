@@ -48,4 +48,3 @@ def test_parse_cell_annotations_splits_segment_and_cell_annotations():
     assert cleaned == "00:10-00:20 00:30-00:40"
     assert "key" in cell_annotations
     assert segment_annotations["key"] == {0}
-

@@ -36,7 +36,9 @@ def test_concatenate_clips_reencode_fallback(monkeypatch):
 
     captured_commands = []
     results = [
-        subprocess.CompletedProcess(args=["ffmpeg"], returncode=1, stderr="copy failed"),
+        subprocess.CompletedProcess(
+            args=["ffmpeg"], returncode=1, stderr="copy failed"
+        ),
         subprocess.CompletedProcess(args=["ffmpeg"], returncode=0, stderr=""),
     ]
 
@@ -70,7 +72,9 @@ def test_calculate_target_bitrate_typical_and_min_floor():
     assert kbps > 100
     small = video.calculate_target_bitrate(target_size_mb=1, duration_seconds=5)
     assert small >= 100
-    zero_duration = video.calculate_target_bitrate(target_size_mb=10, duration_seconds=0)
+    zero_duration = video.calculate_target_bitrate(
+        target_size_mb=10, duration_seconds=0
+    )
     assert zero_duration == 100
 
 
@@ -81,14 +85,17 @@ def test_get_file_duration_error_paths(monkeypatch):
 
     # ffprobe not found
     monkeypatch.setattr(video.os.path, "isfile", lambda _path: True)
+
     def raise_fnf(_cmd, **_kwargs):
         raise FileNotFoundError()
+
     monkeypatch.setattr(video.subprocess, "check_output", raise_fnf)
     assert video.get_file_duration("video.mp4") is None
 
     # ffprobe CalledProcessError
     def raise_cpe(_cmd, **_kwargs):
         raise video.subprocess.CalledProcessError(returncode=1, cmd="ffprobe")
+
     monkeypatch.setattr(video.subprocess, "check_output", raise_cpe)
     assert video.get_file_duration("video.mp4") is None
 

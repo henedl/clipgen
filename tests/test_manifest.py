@@ -1,5 +1,4 @@
 import json
-from pathlib import Path
 
 import config
 import viewer
@@ -57,7 +56,9 @@ def test_save_manifest_merges_cumulatively(tmp_path, monkeypatch):
     viewer.save_manifest([_make_artifact("a4c2s0"), _make_artifact("a5c2s0")])
 
     # Second save: one new, one overlapping
-    viewer.save_manifest([_make_artifact("a5c2s0", description="updated"), _make_artifact("a6c2s0")])
+    viewer.save_manifest(
+        [_make_artifact("a5c2s0", description="updated"), _make_artifact("a6c2s0")]
+    )
 
     loaded = viewer.load_manifest_artifacts()
     assert len(loaded) == 3

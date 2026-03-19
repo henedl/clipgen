@@ -28,7 +28,13 @@ def _basic_sheet_data():
     ]
 
 
-def _make_context(sheet_data=None, cells=None, num_participants=2, baseline_row_idx=None, filename_row_idx=None):
+def _make_context(
+    sheet_data=None,
+    cells=None,
+    num_participants=2,
+    baseline_row_idx=None,
+    filename_row_idx=None,
+):
     """Helper to build a SheetContext for tests."""
     if sheet_data is None:
         sheet_data = _basic_sheet_data()
@@ -51,7 +57,9 @@ def test_get_num_participants_and_participant_list():
     sheet_data = _basic_sheet_data()
     header_row = sheet_data[cells.id_cell.row - 1]
 
-    num = spreadsheet.get_num_participants(header_row, cells.id_cell, col_count=len(header_row))
+    num = spreadsheet.get_num_participants(
+        header_row, cells.id_cell, col_count=len(header_row)
+    )
     assert num == 2
 
     participants = spreadsheet.get_participant_list(header_row, cells.id_cell, num)
