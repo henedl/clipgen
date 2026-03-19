@@ -75,6 +75,7 @@ flowchart LR
     'study': str,              # Normalized study name (filesystem-safe)
     'participant': str,        # e.g. 'P01', 'G02' from header
     'category': str,           # Row category (sanitized; empty → 'uncategorized')
+    'severity': str,           # Row severity (normalized label; empty if no Severity column)
     'times': [(start, end)]    # Added by files.prepare_clip() – list of (start_time, end_time) strings
 }
 ```
@@ -111,16 +112,17 @@ Source video filenames follow `{study}_{participant}.mp4` (e.g. `mystudy_P01.mp4
 | **cell** | Specific cells as `participant.row` (e.g. P01.11, P03.11) |
 | **participant** | All clips for one or more participants (e.g. P01, P03) |
 | **keyword** | Only key-marked clips/timestamps (`!key` annotations in timestamp cell content) |
+| **severity** | Rows matching selected severity levels (optional Severity column; numeric -4..+2 or labels like Critical/High/Medium/Low/N/A/Positive/Very Positive) |
 | **screen** | Generate screenshots (`.png`) instead of video clips |
 | **gif** | Generate GIFs (`.gif`) from selected timestamps |
-| **reel** | Mixed selectors (including `batch`, `keyword`, `timeline`, lines/ranges/categories/cells/participants) combined into one video; deduped by cell and ordered by row/column unless timeline is used |
+| **reel** | Mixed selectors (including `batch`, `keyword`, `timeline`, `severity`, lines/ranges/categories/cells/participants) combined into one video; deduped by cell and ordered by row/column unless timeline or severity ordering is used |
 | **timeline** | Chronological reel for exactly one participant (available via reel selector `timeline` or CLI `-T`) |
 | **reellate** | Build a reel from already-generated clips in the working directory |
 | **browse** | Interactive view of spreadsheet rows (no clip generation) |
 
-Reel selectors: `batch`, `keyword`, `timeline`, line numbers, ranges like `13-16`, quoted categories, cells like `P01.11`, participant IDs like `P01`.
+Reel selectors: `batch`, `keyword`, `timeline`, `severity`, line numbers, ranges like `13-16`, quoted categories, cells like `P01.11`, participant IDs like `P01`.
 
-CLI mode flags are mutually exclusive for selection (`-b/-l/-r/-C/-c/-p/-k/-M/-R/-T`) and can be combined with output format flags (`--screen` or `--gif`) except reel/timeline, which always output a single video reel. `-C/--category` accepts one or more category names (comma- or plus-separated, e.g. `"Observations,Onboarding"`), `-k/--keyword` selects only key-annotated clips, and `-M/--mixed` combines selectors for individual outputs. `--transcribe` can be combined with any mode/format to generate transcript files alongside artifacts; `--transcript-format` overrides the output format (`md`, `srt`, `vtt`).
+CLI mode flags are mutually exclusive for selection (`-b/-l/-r/-C/-c/-p/-k/-S/-M/-R/-T`) and can be combined with output format flags (`--screen` or `--gif`) except reel/timeline, which always output a single video reel. `-C/--category` accepts one or more category names (comma- or plus-separated, e.g. `"Observations,Onboarding"`), `-k/--keyword` selects only key-annotated clips, `-S/--severity` accepts severity levels (e.g. `"Critical,High"` or `"-4,-3"`), and `-M/--mixed` combines selectors for individual outputs. `--transcribe` can be combined with any mode/format to generate transcript files alongside artifacts; `--transcript-format` overrides the output format (`md`, `srt`, `vtt`).
 
 Interactive-only modes without dedicated CLI flags:
 
@@ -132,6 +134,8 @@ Interactive-only modes without dedicated CLI flags:
 
 - `WORKSHEET_PRIORITY` – Worksheet names tried first (e.g. 'Sheet1', 'Data', 'Observations')
 - `ID_HEADER`, `OBSERVATION_HEADER`, `CATEGORY_HEADER` – Required column headers
+- `SEVERITY_HEADER` – Optional column header (`"Severity"`); when present, adds severity metadata to clips
+- `SEVERITY_NUMERIC_TO_LABEL`, `SEVERITY_LABEL_TO_NUMERIC` – Canonical severity mapping (-4=Critical through +2=Very Positive)
 - `PARTICIPANT_PREFIXES` – `('P', 'G')`
 - `ANNOTATION_KEYPHRASES` – maps tokens like `!key` to annotation names (`key`)
 - `IGNORED_TIMESTAMP_TOKENS` – tokens ignored during timestamp parsing (default includes `x`)
@@ -157,6 +161,7 @@ Interactive-only modes without dedicated CLI flags:
 - Participant columns: Immediately after ID; headers start with P or G (e.g. P01, P02, G01). Each holds timestamp strings; non-empty cells become clip candidates.
 - Observation column: Human-readable description per row.
 - Category column: Label per row for category/reel selection.
+- Severity column (optional): Per-row severity level for severity mode filtering and reel sorting. Values can be numeric (-4 to +2) or string labels (Critical, High, Medium, Low, N/A, Positive, Very Positive). Detected via `sheet.find("Severity")`.
 
 Optional clock baseline row:
 
@@ -192,7 +197,7 @@ Reference spreadsheet layout is described in [README.md](README.md).
 
 ## Version
 
-- The version is stored as `VERSIONNUM` in [config.py](config.py) (currently `'0.9.0'`).
+- The version is stored as `VERSIONNUM` in [config.py](config.py) (currently `'0.9.4'`).
 - **When making substantive code changes** (bug fixes or features), increment the **last segment only** (patch) in `config.py`, e.g. `0.9.0` → `0.9.1`. Do not bump for docs-only, comment-only, or refactor-only changes unless they affect user-visible behavior.
 
 ## Testing notes

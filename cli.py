@@ -72,6 +72,8 @@ Examples:
   python clipgen.py -p P01                 Participant mode - all clips for participant P01
   python clipgen.py -p "P01,P03"           Participant mode - all clips for P01 and P03
   python clipgen.py -k                     Keyword mode - only key-marked clips/timestamps
+  python clipgen.py -S "Critical,High"     Severity mode - Critical and High severity clips
+  python clipgen.py -S "-4,-3"             Severity mode - using numeric values
   python clipgen.py -M "5, P01.11, 13-16"  Mixed mode - combine selectors for individual outputs
   python clipgen.py -b -s "Study Name"     Batch mode with specific spreadsheet
   python clipgen.py -l 5 -y                Line mode, skip confirmation prompts
@@ -82,7 +84,7 @@ Examples:
   python clipgen.py -l 5 --gif             Line mode GIF output (.gif)
   python clipgen.py --timeline-viewer      Generate per-participant timeline viewer
 
-Note: Non-interactive mode (using -b, -l, -r, -C, -c, -p, -k, -M, -R, or -T) is silent by default,
+Note: Non-interactive mode (using -b, -l, -r, -C, -c, -p, -k, -S, -M, -R, or -T) is silent by default,
       only showing errors and the final summary. Use -v for full output.
 """,
     )
@@ -135,6 +137,13 @@ Note: Non-interactive mode (using -b, -l, -r, -C, -c, -p, -k, -M, -R, or -T) is 
         "--keyword",
         action="store_true",
         help="Keyword mode: generate only key-marked clips/timestamps",
+    )
+    mode_group.add_argument(
+        "-S",
+        "--severity",
+        type=str,
+        metavar="SEVERITIES",
+        help='Severity mode: filter by severity levels (e.g., "Critical,High" or "-4,-3")',
     )
     mode_group.add_argument(
         "-M",
@@ -482,6 +491,7 @@ def _generate_cli_clips(
         or args.cell
         or args.participant
         or args.keyword
+        or args.severity
         or mixed_selectors
         or args.reel
         or args.timeline
@@ -505,6 +515,23 @@ def _generate_cli_clips(
 
     cli_categories = _parse_cli_categories(getattr(args, "category", None))
 
+    def _parse_cli_severities(raw: Optional[str]) -> List[str]:
+        if not raw:
+            return []
+        combined = raw.replace(",", "+")
+        seen = set()
+        result: List[str] = []
+        for token in combined.split("+"):
+            name = utils.normalize_severity(token.strip())
+            if not name:
+                continue
+            if name not in seen:
+                seen.add(name)
+                result.append(name)
+        return result
+
+    cli_severities = _parse_cli_severities(getattr(args, "severity", None))
+
     mode_dispatch: List[tuple] = [
         (
             args.batch or (output_format != "clip" and not selection_mode_set),
@@ -524,6 +551,7 @@ def _generate_cli_clips(
         (args.cell, "cell", {"cell_specs": cli_mode_args.cell_specs}),
         (args.participant, "participant", {"participant_id": args.participant}),
         (args.keyword, "keyword", {}),
+        (args.severity, "severity", {"severities": cli_severities}),
         (mixed_selectors, "reel", {"reel_input": mixed_selectors}),
         (args.reel, "reel", {"reel_input": args.reel}),
         (args.timeline, "reel", {"reel_input": f"timeline, {args.timeline}"}),
@@ -718,6 +746,7 @@ def main() -> None:
             args.cell,
             args.participant,
             args.keyword,
+            args.severity,
             mixed_selectors,
             args.reel,
             args.timeline,
@@ -742,6 +771,7 @@ def main() -> None:
         or args.cell
         or args.participant
         or args.keyword
+        or args.severity
         or mixed_selectors
         or args.reel
         or args.timeline

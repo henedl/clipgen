@@ -59,6 +59,8 @@ MODE_ALIASES = {
     "participant": "participant",
     "k": "keyword",
     "keyword": "keyword",
+    "sv": "severity",
+    "severity": "severity",
     "s": "screen",
     "screen": "screen",
     "g": "gif",
@@ -80,7 +82,17 @@ MODE_ALIASES = {
 FORMAT_MODE_ALIASES = {
     alias: mode
     for alias, mode in MODE_ALIASES.items()
-    if mode in {"batch", "line", "range", "category", "cell", "participant", "keyword"}
+    if mode
+    in {
+        "batch",
+        "line",
+        "range",
+        "category",
+        "cell",
+        "participant",
+        "keyword",
+        "severity",
+    }
 }
 
 # Dispatch table for standard interactive modes: mode -> (prompt_fn, generate_fn).
@@ -118,6 +130,10 @@ _STANDARD_MODES = {
     "keyword": (
         lambda ctx: interactive.prompt_keyword_confirm(),
         lambda ctx, _: spreadsheet.generate_keyword_timestamps(ctx),
+    ),
+    "severity": (
+        lambda ctx: interactive.prompt_severity_selection(ctx),
+        lambda ctx, v: spreadsheet.generate_severity_timestamps(ctx, v),
     ),
 }
 
@@ -327,6 +343,7 @@ _SELECTION_MODE_HELP = [
     "    ce or cell   - Generate clips from specific cell(s) (e.g., P01.11)",
     "    p or participant - Generate all clips for one participant",
     "    k or keyword - Generate only key-marked clips/timestamps (per-cell annotations)",
+    "    sv or severity - Generate clips by severity level",
 ]
 
 _ALL_MODE_HELP = _SELECTION_MODE_HELP + [
@@ -974,6 +991,9 @@ def _run_reel_mode_interactive(
     utils.info_print(
         "  timeline                 - chronological reel (requires exactly one participant)"
     )
+    utils.info_print(
+        "  severity                 - order reel by severity (most severe first)"
+    )
     utils.info_print("  11, 12, 13-16, 18        - lines and ranges")
     utils.info_print('  "Observations", "Onboarding" - categories (quoted)')
     utils.info_print("  P01.11, P02.15           - cells (participant.row)")
@@ -987,6 +1007,14 @@ def _run_reel_mode_interactive(
         return ([], False, None)
 
     parsed_reel = spreadsheet.parse_reel_input(reel_input)
+    if parsed_reel["severity"] and parsed_reel["timeline"]:
+        utils.error_print(
+            "Cannot combine severity and timeline ordering.",
+            [
+                "Use one ordering at a time: either timeline (chronological) or severity."
+            ],
+        )
+        return ([], False, None)
     if parsed_reel["timeline"]:
         if len(parsed_reel["participants"]) > 1:
             utils.error_print(
@@ -1039,6 +1067,12 @@ def _run_reel_mode_interactive(
             default_filename = f"{timeline_pid}_timeline{config.FILEFORMAT}"
         else:
             default_filename = f"timeline{config.FILEFORMAT}"
+    elif parsed_reel["severity"]:
+        default_filename = (
+            f"{study_name}_severity_reel{config.FILEFORMAT}"
+            if study_name
+            else f"severity_reel{config.FILEFORMAT}"
+        )
 
     output_file = utils.read_user_input(
         f"\nOutput filename (Enter for default {default_filename}):\n>> "
@@ -1179,7 +1213,7 @@ def _run_format_mode_interactive(worksheet: Any, output_format: str) -> None:
     while True:
         selection = utils.read_user_input(
             "\nSelect source rows for this output:\n"
-            "  Modes: (b)atch, (r)ange, (c)ategory, (l)ine, (ce)ll, (p)articipant, (k)eyword\n"
+            "  Modes: (b)atch, (r)ange, (c)ategory, (l)ine, (ce)ll, (p)articipant, (k)eyword, (sv) severity\n"
             '  Or enter mixed selectors directly: e.g. 5, P01.11, 13-16, "Observations"\n>> '
         )
         if not selection:
@@ -1306,9 +1340,7 @@ def _dispatch_interactive_mode(
                 output_basename="timeline_viewer.html",
             )
             if viewer_path:
-                utils.info_print(
-                    f"Participant timeline viewer created: {viewer_path}"
-                )
+                utils.info_print(f"Participant timeline viewer created: {viewer_path}")
         else:
             utils.warning_print(
                 "No artifacts were generated; skipping timeline viewer."
@@ -1358,7 +1390,7 @@ def run_interactive_mode(worksheet: Any) -> None:
                 "\nEnter mode or input directly:\n"
                 "  Tools: (s)creen, (g)if, (re)el, (rl) reel-late, (br)owse, (se)ttings \n"
                 "  Packs: (v)iewer, (tv) timeline-viewer \n"
-                "  Modes: (b)atch, (r)ange, (c)ategory, (l)ine, (ce)ll, (p)articipant, (k)eyword \n"
+                "  Modes: (b)atch, (r)ange, (c)ategory, (l)ine, (ce)ll, (p)articipant, (k)eyword, (sv) severity \n"
                 '  Or enter mixed selectors directly: e.g. 5, P01.11, 13-16, "Observations"\n>> '
             )
             if not input_mode:

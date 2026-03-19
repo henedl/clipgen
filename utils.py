@@ -28,6 +28,7 @@ class ClipRecord(TypedDict, total=False):
     study: str
     participant: str
     category: str
+    severity: str
     source_filename: str
     timestamp_baseline: str
     times: List[Tuple[str, str]]
@@ -42,6 +43,7 @@ class ReelInput(TypedDict):
     batch: bool
     keyword: bool
     timeline: bool
+    severity: bool
     lines: List[int]
     ranges: List[Tuple[int, int]]
     categories: List[str]
@@ -108,6 +110,14 @@ _CLIPGEN_THEME = (
             "mode.cell": "bold light_pink3",
             "mode.participant": "bold cyan",
             "mode.keyword": "bold cyan",
+            "mode.severity": "bold #FF8C00",
+            "severity.critical": "bold #8B0000",
+            "severity.high": "bold red",
+            "severity.medium": "bold #FF8C00",
+            "severity.low": "bold yellow",
+            "severity.na": "bold cyan",
+            "severity.positive": "bold #90EE90",
+            "severity.very_positive": "bold green",
         }
     )
     if RICH_AVAILABLE
@@ -533,6 +543,62 @@ def normalize_participant_id(participant_value: str) -> str:
         if token and token.lower() not in known_tokens:
             cleaned_parts.append(token)
     return " ".join(cleaned_parts).strip()
+
+
+# ---- Severity helpers ----
+
+
+def normalize_severity(raw_value: str) -> str:
+    """Map a raw severity cell value to its canonical label.
+
+    Accepts numeric strings ("-4" .. "2") or case-insensitive labels.
+    Returns the canonical label or the stripped original if unrecognized.
+    """
+    stripped = raw_value.strip()
+    if not stripped:
+        return ""
+    label = config.SEVERITY_NUMERIC_TO_LABEL.get(stripped)
+    if label:
+        return label
+    lower = stripped.lower()
+    if lower in config.SEVERITY_LABEL_TO_NUMERIC:
+        return config.SEVERITY_NUMERIC_TO_LABEL[
+            str(config.SEVERITY_LABEL_TO_NUMERIC[lower])
+        ]
+    return stripped
+
+
+def severity_sort_key(severity_label: str) -> int:
+    """Return a numeric sort key for a severity label (lower = more severe).
+
+    Unrecognized labels sort last.
+    """
+    return config.SEVERITY_LABEL_TO_NUMERIC.get(severity_label.strip().lower(), 999)
+
+
+def format_severity_display(severity_label: str) -> str:
+    """Format a severity label for display, showing both numeric value and name.
+
+    E.g. "Critical" -> "-4 (Critical)". Returns as-is if not in canonical map.
+    """
+    num = config.SEVERITY_LABEL_TO_NUMERIC.get(severity_label.strip().lower())
+    if num is not None:
+        return f"{num} ({severity_label})"
+    return severity_label
+
+
+def get_severity_style(severity_label: str) -> str:
+    """Return the Rich theme style key for a severity label."""
+    _STYLE_MAP = {
+        "critical": "severity.critical",
+        "high": "severity.high",
+        "medium": "severity.medium",
+        "low": "severity.low",
+        "n/a": "severity.na",
+        "positive": "severity.positive",
+        "very positive": "severity.very_positive",
+    }
+    return _STYLE_MAP.get(severity_label.strip().lower(), "")
 
 
 # ---- Column index / letter conversion ----

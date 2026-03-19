@@ -111,6 +111,79 @@ def prompt_category_selection(ctx: SheetContext) -> Optional[List[str]]:
                 )
 
 
+def prompt_severity_selection(ctx: SheetContext) -> Optional[List[str]]:
+    """Show severities sorted most severe first, prompt for selection, return selected or None."""
+    all_severities = spreadsheet.collect_severities(ctx)
+    if not all_severities:
+        utils.info_print("No severity values found in the spreadsheet.")
+        return None
+    utils.info_print("Available severity levels (most severe first):")
+    for i, sev in enumerate(all_severities, 1):
+        display = utils.format_severity_display(sev)
+        style = utils.get_severity_style(sev)
+        if utils._use_rich() and utils.console is not None and style:
+            utils.console.print(f"  {i}. [{style}]{display}[/{style}]")
+        else:
+            utils.info_print(f"  {i}. {display}")
+    while True:
+        selection = utils.read_user_input(
+            '\nEnter severity numbers (comma-separated, e.g., "1,2") or "all":\n>> '
+        )
+        if selection.lower() == "all":
+            return all_severities
+        try:
+            indices = [int(x.strip()) for x in selection.split(",")]
+            selected = []
+            invalid_indices = []
+            for idx in indices:
+                if 1 <= idx <= len(all_severities):
+                    if all_severities[idx - 1] not in selected:
+                        selected.append(all_severities[idx - 1])
+                else:
+                    invalid_indices.append(idx)
+            if invalid_indices:
+                utils.info_print(
+                    f"  Invalid index(es): {', '.join(str(i) for i in invalid_indices)}"
+                )
+            if selected:
+                utils.info_print("Selected severities:")
+                for sev in selected:
+                    utils.info_print(f"  - {utils.format_severity_display(sev)}")
+                yn = utils.read_user_input("\nIs this correct? [y/n]\n>> ")
+                if yn == "y":
+                    return selected
+            else:
+                utils.info_print("No valid severities selected. Please try again.")
+        except ValueError:
+            tokens = [t.strip() for t in selection.split(",") if t.strip()]
+            matched = []
+            unmatched = []
+            for token in tokens:
+                normalized = utils.normalize_severity(token)
+                exact = next(
+                    (s for s in all_severities if s.lower() == normalized.lower()),
+                    None,
+                )
+                if exact:
+                    if exact not in matched:
+                        matched.append(exact)
+                else:
+                    unmatched.append(token)
+            if unmatched:
+                utils.info_print(f"Could not match: {', '.join(unmatched)}")
+            if matched:
+                utils.info_print("Selected severities:")
+                for sev in matched:
+                    utils.info_print(f"  - {utils.format_severity_display(sev)}")
+                yn = utils.read_user_input("\nIs this correct? [y/n]\n>> ")
+                if yn == "y":
+                    return matched
+            else:
+                utils.info_print(
+                    "No valid severities matched. Enter numbers or severity names."
+                )
+
+
 def prompt_line_selection(ctx: SheetContext) -> Optional[List[int]]:
     """Prompt for line numbers, validate bounds, show descriptions, confirm.
 

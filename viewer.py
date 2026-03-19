@@ -72,6 +72,7 @@ def build_artifact_records_for_clip(
                 "study": clip.get("study", ""),
                 "participant": clip.get("participant", ""),
                 "category": clip.get("category", ""),
+                "severity": clip.get("severity", ""),
                 "description": clip.get("desc", ""),
                 "cellRow": cell_row,
                 "cellCol": cell_col,

@@ -51,6 +51,7 @@ class SheetContext:
     study_name: str
     baseline_row_idx: Optional[int] = None
     filename_row_idx: Optional[int] = None
+    severity_cell: Any = None
 
     @property
     def header_row(self) -> List[str]:
@@ -198,6 +199,12 @@ def build_sheet_context(sheet: Any) -> Optional[SheetContext]:
     if filename_cell is not None:
         filename_row_idx = filename_cell.row - 1
 
+    severity_cell = None
+    try:
+        severity_cell = sheet.find(config.SEVERITY_HEADER)
+    except Exception:
+        severity_cell = None
+
     if num_participants == 0:
         utils.warning_print(
             "No participant columns found in the spreadsheet.",
@@ -217,6 +224,7 @@ def build_sheet_context(sheet: Any) -> Optional[SheetContext]:
         study_name=study_name,
         baseline_row_idx=baseline_row_idx,
         filename_row_idx=filename_row_idx,
+        severity_cell=severity_cell,
     )
 
 
@@ -344,6 +352,7 @@ def parse_reel_input(input_string: str) -> ReelInput:
         "batch": False,
         "keyword": False,
         "timeline": False,
+        "severity": False,
         "lines": [],
         "ranges": [],
         "categories": [],
@@ -383,6 +392,10 @@ def parse_reel_input(input_string: str) -> ReelInput:
         # Keyword mode: literal "keyword"
         if token.lower() == "keyword":
             result["keyword"] = True
+            continue
+        # Severity ordering: literal "severity"
+        if token.lower() == "severity":
+            result["severity"] = True
             continue
         # Timeline keyword: literal "timeline"
         if token.lower() == "timeline":
@@ -538,12 +551,18 @@ def _make_clip_record(
     category = ""
     if 0 <= category_col < len(ctx.sheet_data[row_idx]):
         category = ctx.sheet_data[row_idx][category_col]
+    severity = ""
+    if ctx.severity_cell is not None:
+        severity_col = ctx.severity_cell.col - 1
+        if 0 <= severity_col < len(ctx.sheet_data[row_idx]):
+            severity = utils.normalize_severity(ctx.sheet_data[row_idx][severity_col])
     result: ClipRecord = {
         "cell": cell,
         "desc": desc,
         "study": ctx.study_name,
         "participant": participant,
         "category": category,
+        "severity": severity,
     }
     if timestamp_baseline:
         result["timestamp_baseline"] = timestamp_baseline
@@ -689,6 +708,7 @@ def generate_list(
     participant_id: Optional[str] = None,
     reel_input: Optional[str] = None,
     categories: Optional[List[str]] = None,
+    severities: Optional[List[str]] = None,
 ) -> List[ClipRecord]:
     """Generate clip records from a sheet based on mode and resolved parameters.
 
@@ -807,6 +827,16 @@ def generate_list(
         utils.standard_print("Keyword mode: generating key-marked clips...")
         return generate_keyword_timestamps(ctx)
 
+    if mode == "severity":
+        if not severities:
+            utils.error_print(
+                "Severity mode requires severities list.",
+                ["Pass severities via CLI (-S) or use interactive mode."],
+            )
+            return []
+        utils.standard_print(f"Severity mode: filtering by {', '.join(severities)}...")
+        return generate_severity_timestamps(ctx, severities)
+
     if mode == "reel":
         if reel_input is None or not reel_input.strip():
             utils.info_print("Reel mode: no input provided.")
@@ -878,6 +908,44 @@ def generate_category_timestamps(
         if row_category in selected_categories:
             utils.debug_print(f"Row {i + 1} matches category '{row_category}'")
             clips.extend(get_line_timestamps(ctx, i))
+    return clips
+
+
+def collect_severities(ctx: SheetContext) -> List[str]:
+    """Scan sheet and return unique severity values, sorted most severe first."""
+    if ctx.severity_cell is None:
+        return []
+    severities = []
+    severity_col = ctx.severity_cell.col - 1
+    for i in range(ctx.first_data_row_idx, len(ctx.sheet_data)):
+        if severity_col < len(ctx.sheet_data[i]):
+            raw = ctx.sheet_data[i][severity_col].strip()
+            if raw:
+                normalized = utils.normalize_severity(raw)
+                if normalized and normalized not in severities:
+                    severities.append(normalized)
+    severities.sort(key=utils.severity_sort_key)
+    return severities
+
+
+def generate_severity_timestamps(
+    ctx: SheetContext, selected_severities: List[str]
+) -> List[ClipRecord]:
+    """Generate clip records for all rows matching any of the selected severities."""
+    if ctx.severity_cell is None:
+        utils.warning_print("No Severity column found in the spreadsheet.")
+        return []
+    clips = []
+    severity_col = ctx.severity_cell.col - 1
+    selected_lower = {s.lower() for s in selected_severities}
+    for i in range(ctx.first_data_row_idx, len(ctx.sheet_data)):
+        if ctx.filename_row_idx is not None and i == ctx.filename_row_idx:
+            continue
+        if severity_col < len(ctx.sheet_data[i]):
+            raw = ctx.sheet_data[i][severity_col].strip()
+            normalized = utils.normalize_severity(raw)
+            if normalized.lower() in selected_lower:
+                clips.extend(get_line_timestamps(ctx, i))
     return clips
 
 
@@ -1069,6 +1137,14 @@ def sort_clips_chronologically(clips: List[ClipRecord]) -> None:
     clips.sort(key=_clip_start_seconds)
 
 
+def sort_clips_by_severity(clips: List[ClipRecord]) -> None:
+    """Sort clip records in-place by severity (most severe first).
+
+    Clips without severity or with unrecognized severity sort last.
+    """
+    clips.sort(key=lambda clip: utils.severity_sort_key(clip.get("severity", "")))
+
+
 def generate_reel_timestamps(
     ctx: SheetContext, reel_input_string: str
 ) -> List[ClipRecord]:
@@ -1093,6 +1169,7 @@ def generate_reel_timestamps(
         selectors["batch"]
         or selectors["keyword"]
         or selectors["timeline"]
+        or selectors.get("severity")
         or selectors["lines"]
         or selectors["ranges"]
         or selectors["categories"]
@@ -1139,6 +1216,8 @@ def generate_reel_timestamps(
             == timeline_participant
         ]
         sort_clips_chronologically(deduped)
+    elif selectors.get("severity"):
+        sort_clips_by_severity(deduped)
     else:
         deduped.sort(key=lambda issue: (issue["cell"].row, issue["cell"].col))
 

@@ -17,6 +17,7 @@ def _args(**overrides):
         cell=None,
         participant=None,
         keyword=False,
+        severity=None,
         mixed=None,
         reel=None,
         timeline=None,
