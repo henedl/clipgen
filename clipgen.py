@@ -71,6 +71,8 @@ MODE_ALIASES = {
     "browse": "browse",
     "v": "viewer",
     "viewer": "viewer",
+    "tv": "timeline-viewer",
+    "timeline-viewer": "timeline-viewer",
     "se": "settings",
     "settings": "settings",
 }
@@ -1273,6 +1275,45 @@ def _dispatch_interactive_mode(
     if mode == "viewer":
         _run_viewer_mode(worksheet)
         return None
+    if mode == "timeline-viewer":
+        clips_list = spreadsheet.generate_list(worksheet, "batch", skip_prompts=True)
+        outputs_generated, artifacts = process_clips(clips_list, output_format="clip")
+        if not config.REENCODING:
+            _print_reencoding_warning(utils.info_print)
+        _print_completion_message(outputs_generated, "clip", is_reel=False)
+        if artifacts:
+            viewer.INTERACTIVE_ARTIFACTS.extend(artifacts)
+            if config.MANIFEST_ENABLED:
+                viewer.save_manifest(
+                    viewer.INTERACTIVE_ARTIFACTS,
+                    study=artifacts[0].get("study", ""),
+                    worksheet_title=getattr(worksheet, "title", ""),
+                    is_excel=_is_excel_worksheet(worksheet),
+                    mode="timeline-viewer",
+                )
+            study = artifacts[0].get("study", "")
+            data = viewer.finalize_timeline_data(
+                artifacts,
+                study=study,
+                worksheet_title=getattr(worksheet, "title", ""),
+                is_excel=_is_excel_worksheet(worksheet),
+                mode="timeline-viewer",
+                output_format="clip",
+            )
+            viewer_path = viewer.generate_timeline_viewer(
+                data,
+                template_name="timeline-viewer.html",
+                output_basename="timeline_viewer.html",
+            )
+            if viewer_path:
+                utils.info_print(
+                    f"Participant timeline viewer created: {viewer_path}"
+                )
+        else:
+            utils.warning_print(
+                "No artifacts were generated; skipping timeline viewer."
+            )
+        return None
     if mode == "settings":
         utils.set_program_settings()
         return None
@@ -1315,7 +1356,8 @@ def run_interactive_mode(worksheet: Any) -> None:
             utils.print_mode_heading("Mode selection", "mode.selection")
             input_mode = utils.read_user_input(
                 "\nEnter mode or input directly:\n"
-                "  Tools: (s)creen, (g)if, (re)el, (rl) reel-late, (br)owse, (v)iewer, (se)ttings \n"
+                "  Tools: (s)creen, (g)if, (re)el, (rl) reel-late, (br)owse, (se)ttings \n"
+                "  Packs: (v)iewer, (tv) timeline-viewer \n"
                 "  Modes: (b)atch, (r)ange, (c)ategory, (l)ine, (ce)ll, (p)articipant, (k)eyword \n"
                 '  Or enter mixed selectors directly: e.g. 5, P01.11, 13-16, "Observations"\n>> '
             )
