@@ -1177,7 +1177,7 @@ def _run_format_mode_interactive(worksheet: Any, output_format: str) -> None:
     while True:
         selection = utils.read_user_input(
             "\nSelect source rows for this output:\n"
-            "  Modes: (b)atch, (r)ange, (c)ategory, (l)ine, (ce)ll, (p)articipant, (f)ilter\n"
+            "  Modes: (b)atch, (r)ange, (c)ategory, (l)ine, (ce)ll, (p)articipant, (k)eyword\n"
             '  Or enter mixed selectors directly: e.g. 5, P01.11, 13-16, "Observations"\n>> '
         )
         if not selection:
@@ -1316,7 +1316,7 @@ def run_interactive_mode(worksheet: Any) -> None:
             input_mode = utils.read_user_input(
                 "\nEnter mode or input directly:\n"
                 "  Tools: (s)creen, (g)if, (re)el, (rl) reel-late, (br)owse, (v)iewer, (se)ttings \n"
-                "  Modes: (b)atch, (r)ange, (c)ategory, (l)ine, (ce)ll, (p)articipant, (f)ilter \n"
+                "  Modes: (b)atch, (r)ange, (c)ategory, (l)ine, (ce)ll, (p)articipant, (k)eyword \n"
                 '  Or enter mixed selectors directly: e.g. 5, P01.11, 13-16, "Observations"\n>> '
             )
             if not input_mode:
