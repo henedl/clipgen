@@ -9,6 +9,14 @@
     filtered: [],
     selectedId: null,
     duration: 0,
+    listSort: null,
+  };
+
+  var SORT_DEFAULT_DIR = {
+    severity: "desc",
+    chrono: "asc",
+    duration: "desc",
+    alpha: "asc",
   };
 
   // ---- Helpers ----
@@ -174,6 +182,7 @@
       applyFilters();
       renderTimeline();
       renderList();
+      initSortToolbar();
       bindFilterEvents();
     }
   });
@@ -541,12 +550,143 @@
 
   // ---- List rendering ----
 
+  function artifactDurationSec(a) {
+    var s = Number(a.start);
+    var e = Number(a.end);
+    if (isNaN(s)) s = 0;
+    if (isNaN(e)) e = isNaN(s) ? 0 : s;
+    var d = e - s;
+    if (isNaN(d) || d < 0) return 0;
+    return d;
+  }
+
+  function orderedArtifactsForList() {
+    if (!state.listSort) return state.artifacts;
+    var key = state.listSort.key;
+    var dir = state.listSort.dir;
+    return state.artifacts.slice().sort(function (a, b) {
+      var r = 0;
+      if (key === "severity") {
+        var ae = !(a.severity || "").trim();
+        var be = !(b.severity || "").trim();
+        if (ae && be) r = 0;
+        else if (ae) r = 1;
+        else if (be) r = -1;
+        else {
+          var ca = severityClassForLabel(a.severity);
+          var cb = severityClassForLabel(b.severity);
+          var na = SEVERITY_SORT.hasOwnProperty(ca) ? SEVERITY_SORT[ca] : 999;
+          var nb = SEVERITY_SORT.hasOwnProperty(cb) ? SEVERITY_SORT[cb] : 999;
+          if (dir === "desc") r = na - nb;
+          else r = nb - na;
+        }
+      } else if (key === "chrono") {
+        var sa = Number(a.start);
+        var sb = Number(b.start);
+        if (isNaN(sa)) sa = 0;
+        if (isNaN(sb)) sb = 0;
+        r = sa - sb;
+        if (dir === "desc") r = -r;
+      } else if (key === "duration") {
+        var da = artifactDurationSec(a);
+        var db = artifactDurationSec(b);
+        r = da - db;
+        if (dir === "desc") r = -r;
+      } else if (key === "alpha") {
+        var ta = (a.description || "").trim();
+        var tb = (b.description || "").trim();
+        if (!ta && !tb) r = 0;
+        else if (!ta) r = 1;
+        else if (!tb) r = -1;
+        else {
+          r = ta.localeCompare(tb, undefined, { sensitivity: "base" });
+          if (dir === "desc") r = -r;
+        }
+      }
+      if (r !== 0) return r;
+      return a._idx - b._idx;
+    });
+  }
+
+  function sortToolbarLabel(key, dir, active) {
+    if (key === "severity") {
+      if (!active) return "Sort by severity";
+      return dir === "desc"
+        ? "Sort by severity: descending (most severe first)"
+        : "Sort by severity: ascending (least severe first)";
+    }
+    if (key === "chrono") {
+      if (!active) return "Sort by chronology (position in source)";
+      return dir === "asc"
+        ? "Sort by chronology: ascending (earliest in source first)"
+        : "Sort by chronology: descending (latest in source first)";
+    }
+    if (key === "duration") {
+      if (!active) return "Sort by duration";
+      return dir === "desc"
+        ? "Sort by duration: descending (longest first)"
+        : "Sort by duration: ascending (shortest first)";
+    }
+    if (key === "alpha") {
+      if (!active) return "Sort alphabetically (description)";
+      return dir === "asc"
+        ? "Sort alphabetically: ascending (A–Z)"
+        : "Sort alphabetically: descending (Z–A)";
+    }
+    return "";
+  }
+
+  function updateSortToolbarUI() {
+    var bar = qs("#artifactSortBar");
+    if (!bar) return;
+    qsa("#artifactSortBar .artifact-sort-btn").forEach(function (btn) {
+      var key = btn.getAttribute("data-sort");
+      btn.classList.remove("active", "sort-asc", "sort-desc");
+      var dirEl = btn.querySelector(".sort-dir");
+      if (dirEl) dirEl.textContent = "";
+      var isActive = state.listSort && state.listSort.key === key;
+      btn.setAttribute("aria-pressed", isActive ? "true" : "false");
+      if (isActive) {
+        var d = state.listSort.dir;
+        btn.classList.add("active", d === "asc" ? "sort-asc" : "sort-desc");
+        if (dirEl) dirEl.textContent = d === "asc" ? "\u2191" : "\u2193";
+        btn.title = sortToolbarLabel(key, d, true);
+        btn.setAttribute("aria-label", btn.title);
+      } else {
+        btn.title = sortToolbarLabel(key, null, false);
+        btn.setAttribute("aria-label", btn.title);
+      }
+    });
+  }
+
+  function onSortButtonClick(ev) {
+    var key = ev.currentTarget.getAttribute("data-sort");
+    if (!key || !SORT_DEFAULT_DIR.hasOwnProperty(key)) return;
+    if (state.listSort && state.listSort.key === key) {
+      state.listSort.dir = state.listSort.dir === "asc" ? "desc" : "asc";
+    } else {
+      state.listSort = { key: key, dir: SORT_DEFAULT_DIR[key] };
+    }
+    updateSortToolbarUI();
+    renderList();
+  }
+
+  function initSortToolbar() {
+    var bar = qs("#artifactSortBar");
+    if (!bar || bar.dataset.bound === "1") return;
+    bar.dataset.bound = "1";
+    qsa("#artifactSortBar .artifact-sort-btn").forEach(function (btn) {
+      btn.addEventListener("click", onSortButtonClick);
+    });
+    updateSortToolbarUI();
+  }
+
   function renderList() {
     var list = qs("#artifactList");
     if (!list) return;
     list.innerHTML = "";
 
-    state.artifacts.forEach(function (a) {
+    orderedArtifactsForList().forEach(function (a) {
       var li = document.createElement("li");
       li.dataset.id = a.id;
 
@@ -577,6 +717,12 @@
     });
 
     updateListVisibility();
+    if (state.selectedId) {
+      var sel = document.querySelector(
+        '#artifactList li[data-id="' + state.selectedId + '"]'
+      );
+      if (sel) sel.classList.add("selected");
+    }
   }
 
   function updateListVisibility() {

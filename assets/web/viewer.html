@@ -51,7 +51,23 @@
           <label><input type="checkbox" value="gif" checked> GIF</label>
         </fieldset>
       </div>
-      <h3>Artifacts <span id="artifactCount"></span></h3>
+      <div id="artifactListHeader" class="artifact-list-header">
+        <h3>Artifacts <span id="artifactCount"></span></h3>
+        <div id="artifactSortBar" class="artifact-sort-bar" role="toolbar" aria-label="Sort artifact list">
+          <button type="button" class="artifact-sort-btn" data-sort="severity" aria-pressed="false">
+            !<span class="sort-dir" aria-hidden="true"></span>
+          </button>
+          <button type="button" class="artifact-sort-btn" data-sort="chrono" aria-pressed="false">
+            ⏱<span class="sort-dir" aria-hidden="true"></span>
+          </button>
+          <button type="button" class="artifact-sort-btn" data-sort="duration" aria-pressed="false">
+            ↔<span class="sort-dir" aria-hidden="true"></span>
+          </button>
+          <button type="button" class="artifact-sort-btn" data-sort="alpha" aria-pressed="false">
+            A<span class="sort-dir" aria-hidden="true"></span>
+          </button>
+        </div>
+      </div>
       <ul id="artifactList"></ul>
     </aside>
 

@@ -402,6 +402,64 @@ body {
   font-size: 0.85rem;
 }
 
+.artifact-list-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.35rem 0.6rem;
+  margin-bottom: 0.5rem;
+}
+
+#sidebar .artifact-list-header h3 {
+  margin-bottom: 0;
+}
+
+.artifact-sort-bar {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  flex-shrink: 0;
+}
+
+.artifact-sort-btn {
+  position: relative;
+  min-width: 26px;
+  height: 26px;
+  padding: 0 4px;
+  border-radius: 6px;
+  border: 1px solid var(--color-border);
+  background: var(--color-surface-alt);
+  color: var(--color-text);
+  font-size: 0.72rem;
+  font-weight: 600;
+  line-height: 1;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0;
+  transition: background 0.12s ease, border-color 0.12s ease, color 0.12s ease;
+}
+
+.artifact-sort-btn:hover {
+  border-color: var(--color-accent);
+  color: var(--color-accent);
+}
+
+.artifact-sort-btn .sort-dir {
+  font-size: 0.62rem;
+  font-weight: 700;
+  margin-left: 1px;
+  opacity: 0.95;
+}
+
+.artifact-sort-btn.active {
+  border-color: var(--color-accent);
+  background: var(--color-selected);
+  color: var(--color-accent);
+}
+
 /* Filters */
 
 #filters {
