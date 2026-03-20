@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>clipgen Studio</title>
+  <link rel="stylesheet" href="studio.css">
+</head>
+<body>
+  <header id="studioHeader">
+    <div id="studioHeaderTop">
+      <h1>clipgen <span class="header-light">Studio</span></h1>
+      <button id="themeToggle" type="button" aria-label="Toggle dark mode" aria-pressed="false">
+        <span class="theme-toggle-icon theme-icon-sun"></span>
+        <span class="theme-toggle-icon theme-icon-moon"></span>
+      </button>
+    </div>
+    <div id="headerMeta">
+      <span id="studyName"></span>
+      <span id="versionInfo"></span>
+    </div>
+  </header>
+
+  <section id="sheetPreview">
+    <h3>Sheet Preview</h3>
+    <div id="sheetGrid">
+      <div id="sheetLoading" style="padding: 2rem; text-align: center; color: var(--color-text-dim);">
+        Loading sheet data...
+      </div>
+    </div>
+  </section>
+
+  <section id="dropAreas">
+    <div id="artifactsArea" class="drop-area">
+      <h3>Artifacts <span id="artifactsCount">(0)</span></h3>
+      <div id="artifactsList" class="drop-target">
+        <div class="drop-target-empty">Click or drag cells here to queue for generation</div>
+      </div>
+      <div class="area-controls">
+        <select id="artifactFormat">
+          <option value="clip">Clip (.mp4)</option>
+          <option value="screen">Screenshot (.png)</option>
+          <option value="gif">GIF (.gif)</option>
+        </select>
+        <button id="generateBtn" class="btn btn-primary" disabled>Generate</button>
+        <button id="clearArtifactsBtn" class="btn btn-small">Clear</button>
+      </div>
+    </div>
+
+    <div id="reelArea" class="drop-area">
+      <h3>Reel <span id="reelCount">(0)</span></h3>
+      <div id="reelList" class="drop-target">
+        <div class="drop-target-empty">Shift+click or drag cells here to build a reel</div>
+      </div>
+      <div class="area-controls">
+        <button id="buildReelBtn" class="btn btn-primary" disabled>Build Reel</button>
+        <button id="clearReelBtn" class="btn btn-small">Clear</button>
+      </div>
+    </div>
+
+    <div id="viewerArea" class="drop-area">
+      <h3>Viewers</h3>
+      <p>Build Viewer requires generated artifacts. Timeline Viewer runs a full batch export.</p>
+      <div class="area-controls">
+        <button id="buildViewerBtn" class="btn btn-primary" disabled>Build Viewer</button>
+        <button id="buildTimelineViewerBtn" class="btn btn-primary">Timeline Viewer</button>
+      </div>
+      <span id="viewerArtifactCount" style="font-size: 0.75rem; color: var(--color-text-dim);"></span>
+    </div>
+  </section>
+
+  <div id="statusOverlay" class="hidden">
+    <div class="status-card">
+      <div id="statusSpinner" class="spinner"></div>
+      <h3 id="statusTitle">Processing...</h3>
+      <p id="statusMessage"></p>
+      <button id="statusDismiss" class="btn" style="display: none;">Dismiss</button>
+    </div>
+  </div>
+
+  <script src="studio.js" defer></script>
+</body>
+</html>

@@ -94,6 +94,8 @@ Examples:
   python clipgen.py -b --viewer --manifest Timeline viewer + manifest after batch run
   python clipgen.py --viewer               Regenerate clips_viewer.html from saved manifest
   python clipgen.py --regenerate            Regenerate all media artifacts from saved manifest
+  python clipgen.py --studio                  Launch Studio web interface
+  python clipgen.py --studio -s "My Study"   Studio with specific spreadsheet
   python clipgen.py -b -i ./videos -o ./out   Custom input/output directories
   python clipgen.py -b --titlecards        Enable titlecards for this run
   python clipgen.py -b --no-titlecards     Disable titlecards for this run
@@ -256,6 +258,11 @@ Note: Non-interactive mode (using -b, -l, -r, -C, -c, -p, -k, -S, -M, -R, or -T)
         "--regenerate",
         action="store_true",
         help="Regenerate all media artifacts from saved manifest (no spreadsheet needed)",
+    )
+    viewer_manifest.add_argument(
+        "--studio",
+        action="store_true",
+        help="Launch the Studio web interface for interactive artifact generation and reel building",
     )
 
     run_opts = parser.add_argument_group("run options")
@@ -568,9 +575,7 @@ def _generate_cli_clips(
     if isinstance(args.keyword, str):
         combined = args.keyword.replace(",", "+")
         cli_annotation_ids = [
-            t.strip().lower().lstrip("!")
-            for t in combined.split("+")
-            if t.strip()
+            t.strip().lower().lstrip("!") for t in combined.split("+") if t.strip()
         ] or None
 
     mode_dispatch: List[tuple] = [
@@ -806,6 +811,35 @@ def main() -> None:
             )
             sys.exit(1)
 
+    studio_mode = getattr(args, "studio", False)
+    if studio_mode:
+        conflicting = [
+            args.batch,
+            args.lines,
+            args.range,
+            args.category,
+            args.cell,
+            args.participant,
+            args.keyword,
+            args.severity,
+            mixed_selectors,
+            args.reel,
+            args.timeline,
+            args.screen,
+            args.gif,
+            args.viewer,
+            getattr(args, "regenerate", False),
+            timeline_viewer,
+        ]
+        if any(conflicting):
+            utils.error_print(
+                "--studio cannot be combined with mode, format, or --viewer/--regenerate flags.",
+                [
+                    "Only -s (spreadsheet), -i/-o (directories), and -v (verbose) may be used alongside --studio."
+                ],
+            )
+            sys.exit(1)
+
     cli_mode = (
         args.batch
         or args.lines
@@ -900,8 +934,12 @@ def main() -> None:
                 ],
             )
             sys.exit(1)
-        media_count = sum(1 for a in existing_artifacts if a.get("type") != "transcript")
-        utils.info_print(f"Found {media_count} media artifact(s) in manifest. Regenerating...")
+        media_count = sum(
+            1 for a in existing_artifacts if a.get("type") != "transcript"
+        )
+        utils.info_print(
+            f"Found {media_count} media artifact(s) in manifest. Regenerating..."
+        )
         regenerated = clipgen.regenerate_from_manifest(existing_artifacts)
         utils.info_print(f"Regenerated {regenerated} of {media_count} artifact(s).")
         sys.exit(0)
@@ -914,6 +952,12 @@ def main() -> None:
     while True:
         try:
             worksheet = select_worksheet(gspread_client, doc_list, args, cli_mode)
+
+            if getattr(args, "studio", False):
+                import server
+
+                server.start_studio_server(worksheet)
+                sys.exit(0)
 
             # Execute based on mode
             if timeline_viewer:
