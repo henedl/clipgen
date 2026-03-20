@@ -554,49 +554,57 @@ body {
   text-transform: uppercase;
 }
 
-.list-artifact-pill.sev-critical {
+.list-artifact-pill.sev-critical,
+.detail-badge.sev-critical {
   background: var(--sev-critical-bg);
   border-color: var(--sev-critical-bg);
   color: #fff;
 }
 
-.list-artifact-pill.sev-high {
+.list-artifact-pill.sev-high,
+.detail-badge.sev-high {
   background: var(--sev-high-bg);
   border-color: var(--sev-high-bg);
   color: #fff;
 }
 
-.list-artifact-pill.sev-medium {
+.list-artifact-pill.sev-medium,
+.detail-badge.sev-medium {
   background: var(--sev-medium-bg);
   border-color: var(--sev-medium-bg);
   color: #fff;
 }
 
-.list-artifact-pill.sev-low {
+.list-artifact-pill.sev-low,
+.detail-badge.sev-low {
   background: var(--sev-low-bg);
   border-color: var(--sev-low-bg);
   color: #1f2937;
 }
 
-.list-artifact-pill.sev-na {
+.list-artifact-pill.sev-na,
+.detail-badge.sev-na {
   background: var(--sev-na-bg);
   border-color: var(--sev-na-bg);
   color: #fff;
 }
 
-.list-artifact-pill.sev-positive {
+.list-artifact-pill.sev-positive,
+.detail-badge.sev-positive {
   background: var(--sev-positive-bg);
   border-color: var(--sev-positive-bg);
   color: #fff;
 }
 
-.list-artifact-pill.sev-very-positive {
+.list-artifact-pill.sev-very-positive,
+.detail-badge.sev-very-positive {
   background: var(--sev-very-positive-bg);
   border-color: var(--sev-very-positive-bg);
   color: #fff;
 }
 
-.list-artifact-pill.sev-unknown {
+.list-artifact-pill.sev-unknown,
+.detail-badge.sev-unknown {
   background: var(--sev-unknown-bg);
   border-color: var(--sev-unknown-bg);
   color: #fff;
@@ -656,7 +664,28 @@ body {
   text-transform: uppercase;
   padding: 0.15rem 0.6rem;
   border-radius: 999px;
+}
+
+.detail-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  align-items: center;
   margin-bottom: 0.3rem;
+}
+
+.detail-badges .detail-badge {
+  margin-bottom: 0;
+}
+
+.detail-severity {
+  text-transform: none;
+  font-weight: 600;
+}
+
+#detailSeverityPill.hidden,
+#playerSeverityPill.hidden {
+  display: none;
 }
 
 .detail-badge.clip { background: var(--color-clip); color: #fff; }
@@ -937,17 +966,6 @@ html[data-theme="dark"] .artifact-marker.selected {
   font-size: 1rem;
   font-weight: 600;
   margin-top: 0.2rem;
-}
-
-.player-severity {
-  font-size: 0.82rem;
-  color: var(--color-text-dim);
-  margin-top: 0.2rem;
-  font-weight: 600;
-}
-
-.player-severity.hidden {
-  display: none;
 }
 
 #playerMeta {

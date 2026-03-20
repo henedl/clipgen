@@ -109,6 +109,19 @@
     return (a.type || "clip").toUpperCase();
   }
 
+  function applySeverityPill(pillEl, a) {
+    if (!pillEl) return;
+    var sev = (a.severity || "").trim();
+    if (!sev) {
+      pillEl.textContent = "";
+      pillEl.classList.add("hidden");
+      return;
+    }
+    pillEl.classList.remove("hidden");
+    pillEl.textContent = sev;
+    pillEl.className = "detail-badge detail-severity " + severityClassForLabel(sev);
+  }
+
   function qs(sel) {
     return document.querySelector(sel);
   }
@@ -634,7 +647,7 @@
     var playerContent = qs("#playerContent");
     if (playerEmpty) playerEmpty.classList.remove("hidden");
     if (playerContent) playerContent.classList.add("hidden");
-    var ps = qs("#playerSeverity");
+    var ps = qs("#playerSeverityPill");
     if (ps) {
       ps.textContent = "";
       ps.classList.add("hidden");
@@ -654,6 +667,8 @@
     if (empty) empty.classList.add("hidden");
     if (content) content.classList.remove("hidden");
 
+    applySeverityPill(qs("#detailSeverityPill"), a);
+
     var badge = qs("#detailType");
     if (badge) {
       badge.textContent = (a.type || "clip").toUpperCase();
@@ -662,7 +677,6 @@
 
     setText("#detailDescription", a.description || "(no description)");
     setText("#detailCategory", a.category || "–");
-    setText("#detailSeverity", (a.severity || "").trim() || "–");
     setText("#detailParticipant", a.participant || "–");
     setText("#detailTime",
       formatTime(a.start) + (a.end != null ? " – " + formatTime(a.end) : ""));
@@ -831,6 +845,8 @@
     if (empty) empty.classList.add("hidden");
     if (content) content.classList.remove("hidden");
 
+    applySeverityPill(qs("#playerSeverityPill"), a);
+
     var badge = qs("#playerType");
     if (badge) {
       badge.textContent = (a.type || "clip").toUpperCase();
@@ -838,17 +854,6 @@
     }
 
     setText("#playerDescription", a.description || "(no description)");
-
-    var ps = qs("#playerSeverity");
-    if (ps) {
-      if ((a.severity || "").trim()) {
-        ps.textContent = "Severity: " + a.severity;
-        ps.classList.remove("hidden");
-      } else {
-        ps.textContent = "";
-        ps.classList.add("hidden");
-      }
-    }
 
     var metaEl = qs("#playerMeta");
     if (metaEl) {
