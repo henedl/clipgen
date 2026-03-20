@@ -10,6 +10,7 @@
     selectedId: null,
     duration: 0,
     listSort: null,
+    expandedTracks: {},
   };
 
   var SORT_DEFAULT_DIR = {
@@ -488,6 +489,112 @@
     }
   }
 
+  // ---- Track layout algorithms ----
+
+  function computeTrackAssignments(artifacts, duration) {
+    var sorted = artifacts.slice().sort(function (a, b) {
+      var sa = a.start || 0;
+      var sb = b.start || 0;
+      if (sa !== sb) return sa - sb;
+      var da = (a.end || a.start || 0) - sa;
+      var db = (b.end || b.start || 0) - sb;
+      return da - db;
+    });
+    var minWidthSec = duration * 0.004;
+    var trackEnds = [];
+    var assignments = {};
+    sorted.forEach(function (a) {
+      var s = a.start || 0;
+      var e = a.end || a.start || 0;
+      var visualEnd = Math.max(e, s + minWidthSec);
+      var placed = false;
+      for (var i = 0; i < trackEnds.length; i++) {
+        if (trackEnds[i] <= s) {
+          trackEnds[i] = visualEnd;
+          assignments[a.id] = i;
+          placed = true;
+          break;
+        }
+      }
+      if (!placed) {
+        assignments[a.id] = trackEnds.length;
+        trackEnds.push(visualEnd);
+      }
+    });
+    return { assignments: assignments, trackCount: trackEnds.length || 1 };
+  }
+
+  function computeCollapsedZIndices(artifacts) {
+    var items = artifacts.map(function (a) {
+      var s = a.start || 0;
+      var e = a.end || a.start || 0;
+      return { id: a.id, duration: e - s, start: s };
+    });
+    items.sort(function (a, b) {
+      if (a.duration !== b.duration) return b.duration - a.duration;
+      return a.start - b.start;
+    });
+    var zMap = {};
+    items.forEach(function (item, i) {
+      zMap[item.id] = i + 1;
+    });
+    return zMap;
+  }
+
+  function applyTrackLayout(trackEl) {
+    var trackId = trackEl._trackId;
+    var markers = trackEl._trackMarkers;
+    if (!markers || !markers.length) return;
+    var isExpanded = !!state.expandedTracks[trackId];
+    var isUnified = trackId === "unified";
+    var markerHeight = isUnified ? 44 : 24;
+    var topPad = isUnified ? 6 : 4;
+    var gap = 4;
+
+    if (isExpanded) {
+      var artifactList = markers.map(function (m) { return m.artifact; });
+      var packing = computeTrackAssignments(artifactList, state.duration);
+      var numTracks = packing.trackCount;
+      var expandedHeight = topPad + numTracks * (markerHeight + gap);
+      trackEl.style.height = expandedHeight + "px";
+      trackEl.classList.add("track-expanded");
+      trackEl.classList.remove("track-collapsed");
+      markers.forEach(function (m) {
+        var row = packing.assignments[m.artifact.id] || 0;
+        m.el.style.top = (topPad + row * (markerHeight + gap)) + "px";
+        m.el.style.zIndex = "";
+        m.el.dataset.collapsedZ = "";
+      });
+    } else {
+      trackEl.style.height = "";
+      trackEl.classList.remove("track-expanded");
+      trackEl.classList.add("track-collapsed");
+      var zMap = computeCollapsedZIndices(markers.map(function (m) { return m.artifact; }));
+      markers.forEach(function (m) {
+        m.el.style.top = topPad + "px";
+        var z = zMap[m.artifact.id] || 1;
+        m.el.dataset.collapsedZ = z;
+        if (!m.el.classList.contains("selected")) {
+          m.el.style.zIndex = z;
+        }
+      });
+    }
+  }
+
+  function toggleTrackExpand(trackEl) {
+    var trackId = trackEl._trackId;
+    state.expandedTracks[trackId] = !state.expandedTracks[trackId];
+    applyTrackLayout(trackEl);
+    var btn = trackEl.parentNode.querySelector(".track-expand-btn");
+    if (btn) {
+      var expanded = !!state.expandedTracks[trackId];
+      btn.classList.toggle("expanded", expanded);
+      btn.setAttribute("aria-expanded", expanded ? "true" : "false");
+      btn.title = expanded ? "Collapse tracks" : "Expand tracks";
+      btn.setAttribute("aria-label", btn.title);
+    }
+  }
+
   // ---- Timeline rendering ----
 
   function renderTimeline() {
@@ -495,6 +602,7 @@
     if (!track) return;
     track.innerHTML = "";
 
+    var markers = [];
     state.artifacts.forEach(function (a) {
       var marker = el("div", markerClasses(a));
       marker.dataset.id = a.id;
@@ -517,7 +625,20 @@
       });
 
       track.appendChild(marker);
+      markers.push({ el: marker, artifact: a });
     });
+
+    track._trackMarkers = markers;
+    track._trackId = "unified";
+    applyTrackLayout(track);
+
+    var wrapBtn = track.parentNode && track.parentNode.querySelector(".track-expand-btn");
+    if (wrapBtn && !wrapBtn._bound) {
+      wrapBtn._bound = true;
+      wrapBtn.addEventListener("click", function () {
+        toggleTrackExpand(track);
+      });
+    }
 
     renderTicks();
     updateTimelineVisibility();
@@ -754,17 +875,31 @@
 
     qsa(".artifact-marker.selected").forEach(function (m) {
       m.classList.remove("selected");
+      var storedZ = m.dataset.collapsedZ;
+      m.style.zIndex = storedZ || "";
     });
     qsa("#artifactList li.selected").forEach(function (li) {
       li.classList.remove("selected");
     });
 
     var marker = document.querySelector('.artifact-marker[data-id="' + id + '"]');
-    if (marker) marker.classList.add("selected");
+    if (marker) {
+      marker.classList.add("selected");
+      marker.style.zIndex = 1001;
+    }
     var li = document.querySelector('#artifactList li[data-id="' + id + '"]');
     if (li) {
       li.classList.add("selected");
-      li.scrollIntoView({ block: "nearest", behavior: "smooth" });
+      var sidebar = qs("#sidebar");
+      if (sidebar) {
+        var sRect = sidebar.getBoundingClientRect();
+        var lRect = li.getBoundingClientRect();
+        if (lRect.top < sRect.top) {
+          sidebar.scrollTop += lRect.top - sRect.top;
+        } else if (lRect.bottom > sRect.bottom) {
+          sidebar.scrollTop += lRect.bottom - sRect.bottom;
+        }
+      }
     }
 
     var artifact = findArtifact(id);
@@ -781,6 +916,8 @@
     state.selectedId = null;
     qsa(".artifact-marker.selected").forEach(function (m) {
       m.classList.remove("selected");
+      var storedZ = m.dataset.collapsedZ;
+      m.style.zIndex = storedZ || "";
     });
     qsa("#artifactList li.selected").forEach(function (li) {
       li.classList.remove("selected");
@@ -943,6 +1080,7 @@
       row.appendChild(label);
 
       var track = el("div", "participant-track");
+      var markers = [];
       grouped[pid].forEach(function (a) {
         var marker = el("div", markerClasses(a));
         marker.dataset.id = a.id;
@@ -964,8 +1102,26 @@
         });
 
         track.appendChild(marker);
+        markers.push({ el: marker, artifact: a });
       });
+
+      track._trackMarkers = markers;
+      track._trackId = "participant-" + pid;
+      applyTrackLayout(track);
+
       row.appendChild(track);
+
+      var expandBtn = el("button", "track-expand-btn");
+      expandBtn.type = "button";
+      expandBtn.setAttribute("aria-label", "Expand tracks");
+      expandBtn.setAttribute("aria-expanded", "false");
+      expandBtn.title = "Expand tracks";
+      expandBtn.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg>';
+      expandBtn.addEventListener("click", (function (t) {
+        return function () { toggleTrackExpand(t); };
+      })(track));
+      row.appendChild(expandBtn);
+
       container.appendChild(row);
     });
 
