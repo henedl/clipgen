@@ -676,6 +676,7 @@ def run_cli_mode(worksheet: Any, args: Any, cli_mode_args: CliModeArgs) -> None:
         outputs_generated, artifacts = clipgen.process_clips(
             clips_list,
             output_format=output_format,
+            include_severity=bool(args.severity),
         )
 
     if not config.REENCODING:

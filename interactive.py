@@ -113,13 +113,15 @@ def prompt_category_selection(ctx: SheetContext) -> Optional[List[str]]:
 
 def prompt_severity_selection(ctx: SheetContext) -> Optional[List[str]]:
     """Show severities sorted most severe first, prompt for selection, return selected or None."""
-    all_severities = spreadsheet.collect_severities(ctx)
+    all_severities, severity_counts = spreadsheet.collect_severities(ctx)
     if not all_severities:
         utils.info_print("No severity values found in the spreadsheet.")
         return None
     utils.info_print("Available severity levels (most severe first):")
     for i, sev in enumerate(all_severities, 1):
-        display = utils.format_severity_display(sev)
+        count = severity_counts.get(sev, 0)
+        count_label = "1 row" if count == 1 else f"{count} rows"
+        display = f"{utils.format_severity_display(sev)} \u2014 {count_label}"
         style = utils.get_severity_style(sev)
         if utils._use_rich() and utils.console is not None and style:
             utils.console.print(f"  {i}. [{style}]{display}[/{style}]")

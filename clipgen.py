@@ -549,6 +549,7 @@ def _process_single_clip_segments(
     filename_prefix: str = "",
     output_format: str = "clip",
     collect_paths: bool = False,
+    include_severity: bool = False,
 ) -> Tuple[int, List[Tuple[str, str, str]]]:
     """Process one clip's segments: run ffmpeg for each (start, end), optionally collect output paths.
 
@@ -560,6 +561,7 @@ def _process_single_clip_segments(
         missing_videos: Set of already-reported missing paths (read-only here)
         filename_prefix: Prefix for output filename (e.g. '_reel_part_' for reel)
         collect_paths: If True, return list of output paths; otherwise return empty list
+        include_severity: If True and clip has severity, include [Severity] in filename
 
     Returns:
         (number of segments successfully generated, list of output paths if collect_paths else [])
@@ -576,7 +578,10 @@ def _process_single_clip_segments(
         utils.error_print(f"Unsupported output format: '{output_format}'")
         return (generated, output_paths)
 
-    template = f"{filename_prefix}[{clip['category']}] {clip['study']} {clip['participant']} {clip['desc']}{file_extension}"
+    severity_tag = (
+        f"[{clip['severity']}]" if include_severity and clip.get("severity") else ""
+    )
+    template = f"{filename_prefix}[{clip['category']}]{severity_tag} {clip['study']} {clip['participant']} {clip['desc']}{file_extension}"
     for start_time, end_time in clip["times"]:
         try:
             out_name = files.get_unique_filename(template, file_format=file_extension)
@@ -733,6 +738,7 @@ def _transcribe_segments(
 def process_clips(
     clips_list: List[ClipRecord],
     output_format: str = "clip",
+    include_severity: bool = False,
 ) -> Tuple[int, List[Dict[str, Any]]]:
     """Process and generate outputs from the clips list.
 
@@ -770,6 +776,7 @@ def process_clips(
             missing_videos,
             output_format=output_format,
             collect_paths=True,
+            include_severity=include_severity,
         )
         if segment_details:
             all_artifacts.extend(
@@ -1239,7 +1246,7 @@ def _run_format_mode_interactive(worksheet: Any, output_format: str) -> None:
             break
 
     outputs_generated, artifacts = process_clips(
-        clips_list, output_format=output_format
+        clips_list, output_format=output_format, include_severity=(mode == "severity")
     )
     if artifacts:
         viewer.INTERACTIVE_ARTIFACTS.extend(artifacts)
@@ -1429,7 +1436,9 @@ def run_interactive_mode(worksheet: Any) -> None:
                     output_file=reel_output_file,
                 )
             else:
-                outputs_generated, artifacts = process_clips(clips_list)
+                outputs_generated, artifacts = process_clips(
+                    clips_list, include_severity=(resolved_mode == "severity")
+                )
 
             if artifacts:
                 viewer.INTERACTIVE_ARTIFACTS.extend(artifacts)

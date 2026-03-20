@@ -911,21 +911,24 @@ def generate_category_timestamps(
     return clips
 
 
-def collect_severities(ctx: SheetContext) -> List[str]:
-    """Scan sheet and return unique severity values, sorted most severe first."""
+def collect_severities(ctx: SheetContext) -> Tuple[List[str], Dict[str, int]]:
+    """Scan sheet and return unique severity values sorted most severe first, plus row counts."""
     if ctx.severity_cell is None:
-        return []
-    severities = []
+        return [], {}
+    severities: List[str] = []
+    counts: Dict[str, int] = {}
     severity_col = ctx.severity_cell.col - 1
     for i in range(ctx.first_data_row_idx, len(ctx.sheet_data)):
         if severity_col < len(ctx.sheet_data[i]):
             raw = ctx.sheet_data[i][severity_col].strip()
             if raw:
                 normalized = utils.normalize_severity(raw)
-                if normalized and normalized not in severities:
-                    severities.append(normalized)
+                if normalized:
+                    counts[normalized] = counts.get(normalized, 0) + 1
+                    if normalized not in severities:
+                        severities.append(normalized)
     severities.sort(key=utils.severity_sort_key)
-    return severities
+    return severities, counts
 
 
 def generate_severity_timestamps(
