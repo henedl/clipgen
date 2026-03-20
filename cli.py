@@ -93,6 +93,7 @@ Examples:
   python clipgen.py -b --transcribe --transcript-format vtt
   python clipgen.py -b --viewer --manifest Timeline viewer + manifest after batch run
   python clipgen.py --viewer               Regenerate clips_viewer.html from saved manifest
+  python clipgen.py --regenerate            Regenerate all media artifacts from saved manifest
   python clipgen.py -b -i ./videos -o ./out   Custom input/output directories
   python clipgen.py -b --titlecards        Enable titlecards for this run
   python clipgen.py -b --no-titlecards     Disable titlecards for this run
@@ -247,6 +248,11 @@ Note: Non-interactive mode (using -b, -l, -r, -C, -c, -p, -k, -S, -M, -R, or -T)
         "--timeline-viewer",
         action="store_true",
         help="Batch-export all clips and generate a per-participant timeline HTML viewer",
+    )
+    viewer_manifest.add_argument(
+        "--regenerate",
+        action="store_true",
+        help="Regenerate all media artifacts from saved manifest (no spreadsheet needed)",
     )
 
     run_opts = parser.add_argument_group("run options")
@@ -777,10 +783,11 @@ def main() -> None:
             args.screen,
             args.gif,
             args.viewer,
+            getattr(args, "regenerate", False),
         ]
         if any(conflicting):
             utils.error_print(
-                "--timeline-viewer cannot be combined with mode, format, or --viewer flags.",
+                "--timeline-viewer cannot be combined with mode, format, or --viewer/--regenerate flags.",
                 [
                     "Only -s (spreadsheet) and -v (verbose) may be used alongside --timeline-viewer."
                 ],
@@ -868,6 +875,23 @@ def main() -> None:
         viewer_path = viewer.generate_timeline_viewer(data)
         if viewer_path:
             utils.info_print(f"Timeline viewer created from manifest: {viewer_path}")
+        sys.exit(0)
+
+    # Standalone regenerate: re-export all media artifacts from saved manifest
+    if getattr(args, "regenerate", False) and not cli_mode:
+        existing_artifacts = viewer.load_manifest_artifacts()
+        if not existing_artifacts:
+            utils.error_print(
+                "No manifest found or manifest is empty.",
+                [
+                    f"Run a clip generation mode with --manifest first to create {config.MANIFEST_FILENAME}."
+                ],
+            )
+            sys.exit(1)
+        media_count = sum(1 for a in existing_artifacts if a.get("type") != "transcript")
+        utils.info_print(f"Found {media_count} media artifact(s) in manifest. Regenerating...")
+        regenerated = clipgen.regenerate_from_manifest(existing_artifacts)
+        utils.info_print(f"Regenerated {regenerated} of {media_count} artifact(s).")
         sys.exit(0)
 
     # Authenticate with Google (once per run)

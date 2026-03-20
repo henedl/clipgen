@@ -75,6 +75,8 @@ MODE_ALIASES = {
     "viewer": "viewer",
     "tv": "timeline-viewer",
     "timeline-viewer": "timeline-viewer",
+    "rg": "regenerate",
+    "regenerate": "regenerate",
     "se": "settings",
     "settings": "settings",
 }
@@ -921,6 +923,96 @@ def process_reel(
     return (1, []) if ok else (0, [])
 
 
+def regenerate_from_manifest(artifacts: List[Dict[str, Any]]) -> int:
+    """Regenerate media artifacts from manifest entries.
+
+    Skips transcript-type artifacts. For each clip/screen/gif artifact,
+    resolves the source video, converts start/end seconds to timestamps,
+    and invokes the appropriate ffmpeg operation.
+
+    Returns the number of successfully regenerated artifacts.
+    """
+    media = [a for a in artifacts if a.get("type") != "transcript"]
+    if not media:
+        utils.warning_print("No media artifacts to regenerate.")
+        return 0
+
+    utils.print_mode_heading("Regenerating artifacts", "mode.regenerate")
+    missing_videos: Set[str] = set()
+    generated = 0
+
+    progress = utils.create_progress_bar()
+    if progress:
+        with progress:
+            task = progress.add_task("Regenerating", total=len(media))
+            for artifact in media:
+                desc_preview = (artifact.get("description") or "")[
+                    : config.PROGRESS_DESCRIPTION_LENGTH
+                ]
+                progress.update(task, description=f"[{artifact.get('participant', '')}] {desc_preview}...")
+                if _regenerate_single_artifact(artifact, missing_videos):
+                    generated += 1
+                progress.update(task, advance=1)
+    else:
+        for artifact in media:
+            if _regenerate_single_artifact(artifact, missing_videos):
+                generated += 1
+
+    if missing_videos:
+        utils.standard_print(f"* Missing source video files: {len(missing_videos)}")
+    return generated
+
+
+def _regenerate_single_artifact(
+    artifact: Dict[str, Any], missing_videos: Set[str]
+) -> bool:
+    """Regenerate one artifact from its manifest entry. Returns True on success."""
+    source_name = artifact.get("sourceVideo", "")
+    if not source_name:
+        utils.warning_print(f"Artifact '{artifact.get('file', '?')}' has no sourceVideo, skipping.")
+        return False
+
+    source_path = str(utils.resolve_input_path(source_name))
+    if not Path(source_path).is_file():
+        if source_path not in missing_videos:
+            missing_videos.add(source_path)
+            utils.warning_print(f"Source video not found: '{source_name}'")
+        return False
+
+    output_path = str(utils.resolve_output_path(artifact.get("file", "")))
+    start_sec = artifact.get("start", 0)
+    end_sec = artifact.get("end", 0)
+    start_ts = utils.seconds_to_timestamp(int(start_sec))
+    end_ts = utils.seconds_to_timestamp(int(end_sec))
+    artifact_type = artifact.get("type", "clip")
+
+    if artifact_type == "clip":
+        return video.run_ffmpeg(
+            input_file=source_path,
+            output_file=output_path,
+            start_pos=start_ts,
+            end_pos=end_ts,
+            reencode=config.REENCODING,
+        )
+    elif artifact_type == "screen":
+        return video.extract_screenshot(
+            input_file=source_path,
+            output_file=output_path,
+            timestamp=start_ts,
+        )
+    elif artifact_type == "gif":
+        duration = max(int(end_sec - start_sec), config.DEFAULT_GIF_DURATION_SECONDS)
+        return video.extract_gif(
+            input_file=source_path,
+            output_file=output_path,
+            timestamp=start_ts,
+            duration_seconds=duration,
+        )
+    else:
+        utils.warning_print(f"Unknown artifact type '{artifact_type}' for '{artifact.get('file', '?')}', skipping.")
+        return False
+
+
 # ---- Interactive mode flows ----
 
 
@@ -1317,6 +1409,29 @@ def _run_viewer_mode(worksheet: Any) -> None:
         utils.info_print(f"Timeline viewer created: {viewer_path}")
 
 
+def _run_regenerate_mode() -> None:
+    """Regenerate all media artifacts from saved manifest."""
+    existing_artifacts = viewer.load_manifest_artifacts()
+    if not existing_artifacts:
+        utils.info_print(
+            "No manifest file found.\n"
+            "Generate clips first with --manifest to save one."
+        )
+        return
+    media_count = sum(1 for a in existing_artifacts if a.get("type") != "transcript")
+    if media_count == 0:
+        utils.info_print("Manifest contains only transcript artifacts; nothing to regenerate.")
+        return
+    yn = utils.read_user_input(
+        f"Found {media_count} media artifact(s) in manifest.\n"
+        "Regenerate all? [y/n]\n>> "
+    )
+    if yn.strip().lower() != "y":
+        return
+    regenerated = regenerate_from_manifest(existing_artifacts)
+    utils.info_print(f"Regenerated {regenerated} of {media_count} artifact(s).")
+
+
 def _dispatch_interactive_mode(
     mode: Optional[str], worksheet: Any, raw_input: str
 ) -> Optional[Tuple[List[ClipRecord], bool, Optional[str]]]:
@@ -1346,6 +1461,9 @@ def _dispatch_interactive_mode(
         return ([], False, None)
     if mode == "viewer":
         _run_viewer_mode(worksheet)
+        return None
+    if mode == "regenerate":
+        _run_regenerate_mode()
         return None
     if mode == "timeline-viewer":
         clips_list = spreadsheet.generate_list(worksheet, "batch", skip_prompts=True)
@@ -1427,7 +1545,7 @@ def run_interactive_mode(worksheet: Any) -> None:
             input_mode = utils.read_user_input(
                 "\nEnter mode or input directly:\n"
                 "  Tools: (s)creen, (g)if, (re)el, (rl) reel-late, (br)owse, (se)ttings \n"
-                "  Packs: (v)iewer, (tv) timeline-viewer \n"
+                "  Packs: (v)iewer, (tv) timeline-viewer, (rg) regenerate \n"
                 "  Modes: (b)atch, (r)ange, (c)ategory, (l)ine, (ce)ll, (p)articipant, (k)eyword, (sv) severity \n"
                 '  Or enter mixed selectors directly: e.g. 5, P01.11, 13-16, "Observations"\n>> '
             )

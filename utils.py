@@ -111,6 +111,7 @@ _CLIPGEN_THEME = (
             "mode.participant": "bold cyan",
             "mode.keyword": "bold cyan",
             "mode.severity": "bold #FF8C00",
+            "mode.regenerate": "bold green",
             "severity.critical": "bold #8B0000",
             "severity.high": "bold red",
             "severity.medium": "bold #FF8C00",
@@ -936,7 +937,7 @@ def _clock_to_seconds(ts: str) -> Optional[int]:
     return None
 
 
-def _seconds_to_timestamp(total_seconds: int) -> str:
+def seconds_to_timestamp(total_seconds: int) -> str:
     """Format a non-negative number of seconds as H:MM:SS or M:SS."""
     if total_seconds < 0:
         total_seconds = 0
@@ -983,7 +984,7 @@ def convert_clock_pairs_to_relative(
             skipped.append(f"{start_str}-{end_str}")
             continue
         result.append(
-            (_seconds_to_timestamp(start_rel), _seconds_to_timestamp(end_rel))
+            (seconds_to_timestamp(start_rel), seconds_to_timestamp(end_rel))
         )
 
     if skipped:
