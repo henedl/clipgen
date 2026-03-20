@@ -116,7 +116,9 @@ def test_run_cli_mode_batch_happy_path_dispatch(monkeypatch, make_clip):
     cli.run_cli_mode(None, args, cli.CliModeArgs(None, None, None, None))
 
     generate_list.assert_called_once_with(None, "batch", skip_prompts=True)
-    process_clips.assert_called_once_with(clips, output_format="clip")
+    process_clips.assert_called_once_with(
+        clips, output_format="clip", include_severity=False
+    )
     completion.assert_called_once()
 
 
@@ -142,7 +144,9 @@ def test_run_cli_mode_line_with_screen_output(monkeypatch, make_clip):
         line_numbers=[5],
         skip_prompts=True,
     )
-    process_clips.assert_called_once_with(clips, output_format="screen")
+    process_clips.assert_called_once_with(
+        clips, output_format="screen", include_severity=False
+    )
     completion.assert_called_once()
 
 
@@ -166,7 +170,9 @@ def test_run_cli_mode_category_cli_dispatch(monkeypatch, make_clip):
         skip_prompts=True,
         categories=["Observations", "Onboarding"],
     )
-    process_clips.assert_called_once_with(clips, output_format="clip")
+    process_clips.assert_called_once_with(
+        clips, output_format="clip", include_severity=False
+    )
     completion.assert_called_once()
 
 
