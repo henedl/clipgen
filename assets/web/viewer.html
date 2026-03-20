@@ -29,6 +29,7 @@
       <span class="legend-item"><span class="legend-swatch screen"></span> Screenshot</span>
       <span class="legend-item"><span class="legend-swatch gif"></span> GIF</span>
     </div>
+    <div id="severityLegend" class="hidden" aria-label="Severity colors"></div>
   </section>
 
   <div id="layout">
@@ -39,6 +40,10 @@
         <select id="filterCategory"><option value="">All categories</option></select>
         <label for="filterParticipant">Participant</label>
         <select id="filterParticipant"><option value="">All participants</option></select>
+        <div id="filterSeverityWrap" class="filter-severity-wrap hidden">
+          <label for="filterSeverity">Severity</label>
+          <select id="filterSeverity"><option value="">All severities</option></select>
+        </div>
         <fieldset id="filterType">
           <legend>Type</legend>
           <label><input type="checkbox" value="clip" checked> Clip</label>
@@ -62,6 +67,7 @@
         <div id="detailMeta">
           <dl>
             <dt>Category</dt><dd id="detailCategory"></dd>
+            <dt>Severity</dt><dd id="detailSeverity"></dd>
             <dt>Participant</dt><dd id="detailParticipant"></dd>
             <dt>Time</dt><dd id="detailTime"></dd>
             <dt>Cell</dt><dd id="detailCell"></dd>

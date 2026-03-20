@@ -709,6 +709,15 @@ def _transcribe_segments(
     cell = clip.get("cell")
     cell_row = getattr(cell, "row", None)
     cell_col = getattr(cell, "col", None)
+    try:
+        cell_a1 = (
+            gspread.utils.rowcol_to_a1(cell_row, cell_col)
+            if cell_row and cell_col
+            else ""
+        )
+    except Exception:
+        cell_a1 = ""
+    annotations = list(clip.get("cell_annotations", []))
 
     for seg_idx, (out_path, start_str, end_str) in enumerate(segment_details):
         start_sec = utils.timestamp_to_seconds(start_str) or 0.0
@@ -725,10 +734,16 @@ def _transcribe_segments(
                     "file": Path(t_path).name,
                     "start": start_sec,
                     "end": end_sec,
+                    "thumbnail": "",
                     "study": clip.get("study", ""),
                     "participant": clip.get("participant", ""),
                     "category": clip.get("category", ""),
+                    "severity": clip.get("severity", ""),
                     "description": clip.get("desc", ""),
+                    "cellRow": cell_row,
+                    "cellCol": cell_col,
+                    "cellA1": cell_a1,
+                    "annotations": annotations,
                     "sourceVideo": base_video,
                     "transcriptFormat": config.TRANSCRIBE_FORMAT,
                 }

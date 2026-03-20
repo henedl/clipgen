@@ -36,6 +36,7 @@
       <div id="playerInfo">
         <span id="playerType" class="detail-badge"></span>
         <h2 id="playerDescription"></h2>
+        <p id="playerSeverity" class="player-severity hidden"></p>
         <div id="playerMeta"></div>
       </div>
     </div>
@@ -44,10 +45,13 @@
   <section id="participantTimelines">
     <div id="timelinesHeader">
       <h3>Participant Timelines</h3>
-      <div id="timelineLegend">
-        <span class="legend-item"><span class="legend-swatch clip"></span> Clip</span>
-        <span class="legend-item"><span class="legend-swatch screen"></span> Screenshot</span>
-        <span class="legend-item"><span class="legend-swatch gif"></span> GIF</span>
+      <div class="timelines-legend-group">
+        <div id="timelineLegend">
+          <span class="legend-item"><span class="legend-swatch clip"></span> Clip</span>
+          <span class="legend-item"><span class="legend-swatch screen"></span> Screenshot</span>
+          <span class="legend-item"><span class="legend-swatch gif"></span> GIF</span>
+        </div>
+        <div id="severityLegend" class="hidden" aria-label="Severity colors"></div>
       </div>
     </div>
     <div id="participantRows"></div>

@@ -29,6 +29,86 @@
     return n < 10 ? "0" + n : "" + n;
   }
 
+  var SEVERITY_SORT = {
+    "sev-critical": -4,
+    "sev-high": -3,
+    "sev-medium": -2,
+    "sev-low": -1,
+    "sev-na": 0,
+    "sev-positive": 1,
+    "sev-very-positive": 2,
+    "sev-unknown": 998,
+  };
+
+  function severityClassForLabel(raw) {
+    if (!raw || !String(raw).trim()) return "";
+    var k = String(raw).trim().toLowerCase();
+    var map = {
+      critical: "sev-critical",
+      high: "sev-high",
+      medium: "sev-medium",
+      low: "sev-low",
+      "n/a": "sev-na",
+      positive: "sev-positive",
+      "very positive": "sev-very-positive",
+    };
+    return map[k] || "sev-unknown";
+  }
+
+  function markerTypeClass(type) {
+    var t = type || "clip";
+    if (t === "transcript") return "transcript";
+    if (t === "screen" || t === "gif") return t;
+    return "clip";
+  }
+
+  function markerClasses(a) {
+    var parts = ["artifact-marker", markerTypeClass(a.type)];
+    var sev = (a.severity || "").trim();
+    if (sev) {
+      parts.push(severityClassForLabel(sev));
+    }
+    return parts.join(" ");
+  }
+
+  function sortedUniqueSeverities() {
+    var seen = {};
+    var labels = [];
+    state.artifacts.forEach(function (a) {
+      var s = (a.severity || "").trim();
+      if (!s || seen[s]) return;
+      seen[s] = true;
+      labels.push(s);
+    });
+    labels.sort(function (a, b) {
+      var ca = severityClassForLabel(a);
+      var cb = severityClassForLabel(b);
+      var na = SEVERITY_SORT.hasOwnProperty(ca) ? SEVERITY_SORT[ca] : 999;
+      var nb = SEVERITY_SORT.hasOwnProperty(cb) ? SEVERITY_SORT[cb] : 999;
+      if (na !== nb) return na - nb;
+      return a.localeCompare(b);
+    });
+    return labels;
+  }
+
+  function listPillClasses(a) {
+    var t = markerTypeClass(a.type);
+    var parts = ["list-artifact-pill", t];
+    var s = (a.severity || "").trim();
+    if (s) {
+      parts.push(severityClassForLabel(s));
+    } else {
+      parts.push("type-only");
+    }
+    return parts.join(" ");
+  }
+
+  function listPillText(a) {
+    var s = (a.severity || "").trim();
+    if (s) return s;
+    return (a.type || "clip").toUpperCase();
+  }
+
   function qs(sel) {
     return document.querySelector(sel);
   }
@@ -75,6 +155,7 @@
       initParticipantTimelines(presentTypes);
     } else {
       initTypeLegend(presentTypes);
+      initSeverityLegend();
       initTypeFilters(presentTypes);
       populateFilters();
       applyFilters();
@@ -216,6 +297,17 @@
 
     fillSelect("#filterCategory", categories, "All categories");
     fillSelect("#filterParticipant", participants, "All participants");
+
+    var severities = sortedUniqueSeverities();
+    var wrap = qs("#filterSeverityWrap");
+    if (wrap) {
+      if (severities.length === 0) {
+        wrap.classList.add("hidden");
+      } else {
+        wrap.classList.remove("hidden");
+        fillSelect("#filterSeverity", severities, "All severities");
+      }
+    }
   }
 
   function initTypeLegend(presentTypes) {
@@ -237,6 +329,30 @@
       } else {
         item.style.display = "";
       }
+    });
+  }
+
+  function initSeverityLegend() {
+    var leg = qs("#severityLegend");
+    if (!leg) return;
+    var labels = sortedUniqueSeverities();
+    if (labels.length === 0) {
+      leg.innerHTML = "";
+      leg.classList.add("hidden");
+      return;
+    }
+    leg.classList.remove("hidden");
+    leg.innerHTML = "";
+    var prefix = document.createElement("span");
+    prefix.textContent = "Severity: ";
+    prefix.style.fontWeight = "600";
+    leg.appendChild(prefix);
+    labels.forEach(function (lab) {
+      var wrap = el("span", "severity-legend-item");
+      var sw = el("span", "legend-severity-swatch " + severityClassForLabel(lab));
+      wrap.appendChild(sw);
+      wrap.appendChild(document.createTextNode(lab));
+      leg.appendChild(wrap);
     });
   }
 
@@ -298,10 +414,12 @@
   function bindFilterEvents() {
     var catSel = qs("#filterCategory");
     var partSel = qs("#filterParticipant");
+    var sevSel = qs("#filterSeverity");
     var typeChecks = qsa("#filterType input[type=checkbox]");
 
     if (catSel) catSel.addEventListener("change", onFilterChange);
     if (partSel) partSel.addEventListener("change", onFilterChange);
+    if (sevSel) sevSel.addEventListener("change", onFilterChange);
     typeChecks.forEach(function (cb) {
       cb.addEventListener("change", onFilterChange);
     });
@@ -319,11 +437,17 @@
     var cat = (qs("#filterCategory") || {}).value || "";
     var part = (qs("#filterParticipant") || {}).value || "";
     var types = getActiveTypes();
+    var sevFilt = "";
+    var sevWrap = qs("#filterSeverityWrap");
+    if (sevWrap && !sevWrap.classList.contains("hidden")) {
+      sevFilt = (qs("#filterSeverity") || {}).value || "";
+    }
 
     var ids = {};
     state.filtered = state.artifacts.filter(function (a) {
       if (cat && a.category !== cat) return false;
       if (part && a.participant !== part) return false;
+      if (sevFilt && (a.severity || "").trim() !== sevFilt) return false;
       if (types.indexOf(a.type) === -1) return false;
       ids[a.id] = true;
       return true;
@@ -350,7 +474,7 @@
     track.innerHTML = "";
 
     state.artifacts.forEach(function (a) {
-      var marker = el("div", "artifact-marker " + (a.type || "clip"));
+      var marker = el("div", markerClasses(a));
       marker.dataset.id = a.id;
 
       var startPct = ((a.start || 0) / state.duration) * 100;
@@ -413,8 +537,8 @@
       var li = document.createElement("li");
       li.dataset.id = a.id;
 
-      var badge = el("span", "list-type-badge " + (a.type || "clip"), (a.type || "clip").toUpperCase());
-      li.appendChild(badge);
+      var pill = el("span", listPillClasses(a), listPillText(a));
+      li.appendChild(pill);
 
       var info = el("div", "list-item-info");
       var desc = el("div", "list-item-desc", a.description || "(no description)");
@@ -509,6 +633,11 @@
     var playerContent = qs("#playerContent");
     if (playerEmpty) playerEmpty.classList.remove("hidden");
     if (playerContent) playerContent.classList.add("hidden");
+    var ps = qs("#playerSeverity");
+    if (ps) {
+      ps.textContent = "";
+      ps.classList.add("hidden");
+    }
   }
 
   function findArtifact(id) {
@@ -532,6 +661,7 @@
 
     setText("#detailDescription", a.description || "(no description)");
     setText("#detailCategory", a.category || "–");
+    setText("#detailSeverity", (a.severity || "").trim() || "–");
     setText("#detailParticipant", a.participant || "–");
     setText("#detailTime",
       formatTime(a.start) + (a.end != null ? " – " + formatTime(a.end) : ""));
@@ -582,6 +712,9 @@
     html += "</span>";
     if (a.category) html += "<br>" + escHtml(a.category);
     if (a.participant) html += " · " + escHtml(a.participant);
+    if ((a.severity || "").trim()) {
+      html += "<br>" + escHtml(a.severity);
+    }
 
     tip.innerHTML = html;
     tip.classList.remove("hidden");
@@ -624,6 +757,7 @@
 
   function initParticipantTimelines(presentTypes) {
     initTypeLegend(presentTypes);
+    initSeverityLegend();
 
     var grouped = {};
     var participantOrder = [];
@@ -649,7 +783,7 @@
 
       var track = el("div", "participant-track");
       grouped[pid].forEach(function (a) {
-        var marker = el("div", "artifact-marker " + (a.type || "clip"));
+        var marker = el("div", markerClasses(a));
         marker.dataset.id = a.id;
 
         var startPct = ((a.start || 0) / state.duration) * 100;
@@ -703,6 +837,17 @@
     }
 
     setText("#playerDescription", a.description || "(no description)");
+
+    var ps = qs("#playerSeverity");
+    if (ps) {
+      if ((a.severity || "").trim()) {
+        ps.textContent = "Severity: " + a.severity;
+        ps.classList.remove("hidden");
+      } else {
+        ps.textContent = "";
+        ps.classList.add("hidden");
+      }
+    }
 
     var metaEl = qs("#playerMeta");
     if (metaEl) {
