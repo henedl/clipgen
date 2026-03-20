@@ -538,6 +538,7 @@
       li.dataset.id = a.id;
 
       var pill = el("span", listPillClasses(a), listPillText(a));
+      pill.title = listPillText(a);
       li.appendChild(pill);
 
       var info = el("div", "list-item-info");

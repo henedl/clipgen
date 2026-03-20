@@ -36,6 +36,7 @@
   --sev-positive-bg: #16a34a;
   --sev-very-positive-bg: #15803d;
   --sev-unknown-bg: #64748b;
+  --artifact-list-pill-width: 4.5rem;
 }
 
 html {
@@ -502,7 +503,8 @@ body {
   line-height: 1.2;
   border-width: 2px;
   box-sizing: border-box;
-  max-width: 9rem;
+  width: var(--artifact-list-pill-width);
+  min-width: 0;
   text-overflow: ellipsis;
   overflow: hidden;
   white-space: nowrap;
