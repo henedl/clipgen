@@ -44,17 +44,21 @@ class CliModeArgs(NamedTuple):
 def parse_arguments() -> argparse.Namespace:
     """Parse command-line arguments for non-interactive mode.
 
-    Exactly one of the mode flags (-b, -l, -r, -C, -c, -p, -k, -M, -R, -T) may be given;
-    if none is given, the program runs in interactive mode. Optional flags (-s, -y,
-    -v, --screen, --gif) may be combined with any mode.
+    At most one selection-mode flag (-b, -l, -r, -C, -c, -p, -k, -S, -M, -R, -T) may be
+    given; if none is given, the program runs in interactive mode (see --help groups for
+    all options: output format, transcription, paths, viewer/manifest, run flags).
 
     Returns:
-        argparse.Namespace with attributes: batch, lines, range, category, cell,
-        participant, keyword, mixed, reel, timeline (mode flags/values),
-        spreadsheet, yes, verbose, screen, gif, input, output.
+        argparse.Namespace with mode flags/values, spreadsheet, yes, verbose, screen, gif,
+        transcribe, transcript_format, viewer, manifest, timeline_viewer, input, output,
+        titlecards, and related attributes.
     """
     parser = argparse.ArgumentParser(
-        description="clipgen - Video clip generator from Google Sheets timestamps.",
+        description=(
+            "clipgen - Video clip generator from Google Sheets or local Excel timestamps. "
+            "Interactive-only flows (e.g. browse, reellate) have no separate CLI flags; "
+            "run without a selection-mode flag to use them."
+        ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
@@ -76,6 +80,8 @@ Examples:
   python clipgen.py -S "-4,-3"             Severity mode - using numeric values
   python clipgen.py -M "5, P01.11, 13-16"  Mixed mode - combine selectors for individual outputs
   python clipgen.py -b -s "Study Name"     Batch mode with specific spreadsheet
+  python clipgen.py -s excel               Use the only .xlsx in cwd (fails if 0 or many)
+  python clipgen.py -s ./notes.xlsx        Batch with local Excel workbook
   python clipgen.py -l 5 -y                Line mode, skip confirmation prompts
   python clipgen.py -b -v                  Batch mode with verbose output
   python clipgen.py -R "11, 13-16, P01, \\"Observations\\""  Reel mode - one combined video
@@ -83,14 +89,21 @@ Examples:
   python clipgen.py -b --screen            Batch mode screenshots (.png)
   python clipgen.py -l 5 --gif             Line mode GIF output (.gif)
   python clipgen.py --timeline-viewer      Generate per-participant timeline viewer
+  python clipgen.py -b --transcribe        Batch with Markdown transcripts per clip
+  python clipgen.py -b --transcribe --transcript-format vtt
+  python clipgen.py -b --viewer --manifest Timeline viewer + manifest after batch run
+  python clipgen.py --viewer               Regenerate clips_viewer.html from saved manifest
+  python clipgen.py -b -i ./videos -o ./out   Custom input/output directories
+  python clipgen.py -b --titlecards        Enable titlecards for this run
+  python clipgen.py -b --no-titlecards     Disable titlecards for this run
 
 Note: Non-interactive mode (using -b, -l, -r, -C, -c, -p, -k, -S, -M, -R, or -T) is silent by default,
       only showing errors and the final summary. Use -v for full output.
 """,
     )
 
-    # Mode arguments: only one of -b/-l/-r/-C/-c/-p/-k/-M/-R/-T may be set at a time
-    mode_group = parser.add_mutually_exclusive_group()
+    selection = parser.add_argument_group("selection mode (choose at most one)")
+    mode_group = selection.add_mutually_exclusive_group()
     mode_group.add_argument(
         "-b",
         "--batch",
@@ -167,7 +180,8 @@ Note: Non-interactive mode (using -b, -l, -r, -C, -c, -p, -k, -S, -M, -R, or -T)
         help="Timeline mode: chronological reel for one participant (e.g., P01)",
     )
 
-    format_group = parser.add_mutually_exclusive_group()
+    output_fmt = parser.add_argument_group("output format (choose at most one)")
+    format_group = output_fmt.add_mutually_exclusive_group()
     format_group.add_argument(
         "--screen",
         action="store_true",
@@ -177,13 +191,13 @@ Note: Non-interactive mode (using -b, -l, -r, -C, -c, -p, -k, -S, -M, -R, or -T)
         "--gif", action="store_true", help="Output animated GIFs instead of video clips"
     )
 
-    # Transcription arguments
-    parser.add_argument(
+    transcription = parser.add_argument_group("transcription")
+    transcription.add_argument(
         "--transcribe",
         action="store_true",
         help="Generate transcript files alongside artifacts",
     )
-    parser.add_argument(
+    transcription.add_argument(
         "--transcript-format",
         type=str,
         choices=["md", "srt", "vtt"],
@@ -191,49 +205,26 @@ Note: Non-interactive mode (using -b, -l, -r, -C, -c, -p, -k, -S, -M, -R, or -T)
         help="Transcript format: md (default), srt, or vtt",
     )
 
-    # Optional arguments (can be used with any mode)
-    parser.add_argument(
+    paths = parser.add_argument_group("spreadsheet & directories")
+    paths.add_argument(
         "-s",
         "--spreadsheet",
         type=str,
-        metavar="NAME",
-        help="Spreadsheet name, URL, or index number",
+        metavar="SOURCE",
+        help=(
+            "Google Sheet title, numeric index from your account list, full spreadsheet URL, "
+            f"path to a local .xlsx file, or keyword {config.COMMAND_EXCEL!r} to use the "
+            "only .xlsx in the current directory (errors if there are zero or multiple files)"
+        ),
     )
-    parser.add_argument(
-        "-y",
-        "--yes",
-        action="store_true",
-        help="Skip confirmation prompts (auto-confirm)",
-    )
-    parser.add_argument(
-        "-v",
-        "--verbose",
-        action="store_true",
-        help="Increase verbosity (-v = verbose output; default is quiet in CLI, standard in interactive mode)",
-    )
-    parser.add_argument(
-        "--viewer",
-        action="store_true",
-        help="Generate a timeline HTML viewer file (clips_viewer.html). With a mode flag, creates viewer from that run's artifacts. Alone, regenerates from saved manifest.",
-    )
-    parser.add_argument(
-        "--manifest",
-        action="store_true",
-        help="Write artifact metadata to a cumulative manifest JSON file alongside generated clips",
-    )
-    parser.add_argument(
-        "--timeline-viewer",
-        action="store_true",
-        help="Batch-export all clips and generate a per-participant timeline HTML viewer",
-    )
-    parser.add_argument(
+    paths.add_argument(
         "-i",
         "--input",
         type=str,
         metavar="DIR",
         help="Input directory where source videos are located (defaults to current working directory when unset)",
     )
-    parser.add_argument(
+    paths.add_argument(
         "-o",
         "--output",
         type=str,
@@ -241,7 +232,39 @@ Note: Non-interactive mode (using -b, -l, -r, -C, -c, -p, -k, -S, -M, -R, or -T)
         help="Output directory where generated artifacts will be written (defaults to current working directory when unset)",
     )
 
-    titlecard_group = parser.add_mutually_exclusive_group()
+    viewer_manifest = parser.add_argument_group("viewer & manifest")
+    viewer_manifest.add_argument(
+        "--viewer",
+        action="store_true",
+        help="Generate a timeline HTML viewer file (clips_viewer.html). With a mode flag, creates viewer from that run's artifacts. Alone, regenerates from saved manifest.",
+    )
+    viewer_manifest.add_argument(
+        "--manifest",
+        action="store_true",
+        help="Write artifact metadata to a cumulative manifest JSON file alongside generated clips",
+    )
+    viewer_manifest.add_argument(
+        "--timeline-viewer",
+        action="store_true",
+        help="Batch-export all clips and generate a per-participant timeline HTML viewer",
+    )
+
+    run_opts = parser.add_argument_group("run options")
+    run_opts.add_argument(
+        "-y",
+        "--yes",
+        action="store_true",
+        help="Skip confirmation prompts (auto-confirm)",
+    )
+    run_opts.add_argument(
+        "-v",
+        "--verbose",
+        action="store_true",
+        help="Increase verbosity (-v = verbose output; default is quiet in CLI, standard in interactive mode)",
+    )
+
+    titlecards_grp = parser.add_argument_group("title cards (choose at most one)")
+    titlecard_group = titlecards_grp.add_mutually_exclusive_group()
     titlecard_group.add_argument(
         "--titlecards",
         dest="titlecards",
