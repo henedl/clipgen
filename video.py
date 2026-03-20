@@ -203,6 +203,20 @@ def run_ffmpeg(
         # Error already printed by get_file_duration
         return False
 
+    start_seconds = utils.timestamp_to_seconds(start_pos)
+    if start_seconds is not None and start_seconds >= duration_seconds:
+        utils.error_print(
+            f"Start timestamp ({start_pos}) is beyond video duration ({duration_seconds}s). Skipping.",
+            [f"Video file: '{input_file}'"],
+        )
+        return False
+    if start_seconds is not None and start_seconds + duration > duration_seconds:
+        utils.error_print(
+            f"Clip range ({start_pos} to {end_pos}) extends beyond video duration ({duration_seconds}s). Skipping.",
+            [f"Video file: '{input_file}'"],
+        )
+        return False
+
     if duration < 0:
         utils.error_print(
             "Negative duration calculated for video clip. Skipping.",
@@ -294,6 +308,16 @@ def extract_screenshot(input_file: str, output_file: str, timestamp: str) -> boo
         )
         return False
 
+    file_duration = get_file_duration(input_file)
+    if file_duration is not None:
+        start_seconds = utils.timestamp_to_seconds(timestamp)
+        if start_seconds is not None and start_seconds >= file_duration:
+            utils.error_print(
+                f"Screenshot timestamp ({timestamp}) is beyond video duration ({file_duration}s). Skipping.",
+                [f"Video file: '{input_file}'"],
+            )
+            return False
+
     utils.verbose_print(f"Extracting screenshot from {input_file} at {timestamp}.")
     if config.DEBUGGING:
         utils.debug_print(
@@ -373,6 +397,22 @@ def extract_gif(
             ["Duration must be greater than 0 seconds."],
         )
         return False
+
+    file_duration = get_file_duration(input_file)
+    if file_duration is not None:
+        start_seconds = utils.timestamp_to_seconds(timestamp)
+        if start_seconds is not None and start_seconds >= file_duration:
+            utils.error_print(
+                f"GIF start timestamp ({timestamp}) is beyond video duration ({file_duration}s). Skipping.",
+                [f"Video file: '{input_file}'"],
+            )
+            return False
+        if start_seconds is not None and start_seconds + duration_seconds > file_duration:
+            utils.error_print(
+                f"GIF range ({timestamp} + {duration_seconds}s) extends beyond video duration ({file_duration}s). Skipping.",
+                [f"Video file: '{input_file}'"],
+            )
+            return False
 
     utils.verbose_print(
         f"Extracting GIF from {input_file} at {timestamp} ({duration_seconds}s)."
