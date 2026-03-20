@@ -214,12 +214,12 @@ Note: Non-interactive mode (using -b, -l, -r, -C, -c, -p, -k, -S, -M, -R, or -T)
     parser.add_argument(
         "--viewer",
         action="store_true",
-        help="Generate a timeline HTML viewer file (clips_viewer.html) for this run",
+        help="Generate a timeline HTML viewer file (clips_viewer.html). With a mode flag, creates viewer from that run's artifacts. Alone, regenerates from saved manifest.",
     )
     parser.add_argument(
         "--manifest",
         action="store_true",
-        help="Write artifact metadata to a cumulative manifest JSON file; combine with --viewer to regenerate viewer from manifest",
+        help="Write artifact metadata to a cumulative manifest JSON file alongside generated clips",
     )
     parser.add_argument(
         "--timeline-viewer",
@@ -826,8 +826,8 @@ def main() -> None:
     if not video.check_ffmpeg_tools_available():
         sys.exit(1)
 
-    # Standalone manifest → viewer: regenerate viewer from saved manifest, no spreadsheet needed
-    if config.MANIFEST_ENABLED and getattr(args, "viewer", False) and not cli_mode:
+    # Standalone viewer: regenerate viewer from saved manifest, no spreadsheet needed
+    if getattr(args, "viewer", False) and not cli_mode:
         existing_artifacts = viewer.load_manifest_artifacts()
         if not existing_artifacts:
             utils.error_print(

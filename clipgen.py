@@ -1279,21 +1279,37 @@ def _run_format_mode_interactive(worksheet: Any, output_format: str) -> None:
 
 
 def _run_viewer_mode(worksheet: Any) -> None:
-    """Generate the timeline viewer from artifacts collected in this interactive session."""
-    if not viewer.INTERACTIVE_ARTIFACTS:
-        utils.info_print(
-            "No artifacts have been generated yet in this interactive session."
+    """Generate the timeline viewer from session artifacts, falling back to manifest."""
+    artifacts = list(viewer.INTERACTIVE_ARTIFACTS)
+    mode_label = "interactive"
+
+    if not artifacts:
+        manifest_artifacts = viewer.load_manifest_artifacts()
+        if not manifest_artifacts:
+            utils.info_print(
+                "No artifacts in this session and no manifest file found.\n"
+                "Generate clips first, or run a prior session with --manifest to save one."
+            )
+            return
+        count = len(manifest_artifacts)
+        yn = utils.read_user_input(
+            f"No artifacts in this session, but found {count} artifact(s) in manifest.\n"
+            "Generate viewer from manifest? [y/n]\n>> "
         )
-        return
-    study = viewer.INTERACTIVE_ARTIFACTS[0].get("study", "")
-    participant = viewer.INTERACTIVE_ARTIFACTS[0].get("participant", "")
+        if yn.strip().lower() != "y":
+            return
+        artifacts = manifest_artifacts
+        mode_label = "manifest"
+
+    study = artifacts[0].get("study", "")
+    participant = artifacts[0].get("participant", "")
     data = viewer.finalize_timeline_data(
-        viewer.INTERACTIVE_ARTIFACTS,
+        artifacts,
         study=study,
         participant=participant,
-        worksheet_title=getattr(worksheet, "title", ""),
-        is_excel=_is_excel_worksheet(worksheet),
-        mode="interactive",
+        worksheet_title="" if mode_label == "manifest" else getattr(worksheet, "title", ""),
+        is_excel=False if mode_label == "manifest" else _is_excel_worksheet(worksheet),
+        mode=mode_label,
         output_format="clip",
     )
     viewer_path = viewer.generate_timeline_viewer(data)
