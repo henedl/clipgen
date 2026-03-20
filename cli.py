@@ -149,8 +149,11 @@ Note: Non-interactive mode (using -b, -l, -r, -C, -c, -p, -k, -S, -M, -R, or -T)
     mode_group.add_argument(
         "-k",
         "--keyword",
-        action="store_true",
-        help="Keyword mode: generate only key-marked clips/timestamps",
+        nargs="?",
+        const=True,
+        default=False,
+        metavar="ANNOTATIONS",
+        help='Keyword mode: generate only annotated clips. Optionally specify annotation types (e.g., "key,bug")',
     )
     mode_group.add_argument(
         "-S",
@@ -561,6 +564,15 @@ def _generate_cli_clips(
 
     cli_severities = _parse_cli_severities(getattr(args, "severity", None))
 
+    cli_annotation_ids = None
+    if isinstance(args.keyword, str):
+        combined = args.keyword.replace(",", "+")
+        cli_annotation_ids = [
+            t.strip().lower().lstrip("!")
+            for t in combined.split("+")
+            if t.strip()
+        ] or None
+
     mode_dispatch: List[tuple] = [
         (
             args.batch or (output_format != "clip" and not selection_mode_set),
@@ -579,7 +591,7 @@ def _generate_cli_clips(
         (args.category, "category", {"categories": cli_categories}),
         (args.cell, "cell", {"cell_specs": cli_mode_args.cell_specs}),
         (args.participant, "participant", {"participant_id": args.participant}),
-        (args.keyword, "keyword", {}),
+        (args.keyword, "keyword", {"annotation_ids": cli_annotation_ids}),
         (args.severity, "severity", {"severities": cli_severities}),
         (mixed_selectors, "reel", {"reel_input": mixed_selectors}),
         (args.reel, "reel", {"reel_input": args.reel}),

@@ -130,8 +130,8 @@ _STANDARD_MODES = {
         ],
     ),
     "keyword": (
-        lambda ctx: interactive.prompt_keyword_confirm(),
-        lambda ctx, _: spreadsheet.generate_keyword_timestamps(ctx),
+        lambda ctx: interactive.prompt_keyword_selection(ctx),
+        lambda ctx, v: spreadsheet.generate_keyword_timestamps(ctx, annotation_ids=v),
     ),
     "severity": (
         lambda ctx: interactive.prompt_severity_selection(ctx),
@@ -344,7 +344,7 @@ _SELECTION_MODE_HELP = [
     "    l or line    - Generate clips from specific line(s)",
     "    ce or cell   - Generate clips from specific cell(s) (e.g., P01.11)",
     "    p or participant - Generate all clips for one participant",
-    "    k or keyword - Generate only key-marked clips/timestamps (per-cell annotations)",
+    "    k or keyword - Generate only annotated clips/timestamps (e.g., !key)",
     "    sv or severity - Generate clips by severity level",
 ]
 
@@ -1101,7 +1101,7 @@ def _run_reel_mode_interactive(
 
     utils.info_print("Combine selectors into one video. Syntax:")
     utils.info_print("  batch                    - all clips")
-    utils.info_print("  keyword                  - key-marked clips only")
+    utils.info_print("  keyword                  - annotated clips only")
     utils.info_print(
         "  timeline                 - chronological reel (requires exactly one participant)"
     )

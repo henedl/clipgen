@@ -394,12 +394,82 @@ def prompt_participant_selection(ctx: SheetContext) -> Optional[List[str]]:
             return unique_ids
 
 
-def prompt_keyword_confirm() -> bool:
-    """Confirm keyword mode. Returns True to proceed."""
-    yn = utils.read_user_input(
-        "\nKeyword mode will include only key-marked timestamps (per-cell annotations). Do you want to proceed? [y/n]\n>> "
-    )
-    return yn == "y"
+def prompt_keyword_selection(ctx: SheetContext) -> Optional[List[str]]:
+    """Show annotation types found in the sheet, prompt for selection, return selected or None."""
+    all_annotations, annotation_counts = spreadsheet.collect_annotations(ctx)
+    if not all_annotations:
+        utils.info_print("No annotation-marked timestamps found in the spreadsheet.")
+        return None
+    if len(all_annotations) == 1:
+        aid = all_annotations[0]
+        count = annotation_counts.get(aid, 0)
+        count_label = "1 cell" if count == 1 else f"{count} cells"
+        yn = utils.read_user_input(
+            f"\nKeyword mode: found annotation '!{aid}' ({count_label}). Proceed? [y/n]\n>> "
+        )
+        if yn == "y":
+            return [aid]
+        return None
+    utils.info_print("Available annotation types:")
+    for i, aid in enumerate(all_annotations, 1):
+        count = annotation_counts.get(aid, 0)
+        count_label = "1 cell" if count == 1 else f"{count} cells"
+        utils.info_print(f"  {i}. !{aid} — {count_label}")
+    while True:
+        selection = utils.read_user_input(
+            '\nEnter annotation numbers (comma-separated, e.g., "1,2") or "all":\n>> '
+        )
+        if selection.lower() == "all":
+            return all_annotations
+        try:
+            indices = [int(x.strip()) for x in selection.split(",")]
+            selected = []
+            invalid_indices = []
+            for idx in indices:
+                if 1 <= idx <= len(all_annotations):
+                    if all_annotations[idx - 1] not in selected:
+                        selected.append(all_annotations[idx - 1])
+                else:
+                    invalid_indices.append(idx)
+            if invalid_indices:
+                utils.info_print(
+                    f"  Invalid index(es): {', '.join(str(i) for i in invalid_indices)}"
+                )
+            if selected:
+                utils.info_print("Selected annotations:")
+                for aid in selected:
+                    utils.info_print(f"  - !{aid}")
+                yn = utils.read_user_input("\nIs this correct? [y/n]\n>> ")
+                if yn == "y":
+                    return selected
+            else:
+                utils.info_print("No valid annotations selected. Please try again.")
+        except ValueError:
+            tokens = [t.strip().lower().lstrip("!") for t in selection.split(",") if t.strip()]
+            matched = []
+            unmatched = []
+            for token in tokens:
+                exact = next(
+                    (a for a in all_annotations if a.lower() == token), None
+                )
+                if exact:
+                    if exact not in matched:
+                        matched.append(exact)
+                else:
+                    unmatched.append(token)
+            if unmatched:
+                utils.info_print(f"Could not match: {', '.join(unmatched)}")
+            if matched:
+                utils.info_print("Selected annotations:")
+                for aid in matched:
+                    utils.info_print(f"  - !{aid}")
+                yn = utils.read_user_input("\nIs this correct? [y/n]\n>> ")
+                if yn == "y":
+                    return matched
+            else:
+                utils.info_print(
+                    "No valid annotations matched. Enter numbers or annotation names."
+                )
 
 
 # ---- Browse mode ----

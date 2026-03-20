@@ -709,6 +709,7 @@ def generate_list(
     reel_input: Optional[str] = None,
     categories: Optional[List[str]] = None,
     severities: Optional[List[str]] = None,
+    annotation_ids: Optional[List[str]] = None,
 ) -> List[ClipRecord]:
     """Generate clip records from a sheet based on mode and resolved parameters.
 
@@ -824,8 +825,8 @@ def generate_list(
         return clips
 
     if mode == "keyword":
-        utils.standard_print("Keyword mode: generating key-marked clips...")
-        return generate_keyword_timestamps(ctx)
+        utils.standard_print("Keyword mode: generating annotated clips...")
+        return generate_keyword_timestamps(ctx, annotation_ids=annotation_ids)
 
     if mode == "severity":
         if not severities:
@@ -859,25 +860,33 @@ def generate_batch_timestamps(ctx: SheetContext) -> List[ClipRecord]:
     return clips
 
 
-def generate_keyword_timestamps(ctx: SheetContext) -> List[ClipRecord]:
-    """Generate key-marked clips from the entire sheet based on cell content.
+def generate_keyword_timestamps(
+    ctx: SheetContext, annotation_ids: Optional[List[str]] = None
+) -> List[ClipRecord]:
+    """Generate annotation-marked clips from the entire sheet based on cell content.
 
-    Semantics:
-    - Segment-level: annotation tokens like `!key` in a timestamp cell mark the
-      preceding parseable timestamp segment(s) within that cell.
-    - Header/participant-level annotations in the header row are ignored here;
-      keyword mode is driven purely by per-cell annotations.
+    Args:
+        ctx: Sheet context with all metadata
+        annotation_ids: Annotation IDs to filter by. None means all known annotations.
     """
     clips = generate_batch_timestamps(ctx)
     if not clips:
         return []
 
+    target_ids = (
+        annotation_ids
+        if annotation_ids
+        else list(utils.get_known_annotation_map().values())
+    )
+
     filtered_clips: List[ClipRecord] = []
     for clip in clips:
         _, segment_annotations, _ = utils.parse_cell_annotations(clip["cell"].value)
-        key_indexes = sorted(segment_annotations.get("key", set()))
-        if key_indexes:
-            clip["selected_segment_indexes"] = key_indexes
+        matched_indexes: set = set()
+        for aid in target_ids:
+            matched_indexes.update(segment_annotations.get(aid, set()))
+        if matched_indexes:
+            clip["selected_segment_indexes"] = sorted(matched_indexes)
             filtered_clips.append(clip)
 
     return filtered_clips
@@ -929,6 +938,30 @@ def collect_severities(ctx: SheetContext) -> Tuple[List[str], Dict[str, int]]:
                         severities.append(normalized)
     severities.sort(key=utils.severity_sort_key)
     return severities, counts
+
+
+def collect_annotations(ctx: SheetContext) -> Tuple[List[str], Dict[str, int]]:
+    """Scan sheet and return unique annotation IDs found in timestamp cells, plus cell counts."""
+    annotation_ids: List[str] = []
+    counts: Dict[str, int] = {}
+    for i in range(ctx.first_data_row_idx, len(ctx.sheet_data)):
+        if ctx.filename_row_idx is not None and i == ctx.filename_row_idx:
+            continue
+        for col_idx in range(
+            ctx.id_cell.col, ctx.id_cell.col + ctx.num_participants
+        ):
+            if col_idx >= len(ctx.sheet_data[i]):
+                continue
+            cell_value = ctx.sheet_data[i][col_idx].strip()
+            if not cell_value:
+                continue
+            _, segment_annotations, _ = utils.parse_cell_annotations(cell_value)
+            for aid in segment_annotations:
+                counts[aid] = counts.get(aid, 0) + 1
+                if aid not in annotation_ids:
+                    annotation_ids.append(aid)
+    annotation_ids.sort()
+    return annotation_ids, counts
 
 
 def generate_severity_timestamps(
