@@ -44,6 +44,7 @@ class ReelInput(TypedDict):
     keyword: bool
     timeline: bool
     severity: bool
+    highlights: bool
     lines: List[int]
     ranges: List[Tuple[int, int]]
     categories: List[str]

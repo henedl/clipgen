@@ -20,6 +20,7 @@ def _base_args(**overrides):
         "mixed": None,
         "reel": None,
         "timeline": None,
+        "highlights": None,
         "screen": False,
         "gif": False,
         "yes": False,

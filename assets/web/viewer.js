@@ -528,9 +528,12 @@
     var items = artifacts.map(function (a) {
       var s = a.start || 0;
       var e = a.end || a.start || 0;
-      return { id: a.id, duration: e - s, start: s };
+      var cls = severityClassForLabel(a.severity);
+      var sevVal = cls && SEVERITY_SORT.hasOwnProperty(cls) ? SEVERITY_SORT[cls] : 999;
+      return { id: a.id, duration: e - s, start: s, sevVal: sevVal };
     });
     items.sort(function (a, b) {
+      if (a.sevVal !== b.sevVal) return b.sevVal - a.sevVal;
       if (a.duration !== b.duration) return b.duration - a.duration;
       return a.start - b.start;
     });

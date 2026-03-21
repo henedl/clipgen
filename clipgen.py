@@ -949,7 +949,10 @@ def regenerate_from_manifest(artifacts: List[Dict[str, Any]]) -> int:
                 desc_preview = (artifact.get("description") or "")[
                     : config.PROGRESS_DESCRIPTION_LENGTH
                 ]
-                progress.update(task, description=f"[{artifact.get('participant', '')}] {desc_preview}...")
+                progress.update(
+                    task,
+                    description=f"[{artifact.get('participant', '')}] {desc_preview}...",
+                )
                 if _regenerate_single_artifact(artifact, missing_videos):
                     generated += 1
                 progress.update(task, advance=1)
@@ -969,7 +972,9 @@ def _regenerate_single_artifact(
     """Regenerate one artifact from its manifest entry. Returns True on success."""
     source_name = artifact.get("sourceVideo", "")
     if not source_name:
-        utils.warning_print(f"Artifact '{artifact.get('file', '?')}' has no sourceVideo, skipping.")
+        utils.warning_print(
+            f"Artifact '{artifact.get('file', '?')}' has no sourceVideo, skipping."
+        )
         return False
 
     source_path = str(utils.resolve_input_path(source_name))
@@ -1009,7 +1014,9 @@ def _regenerate_single_artifact(
             duration_seconds=duration,
         )
     else:
-        utils.warning_print(f"Unknown artifact type '{artifact_type}' for '{artifact.get('file', '?')}', skipping.")
+        utils.warning_print(
+            f"Unknown artifact type '{artifact_type}' for '{artifact.get('file', '?')}', skipping."
+        )
         return False
 
 
@@ -1108,6 +1115,9 @@ def _run_reel_mode_interactive(
     utils.info_print(
         "  severity                 - order reel by severity (most severe first)"
     )
+    utils.info_print(
+        "  highlights               - auto-select best clips within time budget"
+    )
     utils.info_print("  11, 12, 13-16, 18        - lines and ranges")
     utils.info_print('  "Observations", "Onboarding" - categories (quoted)')
     utils.info_print("  P01.11, P02.15           - cells (participant.row)")
@@ -1121,6 +1131,14 @@ def _run_reel_mode_interactive(
         return ([], False, None)
 
     parsed_reel = spreadsheet.parse_reel_input(reel_input)
+    if parsed_reel.get("highlights") and (
+        parsed_reel["severity"] or parsed_reel["timeline"]
+    ):
+        utils.error_print(
+            "Cannot combine highlights with severity or timeline ordering.",
+            ["Use highlights on its own for auto-ranked highlight reel."],
+        )
+        return ([], False, None)
     if parsed_reel["severity"] and parsed_reel["timeline"]:
         utils.error_print(
             "Cannot combine severity and timeline ordering.",
@@ -1181,6 +1199,12 @@ def _run_reel_mode_interactive(
             default_filename = f"{timeline_pid}_timeline{config.FILEFORMAT}"
         else:
             default_filename = f"timeline{config.FILEFORMAT}"
+    elif parsed_reel.get("highlights"):
+        default_filename = (
+            f"{study_name}_highlights{config.FILEFORMAT}"
+            if study_name
+            else f"highlights{config.FILEFORMAT}"
+        )
     elif parsed_reel["severity"]:
         default_filename = (
             f"{study_name}_severity_reel{config.FILEFORMAT}"
@@ -1399,7 +1423,9 @@ def _run_viewer_mode(worksheet: Any) -> None:
         artifacts,
         study=study,
         participant=participant,
-        worksheet_title="" if mode_label == "manifest" else getattr(worksheet, "title", ""),
+        worksheet_title=""
+        if mode_label == "manifest"
+        else getattr(worksheet, "title", ""),
         is_excel=False if mode_label == "manifest" else _is_excel_worksheet(worksheet),
         mode=mode_label,
         output_format="clip",
@@ -1414,13 +1440,14 @@ def _run_regenerate_mode() -> None:
     existing_artifacts = viewer.load_manifest_artifacts()
     if not existing_artifacts:
         utils.info_print(
-            "No manifest file found.\n"
-            "Generate clips first with --manifest to save one."
+            "No manifest file found.\nGenerate clips first with --manifest to save one."
         )
         return
     media_count = sum(1 for a in existing_artifacts if a.get("type") != "transcript")
     if media_count == 0:
-        utils.info_print("Manifest contains only transcript artifacts; nothing to regenerate.")
+        utils.info_print(
+            "Manifest contains only transcript artifacts; nothing to regenerate."
+        )
         return
     yn = utils.read_user_input(
         f"Found {media_count} media artifact(s) in manifest.\n"

@@ -185,6 +185,15 @@ Note: Non-interactive mode (using -b, -l, -r, -C, -c, -p, -k, -S, -M, -R, or -T)
         metavar="PARTICIPANT",
         help="Timeline mode: chronological reel for one participant (e.g., P01)",
     )
+    mode_group.add_argument(
+        "-H",
+        "--highlights",
+        nargs="?",
+        const="highlights",
+        type=str,
+        metavar="DURATION",
+        help="Highlights reel: auto-select best clips within time budget (default 180s). Optionally specify duration in seconds.",
+    )
 
     output_fmt = parser.add_argument_group("output format (choose at most one)")
     format_group = output_fmt.add_mutually_exclusive_group()
@@ -534,6 +543,7 @@ def _generate_cli_clips(
         or mixed_selectors
         or args.reel
         or args.timeline
+        or args.highlights
     )
 
     def _parse_cli_categories(raw: Optional[str]) -> List[str]:
@@ -578,6 +588,13 @@ def _generate_cli_clips(
             t.strip().lower().lstrip("!") for t in combined.split("+") if t.strip()
         ] or None
 
+    # Apply custom highlights duration if specified (e.g. -H 120)
+    if args.highlights and args.highlights != "highlights":
+        try:
+            config.HIGHLIGHTS_REEL_DURATION_SECONDS = int(args.highlights)
+        except ValueError:
+            pass
+
     mode_dispatch: List[tuple] = [
         (
             args.batch or (output_format != "clip" and not selection_mode_set),
@@ -601,6 +618,7 @@ def _generate_cli_clips(
         (mixed_selectors, "reel", {"reel_input": mixed_selectors}),
         (args.reel, "reel", {"reel_input": args.reel}),
         (args.timeline, "reel", {"reel_input": f"timeline, {args.timeline}"}),
+        (args.highlights, "reel", {"reel_input": "highlights, batch"}),
     ]
 
     for condition, mode, kwargs in mode_dispatch:
@@ -628,6 +646,16 @@ def _resolve_timeline_output_file(
             f"{participant_id}_timeline{config.FILEFORMAT}"
         )
     return files.get_unique_filename(f"timeline{config.FILEFORMAT}")
+
+
+def _resolve_highlights_output_file(
+    clips_list: List[ClipRecord],
+) -> Optional[str]:
+    """Build the output filename for highlights reel mode."""
+    study_name = clips_list[0].get("study", "").strip() if clips_list else ""
+    if study_name:
+        return files.get_unique_filename(f"{study_name}_highlights{config.FILEFORMAT}")
+    return files.get_unique_filename(f"highlights{config.FILEFORMAT}")
 
 
 # ---- CLI mode runner ----
@@ -689,11 +717,11 @@ def run_cli_mode(worksheet: Any, args: Any, cli_mode_args: CliModeArgs) -> None:
     output_format = "screen" if args.screen else "gif" if args.gif else "clip"
     mixed_selectors = getattr(args, "mixed", None)
 
-    if (args.reel or args.timeline) and output_format != "clip":
+    if (args.reel or args.timeline or args.highlights) and output_format != "clip":
         utils.error_print(
-            "Reel/timeline mode cannot be combined with --screen or --gif.",
+            "Reel/timeline/highlights mode cannot be combined with --screen or --gif.",
             [
-                "Use reel/timeline mode for a single .mp4 output, or use screen/gif with batch/line/range/category/cell/participant/keyword selection."
+                "Use reel/timeline/highlights mode for a single .mp4 output, or use screen/gif with batch/line/range/category/cell/participant/keyword selection."
             ],
         )
         sys.exit(1)
@@ -712,8 +740,10 @@ def run_cli_mode(worksheet: Any, args: Any, cli_mode_args: CliModeArgs) -> None:
 
     clips_list = _generate_cli_clips(worksheet, args, cli_mode_args)
 
-    if args.reel or args.timeline:
+    if args.reel or args.timeline or args.highlights:
         reel_output_file = _resolve_timeline_output_file(args, clips_list)
+        if args.highlights and reel_output_file is None:
+            reel_output_file = _resolve_highlights_output_file(clips_list)
         outputs_generated, artifacts = clipgen.process_reel(
             clips_list,
             output_file=reel_output_file,
@@ -728,7 +758,9 @@ def run_cli_mode(worksheet: Any, args: Any, cli_mode_args: CliModeArgs) -> None:
     if not config.REENCODING:
         clipgen._print_reencoding_warning(utils.verbose_print)
     clipgen._print_completion_message(
-        outputs_generated, output_format, is_reel=bool(args.reel or args.timeline)
+        outputs_generated,
+        output_format,
+        is_reel=bool(args.reel or args.timeline or args.highlights),
     )
 
     if (

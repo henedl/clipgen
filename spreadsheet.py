@@ -353,6 +353,7 @@ def parse_reel_input(input_string: str) -> ReelInput:
         "keyword": False,
         "timeline": False,
         "severity": False,
+        "highlights": False,
         "lines": [],
         "ranges": [],
         "categories": [],
@@ -396,6 +397,10 @@ def parse_reel_input(input_string: str) -> ReelInput:
         # Severity ordering: literal "severity"
         if token.lower() == "severity":
             result["severity"] = True
+            continue
+        # Highlights keyword: literal "highlights"
+        if token.lower() == "highlights":
+            result["highlights"] = True
             continue
         # Timeline keyword: literal "timeline"
         if token.lower() == "timeline":
@@ -947,9 +952,7 @@ def collect_annotations(ctx: SheetContext) -> Tuple[List[str], Dict[str, int]]:
     for i in range(ctx.first_data_row_idx, len(ctx.sheet_data)):
         if ctx.filename_row_idx is not None and i == ctx.filename_row_idx:
             continue
-        for col_idx in range(
-            ctx.id_cell.col, ctx.id_cell.col + ctx.num_participants
-        ):
+        for col_idx in range(ctx.id_cell.col, ctx.id_cell.col + ctx.num_participants):
             if col_idx >= len(ctx.sheet_data[i]):
                 continue
             cell_value = ctx.sheet_data[i][col_idx].strip()
@@ -1181,6 +1184,89 @@ def sort_clips_by_severity(clips: List[ClipRecord]) -> None:
     clips.sort(key=lambda clip: utils.severity_sort_key(clip.get("severity", "")))
 
 
+def _clip_duration_seconds(clip: Any) -> float:
+    """Estimate a clip's total duration in seconds from its raw cell value."""
+    cell_value = str(clip.get("cell").value if clip.get("cell") is not None else "")
+    cleaned_value, _, _ = utils.parse_cell_annotations(cell_value)
+    parsed_times = utils.parse_timestamps(cleaned_value)
+    if not parsed_times:
+        return float(config.DEFAULT_DURATION_SECONDS)
+    total = 0.0
+    for start_str, end_str in parsed_times:
+        s = utils.timestamp_to_seconds(start_str)
+        e = utils.timestamp_to_seconds(end_str)
+        if s is not None and e is not None:
+            total += max(0.0, e - s)
+    return total if total > 0 else float(config.DEFAULT_DURATION_SECONDS)
+
+
+def _clip_highlight_score(clip: Any, existing_filenames: Set[str]) -> float:
+    """Score a clip for highlights reel selection.
+
+    Higher score = more important. Combines severity, uniqueness (no existing
+    artifact), and keyword annotation, weighted by config constants.
+    """
+    # Severity: map to 0-1 range
+    severity_scores = {"critical": 1.0, "high": 0.75, "medium": 0.5, "low": 0.25}
+    sev_label = clip.get("severity", "").strip().lower()
+    sev = severity_scores.get(sev_label, 0.0)
+
+    # Uniqueness: 1.0 if no matching artifact exists
+    study = (clip.get("study") or "").lower()
+    participant = (clip.get("participant") or "").lower()
+    desc = (clip.get("desc") or "").lower()[:30]
+    has_existing = (
+        any(
+            study in f.lower()
+            and participant in f.lower()
+            and desc
+            and desc in f.lower()
+            for f in existing_filenames
+        )
+        if study and participant and desc
+        else False
+    )
+    uniq = 0.0 if has_existing else 1.0
+
+    # Keyword: 1.0 if cell has any annotation (e.g. !key)
+    cell_value = str(clip.get("cell").value if clip.get("cell") is not None else "")
+    _, _, cell_annotations = utils.parse_cell_annotations(cell_value)
+    kw = 1.0 if cell_annotations else 0.0
+
+    return (
+        sev * config.HIGHLIGHTS_WEIGHT_SEVERITY
+        + uniq * config.HIGHLIGHTS_WEIGHT_UNIQUENESS
+        + kw * config.HIGHLIGHTS_WEIGHT_KEYWORD
+    )
+
+
+def score_and_truncate_clips(
+    clips: List[ClipRecord],
+    existing_filenames: Set[str],
+    duration_budget: int,
+) -> List[ClipRecord]:
+    """Score clips by importance and select the best ones that fit within a duration budget.
+
+    Clips are scored by severity, uniqueness, and keyword annotations, then
+    sorted highest-first. Clips are accumulated until the total duration exceeds
+    the budget.
+    """
+    scored = sorted(
+        clips,
+        key=lambda c: _clip_highlight_score(c, existing_filenames),
+        reverse=True,
+    )
+    result: List[ClipRecord] = []
+    total_seconds = 0.0
+    for clip in scored:
+        dur = _clip_duration_seconds(clip)
+        if total_seconds + dur > duration_budget and result:
+            break
+        result.append(clip)
+        total_seconds += dur
+    return result
+
+
 def generate_reel_timestamps(
     ctx: SheetContext, reel_input_string: str
 ) -> List[ClipRecord]:
@@ -1191,6 +1277,16 @@ def generate_reel_timestamps(
     ordered list.
     """
     selectors = parse_reel_input(reel_input_string)
+    if selectors.get("highlights") and (
+        selectors["timeline"] or selectors.get("severity")
+    ):
+        utils.error_print(
+            "Highlights selector cannot be combined with timeline or severity ordering.",
+            [
+                "Use highlights on its own or with other clip selectors (batch, lines, etc.)."
+            ],
+        )
+        return []
     if selectors["timeline"] and len(selectors["participants"]) != 1:
         utils.error_print(
             "Timeline selector requires exactly one participant.",
@@ -1206,6 +1302,7 @@ def generate_reel_timestamps(
         or selectors["keyword"]
         or selectors["timeline"]
         or selectors.get("severity")
+        or selectors.get("highlights")
         or selectors["lines"]
         or selectors["ranges"]
         or selectors["categories"]
@@ -1214,6 +1311,20 @@ def generate_reel_timestamps(
     )
     if not has_any:
         return []
+
+    # Highlights alone defaults to batch (score all available clips)
+    if selectors.get("highlights") and not any(
+        [
+            selectors["batch"],
+            selectors["keyword"],
+            selectors["lines"],
+            selectors["ranges"],
+            selectors["categories"],
+            selectors["cells"],
+            selectors["participants"],
+        ]
+    ):
+        selectors["batch"] = True
 
     all_issues: List[ClipRecord] = []
 
@@ -1252,6 +1363,13 @@ def generate_reel_timestamps(
             == timeline_participant
         ]
         sort_clips_chronologically(deduped)
+    elif selectors.get("highlights"):
+        import files
+
+        existing_filenames = set(files.discover_clips())
+        deduped = score_and_truncate_clips(
+            deduped, existing_filenames, config.HIGHLIGHTS_REEL_DURATION_SECONDS
+        )
     elif selectors.get("severity"):
         sort_clips_by_severity(deduped)
     else:

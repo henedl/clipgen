@@ -9,7 +9,7 @@ from icecream import ic
 REENCODING: bool = False
 AUDIO_NORMALIZE: bool = False
 FILEFORMAT: str = ".mp4"
-VERSIONNUM: str = "0.9.15"
+VERSIONNUM: str = "0.9.16"
 TITLECARDS_ENABLED: bool = False
 TITLECARD_DURATION_SECONDS: int = 2
 WORKSHEET_PRIORITY: List[str] = [
@@ -81,6 +81,12 @@ MIN_SOURCE_VIDEO_SIZE_MB: int = 100  # Minimum file size (MB) to consider as a s
 MANIFEST_FILENAME: str = "clipgen_manifest.json"
 MANIFEST_ENABLED: bool = False
 STUDIO_PORT: int = 8089
+
+# Highlights reel constants
+HIGHLIGHTS_REEL_DURATION_SECONDS: int = 180  # 3-minute budget for highlights reel
+HIGHLIGHTS_WEIGHT_SEVERITY: float = 1.0
+HIGHLIGHTS_WEIGHT_UNIQUENESS: float = 0.5
+HIGHLIGHTS_WEIGHT_KEYWORD: float = 0.3
 
 # Browse Mode Constants
 BROWSE_LINES_TO_DISPLAY: int = 5  # Number of rows to show at once when browsing
@@ -156,4 +162,5 @@ SETTINGS_DESCRIPTIONS: Dict[str, str] = {
     "TRANSCRIBE_ENABLED": "Generate transcripts alongside clips using faster-whisper.",
     "TRANSCRIBE_MODEL": "Whisper model size: tiny, base, small, medium, large-v3.",
     "TRANSCRIBE_FORMAT": "Transcript output format: md (Markdown), srt, or vtt.",
+    "HIGHLIGHTS_REEL_DURATION_SECONDS": "Maximum duration in seconds for the highlights reel time budget.",
 }

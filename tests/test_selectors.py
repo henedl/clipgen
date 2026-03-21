@@ -61,6 +61,20 @@ def test_parse_reel_input_ignores_malformed_tokens():
     assert parsed["categories"] == ["Valid Category"]
 
 
+def test_parse_reel_input_parses_highlights():
+    parsed = spreadsheet.parse_reel_input("highlights")
+    assert parsed["highlights"] is True
+    assert parsed["batch"] is False
+    assert parsed["keyword"] is False
+
+
+def test_parse_reel_input_highlights_with_selectors():
+    parsed = spreadsheet.parse_reel_input("highlights, P01, 11")
+    assert parsed["highlights"] is True
+    assert parsed["participants"] == ["P01"]
+    assert parsed["lines"] == [11]
+
+
 def test_detect_mode_from_input_rejects_mixed_types():
     mode, kwargs = spreadsheet.detect_mode_from_input("5, P01.11")
     assert mode is None
@@ -157,6 +171,7 @@ def test_generate_reel_timestamps_dedupes_cells(
             "batch": False,
             "keyword": True,
             "timeline": False,
+            "highlights": False,
             "lines": [4],
             "ranges": [],
             "categories": [],

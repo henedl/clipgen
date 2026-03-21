@@ -115,14 +115,15 @@ Source video filenames follow `{study}_{participant}.mp4` (e.g. `mystudy_P01.mp4
 | **severity** | Rows matching selected severity levels (optional Severity column; numeric -4..+2 or labels like Critical/High/Medium/Low/N/A/Positive/Very Positive) |
 | **screen** | Generate screenshots (`.png`) instead of video clips |
 | **gif** | Generate GIFs (`.gif`) from selected timestamps |
-| **reel** | Mixed selectors (including `batch`, `keyword`, `timeline`, `severity`, lines/ranges/categories/cells/participants) combined into one video; deduped by cell and ordered by row/column unless timeline or severity ordering is used |
+| **reel** | Mixed selectors (including `batch`, `keyword`, `timeline`, `severity`, `highlights`, lines/ranges/categories/cells/participants) combined into one video; deduped by cell and ordered by row/column unless timeline, severity, or highlights ordering is used |
 | **timeline** | Chronological reel for exactly one participant (available via reel selector `timeline` or CLI `-T`) |
+| **highlights** | Auto-select best clips within a time budget, scored by severity, uniqueness, and keyword annotations (available via reel selector `highlights` or CLI `-H`) |
 | **reellate** | Build a reel from already-generated clips in the working directory |
 | **browse** | Interactive view of spreadsheet rows (no clip generation) |
 
-Reel selectors: `batch`, `keyword`, `timeline`, `severity`, line numbers, ranges like `13-16`, quoted categories, cells like `P01.11`, participant IDs like `P01`.
+Reel selectors: `batch`, `keyword`, `timeline`, `severity`, `highlights`, line numbers, ranges like `13-16`, quoted categories, cells like `P01.11`, participant IDs like `P01`.
 
-CLI mode flags are mutually exclusive for selection (`-b/-l/-r/-C/-c/-p/-k/-S/-M/-R/-T`) and can be combined with output format flags (`--screen` or `--gif`) except reel/timeline, which always output a single video reel. `-C/--category` accepts one or more category names (comma- or plus-separated, e.g. `"Observations,Onboarding"`), `-k/--keyword` selects only key-annotated clips, `-S/--severity` accepts severity levels (e.g. `"Critical,High"` or `"-4,-3"`), and `-M/--mixed` combines selectors for individual outputs. `--transcribe` can be combined with any mode/format to generate transcript files alongside artifacts; `--transcript-format` overrides the output format (`md`, `srt`, `vtt`).
+CLI mode flags are mutually exclusive for selection (`-b/-l/-r/-C/-c/-p/-k/-S/-M/-R/-T/-H`) and can be combined with output format flags (`--screen` or `--gif`) except reel/timeline/highlights, which always output a single video reel. `-H/--highlights` generates a highlights reel scored by severity, uniqueness, and keyword annotations within a configurable time budget (default 180s); optionally pass a duration in seconds (e.g. `-H 120`). `-C/--category` accepts one or more category names (comma- or plus-separated, e.g. `"Observations,Onboarding"`), `-k/--keyword` selects only key-annotated clips, `-S/--severity` accepts severity levels (e.g. `"Critical,High"` or `"-4,-3"`), and `-M/--mixed` combines selectors for individual outputs. `--transcribe` can be combined with any mode/format to generate transcript files alongside artifacts; `--transcript-format` overrides the output format (`md`, `srt`, `vtt`).
 
 Interactive-only modes without dedicated CLI flags:
 
@@ -145,6 +146,8 @@ Interactive-only modes without dedicated CLI flags:
 - `DEFAULT_GIF_DURATION_SECONDS` – 5 (GIF extraction length)
 - `MAX_FILENAME_LENGTH` – 255
 - `MAX_FILESIZE_MB` – optional output filesize cap for generated videos (`0` disables)
+- `HIGHLIGHTS_REEL_DURATION_SECONDS` – 180 (3-minute time budget for highlights reel)
+- `HIGHLIGHTS_WEIGHT_SEVERITY`, `HIGHLIGHTS_WEIGHT_UNIQUENESS`, `HIGHLIGHTS_WEIGHT_KEYWORD` – Scoring weights for highlights reel clip ranking (default 1.0, 0.5, 0.3)
 - `COMMAND_LIST_ALL`, `COMMAND_LIST_NEW`, `COMMAND_OPEN_LAST`, `COMMAND_EXCEL`, `COMMAND_HTTP_PREFIX`, `COMMAND_SETTINGS` – Interactive spreadsheet selection commands
 - `TRANSCRIBE_ENABLED` – `False`; set `True` or use `--transcribe` CLI flag to generate transcripts alongside artifacts
 - `TRANSCRIBE_MODEL` – Whisper model size: `tiny`, `base` (default), `small`, `medium`, `large-v3`
