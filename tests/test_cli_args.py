@@ -19,7 +19,7 @@ def _base_args(**overrides):
         "severity": None,
         "mixed": None,
         "reel": None,
-        "timeline": None,
+        "chronologic": None,
         "highlights": None,
         "screen": False,
         "gif": False,

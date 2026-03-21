@@ -31,9 +31,9 @@ def _make_context(
 
 def test_parse_reel_input_parses_mixed_selectors():
     parsed = spreadsheet.parse_reel_input(
-        'timeline, 11, 13-16, P01.5, P02, "Usability"'
+        'chronologic, 11, 13-16, P01.5, P02, "Usability"'
     )
-    assert parsed["timeline"] is True
+    assert parsed["chronologic"] is True
     assert parsed["lines"] == [11]
     assert parsed["ranges"] == [(13, 16)]
     assert parsed["cells"] == [("P01", 5)]
@@ -111,7 +111,7 @@ def test_detect_mode_from_input_cells_and_participants_rejected():
     assert kwargs == {}
 
 
-def test_generate_reel_timestamps_timeline_requires_one_participant(fake_sheet_meta):
+def test_generate_reel_timestamps_chronologic_requires_one_participant(fake_sheet_meta):
     ctx = _make_context(
         sheet_data=[["Study"]],
         id_cell=fake_sheet_meta.id_cell,
@@ -120,7 +120,7 @@ def test_generate_reel_timestamps_timeline_requires_one_participant(fake_sheet_m
         num_participants=1,
         study_name="study",
     )
-    clips = spreadsheet.generate_reel_timestamps(ctx, "timeline")
+    clips = spreadsheet.generate_reel_timestamps(ctx, "chronologic")
     assert clips == []
 
 
@@ -170,7 +170,7 @@ def test_generate_reel_timestamps_dedupes_cells(
         lambda _input: {
             "batch": False,
             "keyword": True,
-            "timeline": False,
+            "chronologic": False,
             "highlights": False,
             "lines": [4],
             "ranges": [],

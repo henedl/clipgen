@@ -337,21 +337,21 @@ def parse_cell_specifications(cell_input: str) -> List[Tuple[str, int]]:
 def parse_reel_input(input_string: str) -> ReelInput:
     """Parse mixed reel selector input into structured selectors.
 
-    Supports: batch, keyword, timeline, lines (e.g. 11, 12), ranges (e.g. 13-16),
+    Supports: batch, keyword, chronologic, lines (e.g. 11, 12), ranges (e.g. 13-16),
     categories (quoted), cells (e.g. P01.11), participants (e.g. P01, P02).
 
     Args:
         input_string: Raw user input (e.g. '11, 13-16, P01, P02.15, "Observations"')
 
     Returns:
-        Dict with keys: batch (bool), keyword (bool), timeline (bool), lines (list of int),
+        Dict with keys: batch (bool), keyword (bool), chronologic (bool), lines (list of int),
         ranges (list of (int,int)), categories (list of str), cells (list of (str,int)),
         participants (list of str)
     """
     result: ReelInput = {
         "batch": False,
         "keyword": False,
-        "timeline": False,
+        "chronologic": False,
         "severity": False,
         "highlights": False,
         "lines": [],
@@ -375,7 +375,7 @@ def parse_reel_input(input_string: str) -> ReelInput:
         rest = rest[: match.start()] + " " + rest[match.end() :]
 
     # Split remaining by comma; each part is one token. Token type is inferred in fixed order below.
-    # Order of checks per token (do not reorder): batch, keyword, timeline, range, line, cell, participant
+    # Order of checks per token (do not reorder): batch, keyword, chronologic, range, line, cell, participant
     parts = [p.strip() for p in rest.split(",") if p.strip()]
     seen_lines = set()
     seen_ranges = set()
@@ -402,9 +402,9 @@ def parse_reel_input(input_string: str) -> ReelInput:
         if token.lower() == "highlights":
             result["highlights"] = True
             continue
-        # Timeline keyword: literal "timeline"
-        if token.lower() == "timeline":
-            result["timeline"] = True
+        # Chronologic keyword: literal "chronologic"
+        if token.lower() == "chronologic":
+            result["chronologic"] = True
             continue
         # Range: "13-16" -> start, end (digits hyphen digits)
         range_match = re.match(r"^(\d+)\s*-\s*(\d+)$", token)
@@ -1272,27 +1272,27 @@ def generate_reel_timestamps(
 ) -> List[ClipRecord]:
     """Generate clip records for reel mode by combining multiple selector types and deduplicating.
 
-    Parses reel input (batch, keyword, timeline, lines, ranges, categories, cells, participants),
+    Parses reel input (batch, keyword, chronologic, lines, ranges, categories, cells, participants),
     collects timestamps from each selector, deduplicates by cell (row, col), and returns a single
     ordered list.
     """
     selectors = parse_reel_input(reel_input_string)
     if selectors.get("highlights") and (
-        selectors["timeline"] or selectors.get("severity")
+        selectors["chronologic"] or selectors.get("severity")
     ):
         utils.error_print(
-            "Highlights selector cannot be combined with timeline or severity ordering.",
+            "Highlights selector cannot be combined with chronologic or severity ordering.",
             [
                 "Use highlights on its own or with other clip selectors (batch, lines, etc.)."
             ],
         )
         return []
-    if selectors["timeline"] and len(selectors["participants"]) != 1:
+    if selectors["chronologic"] and len(selectors["participants"]) != 1:
         utils.error_print(
-            "Timeline selector requires exactly one participant.",
+            "Chronologic selector requires exactly one participant.",
             [
-                "Use timeline with one participant, e.g. 'timeline, P01'.",
-                "Timeline reels are generated per participant.",
+                "Use chronologic with one participant, e.g. 'chronologic, P01'.",
+                "Chronologic reels are generated per participant.",
             ],
         )
         return []
@@ -1300,7 +1300,7 @@ def generate_reel_timestamps(
     has_any = (
         selectors["batch"]
         or selectors["keyword"]
-        or selectors["timeline"]
+        or selectors["chronologic"]
         or selectors.get("severity")
         or selectors.get("highlights")
         or selectors["lines"]
@@ -1352,15 +1352,15 @@ def generate_reel_timestamps(
             seen.add(key)
             deduped.append(issue)
 
-    if selectors["timeline"]:
-        timeline_participant = utils.normalize_participant_id(
+    if selectors["chronologic"]:
+        chronologic_participant = utils.normalize_participant_id(
             selectors["participants"][0]
         ).lower()
         deduped = [
             issue
             for issue in deduped
             if utils.normalize_participant_id(issue.get("participant", "")).lower()
-            == timeline_participant
+            == chronologic_participant
         ]
         sort_clips_chronologically(deduped)
     elif selectors.get("highlights"):

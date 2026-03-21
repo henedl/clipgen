@@ -20,7 +20,7 @@ def _args(**overrides):
         severity=None,
         mixed=None,
         reel=None,
-        timeline=None,
+        chronologic=None,
         highlights=None,
         screen=False,
         gif=False,
@@ -33,11 +33,11 @@ def _args(**overrides):
     return Namespace(**base)
 
 
-def test_run_cli_mode_rejects_timeline_in_mixed_mode(monkeypatch):
-    args = _args(mixed="timeline, 11")
+def test_run_cli_mode_rejects_chronologic_in_mixed_mode(monkeypatch):
+    args = _args(mixed="chronologic, 11")
 
     monkeypatch.setattr(
-        cli.spreadsheet, "parse_reel_input", lambda value: {"timeline": True}
+        cli.spreadsheet, "parse_reel_input", lambda value: {"chronologic": True}
     )
 
     with pytest.raises(SystemExit) as exc:
@@ -63,9 +63,9 @@ def test_generate_cli_clips_prefers_mixed_over_batch(monkeypatch):
     assert call_args.kwargs.get("reel_input") == "11, P01.5"
 
 
-def test_run_cli_mode_timeline_reel_and_viewer(monkeypatch):
+def test_run_cli_mode_chronologic_reel_and_viewer(monkeypatch):
     worksheet = Namespace(title="Sheet", spreadsheet=Namespace(url="http://example"))
-    args = _args(timeline="P01", viewer=True)
+    args = _args(chronologic="P01", viewer=True)
     parsed = cli.CliModeArgs(None, None, None, None)
 
     clips = [{"study": "study", "participant": "P01"}]

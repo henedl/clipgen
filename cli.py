@@ -85,7 +85,7 @@ Examples:
   python clipgen.py -l 5 -y                Line mode, skip confirmation prompts
   python clipgen.py -b -v                  Batch mode with verbose output
   python clipgen.py -R "11, 13-16, P01, \\"Observations\\""  Reel mode - one combined video
-  python clipgen.py -T P01                 Timeline mode - chronological reel for participant P01
+  python clipgen.py -T P01                 Chronologic mode - chronological reel for participant P01
   python clipgen.py -b --screen            Batch mode screenshots (.png)
   python clipgen.py -l 5 --gif             Line mode GIF output (.gif)
   python clipgen.py --timeline-viewer      Generate per-participant timeline viewer
@@ -180,10 +180,10 @@ Note: Non-interactive mode (using -b, -l, -r, -C, -c, -p, -k, -S, -M, -R, or -T)
     )
     mode_group.add_argument(
         "-T",
-        "--timeline",
+        "--chronologic",
         type=str,
         metavar="PARTICIPANT",
-        help="Timeline mode: chronological reel for one participant (e.g., P01)",
+        help="Chronologic mode: chronological reel for one participant (e.g., P01)",
     )
     mode_group.add_argument(
         "-H",
@@ -542,7 +542,7 @@ def _generate_cli_clips(
         or args.severity
         or mixed_selectors
         or args.reel
-        or args.timeline
+        or args.chronologic
         or args.highlights
     )
 
@@ -617,7 +617,7 @@ def _generate_cli_clips(
         (args.severity, "severity", {"severities": cli_severities}),
         (mixed_selectors, "reel", {"reel_input": mixed_selectors}),
         (args.reel, "reel", {"reel_input": args.reel}),
-        (args.timeline, "reel", {"reel_input": f"timeline, {args.timeline}"}),
+        (args.chronologic, "reel", {"reel_input": f"chronologic, {args.chronologic}"}),
         (args.highlights, "reel", {"reel_input": "highlights, batch"}),
     ]
 
@@ -629,23 +629,23 @@ def _generate_cli_clips(
     return []
 
 
-def _resolve_timeline_output_file(
+def _resolve_chronologic_output_file(
     args: Any, clips_list: List[ClipRecord]
 ) -> Optional[str]:
-    """Build the output filename for timeline reel mode."""
-    if not args.timeline:
+    """Build the output filename for chronologic reel mode."""
+    if not args.chronologic:
         return None
-    participant_id = utils.normalize_participant_id(args.timeline).strip()
+    participant_id = utils.normalize_participant_id(args.chronologic).strip()
     study_name = clips_list[0].get("study", "").strip() if clips_list else ""
     if study_name and participant_id:
         return files.get_unique_filename(
-            f"{study_name}_{participant_id}_timeline{config.FILEFORMAT}"
+            f"{study_name}_{participant_id}_chronologic{config.FILEFORMAT}"
         )
     if participant_id:
         return files.get_unique_filename(
-            f"{participant_id}_timeline{config.FILEFORMAT}"
+            f"{participant_id}_chronologic{config.FILEFORMAT}"
         )
-    return files.get_unique_filename(f"timeline{config.FILEFORMAT}")
+    return files.get_unique_filename(f"chronologic{config.FILEFORMAT}")
 
 
 def _resolve_highlights_output_file(
@@ -717,31 +717,31 @@ def run_cli_mode(worksheet: Any, args: Any, cli_mode_args: CliModeArgs) -> None:
     output_format = "screen" if args.screen else "gif" if args.gif else "clip"
     mixed_selectors = getattr(args, "mixed", None)
 
-    if (args.reel or args.timeline or args.highlights) and output_format != "clip":
+    if (args.reel or args.chronologic or args.highlights) and output_format != "clip":
         utils.error_print(
-            "Reel/timeline/highlights mode cannot be combined with --screen or --gif.",
+            "Reel/chronologic/highlights mode cannot be combined with --screen or --gif.",
             [
-                "Use reel/timeline/highlights mode for a single .mp4 output, or use screen/gif with batch/line/range/category/cell/participant/keyword selection."
+                "Use reel/chronologic/highlights mode for a single .mp4 output, or use screen/gif with batch/line/range/category/cell/participant/keyword selection."
             ],
         )
         sys.exit(1)
 
     if mixed_selectors:
         parsed_mixed = spreadsheet.parse_reel_input(mixed_selectors)
-        if parsed_mixed.get("timeline"):
+        if parsed_mixed.get("chronologic"):
             utils.error_print(
-                "Timeline selector is not supported in mixed mode.",
+                "Chronologic selector is not supported in mixed mode.",
                 [
                     "Use -T PARTICIPANT for a chronological reel,",
-                    "or use -R with timeline selectors to create a single reel video.",
+                    "or use -R with chronologic selectors to create a single reel video.",
                 ],
             )
             sys.exit(1)
 
     clips_list = _generate_cli_clips(worksheet, args, cli_mode_args)
 
-    if args.reel or args.timeline or args.highlights:
-        reel_output_file = _resolve_timeline_output_file(args, clips_list)
+    if args.reel or args.chronologic or args.highlights:
+        reel_output_file = _resolve_chronologic_output_file(args, clips_list)
         if args.highlights and reel_output_file is None:
             reel_output_file = _resolve_highlights_output_file(clips_list)
         outputs_generated, artifacts = clipgen.process_reel(
@@ -760,7 +760,7 @@ def run_cli_mode(worksheet: Any, args: Any, cli_mode_args: CliModeArgs) -> None:
     clipgen._print_completion_message(
         outputs_generated,
         output_format,
-        is_reel=bool(args.reel or args.timeline or args.highlights),
+        is_reel=bool(args.reel or args.chronologic or args.highlights),
     )
 
     if (
@@ -828,7 +828,7 @@ def main() -> None:
             args.severity,
             mixed_selectors,
             args.reel,
-            args.timeline,
+            args.chronologic,
             args.screen,
             args.gif,
             args.viewer,
@@ -856,7 +856,7 @@ def main() -> None:
             args.severity,
             mixed_selectors,
             args.reel,
-            args.timeline,
+            args.chronologic,
             args.screen,
             args.gif,
             args.viewer,
@@ -883,7 +883,7 @@ def main() -> None:
         or args.severity
         or mixed_selectors
         or args.reel
-        or args.timeline
+        or args.chronologic
         or args.screen
         or args.gif
         or timeline_viewer

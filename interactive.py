@@ -445,13 +445,13 @@ def prompt_keyword_selection(ctx: SheetContext) -> Optional[List[str]]:
             else:
                 utils.info_print("No valid annotations selected. Please try again.")
         except ValueError:
-            tokens = [t.strip().lower().lstrip("!") for t in selection.split(",") if t.strip()]
+            tokens = [
+                t.strip().lower().lstrip("!") for t in selection.split(",") if t.strip()
+            ]
             matched = []
             unmatched = []
             for token in tokens:
-                exact = next(
-                    (a for a in all_annotations if a.lower() == token), None
-                )
+                exact = next((a for a in all_annotations if a.lower() == token), None)
                 if exact:
                     if exact not in matched:
                         matched.append(exact)
@@ -839,9 +839,9 @@ def browse_spreadsheet(sheet: Any, *, process_fn=None) -> None:
                     or parsed["categories"]
                 )
                 if has_selectors:
-                    if parsed.get("timeline"):
+                    if parsed.get("chronologic"):
                         utils.info_print(
-                            "Timeline selector is not supported in browse mode."
+                            "Chronologic selector is not supported in browse mode."
                         )
                     else:
                         clips = spreadsheet.generate_list(

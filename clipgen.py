@@ -382,16 +382,16 @@ def _resolve_unrecognized_input(
         ("categories", len(parsed["categories"]) > 0),
     ]
     non_empty_types = [name for name, present in selector_types if present]
-    has_timeline = bool(parsed.get("timeline"))
+    has_chronologic = bool(parsed.get("chronologic"))
 
     if not non_empty_types:
         utils.info_print(f"  Unknown mode or input '{user_input}'. Available modes:")
         for line in help_lines:
             utils.info_print(line)
         return None
-    if has_timeline:
+    if has_chronologic:
         utils.info_print(
-            "  Timeline selector is only supported for reel/timeline modes."
+            "  Chronologic selector is only supported for reel/chronologic modes."
         )
         utils.info_print(
             "  Use 're' or 'reel' for a combined reel video, or -T on the command line."
@@ -1044,8 +1044,8 @@ def _print_completion_message(
     )
 
 
-def _prompt_timeline_participant_selection(worksheet: Any) -> Optional[str]:
-    """Prompt user to pick exactly one participant for timeline reels."""
+def _prompt_chronologic_participant_selection(worksheet: Any) -> Optional[str]:
+    """Prompt user to pick exactly one participant for chronologic reels."""
     ctx = spreadsheet.build_sheet_context(worksheet)
     if ctx is None:
         return None
@@ -1057,8 +1057,8 @@ def _prompt_timeline_participant_selection(worksheet: Any) -> Optional[str]:
         utils.info_print("No participants found in the spreadsheet.")
         return None
 
-    utils.print_mode_heading("Timeline participant", "mode.timeline")
-    utils.info_print("Timeline requires exactly one participant.")
+    utils.print_mode_heading("Chronologic participant", "mode.chronologic")
+    utils.info_print("Chronologic mode requires exactly one participant.")
     utils.info_print("Available participants:")
     for i, pid in enumerate(available_list, 1):
         utils.info_print(f"  {i}. {pid}")
@@ -1110,7 +1110,7 @@ def _run_reel_mode_interactive(
     utils.info_print("  batch                    - all clips")
     utils.info_print("  keyword                  - annotated clips only")
     utils.info_print(
-        "  timeline                 - chronological reel (requires exactly one participant)"
+        "  chronologic              - chronological reel (requires exactly one participant)"
     )
     utils.info_print(
         "  severity                 - order reel by severity (most severe first)"
@@ -1122,7 +1122,7 @@ def _run_reel_mode_interactive(
     utils.info_print('  "Observations", "Onboarding" - categories (quoted)')
     utils.info_print("  P01.11, P02.15           - cells (participant.row)")
     utils.info_print("  P01, P02                 - participants (all their clips)")
-    utils.info_print('  Example: timeline, P01, 11, 13-16, "Observations"')
+    utils.info_print('  Example: chronologic, P01, 11, 13-16, "Observations"')
     reel_input = utils.read_user_input(
         "\nEnter reel selectors (combine any of the above, comma-separated):\n>> "
     )
@@ -1132,30 +1132,30 @@ def _run_reel_mode_interactive(
 
     parsed_reel = spreadsheet.parse_reel_input(reel_input)
     if parsed_reel.get("highlights") and (
-        parsed_reel["severity"] or parsed_reel["timeline"]
+        parsed_reel["severity"] or parsed_reel["chronologic"]
     ):
         utils.error_print(
-            "Cannot combine highlights with severity or timeline ordering.",
+            "Cannot combine highlights with severity or chronologic ordering.",
             ["Use highlights on its own for auto-ranked highlight reel."],
         )
         return ([], False, None)
-    if parsed_reel["severity"] and parsed_reel["timeline"]:
+    if parsed_reel["severity"] and parsed_reel["chronologic"]:
         utils.error_print(
-            "Cannot combine severity and timeline ordering.",
+            "Cannot combine severity and chronologic ordering.",
             [
-                "Use one ordering at a time: either timeline (chronological) or severity."
+                "Use one ordering at a time: either chronologic (chronological) or severity."
             ],
         )
         return ([], False, None)
-    if parsed_reel["timeline"]:
+    if parsed_reel["chronologic"]:
         if len(parsed_reel["participants"]) > 1:
             utils.error_print(
-                "Timeline selector supports only one participant.",
-                ["Please provide exactly one participant (e.g., timeline, P01)."],
+                "Chronologic selector supports only one participant.",
+                ["Please provide exactly one participant (e.g., chronologic, P01)."],
             )
             return ([], False, None)
         if len(parsed_reel["participants"]) == 0:
-            selected_pid = _prompt_timeline_participant_selection(worksheet)
+            selected_pid = _prompt_chronologic_participant_selection(worksheet)
             if not selected_pid:
                 return ([], False, None)
             reel_input = f"{reel_input}, {selected_pid}"
@@ -1187,18 +1187,18 @@ def _run_reel_mode_interactive(
         if study_name
         else f"reel{config.FILEFORMAT}"
     )
-    if parsed_reel["timeline"] and parsed_reel["participants"]:
-        timeline_pid = utils.normalize_participant_id(
+    if parsed_reel["chronologic"] and parsed_reel["participants"]:
+        chronologic_pid = utils.normalize_participant_id(
             parsed_reel["participants"][0]
         ).strip()
-        if study_name and timeline_pid:
+        if study_name and chronologic_pid:
             default_filename = (
-                f"{study_name}_{timeline_pid}_timeline{config.FILEFORMAT}"
+                f"{study_name}_{chronologic_pid}_chronologic{config.FILEFORMAT}"
             )
-        elif timeline_pid:
-            default_filename = f"{timeline_pid}_timeline{config.FILEFORMAT}"
+        elif chronologic_pid:
+            default_filename = f"{chronologic_pid}_chronologic{config.FILEFORMAT}"
         else:
-            default_filename = f"timeline{config.FILEFORMAT}"
+            default_filename = f"chronologic{config.FILEFORMAT}"
     elif parsed_reel.get("highlights"):
         default_filename = (
             f"{study_name}_highlights{config.FILEFORMAT}"

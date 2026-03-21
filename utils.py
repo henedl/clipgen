@@ -42,7 +42,7 @@ class ReelInput(TypedDict):
 
     batch: bool
     keyword: bool
-    timeline: bool
+    chronologic: bool
     severity: bool
     highlights: bool
     lines: List[int]
@@ -102,7 +102,7 @@ _CLIPGEN_THEME = (
             "mode.reel": "bold green",
             "mode.reellate": "bold magenta",
             "mode.format": "bold yellow",
-            "mode.timeline": "bold green",
+            "mode.chronologic": "bold green",
             "mode.browse": "bold white",
             "mode.batch": "bold purple",
             "mode.range": "bold plum3",
@@ -984,9 +984,7 @@ def convert_clock_pairs_to_relative(
         if start_rel < 0 or end_rel <= 0 or end_rel <= start_rel:
             skipped.append(f"{start_str}-{end_str}")
             continue
-        result.append(
-            (seconds_to_timestamp(start_rel), seconds_to_timestamp(end_rel))
-        )
+        result.append((seconds_to_timestamp(start_rel), seconds_to_timestamp(end_rel)))
 
     if skipped:
         # Only show detailed skipped clock-based segment warnings at verbose verbosity.
