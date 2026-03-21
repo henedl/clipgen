@@ -79,6 +79,8 @@ MODE_ALIASES = {
     "regenerate": "regenerate",
     "gv": "gallery",
     "gallery": "gallery",
+    "in": "insights",
+    "insights": "insights",
     "se": "settings",
     "settings": "settings",
 }
@@ -1682,6 +1684,11 @@ def _dispatch_interactive_mode(
     if mode == "gallery":
         _run_gallery_mode_interactive()
         return None
+    if mode == "insights":
+        import insights_server
+
+        insights_server.start_insights_server()
+        return None
     if mode == "timeline-viewer":
         clips_list = spreadsheet.generate_list(worksheet, "batch", skip_prompts=True)
         outputs_generated, artifacts = process_clips(clips_list, output_format="clip")
@@ -1764,7 +1771,7 @@ def run_interactive_mode(worksheet: Any) -> None:
             input_mode = utils.read_user_input(
                 "\nEnter mode or input directly:\n"
                 "  Tools: (s)creen, (g)if, (re)el, (rl) reel-late, (br)owse, (se)ttings \n"
-                "  Packs: (v)iewer, (tv) timeline-viewer, (gv) gallery, (rg) regenerate \n"
+                "  Packs: (v)iewer, (tv) timeline-viewer, (gv) gallery, (rg) regenerate, (in) insights \n"
                 "  Modes: (b)atch, (r)ange, (c)ategory, (l)ine, (ce)ll, (p)articipant, (k)eyword, (sv) severity \n"
                 '  Or enter mixed selectors directly: e.g. 5, P01.11, 13-16, "Observations"\n>> '
             )

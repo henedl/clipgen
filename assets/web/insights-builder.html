@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>clipgen Insight Builder</title>
+  <link rel="stylesheet" href="insights-builder.css">
+</head>
+<body>
+  <header id="builderHeader">
+    <div id="headerTop">
+      <h1>clipgen <span class="header-light">Insight Builder</span></h1>
+      <div id="headerActions">
+        <span id="unsavedIndicator" class="hidden">Unsaved changes</span>
+        <button id="saveAllBtn" class="btn btn-primary" disabled>Save</button>
+        <button id="generateViewerBtn" class="btn">Generate Viewer</button>
+        <button id="themeToggle" type="button" aria-label="Toggle dark mode" aria-pressed="false">
+          <span class="theme-toggle-icon theme-icon-sun"></span>
+          <span class="theme-toggle-icon theme-icon-moon"></span>
+        </button>
+      </div>
+    </div>
+    <div id="headerMeta">
+      <span id="artifactCount">0 artifacts</span>
+      <span class="meta-sep">&middot;</span>
+      <span id="insightCount">0 insights</span>
+    </div>
+  </header>
+
+  <main id="builderLayout">
+    <aside id="mediaLibrary">
+      <div id="sidebarHeader">
+        <h2>Media Library</h2>
+        <button id="collapseBtn" type="button" aria-label="Collapse sidebar" title="Collapse sidebar">&lsaquo;</button>
+      </div>
+
+      <div id="filterPanel">
+        <div class="filter-row">
+          <select id="filterParticipant"><option value="">All participants</option></select>
+          <select id="filterCategory"><option value="">All categories</option></select>
+        </div>
+        <div class="filter-row">
+          <select id="filterSeverity"><option value="">All severities</option></select>
+          <div id="typeFilters">
+            <label><input type="checkbox" value="clip" checked> Clip</label>
+            <label><input type="checkbox" value="screen" checked> Screenshot</label>
+            <label><input type="checkbox" value="gif" checked> GIF</label>
+          </div>
+        </div>
+        <input type="text" id="filterSearch" placeholder="Search artifacts..." autocomplete="off">
+      </div>
+
+      <div id="artifactGrid"></div>
+      <div id="resizeHandle"></div>
+    </aside>
+
+    <section id="insightEditor">
+      <div id="editorToolbar">
+        <button id="newInsightBtn" class="btn btn-primary">+ New Insight</button>
+      </div>
+      <div id="insightCards">
+        <div id="emptyState" class="empty-state">
+          <p>No insights yet. Click <strong>+ New Insight</strong> to start authoring.</p>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <div id="addPopover" class="popover hidden">
+    <div id="popoverInsightSelect" class="hidden"></div>
+    <div class="popover-buckets">
+      <button data-bucket="causes" class="popover-btn bucket-causes">Causes</button>
+      <button data-bucket="behaviors" class="popover-btn bucket-behaviors">Behaviors</button>
+      <button data-bucket="impacts" class="popover-btn bucket-impacts">Impacts</button>
+    </div>
+  </div>
+
+  <div id="toast" class="toast hidden"></div>
+
+  <script src="insights-builder.js" defer></script>
+</body>
+</html>

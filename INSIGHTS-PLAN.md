@@ -131,6 +131,8 @@ SPRITE_SHEET_MIN_INTERVAL = 1      # Minimum seconds between frames
 
 Two-column layout: resizable media library sidebar on the left, insight editor main area on the right.
 
+Each insight card has three horizontal areas -  Cause, Behavior, Imapct -  with an editable summary row above each.
+
 ### Media Library Panel (left sidebar)
 
 The media library takes inspiration from video editing suites. It is a visual-first browsing experience for all artifacts in the manifest.

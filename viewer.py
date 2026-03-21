@@ -263,6 +263,54 @@ def generate_gallery_viewer(
     )
 
 
+def finalize_insights_viewer_data(
+    insights_list: List[Dict[str, Any]],
+    artifacts: List[Dict[str, Any]],
+    *,
+    study: str = "",
+    timeline_viewer_file: str = "",
+) -> Dict[str, Any]:
+    """Construct the window.CLIPGEN_DATA structure for the insights viewer."""
+    # Show only "final" insights if any exist, otherwise show all
+    final_insights = [i for i in insights_list if i.get("status") == "final"]
+    visible = final_insights if final_insights else list(insights_list)
+
+    # Collect all referenced artifact IDs
+    referenced_ids: set = set()
+    for ins in visible:
+        for bucket in ("causes", "behaviors", "impacts"):
+            referenced_ids.update(ins.get(bucket, {}).get("artifacts", []))
+
+    referenced_artifacts = [a for a in artifacts if a.get("id") in referenced_ids]
+
+    return {
+        "meta": {
+            "study": study,
+            "generatedAt": datetime.now(timezone.utc).isoformat(),
+            "version": config.VERSIONNUM,
+            "timelineViewerFile": timeline_viewer_file,
+        },
+        "insights": visible,
+        "artifacts": referenced_artifacts,
+    }
+
+
+def generate_insights_viewer(
+    data: Dict[str, Any],
+    *,
+    output_basename: str = "insights_viewer.html",
+) -> Optional[Path]:
+    """Create an insights viewer HTML file with inlined JS/CSS."""
+    return _generate_viewer_html(
+        data,
+        template_name="insights-viewer.html",
+        js_name="insights-viewer.js",
+        css_name="insights-viewer.css",
+        output_basename=output_basename,
+        viewer_label="Insights viewer",
+    )
+
+
 def load_manifest_artifacts() -> List[Dict[str, Any]]:
     """Load artifact records from the manifest file, or return [] if unavailable."""
     manifest_path = Path(utils.get_effective_output_dir()) / config.MANIFEST_FILENAME

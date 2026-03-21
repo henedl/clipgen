@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>clipgen Insights</title>
+  <link rel="stylesheet" href="insights-viewer.css">
+</head>
+<body>
+  <header id="viewerHeader">
+    <div id="headerTop">
+      <h1 id="studyTitle">clipgen <span class="header-light">Insights</span></h1>
+      <button id="themeToggle" type="button" aria-label="Toggle dark mode" aria-pressed="false">
+        <span class="theme-toggle-icon theme-icon-sun"></span>
+        <span class="theme-toggle-icon theme-icon-moon"></span>
+      </button>
+    </div>
+    <div id="headerMeta"></div>
+  </header>
+
+  <main id="content">
+    <section id="insightsIndex"></section>
+    <section id="insightDetail" class="hidden"></section>
+  </main>
+
+  <footer id="viewerFooter" class="hidden">
+    <a id="timelineLink" href="#">View all artifacts in Timeline Viewer &rarr;</a>
+  </footer>
+
+  <!-- CLIPGEN_DATA_HERE -->
+  <script src="insights-viewer.js" defer></script>
+</body>
+</html>

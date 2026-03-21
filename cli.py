@@ -274,6 +274,11 @@ Note: Non-interactive mode (using -b, -l, -r, -C, -c, -p, -k, -S, -M, -R, or -T)
         help="Launch the Studio web interface for interactive artifact generation and reel building",
     )
     viewer_manifest.add_argument(
+        "--insights",
+        action="store_true",
+        help="Launch the Insights Builder for authoring research findings from generated artifacts",
+    )
+    viewer_manifest.add_argument(
         "--gallery",
         type=str,
         nargs="?",
@@ -961,6 +966,36 @@ def main() -> None:
             )
             sys.exit(1)
 
+    insights_mode = getattr(args, "insights", False)
+    if insights_mode:
+        conflicting = [
+            args.batch,
+            args.lines,
+            args.range,
+            args.category,
+            args.cell,
+            args.participant,
+            args.keyword,
+            args.severity,
+            mixed_selectors,
+            args.reel,
+            args.chronologic,
+            args.screen,
+            args.gif,
+            args.viewer,
+            getattr(args, "regenerate", False),
+            timeline_viewer,
+            studio_mode,
+        ]
+        if any(conflicting):
+            utils.error_print(
+                "--insights cannot be combined with mode, format, or --viewer/--regenerate/--studio flags.",
+                [
+                    "Only -i/-o (directories) and -v (verbose) may be used alongside --insights."
+                ],
+            )
+            sys.exit(1)
+
     gallery_arg = getattr(args, "gallery", None)
     if gallery_arg is not None:
         conflicting = [
@@ -1071,6 +1106,13 @@ def main() -> None:
         viewer_path = viewer.generate_timeline_viewer(data)
         if viewer_path:
             utils.info_print(f"Timeline viewer created from manifest: {viewer_path}")
+        sys.exit(0)
+
+    # Standalone insights builder: no spreadsheet needed, reads from manifest
+    if getattr(args, "insights", False):
+        import insights_server
+
+        insights_server.start_insights_server()
         sys.exit(0)
 
     # Standalone gallery: generate interval captures + gallery viewer, no spreadsheet needed
