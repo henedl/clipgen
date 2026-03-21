@@ -142,7 +142,7 @@
   function el(tag, cls, text) {
     var e = document.createElement(tag);
     if (cls) e.className = cls;
-    if (text) e.textContent = text;
+    if (text !== undefined) e.textContent = text;
     return e;
   }
 

@@ -16,7 +16,6 @@ This script supports full unicode/UTF-8 for international characters in:
 
 import difflib
 import hashlib
-import os
 import sys
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
@@ -254,9 +253,7 @@ def _handle_spreadsheet_command(
         return None
     # Handle 'last' command
     if input_name.startswith(config.COMMAND_OPEN_LAST):
-        latest_spreadsheet_name = google_api.get_all_spreadsheets(gspread_client).split(
-            ","
-        )[0]
+        latest_spreadsheet_name = google_api.get_all_spreadsheets(gspread_client)[0]
         return open_spreadsheet_by_name(
             gspread_client, doc_list, latest_spreadsheet_name, use_spinner=True
         )
@@ -996,7 +993,12 @@ def regenerate_from_manifest(
                     generated += 1
                 progress.update(task, advance=1)
             for reel in reels or []:
-                progress.update(task, description=reel.get("description", "Reel")[:config.PROGRESS_DESCRIPTION_LENGTH])
+                progress.update(
+                    task,
+                    description=reel.get("description", "Reel")[
+                        : config.PROGRESS_DESCRIPTION_LENGTH
+                    ],
+                )
                 if _regenerate_reel(reel, missing_videos):
                     generated += 1
                 progress.update(task, advance=1)
@@ -1482,7 +1484,7 @@ def _run_format_mode_interactive(worksheet: Any, output_format: str) -> None:
                 mode="interactive",
             )
     _print_run_summary(
-        f"All done, created {outputs_generated} {output_label}!\nFiles are in {os.getcwd()}"
+        f"All done, created {outputs_generated} {output_label}!\nFiles are in {utils.get_effective_output_dir()}"
     )
 
 

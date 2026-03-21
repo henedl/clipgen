@@ -2,9 +2,9 @@
 """Utility functions for clipgen."""
 
 import difflib
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Set, Tuple, TypeVar, TypedDict
+from typing import Any, Callable, TypedDict, TypeVar
 
 from icecream import ic
 
@@ -31,10 +31,10 @@ class ClipRecord(TypedDict, total=False):
     severity: str
     source_filename: str
     timestamp_baseline: str
-    times: List[Tuple[str, str]]
-    cell_annotations: List[str]
-    segment_annotations: Dict[str, List[int]]
-    selected_segment_indexes: List[int]
+    times: list[tuple[str, str]]
+    cell_annotations: list[str]
+    segment_annotations: dict[str, list[int]]
+    selected_segment_indexes: list[int]
 
 
 class ReelInput(TypedDict):
@@ -45,11 +45,11 @@ class ReelInput(TypedDict):
     chronologic: bool
     severity: bool
     highlights: bool
-    lines: List[int]
-    ranges: List[Tuple[int, int]]
-    categories: List[str]
-    cells: List[Tuple[str, int]]
-    participants: List[str]
+    lines: list[int]
+    ranges: list[tuple[int, int]]
+    categories: list[str]
+    cells: list[tuple[str, int]]
+    participants: list[str]
 
 
 class BrowseRow(TypedDict, total=False):
@@ -58,7 +58,7 @@ class BrowseRow(TypedDict, total=False):
     row_num: int
     category: str
     description: str
-    timestamps: Dict[str, str]
+    timestamps: dict[str, str]
 
 
 # ---- Rich library integration with graceful fallback ----
@@ -191,11 +191,11 @@ def _styled_print(
     message: str,
     *,
     prefix: str = "",
-    prefix_style: Optional[str] = None,
-    message_style: Optional[str] = None,
-    details: Optional[List[str]] = None,
-    details_style: Optional[str] = None,
-    panel_border_style: Optional[str] = None,
+    prefix_style: str | None = None,
+    message_style: str | None = None,
+    details: list[str | None] = None,
+    details_style: str | None = None,
+    panel_border_style: str | None = None,
 ) -> None:
     if _use_rich() and console is not None:
         content = Text()
@@ -220,7 +220,7 @@ def _styled_print(
             print(f"  {detail}")
 
 
-def error_print(message: str, details: Optional[List[str]] = None) -> None:
+def error_print(message: str, details: list[str | None] = None) -> None:
     """Print error messages. Always displayed regardless of verbosity.
 
     Args:
@@ -237,7 +237,7 @@ def error_print(message: str, details: Optional[List[str]] = None) -> None:
     )
 
 
-def warning_print(message: str, details: Optional[List[str]] = None) -> None:
+def warning_print(message: str, details: list[str | None] = None) -> None:
     """Print warning messages. Always displayed regardless of verbosity.
 
     Args:
@@ -267,8 +267,8 @@ def info_print(message: str) -> None:
 
 
 def create_browse_table(
-    rows_data: List[BrowseRow], participant_headers: List[str]
-) -> Optional["Table"]:
+    rows_data: list[BrowseRow], participant_headers: list[str]
+) -> "Table" | None:
     """Create a Rich Table for browse mode display.
 
     Args:
@@ -322,7 +322,7 @@ def create_browse_table(
 
 
 def format_browse_rows_plain(
-    rows_data: List[BrowseRow], participant_headers: List[str]
+    rows_data: list[BrowseRow], participant_headers: list[str]
 ) -> str:
     """Format browse rows as plain text (fallback when Rich unavailable).
 
@@ -399,7 +399,7 @@ def run_with_spinner(message: str, callback: Callable[[], T]) -> T:
         return callback()
 
 
-def print_mode_heading(label: str, style: Optional[str] = None) -> None:
+def print_mode_heading(label: str, style: str | None = None) -> None:
     """Print a one-line mode heading (bold, optional color). Plain fallback when Rich unavailable.
     style should be a theme key (e.g. 'mode.spreadsheet') so colors render correctly.
     No-op when VERBOSITY is below STANDARD (e.g. CLI mode without -v).
@@ -524,10 +524,10 @@ def sanitize_filename(text: str) -> str:
 # ---- Annotation and participant helpers ----
 
 
-def get_known_annotation_map() -> Dict[str, str]:
+def get_known_annotation_map() -> dict[str, str]:
     """Return configured annotation tokens mapped to normalized annotation IDs."""
     configured_map = getattr(config, "ANNOTATION_KEYPHRASES", {"!key": "key"})
-    normalized_map: Dict[str, str] = {}
+    normalized_map: dict[str, str] = {}
     for token, annotation_id in configured_map.items():
         normalized_map[str(token).strip().lower()] = str(annotation_id).strip().lower()
     return normalized_map
@@ -649,7 +649,7 @@ def letter_to_index(letter: str) -> int:
 # parse_timestamps).
 
 
-def _split_timestamp_tokens(cell_value: str) -> List[str]:
+def _split_timestamp_tokens(cell_value: str) -> list[str]:
     """Split a cell value into normalized timestamp/annotation tokens."""
     return (
         cell_value.lower().replace("+", " ").replace(";", " ").replace(",", " ").split()
@@ -661,10 +661,10 @@ def _clean_timestamp_token(token: str) -> str:
     return token.strip().rstrip(",").rstrip("-").replace(".", ":")
 
 
-def get_ignored_timestamp_tokens() -> Set[str]:
+def get_ignored_timestamp_tokens() -> set[str]:
     """Return configured ignored non-timestamp tokens in normalized form."""
     configured_tokens = getattr(config, "IGNORED_TIMESTAMP_TOKENS", set())
-    normalized_tokens: Set[str] = set()
+    normalized_tokens: set[str] = set()
     for token in configured_tokens:
         cleaned = _clean_timestamp_token(str(token).strip().lower())
         if cleaned:
@@ -672,7 +672,7 @@ def get_ignored_timestamp_tokens() -> Set[str]:
     return normalized_tokens
 
 
-def add_duration(start_time: str) -> Optional[str]:
+def add_duration(start_time: str) -> str | None:
     """Add default duration to a start timestamp.
 
     Adds DEFAULT_DURATION_SECONDS to the given start timestamp to create
@@ -685,20 +685,8 @@ def add_duration(start_time: str) -> Optional[str]:
         The new timestamp string with duration added, or None if the timestamp
         format is invalid.
     """
-    try:
-        if len(start_time) <= config.MAX_MMSS_LENGTH:
-            start_datetime = datetime.strptime(str(start_time), "%M:%S")
-            new_time = start_datetime + timedelta(
-                seconds=config.DEFAULT_DURATION_SECONDS
-            )
-            return new_time.strftime("%M:%S")
-        else:
-            start_datetime = datetime.strptime(start_time, "%H:%M:%S")
-            new_time = start_datetime + timedelta(
-                seconds=config.DEFAULT_DURATION_SECONDS
-            )
-            return new_time.strftime("%H:%M:%S")
-    except ValueError:
+    start_seconds = timestamp_to_seconds(start_time)
+    if start_seconds is None:
         warning_print(
             f"Could not parse single timestamp '{start_time}' to add default duration.",
             [
@@ -707,9 +695,10 @@ def add_duration(start_time: str) -> Optional[str]:
             ],
         )
         return None
+    return seconds_to_timestamp(int(start_seconds) + config.DEFAULT_DURATION_SECONDS)
 
 
-def _parse_single_timestamp_token(token: str) -> Optional[Tuple[str, str]]:
+def _parse_single_timestamp_token(token: str) -> tuple[str, str | None]:
     """Parse one token into a (start_time, end_time) pair, or None if invalid/skip.
 
     Handles: dash range (start-end), single timestamp with colon (add default
@@ -764,17 +753,17 @@ def has_non_ignored_timestamp_content(cell_value: str) -> bool:
 
 
 def parse_cell_annotations(
-    cell_value: str, annotation_map: Optional[Dict[str, str]] = None
-) -> Tuple[str, Dict[str, Set[int]], Set[str]]:
+    cell_value: str, annotation_map: dict[str, str | None] = None
+) -> tuple[str, dict[str, set[int]], set[str]]:
     """Extract inline annotation tokens and map them to parsed timestamp indexes.
 
     Semantics: an annotation token marks the preceding parseable timestamp token.
     The returned cleaned cell value has annotation tokens removed.
     """
     known_annotations = annotation_map or get_known_annotation_map()
-    cleaned_tokens: List[str] = []
-    segment_annotations: Dict[str, Set[int]] = {}
-    cell_annotations: Set[str] = set()
+    cleaned_tokens: list[str] = []
+    segment_annotations: dict[str, set[int]] = {}
+    cell_annotations: set[str] = set()
     parsed_timestamp_count = 0
 
     for raw_token in _split_timestamp_tokens(cell_value):
@@ -798,7 +787,7 @@ def parse_cell_annotations(
     return (" ".join(cleaned_tokens), segment_annotations, cell_annotations)
 
 
-def timestamp_to_seconds(ts_str: str) -> Optional[float]:
+def timestamp_to_seconds(ts_str: str) -> float | None:
     """Convert MM:SS or HH:MM:SS timestamp string to seconds.
 
     Args:
@@ -826,8 +815,8 @@ def timestamp_to_seconds(ts_str: str) -> Optional[float]:
 
 
 def parse_timestamps(
-    cell_value: str, cell_ref: Optional[str] = None
-) -> List[Tuple[str, str]]:
+    cell_value: str, cell_ref: str | None = None
+) -> list[tuple[str, str]]:
     """Parse timestamp pairs from a cell value string.
 
     Pipeline: (1) Normalize delimiters to spaces and split into tokens,
@@ -900,7 +889,7 @@ def parse_timestamps(
 # ---- Clock/baseline timestamp conversion ----
 
 
-def _clock_to_seconds(ts: str) -> Optional[int]:
+def _clock_to_seconds(ts: str) -> int | None:
     """Parse a clock-style timestamp into total seconds.
 
     Accepts HH:MM:SS, HH:MM, or MM:SS. Returns None if parsing fails.
@@ -950,10 +939,10 @@ def seconds_to_timestamp(total_seconds: int) -> str:
 
 
 def convert_clock_pairs_to_relative(
-    pairs: List[Tuple[str, str]],
+    pairs: list[tuple[str, str]],
     baseline: str,
-    cell_ref: Optional[str] = None,
-) -> List[Tuple[str, str]]:
+    cell_ref: str | None = None,
+) -> list[tuple[str, str]]:
     """Convert absolute clock (start, end) pairs to relative offsets using a baseline.
 
     Returns a new list of (start, end) pairs in relative time. Invalid or
@@ -971,8 +960,8 @@ def convert_clock_pairs_to_relative(
         )
         return pairs
 
-    result: List[Tuple[str, str]] = []
-    skipped: List[str] = []
+    result: list[tuple[str, str]] = []
+    skipped: list[str] = []
     for start_str, end_str in pairs:
         start_s = _clock_to_seconds(start_str)
         end_s = _clock_to_seconds(end_str)
@@ -1017,19 +1006,13 @@ class BackToModeSelection(Exception):
     """Signal that the user requested to return to the main mode selection prompt."""
 
 
-def read_user_input(prompt: str) -> str:
-    """Read user input and handle global control keywords.
+def check_navigation_keywords(value: str) -> None:
+    """Raise a navigation exception if the first token is a control keyword.
 
-    Recognizes the following keywords when they appear as the first token:
-    - 'quit' / 'exit' -> quit program
-    - 'top'           -> return to spreadsheet selection
-    - 'back'          -> return to main mode selection
+    Recognizes: quit/exit, top, back. Does nothing for empty or non-keyword input.
     """
-    raw = input(prompt)
-    value = raw.strip()
     if not value:
-        return value
-
+        return
     first_token = value.split()[0].lower()
     if first_token in ("quit", "exit"):
         info_print("Exiting clipgen.")
@@ -1041,6 +1024,18 @@ def read_user_input(prompt: str) -> str:
         info_print("Returning to mode selection.")
         raise BackToModeSelection()
 
+
+def read_user_input(prompt: str) -> str:
+    """Read user input and handle global control keywords.
+
+    Recognizes the following keywords when they appear as the first token:
+    - 'quit' / 'exit' -> quit program
+    - 'top'           -> return to spreadsheet selection
+    - 'back'          -> return to main mode selection
+    """
+    raw = input(prompt)
+    value = raw.strip()
+    check_navigation_keywords(value)
     return value
 
 
@@ -1050,7 +1045,7 @@ def suggest_close_match(
     *,
     prompt_prefix: str = "Did you mean",
     cutoff: float = 0.6,
-) -> Optional[str]:
+) -> str | None:
     """Find a fuzzy match and prompt user for confirmation. Returns matched option or None."""
     lower_to_original: dict[str, str] = {}
     for option in valid_options:

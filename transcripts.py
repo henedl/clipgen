@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 import re
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, List, Optional, TypedDict
 
@@ -217,7 +217,7 @@ def _format_markdown(result: TranscriptResult) -> str:
         f"- **Source:** {source_name}",
         f"- **Model:** {result['model']}",
         f"- **Language:** {result['language']}",
-        f"- **Generated:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+        f"- **Generated:** {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}",
         "",
         "---",
         "",

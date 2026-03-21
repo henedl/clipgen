@@ -18,6 +18,8 @@ import utils
 
 INVALID_END_TIMESTAMP = None
 
+_file_duration_cache: Dict[str, int] = {}
+
 
 def _ffmpeg_install_guidance_lines() -> List[str]:
     """Return actionable install guidance based on the current platform."""
@@ -65,7 +67,7 @@ def check_ffmpeg_tools_available() -> bool:
     return False
 
 
-def _run_ffmpeg_process(
+def run_ffmpeg_process(
     ffmpeg_command: List[str],
     *,
     input_file: str,
@@ -106,7 +108,7 @@ def _add_ffmpeg_stderr(
     return error_details
 
 
-def _verify_output_file(output_file: str, operation_label: str) -> bool:
+def verify_output_file(output_file: str, operation_label: str) -> bool:
     """Return True when an expected ffmpeg output file exists, otherwise log an error."""
     if Path(output_file).is_file():
         return True
@@ -253,7 +255,7 @@ def run_ffmpeg(
         input_file, output_file, start_pos, duration, reencode, config.AUDIO_NORMALIZE
     )
     utils.debug_print(f"ffmpeg_command is '{' '.join(ffmpeg_command)}'")
-    ffmpeg_result = _run_ffmpeg_process(
+    ffmpeg_result = run_ffmpeg_process(
         ffmpeg_command,
         input_file=input_file,
         output_file=output_file,
@@ -273,7 +275,7 @@ def run_ffmpeg(
         )
         return False
 
-    if not _verify_output_file(output_file, "ffmpeg"):
+    if not verify_output_file(output_file, "ffmpeg"):
         return False
 
     if config.MAX_FILESIZE_MB and config.MAX_FILESIZE_MB > 0:
@@ -343,7 +345,7 @@ def extract_screenshot(input_file: str, output_file: str, timestamp: str) -> boo
     ]
     utils.debug_print(f"ffmpeg screenshot command: {' '.join(ffmpeg_command)}")
 
-    ffmpeg_result = _run_ffmpeg_process(
+    ffmpeg_result = run_ffmpeg_process(
         ffmpeg_command,
         input_file=input_file,
         output_file=output_file,
@@ -362,7 +364,7 @@ def extract_screenshot(input_file: str, output_file: str, timestamp: str) -> boo
             _add_ffmpeg_stderr(error_details, ffmpeg_result),
         )
         return False
-    if not _verify_output_file(output_file, "ffmpeg screenshot"):
+    if not verify_output_file(output_file, "ffmpeg screenshot"):
         return False
     utils.verbose_print(
         f"+ Generated screenshot '{output_file}' successfully.\n File size: {utils.format_filesize(Path(output_file).stat().st_size)}\n"
@@ -446,7 +448,7 @@ def extract_gif(
     ]
     utils.debug_print(f"ffmpeg gif command: {' '.join(ffmpeg_command)}")
 
-    ffmpeg_result = _run_ffmpeg_process(
+    ffmpeg_result = run_ffmpeg_process(
         ffmpeg_command,
         input_file=input_file,
         output_file=output_file,
@@ -465,7 +467,7 @@ def extract_gif(
             _add_ffmpeg_stderr(error_details, ffmpeg_result),
         )
         return False
-    if not _verify_output_file(output_file, "ffmpeg GIF extraction"):
+    if not verify_output_file(output_file, "ffmpeg GIF extraction"):
         return False
     utils.verbose_print(
         f"+ Generated GIF '{output_file}' successfully.\n File size: {utils.format_filesize(Path(output_file).stat().st_size)}\n"
@@ -482,6 +484,10 @@ def get_file_duration(filepath: str) -> Optional[int]:
     Returns:
         The duration in seconds, or None if the file cannot be probed.
     """
+    resolved = str(Path(filepath).resolve())
+    if resolved in _file_duration_cache:
+        return _file_duration_cache[resolved]
+
     if not Path(filepath).is_file():
         utils.error_print(
             f"Video file not found: '{filepath}'",
@@ -508,7 +514,9 @@ def get_file_duration(filepath: str) -> Optional[int]:
         duration_seconds = float(
             subprocess.check_output(probe_command, encoding="utf-8")
         )
-        return int(duration_seconds)
+        result = round(duration_seconds)
+        _file_duration_cache[resolved] = result
+        return result
     except FileNotFoundError:
         utils.error_print(
             "ffprobe is not installed or not found in system PATH.",
@@ -680,7 +688,7 @@ def compress_to_size(filepath: str, target_size_mb: float) -> bool:
         ]
 
         utils.debug_print(f"Pass 1 command: {' '.join(pass1_command)}")
-        pass1_result = _run_ffmpeg_process(
+        pass1_result = run_ffmpeg_process(
             pass1_command,
             input_file=filepath,
             output_file=null_output,
@@ -723,7 +731,7 @@ def compress_to_size(filepath: str, target_size_mb: float) -> bool:
         ]
 
         utils.debug_print(f"Pass 2 command: {' '.join(pass2_command)}")
-        pass2_result = _run_ffmpeg_process(
+        pass2_result = run_ffmpeg_process(
             pass2_command,
             input_file=filepath,
             output_file=compressed_temp_path,
@@ -743,7 +751,7 @@ def compress_to_size(filepath: str, target_size_mb: float) -> bool:
             )
             return False
 
-        if not _verify_output_file(compressed_temp_path, "Compression"):
+        if not verify_output_file(compressed_temp_path, "Compression"):
             return False
 
         new_size = Path(compressed_temp_path).stat().st_size
@@ -846,7 +854,7 @@ def concatenate_clips(
             utils.debug_print("Debugging enabled, not calling ffmpeg for concat.")
             return False
 
-        ffmpeg_result = _run_ffmpeg_process(
+        ffmpeg_result = run_ffmpeg_process(
             ffmpeg_command,
             input_file=concat_list_file,
             output_file=output_file,
@@ -876,7 +884,7 @@ def concatenate_clips(
                 "aac",
                 output_file,
             ]
-            ffmpeg_result = _run_ffmpeg_process(
+            ffmpeg_result = run_ffmpeg_process(
                 ffmpeg_command_reencode,
                 input_file=concat_list_file,
                 output_file=output_file,
@@ -896,7 +904,7 @@ def concatenate_clips(
             )
             return False
 
-        if not _verify_output_file(output_file, "Concat"):
+        if not verify_output_file(output_file, "Concat"):
             return False
 
         utils.standard_print(f"+ Generated reel '{output_file}' successfully.")

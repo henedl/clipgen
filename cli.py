@@ -607,7 +607,9 @@ def _generate_cli_clips(
         try:
             config.HIGHLIGHTS_REEL_DURATION_SECONDS = int(args.highlights)
         except ValueError:
-            pass
+            utils.warning_print(
+                f"Invalid highlights duration '{args.highlights}', using default ({config.HIGHLIGHTS_REEL_DURATION_SECONDS}s)."
+            )
 
     mode_dispatch: List[tuple] = [
         (
@@ -839,7 +841,9 @@ def run_cli_mode(worksheet: Any, args: Any, cli_mode_args: CliModeArgs) -> None:
     is_excel = clipgen._is_excel_worksheet(worksheet)
     effective_mode = output_format if output_format != "clip" else "batch"
 
-    if (getattr(args, "viewer", False) or getattr(args, "manifest", False)) and artifacts:
+    if (
+        getattr(args, "viewer", False) or getattr(args, "manifest", False)
+    ) and artifacts:
         study = artifacts[0].get("study", "")
         participant = artifacts[0].get("participant", "")
 
@@ -997,6 +1001,7 @@ def main() -> None:
         or mixed_selectors
         or args.reel
         or args.chronologic
+        or args.highlights
         or args.screen
         or args.gif
         or timeline_viewer
@@ -1101,7 +1106,7 @@ def main() -> None:
 
     # Authenticate with Google (once per run)
     gspread_client = authenticate_google()
-    doc_list = google_api.get_all_spreadsheets(gspread_client).split(",")
+    doc_list = google_api.get_all_spreadsheets(gspread_client)
 
     # Outer loop so 'top' can return to spreadsheet selection
     while True:

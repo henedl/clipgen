@@ -99,7 +99,6 @@ body {
 }
 
 #studyName:not(:empty)::before { content: "Study:"; font-weight: 600; }
-#participantId:not(:empty)::before { content: "Participant:"; font-weight: 600; }
 #generatedAt:not(:empty)::before { content: "Generated:"; font-weight: 600; }
 
 #themeToggle {

@@ -46,19 +46,19 @@ def get_worksheet(spreadsheet: gspread.Spreadsheet) -> gspread.Worksheet:
     raise gspread.WorksheetNotFound("Spreadsheet contains no worksheets")
 
 
-def get_all_spreadsheets(connection: gspread.Client) -> str:
-    """Returns comma-separated list of all accessible Google Spreadsheets.
+def get_all_spreadsheets(connection: gspread.Client) -> list[str]:
+    """Returns list of all accessible Google Spreadsheet names.
 
     Args:
         connection: Google client connection object
 
     Returns:
-        Comma-separated string of spreadsheet names
+        List of spreadsheet name strings
     """
     spreadsheet_files = list(connection.list_spreadsheet_files())
     for doc in spreadsheet_files:
         utils.debug_print(str(doc))
-    return ", ".join(doc["name"] for doc in spreadsheet_files)
+    return [doc["name"] for doc in spreadsheet_files]
 
 
 def find_spreadsheet_by_name(search_name: str, doc_list: List[str]) -> int:

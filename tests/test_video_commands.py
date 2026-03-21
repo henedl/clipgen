@@ -32,7 +32,7 @@ def test_build_ffmpeg_cut_command_includes_expected_flags():
 
 def test_concatenate_clips_reencode_fallback(monkeypatch):
     monkeypatch.setattr(video.Path, "is_file", lambda self: True)
-    monkeypatch.setattr(video, "_verify_output_file", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(video, "verify_output_file", lambda *_args, **_kwargs: True)
 
     captured_commands = []
     results = [
@@ -46,7 +46,7 @@ def test_concatenate_clips_reencode_fallback(monkeypatch):
         captured_commands.append(command)
         return results.pop(0)
 
-    monkeypatch.setattr(video, "_run_ffmpeg_process", fake_run_ffmpeg_process)
+    monkeypatch.setattr(video, "run_ffmpeg_process", fake_run_ffmpeg_process)
 
     ok = video.concatenate_clips(["a.mp4", "b.mp4"], "reel.mp4", reencode_on_fail=True)
     assert ok is True

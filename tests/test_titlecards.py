@@ -14,8 +14,8 @@ def test_build_titlecard_frame_uses_png_background_and_scaling(monkeypatch, make
         commands.append(cmd)
         return subprocess.CompletedProcess(args=cmd, returncode=0, stderr="")
 
-    monkeypatch.setattr(video, "_run_ffmpeg_process", fake_run_ffmpeg_process)
-    monkeypatch.setattr(video, "_verify_output_file", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(video, "run_ffmpeg_process", fake_run_ffmpeg_process)
+    monkeypatch.setattr(video, "verify_output_file", lambda *_args, **_kwargs: True)
     monkeypatch.setattr(titlecards.Path, "is_file", lambda self: True)
 
     path = titlecards.build_titlecard_frame(clip, "1280x720")
@@ -41,8 +41,8 @@ def test_build_titlecard_frame_uses_black_background_when_no_asset(
         commands.append(cmd)
         return subprocess.CompletedProcess(args=cmd, returncode=0, stderr="")
 
-    monkeypatch.setattr(video, "_run_ffmpeg_process", fake_run_ffmpeg_process)
-    monkeypatch.setattr(video, "_verify_output_file", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(video, "run_ffmpeg_process", fake_run_ffmpeg_process)
+    monkeypatch.setattr(video, "verify_output_file", lambda *_args, **_kwargs: True)
 
     def fake_is_file(self):
         return False
@@ -71,7 +71,7 @@ def test_prepend_titlecard_to_clip_respects_disabled_flag(monkeypatch, make_clip
     )
     monkeypatch.setattr(
         video,
-        "_run_ffmpeg_process",
+        "run_ffmpeg_process",
         lambda *_args, **_kwargs: calls.__setitem__("ffmpeg", calls["ffmpeg"] + 1),
     )
 
@@ -90,7 +90,7 @@ def test_prepend_titlecard_to_clip_uses_filter_concat(monkeypatch, make_clip):
     monkeypatch.setattr(
         titlecards, "build_titlecard_frame", lambda *_args, **_kwargs: "titlecard.mp4"
     )
-    monkeypatch.setattr(video, "_verify_output_file", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(video, "verify_output_file", lambda *_args, **_kwargs: True)
 
     commands = []
 
@@ -98,7 +98,7 @@ def test_prepend_titlecard_to_clip_uses_filter_concat(monkeypatch, make_clip):
         commands.append(cmd)
         return subprocess.CompletedProcess(args=cmd, returncode=0, stderr="")
 
-    monkeypatch.setattr(video, "_run_ffmpeg_process", fake_run_ffmpeg_process)
+    monkeypatch.setattr(video, "run_ffmpeg_process", fake_run_ffmpeg_process)
     replaced = {}
     monkeypatch.setattr(
         titlecards.os,

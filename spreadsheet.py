@@ -144,13 +144,17 @@ def get_num_participants(header_row: List[str], id_cell: Any, col_count: int) ->
     Returns:
         Number of participant columns found
     """
+    # Scan only columns after the ID column for participant headers
+    start_col = (
+        id_cell.col
+    )  # id_cell.col is 1-based, so this is the 0-based index of the next column
     num_participants = sum(
         1
-        for j in range(col_count)
+        for j in range(start_col, col_count)
         if header_row[j] and header_row[j][0] in config.PARTICIPANT_PREFIXES
     )
     utils.standard_print(
-        f"Found {num_participants} participants in total, spanning columns {id_cell.col + 1} to {num_participants + id_cell.col + 1}."
+        f"Found {num_participants} participants in total, spanning columns {id_cell.col + 1} to {num_participants + id_cell.col}."
     )
     return num_participants
 
@@ -534,7 +538,7 @@ def _make_clip_record(
     cell = gspread.cell.Cell(row_idx + 1, col_idx + 1, cell_value)
     # observation_cell.col is 1-based; convert to 0-based for sheet_data
     desc_col = ctx.observation_cell.col - 1
-    category_col = ctx.observation_cell.col - 2
+    category_col = ctx.category_cell.col - 1
     # Header row in sheet_data is 0-based; id_cell.row is 1-based
     participant_row = ctx.id_cell.row - 1
     desc = ""

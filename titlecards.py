@@ -45,7 +45,9 @@ def _get_video_resolution(filepath: str) -> Optional[str]:
 def _build_drawtext_filter(text: str) -> str:
     safe_text = (text or "").strip()
     # The description has already been sanitized for filenames, but escape colons and backslashes just in case.
-    safe_text = safe_text.replace("\\", "\\\\").replace(":", "\\:")
+    safe_text = (
+        safe_text.replace("\\", "\\\\").replace(":", "\\:").replace("'", "'\\''")
+    )
     return (
         "drawtext=text='{}'"
         ":font=monospace"
@@ -57,39 +59,46 @@ def _build_drawtext_filter(text: str) -> str:
     ).format(safe_text)
 
 
-def build_titlecard_frame(clip: ClipRecord, resolution: str) -> Optional[str]:
-    """Generate a short titlecard video segment for a clip.
+def _build_card_frame(
+    *,
+    resolution: str,
+    background_path: Path,
+    label: str,
+    drawtext_filter: Optional[str] = None,
+    allow_color_fallback: bool = False,
+) -> Optional[str]:
+    """Generate a short title/end card video segment.
 
-    Returns the path to the generated titlecard video, or None on failure.
+    Shared implementation for titlecard and endcard frame generation.
+    Returns the path to the generated card video, or None on failure.
     """
     if not resolution:
         return None
 
-    background_path = Path("assets") / "titlecard.png"
     use_image_background = background_path.is_file()
+    if not use_image_background and not allow_color_fallback:
+        return None
 
     try:
         with tempfile.NamedTemporaryFile(suffix=config.FILEFORMAT, delete=False) as tmp:
-            titlecard_path = tmp.name
+            card_path = tmp.name
     except OSError as error:
         utils.warning_print(
-            "Could not create temporary file for titlecard.",
+            f"Could not create temporary file for {label}.",
             [str(error)],
         )
         return None
 
     if config.DEBUGGING:
         utils.debug_print(
-            f"Debugging enabled, would generate titlecard '{titlecard_path}' "
-            f"for clip '{clip.get('desc', '')}' at resolution {resolution}."
+            f"Debugging enabled, would generate {label} '{card_path}' "
+            f"at resolution {resolution}."
         )
         return None
 
-    drawtext_filter = _build_drawtext_filter(str(clip.get("desc", "")))
-
     if "x" not in resolution:
         utils.warning_print(
-            f"Invalid resolution string '{resolution}' for titlecard.",
+            f"Invalid resolution string '{resolution}' for {label}.",
             ["Expected format 'WIDTHxHEIGHT' (e.g. '1280x720')."],
         )
         return None
@@ -100,8 +109,10 @@ def build_titlecard_frame(clip: ClipRecord, resolution: str) -> Optional[str]:
 
     vf_with_scale = (
         f"scale={resolution}:force_original_aspect_ratio=decrease,"
-        f"pad={width_str}:{height_str}:(ow-iw)/2:(oh-ih)/2,{drawtext_filter}"
+        f"pad={width_str}:{height_str}:(ow-iw)/2:(oh-ih)/2"
     )
+    if drawtext_filter:
+        vf_with_scale += f",{drawtext_filter}"
 
     if use_image_background:
         ffmpeg_command = [
@@ -121,7 +132,7 @@ def build_titlecard_frame(clip: ClipRecord, resolution: str) -> Optional[str]:
             "libx264",
             "-pix_fmt",
             "yuv420p",
-            titlecard_path,
+            card_path,
         ]
         input_label = str(background_path)
     else:
@@ -140,129 +151,57 @@ def build_titlecard_frame(clip: ClipRecord, resolution: str) -> Optional[str]:
             "libx264",
             "-pix_fmt",
             "yuv420p",
-            titlecard_path,
+            card_path,
         ]
         input_label = "lavfi:color"
 
-    utils.debug_print(f"ffmpeg titlecard command: {' '.join(ffmpeg_command)}")
-    ffmpeg_result = video._run_ffmpeg_process(
+    utils.debug_print(f"ffmpeg {label} command: {' '.join(ffmpeg_command)}")
+    ffmpeg_result = video.run_ffmpeg_process(
         ffmpeg_command,
         input_file=input_label,
-        output_file=titlecard_path,
-        os_error_message="ffmpeg could not successfully run for titlecard generation.",
+        output_file=card_path,
+        os_error_message=f"ffmpeg could not successfully run for {label} generation.",
     )
     if ffmpeg_result is None or ffmpeg_result.returncode != 0:
         utils.warning_print(
-            "Titlecard generation failed; clip will be used without a titlecard.",
+            f"{label.capitalize()} generation failed; clip will be used without a {label}.",
             [ffmpeg_result.stderr.strip()]
             if ffmpeg_result and ffmpeg_result.stderr
             else None,
         )
         try:
-            Path(titlecard_path).unlink(missing_ok=True)
+            Path(card_path).unlink(missing_ok=True)
         except TypeError:
-            if Path(titlecard_path).exists():
+            if Path(card_path).exists():
                 try:
-                    Path(titlecard_path).unlink()
+                    Path(card_path).unlink()
                 except OSError:
                     pass
         return None
 
-    if not video._verify_output_file(titlecard_path, "Titlecard generation"):
+    if not video.verify_output_file(card_path, f"{label.capitalize()} generation"):
         return None
-    return titlecard_path
+    return card_path
+
+
+def build_titlecard_frame(clip: ClipRecord, resolution: str) -> Optional[str]:
+    """Generate a short titlecard video segment for a clip."""
+    return _build_card_frame(
+        resolution=resolution,
+        background_path=Path("assets") / "titlecard.png",
+        label="titlecard",
+        drawtext_filter=_build_drawtext_filter(str(clip.get("desc", ""))),
+        allow_color_fallback=True,
+    )
 
 
 def build_endcard_frame(resolution: str) -> Optional[str]:
     """Generate a short endcard video segment if assets/endcard.png exists."""
-    if not resolution:
-        return None
-
-    background_path = Path("assets") / "endcard.png"
-    if not background_path.is_file():
-        return None
-
-    try:
-        with tempfile.NamedTemporaryFile(suffix=config.FILEFORMAT, delete=False) as tmp:
-            endcard_path = tmp.name
-    except OSError as error:
-        utils.warning_print(
-            "Could not create temporary file for endcard.",
-            [str(error)],
-        )
-        return None
-
-    if config.DEBUGGING:
-        utils.debug_print(
-            f"Debugging enabled, would generate endcard '{endcard_path}' "
-            f"at resolution {resolution}."
-        )
-        return None
-
-    if "x" not in resolution:
-        utils.warning_print(
-            f"Invalid resolution string '{resolution}' for endcard.",
-            ["Expected format 'WIDTHxHEIGHT' (e.g. '1280x720')."],
-        )
-        return None
-
-    width_str, height_str = resolution.split("x", 1)
-    width_str = width_str.strip()
-    height_str = height_str.strip()
-
-    vf_with_scale = (
-        f"scale={resolution}:force_original_aspect_ratio=decrease,"
-        f"pad={width_str}:{height_str}:(ow-iw)/2:(oh-ih)/2"
+    return _build_card_frame(
+        resolution=resolution,
+        background_path=Path("assets") / "endcard.png",
+        label="endcard",
     )
-
-    ffmpeg_command = [
-        "ffmpeg",
-        "-y",
-        "-loglevel",
-        config.FFMPEG_LOGLEVEL,
-        "-loop",
-        "1",
-        "-t",
-        str(config.TITLECARD_DURATION_SECONDS),
-        "-i",
-        str(background_path),
-        "-vf",
-        vf_with_scale,
-        "-c:v",
-        "libx264",
-        "-pix_fmt",
-        "yuv420p",
-        endcard_path,
-    ]
-    input_label = str(background_path)
-
-    utils.debug_print(f"ffmpeg endcard command: {' '.join(ffmpeg_command)}")
-    ffmpeg_result = video._run_ffmpeg_process(
-        ffmpeg_command,
-        input_file=input_label,
-        output_file=endcard_path,
-        os_error_message="ffmpeg could not successfully run for endcard generation.",
-    )
-    if ffmpeg_result is None or ffmpeg_result.returncode != 0:
-        utils.warning_print(
-            "Endcard generation failed; clip will be used without an endcard.",
-            [ffmpeg_result.stderr.strip()]
-            if ffmpeg_result and ffmpeg_result.stderr
-            else None,
-        )
-        try:
-            Path(endcard_path).unlink(missing_ok=True)
-        except TypeError:
-            if Path(endcard_path).exists():
-                try:
-                    Path(endcard_path).unlink()
-                except OSError:
-                    pass
-        return None
-
-    if not video._verify_output_file(endcard_path, "Endcard generation"):
-        return None
-    return endcard_path
 
 
 def prepend_titlecard_to_clip(clip: ClipRecord, clip_path: str) -> bool:
@@ -330,7 +269,7 @@ def prepend_titlecard_to_clip(clip: ClipRecord, clip_path: str) -> bool:
             "ffmpeg prepend titlecard filter concat command: "
             + " ".join(ffmpeg_command)
         )
-        ffmpeg_result = video._run_ffmpeg_process(
+        ffmpeg_result = video.run_ffmpeg_process(
             ffmpeg_command,
             input_file=clip_path,
             output_file=output_temp_path,
@@ -345,7 +284,7 @@ def prepend_titlecard_to_clip(clip: ClipRecord, clip_path: str) -> bool:
             )
             return True
 
-        if not video._verify_output_file(output_temp_path, "Prepend titlecard"):
+        if not video.verify_output_file(output_temp_path, "Prepend titlecard"):
             return True
 
         os.replace(output_temp_path, clip_path)
@@ -421,7 +360,7 @@ def append_endcard_to_clip(clip_path: str) -> bool:
         utils.debug_print(
             "ffmpeg append endcard filter concat command: " + " ".join(ffmpeg_command)
         )
-        ffmpeg_result = video._run_ffmpeg_process(
+        ffmpeg_result = video.run_ffmpeg_process(
             ffmpeg_command,
             input_file=clip_path,
             output_file=output_temp_path,
@@ -436,7 +375,7 @@ def append_endcard_to_clip(clip_path: str) -> bool:
             )
             return True
 
-        if not video._verify_output_file(output_temp_path, "Append endcard"):
+        if not video.verify_output_file(output_temp_path, "Append endcard"):
             return True
 
         os.replace(output_temp_path, clip_path)

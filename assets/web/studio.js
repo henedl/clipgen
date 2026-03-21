@@ -29,12 +29,6 @@
     return e;
   }
 
-  function escHtml(str) {
-    var d = document.createElement("div");
-    d.textContent = str;
-    return d.innerHTML;
-  }
-
   function truncate(str, max) {
     if (!str) return "";
     return str.length > max ? str.slice(0, max) + "\u2026" : str;
@@ -759,7 +753,7 @@
   }
 
   function onBuildTimelineViewer() {
-    if (state.generating || state.generatedArtifacts.length === 0) return;
+    if (state.generating) return;
     state.generating = true;
 
     showOverlay("Building timeline viewer...");

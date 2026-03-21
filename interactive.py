@@ -13,8 +13,6 @@ the caller should re-prompt or abort).
 
 import shutil
 import sys
-import termios
-import tty
 import webbrowser
 from typing import Any, List, Optional, Tuple
 
@@ -681,6 +679,9 @@ def browse_spreadsheet(sheet: Any, *, process_fn=None) -> None:
         sys.stdout.write(prompt)
         sys.stdout.flush()
 
+        import termios
+        import tty
+
         fd = sys.stdin.fileno()
         old_settings = termios.tcgetattr(fd)
         try:
@@ -725,16 +726,7 @@ def browse_spreadsheet(sheet: Any, *, process_fn=None) -> None:
         value = full_line.strip()
         if not value:
             return value
-        first_token = value.split()[0].lower()
-        if first_token in ("quit", "exit"):
-            utils.info_print("Exiting clipgen.")
-            raise utils.QuitProgram()
-        if first_token == "top":
-            utils.info_print("Returning to spreadsheet selection.")
-            raise utils.TopToSpreadsheet()
-        if first_token == "back":
-            utils.info_print("Returning to mode selection.")
-            raise utils.BackToModeSelection()
+        utils.check_navigation_keywords(value)
         return value
 
     # Navigation loop
