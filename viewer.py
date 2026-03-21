@@ -204,6 +204,104 @@ def generate_timeline_viewer(
     return out_path
 
 
+def finalize_gallery_data(
+    artifacts: List[Dict[str, Any]],
+    *,
+    source_video: str = "",
+    video_duration: int = 0,
+    output_format: str = "screen",
+    interval: int = 10,
+) -> Dict[str, Any]:
+    """Construct the window.CLIPGEN_DATA structure for the gallery viewer."""
+    return {
+        "meta": {
+            "sourceVideo": source_video,
+            "generatedAt": datetime.now(timezone.utc).isoformat(),
+            "mode": "gallery",
+            "format": output_format,
+            "interval": interval,
+            "videoDuration": video_duration,
+        },
+        "artifacts": artifacts,
+    }
+
+
+def generate_gallery_viewer(
+    data: Dict[str, Any],
+    *,
+    output_basename: str = "gallery_viewer.html",
+) -> Optional[Path]:
+    """Create a gallery viewer HTML file with inlined JS/CSS.
+
+    Reads the gallery template from assets/web, injects serialized data
+    as window.CLIPGEN_DATA, and writes the result to the output directory.
+
+    Returns the path to the generated HTML, or None on failure.
+    """
+    if getattr(sys, "frozen", False):
+        assets_base = Path(sys.executable).resolve().parent
+    else:
+        assets_base = Path(__file__).resolve().parent
+    assets_dir = assets_base / "assets" / "web"
+    template_path = assets_dir / "gallery.html"
+    js_path = assets_dir / "gallery.js"
+    css_path = assets_dir / "gallery.css"
+
+    for required in (template_path, js_path, css_path):
+        if not required.is_file():
+            utils.warning_print(
+                f"Gallery viewer asset not found: {required}",
+                ["Gallery HTML will not be generated."],
+            )
+            return None
+
+    try:
+        template_html = template_path.read_text(encoding="utf-8")
+    except OSError as e:
+        utils.warning_print(f"Could not read gallery template: {e}")
+        return None
+
+    try:
+        css_text = css_path.read_text(encoding="utf-8")
+        js_text = js_path.read_text(encoding="utf-8")
+    except OSError as e:
+        utils.warning_print(f"Could not read gallery assets: {e}")
+        return None
+
+    css_link_tag = '<link rel="stylesheet" href="gallery.css">'
+    inline_css_block = f"<style>\n{css_text}\n</style>"
+    if css_link_tag in template_html:
+        template_html = template_html.replace(css_link_tag, inline_css_block)
+    elif "</head>" in template_html:
+        template_html = template_html.replace("</head>", f"{inline_css_block}\n</head>")
+
+    js_script_tag = '<script src="gallery.js" defer></script>'
+    inline_js_block = f"<script defer>\n{js_text}\n</script>"
+    if js_script_tag in template_html:
+        template_html = template_html.replace(js_script_tag, inline_js_block)
+    elif "</body>" in template_html:
+        template_html = template_html.replace("</body>", f"{inline_js_block}\n</body>")
+
+    data_json = json.dumps(data, ensure_ascii=False, separators=(",", ":"))
+    script_block = f"<script>window.CLIPGEN_DATA={data_json};</script>"
+
+    if _CLIPGEN_DATA_PLACEHOLDER in template_html:
+        output_html = template_html.replace(_CLIPGEN_DATA_PLACEHOLDER, script_block)
+    else:
+        output_html = template_html.replace("</body>", f"{script_block}\n</body>")
+
+    out_name = files.get_unique_filename(output_basename, file_format=".html")
+    out_path = Path(out_name)
+
+    try:
+        out_path.write_text(output_html, encoding="utf-8")
+    except OSError as e:
+        utils.warning_print(f"Could not write gallery HTML: {e}")
+        return None
+
+    return out_path
+
+
 def load_manifest_artifacts() -> List[Dict[str, Any]]:
     """Load artifact records from the manifest file, or return [] if unavailable."""
     manifest_path = Path(utils.get_effective_output_dir()) / config.MANIFEST_FILENAME

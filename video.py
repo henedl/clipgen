@@ -8,11 +8,12 @@ import sys
 import tempfile
 from datetime import datetime
 from pathlib import Path
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 from icecream import ic
 
 import config
+import files
 import utils
 
 INVALID_END_TIMESTAMP = None
@@ -407,7 +408,10 @@ def extract_gif(
                 [f"Video file: '{input_file}'"],
             )
             return False
-        if start_seconds is not None and start_seconds + duration_seconds > file_duration:
+        if (
+            start_seconds is not None
+            and start_seconds + duration_seconds > file_duration
+        ):
             utils.error_print(
                 f"GIF range ({timestamp} + {duration_seconds}s) extends beyond video duration ({file_duration}s). Skipping.",
                 [f"Video file: '{input_file}'"],
@@ -909,3 +913,80 @@ def concatenate_clips(
                 utils.debug_print(
                     f"Could not remove concat list file '{concat_list_file}': {e}"
                 )
+
+
+def generate_interval_captures(
+    input_file: str,
+    *,
+    interval_seconds: int = 10,
+    output_format: str = "screen",
+    gif_duration_seconds: int = 3,
+) -> List[Dict[str, Any]]:
+    """Generate screenshots or GIFs at regular intervals throughout a video.
+
+    Args:
+        input_file: Path to the source video file
+        interval_seconds: Seconds between each capture
+        output_format: 'screen' for PNG screenshots or 'gif' for animated GIFs
+        gif_duration_seconds: Duration of each GIF in seconds (ignored for screenshots)
+
+    Returns:
+        List of artifact metadata dicts with file, timestamp, type, etc.
+        Returns empty list on failure.
+    """
+    if not Path(input_file).is_file():
+        utils.error_print(
+            f"Video file not found: '{input_file}'",
+            [f"Expected location: {Path(input_file).resolve()}"],
+        )
+        return []
+
+    duration = get_file_duration(input_file)
+    if duration is None or duration <= 0:
+        return []
+
+    if interval_seconds <= 0:
+        utils.error_print("Interval must be a positive number of seconds.")
+        return []
+
+    ext = ".png" if output_format == "screen" else ".gif"
+    timestamps = list(range(0, duration, interval_seconds))
+    total = len(timestamps)
+    artifacts: List[Dict[str, Any]] = []
+
+    utils.standard_print(
+        f"Generating {total} {output_format}{'s' if total != 1 else ''} "
+        f"at {interval_seconds}s intervals from '{Path(input_file).name}'."
+    )
+
+    for i, ts in enumerate(timestamps):
+        ts_str = utils.seconds_to_timestamp(ts)
+        ts_safe = ts_str.replace(":", "_")
+        filename = f"gallery_{ts_safe}{ext}"
+        output_path = files.get_unique_filename(filename, file_format=ext)
+
+        if output_format == "screen":
+            ok = extract_screenshot(input_file, output_path, ts_str)
+            gif_dur = None
+        else:
+            gif_dur = min(gif_duration_seconds, duration - ts)
+            if gif_dur <= 0:
+                break
+            ok = extract_gif(input_file, output_path, ts_str, gif_dur)
+
+        if ok:
+            artifacts.append(
+                {
+                    "file": Path(output_path).name,
+                    "timestamp": float(ts),
+                    "timestamp_formatted": ts_str,
+                    "type": output_format,
+                    "duration": gif_dur,
+                }
+            )
+        utils.standard_print(f"  Captured {i + 1}/{total} at {ts_str}")
+
+    utils.info_print(
+        f"Gallery complete: {len(artifacts)} of {total} captures succeeded."
+    )
+    return artifacts

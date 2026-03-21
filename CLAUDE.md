@@ -26,7 +26,7 @@ clipgen is a Python CLI tool that generates clips from timestamps stored in a Go
 | [config.py](config.py) | Global constants and settings (version, headers, limits, commands) |
 | [google_api.py](google_api.py) | Google Sheets auth, worksheet selection by priority, spreadsheet listing/search |
 | [excel_io.py](excel_io.py) | Excel adapter: `ExcelSheetAdapter` mimics gspread Worksheet interface for local .xlsx |
-| [assets/web/](assets/web/) | Static HTML/JS/CSS template for the timeline viewer (`viewer.html`, `viewer.js`, `viewer.css`) |
+| [assets/web/](assets/web/) | Static HTML/JS/CSS templates for viewers: timeline (`viewer.html/js/css`), gallery (`gallery.html/js/css`) |
 
 ### Architecture overview
 
@@ -119,11 +119,14 @@ Source video filenames follow `{study}_{participant}.mp4` (e.g. `mystudy_P01.mp4
 | **chronologic** | Chronological reel for exactly one participant (available via reel selector `chronologic` or CLI `-T`) |
 | **highlights** | Auto-select best clips within a time budget, scored by severity, uniqueness, and keyword annotations (available via reel selector `highlights` or CLI `-H`) |
 | **reellate** | Build a reel from already-generated clips in the working directory |
+| **gallery** | Generate interval screenshots/GIFs from a video and build a gallery HTML viewer (available via interactive `gv`/`gallery` or CLI `--gallery`) |
 | **browse** | Interactive view of spreadsheet rows (no clip generation) |
 
 Reel selectors: `batch`, `keyword`, `chronologic`, `severity`, `highlights`, line numbers, ranges like `13-16`, quoted categories, cells like `P01.11`, participant IDs like `P01`.
 
 CLI mode flags are mutually exclusive for selection (`-b/-l/-r/-C/-c/-p/-k/-S/-M/-R/-T/-H`) and can be combined with output format flags (`--screen` or `--gif`) except reel/chronologic/highlights, which always output a single video reel. `-H/--highlights` generates a highlights reel scored by severity, uniqueness, and keyword annotations within a configurable time budget (default 180s); optionally pass a duration in seconds (e.g. `-H 120`). `-C/--category` accepts one or more category names (comma- or plus-separated, e.g. `"Observations,Onboarding"`), `-k/--keyword` selects only key-annotated clips, `-S/--severity` accepts severity levels (e.g. `"Critical,High"` or `"-4,-3"`), and `-M/--mixed` combines selectors for individual outputs. `--transcribe` can be combined with any mode/format to generate transcript files alongside artifacts; `--transcript-format` overrides the output format (`md`, `srt`, `vtt`).
+
+`--gallery [VIDEO]` generates interval screenshots or GIFs from a video file and builds a gallery HTML viewer. Combine with `--gif` for GIF output and `--interval N` to set the capture interval in seconds (default 10). No spreadsheet is required.
 
 Interactive-only modes without dedicated CLI flags:
 
@@ -144,6 +147,8 @@ Interactive-only modes without dedicated CLI flags:
 - `MAX_CLIP_DURATION_SECONDS` – 600 (10 min); prompts before generating longer clips
 - `DEFAULT_DURATION_SECONDS` – 60 (used when only start time is given)
 - `DEFAULT_GIF_DURATION_SECONDS` – 5 (GIF extraction length)
+- `GALLERY_INTERVAL_SECONDS` – 10 (default interval between gallery captures)
+- `GALLERY_GIF_DURATION_SECONDS` – 3 (default per-GIF duration in gallery mode)
 - `MAX_FILENAME_LENGTH` – 255
 - `MAX_FILESIZE_MB` – optional output filesize cap for generated videos (`0` disables)
 - `HIGHLIGHTS_REEL_DURATION_SECONDS` – 180 (3-minute time budget for highlights reel)
@@ -183,6 +188,14 @@ Reference spreadsheet layout is described in [README.md](README.md).
 - **Data contract** (`window.CLIPGEN_DATA`): JSON object with `meta` (study, participant, generatedAt, mode, sourceSpreadsheet, sourceFileType), `artifacts` (array of {id, type, file, start, end, study, participant, category, description, cellRow, cellCol, cellA1, annotations, sourceVideo}), and `timeline` ({duration, startOffset}).
 - **Key functions**: `build_artifact_records_for_clip()`, `finalize_timeline_data()`, `generate_timeline_viewer()` – all in [viewer.py](viewer.py).
 - Reel mode artifact collection is stubbed (returns empty artifacts list) for future enhancement.
+
+## Gallery HTML Viewer
+
+- **Opt-in**: CLI flag `--gallery [VIDEO]` or interactive `gv`/`gallery` mode.
+- **Assets**: Static template in [assets/web/](assets/web/) (`gallery.html`, `gallery.js`, `gallery.css`). Follows the same inlining pattern as the timeline viewer.
+- **Data contract** (`window.CLIPGEN_DATA`): JSON object with `meta` (sourceVideo, generatedAt, mode, format, interval, videoDuration) and `artifacts` (array of {file, timestamp, timestamp_formatted, type, duration}).
+- **Key functions**: `generate_interval_captures()` in [video.py](video.py), `finalize_gallery_data()` and `generate_gallery_viewer()` in [viewer.py](viewer.py).
+- Gallery artifacts are NOT written to the manifest by default.
 
 ## Transcription ([transcripts.py](transcripts.py))
 

@@ -77,6 +77,8 @@ MODE_ALIASES = {
     "timeline-viewer": "timeline-viewer",
     "rg": "regenerate",
     "regenerate": "regenerate",
+    "gv": "gallery",
+    "gallery": "gallery",
     "se": "settings",
     "settings": "settings",
 }
@@ -353,6 +355,7 @@ _ALL_MODE_HELP = _SELECTION_MODE_HELP + [
     "    g or gif     - Generate GIFs (.gif)",
     "    re or reel   - Combine selectors into one highlight reel video",
     "    rl or reellate - Combine existing clips into a highlight reel",
+    "    gv or gallery - Generate gallery from interval screenshots/GIFs of a video",
     "    br or browse - Browse spreadsheet rows interactively",
 ]
 
@@ -1459,6 +1462,95 @@ def _run_regenerate_mode() -> None:
     utils.info_print(f"Regenerated {regenerated} of {media_count} artifact(s).")
 
 
+def _run_gallery_mode_interactive() -> None:
+    """Interactive gallery mode: select a video, generate interval captures, build gallery viewer."""
+    utils.print_mode_heading("Gallery mode", "mode.gallery")
+
+    input_dir = utils.get_effective_input_dir()
+    videos = sorted(p for p in input_dir.glob(f"*{config.FILEFORMAT}") if p.is_file())
+    if not videos:
+        utils.error_print(
+            f"No {config.FILEFORMAT} files found in {input_dir}.",
+            ["Place a video file in the input directory and try again."],
+        )
+        return
+
+    utils.info_print("Available videos:")
+    for i, v in enumerate(videos, 1):
+        size_mb = v.stat().st_size / 1_000_000
+        utils.info_print(f"  {i}. {v.name}  ({size_mb:.0f} MB)")
+
+    selection = utils.read_user_input("Select a video (number or filename):\n>> ")
+    video_path: Optional[Path] = None
+    try:
+        idx = int(selection) - 1
+        if 0 <= idx < len(videos):
+            video_path = videos[idx]
+    except ValueError:
+        for v in videos:
+            if v.name == selection.strip() or v.stem == selection.strip():
+                video_path = v
+                break
+
+    if video_path is None:
+        utils.error_print(f"Could not find video matching '{selection}'.")
+        return
+
+    fmt_input = (
+        utils.read_user_input("Generate (s)creenshots or (g)ifs? [s]\n>> ")
+        .strip()
+        .lower()
+    )
+    output_format = "gif" if fmt_input in ("g", "gif") else "screen"
+
+    interval_input = utils.read_user_input(
+        f"Capture interval in seconds [{config.GALLERY_INTERVAL_SECONDS}]:\n>> "
+    ).strip()
+    try:
+        interval = (
+            int(interval_input) if interval_input else config.GALLERY_INTERVAL_SECONDS
+        )
+    except ValueError:
+        interval = config.GALLERY_INTERVAL_SECONDS
+    if interval <= 0:
+        interval = config.GALLERY_INTERVAL_SECONDS
+
+    gif_duration = config.GALLERY_GIF_DURATION_SECONDS
+    if output_format == "gif":
+        dur_input = utils.read_user_input(
+            f"GIF duration in seconds [{config.GALLERY_GIF_DURATION_SECONDS}]:\n>> "
+        ).strip()
+        try:
+            gif_duration = (
+                int(dur_input) if dur_input else config.GALLERY_GIF_DURATION_SECONDS
+            )
+        except ValueError:
+            gif_duration = config.GALLERY_GIF_DURATION_SECONDS
+        if gif_duration <= 0:
+            gif_duration = config.GALLERY_GIF_DURATION_SECONDS
+
+    artifacts = video.generate_interval_captures(
+        str(video_path),
+        interval_seconds=interval,
+        output_format=output_format,
+        gif_duration_seconds=gif_duration,
+    )
+    if not artifacts:
+        return
+
+    duration = video.get_file_duration(str(video_path)) or 0
+    data = viewer.finalize_gallery_data(
+        artifacts,
+        source_video=video_path.name,
+        video_duration=duration,
+        output_format=output_format,
+        interval=interval,
+    )
+    gallery_path = viewer.generate_gallery_viewer(data)
+    if gallery_path:
+        utils.info_print(f"Gallery viewer created: {gallery_path}")
+
+
 def _dispatch_interactive_mode(
     mode: Optional[str], worksheet: Any, raw_input: str
 ) -> Optional[Tuple[List[ClipRecord], bool, Optional[str]]]:
@@ -1491,6 +1583,9 @@ def _dispatch_interactive_mode(
         return None
     if mode == "regenerate":
         _run_regenerate_mode()
+        return None
+    if mode == "gallery":
+        _run_gallery_mode_interactive()
         return None
     if mode == "timeline-viewer":
         clips_list = spreadsheet.generate_list(worksheet, "batch", skip_prompts=True)
@@ -1572,7 +1667,7 @@ def run_interactive_mode(worksheet: Any) -> None:
             input_mode = utils.read_user_input(
                 "\nEnter mode or input directly:\n"
                 "  Tools: (s)creen, (g)if, (re)el, (rl) reel-late, (br)owse, (se)ttings \n"
-                "  Packs: (v)iewer, (tv) timeline-viewer, (rg) regenerate \n"
+                "  Packs: (v)iewer, (tv) timeline-viewer, (gv) gallery, (rg) regenerate \n"
                 "  Modes: (b)atch, (r)ange, (c)ategory, (l)ine, (ce)ll, (p)articipant, (k)eyword, (sv) severity \n"
                 '  Or enter mixed selectors directly: e.g. 5, P01.11, 13-16, "Observations"\n>> '
             )

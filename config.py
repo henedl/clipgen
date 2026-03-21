@@ -9,7 +9,7 @@ from icecream import ic
 REENCODING: bool = False
 AUDIO_NORMALIZE: bool = False
 FILEFORMAT: str = ".mp4"
-VERSIONNUM: str = "0.9.17"
+VERSIONNUM: str = "0.9.18"
 TITLECARDS_ENABLED: bool = False
 TITLECARD_DURATION_SECONDS: int = 2
 WORKSHEET_PRIORITY: List[str] = [
@@ -76,6 +76,8 @@ MAX_FILENAME_LENGTH: int = 255
 MAX_CLIP_DURATION_SECONDS: int = 600  # 10 minutes
 DEFAULT_DURATION_SECONDS: int = 60
 DEFAULT_GIF_DURATION_SECONDS: int = 5
+GALLERY_INTERVAL_SECONDS: int = 10  # Default interval between gallery captures
+GALLERY_GIF_DURATION_SECONDS: int = 3  # Default per-GIF duration in gallery mode
 MAX_FILESIZE_MB: int = 0  # Maximum output file size in MB (0 = disabled)
 MIN_SOURCE_VIDEO_SIZE_MB: int = 100  # Minimum file size (MB) to consider as a source video candidate during fuzzy matching
 MANIFEST_FILENAME: str = "clipgen_manifest.json"

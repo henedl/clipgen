@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>clipgen Gallery</title>
+  <link rel="stylesheet" href="gallery.css">
+</head>
+<body>
+  <header id="pageHeader">
+    <div id="pageHeaderTop">
+      <h1>clipgen <span class="header-light">Gallery</span></h1>
+      <button id="themeToggle" type="button" aria-label="Toggle dark mode" aria-pressed="false">
+        <span class="theme-toggle-icon theme-icon-sun"></span>
+        <span class="theme-toggle-icon theme-icon-moon"></span>
+      </button>
+    </div>
+    <div id="headerMeta">
+      <span id="sourceVideo"></span>
+      <span id="generatedAt"></span>
+    </div>
+  </header>
+
+  <section id="galleryInfo">
+    <span id="artifactCount"></span>
+    <span id="intervalInfo"></span>
+  </section>
+
+  <section id="galleryGrid"></section>
+
+  <div id="emptyState" class="hidden">
+    <p>No gallery artifacts were generated.</p>
+  </div>
+
+  <div id="lightbox" class="hidden" role="dialog" aria-label="Image viewer">
+    <button id="lightboxClose" type="button" aria-label="Close">&times;</button>
+    <button id="lightboxPrev" type="button" aria-label="Previous">&lsaquo;</button>
+    <div id="lightboxContent"></div>
+    <button id="lightboxNext" type="button" aria-label="Next">&rsaquo;</button>
+    <div id="lightboxCaption"></div>
+  </div>
+
+  <!-- CLIPGEN_DATA_HERE -->
+  <script src="gallery.js" defer></script>
+</body>
+</html>

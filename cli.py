@@ -273,6 +273,20 @@ Note: Non-interactive mode (using -b, -l, -r, -C, -c, -p, -k, -S, -M, -R, or -T)
         action="store_true",
         help="Launch the Studio web interface for interactive artifact generation and reel building",
     )
+    viewer_manifest.add_argument(
+        "--gallery",
+        type=str,
+        nargs="?",
+        const="",
+        metavar="VIDEO",
+        help="Generate a gallery viewer with interval screenshots/GIFs from a video file",
+    )
+    viewer_manifest.add_argument(
+        "--interval",
+        type=int,
+        metavar="SECONDS",
+        help=f"Capture interval in seconds for gallery mode (default: {config.GALLERY_INTERVAL_SECONDS})",
+    )
 
     run_opts = parser.add_argument_group("run options")
     run_opts.add_argument(
@@ -661,6 +675,60 @@ def _resolve_highlights_output_file(
 # ---- CLI mode runner ----
 
 
+def _run_gallery_cli(args: argparse.Namespace) -> None:
+    """Generate interval captures from a video and build a gallery viewer (no spreadsheet needed)."""
+    gallery_arg = getattr(args, "gallery", "")
+    input_dir = utils.get_effective_input_dir()
+
+    if gallery_arg:
+        video_path = Path(gallery_arg)
+        if not video_path.is_absolute():
+            video_path = input_dir / video_path
+    else:
+        videos = sorted(
+            p for p in input_dir.glob(f"*{config.FILEFORMAT}") if p.is_file()
+        )
+        if not videos:
+            utils.error_print(
+                f"No {config.FILEFORMAT} files found in {input_dir}.",
+                [
+                    "Specify a video file: --gallery path/to/video.mp4",
+                    "Or place a video file in the input directory.",
+                ],
+            )
+            return
+        video_path = videos[0]
+        utils.info_print(f"Using video: {video_path.name}")
+
+    if not video_path.is_file():
+        utils.error_print(f"Video file not found: '{video_path}'")
+        return
+
+    output_format = "gif" if getattr(args, "gif", False) else "screen"
+    interval = getattr(args, "interval", None) or config.GALLERY_INTERVAL_SECONDS
+
+    artifacts = video.generate_interval_captures(
+        str(video_path),
+        interval_seconds=interval,
+        output_format=output_format,
+        gif_duration_seconds=config.GALLERY_GIF_DURATION_SECONDS,
+    )
+    if not artifacts:
+        return
+
+    duration = video.get_file_duration(str(video_path)) or 0
+    data = viewer.finalize_gallery_data(
+        artifacts,
+        source_video=video_path.name,
+        video_duration=duration,
+        output_format=output_format,
+        interval=interval,
+    )
+    gallery_path = viewer.generate_gallery_viewer(data)
+    if gallery_path:
+        utils.info_print(f"Gallery viewer created: {gallery_path}")
+
+
 def _run_timeline_viewer_mode(worksheet: Any, args: Any) -> None:
     """Export all clips via batch mode and generate a per-participant timeline viewer."""
     clips_list = spreadsheet.generate_list(worksheet, "batch", skip_prompts=True)
@@ -872,6 +940,34 @@ def main() -> None:
             )
             sys.exit(1)
 
+    gallery_arg = getattr(args, "gallery", None)
+    if gallery_arg is not None:
+        conflicting = [
+            args.batch,
+            args.lines,
+            args.range,
+            args.category,
+            args.cell,
+            args.participant,
+            args.keyword,
+            args.severity,
+            mixed_selectors,
+            args.reel,
+            args.chronologic,
+            args.viewer,
+            getattr(args, "regenerate", False),
+            timeline_viewer,
+            studio_mode,
+        ]
+        if any(conflicting):
+            utils.error_print(
+                "--gallery cannot be combined with selection modes, --viewer, --regenerate, --studio, or --timeline-viewer.",
+                [
+                    "Only --gif, --interval, -i/-o (directories), and -v (verbose) may be used alongside --gallery."
+                ],
+            )
+            sys.exit(1)
+
     cli_mode = (
         args.batch
         or args.lines
@@ -953,6 +1049,11 @@ def main() -> None:
         viewer_path = viewer.generate_timeline_viewer(data)
         if viewer_path:
             utils.info_print(f"Timeline viewer created from manifest: {viewer_path}")
+        sys.exit(0)
+
+    # Standalone gallery: generate interval captures + gallery viewer, no spreadsheet needed
+    if gallery_arg is not None:
+        _run_gallery_cli(args)
         sys.exit(0)
 
     # Standalone regenerate: re-export all media artifacts from saved manifest
