@@ -113,12 +113,20 @@ def test_process_reel_concatenates_and_cleans_temp_parts(monkeypatch, make_clip)
     monkeypatch.setattr(clipgen.video, "concatenate_clips", concat)
     monkeypatch.setattr(clipgen.Path, "unlink", unlink)
 
-    result, _artifacts = clipgen.process_reel(raw_clips, output_file="reel.mp4")
+    result, reel_records = clipgen.process_reel(raw_clips, output_file="reel.mp4")
     assert result == 1
     concat.assert_called_once()
     concat_args = concat.call_args.args[0]
     assert concat_args == generated_parts
     assert unlink.call_count == len(generated_parts)
+
+    assert len(reel_records) == 1
+    reel = reel_records[0]
+    assert reel["id"].startswith("reel_")
+    assert reel["file"] == "reel.mp4"
+    assert len(reel["components"]) == 2
+    assert reel["components"][0]["cellRow"] == 3
+    assert reel["components"][1]["cellRow"] == 4
 
 
 def test_process_reel_returns_zero_when_no_segments_generated(monkeypatch, make_clip):

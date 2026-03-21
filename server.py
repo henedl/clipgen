@@ -25,6 +25,7 @@ FlaskResponse = Union[Response, Tuple[Response, int]]
 _worksheet: Any = None
 _sheet_context: Optional[spreadsheet.SheetContext] = None
 _generated_artifacts: List[Dict[str, Any]] = []
+_generated_reels: List[Dict[str, Any]] = []
 
 # ---- Flask app ----
 
@@ -173,8 +174,9 @@ def api_reel() -> FlaskResponse:
                 {"ok": False, "error": "No clips found for the specified cells"}
             ), 400
 
-        generated, artifacts = clipgen.process_reel(clips)
-        return jsonify({"ok": True, "generated": generated})
+        generated, reel_records = clipgen.process_reel(clips)
+        _generated_reels.extend(reel_records)
+        return jsonify({"ok": True, "generated": generated, "reels": reel_records})
 
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500

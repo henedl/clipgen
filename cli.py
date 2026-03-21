@@ -808,11 +808,15 @@ def run_cli_mode(worksheet: Any, args: Any, cli_mode_args: CliModeArgs) -> None:
 
     clips_list = _generate_cli_clips(worksheet, args, cli_mode_args)
 
-    if args.reel or args.chronologic or args.highlights:
+    is_reel = bool(args.reel or args.chronologic or args.highlights)
+    artifacts: list = []
+    reel_records: list = []
+
+    if is_reel:
         reel_output_file = _resolve_chronologic_output_file(args, clips_list)
         if args.highlights and reel_output_file is None:
             reel_output_file = _resolve_highlights_output_file(clips_list)
-        outputs_generated, artifacts = clipgen.process_reel(
+        outputs_generated, reel_records = clipgen.process_reel(
             clips_list,
             output_file=reel_output_file,
         )
@@ -828,17 +832,16 @@ def run_cli_mode(worksheet: Any, args: Any, cli_mode_args: CliModeArgs) -> None:
     clipgen._print_completion_message(
         outputs_generated,
         output_format,
-        is_reel=bool(args.reel or args.chronologic or args.highlights),
+        is_reel=is_reel,
     )
 
-    if (
-        getattr(args, "viewer", False) or getattr(args, "manifest", False)
-    ) and artifacts:
+    ws_title = getattr(worksheet, "title", "")
+    is_excel = clipgen._is_excel_worksheet(worksheet)
+    effective_mode = output_format if output_format != "clip" else "batch"
+
+    if (getattr(args, "viewer", False) or getattr(args, "manifest", False)) and artifacts:
         study = artifacts[0].get("study", "")
         participant = artifacts[0].get("participant", "")
-        ws_title = getattr(worksheet, "title", "")
-        is_excel = clipgen._is_excel_worksheet(worksheet)
-        effective_mode = output_format if output_format != "clip" else "batch"
 
         if getattr(args, "viewer", False):
             data = viewer.finalize_timeline_data(
@@ -857,6 +860,7 @@ def run_cli_mode(worksheet: Any, args: Any, cli_mode_args: CliModeArgs) -> None:
         if getattr(args, "manifest", False):
             manifest_path = viewer.save_manifest(
                 artifacts,
+                new_reels=reel_records or None,
                 study=study,
                 participant=participant,
                 worksheet_title=ws_title,
@@ -866,6 +870,19 @@ def run_cli_mode(worksheet: Any, args: Any, cli_mode_args: CliModeArgs) -> None:
             )
             if manifest_path:
                 utils.info_print(f"Manifest updated: {manifest_path}")
+
+    elif getattr(args, "manifest", False) and reel_records:
+        study = reel_records[0].get("study", "")
+        manifest_path = viewer.save_manifest(
+            [],
+            new_reels=reel_records,
+            study=study,
+            worksheet_title=ws_title,
+            is_excel=is_excel,
+            mode="reel",
+        )
+        if manifest_path:
+            utils.info_print(f"Manifest updated: {manifest_path}")
 
 
 # ---- Main entry point ----
@@ -1056,10 +1073,11 @@ def main() -> None:
         _run_gallery_cli(args)
         sys.exit(0)
 
-    # Standalone regenerate: re-export all media artifacts from saved manifest
+    # Standalone regenerate: re-export all media artifacts and reels from saved manifest
     if getattr(args, "regenerate", False) and not cli_mode:
         existing_artifacts = viewer.load_manifest_artifacts()
-        if not existing_artifacts:
+        existing_reels = viewer.load_manifest_reels()
+        if not existing_artifacts and not existing_reels:
             utils.error_print(
                 "No manifest found or manifest is empty.",
                 [
@@ -1070,11 +1088,15 @@ def main() -> None:
         media_count = sum(
             1 for a in existing_artifacts if a.get("type") != "transcript"
         )
+        reel_count = len(existing_reels)
+        total = media_count + reel_count
         utils.info_print(
-            f"Found {media_count} media artifact(s) in manifest. Regenerating..."
+            f"Found {media_count} media artifact(s) and {reel_count} reel(s) in manifest. Regenerating..."
         )
-        regenerated = clipgen.regenerate_from_manifest(existing_artifacts)
-        utils.info_print(f"Regenerated {regenerated} of {media_count} artifact(s).")
+        regenerated = clipgen.regenerate_from_manifest(
+            existing_artifacts, reels=existing_reels
+        )
+        utils.info_print(f"Regenerated {regenerated} of {total} item(s).")
         sys.exit(0)
 
     # Authenticate with Google (once per run)

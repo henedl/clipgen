@@ -15,6 +15,7 @@ This script supports full unicode/UTF-8 for international characters in:
 """
 
 import difflib
+import hashlib
 import os
 import sys
 from pathlib import Path
@@ -852,9 +853,9 @@ def process_reel(
     """Process clips for reel mode: generate individual clips, concatenate into one video, clean up.
 
     Returns:
-        Tuple of (1 if reel generated successfully else 0, artifact records list).
-        Artifact collection for reels is reserved for a future enhancement;
-        the artifacts list is always empty for now.
+        Tuple of (1 if reel generated successfully else 0, reel records list).
+        Each reel record contains an ``id``, ``file``, ``study``, ``description``,
+        and an ordered ``components`` list with per-segment metadata for regeneration.
     """
     if not clips_list:
         utils.warning_print(
@@ -870,6 +871,7 @@ def process_reel(
             break
 
     fuzzy_matches: Dict[str, Optional[str]] = {}
+    components: List[Dict[str, Any]] = []
 
     def process_reel_clip(
         clip: Any, missing_videos: Set[str]
@@ -885,6 +887,20 @@ def process_reel(
             filename_prefix="_reel_part_",
             collect_paths=True,
         )
+        for _out_path, start_str, end_str in segment_paths:
+            components.append(
+                {
+                    "cellRow": getattr(clip.get("cell"), "row", None),
+                    "cellCol": getattr(clip.get("cell"), "col", None),
+                    "participant": clip.get("participant", ""),
+                    "sourceVideo": base_video,
+                    "start": utils.timestamp_to_seconds(start_str),
+                    "end": utils.timestamp_to_seconds(end_str),
+                    "category": clip.get("category", ""),
+                    "description": clip.get("desc", ""),
+                    "severity": clip.get("severity", ""),
+                }
+            )
         return segment_paths
 
     all_segment_paths, _ = _run_clip_pipeline(
@@ -923,21 +939,41 @@ def process_reel(
             utils.warning_print(
                 f"Could not remove temporary reel clip: {path}", [str(e)]
             )
-    return (1, []) if ok else (0, [])
+
+    if not ok:
+        return (0, [])
+
+    parts = sorted(
+        f"{c['cellRow']}:{c['cellCol']}:{c['start']}:{c['end']}" for c in components
+    )
+    reel_id = "reel_" + hashlib.sha256("|".join(parts).encode()).hexdigest()[:8]
+    reel_record = {
+        "id": reel_id,
+        "file": Path(output_file).name,
+        "study": study_name,
+        "description": f"Reel: {len(components)} segments",
+        "components": components,
+    }
+    return (1, [reel_record])
 
 
-def regenerate_from_manifest(artifacts: List[Dict[str, Any]]) -> int:
-    """Regenerate media artifacts from manifest entries.
+def regenerate_from_manifest(
+    artifacts: List[Dict[str, Any]],
+    reels: Optional[List[Dict[str, Any]]] = None,
+) -> int:
+    """Regenerate media artifacts and reels from manifest entries.
 
     Skips transcript-type artifacts. For each clip/screen/gif artifact,
     resolves the source video, converts start/end seconds to timestamps,
-    and invokes the appropriate ffmpeg operation.
+    and invokes the appropriate ffmpeg operation. For each reel, regenerates
+    component clips then concatenates them.
 
-    Returns the number of successfully regenerated artifacts.
+    Returns the number of successfully regenerated items.
     """
     media = [a for a in artifacts if a.get("type") != "transcript"]
-    if not media:
-        utils.warning_print("No media artifacts to regenerate.")
+    total = len(media) + len(reels or [])
+    if total == 0:
+        utils.warning_print("No media artifacts or reels to regenerate.")
         return 0
 
     utils.print_mode_heading("Regenerating artifacts", "mode.regenerate")
@@ -947,7 +983,7 @@ def regenerate_from_manifest(artifacts: List[Dict[str, Any]]) -> int:
     progress = utils.create_progress_bar()
     if progress:
         with progress:
-            task = progress.add_task("Regenerating", total=len(media))
+            task = progress.add_task("Regenerating", total=total)
             for artifact in media:
                 desc_preview = (artifact.get("description") or "")[
                     : config.PROGRESS_DESCRIPTION_LENGTH
@@ -959,9 +995,17 @@ def regenerate_from_manifest(artifacts: List[Dict[str, Any]]) -> int:
                 if _regenerate_single_artifact(artifact, missing_videos):
                     generated += 1
                 progress.update(task, advance=1)
+            for reel in reels or []:
+                progress.update(task, description=reel.get("description", "Reel")[:config.PROGRESS_DESCRIPTION_LENGTH])
+                if _regenerate_reel(reel, missing_videos):
+                    generated += 1
+                progress.update(task, advance=1)
     else:
         for artifact in media:
             if _regenerate_single_artifact(artifact, missing_videos):
+                generated += 1
+        for reel in reels or []:
+            if _regenerate_reel(reel, missing_videos):
                 generated += 1
 
     if missing_videos:
@@ -1021,6 +1065,50 @@ def _regenerate_single_artifact(
             f"Unknown artifact type '{artifact_type}' for '{artifact.get('file', '?')}', skipping."
         )
         return False
+
+
+def _regenerate_reel(reel: Dict[str, Any], missing_videos: Set[str]) -> bool:
+    """Regenerate a reel from its manifest entry by cutting components then concatenating."""
+    components = reel.get("components", [])
+    if not components:
+        return False
+
+    temp_paths: List[str] = []
+    for comp in components:
+        source = comp.get("sourceVideo", "")
+        source_path = str(utils.resolve_input_path(source))
+        if not Path(source_path).is_file():
+            if source_path not in missing_videos:
+                missing_videos.add(source_path)
+                utils.warning_print(f"Source video not found: '{source}'")
+            continue
+
+        start_ts = utils.seconds_to_timestamp(int(comp["start"]))
+        end_ts = utils.seconds_to_timestamp(int(comp["end"]))
+        out_name = files.get_unique_filename(
+            f"_reel_part_{len(temp_paths) + 1}{config.FILEFORMAT}"
+        )
+        if video.run_ffmpeg(
+            input_file=source_path,
+            output_file=out_name,
+            start_pos=start_ts,
+            end_pos=end_ts,
+            reencode=config.REENCODING,
+        ):
+            temp_paths.append(out_name)
+
+    if not temp_paths:
+        return False
+
+    output_file = str(utils.resolve_output_path(reel.get("file", "reel.mp4")))
+    ok = video.concatenate_clips(temp_paths, output_file, reencode_on_fail=True)
+
+    for p in temp_paths:
+        try:
+            Path(p).unlink(missing_ok=True)
+        except OSError:
+            pass
+    return ok
 
 
 # ---- Interactive mode flows ----
@@ -1387,6 +1475,7 @@ def _run_format_mode_interactive(worksheet: Any, output_format: str) -> None:
         if config.MANIFEST_ENABLED:
             viewer.save_manifest(
                 viewer.INTERACTIVE_ARTIFACTS,
+                new_reels=viewer.INTERACTIVE_REELS,
                 study=artifacts[0].get("study", ""),
                 worksheet_title=getattr(worksheet, "title", ""),
                 is_excel=_is_excel_worksheet(worksheet),
@@ -1439,27 +1528,30 @@ def _run_viewer_mode(worksheet: Any) -> None:
 
 
 def _run_regenerate_mode() -> None:
-    """Regenerate all media artifacts from saved manifest."""
+    """Regenerate all media artifacts and reels from saved manifest."""
     existing_artifacts = viewer.load_manifest_artifacts()
-    if not existing_artifacts:
+    existing_reels = viewer.load_manifest_reels()
+    if not existing_artifacts and not existing_reels:
         utils.info_print(
             "No manifest file found.\nGenerate clips first with --manifest to save one."
         )
         return
     media_count = sum(1 for a in existing_artifacts if a.get("type") != "transcript")
-    if media_count == 0:
+    reel_count = len(existing_reels)
+    total = media_count + reel_count
+    if total == 0:
         utils.info_print(
             "Manifest contains only transcript artifacts; nothing to regenerate."
         )
         return
     yn = utils.read_user_input(
-        f"Found {media_count} media artifact(s) in manifest.\n"
+        f"Found {media_count} media artifact(s) and {reel_count} reel(s) in manifest.\n"
         "Regenerate all? [y/n]\n>> "
     )
     if yn.strip().lower() != "y":
         return
-    regenerated = regenerate_from_manifest(existing_artifacts)
-    utils.info_print(f"Regenerated {regenerated} of {media_count} artifact(s).")
+    regenerated = regenerate_from_manifest(existing_artifacts, reels=existing_reels)
+    utils.info_print(f"Regenerated {regenerated} of {total} item(s).")
 
 
 def _run_gallery_mode_interactive() -> None:
@@ -1567,6 +1659,7 @@ def _dispatch_interactive_mode(
                 if config.MANIFEST_ENABLED:
                     viewer.save_manifest(
                         viewer.INTERACTIVE_ARTIFACTS,
+                        new_reels=viewer.INTERACTIVE_REELS,
                         study=artifacts[0].get("study", ""),
                         worksheet_title=getattr(worksheet, "title", ""),
                         is_excel=_is_excel_worksheet(worksheet),
@@ -1598,6 +1691,7 @@ def _dispatch_interactive_mode(
             if config.MANIFEST_ENABLED:
                 viewer.save_manifest(
                     viewer.INTERACTIVE_ARTIFACTS,
+                    new_reels=viewer.INTERACTIVE_REELS,
                     study=artifacts[0].get("study", ""),
                     worksheet_title=getattr(worksheet, "title", ""),
                     is_excel=_is_excel_worksheet(worksheet),
@@ -1659,6 +1753,7 @@ def _dispatch_interactive_mode(
 def run_interactive_mode(worksheet: Any) -> None:
     """Execute interactive mode - main processing loop."""
     viewer.INTERACTIVE_ARTIFACTS.clear()
+    viewer.INTERACTIVE_REELS.clear()
 
     while True:
         try:
@@ -1702,25 +1797,36 @@ def run_interactive_mode(worksheet: Any) -> None:
                     break
                 continue
             if is_reel:
-                outputs_generated, artifacts = process_reel(
+                outputs_generated, reel_records = process_reel(
                     clips_list,
                     output_file=reel_output_file,
                 )
+                if reel_records:
+                    viewer.INTERACTIVE_REELS.extend(reel_records)
+                    if config.MANIFEST_ENABLED:
+                        viewer.save_manifest(
+                            viewer.INTERACTIVE_ARTIFACTS,
+                            new_reels=viewer.INTERACTIVE_REELS,
+                            study=reel_records[0].get("study", ""),
+                            worksheet_title=getattr(worksheet, "title", ""),
+                            is_excel=_is_excel_worksheet(worksheet),
+                            mode="interactive",
+                        )
             else:
                 outputs_generated, artifacts = process_clips(
                     clips_list, include_severity=(resolved_mode == "severity")
                 )
-
-            if artifacts:
-                viewer.INTERACTIVE_ARTIFACTS.extend(artifacts)
-                if config.MANIFEST_ENABLED:
-                    viewer.save_manifest(
-                        viewer.INTERACTIVE_ARTIFACTS,
-                        study=artifacts[0].get("study", ""),
-                        worksheet_title=getattr(worksheet, "title", ""),
-                        is_excel=_is_excel_worksheet(worksheet),
-                        mode="interactive",
-                    )
+                if artifacts:
+                    viewer.INTERACTIVE_ARTIFACTS.extend(artifacts)
+                    if config.MANIFEST_ENABLED:
+                        viewer.save_manifest(
+                            viewer.INTERACTIVE_ARTIFACTS,
+                            new_reels=viewer.INTERACTIVE_REELS,
+                            study=artifacts[0].get("study", ""),
+                            worksheet_title=getattr(worksheet, "title", ""),
+                            is_excel=_is_excel_worksheet(worksheet),
+                            mode="interactive",
+                        )
 
             if not config.REENCODING:
                 _print_reencoding_warning(utils.info_print)

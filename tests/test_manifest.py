@@ -101,6 +101,90 @@ def test_manifest_contains_valid_timeline_data_structure(tmp_path, monkeypatch):
     assert raw["timeline"]["duration"] > 0
 
 
+def test_save_and_load_reels_roundtrip(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "OUTPUT_DIR", str(tmp_path))
+    reel = {
+        "id": "reel_abcd1234",
+        "file": "study_reel.mp4",
+        "study": "study",
+        "description": "Reel: 2 segments",
+        "components": [
+            {
+                "cellRow": 3,
+                "cellCol": 2,
+                "participant": "P01",
+                "sourceVideo": "study_P01.mp4",
+                "start": 10.0,
+                "end": 20.0,
+                "category": "cat",
+                "description": "desc1",
+                "severity": "",
+            },
+            {
+                "cellRow": 4,
+                "cellCol": 2,
+                "participant": "P01",
+                "sourceVideo": "study_P01.mp4",
+                "start": 30.0,
+                "end": 40.0,
+                "category": "cat",
+                "description": "desc2",
+                "severity": "",
+            },
+        ],
+    }
+
+    path = viewer.save_manifest([], new_reels=[reel], study="study", mode="reel")
+    assert path is not None
+
+    loaded_reels = viewer.load_manifest_reels()
+    assert len(loaded_reels) == 1
+    assert loaded_reels[0]["id"] == "reel_abcd1234"
+    assert len(loaded_reels[0]["components"]) == 2
+
+    # Verify reels key is in raw JSON
+    raw = json.loads((tmp_path / config.MANIFEST_FILENAME).read_text())
+    assert "reels" in raw
+    assert len(raw["reels"]) == 1
+
+
+def test_save_manifest_merges_reels_and_artifacts(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "OUTPUT_DIR", str(tmp_path))
+
+    # First save: one artifact
+    viewer.save_manifest([_make_artifact("a4c2s0")])
+
+    # Second save: one reel, no new artifacts
+    reel = {
+        "id": "reel_abcd1234",
+        "file": "reel.mp4",
+        "study": "study",
+        "description": "Reel: 1 segment",
+        "components": [
+            {
+                "cellRow": 3,
+                "cellCol": 2,
+                "participant": "P01",
+                "sourceVideo": "study_P01.mp4",
+                "start": 10.0,
+                "end": 20.0,
+                "category": "cat",
+                "description": "desc",
+                "severity": "",
+            }
+        ],
+    }
+    viewer.save_manifest([], new_reels=[reel])
+
+    assert len(viewer.load_manifest_artifacts()) == 1
+    assert len(viewer.load_manifest_reels()) == 1
+
+
+def test_load_manifest_reels_returns_empty_when_no_file(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "OUTPUT_DIR", str(tmp_path))
+    assert viewer.load_manifest_reels() == []
+
+
 def test_cli_manifest_flag_parsed(monkeypatch):
     import cli
 

@@ -17,8 +17,9 @@ import config
 import files
 import utils
 
-# Mutable list of artifact records collected during an interactive session.
+# Mutable lists of records collected during an interactive session.
 INTERACTIVE_ARTIFACTS: List[Dict[str, Any]] = []
+INTERACTIVE_REELS: List[Dict[str, Any]] = []
 
 
 def build_artifact_records_for_clip(
@@ -87,6 +88,7 @@ def build_artifact_records_for_clip(
 def finalize_timeline_data(
     artifacts: List[Dict[str, Any]],
     *,
+    reels: Optional[List[Dict[str, Any]]] = None,
     study: str = "",
     participant: str = "",
     worksheet_title: str = "",
@@ -103,7 +105,7 @@ def finalize_timeline_data(
 
     duration = max_time * 1.05 if max_time > 0 else 0.0
 
-    return {
+    data: Dict[str, Any] = {
         "meta": {
             "study": study,
             "participant": participant,
@@ -118,6 +120,9 @@ def finalize_timeline_data(
             "startOffset": 0.0,
         },
     }
+    if reels:
+        data["reels"] = reels
+    return data
 
 
 _CLIPGEN_DATA_PLACEHOLDER = "<!-- CLIPGEN_DATA_HERE -->"
@@ -314,9 +319,22 @@ def load_manifest_artifacts() -> List[Dict[str, Any]]:
         return []
 
 
+def load_manifest_reels() -> List[Dict[str, Any]]:
+    """Load reel records from the manifest file, or return [] if unavailable."""
+    manifest_path = Path(utils.get_effective_output_dir()) / config.MANIFEST_FILENAME
+    if not manifest_path.is_file():
+        return []
+    try:
+        data = json.loads(manifest_path.read_text(encoding="utf-8"))
+        return data.get("reels", [])
+    except (OSError, json.JSONDecodeError, AttributeError):
+        return []
+
+
 def save_manifest(
     new_artifacts: List[Dict[str, Any]],
     *,
+    new_reels: Optional[List[Dict[str, Any]]] = None,
     study: str = "",
     participant: str = "",
     worksheet_title: str = "",
@@ -324,9 +342,9 @@ def save_manifest(
     mode: str = "",
     output_format: str = "clip",
 ) -> Optional[Path]:
-    """Merge new artifacts into the manifest file and write it back.
+    """Merge new artifacts and reels into the manifest file and write it back.
 
-    Deduplicates by artifact ``id``; newer entries win.
+    Deduplicates by ``id``; newer entries win.
     Returns the manifest path on success, or None on failure.
     """
     existing = load_manifest_artifacts()
@@ -335,8 +353,15 @@ def save_manifest(
         merged[a["id"]] = a
     all_artifacts = list(merged.values())
 
+    existing_reels = load_manifest_reels()
+    reel_merged = {r["id"]: r for r in existing_reels}
+    for r in new_reels or []:
+        reel_merged[r["id"]] = r
+    all_reels = list(reel_merged.values())
+
     data = finalize_timeline_data(
         all_artifacts,
+        reels=all_reels or None,
         study=study,
         participant=participant,
         worksheet_title=worksheet_title,
