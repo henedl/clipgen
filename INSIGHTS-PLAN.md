@@ -64,7 +64,8 @@ Sprite sheets enable hover-to-scrub previews in the media library and inline thu
 1. **Generation**: `video.generate_sprite_sheet(input_file, output_file, ...)` extracts frames at intervals and tiles them into a single PNG image.
 
 2. **ffmpeg command pattern**:
-   ```
+
+   ```bash
    ffmpeg -i input.mp4 -vf "fps=1/{interval},scale={thumb_width}:-1,tile={cols}x{rows}" -frames:v 1 output_sprite.png
    ```
 
@@ -75,6 +76,7 @@ Sprite sheets enable hover-to-scrub previews in the media library and inline thu
 5. **Storage**: sprite sheet PNGs saved alongside clip artifacts in the output directory. Naming: `{clip_basename}_sprite.png`.
 
 6. **Metadata**: the existing `thumbnail` field in artifact records (currently always `""`) is repurposed for the sprite sheet filename. A `spriteData` object provides grid dimensions:
+
    ```json
    {
      "thumbnail": "clip_name_sprite.png",
@@ -92,7 +94,8 @@ Sprite sheets enable hover-to-scrub previews in the media library and inline thu
 7. **When generated**: on builder startup (blocking), before opening the browser. The server iterates clip artifacts and generates sprite sheets for any that lack them. Once a sprite sheet exists on disk, it is served directly without regeneration.
 
 8. **Frontend hover-to-scrub**: mouse X position over the thumbnail maps to a frame index. The sprite sheet is set as CSS `background-image`, and `background-position` is updated on `mousemove`:
-   ```
+
+   ```css
    frameIndex = floor((mouseX / cardWidth) * frameCount)
    col = frameIndex % cols
    row = floor(frameIndex / cols)
@@ -111,7 +114,7 @@ SPRITE_SHEET_MIN_INTERVAL = 1      # Minimum seconds between frames
 
 ### Overall Layout
 
-```
+```ascii
 +------------------------------------------------------------------+
 | HEADER: "clipgen Insight Builder"   [Save] [Generate Viewer] [O] |
 | N artifact(s) | M insight(s) | [unsaved indicator]               |
@@ -138,6 +141,7 @@ Each insight card has three horizontal areas -  Cause, Behavior, Imapct -  with 
 The media library takes inspiration from video editing suites. It is a visual-first browsing experience for all artifacts in the manifest.
 
 **Resizable behavior:**
+
 - Default width: ~420px
 - Minimum width: 280px
 - Maximum width: 50% of viewport
@@ -146,6 +150,7 @@ The media library takes inspiration from video editing suites. It is a visual-fi
 - Width persisted to `localStorage`
 
 **Filter panel** (top of sidebar, collapsible):
+
 - Participant dropdown — "All participants" default
 - Category dropdown — "All categories" default
 - Severity dropdown — "All severities" default, hidden if no severity data exists
@@ -155,6 +160,7 @@ The media library takes inspiration from video editing suites. It is a visual-fi
 - Filter implementation ports the proven pattern from the timeline viewer (`viewer.js`): `populateFilters()` extracts unique values, `fillSelect()` builds option elements, `applyFilters()` reads all filter values and filters the array, `bindFilterEvents()` attaches change listeners. Filter state is purely client-side.
 
 **Artifact card grid** (scrollable area below filters):
+
 - Cards in a responsive layout (single column in narrow sidebar, 2-column grid when widened)
 - Each card shows:
   - **Media area**: For clips, a div with sprite sheet as `background-image`. On hover, mouse X position maps to frame index and updates `background-position` for scrub preview. On mouse leave, resets to first frame. For screenshots and GIFs, a standard `<img>` element.
@@ -222,7 +228,7 @@ Light/dark theme toggle, preference persisted to `localStorage`. Shared pattern 
 The builder is served by `insights_server.py` (Flask).
 
 | Method | Path | Description |
-|--------|------|-------------|
+| -------- | ------ | ------------- |
 | GET | `/` | Serve `insights-builder.html` |
 | GET | `/<filename>` | Serve static assets (CSS, JS) |
 | GET | `/media/<filename>` | Serve video/image artifacts and sprite sheets from output directory |
