@@ -726,6 +726,7 @@
     var hasDirty = Object.keys(state.dirtyIds).length > 0;
     qs("#unsavedIndicator").classList.toggle("hidden", !hasDirty);
     qs("#saveAllBtn").disabled = !hasDirty;
+    qs("#discardBtn").disabled = !hasDirty;
   }
 
   function saveAll() {
@@ -776,6 +777,21 @@
         delete state.dirtyIds[insightId];
         updateDirtyUI();
         showToast("Insight saved.");
+      });
+  }
+
+  function discardAll() {
+    if (!confirm("Discard all unsaved changes?")) return;
+    fetch("api/insights")
+      .then(function (r) {
+        return r.json();
+      })
+      .then(function (data) {
+        state.insights = data.insights || [];
+        state.dirtyIds = {};
+        updateDirtyUI();
+        renderInsightCards();
+        showToast("Changes discarded.");
       });
   }
 
@@ -1236,6 +1252,7 @@
 
     // Header buttons
     qs("#saveAllBtn").addEventListener("click", saveAll);
+    qs("#discardBtn").addEventListener("click", discardAll);
     qs("#newInsightBtn").addEventListener("click", createNewInsight);
 
     // Popover bucket buttons
