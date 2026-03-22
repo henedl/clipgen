@@ -61,6 +61,73 @@
     return -1;
   }
 
+  function parseTimestampToSeconds(ts) {
+    var parts = ts.split(":");
+    if (parts.length === 3)
+      return (
+        parseInt(parts[0], 10) * 3600 +
+        parseInt(parts[1], 10) * 60 +
+        parseInt(parts[2], 10)
+      );
+    if (parts.length === 2)
+      return parseInt(parts[0], 10) * 60 + parseInt(parts[1], 10);
+    return NaN;
+  }
+
+  function parseClipTimestamp(raw) {
+    var DEFAULT_DUR = 60;
+    var cleaned = raw
+      .toLowerCase()
+      .replace(/!key/g, "")
+      .replace(/[+;,]/g, " ");
+    var tokens = cleaned.split(/\s+/).filter(function (t) {
+      return t && t !== "x";
+    });
+    var firstStart = NaN;
+    var totalDur = 0;
+    for (var i = 0; i < tokens.length; i++) {
+      var tok = tokens[i].replace(/\.$/, "").replace(/\./g, ":");
+      var dashIdx = -1;
+      for (var d = 1; d < tok.length; d++) {
+        if (tok[d] === "-" && tok[d - 1] >= "0" && tok[d - 1] <= "9") {
+          dashIdx = d;
+          break;
+        }
+      }
+      if (dashIdx > 0) {
+        var s = parseTimestampToSeconds(tok.substring(0, dashIdx));
+        var e = parseTimestampToSeconds(tok.substring(dashIdx + 1));
+        if (!isNaN(s) && !isNaN(e)) {
+          if (isNaN(firstStart)) firstStart = s;
+          totalDur += Math.max(0, e - s);
+        }
+      } else if (tok.indexOf(":") > 0) {
+        var sec = parseTimestampToSeconds(tok);
+        if (!isNaN(sec)) {
+          if (isNaN(firstStart)) firstStart = sec;
+          totalDur += DEFAULT_DUR;
+        }
+      }
+    }
+    return {
+      startSeconds: isNaN(firstStart) ? 0 : Math.floor(firstStart),
+      totalDuration: totalDur || DEFAULT_DUR,
+    };
+  }
+
+  function formatDuration(secs) {
+    secs = Math.round(secs);
+    if (secs >= 3600) {
+      var h = Math.floor(secs / 3600);
+      var m = Math.floor((secs % 3600) / 60);
+      var s = secs % 60;
+      return h + ":" + (m < 10 ? "0" : "") + m + ":" + (s < 10 ? "0" : "") + s;
+    }
+    var m2 = Math.floor(secs / 60);
+    var s2 = secs % 60;
+    return m2 + ":" + (s2 < 10 ? "0" : "") + s2;
+  }
+
   // ---- Theme ----
 
   function initThemeToggle() {
@@ -522,7 +589,7 @@
     var list = qs("#reelList");
 
     list.addEventListener("dragstart", function (ev) {
-      var item = ev.target.closest(".queue-item[data-reel-idx]");
+      var item = ev.target.closest(".reel-card[data-reel-idx]");
       if (!item) return;
       _reelDragIdx = parseInt(item.getAttribute("data-reel-idx"), 10);
       ev.dataTransfer.effectAllowed = "move";
@@ -530,7 +597,7 @@
     });
 
     list.addEventListener("dragover", function (ev) {
-      var item = ev.target.closest(".queue-item[data-reel-idx]");
+      var item = ev.target.closest(".reel-card[data-reel-idx]");
       if (item && _reelDragIdx !== null) {
         ev.preventDefault();
         ev.dataTransfer.dropEffect = "move";
@@ -538,7 +605,7 @@
     });
 
     list.addEventListener("drop", function (ev) {
-      var item = ev.target.closest(".queue-item[data-reel-idx]");
+      var item = ev.target.closest(".reel-card[data-reel-idx]");
       if (!item || _reelDragIdx === null) return;
       ev.preventDefault();
       var toIdx = parseInt(item.getAttribute("data-reel-idx"), 10);
@@ -578,29 +645,66 @@
 
   function renderReelQueue() {
     var list = qs("#reelList");
-    qs("#reelCount").textContent = "(" + state.reelQueue.length + ")";
-    qs("#buildReelBtn").disabled = state.reelQueue.length === 0;
+    var n = state.reelQueue.length;
+    qs("#reelCount").textContent = "(" + n + ")";
+    qs("#buildReelBtn").disabled = n === 0;
     list.innerHTML = "";
 
-    if (state.reelQueue.length === 0) {
+    if (n === 0) {
       list.appendChild(
         el("div", "drop-target-empty", "Shift+click or drag cells here to build a reel")
       );
+      qs("#reelDuration").textContent = "";
       return;
     }
 
-    for (var i = 0; i < state.reelQueue.length; i++) {
+    var totalDur = 0;
+    for (var i = 0; i < n; i++) {
       var item = state.reelQueue[i];
-      var row = makeQueueItem(item, i, "reel");
-      row.setAttribute("data-reel-idx", i);
-      row.setAttribute("draggable", "true");
+      var parsed = parseClipTimestamp(item.timestamp);
+      totalDur += parsed.totalDuration;
 
-      var handle = el("span", "reel-handle", "\u2261");
-      var order = el("span", "reel-order", String(i + 1));
-      row.insertBefore(order, row.firstChild);
-      row.insertBefore(handle, row.firstChild);
-      list.appendChild(row);
+      var card = el("div", "reel-card");
+      card.setAttribute("data-reel-idx", i);
+      card.setAttribute("draggable", "true");
+
+      var thumb = el("div", "reel-card-thumb");
+      var img = document.createElement("img");
+      img.src = "api/thumbnail/" + encodeURIComponent(item.participant) + "/" + parsed.startSeconds;
+      img.loading = "lazy";
+      img.alt = "";
+      img.draggable = false;
+      (function (cardEl, thumbEl) {
+        img.addEventListener("error", function () {
+          this.remove();
+          thumbEl.appendChild(el("span", "", "\u2715"));
+          cardEl.classList.add("reel-card-error");
+        });
+      })(card, thumb);
+      thumb.appendChild(img);
+      thumb.appendChild(el("span", "reel-card-duration", formatDuration(parsed.totalDuration)));
+      card.appendChild(thumb);
+
+      var meta = el("div", "reel-card-meta");
+      meta.appendChild(el("span", "reel-card-order", String(i + 1)));
+      meta.appendChild(el("span", "reel-card-ref", item.participant + "." + item.row));
+      card.appendChild(meta);
+
+      var removeBtn = el("button", "reel-card-remove", "\u00D7");
+      removeBtn.title = "Remove";
+      (function (idx) {
+        removeBtn.addEventListener("click", function (ev) {
+          ev.stopPropagation();
+          state.reelQueue.splice(idx, 1);
+          renderReelQueue();
+          updateCellClasses();
+        });
+      })(i);
+      card.appendChild(removeBtn);
+
+      list.appendChild(card);
     }
+    qs("#reelDuration").textContent = formatDuration(totalDur);
   }
 
   function makeQueueItem(item, idx, type) {

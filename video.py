@@ -372,6 +372,57 @@ def extract_screenshot(input_file: str, output_file: str, timestamp: str) -> boo
     return True
 
 
+def extract_thumbnail_bytes(
+    input_file: str,
+    start_seconds: int,
+    *,
+    width: int = 200,
+) -> Optional[bytes]:
+    """Extract a small JPEG thumbnail frame from a video at *start_seconds*.
+
+    Uses fast input seeking (``-ss`` before ``-i``) so performance is
+    independent of file size.  Returns raw JPEG bytes on success or
+    ``None`` on any failure.
+    """
+    if config.DEBUGGING:
+        ic(input_file, start_seconds, width)
+        return None
+
+    if not Path(input_file).is_file():
+        return None
+
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-loglevel",
+        config.FFMPEG_LOGLEVEL,
+        "-ss",
+        str(max(0, start_seconds)),
+        "-i",
+        input_file,
+        "-vframes",
+        "1",
+        "-vf",
+        f"scale={width}:-1",
+        "-f",
+        "image2pipe",
+        "-vcodec",
+        "mjpeg",
+        "-q:v",
+        "5",
+        "pipe:1",
+    ]
+
+    try:
+        result = subprocess.run(cmd, capture_output=True, timeout=15)
+    except (FileNotFoundError, OSError, subprocess.TimeoutExpired):
+        return None
+
+    if result.returncode != 0 or not result.stdout:
+        return None
+    return result.stdout
+
+
 def extract_gif(
     input_file: str, output_file: str, timestamp: str, duration_seconds: int
 ) -> bool:
