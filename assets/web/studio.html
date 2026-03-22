@@ -61,13 +61,39 @@
 
     <div id="viewerArea" class="drop-area">
       <h3>Viewers</h3>
-      <p>Build Viewer requires generated artifacts. Timeline Viewer runs a full batch export. Regenerate re-creates media from a saved manifest.</p>
+      <p>Build Viewer requires generated artifacts. Timeline Viewer runs a full batch export.</p>
       <div class="area-controls">
         <button id="buildViewerBtn" class="btn btn-primary" disabled>Build Viewer</button>
         <button id="buildTimelineViewerBtn" class="btn btn-primary">Timeline Viewer</button>
-        <button id="regenerateBtn" class="btn btn-primary">Regenerate from Manifest</button>
       </div>
       <span id="viewerArtifactCount" style="font-size: 0.75rem; color: var(--color-text-dim);"></span>
+    </div>
+  </section>
+
+  <section id="quickActions">
+    <h3>Quick Actions</h3>
+    <div class="quick-actions-grid">
+      <div class="quick-action-card">
+        <div class="quick-action-info">
+          <strong>Build Highlights Reel</strong>
+          <span>Auto-select the best clips scored by severity, uniqueness, and keyword annotations.</span>
+        </div>
+        <div class="area-controls">
+          <label class="quick-action-label">Duration (s)
+            <input id="highlightsDuration" type="number" min="10" step="10" value="180" class="quick-action-input">
+          </label>
+          <button id="buildHighlightsBtn" class="btn btn-primary">Build Highlights</button>
+        </div>
+      </div>
+      <div class="quick-action-card">
+        <div class="quick-action-info">
+          <strong>Regenerate from Manifest</strong>
+          <span>Re-create all media artifacts and reels from a saved manifest file.</span>
+        </div>
+        <div class="area-controls">
+          <button id="regenerateBtn" class="btn btn-primary">Regenerate</button>
+        </div>
+      </div>
     </div>
   </section>
 

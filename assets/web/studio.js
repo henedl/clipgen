@@ -133,6 +133,10 @@
         state.sheetData = data;
         renderHeader();
         renderGrid();
+        var durInput = qs("#highlightsDuration");
+        if (durInput && data.highlightsDuration) {
+          durInput.value = data.highlightsDuration;
+        }
       })
       .catch(function (err) {
         qs("#sheetLoading").textContent = "Failed to load sheet: " + err;
@@ -645,6 +649,7 @@
     qs("#buildViewerBtn").addEventListener("click", onBuildViewer);
     qs("#buildTimelineViewerBtn").addEventListener("click", onBuildTimelineViewer);
     qs("#regenerateBtn").addEventListener("click", onRegenerate);
+    qs("#buildHighlightsBtn").addEventListener("click", onBuildHighlights);
 
     qs("#statusDismiss").addEventListener("click", hideOverlay);
   }
@@ -807,6 +812,40 @@
           );
         } else {
           showResult(null, data.error || "Regeneration failed");
+        }
+      })
+      .catch(function (err) {
+        state.generating = false;
+        showResult(null, "Request failed: " + err);
+      });
+  }
+
+  function onBuildHighlights() {
+    if (state.generating) return;
+    state.generating = true;
+
+    var duration = parseInt(qs("#highlightsDuration").value, 10);
+    if (!duration || duration < 1) duration = 180;
+
+    showOverlay("Building highlights reel (" + duration + "s budget)...");
+
+    fetch("api/reel", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        cells: ["highlights", "batch"],
+        highlights_duration: duration,
+      }),
+    })
+      .then(function (r) {
+        return r.json();
+      })
+      .then(function (data) {
+        state.generating = false;
+        if (data.ok) {
+          showResult("Highlights reel built successfully", null);
+        } else {
+          showResult(null, data.error || "Highlights reel build failed");
         }
       })
       .catch(function (err) {
