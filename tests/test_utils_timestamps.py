@@ -37,7 +37,7 @@ def test_convert_clock_pairs_to_relative_uses_baseline_and_skips_invalid():
     baseline = "22:00"  # HH:MM = 22:00:00
     converted = utils.convert_clock_pairs_to_relative(pairs, baseline, cell_ref="B5")
     # Both pairs are after baseline; converted to relative (2:12-2:45 and 1:00-1:30).
-    assert converted == [("2:12", "2:45"), ("1:00", "1:30")]
+    assert converted == [("0:02:12", "0:02:45"), ("0:01:00", "0:01:30")]
 
 
 def test_parse_cell_annotations_splits_segment_and_cell_annotations():

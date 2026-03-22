@@ -172,7 +172,7 @@ def test_baseline_and_relative_timestamps_integration(monkeypatch):
     assert len(prepared_p02) == 1
 
     # P01 clip should use the baseline row (09:12:00) and convert to relative times.
-    assert prepared_p01[0]["times"] == [("3:00", "4:30")]
+    assert prepared_p01[0]["times"] == [("0:03:00", "0:04:30")]
 
     # P02 clip has no baseline and should remain relative as entered.
     assert prepared_p02[0]["times"] == [("00:20", "00:40")]
