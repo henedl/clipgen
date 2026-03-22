@@ -181,7 +181,7 @@ def test_baseline_row_detection_and_relative_conversion():
     prepared_p02 = files.prepare_clip(p02_clip)
 
     # P01 times should be converted to relative offsets from 09:12:00
-    assert prepared_p01["times"] == [("1:00", "2:00")]
+    assert prepared_p01["times"] == [("0:01:00", "0:02:00")]
     # P02 times should remain absolute clock values (no baseline applied)
     assert prepared_p02["times"] == [("09:20:00", "09:21:00")]
 

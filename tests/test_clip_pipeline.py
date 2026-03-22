@@ -65,7 +65,7 @@ def test_prepare_clip_converts_clock_timestamps_to_relative(monkeypatch, make_cl
     raw_clip["cell"].value = raw_cell_value
 
     prepared = clipgen.files.prepare_clip(raw_clip)
-    assert prepared["times"] == [("3:00", "4:30")]
+    assert prepared["times"] == [("0:03:00", "0:04:30")]
 
 
 def test_process_clips_skips_when_source_video_missing(monkeypatch, make_clip):
