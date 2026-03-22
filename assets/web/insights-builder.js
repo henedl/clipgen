@@ -544,12 +544,23 @@
       var yPct = sd.rows > 1 ? (row / (sd.rows - 1)) * 100 : 0;
       target.style.backgroundPosition = xPct + "% " + yPct + "%";
       audioScrubAt(target, frameIndex * sd.interval);
+      var filePath = target.dataset.audioFile;
+      if (filePath) {
+        var waveform = extractWaveform(filePath);
+        if (waveform) {
+          drawWaveform(getOrCreateWaveformCanvas(target), waveform, frac);
+        }
+      }
     });
   }
 
   function spriteReset(e) {
     e.currentTarget.style.backgroundPosition = "0% 0%";
     audioScrubStop();
+    var canvas = e.currentTarget.querySelector(".waveform-canvas");
+    if (canvas) canvas.style.display = "none";
+    var scrim = e.currentTarget.querySelector(".waveform-scrim");
+    if (scrim) scrim.style.display = "none";
   }
 
   // ---- Audio scrub (Web Audio API) ----
@@ -561,6 +572,76 @@
   var _audioLastTime = -1;
   var _audioSnippetLen = 0.08;
   var _audioMinDelta = 0.04;
+
+  // ---- Waveform overlay ----
+
+  var _waveformCache = {};
+  var _WAVEFORM_SAMPLES = 200;
+
+  function extractWaveform(filePath) {
+    if (_waveformCache[filePath]) return _waveformCache[filePath];
+    var buf = _audioBuffers[filePath];
+    if (!buf) return null;
+    var raw = buf.getChannelData(0);
+    var len = raw.length;
+    var bucketSize = Math.floor(len / _WAVEFORM_SAMPLES);
+    if (bucketSize < 1) return null;
+    var peaks = new Float32Array(_WAVEFORM_SAMPLES);
+    var maxPeak = 0;
+    for (var i = 0; i < _WAVEFORM_SAMPLES; i++) {
+      var start = i * bucketSize;
+      var end = start + bucketSize;
+      var peak = 0;
+      for (var j = start; j < end; j++) {
+        var abs = raw[j] < 0 ? -raw[j] : raw[j];
+        if (abs > peak) peak = abs;
+      }
+      peaks[i] = peak;
+      if (peak > maxPeak) maxPeak = peak;
+    }
+    if (maxPeak > 0) {
+      for (var k = 0; k < _WAVEFORM_SAMPLES; k++) peaks[k] /= maxPeak;
+    }
+    _waveformCache[filePath] = peaks;
+    return peaks;
+  }
+
+  function getOrCreateWaveformCanvas(mediaEl) {
+    var existing = mediaEl.querySelector(".waveform-canvas");
+    if (existing) {
+      existing.style.display = "";
+      mediaEl.querySelector(".waveform-scrim").style.display = "";
+      return existing;
+    }
+    var scrim = document.createElement("div");
+    scrim.className = "waveform-scrim";
+    mediaEl.appendChild(scrim);
+    var canvas = document.createElement("canvas");
+    canvas.className = "waveform-canvas";
+    var rect = mediaEl.getBoundingClientRect();
+    canvas.width = Math.round(rect.width);
+    canvas.height = Math.round(rect.height * 0.28);
+    mediaEl.appendChild(canvas);
+    return canvas;
+  }
+
+  function drawWaveform(canvas, waveformData, frac) {
+    var ctx = canvas.getContext("2d");
+    var w = canvas.width;
+    var h = canvas.height;
+    ctx.clearRect(0, 0, w, h);
+    var barCount = waveformData.length;
+    var barW = w / barCount;
+    ctx.fillStyle = "rgba(255, 255, 255, 0.75)";
+    for (var i = 0; i < barCount; i++) {
+      var barH = waveformData[i] * h * 0.9;
+      if (barH < 1) barH = 1;
+      ctx.fillRect(i * barW, h - barH, Math.max(barW - 0.5, 0.5), barH);
+    }
+    var x = Math.round(frac * w);
+    ctx.fillStyle = "rgba(255, 255, 255, 0.9)";
+    ctx.fillRect(x - 1, 0, 2, h);
+  }
 
   function getAudioContext() {
     if (!_audioCtx) {
@@ -1249,6 +1330,7 @@
           parseInt(sidebar.style.width, 10) || 420
         );
       } catch (_) {}
+      qsa(".waveform-canvas, .waveform-scrim").forEach(function (c) { c.remove(); });
     });
 
     // Collapse toggle

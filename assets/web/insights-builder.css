@@ -492,6 +492,7 @@ body {
 }
 
 .artifact-media {
+  position: relative;
   width: 100%;
   aspect-ratio: 16 / 9;
   background-color: var(--color-surface-alt);
@@ -849,12 +850,34 @@ body {
 }
 
 .preview-media {
+  position: relative;
   width: 100%;
   aspect-ratio: 16 / 9;
   background-color: var(--color-surface-alt);
   background-size: cover;
   background-position: 0 0;
   overflow: hidden;
+}
+
+.waveform-scrim {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  width: 100%;
+  height: 50%;
+  background: linear-gradient(to top, rgba(0, 0, 0, 0.55), transparent);
+  pointer-events: none;
+  z-index: 1;
+}
+
+.waveform-canvas {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  width: 100%;
+  height: 28%;
+  pointer-events: none;
+  z-index: 2;
 }
 
 .preview-media img {
