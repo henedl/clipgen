@@ -461,10 +461,10 @@
 
     // Media
     var media = el("div", "artifact-media");
-    if (artifact.type === "clip" && artifact.thumbnail && artifact.spriteData) {
+    if (artifact.type === "clip" && artifact.spriteData) {
       var sd = artifact.spriteData;
       media.style.backgroundImage =
-        'url("media/' + encodeURIComponent(artifact.thumbnail) + '")';
+        'url("api/sprites/' + encodeURIComponent(artifact.file) + '")';
       media.style.backgroundSize = (sd.cols * 100) + "% " + (sd.rows * 100) + "%";
       media.dataset.spriteData = JSON.stringify(sd);
       if (artifact.file) media.dataset.audioFile = artifact.file;
@@ -1136,10 +1136,10 @@
 
     // Media
     var media = el("div", "preview-media");
-    if (artifact.type === "clip" && artifact.thumbnail && artifact.spriteData) {
+    if (artifact.type === "clip" && artifact.spriteData) {
       var sd = artifact.spriteData;
       media.style.backgroundImage =
-        'url("media/' + encodeURIComponent(artifact.thumbnail) + '")';
+        'url("api/sprites/' + encodeURIComponent(artifact.file) + '")';
       media.style.backgroundSize = (sd.cols * 100) + "% " + (sd.rows * 100) + "%";
       media.style.backgroundPosition = "0% 0%";
       media.dataset.spriteData = JSON.stringify(sd);

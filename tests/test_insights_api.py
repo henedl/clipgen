@@ -3,6 +3,7 @@ import pytest
 Flask = pytest.importorskip("flask").Flask
 import insights
 import insights_server
+import viewer
 
 
 @pytest.fixture
@@ -99,3 +100,36 @@ def test_delete_insight_via_api(client):
 def test_delete_nonexistent_returns_404(client):
     resp = client.delete("/insights/api/insights/ins_missing")
     assert resp.status_code == 404
+
+
+def test_sprite_404_for_missing_clip(client):
+    resp = client.get("/insights/api/sprites/nonexistent.mp4")
+    assert resp.status_code == 404
+
+
+def test_artifacts_include_sprite_metadata(client, monkeypatch):
+    test_artifacts = [
+        {
+            "id": "a1",
+            "type": "clip",
+            "file": "test.mp4",
+            "start": 0,
+            "end": 60,
+            "study": "s",
+            "participant": "P01",
+            "category": "",
+            "description": "",
+        }
+    ]
+    monkeypatch.setattr(viewer, "load_manifest_artifacts", lambda: test_artifacts)
+    resp = client.get("/insights/api/artifacts")
+    data = resp.get_json()
+    art = data["artifacts"][0]
+    assert "spriteData" in art
+    assert art["spriteData"]["frameCount"] > 0
+    assert art["spriteData"]["cols"] > 0
+
+
+def test_sprites_generate_endpoint_removed(client):
+    resp = client.post("/insights/api/sprites/generate")
+    assert resp.status_code in (404, 405)
