@@ -1,0 +1,13 @@
+[project]
+name = "clipgen"
+version = "0.0.0"
+requires-python = ">=3.12"
+dependencies = [
+    "gspread>=3.7.0",
+    "openpyxl>=3.1.5",
+    "icecream>=2.1.10",
+    "rich>=13.0.0",
+    "flask>=3.0.0",
+    "faster-whisper>=1.0.0",
+    "pytest",
+]

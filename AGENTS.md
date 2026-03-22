@@ -20,3 +20,4 @@
 - Textual-based TUI support (tui.py, TEXTUAL_TUI) has been removed; prefer CLI prompts and the HTML timeline viewer for interactive features.
 - Browse mode scrolling is controlled via `BROWSE_LINES_TO_SCROLL` in `config.py`, with a default of 5 rows per up/down step.
 - The program runs everything in sequence, no multithreading. Implementing multithreading was too much a headache, though the performance upside was notable; shaving up to 30% of runtimes with 4 threads.
+- Always use `uv run` to execute Python commands (e.g. `uv run pytest`, `uv run clipgen.py`). This ensures the correct venv is used, even in worktrees where no `.venv` exists yet.

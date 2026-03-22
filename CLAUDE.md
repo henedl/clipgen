@@ -247,6 +247,7 @@ Reference spreadsheet layout is described in [README.md](README.md).
   - `update_insight()` – merge updates into an existing insight by ID
   - `delete_insight()` – remove an insight by ID
 - **Insight record**:
+
   ```python
   {
       "id": "ins_<8hex>",         # Unique ID (uuid4 hex prefix)
@@ -262,6 +263,7 @@ Reference spreadsheet layout is described in [README.md](README.md).
       "timelineContext": str,
   }
   ```
+
 - **API endpoints** (all under `/insights/`):
   - `GET /api/artifacts` – returns artifacts from manifest, enriched with sprite sheet data
   - `GET/POST /api/insights` – list all or create new insight
@@ -305,7 +307,7 @@ Reference spreadsheet layout is described in [README.md](README.md).
 
 ## Testing notes
 
-- Run the test suite with `pytest -c tests/pytest.ini` from the project root.
+- Run the test suite with `uv run pytest -c tests/pytest.ini` from the project root.
 - Tests cover: CLI argument parsing, CLI mode dispatch, clip pipeline, file/artifact handling, Google/Excel adapters, insights data model, insights API, manifest operations, selectors, spreadsheet generation, studio API, titlecards, transcripts, timestamp utilities, video commands, viewer data, and viewer inlining.
 - Every new CLI mode, flag, or selector should include at least one smoke test in the same PR.
 - With `config.DEBUGGING = True`, icecream is enabled, [video.py](video.py) does not invoke ffmpeg, and [transcripts.py](transcripts.py) returns stub results without loading a Whisper model.
