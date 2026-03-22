@@ -298,6 +298,30 @@ def api_manifest() -> FlaskResponse:
         return jsonify({"ok": False, "error": str(e)}), 500
 
 
+@studio_bp.route("/api/regenerate", methods=["POST"])
+def api_regenerate() -> FlaskResponse:
+    try:
+        artifacts = viewer.load_manifest_artifacts()
+        reels = viewer.load_manifest_reels()
+        if not artifacts and not reels:
+            return jsonify(
+                {
+                    "ok": False,
+                    "error": "No manifest found on disk. Export a manifest first.",
+                }
+            ), 400
+
+        media_count = sum(1 for a in artifacts if a.get("type") != "transcript")
+        reel_count = len(reels)
+        total = media_count + reel_count
+
+        regenerated = clipgen.regenerate_from_manifest(artifacts, reels=reels)
+        return jsonify({"ok": True, "regenerated": regenerated, "total": total})
+
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
 # ---- State initialization ----
 
 
