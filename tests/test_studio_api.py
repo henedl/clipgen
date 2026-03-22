@@ -101,6 +101,77 @@ def test_api_reel_highlights_duration_restored_on_error(client, monkeypatch):
     assert config.HIGHLIGHTS_REEL_DURATION_SECONDS == original
 
 
+def test_api_thumbnail_500_when_no_context(client):
+    resp = client.get("/studio/api/thumbnail/P01/0")
+    assert resp.status_code == 500
+    data = resp.get_json()
+    assert data["ok"] is False
+    assert "No sheet loaded" in data["error"]
+
+
+def test_api_thumbnail_returns_jpeg(client, monkeypatch, tmp_path):
+    import types
+
+    import video
+
+    fake_jpeg = b"\xff\xd8\xff\xe0fake-jpeg-data"
+    dummy_video = tmp_path / "study_P01.mp4"
+    dummy_video.write_bytes(b"not a real video")
+
+    ctx = types.SimpleNamespace(
+        header_row=["ID", "P01"],
+        id_cell=types.SimpleNamespace(col=1),
+        num_participants=1,
+        study_name="study",
+        filename_row_idx=None,
+        sheet_data=[],
+    )
+    monkeypatch.setattr(server, "_sheet_context", ctx)
+    monkeypatch.setattr(server, "_thumbnail_cache", {})
+    monkeypatch.setattr("utils.resolve_input_path", lambda name: dummy_video)
+    monkeypatch.setattr(video, "extract_thumbnail_bytes", lambda *a, **kw: fake_jpeg)
+
+    resp = client.get("/studio/api/thumbnail/P01/10")
+    assert resp.status_code == 200
+    assert resp.content_type == "image/jpeg"
+    assert resp.data == fake_jpeg
+
+
+def test_api_thumbnail_caches(client, monkeypatch, tmp_path):
+    import types
+
+    import video
+
+    call_count = [0]
+    fake_jpeg = b"\xff\xd8\xff\xe0cached"
+    dummy_video = tmp_path / "study_P01.mp4"
+    dummy_video.write_bytes(b"x")
+
+    ctx = types.SimpleNamespace(
+        header_row=["ID", "P01"],
+        id_cell=types.SimpleNamespace(col=1),
+        num_participants=1,
+        study_name="study",
+        filename_row_idx=None,
+        sheet_data=[],
+    )
+    monkeypatch.setattr(server, "_sheet_context", ctx)
+    monkeypatch.setattr(server, "_thumbnail_cache", {})
+    monkeypatch.setattr("utils.resolve_input_path", lambda name: dummy_video)
+
+    def counting_extract(*a, **kw):
+        call_count[0] += 1
+        return fake_jpeg
+
+    monkeypatch.setattr(video, "extract_thumbnail_bytes", counting_extract)
+
+    resp1 = client.get("/studio/api/thumbnail/P01/5")
+    resp2 = client.get("/studio/api/thumbnail/P01/5")
+    assert resp1.status_code == 200
+    assert resp2.status_code == 200
+    assert call_count[0] == 1
+
+
 def test_api_viewer_400_when_no_artifacts(client):
     resp = client.post("/studio/api/viewer")
     assert resp.status_code == 400

@@ -48,17 +48,6 @@
       </div>
     </div>
 
-    <div id="reelArea" class="drop-area">
-      <h3>Reel <span id="reelCount">(0)</span></h3>
-      <div id="reelList" class="drop-target">
-        <div class="drop-target-empty">Shift+click or drag cells here to build a reel</div>
-      </div>
-      <div class="area-controls">
-        <button id="buildReelBtn" class="btn btn-primary" disabled>Build Reel</button>
-        <button id="clearReelBtn" class="btn btn-small">Clear</button>
-      </div>
-    </div>
-
     <div id="viewerArea" class="drop-area">
       <h3>Viewers</h3>
       <p>Build Viewer requires generated artifacts. Timeline Viewer runs a full batch export.</p>
@@ -67,6 +56,19 @@
         <button id="buildTimelineViewerBtn" class="btn btn-primary">Timeline Viewer</button>
       </div>
       <span id="viewerArtifactCount" style="font-size: 0.75rem; color: var(--color-text-dim);"></span>
+    </div>
+  </section>
+
+  <section id="reelArea">
+    <div id="reelHeader">
+      <h3>Reel <span id="reelCount">(0)</span> <span id="reelDuration"></span></h3>
+      <div class="area-controls">
+        <button id="buildReelBtn" class="btn btn-primary" disabled>Build Reel</button>
+        <button id="clearReelBtn" class="btn btn-small">Clear</button>
+      </div>
+    </div>
+    <div id="reelList" class="drop-target">
+      <div class="drop-target-empty">Shift+click or drag cells here to build a reel</div>
     </div>
   </section>
 

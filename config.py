@@ -9,7 +9,7 @@ from icecream import ic
 REENCODING: bool = False
 AUDIO_NORMALIZE: bool = False
 FILEFORMAT: str = ".mp4"
-VERSIONNUM: str = "0.9.35"
+VERSIONNUM: str = "0.9.36"
 TITLECARDS_ENABLED: bool = False
 TITLECARD_DURATION_SECONDS: int = 2
 WORKSHEET_PRIORITY: List[str] = [
@@ -89,6 +89,7 @@ INSIGHTS_MANIFEST_FILENAME: str = "insights_manifest.json"
 SPRITE_SHEET_FRAME_COUNT: int = 20
 SPRITE_SHEET_THUMB_WIDTH: int = 160
 SPRITE_SHEET_MIN_INTERVAL: int = 1
+STUDIO_THUMBNAIL_WIDTH: int = 200
 
 # Highlights reel constants
 HIGHLIGHTS_REEL_DURATION_SECONDS: int = 180  # 3-minute budget for highlights reel

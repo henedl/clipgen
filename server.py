@@ -23,8 +23,10 @@ from flask import (
 
 import clipgen
 import config
+import files
 import spreadsheet
 import utils
+import video
 import viewer
 
 FlaskResponse = Union[Response, Tuple[Response, int]]
@@ -35,6 +37,7 @@ _worksheet: Any = None
 _sheet_context: Optional[spreadsheet.SheetContext] = None
 _generated_artifacts: List[Dict[str, Any]] = []
 _generated_reels: List[Dict[str, Any]] = []
+_thumbnail_cache: Dict[tuple, bytes] = {}
 
 _assets_dir = Path(__file__).resolve().parent / "assets" / "web"
 
@@ -56,7 +59,66 @@ def serve_static(filename: str) -> FlaskResponse:
     return send_from_directory(_assets_dir, filename)
 
 
+# ---- Helpers ----
+
+
+def _resolve_source_video(participant: str) -> Optional[Path]:
+    """Return the resolved path to a participant's source video, or None."""
+    if _sheet_context is None:
+        return None
+    ctx = _sheet_context
+    participants = spreadsheet.get_participant_list(
+        ctx.header_row, ctx.id_cell, ctx.num_participants
+    )
+    if participant not in participants:
+        return None
+    p_idx = participants.index(participant)
+    col_idx = ctx.id_cell.col + p_idx
+
+    override = None
+    if ctx.filename_row_idx is not None:
+        row_data = ctx.sheet_data[ctx.filename_row_idx]
+        if col_idx < len(row_data) and row_data[col_idx].strip():
+            override = row_data[col_idx].strip()
+
+    filename = files.get_source_video_filename(ctx.study_name, participant, override)
+    return utils.resolve_input_path(filename)
+
+
 # ---- API endpoints ----
+
+
+@studio_bp.route("/api/thumbnail/<participant>/<int:start_seconds>")
+def api_thumbnail(participant: str, start_seconds: int) -> FlaskResponse:
+    if _sheet_context is None:
+        return jsonify({"ok": False, "error": "No sheet loaded"}), 500
+
+    start_seconds = max(0, start_seconds)
+    video_path = _resolve_source_video(participant)
+    if video_path is None or not video_path.is_file():
+        return jsonify({"ok": False, "error": "Source video not found"}), 404
+
+    cache_key = (str(video_path), start_seconds)
+    cached = _thumbnail_cache.get(cache_key)
+    if cached is not None:
+        return Response(
+            cached,
+            mimetype="image/jpeg",
+            headers={"Cache-Control": "public, max-age=86400"},
+        )
+
+    jpeg_bytes = video.extract_thumbnail_bytes(
+        str(video_path), start_seconds, width=config.STUDIO_THUMBNAIL_WIDTH
+    )
+    if jpeg_bytes is None:
+        return jsonify({"ok": False, "error": "Thumbnail extraction failed"}), 404
+
+    _thumbnail_cache[cache_key] = jpeg_bytes
+    return Response(
+        jpeg_bytes,
+        mimetype="image/jpeg",
+        headers={"Cache-Control": "public, max-age=86400"},
+    )
 
 
 @studio_bp.route("/api/sheet")
@@ -369,12 +431,13 @@ def api_regenerate() -> FlaskResponse:
 
 def _init_studio_state(worksheet: Any) -> None:
     """Initialize module-level state for Studio routes."""
-    global _worksheet, _sheet_context, _generated_artifacts, _generated_reels
+    global _worksheet, _sheet_context, _generated_artifacts, _generated_reels, _thumbnail_cache
 
     _worksheet = worksheet
     _sheet_context = spreadsheet.build_sheet_context(worksheet)
     _generated_artifacts = []
     _generated_reels = []
+    _thumbnail_cache = {}
 
     if _sheet_context is None:
         utils.error_print("Could not load spreadsheet data for Studio.")
