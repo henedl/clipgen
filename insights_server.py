@@ -2,11 +2,13 @@
 """Insights Builder web server for clipgen.
 
 Serves the Insights Builder front-end and exposes REST endpoints for
-insight CRUD, artifact browsing, sprite sheet generation, and viewer export.
+insight CRUD, artifact browsing, lazy sprite sheet generation, and viewer export.
 """
 
 from __future__ import annotations
 
+import tempfile
+from math import ceil, sqrt
 from pathlib import Path
 from typing import Any, Dict, List, Tuple, Union
 
@@ -25,6 +27,7 @@ FlaskResponse = Union[Response, Tuple[Response, int]]
 _artifacts: List[Dict[str, Any]] = []
 _insights_data: Dict[str, Any] = {}
 _output_dir: str = ""
+_sprite_cache: Dict[str, bytes] = {}
 
 _assets_dir = Path(__file__).resolve().parent / "assets" / "web"
 
@@ -59,30 +62,16 @@ def api_artifacts() -> FlaskResponse:
     # Re-read manifest on every request so artifacts generated in Studio
     # appear immediately when the user navigates to Insights.
     fresh_artifacts = viewer.load_manifest_artifacts()
-    # Enrich with sprite data from the cached list
-    sprite_map = {a.get("file"): a for a in _artifacts if a.get("thumbnail")}
-    missing_sprites = []
     for art in fresh_artifacts:
-        cached = sprite_map.get(art.get("file"))
-        if cached:
-            art["thumbnail"] = cached["thumbnail"]
-            art["spriteData"] = cached.get("spriteData", {})
-        elif art.get("type") == "clip":
-            missing_sprites.append(art)
-
-    # Generate sprites for newly discovered clip artifacts (e.g. from Studio)
-    if missing_sprites:
-        _artifacts.extend(missing_sprites)
-        generated = _generate_missing_sprites()
-        if generated:
-            sprite_map = {a.get("file"): a for a in _artifacts if a.get("thumbnail")}
-            for art in fresh_artifacts:
-                if not art.get("spriteData"):
-                    cached = sprite_map.get(art.get("file"))
-                    if cached:
-                        art["thumbnail"] = cached["thumbnail"]
-                        art["spriteData"] = cached.get("spriteData", {})
-
+        if art.get("type") != "clip":
+            continue
+        start = art.get("start")
+        end = art.get("end")
+        if start is None or end is None:
+            continue
+        duration = (end or 0) - (start or 0)
+        if duration > 0:
+            art["spriteData"] = _compute_sprite_metadata(duration)
     return jsonify({"ok": True, "artifacts": fresh_artifacts})
 
 
@@ -133,10 +122,37 @@ def api_insights_delete(insight_id: str) -> FlaskResponse:
     return jsonify({"ok": True})
 
 
-@insights_bp.route("/api/sprites/generate", methods=["POST"])
-def api_sprites_generate() -> FlaskResponse:
-    generated = _generate_missing_sprites()
-    return jsonify({"ok": True, "generated": generated})
+@insights_bp.route("/api/sprites/<path:filename>")
+def api_sprite(filename: str) -> FlaskResponse:
+    cached = _sprite_cache.get(filename)
+    if cached:
+        return Response(
+            cached,
+            mimetype="image/png",
+            headers={"Cache-Control": "public, max-age=86400"},
+        )
+
+    clip_path = Path(_output_dir) / filename
+    if not clip_path.is_file():
+        return jsonify({"ok": False, "error": "Clip not found"}), 404
+
+    tmp = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
+    tmp_path = tmp.name
+    tmp.close()
+    try:
+        sprite_data = video.generate_sprite_sheet(str(clip_path), tmp_path)
+        if not sprite_data or not Path(tmp_path).is_file():
+            return jsonify({"ok": False, "error": "Sprite generation failed"}), 500
+        png_bytes = Path(tmp_path).read_bytes()
+    finally:
+        Path(tmp_path).unlink(missing_ok=True)
+
+    _sprite_cache[filename] = png_bytes
+    return Response(
+        png_bytes,
+        mimetype="image/png",
+        headers={"Cache-Control": "public, max-age=86400"},
+    )
 
 
 @insights_bp.route("/api/generate-viewer", methods=["POST"])
@@ -180,50 +196,23 @@ def _save_insights() -> None:
     insights.save_insights_manifest(meta, _insights_data.get("insights", []))
 
 
-def _generate_missing_sprites() -> int:
-    """Generate sprite sheets for clip artifacts that lack them. Returns count generated."""
-    generated = 0
-    output_path = Path(_output_dir)
-    for artifact in _artifacts:
-        if artifact.get("type") != "clip":
-            continue
-        filename = artifact.get("file", "")
-        if not filename:
-            continue
-        stem = Path(filename).stem
-        sprite_name = f"{stem}_sprite.png"
-        sprite_path = output_path / sprite_name
-
-        if sprite_path.is_file():
-            artifact["thumbnail"] = sprite_name
-            if "spriteData" not in artifact or not artifact["spriteData"]:
-                # Sprite exists but no metadata — fill in defaults
-                artifact["spriteData"] = {
-                    "cols": 5,
-                    "rows": 4,
-                    "frameCount": config.SPRITE_SHEET_FRAME_COUNT,
-                    "frameWidth": config.SPRITE_SHEET_THUMB_WIDTH,
-                    "frameHeight": round(config.SPRITE_SHEET_THUMB_WIDTH * 9 / 16),
-                    "interval": 1,
-                }
-            continue
-
-        source_video = artifact.get("sourceVideo", "")
-        if not source_video or not Path(source_video).is_file():
-            # Try finding clip file in output dir
-            clip_path = output_path / filename
-            if clip_path.is_file():
-                source_video = str(clip_path)
-            else:
-                continue
-
-        sprite_data = video.generate_sprite_sheet(source_video, str(sprite_path))
-        if sprite_data:
-            artifact["thumbnail"] = sprite_name
-            artifact["spriteData"] = sprite_data
-            generated += 1
-
-    return generated
+def _compute_sprite_metadata(duration_seconds: float) -> Dict[str, Any]:
+    """Compute sprite sheet layout metadata from a clip duration (no I/O)."""
+    frame_count = config.SPRITE_SHEET_FRAME_COUNT
+    thumb_width = config.SPRITE_SHEET_THUMB_WIDTH
+    min_interval = config.SPRITE_SHEET_MIN_INTERVAL
+    interval = max(min_interval, int(duration_seconds) // frame_count)
+    actual_frames = min(frame_count, max(1, int(duration_seconds) // interval))
+    cols = ceil(sqrt(actual_frames))
+    rows = ceil(actual_frames / cols)
+    return {
+        "cols": cols,
+        "rows": rows,
+        "frameCount": actual_frames,
+        "frameWidth": thumb_width,
+        "frameHeight": round(thumb_width * 9 / 16),
+        "interval": interval,
+    }
 
 
 # ---- State initialization ----
@@ -233,7 +222,7 @@ def _init_insights_state() -> None:
     """Initialize module-level state for Insights routes.
 
     Loads artifacts from clipgen_manifest.json and insights from
-    insights_manifest.json. Generates missing sprite sheets.
+    insights_manifest.json. Sprite sheets are generated lazily on request.
     """
     global _artifacts, _insights_data, _output_dir
 
@@ -253,12 +242,5 @@ def _init_insights_state() -> None:
     # Set study in insights meta from artifacts if not already set
     if not _insights_data.get("meta", {}).get("study") and _artifacts:
         _insights_data.setdefault("meta", {})["study"] = _artifacts[0].get("study", "")
-
-    # Generate missing sprite sheets (blocking, before browser opens)
-    sprite_count = _generate_missing_sprites()
-    if sprite_count:
-        utils.info_print(
-            f"Generated {sprite_count} sprite sheet{'s' if sprite_count != 1 else ''}."
-        )
 
 
