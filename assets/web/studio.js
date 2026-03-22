@@ -549,11 +549,24 @@
 
   // ---- Drop targets ----
 
+  function removeFromQueue(queue, participant, row) {
+    var idx = findInQueue(queue, participant, row);
+    if (idx >= 0) queue.splice(idx, 1);
+  }
+
   function initDropTargets() {
     setupDropTarget(qs("#artifactsList"), function (info) {
+      if (info.source === "reel") {
+        removeFromQueue(state.reelQueue, info.participant, info.row);
+        renderReelQueue();
+      }
       addToQueue(state.artifactQueue, info, renderArtifactQueue);
     });
     setupDropTarget(qs("#reelList"), function (info) {
+      if (info.source === "artifact") {
+        removeFromQueue(state.artifactQueue, info.participant, info.row);
+        renderArtifactQueue();
+      }
       addToQueue(state.reelQueue, info, renderReelQueue);
     });
   }
@@ -589,11 +602,22 @@
     var list = qs("#reelList");
 
     list.addEventListener("dragstart", function (ev) {
-      var item = ev.target.closest(".reel-card[data-reel-idx]");
-      if (!item) return;
-      _reelDragIdx = parseInt(item.getAttribute("data-reel-idx"), 10);
-      ev.dataTransfer.effectAllowed = "move";
+      var card = ev.target.closest(".reel-card[data-reel-idx]");
+      if (!card) return;
+      _reelDragIdx = parseInt(card.getAttribute("data-reel-idx"), 10);
+      ev.dataTransfer.effectAllowed = "copyMove";
       ev.dataTransfer.setData("text/plain", String(_reelDragIdx));
+      var reelItem = state.reelQueue[_reelDragIdx];
+      if (reelItem) {
+        var data = {
+          participant: reelItem.participant,
+          row: reelItem.row,
+          desc: reelItem.desc,
+          timestamp: reelItem.timestamp,
+          source: "reel",
+        };
+        ev.dataTransfer.setData("application/json", JSON.stringify(data));
+      }
     });
 
     list.addEventListener("dragover", function (ev) {
@@ -626,20 +650,73 @@
 
   function renderArtifactQueue() {
     var list = qs("#artifactsList");
-    qs("#artifactsCount").textContent = "(" + state.artifactQueue.length + ")";
-    qs("#generateBtn").disabled = state.artifactQueue.length === 0;
+    var n = state.artifactQueue.length;
+    qs("#artifactsCount").textContent = "(" + n + ")";
+    qs("#generateBtn").disabled = n === 0;
+    qs("#addToReelBtn").disabled = n === 0;
     list.innerHTML = "";
 
-    if (state.artifactQueue.length === 0) {
+    if (n === 0) {
       list.appendChild(
         el("div", "drop-target-empty", "Click or drag cells here to queue for generation")
       );
       return;
     }
 
-    for (var i = 0; i < state.artifactQueue.length; i++) {
+    for (var i = 0; i < n; i++) {
       var item = state.artifactQueue[i];
-      list.appendChild(makeQueueItem(item, i, "artifact"));
+      var parsed = parseClipTimestamp(item.timestamp);
+
+      var card = el("div", "artifact-card");
+      card.setAttribute("draggable", "true");
+      (function (itm) {
+        card.addEventListener("dragstart", function (ev) {
+          var data = {
+            participant: itm.participant,
+            row: itm.row,
+            desc: itm.desc,
+            timestamp: itm.timestamp,
+            source: "artifact",
+          };
+          ev.dataTransfer.setData("application/json", JSON.stringify(data));
+          ev.dataTransfer.effectAllowed = "copyMove";
+        });
+      })(item);
+
+      var thumb = el("div", "artifact-card-thumb");
+      var img = document.createElement("img");
+      img.src = "api/thumbnail/" + encodeURIComponent(item.participant) + "/" + parsed.startSeconds;
+      img.loading = "lazy";
+      img.alt = "";
+      img.draggable = false;
+      (function (cardEl, thumbEl) {
+        img.addEventListener("error", function () {
+          this.remove();
+          thumbEl.appendChild(el("span", "", "\u2715"));
+          cardEl.classList.add("artifact-card-error");
+        });
+      })(card, thumb);
+      thumb.appendChild(img);
+      thumb.appendChild(el("span", "artifact-card-duration", formatDuration(parsed.totalDuration)));
+      card.appendChild(thumb);
+
+      var meta = el("div", "artifact-card-meta");
+      meta.appendChild(el("span", "artifact-card-ref", item.participant + "." + item.row));
+      card.appendChild(meta);
+
+      var removeBtn = el("button", "artifact-card-remove", "\u00D7");
+      removeBtn.title = "Remove";
+      (function (idx) {
+        removeBtn.addEventListener("click", function (ev) {
+          ev.stopPropagation();
+          state.artifactQueue.splice(idx, 1);
+          renderArtifactQueue();
+          updateCellClasses();
+        });
+      })(i);
+      card.appendChild(removeBtn);
+
+      list.appendChild(card);
     }
   }
 
@@ -707,38 +784,19 @@
     qs("#reelDuration").textContent = formatDuration(totalDur);
   }
 
-  function makeQueueItem(item, idx, type) {
-    var div = el("div", "queue-item");
-    div.appendChild(
-      el("span", "queue-item-ref", item.participant + "." + item.row)
-    );
-    div.appendChild(el("span", "queue-item-desc", truncate(item.desc, 40)));
-    div.appendChild(el("span", "queue-item-ts", item.timestamp));
-
-    var removeBtn = el("button", "queue-item-remove", "\u00D7");
-    removeBtn.title = "Remove";
-    removeBtn.addEventListener("click", function (ev) {
-      ev.stopPropagation();
-      if (type === "artifact") {
-        state.artifactQueue.splice(idx, 1);
-        renderArtifactQueue();
-      } else {
-        state.reelQueue.splice(idx, 1);
-        renderReelQueue();
-      }
-      updateCellClasses();
-    });
-    div.appendChild(removeBtn);
-
-    return div;
-  }
-
   // ---- Buttons ----
 
   function bindButtons() {
     qs("#clearArtifactsBtn").addEventListener("click", function () {
       state.artifactQueue = [];
       renderArtifactQueue();
+      updateCellClasses();
+    });
+
+    qs("#addToReelBtn").addEventListener("click", function () {
+      for (var i = 0; i < state.artifactQueue.length; i++) {
+        addToQueue(state.reelQueue, state.artifactQueue[i], renderReelQueue);
+      }
       updateCellClasses();
     });
 
