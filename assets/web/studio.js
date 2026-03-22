@@ -644,7 +644,6 @@
     qs("#buildReelBtn").addEventListener("click", onBuildReel);
     qs("#buildViewerBtn").addEventListener("click", onBuildViewer);
     qs("#buildTimelineViewerBtn").addEventListener("click", onBuildTimelineViewer);
-    qs("#exportManifestBtn").addEventListener("click", onExportManifest);
     qs("#regenerateBtn").addEventListener("click", onRegenerate);
 
     qs("#statusDismiss").addEventListener("click", hideOverlay);
@@ -785,34 +784,6 @@
       });
   }
 
-  function onExportManifest() {
-    if (state.generating || state.generatedArtifacts.length === 0) return;
-    state.generating = true;
-
-    showOverlay("Exporting manifest...");
-
-    fetch("api/manifest", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({}),
-    })
-      .then(function (r) {
-        return r.json();
-      })
-      .then(function (data) {
-        state.generating = false;
-        if (data.ok) {
-          showResult("Manifest exported: " + (data.file || ""), null);
-        } else {
-          showResult(null, data.error || "Manifest export failed");
-        }
-      })
-      .catch(function (err) {
-        state.generating = false;
-        showResult(null, "Request failed: " + err);
-      });
-  }
-
   function onRegenerate() {
     if (state.generating) return;
     state.generating = true;
@@ -847,7 +818,6 @@
   function updateViewerButton() {
     var n = state.generatedArtifacts.length;
     qs("#buildViewerBtn").disabled = n === 0;
-    qs("#exportManifestBtn").disabled = n === 0;
     var count = qs("#viewerArtifactCount");
     count.textContent = n > 0 ? n + " artifact(s) ready" : "";
   }
