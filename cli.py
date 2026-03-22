@@ -1110,9 +1110,9 @@ def main() -> None:
 
     # Standalone insights builder: no spreadsheet needed, reads from manifest
     if getattr(args, "insights", False):
-        import insights_server
+        import server
 
-        insights_server.start_insights_server()
+        server.start_combined_server(worksheet=None, default_page="insights")
         sys.exit(0)
 
     # Standalone gallery: generate interval captures + gallery viewer, no spreadsheet needed
@@ -1158,7 +1158,7 @@ def main() -> None:
             if getattr(args, "studio", False):
                 import server
 
-                server.start_studio_server(worksheet)
+                server.start_combined_server(worksheet=worksheet, default_page="studio")
                 sys.exit(0)
 
             # Execute based on mode

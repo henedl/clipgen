@@ -9,7 +9,7 @@ from icecream import ic
 REENCODING: bool = False
 AUDIO_NORMALIZE: bool = False
 FILEFORMAT: str = ".mp4"
-VERSIONNUM: str = "0.9.25"
+VERSIONNUM: str = "0.9.26"
 TITLECARDS_ENABLED: bool = False
 TITLECARD_DURATION_SECONDS: int = 2
 WORKSHEET_PRIORITY: List[str] = [
@@ -82,8 +82,7 @@ MAX_FILESIZE_MB: int = 0  # Maximum output file size in MB (0 = disabled)
 MIN_SOURCE_VIDEO_SIZE_MB: int = 100  # Minimum file size (MB) to consider as a source video candidate during fuzzy matching
 MANIFEST_FILENAME: str = "clipgen_manifest.json"
 MANIFEST_ENABLED: bool = False
-STUDIO_PORT: int = 8089
-INSIGHTS_PORT: int = 8090
+SERVER_PORT: int = 8089
 INSIGHTS_MANIFEST_FILENAME: str = "insights_manifest.json"
 
 # Sprite sheet constants (for insights builder hover-to-scrub)

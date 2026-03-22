@@ -8,7 +8,7 @@ insight CRUD, artifact browsing, sprite sheet generation, and viewer export.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Tuple, Union
 
 from flask import Blueprint, Response, jsonify, request, send_from_directory
 
@@ -261,14 +261,3 @@ def _init_insights_state() -> None:
         )
 
 
-# ---- Entry point ----
-
-
-def start_insights_server(port: Optional[int] = None) -> None:
-    """Start the Insights Builder HTTP server (combined with Studio).
-
-    When launched standalone (no worksheet), only Insights is available.
-    """
-    import server
-
-    server.start_combined_server(worksheet=None, port=port, default_page="insights")

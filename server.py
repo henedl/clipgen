@@ -1,10 +1,9 @@
 # -*- coding: utf-8 -*-
-"""Studio web server for clipgen.
+"""Web server for clipgen Studio and Insights Builder.
 
-Serves the Studio front-end and exposes REST endpoints for sheet data
+Serves the Studio and Insights Builder front-ends on a single port via
+start_combined_server(), and exposes REST endpoints for sheet data
 access, artifact generation, reel building, and viewer creation.
-Also provides start_combined_server() for running Studio and Insights
-Builder together on a single port.
 """
 
 import sys
@@ -316,16 +315,7 @@ def _init_studio_state(worksheet: Any) -> None:
         sys.exit(1)
 
 
-# ---- Entry points ----
-
-
-def start_studio_server(worksheet: Any, port: Optional[int] = None) -> None:
-    """Start the Studio HTTP server (combined with Insights).
-
-    Called from cli.py when --studio flag is used. The worksheet must
-    already be opened and validated.
-    """
-    start_combined_server(worksheet=worksheet, port=port, default_page="studio")
+# ---- Entry point ----
 
 
 def start_combined_server(
@@ -360,7 +350,7 @@ def start_combined_server(
     def status() -> Response:
         return jsonify({"studio": has_studio, "insights": True})
 
-    port = port or config.STUDIO_PORT
+    port = port or config.SERVER_PORT
     url = f"http://127.0.0.1:{port}/{default_page}/"
 
     utils.info_print(f"clipgen server running at http://127.0.0.1:{port}")
