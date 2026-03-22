@@ -467,6 +467,7 @@
         'url("media/' + encodeURIComponent(artifact.thumbnail) + '")';
       media.style.backgroundSize = (sd.cols * 100) + "% " + (sd.rows * 100) + "%";
       media.dataset.spriteData = JSON.stringify(sd);
+      if (artifact.file) media.dataset.audioFile = artifact.file;
       media.addEventListener("mousemove", spriteHover);
       media.addEventListener("mouseleave", spriteReset);
     } else {
@@ -542,11 +543,84 @@
       var xPct = sd.cols > 1 ? (col / (sd.cols - 1)) * 100 : 0;
       var yPct = sd.rows > 1 ? (row / (sd.rows - 1)) * 100 : 0;
       target.style.backgroundPosition = xPct + "% " + yPct + "%";
+      audioScrubAt(target, frameIndex * sd.interval);
     });
   }
 
   function spriteReset(e) {
     e.currentTarget.style.backgroundPosition = "0% 0%";
+    audioScrubStop();
+  }
+
+  // ---- Audio scrub (Web Audio API) ----
+
+  var _audioCtx = null;
+  var _audioBuffers = {};
+  var _audioLoading = {};
+  var _audioSource = null;
+  var _audioLastTime = -1;
+  var _audioSnippetLen = 0.08;
+  var _audioMinDelta = 0.04;
+
+  function getAudioContext() {
+    if (!_audioCtx) {
+      _audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    }
+    if (_audioCtx.state === "suspended") _audioCtx.resume();
+    return _audioCtx;
+  }
+
+  function loadAudioBuffer(filePath) {
+    if (_audioBuffers[filePath]) return Promise.resolve(_audioBuffers[filePath]);
+    if (_audioLoading[filePath]) return _audioLoading[filePath];
+    _audioLoading[filePath] = fetch("media/" + encodeURIComponent(filePath))
+      .then(function (r) { return r.arrayBuffer(); })
+      .then(function (buf) { return getAudioContext().decodeAudioData(buf); })
+      .then(function (decoded) {
+        _audioBuffers[filePath] = decoded;
+        delete _audioLoading[filePath];
+        return decoded;
+      })
+      .catch(function () {
+        delete _audioLoading[filePath];
+        return null;
+      });
+    return _audioLoading[filePath];
+  }
+
+  function audioScrubAt(mediaEl, timeSec) {
+    if (Math.abs(timeSec - _audioLastTime) < _audioMinDelta) return;
+    _audioLastTime = timeSec;
+
+    var filePath = mediaEl.dataset.audioFile;
+    if (!filePath) return;
+
+    var buf = _audioBuffers[filePath];
+    if (!buf) {
+      loadAudioBuffer(filePath);
+      return;
+    }
+
+    if (timeSec < 0 || timeSec >= buf.duration) return;
+
+    var ctx = getAudioContext();
+    if (_audioSource) {
+      try { _audioSource.stop(); } catch (_) {}
+      _audioSource.disconnect();
+    }
+    _audioSource = ctx.createBufferSource();
+    _audioSource.buffer = buf;
+    _audioSource.connect(ctx.destination);
+    _audioSource.start(0, timeSec, _audioSnippetLen);
+  }
+
+  function audioScrubStop() {
+    _audioLastTime = -1;
+    if (_audioSource) {
+      try { _audioSource.stop(); } catch (_) {}
+      _audioSource.disconnect();
+      _audioSource = null;
+    }
   }
 
   // ---- GIF hover-to-play ----
@@ -1069,6 +1143,7 @@
       media.style.backgroundSize = (sd.cols * 100) + "% " + (sd.rows * 100) + "%";
       media.style.backgroundPosition = "0% 0%";
       media.dataset.spriteData = JSON.stringify(sd);
+      if (artifact.file) media.dataset.audioFile = artifact.file;
       media.addEventListener("mousemove", spriteHover);
       media.addEventListener("mouseleave", spriteReset);
     } else {
