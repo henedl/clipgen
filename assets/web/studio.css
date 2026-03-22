@@ -366,7 +366,7 @@ col.col-participant-col {
   background: var(--color-panel-bg);
   border: 1px solid var(--color-panel-border);
   border-top: none;
-  border-radius: 0 0 18px 18px;
+  border-radius: 0;
   box-shadow: 0 24px 60px var(--color-panel-shadow);
   padding: 1rem 1.5rem 1.5rem;
   display: grid;
@@ -572,6 +572,73 @@ col.col-participant-col {
   margin-bottom: 0.5rem;
 }
 
+/* Quick Actions */
+
+#quickActions {
+  max-width: 1120px;
+  margin: 0 auto;
+  background: var(--color-panel-bg);
+  border: 1px solid var(--color-panel-border);
+  border-top: none;
+  border-radius: 0 0 18px 18px;
+  box-shadow: 0 24px 60px var(--color-panel-shadow);
+  padding: 1rem 1.5rem 1.5rem;
+}
+
+#quickActions h3 {
+  font-size: 0.9rem;
+  font-weight: 600;
+  margin-bottom: 0.6rem;
+}
+
+.quick-actions-grid {
+  display: flex;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.quick-action-card {
+  flex: 1;
+  min-width: 240px;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.75rem 1rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  background: var(--color-surface);
+}
+
+.quick-action-info strong {
+  font-size: 0.82rem;
+  display: block;
+  margin-bottom: 0.15rem;
+}
+
+.quick-action-info span {
+  font-size: 0.78rem;
+  color: var(--color-text-dim);
+}
+
+.quick-action-label {
+  font-size: 0.75rem;
+  color: var(--color-text-dim);
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.quick-action-input {
+  width: 5rem;
+  padding: 0.3rem 0.4rem;
+  border: 1px solid var(--color-border);
+  border-radius: calc(var(--radius) - 2px);
+  background: var(--color-surface);
+  color: var(--color-text);
+  font-size: 0.78rem;
+  font-family: var(--font-mono);
+}
+
 /* Status overlay */
 
 #statusOverlay {
@@ -705,7 +772,8 @@ html[data-theme="dark"] .status-card {
 @media (max-width: 768px) {
   #studioHeader,
   #sheetPreview,
-  #dropAreas {
+  #dropAreas,
+  #quickActions {
     margin-left: 0.5rem;
     margin-right: 0.5rem;
     max-width: 100%;

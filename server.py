@@ -116,6 +116,7 @@ def api_sheet() -> FlaskResponse:
             "ok": True,
             "study": ctx.study_name,
             "version": config.VERSIONNUM,
+            "highlightsDuration": config.HIGHLIGHTS_REEL_DURATION_SECONDS,
             "participants": participants,
             "rows": rows,
         }
@@ -169,15 +170,30 @@ def api_reel() -> FlaskResponse:
 
     data = request.get_json(silent=True) or {}
     cell_strings = data.get("cells", [])
+    highlights_duration = data.get("highlights_duration")
 
     if not cell_strings:
         return jsonify({"ok": False, "error": "No cells specified"}), 400
 
     try:
         reel_input = ", ".join(cell_strings)
-        clips = spreadsheet.generate_list(
-            _worksheet, "reel", reel_input=reel_input, skip_prompts=True
-        )
+
+        original_duration = config.HIGHLIGHTS_REEL_DURATION_SECONDS
+        if highlights_duration is not None:
+            try:
+                val = int(highlights_duration)
+                if val > 0:
+                    config.HIGHLIGHTS_REEL_DURATION_SECONDS = val
+            except (ValueError, TypeError):
+                pass
+
+        try:
+            clips = spreadsheet.generate_list(
+                _worksheet, "reel", reel_input=reel_input, skip_prompts=True
+            )
+        finally:
+            config.HIGHLIGHTS_REEL_DURATION_SECONDS = original_duration
+
         if not clips:
             return jsonify(
                 {"ok": False, "error": "No clips found for the specified cells"}
