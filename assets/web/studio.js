@@ -644,7 +644,7 @@
     qs("#buildReelBtn").addEventListener("click", onBuildReel);
     qs("#buildViewerBtn").addEventListener("click", onBuildViewer);
     qs("#buildTimelineViewerBtn").addEventListener("click", onBuildTimelineViewer);
-qs("#regenerateBtn").addEventListener("click", onRegenerate);
+    qs("#regenerateBtn").addEventListener("click", onRegenerate);
 
     qs("#statusDismiss").addEventListener("click", hideOverlay);
   }
