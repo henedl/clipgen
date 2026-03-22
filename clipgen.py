@@ -81,6 +81,8 @@ MODE_ALIASES = {
     "gallery": "gallery",
     "in": "insights",
     "insights": "insights",
+    "st": "studio",
+    "studio": "studio",
     "se": "settings",
     "settings": "settings",
 }
@@ -1685,9 +1687,14 @@ def _dispatch_interactive_mode(
         _run_gallery_mode_interactive()
         return None
     if mode == "insights":
-        import insights_server
+        import server
 
-        insights_server.start_insights_server()
+        server.start_combined_server(worksheet=worksheet, default_page="insights")
+        return None
+    if mode == "studio":
+        import server
+
+        server.start_combined_server(worksheet=worksheet, default_page="studio")
         return None
     if mode == "timeline-viewer":
         clips_list = spreadsheet.generate_list(worksheet, "batch", skip_prompts=True)
@@ -1770,8 +1777,9 @@ def run_interactive_mode(worksheet: Any) -> None:
             utils.print_mode_heading("Mode selection", "mode.selection")
             input_mode = utils.read_user_input(
                 "\nEnter mode or input directly:\n"
-                "  Tools: (s)creen, (g)if, (re)el, (rl) reel-late, (br)owse, (se)ttings \n"
-                "  Packs: (v)iewer, (tv) timeline-viewer, (gv) gallery, (rg) regenerate, (in) insights \n"
+                "  Tools: (s)creen, (g)if, (re)el, (rl) reel-late, (rg) regenerate, (se)ttings \n"
+                "  Front: (st) studio, (in) insights, (br)owse \n"
+                "  Packs: (v)iewer, (tv) timeline-viewer, (gv) gallery \n"
                 "  Modes: (b)atch, (r)ange, (c)ategory, (l)ine, (ce)ll, (p)articipant, (k)eyword, (sv) severity \n"
                 '  Or enter mixed selectors directly: e.g. 5, P01.11, 13-16, "Observations"\n>> '
             )

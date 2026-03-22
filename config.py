@@ -9,7 +9,7 @@ from icecream import ic
 REENCODING: bool = False
 AUDIO_NORMALIZE: bool = False
 FILEFORMAT: str = ".mp4"
-VERSIONNUM: str = "0.9.21"
+VERSIONNUM: str = "0.9.24"
 TITLECARDS_ENABLED: bool = False
 TITLECARD_DURATION_SECONDS: int = 2
 WORKSHEET_PRIORITY: List[str] = [
@@ -172,4 +172,5 @@ SETTINGS_DESCRIPTIONS: Dict[str, str] = {
     "TRANSCRIBE_MODEL": "Whisper model size: tiny, base, small, medium, large-v3.",
     "TRANSCRIBE_FORMAT": "Transcript output format: md (Markdown), srt, or vtt.",
     "HIGHLIGHTS_REEL_DURATION_SECONDS": "Maximum duration in seconds for the highlights reel time budget.",
+    "MANIFEST_ENABLED": "Write a manifest JSON file alongside generated artifacts for session tracking.",
 }

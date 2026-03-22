@@ -3,6 +3,8 @@
 
 Serves the Studio front-end and exposes REST endpoints for sheet data
 access, artifact generation, reel building, and viewer creation.
+Also provides start_combined_server() for running Studio and Insights
+Builder together on a single port.
 """
 
 import sys
@@ -10,7 +12,15 @@ import webbrowser
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 
-from flask import Flask, Response, jsonify, request, send_from_directory
+from flask import (
+    Blueprint,
+    Flask,
+    Response,
+    jsonify,
+    redirect,
+    request,
+    send_from_directory,
+)
 
 import clipgen
 import config
@@ -20,29 +30,29 @@ import viewer
 
 FlaskResponse = Union[Response, Tuple[Response, int]]
 
-# ---- Module-level state (set once by start_studio_server) ----
+# ---- Module-level state (set once by _init_studio_state) ----
 
 _worksheet: Any = None
 _sheet_context: Optional[spreadsheet.SheetContext] = None
 _generated_artifacts: List[Dict[str, Any]] = []
 _generated_reels: List[Dict[str, Any]] = []
 
-# ---- Flask app ----
-
 _assets_dir = Path(__file__).resolve().parent / "assets" / "web"
 
-app = Flask(__name__, static_folder=None)
+# ---- Blueprint ----
+
+studio_bp = Blueprint("studio", __name__)
 
 
 # ---- Static file serving ----
 
 
-@app.route("/")
+@studio_bp.route("/")
 def serve_index() -> FlaskResponse:
     return send_from_directory(_assets_dir, "studio.html")
 
 
-@app.route("/<path:filename>")
+@studio_bp.route("/<path:filename>")
 def serve_static(filename: str) -> FlaskResponse:
     return send_from_directory(_assets_dir, filename)
 
@@ -50,7 +60,7 @@ def serve_static(filename: str) -> FlaskResponse:
 # ---- API endpoints ----
 
 
-@app.route("/api/sheet")
+@studio_bp.route("/api/sheet")
 def api_sheet() -> FlaskResponse:
     if _sheet_context is None:
         return jsonify({"ok": False, "error": "No sheet loaded"}), 500
@@ -113,7 +123,7 @@ def api_sheet() -> FlaskResponse:
     )
 
 
-@app.route("/api/generate", methods=["POST"])
+@studio_bp.route("/api/generate", methods=["POST"])
 def api_generate() -> FlaskResponse:
     if _worksheet is None:
         return jsonify({"ok": False, "error": "No worksheet loaded"}), 500
@@ -153,7 +163,7 @@ def api_generate() -> FlaskResponse:
         return jsonify({"ok": False, "error": str(e)}), 500
 
 
-@app.route("/api/reel", methods=["POST"])
+@studio_bp.route("/api/reel", methods=["POST"])
 def api_reel() -> FlaskResponse:
     if _worksheet is None:
         return jsonify({"ok": False, "error": "No worksheet loaded"}), 500
@@ -182,7 +192,7 @@ def api_reel() -> FlaskResponse:
         return jsonify({"ok": False, "error": str(e)}), 500
 
 
-@app.route("/api/viewer", methods=["POST"])
+@studio_bp.route("/api/viewer", methods=["POST"])
 def api_viewer() -> FlaskResponse:
     artifacts = _generated_artifacts
     if not artifacts:
@@ -208,7 +218,7 @@ def api_viewer() -> FlaskResponse:
         return jsonify({"ok": False, "error": str(e)}), 500
 
 
-@app.route("/api/timeline-viewer", methods=["POST"])
+@studio_bp.route("/api/timeline-viewer", methods=["POST"])
 def api_timeline_viewer() -> FlaskResponse:
     if _worksheet is None:
         return jsonify({"ok": False, "error": "No worksheet loaded"}), 500
@@ -254,28 +264,106 @@ def api_timeline_viewer() -> FlaskResponse:
         return jsonify({"ok": False, "error": str(e)}), 500
 
 
-# ---- Entry point ----
+@studio_bp.route("/api/manifest", methods=["POST"])
+def api_manifest() -> FlaskResponse:
+    artifacts = _generated_artifacts
+    reels = _generated_reels
+    if not artifacts and not reels:
+        return jsonify(
+            {
+                "ok": False,
+                "error": "No artifacts to export. Generate artifacts first.",
+            }
+        ), 400
+
+    try:
+        study = ""
+        if artifacts:
+            study = artifacts[0].get("study", "")
+        elif reels:
+            study = reels[0].get("study", "")
+
+        manifest_path = viewer.save_manifest(
+            artifacts,
+            new_reels=reels or None,
+            study=study,
+            worksheet_title=getattr(_worksheet, "title", ""),
+            is_excel=clipgen._is_excel_worksheet(_worksheet) if _worksheet else False,
+            mode="studio",
+        )
+        if manifest_path:
+            return jsonify({"ok": True, "file": str(manifest_path)})
+        return jsonify({"ok": False, "error": "Failed to write manifest"}), 500
+
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
 
 
-def start_studio_server(worksheet: Any, port: Optional[int] = None) -> None:
-    """Start the Studio HTTP server.
+# ---- State initialization ----
 
-    Called from cli.py when --studio flag is used. The worksheet must
-    already be opened and validated.
-    """
-    global _worksheet, _sheet_context
+
+def _init_studio_state(worksheet: Any) -> None:
+    """Initialize module-level state for Studio routes."""
+    global _worksheet, _sheet_context, _generated_artifacts, _generated_reels
 
     _worksheet = worksheet
     _sheet_context = spreadsheet.build_sheet_context(worksheet)
+    _generated_artifacts = []
+    _generated_reels = []
 
     if _sheet_context is None:
         utils.error_print("Could not load spreadsheet data for Studio.")
         sys.exit(1)
 
-    port = port or config.STUDIO_PORT
-    url = f"http://127.0.0.1:{port}"
 
-    utils.info_print(f"Studio running at {url}")
+# ---- Entry points ----
+
+
+def start_studio_server(worksheet: Any, port: Optional[int] = None) -> None:
+    """Start the Studio HTTP server (combined with Insights).
+
+    Called from cli.py when --studio flag is used. The worksheet must
+    already be opened and validated.
+    """
+    start_combined_server(worksheet=worksheet, port=port, default_page="studio")
+
+
+def start_combined_server(
+    worksheet: Any = None,
+    port: Optional[int] = None,
+    default_page: str = "studio",
+) -> None:
+    """Start a combined Studio + Insights Builder server on one port.
+
+    When worksheet is provided, both Studio and Insights are available.
+    When worksheet is None, only Insights is registered.
+    """
+    import insights_server
+
+    combined = Flask(__name__, static_folder=None)
+
+    # Always register Insights (only needs manifest files on disk)
+    insights_server._init_insights_state()
+    combined.register_blueprint(insights_server.insights_bp, url_prefix="/insights")
+
+    # Register Studio only if a worksheet is available
+    has_studio = worksheet is not None
+    if has_studio:
+        _init_studio_state(worksheet)
+        combined.register_blueprint(studio_bp, url_prefix="/studio")
+
+    @combined.route("/")
+    def root() -> Response:
+        return redirect(f"/{default_page}/")
+
+    @combined.route("/api/status")
+    def status() -> Response:
+        return jsonify({"studio": has_studio, "insights": True})
+
+    port = port or config.STUDIO_PORT
+    url = f"http://127.0.0.1:{port}/{default_page}/"
+
+    utils.info_print(f"clipgen server running at http://127.0.0.1:{port}")
     webbrowser.open(url)
 
-    app.run(host="127.0.0.1", port=port, debug=False)
+    combined.run(host="127.0.0.1", port=port, debug=False)

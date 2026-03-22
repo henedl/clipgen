@@ -120,7 +120,7 @@
   // ---- Data loading ----
 
   function loadSheetData() {
-    fetch("/api/sheet")
+    fetch("api/sheet")
       .then(function (r) {
         return r.json();
       })
@@ -644,6 +644,7 @@
     qs("#buildReelBtn").addEventListener("click", onBuildReel);
     qs("#buildViewerBtn").addEventListener("click", onBuildViewer);
     qs("#buildTimelineViewerBtn").addEventListener("click", onBuildTimelineViewer);
+    qs("#exportManifestBtn").addEventListener("click", onExportManifest);
 
     qs("#statusDismiss").addEventListener("click", hideOverlay);
   }
@@ -661,7 +662,7 @@
 
     showOverlay("Generating " + cells.length + " " + format + "(s)...");
 
-    fetch("/api/generate", {
+    fetch("api/generate", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ cells: cells, format: format }),
@@ -702,7 +703,7 @@
 
     showOverlay("Building reel from " + cells.length + " clips...");
 
-    fetch("/api/reel", {
+    fetch("api/reel", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ cells: cells }),
@@ -730,7 +731,7 @@
 
     showOverlay("Building timeline viewer...");
 
-    fetch("/api/viewer", {
+    fetch("api/viewer", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({}),
@@ -758,7 +759,7 @@
 
     showOverlay("Building timeline viewer...");
 
-    fetch("/api/timeline-viewer", {
+    fetch("api/timeline-viewer", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({}),
@@ -783,9 +784,38 @@
       });
   }
 
+  function onExportManifest() {
+    if (state.generating || state.generatedArtifacts.length === 0) return;
+    state.generating = true;
+
+    showOverlay("Exporting manifest...");
+
+    fetch("api/manifest", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    })
+      .then(function (r) {
+        return r.json();
+      })
+      .then(function (data) {
+        state.generating = false;
+        if (data.ok) {
+          showResult("Manifest exported: " + (data.file || ""), null);
+        } else {
+          showResult(null, data.error || "Manifest export failed");
+        }
+      })
+      .catch(function (err) {
+        state.generating = false;
+        showResult(null, "Request failed: " + err);
+      });
+  }
+
   function updateViewerButton() {
     var n = state.generatedArtifacts.length;
     qs("#buildViewerBtn").disabled = n === 0;
+    qs("#exportManifestBtn").disabled = n === 0;
     var count = qs("#viewerArtifactCount");
     count.textContent = n > 0 ? n + " artifact(s) ready" : "";
   }
@@ -821,6 +851,18 @@
 
   // ---- Init ----
 
+  function checkNavLinks() {
+    fetch("/api/status")
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        if (data.insights) {
+          var link = qs("#insightsLink");
+          if (link) link.classList.remove("hidden");
+        }
+      })
+      .catch(function () {});
+  }
+
   document.addEventListener("DOMContentLoaded", function () {
     initThemeToggle();
     initDropTargets();
@@ -828,5 +870,6 @@
     bindButtons();
     loadSheetData();
     updateViewerButton();
+    checkNavLinks();
   });
 })();

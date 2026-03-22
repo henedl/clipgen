@@ -153,10 +153,10 @@
 
   function loadData() {
     Promise.all([
-      fetch("/api/artifacts").then(function (r) {
+      fetch("api/artifacts").then(function (r) {
         return r.json();
       }),
-      fetch("/api/insights").then(function (r) {
+      fetch("api/insights").then(function (r) {
         return r.json();
       }),
     ]).then(function (results) {
@@ -303,17 +303,21 @@
     if (artifact.type === "clip" && artifact.thumbnail && artifact.spriteData) {
       var sd = artifact.spriteData;
       media.style.backgroundImage =
-        'url("/media/' + encodeURIComponent(artifact.thumbnail) + '")';
-      media.style.backgroundSize = sd.cols * sd.frameWidth + "px " + sd.rows * sd.frameHeight + "px";
+        'url("media/' + encodeURIComponent(artifact.thumbnail) + '")';
+      media.style.backgroundSize = (sd.cols * 100) + "% " + (sd.rows * 100) + "%";
       media.dataset.spriteData = JSON.stringify(sd);
       media.addEventListener("mousemove", spriteHover);
       media.addEventListener("mouseleave", spriteReset);
     } else {
       var img = document.createElement("img");
-      img.src = "/media/" + encodeURIComponent(artifact.file);
+      var fileSrc = "media/" + encodeURIComponent(artifact.file);
+      img.src = fileSrc;
       img.alt = artifact.description || "";
       img.loading = "lazy";
       media.appendChild(img);
+      if (artifact.type === "gif") {
+        setupGifHover(card, img, fileSrc);
+      }
     }
     card.appendChild(media);
 
@@ -353,26 +357,63 @@
 
   // ---- Sprite hover-to-scrub ----
 
+  var _spriteRaf = 0;
   function spriteHover(e) {
-    var sd;
-    try {
-      sd = JSON.parse(e.currentTarget.dataset.spriteData);
-    } catch (_) {
-      return;
-    }
-    var rect = e.currentTarget.getBoundingClientRect();
-    var x = e.clientX - rect.left;
-    var frac = x / rect.width;
-    var frameIndex = Math.floor(frac * sd.frameCount);
-    frameIndex = Math.max(0, Math.min(frameIndex, sd.frameCount - 1));
-    var col = frameIndex % sd.cols;
-    var row = Math.floor(frameIndex / sd.cols);
-    e.currentTarget.style.backgroundPosition =
-      -(col * sd.frameWidth) + "px " + -(row * sd.frameHeight) + "px";
+    var target = e.currentTarget;
+    var clientX = e.clientX;
+    if (_spriteRaf) return;
+    _spriteRaf = requestAnimationFrame(function () {
+      _spriteRaf = 0;
+      var sd;
+      try {
+        sd = JSON.parse(target.dataset.spriteData);
+      } catch (_) {
+        return;
+      }
+      var rect = target.getBoundingClientRect();
+      var frac = (clientX - rect.left) / rect.width;
+      var frameIndex = Math.floor(frac * sd.frameCount);
+      frameIndex = Math.max(0, Math.min(frameIndex, sd.frameCount - 1));
+      var col = frameIndex % sd.cols;
+      var row = Math.floor(frameIndex / sd.cols);
+      var xPct = sd.cols > 1 ? (col / (sd.cols - 1)) * 100 : 0;
+      var yPct = sd.rows > 1 ? (row / (sd.rows - 1)) * 100 : 0;
+      target.style.backgroundPosition = xPct + "% " + yPct + "%";
+    });
   }
 
   function spriteReset(e) {
-    e.currentTarget.style.backgroundPosition = "0px 0px";
+    e.currentTarget.style.backgroundPosition = "0% 0%";
+  }
+
+  // ---- GIF hover-to-play ----
+
+  function setupGifHover(card, img, gifSrc) {
+    var staticSrc = "";
+    var captured = false;
+
+    function captureFirstFrame() {
+      if (captured) return;
+      captured = true;
+      try {
+        var canvas = document.createElement("canvas");
+        canvas.width = img.naturalWidth;
+        canvas.height = img.naturalHeight;
+        canvas.getContext("2d").drawImage(img, 0, 0);
+        staticSrc = canvas.toDataURL("image/png");
+        img.src = staticSrc;
+      } catch (_) {}
+    }
+
+    img.addEventListener("load", captureFirstFrame, { once: true });
+    if (img.complete && img.naturalWidth > 0) captureFirstFrame();
+
+    card.addEventListener("mouseenter", function () {
+      if (staticSrc) img.src = gifSrc;
+    });
+    card.addEventListener("mouseleave", function () {
+      if (staticSrc) img.src = staticSrc;
+    });
   }
 
   // ---- Click-to-add popover ----
@@ -471,7 +512,7 @@
   }
 
   function createNewInsight() {
-    fetch("/api/insights", {
+    fetch("api/insights", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ title: "Untitled insight" }),
@@ -492,7 +533,7 @@
 
   function deleteInsight(insightId) {
     if (!confirm("Delete this insight? This cannot be undone.")) return;
-    fetch("/api/insights/" + insightId, { method: "DELETE" })
+    fetch("api/insights/" + insightId, { method: "DELETE" })
       .then(function (r) {
         return r.json();
       })
@@ -536,7 +577,7 @@
         }
       }
       if (!insight) return Promise.resolve();
-      return fetch("/api/insights/" + id, {
+      return fetch("api/insights/" + id, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(insight),
@@ -560,7 +601,7 @@
       }
     }
     if (!insight) return;
-    fetch("/api/insights/" + insightId, {
+    fetch("api/insights/" + insightId, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(insight),
@@ -845,15 +886,22 @@
     if (artifact.type === "clip" && artifact.thumbnail && artifact.spriteData) {
       var sd = artifact.spriteData;
       media.style.backgroundImage =
-        'url("/media/' + encodeURIComponent(artifact.thumbnail) + '")';
-      media.style.backgroundSize = sd.cols * sd.frameWidth + "px " + sd.rows * sd.frameHeight + "px";
-      media.style.backgroundPosition = "0px 0px";
+        'url("media/' + encodeURIComponent(artifact.thumbnail) + '")';
+      media.style.backgroundSize = (sd.cols * 100) + "% " + (sd.rows * 100) + "%";
+      media.style.backgroundPosition = "0% 0%";
+      media.dataset.spriteData = JSON.stringify(sd);
+      media.addEventListener("mousemove", spriteHover);
+      media.addEventListener("mouseleave", spriteReset);
     } else {
       var img = document.createElement("img");
-      img.src = "/media/" + encodeURIComponent(artifact.file);
+      var fileSrc = "media/" + encodeURIComponent(artifact.file);
+      img.src = fileSrc;
       img.alt = artifact.description || "";
       img.loading = "lazy";
       media.appendChild(img);
+      if (artifact.type === "gif") {
+        setupGifHover(card, img, fileSrc);
+      }
     }
     card.appendChild(media);
 
@@ -914,20 +962,29 @@
       e.preventDefault();
       isResizing = true;
       handle.classList.add("active");
+      sidebar.classList.add("resizing");
       document.body.style.cursor = "col-resize";
       document.body.style.userSelect = "none";
     });
 
+    var rafPending = false;
     document.addEventListener("mousemove", function (e) {
       if (!isResizing) return;
-      var w = Math.max(280, Math.min(window.innerWidth * 0.5, e.clientX));
-      sidebar.style.width = w + "px";
+      if (rafPending) return;
+      rafPending = true;
+      var clientX = e.clientX;
+      requestAnimationFrame(function () {
+        var w = Math.max(280, Math.min(window.innerWidth * 0.5, clientX));
+        sidebar.style.width = w + "px";
+        rafPending = false;
+      });
     });
 
     document.addEventListener("mouseup", function () {
       if (!isResizing) return;
       isResizing = false;
       handle.classList.remove("active");
+      sidebar.classList.remove("resizing");
       document.body.style.cursor = "";
       document.body.style.userSelect = "";
       try {
@@ -985,7 +1042,7 @@
     qs("#generateViewerBtn").addEventListener("click", function () {
       this.disabled = true;
       var btn = this;
-      fetch("/api/generate-viewer", { method: "POST" })
+      fetch("api/generate-viewer", { method: "POST" })
         .then(function (r) {
           return r.json();
         })
@@ -1004,6 +1061,18 @@
     });
   }
 
+  function checkNavLinks() {
+    fetch("/api/status")
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        if (data.studio) {
+          var link = qs("#studioLink");
+          if (link) link.classList.remove("hidden");
+        }
+      })
+      .catch(function () {});
+  }
+
   // ---- Init ----
 
   function init() {
@@ -1012,6 +1081,7 @@
     bindFilterEvents();
     bindGlobalEvents();
     loadData();
+    checkNavLinks();
   }
 
   if (document.readyState === "loading") {

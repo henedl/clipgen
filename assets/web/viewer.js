@@ -1019,25 +1019,32 @@
 
     tip.innerHTML = html;
     tip.classList.remove("hidden");
-    positionTooltip(tip, ev);
+    positionTooltip(tip, ev.clientX, ev.clientY);
   }
 
+  var _tooltipRaf = 0;
   function moveTooltip(ev) {
-    var tip = qs("#tooltip");
-    if (tip && !tip.classList.contains("hidden")) {
-      positionTooltip(tip, ev);
-    }
+    var clientX = ev.clientX;
+    var clientY = ev.clientY;
+    if (_tooltipRaf) return;
+    _tooltipRaf = requestAnimationFrame(function () {
+      _tooltipRaf = 0;
+      var tip = qs("#tooltip");
+      if (tip && !tip.classList.contains("hidden")) {
+        positionTooltip(tip, clientX, clientY);
+      }
+    });
   }
 
-  function positionTooltip(tip, ev) {
-    var x = ev.clientX + 12;
-    var y = ev.clientY + 12;
+  function positionTooltip(tip, clientX, clientY) {
+    var x = clientX + 12;
+    var y = clientY + 12;
     var rect = tip.getBoundingClientRect();
     if (x + rect.width > window.innerWidth - 8) {
-      x = ev.clientX - rect.width - 12;
+      x = clientX - rect.width - 12;
     }
     if (y + rect.height > window.innerHeight - 8) {
-      y = ev.clientY - rect.height - 12;
+      y = clientY - rect.height - 12;
     }
     tip.style.left = x + "px";
     tip.style.top = y + "px";

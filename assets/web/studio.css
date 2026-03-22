@@ -76,6 +76,25 @@ body {
   gap: 1rem;
 }
 
+.hidden {
+  display: none !important;
+}
+
+.nav-link {
+  font-size: 0.82rem;
+  color: var(--color-accent);
+  text-decoration: none;
+  padding: 0.25rem 0.6rem;
+  border-radius: 6px;
+  border: 1px solid var(--color-border);
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.nav-link:hover {
+  background: var(--color-surface-hover, rgba(0, 0, 0, 0.04));
+  border-color: var(--color-accent);
+}
+
 #studioHeader h1 {
   font-size: 1.25rem;
   font-weight: 600;
