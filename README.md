@@ -54,6 +54,65 @@ The viewer is a standalone `clips_viewer.html` file written to the same director
 - Filters by category, participant, and artifact type.
 - A detail panel with inline video/image preview.
 
+### Studio
+
+clipgen can launch a web-based Studio interface for interactive artifact generation and reel building from your spreadsheet data.
+
+- **CLI**: Pass `--studio` to launch the Studio. A spreadsheet is required (Google Sheets or Excel):
+
+``` shell
+python clipgen.py --studio
+python clipgen.py --studio -s "My Study"
+```
+
+The Studio opens in your browser at `http://127.0.0.1:8089/studio/` and provides:
+
+- An interactive spreadsheet grid with color-coded timestamp cells.
+- Click cells to queue clips, screenshots, or GIFs for generation; shift-click or right-click cells for reel queue.
+- Format selection: video clip (.mp4), screenshot (.png), or GIF (.gif).
+- Drag-to-reorder reel building from queued cells.
+- Build a timeline viewer or export a manifest from generated artifacts.
+- Regenerate all artifacts from a saved manifest.
+- Dark/light theme toggle.
+
+### Insights Builder
+
+clipgen includes an Insights Builder for authoring structured UX research findings from generated artifacts. No spreadsheet is required — it reads artifacts from a previously saved manifest.
+
+- **CLI**: Pass `--insights` to launch the Insights Builder:
+
+``` shell
+python clipgen.py --insights
+python clipgen.py --insights -i ./output -o ./output
+```
+
+The Insights Builder opens in your browser at `http://127.0.0.1:8089/insights/` and provides:
+
+- A media library sidebar showing all artifacts from `clipgen_manifest.json`, with filters by participant, category, severity, and type.
+- Hover-to-scrub previews via auto-generated sprite sheets.
+- Create, edit, and delete insights with structured sections: causes, behaviors, and impacts — each with narrative text and artifact references.
+- Severity and status (draft/final) per insight.
+- Export to a standalone `insights_viewer.html` file that shows finalized insights with embedded artifact references.
+
+When `--studio` is used, the Insights Builder is also available via the `/insights/` path on the same server, so both interfaces share a single port.
+
+### Manifest
+
+clipgen can write a cumulative artifact manifest (`clipgen_manifest.json`) alongside generated clips. The manifest tracks all artifacts and reels across runs, and is required by the Insights Builder and the `--regenerate` flag.
+
+- **CLI**: Pass `--manifest` alongside any mode flag to enable manifest writing:
+
+``` shell
+python clipgen.py -b --manifest
+python clipgen.py -b --viewer --manifest
+```
+
+To regenerate all media artifacts from a saved manifest (no spreadsheet needed):
+
+``` shell
+python clipgen.py --regenerate
+```
+
 ### About the spreadsheet
 
 clipgen assumes that you are using a spreadsheet with a particular layout. A reference spreadsheet is [available here](https://docs.google.com/spreadsheets/d/1O51wnzRrYyz63tT6qy1HlJyVzdh9RT3t6QL5NohrcPc/edit?usp=sharing) - feel free to make a copy and use it in your studies.
