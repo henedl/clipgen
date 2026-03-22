@@ -645,6 +645,7 @@
     qs("#buildViewerBtn").addEventListener("click", onBuildViewer);
     qs("#buildTimelineViewerBtn").addEventListener("click", onBuildTimelineViewer);
     qs("#exportManifestBtn").addEventListener("click", onExportManifest);
+    qs("#regenerateBtn").addEventListener("click", onRegenerate);
 
     qs("#statusDismiss").addEventListener("click", hideOverlay);
   }
@@ -804,6 +805,37 @@
           showResult("Manifest exported: " + (data.file || ""), null);
         } else {
           showResult(null, data.error || "Manifest export failed");
+        }
+      })
+      .catch(function (err) {
+        state.generating = false;
+        showResult(null, "Request failed: " + err);
+      });
+  }
+
+  function onRegenerate() {
+    if (state.generating) return;
+    state.generating = true;
+
+    showOverlay("Regenerating artifacts from manifest...");
+
+    fetch("api/regenerate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    })
+      .then(function (r) {
+        return r.json();
+      })
+      .then(function (data) {
+        state.generating = false;
+        if (data.ok) {
+          showResult(
+            "Regenerated " + data.regenerated + " of " + data.total + " item(s)",
+            null
+          );
+        } else {
+          showResult(null, data.error || "Regeneration failed");
         }
       })
       .catch(function (err) {
