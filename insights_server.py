@@ -157,9 +157,10 @@ def api_generate_viewer() -> FlaskResponse:
         if not study and _artifacts:
             study = _artifacts[0].get("study", "")
 
+        fresh_artifacts = viewer.load_manifest_artifacts()
         data = viewer.finalize_insights_viewer_data(
             ins_list,
-            _artifacts,
+            fresh_artifacts,
             study=study,
             timeline_viewer_file=timeline_viewer_file,
         )
