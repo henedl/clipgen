@@ -327,6 +327,8 @@
     badges.appendChild(el("span", "badge badge-participant", artifact.participant));
     badges.appendChild(el("span", "badge badge-" + artifact.type, artifact.type));
     if (artifact.category) badges.appendChild(el("span", "badge badge-category", artifact.category));
+    var sev = (artifact.severity || "").trim();
+    if (sev) badges.appendChild(el("span", "badge badge-severity " + severityClass(sev), sev));
     meta.appendChild(badges);
     meta.appendChild(el("div", "artifact-desc", truncate(artifact.description, 60)));
     meta.appendChild(el("div", "artifact-time", formatTime(artifact.start) + " \u2013 " + formatTime(artifact.end)));
@@ -952,7 +954,7 @@
       var saved = window.localStorage.getItem(SIDEBAR_WIDTH_KEY);
       if (saved) {
         var w = parseInt(saved, 10);
-        if (w >= 280 && w <= window.innerWidth * 0.5) {
+        if (w >= 280 && w <= sidebar.parentElement.offsetWidth * 0.6) {
           sidebar.style.width = w + "px";
         }
       }
@@ -974,7 +976,9 @@
       rafPending = true;
       var clientX = e.clientX;
       requestAnimationFrame(function () {
-        var w = Math.max(280, Math.min(window.innerWidth * 0.5, clientX));
+        var panelLeft = sidebar.parentElement.getBoundingClientRect().left;
+        var maxW = sidebar.parentElement.offsetWidth * 0.6;
+        var w = Math.max(280, Math.min(maxW, clientX - panelLeft));
         sidebar.style.width = w + "px";
         rafPending = false;
       });
@@ -996,8 +1000,15 @@
     });
 
     // Collapse toggle
+    var _savedWidth = "";
     qs("#collapseBtn").addEventListener("click", function () {
       state.sidebarCollapsed = !state.sidebarCollapsed;
+      if (state.sidebarCollapsed) {
+        _savedWidth = sidebar.style.width;
+        sidebar.style.width = "";
+      } else if (_savedWidth) {
+        sidebar.style.width = _savedWidth;
+      }
       sidebar.classList.toggle("collapsed", state.sidebarCollapsed);
     });
   }

@@ -19,6 +19,7 @@
   --color-screen: #0ea5e9;
   --color-gif: #f97316;
   --color-border: #e0ddd7;
+  --color-grid: rgba(0, 0, 0, 0.03);
   --color-selected: rgba(29, 79, 114, 0.08);
   --color-panel-bg: rgba(255, 255, 255, 0.97);
   --color-panel-border: rgba(148, 163, 184, 0.22);
@@ -49,19 +50,26 @@ html {
 body {
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   background-color: var(--color-bg);
+  background-image:
+    linear-gradient(to right, var(--color-grid) 1px, transparent 1px),
+    linear-gradient(to bottom, var(--color-grid) 1px, transparent 1px);
+  background-size: 40px 40px;
   color: var(--color-text);
   line-height: 1.5;
   min-height: 100vh;
-  overflow: hidden;
 }
 
 /* ---- Header ---- */
 
 #builderHeader {
-  padding: 0.8rem 1.2rem 0.5rem;
+  padding: 1.2rem 1.5rem 0.5rem;
+  max-width: 1120px;
+  margin: 1.5rem auto 0;
   background: var(--color-panel-bg);
-  border-bottom: 1px solid var(--color-panel-border);
-  box-shadow: 0 1px 3px var(--color-panel-shadow);
+  border-radius: 18px 18px 0 0;
+  border: 1px solid var(--color-panel-border);
+  border-bottom: none;
+  box-shadow: 0 24px 60px var(--color-panel-shadow);
   z-index: 100;
   position: relative;
 }
@@ -160,39 +168,58 @@ body {
   background: rgba(185, 28, 28, 0.08);
 }
 
-/* ---- Theme toggle ---- */
+/* ---- Theme toggle (matches viewer/studio) ---- */
 
 #themeToggle {
   position: relative;
   width: 32px;
   height: 32px;
+  border-radius: 999px;
   border: 1px solid var(--color-border);
-  border-radius: var(--radius);
-  background: var(--color-surface);
+  background: var(--color-surface-alt);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
   cursor: pointer;
-  overflow: hidden;
+  transition: background 0.15s ease, border-color 0.15s ease, transform 0.1s ease, box-shadow 0.2s ease;
+  flex-shrink: 0;
+}
+
+#themeToggle:hover {
+  background: var(--color-surface);
+  box-shadow: 0 0 0 1px rgba(148, 163, 184, 0.3);
+}
+
+#themeToggle:active {
+  transform: scale(0.96);
+}
+
+#themeToggle:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
 }
 
 .theme-toggle-icon {
   position: absolute;
-  inset: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  transition: opacity 0.2s, transform 0.2s;
+  width: 16px;
+  height: 16px;
+  border-radius: 999px;
+  transition: opacity 0.22s ease, transform 0.22s ease;
 }
 
-.theme-icon-sun::before {
-  content: "\2600";
-  font-size: 1rem;
-}
-
-.theme-icon-moon::before {
-  content: "\263E";
-  font-size: 1rem;
+.theme-icon-sun {
+  background: radial-gradient(circle at 30% 30%, #ffffff 0, #fde68a 40%, #fbbf24 70%, #f59e0b 100%);
+  box-shadow: 0 0 8px rgba(251, 191, 36, 0.6);
+  opacity: 1;
+  transform: translateX(0) scale(1);
 }
 
 .theme-icon-moon {
+  background:
+    radial-gradient(circle at 30% 30%, #e5e7eb 0, #9ca3af 40%, #4b5563 100%),
+    radial-gradient(circle at 65% 35%, transparent 0, transparent 55%, rgba(15, 23, 42, 0.9) 56%, rgba(15, 23, 42, 0.9) 100%);
+  box-shadow: 0 0 10px rgba(148, 163, 184, 0.5);
   opacity: 0;
   transform: translateX(6px) scale(0.85);
 }
@@ -211,7 +238,14 @@ body {
 
 #builderLayout {
   display: flex;
-  height: calc(100vh - 80px);
+  min-height: calc(100vh - 200px);
+  max-width: 1120px;
+  margin: 0 auto 2.5rem;
+  background: var(--color-panel-bg);
+  border-radius: 0 0 18px 18px;
+  box-shadow: 0 24px 60px var(--color-panel-shadow);
+  border: 1px solid var(--color-panel-border);
+  border-top: none;
   overflow: hidden;
 }
 
@@ -220,12 +254,13 @@ body {
 #mediaLibrary {
   width: var(--sidebar-width);
   min-width: 280px;
-  max-width: 50vw;
+  max-width: 50%;
   display: flex;
   flex-direction: column;
   border-right: 1px solid var(--color-border);
   background: var(--color-panel-bg);
   position: relative;
+  overflow: hidden;
 }
 
 #mediaLibrary.collapsed {
@@ -452,6 +487,19 @@ body {
   background: var(--color-surface-alt);
   color: var(--color-text-dim);
 }
+
+.badge-severity {
+  color: #fff;
+}
+
+.badge-severity.sev-critical { background: var(--sev-critical); }
+.badge-severity.sev-high { background: var(--sev-high); }
+.badge-severity.sev-medium { background: var(--sev-medium); }
+.badge-severity.sev-low { background: var(--sev-low); color: #1f2937; }
+.badge-severity.sev-na { background: var(--sev-na); }
+.badge-severity.sev-positive { background: var(--sev-positive); }
+.badge-severity.sev-very-positive { background: var(--sev-very-positive); }
+.badge-severity.sev-unknown { background: var(--sev-unknown); }
 
 .artifact-desc {
   font-size: 0.72rem;
@@ -948,6 +996,7 @@ html[data-theme="dark"] {
   --color-screen: #22d3ee;
   --color-gif: #fb923c;
   --color-border: #1f2933;
+  --color-grid: rgba(255, 255, 255, 0.04);
   --color-selected: rgba(56, 189, 248, 0.15);
   --color-panel-bg: rgba(15, 23, 42, 0.98);
   --color-panel-border: rgba(148, 163, 184, 0.25);
@@ -966,4 +1015,27 @@ html[data-theme="dark"] {
   --color-causes-bg: rgba(251, 146, 60, 0.1);
   --color-behaviors-bg: rgba(96, 165, 250, 0.1);
   --color-impacts-bg: rgba(248, 113, 113, 0.1);
+}
+
+/* ---- Responsive ---- */
+
+@media (max-width: 768px) {
+  #builderHeader,
+  #builderLayout {
+    margin-left: 0.5rem;
+    margin-right: 0.5rem;
+    max-width: 100%;
+  }
+
+  #builderLayout {
+    flex-direction: column;
+  }
+
+  #mediaLibrary {
+    width: 100% !important;
+    max-width: 100%;
+    border-right: none;
+    border-bottom: 1px solid var(--color-border);
+    max-height: 40vh;
+  }
 }
