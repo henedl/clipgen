@@ -160,12 +160,21 @@
     updateThemeButton(next);
   }
 
-  function updateThemeButton(theme) {
+  function updateThemeButton(explicitTheme) {
     var btn = qs("#themeToggle");
-    if (btn) {
-      btn.setAttribute("data-theme", theme || "");
-      btn.setAttribute("aria-pressed", theme === "dark" ? "true" : "false");
+    if (!btn) return;
+    var effective = explicitTheme;
+    if (effective !== "light" && effective !== "dark") {
+      var prefersDark = false;
+      try {
+        prefersDark =
+          window.matchMedia &&
+          window.matchMedia("(prefers-color-scheme: dark)").matches;
+      } catch (_) {}
+      effective = prefersDark ? "dark" : "light";
     }
+    btn.setAttribute("data-theme", effective);
+    btn.setAttribute("aria-pressed", effective === "dark" ? "true" : "false");
   }
 
   // ---- Data loading ----
@@ -1153,15 +1162,49 @@
 
     // Collapse toggle
     var _savedWidth = "";
+    var collapsibles = sidebar.querySelectorAll(
+      "#filterPanel, #artifactListHeader, #artifactGrid, #sidebarHeader h2"
+    );
+    collapsibles.forEach(function (el) {
+      el.classList.add("sidebar-collapsible");
+    });
+
     qs("#collapseBtn").addEventListener("click", function () {
       state.sidebarCollapsed = !state.sidebarCollapsed;
       if (state.sidebarCollapsed) {
+        // Fade out content, then collapse
         _savedWidth = sidebar.style.width;
-        sidebar.style.width = "";
-      } else if (_savedWidth) {
-        sidebar.style.width = _savedWidth;
+        collapsibles.forEach(function (el) {
+          el.style.opacity = "0";
+        });
+        setTimeout(function () {
+          sidebar.style.width = "";
+          sidebar.classList.add("collapsed");
+        }, 100);
+      } else {
+        // Expand width first, keep content hidden, then fade in
+        // Use a wrapper class that keeps content hidden during width transition
+        sidebar.classList.add("expanding");
+        sidebar.classList.remove("collapsed");
+        if (_savedWidth) sidebar.style.width = _savedWidth;
+        // Wait for width transition to finish before showing content
+        function onExpanded(e) {
+          if (e.propertyName !== "width") return;
+          sidebar.removeEventListener("transitionend", onExpanded);
+          sidebar.classList.remove("expanding");
+          collapsibles.forEach(function (el) {
+            el.style.opacity = "0";
+          });
+          requestAnimationFrame(function () {
+            requestAnimationFrame(function () {
+              collapsibles.forEach(function (el) {
+                el.style.opacity = "";
+              });
+            });
+          });
+        }
+        sidebar.addEventListener("transitionend", onExpanded);
       }
-      sidebar.classList.toggle("collapsed", state.sidebarCollapsed);
     });
   }
 

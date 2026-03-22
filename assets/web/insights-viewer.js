@@ -95,12 +95,21 @@
       });
   }
 
-  function updateThemeButton(theme) {
+  function updateThemeButton(explicitTheme) {
     var btn = qs("#themeToggle");
-    if (btn) {
-      btn.setAttribute("data-theme", theme || "");
-      btn.setAttribute("aria-pressed", theme === "dark" ? "true" : "false");
+    if (!btn) return;
+    var effective = explicitTheme;
+    if (effective !== "light" && effective !== "dark") {
+      var prefersDark = false;
+      try {
+        prefersDark =
+          window.matchMedia &&
+          window.matchMedia("(prefers-color-scheme: dark)").matches;
+      } catch (_) {}
+      effective = prefersDark ? "dark" : "light";
     }
+    btn.setAttribute("data-theme", effective);
+    btn.setAttribute("aria-pressed", effective === "dark" ? "true" : "false");
   }
 
   // ---- Render index ----
