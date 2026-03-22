@@ -697,7 +697,11 @@ def add_duration(start_time: str) -> str | None:
             ],
         )
         return None
-    return seconds_to_timestamp(int(start_seconds) + config.DEFAULT_DURATION_SECONDS)
+    has_hours = start_time.count(":") >= 2
+    return seconds_to_timestamp(
+        int(start_seconds) + config.DEFAULT_DURATION_SECONDS,
+        force_hours=has_hours,
+    )
 
 
 def _parse_single_timestamp_token(token: str) -> tuple[str, str | None]:
@@ -929,13 +933,13 @@ def _clock_to_seconds(ts: str) -> int | None:
     return None
 
 
-def seconds_to_timestamp(total_seconds: int) -> str:
+def seconds_to_timestamp(total_seconds: int, *, force_hours: bool = False) -> str:
     """Format a non-negative number of seconds as H:MM:SS or M:SS."""
     if total_seconds < 0:
         total_seconds = 0
     hours, rem = divmod(total_seconds, config.SECONDS_PER_HOUR)
     minutes, seconds = divmod(rem, config.SECONDS_PER_MINUTE)
-    if hours > 0:
+    if hours > 0 or force_hours:
         return f"{hours:d}:{minutes:02d}:{seconds:02d}"
     return f"{minutes:d}:{seconds:02d}"
 
@@ -975,7 +979,12 @@ def convert_clock_pairs_to_relative(
         if start_rel < 0 or end_rel <= 0 or end_rel <= start_rel:
             skipped.append(f"{start_str}-{end_str}")
             continue
-        result.append((seconds_to_timestamp(start_rel), seconds_to_timestamp(end_rel)))
+        result.append(
+            (
+                seconds_to_timestamp(start_rel, force_hours=True),
+                seconds_to_timestamp(end_rel, force_hours=True),
+            )
+        )
 
     if skipped:
         # Only show detailed skipped clock-based segment warnings at verbose verbosity.
