@@ -122,6 +122,30 @@ def api_sheet() -> FlaskResponse:
     )
 
 
+def _save_manifest_quiet() -> None:
+    """Save manifest after generate/reel; swallow errors so the caller still succeeds."""
+    try:
+        artifacts = _generated_artifacts
+        reels = _generated_reels
+        if not artifacts and not reels:
+            return
+        study = ""
+        if artifacts:
+            study = artifacts[0].get("study", "")
+        elif reels:
+            study = reels[0].get("study", "")
+        viewer.save_manifest(
+            artifacts,
+            new_reels=reels or None,
+            study=study,
+            worksheet_title=getattr(_worksheet, "title", ""),
+            is_excel=clipgen._is_excel_worksheet(_worksheet) if _worksheet else False,
+            mode="studio",
+        )
+    except Exception:
+        pass
+
+
 @studio_bp.route("/api/generate", methods=["POST"])
 def api_generate() -> FlaskResponse:
     if _worksheet is None:
@@ -155,6 +179,7 @@ def api_generate() -> FlaskResponse:
 
         generated, artifacts = clipgen.process_clips(clips, output_format=output_format)
         _generated_artifacts.extend(artifacts)
+        _save_manifest_quiet()
 
         return jsonify({"ok": True, "generated": generated, "artifacts": artifacts})
 
@@ -185,6 +210,7 @@ def api_reel() -> FlaskResponse:
 
         generated, reel_records = clipgen.process_reel(clips)
         _generated_reels.extend(reel_records)
+        _save_manifest_quiet()
         return jsonify({"ok": True, "generated": generated, "reels": reel_records})
 
     except Exception as e:
