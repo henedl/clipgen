@@ -16,6 +16,24 @@
     "Very Positive",
   ];
 
+  var SORT_DEFAULT_DIR = {
+    severity: "desc",
+    chrono: "asc",
+    duration: "desc",
+    alpha: "asc",
+  };
+
+  var SEVERITY_SORT = {
+    "sev-critical": -4,
+    "sev-high": -3,
+    "sev-medium": -2,
+    "sev-low": -1,
+    "sev-na": 0,
+    "sev-positive": 1,
+    "sev-very-positive": 2,
+    "sev-unknown": 998,
+  };
+
   var state = {
     artifacts: [],
     filteredArtifacts: [],
@@ -24,6 +42,7 @@
     sidebarCollapsed: false,
     expandedInsightIds: {},
     popoverArtifactId: null,
+    listSort: null,
   };
 
   // ---- Helpers ----
@@ -279,17 +298,150 @@
     });
   }
 
+  // ---- Sorting ----
+
+  function artifactDurationSec(a) {
+    var s = Number(a.start);
+    var e = Number(a.end);
+    if (isNaN(s)) s = 0;
+    if (isNaN(e)) e = isNaN(s) ? 0 : s;
+    var d = e - s;
+    if (isNaN(d) || d < 0) return 0;
+    return d;
+  }
+
+  function orderedArtifactsForList() {
+    if (!state.listSort) return state.filteredArtifacts;
+    var key = state.listSort.key;
+    var dir = state.listSort.dir;
+    return state.filteredArtifacts.slice().sort(function (a, b) {
+      var r = 0;
+      if (key === "severity") {
+        var ae = !(a.severity || "").trim();
+        var be = !(b.severity || "").trim();
+        if (ae && be) r = 0;
+        else if (ae) r = 1;
+        else if (be) r = -1;
+        else {
+          var ca = severityClass(a.severity);
+          var cb = severityClass(b.severity);
+          var na = SEVERITY_SORT.hasOwnProperty(ca) ? SEVERITY_SORT[ca] : 999;
+          var nb = SEVERITY_SORT.hasOwnProperty(cb) ? SEVERITY_SORT[cb] : 999;
+          if (dir === "desc") r = na - nb;
+          else r = nb - na;
+        }
+      } else if (key === "chrono") {
+        var sa = Number(a.start);
+        var sb = Number(b.start);
+        if (isNaN(sa)) sa = 0;
+        if (isNaN(sb)) sb = 0;
+        r = sa - sb;
+        if (dir === "desc") r = -r;
+      } else if (key === "duration") {
+        var da = artifactDurationSec(a);
+        var db = artifactDurationSec(b);
+        r = da - db;
+        if (dir === "desc") r = -r;
+      } else if (key === "alpha") {
+        var ta = (a.description || "").trim();
+        var tb = (b.description || "").trim();
+        if (!ta && !tb) r = 0;
+        else if (!ta) r = 1;
+        else if (!tb) r = -1;
+        else {
+          r = ta.localeCompare(tb, undefined, { sensitivity: "base" });
+          if (dir === "desc") r = -r;
+        }
+      }
+      return r;
+    });
+  }
+
+  function sortToolbarLabel(key, dir, active) {
+    if (key === "severity") {
+      if (!active) return "Sort by severity";
+      return dir === "desc"
+        ? "Sort by severity: descending (most severe first)"
+        : "Sort by severity: ascending (least severe first)";
+    }
+    if (key === "chrono") {
+      if (!active) return "Sort by chronology (position in source)";
+      return dir === "asc"
+        ? "Sort by chronology: ascending (earliest first)"
+        : "Sort by chronology: descending (latest first)";
+    }
+    if (key === "duration") {
+      if (!active) return "Sort by duration";
+      return dir === "desc"
+        ? "Sort by duration: descending (longest first)"
+        : "Sort by duration: ascending (shortest first)";
+    }
+    if (key === "alpha") {
+      if (!active) return "Sort alphabetically (description)";
+      return dir === "asc"
+        ? "Sort alphabetically: ascending (A\u2013Z)"
+        : "Sort alphabetically: descending (Z\u2013A)";
+    }
+    return "";
+  }
+
+  function updateSortToolbarUI() {
+    var bar = qs("#artifactSortBar");
+    if (!bar) return;
+    qsa("#artifactSortBar .artifact-sort-btn").forEach(function (btn) {
+      var key = btn.getAttribute("data-sort");
+      btn.classList.remove("active", "sort-asc", "sort-desc");
+      var dirEl = btn.querySelector(".sort-dir");
+      if (dirEl) dirEl.textContent = "";
+      var isActive = state.listSort && state.listSort.key === key;
+      btn.setAttribute("aria-pressed", isActive ? "true" : "false");
+      if (isActive) {
+        var d = state.listSort.dir;
+        btn.classList.add("active", d === "asc" ? "sort-asc" : "sort-desc");
+        if (dirEl) dirEl.textContent = d === "asc" ? "\u2191" : "\u2193";
+        btn.title = sortToolbarLabel(key, d, true);
+        btn.setAttribute("aria-label", btn.title);
+      } else {
+        btn.title = sortToolbarLabel(key, null, false);
+        btn.setAttribute("aria-label", btn.title);
+      }
+    });
+  }
+
+  function onSortButtonClick(ev) {
+    var key = ev.currentTarget.getAttribute("data-sort");
+    if (!key || !SORT_DEFAULT_DIR.hasOwnProperty(key)) return;
+    if (state.listSort && state.listSort.key === key) {
+      state.listSort.dir = state.listSort.dir === "asc" ? "desc" : "asc";
+    } else {
+      state.listSort = { key: key, dir: SORT_DEFAULT_DIR[key] };
+    }
+    updateSortToolbarUI();
+    renderArtifactGrid();
+  }
+
+  function initSortToolbar() {
+    var bar = qs("#artifactSortBar");
+    if (!bar || bar.dataset.bound === "1") return;
+    bar.dataset.bound = "1";
+    qsa("#artifactSortBar .artifact-sort-btn").forEach(function (btn) {
+      btn.addEventListener("click", onSortButtonClick);
+    });
+    updateSortToolbarUI();
+  }
+
   // ---- Artifact grid rendering ----
 
   function renderArtifactGrid() {
     var grid = qs("#artifactGrid");
     grid.innerHTML = "";
-    if (state.filteredArtifacts.length === 0) {
+    var ordered = orderedArtifactsForList();
+    if (ordered.length === 0) {
       grid.appendChild(el("div", "empty-state", "No artifacts match filters."));
       return;
     }
-    for (var i = 0; i < state.filteredArtifacts.length; i++) {
-      grid.appendChild(createArtifactCard(state.filteredArtifacts[i]));
+    for (var i = 0; i < ordered.length; i++) {
+      grid.appendChild(createArtifactCard(ordered[i]));
     }
   }
 
@@ -1090,6 +1242,7 @@
     initThemeToggle();
     initSidebarResize();
     bindFilterEvents();
+    initSortToolbar();
     bindGlobalEvents();
     loadData();
     checkNavLinks();

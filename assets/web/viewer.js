@@ -13,6 +13,11 @@
     expandedTracks: {},
   };
 
+  var _thumbQueue = [];
+  var _thumbProcessing = false;
+  var _thumbObserver = null;
+  var _thumbCache = {};
+
   var SORT_DEFAULT_DIR = {
     severity: "desc",
     chrono: "asc",
@@ -126,6 +131,119 @@
     if (cls) e.className = cls;
     if (text !== undefined) e.textContent = text;
     return e;
+  }
+
+  // ---- Clip thumbnails ----
+
+  function generateClipThumbnail(mediaEl, artifact, callback) {
+    var done = false;
+    function finish() {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      video.onerror = null;
+      video.onloadedmetadata = null;
+      video.onseeked = null;
+      video.src = "";
+      video.load();
+      callback();
+    }
+
+    var video = document.createElement("video");
+    video.preload = "metadata";
+    video.muted = true;
+    video.playsInline = true;
+    video.src = artifact.file;
+
+    var timer = setTimeout(finish, 8000);
+
+    video.onerror = function () {
+      mediaEl.classList.remove("thumb-pending");
+      finish();
+    };
+
+    video.onloadedmetadata = function () {
+      var dur = video.duration;
+      if (!dur || !isFinite(dur)) { finish(); return; }
+      var seek = Math.min(Math.max(dur * 0.25, 0.5), 5, dur - 0.01);
+      video.currentTime = Math.max(0, seek);
+    };
+
+    video.onseeked = function () {
+      try {
+        var canvas = document.createElement("canvas");
+        canvas.width = 320;
+        canvas.height = 180;
+        var ctx = canvas.getContext("2d");
+        ctx.drawImage(video, 0, 0, 320, 180);
+        canvas.toBlob(function (blob) {
+          if (!blob) { mediaEl.classList.remove("thumb-pending"); finish(); return; }
+          var url = URL.createObjectURL(blob);
+          _thumbCache[artifact.id] = url;
+          var img = document.createElement("img");
+          img.src = url;
+          img.alt = artifact.description || "";
+          mediaEl.classList.remove("thumb-pending");
+          mediaEl.classList.add("thumb-loaded");
+          mediaEl.appendChild(img);
+          finish();
+        }, "image/jpeg", 0.7);
+      } catch (e) {
+        mediaEl.classList.remove("thumb-pending");
+        finish();
+      }
+    };
+  }
+
+  function processThumbQueue() {
+    if (_thumbProcessing || !_thumbQueue.length) return;
+    _thumbProcessing = true;
+    var item = _thumbQueue.shift();
+    generateClipThumbnail(item.mediaEl, item.artifact, function () {
+      _thumbProcessing = false;
+      processThumbQueue();
+    });
+  }
+
+  function initClipThumbnails() {
+    if (_thumbObserver) { _thumbObserver.disconnect(); _thumbObserver = null; }
+    _thumbQueue = [];
+    _thumbProcessing = false;
+
+    var cards = qsa("#artifactList .artifact-card");
+    if (!cards.length) return;
+
+    function enqueueCard(card) {
+      var id = card.dataset.id;
+      var a = findArtifact(id);
+      if (!a || a.type !== "clip") return;
+      var media = card.querySelector(".artifact-media");
+      if (!media || media.querySelector("img")) return;
+      if (_thumbCache[a.id]) {
+        var img = document.createElement("img");
+        img.src = _thumbCache[a.id];
+        img.alt = a.description || "";
+        media.classList.remove("thumb-pending");
+        media.classList.add("thumb-loaded");
+        media.appendChild(img);
+        return;
+      }
+      _thumbQueue.push({ mediaEl: media, artifact: a });
+      processThumbQueue();
+    }
+
+    if (typeof IntersectionObserver !== "undefined") {
+      _thumbObserver = new IntersectionObserver(function (entries) {
+        entries.forEach(function (entry) {
+          if (!entry.isIntersecting) return;
+          _thumbObserver.unobserve(entry.target);
+          enqueueCard(entry.target);
+        });
+      }, { root: qs("#sidebar"), rootMargin: "200px 0px" });
+      cards.forEach(function (card) { _thumbObserver.observe(card); });
+    } else {
+      cards.forEach(enqueueCard);
+    }
   }
 
   // ---- Initialization ----
@@ -803,6 +921,16 @@
         img.alt = a.description || "";
         img.loading = "lazy";
         media.appendChild(img);
+      } else if (a.type === "clip") {
+        if (_thumbCache[a.id]) {
+          var cimg = document.createElement("img");
+          cimg.src = _thumbCache[a.id];
+          cimg.alt = a.description || "";
+          media.classList.add("thumb-loaded");
+          media.appendChild(cimg);
+        } else {
+          media.classList.add("thumb-pending");
+        }
       }
       card.appendChild(media);
 
@@ -839,6 +967,7 @@
       );
       if (sel) sel.classList.add("selected");
     }
+    initClipThumbnails();
   }
 
   function updateListVisibility() {

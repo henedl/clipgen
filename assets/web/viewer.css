@@ -624,6 +624,30 @@ body {
   display: block;
 }
 
+.artifact-media.thumb-pending {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.artifact-media.thumb-pending::after {
+  content: "";
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: var(--color-border);
+  opacity: 0.4;
+}
+
+.artifact-media.thumb-loaded img {
+  animation: thumbFadeIn 0.25s ease;
+}
+
+@keyframes thumbFadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
 .artifact-meta {
   padding: 0.4rem 0.5rem;
   display: flex;
@@ -877,6 +901,10 @@ body {
 
   .track-expand-btn svg {
     transition: none;
+  }
+
+  .artifact-media.thumb-loaded img {
+    animation: none;
   }
 }
 

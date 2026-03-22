@@ -65,7 +65,7 @@ body {
   padding: 1.2rem 1.5rem 0.5rem;
   max-width: 1120px;
   margin: 1.5rem auto 0;
-  background: var(--color-panel-bg);
+  background: var(--color-surface);
   border-radius: 18px 18px 0 0;
   border: 1px solid var(--color-panel-border);
   border-bottom: none;
@@ -241,7 +241,7 @@ body {
   min-height: calc(100vh - 200px);
   max-width: 1120px;
   margin: 0 auto 2.5rem;
-  background: var(--color-panel-bg);
+  background: var(--color-surface);
   border-radius: 0 0 18px 18px;
   box-shadow: 0 24px 60px var(--color-panel-shadow);
   border: 1px solid var(--color-panel-border);
@@ -258,26 +258,34 @@ body {
   display: flex;
   flex-direction: column;
   border-right: 1px solid var(--color-border);
-  background: var(--color-panel-bg);
+  background: var(--color-surface);
   position: relative;
   overflow: hidden;
+  transition: width 0.15s ease, min-width 0.15s ease;
 }
 
 #mediaLibrary.collapsed {
   width: 48px;
   min-width: 48px;
-  overflow: hidden;
-  transition: width 0.15s;
 }
 
 #mediaLibrary.resizing {
   transition: none !important;
 }
 
+#filterPanel,
+#artifactListHeader,
+#artifactGrid,
+#sidebarHeader h2 {
+  transition: opacity 0.1s ease;
+}
+
 #mediaLibrary.collapsed #filterPanel,
+#mediaLibrary.collapsed #artifactListHeader,
 #mediaLibrary.collapsed #artifactGrid,
 #mediaLibrary.collapsed #sidebarHeader h2 {
-  display: none;
+  opacity: 0;
+  pointer-events: none;
 }
 
 #mediaLibrary.collapsed #collapseBtn {
@@ -304,7 +312,6 @@ body {
   border-radius: 4px;
   background: var(--color-surface);
   cursor: pointer;
-  font-size: 0.85rem;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -387,6 +394,61 @@ body {
 
 #filterSearch::placeholder {
   color: var(--color-text-dim);
+}
+
+/* ---- Sort bar ---- */
+
+.artifact-list-header {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  padding: 0.3rem 0.8rem;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.artifact-sort-bar {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  flex-shrink: 0;
+}
+
+.artifact-sort-btn {
+  position: relative;
+  min-width: 26px;
+  height: 26px;
+  padding: 0 4px;
+  border-radius: 6px;
+  border: 1px solid var(--color-border);
+  background: var(--color-surface-alt);
+  color: var(--color-text);
+  font-size: 0.72rem;
+  font-weight: 600;
+  line-height: 1;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0;
+  transition: background 0.12s ease, border-color 0.12s ease, color 0.12s ease;
+}
+
+.artifact-sort-btn:hover {
+  border-color: var(--color-accent);
+  color: var(--color-accent);
+}
+
+.artifact-sort-btn .sort-dir {
+  font-size: 0.62rem;
+  font-weight: 700;
+  margin-left: 1px;
+  opacity: 0.95;
+}
+
+.artifact-sort-btn.active {
+  border-color: var(--color-accent);
+  background: var(--color-selected);
+  color: var(--color-accent);
 }
 
 /* ---- Artifact grid ---- */

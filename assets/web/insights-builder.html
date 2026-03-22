@@ -32,7 +32,7 @@
     <aside id="mediaLibrary">
       <div id="sidebarHeader">
         <h2>Media Library</h2>
-        <button id="collapseBtn" type="button" aria-label="Collapse sidebar" title="Collapse sidebar">&lsaquo;</button>
+        <button id="collapseBtn" type="button" aria-label="Collapse sidebar" title="Collapse sidebar"><svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6.5 1.5 3.5 5 6.5 8.5"/></svg></button>
       </div>
 
       <div id="filterPanel">
@@ -51,6 +51,14 @@
         <input type="text" id="filterSearch" placeholder="Search artifacts..." autocomplete="off">
       </div>
 
+      <div id="artifactListHeader" class="artifact-list-header">
+        <div id="artifactSortBar" class="artifact-sort-bar" role="toolbar" aria-label="Sort artifact list">
+          <button type="button" class="artifact-sort-btn" data-sort="severity" aria-pressed="false">!<span class="sort-dir" aria-hidden="true"></span></button>
+          <button type="button" class="artifact-sort-btn" data-sort="chrono" aria-pressed="false">&#9201;<span class="sort-dir" aria-hidden="true"></span></button>
+          <button type="button" class="artifact-sort-btn" data-sort="duration" aria-pressed="false">&#8596;<span class="sort-dir" aria-hidden="true"></span></button>
+          <button type="button" class="artifact-sort-btn" data-sort="alpha" aria-pressed="false">A<span class="sort-dir" aria-hidden="true"></span></button>
+        </div>
+      </div>
       <div id="artifactGrid"></div>
       <div id="resizeHandle"></div>
     </aside>
