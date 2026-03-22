@@ -558,9 +558,12 @@
   var _audioBuffers = {};
   var _audioLoading = {};
   var _audioSource = null;
+  var _audioGain = null;
   var _audioLastTime = -1;
-  var _audioSnippetLen = 0.08;
+  var _audioSnippetLen = 0.10;
   var _audioMinDelta = 0.04;
+  var _audioFadeIn = 0.005;
+  var _audioFadeOut = 0.01;
 
   function getAudioContext() {
     if (!_audioCtx) {
@@ -604,22 +607,65 @@
     if (timeSec < 0 || timeSec >= buf.duration) return;
 
     var ctx = getAudioContext();
-    if (_audioSource) {
-      try { _audioSource.stop(); } catch (_) {}
-      _audioSource.disconnect();
+    var now = ctx.currentTime;
+
+    // Crossfade-out the previous snippet instead of hard-stopping
+    if (_audioGain) {
+      _audioGain.gain.cancelScheduledValues(now);
+      _audioGain.gain.setValueAtTime(_audioGain.gain.value, now);
+      _audioGain.gain.linearRampToValueAtTime(0, now + _audioFadeOut);
     }
-    _audioSource = ctx.createBufferSource();
-    _audioSource.buffer = buf;
-    _audioSource.connect(ctx.destination);
-    _audioSource.start(0, timeSec, _audioSnippetLen);
+    if (_audioSource) {
+      var prev = _audioSource;
+      var prevGain = _audioGain;
+      setTimeout(function () {
+        try { prev.stop(); } catch (_) {}
+        prev.disconnect();
+        if (prevGain) prevGain.disconnect();
+      }, _audioFadeOut * 1000 + 5);
+    }
+
+    // Create new source with fade envelope
+    var gain = ctx.createGain();
+    gain.connect(ctx.destination);
+    gain.gain.setValueAtTime(0, now);
+    gain.gain.linearRampToValueAtTime(1, now + _audioFadeIn);
+    gain.gain.setValueAtTime(1, now + _audioSnippetLen - _audioFadeOut);
+    gain.gain.linearRampToValueAtTime(0, now + _audioSnippetLen);
+
+    var src = ctx.createBufferSource();
+    src.buffer = buf;
+    src.connect(gain);
+    src.onended = function () {
+      src.disconnect();
+      gain.disconnect();
+      if (_audioSource === src) { _audioSource = null; _audioGain = null; }
+    };
+    src.start(0, timeSec, _audioSnippetLen);
+
+    _audioSource = src;
+    _audioGain = gain;
   }
 
   function audioScrubStop() {
     _audioLastTime = -1;
     if (_audioSource) {
-      try { _audioSource.stop(); } catch (_) {}
-      _audioSource.disconnect();
+      var ctx = getAudioContext();
+      var now = ctx.currentTime;
+      var src = _audioSource;
+      var gain = _audioGain;
+      if (gain) {
+        gain.gain.cancelScheduledValues(now);
+        gain.gain.setValueAtTime(gain.gain.value, now);
+        gain.gain.linearRampToValueAtTime(0, now + _audioFadeOut);
+      }
+      setTimeout(function () {
+        try { src.stop(); } catch (_) {}
+        src.disconnect();
+        if (gain) gain.disconnect();
+      }, _audioFadeOut * 1000 + 5);
       _audioSource = null;
+      _audioGain = null;
     }
   }
 
