@@ -172,6 +172,44 @@ def test_api_thumbnail_caches(client, monkeypatch, tmp_path):
     assert call_count[0] == 1
 
 
+def test_api_manifest_get_returns_artifacts(client, monkeypatch):
+    import viewer
+
+    fake_artifacts = [{"id": "a5c2s0", "type": "clip", "participant": "P01", "cellRow": 5}]
+    monkeypatch.setattr(viewer, "load_manifest_artifacts", lambda: fake_artifacts)
+    monkeypatch.setattr(viewer, "load_manifest_reels", lambda: [])
+    resp = client.get("/studio/api/manifest")
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["ok"] is True
+    assert len(data["artifacts"]) == 1
+    assert data["artifacts"][0]["id"] == "a5c2s0"
+    assert data["reels"] == []
+
+
+def test_api_manifest_get_empty(client, monkeypatch):
+    import viewer
+
+    monkeypatch.setattr(viewer, "load_manifest_artifacts", lambda: [])
+    monkeypatch.setattr(viewer, "load_manifest_reels", lambda: [])
+    resp = client.get("/studio/api/manifest")
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["ok"] is True
+    assert data["artifacts"] == []
+    assert data["reels"] == []
+
+
+def test_api_manifest_post_still_works(client, monkeypatch):
+    monkeypatch.setattr(server, "_generated_artifacts", [])
+    monkeypatch.setattr(server, "_generated_reels", [])
+    resp = client.post("/studio/api/manifest")
+    assert resp.status_code == 400
+    data = resp.get_json()
+    assert data["ok"] is False
+    assert "No artifacts" in data["error"]
+
+
 def test_api_viewer_400_when_no_artifacts(client):
     resp = client.post("/studio/api/viewer")
     assert resp.status_code == 400

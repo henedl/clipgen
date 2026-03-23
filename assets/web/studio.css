@@ -944,11 +944,7 @@ html[data-theme="dark"] .reel-card.reel-card-error .reel-card-thumb {
 }
 
 .artifact-card-queued .artifact-card-remove,
-.artifact-card-success .artifact-card-remove,
-.artifact-card-fail .artifact-card-remove,
-.reel-card-queued .reel-card-remove,
-.reel-card-success .reel-card-remove,
-.reel-card-fail .reel-card-remove {
+.reel-card-queued .reel-card-remove {
   display: none;
 }
 
