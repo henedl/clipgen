@@ -845,79 +845,232 @@
     qs("#statusDismiss").addEventListener("click", hideOverlay);
   }
 
+  // ---- Generation progress helpers ----
+
+  function setTitleSpinner(id, active) {
+    var s = qs("#" + id);
+    if (s) s.classList.toggle("active", active);
+  }
+
+  function findCard(listEl, participant, row) {
+    return listEl.querySelector(
+      '[data-participant="' + participant + '"][data-row="' + row + '"]'
+    );
+  }
+
+  function createPulserOverlay() {
+    var overlay = el("div", "card-gen-overlay");
+    overlay.innerHTML =
+      '<svg width="26" height="10" viewBox="0 0 26 10">' +
+      '<circle cx="5" cy="7" r="3"/>' +
+      '<circle cx="13" cy="7" r="3"/>' +
+      '<circle cx="21" cy="7" r="3"/>' +
+      '</svg>';
+    return overlay;
+  }
+
+  function createResultBadge(success) {
+    var badge = el("div", "card-gen-badge " + (success ? "card-gen-badge-ok" : "card-gen-badge-fail"));
+    badge.innerHTML = success
+      ? '<svg width="12" height="12" viewBox="0 0 12 12"><path d="M2.5 6.5l2.5 2.5 4.5-5" fill="none" stroke="#fff" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>'
+      : '<svg width="12" height="12" viewBox="0 0 12 12"><path d="M3 3l6 6M9 3l-6 6" fill="none" stroke="#fff" stroke-width="1.5" stroke-linecap="round"/></svg>';
+    return badge;
+  }
+
+  function setCardQueued(card) {
+    card.classList.add(
+      card.classList.contains("reel-card") ? "reel-card-queued" : "artifact-card-queued"
+    );
+    var thumb = card.querySelector(".artifact-card-thumb, .reel-card-thumb");
+    if (thumb) thumb.appendChild(createPulserOverlay());
+  }
+
+  function setCardResult(card, success) {
+    var isReel = card.classList.contains("reel-card");
+    card.classList.remove(isReel ? "reel-card-queued" : "artifact-card-queued");
+    card.classList.add(
+      isReel
+        ? (success ? "reel-card-success" : "reel-card-fail")
+        : (success ? "artifact-card-success" : "artifact-card-fail")
+    );
+    var overlay = card.querySelector(".card-gen-overlay");
+    if (overlay) overlay.remove();
+    var thumb = card.querySelector(".artifact-card-thumb, .reel-card-thumb");
+    if (thumb) thumb.appendChild(createResultBadge(success));
+  }
+
+  function clearCardStates(listEl) {
+    var cards = listEl.querySelectorAll(
+      ".artifact-card-queued, .artifact-card-success, .artifact-card-fail," +
+      ".reel-card-queued, .reel-card-success, .reel-card-fail"
+    );
+    for (var i = 0; i < cards.length; i++) {
+      cards[i].classList.remove(
+        "artifact-card-queued", "artifact-card-success", "artifact-card-fail",
+        "reel-card-queued", "reel-card-success", "reel-card-fail"
+      );
+      var overlay = cards[i].querySelector(".card-gen-overlay");
+      if (overlay) overlay.remove();
+      var badge = cards[i].querySelector(".card-gen-badge");
+      if (badge) badge.remove();
+    }
+  }
+
+  function setGeneratingLock(locked) {
+    var ids = [
+      "#generateBtn", "#buildReelBtn", "#clearArtifactsBtn",
+      "#clearReelBtn", "#addToReelBtn", "#buildHighlightsBtn",
+      "#buildViewerBtn", "#buildTimelineViewerBtn", "#regenerateBtn"
+    ];
+    for (var i = 0; i < ids.length; i++) {
+      var b = qs(ids[i]);
+      if (b) b.disabled = locked;
+    }
+    document.body.classList.toggle("studio-generating", locked);
+  }
+
   // ---- API calls ----
 
   function onGenerate() {
     if (state.generating || state.artifactQueue.length === 0) return;
     state.generating = true;
+    setGeneratingLock(true);
+    setTitleSpinner("artifactsSpinner", true);
 
-    var cells = state.artifactQueue.map(function (item) {
+    var format = qs("#artifactFormat").value;
+    var list = qs("#artifactsList");
+    var items = state.artifactQueue.slice();
+    var cells = items.map(function (item) {
       return item.participant + "." + item.row;
     });
-    var format = qs("#artifactFormat").value;
 
-    showOverlay("Generating " + cells.length + " " + format + "(s)...");
+    for (var i = 0; i < items.length; i++) {
+      var c = findCard(list, items[i].participant, items[i].row);
+      if (c) setCardQueued(c);
+    }
+
+    var totalSuccess = 0;
+    var totalFail = 0;
+    var allArtifacts = [];
+
+    function finishGenerate() {
+      setTitleSpinner("artifactsSpinner", false);
+      state.generating = false;
+      setGeneratingLock(false);
+      if (allArtifacts.length > 0) {
+        state.generatedArtifacts = state.generatedArtifacts.concat(allArtifacts);
+        updateViewerButton();
+      }
+      var msg = "Generated " + totalSuccess + " artifact(s)";
+      if (totalFail > 0) msg += ", " + totalFail + " failed";
+      showResult(
+        totalSuccess > 0 ? msg : null,
+        totalSuccess === 0 && totalFail > 0 ? "All generations failed" : null
+      );
+      qs("#statusOverlay").classList.remove("hidden");
+    }
+
+    function handleLine(line) {
+      var data = JSON.parse(line);
+      var dot = data.cell.lastIndexOf(".");
+      var participant = data.cell.substring(0, dot);
+      var row = data.cell.substring(dot + 1);
+      var card = findCard(list, participant, row);
+      if (data.ok) {
+        if (card) setCardResult(card, true);
+        totalSuccess += (data.generated || 1);
+        if (data.artifacts) allArtifacts = allArtifacts.concat(data.artifacts);
+      } else {
+        if (card) setCardResult(card, false);
+        totalFail++;
+      }
+    }
 
     fetch("api/generate", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ cells: cells, format: format }),
     })
-      .then(function (r) {
-        return r.json();
-      })
-      .then(function (data) {
-        state.generating = false;
-        if (data.ok) {
-          if (data.artifacts) {
-            state.generatedArtifacts = state.generatedArtifacts.concat(
-              data.artifacts
-            );
-          }
-          updateViewerButton();
-          showResult(
-            "Generated " + (data.generated || 0) + " artifact(s)",
-            null
-          );
-        } else {
-          showResult(null, data.error || "Generation failed");
+      .then(function (response) {
+        var reader = response.body.getReader();
+        var decoder = new TextDecoder();
+        var buffer = "";
+
+        function read() {
+          return reader.read().then(function (result) {
+            if (result.done) {
+              if (buffer.trim()) handleLine(buffer.trim());
+              finishGenerate();
+              return;
+            }
+            buffer += decoder.decode(result.value, { stream: true });
+            var lines = buffer.split("\n");
+            buffer = lines.pop();
+            for (var i = 0; i < lines.length; i++) {
+              if (lines[i].trim()) handleLine(lines[i].trim());
+            }
+            return read();
+          });
         }
+
+        return read();
       })
       .catch(function (err) {
-        state.generating = false;
-        showResult(null, "Request failed: " + err);
+        finishGenerate();
       });
   }
 
   function onBuildReel() {
     if (state.generating || state.reelQueue.length === 0) return;
     state.generating = true;
+    setGeneratingLock(true);
+    setTitleSpinner("reelSpinner", true);
 
     var cells = state.reelQueue.map(function (item) {
       return item.participant + "." + item.row;
     });
 
-    showOverlay("Building reel from " + cells.length + " clips...");
+    var list = qs("#reelList");
+    var reelCards = list.querySelectorAll(".reel-card");
+    for (var i = 0; i < reelCards.length; i++) {
+      setCardQueued(reelCards[i]);
+    }
 
     fetch("api/reel", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ cells: cells }),
     })
-      .then(function (r) {
-        return r.json();
-      })
+      .then(function (r) { return r.json(); })
       .then(function (data) {
         state.generating = false;
+        setTitleSpinner("reelSpinner", false);
+        setGeneratingLock(false);
+
+        var cards = list.querySelectorAll(".reel-card");
+        for (var j = 0; j < cards.length; j++) {
+          setCardResult(cards[j], !!data.ok);
+        }
+
         if (data.ok) {
           showResult("Reel built successfully", null);
         } else {
           showResult(null, data.error || "Reel build failed");
         }
+        qs("#statusOverlay").classList.remove("hidden");
       })
       .catch(function (err) {
         state.generating = false;
+        setTitleSpinner("reelSpinner", false);
+        setGeneratingLock(false);
+
+        var cards = list.querySelectorAll(".reel-card");
+        for (var j = 0; j < cards.length; j++) {
+          setCardResult(cards[j], false);
+        }
+
         showResult(null, "Request failed: " + err);
+        qs("#statusOverlay").classList.remove("hidden");
       });
   }
 
@@ -1079,6 +1232,8 @@
 
   function hideOverlay() {
     qs("#statusOverlay").classList.add("hidden");
+    clearCardStates(qs("#artifactsList"));
+    clearCardStates(qs("#reelList"));
   }
 
   // ---- Init ----
