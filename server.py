@@ -293,6 +293,50 @@ def api_generate() -> FlaskResponse:
     return Response(stream(), mimetype="application/x-ndjson", headers={"X-Accel-Buffering": "no"})
 
 
+@studio_bp.route("/api/highlights-preview", methods=["POST"])
+def api_highlights_preview() -> FlaskResponse:
+    if _worksheet is None:
+        return jsonify({"ok": False, "error": "No worksheet loaded"}), 500
+
+    data = request.get_json(silent=True) or {}
+    highlights_duration = data.get("highlights_duration")
+
+    original_duration = config.HIGHLIGHTS_REEL_DURATION_SECONDS
+    if highlights_duration is not None:
+        try:
+            val = int(highlights_duration)
+            if val > 0:
+                config.HIGHLIGHTS_REEL_DURATION_SECONDS = val
+        except (ValueError, TypeError):
+            pass
+
+    try:
+        clips = spreadsheet.generate_list(
+            _worksheet, "reel", reel_input="highlights, batch", skip_prompts=True
+        )
+    finally:
+        config.HIGHLIGHTS_REEL_DURATION_SECONDS = original_duration
+
+    if not clips:
+        return jsonify(
+            {"ok": False, "error": "No clips found for highlights selection"}
+        ), 400
+
+    result = []
+    for clip in clips:
+        cell = clip.get("cell")
+        result.append(
+            {
+                "participant": clip.get("participant", ""),
+                "row": cell.row if cell else 0,
+                "desc": clip.get("desc", ""),
+                "timestamp": str(cell.value) if cell else "",
+            }
+        )
+
+    return jsonify({"ok": True, "clips": result})
+
+
 @studio_bp.route("/api/reel", methods=["POST"])
 def api_reel() -> FlaskResponse:
     if _worksheet is None:

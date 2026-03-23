@@ -53,14 +53,19 @@ body {
   background-size: 40px 40px;
   color: var(--color-text);
   line-height: 1.5;
-  min-height: 100vh;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 
 /* Header */
 
 #studioHeader {
+  flex-shrink: 0;
   padding: 1.2rem 1.5rem 0.8rem;
   max-width: 1120px;
+  width: 100%;
   margin: 1.5rem auto 0;
   background: var(--color-panel-bg);
   border-radius: 18px 18px 0 0;
@@ -189,7 +194,12 @@ body {
 /* Sheet preview */
 
 #sheetPreview {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
   max-width: 1120px;
+  width: 100%;
   margin: 0 auto;
   background: var(--color-panel-bg);
   border-left: 1px solid var(--color-panel-border);
@@ -205,8 +215,9 @@ body {
 }
 
 #sheetGrid {
+  flex: 1;
+  min-height: 0;
   overflow: auto;
-  max-height: 50vh;
   border: 1px solid var(--color-border);
   border-radius: var(--radius);
 }
@@ -362,6 +373,13 @@ col.col-participant-col {
   border-bottom: 1px solid var(--color-border);
   background: transparent;
   opacity: 0.6;
+}
+
+/* Bottom panel (sticky to viewport bottom) */
+
+#bottomPanel {
+  flex-shrink: 0;
+  width: 100%;
 }
 
 /* Drop areas */
@@ -1124,6 +1142,7 @@ html[data-theme="dark"] .reel-card-fail {
 @media (max-width: 768px) {
   #studioHeader,
   #sheetPreview,
+  #bottomPanel,
   #dropAreas,
   #reelArea,
   #quickActions {
@@ -1134,9 +1153,5 @@ html[data-theme="dark"] .reel-card-fail {
 
   #dropAreas {
     grid-template-columns: 1fr;
-  }
-
-  #sheetGrid {
-    max-height: 40vh;
   }
 }
