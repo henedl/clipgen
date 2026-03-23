@@ -13,6 +13,7 @@
     generatedArtifacts: [],
     generating: false,
     cellResults: {},
+    stashes: [],
   };
 
   // ---- Helpers ----
@@ -898,6 +899,7 @@
     var n = state.reelQueue.length;
     qs("#reelCount").textContent = "(" + n + ")";
     qs("#buildReelBtn").disabled = n === 0;
+    qs("#stashReelBtn").disabled = n === 0;
     list.innerHTML = "";
     saveQueues();
 
@@ -973,6 +975,177 @@
     applyCardStates(list);
   }
 
+  // ---- Stashed reels ----
+
+  function loadStashes() {
+    fetch("api/stashes")
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        if (data.ok) {
+          state.stashes = data.stashes || [];
+          renderStashedReels();
+        }
+      })
+      .catch(function () {});
+  }
+
+  function renderStashedReels() {
+    var area = qs("#stashedReelsArea");
+    var list = qs("#stashedReelsList");
+    var n = state.stashes.length;
+    qs("#stashedReelsCount").textContent = "(" + n + ")";
+
+    if (n === 0) {
+      area.classList.add("hidden");
+      return;
+    }
+    area.classList.remove("hidden");
+    list.innerHTML = "";
+
+    for (var i = 0; i < n; i++) {
+      var stash = state.stashes[i];
+      var card = el("div", "stash-card");
+      card.setAttribute("data-stash-id", stash.id);
+
+      var nameEl = el("span", "stash-card-name", truncate(stash.name, 20));
+      nameEl.title = stash.name;
+      (function (stashRef, nameNode) {
+        nameNode.addEventListener("click", function (ev) {
+          ev.stopPropagation();
+          startStashRename(stashRef, nameNode);
+        });
+      })(stash, nameEl);
+      card.appendChild(nameEl);
+
+      var info = el("div", "stash-card-info");
+      info.appendChild(el("span", "", stash.count + " clips"));
+      info.appendChild(el("span", "", formatDuration(stash.totalDuration)));
+      card.appendChild(info);
+
+      var removeBtn = el("button", "stash-card-remove", "\u00D7");
+      removeBtn.title = "Delete stash";
+      (function (stashId) {
+        removeBtn.addEventListener("click", function (ev) {
+          ev.stopPropagation();
+          deleteStash(stashId);
+        });
+      })(stash.id);
+      card.appendChild(removeBtn);
+
+      (function (stashRef) {
+        card.addEventListener("click", function () {
+          recallStash(stashRef);
+        });
+      })(stash);
+
+      list.appendChild(card);
+    }
+  }
+
+  function computeReelDuration(items) {
+    var total = 0;
+    for (var i = 0; i < items.length; i++) {
+      var dur = items[i].segDuration;
+      if (dur === undefined || dur === null) {
+        var segs = parseClipTimestamps(items[i].timestamp);
+        dur = segs.length > 0 ? segs[0].duration : 0;
+      }
+      total += dur || 0;
+    }
+    return total;
+  }
+
+  function stashCurrentReel() {
+    if (state.reelQueue.length === 0) return;
+
+    var items = state.reelQueue.slice();
+    var totalDuration = computeReelDuration(items);
+    fetch("api/stashes", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "create", items: items, name: "", totalDuration: totalDuration }),
+    })
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        if (data.ok) {
+          state.stashes.push(data.stash);
+          for (var i = 0; i < state.reelQueue.length; i++) {
+            var item = state.reelQueue[i];
+            delete state.cellResults[cellKey(item.participant, item.row)];
+          }
+          state.reelQueue = [];
+          renderReelQueue();
+          renderStashedReels();
+          updateCellClasses();
+        }
+      })
+      .catch(function () {});
+  }
+
+  function recallStash(stash) {
+    state.reelQueue = stash.items.slice();
+    renderReelQueue();
+    updateCellClasses();
+  }
+
+  function deleteStash(stashId) {
+    fetch("api/stashes", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "delete", id: stashId }),
+    })
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        if (data.ok) {
+          for (var i = 0; i < state.stashes.length; i++) {
+            if (state.stashes[i].id === stashId) {
+              state.stashes.splice(i, 1);
+              break;
+            }
+          }
+          renderStashedReels();
+        }
+      })
+      .catch(function () {});
+  }
+
+  function startStashRename(stash, nameNode) {
+    var parent = nameNode.parentNode;
+    var input = document.createElement("input");
+    input.className = "stash-card-name-input";
+    input.type = "text";
+    input.value = stash.name;
+
+    function commit() {
+      var newName = input.value.trim() || stash.name;
+      stash.name = newName;
+      var span = el("span", "stash-card-name", truncate(newName, 20));
+      span.title = newName;
+      span.addEventListener("click", function (ev) {
+        ev.stopPropagation();
+        startStashRename(stash, span);
+      });
+      parent.replaceChild(span, input);
+
+      fetch("api/stashes", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "update", id: stash.id, name: newName }),
+      }).catch(function () {});
+    }
+
+    input.addEventListener("blur", commit);
+    input.addEventListener("keydown", function (ev) {
+      if (ev.key === "Enter") { ev.preventDefault(); input.blur(); }
+      if (ev.key === "Escape") { input.value = stash.name; input.blur(); }
+    });
+    input.addEventListener("click", function (ev) { ev.stopPropagation(); });
+
+    parent.replaceChild(input, nameNode);
+    input.focus();
+    input.select();
+  }
+
   // ---- Buttons ----
 
   function bindButtons() {
@@ -1003,6 +1176,7 @@
       updateCellClasses();
     });
 
+    qs("#stashReelBtn").addEventListener("click", stashCurrentReel);
     qs("#generateBtn").addEventListener("click", onGenerate);
     qs("#buildReelBtn").addEventListener("click", onBuildReel);
     qs("#buildViewerBtn").addEventListener("click", onBuildViewer);
@@ -1453,6 +1627,7 @@
     bindReelReorder();
     bindButtons();
     loadSheetData();
+    loadStashes();
     updateViewerButton();
     checkNavLinks();
   });
