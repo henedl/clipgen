@@ -103,6 +103,7 @@
             </label>
           </div>
         </div>
+        <button id="stashReelBtn" class="btn btn-small" disabled>Stash</button>
         <button id="buildReelBtn" class="btn btn-primary" disabled>Build Reel</button>
         <button id="clearReelBtn" class="btn btn-small">Clear</button>
       </div>
@@ -110,6 +111,13 @@
     <div id="reelList" class="drop-target">
       <div class="drop-target-empty">Shift+click or drag cells here to build a reel</div>
     </div>
+  </section>
+
+  <section id="stashedReelsArea" class="hidden">
+    <div id="stashedReelsHeader">
+      <h3>Stashed Reels <span id="stashedReelsCount">(0)</span></h3>
+    </div>
+    <div id="stashedReelsList"></div>
   </section>
   </div>
 

@@ -480,6 +480,7 @@ col.col-participant-col {
   position: relative;
   transition: box-shadow 0.15s, border-color 0.15s;
   user-select: none;
+  will-change: transform;
 }
 
 .artifact-card:active {
@@ -543,9 +544,9 @@ col.col-participant-col {
   border-radius: 50%;
   width: 18px;
   height: 18px;
-  font-size: 0.7rem;
-  line-height: 18px;
-  text-align: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   cursor: pointer;
   opacity: 0;
   transition: opacity 0.15s;
@@ -585,6 +586,11 @@ col.col-participant-col {
   border-radius: 0 0 18px 18px;
   box-shadow: 0 24px 60px var(--color-panel-shadow);
   padding: 1rem 1.5rem 1.5rem;
+}
+
+#reelArea:has(+ #stashedReelsArea:not(.hidden)) {
+  border-radius: 0;
+  margin-bottom: 0;
 }
 
 #reelArea h3 {
@@ -635,6 +641,7 @@ col.col-participant-col {
   position: relative;
   transition: box-shadow 0.15s, border-color 0.15s;
   user-select: none;
+  will-change: transform;
 }
 
 .reel-card:active {
@@ -706,9 +713,9 @@ col.col-participant-col {
   border-radius: 50%;
   width: 18px;
   height: 18px;
-  font-size: 0.7rem;
-  line-height: 18px;
-  text-align: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   cursor: pointer;
   opacity: 0;
   transition: opacity 0.15s;
@@ -743,6 +750,138 @@ html[data-theme="dark"] .reel-card.reel-card-error {
 
 html[data-theme="dark"] .reel-card.reel-card-error .reel-card-thumb {
   color: #f87171;
+}
+
+/* Stashed reels */
+
+#stashedReelsArea {
+  max-width: 1120px;
+  margin: 0 auto 1.5rem;
+  background: var(--color-panel-bg);
+  border: 1px solid var(--color-panel-border);
+  border-top: none;
+  border-radius: 0 0 18px 18px;
+  box-shadow: 0 24px 60px var(--color-panel-shadow);
+  padding: 0.8rem 1.5rem 1rem;
+}
+
+#stashedReelsArea.hidden {
+  display: none;
+}
+
+#stashedReelsHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 0.5rem;
+}
+
+#stashedReelsHeader h3 {
+  font-size: 0.85rem;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+#stashedReelsHeader h3 span {
+  font-weight: 400;
+  color: var(--color-text-dim);
+  font-size: 0.78rem;
+}
+
+#stashedReelsList {
+  display: flex;
+  flex-direction: row;
+  gap: 0.5rem;
+  overflow-x: auto;
+  padding: 0.3rem 0;
+}
+
+.stash-card {
+  flex-shrink: 0;
+  width: 160px;
+  border: 1px solid var(--color-border);
+  border-radius: calc(var(--radius) - 2px);
+  background: var(--color-surface);
+  padding: 0.5rem 0.6rem;
+  cursor: pointer;
+  position: relative;
+  transition: box-shadow 0.15s, border-color 0.15s;
+  user-select: none;
+}
+
+.stash-card:hover {
+  border-color: var(--color-accent);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+
+.stash-card-name {
+  display: block;
+  font-size: 0.78rem;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: text;
+  padding: 1px 2px;
+  border-radius: 3px;
+  border: 1px solid transparent;
+  transition: border-color 0.15s;
+}
+
+.stash-card-name:hover {
+  border-color: var(--color-border);
+}
+
+.stash-card-name-input {
+  display: block;
+  font-size: 0.78rem;
+  font-weight: 600;
+  width: 100%;
+  padding: 1px 2px;
+  border: 1px solid var(--color-accent);
+  border-radius: 3px;
+  background: var(--color-surface);
+  color: var(--color-text);
+  outline: none;
+  font-family: inherit;
+}
+
+.stash-card-info {
+  display: flex;
+  gap: 0.5rem;
+  font-size: 0.7rem;
+  color: var(--color-text-dim);
+  margin-top: 0.25rem;
+  font-family: var(--font-mono);
+}
+
+.stash-card-remove {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  background: rgba(0, 0, 0, 0.5);
+  color: #fff;
+  border: none;
+  border-radius: 50%;
+  width: 18px;
+  height: 18px;
+  font-size: 0.7rem;
+  line-height: 18px;
+  text-align: center;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s;
+  padding: 0;
+}
+
+.stash-card:hover .stash-card-remove {
+  opacity: 1;
+}
+
+.stash-card-remove:hover {
+  background: #dc2626;
 }
 
 /* Area controls */
@@ -1141,6 +1280,9 @@ html[data-theme="dark"] .reel-card.reel-card-error .reel-card-thumb {
     border-color: #f87171;
     background: #451a1a;
   }
+  .stash-card-name-input {
+    background: var(--color-surface-alt);
+  }
 }
 
 html[data-theme="dark"] {
@@ -1198,6 +1340,10 @@ html[data-theme="dark"] .reel-card-fail {
   background: #451a1a;
 }
 
+html[data-theme="dark"] .stash-card-name-input {
+  background: var(--color-surface-alt);
+}
+
 /* ---- Responsive ---- */
 
 @media (max-width: 768px) {
@@ -1206,6 +1352,7 @@ html[data-theme="dark"] .reel-card-fail {
   #bottomPanel,
   #dropAreas,
   #reelArea,
+  #stashedReelsArea,
   #quickActions {
     margin-left: 0.5rem;
     margin-right: 0.5rem;

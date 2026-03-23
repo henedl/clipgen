@@ -84,6 +84,7 @@ MANIFEST_FILENAME: str = "clipgen_manifest.json"
 MANIFEST_ENABLED: bool = False
 SERVER_PORT: int = 8089
 INSIGHTS_MANIFEST_FILENAME: str = "insights_manifest.json"
+STASHES_MANIFEST_FILENAME: str = "reel_stashes.json"
 
 # Sprite sheet constants (for insights builder hover-to-scrub)
 SPRITE_SHEET_FRAME_COUNT: int = 20
