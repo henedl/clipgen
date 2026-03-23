@@ -342,6 +342,42 @@ def test_api_reel_skips_existing_reel(client, monkeypatch, tmp_path):
     assert process_called == []
 
 
+def test_api_gallery_500_when_no_context(client):
+    resp = client.post("/studio/api/gallery", json={"participant": "P01"})
+    assert resp.status_code == 500
+    data = resp.get_json()
+    assert data["ok"] is False
+    assert "No sheet loaded" in data["error"]
+
+
+def test_api_gallery_400_when_no_participant(client, monkeypatch):
+    monkeypatch.setattr(server, "_sheet_context", object())
+    resp = client.post("/studio/api/gallery", json={"participant": "", "format": "screen"})
+    assert resp.status_code == 400
+    data = resp.get_json()
+    assert "No participant" in data["error"]
+
+
+def test_api_gallery_400_for_invalid_format(client, monkeypatch):
+    monkeypatch.setattr(server, "_sheet_context", object())
+    resp = client.post("/studio/api/gallery", json={"participant": "P01", "format": "clip"})
+    assert resp.status_code == 400
+    data = resp.get_json()
+    assert "Invalid format" in data["error"]
+
+
+def test_api_gallery_404_when_video_not_found(client, monkeypatch):
+    monkeypatch.setattr(server, "_sheet_context", object())
+    monkeypatch.setattr(server, "_resolve_source_video", lambda p: None)
+    resp = client.post(
+        "/studio/api/gallery",
+        json={"participant": "P01", "format": "screen", "interval": 10},
+    )
+    assert resp.status_code == 404
+    data = resp.get_json()
+    assert "not found" in data["error"]
+
+
 def test_api_viewer_400_when_no_artifacts(client):
     resp = client.post("/studio/api/viewer")
     assert resp.status_code == 400

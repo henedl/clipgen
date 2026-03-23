@@ -509,6 +509,60 @@ def api_timeline_viewer() -> FlaskResponse:
         return jsonify({"ok": False, "error": str(e)}), 500
 
 
+@studio_bp.route("/api/gallery", methods=["POST"])
+def api_gallery() -> FlaskResponse:
+    if _sheet_context is None:
+        return jsonify({"ok": False, "error": "No sheet loaded"}), 500
+
+    data = request.get_json(silent=True) or {}
+    participant = data.get("participant", "")
+    output_format = data.get("format", "screen")
+    interval = data.get("interval", config.GALLERY_INTERVAL_SECONDS)
+
+    if not participant:
+        return jsonify({"ok": False, "error": "No participant specified"}), 400
+
+    if output_format not in ("screen", "gif"):
+        return jsonify({"ok": False, "error": f"Invalid format: {output_format}"}), 400
+
+    try:
+        interval = int(interval)
+        if interval < 1:
+            interval = config.GALLERY_INTERVAL_SECONDS
+    except (ValueError, TypeError):
+        interval = config.GALLERY_INTERVAL_SECONDS
+
+    video_path = _resolve_source_video(participant)
+    if video_path is None or not video_path.is_file():
+        return jsonify({"ok": False, "error": f"Source video not found for {participant}"}), 404
+
+    try:
+        artifacts = video.generate_interval_captures(
+            str(video_path),
+            interval_seconds=interval,
+            output_format=output_format,
+            gif_duration_seconds=config.GALLERY_GIF_DURATION_SECONDS,
+        )
+        if not artifacts:
+            return jsonify({"ok": False, "error": "No captures generated"}), 500
+
+        duration = video.get_file_duration(str(video_path)) or 0
+        gallery_data = viewer.finalize_gallery_data(
+            artifacts,
+            source_video=video_path.name,
+            video_duration=duration,
+            output_format=output_format,
+            interval=interval,
+        )
+        gallery_path = viewer.generate_gallery_viewer(gallery_data)
+        if gallery_path:
+            return jsonify({"ok": True, "file": str(gallery_path)})
+        return jsonify({"ok": False, "error": "Failed to generate gallery viewer"}), 500
+
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
 @studio_bp.route("/api/manifest", methods=["GET", "POST"])
 def api_manifest() -> FlaskResponse:
     if request.method == "GET":

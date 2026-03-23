@@ -10,11 +10,37 @@
   <header id="studioHeader">
     <div id="studioHeaderTop">
       <h1>clipgen <span class="header-light">Studio</span></h1>
-      <a id="insightsLink" href="/insights/" class="nav-link hidden">Insights Builder</a>
-      <button id="themeToggle" type="button" aria-label="Toggle dark mode" aria-pressed="false">
-        <span class="theme-toggle-icon theme-icon-sun"></span>
-        <span class="theme-toggle-icon theme-icon-moon"></span>
-      </button>
+      <div id="headerActions">
+        <a id="insightsLink" href="/insights/" class="nav-link hidden">Insights Builder</a>
+        <button id="buildTimelineViewerBtn" class="btn btn-small">Timeline Viewer</button>
+        <div class="gallery-group">
+          <button id="galleryBtn" class="btn btn-small btn-icon" title="Generate a gallery viewer from a participant's source video">
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="1" y="1" width="6" height="6" rx="1"/><rect x="9" y="1" width="6" height="6" rx="1"/>
+              <rect x="1" y="9" width="6" height="6" rx="1"/><rect x="9" y="9" width="6" height="6" rx="1"/>
+            </svg>
+            Gallery Viewer
+          </button>
+          <div id="galleryDrawer" class="gallery-drawer">
+            <label class="gallery-drawer-label">Source
+              <select id="galleryParticipant" class="gallery-drawer-select"></select>
+            </label>
+            <label class="gallery-drawer-label">Format
+              <select id="galleryFormat" class="gallery-drawer-select">
+                <option value="screen">Screenshot</option>
+                <option value="gif">GIF</option>
+              </select>
+            </label>
+            <label class="gallery-drawer-label">Interval (s)
+              <input id="galleryInterval" type="number" min="1" step="1" value="10" class="gallery-drawer-input">
+            </label>
+          </div>
+        </div>
+        <button id="themeToggle" type="button" aria-label="Toggle dark mode" aria-pressed="false">
+          <span class="theme-toggle-icon theme-icon-sun"></span>
+          <span class="theme-toggle-icon theme-icon-moon"></span>
+        </button>
+      </div>
     </div>
     <div id="headerMeta">
       <span id="studyName"></span>
@@ -34,10 +60,7 @@
   <div id="bottomPanel">
   <section id="dropAreas">
     <div id="artifactsArea" class="drop-area">
-      <h3><svg id="artifactsSpinner" class="title-spinner" width="14" height="14" viewBox="0 0 14 14" fill="none"><circle cx="7" cy="7" r="5.5" stroke="currentColor" stroke-width="1.5" opacity="0.25"/><circle cx="7" cy="7" r="5.5" stroke="currentColor" stroke-width="1.5" stroke-dasharray="20 15" stroke-linecap="round"><animateTransform attributeName="transform" type="rotate" from="0 7 7" to="360 7 7" dur="0.7s" repeatCount="indefinite"/></circle></svg>Artifacts <span id="artifactsCount">(0)</span></h3>
-      <div id="artifactsList" class="drop-target">
-        <div class="drop-target-empty">Click or drag cells here to queue for generation</div>
-      </div>
+      <h3><svg id="artifactsSpinner" class="title-spinner" width="14" height="14" viewBox="0 0 14 14" fill="none"><circle cx="7" cy="7" r="5.5" stroke="currentColor" stroke-width="1.5" opacity="0.25"/><circle cx="7" cy="7" r="5.5" stroke="currentColor" stroke-width="1.5" stroke-dasharray="20 15" stroke-linecap="round"><animateTransform attributeName="transform" type="rotate" from="0 7 7" to="360 7 7" dur="0.7s" repeatCount="indefinite"/></circle></svg>Artifacts <span id="artifactsCount">(0)</span> <span id="viewerArtifactCount" style="font-weight: 400; font-size: 0.8rem; color: var(--color-text-dim);"></span></h3>
       <div class="area-controls">
         <button id="addToReelBtn" class="btn btn-small btn-icon" disabled>
           <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
@@ -51,18 +74,12 @@
           <option value="gif">GIF (.gif)</option>
         </select>
         <button id="generateBtn" class="btn btn-primary" disabled>Generate</button>
+        <button id="buildViewerBtn" class="btn btn-primary" disabled>Build Viewer</button>
         <button id="clearArtifactsBtn" class="btn btn-small">Clear</button>
       </div>
-    </div>
-
-    <div id="viewerArea" class="drop-area">
-      <h3>Viewers</h3>
-      <p>Build Viewer requires generated artifacts. Timeline Viewer runs a full batch export.</p>
-      <div class="area-controls">
-        <button id="buildViewerBtn" class="btn btn-primary" disabled>Build Viewer</button>
-        <button id="buildTimelineViewerBtn" class="btn btn-primary">Timeline Viewer</button>
+      <div id="artifactsList" class="drop-target">
+        <div class="drop-target-empty">Click or drag cells here to queue for generation</div>
       </div>
-      <span id="viewerArtifactCount" style="font-size: 0.75rem; color: var(--color-text-dim);"></span>
     </div>
   </section>
 

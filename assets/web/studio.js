@@ -277,6 +277,7 @@
         state.sheetData = data;
         renderHeader();
         renderGrid();
+        populateGalleryParticipants(data.participants || []);
         var durInput = qs("#highlightsDuration");
         if (durInput && data.highlightsDuration) {
           durInput.value = data.highlightsDuration;
@@ -1184,6 +1185,7 @@
     qs("#buildViewerBtn").addEventListener("click", onBuildViewer);
     qs("#buildTimelineViewerBtn").addEventListener("click", onBuildTimelineViewer);
     qs("#buildHighlightsBtn").addEventListener("click", onBuildHighlights);
+    qs("#galleryBtn").addEventListener("click", onGallery);
 
     qs("#statusDismiss").addEventListener("click", hideOverlay);
   }
@@ -1282,7 +1284,7 @@
     var ids = [
       "#generateBtn", "#buildReelBtn", "#clearArtifactsBtn",
       "#clearReelBtn", "#addToReelBtn", "#buildHighlightsBtn",
-      "#buildViewerBtn", "#buildTimelineViewerBtn"
+      "#buildViewerBtn", "#buildTimelineViewerBtn", "#galleryBtn"
     ];
     for (var i = 0; i < ids.length; i++) {
       var b = qs(ids[i]);
@@ -1565,6 +1567,82 @@
             null,
             data.error || "No clips found for highlights selection"
           );
+        }
+      })
+      .catch(function (err) {
+        state.generating = false;
+        showResult(null, "Request failed: " + err);
+      });
+  }
+
+  function populateGalleryParticipants(participants) {
+    var sel = qs("#galleryParticipant");
+    if (!sel) return;
+    sel.innerHTML = "";
+    for (var i = 0; i < participants.length; i++) {
+      var opt = el("option");
+      opt.value = participants[i];
+      opt.textContent = participants[i];
+      sel.appendChild(opt);
+    }
+  }
+
+  function onGallery() {
+    if (state.generating) return;
+
+    var drawer = qs("#galleryDrawer");
+    var btn = qs("#galleryBtn");
+    var isOpen = drawer.classList.contains("open");
+
+    var gridIconHTML =
+      '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">' +
+      '<rect x="1" y="1" width="6" height="6" rx="1"/><rect x="9" y="1" width="6" height="6" rx="1"/>' +
+      '<rect x="1" y="9" width="6" height="6" rx="1"/><rect x="9" y="9" width="6" height="6" rx="1"/>' +
+      "</svg>";
+    var checkHTML =
+      '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' +
+      '<path d="M3 8.5l3.5 3.5 6.5-8"/>' +
+      "</svg>";
+
+    if (!isOpen) {
+      drawer.classList.add("open");
+      var w = btn.offsetWidth;
+      btn.style.minWidth = w + "px";
+      btn.innerHTML = checkHTML + "Confirm";
+      return;
+    }
+
+    var participant = qs("#galleryParticipant").value;
+    var format = qs("#galleryFormat").value;
+    var interval = parseInt(qs("#galleryInterval").value, 10);
+    if (!interval || interval < 1) interval = 10;
+
+    drawer.classList.remove("open");
+    btn.style.minWidth = "";
+    btn.innerHTML = gridIconHTML + "Gallery Viewer";
+
+    if (!participant) {
+      showResult(null, "No participant selected for gallery");
+      return;
+    }
+
+    state.generating = true;
+    showOverlay("Generating gallery viewer for " + participant + "...");
+
+    fetch("api/gallery", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ participant: participant, format: format, interval: interval }),
+    })
+      .then(function (r) {
+        return r.json();
+      })
+      .then(function (data) {
+        state.generating = false;
+        if (data.ok) {
+          showResult("Gallery viewer created: " + (data.file || ""), null);
+        } else {
+          showResult(null, data.error || "Gallery build failed");
         }
       })
       .catch(function (err) {
