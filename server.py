@@ -6,6 +6,7 @@ start_combined_server(), and exposes REST endpoints for sheet data
 access, artifact generation, reel building, and viewer creation.
 """
 
+import json
 import sys
 import webbrowser
 from pathlib import Path
@@ -228,26 +229,35 @@ def api_generate() -> FlaskResponse:
         cell_input = ", ".join(cell_strings)
         cell_specs = spreadsheet.parse_cell_specifications(cell_input)
         if not cell_specs:
-            return jsonify(
-                {"ok": False, "error": "Could not parse cell specifications"}
-            ), 400
+            return jsonify({"ok": False, "error": "Could not parse cell specifications"}), 400
 
         clips = spreadsheet.generate_list(
             _worksheet, "cell", cell_specs=cell_specs, skip_prompts=True
         )
-        if not clips:
-            return jsonify(
-                {"ok": False, "error": "No clips found for the specified cells"}
-            ), 400
-
-        generated, artifacts = clipgen.process_clips(clips, output_format=output_format)
-        _generated_artifacts.extend(artifacts)
-        _save_manifest_quiet()
-
-        return jsonify({"ok": True, "generated": generated, "artifacts": artifacts})
-
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
+
+    def stream() -> Any:
+        clip_cells: set[str] = set()
+        for clip in clips:
+            cell_str = clip["participant"] + "." + str(clip["cell"].row)
+            clip_cells.add(cell_str)
+            try:
+                generated, artifacts = clipgen.process_clips(
+                    [clip], output_format=output_format
+                )
+                _generated_artifacts.extend(artifacts)
+                yield json.dumps(
+                    {"cell": cell_str, "ok": generated > 0, "generated": generated, "artifacts": artifacts}
+                ) + "\n"
+            except Exception as e:
+                yield json.dumps({"cell": cell_str, "ok": False, "error": str(e)}) + "\n"
+        for cs in cell_strings:
+            if cs not in clip_cells:
+                yield json.dumps({"cell": cs, "ok": False, "error": "No clip found"}) + "\n"
+        _save_manifest_quiet()
+
+    return Response(stream(), mimetype="application/x-ndjson", headers={"X-Accel-Buffering": "no"})
 
 
 @studio_bp.route("/api/reel", methods=["POST"])
