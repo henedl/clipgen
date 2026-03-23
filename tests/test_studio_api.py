@@ -1,3 +1,5 @@
+import json
+
 import pytest
 
 Flask = pytest.importorskip("flask").Flask
@@ -208,6 +210,136 @@ def test_api_manifest_post_still_works(client, monkeypatch):
     data = resp.get_json()
     assert data["ok"] is False
     assert "No artifacts" in data["error"]
+
+
+def test_api_generate_skips_existing_artifacts(client, monkeypatch, tmp_path):
+    """Already-generated artifacts are returned without re-running process_clips."""
+    import types
+
+    monkeypatch.setattr(server, "_worksheet", object())
+    monkeypatch.setattr("config.OUTPUT_DIR", str(tmp_path))
+
+    # Create the artifact file on disk
+    (tmp_path / "clip.mp4").write_bytes(b"video")
+
+    existing = [
+        {"id": "a5c2s0", "type": "clip", "file": "clip.mp4", "cellRow": 5, "cellCol": 2}
+    ]
+    monkeypatch.setattr(server, "_generated_artifacts", list(existing))
+
+    cell = types.SimpleNamespace(row=5, col=2, value="1:00")
+
+    def fake_generate_list(ws, mode, *, cell_specs, skip_prompts):
+        return [{"participant": "P01", "cell": cell}]
+
+    def fake_parse_cell_specs(text):
+        return [("P01", 5)]
+
+    monkeypatch.setattr("spreadsheet.generate_list", fake_generate_list)
+    monkeypatch.setattr("spreadsheet.parse_cell_specifications", fake_parse_cell_specs)
+
+    process_called = []
+    monkeypatch.setattr(
+        "clipgen.process_clips",
+        lambda *a, **kw: process_called.append(1) or (1, []),
+    )
+
+    resp = client.post("/studio/api/generate", json={"cells": ["P01.5"], "format": "clip"})
+    assert resp.status_code == 200
+    lines = [json.loads(line) for line in resp.data.decode().strip().split("\n")]
+    assert lines[0]["ok"] is True
+    assert lines[0]["skipped"] is True
+    assert lines[0]["artifacts"] == existing
+    assert process_called == []
+
+
+def test_api_generate_regenerates_when_file_missing(client, monkeypatch, tmp_path):
+    """If artifact file is missing from disk, regeneration proceeds normally."""
+    import types
+
+    monkeypatch.setattr(server, "_worksheet", object())
+    monkeypatch.setattr("config.OUTPUT_DIR", str(tmp_path))
+
+    # Artifact record exists but file does NOT
+    stale = [
+        {"id": "a5c2s0", "type": "clip", "file": "gone.mp4", "cellRow": 5, "cellCol": 2}
+    ]
+    monkeypatch.setattr(server, "_generated_artifacts", list(stale))
+
+    cell = types.SimpleNamespace(row=5, col=2, value="1:00")
+
+    def fake_generate_list(ws, mode, *, cell_specs, skip_prompts):
+        return [{"participant": "P01", "cell": cell}]
+
+    monkeypatch.setattr("spreadsheet.generate_list", fake_generate_list)
+    monkeypatch.setattr("spreadsheet.parse_cell_specifications", lambda t: [("P01", 5)])
+
+    new_artifact = {"id": "a5c2s0", "type": "clip", "file": "new.mp4", "cellRow": 5, "cellCol": 2}
+    monkeypatch.setattr(
+        "clipgen.process_clips",
+        lambda *a, **kw: (1, [new_artifact]),
+    )
+
+    resp = client.post("/studio/api/generate", json={"cells": ["P01.5"], "format": "clip"})
+    lines = [json.loads(line) for line in resp.data.decode().strip().split("\n")]
+    assert lines[0]["ok"] is True
+    assert "skipped" not in lines[0]
+    assert lines[0]["artifacts"] == [new_artifact]
+
+
+def test_api_reel_skips_existing_reel(client, monkeypatch, tmp_path):
+    """An identical reel is returned without re-running process_reel."""
+    import types
+
+    import clipgen as clipgen_mod
+
+    monkeypatch.setattr(server, "_worksheet", object())
+    monkeypatch.setattr("config.OUTPUT_DIR", str(tmp_path))
+
+    # Create the reel file on disk
+    (tmp_path / "study_reel.mp4").write_bytes(b"reel")
+
+    cell = types.SimpleNamespace(row=5, col=2, value="1:00-1:30")
+
+    # Compute expected reel ID using the same function the server will use
+    components = [{"cellRow": 5, "cellCol": 2, "start": 60.0, "end": 90.0}]
+    expected_id = clipgen_mod.compute_reel_id(components)
+
+    existing_reel = {
+        "id": expected_id,
+        "file": "study_reel.mp4",
+        "study": "study",
+        "components": components,
+    }
+    monkeypatch.setattr(server, "_generated_reels", [existing_reel])
+
+    def fake_generate_list(ws, mode, *, reel_input, skip_prompts):
+        return [
+            {
+                "participant": "P01",
+                "cell": cell,
+                "desc": "test",
+                "category": "cat",
+                "study": "study",
+                "severity": "",
+            }
+        ]
+
+    monkeypatch.setattr("spreadsheet.generate_list", fake_generate_list)
+
+    process_called = []
+    monkeypatch.setattr(
+        "clipgen.process_reel",
+        lambda *a, **kw: process_called.append(1) or (1, []),
+    )
+
+    resp = client.post("/studio/api/reel", json={"cells": ["P01.5"]})
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["ok"] is True
+    assert data["skipped"] is True
+    assert data["reels"] == [existing_reel]
+    assert process_called == []
 
 
 def test_api_viewer_400_when_no_artifacts(client):

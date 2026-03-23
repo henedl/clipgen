@@ -6,6 +6,7 @@ start_combined_server(), and exposes REST endpoints for sheet data
 access, artifact generation, reel building, and viewer creation.
 """
 
+import hashlib
 import json
 import sys
 import webbrowser
@@ -210,6 +211,22 @@ def _save_manifest_quiet() -> None:
         pass
 
 
+def _find_existing_artifacts(
+    cell_row: int, cell_col: int, artifact_type: str
+) -> List[Dict[str, Any]]:
+    """Return cached artifact records for a cell+type whose files still exist on disk."""
+    matches = [
+        a
+        for a in _generated_artifacts
+        if a.get("cellRow") == cell_row
+        and a.get("cellCol") == cell_col
+        and a.get("type") == artifact_type
+    ]
+    return [
+        a for a in matches if Path(utils.resolve_output_path(a["file"])).is_file()
+    ]
+
+
 @studio_bp.route("/api/generate", methods=["POST"])
 def api_generate() -> FlaskResponse:
     if _worksheet is None:
@@ -242,6 +259,22 @@ def api_generate() -> FlaskResponse:
         for clip in clips:
             cell_str = clip["participant"] + "." + str(clip["cell"].row)
             clip_cells.add(cell_str)
+
+            existing = _find_existing_artifacts(
+                clip["cell"].row, clip["cell"].col, output_format
+            )
+            if existing:
+                yield json.dumps(
+                    {
+                        "cell": cell_str,
+                        "ok": True,
+                        "generated": len(existing),
+                        "artifacts": existing,
+                        "skipped": True,
+                    }
+                ) + "\n"
+                continue
+
             try:
                 generated, artifacts = clipgen.process_clips(
                     [clip], output_format=output_format
@@ -295,6 +328,35 @@ def api_reel() -> FlaskResponse:
             return jsonify(
                 {"ok": False, "error": "No clips found for the specified cells"}
             ), 400
+
+        # Check if an identical reel already exists
+        components: List[Dict[str, Any]] = []
+        for clip in clips:
+            files.prepare_clip(clip)
+            cell = clip.get("cell")
+            for start_str, end_str in clip.get("times", []):
+                components.append(
+                    {
+                        "cellRow": getattr(cell, "row", None),
+                        "cellCol": getattr(cell, "col", None),
+                        "start": utils.timestamp_to_seconds(start_str),
+                        "end": utils.timestamp_to_seconds(end_str),
+                    }
+                )
+        if components:
+            expected_id = clipgen.compute_reel_id(components)
+            for reel in _generated_reels:
+                if reel.get("id") == expected_id and Path(
+                    utils.resolve_output_path(reel["file"])
+                ).is_file():
+                    return jsonify(
+                        {
+                            "ok": True,
+                            "generated": 1,
+                            "reels": [reel],
+                            "skipped": True,
+                        }
+                    )
 
         generated, reel_records = clipgen.process_reel(clips)
         _generated_reels.extend(reel_records)
@@ -450,8 +512,8 @@ def _init_studio_state(worksheet: Any) -> None:
 
     _worksheet = worksheet
     _sheet_context = spreadsheet.build_sheet_context(worksheet)
-    _generated_artifacts = []
-    _generated_reels = []
+    _generated_artifacts = viewer.load_manifest_artifacts()
+    _generated_reels = viewer.load_manifest_reels()
     _thumbnail_cache = {}
 
     if _sheet_context is None:
