@@ -61,6 +61,19 @@
     return -1;
   }
 
+  function clearGridHighlights() {
+    var els = qsa(".header-highlight");
+    for (var i = 0; i < els.length; i++) els[i].classList.remove("header-highlight");
+  }
+
+  function highlightGridHeaders(participant, row) {
+    clearGridHighlights();
+    var th = qs('#sheetGrid thead th[data-participant="' + participant + '"]');
+    if (th) th.classList.add("header-highlight");
+    var td = qs('#sheetGrid tbody td[data-select-row="' + row + '"]');
+    if (td) td.classList.add("header-highlight");
+  }
+
   function parseTimestampToSeconds(ts) {
     var parts = ts.split(":");
     if (parts.length === 3)
@@ -649,6 +662,7 @@
   // ---- Queue rendering ----
 
   function renderArtifactQueue() {
+    clearGridHighlights();
     var list = qs("#artifactsList");
     var n = state.artifactQueue.length;
     qs("#artifactsCount").textContent = "(" + n + ")";
@@ -668,6 +682,8 @@
       var parsed = parseClipTimestamp(item.timestamp);
 
       var card = el("div", "artifact-card");
+      card.setAttribute("data-participant", item.participant);
+      card.setAttribute("data-row", item.row);
       card.setAttribute("draggable", "true");
       (function (itm) {
         card.addEventListener("dragstart", function (ev) {
@@ -716,11 +732,17 @@
       })(i);
       card.appendChild(removeBtn);
 
+      (function (p, r) {
+        card.addEventListener("mouseenter", function () { highlightGridHeaders(p, r); });
+        card.addEventListener("mouseleave", clearGridHighlights);
+      })(item.participant, item.row);
+
       list.appendChild(card);
     }
   }
 
   function renderReelQueue() {
+    clearGridHighlights();
     var list = qs("#reelList");
     var n = state.reelQueue.length;
     qs("#reelCount").textContent = "(" + n + ")";
@@ -743,6 +765,8 @@
 
       var card = el("div", "reel-card");
       card.setAttribute("data-reel-idx", i);
+      card.setAttribute("data-participant", item.participant);
+      card.setAttribute("data-row", item.row);
       card.setAttribute("draggable", "true");
 
       var thumb = el("div", "reel-card-thumb");
@@ -778,6 +802,11 @@
         });
       })(i);
       card.appendChild(removeBtn);
+
+      (function (p, r) {
+        card.addEventListener("mouseenter", function () { highlightGridHeaders(p, r); });
+        card.addEventListener("mouseleave", clearGridHighlights);
+      })(item.participant, item.row);
 
       list.appendChild(card);
     }
