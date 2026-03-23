@@ -847,6 +847,14 @@ def process_clips(
     return (outputs_generated, all_artifacts)
 
 
+def compute_reel_id(components: List[Dict[str, Any]]) -> str:
+    """Compute a deterministic reel ID from its component metadata."""
+    parts = sorted(
+        f"{c['cellRow']}:{c['cellCol']}:{c['start']}:{c['end']}" for c in components
+    )
+    return "reel_" + hashlib.sha256("|".join(parts).encode()).hexdigest()[:8]
+
+
 def process_reel(
     clips_list: List[ClipRecord],
     output_file: Optional[str] = None,
@@ -944,10 +952,7 @@ def process_reel(
     if not ok:
         return (0, [])
 
-    parts = sorted(
-        f"{c['cellRow']}:{c['cellCol']}:{c['start']}:{c['end']}" for c in components
-    )
-    reel_id = "reel_" + hashlib.sha256("|".join(parts).encode()).hexdigest()[:8]
+    reel_id = compute_reel_id(components)
     reel_record = {
         "id": reel_id,
         "file": Path(output_file).name,
