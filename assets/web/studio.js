@@ -4,6 +4,7 @@
   "use strict";
 
   var THEME_STORAGE_KEY = "clipgen-studio-theme";
+  var QUEUE_STORAGE_KEY = "clipgen-studio-queues";
 
   var state = {
     sheetData: null,
@@ -11,6 +12,7 @@
     reelQueue: [],
     generatedArtifacts: [],
     generating: false,
+    cellResults: {},
   };
 
   // ---- Helpers ----
@@ -197,6 +199,27 @@
     btn.setAttribute("aria-pressed", theme === "dark" ? "true" : "false");
   }
 
+  // ---- Queue persistence (sessionStorage) ----
+
+  function saveQueues() {
+    try {
+      sessionStorage.setItem(QUEUE_STORAGE_KEY, JSON.stringify({
+        artifactQueue: state.artifactQueue,
+        reelQueue: state.reelQueue,
+      }));
+    } catch (e) { /* ignore quota errors */ }
+  }
+
+  function restoreQueues() {
+    try {
+      var raw = sessionStorage.getItem(QUEUE_STORAGE_KEY);
+      if (!raw) return;
+      var saved = JSON.parse(raw);
+      if (saved.artifactQueue) state.artifactQueue = saved.artifactQueue;
+      if (saved.reelQueue) state.reelQueue = saved.reelQueue;
+    } catch (e) { /* ignore parse errors */ }
+  }
+
   // ---- Data loading ----
 
   function loadSheetData() {
@@ -217,10 +240,66 @@
         if (durInput && data.highlightsDuration) {
           durInput.value = data.highlightsDuration;
         }
+        restoreQueues();
+        if (state.artifactQueue.length > 0 || state.reelQueue.length > 0) {
+          renderArtifactQueue();
+          renderReelQueue();
+          updateCellClasses();
+        }
+        loadManifestState();
       })
       .catch(function (err) {
         qs("#sheetLoading").textContent = "Failed to load sheet: " + err;
       });
+  }
+
+  function loadManifestState() {
+    fetch("api/manifest")
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        if (!data.ok || !state.sheetData) return;
+        var artifacts = data.artifacts || [];
+        if (artifacts.length === 0) return;
+
+        var seen = {};
+        for (var i = 0; i < artifacts.length; i++) {
+          var a = artifacts[i];
+          if (!a.participant || !a.cellRow || a.type === "transcript") continue;
+          var key = cellKey(a.participant, a.cellRow);
+          if (seen[key]) continue;
+          seen[key] = true;
+
+          var matchedRow = null;
+          for (var j = 0; j < state.sheetData.rows.length; j++) {
+            if (state.sheetData.rows[j].rowNum === a.cellRow) {
+              matchedRow = state.sheetData.rows[j];
+              break;
+            }
+          }
+          if (!matchedRow) continue;
+
+          var cellData = matchedRow.cells[a.participant];
+          if (!cellData || !cellData.valid) continue;
+
+          state.cellResults[key] = "success";
+          if (findInQueue(state.artifactQueue, a.participant, a.cellRow) >= 0) continue;
+
+          state.artifactQueue.push({
+            participant: a.participant,
+            row: a.cellRow,
+            desc: matchedRow.observation || "",
+            timestamp: cellData.value || "",
+          });
+        }
+
+        state.generatedArtifacts = state.generatedArtifacts.concat(
+          artifacts.filter(function (a) { return a.type !== "transcript"; })
+        );
+        renderArtifactQueue();
+        updateCellClasses();
+        updateViewerButton();
+      })
+      .catch(function () {});
   }
 
   // ---- Header rendering ----
@@ -669,6 +748,7 @@
     qs("#generateBtn").disabled = n === 0;
     qs("#addToReelBtn").disabled = n === 0;
     list.innerHTML = "";
+    saveQueues();
 
     if (n === 0) {
       list.appendChild(
@@ -725,7 +805,8 @@
       (function (idx) {
         removeBtn.addEventListener("click", function (ev) {
           ev.stopPropagation();
-          state.artifactQueue.splice(idx, 1);
+          var removed = state.artifactQueue.splice(idx, 1)[0];
+          delete state.cellResults[cellKey(removed.participant, removed.row)];
           renderArtifactQueue();
           updateCellClasses();
         });
@@ -739,6 +820,7 @@
 
       list.appendChild(card);
     }
+    applyCardStates(list);
   }
 
   function renderReelQueue() {
@@ -748,6 +830,7 @@
     qs("#reelCount").textContent = "(" + n + ")";
     qs("#buildReelBtn").disabled = n === 0;
     list.innerHTML = "";
+    saveQueues();
 
     if (n === 0) {
       list.appendChild(
@@ -796,7 +879,8 @@
       (function (idx) {
         removeBtn.addEventListener("click", function (ev) {
           ev.stopPropagation();
-          state.reelQueue.splice(idx, 1);
+          var removed = state.reelQueue.splice(idx, 1)[0];
+          delete state.cellResults[cellKey(removed.participant, removed.row)];
           renderReelQueue();
           updateCellClasses();
         });
@@ -811,12 +895,17 @@
       list.appendChild(card);
     }
     qs("#reelDuration").textContent = formatDuration(totalDur);
+    applyCardStates(list);
   }
 
   // ---- Buttons ----
 
   function bindButtons() {
     qs("#clearArtifactsBtn").addEventListener("click", function () {
+      for (var i = 0; i < state.artifactQueue.length; i++) {
+        var item = state.artifactQueue[i];
+        delete state.cellResults[cellKey(item.participant, item.row)];
+      }
       state.artifactQueue = [];
       renderArtifactQueue();
       updateCellClasses();
@@ -830,6 +919,10 @@
     });
 
     qs("#clearReelBtn").addEventListener("click", function () {
+      for (var i = 0; i < state.reelQueue.length; i++) {
+        var item = state.reelQueue[i];
+        delete state.cellResults[cellKey(item.participant, item.row)];
+      }
       state.reelQueue = [];
       renderReelQueue();
       updateCellClasses();
@@ -839,7 +932,6 @@
     qs("#buildReelBtn").addEventListener("click", onBuildReel);
     qs("#buildViewerBtn").addEventListener("click", onBuildViewer);
     qs("#buildTimelineViewerBtn").addEventListener("click", onBuildTimelineViewer);
-    qs("#regenerateBtn").addEventListener("click", onRegenerate);
     qs("#buildHighlightsBtn").addEventListener("click", onBuildHighlights);
 
     qs("#statusDismiss").addEventListener("click", hideOverlay);
@@ -883,6 +975,9 @@
     );
     var thumb = card.querySelector(".artifact-card-thumb, .reel-card-thumb");
     if (thumb) thumb.appendChild(createPulserOverlay());
+    var p = card.getAttribute("data-participant");
+    var r = card.getAttribute("data-row");
+    if (p && r) delete state.cellResults[cellKey(p, parseInt(r, 10))];
   }
 
   function setCardResult(card, success) {
@@ -897,6 +992,22 @@
     if (overlay) overlay.remove();
     var thumb = card.querySelector(".artifact-card-thumb, .reel-card-thumb");
     if (thumb) thumb.appendChild(createResultBadge(success));
+    var p = card.getAttribute("data-participant");
+    var r = card.getAttribute("data-row");
+    if (p && r) state.cellResults[cellKey(p, parseInt(r, 10))] = success ? "success" : "fail";
+  }
+
+  function applyCardStates(listEl) {
+    var cards = listEl.querySelectorAll(".artifact-card, .reel-card");
+    for (var i = 0; i < cards.length; i++) {
+      var card = cards[i];
+      var p = card.getAttribute("data-participant");
+      var r = card.getAttribute("data-row");
+      var result = state.cellResults[cellKey(p, parseInt(r, 10))];
+      if (result === "success" || result === "fail") {
+        setCardResult(card, result === "success");
+      }
+    }
   }
 
   function clearCardStates(listEl) {
@@ -920,7 +1031,7 @@
     var ids = [
       "#generateBtn", "#buildReelBtn", "#clearArtifactsBtn",
       "#clearReelBtn", "#addToReelBtn", "#buildHighlightsBtn",
-      "#buildViewerBtn", "#buildTimelineViewerBtn", "#regenerateBtn"
+      "#buildViewerBtn", "#buildTimelineViewerBtn"
     ];
     for (var i = 0; i < ids.length; i++) {
       var b = qs(ids[i]);
@@ -1133,37 +1244,6 @@
       });
   }
 
-  function onRegenerate() {
-    if (state.generating) return;
-    state.generating = true;
-
-    showOverlay("Regenerating artifacts from manifest...");
-
-    fetch("api/regenerate", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({}),
-    })
-      .then(function (r) {
-        return r.json();
-      })
-      .then(function (data) {
-        state.generating = false;
-        if (data.ok) {
-          showResult(
-            "Regenerated " + data.regenerated + " of " + data.total + " item(s)",
-            null
-          );
-        } else {
-          showResult(null, data.error || "Regeneration failed");
-        }
-      })
-      .catch(function (err) {
-        state.generating = false;
-        showResult(null, "Request failed: " + err);
-      });
-  }
-
   function onBuildHighlights() {
     if (state.generating) return;
     state.generating = true;
@@ -1232,8 +1312,6 @@
 
   function hideOverlay() {
     qs("#statusOverlay").classList.add("hidden");
-    clearCardStates(qs("#artifactsList"));
-    clearCardStates(qs("#reelList"));
   }
 
   // ---- Init ----

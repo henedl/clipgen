@@ -377,8 +377,13 @@ def api_timeline_viewer() -> FlaskResponse:
         return jsonify({"ok": False, "error": str(e)}), 500
 
 
-@studio_bp.route("/api/manifest", methods=["POST"])
+@studio_bp.route("/api/manifest", methods=["GET", "POST"])
 def api_manifest() -> FlaskResponse:
+    if request.method == "GET":
+        artifacts = viewer.load_manifest_artifacts()
+        reels = viewer.load_manifest_reels()
+        return jsonify({"ok": True, "artifacts": artifacts, "reels": reels})
+
     artifacts = _generated_artifacts
     reels = _generated_reels
     if not artifacts and not reels:
