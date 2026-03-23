@@ -576,7 +576,7 @@ col.col-participant-col {
   background: var(--color-panel-bg);
   border: 1px solid var(--color-panel-border);
   border-top: none;
-  border-radius: 0;
+  border-radius: 0 0 18px 18px;
   box-shadow: 0 24px 60px var(--color-panel-shadow);
   padding: 1rem 1.5rem 1.5rem;
 }
@@ -815,63 +815,49 @@ html[data-theme="dark"] .reel-card.reel-card-error .reel-card-thumb {
   margin-bottom: 0.5rem;
 }
 
-/* Quick Actions */
+/* Highlights button group (inside reel header) */
 
-#quickActions {
-  max-width: 1120px;
-  margin: 0 auto;
-  background: var(--color-panel-bg);
-  border: 1px solid var(--color-panel-border);
-  border-top: none;
-  border-radius: 0 0 18px 18px;
-  box-shadow: 0 24px 60px var(--color-panel-shadow);
-  padding: 1rem 1.5rem 1.5rem;
-}
-
-#quickActions h3 {
-  font-size: 0.9rem;
-  font-weight: 600;
-  margin-bottom: 0.6rem;
-}
-
-.quick-actions-grid {
-  display: flex;
-  gap: 1rem;
-  flex-wrap: wrap;
-}
-
-.quick-action-card {
-  flex: 1;
-  min-width: 240px;
+.highlights-group {
+  position: relative;
   display: flex;
   flex-direction: column;
-  gap: 0.5rem;
-  padding: 0.75rem 1rem;
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius);
-  background: var(--color-surface);
+  align-items: flex-start;
 }
 
-.quick-action-info strong {
-  font-size: 0.82rem;
-  display: block;
-  margin-bottom: 0.15rem;
+.btn-icon {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
 }
 
-.quick-action-info span {
-  font-size: 0.78rem;
-  color: var(--color-text-dim);
+.sparkles-icon {
+  flex-shrink: 0;
 }
 
-.quick-action-label {
+.highlights-drawer {
+  max-height: 0;
+  opacity: 0;
+  overflow: hidden;
+  transition: max-height 0.25s ease, opacity 0.2s ease, margin 0.25s ease;
+  margin-top: 0;
+}
+
+.highlights-drawer.open {
+  max-height: 3rem;
+  opacity: 1;
+  margin-top: 0.4rem;
+}
+
+.highlights-drawer-label {
   font-size: 0.75rem;
   color: var(--color-text-dim);
   display: flex;
   align-items: center;
   gap: 0.35rem;
+  white-space: nowrap;
 }
 
-.quick-action-input {
+.highlights-drawer-input {
   width: 5rem;
   padding: 0.3rem 0.4rem;
   border: 1px solid var(--color-border);
