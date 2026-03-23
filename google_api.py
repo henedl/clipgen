@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """Google Sheets API integration for clipgen."""
 
+import time
 from typing import List
 
 import gspread
@@ -8,6 +9,15 @@ from icecream import ic
 
 import config
 import utils
+
+
+def _is_transient_api_error(exc: gspread.exceptions.APIError) -> bool:
+    """Return True if the APIError is a transient server-side error worth retrying."""
+    try:
+        code = exc.response.status_code
+    except AttributeError:
+        return False
+    return code >= 500
 
 
 def get_worksheet(spreadsheet: gspread.Spreadsheet) -> gspread.Worksheet:
@@ -49,16 +59,31 @@ def get_worksheet(spreadsheet: gspread.Spreadsheet) -> gspread.Worksheet:
 def get_all_spreadsheets(connection: gspread.Client) -> list[str]:
     """Returns list of all accessible Google Spreadsheet names.
 
+    Retries on transient Google API errors (5xx) with exponential backoff.
+
     Args:
         connection: Google client connection object
 
     Returns:
         List of spreadsheet name strings
     """
-    spreadsheet_files = list(connection.list_spreadsheet_files())
-    for doc in spreadsheet_files:
-        utils.debug_print(str(doc))
-    return [doc["name"] for doc in spreadsheet_files]
+    max_retries = config.GOOGLE_API_MAX_RETRIES
+    for attempt in range(max_retries + 1):
+        try:
+            spreadsheet_files = list(connection.list_spreadsheet_files())
+            for doc in spreadsheet_files:
+                utils.debug_print(str(doc))
+            return [doc["name"] for doc in spreadsheet_files]
+        except gspread.exceptions.APIError as e:
+            if not _is_transient_api_error(e) or attempt == max_retries:
+                raise
+            delay = 2 ** (attempt + 1)
+            utils.warning_print(
+                f"Google API error (attempt {attempt + 1}/{max_retries + 1}): {e}. "
+                f"Retrying in {delay}s..."
+            )
+            time.sleep(delay)
+    return []
 
 
 def find_spreadsheet_by_name(search_name: str, doc_list: List[str]) -> int:
