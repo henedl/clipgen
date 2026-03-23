@@ -474,6 +474,7 @@ col.col-participant-col {
   position: relative;
   transition: box-shadow 0.15s, border-color 0.15s;
   user-select: none;
+  will-change: transform;
 }
 
 .artifact-card:active {
@@ -537,9 +538,9 @@ col.col-participant-col {
   border-radius: 50%;
   width: 18px;
   height: 18px;
-  font-size: 0.7rem;
-  line-height: 18px;
-  text-align: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   cursor: pointer;
   opacity: 0;
   transition: opacity 0.15s;
@@ -634,6 +635,7 @@ col.col-participant-col {
   position: relative;
   transition: box-shadow 0.15s, border-color 0.15s;
   user-select: none;
+  will-change: transform;
 }
 
 .reel-card:active {
@@ -705,9 +707,9 @@ col.col-participant-col {
   border-radius: 50%;
   width: 18px;
   height: 18px;
-  font-size: 0.7rem;
-  line-height: 18px;
-  text-align: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   cursor: pointer;
   opacity: 0;
   transition: opacity 0.15s;

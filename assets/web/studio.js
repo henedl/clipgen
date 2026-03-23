@@ -870,7 +870,8 @@
       meta.appendChild(el("span", "artifact-card-ref", refText));
       card.appendChild(meta);
 
-      var removeBtn = el("button", "artifact-card-remove", "\u00D7");
+      var removeBtn = el("button", "artifact-card-remove");
+      removeBtn.innerHTML = '<svg width="10" height="10" viewBox="0 0 10 10"><path d="M2.5 2.5l5 5M7.5 2.5l-5 5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>';
       removeBtn.title = "Remove";
       (function (idx) {
         removeBtn.addEventListener("click", function (ev) {
@@ -951,7 +952,8 @@
       meta.appendChild(el("span", "reel-card-ref", refText));
       card.appendChild(meta);
 
-      var removeBtn = el("button", "reel-card-remove", "\u00D7");
+      var removeBtn = el("button", "reel-card-remove");
+      removeBtn.innerHTML = '<svg width="10" height="10" viewBox="0 0 10 10"><path d="M2.5 2.5l5 5M7.5 2.5l-5 5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>';
       removeBtn.title = "Remove";
       (function (idx) {
         removeBtn.addEventListener("click", function (ev) {
