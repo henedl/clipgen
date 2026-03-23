@@ -211,6 +211,32 @@ def _save_manifest_quiet() -> None:
         pass
 
 
+def _load_stashes() -> List[Dict[str, Any]]:
+    stash_path = Path(utils.get_effective_output_dir()) / config.STASHES_MANIFEST_FILENAME
+    if not stash_path.is_file():
+        return []
+    try:
+        data = json.loads(stash_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+    if not isinstance(data, list):
+        return []
+    return data
+
+
+def _save_stashes(stashes: List[Dict[str, Any]]) -> Optional[Path]:
+    stash_path = Path(utils.get_effective_output_dir()) / config.STASHES_MANIFEST_FILENAME
+    try:
+        stash_path.parent.mkdir(parents=True, exist_ok=True)
+        stash_path.write_text(
+            json.dumps(stashes, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        return stash_path
+    except OSError:
+        return None
+
+
 def _find_existing_artifacts(
     cell_row: int, cell_col: int, artifact_type: str
 ) -> List[Dict[str, Any]]:
@@ -545,6 +571,67 @@ def api_regenerate() -> FlaskResponse:
 
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@studio_bp.route("/api/stashes", methods=["GET"])
+def api_stashes_get() -> FlaskResponse:
+    return jsonify({"ok": True, "stashes": _load_stashes()})
+
+
+@studio_bp.route("/api/stashes", methods=["POST"])
+def api_stashes_post() -> FlaskResponse:
+    import uuid
+    from datetime import datetime, timezone
+
+    data = request.get_json(silent=True) or {}
+    action = data.get("action", "create")
+    stashes = _load_stashes()
+
+    if action == "create":
+        items = data.get("items", [])
+        if not items:
+            return jsonify({"ok": False, "error": "No items to stash"}), 400
+        name = data.get("name", "")
+        total_duration = data.get("totalDuration") or sum(
+            item.get("segDuration", 0) for item in items
+        )
+        stash = {
+            "id": f"stash_{uuid.uuid4().hex[:8]}",
+            "name": name or f"Stash {len(stashes) + 1}",
+            "items": items,
+            "count": len(items),
+            "totalDuration": total_duration,
+            "createdAt": datetime.now(timezone.utc).isoformat(),
+        }
+        stashes.append(stash)
+        _save_stashes(stashes)
+        return jsonify({"ok": True, "stash": stash})
+
+    if action == "update":
+        stash_id = data.get("id")
+        if not stash_id:
+            return jsonify({"ok": False, "error": "No stash ID"}), 400
+        for s in stashes:
+            if s["id"] == stash_id:
+                name = data.get("name")
+                if name is not None:
+                    s["name"] = name
+                _save_stashes(stashes)
+                return jsonify({"ok": True, "stash": s})
+        return jsonify({"ok": False, "error": "Stash not found"}), 404
+
+    if action == "delete":
+        stash_id = data.get("id")
+        if not stash_id:
+            return jsonify({"ok": False, "error": "No stash ID"}), 400
+        for i, s in enumerate(stashes):
+            if s["id"] == stash_id:
+                stashes.pop(i)
+                _save_stashes(stashes)
+                return jsonify({"ok": True})
+        return jsonify({"ok": False, "error": "Stash not found"}), 404
+
+    return jsonify({"ok": False, "error": f"Unknown action: {action}"}), 400
 
 
 # ---- State initialization ----
