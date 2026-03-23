@@ -63,6 +63,49 @@
     return -1;
   }
 
+  function hasSegmentInQueue(queue, participant, rowNum, segIdx) {
+    var key = cellKey(participant, rowNum);
+    for (var i = 0; i < queue.length; i++) {
+      if (cellKey(queue[i].participant, queue[i].row) === key && queue[i].segIdx === segIdx) return true;
+    }
+    return false;
+  }
+
+  function removeAllCellEntries(queue, participant, rowNum) {
+    var key = cellKey(participant, rowNum);
+    for (var i = queue.length - 1; i >= 0; i--) {
+      if (cellKey(queue[i].participant, queue[i].row) === key) queue.splice(i, 1);
+    }
+  }
+
+  function removeSegmentEntry(queue, participant, rowNum, segIdx) {
+    var key = cellKey(participant, rowNum);
+    for (var i = 0; i < queue.length; i++) {
+      if (cellKey(queue[i].participant, queue[i].row) === key && queue[i].segIdx === segIdx) {
+        queue.splice(i, 1);
+        return;
+      }
+    }
+  }
+
+  function expandCellToSegments(info) {
+    var segments = parseClipTimestamps(info.timestamp);
+    var entries = [];
+    for (var i = 0; i < segments.length; i++) {
+      entries.push({
+        participant: info.participant,
+        row: info.row,
+        desc: info.desc,
+        timestamp: info.timestamp,
+        segIdx: i,
+        segStart: segments[i].startSeconds,
+        segDuration: segments[i].duration,
+        segTotal: segments.length,
+      });
+    }
+    return entries;
+  }
+
   function clearGridHighlights() {
     var els = qsa(".header-highlight");
     for (var i = 0; i < els.length; i++) els[i].classList.remove("header-highlight");
@@ -89,7 +132,7 @@
     return NaN;
   }
 
-  function parseClipTimestamp(raw) {
+  function parseClipTimestamps(raw) {
     var DEFAULT_DUR = 60;
     var cleaned = raw
       .toLowerCase()
@@ -98,8 +141,7 @@
     var tokens = cleaned.split(/\s+/).filter(function (t) {
       return t && t !== "x";
     });
-    var firstStart = NaN;
-    var totalDur = 0;
+    var segments = [];
     for (var i = 0; i < tokens.length; i++) {
       var tok = tokens[i].replace(/\.$/, "").replace(/\./g, ":");
       var dashIdx = -1;
@@ -113,21 +155,19 @@
         var s = parseTimestampToSeconds(tok.substring(0, dashIdx));
         var e = parseTimestampToSeconds(tok.substring(dashIdx + 1));
         if (!isNaN(s) && !isNaN(e)) {
-          if (isNaN(firstStart)) firstStart = s;
-          totalDur += Math.max(0, e - s);
+          segments.push({ startSeconds: Math.floor(s), duration: Math.max(0, e - s) });
         }
       } else if (tok.indexOf(":") > 0) {
         var sec = parseTimestampToSeconds(tok);
         if (!isNaN(sec)) {
-          if (isNaN(firstStart)) firstStart = sec;
-          totalDur += DEFAULT_DUR;
+          segments.push({ startSeconds: Math.floor(sec), duration: DEFAULT_DUR });
         }
       }
     }
-    return {
-      startSeconds: isNaN(firstStart) ? 0 : Math.floor(firstStart),
-      totalDuration: totalDur || DEFAULT_DUR,
-    };
+    if (segments.length === 0) {
+      segments.push({ startSeconds: 0, duration: DEFAULT_DUR });
+    }
+    return segments;
   }
 
   function formatDuration(secs) {
@@ -284,12 +324,14 @@
           state.cellResults[key] = "success";
           if (findInQueue(state.artifactQueue, a.participant, a.cellRow) >= 0) continue;
 
-          state.artifactQueue.push({
+          var info = {
             participant: a.participant,
             row: a.cellRow,
             desc: matchedRow.observation || "",
             timestamp: cellData.value || "",
-          });
+          };
+          var entries = expandCellToSegments(info);
+          for (var ei = 0; ei < entries.length; ei++) state.artifactQueue.push(entries[ei]);
         }
 
         state.generatedArtifacts = state.generatedArtifacts.concat(
@@ -487,30 +529,40 @@
   }
 
   function toggleArtifactCell(info) {
-    var idx = findInQueue(state.artifactQueue, info.participant, info.row);
-    if (idx >= 0) {
-      state.artifactQueue.splice(idx, 1);
+    if (findInQueue(state.artifactQueue, info.participant, info.row) >= 0) {
+      removeAllCellEntries(state.artifactQueue, info.participant, info.row);
     } else {
-      state.artifactQueue.push(info);
+      var entries = expandCellToSegments(info);
+      for (var i = 0; i < entries.length; i++) state.artifactQueue.push(entries[i]);
     }
     renderArtifactQueue();
     updateCellClasses();
   }
 
   function toggleReelCell(info) {
-    var idx = findInQueue(state.reelQueue, info.participant, info.row);
-    if (idx >= 0) {
-      state.reelQueue.splice(idx, 1);
+    if (findInQueue(state.reelQueue, info.participant, info.row) >= 0) {
+      removeAllCellEntries(state.reelQueue, info.participant, info.row);
     } else {
-      state.reelQueue.push(info);
+      var entries = expandCellToSegments(info);
+      for (var i = 0; i < entries.length; i++) state.reelQueue.push(entries[i]);
     }
     renderReelQueue();
     updateCellClasses();
   }
 
   function addToQueue(targetQueue, info, renderFn) {
-    if (findInQueue(targetQueue, info.participant, info.row) < 0) {
-      targetQueue.push(info);
+    var added = false;
+    if (info.segIdx !== undefined) {
+      if (!hasSegmentInQueue(targetQueue, info.participant, info.row, info.segIdx)) {
+        targetQueue.push(info);
+        added = true;
+      }
+    } else if (findInQueue(targetQueue, info.participant, info.row) < 0) {
+      var entries = expandCellToSegments(info);
+      for (var i = 0; i < entries.length; i++) targetQueue.push(entries[i]);
+      added = true;
+    }
+    if (added) {
       renderFn();
       updateCellClasses();
     }
@@ -530,7 +582,7 @@
   }
 
   function toggleBatchInQueue(queue, infos, renderFn) {
-    // If all are already in the queue, remove them; otherwise add missing ones
+    // If all cells are already in the queue, remove them; otherwise add missing ones
     var allPresent = true;
     for (var i = 0; i < infos.length; i++) {
       if (findInQueue(queue, infos[i].participant, infos[i].row) < 0) {
@@ -540,13 +592,13 @@
     }
     if (allPresent) {
       for (var j = 0; j < infos.length; j++) {
-        var idx = findInQueue(queue, infos[j].participant, infos[j].row);
-        if (idx >= 0) queue.splice(idx, 1);
+        removeAllCellEntries(queue, infos[j].participant, infos[j].row);
       }
     } else {
       for (var k = 0; k < infos.length; k++) {
         if (findInQueue(queue, infos[k].participant, infos[k].row) < 0) {
-          queue.push(infos[k]);
+          var entries = expandCellToSegments(infos[k]);
+          for (var m = 0; m < entries.length; m++) queue.push(entries[m]);
         }
       }
     }
@@ -641,22 +693,25 @@
 
   // ---- Drop targets ----
 
-  function removeFromQueue(queue, participant, row) {
-    var idx = findInQueue(queue, participant, row);
-    if (idx >= 0) queue.splice(idx, 1);
+  function removeFromQueue(queue, info) {
+    if (info.segIdx !== undefined) {
+      removeSegmentEntry(queue, info.participant, info.row, info.segIdx);
+    } else {
+      removeAllCellEntries(queue, info.participant, info.row);
+    }
   }
 
   function initDropTargets() {
     setupDropTarget(qs("#artifactsList"), function (info) {
       if (info.source === "reel") {
-        removeFromQueue(state.reelQueue, info.participant, info.row);
+        removeFromQueue(state.reelQueue, info);
         renderReelQueue();
       }
       addToQueue(state.artifactQueue, info, renderArtifactQueue);
     });
     setupDropTarget(qs("#reelList"), function (info) {
       if (info.source === "artifact") {
-        removeFromQueue(state.artifactQueue, info.participant, info.row);
+        removeFromQueue(state.artifactQueue, info);
         renderArtifactQueue();
       }
       addToQueue(state.reelQueue, info, renderReelQueue);
@@ -706,6 +761,10 @@
           row: reelItem.row,
           desc: reelItem.desc,
           timestamp: reelItem.timestamp,
+          segIdx: reelItem.segIdx,
+          segStart: reelItem.segStart,
+          segDuration: reelItem.segDuration,
+          segTotal: reelItem.segTotal,
           source: "reel",
         };
         ev.dataTransfer.setData("application/json", JSON.stringify(data));
@@ -759,11 +818,15 @@
 
     for (var i = 0; i < n; i++) {
       var item = state.artifactQueue[i];
-      var parsed = parseClipTimestamp(item.timestamp);
+      var segStart = item.segStart !== undefined ? item.segStart : parseClipTimestamps(item.timestamp)[0].startSeconds;
+      var segDuration = item.segDuration !== undefined ? item.segDuration : parseClipTimestamps(item.timestamp)[0].duration;
+      var segTotal = item.segTotal || 1;
+      var segIdx = item.segIdx || 0;
 
       var card = el("div", "artifact-card");
       card.setAttribute("data-participant", item.participant);
       card.setAttribute("data-row", item.row);
+      card.setAttribute("data-seg-idx", segIdx);
       card.setAttribute("draggable", "true");
       (function (itm) {
         card.addEventListener("dragstart", function (ev) {
@@ -772,6 +835,10 @@
             row: itm.row,
             desc: itm.desc,
             timestamp: itm.timestamp,
+            segIdx: itm.segIdx,
+            segStart: itm.segStart,
+            segDuration: itm.segDuration,
+            segTotal: itm.segTotal,
             source: "artifact",
           };
           ev.dataTransfer.setData("application/json", JSON.stringify(data));
@@ -781,7 +848,7 @@
 
       var thumb = el("div", "artifact-card-thumb");
       var img = document.createElement("img");
-      img.src = "api/thumbnail/" + encodeURIComponent(item.participant) + "/" + parsed.startSeconds;
+      img.src = "api/thumbnail/" + encodeURIComponent(item.participant) + "/" + segStart;
       img.loading = "lazy";
       img.alt = "";
       img.draggable = false;
@@ -793,11 +860,13 @@
         });
       })(card, thumb);
       thumb.appendChild(img);
-      thumb.appendChild(el("span", "artifact-card-duration", formatDuration(parsed.totalDuration)));
+      thumb.appendChild(el("span", "artifact-card-duration", formatDuration(segDuration)));
       card.appendChild(thumb);
 
       var meta = el("div", "artifact-card-meta");
-      meta.appendChild(el("span", "artifact-card-ref", item.participant + "." + item.row));
+      var refText = item.participant + "." + item.row;
+      if (segTotal > 1) refText += " (" + (segIdx + 1) + "/" + segTotal + ")";
+      meta.appendChild(el("span", "artifact-card-ref", refText));
       card.appendChild(meta);
 
       var removeBtn = el("button", "artifact-card-remove", "\u00D7");
@@ -843,18 +912,22 @@
     var totalDur = 0;
     for (var i = 0; i < n; i++) {
       var item = state.reelQueue[i];
-      var parsed = parseClipTimestamp(item.timestamp);
-      totalDur += parsed.totalDuration;
+      var segStart = item.segStart !== undefined ? item.segStart : parseClipTimestamps(item.timestamp)[0].startSeconds;
+      var segDuration = item.segDuration !== undefined ? item.segDuration : parseClipTimestamps(item.timestamp)[0].duration;
+      var segTotal = item.segTotal || 1;
+      var segIdx = item.segIdx || 0;
+      totalDur += segDuration;
 
       var card = el("div", "reel-card");
       card.setAttribute("data-reel-idx", i);
       card.setAttribute("data-participant", item.participant);
       card.setAttribute("data-row", item.row);
+      card.setAttribute("data-seg-idx", segIdx);
       card.setAttribute("draggable", "true");
 
       var thumb = el("div", "reel-card-thumb");
       var img = document.createElement("img");
-      img.src = "api/thumbnail/" + encodeURIComponent(item.participant) + "/" + parsed.startSeconds;
+      img.src = "api/thumbnail/" + encodeURIComponent(item.participant) + "/" + segStart;
       img.loading = "lazy";
       img.alt = "";
       img.draggable = false;
@@ -866,12 +939,14 @@
         });
       })(card, thumb);
       thumb.appendChild(img);
-      thumb.appendChild(el("span", "reel-card-duration", formatDuration(parsed.totalDuration)));
+      thumb.appendChild(el("span", "reel-card-duration", formatDuration(segDuration)));
       card.appendChild(thumb);
 
       var meta = el("div", "reel-card-meta");
       meta.appendChild(el("span", "reel-card-order", String(i + 1)));
-      meta.appendChild(el("span", "reel-card-ref", item.participant + "." + item.row));
+      var refText = item.participant + "." + item.row;
+      if (segTotal > 1) refText += " (" + (segIdx + 1) + "/" + segTotal + ")";
+      meta.appendChild(el("span", "reel-card-ref", refText));
       card.appendChild(meta);
 
       var removeBtn = el("button", "reel-card-remove", "\u00D7");
@@ -1051,13 +1126,16 @@
     var format = qs("#artifactFormat").value;
     var list = qs("#artifactsList");
     var items = state.artifactQueue.slice();
-    var cells = items.map(function (item) {
-      return item.participant + "." + item.row;
-    });
+    var cellsSeen = {};
+    var cells = [];
+    for (var ci = 0; ci < items.length; ci++) {
+      var ck = items[ci].participant + "." + items[ci].row;
+      if (!cellsSeen[ck]) { cellsSeen[ck] = true; cells.push(ck); }
+    }
 
-    for (var i = 0; i < items.length; i++) {
-      var c = findCard(list, items[i].participant, items[i].row);
-      if (c) setCardQueued(c);
+    var allCards = list.querySelectorAll(".artifact-card");
+    for (var i = 0; i < allCards.length; i++) {
+      setCardQueued(allCards[i]);
     }
 
     var totalSuccess = 0;
@@ -1086,13 +1164,15 @@
       var dot = data.cell.lastIndexOf(".");
       var participant = data.cell.substring(0, dot);
       var row = data.cell.substring(dot + 1);
-      var card = findCard(list, participant, row);
+      var cards = list.querySelectorAll(
+        '[data-participant="' + participant + '"][data-row="' + row + '"]'
+      );
       if (data.ok) {
-        if (card) setCardResult(card, true);
+        for (var ci = 0; ci < cards.length; ci++) setCardResult(cards[ci], true);
         totalSuccess += (data.generated || 1);
         if (data.artifacts) allArtifacts = allArtifacts.concat(data.artifacts);
       } else {
-        if (card) setCardResult(card, false);
+        for (var ci = 0; ci < cards.length; ci++) setCardResult(cards[ci], false);
         totalFail++;
       }
     }
@@ -1137,9 +1217,12 @@
     setGeneratingLock(true);
     setTitleSpinner("reelSpinner", true);
 
-    var cells = state.reelQueue.map(function (item) {
-      return item.participant + "." + item.row;
-    });
+    var cellsSeen = {};
+    var cells = [];
+    for (var ci = 0; ci < state.reelQueue.length; ci++) {
+      var ck = state.reelQueue[ci].participant + "." + state.reelQueue[ci].row;
+      if (!cellsSeen[ck]) { cellsSeen[ck] = true; cells.push(ck); }
+    }
 
     var list = qs("#reelList");
     var reelCards = list.querySelectorAll(".reel-card");
