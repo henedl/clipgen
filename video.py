@@ -1,14 +1,16 @@
 # -*- coding: utf-8 -*-
 """Video processing operations for clipgen."""
 
+import json
 import os
 import shutil
 import subprocess
 import sys
 import tempfile
+from collections import Counter
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from icecream import ic
 
@@ -594,6 +596,68 @@ def get_file_duration(filepath: str) -> Optional[int]:
         return None
 
 
+def probe_video_properties(filepath: str) -> Optional[Dict[str, Any]]:
+    """Probe video file for stream properties (resolution, codecs).
+
+    Returns:
+        Dict with 'width' (int), 'height' (int), 'video_codec' (str),
+        'audio_codec' (str or None if no audio stream), or None if probe fails.
+    """
+    if config.DEBUGGING:
+        return {
+            "width": 1920,
+            "height": 1080,
+            "video_codec": "h264",
+            "audio_codec": "aac",
+        }
+
+    if not Path(filepath).is_file():
+        return None
+
+    probe_command = [
+        "ffprobe",
+        "-v",
+        "error",
+        "-show_entries",
+        "stream=width,height,codec_name,codec_type",
+        "-of",
+        "json",
+        filepath,
+    ]
+    try:
+        raw = subprocess.check_output(probe_command, encoding="utf-8")
+    except (subprocess.CalledProcessError, FileNotFoundError, OSError):
+        return None
+
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        return None
+
+    streams = data.get("streams", [])
+    width = height = 0
+    video_codec: Optional[str] = None
+    audio_codec: Optional[str] = None
+    for stream in streams:
+        codec_type = stream.get("codec_type", "")
+        if codec_type == "video" and video_codec is None:
+            width = int(stream.get("width", 0))
+            height = int(stream.get("height", 0))
+            video_codec = stream.get("codec_name")
+        elif codec_type == "audio" and audio_codec is None:
+            audio_codec = stream.get("codec_name")
+
+    if not video_codec or width <= 0 or height <= 0:
+        return None
+
+    return {
+        "width": width,
+        "height": height,
+        "video_codec": video_codec,
+        "audio_codec": audio_codec,
+    }
+
+
 def get_duration(start_time: str, end_time: Optional[str]) -> Optional[int]:
     """Calculate the duration between two timestamps.
 
@@ -844,13 +908,118 @@ def compress_to_size(filepath: str, target_size_mb: float) -> bool:
                 )
 
 
+def _detect_clip_mismatches(
+    clip_paths: List[str],
+) -> Tuple[List[Optional[Dict[str, Any]]], bool, bool]:
+    """Probe clips and detect property mismatches.
+
+    Returns:
+        (properties_list, has_resolution_mismatch, has_audio_presence_mismatch)
+        properties_list parallels clip_paths (None entries for failed probes).
+    """
+    props_list: List[Optional[Dict[str, Any]]] = [
+        probe_video_properties(p) for p in clip_paths
+    ]
+    probed = [p for p in props_list if p is not None]
+    if len(probed) < 2:
+        return (props_list, False, False)
+
+    resolutions = Counter((p["width"], p["height"]) for p in probed)
+    video_codecs = Counter(p["video_codec"] for p in probed)
+    has_audio = [p["audio_codec"] is not None for p in probed]
+
+    has_resolution_mismatch = len(resolutions) > 1
+    has_audio_presence_mismatch = len(set(has_audio)) > 1
+
+    if has_resolution_mismatch:
+        detail = ", ".join(
+            f"{w}x{h} ({n} clip{'s' if n > 1 else ''})"
+            for (w, h), n in resolutions.most_common()
+        )
+        utils.warning_print(f"Resolution mismatch across reel clips: {detail}.")
+
+    if len(video_codecs) > 1:
+        detail = ", ".join(
+            f"{c} ({n} clip{'s' if n > 1 else ''})"
+            for c, n in video_codecs.most_common()
+        )
+        utils.warning_print(f"Video codec mismatch across reel clips: {detail}.")
+
+    if has_audio_presence_mismatch:
+        utils.warning_print(
+            "Audio stream mismatch: some clips have no audio track."
+        )
+
+    return (props_list, has_resolution_mismatch, has_audio_presence_mismatch)
+
+
+def _pick_target_resolution(
+    props_list: List[Optional[Dict[str, Any]]],
+) -> Tuple[int, int]:
+    """Choose target resolution from probed properties (most common, ties broken by largest)."""
+    resolutions = Counter(
+        (p["width"], p["height"]) for p in props_list if p is not None
+    )
+    max_count = max(resolutions.values())
+    candidates = [res for res, cnt in resolutions.items() if cnt == max_count]
+    w, h = max(candidates, key=lambda r: r[0] * r[1])
+    # libx264 requires even dimensions
+    return (w if w % 2 == 0 else w + 1, h if h % 2 == 0 else h + 1)
+
+
+def _build_filter_complex_concat(
+    clip_paths: List[str],
+    props_list: List[Optional[Dict[str, Any]]],
+    target_w: int,
+    target_h: int,
+) -> Tuple[str, bool]:
+    """Build a filter_complex string that scales/pads all inputs to target resolution.
+
+    Returns:
+        (filter_complex_string, has_any_audio)
+    """
+    filter_parts: List[str] = []
+    has_any_audio = any(
+        p is not None and p.get("audio_codec") is not None for p in props_list
+    )
+
+    for i, props in enumerate(props_list):
+        filter_parts.append(
+            f"[{i}:v]scale={target_w}:{target_h}"
+            f":force_original_aspect_ratio=decrease,"
+            f"pad={target_w}:{target_h}:(ow-iw)/2:(oh-ih)/2,"
+            f"setsar=1[v{i}]"
+        )
+        if has_any_audio:
+            if props is not None and props.get("audio_codec") is not None:
+                filter_parts.append(f"[{i}:a]aresample=44100[a{i}]")
+            else:
+                dur = get_file_duration(clip_paths[i]) or 1
+                filter_parts.append(
+                    f"anullsrc=r=44100:cl=stereo[sil{i}];"
+                    f"[sil{i}]atrim=duration={dur}[a{i}]"
+                )
+
+    n = len(props_list)
+    if has_any_audio:
+        concat_inputs = "".join(f"[v{i}][a{i}]" for i in range(n))
+        filter_parts.append(f"{concat_inputs}concat=n={n}:v=1:a=1[outv][outa]")
+    else:
+        concat_inputs = "".join(f"[v{i}]" for i in range(n))
+        filter_parts.append(f"{concat_inputs}concat=n={n}:v=1:a=0[outv]")
+
+    return (";".join(filter_parts), has_any_audio)
+
+
 def concatenate_clips(
     clip_paths: List[str], output_file: str, reencode_on_fail: bool = True
 ) -> bool:
-    """Concatenate multiple video clips into a single file using ffmpeg concat demuxer.
+    """Concatenate multiple video clips into a single file.
 
-    Writes a temporary file list for ffmpeg, runs concat demuxer with stream copy,
-    and optionally falls back to re-encoding if stream copy fails (e.g. codec mismatch).
+    Probes all clips for property mismatches. When resolutions or audio presence
+    differ, uses ffmpeg filter_complex to scale/pad inputs to a common resolution.
+    Otherwise uses the fast concat demuxer with stream copy, falling back to
+    re-encoding if stream copy fails.
 
     Args:
         clip_paths: List of paths to clip files (order preserved)
@@ -872,6 +1041,79 @@ def concatenate_clips(
             )
             return False
 
+    utils.standard_print(
+        f"Concatenating {len(clip_paths)} clips into {output_file}."
+    )
+    if config.DEBUGGING:
+        utils.debug_print("Debugging enabled, not calling ffmpeg for concat.")
+        return False
+
+    props_list, res_mismatch, audio_mismatch = _detect_clip_mismatches(clip_paths)
+
+    if res_mismatch or audio_mismatch:
+        utils.warning_print(
+            "Re-encoding all clips to produce a compatible reel (this may take longer)."
+        )
+        return _concatenate_filter_complex(
+            clip_paths, props_list, output_file
+        )
+
+    return _concatenate_demuxer(clip_paths, output_file, reencode_on_fail)
+
+
+def _concatenate_filter_complex(
+    clip_paths: List[str],
+    props_list: List[Optional[Dict[str, Any]]],
+    output_file: str,
+) -> bool:
+    """Concatenate clips using filter_complex (handles resolution/audio mismatches)."""
+    target_w, target_h = _pick_target_resolution(props_list)
+    filter_str, has_audio = _build_filter_complex_concat(
+        clip_paths, props_list, target_w, target_h
+    )
+
+    ffmpeg_command = ["ffmpeg", "-y", "-loglevel", config.FFMPEG_LOGLEVEL]
+    for path in clip_paths:
+        ffmpeg_command.extend(["-i", str(Path(path).resolve())])
+    ffmpeg_command.extend(["-filter_complex", filter_str])
+    ffmpeg_command.extend(["-map", "[outv]"])
+    if has_audio:
+        ffmpeg_command.extend(["-map", "[outa]"])
+    ffmpeg_command.extend(["-c:v", "libx264", "-c:a", "aac", output_file])
+
+    utils.debug_print(f"ffmpeg filter_complex concat: {' '.join(ffmpeg_command)}")
+    try:
+        result = run_ffmpeg_process(
+            ffmpeg_command,
+            input_file=clip_paths[0],
+            output_file=output_file,
+            os_error_message="Filter-complex concatenation failed.",
+        )
+        if result is None or result.returncode != 0:
+            error_details = [
+                f"Output: '{output_file}'",
+                f"Clips: {len(clip_paths)} files",
+                f"Target resolution: {target_w}x{target_h}",
+            ]
+            if result is not None:
+                error_details = _add_ffmpeg_stderr(error_details, result)
+            utils.error_print("ffmpeg filter_complex concat failed.", error_details)
+            return False
+
+        if not verify_output_file(output_file, "Concat"):
+            return False
+
+        utils.standard_print(f"+ Generated reel '{output_file}' successfully.")
+        return True
+    except OSError as e:
+        utils.error_print(f"Concatenation failed: {e}")
+        return False
+
+
+def _concatenate_demuxer(
+    clip_paths: List[str], output_file: str, reencode_on_fail: bool
+) -> bool:
+    """Concatenate clips using concat demuxer (fast path for matching properties)."""
     with tempfile.NamedTemporaryFile(
         mode="w", suffix=".txt", delete=False, encoding="utf-8"
     ) as file_handle:
@@ -897,13 +1139,7 @@ def concatenate_clips(
             "copy",
             output_file,
         ]
-        utils.standard_print(
-            f"Concatenating {len(clip_paths)} clips into {output_file}."
-        )
         utils.debug_print(f"ffmpeg concat command: {' '.join(ffmpeg_command)}")
-        if config.DEBUGGING:
-            utils.debug_print("Debugging enabled, not calling ffmpeg for concat.")
-            return False
 
         ffmpeg_result = run_ffmpeg_process(
             ffmpeg_command,
@@ -1091,29 +1327,10 @@ def generate_sprite_sheet(
     rows = ceil(actual_frames / cols)
 
     # Get source video dimensions for aspect-ratio-correct frame height
-    probe_cmd = [
-        "ffprobe",
-        "-v",
-        "error",
-        "-select_streams",
-        "v:0",
-        "-show_entries",
-        "stream=width,height",
-        "-of",
-        "csv=s=x:p=0",
-        input_file,
-    ]
     frame_height = round(thumb_width * 9 / 16)  # fallback to 16:9
-    if not config.DEBUGGING:
-        try:
-            probe_out = subprocess.check_output(probe_cmd, encoding="utf-8").strip()
-            if "x" in probe_out:
-                src_w, src_h = probe_out.split("x")[:2]
-                src_w, src_h = int(src_w), int(src_h)
-                if src_w > 0:
-                    frame_height = round(thumb_width * src_h / src_w)
-        except (subprocess.CalledProcessError, ValueError, FileNotFoundError):
-            pass
+    props = probe_video_properties(input_file)
+    if props and props["width"] > 0:
+        frame_height = round(thumb_width * props["height"] / props["width"])
 
     if config.DEBUGGING:
         ic(input_file, output_file, actual_frames, cols, rows, interval)

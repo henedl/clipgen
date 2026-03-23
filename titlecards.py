@@ -1,5 +1,4 @@
 import os
-import subprocess
 import tempfile
 from pathlib import Path
 from typing import Optional
@@ -12,34 +11,10 @@ from utils import ClipRecord
 
 def _get_video_resolution(filepath: str) -> Optional[str]:
     """Return 'WIDTHxHEIGHT' resolution string for the first video stream."""
-    if not Path(filepath).is_file():
+    props = video.probe_video_properties(filepath)
+    if props is None:
         return None
-
-    probe_command = [
-        "ffprobe",
-        "-v",
-        "error",
-        "-select_streams",
-        "v:0",
-        "-show_entries",
-        "stream=width,height",
-        "-of",
-        "csv=s=x:p=0",
-        filepath,
-    ]
-    utils.debug_print(f"ffprobe resolution command: {' '.join(probe_command)}")
-    try:
-        output = subprocess.check_output(probe_command, encoding="utf-8").strip()
-    except (subprocess.CalledProcessError, FileNotFoundError, OSError) as error:
-        utils.warning_print(
-            f"Could not probe video resolution for '{filepath}'.",
-            [str(error)],
-        )
-        return None
-
-    if not output or "x" not in output:
-        return None
-    return output
+    return f"{props['width']}x{props['height']}"
 
 
 def _build_drawtext_filter(text: str) -> str:
