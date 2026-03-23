@@ -572,7 +572,7 @@ col.col-participant-col {
 
 #reelArea {
   max-width: 1120px;
-  margin: 0 auto;
+  margin: 0 auto 1.5rem;
   background: var(--color-panel-bg);
   border: 1px solid var(--color-panel-border);
   border-top: none;
@@ -835,17 +835,25 @@ html[data-theme="dark"] .reel-card.reel-card-error .reel-card-thumb {
 }
 
 .highlights-drawer {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  z-index: 10;
   max-height: 0;
   opacity: 0;
   overflow: hidden;
-  transition: max-height 0.25s ease, opacity 0.2s ease, margin 0.25s ease;
+  transition: max-height 0.25s ease, opacity 0.2s ease, margin-top 0.25s ease;
   margin-top: 0;
+  background: var(--color-panel-bg);
+  border-radius: calc(var(--radius) - 2px);
+  pointer-events: none;
 }
 
 .highlights-drawer.open {
   max-height: 3rem;
   opacity: 1;
-  margin-top: 0.4rem;
+  margin-top: 0.35rem;
+  pointer-events: auto;
 }
 
 .highlights-drawer-label {
