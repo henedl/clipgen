@@ -281,7 +281,7 @@ body {
 .col-participant {
   cursor: pointer;
   user-select: none;
-  transition: color 0.15s;
+  transition: color 0.15s, background-color 0.15s;
 }
 
 .col-row-num-header:hover,
@@ -292,10 +292,16 @@ body {
 .col-row-num-clickable {
   cursor: pointer;
   user-select: none;
-  transition: color 0.15s;
+  transition: color 0.15s, background-color 0.15s;
 }
 
 .col-row-num-clickable:hover {
+  color: var(--color-accent);
+}
+
+#sheetGrid .col-participant.header-highlight,
+#sheetGrid .col-row-num-clickable.header-highlight {
+  background-color: rgba(29, 79, 114, 0.15);
   color: var(--color-accent);
 }
 
@@ -950,6 +956,10 @@ html[data-theme="dark"] .reel-card.reel-card-error .reel-card-thumb {
     --sev-very-positive: #4ade80;
     --sev-unknown: #94a3b8;
   }
+  #sheetGrid .col-participant.header-highlight,
+  #sheetGrid .col-row-num-clickable.header-highlight {
+    background-color: rgba(56, 189, 248, 0.18);
+  }
 }
 
 html[data-theme="dark"] {
@@ -980,6 +990,11 @@ html[data-theme="dark"] {
   --sev-positive: #86efac;
   --sev-very-positive: #4ade80;
   --sev-unknown: #94a3b8;
+}
+
+html[data-theme="dark"] #sheetGrid .col-participant.header-highlight,
+html[data-theme="dark"] #sheetGrid .col-row-num-clickable.header-highlight {
+  background-color: rgba(56, 189, 248, 0.18);
 }
 
 html[data-theme="dark"] .status-card {
