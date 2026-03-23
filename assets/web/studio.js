@@ -1251,25 +1251,34 @@
     var duration = parseInt(qs("#highlightsDuration").value, 10);
     if (!duration || duration < 1) duration = 180;
 
-    showOverlay("Building highlights reel (" + duration + "s budget)...");
+    showOverlay("Finding best clips (" + duration + "s budget)...");
 
-    fetch("api/reel", {
+    fetch("api/highlights-preview", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        cells: ["highlights", "batch"],
-        highlights_duration: duration,
-      }),
+      body: JSON.stringify({ highlights_duration: duration }),
     })
       .then(function (r) {
         return r.json();
       })
       .then(function (data) {
         state.generating = false;
-        if (data.ok) {
-          showResult("Highlights reel built successfully", null);
+        if (data.ok && data.clips && data.clips.length > 0) {
+          state.reelQueue = [];
+          for (var i = 0; i < data.clips.length; i++) {
+            state.reelQueue.push(data.clips[i]);
+          }
+          renderReelQueue();
+          updateCellClasses();
+          showResult(
+            "Added " + data.clips.length + " clip(s) to reel queue",
+            null
+          );
         } else {
-          showResult(null, data.error || "Highlights reel build failed");
+          showResult(
+            null,
+            data.error || "No clips found for highlights selection"
+          );
         }
       })
       .catch(function (err) {
