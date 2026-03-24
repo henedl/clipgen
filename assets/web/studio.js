@@ -14,6 +14,7 @@
     generating: false,
     cellResults: {},
     stashes: [],
+    artifactStashes: [],
   };
 
   // ---- Helpers ----
@@ -705,6 +706,11 @@
 
   function initDropTargets() {
     setupDropTarget(qs("#artifactsList"), function (info) {
+      if (info.source === "reel-stash" || info.source === "artifact-stash") {
+        for (var i = 0; i < info.items.length; i++)
+          addToQueue(state.artifactQueue, info.items[i], renderArtifactQueue);
+        return;
+      }
       if (info.source === "reel") {
         removeFromQueue(state.reelQueue, info);
         renderReelQueue();
@@ -712,11 +718,33 @@
       addToQueue(state.artifactQueue, info, renderArtifactQueue);
     });
     setupDropTarget(qs("#reelList"), function (info) {
+      if (info.source === "reel-stash" || info.source === "artifact-stash") {
+        for (var i = 0; i < info.items.length; i++)
+          addToQueue(state.reelQueue, info.items[i], renderReelQueue);
+        return;
+      }
       if (info.source === "artifact") {
         removeFromQueue(state.artifactQueue, info);
         renderArtifactQueue();
       }
       addToQueue(state.reelQueue, info, renderReelQueue);
+    });
+
+    setupDropTarget(qs("#stashedReelsList"), function (info) {
+      if (info.source === "reel-stash" || info.source === "artifact-stash") {
+        createStashViaAPI("api/stashes", info.items, function (stash) {
+          state.stashes.push(stash);
+          renderStashedReels();
+        });
+      }
+    });
+    setupDropTarget(qs("#stashedArtifactsList"), function (info) {
+      if (info.source === "reel-stash" || info.source === "artifact-stash") {
+        createStashViaAPI("api/artifact-stashes", info.items, function (stash) {
+          state.artifactStashes.push(stash);
+          renderStashedArtifacts();
+        });
+      }
     });
   }
 
@@ -736,7 +764,7 @@
       target.classList.remove("drag-over");
       try {
         var info = JSON.parse(ev.dataTransfer.getData("application/json"));
-        if (info && info.participant && info.row) {
+        if (info && (info.participant || info.items)) {
           onDrop(info);
         }
       } catch (_) {}
@@ -808,6 +836,7 @@
     qs("#artifactsCount").textContent = "(" + n + ")";
     qs("#generateBtn").disabled = n === 0;
     qs("#addToReelBtn").disabled = n === 0;
+    qs("#stashArtifactsBtn").disabled = n === 0;
     list.innerHTML = "";
     saveQueues();
 
@@ -999,23 +1028,36 @@
     qs("#stashedReelsCount").textContent = "(" + n + ")";
 
     if (n === 0) {
-      area.classList.add("hidden");
+      if (!area.classList.contains("stash-drop-reveal")) area.classList.add("hidden");
+      list.innerHTML = "";
       return;
     }
     area.classList.remove("hidden");
+    area.classList.remove("stash-drop-reveal");
     list.innerHTML = "";
 
     for (var i = 0; i < n; i++) {
       var stash = state.stashes[i];
       var card = el("div", "stash-card");
       card.setAttribute("data-stash-id", stash.id);
+      card.setAttribute("draggable", "true");
+      (function (stashRef) {
+        card.addEventListener("dragstart", function (ev) {
+          ev.dataTransfer.setData("application/json", JSON.stringify({
+            stashId: stashRef.id,
+            items: stashRef.items,
+            source: "reel-stash",
+          }));
+          ev.dataTransfer.effectAllowed = "copy";
+        });
+      })(stash);
 
       var nameEl = el("span", "stash-card-name", truncate(stash.name, 20));
       nameEl.title = stash.name;
       (function (stashRef, nameNode) {
         nameNode.addEventListener("click", function (ev) {
           ev.stopPropagation();
-          startStashRename(stashRef, nameNode);
+          startStashRename(stashRef, nameNode, "api/stashes");
         });
       })(stash, nameEl);
       card.appendChild(nameEl);
@@ -1030,7 +1072,7 @@
       (function (stashId) {
         removeBtn.addEventListener("click", function (ev) {
           ev.stopPropagation();
-          deleteStash(stashId);
+          deleteStash(stashId, "api/stashes", state.stashes, renderStashedReels);
         });
       })(stash.id);
       card.appendChild(removeBtn);
@@ -1091,8 +1133,8 @@
     updateCellClasses();
   }
 
-  function deleteStash(stashId) {
-    fetch("api/stashes", {
+  function deleteStash(stashId, endpoint, stateArray, renderFn) {
+    fetch(endpoint, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ action: "delete", id: stashId }),
@@ -1100,19 +1142,19 @@
       .then(function (r) { return r.json(); })
       .then(function (data) {
         if (data.ok) {
-          for (var i = 0; i < state.stashes.length; i++) {
-            if (state.stashes[i].id === stashId) {
-              state.stashes.splice(i, 1);
+          for (var i = 0; i < stateArray.length; i++) {
+            if (stateArray[i].id === stashId) {
+              stateArray.splice(i, 1);
               break;
             }
           }
-          renderStashedReels();
+          renderFn();
         }
       })
       .catch(function () {});
   }
 
-  function startStashRename(stash, nameNode) {
+  function startStashRename(stash, nameNode, endpoint) {
     var parent = nameNode.parentNode;
     var input = document.createElement("input");
     input.className = "stash-card-name-input";
@@ -1126,11 +1168,11 @@
       span.title = newName;
       span.addEventListener("click", function (ev) {
         ev.stopPropagation();
-        startStashRename(stash, span);
+        startStashRename(stash, span, endpoint);
       });
       parent.replaceChild(span, input);
 
-      fetch("api/stashes", {
+      fetch(endpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "update", id: stash.id, name: newName }),
@@ -1147,6 +1189,161 @@
     parent.replaceChild(input, nameNode);
     input.focus();
     input.select();
+  }
+
+  function createStashViaAPI(endpoint, items, onSuccess) {
+    var totalDuration = computeReelDuration(items);
+    fetch(endpoint, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "create", items: items, name: "", totalDuration: totalDuration }),
+    })
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        if (data.ok) onSuccess(data.stash);
+      })
+      .catch(function () {});
+  }
+
+  // ---- Stashed artifacts ----
+
+  function loadArtifactStashes() {
+    fetch("api/artifact-stashes")
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        if (data.ok) {
+          state.artifactStashes = data.stashes || [];
+          renderStashedArtifacts();
+        }
+      })
+      .catch(function () {});
+  }
+
+  function renderStashedArtifacts() {
+    var area = qs("#stashedArtifactsArea");
+    var list = qs("#stashedArtifactsList");
+    var n = state.artifactStashes.length;
+    qs("#stashedArtifactsCount").textContent = "(" + n + ")";
+
+    if (n === 0) {
+      if (!area.classList.contains("stash-drop-reveal")) area.classList.add("hidden");
+      list.innerHTML = "";
+      return;
+    }
+    area.classList.remove("hidden");
+    area.classList.remove("stash-drop-reveal");
+    list.innerHTML = "";
+
+    for (var i = 0; i < n; i++) {
+      var stash = state.artifactStashes[i];
+      var card = el("div", "stash-card");
+      card.setAttribute("data-stash-id", stash.id);
+      card.setAttribute("draggable", "true");
+      (function (stashRef) {
+        card.addEventListener("dragstart", function (ev) {
+          ev.dataTransfer.setData("application/json", JSON.stringify({
+            stashId: stashRef.id,
+            items: stashRef.items,
+            source: "artifact-stash",
+          }));
+          ev.dataTransfer.effectAllowed = "copy";
+        });
+      })(stash);
+
+      var nameEl = el("span", "stash-card-name", truncate(stash.name, 20));
+      nameEl.title = stash.name;
+      (function (stashRef, nameNode) {
+        nameNode.addEventListener("click", function (ev) {
+          ev.stopPropagation();
+          startStashRename(stashRef, nameNode, "api/artifact-stashes");
+        });
+      })(stash, nameEl);
+      card.appendChild(nameEl);
+
+      var info = el("div", "stash-card-info");
+      info.appendChild(el("span", "", stash.count + " clips"));
+      info.appendChild(el("span", "", formatDuration(stash.totalDuration)));
+      card.appendChild(info);
+
+      var removeBtn = el("button", "stash-card-remove", "\u00D7");
+      removeBtn.title = "Delete stash";
+      (function (stashId) {
+        removeBtn.addEventListener("click", function (ev) {
+          ev.stopPropagation();
+          deleteStash(stashId, "api/artifact-stashes", state.artifactStashes, renderStashedArtifacts);
+        });
+      })(stash.id);
+      card.appendChild(removeBtn);
+
+      (function (stashRef) {
+        card.addEventListener("click", function () {
+          recallArtifactStash(stashRef);
+        });
+      })(stash);
+
+      list.appendChild(card);
+    }
+  }
+
+  function stashCurrentArtifacts() {
+    if (state.artifactQueue.length === 0) return;
+
+    var items = state.artifactQueue.slice();
+    var totalDuration = computeReelDuration(items);
+    fetch("api/artifact-stashes", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "create", items: items, name: "", totalDuration: totalDuration }),
+    })
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        if (data.ok) {
+          state.artifactStashes.push(data.stash);
+          for (var i = 0; i < state.artifactQueue.length; i++) {
+            var item = state.artifactQueue[i];
+            delete state.cellResults[cellKey(item.participant, item.row)];
+          }
+          state.artifactQueue = [];
+          renderArtifactQueue();
+          renderStashedArtifacts();
+          updateCellClasses();
+        }
+      })
+      .catch(function () {});
+  }
+
+  function recallArtifactStash(stash) {
+    state.artifactQueue = stash.items.slice();
+    renderArtifactQueue();
+    updateCellClasses();
+  }
+
+  // ---- Stash drag-reveal ----
+
+  function revealEmptyStashAreas() {
+    var artArea = qs("#stashedArtifactsArea");
+    var reelArea = qs("#stashedReelsArea");
+    if (state.artifactStashes.length === 0) {
+      artArea.classList.remove("hidden");
+      artArea.classList.add("stash-drop-reveal");
+    }
+    if (state.stashes.length === 0) {
+      reelArea.classList.remove("hidden");
+      reelArea.classList.add("stash-drop-reveal");
+    }
+  }
+
+  function hideEmptyStashAreas() {
+    var artArea = qs("#stashedArtifactsArea");
+    var reelArea = qs("#stashedReelsArea");
+    if (state.artifactStashes.length === 0) {
+      artArea.classList.add("hidden");
+      artArea.classList.remove("stash-drop-reveal");
+    }
+    if (state.stashes.length === 0) {
+      reelArea.classList.add("hidden");
+      reelArea.classList.remove("stash-drop-reveal");
+    }
   }
 
   // ---- Buttons ----
@@ -1180,6 +1377,7 @@
     });
 
     qs("#stashReelBtn").addEventListener("click", stashCurrentReel);
+    qs("#stashArtifactsBtn").addEventListener("click", stashCurrentArtifacts);
     qs("#generateBtn").addEventListener("click", onGenerate);
     qs("#buildReelBtn").addEventListener("click", onBuildReel);
     qs("#buildViewerBtn").addEventListener("click", onBuildViewer);
@@ -1708,7 +1906,16 @@
     bindButtons();
     loadSheetData();
     loadStashes();
+    loadArtifactStashes();
     updateViewerButton();
     checkNavLinks();
+
+    document.addEventListener("dragstart", function (ev) {
+      if (!ev.target.closest(".stash-card")) return;
+      requestAnimationFrame(revealEmptyStashAreas);
+    });
+    document.addEventListener("dragend", function () {
+      hideEmptyStashAreas();
+    });
   });
 })();
