@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """Configuration constants for clipgen."""
 
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from icecream import ic
 
@@ -9,7 +9,7 @@ from icecream import ic
 REENCODING: bool = False
 AUDIO_NORMALIZE: bool = False
 FILEFORMAT: str = ".mp4"
-VERSIONNUM: str = "0.9.45"
+VERSIONNUM: str = "0.9.46"
 TITLECARDS_ENABLED: bool = False
 TITLECARD_DURATION_SECONDS: int = 2
 WORKSHEET_PRIORITY: List[str] = [
@@ -86,6 +86,7 @@ SERVER_PORT: int = 8089
 INSIGHTS_MANIFEST_FILENAME: str = "insights_manifest.json"
 STASHES_MANIFEST_FILENAME: str = "reel_stashes.json"
 ARTIFACT_STASHES_MANIFEST_FILENAME: str = "artifact_stashes.json"
+STUDIO_SETTINGS_FILENAME: str = "studio_settings.json"
 GOOGLE_API_MAX_RETRIES: int = 3  # Retries for transient Google API errors (5xx)
 
 # Sprite sheet constants (for insights builder hover-to-scrub)
@@ -176,4 +177,19 @@ SETTINGS_DESCRIPTIONS: Dict[str, str] = {
     "TRANSCRIBE_FORMAT": "Transcript output format: md (Markdown), srt, or vtt.",
     "HIGHLIGHTS_REEL_DURATION_SECONDS": "Maximum duration in seconds for the highlights reel time budget.",
     "MANIFEST_ENABLED": "Write a manifest JSON file alongside generated artifacts for session tracking.",
+}
+
+# Studio-exposed settings with UI metadata (group, type, constraints).
+# Keys must match module-level attributes above and entries in SETTINGS_DESCRIPTIONS.
+STUDIO_SETTINGS: Dict[str, Dict[str, Any]] = {
+    "REENCODING": {"group": "Video Output", "type": "bool"},
+    "AUDIO_NORMALIZE": {"group": "Video Output", "type": "bool"},
+    "FILEFORMAT": {"group": "Video Output", "type": "select", "options": [".mp4", ".webm", ".mkv"]},
+    "MAX_FILESIZE_MB": {"group": "Video Output", "type": "int", "min": 0, "step": 1},
+    "DEFAULT_DURATION_SECONDS": {"group": "Clip Behavior", "type": "int", "min": 1, "step": 1},
+    "MAX_CLIP_DURATION_SECONDS": {"group": "Clip Behavior", "type": "int", "min": 1, "step": 1},
+    "TITLECARDS_ENABLED": {"group": "Titlecards", "type": "bool"},
+    "TITLECARD_DURATION_SECONDS": {"group": "Titlecards", "type": "int", "min": 1, "step": 1},
+    "HIGHLIGHTS_REEL_DURATION_SECONDS": {"group": "Generation", "type": "int", "min": 10, "step": 10},
+    "MANIFEST_ENABLED": {"group": "Generation", "type": "bool"},
 }

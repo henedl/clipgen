@@ -15,6 +15,7 @@
     cellResults: {},
     stashes: [],
     artifactStashes: [],
+    settingsData: null,
   };
 
   // ---- Helpers ----
@@ -1405,6 +1406,16 @@
       }
     });
 
+    qs("#titlecardEnabled").addEventListener("change", persistTitlecardSettings);
+    qs("#titlecardDuration").addEventListener("change", persistTitlecardSettings);
+
+    qs("#settingsBtn").addEventListener("click", openSettings);
+    qs("#settingsClose").addEventListener("click", closeSettings);
+    qs("#settingsResetBtn").addEventListener("click", resetSettings);
+    qs("#settingsOverlay").addEventListener("click", function (e) {
+      if (e.target === qs("#settingsOverlay")) closeSettings();
+    });
+
     qs("#statusDismiss").addEventListener("click", hideOverlay);
   }
 
@@ -1917,6 +1928,254 @@
 
   function hideOverlay() {
     qs("#statusOverlay").classList.add("hidden");
+  }
+
+  // ---- Settings ----
+
+  var _settingsSaveTimer = null;
+
+  function openSettings() {
+    qs("#settingsOverlay").classList.remove("hidden");
+    loadSettings();
+  }
+
+  function closeSettings() {
+    qs("#settingsOverlay").classList.add("hidden");
+  }
+
+  function loadSettings() {
+    qs("#settingsContent").textContent = "Loading settings\u2026";
+    fetch("api/settings")
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        if (!data.ok) {
+          qs("#settingsContent").textContent = "Failed to load settings.";
+          return;
+        }
+        state.settingsData = data.settings;
+        renderSettings();
+      })
+      .catch(function () {
+        qs("#settingsContent").textContent = "Failed to load settings.";
+      });
+  }
+
+  function renderSettings() {
+    var container = qs("#settingsContent");
+    container.innerHTML = "";
+
+    var groups = {};
+    var groupOrder = [];
+    for (var i = 0; i < state.settingsData.length; i++) {
+      var s = state.settingsData[i];
+      if (!groups[s.group]) {
+        groups[s.group] = [];
+        groupOrder.push(s.group);
+      }
+      groups[s.group].push(s);
+    }
+
+    for (var gi = 0; gi < groupOrder.length; gi++) {
+      var groupName = groupOrder[gi];
+      container.appendChild(el("div", "settings-group-label", groupName));
+      var items = groups[groupName];
+      for (var si = 0; si < items.length; si++) {
+        container.appendChild(buildSettingRow(items[si]));
+      }
+    }
+  }
+
+  function buildSettingRow(s) {
+    var row = el("div", "settings-row");
+    if (s.value !== s.default) row.classList.add("settings-changed");
+    row.setAttribute("data-setting", s.name);
+
+    var labelDiv = el("div", "settings-label");
+    var friendlyName = s.name
+      .replace(/_/g, " ").toLowerCase()
+      .replace(/\b\w/g, function (c) { return c.toUpperCase(); })
+      .replace(/Mb$/i, "(MB)").replace(/Seconds$/i, "(s)");
+    labelDiv.appendChild(el("div", "settings-label-name", friendlyName));
+    labelDiv.appendChild(el("div", "settings-label-desc", s.description));
+
+    var controlDiv = el("div", "settings-control");
+    var settingName = s.name;
+
+    if (s.type === "bool") {
+      var toggle = document.createElement("input");
+      toggle.type = "checkbox";
+      toggle.className = "settings-toggle";
+      toggle.checked = !!s.value;
+      toggle.addEventListener("change", function () {
+        var setting = findSetting(settingName);
+        if (setting) setting.value = this.checked;
+        updateSettingChanged(settingName);
+        scheduleSaveSettings();
+      });
+      controlDiv.appendChild(toggle);
+    } else if (s.type === "select" && s.options) {
+      var sel = document.createElement("select");
+      for (var oi = 0; oi < s.options.length; oi++) {
+        var opt = document.createElement("option");
+        opt.value = s.options[oi];
+        opt.textContent = s.options[oi];
+        if (s.options[oi] === s.value) opt.selected = true;
+        sel.appendChild(opt);
+      }
+      sel.addEventListener("change", function () {
+        var setting = findSetting(settingName);
+        if (setting) setting.value = this.value;
+        updateSettingChanged(settingName);
+        scheduleSaveSettings();
+      });
+      controlDiv.appendChild(sel);
+    } else {
+      var input = document.createElement("input");
+      input.type = "number";
+      if (s.min !== undefined && s.min !== null) input.min = s.min;
+      if (s.step !== undefined && s.step !== null) input.step = s.step;
+      input.value = s.value;
+      input.placeholder = String(s.default);
+      input.addEventListener("change", function () {
+        var setting = findSetting(settingName);
+        if (setting) setting.value = parseInt(this.value, 10) || 0;
+        updateSettingChanged(settingName);
+        scheduleSaveSettings();
+      });
+      controlDiv.appendChild(input);
+    }
+
+    row.appendChild(labelDiv);
+    row.appendChild(controlDiv);
+    return row;
+  }
+
+  function findSetting(name) {
+    if (!state.settingsData) return null;
+    for (var i = 0; i < state.settingsData.length; i++) {
+      if (state.settingsData[i].name === name) return state.settingsData[i];
+    }
+    return null;
+  }
+
+  function updateSettingChanged(name) {
+    var setting = findSetting(name);
+    if (!setting) return;
+    var row = qs('.settings-row[data-setting="' + name + '"]');
+    if (!row) return;
+    if (setting.value !== setting.default) {
+      row.classList.add("settings-changed");
+    } else {
+      row.classList.remove("settings-changed");
+    }
+  }
+
+  function scheduleSaveSettings() {
+    if (_settingsSaveTimer) clearTimeout(_settingsSaveTimer);
+    _settingsSaveTimer = setTimeout(saveSettings, 400);
+  }
+
+  function saveSettings() {
+    if (!state.settingsData) return;
+    var payload = {};
+    for (var i = 0; i < state.settingsData.length; i++) {
+      var s = state.settingsData[i];
+      payload[s.name] = s.value;
+    }
+
+    var statusEl = qs("#settingsSaveStatus");
+    if (statusEl) statusEl.textContent = "Saving\u2026";
+
+    fetch("api/settings", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ settings: payload }),
+    })
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        if (statusEl) {
+          statusEl.textContent = data.ok ? "Saved" : "Save failed";
+          setTimeout(function () { statusEl.textContent = ""; }, 2000);
+        }
+        if (data.ok) syncInlineControls();
+      })
+      .catch(function () {
+        if (statusEl) statusEl.textContent = "Save failed";
+      });
+  }
+
+  function resetSettings() {
+    if (!state.settingsData) return;
+    var payload = {};
+    for (var i = 0; i < state.settingsData.length; i++) {
+      var s = state.settingsData[i];
+      s.value = s.default;
+      payload[s.name] = s.default;
+    }
+    renderSettings();
+
+    fetch("api/settings", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ settings: payload }),
+    })
+      .then(function (r) { return r.json(); })
+      .then(function () {
+        var statusEl = qs("#settingsSaveStatus");
+        if (statusEl) {
+          statusEl.textContent = "Reset to defaults";
+          setTimeout(function () { statusEl.textContent = ""; }, 2000);
+        }
+        syncInlineControls();
+      })
+      .catch(function () {});
+  }
+
+  function syncInlineControls() {
+    if (!state.settingsData) return;
+    var tcEnabled = findSetting("TITLECARDS_ENABLED");
+    var tcDuration = findSetting("TITLECARD_DURATION_SECONDS");
+    var hlDuration = findSetting("HIGHLIGHTS_REEL_DURATION_SECONDS");
+
+    if (tcEnabled) {
+      var cb = qs("#titlecardEnabled");
+      if (cb) cb.checked = !!tcEnabled.value;
+    }
+    if (tcDuration) {
+      var dur = qs("#titlecardDuration");
+      if (dur) dur.value = tcDuration.value;
+    }
+    if (hlDuration) {
+      var hl = qs("#highlightsDuration");
+      if (hl) hl.value = hlDuration.value;
+    }
+  }
+
+  function persistTitlecardSettings() {
+    var cb = qs("#titlecardEnabled");
+    var dur = qs("#titlecardDuration");
+    if (!cb || !dur) return;
+
+    var payload = {
+      TITLECARDS_ENABLED: cb.checked,
+      TITLECARD_DURATION_SECONDS: parseInt(dur.value, 10) || 2,
+    };
+
+    fetch("api/settings", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ settings: payload }),
+    })
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        if (data.ok && state.settingsData) {
+          var tcE = findSetting("TITLECARDS_ENABLED");
+          var tcD = findSetting("TITLECARD_DURATION_SECONDS");
+          if (tcE) tcE.value = cb.checked;
+          if (tcD) tcD.value = parseInt(dur.value, 10) || 2;
+        }
+      })
+      .catch(function () {});
   }
 
   // ---- Init ----

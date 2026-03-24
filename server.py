@@ -41,6 +41,11 @@ _generated_artifacts: List[Dict[str, Any]] = []
 _generated_reels: List[Dict[str, Any]] = []
 _thumbnail_cache: Dict[tuple, bytes] = {}
 
+# Snapshot config defaults before any settings file is loaded.
+_settings_defaults: Dict[str, Any] = {
+    name: getattr(config, name) for name in getattr(config, "STUDIO_SETTINGS", {})
+}
+
 _assets_dir = Path(__file__).resolve().parent / "assets" / "web"
 
 # ---- Blueprint ----
@@ -265,6 +270,65 @@ def _save_artifact_stashes(stashes: List[Dict[str, Any]]) -> Optional[Path]:
             encoding="utf-8",
         )
         return stash_path
+    except OSError:
+        return None
+
+
+def _load_studio_settings() -> Dict[str, Any]:
+    """Load studio_settings.json and apply non-default values to config module."""
+    settings_path = Path(utils.get_effective_output_dir()) / config.STUDIO_SETTINGS_FILENAME
+    if not settings_path.is_file():
+        return {}
+    try:
+        data = json.loads(settings_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+
+    applied: Dict[str, Any] = {}
+    for name, value in data.items():
+        if name not in config.STUDIO_SETTINGS:
+            continue
+        default = _settings_defaults.get(name)
+        expected_type = type(default) if default is not None else str
+        try:
+            if expected_type is bool:
+                coerced = bool(value)
+            elif expected_type is int:
+                coerced = int(value)
+            elif expected_type is float:
+                coerced = float(value)
+            else:
+                coerced = str(value)
+        except (ValueError, TypeError):
+            continue
+        setattr(config, name, coerced)
+        applied[name] = coerced
+    return applied
+
+
+def _save_studio_settings(overrides: Dict[str, Any]) -> Optional[Path]:
+    """Write only non-default settings to studio_settings.json."""
+    settings_path = Path(utils.get_effective_output_dir()) / config.STUDIO_SETTINGS_FILENAME
+    to_save = {}
+    for name, value in overrides.items():
+        if name in _settings_defaults and value != _settings_defaults[name]:
+            to_save[name] = value
+    if not to_save:
+        if settings_path.is_file():
+            try:
+                settings_path.unlink()
+            except OSError:
+                pass
+        return None
+    try:
+        settings_path.parent.mkdir(parents=True, exist_ok=True)
+        settings_path.write_text(
+            json.dumps(to_save, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        return settings_path
     except OSError:
         return None
 
@@ -814,6 +878,61 @@ def api_artifact_stashes_post() -> FlaskResponse:
     return jsonify({"ok": False, "error": f"Unknown action: {action}"}), 400
 
 
+@studio_bp.route("/api/settings", methods=["GET"])
+def api_settings_get() -> FlaskResponse:
+    settings = []
+    for name, meta in config.STUDIO_SETTINGS.items():
+        settings.append(
+            {
+                "name": name,
+                "value": getattr(config, name),
+                "default": _settings_defaults.get(name),
+                "description": config.SETTINGS_DESCRIPTIONS.get(name, ""),
+                "group": meta.get("group", ""),
+                "type": meta.get("type", "str"),
+                "options": meta.get("options"),
+                "min": meta.get("min"),
+                "step": meta.get("step"),
+            }
+        )
+    return jsonify({"ok": True, "settings": settings})
+
+
+@studio_bp.route("/api/settings", methods=["PUT"])
+def api_settings_put() -> FlaskResponse:
+    data = request.get_json(silent=True) or {}
+    settings_data = data.get("settings")
+    if not isinstance(settings_data, dict):
+        return jsonify({"ok": False, "error": "Invalid settings payload"}), 400
+
+    applied: Dict[str, Any] = {}
+    for name, value in settings_data.items():
+        if name not in config.STUDIO_SETTINGS:
+            continue
+        default = _settings_defaults.get(name)
+        expected_type = type(default) if default is not None else str
+        try:
+            if expected_type is bool:
+                coerced = (
+                    value
+                    if isinstance(value, bool)
+                    else str(value).lower() in ("true", "1", "yes", "on")
+                )
+            elif expected_type is int:
+                coerced = int(value)
+            elif expected_type is float:
+                coerced = float(value)
+            else:
+                coerced = str(value)
+        except (ValueError, TypeError):
+            continue
+        setattr(config, name, coerced)
+        applied[name] = coerced
+
+    _save_studio_settings(applied)
+    return jsonify({"ok": True, "applied": applied})
+
+
 # ---- State initialization ----
 
 
@@ -821,6 +940,7 @@ def _init_studio_state(worksheet: Any) -> None:
     """Initialize module-level state for Studio routes."""
     global _worksheet, _sheet_context, _generated_artifacts, _generated_reels, _thumbnail_cache
 
+    _load_studio_settings()
     _worksheet = worksheet
     _sheet_context = spreadsheet.build_sheet_context(worksheet)
     _generated_artifacts = viewer.load_manifest_artifacts()
