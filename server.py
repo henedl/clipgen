@@ -181,6 +181,8 @@ def api_sheet() -> FlaskResponse:
             "study": ctx.study_name,
             "version": config.VERSIONNUM,
             "highlightsDuration": config.HIGHLIGHTS_REEL_DURATION_SECONDS,
+            "titlecardsEnabled": config.TITLECARDS_ENABLED,
+            "titlecardDuration": config.TITLECARD_DURATION_SECONDS,
             "participants": participants,
             "rows": rows,
         }
@@ -291,6 +293,8 @@ def api_generate() -> FlaskResponse:
     data = request.get_json(silent=True) or {}
     cell_strings = data.get("cells", [])
     output_format = data.get("format", "clip")
+    tc_enabled = data.get("titlecards_enabled")
+    tc_duration = data.get("titlecard_duration")
 
     if not cell_strings:
         return jsonify({"ok": False, "error": "No cells specified"}), 400
@@ -311,40 +315,55 @@ def api_generate() -> FlaskResponse:
         return jsonify({"ok": False, "error": str(e)}), 500
 
     def stream() -> Any:
-        clip_cells: set[str] = set()
-        for clip in clips:
-            cell_str = clip["participant"] + "." + str(clip["cell"].row)
-            clip_cells.add(cell_str)
-
-            existing = _find_existing_artifacts(
-                clip["cell"].row, clip["cell"].col, output_format
-            )
-            if existing:
-                yield json.dumps(
-                    {
-                        "cell": cell_str,
-                        "ok": True,
-                        "generated": len(existing),
-                        "artifacts": existing,
-                        "skipped": True,
-                    }
-                ) + "\n"
-                continue
-
+        original_tc_enabled = config.TITLECARDS_ENABLED
+        original_tc_duration = config.TITLECARD_DURATION_SECONDS
+        if tc_enabled is not None:
+            config.TITLECARDS_ENABLED = bool(tc_enabled)
+        if tc_duration is not None:
             try:
-                generated, artifacts = clipgen.process_clips(
-                    [clip], output_format=output_format
+                val = int(tc_duration)
+                if val > 0:
+                    config.TITLECARD_DURATION_SECONDS = val
+            except (ValueError, TypeError):
+                pass
+        try:
+            clip_cells: set[str] = set()
+            for clip in clips:
+                cell_str = clip["participant"] + "." + str(clip["cell"].row)
+                clip_cells.add(cell_str)
+
+                existing = _find_existing_artifacts(
+                    clip["cell"].row, clip["cell"].col, output_format
                 )
-                _generated_artifacts.extend(artifacts)
-                yield json.dumps(
-                    {"cell": cell_str, "ok": generated > 0, "generated": generated, "artifacts": artifacts}
-                ) + "\n"
-            except Exception as e:
-                yield json.dumps({"cell": cell_str, "ok": False, "error": str(e)}) + "\n"
-        for cs in cell_strings:
-            if cs not in clip_cells:
-                yield json.dumps({"cell": cs, "ok": False, "error": "No clip found"}) + "\n"
-        _save_manifest_quiet()
+                if existing:
+                    yield json.dumps(
+                        {
+                            "cell": cell_str,
+                            "ok": True,
+                            "generated": len(existing),
+                            "artifacts": existing,
+                            "skipped": True,
+                        }
+                    ) + "\n"
+                    continue
+
+                try:
+                    generated, artifacts = clipgen.process_clips(
+                        [clip], output_format=output_format
+                    )
+                    _generated_artifacts.extend(artifacts)
+                    yield json.dumps(
+                        {"cell": cell_str, "ok": generated > 0, "generated": generated, "artifacts": artifacts}
+                    ) + "\n"
+                except Exception as e:
+                    yield json.dumps({"cell": cell_str, "ok": False, "error": str(e)}) + "\n"
+            for cs in cell_strings:
+                if cs not in clip_cells:
+                    yield json.dumps({"cell": cs, "ok": False, "error": "No clip found"}) + "\n"
+            _save_manifest_quiet()
+        finally:
+            config.TITLECARDS_ENABLED = original_tc_enabled
+            config.TITLECARD_DURATION_SECONDS = original_tc_duration
 
     return Response(stream(), mimetype="application/x-ndjson", headers={"X-Accel-Buffering": "no"})
 
@@ -401,6 +420,8 @@ def api_reel() -> FlaskResponse:
     data = request.get_json(silent=True) or {}
     cell_strings = data.get("cells", [])
     highlights_duration = data.get("highlights_duration")
+    tc_enabled = data.get("titlecards_enabled")
+    tc_duration = data.get("titlecard_duration")
 
     if not cell_strings:
         return jsonify({"ok": False, "error": "No cells specified"}), 400
@@ -409,11 +430,22 @@ def api_reel() -> FlaskResponse:
         reel_input = ", ".join(cell_strings)
 
         original_duration = config.HIGHLIGHTS_REEL_DURATION_SECONDS
+        original_tc_enabled = config.TITLECARDS_ENABLED
+        original_tc_duration = config.TITLECARD_DURATION_SECONDS
         if highlights_duration is not None:
             try:
                 val = int(highlights_duration)
                 if val > 0:
                     config.HIGHLIGHTS_REEL_DURATION_SECONDS = val
+            except (ValueError, TypeError):
+                pass
+        if tc_enabled is not None:
+            config.TITLECARDS_ENABLED = bool(tc_enabled)
+        if tc_duration is not None:
+            try:
+                val = int(tc_duration)
+                if val > 0:
+                    config.TITLECARD_DURATION_SECONDS = val
             except (ValueError, TypeError):
                 pass
 
@@ -465,6 +497,9 @@ def api_reel() -> FlaskResponse:
 
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
+    finally:
+        config.TITLECARDS_ENABLED = original_tc_enabled
+        config.TITLECARD_DURATION_SECONDS = original_tc_duration
 
 
 @studio_bp.route("/api/viewer", methods=["POST"])

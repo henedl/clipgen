@@ -283,6 +283,18 @@
         if (durInput && data.highlightsDuration) {
           durInput.value = data.highlightsDuration;
         }
+        var tcCheckbox = qs("#titlecardEnabled");
+        var tcDurInput = qs("#titlecardDuration");
+        if (tcCheckbox && data.titlecardsEnabled !== undefined) {
+          tcCheckbox.checked = data.titlecardsEnabled;
+        }
+        if (tcDurInput && data.titlecardDuration) {
+          tcDurInput.value = data.titlecardDuration;
+        }
+        var tcGroup = qs("#titlecardGroup");
+        if (tcGroup && qs("#artifactFormat").value === "clip") {
+          tcGroup.classList.remove("hidden");
+        }
         restoreQueues();
         if (state.artifactQueue.length > 0 || state.reelQueue.length > 0) {
           renderArtifactQueue();
@@ -1385,6 +1397,14 @@
     qs("#buildHighlightsBtn").addEventListener("click", onBuildHighlights);
     qs("#galleryBtn").addEventListener("click", onGallery);
 
+    qs("#artifactFormat").addEventListener("change", function () {
+      var tcGroup = qs("#titlecardGroup");
+      if (tcGroup) {
+        if (this.value === "clip") tcGroup.classList.remove("hidden");
+        else tcGroup.classList.add("hidden");
+      }
+    });
+
     qs("#statusDismiss").addEventListener("click", hideOverlay);
   }
 
@@ -1553,10 +1573,18 @@
       }
     }
 
+    var genBody = { cells: cells, format: format };
+    if (format === "clip") {
+      var tcCb = qs("#titlecardEnabled");
+      var tcDur = qs("#titlecardDuration");
+      if (tcCb) genBody.titlecards_enabled = tcCb.checked;
+      if (tcDur) genBody.titlecard_duration = parseInt(tcDur.value, 10) || 2;
+    }
+
     fetch("api/generate", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ cells: cells, format: format }),
+      body: JSON.stringify(genBody),
     })
       .then(function (response) {
         var reader = response.body.getReader();
@@ -1606,10 +1634,16 @@
       setCardQueued(reelCards[i]);
     }
 
+    var reelBody = { cells: cells };
+    var tcCb = qs("#titlecardEnabled");
+    var tcDur = qs("#titlecardDuration");
+    if (tcCb) reelBody.titlecards_enabled = tcCb.checked;
+    if (tcDur) reelBody.titlecard_duration = parseInt(tcDur.value, 10) || 2;
+
     fetch("api/reel", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ cells: cells }),
+      body: JSON.stringify(reelBody),
     })
       .then(function (r) { return r.json(); })
       .then(function (data) {
