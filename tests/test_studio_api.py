@@ -640,3 +640,173 @@ def test_api_artifact_stashes_unknown_action_400(client, monkeypatch):
     assert resp.status_code == 400
     data = resp.get_json()
     assert "Unknown action" in data["error"]
+
+
+# ---- Titlecard settings tests ----
+
+
+def test_api_sheet_returns_titlecard_defaults(client, monkeypatch):
+    """api/sheet includes titlecardsEnabled and titlecardDuration from config."""
+    import types
+
+    import config
+
+    ctx = types.SimpleNamespace(
+        header_row=["ID", "P01"],
+        id_cell=types.SimpleNamespace(row=1, col=1),
+        num_participants=1,
+        study_name="study",
+        observation_cell=types.SimpleNamespace(col=3),
+        category_cell=types.SimpleNamespace(col=4),
+        severity_cell=None,
+        baseline_row_idx=None,
+        filename_row_idx=None,
+        first_data_row_idx=2,
+        sheet_data=[["study"], ["ID", "P01", "Observation", "Category"]],
+    )
+    monkeypatch.setattr(server, "_sheet_context", ctx)
+
+    resp = client.get("/studio/api/sheet")
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["ok"] is True
+    assert data["titlecardsEnabled"] == config.TITLECARDS_ENABLED
+    assert data["titlecardDuration"] == config.TITLECARD_DURATION_SECONDS
+
+
+def test_api_generate_titlecard_override(client, monkeypatch):
+    """titlecards_enabled and titlecard_duration temporarily override config during generate."""
+    import types
+
+    import config
+
+    monkeypatch.setattr(server, "_worksheet", object())
+    original_enabled = config.TITLECARDS_ENABLED
+    original_duration = config.TITLECARD_DURATION_SECONDS
+    captured = {}
+
+    cell = types.SimpleNamespace(row=5, col=2, value="1:00")
+
+    def fake_generate_list(ws, mode, *, cell_specs, skip_prompts):
+        return [{"participant": "P01", "cell": cell}]
+
+    def fake_process_clips(clips, *, output_format):
+        captured["enabled"] = config.TITLECARDS_ENABLED
+        captured["duration"] = config.TITLECARD_DURATION_SECONDS
+        return (1, [{"id": "a1", "type": "clip"}])
+
+    monkeypatch.setattr("spreadsheet.generate_list", fake_generate_list)
+    monkeypatch.setattr("spreadsheet.parse_cell_specifications", lambda t: [("P01", 5)])
+    monkeypatch.setattr("clipgen.process_clips", fake_process_clips)
+    monkeypatch.setattr(server, "_generated_artifacts", [])
+
+    resp = client.post(
+        "/studio/api/generate",
+        json={
+            "cells": ["P01.5"],
+            "format": "clip",
+            "titlecards_enabled": True,
+            "titlecard_duration": 5,
+        },
+    )
+    lines = [json.loads(ln) for ln in resp.data.decode().strip().split("\n")]
+    assert resp.status_code == 200
+    assert captured["enabled"] is True
+    assert captured["duration"] == 5
+    assert config.TITLECARDS_ENABLED == original_enabled
+    assert config.TITLECARD_DURATION_SECONDS == original_duration
+
+
+def test_api_generate_titlecard_restored_on_error(client, monkeypatch):
+    """Titlecard config is restored even when process_clips raises."""
+    import types
+
+    import config
+
+    monkeypatch.setattr(server, "_worksheet", object())
+    original_enabled = config.TITLECARDS_ENABLED
+    original_duration = config.TITLECARD_DURATION_SECONDS
+
+    cell = types.SimpleNamespace(row=5, col=2, value="1:00")
+
+    def fake_generate_list(ws, mode, *, cell_specs, skip_prompts):
+        return [{"participant": "P01", "cell": cell}]
+
+    def fake_process_clips(clips, *, output_format):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr("spreadsheet.generate_list", fake_generate_list)
+    monkeypatch.setattr("spreadsheet.parse_cell_specifications", lambda t: [("P01", 5)])
+    monkeypatch.setattr("clipgen.process_clips", fake_process_clips)
+    monkeypatch.setattr(server, "_generated_artifacts", [])
+
+    resp = client.post(
+        "/studio/api/generate",
+        json={
+            "cells": ["P01.5"],
+            "format": "clip",
+            "titlecards_enabled": True,
+            "titlecard_duration": 10,
+        },
+    )
+    _ = resp.data  # consume streaming response to trigger finally
+    assert resp.status_code == 200  # streaming response still 200
+    assert config.TITLECARDS_ENABLED == original_enabled
+    assert config.TITLECARD_DURATION_SECONDS == original_duration
+
+
+def test_api_reel_titlecard_override(client, monkeypatch):
+    """titlecards_enabled and titlecard_duration temporarily override config during reel build."""
+    import config
+
+    monkeypatch.setattr(server, "_worksheet", object())
+    original_enabled = config.TITLECARDS_ENABLED
+    original_duration = config.TITLECARD_DURATION_SECONDS
+    captured = {}
+
+    def fake_generate_list(ws, mode, *, reel_input, skip_prompts):
+        captured["enabled"] = config.TITLECARDS_ENABLED
+        captured["duration"] = config.TITLECARD_DURATION_SECONDS
+        return []
+
+    monkeypatch.setattr("spreadsheet.generate_list", fake_generate_list)
+
+    resp = client.post(
+        "/studio/api/reel",
+        json={
+            "cells": ["P01.5"],
+            "titlecards_enabled": True,
+            "titlecard_duration": 4,
+        },
+    )
+    assert resp.status_code == 400  # no clips → 400
+    assert captured["enabled"] is True
+    assert captured["duration"] == 4
+    assert config.TITLECARDS_ENABLED == original_enabled
+    assert config.TITLECARD_DURATION_SECONDS == original_duration
+
+
+def test_api_reel_titlecard_restored_on_error(client, monkeypatch):
+    """Titlecard config is restored even when generate_list raises."""
+    import config
+
+    monkeypatch.setattr(server, "_worksheet", object())
+    original_enabled = config.TITLECARDS_ENABLED
+    original_duration = config.TITLECARD_DURATION_SECONDS
+
+    def raise_generate_list(ws, mode, *, reel_input, skip_prompts):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr("spreadsheet.generate_list", raise_generate_list)
+
+    resp = client.post(
+        "/studio/api/reel",
+        json={
+            "cells": ["P01.5"],
+            "titlecards_enabled": True,
+            "titlecard_duration": 7,
+        },
+    )
+    assert resp.status_code == 500
+    assert config.TITLECARDS_ENABLED == original_enabled
+    assert config.TITLECARD_DURATION_SECONDS == original_duration

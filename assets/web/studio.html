@@ -73,6 +73,13 @@
           <option value="screen">Screenshot (.png)</option>
           <option value="gif">GIF (.gif)</option>
         </select>
+        <label id="titlecardGroup" class="titlecard-group">
+          <input id="titlecardEnabled" type="checkbox">
+          <span class="titlecard-label-text">Titlecards</span>
+          <input id="titlecardDuration" type="number" min="1" step="1" value="2"
+                 class="titlecard-duration-input" title="Duration (seconds)">
+          <span class="titlecard-label-unit">s</span>
+        </label>
         <button id="generateBtn" class="btn btn-primary" disabled>Generate</button>
         <button id="buildViewerBtn" class="btn btn-primary" disabled>Build Viewer</button>
         <button id="stashArtifactsBtn" class="btn btn-small" disabled>Stash</button>
