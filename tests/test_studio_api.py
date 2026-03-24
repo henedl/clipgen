@@ -511,3 +511,132 @@ def test_api_stashes_unknown_action_400(client, monkeypatch):
     assert resp.status_code == 400
     data = resp.get_json()
     assert "Unknown action" in data["error"]
+
+
+# ---- Artifact stash API tests ----
+
+
+def test_api_artifact_stashes_get_empty(client, monkeypatch):
+    monkeypatch.setattr(server, "_load_artifact_stashes", lambda: [])
+    resp = client.get("/studio/api/artifact-stashes")
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["ok"] is True
+    assert data["stashes"] == []
+
+
+def test_api_artifact_stashes_create(client, monkeypatch):
+    saved = []
+    monkeypatch.setattr(server, "_load_artifact_stashes", lambda: [])
+    monkeypatch.setattr(server, "_save_artifact_stashes", lambda s: saved.append(s))
+
+    items = [
+        {"participant": "P01", "row": 5, "segDuration": 30},
+        {"participant": "P02", "row": 7, "segDuration": 45},
+    ]
+    resp = client.post(
+        "/studio/api/artifact-stashes",
+        json={"action": "create", "items": items, "name": "My artifacts"},
+    )
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["ok"] is True
+    stash = data["stash"]
+    assert stash["name"] == "My artifacts"
+    assert stash["count"] == 2
+    assert stash["totalDuration"] == 75
+    assert stash["id"].startswith("astash_")
+    assert "createdAt" in stash
+    assert len(saved) == 1
+    assert len(saved[0]) == 1
+
+
+def test_api_artifact_stashes_create_default_name(client, monkeypatch):
+    monkeypatch.setattr(
+        server, "_load_artifact_stashes", lambda: [{"id": "astash_old"}]
+    )
+    monkeypatch.setattr(server, "_save_artifact_stashes", lambda s: None)
+
+    resp = client.post(
+        "/studio/api/artifact-stashes",
+        json={"action": "create", "items": [{"segDuration": 10}]},
+    )
+    data = resp.get_json()
+    assert data["stash"]["name"] == "Stash 2"
+
+
+def test_api_artifact_stashes_create_empty_items_400(client, monkeypatch):
+    monkeypatch.setattr(server, "_load_artifact_stashes", lambda: [])
+    resp = client.post(
+        "/studio/api/artifact-stashes",
+        json={"action": "create", "items": []},
+    )
+    assert resp.status_code == 400
+    data = resp.get_json()
+    assert "No items" in data["error"]
+
+
+def test_api_artifact_stashes_update_name(client, monkeypatch):
+    existing = [{"id": "astash_abc", "name": "Old name", "items": [], "count": 0}]
+    saved = []
+    monkeypatch.setattr(server, "_load_artifact_stashes", lambda: list(existing))
+    monkeypatch.setattr(server, "_save_artifact_stashes", lambda s: saved.append(s))
+
+    resp = client.post(
+        "/studio/api/artifact-stashes",
+        json={"action": "update", "id": "astash_abc", "name": "New name"},
+    )
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["ok"] is True
+    assert data["stash"]["name"] == "New name"
+    assert saved[0][0]["name"] == "New name"
+
+
+def test_api_artifact_stashes_update_404(client, monkeypatch):
+    monkeypatch.setattr(server, "_load_artifact_stashes", lambda: [])
+    resp = client.post(
+        "/studio/api/artifact-stashes",
+        json={"action": "update", "id": "astash_nope", "name": "x"},
+    )
+    assert resp.status_code == 404
+
+
+def test_api_artifact_stashes_delete(client, monkeypatch):
+    existing = [
+        {"id": "astash_aaa", "name": "A"},
+        {"id": "astash_bbb", "name": "B"},
+    ]
+    saved = []
+    monkeypatch.setattr(server, "_load_artifact_stashes", lambda: list(existing))
+    monkeypatch.setattr(server, "_save_artifact_stashes", lambda s: saved.append(s))
+
+    resp = client.post(
+        "/studio/api/artifact-stashes",
+        json={"action": "delete", "id": "astash_aaa"},
+    )
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["ok"] is True
+    assert len(saved[0]) == 1
+    assert saved[0][0]["id"] == "astash_bbb"
+
+
+def test_api_artifact_stashes_delete_not_found_404(client, monkeypatch):
+    monkeypatch.setattr(server, "_load_artifact_stashes", lambda: [])
+    resp = client.post(
+        "/studio/api/artifact-stashes",
+        json={"action": "delete", "id": "astash_nope"},
+    )
+    assert resp.status_code == 404
+
+
+def test_api_artifact_stashes_unknown_action_400(client, monkeypatch):
+    monkeypatch.setattr(server, "_load_artifact_stashes", lambda: [])
+    resp = client.post(
+        "/studio/api/artifact-stashes",
+        json={"action": "bogus"},
+    )
+    assert resp.status_code == 400
+    data = resp.get_json()
+    assert "Unknown action" in data["error"]

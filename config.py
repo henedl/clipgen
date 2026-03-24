@@ -9,7 +9,7 @@ from icecream import ic
 REENCODING: bool = False
 AUDIO_NORMALIZE: bool = False
 FILEFORMAT: str = ".mp4"
-VERSIONNUM: str = "0.9.43"
+VERSIONNUM: str = "0.9.44"
 TITLECARDS_ENABLED: bool = False
 TITLECARD_DURATION_SECONDS: int = 2
 WORKSHEET_PRIORITY: List[str] = [
@@ -85,6 +85,7 @@ MANIFEST_ENABLED: bool = False
 SERVER_PORT: int = 8089
 INSIGHTS_MANIFEST_FILENAME: str = "insights_manifest.json"
 STASHES_MANIFEST_FILENAME: str = "reel_stashes.json"
+ARTIFACT_STASHES_MANIFEST_FILENAME: str = "artifact_stashes.json"
 GOOGLE_API_MAX_RETRIES: int = 3  # Retries for transient Google API errors (5xx)
 
 # Sprite sheet constants (for insights builder hover-to-scrub)

@@ -75,12 +75,20 @@
         </select>
         <button id="generateBtn" class="btn btn-primary" disabled>Generate</button>
         <button id="buildViewerBtn" class="btn btn-primary" disabled>Build Viewer</button>
+        <button id="stashArtifactsBtn" class="btn btn-small" disabled>Stash</button>
         <button id="clearArtifactsBtn" class="btn btn-small">Clear</button>
       </div>
       <div id="artifactsList" class="drop-target">
         <div class="drop-target-empty">Click or drag cells here to queue for generation</div>
       </div>
     </div>
+  </section>
+
+  <section id="stashedArtifactsArea" class="hidden">
+    <div id="stashedArtifactsHeader">
+      <h3>Stashed Artifacts <span id="stashedArtifactsCount">(0)</span></h3>
+    </div>
+    <div id="stashedArtifactsList"></div>
   </section>
 
   <section id="reelArea">
