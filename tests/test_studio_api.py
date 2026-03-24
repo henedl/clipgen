@@ -810,3 +810,140 @@ def test_api_reel_titlecard_restored_on_error(client, monkeypatch):
     assert resp.status_code == 500
     assert config.TITLECARDS_ENABLED == original_enabled
     assert config.TITLECARD_DURATION_SECONDS == original_duration
+
+
+# ---- Settings API tests ----
+
+
+def test_api_settings_get(client):
+    """GET /api/settings returns all Studio-exposed settings with metadata."""
+    resp = client.get("/studio/api/settings")
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["ok"] is True
+    settings = data["settings"]
+    assert len(settings) > 0
+
+    names = {s["name"] for s in settings}
+    assert "REENCODING" in names
+    assert "TITLECARDS_ENABLED" in names
+    assert "HIGHLIGHTS_REEL_DURATION_SECONDS" in names
+
+    for s in settings:
+        assert "name" in s
+        assert "value" in s
+        assert "default" in s
+        assert "description" in s
+        assert "group" in s
+        assert "type" in s
+
+
+def test_api_settings_put_applies_values(client, monkeypatch):
+    """PUT /api/settings applies values to config and returns applied dict."""
+    import config
+
+    monkeypatch.setattr(server, "_save_studio_settings", lambda o: None)
+    original = config.REENCODING
+
+    resp = client.put(
+        "/studio/api/settings",
+        json={"settings": {"REENCODING": True}},
+    )
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["ok"] is True
+    assert data["applied"]["REENCODING"] is True
+    assert config.REENCODING is True
+
+    # Restore
+    config.REENCODING = original
+
+
+def test_api_settings_put_ignores_unknown(client, monkeypatch):
+    """Unknown setting names are silently ignored."""
+    monkeypatch.setattr(server, "_save_studio_settings", lambda o: None)
+
+    resp = client.put(
+        "/studio/api/settings",
+        json={"settings": {"FAKE_SETTING": 42, "REENCODING": False}},
+    )
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert "FAKE_SETTING" not in data["applied"]
+    assert "REENCODING" in data["applied"]
+
+
+def test_api_settings_put_type_coercion(client, monkeypatch):
+    """Int and bool values are coerced correctly."""
+    import config
+
+    monkeypatch.setattr(server, "_save_studio_settings", lambda o: None)
+    original = config.HIGHLIGHTS_REEL_DURATION_SECONDS
+
+    resp = client.put(
+        "/studio/api/settings",
+        json={"settings": {"HIGHLIGHTS_REEL_DURATION_SECONDS": "120"}},
+    )
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["applied"]["HIGHLIGHTS_REEL_DURATION_SECONDS"] == 120
+    assert config.HIGHLIGHTS_REEL_DURATION_SECONDS == 120
+
+    config.HIGHLIGHTS_REEL_DURATION_SECONDS = original
+
+
+def test_api_settings_put_invalid_payload(client):
+    """PUT /api/settings with no settings dict returns 400."""
+    resp = client.put(
+        "/studio/api/settings",
+        json={"not_settings": {}},
+    )
+    assert resp.status_code == 400
+    data = resp.get_json()
+    assert data["ok"] is False
+
+
+def test_load_studio_settings(monkeypatch, tmp_path):
+    """_load_studio_settings reads file and applies to config."""
+    import config
+
+    monkeypatch.setattr("config.OUTPUT_DIR", str(tmp_path))
+    original = config.REENCODING
+
+    settings_file = tmp_path / config.STUDIO_SETTINGS_FILENAME
+    settings_file.write_text(json.dumps({"REENCODING": True}))
+
+    applied = server._load_studio_settings()
+    assert applied["REENCODING"] is True
+    assert config.REENCODING is True
+
+    config.REENCODING = original
+
+
+def test_load_studio_settings_missing_file(monkeypatch, tmp_path):
+    """Missing settings file returns empty dict without error."""
+    monkeypatch.setattr("config.OUTPUT_DIR", str(tmp_path))
+    applied = server._load_studio_settings()
+    assert applied == {}
+
+
+def test_save_studio_settings_non_defaults_only(monkeypatch, tmp_path):
+    """Only non-default values are written; all-defaults deletes the file."""
+    import config
+
+    monkeypatch.setattr("config.OUTPUT_DIR", str(tmp_path))
+    settings_file = tmp_path / config.STUDIO_SETTINGS_FILENAME
+
+    # Save a non-default value
+    result = server._save_studio_settings({"REENCODING": True})
+    assert result is not None
+    assert settings_file.is_file()
+    data = json.loads(settings_file.read_text())
+    assert data["REENCODING"] is True
+
+    # Save all defaults — file should be removed
+    result = server._save_studio_settings(
+        {"REENCODING": server._settings_defaults["REENCODING"]}
+    )
+    assert result is None
+    assert not settings_file.is_file()

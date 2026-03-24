@@ -162,3 +162,7 @@ clipgen can be packaged as a single-file executable with PyInstaller.
 ## AI Disclosure
 
 The author has used an LLM coding agent for assistance in writing parts of this program; if you want to avoid software connected to LLMs, I get it. All code in this reposity prior to 2026 was written by a human, if you would like to fork the project.
+
+## Credits
+
+- Icons: [Heroicons](https://heroicons.com/) (Micro set) by Tailwind Labs, Inc. — MIT License.
