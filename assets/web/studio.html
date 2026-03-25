@@ -74,12 +74,6 @@
     <div id="artifactsArea" class="drop-area">
       <h3><svg id="artifactsSpinner" class="title-spinner" width="14" height="14" viewBox="0 0 14 14" fill="none"><circle cx="7" cy="7" r="5.5" stroke="currentColor" stroke-width="1.5" opacity="0.25"/><circle cx="7" cy="7" r="5.5" stroke="currentColor" stroke-width="1.5" stroke-dasharray="20 15" stroke-linecap="round"><animateTransform attributeName="transform" type="rotate" from="0 7 7" to="360 7 7" dur="0.7s" repeatCount="indefinite"/></circle></svg>Artifacts <span id="artifactsCount">(0)</span> <span id="viewerArtifactCount" style="font-weight: 400; font-size: 0.8rem; color: var(--color-text-dim);"></span></h3>
       <div class="area-controls">
-        <button id="addToReelBtn" class="btn btn-small btn-icon" disabled>
-          <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
-            <path d="M2.53 3.95633C1.86395 3.54005 1 4.0189 1 4.80433V11.1958C1 11.9813 1.86395 12.4601 2.53 12.0438L7.6432 8.84808C7.80276 8.74836 7.92169 8.61486 8 8.46479V11.1958C8 11.9813 8.86395 12.4601 9.53 12.0438L14.6432 8.84808C15.2699 8.45642 15.2699 7.54376 14.6432 7.15209L9.53 3.95633C8.86395 3.54005 8 4.0189 8 4.80433V7.53538C7.92169 7.38531 7.80276 7.25181 7.6432 7.15209L2.53 3.95633Z"/>
-          </svg>
-          Add to Reel
-        </button>
         <select id="artifactFormat">
           <option value="clip">Clip (.mp4)</option>
           <option value="screen">Screenshot (.png)</option>
@@ -92,9 +86,9 @@
                  class="titlecard-duration-input" title="Duration (seconds)">
           <span class="titlecard-label-unit">s</span>
         </label>
-        <button id="generateBtn" class="btn btn-primary" disabled>Generate</button>
-        <button id="buildViewerBtn" class="btn btn-primary" disabled>Build Viewer</button>
-        <button id="stashArtifactsBtn" class="btn btn-small btn-icon" disabled>
+        <button id="generateBtn" class="btn btn-primary" disabled data-tooltip="Add cells to the work area first">Generate</button>
+        <button id="buildViewerBtn" class="btn btn-primary" disabled data-tooltip="Generate artifacts first">Build Viewer</button>
+        <button id="stashArtifactsBtn" class="btn btn-small btn-icon" disabled data-tooltip="Add cells to the work area first">
           <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
             <path d="M3 2C2.44772 2 2 2.44772 2 3V4C2 4.55228 2.44772 5 3 5H13C13.5523 5 14 4.55228 14 4V3C14 2.44772 13.5523 2 13 2H3Z"/>
             <path fill-rule="evenodd" clip-rule="evenodd" d="M3 6H13V12C13 13.1046 12.1046 14 11 14H5C3.89543 14 3 13.1046 3 12V6ZM6 8.75C6 8.33579 6.33579 8 6.75 8H9.25C9.66421 8 10 8.33579 10 8.75C10 9.16421 9.66421 9.5 9.25 9.5H6.75C6.33579 9.5 6 9.16421 6 8.75Z"/>
@@ -111,6 +105,12 @@
       <div id="artifactsList" class="drop-target">
         <div class="drop-target-empty">Click or drag cells here to queue for generation</div>
       </div>
+      <button id="addToReelBtn" class="btn btn-small btn-icon" disabled data-tooltip="Add cells to the work area first">
+        <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+          <path fill-rule="evenodd" clip-rule="evenodd" d="M8 2a.75.75 0 0 1 .75.75v8.69l3.22-3.22a.75.75 0 1 1 1.06 1.06l-4.5 4.5a.75.75 0 0 1-1.06 0l-4.5-4.5a.75.75 0 0 1 1.06-1.06l3.22 3.22V2.75A.75.75 0 0 1 8 2Z"/>
+        </svg>
+        Add to Reel
+      </button>
     </div>
   </section>
 
@@ -141,18 +141,18 @@
             </label>
           </div>
         </div>
-        <button id="stashReelBtn" class="btn btn-small btn-icon" disabled>
+        <button id="buildReelBtn" class="btn btn-primary btn-icon" disabled data-tooltip="Add clips to the reel first">
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+            <path d="M3 3.73241C3 2.54878 4.30673 1.83146 5.30531 2.46692L12.0114 6.73441C12.9376 7.32384 12.9376 8.67597 12.0114 9.2654L5.30532 13.5329C4.30673 14.1684 3 13.451 3 12.2674V3.73241Z"/>
+          </svg>
+          Build Reel
+        </button>
+        <button id="stashReelBtn" class="btn btn-small btn-icon" disabled data-tooltip="Add clips to the reel first">
           <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
             <path d="M3 2C2.44772 2 2 2.44772 2 3V4C2 4.55228 2.44772 5 3 5H13C13.5523 5 14 4.55228 14 4V3C14 2.44772 13.5523 2 13 2H3Z"/>
             <path fill-rule="evenodd" clip-rule="evenodd" d="M3 6H13V12C13 13.1046 12.1046 14 11 14H5C3.89543 14 3 13.1046 3 12V6ZM6 8.75C6 8.33579 6.33579 8 6.75 8H9.25C9.66421 8 10 8.33579 10 8.75C10 9.16421 9.66421 9.5 9.25 9.5H6.75C6.33579 9.5 6 9.16421 6 8.75Z"/>
           </svg>
           Stash
-        </button>
-        <button id="buildReelBtn" class="btn btn-primary btn-icon" disabled>
-          <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
-            <path d="M3 3.73241C3 2.54878 4.30673 1.83146 5.30531 2.46692L12.0114 6.73441C12.9376 7.32384 12.9376 8.67597 12.0114 9.2654L5.30532 13.5329C4.30673 14.1684 3 13.451 3 12.2674V3.73241Z"/>
-          </svg>
-          Build Reel
         </button>
         <button id="clearReelBtn" class="btn btn-small btn-icon">
           <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">

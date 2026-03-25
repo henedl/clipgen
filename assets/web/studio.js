@@ -351,7 +351,7 @@
         }
 
         state.generatedArtifacts = state.generatedArtifacts.concat(
-          artifacts.filter(function (a) { return a.type !== "transcript"; })
+          artifacts.filter(function (a) { return a.type !== "transcript" && a.file; })
         );
         renderArtifactQueue();
         updateCellClasses();
@@ -848,8 +848,11 @@
     var n = state.artifactQueue.length;
     qs("#artifactsCount").textContent = "(" + n + ")";
     qs("#generateBtn").disabled = n === 0;
+    if (n === 0) qs("#generateBtn").setAttribute("data-tooltip", "Add cells to the work area first");
     qs("#addToReelBtn").disabled = n === 0;
+    if (n === 0) qs("#addToReelBtn").setAttribute("data-tooltip", "Add cells to the work area first");
     qs("#stashArtifactsBtn").disabled = n === 0;
+    if (n === 0) qs("#stashArtifactsBtn").setAttribute("data-tooltip", "Add cells to the work area first");
     list.innerHTML = "";
     saveQueues();
 
@@ -943,7 +946,9 @@
     var n = state.reelQueue.length;
     qs("#reelCount").textContent = "(" + n + ")";
     qs("#buildReelBtn").disabled = n === 0;
+    if (n === 0) qs("#buildReelBtn").setAttribute("data-tooltip", "Add clips to the reel first");
     qs("#stashReelBtn").disabled = n === 0;
+    if (n === 0) qs("#stashReelBtn").setAttribute("data-tooltip", "Add clips to the reel first");
     list.innerHTML = "";
     saveQueues();
 
@@ -1555,8 +1560,8 @@
       setGeneratingLock(false);
       if (allArtifacts.length > 0) {
         state.generatedArtifacts = state.generatedArtifacts.concat(allArtifacts);
-        updateViewerButton();
       }
+      updateViewerButton();
       var msg = "Generated " + totalSuccess + " artifact(s)";
       if (totalFail > 0) msg += ", " + totalFail + " failed";
       showResult(
@@ -1897,6 +1902,7 @@
   function updateViewerButton() {
     var n = state.generatedArtifacts.length;
     qs("#buildViewerBtn").disabled = n === 0;
+    if (n === 0) qs("#buildViewerBtn").setAttribute("data-tooltip", "Generate artifacts first");
     var count = qs("#viewerArtifactCount");
     count.textContent = n > 0 ? n + " artifact(s) ready" : "";
   }
