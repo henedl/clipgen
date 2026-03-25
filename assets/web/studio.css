@@ -964,6 +964,21 @@ html[data-theme="dark"] .reel-card.reel-card-error .reel-card-thumb {
   flex-wrap: wrap;
 }
 
+.area-controls .btn {
+  height: 1.75rem;
+  display: inline-flex;
+  align-items: center;
+}
+
+#generateBtn {
+  margin-left: auto;
+}
+
+#addToReelBtn {
+  align-self: flex-end;
+  margin-top: 0.35rem;
+}
+
 .area-controls select {
   padding: 0.35rem 0.5rem;
   border: 1px solid var(--color-border);
@@ -1045,6 +1060,11 @@ html[data-theme="dark"] .reel-card.reel-card-error .reel-card-thumb {
   color: #fff;
 }
 
+.btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 .btn-primary:disabled {
   opacity: 0.5;
   cursor: not-allowed;
@@ -1063,6 +1083,39 @@ html[data-theme="dark"] .reel-card.reel-card-error .reel-card-thumb {
 
 .btn-icon svg {
   flex-shrink: 0;
+}
+
+/* Disabled button tooltips */
+
+.btn[data-tooltip] {
+  position: relative;
+}
+
+.btn[data-tooltip]:disabled::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 0.3rem 0.6rem;
+  background: var(--color-text);
+  color: var(--color-bg);
+  font-size: 0.7rem;
+  font-weight: 400;
+  white-space: nowrap;
+  border-radius: 4px;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.15s;
+  z-index: 20;
+}
+
+.btn[data-tooltip]:disabled:hover::after {
+  opacity: 1;
+}
+
+.studio-generating .btn[data-tooltip]:disabled::after {
+  display: none;
 }
 
 /* Highlights button group (inside reel header) */
