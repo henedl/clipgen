@@ -18,6 +18,7 @@
     settingsData: null,
     dividerOffset: 0,
     activeFunction: "",
+    cellExpandHover: true,
     filtersVisible: false,
     filters: {
       categories: [],
@@ -623,6 +624,9 @@
         if (tcDurInput && data.titlecardDuration) {
           tcDurInput.value = data.titlecardDuration;
         }
+        if (data.cellExpandHover !== undefined) {
+          state.cellExpandHover = data.cellExpandHover;
+        }
         var tcGroup = qs("#titlecardGroup");
         if (tcGroup && qs("#artifactFormat").value === "clip") {
           tcGroup.classList.remove("hidden");
@@ -1200,6 +1204,60 @@
       var info = getCellInfo(td);
       toggleReelCell(info);
     });
+
+    // Floating expanded cell for overflowing timestamp cells
+    var cellFloat = document.createElement("div");
+    cellFloat.className = "ts-cell-float";
+    cellFloat.style.display = "none";
+    document.body.appendChild(cellFloat);
+    var floatCell = null;
+    var floatTitle = "";
+
+    function showFloat(td) {
+      if (!state.cellExpandHover) return;
+      if (td.scrollWidth <= td.clientWidth) return;
+      floatCell = td;
+      floatTitle = td.title || "";
+      td.title = "";
+      var rect = td.getBoundingClientRect();
+      cellFloat.textContent = td.textContent;
+      cellFloat.style.backgroundColor = getComputedStyle(td).backgroundColor;
+      cellFloat.style.top = rect.top + "px";
+      cellFloat.style.left = rect.left + "px";
+      cellFloat.style.height = rect.height + "px";
+      cellFloat.style.lineHeight = rect.height + "px";
+      cellFloat.style.display = "block";
+      cellFloat.offsetWidth; // force reflow
+      cellFloat.style.opacity = "1";
+    }
+
+    function hideFloat() {
+      cellFloat.style.opacity = "0";
+      if (floatCell) {
+        floatCell.title = floatTitle;
+        floatCell = null;
+      }
+      setTimeout(function () {
+        if (!floatCell) cellFloat.style.display = "none";
+      }, 70);
+    }
+
+    grid.addEventListener("mouseover", function (ev) {
+      var td = ev.target.closest(".ts-cell");
+      if (!td || td.classList.contains("empty")) { if (floatCell) hideFloat(); return; }
+      if (td !== floatCell) {
+        if (floatCell) hideFloat();
+        showFloat(td);
+      }
+    });
+
+    grid.addEventListener("mouseleave", function () {
+      if (floatCell) hideFloat();
+    });
+
+    grid.addEventListener("scroll", function () {
+      if (floatCell) hideFloat();
+    }, { passive: true });
   }
 
   // ---- Drag from grid ----
@@ -2656,6 +2714,10 @@
     if (hlDuration) {
       var hl = qs("#highlightsDuration");
       if (hl) hl.value = hlDuration.value;
+    }
+    var cellExpand = findSetting("STUDIO_CELL_EXPAND_HOVER");
+    if (cellExpand) {
+      state.cellExpandHover = !!cellExpand.value;
     }
   }
 
