@@ -1293,6 +1293,24 @@
     });
   }
 
+  // ---- Wheel-to-horizontal scroll for card queues ----
+
+  function initWheelScroll() {
+    ["#artifactsList", "#reelList"].forEach(function (sel) {
+      var el = qs(sel);
+      el.addEventListener(
+        "wheel",
+        function (e) {
+          if (el.scrollWidth > el.clientWidth) {
+            e.preventDefault();
+            el.scrollLeft += e.deltaY;
+          }
+        },
+        { passive: false },
+      );
+    });
+  }
+
   // ---- Reel reordering ----
 
   var _reelDragIdx = null;
@@ -2714,6 +2732,7 @@
     initThemeToggle();
     initFilterToggle();
     initDropTargets();
+    initWheelScroll();
     bindReelReorder();
     bindButtons();
     initPanelDivider();
