@@ -72,7 +72,7 @@
     </div>
     <div id="filterBar" class="hidden"></div>
     <div id="sheetGrid">
-      <div id="sheetLoading" style="padding: 2rem; text-align: center; color: var(--color-text-dim);">
+      <div id="sheetLoading">
         Loading sheet data...
       </div>
     </div>
@@ -83,7 +83,7 @@
   <div id="bottomPanel">
   <section id="dropAreas">
     <div id="artifactsArea" class="drop-area">
-      <h3><svg id="artifactsSpinner" class="title-spinner" width="14" height="14" viewBox="0 0 14 14" fill="none"><circle cx="7" cy="7" r="5.5" stroke="currentColor" stroke-width="1.5" opacity="0.25"/><circle cx="7" cy="7" r="5.5" stroke="currentColor" stroke-width="1.5" stroke-dasharray="20 15" stroke-linecap="round"><animateTransform attributeName="transform" type="rotate" from="0 7 7" to="360 7 7" dur="0.7s" repeatCount="indefinite"/></circle></svg>Artifacts <span id="artifactsCount">(0)</span> <span id="viewerArtifactCount" style="font-weight: 400; font-size: 0.8rem; color: var(--color-text-dim);"></span></h3>
+      <h3><svg id="artifactsSpinner" class="title-spinner" width="14" height="14" viewBox="0 0 14 14" fill="none"><circle cx="7" cy="7" r="5.5" stroke="currentColor" stroke-width="1.5" opacity="0.25"/><circle cx="7" cy="7" r="5.5" stroke="currentColor" stroke-width="1.5" stroke-dasharray="20 15" stroke-linecap="round"><animateTransform attributeName="transform" type="rotate" from="0 7 7" to="360 7 7" dur="0.7s" repeatCount="indefinite"/></circle></svg>Artifacts <span id="artifactsCount">(0)</span> <span id="viewerArtifactCount"></span></h3>
       <div class="area-controls">
         <select id="artifactFormat">
           <option value="clip">Clip (.mp4)</option>
@@ -205,10 +205,10 @@
       <div id="statusSpinner" class="spinner"></div>
       <h3 id="statusTitle">Processing...</h3>
       <p id="statusMessage"></p>
-      <button id="statusDismiss" class="btn" style="display: none;">Dismiss</button>
+      <button id="statusDismiss" class="btn hidden">Dismiss</button>
     </div>
   </div>
 
-  <script src="studio.js" defer></script>
+  <script src="studio.js"></script>
 </body>
 </html>

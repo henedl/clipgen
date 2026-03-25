@@ -102,7 +102,7 @@ body {
 }
 
 .nav-link:hover {
-  background: var(--color-surface-hover, rgba(0, 0, 0, 0.04));
+  background: rgba(0, 0, 0, 0.04);
   border-color: var(--color-accent);
 }
 
@@ -405,6 +405,18 @@ body {
 .filter-clear svg {
   width: 12px;
   height: 12px;
+}
+
+#sheetLoading {
+  padding: 2rem;
+  text-align: center;
+  color: var(--color-text-dim);
+}
+
+#viewerArtifactCount {
+  font-weight: 400;
+  font-size: 0.8rem;
+  color: var(--color-text-dim);
 }
 
 #sheetGrid {
@@ -745,7 +757,9 @@ col.col-participant-col {
   padding: 0.5rem;
 }
 
-.artifact-card {
+/* Shared card base (artifact + reel) */
+
+.queue-card {
   flex-shrink: 0;
   width: 140px;
   border: 1px solid var(--color-border);
@@ -756,19 +770,18 @@ col.col-participant-col {
   position: relative;
   transition: box-shadow 0.15s, border-color 0.15s;
   user-select: none;
-  will-change: transform;
 }
 
-.artifact-card:active {
+.queue-card:active {
   cursor: grabbing;
 }
 
-.artifact-card:hover {
+.queue-card:hover {
   border-color: var(--color-accent);
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
 }
 
-.artifact-card-thumb {
+.queue-card-thumb {
   position: relative;
   width: 100%;
   aspect-ratio: 16 / 9;
@@ -776,14 +789,14 @@ col.col-participant-col {
   overflow: hidden;
 }
 
-.artifact-card-thumb img {
+.queue-card-thumb img {
   width: 100%;
   height: 100%;
   object-fit: cover;
   display: block;
 }
 
-.artifact-card-duration {
+.queue-card-duration {
   position: absolute;
   bottom: 3px;
   right: 3px;
@@ -796,7 +809,7 @@ col.col-participant-col {
   line-height: 1.3;
 }
 
-.artifact-card-meta {
+.queue-card-meta {
   display: flex;
   align-items: center;
   gap: 0.25rem;
@@ -804,13 +817,13 @@ col.col-participant-col {
   font-size: 0.7rem;
 }
 
-.artifact-card-ref {
+.queue-card-ref {
   font-family: var(--font-mono);
   font-weight: 600;
   font-size: 0.7rem;
 }
 
-.artifact-card-remove {
+.queue-card-remove {
   position: absolute;
   top: 2px;
   right: 2px;
@@ -829,20 +842,20 @@ col.col-participant-col {
   padding: 0;
 }
 
-.artifact-card:hover .artifact-card-remove {
+.queue-card:hover .queue-card-remove {
   opacity: 1;
 }
 
-.artifact-card-remove:hover {
+.queue-card-remove:hover {
   background: #dc2626;
 }
 
-.artifact-card.artifact-card-error {
+.queue-card-error {
   border-color: #dc2626;
   background: #fef2f2;
 }
 
-.artifact-card.artifact-card-error .artifact-card-thumb {
+.queue-card-error .queue-card-thumb {
   display: flex;
   align-items: center;
   justify-content: center;
@@ -906,64 +919,7 @@ col.col-participant-col {
   color: var(--color-text-dim);
 }
 
-.reel-card {
-  flex-shrink: 0;
-  width: 140px;
-  border: 1px solid var(--color-border);
-  border-radius: calc(var(--radius) - 2px);
-  background: var(--color-surface);
-  overflow: hidden;
-  cursor: grab;
-  position: relative;
-  transition: box-shadow 0.15s, border-color 0.15s;
-  user-select: none;
-  will-change: transform;
-}
-
-.reel-card:active {
-  cursor: grabbing;
-}
-
-.reel-card:hover {
-  border-color: var(--color-accent);
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
-}
-
-.reel-card-thumb {
-  position: relative;
-  width: 100%;
-  aspect-ratio: 16 / 9;
-  background: var(--color-surface-alt);
-  overflow: hidden;
-}
-
-.reel-card-thumb img {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-  display: block;
-}
-
-.reel-card-duration {
-  position: absolute;
-  bottom: 3px;
-  right: 3px;
-  background: rgba(0, 0, 0, 0.7);
-  color: #fff;
-  font-size: 0.62rem;
-  font-family: var(--font-mono);
-  padding: 1px 4px;
-  border-radius: 3px;
-  line-height: 1.3;
-}
-
-.reel-card-meta {
-  display: flex;
-  align-items: center;
-  gap: 0.25rem;
-  padding: 0.2rem 0.35rem;
-  font-size: 0.7rem;
-}
+/* Reel-specific additions */
 
 .reel-card-order {
   font-family: var(--font-mono);
@@ -973,58 +929,11 @@ col.col-participant-col {
   text-align: center;
 }
 
-.reel-card-ref {
-  font-family: var(--font-mono);
-  font-weight: 600;
-  font-size: 0.7rem;
-}
-
-.reel-card-remove {
-  position: absolute;
-  top: 2px;
-  right: 2px;
-  background: rgba(0, 0, 0, 0.5);
-  color: #fff;
-  border: none;
-  border-radius: 50%;
-  width: 18px;
-  height: 18px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
-  opacity: 0;
-  transition: opacity 0.15s;
-  padding: 0;
-}
-
-.reel-card:hover .reel-card-remove {
-  opacity: 1;
-}
-
-.reel-card-remove:hover {
-  background: #dc2626;
-}
-
-.reel-card.reel-card-error {
-  border-color: #dc2626;
-  background: #fef2f2;
-}
-
-.reel-card.reel-card-error .reel-card-thumb {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: #dc2626;
-  font-size: 1.4rem;
-  font-weight: 700;
-}
-
-html[data-theme="dark"] .reel-card.reel-card-error {
+html[data-theme="dark"] .queue-card-error {
   background: #451a1a;
 }
 
-html[data-theme="dark"] .reel-card.reel-card-error .reel-card-thumb {
+html[data-theme="dark"] .queue-card-error .queue-card-thumb {
   color: #f87171;
 }
 
@@ -1039,10 +948,6 @@ html[data-theme="dark"] .reel-card.reel-card-error .reel-card-thumb {
   border-radius: 0 0 18px 18px;
   box-shadow: 0 24px 60px var(--color-panel-shadow);
   padding: 0.8rem 1.5rem 1rem;
-}
-
-#stashedReelsArea.hidden {
-  display: none;
 }
 
 #stashedReelsHeader {
@@ -1179,10 +1084,6 @@ html[data-theme="dark"] .reel-card.reel-card-error .reel-card-thumb {
   border-radius: 0;
   box-shadow: 0 24px 60px var(--color-panel-shadow);
   padding: 0.8rem 1.5rem 1rem;
-}
-
-#stashedArtifactsArea.hidden {
-  display: none;
 }
 
 #stashedArtifactsHeader {
@@ -1341,20 +1242,9 @@ html[data-theme="dark"] .reel-card.reel-card-error .reel-card-thumb {
   cursor: not-allowed;
 }
 
-.btn-primary:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
 .btn-small {
   padding: 0.25rem 0.6rem;
   font-size: 0.72rem;
-}
-
-.btn-icon {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.3rem;
 }
 
 .btn-icon svg {
@@ -1537,8 +1427,7 @@ html[data-theme="dark"] .reel-card.reel-card-error .reel-card-thumb {
 
 /* Card generation states */
 
-.artifact-card-queued,
-.reel-card-queued {
+.queue-card-queued {
   opacity: 0.55;
   pointer-events: none;
 }
@@ -1566,14 +1455,12 @@ html[data-theme="dark"] .reel-card.reel-card-error .reel-card-thumb {
 .card-gen-overlay svg circle:nth-child(2) { animation: pulse-dot 0.9s ease-in-out 0.15s infinite; }
 .card-gen-overlay svg circle:nth-child(3) { animation: pulse-dot 0.9s ease-in-out 0.3s infinite; }
 
-.artifact-card-success,
-.reel-card-success {
+.queue-card-success {
   border-color: #16a34a;
   background: #f0fdf4;
 }
 
-.artifact-card-fail,
-.reel-card-fail {
+.queue-card-fail {
   border-color: #dc2626;
   background: #fef2f2;
 }
@@ -1603,8 +1490,7 @@ html[data-theme="dark"] .reel-card.reel-card-error .reel-card-thumb {
   display: block;
 }
 
-.artifact-card-queued .artifact-card-remove,
-.reel-card-queued .reel-card-remove {
+.queue-card-queued .queue-card-remove {
   display: none;
 }
 
@@ -1675,8 +1561,9 @@ html[data-theme="dark"] .reel-card.reel-card-error .reel-card-thumb {
 
 /* ---- Dark mode ---- */
 
+/* OS preference (applies when user hasn't manually toggled) */
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme="light"]) {
     --color-bg: #020617;
     --color-surface: #020617;
     --color-surface-alt: #0b1120;
@@ -1705,28 +1592,9 @@ html[data-theme="dark"] .reel-card.reel-card-error .reel-card-thumb {
     --sev-very-positive: #4ade80;
     --sev-unknown: #94a3b8;
   }
-  #sheetGrid .col-participant.header-highlight,
-  #sheetGrid .col-row-num-clickable.header-highlight {
-    background-color: rgba(56, 189, 248, 0.18);
-  }
-  .card-gen-overlay {
-    background: rgba(0, 0, 0, 0.45);
-  }
-  .artifact-card-success,
-  .reel-card-success {
-    border-color: #4ade80;
-    background: #052e16;
-  }
-  .artifact-card-fail,
-  .reel-card-fail {
-    border-color: #f87171;
-    background: #451a1a;
-  }
-  .stash-card-name-input {
-    background: var(--color-surface-alt);
-  }
 }
 
+/* Manual toggle */
 html[data-theme="dark"] {
   --color-bg: #020617;
   --color-surface: #020617;
@@ -1757,6 +1625,42 @@ html[data-theme="dark"] {
   --sev-unknown: #94a3b8;
 }
 
+/* Dark element overrides (shared by both @media and data-theme via specificity) */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) #sheetGrid .col-participant.header-highlight,
+  :root:not([data-theme="light"]) #sheetGrid .col-row-num-clickable.header-highlight {
+    background-color: rgba(56, 189, 248, 0.18);
+  }
+  :root:not([data-theme="light"]) .status-card {
+    background: var(--color-surface-alt);
+  }
+  :root:not([data-theme="light"]) .card-gen-overlay {
+    background: rgba(0, 0, 0, 0.45);
+  }
+  :root:not([data-theme="light"]) .queue-card-success {
+    border-color: #4ade80;
+    background: #052e16;
+  }
+  :root:not([data-theme="light"]) .queue-card-fail {
+    border-color: #f87171;
+    background: #451a1a;
+  }
+  :root:not([data-theme="light"]) .stash-card-name-input {
+    background: var(--color-surface-alt);
+  }
+  :root:not([data-theme="light"]) .filter-cat-panel {
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+  }
+  :root:not([data-theme="light"]) .filter-select,
+  :root:not([data-theme="light"]) .filter-number,
+  :root:not([data-theme="light"]) .filter-cat-btn {
+    background: var(--color-surface-alt);
+  }
+  :root:not([data-theme="light"]) .settings-panel {
+    background: var(--color-surface-alt);
+  }
+}
+
 html[data-theme="dark"] #sheetGrid .col-participant.header-highlight,
 html[data-theme="dark"] #sheetGrid .col-row-num-clickable.header-highlight {
   background-color: rgba(56, 189, 248, 0.18);
@@ -1770,14 +1674,12 @@ html[data-theme="dark"] .card-gen-overlay {
   background: rgba(0, 0, 0, 0.45);
 }
 
-html[data-theme="dark"] .artifact-card-success,
-html[data-theme="dark"] .reel-card-success {
+html[data-theme="dark"] .queue-card-success {
   border-color: #4ade80;
   background: #052e16;
 }
 
-html[data-theme="dark"] .artifact-card-fail,
-html[data-theme="dark"] .reel-card-fail {
+html[data-theme="dark"] .queue-card-fail {
   border-color: #f87171;
   background: #451a1a;
 }
@@ -1976,8 +1878,7 @@ html[data-theme="dark"] .settings-panel {
   #dropAreas,
   #reelArea,
   #stashedReelsArea,
-  #stashedArtifactsArea,
-  #quickActions {
+  #stashedArtifactsArea {
     margin-left: 0.5rem;
     margin-right: 0.5rem;
     max-width: 100%;

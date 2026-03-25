@@ -479,17 +479,6 @@
     fnGroup.appendChild(fnClear);
 
     bar.appendChild(fnGroup);
-
-    // Close category dropdown on outside click
-    document.addEventListener("click", function (ev) {
-      var wrap = qs(".filter-cat-wrap");
-      if (wrap && !wrap.contains(ev.target)) {
-        var btn = wrap.querySelector(".filter-cat-btn");
-        var panel = wrap.querySelector(".filter-cat-panel");
-        if (btn) btn.classList.remove("open");
-        if (panel) panel.classList.add("hidden");
-      }
-    });
   }
 
   function initFilterToggle() {
@@ -607,6 +596,7 @@
   function loadSheetData() {
     fetch("api/sheet")
       .then(function (r) {
+        if (!r.ok) throw new Error("Server error " + r.status);
         return r.json();
       })
       .then(function (data) {
@@ -1384,12 +1374,19 @@
 
     for (var i = 0; i < n; i++) {
       var item = state.artifactQueue[i];
-      var segStart = item.segStart !== undefined ? item.segStart : parseClipTimestamps(item.timestamp)[0].startSeconds;
-      var segDuration = item.segDuration !== undefined ? item.segDuration : parseClipTimestamps(item.timestamp)[0].duration;
+      var segStart, segDuration;
+      if (item.segStart !== undefined && item.segDuration !== undefined) {
+        segStart = item.segStart;
+        segDuration = item.segDuration;
+      } else {
+        var parsed = parseClipTimestamps(item.timestamp)[0];
+        segStart = parsed.startSeconds;
+        segDuration = parsed.duration;
+      }
       var segTotal = item.segTotal || 1;
       var segIdx = item.segIdx || 0;
 
-      var card = el("div", "artifact-card");
+      var card = el("div", "queue-card");
       card.setAttribute("data-participant", item.participant);
       card.setAttribute("data-row", item.row);
       card.setAttribute("data-seg-idx", segIdx);
@@ -1412,7 +1409,7 @@
         });
       })(item);
 
-      var thumb = el("div", "artifact-card-thumb");
+      var thumb = el("div", "queue-card-thumb");
       var img = document.createElement("img");
       img.src = "api/thumbnail/" + encodeURIComponent(item.participant) + "/" + segStart;
       img.loading = "lazy";
@@ -1422,20 +1419,20 @@
         img.addEventListener("error", function () {
           this.remove();
           thumbEl.appendChild(el("span", "", "\u2715"));
-          cardEl.classList.add("artifact-card-error");
+          cardEl.classList.add("queue-card-error");
         });
       })(card, thumb);
       thumb.appendChild(img);
-      thumb.appendChild(el("span", "artifact-card-duration", formatDuration(segDuration)));
+      thumb.appendChild(el("span", "queue-card-duration", formatDuration(segDuration)));
       card.appendChild(thumb);
 
-      var meta = el("div", "artifact-card-meta");
+      var meta = el("div", "queue-card-meta");
       var refText = item.participant + "." + item.row;
       if (segTotal > 1) refText += " (" + (segIdx + 1) + "/" + segTotal + ")";
-      meta.appendChild(el("span", "artifact-card-ref", refText));
+      meta.appendChild(el("span", "queue-card-ref", refText));
       card.appendChild(meta);
 
-      var removeBtn = el("button", "artifact-card-remove");
+      var removeBtn = el("button", "queue-card-remove");
       removeBtn.innerHTML = '<svg width="10" height="10" viewBox="0 0 10 10"><path d="M2.5 2.5l5 5M7.5 2.5l-5 5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>';
       removeBtn.title = "Remove";
       (function (idx) {
@@ -1482,20 +1479,27 @@
     var totalDur = 0;
     for (var i = 0; i < n; i++) {
       var item = state.reelQueue[i];
-      var segStart = item.segStart !== undefined ? item.segStart : parseClipTimestamps(item.timestamp)[0].startSeconds;
-      var segDuration = item.segDuration !== undefined ? item.segDuration : parseClipTimestamps(item.timestamp)[0].duration;
+      var segStart, segDuration;
+      if (item.segStart !== undefined && item.segDuration !== undefined) {
+        segStart = item.segStart;
+        segDuration = item.segDuration;
+      } else {
+        var parsed = parseClipTimestamps(item.timestamp)[0];
+        segStart = parsed.startSeconds;
+        segDuration = parsed.duration;
+      }
       var segTotal = item.segTotal || 1;
       var segIdx = item.segIdx || 0;
       totalDur += segDuration;
 
-      var card = el("div", "reel-card");
+      var card = el("div", "queue-card reel-card");
       card.setAttribute("data-reel-idx", i);
       card.setAttribute("data-participant", item.participant);
       card.setAttribute("data-row", item.row);
       card.setAttribute("data-seg-idx", segIdx);
       card.setAttribute("draggable", "true");
 
-      var thumb = el("div", "reel-card-thumb");
+      var thumb = el("div", "queue-card-thumb");
       var img = document.createElement("img");
       img.src = "api/thumbnail/" + encodeURIComponent(item.participant) + "/" + segStart;
       img.loading = "lazy";
@@ -1505,21 +1509,21 @@
         img.addEventListener("error", function () {
           this.remove();
           thumbEl.appendChild(el("span", "", "\u2715"));
-          cardEl.classList.add("reel-card-error");
+          cardEl.classList.add("queue-card-error");
         });
       })(card, thumb);
       thumb.appendChild(img);
-      thumb.appendChild(el("span", "reel-card-duration", formatDuration(segDuration)));
+      thumb.appendChild(el("span", "queue-card-duration", formatDuration(segDuration)));
       card.appendChild(thumb);
 
-      var meta = el("div", "reel-card-meta");
+      var meta = el("div", "queue-card-meta");
       meta.appendChild(el("span", "reel-card-order", String(i + 1)));
       var refText = item.participant + "." + item.row;
       if (segTotal > 1) refText += " (" + (segIdx + 1) + "/" + segTotal + ")";
-      meta.appendChild(el("span", "reel-card-ref", refText));
+      meta.appendChild(el("span", "queue-card-ref", refText));
       card.appendChild(meta);
 
-      var removeBtn = el("button", "reel-card-remove");
+      var removeBtn = el("button", "queue-card-remove");
       removeBtn.innerHTML = '<svg width="10" height="10" viewBox="0 0 10 10"><path d="M2.5 2.5l5 5M7.5 2.5l-5 5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>';
       removeBtn.title = "Remove";
       (function (idx) {
@@ -1954,12 +1958,6 @@
     if (s) s.classList.toggle("active", active);
   }
 
-  function findCard(listEl, participant, row) {
-    return listEl.querySelector(
-      '[data-participant="' + participant + '"][data-row="' + row + '"]'
-    );
-  }
-
   function createPulserOverlay() {
     var overlay = el("div", "card-gen-overlay");
     overlay.innerHTML =
@@ -1980,10 +1978,8 @@
   }
 
   function setCardQueued(card) {
-    card.classList.add(
-      card.classList.contains("reel-card") ? "reel-card-queued" : "artifact-card-queued"
-    );
-    var thumb = card.querySelector(".artifact-card-thumb, .reel-card-thumb");
+    card.classList.add("queue-card-queued");
+    var thumb = card.querySelector(".queue-card-thumb");
     if (thumb) thumb.appendChild(createPulserOverlay());
     var p = card.getAttribute("data-participant");
     var r = card.getAttribute("data-row");
@@ -1991,16 +1987,11 @@
   }
 
   function setCardResult(card, success) {
-    var isReel = card.classList.contains("reel-card");
-    card.classList.remove(isReel ? "reel-card-queued" : "artifact-card-queued");
-    card.classList.add(
-      isReel
-        ? (success ? "reel-card-success" : "reel-card-fail")
-        : (success ? "artifact-card-success" : "artifact-card-fail")
-    );
+    card.classList.remove("queue-card-queued");
+    card.classList.add(success ? "queue-card-success" : "queue-card-fail");
     var overlay = card.querySelector(".card-gen-overlay");
     if (overlay) overlay.remove();
-    var thumb = card.querySelector(".artifact-card-thumb, .reel-card-thumb");
+    var thumb = card.querySelector(".queue-card-thumb");
     if (thumb) thumb.appendChild(createResultBadge(success));
     var p = card.getAttribute("data-participant");
     var r = card.getAttribute("data-row");
@@ -2008,7 +1999,7 @@
   }
 
   function applyCardStates(listEl) {
-    var cards = listEl.querySelectorAll(".artifact-card, .reel-card");
+    var cards = listEl.querySelectorAll(".queue-card");
     for (var i = 0; i < cards.length; i++) {
       var card = cards[i];
       var p = card.getAttribute("data-participant");
@@ -2020,28 +2011,12 @@
     }
   }
 
-  function clearCardStates(listEl) {
-    var cards = listEl.querySelectorAll(
-      ".artifact-card-queued, .artifact-card-success, .artifact-card-fail," +
-      ".reel-card-queued, .reel-card-success, .reel-card-fail"
-    );
-    for (var i = 0; i < cards.length; i++) {
-      cards[i].classList.remove(
-        "artifact-card-queued", "artifact-card-success", "artifact-card-fail",
-        "reel-card-queued", "reel-card-success", "reel-card-fail"
-      );
-      var overlay = cards[i].querySelector(".card-gen-overlay");
-      if (overlay) overlay.remove();
-      var badge = cards[i].querySelector(".card-gen-badge");
-      if (badge) badge.remove();
-    }
-  }
-
   function setGeneratingLock(locked) {
     var ids = [
       "#generateBtn", "#buildReelBtn", "#clearArtifactsBtn",
       "#clearReelBtn", "#addToReelBtn", "#buildHighlightsBtn",
-      "#buildViewerBtn", "#buildTimelineViewerBtn", "#galleryBtn"
+      "#buildViewerBtn", "#buildTimelineViewerBtn", "#galleryBtn",
+      "#stashReelBtn", "#stashArtifactsBtn"
     ];
     for (var i = 0; i < ids.length; i++) {
       var b = qs(ids[i]);
@@ -2068,7 +2043,7 @@
       if (!cellsSeen[ck]) { cellsSeen[ck] = true; cells.push(ck); }
     }
 
-    var allCards = list.querySelectorAll(".artifact-card");
+    var allCards = list.querySelectorAll(".queue-card");
     for (var i = 0; i < allCards.length; i++) {
       setCardQueued(allCards[i]);
     }
@@ -2095,7 +2070,9 @@
     }
 
     function handleLine(line) {
-      var data = JSON.parse(line);
+      var data;
+      try { data = JSON.parse(line); } catch (_) { return; }
+      if (!data || !data.cell) return;
       var dot = data.cell.lastIndexOf(".");
       var participant = data.cell.substring(0, dot);
       var row = data.cell.substring(dot + 1);
@@ -2126,6 +2103,7 @@
       body: JSON.stringify(genBody),
     })
       .then(function (response) {
+        if (!response.ok) throw new Error("Server error " + response.status);
         var reader = response.body.getReader();
         var decoder = new TextDecoder();
         var buffer = "";
@@ -2168,7 +2146,7 @@
     }
 
     var list = qs("#reelList");
-    var reelCards = list.querySelectorAll(".reel-card");
+    var reelCards = list.querySelectorAll(".queue-card");
     for (var i = 0; i < reelCards.length; i++) {
       setCardQueued(reelCards[i]);
     }
@@ -2184,13 +2162,16 @@
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(reelBody),
     })
-      .then(function (r) { return r.json(); })
+      .then(function (r) {
+        if (!r.ok) throw new Error("Server error " + r.status);
+        return r.json();
+      })
       .then(function (data) {
         state.generating = false;
         setTitleSpinner("reelSpinner", false);
         setGeneratingLock(false);
 
-        var cards = list.querySelectorAll(".reel-card");
+        var cards = list.querySelectorAll(".queue-card");
         for (var j = 0; j < cards.length; j++) {
           setCardResult(cards[j], !!data.ok);
         }
@@ -2207,7 +2188,7 @@
         setTitleSpinner("reelSpinner", false);
         setGeneratingLock(false);
 
-        var cards = list.querySelectorAll(".reel-card");
+        var cards = list.querySelectorAll(".queue-card");
         for (var j = 0; j < cards.length; j++) {
           setCardResult(cards[j], false);
         }
@@ -2229,6 +2210,7 @@
       body: JSON.stringify({}),
     })
       .then(function (r) {
+        if (!r.ok) throw new Error("Server error " + r.status);
         return r.json();
       })
       .then(function (data) {
@@ -2257,6 +2239,7 @@
       body: JSON.stringify({}),
     })
       .then(function (r) {
+        if (!r.ok) throw new Error("Server error " + r.status);
         return r.json();
       })
       .then(function (data) {
@@ -2276,6 +2259,9 @@
       });
   }
 
+  var _highlightsBtnOrigHTML = "";
+  var _galleryBtnOrigHTML = "";
+
   function onBuildHighlights() {
     if (state.generating) return;
 
@@ -2283,18 +2269,13 @@
     var btn = qs("#buildHighlightsBtn");
     var isOpen = drawer.classList.contains("open");
 
-    var sparklesHTML =
-      '<svg class="sparkles-icon" width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">' +
-      '<path d="M8 1l1.1 3.4L12.5 5.5l-3.4 1.1L8 10l-1.1-3.4L3.5 5.5l3.4-1.1z"/>' +
-      '<path d="M12.5 10l.6 1.7 1.7.6-1.7.6-.6 1.7-.6-1.7-1.7-.6 1.7-.6z"/>' +
-      '<path d="M3 11l.4 1.1 1.1.4-1.1.4L3 14l-.4-1.1L1.5 12.5l1.1-.4z"/>' +
-      "</svg>";
     var checkHTML =
       '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' +
       '<path d="M3 8.5l3.5 3.5 6.5-8"/>' +
       "</svg>";
 
     if (!isOpen) {
+      _highlightsBtnOrigHTML = btn.innerHTML;
       drawer.classList.add("open");
       var w = btn.offsetWidth;
       btn.style.minWidth = w + "px";
@@ -2307,7 +2288,7 @@
 
     drawer.classList.remove("open");
     btn.style.minWidth = "";
-    btn.innerHTML = sparklesHTML + "Find Highlights";
+    btn.innerHTML = _highlightsBtnOrigHTML;
 
     state.generating = true;
     showOverlay("Finding best clips (" + duration + "s budget)...");
@@ -2318,6 +2299,7 @@
       body: JSON.stringify({ highlights_duration: duration }),
     })
       .then(function (r) {
+        if (!r.ok) throw new Error("Server error " + r.status);
         return r.json();
       })
       .then(function (data) {
@@ -2365,17 +2347,13 @@
     var btn = qs("#galleryBtn");
     var isOpen = drawer.classList.contains("open");
 
-    var gridIconHTML =
-      '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">' +
-      '<rect x="1" y="1" width="6" height="6" rx="1"/><rect x="9" y="1" width="6" height="6" rx="1"/>' +
-      '<rect x="1" y="9" width="6" height="6" rx="1"/><rect x="9" y="9" width="6" height="6" rx="1"/>' +
-      "</svg>";
     var checkHTML =
       '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' +
       '<path d="M3 8.5l3.5 3.5 6.5-8"/>' +
       "</svg>";
 
     if (!isOpen) {
+      _galleryBtnOrigHTML = btn.innerHTML;
       drawer.classList.add("open");
       var w = btn.offsetWidth;
       btn.style.minWidth = w + "px";
@@ -2390,7 +2368,7 @@
 
     drawer.classList.remove("open");
     btn.style.minWidth = "";
-    btn.innerHTML = gridIconHTML + "Gallery Viewer";
+    btn.innerHTML = _galleryBtnOrigHTML;
 
     if (!participant) {
       showResult(null, "No participant selected for gallery");
@@ -2406,6 +2384,7 @@
       body: JSON.stringify({ participant: participant, format: format, interval: interval }),
     })
       .then(function (r) {
+        if (!r.ok) throw new Error("Server error " + r.status);
         return r.json();
       })
       .then(function (data) {
@@ -2437,7 +2416,7 @@
     qs("#statusTitle").textContent = message;
     qs("#statusMessage").textContent = "";
     qs("#statusMessage").className = "";
-    qs("#statusDismiss").style.display = "none";
+    qs("#statusDismiss").classList.add("hidden");
     qs("#statusOverlay").classList.remove("hidden");
   }
 
@@ -2452,7 +2431,7 @@
       qs("#statusMessage").textContent = successMsg || "";
       qs("#statusMessage").className = "";
     }
-    qs("#statusDismiss").style.display = "";
+    qs("#statusDismiss").classList.remove("hidden");
   }
 
   function hideOverlay() {
@@ -2710,7 +2689,7 @@
   // ---- Init ----
 
   function checkNavLinks() {
-    fetch("/api/status")
+    fetch("../api/status")
       .then(function (r) { return r.json(); })
       .then(function (data) {
         if (data.insights) {
@@ -2720,6 +2699,16 @@
       })
       .catch(function () {});
   }
+
+  document.addEventListener("click", function (ev) {
+    var wrap = qs(".filter-cat-wrap");
+    if (wrap && !wrap.contains(ev.target)) {
+      var btn = wrap.querySelector(".filter-cat-btn");
+      var panel = wrap.querySelector(".filter-cat-panel");
+      if (btn) btn.classList.remove("open");
+      if (panel) panel.classList.add("hidden");
+    }
+  });
 
   document.addEventListener("DOMContentLoaded", function () {
     initThemeToggle();
