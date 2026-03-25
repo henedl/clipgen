@@ -296,6 +296,59 @@ body {
   color: var(--color-text-dim);
 }
 
+.col-function {
+  width: 3.5rem;
+  text-align: center;
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--color-text-dim);
+}
+
+.fn-header-wrap {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.fn-select {
+  appearance: none;
+  -webkit-appearance: none;
+  background: transparent;
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  padding: 0.15rem 0.3rem;
+  font-size: 0.75rem;
+  color: var(--color-text);
+  cursor: pointer;
+  flex: 1;
+  min-width: 0;
+  text-align: center;
+}
+
+.fn-select:hover {
+  border-color: var(--color-accent);
+}
+
+.fn-select:focus {
+  outline: none;
+  border-color: var(--color-accent);
+}
+
+.fn-clear {
+  background: none;
+  border: none;
+  color: var(--color-text-dim);
+  cursor: pointer;
+  font-size: 0.8rem;
+  line-height: 1;
+  padding: 0 2px;
+  flex-shrink: 0;
+}
+
+.fn-clear:hover {
+  color: var(--color-text);
+}
+
 .col-observation {
   overflow: hidden;
   text-overflow: ellipsis;

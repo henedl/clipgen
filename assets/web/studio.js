@@ -17,6 +17,26 @@
     artifactStashes: [],
     settingsData: null,
     dividerOffset: 0,
+    activeFunction: "",
+  };
+
+  var ROW_FUNCTIONS = {
+    Count: function (row, participants) {
+      var total = 0;
+      for (var j = 0; j < participants.length; j++) {
+        var c = row.cells[participants[j]];
+        if (c && c.valid) total += parseClipTimestamps(c.value).length;
+      }
+      return total;
+    },
+    Unique: function (row, participants) {
+      var count = 0;
+      for (var j = 0; j < participants.length; j++) {
+        var c = row.cells[participants[j]];
+        if (c && c.valid) count++;
+      }
+      return count;
+    },
   };
 
   // ---- Helpers ----
@@ -394,7 +414,7 @@
     grid.innerHTML = "";
 
     var showSeverity = hasSeverityData(d.rows);
-    var metaCols = showSeverity ? 4 : 3;
+    var metaCols = showSeverity ? 5 : 4;
     var totalCols = metaCols + d.participants.length;
     var table = el("table");
 
@@ -403,6 +423,9 @@
     var colRowNum = document.createElement("col");
     colRowNum.style.width = "3rem";
     colgroup.appendChild(colRowNum);
+    var colFn = document.createElement("col");
+    colFn.style.width = "3.5rem";
+    colgroup.appendChild(colFn);
     var colObs = document.createElement("col");
     colObs.style.width = "auto";
     colgroup.appendChild(colObs);
@@ -427,6 +450,45 @@
     var batchTh = el("th", "col-row-num col-row-num-header", "#");
     batchTh.title = "Select all cells";
     hrow.appendChild(batchTh);
+
+    var fnTh = el("th", "col-function");
+    var fnWrap = el("div", "fn-header-wrap");
+    var fnSelect = document.createElement("select");
+    fnSelect.className = "fn-select";
+    fnSelect.title = "Row function";
+    var defaultOpt = document.createElement("option");
+    defaultOpt.value = "";
+    defaultOpt.textContent = "\u0192";
+    defaultOpt.selected = !state.activeFunction;
+    fnSelect.appendChild(defaultOpt);
+    var fnNames = Object.keys(ROW_FUNCTIONS);
+    for (var fi = 0; fi < fnNames.length; fi++) {
+      var fnOpt = document.createElement("option");
+      fnOpt.value = fnNames[fi];
+      fnOpt.textContent = fnNames[fi];
+      if (state.activeFunction === fnNames[fi]) fnOpt.selected = true;
+      fnSelect.appendChild(fnOpt);
+    }
+    var fnClear = el("button", "fn-clear", "\u00d7");
+    fnClear.title = "Clear function";
+    fnClear.type = "button";
+    if (!state.activeFunction) fnClear.style.display = "none";
+    fnSelect.addEventListener("change", function () {
+      state.activeFunction = this.value;
+      fnClear.style.display = this.value ? "" : "none";
+      updateFunctionColumn();
+    });
+    fnClear.addEventListener("click", function () {
+      state.activeFunction = "";
+      fnSelect.value = "";
+      this.style.display = "none";
+      updateFunctionColumn();
+    });
+    fnWrap.appendChild(fnSelect);
+    fnWrap.appendChild(fnClear);
+    fnTh.appendChild(fnWrap);
+    hrow.appendChild(fnTh);
+
     hrow.appendChild(el("th", "col-observation", "Observation"));
     hrow.appendChild(el("th", "col-category", "Category"));
     if (showSeverity) {
@@ -472,6 +534,7 @@
 
     bindGridEvents();
     bindDragFromGrid();
+    if (state.activeFunction) updateFunctionColumn();
   }
 
   // ---- Panel divider (resizable split between sheet preview and bottom panel) ----
@@ -565,6 +628,14 @@
     rowTd.setAttribute("data-select-row", row.rowNum);
     rowTd.title = "Select row " + row.rowNum;
     tr.appendChild(rowTd);
+
+    var fnTd = el("td", "col-function");
+    fnTd.setAttribute("data-fn-row", row.rowNum);
+    if (state.activeFunction && ROW_FUNCTIONS[state.activeFunction]) {
+      fnTd.textContent = ROW_FUNCTIONS[state.activeFunction](row, participants);
+    }
+    tr.appendChild(fnTd);
+
     var obsTd = el("td", "col-observation");
     obsTd.textContent = truncate(row.observation, 50);
     obsTd.title = row.observation;
@@ -601,6 +672,40 @@
       tr.appendChild(td);
     }
     return tr;
+  }
+
+  function updateFunctionColumn() {
+    var d = state.sheetData;
+    if (!d) return;
+    var fn = state.activeFunction && ROW_FUNCTIONS[state.activeFunction];
+    var cells = qsa("[data-fn-row]");
+
+    // First pass: compute values and find range
+    var values = [];
+    for (var i = 0; i < cells.length; i++) {
+      var rowNum = parseInt(cells[i].getAttribute("data-fn-row"), 10);
+      var row = null;
+      for (var j = 0; j < d.rows.length; j++) {
+        if (d.rows[j].rowNum === rowNum) { row = d.rows[j]; break; }
+      }
+      var val = (fn && row) ? fn(row, d.participants) : null;
+      values.push(val);
+      cells[i].textContent = val !== null ? val : "";
+    }
+
+    // Second pass: apply conditional background
+    var max = 0;
+    for (var k = 0; k < values.length; k++) {
+      if (values[k] !== null && values[k] > max) max = values[k];
+    }
+    for (var m = 0; m < cells.length; m++) {
+      if (values[m] !== null && max > 0) {
+        var t = values[m] / max;
+        cells[m].style.backgroundColor = "rgba(168, 130, 214, " + (t * 0.45).toFixed(3) + ")";
+      } else {
+        cells[m].style.backgroundColor = "";
+      }
+    }
   }
 
   // ---- Cell selection ----
