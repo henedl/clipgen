@@ -9,7 +9,7 @@ from icecream import ic
 REENCODING: bool = False
 AUDIO_NORMALIZE: bool = False
 FILEFORMAT: str = ".mp4"
-VERSIONNUM: str = "0.9.51"
+VERSIONNUM: str = "0.9.52"
 TITLECARDS_ENABLED: bool = False
 TITLECARD_DURATION_SECONDS: int = 2
 WORKSHEET_PRIORITY: List[str] = [
@@ -87,6 +87,7 @@ INSIGHTS_MANIFEST_FILENAME: str = "insights_manifest.json"
 STASHES_MANIFEST_FILENAME: str = "reel_stashes.json"
 ARTIFACT_STASHES_MANIFEST_FILENAME: str = "artifact_stashes.json"
 STUDIO_SETTINGS_FILENAME: str = "studio_settings.json"
+STUDIO_CELL_EXPAND_HOVER: bool = True
 GOOGLE_API_MAX_RETRIES: int = 3  # Retries for transient Google API errors (5xx)
 
 # Sprite sheet constants (for insights builder hover-to-scrub)
@@ -177,6 +178,7 @@ SETTINGS_DESCRIPTIONS: Dict[str, str] = {
     "TRANSCRIBE_FORMAT": "Transcript output format: md (Markdown), srt, or vtt.",
     "HIGHLIGHTS_REEL_DURATION_SECONDS": "Maximum duration in seconds for the highlights reel time budget.",
     "MANIFEST_ENABLED": "Write a manifest JSON file alongside generated artifacts for session tracking.",
+    "STUDIO_CELL_EXPAND_HOVER": "Expand overflowing timestamp cells on hover in the Sheet Preview.",
 }
 
 # Studio-exposed settings with UI metadata (group, type, constraints).
@@ -192,4 +194,5 @@ STUDIO_SETTINGS: Dict[str, Dict[str, Any]] = {
     "TITLECARD_DURATION_SECONDS": {"group": "Titlecards", "type": "int", "min": 1, "step": 1},
     "HIGHLIGHTS_REEL_DURATION_SECONDS": {"group": "Generation", "type": "int", "min": 10, "step": 10},
     "MANIFEST_ENABLED": {"group": "Generation", "type": "bool"},
+    "STUDIO_CELL_EXPAND_HOVER": {"group": "Sheet Preview", "type": "bool"},
 }

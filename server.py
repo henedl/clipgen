@@ -188,6 +188,7 @@ def api_sheet() -> FlaskResponse:
             "highlightsDuration": config.HIGHLIGHTS_REEL_DURATION_SECONDS,
             "titlecardsEnabled": config.TITLECARDS_ENABLED,
             "titlecardDuration": config.TITLECARD_DURATION_SECONDS,
+            "cellExpandHover": config.STUDIO_CELL_EXPAND_HOVER,
             "participants": participants,
             "rows": rows,
         }
