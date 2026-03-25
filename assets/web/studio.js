@@ -16,6 +16,7 @@
     stashes: [],
     artifactStashes: [],
     settingsData: null,
+    dividerOffset: 0,
   };
 
   // ---- Helpers ----
@@ -279,6 +280,7 @@
         state.sheetData = data;
         renderHeader();
         renderGrid();
+        computeGridMaxHeight();
         populateGalleryParticipants(data.participants || []);
         var durInput = qs("#highlightsDuration");
         if (durInput && data.highlightsDuration) {
@@ -470,6 +472,90 @@
 
     bindGridEvents();
     bindDragFromGrid();
+  }
+
+  // ---- Panel divider (resizable split between sheet preview and bottom panel) ----
+
+  function computeGridMaxHeight() {
+    var header = qs("#studioHeader");
+    var preview = qs("#sheetPreview");
+    var divider = qs("#panelDivider");
+    var bottom = qs("#bottomPanel");
+    var grid = qs("#sheetGrid");
+    if (!header || !preview || !divider || !bottom || !grid) return;
+
+    var previewH3 = preview.querySelector("h3");
+    var previewStyle = getComputedStyle(preview);
+    var previewPadTop = parseFloat(previewStyle.paddingTop) || 0;
+    var previewPadBot = parseFloat(previewStyle.paddingBottom) || 0;
+    var h3Height = previewH3 ? previewH3.offsetHeight : 0;
+    var h3Style = previewH3 ? getComputedStyle(previewH3) : null;
+    var h3Margin = h3Style
+      ? (parseFloat(h3Style.marginTop) || 0) + (parseFloat(h3Style.marginBottom) || 0)
+      : 0;
+
+    var headerRect = header.getBoundingClientRect();
+    var sheetChrome = previewPadTop + h3Height + h3Margin + previewPadBot;
+    var available = window.innerHeight - headerRect.top - headerRect.height
+      - sheetChrome - divider.offsetHeight - bottom.offsetHeight;
+
+    var MIN_GRID = 100;
+    var maxAllowed = Math.max(0, available - MIN_GRID);
+    state.dividerOffset = Math.min(state.dividerOffset, maxAllowed);
+
+    grid.style.maxHeight = Math.max(MIN_GRID, available - state.dividerOffset) + "px";
+  }
+
+  function initPanelDivider() {
+    var handle = qs("#panelDivider");
+    if (!handle) return;
+    var dragging = false;
+    var startY = 0;
+    var startOffset = 0;
+
+    function onDown(e) {
+      e.preventDefault();
+      dragging = true;
+      startY = e.clientY || (e.touches && e.touches[0].clientY) || 0;
+      startOffset = state.dividerOffset;
+      handle.classList.add("active");
+      document.body.style.cursor = "row-resize";
+      document.body.style.userSelect = "none";
+    }
+
+    handle.addEventListener("mousedown", onDown);
+    handle.addEventListener("touchstart", onDown, { passive: false });
+
+    var rafPending = false;
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("touchmove", onMove, { passive: false });
+
+    function onMove(e) {
+      if (!dragging || rafPending) return;
+      rafPending = true;
+      var clientY = e.clientY || (e.touches && e.touches[0].clientY) || 0;
+      requestAnimationFrame(function () {
+        var delta = startY - clientY;
+        var grid = qs("#sheetGrid");
+        var table = grid ? grid.querySelector("table") : null;
+        var tableH = table ? table.offsetHeight : 0;
+        var maxOff = Math.max(0, tableH - 100);
+        state.dividerOffset = Math.max(0, Math.min(maxOff, startOffset + delta));
+        computeGridMaxHeight();
+        rafPending = false;
+      });
+    }
+
+    function onUp() {
+      if (!dragging) return;
+      dragging = false;
+      handle.classList.remove("active");
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+    }
+
+    document.addEventListener("mouseup", onUp);
+    document.addEventListener("touchend", onUp);
   }
 
   function renderDataRow(row, participants, showSeverity) {
@@ -1103,6 +1189,7 @@
 
       list.appendChild(card);
     }
+    computeGridMaxHeight();
   }
 
   function computeReelDuration(items) {
@@ -1301,6 +1388,7 @@
 
       list.appendChild(card);
     }
+    computeGridMaxHeight();
   }
 
   function stashCurrentArtifacts() {
@@ -1349,6 +1437,7 @@
       reelArea.classList.remove("hidden");
       reelArea.classList.add("stash-drop-reveal");
     }
+    computeGridMaxHeight();
   }
 
   function hideEmptyStashAreas() {
@@ -1362,6 +1451,7 @@
       reelArea.classList.add("hidden");
       reelArea.classList.remove("stash-drop-reveal");
     }
+    computeGridMaxHeight();
   }
 
   // ---- Buttons ----
@@ -2203,11 +2293,13 @@
     initDropTargets();
     bindReelReorder();
     bindButtons();
+    initPanelDivider();
     loadSheetData();
     loadStashes();
     loadArtifactStashes();
     updateViewerButton();
     checkNavLinks();
+    window.addEventListener("resize", computeGridMaxHeight);
 
     document.addEventListener("dragstart", function (ev) {
       if (!ev.target.closest(".stash-card")) return;

@@ -200,8 +200,7 @@ body {
 /* Sheet preview */
 
 #sheetPreview {
-  flex: 1;
-  min-height: 0;
+  flex: 0 1 auto;
   display: flex;
   flex-direction: column;
   max-width: 1120px;
@@ -221,8 +220,6 @@ body {
 }
 
 #sheetGrid {
-  flex: 1;
-  min-height: 0;
   overflow: auto;
   border: 1px solid var(--color-border);
   border-radius: var(--radius);
@@ -233,6 +230,44 @@ body {
   border-collapse: collapse;
   font-size: 0.82rem;
   table-layout: fixed;
+}
+
+/* Panel divider (resizable handle between sheet preview and bottom panel) */
+
+#panelDivider {
+  max-width: 1120px;
+  width: 100%;
+  margin: 0 auto;
+  height: 12px;
+  background: var(--color-panel-bg);
+  border-left: 1px solid var(--color-panel-border);
+  border-right: 1px solid var(--color-panel-border);
+  cursor: row-resize;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  user-select: none;
+  transition: background-color 0.15s;
+}
+
+#panelDivider:hover,
+#panelDivider.active {
+  background-color: var(--color-surface-alt);
+}
+
+.divider-handle {
+  width: 36px;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--color-border);
+  transition: background-color 0.15s, width 0.15s;
+}
+
+#panelDivider:hover .divider-handle,
+#panelDivider.active .divider-handle {
+  background: var(--color-text-dim);
+  width: 48px;
 }
 
 #sheetGrid thead th {
@@ -1685,6 +1720,7 @@ html[data-theme="dark"] .settings-panel {
 @media (max-width: 768px) {
   #studioHeader,
   #sheetPreview,
+  #panelDivider,
   #bottomPanel,
   #dropAreas,
   #reelArea,
