@@ -18,7 +18,25 @@
     settingsData: null,
     dividerOffset: 0,
     activeFunction: "",
+    filtersVisible: false,
+    filters: {
+      categories: [],
+      sevMin: "",
+      sevMax: "",
+      fnMin: null,
+      fnMax: null,
+    },
   };
+
+  var SEVERITY_ORDER = [
+    { label: "Critical", rank: -4 },
+    { label: "High", rank: -3 },
+    { label: "Medium", rank: -2 },
+    { label: "Low", rank: -1 },
+    { label: "N/A", rank: 0 },
+    { label: "Positive", rank: 1 },
+    { label: "Very Positive", rank: 2 },
+  ];
 
   var ROW_FUNCTIONS = {
     Count: function (row, participants) {
@@ -207,6 +225,306 @@
     return m2 + ":" + (s2 < 10 ? "0" : "") + s2;
   }
 
+  // ---- Filtering ----
+
+  function severityRank(label) {
+    if (!label) return null;
+    var k = label.trim().toLowerCase();
+    for (var i = 0; i < SEVERITY_ORDER.length; i++) {
+      if (SEVERITY_ORDER[i].label.toLowerCase() === k) return SEVERITY_ORDER[i].rank;
+    }
+    return null;
+  }
+
+  function hasActiveFilters() {
+    var f = state.filters;
+    return (
+      f.categories.length > 0 ||
+      f.sevMin !== "" ||
+      f.sevMax !== "" ||
+      f.fnMin !== null ||
+      f.fnMax !== null
+    );
+  }
+
+  function getFilteredRows(rows) {
+    var f = state.filters;
+    if (!hasActiveFilters()) return rows;
+
+    var sevMinRank = f.sevMin ? severityRank(f.sevMin) : null;
+    var sevMaxRank = f.sevMax ? severityRank(f.sevMax) : null;
+    var fnActive = state.activeFunction && ROW_FUNCTIONS[state.activeFunction];
+    var participants = state.sheetData ? state.sheetData.participants : [];
+
+    return rows.filter(function (row) {
+      if (f.categories.length > 0) {
+        if (!row.category || f.categories.indexOf(row.category) < 0) return false;
+      }
+      if (sevMinRank !== null || sevMaxRank !== null) {
+        var r = severityRank(row.severity);
+        if (r === null) return false;
+        if (sevMinRank !== null && r < sevMinRank) return false;
+        if (sevMaxRank !== null && r > sevMaxRank) return false;
+      }
+      if (f.fnMin !== null || f.fnMax !== null) {
+        if (!fnActive) return false;
+        var val = fnActive(row, participants);
+        if (f.fnMin !== null && val < f.fnMin) return false;
+        if (f.fnMax !== null && val > f.fnMax) return false;
+      }
+      return true;
+    });
+  }
+
+  function clearAllFilters() {
+    state.filters.categories = [];
+    state.filters.sevMin = "";
+    state.filters.sevMax = "";
+    state.filters.fnMin = null;
+    state.filters.fnMax = null;
+  }
+
+  function renderFilterBar() {
+    var bar = qs("#filterBar");
+    if (!bar || !state.sheetData) return;
+    bar.innerHTML = "";
+
+    var d = state.sheetData;
+
+    // --- Category filter ---
+    var uniqueCats = [];
+    for (var i = 0; i < d.rows.length; i++) {
+      var cat = d.rows[i].category;
+      if (cat && uniqueCats.indexOf(cat) < 0) uniqueCats.push(cat);
+    }
+    uniqueCats.sort();
+
+    if (uniqueCats.length > 0) {
+      var catGroup = el("div", "filter-group");
+      catGroup.appendChild(el("span", "filter-group-label", "Category"));
+
+      var catWrap = el("div", "filter-cat-wrap");
+      var catBtn = el("button", "filter-cat-btn");
+      catBtn.type = "button";
+      catBtn.innerHTML = 'All <span class="chevron">\u25BE</span>';
+      var catPanel = el("div", "filter-cat-panel hidden");
+
+      for (var ci = 0; ci < uniqueCats.length; ci++) {
+        var lbl = document.createElement("label");
+        var cb = document.createElement("input");
+        cb.type = "checkbox";
+        cb.value = uniqueCats[ci];
+        cb.setAttribute("data-filter-cat", uniqueCats[ci]);
+        lbl.appendChild(cb);
+        lbl.appendChild(document.createTextNode(uniqueCats[ci]));
+        catPanel.appendChild(lbl);
+      }
+
+      catBtn.addEventListener("click", function (ev) {
+        ev.stopPropagation();
+        catBtn.classList.toggle("open");
+        catPanel.classList.toggle("hidden");
+      });
+
+      catPanel.addEventListener("change", function () {
+        var checked = catPanel.querySelectorAll("input:checked");
+        state.filters.categories = [];
+        for (var j = 0; j < checked.length; j++) {
+          state.filters.categories.push(checked[j].value);
+        }
+        var count = state.filters.categories.length;
+        catBtn.innerHTML =
+          (count === 0 ? "All" : count + " selected") +
+          ' <span class="chevron">\u25BE</span>';
+        renderGrid();
+        computeGridMaxHeight();
+      });
+
+      catWrap.appendChild(catBtn);
+      catWrap.appendChild(catPanel);
+      catGroup.appendChild(catWrap);
+
+      var catClear = document.createElement("button");
+      catClear.className = "filter-clear";
+      catClear.type = "button";
+      catClear.title = "Clear category filter";
+      catClear.innerHTML =
+        '<svg viewBox="0 0 16 16" fill="currentColor"><path d="M5.28 4.22a.75.75 0 0 0-1.06 1.06L6.94 8l-2.72 2.72a.75.75 0 1 0 1.06 1.06L8 9.06l2.72 2.72a.75.75 0 1 0 1.06-1.06L9.06 8l2.72-2.72a.75.75 0 0 0-1.06-1.06L8 6.94 5.28 4.22Z"/></svg>';
+      catClear.addEventListener("click", function () {
+        state.filters.categories = [];
+        var cbs = catPanel.querySelectorAll("input[type=checkbox]");
+        for (var j = 0; j < cbs.length; j++) cbs[j].checked = false;
+        catBtn.innerHTML = 'All <span class="chevron">\u25BE</span>';
+        renderGrid();
+        computeGridMaxHeight();
+      });
+      catGroup.appendChild(catClear);
+
+      bar.appendChild(catGroup);
+    }
+
+    // --- Severity filter ---
+    var showSeverity = hasSeverityData(d.rows);
+    if (showSeverity) {
+      var sevGroup = el("div", "filter-group");
+      sevGroup.appendChild(el("span", "filter-group-label", "Severity"));
+
+      var sevMin = document.createElement("select");
+      sevMin.className = "filter-select";
+      sevMin.id = "filterSevMin";
+      var sevMinDefault = document.createElement("option");
+      sevMinDefault.value = "";
+      sevMinDefault.textContent = "Any";
+      sevMin.appendChild(sevMinDefault);
+      for (var si = 0; si < SEVERITY_ORDER.length; si++) {
+        var opt = document.createElement("option");
+        opt.value = SEVERITY_ORDER[si].label;
+        opt.textContent = SEVERITY_ORDER[si].label;
+        sevMin.appendChild(opt);
+      }
+
+      var sevMax = document.createElement("select");
+      sevMax.className = "filter-select";
+      sevMax.id = "filterSevMax";
+      var sevMaxDefault = document.createElement("option");
+      sevMaxDefault.value = "";
+      sevMaxDefault.textContent = "Any";
+      sevMax.appendChild(sevMaxDefault);
+      for (var sj = 0; sj < SEVERITY_ORDER.length; sj++) {
+        var opt2 = document.createElement("option");
+        opt2.value = SEVERITY_ORDER[sj].label;
+        opt2.textContent = SEVERITY_ORDER[sj].label;
+        sevMax.appendChild(opt2);
+      }
+
+      function onSevChange() {
+        state.filters.sevMin = sevMin.value;
+        state.filters.sevMax = sevMax.value;
+        renderGrid();
+        computeGridMaxHeight();
+      }
+      sevMin.addEventListener("change", onSevChange);
+      sevMax.addEventListener("change", onSevChange);
+
+      sevGroup.appendChild(sevMin);
+      sevGroup.appendChild(el("span", "filter-range-sep", "to"));
+      sevGroup.appendChild(sevMax);
+
+      var sevClear = document.createElement("button");
+      sevClear.className = "filter-clear";
+      sevClear.type = "button";
+      sevClear.title = "Clear severity filter";
+      sevClear.innerHTML =
+        '<svg viewBox="0 0 16 16" fill="currentColor"><path d="M5.28 4.22a.75.75 0 0 0-1.06 1.06L6.94 8l-2.72 2.72a.75.75 0 1 0 1.06 1.06L8 9.06l2.72 2.72a.75.75 0 1 0 1.06-1.06L9.06 8l2.72-2.72a.75.75 0 0 0-1.06-1.06L8 6.94 5.28 4.22Z"/></svg>';
+      sevClear.addEventListener("click", function () {
+        state.filters.sevMin = "";
+        state.filters.sevMax = "";
+        sevMin.value = "";
+        sevMax.value = "";
+        renderGrid();
+        computeGridMaxHeight();
+      });
+      sevGroup.appendChild(sevClear);
+
+      bar.appendChild(sevGroup);
+    }
+
+    // --- Function filter ---
+    var fnGroup = el("div", "filter-group");
+    fnGroup.appendChild(el("span", "filter-group-label", "Function"));
+
+    var fnMin = document.createElement("input");
+    fnMin.type = "number";
+    fnMin.className = "filter-number";
+    fnMin.id = "filterFnMin";
+    fnMin.placeholder = "Min";
+    fnMin.disabled = !state.activeFunction;
+
+    var fnMax = document.createElement("input");
+    fnMax.type = "number";
+    fnMax.className = "filter-number";
+    fnMax.id = "filterFnMax";
+    fnMax.placeholder = "Max";
+    fnMax.disabled = !state.activeFunction;
+
+    function onFnChange() {
+      var minVal = fnMin.value.trim();
+      var maxVal = fnMax.value.trim();
+      state.filters.fnMin = minVal !== "" ? parseFloat(minVal) : null;
+      state.filters.fnMax = maxVal !== "" ? parseFloat(maxVal) : null;
+      renderGrid();
+      computeGridMaxHeight();
+    }
+    fnMin.addEventListener("input", onFnChange);
+    fnMax.addEventListener("input", onFnChange);
+
+    fnGroup.appendChild(fnMin);
+    fnGroup.appendChild(el("span", "filter-range-sep", "to"));
+    fnGroup.appendChild(fnMax);
+
+    var fnClear = document.createElement("button");
+    fnClear.className = "filter-clear";
+    fnClear.type = "button";
+    fnClear.title = "Clear function filter";
+    fnClear.innerHTML =
+      '<svg viewBox="0 0 16 16" fill="currentColor"><path d="M5.28 4.22a.75.75 0 0 0-1.06 1.06L6.94 8l-2.72 2.72a.75.75 0 1 0 1.06 1.06L8 9.06l2.72 2.72a.75.75 0 1 0 1.06-1.06L9.06 8l2.72-2.72a.75.75 0 0 0-1.06-1.06L8 6.94 5.28 4.22Z"/></svg>';
+    fnClear.addEventListener("click", function () {
+      state.filters.fnMin = null;
+      state.filters.fnMax = null;
+      fnMin.value = "";
+      fnMax.value = "";
+      renderGrid();
+      computeGridMaxHeight();
+    });
+    fnGroup.appendChild(fnClear);
+
+    bar.appendChild(fnGroup);
+
+    // Close category dropdown on outside click
+    document.addEventListener("click", function (ev) {
+      var wrap = qs(".filter-cat-wrap");
+      if (wrap && !wrap.contains(ev.target)) {
+        var btn = wrap.querySelector(".filter-cat-btn");
+        var panel = wrap.querySelector(".filter-cat-panel");
+        if (btn) btn.classList.remove("open");
+        if (panel) panel.classList.add("hidden");
+      }
+    });
+  }
+
+  function initFilterToggle() {
+    var btn = qs("#filterToggle");
+    if (!btn) return;
+    btn.addEventListener("click", function () {
+      state.filtersVisible = !state.filtersVisible;
+      var bar = qs("#filterBar");
+      if (state.filtersVisible) {
+        bar.classList.remove("hidden");
+      } else {
+        bar.classList.add("hidden");
+        if (hasActiveFilters()) {
+          clearAllFilters();
+          renderGrid();
+        }
+      }
+      computeGridMaxHeight();
+    });
+  }
+
+  function syncFilterFnDisabled() {
+    var fnMin = qs("#filterFnMin");
+    var fnMax = qs("#filterFnMax");
+    var enabled = !!state.activeFunction;
+    if (fnMin) fnMin.disabled = !enabled;
+    if (fnMax) fnMax.disabled = !enabled;
+    if (!enabled && (state.filters.fnMin !== null || state.filters.fnMax !== null)) {
+      state.filters.fnMin = null;
+      state.filters.fnMax = null;
+      if (fnMin) fnMin.value = "";
+      if (fnMax) fnMax.value = "";
+    }
+  }
+
   // ---- Theme ----
 
   function initThemeToggle() {
@@ -299,6 +617,7 @@
         }
         state.sheetData = data;
         renderHeader();
+        renderFilterBar();
         renderGrid();
         computeGridMaxHeight();
         populateGalleryParticipants(data.participants || []);
@@ -476,12 +795,14 @@
     fnSelect.addEventListener("change", function () {
       state.activeFunction = this.value;
       fnClear.style.display = this.value ? "" : "none";
+      syncFilterFnDisabled();
       updateFunctionColumn();
     });
     fnClear.addEventListener("click", function () {
       state.activeFunction = "";
       fnSelect.value = "";
       this.style.display = "none";
+      syncFilterFnDisabled();
       updateFunctionColumn();
     });
     fnWrap.appendChild(fnSelect);
@@ -505,13 +826,14 @@
     table.appendChild(thead);
 
     // Group consecutive empty rows into separators
+    var filteredRows = getFilteredRows(d.rows);
     var tbody = el("tbody");
     var i = 0;
-    while (i < d.rows.length) {
-      var row = d.rows[i];
+    while (i < filteredRows.length) {
+      var row = filteredRows[i];
       if (isRowEmpty(row, d.participants)) {
         var emptyStart = i;
-        while (i < d.rows.length && isRowEmpty(d.rows[i], d.participants)) {
+        while (i < filteredRows.length && isRowEmpty(filteredRows[i], d.participants)) {
           i++;
         }
         var emptyCount = i - emptyStart;
@@ -547,18 +869,24 @@
     var grid = qs("#sheetGrid");
     if (!header || !preview || !divider || !bottom || !grid) return;
 
-    var previewH3 = preview.querySelector("h3");
+    var previewHeader = preview.querySelector(".sheet-preview-header");
+    var filterBar = qs("#filterBar");
     var previewStyle = getComputedStyle(preview);
     var previewPadTop = parseFloat(previewStyle.paddingTop) || 0;
     var previewPadBot = parseFloat(previewStyle.paddingBottom) || 0;
-    var h3Height = previewH3 ? previewH3.offsetHeight : 0;
-    var h3Style = previewH3 ? getComputedStyle(previewH3) : null;
-    var h3Margin = h3Style
-      ? (parseFloat(h3Style.marginTop) || 0) + (parseFloat(h3Style.marginBottom) || 0)
+    var phHeight = previewHeader ? previewHeader.offsetHeight : 0;
+    var phStyle = previewHeader ? getComputedStyle(previewHeader) : null;
+    var phMargin = phStyle
+      ? (parseFloat(phStyle.marginTop) || 0) + (parseFloat(phStyle.marginBottom) || 0)
+      : 0;
+    var fbHeight = filterBar && !filterBar.classList.contains("hidden") ? filterBar.offsetHeight : 0;
+    var fbStyle = filterBar && !filterBar.classList.contains("hidden") ? getComputedStyle(filterBar) : null;
+    var fbMargin = fbStyle
+      ? (parseFloat(fbStyle.marginTop) || 0) + (parseFloat(fbStyle.marginBottom) || 0)
       : 0;
 
     var headerRect = header.getBoundingClientRect();
-    var sheetChrome = previewPadTop + h3Height + h3Margin + previewPadBot;
+    var sheetChrome = previewPadTop + phHeight + phMargin + fbHeight + fbMargin + previewPadBot;
     var available = window.innerHeight - headerRect.top - headerRect.height
       - sheetChrome - divider.offsetHeight - bottom.offsetHeight;
 
@@ -2395,6 +2723,7 @@
 
   document.addEventListener("DOMContentLoaded", function () {
     initThemeToggle();
+    initFilterToggle();
     initDropTargets();
     bindReelReorder();
     bindButtons();
