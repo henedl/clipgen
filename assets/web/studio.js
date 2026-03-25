@@ -980,7 +980,6 @@
 
       if (cellData.hasText) {
         td.textContent = cellData.value;
-        td.title = cellData.value;
         if (cellData.valid) {
           td.classList.add("valid-ts");
         } else {
@@ -1211,21 +1210,17 @@
     cellFloat.style.display = "none";
     document.body.appendChild(cellFloat);
     var floatCell = null;
-    var floatTitle = "";
 
     function showFloat(td) {
       if (!state.cellExpandHover) return;
       if (td.scrollWidth <= td.clientWidth) return;
       floatCell = td;
-      floatTitle = td.title || "";
-      td.title = "";
       var rect = td.getBoundingClientRect();
       cellFloat.textContent = td.textContent;
       cellFloat.style.backgroundColor = getComputedStyle(td).backgroundColor;
-      cellFloat.style.top = rect.top + "px";
+      cellFloat.style.top = (rect.top + 1) + "px";
       cellFloat.style.left = rect.left + "px";
-      cellFloat.style.height = rect.height + "px";
-      cellFloat.style.lineHeight = rect.height + "px";
+      cellFloat.style.height = (rect.height - 1) + "px";
       cellFloat.style.display = "block";
       cellFloat.offsetWidth; // force reflow
       cellFloat.style.opacity = "1";
@@ -1233,10 +1228,7 @@
 
     function hideFloat() {
       cellFloat.style.opacity = "0";
-      if (floatCell) {
-        floatCell.title = floatTitle;
-        floatCell = null;
-      }
+      floatCell = null;
       setTimeout(function () {
         if (!floatCell) cellFloat.style.display = "none";
       }, 70);

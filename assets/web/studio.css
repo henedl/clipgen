@@ -661,9 +661,11 @@ col.col-participant-col {
 .ts-cell-float {
   position: fixed;
   z-index: 10;
+  box-sizing: border-box;
   font-family: var(--font-mono);
   font-size: 0.72rem;
   padding: 0.35rem 0.6rem;
+  text-align: center;
   white-space: nowrap;
   pointer-events: none;
   opacity: 0;
