@@ -1,16 +1,130 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="utf-8">
-    <title>Screenspace</title>
-    <style>
-        body { font-family: system-ui, -apple-system, sans-serif; max-width: 600px; margin: 80px auto; color: #333; }
-        h1 { font-size: 1.5rem; }
-        p { color: #666; }
-    </style>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>clipgen Screenspace</title>
+  <link rel="stylesheet" href="screenspace.css">
 </head>
 <body>
-    <h1>Screenspace</h1>
-    <p>Analysis engine ready. UI coming in Phase 2.</p>
+  <header id="ssHeader">
+    <div id="headerTop">
+      <h1>clipgen <span class="header-light">Screenspace</span></h1>
+      <div id="headerActions">
+        <a id="studioLink" href="/studio/" class="nav-link hidden">Studio</a>
+        <a id="insightsLink" href="/insights/" class="nav-link hidden">Insights</a>
+        <label class="participant-label">
+          Source
+          <select id="participantSelect"><option value="">No participants</option></select>
+        </label>
+        <span id="videoInfo" class="video-info"></span>
+        <button id="themeToggle" type="button" aria-label="Toggle dark mode" aria-pressed="false">
+          <span class="theme-toggle-icon theme-icon-sun"></span>
+          <span class="theme-toggle-icon theme-icon-moon"></span>
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <main id="ssMain">
+    <section id="viewerSection">
+      <div id="frameContainer">
+        <canvas id="frameCanvas"></canvas>
+        <canvas id="overlayCanvas"></canvas>
+        <div id="frameEmpty">Select a participant to view frames</div>
+      </div>
+      <div id="frameControls">
+        <input id="timestampSlider" type="range" min="0" max="100" step="0.01" value="0">
+        <input id="timestampInput" type="text" placeholder="0:00" spellcheck="false">
+        <button id="framePrev" class="btn btn-small" title="Step back 1s">&lsaquo;</button>
+        <button id="frameNext" class="btn btn-small" title="Step forward 1s">&rsaquo;</button>
+      </div>
+
+      <div id="regionBar">
+        <div id="regionChips"></div>
+        <button id="saveRegionBtn" class="btn btn-small hidden">Save Region</button>
+        <button id="clearSelectionBtn" class="btn btn-small hidden">Clear</button>
+        <button id="deleteRegionBtn" class="btn btn-small hidden">Delete</button>
+      </div>
+    </section>
+
+    <section id="timelineSection">
+      <canvas id="timelineCanvas"></canvas>
+      <div id="timelineControls">
+        <button id="zoomInBtn" class="btn btn-small">+</button>
+        <button id="zoomOutBtn" class="btn btn-small">&minus;</button>
+        <button id="zoomResetBtn" class="btn btn-small">Reset</button>
+        <span class="timeline-sep"></span>
+        <button id="setInBtn" class="btn btn-small">Set In</button>
+        <button id="setOutBtn" class="btn btn-small">Set Out</button>
+        <button id="clearMarkersBtn" class="btn btn-small hidden">Clear Markers</button>
+        <span id="markerInfo" class="marker-info"></span>
+        <div id="timelineLegend"></div>
+      </div>
+    </section>
+
+    <section id="workflowSection">
+      <div id="workflowTabs">
+        <button class="wf-tab active" data-type="color">Color</button>
+        <button class="wf-tab" data-type="change">Change</button>
+        <button class="wf-tab" data-type="similarity">Similarity</button>
+        <button class="wf-tab" data-type="text">Text</button>
+        <button class="wf-tab" data-type="timelapse">Timelapse</button>
+      </div>
+      <div id="workflowBody">
+        <div id="workflowParams"></div>
+        <button id="runBtn" class="btn btn-primary btn-icon" disabled data-tooltip="Select a region first">
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+            <path d="M3 3.732a1 1 0 0 1 1.514-.857l8.07 4.268a1 1 0 0 1 0 1.714l-8.07 4.268A1 1 0 0 1 3 12.268V3.732Z"/>
+          </svg>
+          Run Analysis
+        </button>
+      </div>
+    </section>
+  </main>
+
+  <div id="bottomPanel">
+    <div id="taskQueuePanel">
+      <div class="panel-header">
+        <h3>Task Queue <span id="taskCount">(0)</span></h3>
+      </div>
+      <div id="taskList">
+        <div class="panel-empty">No tasks yet. Configure a workflow and click Run.</div>
+      </div>
+    </div>
+    <div id="resultsPanel">
+      <div class="panel-header">
+        <h3>Results <span id="resultCount"></span></h3>
+        <div id="resultsActions" class="hidden">
+          <button id="exportJsonBtn" class="btn btn-small">JSON</button>
+          <button id="exportCsvBtn" class="btn btn-small">CSV</button>
+        </div>
+      </div>
+      <div id="resultsList">
+        <div class="panel-empty">Click a completed task to view results.</div>
+      </div>
+    </div>
+  </div>
+
+  <div id="regionNameModal" class="modal-overlay hidden">
+    <div class="modal-card">
+      <h3>Save Region</h3>
+      <label class="modal-label">Name
+        <input id="regionNameInput" type="text" placeholder="e.g. healthbar" spellcheck="false" autocomplete="off">
+      </label>
+      <label class="modal-label">Description (optional)
+        <input id="regionDescInput" type="text" placeholder="Player health bar" spellcheck="false" autocomplete="off">
+      </label>
+      <div class="modal-coords" id="regionCoords"></div>
+      <div class="modal-actions">
+        <button id="regionNameCancel" class="btn">Cancel</button>
+        <button id="regionNameSave" class="btn btn-primary">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast hidden"></div>
+
+  <script src="screenspace.js"></script>
 </body>
 </html>

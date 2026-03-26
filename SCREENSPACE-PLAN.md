@@ -124,51 +124,51 @@ Build the Screenspace web interface.
 
 ### Video display and region selection
 
-- [ ] Video frame viewer: display frames from the selected participant's source video; frame fetched via `/api/video/frame/<participant>/<timestamp>`
-- [ ] Frame navigation: scrub through video by timestamp using a slider or direct input; display current frame
-- [ ] Participant selector: dropdown listing participants with available source videos
-- [ ] Rectangular region selection tool: click-and-drag overlay on the video frame to define a region; show coordinates and dimensions
-- [ ] Named regions: save a selected region with a name; load/apply saved regions from the dropdown; edit and delete existing regions
-- [ ] Region visualization: draw saved regions as labeled overlays on the current frame, each in a distinct color
+- [x] Video frame viewer: display frames from the selected participant's source video; frame fetched via `/api/video/frame/<participant>/<timestamp>`
+- [x] Frame navigation: scrub through video by timestamp using a slider or direct input; display current frame
+- [x] Participant selector: dropdown listing participants with available source videos
+- [x] Rectangular region selection tool: click-and-drag overlay on the video frame to define a region; show coordinates and dimensions
+- [x] Named regions: save a selected region with a name; load/apply saved regions from the dropdown; edit and delete existing regions
+- [x] Region visualization: draw saved regions as labeled overlays on the current frame, each in a distinct color
 
 ### Toolbar and workflow configuration
 
-- [ ] Workflow selector: toolbar below the video with buttons/tabs for each workflow type (Color, Change, Similarity, Text, Timelapse)
-- [ ] Per-workflow parameter panels:
+- [x] Workflow selector: toolbar below the video with buttons/tabs for each workflow type (Color, Change, Similarity, Text, Timelapse)
+- [x] Per-workflow parameter panels:
   - **Color**: target color picker (HSV), tolerance slider, sample interval
   - **Change**: sensitivity threshold slider, sample interval
   - **Similarity**: reference frame selector (current frame becomes reference), similarity threshold, sample interval
   - **Text**: search string input, fuzzy match threshold, sample interval, language selector
   - **Timelapse**: speedup factor, output format (video/GIF), output resolution
-- [ ] Time range selection: optional in/out markers on the timeline to restrict analysis to a sub-range; default is full video duration
-- [ ] "Run" button to enqueue the configured task
+- [x] Time range selection: optional in/out markers on the timeline to restrict analysis to a sub-range; default is full video duration
+- [x] "Run" button to enqueue the configured task
 
 ### Timeline
 
-- [ ] Horizontal timeline bar showing the full duration of the selected participant's video
-- [ ] Result markers: completed tasks' result timestamps shown as markers/spans on the timeline; color-coded by task type
-- [ ] In/out markers: draggable markers to set analysis time range
-- [ ] Click-to-seek: clicking a point on the timeline updates the video frame viewer to that timestamp
-- [ ] Zoom and pan: ability to zoom into a time range for dense results
+- [x] Horizontal timeline bar showing the full duration of the selected participant's video
+- [x] Result markers: completed tasks' result timestamps shown as markers/spans on the timeline; color-coded by task type
+- [x] In/out markers: draggable markers to set analysis time range
+- [x] Click-to-seek: clicking a point on the timeline updates the video frame viewer to that timestamp
+- [x] Zoom and pan: ability to zoom into a time range for dense results
 
 ### Task queue panel
 
-- [ ] Queue display: list of all tasks (queued, running, completed, failed) with status indicators
-- [ ] Progress bar for the currently running task
+- [x] Queue display: list of all tasks (queued, running, completed, failed) with status indicators
+- [x] Progress bar for the currently running task
 - [ ] Spinner/indeterminate progress when frame count is unknown
 - [ ] Drag-to-reorder queued tasks
-- [ ] Cancel button for queued and running tasks
-- [ ] Click a completed task to load its results onto the timeline
-- [ ] Task detail view: show parameters, region used, result count, timestamps
+- [x] Cancel button for queued and running tasks
+- [x] Click a completed task to load its results onto the timeline
+- [x] Task detail view: show parameters, region used, result count, timestamps
 
 ### Results display
 
-- [ ] Results list: scrollable list of timestamps/spans returned by a completed task
-- [ ] Click a result to seek the video frame viewer to that timestamp
-- [ ] For color/change/similarity tasks: show the match score or change magnitude alongside each timestamp
-- [ ] For text tasks: show the OCR'd text and confidence alongside each timestamp
-- [ ] For timelapse tasks: inline video/GIF player showing the generated timelapse
-- [ ] Export results: button to download results as JSON or CSV
+- [x] Results list: scrollable list of timestamps/spans returned by a completed task
+- [x] Click a result to seek the video frame viewer to that timestamp
+- [x] For color/change/similarity tasks: show the match score or change magnitude alongside each timestamp
+- [x] For text tasks: show the OCR'd text and confidence alongside each timestamp
+- [x] For timelapse tasks: inline video/GIF player showing the generated timelapse
+- [x] Export results: button to download results as JSON or CSV
 
 ---
 

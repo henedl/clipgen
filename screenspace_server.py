@@ -82,7 +82,9 @@ def api_video_frame(participant: str, timestamp: float) -> FlaskResponse:
     """Extract and return a single JPEG frame at the given timestamp."""
     video_path = _find_participant_video(participant)
     if video_path is None:
-        return jsonify({"ok": False, "error": f"No video for participant {participant}"}), 404
+        return jsonify(
+            {"ok": False, "error": f"No video for participant {participant}"}
+        ), 404
 
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
@@ -108,7 +110,9 @@ def api_video_info(participant: str) -> FlaskResponse:
     """Return video metadata (duration, resolution, fps)."""
     video_path = _find_participant_video(participant)
     if video_path is None:
-        return jsonify({"ok": False, "error": f"No video for participant {participant}"}), 404
+        return jsonify(
+            {"ok": False, "error": f"No video for participant {participant}"}
+        ), 404
 
     duration = video.get_file_duration(video_path)
     props = video.probe_video_properties(video_path)
@@ -217,7 +221,9 @@ def api_tasks_create() -> FlaskResponse:
     task_type = data.get("type", "").strip()
     valid_types = ("color", "change", "similarity", "text", "timelapse")
     if task_type not in valid_types:
-        return jsonify({"ok": False, "error": f"type must be one of: {', '.join(valid_types)}"}), 400
+        return jsonify(
+            {"ok": False, "error": f"type must be one of: {', '.join(valid_types)}"}
+        ), 400
 
     participant = data.get("participant", "").strip()
     if not participant:
@@ -233,7 +239,9 @@ def api_tasks_create() -> FlaskResponse:
 
     video_path = _find_participant_video(participant)
     if video_path is None:
-        return jsonify({"ok": False, "error": f"No video for participant {participant}"}), 400
+        return jsonify(
+            {"ok": False, "error": f"No video for participant {participant}"}
+        ), 400
 
     source_video = ""
     for p in _participants:
@@ -243,6 +251,29 @@ def api_tasks_create() -> FlaskResponse:
 
     region_coords = regions[region_name]
     parameters = data.get("parameters", {})
+
+    # Similarity tasks: extract reference frame from video at given timestamp
+    if task_type == "similarity":
+        ref_ts = parameters.get("reference_timestamp")
+        if ref_ts is None:
+            return jsonify(
+                {"ok": False, "error": "Similarity scan requires reference_timestamp"}
+            ), 400
+        cap = cv2.VideoCapture(video_path)
+        if not cap.isOpened():
+            return jsonify(
+                {"ok": False, "error": "Could not open video for reference frame"}
+            ), 500
+        cap.set(cv2.CAP_PROP_POS_MSEC, float(ref_ts) * 1000.0)
+        ret, frame = cap.read()
+        cap.release()
+        if not ret:
+            return jsonify(
+                {"ok": False, "error": "Could not read reference frame"}
+            ), 400
+        ref_region = screenspace.extract_region(frame, region_coords)
+        parameters["reference_frame"] = ref_region
+        parameters.pop("reference_timestamp", None)
 
     task = screenspace.create_task(
         task_type=task_type,
@@ -367,6 +398,4 @@ def _persist_manifest() -> None:
     """Save manifest after a task completes."""
     if _worker:
         tasks = _worker.get_all_tasks()
-        screenspace.save_screenspace_manifest(
-            _manifest.get("regions", {}), tasks
-        )
+        screenspace.save_screenspace_manifest(_manifest.get("regions", {}), tasks)
