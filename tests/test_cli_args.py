@@ -28,6 +28,7 @@ def _base_args(**overrides):
         "spreadsheet": None,
         "viewer": False,
         "titlecards": None,
+        "screenspace": False,
     }
     args.update(overrides)
     return Namespace(**args)

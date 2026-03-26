@@ -279,6 +279,11 @@ Note: Non-interactive mode (using -b, -l, -r, -C, -c, -p, -k, -S, -M, -R, or -T)
         help="Launch the Insights Builder for authoring research findings from generated artifacts",
     )
     viewer_manifest.add_argument(
+        "--screenspace",
+        action="store_true",
+        help="Launch the Screenspace analysis interface for video frame analysis",
+    )
+    viewer_manifest.add_argument(
         "--gallery",
         type=str,
         nargs="?",
@@ -986,12 +991,44 @@ def main() -> None:
             getattr(args, "regenerate", False),
             timeline_viewer,
             studio_mode,
+            getattr(args, "screenspace", False),
         ]
         if any(conflicting):
             utils.error_print(
-                "--insights cannot be combined with mode, format, or --viewer/--regenerate/--studio flags.",
+                "--insights cannot be combined with mode, format, or --viewer/--regenerate/--studio/--screenspace flags.",
                 [
                     "Only -i/-o (directories) and -v (verbose) may be used alongside --insights."
+                ],
+            )
+            sys.exit(1)
+
+    screenspace_mode = getattr(args, "screenspace", False)
+    if screenspace_mode:
+        conflicting = [
+            args.batch,
+            args.lines,
+            args.range,
+            args.category,
+            args.cell,
+            args.participant,
+            args.keyword,
+            args.severity,
+            mixed_selectors,
+            args.reel,
+            args.chronologic,
+            args.screen,
+            args.gif,
+            args.viewer,
+            getattr(args, "regenerate", False),
+            timeline_viewer,
+            studio_mode,
+            insights_mode,
+        ]
+        if any(conflicting):
+            utils.error_print(
+                "--screenspace cannot be combined with mode, format, or --viewer/--regenerate/--studio/--insights flags.",
+                [
+                    "Only -s (spreadsheet), -i/-o (directories), and -v (verbose) may be used alongside --screenspace."
                 ],
             )
             sys.exit(1)
@@ -1014,6 +1051,7 @@ def main() -> None:
             getattr(args, "regenerate", False),
             timeline_viewer,
             studio_mode,
+            screenspace_mode,
         ]
         if any(conflicting):
             utils.error_print(
@@ -1115,6 +1153,15 @@ def main() -> None:
         server.start_combined_server(worksheet=None, default_page="insights")
         sys.exit(0)
 
+    # Standalone screenspace: can work without spreadsheet (discovers videos from input dir)
+    if getattr(args, "screenspace", False) and not args.spreadsheet:
+        import server
+
+        server.start_combined_server(
+            worksheet=None, default_page="screenspace", screenspace=True
+        )
+        sys.exit(0)
+
     # Standalone gallery: generate interval captures + gallery viewer, no spreadsheet needed
     if gallery_arg is not None:
         _run_gallery_cli(args)
@@ -1159,6 +1206,16 @@ def main() -> None:
                 import server
 
                 server.start_combined_server(worksheet=worksheet, default_page="studio")
+                sys.exit(0)
+
+            if getattr(args, "screenspace", False):
+                import server
+
+                server.start_combined_server(
+                    worksheet=worksheet,
+                    default_page="screenspace",
+                    screenspace=True,
+                )
                 sys.exit(0)
 
             # Execute based on mode

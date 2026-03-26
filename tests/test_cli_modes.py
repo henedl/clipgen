@@ -28,6 +28,7 @@ def _args(**overrides):
         verbose=False,
         spreadsheet=None,
         viewer=False,
+        screenspace=False,
     )
     base.update(overrides)
     return Namespace(**base)

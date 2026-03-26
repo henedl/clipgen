@@ -956,15 +956,28 @@ def _init_studio_state(worksheet: Any) -> None:
 # ---- Entry point ----
 
 
+def _resolve_participants() -> Optional[List[str]]:
+    """Extract participant IDs from the loaded sheet context."""
+    if _sheet_context is None:
+        return None
+    return spreadsheet.get_participant_list(
+        _sheet_context.header_row,
+        _sheet_context.id_cell,
+        _sheet_context.num_participants,
+    )
+
+
 def start_combined_server(
     worksheet: Any = None,
     port: Optional[int] = None,
     default_page: str = "studio",
+    screenspace: bool = False,
 ) -> None:
-    """Start a combined Studio + Insights Builder server on one port.
+    """Start a combined Studio + Insights + Screenspace server on one port.
 
     When worksheet is provided, both Studio and Insights are available.
     When worksheet is None, only Insights is registered.
+    Screenspace is registered when the *screenspace* flag is True.
     """
     import insights_server
 
@@ -980,13 +993,32 @@ def start_combined_server(
         _init_studio_state(worksheet)
         combined.register_blueprint(studio_bp, url_prefix="/studio")
 
+    # Register Screenspace if requested
+    has_screenspace = screenspace
+    if has_screenspace:
+        import screenspace_server
+
+        screenspace_server._init_screenspace_state(
+            sheet_context=_sheet_context if has_studio else None,
+            participant_list=_resolve_participants() if has_studio else None,
+        )
+        combined.register_blueprint(
+            screenspace_server.screenspace_bp, url_prefix="/screenspace"
+        )
+
     @combined.route("/")
     def root() -> Response:
         return redirect(f"/{default_page}/")
 
     @combined.route("/api/status")
     def status() -> Response:
-        return jsonify({"studio": has_studio, "insights": True})
+        return jsonify(
+            {
+                "studio": has_studio,
+                "insights": True,
+                "screenspace": has_screenspace,
+            }
+        )
 
     port = port or config.SERVER_PORT
     url = f"http://127.0.0.1:{port}/{default_page}/"
