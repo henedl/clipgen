@@ -360,6 +360,12 @@ body {
   flex-shrink: 0;
 }
 
+.region-hint {
+  font-size: 0.72rem;
+  color: var(--color-text-dim);
+  font-style: italic;
+}
+
 /* Timeline */
 
 #timelineSection {
