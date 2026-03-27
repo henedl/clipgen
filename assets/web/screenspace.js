@@ -42,6 +42,7 @@
     selectedTaskId: null,
     selectedTaskResults: null,
     pollTimer: null,
+    queuePaused: false,
     timelineDragging: false,
     panelHeight: 260,
   };
@@ -105,6 +106,17 @@
     var names = Object.keys(state.regions);
     var idx = names.indexOf(name);
     return idx >= 0 ? regionColorForIndex(idx) : REGION_COLORS[0];
+  }
+
+  function regionToPixels(r) {
+    if (!r.source_width) return r;
+    var canvas = qs("#overlayCanvas");
+    return {
+      x: Math.round(r.x * canvas.width),
+      y: Math.round(r.y * canvas.height),
+      w: Math.round(r.w * canvas.width),
+      h: Math.round(r.h * canvas.height),
+    };
   }
 
   function taskTypeColor(type) {
@@ -411,12 +423,15 @@
       if (!name) return;
       var desc = qs("#regionDescInput").value.trim();
       var r = state.pendingRegion;
-      var body = { name: name, x: r.x, y: r.y, w: r.w, h: r.h };
+      var canvas = qs("#overlayCanvas");
+      var body = { name: name, x: r.x, y: r.y, w: r.w, h: r.h, canvas_width: canvas.width, canvas_height: canvas.height };
       if (desc) body.description = desc;
       apiPost("api/regions", body)
         .then(function (data) {
           if (data.ok) {
-            state.regions[name] = { x: r.x, y: r.y, w: r.w, h: r.h, description: desc };
+            var saved = data.region;
+            if (desc) saved.description = desc;
+            state.regions[name] = saved;
             state.pendingRegion = null;
             state.activeRegion = name;
             renderRegionChips();
@@ -493,15 +508,20 @@
     var ctx = canvas.getContext("2d");
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
+    // Scale factor: canvas pixels per display pixel, so chrome looks
+    // the same physical size regardless of the underlying video resolution.
+    var displayW = canvas.getBoundingClientRect().width || canvas.width;
+    var s = canvas.width / displayW;
+
     // Draw saved regions
     var names = Object.keys(state.regions);
     names.forEach(function (name, i) {
-      var r = state.regions[name];
+      var r = regionToPixels(state.regions[name]);
       var color = regionColorForIndex(i);
       var isActive = (name === state.activeRegion);
       ctx.strokeStyle = color;
-      ctx.lineWidth = isActive ? 3 : 1.5;
-      ctx.setLineDash(isActive ? [] : [8, 4]);
+      ctx.lineWidth = (isActive ? 2 : 1) * s;
+      ctx.setLineDash(isActive ? [] : [6 * s, 3 * s]);
       ctx.strokeRect(r.x, r.y, r.w, r.h);
       if (isActive) {
         ctx.fillStyle = hexToRgba(color, 0.12);
@@ -509,29 +529,32 @@
       }
       ctx.setLineDash([]);
       // Label
-      ctx.font = "bold 13px -apple-system, BlinkMacSystemFont, sans-serif";
-      var labelW = ctx.measureText(name).width + 8;
+      var fontSize = Math.round(12 * s);
+      var labelH = Math.round(16 * s);
+      var pad = Math.round(4 * s);
+      ctx.font = "bold " + fontSize + "px -apple-system, BlinkMacSystemFont, sans-serif";
+      var labelW = ctx.measureText(name).width + pad * 2;
       ctx.fillStyle = hexToRgba(color, 0.85);
-      ctx.fillRect(r.x, r.y - 18, labelW, 18);
+      ctx.fillRect(r.x, r.y - labelH, labelW, labelH);
       ctx.fillStyle = "#fff";
-      ctx.fillText(name, r.x + 4, r.y - 5);
+      ctx.fillText(name, r.x + pad, r.y - Math.round(4 * s));
     });
 
     // Drawing in progress
     if (state.drawingRegion) {
       var d = state.drawingRegion;
       ctx.strokeStyle = "#ffffff";
-      ctx.lineWidth = 2;
-      ctx.setLineDash([4, 4]);
+      ctx.lineWidth = 1.5 * s;
+      ctx.setLineDash([4 * s, 3 * s]);
       ctx.strokeRect(d.startX, d.startY, d.endX - d.startX, d.endY - d.startY);
       ctx.setLineDash([]);
       // Dimensions
       var w = Math.abs(d.endX - d.startX);
       var h = Math.abs(d.endY - d.startY);
       if (w > 20 && h > 20) {
-        ctx.font = "12px " + getComputedStyle(document.documentElement).getPropertyValue("--font-mono").trim();
+        ctx.font = Math.round(11 * s) + "px " + getComputedStyle(document.documentElement).getPropertyValue("--font-mono").trim();
         ctx.fillStyle = "rgba(255,255,255,0.9)";
-        ctx.fillText(w + "\u00d7" + h, Math.min(d.startX, d.endX) + 4, Math.max(d.startY, d.endY) + 16);
+        ctx.fillText(w + "\u00d7" + h, Math.min(d.startX, d.endX) + Math.round(4 * s), Math.max(d.startY, d.endY) + Math.round(14 * s));
       }
     }
 
@@ -539,14 +562,14 @@
     if (state.pendingRegion) {
       var p = state.pendingRegion;
       ctx.strokeStyle = "#ffffff";
-      ctx.lineWidth = 2;
+      ctx.lineWidth = 1.5 * s;
       ctx.setLineDash([]);
       ctx.strokeRect(p.x, p.y, p.w, p.h);
       ctx.fillStyle = "rgba(255, 255, 255, 0.08)";
       ctx.fillRect(p.x, p.y, p.w, p.h);
-      ctx.font = "12px " + getComputedStyle(document.documentElement).getPropertyValue("--font-mono").trim();
+      ctx.font = Math.round(11 * s) + "px " + getComputedStyle(document.documentElement).getPropertyValue("--font-mono").trim();
       ctx.fillStyle = "rgba(255,255,255,0.9)";
-      ctx.fillText(p.w + "\u00d7" + p.h + " px", p.x + 4, p.y + p.h + 16);
+      ctx.fillText(p.w + "\u00d7" + p.h + " px", p.x + Math.round(4 * s), p.y + p.h + Math.round(14 * s));
     }
   }
 
@@ -1078,7 +1101,7 @@
       showToast("Select a saved region first");
       return;
     }
-    var r = state.regions[state.activeRegion];
+    var r = regionToPixels(state.regions[state.activeRegion]);
     var canvas = qs("#frameCanvas");
     var ctx = canvas.getContext("2d");
     var imgData = ctx.getImageData(r.x, r.y, r.w, r.h);
@@ -1277,9 +1300,44 @@
     return svg;
   }
 
+  function svgPauseIcon() {
+    var svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    svg.setAttribute("width", "14");
+    svg.setAttribute("height", "14");
+    svg.setAttribute("viewBox", "0 0 16 16");
+    svg.setAttribute("fill", "currentColor");
+    var p1 = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+    p1.setAttribute("x", "3.5");
+    p1.setAttribute("y", "2");
+    p1.setAttribute("width", "3");
+    p1.setAttribute("height", "12");
+    p1.setAttribute("rx", "1");
+    svg.appendChild(p1);
+    var p2 = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+    p2.setAttribute("x", "9.5");
+    p2.setAttribute("y", "2");
+    p2.setAttribute("width", "3");
+    p2.setAttribute("height", "12");
+    p2.setAttribute("rx", "1");
+    svg.appendChild(p2);
+    return svg;
+  }
+
+  function svgPlayIcon() {
+    var svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    svg.setAttribute("width", "14");
+    svg.setAttribute("height", "14");
+    svg.setAttribute("viewBox", "0 0 16 16");
+    svg.setAttribute("fill", "currentColor");
+    var path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    path.setAttribute("d", "M3 3.732a1 1 0 0 1 1.514-.857l8.07 4.268a1 1 0 0 1 0 1.714l-8.07 4.268A1 1 0 0 1 3 12.268V3.732Z");
+    svg.appendChild(path);
+    return svg;
+  }
+
   function sortTasks() {
     // completed/failed at top (oldest first), then running, then queued (by priority), cancelled last
-    var statusOrder = { completed: 0, failed: 1, running: 2, queued: 3, cancelled: 4 };
+    var statusOrder = { completed: 0, failed: 1, running: 2, paused: 3, queued: 4, cancelled: 5 };
     state.tasks.sort(function (a, b) {
       var sa = statusOrder[a.status] !== undefined ? statusOrder[a.status] : 5;
       var sb = statusOrder[b.status] !== undefined ? statusOrder[b.status] : 5;
@@ -1327,9 +1385,9 @@
         return;
       }
 
-      // Select completed task to view results
+      // Select completed/paused task to view results
       var task = findTask(taskId);
-      if (task && task.status === "completed") {
+      if (task && (task.status === "completed" || task.status === "paused")) {
         state.selectedTaskId = taskId;
         loadAndShowResults(taskId);
         renderTaskList();
@@ -1579,6 +1637,36 @@
     return null;
   }
 
+  function updatePauseButton() {
+    var btn = qs("#taskQueuePauseBtn");
+    if (!btn) return;
+    btn.innerHTML = "";
+    if (state.queuePaused) {
+      btn.appendChild(svgPlayIcon());
+      btn.title = "Resume queue";
+    } else {
+      btn.appendChild(svgPauseIcon());
+      btn.title = "Pause queue";
+    }
+  }
+
+  function initPauseButton() {
+    var btn = qs("#taskQueuePauseBtn");
+    if (!btn) return;
+    updatePauseButton();
+    btn.addEventListener("click", function () {
+      var endpoint = state.queuePaused ? "api/tasks/resume" : "api/tasks/pause";
+      apiPost(endpoint)
+        .then(function (data) {
+          if (data.ok) {
+            state.queuePaused = data.paused;
+            updatePauseButton();
+          }
+        })
+        .catch(function (err) { showToast("Error: " + err.message); });
+    });
+  }
+
   function renderTaskList() {
     sortTasks();
     var container = qs("#taskList");
@@ -1616,7 +1704,7 @@
       meta.textContent = task.participant + " \u00b7 " + (task.region || "");
       info.appendChild(meta);
 
-      if (task.status === "running") {
+      if (task.status === "running" || task.status === "paused") {
         var prog = el("div", "task-card-progress");
         var fill = el("div", "task-card-progress-fill");
         fill.style.width = Math.round((task.progress || 0) * 100) + "%";
@@ -1628,6 +1716,11 @@
       // Status text
       var statusText = task.status;
       if (task.status === "running") statusText = Math.round((task.progress || 0) * 100) + "%";
+      if (task.status === "paused") {
+        var pPct = Math.round((task.progress || 0) * 100);
+        var pLen = Array.isArray(task.result) ? task.result.length : 0;
+        statusText = "paused " + pPct + "%" + (pLen ? " \u00b7 " + pLen + " result" + (pLen !== 1 ? "s" : "") : "");
+      }
       if (task.status === "failed" && task.error) {
         statusText = task.error;
         card.title = task.error;
@@ -1663,7 +1756,7 @@
 
   function pollTasks() {
     var hasActive = state.tasks.some(function (t) {
-      return t.status === "queued" || t.status === "running";
+      return t.status === "queued" || t.status === "running" || t.status === "paused";
     });
     if (!hasActive) {
       clearInterval(state.pollTimer);
@@ -1678,6 +1771,10 @@
         var oldTask = oldSelected ? findTask(oldSelected) : null;
         var wasRunning = oldTask && (oldTask.status === "queued" || oldTask.status === "running");
         state.tasks = data.tasks;
+        if (data.paused !== undefined) {
+          state.queuePaused = data.paused;
+          updatePauseButton();
+        }
         renderTaskList();
         renderTimeline();
         // Auto-load results when selected task completes
@@ -1929,6 +2026,7 @@
     initWorkflowTabs();
     initRunButton();
     initTaskQueue();
+    initPauseButton();
     initResultsPanel();
     initPanelDivider();
     initKeyboard();
