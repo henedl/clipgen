@@ -52,6 +52,7 @@
     previewMaxWidth: 100,
     taskFilter: null,
     pipetteActive: false,
+    runParticipants: [],
   };
 
   // ---- Helpers ----
@@ -250,7 +251,79 @@
     });
   }
 
-  function selectParticipant(pid) {
+  function renderRunParticipantPicker() {
+    var wrap = qs("#runParticipantPicker");
+    if (!wrap) return;
+    wrap.innerHTML = "";
+    if (state.participants.length <= 1) return;
+
+    var btn = el("button", "run-picker-btn");
+    btn.type = "button";
+    updatePickerBtnText(btn);
+
+    var panel = el("div", "run-picker-panel hidden");
+
+    var toggleAll = el("span", "run-picker-toggle-all");
+    toggleAll.textContent = state.runParticipants.length === state.participants.length ? "Deselect all" : "Select all";
+    toggleAll.addEventListener("click", function () {
+      var allSelected = state.runParticipants.length === state.participants.length;
+      state.runParticipants = allSelected ? [] : state.participants.map(function (p) { return p.id; });
+      var cbs = panel.querySelectorAll("input[type=checkbox]");
+      for (var i = 0; i < cbs.length; i++) cbs[i].checked = !allSelected;
+      toggleAll.textContent = allSelected ? "Select all" : "Deselect all";
+      updatePickerBtnText(btn);
+      updateRunButton();
+    });
+    panel.appendChild(toggleAll);
+
+    state.participants.forEach(function (p) {
+      var lbl = document.createElement("label");
+      var cb = document.createElement("input");
+      cb.type = "checkbox";
+      cb.value = p.id;
+      cb.checked = state.runParticipants.indexOf(p.id) >= 0;
+      cb.addEventListener("change", function () {
+        if (cb.checked) {
+          if (state.runParticipants.indexOf(p.id) < 0) state.runParticipants.push(p.id);
+        } else {
+          state.runParticipants = state.runParticipants.filter(function (id) { return id !== p.id; });
+        }
+        toggleAll.textContent = state.runParticipants.length === state.participants.length ? "Deselect all" : "Select all";
+        updatePickerBtnText(btn);
+        updateRunButton();
+      });
+      lbl.appendChild(cb);
+      lbl.appendChild(document.createTextNode(p.id));
+      panel.appendChild(lbl);
+    });
+
+    btn.addEventListener("click", function (e) {
+      e.stopPropagation();
+      var open = !panel.classList.contains("hidden");
+      panel.classList.toggle("hidden", open);
+      btn.classList.toggle("open", !open);
+    });
+
+    wrap.appendChild(btn);
+    wrap.appendChild(panel);
+  }
+
+  function updatePickerBtnText(btn) {
+    var n = state.runParticipants.length;
+    var text = n === 0 ? "No participants"
+      : n === 1 ? state.runParticipants[0]
+      : n + " participants";
+    btn.innerHTML = text + ' <span class="chevron">&#x25BE;</span>';
+  }
+
+  function closeRunPicker() {
+    var panel = qs(".run-picker-panel");
+    var btn = qs(".run-picker-btn");
+    if (panel) panel.classList.add("hidden");
+    if (btn) btn.classList.remove("open");
+  }
+
+  function selectParticipant(pid, initialTimestamp) {
     state.selectedParticipant = pid;
     state.currentTimestamp = 0;
     state.videoInfo = null;
@@ -269,7 +342,7 @@
         if (data.info.fps) parts.push(Math.round(data.info.fps) + "fps");
         qs("#videoInfo").textContent = parts.join(" \u00b7 ");
         renderTimeline();
-        loadFrame(0);
+        loadFrame(initialTimestamp !== undefined ? initialTimestamp : 0);
       })
       .catch(function () { showToast("Failed to load video info"); });
   }
@@ -1639,12 +1712,12 @@
   function updateRunButton() {
     var btn = qs("#runBtn");
     var hasRegion = !!state.activeRegion;
-    var hasParticipant = !!state.selectedParticipant;
-    btn.disabled = !hasRegion || !hasParticipant;
+    var hasParticipants = state.runParticipants.length > 0 || !!state.selectedParticipant;
+    btn.disabled = !hasRegion || !hasParticipants;
     if (!hasRegion) {
       btn.setAttribute("data-tooltip", "Select a region first");
-    } else if (!hasParticipant) {
-      btn.setAttribute("data-tooltip", "Select a participant first");
+    } else if (!hasParticipants) {
+      btn.setAttribute("data-tooltip", "Select participants to run");
     } else {
       btn.removeAttribute("data-tooltip");
     }
@@ -1654,7 +1727,12 @@
 
   function initRunButton() {
     qs("#runBtn").addEventListener("click", function () {
-      if (!state.activeRegion || !state.selectedParticipant) return;
+      if (!state.activeRegion) return;
+      var participants = state.runParticipants.length > 0
+        ? state.runParticipants
+        : (state.selectedParticipant ? [state.selectedParticipant] : []);
+      if (participants.length === 0) return;
+
       var type = state.activeWorkflow;
       var params = gatherWorkflowParams(type);
       if (params === null) return;
@@ -1662,25 +1740,29 @@
       if (state.inMarker !== null) params.start_seconds = state.inMarker;
       if (state.outMarker !== null) params.end_seconds = state.outMarker;
 
-      var body = {
-        type: type,
-        participant: state.selectedParticipant,
-        region: state.activeRegion,
-        parameters: params,
-      };
-
-      apiPost("api/tasks", body)
-        .then(function (data) {
-          if (data.ok) {
-            state.tasks.push(data.task);
-            renderTaskList();
-            showToast("Task queued: " + type);
-            startPolling();
-          } else {
-            showToast(data.error || "Failed to create task");
-          }
-        })
-        .catch(function (err) { showToast("Error: " + err.message); });
+      var chain = Promise.resolve();
+      participants.forEach(function (pid) {
+        chain = chain.then(function () {
+          var body = {
+            type: type,
+            participant: pid,
+            region: state.activeRegion,
+            parameters: params,
+          };
+          return apiPost("api/tasks", body).then(function (data) {
+            if (data.ok) {
+              state.tasks.push(data.task);
+              renderTaskList();
+            } else {
+              showToast(data.error || "Failed to create task for " + pid);
+            }
+          });
+        });
+      });
+      chain.then(function () {
+        showToast(participants.length + " task" + (participants.length !== 1 ? "s" : "") + " queued: " + type);
+        startPolling();
+      }).catch(function (err) { showToast("Error: " + err.message); });
     });
   }
 
@@ -1909,6 +1991,9 @@
           renderTaskList();
           renderTimeline();
         } else {
+          if (task.participant && task.participant !== state.selectedParticipant) {
+            selectParticipant(task.participant);
+          }
           state.selectedTaskId = taskId;
           loadAndShowResults(taskId);
           renderTaskList();
@@ -2388,7 +2473,13 @@
       var row = e.target.closest(".result-row");
       if (!row || !row.dataset.timestamp) return;
       var ts = parseFloat(row.dataset.timestamp);
-      if (!isNaN(ts)) loadFrame(ts);
+      if (isNaN(ts)) return;
+      var task = state.selectedTaskId ? findTask(state.selectedTaskId) : null;
+      if (task && task.participant && task.participant !== state.selectedParticipant) {
+        selectParticipant(task.participant, ts);
+        return;
+      }
+      loadFrame(ts);
     });
 
     qs("#exportJsonBtn").addEventListener("click", function () { exportResults("json"); });
@@ -2715,7 +2806,16 @@
     // Participant select
     qs("#participantSelect").addEventListener("change", function () {
       var pid = this.value;
-      if (pid) selectParticipant(pid);
+      if (pid) {
+        selectParticipant(pid);
+        state.runParticipants = [pid];
+        renderRunParticipantPicker();
+      }
+    });
+
+    // Close run picker on outside click
+    document.addEventListener("click", function (e) {
+      if (!e.target.closest(".run-picker-wrap")) closeRunPicker();
     });
 
     // Load initial data
@@ -2725,8 +2825,11 @@
         state.participants = (data.participants || []).filter(function (p) { return p.has_video; });
         renderParticipantSelect();
         if (state.participants.length > 0) {
-          selectParticipant(state.participants[0].id);
+          var first = state.participants[0].id;
+          selectParticipant(first);
+          state.runParticipants = [first];
         }
+        renderRunParticipantPicker();
       })
       .catch(function () { showToast("Failed to load participants"); });
 

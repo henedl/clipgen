@@ -536,6 +536,87 @@ body {
   align-self: flex-end;
 }
 
+/* Run participant picker */
+
+.run-picker-wrap {
+  position: relative;
+}
+
+.run-picker-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: calc(var(--radius) - 2px);
+  padding: 0.25rem 0.5rem;
+  font-size: 0.72rem;
+  color: var(--color-text);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.run-picker-btn:hover {
+  border-color: var(--color-accent);
+}
+
+.run-picker-btn .chevron {
+  font-size: 0.6rem;
+  color: var(--color-text-dim);
+  transition: transform 0.15s;
+}
+
+.run-picker-btn.open .chevron {
+  transform: rotate(180deg);
+}
+
+.run-picker-panel {
+  position: absolute;
+  bottom: calc(100% + 4px);
+  left: 0;
+  z-index: 20;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.12);
+  padding: 0.3rem 0;
+  min-width: 8rem;
+  max-height: 14rem;
+  overflow-y: auto;
+}
+
+.run-picker-panel label {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.25rem 0.5rem;
+  cursor: pointer;
+  font-size: 0.75rem;
+  white-space: nowrap;
+}
+
+.run-picker-panel label:hover {
+  background: var(--color-selected);
+}
+
+.run-picker-panel input[type="checkbox"] {
+  margin: 0;
+  flex-shrink: 0;
+}
+
+.run-picker-toggle-all {
+  font-size: 0.68rem;
+  color: var(--color-accent);
+  cursor: pointer;
+  padding: 0.2rem 0.5rem;
+  border-bottom: 1px solid var(--color-border);
+  display: block;
+}
+
+.run-picker-toggle-all:hover {
+  text-decoration: underline;
+}
+
 #workflowParams {
   display: flex;
   flex-direction: column;
@@ -1368,6 +1449,10 @@ html[data-theme="dark"] .btn-primary:hover {
 
 html[data-theme="dark"] .region-chip.active {
   background: rgba(255, 255, 255, 0.08);
+}
+
+html[data-theme="dark"] .run-picker-panel {
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
 }
 
 /* Responsive */
