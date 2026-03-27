@@ -13,6 +13,7 @@ import json
 import queue
 import re
 import threading
+import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -651,6 +652,7 @@ TASK_STATUS_RUNNING = "running"
 TASK_STATUS_COMPLETED = "completed"
 TASK_STATUS_FAILED = "failed"
 TASK_STATUS_CANCELLED = "cancelled"
+TASK_STATUS_PAUSED = "paused"
 
 _SENTINEL = object()
 
@@ -694,6 +696,7 @@ class ScreenspaceWorker:
         self._lock = threading.Lock()
         self._thread: Optional[threading.Thread] = None
         self._running = False
+        self._paused = threading.Event()
         self.on_task_complete: Optional[Callable[[], None]] = None
 
     def start(self) -> None:
@@ -718,12 +721,12 @@ class ScreenspaceWorker:
         return task_id
 
     def cancel(self, task_id: str) -> bool:
-        """Cancel a queued or running task. Returns True if cancelled."""
+        """Cancel a queued, running, or paused task. Returns True if cancelled."""
         with self._lock:
             task = self._tasks.get(task_id)
             if task is None:
                 return False
-            if task["status"] == TASK_STATUS_QUEUED:
+            if task["status"] in (TASK_STATUS_QUEUED, TASK_STATUS_PAUSED):
                 task["status"] = TASK_STATUS_CANCELLED
                 return True
             if task["status"] == TASK_STATUS_RUNNING:
@@ -757,6 +760,54 @@ class ScreenspaceWorker:
                     task["priority"] = i + 1
         return True
 
+    @property
+    def is_paused(self) -> bool:
+        """Return whether the queue is paused."""
+        return self._paused.is_set()
+
+    def pause(self) -> None:
+        """Pause the queue. Stops the running task so it yields partial results."""
+        self._paused.set()
+        with self._lock:
+            for task in self._tasks.values():
+                if task["status"] == TASK_STATUS_RUNNING:
+                    task["_paused_flag"] = True
+
+    def resume(self) -> None:
+        """Resume the queue. Re-enqueues paused tasks from where they left off."""
+        self._paused.clear()
+        to_resume: List[Dict[str, Any]] = []
+        with self._lock:
+            for task in self._tasks.values():
+                if task["status"] == TASK_STATUS_PAUSED:
+                    to_resume.append(task)
+
+        for task in to_resume:
+            progress = task.get("progress", 0.0)
+            params = task.get("parameters", {})
+            start = params.get("start_seconds", 0.0)
+            end = params.get("end_seconds")
+            if end is None:
+                cap = cv2.VideoCapture(task["video_path"])
+                fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+                total = cap.get(cv2.CAP_PROP_FRAME_COUNT)
+                end = total / fps if fps > 0 else 0.0
+                cap.release()
+            resume_at = start + progress * (end - start)
+
+            with self._lock:
+                task["_partial_results"] = task.get("result", [])
+                task["_progress_offset"] = progress
+                task["_progress_scale"] = max(1.0 - progress, 0.001)
+                task.pop("result", None)
+                task.pop("_paused_flag", None)
+                params["start_seconds"] = resume_at
+                task["status"] = TASK_STATUS_QUEUED
+
+            self._queue.put(
+                (task.get("priority", 100), task["created_at"], task["id"])
+            )
+
     def remove_task(self, task_id: str) -> bool:
         """Cancel (if active) and fully remove a task."""
         with self._lock:
@@ -772,11 +823,17 @@ class ScreenspaceWorker:
         """Worker loop."""
         while self._running:
             try:
-                _, _, task_id = self._queue.get(timeout=1)
+                item = self._queue.get(timeout=1)
             except queue.Empty:
                 continue
+            priority, created_at, task_id = item
             if task_id is _SENTINEL:
                 break
+
+            if self._paused.is_set():
+                self._queue.put(item)
+                time.sleep(0.25)
+                continue
 
             with self._lock:
                 task = self._tasks.get(task_id)
@@ -796,25 +853,37 @@ class ScreenspaceWorker:
         def _on_progress(progress: float) -> None:
             with self._lock:
                 t = self._tasks.get(task_id)
-                if t:
-                    t["progress"] = min(progress, 1.0)
+                if t and not t.get("_paused_flag"):
+                    offset = t.get("_progress_offset", 0.0)
+                    scale = t.get("_progress_scale", 1.0)
+                    t["progress"] = min(offset + progress * scale, 1.0)
 
         def _cancel_flag() -> bool:
             with self._lock:
                 t = self._tasks.get(task_id)
-                return bool(t and t.get("_cancelled"))
+                return bool(
+                    t and (t.get("_cancelled") or t.get("_paused_flag"))
+                )
 
         try:
             result = self._dispatch(task, _on_progress, _cancel_flag)
             with self._lock:
                 t = self._tasks.get(task_id)
                 if t:
-                    if t.get("_cancelled"):
+                    if t.get("_paused_flag"):
+                        t["status"] = TASK_STATUS_PAUSED
+                        t["result"] = result
+                    elif t.get("_cancelled"):
                         t["status"] = TASK_STATUS_CANCELLED
                     else:
                         t["status"] = TASK_STATUS_COMPLETED
+                        partial = t.pop("_partial_results", None)
+                        if partial and isinstance(result, list):
+                            result = partial + result
                         t["result"] = result
                         t["progress"] = 1.0
+                        t.pop("_progress_offset", None)
+                        t.pop("_progress_scale", None)
                     t["completed_at"] = datetime.now(timezone.utc).isoformat()
         except Exception as exc:
             with self._lock:

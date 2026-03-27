@@ -194,7 +194,8 @@ def api_tasks_list() -> FlaskResponse:
     """List all tasks with status and progress."""
     tasks = _worker.get_all_tasks() if _worker else []
     clean = [_clean_task(t) for t in tasks]
-    return jsonify({"ok": True, "tasks": clean})
+    paused = _worker.is_paused if _worker else False
+    return jsonify({"ok": True, "tasks": clean, "paused": paused})
 
 
 @screenspace_bp.route("/api/tasks/<task_id>")
@@ -318,6 +319,24 @@ def api_tasks_reorder() -> FlaskResponse:
         return jsonify({"ok": False, "error": "task_ids list required"}), 400
     _worker.reorder(data["task_ids"])
     return jsonify({"ok": True})
+
+
+@screenspace_bp.route("/api/tasks/pause", methods=["POST"])
+def api_tasks_pause() -> FlaskResponse:
+    """Pause the task queue."""
+    if not _worker:
+        return jsonify({"ok": False, "error": "Worker not initialized"}), 500
+    _worker.pause()
+    return jsonify({"ok": True, "paused": True})
+
+
+@screenspace_bp.route("/api/tasks/resume", methods=["POST"])
+def api_tasks_resume() -> FlaskResponse:
+    """Resume the task queue."""
+    if not _worker:
+        return jsonify({"ok": False, "error": "Worker not initialized"}), 500
+    _worker.resume()
+    return jsonify({"ok": True, "paused": False})
 
 
 @screenspace_bp.route("/api/tasks/<task_id>/results")
