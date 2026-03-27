@@ -528,8 +528,12 @@ body {
 #workflowBody {
   display: flex;
   flex-direction: column;
-  gap: 0.6rem;
+  gap: 0.4rem;
   padding: 0.6rem 0;
+}
+
+#runBtn {
+  align-self: flex-end;
 }
 
 #workflowParams {
@@ -538,6 +542,7 @@ body {
   gap: 0.25rem;
   flex: 1;
   min-height: 0;
+  min-width: 0;
   overflow-y: auto;
 }
 
@@ -558,6 +563,8 @@ body {
   display: flex;
   align-items: center;
   gap: 0.4rem;
+  flex: 1;
+  min-width: 0;
 }
 
 .param-control input[type="range"] {
@@ -582,7 +589,8 @@ body {
 }
 
 .param-control input[type="text"] {
-  width: 12rem;
+  flex: 1;
+  min-width: 0;
 }
 
 .param-value {
@@ -679,8 +687,8 @@ body {
   content: attr(data-tooltip);
   position: absolute;
   bottom: calc(100% + 6px);
-  left: 50%;
-  transform: translateX(-50%);
+  right: 0;
+  left: auto;
   padding: 0.3rem 0.6rem;
   background: var(--color-text);
   color: var(--color-bg);
