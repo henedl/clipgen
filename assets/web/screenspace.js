@@ -42,6 +42,7 @@
     selectedTaskResults: null,
     pollTimer: null,
     timelineDragging: false,
+    panelHeight: 260,
   };
 
   // ---- Helpers ----
@@ -247,8 +248,6 @@
         if (data.info.width && data.info.height) parts.push(data.info.width + "x" + data.info.height);
         if (data.info.fps) parts.push(Math.round(data.info.fps) + "fps");
         qs("#videoInfo").textContent = parts.join(" \u00b7 ");
-        qs("#timestampSlider").max = data.info.duration || 100;
-        qs("#timestampSlider").value = 0;
         renderTimeline();
         loadFrame(0);
       })
@@ -262,7 +261,6 @@
     if (state.frameLoading) return;
     state.frameLoading = true;
     state.currentTimestamp = timestamp;
-    qs("#timestampSlider").value = timestamp;
     qs("#timestampInput").value = formatTimestamp(timestamp);
 
     var img = new Image();
@@ -290,13 +288,7 @@
   }
 
   function initFrameControls() {
-    var slider = qs("#timestampSlider");
     var input = qs("#timestampInput");
-
-    slider.addEventListener("input", function () {
-      var ts = parseFloat(slider.value);
-      if (!isNaN(ts)) loadFrame(ts);
-    });
 
     input.addEventListener("change", function () {
       var ts = parseTimestampInput(input.value);
@@ -585,7 +577,6 @@
       var mouseTs = timelineXToTime(e);
       var oldZoom = state.timelineZoom;
       state.timelineZoom = clamp(oldZoom * zoomFactor, 1, 200);
-      // Keep mouse position stable
       if (mouseTs !== null && state.timelineZoom > 1) {
         var rect = canvas.getBoundingClientRect();
         var frac = (e.clientX - rect.left) / rect.width;
@@ -597,12 +588,25 @@
     }, { passive: false });
 
     var dragStart = null;
+    var scrubbing = false;
     canvas.addEventListener("mousedown", function (e) {
-      if (state.timelineZoom <= 1) return;
-      dragStart = { x: e.clientX, offset: state.timelineOffset };
-      state.timelineDragging = false;
+      if (state.timelineZoom > 1) {
+        // Zoomed in: drag to pan
+        dragStart = { x: e.clientX, offset: state.timelineOffset };
+        state.timelineDragging = false;
+      } else {
+        // Not zoomed: drag to scrub
+        scrubbing = true;
+        var ts = timelineXToTime(e);
+        if (ts !== null) loadFrame(ts);
+      }
     });
     document.addEventListener("mousemove", function (e) {
+      if (scrubbing) {
+        var ts = timelineXToTime(e);
+        if (ts !== null) loadFrame(ts);
+        return;
+      }
       if (!dragStart) return;
       var dx = e.clientX - dragStart.x;
       if (Math.abs(dx) > 3) state.timelineDragging = true;
@@ -615,6 +619,7 @@
       renderTimeline();
     });
     document.addEventListener("mouseup", function () {
+      scrubbing = false;
       if (dragStart) {
         setTimeout(function () { state.timelineDragging = false; }, 50);
         dragStart = null;
@@ -667,7 +672,7 @@
 
   function sizeTimelineCanvas() {
     var canvas = qs("#timelineCanvas");
-    var rect = canvas.parentElement.getBoundingClientRect();
+    var rect = canvas.getBoundingClientRect();
     canvas.width = Math.floor(rect.width);
     canvas.height = 64;
     renderTimeline();
@@ -1460,6 +1465,61 @@
     });
   }
 
+  // ---- Panel divider ----
+
+  function initPanelDivider() {
+    var handle = qs("#panelDivider");
+    var panel = qs("#bottomPanel");
+    if (!handle || !panel) return;
+    var dragging = false;
+    var startY = 0;
+    var startHeight = 0;
+
+    var MIN_H = 120;
+    var MAX_H = Math.round(window.innerHeight * 0.6);
+
+    function onDown(e) {
+      e.preventDefault();
+      dragging = true;
+      startY = e.clientY || (e.touches && e.touches[0].clientY) || 0;
+      startHeight = state.panelHeight;
+      handle.classList.add("active");
+      document.body.style.cursor = "row-resize";
+      document.body.style.userSelect = "none";
+    }
+
+    handle.addEventListener("mousedown", onDown);
+    handle.addEventListener("touchstart", onDown, { passive: false });
+
+    var rafPending = false;
+
+    function onMove(e) {
+      if (!dragging || rafPending) return;
+      rafPending = true;
+      var clientY = e.clientY || (e.touches && e.touches[0].clientY) || 0;
+      requestAnimationFrame(function () {
+        var delta = startY - clientY;
+        state.panelHeight = Math.max(MIN_H, Math.min(MAX_H, startHeight + delta));
+        panel.style.height = state.panelHeight + "px";
+        rafPending = false;
+      });
+    }
+
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("touchmove", onMove, { passive: false });
+
+    function onUp() {
+      if (!dragging) return;
+      dragging = false;
+      handle.classList.remove("active");
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+    }
+
+    document.addEventListener("mouseup", onUp);
+    document.addEventListener("touchend", onUp);
+  }
+
   // ---- Init ----
 
   document.addEventListener("DOMContentLoaded", function () {
@@ -1471,6 +1531,7 @@
     initRunButton();
     initTaskQueue();
     initResultsPanel();
+    initPanelDivider();
     initKeyboard();
     checkNavLinks();
 
