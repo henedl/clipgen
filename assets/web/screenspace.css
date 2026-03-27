@@ -27,6 +27,7 @@
   --color-task-change: #f97316;
   --color-task-similarity: #0ea5e9;
   --color-task-text: #10b981;
+  --color-task-numbers: #eab308;
   --color-task-timelapse: #ec4899;
 }
 
@@ -425,6 +426,9 @@ body {
 }
 
 .wf-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
   padding: 0.35rem 0.6rem;
   border: none;
   border-bottom: 2px solid transparent;
@@ -436,14 +440,50 @@ body {
   transition: color 0.15s, border-color 0.15s;
 }
 
-.wf-tab:hover {
-  color: var(--color-text);
+.wf-tab svg {
+  width: 12px;
+  height: 12px;
+  flex-shrink: 0;
 }
 
 .wf-tab.active {
-  color: var(--color-accent);
-  border-bottom-color: var(--color-accent);
   font-weight: 600;
+}
+
+.wf-tab[data-type="color"]:hover,
+.wf-tab[data-type="color"].active {
+  color: var(--color-task-color);
+  border-bottom-color: var(--color-task-color);
+}
+
+.wf-tab[data-type="change"]:hover,
+.wf-tab[data-type="change"].active {
+  color: var(--color-task-change);
+  border-bottom-color: var(--color-task-change);
+}
+
+.wf-tab[data-type="similarity"]:hover,
+.wf-tab[data-type="similarity"].active {
+  color: var(--color-task-similarity);
+  border-bottom-color: var(--color-task-similarity);
+}
+
+.wf-tab[data-type="text"]:hover,
+.wf-tab[data-type="text"].active {
+  color: var(--color-task-text);
+  border-bottom-color: var(--color-task-text);
+}
+
+.wf-tab[data-type="numbers"]:hover,
+.wf-tab[data-type="numbers"].active {
+  color: var(--color-task-numbers);
+  border-bottom-color: var(--color-task-numbers);
+}
+
+.wf-tab[data-type="timelapse"]:hover,
+.wf-tab[data-type="timelapse"].active {
+  color: var(--color-task-timelapse);
+  border-bottom-color: var(--color-task-timelapse);
 }
 
 #workflowBody {
@@ -1077,6 +1117,7 @@ body {
     --color-task-change: #fb923c;
     --color-task-similarity: #22d3ee;
     --color-task-text: #34d399;
+    --color-task-numbers: #facc15;
     --color-task-timelapse: #f472b6;
   }
 }
@@ -1100,6 +1141,7 @@ html[data-theme="dark"] {
   --color-task-change: #fb923c;
   --color-task-similarity: #22d3ee;
   --color-task-text: #34d399;
+  --color-task-numbers: #facc15;
   --color-task-timelapse: #f472b6;
 }
 
