@@ -111,7 +111,11 @@
     <div id="taskQueuePanel">
       <div class="panel-header">
         <h3>Task Queue <span id="taskCount">(0)</span></h3>
-        <button id="taskQueuePauseBtn" class="panel-header-btn" title="Pause queue"></button>
+        <div class="panel-header-actions">
+          <button id="taskFilterDoneBtn" class="panel-header-btn task-filter-btn" title="Show completed" data-filter="completed"></button>
+          <button id="taskFilterFailedBtn" class="panel-header-btn task-filter-btn" title="Show failed" data-filter="failed"></button>
+          <button id="taskQueuePauseBtn" class="panel-header-btn" title="Pause queue"></button>
+        </div>
       </div>
       <div id="taskList">
         <div class="panel-empty">No tasks yet. Configure a workflow and click Run.</div>

@@ -47,6 +47,7 @@
     timelineDragging: false,
     panelHeight: 260,
     previewMaxWidth: 100,
+    taskFilter: null,
   };
 
   // ---- Helpers ----
@@ -1344,6 +1345,21 @@
     return svg;
   }
 
+  function svgCheckIcon() {
+    var svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    svg.setAttribute("width", "14");
+    svg.setAttribute("height", "14");
+    svg.setAttribute("viewBox", "0 0 16 16");
+    svg.setAttribute("fill", "currentColor");
+    // check.svg from assets/icons
+    var path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    path.setAttribute("fill-rule", "evenodd");
+    path.setAttribute("clip-rule", "evenodd");
+    path.setAttribute("d", "M12.416 3.37592C12.7607 3.60568 12.8538 4.07134 12.624 4.41598L7.62404 11.916C7.4994 12.1029 7.2975 12.2242 7.0739 12.2463C6.8503 12.2684 6.62855 12.1892 6.46967 12.0303L3.46967 9.03029C3.17678 8.73739 3.17678 8.26252 3.46967 7.96963C3.76256 7.67673 4.23744 7.67673 4.53033 7.96963L6.88343 10.3227L11.376 3.58393C11.6057 3.23929 12.0714 3.14616 12.416 3.37592Z");
+    svg.appendChild(path);
+    return svg;
+  }
+
   function sortTasks() {
     // completed/failed at top (oldest first), then running, then queued (by priority), cancelled last
     var statusOrder = { completed: 0, failed: 1, running: 2, paused: 3, queued: 4, cancelled: 5 };
@@ -1710,17 +1726,51 @@
     });
   }
 
+  function initTaskFilters() {
+    var doneBtn = qs("#taskFilterDoneBtn");
+    var failedBtn = qs("#taskFilterFailedBtn");
+    if (doneBtn) {
+      doneBtn.appendChild(svgCheckIcon());
+      doneBtn.addEventListener("click", function () { toggleTaskFilter("completed"); });
+    }
+    if (failedBtn) {
+      failedBtn.appendChild(svgDismissIcon());
+      failedBtn.addEventListener("click", function () { toggleTaskFilter("failed"); });
+    }
+  }
+
+  function toggleTaskFilter(status) {
+    state.taskFilter = state.taskFilter === status ? null : status;
+    updateTaskFilterButtons();
+    renderTaskList();
+  }
+
+  function updateTaskFilterButtons() {
+    var doneBtn = qs("#taskFilterDoneBtn");
+    var failedBtn = qs("#taskFilterFailedBtn");
+    if (doneBtn) doneBtn.classList.toggle("active", state.taskFilter === "completed");
+    if (failedBtn) failedBtn.classList.toggle("active", state.taskFilter === "failed");
+  }
+
   function renderTaskList() {
     sortTasks();
     var container = qs("#taskList");
     var count = qs("#taskCount");
-    count.textContent = "(" + state.tasks.length + ")";
+    var filtered = state.taskFilter
+      ? state.tasks.filter(function (t) { return t.status === state.taskFilter; })
+      : state.tasks;
+    count.textContent = "(" + filtered.length + ")";
+    updateTaskFilterButtons();
     if (state.tasks.length === 0) {
       container.innerHTML = '<div class="panel-empty">No tasks yet. Configure a workflow and click Run.</div>';
       return;
     }
+    if (filtered.length === 0) {
+      container.innerHTML = '<div class="panel-empty">No ' + state.taskFilter + ' tasks.</div>';
+      return;
+    }
     container.innerHTML = "";
-    state.tasks.forEach(function (task) {
+    filtered.forEach(function (task) {
       var card = el("div", "task-card task-card-" + task.status);
       card.dataset.taskId = task.id;
       if (task.id === state.selectedTaskId) card.classList.add("selected");
@@ -2137,6 +2187,7 @@
     initRunButton();
     initTaskQueue();
     initPauseButton();
+    initTaskFilters();
     initResultsPanel();
     initPanelDivider();
     initPreviewResize();
