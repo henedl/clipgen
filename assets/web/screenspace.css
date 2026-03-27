@@ -748,6 +748,13 @@ body {
 .task-card-failed {
   border-left-color: #dc2626;
 }
+.task-card-failed .task-card-status {
+  color: #dc2626;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 120px;
+}
 
 .task-card-cancelled {
   border-left-color: var(--color-text-dim);
