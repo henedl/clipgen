@@ -219,7 +219,7 @@ def api_tasks_create() -> FlaskResponse:
         return jsonify({"ok": False, "error": "JSON body required"}), 400
 
     task_type = data.get("type", "").strip()
-    valid_types = ("color", "change", "similarity", "text", "timelapse")
+    valid_types = ("color", "change", "similarity", "text", "numbers", "timelapse")
     if task_type not in valid_types:
         return jsonify(
             {"ok": False, "error": f"type must be one of: {', '.join(valid_types)}"}

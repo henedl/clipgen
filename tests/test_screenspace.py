@@ -324,3 +324,55 @@ class TestScreenspaceWorker:
     def test_get_task_returns_none_for_unknown(self):
         worker = screenspace.ScreenspaceWorker()
         assert worker.get_task("ss_unknown") is None
+
+
+class TestScanNumbers:
+    def test_unknown_operator_raises(self):
+        with pytest.raises(ValueError, match="Unknown.*operator"):
+            screenspace.scan_numbers(
+                "/nonexistent.mp4",
+                {"x": 0, "y": 0, "w": 10, "h": 10},
+                operator="invalid",
+                target_value=100,
+            )
+
+    def test_valid_operators_accepted(self):
+        for op in ("eq", "gt", "lt", "gte", "lte", "range"):
+            # Should not raise ValueError -- returns [] because video doesn't exist
+            result = screenspace.scan_numbers(
+                "/nonexistent.mp4",
+                {"x": 0, "y": 0, "w": 10, "h": 10},
+                operator=op,
+                target_value=100,
+                range_min=0,
+                range_max=200,
+            )
+            assert result == []
+
+    def test_dispatch_routes_numbers(self):
+        worker = screenspace.ScreenspaceWorker()
+        task = screenspace.create_task(
+            "numbers",
+            "P01",
+            "s_P01.mp4",
+            "/nonexistent.mp4",
+            "r",
+            {"x": 0, "y": 0, "w": 10, "h": 10},
+            parameters={"operator": "gt", "target_value": 50},
+        )
+        # Should not raise -- dispatches to scan_numbers, returns [] for bad video
+        result = worker._dispatch(task, lambda p: None, lambda: False)
+        assert result == []
+
+    def test_dispatch_unknown_type_raises(self):
+        worker = screenspace.ScreenspaceWorker()
+        task = screenspace.create_task(
+            "bogus",
+            "P01",
+            "s.mp4",
+            "/v.mp4",
+            "r",
+            {"x": 0, "y": 0, "w": 1, "h": 1},
+        )
+        with pytest.raises(ValueError, match="Unknown task type"):
+            worker._dispatch(task, lambda p: None, lambda: False)

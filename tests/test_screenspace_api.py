@@ -174,6 +174,23 @@ def test_create_task_no_video(client):
     assert "video" in resp.get_json()["error"].lower()
 
 
+def test_create_task_numbers_type_accepted(client):
+    """'numbers' passes type validation (fails at video check, not type check)."""
+    screenspace_server._manifest["regions"]["r"] = {
+        "x": 0,
+        "y": 0,
+        "w": 10,
+        "h": 10,
+    }
+    resp = client.post(
+        "/screenspace/api/tasks",
+        json={"type": "numbers", "participant": "P01", "region": "r"},
+    )
+    data = resp.get_json()
+    assert resp.status_code == 400
+    assert "video" in data["error"].lower()
+
+
 def test_get_task_not_found(client):
     resp = client.get("/screenspace/api/tasks/ss_nonexist")
     assert resp.status_code == 404
