@@ -46,6 +46,7 @@
     queuePaused: false,
     timelineDragging: false,
     panelHeight: 260,
+    previewMaxWidth: 100,
   };
 
   // ---- Helpers ----
@@ -2058,6 +2059,73 @@
     document.addEventListener("touchend", onUp);
   }
 
+  // ---- Preview resize ----
+
+  function initPreviewResize() {
+    var handle = qs("#previewResizeHandle");
+    var container = qs("#frameContainer");
+    if (!handle || !container) return;
+    var dragging = false;
+    var startX = 0;
+    var startWidthPx = 0;
+    var parentWidth = 0;
+
+    var MIN_PCT = 30;
+    var MAX_PCT = 100;
+
+    function onDown(e) {
+      e.preventDefault();
+      e.stopPropagation();
+      dragging = true;
+      startX = e.clientX || (e.touches && e.touches[0].clientX) || 0;
+      startWidthPx = container.getBoundingClientRect().width;
+      parentWidth = container.parentElement.getBoundingClientRect().width;
+      handle.classList.add("active");
+      document.body.style.cursor = "nwse-resize";
+      document.body.style.userSelect = "none";
+    }
+
+    handle.addEventListener("mousedown", onDown);
+    handle.addEventListener("touchstart", onDown, { passive: false });
+
+    var rafPending = false;
+
+    function onMove(e) {
+      if (!dragging || rafPending) return;
+      rafPending = true;
+      var clientX = e.clientX || (e.touches && e.touches[0].clientX) || 0;
+      requestAnimationFrame(function () {
+        var delta = clientX - startX;
+        var newWidthPx = startWidthPx + delta;
+        var pct = Math.max(MIN_PCT, Math.min(MAX_PCT, (newWidthPx / parentWidth) * 100));
+        state.previewMaxWidth = Math.round(pct);
+        container.style.maxWidth = state.previewMaxWidth + "%";
+        rafPending = false;
+      });
+    }
+
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("touchmove", onMove, { passive: false });
+
+    function onUp() {
+      if (!dragging) return;
+      dragging = false;
+      handle.classList.remove("active");
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+    }
+
+    document.addEventListener("mouseup", onUp);
+    document.addEventListener("touchend", onUp);
+
+    handle.addEventListener("dblclick", function (e) {
+      e.preventDefault();
+      e.stopPropagation();
+      state.previewMaxWidth = MAX_PCT;
+      container.style.maxWidth = "";
+    });
+  }
+
   // ---- Init ----
 
   document.addEventListener("DOMContentLoaded", function () {
@@ -2071,6 +2139,7 @@
     initPauseButton();
     initResultsPanel();
     initPanelDivider();
+    initPreviewResize();
     initKeyboard();
     checkNavLinks();
 
