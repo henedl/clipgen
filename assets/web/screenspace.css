@@ -232,6 +232,7 @@ body {
   border-radius: var(--radius);
   overflow: hidden;
   line-height: 0;
+  margin: 0 auto;
 }
 
 #frameCanvas,
@@ -261,6 +262,38 @@ body {
   color: #6b7280;
   font-size: 0.85rem;
   pointer-events: none;
+}
+
+/* Preview resize handle */
+
+.preview-resize-handle {
+  position: absolute;
+  bottom: 0;
+  right: 0;
+  width: 20px;
+  height: 20px;
+  cursor: nwse-resize;
+  z-index: 5;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+.preview-resize-handle::before {
+  content: "";
+  position: absolute;
+  bottom: 4px;
+  right: 4px;
+  width: 10px;
+  height: 10px;
+  background:
+    radial-gradient(circle, var(--color-text-dim) 1.5px, transparent 1.5px) 6px 6px / 4px 4px no-repeat,
+    radial-gradient(circle, var(--color-text-dim) 1.5px, transparent 1.5px) 6px 2px / 4px 4px no-repeat,
+    radial-gradient(circle, var(--color-text-dim) 1.5px, transparent 1.5px) 2px 6px / 4px 4px no-repeat;
+}
+
+#frameContainer:hover .preview-resize-handle,
+.preview-resize-handle.active {
+  opacity: 1;
 }
 
 #timestampInput {
