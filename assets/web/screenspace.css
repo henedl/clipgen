@@ -360,6 +360,12 @@ body {
   flex-shrink: 0;
 }
 
+.region-hint {
+  font-size: 0.72rem;
+  color: var(--color-text-dim);
+  font-style: italic;
+}
+
 /* Timeline */
 
 #timelineSection {
@@ -522,8 +528,12 @@ body {
 #workflowBody {
   display: flex;
   flex-direction: column;
-  gap: 0.6rem;
+  gap: 0.4rem;
   padding: 0.6rem 0;
+}
+
+#runBtn {
+  align-self: flex-end;
 }
 
 #workflowParams {
@@ -532,6 +542,7 @@ body {
   gap: 0.25rem;
   flex: 1;
   min-height: 0;
+  min-width: 0;
   overflow-y: auto;
 }
 
@@ -552,6 +563,8 @@ body {
   display: flex;
   align-items: center;
   gap: 0.4rem;
+  flex: 1;
+  min-width: 0;
 }
 
 .param-control input[type="range"] {
@@ -576,7 +589,8 @@ body {
 }
 
 .param-control input[type="text"] {
-  width: 12rem;
+  flex: 1;
+  min-width: 0;
 }
 
 .param-value {
@@ -732,8 +746,8 @@ body {
   content: attr(data-tooltip);
   position: absolute;
   bottom: calc(100% + 6px);
-  left: 50%;
-  transform: translateX(-50%);
+  right: 0;
+  left: auto;
   padding: 0.3rem 0.6rem;
   background: var(--color-text);
   color: var(--color-bg);
@@ -1020,6 +1034,47 @@ body {
 
 .task-card-drag-handle:active {
   cursor: grabbing;
+}
+
+@keyframes task-card-spin {
+  to { transform: rotate(360deg); }
+}
+
+.task-card-spinner {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  padding: 0.1rem 0;
+  width: 10px;
+  height: 14px;
+}
+
+.task-card-spinner::after {
+  content: "";
+  width: 10px;
+  height: 10px;
+  border: 1.5px solid var(--color-border);
+  border-top-color: var(--color-accent);
+  border-radius: 50%;
+  animation: task-card-spin 0.7s linear infinite;
+}
+
+.task-card-pause-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  padding: 0.1rem 0;
+  width: 10px;
+  height: 14px;
+  color: #eab308;
+  opacity: 0.7;
+}
+
+.task-card-pause-icon svg {
+  width: 10px;
+  height: 10px;
 }
 
 /* Edit button */

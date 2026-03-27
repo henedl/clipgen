@@ -32,6 +32,9 @@
     activeRegion: null,
     drawingRegion: null,
     pendingRegion: null,
+    draggingRegion: null,
+    resizingRegion: null,
+    hoveredRegion: null,
     timelineZoom: 1,
     timelineOffset: 0,
     inMarker: null,
@@ -166,7 +169,7 @@
   }
 
   function frameUrl(pid, ts) {
-    return "api/video/frame/" + encodeURIComponent(pid) + "/" + ts;
+    return "api/video/frame/" + encodeURIComponent(pid) + "/" + Number(ts).toFixed(6);
   }
 
   // ---- Theme toggle (matches Studio) ----
@@ -353,6 +356,54 @@
     };
   }
 
+  function computeLabelRect(r, name, ctx, s) {
+    var fontSize = Math.round(12 * s);
+    var labelH = Math.round(16 * s);
+    var pad = Math.round(4 * s);
+    var gripW = Math.round(8 * s);
+    var gripPadL = Math.round(3 * s);
+    ctx.font = "bold " + fontSize + "px -apple-system, BlinkMacSystemFont, sans-serif";
+    var textW = ctx.measureText(name).width;
+    var labelW = gripPadL + gripW + pad + textW + pad;
+    return { x: r.x, y: r.y - labelH, w: labelW, h: labelH, gripPadL: gripPadL, gripW: gripW, pad: pad, fontSize: fontSize };
+  }
+
+  function findHitRegion(px, py, s, ctx) {
+    var names = Object.keys(state.regions);
+    var handleSize = Math.round(14 * s);
+    for (var i = names.length - 1; i >= 0; i--) {
+      var name = names[i];
+      var r = regionToPixels(state.regions[name]);
+      if (px >= r.x + r.w - handleSize && px <= r.x + r.w && py >= r.y + r.h - handleSize && py <= r.y + r.h) {
+        return { name: name, handle: "resize" };
+      }
+      var lr = computeLabelRect(r, name, ctx, s);
+      if (px >= lr.x && px <= lr.x + lr.w && py >= lr.y && py <= lr.y + lr.h) {
+        return { name: name, handle: "move" };
+      }
+    }
+    return null;
+  }
+
+  function saveRegionUpdate(name) {
+    var region = state.regions[name];
+    if (!region) return;
+    var canvas = qs("#overlayCanvas");
+    var px = regionToPixels(region);
+    var body = { name: name, x: px.x, y: px.y, w: px.w, h: px.h, canvas_width: canvas.width, canvas_height: canvas.height };
+    if (region.description) body.description = region.description;
+    apiPost("api/regions", body)
+      .then(function (data) {
+        if (data.ok) {
+          var saved = data.region;
+          if (region.description) saved.description = region.description;
+          state.regions[name] = saved;
+          renderOverlay();
+        }
+      })
+      .catch(function () { showToast("Failed to update region"); });
+  }
+
   function initRegionDrawing() {
     var overlay = qs("#overlayCanvas");
 
@@ -369,6 +420,33 @@
         return;
       }
       var pos = canvasCoords(overlay, e);
+      var displayW = overlay.getBoundingClientRect().width || overlay.width;
+      var s = overlay.width / displayW;
+      var ctx = overlay.getContext("2d");
+      var hit = findHitRegion(pos.x, pos.y, s, ctx);
+      if (hit && hit.handle === "resize") {
+        var origR = state.regions[hit.name];
+        state.resizingRegion = { name: hit.name, origRegion: { x: origR.x, y: origR.y, w: origR.w, h: origR.h } };
+        state.activeRegion = hit.name;
+        state.pendingRegion = null;
+        document.body.style.cursor = "nwse-resize";
+        document.body.style.userSelect = "none";
+        renderRegionChips();
+        updateRegionButtons();
+        return;
+      }
+      if (hit && hit.handle === "move") {
+        var r = regionToPixels(state.regions[hit.name]);
+        var origM = state.regions[hit.name];
+        state.draggingRegion = { name: hit.name, offsetX: pos.x - r.x, offsetY: pos.y - r.y, origRegion: { x: origM.x, y: origM.y, w: origM.w, h: origM.h } };
+        state.activeRegion = hit.name;
+        state.pendingRegion = null;
+        document.body.style.cursor = "grabbing";
+        document.body.style.userSelect = "none";
+        renderRegionChips();
+        updateRegionButtons();
+        return;
+      }
       state.drawingRegion = { startX: pos.x, startY: pos.y, endX: pos.x, endY: pos.y };
       state.pendingRegion = null;
       state.activeRegion = null;
@@ -376,15 +454,65 @@
     });
 
     overlay.addEventListener("mousemove", function (e) {
-      if (state.pipetteActive || !state.drawingRegion) return;
+      if (state.pipetteActive) return;
       var pos = canvasCoords(overlay, e);
-      state.drawingRegion.endX = pos.x;
-      state.drawingRegion.endY = pos.y;
+      var displayW = overlay.getBoundingClientRect().width || overlay.width;
+      var s = overlay.width / displayW;
+      if (state.resizingRegion) {
+        var rName = state.resizingRegion.name;
+        var rPx = regionToPixels(state.regions[rName]);
+        var minSize = Math.round(20 * s);
+        var newW = clamp(pos.x - rPx.x, minSize, overlay.width - rPx.x);
+        var newH = clamp(pos.y - rPx.y, minSize, overlay.height - rPx.y);
+        state.regions[rName] = Object.assign({}, state.regions[rName], { w: newW / overlay.width, h: newH / overlay.height });
+        renderOverlay();
+        return;
+      }
+      if (state.draggingRegion) {
+        var d = state.draggingRegion;
+        var dPx = regionToPixels(state.regions[d.name]);
+        var newX = clamp(pos.x - d.offsetX, 0, overlay.width - dPx.w);
+        var newY = clamp(pos.y - d.offsetY, 0, overlay.height - dPx.h);
+        state.regions[d.name] = Object.assign({}, state.regions[d.name], { x: newX / overlay.width, y: newY / overlay.height });
+        renderOverlay();
+        return;
+      }
+      if (state.drawingRegion) {
+        state.drawingRegion.endX = pos.x;
+        state.drawingRegion.endY = pos.y;
+        renderOverlay();
+        return;
+      }
+      var ctx = overlay.getContext("2d");
+      var hit = findHitRegion(pos.x, pos.y, s, ctx);
+      state.hoveredRegion = hit;
+      overlay.style.cursor = hit ? (hit.handle === "resize" ? "nwse-resize" : "grab") : "crosshair";
       renderOverlay();
     });
 
     overlay.addEventListener("mouseup", function (e) {
-      if (state.pipetteActive || !state.drawingRegion) return;
+      if (state.pipetteActive) return;
+      if (state.resizingRegion) {
+        var rName = state.resizingRegion.name;
+        state.resizingRegion = null;
+        document.body.style.cursor = "";
+        document.body.style.userSelect = "";
+        saveRegionUpdate(rName);
+        renderOverlay();
+        updateRegionButtons();
+        return;
+      }
+      if (state.draggingRegion) {
+        var dName = state.draggingRegion.name;
+        state.draggingRegion = null;
+        document.body.style.cursor = "";
+        document.body.style.userSelect = "";
+        saveRegionUpdate(dName);
+        renderOverlay();
+        updateRegionButtons();
+        return;
+      }
+      if (!state.drawingRegion) return;
       var pos = canvasCoords(overlay, e);
       state.drawingRegion.endX = pos.x;
       state.drawingRegion.endY = pos.y;
@@ -398,6 +526,50 @@
       }
       renderOverlay();
       updateRegionButtons();
+    });
+
+    // Document-level listeners so drag/resize continues outside the canvas
+    document.addEventListener("mousemove", function (e) {
+      if (!state.resizingRegion && !state.draggingRegion) return;
+      var pos = canvasCoords(overlay, e);
+      var displayW = overlay.getBoundingClientRect().width || overlay.width;
+      var s = overlay.width / displayW;
+      if (state.resizingRegion) {
+        var rName = state.resizingRegion.name;
+        var rPx = regionToPixels(state.regions[rName]);
+        var minSize = Math.round(20 * s);
+        var newW = clamp(pos.x - rPx.x, minSize, overlay.width - rPx.x);
+        var newH = clamp(pos.y - rPx.y, minSize, overlay.height - rPx.y);
+        state.regions[rName] = Object.assign({}, state.regions[rName], { w: newW / overlay.width, h: newH / overlay.height });
+        renderOverlay();
+      } else if (state.draggingRegion) {
+        var d = state.draggingRegion;
+        var dPx = regionToPixels(state.regions[d.name]);
+        var newX = clamp(pos.x - d.offsetX, 0, overlay.width - dPx.w);
+        var newY = clamp(pos.y - d.offsetY, 0, overlay.height - dPx.h);
+        state.regions[d.name] = Object.assign({}, state.regions[d.name], { x: newX / overlay.width, y: newY / overlay.height });
+        renderOverlay();
+      }
+    });
+
+    document.addEventListener("mouseup", function () {
+      if (state.resizingRegion) {
+        var rName = state.resizingRegion.name;
+        state.resizingRegion = null;
+        document.body.style.cursor = "";
+        document.body.style.userSelect = "";
+        saveRegionUpdate(rName);
+        renderOverlay();
+        updateRegionButtons();
+      } else if (state.draggingRegion) {
+        var dName = state.draggingRegion.name;
+        state.draggingRegion = null;
+        document.body.style.cursor = "";
+        document.body.style.userSelect = "";
+        saveRegionUpdate(dName);
+        renderOverlay();
+        updateRegionButtons();
+      }
     });
 
     qs("#saveRegionBtn").addEventListener("click", function () {
@@ -492,6 +664,11 @@
     var container = qs("#regionChips");
     container.innerHTML = "";
     var names = Object.keys(state.regions);
+    if (names.length === 0) {
+      var hint = el("span", "region-hint", "Click and drag on the video to create a region");
+      container.appendChild(hint);
+      return;
+    }
     names.forEach(function (name, i) {
       var color = regionColorForIndex(i);
       var chip = el("div", "region-chip" + (name === state.activeRegion ? " active" : ""));
@@ -533,6 +710,8 @@
       var r = regionToPixels(state.regions[name]);
       var color = regionColorForIndex(i);
       var isActive = (name === state.activeRegion);
+      var isHovered = state.hoveredRegion && state.hoveredRegion.name === name;
+      var showHandles = isActive || isHovered;
       ctx.strokeStyle = color;
       ctx.lineWidth = (isActive ? 2 : 1) * s;
       ctx.setLineDash(isActive ? [] : [6 * s, 3 * s]);
@@ -542,16 +721,41 @@
         ctx.fillRect(r.x, r.y, r.w, r.h);
       }
       ctx.setLineDash([]);
-      // Label
-      var fontSize = Math.round(12 * s);
-      var labelH = Math.round(16 * s);
-      var pad = Math.round(4 * s);
-      ctx.font = "bold " + fontSize + "px -apple-system, BlinkMacSystemFont, sans-serif";
-      var labelW = ctx.measureText(name).width + pad * 2;
+
+      // Label with grip indicator
+      var lr = computeLabelRect(r, name, ctx, s);
       ctx.fillStyle = hexToRgba(color, 0.85);
-      ctx.fillRect(r.x, r.y - labelH, labelW, labelH);
+      ctx.fillRect(lr.x, lr.y, lr.w, lr.h);
+      if (showHandles) {
+        ctx.fillStyle = "rgba(255,255,255,0.5)";
+        var dotR = Math.round(1 * s);
+        var gripColGap = Math.round(3 * s);
+        var gripRowGap = Math.round(3 * s);
+        var gx = lr.x + lr.gripPadL + dotR + Math.round(1 * s);
+        var gy = lr.y + Math.round(lr.h / 2) - gripRowGap;
+        for (var row = 0; row < 3; row++) {
+          for (var col = 0; col < 2; col++) {
+            ctx.beginPath();
+            ctx.arc(gx + col * gripColGap, gy + row * gripRowGap, dotR, 0, Math.PI * 2);
+            ctx.fill();
+          }
+        }
+      }
       ctx.fillStyle = "#fff";
-      ctx.fillText(name, r.x + pad, r.y - Math.round(4 * s));
+      ctx.fillText(name, lr.x + lr.gripPadL + lr.gripW + lr.pad, r.y - Math.round(4 * s));
+
+      // Resize handle (bottom-right corner, 3-dot triangle)
+      if (showHandles) {
+        var dotRr = Math.round(1.5 * s);
+        var handlePad = Math.round(5 * s);
+        var dotSpacing = Math.round(4 * s);
+        var bx = r.x + r.w - handlePad;
+        var by = r.y + r.h - handlePad;
+        ctx.fillStyle = hexToRgba(color, 0.9);
+        ctx.beginPath(); ctx.arc(bx, by, dotRr, 0, Math.PI * 2); ctx.fill();
+        ctx.beginPath(); ctx.arc(bx - dotSpacing, by, dotRr, 0, Math.PI * 2); ctx.fill();
+        ctx.beginPath(); ctx.arc(bx, by - dotSpacing, dotRr, 0, Math.PI * 2); ctx.fill();
+      }
     });
 
     // Drawing in progress
@@ -2073,6 +2277,12 @@
         handle.addEventListener("mousedown", function () { card.setAttribute("draggable", "true"); });
         handle.addEventListener("mouseup", function () { card.removeAttribute("draggable"); });
         card.appendChild(handle);
+      } else if (task.status === "running") {
+        card.appendChild(el("span", "task-card-spinner"));
+      } else if (task.status === "paused") {
+        var pauseIcon = el("span", "task-card-pause-icon");
+        pauseIcon.appendChild(svgPauseIcon());
+        card.appendChild(pauseIcon);
       }
 
       // Type badge
@@ -2336,7 +2546,21 @@
           deactivatePipette();
           return;
         }
-        if (state.pendingRegion || state.activeRegion) {
+        if (state.draggingRegion) {
+          var orig = state.draggingRegion.origRegion;
+          state.regions[state.draggingRegion.name] = Object.assign({}, state.regions[state.draggingRegion.name], orig);
+          state.draggingRegion = null;
+          document.body.style.cursor = "";
+          document.body.style.userSelect = "";
+          renderOverlay();
+        } else if (state.resizingRegion) {
+          var origR = state.resizingRegion.origRegion;
+          state.regions[state.resizingRegion.name] = Object.assign({}, state.regions[state.resizingRegion.name], origR);
+          state.resizingRegion = null;
+          document.body.style.cursor = "";
+          document.body.style.userSelect = "";
+          renderOverlay();
+        } else if (state.pendingRegion || state.activeRegion) {
           state.pendingRegion = null;
           state.activeRegion = null;
           renderOverlay();
