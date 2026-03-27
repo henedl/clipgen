@@ -40,6 +40,7 @@
     referenceTimestamp: null,
     tasks: [],
     selectedTaskId: null,
+    hoveredTaskId: null,
     selectedTaskResults: null,
     pollTimer: null,
     queuePaused: false,
@@ -810,12 +811,14 @@
     // Result markers from completed tasks
     var resultY = 24;
     var resultH = h - resultY - 6;
+    var focused = focusedTaskId();
     state.tasks.forEach(function (task) {
       if (task.status !== "completed" || !task.result) return;
       var color = taskTypeColor(task.type);
+      var dimmed = focused && task.id !== focused;
       if (task.type === "color") {
         // Spans
-        ctx.fillStyle = hexToRgba(color, 0.35);
+        ctx.fillStyle = hexToRgba(color, dimmed ? 0.10 : 0.35);
         task.result.forEach(function (span) {
           var x1 = timeToX(span.start);
           var x2 = timeToX(span.end);
@@ -825,7 +828,7 @@
         // No timeline markers for timelapse
       } else {
         // Point markers (change, similarity, text)
-        ctx.strokeStyle = color;
+        ctx.strokeStyle = dimmed ? hexToRgba(color, 0.15) : color;
         ctx.lineWidth = 1.5;
         var results = task.result || [];
         results.forEach(function (r) {
@@ -877,12 +880,17 @@
     });
     var types = Object.keys(hasTypes);
     if (types.length === 0) return;
+    var focused = focusedTaskId();
+    var focusedType = focused ? (findTask(focused) || {}).type : null;
     types.forEach(function (type) {
       var item = el("span", "legend-item");
       var dot = el("span", "legend-dot");
       dot.style.background = taskTypeColor(type);
       item.appendChild(dot);
       item.appendChild(document.createTextNode(type));
+      if (focusedType && type !== focusedType) {
+        item.style.opacity = "0.3";
+      }
       container.appendChild(item);
     });
   }
@@ -1364,6 +1372,9 @@
           .then(function (data) {
             if (data.ok) {
               state.tasks = state.tasks.filter(function (t) { return t.id !== taskId; });
+              if (state.hoveredTaskId === taskId) {
+                state.hoveredTaskId = null;
+              }
               if (state.selectedTaskId === taskId) {
                 state.selectedTaskId = null;
                 state.selectedTaskResults = null;
@@ -1391,6 +1402,29 @@
         state.selectedTaskId = taskId;
         loadAndShowResults(taskId);
         renderTaskList();
+      }
+    });
+
+    // Hover handler for task focus (dim non-hovered timeline markers)
+    taskListEl.addEventListener("mouseover", function (e) {
+      var card = e.target.closest(".task-card");
+      if (!card) return;
+      var task = findTask(card.dataset.taskId);
+      if (task && task.status === "completed") {
+        if (state.hoveredTaskId !== task.id) {
+          state.hoveredTaskId = task.id;
+          renderTimeline();
+        }
+      } else if (state.hoveredTaskId) {
+        state.hoveredTaskId = null;
+        renderTimeline();
+      }
+    });
+
+    taskListEl.addEventListener("mouseleave", function () {
+      if (state.hoveredTaskId) {
+        state.hoveredTaskId = null;
+        renderTimeline();
       }
     });
 
@@ -1635,6 +1669,14 @@
       if (state.tasks[i].id === id) return state.tasks[i];
     }
     return null;
+  }
+
+  function focusedTaskId() {
+    if (state.hoveredTaskId) {
+      var ht = findTask(state.hoveredTaskId);
+      if (ht && ht.status === "completed") return state.hoveredTaskId;
+    }
+    return state.selectedTaskId;
   }
 
   function updatePauseButton() {
