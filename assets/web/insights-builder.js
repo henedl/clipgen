@@ -1495,6 +1495,10 @@
           var link = qs("#studioLink");
           if (link) link.classList.remove("hidden");
         }
+        if (data.screenspace) {
+          var link = qs("#screenspaceLink");
+          if (link) link.classList.remove("hidden");
+        }
       })
       .catch(function () {});
   }
