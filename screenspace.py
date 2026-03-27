@@ -838,9 +838,14 @@ def save_screenspace_manifest(
     manifest_path = (
         Path(utils.get_effective_output_dir()) / config.SCREENSPACE_MANIFEST_FILENAME
     )
-    clean_tasks = [
-        {k: v for k, v in task.items() if not k.startswith("_")} for task in tasks
-    ]
+    clean_tasks = []
+    for task in tasks:
+        ct = {k: v for k, v in task.items() if not k.startswith("_")}
+        if "parameters" in ct:
+            ct["parameters"] = {
+                k: v for k, v in ct["parameters"].items() if k != "reference_frame"
+            }
+        clean_tasks.append(ct)
     try:
         manifest_path.write_text(
             json.dumps(
