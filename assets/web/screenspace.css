@@ -262,20 +262,6 @@ body {
   pointer-events: none;
 }
 
-/* Frame controls */
-
-#frameControls {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-}
-
-#timestampSlider {
-  flex: 1;
-  accent-color: var(--color-accent);
-  height: 4px;
-}
-
 #timestampInput {
   width: 5.5rem;
   font-size: 0.78rem;
@@ -346,6 +332,31 @@ body {
   display: flex;
   flex-direction: column;
   gap: 0.3rem;
+}
+
+#timelineRow {
+  display: flex;
+  align-items: stretch;
+  gap: 0.5rem;
+}
+
+#timelineRow #timelineCanvas {
+  flex: 1;
+  min-width: 0;
+}
+
+#timelineSeek {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.2rem;
+  flex-shrink: 0;
+}
+
+#timelineStepBtns {
+  display: flex;
+  gap: 0.2rem;
 }
 
 #timelineCanvas {
