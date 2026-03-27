@@ -1,38 +1,47 @@
 # clipgen
 
-clipgen is a Python program that uses the [gspread library](https://docs.gspread.org) and [ffmpeg](https://www.ffmpeg.org) to quickly generate video snippets based on timestamps in a Google Sheet or a local Excel file.
+clipgen is a Python program that uses [ffmpeg](https://www.ffmpeg.org) and a Google Sheet or local Excel file to quickly generate video clips, screenshots, and GIFs based on timestamps in your research notes. It also includes web-based interfaces for interactive clip generation (Studio), structured UX findings (Insights Builder), and video frame analysis (Screenspace).
 
-**Data flow:** Timestamps entered by you → spreadsheet → clipgen reads timestamped records (descriptions, study name, participant IDs, categories) → ffmpeg → clips or highlight reel.
-
-The program was created to speed up data processing during playtests and is provided as-is, without promise of support. The target audience of this program are User Experience Researchers and UX professionals who prefer to manage their videos locally rather than in the cloud.
+The target audience is UX Researchers and professionals who prefer to manage playtest videos locally.
 
 ## How to use
 
 ### Pre-requisites
 
-1. Install the required Python dependencies: ```pip install -r requirements.txt```
-2. Install ffmpeg and ensure it is available via your `PATH`.
-3. Configure your Google Authentication per [gspread's setup guide](https://docs.gspread.org/en/master/oauth2.html); clipgen requires you to have a Google Cloud project with API access, with a OAuth credentials file on your system.
+1. Install [uv](https://docs.astral.sh/uv/) and run `uv sync` to install Python dependencies.
+2. Install ffmpeg and ensure it is available in your `PATH`.
+3. For Google Sheets: configure Google authentication per [gspread's setup guide](https://docs.gspread.org/en/master/oauth2.html). Place `credentials.json` in `./config/gspread/` or the same folder as `clipgen.py`.
 
 ### Starting clipgen
 
-- Place video files in the same folder as the executable or `clipgen.py`.
-- `ffmpeg` and `ffprobe` must be installed and available in `PATH`.
-- Your Google `credentials.json` must be in `./config/gspread/`or same folder as executable.
-- The executable uses its own folder as working directory (so local files resolve consistently).
-- Launch clipgen either interactively or through command-line arguments.
-- Select the Google Sheet or local Excel document you want to work on, and enjoy quick video clip generation based on your timestamped notes.
+Place your video files in the same directory as `clipgen.py`, named `{study}_{participant}.mp4` (e.g. `mystudy_P01.mp4`). Then run:
 
-### Usage instructions
+```shell
+uv run clipgen.py
+```
 
-- Can be used interactively or non-interactively, via command line argument calls.
-- Several modes of generating timestamps are supported:
-  - Batch
-  - Single or multiple lines
-  - Ranges
-  - Categories
-- Sheets can be browsed interactively through the program; no need to have a web browser always open.
-- Clipgen can also generate highlight reels based on your input, combining multiple clips into a single video file.
+Or launch directly with a mode flag:
+
+```shell
+uv run clipgen.py -b                    # Batch: all clips
+uv run clipgen.py -l 5+7+12            # Lines: rows 5, 7, 12
+uv run clipgen.py -r 5-12              # Range: rows 5–12
+uv run clipgen.py -C "Onboarding"      # Category
+uv run clipgen.py --screen -b          # Screenshots instead of clips
+uv run clipgen.py --gif -b             # GIFs instead of clips
+```
+
+Run `uv run clipgen.py --help` for the full flag reference.
+
+### Modes
+
+clipgen supports a range of generation modes, selectable interactively or via CLI flags:
+
+- **Selection modes**: `batch` (-b), `line` (-l), `range` (-r), `category` (-C), `cell` (-c), `participant` (-p), `keyword` (-k), `severity` (-S)
+- **Output formats**: clips (default), `--screen` (screenshots), `--gif` (GIFs)
+- **Reels**: `reel` (-R), `chronologic` (-T), `highlights` (-H), `reellate` (interactive)
+- **Gallery**: `--gallery VIDEO` — interval screenshots/GIFs with a browser-viewable gallery
+- **Browse**: interactive spreadsheet viewer (no output)
 
 ### Timeline viewer
 
@@ -41,8 +50,8 @@ clipgen can generate an interactive HTML timeline viewer that visualizes all art
 - **CLI**: Pass `--viewer` alongside any mode flag to generate the viewer after clip processing:
 
 ``` shell
-python clipgen.py -b --viewer
-python clipgen.py -l 5+7 --screen --viewer
+uv run clipgen.py -b --viewer
+uv run clipgen.py -l 5+7 --screen --viewer
 ```
 
 - **Interactive mode**: During an interactive session, clipgen keeps track of all generated artifacts. You can choose the `viewer` mode from the mode selection prompt to generate a timeline viewer for everything created so far in that session.
@@ -61,8 +70,8 @@ clipgen can launch a web-based Studio interface for interactive artifact generat
 - **CLI**: Pass `--studio` to launch the Studio. A spreadsheet is required (Google Sheets or Excel):
 
 ``` shell
-python clipgen.py --studio
-python clipgen.py --studio -s "My Study"
+uv run clipgen.py --studio
+uv run clipgen.py --studio -s "My Study"
 ```
 
 The Studio opens in your browser at `http://127.0.0.1:8089/studio/` and provides:
@@ -82,8 +91,8 @@ clipgen includes an Insights Builder for authoring structured UX research findin
 - **CLI**: Pass `--insights` to launch the Insights Builder:
 
 ``` shell
-python clipgen.py --insights
-python clipgen.py --insights -i ./output -o ./output
+uv run clipgen.py --insights
+uv run clipgen.py --insights -i ./output -o ./output
 ```
 
 The Insights Builder opens in your browser at `http://127.0.0.1:8089/insights/` and provides:
@@ -96,6 +105,19 @@ The Insights Builder opens in your browser at `http://127.0.0.1:8089/insights/` 
 
 When `--studio` is used, the Insights Builder is also available via the `/insights/` path on the same server, so both interfaces share a single port.
 
+### Screenspace
+
+clipgen includes a Screenspace interface for analyzing video frames. Draw regions of interest and run automated analysis tasks to find patterns across the video.
+
+- **CLI**: Pass `--screenspace` to launch. No spreadsheet required — clipgen discovers participant videos automatically:
+
+``` shell
+uv run clipgen.py --screenspace
+uv run clipgen.py --screenspace -s "My Study"
+```
+
+Screenspace opens at `http://127.0.0.1:8089/screenspace/`. Available analysis tools: **Color** (match a region's color), **Change** (detect content changes), **Similarity** (find frames matching a reference), **Text** (OCR fuzzy search), **Numbers** (OCR numeric comparison), **Timelapse** (sped-up region video). Tasks run in a pausable background queue with drag-to-reorder.
+
 ### Manifest
 
 clipgen can write a cumulative artifact manifest (`clipgen_manifest.json`) alongside generated clips. The manifest tracks all artifacts and reels across runs, and is required by the Insights Builder and the `--regenerate` flag.
@@ -103,14 +125,14 @@ clipgen can write a cumulative artifact manifest (`clipgen_manifest.json`) along
 - **CLI**: Pass `--manifest` alongside any mode flag to enable manifest writing:
 
 ``` shell
-python clipgen.py -b --manifest
-python clipgen.py -b --viewer --manifest
+uv run clipgen.py -b --manifest
+uv run clipgen.py -b --viewer --manifest
 ```
 
 To regenerate all media artifacts from a saved manifest (no spreadsheet needed):
 
 ``` shell
-python clipgen.py --regenerate
+uv run clipgen.py --regenerate
 ```
 
 ### About the spreadsheet
@@ -120,42 +142,23 @@ clipgen assumes that you are using a spreadsheet with a particular layout. A ref
 Timestamps must be separated by characters ```+ , ;```
 Ranges must be separated by character ```-```
 
-You can optionally add a **baseline row for clock timestamps** using a single sheet-wide marker row:
+An optional `Baseline time` row supports clock/absolute timestamps: add a baseline timestamp per participant column (e.g. `09:12:00`), and clipgen automatically converts those timestamps to relative offsets before cutting clips. Columns without a baseline value use relative timestamps.
 
-- One row in the sheet should contain the label `Baseline time` in any cell; this row is treated as the baseline marker row.
-- That same row can contain a clock timestamp for each participant column, e.g. `09:12:00` in the `P01` column.
-- When a baseline cell is non-empty in the marker row, all timestamps in that participant column are treated as **clock/absolute times** and are converted to **relative offsets** by subtracting the per-column baseline time before cutting clips.
-- When a baseline cell is empty in the marker row, timestamps in that participant column are treated as **relative**.
-- If no `Baseline time` marker row exists at all, all participant columns are interpreted as using relative timestamps.
+## Building from source
 
-## Build single-file executable
+Cross-platform executables (macOS and Windows) are built automatically via GitHub Actions (`.github/workflows/build-binaries.yml`) on version tag pushes. To build locally with PyInstaller:
 
-clipgen can be packaged as a single-file executable with PyInstaller.
+```shell
+pip install pyinstaller
+pyinstaller --clean --noconfirm build/clipgen.spec
+```
 
-- Build each platform on that platform:
-  - Build macOS binary on macOS
-  - Build Windows `.exe` on Windows
-- Install build dependency:
-  - `pip install pyinstaller`
-- Build using the included spec:
-  - `pyinstaller --clean --noconfirm build/clipgen.spec`
-- Output binaries:
-  - macOS: `dist/clipgen`
-  - Windows: `dist/clipgen.exe`
-
-### CI build artifacts
-
-- Cross-platform binaries are built by GitHub Actions workflow:
-  - `.github/workflows/build-binaries.yml`
-- Triggered on tag pushes matching `v*` and manual workflow dispatch.
-- Artifacts are uploaded as:
-  - `clipgen-macos`
-  - `clipgen-windows`
+Output: `dist/clipgen` (macOS) or `dist/clipgen.exe` (Windows).
 
 ## Testing
 
 - Run the smoke test suite before releases and when adding features:
-  - `pytest -c tests/pytest.ini`
+  - `uv run pytest -c tests/pytest.ini`
 - Contributor rule:
   - Every new CLI mode, flag, or selector should include at least one smoke test in the same PR.
 
