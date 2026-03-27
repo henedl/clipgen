@@ -325,6 +325,31 @@ class TestScreenspaceWorker:
         worker = screenspace.ScreenspaceWorker()
         assert worker.get_task("ss_unknown") is None
 
+    def test_remove_queued_task(self):
+        worker = screenspace.ScreenspaceWorker()
+        task = screenspace.create_task(
+            "color", "P01", "s.mp4", "/v.mp4", "r", {"x": 0, "y": 0, "w": 1, "h": 1}
+        )
+        worker.enqueue(task)
+        assert worker.remove_task(task["id"]) is True
+        assert worker.get_task(task["id"]) is None
+
+    def test_remove_nonexistent(self):
+        worker = screenspace.ScreenspaceWorker()
+        assert worker.remove_task("ss_nonexist") is False
+
+    def test_remove_running_task_sets_cancelled(self):
+        worker = screenspace.ScreenspaceWorker()
+        task = screenspace.create_task(
+            "color", "P01", "s.mp4", "/v.mp4", "r", {"x": 0, "y": 0, "w": 1, "h": 1}
+        )
+        worker.enqueue(task)
+        # Simulate running status
+        with worker._lock:
+            worker._tasks[task["id"]]["status"] = screenspace.TASK_STATUS_RUNNING
+        assert worker.remove_task(task["id"]) is True
+        assert worker.get_task(task["id"]) is None
+
 
 class TestScanNumbers:
     def test_unknown_operator_raises(self):

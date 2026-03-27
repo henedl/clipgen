@@ -817,19 +817,70 @@ body {
   color: var(--color-text-dim);
 }
 
-.task-card-cancel {
+/* Drag-and-drop */
+.task-card.dragging {
+  opacity: 0.4;
+}
+
+.task-card.drag-over {
+  border-top: 2px solid var(--color-accent);
+}
+
+/* Drag handle */
+.task-card-drag-handle {
+  display: inline-flex;
+  align-items: center;
+  cursor: grab;
+  color: var(--color-text-dim);
+  flex-shrink: 0;
+  padding: 0.1rem 0;
+  opacity: 0.5;
+  transition: opacity 0.15s, color 0.15s;
+}
+
+.task-card-drag-handle:hover {
+  opacity: 1;
+  color: var(--color-text);
+}
+
+.task-card-drag-handle:active {
+  cursor: grabbing;
+}
+
+/* Edit button */
+.task-card-edit {
   background: none;
   border: none;
   color: var(--color-text-dim);
   cursor: pointer;
-  font-size: 0.72rem;
   padding: 0.1rem 0.3rem;
   border-radius: 3px;
   transition: background 0.15s, color 0.15s;
   flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
 }
 
-.task-card-cancel:hover {
+.task-card-edit:hover {
+  background: rgba(59, 130, 246, 0.1);
+  color: var(--color-accent);
+}
+
+/* Dismiss button */
+.task-card-dismiss {
+  background: none;
+  border: none;
+  color: var(--color-text-dim);
+  cursor: pointer;
+  padding: 0.1rem 0.3rem;
+  border-radius: 3px;
+  transition: background 0.15s, color 0.15s;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+}
+
+.task-card-dismiss:hover {
   background: rgba(220, 38, 38, 0.1);
   color: #dc2626;
 }

@@ -1233,26 +1233,100 @@
 
   // ---- Task queue ----
 
+  function svgEditIcon() {
+    var svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    svg.setAttribute("width", "14");
+    svg.setAttribute("height", "14");
+    svg.setAttribute("viewBox", "0 0 16 16");
+    svg.setAttribute("fill", "currentColor");
+    // pencil-square.svg from assets/icons
+    var p1 = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    p1.setAttribute("d", "M13.4875 2.51256C12.804 1.82915 11.696 1.82915 11.0126 2.51256L6.75098 6.77417C6.49563 7.02951 6.29308 7.33265 6.15488 7.66628L5.30712 9.71282C5.19103 9.99307 5.25519 10.3157 5.46968 10.5302C5.68417 10.7447 6.00676 10.8088 6.28702 10.6928L8.33382 9.84501C8.66748 9.70681 8.97066 9.50423 9.22604 9.24886L13.4875 4.98744C14.1709 4.30402 14.1709 3.19598 13.4875 2.51256Z");
+    svg.appendChild(p1);
+    var p2 = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    p2.setAttribute("d", "M4.75 3.5C4.05964 3.5 3.5 4.05964 3.5 4.75V11.25C3.5 11.9404 4.05964 12.5 4.75 12.5H11.25C11.9404 12.5 12.5 11.9404 12.5 11.25V9C12.5 8.58579 12.8358 8.25 13.25 8.25C13.6642 8.25 14 8.58579 14 9V11.25C14 12.7688 12.7688 14 11.25 14H4.75C3.23122 14 2 12.7688 2 11.25V4.75C2 3.23122 3.23122 2 4.75 2H7C7.41421 2 7.75 2.33579 7.75 2.75C7.75 3.16421 7.41421 3.5 7 3.5H4.75Z");
+    svg.appendChild(p2);
+    return svg;
+  }
+
+  function svgDragHandle() {
+    var svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    svg.setAttribute("width", "10");
+    svg.setAttribute("height", "14");
+    svg.setAttribute("viewBox", "0 0 16 16");
+    svg.setAttribute("fill", "currentColor");
+    // bars-2.svg from assets/icons
+    var path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    path.setAttribute("fill-rule", "evenodd");
+    path.setAttribute("clip-rule", "evenodd");
+    path.setAttribute("d", "M2 4.75C2 4.33579 2.33579 4 2.75 4H13.25C13.6642 4 14 4.33579 14 4.75C14 5.16421 13.6642 5.5 13.25 5.5H2.75C2.33579 5.5 2 5.16421 2 4.75ZM2 11.25C2 10.8358 2.33579 10.5 2.75 10.5H13.25C13.6642 10.5 14 10.8358 14 11.25C14 11.6642 13.6642 12 13.25 12H2.75C2.33579 12 2 11.6642 2 11.25Z");
+    svg.appendChild(path);
+    return svg;
+  }
+
+  function svgDismissIcon() {
+    var svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    svg.setAttribute("width", "14");
+    svg.setAttribute("height", "14");
+    svg.setAttribute("viewBox", "0 0 16 16");
+    svg.setAttribute("fill", "currentColor");
+    // x-mark.svg from assets/icons
+    var path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    path.setAttribute("d", "M5.28033 4.21967C4.98744 3.92678 4.51256 3.92678 4.21967 4.21967C3.92678 4.51256 3.92678 4.98744 4.21967 5.28033L6.93934 8L4.21967 10.7197C3.92678 11.0126 3.92678 11.4874 4.21967 11.7803C4.51256 12.0732 4.98744 12.0732 5.28033 11.7803L8 9.06066L10.7197 11.7803C11.0126 12.0732 11.4874 12.0732 11.7803 11.7803C12.0732 11.4874 12.0732 11.0126 11.7803 10.7197L9.06066 8L11.7803 5.28033C12.0732 4.98744 12.0732 4.51256 11.7803 4.21967C11.4874 3.92678 11.0126 3.92678 10.7197 4.21967L8 6.93934L5.28033 4.21967Z");
+    svg.appendChild(path);
+    return svg;
+  }
+
+  function sortTasks() {
+    // completed/failed at top (oldest first), then running, then queued (by priority), cancelled last
+    var statusOrder = { completed: 0, failed: 1, running: 2, queued: 3, cancelled: 4 };
+    state.tasks.sort(function (a, b) {
+      var sa = statusOrder[a.status] !== undefined ? statusOrder[a.status] : 5;
+      var sb = statusOrder[b.status] !== undefined ? statusOrder[b.status] : 5;
+      if (sa !== sb) return sa - sb;
+      if (a.status === "queued" && b.status === "queued") {
+        return (a.priority || 100) - (b.priority || 100);
+      }
+      return (a.created_at || "").localeCompare(b.created_at || "");
+    });
+  }
+
   function initTaskQueue() {
+    var taskListEl = qs("#taskList");
+
     // Click handler delegated on taskList
-    qs("#taskList").addEventListener("click", function (e) {
+    taskListEl.addEventListener("click", function (e) {
       var card = e.target.closest(".task-card");
       if (!card) return;
       var taskId = card.dataset.taskId;
-      // Cancel button
-      if (e.target.closest(".task-card-cancel")) {
-        apiDelete("api/tasks/" + taskId)
+
+      // Dismiss button
+      if (e.target.closest(".task-card-dismiss")) {
+        apiDelete("api/tasks/" + taskId + "?dismiss=true")
           .then(function (data) {
             if (data.ok) {
-              var task = findTask(taskId);
-              if (task) task.status = "cancelled";
+              state.tasks = state.tasks.filter(function (t) { return t.id !== taskId; });
+              if (state.selectedTaskId === taskId) {
+                state.selectedTaskId = null;
+                state.selectedTaskResults = null;
+                renderResults();
+              }
               renderTaskList();
-              showToast("Task cancelled");
+              renderTimeline();
+              showToast("Task dismissed");
             }
           })
-          .catch(function () { showToast("Failed to cancel task"); });
+          .catch(function () { showToast("Failed to dismiss task"); });
         return;
       }
+
+      // Edit button
+      if (e.target.closest(".task-card-edit")) {
+        var task = findTask(taskId);
+        if (task) restoreTaskToWorkflow(task);
+        return;
+      }
+
       // Select completed task to view results
       var task = findTask(taskId);
       if (task && task.status === "completed") {
@@ -1261,6 +1335,241 @@
         renderTaskList();
       }
     });
+
+    // Drag-and-drop: only initiate drag from the handle
+    taskListEl.addEventListener("dragstart", function (e) {
+      var card = e.target.closest(".task-card");
+      if (!card) { e.preventDefault(); return; }
+      var task = findTask(card.dataset.taskId);
+      if (!task) { e.preventDefault(); return; }
+      var allowed = task.status === "queued" || task.status === "completed" || task.status === "failed";
+      if (!allowed) { e.preventDefault(); return; }
+      card.classList.add("dragging");
+      e.dataTransfer.setData("text/plain", card.dataset.taskId);
+      e.dataTransfer.setData("application/x-task-status", task.status);
+      e.dataTransfer.effectAllowed = "move";
+    });
+
+    taskListEl.addEventListener("dragend", function (e) {
+      var card = e.target.closest(".task-card");
+      if (card) {
+        card.classList.remove("dragging");
+        card.removeAttribute("draggable");
+      }
+      clearDragIndicators(taskListEl);
+    });
+
+    taskListEl.addEventListener("dragover", function (e) {
+      if (e.dataTransfer.types.indexOf("text/plain") < 0) return;
+
+      var cards = taskListEl.querySelectorAll(".task-card:not(.dragging)");
+      var insertIdx = getDropIndex(taskListEl, e.clientY);
+
+      // Determine boundary between finished (completed/failed) and queued zones
+      var finishedCount = 0;
+      var queuedStart = cards.length;
+      for (var i = 0; i < cards.length; i++) {
+        var t = findTask(cards[i].dataset.taskId);
+        if (t && (t.status === "completed" || t.status === "failed")) finishedCount++;
+        else { queuedStart = i; break; }
+      }
+
+      var dragStatus = e.dataTransfer.types.indexOf("application/x-task-status") >= 0
+        ? "unknown" : "unknown";
+      // Infer dragged status from position constraint:
+      // We stored it in dataTransfer but can't read it during dragover (security).
+      // Instead, find the dragging card to determine its status.
+      var draggingCard = taskListEl.querySelector(".task-card.dragging");
+      var draggingTask = draggingCard ? findTask(draggingCard.dataset.taskId) : null;
+      var isQueuedDrag = draggingTask && draggingTask.status === "queued";
+      var isFinishedDrag = draggingTask && (draggingTask.status === "completed" || draggingTask.status === "failed");
+
+      // Queued tasks can't go above finished tasks
+      if (isQueuedDrag && insertIdx < finishedCount) return;
+      // Finished tasks can't go below into queued zone
+      if (isFinishedDrag && insertIdx > finishedCount) return;
+
+      e.preventDefault();
+      e.dataTransfer.dropEffect = "move";
+      clearDragIndicators(taskListEl);
+      if (insertIdx < cards.length) {
+        cards[insertIdx].classList.add("drag-over");
+      }
+    });
+
+    taskListEl.addEventListener("dragleave", function (e) {
+      var card = e.target.closest(".task-card");
+      if (card) card.classList.remove("drag-over");
+    });
+
+    taskListEl.addEventListener("drop", function (e) {
+      e.preventDefault();
+      clearDragIndicators(taskListEl);
+      var draggedId = e.dataTransfer.getData("text/plain");
+      if (!draggedId) return;
+
+      var draggedTask = findTask(draggedId);
+      if (!draggedTask) return;
+      var isQueued = draggedTask.status === "queued";
+
+      if (isQueued) {
+        // Reorder among queued tasks
+        var queuedIds = [];
+        state.tasks.forEach(function (t) {
+          if (t.status === "queued") queuedIds.push(t.id);
+        });
+        var fromIdx = queuedIds.indexOf(draggedId);
+        if (fromIdx < 0) return;
+        queuedIds.splice(fromIdx, 1);
+        var toIdx = getDropIndexAmongStatus(taskListEl, e.clientY, "queued");
+        queuedIds.splice(toIdx, 0, draggedId);
+
+        apiPut("api/tasks/reorder", { task_ids: queuedIds }).catch(function () {
+          showToast("Failed to reorder tasks");
+        });
+        for (var i = 0; i < queuedIds.length; i++) {
+          var t = findTask(queuedIds[i]);
+          if (t) t.priority = i + 1;
+        }
+      } else {
+        // Reorder finished tasks visually via created_at swapping
+        var finishedTasks = [];
+        state.tasks.forEach(function (t) {
+          if (t.status === "completed" || t.status === "failed") finishedTasks.push(t);
+        });
+        var fromIdx2 = -1;
+        for (var j = 0; j < finishedTasks.length; j++) {
+          if (finishedTasks[j].id === draggedId) { fromIdx2 = j; break; }
+        }
+        if (fromIdx2 < 0) return;
+        finishedTasks.splice(fromIdx2, 1);
+        var toIdx2 = getDropIndexAmongStatus(taskListEl, e.clientY, "finished");
+        finishedTasks.splice(toIdx2, 0, draggedTask);
+        // Reassign created_at to maintain the visual order across polls
+        var timestamps = finishedTasks.map(function (t) { return t.created_at; });
+        timestamps.sort();
+        for (var k = 0; k < finishedTasks.length; k++) {
+          finishedTasks[k].created_at = timestamps[k];
+        }
+      }
+
+      sortTasks();
+      renderTaskList();
+    });
+  }
+
+  function getDropIndex(container, clientY) {
+    var cards = container.querySelectorAll(".task-card:not(.dragging)");
+    for (var i = 0; i < cards.length; i++) {
+      var rect = cards[i].getBoundingClientRect();
+      if (clientY < rect.top + rect.height / 2) return i;
+    }
+    return cards.length;
+  }
+
+  function getDropIndexAmongStatus(container, clientY, group) {
+    var cards = container.querySelectorAll(".task-card:not(.dragging)");
+    var idx = 0;
+    for (var i = 0; i < cards.length; i++) {
+      var t = findTask(cards[i].dataset.taskId);
+      if (!t) continue;
+      var match = group === "queued"
+        ? t.status === "queued"
+        : (t.status === "completed" || t.status === "failed");
+      if (!match) continue;
+      var rect = cards[i].getBoundingClientRect();
+      if (clientY < rect.top + rect.height / 2) return idx;
+      idx++;
+    }
+    return idx;
+  }
+
+  function clearDragIndicators(container) {
+    var cards = container.querySelectorAll(".task-card.drag-over");
+    for (var i = 0; i < cards.length; i++) cards[i].classList.remove("drag-over");
+  }
+
+  function setInputValue(selector, value) {
+    var inp = qs(selector);
+    if (inp) inp.value = value;
+  }
+
+  function syncValueDisplays() {
+    var inputs = qsa(".param-control input[type='range']");
+    for (var i = 0; i < inputs.length; i++) {
+      var valSpan = inputs[i].parentNode.querySelector(".param-value");
+      if (valSpan) valSpan.textContent = inputs[i].value;
+    }
+  }
+
+  function restoreTaskToWorkflow(task) {
+    // Switch workflow tab
+    state.activeWorkflow = task.type;
+    qsa(".wf-tab").forEach(function (t) { t.classList.remove("active"); });
+    var targetTab = qs('.wf-tab[data-type="' + task.type + '"]');
+    if (targetTab) targetTab.classList.add("active");
+
+    // Select participant
+    if (task.participant) {
+      state.selectedParticipant = task.participant;
+      var sel = qs("#participantSelect");
+      if (sel) sel.value = task.participant;
+    }
+
+    // Select region
+    if (task.region && state.regions[task.region]) {
+      state.activeRegion = task.region;
+      state.pendingRegion = null;
+      renderRegionChips();
+      renderOverlay();
+      updateRegionButtons();
+    }
+
+    // For similarity, restore reference timestamp before rendering params
+    if (task.type === "similarity") {
+      var params = task.parameters || {};
+      if (params.reference_timestamp !== undefined) {
+        state.referenceTimestamp = params.reference_timestamp;
+      } else {
+        showToast("Reference frame must be recaptured");
+      }
+    }
+
+    // Rebuild param controls then set values
+    renderWorkflowParams();
+
+    var params = task.parameters || {};
+    if (task.type === "color") {
+      setInputValue("#paramColorH", params.target_color ? params.target_color.h : 90);
+      setInputValue("#paramColorS", params.target_color ? params.target_color.s : 200);
+      setInputValue("#paramColorV", params.target_color ? params.target_color.v : 200);
+      setInputValue("#paramColorTolH", params.tolerance ? params.tolerance.h : 15);
+      setInputValue("#paramColorTolS", params.tolerance ? params.tolerance.s : 40);
+      setInputValue("#paramColorTolV", params.tolerance ? params.tolerance.v : 40);
+      setInputValue("#paramColorInterval", params.interval || 1.0);
+      updateColorPreview();
+    } else if (task.type === "change") {
+      setInputValue("#paramChangeThresh", params.threshold || 0.03);
+      setInputValue("#paramChangeNoise", params.noise_threshold || 30);
+      setInputValue("#paramChangeInterval", params.interval || 1.0);
+    } else if (task.type === "similarity") {
+      setInputValue("#paramSimThresh", params.threshold || 0.90);
+      setInputValue("#paramSimInterval", params.interval || 1.0);
+    } else if (task.type === "text") {
+      setInputValue("#paramTextSearch", params.search_string || "");
+      setInputValue("#paramTextFuzzy", params.fuzzy_threshold || 0.80);
+      setInputValue("#paramTextInterval", params.interval || 2.0);
+      if (params.languages && params.languages[0]) {
+        setInputValue("#paramTextLang", params.languages[0]);
+      }
+    } else if (task.type === "timelapse") {
+      setInputValue("#paramTlSpeed", params.speedup_factor || 10);
+      setInputValue("#paramTlFormat", params.output_format || "mp4");
+    }
+
+    syncValueDisplays();
+    updateRunButton();
+    showToast("Restored " + task.type + " task parameters");
   }
 
   function findTask(id) {
@@ -1271,6 +1580,7 @@
   }
 
   function renderTaskList() {
+    sortTasks();
     var container = qs("#taskList");
     var count = qs("#taskCount");
     count.textContent = "(" + state.tasks.length + ")";
@@ -1283,6 +1593,16 @@
       var card = el("div", "task-card task-card-" + task.status);
       card.dataset.taskId = task.id;
       if (task.id === state.selectedTaskId) card.classList.add("selected");
+
+      // Drag handle for reorderable tasks (completed, failed, queued)
+      var isDraggable = task.status === "queued" || task.status === "completed" || task.status === "failed";
+      if (isDraggable) {
+        var handle = el("span", "task-card-drag-handle");
+        handle.appendChild(svgDragHandle());
+        handle.addEventListener("mousedown", function () { card.setAttribute("draggable", "true"); });
+        handle.addEventListener("mouseup", function () { card.removeAttribute("draggable"); });
+        card.appendChild(handle);
+      }
 
       // Type badge
       var badge = el("span", "task-card-type");
@@ -1318,12 +1638,17 @@
       }
       card.appendChild(el("span", "task-card-status", statusText));
 
-      // Cancel button
-      if (task.status === "queued" || task.status === "running") {
-        var cancelBtn = el("button", "task-card-cancel", "\u2715");
-        cancelBtn.title = "Cancel";
-        card.appendChild(cancelBtn);
-      }
+      // Edit button
+      var editBtn = el("button", "task-card-edit");
+      editBtn.title = "Edit";
+      editBtn.appendChild(svgEditIcon());
+      card.appendChild(editBtn);
+
+      // Dismiss button
+      var dismissBtn = el("button", "task-card-dismiss");
+      dismissBtn.title = "Dismiss";
+      dismissBtn.appendChild(svgDismissIcon());
+      card.appendChild(dismissBtn);
 
       container.appendChild(card);
     });
