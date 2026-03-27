@@ -410,14 +410,15 @@ body {
   display: flex;
   gap: 0;
   border-bottom: 1px solid var(--color-border);
+  flex-wrap: wrap;
 }
 
 .wf-tab {
-  padding: 0.4rem 0.9rem;
+  padding: 0.35rem 0.6rem;
   border: none;
   border-bottom: 2px solid transparent;
   background: none;
-  font-size: 0.78rem;
+  font-size: 0.72rem;
   font-weight: 500;
   color: var(--color-text-dim);
   cursor: pointer;
@@ -436,16 +437,18 @@ body {
 
 #workflowBody {
   display: flex;
-  align-items: flex-start;
-  gap: 1rem;
+  flex-direction: column;
+  gap: 0.6rem;
   padding: 0.6rem 0;
 }
 
 #workflowParams {
-  flex: 1;
   display: flex;
   flex-direction: column;
   gap: 0.25rem;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
 }
 
 .param-row {
@@ -456,8 +459,8 @@ body {
 }
 
 .param-label {
-  font-size: 0.78rem;
-  min-width: 7rem;
+  font-size: 0.72rem;
+  min-width: 5.5rem;
   color: var(--color-text-dim);
 }
 
@@ -468,7 +471,7 @@ body {
 }
 
 .param-control input[type="range"] {
-  width: 120px;
+  width: 80px;
   accent-color: var(--color-accent);
 }
 
@@ -605,6 +608,44 @@ body {
   opacity: 1;
 }
 
+/* Panel divider */
+
+#panelDivider {
+  max-width: 1120px;
+  width: 100%;
+  margin: 0 auto;
+  height: 12px;
+  background: var(--color-panel-bg);
+  border-left: 1px solid var(--color-panel-border);
+  border-right: 1px solid var(--color-panel-border);
+  cursor: row-resize;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  user-select: none;
+  transition: background-color 0.15s;
+}
+
+#panelDivider:hover,
+#panelDivider.active {
+  background-color: var(--color-surface-alt);
+}
+
+.divider-handle {
+  width: 36px;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--color-border);
+  transition: background-color 0.15s, width 0.15s;
+}
+
+#panelDivider:hover .divider-handle,
+#panelDivider.active .divider-handle {
+  background: var(--color-text-dim);
+  width: 48px;
+}
+
 /* Bottom panel */
 
 #bottomPanel {
@@ -618,10 +659,20 @@ body {
   box-shadow: 0 24px 60px var(--color-panel-shadow);
   padding: 0.8rem 1.5rem 1.2rem;
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: 1fr 1fr 1fr;
   gap: 1.5rem;
   flex-shrink: 0;
   margin-bottom: 1.5rem;
+  height: 260px;
+  min-height: 120px;
+  overflow: hidden;
+}
+
+#bottomPanel > * {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .panel-header {
@@ -655,7 +706,8 @@ body {
   display: flex;
   flex-direction: column;
   gap: 0.3rem;
-  max-height: 260px;
+  flex: 1;
+  min-height: 0;
   overflow-y: auto;
 }
 
@@ -770,7 +822,8 @@ body {
   display: flex;
   flex-direction: column;
   gap: 0;
-  max-height: 260px;
+  flex: 1;
+  min-height: 0;
   overflow-y: auto;
 }
 
@@ -1021,6 +1074,7 @@ html[data-theme="dark"] .region-chip.active {
 @media (max-width: 768px) {
   #ssHeader,
   #ssMain,
+  #panelDivider,
   #bottomPanel {
     margin-left: 0.5rem;
     margin-right: 0.5rem;
@@ -1028,8 +1082,6 @@ html[data-theme="dark"] .region-chip.active {
   }
   #bottomPanel {
     grid-template-columns: 1fr;
-  }
-  #workflowBody {
-    flex-direction: column;
+    height: auto;
   }
 }
