@@ -61,12 +61,21 @@ def test_list_regions_empty(client):
 def test_create_region(client):
     resp = client.post(
         "/screenspace/api/regions",
-        json={"name": "healthbar", "x": 100, "y": 20, "w": 300, "h": 30},
+        json={
+            "name": "healthbar",
+            "x": 100,
+            "y": 20,
+            "w": 300,
+            "h": 30,
+            "canvas_width": 1920,
+            "canvas_height": 1080,
+        },
     )
     assert resp.status_code == 200
     data = resp.get_json()
     assert data["ok"] is True
-    assert data["region"]["x"] == 100
+    assert data["region"]["source_width"] == 1920
+    assert abs(data["region"]["x"] - 100 / 1920) < 1e-9
 
     list_resp = client.get("/screenspace/api/regions")
     assert "healthbar" in list_resp.get_json()["regions"]
@@ -81,6 +90,8 @@ def test_create_region_with_description(client):
             "y": 0,
             "w": 50,
             "h": 20,
+            "canvas_width": 1920,
+            "canvas_height": 1080,
             "description": "Score display",
         },
     )
@@ -120,6 +131,69 @@ def test_delete_region(client):
 def test_delete_nonexistent_region(client):
     resp = client.delete("/screenspace/api/regions/nope")
     assert resp.status_code == 404
+
+
+def test_create_region_normalizes_coords(client):
+    resp = client.post(
+        "/screenspace/api/regions",
+        json={
+            "name": "center",
+            "x": 960,
+            "y": 540,
+            "w": 192,
+            "h": 108,
+            "canvas_width": 1920,
+            "canvas_height": 1080,
+        },
+    )
+    data = resp.get_json()
+    assert data["ok"] is True
+    r = data["region"]
+    assert abs(r["x"] - 0.5) < 1e-9
+    assert abs(r["y"] - 0.5) < 1e-9
+    assert abs(r["w"] - 0.1) < 1e-9
+    assert abs(r["h"] - 0.1) < 1e-9
+    assert r["source_width"] == 1920
+    assert r["source_height"] == 1080
+
+
+def test_create_region_legacy_no_canvas_dims(client):
+    resp = client.post(
+        "/screenspace/api/regions",
+        json={"name": "legacy", "x": 100, "y": 20, "w": 300, "h": 30},
+    )
+    data = resp.get_json()
+    assert data["ok"] is True
+    r = data["region"]
+    assert r["x"] == 100
+    assert r["y"] == 20
+    assert r["w"] == 300
+    assert r["h"] == 30
+    assert "source_width" not in r
+
+
+def test_denormalize_region():
+    from screenspace_server import _denormalize_region
+
+    region = {"x": 0.5, "y": 0.5, "w": 0.1, "h": 0.1, "source_width": 1920, "source_height": 1080}
+    px = _denormalize_region(region, 1920, 1080)
+    assert px == {"x": 960, "y": 540, "w": 192, "h": 108}
+
+
+def test_denormalize_legacy_region():
+    from screenspace_server import _denormalize_region
+
+    region = {"x": 100, "y": 20, "w": 300, "h": 30}
+    px = _denormalize_region(region, 1280, 720)
+    assert px == {"x": 100, "y": 20, "w": 300, "h": 30}
+
+
+def test_denormalize_cross_resolution():
+    from screenspace_server import _denormalize_region
+
+    region = {"x": 0.5, "y": 0.5, "w": 0.1, "h": 0.1, "source_width": 1920, "source_height": 1080}
+    px = _denormalize_region(region, 1280, 720)
+    assert px == {"x": 640, "y": 360, "w": 128, "h": 72}
 
 
 # ---- Tasks ----

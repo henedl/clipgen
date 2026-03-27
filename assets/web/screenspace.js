@@ -107,6 +107,17 @@
     return idx >= 0 ? regionColorForIndex(idx) : REGION_COLORS[0];
   }
 
+  function regionToPixels(r) {
+    if (!r.source_width) return r;
+    var canvas = qs("#overlayCanvas");
+    return {
+      x: Math.round(r.x * canvas.width),
+      y: Math.round(r.y * canvas.height),
+      w: Math.round(r.w * canvas.width),
+      h: Math.round(r.h * canvas.height),
+    };
+  }
+
   function taskTypeColor(type) {
     return TASK_COLORS[type] || "#888";
   }
@@ -411,12 +422,15 @@
       if (!name) return;
       var desc = qs("#regionDescInput").value.trim();
       var r = state.pendingRegion;
-      var body = { name: name, x: r.x, y: r.y, w: r.w, h: r.h };
+      var canvas = qs("#overlayCanvas");
+      var body = { name: name, x: r.x, y: r.y, w: r.w, h: r.h, canvas_width: canvas.width, canvas_height: canvas.height };
       if (desc) body.description = desc;
       apiPost("api/regions", body)
         .then(function (data) {
           if (data.ok) {
-            state.regions[name] = { x: r.x, y: r.y, w: r.w, h: r.h, description: desc };
+            var saved = data.region;
+            if (desc) saved.description = desc;
+            state.regions[name] = saved;
             state.pendingRegion = null;
             state.activeRegion = name;
             renderRegionChips();
@@ -493,15 +507,20 @@
     var ctx = canvas.getContext("2d");
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
+    // Scale factor: canvas pixels per display pixel, so chrome looks
+    // the same physical size regardless of the underlying video resolution.
+    var displayW = canvas.getBoundingClientRect().width || canvas.width;
+    var s = canvas.width / displayW;
+
     // Draw saved regions
     var names = Object.keys(state.regions);
     names.forEach(function (name, i) {
-      var r = state.regions[name];
+      var r = regionToPixels(state.regions[name]);
       var color = regionColorForIndex(i);
       var isActive = (name === state.activeRegion);
       ctx.strokeStyle = color;
-      ctx.lineWidth = isActive ? 3 : 1.5;
-      ctx.setLineDash(isActive ? [] : [8, 4]);
+      ctx.lineWidth = (isActive ? 2 : 1) * s;
+      ctx.setLineDash(isActive ? [] : [6 * s, 3 * s]);
       ctx.strokeRect(r.x, r.y, r.w, r.h);
       if (isActive) {
         ctx.fillStyle = hexToRgba(color, 0.12);
@@ -509,29 +528,32 @@
       }
       ctx.setLineDash([]);
       // Label
-      ctx.font = "bold 13px -apple-system, BlinkMacSystemFont, sans-serif";
-      var labelW = ctx.measureText(name).width + 8;
+      var fontSize = Math.round(12 * s);
+      var labelH = Math.round(16 * s);
+      var pad = Math.round(4 * s);
+      ctx.font = "bold " + fontSize + "px -apple-system, BlinkMacSystemFont, sans-serif";
+      var labelW = ctx.measureText(name).width + pad * 2;
       ctx.fillStyle = hexToRgba(color, 0.85);
-      ctx.fillRect(r.x, r.y - 18, labelW, 18);
+      ctx.fillRect(r.x, r.y - labelH, labelW, labelH);
       ctx.fillStyle = "#fff";
-      ctx.fillText(name, r.x + 4, r.y - 5);
+      ctx.fillText(name, r.x + pad, r.y - Math.round(4 * s));
     });
 
     // Drawing in progress
     if (state.drawingRegion) {
       var d = state.drawingRegion;
       ctx.strokeStyle = "#ffffff";
-      ctx.lineWidth = 2;
-      ctx.setLineDash([4, 4]);
+      ctx.lineWidth = 1.5 * s;
+      ctx.setLineDash([4 * s, 3 * s]);
       ctx.strokeRect(d.startX, d.startY, d.endX - d.startX, d.endY - d.startY);
       ctx.setLineDash([]);
       // Dimensions
       var w = Math.abs(d.endX - d.startX);
       var h = Math.abs(d.endY - d.startY);
       if (w > 20 && h > 20) {
-        ctx.font = "12px " + getComputedStyle(document.documentElement).getPropertyValue("--font-mono").trim();
+        ctx.font = Math.round(11 * s) + "px " + getComputedStyle(document.documentElement).getPropertyValue("--font-mono").trim();
         ctx.fillStyle = "rgba(255,255,255,0.9)";
-        ctx.fillText(w + "\u00d7" + h, Math.min(d.startX, d.endX) + 4, Math.max(d.startY, d.endY) + 16);
+        ctx.fillText(w + "\u00d7" + h, Math.min(d.startX, d.endX) + Math.round(4 * s), Math.max(d.startY, d.endY) + Math.round(14 * s));
       }
     }
 
@@ -539,14 +561,14 @@
     if (state.pendingRegion) {
       var p = state.pendingRegion;
       ctx.strokeStyle = "#ffffff";
-      ctx.lineWidth = 2;
+      ctx.lineWidth = 1.5 * s;
       ctx.setLineDash([]);
       ctx.strokeRect(p.x, p.y, p.w, p.h);
       ctx.fillStyle = "rgba(255, 255, 255, 0.08)";
       ctx.fillRect(p.x, p.y, p.w, p.h);
-      ctx.font = "12px " + getComputedStyle(document.documentElement).getPropertyValue("--font-mono").trim();
+      ctx.font = Math.round(11 * s) + "px " + getComputedStyle(document.documentElement).getPropertyValue("--font-mono").trim();
       ctx.fillStyle = "rgba(255,255,255,0.9)";
-      ctx.fillText(p.w + "\u00d7" + p.h + " px", p.x + 4, p.y + p.h + 16);
+      ctx.fillText(p.w + "\u00d7" + p.h + " px", p.x + Math.round(4 * s), p.y + p.h + Math.round(14 * s));
     }
   }
 
@@ -1078,7 +1100,7 @@
       showToast("Select a saved region first");
       return;
     }
-    var r = state.regions[state.activeRegion];
+    var r = regionToPixels(state.regions[state.activeRegion]);
     var canvas = qs("#frameCanvas");
     var ctx = canvas.getContext("2d");
     var imgData = ctx.getImageData(r.x, r.y, r.w, r.h);

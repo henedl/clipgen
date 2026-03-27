@@ -131,6 +131,45 @@ def api_video_info(participant: str) -> FlaskResponse:
     return jsonify({"ok": True, "info": info})
 
 
+# ---- Region coordinate normalization ----
+
+
+def _normalize_region(
+    x: float,
+    y: float,
+    w: float,
+    h: float,
+    frame_w: int,
+    frame_h: int,
+) -> Dict[str, Any]:
+    """Convert pixel coordinates to normalized 0-1 fractions."""
+    return {
+        "x": x / frame_w,
+        "y": y / frame_h,
+        "w": w / frame_w,
+        "h": h / frame_h,
+        "source_width": frame_w,
+        "source_height": frame_h,
+    }
+
+
+def _denormalize_region(
+    region: Dict[str, Any], target_w: int, target_h: int
+) -> Dict[str, int]:
+    """Convert normalized region to pixel coordinates for a target resolution.
+
+    Legacy regions (without ``source_width``) pass through unchanged.
+    """
+    if "source_width" not in region:
+        return {"x": region["x"], "y": region["y"], "w": region["w"], "h": region["h"]}
+    return {
+        "x": int(round(region["x"] * target_w)),
+        "y": int(round(region["y"] * target_h)),
+        "w": int(round(region["w"] * target_w)),
+        "h": int(round(region["h"] * target_h)),
+    }
+
+
 # ---- Regions CRUD ----
 
 
@@ -156,12 +195,24 @@ def api_regions_create() -> FlaskResponse:
         if val is None or not isinstance(val, (int, float)):
             return jsonify({"ok": False, "error": f"'{field}' must be a number"}), 400
 
-    region = {
-        "x": int(data["x"]),
-        "y": int(data["y"]),
-        "w": int(data["w"]),
-        "h": int(data["h"]),
-    }
+    canvas_w = data.get("canvas_width")
+    canvas_h = data.get("canvas_height")
+    if (
+        isinstance(canvas_w, (int, float))
+        and isinstance(canvas_h, (int, float))
+        and canvas_w > 0
+        and canvas_h > 0
+    ):
+        region: Dict[str, Any] = _normalize_region(
+            data["x"], data["y"], data["w"], data["h"], int(canvas_w), int(canvas_h)
+        )
+    else:
+        region = {
+            "x": int(data["x"]),
+            "y": int(data["y"]),
+            "w": int(data["w"]),
+            "h": int(data["h"]),
+        }
     if "description" in data:
         region["description"] = str(data["description"])
 
@@ -249,7 +300,14 @@ def api_tasks_create() -> FlaskResponse:
             source_video = Path(p["video_path"]).name
             break
 
-    region_coords = regions[region_name]
+    region_data = regions[region_name]
+    props = video.probe_video_properties(video_path)
+    if props and props.get("width") and props.get("height"):
+        region_coords = _denormalize_region(region_data, props["width"], props["height"])
+    else:
+        region_coords = {
+            k: region_data[k] for k in ("x", "y", "w", "h") if k in region_data
+        }
     parameters = data.get("parameters", {})
 
     # Similarity tasks: extract reference frame from video at given timestamp
