@@ -42,6 +42,7 @@
     selectedTaskResults: null,
     pollTimer: null,
     timelineDragging: false,
+    panelHeight: 260,
   };
 
   // ---- Helpers ----
@@ -1460,6 +1461,61 @@
     });
   }
 
+  // ---- Panel divider ----
+
+  function initPanelDivider() {
+    var handle = qs("#panelDivider");
+    var panel = qs("#bottomPanel");
+    if (!handle || !panel) return;
+    var dragging = false;
+    var startY = 0;
+    var startHeight = 0;
+
+    var MIN_H = 120;
+    var MAX_H = Math.round(window.innerHeight * 0.6);
+
+    function onDown(e) {
+      e.preventDefault();
+      dragging = true;
+      startY = e.clientY || (e.touches && e.touches[0].clientY) || 0;
+      startHeight = state.panelHeight;
+      handle.classList.add("active");
+      document.body.style.cursor = "row-resize";
+      document.body.style.userSelect = "none";
+    }
+
+    handle.addEventListener("mousedown", onDown);
+    handle.addEventListener("touchstart", onDown, { passive: false });
+
+    var rafPending = false;
+
+    function onMove(e) {
+      if (!dragging || rafPending) return;
+      rafPending = true;
+      var clientY = e.clientY || (e.touches && e.touches[0].clientY) || 0;
+      requestAnimationFrame(function () {
+        var delta = startY - clientY;
+        state.panelHeight = Math.max(MIN_H, Math.min(MAX_H, startHeight + delta));
+        panel.style.height = state.panelHeight + "px";
+        rafPending = false;
+      });
+    }
+
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("touchmove", onMove, { passive: false });
+
+    function onUp() {
+      if (!dragging) return;
+      dragging = false;
+      handle.classList.remove("active");
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+    }
+
+    document.addEventListener("mouseup", onUp);
+    document.addEventListener("touchend", onUp);
+  }
+
   // ---- Init ----
 
   document.addEventListener("DOMContentLoaded", function () {
@@ -1471,6 +1527,7 @@
     initRunButton();
     initTaskQueue();
     initResultsPanel();
+    initPanelDivider();
     initKeyboard();
     checkNavLinks();
 
