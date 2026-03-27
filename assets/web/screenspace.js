@@ -1993,6 +1993,12 @@
         handle.addEventListener("mousedown", function () { card.setAttribute("draggable", "true"); });
         handle.addEventListener("mouseup", function () { card.removeAttribute("draggable"); });
         card.appendChild(handle);
+      } else if (task.status === "running") {
+        card.appendChild(el("span", "task-card-spinner"));
+      } else if (task.status === "paused") {
+        var pauseIcon = el("span", "task-card-pause-icon");
+        pauseIcon.appendChild(svgPauseIcon());
+        card.appendChild(pauseIcon);
       }
 
       // Type badge
