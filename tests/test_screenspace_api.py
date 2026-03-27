@@ -184,6 +184,43 @@ def test_cancel_task_not_found(client):
     assert resp.status_code == 400
 
 
+def test_dismiss_queued_task(client):
+    worker = screenspace_server._worker
+    task = screenspace.create_task(
+        "color", "P01", "s.mp4", "/v.mp4", "r", {"x": 0, "y": 0, "w": 1, "h": 1}
+    )
+    worker.enqueue(task)
+    screenspace_server._manifest["tasks"].append(task)
+    resp = client.delete(f"/screenspace/api/tasks/{task['id']}?dismiss=true")
+    assert resp.status_code == 200
+    assert resp.get_json()["ok"] is True
+    # Task removed from worker
+    assert worker.get_task(task["id"]) is None
+    # Task removed from manifest
+    assert all(t["id"] != task["id"] for t in screenspace_server._manifest["tasks"])
+
+
+def test_dismiss_completed_task(client):
+    worker = screenspace_server._worker
+    task = screenspace.create_task(
+        "color", "P01", "s.mp4", "/v.mp4", "r", {"x": 0, "y": 0, "w": 1, "h": 1}
+    )
+    worker.enqueue(task)
+    # Simulate completed status
+    with worker._lock:
+        worker._tasks[task["id"]]["status"] = "completed"
+    screenspace_server._manifest["tasks"].append(task)
+    resp = client.delete(f"/screenspace/api/tasks/{task['id']}?dismiss=true")
+    assert resp.status_code == 200
+    assert worker.get_task(task["id"]) is None
+    assert all(t["id"] != task["id"] for t in screenspace_server._manifest["tasks"])
+
+
+def test_dismiss_nonexistent_task(client):
+    resp = client.delete("/screenspace/api/tasks/ss_nonexist?dismiss=true")
+    assert resp.status_code == 404
+
+
 def test_task_results_not_found(client):
     resp = client.get("/screenspace/api/tasks/ss_nonexist/results")
     assert resp.status_code == 404

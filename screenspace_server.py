@@ -273,7 +273,6 @@ def api_tasks_create() -> FlaskResponse:
             ), 400
         ref_region = screenspace.extract_region(frame, region_coords)
         parameters["reference_frame"] = ref_region
-        parameters.pop("reference_timestamp", None)
 
     task = screenspace.create_task(
         task_type=task_type,
@@ -293,9 +292,17 @@ def api_tasks_create() -> FlaskResponse:
 
 @screenspace_bp.route("/api/tasks/<task_id>", methods=["DELETE"])
 def api_tasks_cancel(task_id: str) -> FlaskResponse:
-    """Cancel a queued or running task."""
+    """Cancel or dismiss a task.  ?dismiss=true fully removes the task."""
     if not _worker:
         return jsonify({"ok": False, "error": "Worker not initialized"}), 500
+    if request.args.get("dismiss") == "true":
+        if not _worker.remove_task(task_id):
+            return jsonify({"ok": False, "error": "Task not found"}), 404
+        _manifest["tasks"] = [
+            t for t in _manifest.get("tasks", []) if t["id"] != task_id
+        ]
+        _persist_manifest()
+        return jsonify({"ok": True})
     if _worker.cancel(task_id):
         return jsonify({"ok": True})
     return jsonify({"ok": False, "error": "Task not found or already finished"}), 400
