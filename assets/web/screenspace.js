@@ -1233,6 +1233,10 @@
       // Status text
       var statusText = task.status;
       if (task.status === "running") statusText = Math.round((task.progress || 0) * 100) + "%";
+      if (task.status === "failed" && task.error) {
+        statusText = task.error;
+        card.title = task.error;
+      }
       if (task.status === "completed" && task.result) {
         var rLen = Array.isArray(task.result) ? task.result.length : (typeof task.result === "string" ? 1 : 0);
         statusText = rLen + " result" + (rLen !== 1 ? "s" : "");
