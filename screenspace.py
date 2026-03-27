@@ -656,6 +656,17 @@ class ScreenspaceWorker:
                     task["priority"] = i + 1
         return True
 
+    def remove_task(self, task_id: str) -> bool:
+        """Cancel (if active) and fully remove a task."""
+        with self._lock:
+            task = self._tasks.get(task_id)
+            if task is None:
+                return False
+            if task["status"] == TASK_STATUS_RUNNING:
+                task["_cancelled"] = True
+            self._tasks.pop(task_id, None)
+            return True
+
     def _run(self) -> None:
         """Worker loop."""
         while self._running:
