@@ -704,6 +704,23 @@ body {
   font-size: 0.78rem;
 }
 
+.panel-header-btn {
+  background: none;
+  border: none;
+  color: var(--color-text-dim);
+  cursor: pointer;
+  padding: 0.15rem 0.3rem;
+  border-radius: 3px;
+  transition: background 0.15s, color 0.15s;
+  display: inline-flex;
+  align-items: center;
+}
+
+.panel-header-btn:hover {
+  background: rgba(59, 130, 246, 0.1);
+  color: var(--color-accent);
+}
+
 .panel-empty {
   font-size: 0.78rem;
   color: var(--color-text-dim);
@@ -765,6 +782,10 @@ body {
   text-overflow: ellipsis;
   white-space: nowrap;
   max-width: 120px;
+}
+
+.task-card-paused {
+  border-left-color: #eab308;
 }
 
 .task-card-cancelled {

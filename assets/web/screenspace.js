@@ -42,6 +42,7 @@
     selectedTaskId: null,
     selectedTaskResults: null,
     pollTimer: null,
+    queuePaused: false,
     timelineDragging: false,
     panelHeight: 260,
   };
@@ -1299,9 +1300,44 @@
     return svg;
   }
 
+  function svgPauseIcon() {
+    var svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    svg.setAttribute("width", "14");
+    svg.setAttribute("height", "14");
+    svg.setAttribute("viewBox", "0 0 16 16");
+    svg.setAttribute("fill", "currentColor");
+    var p1 = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+    p1.setAttribute("x", "3.5");
+    p1.setAttribute("y", "2");
+    p1.setAttribute("width", "3");
+    p1.setAttribute("height", "12");
+    p1.setAttribute("rx", "1");
+    svg.appendChild(p1);
+    var p2 = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+    p2.setAttribute("x", "9.5");
+    p2.setAttribute("y", "2");
+    p2.setAttribute("width", "3");
+    p2.setAttribute("height", "12");
+    p2.setAttribute("rx", "1");
+    svg.appendChild(p2);
+    return svg;
+  }
+
+  function svgPlayIcon() {
+    var svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    svg.setAttribute("width", "14");
+    svg.setAttribute("height", "14");
+    svg.setAttribute("viewBox", "0 0 16 16");
+    svg.setAttribute("fill", "currentColor");
+    var path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    path.setAttribute("d", "M3 3.732a1 1 0 0 1 1.514-.857l8.07 4.268a1 1 0 0 1 0 1.714l-8.07 4.268A1 1 0 0 1 3 12.268V3.732Z");
+    svg.appendChild(path);
+    return svg;
+  }
+
   function sortTasks() {
     // completed/failed at top (oldest first), then running, then queued (by priority), cancelled last
-    var statusOrder = { completed: 0, failed: 1, running: 2, queued: 3, cancelled: 4 };
+    var statusOrder = { completed: 0, failed: 1, running: 2, paused: 3, queued: 4, cancelled: 5 };
     state.tasks.sort(function (a, b) {
       var sa = statusOrder[a.status] !== undefined ? statusOrder[a.status] : 5;
       var sb = statusOrder[b.status] !== undefined ? statusOrder[b.status] : 5;
@@ -1349,9 +1385,9 @@
         return;
       }
 
-      // Select completed task to view results
+      // Select completed/paused task to view results
       var task = findTask(taskId);
-      if (task && task.status === "completed") {
+      if (task && (task.status === "completed" || task.status === "paused")) {
         state.selectedTaskId = taskId;
         loadAndShowResults(taskId);
         renderTaskList();
@@ -1601,6 +1637,36 @@
     return null;
   }
 
+  function updatePauseButton() {
+    var btn = qs("#taskQueuePauseBtn");
+    if (!btn) return;
+    btn.innerHTML = "";
+    if (state.queuePaused) {
+      btn.appendChild(svgPlayIcon());
+      btn.title = "Resume queue";
+    } else {
+      btn.appendChild(svgPauseIcon());
+      btn.title = "Pause queue";
+    }
+  }
+
+  function initPauseButton() {
+    var btn = qs("#taskQueuePauseBtn");
+    if (!btn) return;
+    updatePauseButton();
+    btn.addEventListener("click", function () {
+      var endpoint = state.queuePaused ? "api/tasks/resume" : "api/tasks/pause";
+      apiPost(endpoint)
+        .then(function (data) {
+          if (data.ok) {
+            state.queuePaused = data.paused;
+            updatePauseButton();
+          }
+        })
+        .catch(function (err) { showToast("Error: " + err.message); });
+    });
+  }
+
   function renderTaskList() {
     sortTasks();
     var container = qs("#taskList");
@@ -1638,7 +1704,7 @@
       meta.textContent = task.participant + " \u00b7 " + (task.region || "");
       info.appendChild(meta);
 
-      if (task.status === "running") {
+      if (task.status === "running" || task.status === "paused") {
         var prog = el("div", "task-card-progress");
         var fill = el("div", "task-card-progress-fill");
         fill.style.width = Math.round((task.progress || 0) * 100) + "%";
@@ -1650,6 +1716,11 @@
       // Status text
       var statusText = task.status;
       if (task.status === "running") statusText = Math.round((task.progress || 0) * 100) + "%";
+      if (task.status === "paused") {
+        var pPct = Math.round((task.progress || 0) * 100);
+        var pLen = Array.isArray(task.result) ? task.result.length : 0;
+        statusText = "paused " + pPct + "%" + (pLen ? " \u00b7 " + pLen + " result" + (pLen !== 1 ? "s" : "") : "");
+      }
       if (task.status === "failed" && task.error) {
         statusText = task.error;
         card.title = task.error;
@@ -1685,7 +1756,7 @@
 
   function pollTasks() {
     var hasActive = state.tasks.some(function (t) {
-      return t.status === "queued" || t.status === "running";
+      return t.status === "queued" || t.status === "running" || t.status === "paused";
     });
     if (!hasActive) {
       clearInterval(state.pollTimer);
@@ -1700,6 +1771,10 @@
         var oldTask = oldSelected ? findTask(oldSelected) : null;
         var wasRunning = oldTask && (oldTask.status === "queued" || oldTask.status === "running");
         state.tasks = data.tasks;
+        if (data.paused !== undefined) {
+          state.queuePaused = data.paused;
+          updatePauseButton();
+        }
         renderTaskList();
         renderTimeline();
         // Auto-load results when selected task completes
@@ -1951,6 +2026,7 @@
     initWorkflowTabs();
     initRunButton();
     initTaskQueue();
+    initPauseButton();
     initResultsPanel();
     initPanelDivider();
     initKeyboard();

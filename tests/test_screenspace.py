@@ -351,6 +351,48 @@ class TestScreenspaceWorker:
         assert worker.get_task(task["id"]) is None
 
 
+    def test_pause_resume_flags(self):
+        worker = screenspace.ScreenspaceWorker()
+        assert worker.is_paused is False
+        worker.pause()
+        assert worker.is_paused is True
+        worker.resume()
+        assert worker.is_paused is False
+
+    def test_pause_sets_paused_flag_on_running_task(self):
+        worker = screenspace.ScreenspaceWorker()
+        task = screenspace.create_task(
+            "color", "P01", "s.mp4", "/v.mp4", "r", {"x": 0, "y": 0, "w": 1, "h": 1}
+        )
+        worker.enqueue(task)
+        with worker._lock:
+            worker._tasks[task["id"]]["status"] = screenspace.TASK_STATUS_RUNNING
+        worker.pause()
+        with worker._lock:
+            assert worker._tasks[task["id"]].get("_paused_flag") is True
+
+    def test_resume_requeues_paused_task(self):
+        worker = screenspace.ScreenspaceWorker()
+        task = screenspace.create_task(
+            "color",
+            "P01",
+            "s.mp4",
+            "/v.mp4",
+            "r",
+            {"x": 0, "y": 0, "w": 1, "h": 1},
+            parameters={"start_seconds": 0.0, "end_seconds": 100.0},
+        )
+        worker.enqueue(task)
+        with worker._lock:
+            worker._tasks[task["id"]]["status"] = screenspace.TASK_STATUS_PAUSED
+            worker._tasks[task["id"]]["progress"] = 0.5
+            worker._tasks[task["id"]]["result"] = [{"timestamp": 5.0}]
+        worker.resume()
+        t = worker.get_task(task["id"])
+        assert t["status"] == "queued"
+        assert t.get("parameters", {}).get("start_seconds") == 50.0
+
+
 class TestScanNumbers:
     def test_unknown_operator_raises(self):
         with pytest.raises(ValueError, match="Unknown.*operator"):
