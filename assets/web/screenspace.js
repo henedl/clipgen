@@ -12,6 +12,7 @@
     change: "#f97316",
     similarity: "#0ea5e9",
     text: "#10b981",
+    numbers: "#eab308",
     timelapse: "#ec4899",
   };
 
@@ -941,6 +942,53 @@
       langControl.appendChild(langSel);
       langRow.appendChild(langControl);
       container.appendChild(langRow);
+    } else if (type === "numbers") {
+      // Operator selector
+      var opRow = el("div", "param-row");
+      opRow.appendChild(el("span", "param-label", "Operator"));
+      var opControl = el("div", "param-control");
+      var opSel = document.createElement("select");
+      opSel.id = "paramNumOperator";
+      [["gt", "Greater than (>)"], ["lt", "Less than (<)"], ["eq", "Equal to (=)"],
+       ["gte", "Greater or equal (\u2265)"], ["lte", "Less or equal (\u2264)"], ["range", "In range"]].forEach(function (pair) {
+        var opt = el("option", null, pair[1]);
+        opt.value = pair[0];
+        opSel.appendChild(opt);
+      });
+      opSel.addEventListener("change", function () {
+        var rangeRow = qs("#paramNumRangeRow");
+        var targetRow = qs("#paramNumTargetRow");
+        if (opSel.value === "range") {
+          if (rangeRow) rangeRow.style.display = "";
+          if (targetRow) targetRow.style.display = "none";
+        } else {
+          if (rangeRow) rangeRow.style.display = "none";
+          if (targetRow) targetRow.style.display = "";
+        }
+      });
+      opControl.appendChild(opSel);
+      opRow.appendChild(opControl);
+      container.appendChild(opRow);
+      // Target value (for non-range operators)
+      var targetRow = el("div", "param-row");
+      targetRow.id = "paramNumTargetRow";
+      targetRow.appendChild(el("span", "param-label", "Target value"));
+      var targetCtrl = el("div", "param-control");
+      targetCtrl.appendChild(numberInput("paramNumTarget", -999999, 999999, 100, 1));
+      targetRow.appendChild(targetCtrl);
+      container.appendChild(targetRow);
+      // Range min/max (hidden by default)
+      var numRangeRow = el("div", "param-row");
+      numRangeRow.id = "paramNumRangeRow";
+      numRangeRow.style.display = "none";
+      numRangeRow.appendChild(el("span", "param-label", "Range"));
+      var rangeCtrl = el("div", "param-control");
+      rangeCtrl.appendChild(numberInput("paramNumMin", -999999, 999999, 0, 1));
+      rangeCtrl.appendChild(el("span", "param-value", "\u2013"));
+      rangeCtrl.appendChild(numberInput("paramNumMax", -999999, 999999, 100, 1));
+      numRangeRow.appendChild(rangeCtrl);
+      container.appendChild(numRangeRow);
+      addParamRow(container, "Interval (s)", numberInput("paramNumInterval", 0.5, 60, 2.0, 0.5));
     } else if (type === "timelapse") {
       addParamRow(container, "Speed", numberInput("paramTlSpeed", 2, 100, 10, 1));
       var fmtRow = el("div", "param-row");
@@ -1154,6 +1202,28 @@
       params.interval = parseFloat((qs("#paramTextInterval") || {}).value) || 2.0;
       var lang = (qs("#paramTextLang") || {}).value || "en";
       params.languages = [lang];
+    } else if (type === "numbers") {
+      var op = (qs("#paramNumOperator") || {}).value || "gt";
+      params.operator = op;
+      if (op === "range") {
+        params.range_min = parseFloat((qs("#paramNumMin") || {}).value);
+        params.range_max = parseFloat((qs("#paramNumMax") || {}).value);
+        if (isNaN(params.range_min) || isNaN(params.range_max)) {
+          showToast("Enter valid min and max values");
+          return null;
+        }
+        if (params.range_min > params.range_max) {
+          showToast("Min must be less than or equal to max");
+          return null;
+        }
+      } else {
+        params.target_value = parseFloat((qs("#paramNumTarget") || {}).value);
+        if (isNaN(params.target_value)) {
+          showToast("Enter a valid target number");
+          return null;
+        }
+      }
+      params.interval = parseFloat((qs("#paramNumInterval") || {}).value) || 2.0;
     } else if (type === "timelapse") {
       params.speedup_factor = parseFloat((qs("#paramTlSpeed") || {}).value) || 10;
       params.output_format = (qs("#paramTlFormat") || {}).value || "mp4";
@@ -1722,6 +1792,10 @@
         row.appendChild(el("span", "result-timestamp", formatTimestamp(r.timestamp)));
         row.appendChild(el("span", "result-detail", r.text_found || ""));
         row.appendChild(el("span", "result-score", (r.confidence * 100).toFixed(0) + "%"));
+      } else if (task.type === "numbers") {
+        row.dataset.timestamp = r.timestamp;
+        row.appendChild(el("span", "result-timestamp", formatTimestamp(r.timestamp)));
+        row.appendChild(el("span", "result-detail", String(r.number_found)));
       }
 
       container.appendChild(row);

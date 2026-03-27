@@ -11,6 +11,7 @@ import copy
 import difflib
 import json
 import queue
+import re
 import threading
 import uuid
 from datetime import datetime, timezone
@@ -480,6 +481,106 @@ def scan_text(
     return results
 
 
+_NUMBERS_RE = re.compile(r"-?\d+(?:\.\d+)?")
+_VALID_OPERATORS = ("eq", "gt", "lt", "gte", "lte", "range")
+
+
+def scan_numbers(
+    video_path: str,
+    region: Dict[str, int],
+    operator: str,
+    target_value: float = 0,
+    interval_seconds: float = 2.0,
+    *,
+    range_min: Optional[float] = None,
+    range_max: Optional[float] = None,
+    languages: Optional[List[str]] = None,
+    start_seconds: float = 0.0,
+    end_seconds: Optional[float] = None,
+    on_progress: Optional[Callable[[float], None]] = None,
+    cancel_flag: Optional[Callable[[], bool]] = None,
+) -> List[Dict[str, Any]]:
+    """Scan for numeric values in a region and apply a comparison.
+
+    Uses EasyOCR to detect text, parses numbers from it, and returns
+    timestamps where the detected number satisfies the comparison.
+    """
+    if operator not in _VALID_OPERATORS:
+        raise ValueError(
+            f"Unknown operator '{operator}'. Must be one of: {', '.join(_VALID_OPERATORS)}"
+        )
+
+    try:
+        import easyocr  # type: ignore[import-untyped]
+    except ImportError:
+        raise ImportError(
+            "EasyOCR is required for numbers scan. Install with: uv add easyocr"
+        ) from None
+
+    if languages is None:
+        languages = ["en"]
+
+    reader = easyocr.Reader(languages, verbose=False)
+
+    cap = cv2.VideoCapture(video_path)
+    if not cap.isOpened():
+        return []
+    fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+    total_frames = cap.get(cv2.CAP_PROP_FRAME_COUNT)
+    duration = total_frames / fps if fps > 0 else 0.0
+    cap.release()
+
+    if end_seconds is None or end_seconds > duration:
+        end_seconds = duration
+    total_range = end_seconds - start_seconds
+
+    results: List[Dict[str, Any]] = []
+
+    def _check(value: float) -> bool:
+        if operator == "eq":
+            return value == target_value
+        elif operator == "gt":
+            return value > target_value
+        elif operator == "lt":
+            return value < target_value
+        elif operator == "gte":
+            return value >= target_value
+        elif operator == "lte":
+            return value <= target_value
+        elif operator == "range":
+            return (range_min is not None and range_max is not None
+                    and range_min <= value <= range_max)
+        return False
+
+    def _cb(ts: float, pixels: np.ndarray) -> Optional[bool]:
+        if cancel_flag and cancel_flag():
+            return False
+        ocr_results = reader.readtext(pixels, detail=1)
+        for _, text, _conf in ocr_results:
+            cleaned = text.replace(",", "")
+            for match in _NUMBERS_RE.findall(cleaned):
+                num = float(match)
+                if _check(num):
+                    results.append({"timestamp": ts, "number_found": num})
+                    return None
+        if on_progress and total_range > 0:
+            on_progress((ts - start_seconds) / total_range)
+        return None
+
+    scan_video_frames(
+        video_path,
+        region,
+        interval_seconds,
+        _cb,
+        start_seconds=start_seconds,
+        end_seconds=end_seconds,
+    )
+
+    if on_progress:
+        on_progress(1.0)
+    return results
+
+
 def generate_timelapse(
     video_path: str,
     region: Dict[str, int],
@@ -781,6 +882,21 @@ class ScreenspaceWorker:
                 search_string=params.get("search_string", ""),
                 interval_seconds=params.get("interval", 2.0),
                 fuzzy_threshold=params.get("fuzzy_threshold", 0),
+                languages=params.get("languages"),
+                start_seconds=params.get("start_seconds", 0.0),
+                end_seconds=params.get("end_seconds"),
+                on_progress=on_progress,
+                cancel_flag=cancel_flag,
+            )
+        elif task_type == "numbers":
+            return scan_numbers(
+                video_path,
+                region,
+                operator=params.get("operator", "gt"),
+                target_value=params.get("target_value", 0),
+                interval_seconds=params.get("interval", 2.0),
+                range_min=params.get("range_min"),
+                range_max=params.get("range_max"),
                 languages=params.get("languages"),
                 start_seconds=params.get("start_seconds", 0.0),
                 end_seconds=params.get("end_seconds"),
