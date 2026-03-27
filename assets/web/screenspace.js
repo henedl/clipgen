@@ -51,6 +51,7 @@
     panelHeight: 260,
     previewMaxWidth: 100,
     taskFilter: null,
+    pipetteActive: false,
   };
 
   // ---- Helpers ----
@@ -408,6 +409,16 @@
 
     overlay.addEventListener("mousedown", function (e) {
       if (e.button !== 0) return;
+      if (state.pipetteActive) {
+        var pos = canvasCoords(qs("#frameCanvas"), e);
+        var frameCtx = qs("#frameCanvas").getContext("2d");
+        var pixel = frameCtx.getImageData(pos.x, pos.y, 1, 1).data;
+        var hsv = rgbToHsv(pixel[0], pixel[1], pixel[2]);
+        setTargetColor(hsv.h, hsv.s, hsv.v);
+        deactivatePipette();
+        showToast("Sampled color from frame");
+        return;
+      }
       var pos = canvasCoords(overlay, e);
       var displayW = overlay.getBoundingClientRect().width || overlay.width;
       var s = overlay.width / displayW;
@@ -443,6 +454,7 @@
     });
 
     overlay.addEventListener("mousemove", function (e) {
+      if (state.pipetteActive) return;
       var pos = canvasCoords(overlay, e);
       var displayW = overlay.getBoundingClientRect().width || overlay.width;
       var s = overlay.width / displayW;
@@ -479,6 +491,7 @@
     });
 
     overlay.addEventListener("mouseup", function (e) {
+      if (state.pipetteActive) return;
       if (state.resizingRegion) {
         var rName = state.resizingRegion.name;
         state.resizingRegion = null;
@@ -1119,22 +1132,135 @@
     var type = state.activeWorkflow;
 
     if (type === "color") {
-      addParamRow(container, "Target Hue", rangeInput("paramColorH", 0, 180, 90), "paramColorHVal");
-      addParamRow(container, "Target Sat", rangeInput("paramColorS", 0, 255, 200), "paramColorSVal");
-      addParamRow(container, "Target Val", rangeInput("paramColorV", 0, 255, 200), "paramColorVVal");
-      addParamRow(container, "Hue Tol.", rangeInput("paramColorTolH", 0, 90, 15), "paramColorTolHVal");
-      addParamRow(container, "Sat Tol.", rangeInput("paramColorTolS", 0, 128, 40), "paramColorTolSVal");
-      addParamRow(container, "Val Tol.", rangeInput("paramColorTolV", 0, 128, 40), "paramColorTolVVal");
-      addParamRow(container, "Interval (s)", numberInput("paramColorInterval", 0.5, 60, 1.0, 0.5));
-      // Color preview swatch
+      // Color picker group: palette + brightness + hex/pipette
+      var pickerGroup = el("div", "color-picker-group");
+
+      // Hue-Saturation palette canvas
+      var palette = document.createElement("canvas");
+      palette.id = "colorPalette";
+      palette.className = "color-palette-canvas";
+      pickerGroup.appendChild(palette);
+
+      // Brightness strip
+      var bright = document.createElement("canvas");
+      bright.id = "colorBrightness";
+      bright.className = "color-brightness-strip";
+      pickerGroup.appendChild(bright);
+
+      // Color input row: preview swatch + hex input + pipette button
+      var inputRow = el("div", "color-input-row");
       var preview = el("div", "color-preview");
       preview.id = "colorPreview";
-      container.appendChild(preview);
+      inputRow.appendChild(preview);
+
+      var hexInput = document.createElement("input");
+      hexInput.type = "text";
+      hexInput.id = "paramColorHex";
+      hexInput.className = "color-hex-input";
+      hexInput.placeholder = "#000000";
+      hexInput.maxLength = 7;
+      inputRow.appendChild(hexInput);
+
+      var pipetteBtn = el("button", "btn btn-small btn-pipette");
+      pipetteBtn.id = "pipetteBtn";
+      pipetteBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path fill-rule="evenodd" clip-rule="evenodd" d="M15 4C15 5.39788 14.0439 6.57245 12.75 6.90549V8.5C12.75 8.69891 12.671 8.88968 12.5303 9.03033L12.0303 9.53033C11.7374 9.82322 11.2626 9.82322 10.9697 9.53033L10.25 8.81069L5.57322 13.4875C5.24503 13.8157 4.79992 14.0001 4.33579 14.0001H3.66421C3.59791 14.0001 3.53432 14.0264 3.48744 14.0733L2.78033 14.7804C2.63968 14.921 2.44891 15.0001 2.25 15.0001C2.05109 15.0001 1.86032 14.921 1.71967 14.7804L1.21967 14.2804C0.926777 13.9875 0.926777 13.5126 1.21967 13.2197L1.92678 12.5126C1.97366 12.4657 2 12.4021 2 12.3358V11.6643C2 11.2001 2.18437 10.755 2.51256 10.4268L7.18937 5.75003L6.46967 5.03033C6.17678 4.73744 6.17678 4.26256 6.46967 3.96967L6.96967 3.46967C7.11032 3.32902 7.30109 3.25 7.5 3.25H9.09451C9.42755 1.95608 10.6021 1 12 1C13.6569 1 15 2.34315 15 4ZM9.18937 7.75003L8.25003 6.81069L3.57322 11.4875C3.52634 11.5344 3.5 11.598 3.5 11.6643V12.3358C3.5 12.3938 3.49713 12.4514 3.49146 12.5086C3.54862 12.5029 3.60627 12.5001 3.66421 12.5001H4.33579C4.40209 12.5001 4.46568 12.4737 4.51256 12.4268L9.18937 7.75003Z"/></svg>';
+      pipetteBtn.title = "Pick color from video frame";
+      pipetteBtn.addEventListener("click", function () {
+        if (state.pipetteActive) deactivatePipette();
+        else activatePipette();
+      });
+      inputRow.appendChild(pipetteBtn);
+
+      var sampleBtn = el("button", "btn btn-small", "From Region");
+      sampleBtn.addEventListener("click", sampleColorFromRegion);
+      inputRow.appendChild(sampleBtn);
+
+      pickerGroup.appendChild(inputRow);
+
+      // Hidden inputs for gatherWorkflowParams() contract
+      var hiddenH = document.createElement("input");
+      hiddenH.type = "hidden"; hiddenH.id = "paramColorH"; hiddenH.value = "90";
+      var hiddenS = document.createElement("input");
+      hiddenS.type = "hidden"; hiddenS.id = "paramColorS"; hiddenS.value = "200";
+      var hiddenV = document.createElement("input");
+      hiddenV.type = "hidden"; hiddenV.id = "paramColorV"; hiddenV.value = "200";
+      pickerGroup.appendChild(hiddenH);
+      pickerGroup.appendChild(hiddenS);
+      pickerGroup.appendChild(hiddenV);
+
+      container.appendChild(pickerGroup);
+
+      // Palette canvas events
+      var paletteDragging = false;
+      function pickFromPalette(e) {
+        var rect = palette.getBoundingClientRect();
+        var x = clamp(e.clientX - rect.left, 0, rect.width);
+        var y = clamp(e.clientY - rect.top, 0, rect.height);
+        var h = Math.round((x / rect.width) * 180);
+        var s = Math.round((1 - y / rect.height) * 255);
+        var curV = parseFloat(qs("#paramColorV").value) || 0;
+        setTargetColor(h, s, curV);
+      }
+      palette.addEventListener("mousedown", function (e) {
+        e.preventDefault();
+        paletteDragging = true;
+        pickFromPalette(e);
+      });
+      document.addEventListener("mousemove", function (e) {
+        if (paletteDragging) pickFromPalette(e);
+      });
+      document.addEventListener("mouseup", function () { paletteDragging = false; });
+
+      // Brightness strip events
+      var brightDragging = false;
+      function pickFromBrightness(e) {
+        var rect = bright.getBoundingClientRect();
+        var x = clamp(e.clientX - rect.left, 0, rect.width);
+        var v = Math.round((x / rect.width) * 255);
+        var curH = parseFloat(qs("#paramColorH").value) || 0;
+        var curS = parseFloat(qs("#paramColorS").value) || 0;
+        setTargetColor(curH, curS, v);
+      }
+      bright.addEventListener("mousedown", function (e) {
+        e.preventDefault();
+        brightDragging = true;
+        pickFromBrightness(e);
+      });
+      document.addEventListener("mousemove", function (e) {
+        if (brightDragging) pickFromBrightness(e);
+      });
+      document.addEventListener("mouseup", function () { brightDragging = false; });
+
+      // Hex input event
+      hexInput.addEventListener("input", function () {
+        var rgb = hexToRgb(hexInput.value);
+        if (rgb) {
+          var hsv = rgbToHsv(rgb.r, rgb.g, rgb.b);
+          // Update hidden inputs and visuals without re-setting the hex field
+          var hEl = qs("#paramColorH"), sEl = qs("#paramColorS"), vEl = qs("#paramColorV");
+          if (hEl) hEl.value = hsv.h;
+          if (sEl) sEl.value = hsv.s;
+          if (vEl) vEl.value = hsv.v;
+          updateColorPreview();
+          renderColorPalette();
+          renderBrightnessStrip();
+        }
+      });
+
+      // Unified tolerance slider
+      var tolSlider = rangeInput("paramColorTol", 0, 100, 30);
+      addParamRow(container, "Tolerance", tolSlider, "paramColorTolVal");
+      tolSlider.addEventListener("input", function () {
+        renderColorPalette();
+      });
+      addParamRow(container, "Interval (s)", numberInput("paramColorInterval", 0.5, 60, 1.0, 0.5));
+
+      // Initial render of palette and preview
+      renderColorPalette();
+      renderBrightnessStrip();
       updateColorPreview();
-      // Sample from frame button
-      var sampleBtn = el("button", "btn btn-small", "Sample from Frame");
-      sampleBtn.addEventListener("click", sampleColorFromFrame);
-      container.appendChild(sampleBtn);
+      var initRgb = hsvToRgb(90, 200, 200);
+      hexInput.value = rgbToHex(initRgb.r, initRgb.g, initRgb.b);
     } else if (type === "change") {
       addParamRow(container, "Threshold", rangeInput("paramChangeThresh", 0.01, 0.50, 0.03, 0.01), "paramChangeThreshVal");
       addParamRow(container, "Noise Thr.", rangeInput("paramChangeNoise", 0, 100, 30, 1), "paramChangeNoiseVal");
@@ -1295,30 +1421,189 @@
     return inp;
   }
 
+  // ---- Color conversion utilities ----
+
+  function rgbToHsv(r, g, b) {
+    var rn = r / 255, gn = g / 255, bn = b / 255;
+    var max = Math.max(rn, gn, bn), min = Math.min(rn, gn, bn);
+    var d = max - min, hue = 0;
+    if (d > 0) {
+      if (max === rn) hue = ((gn - bn) / d) % 6;
+      else if (max === gn) hue = (bn - rn) / d + 2;
+      else hue = (rn - gn) / d + 4;
+      hue = Math.round(hue * 30);
+      if (hue < 0) hue += 180;
+    }
+    return { h: hue, s: max > 0 ? Math.round((d / max) * 255) : 0, v: Math.round(max * 255) };
+  }
+
+  function hsvToRgb(h, s, v) {
+    var hDeg = h * 2, sn = s / 255, vn = v / 255;
+    var c = vn * sn, x = c * (1 - Math.abs((hDeg / 60) % 2 - 1)), m = vn - c;
+    var r1 = 0, g1 = 0, b1 = 0;
+    if (hDeg < 60) { r1 = c; g1 = x; }
+    else if (hDeg < 120) { r1 = x; g1 = c; }
+    else if (hDeg < 180) { g1 = c; b1 = x; }
+    else if (hDeg < 240) { g1 = x; b1 = c; }
+    else if (hDeg < 300) { r1 = x; b1 = c; }
+    else { r1 = c; b1 = x; }
+    return { r: Math.round((r1 + m) * 255), g: Math.round((g1 + m) * 255), b: Math.round((b1 + m) * 255) };
+  }
+
+  function rgbToHex(r, g, b) {
+    return "#" + ((1 << 24) | (r << 16) | (g << 8) | b).toString(16).slice(1);
+  }
+
+  function hexToRgb(hex) {
+    hex = hex.replace(/^#/, "");
+    if (hex.length === 3) hex = hex[0] + hex[0] + hex[1] + hex[1] + hex[2] + hex[2];
+    if (!/^[0-9a-fA-F]{6}$/.test(hex)) return null;
+    var n = parseInt(hex, 16);
+    return { r: (n >> 16) & 255, g: (n >> 8) & 255, b: n & 255 };
+  }
+
   function updateColorPreview() {
     var preview = qs("#colorPreview");
     if (!preview) return;
     var h = parseFloat((qs("#paramColorH") || {}).value) || 0;
     var s = parseFloat((qs("#paramColorS") || {}).value) || 0;
     var v = parseFloat((qs("#paramColorV") || {}).value) || 0;
-    // Convert OpenCV HSV (H:0-180, S:0-255, V:0-255) to CSS hsl
-    var hDeg = h * 2; // OpenCV H is 0-180, CSS is 0-360
-    var sPercent = (s / 255) * 100;
-    var lPercent = (v / 255) * (1 - s / 255 / 2) * 100;
-    preview.style.background = "hsl(" + hDeg + "," + sPercent + "%," + Math.max(lPercent, 5) + "%)";
+    var rgb = hsvToRgb(h, s, v);
+    preview.style.background = rgbToHex(rgb.r, rgb.g, rgb.b);
   }
 
-  function sampleColorFromFrame() {
+  function setTargetColor(h, s, v) {
+    h = clamp(Math.round(h), 0, 180);
+    s = clamp(Math.round(s), 0, 255);
+    v = clamp(Math.round(v), 0, 255);
+    var hEl = qs("#paramColorH"), sEl = qs("#paramColorS"), vEl = qs("#paramColorV");
+    if (hEl) hEl.value = h;
+    if (sEl) sEl.value = s;
+    if (vEl) vEl.value = v;
+    var rgb = hsvToRgb(h, s, v);
+    var hexEl = qs("#paramColorHex");
+    if (hexEl) hexEl.value = rgbToHex(rgb.r, rgb.g, rgb.b);
+    updateColorPreview();
+    renderColorPalette();
+    renderBrightnessStrip();
+  }
+
+  function sizeCanvasToDisplay(canvas) {
+    var rect = canvas.getBoundingClientRect();
+    var dpr = window.devicePixelRatio || 1;
+    var w = Math.round(rect.width * dpr);
+    var h = Math.round(rect.height * dpr);
+    if (canvas.width !== w || canvas.height !== h) {
+      canvas.width = w;
+      canvas.height = h;
+    }
+    return { w: w, h: h, dpr: dpr };
+  }
+
+  function renderColorPalette() {
+    var canvas = qs("#colorPalette");
+    if (!canvas || !canvas.getBoundingClientRect().width) return;
+    var size = sizeCanvasToDisplay(canvas);
+    var w = size.w, h = size.h, dpr = size.dpr;
+    var ctx = canvas.getContext("2d");
+
+    // Hue spectrum (horizontal)
+    var hueGrad = ctx.createLinearGradient(0, 0, w, 0);
+    var stops = ["#ff0000", "#ffff00", "#00ff00", "#00ffff", "#0000ff", "#ff00ff", "#ff0000"];
+    for (var i = 0; i < stops.length; i++) hueGrad.addColorStop(i / (stops.length - 1), stops[i]);
+    ctx.fillStyle = hueGrad;
+    ctx.fillRect(0, 0, w, h);
+
+    // White-to-transparent overlay (bottom = white = low saturation)
+    var satGrad = ctx.createLinearGradient(0, 0, 0, h);
+    satGrad.addColorStop(0, "rgba(255,255,255,0)");
+    satGrad.addColorStop(1, "rgba(255,255,255,1)");
+    ctx.fillStyle = satGrad;
+    ctx.fillRect(0, 0, w, h);
+
+    // Black overlay for brightness
+    var curV = parseFloat((qs("#paramColorV") || {}).value) || 0;
+    var darkness = 1 - curV / 255;
+    if (darkness > 0) {
+      ctx.fillStyle = "rgba(0,0,0," + darkness + ")";
+      ctx.fillRect(0, 0, w, h);
+    }
+
+    // Current position
+    var curH = parseFloat((qs("#paramColorH") || {}).value) || 0;
+    var curS = parseFloat((qs("#paramColorS") || {}).value) || 0;
+    var cx = (curH / 180) * w;
+    var cy = (1 - curS / 255) * h;
+
+    // Tolerance range visualization
+    var tol = parseFloat((qs("#paramColorTol") || {}).value) || 0;
+    if (tol > 0) {
+      var tolH = tol * 90 / 100;
+      var tolS = tol * 128 / 100;
+      var rx = (tolH / 180) * w;
+      var ry = (tolS / 255) * h;
+      ctx.fillStyle = "rgba(255,255,255,0.18)";
+      ctx.strokeStyle = "rgba(255,255,255,0.4)";
+      ctx.lineWidth = 1 * dpr;
+      ctx.beginPath();
+      ctx.rect(cx - rx, cy - ry, rx * 2, ry * 2);
+      ctx.fill();
+      ctx.stroke();
+    }
+
+    // Crosshair indicator
+    var r = 5 * dpr;
+    ctx.beginPath();
+    ctx.arc(cx, cy, r, 0, Math.PI * 2);
+    ctx.strokeStyle = "#fff";
+    ctx.lineWidth = 2 * dpr;
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(cx, cy, r + 1 * dpr, 0, Math.PI * 2);
+    ctx.strokeStyle = "#000";
+    ctx.lineWidth = 1 * dpr;
+    ctx.stroke();
+  }
+
+  function renderBrightnessStrip() {
+    var canvas = qs("#colorBrightness");
+    if (!canvas || !canvas.getBoundingClientRect().width) return;
+    var size = sizeCanvasToDisplay(canvas);
+    var w = size.w, h = size.h, dpr = size.dpr;
+    var ctx = canvas.getContext("2d");
+    var curH = parseFloat((qs("#paramColorH") || {}).value) || 0;
+    var curS = parseFloat((qs("#paramColorS") || {}).value) || 0;
+
+    // Gradient from black (left) to fully saturated color (right)
+    var fullRgb = hsvToRgb(curH, curS, 255);
+    var grad = ctx.createLinearGradient(0, 0, w, 0);
+    grad.addColorStop(0, "#000000");
+    grad.addColorStop(1, rgbToHex(fullRgb.r, fullRgb.g, fullRgb.b));
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, w, h);
+
+    // Position indicator
+    var curV = parseFloat((qs("#paramColorV") || {}).value) || 0;
+    var ix = (curV / 255) * w;
+    var r = 4 * dpr;
+    ctx.beginPath();
+    ctx.arc(clamp(ix, r, w - r), h / 2, r, 0, Math.PI * 2);
+    ctx.fillStyle = "#fff";
+    ctx.fill();
+    ctx.strokeStyle = "#000";
+    ctx.lineWidth = 1 * dpr;
+    ctx.stroke();
+  }
+
+  function sampleColorFromRegion() {
     if (!state.frameImage || !state.activeRegion) {
       showToast("Select a saved region first");
       return;
     }
     var r = regionToPixels(state.regions[state.activeRegion]);
-    var canvas = qs("#frameCanvas");
-    var ctx = canvas.getContext("2d");
+    var ctx = qs("#frameCanvas").getContext("2d");
     var imgData = ctx.getImageData(r.x, r.y, r.w, r.h);
     var data = imgData.data;
-    // Average RGB then convert to HSV
     var totalR = 0, totalG = 0, totalB = 0;
     var count = data.length / 4;
     for (var i = 0; i < data.length; i += 4) {
@@ -1326,31 +1611,29 @@
       totalG += data[i + 1];
       totalB += data[i + 2];
     }
-    var avgR = totalR / count / 255;
-    var avgG = totalG / count / 255;
-    var avgB = totalB / count / 255;
-    var max = Math.max(avgR, avgG, avgB);
-    var min = Math.min(avgR, avgG, avgB);
-    var d = max - min;
-    var hue = 0;
-    if (d > 0) {
-      if (max === avgR) hue = ((avgG - avgB) / d) % 6;
-      else if (max === avgG) hue = (avgB - avgR) / d + 2;
-      else hue = (avgR - avgG) / d + 4;
-      hue = Math.round(hue * 30); // Convert to 0-180 range (OpenCV scale)
-      if (hue < 0) hue += 180;
-    }
-    var sat = max > 0 ? Math.round((d / max) * 255) : 0;
-    var val = Math.round(max * 255);
-
-    var hEl = qs("#paramColorH");
-    var sEl = qs("#paramColorS");
-    var vEl = qs("#paramColorV");
-    if (hEl) { hEl.value = hue; qs("#paramColorHVal").textContent = hue; }
-    if (sEl) { sEl.value = sat; qs("#paramColorSVal").textContent = sat; }
-    if (vEl) { vEl.value = val; qs("#paramColorVVal").textContent = val; }
-    updateColorPreview();
+    var hsv = rgbToHsv(Math.round(totalR / count), Math.round(totalG / count), Math.round(totalB / count));
+    setTargetColor(hsv.h, hsv.s, hsv.v);
     showToast("Sampled color from " + state.activeRegion);
+  }
+
+  function activatePipette() {
+    if (!state.frameImage) {
+      showToast("Load a video frame first");
+      return;
+    }
+    state.pipetteActive = true;
+    var overlay = qs("#overlayCanvas");
+    if (overlay) overlay.classList.add("pipette-active");
+    var btn = qs("#pipetteBtn");
+    if (btn) btn.classList.add("active");
+  }
+
+  function deactivatePipette() {
+    state.pipetteActive = false;
+    var overlay = qs("#overlayCanvas");
+    if (overlay) overlay.classList.remove("pipette-active");
+    var btn = qs("#pipetteBtn");
+    if (btn) btn.classList.remove("active");
   }
 
   function updateRunButton() {
@@ -1409,10 +1692,11 @@
         s: parseFloat((qs("#paramColorS") || {}).value) || 0,
         v: parseFloat((qs("#paramColorV") || {}).value) || 0,
       };
+      var tol = parseFloat((qs("#paramColorTol") || {}).value) || 30;
       params.tolerance = {
-        h: parseFloat((qs("#paramColorTolH") || {}).value) || 15,
-        s: parseFloat((qs("#paramColorTolS") || {}).value) || 40,
-        v: parseFloat((qs("#paramColorTolV") || {}).value) || 40,
+        h: Math.round(tol * 90 / 100),
+        s: Math.round(tol * 128 / 100),
+        v: Math.round(tol * 128 / 100),
       };
       params.interval = parseFloat((qs("#paramColorInterval") || {}).value) || 1.0;
     } else if (type === "change") {
@@ -2258,6 +2542,10 @@
         e.preventDefault();
         if (state.videoInfo) loadFrame(clamp(state.currentTimestamp + FRAME_STEP, 0, state.videoInfo.duration));
       } else if (e.key === "Escape") {
+        if (state.pipetteActive) {
+          deactivatePipette();
+          return;
+        }
         if (state.draggingRegion) {
           var orig = state.draggingRegion.origRegion;
           state.regions[state.draggingRegion.name] = Object.assign({}, state.regions[state.draggingRegion.name], orig);
