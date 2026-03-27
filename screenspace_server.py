@@ -329,7 +329,12 @@ def api_tasks_results(task_id: str) -> FlaskResponse:
 
 def _clean_task(task: Dict[str, Any]) -> Dict[str, Any]:
     """Remove internal fields from a task dict for API responses."""
-    return {k: v for k, v in task.items() if not k.startswith("_")}
+    cleaned = {k: v for k, v in task.items() if not k.startswith("_")}
+    if "parameters" in cleaned:
+        cleaned["parameters"] = {
+            k: v for k, v in cleaned["parameters"].items() if k != "reference_frame"
+        }
+    return cleaned
 
 
 # ---- State initialization ----
