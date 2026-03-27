@@ -1413,12 +1413,20 @@
         return;
       }
 
-      // Select completed/paused task to view results
+      // Select completed/paused task to view results; click again to deselect
       var task = findTask(taskId);
       if (task && (task.status === "completed" || task.status === "paused")) {
-        state.selectedTaskId = taskId;
-        loadAndShowResults(taskId);
-        renderTaskList();
+        if (state.selectedTaskId === taskId) {
+          state.selectedTaskId = null;
+          state.selectedTaskResults = null;
+          renderResults();
+          renderTaskList();
+          renderTimeline();
+        } else {
+          state.selectedTaskId = taskId;
+          loadAndShowResults(taskId);
+          renderTaskList();
+        }
       }
     });
 
