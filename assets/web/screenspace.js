@@ -168,7 +168,7 @@
   }
 
   function frameUrl(pid, ts) {
-    return "api/video/frame/" + encodeURIComponent(pid) + "/" + ts;
+    return "api/video/frame/" + encodeURIComponent(pid) + "/" + Number(ts).toFixed(6);
   }
 
   // ---- Theme toggle (matches Studio) ----
