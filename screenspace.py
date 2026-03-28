@@ -31,6 +31,23 @@ import video
 
 
 # ---------------------------------------------------------------------------
+# Module-level caches
+# ---------------------------------------------------------------------------
+
+_ocr_readers: Dict[tuple, Any] = {}
+
+
+def _get_ocr_reader(languages: List[str]) -> Any:
+    """Return a cached EasyOCR Reader for the given language set."""
+    import easyocr  # type: ignore[import-untyped]
+
+    key = tuple(sorted(languages))
+    if key not in _ocr_readers:
+        _ocr_readers[key] = easyocr.Reader(list(key), verbose=False)
+    return _ocr_readers[key]
+
+
+# ---------------------------------------------------------------------------
 # Analysis primitives
 # ---------------------------------------------------------------------------
 
@@ -275,6 +292,7 @@ def scan_color(
     end_seconds: Optional[float] = None,
     on_progress: Optional[Callable[[float], None]] = None,
     cancel_flag: Optional[Callable[[], bool]] = None,
+    on_result: Optional[Callable[[Dict[str, Any]], None]] = None,
 ) -> List[Dict[str, Any]]:
     """Scan video for frames where region color matches target.
 
@@ -303,6 +321,8 @@ def scan_color(
             return False
         if color_matches(pixels, target_color, tolerance):
             matches.append(ts)
+            if on_result:
+                on_result({"timestamp": ts})
         if on_progress and total_range > 0:
             on_progress((ts - start_seconds) / total_range)
         return None
@@ -334,6 +354,7 @@ def scan_changes(
     end_seconds: Optional[float] = None,
     on_progress: Optional[Callable[[float], None]] = None,
     cancel_flag: Optional[Callable[[], bool]] = None,
+    on_result: Optional[Callable[[Dict[str, Any]], None]] = None,
 ) -> List[Dict[str, Any]]:
     """Scan video for change points in a region.
 
@@ -359,16 +380,28 @@ def scan_changes(
     total_range = end_seconds - start_seconds
 
     results: List[Dict[str, Any]] = []
-    prev_pixels: List[Optional[np.ndarray]] = [None]
+    prev_gray: List[Optional[np.ndarray]] = [None]
+    k = config.SCREENSPACE_BLUR_KERNEL
+    mk = config.SCREENSPACE_MORPH_KERNEL
+    morph_kernel = np.ones((mk, mk), np.uint8)
 
     def _cb(ts: float, pixels: np.ndarray) -> Optional[bool]:
         if cancel_flag and cancel_flag():
             return False
-        if prev_pixels[0] is not None:
-            mag = compute_frame_diff(prev_pixels[0], pixels, noise_threshold)
+        curr_gray = cv2.cvtColor(
+            cv2.GaussianBlur(pixels, (k, k), 0), cv2.COLOR_BGR2GRAY
+        )
+        if prev_gray[0] is not None:
+            diff = cv2.absdiff(prev_gray[0], curr_gray)
+            _, mask = cv2.threshold(diff, noise_threshold, 255, cv2.THRESH_BINARY)
+            mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, morph_kernel)
+            mag = float(np.count_nonzero(mask)) / float(mask.size) if mask.size else 0.0
             if mag >= threshold:
-                results.append({"timestamp": ts, "magnitude": round(mag, 4)})
-        prev_pixels[0] = pixels.copy()
+                rd = {"timestamp": ts, "magnitude": round(mag, 4)}
+                results.append(rd)
+                if on_result:
+                    on_result(rd)
+        prev_gray[0] = curr_gray
         if on_progress and total_range > 0:
             on_progress((ts - start_seconds) / total_range)
         return None
@@ -400,6 +433,7 @@ def scan_similarity(
     end_seconds: Optional[float] = None,
     on_progress: Optional[Callable[[float], None]] = None,
     cancel_flag: Optional[Callable[[], bool]] = None,
+    on_result: Optional[Callable[[Dict[str, Any]], None]] = None,
 ) -> List[Dict[str, Any]]:
     """Find frames where region is similar to a reference.
 
@@ -427,15 +461,55 @@ def scan_similarity(
     ref_phash = compute_phash(reference_frame)
     phash_threshold = config.SCREENSPACE_PHASH_THRESHOLD
 
+    # Pre-resize and preprocess reference frame once
+    max_dim = 256
+    rh, rw = reference_frame.shape[:2]
+    needs_resize = rh > max_dim or rw > max_dim
+    if needs_resize:
+        scale = max_dim / max(rh, rw)
+        new_w, new_h = int(rw * scale), int(rh * scale)
+        ref_resized = cv2.resize(
+            reference_frame, (new_w, new_h), interpolation=cv2.INTER_AREA
+        )
+    else:
+        ref_resized = reference_frame
+    bk = config.SCREENSPACE_BLUR_KERNEL
+    ref_gray = cv2.cvtColor(
+        cv2.GaussianBlur(ref_resized, (bk, bk), 0), cv2.COLOR_BGR2GRAY
+    )
+
+    prev_skip_gray: List[Optional[np.ndarray]] = [None]
+
     def _cb(ts: float, pixels: np.ndarray) -> Optional[bool]:
         if cancel_flag and cancel_flag():
             return False
         if pixels.shape == reference_frame.shape:
+            # Static-frame skip
+            gray = cv2.cvtColor(pixels, cv2.COLOR_BGR2GRAY)
+            if prev_skip_gray[0] is not None:
+                if float(np.mean(cv2.absdiff(prev_skip_gray[0], gray))) < 2.0:
+                    if on_progress and total_range > 0:
+                        on_progress((ts - start_seconds) / total_range)
+                    return None
+            prev_skip_gray[0] = gray
+
             frame_phash = compute_phash(pixels)
             if ref_phash - frame_phash <= phash_threshold:
-                is_sim, score = regions_are_similar(pixels, reference_frame, threshold)
-                if is_sim:
-                    results.append({"timestamp": ts, "score": round(score, 4)})
+                if needs_resize:
+                    cand = cv2.resize(
+                        pixels, (new_w, new_h), interpolation=cv2.INTER_AREA
+                    )
+                else:
+                    cand = pixels
+                cand_gray = cv2.cvtColor(
+                    cv2.GaussianBlur(cand, (bk, bk), 0), cv2.COLOR_BGR2GRAY
+                )
+                score = float(ssim(ref_gray, cand_gray))
+                if score >= threshold:
+                    rd = {"timestamp": ts, "score": round(score, 4)}
+                    results.append(rd)
+                    if on_result:
+                        on_result(rd)
         if on_progress and total_range > 0:
             on_progress((ts - start_seconds) / total_range)
         return None
@@ -469,6 +543,7 @@ def scan_text(
     end_seconds: Optional[float] = None,
     on_progress: Optional[Callable[[float], None]] = None,
     cancel_flag: Optional[Callable[[], bool]] = None,
+    on_result: Optional[Callable[[Dict[str, Any]], None]] = None,
 ) -> List[Dict[str, Any]]:
     """Scan for text appearances in a region using EasyOCR.
 
@@ -476,7 +551,7 @@ def scan_text(
     instructions if missing.
     """
     try:
-        import easyocr  # type: ignore[import-untyped]
+        import easyocr  # noqa: F401 — validate availability
     except ImportError:
         raise ImportError(
             "EasyOCR is required for text scan. Install with: uv add easyocr"
@@ -487,7 +562,7 @@ def scan_text(
     if languages is None:
         languages = ["en"]
 
-    reader = easyocr.Reader(languages, verbose=False)
+    reader = _get_ocr_reader(languages)
 
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
@@ -520,13 +595,14 @@ def scan_text(
         for _, text, conf in ocr_results:
             ratio = difflib.SequenceMatcher(None, search_lower, text.lower()).ratio()
             if ratio >= fuzzy_threshold:
-                results.append(
-                    {
-                        "timestamp": ts,
-                        "text_found": text,
-                        "confidence": round(conf, 4),
-                    }
-                )
+                rd = {
+                    "timestamp": ts,
+                    "text_found": text,
+                    "confidence": round(conf, 4),
+                }
+                results.append(rd)
+                if on_result:
+                    on_result(rd)
                 break
         if on_progress and total_range > 0:
             on_progress((ts - start_seconds) / total_range)
@@ -566,6 +642,7 @@ def scan_numbers(
     end_seconds: Optional[float] = None,
     on_progress: Optional[Callable[[float], None]] = None,
     cancel_flag: Optional[Callable[[], bool]] = None,
+    on_result: Optional[Callable[[Dict[str, Any]], None]] = None,
 ) -> List[Dict[str, Any]]:
     """Scan for numeric values in a region and apply a comparison.
 
@@ -578,7 +655,7 @@ def scan_numbers(
         )
 
     try:
-        import easyocr  # type: ignore[import-untyped]
+        import easyocr  # noqa: F401 — validate availability
     except ImportError:
         raise ImportError(
             "EasyOCR is required for numbers scan. Install with: uv add easyocr"
@@ -587,7 +664,7 @@ def scan_numbers(
     if languages is None:
         languages = ["en"]
 
-    reader = easyocr.Reader(languages, verbose=False)
+    reader = _get_ocr_reader(languages)
 
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
@@ -640,7 +717,10 @@ def scan_numbers(
             for match in _NUMBERS_RE.findall(cleaned):
                 num = float(match)
                 if _check(num):
-                    results.append({"timestamp": ts, "number_found": num})
+                    rd = {"timestamp": ts, "number_found": num}
+                    results.append(rd)
+                    if on_result:
+                        on_result(rd)
                     return None
         if on_progress and total_range > 0:
             on_progress((ts - start_seconds) / total_range)
@@ -928,6 +1008,12 @@ class ScreenspaceWorker:
         """Dispatch task to the appropriate workflow function."""
         task_id = task["id"]
 
+        # Seed incremental results (includes partial results on resume)
+        with self._lock:
+            t = self._tasks.get(task_id)
+            if t:
+                t["result"] = list(t.get("_partial_results", []))
+
         def _on_progress(progress: float) -> None:
             with self._lock:
                 t = self._tasks.get(task_id)
@@ -941,8 +1027,14 @@ class ScreenspaceWorker:
                 t = self._tasks.get(task_id)
                 return bool(t and (t.get("_cancelled") or t.get("_paused_flag")))
 
+        def _on_result(result_dict: Dict[str, Any]) -> None:
+            with self._lock:
+                t = self._tasks.get(task_id)
+                if t and isinstance(t.get("result"), list):
+                    t["result"].append(result_dict)
+
         try:
-            result = self._dispatch(task, _on_progress, _cancel_flag)
+            result = self._dispatch(task, _on_progress, _cancel_flag, _on_result)
             with self._lock:
                 t = self._tasks.get(task_id)
                 if t:
@@ -974,6 +1066,7 @@ class ScreenspaceWorker:
         task: Dict[str, Any],
         on_progress: Callable[[float], None],
         cancel_flag: Callable[[], bool],
+        on_result: Optional[Callable[[Dict[str, Any]], None]] = None,
     ) -> Any:
         """Route task to the correct workflow function."""
         video_path = task["video_path"]
@@ -992,6 +1085,7 @@ class ScreenspaceWorker:
                 end_seconds=params.get("end_seconds"),
                 on_progress=on_progress,
                 cancel_flag=cancel_flag,
+                on_result=on_result,
             )
         elif task_type == "change":
             return scan_changes(
@@ -1004,6 +1098,7 @@ class ScreenspaceWorker:
                 end_seconds=params.get("end_seconds"),
                 on_progress=on_progress,
                 cancel_flag=cancel_flag,
+                on_result=on_result,
             )
         elif task_type == "similarity":
             ref_frame = params.get("reference_frame")
@@ -1019,6 +1114,7 @@ class ScreenspaceWorker:
                 end_seconds=params.get("end_seconds"),
                 on_progress=on_progress,
                 cancel_flag=cancel_flag,
+                on_result=on_result,
             )
         elif task_type == "text":
             return scan_text(
@@ -1032,6 +1128,7 @@ class ScreenspaceWorker:
                 end_seconds=params.get("end_seconds"),
                 on_progress=on_progress,
                 cancel_flag=cancel_flag,
+                on_result=on_result,
             )
         elif task_type == "numbers":
             return scan_numbers(
@@ -1047,6 +1144,7 @@ class ScreenspaceWorker:
                 end_seconds=params.get("end_seconds"),
                 on_progress=on_progress,
                 cancel_flag=cancel_flag,
+                on_result=on_result,
             )
         elif task_type == "timelapse":
             output_path = params.get("output_path", "")
