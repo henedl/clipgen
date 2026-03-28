@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """Video processing operations for clipgen."""
 
+import concurrent.futures
 import json
 import os
 import shutil
@@ -1211,6 +1212,130 @@ def _concatenate_demuxer(
                 )
 
 
+def _batch_extract_screenshots(
+    input_file: str,
+    timestamps: List[int],
+    interval_seconds: int,
+) -> Optional[List[Dict[str, Any]]]:
+    """Extract all gallery screenshots in a single ffmpeg pass.
+
+    Uses fps=1/interval filter to avoid spawning one process per frame.
+    Returns artifact list on success, or None to signal fallback.
+    """
+    tmpdir = tempfile.mkdtemp(prefix="clipgen_gallery_")
+    try:
+        ffmpeg_command = [
+            "ffmpeg",
+            "-y",
+            "-loglevel",
+            config.FFMPEG_LOGLEVEL,
+            "-i",
+            input_file,
+            "-vf",
+            f"fps=1/{interval_seconds}",
+            "-q:v",
+            config.FFMPEG_SCREENSHOT_QUALITY,
+            os.path.join(tmpdir, "frame_%04d.png"),
+        ]
+        utils.debug_print(f"ffmpeg batch screenshot command: {' '.join(ffmpeg_command)}")
+
+        ffmpeg_result = run_ffmpeg_process(
+            ffmpeg_command,
+            input_file=input_file,
+            output_file=os.path.join(tmpdir, "frame_*.png"),
+            os_error_message="ffmpeg could not run for batch screenshot extraction.",
+        )
+        if ffmpeg_result is None or ffmpeg_result.returncode != 0:
+            return None
+
+        artifacts: List[Dict[str, Any]] = []
+        for i, ts in enumerate(timestamps):
+            frame_file = os.path.join(tmpdir, f"frame_{i + 1:04d}.png")
+            if not os.path.isfile(frame_file):
+                continue
+            ts_str = utils.seconds_to_timestamp(ts)
+            ts_safe = ts_str.replace(":", "_")
+            filename = f"gallery_{ts_safe}.png"
+            output_path = files.get_unique_filename(filename, file_format=".png")
+            shutil.move(frame_file, output_path)
+            artifacts.append(
+                {
+                    "file": Path(output_path).name,
+                    "timestamp": float(ts),
+                    "timestamp_formatted": ts_str,
+                    "type": "screen",
+                    "duration": None,
+                }
+            )
+        return artifacts if artifacts else None
+    except Exception:
+        return None
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+def _parallel_extract_gifs(
+    input_file: str,
+    timestamps: List[int],
+    interval_seconds: int,
+    gif_duration_seconds: int,
+    duration: int,
+) -> Optional[List[Dict[str, Any]]]:
+    """Extract gallery GIFs using parallel ffmpeg processes.
+
+    Returns artifact list on success, or None to signal fallback.
+    """
+    tasks: List[Tuple[str, str, str, int, float]] = []
+    for ts in timestamps:
+        ts_str = utils.seconds_to_timestamp(ts)
+        ts_safe = ts_str.replace(":", "_")
+        filename = f"gallery_{ts_safe}.gif"
+        output_path = files.get_unique_filename(filename, file_format=".gif")
+        gif_dur = min(gif_duration_seconds, duration - ts)
+        if gif_dur <= 0:
+            break
+        tasks.append((input_file, output_path, ts_str, gif_dur, float(ts)))
+
+    if not tasks:
+        return None
+
+    total = len(tasks)
+    artifacts: List[Dict[str, Any]] = []
+    completed = 0
+
+    try:
+        with concurrent.futures.ThreadPoolExecutor(
+            max_workers=config.GALLERY_PARALLEL_WORKERS,
+        ) as pool:
+            future_to_task = {
+                pool.submit(extract_gif, t[0], t[1], t[2], t[3]): t for t in tasks
+            }
+            for future in concurrent.futures.as_completed(future_to_task):
+                task = future_to_task[future]
+                _, output_path, ts_str, gif_dur, ts_float = task
+                completed += 1
+                try:
+                    ok = future.result()
+                except Exception:
+                    ok = False
+                if ok:
+                    artifacts.append(
+                        {
+                            "file": Path(output_path).name,
+                            "timestamp": ts_float,
+                            "timestamp_formatted": ts_str,
+                            "type": "gif",
+                            "duration": gif_dur,
+                        }
+                    )
+                utils.standard_print(f"  Captured {completed}/{total} at {ts_str}")
+    except Exception:
+        return None
+
+    artifacts.sort(key=lambda a: a["timestamp"])
+    return artifacts if artifacts else None
+
+
 def generate_interval_captures(
     input_file: str,
     *,
@@ -1254,6 +1379,29 @@ def generate_interval_captures(
         f"Generating {total} {output_format}{'s' if total != 1 else ''} "
         f"at {interval_seconds}s intervals from '{Path(input_file).name}'."
     )
+
+    if output_format == "screen" and not config.DEBUGGING and total > 1:
+        batch_artifacts = _batch_extract_screenshots(
+            input_file, timestamps, interval_seconds
+        )
+        if batch_artifacts:
+            utils.standard_print(
+                f"  Captured {len(batch_artifacts)}/{total} screenshots (batch)"
+            )
+            utils.info_print(
+                f"Gallery complete: {len(batch_artifacts)} of {total} captures succeeded."
+            )
+            return batch_artifacts
+
+    if output_format != "screen" and not config.DEBUGGING and total > 1:
+        parallel_artifacts = _parallel_extract_gifs(
+            input_file, timestamps, interval_seconds, gif_duration_seconds, duration
+        )
+        if parallel_artifacts is not None:
+            utils.info_print(
+                f"Gallery complete: {len(parallel_artifacts)} of {total} captures succeeded."
+            )
+            return parallel_artifacts
 
     for i, ts in enumerate(timestamps):
         ts_str = utils.seconds_to_timestamp(ts)
