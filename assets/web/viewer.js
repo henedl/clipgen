@@ -22,7 +22,7 @@
   var _filmstripObserver = null;
   var _filmstripThumbQueue = [];
   var _filmstripThumbActive = 0;
-  var FILMSTRIP_CONCURRENCY = 3;
+  var FILMSTRIP_CONCURRENCY = 2;
   var FILMSTRIP_STORAGE_KEY = "clipgen-viewer-filmstrip";
 
   var SORT_DEFAULT_DIR = {
@@ -343,7 +343,7 @@
   function generateFilmstripThumb(markerEl, artifact, callback) {
     var STRIP_HEIGHT = 88;
     var MIN_FRAMES = 2;
-    var MAX_FRAMES = 12;
+    var MAX_FRAMES = 20;
 
     var done = false;
     var perFrameTimer = null;
@@ -355,9 +355,8 @@
       video.onerror = null;
       video.onloadedmetadata = null;
       video.onseeked = null;
-      video.src = "";
-      video.load();
       callback();
+      try { video.src = ""; video.load(); } catch (_) {}
     }
 
     var video = document.createElement("video");
@@ -366,7 +365,7 @@
     video.playsInline = true;
     video.src = artifact.file;
 
-    var timer = setTimeout(finish, 15000);
+    var timer = setTimeout(finish, 20000);
 
     video.onerror = function () {
       markerEl.classList.remove("filmstrip-loading");
@@ -384,8 +383,10 @@
 
       var aspect = (video.videoWidth / video.videoHeight) || (16 / 9);
       var thumbW = Math.round(STRIP_HEIGHT * aspect);
+      var markerH = markerEl.offsetHeight || STRIP_HEIGHT;
       var markerW = markerEl.offsetWidth || thumbW;
-      var numFrames = Math.min(MAX_FRAMES, Math.max(MIN_FRAMES, Math.ceil(markerW / thumbW)));
+      var displayThumbW = thumbW * markerH / STRIP_HEIGHT;
+      var numFrames = Math.min(MAX_FRAMES, Math.max(MIN_FRAMES, Math.ceil(markerW / displayThumbW)));
 
       var canvas = document.createElement("canvas");
       canvas.width = thumbW * numFrames;
@@ -452,10 +453,15 @@
         continue;
       }
       _filmstripThumbActive++;
-      generateFilmstripThumb(item.el, item.artifact, function () {
+      try {
+        generateFilmstripThumb(item.el, item.artifact, function () {
+          _filmstripThumbActive--;
+          processFilmstripThumbQueue();
+        });
+      } catch (_) {
+        item.el.classList.remove("filmstrip-loading");
         _filmstripThumbActive--;
-        processFilmstripThumbQueue();
-      });
+      }
     }
   }
 
