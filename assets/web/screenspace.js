@@ -16,6 +16,10 @@
     timelapse: "#ec4899",
   };
 
+  var TIMELINE_CANVAS_HEIGHT = 64;
+
+  var _paletteDocListeners = null;
+
   var REGION_COLORS = [
     "#3b82f6", "#ef4444", "#22c55e", "#f59e0b",
     "#8b5cf6", "#06b6d4", "#ec4899", "#14b8a6",
@@ -55,6 +59,24 @@
     runParticipants: [],
     runRegions: [],
   };
+
+  var _cachedThemeColors = null;
+
+  function refreshThemeColors() {
+    var cs = getComputedStyle(document.documentElement);
+    _cachedThemeColors = {
+      surfaceAlt: cs.getPropertyValue("--color-surface-alt").trim() || "#f1ece4",
+      border: cs.getPropertyValue("--color-border").trim() || "#e0ddd7",
+      textDim: cs.getPropertyValue("--color-text-dim").trim() || "#6b7280",
+      accent: cs.getPropertyValue("--color-accent").trim() || "#1d4f72",
+      fontMono: cs.getPropertyValue("--font-mono").trim() || "monospace",
+    };
+  }
+
+  function getThemeColors() {
+    if (!_cachedThemeColors) refreshThemeColors();
+    return _cachedThemeColors;
+  }
 
   // ---- Helpers ----
 
@@ -215,6 +237,7 @@
     root.setAttribute("data-theme", next);
     try { window.localStorage.setItem(THEME_STORAGE_KEY, next); } catch (_) {}
     updateThemeToggleButton(next);
+    refreshThemeColors();
     renderTimeline();
   }
 
@@ -427,12 +450,29 @@
 
   // ---- Frame viewer ----
 
-  function loadFrame(timestamp) {
-    if (!state.selectedParticipant) return;
-    if (state.frameLoading) return;
-    state.frameLoading = true;
+  function seekPlayhead(timestamp) {
     state.currentTimestamp = timestamp;
     qs("#timestampInput").value = formatTimestamp(timestamp);
+    renderTimeline();
+  }
+
+  var _pendingFrameTs = null;
+  var _loadedFrameTs = null;
+
+  function loadFrame(timestamp) {
+    if (!state.selectedParticipant) return;
+    seekPlayhead(timestamp);
+    if (state.frameLoading) {
+      _pendingFrameTs = timestamp;
+      return;
+    }
+    _fetchFrame(timestamp);
+  }
+
+  function _fetchFrame(timestamp) {
+    state.frameLoading = true;
+    _pendingFrameTs = null;
+    _loadedFrameTs = timestamp;
 
     var img = new Image();
     img.onload = function () {
@@ -451,9 +491,15 @@
       ctx.drawImage(img, 0, 0);
       renderOverlay();
       renderTimeline();
+      if (_pendingFrameTs !== null && _pendingFrameTs !== _loadedFrameTs) {
+        _fetchFrame(_pendingFrameTs);
+      }
     };
     img.onerror = function () {
       state.frameLoading = false;
+      if (_pendingFrameTs !== null && _pendingFrameTs !== _loadedFrameTs) {
+        _fetchFrame(_pendingFrameTs);
+      }
     };
     img.src = frameUrl(state.selectedParticipant, timestamp);
   }
@@ -983,6 +1029,7 @@
 
     var dragStart = null;
     var scrubbing = false;
+    var scrubRaf = 0;
     canvas.addEventListener("mousedown", function (e) {
       if (state.timelineZoom > 1) {
         // Zoomed in: drag to pan
@@ -998,7 +1045,15 @@
     document.addEventListener("mousemove", function (e) {
       if (scrubbing) {
         var ts = timelineXToTime(e);
-        if (ts !== null) loadFrame(ts);
+        if (ts !== null) {
+          seekPlayhead(ts);
+          if (!scrubRaf) {
+            scrubRaf = requestAnimationFrame(function () {
+              scrubRaf = 0;
+              loadFrame(state.currentTimestamp);
+            });
+          }
+        }
         return;
       }
       if (!dragStart) return;
@@ -1013,7 +1068,11 @@
       renderTimeline();
     });
     document.addEventListener("mouseup", function () {
-      scrubbing = false;
+      if (scrubbing) {
+        scrubbing = false;
+        if (scrubRaf) { cancelAnimationFrame(scrubRaf); scrubRaf = 0; }
+        loadFrame(state.currentTimestamp);
+      }
       if (dragStart) {
         setTimeout(function () { state.timelineDragging = false; }, 50);
         dragStart = null;
@@ -1068,7 +1127,7 @@
     var canvas = qs("#timelineCanvas");
     var rect = canvas.getBoundingClientRect();
     canvas.width = Math.floor(rect.width);
-    canvas.height = 64;
+    canvas.height = TIMELINE_CANVAS_HEIGHT;
     renderTimeline();
   }
 
@@ -1105,21 +1164,16 @@
     var h = canvas.height;
     var dur = state.videoInfo ? state.videoInfo.duration : 0;
 
-    // Resolve CSS variables for theming
-    var cs = getComputedStyle(document.documentElement);
-    var surfaceAlt = cs.getPropertyValue("--color-surface-alt").trim() || "#f1ece4";
-    var borderColor = cs.getPropertyValue("--color-border").trim() || "#e0ddd7";
-    var textDim = cs.getPropertyValue("--color-text-dim").trim() || "#6b7280";
-    var accent = cs.getPropertyValue("--color-accent").trim() || "#1d4f72";
+    var tc = getThemeColors();
 
     ctx.clearRect(0, 0, w, h);
 
     // Background
-    ctx.fillStyle = surfaceAlt;
+    ctx.fillStyle = tc.surfaceAlt;
     ctx.fillRect(0, 0, w, h);
 
     if (dur <= 0) {
-      ctx.fillStyle = textDim;
+      ctx.fillStyle = tc.textDim;
       ctx.font = "12px -apple-system, sans-serif";
       ctx.textAlign = "center";
       ctx.fillText("No video loaded", w / 2, h / 2 + 4);
@@ -1138,9 +1192,9 @@
     // Time ruler ticks
     var tickInterval = computeTickInterval(visLen);
     var firstTick = Math.ceil(visStart / tickInterval) * tickInterval;
-    ctx.strokeStyle = borderColor;
-    ctx.fillStyle = textDim;
-    ctx.font = "10px " + (cs.getPropertyValue("--font-mono").trim() || "monospace");
+    ctx.strokeStyle = tc.border;
+    ctx.fillStyle = tc.textDim;
+    ctx.font = "10px " + tc.fontMono;
     ctx.textAlign = "center";
     ctx.lineWidth = 1;
     for (var t = firstTick; t <= visEnd; t += tickInterval) {
@@ -1214,14 +1268,14 @@
 
     // Playhead
     var px = timeToX(state.currentTimestamp);
-    ctx.strokeStyle = accent;
+    ctx.strokeStyle = tc.accent;
     ctx.lineWidth = 2;
     ctx.beginPath();
     ctx.moveTo(px, 0);
     ctx.lineTo(px, h);
     ctx.stroke();
     // Playhead triangle
-    ctx.fillStyle = accent;
+    ctx.fillStyle = tc.accent;
     ctx.beginPath();
     ctx.moveTo(px - 5, 0);
     ctx.lineTo(px + 5, 0);
@@ -1356,6 +1410,7 @@
 
       // Palette canvas events
       var paletteDragging = false;
+      var brightDragging = false;
       function pickFromPalette(e) {
         var rect = palette.getBoundingClientRect();
         var x = clamp(e.clientX - rect.left, 0, rect.width);
@@ -1370,13 +1425,8 @@
         paletteDragging = true;
         pickFromPalette(e);
       });
-      document.addEventListener("mousemove", function (e) {
-        if (paletteDragging) pickFromPalette(e);
-      });
-      document.addEventListener("mouseup", function () { paletteDragging = false; });
 
       // Brightness strip events
-      var brightDragging = false;
       function pickFromBrightness(e) {
         var rect = bright.getBoundingClientRect();
         var x = clamp(e.clientX - rect.left, 0, rect.width);
@@ -1390,10 +1440,20 @@
         brightDragging = true;
         pickFromBrightness(e);
       });
-      document.addEventListener("mousemove", function (e) {
+
+      // Remove previous document-level listeners before adding new ones
+      if (_paletteDocListeners) {
+        document.removeEventListener("mousemove", _paletteDocListeners.move);
+        document.removeEventListener("mouseup", _paletteDocListeners.up);
+      }
+      function onDocMove(e) {
+        if (paletteDragging) pickFromPalette(e);
         if (brightDragging) pickFromBrightness(e);
-      });
-      document.addEventListener("mouseup", function () { brightDragging = false; });
+      }
+      function onDocUp() { paletteDragging = false; brightDragging = false; }
+      document.addEventListener("mousemove", onDocMove);
+      document.addEventListener("mouseup", onDocUp);
+      _paletteDocListeners = { move: onDocMove, up: onDocUp };
 
       // Hex input event
       hexInput.addEventListener("input", function () {
@@ -2337,9 +2397,8 @@
       setInputValue("#paramColorH", params.target_color ? params.target_color.h : 90);
       setInputValue("#paramColorS", params.target_color ? params.target_color.s : 200);
       setInputValue("#paramColorV", params.target_color ? params.target_color.v : 200);
-      setInputValue("#paramColorTolH", params.tolerance ? params.tolerance.h : 15);
-      setInputValue("#paramColorTolS", params.tolerance ? params.tolerance.s : 40);
-      setInputValue("#paramColorTolV", params.tolerance ? params.tolerance.v : 40);
+      var savedTol = params.tolerance ? Math.round(params.tolerance.h * 100 / 90) : 30;
+      setInputValue("#paramColorTol", savedTol);
       setInputValue("#paramColorInterval", params.interval || 1.0);
       updateColorPreview();
     } else if (task.type === "change") {
