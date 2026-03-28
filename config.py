@@ -9,7 +9,7 @@ from icecream import ic
 REENCODING: bool = False
 AUDIO_NORMALIZE: bool = False
 FILEFORMAT: str = ".mp4"
-VERSIONNUM: str = "0.9.63"
+VERSIONNUM: str = "0.9.64"
 TITLECARDS_ENABLED: bool = False
 FILMSTRIP_ENABLED: bool = False
 TITLECARD_DURATION_SECONDS: int = 2
