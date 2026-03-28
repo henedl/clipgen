@@ -21,7 +21,8 @@
   var _filmstripEnabled = false;
   var _filmstripObserver = null;
   var _filmstripThumbQueue = [];
-  var _filmstripThumbProcessing = false;
+  var _filmstripThumbActive = 0;
+  var FILMSTRIP_CONCURRENCY = 3;
   var FILMSTRIP_STORAGE_KEY = "clipgen-viewer-filmstrip";
 
   var SORT_DEFAULT_DIR = {
@@ -285,7 +286,7 @@
   function applyFilmstripMode() {
     if (_filmstripObserver) { _filmstripObserver.disconnect(); _filmstripObserver = null; }
     _filmstripThumbQueue = [];
-    _filmstripThumbProcessing = false;
+    _filmstripThumbActive = 0;
 
     var markers = qsa(".artifact-marker");
     if (!markers.length) return;
@@ -440,29 +441,28 @@
   }
 
   function processFilmstripThumbQueue() {
-    if (_filmstripThumbProcessing || !_filmstripThumbQueue.length) return;
-    _filmstripThumbProcessing = true;
-    var item = _filmstripThumbQueue.shift();
-    if (_thumbCache[item.artifact.id]) {
-      if (_filmstripEnabled && item.el.classList.contains("filmstrip-loading")) {
-        item.el.style.backgroundImage = "url(" + _thumbCache[item.artifact.id] + ")";
-        item.el.classList.remove("filmstrip-loading");
-        item.el.classList.add("filmstrip-thumb");
+    while (_filmstripThumbActive < FILMSTRIP_CONCURRENCY && _filmstripThumbQueue.length) {
+      var item = _filmstripThumbQueue.shift();
+      if (_thumbCache[item.artifact.id]) {
+        if (_filmstripEnabled && item.el.classList.contains("filmstrip-loading")) {
+          item.el.style.backgroundImage = "url(" + _thumbCache[item.artifact.id] + ")";
+          item.el.classList.remove("filmstrip-loading");
+          item.el.classList.add("filmstrip-thumb");
+        }
+        continue;
       }
-      _filmstripThumbProcessing = false;
-      processFilmstripThumbQueue();
-      return;
+      _filmstripThumbActive++;
+      generateFilmstripThumb(item.el, item.artifact, function () {
+        _filmstripThumbActive--;
+        processFilmstripThumbQueue();
+      });
     }
-    generateFilmstripThumb(item.el, item.artifact, function () {
-      _filmstripThumbProcessing = false;
-      processFilmstripThumbQueue();
-    });
   }
 
   function removeFilmstripMode() {
     if (_filmstripObserver) { _filmstripObserver.disconnect(); _filmstripObserver = null; }
     _filmstripThumbQueue = [];
-    _filmstripThumbProcessing = false;
+    _filmstripThumbActive = 0;
 
     qsa(".artifact-marker.filmstrip-thumb, .artifact-marker.filmstrip-loading").forEach(function (m) {
       m.classList.remove("filmstrip-thumb", "filmstrip-sev-border", "filmstrip-loading");
