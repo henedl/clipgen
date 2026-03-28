@@ -114,19 +114,24 @@ def api_video_info(participant: str) -> FlaskResponse:
             {"ok": False, "error": f"No video for participant {participant}"}
         ), 404
 
-    duration = video.get_file_duration(video_path)
-    props = video.probe_video_properties(video_path)
-
-    info: Dict[str, Any] = {"participant": participant, "duration": duration}
-    if props:
-        info["width"] = props.get("width")
-        info["height"] = props.get("height")
-        info["video_codec"] = props.get("video_codec")
-
     cap = cv2.VideoCapture(video_path)
-    if cap.isOpened():
-        info["fps"] = cap.get(cv2.CAP_PROP_FPS)
-        cap.release()
+    if not cap.isOpened():
+        return jsonify({"ok": False, "error": "Could not open video file"}), 500
+
+    vid_fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    total_frames = cap.get(cv2.CAP_PROP_FRAME_COUNT)
+    duration = round(total_frames / vid_fps) if vid_fps > 0 else 0
+    cap.release()
+
+    info: Dict[str, Any] = {
+        "participant": participant,
+        "duration": duration,
+        "fps": vid_fps,
+        "width": width if width > 0 else None,
+        "height": height if height > 0 else None,
+    }
 
     return jsonify({"ok": True, "info": info})
 
@@ -304,7 +309,9 @@ def api_tasks_create() -> FlaskResponse:
     region_data = regions[region_name]
     props = video.probe_video_properties(video_path)
     if props and props.get("width") and props.get("height"):
-        region_coords = _denormalize_region(region_data, props["width"], props["height"])
+        region_coords = _denormalize_region(
+            region_data, props["width"], props["height"]
+        )
     else:
         region_coords = {
             k: region_data[k] for k in ("x", "y", "w", "h") if k in region_data

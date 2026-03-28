@@ -62,6 +62,11 @@ def average_color_hsv(region_pixels: np.ndarray) -> Dict[str, float]:
     Returns:
         Dict with keys ``h`` (0-180), ``s`` (0-255), ``v`` (0-255).
     """
+    h, w = region_pixels.shape[:2]
+    if h > 64 or w > 64:
+        region_pixels = cv2.resize(
+            region_pixels, (min(w, 64), min(h, 64)), interpolation=cv2.INTER_AREA
+        )
     hsv = cv2.cvtColor(region_pixels, cv2.COLOR_BGR2HSV)
     mean = np.mean(hsv, axis=(0, 1))
     return {"h": float(mean[0]), "s": float(mean[1]), "v": float(mean[2])}
@@ -125,6 +130,13 @@ def regions_are_similar(
     """
     if threshold <= 0.0:
         threshold = config.SCREENSPACE_SSIM_THRESHOLD
+    max_dim = 256
+    h, w = region_a.shape[:2]
+    if h > max_dim or w > max_dim:
+        scale = max_dim / max(h, w)
+        new_w, new_h = int(w * scale), int(h * scale)
+        region_a = cv2.resize(region_a, (new_w, new_h), interpolation=cv2.INTER_AREA)
+        region_b = cv2.resize(region_b, (new_w, new_h), interpolation=cv2.INTER_AREA)
     k = config.SCREENSPACE_BLUR_KERNEL
     a_blur = cv2.GaussianBlur(region_a, (k, k), 0)
     b_blur = cv2.GaussianBlur(region_b, (k, k), 0)
@@ -149,33 +161,68 @@ def scan_video_frames(
     *,
     start_seconds: float = 0.0,
     end_seconds: Optional[float] = None,
+    fps: float = 0.0,
+    duration: float = 0.0,
 ) -> None:
     """Iterate through video at interval, extract region, call callback.
 
     The *callback* receives ``(timestamp_seconds, region_pixels)`` and may
     return ``False`` to stop iteration early.
+
+    When *fps* and *duration* are provided, skips internal metadata reads.
+    Uses sequential frame reading (grab/retrieve) for small intervals
+    to avoid expensive H.264 seeking.
     """
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
         return
 
-    fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
-    total_frames = cap.get(cv2.CAP_PROP_FRAME_COUNT)
-    duration = total_frames / fps if fps > 0 else 0.0
+    if fps <= 0:
+        fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+    if duration <= 0:
+        total_frames = cap.get(cv2.CAP_PROP_FRAME_COUNT)
+        duration = total_frames / fps if fps > 0 else 0.0
     if end_seconds is None or end_seconds > duration:
         end_seconds = duration
 
-    ts = start_seconds
-    while ts <= end_seconds:
-        cap.set(cv2.CAP_PROP_POS_MSEC, ts * 1000.0)
-        ret, frame = cap.read()
-        if not ret:
-            break
-        cropped = extract_region(frame, region)
-        result = callback(ts, cropped)
-        if result is False:
-            break
-        ts += interval_seconds
+    use_sequential = interval_seconds <= config.SCREENSPACE_SEQUENTIAL_READ_MAX_INTERVAL
+
+    if use_sequential:
+        frame_interval = max(1, round(interval_seconds * fps))
+        if start_seconds > 0:
+            cap.set(cv2.CAP_PROP_POS_MSEC, start_seconds * 1000.0)
+        frame_idx = 0
+        end_frame = int(end_seconds * fps)
+        start_frame = int(start_seconds * fps)
+        while True:
+            grabbed = cap.grab()
+            if not grabbed:
+                break
+            abs_frame = start_frame + frame_idx
+            if abs_frame > end_frame:
+                break
+            if frame_idx % frame_interval == 0:
+                ret, frame = cap.retrieve()
+                if not ret:
+                    break
+                ts = start_seconds + frame_idx / fps
+                cropped = extract_region(frame, region)
+                result = callback(ts, cropped)
+                if result is False:
+                    break
+            frame_idx += 1
+    else:
+        ts = start_seconds
+        while ts <= end_seconds:
+            cap.set(cv2.CAP_PROP_POS_MSEC, ts * 1000.0)
+            ret, frame = cap.read()
+            if not ret:
+                break
+            cropped = extract_region(frame, region)
+            result = callback(ts, cropped)
+            if result is False:
+                break
+            ts += interval_seconds
 
     cap.release()
 
@@ -240,13 +287,13 @@ def scan_color(
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
         return []
-    fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+    vid_fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
     total_frames = cap.get(cv2.CAP_PROP_FRAME_COUNT)
-    duration = total_frames / fps if fps > 0 else 0.0
+    vid_duration = total_frames / vid_fps if vid_fps > 0 else 0.0
     cap.release()
 
-    if end_seconds is None or end_seconds > duration:
-        end_seconds = duration
+    if end_seconds is None or end_seconds > vid_duration:
+        end_seconds = vid_duration
     total_range = end_seconds - start_seconds
 
     matches: List[float] = []
@@ -267,6 +314,8 @@ def scan_color(
         _cb,
         start_seconds=start_seconds,
         end_seconds=end_seconds,
+        fps=vid_fps,
+        duration=vid_duration,
     )
 
     if on_progress:
@@ -300,13 +349,13 @@ def scan_changes(
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
         return []
-    fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+    vid_fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
     total_frames = cap.get(cv2.CAP_PROP_FRAME_COUNT)
-    duration = total_frames / fps if fps > 0 else 0.0
+    vid_duration = total_frames / vid_fps if vid_fps > 0 else 0.0
     cap.release()
 
-    if end_seconds is None or end_seconds > duration:
-        end_seconds = duration
+    if end_seconds is None or end_seconds > vid_duration:
+        end_seconds = vid_duration
     total_range = end_seconds - start_seconds
 
     results: List[Dict[str, Any]] = []
@@ -331,6 +380,8 @@ def scan_changes(
         _cb,
         start_seconds=start_seconds,
         end_seconds=end_seconds,
+        fps=vid_fps,
+        duration=vid_duration,
     )
 
     if on_progress:
@@ -363,24 +414,28 @@ def scan_similarity(
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
         return []
-    fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+    vid_fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
     total_frames = cap.get(cv2.CAP_PROP_FRAME_COUNT)
-    duration = total_frames / fps if fps > 0 else 0.0
+    vid_duration = total_frames / vid_fps if vid_fps > 0 else 0.0
     cap.release()
 
-    if end_seconds is None or end_seconds > duration:
-        end_seconds = duration
+    if end_seconds is None or end_seconds > vid_duration:
+        end_seconds = vid_duration
     total_range = end_seconds - start_seconds
 
     results: List[Dict[str, Any]] = []
+    ref_phash = compute_phash(reference_frame)
+    phash_threshold = config.SCREENSPACE_PHASH_THRESHOLD
 
     def _cb(ts: float, pixels: np.ndarray) -> Optional[bool]:
         if cancel_flag and cancel_flag():
             return False
         if pixels.shape == reference_frame.shape:
-            is_sim, score = regions_are_similar(pixels, reference_frame, threshold)
-            if is_sim:
-                results.append({"timestamp": ts, "score": round(score, 4)})
+            frame_phash = compute_phash(pixels)
+            if ref_phash - frame_phash <= phash_threshold:
+                is_sim, score = regions_are_similar(pixels, reference_frame, threshold)
+                if is_sim:
+                    results.append({"timestamp": ts, "score": round(score, 4)})
         if on_progress and total_range > 0:
             on_progress((ts - start_seconds) / total_range)
         return None
@@ -392,6 +447,8 @@ def scan_similarity(
         _cb,
         start_seconds=start_seconds,
         end_seconds=end_seconds,
+        fps=vid_fps,
+        duration=vid_duration,
     )
 
     if on_progress:
@@ -435,26 +492,33 @@ def scan_text(
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
         return []
-    fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+    vid_fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
     total_frames = cap.get(cv2.CAP_PROP_FRAME_COUNT)
-    duration = total_frames / fps if fps > 0 else 0.0
+    vid_duration = total_frames / vid_fps if vid_fps > 0 else 0.0
     cap.release()
 
-    if end_seconds is None or end_seconds > duration:
-        end_seconds = duration
+    if end_seconds is None or end_seconds > vid_duration:
+        end_seconds = vid_duration
     total_range = end_seconds - start_seconds
 
     results: List[Dict[str, Any]] = []
     search_lower = search_string.lower()
+    prev_gray: List[Optional[np.ndarray]] = [None]
 
     def _cb(ts: float, pixels: np.ndarray) -> Optional[bool]:
         if cancel_flag and cancel_flag():
             return False
+        gray = cv2.cvtColor(pixels, cv2.COLOR_BGR2GRAY)
+        if prev_gray[0] is not None:
+            diff = float(np.mean(cv2.absdiff(prev_gray[0], gray)))
+            if diff < 2.0:
+                if on_progress and total_range > 0:
+                    on_progress((ts - start_seconds) / total_range)
+                return None
+        prev_gray[0] = gray
         ocr_results = reader.readtext(pixels, detail=1)
         for _, text, conf in ocr_results:
-            ratio = difflib.SequenceMatcher(
-                None, search_lower, text.lower()
-            ).ratio()
+            ratio = difflib.SequenceMatcher(None, search_lower, text.lower()).ratio()
             if ratio >= fuzzy_threshold:
                 results.append(
                     {
@@ -475,6 +539,8 @@ def scan_text(
         _cb,
         start_seconds=start_seconds,
         end_seconds=end_seconds,
+        fps=vid_fps,
+        duration=vid_duration,
     )
 
     if on_progress:
@@ -526,16 +592,17 @@ def scan_numbers(
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
         return []
-    fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+    vid_fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
     total_frames = cap.get(cv2.CAP_PROP_FRAME_COUNT)
-    duration = total_frames / fps if fps > 0 else 0.0
+    vid_duration = total_frames / vid_fps if vid_fps > 0 else 0.0
     cap.release()
 
-    if end_seconds is None or end_seconds > duration:
-        end_seconds = duration
+    if end_seconds is None or end_seconds > vid_duration:
+        end_seconds = vid_duration
     total_range = end_seconds - start_seconds
 
     results: List[Dict[str, Any]] = []
+    prev_gray: List[Optional[np.ndarray]] = [None]
 
     def _check(value: float) -> bool:
         if operator == "eq":
@@ -549,13 +616,24 @@ def scan_numbers(
         elif operator == "lte":
             return value <= target_value
         elif operator == "range":
-            return (range_min is not None and range_max is not None
-                    and range_min <= value <= range_max)
+            return (
+                range_min is not None
+                and range_max is not None
+                and range_min <= value <= range_max
+            )
         return False
 
     def _cb(ts: float, pixels: np.ndarray) -> Optional[bool]:
         if cancel_flag and cancel_flag():
             return False
+        gray = cv2.cvtColor(pixels, cv2.COLOR_BGR2GRAY)
+        if prev_gray[0] is not None:
+            diff = float(np.mean(cv2.absdiff(prev_gray[0], gray)))
+            if diff < 2.0:
+                if on_progress and total_range > 0:
+                    on_progress((ts - start_seconds) / total_range)
+                return None
+        prev_gray[0] = gray
         ocr_results = reader.readtext(pixels, detail=1)
         for _, text, _conf in ocr_results:
             cleaned = text.replace(",", "")
@@ -575,6 +653,8 @@ def scan_numbers(
         _cb,
         start_seconds=start_seconds,
         end_seconds=end_seconds,
+        fps=vid_fps,
+        duration=vid_duration,
     )
 
     if on_progress:
@@ -804,9 +884,7 @@ class ScreenspaceWorker:
                 params["start_seconds"] = resume_at
                 task["status"] = TASK_STATUS_QUEUED
 
-            self._queue.put(
-                (task.get("priority", 100), task["created_at"], task["id"])
-            )
+            self._queue.put((task.get("priority", 100), task["created_at"], task["id"]))
 
     def remove_task(self, task_id: str) -> bool:
         """Cancel (if active) and fully remove a task."""
@@ -861,9 +939,7 @@ class ScreenspaceWorker:
         def _cancel_flag() -> bool:
             with self._lock:
                 t = self._tasks.get(task_id)
-                return bool(
-                    t and (t.get("_cancelled") or t.get("_paused_flag"))
-                )
+                return bool(t and (t.get("_cancelled") or t.get("_paused_flag")))
 
         try:
             result = self._dispatch(task, _on_progress, _cancel_flag)
