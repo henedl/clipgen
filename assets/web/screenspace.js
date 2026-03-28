@@ -1177,16 +1177,16 @@
       }
     }
 
-    // Result markers from completed tasks
+    // Result markers from completed and running tasks
     var resultY = 24;
     var resultH = h - resultY - 6;
     var focused = focusedTaskId();
     state.tasks.forEach(function (task) {
-      if (task.status !== "completed" || !task.result) return;
+      if ((task.status !== "completed" && task.status !== "running") || !task.result) return;
       var color = taskTypeColor(task.type);
       var dimmed = focused && task.id !== focused;
-      if (task.type === "color") {
-        // Spans
+      if (task.type === "color" && task.status === "completed") {
+        // Completed color: merged spans
         ctx.fillStyle = hexToRgba(color, dimmed ? 0.10 : 0.35);
         task.result.forEach(function (span) {
           var x1 = timeToX(span.start);
@@ -1196,7 +1196,7 @@
       } else if (task.type === "timelapse") {
         // No timeline markers for timelapse
       } else {
-        // Point markers (change, similarity, text)
+        // Point markers (change, similarity, text, numbers, running color)
         ctx.strokeStyle = dimmed ? hexToRgba(color, 0.15) : color;
         ctx.lineWidth = 1.5;
         var results = task.result || [];
@@ -1245,7 +1245,7 @@
     container.innerHTML = "";
     var hasTypes = {};
     state.tasks.forEach(function (t) {
-      if (t.status === "completed" && t.result) hasTypes[t.type] = true;
+      if ((t.status === "completed" || t.status === "running") && t.result) hasTypes[t.type] = true;
     });
     var types = Object.keys(hasTypes);
     if (types.length === 0) return;
@@ -2087,9 +2087,9 @@
         return;
       }
 
-      // Select completed/paused task to view results; click again to deselect
+      // Select completed/paused/running task to view results; click again to deselect
       var task = findTask(taskId);
-      if (task && (task.status === "completed" || task.status === "paused")) {
+      if (task && (task.status === "completed" || task.status === "paused" || task.status === "running")) {
         if (state.selectedTaskId === taskId) {
           state.selectedTaskId = null;
           state.selectedTaskResults = null;
@@ -2112,7 +2112,7 @@
       var card = e.target.closest(".task-card");
       if (!card) return;
       var task = findTask(card.dataset.taskId);
-      if (task && task.status === "completed") {
+      if (task && (task.status === "completed" || task.status === "running")) {
         if (state.hoveredTaskId !== task.id) {
           state.hoveredTaskId = task.id;
           renderTimeline();
@@ -2505,7 +2505,11 @@
 
       // Status text
       var statusText = task.status;
-      if (task.status === "running") statusText = Math.round((task.progress || 0) * 100) + "%";
+      if (task.status === "running") {
+        var rPct = Math.round((task.progress || 0) * 100);
+        var rLen = Array.isArray(task.result) ? task.result.length : 0;
+        statusText = rPct + "%" + (rLen ? " \u00b7 " + rLen + " result" + (rLen !== 1 ? "s" : "") : "");
+      }
       if (task.status === "paused") {
         var pPct = Math.round((task.progress || 0) * 100);
         var pLen = Array.isArray(task.result) ? task.result.length : 0;
@@ -2567,6 +2571,14 @@
         }
         renderTaskList();
         renderTimeline();
+        // Auto-update results for selected running task
+        if (oldSelected) {
+          var selTask = findTask(oldSelected);
+          if (selTask && selTask.status === "running" && selTask.result) {
+            state.selectedTaskResults = selTask.result;
+            renderResults();
+          }
+        }
         // Auto-load results when selected task completes
         if (wasRunning && oldSelected) {
           var newTask = findTask(oldSelected);
@@ -2617,7 +2629,7 @@
     var task = state.selectedTaskId ? findTask(state.selectedTaskId) : null;
 
     if (!results || !task) {
-      container.innerHTML = '<div class="panel-empty">Click a completed task to view results.</div>';
+      container.innerHTML = '<div class="panel-empty">Click a task to view results.</div>';
       countEl.textContent = "";
       actionsEl.classList.add("hidden");
       return;
