@@ -48,6 +48,18 @@ def test_finalize_timeline_data_empty_artifacts():
     assert data["artifacts"] == []
 
 
+def test_finalize_timeline_data_includes_filmstrip_meta(monkeypatch):
+    import config
+
+    monkeypatch.setattr(config, "FILMSTRIP_ENABLED", False)
+    data = viewer.finalize_timeline_data([])
+    assert data["meta"]["filmstripEnabled"] is False
+
+    monkeypatch.setattr(config, "FILMSTRIP_ENABLED", True)
+    data = viewer.finalize_timeline_data([])
+    assert data["meta"]["filmstripEnabled"] is True
+
+
 def test_finalize_timeline_data_includes_reels():
     reels = [{"id": "reel_1", "file": "r.mp4"}]
     data = viewer.finalize_timeline_data([], reels=reels)

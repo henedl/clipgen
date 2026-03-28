@@ -6,7 +6,6 @@ start_combined_server(), and exposes REST endpoints for sheet data
 access, artifact generation, reel building, and viewer creation.
 """
 
-import hashlib
 import json
 import sys
 import webbrowser

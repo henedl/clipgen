@@ -28,6 +28,7 @@ def _base_args(**overrides):
         "spreadsheet": None,
         "viewer": False,
         "titlecards": None,
+        "filmstrip": None,
         "screenspace": False,
     }
     args.update(overrides)
@@ -63,6 +64,23 @@ def test_parse_arguments_titlecards_flags(monkeypatch):
     monkeypatch.setattr("sys.argv", ["clipgen.py", "--no-titlecards"])
     args = cli.parse_arguments()
     assert args.titlecards is False
+
+
+def test_parse_arguments_filmstrip_flags(monkeypatch):
+    # Default: no flag → None (use config default)
+    monkeypatch.setattr("sys.argv", ["clipgen.py"])
+    args = cli.parse_arguments()
+    assert getattr(args, "filmstrip", None) is None
+
+    # --filmstrip → True
+    monkeypatch.setattr("sys.argv", ["clipgen.py", "--filmstrip"])
+    args = cli.parse_arguments()
+    assert args.filmstrip is True
+
+    # --no-filmstrip → False
+    monkeypatch.setattr("sys.argv", ["clipgen.py", "--no-filmstrip"])
+    args = cli.parse_arguments()
+    assert args.filmstrip is False
 
 
 def test_parse_cli_mode_args_parses_mixed_line_separators():

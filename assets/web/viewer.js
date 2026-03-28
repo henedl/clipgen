@@ -18,6 +18,12 @@
   var _thumbObserver = null;
   var _thumbCache = {};
 
+  var _filmstripEnabled = false;
+  var _filmstripObserver = null;
+  var _filmstripThumbQueue = [];
+  var _filmstripThumbProcessing = false;
+  var FILMSTRIP_STORAGE_KEY = "clipgen-viewer-filmstrip";
+
   var SORT_DEFAULT_DIR = {
     severity: "desc",
     chrono: "asc",
@@ -246,6 +252,183 @@
     }
   }
 
+  // ---- Filmstrip mode ----
+
+  function initFilmstripToggle() {
+    var defaultOn = data && data.meta && data.meta.filmstripEnabled;
+    var stored = null;
+    try { stored = window.localStorage.getItem(FILMSTRIP_STORAGE_KEY); } catch (_) {}
+    if (stored === "true") _filmstripEnabled = true;
+    else if (stored === "false") _filmstripEnabled = false;
+    else _filmstripEnabled = !!defaultOn;
+
+    var btn = qs("#filmstripToggle");
+    if (btn) {
+      btn.addEventListener("click", toggleFilmstrip);
+      updateFilmstripButton();
+    }
+  }
+
+  function updateFilmstripButton() {
+    var btn = qs("#filmstripToggle");
+    if (btn) btn.setAttribute("aria-pressed", _filmstripEnabled ? "true" : "false");
+  }
+
+  function toggleFilmstrip() {
+    _filmstripEnabled = !_filmstripEnabled;
+    try { window.localStorage.setItem(FILMSTRIP_STORAGE_KEY, _filmstripEnabled ? "true" : "false"); } catch (_) {}
+    updateFilmstripButton();
+    if (_filmstripEnabled) applyFilmstripMode();
+    else removeFilmstripMode();
+  }
+
+  function applyFilmstripMode() {
+    if (_filmstripObserver) { _filmstripObserver.disconnect(); _filmstripObserver = null; }
+    _filmstripThumbQueue = [];
+    _filmstripThumbProcessing = false;
+
+    var markers = qsa(".artifact-marker");
+    if (!markers.length) return;
+
+    var needsObserver = [];
+
+    markers.forEach(function (m) {
+      var id = m.dataset.id;
+      var a = findArtifact(id);
+      if (!a) return;
+
+      var hasSev = !!(a.severity || "").trim();
+
+      if (a.type === "screen" || a.type === "gif") {
+        m.style.backgroundImage = "url(" + encodeURI(a.file) + ")";
+        m.classList.add("filmstrip-thumb");
+        if (hasSev) m.classList.add("filmstrip-sev-border");
+      } else if (a.type === "clip") {
+        if (_thumbCache[a.id]) {
+          m.style.backgroundImage = "url(" + _thumbCache[a.id] + ")";
+          m.classList.add("filmstrip-thumb");
+          if (hasSev) m.classList.add("filmstrip-sev-border");
+        } else {
+          m.classList.add("filmstrip-loading");
+          if (hasSev) m.classList.add("filmstrip-sev-border");
+          needsObserver.push({ el: m, artifact: a });
+        }
+      }
+    });
+
+    if (!needsObserver.length) return;
+
+    function enqueueMarker(item) {
+      _filmstripThumbQueue.push(item);
+      processFilmstripThumbQueue();
+    }
+
+    if (typeof IntersectionObserver !== "undefined") {
+      _filmstripObserver = new IntersectionObserver(function (entries) {
+        entries.forEach(function (entry) {
+          if (!entry.isIntersecting) return;
+          _filmstripObserver.unobserve(entry.target);
+          var id = entry.target.dataset.id;
+          var a = findArtifact(id);
+          if (a) enqueueMarker({ el: entry.target, artifact: a });
+        });
+      }, { rootMargin: "200px 0px" });
+      needsObserver.forEach(function (item) { _filmstripObserver.observe(item.el); });
+    } else {
+      needsObserver.forEach(enqueueMarker);
+    }
+  }
+
+  function generateFilmstripThumb(markerEl, artifact, callback) {
+    var done = false;
+    function finish() {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      video.onerror = null;
+      video.onloadedmetadata = null;
+      video.onseeked = null;
+      video.src = "";
+      video.load();
+      callback();
+    }
+
+    var video = document.createElement("video");
+    video.preload = "metadata";
+    video.muted = true;
+    video.playsInline = true;
+    video.src = artifact.file;
+
+    var timer = setTimeout(finish, 8000);
+
+    video.onerror = function () {
+      markerEl.classList.remove("filmstrip-loading");
+      finish();
+    };
+
+    video.onloadedmetadata = function () {
+      var dur = video.duration;
+      if (!dur || !isFinite(dur)) { markerEl.classList.remove("filmstrip-loading"); finish(); return; }
+      var seek = Math.min(Math.max(dur * 0.25, 0.5), 5, dur - 0.01);
+      video.currentTime = Math.max(0, seek);
+    };
+
+    video.onseeked = function () {
+      try {
+        var canvas = document.createElement("canvas");
+        canvas.width = 160;
+        canvas.height = 90;
+        var ctx = canvas.getContext("2d");
+        ctx.drawImage(video, 0, 0, 160, 90);
+        canvas.toBlob(function (blob) {
+          if (!blob) { markerEl.classList.remove("filmstrip-loading"); finish(); return; }
+          var url = URL.createObjectURL(blob);
+          _thumbCache[artifact.id] = url;
+          if (_filmstripEnabled && markerEl.classList.contains("filmstrip-loading")) {
+            markerEl.style.backgroundImage = "url(" + url + ")";
+            markerEl.classList.remove("filmstrip-loading");
+            markerEl.classList.add("filmstrip-thumb");
+          }
+          finish();
+        }, "image/jpeg", 0.7);
+      } catch (e) {
+        markerEl.classList.remove("filmstrip-loading");
+        finish();
+      }
+    };
+  }
+
+  function processFilmstripThumbQueue() {
+    if (_filmstripThumbProcessing || !_filmstripThumbQueue.length) return;
+    _filmstripThumbProcessing = true;
+    var item = _filmstripThumbQueue.shift();
+    if (_thumbCache[item.artifact.id]) {
+      if (_filmstripEnabled && item.el.classList.contains("filmstrip-loading")) {
+        item.el.style.backgroundImage = "url(" + _thumbCache[item.artifact.id] + ")";
+        item.el.classList.remove("filmstrip-loading");
+        item.el.classList.add("filmstrip-thumb");
+      }
+      _filmstripThumbProcessing = false;
+      processFilmstripThumbQueue();
+      return;
+    }
+    generateFilmstripThumb(item.el, item.artifact, function () {
+      _filmstripThumbProcessing = false;
+      processFilmstripThumbQueue();
+    });
+  }
+
+  function removeFilmstripMode() {
+    if (_filmstripObserver) { _filmstripObserver.disconnect(); _filmstripObserver = null; }
+    _filmstripThumbQueue = [];
+    _filmstripThumbProcessing = false;
+
+    qsa(".artifact-marker.filmstrip-thumb, .artifact-marker.filmstrip-loading").forEach(function (m) {
+      m.classList.remove("filmstrip-thumb", "filmstrip-sev-border", "filmstrip-loading");
+      m.style.backgroundImage = "";
+    });
+  }
+
   // ---- Initialization ----
 
   var THEME_STORAGE_KEY = "clipgen-viewer-theme";
@@ -286,6 +469,9 @@
       initSortToolbar();
       bindFilterEvents();
     }
+
+    initFilmstripToggle();
+    if (_filmstripEnabled) applyFilmstripMode();
   });
 
   function initThemeToggle() {

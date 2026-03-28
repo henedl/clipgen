@@ -329,6 +329,22 @@ Note: Non-interactive mode (using -b, -l, -r, -C, -c, -p, -k, -S, -M, -R, or -T)
 
     parser.set_defaults(titlecards=None)
 
+    filmstrip_grp = parser.add_argument_group("filmstrip (choose at most one)")
+    filmstrip_group = filmstrip_grp.add_mutually_exclusive_group()
+    filmstrip_group.add_argument(
+        "--filmstrip",
+        dest="filmstrip",
+        action="store_true",
+        help="Enable filmstrip thumbnail mode on timeline markers in the HTML viewer",
+    )
+    filmstrip_group.add_argument(
+        "--no-filmstrip",
+        dest="filmstrip",
+        action="store_false",
+        help="Disable filmstrip thumbnail mode on timeline markers in the HTML viewer",
+    )
+    parser.set_defaults(filmstrip=None)
+
     return parser.parse_args()
 
 
@@ -1089,6 +1105,10 @@ def main() -> None:
     # Optional per-run override for titlecards setting
     if getattr(args, "titlecards", None) is not None:
         config.TITLECARDS_ENABLED = bool(args.titlecards)
+
+    # Optional per-run override for filmstrip setting
+    if getattr(args, "filmstrip", None) is not None:
+        config.FILMSTRIP_ENABLED = bool(args.filmstrip)
 
     # Optional per-run overrides for input/output directories
     if getattr(args, "input", None) is not None:
