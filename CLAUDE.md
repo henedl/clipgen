@@ -149,7 +149,7 @@ CLI mode flags are mutually exclusive for selection (`-b/-l/-r/-C/-c/-p/-k/-S/-M
 
 `--studio` launches a Flask-based web interface for interactive artifact generation. Requires a spreadsheet (Google Sheets or Excel); can combine with `-s`, `-i/-o`, `-v`. Cannot combine with mode flags, format flags, `--viewer`, or `--regenerate`. `--insights` launches the Insights Builder for authoring research findings from generated artifacts; no spreadsheet required. Can combine with `-i/-o`, `-v`. Cannot combine with mode flags, format flags, `--viewer`, `--regenerate`, or `--studio`. `--manifest` writes a cumulative artifact manifest (`clipgen_manifest.json`) alongside generated clips; required by `--insights` and `--regenerate`. `--regenerate` re-creates all media artifacts and reels from a saved manifest without a spreadsheet.
 
-`--screenspace` launches the Screenspace frame analysis interface. Works with or without a spreadsheet (auto-discovers participant videos from the input directory). Can combine with `-s`, `-i/-o`, `-v`. Cannot combine with mode flags, format flags, `--viewer`, `--regenerate`, `--studio`, or `--insights`. `--titlecards` / `--no-titlecards` override `TITLECARDS_ENABLED` for the current run, prepending a generated title card to each output clip.
+`--screenspace` launches the Screenspace frame analysis interface. Works with or without a spreadsheet (auto-discovers participant videos from the input directory). Can combine with `-s`, `-i/-o`, `-v`. Cannot combine with mode flags, format flags, `--viewer`, `--regenerate`, `--studio`, or `--insights`. `--titlecards` / `--no-titlecards` override `TITLECARDS_ENABLED` for the current run, prepending a generated title card to each output clip. `--filmstrip` / `--no-filmstrip` override `FILMSTRIP_ENABLED` for the current run, toggling thumbnail images on timeline markers in the generated HTML viewer.
 
 Interactive-only modes without dedicated CLI flags:
 
@@ -192,6 +192,7 @@ Interactive-only modes without dedicated CLI flags:
 - `SPRITE_SHEET_THUMB_WIDTH` – `160` – pixel width of each sprite thumbnail
 - `SPRITE_SHEET_MIN_INTERVAL` – `1` – minimum seconds between sprite frames
 - `TITLECARDS_ENABLED` – `False`; set `True` or pass `--titlecards` to prepend a generated title card to each clip
+- `FILMSTRIP_ENABLED` – `False`; set `True` or pass `--filmstrip` to show thumbnail images on timeline markers in the HTML viewer
 - `TITLECARD_DURATION_SECONDS` – `2`; duration in seconds for the generated title card
 - `SCREENSPACE_MANIFEST_FILENAME` – `"screenspace_manifest.json"` – Screenspace state persistence file
 - `SCREENSPACE_DEFAULT_INTERVAL` – `1.0` – default frame sampling interval (seconds) for analysis tasks
@@ -223,8 +224,9 @@ Reference spreadsheet layout is described in [README.md](README.md).
 
 - **Opt-in**: CLI flag `--viewer` or interactive `viewer` mode from the mode selection prompt.
 - **Assets**: Static template in [assets/web/](assets/web/) (`viewer.html`, `viewer.js`, `viewer.css`). Per-run, Python copies these into the artifact directory and injects a `<script>window.CLIPGEN_DATA={...};</script>` block replacing the `<!-- CLIPGEN_DATA_HERE -->` placeholder.
-- **Data contract** (`window.CLIPGEN_DATA`): JSON object with `meta` (study, participant, generatedAt, mode, sourceSpreadsheet, sourceFileType), `artifacts` (array of {id, type, file, start, end, study, participant, category, description, cellRow, cellCol, cellA1, annotations, sourceVideo}), and `timeline` ({duration, startOffset}).
+- **Data contract** (`window.CLIPGEN_DATA`): JSON object with `meta` (study, participant, generatedAt, mode, sourceSpreadsheet, sourceFileType, filmstripEnabled), `artifacts` (array of {id, type, file, start, end, study, participant, category, description, cellRow, cellCol, cellA1, annotations, sourceVideo}), and `timeline` ({duration, startOffset}).
 - **Key functions**: `build_artifact_records_for_clip()`, `finalize_timeline_data()`, `generate_timeline_viewer()` – all in [viewer.py](viewer.py).
+- **Filmstrip mode**: Toggle button in the viewer header replaces colored timeline markers with thumbnail images from the artifacts. Screenshots/GIFs load directly; clip thumbnails are extracted client-side via canvas. Persists via `localStorage`. Default controlled by `config.FILMSTRIP_ENABLED` / `--filmstrip`.
 - Reel mode artifact collection is stubbed (returns empty artifacts list) for future enhancement.
 
 ## Gallery HTML Viewer

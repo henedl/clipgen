@@ -113,6 +113,7 @@ def finalize_timeline_data(
             "mode": mode,
             "sourceSpreadsheet": worksheet_title,
             "sourceFileType": "excel" if is_excel else "google",
+            "filmstripEnabled": config.FILMSTRIP_ENABLED,
         },
         "artifacts": artifacts,
         "timeline": {

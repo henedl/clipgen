@@ -3,7 +3,6 @@ import time
 
 import config
 import insights
-import utils
 
 
 def _redirect_output(tmp_path, monkeypatch):

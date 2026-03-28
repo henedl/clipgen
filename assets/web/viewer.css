@@ -100,31 +100,50 @@ body {
 #studyName:not(:empty)::before { content: "Study:"; font-weight: 600; }
 #generatedAt:not(:empty)::before { content: "Generated:"; font-weight: 600; }
 
-#themeToggle {
+.header-buttons {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+#themeToggle,
+#filmstripToggle {
   position: relative;
   width: 32px;
   height: 32px;
   border-radius: 999px;
   border: 1px solid var(--color-border);
   background: var(--color-surface-alt);
+  color: var(--color-text-dim);
   display: inline-flex;
   align-items: center;
   justify-content: center;
   padding: 0;
   cursor: pointer;
-  transition: background 0.15s ease, border-color 0.15s ease, transform 0.1s ease, box-shadow 0.2s ease;
+  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease, transform 0.1s ease, box-shadow 0.2s ease;
 }
 
-#themeToggle:hover {
+#filmstripToggle svg { width: 16px; height: 16px; }
+
+#filmstripToggle[aria-pressed="true"] {
+  border-color: var(--color-accent);
+  background: var(--color-selected);
+  color: var(--color-accent);
+}
+
+#themeToggle:hover,
+#filmstripToggle:hover {
   background: var(--color-surface);
   box-shadow: 0 0 0 1px rgba(148, 163, 184, 0.3);
 }
 
-#themeToggle:active {
+#themeToggle:active,
+#filmstripToggle:active {
   transform: scale(0.96);
 }
 
-#themeToggle:focus-visible {
+#themeToggle:focus-visible,
+#filmstripToggle:focus-visible {
   outline: 2px solid var(--color-accent);
   outline-offset: 2px;
 }
@@ -283,6 +302,30 @@ body {
 .artifact-marker.filtered-out {
   opacity: 0.12;
   pointer-events: none;
+}
+
+.artifact-marker.filmstrip-thumb {
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+  border-width: 1px;
+  border-color: rgba(0, 0, 0, 0.2);
+  border-style: solid;
+}
+
+.artifact-marker.filmstrip-thumb.filmstrip-sev-border {
+  border-bottom-width: 3px;
+}
+
+.artifact-marker.filmstrip-loading {
+  background: linear-gradient(90deg, var(--color-surface-alt) 25%, var(--color-surface) 50%, var(--color-surface-alt) 75%);
+  background-size: 200% 100%;
+  animation: filmstrip-shimmer 1.5s ease-in-out infinite;
+}
+
+@keyframes filmstrip-shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
 }
 
 .timeline-track-wrap {
@@ -906,6 +949,10 @@ body {
   .artifact-media.thumb-loaded img {
     animation: none;
   }
+
+  .artifact-marker.filmstrip-loading {
+    animation: none;
+  }
 }
 
 @media (prefers-color-scheme: dark) {
@@ -950,6 +997,10 @@ body {
       0 0 0 2px var(--color-selected-ring),
       0 0 0 5px rgba(56, 189, 248, 0.9),
       0 0 18px rgba(0, 0, 0, 0.45);
+  }
+
+  .artifact-marker.filmstrip-thumb {
+    border-color: rgba(255, 255, 255, 0.15);
   }
 }
 
@@ -1011,6 +1062,10 @@ html[data-theme="dark"] {
 
 html[data-theme="dark"] .artifact-marker:hover {
   box-shadow: 0 4px 18px rgba(0, 0, 0, 0.55);
+}
+
+html[data-theme="dark"] .artifact-marker.filmstrip-thumb {
+  border-color: rgba(255, 255, 255, 0.15);
 }
 
 html[data-theme="dark"] .artifact-marker.selected {

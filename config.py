@@ -11,6 +11,7 @@ AUDIO_NORMALIZE: bool = False
 FILEFORMAT: str = ".mp4"
 VERSIONNUM: str = "0.9.62"
 TITLECARDS_ENABLED: bool = False
+FILMSTRIP_ENABLED: bool = False
 TITLECARD_DURATION_SECONDS: int = 2
 WORKSHEET_PRIORITY: List[str] = [
     "Sheet1",
@@ -191,6 +192,7 @@ SETTINGS_DESCRIPTIONS: Dict[str, str] = {
     "HIGHLIGHTS_REEL_DURATION_SECONDS": "Maximum duration in seconds for the highlights reel time budget.",
     "MANIFEST_ENABLED": "Write a manifest JSON file alongside generated artifacts for session tracking.",
     "STUDIO_CELL_EXPAND_HOVER": "Expand overflowing timestamp cells on hover in the Sheet Preview.",
+    "FILMSTRIP_ENABLED": "Show thumbnail images on timeline markers instead of solid colors (in the HTML viewer).",
 }
 
 # Studio-exposed settings with UI metadata (group, type, constraints).
