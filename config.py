@@ -9,7 +9,7 @@ from icecream import ic
 REENCODING: bool = False
 AUDIO_NORMALIZE: bool = False
 FILEFORMAT: str = ".mp4"
-VERSIONNUM: str = "0.9.61"
+VERSIONNUM: str = "0.9.62"
 TITLECARDS_ENABLED: bool = False
 TITLECARD_DURATION_SECONDS: int = 2
 WORKSHEET_PRIORITY: List[str] = [
@@ -105,6 +105,8 @@ SCREENSPACE_SSIM_THRESHOLD: float = 0.90
 SCREENSPACE_CHANGE_RATIO_THRESHOLD: float = 0.03
 SCREENSPACE_MORPH_KERNEL: int = 3
 SCREENSPACE_OCR_FUZZY_THRESHOLD: float = 0.8
+SCREENSPACE_PHASH_THRESHOLD: int = 15
+SCREENSPACE_SEQUENTIAL_READ_MAX_INTERVAL: float = 3.0
 
 # Highlights reel constants
 HIGHLIGHTS_REEL_DURATION_SECONDS: int = 180  # 3-minute budget for highlights reel
@@ -196,13 +198,37 @@ SETTINGS_DESCRIPTIONS: Dict[str, str] = {
 STUDIO_SETTINGS: Dict[str, Dict[str, Any]] = {
     "REENCODING": {"group": "Video Output", "type": "bool"},
     "AUDIO_NORMALIZE": {"group": "Video Output", "type": "bool"},
-    "FILEFORMAT": {"group": "Video Output", "type": "select", "options": [".mp4", ".webm", ".mkv"]},
+    "FILEFORMAT": {
+        "group": "Video Output",
+        "type": "select",
+        "options": [".mp4", ".webm", ".mkv"],
+    },
     "MAX_FILESIZE_MB": {"group": "Video Output", "type": "int", "min": 0, "step": 1},
-    "DEFAULT_DURATION_SECONDS": {"group": "Clip Behavior", "type": "int", "min": 1, "step": 1},
-    "MAX_CLIP_DURATION_SECONDS": {"group": "Clip Behavior", "type": "int", "min": 1, "step": 1},
+    "DEFAULT_DURATION_SECONDS": {
+        "group": "Clip Behavior",
+        "type": "int",
+        "min": 1,
+        "step": 1,
+    },
+    "MAX_CLIP_DURATION_SECONDS": {
+        "group": "Clip Behavior",
+        "type": "int",
+        "min": 1,
+        "step": 1,
+    },
     "TITLECARDS_ENABLED": {"group": "Titlecards", "type": "bool"},
-    "TITLECARD_DURATION_SECONDS": {"group": "Titlecards", "type": "int", "min": 1, "step": 1},
-    "HIGHLIGHTS_REEL_DURATION_SECONDS": {"group": "Generation", "type": "int", "min": 10, "step": 10},
+    "TITLECARD_DURATION_SECONDS": {
+        "group": "Titlecards",
+        "type": "int",
+        "min": 1,
+        "step": 1,
+    },
+    "HIGHLIGHTS_REEL_DURATION_SECONDS": {
+        "group": "Generation",
+        "type": "int",
+        "min": 10,
+        "step": 10,
+    },
     "MANIFEST_ENABLED": {"group": "Generation", "type": "bool"},
     "STUDIO_CELL_EXPAND_HOVER": {"group": "Sheet Preview", "type": "bool"},
 }
