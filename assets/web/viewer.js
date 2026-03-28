@@ -345,10 +345,12 @@
     var MAX_FRAMES = 12;
 
     var done = false;
+    var perFrameTimer = null;
     function finish() {
       if (done) return;
       done = true;
       clearTimeout(timer);
+      clearTimeout(perFrameTimer);
       video.onerror = null;
       video.onloadedmetadata = null;
       video.onseeked = null;
@@ -396,12 +398,16 @@
       }
 
       var frameIndex = 0;
-      video.onseeked = function () {
+      var seekGen = 0;
+
+      function captureAndAdvance() {
+        clearTimeout(perFrameTimer);
         try { ctx.drawImage(video, frameIndex * thumbW, 0, thumbW, STRIP_HEIGHT); } catch (_) {}
         frameIndex++;
         if (frameIndex < seekTimes.length) {
-          video.currentTime = seekTimes[frameIndex];
+          seekToFrame(frameIndex);
         } else {
+          video.onseeked = null;
           canvas.toBlob(function (blob) {
             if (!blob) { markerEl.classList.remove("filmstrip-loading"); finish(); return; }
             var url = URL.createObjectURL(blob);
@@ -414,9 +420,22 @@
             finish();
           }, "image/jpeg", 0.7);
         }
-      };
+      }
 
-      video.currentTime = seekTimes[0];
+      function seekToFrame(idx) {
+        var gen = ++seekGen;
+        video.onseeked = function () {
+          if (gen !== seekGen) return;
+          captureAndAdvance();
+        };
+        perFrameTimer = setTimeout(function () {
+          if (gen !== seekGen) return;
+          captureAndAdvance();
+        }, 800);
+        video.currentTime = seekTimes[idx];
+      }
+
+      seekToFrame(0);
     };
   }
 
