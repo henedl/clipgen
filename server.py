@@ -970,15 +970,16 @@ def start_combined_server(
     worksheet: Any = None,
     port: Optional[int] = None,
     default_page: str = "studio",
-    screenspace: bool = False,
 ) -> None:
     """Start a combined Studio + Insights + Screenspace server on one port.
 
     When worksheet is provided, both Studio and Insights are available.
     When worksheet is None, only Insights is registered.
-    Screenspace is registered when the *screenspace* flag is True.
+    Screenspace is always registered (auto-discovers videos when no
+    spreadsheet is provided).
     """
     import insights_server
+    import screenspace_server
 
     combined = Flask(__name__, static_folder=None)
 
@@ -992,18 +993,14 @@ def start_combined_server(
         _init_studio_state(worksheet)
         combined.register_blueprint(studio_bp, url_prefix="/studio")
 
-    # Register Screenspace if requested
-    has_screenspace = screenspace
-    if has_screenspace:
-        import screenspace_server
-
-        screenspace_server._init_screenspace_state(
-            sheet_context=_sheet_context if has_studio else None,
-            participant_list=_resolve_participants() if has_studio else None,
-        )
-        combined.register_blueprint(
-            screenspace_server.screenspace_bp, url_prefix="/screenspace"
-        )
+    # Always register Screenspace (auto-discovers videos from input dir)
+    screenspace_server._init_screenspace_state(
+        sheet_context=_sheet_context if has_studio else None,
+        participant_list=_resolve_participants() if has_studio else None,
+    )
+    combined.register_blueprint(
+        screenspace_server.screenspace_bp, url_prefix="/screenspace"
+    )
 
     @combined.route("/")
     def root() -> Response:
@@ -1015,7 +1012,7 @@ def start_combined_server(
             {
                 "studio": has_studio,
                 "insights": True,
-                "screenspace": has_screenspace,
+                "screenspace": True,
             }
         )
 
