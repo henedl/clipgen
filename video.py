@@ -21,6 +21,7 @@ import utils
 INVALID_END_TIMESTAMP = None
 
 _file_duration_cache: Dict[str, int] = {}
+_video_properties_cache: Dict[str, Dict[str, Any]] = {}
 
 
 def _ffmpeg_install_guidance_lines() -> List[str]:
@@ -611,6 +612,10 @@ def probe_video_properties(filepath: str) -> Optional[Dict[str, Any]]:
             "audio_codec": "aac",
         }
 
+    resolved = str(Path(filepath).resolve())
+    if resolved in _video_properties_cache:
+        return _video_properties_cache[resolved]
+
     if not Path(filepath).is_file():
         return None
 
@@ -650,12 +655,14 @@ def probe_video_properties(filepath: str) -> Optional[Dict[str, Any]]:
     if not video_codec or width <= 0 or height <= 0:
         return None
 
-    return {
+    result = {
         "width": width,
         "height": height,
         "video_codec": video_codec,
         "audio_codec": audio_codec,
     }
+    _video_properties_cache[resolved] = result
+    return result
 
 
 def get_duration(start_time: str, end_time: Optional[str]) -> Optional[int]:
@@ -946,9 +953,7 @@ def _detect_clip_mismatches(
         utils.warning_print(f"Video codec mismatch across reel clips: {detail}.")
 
     if has_audio_presence_mismatch:
-        utils.warning_print(
-            "Audio stream mismatch: some clips have no audio track."
-        )
+        utils.warning_print("Audio stream mismatch: some clips have no audio track.")
 
     return (props_list, has_resolution_mismatch, has_audio_presence_mismatch)
 
@@ -1041,9 +1046,7 @@ def concatenate_clips(
             )
             return False
 
-    utils.standard_print(
-        f"Concatenating {len(clip_paths)} clips into {output_file}."
-    )
+    utils.standard_print(f"Concatenating {len(clip_paths)} clips into {output_file}.")
     if config.DEBUGGING:
         utils.debug_print("Debugging enabled, not calling ffmpeg for concat.")
         return False
@@ -1054,9 +1057,7 @@ def concatenate_clips(
         utils.warning_print(
             "Re-encoding all clips to produce a compatible reel (this may take longer)."
         )
-        return _concatenate_filter_complex(
-            clip_paths, props_list, output_file
-        )
+        return _concatenate_filter_complex(clip_paths, props_list, output_file)
 
     return _concatenate_demuxer(clip_paths, output_file, reencode_on_fail)
 

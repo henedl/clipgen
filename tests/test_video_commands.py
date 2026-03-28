@@ -71,6 +71,7 @@ def test_concatenate_clips_reencode_fallback(monkeypatch):
 
 
 def test_probe_video_properties_parses_output(monkeypatch):
+    video._video_properties_cache.clear()
     fake_json = json.dumps(
         {
             "streams": [
@@ -85,9 +86,7 @@ def test_probe_video_properties_parses_output(monkeypatch):
         }
     )
     monkeypatch.setattr(video.Path, "is_file", lambda self: True)
-    monkeypatch.setattr(
-        video.subprocess, "check_output", lambda _cmd, **_kw: fake_json
-    )
+    monkeypatch.setattr(video.subprocess, "check_output", lambda _cmd, **_kw: fake_json)
 
     result = video.probe_video_properties("clip.mp4")
     assert result == {
@@ -99,6 +98,7 @@ def test_probe_video_properties_parses_output(monkeypatch):
 
 
 def test_probe_video_properties_no_audio(monkeypatch):
+    video._video_properties_cache.clear()
     fake_json = json.dumps(
         {
             "streams": [
@@ -112,9 +112,7 @@ def test_probe_video_properties_no_audio(monkeypatch):
         }
     )
     monkeypatch.setattr(video.Path, "is_file", lambda self: True)
-    monkeypatch.setattr(
-        video.subprocess, "check_output", lambda _cmd, **_kw: fake_json
-    )
+    monkeypatch.setattr(video.subprocess, "check_output", lambda _cmd, **_kw: fake_json)
 
     result = video.probe_video_properties("clip.mp4")
     assert result is not None
@@ -124,6 +122,7 @@ def test_probe_video_properties_no_audio(monkeypatch):
 
 
 def test_probe_video_properties_failure(monkeypatch):
+    video._video_properties_cache.clear()
     monkeypatch.setattr(video.Path, "is_file", lambda self: True)
 
     def raise_cpe(_cmd, **_kw):
@@ -134,6 +133,7 @@ def test_probe_video_properties_failure(monkeypatch):
 
 
 def test_probe_video_properties_file_not_found(monkeypatch):
+    video._video_properties_cache.clear()
     monkeypatch.setattr(video.Path, "is_file", lambda self: False)
     assert video.probe_video_properties("missing.mp4") is None
 
@@ -171,12 +171,20 @@ def test_concatenate_clips_resolution_mismatch_uses_filter_complex(monkeypatch):
     monkeypatch.setattr(video, "verify_output_file", lambda *_a, **_kw: True)
 
     props_by_path = {
-        "a.mp4": {"width": 1920, "height": 1080, "video_codec": "h264", "audio_codec": "aac"},
-        "b.mp4": {"width": 1280, "height": 720, "video_codec": "h264", "audio_codec": "aac"},
+        "a.mp4": {
+            "width": 1920,
+            "height": 1080,
+            "video_codec": "h264",
+            "audio_codec": "aac",
+        },
+        "b.mp4": {
+            "width": 1280,
+            "height": 720,
+            "video_codec": "h264",
+            "audio_codec": "aac",
+        },
     }
-    monkeypatch.setattr(
-        video, "probe_video_properties", lambda p: props_by_path.get(p)
-    )
+    monkeypatch.setattr(video, "probe_video_properties", lambda p: props_by_path.get(p))
 
     captured = []
 
@@ -205,15 +213,26 @@ def test_concatenate_clips_warns_on_mismatch(monkeypatch):
     monkeypatch.setattr(video, "verify_output_file", lambda *_a, **_kw: True)
 
     props_by_path = {
-        "a.mp4": {"width": 1920, "height": 1080, "video_codec": "h264", "audio_codec": "aac"},
-        "b.mp4": {"width": 1280, "height": 720, "video_codec": "hevc", "audio_codec": "aac"},
+        "a.mp4": {
+            "width": 1920,
+            "height": 1080,
+            "video_codec": "h264",
+            "audio_codec": "aac",
+        },
+        "b.mp4": {
+            "width": 1280,
+            "height": 720,
+            "video_codec": "hevc",
+            "audio_codec": "aac",
+        },
     }
+    monkeypatch.setattr(video, "probe_video_properties", lambda p: props_by_path.get(p))
     monkeypatch.setattr(
-        video, "probe_video_properties", lambda p: props_by_path.get(p)
-    )
-    monkeypatch.setattr(
-        video, "run_ffmpeg_process",
-        lambda cmd, **_kw: subprocess.CompletedProcess(args=cmd, returncode=0, stderr=""),
+        video,
+        "run_ffmpeg_process",
+        lambda cmd, **_kw: subprocess.CompletedProcess(
+            args=cmd, returncode=0, stderr=""
+        ),
     )
 
     warnings = []
@@ -240,12 +259,20 @@ def test_concatenate_clips_mixed_audio_presence(monkeypatch):
     monkeypatch.setattr(video, "get_file_duration", lambda _p: 10)
 
     props_by_path = {
-        "a.mp4": {"width": 1920, "height": 1080, "video_codec": "h264", "audio_codec": "aac"},
-        "b.mp4": {"width": 1920, "height": 1080, "video_codec": "h264", "audio_codec": None},
+        "a.mp4": {
+            "width": 1920,
+            "height": 1080,
+            "video_codec": "h264",
+            "audio_codec": "aac",
+        },
+        "b.mp4": {
+            "width": 1920,
+            "height": 1080,
+            "video_codec": "h264",
+            "audio_codec": None,
+        },
     }
-    monkeypatch.setattr(
-        video, "probe_video_properties", lambda p: props_by_path.get(p)
-    )
+    monkeypatch.setattr(video, "probe_video_properties", lambda p: props_by_path.get(p))
 
     captured = []
 
@@ -282,11 +309,22 @@ def test_concatenate_clips_all_no_audio(monkeypatch):
     # Same resolution, but audio mismatch is about presence—need at least one
     # mismatch to trigger filter_complex. Use resolution mismatch instead.
     call_count = [0]
+
     def props_alternating(_p):
         call_count[0] += 1
         if call_count[0] % 2 == 1:
-            return {"width": 1920, "height": 1080, "video_codec": "h264", "audio_codec": None}
-        return {"width": 1280, "height": 720, "video_codec": "h264", "audio_codec": None}
+            return {
+                "width": 1920,
+                "height": 1080,
+                "video_codec": "h264",
+                "audio_codec": None,
+            }
+        return {
+            "width": 1280,
+            "height": 720,
+            "video_codec": "h264",
+            "audio_codec": None,
+        }
 
     monkeypatch.setattr(video, "probe_video_properties", props_alternating)
 
