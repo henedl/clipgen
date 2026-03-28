@@ -1707,7 +1707,7 @@ def _dispatch_interactive_mode(
         import server
 
         server.start_combined_server(
-            worksheet=worksheet, default_page="screenspace", screenspace=True
+            worksheet=worksheet, default_page="screenspace"
         )
         return None
     if mode == "timeline-viewer":
