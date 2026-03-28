@@ -304,8 +304,8 @@ body {
 }
 
 .artifact-marker.filmstrip-thumb {
-  background-size: cover;
-  background-position: center;
+  background-size: auto 100%;
+  background-position: left top;
   background-repeat: no-repeat;
   border-width: 1px;
   border-color: rgba(0, 0, 0, 0.2);
