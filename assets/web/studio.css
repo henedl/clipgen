@@ -28,6 +28,7 @@
   --color-cell-text: #dbeafe;
   --color-cell-valid: #93c5fd;
   --color-cell-selected: #c4b5fd;
+  --color-heatmap: 168, 130, 214;
   --color-cell-hover: rgba(29, 79, 114, 0.06);
   --sev-critical: #b91c1c;
   --sev-high: #dc2626;
@@ -1601,6 +1602,7 @@ html[data-theme="dark"] .queue-card-error .queue-card-thumb {
     --color-cell-valid: #1d4ed8;
     --color-cell-selected: #6d28d9;
     --color-cell-hover: rgba(56, 189, 248, 0.08);
+    --color-heatmap: 192, 160, 235;
     --sev-critical: #f87171;
     --sev-high: #fb7185;
     --sev-medium: #fdba74;
@@ -1632,6 +1634,7 @@ html[data-theme="dark"] {
   --color-cell-text: #1e3a5f;
   --color-cell-valid: #1d4ed8;
   --color-cell-selected: #6d28d9;
+  --color-heatmap: 192, 160, 235;
   --color-cell-hover: rgba(56, 189, 248, 0.08);
   --sev-critical: #f87171;
   --sev-high: #fb7185;
