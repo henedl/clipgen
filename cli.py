@@ -1177,9 +1177,7 @@ def main() -> None:
     if getattr(args, "screenspace", False) and not args.spreadsheet:
         import server
 
-        server.start_combined_server(
-            worksheet=None, default_page="screenspace", screenspace=True
-        )
+        server.start_combined_server(worksheet=None, default_page="screenspace")
         sys.exit(0)
 
     # Standalone gallery: generate interval captures + gallery viewer, no spreadsheet needed
@@ -1232,9 +1230,7 @@ def main() -> None:
                 import server
 
                 server.start_combined_server(
-                    worksheet=worksheet,
-                    default_page="screenspace",
-                    screenspace=True,
+                    worksheet=worksheet, default_page="screenspace"
                 )
                 sys.exit(0)
 
