@@ -531,8 +531,26 @@ body {
   padding: 0.6rem 0;
 }
 
+#workflowActionRow {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
 #runBtn {
-  align-self: flex-end;
+  margin-left: auto;
+}
+
+#workflowIntervalSlot {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  font-size: 0.72rem;
+  color: var(--color-text-dim);
+}
+
+#workflowIntervalSlot .param-control input[type="number"] {
+  width: 3.5rem;
 }
 
 /* Run participant picker */
@@ -553,6 +571,16 @@ body {
   color: var(--color-text);
   cursor: pointer;
   white-space: nowrap;
+  max-width: 8.5rem;
+  min-width: 0;
+}
+
+.run-picker-btn-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+  flex: 1;
 }
 
 .run-picker-btn:hover {
@@ -571,7 +599,7 @@ body {
 
 .run-picker-panel {
   position: absolute;
-  bottom: calc(100% + 4px);
+  top: calc(100% + 4px);
   left: 0;
   z-index: 20;
   background: var(--color-surface);
@@ -580,6 +608,7 @@ body {
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.12);
   padding: 0.3rem 0;
   min-width: 8rem;
+  max-width: 16rem;
   max-height: 14rem;
   overflow-y: auto;
 }
@@ -591,7 +620,14 @@ body {
   padding: 0.25rem 0.5rem;
   cursor: pointer;
   font-size: 0.75rem;
+  overflow: hidden;
+}
+
+.run-picker-panel label span.run-picker-label-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
+  min-width: 0;
 }
 
 .run-picker-panel label:hover {
@@ -896,11 +932,11 @@ body {
   box-shadow: 0 24px 60px var(--color-panel-shadow);
   padding: 0.8rem 1.5rem 1.2rem;
   display: grid;
-  grid-template-columns: 1fr 1fr 1fr;
+  grid-template-columns: 1.7fr 1fr 1fr;
   gap: 1.5rem;
   flex-shrink: 0;
   margin-bottom: 1.5rem;
-  height: 260px;
+  height: 340px;
   min-height: 120px;
   overflow: hidden;
 }
@@ -1042,14 +1078,26 @@ body {
 }
 
 .task-card-type {
-  font-size: 0.68rem;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  padding: 0.1rem 0.35rem;
-  border-radius: 3px;
-  color: #fff;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   flex-shrink: 0;
+  width: 16px;
+  height: 16px;
+}
+
+.task-card-type-icon {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  background-color: currentColor;
+  mask-size: contain;
+  mask-repeat: no-repeat;
+  mask-position: center;
+  -webkit-mask-size: contain;
+  -webkit-mask-repeat: no-repeat;
+  -webkit-mask-position: center;
 }
 
 .task-card-info {

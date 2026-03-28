@@ -48,11 +48,12 @@
     pollTimer: null,
     queuePaused: false,
     timelineDragging: false,
-    panelHeight: 260,
+    panelHeight: 340,
     previewMaxWidth: 100,
     taskFilter: null,
     pipetteActive: false,
     runParticipants: [],
+    runRegions: [],
   };
 
   // ---- Helpers ----
@@ -313,14 +314,91 @@
     var text = n === 0 ? "No participants"
       : n === 1 ? state.runParticipants[0]
       : n + " participants";
-    btn.innerHTML = text + ' <span class="chevron">&#x25BE;</span>';
+    btn.innerHTML = '<span class="run-picker-btn-text">' + text + '</span><span class="chevron">&#x25BE;</span>';
   }
 
   function closeRunPicker() {
-    var panel = qs(".run-picker-panel");
-    var btn = qs(".run-picker-btn");
-    if (panel) panel.classList.add("hidden");
-    if (btn) btn.classList.remove("open");
+    var panels = qsa(".run-picker-panel");
+    var btns = qsa(".run-picker-btn");
+    for (var i = 0; i < panels.length; i++) panels[i].classList.add("hidden");
+    for (var i = 0; i < btns.length; i++) btns[i].classList.remove("open");
+  }
+
+  function renderRunRegionPicker() {
+    var wrap = qs("#runRegionPicker");
+    if (!wrap) return;
+    wrap.innerHTML = "";
+    var names = Object.keys(state.regions);
+    // Remove any runRegions that no longer exist
+    state.runRegions = state.runRegions.filter(function (r) { return names.indexOf(r) >= 0; });
+    // Auto-select the active region when no explicit selection has been made
+    if (state.runRegions.length === 0 && state.activeRegion && names.indexOf(state.activeRegion) >= 0) {
+      state.runRegions = [state.activeRegion];
+    }
+    if (names.length === 0) return;
+
+    var btn = el("button", "run-picker-btn");
+    btn.type = "button";
+    updateRegionPickerBtnText(btn);
+
+    var panel = el("div", "run-picker-panel hidden");
+
+    var toggleAll = el("span", "run-picker-toggle-all");
+    toggleAll.textContent = state.runRegions.length === names.length ? "Deselect all" : "Select all";
+    toggleAll.addEventListener("click", function () {
+      var allSelected = state.runRegions.length === names.length;
+      state.runRegions = allSelected ? [] : names.slice();
+      var cbs = panel.querySelectorAll("input[type=checkbox]");
+      for (var i = 0; i < cbs.length; i++) cbs[i].checked = !allSelected;
+      toggleAll.textContent = allSelected ? "Select all" : "Deselect all";
+      updateRegionPickerBtnText(btn);
+      updateRunButton();
+    });
+    panel.appendChild(toggleAll);
+
+    names.forEach(function (name, idx) {
+      var color = regionColorForIndex(idx);
+      var lbl = document.createElement("label");
+      var cb = document.createElement("input");
+      cb.type = "checkbox";
+      cb.value = name;
+      cb.checked = state.runRegions.indexOf(name) >= 0;
+      cb.addEventListener("change", function () {
+        if (cb.checked) {
+          if (state.runRegions.indexOf(name) < 0) state.runRegions.push(name);
+        } else {
+          state.runRegions = state.runRegions.filter(function (r) { return r !== name; });
+        }
+        toggleAll.textContent = state.runRegions.length === names.length ? "Deselect all" : "Select all";
+        updateRegionPickerBtnText(btn);
+        updateRunButton();
+      });
+      lbl.appendChild(cb);
+      var dot = el("span", "region-chip-dot");
+      dot.style.background = color;
+      lbl.appendChild(dot);
+      var nameSpan = el("span", "run-picker-label-text", name);
+      lbl.appendChild(nameSpan);
+      panel.appendChild(lbl);
+    });
+
+    btn.addEventListener("click", function (e) {
+      e.stopPropagation();
+      var open = !panel.classList.contains("hidden");
+      panel.classList.toggle("hidden", open);
+      btn.classList.toggle("open", !open);
+    });
+
+    wrap.appendChild(btn);
+    wrap.appendChild(panel);
+  }
+
+  function updateRegionPickerBtnText(btn) {
+    var n = state.runRegions.length;
+    var text = n === 0 ? "No region"
+      : n === 1 ? state.runRegions[0]
+      : n + " regions";
+    btn.innerHTML = '<span class="run-picker-btn-text">' + text + '</span><span class="chevron">&#x25BE;</span>';
   }
 
   function selectParticipant(pid, initialTimestamp) {
@@ -764,6 +842,7 @@
       });
       container.appendChild(chip);
     });
+    renderRunRegionPicker();
   }
 
   function renderOverlay() {
@@ -1199,9 +1278,21 @@
     renderWorkflowParams();
   }
 
+  function renderIntervalSlot(inputId, min, max, def, step) {
+    var slot = qs("#workflowIntervalSlot");
+    if (!slot) return;
+    slot.innerHTML = "";
+    slot.appendChild(el("span", null, "Interval\u202f(s)"));
+    var ctrl = el("div", "param-control");
+    ctrl.appendChild(numberInput(inputId, min, max, def, step));
+    slot.appendChild(ctrl);
+  }
+
   function renderWorkflowParams() {
     var container = qs("#workflowParams");
     container.innerHTML = "";
+    var intervalSlot = qs("#workflowIntervalSlot");
+    if (intervalSlot) intervalSlot.innerHTML = "";
     var type = state.activeWorkflow;
 
     if (type === "color") {
@@ -1326,7 +1417,7 @@
       tolSlider.addEventListener("input", function () {
         renderColorPalette();
       });
-      addParamRow(container, "Interval (s)", numberInput("paramColorInterval", 0.5, 60, 1.0, 0.5));
+      renderIntervalSlot("paramColorInterval", 0.5, 60, 1.0, 0.5);
 
       // Initial render of palette and preview
       renderColorPalette();
@@ -1337,7 +1428,7 @@
     } else if (type === "change") {
       addParamRow(container, "Threshold", rangeInput("paramChangeThresh", 0.01, 0.50, 0.03, 0.01), "paramChangeThreshVal");
       addParamRow(container, "Noise Thr.", rangeInput("paramChangeNoise", 0, 100, 30, 1), "paramChangeNoiseVal");
-      addParamRow(container, "Interval (s)", numberInput("paramChangeInterval", 0.5, 60, 1.0, 0.5));
+      renderIntervalSlot("paramChangeInterval", 0.5, 60, 1.0, 0.5);
     } else if (type === "similarity") {
       var refRow = el("div", "param-row");
       var refLabel = el("span", "param-label", "Reference");
@@ -1357,11 +1448,11 @@
       refRow.appendChild(refControl);
       container.appendChild(refRow);
       addParamRow(container, "Threshold", rangeInput("paramSimThresh", 0.50, 1.00, 0.90, 0.01), "paramSimThreshVal");
-      addParamRow(container, "Interval (s)", numberInput("paramSimInterval", 0.5, 60, 1.0, 0.5));
+      renderIntervalSlot("paramSimInterval", 0.5, 60, 1.0, 0.5);
     } else if (type === "text") {
       addParamRow(container, "Search text", textInput("paramTextSearch", "Enter text to find..."));
       addParamRow(container, "Fuzzy Thr.", rangeInput("paramTextFuzzy", 0.50, 1.00, 0.80, 0.01), "paramTextFuzzyVal");
-      addParamRow(container, "Interval (s)", numberInput("paramTextInterval", 0.5, 60, 2.0, 0.5));
+      renderIntervalSlot("paramTextInterval", 0.5, 60, 2.0, 0.5);
       var langRow = el("div", "param-row");
       langRow.appendChild(el("span", "param-label", "Language"));
       var langControl = el("div", "param-control");
@@ -1422,7 +1513,7 @@
       rangeCtrl.appendChild(numberInput("paramNumMax", -999999, 999999, 100, 1));
       numRangeRow.appendChild(rangeCtrl);
       container.appendChild(numRangeRow);
-      addParamRow(container, "Interval (s)", numberInput("paramNumInterval", 0.5, 60, 2.0, 0.5));
+      renderIntervalSlot("paramNumInterval", 0.5, 60, 2.0, 0.5);
     } else if (type === "timelapse") {
       addParamRow(container, "Speed", numberInput("paramTlSpeed", 2, 100, 10, 1));
       var fmtRow = el("div", "param-row");
@@ -1711,7 +1802,7 @@
 
   function updateRunButton() {
     var btn = qs("#runBtn");
-    var hasRegion = !!state.activeRegion;
+    var hasRegion = state.runRegions.length > 0 || !!state.activeRegion;
     var hasParticipants = state.runParticipants.length > 0 || !!state.selectedParticipant;
     btn.disabled = !hasRegion || !hasParticipants;
     if (!hasRegion) {
@@ -1727,7 +1818,10 @@
 
   function initRunButton() {
     qs("#runBtn").addEventListener("click", function () {
-      if (!state.activeRegion) return;
+      var regions = state.runRegions.length > 0
+        ? state.runRegions
+        : (state.activeRegion ? [state.activeRegion] : []);
+      if (regions.length === 0) return;
       var participants = state.runParticipants.length > 0
         ? state.runParticipants
         : (state.selectedParticipant ? [state.selectedParticipant] : []);
@@ -1742,25 +1836,28 @@
 
       var chain = Promise.resolve();
       participants.forEach(function (pid) {
-        chain = chain.then(function () {
-          var body = {
-            type: type,
-            participant: pid,
-            region: state.activeRegion,
-            parameters: params,
-          };
-          return apiPost("api/tasks", body).then(function (data) {
-            if (data.ok) {
-              state.tasks.push(data.task);
-              renderTaskList();
-            } else {
-              showToast(data.error || "Failed to create task for " + pid);
-            }
+        regions.forEach(function (regionName) {
+          chain = chain.then(function () {
+            var body = {
+              type: type,
+              participant: pid,
+              region: regionName,
+              parameters: params,
+            };
+            return apiPost("api/tasks", body).then(function (data) {
+              if (data.ok) {
+                state.tasks.push(data.task);
+                renderTaskList();
+              } else {
+                showToast(data.error || "Failed to create task for " + pid + " / " + regionName);
+              }
+            });
           });
         });
       });
+      var totalTasks = participants.length * regions.length;
       chain.then(function () {
-        showToast(participants.length + " task" + (participants.length !== 1 ? "s" : "") + " queued: " + type);
+        showToast(totalTasks + " task" + (totalTasks !== 1 ? "s" : "") + " queued: " + type);
         startPolling();
       }).catch(function (err) { showToast("Error: " + err.message); });
     });
@@ -1900,6 +1997,15 @@
     svg.appendChild(p2);
     return svg;
   }
+
+  var TASK_TYPE_ICON_FILES = {
+    color: "eye-dropper",
+    change: "bolt",
+    similarity: "photo",
+    text: "language",
+    numbers: "hashtag",
+    timelapse: "forward",
+  };
 
   function svgPlayIcon() {
     var svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
@@ -2372,8 +2478,14 @@
 
       // Type badge
       var badge = el("span", "task-card-type");
-      badge.textContent = task.type;
-      badge.style.background = taskTypeColor(task.type);
+      badge.style.color = taskTypeColor(task.type);
+      badge.title = task.type;
+      var iconSpan = el("span", "task-card-type-icon");
+      var iconFile = TASK_TYPE_ICON_FILES[task.type] || "squares-2x2";
+      var iconUrl = 'url("/screenspace/icons/' + iconFile + '.svg")';
+      iconSpan.style.maskImage = iconUrl;
+      iconSpan.style.webkitMaskImage = iconUrl;
+      badge.appendChild(iconSpan);
       card.appendChild(badge);
 
       // Info

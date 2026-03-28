@@ -48,6 +48,12 @@ def serve_static(filename: str) -> FlaskResponse:
     return send_from_directory(_assets_dir, filename)
 
 
+@screenspace_bp.route("/icons/<path:filename>")
+def serve_icons(filename: str) -> FlaskResponse:
+    icons_dir = Path(__file__).resolve().parent / "assets" / "icons"
+    return send_from_directory(icons_dir, filename)
+
+
 @screenspace_bp.route("/media/<path:filename>")
 def serve_media(filename: str) -> FlaskResponse:
     if not _output_dir:
