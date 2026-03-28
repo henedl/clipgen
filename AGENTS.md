@@ -11,6 +11,13 @@
 - Never write a class when a function will do.
 - No comments on obvious code.
 - Treat spreadsheet layout and timestamp semantics as domain rules; if tests conflict with these, reconsider or adjust the tests rather than changing core semantics to satisfy them.
+- All web UIs use vanilla JavaScript (ES5-style `.then()` chaining, not async/await), hand-written CSS with CSS variables for theming, and plain HTML. No React, TypeScript, CSS frameworks, or build tools.
+- **CSS design tokens**: Use tokens from `assets/web/tokens.css` for spacing (`--space-N`), font sizes (`--text-N`), border radius (`--radius-N`), shadows (`--shadow-N`), transitions (`--duration-N`), and z-index (`--z-N`). Never write raw `rem`/`px` values for these properties in new code. When editing existing CSS, convert touched values to tokens.
+- Thin server, thick client: keep the Flask server focused on data/media endpoints; UI logic, state management, and rendering happen client-side.
+- Plan-driven development: detailed implementation plans with specific files, line numbers, code structure, and verification steps are written before coding begins. Follow attached plans closely.
+- Features are often built incrementally across multiple sessions. Check for existing groundwork before starting from scratch.
+- Manifest-driven state persistence: JSON manifest files (clipgen, insights, screenspace, stashes, settings) follow the pattern of load-on-startup, save-after-mutations.
+- No hardcoded version numbers in evergreen docs (CLAUDE.md, README.md). Reference `VERSIONNUM` in `config.py` instead.
 
 ## Learned Workspace Facts
 

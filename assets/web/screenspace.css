@@ -21,7 +21,6 @@
   --color-panel-border: rgba(148, 163, 184, 0.22);
   --color-panel-shadow: rgba(15, 23, 42, 0.12);
   --color-grid: rgba(0, 0, 0, 0.03);
-  --radius: 8px;
   --font-mono: "SF Mono", "Fira Code", "Cascadia Code", Consolas, monospace;
   --color-task-color: #8b5cf6;
   --color-task-change: #f97316;
@@ -32,7 +31,7 @@
 }
 
 html {
-  font-size: 15px;
+  font-size: 16px;
 }
 
 body {

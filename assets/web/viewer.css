@@ -26,7 +26,6 @@
   --color-grid: rgba(0, 0, 0, 0.03);
   --color-selected-ring: #ffffff;
   --color-tooltip-shadow: rgba(0, 0, 0, 0.18);
-  --radius: 8px;
   --font-mono: "SF Mono", "Fira Code", "Cascadia Code", Consolas, monospace;
   --sev-critical-bg: #b91c1c;
   --sev-high-bg: #dc2626;
@@ -39,7 +38,7 @@
 }
 
 html {
-  font-size: 15px;
+  font-size: 16px;
 }
 
 body {

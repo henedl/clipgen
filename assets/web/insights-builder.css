@@ -24,7 +24,6 @@
   --color-panel-bg: rgba(255, 255, 255, 0.97);
   --color-panel-border: rgba(148, 163, 184, 0.22);
   --color-panel-shadow: rgba(15, 23, 42, 0.12);
-  --radius: 8px;
   --font-mono: "SF Mono", "Fira Code", "Cascadia Code", Consolas, monospace;
   --sev-critical: #b91c1c;
   --sev-high: #dc2626;
@@ -44,7 +43,7 @@
 }
 
 html {
-  font-size: 15px;
+  font-size: 16px;
 }
 
 body {
