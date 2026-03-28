@@ -342,8 +342,7 @@
   function generateFilmstripThumb(markerEl, artifact, callback) {
     var STRIP_HEIGHT = 88;
     var MIN_FRAMES = 2;
-    var MAX_FRAMES = 8;
-    var STEP_SECONDS = 10;
+    var MAX_FRAMES = 12;
 
     var done = false;
     function finish() {
@@ -380,8 +379,10 @@
       var clipDur = clipEnd - clipStart;
       if (clipDur <= 0) clipDur = dur;
 
-      var numFrames = Math.min(MAX_FRAMES, Math.max(MIN_FRAMES, Math.ceil(clipDur / STEP_SECONDS)));
-      var thumbW = Math.round(STRIP_HEIGHT * (video.videoWidth / video.videoHeight)) || 156;
+      var aspect = (video.videoWidth / video.videoHeight) || (16 / 9);
+      var thumbW = Math.round(STRIP_HEIGHT * aspect);
+      var markerW = markerEl.offsetWidth || thumbW;
+      var numFrames = Math.min(MAX_FRAMES, Math.max(MIN_FRAMES, Math.ceil(markerW / thumbW)));
 
       var canvas = document.createElement("canvas");
       canvas.width = thumbW * numFrames;
@@ -891,11 +892,31 @@
     }
   }
 
+  function updateExpandButtonState(trackEl) {
+    var btn = trackEl.parentNode && trackEl.parentNode.querySelector(".track-expand-btn");
+    if (!btn) return;
+    var markers = trackEl._trackMarkers;
+    if (!markers || !markers.length) { btn.disabled = true; return; }
+    var artifactList = markers.map(function (m) { return m.artifact; });
+    var packing = computeTrackAssignments(artifactList, state.duration);
+    var canExpand = packing.trackCount > 1;
+    btn.disabled = !canExpand;
+    if (!canExpand && state.expandedTracks[trackEl._trackId]) {
+      state.expandedTracks[trackEl._trackId] = false;
+      applyTrackLayout(trackEl);
+      btn.classList.remove("expanded");
+      btn.setAttribute("aria-expanded", "false");
+      btn.title = "Expand tracks";
+      btn.setAttribute("aria-label", btn.title);
+    }
+  }
+
   function toggleTrackExpand(trackEl) {
+    var btn = trackEl.parentNode && trackEl.parentNode.querySelector(".track-expand-btn");
+    if (btn && btn.disabled) return;
     var trackId = trackEl._trackId;
     state.expandedTracks[trackId] = !state.expandedTracks[trackId];
     applyTrackLayout(trackEl);
-    var btn = trackEl.parentNode.querySelector(".track-expand-btn");
     if (btn) {
       var expanded = !!state.expandedTracks[trackId];
       btn.classList.toggle("expanded", expanded);
@@ -941,6 +962,7 @@
     track._trackMarkers = markers;
     track._trackId = "unified";
     applyTrackLayout(track);
+    updateExpandButtonState(track);
 
     var wrapBtn = track.parentNode && track.parentNode.querySelector(".track-expand-btn");
     if (wrapBtn && !wrapBtn._bound) {
@@ -1459,6 +1481,7 @@
         return function () { toggleTrackExpand(t); };
       })(track));
       row.appendChild(expandBtn);
+      updateExpandButtonState(track);
 
       container.appendChild(row);
     });
