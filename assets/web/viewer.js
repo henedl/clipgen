@@ -340,6 +340,11 @@
   }
 
   function generateFilmstripThumb(markerEl, artifact, callback) {
+    var STRIP_HEIGHT = 88;
+    var MIN_FRAMES = 2;
+    var MAX_FRAMES = 8;
+    var STEP_SECONDS = 10;
+
     var done = false;
     function finish() {
       if (done) return;
@@ -359,7 +364,7 @@
     video.playsInline = true;
     video.src = artifact.file;
 
-    var timer = setTimeout(finish, 8000);
+    var timer = setTimeout(finish, 15000);
 
     video.onerror = function () {
       markerEl.classList.remove("filmstrip-loading");
@@ -369,32 +374,48 @@
     video.onloadedmetadata = function () {
       var dur = video.duration;
       if (!dur || !isFinite(dur)) { markerEl.classList.remove("filmstrip-loading"); finish(); return; }
-      var seek = Math.min(Math.max(dur * 0.25, 0.5), 5, dur - 0.01);
-      video.currentTime = Math.max(0, seek);
-    };
 
-    video.onseeked = function () {
-      try {
-        var canvas = document.createElement("canvas");
-        canvas.width = 160;
-        canvas.height = 90;
-        var ctx = canvas.getContext("2d");
-        ctx.drawImage(video, 0, 0, 160, 90);
-        canvas.toBlob(function (blob) {
-          if (!blob) { markerEl.classList.remove("filmstrip-loading"); finish(); return; }
-          var url = URL.createObjectURL(blob);
-          _thumbCache[artifact.id] = url;
-          if (_filmstripEnabled && markerEl.classList.contains("filmstrip-loading")) {
-            markerEl.style.backgroundImage = "url(" + url + ")";
-            markerEl.classList.remove("filmstrip-loading");
-            markerEl.classList.add("filmstrip-thumb");
-          }
-          finish();
-        }, "image/jpeg", 0.7);
-      } catch (e) {
-        markerEl.classList.remove("filmstrip-loading");
-        finish();
+      var clipStart = artifact.start || 0;
+      var clipEnd = artifact.end || artifact.start || dur;
+      var clipDur = clipEnd - clipStart;
+      if (clipDur <= 0) clipDur = dur;
+
+      var numFrames = Math.min(MAX_FRAMES, Math.max(MIN_FRAMES, Math.ceil(clipDur / STEP_SECONDS)));
+      var thumbW = Math.round(STRIP_HEIGHT * (video.videoWidth / video.videoHeight)) || 156;
+
+      var canvas = document.createElement("canvas");
+      canvas.width = thumbW * numFrames;
+      canvas.height = STRIP_HEIGHT;
+      var ctx = canvas.getContext("2d");
+
+      var seekTimes = [];
+      for (var i = 0; i < numFrames; i++) {
+        var t = clipStart + (clipDur * (i + 0.5)) / numFrames;
+        seekTimes.push(Math.min(Math.max(0, t), dur - 0.01));
       }
+
+      var frameIndex = 0;
+      video.onseeked = function () {
+        try { ctx.drawImage(video, frameIndex * thumbW, 0, thumbW, STRIP_HEIGHT); } catch (_) {}
+        frameIndex++;
+        if (frameIndex < seekTimes.length) {
+          video.currentTime = seekTimes[frameIndex];
+        } else {
+          canvas.toBlob(function (blob) {
+            if (!blob) { markerEl.classList.remove("filmstrip-loading"); finish(); return; }
+            var url = URL.createObjectURL(blob);
+            _thumbCache[artifact.id] = url;
+            if (_filmstripEnabled && markerEl.classList.contains("filmstrip-loading")) {
+              markerEl.style.backgroundImage = "url(" + url + ")";
+              markerEl.classList.remove("filmstrip-loading");
+              markerEl.classList.add("filmstrip-thumb");
+            }
+            finish();
+          }, "image/jpeg", 0.7);
+        }
+      };
+
+      video.currentTime = seekTimes[0];
     };
   }
 
