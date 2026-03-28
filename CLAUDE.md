@@ -104,6 +104,19 @@ Source video filenames follow `{study}_{participant}.mp4` (e.g. `mystudy_P01.mp4
 - **Ruff** – Linting and formatting. A `PostToolUse` hook in `.claude/settings.json` automatically runs `uv run ruff check --fix` and `uv run ruff format` on every edited/written file. You can also run these manually: `uv run ruff check --fix` and `uv run ruff format`.
 - **ty** – Use `uv run ty check` for type checking.
 
+## CSS design tokens
+
+All web interfaces share a design token system defined in [assets/web/tokens.css](assets/web/tokens.css). Flask-served pages load it via `<link>`; standalone inlined viewers (timeline, gallery, insights) get tokens prepended by `viewer.py`.
+
+Use these tokens for **all new CSS**. When editing existing CSS, convert touched values to tokens. See the cheat-sheet comment at the top of `tokens.css` for the full reference. Summary:
+
+- **Spacing**: `--space-1` (4px) through `--space-8` (48px)
+- **Typography**: `--text-xs` (12px) through `--text-2xl` (24px)
+- **Border radius**: `--radius-sm` (4px), `--radius-md` (8px), `--radius-lg` (14px), `--radius-full` (999px). Legacy `--radius` aliases `--radius-md`.
+- **Shadows**: `--shadow-sm`, `--shadow-md`, `--shadow-lg`, `--shadow-xl`, `--shadow-focus`
+- **Transitions**: `--duration-fast` (150ms), `--duration-normal` (250ms), `--duration-slow` (350ms)
+- **Z-index**: `--z-float` (10), `--z-dropdown` (100), `--z-modal` (1000), `--z-overlay` (2000), `--z-toast` (3000)
+
 ## Conventions and patterns
 
 - **Coordinates:** gspread uses **1-based** row/col. `sheet.get_all_values()` is a list of lists with **0-based** indices: `sheet_data[row_idx][col_idx]`. Conversions: sheet row = `row_idx + 1`, sheet col = `col_idx + 1`.

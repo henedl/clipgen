@@ -173,6 +173,14 @@ def _generate_viewer_html(
         utils.warning_print(f"Could not read {viewer_label.lower()} assets: {e}")
         return None
 
+    # Prepend design tokens so standalone viewers have the full token set
+    tokens_path = assets_dir / "tokens.css"
+    if tokens_path.is_file():
+        try:
+            css_text = tokens_path.read_text(encoding="utf-8") + "\n" + css_text
+        except OSError:
+            pass
+
     # Inline CSS
     css_link_tag = f'<link rel="stylesheet" href="{css_name}">'
     inline_css_block = f"<style>\n{css_text}\n</style>"

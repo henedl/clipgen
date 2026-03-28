@@ -21,12 +21,11 @@
   --color-panel-shadow: rgba(15, 23, 42, 0.12);
   --color-grid: rgba(0, 0, 0, 0.03);
   --color-overlay-bg: rgba(0, 0, 0, 0.85);
-  --radius: 8px;
   --font-mono: "SF Mono", "Fira Code", "Cascadia Code", Consolas, monospace;
 }
 
 html {
-  font-size: 15px;
+  font-size: 16px;
 }
 
 body {
