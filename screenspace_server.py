@@ -27,6 +27,7 @@ _manifest: Dict[str, Any] = {}
 _worker: Optional[screenspace.ScreenspaceWorker] = None
 _output_dir: str = ""
 _participants: List[Dict[str, Any]] = []
+_video_cap_cache: Dict[str, Any] = {"path": None, "cap": None}
 
 _assets_dir = Path(__file__).resolve().parent / "assets" / "web"
 
@@ -83,6 +84,25 @@ def _find_participant_video(participant_id: str) -> Optional[str]:
     return None
 
 
+def _get_video_cap(video_path: str) -> Optional[cv2.VideoCapture]:
+    """Return a cached VideoCapture for *video_path*, opening a new one if needed."""
+    if _video_cap_cache["path"] == video_path and _video_cap_cache["cap"] is not None:
+        cap = _video_cap_cache["cap"]
+        if cap.isOpened():
+            return cap
+    # Evict old entry
+    if _video_cap_cache["cap"] is not None:
+        _video_cap_cache["cap"].release()
+    cap = cv2.VideoCapture(video_path)
+    if not cap.isOpened():
+        _video_cap_cache["path"] = None
+        _video_cap_cache["cap"] = None
+        return None
+    _video_cap_cache["path"] = video_path
+    _video_cap_cache["cap"] = cap
+    return cap
+
+
 @screenspace_bp.route("/api/video/frame/<participant>/<float:timestamp>")
 def api_video_frame(participant: str, timestamp: float) -> FlaskResponse:
     """Extract and return a single JPEG frame at the given timestamp."""
@@ -92,13 +112,12 @@ def api_video_frame(participant: str, timestamp: float) -> FlaskResponse:
             {"ok": False, "error": f"No video for participant {participant}"}
         ), 404
 
-    cap = cv2.VideoCapture(video_path)
-    if not cap.isOpened():
+    cap = _get_video_cap(video_path)
+    if cap is None:
         return jsonify({"ok": False, "error": "Could not open video file"}), 500
 
     cap.set(cv2.CAP_PROP_POS_MSEC, timestamp * 1000.0)
     ret, frame = cap.read()
-    cap.release()
 
     if not ret:
         return jsonify({"ok": False, "error": "Could not read frame at timestamp"}), 400

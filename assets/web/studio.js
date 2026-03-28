@@ -1019,10 +1019,11 @@
     for (var k = 0; k < values.length; k++) {
       if (values[k] !== null && values[k] > max) max = values[k];
     }
+    var hm = getComputedStyle(document.documentElement).getPropertyValue("--color-heatmap").trim() || "168, 130, 214";
     for (var m = 0; m < cells.length; m++) {
       if (values[m] !== null && max > 0) {
         var t = values[m] / max;
-        cells[m].style.backgroundColor = "rgba(168, 130, 214, " + (t * 0.45).toFixed(3) + ")";
+        cells[m].style.backgroundColor = "rgba(" + hm + ", " + (t * 0.45).toFixed(3) + ")";
       } else {
         cells[m].style.backgroundColor = "";
       }
