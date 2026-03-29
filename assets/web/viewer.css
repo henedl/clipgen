@@ -106,7 +106,8 @@ body {
 }
 
 #themeToggle,
-#filmstripToggle {
+#filmstripToggle,
+#screenspaceToggle {
   position: relative;
   width: 32px;
   height: 32px;
@@ -122,27 +123,32 @@ body {
   transition: background var(--duration-fast) ease, border-color var(--duration-fast) ease, color var(--duration-fast) ease, transform var(--duration-fast) ease, box-shadow var(--duration-normal) ease;
 }
 
-#filmstripToggle svg { width: 16px; height: 16px; }
+#filmstripToggle svg,
+#screenspaceToggle svg { width: 16px; height: 16px; }
 
-#filmstripToggle[aria-pressed="true"] {
+#filmstripToggle[aria-pressed="true"],
+#screenspaceToggle[aria-pressed="true"] {
   border-color: var(--color-accent);
   background: var(--color-selected);
   color: var(--color-accent);
 }
 
 #themeToggle:hover,
-#filmstripToggle:hover {
+#filmstripToggle:hover,
+#screenspaceToggle:hover {
   background: var(--color-surface);
   box-shadow: 0 0 0 1px rgba(148, 163, 184, 0.3);
 }
 
 #themeToggle:active,
-#filmstripToggle:active {
+#filmstripToggle:active,
+#screenspaceToggle:active {
   transform: scale(0.96);
 }
 
 #themeToggle:focus-visible,
-#filmstripToggle:focus-visible {
+#filmstripToggle:focus-visible,
+#screenspaceToggle:focus-visible {
   outline: 2px solid var(--color-accent);
   outline-offset: 2px;
 }
@@ -805,7 +811,9 @@ body {
 #detailContent.hidden,
 #detailEmpty.hidden,
 #emptyState.hidden,
-#tooltip.hidden {
+#tooltip.hidden,
+#screenspaceTrackWrap.hidden,
+#screenspaceLegend.hidden {
   display: none;
 }
 
@@ -1283,6 +1291,22 @@ html[data-theme="dark"] .artifact-marker.selected {
   #participantTicks {
     margin-left: calc(40px + 0.8rem);
   }
+}
+
+.participant-tracks-col {
+  flex: 1;
+  min-width: 0;
+}
+
+.participant-ss-track {
+  position: relative;
+  height: 12px;
+  margin-top: 2px;
+}
+
+.participant-ss-track .screenspace-marker {
+  top: 1px;
+  height: 10px;
 }
 
 /* ---- Screenspace track ---- */
