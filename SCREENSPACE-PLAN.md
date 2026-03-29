@@ -4,7 +4,7 @@
 
 Screenspace is a post-processing feature set that performs image analysis on source video files to find and label moments matching specific visual conditions. It produces a duct-taped form of telemetry for software that lacks traditional telemetry — searching for visual changes, color states, text appearances, and similarity matches across long video recordings.
 
-Results are displayed on a timeline in the Screenspace UI, and can be exported as timestamp markers for use in other clipgen viewers (e.g. Timeline Viewer).
+Results are displayed on a timeline in the Screenspace UI. Completed analysis produces **events** — timestamped detections with metadata — that flow via `screenspace_manifest.json` to Studio (for clip generation) and the Timeline Viewer (for visualization).
 
 ### Use cases driving this work
 
@@ -13,6 +13,7 @@ Results are displayed on a timeline in the Screenspace UI, and can be exported a
 3. **Visual search** — find frames that look similar to a reference moment (e.g. "show me every time the inventory screen looked like this")
 4. **Text detection** — find when specific text appears on screen (e.g. a chat message, an error dialog, a score value)
 5. **Region timelapse** — generate a sped-up view of a screen region over time (e.g. a minimap timelapse, a resource counter progression)
+6. **Numeric monitoring** — find when a numeric value in a screen region meets a condition (e.g. a score exceeding 1000, health dropping below 20)
 
 ### Key architectural decisions
 
@@ -22,9 +23,10 @@ Results are displayed on a timeline in the Screenspace UI, and can be exported a
 - **Task queue with single worker.** Analysis tasks are queued and processed sequentially by a background worker thread. The queue is visible in the frontend with reorder and cancel controls.
 - **Separate manifest.** Screenspace persists tasks, region definitions, and results to `screenspace_manifest.json`, independent of `clipgen_manifest.json`.
 - **OpenCV as the analysis engine.** `opencv-python-headless` (~40MB, pip-installable, no system dependencies) handles color analysis, frame differencing, similarity comparison, and frame extraction. ffmpeg handles timelapse generation via crop filters.
-- **EasyOCR for text detection.** Lazy-imported so users who don't use OCR features never need PyTorch installed. Models downloaded on first use (~100MB for English).
+- **EasyOCR for text and numeric detection.** Lazy-imported so users who don't use OCR features never need PyTorch installed. Models downloaded on first use (~100MB for English). Used by both the Text and Numbers workflows.
 - **Compression-aware thresholds.** All comparisons apply Gaussian blur and noise thresholds to handle H.264/H.265 compression artifacts. Default pixel-diff threshold of 30, SSIM threshold of 0.90.
-- **Screenspace UI has its own timeline.** Results are displayed on a built-in timeline. Export to Timeline Viewer markers is a future integration point.
+- **Screenspace UI has its own timeline.** Results are displayed on a built-in timeline with zoom, pan, and click-to-seek. In/out markers restrict analysis to sub-ranges.
+- **Event data model.** Task results are converted to `ScreenspaceEvent` records — raw point detections stored in the manifest. Clustering into clip-worthy spans happens downstream at Studio ingest time, keeping the manifest as ground truth.
 
 ---
 
@@ -36,37 +38,41 @@ Build the analysis engine, server integration, and task queue.
 
 Core image analysis functions, all operating on NumPy arrays (OpenCV frames):
 
-- [ ] `extract_region(frame, region)` — crop a rectangular region from a frame; region is `{x, y, w, h}` in pixels
-- [ ] `average_color_hsv(region_pixels)` — compute mean HSV color of a cropped region; return `{h, s, v}` values
-- [ ] `color_matches(region_pixels, target_color, tolerance)` — check if region's average color is within tolerance of a target; comparison in HSV space (hue-aware, handles red wraparound)
-- [ ] `compute_frame_diff(region_a, region_b, noise_threshold=30)` — absolute pixel difference between two same-sized regions; apply Gaussian blur first; return change ratio (0.0–1.0)
-- [ ] `regions_are_similar(region_a, region_b, threshold=0.90)` — SSIM-based similarity check with blur preprocessing; return boolean + score
-- [ ] `compute_phash(region_pixels)` — perceptual hash of a region for fast similarity scanning; return hash object
-- [ ] `scan_video_frames(video_path, region, interval_seconds, callback)` — iterate through video at interval, extract region, call callback per frame; yield `(timestamp, frame_data)` pairs; use OpenCV `VideoCapture` in sequential mode
-- [ ] `build_timelapse_command(video_path, region, speedup_factor, output_path, output_format)` — construct ffmpeg argv for cropped timelapse (video or GIF); use `crop=w:h:x:y` + `setpts` filters
+- [x] `extract_region(frame, region)` — crop a rectangular region from a frame; region is `{x, y, w, h}` in pixels
+- [x] `average_color_hsv(region_pixels)` — compute mean HSV color of a cropped region; return `{h, s, v}` values
+- [x] `color_matches(region_pixels, target_color, tolerance)` — check if region's average color is within tolerance of a target; comparison in HSV space (hue-aware, handles red wraparound)
+- [x] `compute_frame_diff(region_a, region_b, noise_threshold=30)` — absolute pixel difference between two same-sized regions; apply Gaussian blur first; return change ratio (0.0–1.0)
+- [x] `regions_are_similar(region_a, region_b, threshold=0.90)` — SSIM-based similarity check with blur preprocessing; return boolean + score
+- [x] `compute_phash(region_pixels)` — perceptual hash of a region for fast similarity scanning; return hash object
+- [x] `scan_video_frames(video_path, region, interval_seconds, callback)` — iterate through video at interval, extract region, call callback per frame; yield `(timestamp, frame_data)` pairs; use OpenCV `VideoCapture` in sequential mode
+- [x] `build_timelapse_command(video_path, region, speedup_factor, output_path, output_format)` — construct ffmpeg argv for cropped timelapse (video or GIF); use `crop=w:h:x:y` + `setpts` filters
 
 ### Analysis workflows
 
 Each workflow wraps the primitives above into a complete scan-and-report operation:
 
-- [ ] **Color scan** (`scan_color`): iterate frames at interval, check `color_matches()` on region, collect timestamps where condition is met; return list of `{start, end, duration}` spans (merge consecutive matches into spans)
-- [ ] **Change scan** (`scan_changes`): compare region across consecutive sampled frames, flag timestamps where `compute_frame_diff()` exceeds threshold; return list of change-point timestamps with magnitude
-- [ ] **Similarity scan** (`scan_similarity`): given a reference frame's region, scan video for frames where `regions_are_similar()` or phash distance is below threshold; return ranked list of `{timestamp, score}` matches
-- [ ] **Text scan** (`scan_text`): iterate frames at interval, run EasyOCR on region, match extracted text against search string using fuzzy matching (`difflib.SequenceMatcher`, ratio > 0.8); return list of `{timestamp, text_found, confidence}` matches; EasyOCR lazy-imported with clear error if missing
-- [ ] **Timelapse generation** (`generate_timelapse`): run ffmpeg crop+speed command via `video.run_ffmpeg_process()`; return output file path
+- [x] **Color scan** (`scan_color`): iterate frames at interval, check `color_matches()` on region, collect timestamps where condition is met; return list of `{start, end, duration}` spans (merge consecutive matches into spans)
+- [x] **Change scan** (`scan_changes`): compare region across consecutive sampled frames, flag timestamps where `compute_frame_diff()` exceeds threshold; return list of change-point timestamps with magnitude
+- [x] **Similarity scan** (`scan_similarity`): given a reference frame's region, scan video for frames where `regions_are_similar()` or phash distance is below threshold; return ranked list of `{timestamp, score}` matches
+- [x] **Text scan** (`scan_text`): iterate frames at interval, run EasyOCR on region, match extracted text against search string using fuzzy matching (`difflib.SequenceMatcher`, ratio > 0.8); return list of `{timestamp, text_found, confidence}` matches; EasyOCR lazy-imported with clear error if missing
+- [x] **Numbers scan** (`scan_numbers`): iterate frames at interval, run EasyOCR on region, parse numeric values, compare against target with operator (eq/gt/lt/gte/lte/range); return list of `{timestamp, value}` matches; shares EasyOCR dependency with text scan
+- [x] **Timelapse generation** (`generate_timelapse`): run ffmpeg crop+speed command via `video.run_ffmpeg_process()`; return output file path
 
 ### Task queue
 
-- [ ] `ScreenspaceWorker` — background thread that pulls tasks from a `queue.PriorityQueue` and executes them; single worker by default
-- [ ] Task lifecycle: `queued` → `running` → `completed` / `failed` / `cancelled`
-- [ ] Each task is a dict: `{id, type, participant, video_path, region, parameters, status, progress, result, created_at}`
-- [ ] Progress reporting: worker updates task `progress` (0.0–1.0) as frames are processed; frontend polls for updates
-- [ ] Cancellation: set a `cancelled` flag on the task; worker checks flag between frame iterations and aborts early
-- [ ] Queue reordering: tasks can be reordered by adjusting priority values while status is `queued`
+- [x] `ScreenspaceWorker` — background thread that pulls tasks from a `queue.PriorityQueue` and executes them; single worker by default
+- [x] Task lifecycle: `queued` → `running` → `completed` / `failed` / `cancelled` / `paused`
+- [x] Each task is a dict: `{id, type, participant, video_path, region, parameters, status, progress, result, created_at}`
+- [x] Progress reporting: worker updates task `progress` (0.0–1.0) as frames are processed; frontend polls for updates
+- [x] Cancellation: set a `cancelled` flag on the task; worker checks flag between frame iterations and aborts early
+- [x] Queue reordering: tasks can be reordered by adjusting priority values while status is `queued`
+- [x] Pause/resume support: worker thread can be paused and resumed; partial results are preserved and scan resumes from last position
+- [x] Task dismissal: `remove_task()` for permanently removing completed/failed/cancelled tasks from the queue
+- [x] Partial result accumulation: results collected before a pause are preserved; scan resumes from where it left off
 
 ### Manifest (`screenspace_manifest.json`)
 
-- [ ] Schema:
+- [x] Schema:
   ```json
   {
     "regions": {
@@ -76,7 +82,7 @@ Each workflow wraps the primitives above into a complete scan-and-report operati
     "tasks": [
       {
         "id": "ss_<8hex>",
-        "type": "color|change|similarity|text|timelapse",
+        "type": "color|change|similarity|text|numbers|timelapse",
         "participant": "P01",
         "source_video": "study_P01.mp4",
         "region": "healthbar",
@@ -86,22 +92,23 @@ Each workflow wraps the primitives above into a complete scan-and-report operati
         "completed_at": "iso8601",
         "results": []
       }
-    ]
+    ],
+    "events": []
   }
   ```
-- [ ] Regions are top-level and shared across tasks (referenced by name)
-- [ ] `load_screenspace_manifest()` / `save_screenspace_manifest()` — read/write with merge semantics (match existing manifest patterns)
-- [ ] Manifest lives in the output directory alongside `clipgen_manifest.json`
+- [x] Regions are top-level and shared across tasks (referenced by name)
+- [x] `load_screenspace_manifest()` / `save_screenspace_manifest()` — read/write with merge semantics (match existing manifest patterns)
+- [x] Manifest lives in the output directory alongside `clipgen_manifest.json`
 
 ### Server integration
 
-- [ ] Create `screenspace_server.py` with `screenspace_bp = Blueprint("screenspace", __name__)`
-- [ ] `_init_screenspace_state()` — initialize worker thread, load manifest, resolve participant video paths
-- [ ] Register blueprint in `start_combined_server()` at `/screenspace/` prefix
-- [ ] Add `--screenspace` CLI flag in `cli.py`; can combine with `-s`, `-i/-o`, `-v` (requires spreadsheet for participant resolution); cannot combine with mode flags
-- [ ] Add `SCREENSPACE_MANIFEST_FILENAME` to `config.py`
-- [ ] Static file serving: serve `screenspace.html` at `/screenspace/`
-- [ ] API endpoints:
+- [x] Create `screenspace_server.py` with `screenspace_bp = Blueprint("screenspace", __name__)`
+- [x] `_init_screenspace_state()` — initialize worker thread, load manifest, resolve participant video paths
+- [x] Register blueprint in `start_combined_server()` at `/screenspace/` prefix; blueprint is always registered (not conditional on `--screenspace`)
+- [x] Add `--screenspace` CLI flag in `cli.py`; can combine with `-s`, `-i/-o`, `-v`; works with or without spreadsheet (auto-discovers participant videos); cannot combine with mode flags
+- [x] Add `SCREENSPACE_MANIFEST_FILENAME` to `config.py`
+- [x] Static file serving: serve `screenspace.html` at `/screenspace/`
+- [x] API endpoints:
   - `GET /api/participants` — list participants with source video availability
   - `GET /api/video/frame/<participant>/<timestamp>` — extract and return a single frame as JPEG at given timestamp
   - `GET /api/video/info/<participant>` — return video metadata (duration, resolution, fps)
@@ -111,8 +118,10 @@ Each workflow wraps the primitives above into a complete scan-and-report operati
   - `POST /api/tasks` — enqueue a new analysis task
   - `GET /api/tasks` — list all tasks with status and progress
   - `GET /api/tasks/<id>` — get task detail including results
-  - `DELETE /api/tasks/<id>` — cancel a queued/running task
+  - `DELETE /api/tasks/<id>` — cancel a queued/running task; `?dismiss=true` for full removal
   - `PUT /api/tasks/reorder` — reorder queued tasks
+  - `POST /api/tasks/pause` — pause the task queue
+  - `POST /api/tasks/resume` — resume the task queue
   - `GET /api/tasks/<id>/results` — get task results (timestamps, artifacts)
   - `GET /media/<filename>` — serve generated timelapse files
 
@@ -133,13 +142,16 @@ Build the Screenspace web interface.
 
 ### Toolbar and workflow configuration
 
-- [x] Workflow selector: toolbar below the video with buttons/tabs for each workflow type (Color, Change, Similarity, Text, Timelapse)
+- [x] Workflow selector: toolbar below the video with buttons/tabs for each workflow type (Color, Change, Similarity, Text, Numbers, Timelapse)
 - [x] Per-workflow parameter panels:
-  - **Color**: target color picker (HSV), tolerance slider, sample interval
-  - **Change**: sensitivity threshold slider, sample interval
+  - **Color**: target color picker (HSV), tolerance slider, sample interval; includes pipette tool (eyedropper from frame) and "From Region" button (samples average color of active region)
+  - **Change**: sensitivity threshold slider, noise threshold slider, sample interval
   - **Similarity**: reference frame selector (current frame becomes reference), similarity threshold, sample interval
   - **Text**: search string input, fuzzy match threshold, sample interval, language selector
-  - **Timelapse**: speedup factor, output format (video/GIF), output resolution
+  - **Numbers**: operator dropdown (eq/gt/lt/gte/lte/range), target value or min/max range inputs, sample interval
+  - **Timelapse**: speedup factor, output format (video/GIF)
+- [x] Multi-participant picker: checkbox dropdown with "Select all / Deselect all" toggle for running tasks across participants
+- [x] Multi-region picker: checkbox dropdown with color-coded dots, auto-selects active region
 - [x] Time range selection: optional in/out markers on the timeline to restrict analysis to a sub-range; default is full video duration
 - [x] "Run" button to enqueue the configured task
 
@@ -153,13 +165,17 @@ Build the Screenspace web interface.
 
 ### Task queue panel
 
-- [x] Queue display: list of all tasks (queued, running, completed, failed) with status indicators
+- [x] Queue display: list of all tasks (queued, running, completed, failed, paused) with status indicators
 - [x] Progress bar for the currently running task
-- [ ] Spinner/indeterminate progress when frame count is unknown
-- [ ] Drag-to-reorder queued tasks
+- [x] Spinner/indeterminate progress when frame count is unknown (shows spinner + elapsed duration)
+- [x] Drag-to-reorder queued tasks (queued tasks reorderable among themselves, finished tasks reorderable in their zone)
 - [x] Cancel button for queued and running tasks
 - [x] Click a completed task to load its results onto the timeline
 - [x] Task detail view: show parameters, region used, result count, timestamps
+- [x] Pause/resume queue controls
+- [x] Task filter buttons (completed/failed visibility toggle)
+- [x] Edit button to restore workflow parameters from a completed task
+- [x] Retry button for failed tasks
 
 ### Results display
 
@@ -167,6 +183,7 @@ Build the Screenspace web interface.
 - [x] Click a result to seek the video frame viewer to that timestamp
 - [x] For color/change/similarity tasks: show the match score or change magnitude alongside each timestamp
 - [x] For text tasks: show the OCR'd text and confidence alongside each timestamp
+- [x] For numbers tasks: show the detected numeric value alongside each timestamp
 - [x] For timelapse tasks: inline video/GIF player showing the generated timelapse
 - [x] Export results: button to download results as JSON or CSV
 
@@ -174,24 +191,145 @@ Build the Screenspace web interface.
 
 ## Phase 3: Integration and Export
 
-Connect Screenspace results with the rest of clipgen.
+Connect Screenspace detections with Studio and the Timeline Viewer. Screenspace acts as a **detection layer** that emits events — timestamped observations stored as raw points in the manifest. Studio reads these events, clusters them into clip-worthy spans, and feeds them into the generation pipeline.
 
-### Timeline Viewer integration
+### Event data model
 
-- [ ] Export Screenspace result timestamps as a marker format compatible with Timeline Viewer
-- [ ] Timeline Viewer: render Screenspace markers as a separate track/layer alongside clip artifacts
-- [ ] Marker metadata: task type, region name, match score, linked to the originating Screenspace task
+Events are the bridge between Screenspace detection and the rest of clipgen. Each event represents a single detection at a point in time.
 
-### Studio integration
+```python
+ScreenspaceEvent:
+    id: str                      # stable uuid (e.g. "ev_<8hex>")
+    source_video: str            # e.g. "study_P01.mp4"
+    participant: str             # e.g. "P01"
+    detector: str                # analysis tool: "color", "change", "similarity", "text", "numbers"
+    event_type: str              # user-defined semantic label: "low_health", "death_screen", etc.
+    time_in: float               # seconds (== time_out for point events)
+    time_out: float              # seconds (== time_in for point events)
+    confidence: float            # normalized 0.0–1.0
+    metadata: dict               # detector-specific payload (magnitude, ocr_value, region rect, etc.)
+    excluded: bool               # soft-delete; excluded events hidden from Studio
+    task_id: str                 # originating task ID for provenance
+    region: str                  # region name used in detection
+```
 
-- [ ] Surface Screenspace markers in Studio's spreadsheet grid (e.g. highlight cells whose timestamps overlap with Screenspace results)
-- [ ] Quick link from Studio to open Screenspace for the selected participant
+Key design decisions:
+- **Events are raw point events** (`time_in == time_out`). Clustering into spans is a post-processing step at Studio ingest, not baked into the manifest. The manifest is ground truth.
+- **`detector` and `event_type` are separate fields.** The same detector can produce multiple event types; the same event type could come from different detectors. This enables flexible filtering in Studio.
+- **`excluded` is a soft delete.** Users can remove events from the active set in Screenspace without destroying data. Studio shows only non-excluded events.
+- **Events are per-source-video.** `source_video` and `participant` are on each event.
 
-### Artifact generation from results
+Manifest `events` key (added to `screenspace_manifest.json`):
+```json
+{
+  "events": [
+    {
+      "id": "ev_a1b2c3d4",
+      "source_video": "study_P01.mp4",
+      "participant": "P01",
+      "detector": "change",
+      "event_type": "hud_update",
+      "time_in": 50.0,
+      "time_out": 50.0,
+      "confidence": 0.85,
+      "metadata": {"magnitude": 0.12},
+      "excluded": false,
+      "task_id": "ss_12345678",
+      "region": "healthbar"
+    }
+  ]
+}
+```
 
-- [ ] Allow generating clips/screenshots from Screenspace result timestamps (reuse existing `video.py` pipeline)
-- [ ] Generated artifacts written to `clipgen_manifest.json` alongside manually selected artifacts
-- [ ] Attribution: artifacts generated from Screenspace results carry a `source: "screenspace"` field and link back to the task ID
+### Event generation from task results
+
+- [ ] Events generated automatically when a task completes; each matched frame becomes one event
+- [ ] **Color scan**: preserve raw per-frame match timestamps before span merging; each matched frame → one event with `confidence` from color match score
+- [ ] **Change scan**: each change-point → one event with `confidence` from magnitude
+- [ ] **Similarity scan**: each matching frame → one event with `confidence` from SSIM score
+- [ ] **Text scan**: each OCR match → one event with `confidence` from fuzzy match ratio, `metadata.text_found`
+- [ ] **Numbers scan**: each numeric match → one event with `confidence` from OCR confidence, `metadata.value`
+- [ ] **Timelapse**: no events (produces a video file, not detections)
+- [ ] `create_event()` helper in `screenspace.py`; event generation in worker's task completion path
+- [ ] `confidence` normalization: each detector maps its native score to 0–1
+
+### `event_type` in workflow configuration
+
+- [ ] New optional "Event label" text input in each workflow's parameter panel (placeholder: e.g. "low_health", "death_screen")
+- [ ] Maps to `event_type` on generated events; if blank, defaults to `"{detector}: {region}"` (e.g. "change: healthbar")
+- [ ] Passed through task parameters in `screenspace_server.py` to `screenspace.py`
+
+### Event exclusion in Screenspace
+
+- [ ] After a task completes, results panel shows events with per-row exclude/include toggle
+- [ ] Excluded events are dimmed but still visible; "Show excluded" toggle in results header
+- [ ] Exclusion changes persisted to manifest immediately
+- [ ] API endpoints:
+  - `PUT /api/events/<event_id>/exclude` — set `excluded: true`
+  - `PUT /api/events/<event_id>/include` — set `excluded: false`
+  - `GET /api/events` — list all events, with optional `?excluded=false` filter
+  - `PUT /api/events/bulk-exclude` — body: `{"ids": [...]}`
+  - `PUT /api/events/bulk-include` — body: `{"ids": [...]}`
+
+### Studio Intake section
+
+Studio reads non-excluded events from `screenspace_manifest.json` and displays them in a new **"Screenspace Intake"** section in the bottom panel.
+
+- [ ] **Clustering at Studio ingest**: raw point events grouped into spans using a configurable proximity threshold (default 5s); each cluster becomes one intake card showing the span's time range
+- [ ] Clustering threshold configurable via a small control in the Intake section header; clusters recalculate on change
+- [ ] Single isolated events get ±padding (default 5s) to form a clip-worthy span; clamped to `[0, videoDuration]`
+- [ ] **Intake card rendering**: participant badge, time range, event type label, detector badge (color-coded), region name, event count, confidence indicator, "Add to Artifacts" and "Add to Reel" buttons, dismiss button
+- [ ] **"New events" indicator**: events not previously seen by Studio are highlighted with a subtle badge; clears on interaction
+- [ ] **Bulk actions**: "Add All to Artifacts", "Add All to Reel" buttons in section header
+- [ ] **Data flow**: Studio fetches `GET /screenspace/api/events?excluded=false` on load and periodically (every 10s when Screenspace is active); clustering happens client-side
+- [ ] Section hidden when no events exist
+- [ ] New config constant: `SCREENSPACE_INTAKE_CLUSTER_SECONDS = 5`
+
+### Studio clip generation from intake
+
+- [ ] New endpoint `POST /studio/api/generate-intake` generates clips directly from intake spans; resolves source video via participant, calls `video.cut_clip()` directly (bypasses spreadsheet pipeline)
+- [ ] Artifact IDs use `intake_{hash}_s{seg}` format
+- [ ] Reel integration: intake items can be added to the Reel area; `POST /studio/api/reel` accepts optional `intake_items` array
+- [x] Quick link from Studio to open Screenspace for the selected participant (already implemented as nav link)
+
+### Timeline Viewer Screenspace track
+
+Screenspace events rendered as a separate track in both the standalone Timeline Viewer HTML export and Studio-generated viewers.
+
+- [ ] Data contract extension — new optional `screenspaceEvents` key in `window.CLIPGEN_DATA`:
+  ```json
+  {
+    "meta": {"screenspaceEnabled": true},
+    "screenspaceEvents": [
+      {"id": "ev_...", "type": "change", "eventType": "hud_update", "participant": "P01",
+       "timeIn": 50.0, "timeOut": 50.0, "confidence": 0.85, "region": "healthbar", "metadata": {}}
+    ]
+  }
+  ```
+- [ ] Second track row ("Screenspace") below the main artifact track
+- [ ] Client-side clustering of raw events into visual markers (same threshold logic as Studio)
+- [ ] Markers color-coded by detector type (same palette as Screenspace UI)
+- [ ] Tooltips showing event type, region, participant, time range, confidence
+- [ ] Legend extended with Screenspace detector type swatches
+- [ ] Track hidden when no events present
+- [ ] `finalize_timeline_data()` in `viewer.py` gets optional `screenspace_events` parameter
+- [ ] `load_screenspace_events_for_viewer()` helper reads non-excluded events from screenspace manifest
+
+### Artifact attribution
+
+- [ ] Clips generated from Screenspace intake carry `source: "screenspace"` and `event_ids: [...]` in artifact records
+- [ ] `intake_label` field from the event type
+- [ ] Visible in Timeline Viewer tooltips and Insights Builder artifact browser
+
+---
+
+## Phase 4: Additional Detection Modes
+
+Expand the analysis engine with new detection capabilities.
+
+- [ ] **Template/Object detection** — find instances of a reference image or template anywhere in the frame, not constrained to a fixed region; useful for detecting specific UI elements, icons, or visual patterns regardless of position
+- [ ] **Optical flow** — detect and quantify motion in a region (magnitude, direction); useful for finding moments of high activity vs stillness, tracking movement patterns
+- [ ] **Scene type classification** — categorize frames by visual content (menu screen, gameplay, cutscene, loading screen); useful for segmenting long recordings by activity type
 
 ---
 
@@ -226,11 +364,11 @@ Connect Screenspace results with the rest of clipgen.
 | Package | Purpose | Size | Install |
 |---------|---------|------|---------|
 | `opencv-python-headless` | Frame extraction, color analysis, differencing, SSIM | ~40MB | `uv add opencv-python-headless` |
-| `easyocr` | OCR for text detection workflow | ~100MB models (downloaded on first use) | `uv add easyocr` (pulls PyTorch) |
+| `easyocr` | OCR for text and numbers detection workflows | ~100MB models (downloaded on first use) | `uv add easyocr` (pulls PyTorch) |
 | `imagehash` | Perceptual hashing for fast similarity scans | ~200KB | `uv add imagehash` |
 | `scikit-image` | SSIM computation (convenient API) | ~30MB | `uv add scikit-image` |
 
-OpenCV and imagehash are always required. EasyOCR is lazy-imported — only needed when running text scan tasks. If missing, the text workflow shows an install instruction rather than crashing.
+OpenCV and imagehash are always required. EasyOCR is lazy-imported — only needed when running text or numbers scan tasks. If missing, those workflows show an install instruction rather than crashing.
 
 ### Compression artifact handling
 
