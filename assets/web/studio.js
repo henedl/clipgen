@@ -1509,7 +1509,11 @@
       })(card, thumb);
       thumb.appendChild(img);
       thumb.appendChild(el("span", "queue-card-duration", formatDuration(segDuration)));
-      if (isIntake) thumb.appendChild(el("span", "queue-card-source-badge", "SS"));
+      if (isIntake) {
+        var ssBadge = el("span", "queue-card-source-badge");
+        ssBadge.innerHTML = '<svg viewBox="0 0 16 16" fill="currentColor"><path d="M3.5 2C2.67157 2 2 2.67157 2 3.5V5.5C2 6.32843 2.67157 7 3.5 7H5.5C6.32843 7 7 6.32843 7 5.5V3.5C7 2.67157 6.32843 2 5.5 2H3.5Z"/><path d="M3.5 9C2.67157 9 2 9.67157 2 10.5V12.5C2 13.3284 2.67157 14 3.5 14H5.5C6.32843 14 7 13.3284 7 12.5V10.5C7 9.67157 6.32843 9 5.5 9H3.5Z"/><path d="M9 3.5C9 2.67157 9.67157 2 10.5 2H12.5C13.3284 2 14 2.67157 14 3.5V5.5C14 6.32843 13.3284 7 12.5 7H10.5C9.67157 7 9 6.32843 9 5.5V3.5Z"/><path d="M10.5 9C9.67157 9 9 9.67157 9 10.5V12.5C9 13.3284 9.67157 14 10.5 14H12.5C13.3284 14 14 13.3284 14 12.5V10.5C14 9.67157 13.3284 9 12.5 9H10.5Z"/></svg>';
+        thumb.appendChild(ssBadge);
+      }
       card.appendChild(thumb);
 
       var meta = el("div", "queue-card-meta");
@@ -1611,7 +1615,11 @@
       })(card, thumb);
       thumb.appendChild(img);
       thumb.appendChild(el("span", "queue-card-duration", formatDuration(segDuration)));
-      if (isIntake) thumb.appendChild(el("span", "queue-card-source-badge", "SS"));
+      if (isIntake) {
+        var ssBadge = el("span", "queue-card-source-badge");
+        ssBadge.innerHTML = '<svg viewBox="0 0 16 16" fill="currentColor"><path d="M3.5 2C2.67157 2 2 2.67157 2 3.5V5.5C2 6.32843 2.67157 7 3.5 7H5.5C6.32843 7 7 6.32843 7 5.5V3.5C7 2.67157 6.32843 2 5.5 2H3.5Z"/><path d="M3.5 9C2.67157 9 2 9.67157 2 10.5V12.5C2 13.3284 2.67157 14 3.5 14H5.5C6.32843 14 7 13.3284 7 12.5V10.5C7 9.67157 6.32843 9 5.5 9H3.5Z"/><path d="M9 3.5C9 2.67157 9.67157 2 10.5 2H12.5C13.3284 2 14 2.67157 14 3.5V5.5C14 6.32843 13.3284 7 12.5 7H10.5C9.67157 7 9 6.32843 9 5.5V3.5Z"/><path d="M10.5 9C9.67157 9 9 9.67157 9 10.5V12.5C9 13.3284 9.67157 14 10.5 14H12.5C13.3284 14 14 13.3284 14 12.5V10.5C14 9.67157 13.3284 9 12.5 9H10.5Z"/></svg>';
+        thumb.appendChild(ssBadge);
+      }
       card.appendChild(thumb);
 
       var meta = el("div", "queue-card-meta");
@@ -3122,6 +3130,20 @@
   }
 
   function initIntake() {
+    var area = qs("#intakeArea");
+    if (localStorage.getItem("studio-intake-collapsed")) {
+      area.classList.add("intake-collapsed");
+    }
+    qs("#intakeHeader").addEventListener("click", function () {
+      area.classList.toggle("intake-collapsed");
+      if (area.classList.contains("intake-collapsed")) {
+        localStorage.setItem("studio-intake-collapsed", "1");
+      } else {
+        localStorage.removeItem("studio-intake-collapsed");
+      }
+      computeGridMaxHeight();
+    });
+
     var list = qs("#intakeList");
     list.addEventListener("click", function (e) {
       var btn = e.target.closest("[data-action]");
