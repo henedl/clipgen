@@ -1524,6 +1524,7 @@ def _run_viewer_mode(worksheet: Any) -> None:
 
     study = artifacts[0].get("study", "")
     participant = artifacts[0].get("participant", "")
+    ss_events = viewer.load_screenspace_events_for_viewer()
     data = viewer.finalize_timeline_data(
         artifacts,
         study=study,
@@ -1534,6 +1535,7 @@ def _run_viewer_mode(worksheet: Any) -> None:
         is_excel=False if mode_label == "manifest" else _is_excel_worksheet(worksheet),
         mode=mode_label,
         output_format="clip",
+        screenspace_events=ss_events or None,
     )
     viewer_path = viewer.generate_timeline_viewer(data)
     if viewer_path:
@@ -1726,6 +1728,7 @@ def _dispatch_interactive_mode(
                     mode="timeline-viewer",
                 )
             study = artifacts[0].get("study", "")
+            ss_events = viewer.load_screenspace_events_for_viewer()
             data = viewer.finalize_timeline_data(
                 artifacts,
                 study=study,
@@ -1733,6 +1736,7 @@ def _dispatch_interactive_mode(
                 is_excel=_is_excel_worksheet(worksheet),
                 mode="timeline-viewer",
                 output_format="clip",
+                screenspace_events=ss_events or None,
             )
             viewer_path = viewer.generate_timeline_viewer(
                 data,

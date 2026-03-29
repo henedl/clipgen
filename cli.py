@@ -773,6 +773,7 @@ def _run_timeline_viewer_mode(worksheet: Any, args: Any) -> None:
         return
 
     study = artifacts[0].get("study", "")
+    ss_events = viewer.load_screenspace_events_for_viewer()
     data = viewer.finalize_timeline_data(
         artifacts,
         study=study,
@@ -780,6 +781,7 @@ def _run_timeline_viewer_mode(worksheet: Any, args: Any) -> None:
         is_excel=clipgen._is_excel_worksheet(worksheet),
         mode="timeline-viewer",
         output_format="clip",
+        screenspace_events=ss_events or None,
     )
     viewer_path = viewer.generate_timeline_viewer(
         data,
@@ -874,6 +876,7 @@ def run_cli_mode(worksheet: Any, args: Any, cli_mode_args: CliModeArgs) -> None:
         participant = artifacts[0].get("participant", "")
 
         if getattr(args, "viewer", False):
+            ss_events = viewer.load_screenspace_events_for_viewer()
             data = viewer.finalize_timeline_data(
                 artifacts,
                 study=study,
@@ -882,6 +885,7 @@ def run_cli_mode(worksheet: Any, args: Any, cli_mode_args: CliModeArgs) -> None:
                 is_excel=is_excel,
                 mode=effective_mode,
                 output_format=output_format,
+                screenspace_events=ss_events or None,
             )
             viewer_path = viewer.generate_timeline_viewer(data)
             if viewer_path:
@@ -1158,8 +1162,10 @@ def main() -> None:
             sys.exit(1)
         study = existing_artifacts[0].get("study", "")
         participant = existing_artifacts[0].get("participant", "")
+        ss_events = viewer.load_screenspace_events_for_viewer()
         data = viewer.finalize_timeline_data(
-            existing_artifacts, study=study, participant=participant, mode="manifest"
+            existing_artifacts, study=study, participant=participant, mode="manifest",
+            screenspace_events=ss_events or None,
         )
         viewer_path = viewer.generate_timeline_viewer(data)
         if viewer_path:
