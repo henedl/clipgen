@@ -226,6 +226,48 @@ body {
   margin-bottom: var(--space-2);
 }
 
+.preview-tabs {
+  display: flex;
+  flex: 1;
+}
+
+.preview-tab {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  padding: var(--space-2) var(--space-3);
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--color-text-dim);
+  cursor: pointer;
+  transition: color var(--duration-fast), border-color var(--duration-fast);
+}
+
+.preview-tab:hover {
+  color: var(--color-text);
+}
+
+.preview-tab.active {
+  color: var(--color-text);
+  border-bottom-color: var(--color-accent);
+}
+
+.intake-tab-badge {
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: var(--radius-full);
+  background: var(--color-accent);
+  color: #fff;
+  font-weight: 600;
+  margin-left: var(--space-1);
+}
+
+#intakePanel {
+  flex: 1;
+  overflow: auto;
+  padding: 0 var(--space-1);
+}
+
 #filterToggle svg {
   transition: color var(--duration-fast);
 }
@@ -1899,8 +1941,7 @@ html[data-theme="dark"] .settings-panel {
   #dropAreas,
   #reelArea,
   #stashedReelsArea,
-  #stashedArtifactsArea,
-  #intakeArea {
+  #stashedArtifactsArea {
     margin-left: var(--space-2);
     margin-right: var(--space-2);
     max-width: 100%;
@@ -1909,39 +1950,6 @@ html[data-theme="dark"] .settings-panel {
 }
 
 /* ---- Screenspace Intake ---- */
-
-#intakeArea {
-  border-top: 1px solid var(--color-border);
-  padding: var(--space-2) var(--space-3);
-}
-
-#intakeArea h3 {
-  font-size: var(--text-sm);
-  margin: 0 0 var(--space-2) 0;
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  cursor: pointer;
-  user-select: none;
-}
-
-.collapse-chevron {
-  flex-shrink: 0;
-  transition: transform var(--duration-fast);
-  transform: rotate(90deg);
-}
-
-#intakeArea.intake-collapsed .collapse-chevron {
-  transform: rotate(0deg);
-}
-
-#intakeArea.intake-collapsed h3 {
-  margin-bottom: 0;
-}
-
-#intakeArea.intake-collapsed #intakeBody {
-  display: none;
-}
 
 #intakeControls {
   display: flex;
@@ -1967,15 +1975,6 @@ html[data-theme="dark"] .settings-panel {
   border-radius: var(--radius-sm);
   background: var(--color-surface);
   color: var(--color-text);
-}
-
-.intake-new-badge {
-  font-size: 10px;
-  padding: 1px 6px;
-  border-radius: var(--radius-full);
-  background: var(--color-accent);
-  color: #fff;
-  font-weight: 600;
 }
 
 .intake-card {
@@ -2095,6 +2094,9 @@ html[data-theme="dark"] .settings-panel {
 }
 
 .intake-filter-det {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
   font-size: 10px;
   padding: 1px 6px;
   border: 1px solid var(--det-color, var(--color-border));
@@ -2105,6 +2107,20 @@ html[data-theme="dark"] .settings-panel {
   font-weight: 600;
   text-transform: uppercase;
   transition: background var(--duration-fast), color var(--duration-fast);
+}
+
+.intake-det-icon {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  flex-shrink: 0;
+  background-color: currentColor;
+  mask-size: contain;
+  mask-repeat: no-repeat;
+  mask-position: center;
+  -webkit-mask-size: contain;
+  -webkit-mask-repeat: no-repeat;
+  -webkit-mask-position: center;
 }
 
 .intake-filter-det:hover {
