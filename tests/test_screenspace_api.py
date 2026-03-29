@@ -374,7 +374,9 @@ def test_serve_index(client):
 # ---- Events ----
 
 
-def _sample_event(event_id="ev_test1234", excluded=False, participant="P01", task_id="ss_t1"):
+def _sample_event(
+    event_id="ev_test1234", excluded=False, participant="P01", task_id="ss_t1"
+):
     return {
         "id": event_id,
         "source_video": "study_P01.mp4",
