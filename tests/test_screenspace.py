@@ -279,6 +279,7 @@ class TestScreenspaceWorker:
         worker.enqueue(task)
         assert worker.cancel(task["id"]) is True
         t = worker.get_task(task["id"])
+        assert t is not None
         assert t["status"] == "cancelled"
 
     def test_cancel_nonexistent(self):
@@ -308,6 +309,7 @@ class TestScreenspaceWorker:
                     break
                 time.sleep(0.1)
             t = worker.get_task(task["id"])
+            assert t is not None
             assert t["status"] in ("completed", "failed")
         finally:
             worker.stop()
@@ -327,6 +329,7 @@ class TestScreenspaceWorker:
         worker.enqueue(t2)
         assert worker.reorder([t2["id"], t1["id"]]) is True
         got = worker.get_task(t2["id"])
+        assert got is not None
         assert got["priority"] == 1
 
     def test_get_task_returns_none_for_unknown(self):
@@ -396,6 +399,7 @@ class TestScreenspaceWorker:
             worker._tasks[task["id"]]["result"] = [{"timestamp": 5.0}]
         worker.resume()
         t = worker.get_task(task["id"])
+        assert t is not None
         assert t["status"] == "queued"
         assert t.get("parameters", {}).get("start_seconds") == 50.0
 

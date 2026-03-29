@@ -1040,7 +1040,7 @@ def start_combined_server(
     )
 
     @combined.route("/")
-    def root() -> Response:
+    def root():
         return redirect(f"/{default_page}/")
 
     @combined.route("/api/status")

@@ -26,7 +26,7 @@ FlaskResponse = Union[Response, Tuple[Response, int]]
 
 _artifacts: List[Dict[str, Any]] = []
 _insights_data: Dict[str, Any] = {}
-_output_dir: str = ""
+_output_dir: Union[str, Path] = ""
 _sprite_cache: Dict[str, bytes] = {}
 
 _assets_dir = Path(__file__).resolve().parent / "assets" / "web"

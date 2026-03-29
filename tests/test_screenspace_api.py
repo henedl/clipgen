@@ -287,6 +287,7 @@ def test_cancel_task_not_found(client):
 
 def test_dismiss_queued_task(client):
     worker = screenspace_server._worker
+    assert worker is not None
     task = screenspace.create_task(
         "color", "P01", "s.mp4", "/v.mp4", "r", {"x": 0, "y": 0, "w": 1, "h": 1}
     )
@@ -303,6 +304,7 @@ def test_dismiss_queued_task(client):
 
 def test_dismiss_completed_task(client):
     worker = screenspace_server._worker
+    assert worker is not None
     task = screenspace.create_task(
         "color", "P01", "s.mp4", "/v.mp4", "r", {"x": 0, "y": 0, "w": 1, "h": 1}
     )

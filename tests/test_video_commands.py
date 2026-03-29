@@ -238,7 +238,7 @@ def test_concatenate_clips_warns_on_mismatch(monkeypatch):
     warnings = []
     original_warning = video.utils.warning_print
 
-    def capture_warning(msg, details=None):
+    def capture_warning(msg: str, details: list[str] | None = None):
         warnings.append(msg)
         original_warning(msg, details)
 

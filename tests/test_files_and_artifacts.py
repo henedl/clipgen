@@ -1,6 +1,5 @@
 from pathlib import Path
 from types import SimpleNamespace
-from typing import cast
 
 import files
 import utils
@@ -170,8 +169,8 @@ def test_baseline_row_detection_and_relative_conversion():
     # Expect clip records for both participants
     assert len(clips) == 2
 
-    p01_clip = cast(ClipRecord, clips[0])
-    p02_clip = cast(ClipRecord, clips[1])
+    p01_clip = clips[0]
+    p02_clip = clips[1]
 
     # P01 column has a baseline in the marker row, P02 does not
     assert p01_clip.get("timestamp_baseline") == "09:12:00"
@@ -214,8 +213,8 @@ def test_no_baseline_row_means_relative_timestamps_only():
     clips = spreadsheet.get_line_timestamps(ctx, 3)
 
     assert len(clips) == 2
-    p01_clip = cast(ClipRecord, clips[0])
-    p02_clip = cast(ClipRecord, clips[1])
+    p01_clip = clips[0]
+    p02_clip = clips[1]
 
     assert "timestamp_baseline" not in p01_clip
     assert "timestamp_baseline" not in p02_clip
