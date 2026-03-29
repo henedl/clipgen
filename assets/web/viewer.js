@@ -512,6 +512,7 @@
     if (qs("#participantTimelines")) {
       var presentTypes = state.presentTypes || derivePresentTypes(state.artifacts);
       initParticipantTimelines(presentTypes);
+      if (_filmstripEnabled) applyFilmstripMode();
       return;
     }
 
