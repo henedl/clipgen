@@ -25,6 +25,9 @@
   var FILMSTRIP_CONCURRENCY = 2;
   var FILMSTRIP_STORAGE_KEY = "clipgen-viewer-filmstrip";
 
+  var _screenspaceVisible = true;
+  var SCREENSPACE_STORAGE_KEY = "clipgen-viewer-screenspace";
+
   var SORT_DEFAULT_DIR = {
     severity: "desc",
     chrono: "asc",
@@ -476,6 +479,59 @@
     });
   }
 
+  // ---- Screenspace toggle ----
+
+  function initScreenspaceToggle() {
+    var hasEvents = data && data.screenspaceEvents && data.screenspaceEvents.length > 0;
+    var btn = qs("#screenspaceToggle");
+    if (!btn) return;
+    if (!hasEvents) {
+      btn.style.display = "none";
+      return;
+    }
+    var stored = null;
+    try { stored = window.localStorage.getItem(SCREENSPACE_STORAGE_KEY); } catch (_) {}
+    if (stored === "false") _screenspaceVisible = false;
+    else _screenspaceVisible = true;
+
+    btn.addEventListener("click", toggleScreenspace);
+    updateScreenspaceButton();
+  }
+
+  function updateScreenspaceButton() {
+    var btn = qs("#screenspaceToggle");
+    if (btn) btn.setAttribute("aria-pressed", _screenspaceVisible ? "true" : "false");
+  }
+
+  function toggleScreenspace() {
+    _screenspaceVisible = !_screenspaceVisible;
+    try { window.localStorage.setItem(SCREENSPACE_STORAGE_KEY, _screenspaceVisible ? "true" : "false"); } catch (_) {}
+    updateScreenspaceButton();
+
+    // Participant timelines mode: re-render to add/remove per-participant sub-tracks
+    if (qs("#participantTimelines")) {
+      var presentTypes = state.presentTypes || derivePresentTypes(state.artifacts);
+      initParticipantTimelines(presentTypes);
+      return;
+    }
+
+    // Unified track mode: show/hide the global screenspace track
+    var wrap = qs("#screenspaceTrackWrap");
+    var legend = qs("#screenspaceLegend");
+    if (_screenspaceVisible) {
+      var track = qs("#screenspaceTrack");
+      if (track && !track.hasChildNodes() && data.screenspaceEvents && data.screenspaceEvents.length > 0) {
+        renderScreenspaceTrack(data.screenspaceEvents, data.timeline.duration);
+      } else {
+        if (wrap) wrap.classList.remove("hidden");
+        if (legend) legend.classList.remove("hidden");
+      }
+    } else {
+      if (wrap) wrap.classList.add("hidden");
+      if (legend) legend.classList.add("hidden");
+    }
+  }
+
   // ---- Initialization ----
 
   var THEME_STORAGE_KEY = "clipgen-viewer-theme";
@@ -517,7 +573,8 @@
       bindFilterEvents();
     }
 
-    if (data.screenspaceEvents && data.screenspaceEvents.length > 0) {
+    initScreenspaceToggle();
+    if (!qs("#participantTimelines") && _screenspaceVisible && data.screenspaceEvents && data.screenspaceEvents.length > 0) {
       renderScreenspaceTrack(data.screenspaceEvents, data.timeline.duration);
     }
 
@@ -1467,15 +1524,28 @@
     });
     participantOrder.sort();
 
+    // Pre-cluster screenspace events by participant
+    var ssEvents = (_screenspaceVisible && data.screenspaceEvents) ? data.screenspaceEvents : [];
+    var ssClusters = ssEvents.length ? clusterScreenspaceEvents(ssEvents, state.duration) : [];
+    var ssByParticipant = {};
+    ssClusters.forEach(function (c) {
+      if (!ssByParticipant[c.participant]) ssByParticipant[c.participant] = [];
+      ssByParticipant[c.participant].push(c);
+    });
+
     var container = qs("#participantRows");
     if (!container) return;
     container.innerHTML = "";
+
+    var allDetectorsSeen = {};
 
     participantOrder.forEach(function (pid) {
       var row = el("div", "participant-row");
 
       var label = el("div", "participant-label", pid);
       row.appendChild(label);
+
+      var tracksCol = el("div", "participant-tracks-col");
 
       var track = el("div", "participant-track");
       var markers = [];
@@ -1507,7 +1577,18 @@
       track._trackId = "participant-" + pid;
       applyTrackLayout(track);
 
-      row.appendChild(track);
+      tracksCol.appendChild(track);
+
+      // Add screenspace sub-track for this participant
+      var pidClusters = ssByParticipant[pid];
+      if (pidClusters && pidClusters.length) {
+        var ssTrack = el("div", "participant-ss-track");
+        var seen = renderScreenspaceMarkers(pidClusters, ssTrack, state.duration);
+        Object.keys(seen).forEach(function (k) { allDetectorsSeen[k] = true; });
+        tracksCol.appendChild(ssTrack);
+      }
+
+      row.appendChild(tracksCol);
 
       var expandBtn = el("button", "track-expand-btn");
       expandBtn.type = "button";
@@ -1523,6 +1604,14 @@
 
       container.appendChild(row);
     });
+
+    // Build screenspace legend from all participants' events
+    var legend = qs("#screenspaceLegend");
+    if (Object.keys(allDetectorsSeen).length && _screenspaceVisible) {
+      buildScreenspaceLegend(legend, allDetectorsSeen);
+    } else if (legend) {
+      legend.classList.add("hidden");
+    }
 
     renderParticipantTicks();
   }
@@ -1600,13 +1689,7 @@
     numbers: "#eab308",
   };
 
-  function renderScreenspaceTrack(events, timelineDuration) {
-    var wrap = qs("#screenspaceTrackWrap");
-    var track = qs("#screenspaceTrack");
-    var legend = qs("#screenspaceLegend");
-    if (!wrap || !track || !timelineDuration) return;
-
-    // Cluster events by participant + event_type within 5s
+  function clusterScreenspaceEvents(events, timelineDuration) {
     var sorted = events.slice().sort(function (a, b) {
       if (a.participant !== b.participant) return a.participant < b.participant ? -1 : 1;
       if (a.eventType !== b.eventType) return a.eventType < b.eventType ? -1 : 1;
@@ -1641,20 +1724,24 @@
     }
     if (cur) clusters.push(cur);
 
-    // Pad point events
     for (var j = 0; j < clusters.length; j++) {
       if (clusters[j].start === clusters[j].end) {
         clusters[j].start = Math.max(0, clusters[j].start - 2);
         clusters[j].end = Math.min(timelineDuration, clusters[j].end + 2);
       }
     }
+    return clusters;
+  }
 
-    track.innerHTML = "";
+  function renderScreenspaceMarkers(clusters, trackEl, timelineDuration) {
     var detectorsSeen = {};
-
     clusters.forEach(function (c) {
-      var left = (c.start / timelineDuration) * 100;
-      var width = Math.max(((c.end - c.start) / timelineDuration) * 100, 0.4);
+      // Clamp to timeline bounds so markers don't spill past the track edge
+      var clampedStart = Math.max(0, Math.min(c.start, timelineDuration));
+      var clampedEnd = Math.max(0, Math.min(c.end, timelineDuration));
+      if (clampedStart >= timelineDuration) return;
+      var left = (clampedStart / timelineDuration) * 100;
+      var width = Math.max(((clampedEnd - clampedStart) / timelineDuration) * 100, 0.4);
       var marker = document.createElement("div");
       marker.className = "screenspace-marker ss-type-" + c.type;
       marker.style.left = left + "%";
@@ -1669,27 +1756,39 @@
         "\nTime: " + formatTime(c.start) + " \u2013 " + formatTime(c.end) +
         "\nConfidence: " + Math.round(avgConf * 100) + "%" +
         "\nEvents: " + c.count;
-      track.appendChild(marker);
+      trackEl.appendChild(marker);
       detectorsSeen[c.type] = true;
     });
+    return detectorsSeen;
+  }
 
+  function buildScreenspaceLegend(legendEl, detectorsSeen) {
+    if (!legendEl) return;
+    legendEl.innerHTML = "";
+    var types = Object.keys(detectorsSeen);
+    if (!types.length) return;
+    types.forEach(function (t) {
+      var item = document.createElement("span");
+      item.className = "legend-item";
+      var swatch = document.createElement("span");
+      swatch.className = "legend-swatch";
+      swatch.style.background = SS_DETECTOR_COLORS[t] || "#888";
+      item.appendChild(swatch);
+      item.appendChild(document.createTextNode(" " + t.charAt(0).toUpperCase() + t.slice(1)));
+      legendEl.appendChild(item);
+    });
+    legendEl.classList.remove("hidden");
+  }
+
+  function renderScreenspaceTrack(events, timelineDuration) {
+    var wrap = qs("#screenspaceTrackWrap");
+    var track = qs("#screenspaceTrack");
+    if (!wrap || !track || !timelineDuration) return;
+
+    var clusters = clusterScreenspaceEvents(events, timelineDuration);
+    track.innerHTML = "";
+    var detectorsSeen = renderScreenspaceMarkers(clusters, track, timelineDuration);
     wrap.classList.remove("hidden");
-
-    // Build legend
-    if (legend) {
-      legend.innerHTML = "";
-      var types = Object.keys(detectorsSeen);
-      types.forEach(function (t) {
-        var item = document.createElement("span");
-        item.className = "legend-item";
-        var swatch = document.createElement("span");
-        swatch.className = "legend-swatch";
-        swatch.style.background = SS_DETECTOR_COLORS[t] || "#888";
-        item.appendChild(swatch);
-        item.appendChild(document.createTextNode(" " + t.charAt(0).toUpperCase() + t.slice(1)));
-        legend.appendChild(item);
-      });
-      legend.classList.remove("hidden");
-    }
+    buildScreenspaceLegend(qs("#screenspaceLegend"), detectorsSeen);
   }
 })();
