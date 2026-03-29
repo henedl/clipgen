@@ -34,6 +34,7 @@
     intakeFilterText: "",
     intakeFilterDetector: "",
     intakeFilterNew: false,
+    activePreviewTab: "sheet",
   };
 
   var SEVERITY_ORDER = [
@@ -522,6 +523,43 @@
     }
   }
 
+  // ---- Preview tabs ----
+
+  function initPreviewTabs() {
+    var tabs = qsa(".preview-tab");
+    for (var i = 0; i < tabs.length; i++) {
+      tabs[i].addEventListener("click", function () {
+        var target = this.dataset.tab;
+        if (target === state.activePreviewTab) return;
+        state.activePreviewTab = target;
+        var allTabs = qsa(".preview-tab");
+        for (var j = 0; j < allTabs.length; j++) allTabs[j].classList.remove("active");
+        this.classList.add("active");
+        syncPreviewTab();
+      });
+    }
+  }
+
+  function syncPreviewTab() {
+    var grid = qs("#sheetGrid");
+    var filterBar = qs("#filterBar");
+    var filterToggle = qs("#filterToggle");
+    var intakePanel = qs("#intakePanel");
+
+    if (state.activePreviewTab === "sheet") {
+      grid.classList.remove("hidden");
+      intakePanel.classList.add("hidden");
+      if (filterToggle) filterToggle.classList.remove("hidden");
+      if (state.filtersVisible && filterBar) filterBar.classList.remove("hidden");
+    } else {
+      grid.classList.add("hidden");
+      if (filterBar) filterBar.classList.add("hidden");
+      if (filterToggle) filterToggle.classList.add("hidden");
+      intakePanel.classList.remove("hidden");
+    }
+    computeGridMaxHeight();
+  }
+
   // ---- Theme ----
 
   function initThemeToggle() {
@@ -895,7 +933,10 @@
     var maxAllowed = Math.max(0, available - MIN_GRID);
     state.dividerOffset = Math.min(state.dividerOffset, maxAllowed);
 
-    grid.style.maxHeight = Math.max(MIN_GRID, available - state.dividerOffset) + "px";
+    var maxH = Math.max(MIN_GRID, available - state.dividerOffset) + "px";
+    grid.style.maxHeight = maxH;
+    var intakePanel = qs("#intakePanel");
+    if (intakePanel) intakePanel.style.maxHeight = maxH;
   }
 
   function initPanelDivider() {
@@ -2909,6 +2950,8 @@
         if (data.screenspace) {
           var link = qs("#screenspaceLink");
           if (link) link.classList.remove("hidden");
+          var intakeTab = qs('.preview-tab[data-tab="intake"]');
+          if (intakeTab) intakeTab.classList.remove("hidden");
         }
       })
       .catch(function () {});
@@ -2922,6 +2965,14 @@
     similarity: "#0ea5e9",
     text: "#10b981",
     numbers: "#eab308",
+  };
+
+  var INTAKE_DETECTOR_ICON_FILES = {
+    color: "eye-dropper",
+    change: "bolt",
+    similarity: "photo",
+    text: "language",
+    numbers: "hashtag",
   };
 
   function clusterIntakeEvents(events, thresholdSec) {
@@ -2999,29 +3050,26 @@
   }
 
   function renderIntake(hasNew) {
-    var area = qs("#intakeArea");
     var list = qs("#intakeList");
-    var countEl = qs("#intakeCount");
     var addAllBtn = qs("#intakeAddAllBtn");
     var reelAllBtn = qs("#intakeReelAllBtn");
-    var badge = qs("#intakeNewBadge");
+    var tabBadge = qs("#intakeTabBadge");
 
     if (!state.intakeClusters.length) {
-      if (!area.classList.contains("hidden")) {
-        area.classList.add("hidden");
-        computeGridMaxHeight();
-      }
+      if (tabBadge) tabBadge.classList.add("hidden");
+      list.innerHTML = "";
+      list.appendChild(el("div", "drop-target-empty", "Screenspace events will appear here"));
+      addAllBtn.disabled = true;
+      reelAllBtn.disabled = true;
       return;
     }
-    var wasHidden = area.classList.contains("hidden");
-    area.classList.remove("hidden");
-    if (wasHidden) computeGridMaxHeight();
+    if (tabBadge) {
+      tabBadge.textContent = state.intakeClusters.length;
+      tabBadge.classList.remove("hidden");
+    }
     var clusters = filteredIntakeClusters();
-    countEl.textContent = "(" + clusters.length + "/" + state.intakeClusters.length + ")";
     addAllBtn.disabled = clusters.length === 0;
     reelAllBtn.disabled = clusters.length === 0;
-
-    if (hasNew && badge) badge.classList.remove("hidden");
 
     list.innerHTML = "";
     if (clusters.length === 0) {
@@ -3130,19 +3178,16 @@
   }
 
   function initIntake() {
-    var area = qs("#intakeArea");
-    if (localStorage.getItem("studio-intake-collapsed")) {
-      area.classList.add("intake-collapsed");
-    }
-    qs("#intakeHeader").addEventListener("click", function () {
-      area.classList.toggle("intake-collapsed");
-      if (area.classList.contains("intake-collapsed")) {
-        localStorage.setItem("studio-intake-collapsed", "1");
-      } else {
-        localStorage.removeItem("studio-intake-collapsed");
+    // Set mask-image on filter pill icons
+    var iconSpans = qsa(".intake-det-icon");
+    for (var k = 0; k < iconSpans.length; k++) {
+      var iconName = iconSpans[k].dataset.icon;
+      if (iconName) {
+        var iconUrl = 'url("../screenspace/icons/' + iconName + '.svg")';
+        iconSpans[k].style.maskImage = iconUrl;
+        iconSpans[k].style.webkitMaskImage = iconUrl;
       }
-      computeGridMaxHeight();
-    });
+    }
 
     var list = qs("#intakeList");
     list.addEventListener("click", function (e) {
@@ -3217,6 +3262,7 @@
   document.addEventListener("DOMContentLoaded", function () {
     initThemeToggle();
     initFilterToggle();
+    initPreviewTabs();
     initDropTargets();
     initWheelScroll();
     bindReelReorder();
