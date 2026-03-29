@@ -467,7 +467,7 @@ body {
   display: inline-flex;
   align-items: center;
   gap: var(--space-1);
-  padding: var(--space-2) var(--space-3);
+  padding: var(--space-2) var(--space-2);
   border: none;
   border-bottom: 2px solid transparent;
   background: none;
@@ -936,7 +936,7 @@ body {
   gap: var(--space-5);
   flex-shrink: 0;
   margin-bottom: var(--space-5);
-  height: 340px;
+  height: 400px;
   min-height: 120px;
   overflow: hidden;
 }
