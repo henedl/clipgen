@@ -3122,6 +3122,20 @@
   }
 
   function initIntake() {
+    var area = qs("#intakeArea");
+    if (localStorage.getItem("studio-intake-collapsed")) {
+      area.classList.add("intake-collapsed");
+    }
+    qs("#intakeHeader").addEventListener("click", function () {
+      area.classList.toggle("intake-collapsed");
+      if (area.classList.contains("intake-collapsed")) {
+        localStorage.setItem("studio-intake-collapsed", "1");
+      } else {
+        localStorage.removeItem("studio-intake-collapsed");
+      }
+      computeGridMaxHeight();
+    });
+
     var list = qs("#intakeList");
     list.addEventListener("click", function (e) {
       var btn = e.target.closest("[data-action]");
