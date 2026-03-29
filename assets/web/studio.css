@@ -2128,17 +2128,20 @@ html[data-theme="dark"] .settings-panel {
 /* Intake source badge on queue cards */
 .queue-card-source-badge {
   position: absolute;
-  top: 4px;
+  bottom: 4px;
   left: 4px;
-  font-size: 9px;
-  font-weight: 700;
-  padding: 1px 4px;
+  padding: 3px;
   border-radius: var(--radius-sm);
   background: rgba(52, 152, 219, 0.85);
   color: #fff;
-  text-transform: uppercase;
-  line-height: 1.2;
+  line-height: 0;
   z-index: 1;
+}
+
+.queue-card-source-badge svg {
+  width: 10px;
+  height: 10px;
+  display: block;
 }
 
 .queue-card-intake .queue-card-ref {
