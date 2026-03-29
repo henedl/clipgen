@@ -95,6 +95,7 @@ def finalize_timeline_data(
     is_excel: bool = False,
     mode: str = "",
     output_format: str = "clip",
+    screenspace_events: Optional[List[Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
     """Construct the full window.CLIPGEN_DATA structure for the timeline viewer."""
     max_time = 0.0
@@ -123,7 +124,32 @@ def finalize_timeline_data(
     }
     if reels:
         data["reels"] = reels
+    if screenspace_events:
+        data["meta"]["screenspaceEnabled"] = True
+        data["screenspaceEvents"] = screenspace_events
     return data
+
+
+def load_screenspace_events_for_viewer() -> List[Dict[str, Any]]:
+    """Load non-excluded events from screenspace manifest for viewer export."""
+    import screenspace
+
+    manifest = screenspace.load_screenspace_manifest()
+    return [
+        {
+            "id": e["id"],
+            "type": e["detector"],
+            "eventType": e["event_type"],
+            "participant": e["participant"],
+            "timeIn": e["time_in"],
+            "timeOut": e["time_out"],
+            "confidence": e["confidence"],
+            "region": e.get("region", ""),
+            "metadata": e.get("metadata", {}),
+        }
+        for e in manifest.get("events", [])
+        if not e.get("excluded")
+    ]
 
 
 _CLIPGEN_DATA_PLACEHOLDER = "<!-- CLIPGEN_DATA_HERE -->"

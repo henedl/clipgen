@@ -1899,10 +1899,228 @@ html[data-theme="dark"] .settings-panel {
   #dropAreas,
   #reelArea,
   #stashedReelsArea,
-  #stashedArtifactsArea {
+  #stashedArtifactsArea,
+  #intakeArea {
     margin-left: var(--space-2);
     margin-right: var(--space-2);
     max-width: 100%;
   }
 
+}
+
+/* ---- Screenspace Intake ---- */
+
+#intakeArea {
+  border-top: 1px solid var(--color-border);
+  padding: var(--space-2) var(--space-3);
+}
+
+#intakeArea h3 {
+  font-size: var(--text-sm);
+  margin: 0 0 var(--space-2) 0;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+#intakeControls {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-bottom: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.intake-cluster-label {
+  font-size: var(--text-xs);
+  color: var(--color-text-dim);
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.intake-cluster-input {
+  width: 48px;
+  font-size: var(--text-xs);
+  padding: 2px 4px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  color: var(--color-text);
+}
+
+.intake-new-badge {
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: var(--radius-full);
+  background: var(--color-accent);
+  color: #fff;
+  font-weight: 600;
+}
+
+.intake-card {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: var(--space-2);
+  margin-bottom: var(--space-1);
+  background: var(--color-surface);
+  transition: box-shadow var(--duration-fast);
+}
+
+.intake-card:hover {
+  box-shadow: var(--shadow-sm);
+}
+
+.intake-card-header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-bottom: var(--space-1);
+}
+
+.intake-participant {
+  font-weight: 600;
+  font-size: var(--text-sm);
+}
+
+.intake-detector-badge {
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: var(--radius-full);
+  color: #fff;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.intake-card-info {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-xs);
+  color: var(--color-text-dim);
+  flex-wrap: wrap;
+  margin-bottom: var(--space-1);
+}
+
+.intake-time {
+  font-family: var(--font-mono);
+}
+
+.intake-label {
+  font-weight: 500;
+  color: var(--color-text);
+}
+
+.intake-region {
+  background: var(--color-surface-alt);
+  padding: 0 4px;
+  border-radius: var(--radius-sm);
+}
+
+.intake-conf-bar {
+  height: 3px;
+  background: var(--color-border);
+  border-radius: var(--radius-full);
+  margin-bottom: var(--space-1);
+  overflow: hidden;
+}
+
+.intake-conf-fill {
+  height: 100%;
+  background: var(--color-accent);
+  border-radius: var(--radius-full);
+  transition: width var(--duration-fast);
+}
+
+.intake-card-actions {
+  display: flex;
+  gap: var(--space-1);
+}
+
+.intake-card-actions .btn-ghost {
+  background: none;
+  border: none;
+  color: var(--color-text-dim);
+  cursor: pointer;
+  font-size: var(--text-sm);
+  padding: 2px 6px;
+}
+
+.intake-card-actions .btn-ghost:hover {
+  color: var(--color-text);
+}
+
+/* Intake filters */
+.intake-filters {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-bottom: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.intake-filter-search {
+  width: 160px;
+  font-size: var(--text-xs);
+  padding: 3px 8px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  color: var(--color-text);
+}
+
+.intake-filter-pills {
+  display: flex;
+  gap: 4px;
+}
+
+.intake-filter-det {
+  font-size: 10px;
+  padding: 1px 6px;
+  border: 1px solid var(--det-color, var(--color-border));
+  border-radius: var(--radius-full);
+  background: transparent;
+  color: var(--det-color, var(--color-text-dim));
+  cursor: pointer;
+  font-weight: 600;
+  text-transform: uppercase;
+  transition: background var(--duration-fast), color var(--duration-fast);
+}
+
+.intake-filter-det:hover {
+  background: color-mix(in srgb, var(--det-color) 15%, transparent);
+}
+
+.intake-filter-det.active {
+  background: var(--det-color);
+  color: #fff;
+}
+
+.intake-filter-new-label {
+  font-size: var(--text-xs);
+  color: var(--color-text-dim);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+}
+
+/* Intake source badge on queue cards */
+.queue-card-source-badge {
+  position: absolute;
+  top: 4px;
+  left: 4px;
+  font-size: 9px;
+  font-weight: 700;
+  padding: 1px 4px;
+  border-radius: var(--radius-sm);
+  background: rgba(52, 152, 219, 0.85);
+  color: #fff;
+  text-transform: uppercase;
+  line-height: 1.2;
+  z-index: 1;
+}
+
+.queue-card-intake .queue-card-ref {
+  font-size: var(--text-xs);
 }

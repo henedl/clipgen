@@ -15,7 +15,7 @@ def client(tmp_path, monkeypatch):
     app.register_blueprint(screenspace_server.screenspace_bp, url_prefix="/screenspace")
 
     monkeypatch.setattr(config, "OUTPUT_DIR", str(tmp_path))
-    screenspace_server._manifest = {"regions": {}, "tasks": []}
+    screenspace_server._manifest = {"regions": {}, "tasks": [], "events": []}
     screenspace_server._participants = [
         {"id": "P01", "video_path": "/tmp/test_P01.mp4", "has_video": False},
         {"id": "P02", "video_path": "/tmp/test_P02.mp4", "has_video": False},
@@ -24,7 +24,9 @@ def client(tmp_path, monkeypatch):
     screenspace_server._worker = screenspace.ScreenspaceWorker()
 
     monkeypatch.setattr(
-        screenspace, "save_screenspace_manifest", lambda r, t: tmp_path / "m.json"
+        screenspace,
+        "save_screenspace_manifest",
+        lambda r, t, e=None: tmp_path / "m.json",
     )
 
     with app.test_client() as c:
@@ -367,3 +369,136 @@ def test_serve_index(client):
     resp = client.get("/screenspace/")
     assert resp.status_code == 200
     assert b"Screenspace" in resp.data
+
+
+# ---- Events ----
+
+
+def _sample_event(event_id="ev_test1234", excluded=False, participant="P01", task_id="ss_t1"):
+    return {
+        "id": event_id,
+        "source_video": "study_P01.mp4",
+        "participant": participant,
+        "detector": "change",
+        "event_type": "change: hud",
+        "time_in": 10.0,
+        "time_out": 10.0,
+        "confidence": 0.85,
+        "metadata": {"magnitude": 0.12},
+        "excluded": excluded,
+        "task_id": task_id,
+        "region": "hud",
+    }
+
+
+def test_events_list_empty(client):
+    resp = client.get("/screenspace/api/events")
+    data = resp.get_json()
+    assert data["ok"] is True
+    assert data["events"] == []
+
+
+def test_events_list_all(client):
+    screenspace_server._manifest["events"] = [
+        _sample_event("ev_1"),
+        _sample_event("ev_2", excluded=True),
+    ]
+    resp = client.get("/screenspace/api/events")
+    data = resp.get_json()
+    assert len(data["events"]) == 2
+
+
+def test_events_filter_excluded_false(client):
+    screenspace_server._manifest["events"] = [
+        _sample_event("ev_1"),
+        _sample_event("ev_2", excluded=True),
+    ]
+    resp = client.get("/screenspace/api/events?excluded=false")
+    data = resp.get_json()
+    assert len(data["events"]) == 1
+    assert data["events"][0]["id"] == "ev_1"
+
+
+def test_events_filter_by_participant(client):
+    screenspace_server._manifest["events"] = [
+        _sample_event("ev_1", participant="P01"),
+        _sample_event("ev_2", participant="P02"),
+    ]
+    resp = client.get("/screenspace/api/events?participant=P02")
+    data = resp.get_json()
+    assert len(data["events"]) == 1
+    assert data["events"][0]["participant"] == "P02"
+
+
+def test_events_filter_by_task_id(client):
+    screenspace_server._manifest["events"] = [
+        _sample_event("ev_1", task_id="ss_a"),
+        _sample_event("ev_2", task_id="ss_b"),
+    ]
+    resp = client.get("/screenspace/api/events?task_id=ss_a")
+    data = resp.get_json()
+    assert len(data["events"]) == 1
+    assert data["events"][0]["task_id"] == "ss_a"
+
+
+def test_event_exclude(client):
+    screenspace_server._manifest["events"] = [_sample_event("ev_1")]
+    resp = client.put("/screenspace/api/events/ev_1/exclude")
+    data = resp.get_json()
+    assert data["ok"] is True
+    assert screenspace_server._manifest["events"][0]["excluded"] is True
+
+
+def test_event_include(client):
+    screenspace_server._manifest["events"] = [_sample_event("ev_1", excluded=True)]
+    resp = client.put("/screenspace/api/events/ev_1/include")
+    data = resp.get_json()
+    assert data["ok"] is True
+    assert screenspace_server._manifest["events"][0]["excluded"] is False
+
+
+def test_event_exclude_not_found(client):
+    screenspace_server._manifest["events"] = []
+    resp = client.put("/screenspace/api/events/ev_missing/exclude")
+    assert resp.status_code == 404
+
+
+def test_events_bulk_exclude(client):
+    screenspace_server._manifest["events"] = [
+        _sample_event("ev_1"),
+        _sample_event("ev_2"),
+        _sample_event("ev_3"),
+    ]
+    resp = client.put(
+        "/screenspace/api/events/bulk-exclude",
+        json={"ids": ["ev_1", "ev_3"]},
+    )
+    data = resp.get_json()
+    assert data["ok"] is True
+    assert data["updated"] == 2
+    assert screenspace_server._manifest["events"][0]["excluded"] is True
+    assert screenspace_server._manifest["events"][1]["excluded"] is False
+    assert screenspace_server._manifest["events"][2]["excluded"] is True
+
+
+def test_events_bulk_include(client):
+    screenspace_server._manifest["events"] = [
+        _sample_event("ev_1", excluded=True),
+        _sample_event("ev_2", excluded=True),
+    ]
+    resp = client.put(
+        "/screenspace/api/events/bulk-include",
+        json={"ids": ["ev_1", "ev_2"]},
+    )
+    data = resp.get_json()
+    assert data["ok"] is True
+    assert data["updated"] == 2
+    assert screenspace_server._manifest["events"][0]["excluded"] is False
+
+
+def test_events_bulk_exclude_empty_ids(client):
+    resp = client.put(
+        "/screenspace/api/events/bulk-exclude",
+        json={"ids": []},
+    )
+    assert resp.status_code == 400

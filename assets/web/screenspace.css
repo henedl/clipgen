@@ -1273,6 +1273,40 @@ body {
   border-bottom: none;
 }
 
+.result-row.excluded {
+  opacity: 0.4;
+}
+
+.result-exclude-btn {
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  cursor: pointer;
+  font-size: var(--text-xs);
+  color: var(--color-text-dim);
+  transition: background var(--duration-fast), color var(--duration-fast);
+}
+
+.result-exclude-btn:hover {
+  background: var(--color-selected);
+  color: var(--color-text);
+}
+
+.results-toggle {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: var(--text-xs);
+  color: var(--color-text-dim);
+  cursor: pointer;
+}
+
 .result-timestamp {
   font-family: var(--font-mono);
   font-size: var(--text-xs);

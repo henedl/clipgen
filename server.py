@@ -7,6 +7,7 @@ access, artifact generation, reel building, and viewer creation.
 """
 
 import json
+import os
 import sys
 import webbrowser
 from pathlib import Path
@@ -610,8 +611,13 @@ def api_viewer() -> FlaskResponse:
     try:
         study = artifacts[0].get("study", "")
         participant = artifacts[0].get("participant", "")
+        ss_events = viewer.load_screenspace_events_for_viewer()
         data = viewer.finalize_timeline_data(
-            artifacts, study=study, participant=participant, mode="studio"
+            artifacts,
+            study=study,
+            participant=participant,
+            mode="studio",
+            screenspace_events=ss_events or None,
         )
         viewer_path = viewer.generate_timeline_viewer(data)
         if viewer_path:
@@ -639,6 +645,7 @@ def api_timeline_viewer() -> FlaskResponse:
         _generated_artifacts.extend(artifacts)
 
         study = artifacts[0].get("study", "")
+        ss_events = viewer.load_screenspace_events_for_viewer()
         data = viewer.finalize_timeline_data(
             artifacts,
             study=study,
@@ -646,6 +653,7 @@ def api_timeline_viewer() -> FlaskResponse:
             is_excel=clipgen._is_excel_worksheet(_worksheet),
             mode="timeline-viewer",
             output_format="clip",
+            screenspace_events=ss_events or None,
         )
         viewer_path = viewer.generate_timeline_viewer(
             data,
@@ -963,6 +971,169 @@ def api_settings_put() -> FlaskResponse:
 
     _save_studio_settings(applied)
     return jsonify({"ok": True, "applied": applied})
+
+
+# ---- Screenspace Intake ----
+
+
+@studio_bp.route("/api/generate-intake", methods=["POST"])
+def api_generate_intake() -> FlaskResponse:
+    """Generate clips from Screenspace intake spans."""
+    import hashlib
+
+    import screenspace_server
+
+    data = request.get_json(silent=True) or {}
+    items = data.get("items", [])
+    if not items:
+        return jsonify({"ok": False, "error": "No intake items specified"}), 400
+
+    output_format = data.get("format", "clip")
+    output_dir = Path(utils.get_effective_output_dir())
+    results: List[Dict[str, Any]] = []
+
+    for item in items:
+        participant = item.get("participant", "")
+        start = float(item.get("start", 0))
+        end = float(item.get("end", 0))
+        event_type = item.get("event_type", "")
+        event_ids = item.get("event_ids", [])
+
+        video_path = None
+        for p in screenspace_server._participants:
+            if p["id"] == participant and p.get("has_video"):
+                video_path = p["video_path"]
+                break
+
+        if not video_path:
+            results.append({"ok": False, "error": f"No video for {participant}"})
+            continue
+
+        span_hash = hashlib.md5(f"{participant}_{start}_{end}".encode()).hexdigest()[:8]
+        out_name = f"intake_{span_hash}{config.FILEFORMAT}"
+        out_path = str(output_dir / out_name)
+        out_path = files.get_unique_filename(out_path)
+
+        start_str = utils.seconds_to_timestamp(int(start))
+        end_str = utils.seconds_to_timestamp(int(end))
+
+        success = video.run_ffmpeg(
+            video_path, out_path, start_str, end_str, config.REENCODING
+        )
+
+        if success:
+            artifact: Dict[str, Any] = {
+                "id": f"intake_{span_hash}_s0",
+                "type": output_format,
+                "file": Path(out_path).name,
+                "start": start,
+                "end": end,
+                "participant": participant,
+                "source": "screenspace",
+                "event_ids": event_ids,
+                "intake_label": event_type,
+                "sourceVideo": Path(video_path).name,
+            }
+            _generated_artifacts.append(artifact)
+            results.append({"ok": True, "artifact": artifact})
+        else:
+            results.append({"ok": False, "error": "ffmpeg failed"})
+
+    _save_manifest_quiet()
+    return jsonify({"ok": True, "results": results})
+
+
+@studio_bp.route("/api/reel-direct", methods=["POST"])
+def api_reel_direct() -> FlaskResponse:
+    """Build a reel from direct timestamp segments (for intake / mixed queues)."""
+    import hashlib
+    import tempfile
+
+    import screenspace_server
+
+    data = request.get_json(silent=True) or {}
+    segments = data.get("segments", [])
+    if not segments:
+        return jsonify({"ok": False, "error": "No segments specified"}), 400
+
+    tc_enabled = data.get("titlecards_enabled")
+    tc_duration = data.get("titlecard_duration")
+    original_tc_enabled = config.TITLECARDS_ENABLED
+    original_tc_duration = config.TITLECARD_DURATION_SECONDS
+    if tc_enabled is not None:
+        config.TITLECARDS_ENABLED = bool(tc_enabled)
+    if tc_duration is not None:
+        try:
+            val = int(tc_duration)
+            if val > 0:
+                config.TITLECARD_DURATION_SECONDS = val
+        except (ValueError, TypeError):
+            pass
+
+    output_dir = Path(utils.get_effective_output_dir())
+    clip_paths: List[str] = []
+    temp_clips: List[str] = []
+
+    try:
+        for seg in segments:
+            participant = seg.get("participant", "")
+            start = float(seg.get("start", 0))
+            end = float(seg.get("end", 0))
+            if end <= start:
+                continue
+
+            video_path = None
+            for p in screenspace_server._participants:
+                if p["id"] == participant and p.get("has_video"):
+                    video_path = p["video_path"]
+                    break
+
+            if not video_path:
+                continue
+
+            start_str = utils.seconds_to_timestamp(int(start))
+            end_str = utils.seconds_to_timestamp(int(end))
+
+            fd, tmp_path = tempfile.mkstemp(
+                suffix=config.FILEFORMAT, dir=str(output_dir)
+            )
+            os.close(fd)
+            temp_clips.append(tmp_path)
+
+            ok = video.run_ffmpeg(
+                video_path, tmp_path, start_str, end_str, config.REENCODING
+            )
+            if ok:
+                clip_paths.append(tmp_path)
+
+        if not clip_paths:
+            return jsonify({"ok": False, "error": "No clips could be generated"}), 400
+
+        reel_name = files.get_unique_filename(
+            str(output_dir / f"intake_reel{config.FILEFORMAT}")
+        )
+        ok = video.concatenate_clips(clip_paths, reel_name, reencode_on_fail=True)
+
+        if ok:
+            reel_record: Dict[str, Any] = {
+                "id": f"reel_intake_{hashlib.md5(reel_name.encode()).hexdigest()[:8]}",
+                "file": Path(reel_name).name,
+                "source": "screenspace",
+                "description": f"Intake reel ({len(clip_paths)} segments)",
+            }
+            _generated_reels.append(reel_record)
+            _save_manifest_quiet()
+            return jsonify({"ok": True, "generated": 1, "reels": [reel_record]})
+        else:
+            return jsonify({"ok": False, "error": "Reel concatenation failed"}), 500
+    finally:
+        config.TITLECARDS_ENABLED = original_tc_enabled
+        config.TITLECARD_DURATION_SECONDS = original_tc_duration
+        for tmp in temp_clips:
+            try:
+                Path(tmp).unlink(missing_ok=True)
+            except OSError:
+                pass
 
 
 # ---- State initialization ----
