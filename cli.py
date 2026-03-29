@@ -1164,7 +1164,10 @@ def main() -> None:
         participant = existing_artifacts[0].get("participant", "")
         ss_events = viewer.load_screenspace_events_for_viewer()
         data = viewer.finalize_timeline_data(
-            existing_artifacts, study=study, participant=participant, mode="manifest",
+            existing_artifacts,
+            study=study,
+            participant=participant,
+            mode="manifest",
             screenspace_events=ss_events or None,
         )
         viewer_path = viewer.generate_timeline_viewer(data)
