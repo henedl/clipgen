@@ -195,7 +195,7 @@ def _styled_print(
     prefix: str = "",
     prefix_style: str | None = None,
     message_style: str | None = None,
-    details: list[str | None] = None,
+    details: list[str] | None = None,
     details_style: str | None = None,
     panel_border_style: str | None = None,
 ) -> None:
@@ -222,7 +222,7 @@ def _styled_print(
             print(f"  {detail}")
 
 
-def error_print(message: str, details: list[str | None] = None) -> None:
+def error_print(message: str, details: list[str] | None = None) -> None:
     """Print error messages. Always displayed regardless of verbosity.
 
     Args:
@@ -239,7 +239,7 @@ def error_print(message: str, details: list[str | None] = None) -> None:
     )
 
 
-def warning_print(message: str, details: list[str | None] = None) -> None:
+def warning_print(message: str, details: list[str] | None = None) -> None:
     """Print warning messages. Always displayed regardless of verbosity.
 
     Args:
@@ -704,7 +704,7 @@ def add_duration(start_time: str) -> str | None:
     )
 
 
-def _parse_single_timestamp_token(token: str) -> tuple[str, str | None]:
+def _parse_single_timestamp_token(token: str) -> tuple[str, str | None] | None:
     """Parse one token into a (start_time, end_time) pair, or None if invalid/skip.
 
     Handles: dash range (start-end), single timestamp with colon (add default
@@ -759,7 +759,7 @@ def has_non_ignored_timestamp_content(cell_value: str) -> bool:
 
 
 def parse_cell_annotations(
-    cell_value: str, annotation_map: dict[str, str | None] = None
+    cell_value: str, annotation_map: dict[str, str | None] | None = None
 ) -> tuple[str, dict[str, set[int]], set[str]]:
     """Extract inline annotation tokens and map them to parsed timestamp indexes.
 

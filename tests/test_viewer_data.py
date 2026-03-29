@@ -1,7 +1,9 @@
 import viewer
 
 
-def _make_artifact(artifact_id, *, start=10.0, end=20.0, study="study", participant="P01"):
+def _make_artifact(
+    artifact_id, *, start=10.0, end=20.0, study="study", participant="P01"
+):
     return {
         "id": artifact_id,
         "type": "clip",
@@ -28,7 +30,12 @@ def _make_artifact(artifact_id, *, start=10.0, end=20.0, study="study", particip
 def test_finalize_timeline_data_duration_and_structure():
     arts = [_make_artifact("a1", end=20.0), _make_artifact("a2", end=50.0)]
     data = viewer.finalize_timeline_data(
-        arts, study="s", participant="P01", worksheet_title="Sheet1", is_excel=True, mode="batch"
+        arts,
+        study="s",
+        participant="P01",
+        worksheet_title="Sheet1",
+        is_excel=True,
+        mode="batch",
     )
 
     assert set(data.keys()) == {"meta", "artifacts", "timeline"}
@@ -72,7 +79,11 @@ def test_finalize_timeline_data_includes_reels():
 def test_finalize_gallery_data_structure():
     gallery_artifacts = [{"file": "frame_10.png", "timestamp": 10.0}]
     data = viewer.finalize_gallery_data(
-        gallery_artifacts, source_video="vid.mp4", video_duration=120, output_format="screen", interval=5
+        gallery_artifacts,
+        source_video="vid.mp4",
+        video_duration=120,
+        output_format="screen",
+        interval=5,
     )
 
     assert data["meta"]["mode"] == "gallery"

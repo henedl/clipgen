@@ -1237,7 +1237,9 @@ def _batch_extract_screenshots(
             config.FFMPEG_SCREENSHOT_QUALITY,
             os.path.join(tmpdir, "frame_%04d.png"),
         ]
-        utils.debug_print(f"ffmpeg batch screenshot command: {' '.join(ffmpeg_command)}")
+        utils.debug_print(
+            f"ffmpeg batch screenshot command: {' '.join(ffmpeg_command)}"
+        )
 
         ffmpeg_result = run_ffmpeg_process(
             ffmpeg_command,

@@ -40,7 +40,9 @@ def test_update_insight_merges_fields():
     original_id = ins["id"]
     time.sleep(0.01)
 
-    result = insights.update_insight([ins], original_id, {"title": "New", "severity": "Critical"})
+    result = insights.update_insight(
+        [ins], original_id, {"title": "New", "severity": "Critical"}
+    )
 
     assert result is ins
     assert ins["title"] == "New"

@@ -39,7 +39,7 @@ _ocr_readers: Dict[tuple, Any] = {}
 
 def _get_ocr_reader(languages: List[str]) -> Any:
     """Return a cached EasyOCR Reader for the given language set."""
-    import easyocr  # type: ignore[import-untyped]
+    import easyocr
 
     key = tuple(sorted(languages))
     if key not in _ocr_readers:

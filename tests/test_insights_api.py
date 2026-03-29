@@ -1,9 +1,9 @@
 import pytest
 
 Flask = pytest.importorskip("flask").Flask
-import insights
-import insights_server
-import viewer
+import insights  # noqa: E402
+import insights_server  # noqa: E402
+import viewer  # noqa: E402
 
 
 @pytest.fixture

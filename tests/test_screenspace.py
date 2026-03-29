@@ -243,7 +243,12 @@ class TestScreenspaceWorker:
     def test_enqueue_and_get(self):
         worker = screenspace.ScreenspaceWorker()
         task = screenspace.create_task(
-            "color", "P01", "s_P01.mp4", "/v.mp4", "hb", {"x": 0, "y": 0, "w": 10, "h": 10}
+            "color",
+            "P01",
+            "s_P01.mp4",
+            "/v.mp4",
+            "hb",
+            {"x": 0, "y": 0, "w": 10, "h": 10},
         )
         tid = worker.enqueue(task)
         assert tid == task["id"]
@@ -274,6 +279,7 @@ class TestScreenspaceWorker:
         worker.enqueue(task)
         assert worker.cancel(task["id"]) is True
         t = worker.get_task(task["id"])
+        assert t is not None
         assert t["status"] == "cancelled"
 
     def test_cancel_nonexistent(self):
@@ -291,7 +297,10 @@ class TestScreenspaceWorker:
                 "/nonexistent/nope.mp4",
                 "r",
                 {"x": 0, "y": 0, "w": 10, "h": 10},
-                parameters={"target_color": {"h": 0, "s": 0, "v": 0}, "tolerance": {"h": 10, "s": 10, "v": 10}},
+                parameters={
+                    "target_color": {"h": 0, "s": 0, "v": 0},
+                    "tolerance": {"h": 10, "s": 10, "v": 10},
+                },
             )
             worker.enqueue(task)
             for _ in range(50):
@@ -300,6 +309,7 @@ class TestScreenspaceWorker:
                     break
                 time.sleep(0.1)
             t = worker.get_task(task["id"])
+            assert t is not None
             assert t["status"] in ("completed", "failed")
         finally:
             worker.stop()
@@ -319,6 +329,7 @@ class TestScreenspaceWorker:
         worker.enqueue(t2)
         assert worker.reorder([t2["id"], t1["id"]]) is True
         got = worker.get_task(t2["id"])
+        assert got is not None
         assert got["priority"] == 1
 
     def test_get_task_returns_none_for_unknown(self):
@@ -349,7 +360,6 @@ class TestScreenspaceWorker:
             worker._tasks[task["id"]]["status"] = screenspace.TASK_STATUS_RUNNING
         assert worker.remove_task(task["id"]) is True
         assert worker.get_task(task["id"]) is None
-
 
     def test_pause_resume_flags(self):
         worker = screenspace.ScreenspaceWorker()
@@ -389,6 +399,7 @@ class TestScreenspaceWorker:
             worker._tasks[task["id"]]["result"] = [{"timestamp": 5.0}]
         worker.resume()
         t = worker.get_task(task["id"])
+        assert t is not None
         assert t["status"] == "queued"
         assert t.get("parameters", {}).get("start_seconds") == 50.0
 

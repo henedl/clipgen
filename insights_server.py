@@ -26,7 +26,7 @@ FlaskResponse = Union[Response, Tuple[Response, int]]
 
 _artifacts: List[Dict[str, Any]] = []
 _insights_data: Dict[str, Any] = {}
-_output_dir: str = ""
+_output_dir: Union[str, Path] = ""
 _sprite_cache: Dict[str, bytes] = {}
 
 _assets_dir = Path(__file__).resolve().parent / "assets" / "web"
@@ -242,5 +242,3 @@ def _init_insights_state() -> None:
     # Set study in insights meta from artifacts if not already set
     if not _insights_data.get("meta", {}).get("study") and _artifacts:
         _insights_data.setdefault("meta", {})["study"] = _artifacts[0].get("study", "")
-
-

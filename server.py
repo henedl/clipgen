@@ -219,7 +219,9 @@ def _save_manifest_quiet() -> None:
 
 
 def _load_stashes() -> List[Dict[str, Any]]:
-    stash_path = Path(utils.get_effective_output_dir()) / config.STASHES_MANIFEST_FILENAME
+    stash_path = (
+        Path(utils.get_effective_output_dir()) / config.STASHES_MANIFEST_FILENAME
+    )
     if not stash_path.is_file():
         return []
     try:
@@ -232,7 +234,9 @@ def _load_stashes() -> List[Dict[str, Any]]:
 
 
 def _save_stashes(stashes: List[Dict[str, Any]]) -> Optional[Path]:
-    stash_path = Path(utils.get_effective_output_dir()) / config.STASHES_MANIFEST_FILENAME
+    stash_path = (
+        Path(utils.get_effective_output_dir()) / config.STASHES_MANIFEST_FILENAME
+    )
     try:
         stash_path.parent.mkdir(parents=True, exist_ok=True)
         stash_path.write_text(
@@ -246,7 +250,8 @@ def _save_stashes(stashes: List[Dict[str, Any]]) -> Optional[Path]:
 
 def _load_artifact_stashes() -> List[Dict[str, Any]]:
     stash_path = (
-        Path(utils.get_effective_output_dir()) / config.ARTIFACT_STASHES_MANIFEST_FILENAME
+        Path(utils.get_effective_output_dir())
+        / config.ARTIFACT_STASHES_MANIFEST_FILENAME
     )
     if not stash_path.is_file():
         return []
@@ -261,7 +266,8 @@ def _load_artifact_stashes() -> List[Dict[str, Any]]:
 
 def _save_artifact_stashes(stashes: List[Dict[str, Any]]) -> Optional[Path]:
     stash_path = (
-        Path(utils.get_effective_output_dir()) / config.ARTIFACT_STASHES_MANIFEST_FILENAME
+        Path(utils.get_effective_output_dir())
+        / config.ARTIFACT_STASHES_MANIFEST_FILENAME
     )
     try:
         stash_path.parent.mkdir(parents=True, exist_ok=True)
@@ -276,7 +282,9 @@ def _save_artifact_stashes(stashes: List[Dict[str, Any]]) -> Optional[Path]:
 
 def _load_studio_settings() -> Dict[str, Any]:
     """Load studio_settings.json and apply non-default values to config module."""
-    settings_path = Path(utils.get_effective_output_dir()) / config.STUDIO_SETTINGS_FILENAME
+    settings_path = (
+        Path(utils.get_effective_output_dir()) / config.STUDIO_SETTINGS_FILENAME
+    )
     if not settings_path.is_file():
         return {}
     try:
@@ -310,7 +318,9 @@ def _load_studio_settings() -> Dict[str, Any]:
 
 def _save_studio_settings(overrides: Dict[str, Any]) -> Optional[Path]:
     """Write only non-default settings to studio_settings.json."""
-    settings_path = Path(utils.get_effective_output_dir()) / config.STUDIO_SETTINGS_FILENAME
+    settings_path = (
+        Path(utils.get_effective_output_dir()) / config.STUDIO_SETTINGS_FILENAME
+    )
     to_save = {}
     for name, value in overrides.items():
         if name in _settings_defaults and value != _settings_defaults[name]:
@@ -344,9 +354,7 @@ def _find_existing_artifacts(
         and a.get("cellCol") == cell_col
         and a.get("type") == artifact_type
     ]
-    return [
-        a for a in matches if Path(utils.resolve_output_path(a["file"])).is_file()
-    ]
+    return [a for a in matches if Path(utils.resolve_output_path(a["file"])).is_file()]
 
 
 @studio_bp.route("/api/generate", methods=["POST"])
@@ -370,7 +378,9 @@ def api_generate() -> FlaskResponse:
         cell_input = ", ".join(cell_strings)
         cell_specs = spreadsheet.parse_cell_specifications(cell_input)
         if not cell_specs:
-            return jsonify({"ok": False, "error": "Could not parse cell specifications"}), 400
+            return jsonify(
+                {"ok": False, "error": "Could not parse cell specifications"}
+            ), 400
 
         clips = spreadsheet.generate_list(
             _worksheet, "cell", cell_specs=cell_specs, skip_prompts=True
@@ -400,15 +410,18 @@ def api_generate() -> FlaskResponse:
                     clip["cell"].row, clip["cell"].col, output_format
                 )
                 if existing:
-                    yield json.dumps(
-                        {
-                            "cell": cell_str,
-                            "ok": True,
-                            "generated": len(existing),
-                            "artifacts": existing,
-                            "skipped": True,
-                        }
-                    ) + "\n"
+                    yield (
+                        json.dumps(
+                            {
+                                "cell": cell_str,
+                                "ok": True,
+                                "generated": len(existing),
+                                "artifacts": existing,
+                                "skipped": True,
+                            }
+                        )
+                        + "\n"
+                    )
                     continue
 
                 try:
@@ -416,20 +429,36 @@ def api_generate() -> FlaskResponse:
                         [clip], output_format=output_format
                     )
                     _generated_artifacts.extend(artifacts)
-                    yield json.dumps(
-                        {"cell": cell_str, "ok": generated > 0, "generated": generated, "artifacts": artifacts}
-                    ) + "\n"
+                    yield (
+                        json.dumps(
+                            {
+                                "cell": cell_str,
+                                "ok": generated > 0,
+                                "generated": generated,
+                                "artifacts": artifacts,
+                            }
+                        )
+                        + "\n"
+                    )
                 except Exception as e:
-                    yield json.dumps({"cell": cell_str, "ok": False, "error": str(e)}) + "\n"
+                    yield (
+                        json.dumps({"cell": cell_str, "ok": False, "error": str(e)})
+                        + "\n"
+                    )
             for cs in cell_strings:
                 if cs not in clip_cells:
-                    yield json.dumps({"cell": cs, "ok": False, "error": "No clip found"}) + "\n"
+                    yield (
+                        json.dumps({"cell": cs, "ok": False, "error": "No clip found"})
+                        + "\n"
+                    )
             _save_manifest_quiet()
         finally:
             config.TITLECARDS_ENABLED = original_tc_enabled
             config.TITLECARD_DURATION_SECONDS = original_tc_duration
 
-    return Response(stream(), mimetype="application/x-ndjson", headers={"X-Accel-Buffering": "no"})
+    return Response(
+        stream(), mimetype="application/x-ndjson", headers={"X-Accel-Buffering": "no"}
+    )
 
 
 @studio_bp.route("/api/highlights-preview", methods=["POST"])
@@ -542,9 +571,10 @@ def api_reel() -> FlaskResponse:
         if components:
             expected_id = clipgen.compute_reel_id(components)
             for reel in _generated_reels:
-                if reel.get("id") == expected_id and Path(
-                    utils.resolve_output_path(reel["file"])
-                ).is_file():
+                if (
+                    reel.get("id") == expected_id
+                    and Path(utils.resolve_output_path(reel["file"])).is_file()
+                ):
                     return jsonify(
                         {
                             "ok": True,
@@ -663,7 +693,9 @@ def api_gallery() -> FlaskResponse:
 
     video_path = _resolve_source_video(participant)
     if video_path is None or not video_path.is_file():
-        return jsonify({"ok": False, "error": f"Source video not found for {participant}"}), 404
+        return jsonify(
+            {"ok": False, "error": f"Source video not found for {participant}"}
+        ), 404
 
     try:
         artifacts = video.generate_interval_captures(
@@ -938,7 +970,12 @@ def api_settings_put() -> FlaskResponse:
 
 def _init_studio_state(worksheet: Any) -> None:
     """Initialize module-level state for Studio routes."""
-    global _worksheet, _sheet_context, _generated_artifacts, _generated_reels, _thumbnail_cache
+    global \
+        _worksheet, \
+        _sheet_context, \
+        _generated_artifacts, \
+        _generated_reels, \
+        _thumbnail_cache
 
     _load_studio_settings()
     _worksheet = worksheet
@@ -1003,7 +1040,7 @@ def start_combined_server(
     )
 
     @combined.route("/")
-    def root() -> Response:
+    def root():
         return redirect(f"/{default_page}/")
 
     @combined.route("/api/status")

@@ -17,7 +17,7 @@ def _is_transient_api_error(exc: gspread.exceptions.APIError) -> bool:
         code = exc.response.status_code
     except AttributeError:
         return False
-    return code >= 500
+    return code is not None and code >= 500
 
 
 def get_worksheet(spreadsheet: gspread.Spreadsheet) -> gspread.Worksheet:

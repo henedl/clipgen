@@ -227,13 +227,14 @@ def api_regions_create() -> FlaskResponse:
 
     canvas_w = data.get("canvas_width")
     canvas_h = data.get("canvas_height")
+    region: Dict[str, Any]
     if (
         isinstance(canvas_w, (int, float))
         and isinstance(canvas_h, (int, float))
         and canvas_w > 0
         and canvas_h > 0
     ):
-        region: Dict[str, Any] = _normalize_region(
+        region = _normalize_region(
             data["x"], data["y"], data["w"], data["h"], int(canvas_w), int(canvas_h)
         )
     else:

@@ -3,7 +3,7 @@ import json
 import pytest
 
 Flask = pytest.importorskip("flask").Flask
-import server
+import server  # noqa: E402
 
 
 @pytest.fixture
@@ -46,7 +46,9 @@ def test_api_generate_400_when_no_cells(client, monkeypatch):
 
 def test_api_generate_400_for_invalid_format(client, monkeypatch):
     monkeypatch.setattr(server, "_worksheet", object())
-    resp = client.post("/studio/api/generate", json={"cells": ["P01.3"], "format": "pdf"})
+    resp = client.post(
+        "/studio/api/generate", json={"cells": ["P01.3"], "format": "pdf"}
+    )
     assert resp.status_code == 400
     data = resp.get_json()
     assert "Invalid format" in data["error"]
@@ -177,7 +179,9 @@ def test_api_thumbnail_caches(client, monkeypatch, tmp_path):
 def test_api_manifest_get_returns_artifacts(client, monkeypatch):
     import viewer
 
-    fake_artifacts = [{"id": "a5c2s0", "type": "clip", "participant": "P01", "cellRow": 5}]
+    fake_artifacts = [
+        {"id": "a5c2s0", "type": "clip", "participant": "P01", "cellRow": 5}
+    ]
     monkeypatch.setattr(viewer, "load_manifest_artifacts", lambda: fake_artifacts)
     monkeypatch.setattr(viewer, "load_manifest_reels", lambda: [])
     resp = client.get("/studio/api/manifest")
@@ -244,7 +248,9 @@ def test_api_generate_skips_existing_artifacts(client, monkeypatch, tmp_path):
         lambda *a, **kw: process_called.append(1) or (1, []),
     )
 
-    resp = client.post("/studio/api/generate", json={"cells": ["P01.5"], "format": "clip"})
+    resp = client.post(
+        "/studio/api/generate", json={"cells": ["P01.5"], "format": "clip"}
+    )
     assert resp.status_code == 200
     lines = [json.loads(line) for line in resp.data.decode().strip().split("\n")]
     assert lines[0]["ok"] is True
@@ -274,13 +280,21 @@ def test_api_generate_regenerates_when_file_missing(client, monkeypatch, tmp_pat
     monkeypatch.setattr("spreadsheet.generate_list", fake_generate_list)
     monkeypatch.setattr("spreadsheet.parse_cell_specifications", lambda t: [("P01", 5)])
 
-    new_artifact = {"id": "a5c2s0", "type": "clip", "file": "new.mp4", "cellRow": 5, "cellCol": 2}
+    new_artifact = {
+        "id": "a5c2s0",
+        "type": "clip",
+        "file": "new.mp4",
+        "cellRow": 5,
+        "cellCol": 2,
+    }
     monkeypatch.setattr(
         "clipgen.process_clips",
         lambda *a, **kw: (1, [new_artifact]),
     )
 
-    resp = client.post("/studio/api/generate", json={"cells": ["P01.5"], "format": "clip"})
+    resp = client.post(
+        "/studio/api/generate", json={"cells": ["P01.5"], "format": "clip"}
+    )
     lines = [json.loads(line) for line in resp.data.decode().strip().split("\n")]
     assert lines[0]["ok"] is True
     assert "skipped" not in lines[0]
@@ -352,7 +366,9 @@ def test_api_gallery_500_when_no_context(client):
 
 def test_api_gallery_400_when_no_participant(client, monkeypatch):
     monkeypatch.setattr(server, "_sheet_context", object())
-    resp = client.post("/studio/api/gallery", json={"participant": "", "format": "screen"})
+    resp = client.post(
+        "/studio/api/gallery", json={"participant": "", "format": "screen"}
+    )
     assert resp.status_code == 400
     data = resp.get_json()
     assert "No participant" in data["error"]
@@ -360,7 +376,9 @@ def test_api_gallery_400_when_no_participant(client, monkeypatch):
 
 def test_api_gallery_400_for_invalid_format(client, monkeypatch):
     monkeypatch.setattr(server, "_sheet_context", object())
-    resp = client.post("/studio/api/gallery", json={"participant": "P01", "format": "clip"})
+    resp = client.post(
+        "/studio/api/gallery", json={"participant": "P01", "format": "clip"}
+    )
     assert resp.status_code == 400
     data = resp.get_json()
     assert "Invalid format" in data["error"]
@@ -709,8 +727,8 @@ def test_api_generate_titlecard_override(client, monkeypatch):
             "titlecard_duration": 5,
         },
     )
-    lines = [json.loads(ln) for ln in resp.data.decode().strip().split("\n")]
     assert resp.status_code == 200
+    resp.data  # consume streamed response so generator finally-block runs
     assert captured["enabled"] is True
     assert captured["duration"] == 5
     assert config.TITLECARDS_ENABLED == original_enabled

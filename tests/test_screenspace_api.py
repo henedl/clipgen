@@ -1,21 +1,18 @@
 """Tests for Screenspace server API endpoints."""
 
-
 import pytest
 
 Flask = pytest.importorskip("flask").Flask
 
-import config
-import screenspace
-import screenspace_server
+import config  # noqa: E402
+import screenspace  # noqa: E402
+import screenspace_server  # noqa: E402
 
 
 @pytest.fixture
 def client(tmp_path, monkeypatch):
     app = Flask(__name__)
-    app.register_blueprint(
-        screenspace_server.screenspace_bp, url_prefix="/screenspace"
-    )
+    app.register_blueprint(screenspace_server.screenspace_bp, url_prefix="/screenspace")
 
     monkeypatch.setattr(config, "OUTPUT_DIR", str(tmp_path))
     screenspace_server._manifest = {"regions": {}, "tasks": []}
@@ -174,7 +171,14 @@ def test_create_region_legacy_no_canvas_dims(client):
 def test_denormalize_region():
     from screenspace_server import _denormalize_region
 
-    region = {"x": 0.5, "y": 0.5, "w": 0.1, "h": 0.1, "source_width": 1920, "source_height": 1080}
+    region = {
+        "x": 0.5,
+        "y": 0.5,
+        "w": 0.1,
+        "h": 0.1,
+        "source_width": 1920,
+        "source_height": 1080,
+    }
     px = _denormalize_region(region, 1920, 1080)
     assert px == {"x": 960, "y": 540, "w": 192, "h": 108}
 
@@ -190,7 +194,14 @@ def test_denormalize_legacy_region():
 def test_denormalize_cross_resolution():
     from screenspace_server import _denormalize_region
 
-    region = {"x": 0.5, "y": 0.5, "w": 0.1, "h": 0.1, "source_width": 1920, "source_height": 1080}
+    region = {
+        "x": 0.5,
+        "y": 0.5,
+        "w": 0.1,
+        "h": 0.1,
+        "source_width": 1920,
+        "source_height": 1080,
+    }
     px = _denormalize_region(region, 1280, 720)
     assert px == {"x": 640, "y": 360, "w": 128, "h": 72}
 
@@ -276,6 +287,7 @@ def test_cancel_task_not_found(client):
 
 def test_dismiss_queued_task(client):
     worker = screenspace_server._worker
+    assert worker is not None
     task = screenspace.create_task(
         "color", "P01", "s.mp4", "/v.mp4", "r", {"x": 0, "y": 0, "w": 1, "h": 1}
     )
@@ -292,6 +304,7 @@ def test_dismiss_queued_task(client):
 
 def test_dismiss_completed_task(client):
     worker = screenspace_server._worker
+    assert worker is not None
     task = screenspace.create_task(
         "color", "P01", "s.mp4", "/v.mp4", "r", {"x": 0, "y": 0, "w": 1, "h": 1}
     )

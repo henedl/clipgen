@@ -1706,9 +1706,7 @@ def _dispatch_interactive_mode(
     if mode == "screenspace":
         import server
 
-        server.start_combined_server(
-            worksheet=worksheet, default_page="screenspace"
-        )
+        server.start_combined_server(worksheet=worksheet, default_page="screenspace")
         return None
     if mode == "timeline-viewer":
         clips_list = spreadsheet.generate_list(worksheet, "batch", skip_prompts=True)
