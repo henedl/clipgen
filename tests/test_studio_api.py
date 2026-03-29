@@ -728,6 +728,7 @@ def test_api_generate_titlecard_override(client, monkeypatch):
         },
     )
     assert resp.status_code == 200
+    resp.data  # consume streamed response so generator finally-block runs
     assert captured["enabled"] is True
     assert captured["duration"] == 5
     assert config.TITLECARDS_ENABLED == original_enabled
