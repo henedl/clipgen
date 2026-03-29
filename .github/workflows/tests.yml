@@ -1,8 +1,20 @@
-name: tests
+name: checks
 
 on:
   push:
+    branches:
+      - master
+    paths:
+      - "**.py"
+      - "tests/**"
+      - "pyproject.toml"
+      - ".github/workflows/tests.yml"
   pull_request:
+    paths:
+      - "**.py"
+      - "tests/**"
+      - "pyproject.toml"
+      - ".github/workflows/tests.yml"
 
 jobs:
   smoke-tests:
@@ -18,3 +30,35 @@ jobs:
 
       - name: Run smoke tests
         run: uv run pytest -c tests/pytest.ini
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.12"
+
+      - name: Ruff check
+        run: uv run ruff check
+
+      - name: Ruff format check
+        run: uv run ruff format --check
+
+  typecheck:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.12"
+
+      - name: Type check
+        run: uv run ty check

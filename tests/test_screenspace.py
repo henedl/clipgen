@@ -243,7 +243,12 @@ class TestScreenspaceWorker:
     def test_enqueue_and_get(self):
         worker = screenspace.ScreenspaceWorker()
         task = screenspace.create_task(
-            "color", "P01", "s_P01.mp4", "/v.mp4", "hb", {"x": 0, "y": 0, "w": 10, "h": 10}
+            "color",
+            "P01",
+            "s_P01.mp4",
+            "/v.mp4",
+            "hb",
+            {"x": 0, "y": 0, "w": 10, "h": 10},
         )
         tid = worker.enqueue(task)
         assert tid == task["id"]
@@ -291,7 +296,10 @@ class TestScreenspaceWorker:
                 "/nonexistent/nope.mp4",
                 "r",
                 {"x": 0, "y": 0, "w": 10, "h": 10},
-                parameters={"target_color": {"h": 0, "s": 0, "v": 0}, "tolerance": {"h": 10, "s": 10, "v": 10}},
+                parameters={
+                    "target_color": {"h": 0, "s": 0, "v": 0},
+                    "tolerance": {"h": 10, "s": 10, "v": 10},
+                },
             )
             worker.enqueue(task)
             for _ in range(50):
@@ -349,7 +357,6 @@ class TestScreenspaceWorker:
             worker._tasks[task["id"]]["status"] = screenspace.TASK_STATUS_RUNNING
         assert worker.remove_task(task["id"]) is True
         assert worker.get_task(task["id"]) is None
-
 
     def test_pause_resume_flags(self):
         worker = screenspace.ScreenspaceWorker()

@@ -242,5 +242,3 @@ def _init_insights_state() -> None:
     # Set study in insights meta from artifacts if not already set
     if not _insights_data.get("meta", {}).get("study") and _artifacts:
         _insights_data.setdefault("meta", {})["study"] = _artifacts[0].get("study", "")
-
-
