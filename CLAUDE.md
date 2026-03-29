@@ -117,6 +117,10 @@ Use these tokens for **all new CSS**. When editing existing CSS, convert touched
 - **Transitions**: `--duration-fast` (150ms), `--duration-normal` (250ms), `--duration-slow` (350ms)
 - **Z-index**: `--z-float` (10), `--z-dropdown` (100), `--z-modal` (1000), `--z-overlay` (2000), `--z-toast` (3000)
 
+## SVG icons
+
+A library of 316 Heroicons (outline style, 24×24 viewBox) lives in [assets/icons/](assets/icons/). Filenames use kebab-case (e.g. `pencil-square.svg`, `eye-dropper.svg`, `arrow-right.svg`). When adding icons to a web UI, pick an icon from this library instead of writing new inline SVG paths or using text/emoji glyphs. See existing usage in `screenspace.js` (`svgEditIcon()`, `svgDragHandle()`, etc.) for the `createElementNS()` pattern.
+
 ## Conventions and patterns
 
 - **Coordinates:** gspread uses **1-based** row/col. `sheet.get_all_values()` is a list of lists with **0-based** indices: `sheet_data[row_idx][col_idx]`. Conversions: sheet row = `row_idx + 1`, sheet col = `col_idx + 1`.
