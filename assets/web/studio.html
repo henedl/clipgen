@@ -188,25 +188,32 @@
   </section>
 
   <section id="intakeArea" class="hidden">
-    <h3>Screenspace Intake <span id="intakeCount">(0)</span> <span id="intakeNewBadge" class="intake-new-badge hidden">new</span></h3>
-    <div class="area-controls" id="intakeControls">
-      <label class="intake-cluster-label">Cluster <input id="intakeClusterThreshold" type="number" min="1" max="60" value="5" class="intake-cluster-input">s</label>
-      <button id="intakeAddAllBtn" class="btn btn-small" disabled>Add All to Artifacts</button>
-      <button id="intakeReelAllBtn" class="btn btn-small" disabled>Add All to Reel</button>
-    </div>
-    <div class="intake-filters">
-      <input id="intakeFilterSearch" type="text" placeholder="Search events\u2026" class="intake-filter-search">
-      <div class="intake-filter-pills">
-        <button class="intake-filter-det" data-detector="color" style="--det-color:#e74c3c">color</button>
-        <button class="intake-filter-det" data-detector="change" style="--det-color:#f39c12">change</button>
-        <button class="intake-filter-det" data-detector="similarity" style="--det-color:#3498db">similarity</button>
-        <button class="intake-filter-det" data-detector="text" style="--det-color:#10b981">text</button>
-        <button class="intake-filter-det" data-detector="numbers" style="--det-color:#eab308">numbers</button>
+    <h3 id="intakeHeader">
+      <svg class="collapse-chevron" width="12" height="12" viewBox="0 0 12 12" fill="none">
+        <path d="M4.5 2L9 6L4.5 10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+      Screenspace Intake <span id="intakeCount">(0)</span> <span id="intakeNewBadge" class="intake-new-badge hidden">new</span>
+    </h3>
+    <div id="intakeBody">
+      <div class="area-controls" id="intakeControls">
+        <label class="intake-cluster-label">Cluster <input id="intakeClusterThreshold" type="number" min="1" max="60" value="5" class="intake-cluster-input">s</label>
+        <button id="intakeAddAllBtn" class="btn btn-small" disabled>Add All to Artifacts</button>
+        <button id="intakeReelAllBtn" class="btn btn-small" disabled>Add All to Reel</button>
       </div>
-      <label class="intake-filter-new-label"><input id="intakeFilterNew" type="checkbox"> New only</label>
-    </div>
-    <div id="intakeList" class="drop-target">
-      <div class="drop-target-empty">Screenspace events will appear here</div>
+      <div class="intake-filters">
+        <input id="intakeFilterSearch" type="text" placeholder="Search events\u2026" class="intake-filter-search">
+        <div class="intake-filter-pills">
+          <button class="intake-filter-det" data-detector="color" style="--det-color:#e74c3c">color</button>
+          <button class="intake-filter-det" data-detector="change" style="--det-color:#f39c12">change</button>
+          <button class="intake-filter-det" data-detector="similarity" style="--det-color:#3498db">similarity</button>
+          <button class="intake-filter-det" data-detector="text" style="--det-color:#10b981">text</button>
+          <button class="intake-filter-det" data-detector="numbers" style="--det-color:#eab308">numbers</button>
+        </div>
+        <label class="intake-filter-new-label"><input id="intakeFilterNew" type="checkbox"> New only</label>
+      </div>
+      <div id="intakeList" class="drop-target">
+        <div class="drop-target-empty">Screenspace events will appear here</div>
+      </div>
     </div>
   </section>
   </div>
