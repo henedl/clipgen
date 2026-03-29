@@ -58,6 +58,8 @@
     pipetteActive: false,
     runParticipants: [],
     runRegions: [],
+    taskEvents: {},
+    showExcluded: true,
   };
 
   var _cachedThemeColors = null;
@@ -1591,6 +1593,10 @@
       container.appendChild(fmtRow);
     }
 
+    if (type !== "timelapse") {
+      addParamRow(container, "Event label", textInput("paramEventLabel", "e.g. low_health"));
+    }
+
     updateRunButton();
   }
 
@@ -1985,6 +1991,10 @@
     } else if (type === "timelapse") {
       params.speedup_factor = parseFloat((qs("#paramTlSpeed") || {}).value) || 10;
       params.output_format = (qs("#paramTlFormat") || {}).value || "mp4";
+    }
+    var labelEl = qs("#paramEventLabel");
+    if (labelEl && labelEl.value.trim()) {
+      params.event_label = labelEl.value.trim();
     }
     return params;
   }
@@ -2653,6 +2663,21 @@
 
   function initResultsPanel() {
     qs("#resultsList").addEventListener("click", function (e) {
+      // Handle exclude toggle
+      var btn = e.target.closest(".result-exclude-btn");
+      if (btn && btn.dataset.eventId) {
+        var evId = btn.dataset.eventId;
+        var isExcluded = btn.dataset.excluded === "true";
+        var endpoint = isExcluded ? "api/events/" + evId + "/include" : "api/events/" + evId + "/exclude";
+        apiPut(endpoint).then(function () {
+          var evts = state.taskEvents[state.selectedTaskId] || [];
+          for (var i = 0; i < evts.length; i++) {
+            if (evts[i].id === evId) { evts[i].excluded = !isExcluded; break; }
+          }
+          renderResults();
+        });
+        return;
+      }
       var row = e.target.closest(".result-row");
       if (!row || !row.dataset.timestamp) return;
       var ts = parseFloat(row.dataset.timestamp);
@@ -2667,6 +2692,11 @@
 
     qs("#exportJsonBtn").addEventListener("click", function () { exportResults("json"); });
     qs("#exportCsvBtn").addEventListener("click", function () { exportResults("csv"); });
+
+    qs("#showExcludedCb").addEventListener("change", function () {
+      state.showExcluded = this.checked;
+      renderResults();
+    });
   }
 
   function loadAndShowResults(taskId) {
@@ -2674,6 +2704,10 @@
       .then(function (data) {
         state.selectedTaskId = taskId;
         state.selectedTaskResults = data.results;
+        return apiGet("api/events?task_id=" + taskId);
+      })
+      .then(function (evData) {
+        state.taskEvents[taskId] = evData.events || [];
         renderResults();
         renderTaskList();
       })
@@ -2725,21 +2759,51 @@
       return;
     }
 
+    var events = state.taskEvents[state.selectedTaskId] || [];
+    var eventsByTs = {};
+    events.forEach(function (ev) {
+      var key = ev.time_in.toFixed(2);
+      if (!eventsByTs[key]) eventsByTs[key] = [];
+      eventsByTs[key].push(ev);
+    });
+
+    // For color results (spans), build a consumed-index tracker per timestamp
+    var eventTsIndex = {};
+
+    var showToggle = qs("#showExcludedToggle");
+    if (showToggle) showToggle.classList.toggle("hidden", events.length === 0);
+
+    var visibleCount = 0;
+
     countEl.textContent = "(" + results.length + ")";
     container.innerHTML = "";
 
     results.forEach(function (r) {
-      var row = el("div", "result-row");
+      // Find matching event for this result
+      var ts = r.timestamp !== undefined ? r.timestamp : r.start;
+      var tsKey = ts !== undefined ? ts.toFixed(2) : null;
+      var matchedEvent = null;
+      if (tsKey && eventsByTs[tsKey]) {
+        var idx = eventTsIndex[tsKey] || 0;
+        if (idx < eventsByTs[tsKey].length) {
+          matchedEvent = eventsByTs[tsKey][idx];
+          eventTsIndex[tsKey] = idx + 1;
+        }
+      }
+
+      var isExcluded = matchedEvent && matchedEvent.excluded;
+      if (isExcluded && !state.showExcluded) return;
+      visibleCount++;
+
+      var row = el("div", "result-row" + (isExcluded ? " excluded" : ""));
 
       if (task.type === "color") {
-        // Span result: start-end, duration
         row.dataset.timestamp = r.start;
         row.appendChild(el("span", "result-timestamp", formatTimestamp(r.start) + " \u2013 " + formatTimestamp(r.end)));
         row.appendChild(el("span", "result-detail", r.duration.toFixed(1) + "s"));
       } else if (task.type === "change") {
         row.dataset.timestamp = r.timestamp;
         row.appendChild(el("span", "result-timestamp", formatTimestamp(r.timestamp)));
-        // Magnitude bar
         var bar = el("div", "result-bar");
         var fill = el("div", "result-bar-fill");
         fill.style.width = Math.round(Math.min(r.magnitude, 1) * 100) + "%";
@@ -2760,6 +2824,15 @@
         row.dataset.timestamp = r.timestamp;
         row.appendChild(el("span", "result-timestamp", formatTimestamp(r.timestamp)));
         row.appendChild(el("span", "result-detail", String(r.number_found)));
+      }
+
+      if (matchedEvent) {
+        var btn = el("button", "result-exclude-btn");
+        btn.dataset.eventId = matchedEvent.id;
+        btn.dataset.excluded = isExcluded ? "true" : "false";
+        btn.title = isExcluded ? "Include event" : "Exclude event";
+        btn.innerHTML = isExcluded ? "&#x2715;" : "&#x2713;";
+        row.appendChild(btn);
       }
 
       container.appendChild(row);

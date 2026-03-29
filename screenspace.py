@@ -319,10 +319,28 @@ def scan_color(
     def _cb(ts: float, pixels: np.ndarray) -> Optional[bool]:
         if cancel_flag and cancel_flag():
             return False
-        if color_matches(pixels, target_color, tolerance):
+        avg = average_color_hsv(pixels)
+        hue_diff = abs(avg["h"] - target_color["h"])
+        hue_dist = min(hue_diff, 180.0 - hue_diff)
+        s_dist = abs(avg["s"] - target_color["s"])
+        v_dist = abs(avg["v"] - target_color["v"])
+        if (
+            hue_dist <= tolerance["h"]
+            and s_dist <= tolerance["s"]
+            and v_dist <= tolerance["v"]
+        ):
             matches.append(ts)
             if on_result:
-                on_result({"timestamp": ts})
+                conf = max(
+                    0.0,
+                    1.0
+                    - max(
+                        hue_dist / max(tolerance["h"], 1e-6),
+                        s_dist / max(tolerance["s"], 1e-6),
+                        v_dist / max(tolerance["v"], 1e-6),
+                    ),
+                )
+                on_result({"timestamp": ts, "_confidence": conf})
         if on_progress and total_range > 0:
             on_progress((ts - start_seconds) / total_range)
         return None
@@ -865,6 +883,17 @@ class ScreenspaceWorker:
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._thread.start()
 
+    def restore_tasks(self, tasks: List[Dict[str, Any]]) -> None:
+        """Load historical tasks into the worker (completed/failed/cancelled).
+
+        Only non-queued tasks are restored for display; queued tasks are not
+        re-enqueued since the analysis context (video caps) is gone.
+        """
+        with self._lock:
+            for t in tasks:
+                if t.get("id"):
+                    self._tasks[t["id"]] = copy.deepcopy(t)
+
     def stop(self) -> None:
         """Signal the worker thread to stop."""
         self._running = False
@@ -977,6 +1006,44 @@ class ScreenspaceWorker:
             self._tasks.pop(task_id, None)
             return True
 
+    def drain_new_events(self) -> List[Dict[str, Any]]:
+        """Collect and clear ``_generated_events`` from all tasks. Thread-safe."""
+        events: List[Dict[str, Any]] = []
+        with self._lock:
+            for t in self._tasks.values():
+                events.extend(t.pop("_generated_events", []))
+        return events
+
+    def _generate_events_from_results(
+        self, task: Dict[str, Any], raw_results: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        """Convert raw task results into ScreenspaceEvent records."""
+        task_type = task.get("type", "")
+        if task_type == "timelapse":
+            return []
+        events: List[Dict[str, Any]] = []
+        for r in raw_results:
+            ts = r.get("timestamp", r.get("start", 0.0))
+            metadata: Dict[str, Any] = {}
+            if task_type == "color":
+                confidence = r.get("_confidence", 1.0)
+            elif task_type == "change":
+                confidence = r.get("magnitude", 0.0)
+                metadata["magnitude"] = r.get("magnitude", 0.0)
+            elif task_type == "similarity":
+                confidence = r.get("score", 0.0)
+                metadata["score"] = r.get("score", 0.0)
+            elif task_type == "text":
+                confidence = r.get("confidence", 0.0)
+                metadata["text_found"] = r.get("text_found", "")
+            elif task_type == "numbers":
+                confidence = 1.0
+                metadata["value"] = r.get("number_found", 0)
+            else:
+                confidence = 1.0
+            events.append(create_event(task, ts, confidence, metadata))
+        return events
+
     def _run(self) -> None:
         """Worker loop."""
         while self._running:
@@ -1013,6 +1080,7 @@ class ScreenspaceWorker:
             t = self._tasks.get(task_id)
             if t:
                 t["result"] = list(t.get("_partial_results", []))
+                t["_raw_results"] = list(t.get("_partial_results", []))
 
         def _on_progress(progress: float) -> None:
             with self._lock:
@@ -1030,8 +1098,11 @@ class ScreenspaceWorker:
         def _on_result(result_dict: Dict[str, Any]) -> None:
             with self._lock:
                 t = self._tasks.get(task_id)
-                if t and isinstance(t.get("result"), list):
-                    t["result"].append(result_dict)
+                if t:
+                    if isinstance(t.get("result"), list):
+                        t["result"].append(result_dict)
+                    if isinstance(t.get("_raw_results"), list):
+                        t["_raw_results"].append(result_dict)
 
         try:
             result = self._dispatch(task, _on_progress, _cancel_flag, _on_result)
@@ -1052,6 +1123,10 @@ class ScreenspaceWorker:
                         t["progress"] = 1.0
                         t.pop("_progress_offset", None)
                         t.pop("_progress_scale", None)
+                        raw = t.pop("_raw_results", [])
+                        t["_generated_events"] = self._generate_events_from_results(
+                            t, raw
+                        )
                     t["completed_at"] = datetime.now(timezone.utc).isoformat()
         except Exception as exc:
             with self._lock:
@@ -1171,7 +1246,7 @@ class ScreenspaceWorker:
 
 
 def _empty_screenspace_manifest() -> Dict[str, Any]:
-    return {"regions": {}, "tasks": []}
+    return {"regions": {}, "tasks": [], "events": []}
 
 
 def load_screenspace_manifest() -> Dict[str, Any]:
@@ -1193,12 +1268,14 @@ def load_screenspace_manifest() -> Dict[str, Any]:
     return {
         "regions": data.get("regions", {}),
         "tasks": data.get("tasks", []),
+        "events": data.get("events", []),
     }
 
 
 def save_screenspace_manifest(
     regions: Dict[str, Dict[str, Any]],
     tasks: List[Dict[str, Any]],
+    events: Optional[List[Dict[str, Any]]] = None,
 ) -> Optional[Path]:
     """Write the screenspace manifest to disk.
 
@@ -1219,7 +1296,11 @@ def save_screenspace_manifest(
     try:
         manifest_path.write_text(
             json.dumps(
-                {"regions": regions, "tasks": clean_tasks},
+                {
+                    "regions": regions,
+                    "tasks": clean_tasks,
+                    "events": events or [],
+                },
                 ensure_ascii=False,
                 indent=2,
             ),
@@ -1229,3 +1310,29 @@ def save_screenspace_manifest(
     except OSError as e:
         utils.warning_print(f"Could not write screenspace manifest: {e}")
         return None
+
+
+def create_event(
+    task: Dict[str, Any],
+    timestamp: float,
+    confidence: float,
+    metadata: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Create a ScreenspaceEvent from a task result entry."""
+    event_label = task.get("parameters", {}).get("event_label", "")
+    if not event_label:
+        event_label = task["type"] + ": " + task.get("region", "")
+    return {
+        "id": f"ev_{uuid.uuid4().hex[:8]}",
+        "source_video": task.get("source_video", ""),
+        "participant": task.get("participant", ""),
+        "detector": task["type"],
+        "event_type": event_label,
+        "time_in": round(timestamp, 2),
+        "time_out": round(timestamp, 2),
+        "confidence": round(max(0.0, min(1.0, confidence)), 4),
+        "metadata": metadata or {},
+        "excluded": False,
+        "task_id": task["id"],
+        "region": task.get("region", ""),
+    }

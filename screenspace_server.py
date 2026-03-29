@@ -249,7 +249,9 @@ def api_regions_create() -> FlaskResponse:
 
     _manifest.setdefault("regions", {})[name] = region
     screenspace.save_screenspace_manifest(
-        _manifest.get("regions", {}), _manifest.get("tasks", [])
+        _manifest.get("regions", {}),
+        _manifest.get("tasks", []),
+        _manifest.get("events", []),
     )
 
     return jsonify({"ok": True, "region": region})
@@ -263,7 +265,9 @@ def api_regions_delete(name: str) -> FlaskResponse:
         return jsonify({"ok": False, "error": f"Region '{name}' not found"}), 404
 
     del regions[name]
-    screenspace.save_screenspace_manifest(regions, _manifest.get("tasks", []))
+    screenspace.save_screenspace_manifest(
+        regions, _manifest.get("tasks", []), _manifest.get("events", [])
+    )
 
     return jsonify({"ok": True})
 
@@ -441,6 +445,81 @@ def api_tasks_results(task_id: str) -> FlaskResponse:
     return jsonify({"ok": True, "results": task.get("result")})
 
 
+# ---- Events CRUD ----
+
+
+@screenspace_bp.route("/api/events")
+def api_events_list() -> FlaskResponse:
+    """List events with optional filtering."""
+    events = _manifest.get("events", [])
+    excluded_filter = request.args.get("excluded")
+    if excluded_filter == "false":
+        events = [e for e in events if not e.get("excluded")]
+    elif excluded_filter == "true":
+        events = [e for e in events if e.get("excluded")]
+    participant = request.args.get("participant")
+    if participant:
+        events = [e for e in events if e.get("participant") == participant]
+    task_id = request.args.get("task_id")
+    if task_id:
+        events = [e for e in events if e.get("task_id") == task_id]
+    return jsonify({"ok": True, "events": events})
+
+
+@screenspace_bp.route("/api/events/<event_id>/exclude", methods=["PUT"])
+def api_event_exclude(event_id: str) -> FlaskResponse:
+    """Set an event as excluded."""
+    for e in _manifest.get("events", []):
+        if e["id"] == event_id:
+            e["excluded"] = True
+            _persist_manifest()
+            return jsonify({"ok": True})
+    return jsonify({"ok": False, "error": "Event not found"}), 404
+
+
+@screenspace_bp.route("/api/events/<event_id>/include", methods=["PUT"])
+def api_event_include(event_id: str) -> FlaskResponse:
+    """Set an event as included."""
+    for e in _manifest.get("events", []):
+        if e["id"] == event_id:
+            e["excluded"] = False
+            _persist_manifest()
+            return jsonify({"ok": True})
+    return jsonify({"ok": False, "error": "Event not found"}), 404
+
+
+@screenspace_bp.route("/api/events/bulk-exclude", methods=["PUT"])
+def api_events_bulk_exclude() -> FlaskResponse:
+    """Bulk-exclude events by ID list."""
+    data = request.get_json(silent=True) or {}
+    ids = set(data.get("ids", []))
+    if not ids:
+        return jsonify({"ok": False, "error": "ids list required"}), 400
+    count = 0
+    for e in _manifest.get("events", []):
+        if e["id"] in ids:
+            e["excluded"] = True
+            count += 1
+    _persist_manifest()
+    return jsonify({"ok": True, "updated": count})
+
+
+@screenspace_bp.route("/api/events/bulk-include", methods=["PUT"])
+def api_events_bulk_include() -> FlaskResponse:
+    """Bulk-include events by ID list."""
+    data = request.get_json(silent=True) or {}
+    ids = set(data.get("ids", []))
+    if not ids:
+        return jsonify({"ok": False, "error": "ids list required"}), 400
+    count = 0
+    for e in _manifest.get("events", []):
+        if e["id"] in ids:
+            e["excluded"] = False
+            count += 1
+    _persist_manifest()
+    return jsonify({"ok": True, "updated": count})
+
+
 # ---- Helpers ----
 
 
@@ -492,6 +571,7 @@ def _init_screenspace_state(
 
     _worker = screenspace.ScreenspaceWorker()
     _worker.on_task_complete = _persist_manifest
+    _worker.restore_tasks(_manifest.get("tasks", []))
     _worker.start()
 
 
@@ -519,5 +599,10 @@ def _discover_participant_videos(study_name: str) -> None:
 def _persist_manifest() -> None:
     """Save manifest after a task completes."""
     if _worker:
+        new_events = _worker.drain_new_events()
+        if new_events:
+            _manifest.setdefault("events", []).extend(new_events)
         tasks = _worker.get_all_tasks()
-        screenspace.save_screenspace_manifest(_manifest.get("regions", {}), tasks)
+        screenspace.save_screenspace_manifest(
+            _manifest.get("regions", {}), tasks, _manifest.get("events", [])
+        )

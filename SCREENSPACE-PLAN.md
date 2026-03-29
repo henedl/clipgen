@@ -243,28 +243,28 @@ Manifest `events` key (added to `screenspace_manifest.json`):
 
 ### Event generation from task results
 
-- [ ] Events generated automatically when a task completes; each matched frame becomes one event
-- [ ] **Color scan**: preserve raw per-frame match timestamps before span merging; each matched frame → one event with `confidence` from color match score
-- [ ] **Change scan**: each change-point → one event with `confidence` from magnitude
-- [ ] **Similarity scan**: each matching frame → one event with `confidence` from SSIM score
-- [ ] **Text scan**: each OCR match → one event with `confidence` from fuzzy match ratio, `metadata.text_found`
-- [ ] **Numbers scan**: each numeric match → one event with `confidence` from OCR confidence, `metadata.value`
-- [ ] **Timelapse**: no events (produces a video file, not detections)
-- [ ] `create_event()` helper in `screenspace.py`; event generation in worker's task completion path
-- [ ] `confidence` normalization: each detector maps its native score to 0–1
+- [x] Events generated automatically when a task completes; each matched frame becomes one event
+- [x] **Color scan**: preserve raw per-frame match timestamps before span merging; each matched frame → one event with `confidence` from color match score
+- [x] **Change scan**: each change-point → one event with `confidence` from magnitude
+- [x] **Similarity scan**: each matching frame → one event with `confidence` from SSIM score
+- [x] **Text scan**: each OCR match → one event with `confidence` from fuzzy match ratio, `metadata.text_found`
+- [x] **Numbers scan**: each numeric match → one event with `confidence` from OCR confidence, `metadata.value`
+- [x] **Timelapse**: no events (produces a video file, not detections)
+- [x] `create_event()` helper in `screenspace.py`; event generation in worker's task completion path
+- [x] `confidence` normalization: each detector maps its native score to 0–1
 
 ### `event_type` in workflow configuration
 
-- [ ] New optional "Event label" text input in each workflow's parameter panel (placeholder: e.g. "low_health", "death_screen")
-- [ ] Maps to `event_type` on generated events; if blank, defaults to `"{detector}: {region}"` (e.g. "change: healthbar")
-- [ ] Passed through task parameters in `screenspace_server.py` to `screenspace.py`
+- [x] New optional "Event label" text input in each workflow's parameter panel (placeholder: e.g. "low_health", "death_screen")
+- [x] Maps to `event_type` on generated events; if blank, defaults to `"{detector}: {region}"` (e.g. "change: healthbar")
+- [x] Passed through task parameters in `screenspace_server.py` to `screenspace.py`
 
 ### Event exclusion in Screenspace
 
-- [ ] After a task completes, results panel shows events with per-row exclude/include toggle
-- [ ] Excluded events are dimmed but still visible; "Show excluded" toggle in results header
-- [ ] Exclusion changes persisted to manifest immediately
-- [ ] API endpoints:
+- [x] After a task completes, results panel shows events with per-row exclude/include toggle
+- [x] Excluded events are dimmed but still visible; "Show excluded" toggle in results header
+- [x] Exclusion changes persisted to manifest immediately
+- [x] API endpoints:
   - `PUT /api/events/<event_id>/exclude` — set `excluded: true`
   - `PUT /api/events/<event_id>/include` — set `excluded: false`
   - `GET /api/events` — list all events, with optional `?excluded=false` filter
@@ -275,28 +275,28 @@ Manifest `events` key (added to `screenspace_manifest.json`):
 
 Studio reads non-excluded events from `screenspace_manifest.json` and displays them in a new **"Screenspace Intake"** section in the bottom panel.
 
-- [ ] **Clustering at Studio ingest**: raw point events grouped into spans using a configurable proximity threshold (default 5s); each cluster becomes one intake card showing the span's time range
-- [ ] Clustering threshold configurable via a small control in the Intake section header; clusters recalculate on change
-- [ ] Single isolated events get ±padding (default 5s) to form a clip-worthy span; clamped to `[0, videoDuration]`
-- [ ] **Intake card rendering**: participant badge, time range, event type label, detector badge (color-coded), region name, event count, confidence indicator, "Add to Artifacts" and "Add to Reel" buttons, dismiss button
-- [ ] **"New events" indicator**: events not previously seen by Studio are highlighted with a subtle badge; clears on interaction
-- [ ] **Bulk actions**: "Add All to Artifacts", "Add All to Reel" buttons in section header
-- [ ] **Data flow**: Studio fetches `GET /screenspace/api/events?excluded=false` on load and periodically (every 10s when Screenspace is active); clustering happens client-side
-- [ ] Section hidden when no events exist
-- [ ] New config constant: `SCREENSPACE_INTAKE_CLUSTER_SECONDS = 5`
+- [x] **Clustering at Studio ingest**: raw point events grouped into spans using a configurable proximity threshold (default 5s); each cluster becomes one intake card showing the span's time range
+- [x] Clustering threshold configurable via a small control in the Intake section header; clusters recalculate on change
+- [x] Single isolated events get ±padding (default 5s) to form a clip-worthy span; clamped to `[0, videoDuration]`
+- [x] **Intake card rendering**: participant badge, time range, event type label, detector badge (color-coded), region name, event count, confidence indicator, "Add to Artifacts" and "Add to Reel" buttons, dismiss button
+- [x] **"New events" indicator**: events not previously seen by Studio are highlighted with a subtle badge; clears on interaction
+- [x] **Bulk actions**: "Add All to Artifacts", "Add All to Reel" buttons in section header
+- [x] **Data flow**: Studio fetches `GET /screenspace/api/events?excluded=false` on load and periodically (every 10s when Screenspace is active); clustering happens client-side
+- [x] Section hidden when no events exist
+- [x] New config constant: `SCREENSPACE_INTAKE_CLUSTER_SECONDS = 5`
 
 ### Studio clip generation from intake
 
-- [ ] New endpoint `POST /studio/api/generate-intake` generates clips directly from intake spans; resolves source video via participant, calls `video.cut_clip()` directly (bypasses spreadsheet pipeline)
-- [ ] Artifact IDs use `intake_{hash}_s{seg}` format
-- [ ] Reel integration: intake items can be added to the Reel area; `POST /studio/api/reel` accepts optional `intake_items` array
+- [x] New endpoint `POST /studio/api/generate-intake` generates clips directly from intake spans; resolves source video via participant, calls `video.cut_clip()` directly (bypasses spreadsheet pipeline)
+- [x] Artifact IDs use `intake_{hash}_s{seg}` format
+- [x] Reel integration: intake items can be added to the Reel area; `POST /studio/api/reel` accepts optional `intake_items` array
 - [x] Quick link from Studio to open Screenspace for the selected participant (already implemented as nav link)
 
 ### Timeline Viewer Screenspace track
 
 Screenspace events rendered as a separate track in both the standalone Timeline Viewer HTML export and Studio-generated viewers.
 
-- [ ] Data contract extension — new optional `screenspaceEvents` key in `window.CLIPGEN_DATA`:
+- [x] Data contract extension — new optional `screenspaceEvents` key in `window.CLIPGEN_DATA`:
   ```json
   {
     "meta": {"screenspaceEnabled": true},
@@ -306,20 +306,20 @@ Screenspace events rendered as a separate track in both the standalone Timeline 
     ]
   }
   ```
-- [ ] Second track row ("Screenspace") below the main artifact track
-- [ ] Client-side clustering of raw events into visual markers (same threshold logic as Studio)
-- [ ] Markers color-coded by detector type (same palette as Screenspace UI)
-- [ ] Tooltips showing event type, region, participant, time range, confidence
-- [ ] Legend extended with Screenspace detector type swatches
-- [ ] Track hidden when no events present
-- [ ] `finalize_timeline_data()` in `viewer.py` gets optional `screenspace_events` parameter
-- [ ] `load_screenspace_events_for_viewer()` helper reads non-excluded events from screenspace manifest
+- [x] Second track row ("Screenspace") below the main artifact track
+- [x] Client-side clustering of raw events into visual markers (same threshold logic as Studio)
+- [x] Markers color-coded by detector type (same palette as Screenspace UI)
+- [x] Tooltips showing event type, region, participant, time range, confidence
+- [x] Legend extended with Screenspace detector type swatches
+- [x] Track hidden when no events present
+- [x] `finalize_timeline_data()` in `viewer.py` gets optional `screenspace_events` parameter
+- [x] `load_screenspace_events_for_viewer()` helper reads non-excluded events from screenspace manifest
 
 ### Artifact attribution
 
-- [ ] Clips generated from Screenspace intake carry `source: "screenspace"` and `event_ids: [...]` in artifact records
-- [ ] `intake_label` field from the event type
-- [ ] Visible in Timeline Viewer tooltips and Insights Builder artifact browser
+- [x] Clips generated from Screenspace intake carry `source: "screenspace"` and `event_ids: [...]` in artifact records
+- [x] `intake_label` field from the event type
+- [x] Visible in Timeline Viewer tooltips and Insights Builder artifact browser
 
 ---
 

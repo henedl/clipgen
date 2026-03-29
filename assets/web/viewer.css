@@ -1285,3 +1285,52 @@ html[data-theme="dark"] .artifact-marker.selected {
   }
 }
 
+/* ---- Screenspace track ---- */
+
+.screenspace-track-wrap {
+  position: relative;
+  border-top: 1px solid var(--color-border);
+  padding: var(--space-1) 0;
+}
+
+.screenspace-track-label {
+  position: absolute;
+  left: 0;
+  top: var(--space-1);
+  font-size: 10px;
+  color: var(--color-text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  writing-mode: vertical-lr;
+  transform: rotate(180deg);
+  padding: 0 2px;
+}
+
+#screenspaceTrack {
+  position: relative;
+  height: 24px;
+  margin-left: 16px;
+}
+
+.screenspace-marker {
+  position: absolute;
+  top: 2px;
+  height: 20px;
+  border-radius: var(--radius-sm);
+  opacity: 0.75;
+  cursor: default;
+  transition: opacity var(--duration-fast);
+}
+
+.screenspace-marker:hover {
+  opacity: 1;
+}
+
+#screenspaceLegend {
+  display: flex;
+  gap: var(--space-3);
+  padding: var(--space-1) 0;
+  font-size: var(--text-xs);
+  color: var(--color-text-dim);
+}
+

@@ -517,6 +517,10 @@
       bindFilterEvents();
     }
 
+    if (data.screenspaceEvents && data.screenspaceEvents.length > 0) {
+      renderScreenspaceTrack(data.screenspaceEvents, data.timeline.duration);
+    }
+
     initFilmstripToggle();
     if (_filmstripEnabled) applyFilmstripMode();
   });
@@ -1344,6 +1348,15 @@
     setText("#detailCell", a.cellA1 || (a.cellRow ? "R" + a.cellRow + "C" + a.cellCol : "–"));
     setText("#detailSource", a.sourceVideo || "–");
     setText("#detailFile", a.file || "–");
+    var intakeRow = qs("#detailIntakeRow");
+    if (intakeRow) {
+      if (a.source === "screenspace" && a.intake_label) {
+        setText("#detailIntakeLabel", a.intake_label);
+        intakeRow.classList.remove("hidden");
+      } else {
+        intakeRow.classList.add("hidden");
+      }
+    }
 
     var preview = qs("#detailPreview");
     if (!preview) return;
@@ -1574,6 +1587,109 @@
       vid.autoplay = true;
       vid.src = a.file;
       preview.appendChild(vid);
+    }
+  }
+
+  // ---- Screenspace track ----
+
+  var SS_DETECTOR_COLORS = {
+    color: "#8b5cf6",
+    change: "#f97316",
+    similarity: "#0ea5e9",
+    text: "#10b981",
+    numbers: "#eab308",
+  };
+
+  function renderScreenspaceTrack(events, timelineDuration) {
+    var wrap = qs("#screenspaceTrackWrap");
+    var track = qs("#screenspaceTrack");
+    var legend = qs("#screenspaceLegend");
+    if (!wrap || !track || !timelineDuration) return;
+
+    // Cluster events by participant + event_type within 5s
+    var sorted = events.slice().sort(function (a, b) {
+      if (a.participant !== b.participant) return a.participant < b.participant ? -1 : 1;
+      if (a.eventType !== b.eventType) return a.eventType < b.eventType ? -1 : 1;
+      return a.timeIn - b.timeIn;
+    });
+    var clusters = [];
+    var cur = null;
+    for (var i = 0; i < sorted.length; i++) {
+      var ev = sorted[i];
+      if (
+        !cur ||
+        ev.participant !== cur.participant ||
+        ev.eventType !== cur.eventType ||
+        ev.timeIn - cur.end > 5
+      ) {
+        if (cur) clusters.push(cur);
+        cur = {
+          participant: ev.participant,
+          start: ev.timeIn,
+          end: ev.timeOut,
+          eventType: ev.eventType,
+          type: ev.type,
+          region: ev.region,
+          count: 1,
+          confSum: ev.confidence,
+        };
+      } else {
+        cur.end = Math.max(cur.end, ev.timeOut);
+        cur.count++;
+        cur.confSum += ev.confidence;
+      }
+    }
+    if (cur) clusters.push(cur);
+
+    // Pad point events
+    for (var j = 0; j < clusters.length; j++) {
+      if (clusters[j].start === clusters[j].end) {
+        clusters[j].start = Math.max(0, clusters[j].start - 2);
+        clusters[j].end = Math.min(timelineDuration, clusters[j].end + 2);
+      }
+    }
+
+    track.innerHTML = "";
+    var detectorsSeen = {};
+
+    clusters.forEach(function (c) {
+      var left = (c.start / timelineDuration) * 100;
+      var width = Math.max(((c.end - c.start) / timelineDuration) * 100, 0.4);
+      var marker = document.createElement("div");
+      marker.className = "screenspace-marker ss-type-" + c.type;
+      marker.style.left = left + "%";
+      marker.style.width = width + "%";
+      marker.style.background = SS_DETECTOR_COLORS[c.type] || "#888";
+      var avgConf = c.count > 0 ? (c.confSum / c.count) : 0;
+      marker.title =
+        c.eventType +
+        " (" + c.type + ")" +
+        "\nRegion: " + c.region +
+        "\nParticipant: " + c.participant +
+        "\nTime: " + formatTime(c.start) + " \u2013 " + formatTime(c.end) +
+        "\nConfidence: " + Math.round(avgConf * 100) + "%" +
+        "\nEvents: " + c.count;
+      track.appendChild(marker);
+      detectorsSeen[c.type] = true;
+    });
+
+    wrap.classList.remove("hidden");
+
+    // Build legend
+    if (legend) {
+      legend.innerHTML = "";
+      var types = Object.keys(detectorsSeen);
+      types.forEach(function (t) {
+        var item = document.createElement("span");
+        item.className = "legend-item";
+        var swatch = document.createElement("span");
+        swatch.className = "legend-swatch";
+        swatch.style.background = SS_DETECTOR_COLORS[t] || "#888";
+        item.appendChild(swatch);
+        item.appendChild(document.createTextNode(" " + t.charAt(0).toUpperCase() + t.slice(1)));
+        legend.appendChild(item);
+      });
+      legend.classList.remove("hidden");
     }
   }
 })();

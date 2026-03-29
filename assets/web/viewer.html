@@ -33,12 +33,17 @@
         <svg viewBox="0 0 24 24" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg>
       </button>
     </div>
+    <div class="timeline-track-wrap screenspace-track-wrap hidden" id="screenspaceTrackWrap">
+      <div class="screenspace-track-label">Screenspace</div>
+      <div id="screenspaceTrack"></div>
+    </div>
     <div id="timelineTicks"></div>
     <div id="timelineLegend">
       <span class="legend-item"><span class="legend-swatch clip"></span> Clip</span>
       <span class="legend-item"><span class="legend-swatch screen"></span> Screenshot</span>
       <span class="legend-item"><span class="legend-swatch gif"></span> GIF</span>
     </div>
+    <div id="screenspaceLegend" class="hidden" aria-label="Screenspace detector types"></div>
     <div id="severityLegend" class="hidden" aria-label="Severity colors"></div>
   </section>
 
@@ -101,6 +106,7 @@
             <dt>Cell</dt><dd id="detailCell"></dd>
             <dt>Source</dt><dd id="detailSource"></dd>
             <dt>File</dt><dd id="detailFile"></dd>
+            <div id="detailIntakeRow" class="hidden"><dt>Screenspace</dt><dd id="detailIntakeLabel"></dd></div>
           </dl>
         </div>
         <div id="detailPreview"></div>

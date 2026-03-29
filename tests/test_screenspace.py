@@ -166,7 +166,7 @@ class TestMergeTimestampSpans:
 class TestManifest:
     def test_empty_manifest_structure(self):
         m = screenspace._empty_screenspace_manifest()
-        assert m == {"regions": {}, "tasks": []}
+        assert m == {"regions": {}, "tasks": [], "events": []}
 
     def test_roundtrip(self, tmp_path, monkeypatch):
         monkeypatch.setattr(config, "OUTPUT_DIR", str(tmp_path))
@@ -201,21 +201,196 @@ class TestManifest:
     def test_load_missing_file(self, tmp_path, monkeypatch):
         monkeypatch.setattr(config, "OUTPUT_DIR", str(tmp_path))
         result = screenspace.load_screenspace_manifest()
-        assert result == {"regions": {}, "tasks": []}
+        assert result == {"regions": {}, "tasks": [], "events": []}
 
     def test_load_malformed_json(self, tmp_path, monkeypatch):
         monkeypatch.setattr(config, "OUTPUT_DIR", str(tmp_path))
         manifest_path = tmp_path / config.SCREENSPACE_MANIFEST_FILENAME
         manifest_path.write_text("not json")
         result = screenspace.load_screenspace_manifest()
-        assert result == {"regions": {}, "tasks": []}
+        assert result == {"regions": {}, "tasks": [], "events": []}
 
     def test_load_non_dict(self, tmp_path, monkeypatch):
         monkeypatch.setattr(config, "OUTPUT_DIR", str(tmp_path))
         manifest_path = tmp_path / config.SCREENSPACE_MANIFEST_FILENAME
         manifest_path.write_text(json.dumps([1, 2, 3]))
         result = screenspace.load_screenspace_manifest()
-        assert result == {"regions": {}, "tasks": []}
+        assert result == {"regions": {}, "tasks": [], "events": []}
+
+
+# ---------------------------------------------------------------------------
+# Events
+# ---------------------------------------------------------------------------
+
+
+class TestCreateEvent:
+    def _make_task(self, **overrides):
+        base = {
+            "id": "ss_abcd1234",
+            "type": "change",
+            "source_video": "study_P01.mp4",
+            "participant": "P01",
+            "region": "healthbar",
+            "parameters": {},
+        }
+        base.update(overrides)
+        return base
+
+    def test_basic_event_structure(self):
+        task = self._make_task()
+        ev = screenspace.create_event(task, 50.0, 0.85, {"magnitude": 0.12})
+        assert ev["id"].startswith("ev_")
+        assert ev["source_video"] == "study_P01.mp4"
+        assert ev["participant"] == "P01"
+        assert ev["detector"] == "change"
+        assert ev["time_in"] == 50.0
+        assert ev["time_out"] == 50.0
+        assert ev["confidence"] == 0.85
+        assert ev["metadata"] == {"magnitude": 0.12}
+        assert ev["excluded"] is False
+        assert ev["task_id"] == "ss_abcd1234"
+        assert ev["region"] == "healthbar"
+
+    def test_default_event_type_fallback(self):
+        task = self._make_task()
+        ev = screenspace.create_event(task, 10.0, 0.5)
+        assert ev["event_type"] == "change: healthbar"
+
+    def test_custom_event_label(self):
+        task = self._make_task(parameters={"event_label": "low_health"})
+        ev = screenspace.create_event(task, 10.0, 0.5)
+        assert ev["event_type"] == "low_health"
+
+    def test_confidence_clamping(self):
+        task = self._make_task()
+        ev_high = screenspace.create_event(task, 10.0, 1.5)
+        assert ev_high["confidence"] == 1.0
+        ev_low = screenspace.create_event(task, 10.0, -0.5)
+        assert ev_low["confidence"] == 0.0
+
+    def test_empty_metadata_default(self):
+        task = self._make_task()
+        ev = screenspace.create_event(task, 10.0, 0.5)
+        assert ev["metadata"] == {}
+
+
+class TestGenerateEventsFromResults:
+    def _make_worker_and_task(self, task_type, **params):
+        worker = screenspace.ScreenspaceWorker()
+        task = {
+            "id": "ss_test1234",
+            "type": task_type,
+            "source_video": "study_P01.mp4",
+            "participant": "P01",
+            "region": "hud",
+            "parameters": params,
+        }
+        return worker, task
+
+    def test_change_events(self):
+        worker, task = self._make_worker_and_task("change")
+        raw = [
+            {"timestamp": 10.0, "magnitude": 0.15},
+            {"timestamp": 20.0, "magnitude": 0.8},
+        ]
+        events = worker._generate_events_from_results(task, raw)
+        assert len(events) == 2
+        assert events[0]["confidence"] == 0.15
+        assert events[0]["metadata"]["magnitude"] == 0.15
+        assert events[1]["confidence"] == 0.8
+
+    def test_similarity_events(self):
+        worker, task = self._make_worker_and_task("similarity")
+        raw = [{"timestamp": 5.0, "score": 0.95}]
+        events = worker._generate_events_from_results(task, raw)
+        assert len(events) == 1
+        assert events[0]["confidence"] == 0.95
+        assert events[0]["metadata"]["score"] == 0.95
+
+    def test_text_events(self):
+        worker, task = self._make_worker_and_task("text")
+        raw = [{"timestamp": 30.0, "text_found": "hello", "confidence": 0.9}]
+        events = worker._generate_events_from_results(task, raw)
+        assert len(events) == 1
+        assert events[0]["metadata"]["text_found"] == "hello"
+        assert events[0]["confidence"] == 0.9
+
+    def test_numbers_events(self):
+        worker, task = self._make_worker_and_task("numbers")
+        raw = [{"timestamp": 15.0, "number_found": 42}]
+        events = worker._generate_events_from_results(task, raw)
+        assert len(events) == 1
+        assert events[0]["confidence"] == 1.0
+        assert events[0]["metadata"]["value"] == 42
+
+    def test_color_events(self):
+        worker, task = self._make_worker_and_task("color")
+        raw = [{"timestamp": 5.0, "_confidence": 0.7}]
+        events = worker._generate_events_from_results(task, raw)
+        assert len(events) == 1
+        assert events[0]["confidence"] == 0.7
+
+    def test_timelapse_no_events(self):
+        worker, task = self._make_worker_and_task("timelapse")
+        events = worker._generate_events_from_results(task, [{"file": "out.mp4"}])
+        assert events == []
+
+
+class TestManifestWithEvents:
+    def test_roundtrip_with_events(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(config, "OUTPUT_DIR", str(tmp_path))
+        events = [
+            {
+                "id": "ev_test1234",
+                "source_video": "study_P01.mp4",
+                "participant": "P01",
+                "detector": "change",
+                "event_type": "change: hud",
+                "time_in": 10.0,
+                "time_out": 10.0,
+                "confidence": 0.85,
+                "metadata": {"magnitude": 0.12},
+                "excluded": False,
+                "task_id": "ss_abcd1234",
+                "region": "hud",
+            }
+        ]
+        path = screenspace.save_screenspace_manifest({}, [], events)
+        assert path is not None
+
+        loaded = screenspace.load_screenspace_manifest()
+        assert len(loaded["events"]) == 1
+        assert loaded["events"][0]["id"] == "ev_test1234"
+        assert loaded["events"][0]["confidence"] == 0.85
+
+    def test_empty_events_default(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(config, "OUTPUT_DIR", str(tmp_path))
+        screenspace.save_screenspace_manifest({}, [])
+        loaded = screenspace.load_screenspace_manifest()
+        assert loaded["events"] == []
+
+
+class TestDrainNewEvents:
+    def test_drain_collects_and_clears(self):
+        worker = screenspace.ScreenspaceWorker()
+        task = screenspace.create_task(
+            task_type="change",
+            participant="P01",
+            source_video="study_P01.mp4",
+            video_path="/path/study_P01.mp4",
+            region_name="hud",
+            region_coords={"x": 0, "y": 0, "w": 100, "h": 50},
+        )
+        worker.enqueue(task)
+        # Manually inject generated events for testing
+        worker._tasks[task["id"]]["_generated_events"] = [
+            {"id": "ev_1", "detector": "change"},
+            {"id": "ev_2", "detector": "change"},
+        ]
+        events = worker.drain_new_events()
+        assert len(events) == 2
+        # Second drain should be empty
+        assert worker.drain_new_events() == []
 
 
 # ---------------------------------------------------------------------------
