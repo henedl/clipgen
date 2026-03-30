@@ -426,6 +426,141 @@ body {
   color: var(--color-accent);
 }
 
+/* Stash area */
+
+#stashArea {
+  display: flex;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.stash-card {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  max-width: 280px;
+  padding: var(--space-1) var(--space-2) var(--space-1) var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  font-size: var(--text-xs);
+  color: var(--color-text-dim);
+  transition: border-color var(--duration-fast);
+}
+
+.stash-card:hover {
+  border-color: var(--color-accent);
+}
+
+.stash-card-name {
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  outline: none;
+  cursor: text;
+  border-radius: var(--radius-sm);
+  padding: 0 2px;
+  min-width: 0;
+  transition: background var(--duration-fast);
+}
+
+.stash-card-name:hover,
+.stash-card-name:focus {
+  background: rgba(0, 0, 0, 0.05);
+}
+
+.stash-card-sep {
+  opacity: 0.4;
+  flex-shrink: 0;
+}
+
+.stash-card-count {
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.stash-card-dots {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  flex-shrink: 0;
+}
+
+.stash-dot-fade {
+  -webkit-mask-image: linear-gradient(to right, black, transparent);
+  mask-image: linear-gradient(to right, black, transparent);
+}
+
+.stash-card-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+  opacity: 0;
+  transition: opacity var(--duration-fast);
+}
+
+.stash-card:hover .stash-card-actions {
+  opacity: 1;
+}
+
+.stash-card-action-btn {
+  background: none;
+  border: none;
+  color: var(--color-text-dim);
+  cursor: pointer;
+  padding: 2px;
+  border-radius: var(--radius-sm);
+  display: inline-flex;
+  align-items: center;
+  transition: color var(--duration-fast);
+}
+
+.stash-card-action-btn:hover {
+  color: var(--color-accent);
+}
+
+/* Stash folders in region picker */
+
+.stash-folder-header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: var(--space-1) var(--space-2);
+  font-size: var(--text-xs);
+  color: var(--color-text-dim);
+  cursor: pointer;
+  border-top: 1px solid var(--color-border);
+  margin-top: var(--space-1);
+}
+
+.stash-folder-header:hover {
+  color: var(--color-text);
+}
+
+.stash-folder-header .chevron {
+  font-size: 10px;
+  transition: transform var(--duration-fast);
+  display: inline-block;
+}
+
+.stash-folder-header.expanded .chevron {
+  transform: rotate(90deg);
+}
+
+.stash-folder-content {
+  display: none;
+}
+
+.stash-folder-content.expanded {
+  display: block;
+}
+
+.stash-folder-content label.stash-folder-item {
+  padding-left: var(--space-4);
+}
+
 /* Timeline */
 
 #timelineSection {
@@ -1595,6 +1730,11 @@ html[data-theme="dark"] .region-chip.active {
 
 html[data-theme="dark"] .run-picker-panel {
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+}
+
+html[data-theme="dark"] .stash-card-name:hover,
+html[data-theme="dark"] .stash-card-name:focus {
+  background: rgba(255, 255, 255, 0.08);
 }
 
 /* Responsive */

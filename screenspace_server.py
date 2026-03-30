@@ -7,6 +7,9 @@ region management, task execution, video frame extraction, and media serving.
 
 from __future__ import annotations
 
+import copy
+import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 
@@ -252,6 +255,7 @@ def api_regions_create() -> FlaskResponse:
         _manifest.get("regions", {}),
         _manifest.get("tasks", []),
         _manifest.get("events", []),
+        stashes=_manifest.get("stashes", []),
     )
 
     return jsonify({"ok": True, "region": region})
@@ -266,10 +270,108 @@ def api_regions_delete(name: str) -> FlaskResponse:
 
     del regions[name]
     screenspace.save_screenspace_manifest(
-        regions, _manifest.get("tasks", []), _manifest.get("events", [])
+        regions,
+        _manifest.get("tasks", []),
+        _manifest.get("events", []),
+        stashes=_manifest.get("stashes", []),
     )
 
     return jsonify({"ok": True})
+
+
+# ---- Stashes CRUD ----
+
+
+@screenspace_bp.route("/api/stashes")
+def api_stashes_list() -> FlaskResponse:
+    """List all region stashes."""
+    return jsonify({"ok": True, "stashes": _manifest.get("stashes", [])})
+
+
+@screenspace_bp.route("/api/stashes", methods=["POST"])
+def api_stashes_create() -> FlaskResponse:
+    """Stash all current regions and clear the active set."""
+    regions = _manifest.get("regions", {})
+    if not regions:
+        return jsonify({"ok": False, "error": "No regions to stash"}), 400
+
+    stash = {
+        "id": "stash_" + uuid.uuid4().hex[:8],
+        "name": "Stashed Regions",
+        "createdAt": datetime.now(timezone.utc).isoformat(),
+        "regions": copy.deepcopy(regions),
+    }
+    _manifest.setdefault("stashes", []).append(stash)
+    _manifest["regions"] = {}
+    screenspace.save_screenspace_manifest(
+        _manifest.get("regions", {}),
+        _manifest.get("tasks", []),
+        _manifest.get("events", []),
+        stashes=_manifest.get("stashes", []),
+    )
+    return jsonify({"ok": True, "stash": stash})
+
+
+@screenspace_bp.route("/api/stashes/<stash_id>", methods=["PUT"])
+def api_stashes_update(stash_id: str) -> FlaskResponse:
+    """Update a stash (rename)."""
+    data = request.get_json(silent=True)
+    if not data:
+        return jsonify({"ok": False, "error": "JSON body required"}), 400
+
+    stashes = _manifest.get("stashes", [])
+    stash = next((s for s in stashes if s["id"] == stash_id), None)
+    if stash is None:
+        return jsonify({"ok": False, "error": "Stash not found"}), 404
+
+    name = data.get("name", "").strip()
+    if name:
+        stash["name"] = name
+
+    screenspace.save_screenspace_manifest(
+        _manifest.get("regions", {}),
+        _manifest.get("tasks", []),
+        _manifest.get("events", []),
+        stashes=stashes,
+    )
+    return jsonify({"ok": True, "stash": stash})
+
+
+@screenspace_bp.route("/api/stashes/<stash_id>", methods=["DELETE"])
+def api_stashes_delete(stash_id: str) -> FlaskResponse:
+    """Dismiss a region stash."""
+    stashes = _manifest.get("stashes", [])
+    idx = next((i for i, s in enumerate(stashes) if s["id"] == stash_id), None)
+    if idx is None:
+        return jsonify({"ok": False, "error": "Stash not found"}), 404
+
+    stashes.pop(idx)
+    screenspace.save_screenspace_manifest(
+        _manifest.get("regions", {}),
+        _manifest.get("tasks", []),
+        _manifest.get("events", []),
+        stashes=stashes,
+    )
+    return jsonify({"ok": True})
+
+
+@screenspace_bp.route("/api/stashes/<stash_id>/restore", methods=["POST"])
+def api_stashes_restore(stash_id: str) -> FlaskResponse:
+    """Restore a stash: replace active regions with stashed ones, remove stash."""
+    stashes = _manifest.get("stashes", [])
+    idx = next((i for i, s in enumerate(stashes) if s["id"] == stash_id), None)
+    if idx is None:
+        return jsonify({"ok": False, "error": "Stash not found"}), 404
+
+    stash = stashes.pop(idx)
+    _manifest["regions"] = copy.deepcopy(stash["regions"])
+    screenspace.save_screenspace_manifest(
+        _manifest["regions"],
+        _manifest.get("tasks", []),
+        _manifest.get("events", []),
+        stashes=stashes,
+    )
+    return jsonify({"ok": True, "regions": _manifest["regions"]})
 
 
 # ---- Tasks CRUD ----
@@ -321,6 +423,11 @@ def api_tasks_create() -> FlaskResponse:
         return jsonify({"ok": False, "error": "region is required"}), 400
 
     regions = _manifest.get("regions", {})
+    if region_name not in regions:
+        for stash in _manifest.get("stashes", []):
+            if region_name in stash.get("regions", {}):
+                regions = stash["regions"]
+                break
     if region_name not in regions:
         return jsonify({"ok": False, "error": f"Region '{region_name}' not found"}), 400
 
@@ -604,5 +711,8 @@ def _persist_manifest() -> None:
             _manifest.setdefault("events", []).extend(new_events)
         tasks = _worker.get_all_tasks()
         screenspace.save_screenspace_manifest(
-            _manifest.get("regions", {}), tasks, _manifest.get("events", [])
+            _manifest.get("regions", {}),
+            tasks,
+            _manifest.get("events", []),
+            stashes=_manifest.get("stashes", []),
         )

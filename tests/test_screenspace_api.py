@@ -26,7 +26,7 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setattr(
         screenspace,
         "save_screenspace_manifest",
-        lambda r, t, e=None: tmp_path / "m.json",
+        lambda r, t, e=None, stashes=None: tmp_path / "m.json",
     )
 
     with app.test_client() as c:

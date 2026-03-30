@@ -166,7 +166,7 @@ class TestMergeTimestampSpans:
 class TestManifest:
     def test_empty_manifest_structure(self):
         m = screenspace._empty_screenspace_manifest()
-        assert m == {"regions": {}, "tasks": [], "events": []}
+        assert m == {"regions": {}, "tasks": [], "events": [], "stashes": []}
 
     def test_roundtrip(self, tmp_path, monkeypatch):
         monkeypatch.setattr(config, "OUTPUT_DIR", str(tmp_path))
@@ -201,21 +201,21 @@ class TestManifest:
     def test_load_missing_file(self, tmp_path, monkeypatch):
         monkeypatch.setattr(config, "OUTPUT_DIR", str(tmp_path))
         result = screenspace.load_screenspace_manifest()
-        assert result == {"regions": {}, "tasks": [], "events": []}
+        assert result == {"regions": {}, "tasks": [], "events": [], "stashes": []}
 
     def test_load_malformed_json(self, tmp_path, monkeypatch):
         monkeypatch.setattr(config, "OUTPUT_DIR", str(tmp_path))
         manifest_path = tmp_path / config.SCREENSPACE_MANIFEST_FILENAME
         manifest_path.write_text("not json")
         result = screenspace.load_screenspace_manifest()
-        assert result == {"regions": {}, "tasks": [], "events": []}
+        assert result == {"regions": {}, "tasks": [], "events": [], "stashes": []}
 
     def test_load_non_dict(self, tmp_path, monkeypatch):
         monkeypatch.setattr(config, "OUTPUT_DIR", str(tmp_path))
         manifest_path = tmp_path / config.SCREENSPACE_MANIFEST_FILENAME
         manifest_path.write_text(json.dumps([1, 2, 3]))
         result = screenspace.load_screenspace_manifest()
-        assert result == {"regions": {}, "tasks": [], "events": []}
+        assert result == {"regions": {}, "tasks": [], "events": [], "stashes": []}
 
 
 # ---------------------------------------------------------------------------
