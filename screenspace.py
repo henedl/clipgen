@@ -1246,7 +1246,7 @@ class ScreenspaceWorker:
 
 
 def _empty_screenspace_manifest() -> Dict[str, Any]:
-    return {"regions": {}, "tasks": [], "events": []}
+    return {"regions": {}, "tasks": [], "events": [], "stashes": []}
 
 
 def load_screenspace_manifest() -> Dict[str, Any]:
@@ -1269,6 +1269,7 @@ def load_screenspace_manifest() -> Dict[str, Any]:
         "regions": data.get("regions", {}),
         "tasks": data.get("tasks", []),
         "events": data.get("events", []),
+        "stashes": data.get("stashes", []),
     }
 
 
@@ -1276,6 +1277,7 @@ def save_screenspace_manifest(
     regions: Dict[str, Dict[str, Any]],
     tasks: List[Dict[str, Any]],
     events: Optional[List[Dict[str, Any]]] = None,
+    stashes: Optional[List[Dict[str, Any]]] = None,
 ) -> Optional[Path]:
     """Write the screenspace manifest to disk.
 
@@ -1300,6 +1302,7 @@ def save_screenspace_manifest(
                     "regions": regions,
                     "tasks": clean_tasks,
                     "events": events or [],
+                    "stashes": stashes or [],
                 },
                 ensure_ascii=False,
                 indent=2,

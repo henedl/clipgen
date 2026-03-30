@@ -62,6 +62,8 @@
     showExcluded: true,
     showRegionLabels: true,
     showRegionOverlays: true,
+    stashes: [],
+    previewRegions: null,
   };
 
   var _cachedThemeColors = null;
@@ -351,18 +353,29 @@
     for (var i = 0; i < btns.length; i++) btns[i].classList.remove("open");
   }
 
+  function allAvailableRegionNames() {
+    var names = Object.keys(state.regions);
+    state.stashes.forEach(function (stash) {
+      Object.keys(stash.regions).forEach(function (n) {
+        if (names.indexOf(n) < 0) names.push(n);
+      });
+    });
+    return names;
+  }
+
   function renderRunRegionPicker() {
     var wrap = qs("#runRegionPicker");
     if (!wrap) return;
     wrap.innerHTML = "";
     var names = Object.keys(state.regions);
-    // Remove any runRegions that no longer exist
-    state.runRegions = state.runRegions.filter(function (r) { return names.indexOf(r) >= 0; });
+    var allNames = allAvailableRegionNames();
+    // Remove any runRegions that no longer exist in active or stashes
+    state.runRegions = state.runRegions.filter(function (r) { return allNames.indexOf(r) >= 0; });
     // Auto-select the active region when no explicit selection has been made
     if (state.runRegions.length === 0 && state.activeRegion && names.indexOf(state.activeRegion) >= 0) {
       state.runRegions = [state.activeRegion];
     }
-    if (names.length === 0) return;
+    if (allNames.length === 0) return;
 
     var btn = el("button", "run-picker-btn");
     btn.type = "button";
@@ -370,43 +383,94 @@
 
     var panel = el("div", "run-picker-panel hidden");
 
-    var toggleAll = el("span", "run-picker-toggle-all");
-    toggleAll.textContent = state.runRegions.length === names.length ? "Deselect all" : "Select all";
-    toggleAll.addEventListener("click", function () {
-      var allSelected = state.runRegions.length === names.length;
-      state.runRegions = allSelected ? [] : names.slice();
-      var cbs = panel.querySelectorAll("input[type=checkbox]");
-      for (var i = 0; i < cbs.length; i++) cbs[i].checked = !allSelected;
-      toggleAll.textContent = allSelected ? "Select all" : "Deselect all";
-      updateRegionPickerBtnText(btn);
-      updateRunButton();
-    });
-    panel.appendChild(toggleAll);
-
-    names.forEach(function (name, idx) {
-      var color = regionColorForIndex(idx);
-      var lbl = document.createElement("label");
-      var cb = document.createElement("input");
-      cb.type = "checkbox";
-      cb.value = name;
-      cb.checked = state.runRegions.indexOf(name) >= 0;
-      cb.addEventListener("change", function () {
-        if (cb.checked) {
-          if (state.runRegions.indexOf(name) < 0) state.runRegions.push(name);
-        } else {
-          state.runRegions = state.runRegions.filter(function (r) { return r !== name; });
-        }
-        toggleAll.textContent = state.runRegions.length === names.length ? "Deselect all" : "Select all";
+    if (names.length > 0) {
+      var toggleAll = el("span", "run-picker-toggle-all");
+      toggleAll.textContent = state.runRegions.length === names.length ? "Deselect all" : "Select all";
+      toggleAll.addEventListener("click", function () {
+        var allSelected = state.runRegions.length === names.length;
+        state.runRegions = allSelected ? [] : names.slice();
+        var cbs = panel.querySelectorAll(".run-picker-active-region input[type=checkbox]");
+        for (var i = 0; i < cbs.length; i++) cbs[i].checked = !allSelected;
+        toggleAll.textContent = allSelected ? "Select all" : "Deselect all";
         updateRegionPickerBtnText(btn);
         updateRunButton();
       });
-      lbl.appendChild(cb);
-      var dot = el("span", "region-chip-dot");
-      dot.style.background = color;
-      lbl.appendChild(dot);
-      var nameSpan = el("span", "run-picker-label-text", name);
-      lbl.appendChild(nameSpan);
-      panel.appendChild(lbl);
+      panel.appendChild(toggleAll);
+
+      names.forEach(function (name, idx) {
+        var color = regionColorForIndex(idx);
+        var lbl = document.createElement("label");
+        lbl.className = "run-picker-active-region";
+        var cb = document.createElement("input");
+        cb.type = "checkbox";
+        cb.value = name;
+        cb.checked = state.runRegions.indexOf(name) >= 0;
+        cb.addEventListener("change", function () {
+          if (cb.checked) {
+            if (state.runRegions.indexOf(name) < 0) state.runRegions.push(name);
+          } else {
+            state.runRegions = state.runRegions.filter(function (r) { return r !== name; });
+          }
+          toggleAll.textContent = state.runRegions.length === names.length ? "Deselect all" : "Select all";
+          updateRegionPickerBtnText(btn);
+          updateRunButton();
+        });
+        lbl.appendChild(cb);
+        var dot = el("span", "region-chip-dot");
+        dot.style.background = color;
+        lbl.appendChild(dot);
+        var nameSpan = el("span", "run-picker-label-text", name);
+        lbl.appendChild(nameSpan);
+        panel.appendChild(lbl);
+      });
+    }
+
+    // Stash folders
+    state.stashes.forEach(function (stash) {
+      var stashNames = Object.keys(stash.regions);
+      if (stashNames.length === 0) return;
+
+      var header = el("div", "stash-folder-header");
+      var chevron = el("span", "chevron", "\u25B8");
+      header.appendChild(chevron);
+      header.appendChild(document.createTextNode(stash.name + " (" + stashNames.length + ")"));
+
+      var content = el("div", "stash-folder-content");
+
+      header.addEventListener("click", function () {
+        var expanded = header.classList.toggle("expanded");
+        content.classList.toggle("expanded", expanded);
+      });
+
+      panel.appendChild(header);
+
+      stashNames.forEach(function (name, idx) {
+        var color = regionColorForIndex(idx);
+        var lbl = document.createElement("label");
+        lbl.className = "stash-folder-item";
+        var cb = document.createElement("input");
+        cb.type = "checkbox";
+        cb.value = name;
+        cb.checked = state.runRegions.indexOf(name) >= 0;
+        cb.addEventListener("change", function () {
+          if (cb.checked) {
+            if (state.runRegions.indexOf(name) < 0) state.runRegions.push(name);
+          } else {
+            state.runRegions = state.runRegions.filter(function (r) { return r !== name; });
+          }
+          updateRegionPickerBtnText(btn);
+          updateRunButton();
+        });
+        lbl.appendChild(cb);
+        var dot = el("span", "region-chip-dot");
+        dot.style.background = color;
+        lbl.appendChild(dot);
+        var nameSpan = el("span", "run-picker-label-text", name);
+        lbl.appendChild(nameSpan);
+        content.appendChild(lbl);
+      });
+
+      panel.appendChild(content);
     });
 
     btn.addEventListener("click", function (e) {
@@ -824,6 +888,11 @@
       renderOverlay();
     });
 
+    // Stash all regions
+    var stashBtn = qs("#stashRegionsBtn");
+    stashBtn.appendChild(svgArchiveIcon());
+    stashBtn.addEventListener("click", stashRegions);
+
     // Region name modal
     qs("#regionNameCancel").addEventListener("click", hideRegionNameModal);
     qs("#regionNameSave").addEventListener("click", function () {
@@ -896,6 +965,7 @@
     var toggleRegionsBtn = qs("#toggleRegionsBtn");
     toggleLabelsBtn.classList.toggle("hidden", !hasRegions);
     toggleRegionsBtn.classList.toggle("hidden", !hasRegions);
+    qs("#stashRegionsBtn").classList.toggle("hidden", !hasRegions);
     toggleLabelsBtn.classList.toggle("active", state.showRegionLabels);
     toggleRegionsBtn.classList.toggle("active", state.showRegionOverlays);
 
@@ -944,6 +1014,153 @@
     wrapper.classList.toggle("has-overflow", chips.scrollWidth > chips.clientWidth && chips.scrollLeft + chips.clientWidth < chips.scrollWidth - 1);
   }
 
+  // ---- Region stashing ----
+
+  function stashRegions() {
+    apiPost("api/stashes", {}).then(function (data) {
+      if (!data.ok) return;
+      state.stashes.push(data.stash);
+      state.regions = {};
+      state.activeRegion = null;
+      state.pendingRegion = null;
+      renderRegionChips();
+      renderOverlay();
+      updateRegionButtons();
+      updateRunButton();
+      renderStashCards();
+      showToast("Regions stashed");
+    });
+  }
+
+  function dismissStash(stashId) {
+    apiDelete("api/stashes/" + stashId).then(function (data) {
+      if (!data.ok) return;
+      state.stashes = state.stashes.filter(function (s) { return s.id !== stashId; });
+      // Remove any run-selected regions that belonged to this stash
+      renderRunRegionPicker();
+      renderStashCards();
+      showToast("Stash dismissed");
+    });
+  }
+
+  function restoreStash(stashId) {
+    apiPost("api/stashes/" + stashId + "/restore", {}).then(function (data) {
+      if (!data.ok) return;
+      state.regions = data.regions || {};
+      state.activeRegion = null;
+      state.pendingRegion = null;
+      state.stashes = state.stashes.filter(function (s) { return s.id !== stashId; });
+      renderRegionChips();
+      renderOverlay();
+      updateRegionButtons();
+      updateRunButton();
+      renderStashCards();
+      showToast("Regions restored");
+    });
+  }
+
+  function renameStash(stashId, newName) {
+    apiPut("api/stashes/" + stashId, { name: newName }).then(function (data) {
+      if (!data.ok) return;
+      for (var i = 0; i < state.stashes.length; i++) {
+        if (state.stashes[i].id === stashId) {
+          state.stashes[i].name = data.stash.name;
+          break;
+        }
+      }
+      renderRunRegionPicker();
+    });
+  }
+
+  function renderStashCards() {
+    var existing = qs("#stashArea");
+    if (state.stashes.length === 0) {
+      if (existing) existing.remove();
+      return;
+    }
+    var area = existing || el("div");
+    area.id = "stashArea";
+    area.innerHTML = "";
+
+    var MAX_DOTS = 5;
+
+    state.stashes.forEach(function (stash) {
+      var card = el("div", "stash-card");
+      var regionNames = Object.keys(stash.regions);
+
+      // Editable name
+      var nameEl = el("span", "stash-card-name", stash.name);
+      nameEl.setAttribute("contenteditable", "true");
+      nameEl.setAttribute("spellcheck", "false");
+      nameEl.addEventListener("blur", function () {
+        var trimmed = nameEl.textContent.trim();
+        if (trimmed && trimmed !== stash.name) {
+          renameStash(stash.id, trimmed);
+        } else {
+          nameEl.textContent = stash.name;
+        }
+      });
+      nameEl.addEventListener("keydown", function (e) {
+        if (e.key === "Enter") { e.preventDefault(); nameEl.blur(); }
+      });
+      card.appendChild(nameEl);
+
+      // Separator dot and count
+      card.appendChild(el("span", "stash-card-sep", "\u00b7"));
+      card.appendChild(el("span", "stash-card-count", regionNames.length + " region" + (regionNames.length !== 1 ? "s" : "")));
+
+      // Colored dots (max 5, with fade-out on 6th)
+      var dots = el("span", "stash-card-dots");
+      var showCount = Math.min(regionNames.length, MAX_DOTS);
+      for (var i = 0; i < showCount; i++) {
+        var dot = el("span", "region-chip-dot");
+        dot.style.background = regionColorForIndex(i);
+        dot.title = regionNames[i];
+        dots.appendChild(dot);
+      }
+      if (regionNames.length > MAX_DOTS) {
+        var fadeDot = el("span", "region-chip-dot stash-dot-fade");
+        fadeDot.style.background = regionColorForIndex(MAX_DOTS);
+        dots.appendChild(fadeDot);
+      }
+      card.appendChild(dots);
+
+      // Action buttons
+      var actions = el("span", "stash-card-actions");
+
+      var restoreBtn = el("button", "stash-card-action-btn");
+      restoreBtn.title = "Restore regions";
+      restoreBtn.appendChild(svgRestoreIcon());
+      restoreBtn.addEventListener("click", function () { restoreStash(stash.id); });
+      actions.appendChild(restoreBtn);
+
+      var dismissBtn = el("button", "stash-card-action-btn");
+      dismissBtn.title = "Dismiss stash";
+      dismissBtn.appendChild(svgDismissIcon());
+      dismissBtn.addEventListener("click", function () { dismissStash(stash.id); });
+      actions.appendChild(dismissBtn);
+
+      card.appendChild(actions);
+
+      // Hover preview: show stashed regions on the overlay
+      card.addEventListener("mouseenter", function () {
+        state.previewRegions = stash.regions;
+        renderOverlay();
+      });
+      card.addEventListener("mouseleave", function () {
+        state.previewRegions = null;
+        renderOverlay();
+      });
+
+      area.appendChild(card);
+    });
+
+    if (!existing) {
+      var viewerSection = qs("#viewerSection");
+      viewerSection.parentNode.insertBefore(area, viewerSection.nextSibling);
+    }
+  }
+
   function renderOverlay() {
     var canvas = qs("#overlayCanvas");
     if (!canvas.width || !canvas.height) return;
@@ -955,11 +1172,12 @@
     var displayW = canvas.getBoundingClientRect().width || canvas.width;
     var s = canvas.width / displayW;
 
-    // Draw saved regions
+    // Draw saved regions (or preview regions when hovering a stash)
+    var drawRegions = state.previewRegions || state.regions;
     if (state.showRegionOverlays) {
-      var names = Object.keys(state.regions);
+      var names = Object.keys(drawRegions);
       names.forEach(function (name, i) {
-        var r = regionToPixels(state.regions[name]);
+        var r = regionToPixels(drawRegions[name]);
         var color = regionColorForIndex(i);
         var isActive = (name === state.activeRegion);
         var isHovered = state.hoveredRegion && state.hoveredRegion.name === name;
@@ -2210,6 +2428,40 @@
     return svg;
   }
 
+  function svgArchiveIcon() {
+    var svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    svg.setAttribute("width", "14");
+    svg.setAttribute("height", "14");
+    svg.setAttribute("viewBox", "0 0 16 16");
+    svg.setAttribute("fill", "currentColor");
+    // archive-box-arrow-down.svg from assets/icons
+    var p1 = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    p1.setAttribute("d", "M2 3C2 2.44772 2.44772 2 3 2H13C13.5523 2 14 2.44772 14 3V4C14 4.55228 13.5523 5 13 5H3C2.44772 5 2 4.55228 2 4V3Z");
+    svg.appendChild(p1);
+    var p2 = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    p2.setAttribute("fill-rule", "evenodd");
+    p2.setAttribute("clip-rule", "evenodd");
+    p2.setAttribute("d", "M13 6H3V12C3 13.1046 3.89543 14 5 14H11C12.1046 14 13 13.1046 13 12V6ZM8.75 7.75C8.75 7.33579 8.41421 7 8 7C7.58579 7 7.25 7.33579 7.25 7.75V10.4393L6.03033 9.21967C5.73744 8.92678 5.26256 8.92678 4.96967 9.21967C4.67678 9.51256 4.67678 9.98744 4.96967 10.2803L7.46967 12.7803C7.76256 13.0732 8.23744 13.0732 8.53033 12.7803L11.0303 10.2803C11.3232 9.98744 11.3232 9.51256 11.0303 9.21967C10.7374 8.92678 10.2626 8.92678 9.96967 9.21967L8.75 10.4393V7.75Z");
+    svg.appendChild(p2);
+    return svg;
+  }
+
+  function svgRestoreIcon() {
+    var svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    svg.setAttribute("width", "14");
+    svg.setAttribute("height", "14");
+    svg.setAttribute("viewBox", "0 0 16 16");
+    svg.setAttribute("fill", "currentColor");
+    // arrow-up-tray.svg from assets/icons
+    var p1 = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    p1.setAttribute("d", "M7.25 10.25C7.25 10.6642 7.58579 11 8 11C8.41421 11 8.75 10.6642 8.75 10.25L8.75 4.56066L10.9697 6.78033C11.2626 7.07322 11.7374 7.07322 12.0303 6.78033C12.3232 6.48744 12.3232 6.01256 12.0303 5.71967L8.53033 2.21967C8.23744 1.92678 7.76256 1.92678 7.46967 2.21967L3.96967 5.71967C3.67678 6.01256 3.67678 6.48744 3.96967 6.78033C4.26256 7.07322 4.73744 7.07322 5.03033 6.78033L7.25 4.56066L7.25 10.25Z");
+    svg.appendChild(p1);
+    var p2 = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    p2.setAttribute("d", "M3.5 9.75C3.5 9.33579 3.16421 9 2.75 9C2.33579 9 2 9.33579 2 9.75V11.25C2 12.7688 3.23122 14 4.75 14H11.25C12.7688 14 14 12.7688 14 11.25V9.75C14 9.33579 13.6642 9 13.25 9C12.8358 9 12.5 9.33579 12.5 9.75V11.25C12.5 11.9404 11.9404 12.5 11.25 12.5H4.75C4.05964 12.5 3.5 11.9404 3.5 11.25V9.75Z");
+    svg.appendChild(p2);
+    return svg;
+  }
+
   function sortTasks() {
     // completed/failed at top (oldest first), then running, then queued (by priority), cancelled last
     var statusOrder = { completed: 0, failed: 1, running: 2, paused: 3, queued: 4, cancelled: 5 };
@@ -3202,6 +3454,16 @@
           renderRegionChips();
           updateRegionButtons();
           renderOverlay();
+        }
+      })
+      .catch(function () {});
+
+    apiGet("api/stashes")
+      .then(function (data) {
+        if (data.ok) {
+          state.stashes = data.stashes || [];
+          renderStashCards();
+          renderRunRegionPicker();
         }
       })
       .catch(function () {});
