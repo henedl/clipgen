@@ -60,6 +60,8 @@
     runRegions: [],
     taskEvents: {},
     showExcluded: true,
+    showRegionLabels: true,
+    showRegionOverlays: true,
   };
 
   var _cachedThemeColors = null;
@@ -568,6 +570,7 @@
   }
 
   function findHitRegion(px, py, s, ctx) {
+    if (!state.showRegionOverlays) return null;
     var names = Object.keys(state.regions);
     var handleSize = Math.round(14 * s);
     for (var i = names.length - 1; i >= 0; i--) {
@@ -576,9 +579,11 @@
       if (px >= r.x + r.w - handleSize && px <= r.x + r.w && py >= r.y + r.h - handleSize && py <= r.y + r.h) {
         return { name: name, handle: "resize" };
       }
-      var lr = computeLabelRect(r, name, ctx, s);
-      if (px >= lr.x && px <= lr.x + lr.w && py >= lr.y && py <= lr.y + lr.h) {
-        return { name: name, handle: "move" };
+      if (state.showRegionLabels) {
+        var lr = computeLabelRect(r, name, ctx, s);
+        if (px >= lr.x && px <= lr.x + lr.w && py >= lr.y && py <= lr.y + lr.h) {
+          return { name: name, handle: "move" };
+        }
       }
     }
     return null;
@@ -801,6 +806,24 @@
         .catch(function () { showToast("Failed to delete region"); });
     });
 
+    // Toggle region labels
+    var toggleLabelsBtn = qs("#toggleLabelsBtn");
+    toggleLabelsBtn.appendChild(svgTagIcon());
+    toggleLabelsBtn.addEventListener("click", function () {
+      state.showRegionLabels = !state.showRegionLabels;
+      updateRegionButtons();
+      renderOverlay();
+    });
+
+    // Toggle region visibility
+    var toggleRegionsBtn = qs("#toggleRegionsBtn");
+    toggleRegionsBtn.appendChild(svgEyeIcon());
+    toggleRegionsBtn.addEventListener("click", function () {
+      state.showRegionOverlays = !state.showRegionOverlays;
+      updateRegionButtons();
+      renderOverlay();
+    });
+
     // Region name modal
     qs("#regionNameCancel").addEventListener("click", hideRegionNameModal);
     qs("#regionNameSave").addEventListener("click", function () {
@@ -836,6 +859,16 @@
       if (e.key === "Enter") qs("#regionNameSave").click();
       if (e.key === "Escape") hideRegionNameModal();
     });
+
+    // Convert vertical scroll to horizontal on region chips
+    var chipsEl = qs("#regionChips");
+    chipsEl.addEventListener("wheel", function (e) {
+      if (chipsEl.scrollWidth > chipsEl.clientWidth) {
+        e.preventDefault();
+        chipsEl.scrollLeft += e.deltaY;
+      }
+    }, { passive: false });
+    chipsEl.addEventListener("scroll", updateRegionChipsOverflow);
   }
 
   function showRegionNameModal() {
@@ -854,9 +887,20 @@
   function updateRegionButtons() {
     var hasPending = !!state.pendingRegion;
     var hasActive = !!state.activeRegion;
+    var hasRegions = Object.keys(state.regions).length > 0;
     qs("#saveRegionBtn").classList.toggle("hidden", !hasPending);
     qs("#clearSelectionBtn").classList.toggle("hidden", !hasPending && !hasActive);
     qs("#deleteRegionBtn").classList.toggle("hidden", !hasActive);
+
+    var toggleLabelsBtn = qs("#toggleLabelsBtn");
+    var toggleRegionsBtn = qs("#toggleRegionsBtn");
+    toggleLabelsBtn.classList.toggle("hidden", !hasRegions);
+    toggleRegionsBtn.classList.toggle("hidden", !hasRegions);
+    toggleLabelsBtn.classList.toggle("active", state.showRegionLabels);
+    toggleRegionsBtn.classList.toggle("active", state.showRegionOverlays);
+
+    toggleRegionsBtn.innerHTML = "";
+    toggleRegionsBtn.appendChild(state.showRegionOverlays ? svgEyeIcon() : svgEyeSlashIcon());
   }
 
   function renderRegionChips() {
@@ -891,6 +935,13 @@
       container.appendChild(chip);
     });
     renderRunRegionPicker();
+    updateRegionChipsOverflow();
+  }
+
+  function updateRegionChipsOverflow() {
+    var chips = qs("#regionChips");
+    var wrapper = qs("#regionChipsScroll");
+    wrapper.classList.toggle("has-overflow", chips.scrollWidth > chips.clientWidth && chips.scrollLeft + chips.clientWidth < chips.scrollWidth - 1);
   }
 
   function renderOverlay() {
@@ -905,58 +956,62 @@
     var s = canvas.width / displayW;
 
     // Draw saved regions
-    var names = Object.keys(state.regions);
-    names.forEach(function (name, i) {
-      var r = regionToPixels(state.regions[name]);
-      var color = regionColorForIndex(i);
-      var isActive = (name === state.activeRegion);
-      var isHovered = state.hoveredRegion && state.hoveredRegion.name === name;
-      var showHandles = isActive || isHovered;
-      ctx.strokeStyle = color;
-      ctx.lineWidth = (isActive ? 2 : 1) * s;
-      ctx.setLineDash(isActive ? [] : [6 * s, 3 * s]);
-      ctx.strokeRect(r.x, r.y, r.w, r.h);
-      if (isActive) {
-        ctx.fillStyle = hexToRgba(color, 0.12);
-        ctx.fillRect(r.x, r.y, r.w, r.h);
-      }
-      ctx.setLineDash([]);
-
-      // Label with grip indicator
-      var lr = computeLabelRect(r, name, ctx, s);
-      ctx.fillStyle = hexToRgba(color, 0.85);
-      ctx.fillRect(lr.x, lr.y, lr.w, lr.h);
-      if (showHandles) {
-        ctx.fillStyle = "rgba(255,255,255,0.5)";
-        var dotR = Math.round(1 * s);
-        var gripColGap = Math.round(3 * s);
-        var gripRowGap = Math.round(3 * s);
-        var gx = lr.x + lr.gripPadL + dotR + Math.round(1 * s);
-        var gy = lr.y + Math.round(lr.h / 2) - gripRowGap;
-        for (var row = 0; row < 3; row++) {
-          for (var col = 0; col < 2; col++) {
-            ctx.beginPath();
-            ctx.arc(gx + col * gripColGap, gy + row * gripRowGap, dotR, 0, Math.PI * 2);
-            ctx.fill();
-          }
+    if (state.showRegionOverlays) {
+      var names = Object.keys(state.regions);
+      names.forEach(function (name, i) {
+        var r = regionToPixels(state.regions[name]);
+        var color = regionColorForIndex(i);
+        var isActive = (name === state.activeRegion);
+        var isHovered = state.hoveredRegion && state.hoveredRegion.name === name;
+        var showHandles = isActive || isHovered;
+        ctx.strokeStyle = color;
+        ctx.lineWidth = (isActive ? 2 : 1) * s;
+        ctx.setLineDash(isActive ? [] : [6 * s, 3 * s]);
+        ctx.strokeRect(r.x, r.y, r.w, r.h);
+        if (isActive) {
+          ctx.fillStyle = hexToRgba(color, 0.12);
+          ctx.fillRect(r.x, r.y, r.w, r.h);
         }
-      }
-      ctx.fillStyle = "#fff";
-      ctx.fillText(name, lr.x + lr.gripPadL + lr.gripW + lr.pad, r.y - Math.round(4 * s));
+        ctx.setLineDash([]);
 
-      // Resize handle (bottom-right corner, 3-dot triangle)
-      if (showHandles) {
-        var dotRr = Math.round(1.5 * s);
-        var handlePad = Math.round(5 * s);
-        var dotSpacing = Math.round(4 * s);
-        var bx = r.x + r.w - handlePad;
-        var by = r.y + r.h - handlePad;
-        ctx.fillStyle = hexToRgba(color, 0.9);
-        ctx.beginPath(); ctx.arc(bx, by, dotRr, 0, Math.PI * 2); ctx.fill();
-        ctx.beginPath(); ctx.arc(bx - dotSpacing, by, dotRr, 0, Math.PI * 2); ctx.fill();
-        ctx.beginPath(); ctx.arc(bx, by - dotSpacing, dotRr, 0, Math.PI * 2); ctx.fill();
-      }
-    });
+        // Label with grip indicator
+        if (state.showRegionLabels) {
+          var lr = computeLabelRect(r, name, ctx, s);
+          ctx.fillStyle = hexToRgba(color, 0.85);
+          ctx.fillRect(lr.x, lr.y, lr.w, lr.h);
+          if (showHandles) {
+            ctx.fillStyle = "rgba(255,255,255,0.5)";
+            var dotR = Math.round(1 * s);
+            var gripColGap = Math.round(3 * s);
+            var gripRowGap = Math.round(3 * s);
+            var gx = lr.x + lr.gripPadL + dotR + Math.round(1 * s);
+            var gy = lr.y + Math.round(lr.h / 2) - gripRowGap;
+            for (var row = 0; row < 3; row++) {
+              for (var col = 0; col < 2; col++) {
+                ctx.beginPath();
+                ctx.arc(gx + col * gripColGap, gy + row * gripRowGap, dotR, 0, Math.PI * 2);
+                ctx.fill();
+              }
+            }
+          }
+          ctx.fillStyle = "#fff";
+          ctx.fillText(name, lr.x + lr.gripPadL + lr.gripW + lr.pad, r.y - Math.round(4 * s));
+        }
+
+        // Resize handle (bottom-right corner, 3-dot triangle)
+        if (showHandles) {
+          var dotRr = Math.round(1.5 * s);
+          var handlePad = Math.round(5 * s);
+          var dotSpacing = Math.round(4 * s);
+          var bx = r.x + r.w - handlePad;
+          var by = r.y + r.h - handlePad;
+          ctx.fillStyle = hexToRgba(color, 0.9);
+          ctx.beginPath(); ctx.arc(bx, by, dotRr, 0, Math.PI * 2); ctx.fill();
+          ctx.beginPath(); ctx.arc(bx - dotSpacing, by, dotRr, 0, Math.PI * 2); ctx.fill();
+          ctx.beginPath(); ctx.arc(bx, by - dotSpacing, dotRr, 0, Math.PI * 2); ctx.fill();
+        }
+      });
+    }
 
     // Drawing in progress
     if (state.drawingRegion) {
@@ -2014,6 +2069,57 @@
     var p2 = document.createElementNS("http://www.w3.org/2000/svg", "path");
     p2.setAttribute("d", "M4.75 3.5C4.05964 3.5 3.5 4.05964 3.5 4.75V11.25C3.5 11.9404 4.05964 12.5 4.75 12.5H11.25C11.9404 12.5 12.5 11.9404 12.5 11.25V9C12.5 8.58579 12.8358 8.25 13.25 8.25C13.6642 8.25 14 8.58579 14 9V11.25C14 12.7688 12.7688 14 11.25 14H4.75C3.23122 14 2 12.7688 2 11.25V4.75C2 3.23122 3.23122 2 4.75 2H7C7.41421 2 7.75 2.33579 7.75 2.75C7.75 3.16421 7.41421 3.5 7 3.5H4.75Z");
     svg.appendChild(p2);
+    return svg;
+  }
+
+  function svgEyeIcon() {
+    var svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    svg.setAttribute("width", "14");
+    svg.setAttribute("height", "14");
+    svg.setAttribute("viewBox", "0 0 16 16");
+    svg.setAttribute("fill", "currentColor");
+    // eye.svg from assets/icons
+    var p1 = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    p1.setAttribute("d", "M8 9.5C8.82843 9.5 9.5 8.82843 9.5 8C9.5 7.17157 8.82843 6.5 8 6.5C7.17157 6.5 6.5 7.17157 6.5 8C6.5 8.82843 7.17157 9.5 8 9.5Z");
+    svg.appendChild(p1);
+    var p2 = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    p2.setAttribute("fill-rule", "evenodd");
+    p2.setAttribute("clip-rule", "evenodd");
+    p2.setAttribute("d", "M1.3794 8.28049C1.31616 8.09687 1.31625 7.89727 1.37965 7.71371C2.32719 4.97038 4.93238 3 7.99777 3C11.0653 3 13.672 4.97316 14.6179 7.71951C14.6811 7.90313 14.681 8.10274 14.6176 8.2863C13.6701 11.0296 11.0649 13 7.99952 13C4.93197 13 2.32527 11.0268 1.3794 8.28049ZM11 8C11 9.65685 9.65685 11 8 11C6.34315 11 5 9.65685 5 8C5 6.34315 6.34315 5 8 5C9.65685 5 11 6.34315 11 8Z");
+    svg.appendChild(p2);
+    return svg;
+  }
+
+  function svgEyeSlashIcon() {
+    var svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    svg.setAttribute("width", "14");
+    svg.setAttribute("height", "14");
+    svg.setAttribute("viewBox", "0 0 16 16");
+    svg.setAttribute("fill", "currentColor");
+    // eye-slash.svg from assets/icons
+    var p1 = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    p1.setAttribute("fill-rule", "evenodd");
+    p1.setAttribute("clip-rule", "evenodd");
+    p1.setAttribute("d", "M3.28033 2.21967C2.98744 1.92678 2.51256 1.92678 2.21967 2.21967C1.92678 2.51256 1.92678 2.98744 2.21967 3.28033L12.7197 13.7803C13.0126 14.0732 13.4874 14.0732 13.7803 13.7803C14.0732 13.4874 14.0732 13.0126 13.7803 12.7197L12.4577 11.397C13.438 10.5863 14.1937 9.51366 14.6176 8.2863C14.681 8.10274 14.6811 7.90313 14.6179 7.71951C13.672 4.97316 11.0653 3 7.99777 3C6.85414 3 5.77457 3.27425 4.82123 3.76057L3.28033 2.21967ZM6.47602 5.41536L7.61147 6.55081C7.73539 6.51767 7.86563 6.5 8 6.5C8.82843 6.5 9.5 7.17157 9.5 8C9.5 8.13437 9.48233 8.26461 9.44919 8.38853L10.5846 9.52398C10.8486 9.07734 11 8.55636 11 8C11 6.34315 9.65685 5 8 5C7.44364 5 6.92266 5.15145 6.47602 5.41536Z");
+    svg.appendChild(p1);
+    var p2 = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    p2.setAttribute("d", "M7.81206 10.9942L9.62754 12.8097C9.10513 12.9341 8.56002 13 7.99952 13C4.93197 13 2.32527 11.0268 1.3794 8.28049C1.31616 8.09687 1.31625 7.89727 1.37965 7.71371C1.63675 6.96935 2.01588 6.28191 2.49314 5.67529L5.00579 8.18794C5.09895 9.69509 6.30491 10.901 7.81206 10.9942Z");
+    svg.appendChild(p2);
+    return svg;
+  }
+
+  function svgTagIcon() {
+    var svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    svg.setAttribute("width", "14");
+    svg.setAttribute("height", "14");
+    svg.setAttribute("viewBox", "0 0 16 16");
+    svg.setAttribute("fill", "currentColor");
+    // tag.svg from assets/icons
+    var path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    path.setAttribute("fill-rule", "evenodd");
+    path.setAttribute("clip-rule", "evenodd");
+    path.setAttribute("d", "M4.5 2C3.11929 2 2 3.11929 2 4.5V7.37868C2 8.04172 2.26339 8.67761 2.73223 9.14645L7.23223 13.6464C8.20854 14.6228 9.79145 14.6228 10.7678 13.6464L13.6464 10.7678C14.6228 9.79146 14.6228 8.20855 13.6464 7.23223L9.14645 2.73223C8.67761 2.26339 8.04172 2 7.37868 2H4.5ZM5 6C5.55228 6 6 5.55228 6 5C6 4.44772 5.55228 4 5 4C4.44772 4 4 4.44772 4 5C4 5.55228 4.44772 6 5 6Z");
+    svg.appendChild(path);
     return svg;
   }
 
@@ -3094,6 +3200,7 @@
         if (data.ok) {
           state.regions = data.regions || {};
           renderRegionChips();
+          updateRegionButtons();
           renderOverlay();
         }
       })

@@ -36,10 +36,14 @@
         <div id="previewResizeHandle" class="preview-resize-handle"></div>
       </div>
       <div id="regionBar">
-        <div id="regionChips"></div>
-        <button id="saveRegionBtn" class="btn btn-small hidden">Save Region</button>
-        <button id="clearSelectionBtn" class="btn btn-small hidden">Clear</button>
-        <button id="deleteRegionBtn" class="btn btn-small hidden">Delete</button>
+        <div id="regionChipsScroll"><div id="regionChips"></div></div>
+        <div id="regionActions">
+          <button id="saveRegionBtn" class="btn btn-small hidden">Save Region</button>
+          <button id="clearSelectionBtn" class="btn btn-small hidden">Clear</button>
+          <button id="deleteRegionBtn" class="btn btn-small hidden">Delete</button>
+          <button id="toggleLabelsBtn" class="region-toggle-btn hidden" title="Toggle region names"></button>
+          <button id="toggleRegionsBtn" class="region-toggle-btn hidden" title="Toggle region visibility"></button>
+        </div>
       </div>
     </section>
 
