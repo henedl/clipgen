@@ -343,7 +343,11 @@
     var text = n === 0 ? "No participants"
       : n === 1 ? state.runParticipants[0]
       : n + " participants";
-    btn.innerHTML = '<span class="run-picker-btn-text">' + text + '</span><span class="chevron">&#x25BE;</span>';
+    btn.innerHTML = "";
+    btn.appendChild(el("span", "run-picker-btn-text", text));
+    var chevron = el("span", "chevron");
+    chevron.appendChild(svgChevronDownIcon());
+    btn.appendChild(chevron);
   }
 
   function closeRunPicker() {
@@ -489,7 +493,11 @@
     var text = n === 0 ? "No region"
       : n === 1 ? state.runRegions[0]
       : n + " regions";
-    btn.innerHTML = '<span class="run-picker-btn-text">' + text + '</span><span class="chevron">&#x25BE;</span>';
+    btn.innerHTML = "";
+    btn.appendChild(el("span", "run-picker-btn-text", text));
+    var chevron = el("span", "chevron");
+    chevron.appendChild(svgChevronDownIcon());
+    btn.appendChild(chevron);
   }
 
   function selectParticipant(pid, initialTimestamp) {
@@ -573,6 +581,8 @@
   }
 
   function initFrameControls() {
+    qs("#framePrev").appendChild(svgChevronLeftIcon());
+    qs("#frameNext").appendChild(svgChevronRightIcon());
     var input = qs("#timestampInput");
 
     input.addEventListener("change", function () {
@@ -1274,6 +1284,8 @@
   // ---- Timeline ----
 
   function initTimeline() {
+    qs("#zoomInBtn").appendChild(svgPlusIcon());
+    qs("#zoomOutBtn").appendChild(svgMinusIcon());
     var canvas = qs("#timelineCanvas");
     sizeTimelineCanvas();
     window.addEventListener("resize", sizeTimelineCanvas);
@@ -2462,6 +2474,72 @@
     return svg;
   }
 
+  function svgPlusIcon() {
+    var svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    svg.setAttribute("width", "12");
+    svg.setAttribute("height", "12");
+    svg.setAttribute("viewBox", "0 0 16 16");
+    svg.setAttribute("fill", "currentColor");
+    var path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    path.setAttribute("d", "M8.75 3.75C8.75 3.33579 8.41421 3 8 3C7.58579 3 7.25 3.33579 7.25 3.75V7.25H3.75C3.33579 7.25 3 7.58579 3 8C3 8.41421 3.33579 8.75 3.75 8.75L7.25 8.75V12.25C7.25 12.6642 7.58579 13 8 13C8.41421 13 8.75 12.6642 8.75 12.25V8.75L12.25 8.75C12.6642 8.75 13 8.41421 13 8C13 7.58579 12.6642 7.25 12.25 7.25H8.75V3.75Z");
+    svg.appendChild(path);
+    return svg;
+  }
+
+  function svgMinusIcon() {
+    var svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    svg.setAttribute("width", "12");
+    svg.setAttribute("height", "12");
+    svg.setAttribute("viewBox", "0 0 16 16");
+    svg.setAttribute("fill", "currentColor");
+    var path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    path.setAttribute("d", "M3.75 7.25C3.33579 7.25 3 7.58579 3 8C3 8.41421 3.33579 8.75 3.75 8.75L12.25 8.75C12.6642 8.75 13 8.41421 13 8C13 7.58579 12.6642 7.25 12.25 7.25H3.75Z");
+    svg.appendChild(path);
+    return svg;
+  }
+
+  function svgChevronLeftIcon() {
+    var svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    svg.setAttribute("width", "12");
+    svg.setAttribute("height", "12");
+    svg.setAttribute("viewBox", "0 0 16 16");
+    svg.setAttribute("fill", "currentColor");
+    var path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    path.setAttribute("fill-rule", "evenodd");
+    path.setAttribute("clip-rule", "evenodd");
+    path.setAttribute("d", "M9.78033 4.21967C10.0732 4.51256 10.0732 4.98744 9.78033 5.28033L7.06066 8L9.78033 10.7197C10.0732 11.0126 10.0732 11.4874 9.78033 11.7803C9.48744 12.0732 9.01256 12.0732 8.71967 11.7803L5.46967 8.53033C5.17678 8.23744 5.17678 7.76256 5.46967 7.46967L8.71967 4.21967C9.01256 3.92678 9.48744 3.92678 9.78033 4.21967Z");
+    svg.appendChild(path);
+    return svg;
+  }
+
+  function svgChevronRightIcon() {
+    var svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    svg.setAttribute("width", "12");
+    svg.setAttribute("height", "12");
+    svg.setAttribute("viewBox", "0 0 16 16");
+    svg.setAttribute("fill", "currentColor");
+    var path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    path.setAttribute("fill-rule", "evenodd");
+    path.setAttribute("clip-rule", "evenodd");
+    path.setAttribute("d", "M6.21967 4.21967C6.51256 3.92678 6.98744 3.92678 7.28033 4.21967L10.5303 7.46967C10.8232 7.76256 10.8232 8.23744 10.5303 8.53033L7.28033 11.7803C6.98744 12.0732 6.51256 12.0732 6.21967 11.7803C5.92678 11.4874 5.92678 11.0126 6.21967 10.7197L8.93934 8L6.21967 5.28033C5.92678 4.98744 5.92678 4.51256 6.21967 4.21967Z");
+    svg.appendChild(path);
+    return svg;
+  }
+
+  function svgChevronDownIcon() {
+    var svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    svg.setAttribute("width", "10");
+    svg.setAttribute("height", "10");
+    svg.setAttribute("viewBox", "0 0 16 16");
+    svg.setAttribute("fill", "currentColor");
+    var path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    path.setAttribute("fill-rule", "evenodd");
+    path.setAttribute("clip-rule", "evenodd");
+    path.setAttribute("d", "M4.21967 6.21967C4.51256 5.92678 4.98744 5.92678 5.28033 6.21967L8 8.93934L10.7197 6.21967C11.0126 5.92678 11.4874 5.92678 11.7803 6.21967C12.0732 6.51256 12.0732 6.98744 11.7803 7.28033L8.53033 10.5303C8.23744 10.8232 7.76256 10.8232 7.46967 10.5303L4.21967 7.28033C3.92678 6.98744 3.92678 6.51256 4.21967 6.21967Z");
+    svg.appendChild(path);
+    return svg;
+  }
+
   function sortTasks() {
     // completed/failed at top (oldest first), then running, then queued (by priority), cancelled last
     var statusOrder = { completed: 0, failed: 1, running: 2, paused: 3, queued: 4, cancelled: 5 };
@@ -3189,7 +3267,10 @@
         btn.dataset.eventId = matchedEvent.id;
         btn.dataset.excluded = isExcluded ? "true" : "false";
         btn.title = isExcluded ? "Include event" : "Exclude event";
-        btn.innerHTML = isExcluded ? "&#x2715;" : "&#x2713;";
+        var icon = isExcluded ? svgDismissIcon() : svgCheckIcon();
+        icon.setAttribute("width", "12");
+        icon.setAttribute("height", "12");
+        btn.appendChild(icon);
         row.appendChild(btn);
       }
 
