@@ -2,7 +2,7 @@
 
 ## Overview
 
-Transcripts in clipgen are currently a "write to disk and forget" feature. This plan transforms them into a tightly coupled property of artifacts, surfaced across all web interfaces, with a corrections system that improves transcription quality over time.
+Transcripts in clipgen are currently a "write to disk and forget" feature. This plan transforms them into a tightly coupled property of artifacts, surfaced across all web interfaces, with a corrections system that improves transcription quality over time. The primary curation surface is a **dedicated Transcript workspace** served at `/transcripts/` (modeled after Screenspace), with a lightweight **Transcript Intake tab** in Studio for cross-referencing transcript moments during artifact work.
 
 ### Use cases driving this work
 
@@ -12,7 +12,7 @@ Transcripts in clipgen are currently a "write to disk and forget" feature. This 
 
 ### Key architectural decisions
 
-- **Source-video transcripts are the primary model.** `--pre-transcribe [ID...]` transcribes full source videos upfront and stores results in the manifest. No IDs = all participants enqueued. This is the primary intended workflow: transcribe everything before analysis begins, then walk away for the duration.
+- **Source-video transcripts are the primary model.** `--pre-transcribe [ID...]` transcribes full source videos upfront and stores results in the manifest. No IDs = all participants enqueued. This is the primary intended workflow: transcribe everything before analysis begins, then walk away for the duration. The Transcript workspace also supports queuing transcription jobs directly from the UI.
 - Per-clip transcripts are *derived* from source transcripts when available (filtering segments by time range). On-the-fly Whisper transcription is the fallback when no source transcript exists and transcription is requested.
 - Source transcripts are stored as a new top-level section in `clipgen_manifest.json`, keyed by participant ID.
 - Transcript segments are embedded on clip/reel artifact records as a `transcript` field (derived from source or generated on-the-fly).
@@ -21,7 +21,8 @@ Transcripts in clipgen are currently a "write to disk and forget" feature. This 
 - Corrections feed back into Whisper as context keywords AND apply as post-processing.
 - Transcript segment schema is `{start, end, text}` — designed to accommodate a `speaker` field later (for diarization).
 - Reel transcripts are merged from constituent clip transcripts, maintaining order.
-- Initial Studio implementation is read-only; video playback integration is deferred.
+- **Dedicated workspace at `/transcripts/`** — a full-page curation environment (own Flask blueprint, own HTML/JS/CSS assets) following the Screenspace pattern. Works standalone with source media files; no spreadsheet required.
+- **Studio Transcript Intake tab** — a third tab in Studio's preview area (alongside Sheet Preview and Screenspace Intake) for browsing and searching transcript content without leaving Studio. Appears when source transcripts exist in the manifest.
 
 ---
 
@@ -63,41 +64,100 @@ Embed transcript data on artifacts and build the corrections system.
 
 ---
 
-## Phase 2: Curation
+## Phase 2: Transcript Workspace
 
-Surface transcripts in Studio and Viewer for the analysis workflow. **Initial implementation targets Studio.**
+Dedicated page at `/transcripts/` for transcript curation, editing, and transcription management. Follows the Screenspace architectural pattern: own Flask blueprint, own assets, registered on the combined server.
 
-### Display
+### Server and routing
 
-**Studio transcript panel:**
+- [ ] New `transcripts_server.py` — Flask blueprint registered at `/transcripts/`
+- [ ] `_init_transcripts_state()` — discovers source media files from input directory (like Screenspace's participant discovery), loads source transcripts from manifest
+- [ ] Register blueprint in `start_combined_server()` alongside Studio, Insights, and Screenspace
+- [ ] `--transcripts` CLI flag to launch the workspace; works standalone (no spreadsheet required) as long as source media files exist in the input directory
+- [ ] Can combine with `-i/-o`, `-v`; cannot combine with mode flags, format flags, or `--viewer`
 
-- [ ] Add a togglable transcript panel on the right side of the Studio interface; slides out when toggled, slides away when toggled off
-- [ ] Panel shows only participants that have source transcripts in the manifest; participants without transcripts are not mentioned
-- [ ] Empty state (no source transcripts in manifest at all): display an instruction to run `--pre-transcribe`
-- [ ] Each participant with a transcript is shown as a collapsible section (folded by default); clicking the header expands/collapses it
-- [ ] Transcript display uses a two-column layout: **Time** (left) | **Transcript text** (right)
-- [ ] Panel is read-only in the initial implementation; editing and playback interaction deferred to later phases
+### Assets
 
-**Timeline Viewer:**
+- [ ] `transcripts.html`, `transcripts.js`, `transcripts.css` in `assets/web/`
+- [ ] Served directly by Flask (no inlining), consistent with Studio and Screenspace
 
-- [ ] Timeline Viewer detail panel: scrollable transcript alongside video playback
-- [ ] Playback-synced transcript highlighting — active segment highlighted as video plays
+### Workspace layout
+
+The workspace is a full-page environment for deep transcript work:
+
+- [ ] **Header**: participant selector (dropdown of discovered source videos), transcription status indicator, navigation back to Studio/other workspaces
+- [ ] **Main area — transcript view**: scrollable transcript for the selected participant, displayed as a segment list with timestamps on the left and text on the right
+- [ ] **Video player**: inline video playback for the selected participant's source video; clicking a transcript segment seeks to that position
+- [ ] **Playback-synced highlighting**: active segment highlighted as video plays, auto-scroll to keep current segment visible
+- [ ] **Corrections panel**: view and manage the corrections dictionary (study-local and global entries), with promote/demote/delete actions
+
+### Transcription queue
+
+The workspace can trigger and monitor transcription jobs, not just view results:
+
+- [ ] **Queue UI**: list of participants with transcription status (not started / queued / in progress / complete)
+- [ ] **Enqueue**: select one or more participants to transcribe; starts a background transcription job on the server
+- [ ] **Progress**: show progress for in-flight transcription (segment count or percentage if available from faster-whisper)
+- [ ] **Idempotent**: participants already transcribed show as complete; re-transcribe option available with confirmation
+- [ ] **API endpoints**:
+  - `POST /transcripts/api/transcribe` — enqueue participant(s) for transcription
+  - `GET /transcripts/api/transcribe/status` — poll transcription job status
+- [ ] Transcription results are stored to `source_transcripts` in the manifest, same as `--pre-transcribe`
+
+### API endpoints
+
+- [ ] `GET /transcripts/api/participants` — list discovered source videos with transcription status
+- [ ] `GET /transcripts/api/transcript/<participant>` — return full source transcript segments for a participant
+- [ ] `PUT /transcripts/api/transcript/<participant>/segments/<index>` — edit a segment's text (creates a correction entry)
+- [ ] `GET /transcripts/api/corrections` — list all corrections (study-local + global, distinguished)
+- [ ] `POST /transcripts/api/corrections` — add a correction manually
+- [ ] `PUT /transcripts/api/corrections/<id>/promote` — promote study-local correction to global
+- [ ] `DELETE /transcripts/api/corrections/<id>` — remove a correction
+- [ ] `GET /transcripts/api/search?q=<query>` — keyword search across all transcribed participants; returns matching segments with participant ID and timestamps
 
 ### Editing
 
-- [ ] Editable transcript text in the curation UI (Studio or Viewer)
-- [ ] Edits create correction entries: save `{"from": original, "to": edited}` to study-local corrections dictionary
-- [ ] Option to promote a correction to the global dictionary
+- [ ] Click-to-edit on any transcript segment text
+- [ ] On save, original and edited text are compared; if different, a correction entry is created automatically (`{"from": original, "to": edited}`)
+- [ ] Edited segments are visually marked (subtle indicator that the text was corrected)
+- [ ] Corrections apply immediately to all identical occurrences across all participants' transcripts (post-processing pass)
+- [ ] Option to promote a correction to the global dictionary via the corrections panel
 
 ### Search
 
-- [ ] Keyword search across transcript content in Studio or Viewer
-- [ ] Cross-participant search: "show me every artifact where someone said X"
-- [ ] Occurrence counting for keyword frequency analysis
+- [ ] Search bar in the workspace header — keyword search across all transcribed participants
+- [ ] Results shown as a filterable list: participant, timestamp, matching segment text with query highlighted
+- [ ] Click a result to jump to that participant's transcript at the matching segment
+- [ ] Occurrence count displayed per participant and total
 
 ---
 
-## Phase 3: Presentation
+## Phase 3: Studio Transcript Intake
+
+Surface transcript data inside Studio as a lightweight intake tab for cross-referencing during artifact work.
+
+### Intake tab
+
+- [ ] Third tab in Studio's `#sheetPreview` area: **"Transcript Intake"** alongside "Sheet Preview" and "Screenspace Intake"
+- [ ] Tab only appears when source transcripts exist in the manifest (at least one participant transcribed); hidden otherwise
+- [ ] Loads transcript data from the manifest via a Studio API endpoint (not the Transcript workspace server — Studio serves its own data)
+
+### Intake tab contents
+
+- [ ] **Participant filter**: dropdown or chip bar to filter by participant
+- [ ] **Search**: keyword search across transcript content, scoped to selected participant(s) or all
+- [ ] **Segment list**: matching transcript segments displayed as compact cards — timestamp, participant badge, text snippet
+- [ ] **"New only" toggle**: filter to segments not yet associated with any artifact (helps find uncaptured moments)
+- [ ] **Drag to artifact area**: segments can be dragged from the intake list to the artifact work area, creating a clip artifact card with pre-filled timestamp range from the segment
+
+### Studio API additions
+
+- [ ] `GET /studio/api/transcripts` — return source transcripts from manifest (participant list with segment counts, or full segments for a requested participant)
+- [ ] `GET /studio/api/transcripts/search?q=<query>` — search across transcript content, return matching segments
+
+---
+
+## Phase 4: Presentation
 
 Surface transcripts in output-facing viewers and the Insights Builder.
 
@@ -113,27 +173,17 @@ Surface transcripts in output-facing viewers and the Insights Builder.
 - [ ] Render quotes as evidence blocks alongside video clips in the standalone viewer
 - [ ] Quote formatting: quoted text with participant attribution and timestamp
 
-### Timeline Viewer (reader-facing)
+### Timeline Viewer
 
-- [ ] Transcript visible to readers in the detail panel (not just during curation)
+- [ ] Detail panel: scrollable transcript alongside video playback
+- [ ] Playback-synced transcript highlighting — active segment highlighted as video plays
 - [ ] Type filter updated to include transcript-bearing artifacts
-
----
-
-## Future: Video Playback in Studio
-
-Not in scope for the initial Studio implementation, but designed to be added later.
-
-- Preview area to the right of the spreadsheet for video playback
-- Clicking a transcript time or segment triggers playback at that position
-- Allow creating timestamps / generating artifact cards directly from transcript selections
-- Interaction model (where the player lives, how it coexists with the spreadsheet and transcript panel) to be designed when this is tackled
 
 ---
 
 ## Future: Speaker Diarization
 
-Not in scope for Phases 1-3, but the segment schema is designed to accommodate it.
+Not in scope for Phases 1–4, but the segment schema is designed to accommodate it.
 
 - Extend segment schema: `{start, end, text, speaker}`
 - Separate moderator speech from participant speech
@@ -148,3 +198,5 @@ Not in scope for Phases 1-3, but the segment schema is designed to accommodate i
 - **Manifest size** — source transcripts stored in manifest may grow large for long sessions; worth checking at scale (e.g. 6+ participants with hour-long videos)
 - **Auto-apply safety** — corrections applied without approval could introduce errors in edge cases (e.g., a legitimate use of the "from" text in a different context)
 - **Pre-transcribe runtime** — full-session transcription is slow; the idempotency guarantee (skip already-stored participants) means re-running is safe and partial runs can be completed incrementally
+- **Background transcription in workspace** — running Whisper in a background thread while serving the Flask app; need to ensure thread safety for manifest writes and that the GIL doesn't starve the server. Same single-threaded-by-nature constraint as Screenspace's task queue worker.
+- **Standalone discovery** — the workspace discovers source media from the input directory without a spreadsheet. Participant ID extraction from filenames (`{study}_{participant}.mp4`) must be robust to naming variations.
