@@ -649,7 +649,7 @@ body {
 }
 
 .run-picker-btn .chevron {
-  font-size: var(--text-xs);
+  display: inline-flex;
   color: var(--color-text-dim);
   transition: transform var(--duration-fast);
 }
