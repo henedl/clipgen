@@ -70,6 +70,7 @@ Surface transcripts in Studio and Viewer for the analysis workflow. **Initial im
 ### Display
 
 **Studio transcript panel:**
+
 - [ ] Add a togglable transcript panel on the right side of the Studio interface; slides out when toggled, slides away when toggled off
 - [ ] Panel shows only participants that have source transcripts in the manifest; participants without transcripts are not mentioned
 - [ ] Empty state (no source transcripts in manifest at all): display an instruction to run `--pre-transcribe`
@@ -78,6 +79,7 @@ Surface transcripts in Studio and Viewer for the analysis workflow. **Initial im
 - [ ] Panel is read-only in the initial implementation; editing and playback interaction deferred to later phases
 
 **Timeline Viewer:**
+
 - [ ] Timeline Viewer detail panel: scrollable transcript alongside video playback
 - [ ] Playback-synced transcript highlighting — active segment highlighted as video plays
 
