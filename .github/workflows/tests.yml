@@ -8,12 +8,14 @@ on:
       - "**.py"
       - "tests/**"
       - "pyproject.toml"
+      - "uv.lock"
       - ".github/workflows/tests.yml"
   pull_request:
     paths:
       - "**.py"
       - "tests/**"
       - "pyproject.toml"
+      - "uv.lock"
       - ".github/workflows/tests.yml"
 
 jobs:
@@ -28,8 +30,13 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Install dependencies (CPU-only torch)
+        run: |
+          uv venv
+          uv pip install . --torch-backend cpu
+
       - name: Run smoke tests
-        run: uv run pytest -c tests/pytest.ini
+        run: uv run --no-sync pytest -c tests/pytest.ini
 
   lint:
     runs-on: ubuntu-latest
@@ -59,8 +66,10 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install dependencies
-        run: uv sync
+      - name: Install dependencies (CPU-only torch)
+        run: |
+          uv venv
+          uv pip install . --torch-backend cpu
 
       - name: Type check
         run: uvx ty check
