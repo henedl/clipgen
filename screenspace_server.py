@@ -472,7 +472,17 @@ def api_tasks_create() -> FlaskResponse:
         return jsonify({"ok": False, "error": "JSON body required"}), 400
 
     task_type = data.get("type", "").strip()
-    valid_types = ("color", "change", "similarity", "text", "numbers", "timelapse")
+    valid_types = (
+        "color",
+        "change",
+        "similarity",
+        "text",
+        "numbers",
+        "timelapse",
+        "template",
+        "flow",
+        "scene",
+    )
     if task_type not in valid_types:
         return jsonify(
             {"ok": False, "error": f"type must be one of: {', '.join(valid_types)}"}
@@ -544,6 +554,58 @@ def api_tasks_create() -> FlaskResponse:
             ), 400
         ref_region = screenspace.extract_region(frame, region_coords)
         parameters["reference_frame"] = ref_region
+
+    # Template tasks: extract template region from video at reference timestamp
+    if task_type == "template":
+        import cv2
+
+        ref_ts = parameters.get("reference_timestamp")
+        if ref_ts is None:
+            return jsonify(
+                {"ok": False, "error": "Template scan requires reference_timestamp"}
+            ), 400
+        cap = cv2.VideoCapture(video_path)
+        if not cap.isOpened():
+            return jsonify(
+                {"ok": False, "error": "Could not open video for template capture"}
+            ), 500
+        cap.set(cv2.CAP_PROP_POS_MSEC, float(ref_ts) * 1000.0)
+        ret, frame = cap.read()
+        cap.release()
+        if not ret:
+            return jsonify({"ok": False, "error": "Could not read template frame"}), 400
+        parameters["template_image"] = screenspace.extract_region(frame, region_coords)
+
+    # Scene tasks: extract reference frame for each scene type
+    if task_type == "scene":
+        import cv2
+
+        scene_refs = parameters.get("scene_references")
+        if not scene_refs or not isinstance(scene_refs, list):
+            return jsonify(
+                {"ok": False, "error": "Scene scan requires scene_references list"}
+            ), 400
+        cap = cv2.VideoCapture(video_path)
+        if not cap.isOpened():
+            return jsonify(
+                {"ok": False, "error": "Could not open video for scene references"}
+            ), 500
+        reference_scenes = []
+        for ref in scene_refs:
+            cap.set(cv2.CAP_PROP_POS_MSEC, float(ref["timestamp"]) * 1000.0)
+            ret, frame = cap.read()
+            if not ret:
+                cap.release()
+                return jsonify(
+                    {
+                        "ok": False,
+                        "error": f"Could not read frame for scene '{ref['name']}'",
+                    }
+                ), 400
+            ref_region = screenspace.extract_region(frame, region_coords)
+            reference_scenes.append({"name": ref["name"], "frame": ref_region})
+        cap.release()
+        parameters["reference_scenes"] = reference_scenes
 
     task = screenspace.create_task(
         task_type=task_type,
@@ -703,7 +765,9 @@ def _clean_task(task: Dict[str, Any]) -> Dict[str, Any]:
     cleaned = {k: v for k, v in task.items() if not k.startswith("_")}
     if "parameters" in cleaned:
         cleaned["parameters"] = {
-            k: v for k, v in cleaned["parameters"].items() if k != "reference_frame"
+            k: v
+            for k, v in cleaned["parameters"].items()
+            if k not in ("reference_frame", "template_image", "reference_scenes")
         }
     return cleaned
 
