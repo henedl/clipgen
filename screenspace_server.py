@@ -39,14 +39,16 @@ import copy
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 
-import cv2
+if TYPE_CHECKING:
+    import cv2
+    import screenspace
+
 from flask import Blueprint, Response, jsonify, request, send_from_directory
 
 import config
 import files
-import screenspace
 import utils
 import video
 
@@ -55,7 +57,7 @@ FlaskResponse = Union[Response, Tuple[Response, int]]
 # ---- Module-level state (set once by _init_screenspace_state) ----
 
 _manifest: Dict[str, Any] = {}
-_worker: Optional[screenspace.ScreenspaceWorker] = None
+_worker: Optional["screenspace.ScreenspaceWorker"] = None
 _output_dir: str = ""
 _participants: List[Dict[str, Any]] = []
 _video_cap_cache: Dict[str, Any] = {"path": None, "cap": None}
@@ -115,8 +117,10 @@ def _find_participant_video(participant_id: str) -> Optional[str]:
     return None
 
 
-def _get_video_cap(video_path: str) -> Optional[cv2.VideoCapture]:
+def _get_video_cap(video_path: str) -> Optional["cv2.VideoCapture"]:
     """Return a cached VideoCapture for *video_path*, opening a new one if needed."""
+    import cv2
+
     if _video_cap_cache["path"] == video_path and _video_cap_cache["cap"] is not None:
         cap = _video_cap_cache["cap"]
         if cap.isOpened():
@@ -152,6 +156,8 @@ def api_video_frame(participant: str, timestamp: str) -> FlaskResponse:
     if cap is None:
         return jsonify({"ok": False, "error": "Could not open video file"}), 500
 
+    import cv2
+
     cap.set(cv2.CAP_PROP_POS_MSEC, ts * 1000.0)
     ret, frame = cap.read()
 
@@ -174,6 +180,8 @@ def api_video_info(participant: str) -> FlaskResponse:
         return jsonify(
             {"ok": False, "error": f"No video for participant {participant}"}
         ), 404
+
+    import cv2
 
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
@@ -283,6 +291,8 @@ def api_regions_create() -> FlaskResponse:
     if "description" in data:
         region["description"] = str(data["description"])
 
+    import screenspace
+
     _manifest.setdefault("regions", {})[name] = region
     screenspace.save_screenspace_manifest(
         _manifest.get("regions", {}),
@@ -300,6 +310,8 @@ def api_regions_delete(name: str) -> FlaskResponse:
     regions = _manifest.get("regions", {})
     if name not in regions:
         return jsonify({"ok": False, "error": f"Region '{name}' not found"}), 404
+
+    import screenspace
 
     del regions[name]
     screenspace.save_screenspace_manifest(
@@ -334,6 +346,8 @@ def api_stashes_create() -> FlaskResponse:
         "createdAt": datetime.now(timezone.utc).isoformat(),
         "regions": copy.deepcopy(regions),
     }
+    import screenspace
+
     _manifest.setdefault("stashes", []).append(stash)
     _manifest["regions"] = {}
     screenspace.save_screenspace_manifest(
@@ -357,6 +371,8 @@ def api_stashes_update(stash_id: str) -> FlaskResponse:
     if stash is None:
         return jsonify({"ok": False, "error": "Stash not found"}), 404
 
+    import screenspace
+
     name = data.get("name", "").strip()
     if name:
         stash["name"] = name
@@ -378,6 +394,8 @@ def api_stashes_delete(stash_id: str) -> FlaskResponse:
     if idx is None:
         return jsonify({"ok": False, "error": "Stash not found"}), 404
 
+    import screenspace
+
     stashes.pop(idx)
     screenspace.save_screenspace_manifest(
         _manifest.get("regions", {}),
@@ -395,6 +413,8 @@ def api_stashes_restore(stash_id: str) -> FlaskResponse:
     idx = next((i for i, s in enumerate(stashes) if s["id"] == stash_id), None)
     if idx is None:
         return jsonify({"ok": False, "error": "Stash not found"}), 404
+
+    import screenspace
 
     stash = stashes.pop(idx)
     _manifest["regions"] = copy.deepcopy(stash["regions"])
@@ -488,8 +508,12 @@ def api_tasks_create() -> FlaskResponse:
         }
     parameters = data.get("parameters", {})
 
+    import screenspace
+
     # Similarity tasks: extract reference frame from video at given timestamp
     if task_type == "similarity":
+        import cv2
+
         ref_ts = parameters.get("reference_timestamp")
         if ref_ts is None:
             return jsonify(
@@ -685,6 +709,8 @@ def _init_screenspace_state(
     Loads manifest, resolves participant video paths, and starts the
     background worker thread.
     """
+    import screenspace
+
     global _manifest, _worker, _output_dir, _participants
 
     _output_dir = str(utils.get_effective_output_dir())
@@ -738,6 +764,8 @@ def _discover_participant_videos(study_name: str) -> None:
 
 def _persist_manifest() -> None:
     """Save manifest after a task completes."""
+    import screenspace
+
     if _worker:
         new_events = _worker.drain_new_events()
         if new_events:

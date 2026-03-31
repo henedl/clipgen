@@ -33,7 +33,7 @@ Clip record (returned by generation functions):
 
 import re
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, NamedTuple, Optional, Set, Tuple
 
 import gspread
 from icecream import ic
@@ -77,19 +77,40 @@ class SheetContext:
 # ---- Validation and context building ----
 
 
-def validate_spreadsheet_headers(sheet: Any) -> Optional[Tuple[Any, Any, Any]]:
-    """Validate that required headers exist in the spreadsheet.
+class _CellLike(NamedTuple):
+    """Minimal cell reference with 1-based row and col."""
+
+    row: int
+    col: int
+
+
+def _find_in_data(sheet_data: List[List[str]], text: str) -> Optional[_CellLike]:
+    """Find first cell with exact text match in pre-loaded sheet data.
+
+    Returns _CellLike(row, col) with 1-based coordinates, or None.
+    """
+    for row_idx, row in enumerate(sheet_data):
+        for col_idx, cell_value in enumerate(row):
+            if cell_value == text:
+                return _CellLike(row=row_idx + 1, col=col_idx + 1)
+    return None
+
+
+def validate_spreadsheet_headers(
+    sheet_data: List[List[str]],
+) -> Optional[Tuple[_CellLike, _CellLike, _CellLike]]:
+    """Validate that required headers exist in pre-loaded sheet data.
 
     Args:
-        sheet: The gspread worksheet object
+        sheet_data: Pre-loaded sheet data (list of lists from get_all_values()).
 
     Returns:
         tuple: (id_cell, observation_cell, category_cell) if all headers found,
                None if any header is missing
     """
-    id_cell = sheet.find(config.ID_HEADER)
-    observation_cell = sheet.find(config.OBSERVATION_HEADER)
-    category_cell = sheet.find(config.CATEGORY_HEADER)
+    id_cell = _find_in_data(sheet_data, config.ID_HEADER)
+    observation_cell = _find_in_data(sheet_data, config.OBSERVATION_HEADER)
+    category_cell = _find_in_data(sheet_data, config.CATEGORY_HEADER)
 
     missing_headers = []
     if id_cell is None:
@@ -109,6 +130,8 @@ def validate_spreadsheet_headers(sheet: Any) -> Optional[Tuple[Any, Any, Any]]:
         )
         return None
 
+    if id_cell is None or observation_cell is None or category_cell is None:
+        return None
     return (id_cell, observation_cell, category_cell)
 
 
@@ -173,16 +196,9 @@ def get_num_participants(header_row: List[str], id_cell: Any, col_count: int) ->
 def build_sheet_context(sheet: Any) -> Optional[SheetContext]:
     """Validate headers, load sheet data, and build a SheetContext.
 
+    Makes exactly one API call (get_all_values); all header lookups use local data.
     Returns None if validation fails (missing headers, empty sheet, no participants).
     """
-    header_result = validate_spreadsheet_headers(sheet)
-    if header_result is None:
-        return None
-
-    id_cell, observation_cell, category_cell = header_result
-    if config.DEBUGGING:
-        ic(id_cell, observation_cell, category_cell)
-
     sheet_data = sheet.get_all_values()
     utils.debug_print(f"Sheet dumped into memory at {utils.get_current_time()}")
 
@@ -193,6 +209,14 @@ def build_sheet_context(sheet: Any) -> Optional[SheetContext]:
         )
         return None
 
+    header_result = validate_spreadsheet_headers(sheet_data)
+    if header_result is None:
+        return None
+
+    id_cell, observation_cell, category_cell = header_result
+    if config.DEBUGGING:
+        ic(id_cell, observation_cell, category_cell)
+
     baseline_row_idx = _detect_baseline_row(sheet_data)
 
     study_name = sheet_data[0][0]
@@ -201,24 +225,16 @@ def build_sheet_context(sheet: Any) -> Optional[SheetContext]:
     utils.standard_print(f"\nBeginning work on {study_name}.")
     study_name = utils.normalize_study_name(study_name)
 
-    num_participants = get_num_participants(
-        sheet.row_values(id_cell.row), id_cell, sheet.col_count
-    )
+    header_row = sheet_data[id_cell.row - 1]
+    col_count = max(len(row) for row in sheet_data)
+    num_participants = get_num_participants(header_row, id_cell, col_count)
 
-    filename_cell = None
+    filename_cell = _find_in_data(sheet_data, config.FILENAME_HEADER)
     filename_row_idx: Optional[int] = None
-    try:
-        filename_cell = sheet.find(config.FILENAME_HEADER)
-    except Exception:
-        filename_cell = None
     if filename_cell is not None:
         filename_row_idx = filename_cell.row - 1
 
-    severity_cell = None
-    try:
-        severity_cell = sheet.find(config.SEVERITY_HEADER)
-    except Exception:
-        severity_cell = None
+    severity_cell = _find_in_data(sheet_data, config.SEVERITY_HEADER)
 
     if num_participants == 0:
         utils.warning_print(

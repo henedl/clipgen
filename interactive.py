@@ -490,10 +490,12 @@ def browse_spreadsheet(sheet: Any, *, process_fn=None) -> None:
     """
 
     def _load_browse_data() -> tuple:
-        header_result = spreadsheet.validate_spreadsheet_headers(sheet)
+        sheet_data = sheet.get_all_values()
+        if len(sheet_data) <= 1:
+            return (None, None)
+        header_result = spreadsheet.validate_spreadsheet_headers(sheet_data)
         if header_result is None:
             return (None, None)
-        sheet_data = sheet.get_all_values()
         return (header_result, sheet_data)
 
     header_result, sheet_data = (
@@ -507,16 +509,10 @@ def browse_spreadsheet(sheet: Any, *, process_fn=None) -> None:
     id_cell, observation_cell, category_cell = header_result
     utils.debug_print(f"Sheet dumped into memory at {utils.get_current_time()}")
 
-    # Check if sheet is empty or has only headers
-    if len(sheet_data) <= 1:
-        utils.error_print("Spreadsheet appears to be empty (no data rows found).")
-        return
-
     # Get participant info
-    header_row = sheet.row_values(id_cell.row)
-    num_participants = spreadsheet.get_num_participants(
-        header_row, id_cell, sheet.col_count
-    )
+    header_row = sheet_data[id_cell.row - 1]
+    col_count = max(len(row) for row in sheet_data)
+    num_participants = spreadsheet.get_num_participants(header_row, id_cell, col_count)
 
     if num_participants == 0:
         utils.warning_print(
