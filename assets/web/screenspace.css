@@ -947,6 +947,19 @@ body {
   min-width: 2.5rem;
 }
 
+.template-upload-info {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.template-upload-info img {
+  height: 24px;
+  width: auto;
+  border-radius: var(--radius-sm);
+  background: var(--color-bg-checkered, repeating-conic-gradient(var(--color-border) 0% 25%, transparent 0% 50%) 50% / 8px 8px);
+}
+
 .color-preview {
   width: 24px;
   height: 24px;

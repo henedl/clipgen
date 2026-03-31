@@ -188,11 +188,14 @@ def match_template(
     template: np.ndarray,
     threshold: float = 0.0,
     nms_overlap: float = 0.0,
+    mask: Optional[np.ndarray] = None,
 ) -> List[Dict[str, Any]]:
     """Find all locations where template appears in frame.
 
     Uses ``cv2.matchTemplate`` with ``TM_CCOEFF_NORMED``.  Non-maximum
-    suppression removes overlapping detections.
+    suppression removes overlapping detections.  An optional *mask*
+    (same size as *template*, single-channel) restricts matching to
+    non-transparent regions — useful for uploaded PNGs with alpha.
 
     Returns:
         List of ``{x, y, w, h, score}`` dicts for each match above *threshold*.
@@ -210,7 +213,14 @@ def match_template(
     if th > frame_gray.shape[0] or tw > frame_gray.shape[1]:
         return []
 
-    result = cv2.matchTemplate(frame_gray, tmpl_gray, cv2.TM_CCOEFF_NORMED)
+    # Blur the mask to match the blurred template/frame
+    gray_mask = None
+    if mask is not None:
+        gray_mask = cv2.GaussianBlur(mask, (k, k), 0)
+
+    result = cv2.matchTemplate(
+        frame_gray, tmpl_gray, cv2.TM_CCOEFF_NORMED, mask=gray_mask
+    )
     locs = np.where(result >= threshold)
     if len(locs[0]) == 0:
         return []
@@ -1086,6 +1096,7 @@ def scan_template(
     threshold: float = 0.0,
     interval_seconds: float = 0.0,
     *,
+    template_mask: Optional[np.ndarray] = None,
     start_seconds: float = 0.0,
     end_seconds: Optional[float] = None,
     on_progress: Optional[Callable[[float], None]] = None,
@@ -1096,7 +1107,8 @@ def scan_template(
 
     The template is searched across the **full frame** (not limited to a
     region).  *region* is unused for cropping but kept in the signature
-    for consistency with other workflows.
+    for consistency with other workflows.  An optional *template_mask*
+    restricts matching to non-transparent regions of an uploaded PNG.
 
     Returns list of ``{timestamp, matches, best_score, match_count}`` dicts.
     """
@@ -1122,7 +1134,9 @@ def scan_template(
     def _cb(ts: float, frame: np.ndarray) -> Optional[bool]:
         if cancel_flag and cancel_flag():
             return False
-        matches = match_template(frame, template_image, threshold=threshold)
+        matches = match_template(
+            frame, template_image, threshold=threshold, mask=template_mask
+        )
         if matches:
             best = max(m["score"] for m in matches)
             rd = {
@@ -1929,6 +1943,7 @@ class ScreenspaceWorker:
                 template_image=template_img,
                 threshold=params.get("threshold", 0),
                 interval_seconds=params.get("interval", 0),
+                template_mask=params.get("template_mask"),
                 start_seconds=params.get("start_seconds", 0.0),
                 end_seconds=params.get("end_seconds"),
                 on_progress=on_progress,
@@ -2021,7 +2036,13 @@ def save_screenspace_manifest(
             ct["parameters"] = {
                 k: v
                 for k, v in ct["parameters"].items()
-                if k not in ("reference_frame", "template_image", "reference_scenes")
+                if k
+                not in (
+                    "reference_frame",
+                    "template_image",
+                    "template_mask",
+                    "reference_scenes",
+                )
             }
         # Strip flow_grid from results (large per-frame data, not needed on disk)
         if isinstance(ct.get("result"), list):

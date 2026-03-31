@@ -140,6 +140,22 @@ class TestMatchTemplate:
         results = screenspace.match_template(frame, template, threshold=0.5)
         assert results == []
 
+    def test_match_with_mask(self):
+        rng = np.random.RandomState(42)
+        frame = rng.randint(0, 255, (100, 200, 3), dtype=np.uint8)
+        template = frame[30:60, 80:140].copy()
+        # Full opaque mask — should behave like no mask
+        mask = np.full((30, 60), 255, dtype=np.uint8)
+        results = screenspace.match_template(frame, template, threshold=0.9, mask=mask)
+        assert len(results) >= 1
+
+    def test_match_with_none_mask(self):
+        rng = np.random.RandomState(42)
+        frame = rng.randint(0, 255, (100, 200, 3), dtype=np.uint8)
+        template = frame[30:60, 80:140].copy()
+        results = screenspace.match_template(frame, template, threshold=0.9, mask=None)
+        assert len(results) >= 1
+
 
 class TestComputeOpticalFlow:
     def test_no_motion(self):

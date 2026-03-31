@@ -118,6 +118,7 @@
     previewRegions: null,
     resultOverlay: null,
     heatmapOverlay: null,
+    uploadedTemplate: null,
   };
 
   var _timelineHitRects = [];
@@ -2178,11 +2179,53 @@
       var tmplCapBtn = el("button", "btn btn-small", "Capture Region");
       tmplCapBtn.addEventListener("click", function () {
         state.referenceTimestamp = state.currentTimestamp;
+        state.uploadedTemplate = null;
         renderWorkflowParams();
         showToast("Template captured at " + formatTimestamp(state.currentTimestamp));
       });
       tmplRefCtrl.appendChild(tmplCapBtn);
-      if (state.referenceTimestamp !== null) {
+
+      // Upload PNG button
+      var tmplFileInput = document.createElement("input");
+      tmplFileInput.type = "file";
+      tmplFileInput.accept = "image/png";
+      tmplFileInput.style.display = "none";
+      tmplFileInput.addEventListener("change", function () {
+        var file = tmplFileInput.files[0];
+        if (!file) return;
+        var reader = new FileReader();
+        reader.onload = function (e) {
+          // Store base64 data (strip the data:image/png;base64, prefix)
+          var dataUrl = e.target.result;
+          var b64 = dataUrl.split(",")[1];
+          state.uploadedTemplate = { name: file.name, data: b64 };
+          state.referenceTimestamp = null;
+          renderWorkflowParams();
+          showToast("Template loaded: " + file.name);
+        };
+        reader.readAsDataURL(file);
+      });
+      var tmplUploadBtn = el("button", "btn btn-small", "Upload PNG");
+      tmplUploadBtn.addEventListener("click", function () { tmplFileInput.click(); });
+      tmplRefCtrl.appendChild(tmplUploadBtn);
+      tmplRefCtrl.appendChild(tmplFileInput);
+
+      // Status indicator
+      if (state.uploadedTemplate) {
+        var uploadInfo = el("span", "param-value template-upload-info");
+        var uploadThumb = document.createElement("img");
+        uploadThumb.src = "data:image/png;base64," + state.uploadedTemplate.data;
+        uploadThumb.alt = state.uploadedTemplate.name;
+        uploadInfo.appendChild(uploadThumb);
+        uploadInfo.appendChild(document.createTextNode(state.uploadedTemplate.name));
+        var clearBtn = el("button", "btn btn-small", "\u00d7");
+        clearBtn.addEventListener("click", function () {
+          state.uploadedTemplate = null;
+          renderWorkflowParams();
+        });
+        uploadInfo.appendChild(clearBtn);
+        tmplRefCtrl.appendChild(uploadInfo);
+      } else if (state.referenceTimestamp !== null) {
         tmplRefCtrl.appendChild(el("span", "param-value", formatTimestamp(state.referenceTimestamp)));
       }
       tmplRefRow.appendChild(tmplRefCtrl);
@@ -2632,11 +2675,14 @@
       params.speedup_factor = parseFloat((qs("#paramTlSpeed") || {}).value) || 10;
       params.output_format = (qs("#paramTlFormat") || {}).value || "mp4";
     } else if (type === "template") {
-      if (state.referenceTimestamp === null) {
-        showToast("Capture a template region first");
+      if (state.uploadedTemplate) {
+        params.template_image_data = state.uploadedTemplate.data;
+      } else if (state.referenceTimestamp !== null) {
+        params.reference_timestamp = state.referenceTimestamp;
+      } else {
+        showToast("Capture a template region or upload a PNG");
         return null;
       }
-      params.reference_timestamp = state.referenceTimestamp;
       params.threshold = parseFloat((qs("#paramTemplateThresh") || {}).value) || 0.70;
       params.interval = parseFloat((qs("#paramTemplateInterval") || {}).value) || 1.0;
     } else if (type === "flow") {

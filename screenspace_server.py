@@ -555,26 +555,59 @@ def api_tasks_create() -> FlaskResponse:
         ref_region = screenspace.extract_region(frame, region_coords)
         parameters["reference_frame"] = ref_region
 
-    # Template tasks: extract template region from video at reference timestamp
+    # Template tasks: use uploaded PNG or extract template region from video
     if task_type == "template":
-        import cv2
+        import base64
 
-        ref_ts = parameters.get("reference_timestamp")
-        if ref_ts is None:
-            return jsonify(
-                {"ok": False, "error": "Template scan requires reference_timestamp"}
-            ), 400
-        cap = cv2.VideoCapture(video_path)
-        if not cap.isOpened():
-            return jsonify(
-                {"ok": False, "error": "Could not open video for template capture"}
-            ), 500
-        cap.set(cv2.CAP_PROP_POS_MSEC, float(ref_ts) * 1000.0)
-        ret, frame = cap.read()
-        cap.release()
-        if not ret:
-            return jsonify({"ok": False, "error": "Could not read template frame"}), 400
-        parameters["template_image"] = screenspace.extract_region(frame, region_coords)
+        import cv2
+        import numpy as np
+
+        upload_b64 = parameters.pop("template_image_data", None)
+        if upload_b64:
+            # Decode uploaded PNG (may have alpha channel for masking)
+            try:
+                img_bytes = base64.b64decode(upload_b64)
+                img_arr = np.frombuffer(img_bytes, dtype=np.uint8)
+                img = cv2.imdecode(img_arr, cv2.IMREAD_UNCHANGED)
+            except Exception:
+                return jsonify(
+                    {"ok": False, "error": "Could not decode uploaded image"}
+                ), 400
+            if img is None:
+                return jsonify({"ok": False, "error": "Invalid image data"}), 400
+            if len(img.shape) == 2:
+                # Grayscale → convert to BGR
+                img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
+            if img.shape[2] == 4:
+                # Extract alpha as mask, convert to BGR for template
+                parameters["template_mask"] = img[:, :, 3]
+                parameters["template_image"] = cv2.cvtColor(img, cv2.COLOR_BGRA2BGR)
+            else:
+                parameters["template_image"] = img
+        else:
+            ref_ts = parameters.get("reference_timestamp")
+            if ref_ts is None:
+                return jsonify(
+                    {
+                        "ok": False,
+                        "error": "Template scan requires reference_timestamp or uploaded image",
+                    }
+                ), 400
+            cap = cv2.VideoCapture(video_path)
+            if not cap.isOpened():
+                return jsonify(
+                    {"ok": False, "error": "Could not open video for template capture"}
+                ), 500
+            cap.set(cv2.CAP_PROP_POS_MSEC, float(ref_ts) * 1000.0)
+            ret, frame = cap.read()
+            cap.release()
+            if not ret:
+                return jsonify(
+                    {"ok": False, "error": "Could not read template frame"}
+                ), 400
+            parameters["template_image"] = screenspace.extract_region(
+                frame, region_coords
+            )
 
     # Scene tasks: extract reference frame for each scene type
     if task_type == "scene":
@@ -767,7 +800,13 @@ def _clean_task(task: Dict[str, Any]) -> Dict[str, Any]:
         cleaned["parameters"] = {
             k: v
             for k, v in cleaned["parameters"].items()
-            if k not in ("reference_frame", "template_image", "reference_scenes")
+            if k
+            not in (
+                "reference_frame",
+                "template_image",
+                "template_mask",
+                "reference_scenes",
+            )
         }
     return cleaned
 
