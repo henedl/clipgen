@@ -116,6 +116,8 @@
     showRegionOverlays: true,
     stashes: [],
     previewRegions: null,
+    resultOverlay: null,
+    heatmapOverlay: null,
   };
 
   var _timelineHitRects = [];
@@ -563,6 +565,8 @@
     state.videoInfo = null;
     state.referenceTimestamp = null;
     state.sceneReferences = [];
+    state.resultOverlay = null;
+    state.heatmapOverlay = null;
     qs("#participantSelect").value = pid;
     qs("#videoInfo").textContent = "";
     qs("#frameEmpty").classList.remove("hidden");
@@ -1351,6 +1355,71 @@
       ctx.fillStyle = "rgba(255,255,255,0.9)";
       ctx.fillText(p.w + "\u00d7" + p.h + " px", p.x + Math.round(4 * s), p.y + p.h + Math.round(14 * s));
     }
+
+    // Result overlay: template match bounding boxes / flow motion arrows
+    if (state.resultOverlay) {
+      ctx.setLineDash([]);
+      if (state.resultOverlay.type === "template") {
+        var matches = state.resultOverlay.data.matches || [];
+        matches.forEach(function (m) {
+          ctx.strokeStyle = taskTypeColor("template");
+          ctx.lineWidth = 2 * s;
+          ctx.strokeRect(m.x, m.y, m.w, m.h);
+          ctx.fillStyle = hexToRgba(taskTypeColor("template"), 0.15);
+          ctx.fillRect(m.x, m.y, m.w, m.h);
+          ctx.font = Math.round(11 * s) + "px " + getThemeColors().fontMono;
+          ctx.fillStyle = taskTypeColor("template");
+          ctx.fillText((m.score * 100).toFixed(0) + "%", m.x + Math.round(3 * s), m.y - Math.round(4 * s));
+        });
+      } else if (state.resultOverlay.type === "flow") {
+        var grid = state.resultOverlay.data.flow_grid || [];
+        var fRegion = state.resultOverlay.region;
+        if (fRegion && fRegion.w && grid.length) {
+          var maxMag = 0;
+          grid.forEach(function (c) { if (c.mag > maxMag) maxMag = c.mag; });
+          if (maxMag > 0) {
+            grid.forEach(function (c) {
+              var px = fRegion.x + c.x * fRegion.w;
+              var py = fRegion.y + c.y * fRegion.h;
+              var norm = Math.min(c.mag / maxMag, 1);
+              var arrowLen = norm * 20 * s;
+              var rad = c.ang * Math.PI / 180;
+              var ex = px + Math.cos(rad) * arrowLen;
+              var ey = py + Math.sin(rad) * arrowLen;
+              var alpha = norm * 0.8 + 0.2;
+              ctx.strokeStyle = "rgba(99, 102, 241, " + alpha + ")";
+              ctx.lineWidth = 1.5 * s;
+              ctx.beginPath();
+              ctx.moveTo(px, py);
+              ctx.lineTo(ex, ey);
+              ctx.stroke();
+              var headLen = 4 * s;
+              ctx.beginPath();
+              ctx.moveTo(ex, ey);
+              ctx.lineTo(ex - headLen * Math.cos(rad - 0.4), ey - headLen * Math.sin(rad - 0.4));
+              ctx.moveTo(ex, ey);
+              ctx.lineTo(ex - headLen * Math.cos(rad + 0.4), ey - headLen * Math.sin(rad + 0.4));
+              ctx.stroke();
+            });
+          }
+        }
+      }
+    }
+
+    // Heatmap image overlay (semi-transparent composite)
+    if (state.heatmapOverlay && state.heatmapOverlay._img) {
+      var hm = state.heatmapOverlay;
+      ctx.globalAlpha = 0.5;
+      if (hm.type === "template") {
+        ctx.drawImage(hm._img, 0, 0, canvas.width, canvas.height);
+      } else if (hm.type === "flow") {
+        var rPx = regionToPixels(state.regions[hm.region] || {});
+        if (rPx && rPx.w) {
+          ctx.drawImage(hm._img, rPx.x, rPx.y, rPx.w, rPx.h);
+        }
+      }
+      ctx.globalAlpha = 1.0;
+    }
   }
 
   function hexToRgba(hex, alpha) {
@@ -1375,7 +1444,10 @@
     canvas.addEventListener("click", function (e) {
       if (state.timelineDragging) return;
       var ts = timelineXToTime(e);
-      if (ts !== null) loadFrame(ts);
+      if (ts !== null) {
+        state.resultOverlay = null;
+        loadFrame(ts);
+      }
     });
 
     canvas.addEventListener("wheel", function (e) {
@@ -3460,6 +3532,16 @@
         selectParticipant(task.participant, ts);
         return;
       }
+      // Set result overlay for spatial visualization
+      var ri = parseInt(row.dataset.resultIndex, 10);
+      var rData = (!isNaN(ri) && state.selectedTaskResults) ? state.selectedTaskResults[ri] : null;
+      if (task && rData && task.type === "template" && rData.matches) {
+        state.resultOverlay = { type: "template", data: rData };
+      } else if (task && rData && task.type === "flow" && rData.flow_grid) {
+        state.resultOverlay = { type: "flow", data: rData, region: regionToPixels(state.regions[task.region] || {}) };
+      } else {
+        state.resultOverlay = null;
+      }
       loadFrame(ts);
     });
 
@@ -3473,6 +3555,8 @@
   }
 
   function loadAndShowResults(taskId) {
+    state.resultOverlay = null;
+    state.heatmapOverlay = null;
     apiGet("api/tasks/" + taskId + "/results")
       .then(function (data) {
         state.selectedTaskId = taskId;
@@ -3551,7 +3635,40 @@
     countEl.textContent = "(" + results.length + ")";
     container.innerHTML = "";
 
-    results.forEach(function (r) {
+    // Heatmap artifact display (template, flow)
+    if (task.heatmap && (task.type === "template" || task.type === "flow")) {
+      var heatmapSection = el("div", "heatmap-result");
+      var heatmapLabel = el("div", "heatmap-label");
+      heatmapLabel.appendChild(document.createTextNode("Detection Heatmap"));
+      var overlayBtn = el("button", "ss-btn ss-btn-sm", state.heatmapOverlay ? "Hide Overlay" : "Overlay on Frame");
+      overlayBtn.addEventListener("click", function () {
+        if (state.heatmapOverlay) {
+          state.heatmapOverlay = null;
+          overlayBtn.textContent = "Overlay on Frame";
+          renderOverlay();
+        } else {
+          state.heatmapOverlay = { src: "media/" + task.heatmap, type: task.type, region: task.region };
+          overlayBtn.textContent = "Hide Overlay";
+          var hmImg = new Image();
+          hmImg.onload = function () {
+            if (state.heatmapOverlay) {
+              state.heatmapOverlay._img = hmImg;
+              renderOverlay();
+            }
+          };
+          hmImg.src = "media/" + task.heatmap;
+        }
+      });
+      heatmapLabel.appendChild(overlayBtn);
+      heatmapSection.appendChild(heatmapLabel);
+      var heatmapImg = document.createElement("img");
+      heatmapImg.src = "media/" + task.heatmap;
+      heatmapImg.alt = "Detection heatmap";
+      heatmapSection.appendChild(heatmapImg);
+      container.appendChild(heatmapSection);
+    }
+
+    results.forEach(function (r, rIdx) {
       // Find matching event for this result
       var ts = r.timestamp !== undefined ? r.timestamp : r.start;
       var tsKey = ts !== undefined ? ts.toFixed(2) : null;
@@ -3569,6 +3686,7 @@
       visibleCount++;
 
       var row = el("div", "result-row" + (isExcluded ? " excluded" : ""));
+      row.dataset.resultIndex = rIdx;
 
       if (task.type === "color") {
         row.dataset.timestamp = r.start;

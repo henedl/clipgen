@@ -9,7 +9,7 @@ from icecream import ic
 REENCODING: bool = False
 AUDIO_NORMALIZE: bool = False
 FILEFORMAT: str = ".mp4"
-VERSIONNUM: str = "0.10.1"
+VERSIONNUM: str = "0.10.2"
 TITLECARDS_ENABLED: bool = (
     False  # use --titlecards / --no-titlecards to override per run
 )
@@ -146,6 +146,8 @@ SCREENSPACE_FLOW_MAGNITUDE_THRESHOLD: float = 2.0
 SCREENSPACE_FLOW_PYRE_SCALE: float = 0.5
 SCREENSPACE_SCENE_SIMILARITY_THRESHOLD: float = 0.75
 SCREENSPACE_SCENE_HISTOGRAM_BINS: int = 64
+SCREENSPACE_FLOW_GRID_SIZE: int = 8
+SCREENSPACE_FLOW_GRID_MIN_MAG: float = 0.5
 
 # Highlights reel constants
 HIGHLIGHTS_REEL_DURATION_SECONDS: int = 180  # 3-minute budget for highlights reel

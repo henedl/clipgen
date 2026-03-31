@@ -250,12 +250,14 @@ def compute_optical_flow(
     prev_gray: np.ndarray,
     curr_gray: np.ndarray,
     pyr_scale: float = 0.0,
-) -> Dict[str, float]:
+    return_grid: bool = False,
+) -> Dict[str, Any]:
     """Compute dense optical flow between two grayscale frames.
 
     Returns:
-        Dict with ``magnitude`` (mean flow vector length) and
-        ``angle`` (dominant direction in degrees, 0-360).
+        Dict with ``magnitude`` (mean flow vector length),
+        ``angle`` (dominant direction in degrees, 0-360), and optionally
+        ``flow_grid`` (sparse grid of motion vectors for visualization).
     """
     if pyr_scale <= 0.0:
         pyr_scale = config.SCREENSPACE_FLOW_PYRE_SCALE
@@ -285,7 +287,35 @@ def compute_optical_flow(
     else:
         dominant_angle = 0.0
 
-    return {"magnitude": round(mean_mag, 4), "angle": round(dominant_angle, 1)}
+    result: Dict[str, Any] = {
+        "magnitude": round(mean_mag, 4),
+        "angle": round(dominant_angle, 1),
+    }
+
+    if return_grid:
+        grid_size = config.SCREENSPACE_FLOW_GRID_SIZE
+        min_mag = config.SCREENSPACE_FLOW_GRID_MIN_MAG
+        gh, gw = mag.shape[:2]
+        step_y = max(1, gh // grid_size)
+        step_x = max(1, gw // grid_size)
+        grid: List[Dict[str, float]] = []
+        for gy in range(0, gh, step_y):
+            for gx in range(0, gw, step_x):
+                cell_mag = float(np.mean(mag[gy : gy + step_y, gx : gx + step_x]))
+                if cell_mag < min_mag:
+                    continue
+                cell_ang = float(np.mean(ang[gy : gy + step_y, gx : gx + step_x]))
+                grid.append(
+                    {
+                        "x": round((gx + step_x / 2) / gw, 3),
+                        "y": round((gy + step_y / 2) / gh, 3),
+                        "mag": round(cell_mag, 2),
+                        "ang": round(cell_ang, 1),
+                    }
+                )
+        result["flow_grid"] = grid
+
+    return result
 
 
 def compute_scene_fingerprint(region_pixels: np.ndarray) -> Dict[str, Any]:
@@ -1171,16 +1201,26 @@ def scan_flow(
             return False
         curr_gray = cv2.cvtColor(pixels, cv2.COLOR_BGR2GRAY)
         if prev_gray[0] is not None:
-            flow_result = compute_optical_flow(prev_gray[0], curr_gray)
+            flow_result = compute_optical_flow(
+                prev_gray[0], curr_gray, return_grid=True
+            )
             if flow_result["magnitude"] >= magnitude_threshold:
-                rd = {
+                rd: Dict[str, Any] = {
                     "timestamp": ts,
                     "magnitude": flow_result["magnitude"],
                     "angle": flow_result["angle"],
+                    "flow_grid": flow_result.get("flow_grid", []),
                 }
                 results.append(rd)
                 if on_result:
-                    on_result(rd)
+                    # Keep incremental updates lightweight (no grid)
+                    on_result(
+                        {
+                            "timestamp": ts,
+                            "magnitude": flow_result["magnitude"],
+                            "angle": flow_result["angle"],
+                        }
+                    )
         prev_gray[0] = curr_gray
         if on_progress and total_range > 0:
             on_progress((ts - start_seconds) / total_range)
@@ -1383,6 +1423,73 @@ def create_task(
     }
 
 
+# ---------------------------------------------------------------------------
+# Heatmap generation
+# ---------------------------------------------------------------------------
+
+
+def generate_template_heatmap(
+    results: List[Dict[str, Any]],
+    frame_width: int,
+    frame_height: int,
+    output_path: str,
+) -> Optional[str]:
+    """Generate a heatmap PNG from accumulated template match bounding boxes.
+
+    Each pixel's intensity reflects how many times (weighted by score) it fell
+    inside a match bounding box across all scanned frames.
+    """
+    accumulator = np.zeros((frame_height, frame_width), dtype=np.float32)
+    for r in results:
+        for m in r.get("matches", []):
+            x, y, w, h = int(m["x"]), int(m["y"]), int(m["w"]), int(m["h"])
+            y2 = min(y + h, frame_height)
+            x2 = min(x + w, frame_width)
+            accumulator[y:y2, x:x2] += m.get("score", 1.0)
+
+    if accumulator.max() == 0:
+        return None
+
+    normalized = (accumulator / accumulator.max() * 255).astype(np.uint8)
+    normalized = cv2.GaussianBlur(normalized, (15, 15), 0)
+    heatmap = cv2.applyColorMap(normalized, cv2.COLORMAP_JET)
+    cv2.imwrite(output_path, heatmap)
+    return output_path
+
+
+def generate_flow_heatmap(
+    results: List[Dict[str, Any]],
+    region_width: int,
+    region_height: int,
+    output_path: str,
+) -> Optional[str]:
+    """Generate a heatmap PNG from accumulated optical flow magnitudes.
+
+    Uses ``flow_grid`` data from each result to paint per-cell motion
+    intensity across all frames.
+    """
+    acc_size = 256
+    accumulator = np.zeros((acc_size, acc_size), dtype=np.float32)
+    for r in results:
+        for cell in r.get("flow_grid", []):
+            cx = int(cell["x"] * (acc_size - 1))
+            cy = int(cell["y"] * (acc_size - 1))
+            radius = max(1, acc_size // 16)
+            cv2.circle(accumulator, (cx, cy), radius, float(cell["mag"]), -1)
+
+    if accumulator.max() == 0:
+        return None
+
+    normalized = (accumulator / accumulator.max() * 255).astype(np.uint8)
+    normalized = cv2.GaussianBlur(normalized, (15, 15), 0)
+    heatmap = cv2.applyColorMap(normalized, cv2.COLORMAP_JET)
+    heatmap = cv2.resize(
+        heatmap, (region_width, region_height), interpolation=cv2.INTER_LINEAR
+    )
+    cv2.imwrite(output_path, heatmap)
+    return output_path
+
+
 class ScreenspaceWorker:
     """Background thread that processes analysis tasks sequentially."""
 
@@ -1574,6 +1681,33 @@ class ScreenspaceWorker:
             events.append(create_event(task, ts, confidence, metadata))
         return events
 
+    def _generate_heatmap(
+        self, task: Dict[str, Any], results: List[Dict[str, Any]]
+    ) -> None:
+        """Generate a heatmap PNG for template or flow tasks."""
+        task_type = task.get("type", "")
+        task_id = task["id"]
+        if task_type == "template":
+            heatmap_path = str(
+                Path(utils.get_effective_output_dir()) / f"heatmap_{task_id}.png"
+            )
+            props = video.probe_video_properties(task["video_path"])
+            fw = props.get("width", 1920) if props else 1920
+            fh = props.get("height", 1080) if props else 1080
+            hp = generate_template_heatmap(results, fw, fh, heatmap_path)
+            if hp:
+                task["heatmap"] = Path(hp).name
+        elif task_type == "flow":
+            heatmap_path = str(
+                Path(utils.get_effective_output_dir()) / f"heatmap_{task_id}.png"
+            )
+            rc = task.get("region_coords", {})
+            rw = rc.get("w", 256)
+            rh = rc.get("h", 256)
+            hp = generate_flow_heatmap(results, rw, rh, heatmap_path)
+            if hp:
+                task["heatmap"] = Path(hp).name
+
     def _run(self) -> None:
         """Worker loop."""
         while self._running:
@@ -1673,6 +1807,9 @@ class ScreenspaceWorker:
                         t["_generated_events"] = self._generate_events_from_results(
                             t, raw
                         )
+                        # Generate heatmap artifacts for template/flow tasks
+                        if isinstance(result, list) and result:
+                            self._generate_heatmap(t, result)
                     t["completed_at"] = datetime.now(timezone.utc).isoformat()
         except Exception as exc:
             with self._lock:
@@ -1886,6 +2023,11 @@ def save_screenspace_manifest(
                 for k, v in ct["parameters"].items()
                 if k not in ("reference_frame", "template_image", "reference_scenes")
             }
+        # Strip flow_grid from results (large per-frame data, not needed on disk)
+        if isinstance(ct.get("result"), list):
+            ct["result"] = [
+                {k: v for k, v in r.items() if k != "flow_grid"} for r in ct["result"]
+            ]
         clean_tasks.append(ct)
     try:
         manifest_path.write_text(
