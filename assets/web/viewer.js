@@ -1572,9 +1572,11 @@
       ev.stopPropagation();
       doActivate();
     });
-    vid.addEventListener("click", function () {
+    function onVidClick() {
       if (vid.paused) doActivate();
-    });
+    }
+    vid.addEventListener("click", onVidClick);
+    vid._previewClickHandler = onVidClick;
 
     wrap.appendChild(vid);
     wrap.appendChild(overlay);
@@ -1607,6 +1609,11 @@
   function activatePreview() {
     if (!_preview || !_preview.videoEl) return;
     var vid = _preview.videoEl;
+    // Remove click-to-play so it doesn't fight native controls
+    if (vid._previewClickHandler) {
+      vid.removeEventListener("click", vid._previewClickHandler);
+      vid._previewClickHandler = null;
+    }
     vid.muted = false;
     vid.controls = true;
     vid.play();
