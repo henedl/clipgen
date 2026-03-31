@@ -1046,7 +1046,9 @@ def api_generate_intake() -> FlaskResponse:
         span_hash = hashlib.md5(f"{participant}_{start}_{end}".encode()).hexdigest()[:8]
         safe_event_type = utils.sanitize_filename(event_type) if event_type else ""
         desc_part = f"{safe_event_type} " if safe_event_type else ""
-        out_name = f"{study} {participant} {desc_part}intake {span_hash}{config.FILEFORMAT}"
+        out_name = (
+            f"{study} {participant} {desc_part}intake {span_hash}{config.FILEFORMAT}"
+        )
         out_path = str(output_dir / out_name)
         out_path = files.get_unique_filename(out_path)
 
