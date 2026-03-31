@@ -843,6 +843,27 @@ def api_gallery() -> FlaskResponse:
         return jsonify({"ok": False, "error": str(e)}), 500
 
 
+@studio_bp.route("/api/open-viewer", methods=["POST"])
+def api_open_viewer() -> FlaskResponse:
+    """Open a generated viewer HTML file in the default browser."""
+    data = request.get_json(silent=True) or {}
+    file_path = data.get("file", "")
+    if not file_path:
+        return jsonify({"ok": False, "error": "No file specified"}), 400
+
+    p = Path(file_path).resolve()
+    output_dir = Path(utils.get_effective_output_dir()).resolve()
+
+    if p.suffix != ".html" or not str(p).startswith(str(output_dir)):
+        return jsonify({"ok": False, "error": "Invalid file path"}), 403
+
+    if not p.is_file():
+        return jsonify({"ok": False, "error": "File not found"}), 404
+
+    webbrowser.open(p.as_uri())
+    return jsonify({"ok": True})
+
+
 @studio_bp.route("/api/manifest", methods=["GET", "POST"])
 def api_manifest() -> FlaskResponse:
     if request.method == "GET":

@@ -2138,6 +2138,16 @@
     });
 
     qs("#statusDismiss").addEventListener("click", hideOverlay);
+    qs("#statusOpen").addEventListener("click", function () {
+      if (_lastViewerFile) {
+        fetch("api/open-viewer", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ file: _lastViewerFile }),
+        });
+      }
+      hideOverlay();
+    });
 
     qs("#confirmOverlay").addEventListener("click", function (e) {
       if (e.target === qs("#confirmOverlay")) hideConfirm();
@@ -2502,7 +2512,7 @@
       .then(function (data) {
         state.generating = false;
         if (data.ok) {
-          showResult("Viewer created: " + (data.file || ""), null);
+          showResult("Viewer created: " + (data.file || ""), null, data.file);
         } else {
           showResult(null, data.error || "Viewer build failed");
         }
@@ -2565,7 +2575,7 @@
           var msg = "Timeline viewer created: " + (data.file || "");
           if (data.generated) msg = "Generated " + data.generated + " clip(s). " + msg;
           updateViewerButton();
-          showResult(msg, null);
+          showResult(msg, null, data.file);
         } else {
           showResult(null, data.error || "Timeline viewer build failed");
         }
@@ -2707,7 +2717,7 @@
       .then(function (data) {
         state.generating = false;
         if (data.ok) {
-          showResult("Gallery viewer created: " + (data.file || ""), null);
+          showResult("Gallery viewer created: " + (data.file || ""), null, data.file);
         } else {
           showResult(null, data.error || "Gallery build failed");
         }
@@ -2728,25 +2738,36 @@
 
   // ---- Status overlay ----
 
+  var _lastViewerFile = "";
+
   function showOverlay(message) {
     qs("#statusSpinner").style.display = "";
     qs("#statusTitle").textContent = message;
     qs("#statusMessage").textContent = "";
     qs("#statusMessage").className = "";
     qs("#statusDismiss").classList.add("hidden");
+    qs("#statusOpen").classList.add("hidden");
+    _lastViewerFile = "";
     qs("#statusOverlay").classList.remove("hidden");
   }
 
-  function showResult(successMsg, errorMsg) {
+  function showResult(successMsg, errorMsg, filePath) {
     qs("#statusSpinner").style.display = "none";
     if (errorMsg) {
       qs("#statusTitle").textContent = "Error";
       qs("#statusMessage").textContent = errorMsg;
       qs("#statusMessage").className = "error-text";
+      qs("#statusOpen").classList.add("hidden");
     } else {
       qs("#statusTitle").textContent = "Done";
       qs("#statusMessage").textContent = successMsg || "";
       qs("#statusMessage").className = "";
+      if (filePath) {
+        _lastViewerFile = filePath;
+        qs("#statusOpen").classList.remove("hidden");
+      } else {
+        qs("#statusOpen").classList.add("hidden");
+      }
     }
     qs("#statusDismiss").classList.remove("hidden");
   }

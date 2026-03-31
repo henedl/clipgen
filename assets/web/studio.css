@@ -1605,6 +1605,12 @@ html[data-theme="dark"] .queue-card-error .queue-card-thumb {
   color: #dc2626;
 }
 
+.status-actions {
+  display: flex;
+  gap: var(--space-3);
+  margin-top: var(--space-2);
+}
+
 /* Confirm overlay */
 
 #confirmOverlay {
