@@ -1335,6 +1335,7 @@ html[data-theme="dark"] .artifact-marker.selected {
 #screenspaceTrack {
   position: relative;
   height: 24px;
+  flex: 1;
 }
 
 .screenspace-marker {

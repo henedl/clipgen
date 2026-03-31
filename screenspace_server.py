@@ -134,9 +134,14 @@ def _get_video_cap(video_path: str) -> Optional[cv2.VideoCapture]:
     return cap
 
 
-@screenspace_bp.route("/api/video/frame/<participant>/<float:timestamp>")
-def api_video_frame(participant: str, timestamp: float) -> FlaskResponse:
+@screenspace_bp.route("/api/video/frame/<participant>/<timestamp>")
+def api_video_frame(participant: str, timestamp: str) -> FlaskResponse:
     """Extract and return a single JPEG frame at the given timestamp."""
+    try:
+        ts = float(timestamp)
+    except (ValueError, TypeError):
+        return jsonify({"ok": False, "error": "Invalid timestamp"}), 400
+
     video_path = _find_participant_video(participant)
     if video_path is None:
         return jsonify(
@@ -147,7 +152,7 @@ def api_video_frame(participant: str, timestamp: float) -> FlaskResponse:
     if cap is None:
         return jsonify({"ok": False, "error": "Could not open video file"}), 500
 
-    cap.set(cv2.CAP_PROP_POS_MSEC, timestamp * 1000.0)
+    cap.set(cv2.CAP_PROP_POS_MSEC, ts * 1000.0)
     ret, frame = cap.read()
 
     if not ret:
