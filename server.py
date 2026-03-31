@@ -1101,6 +1101,7 @@ def api_generate_intake() -> FlaskResponse:
 
     output_format = data.get("format", "clip")
     output_dir = Path(utils.get_effective_output_dir())
+    study = _sheet_context.study_name if _sheet_context else ""
     results: List[Dict[str, Any]] = []
 
     for item in items:
@@ -1121,7 +1122,11 @@ def api_generate_intake() -> FlaskResponse:
             continue
 
         span_hash = hashlib.md5(f"{participant}_{start}_{end}".encode()).hexdigest()[:8]
-        out_name = f"intake_{span_hash}{config.FILEFORMAT}"
+        safe_event_type = utils.sanitize_filename(event_type) if event_type else ""
+        desc_part = f"{safe_event_type} " if safe_event_type else ""
+        out_name = (
+            f"{study} {participant} {desc_part}intake {span_hash}{config.FILEFORMAT}"
+        )
         out_path = str(output_dir / out_name)
         out_path = files.get_unique_filename(out_path)
 
@@ -1140,7 +1145,7 @@ def api_generate_intake() -> FlaskResponse:
                 "start": start,
                 "end": end,
                 "thumbnail": "",
-                "study": "",
+                "study": study,
                 "participant": participant,
                 "category": "",
                 "severity": "",
@@ -1229,8 +1234,10 @@ def api_reel_direct() -> FlaskResponse:
         if not clip_paths:
             return jsonify({"ok": False, "error": "No clips could be generated"}), 400
 
+        reel_study = _sheet_context.study_name if _sheet_context else ""
+        reel_base = f"{reel_study} intake reel" if reel_study else "intake_reel"
         reel_name = files.get_unique_filename(
-            str(output_dir / f"intake_reel{config.FILEFORMAT}")
+            str(output_dir / f"{reel_base}{config.FILEFORMAT}")
         )
         ok = video.concatenate_clips(clip_paths, reel_name, reencode_on_fail=True)
 

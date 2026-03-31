@@ -2131,6 +2131,12 @@
       if (e.target === qs("#settingsOverlay")) closeSettings();
     });
 
+    qs("#logBtn").addEventListener("click", openLog);
+    qs("#logClose").addEventListener("click", closeLog);
+    qs("#logOverlay").addEventListener("click", function (e) {
+      if (e.target === qs("#logOverlay")) closeLog();
+    });
+
     qs("#statusDismiss").addEventListener("click", hideOverlay);
 
     qs("#confirmOverlay").addEventListener("click", function (e) {
@@ -2784,6 +2790,59 @@
   // ---- Settings ----
 
   var _settingsSaveTimer = null;
+
+  // ---- Artifact log ----
+
+  function openLog() {
+    qs("#logOverlay").classList.remove("hidden");
+    renderLog();
+  }
+
+  function closeLog() {
+    qs("#logOverlay").classList.add("hidden");
+  }
+
+  function renderLog() {
+    var container = qs("#logContent");
+    var countEl = qs("#logCount");
+    var items = state.generatedArtifacts;
+
+    if (items.length === 0) {
+      container.innerHTML = "";
+      container.appendChild(el("div", "log-empty", "No artifacts generated yet."));
+      countEl.textContent = "";
+      return;
+    }
+
+    container.innerHTML = "";
+    for (var i = items.length - 1; i >= 0; i--) {
+      var a = items[i];
+      var row = el("div", "log-entry");
+
+      var badge = el("span", "log-type-badge", a.type || "clip");
+      badge.setAttribute("data-type", a.type || "clip");
+      row.appendChild(badge);
+
+      row.appendChild(el("span", "log-entry-file", a.file || ""));
+
+      var meta = [];
+      if (a.participant) meta.push(a.participant);
+      if (a.description) {
+        var desc = a.description.length > 40 ? a.description.slice(0, 40) + "\u2026" : a.description;
+        meta.push(desc);
+      }
+      if (meta.length > 0) {
+        row.appendChild(el("span", "log-entry-meta", meta.join(" \u00B7 ")));
+      }
+
+      container.appendChild(row);
+    }
+
+    var n = items.length;
+    countEl.textContent = n + " artifact" + (n !== 1 ? "s" : "");
+  }
+
+  // ---- Settings ----
 
   function openSettings() {
     qs("#settingsOverlay").classList.remove("hidden");
