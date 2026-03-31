@@ -34,6 +34,7 @@
     intakeFilterText: "",
     intakeFilterDetector: "",
     intakeFilterNew: false,
+    intakeHoveredIdx: -1,
     activePreviewTab: "sheet",
   };
 
@@ -232,6 +233,21 @@
     var m2 = Math.floor(secs / 60);
     var s2 = secs % 60;
     return m2 + ":" + (s2 < 10 ? "0" : "") + s2;
+  }
+
+  function hexToRgba(hex, alpha) {
+    var r = parseInt(hex.slice(1, 3), 16);
+    var g = parseInt(hex.slice(3, 5), 16);
+    var b = parseInt(hex.slice(5, 7), 16);
+    return "rgba(" + r + "," + g + "," + b + "," + alpha + ")";
+  }
+
+  function intakeComputeTickInterval(visLen) {
+    var candidates = [1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600];
+    for (var i = 0; i < candidates.length; i++) {
+      if (visLen / candidates[i] <= 12) return candidates[i];
+    }
+    return 3600;
   }
 
   // ---- Filtering ----
@@ -566,6 +582,7 @@
         pollIntakeEvents();
         state.intakePollTimer = setInterval(pollIntakeEvents, 10000);
       }
+      setTimeout(sizeIntakeCanvas, 0);
     }
     computeGridMaxHeight();
   }
@@ -3264,18 +3281,137 @@
       });
   }
 
+  var SS_BADGE_SVG = '<svg viewBox="0 0 16 16" fill="currentColor"><path d="M3.5 2C2.67157 2 2 2.67157 2 3.5V5.5C2 6.32843 2.67157 7 3.5 7H5.5C6.32843 7 7 6.32843 7 5.5V3.5C7 2.67157 6.32843 2 5.5 2H3.5Z"/><path d="M3.5 9C2.67157 9 2 9.67157 2 10.5V12.5C2 13.3284 2.67157 14 3.5 14H5.5C6.32843 14 7 13.3284 7 12.5V10.5C7 9.67157 6.32843 9 5.5 9H3.5Z"/><path d="M9 3.5C9 2.67157 9.67157 2 10.5 2H12.5C13.3284 2 14 2.67157 14 3.5V5.5C14 6.32843 13.3284 7 12.5 7H10.5C9.67157 7 9 6.32843 9 5.5V3.5Z"/><path d="M10.5 9C9.67157 9 9 9.67157 9 10.5V12.5C9 13.3284 9.67157 14 10.5 14H12.5C13.3284 14 14 13.3284 14 12.5V10.5C14 9.67157 13.3284 9 12.5 9H10.5Z"/></svg>';
+
+  var _intakeHitRects = [];
+
+  function sizeIntakeCanvas() {
+    var canvas = qs("#intakeTimeline");
+    if (!canvas) return;
+    var w = canvas.clientWidth;
+    if (w <= 0) return;
+    var dpr = window.devicePixelRatio || 1;
+    canvas.width = w * dpr;
+    canvas.height = 48 * dpr;
+    var ctx = canvas.getContext("2d");
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    renderIntakeTimeline();
+  }
+
+  function renderIntakeTimeline() {
+    var canvas = qs("#intakeTimeline");
+    if (!canvas) return;
+    var ctx = canvas.getContext("2d");
+    var dpr = window.devicePixelRatio || 1;
+    var w = canvas.width / dpr;
+    var h = canvas.height / dpr;
+    if (w <= 0 || h <= 0) return;
+
+    var cs = getComputedStyle(document.documentElement);
+    var surfaceAlt = cs.getPropertyValue("--color-surface-alt").trim() || "#f1ece4";
+    var borderColor = cs.getPropertyValue("--color-border").trim() || "#e0ddd7";
+    var textDim = cs.getPropertyValue("--color-text-dim").trim() || "#6b7280";
+    var fontMono = cs.getPropertyValue("--font-mono").trim() || "monospace";
+
+    ctx.clearRect(0, 0, w, h);
+    ctx.fillStyle = surfaceAlt;
+    ctx.fillRect(0, 0, w, h);
+
+    var clusters = filteredIntakeClusters();
+    if (!clusters.length) {
+      ctx.fillStyle = textDim;
+      ctx.font = "12px -apple-system, sans-serif";
+      ctx.textAlign = "center";
+      ctx.fillText("No events", w / 2, h / 2 + 4);
+      ctx.textAlign = "start";
+      _intakeHitRects = [];
+      return;
+    }
+
+    var maxEnd = 0;
+    for (var i = 0; i < clusters.length; i++) {
+      if (clusters[i].end > maxEnd) maxEnd = clusters[i].end;
+    }
+    var duration = Math.max(maxEnd * 1.05, 60);
+
+    function timeToX(t) {
+      return (t / duration) * w;
+    }
+
+    // Time ruler ticks
+    var tickInterval = intakeComputeTickInterval(duration);
+    var firstTick = Math.ceil(0 / tickInterval) * tickInterval;
+    ctx.strokeStyle = borderColor;
+    ctx.fillStyle = textDim;
+    ctx.font = "10px " + fontMono;
+    ctx.textAlign = "center";
+    ctx.lineWidth = 1;
+    for (var t = firstTick; t <= duration; t += tickInterval) {
+      var x = timeToX(t);
+      ctx.beginPath();
+      ctx.moveTo(x, 0);
+      ctx.lineTo(x, 8);
+      ctx.stroke();
+      ctx.fillText(formatDuration(t), x, 18);
+    }
+    ctx.textAlign = "start";
+
+    // Cluster markers
+    var markerY = 22;
+    var markerH = h - markerY - 4;
+    _intakeHitRects = [];
+
+    for (var ci = 0; ci < clusters.length; ci++) {
+      var c = clusters[ci];
+      var color = INTAKE_DETECTOR_COLORS[c.detector] || "#888";
+      var highlighted = state.intakeHoveredIdx === ci;
+      var dimmed = state.intakeHoveredIdx !== -1 && !highlighted;
+      var alpha = highlighted ? 0.85 : (dimmed ? 0.15 : 0.5);
+
+      var x1 = timeToX(c.start);
+      var x2 = timeToX(c.end);
+      var mw = Math.max(x2 - x1, 3);
+
+      ctx.fillStyle = hexToRgba(color, alpha);
+      ctx.fillRect(x1, markerY, mw, markerH);
+
+      _intakeHitRects.push({ x1: x1, x2: x1 + mw, y: markerY, h: markerH, clusterIdx: ci });
+    }
+  }
+
+  function intakeHitTest(mx, my) {
+    for (var i = _intakeHitRects.length - 1; i >= 0; i--) {
+      var hr = _intakeHitRects[i];
+      if (mx >= hr.x1 && mx <= hr.x2 && my >= hr.y && my <= hr.y + hr.h) return hr;
+    }
+    return null;
+  }
+
+  function highlightIntakeCard(idx) {
+    var cards = qsa(".intake-queue-card");
+    for (var i = 0; i < cards.length; i++) {
+      if (i === idx) {
+        cards[i].classList.add("intake-highlight");
+        cards[i].scrollIntoView({ block: "nearest", behavior: "smooth" });
+      } else {
+        cards[i].classList.remove("intake-highlight");
+      }
+    }
+  }
+
   function renderIntake(hasNew) {
-    var list = qs("#intakeList");
+    var container = qs("#intakeCards");
     var addAllBtn = qs("#intakeAddAllBtn");
     var reelAllBtn = qs("#intakeReelAllBtn");
     var tabBadge = qs("#intakeTabBadge");
 
     if (!state.intakeClusters.length) {
       if (tabBadge) tabBadge.classList.add("hidden");
-      list.innerHTML = "";
-      list.appendChild(el("div", "drop-target-empty", "Screenspace events will appear here"));
+      container.innerHTML = "";
+      container.appendChild(el("div", "drop-target-empty", "Screenspace events will appear here"));
       addAllBtn.disabled = true;
       reelAllBtn.disabled = true;
+      sizeIntakeCanvas();
       return;
     }
     if (tabBadge) {
@@ -3286,50 +3422,67 @@
     addAllBtn.disabled = clusters.length === 0;
     reelAllBtn.disabled = clusters.length === 0;
 
-    list.innerHTML = "";
+    sizeIntakeCanvas();
+
+    container.innerHTML = "";
     if (clusters.length === 0) {
-      list.appendChild(el("div", "drop-target-empty", "No events match the current filters"));
+      container.appendChild(el("div", "drop-target-empty", "No events match the current filters"));
       return;
     }
     clusters.forEach(function (c, idx) {
-      var card = el("div", "intake-card");
+      var segDuration = c.end - c.start;
+      var card = el("div", "queue-card intake-queue-card");
       card.dataset.intakeIdx = idx;
+      card.setAttribute("draggable", "true");
 
-      var header = el("div", "intake-card-header");
-      var pid = el("span", "intake-participant", c.participant);
-      header.appendChild(pid);
-      var detBadge = el("span", "intake-detector-badge", c.detector);
-      detBadge.style.background = INTAKE_DETECTOR_COLORS[c.detector] || "#888";
-      header.appendChild(detBadge);
-      card.appendChild(header);
+      var thumb = el("div", "queue-card-thumb");
+      var img = document.createElement("img");
+      img.src = "../screenspace/api/video/frame/" + encodeURIComponent(c.participant) + "/" + c.start;
+      img.loading = "lazy";
+      img.alt = "";
+      img.draggable = false;
+      (function (cardEl, thumbEl) {
+        img.addEventListener("error", function () {
+          this.remove();
+          thumbEl.appendChild(el("span", "", "\u2715"));
+          cardEl.classList.add("queue-card-error");
+        });
+      })(card, thumb);
+      thumb.appendChild(img);
+      thumb.appendChild(el("span", "queue-card-duration", formatDuration(segDuration)));
 
-      var info = el("div", "intake-card-info");
-      info.appendChild(el("span", "intake-time", formatDuration(c.start) + " \u2013 " + formatDuration(c.end)));
-      info.appendChild(el("span", "intake-label", c.event_type));
-      if (c.region) info.appendChild(el("span", "intake-region", c.region));
-      info.appendChild(el("span", "intake-count", c.events.length + " event" + (c.events.length !== 1 ? "s" : "")));
-      card.appendChild(info);
+      var ssBadge = el("span", "queue-card-source-badge");
+      ssBadge.innerHTML = SS_BADGE_SVG;
+      thumb.appendChild(ssBadge);
 
-      var confBar = el("div", "intake-conf-bar");
-      var confFill = el("div", "intake-conf-fill");
-      confFill.style.width = Math.round(c.confidence_avg * 100) + "%";
-      confBar.appendChild(confFill);
-      card.appendChild(confBar);
+      var detDot = el("span", "intake-card-det-dot");
+      detDot.style.background = INTAKE_DETECTOR_COLORS[c.detector] || "#888";
+      thumb.appendChild(detDot);
 
-      var actions = el("div", "intake-card-actions");
-      var addBtn = el("button", "btn btn-small", "Add to Artifacts");
-      addBtn.dataset.action = "add-artifact";
-      actions.appendChild(addBtn);
-      var reelBtn = el("button", "btn btn-small", "Add to Reel");
-      reelBtn.dataset.action = "add-reel";
-      actions.appendChild(reelBtn);
-      var dismissBtn = el("button", "btn btn-small btn-ghost", "\u00d7");
-      dismissBtn.dataset.action = "dismiss";
-      dismissBtn.title = "Dismiss (exclude events)";
-      actions.appendChild(dismissBtn);
-      card.appendChild(actions);
+      card.appendChild(thumb);
 
-      list.appendChild(card);
+      var meta = el("div", "queue-card-meta");
+      meta.appendChild(el("span", "queue-card-ref",
+        c.participant + " \u00b7 " + (c.event_type || "intake")));
+      card.appendChild(meta);
+
+      // Drag support
+      (function (cluster) {
+        card.addEventListener("dragstart", function (ev) {
+          ev.dataTransfer.setData("application/json", JSON.stringify({
+            participant: cluster.participant,
+            desc: cluster.event_type,
+            segStart: cluster.start,
+            segDuration: cluster.end - cluster.start,
+            source: "screenspace",
+            event_type: cluster.event_type,
+            event_ids: cluster.events.map(function (e) { return e.id; }),
+          }));
+          ev.dataTransfer.effectAllowed = "copyMove";
+        });
+      })(c);
+
+      container.appendChild(card);
     });
   }
 
@@ -3404,20 +3557,78 @@
       }
     }
 
-    var list = qs("#intakeList");
-    list.addEventListener("click", function (e) {
-      var btn = e.target.closest("[data-action]");
-      if (!btn) return;
-      var card = btn.closest(".intake-card");
+    var intakeCards = qs("#intakeCards");
+
+    // Click: normal = Artifacts, shift = Reel
+    intakeCards.addEventListener("click", function (e) {
+      var card = e.target.closest(".intake-queue-card");
       if (!card) return;
       var idx = parseInt(card.dataset.intakeIdx);
-      var visible = filteredIntakeClusters();
-      var cluster = visible[idx];
+      var cluster = filteredIntakeClusters()[idx];
       if (!cluster) return;
-      var action = btn.dataset.action;
-      if (action === "add-artifact") intakeAddToArtifacts(cluster);
-      else if (action === "add-reel") intakeAddToReel(cluster);
-      else if (action === "dismiss") intakeDismissCluster(cluster);
+      if (e.shiftKey) intakeAddToReel(cluster);
+      else intakeAddToArtifacts(cluster);
+    });
+
+    // Right-click to dismiss
+    intakeCards.addEventListener("contextmenu", function (e) {
+      var card = e.target.closest(".intake-queue-card");
+      if (!card) return;
+      e.preventDefault();
+      var idx = parseInt(card.dataset.intakeIdx);
+      var cluster = filteredIntakeClusters()[idx];
+      if (cluster) intakeDismissCluster(cluster);
+    });
+
+    // Card hover → highlight timeline marker
+    intakeCards.addEventListener("mouseover", function (e) {
+      var card = e.target.closest(".intake-queue-card");
+      if (!card) return;
+      var idx = parseInt(card.dataset.intakeIdx);
+      if (state.intakeHoveredIdx !== idx) {
+        state.intakeHoveredIdx = idx;
+        renderIntakeTimeline();
+      }
+    });
+    intakeCards.addEventListener("mouseleave", function () {
+      if (state.intakeHoveredIdx !== -1) {
+        state.intakeHoveredIdx = -1;
+        renderIntakeTimeline();
+      }
+    });
+
+    // Timeline canvas interactions
+    var intakeCanvas = qs("#intakeTimeline");
+    intakeCanvas.addEventListener("mousemove", function (e) {
+      var rect = intakeCanvas.getBoundingClientRect();
+      var dpr = window.devicePixelRatio || 1;
+      var mx = (e.clientX - rect.left);
+      var my = (e.clientY - rect.top);
+      var hit = intakeHitTest(mx, my);
+      var idx = hit ? hit.clusterIdx : -1;
+      if (state.intakeHoveredIdx !== idx) {
+        state.intakeHoveredIdx = idx;
+        renderIntakeTimeline();
+        highlightIntakeCard(idx);
+      }
+    });
+    intakeCanvas.addEventListener("mouseleave", function () {
+      if (state.intakeHoveredIdx !== -1) {
+        state.intakeHoveredIdx = -1;
+        renderIntakeTimeline();
+        highlightIntakeCard(-1);
+      }
+    });
+    intakeCanvas.addEventListener("click", function (e) {
+      var rect = intakeCanvas.getBoundingClientRect();
+      var mx = e.clientX - rect.left;
+      var my = e.clientY - rect.top;
+      var hit = intakeHitTest(mx, my);
+      if (!hit) return;
+      var cluster = filteredIntakeClusters()[hit.clusterIdx];
+      if (!cluster) return;
+      if (e.shiftKey) intakeAddToReel(cluster);
+      else intakeAddToArtifacts(cluster);
     });
 
     qs("#intakeAddAllBtn").addEventListener("click", function () {
@@ -3501,7 +3712,10 @@
     updateViewerButton();
     checkNavLinks();
     initIntake();
-    window.addEventListener("resize", computeGridMaxHeight);
+    window.addEventListener("resize", function () {
+      computeGridMaxHeight();
+      sizeIntakeCanvas();
+    });
 
     document.addEventListener("dragstart", function (ev) {
       if (!ev.target.closest(".stash-card")) return;

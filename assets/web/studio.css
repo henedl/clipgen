@@ -2173,96 +2173,36 @@ html[data-theme="dark"] .log-panel {
   color: var(--color-text);
 }
 
-.intake-card {
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
-  padding: var(--space-2);
-  margin-bottom: var(--space-1);
-  background: var(--color-surface);
-  transition: box-shadow var(--duration-fast);
+#intakeTimeline {
+  width: 100%;
+  height: 48px;
+  border-radius: calc(var(--radius) - 2px);
+  cursor: crosshair;
+  display: block;
+  margin-bottom: var(--space-2);
 }
 
-.intake-card:hover {
-  box-shadow: var(--shadow-sm);
-}
-
-.intake-card-header {
+.intake-cards-grid {
   display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  margin-bottom: var(--space-1);
-}
-
-.intake-participant {
-  font-weight: 600;
-  font-size: var(--text-sm);
-}
-
-.intake-detector-badge {
-  font-size: 10px;
-  padding: 1px 6px;
-  border-radius: var(--radius-full);
-  color: #fff;
-  font-weight: 600;
-  text-transform: uppercase;
-}
-
-.intake-card-info {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  font-size: var(--text-xs);
-  color: var(--color-text-dim);
   flex-wrap: wrap;
-  margin-bottom: var(--space-1);
+  gap: var(--space-2);
+  overflow-y: auto;
+  padding: var(--space-1);
 }
 
-.intake-time {
-  font-family: var(--font-mono);
+.queue-card.intake-highlight {
+  border-color: var(--color-accent);
+  box-shadow: 0 0 0 2px var(--color-accent);
 }
 
-.intake-label {
-  font-weight: 500;
-  color: var(--color-text);
-}
-
-.intake-region {
-  background: var(--color-surface-alt);
-  padding: 0 4px;
-  border-radius: var(--radius-sm);
-}
-
-.intake-conf-bar {
-  height: 3px;
-  background: var(--color-border);
+.intake-card-det-dot {
+  position: absolute;
+  top: 4px;
+  left: 4px;
+  width: 8px;
+  height: 8px;
   border-radius: var(--radius-full);
-  margin-bottom: var(--space-1);
-  overflow: hidden;
-}
-
-.intake-conf-fill {
-  height: 100%;
-  background: var(--color-accent);
-  border-radius: var(--radius-full);
-  transition: width var(--duration-fast);
-}
-
-.intake-card-actions {
-  display: flex;
-  gap: var(--space-1);
-}
-
-.intake-card-actions .btn-ghost {
-  background: none;
-  border: none;
-  color: var(--color-text-dim);
-  cursor: pointer;
-  font-size: var(--text-sm);
-  padding: 2px 6px;
-}
-
-.intake-card-actions .btn-ghost:hover {
-  color: var(--color-text);
+  z-index: 1;
 }
 
 /* Intake filters */
