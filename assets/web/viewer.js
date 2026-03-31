@@ -560,6 +560,8 @@
     computeDuration();
     populateHeader();
 
+    initScreenspaceToggle();
+
     if (qs("#participantTimelines")) {
       initParticipantTimelines(presentTypes);
     } else {
@@ -574,7 +576,6 @@
       bindFilterEvents();
     }
 
-    initScreenspaceToggle();
     if (!qs("#participantTimelines") && _screenspaceVisible && data.screenspaceEvents && data.screenspaceEvents.length > 0) {
       renderScreenspaceTrack(data.screenspaceEvents, data.timeline.duration);
     }
