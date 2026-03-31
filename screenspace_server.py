@@ -36,6 +36,7 @@ API endpoints (all under /screenspace/):
 from __future__ import annotations
 
 import copy
+import threading
 import uuid
 from collections import OrderedDict
 from datetime import datetime, timezone
@@ -63,6 +64,7 @@ _output_dir: str = ""
 _participants: List[Dict[str, Any]] = []
 _video_cap_cache: OrderedDict[str, Any] = OrderedDict()
 _VIDEO_CAP_MAX = 3
+_video_cap_lock = threading.Lock()
 _video_metadata_cache: Dict[str, Dict[str, Any]] = {}
 
 _assets_dir = Path(__file__).resolve().parent / "assets" / "web"
@@ -156,14 +158,15 @@ def api_video_frame(participant: str, timestamp: str) -> FlaskResponse:
             {"ok": False, "error": f"No video for participant {participant}"}
         ), 404
 
-    cap = _get_video_cap(video_path)
-    if cap is None:
-        return jsonify({"ok": False, "error": "Could not open video file"}), 500
-
     import cv2
 
-    cap.set(cv2.CAP_PROP_POS_MSEC, ts * 1000.0)
-    ret, frame = cap.read()
+    with _video_cap_lock:
+        cap = _get_video_cap(video_path)
+        if cap is None:
+            return jsonify({"ok": False, "error": "Could not open video file"}), 500
+
+        cap.set(cv2.CAP_PROP_POS_MSEC, ts * 1000.0)
+        ret, frame = cap.read()
 
     if not ret:
         return jsonify({"ok": False, "error": "Could not read frame at timestamp"}), 400
