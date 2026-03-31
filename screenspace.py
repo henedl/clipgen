@@ -213,6 +213,11 @@ def match_template(
     if th > frame_gray.shape[0] or tw > frame_gray.shape[1]:
         return []
 
+    # A constant (zero-variance) template produces undefined TM_CCOEFF_NORMED
+    # results — every position may score ~1.0.  Bail out early.
+    if float(np.std(tmpl_gray)) < 1e-6:
+        return []
+
     # Blur the mask to match the blurred template/frame
     gray_mask = None
     if mask is not None:
@@ -281,8 +286,9 @@ def compute_optical_flow(
         prev_gray = cv2.resize(prev_gray, (new_w, new_h), interpolation=cv2.INTER_AREA)
         curr_gray = cv2.resize(curr_gray, (new_w, new_h), interpolation=cv2.INTER_AREA)
 
+    flow_out = np.zeros((*prev_gray.shape[:2], 2), dtype=np.float32)
     flow = cv2.calcOpticalFlowFarneback(
-        prev_gray, curr_gray, None, pyr_scale, 3, 15, 3, 5, 1.2, 0
+        prev_gray, curr_gray, flow_out, pyr_scale, 3, 15, 3, 5, 1.2, 0
     )
     mag, ang = cv2.cartToPolar(flow[..., 0], flow[..., 1], angleInDegrees=True)
     mean_mag = float(np.mean(mag))
