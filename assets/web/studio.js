@@ -1416,6 +1416,11 @@
           addToQueue(state.artifactQueue, info.items[i], renderArtifactQueue);
         return;
       }
+      if (info.source === "screenspace") {
+        state.artifactQueue.push(info);
+        renderArtifactQueue();
+        return;
+      }
       if (info.source === "reel") {
         removeFromQueue(state.reelQueue, info);
         renderReelQueue();
@@ -1426,6 +1431,11 @@
       if (info.source === "reel-stash" || info.source === "artifact-stash") {
         for (var i = 0; i < info.items.length; i++)
           addToQueue(state.reelQueue, info.items[i], renderReelQueue);
+        return;
+      }
+      if (info.source === "screenspace") {
+        state.reelQueue.push(info);
+        renderReelQueue();
         return;
       }
       if (info.source === "artifact") {
