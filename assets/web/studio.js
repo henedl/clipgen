@@ -2131,7 +2131,17 @@
       if (e.target === qs("#settingsOverlay")) closeSettings();
     });
 
+    qs("#logBtn").addEventListener("click", openLog);
+    qs("#logClose").addEventListener("click", closeLog);
+    qs("#logOverlay").addEventListener("click", function (e) {
+      if (e.target === qs("#logOverlay")) closeLog();
+    });
+
     qs("#statusDismiss").addEventListener("click", hideOverlay);
+
+    qs("#confirmOverlay").addEventListener("click", function (e) {
+      if (e.target === qs("#confirmOverlay")) hideConfirm();
+    });
   }
 
   // ---- Generation progress helpers ----
@@ -2505,14 +2515,45 @@
 
   function onBuildTimelineViewer() {
     if (state.generating) return;
-    state.generating = true;
 
-    showOverlay("Building timeline viewer...");
+    if (state.intakeClusters && state.intakeClusters.length > 0) {
+      var n = state.intakeClusters.length;
+      showConfirm(
+        "Include Intake Events?",
+        n + " Intake event group" + (n === 1 ? "" : "s") +
+          " detected from Screenspace. Include them as clips in the timeline viewer?",
+        function () { startTimelineViewerBuild(true); },
+        function () { startTimelineViewerBuild(false); }
+      );
+    } else {
+      startTimelineViewerBuild(false);
+    }
+  }
+
+  function startTimelineViewerBuild(includeIntake) {
+    state.generating = true;
+    var body = {};
+
+    if (includeIntake && state.intakeClusters && state.intakeClusters.length > 0) {
+      showOverlay("Building timeline viewer with intake events\u2026");
+      body.include_intake = true;
+      body.intake_items = state.intakeClusters.map(function (c) {
+        return {
+          participant: c.participant,
+          start: c.start,
+          end: c.end,
+          event_type: c.event_type,
+          event_ids: c.events.map(function (e) { return e.id; }),
+        };
+      });
+    } else {
+      showOverlay("Building timeline viewer\u2026");
+    }
 
     fetch("api/timeline-viewer", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({}),
+      body: JSON.stringify(body),
     })
       .then(function (r) {
         if (!r.ok) throw new Error("Server error " + r.status);
@@ -2714,9 +2755,94 @@
     qs("#statusOverlay").classList.add("hidden");
   }
 
+  // ---- Confirm overlay ----
+
+  var _confirmCleanup = null;
+
+  function showConfirm(title, message, onYes, onNo) {
+    qs("#confirmTitle").textContent = title;
+    qs("#confirmMessage").textContent = message;
+    qs("#confirmOverlay").classList.remove("hidden");
+
+    var yesBtn = qs("#confirmYes");
+    var noBtn = qs("#confirmNo");
+
+    function cleanup() {
+      qs("#confirmOverlay").classList.add("hidden");
+      yesBtn.removeEventListener("click", handleYes);
+      noBtn.removeEventListener("click", handleNo);
+      _confirmCleanup = null;
+    }
+
+    function handleYes() { cleanup(); onYes(); }
+    function handleNo() { cleanup(); onNo(); }
+
+    yesBtn.addEventListener("click", handleYes);
+    noBtn.addEventListener("click", handleNo);
+    _confirmCleanup = cleanup;
+  }
+
+  function hideConfirm() {
+    if (_confirmCleanup) _confirmCleanup();
+    else qs("#confirmOverlay").classList.add("hidden");
+  }
+
   // ---- Settings ----
 
   var _settingsSaveTimer = null;
+
+  // ---- Artifact log ----
+
+  function openLog() {
+    qs("#logOverlay").classList.remove("hidden");
+    renderLog();
+  }
+
+  function closeLog() {
+    qs("#logOverlay").classList.add("hidden");
+  }
+
+  function renderLog() {
+    var container = qs("#logContent");
+    var countEl = qs("#logCount");
+    var items = state.generatedArtifacts;
+
+    if (items.length === 0) {
+      container.innerHTML = "";
+      container.appendChild(el("div", "log-empty", "No artifacts generated yet."));
+      countEl.textContent = "";
+      return;
+    }
+
+    container.innerHTML = "";
+    for (var i = items.length - 1; i >= 0; i--) {
+      var a = items[i];
+      var row = el("div", "log-entry");
+
+      var badge = el("span", "log-type-badge", a.type || "clip");
+      badge.setAttribute("data-type", a.type || "clip");
+      row.appendChild(badge);
+
+      row.appendChild(el("span", "log-entry-file", a.file || ""));
+
+      var meta = [];
+      if (a.participant) meta.push(a.participant);
+      if (a.description) {
+        var desc = a.description.length > 40 ? a.description.slice(0, 40) + "\u2026" : a.description;
+        meta.push(desc);
+      }
+      if (meta.length > 0) {
+        row.appendChild(el("span", "log-entry-meta", meta.join(" \u00B7 ")));
+      }
+
+      container.appendChild(row);
+    }
+
+    var n = items.length;
+    countEl.textContent = n + " artifact" + (n !== 1 ? "s" : "");
+  }
+
+  // ---- Settings ----
 
   function openSettings() {
     qs("#settingsOverlay").classList.remove("hidden");

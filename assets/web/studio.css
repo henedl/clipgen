@@ -1605,6 +1605,52 @@ html[data-theme="dark"] .queue-card-error .queue-card-thumb {
   color: #dc2626;
 }
 
+/* Confirm overlay */
+
+#confirmOverlay {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-dropdown);
+  background: rgba(0, 0, 0, 0.4);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+#confirmOverlay.hidden {
+  display: none;
+}
+
+.confirm-card {
+  background: var(--color-surface);
+  border-radius: var(--radius-lg);
+  padding: var(--space-6) var(--space-8);
+  max-width: 420px;
+  width: 90%;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.25);
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-4);
+}
+
+.confirm-card h3 {
+  font-size: var(--text-md);
+  font-weight: 600;
+}
+
+.confirm-card p {
+  font-size: var(--text-sm);
+  color: var(--color-text-dim);
+}
+
+.confirm-actions {
+  display: flex;
+  gap: var(--space-3);
+  margin-top: var(--space-2);
+}
+
 /* Spinner */
 
 .spinner {
@@ -1694,7 +1740,8 @@ html[data-theme="dark"] {
   :root:not([data-theme="light"]) #sheetGrid .col-row-num-clickable.header-highlight {
     background-color: rgba(56, 189, 248, 0.18);
   }
-  :root:not([data-theme="light"]) .status-card {
+  :root:not([data-theme="light"]) .status-card,
+  :root:not([data-theme="light"]) .confirm-card {
     background: var(--color-surface-alt);
   }
   :root:not([data-theme="light"]) .card-gen-overlay {
@@ -1729,7 +1776,8 @@ html[data-theme="dark"] #sheetGrid .col-row-num-clickable.header-highlight {
   background-color: rgba(56, 189, 248, 0.18);
 }
 
-html[data-theme="dark"] .status-card {
+html[data-theme="dark"] .status-card,
+html[data-theme="dark"] .confirm-card {
   background: var(--color-surface-alt);
 }
 
@@ -1928,6 +1976,148 @@ html[data-theme="dark"] .filter-cat-btn {
 }
 
 html[data-theme="dark"] .settings-panel {
+  background: var(--color-surface-alt);
+}
+
+/* ---- Artifact Log overlay ---- */
+
+#logOverlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.4);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: var(--z-dropdown);
+}
+
+#logOverlay.hidden {
+  display: none;
+}
+
+.log-panel {
+  background: var(--color-surface);
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--color-panel-border);
+  box-shadow: var(--shadow-xl);
+  width: 520px;
+  max-width: 92vw;
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.log-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-4) var(--space-5);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.log-header h3 {
+  font-size: var(--text-md);
+  font-weight: 600;
+}
+
+#logContent {
+  flex: 1;
+  overflow-y: auto;
+  padding: var(--space-3) var(--space-5);
+}
+
+.log-footer {
+  display: flex;
+  align-items: center;
+  padding: var(--space-3) var(--space-5);
+  border-top: 1px solid var(--color-border);
+}
+
+.log-footer span {
+  font-size: var(--text-xs);
+  color: var(--color-text-dim);
+}
+
+.log-empty {
+  text-align: center;
+  color: var(--color-text-dim);
+  font-size: var(--text-sm);
+  padding: var(--space-6) 0;
+}
+
+.log-entry {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  padding: var(--space-2) 0;
+  border-bottom: 1px solid var(--color-border);
+  font-size: var(--text-sm);
+  line-height: 1.4;
+}
+
+.log-entry:last-child {
+  border-bottom: none;
+}
+
+.log-type-badge {
+  flex-shrink: 0;
+  font-size: var(--text-xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  padding: 1px var(--space-2);
+  border-radius: var(--radius);
+  background: var(--color-border);
+  color: var(--color-text-dim);
+}
+
+.log-type-badge[data-type="clip"] {
+  background: #dbeafe;
+  color: #1e40af;
+}
+
+.log-type-badge[data-type="screen"] {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.log-type-badge[data-type="gif"] {
+  background: #d1fae5;
+  color: #065f46;
+}
+
+html[data-theme="dark"] .log-type-badge[data-type="clip"] {
+  background: #1e3a5f;
+  color: #93c5fd;
+}
+
+html[data-theme="dark"] .log-type-badge[data-type="screen"] {
+  background: #451a03;
+  color: #fcd34d;
+}
+
+html[data-theme="dark"] .log-type-badge[data-type="gif"] {
+  background: #064e3b;
+  color: #6ee7b7;
+}
+
+.log-entry-file {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+}
+
+.log-entry-meta {
+  flex-shrink: 0;
+  font-size: var(--text-xs);
+  color: var(--color-text-dim);
+}
+
+html[data-theme="dark"] .log-panel {
   background: var(--color-surface-alt);
 }
 

@@ -439,6 +439,120 @@ def test_api_viewer_400_when_no_artifacts(client):
     assert "No artifacts" in data["error"]
 
 
+def test_api_timeline_viewer_without_intake(client, monkeypatch):
+    import clipgen
+    import spreadsheet
+    import viewer
+
+    fake_ws = type("FakeWS", (), {"title": "Sheet1"})()
+    monkeypatch.setattr(server, "_worksheet", fake_ws)
+
+    fake_clips = [{"desc": "test", "participant": "P01"}]
+    fake_artifacts = [
+        {
+            "id": "a1",
+            "type": "clip",
+            "study": "s",
+            "participant": "P01",
+            "start": 0,
+            "end": 5,
+        }
+    ]
+    monkeypatch.setattr(spreadsheet, "generate_list", lambda *a, **kw: fake_clips)
+    monkeypatch.setattr(clipgen, "process_clips", lambda *a, **kw: (1, fake_artifacts))
+    monkeypatch.setattr(clipgen, "_is_excel_worksheet", lambda ws: False)
+    monkeypatch.setattr(viewer, "load_screenspace_events_for_viewer", lambda: [])
+    monkeypatch.setattr(viewer, "finalize_timeline_data", lambda *a, **kw: {"meta": {}})
+    monkeypatch.setattr(
+        viewer, "generate_timeline_viewer", lambda *a, **kw: "/out/viewer.html"
+    )
+    monkeypatch.setattr(server, "_save_manifest_quiet", lambda: None)
+
+    resp = client.post("/studio/api/timeline-viewer", json={})
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["ok"] is True
+    assert data["generated"] == 1
+
+
+def test_api_timeline_viewer_with_intake(client, monkeypatch):
+    import clipgen
+    import spreadsheet
+    import viewer
+
+    fake_ws = type("FakeWS", (), {"title": "Sheet1"})()
+    monkeypatch.setattr(server, "_worksheet", fake_ws)
+
+    fake_clips = [{"desc": "test", "participant": "P01"}]
+    sheet_artifacts = [
+        {
+            "id": "a1",
+            "type": "clip",
+            "study": "s",
+            "participant": "P01",
+            "start": 0,
+            "end": 5,
+        }
+    ]
+    intake_artifact = {
+        "id": "intake_abc_s0",
+        "type": "clip",
+        "source": "screenspace",
+        "participant": "P02",
+        "start": 10.0,
+        "end": 15.0,
+    }
+
+    monkeypatch.setattr(spreadsheet, "generate_list", lambda *a, **kw: fake_clips)
+    monkeypatch.setattr(clipgen, "process_clips", lambda *a, **kw: (1, sheet_artifacts))
+    monkeypatch.setattr(clipgen, "_is_excel_worksheet", lambda ws: False)
+    monkeypatch.setattr(viewer, "load_screenspace_events_for_viewer", lambda: [])
+    monkeypatch.setattr(server, "_save_manifest_quiet", lambda: None)
+
+    captured_artifacts = []
+
+    def fake_finalize(artifacts, **kw):
+        captured_artifacts.extend(artifacts)
+        return {"meta": {}}
+
+    monkeypatch.setattr(viewer, "finalize_timeline_data", fake_finalize)
+    monkeypatch.setattr(
+        viewer, "generate_timeline_viewer", lambda *a, **kw: "/out/viewer.html"
+    )
+    monkeypatch.setattr(
+        server, "_generate_intake_clips", lambda items, **kw: [intake_artifact]
+    )
+
+    resp = client.post(
+        "/studio/api/timeline-viewer",
+        json={
+            "include_intake": True,
+            "intake_items": [
+                {
+                    "participant": "P02",
+                    "start": 10.0,
+                    "end": 15.0,
+                    "event_type": "text",
+                },
+            ],
+        },
+    )
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["ok"] is True
+    assert data["generated"] == 2
+    assert len(captured_artifacts) == 2
+    assert captured_artifacts[1]["source"] == "screenspace"
+
+
+def test_api_timeline_viewer_500_when_no_worksheet(client):
+    resp = client.post("/studio/api/timeline-viewer", json={})
+    assert resp.status_code == 500
+    data = resp.get_json()
+    assert data["ok"] is False
+    assert "No worksheet" in data["error"]
+
+
 # ---- Stash API tests ----
 
 

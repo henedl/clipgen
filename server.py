@@ -252,6 +252,72 @@ def _save_manifest_quiet() -> None:
         pass
 
 
+def _generate_intake_clips(
+    items: List[Dict[str, Any]], output_format: str = "clip"
+) -> List[Dict[str, Any]]:
+    """Generate clips from intake items and return successful artifact dicts."""
+    import hashlib
+
+    import screenspace_server
+
+    output_dir = Path(utils.get_effective_output_dir())
+    artifacts: List[Dict[str, Any]] = []
+
+    for item in items:
+        participant = item.get("participant", "")
+        start = float(item.get("start", 0))
+        end = float(item.get("end", 0))
+        event_type = item.get("event_type", "")
+        event_ids = item.get("event_ids", [])
+
+        video_path = None
+        for p in screenspace_server._participants:
+            if p["id"] == participant and p.get("has_video"):
+                video_path = p["video_path"]
+                break
+
+        if not video_path:
+            continue
+
+        span_hash = hashlib.md5(f"{participant}_{start}_{end}".encode()).hexdigest()[:8]
+        out_name = f"intake_{span_hash}{config.FILEFORMAT}"
+        out_path = str(output_dir / out_name)
+        out_path = files.get_unique_filename(out_path)
+
+        start_str = utils.seconds_to_timestamp(int(start))
+        end_str = utils.seconds_to_timestamp(int(end))
+
+        success = video.run_ffmpeg(
+            video_path, out_path, start_str, end_str, config.REENCODING
+        )
+
+        if success:
+            artifact: Dict[str, Any] = {
+                "id": f"intake_{span_hash}_s0",
+                "type": output_format,
+                "file": Path(out_path).name,
+                "start": start,
+                "end": end,
+                "thumbnail": "",
+                "study": "",
+                "participant": participant,
+                "category": "",
+                "severity": "",
+                "description": event_type or "Screenspace intake",
+                "cellRow": None,
+                "cellCol": None,
+                "cellA1": "",
+                "annotations": [],
+                "source": "screenspace",
+                "event_ids": event_ids,
+                "intake_label": event_type,
+                "sourceVideo": Path(video_path).name,
+            }
+            artifacts.append(artifact)
+
+    return artifacts
+
+
 def _load_stashes() -> List[Dict[str, Any]]:
     stash_path = (
         Path(utils.get_effective_output_dir()) / config.STASHES_MANIFEST_FILENAME
@@ -667,6 +733,10 @@ def api_timeline_viewer() -> FlaskResponse:
         return jsonify({"ok": False, "error": "No worksheet loaded"}), 500
 
     try:
+        req = request.get_json(silent=True) or {}
+        include_intake = req.get("include_intake", False)
+        intake_items = req.get("intake_items", [])
+
         clips_list = spreadsheet.generate_list(_worksheet, "batch", skip_prompts=True)
         if not clips_list:
             return jsonify({"ok": False, "error": "No clips found in sheet"}), 400
@@ -677,9 +747,16 @@ def api_timeline_viewer() -> FlaskResponse:
 
         _generated_artifacts.extend(artifacts)
 
+        # Generate intake clips if requested
+        intake_artifacts: List[Dict[str, Any]] = []
+        if include_intake and intake_items:
+            intake_artifacts = _generate_intake_clips(intake_items)
+            artifacts = artifacts + intake_artifacts
+            _generated_artifacts.extend(intake_artifacts)
+
         study = artifacts[0].get("study", "")
         ss_events = viewer.load_screenspace_events_for_viewer()
-        data = viewer.finalize_timeline_data(
+        viewer_data = viewer.finalize_timeline_data(
             artifacts,
             study=study,
             worksheet_title=getattr(_worksheet, "title", ""),
@@ -689,16 +766,17 @@ def api_timeline_viewer() -> FlaskResponse:
             screenspace_events=ss_events or None,
         )
         viewer_path = viewer.generate_timeline_viewer(
-            data,
+            viewer_data,
             template_name="timeline-viewer.html",
             output_basename="timeline_viewer.html",
         )
         if viewer_path:
+            _save_manifest_quiet()
             return jsonify(
                 {
                     "ok": True,
                     "file": str(viewer_path),
-                    "generated": generated,
+                    "generated": generated + len(intake_artifacts),
                 }
             )
         return jsonify(
@@ -1023,6 +1101,7 @@ def api_generate_intake() -> FlaskResponse:
 
     output_format = data.get("format", "clip")
     output_dir = Path(utils.get_effective_output_dir())
+    study = _sheet_context.study_name if _sheet_context else ""
     results: List[Dict[str, Any]] = []
 
     for item in items:
@@ -1043,7 +1122,11 @@ def api_generate_intake() -> FlaskResponse:
             continue
 
         span_hash = hashlib.md5(f"{participant}_{start}_{end}".encode()).hexdigest()[:8]
-        out_name = f"intake_{span_hash}{config.FILEFORMAT}"
+        safe_event_type = utils.sanitize_filename(event_type) if event_type else ""
+        desc_part = f"{safe_event_type} " if safe_event_type else ""
+        out_name = (
+            f"{study} {participant} {desc_part}intake {span_hash}{config.FILEFORMAT}"
+        )
         out_path = str(output_dir / out_name)
         out_path = files.get_unique_filename(out_path)
 
@@ -1062,7 +1145,7 @@ def api_generate_intake() -> FlaskResponse:
                 "start": start,
                 "end": end,
                 "thumbnail": "",
-                "study": "",
+                "study": study,
                 "participant": participant,
                 "category": "",
                 "severity": "",
@@ -1151,8 +1234,10 @@ def api_reel_direct() -> FlaskResponse:
         if not clip_paths:
             return jsonify({"ok": False, "error": "No clips could be generated"}), 400
 
+        reel_study = _sheet_context.study_name if _sheet_context else ""
+        reel_base = f"{reel_study} intake reel" if reel_study else "intake_reel"
         reel_name = files.get_unique_filename(
-            str(output_dir / f"intake_reel{config.FILEFORMAT}")
+            str(output_dir / f"{reel_base}{config.FILEFORMAT}")
         )
         ok = video.concatenate_clips(clip_paths, reel_name, reencode_on_fail=True)
 
