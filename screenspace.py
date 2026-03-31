@@ -1113,6 +1113,8 @@ class ScreenspaceWorker:
                         t["result"].append(result_dict)
                     if isinstance(t.get("_raw_results"), list):
                         t["_raw_results"].append(result_dict)
+                    if t.get("parameters", {}).get("detect_first"):
+                        t["_cancelled"] = True
 
         try:
             result = self._dispatch(task, _on_progress, _cancel_flag, _on_result)
@@ -1123,7 +1125,21 @@ class ScreenspaceWorker:
                         t["status"] = TASK_STATUS_PAUSED
                         t["result"] = result
                     elif t.get("_cancelled"):
-                        t["status"] = TASK_STATUS_CANCELLED
+                        if t.get("parameters", {}).get("detect_first"):
+                            t["status"] = TASK_STATUS_COMPLETED
+                            partial = t.pop("_partial_results", None)
+                            if partial and isinstance(result, list):
+                                result = partial + result
+                            t["result"] = result
+                            t["progress"] = 1.0
+                            t.pop("_progress_offset", None)
+                            t.pop("_progress_scale", None)
+                            raw = t.pop("_raw_results", [])
+                            t["_generated_events"] = self._generate_events_from_results(
+                                t, raw
+                            )
+                        else:
+                            t["status"] = TASK_STATUS_CANCELLED
                     else:
                         t["status"] = TASK_STATUS_COMPLETED
                         partial = t.pop("_partial_results", None)

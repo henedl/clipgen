@@ -879,6 +879,11 @@ body {
   min-width: 0;
 }
 
+.param-control input[type="checkbox"] {
+  margin: 0;
+  accent-color: var(--color-accent);
+}
+
 .param-control input[type="range"] {
   width: 80px;
   accent-color: var(--color-accent);
