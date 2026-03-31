@@ -2080,6 +2080,10 @@
 
     if (type !== "timelapse") {
       addParamRow(container, "Event label", textInput("paramEventLabel", "e.g. low_health"));
+      var dfCb = document.createElement("input");
+      dfCb.type = "checkbox";
+      dfCb.id = "paramDetectFirst";
+      addParamRow(container, "Detect first", dfCb);
     }
 
     updateRunButton();
@@ -2480,6 +2484,10 @@
     var labelEl = qs("#paramEventLabel");
     if (labelEl && labelEl.value.trim()) {
       params.event_label = labelEl.value.trim();
+    }
+    var dfEl = qs("#paramDetectFirst");
+    if (dfEl && dfEl.checked) {
+      params.detect_first = true;
     }
     return params;
   }
