@@ -663,6 +663,7 @@ body {
 }
 
 .artifact-media {
+  position: relative;
   width: 100%;
   aspect-ratio: 16 / 9;
   background-color: var(--color-surface-alt);
@@ -700,6 +701,32 @@ body {
 @keyframes thumbFadeIn {
   from { opacity: 0; }
   to { opacity: 1; }
+}
+
+.scrub-progress {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  width: 100%;
+  height: 3px;
+  background: rgba(0, 0, 0, 0.2);
+  opacity: 0;
+  transition: opacity var(--duration-fast);
+  pointer-events: none;
+}
+
+.scrub-active .scrub-progress {
+  opacity: 1;
+}
+
+.scrub-progress-fill {
+  height: 100%;
+  width: 0%;
+  background: var(--color-accent);
+}
+
+.scrub-active img {
+  opacity: 0;
 }
 
 .artifact-meta {
