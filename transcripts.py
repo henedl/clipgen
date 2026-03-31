@@ -1,5 +1,27 @@
 # -*- coding: utf-8 -*-
-"""Transcription support for clipgen using faster-whisper."""
+"""Transcription support for clipgen via faster-whisper (CTranslate2-based Whisper).
+
+The Whisper model is lazy-loaded on first use and cached at module level for the session.
+
+Data types (defined below):
+  TranscriptSegment – TypedDict: start (float), end (float), text (str)
+  TranscriptResult  – TypedDict: segments, language, source_file, model
+
+Key functions:
+  transcribe_video(path, *, language, initial_prompt, context_keywords)
+    → TranscriptResult; context_keywords are appended to the initial prompt
+  filter_segments(result, start_sec, end_sec, *, offset_to_zero)
+    → TranscriptResult for a clip's time range; offset_to_zero=True shifts to clip-relative times
+  write_transcript(result, output_path, *, fmt)
+    → writes .md (Markdown), .srt (SRT), or .vtt (WebVTT)
+  read_transcript(filepath) → TranscriptResult (parses any supported format)
+  get_transcript_extension(fmt) → file extension string for a format
+
+Pipeline integration: clipgen.process_clips() calls _transcribe_segments() which caches the
+full-video result per source video, then filters and writes per-clip transcripts. Transcript
+artifacts (type "transcript") are added to the artifact list for manifest tracking. Output
+filenames match the corresponding clip filename with the transcript extension.
+"""
 
 from __future__ import annotations
 

@@ -1,8 +1,26 @@
 # -*- coding: utf-8 -*-
 """Insights data model and manifest persistence for clipgen.
 
-Handles CRUD operations for insight records and read/write of
-the insights manifest JSON file.
+Insight record shape:
+  {
+    "id": "ins_<8hex>",       # uuid4 hex prefix, assigned by create_insight()
+    "title": str,
+    "summary": str,
+    "severity": str,          # Critical/High/Medium/Low/N/A/Positive/Very Positive
+    "status": str,            # "draft" or "final"
+    "createdAt": str,         # ISO 8601 UTC
+    "updatedAt": str,         # ISO 8601 UTC
+    "causes":    {"narrative": str, "artifacts": [ids]},
+    "behaviors": {"narrative": str, "artifacts": [ids]},
+    "impacts":   {"narrative": str, "artifacts": [ids]},
+    "timelineContext": str,
+  }
+
+Key functions:
+  load_insights_manifest() / save_insights_manifest() – read/write insights_manifest.json
+  create_insight()  – returns a new insight dict with all fields initialized
+  update_insight()  – merge a partial dict into an existing insight by id
+  delete_insight()  – remove an insight by id
 """
 
 from __future__ import annotations

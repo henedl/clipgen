@@ -1,13 +1,24 @@
 # -*- coding: utf-8 -*-
 """Spreadsheet data processing for clipgen.
 
-Expected spreadsheet structure:
-- Row 0 (first row): Study name in cell A1; may be empty (falls back to spreadsheet title).
-- Header cells: Contains required columns ID, Observation, Category (exact names from config).
-- Participant columns: Immediately follow the ID column; headers start with P or G (e.g. P01, P02, G01).
-  Each participant column holds timestamp values; non-empty cells become clip candidates.
-- Category column: Labels each observation row; used for category and reel selection.
-- Observation column: Human-readable description for each row; used in clip metadata.
+Expected spreadsheet layout (see README.md for a reference example):
+- Row 0 (A1): Study name; optional — falls back to spreadsheet title when empty.
+- Header row: Must contain required columns ID, Observation, Category (exact names from config).
+  Optional columns: Severity (numeric -4..+2 or labels like Critical/High; enables severity mode)
+  and Filename (overrides auto-generated output filenames).
+- Participant columns: Immediately follow the ID column; headers start with P or G (e.g. P01, G02).
+  Each column holds timestamp strings; non-empty cells become clip candidates.
+- Observation column: Human-readable description per row; included in clip metadata and filenames.
+- Category column: Label per row; used for category and reel selection.
+
+Optional baseline time row:
+- A row whose cells include the label "Baseline time" marks that row as a clock baseline.
+- Per-participant baseline timestamps in that row (e.g. "09:12:00" under P01) mean that
+  participant column uses absolute/clock timestamps.
+- During files.prepare_clip(), absolute (start, end) pairs are converted to relative offsets
+  by subtracting the per-column baseline via utils.convert_clock_pairs_to_relative().
+- Participant columns without a baseline cell use relative timestamps as-is.
+- If the marker row is absent entirely, all columns are treated as relative.
 
 Coordinate system:
 - gspread uses 1-based row/col (e.g. Cell(row=1, col=1) is A1).
@@ -16,8 +27,8 @@ Coordinate system:
 
 Clip record (returned by generation functions):
 - Dict with keys: cell (gspread Cell), desc (observation text), study (normalized name),
-  participant (header value for that column), category (row category). The 'times' key
-  is added later by prepare_clip when resolving timestamps to actual time ranges.
+  participant (header value for that column), category (row category), severity (label or "").
+  The 'times' key is added later by files.prepare_clip() when resolving timestamps to time ranges.
 """
 
 import re

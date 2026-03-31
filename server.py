@@ -1,9 +1,29 @@
 # -*- coding: utf-8 -*-
-"""Web server for clipgen Studio and Insights Builder.
+"""Combined Flask server for clipgen Studio, Insights Builder, and Screenspace.
 
-Serves the Studio and Insights Builder front-ends on a single port via
-start_combined_server(), and exposes REST endpoints for sheet data
-access, artifact generation, reel building, and viewer creation.
+Entry point: start_combined_server(worksheet, port, default_page) registers
+Studio, Insights, and Screenspace blueprints on one app at config.SERVER_PORT (8089).
+Module-level state: _worksheet, _sheet_context, _generated_artifacts, _generated_reels
+(initialized by _init_studio_state()).
+
+Studio API endpoints (all under /studio/):
+  GET  /api/sheet              – spreadsheet grid data (rows, participants, timestamps)
+  GET  /api/thumbnail/<p>/<t>  – JPEG thumbnail frame from participant video
+  POST /api/generate           – generate clip/screen/gif artifacts for specified cells
+  POST /api/highlights-preview – preview highlights reel selection without generating
+  POST /api/reel               – build a reel from specified cells
+  POST /api/reel-direct        – build a reel from explicit clip paths
+  POST /api/viewer             – generate timeline viewer from session artifacts
+  POST /api/timeline-viewer    – batch-export all clips and generate timeline viewer
+  POST /api/gallery            – generate gallery from a video file
+  GET/POST /api/manifest       – read or write the cumulative artifact manifest
+  POST /api/regenerate         – regenerate all media from saved manifest
+  GET/POST /api/stashes        – reel stash CRUD
+  GET/POST /api/artifact-stashes – artifact stash CRUD
+  POST /api/generate-intake    – generate artifacts from an intake/screenspace manifest
+  GET  /api/settings           – read current config settings
+  PUT  /api/settings           – update config settings
+  GET  /api/status             – reports which interfaces are active (studio/insights/screenspace)
 """
 
 import json

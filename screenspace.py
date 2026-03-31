@@ -1,8 +1,18 @@
 # -*- coding: utf-8 -*-
 """Screenspace analysis engine for clipgen.
 
-Provides image analysis primitives, analysis workflows, a background
-task queue worker, and manifest persistence for the Screenspace feature.
+Six analysis tools (passed as 'type' when creating a task):
+  color      – frames where a region's average HSV color matches a target within tolerance
+  change     – frames where pixel diff ratio exceeds SCREENSPACE_CHANGE_RATIO_THRESHOLD
+  similarity – frames matching a reference capture via SSIM (SCREENSPACE_SSIM_THRESHOLD)
+  text       – OCR fuzzy search for a query string (SCREENSPACE_OCR_FUZZY_THRESHOLD); requires EasyOCR
+  numbers    – OCR numeric comparison with a relational condition (eq/gt/lt/gte/lte/range)
+  timelapse  – sped-up video of a region over a time range
+
+Workflow: user draws regions on a frame → enqueues tasks → ScreenspaceWorker processes in
+a background thread → results are timestamps or artifact files → state persisted to
+screenspace_manifest.json. Region coordinates are normalized (0–1); source_width/source_height
+are stored for denormalization to target video resolution.
 """
 
 from __future__ import annotations

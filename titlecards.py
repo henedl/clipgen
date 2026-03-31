@@ -1,3 +1,19 @@
+# -*- coding: utf-8 -*-
+"""Titlecard and endcard generation for clipgen.
+
+Prepends a short title card (first frame of source video + text overlay) and optionally
+appends an endcard (last frame, no text) to each generated clip via FFmpeg. Falls back
+to a color fill when no source frame is available. Duration is set by
+config.TITLECARD_DURATION_SECONDS (default 2s). Enabled via config.TITLECARDS_ENABLED
+or the --titlecards / --no-titlecards CLI flags.
+
+Key functions:
+  build_titlecard_frame(clip, resolution) – build the title card FFmpeg segment
+  build_endcard_frame(resolution)         – build the endcard FFmpeg segment
+  prepend_titlecard_to_clip(clip, clip_path) – prepend title card to an existing clip file
+  append_endcard_to_clip(clip_path)          – append endcard to an existing clip file
+"""
+
 import os
 import tempfile
 from pathlib import Path

@@ -1,8 +1,19 @@
 # -*- coding: utf-8 -*-
-"""Insights Builder web server for clipgen.
+"""Insights Builder Flask blueprint for clipgen.
 
-Serves the Insights Builder front-end and exposes REST endpoints for
-insight CRUD, artifact browsing, lazy sprite sheet generation, and viewer export.
+Registered at /insights/ by start_combined_server(). When --insights is used without
+a spreadsheet, only this blueprint is active.
+
+API endpoints (all under /insights/):
+  GET  /media/<filename>             – serve artifact media files from output directory
+  GET  /api/artifacts                – artifacts from manifest enriched with sprite data
+  GET  /api/insights                 – list all insights
+  POST /api/insights                 – create new insight
+  GET  /api/insights/<id>            – read single insight
+  PUT  /api/insights/<id>            – update insight fields
+  DELETE /api/insights/<id>          – delete insight
+  GET  /api/sprites/<filename>       – serve or generate a sprite sheet for a clip
+  POST /api/generate-viewer          – export standalone insights_viewer.html
 """
 
 from __future__ import annotations

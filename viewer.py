@@ -1,8 +1,30 @@
 # -*- coding: utf-8 -*-
-"""Timeline viewer generation for clipgen.
+"""Timeline and gallery viewer generation, manifest persistence, and insights viewer export.
 
-Builds artifact metadata records from processed clips and generates
-a self-contained HTML timeline viewer with inlined CSS/JS.
+Timeline viewer (--viewer / interactive 'viewer'):
+  Injects window.CLIPGEN_DATA into viewer.html, replacing <!-- CLIPGEN_DATA_HERE -->.
+  Data shape: { meta: {study, participant, generatedAt, mode, sourceSpreadsheet,
+    sourceFileType, filmstripEnabled}, artifacts: [{id, type, file, start, end,
+    study, participant, category, description, cellRow, cellCol, cellA1, annotations,
+    sourceVideo}], timeline: {duration, startOffset} }
+  Key functions: build_artifact_records_for_clip(), finalize_timeline_data(),
+    generate_timeline_viewer().
+
+Gallery viewer (--gallery):
+  Same inlining pattern using gallery.html.
+  Data shape: { meta: {sourceVideo, generatedAt, mode, format, interval, videoDuration},
+    artifacts: [{file, timestamp, timestamp_formatted, type, duration}] }
+  Key functions: finalize_gallery_data(), generate_gallery_viewer().
+  Gallery artifacts are NOT written to the manifest by default.
+
+Insights viewer (generate_insights_viewer()):
+  Produces a standalone insights_viewer.html. Shows only 'final' insights when any exist;
+  falls back to all insights. Only artifacts referenced by visible insights are included.
+  Key functions: finalize_insights_viewer_data(), generate_insights_viewer().
+
+Artifact manifest (save_manifest / load_manifest_*):
+  Merges new artifacts/reels into clipgen_manifest.json, deduplicating by id (newer wins).
+  Consumed by Insights Builder, --regenerate, and standalone --viewer.
 """
 
 import json

@@ -20,6 +20,9 @@
 - No hardcoded version numbers in evergreen docs (CLAUDE.md, README.md). Reference `VERSIONNUM` in `config.py` instead.
 - **Icons**: Prefer SVG icons from `assets/icons/` (316 Heroicons outline, kebab-case names like `pencil-square.svg`) over crafting new inline SVG paths or using text/emoji glyphs in web UIs.
 - **Linting/formatting**: Run `uv run ruff check --fix && uv run ruff format` after editing Python files. Run `uv run ty check` for type checking.
+- Commit early and commit often, so we can roll back changes more easily.
+- Check git log regularly, especially when confused.
+- Never edit .gitignore automatically, always confirm changes to this file with the user.
 
 ## Learned Workspace Facts
 

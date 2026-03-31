@@ -104,22 +104,9 @@ Source video filenames follow `{study}_{participant}.mp4` (e.g. `mystudy_P01.mp4
 - **Ruff** – Linting and formatting. A `PostToolUse` hook in `.claude/settings.json` automatically runs `uv run ruff check --fix` and `uv run ruff format` on every edited/written file. You can also run these manually: `uv run ruff check --fix` and `uv run ruff format`.
 - **ty** – Use `uv run ty check` for type checking.
 
-## CSS design tokens
-
-All web interfaces share a design token system defined in [assets/web/tokens.css](assets/web/tokens.css). Flask-served pages load it via `<link>`; standalone inlined viewers (timeline, gallery, insights) get tokens prepended by `viewer.py`.
-
-Use these tokens for **all new CSS**. When editing existing CSS, convert touched values to tokens. See the cheat-sheet comment at the top of `tokens.css` for the full reference. Summary:
-
-- **Spacing**: `--space-1` (4px) through `--space-8` (48px)
-- **Typography**: `--text-xs` (12px) through `--text-2xl` (24px)
-- **Border radius**: `--radius-sm` (4px), `--radius-md` (8px), `--radius-lg` (14px), `--radius-full` (999px). Legacy `--radius` aliases `--radius-md`.
-- **Shadows**: `--shadow-sm`, `--shadow-md`, `--shadow-lg`, `--shadow-xl`, `--shadow-focus`
-- **Transitions**: `--duration-fast` (150ms), `--duration-normal` (250ms), `--duration-slow` (350ms)
-- **Z-index**: `--z-float` (10), `--z-dropdown` (100), `--z-modal` (1000), `--z-overlay` (2000), `--z-toast` (3000)
-
 ## SVG icons
 
-A library of 316 Heroicons (outline style, 24×24 viewBox) lives in [assets/icons/](assets/icons/). Filenames use kebab-case (e.g. `pencil-square.svg`, `eye-dropper.svg`, `arrow-right.svg`). When adding icons to a web UI, pick an icon from this library instead of writing new inline SVG paths or using text/emoji glyphs. See existing usage in `screenspace.js` (`svgEditIcon()`, `svgDragHandle()`, etc.) for the `createElementNS()` pattern.
+316 Heroicons (outline, 24×24) live in [assets/icons/](assets/icons/) with kebab-case filenames. Use these for all web UI icons rather than writing new inline SVG paths. See the comment near `svgEditIcon()` in `screenspace.js` for the `createElementNS()` pattern.
 
 ## Conventions and patterns
 
@@ -174,199 +161,41 @@ Interactive-only modes without dedicated CLI flags:
 - `browse` – interactive spreadsheet browser for inspecting rows and timestamps.
 - Interactive `viewer` – launches the HTML timeline viewer based on artifacts generated in the current interactive session (CLI uses `--viewer` instead).
 
-## Important configuration ([config.py](config.py))
-
-- `WORKSHEET_PRIORITY` – Worksheet names tried first (e.g. 'Sheet1', 'Data', 'Observations')
-- `ID_HEADER`, `OBSERVATION_HEADER`, `CATEGORY_HEADER` – Required column headers
-- `SEVERITY_HEADER` – Optional column header (`"Severity"`); when present, adds severity metadata to clips
-- `SEVERITY_NUMERIC_TO_LABEL`, `SEVERITY_LABEL_TO_NUMERIC` – Canonical severity mapping (-4=Critical through +2=Very Positive)
-- `PARTICIPANT_PREFIXES` – `('P', 'G')`
-- `ANNOTATION_KEYPHRASES` – maps tokens like `!key` to annotation names (`key`)
-- `IGNORED_TIMESTAMP_TOKENS` – tokens ignored during timestamp parsing (default includes `x`)
-- `FILEFORMAT` – `.mp4`
-- `MAX_CLIP_DURATION_SECONDS` – 600 (10 min); prompts before generating longer clips
-- `DEFAULT_DURATION_SECONDS` – 60 (used when only start time is given)
-- `DEFAULT_GIF_DURATION_SECONDS` – 5 (GIF extraction length)
-- `GALLERY_INTERVAL_SECONDS` – 10 (default interval between gallery captures)
-- `GALLERY_GIF_DURATION_SECONDS` – 3 (default per-GIF duration in gallery mode)
-- `MAX_FILENAME_LENGTH` – 255
-- `MAX_FILESIZE_MB` – optional output filesize cap for generated videos (`0` disables)
-- `HIGHLIGHTS_REEL_DURATION_SECONDS` – 180 (3-minute time budget for highlights reel)
-- `HIGHLIGHTS_WEIGHT_SEVERITY`, `HIGHLIGHTS_WEIGHT_UNIQUENESS`, `HIGHLIGHTS_WEIGHT_KEYWORD` – Scoring weights for highlights reel clip ranking (default 1.0, 0.5, 0.3)
-- `COMMAND_LIST_ALL`, `COMMAND_LIST_NEW`, `COMMAND_OPEN_LAST`, `COMMAND_EXCEL`, `COMMAND_HTTP_PREFIX`, `COMMAND_SETTINGS` – Interactive spreadsheet selection commands
-- `TRANSCRIBE_ENABLED` – `False`; set `True` or use `--transcribe` CLI flag to generate transcripts alongside artifacts
-- `TRANSCRIBE_MODEL` – Whisper model size: `tiny`, `base` (default), `small`, `medium`, `large-v3`
-- `TRANSCRIBE_LANGUAGE` – `None` (auto-detect) or language code like `"en"`
-- `TRANSCRIBE_COMPUTE_TYPE` – `"int8"` (fastest), `"float16"`, or `"float32"`
-- `TRANSCRIBE_FORMAT` – Output format: `"md"` (Markdown, default), `"srt"`, or `"vtt"`
-- `TRANSCRIBE_INITIAL_PROMPT` – Context prompt sent to Whisper (default: UX research session description)
-- `TRANSCRIBE_BEAM_SIZE` – Beam search width (`5` default)
-- `MANIFEST_FILENAME` – `"clipgen_manifest.json"` – cumulative artifact manifest file name
-- `MANIFEST_ENABLED` – `False`; set `True` or use `--manifest` CLI flag to write manifest alongside generated artifacts
-- `SERVER_PORT` – `8089` – port for the combined Studio/Insights Flask server
-- `INSIGHTS_MANIFEST_FILENAME` – `"insights_manifest.json"` – insights data manifest file name
-- `SPRITE_SHEET_FRAME_COUNT` – `20` – number of frames extracted per sprite sheet
-- `SPRITE_SHEET_THUMB_WIDTH` – `160` – pixel width of each sprite thumbnail
-- `SPRITE_SHEET_MIN_INTERVAL` – `1` – minimum seconds between sprite frames
-- `TITLECARDS_ENABLED` – `False`; set `True` or pass `--titlecards` to prepend a generated title card to each clip
-- `FILMSTRIP_ENABLED` – `False`; set `True` or pass `--filmstrip` to show thumbnail images on timeline markers in the HTML viewer
-- `TITLECARD_DURATION_SECONDS` – `2`; duration in seconds for the generated title card
-- `SCREENSPACE_MANIFEST_FILENAME` – `"screenspace_manifest.json"` – Screenspace state persistence file
-- `SCREENSPACE_DEFAULT_INTERVAL` – `1.0` – default frame sampling interval (seconds) for analysis tasks
-- `SCREENSPACE_SSIM_THRESHOLD` – `0.90` – minimum SSIM score for Similarity tool matches
-- `SCREENSPACE_CHANGE_RATIO_THRESHOLD` – `0.03` – minimum changed-pixel fraction for Change tool matches
-- `SCREENSPACE_OCR_FUZZY_THRESHOLD` – `0.8` – minimum fuzzy match score for Text/Numbers tool matches
-- `SCREENSPACE_NOISE_THRESHOLD`, `SCREENSPACE_BLUR_KERNEL`, `SCREENSPACE_MORPH_KERNEL` – image preprocessing tuning for change detection
-
 ## Spreadsheet layout
 
-- Row 0 (A1): Study name (optional; falls back to spreadsheet title).
-- Header row: Must include columns **ID**, **Observation**, **Category** (exact names from config).
-- Participant columns: Immediately after ID; headers start with P or G (e.g. P01, P02, G01). Each holds timestamp strings; non-empty cells become clip candidates.
-- Observation column: Human-readable description per row.
-- Category column: Label per row for category/reel selection.
-- Severity column (optional): Per-row severity level for severity mode filtering and reel sorting. Values can be numeric (-4 to +2) or string labels (Critical, High, Medium, Low, N/A, Positive, Very Positive). Detected via `sheet.find("Severity")`.
-
-Optional clock baseline row:
-
-- A single sheet-wide **baseline marker row** contains the label `Baseline time` in one of its cells and per-participant baseline timestamps in the participant columns.
-- Each non-empty baseline cell in that row (e.g. `09:12:00` under `P01`) marks that participant column as using **clock/absolute** timestamps.
-- During `files.prepare_clip()`, all `(start, end)` pairs in that column are converted to **relative** offsets by subtracting the per-column baseline via `utils.convert_clock_pairs_to_relative()`.
-- Empty baseline cells in the marker row mean the participant column uses **relative** timestamps (no conversion applied).
-- If no `Baseline time` marker row is present at all, all participant columns are treated as using relative timestamps.
-
-Reference spreadsheet layout is described in [README.md](README.md).
+Required columns: **ID**, **Observation**, **Category**. Participant columns follow ID with headers starting `P` or `G`. An optional `Baseline time` marker row enables clock/absolute timestamps per participant column (converted to relative offsets in `files.prepare_clip()`). Full layout details and baseline semantics are documented in the [spreadsheet.py](spreadsheet.py) module docstring and in [README.md](README.md).
 
 ## Timeline HTML Viewer
 
-- **Opt-in**: CLI flag `--viewer` or interactive `viewer` mode from the mode selection prompt.
-- **Assets**: Static template in [assets/web/](assets/web/) (`viewer.html`, `viewer.js`, `viewer.css`). Per-run, Python copies these into the artifact directory and injects a `<script>window.CLIPGEN_DATA={...};</script>` block replacing the `<!-- CLIPGEN_DATA_HERE -->` placeholder.
-- **Data contract** (`window.CLIPGEN_DATA`): JSON object with `meta` (study, participant, generatedAt, mode, sourceSpreadsheet, sourceFileType, filmstripEnabled), `artifacts` (array of {id, type, file, start, end, study, participant, category, description, cellRow, cellCol, cellA1, annotations, sourceVideo}), and `timeline` ({duration, startOffset}).
-- **Key functions**: `build_artifact_records_for_clip()`, `finalize_timeline_data()`, `generate_timeline_viewer()` – all in [viewer.py](viewer.py).
-- **Filmstrip mode**: Toggle button in the viewer header replaces colored timeline markers with thumbnail images from the artifacts. Screenshots/GIFs load directly; clip thumbnails are extracted client-side via canvas. Persists via `localStorage`. Default controlled by `config.FILMSTRIP_ENABLED` / `--filmstrip`.
-- Reel mode artifact collection is stubbed (returns empty artifacts list) for future enhancement.
+Opt-in via `--viewer` or interactive `viewer`. Injects `window.CLIPGEN_DATA` into `assets/web/viewer.html` replacing `<!-- CLIPGEN_DATA_HERE -->`. Data contract, key functions, filmstrip mode, and gallery variant are documented in the [viewer.py](viewer.py) module docstring.
 
 ## Gallery HTML Viewer
 
-- **Opt-in**: CLI flag `--gallery [VIDEO]` or interactive `gv`/`gallery` mode.
-- **Assets**: Static template in [assets/web/](assets/web/) (`gallery.html`, `gallery.js`, `gallery.css`). Follows the same inlining pattern as the timeline viewer.
-- **Data contract** (`window.CLIPGEN_DATA`): JSON object with `meta` (sourceVideo, generatedAt, mode, format, interval, videoDuration) and `artifacts` (array of {file, timestamp, timestamp_formatted, type, duration}).
-- **Key functions**: `generate_interval_captures()` in [video.py](video.py), `finalize_gallery_data()` and `generate_gallery_viewer()` in [viewer.py](viewer.py).
-- Gallery artifacts are NOT written to the manifest by default.
+Opt-in via `--gallery [VIDEO]` or interactive `gv`/`gallery`. Uses the same injection pattern as the timeline viewer but with `assets/web/gallery.html`. Key functions and data contract are documented in the [viewer.py](viewer.py) module docstring.
 
 ## Studio Web Interface
 
-- **Opt-in**: CLI flag `--studio`. Requires a spreadsheet (Google Sheets or Excel).
-- **Server**: `start_combined_server()` in [server.py](server.py) starts a Flask app serving both Studio (at `/studio/`) and Insights Builder (at `/insights/`) on `config.SERVER_PORT` (default 8089). Opens the browser automatically.
-- **Assets**: Static template in [assets/web/](assets/web/) (`studio.html`, `studio.js`, `studio.css`). Served directly by Flask (no inlining).
-- **API endpoints** (all under `/studio/`):
-  - `GET /api/sheet` – returns spreadsheet grid data (rows, participants, observations, categories, severity, per-cell timestamp validity)
-  - `POST /api/generate` – generates artifacts for specified cells in a given format (clip/screen/gif)
-  - `POST /api/reel` – builds a reel from specified cells
-  - `POST /api/viewer` – generates a timeline viewer from session artifacts
-  - `POST /api/timeline-viewer` – batch-exports all clips and generates a timeline viewer
-  - `POST /api/manifest` – writes the cumulative artifact manifest to disk
-  - `POST /api/regenerate` – regenerates all media from saved manifest
-  - `GET /api/status` – reports which interfaces are available (studio/insights)
-- **State**: Module-level `_worksheet`, `_sheet_context`, `_generated_artifacts`, `_generated_reels` in [server.py](server.py), initialized by `_init_studio_state()`.
-- **Key function**: `start_combined_server(worksheet, port, default_page)` – registers both Studio and Insights blueprints on one Flask app.
+Opt-in via `--studio`; requires a spreadsheet. Starts a Flask app via `start_combined_server()` in [server.py](server.py) at `config.SERVER_PORT` (8089), serving `assets/web/studio.html`. API endpoints, module-level state, and key function signatures are documented in the [server.py](server.py) module docstring.
 
 ## Insights Builder ([insights.py](insights.py), [insights_server.py](insights_server.py))
 
-- **Opt-in**: CLI flag `--insights`. No spreadsheet required; reads from `clipgen_manifest.json`.
-- **Server**: Served by the same combined Flask server as Studio, at `/insights/`. When `--insights` is used alone (no spreadsheet), only the Insights blueprint is active.
-- **Assets**: Static template in [assets/web/](assets/web/) (`insights-builder.html/js/css` for the builder, `insights-viewer.html/js/css` for the exported viewer). Builder is served by Flask; viewer is generated as a standalone HTML file via `generate_insights_viewer()`.
-- **Data model** ([insights.py](insights.py)):
-  - `load_insights_manifest()` / `save_insights_manifest()` – read/write `insights_manifest.json`
-  - `create_insight()` – returns a new insight dict with all fields initialized
-  - `update_insight()` – merge updates into an existing insight by ID
-  - `delete_insight()` – remove an insight by ID
-- **Insight record**:
-
-  ```python
-  {
-      "id": "ins_<8hex>",         # Unique ID (uuid4 hex prefix)
-      "title": str,
-      "summary": str,
-      "severity": str,            # Critical/High/Medium/Low/N/A/Positive/Very Positive
-      "status": str,              # "draft" or "final"
-      "createdAt": str,           # ISO 8601 UTC
-      "updatedAt": str,           # ISO 8601 UTC
-      "causes": {"narrative": str, "artifacts": [ids]},
-      "behaviors": {"narrative": str, "artifacts": [ids]},
-      "impacts": {"narrative": str, "artifacts": [ids]},
-      "timelineContext": str,
-  }
-  ```
-
-- **API endpoints** (all under `/insights/`):
-  - `GET /api/artifacts` – returns artifacts from manifest, enriched with sprite sheet data
-  - `GET/POST /api/insights` – list all or create new insight
-  - `GET/PUT/DELETE /api/insights/<id>` – read, update, or delete a single insight
-  - `POST /api/sprites/generate` – generate missing sprite sheets for clip artifacts
-  - `POST /api/generate-viewer` – export standalone insights viewer HTML
-  - `GET /media/<filename>` – serve artifact media files from output directory
-- **Sprite sheets**: `video.generate_sprite_sheet()` extracts frames at regular intervals and tiles them into a PNG contact sheet for hover-to-scrub previews. Configured by `SPRITE_SHEET_FRAME_COUNT`, `SPRITE_SHEET_THUMB_WIDTH`, `SPRITE_SHEET_MIN_INTERVAL` in [config.py](config.py).
-- **Viewer export**: `finalize_insights_viewer_data()` and `generate_insights_viewer()` in [viewer.py](viewer.py) produce a standalone `insights_viewer.html`. Shows only "final" insights if any exist; otherwise shows all. Only artifacts referenced by visible insights are included.
-- **Manifests**: `clipgen_manifest.json` (artifacts, read-only) and `insights_manifest.json` (insights, read-write) in the output directory.
+Opt-in via `--insights`; no spreadsheet required — reads from `clipgen_manifest.json`. Served at `/insights/` by the same Flask server as Studio. Insight record shape and CRUD function signatures are in the [insights.py](insights.py) module docstring. Flask API endpoints are in the [insights_server.py](insights_server.py) module docstring. The exported `insights_viewer.html` is generated by `finalize_insights_viewer_data()` / `generate_insights_viewer()` in [viewer.py](viewer.py).
 
 ## Screenspace ([screenspace.py](screenspace.py), [screenspace_server.py](screenspace_server.py))
 
-- **Opt-in**: CLI flag `--screenspace` or interactive `ss`/`screenspace`. No spreadsheet required; auto-discovers participant videos from the input directory.
-- **Server**: Served at `/screenspace/` by the combined Flask server (`start_combined_server()` in [server.py](server.py)) on `config.SERVER_PORT` (default 8089).
-- **Assets**: `screenspace.html`, `screenspace.js`, `screenspace.css` in [assets/web/](assets/web/). Served directly by Flask (no inlining).
-- **Analysis tools** (six types, passed as `type` in task creation):
-  - `color` – Find frames where a region's average HSV color matches a target color within a configurable tolerance.
-  - `change` – Detect frames where content changes significantly (pixel diff ratio above `SCREENSPACE_CHANGE_RATIO_THRESHOLD`).
-  - `similarity` – Find frames matching a reference frame capture via SSIM (`SCREENSPACE_SSIM_THRESHOLD`).
-  - `text` – OCR fuzzy search: frames where text in a region matches a query string (`SCREENSPACE_OCR_FUZZY_THRESHOLD`); requires EasyOCR.
-  - `numbers` – OCR numeric comparison: frames where a numeric value satisfies a relational condition (eq/gt/lt/gte/lte/range).
-  - `timelapse` – Generate a sped-up video of a region over a time range.
-- **Workflow**: User draws rectangular regions on a video frame → configures and enqueues analysis tasks → `ScreenspaceWorker` processes tasks in a background thread → results are timestamps or artifact files → state persisted to `screenspace_manifest.json`.
-- **Task queue**: Pausable/resumable; tasks can be drag-reordered by priority. Partial results available on pause.
-- **Region coordinates**: Normalized (0–1) relative to canvas size, with `source_width`/`source_height` stored for denormalization to target video resolution.
-- **API endpoints** (all under `/screenspace/`):
-  - `GET /api/participants` – list discovered participant videos
-  - `GET /api/video/frame/<participant>/<timestamp>` – extract a JPEG frame
-  - `GET /api/video/info/<participant>` – video metadata (duration, resolution, fps)
-  - `GET/POST /api/regions`, `DELETE /api/regions/<name>` – region CRUD
-  - `GET/POST /api/tasks`, `GET/DELETE /api/tasks/<task_id>` – task queue management
-  - `PUT /api/tasks/reorder`, `POST /api/tasks/pause`, `POST /api/tasks/resume` – queue control
-  - `GET /api/tasks/<task_id>/results` – analysis results (timestamps, artifact paths)
-- **State**: Module-level `_manifest`, `_worker`, `_output_dir`, `_participants` in [screenspace_server.py](screenspace_server.py), initialized by `_init_screenspace_state()`.
-- **Manifest**: `screenspace_manifest.json` in the output directory; stores region definitions and task history.
+Opt-in via `--screenspace` or interactive `ss`/`screenspace`; no spreadsheet required. Served at `/screenspace/` by the combined Flask server. Analysis tool descriptions (color/change/similarity/text/numbers/timelapse) and API endpoints are documented in the [screenspace.py](screenspace.py) and [screenspace_server.py](screenspace_server.py) module docstrings.
 
 ## Artifact Manifest
 
-- **Opt-in**: CLI flag `--manifest` or `config.MANIFEST_ENABLED = True` via interactive settings.
-- **File**: `clipgen_manifest.json` in the output directory (name from `config.MANIFEST_FILENAME`).
-- **Key functions** in [viewer.py](viewer.py):
-  - `save_manifest(new_artifacts, *, new_reels, study, ...)` – merges new artifacts/reels into existing manifest (deduplicates by `id`; newer entries win) and writes JSON.
-  - `load_manifest_artifacts()` – reads artifact records from manifest, or returns `[]`.
-  - `load_manifest_reels()` – reads reel records from manifest, or returns `[]`.
-- **Regeneration**: `--regenerate` CLI flag invokes `clipgen.regenerate_from_manifest()`, which re-creates media artifacts and reels from manifest entries without a spreadsheet. Skips transcript-type artifacts.
-- **Consumers**: The Insights Builder reads `clipgen_manifest.json` for its media library. Studio can export and regenerate from manifest. The standalone `--viewer` flag (without a mode) also reads from manifest.
+Opt-in via `--manifest` or `config.MANIFEST_ENABLED`. Writes `clipgen_manifest.json` alongside artifacts. Key functions (`save_manifest`, `load_manifest_artifacts`, `load_manifest_reels`) and merge/dedup behavior are documented in the [viewer.py](viewer.py) module docstring. Consumed by Insights Builder, `--regenerate`, and standalone `--viewer`.
 
 ## Transcription ([transcripts.py](transcripts.py))
 
-- **Opt-in**: CLI flag `--transcribe` or `config.TRANSCRIBE_ENABLED = True` via interactive settings.
-- **Engine**: [faster-whisper](https://github.com/SYSTRAN/faster-whisper) (CTranslate2-based Whisper). Model is lazy-loaded on first use and cached at module level for the session.
-- **Key functions**:
-  - `transcribe_video(video_path, *, language, initial_prompt, context_keywords)` → `TranscriptResult` with timestamped segments, detected language, source file, model name. Accepts optional `context_keywords` list appended to the initial prompt.
-  - `filter_segments(result, start_sec, end_sec, *, offset_to_zero)` → filtered `TranscriptResult` for a clip's time range; `offset_to_zero=True` shifts times so the clip starts at 0:00.
-  - `write_transcript(result, output_path, *, fmt)` → writes Markdown (`.md`), SRT (`.srt`), or WebVTT (`.vtt`).
-  - `read_transcript(filepath)` → parses any supported format back into `TranscriptResult` (for future subtitle/viewer use).
-  - `get_transcript_extension(fmt)` → returns the file extension for a format string.
-- **Data types**: `TranscriptSegment` (start, end, text) and `TranscriptResult` (segments, language, source_file, model) — both `TypedDict`.
-- **Pipeline integration**: In `clipgen.process_clips()`, `_transcribe_segments()` caches full-video transcription per source video, then filters and writes per-clip transcripts. Transcript artifacts (type `"transcript"`) are added to the artifact list for manifest tracking.
-- **Output filenames**: Match the corresponding clip filename but with the transcript extension (e.g. `[Onboarding] study P01 desc.md`).
+Opt-in via `--transcribe` or `config.TRANSCRIBE_ENABLED`. Uses faster-whisper; model is lazy-loaded and cached per session. Data types, key function signatures, and pipeline integration details are documented in the [transcripts.py](transcripts.py) module docstring.
 
 ## Titlecards ([titlecards.py](titlecards.py))
 
-- **Opt-in**: `config.TITLECARDS_ENABLED = True` or pass `--titlecards` / `--no-titlecards` to override for a single run.
-- **Function**: Prepends a short title card video segment (first frame of source video + text overlay, via FFmpeg) to each generated clip. An endcard (last frame, no text) can also be appended.
-- **Key functions**: `build_titlecard_frame(clip, resolution)`, `build_endcard_frame(resolution)`, `prepend_titlecard_to_clip(clip, clip_path)`, `append_endcard_to_clip(clip_path)`.
-- **Config**: `TITLECARD_DURATION_SECONDS` (default `2`) sets card length. Falls back to a color fill when no source frame is available.
+Opt-in via `config.TITLECARDS_ENABLED` or `--titlecards` / `--no-titlecards`. Prepends a title card (first source frame + text overlay) to each clip. Key functions and config knobs are documented in the [titlecards.py](titlecards.py) module docstring.
 
 ## Version
 

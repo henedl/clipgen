@@ -1,8 +1,36 @@
 # -*- coding: utf-8 -*-
-"""Screenspace web server for clipgen.
+"""Screenspace Flask blueprint for clipgen.
 
-Serves the Screenspace front-end and exposes REST endpoints for
-region management, task execution, video frame extraction, and media serving.
+Registered at /screenspace/ by start_combined_server(). Works with or without a
+spreadsheet; auto-discovers participant videos from the input directory.
+Module-level state: _manifest, _worker, _output_dir, _participants (initialized by
+_init_screenspace_state()).
+
+API endpoints (all under /screenspace/):
+  GET  /media/<filename>                    – serve artifact media files
+  GET  /api/participants                    – list discovered participant videos
+  GET  /api/video/frame/<participant>/<ts>  – extract a JPEG frame at timestamp
+  GET  /api/video/info/<participant>        – video metadata (duration, resolution, fps)
+  GET  /api/regions                         – list regions
+  POST /api/regions                         – create or update a region
+  DELETE /api/regions/<name>               – delete a region
+  GET/POST /api/stashes                    – stash CRUD (save/restore named region sets)
+  PUT  /api/stashes/<id>                   – update stash
+  DELETE /api/stashes/<id>                 – delete stash
+  POST /api/stashes/<id>/restore           – restore a stash
+  GET  /api/tasks                          – list task queue
+  GET  /api/tasks/<task_id>               – get single task
+  POST /api/tasks                          – create and enqueue a new task
+  DELETE /api/tasks/<task_id>             – cancel/remove a task
+  PUT  /api/tasks/reorder                  – reorder task queue by priority
+  POST /api/tasks/pause                    – pause the worker
+  POST /api/tasks/resume                   – resume the worker
+  GET  /api/tasks/<task_id>/results        – analysis results (timestamps, artifact paths)
+  GET  /api/events                         – list result events across all tasks
+  PUT  /api/events/<event_id>/exclude      – mark an event excluded
+  PUT  /api/events/<event_id>/include      – mark an event included
+  PUT  /api/events/bulk-exclude            – bulk exclude events by task/time range
+  PUT  /api/events/bulk-include            – bulk include events by task/time range
 """
 
 from __future__ import annotations
