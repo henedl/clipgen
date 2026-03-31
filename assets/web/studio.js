@@ -2138,6 +2138,10 @@
     });
 
     qs("#statusDismiss").addEventListener("click", hideOverlay);
+
+    qs("#confirmOverlay").addEventListener("click", function (e) {
+      if (e.target === qs("#confirmOverlay")) hideConfirm();
+    });
   }
 
   // ---- Generation progress helpers ----
@@ -2511,14 +2515,45 @@
 
   function onBuildTimelineViewer() {
     if (state.generating) return;
-    state.generating = true;
 
-    showOverlay("Building timeline viewer...");
+    if (state.intakeClusters && state.intakeClusters.length > 0) {
+      var n = state.intakeClusters.length;
+      showConfirm(
+        "Include Intake Events?",
+        n + " Intake event group" + (n === 1 ? "" : "s") +
+          " detected from Screenspace. Include them as clips in the timeline viewer?",
+        function () { startTimelineViewerBuild(true); },
+        function () { startTimelineViewerBuild(false); }
+      );
+    } else {
+      startTimelineViewerBuild(false);
+    }
+  }
+
+  function startTimelineViewerBuild(includeIntake) {
+    state.generating = true;
+    var body = {};
+
+    if (includeIntake && state.intakeClusters && state.intakeClusters.length > 0) {
+      showOverlay("Building timeline viewer with intake events\u2026");
+      body.include_intake = true;
+      body.intake_items = state.intakeClusters.map(function (c) {
+        return {
+          participant: c.participant,
+          start: c.start,
+          end: c.end,
+          event_type: c.event_type,
+          event_ids: c.events.map(function (e) { return e.id; }),
+        };
+      });
+    } else {
+      showOverlay("Building timeline viewer\u2026");
+    }
 
     fetch("api/timeline-viewer", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({}),
+      body: JSON.stringify(body),
     })
       .then(function (r) {
         if (!r.ok) throw new Error("Server error " + r.status);
@@ -2718,6 +2753,38 @@
 
   function hideOverlay() {
     qs("#statusOverlay").classList.add("hidden");
+  }
+
+  // ---- Confirm overlay ----
+
+  var _confirmCleanup = null;
+
+  function showConfirm(title, message, onYes, onNo) {
+    qs("#confirmTitle").textContent = title;
+    qs("#confirmMessage").textContent = message;
+    qs("#confirmOverlay").classList.remove("hidden");
+
+    var yesBtn = qs("#confirmYes");
+    var noBtn = qs("#confirmNo");
+
+    function cleanup() {
+      qs("#confirmOverlay").classList.add("hidden");
+      yesBtn.removeEventListener("click", handleYes);
+      noBtn.removeEventListener("click", handleNo);
+      _confirmCleanup = null;
+    }
+
+    function handleYes() { cleanup(); onYes(); }
+    function handleNo() { cleanup(); onNo(); }
+
+    yesBtn.addEventListener("click", handleYes);
+    noBtn.addEventListener("click", handleNo);
+    _confirmCleanup = cleanup;
+  }
+
+  function hideConfirm() {
+    if (_confirmCleanup) _confirmCleanup();
+    else qs("#confirmOverlay").classList.add("hidden");
   }
 
   // ---- Settings ----
