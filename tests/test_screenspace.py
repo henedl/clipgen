@@ -118,6 +118,69 @@ class TestComputePhash:
         assert hash_a != hash_b
 
 
+class TestMatchTemplate:
+    def test_exact_match(self):
+        # Use a textured pattern so template matching works after blur
+        rng = np.random.RandomState(42)
+        frame = rng.randint(0, 255, (100, 200, 3), dtype=np.uint8)
+        template = frame[30:60, 80:140].copy()
+        results = screenspace.match_template(frame, template, threshold=0.9)
+        assert len(results) >= 1
+        assert results[0]["score"] >= 0.9
+
+    def test_no_match(self):
+        frame = np.zeros((100, 200, 3), dtype=np.uint8)
+        template = np.full((20, 40, 3), 128, dtype=np.uint8)
+        results = screenspace.match_template(frame, template, threshold=0.9)
+        assert len(results) == 0
+
+    def test_template_larger_than_frame(self):
+        frame = np.zeros((20, 20, 3), dtype=np.uint8)
+        template = np.zeros((50, 50, 3), dtype=np.uint8)
+        results = screenspace.match_template(frame, template, threshold=0.5)
+        assert results == []
+
+
+class TestComputeOpticalFlow:
+    def test_no_motion(self):
+        gray = np.full((50, 50), 128, dtype=np.uint8)
+        result = screenspace.compute_optical_flow(gray, gray.copy())
+        assert result["magnitude"] < 0.5
+        assert "angle" in result
+
+    def test_motion_detected(self):
+        prev = np.zeros((80, 80), dtype=np.uint8)
+        curr = np.zeros((80, 80), dtype=np.uint8)
+        prev[20:40, 20:40] = 255
+        curr[30:50, 30:50] = 255
+        result = screenspace.compute_optical_flow(prev, curr)
+        assert result["magnitude"] > 0
+
+
+class TestSceneFingerprint:
+    def test_same_frame_similar(self):
+        frame = np.random.randint(50, 200, (50, 50, 3), dtype=np.uint8)
+        fp1 = screenspace.compute_scene_fingerprint(frame)
+        fp2 = screenspace.compute_scene_fingerprint(frame.copy())
+        score = screenspace.compare_scene_fingerprints(fp1, fp2)
+        assert score >= 0.99
+
+    def test_different_frames_dissimilar(self):
+        a = np.zeros((50, 50, 3), dtype=np.uint8)
+        b = np.full((50, 50, 3), 255, dtype=np.uint8)
+        fp_a = screenspace.compute_scene_fingerprint(a)
+        fp_b = screenspace.compute_scene_fingerprint(b)
+        score = screenspace.compare_scene_fingerprints(fp_a, fp_b)
+        assert score < 0.8
+
+    def test_fingerprint_has_expected_keys(self):
+        frame = np.random.randint(0, 255, (30, 30, 3), dtype=np.uint8)
+        fp = screenspace.compute_scene_fingerprint(frame)
+        assert "histogram" in fp
+        assert "edge_density" in fp
+        assert "color_stats" in fp
+
+
 class TestBuildTimelapseCommand:
     def test_mp4_output(self):
         cmd = screenspace.build_timelapse_command(
@@ -334,6 +397,33 @@ class TestGenerateEventsFromResults:
         worker, task = self._make_worker_and_task("timelapse")
         events = worker._generate_events_from_results(task, [{"file": "out.mp4"}])
         assert events == []
+
+    def test_template_events(self):
+        worker, task = self._make_worker_and_task("template")
+        raw = [{"timestamp": 5.0, "best_score": 0.85, "match_count": 2}]
+        events = worker._generate_events_from_results(task, raw)
+        assert len(events) == 1
+        assert events[0]["confidence"] == 0.85
+        assert events[0]["metadata"]["match_count"] == 2
+        assert events[0]["metadata"]["best_score"] == 0.85
+
+    def test_flow_events(self):
+        worker, task = self._make_worker_and_task("flow")
+        raw = [{"timestamp": 10.0, "magnitude": 5.0, "angle": 90.0}]
+        events = worker._generate_events_from_results(task, raw)
+        assert len(events) == 1
+        assert events[0]["confidence"] == 0.5  # 5.0 / 10.0
+        assert events[0]["metadata"]["magnitude"] == 5.0
+        assert events[0]["metadata"]["angle"] == 90.0
+
+    def test_scene_events(self):
+        worker, task = self._make_worker_and_task("scene")
+        raw = [{"timestamp": 15.0, "scene_name": "menu", "score": 0.92}]
+        events = worker._generate_events_from_results(task, raw)
+        assert len(events) == 1
+        assert events[0]["confidence"] == 0.92
+        assert events[0]["metadata"]["scene_name"] == "menu"
+        assert events[0]["metadata"]["score"] == 0.92
 
 
 class TestManifestWithEvents:
