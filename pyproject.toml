@@ -15,3 +15,15 @@ dependencies = [
     "easyocr>=1.7.0",
     "pytest",
 ]
+
+[tool.setuptools]
+packages = []
+py-modules = [
+    "cli", "clipgen", "config", "excel_io", "files", "google_api",
+    "insights", "insights_server", "interactive", "screenspace",
+    "screenspace_server", "server", "spreadsheet", "titlecards",
+    "transcripts", "utils", "video", "viewer",
+]
+
+[tool.uv]
+required-version = ">=0.11.0"
