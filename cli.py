@@ -13,14 +13,11 @@ import sys
 from pathlib import Path
 from typing import Any, List, NamedTuple, Optional, Tuple
 
-import gspread
 from icecream import ic
 
 import clipgen
 import config
-import excel_io
 import files
-import google_api
 import spreadsheet
 import utils
 import video
@@ -434,6 +431,8 @@ def authenticate_google() -> Any:
     Returns:
         Google client connection object
     """
+    import gspread
+
     try:
         utils.debug_print("Attempting login...")
         gspread_client = gspread.oauth(credentials_filename="credentials.json")
@@ -473,6 +472,8 @@ def select_worksheet(
     Returns:
         Worksheet object
     """
+    import excel_io
+
     worksheet = None
     if args.spreadsheet:
         # CLI-specified spreadsheet
@@ -1221,6 +1222,8 @@ def main() -> None:
         sys.exit(0)
 
     # Authenticate with Google (once per run)
+    import google_api
+
     gspread_client = authenticate_google()
     doc_list = google_api.get_all_spreadsheets(gspread_client)
 

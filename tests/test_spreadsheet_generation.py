@@ -176,3 +176,35 @@ def test_baseline_and_relative_timestamps_integration(monkeypatch):
 
     # P02 clip has no baseline and should remain relative as entered.
     assert prepared_p02[0]["times"] == [("00:20", "00:40")]
+
+
+# ---- Local header lookup tests ----
+
+
+def test_find_in_data_finds_exact_match():
+    data = [["Study"], ["ID", "P01", "P02", "Observation", "Category"]]
+    result = spreadsheet._find_in_data(data, "Observation")
+    assert result is not None
+    assert result.row == 2
+    assert result.col == 4
+
+
+def test_find_in_data_returns_none_for_missing():
+    data = [["ID", "P01"]]
+    assert spreadsheet._find_in_data(data, "Missing") is None
+
+
+def test_validate_headers_with_local_data():
+    data = [["Study"], ["ID", "P01", "P02", "Observation", "Category"]]
+    result = spreadsheet.validate_spreadsheet_headers(data)
+    assert result is not None
+    id_cell, obs_cell, cat_cell = result
+    assert id_cell.row == 2 and id_cell.col == 1
+    assert obs_cell.row == 2 and obs_cell.col == 4
+    assert cat_cell.row == 2 and cat_cell.col == 5
+
+
+def test_validate_headers_missing_required(capsys):
+    data = [["Study"], ["ID", "P01", "P02"]]
+    result = spreadsheet.validate_spreadsheet_headers(data)
+    assert result is None

@@ -24,16 +24,13 @@ import gspread
 from icecream import ic
 
 import config
-import excel_io
 import files
 import google_api
 import interactive
 import spreadsheet
-import transcripts
 import utils
 import video
 import viewer
-import titlecards
 from utils import ClipRecord
 
 # Active progress bar reference, set during clip pipeline so nested functions
@@ -241,6 +238,8 @@ def _handle_spreadsheet_command(
         return None
     # Handle 'excel' for local .xlsx
     if input_name.strip().lower() == config.COMMAND_EXCEL:
+        import excel_io
+
         return excel_io.select_excel_file()
     # Handle URL
     if input_name.startswith(config.COMMAND_HTTP_PREFIX):
@@ -616,8 +615,12 @@ def _process_single_clip_segments(
                 reencode=config.REENCODING,
             )
             if ok and config.TITLECARDS_ENABLED:
+                import titlecards
+
                 ok = titlecards.prepend_titlecard_to_clip(clip, out_name)
             if ok:
+                import titlecards
+
                 ok = titlecards.append_endcard_to_clip(out_name)
         elif output_format == "screen":
             ok = video.extract_screenshot(
@@ -706,6 +709,8 @@ def _transcribe_segments(
     transcript_cache: Dict[str, Any],
 ) -> None:
     """Transcribe segments of a clip and write transcript files."""
+    import transcripts
+
     if base_video not in transcript_cache:
         transcript_cache[base_video] = transcripts.transcribe_video(
             str(utils.resolve_input_path(base_video))
