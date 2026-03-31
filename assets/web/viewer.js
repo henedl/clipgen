@@ -25,6 +25,13 @@
   var FILMSTRIP_CONCURRENCY = 2;
   var FILMSTRIP_STORAGE_KEY = "clipgen-viewer-filmstrip";
 
+  var _scrubCache = {};
+  var _scrubGenerating = {};
+  var _scrubRaf = 0;
+  var SCRUB_FRAME_COUNT = 10;
+  var SCRUB_FRAME_WIDTH = 320;
+  var SCRUB_FRAME_HEIGHT = 180;
+
   var _screenspaceVisible = true;
   var SCREENSPACE_STORAGE_KEY = "clipgen-viewer-screenspace";
 
@@ -213,6 +220,165 @@
       _thumbProcessing = false;
       processThumbQueue();
     });
+  }
+
+  // ---- Sidebar scrub sprites ----
+
+  function generateScrubSprite(artifact, callback) {
+    if (_scrubCache[artifact.id]) { callback(_scrubCache[artifact.id]); return; }
+    if (_scrubGenerating[artifact.id]) { callback(null); return; }
+    _scrubGenerating[artifact.id] = true;
+
+    var done = false;
+    var perFrameTimer = null;
+    function finish(url) {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      clearTimeout(perFrameTimer);
+      video.onerror = null;
+      video.onloadedmetadata = null;
+      video.onseeked = null;
+      delete _scrubGenerating[artifact.id];
+      try { video.src = ""; video.load(); } catch (_) {}
+      callback(url || null);
+    }
+
+    var video = document.createElement("video");
+    video.preload = "metadata";
+    video.muted = true;
+    video.playsInline = true;
+    video.src = artifact.file;
+
+    var timer = setTimeout(function () { finish(null); }, 15000);
+
+    video.onerror = function () { finish(null); };
+
+    video.onloadedmetadata = function () {
+      var dur = video.duration;
+      if (!dur || !isFinite(dur)) { finish(null); return; }
+
+      var clipStart = artifact.start || 0;
+      var clipEnd = artifact.end || dur;
+      var clipDur = clipEnd - clipStart;
+      if (clipDur <= 0) clipDur = dur;
+
+      var canvas = document.createElement("canvas");
+      canvas.width = SCRUB_FRAME_WIDTH * SCRUB_FRAME_COUNT;
+      canvas.height = SCRUB_FRAME_HEIGHT;
+      var ctx = canvas.getContext("2d");
+
+      var seekTimes = [];
+      for (var i = 0; i < SCRUB_FRAME_COUNT; i++) {
+        var t = clipStart + (clipDur * (i + 0.5)) / SCRUB_FRAME_COUNT;
+        seekTimes.push(Math.min(Math.max(0, t), dur - 0.01));
+      }
+
+      var frameIndex = 0;
+      var seekGen = 0;
+
+      function captureAndAdvance() {
+        clearTimeout(perFrameTimer);
+        try { ctx.drawImage(video, frameIndex * SCRUB_FRAME_WIDTH, 0, SCRUB_FRAME_WIDTH, SCRUB_FRAME_HEIGHT); } catch (_) {}
+        frameIndex++;
+        if (frameIndex < seekTimes.length) {
+          seekToFrame(frameIndex);
+        } else {
+          video.onseeked = null;
+          canvas.toBlob(function (blob) {
+            if (!blob) { finish(null); return; }
+            var url = URL.createObjectURL(blob);
+            _scrubCache[artifact.id] = url;
+            finish(url);
+          }, "image/jpeg", 0.7);
+        }
+      }
+
+      function seekToFrame(idx) {
+        var gen = ++seekGen;
+        video.onseeked = function () {
+          if (gen !== seekGen) return;
+          captureAndAdvance();
+        };
+        perFrameTimer = setTimeout(function () {
+          if (gen !== seekGen) return;
+          captureAndAdvance();
+        }, 800);
+        video.currentTime = seekTimes[idx];
+      }
+
+      seekToFrame(0);
+    };
+  }
+
+  function activateScrubMode(mediaEl, artifact) {
+    var url = _scrubCache[artifact.id];
+    if (!url) return;
+    var img = mediaEl.querySelector("img");
+    if (img) img.style.display = "none";
+    mediaEl.style.backgroundImage = "url(" + url + ")";
+    mediaEl.style.backgroundSize = (SCRUB_FRAME_COUNT * 100) + "% 100%";
+    mediaEl.style.backgroundPosition = "0% 0%";
+    mediaEl.classList.add("scrub-active");
+
+    if (!mediaEl.querySelector(".scrub-progress")) {
+      var bar = el("div", "scrub-progress");
+      bar.appendChild(el("div", "scrub-progress-fill"));
+      mediaEl.appendChild(bar);
+    }
+  }
+
+  function scrubEnter(ev) {
+    var mediaEl = ev.currentTarget;
+    var card = mediaEl.closest(".artifact-card");
+    if (!card) return;
+    var id = card.dataset.id;
+    var artifact = findArtifact(id);
+    if (!artifact || artifact.type !== "clip") return;
+
+    if (_scrubCache[artifact.id]) {
+      activateScrubMode(mediaEl, artifact);
+      return;
+    }
+
+    generateScrubSprite(artifact, function (url) {
+      if (!url) return;
+      if (mediaEl.matches(":hover")) {
+        activateScrubMode(mediaEl, artifact);
+      }
+    });
+  }
+
+  function scrubMove(ev) {
+    var target = ev.currentTarget;
+    if (!target.classList.contains("scrub-active")) return;
+    var clientX = ev.clientX;
+    if (_scrubRaf) return;
+    _scrubRaf = requestAnimationFrame(function () {
+      _scrubRaf = 0;
+      var rect = target.getBoundingClientRect();
+      var frac = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
+      var frameIndex = Math.min(Math.floor(frac * SCRUB_FRAME_COUNT), SCRUB_FRAME_COUNT - 1);
+      var xPct = SCRUB_FRAME_COUNT > 1 ? (frameIndex / (SCRUB_FRAME_COUNT - 1)) * 100 : 0;
+      target.style.backgroundPosition = xPct + "% 0%";
+
+      var fill = target.querySelector(".scrub-progress-fill");
+      if (fill) fill.style.width = (frac * 100).toFixed(1) + "%";
+    });
+  }
+
+  function scrubLeave(ev) {
+    var mediaEl = ev.currentTarget;
+    if (!mediaEl.classList.contains("scrub-active")) return;
+    mediaEl.classList.remove("scrub-active");
+    mediaEl.style.backgroundImage = "";
+    mediaEl.style.backgroundSize = "";
+    mediaEl.style.backgroundPosition = "";
+    var img = mediaEl.querySelector("img");
+    if (img) img.style.display = "";
+
+    var fill = mediaEl.querySelector(".scrub-progress-fill");
+    if (fill) fill.style.width = "0%";
   }
 
   function initClipThumbnails() {
@@ -1228,6 +1394,7 @@
     list.innerHTML = "";
 
     orderedArtifactsForList().forEach(function (a) {
+      if (a.type === "transcript") return;
       var card = el("div", "artifact-card");
       card.dataset.id = a.id;
 
@@ -1248,6 +1415,11 @@
         } else {
           media.classList.add("thumb-pending");
         }
+      }
+      if (a.type === "clip") {
+        media.addEventListener("mouseenter", scrubEnter);
+        media.addEventListener("mousemove", scrubMove);
+        media.addEventListener("mouseleave", scrubLeave);
       }
       card.appendChild(media);
 
