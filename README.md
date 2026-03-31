@@ -118,6 +118,52 @@ uv run clipgen.py --screenspace -s "My Study"
 
 Screenspace opens at `http://127.0.0.1:8089/screenspace/`. Available analysis tools: **Color** (match a region's color), **Change** (detect content changes), **Similarity** (find frames matching a reference), **Text** (OCR fuzzy search), **Numbers** (OCR numeric comparison), **Timelapse** (sped-up region video). Tasks run in a pausable background queue with drag-to-reorder.
 
+### Architecture overview
+
+End-to-end data flow from spreadsheet input to video artifacts and optional HTML timeline viewer:
+
+```mermaid
+flowchart LR
+  user["User"] --> entry["clipgen.py (entry point)"]
+  entry --> cli["cli.py (CLI parsing, setup, dispatch)"]
+
+  cli --> sheetSource["Spreadsheet source selection"]
+  sheetSource --> googleSheets["google_api.py (Google Sheets)"]
+  sheetSource --> excelSheets["excel_io.py (Excel .xlsx)"]
+
+  googleSheets --> spreadsheetLayer["spreadsheet.py (rows, selectors)"]
+  excelSheets --> spreadsheetLayer
+
+  spreadsheetLayer --> filesLayer["files.py (prepare_clip, filenames)"]
+  filesLayer --> utilsLayer["utils.py (timestamps, annotations)"]
+  filesLayer --> videoLayer["video.py (ffmpeg/ffprobe)"]
+
+  utilsLayer --> videoLayer
+  videoLayer --> artifacts["Clips / screenshots / GIFs / reels"]
+
+  artifacts --> transcriptLayer["transcripts.py (faster-whisper)"]
+  transcriptLayer --> transcriptFiles["Transcript files (.md / .srt / .vtt)"]
+
+  artifacts --> viewer["assets/web (timeline viewer)"]
+
+  cli --> server["server.py (Flask)"]
+  server --> studioUI["Studio (assets/web)"]
+  server --> insightsUI["Insights Builder (assets/web)"]
+  server --> spreadsheetLayer
+  server --> videoLayer
+  insightsUI --> insightsData["insights.py (data model)"]
+  server --> screenspaceUI["Screenspace (assets/web)"]
+  screenspaceUI --> screenspaceEngine["screenspace.py (analysis engine)"]
+```
+
+1. **Input and selection**: `clipgen.py` reads CLI arguments, selects mode, and chooses a spreadsheet source (Google Sheets via `google_api.py` or local Excel via `excel_io.py`).
+2. **Spreadsheet layer**: `spreadsheet.py` parses headers, validates layout, interprets the selected mode/selector, and yields logical clip records with per-participant timestamps.
+3. **Clip preparation**: `files.py` (with `utils.py`) parses and normalizes timestamps/annotations into `times` ranges, sanitizes study/participant/category names, and generates safe output filenames.
+4. **Rendering**: `video.py` uses ffmpeg/ffprobe to cut clips, screenshots, GIFs, or reels from `{study}_{participant}.mp4`, honoring limits and other settings in `config.py`.
+5. **Optional transcription**: When `--transcribe` is set, `transcripts.py` uses faster-whisper to transcribe source videos (cached per video), filters segments to each clip's time range, and writes transcript files alongside artifacts.
+6. **Optional viewer**: When requested, `clipgen.py` uses the templates in `assets/web` to build an HTML timeline viewer from the generated artifacts.
+7. **Web interfaces**: When `--studio`, `--insights`, or `--screenspace` is passed, `server.py` starts a combined Flask server. Studio serves an interactive spreadsheet grid backed by the same spreadsheet/video pipeline. Insights Builder reads `clipgen_manifest.json` and provides CRUD for structured research findings, persisted to `insights_manifest.json`. Screenspace provides video frame analysis with a pausable task queue, persisted to `screenspace_manifest.json`.
+
 ### Manifest
 
 clipgen can write a cumulative artifact manifest (`clipgen_manifest.json`) alongside generated clips. The manifest tracks all artifacts and reels across runs, and is required by the Insights Builder and the `--regenerate` flag.

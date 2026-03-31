@@ -3,13 +3,10 @@
 ## Learned User Preferences
 
 - When the user attaches an implementation plan that already has created todos, do not edit the plan file; mark those todos in_progress as you work and complete them without recreating the list.
-- Prefer inlining functions rather than creating yet another helper.
 - Don't extract helpers unless it is called more than once.
 - Prefer placing generic index/letter conversion utilities (e.g. index_to_letter, letter_to_index) in utils.py rather than in domain-specific modules like files.py.
-- Prefer minimal, focused edits over broad rewrites.
 - Prefer naming new helpers to match existing method naming patterns in the same module.
 - Never write a class when a function will do.
-- No comments on obvious code.
 - Treat spreadsheet layout and timestamp semantics as domain rules; if tests conflict with these, reconsider or adjust the tests rather than changing core semantics to satisfy them.
 - All web UIs use vanilla JavaScript (ES5-style `.then()` chaining, not async/await), hand-written CSS with CSS variables for theming, and plain HTML. No React, TypeScript, CSS frameworks, or build tools.
 - **CSS design tokens**: Use tokens from `assets/web/tokens.css` for spacing (`--space-N`), font sizes (`--text-N`), border radius (`--radius-N`), shadows (`--shadow-N`), transitions (`--duration-N`), and z-index (`--z-N`). Never write raw `rem`/`px` values for these properties in new code. When editing existing CSS, convert touched values to tokens.
@@ -21,7 +18,7 @@
 - **Icons**: Prefer SVG icons from `assets/icons/` (316 Heroicons outline, kebab-case names like `pencil-square.svg`) over crafting new inline SVG paths or using text/emoji glyphs in web UIs.
 - **Linting/formatting**: Run `uv run ruff check --fix && uv run ruff format` after editing Python files. Run `uv run ty check` for type checking.
 - Commit early and commit often, so we can roll back changes more easily.
-- Check git log regularly, especially when confused.
+- If a problem is reoccurring and survives fix attempts, check git logs for clues.
 - Never edit .gitignore automatically, always confirm changes to this file with the user.
 
 ## Learned Workspace Facts
