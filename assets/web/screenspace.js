@@ -4,7 +4,7 @@
   "use strict";
 
   var THEME_STORAGE_KEY = "clipgen-screenspace-theme";
-  var POLL_INTERVAL = 2000;
+  var POLL_INTERVAL = 3000;
   var FRAME_STEP = 1.0;
 
   var TASK_COLORS = {
@@ -106,6 +106,9 @@
   };
 
   var _timelineHitRects = [];
+  var _overlayRaf = 0;
+  var _cachedOverlayRect = null;
+  var _lastPollFingerprint = "";
 
   var _cachedThemeColors = null;
 
@@ -570,7 +573,7 @@
   function seekPlayhead(timestamp) {
     state.currentTimestamp = timestamp;
     qs("#timestampInput").value = formatTimestamp(timestamp);
-    renderTimeline();
+    renderPlayhead();
   }
 
   var _pendingFrameTs = null;
@@ -653,14 +656,30 @@
 
   // ---- Region drawing ----
 
-  function canvasCoords(canvas, event) {
-    var rect = canvas.getBoundingClientRect();
+  function canvasCoords(canvas, event, cachedRect) {
+    var rect = cachedRect || canvas.getBoundingClientRect();
     var scaleX = canvas.width / rect.width;
     var scaleY = canvas.height / rect.height;
     return {
       x: Math.round((event.clientX - rect.left) * scaleX),
       y: Math.round((event.clientY - rect.top) * scaleY),
     };
+  }
+
+  function scheduleOverlayRender() {
+    if (_overlayRaf) return;
+    _overlayRaf = requestAnimationFrame(function () {
+      _overlayRaf = 0;
+      renderOverlay();
+    });
+  }
+
+  function flushOverlayRender() {
+    if (_overlayRaf) {
+      cancelAnimationFrame(_overlayRaf);
+      _overlayRaf = 0;
+    }
+    renderOverlay();
   }
 
   function normalizeRect(x1, y1, x2, y2) {
@@ -738,8 +757,9 @@
         showToast("Sampled color from frame");
         return;
       }
-      var pos = canvasCoords(overlay, e);
-      var displayW = overlay.getBoundingClientRect().width || overlay.width;
+      _cachedOverlayRect = overlay.getBoundingClientRect();
+      var pos = canvasCoords(overlay, e, _cachedOverlayRect);
+      var displayW = _cachedOverlayRect.width || overlay.width;
       var s = overlay.width / displayW;
       var ctx = overlay.getContext("2d");
       var hit = findHitRegion(pos.x, pos.y, s, ctx);
@@ -774,8 +794,9 @@
 
     overlay.addEventListener("mousemove", function (e) {
       if (state.pipetteActive) return;
-      var pos = canvasCoords(overlay, e);
-      var displayW = overlay.getBoundingClientRect().width || overlay.width;
+      var rect = _cachedOverlayRect || overlay.getBoundingClientRect();
+      var pos = canvasCoords(overlay, e, rect);
+      var displayW = rect.width || overlay.width;
       var s = overlay.width / displayW;
       if (state.resizingRegion) {
         var rName = state.resizingRegion.name;
@@ -784,7 +805,7 @@
         var newW = clamp(pos.x - rPx.x, minSize, overlay.width - rPx.x);
         var newH = clamp(pos.y - rPx.y, minSize, overlay.height - rPx.y);
         state.regions[rName] = Object.assign({}, state.regions[rName], { w: newW / overlay.width, h: newH / overlay.height });
-        renderOverlay();
+        scheduleOverlayRender();
         return;
       }
       if (state.draggingRegion) {
@@ -793,31 +814,32 @@
         var newX = clamp(pos.x - d.offsetX, 0, overlay.width - dPx.w);
         var newY = clamp(pos.y - d.offsetY, 0, overlay.height - dPx.h);
         state.regions[d.name] = Object.assign({}, state.regions[d.name], { x: newX / overlay.width, y: newY / overlay.height });
-        renderOverlay();
+        scheduleOverlayRender();
         return;
       }
       if (state.drawingRegion) {
         state.drawingRegion.endX = pos.x;
         state.drawingRegion.endY = pos.y;
-        renderOverlay();
+        scheduleOverlayRender();
         return;
       }
       var ctx = overlay.getContext("2d");
       var hit = findHitRegion(pos.x, pos.y, s, ctx);
       state.hoveredRegion = hit;
       overlay.style.cursor = hit ? (hit.handle === "resize" ? "nwse-resize" : "grab") : "crosshair";
-      renderOverlay();
+      scheduleOverlayRender();
     });
 
     overlay.addEventListener("mouseup", function (e) {
       if (state.pipetteActive) return;
+      _cachedOverlayRect = null;
       if (state.resizingRegion) {
         var rName = state.resizingRegion.name;
         state.resizingRegion = null;
         document.body.style.cursor = "";
         document.body.style.userSelect = "";
         saveRegionUpdate(rName);
-        renderOverlay();
+        flushOverlayRender();
         updateRegionButtons();
         return;
       }
@@ -827,7 +849,7 @@
         document.body.style.cursor = "";
         document.body.style.userSelect = "";
         saveRegionUpdate(dName);
-        renderOverlay();
+        flushOverlayRender();
         updateRegionButtons();
         return;
       }
@@ -843,15 +865,16 @@
       if (r.w > 5 && r.h > 5) {
         state.pendingRegion = r;
       }
-      renderOverlay();
+      flushOverlayRender();
       updateRegionButtons();
     });
 
     // Document-level listeners so drag/resize continues outside the canvas
     document.addEventListener("mousemove", function (e) {
       if (!state.resizingRegion && !state.draggingRegion) return;
-      var pos = canvasCoords(overlay, e);
-      var displayW = overlay.getBoundingClientRect().width || overlay.width;
+      var rect = _cachedOverlayRect || overlay.getBoundingClientRect();
+      var pos = canvasCoords(overlay, e, rect);
+      var displayW = rect.width || overlay.width;
       var s = overlay.width / displayW;
       if (state.resizingRegion) {
         var rName = state.resizingRegion.name;
@@ -860,25 +883,26 @@
         var newW = clamp(pos.x - rPx.x, minSize, overlay.width - rPx.x);
         var newH = clamp(pos.y - rPx.y, minSize, overlay.height - rPx.y);
         state.regions[rName] = Object.assign({}, state.regions[rName], { w: newW / overlay.width, h: newH / overlay.height });
-        renderOverlay();
+        scheduleOverlayRender();
       } else if (state.draggingRegion) {
         var d = state.draggingRegion;
         var dPx = regionToPixels(state.regions[d.name]);
         var newX = clamp(pos.x - d.offsetX, 0, overlay.width - dPx.w);
         var newY = clamp(pos.y - d.offsetY, 0, overlay.height - dPx.h);
         state.regions[d.name] = Object.assign({}, state.regions[d.name], { x: newX / overlay.width, y: newY / overlay.height });
-        renderOverlay();
+        scheduleOverlayRender();
       }
     });
 
     document.addEventListener("mouseup", function () {
+      _cachedOverlayRect = null;
       if (state.resizingRegion) {
         var rName = state.resizingRegion.name;
         state.resizingRegion = null;
         document.body.style.cursor = "";
         document.body.style.userSelect = "";
         saveRegionUpdate(rName);
-        renderOverlay();
+        flushOverlayRender();
         updateRegionButtons();
       } else if (state.draggingRegion) {
         var dName = state.draggingRegion.name;
@@ -886,7 +910,7 @@
         document.body.style.cursor = "";
         document.body.style.userSelect = "";
         saveRegionUpdate(dName);
-        renderOverlay();
+        flushOverlayRender();
         updateRegionButtons();
       }
     });
@@ -1294,7 +1318,7 @@
       var w = Math.abs(d.endX - d.startX);
       var h = Math.abs(d.endY - d.startY);
       if (w > 20 && h > 20) {
-        ctx.font = Math.round(11 * s) + "px " + getComputedStyle(document.documentElement).getPropertyValue("--font-mono").trim();
+        ctx.font = Math.round(11 * s) + "px " + getThemeColors().fontMono;
         ctx.fillStyle = "rgba(255,255,255,0.9)";
         ctx.fillText(w + "\u00d7" + h, Math.min(d.startX, d.endX) + Math.round(4 * s), Math.max(d.startY, d.endY) + Math.round(14 * s));
       }
@@ -1309,7 +1333,7 @@
       ctx.strokeRect(p.x, p.y, p.w, p.h);
       ctx.fillStyle = "rgba(255, 255, 255, 0.08)";
       ctx.fillRect(p.x, p.y, p.w, p.h);
-      ctx.font = Math.round(11 * s) + "px " + getComputedStyle(document.documentElement).getPropertyValue("--font-mono").trim();
+      ctx.font = Math.round(11 * s) + "px " + getThemeColors().fontMono;
       ctx.fillStyle = "rgba(255,255,255,0.9)";
       ctx.fillText(p.w + "\u00d7" + p.h + " px", p.x + Math.round(4 * s), p.y + p.h + Math.round(14 * s));
     }
@@ -1329,7 +1353,10 @@
     qs("#zoomOutBtn").appendChild(svgMinusIcon());
     var canvas = qs("#timelineCanvas");
     sizeTimelineCanvas();
-    window.addEventListener("resize", sizeTimelineCanvas);
+    window.addEventListener("resize", function () {
+      _cachedOverlayRect = null;
+      sizeTimelineCanvas();
+    });
 
     canvas.addEventListener("click", function (e) {
       if (state.timelineDragging) return;
@@ -1486,7 +1513,11 @@
     var rect = canvas.getBoundingClientRect();
     canvas.width = Math.floor(rect.width);
     canvas.height = TIMELINE_CANVAS_HEIGHT;
+    var ph = qs("#playheadCanvas");
+    ph.width = canvas.width;
+    ph.height = canvas.height;
     renderTimeline();
+    renderPlayhead();
   }
 
   function timelineXToTime(event) {
@@ -1629,15 +1660,29 @@
       }
     });
 
-    // Playhead
-    var px = timeToX(state.currentTimestamp);
+    renderTimelineLegend();
+    renderPlayhead();
+  }
+
+  function renderPlayhead() {
+    var canvas = qs("#playheadCanvas");
+    if (!canvas.width || !canvas.height) return;
+    var ctx = canvas.getContext("2d");
+    var w = canvas.width;
+    var h = canvas.height;
+    var dur = state.videoInfo ? state.videoInfo.duration : 0;
+    ctx.clearRect(0, 0, w, h);
+    if (dur <= 0) return;
+    var visLen = dur / state.timelineZoom;
+    var visStart = state.timelineOffset;
+    var px = ((state.currentTimestamp - visStart) / visLen) * w;
+    var tc = getThemeColors();
     ctx.strokeStyle = tc.accent;
     ctx.lineWidth = 2;
     ctx.beginPath();
     ctx.moveTo(px, 0);
     ctx.lineTo(px, h);
     ctx.stroke();
-    // Playhead triangle
     ctx.fillStyle = tc.accent;
     ctx.beginPath();
     ctx.moveTo(px - 5, 0);
@@ -1645,8 +1690,6 @@
     ctx.lineTo(px, 6);
     ctx.closePath();
     ctx.fill();
-
-    renderTimelineLegend();
   }
 
   function hitTestTimeline(clientX, clientY) {
@@ -3127,7 +3170,7 @@
       container.innerHTML = '<div class="panel-empty">No ' + state.taskFilter + ' tasks.</div>';
       return;
     }
-    container.innerHTML = "";
+    var frag = document.createDocumentFragment();
     filtered.forEach(function (task) {
       var card = el("div", "task-card task-card-" + task.status);
       card.dataset.taskId = task.id;
@@ -3210,8 +3253,10 @@
       dismissBtn.appendChild(svgDismissIcon());
       card.appendChild(dismissBtn);
 
-      container.appendChild(card);
+      frag.appendChild(card);
     });
+    container.innerHTML = "";
+    container.appendChild(frag);
   }
 
   // ---- Polling ----
@@ -3242,8 +3287,15 @@
           state.queuePaused = data.paused;
           updatePauseButton();
         }
-        renderTaskList();
-        renderTimeline();
+        var fp = JSON.stringify(data.tasks.map(function (t) {
+          return t.id + ":" + t.status + ":" + t.progress;
+        }));
+        var changed = fp !== _lastPollFingerprint;
+        _lastPollFingerprint = fp;
+        if (changed) {
+          renderTaskList();
+          renderTimeline();
+        }
         // Auto-update results for selected running task
         if (oldSelected) {
           var selTask = findTask(oldSelected);

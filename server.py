@@ -1358,6 +1358,20 @@ def start_combined_server(
         screenspace_server.screenspace_bp, url_prefix="/screenspace"
     )
 
+    @combined.after_request
+    def _set_cache_headers(response):
+        # Skip if a route already set Cache-Control (e.g. thumbnails, sprites)
+        if "Cache-Control" in response.headers:
+            return response
+        ct = response.content_type or ""
+        if ct.startswith("text/html"):
+            response.headers["Cache-Control"] = "no-cache"
+        elif ct.startswith(("text/css", "application/javascript", "text/javascript")):
+            response.headers["Cache-Control"] = "public, max-age=3600"
+        elif ct.startswith("image/svg"):
+            response.headers["Cache-Control"] = "public, max-age=86400"
+        return response
+
     @combined.route("/")
     def root():
         return redirect(f"/{default_page}/")
