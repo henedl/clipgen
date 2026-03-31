@@ -35,6 +35,11 @@
   var _screenspaceVisible = true;
   var SCREENSPACE_STORAGE_KEY = "clipgen-viewer-screenspace";
 
+  var _preview = null; // { id, videoEl, wrapEl } — currently previewed artifact
+  var _hoverDebounce = null;
+  var _seekRaf = 0;
+  var _lastSeekProportion = null;
+
   var SORT_DEFAULT_DIR = {
     severity: "desc",
     chrono: "asc",
@@ -1182,6 +1187,33 @@
 
   // ---- Timeline rendering ----
 
+  function bindMarkerEvents(marker, a) {
+    marker.addEventListener("mouseenter", function (ev) {
+      onMarkerHover(ev);
+      clearTimeout(_hoverDebounce);
+      var target = ev.currentTarget;
+      var cx = ev.clientX;
+      _hoverDebounce = setTimeout(function () {
+        var p = getMarkerProportion(target, cx);
+        previewArtifact(a.id, a.type === "clip" ? p : 0);
+      }, 60);
+    });
+    marker.addEventListener("mousemove", function (ev) {
+      moveTooltip(ev);
+      if (_preview && _preview.id === a.id && _preview.videoEl) {
+        var p = getMarkerProportion(ev.currentTarget, ev.clientX);
+        updatePreviewSeek(p);
+      }
+    });
+    marker.addEventListener("mouseleave", function () {
+      hideTooltip();
+      clearTimeout(_hoverDebounce);
+    });
+    marker.addEventListener("click", function () {
+      selectArtifact(a.id);
+    });
+  }
+
   function renderTimeline() {
     var track = qs("#timelineTrack");
     if (!track) return;
@@ -1202,12 +1234,7 @@
       marker.style.left = startPct + "%";
       marker.style.width = widthPct + "%";
 
-      marker.addEventListener("mouseenter", onMarkerHover);
-      marker.addEventListener("mousemove", moveTooltip);
-      marker.addEventListener("mouseleave", hideTooltip);
-      marker.addEventListener("click", function () {
-        selectArtifact(a.id);
-      });
+      bindMarkerEvents(marker, a);
 
       track.appendChild(marker);
       markers.push({ el: marker, artifact: a });
@@ -1479,11 +1506,7 @@
 
   // ---- Selection & detail ----
 
-  function selectArtifact(id) {
-    if (state.selectedId === id) {
-      clearSelection();
-      return;
-    }
+  function selectArtifactVisuals(id) {
     state.selectedId = id;
 
     qsa(".artifact-marker.selected").forEach(function (m) {
@@ -1514,6 +1537,22 @@
         }
       }
     }
+  }
+
+  function selectArtifact(id) {
+    if (state.selectedId === id) {
+      clearSelection();
+      return;
+    }
+
+    // If preview is already showing this artifact, promote it to active playback
+    if (_preview && _preview.id === id && _preview.videoEl) {
+      activatePreview();
+      selectArtifactVisuals(id);
+      return;
+    }
+
+    selectArtifactVisuals(id);
 
     var artifact = findArtifact(id);
     if (!artifact) return;
@@ -1527,6 +1566,7 @@
 
   function clearSelection() {
     state.selectedId = null;
+    _preview = null;
     qsa(".artifact-marker.selected").forEach(function (m) {
       m.classList.remove("selected");
       var storedZ = m.dataset.collapsedZ;
@@ -1563,35 +1603,12 @@
     if (empty) empty.classList.add("hidden");
     if (content) content.classList.remove("hidden");
 
-    applySeverityPill(qs("#detailSeverityPill"), a);
-
-    var badge = qs("#detailType");
-    if (badge) {
-      badge.textContent = (a.type || "clip").toUpperCase();
-      badge.className = "detail-badge " + (a.type || "clip");
-    }
-
-    setText("#detailDescription", a.description || "(no description)");
-    setText("#detailCategory", a.category || "–");
-    setText("#detailParticipant", a.participant || "–");
-    setText("#detailTime",
-      formatTime(a.start) + (a.end != null ? " – " + formatTime(a.end) : ""));
-    setText("#detailCell", a.cellA1 || (a.cellRow ? "R" + a.cellRow + "C" + a.cellCol : "–"));
-    setText("#detailSource", a.sourceVideo || "–");
-    setText("#detailFile", a.file || "–");
-    var intakeRow = qs("#detailIntakeRow");
-    if (intakeRow) {
-      if (a.source === "screenspace" && a.intake_label) {
-        setText("#detailIntakeLabel", a.intake_label);
-        intakeRow.classList.remove("hidden");
-      } else {
-        intakeRow.classList.add("hidden");
-      }
-    }
+    populateDetailMeta(a);
 
     var preview = qs("#detailPreview");
     if (!preview) return;
     preview.innerHTML = "";
+    _preview = null;
 
     if (!a.file) return;
 
@@ -1611,6 +1628,212 @@
       vid.preload = "metadata";
       vid.src = a.file;
       preview.appendChild(vid);
+    }
+  }
+
+  // ---- Hover preview ----
+
+  function getMarkerProportion(markerEl, clientX) {
+    var rect = markerEl.getBoundingClientRect();
+    if (rect.width <= 0) return 0;
+    return Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
+  }
+
+  function previewArtifact(id, seekProportion) {
+    var a = findArtifact(id);
+    if (!a || !a.file) return;
+
+    // Don't interrupt active playback
+    if (state.selectedId && _preview && _preview.videoEl && !_preview.videoEl.paused) return;
+
+    // Already previewing this artifact — just update seek
+    if (_preview && _preview.id === id) {
+      if (_preview.videoEl && seekProportion != null) {
+        updatePreviewSeek(seekProportion);
+      }
+      return;
+    }
+
+    // Determine which preview container to use
+    var isPlayerLayout = !!qs("#playerPane");
+    var preview, empty, content;
+    if (isPlayerLayout) {
+      preview = qs("#playerPreview");
+      empty = qs("#playerEmpty");
+      content = qs("#playerContent");
+    } else {
+      preview = qs("#detailPreview");
+      empty = qs("#detailEmpty");
+      content = qs("#detailContent");
+    }
+    if (!preview) return;
+
+    // Show the detail/player pane
+    if (empty) empty.classList.add("hidden");
+    if (content) content.classList.remove("hidden");
+
+    // Populate metadata
+    if (isPlayerLayout) {
+      populatePlayerMeta(a);
+    } else {
+      populateDetailMeta(a);
+    }
+
+    // Clear existing preview
+    preview.innerHTML = "";
+    _preview = null;
+
+    if (a.type === "screen") {
+      var img = document.createElement("img");
+      img.src = a.file;
+      img.alt = a.description || "screenshot";
+      preview.appendChild(img);
+      _preview = { id: id, videoEl: null, wrapEl: null };
+      return;
+    }
+
+    if (a.type === "gif") {
+      var gifImg = document.createElement("img");
+      gifImg.src = a.file;
+      gifImg.alt = a.description || "gif";
+      preview.appendChild(gifImg);
+      _preview = { id: id, videoEl: null, wrapEl: null };
+      return;
+    }
+
+    // Clip: create video preview with play overlay
+    var wrap = el("div", "video-preview-wrap");
+    var vid = document.createElement("video");
+    vid.preload = "auto";
+    vid.muted = true;
+    vid.playsInline = true;
+    vid.src = a.file;
+
+    var overlay = document.createElement("button");
+    overlay.className = "video-play-overlay";
+    overlay.type = "button";
+    overlay.setAttribute("aria-label", "Play video");
+    overlay.innerHTML = '<svg width="56" height="56" viewBox="0 0 16 16" fill="currentColor" xmlns="http://www.w3.org/2000/svg">' +
+      '<path d="M3 3.73241C3 2.54878 4.30673 1.83146 5.30531 2.46692L12.0114 6.73441C12.9376 7.32384 12.9376 8.67597 12.0114 9.2654L5.30532 13.5329C4.30673 14.1684 3 13.451 3 12.2674V3.73241Z"/>' +
+      '</svg>';
+
+    var timeBadge = el("span", "video-time-badge", "--:--");
+
+    var proportion = seekProportion != null ? seekProportion : 0;
+
+    vid.onloadedmetadata = function () {
+      var dur = vid.duration;
+      if (!dur || !isFinite(dur)) return;
+      var seekTime = dur * Math.max(0, Math.min(1, proportion));
+      vid.currentTime = seekTime;
+      timeBadge.textContent = formatTime(seekTime) + " / " + formatTime(dur);
+    };
+
+    vid.onerror = function () {
+      if (wrap.parentNode) wrap.parentNode.removeChild(wrap);
+      _preview = { id: id, videoEl: null, wrapEl: null };
+    };
+
+    function doActivate() {
+      activatePreview();
+      var markerId = _preview ? _preview.id : id;
+      selectArtifactVisuals(markerId);
+    }
+
+    overlay.addEventListener("click", function (ev) {
+      ev.stopPropagation();
+      doActivate();
+    });
+    function onVidClick() {
+      if (vid.paused) doActivate();
+    }
+    vid.addEventListener("click", onVidClick);
+    vid._previewClickHandler = onVidClick;
+
+    wrap.appendChild(vid);
+    wrap.appendChild(overlay);
+    wrap.appendChild(timeBadge);
+    preview.appendChild(wrap);
+
+    _preview = { id: id, videoEl: vid, wrapEl: wrap, overlay: overlay, timeBadge: timeBadge };
+    _lastSeekProportion = proportion;
+  }
+
+  function updatePreviewSeek(proportionX) {
+    if (!_preview || !_preview.videoEl) return;
+    var vid = _preview.videoEl;
+    if (!vid.duration || !isFinite(vid.duration)) return;
+    if (vid.readyState < 1) return; // metadata not yet loaded
+
+    if (_seekRaf) return;
+    _seekRaf = requestAnimationFrame(function () {
+      _seekRaf = 0;
+      var clamped = Math.max(0, Math.min(1, proportionX));
+      var seekTime = vid.duration * clamped;
+      vid.currentTime = seekTime;
+      if (_preview && _preview.timeBadge) {
+        _preview.timeBadge.textContent = formatTime(seekTime) + " / " + formatTime(vid.duration);
+      }
+      _lastSeekProportion = clamped;
+    });
+  }
+
+  function activatePreview() {
+    if (!_preview || !_preview.videoEl) return;
+    var vid = _preview.videoEl;
+    // Remove click-to-play so it doesn't fight native controls
+    if (vid._previewClickHandler) {
+      vid.removeEventListener("click", vid._previewClickHandler);
+      vid._previewClickHandler = null;
+    }
+    vid.muted = false;
+    vid.controls = true;
+    vid.play();
+    if (_preview.overlay) _preview.overlay.classList.add("hidden");
+    if (_preview.timeBadge) _preview.timeBadge.classList.add("hidden");
+  }
+
+  function populateDetailMeta(a) {
+    applySeverityPill(qs("#detailSeverityPill"), a);
+    var badge = qs("#detailType");
+    if (badge) {
+      badge.textContent = (a.type || "clip").toUpperCase();
+      badge.className = "detail-badge " + (a.type || "clip");
+    }
+    setText("#detailDescription", a.description || "(no description)");
+    setText("#detailCategory", a.category || "\u2013");
+    setText("#detailParticipant", a.participant || "\u2013");
+    setText("#detailTime",
+      formatTime(a.start) + (a.end != null ? " \u2013 " + formatTime(a.end) : ""));
+    setText("#detailCell", a.cellA1 || (a.cellRow ? "R" + a.cellRow + "C" + a.cellCol : "\u2013"));
+    setText("#detailSource", a.sourceVideo || "\u2013");
+    setText("#detailFile", a.file || "\u2013");
+    var intakeRow = qs("#detailIntakeRow");
+    if (intakeRow) {
+      if (a.source === "screenspace" && a.intake_label) {
+        setText("#detailIntakeLabel", a.intake_label);
+        intakeRow.classList.remove("hidden");
+      } else {
+        intakeRow.classList.add("hidden");
+      }
+    }
+  }
+
+  function populatePlayerMeta(a) {
+    applySeverityPill(qs("#playerSeverityPill"), a);
+    var badge = qs("#playerType");
+    if (badge) {
+      badge.textContent = (a.type || "clip").toUpperCase();
+      badge.className = "detail-badge " + (a.type || "clip");
+    }
+    setText("#playerDescription", a.description || "(no description)");
+    var metaEl = qs("#playerMeta");
+    if (metaEl) {
+      var parts = [];
+      if (a.participant) parts.push(escHtml(a.participant));
+      parts.push(formatTime(a.start) + (a.end != null ? " \u2013 " + formatTime(a.end) : ""));
+      if (a.category) parts.push(escHtml(a.category));
+      metaEl.innerHTML = parts.join("&ensp;\u00B7&ensp;");
     }
   }
 
@@ -1773,12 +1996,7 @@
         marker.style.left = startPct + "%";
         marker.style.width = widthPct + "%";
 
-        marker.addEventListener("mouseenter", onMarkerHover);
-        marker.addEventListener("mousemove", moveTooltip);
-        marker.addEventListener("mouseleave", hideTooltip);
-        marker.addEventListener("click", function () {
-          selectArtifact(a.id);
-        });
+        bindMarkerEvents(marker, a);
 
         track.appendChild(marker);
         markers.push({ el: marker, artifact: a });
@@ -1846,28 +2064,12 @@
     if (empty) empty.classList.add("hidden");
     if (content) content.classList.remove("hidden");
 
-    applySeverityPill(qs("#playerSeverityPill"), a);
-
-    var badge = qs("#playerType");
-    if (badge) {
-      badge.textContent = (a.type || "clip").toUpperCase();
-      badge.className = "detail-badge " + (a.type || "clip");
-    }
-
-    setText("#playerDescription", a.description || "(no description)");
-
-    var metaEl = qs("#playerMeta");
-    if (metaEl) {
-      var parts = [];
-      if (a.participant) parts.push(escHtml(a.participant));
-      parts.push(formatTime(a.start) + (a.end != null ? " – " + formatTime(a.end) : ""));
-      if (a.category) parts.push(escHtml(a.category));
-      metaEl.innerHTML = parts.join("&ensp;·&ensp;");
-    }
+    populatePlayerMeta(a);
 
     var preview = qs("#playerPreview");
     if (!preview) return;
     preview.innerHTML = "";
+    _preview = null;
 
     if (!a.file) return;
 
