@@ -1605,6 +1605,52 @@ html[data-theme="dark"] .queue-card-error .queue-card-thumb {
   color: #dc2626;
 }
 
+/* Confirm overlay */
+
+#confirmOverlay {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-dropdown);
+  background: rgba(0, 0, 0, 0.4);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+#confirmOverlay.hidden {
+  display: none;
+}
+
+.confirm-card {
+  background: var(--color-surface);
+  border-radius: var(--radius-lg);
+  padding: var(--space-6) var(--space-8);
+  max-width: 420px;
+  width: 90%;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.25);
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-4);
+}
+
+.confirm-card h3 {
+  font-size: var(--text-md);
+  font-weight: 600;
+}
+
+.confirm-card p {
+  font-size: var(--text-sm);
+  color: var(--color-text-dim);
+}
+
+.confirm-actions {
+  display: flex;
+  gap: var(--space-3);
+  margin-top: var(--space-2);
+}
+
 /* Spinner */
 
 .spinner {
@@ -1694,7 +1740,8 @@ html[data-theme="dark"] {
   :root:not([data-theme="light"]) #sheetGrid .col-row-num-clickable.header-highlight {
     background-color: rgba(56, 189, 248, 0.18);
   }
-  :root:not([data-theme="light"]) .status-card {
+  :root:not([data-theme="light"]) .status-card,
+  :root:not([data-theme="light"]) .confirm-card {
     background: var(--color-surface-alt);
   }
   :root:not([data-theme="light"]) .card-gen-overlay {
@@ -1729,7 +1776,8 @@ html[data-theme="dark"] #sheetGrid .col-row-num-clickable.header-highlight {
   background-color: rgba(56, 189, 248, 0.18);
 }
 
-html[data-theme="dark"] .status-card {
+html[data-theme="dark"] .status-card,
+html[data-theme="dark"] .confirm-card {
   background: var(--color-surface-alt);
 }
 
