@@ -9,10 +9,14 @@ from icecream import ic
 REENCODING: bool = False
 AUDIO_NORMALIZE: bool = False
 FILEFORMAT: str = ".mp4"
-VERSIONNUM: str = "0.9.74"
-TITLECARDS_ENABLED: bool = False  # use --titlecards / --no-titlecards to override per run
+VERSIONNUM: str = "0.9.75"
+TITLECARDS_ENABLED: bool = (
+    False  # use --titlecards / --no-titlecards to override per run
+)
 FILMSTRIP_ENABLED: bool = False  # use --filmstrip / --no-filmstrip to override per run
-TITLECARD_DURATION_SECONDS: int = 2  # duration in seconds; falls back to color fill when no source frame available
+TITLECARD_DURATION_SECONDS: int = (
+    2  # duration in seconds; falls back to color fill when no source frame available
+)
 WORKSHEET_PRIORITY: List[str] = [  # tried in order before falling back to first sheet
     "Sheet1",
     "Data",
@@ -23,7 +27,9 @@ WORKSHEET_PRIORITY: List[str] = [  # tried in order before falling back to first
     "dataset",
     "Dataset",
 ]
-DEBUGGING: bool = False  # enables icecream output, skips ffmpeg execution, returns stub transcripts
+DEBUGGING: bool = (
+    False  # enables icecream output, skips ffmpeg execution, returns stub transcripts
+)
 QUIET: int = 0
 STANDARD: int = 1
 VERBOSE: int = 2
@@ -47,7 +53,9 @@ ID_HEADER: str = "ID"
 OBSERVATION_HEADER: str = "Observation"
 CATEGORY_HEADER: str = "Category"
 FILENAME_HEADER: str = "Filename"
-SEVERITY_HEADER: str = "Severity"  # optional column; when present adds severity metadata to clips
+SEVERITY_HEADER: str = (
+    "Severity"  # optional column; when present adds severity metadata to clips
+)
 PARTICIPANT_PREFIXES: Tuple[str, ...] = ("P", "G")  # 'P' for individual, 'G' for group
 SEVERITY_NUMERIC_TO_LABEL: Dict[str, str] = {
     "-4": "Critical",
@@ -67,16 +75,24 @@ SEVERITY_LABEL_TO_NUMERIC: Dict[str, int] = {
     "positive": 1,
     "very positive": 2,
 }
-ANNOTATION_KEYPHRASES: Dict[str, str] = {  # cell token → annotation name; stripped before timestamp parsing
+ANNOTATION_KEYPHRASES: Dict[
+    str, str
+] = {  # cell token → annotation name; stripped before timestamp parsing
     "!key": "key",
 }
-IGNORED_TIMESTAMP_TOKENS: Set[str] = {"x"}  # tokens skipped silently during timestamp parsing
+IGNORED_TIMESTAMP_TOKENS: Set[str] = {
+    "x"
+}  # tokens skipped silently during timestamp parsing
 
 # File and Duration Constants
 MAX_FILENAME_LENGTH: int = 255
-MAX_CLIP_DURATION_SECONDS: int = 600  # 10 min; prompts user for confirmation before generating longer clips
+MAX_CLIP_DURATION_SECONDS: int = (
+    600  # 10 min; prompts user for confirmation before generating longer clips
+)
 DEFAULT_DURATION_SECONDS: int = 60  # clip length when only a start time is given
-DEFAULT_GIF_DURATION_SECONDS: int = 5  # GIF extraction length when only a start time is given
+DEFAULT_GIF_DURATION_SECONDS: int = (
+    5  # GIF extraction length when only a start time is given
+)
 GALLERY_INTERVAL_SECONDS: int = 10  # Default interval between gallery captures
 GALLERY_GIF_DURATION_SECONDS: int = 3  # Default per-GIF duration in gallery mode
 GALLERY_PARALLEL_WORKERS: int = (
@@ -85,9 +101,15 @@ GALLERY_PARALLEL_WORKERS: int = (
 MAX_FILESIZE_MB: int = 0  # Maximum output file size in MB (0 = disabled)
 MIN_SOURCE_VIDEO_SIZE_MB: int = 100  # Minimum file size (MB) to consider as a source video candidate during fuzzy matching
 MANIFEST_FILENAME: str = "clipgen_manifest.json"  # cumulative artifact manifest; consumed by Insights Builder and --regenerate
-MANIFEST_ENABLED: bool = False  # use --manifest CLI flag or set True to write manifest alongside artifacts
-SERVER_PORT: int = 8089  # port for the combined Studio/Insights/Screenspace Flask server
-INSIGHTS_MANIFEST_FILENAME: str = "insights_manifest.json"  # insights data manifest; read/written by Insights Builder
+MANIFEST_ENABLED: bool = (
+    False  # use --manifest CLI flag or set True to write manifest alongside artifacts
+)
+SERVER_PORT: int = (
+    8089  # port for the combined Studio/Insights/Screenspace Flask server
+)
+INSIGHTS_MANIFEST_FILENAME: str = (
+    "insights_manifest.json"  # insights data manifest; read/written by Insights Builder
+)
 STASHES_MANIFEST_FILENAME: str = "reel_stashes.json"
 ARTIFACT_STASHES_MANIFEST_FILENAME: str = "artifact_stashes.json"
 STUDIO_SETTINGS_FILENAME: str = "studio_settings.json"
@@ -102,22 +124,30 @@ STUDIO_THUMBNAIL_WIDTH: int = 200
 
 # Screenspace constants
 SCREENSPACE_MANIFEST_FILENAME: str = "screenspace_manifest.json"
-SCREENSPACE_DEFAULT_INTERVAL: float = 1.0  # default frame sampling interval (seconds) for analysis tasks
+SCREENSPACE_DEFAULT_INTERVAL: float = (
+    1.0  # default frame sampling interval (seconds) for analysis tasks
+)
 SCREENSPACE_NOISE_THRESHOLD: int = 30  # image preprocessing tuning for change detection
 SCREENSPACE_BLUR_KERNEL: int = 5  # image preprocessing tuning for change detection
 SCREENSPACE_SSIM_THRESHOLD: float = 0.90  # min SSIM score for Similarity tool matches
-SCREENSPACE_CHANGE_RATIO_THRESHOLD: float = 0.03  # min changed-pixel fraction for Change tool matches
+SCREENSPACE_CHANGE_RATIO_THRESHOLD: float = (
+    0.03  # min changed-pixel fraction for Change tool matches
+)
 SCREENSPACE_MORPH_KERNEL: int = 3  # image preprocessing tuning for change detection
-SCREENSPACE_OCR_FUZZY_THRESHOLD: float = 0.8  # min fuzzy match score for Text/Numbers tool matches
+SCREENSPACE_OCR_FUZZY_THRESHOLD: float = (
+    0.8  # min fuzzy match score for Text/Numbers tool matches
+)
 SCREENSPACE_PHASH_THRESHOLD: int = 15
 SCREENSPACE_SEQUENTIAL_READ_MAX_INTERVAL: float = 3.0
 SCREENSPACE_INTAKE_CLUSTER_SECONDS: int = 5
 
 # Highlights reel constants
 HIGHLIGHTS_REEL_DURATION_SECONDS: int = 180  # 3-minute budget for highlights reel
-HIGHLIGHTS_WEIGHT_SEVERITY: float = 1.0   # scoring weight for severity in highlights reel ranking
+HIGHLIGHTS_WEIGHT_SEVERITY: float = (
+    1.0  # scoring weight for severity in highlights reel ranking
+)
 HIGHLIGHTS_WEIGHT_UNIQUENESS: float = 0.5  # scoring weight for participant uniqueness
-HIGHLIGHTS_WEIGHT_KEYWORD: float = 0.3    # scoring weight for !key annotation
+HIGHLIGHTS_WEIGHT_KEYWORD: float = 0.3  # scoring weight for !key annotation
 
 # Browse Mode Constants
 BROWSE_LINES_TO_DISPLAY: int = 5  # Number of rows to show at once when browsing
