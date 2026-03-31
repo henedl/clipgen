@@ -595,6 +595,64 @@ class TestScreenspaceWorker:
         finally:
             worker.stop()
 
+    def test_worker_survives_on_task_complete_exception(self):
+        """Worker continues processing tasks after on_task_complete raises."""
+        worker = screenspace.ScreenspaceWorker()
+        call_count = {"n": 0}
+
+        def bad_callback():
+            call_count["n"] += 1
+            if call_count["n"] == 1:
+                raise TypeError("simulated persistence failure")
+
+        worker.on_task_complete = bad_callback
+        worker.start()
+        try:
+            t1 = screenspace.create_task(
+                "color",
+                "P01",
+                "s.mp4",
+                "/nonexistent/v.mp4",
+                "r",
+                {"x": 0, "y": 0, "w": 10, "h": 10},
+                parameters={
+                    "target_color": {"h": 0, "s": 0, "v": 0},
+                    "tolerance": {"h": 10, "s": 10, "v": 10},
+                },
+            )
+            worker.enqueue(t1)
+            for _ in range(50):
+                t = worker.get_task(t1["id"])
+                if t and t["status"] in ("completed", "failed"):
+                    break
+                time.sleep(0.1)
+
+            # Second task should still process even though first callback raised
+            t2 = screenspace.create_task(
+                "color",
+                "P02",
+                "s.mp4",
+                "/nonexistent/v.mp4",
+                "r",
+                {"x": 0, "y": 0, "w": 10, "h": 10},
+                parameters={
+                    "target_color": {"h": 0, "s": 0, "v": 0},
+                    "tolerance": {"h": 10, "s": 10, "v": 10},
+                },
+            )
+            worker.enqueue(t2)
+            for _ in range(50):
+                t = worker.get_task(t2["id"])
+                if t and t["status"] in ("completed", "failed"):
+                    break
+                time.sleep(0.1)
+            t = worker.get_task(t2["id"])
+            assert t is not None
+            assert t["status"] in ("completed", "failed")
+            assert call_count["n"] >= 2
+        finally:
+            worker.stop()
+
     def test_text_task_easyocr_importable(self):
         import easyocr  # noqa: F401
 

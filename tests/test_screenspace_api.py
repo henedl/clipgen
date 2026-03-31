@@ -295,6 +295,42 @@ def test_create_task_new_types_accepted(client, task_type):
     assert "video" in data["error"].lower()
 
 
+def test_create_template_task_no_region_with_upload(client):
+    """Template task with uploaded image skips region validation."""
+    import base64
+
+    # Minimal 1x1 red PNG
+    png_b64 = base64.b64encode(
+        b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01"
+        b"\x00\x00\x00\x01\x08\x02\x00\x00\x00\x90wS\xde\x00"
+        b"\x00\x00\x0cIDATx\x9cc\xf8\x0f\x00\x00\x01\x01\x00"
+        b"\x05\x18\xd8N\x00\x00\x00\x00IEND\xaeB`\x82"
+    ).decode()
+    resp = client.post(
+        "/screenspace/api/tasks",
+        json={
+            "type": "template",
+            "participant": "P01",
+            "parameters": {"template_image_data": png_b64},
+        },
+    )
+    data = resp.get_json()
+    # Should fail at video check, NOT at "region is required"
+    assert resp.status_code == 400
+    assert "region" not in data["error"].lower()
+    assert "video" in data["error"].lower()
+
+
+def test_create_non_template_task_still_requires_region(client):
+    """Non-template tasks still require a region."""
+    resp = client.post(
+        "/screenspace/api/tasks",
+        json={"type": "change", "participant": "P01"},
+    )
+    assert resp.status_code == 400
+    assert "region" in resp.get_json()["error"].lower()
+
+
 def test_get_task_not_found(client):
     resp = client.get("/screenspace/api/tasks/ss_nonexist")
     assert resp.status_code == 404
