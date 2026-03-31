@@ -14,6 +14,9 @@
     text: "#10b981",
     numbers: "#eab308",
     timelapse: "#ec4899",
+    template: "#f43f5e",
+    flow: "#6366f1",
+    scene: "#14b8a6",
   };
 
   var SS_TYPE_ICON_PATHS = {
@@ -32,6 +35,15 @@
     ]},
     numbers: { viewBox: "0 0 16 16", paths: [
       { d: "M7.48677 2.89033C7.56427 2.48344 7.29725 2.09075 6.89035 2.01325C6.48345 1.93574 6.09077 2.20277 6.01326 2.60967L5.55827 4.99835H3.60963C3.19542 4.99835 2.85963 5.33414 2.85963 5.74835C2.85963 6.16257 3.19542 6.49835 3.60963 6.49835H5.27256L4.7016 9.49589H2.74963C2.33542 9.49589 1.99963 9.83168 1.99963 10.2459C1.99963 10.6601 2.33542 10.9959 2.74963 10.9959H4.41588L4.01326 13.1097C3.93576 13.5166 4.20278 13.9092 4.60968 13.9868C5.01658 14.0643 5.40926 13.7972 5.48677 13.3903L5.94285 10.9959H8.91589L8.51326 13.1097C8.43576 13.5166 8.70278 13.9092 9.10968 13.9868C9.51658 14.0643 9.90927 13.7972 9.98677 13.3903L10.4429 10.9959H12.3896C12.8038 10.9959 13.1396 10.6601 13.1396 10.2459C13.1396 9.83168 12.8038 9.49589 12.3896 9.49589H10.7286L11.2995 6.49835H13.2496C13.6638 6.49835 13.9996 6.16257 13.9996 5.74835C13.9996 5.33414 13.6638 4.99835 13.2496 4.99835H11.5852L11.9868 2.89033C12.0643 2.48344 11.7972 2.09075 11.3903 2.01325C10.9835 1.93574 10.5908 2.20277 10.5133 2.60967L10.0583 4.99835H7.08524L7.48677 2.89033ZM6.79953 6.49835L6.22857 9.49589H9.2016L9.77256 6.49835H6.79953Z", fillRule: "evenodd" }
+    ]},
+    template: { viewBox: "0 0 16 16", paths: [
+      { d: "M2 3.5A1.5 1.5 0 0 1 3.5 2H5a.75.75 0 0 1 0 1.5H3.5v1.75a.75.75 0 0 1-1.5 0V3.5ZM11 2a.75.75 0 0 0 0 1.5h1.5v1.75a.75.75 0 0 0 1.5 0V3.5A1.5 1.5 0 0 0 12.5 2H11ZM2.75 10.75a.75.75 0 0 1 .75.75v1.5H5a.75.75 0 0 1 0 1.5H3.5A1.5 1.5 0 0 1 2 13v-1.5a.75.75 0 0 1 .75-.75ZM13.25 10.75a.75.75 0 0 1 .75.75V13a1.5 1.5 0 0 1-1.5 1.5H11a.75.75 0 0 1 0-1.5h1.5v-1.5a.75.75 0 0 1 .75-.75ZM10 8a2 2 0 1 1-4 0 2 2 0 0 1 4 0Z", fillRule: "evenodd" }
+    ]},
+    flow: { viewBox: "0 0 16 16", paths: [
+      { d: "M5.28 10.22a.75.75 0 0 1 0 1.06l-1.47 1.47h8.44a.75.75 0 0 1 0 1.5H3.81l1.47 1.47a.75.75 0 0 1-1.06 1.06l-2.75-2.75a.75.75 0 0 1 0-1.06l2.75-2.75a.75.75 0 0 1 1.06 0ZM10.72.22a.75.75 0 0 1 1.06 0l2.75 2.75a.75.75 0 0 1 0 1.06l-2.75 2.75a.75.75 0 1 1-1.06-1.06l1.47-1.47H3.75a.75.75 0 0 1 0-1.5h8.44L10.72 1.28a.75.75 0 0 1 0-1.06Z", fillRule: "evenodd" }
+    ]},
+    scene: { viewBox: "0 0 16 16", paths: [
+      { d: "M2 3.5A1.5 1.5 0 0 1 3.5 2h2A1.5 1.5 0 0 1 7 3.5v2A1.5 1.5 0 0 1 5.5 7h-2A1.5 1.5 0 0 1 2 5.5v-2ZM9 3.5A1.5 1.5 0 0 1 10.5 2h2A1.5 1.5 0 0 1 14 3.5v2A1.5 1.5 0 0 1 12.5 7h-2A1.5 1.5 0 0 1 9 5.5v-2ZM2 10.5A1.5 1.5 0 0 1 3.5 9h2A1.5 1.5 0 0 1 7 10.5v2A1.5 1.5 0 0 1 5.5 14h-2A1.5 1.5 0 0 1 2 12.5v-2ZM9 10.5A1.5 1.5 0 0 1 10.5 9h2A1.5 1.5 0 0 1 14 10.5v2A1.5 1.5 0 0 1 12.5 14h-2A1.5 1.5 0 0 1 9 12.5v-2Z" }
     ]}
   };
 
@@ -84,6 +96,7 @@
     outMarker: null,
     activeWorkflow: "color",
     referenceTimestamp: null,
+    sceneReferences: [],
     tasks: [],
     selectedTaskId: null,
     hoveredTaskId: null,
@@ -549,6 +562,7 @@
     state.currentTimestamp = 0;
     state.videoInfo = null;
     state.referenceTimestamp = null;
+    state.sceneReferences = [];
     qs("#participantSelect").value = pid;
     qs("#videoInfo").textContent = "";
     qs("#frameEmpty").classList.remove("hidden");
@@ -1747,6 +1761,15 @@
       if (r.confidence !== undefined) details.appendChild(el("span", "", "Confidence: " + (r.confidence * 100).toFixed(0) + "%"));
     } else if (hit.task.type === "numbers" && r.number_found !== undefined) {
       details.appendChild(el("span", "", "Found: " + r.number_found));
+    } else if (hit.task.type === "template" && r.best_score !== undefined) {
+      details.appendChild(el("span", "", "Score: " + (r.best_score * 100).toFixed(1) + "%"));
+      if (r.match_count !== undefined) details.appendChild(el("span", "", "Matches: " + r.match_count));
+    } else if (hit.task.type === "flow" && r.magnitude !== undefined) {
+      details.appendChild(el("span", "", "Magnitude: " + r.magnitude.toFixed(2)));
+      if (r.angle !== undefined) details.appendChild(el("span", "", "Direction: " + r.angle.toFixed(0) + "\u00b0"));
+    } else if (hit.task.type === "scene" && r.scene_name) {
+      details.appendChild(el("span", "", "Scene: " + r.scene_name));
+      if (r.score !== undefined) details.appendChild(el("span", "", "Score: " + (r.score * 100).toFixed(1) + "%"));
     }
     tip.appendChild(details);
 
@@ -2076,6 +2099,62 @@
       fmtControl.appendChild(fmtSel);
       fmtRow.appendChild(fmtControl);
       container.appendChild(fmtRow);
+    } else if (type === "template") {
+      var tmplRefRow = el("div", "param-row");
+      tmplRefRow.appendChild(el("span", "param-label", "Template"));
+      var tmplRefCtrl = el("div", "param-control");
+      var tmplCapBtn = el("button", "btn btn-small", "Capture Region");
+      tmplCapBtn.addEventListener("click", function () {
+        state.referenceTimestamp = state.currentTimestamp;
+        renderWorkflowParams();
+        showToast("Template captured at " + formatTimestamp(state.currentTimestamp));
+      });
+      tmplRefCtrl.appendChild(tmplCapBtn);
+      if (state.referenceTimestamp !== null) {
+        tmplRefCtrl.appendChild(el("span", "param-value", formatTimestamp(state.referenceTimestamp)));
+      }
+      tmplRefRow.appendChild(tmplRefCtrl);
+      container.appendChild(tmplRefRow);
+      addParamRow(container, "Threshold", rangeInput("paramTemplateThresh", 0.50, 1.00, 0.70, 0.01), "paramTemplateThreshVal");
+      renderIntervalSlot("paramTemplateInterval", 0.5, 60, 1.0, 0.5);
+    } else if (type === "flow") {
+      addParamRow(container, "Magnitude", rangeInput("paramFlowMag", 0.5, 20.0, 2.0, 0.5), "paramFlowMagVal");
+      renderIntervalSlot("paramFlowInterval", 0.5, 60, 1.0, 0.5);
+    } else if (type === "scene") {
+      var sceneList = el("div", "scene-reference-list");
+      sceneList.id = "sceneRefList";
+      state.sceneReferences.forEach(function (ref, i) {
+        var item = el("div", "scene-ref-item");
+        item.appendChild(el("span", "scene-ref-name", ref.name));
+        item.appendChild(el("span", "param-value", formatTimestamp(ref.timestamp)));
+        var rmBtn = el("button", "btn btn-small", "\u00d7");
+        rmBtn.addEventListener("click", function () {
+          state.sceneReferences.splice(i, 1);
+          renderWorkflowParams();
+        });
+        item.appendChild(rmBtn);
+        sceneList.appendChild(item);
+      });
+      container.appendChild(sceneList);
+      var addScRow = el("div", "param-row");
+      addScRow.appendChild(el("span", "param-label", "Add Scene"));
+      var addScCtrl = el("div", "param-control");
+      var scNameInp = textInput("paramSceneName", "e.g. menu, gameplay");
+      addScCtrl.appendChild(scNameInp);
+      var scCapBtn = el("button", "btn btn-small", "Capture");
+      scCapBtn.addEventListener("click", function () {
+        var nameEl = qs("#paramSceneName");
+        var name = nameEl ? nameEl.value.trim() : "";
+        if (!name) { showToast("Enter a scene name"); return; }
+        state.sceneReferences.push({ name: name, timestamp: state.currentTimestamp });
+        renderWorkflowParams();
+        showToast("Scene '" + name + "' at " + formatTimestamp(state.currentTimestamp));
+      });
+      addScCtrl.appendChild(scCapBtn);
+      addScRow.appendChild(addScCtrl);
+      container.appendChild(addScRow);
+      addParamRow(container, "Threshold", rangeInput("paramSceneThresh", 0.50, 1.00, 0.75, 0.01), "paramSceneThreshVal");
+      renderIntervalSlot("paramSceneInterval", 0.5, 60, 1.0, 0.5);
     }
 
     if (type !== "timelapse") {
@@ -2480,6 +2559,27 @@
     } else if (type === "timelapse") {
       params.speedup_factor = parseFloat((qs("#paramTlSpeed") || {}).value) || 10;
       params.output_format = (qs("#paramTlFormat") || {}).value || "mp4";
+    } else if (type === "template") {
+      if (state.referenceTimestamp === null) {
+        showToast("Capture a template region first");
+        return null;
+      }
+      params.reference_timestamp = state.referenceTimestamp;
+      params.threshold = parseFloat((qs("#paramTemplateThresh") || {}).value) || 0.70;
+      params.interval = parseFloat((qs("#paramTemplateInterval") || {}).value) || 1.0;
+    } else if (type === "flow") {
+      params.magnitude_threshold = parseFloat((qs("#paramFlowMag") || {}).value) || 2.0;
+      params.interval = parseFloat((qs("#paramFlowInterval") || {}).value) || 1.0;
+    } else if (type === "scene") {
+      if (state.sceneReferences.length === 0) {
+        showToast("Add at least one scene reference");
+        return null;
+      }
+      params.scene_references = state.sceneReferences.map(function (ref) {
+        return { name: ref.name, timestamp: ref.timestamp };
+      });
+      params.threshold = parseFloat((qs("#paramSceneThresh") || {}).value) || 0.75;
+      params.interval = parseFloat((qs("#paramSceneInterval") || {}).value) || 1.0;
     }
     var labelEl = qs("#paramEventLabel");
     if (labelEl && labelEl.value.trim()) {
@@ -3075,6 +3175,23 @@
     } else if (task.type === "timelapse") {
       setInputValue("#paramTlSpeed", params.speedup_factor || 10);
       setInputValue("#paramTlFormat", params.output_format || "mp4");
+    } else if (task.type === "template") {
+      if (params.reference_timestamp !== undefined) {
+        state.referenceTimestamp = params.reference_timestamp;
+      }
+      setInputValue("#paramTemplateThresh", params.threshold || 0.70);
+      setInputValue("#paramTemplateInterval", params.interval || 1.0);
+    } else if (task.type === "flow") {
+      setInputValue("#paramFlowMag", params.magnitude_threshold || 2.0);
+      setInputValue("#paramFlowInterval", params.interval || 1.0);
+    } else if (task.type === "scene") {
+      if (params.scene_references) {
+        state.sceneReferences = params.scene_references.map(function (ref) {
+          return { name: ref.name, timestamp: ref.timestamp };
+        });
+      }
+      setInputValue("#paramSceneThresh", params.threshold || 0.75);
+      setInputValue("#paramSceneInterval", params.interval || 1.0);
     }
 
     syncValueDisplays();
@@ -3480,6 +3597,26 @@
         row.dataset.timestamp = r.timestamp;
         row.appendChild(el("span", "result-timestamp", formatTimestamp(r.timestamp)));
         row.appendChild(el("span", "result-detail", String(r.number_found)));
+      } else if (task.type === "template") {
+        row.dataset.timestamp = r.timestamp;
+        row.appendChild(el("span", "result-timestamp", formatTimestamp(r.timestamp)));
+        row.appendChild(el("span", "result-score", (r.best_score * 100).toFixed(1) + "%"));
+        row.appendChild(el("span", "result-detail", r.match_count + " match" + (r.match_count !== 1 ? "es" : "")));
+      } else if (task.type === "flow") {
+        row.dataset.timestamp = r.timestamp;
+        row.appendChild(el("span", "result-timestamp", formatTimestamp(r.timestamp)));
+        var flowBar = el("div", "result-bar");
+        var flowFill = el("div", "result-bar-fill");
+        flowFill.style.width = Math.round(Math.min(r.magnitude / 20, 1) * 100) + "%";
+        flowFill.style.background = taskTypeColor("flow");
+        flowBar.appendChild(flowFill);
+        row.appendChild(flowBar);
+        row.appendChild(el("span", "result-score", r.magnitude.toFixed(2)));
+      } else if (task.type === "scene") {
+        row.dataset.timestamp = r.timestamp;
+        row.appendChild(el("span", "result-timestamp", formatTimestamp(r.timestamp)));
+        row.appendChild(el("span", "result-detail", r.scene_name));
+        row.appendChild(el("span", "result-score", (r.score * 100).toFixed(1) + "%"));
       }
 
       if (matchedEvent) {
