@@ -8,6 +8,7 @@ Module-level state: _worksheet, _sheet_context, _generated_artifacts, _generated
 
 Studio API endpoints (all under /studio/):
   GET  /api/sheet              – spreadsheet grid data (rows, participants, timestamps)
+  POST /api/sheet/refresh      – re-fetch spreadsheet data from source (Google/Excel)
   GET  /api/thumbnail/<p>/<t>  – JPEG thumbnail frame from participant video
   POST /api/generate           – generate clip/screen/gif artifacts for specified cells
   POST /api/highlights-preview – preview highlights reel selection without generating
@@ -213,6 +214,18 @@ def api_sheet() -> FlaskResponse:
             "rows": rows,
         }
     )
+
+
+@studio_bp.route("/api/sheet/refresh", methods=["POST"])
+def api_sheet_refresh() -> FlaskResponse:
+    global _sheet_context
+    if _worksheet is None:
+        return jsonify({"ok": False, "error": "No worksheet available"}), 500
+    new_context = spreadsheet.build_sheet_context(_worksheet)
+    if new_context is None:
+        return jsonify({"ok": False, "error": "Failed to refresh sheet data"}), 500
+    _sheet_context = new_context
+    return jsonify({"ok": True})
 
 
 def _save_manifest_quiet() -> None:
