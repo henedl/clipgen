@@ -36,6 +36,7 @@ API endpoints (all under /screenspace/):
 from __future__ import annotations
 
 import copy
+import math
 import threading
 import uuid
 from collections import OrderedDict
@@ -447,7 +448,10 @@ def api_tasks_list() -> FlaskResponse:
     tasks = _worker.get_all_tasks() if _worker else []
     clean = [_clean_task(t) for t in tasks]
     paused = _worker.is_paused if _worker else False
-    return jsonify({"ok": True, "tasks": clean, "paused": paused})
+    alive = _worker.is_alive if _worker else False
+    return jsonify(
+        {"ok": True, "tasks": clean, "paused": paused, "worker_alive": alive}
+    )
 
 
 @screenspace_bp.route("/api/tasks/<task_id>")
@@ -493,17 +497,27 @@ def api_tasks_create() -> FlaskResponse:
         return jsonify({"ok": False, "error": "participant is required"}), 400
 
     region_name = data.get("region", "").strip()
-    if not region_name:
+
+    # Template tasks with an uploaded image scan the full frame; no region needed
+    has_uploaded_template = task_type == "template" and data.get("parameters", {}).get(
+        "template_image_data"
+    )
+
+    if not region_name and not has_uploaded_template:
         return jsonify({"ok": False, "error": "region is required"}), 400
 
-    regions = _manifest.get("regions", {})
-    if region_name not in regions:
-        for stash in _manifest.get("stashes", []):
-            if region_name in stash.get("regions", {}):
-                regions = stash["regions"]
-                break
-    if region_name not in regions:
-        return jsonify({"ok": False, "error": f"Region '{region_name}' not found"}), 400
+    regions: Dict[str, Any] = {}
+    if region_name:
+        regions = _manifest.get("regions", {})
+        if region_name not in regions:
+            for stash in _manifest.get("stashes", []):
+                if region_name in stash.get("regions", {}):
+                    regions = stash["regions"]
+                    break
+        if region_name not in regions:
+            return jsonify(
+                {"ok": False, "error": f"Region '{region_name}' not found"}
+            ), 400
 
     video_path = _find_participant_video(participant)
     if video_path is None:
@@ -517,16 +531,21 @@ def api_tasks_create() -> FlaskResponse:
             source_video = Path(p["video_path"]).name
             break
 
-    region_data = regions[region_name]
-    props = video.probe_video_properties(video_path)
-    if props and props.get("width") and props.get("height"):
-        region_coords = _denormalize_region(
-            region_data, props["width"], props["height"]
-        )
+    if region_name:
+        region_data = regions[region_name]
+        props = video.probe_video_properties(video_path)
+        if props and props.get("width") and props.get("height"):
+            region_coords = _denormalize_region(
+                region_data, props["width"], props["height"]
+            )
+        else:
+            region_coords = {
+                k: region_data[k] for k in ("x", "y", "w", "h") if k in region_data
+            }
     else:
-        region_coords = {
-            k: region_data[k] for k in ("x", "y", "w", "h") if k in region_data
-        }
+        # Full-frame template scan -- sentinel region
+        region_name = "full_frame"
+        region_coords = {"x": 0, "y": 0, "w": 0, "h": 0}
     parameters = data.get("parameters", {})
 
     import screenspace
@@ -793,6 +812,17 @@ def api_events_bulk_include() -> FlaskResponse:
 # ---- Helpers ----
 
 
+def _sanitize_floats(obj: Any) -> Any:
+    """Replace non-finite floats (inf, nan) with None for JSON safety."""
+    if isinstance(obj, float) and not math.isfinite(obj):
+        return None
+    if isinstance(obj, dict):
+        return {k: _sanitize_floats(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_sanitize_floats(v) for v in obj]
+    return obj
+
+
 def _clean_task(task: Dict[str, Any]) -> Dict[str, Any]:
     """Remove internal fields from a task dict for API responses."""
     cleaned = {k: v for k, v in task.items() if not k.startswith("_")}
@@ -808,7 +838,7 @@ def _clean_task(task: Dict[str, Any]) -> Dict[str, Any]:
                 "reference_scenes",
             )
         }
-    return cleaned
+    return _sanitize_floats(cleaned)
 
 
 # ---- State initialization ----

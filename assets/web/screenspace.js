@@ -2553,8 +2553,10 @@
     var btn = qs("#runBtn");
     var hasRegion = state.runRegions.length > 0 || !!state.activeRegion;
     var hasParticipants = state.runParticipants.length > 0 || !!state.selectedParticipant;
-    btn.disabled = !hasRegion || !hasParticipants;
-    if (!hasRegion) {
+    // Template with uploaded image can run without a region (full-frame scan)
+    var templateNoRegion = state.activeWorkflow === "template" && !!state.uploadedTemplate;
+    btn.disabled = (!hasRegion && !templateNoRegion) || !hasParticipants;
+    if (!hasRegion && !templateNoRegion) {
       btn.setAttribute("data-tooltip", "Select a region first");
     } else if (!hasParticipants) {
       btn.setAttribute("data-tooltip", "Select participants to run");
@@ -2567,16 +2569,17 @@
 
   function initRunButton() {
     qs("#runBtn").addEventListener("click", function () {
+      var type = state.activeWorkflow;
       var regions = state.runRegions.length > 0
         ? state.runRegions
         : (state.activeRegion ? [state.activeRegion] : []);
-      if (regions.length === 0) return;
+      // Template with uploaded image can run without a region (full-frame scan)
+      if (regions.length === 0 && !(type === "template" && state.uploadedTemplate)) return;
+      if (regions.length === 0) regions = [""];
       var participants = state.runParticipants.length > 0
         ? state.runParticipants
         : (state.selectedParticipant ? [state.selectedParticipant] : []);
       if (participants.length === 0) return;
-
-      var type = state.activeWorkflow;
       var params = gatherWorkflowParams(type);
       if (params === null) return;
 

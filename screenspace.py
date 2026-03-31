@@ -23,6 +23,7 @@ from __future__ import annotations
 import copy
 import difflib
 import json
+import math
 import queue
 import re
 import threading
@@ -230,10 +231,14 @@ def match_template(
     if len(locs[0]) == 0:
         return []
 
-    # Collect raw detections sorted by score descending
+    # Collect raw detections sorted by score descending.
+    # TM_CCOEFF_NORMED can produce inf/nan when a frame patch has zero
+    # variance (constant colour) — skip those positions.
     detections: List[Dict[str, Any]] = []
     for pt_y, pt_x in zip(locs[0], locs[1]):
         score = float(result[pt_y, pt_x])
+        if not math.isfinite(score):
+            continue
         detections.append(
             {"x": int(pt_x), "y": int(pt_y), "w": tw, "h": th, "score": score}
         )
@@ -1595,6 +1600,11 @@ class ScreenspaceWorker:
         return True
 
     @property
+    def is_alive(self) -> bool:
+        """Return whether the worker thread is alive."""
+        return self._thread is not None and self._thread.is_alive()
+
+    @property
     def is_paused(self) -> bool:
         """Return whether the queue is paused."""
         return self._paused.is_set()
@@ -1735,25 +1745,32 @@ class ScreenspaceWorker:
                 item = self._queue.get(timeout=1)
             except queue.Empty:
                 continue
-            priority, created_at, task_id = item
-            if task_id is _SENTINEL:
-                break
 
-            if self._paused.is_set():
-                self._queue.put(item)
-                time.sleep(0.25)
-                continue
+            try:
+                priority, created_at, task_id = item
+                if task_id is _SENTINEL:
+                    break
 
-            with self._lock:
-                task = self._tasks.get(task_id)
-                if task is None or task["status"] != TASK_STATUS_QUEUED:
+                if self._paused.is_set():
+                    self._queue.put(item)
+                    time.sleep(0.25)
                     continue
-                task["status"] = TASK_STATUS_RUNNING
 
-            self._execute_task(task)
+                with self._lock:
+                    task = self._tasks.get(task_id)
+                    if task is None or task["status"] != TASK_STATUS_QUEUED:
+                        continue
+                    task["status"] = TASK_STATUS_RUNNING
 
-            if self.on_task_complete:
-                self.on_task_complete()
+                self._execute_task(task)
+
+                if self.on_task_complete:
+                    try:
+                        self.on_task_complete()
+                    except Exception as exc:
+                        utils.warning_print(f"on_task_complete callback failed: {exc}")
+            except Exception as exc:
+                utils.warning_print(f"Worker loop error: {exc}")
 
     def _execute_task(self, task: Dict[str, Any]) -> None:
         """Dispatch task to the appropriate workflow function."""
