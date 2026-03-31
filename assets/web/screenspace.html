@@ -50,7 +50,10 @@
 
     <section id="timelineSection">
       <div id="timelineRow">
-        <canvas id="timelineCanvas"></canvas>
+        <div id="timelineCanvasWrapper">
+          <canvas id="timelineCanvas"></canvas>
+          <canvas id="playheadCanvas"></canvas>
+        </div>
         <div id="timelineSeek">
           <input id="timestampInput" type="text" placeholder="0:00" spellcheck="false">
           <div id="timelineStepBtns">

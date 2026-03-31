@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import copy
 import uuid
+from collections import OrderedDict
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
@@ -60,7 +61,9 @@ _manifest: Dict[str, Any] = {}
 _worker: Optional["screenspace.ScreenspaceWorker"] = None
 _output_dir: str = ""
 _participants: List[Dict[str, Any]] = []
-_video_cap_cache: Dict[str, Any] = {"path": None, "cap": None}
+_video_cap_cache: OrderedDict[str, Any] = OrderedDict()
+_VIDEO_CAP_MAX = 3
+_video_metadata_cache: Dict[str, Dict[str, Any]] = {}
 
 _assets_dir = Path(__file__).resolve().parent / "assets" / "web"
 
@@ -121,20 +124,21 @@ def _get_video_cap(video_path: str) -> Optional["cv2.VideoCapture"]:
     """Return a cached VideoCapture for *video_path*, opening a new one if needed."""
     import cv2
 
-    if _video_cap_cache["path"] == video_path and _video_cap_cache["cap"] is not None:
-        cap = _video_cap_cache["cap"]
+    if video_path in _video_cap_cache:
+        cap = _video_cap_cache[video_path]
         if cap.isOpened():
+            _video_cap_cache.move_to_end(video_path)
             return cap
-    # Evict old entry
-    if _video_cap_cache["cap"] is not None:
-        _video_cap_cache["cap"].release()
+        # Stale entry
+        cap.release()
+        del _video_cap_cache[video_path]
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
-        _video_cap_cache["path"] = None
-        _video_cap_cache["cap"] = None
         return None
-    _video_cap_cache["path"] = video_path
-    _video_cap_cache["cap"] = cap
+    _video_cap_cache[video_path] = cap
+    if len(_video_cap_cache) > _VIDEO_CAP_MAX:
+        _, old_cap = _video_cap_cache.popitem(last=False)
+        old_cap.release()
     return cap
 
 
@@ -175,6 +179,9 @@ def api_video_frame(participant: str, timestamp: str) -> FlaskResponse:
 @screenspace_bp.route("/api/video/info/<participant>")
 def api_video_info(participant: str) -> FlaskResponse:
     """Return video metadata (duration, resolution, fps)."""
+    if participant in _video_metadata_cache:
+        return jsonify({"ok": True, "info": _video_metadata_cache[participant]})
+
     video_path = _find_participant_video(participant)
     if video_path is None:
         return jsonify(
@@ -201,6 +208,7 @@ def api_video_info(participant: str) -> FlaskResponse:
         "width": width if width > 0 else None,
         "height": height if height > 0 else None,
     }
+    _video_metadata_cache[participant] = info
 
     return jsonify({"ok": True, "info": info})
 

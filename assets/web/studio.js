@@ -345,7 +345,7 @@
         catBtn.innerHTML =
           (count === 0 ? "All" : count + " selected") +
           ' <span class="chevron">\u25BE</span>';
-        renderGrid();
+        applyGridFilters();
         computeGridMaxHeight();
       });
 
@@ -364,7 +364,7 @@
         var cbs = catPanel.querySelectorAll("input[type=checkbox]");
         for (var j = 0; j < cbs.length; j++) cbs[j].checked = false;
         catBtn.innerHTML = 'All <span class="chevron">\u25BE</span>';
-        renderGrid();
+        applyGridFilters();
         computeGridMaxHeight();
       });
       catGroup.appendChild(catClear);
@@ -409,7 +409,7 @@
       function onSevChange() {
         state.filters.sevMin = sevMin.value;
         state.filters.sevMax = sevMax.value;
-        renderGrid();
+        applyGridFilters();
         computeGridMaxHeight();
       }
       sevMin.addEventListener("change", onSevChange);
@@ -430,7 +430,7 @@
         state.filters.sevMax = "";
         sevMin.value = "";
         sevMax.value = "";
-        renderGrid();
+        applyGridFilters();
         computeGridMaxHeight();
       });
       sevGroup.appendChild(sevClear);
@@ -461,7 +461,7 @@
       var maxVal = fnMax.value.trim();
       state.filters.fnMin = minVal !== "" ? parseFloat(minVal) : null;
       state.filters.fnMax = maxVal !== "" ? parseFloat(maxVal) : null;
-      renderGrid();
+      applyGridFilters();
       computeGridMaxHeight();
     }
     fnMin.addEventListener("input", onFnChange);
@@ -482,7 +482,7 @@
       state.filters.fnMax = null;
       fnMin.value = "";
       fnMax.value = "";
-      renderGrid();
+      applyGridFilters();
       computeGridMaxHeight();
     });
     fnGroup.appendChild(fnClear);
@@ -502,7 +502,7 @@
         bar.classList.add("hidden");
         if (hasActiveFilters()) {
           clearAllFilters();
-          renderGrid();
+          applyGridFilters();
         }
       }
       computeGridMaxHeight();
@@ -553,12 +553,19 @@
       if (filterToggle) filterToggle.classList.remove("hidden");
       if (refreshBtn) refreshBtn.classList.remove("hidden");
       if (state.filtersVisible && filterBar) filterBar.classList.remove("hidden");
+      // Pause intake polling when leaving intake tab
+      if (state.intakePollTimer) { clearInterval(state.intakePollTimer); state.intakePollTimer = null; }
     } else {
       grid.classList.add("hidden");
       if (filterBar) filterBar.classList.add("hidden");
       if (filterToggle) filterToggle.classList.add("hidden");
       if (refreshBtn) refreshBtn.classList.add("hidden");
       intakePanel.classList.remove("hidden");
+      // Resume intake polling when entering intake tab
+      if (!state.intakePollTimer && !document.hidden) {
+        pollIntakeEvents();
+        state.intakePollTimer = setInterval(pollIntakeEvents, 10000);
+      }
     }
     computeGridMaxHeight();
   }
@@ -794,6 +801,8 @@
     return false;
   }
 
+  var _gridEventsBound = false;
+
   function renderGrid() {
     var d = state.sheetData;
     var grid = qs("#sheetGrid");
@@ -802,6 +811,8 @@
     var showSeverity = hasSeverityData(d.rows);
     var metaCols = showSeverity ? 5 : 4;
     var totalCols = metaCols + d.participants.length;
+    state._gridTotalCols = totalCols;
+    state._gridShowSeverity = showSeverity;
     var table = el("table");
 
     // Colgroup for fixed column widths — participant columns share equal width
@@ -892,9 +903,31 @@
     thead.appendChild(hrow);
     table.appendChild(thead);
 
-    // Group consecutive empty rows into separators
-    var filteredRows = getFilteredRows(d.rows);
     var tbody = el("tbody");
+    tbody.id = "gridTbody";
+    table.appendChild(tbody);
+    grid.appendChild(table);
+
+    applyGridFilters();
+
+    if (!_gridEventsBound) {
+      bindGridEvents();
+      bindDragFromGrid();
+      _gridEventsBound = true;
+    }
+    if (state.activeFunction) updateFunctionColumn();
+  }
+
+  function applyGridFilters() {
+    var d = state.sheetData;
+    if (!d) return;
+    var tbody = qs("#gridTbody");
+    if (!tbody) return;
+    var totalCols = state._gridTotalCols;
+    var showSeverity = state._gridShowSeverity;
+
+    var filteredRows = getFilteredRows(d.rows);
+    var frag = document.createDocumentFragment();
     var i = 0;
     while (i < filteredRows.length) {
       var row = filteredRows[i];
@@ -912,17 +945,15 @@
         );
         sepTd.setAttribute("colspan", String(totalCols));
         sepTr.appendChild(sepTd);
-        tbody.appendChild(sepTr);
+        frag.appendChild(sepTr);
       } else {
-        tbody.appendChild(renderDataRow(row, d.participants, showSeverity));
+        frag.appendChild(renderDataRow(row, d.participants, showSeverity));
         i++;
       }
     }
-    table.appendChild(tbody);
-    grid.appendChild(table);
-
-    bindGridEvents();
-    bindDragFromGrid();
+    tbody.innerHTML = "";
+    tbody.appendChild(frag);
+    updateCellClasses();
     if (state.activeFunction) updateFunctionColumn();
   }
 
@@ -1124,6 +1155,14 @@
     }
   }
 
+  function updateSingleCellClass(participant, row) {
+    var td = qs('.ts-cell[data-participant="' + participant + '"][data-row="' + row + '"]');
+    if (!td) return;
+    var inArt = findInQueue(state.artifactQueue, participant, row) >= 0;
+    var inReel = findInQueue(state.reelQueue, participant, row) >= 0;
+    td.classList.toggle("selected", inArt || inReel);
+  }
+
   function getCellInfo(td) {
     return {
       participant: td.getAttribute("data-participant"),
@@ -1141,7 +1180,7 @@
       for (var i = 0; i < entries.length; i++) state.artifactQueue.push(entries[i]);
     }
     renderArtifactQueue();
-    updateCellClasses();
+    updateSingleCellClass(info.participant, info.row);
   }
 
   function toggleReelCell(info) {
@@ -1152,7 +1191,7 @@
       for (var i = 0; i < entries.length; i++) state.reelQueue.push(entries[i]);
     }
     renderReelQueue();
-    updateCellClasses();
+    updateSingleCellClass(info.participant, info.row);
   }
 
   function addToQueue(targetQueue, info, renderFn) {
@@ -1169,7 +1208,7 @@
     }
     if (added) {
       renderFn();
-      updateCellClasses();
+      updateSingleCellClass(info.participant, info.row);
     }
   }
 
@@ -3374,10 +3413,12 @@
 
     // Filter controls
     var searchEl = qs("#intakeFilterSearch");
+    var _intakeSearchTimer = 0;
     if (searchEl) {
       searchEl.addEventListener("input", function () {
         state.intakeFilterText = this.value;
-        renderIntake(false);
+        clearTimeout(_intakeSearchTimer);
+        _intakeSearchTimer = setTimeout(function () { renderIntake(false); }, 250);
       });
     }
     var detBtns = qsa(".intake-filter-det");
@@ -3402,6 +3443,16 @@
     // Start polling immediately — silently fails if Screenspace is unavailable
     pollIntakeEvents();
     state.intakePollTimer = setInterval(pollIntakeEvents, 10000);
+
+    // Pause polling when browser tab or intake panel is not visible
+    document.addEventListener("visibilitychange", function () {
+      if (document.hidden) {
+        if (state.intakePollTimer) { clearInterval(state.intakePollTimer); state.intakePollTimer = null; }
+      } else if (state.activePreviewTab === "intake") {
+        pollIntakeEvents();
+        if (!state.intakePollTimer) state.intakePollTimer = setInterval(pollIntakeEvents, 10000);
+      }
+    });
   }
 
   document.addEventListener("click", function (ev) {
