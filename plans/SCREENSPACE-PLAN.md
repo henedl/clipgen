@@ -327,9 +327,9 @@ Screenspace events rendered as a separate track in both the standalone Timeline 
 
 Expand the analysis engine with new detection capabilities.
 
-- [ ] **Template/Object detection** — find instances of a reference image or template anywhere in the frame, not constrained to a fixed region; useful for detecting specific UI elements, icons, or visual patterns regardless of position
-- [ ] **Optical flow** — detect and quantify motion in a region (magnitude, direction); useful for finding moments of high activity vs stillness, tracking movement patterns
-- [ ] **Scene type classification** — categorize frames by visual content (menu screen, gameplay, cutscene, loading screen); useful for segmenting long recordings by activity type
+- [x] **Template/Object detection** — find instances of a reference image or template anywhere in the frame, not constrained to a fixed region; useful for detecting specific UI elements, icons, or visual patterns regardless of position
+- [x] **Optical flow** — detect and quantify motion in a region (magnitude, direction); useful for finding moments of high activity vs stillness, tracking movement patterns
+- [x] **Scene type classification** — categorize frames by visual content (menu screen, gameplay, cutscene, loading screen); useful for segmenting long recordings by activity type
 
 ---
 

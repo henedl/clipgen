@@ -277,6 +277,24 @@ def test_create_task_numbers_type_accepted(client):
     assert "video" in data["error"].lower()
 
 
+@pytest.mark.parametrize("task_type", ["template", "flow", "scene"])
+def test_create_task_new_types_accepted(client, task_type):
+    """New phase-4 types pass type validation (fail at video, not type)."""
+    screenspace_server._manifest["regions"]["r"] = {
+        "x": 0,
+        "y": 0,
+        "w": 10,
+        "h": 10,
+    }
+    resp = client.post(
+        "/screenspace/api/tasks",
+        json={"type": task_type, "participant": "P01", "region": "r"},
+    )
+    data = resp.get_json()
+    assert resp.status_code == 400
+    assert "video" in data["error"].lower()
+
+
 def test_get_task_not_found(client):
     resp = client.get("/screenspace/api/tasks/ss_nonexist")
     assert resp.status_code == 404

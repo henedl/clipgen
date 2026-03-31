@@ -1,13 +1,16 @@
 # -*- coding: utf-8 -*-
 """Screenspace analysis engine for clipgen.
 
-Six analysis tools (passed as 'type' when creating a task):
+Nine analysis tools (passed as 'type' when creating a task):
   color      – frames where a region's average HSV color matches a target within tolerance
   change     – frames where pixel diff ratio exceeds SCREENSPACE_CHANGE_RATIO_THRESHOLD
   similarity – frames matching a reference capture via SSIM (SCREENSPACE_SSIM_THRESHOLD)
   text       – OCR fuzzy search for a query string (SCREENSPACE_OCR_FUZZY_THRESHOLD); requires EasyOCR
   numbers    – OCR numeric comparison with a relational condition (eq/gt/lt/gte/lte/range)
   timelapse  – sped-up video of a region over a time range
+  template   – find a reference image/template anywhere in the full frame via cv2.matchTemplate
+  flow       – detect motion in a region via dense optical flow (cv2.calcOpticalFlowFarneback)
+  scene      – classify frames by similarity to user-captured reference scenes
 
 Workflow: user draws regions on a frame → enqueues tasks → ScreenspaceWorker processes in
 a background thread → results are timestamps or artifact files → state persisted to
@@ -180,6 +183,237 @@ def compute_phash(region_pixels: np.ndarray) -> imagehash.ImageHash:
     return imagehash.phash(pil_img)
 
 
+def match_template(
+    frame: np.ndarray,
+    template: np.ndarray,
+    threshold: float = 0.0,
+    nms_overlap: float = 0.0,
+    mask: Optional[np.ndarray] = None,
+) -> List[Dict[str, Any]]:
+    """Find all locations where template appears in frame.
+
+    Uses ``cv2.matchTemplate`` with ``TM_CCOEFF_NORMED``.  Non-maximum
+    suppression removes overlapping detections.  An optional *mask*
+    (same size as *template*, single-channel) restricts matching to
+    non-transparent regions — useful for uploaded PNGs with alpha.
+
+    Returns:
+        List of ``{x, y, w, h, score}`` dicts for each match above *threshold*.
+    """
+    if threshold <= 0.0:
+        threshold = config.SCREENSPACE_TEMPLATE_MATCH_THRESHOLD
+    if nms_overlap <= 0.0:
+        nms_overlap = config.SCREENSPACE_TEMPLATE_NMS_OVERLAP
+
+    k = config.SCREENSPACE_BLUR_KERNEL
+    frame_gray = cv2.cvtColor(cv2.GaussianBlur(frame, (k, k), 0), cv2.COLOR_BGR2GRAY)
+    tmpl_gray = cv2.cvtColor(cv2.GaussianBlur(template, (k, k), 0), cv2.COLOR_BGR2GRAY)
+
+    th, tw = tmpl_gray.shape[:2]
+    if th > frame_gray.shape[0] or tw > frame_gray.shape[1]:
+        return []
+
+    # A constant (zero-variance) template produces undefined TM_CCOEFF_NORMED
+    # results — every position may score ~1.0.  Bail out early.
+    if float(np.std(tmpl_gray)) < 1e-6:
+        return []
+
+    # Blur the mask to match the blurred template/frame
+    gray_mask = None
+    if mask is not None:
+        gray_mask = cv2.GaussianBlur(mask, (k, k), 0)
+
+    result = cv2.matchTemplate(
+        frame_gray, tmpl_gray, cv2.TM_CCOEFF_NORMED, mask=gray_mask
+    )
+    locs = np.where(result >= threshold)
+    if len(locs[0]) == 0:
+        return []
+
+    # Collect raw detections sorted by score descending
+    detections: List[Dict[str, Any]] = []
+    for pt_y, pt_x in zip(locs[0], locs[1]):
+        score = float(result[pt_y, pt_x])
+        detections.append(
+            {"x": int(pt_x), "y": int(pt_y), "w": tw, "h": th, "score": score}
+        )
+    detections.sort(key=lambda d: d["score"], reverse=True)
+
+    # Non-maximum suppression
+    kept: List[Dict[str, Any]] = []
+    for det in detections:
+        overlaps = False
+        for k_det in kept:
+            # Compute IoU
+            xa = max(det["x"], k_det["x"])
+            ya = max(det["y"], k_det["y"])
+            xb = min(det["x"] + det["w"], k_det["x"] + k_det["w"])
+            yb = min(det["y"] + det["h"], k_det["y"] + k_det["h"])
+            inter = max(0, xb - xa) * max(0, yb - ya)
+            area_a = det["w"] * det["h"]
+            area_b = k_det["w"] * k_det["h"]
+            union = area_a + area_b - inter
+            if union > 0 and inter / union > nms_overlap:
+                overlaps = True
+                break
+        if not overlaps:
+            kept.append(det)
+    return kept
+
+
+def compute_optical_flow(
+    prev_gray: np.ndarray,
+    curr_gray: np.ndarray,
+    pyr_scale: float = 0.0,
+    return_grid: bool = False,
+) -> Dict[str, Any]:
+    """Compute dense optical flow between two grayscale frames.
+
+    Returns:
+        Dict with ``magnitude`` (mean flow vector length),
+        ``angle`` (dominant direction in degrees, 0-360), and optionally
+        ``flow_grid`` (sparse grid of motion vectors for visualization).
+    """
+    if pyr_scale <= 0.0:
+        pyr_scale = config.SCREENSPACE_FLOW_PYRE_SCALE
+
+    # Resize to max 256px for speed
+    max_dim = 256
+    h, w = prev_gray.shape[:2]
+    if h > max_dim or w > max_dim:
+        scale = max_dim / max(h, w)
+        new_w, new_h = int(w * scale), int(h * scale)
+        prev_gray = cv2.resize(prev_gray, (new_w, new_h), interpolation=cv2.INTER_AREA)
+        curr_gray = cv2.resize(curr_gray, (new_w, new_h), interpolation=cv2.INTER_AREA)
+
+    flow_out = np.zeros((*prev_gray.shape[:2], 2), dtype=np.float32)
+    flow = cv2.calcOpticalFlowFarneback(
+        prev_gray, curr_gray, flow_out, pyr_scale, 3, 15, 3, 5, 1.2, 0
+    )
+    mag, ang = cv2.cartToPolar(flow[..., 0], flow[..., 1], angleInDegrees=True)
+    mean_mag = float(np.mean(mag))
+
+    # Dominant angle: weighted mean by magnitude
+    if mean_mag > 0:
+        # Use circular mean to avoid wraparound issues
+        rad = np.deg2rad(ang)
+        sin_sum = float(np.sum(mag * np.sin(rad)))
+        cos_sum = float(np.sum(mag * np.cos(rad)))
+        dominant_angle = float(np.rad2deg(np.arctan2(sin_sum, cos_sum))) % 360.0
+    else:
+        dominant_angle = 0.0
+
+    result: Dict[str, Any] = {
+        "magnitude": round(mean_mag, 4),
+        "angle": round(dominant_angle, 1),
+    }
+
+    if return_grid:
+        grid_size = config.SCREENSPACE_FLOW_GRID_SIZE
+        min_mag = config.SCREENSPACE_FLOW_GRID_MIN_MAG
+        gh, gw = mag.shape[:2]
+        step_y = max(1, gh // grid_size)
+        step_x = max(1, gw // grid_size)
+        grid: List[Dict[str, float]] = []
+        for gy in range(0, gh, step_y):
+            for gx in range(0, gw, step_x):
+                cell_mag = float(np.mean(mag[gy : gy + step_y, gx : gx + step_x]))
+                if cell_mag < min_mag:
+                    continue
+                cell_ang = float(np.mean(ang[gy : gy + step_y, gx : gx + step_x]))
+                grid.append(
+                    {
+                        "x": round((gx + step_x / 2) / gw, 3),
+                        "y": round((gy + step_y / 2) / gh, 3),
+                        "mag": round(cell_mag, 2),
+                        "ang": round(cell_ang, 1),
+                    }
+                )
+        result["flow_grid"] = grid
+
+    return result
+
+
+def compute_scene_fingerprint(region_pixels: np.ndarray) -> Dict[str, Any]:
+    """Compute a feature-based fingerprint for scene classification.
+
+    Combines HSV histogram, edge density, and color statistics into a
+    fingerprint suitable for comparison via :func:`compare_scene_fingerprints`.
+    """
+    # Resize to standardize
+    max_dim = 128
+    h, w = region_pixels.shape[:2]
+    if h > max_dim or w > max_dim:
+        scale = max_dim / max(h, w)
+        region_pixels = cv2.resize(
+            region_pixels,
+            (int(w * scale), int(h * scale)),
+            interpolation=cv2.INTER_AREA,
+        )
+
+    bins = config.SCREENSPACE_SCENE_HISTOGRAM_BINS
+    hsv = cv2.cvtColor(region_pixels, cv2.COLOR_BGR2HSV)
+    # 3D histogram flattened
+    hist = cv2.calcHist(
+        [hsv],
+        [0, 1, 2],
+        None,
+        [bins, bins, bins],
+        [0, 180, 0, 256, 0, 256],
+    )
+    cv2.normalize(hist, hist)
+
+    # Edge density
+    gray = cv2.cvtColor(region_pixels, cv2.COLOR_BGR2GRAY)
+    edges = cv2.Canny(gray, 100, 200)
+    edge_density = (
+        float(np.count_nonzero(edges)) / float(edges.size) if edges.size > 0 else 0.0
+    )
+
+    # Color stats per channel
+    color_stats: List[float] = []
+    for ch in range(3):
+        channel = region_pixels[:, :, ch].astype(np.float64)
+        color_stats.extend([float(np.mean(channel)), float(np.std(channel))])
+
+    return {
+        "histogram": hist,
+        "edge_density": edge_density,
+        "color_stats": color_stats,
+    }
+
+
+def compare_scene_fingerprints(
+    fp_a: Dict[str, Any],
+    fp_b: Dict[str, Any],
+) -> float:
+    """Compare two scene fingerprints.
+
+    Returns similarity score 0.0–1.0.
+    """
+    # Histogram correlation: range [-1, 1] → [0, 1]
+    hist_corr = cv2.compareHist(
+        fp_a["histogram"].astype(np.float32),
+        fp_b["histogram"].astype(np.float32),
+        cv2.HISTCMP_CORREL,
+    )
+    hist_sim = (hist_corr + 1.0) / 2.0
+
+    # Edge density similarity
+    edge_sim = 1.0 - abs(fp_a["edge_density"] - fp_b["edge_density"])
+
+    # Color stats similarity (normalized Euclidean distance)
+    stats_a = np.array(fp_a["color_stats"], dtype=np.float64)
+    stats_b = np.array(fp_b["color_stats"], dtype=np.float64)
+    max_dist = np.sqrt(len(stats_a)) * 255.0  # theoretical max
+    dist = float(np.linalg.norm(stats_a - stats_b))
+    color_sim = 1.0 - (dist / max_dist) if max_dist > 0 else 1.0
+
+    # Weighted average
+    score = 0.6 * hist_sim + 0.2 * edge_sim + 0.2 * color_sim
+    return max(0.0, min(1.0, score))
+
+
 def scan_video_frames(
     video_path: str,
     region: Dict[str, int],
@@ -247,6 +481,72 @@ def scan_video_frames(
                 break
             cropped = extract_region(frame, region)
             result = callback(ts, cropped)
+            if result is False:
+                break
+            ts += interval_seconds
+
+    cap.release()
+
+
+def scan_video_full_frames(
+    video_path: str,
+    interval_seconds: float,
+    callback: Callable[[float, np.ndarray], Optional[bool]],
+    *,
+    start_seconds: float = 0.0,
+    end_seconds: Optional[float] = None,
+    fps: float = 0.0,
+    duration: float = 0.0,
+) -> None:
+    """Like :func:`scan_video_frames` but passes the full frame (no region crop).
+
+    Used by template detection which searches the entire frame.
+    """
+    cap = cv2.VideoCapture(video_path)
+    if not cap.isOpened():
+        return
+
+    if fps <= 0:
+        fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+    if duration <= 0:
+        total_frames = cap.get(cv2.CAP_PROP_FRAME_COUNT)
+        duration = total_frames / fps if fps > 0 else 0.0
+    if end_seconds is None or end_seconds > duration:
+        end_seconds = duration
+
+    use_sequential = interval_seconds <= config.SCREENSPACE_SEQUENTIAL_READ_MAX_INTERVAL
+
+    if use_sequential:
+        frame_interval = max(1, round(interval_seconds * fps))
+        if start_seconds > 0:
+            cap.set(cv2.CAP_PROP_POS_MSEC, start_seconds * 1000.0)
+        frame_idx = 0
+        end_frame = int(end_seconds * fps)
+        start_frame = int(start_seconds * fps)
+        while True:
+            grabbed = cap.grab()
+            if not grabbed:
+                break
+            abs_frame = start_frame + frame_idx
+            if abs_frame > end_frame:
+                break
+            if frame_idx % frame_interval == 0:
+                ret, frame = cap.retrieve()
+                if not ret:
+                    break
+                ts = start_seconds + frame_idx / fps
+                result = callback(ts, frame)
+                if result is False:
+                    break
+            frame_idx += 1
+    else:
+        ts = start_seconds
+        while ts <= end_seconds:
+            cap.set(cv2.CAP_PROP_POS_MSEC, ts * 1000.0)
+            ret, frame = cap.read()
+            if not ret:
+                break
+            result = callback(ts, frame)
             if result is False:
                 break
             ts += interval_seconds
@@ -795,6 +1095,274 @@ def generate_timelapse(
     return output_path
 
 
+def scan_template(
+    video_path: str,
+    region: Dict[str, int],
+    template_image: np.ndarray,
+    threshold: float = 0.0,
+    interval_seconds: float = 0.0,
+    *,
+    template_mask: Optional[np.ndarray] = None,
+    start_seconds: float = 0.0,
+    end_seconds: Optional[float] = None,
+    on_progress: Optional[Callable[[float], None]] = None,
+    cancel_flag: Optional[Callable[[], bool]] = None,
+    on_result: Optional[Callable[[Dict[str, Any]], None]] = None,
+) -> List[Dict[str, Any]]:
+    """Scan video for frames containing the template image.
+
+    The template is searched across the **full frame** (not limited to a
+    region).  *region* is unused for cropping but kept in the signature
+    for consistency with other workflows.  An optional *template_mask*
+    restricts matching to non-transparent regions of an uploaded PNG.
+
+    Returns list of ``{timestamp, matches, best_score, match_count}`` dicts.
+    """
+    if threshold <= 0:
+        threshold = config.SCREENSPACE_TEMPLATE_MATCH_THRESHOLD
+    if interval_seconds <= 0:
+        interval_seconds = config.SCREENSPACE_DEFAULT_INTERVAL
+
+    cap = cv2.VideoCapture(video_path)
+    if not cap.isOpened():
+        return []
+    vid_fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+    total_frames = cap.get(cv2.CAP_PROP_FRAME_COUNT)
+    vid_duration = total_frames / vid_fps if vid_fps > 0 else 0.0
+    cap.release()
+
+    if end_seconds is None or end_seconds > vid_duration:
+        end_seconds = vid_duration
+    total_range = end_seconds - start_seconds
+
+    results: List[Dict[str, Any]] = []
+
+    def _cb(ts: float, frame: np.ndarray) -> Optional[bool]:
+        if cancel_flag and cancel_flag():
+            return False
+        matches = match_template(
+            frame, template_image, threshold=threshold, mask=template_mask
+        )
+        if matches:
+            best = max(m["score"] for m in matches)
+            rd = {
+                "timestamp": ts,
+                "matches": matches,
+                "best_score": round(best, 4),
+                "match_count": len(matches),
+            }
+            results.append(rd)
+            if on_result:
+                on_result(
+                    {
+                        "timestamp": ts,
+                        "best_score": rd["best_score"],
+                        "match_count": rd["match_count"],
+                    }
+                )
+        if on_progress and total_range > 0:
+            on_progress((ts - start_seconds) / total_range)
+        return None
+
+    scan_video_full_frames(
+        video_path,
+        interval_seconds,
+        _cb,
+        start_seconds=start_seconds,
+        end_seconds=end_seconds,
+        fps=vid_fps,
+        duration=vid_duration,
+    )
+
+    if on_progress:
+        on_progress(1.0)
+    return results
+
+
+def scan_flow(
+    video_path: str,
+    region: Dict[str, int],
+    magnitude_threshold: float = 0.0,
+    interval_seconds: float = 0.0,
+    *,
+    start_seconds: float = 0.0,
+    end_seconds: Optional[float] = None,
+    on_progress: Optional[Callable[[float], None]] = None,
+    cancel_flag: Optional[Callable[[], bool]] = None,
+    on_result: Optional[Callable[[Dict[str, Any]], None]] = None,
+) -> List[Dict[str, Any]]:
+    """Scan video for motion in a region using dense optical flow.
+
+    Returns list of ``{timestamp, magnitude, angle}`` dicts where
+    magnitude exceeds *magnitude_threshold*.
+    """
+    if magnitude_threshold <= 0:
+        magnitude_threshold = config.SCREENSPACE_FLOW_MAGNITUDE_THRESHOLD
+    if interval_seconds <= 0:
+        interval_seconds = config.SCREENSPACE_DEFAULT_INTERVAL
+
+    cap = cv2.VideoCapture(video_path)
+    if not cap.isOpened():
+        return []
+    vid_fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+    total_frames = cap.get(cv2.CAP_PROP_FRAME_COUNT)
+    vid_duration = total_frames / vid_fps if vid_fps > 0 else 0.0
+    cap.release()
+
+    if end_seconds is None or end_seconds > vid_duration:
+        end_seconds = vid_duration
+    total_range = end_seconds - start_seconds
+
+    results: List[Dict[str, Any]] = []
+    prev_gray: List[Optional[np.ndarray]] = [None]
+
+    def _cb(ts: float, pixels: np.ndarray) -> Optional[bool]:
+        if cancel_flag and cancel_flag():
+            return False
+        curr_gray = cv2.cvtColor(pixels, cv2.COLOR_BGR2GRAY)
+        if prev_gray[0] is not None:
+            flow_result = compute_optical_flow(
+                prev_gray[0], curr_gray, return_grid=True
+            )
+            if flow_result["magnitude"] >= magnitude_threshold:
+                rd: Dict[str, Any] = {
+                    "timestamp": ts,
+                    "magnitude": flow_result["magnitude"],
+                    "angle": flow_result["angle"],
+                    "flow_grid": flow_result.get("flow_grid", []),
+                }
+                results.append(rd)
+                if on_result:
+                    # Keep incremental updates lightweight (no grid)
+                    on_result(
+                        {
+                            "timestamp": ts,
+                            "magnitude": flow_result["magnitude"],
+                            "angle": flow_result["angle"],
+                        }
+                    )
+        prev_gray[0] = curr_gray
+        if on_progress and total_range > 0:
+            on_progress((ts - start_seconds) / total_range)
+        return None
+
+    scan_video_frames(
+        video_path,
+        region,
+        interval_seconds,
+        _cb,
+        start_seconds=start_seconds,
+        end_seconds=end_seconds,
+        fps=vid_fps,
+        duration=vid_duration,
+    )
+
+    if on_progress:
+        on_progress(1.0)
+    return results
+
+
+def scan_scene(
+    video_path: str,
+    region: Dict[str, int],
+    reference_scenes: List[Dict[str, Any]],
+    threshold: float = 0.0,
+    interval_seconds: float = 0.0,
+    *,
+    start_seconds: float = 0.0,
+    end_seconds: Optional[float] = None,
+    on_progress: Optional[Callable[[float], None]] = None,
+    cancel_flag: Optional[Callable[[], bool]] = None,
+    on_result: Optional[Callable[[Dict[str, Any]], None]] = None,
+) -> List[Dict[str, Any]]:
+    """Classify frames by similarity to reference scene fingerprints.
+
+    *reference_scenes* is a list of ``{name: str, frame: np.ndarray}``
+    dicts.  Each frame's region is fingerprinted and compared against
+    all references; the best match above *threshold* is reported.
+
+    Returns list of ``{timestamp, scene_name, score}`` dicts.
+    """
+    if threshold <= 0:
+        threshold = config.SCREENSPACE_SCENE_SIMILARITY_THRESHOLD
+    if interval_seconds <= 0:
+        interval_seconds = config.SCREENSPACE_DEFAULT_INTERVAL
+
+    # Pre-compute fingerprints for reference scenes
+    ref_fps: List[Tuple[str, Dict[str, Any]]] = []
+    for ref in reference_scenes:
+        fp = compute_scene_fingerprint(ref["frame"])
+        ref_fps.append((ref["name"], fp))
+
+    if not ref_fps:
+        return []
+
+    cap = cv2.VideoCapture(video_path)
+    if not cap.isOpened():
+        return []
+    vid_fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+    total_frames = cap.get(cv2.CAP_PROP_FRAME_COUNT)
+    vid_duration = total_frames / vid_fps if vid_fps > 0 else 0.0
+    cap.release()
+
+    if end_seconds is None or end_seconds > vid_duration:
+        end_seconds = vid_duration
+    total_range = end_seconds - start_seconds
+
+    results: List[Dict[str, Any]] = []
+    prev_skip_gray: List[Optional[np.ndarray]] = [None]
+
+    def _cb(ts: float, pixels: np.ndarray) -> Optional[bool]:
+        if cancel_flag and cancel_flag():
+            return False
+
+        # Static-frame skip (same pattern as similarity scan)
+        curr_gray = cv2.cvtColor(pixels, cv2.COLOR_BGR2GRAY).astype(np.float32)
+        if prev_skip_gray[0] is not None:
+            if abs(float(np.mean(curr_gray)) - float(np.mean(prev_skip_gray[0]))) < 2.0:
+                if on_progress and total_range > 0:
+                    on_progress((ts - start_seconds) / total_range)
+                return None
+        prev_skip_gray[0] = curr_gray
+
+        fp = compute_scene_fingerprint(pixels)
+        best_name = ""
+        best_score = 0.0
+        for ref_name, ref_fp in ref_fps:
+            score = compare_scene_fingerprints(fp, ref_fp)
+            if score > best_score:
+                best_score = score
+                best_name = ref_name
+
+        if best_score >= threshold:
+            rd = {
+                "timestamp": ts,
+                "scene_name": best_name,
+                "score": round(best_score, 4),
+            }
+            results.append(rd)
+            if on_result:
+                on_result(rd)
+        if on_progress and total_range > 0:
+            on_progress((ts - start_seconds) / total_range)
+        return None
+
+    scan_video_frames(
+        video_path,
+        region,
+        interval_seconds,
+        _cb,
+        start_seconds=start_seconds,
+        end_seconds=end_seconds,
+        fps=vid_fps,
+        duration=vid_duration,
+    )
+
+    if on_progress:
+        on_progress(1.0)
+    return results
+
+
 def _merge_timestamp_spans(
     timestamps: List[float], interval: float
 ) -> List[Dict[str, Any]]:
@@ -873,6 +1441,73 @@ def create_task(
         "completed_at": None,
         "_cancelled": False,
     }
+
+
+# ---------------------------------------------------------------------------
+# Heatmap generation
+# ---------------------------------------------------------------------------
+
+
+def generate_template_heatmap(
+    results: List[Dict[str, Any]],
+    frame_width: int,
+    frame_height: int,
+    output_path: str,
+) -> Optional[str]:
+    """Generate a heatmap PNG from accumulated template match bounding boxes.
+
+    Each pixel's intensity reflects how many times (weighted by score) it fell
+    inside a match bounding box across all scanned frames.
+    """
+    accumulator = np.zeros((frame_height, frame_width), dtype=np.float32)
+    for r in results:
+        for m in r.get("matches", []):
+            x, y, w, h = int(m["x"]), int(m["y"]), int(m["w"]), int(m["h"])
+            y2 = min(y + h, frame_height)
+            x2 = min(x + w, frame_width)
+            accumulator[y:y2, x:x2] += m.get("score", 1.0)
+
+    if accumulator.max() == 0:
+        return None
+
+    normalized = (accumulator / accumulator.max() * 255).astype(np.uint8)
+    normalized = cv2.GaussianBlur(normalized, (15, 15), 0)
+    heatmap = cv2.applyColorMap(normalized, cv2.COLORMAP_JET)
+    cv2.imwrite(output_path, heatmap)
+    return output_path
+
+
+def generate_flow_heatmap(
+    results: List[Dict[str, Any]],
+    region_width: int,
+    region_height: int,
+    output_path: str,
+) -> Optional[str]:
+    """Generate a heatmap PNG from accumulated optical flow magnitudes.
+
+    Uses ``flow_grid`` data from each result to paint per-cell motion
+    intensity across all frames.
+    """
+    acc_size = 256
+    accumulator = np.zeros((acc_size, acc_size), dtype=np.float32)
+    for r in results:
+        for cell in r.get("flow_grid", []):
+            cx = int(cell["x"] * (acc_size - 1))
+            cy = int(cell["y"] * (acc_size - 1))
+            radius = max(1, acc_size // 16)
+            cv2.circle(accumulator, (cx, cy), radius, float(cell["mag"]), -1)
+
+    if accumulator.max() == 0:
+        return None
+
+    normalized = (accumulator / accumulator.max() * 255).astype(np.uint8)
+    normalized = cv2.GaussianBlur(normalized, (15, 15), 0)
+    heatmap = cv2.applyColorMap(normalized, cv2.COLORMAP_JET)
+    heatmap = cv2.resize(
+        heatmap, (region_width, region_height), interpolation=cv2.INTER_LINEAR
+    )
+    cv2.imwrite(output_path, heatmap)
+    return output_path
 
 
 class ScreenspaceWorker:
@@ -1049,10 +1684,49 @@ class ScreenspaceWorker:
             elif task_type == "numbers":
                 confidence = 1.0
                 metadata["value"] = r.get("number_found", 0)
+            elif task_type == "template":
+                confidence = r.get("best_score", 0.0)
+                metadata["match_count"] = r.get("match_count", 0)
+                metadata["best_score"] = r.get("best_score", 0.0)
+            elif task_type == "flow":
+                confidence = min(r.get("magnitude", 0.0) / 10.0, 1.0)
+                metadata["magnitude"] = r.get("magnitude", 0.0)
+                metadata["angle"] = r.get("angle", 0.0)
+            elif task_type == "scene":
+                confidence = r.get("score", 0.0)
+                metadata["scene_name"] = r.get("scene_name", "")
+                metadata["score"] = r.get("score", 0.0)
             else:
                 confidence = 1.0
             events.append(create_event(task, ts, confidence, metadata))
         return events
+
+    def _generate_heatmap(
+        self, task: Dict[str, Any], results: List[Dict[str, Any]]
+    ) -> None:
+        """Generate a heatmap PNG for template or flow tasks."""
+        task_type = task.get("type", "")
+        task_id = task["id"]
+        if task_type == "template":
+            heatmap_path = str(
+                Path(utils.get_effective_output_dir()) / f"heatmap_{task_id}.png"
+            )
+            props = video.probe_video_properties(task["video_path"])
+            fw = props.get("width", 1920) if props else 1920
+            fh = props.get("height", 1080) if props else 1080
+            hp = generate_template_heatmap(results, fw, fh, heatmap_path)
+            if hp:
+                task["heatmap"] = Path(hp).name
+        elif task_type == "flow":
+            heatmap_path = str(
+                Path(utils.get_effective_output_dir()) / f"heatmap_{task_id}.png"
+            )
+            rc = task.get("region_coords", {})
+            rw = rc.get("w", 256)
+            rh = rc.get("h", 256)
+            hp = generate_flow_heatmap(results, rw, rh, heatmap_path)
+            if hp:
+                task["heatmap"] = Path(hp).name
 
     def _run(self) -> None:
         """Worker loop."""
@@ -1153,6 +1827,9 @@ class ScreenspaceWorker:
                         t["_generated_events"] = self._generate_events_from_results(
                             t, raw
                         )
+                        # Generate heatmap artifacts for template/flow tasks
+                        if isinstance(result, list) and result:
+                            self._generate_heatmap(t, result)
                     t["completed_at"] = datetime.now(timezone.utc).isoformat()
         except Exception as exc:
             with self._lock:
@@ -1262,6 +1939,51 @@ class ScreenspaceWorker:
                 output_path=output_path,
                 output_format=params.get("output_format", "mp4"),
             )
+        elif task_type == "template":
+            template_img = params.get("template_image")
+            if template_img is None:
+                raise ValueError("Template scan requires a template_image parameter")
+            return scan_template(
+                video_path,
+                region,
+                template_image=template_img,
+                threshold=params.get("threshold", 0),
+                interval_seconds=params.get("interval", 0),
+                template_mask=params.get("template_mask"),
+                start_seconds=params.get("start_seconds", 0.0),
+                end_seconds=params.get("end_seconds"),
+                on_progress=on_progress,
+                cancel_flag=cancel_flag,
+                on_result=on_result,
+            )
+        elif task_type == "flow":
+            return scan_flow(
+                video_path,
+                region,
+                magnitude_threshold=params.get("magnitude_threshold", 0),
+                interval_seconds=params.get("interval", 0),
+                start_seconds=params.get("start_seconds", 0.0),
+                end_seconds=params.get("end_seconds"),
+                on_progress=on_progress,
+                cancel_flag=cancel_flag,
+                on_result=on_result,
+            )
+        elif task_type == "scene":
+            ref_scenes = params.get("reference_scenes")
+            if not ref_scenes:
+                raise ValueError("Scene scan requires reference_scenes parameter")
+            return scan_scene(
+                video_path,
+                region,
+                reference_scenes=ref_scenes,
+                threshold=params.get("threshold", 0),
+                interval_seconds=params.get("interval", 0),
+                start_seconds=params.get("start_seconds", 0.0),
+                end_seconds=params.get("end_seconds"),
+                on_progress=on_progress,
+                cancel_flag=cancel_flag,
+                on_result=on_result,
+            )
         else:
             raise ValueError(f"Unknown task type: {task_type}")
 
@@ -1318,8 +2040,21 @@ def save_screenspace_manifest(
         ct = {k: v for k, v in task.items() if not k.startswith("_")}
         if "parameters" in ct:
             ct["parameters"] = {
-                k: v for k, v in ct["parameters"].items() if k != "reference_frame"
+                k: v
+                for k, v in ct["parameters"].items()
+                if k
+                not in (
+                    "reference_frame",
+                    "template_image",
+                    "template_mask",
+                    "reference_scenes",
+                )
             }
+        # Strip flow_grid from results (large per-frame data, not needed on disk)
+        if isinstance(ct.get("result"), list):
+            ct["result"] = [
+                {k: v for k, v in r.items() if k != "flow_grid"} for r in ct["result"]
+            ]
         clean_tasks.append(ct)
     try:
         manifest_path.write_text(
