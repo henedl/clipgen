@@ -1452,6 +1452,7 @@
   function showTooltipForArtifact(a, ev) {
     var tip = qs("#tooltip");
     if (!tip) return;
+    tip.style.borderLeft = "";
 
     var html = "<strong>" + escHtml(a.description || "(no description)") + "</strong><br>";
     html += '<span class="tooltip-time">' + formatTime(a.start);
@@ -1464,6 +1465,42 @@
     }
 
     tip.innerHTML = html;
+    tip.classList.remove("hidden");
+    positionTooltip(tip, ev.clientX, ev.clientY);
+  }
+
+  function showTooltipForScreenspaceCluster(c, ev) {
+    var tip = qs("#tooltip");
+    if (!tip) return;
+    var color = SS_DETECTOR_COLORS[c.type] || "#888";
+    var avgConf = c.count > 0 ? (c.confSum / c.count) : 0;
+
+    tip.innerHTML = "";
+    tip.style.borderLeft = "3px solid " + color;
+
+    var header = el("div", "ss-tooltip-header");
+    var icon = buildDetectorIconSvg(c.type);
+    if (icon) {
+      icon.style.color = color;
+      icon.style.flexShrink = "0";
+      header.appendChild(icon);
+    }
+    var title = document.createElement("strong");
+    title.textContent = c.eventType + " (" + c.type + ")";
+    header.appendChild(title);
+    tip.appendChild(header);
+
+    var time = el("span", "tooltip-time");
+    time.textContent = formatTime(c.start) + " \u2013 " + formatTime(c.end);
+    tip.appendChild(time);
+
+    var details = el("div", "ss-tooltip-details");
+    details.appendChild(el("span", "", "Region: " + c.region));
+    details.appendChild(el("span", "", "Participant: " + c.participant));
+    details.appendChild(el("span", "", "Confidence: " + Math.round(avgConf * 100) + "%"));
+    if (c.count > 1) details.appendChild(el("span", "", "Events: " + c.count));
+    tip.appendChild(details);
+
     tip.classList.remove("hidden");
     positionTooltip(tip, ev.clientX, ev.clientY);
   }
@@ -1690,6 +1727,45 @@
     numbers: "#eab308",
   };
 
+  var SS_DETECTOR_ICON_PATHS = {
+    color: { viewBox: "0 0 16 16", paths: [
+      { d: "M15 4C15 5.39788 14.0439 6.57245 12.75 6.90549V8.5C12.75 8.69891 12.671 8.88968 12.5303 9.03033L12.0303 9.53033C11.7374 9.82322 11.2626 9.82322 10.9697 9.53033L10.25 8.81069L5.57322 13.4875C5.24503 13.8157 4.79992 14.0001 4.33579 14.0001H3.66421C3.59791 14.0001 3.53432 14.0264 3.48744 14.0733L2.78033 14.7804C2.63968 14.921 2.44891 15.0001 2.25 15.0001C2.05109 15.0001 1.86032 14.921 1.71967 14.7804L1.21967 14.2804C0.926777 13.9875 0.926777 13.5126 1.21967 13.2197L1.92678 12.5126C1.97366 12.4657 2 12.4021 2 12.3358V11.6643C2 11.2001 2.18437 10.755 2.51256 10.4268L7.18937 5.75003L6.46967 5.03033C6.17678 4.73744 6.17678 4.26256 6.46967 3.96967L6.96967 3.46967C7.11032 3.32902 7.30109 3.25 7.5 3.25H9.09451C9.42755 1.95608 10.6021 1 12 1C13.6569 1 15 2.34315 15 4ZM9.18937 7.75003L8.25003 6.81069L3.57322 11.4875C3.52634 11.5344 3.5 11.598 3.5 11.6643V12.3358C3.5 12.3938 3.49713 12.4514 3.49146 12.5086C3.54862 12.5029 3.60627 12.5001 3.66421 12.5001H4.33579C4.40209 12.5001 4.46568 12.4737 4.51256 12.4268L9.18937 7.75003Z", fillRule: "evenodd" }
+    ]},
+    change: { viewBox: "0 0 16 16", paths: [
+      { d: "M9.58011 1.07655C9.88578 1.22638 10.0522 1.56328 9.98545 1.89709L9.16486 6H13.25C13.5437 6 13.8103 6.17136 13.9323 6.43847C14.0542 6.70558 14.0091 7.0193 13.8168 7.2412L7.31678 14.7412C7.09383 14.9984 6.72559 15.0733 6.41991 14.9234C6.11424 14.7736 5.94781 14.4367 6.01458 14.1029L6.83516 10H2.75001C2.45637 10 2.18974 9.82864 2.06777 9.56153C1.9458 9.29442 1.99093 8.9807 2.18324 8.7588L8.68324 1.2588C8.90619 1.00155 9.27444 0.92672 9.58011 1.07655Z", fillRule: "evenodd" }
+    ]},
+    similarity: { viewBox: "0 0 16 16", paths: [
+      { d: "M2 4C2 2.89543 2.89543 2 4 2H12C13.1046 2 14 2.89543 14 4V12C14 13.1046 13.1046 14 12 14H4C2.89543 14 2 13.1046 2 12V4ZM12.5 9.70711C12.5 9.5745 12.4473 9.44732 12.3536 9.35355L11.3536 8.35355C11.1583 8.15829 10.8417 8.15829 10.6464 8.35355L9.35355 9.64645C9.15829 9.84171 8.84171 9.84171 8.64645 9.64645L6.35355 7.35355C6.15829 7.15829 5.84171 7.15829 5.64645 7.35355L3.64645 9.35355C3.55268 9.44732 3.5 9.5745 3.5 9.70711V12C3.5 12.2761 3.72386 12.5 4 12.5H12C12.2761 12.5 12.5 12.2761 12.5 12V9.70711ZM12 5C12 5.55228 11.5523 6 11 6C10.4477 6 10 5.55228 10 5C10 4.44772 10.4477 4 11 4C11.5523 4 12 4.44772 12 5Z", fillRule: "evenodd" }
+    ]},
+    text: { viewBox: "0 0 16 16", paths: [
+      { d: "M11 5C11.299 5 11.5693 5.17751 11.6882 5.45179L14.9382 12.9518C15.1029 13.3319 14.9283 13.7735 14.5482 13.9382C14.1682 14.1029 13.7266 13.9283 13.5619 13.5482L12.8908 11.9997H9.10923L8.4382 13.5482C8.2735 13.9283 7.83189 14.1029 7.45182 13.9382C7.07176 13.7735 6.89717 13.3319 7.06186 12.9518L10.3119 5.45179C10.4307 5.17751 10.7011 5 11 5ZM9.75923 10.4997H12.2408L11 7.63628L9.75923 10.4997Z", fillRule: "evenodd" },
+      { d: "M5.00003 1C5.41424 1 5.75003 1.33579 5.75003 1.75V3.01104C6.16299 3.02322 6.5735 3.04541 6.98131 3.0774C7.44038 3.11341 7.89601 3.16182 8.34786 3.22231C8.75842 3.27727 9.04668 3.65464 8.99172 4.06519C8.93676 4.47574 8.55938 4.76401 8.14883 4.70905C7.92894 4.67961 7.70808 4.65321 7.48628 4.6299C7.1301 5.85717 6.59808 7.00928 5.91941 8.05729C6.15555 8.36066 6.40658 8.65193 6.67142 8.92999C6.95709 9.22993 6.94553 9.70466 6.64559 9.99034C6.34565 10.276 5.87092 10.2644 5.58525 9.96451C5.38294 9.7521 5.18774 9.53284 5.00002 9.30711C4.18402 10.2884 3.22645 11.1474 2.15883 11.853C1.81326 12.0813 1.34799 11.9863 1.11962 11.6408C0.891239 11.2952 0.986242 10.8299 1.33181 10.6015C2.3813 9.90797 3.31021 9.04714 4.08066 8.05729C3.88359 7.75296 3.69887 7.43984 3.52724 7.11865C3.33202 6.75332 3.46992 6.29891 3.83524 6.10369C4.20057 5.90847 4.65498 6.04637 4.8502 6.4117C4.89895 6.50293 4.9489 6.59343 5.00002 6.68318C5.38798 6.00207 5.7083 5.27759 5.95187 4.51891C5.63619 4.50635 5.31887 4.5 5.00003 4.5C3.93193 4.5 2.88086 4.57121 1.85122 4.70905C1.44067 4.76401 1.0633 4.47574 1.00834 4.06519C0.95338 3.65464 1.24164 3.27727 1.65219 3.22231C2.50548 3.10808 3.37219 3.03692 4.25003 3.01104V1.75C4.25003 1.33579 4.58582 1 5.00003 1Z", fillRule: "evenodd" }
+    ]},
+    numbers: { viewBox: "0 0 16 16", paths: [
+      { d: "M7.48677 2.89033C7.56427 2.48344 7.29725 2.09075 6.89035 2.01325C6.48345 1.93574 6.09077 2.20277 6.01326 2.60967L5.55827 4.99835H3.60963C3.19542 4.99835 2.85963 5.33414 2.85963 5.74835C2.85963 6.16257 3.19542 6.49835 3.60963 6.49835H5.27256L4.7016 9.49589H2.74963C2.33542 9.49589 1.99963 9.83168 1.99963 10.2459C1.99963 10.6601 2.33542 10.9959 2.74963 10.9959H4.41588L4.01326 13.1097C3.93576 13.5166 4.20278 13.9092 4.60968 13.9868C5.01658 14.0643 5.40926 13.7972 5.48677 13.3903L5.94285 10.9959H8.91589L8.51326 13.1097C8.43576 13.5166 8.70278 13.9092 9.10968 13.9868C9.51658 14.0643 9.90927 13.7972 9.98677 13.3903L10.4429 10.9959H12.3896C12.8038 10.9959 13.1396 10.6601 13.1396 10.2459C13.1396 9.83168 12.8038 9.49589 12.3896 9.49589H10.7286L11.2995 6.49835H13.2496C13.6638 6.49835 13.9996 6.16257 13.9996 5.74835C13.9996 5.33414 13.6638 4.99835 13.2496 4.99835H11.5852L11.9868 2.89033C12.0643 2.48344 11.7972 2.09075 11.3903 2.01325C10.9835 1.93574 10.5908 2.20277 10.5133 2.60967L10.0583 4.99835H7.08524L7.48677 2.89033ZM6.79953 6.49835L6.22857 9.49589H9.2016L9.77256 6.49835H6.79953Z", fillRule: "evenodd" }
+    ]}
+  };
+
+  function buildDetectorIconSvg(type) {
+    var info = SS_DETECTOR_ICON_PATHS[type];
+    if (!info) return null;
+    var svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    svg.setAttribute("width", "14");
+    svg.setAttribute("height", "14");
+    svg.setAttribute("viewBox", info.viewBox);
+    svg.setAttribute("fill", "currentColor");
+    info.paths.forEach(function (p) {
+      var path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+      path.setAttribute("d", p.d);
+      if (p.fillRule) {
+        path.setAttribute("fill-rule", p.fillRule);
+        path.setAttribute("clip-rule", p.fillRule);
+      }
+      svg.appendChild(path);
+    });
+    return svg;
+  }
+
   function clusterScreenspaceEvents(events, timelineDuration) {
     var sorted = events.slice().sort(function (a, b) {
       if (a.participant !== b.participant) return a.participant < b.participant ? -1 : 1;
@@ -1748,15 +1824,15 @@
       marker.style.left = left + "%";
       marker.style.width = width + "%";
       marker.style.background = SS_DETECTOR_COLORS[c.type] || "#888";
-      var avgConf = c.count > 0 ? (c.confSum / c.count) : 0;
-      marker.title =
-        c.eventType +
-        " (" + c.type + ")" +
-        "\nRegion: " + c.region +
-        "\nParticipant: " + c.participant +
-        "\nTime: " + formatTime(c.start) + " \u2013 " + formatTime(c.end) +
-        "\nConfidence: " + Math.round(avgConf * 100) + "%" +
-        "\nEvents: " + c.count;
+      marker.addEventListener("mouseenter", function (cluster) {
+        return function (ev) { showTooltipForScreenspaceCluster(cluster, ev); };
+      }(c));
+      marker.addEventListener("mousemove", moveTooltip);
+      marker.addEventListener("mouseleave", function () {
+        var tip = qs("#tooltip");
+        if (tip) tip.style.borderLeft = "";
+        hideTooltip();
+      });
       trackEl.appendChild(marker);
       detectorsSeen[c.type] = true;
     });

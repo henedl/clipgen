@@ -915,6 +915,21 @@ body {
   color: var(--color-text-dim);
 }
 
+.ss-tooltip-header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.ss-tooltip-details {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  margin-top: var(--space-1);
+  font-size: var(--text-xs);
+  color: var(--color-text-dim);
+}
+
 /* Empty state */
 
 #emptyState {
