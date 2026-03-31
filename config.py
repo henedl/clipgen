@@ -9,7 +9,7 @@ from icecream import ic
 REENCODING: bool = False
 AUDIO_NORMALIZE: bool = False
 FILEFORMAT: str = ".mp4"
-VERSIONNUM: str = "0.9.74"
+VERSIONNUM: str = "0.9.75"
 TITLECARDS_ENABLED: bool = False  # use --titlecards / --no-titlecards to override per run
 FILMSTRIP_ENABLED: bool = False  # use --filmstrip / --no-filmstrip to override per run
 TITLECARD_DURATION_SECONDS: int = 2  # duration in seconds; falls back to color fill when no source frame available

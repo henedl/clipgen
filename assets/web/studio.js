@@ -544,17 +544,20 @@
     var grid = qs("#sheetGrid");
     var filterBar = qs("#filterBar");
     var filterToggle = qs("#filterToggle");
+    var refreshBtn = qs("#refreshSheet");
     var intakePanel = qs("#intakePanel");
 
     if (state.activePreviewTab === "sheet") {
       grid.classList.remove("hidden");
       intakePanel.classList.add("hidden");
       if (filterToggle) filterToggle.classList.remove("hidden");
+      if (refreshBtn) refreshBtn.classList.remove("hidden");
       if (state.filtersVisible && filterBar) filterBar.classList.remove("hidden");
     } else {
       grid.classList.add("hidden");
       if (filterBar) filterBar.classList.add("hidden");
       if (filterToggle) filterToggle.classList.add("hidden");
+      if (refreshBtn) refreshBtn.classList.add("hidden");
       intakePanel.classList.remove("hidden");
     }
     computeGridMaxHeight();
@@ -686,6 +689,31 @@
       })
       .catch(function (err) {
         qs("#sheetLoading").textContent = "Failed to load sheet: " + err;
+      });
+  }
+
+  function refreshSheetData() {
+    var btn = qs("#refreshSheet");
+    if (!btn || btn.disabled) return;
+    btn.disabled = true;
+    var svg = btn.querySelector("svg");
+    if (svg) svg.style.animation = "spin 0.7s linear infinite";
+
+    fetch("api/sheet/refresh", { method: "POST" })
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        if (!data.ok) {
+          showResult(null, "Refresh failed: " + (data.error || "Unknown error"));
+          return;
+        }
+        loadSheetData();
+      })
+      .catch(function (err) {
+        showResult(null, "Refresh failed: " + err);
+      })
+      .then(function () {
+        btn.disabled = false;
+        if (svg) svg.style.animation = "";
       });
   }
 
@@ -2095,6 +2123,7 @@
     qs("#titlecardEnabled").addEventListener("change", persistTitlecardSettings);
     qs("#titlecardDuration").addEventListener("change", persistTitlecardSettings);
 
+    qs("#refreshSheet").addEventListener("click", refreshSheetData);
     qs("#settingsBtn").addEventListener("click", openSettings);
     qs("#settingsClose").addEventListener("click", closeSettings);
     qs("#settingsResetBtn").addEventListener("click", resetSettings);

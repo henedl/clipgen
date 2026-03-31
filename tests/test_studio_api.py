@@ -29,6 +29,41 @@ def test_api_sheet_500_when_no_context(client):
     assert "No sheet loaded" in data["error"]
 
 
+def test_api_sheet_refresh_500_when_no_worksheet(client):
+    resp = client.post("/studio/api/sheet/refresh")
+    assert resp.status_code == 500
+    data = resp.get_json()
+    assert data["ok"] is False
+    assert "No worksheet" in data["error"]
+
+
+def test_api_sheet_refresh_success(client, monkeypatch):
+    import spreadsheet
+
+    fake_context = object()
+    monkeypatch.setattr(server, "_worksheet", object())
+    monkeypatch.setattr(spreadsheet, "build_sheet_context", lambda ws: fake_context)
+
+    resp = client.post("/studio/api/sheet/refresh")
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["ok"] is True
+    assert server._sheet_context is fake_context
+
+
+def test_api_sheet_refresh_500_when_build_fails(client, monkeypatch):
+    import spreadsheet
+
+    monkeypatch.setattr(server, "_worksheet", object())
+    monkeypatch.setattr(spreadsheet, "build_sheet_context", lambda ws: None)
+
+    resp = client.post("/studio/api/sheet/refresh")
+    assert resp.status_code == 500
+    data = resp.get_json()
+    assert data["ok"] is False
+    assert "Failed to refresh" in data["error"]
+
+
 def test_api_generate_500_when_no_worksheet(client):
     resp = client.post("/studio/api/generate", json={"cells": ["P01.3"]})
     assert resp.status_code == 500
