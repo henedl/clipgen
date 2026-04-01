@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import difflib
+import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, TypedDict, TypeVar
@@ -491,6 +492,19 @@ def resolve_output_path(name: str) -> Path:
     if path.is_absolute():
         return path
     return base / path
+
+
+def get_bundled_assets_root() -> Path:
+    """Return the base directory for bundled project assets.
+
+    In a PyInstaller one-file build, bundled data is extracted to sys._MEIPASS.
+    In source runs, assets are relative to the source directory.
+    """
+    if getattr(sys, "frozen", False):
+        return Path(
+            getattr(sys, "_MEIPASS", str(Path(sys.executable).resolve().parent))
+        )
+    return Path(__file__).resolve().parent
 
 
 # ---- Filename and study name helpers ----
