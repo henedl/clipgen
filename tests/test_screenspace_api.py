@@ -614,6 +614,72 @@ def test_create_multitool_task_no_steps(client):
     assert resp.status_code == 400
 
 
+def test_create_multitool_task_missing_step_region(client):
+    _create_region(client, "healthbar")
+    resp = client.post(
+        "/screenspace/api/tasks",
+        json={
+            "type": "multitool",
+            "participant": "P01",
+            "region": "healthbar",
+            "parameters": {
+                "steps": [
+                    {"type": "color", "region": "healthbar"},
+                    {"type": "change"},
+                ]
+            },
+        },
+    )
+    assert resp.status_code == 400
+    data = resp.get_json()
+    assert "region is required" in data["error"]
+
+
+def test_create_multitool_task_unknown_step_region(client):
+    _create_region(client, "healthbar")
+    resp = client.post(
+        "/screenspace/api/tasks",
+        json={
+            "type": "multitool",
+            "participant": "P01",
+            "region": "healthbar",
+            "parameters": {
+                "steps": [
+                    {"type": "color", "region": "healthbar"},
+                    {"type": "change", "region": "nonexistent"},
+                ]
+            },
+        },
+    )
+    assert resp.status_code == 400
+    data = resp.get_json()
+    assert "not found" in data["error"]
+
+
+def test_create_multitool_task_no_global_region_ok(client):
+    """Multitool tasks should not require a global region when steps have per-step regions."""
+    _create_region(client, "healthbar")
+    _create_region(client, "statusbar", x=0, y=0, w=100, h=20)
+    resp = client.post(
+        "/screenspace/api/tasks",
+        json={
+            "type": "multitool",
+            "participant": "P01",
+            "region": "",
+            "parameters": {
+                "steps": [
+                    {"type": "color", "region": "healthbar"},
+                    {"type": "change", "region": "statusbar"},
+                ]
+            },
+        },
+    )
+    # Should fail on video lookup (has_video=False), not region validation
+    assert resp.status_code == 400
+    data = resp.get_json()
+    assert "No video" in data["error"]
+
+
 def _create_region(client, name, x=100, y=20, w=300, h=30):
     client.post(
         "/screenspace/api/regions",

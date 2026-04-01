@@ -1625,6 +1625,7 @@ def scan_multitool(
     # ---- Step 0: full scan via the appropriate scan_* function ----
     step0 = steps[0]
     step0_type = step0["type"]
+    step0_region = step0.get("region_coords", region)
     step0_collected: List[Dict[str, Any]] = []
 
     def _collect(rd: Dict[str, Any]) -> None:
@@ -1644,7 +1645,7 @@ def scan_multitool(
     if step0_type == "color":
         scan_color(
             video_path,
-            region,
+            step0_region,
             target_color=step0.get("target_color", {"h": 0, "s": 0, "v": 0}),
             tolerance=step0.get("tolerance", {"h": 10, "s": 50, "v": 50}),
             interval_seconds=interval,
@@ -1657,7 +1658,7 @@ def scan_multitool(
     elif step0_type == "change":
         scan_changes(
             video_path,
-            region,
+            step0_region,
             threshold=step0.get("threshold", 0),
             interval_seconds=interval,
             noise_threshold=step0.get("noise_threshold", 0),
@@ -1673,7 +1674,7 @@ def scan_multitool(
             raise ValueError("Similarity step requires a reference_frame parameter")
         scan_similarity(
             video_path,
-            region,
+            step0_region,
             reference_frame=ref_frame,
             threshold=step0.get("threshold", 0),
             interval_seconds=interval,
@@ -1686,7 +1687,7 @@ def scan_multitool(
     elif step0_type == "text":
         scan_text(
             video_path,
-            region,
+            step0_region,
             search_string=step0.get("search_string", ""),
             interval_seconds=interval,
             fuzzy_threshold=step0.get("fuzzy_threshold", 0),
@@ -1700,7 +1701,7 @@ def scan_multitool(
     elif step0_type == "numbers":
         scan_numbers(
             video_path,
-            region,
+            step0_region,
             operator=step0.get("operator", "gt"),
             target_value=step0.get("target_value", 0),
             interval_seconds=interval,
@@ -1719,7 +1720,7 @@ def scan_multitool(
             raise ValueError("Template step requires a template_image parameter")
         scan_template(
             video_path,
-            region,
+            step0_region,
             template_image=template_img,
             threshold=step0.get("threshold", 0),
             interval_seconds=interval,
@@ -1733,7 +1734,7 @@ def scan_multitool(
     elif step0_type == "flow":
         scan_flow(
             video_path,
-            region,
+            step0_region,
             magnitude_threshold=step0.get("magnitude_threshold", 0),
             interval_seconds=interval,
             start_seconds=s0_start,
@@ -1748,7 +1749,7 @@ def scan_multitool(
             raise ValueError("Scene step requires reference_scenes parameter")
         scan_scene(
             video_path,
-            region,
+            step0_region,
             reference_scenes=ref_scenes,
             threshold=step0.get("threshold", 0),
             interval_seconds=interval,
@@ -1781,6 +1782,7 @@ def scan_multitool(
             return []
         step = steps[step_idx]
         step_type = step["type"]
+        step_region = step.get("region_coords", region)
         new_working: Dict[float, List[Dict[str, Any]]] = {}
 
         cap = cv2.VideoCapture(video_path)
@@ -1810,7 +1812,7 @@ def scan_multitool(
                     prev_frame = None
 
             passed, result_dict = check_frame_for_tool(
-                frame, prev_frame, region, step_type, step
+                frame, prev_frame, step_region, step_type, step
             )
             if passed and result_dict is not None:
                 new_working[ts] = working[ts] + [result_dict]
@@ -2662,10 +2664,11 @@ def save_screenspace_manifest(
             ct["parameters"] = {
                 k: v for k, v in ct["parameters"].items() if k not in _binary_keys
             }
-            # Strip binary data from multitool step parameters
+            # Strip binary data and internal coords from multitool step parameters
             if "steps" in ct["parameters"]:
+                _step_strip_keys = _binary_keys + ("region_coords",)
                 ct["parameters"]["steps"] = [
-                    {k: v for k, v in s.items() if k not in _binary_keys}
+                    {k: v for k, v in s.items() if k not in _step_strip_keys}
                     for s in ct["parameters"]["steps"]
                 ]
         # Strip flow_grid from results (large per-frame data, not needed on disk)

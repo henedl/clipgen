@@ -504,7 +504,8 @@ def api_tasks_create() -> FlaskResponse:
         "template_image_data"
     )
 
-    if not region_name and not has_uploaded_template:
+    # Multitool uses per-step regions; others need a global region (unless template upload)
+    if not region_name and not has_uploaded_template and task_type != "multitool":
         return jsonify({"ok": False, "error": "region is required"}), 400
 
     # Early validation for multitool steps (before video path lookup)
@@ -532,15 +533,29 @@ def api_tasks_create() -> FlaskResponse:
                     {"ok": False, "error": f"Step {i}: invalid type '{stype}'"}
                 ), 400
 
-    regions: Dict[str, Any] = {}
-    if region_name:
-        regions = _manifest.get("regions", {})
-        if region_name not in regions:
-            for stash in _manifest.get("stashes", []):
-                if region_name in stash.get("regions", {}):
-                    regions = stash["regions"]
-                    break
-        if region_name not in regions:
+    # Build combined region lookup dict (active + stashes)
+    all_known_regions: Dict[str, Any] = dict(_manifest.get("regions", {}))
+    for stash in _manifest.get("stashes", []):
+        all_known_regions.update(stash.get("regions", {}))
+
+    # Multitool validates per-step regions; non-multitool validates global region
+    if task_type == "multitool":
+        mt_steps_early = data.get("parameters", {}).get("steps", [])
+        for i, step in enumerate(mt_steps_early):
+            step_region = (step.get("region") or "").strip()
+            if not step_region:
+                return jsonify(
+                    {"ok": False, "error": f"Step {i}: region is required"}
+                ), 400
+            if step_region not in all_known_regions:
+                return jsonify(
+                    {
+                        "ok": False,
+                        "error": f"Step {i}: region '{step_region}' not found",
+                    }
+                ), 400
+    else:
+        if region_name and region_name not in all_known_regions:
             return jsonify(
                 {"ok": False, "error": f"Region '{region_name}' not found"}
             ), 400
@@ -557,17 +572,28 @@ def api_tasks_create() -> FlaskResponse:
             source_video = Path(p["video_path"]).name
             break
 
-    if region_name:
-        region_data = regions[region_name]
-        props = video.probe_video_properties(video_path)
+    props = video.probe_video_properties(video_path)
+
+    def _resolve_region_coords(name: str) -> Dict[str, Any]:
+        """Convert a named region to pixel coordinates."""
+        rd = all_known_regions[name]
         if props and props.get("width") and props.get("height"):
-            region_coords = _denormalize_region(
-                region_data, props["width"], props["height"]
-            )
+            return _denormalize_region(rd, props["width"], props["height"])
+        return {k: rd[k] for k in ("x", "y", "w", "h") if k in rd}
+
+    if region_name and region_name in all_known_regions:
+        region_coords = _resolve_region_coords(region_name)
+    elif task_type == "multitool":
+        # Multitool uses per-step regions; use first step's region for top-level metadata
+        first_step_region = (
+            data.get("parameters", {}).get("steps", [{}])[0].get("region", "")
+        )
+        if first_step_region and first_step_region in all_known_regions:
+            region_name = first_step_region
+            region_coords = _resolve_region_coords(first_step_region)
         else:
-            region_coords = {
-                k: region_data[k] for k in ("x", "y", "w", "h") if k in region_data
-            }
+            region_name = "per_step"
+            region_coords = {"x": 0, "y": 0, "w": 0, "h": 0}
     else:
         # Full-frame template scan -- sentinel region
         region_name = "full_frame"
@@ -688,7 +714,7 @@ def api_tasks_create() -> FlaskResponse:
         cap.release()
         parameters["reference_scenes"] = reference_scenes
 
-    # Multitool tasks: prepare per-step parameters (validation done earlier)
+    # Multitool tasks: resolve per-step regions and prepare parameters
     if task_type == "multitool":
         import base64
 
@@ -698,6 +724,15 @@ def api_tasks_create() -> FlaskResponse:
         steps = parameters.get("steps", [])
         for i, step in enumerate(steps):
             stype = step.get("type", "")
+
+            # Resolve this step's region to pixel coords
+            step_region_name = (step.get("region") or "").strip()
+            if step_region_name and step_region_name in all_known_regions:
+                step["region_coords"] = _resolve_region_coords(step_region_name)
+            else:
+                step["region_coords"] = region_coords  # fallback to top-level
+
+            step_rc = step["region_coords"]
 
             if stype == "similarity":
                 ref_ts = step.get("reference_timestamp")
@@ -721,9 +756,7 @@ def api_tasks_create() -> FlaskResponse:
                             "error": f"Step {i}: could not read reference frame",
                         }
                     ), 400
-                step["reference_frame"] = screenspace.extract_region(
-                    frame, region_coords
-                )
+                step["reference_frame"] = screenspace.extract_region(frame, step_rc)
 
             elif stype == "template":
                 upload_b64 = step.pop("template_image_data", None)
@@ -774,9 +807,7 @@ def api_tasks_create() -> FlaskResponse:
                                 "error": f"Step {i}: could not read template frame",
                             }
                         ), 400
-                    step["template_image"] = screenspace.extract_region(
-                        frame, region_coords
-                    )
+                    step["template_image"] = screenspace.extract_region(frame, step_rc)
 
             elif stype == "scene":
                 scene_refs = step.get("scene_references")
@@ -802,7 +833,7 @@ def api_tasks_create() -> FlaskResponse:
                                 "error": f"Step {i}: could not read frame for scene '{ref['name']}'",
                             }
                         ), 400
-                    ref_region = screenspace.extract_region(frame, region_coords)
+                    ref_region = screenspace.extract_region(frame, step_rc)
                     ref_scenes_list.append({"name": ref["name"], "frame": ref_region})
                 cap.release()
                 step["reference_scenes"] = ref_scenes_list
@@ -984,10 +1015,11 @@ def _clean_task(task: Dict[str, Any]) -> Dict[str, Any]:
         cleaned["parameters"] = {
             k: v for k, v in cleaned["parameters"].items() if k not in _binary_keys
         }
-        # Strip binary data from multitool step parameters
+        # Strip binary data and internal coords from multitool step parameters
         if "steps" in cleaned["parameters"]:
+            _step_strip_keys = _binary_keys + ("region_coords",)
             cleaned["parameters"]["steps"] = [
-                {k: v for k, v in s.items() if k not in _binary_keys}
+                {k: v for k, v in s.items() if k not in _step_strip_keys}
                 for s in cleaned["parameters"]["steps"]
             ]
     return _sanitize_floats(cleaned)

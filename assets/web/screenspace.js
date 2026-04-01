@@ -2029,6 +2029,7 @@
         qsa(".wf-tab").forEach(function (t) { t.classList.remove("active"); });
         tab.classList.add("active");
         renderWorkflowParams();
+        updateRunButton();
       });
     });
     // Tool info icon in action row
@@ -2076,6 +2077,36 @@
 
   function renderMultitoolStepBody(body, stepType, idx) {
     var sfx = "_mt" + idx;
+
+    // Per-step region selector
+    var regionRow = el("div", "param-row");
+    regionRow.appendChild(el("span", "param-label", "Region"));
+    var regionCtrl = el("div", "param-control");
+    var regionSel = document.createElement("select");
+    regionSel.className = "multitool-step-region-select";
+    regionSel.id = "paramStepRegion" + sfx;
+    var regionNames = allAvailableRegionNames();
+    regionNames.forEach(function (name) {
+      var opt = document.createElement("option");
+      opt.value = name;
+      opt.textContent = name;
+      if (name === state.multitoolSteps[idx].region) opt.selected = true;
+      regionSel.appendChild(opt);
+    });
+    if (!state.multitoolSteps[idx].region && regionNames.length > 0) {
+      var defaultRegion = (state.runRegions.length > 0 ? state.runRegions[0] : state.activeRegion) || regionNames[0];
+      state.multitoolSteps[idx].region = defaultRegion;
+      regionSel.value = defaultRegion;
+    }
+    (function (capturedIdx) {
+      regionSel.addEventListener("change", function () {
+        state.multitoolSteps[capturedIdx].region = regionSel.value;
+      });
+    })(idx);
+    regionCtrl.appendChild(regionSel);
+    regionRow.appendChild(regionCtrl);
+    body.appendChild(regionRow);
+
     if (stepType === "color") {
       var row1 = el("div", "param-row");
       row1.appendChild(el("span", "param-label", "Hex color"));
@@ -2266,11 +2297,34 @@
     }
   }
 
+  function getMultitoolDropIndex(container, clientY) {
+    var cards = container.querySelectorAll(".multitool-step:not(.dragging)");
+    for (var i = 0; i < cards.length; i++) {
+      var rect = cards[i].getBoundingClientRect();
+      if (clientY < rect.top + rect.height / 2) return i;
+    }
+    return cards.length;
+  }
+
+  function clearMultitoolDragIndicators(container) {
+    var cards = container.querySelectorAll(".multitool-step.drag-over");
+    for (var i = 0; i < cards.length; i++) cards[i].classList.remove("drag-over");
+  }
+
   function renderMultitoolParams(container) {
     var stepsDiv = el("div", "multitool-steps");
     state.multitoolSteps.forEach(function (step, idx) {
       var card = el("div", "multitool-step");
+      card.dataset.stepIdx = String(idx);
       var header = el("div", "multitool-step-header");
+
+      // Drag handle
+      var dragHandle = el("span", "multitool-step-drag-handle");
+      dragHandle.appendChild(svgDragHandle());
+      dragHandle.addEventListener("mousedown", function () { card.setAttribute("draggable", "true"); });
+      dragHandle.addEventListener("mouseup", function () { card.removeAttribute("draggable"); });
+      header.appendChild(dragHandle);
+
       header.appendChild(el("span", "multitool-step-num", String(idx + 1)));
       var typeSpan = el("span", "multitool-step-type");
       typeSpan.style.color = taskTypeColor(step.type);
@@ -2296,13 +2350,59 @@
       renderMultitoolStepBody(body, step.type, idx);
       card.appendChild(body);
 
-      header.addEventListener("click", function () {
+      header.addEventListener("click", function (e) {
+        if (e.target.closest(".multitool-step-drag-handle") || e.target.closest(".multitool-step-remove")) return;
         step.collapsed = !step.collapsed;
         body.classList.toggle("collapsed", step.collapsed);
       });
 
       stepsDiv.appendChild(card);
     });
+
+    // Drag-and-drop reordering
+    stepsDiv.addEventListener("dragstart", function (e) {
+      var card = e.target.closest(".multitool-step");
+      if (!card) { e.preventDefault(); return; }
+      card.classList.add("dragging");
+      e.dataTransfer.setData("text/plain", card.dataset.stepIdx);
+      e.dataTransfer.effectAllowed = "move";
+    });
+    stepsDiv.addEventListener("dragend", function (e) {
+      var card = e.target.closest(".multitool-step");
+      if (card) {
+        card.classList.remove("dragging");
+        card.removeAttribute("draggable");
+      }
+      clearMultitoolDragIndicators(stepsDiv);
+    });
+    stepsDiv.addEventListener("dragover", function (e) {
+      if (e.dataTransfer.types.indexOf("text/plain") < 0) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = "move";
+      clearMultitoolDragIndicators(stepsDiv);
+      var cards = stepsDiv.querySelectorAll(".multitool-step:not(.dragging)");
+      var insertIdx = getMultitoolDropIndex(stepsDiv, e.clientY);
+      if (insertIdx < cards.length) {
+        cards[insertIdx].classList.add("drag-over");
+      }
+    });
+    stepsDiv.addEventListener("dragleave", function (e) {
+      var card = e.target.closest(".multitool-step");
+      if (card) card.classList.remove("drag-over");
+    });
+    stepsDiv.addEventListener("drop", function (e) {
+      e.preventDefault();
+      clearMultitoolDragIndicators(stepsDiv);
+      var fromIdx = parseInt(e.dataTransfer.getData("text/plain"), 10);
+      if (isNaN(fromIdx)) return;
+      var toIdx = getMultitoolDropIndex(stepsDiv, e.clientY);
+      if (fromIdx === toIdx) return;
+      var moved = state.multitoolSteps.splice(fromIdx, 1)[0];
+      if (toIdx > fromIdx) toIdx--;
+      state.multitoolSteps.splice(toIdx, 0, moved);
+      renderWorkflowParams();
+    });
+
     container.appendChild(stepsDiv);
 
     // Add Step row
@@ -2338,6 +2438,10 @@
     var intervalSlot = qs("#workflowIntervalSlot");
     if (intervalSlot) intervalSlot.innerHTML = "";
     var type = state.activeWorkflow;
+
+    // Hide global region picker for multitool (per-step regions instead)
+    var regionPickerWrap = qs("#runRegionPicker");
+    if (regionPickerWrap) regionPickerWrap.style.display = type === "multitool" ? "none" : "";
 
     if (type === "multitool") {
       renderMultitoolParams(container);
@@ -2984,16 +3088,30 @@
     var hasParticipants = state.runParticipants.length > 0 || !!state.selectedParticipant;
     // Template with uploaded image can run without a region (full-frame scan)
     var templateNoRegion = state.activeWorkflow === "template" && !!state.uploadedTemplate;
-    var multitoolReady = state.activeWorkflow === "multitool" && state.multitoolSteps.length >= 2;
-    btn.disabled = (!hasRegion && !templateNoRegion) || !hasParticipants || (state.activeWorkflow === "multitool" && !multitoolReady);
-    if (!hasRegion && !templateNoRegion) {
-      btn.setAttribute("data-tooltip", "Select a region first");
-    } else if (!hasParticipants) {
-      btn.setAttribute("data-tooltip", "Select participants to run");
-    } else if (state.activeWorkflow === "multitool" && !multitoolReady) {
-      btn.setAttribute("data-tooltip", "Add at least 2 steps");
+    // Multitool uses per-step regions instead of a global region
+    var isMultitool = state.activeWorkflow === "multitool";
+    var multitoolReady = isMultitool && state.multitoolSteps.length >= 2;
+    var multitoolHasRegions = multitoolReady && state.multitoolSteps.every(function (s) { return !!s.region; });
+    if (isMultitool) {
+      btn.disabled = !hasParticipants || !multitoolReady || !multitoolHasRegions;
+      if (!hasParticipants) {
+        btn.setAttribute("data-tooltip", "Select participants to run");
+      } else if (!multitoolReady) {
+        btn.setAttribute("data-tooltip", "Add at least 2 steps");
+      } else if (!multitoolHasRegions) {
+        btn.setAttribute("data-tooltip", "Each step needs a region");
+      } else {
+        btn.removeAttribute("data-tooltip");
+      }
     } else {
-      btn.removeAttribute("data-tooltip");
+      btn.disabled = (!hasRegion && !templateNoRegion) || !hasParticipants;
+      if (!hasRegion && !templateNoRegion) {
+        btn.setAttribute("data-tooltip", "Select a region first");
+      } else if (!hasParticipants) {
+        btn.setAttribute("data-tooltip", "Select participants to run");
+      } else {
+        btn.removeAttribute("data-tooltip");
+      }
     }
   }
 
@@ -3005,8 +3123,10 @@
       var regions = state.runRegions.length > 0
         ? state.runRegions
         : (state.activeRegion ? [state.activeRegion] : []);
+      // Multitool uses per-step regions; skip global region requirement
+      var isMultitool = type === "multitool";
       // Template with uploaded image can run without a region (full-frame scan)
-      if (regions.length === 0 && !(type === "template" && state.uploadedTemplate)) return;
+      if (!isMultitool && regions.length === 0 && !(type === "template" && state.uploadedTemplate)) return;
       if (regions.length === 0) regions = [""];
       var participants = state.runParticipants.length > 0
         ? state.runParticipants
@@ -3019,13 +3139,15 @@
       if (state.outMarker !== null) params.end_seconds = state.outMarker;
 
       var chain = Promise.resolve();
-      participants.forEach(function (pid) {
-        regions.forEach(function (regionName) {
+      if (isMultitool) {
+        // Multitool: one task per participant, first step's region as top-level
+        var mtRegion = (params.steps && params.steps.length > 0) ? (params.steps[0].region || "") : "";
+        participants.forEach(function (pid) {
           chain = chain.then(function () {
             var body = {
               type: type,
               participant: pid,
-              region: regionName,
+              region: mtRegion,
               parameters: params,
             };
             return apiPost("api/tasks", body).then(function (data) {
@@ -3033,13 +3155,34 @@
                 state.tasks.push(data.task);
                 renderTaskList();
               } else {
-                showToast(data.error || "Failed to create task for " + pid + " / " + regionName);
+                showToast(data.error || "Failed to create task for " + pid);
               }
             });
           });
         });
-      });
-      var totalTasks = participants.length * regions.length;
+      } else {
+        participants.forEach(function (pid) {
+          regions.forEach(function (regionName) {
+            chain = chain.then(function () {
+              var body = {
+                type: type,
+                participant: pid,
+                region: regionName,
+                parameters: params,
+              };
+              return apiPost("api/tasks", body).then(function (data) {
+                if (data.ok) {
+                  state.tasks.push(data.task);
+                  renderTaskList();
+                } else {
+                  showToast(data.error || "Failed to create task for " + pid + " / " + regionName);
+                }
+              });
+            });
+          });
+        });
+      }
+      var totalTasks = isMultitool ? participants.length : participants.length * regions.length;
       chain.then(function () {
         showToast(totalTasks + " task" + (totalTasks !== 1 ? "s" : "") + " queued: " + type);
         startPolling();
@@ -3108,6 +3251,7 @@
       });
       p.threshold = parseFloat((qs("#paramSceneThresh" + sfx) || {}).value) || 0.75;
     }
+    p.region = state.multitoolSteps[idx].region || "";
     return p;
   }
 
@@ -3782,6 +3926,7 @@
       var mtParams = task.parameters || {};
       state.multitoolSteps = (mtParams.steps || []).map(function (s) {
         var step = { type: s.type, collapsed: true };
+        if (s.region) step.region = s.region;
         if (s.reference_timestamp !== undefined) step._refTs = s.reference_timestamp;
         if (s.scene_references) step._scenes = s.scene_references.map(function (ref) {
           return { name: ref.name, timestamp: ref.timestamp };
@@ -3799,6 +3944,7 @@
       // Restore per-step values
       (params.steps || []).forEach(function (s, i) {
         var sfx = "_mt" + i;
+        if (s.region) setInputValue("#paramStepRegion" + sfx, s.region);
         if (s.type === "color" && s.target_color) {
           setInputValue("#paramColorH" + sfx, s.target_color.h || 0);
           setInputValue("#paramColorS" + sfx, s.target_color.s || 0);
@@ -4252,7 +4398,7 @@
     actionsEl.classList.remove("hidden");
 
     // Show/hide certainty controls based on whether the tool has confidence scores
-    var hasConf = task && { change: 1, similarity: 1, text: 1, template: 1, scene: 1, flow: 1 }[task.type];
+    var hasConf = task && { change: 1, similarity: 1, text: 1, template: 1, scene: 1, flow: 1, multitool: 1 }[task.type];
     var certLabel = qs("#certaintyCutoffLabel");
     var exclBtn = qs("#excludeNonVisibleBtn");
     if (certLabel) certLabel.classList.toggle("hidden", !hasConf);
@@ -4383,6 +4529,7 @@
         else if (task.type === "template") confValue = r.best_score;
         else if (task.type === "flow") confValue = Math.min(r.magnitude / 10, 1);
         else if (task.type === "scene") confValue = r.score;
+        else if (task.type === "multitool") confValue = r.min_confidence;
         if (confValue !== null && confValue < state.certaintyCutoff) return;
       }
 
