@@ -1284,21 +1284,24 @@ def scan_scene(
     """Classify frames by similarity to reference scene fingerprints.
 
     *reference_scenes* is a list of ``{name: str, frame: np.ndarray}``
-    dicts.  Each frame's region is fingerprinted and compared against
-    all references; the best match above *threshold* is reported.
+    dicts, optionally with a per-scene ``threshold`` float.  Each
+    frame's region is fingerprinted and compared against all references;
+    the best match above its threshold is reported.
 
     Returns list of ``{timestamp, scene_name, score}`` dicts.
     """
-    if threshold <= 0:
-        threshold = config.SCREENSPACE_SCENE_SIMILARITY_THRESHOLD
+    default_threshold = (
+        threshold if threshold > 0 else config.SCREENSPACE_SCENE_SIMILARITY_THRESHOLD
+    )
     if interval_seconds <= 0:
         interval_seconds = config.SCREENSPACE_DEFAULT_INTERVAL
 
-    # Pre-compute fingerprints for reference scenes
-    ref_fps: List[Tuple[str, Dict[str, Any]]] = []
+    # Pre-compute fingerprints for reference scenes (with per-scene thresholds)
+    ref_fps: List[Tuple[str, Dict[str, Any], float]] = []
     for ref in reference_scenes:
         fp = compute_scene_fingerprint(ref["frame"])
-        ref_fps.append((ref["name"], fp))
+        ref_thresh = float(ref.get("threshold", default_threshold))
+        ref_fps.append((ref["name"], fp, ref_thresh))
 
     if not ref_fps:
         return []
@@ -1334,13 +1337,15 @@ def scan_scene(
         fp = compute_scene_fingerprint(pixels)
         best_name = ""
         best_score = 0.0
-        for ref_name, ref_fp in ref_fps:
+        best_thresh = default_threshold
+        for ref_name, ref_fp, ref_thresh in ref_fps:
             score = compare_scene_fingerprints(fp, ref_fp)
             if score > best_score:
                 best_score = score
                 best_name = ref_name
+                best_thresh = ref_thresh
 
-        if best_score >= threshold:
+        if best_score >= best_thresh:
             rd = {
                 "timestamp": ts,
                 "scene_name": best_name,
@@ -1992,6 +1997,100 @@ def generate_flow_heatmap(
     return output_path
 
 
+def _accumulate_heatmap_result(
+    accumulator: np.ndarray,
+    result: Dict[str, Any],
+    heatmap_type: str,
+) -> None:
+    """Add a single result's contribution to a heatmap accumulator."""
+    acc_h, acc_w = accumulator.shape[:2]
+    if heatmap_type == "template":
+        for m in result.get("matches", []):
+            x, y, w, h = int(m["x"]), int(m["y"]), int(m["w"]), int(m["h"])
+            y2 = min(y + h, acc_h)
+            x2 = min(x + w, acc_w)
+            accumulator[y:y2, x:x2] += m.get("score", 1.0)
+    elif heatmap_type == "flow":
+        for cell in result.get("flow_grid", []):
+            cx = int(cell["x"] * (acc_w - 1))
+            cy = int(cell["y"] * (acc_h - 1))
+            radius = max(1, acc_w // 16)
+            cv2.circle(accumulator, (cx, cy), radius, float(cell["mag"]), -1)
+
+
+def generate_heatmap_gif(
+    results: List[Dict[str, Any]],
+    width: int,
+    height: int,
+    output_path: str,
+    heatmap_type: str = "template",
+    num_frames: int = 24,
+    frame_duration_ms: int = 120,
+) -> Optional[str]:
+    """Generate an animated GIF showing heatmap accumulation over time.
+
+    Divides *results* into *num_frames* temporal buckets, progressively
+    accumulates heatmap data, and writes frames as an animated GIF.
+    """
+    if not results:
+        return None
+
+    num_frames = min(num_frames, len(results))
+    if num_frames < 2:
+        return None
+
+    acc_h, acc_w = height, width
+    if heatmap_type == "flow":
+        acc_h = acc_w = 256
+
+    # First pass: compute global max for consistent normalization
+    global_acc = np.zeros((acc_h, acc_w), dtype=np.float32)
+    for r in results:
+        _accumulate_heatmap_result(global_acc, r, heatmap_type)
+    global_max = float(global_acc.max())
+    if global_max == 0:
+        return None
+
+    # Second pass: build progressive frames
+    accumulator = np.zeros((acc_h, acc_w), dtype=np.float32)
+    frames: List[Image.Image] = []
+    bucket_size = max(1, len(results) // num_frames)
+
+    for frame_idx in range(num_frames):
+        start_idx = frame_idx * bucket_size
+        end_idx = (
+            len(results)
+            if frame_idx == num_frames - 1
+            else min((frame_idx + 1) * bucket_size, len(results))
+        )
+        for r_idx in range(start_idx, end_idx):
+            _accumulate_heatmap_result(accumulator, results[r_idx], heatmap_type)
+
+        normalized = (accumulator / global_max * 255).astype(np.uint8)
+        normalized = cv2.GaussianBlur(normalized, (15, 15), 0)
+        colored = cv2.applyColorMap(normalized, cv2.COLORMAP_JET)
+
+        if heatmap_type == "flow":
+            colored = cv2.resize(
+                colored, (width, height), interpolation=cv2.INTER_LINEAR
+            )
+
+        rgb = cv2.cvtColor(colored, cv2.COLOR_BGR2RGB)
+        frames.append(Image.fromarray(rgb))
+
+    if not frames:
+        return None
+
+    frames[0].save(
+        output_path,
+        save_all=True,
+        append_images=frames[1:],
+        duration=frame_duration_ms,
+        loop=0,
+    )
+    return output_path
+
+
 class ScreenspaceWorker:
     """Background thread that processes analysis tasks sequentially."""
 
@@ -2197,6 +2296,14 @@ class ScreenspaceWorker:
             hp = generate_template_heatmap(results, fw, fh, heatmap_path)
             if hp:
                 task["heatmap"] = Path(hp).name
+            gif_path = str(
+                Path(utils.get_effective_output_dir()) / f"heatmap_{task_id}.gif"
+            )
+            gp = generate_heatmap_gif(
+                results, fw, fh, gif_path, heatmap_type="template"
+            )
+            if gp:
+                task["heatmap_gif"] = Path(gp).name
         elif task_type == "flow":
             heatmap_path = str(
                 Path(utils.get_effective_output_dir()) / f"heatmap_{task_id}.png"
@@ -2207,6 +2314,12 @@ class ScreenspaceWorker:
             hp = generate_flow_heatmap(results, rw, rh, heatmap_path)
             if hp:
                 task["heatmap"] = Path(hp).name
+            gif_path = str(
+                Path(utils.get_effective_output_dir()) / f"heatmap_{task_id}.gif"
+            )
+            gp = generate_heatmap_gif(results, rw, rh, gif_path, heatmap_type="flow")
+            if gp:
+                task["heatmap_gif"] = Path(gp).name
 
     def _run(self) -> None:
         """Worker loop."""

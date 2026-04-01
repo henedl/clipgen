@@ -157,8 +157,8 @@
         <h3>Results <span id="resultCount"></span></h3>
         <div id="resultsActions" class="hidden">
           <label id="showExcludedToggle" class="results-toggle"><input type="checkbox" id="showExcludedCb" checked> Show excluded</label>
-          <button id="exportJsonBtn" class="btn btn-small">JSON</button>
-          <button id="exportCsvBtn" class="btn btn-small">CSV</button>
+          <label id="certaintyCutoffLabel" class="results-certainty-label hidden">Certainty <input type="range" id="certaintyCutoff" min="0" max="100" value="0" step="1" class="results-certainty-slider"><span id="certaintyCutoffVal">0%</span></label>
+          <button id="excludeNonVisibleBtn" class="btn btn-small hidden">Exclude Hidden</button>
         </div>
       </div>
       <div id="resultsList">

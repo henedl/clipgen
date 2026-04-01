@@ -3207,6 +3207,10 @@
     similarity: "#0ea5e9",
     text: "#10b981",
     numbers: "#eab308",
+    timelapse: "#ec4899",
+    template: "#f43f5e",
+    flow: "#6366f1",
+    scene: "#14b8a6",
   };
 
   var INTAKE_DETECTOR_ICON_FILES = {
@@ -3215,6 +3219,10 @@
     similarity: "photo",
     text: "language",
     numbers: "hashtag",
+    timelapse: "film",
+    template: "viewfinder-circle",
+    flow: "arrows-right-left",
+    scene: "squares-2x2",
   };
 
   function clusterIntakeEvents(events, thresholdSec) {
