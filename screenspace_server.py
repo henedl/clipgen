@@ -526,12 +526,13 @@ def api_tasks_create() -> FlaskResponse:
             "flow",
             "scene",
         )
-        for i, step in enumerate(mt_steps):
-            if not isinstance(step, dict):
+        for i, step_raw in enumerate(mt_steps):
+            if not isinstance(step_raw, dict):
                 return jsonify(
                     {"ok": False, "error": f"Step {i}: must be an object"}
                 ), 400
-            stype = step.get("type", "")
+            step_v: Dict[str, Any] = step_raw
+            stype = step_v.get("type", "")
             if stype not in allowed_step_types:
                 return jsonify(
                     {"ok": False, "error": f"Step {i}: invalid type '{stype}'"}
