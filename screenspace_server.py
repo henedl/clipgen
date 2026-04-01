@@ -527,6 +527,10 @@ def api_tasks_create() -> FlaskResponse:
             "scene",
         )
         for i, step in enumerate(mt_steps):
+            if not isinstance(step, dict):
+                return jsonify(
+                    {"ok": False, "error": f"Step {i}: must be an object"}
+                ), 400
             stype = step.get("type", "")
             if stype not in allowed_step_types:
                 return jsonify(
@@ -540,7 +544,9 @@ def api_tasks_create() -> FlaskResponse:
 
     # Multitool validates per-step regions; non-multitool validates global region
     if task_type == "multitool":
-        mt_steps_early = data.get("parameters", {}).get("steps", [])
+        mt_steps_early: list[dict[str, Any]] = data.get("parameters", {}).get(
+            "steps", []
+        )
         for i, step in enumerate(mt_steps_early):
             step_region = (step.get("region") or "").strip()
             if not step_region:
