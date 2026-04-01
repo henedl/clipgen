@@ -458,6 +458,14 @@ def authenticate_google() -> Any:
 # ---- Worksheet selection ----
 
 
+def _is_excel_spreadsheet_arg(spreadsheet_arg: Optional[str]) -> bool:
+    """Return True if the -s argument points to a local Excel file."""
+    if not spreadsheet_arg:
+        return False
+    raw = spreadsheet_arg.strip().lower()
+    return raw == config.COMMAND_EXCEL or raw.endswith(".xlsx")
+
+
 def select_worksheet(
     gspread_client: Any, doc_list: List[str], args: Any, cli_mode: bool
 ) -> Any:
@@ -1221,11 +1229,14 @@ def main() -> None:
         utils.info_print(f"Regenerated {regenerated} of {total} item(s).")
         sys.exit(0)
 
-    # Authenticate with Google (once per run)
-    import google_api
+    # Authenticate with Google (once per run) – skip for local Excel files
+    gspread_client = None
+    doc_list: List[str] = []
+    if not _is_excel_spreadsheet_arg(getattr(args, "spreadsheet", None)):
+        import google_api
 
-    gspread_client = authenticate_google()
-    doc_list = google_api.get_all_spreadsheets(gspread_client)
+        gspread_client = authenticate_google()
+        doc_list = google_api.get_all_spreadsheets(gspread_client)
 
     # Outer loop so 'top' can return to spreadsheet selection
     while True:

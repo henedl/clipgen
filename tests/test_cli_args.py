@@ -217,3 +217,25 @@ def test_run_cli_mode_reel_cli_dispatch(monkeypatch, make_clip):
     # First positional argument should be the clips list returned from generate_list.
     assert process_reel.call_args[0][0] is clips
     completion.assert_called_once()
+
+
+# ---- Excel auth-skipping ----
+
+
+@pytest.mark.parametrize(
+    "value,expected",
+    [
+        ("excel", True),
+        ("EXCEL", True),
+        ("  excel  ", True),
+        ("notes.xlsx", True),
+        ("path/to/file.XLSX", True),
+        (None, False),
+        ("", False),
+        ("my-spreadsheet", False),
+        ("https://docs.google.com/spreadsheets/d/abc", False),
+        ("42", False),
+    ],
+)
+def test_is_excel_spreadsheet_arg(value, expected):
+    assert cli._is_excel_spreadsheet_arg(value) is expected
