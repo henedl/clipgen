@@ -112,6 +112,7 @@
     runRegions: [],
     taskEvents: {},
     showExcluded: true,
+    certaintyCutoff: 0,
     showRegionLabels: true,
     showRegionOverlays: true,
     stashes: [],
@@ -119,6 +120,7 @@
     resultOverlay: null,
     heatmapOverlay: null,
     uploadedTemplate: null,
+    hoveredResultSceneName: null,
   };
 
   var _timelineHitRects = [];
@@ -1712,15 +1714,28 @@
     var resultH = h - resultY - 6;
     var focused = focusedTaskId();
     _timelineHitRects = [];
+
+    // Build excluded-timestamp lookup per task from cached events
+    var excludedByTask = {};
+    Object.keys(state.taskEvents).forEach(function (tid) {
+      var exSet = {};
+      (state.taskEvents[tid] || []).forEach(function (ev) {
+        if (ev.excluded) exSet[ev.time_in.toFixed(2)] = true;
+      });
+      excludedByTask[tid] = exSet;
+    });
+
     state.tasks.forEach(function (task) {
       if ((task.status !== "completed" && task.status !== "running") || !task.result) return;
       if (task.participant && task.participant !== state.selectedParticipant) return;
       var color = taskTypeColor(task.type);
       var dimmed = focused && task.id !== focused;
+      var taskExcluded = excludedByTask[task.id] || {};
       if (task.type === "color" && task.status === "completed") {
         // Completed color: merged spans
-        ctx.fillStyle = hexToRgba(color, dimmed ? 0.10 : 0.35);
         task.result.forEach(function (span) {
+          var isExcluded = taskExcluded[span.start.toFixed(2)];
+          ctx.fillStyle = hexToRgba(color, isExcluded ? 0.05 : (dimmed ? 0.10 : 0.35));
           var x1 = timeToX(span.start);
           var x2 = timeToX(span.end);
           var rw = Math.max(x2 - x1, 2);
@@ -1730,18 +1745,31 @@
       } else if (task.type === "timelapse") {
         // No timeline markers for timelapse
       } else {
-        // Point markers (change, similarity, text, numbers, running color)
-        ctx.strokeStyle = dimmed ? hexToRgba(color, 0.15) : color;
+        // Point markers (change, similarity, text, numbers, template, flow, scene, running color)
         ctx.lineWidth = 1.5;
         var results = task.result || [];
         results.forEach(function (r) {
           var ts = r.timestamp !== undefined ? r.timestamp : r.start;
           if (ts === undefined) return;
+          var isExcluded = taskExcluded[ts.toFixed(2)];
+          var sceneDimmed = task.type === "scene" && state.hoveredResultSceneName !== null
+            && r.scene_name !== state.hoveredResultSceneName;
+          if (isExcluded) {
+            ctx.strokeStyle = hexToRgba(color, 0.15);
+            ctx.setLineDash([3, 3]);
+          } else if (dimmed || sceneDimmed) {
+            ctx.strokeStyle = hexToRgba(color, 0.15);
+            ctx.setLineDash([]);
+          } else {
+            ctx.strokeStyle = color;
+            ctx.setLineDash([]);
+          }
           var x = timeToX(ts);
           ctx.beginPath();
           ctx.moveTo(x, resultY);
           ctx.lineTo(x, resultY + resultH);
           ctx.stroke();
+          ctx.setLineDash([]);
           _timelineHitRects.push({ x1: x - 3, x2: x + 3, y: resultY, h: resultH, task: task, result: r });
         });
       }
@@ -2330,9 +2358,26 @@
       var sceneList = el("div", "scene-reference-list");
       sceneList.id = "sceneRefList";
       state.sceneReferences.forEach(function (ref, i) {
+        if (ref.threshold === undefined) ref.threshold = 0.75;
         var item = el("div", "scene-ref-item");
         item.appendChild(el("span", "scene-ref-name", ref.name));
         item.appendChild(el("span", "param-value", formatTimestamp(ref.timestamp)));
+        var threshSlider = document.createElement("input");
+        threshSlider.type = "range";
+        threshSlider.min = "0.50";
+        threshSlider.max = "1.00";
+        threshSlider.step = "0.01";
+        threshSlider.value = String(ref.threshold);
+        threshSlider.className = "scene-ref-thresh";
+        var threshVal = el("span", "param-value", String(ref.threshold));
+        threshSlider.addEventListener("input", (function (idx) {
+          return function () {
+            state.sceneReferences[idx].threshold = parseFloat(threshSlider.value);
+            threshVal.textContent = threshSlider.value;
+          };
+        })(i));
+        item.appendChild(threshSlider);
+        item.appendChild(threshVal);
         var rmBtn = el("button", "btn btn-small", "\u00d7");
         rmBtn.addEventListener("click", function () {
           state.sceneReferences.splice(i, 1);
@@ -2352,14 +2397,13 @@
         var nameEl = qs("#paramSceneName");
         var name = nameEl ? nameEl.value.trim() : "";
         if (!name) { showToast("Enter a scene name"); return; }
-        state.sceneReferences.push({ name: name, timestamp: state.currentTimestamp });
+        state.sceneReferences.push({ name: name, timestamp: state.currentTimestamp, threshold: 0.75 });
         renderWorkflowParams();
         showToast("Scene '" + name + "' at " + formatTimestamp(state.currentTimestamp));
       });
       addScCtrl.appendChild(scCapBtn);
       addScRow.appendChild(addScCtrl);
       container.appendChild(addScRow);
-      addParamRow(container, "Threshold", rangeInput("paramSceneThresh", 0.50, 1.00, 0.75, 0.01), "paramSceneThreshVal");
       renderIntervalSlot("paramSceneInterval", 0.5, 60, 1.0, 0.5);
     }
 
@@ -2788,9 +2832,8 @@
         return null;
       }
       params.scene_references = state.sceneReferences.map(function (ref) {
-        return { name: ref.name, timestamp: ref.timestamp };
+        return { name: ref.name, timestamp: ref.timestamp, threshold: ref.threshold || 0.75 };
       });
-      params.threshold = parseFloat((qs("#paramSceneThresh") || {}).value) || 0.75;
       params.interval = parseFloat((qs("#paramSceneInterval") || {}).value) || 1.0;
     }
     var labelEl = qs("#paramEventLabel");
@@ -3399,10 +3442,9 @@
     } else if (task.type === "scene") {
       if (params.scene_references) {
         state.sceneReferences = params.scene_references.map(function (ref) {
-          return { name: ref.name, timestamp: ref.timestamp };
+          return { name: ref.name, timestamp: ref.timestamp, threshold: ref.threshold || 0.75 };
         });
       }
-      setInputValue("#paramSceneThresh", params.threshold || 0.75);
       setInputValue("#paramSceneInterval", params.interval || 1.0);
     }
 
@@ -3685,18 +3727,79 @@
       loadFrame(ts);
     });
 
-    qs("#exportJsonBtn").addEventListener("click", function () { exportResults("json"); });
-    qs("#exportCsvBtn").addEventListener("click", function () { exportResults("csv"); });
+    // Hover result rows to highlight matching scene markers on timeline
+    qs("#resultsList").addEventListener("mouseover", function (e) {
+      var row = e.target.closest(".result-row");
+      if (!row) return;
+      var task = state.selectedTaskId ? findTask(state.selectedTaskId) : null;
+      if (!task || task.type !== "scene") return;
+      var ri = parseInt(row.dataset.resultIndex, 10);
+      var results = state.selectedTaskResults || [];
+      if (isNaN(ri) || ri >= results.length) return;
+      var sceneName = results[ri].scene_name;
+      if (sceneName !== state.hoveredResultSceneName) {
+        state.hoveredResultSceneName = sceneName;
+        renderTimeline();
+      }
+    });
+
+    qs("#resultsList").addEventListener("mouseleave", function () {
+      if (state.hoveredResultSceneName !== null) {
+        state.hoveredResultSceneName = null;
+        renderTimeline();
+      }
+    });
 
     qs("#showExcludedCb").addEventListener("change", function () {
       state.showExcluded = this.checked;
       renderResults();
+    });
+
+    qs("#certaintyCutoff").addEventListener("input", function () {
+      state.certaintyCutoff = parseInt(this.value, 10) / 100;
+      qs("#certaintyCutoffVal").textContent = this.value + "%";
+      renderResults();
+    });
+
+    qs("#excludeNonVisibleBtn").addEventListener("click", function () {
+      var events = state.taskEvents[state.selectedTaskId] || [];
+      var task = state.selectedTaskId ? findTask(state.selectedTaskId) : null;
+      if (!task || !events.length || state.certaintyCutoff <= 0) {
+        showToast("Set a certainty threshold first");
+        return;
+      }
+      var idsToExclude = [];
+      events.forEach(function (ev) {
+        if (!ev.excluded && ev.confidence < state.certaintyCutoff) {
+          idsToExclude.push(ev.id);
+        }
+      });
+      if (idsToExclude.length === 0) {
+        showToast("No events below threshold");
+        return;
+      }
+      apiPut("api/events/bulk-exclude", { ids: idsToExclude }).then(function () {
+        idsToExclude.forEach(function (id) {
+          for (var i = 0; i < events.length; i++) {
+            if (events[i].id === id) { events[i].excluded = true; break; }
+          }
+        });
+        renderResults();
+        renderTimeline();
+        showToast("Excluded " + idsToExclude.length + " events");
+      });
     });
   }
 
   function loadAndShowResults(taskId) {
     state.resultOverlay = null;
     state.heatmapOverlay = null;
+    state.hoveredResultSceneName = null;
+    state.certaintyCutoff = 0;
+    var slider = qs("#certaintyCutoff");
+    if (slider) slider.value = "0";
+    var valSpan = qs("#certaintyCutoffVal");
+    if (valSpan) valSpan.textContent = "0%";
     apiGet("api/tasks/" + taskId + "/results")
       .then(function (data) {
         state.selectedTaskId = taskId;
@@ -3726,6 +3829,13 @@
     }
 
     actionsEl.classList.remove("hidden");
+
+    // Show/hide certainty controls based on whether the tool has confidence scores
+    var hasConf = task && { change: 1, similarity: 1, text: 1, template: 1, scene: 1, flow: 1 }[task.type];
+    var certLabel = qs("#certaintyCutoffLabel");
+    var exclBtn = qs("#excludeNonVisibleBtn");
+    if (certLabel) certLabel.classList.toggle("hidden", !hasConf);
+    if (exclBtn) exclBtn.classList.toggle("hidden", !hasConf);
 
     // Timelapse: single file result
     if (task.type === "timelapse" && typeof results === "string") {
@@ -3800,11 +3910,33 @@
         }
       });
       heatmapLabel.appendChild(overlayBtn);
+
+      if (task.heatmap_gif) {
+        var animBtn = el("button", "ss-btn ss-btn-sm", "Show Animation");
+        var showingGif = false;
+        animBtn.addEventListener("click", function () {
+          showingGif = !showingGif;
+          heatmapStaticImg.classList.toggle("hidden", showingGif);
+          heatmapGifImg.classList.toggle("hidden", !showingGif);
+          animBtn.textContent = showingGif ? "Show Static" : "Show Animation";
+        });
+        heatmapLabel.appendChild(animBtn);
+      }
+
       heatmapSection.appendChild(heatmapLabel);
-      var heatmapImg = document.createElement("img");
-      heatmapImg.src = "media/" + task.heatmap;
-      heatmapImg.alt = "Detection heatmap";
-      heatmapSection.appendChild(heatmapImg);
+      var heatmapStaticImg = document.createElement("img");
+      heatmapStaticImg.src = "media/" + task.heatmap;
+      heatmapStaticImg.alt = "Detection heatmap";
+      heatmapSection.appendChild(heatmapStaticImg);
+
+      if (task.heatmap_gif) {
+        var heatmapGifImg = document.createElement("img");
+        heatmapGifImg.src = "media/" + task.heatmap_gif;
+        heatmapGifImg.alt = "Heatmap accumulation animation";
+        heatmapGifImg.className = "hidden";
+        heatmapSection.appendChild(heatmapGifImg);
+      }
+
       container.appendChild(heatmapSection);
     }
 
@@ -3819,6 +3951,18 @@
           matchedEvent = eventsByTs[tsKey][idx];
           eventTsIndex[tsKey] = idx + 1;
         }
+      }
+
+      // Certainty filtering
+      if (hasConf && state.certaintyCutoff > 0) {
+        var confValue = null;
+        if (task.type === "change") confValue = r.magnitude;
+        else if (task.type === "similarity") confValue = r.score;
+        else if (task.type === "text") confValue = r.confidence;
+        else if (task.type === "template") confValue = r.best_score;
+        else if (task.type === "flow") confValue = Math.min(r.magnitude / 10, 1);
+        else if (task.type === "scene") confValue = r.score;
+        if (confValue !== null && confValue < state.certaintyCutoff) return;
       }
 
       var isExcluded = matchedEvent && matchedEvent.excluded;
@@ -3891,42 +4035,6 @@
 
       container.appendChild(row);
     });
-  }
-
-  function exportResults(format) {
-    if (!state.selectedTaskResults || !state.selectedTaskId) return;
-    var task = findTask(state.selectedTaskId);
-    var filename = "screenspace_" + (task ? task.type : "results") + "_" + state.selectedTaskId;
-    var results = state.selectedTaskResults;
-
-    if (format === "json") {
-      var blob = new Blob([JSON.stringify(results, null, 2)], { type: "application/json" });
-      downloadBlob(blob, filename + ".json");
-    } else {
-      if (!Array.isArray(results) || results.length === 0) return;
-      var keys = Object.keys(results[0]);
-      var lines = [keys.join(",")];
-      results.forEach(function (r) {
-        lines.push(keys.map(function (k) {
-          var v = r[k];
-          if (typeof v === "string") return '"' + v.replace(/"/g, '""') + '"';
-          return v;
-        }).join(","));
-      });
-      var blob = new Blob([lines.join("\n")], { type: "text/csv" });
-      downloadBlob(blob, filename + ".csv");
-    }
-  }
-
-  function downloadBlob(blob, filename) {
-    var url = URL.createObjectURL(blob);
-    var a = document.createElement("a");
-    a.href = url;
-    a.download = filename;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
   }
 
   // ---- Keyboard shortcuts ----
