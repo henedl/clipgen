@@ -22,6 +22,7 @@
   --color-panel-shadow: rgba(15, 23, 42, 0.12);
   --color-grid: rgba(0, 0, 0, 0.03);
   --font-mono: "SF Mono", "Fira Code", "Cascadia Code", Consolas, monospace;
+  --color-task-multitool: #64748b;
   --color-task-color: #8b5cf6;
   --color-task-change: #f97316;
   --color-task-similarity: #0ea5e9;
@@ -662,6 +663,8 @@ body {
 #workflowSection {
   display: flex;
   flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
 }
 
 #workflowTabs {
@@ -694,6 +697,12 @@ body {
 
 .wf-tab.active {
   font-weight: 600;
+}
+
+.wf-tab[data-type="multitool"]:hover,
+.wf-tab[data-type="multitool"].active {
+  color: var(--color-task-multitool);
+  border-bottom-color: var(--color-task-multitool);
 }
 
 .wf-tab[data-type="color"]:hover,
@@ -755,6 +764,9 @@ body {
   flex-direction: column;
   gap: var(--space-2);
   padding: var(--space-3) 0;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
 }
 
 #workflowActionRow {
@@ -886,6 +898,152 @@ body {
   min-height: 0;
   min-width: 0;
   overflow-y: auto;
+}
+
+/* Multitool step list */
+
+.multitool-steps {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.multitool-step {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-bg);
+  overflow: hidden;
+}
+
+.multitool-step-header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-2);
+  cursor: pointer;
+  font-size: var(--text-xs);
+  user-select: none;
+}
+
+.multitool-step-header:hover {
+  background: var(--color-surface-hover);
+}
+
+.multitool-step-num {
+  font-weight: 600;
+  color: var(--color-text-dim);
+  min-width: 1.2rem;
+}
+
+.multitool-step-type {
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.multitool-step-type svg {
+  width: 12px;
+  height: 12px;
+}
+
+.multitool-step-remove {
+  margin-left: auto;
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--color-text-dim);
+  padding: 2px;
+  border-radius: var(--radius-sm);
+  display: flex;
+  align-items: center;
+}
+
+.multitool-step-remove:hover {
+  color: var(--color-text);
+  background: var(--color-surface-hover);
+}
+
+.multitool-step-drag-handle {
+  display: inline-flex;
+  align-items: center;
+  cursor: grab;
+  color: var(--color-text-dim);
+  flex-shrink: 0;
+  opacity: 0.5;
+  transition: opacity var(--duration-fast), color var(--duration-fast);
+}
+
+.multitool-step-drag-handle:hover {
+  opacity: 1;
+  color: var(--color-text);
+}
+
+.multitool-step-drag-handle:active {
+  cursor: grabbing;
+}
+
+.multitool-step.dragging {
+  opacity: 0.4;
+}
+
+.multitool-step.drag-over {
+  border-top: 2px solid var(--color-accent);
+}
+
+.multitool-step-body {
+  padding: var(--space-1) var(--space-2) var(--space-2);
+  border-top: 1px solid var(--color-border);
+}
+
+.multitool-step-body.collapsed {
+  display: none;
+}
+
+.multitool-add-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) 0;
+}
+
+.multitool-add-row select {
+  flex: 1;
+  font-size: var(--text-xs);
+  padding: var(--space-1);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--color-border);
+  background: var(--color-bg);
+  color: var(--color-text);
+}
+
+.multitool-hint {
+  font-size: var(--text-xs);
+  color: var(--color-text-dim);
+  padding: var(--space-1) 0;
+}
+
+.multitool-type-badge {
+  font-size: var(--text-xs);
+  font-weight: 600;
+  margin-right: var(--space-1);
+}
+
+.multitool-step-region-select {
+  font-size: var(--text-xs);
+  padding: var(--space-1);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--color-border);
+  background: var(--color-bg);
+  color: var(--color-text);
+  max-width: 10rem;
+}
+
+.multitool-badges {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 2px;
 }
 
 .param-row {
@@ -1879,6 +2037,7 @@ body {
     --color-panel-border: rgba(148, 163, 184, 0.35);
     --color-panel-shadow: rgba(0, 0, 0, 0.7);
     --color-grid: rgba(255, 255, 255, 0.04);
+    --color-task-multitool: #94a3b8;
     --color-task-color: #a78bfa;
     --color-task-change: #fb923c;
     --color-task-similarity: #22d3ee;
@@ -1906,6 +2065,7 @@ html[data-theme="dark"] {
   --color-panel-border: rgba(148, 163, 184, 0.35);
   --color-panel-shadow: rgba(0, 0, 0, 0.7);
   --color-grid: rgba(255, 255, 255, 0.04);
+  --color-task-multitool: #94a3b8;
   --color-task-color: #a78bfa;
   --color-task-change: #fb923c;
   --color-task-similarity: #22d3ee;

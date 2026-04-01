@@ -42,7 +42,7 @@ import uuid
 from collections import OrderedDict
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union, cast
 
 if TYPE_CHECKING:
     import cv2
@@ -477,6 +477,7 @@ def api_tasks_create() -> FlaskResponse:
 
     task_type = data.get("type", "").strip()
     valid_types = (
+        "multitool",
         "color",
         "change",
         "similarity",
@@ -503,18 +504,65 @@ def api_tasks_create() -> FlaskResponse:
         "template_image_data"
     )
 
-    if not region_name and not has_uploaded_template:
+    # Multitool uses per-step regions; others need a global region (unless template upload)
+    if not region_name and not has_uploaded_template and task_type != "multitool":
         return jsonify({"ok": False, "error": "region is required"}), 400
 
-    regions: Dict[str, Any] = {}
-    if region_name:
-        regions = _manifest.get("regions", {})
-        if region_name not in regions:
-            for stash in _manifest.get("stashes", []):
-                if region_name in stash.get("regions", {}):
-                    regions = stash["regions"]
-                    break
-        if region_name not in regions:
+    # Early validation for multitool steps (before video path lookup)
+    if task_type == "multitool":
+        parameters_early = data.get("parameters", {})
+        mt_steps = parameters_early.get("steps")
+        if not mt_steps or not isinstance(mt_steps, list) or len(mt_steps) < 2:
+            return jsonify(
+                {"ok": False, "error": "Multitool requires at least 2 steps"}
+            ), 400
+        allowed_step_types = (
+            "color",
+            "change",
+            "similarity",
+            "text",
+            "numbers",
+            "template",
+            "flow",
+            "scene",
+        )
+        for i, step_raw in enumerate(mt_steps):
+            if not isinstance(step_raw, dict):
+                return jsonify(
+                    {"ok": False, "error": f"Step {i}: must be an object"}
+                ), 400
+            step_v = cast(Dict[str, Any], step_raw)
+            stype = step_v.get("type", "")
+            if stype not in allowed_step_types:
+                return jsonify(
+                    {"ok": False, "error": f"Step {i}: invalid type '{stype}'"}
+                ), 400
+
+    # Build combined region lookup dict (active + stashes)
+    all_known_regions: Dict[str, Any] = dict(_manifest.get("regions", {}))
+    for stash in _manifest.get("stashes", []):
+        all_known_regions.update(stash.get("regions", {}))
+
+    # Multitool validates per-step regions; non-multitool validates global region
+    if task_type == "multitool":
+        mt_steps_early: list[dict[str, Any]] = data.get("parameters", {}).get(
+            "steps", []
+        )
+        for i, step in enumerate(mt_steps_early):
+            step_region = (step.get("region") or "").strip()
+            if not step_region:
+                return jsonify(
+                    {"ok": False, "error": f"Step {i}: region is required"}
+                ), 400
+            if step_region not in all_known_regions:
+                return jsonify(
+                    {
+                        "ok": False,
+                        "error": f"Step {i}: region '{step_region}' not found",
+                    }
+                ), 400
+    else:
+        if region_name and region_name not in all_known_regions:
             return jsonify(
                 {"ok": False, "error": f"Region '{region_name}' not found"}
             ), 400
@@ -531,17 +579,28 @@ def api_tasks_create() -> FlaskResponse:
             source_video = Path(p["video_path"]).name
             break
 
-    if region_name:
-        region_data = regions[region_name]
-        props = video.probe_video_properties(video_path)
+    props = video.probe_video_properties(video_path)
+
+    def _resolve_region_coords(name: str) -> Dict[str, Any]:
+        """Convert a named region to pixel coordinates."""
+        rd = all_known_regions[name]
         if props and props.get("width") and props.get("height"):
-            region_coords = _denormalize_region(
-                region_data, props["width"], props["height"]
-            )
+            return _denormalize_region(rd, props["width"], props["height"])
+        return {k: rd[k] for k in ("x", "y", "w", "h") if k in rd}
+
+    if region_name and region_name in all_known_regions:
+        region_coords = _resolve_region_coords(region_name)
+    elif task_type == "multitool":
+        # Multitool uses per-step regions; use first step's region for top-level metadata
+        first_step_region = (
+            data.get("parameters", {}).get("steps", [{}])[0].get("region", "")
+        )
+        if first_step_region and first_step_region in all_known_regions:
+            region_name = first_step_region
+            region_coords = _resolve_region_coords(first_step_region)
         else:
-            region_coords = {
-                k: region_data[k] for k in ("x", "y", "w", "h") if k in region_data
-            }
+            region_name = "per_step"
+            region_coords = {"x": 0, "y": 0, "w": 0, "h": 0}
     else:
         # Full-frame template scan -- sentinel region
         region_name = "full_frame"
@@ -661,6 +720,130 @@ def api_tasks_create() -> FlaskResponse:
             reference_scenes.append(scene_entry)
         cap.release()
         parameters["reference_scenes"] = reference_scenes
+
+    # Multitool tasks: resolve per-step regions and prepare parameters
+    if task_type == "multitool":
+        import base64
+
+        import cv2
+        import numpy as np
+
+        steps = parameters.get("steps", [])
+        for i, step in enumerate(steps):
+            stype = step.get("type", "")
+
+            # Resolve this step's region to pixel coords
+            step_region_name = (step.get("region") or "").strip()
+            if step_region_name and step_region_name in all_known_regions:
+                step["region_coords"] = _resolve_region_coords(step_region_name)
+            else:
+                step["region_coords"] = region_coords  # fallback to top-level
+
+            step_rc = step["region_coords"]
+
+            if stype == "similarity":
+                ref_ts = step.get("reference_timestamp")
+                if ref_ts is None:
+                    return jsonify(
+                        {
+                            "ok": False,
+                            "error": f"Step {i}: similarity requires reference_timestamp",
+                        }
+                    ), 400
+                cap = cv2.VideoCapture(video_path)
+                if not cap.isOpened():
+                    return jsonify({"ok": False, "error": "Could not open video"}), 500
+                cap.set(cv2.CAP_PROP_POS_MSEC, float(ref_ts) * 1000.0)
+                ret, frame = cap.read()
+                cap.release()
+                if not ret:
+                    return jsonify(
+                        {
+                            "ok": False,
+                            "error": f"Step {i}: could not read reference frame",
+                        }
+                    ), 400
+                step["reference_frame"] = screenspace.extract_region(frame, step_rc)
+
+            elif stype == "template":
+                upload_b64 = step.pop("template_image_data", None)
+                if upload_b64:
+                    try:
+                        img_bytes = base64.b64decode(upload_b64)
+                        img_arr = np.frombuffer(img_bytes, dtype=np.uint8)
+                        img = cv2.imdecode(img_arr, cv2.IMREAD_UNCHANGED)
+                    except Exception:
+                        return jsonify(
+                            {
+                                "ok": False,
+                                "error": f"Step {i}: could not decode uploaded image",
+                            }
+                        ), 400
+                    if img is None:
+                        return jsonify(
+                            {"ok": False, "error": f"Step {i}: invalid image data"}
+                        ), 400
+                    if len(img.shape) == 2:
+                        img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
+                    if img.shape[2] == 4:
+                        step["template_mask"] = img[:, :, 3]
+                        step["template_image"] = cv2.cvtColor(img, cv2.COLOR_BGRA2BGR)
+                    else:
+                        step["template_image"] = img
+                else:
+                    ref_ts = step.get("reference_timestamp")
+                    if ref_ts is None:
+                        return jsonify(
+                            {
+                                "ok": False,
+                                "error": f"Step {i}: template requires reference_timestamp or uploaded image",
+                            }
+                        ), 400
+                    cap = cv2.VideoCapture(video_path)
+                    if not cap.isOpened():
+                        return jsonify(
+                            {"ok": False, "error": "Could not open video"}
+                        ), 500
+                    cap.set(cv2.CAP_PROP_POS_MSEC, float(ref_ts) * 1000.0)
+                    ret, frame = cap.read()
+                    cap.release()
+                    if not ret:
+                        return jsonify(
+                            {
+                                "ok": False,
+                                "error": f"Step {i}: could not read template frame",
+                            }
+                        ), 400
+                    step["template_image"] = screenspace.extract_region(frame, step_rc)
+
+            elif stype == "scene":
+                scene_refs = step.get("scene_references")
+                if not scene_refs or not isinstance(scene_refs, list):
+                    return jsonify(
+                        {
+                            "ok": False,
+                            "error": f"Step {i}: scene requires scene_references list",
+                        }
+                    ), 400
+                cap = cv2.VideoCapture(video_path)
+                if not cap.isOpened():
+                    return jsonify({"ok": False, "error": "Could not open video"}), 500
+                ref_scenes_list = []
+                for ref in scene_refs:
+                    cap.set(cv2.CAP_PROP_POS_MSEC, float(ref["timestamp"]) * 1000.0)
+                    ret, frame = cap.read()
+                    if not ret:
+                        cap.release()
+                        return jsonify(
+                            {
+                                "ok": False,
+                                "error": f"Step {i}: could not read frame for scene '{ref['name']}'",
+                            }
+                        ), 400
+                    ref_region = screenspace.extract_region(frame, step_rc)
+                    ref_scenes_list.append({"name": ref["name"], "frame": ref_region})
+                cap.release()
+                step["reference_scenes"] = ref_scenes_list
 
     task = screenspace.create_task(
         task_type=task_type,
@@ -830,17 +1013,22 @@ def _clean_task(task: Dict[str, Any]) -> Dict[str, Any]:
     """Remove internal fields from a task dict for API responses."""
     cleaned = {k: v for k, v in task.items() if not k.startswith("_")}
     if "parameters" in cleaned:
+        _binary_keys = (
+            "reference_frame",
+            "template_image",
+            "template_mask",
+            "reference_scenes",
+        )
         cleaned["parameters"] = {
-            k: v
-            for k, v in cleaned["parameters"].items()
-            if k
-            not in (
-                "reference_frame",
-                "template_image",
-                "template_mask",
-                "reference_scenes",
-            )
+            k: v for k, v in cleaned["parameters"].items() if k not in _binary_keys
         }
+        # Strip binary data and internal coords from multitool step parameters
+        if "steps" in cleaned["parameters"]:
+            _step_strip_keys = _binary_keys + ("region_coords",)
+            cleaned["parameters"]["steps"] = [
+                {k: v for k, v in s.items() if k not in _step_strip_keys}
+                for s in cleaned["parameters"]["steps"]
+            ]
     return _sanitize_floats(cleaned)
 
 

@@ -1,7 +1,8 @@
 # -*- coding: utf-8 -*-
 """Screenspace analysis engine for clipgen.
 
-Nine analysis tools (passed as 'type' when creating a task):
+Ten analysis tools (passed as 'type' when creating a task):
+  multitool  – chain multiple tools; each subsequent step only checks frames that passed previous steps
   color      – frames where a region's average HSV color matches a target within tolerance
   change     – frames where pixel diff ratio exceeds SCREENSPACE_CHANGE_RATIO_THRESHOLD
   similarity – frames matching a reference capture via SSIM (SCREENSPACE_SSIM_THRESHOLD)
@@ -397,9 +398,11 @@ def compare_scene_fingerprints(
     Returns similarity score 0.0–1.0.
     """
     # Histogram correlation: range [-1, 1] → [0, 1]
+    # Flatten 3D histograms to 1D — cv2.compareHist returns incorrect
+    # results for multidimensional arrays.
     hist_corr = cv2.compareHist(
-        fp_a["histogram"].astype(np.float32),
-        fp_b["histogram"].astype(np.float32),
+        fp_a["histogram"].flatten().astype(np.float32),
+        fp_b["histogram"].flatten().astype(np.float32),
         cv2.HISTCMP_CORREL,
     )
     hist_sim = (hist_corr + 1.0) / 2.0
@@ -1373,6 +1376,484 @@ def scan_scene(
     return results
 
 
+# ---------------------------------------------------------------------------
+# Multitool: per-frame evaluation and multi-factor scan
+# ---------------------------------------------------------------------------
+
+_NUMBERS_CHECK_RE = re.compile(r"-?\d+(?:\.\d+)?")
+
+
+def _extract_confidence(tool_type: str, result: Dict[str, Any]) -> float:
+    """Extract a normalized [0, 1] confidence from a tool-specific result dict."""
+    if tool_type == "color":
+        return result.get("_confidence", 1.0)
+    elif tool_type == "change":
+        return min(result.get("magnitude", 0.0), 1.0)
+    elif tool_type == "similarity":
+        return result.get("score", 0.0)
+    elif tool_type == "text":
+        return result.get("confidence", 0.0)
+    elif tool_type == "numbers":
+        return 1.0
+    elif tool_type == "template":
+        return result.get("best_score", 0.0)
+    elif tool_type == "flow":
+        return min(result.get("magnitude", 0.0) / 10.0, 1.0)
+    elif tool_type == "scene":
+        return result.get("score", 0.0)
+    elif tool_type == "multitool":
+        return result.get("min_confidence", 0.0)
+    return 1.0
+
+
+def check_frame_for_tool(
+    frame: np.ndarray,
+    prev_frame: Optional[np.ndarray],
+    region: Dict[str, int],
+    tool_type: str,
+    parameters: Dict[str, Any],
+) -> Tuple[bool, Optional[Dict[str, Any]]]:
+    """Evaluate whether a single frame passes a tool's criteria.
+
+    Used by :func:`scan_multitool` for steps 1+ in the chain.  Returns
+    ``(passed, result_dict)`` where *result_dict* contains tool-specific
+    metadata when the check passes, or ``None`` when it does not.
+
+    For **change** and **flow** tools *prev_frame* is required (the frame
+    immediately before the candidate timestamp).  If it is ``None`` the
+    check is skipped (returns ``(False, None)``).
+    """
+    if tool_type == "color":
+        pixels = extract_region(frame, region)
+        target = parameters.get("target_color", {"h": 0, "s": 0, "v": 0})
+        tol = parameters.get("tolerance", {"h": 10, "s": 50, "v": 50})
+        avg = average_color_hsv(pixels)
+        hue_diff = abs(avg["h"] - target["h"])
+        hue_dist = min(hue_diff, 180.0 - hue_diff)
+        s_dist = abs(avg["s"] - target["s"])
+        v_dist = abs(avg["v"] - target["v"])
+        if hue_dist <= tol["h"] and s_dist <= tol["s"] and v_dist <= tol["v"]:
+            conf = max(
+                0.0,
+                1.0
+                - max(
+                    hue_dist / max(tol["h"], 1e-6),
+                    s_dist / max(tol["s"], 1e-6),
+                    v_dist / max(tol["v"], 1e-6),
+                ),
+            )
+            return True, {"_confidence": conf}
+        return False, None
+
+    elif tool_type == "change":
+        if prev_frame is None:
+            return False, None
+        pixels = extract_region(frame, region)
+        prev_pixels = extract_region(prev_frame, region)
+        threshold = parameters.get(
+            "threshold", config.SCREENSPACE_CHANGE_RATIO_THRESHOLD
+        )
+        noise_threshold = parameters.get(
+            "noise_threshold", config.SCREENSPACE_NOISE_THRESHOLD
+        )
+        k = config.SCREENSPACE_BLUR_KERNEL
+        mk = config.SCREENSPACE_MORPH_KERNEL
+        morph_kernel = np.ones((mk, mk), np.uint8)
+        curr_gray = cv2.cvtColor(
+            cv2.GaussianBlur(pixels, (k, k), 0), cv2.COLOR_BGR2GRAY
+        )
+        prev_gray = cv2.cvtColor(
+            cv2.GaussianBlur(prev_pixels, (k, k), 0), cv2.COLOR_BGR2GRAY
+        )
+        diff = cv2.absdiff(prev_gray, curr_gray)
+        _, mask = cv2.threshold(diff, noise_threshold, 255, cv2.THRESH_BINARY)
+        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, morph_kernel)
+        mag = float(np.count_nonzero(mask)) / float(mask.size) if mask.size else 0.0
+        if mag >= threshold:
+            return True, {"magnitude": round(mag, 4)}
+        return False, None
+
+    elif tool_type == "similarity":
+        ref = parameters.get("reference_frame")
+        if ref is None:
+            return False, None
+        pixels = extract_region(frame, region)
+        threshold = parameters.get("threshold", config.SCREENSPACE_SSIM_THRESHOLD)
+        is_sim, score = regions_are_similar(pixels, ref, threshold)
+        if is_sim:
+            return True, {"score": round(score, 4)}
+        return False, None
+
+    elif tool_type == "text":
+        pixels = extract_region(frame, region)
+        search_string = parameters.get("search_string", "")
+        if not search_string:
+            return False, None
+        fuzzy_threshold = parameters.get(
+            "fuzzy_threshold", config.SCREENSPACE_OCR_FUZZY_THRESHOLD
+        )
+        languages = parameters.get("languages") or ["en"]
+        reader = _get_ocr_reader(languages)
+        ocr_results = reader.readtext(pixels, detail=1)
+        search_lower = search_string.lower()
+        for _, text, conf in ocr_results:
+            ratio = difflib.SequenceMatcher(None, search_lower, text.lower()).ratio()
+            if ratio >= fuzzy_threshold:
+                return True, {"text_found": text, "confidence": round(conf, 4)}
+        return False, None
+
+    elif tool_type == "numbers":
+        pixels = extract_region(frame, region)
+        operator = parameters.get("operator", "gt")
+        target_value = parameters.get("target_value", 0)
+        range_min = parameters.get("range_min")
+        range_max = parameters.get("range_max")
+        languages = parameters.get("languages") or ["en"]
+        reader = _get_ocr_reader(languages)
+        ocr_results = reader.readtext(pixels, detail=1)
+        for _, text, _conf in ocr_results:
+            cleaned = text.replace(",", "")
+            for match in _NUMBERS_CHECK_RE.findall(cleaned):
+                num = float(match)
+                passed = False
+                if operator == "eq":
+                    passed = num == target_value
+                elif operator == "gt":
+                    passed = num > target_value
+                elif operator == "lt":
+                    passed = num < target_value
+                elif operator == "gte":
+                    passed = num >= target_value
+                elif operator == "lte":
+                    passed = num <= target_value
+                elif operator == "range":
+                    passed = (
+                        range_min is not None
+                        and range_max is not None
+                        and range_min <= num <= range_max
+                    )
+                if passed:
+                    return True, {"number_found": num}
+        return False, None
+
+    elif tool_type == "template":
+        template_img = parameters.get("template_image")
+        if template_img is None:
+            return False, None
+        threshold = parameters.get(
+            "threshold", config.SCREENSPACE_TEMPLATE_MATCH_THRESHOLD
+        )
+        template_mask = parameters.get("template_mask")
+        matches = match_template(
+            frame, template_img, threshold=threshold, mask=template_mask
+        )
+        if matches:
+            best = max(m["score"] for m in matches)
+            return True, {
+                "best_score": round(best, 4),
+                "match_count": len(matches),
+            }
+        return False, None
+
+    elif tool_type == "flow":
+        if prev_frame is None:
+            return False, None
+        pixels = extract_region(frame, region)
+        prev_pixels = extract_region(prev_frame, region)
+        curr_gray = cv2.cvtColor(pixels, cv2.COLOR_BGR2GRAY)
+        prev_gray_f = cv2.cvtColor(prev_pixels, cv2.COLOR_BGR2GRAY)
+        magnitude_threshold = parameters.get(
+            "magnitude_threshold", config.SCREENSPACE_FLOW_MAGNITUDE_THRESHOLD
+        )
+        flow_result = compute_optical_flow(prev_gray_f, curr_gray)
+        if flow_result["magnitude"] >= magnitude_threshold:
+            return True, {
+                "magnitude": flow_result["magnitude"],
+                "angle": flow_result["angle"],
+            }
+        return False, None
+
+    elif tool_type == "scene":
+        ref_scenes = parameters.get("reference_scenes")
+        if not ref_scenes:
+            return False, None
+        threshold = parameters.get(
+            "threshold", config.SCREENSPACE_SCENE_SIMILARITY_THRESHOLD
+        )
+        pixels = extract_region(frame, region)
+        fp = compute_scene_fingerprint(pixels)
+        best_name = ""
+        best_score = 0.0
+        for ref in ref_scenes:
+            ref_fp = compute_scene_fingerprint(ref["frame"])
+            score = compare_scene_fingerprints(fp, ref_fp)
+            if score > best_score:
+                best_score = score
+                best_name = ref["name"]
+        if best_score >= threshold:
+            return True, {"scene_name": best_name, "score": round(best_score, 4)}
+        return False, None
+
+    return False, None
+
+
+def scan_multitool(
+    video_path: str,
+    region: Dict[str, int],
+    steps: List[Dict[str, Any]],
+    *,
+    start_seconds: float = 0.0,
+    end_seconds: Optional[float] = None,
+    on_progress: Optional[Callable[[float], None]] = None,
+    cancel_flag: Optional[Callable[[], bool]] = None,
+    on_result: Optional[Callable[[Dict[str, Any]], None]] = None,
+) -> List[Dict[str, Any]]:
+    """Run a multi-factor scan chaining several tool types.
+
+    Step 0 runs a full scan on the video.  Each subsequent step only
+    checks the timestamps that passed the previous step.  The final
+    results are timestamps that survived all steps.
+
+    Each entry in *steps* is a dict with ``"type"`` plus the tool's
+    own parameters (e.g. ``target_color``, ``tolerance`` for color).
+
+    Returns a list of ``{timestamp, tool_types, steps, min_confidence}``
+    dicts.
+    """
+    num_steps = len(steps)
+    if num_steps < 2:
+        raise ValueError("Multitool requires at least 2 steps")
+
+    # ---- Step 0: full scan via the appropriate scan_* function ----
+    step0 = steps[0]
+    step0_type = step0["type"]
+    step0_region = step0.get("region_coords", region)
+    step0_collected: List[Dict[str, Any]] = []
+
+    def _collect(rd: Dict[str, Any]) -> None:
+        step0_collected.append(rd)
+
+    def _scaled_progress_0(p: float) -> None:
+        if on_progress:
+            on_progress(p / num_steps)
+
+    def _cancel() -> bool:
+        return bool(cancel_flag and cancel_flag())
+
+    interval = step0.get("interval", config.SCREENSPACE_DEFAULT_INTERVAL)
+    s0_start = step0.get("start_seconds", start_seconds)
+    s0_end = step0.get("end_seconds", end_seconds)
+
+    if step0_type == "color":
+        scan_color(
+            video_path,
+            step0_region,
+            target_color=step0.get("target_color", {"h": 0, "s": 0, "v": 0}),
+            tolerance=step0.get("tolerance", {"h": 10, "s": 50, "v": 50}),
+            interval_seconds=interval,
+            start_seconds=s0_start,
+            end_seconds=s0_end,
+            on_progress=_scaled_progress_0,
+            cancel_flag=_cancel,
+            on_result=_collect,
+        )
+    elif step0_type == "change":
+        scan_changes(
+            video_path,
+            step0_region,
+            threshold=step0.get("threshold", 0),
+            interval_seconds=interval,
+            noise_threshold=step0.get("noise_threshold", 0),
+            start_seconds=s0_start,
+            end_seconds=s0_end,
+            on_progress=_scaled_progress_0,
+            cancel_flag=_cancel,
+            on_result=_collect,
+        )
+    elif step0_type == "similarity":
+        ref_frame = step0.get("reference_frame")
+        if ref_frame is None:
+            raise ValueError("Similarity step requires a reference_frame parameter")
+        scan_similarity(
+            video_path,
+            step0_region,
+            reference_frame=ref_frame,
+            threshold=step0.get("threshold", 0),
+            interval_seconds=interval,
+            start_seconds=s0_start,
+            end_seconds=s0_end,
+            on_progress=_scaled_progress_0,
+            cancel_flag=_cancel,
+            on_result=_collect,
+        )
+    elif step0_type == "text":
+        scan_text(
+            video_path,
+            step0_region,
+            search_string=step0.get("search_string", ""),
+            interval_seconds=interval,
+            fuzzy_threshold=step0.get("fuzzy_threshold", 0),
+            languages=step0.get("languages"),
+            start_seconds=s0_start,
+            end_seconds=s0_end,
+            on_progress=_scaled_progress_0,
+            cancel_flag=_cancel,
+            on_result=_collect,
+        )
+    elif step0_type == "numbers":
+        scan_numbers(
+            video_path,
+            step0_region,
+            operator=step0.get("operator", "gt"),
+            target_value=step0.get("target_value", 0),
+            interval_seconds=interval,
+            range_min=step0.get("range_min"),
+            range_max=step0.get("range_max"),
+            languages=step0.get("languages"),
+            start_seconds=s0_start,
+            end_seconds=s0_end,
+            on_progress=_scaled_progress_0,
+            cancel_flag=_cancel,
+            on_result=_collect,
+        )
+    elif step0_type == "template":
+        template_img = step0.get("template_image")
+        if template_img is None:
+            raise ValueError("Template step requires a template_image parameter")
+        scan_template(
+            video_path,
+            step0_region,
+            template_image=template_img,
+            threshold=step0.get("threshold", 0),
+            interval_seconds=interval,
+            template_mask=step0.get("template_mask"),
+            start_seconds=s0_start,
+            end_seconds=s0_end,
+            on_progress=_scaled_progress_0,
+            cancel_flag=_cancel,
+            on_result=_collect,
+        )
+    elif step0_type == "flow":
+        scan_flow(
+            video_path,
+            step0_region,
+            magnitude_threshold=step0.get("magnitude_threshold", 0),
+            interval_seconds=interval,
+            start_seconds=s0_start,
+            end_seconds=s0_end,
+            on_progress=_scaled_progress_0,
+            cancel_flag=_cancel,
+            on_result=_collect,
+        )
+    elif step0_type == "scene":
+        ref_scenes = step0.get("reference_scenes")
+        if not ref_scenes:
+            raise ValueError("Scene step requires reference_scenes parameter")
+        scan_scene(
+            video_path,
+            step0_region,
+            reference_scenes=ref_scenes,
+            threshold=step0.get("threshold", 0),
+            interval_seconds=interval,
+            start_seconds=s0_start,
+            end_seconds=s0_end,
+            on_progress=_scaled_progress_0,
+            cancel_flag=_cancel,
+            on_result=_collect,
+        )
+    else:
+        raise ValueError(f"Unsupported step 0 type: {step0_type}")
+
+    if _cancel():
+        return []
+
+    # Build working set: {timestamp: [step0_result_dict]}
+    working: Dict[float, List[Dict[str, Any]]] = {}
+    for rd in step0_collected:
+        ts = rd.get("timestamp", rd.get("start", 0.0))
+        working[ts] = [rd]
+
+    if not working:
+        if on_progress:
+            on_progress(1.0)
+        return []
+
+    # ---- Steps 1..N-1: check surviving timestamps ----
+    for step_idx in range(1, num_steps):
+        if _cancel():
+            return []
+        step = steps[step_idx]
+        step_type = step["type"]
+        step_region = step.get("region_coords", region)
+        new_working: Dict[float, List[Dict[str, Any]]] = {}
+
+        cap = cv2.VideoCapture(video_path)
+        if not cap.isOpened():
+            break
+
+        timestamps = sorted(working.keys())
+        total_ts = len(timestamps)
+
+        for ti, ts in enumerate(timestamps):
+            if _cancel():
+                break
+
+            # Read frame at timestamp
+            cap.set(cv2.CAP_PROP_POS_MSEC, ts * 1000.0)
+            ret, frame = cap.read()
+            if not ret:
+                continue
+
+            # For change/flow, read previous frame
+            prev_frame = None
+            if step_type in ("change", "flow"):
+                prev_ts = max(0.0, ts - interval)
+                cap.set(cv2.CAP_PROP_POS_MSEC, prev_ts * 1000.0)
+                ret2, prev_frame = cap.read()
+                if not ret2:
+                    prev_frame = None
+
+            passed, result_dict = check_frame_for_tool(
+                frame, prev_frame, step_region, step_type, step
+            )
+            if passed and result_dict is not None:
+                new_working[ts] = working[ts] + [result_dict]
+
+            if on_progress and total_ts > 0:
+                step_base = step_idx / num_steps
+                step_frac = (ti + 1) / total_ts / num_steps
+                on_progress(step_base + step_frac)
+
+        cap.release()
+        working = new_working
+
+        if not working:
+            break
+
+    # ---- Build final results ----
+    tool_types = [s["type"] for s in steps]
+    results: List[Dict[str, Any]] = []
+    for ts in sorted(working.keys()):
+        step_results = working[ts]
+        confidences = []
+        for i, sr in enumerate(step_results):
+            confidences.append(_extract_confidence(steps[i]["type"], sr))
+        min_conf = min(confidences) if confidences else 0.0
+        rd = {
+            "timestamp": round(ts, 2),
+            "tool_types": tool_types,
+            "steps": step_results,
+            "min_confidence": round(min_conf, 4),
+        }
+        results.append(rd)
+        if on_result:
+            on_result(rd)
+
+    if on_progress:
+        on_progress(1.0)
+    return results
+
+
 def _merge_timestamp_spans(
     timestamps: List[float], interval: float
 ) -> List[Dict[str, Any]]:
@@ -1778,35 +2259,28 @@ class ScreenspaceWorker:
         events: List[Dict[str, Any]] = []
         for r in raw_results:
             ts = r.get("timestamp", r.get("start", 0.0))
+            confidence = _extract_confidence(task_type, r)
             metadata: Dict[str, Any] = {}
-            if task_type == "color":
-                confidence = r.get("_confidence", 1.0)
-            elif task_type == "change":
-                confidence = r.get("magnitude", 0.0)
+            if task_type == "change":
                 metadata["magnitude"] = r.get("magnitude", 0.0)
             elif task_type == "similarity":
-                confidence = r.get("score", 0.0)
                 metadata["score"] = r.get("score", 0.0)
             elif task_type == "text":
-                confidence = r.get("confidence", 0.0)
                 metadata["text_found"] = r.get("text_found", "")
             elif task_type == "numbers":
-                confidence = 1.0
                 metadata["value"] = r.get("number_found", 0)
             elif task_type == "template":
-                confidence = r.get("best_score", 0.0)
                 metadata["match_count"] = r.get("match_count", 0)
                 metadata["best_score"] = r.get("best_score", 0.0)
             elif task_type == "flow":
-                confidence = min(r.get("magnitude", 0.0) / 10.0, 1.0)
                 metadata["magnitude"] = r.get("magnitude", 0.0)
                 metadata["angle"] = r.get("angle", 0.0)
             elif task_type == "scene":
-                confidence = r.get("score", 0.0)
                 metadata["scene_name"] = r.get("scene_name", "")
                 metadata["score"] = r.get("score", 0.0)
-            else:
-                confidence = 1.0
+            elif task_type == "multitool":
+                metadata["tool_types"] = r.get("tool_types", [])
+                metadata["steps"] = r.get("steps", [])
             events.append(create_event(task, ts, confidence, metadata))
         return events
 
@@ -2114,6 +2588,20 @@ class ScreenspaceWorker:
                 cancel_flag=cancel_flag,
                 on_result=on_result,
             )
+        elif task_type == "multitool":
+            steps = params.get("steps", [])
+            if not steps or len(steps) < 2:
+                raise ValueError("Multitool requires at least 2 steps")
+            return scan_multitool(
+                video_path,
+                region,
+                steps=steps,
+                start_seconds=params.get("start_seconds", 0.0),
+                end_seconds=params.get("end_seconds"),
+                on_progress=on_progress,
+                cancel_flag=cancel_flag,
+                on_result=on_result,
+            )
         else:
             raise ValueError(f"Unknown task type: {task_type}")
 
@@ -2169,17 +2657,22 @@ def save_screenspace_manifest(
     for task in tasks:
         ct = {k: v for k, v in task.items() if not k.startswith("_")}
         if "parameters" in ct:
+            _binary_keys = (
+                "reference_frame",
+                "template_image",
+                "template_mask",
+                "reference_scenes",
+            )
             ct["parameters"] = {
-                k: v
-                for k, v in ct["parameters"].items()
-                if k
-                not in (
-                    "reference_frame",
-                    "template_image",
-                    "template_mask",
-                    "reference_scenes",
-                )
+                k: v for k, v in ct["parameters"].items() if k not in _binary_keys
             }
+            # Strip binary data and internal coords from multitool step parameters
+            if "steps" in ct["parameters"]:
+                _step_strip_keys = _binary_keys + ("region_coords",)
+                ct["parameters"]["steps"] = [
+                    {k: v for k, v in s.items() if k not in _step_strip_keys}
+                    for s in ct["parameters"]["steps"]
+                ]
         # Strip flow_grid from results (large per-frame data, not needed on disk)
         if isinstance(ct.get("result"), list):
             ct["result"] = [
