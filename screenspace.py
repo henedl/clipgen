@@ -398,9 +398,11 @@ def compare_scene_fingerprints(
     Returns similarity score 0.0–1.0.
     """
     # Histogram correlation: range [-1, 1] → [0, 1]
+    # Flatten 3D histograms to 1D — cv2.compareHist returns incorrect
+    # results for multidimensional arrays.
     hist_corr = cv2.compareHist(
-        fp_a["histogram"].astype(np.float32),
-        fp_b["histogram"].astype(np.float32),
+        fp_a["histogram"].flatten().astype(np.float32),
+        fp_b["histogram"].flatten().astype(np.float32),
         cv2.HISTCMP_CORREL,
     )
     hist_sim = (hist_corr + 1.0) / 2.0
