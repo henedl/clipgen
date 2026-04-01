@@ -42,7 +42,7 @@ import uuid
 from collections import OrderedDict
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union, cast
 
 if TYPE_CHECKING:
     import cv2
@@ -531,7 +531,7 @@ def api_tasks_create() -> FlaskResponse:
                 return jsonify(
                     {"ok": False, "error": f"Step {i}: must be an object"}
                 ), 400
-            step_v: Dict[str, Any] = step_raw
+            step_v = cast(Dict[str, Any], step_raw)
             stype = step_v.get("type", "")
             if stype not in allowed_step_types:
                 return jsonify(
