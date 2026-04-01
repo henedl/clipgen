@@ -911,3 +911,124 @@ class TestFlowGridStrippedFromManifest:
         result = loaded["tasks"][0]["result"][0]
         assert "flow_grid" not in result
         assert result["magnitude"] == 5.0
+
+
+# ---------------------------------------------------------------------------
+# check_frame_for_tool
+# ---------------------------------------------------------------------------
+
+
+class TestCheckFrameForTool:
+    def test_color_pass(self):
+        # Pure blue in BGR: (255, 0, 0) -> HSV ~(120, 255, 255)
+        frame = np.full((100, 100, 3), [255, 0, 0], dtype=np.uint8)
+        region = {"x": 0, "y": 0, "w": 100, "h": 100}
+        params = {
+            "target_color": {"h": 120, "s": 255, "v": 255},
+            "tolerance": {"h": 10, "s": 50, "v": 50},
+        }
+        passed, result = screenspace.check_frame_for_tool(
+            frame, None, region, "color", params
+        )
+        assert passed is True
+        assert result is not None
+        assert "_confidence" in result
+
+    def test_color_fail(self):
+        frame = np.full((100, 100, 3), [255, 0, 0], dtype=np.uint8)
+        region = {"x": 0, "y": 0, "w": 100, "h": 100}
+        # Red target will not match blue frame
+        params = {
+            "target_color": {"h": 0, "s": 255, "v": 255},
+            "tolerance": {"h": 5, "s": 10, "v": 10},
+        }
+        passed, result = screenspace.check_frame_for_tool(
+            frame, None, region, "color", params
+        )
+        assert passed is False
+        assert result is None
+
+    def test_change_needs_prev_frame(self):
+        frame = np.zeros((100, 100, 3), dtype=np.uint8)
+        region = {"x": 0, "y": 0, "w": 100, "h": 100}
+        passed, result = screenspace.check_frame_for_tool(
+            frame, None, region, "change", {"threshold": 0.03}
+        )
+        assert passed is False
+        assert result is None
+
+    def test_change_pass(self):
+        frame_a = np.zeros((100, 100, 3), dtype=np.uint8)
+        frame_b = np.full((100, 100, 3), 200, dtype=np.uint8)
+        region = {"x": 0, "y": 0, "w": 100, "h": 100}
+        passed, result = screenspace.check_frame_for_tool(
+            frame_b, frame_a, region, "change", {"threshold": 0.03}
+        )
+        assert passed is True
+        assert result is not None
+        assert "magnitude" in result
+
+    def test_similarity_pass(self):
+        frame = np.full((100, 100, 3), 128, dtype=np.uint8)
+        region = {"x": 0, "y": 0, "w": 100, "h": 100}
+        ref = np.full((100, 100, 3), 128, dtype=np.uint8)
+        passed, result = screenspace.check_frame_for_tool(
+            frame,
+            None,
+            region,
+            "similarity",
+            {"reference_frame": ref, "threshold": 0.5},
+        )
+        assert passed is True
+        assert result is not None
+        assert "score" in result
+
+    def test_flow_needs_prev_frame(self):
+        frame = np.zeros((100, 100, 3), dtype=np.uint8)
+        region = {"x": 0, "y": 0, "w": 100, "h": 100}
+        passed, result = screenspace.check_frame_for_tool(
+            frame, None, region, "flow", {"magnitude_threshold": 2.0}
+        )
+        assert passed is False
+        assert result is None
+
+    def test_unknown_type(self):
+        frame = np.zeros((100, 100, 3), dtype=np.uint8)
+        region = {"x": 0, "y": 0, "w": 100, "h": 100}
+        passed, result = screenspace.check_frame_for_tool(
+            frame, None, region, "bogus", {}
+        )
+        assert passed is False
+        assert result is None
+
+
+class TestExtractConfidence:
+    def test_color(self):
+        assert screenspace._extract_confidence("color", {"_confidence": 0.8}) == 0.8
+
+    def test_change(self):
+        assert screenspace._extract_confidence("change", {"magnitude": 0.5}) == 0.5
+
+    def test_similarity(self):
+        assert screenspace._extract_confidence("similarity", {"score": 0.95}) == 0.95
+
+    def test_numbers(self):
+        assert screenspace._extract_confidence("numbers", {}) == 1.0
+
+    def test_multitool(self):
+        assert (
+            screenspace._extract_confidence("multitool", {"min_confidence": 0.7}) == 0.7
+        )
+
+    def test_unknown_type(self):
+        assert screenspace._extract_confidence("bogus", {}) == 1.0
+
+
+class TestScanMultitool:
+    def test_requires_min_2_steps(self):
+        with pytest.raises(ValueError, match="at least 2"):
+            screenspace.scan_multitool(
+                "/fake/video.mp4",
+                {"x": 0, "y": 0, "w": 100, "h": 100},
+                steps=[{"type": "color"}],
+            )

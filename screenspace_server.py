@@ -477,6 +477,7 @@ def api_tasks_create() -> FlaskResponse:
 
     task_type = data.get("type", "").strip()
     valid_types = (
+        "multitool",
         "color",
         "change",
         "similarity",
@@ -505,6 +506,31 @@ def api_tasks_create() -> FlaskResponse:
 
     if not region_name and not has_uploaded_template:
         return jsonify({"ok": False, "error": "region is required"}), 400
+
+    # Early validation for multitool steps (before video path lookup)
+    if task_type == "multitool":
+        parameters_early = data.get("parameters", {})
+        mt_steps = parameters_early.get("steps")
+        if not mt_steps or not isinstance(mt_steps, list) or len(mt_steps) < 2:
+            return jsonify(
+                {"ok": False, "error": "Multitool requires at least 2 steps"}
+            ), 400
+        allowed_step_types = (
+            "color",
+            "change",
+            "similarity",
+            "text",
+            "numbers",
+            "template",
+            "flow",
+            "scene",
+        )
+        for i, step in enumerate(mt_steps):
+            stype = step.get("type", "")
+            if stype not in allowed_step_types:
+                return jsonify(
+                    {"ok": False, "error": f"Step {i}: invalid type '{stype}'"}
+                ), 400
 
     regions: Dict[str, Any] = {}
     if region_name:
@@ -658,6 +684,125 @@ def api_tasks_create() -> FlaskResponse:
             reference_scenes.append({"name": ref["name"], "frame": ref_region})
         cap.release()
         parameters["reference_scenes"] = reference_scenes
+
+    # Multitool tasks: prepare per-step parameters (validation done earlier)
+    if task_type == "multitool":
+        import base64
+
+        import cv2
+        import numpy as np
+
+        steps = parameters.get("steps", [])
+        for i, step in enumerate(steps):
+            stype = step.get("type", "")
+
+            if stype == "similarity":
+                ref_ts = step.get("reference_timestamp")
+                if ref_ts is None:
+                    return jsonify(
+                        {
+                            "ok": False,
+                            "error": f"Step {i}: similarity requires reference_timestamp",
+                        }
+                    ), 400
+                cap = cv2.VideoCapture(video_path)
+                if not cap.isOpened():
+                    return jsonify({"ok": False, "error": "Could not open video"}), 500
+                cap.set(cv2.CAP_PROP_POS_MSEC, float(ref_ts) * 1000.0)
+                ret, frame = cap.read()
+                cap.release()
+                if not ret:
+                    return jsonify(
+                        {
+                            "ok": False,
+                            "error": f"Step {i}: could not read reference frame",
+                        }
+                    ), 400
+                step["reference_frame"] = screenspace.extract_region(
+                    frame, region_coords
+                )
+
+            elif stype == "template":
+                upload_b64 = step.pop("template_image_data", None)
+                if upload_b64:
+                    try:
+                        img_bytes = base64.b64decode(upload_b64)
+                        img_arr = np.frombuffer(img_bytes, dtype=np.uint8)
+                        img = cv2.imdecode(img_arr, cv2.IMREAD_UNCHANGED)
+                    except Exception:
+                        return jsonify(
+                            {
+                                "ok": False,
+                                "error": f"Step {i}: could not decode uploaded image",
+                            }
+                        ), 400
+                    if img is None:
+                        return jsonify(
+                            {"ok": False, "error": f"Step {i}: invalid image data"}
+                        ), 400
+                    if len(img.shape) == 2:
+                        img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
+                    if img.shape[2] == 4:
+                        step["template_mask"] = img[:, :, 3]
+                        step["template_image"] = cv2.cvtColor(img, cv2.COLOR_BGRA2BGR)
+                    else:
+                        step["template_image"] = img
+                else:
+                    ref_ts = step.get("reference_timestamp")
+                    if ref_ts is None:
+                        return jsonify(
+                            {
+                                "ok": False,
+                                "error": f"Step {i}: template requires reference_timestamp or uploaded image",
+                            }
+                        ), 400
+                    cap = cv2.VideoCapture(video_path)
+                    if not cap.isOpened():
+                        return jsonify(
+                            {"ok": False, "error": "Could not open video"}
+                        ), 500
+                    cap.set(cv2.CAP_PROP_POS_MSEC, float(ref_ts) * 1000.0)
+                    ret, frame = cap.read()
+                    cap.release()
+                    if not ret:
+                        return jsonify(
+                            {
+                                "ok": False,
+                                "error": f"Step {i}: could not read template frame",
+                            }
+                        ), 400
+                    step["template_image"] = screenspace.extract_region(
+                        frame, region_coords
+                    )
+
+            elif stype == "scene":
+                scene_refs = step.get("scene_references")
+                if not scene_refs or not isinstance(scene_refs, list):
+                    return jsonify(
+                        {
+                            "ok": False,
+                            "error": f"Step {i}: scene requires scene_references list",
+                        }
+                    ), 400
+                cap = cv2.VideoCapture(video_path)
+                if not cap.isOpened():
+                    return jsonify({"ok": False, "error": "Could not open video"}), 500
+                ref_scenes_list = []
+                for ref in scene_refs:
+                    cap.set(cv2.CAP_PROP_POS_MSEC, float(ref["timestamp"]) * 1000.0)
+                    ret, frame = cap.read()
+                    if not ret:
+                        cap.release()
+                        return jsonify(
+                            {
+                                "ok": False,
+                                "error": f"Step {i}: could not read frame for scene '{ref['name']}'",
+                            }
+                        ), 400
+                    ref_region = screenspace.extract_region(frame, region_coords)
+                    ref_scenes_list.append({"name": ref["name"], "frame": ref_region})
+                cap.release()
+                step["reference_scenes"] = ref_scenes_list
 
     task = screenspace.create_task(
         task_type=task_type,
@@ -827,17 +972,21 @@ def _clean_task(task: Dict[str, Any]) -> Dict[str, Any]:
     """Remove internal fields from a task dict for API responses."""
     cleaned = {k: v for k, v in task.items() if not k.startswith("_")}
     if "parameters" in cleaned:
+        _binary_keys = (
+            "reference_frame",
+            "template_image",
+            "template_mask",
+            "reference_scenes",
+        )
         cleaned["parameters"] = {
-            k: v
-            for k, v in cleaned["parameters"].items()
-            if k
-            not in (
-                "reference_frame",
-                "template_image",
-                "template_mask",
-                "reference_scenes",
-            )
+            k: v for k, v in cleaned["parameters"].items() if k not in _binary_keys
         }
+        # Strip binary data from multitool step parameters
+        if "steps" in cleaned["parameters"]:
+            cleaned["parameters"]["steps"] = [
+                {k: v for k, v in s.items() if k not in _binary_keys}
+                for s in cleaned["parameters"]["steps"]
+            ]
     return _sanitize_floats(cleaned)
 
 

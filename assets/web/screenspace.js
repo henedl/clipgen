@@ -8,6 +8,7 @@
   var FRAME_STEP = 1.0;
 
   var TASK_COLORS = {
+    multitool: "#64748b",
     color: "#8b5cf6",
     change: "#f97316",
     similarity: "#0ea5e9",
@@ -20,6 +21,10 @@
   };
 
   var SS_TYPE_ICON_PATHS = {
+    multitool: { viewBox: "0 0 16 16", paths: [
+      { d: "M8.91421 6.02513C9.2071 5.73223 9.68197 5.73223 9.97487 6.02513C11.3417 7.39196 11.3417 9.60804 9.97487 10.9749L7.97487 12.9749C6.60803 14.3417 4.39195 14.3417 3.02512 12.9749C1.82824 11.778 1.67995 9.93153 2.57781 8.57265C2.80615 8.22706 3.27142 8.13202 3.61701 8.36036C3.9626 8.5887 4.05765 9.05397 3.8293 9.39956C3.31651 10.1757 3.40282 11.2313 4.08578 11.9142C4.86683 12.6953 6.13316 12.6953 6.91421 11.9142L8.91421 9.91421C9.69525 9.13316 9.69525 7.86683 8.91421 7.08579C8.62131 6.79289 8.62131 6.31802 8.91421 6.02513Z", fillRule: "evenodd" },
+      { d: "M7.08578 9.97487C6.79289 10.2678 6.31801 10.2678 6.02512 9.97487C4.65828 8.60804 4.65829 6.39196 6.02512 5.02513L8.02512 3.02513C9.39195 1.65829 11.608 1.65829 12.9749 3.02513C14.1717 4.22201 14.32 6.06847 13.4222 7.42735C13.1938 7.77294 12.7286 7.86798 12.383 7.63964C12.0374 7.4113 11.9423 6.94603 12.1707 6.60044C12.6835 5.82435 12.5972 4.76874 11.9142 4.08579C11.1332 3.30474 9.86683 3.30474 9.08578 4.08579L7.08578 6.08579C6.30473 6.86683 6.30473 8.13316 7.08578 8.91421C7.37867 9.20711 7.37867 9.68198 7.08578 9.97487Z", fillRule: "evenodd" }
+    ]},
     color: { viewBox: "0 0 16 16", paths: [
       { d: "M15 4C15 5.39788 14.0439 6.57245 12.75 6.90549V8.5C12.75 8.69891 12.671 8.88968 12.5303 9.03033L12.0303 9.53033C11.7374 9.82322 11.2626 9.82322 10.9697 9.53033L10.25 8.81069L5.57322 13.4875C5.24503 13.8157 4.79992 14.0001 4.33579 14.0001H3.66421C3.59791 14.0001 3.53432 14.0264 3.48744 14.0733L2.78033 14.7804C2.63968 14.921 2.44891 15.0001 2.25 15.0001C2.05109 15.0001 1.86032 14.921 1.71967 14.7804L1.21967 14.2804C0.926777 13.9875 0.926777 13.5126 1.21967 13.2197L1.92678 12.5126C1.97366 12.4657 2 12.4021 2 12.3358V11.6643C2 11.2001 2.18437 10.755 2.51256 10.4268L7.18937 5.75003L6.46967 5.03033C6.17678 4.73744 6.17678 4.26256 6.46967 3.96967L6.96967 3.46967C7.11032 3.32902 7.30109 3.25 7.5 3.25H9.09451C9.42755 1.95608 10.6021 1 12 1C13.6569 1 15 2.34315 15 4ZM9.18937 7.75003L8.25003 6.81069L3.57322 11.4875C3.52634 11.5344 3.5 11.598 3.5 11.6643V12.3358C3.5 12.3938 3.49713 12.4514 3.49146 12.5086C3.54862 12.5029 3.60627 12.5001 3.66421 12.5001H4.33579C4.40209 12.5001 4.46568 12.4737 4.51256 12.4268L9.18937 7.75003Z", fillRule: "evenodd" }
     ]},
@@ -119,6 +124,7 @@
     resultOverlay: null,
     heatmapOverlay: null,
     uploadedTemplate: null,
+    multitoolSteps: [],
   };
 
   var _timelineHitRects = [];
@@ -771,7 +777,21 @@
         var frameCtx = qs("#frameCanvas").getContext("2d");
         var pixel = frameCtx.getImageData(pos.x, pos.y, 1, 1).data;
         var hsv = rgbToHsv(pixel[0], pixel[1], pixel[2]);
-        setTargetColor(hsv.h, hsv.s, hsv.v);
+        if (state._mtPipetteStep !== undefined && state._mtPipetteStep >= 0) {
+          var mtIdx = state._mtPipetteStep;
+          var mtSfx = "_mt" + mtIdx;
+          var mtHEl = qs("#paramColorH" + mtSfx);
+          var mtSEl = qs("#paramColorS" + mtSfx);
+          var mtVEl = qs("#paramColorV" + mtSfx);
+          if (mtHEl) mtHEl.value = clamp(Math.round(hsv.h), 0, 180);
+          if (mtSEl) mtSEl.value = clamp(Math.round(hsv.s), 0, 255);
+          if (mtVEl) mtVEl.value = clamp(Math.round(hsv.v), 0, 255);
+          var mtHex = qs("#paramColorHex" + mtSfx);
+          if (mtHex) mtHex.value = rgbToHex(pixel[0], pixel[1], pixel[2]);
+          state._mtPipetteStep = -1;
+        } else {
+          setTargetColor(hsv.h, hsv.s, hsv.v);
+        }
         deactivatePipette();
         showToast("Sampled color from frame");
         return;
@@ -1872,6 +1892,7 @@
   // ---- Tool info tooltip ----
 
   var TOOL_INFO = {
+    multitool: "Multitool chains multiple analysis tools together. Add at least two tool steps — each subsequent tool only checks frames that passed the previous step, finding moments that match ALL criteria simultaneously.",
     color: "[TODO_INFO] Color tool: finds frames where a region's average color matches your chosen target within the tolerance range. Useful for tracking UI state indicators, health bars, or any element identified by a specific color.",
     change: "[TODO_INFO] Change tool: detects frames where pixel differences in the region exceed the threshold. Good for spotting sudden visual changes like screen transitions, pop-ups appearing, or loading states completing.",
     similarity: "[TODO_INFO] Similarity tool: compares each frame against a captured reference using structural similarity (SSIM). Use it to find moments that look like a specific reference frame — e.g. a particular menu, dialog, or game state.",
@@ -2014,6 +2035,273 @@
     slot.appendChild(ctrl);
   }
 
+  var MULTITOOL_ALLOWED_TYPES = [
+    { value: "color", label: "Color" },
+    { value: "change", label: "Change" },
+    { value: "similarity", label: "Similarity" },
+    { value: "text", label: "Text" },
+    { value: "numbers", label: "Numbers" },
+    { value: "template", label: "Template" },
+    { value: "flow", label: "Flow" },
+    { value: "scene", label: "Scene" },
+  ];
+
+  function renderMultitoolStepBody(body, stepType, idx) {
+    var sfx = "_mt" + idx;
+    if (stepType === "color") {
+      var row1 = el("div", "param-row");
+      row1.appendChild(el("span", "param-label", "Hex color"));
+      var ctrl1 = el("div", "param-control");
+      var hexIn = document.createElement("input");
+      hexIn.type = "text"; hexIn.id = "paramColorHex" + sfx;
+      hexIn.className = "color-hex-input"; hexIn.placeholder = "#000000"; hexIn.maxLength = 7;
+      hexIn.style.width = "5.5rem";
+      ctrl1.appendChild(hexIn);
+      // Pipette button for multitool color step
+      var pipBtn = el("button", "btn btn-small btn-pipette");
+      pipBtn.title = "Pick color from frame";
+      pipBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path fill-rule="evenodd" clip-rule="evenodd" d="M15 4C15 5.39788 14.0439 6.57245 12.75 6.90549V8.5C12.75 8.69891 12.671 8.88968 12.5303 9.03033L12.0303 9.53033C11.7374 9.82322 11.2626 9.82322 10.9697 9.53033L10.25 8.81069L5.57322 13.4875C5.24503 13.8157 4.79992 14.0001 4.33579 14.0001H3.66421C3.59791 14.0001 3.53432 14.0264 3.48744 14.0733L2.78033 14.7804C2.63968 14.921 2.44891 15.0001 2.25 15.0001C2.05109 15.0001 1.86032 14.921 1.71967 14.7804L1.21967 14.2804C0.926777 13.9875 0.926777 13.5126 1.21967 13.2197L1.92678 12.5126C1.97366 12.4657 2 12.4021 2 12.3358V11.6643C2 11.2001 2.18437 10.755 2.51256 10.4268L7.18937 5.75003L6.46967 5.03033C6.17678 4.73744 6.17678 4.26256 6.46967 3.96967L6.96967 3.46967C7.11032 3.32902 7.30109 3.25 7.5 3.25H9.09451C9.42755 1.95608 10.6021 1 12 1C13.6569 1 15 2.34315 15 4ZM9.18937 7.75003L8.25003 6.81069L3.57322 11.4875C3.52634 11.5344 3.5 11.598 3.5 11.6643V12.3358C3.5 12.3938 3.49713 12.4514 3.49146 12.5086C3.54862 12.5029 3.60627 12.5001 3.66421 12.5001H4.33579C4.40209 12.5001 4.46568 12.4737 4.51256 12.4268L9.18937 7.75003Z"/></svg>';
+      (function(capturedIdx) {
+        pipBtn.addEventListener("click", function() {
+          if (state.pipetteActive) { deactivatePipette(); return; }
+          state._mtPipetteStep = capturedIdx;
+          activatePipette();
+        });
+      })(idx);
+      ctrl1.appendChild(pipBtn);
+      // Hidden HSV fields
+      var hH = document.createElement("input"); hH.type = "hidden"; hH.id = "paramColorH" + sfx; hH.value = "0";
+      var hS = document.createElement("input"); hS.type = "hidden"; hS.id = "paramColorS" + sfx; hS.value = "0";
+      var hV = document.createElement("input"); hV.type = "hidden"; hV.id = "paramColorV" + sfx; hV.value = "0";
+      ctrl1.appendChild(hH); ctrl1.appendChild(hS); ctrl1.appendChild(hV);
+      row1.appendChild(ctrl1);
+      body.appendChild(row1);
+      // Listen for hex input changes to update hidden HSV
+      hexIn.addEventListener("input", function() {
+        var hex = hexIn.value.replace("#", "");
+        if (hex.length === 6) {
+          var r = parseInt(hex.substring(0, 2), 16) || 0;
+          var g = parseInt(hex.substring(2, 4), 16) || 0;
+          var b = parseInt(hex.substring(4, 6), 16) || 0;
+          // Convert RGB to HSV (OpenCV convention: H 0-180, S 0-255, V 0-255)
+          var rr = r / 255, gg = g / 255, bb = b / 255;
+          var mx = Math.max(rr, gg, bb), mn = Math.min(rr, gg, bb);
+          var d = mx - mn, h = 0, s = mx === 0 ? 0 : d / mx, v = mx;
+          if (d !== 0) {
+            if (mx === rr) h = ((gg - bb) / d + (gg < bb ? 6 : 0)) / 6;
+            else if (mx === gg) h = ((bb - rr) / d + 2) / 6;
+            else h = ((rr - gg) / d + 4) / 6;
+          }
+          hH.value = Math.round(h * 180);
+          hS.value = Math.round(s * 255);
+          hV.value = Math.round(v * 255);
+        }
+      });
+      var row2 = el("div", "param-row");
+      row2.appendChild(el("span", "param-label", "Tolerance"));
+      var ctrl2 = el("div", "param-control");
+      ctrl2.appendChild(numberInput("paramColorTol" + sfx, 0, 100, 30, 1));
+      row2.appendChild(ctrl2);
+      body.appendChild(row2);
+    } else if (stepType === "change") {
+      var r1 = el("div", "param-row");
+      r1.appendChild(el("span", "param-label", "Threshold"));
+      var c1 = el("div", "param-control");
+      c1.appendChild(numberInput("paramChangeThresh" + sfx, 0.01, 0.50, 0.03, 0.01));
+      r1.appendChild(c1);
+      body.appendChild(r1);
+      var r2 = el("div", "param-row");
+      r2.appendChild(el("span", "param-label", "Noise"));
+      var c2 = el("div", "param-control");
+      c2.appendChild(numberInput("paramChangeNoise" + sfx, 0, 100, 30, 1));
+      r2.appendChild(c2);
+      body.appendChild(r2);
+    } else if (stepType === "similarity") {
+      var r1 = el("div", "param-row");
+      r1.appendChild(el("span", "param-label", "Reference"));
+      var c1 = el("div", "param-control");
+      var capBtn = el("button", "btn btn-small", "Capture Frame");
+      var tsLabel = el("span", "param-value", "—");
+      tsLabel.id = "paramSimRef" + sfx;
+      capBtn.addEventListener("click", function () {
+        state.multitoolSteps[idx]._refTs = state.currentTimestamp;
+        tsLabel.textContent = formatTimestamp(state.currentTimestamp);
+      });
+      c1.appendChild(capBtn);
+      c1.appendChild(tsLabel);
+      r1.appendChild(c1);
+      body.appendChild(r1);
+      var r2 = el("div", "param-row");
+      r2.appendChild(el("span", "param-label", "Threshold"));
+      var c2 = el("div", "param-control");
+      c2.appendChild(numberInput("paramSimThresh" + sfx, 0.50, 1.00, 0.90, 0.01));
+      r2.appendChild(c2);
+      body.appendChild(r2);
+    } else if (stepType === "text") {
+      var r1 = el("div", "param-row");
+      r1.appendChild(el("span", "param-label", "Search"));
+      var c1 = el("div", "param-control");
+      var searchIn = document.createElement("input");
+      searchIn.type = "text"; searchIn.id = "paramTextSearch" + sfx;
+      searchIn.placeholder = "Search text...";
+      searchIn.style.flex = "1"; searchIn.style.fontSize = "var(--text-xs)";
+      searchIn.style.padding = "var(--space-1)";
+      searchIn.style.border = "1px solid var(--color-border)";
+      searchIn.style.borderRadius = "var(--radius-sm)";
+      searchIn.style.background = "var(--color-bg)";
+      searchIn.style.color = "var(--color-text)";
+      c1.appendChild(searchIn);
+      r1.appendChild(c1);
+      body.appendChild(r1);
+      var r2 = el("div", "param-row");
+      r2.appendChild(el("span", "param-label", "Fuzzy"));
+      var c2 = el("div", "param-control");
+      c2.appendChild(numberInput("paramTextFuzzy" + sfx, 0.50, 1.00, 0.80, 0.01));
+      r2.appendChild(c2);
+      body.appendChild(r2);
+    } else if (stepType === "numbers") {
+      var r1 = el("div", "param-row");
+      r1.appendChild(el("span", "param-label", "Operator"));
+      var c1 = el("div", "param-control");
+      var sel = document.createElement("select");
+      sel.id = "paramNumOperator" + sfx;
+      sel.style.fontSize = "var(--text-xs)";
+      [["gt",">"],["lt","<"],["eq","="],["gte","≥"],["lte","≤"],["range","range"]].forEach(function(pair) {
+        var opt = document.createElement("option"); opt.value = pair[0]; opt.textContent = pair[1];
+        sel.appendChild(opt);
+      });
+      c1.appendChild(sel);
+      r1.appendChild(c1);
+      body.appendChild(r1);
+      var r2 = el("div", "param-row");
+      r2.appendChild(el("span", "param-label", "Target"));
+      var c2 = el("div", "param-control");
+      var targetIn = document.createElement("input");
+      targetIn.type = "number"; targetIn.id = "paramNumTarget" + sfx; targetIn.style.width = "4rem";
+      targetIn.style.fontSize = "var(--text-xs)";
+      c2.appendChild(targetIn);
+      r2.appendChild(c2);
+      body.appendChild(r2);
+    } else if (stepType === "template") {
+      var r1 = el("div", "param-row");
+      r1.appendChild(el("span", "param-label", "Template"));
+      var c1 = el("div", "param-control");
+      var capBtn = el("button", "btn btn-small", "Capture Frame");
+      var tsLabel = el("span", "param-value", "—");
+      tsLabel.id = "paramTemplateRef" + sfx;
+      capBtn.addEventListener("click", function () {
+        state.multitoolSteps[idx]._refTs = state.currentTimestamp;
+        tsLabel.textContent = formatTimestamp(state.currentTimestamp);
+      });
+      c1.appendChild(capBtn);
+      c1.appendChild(tsLabel);
+      r1.appendChild(c1);
+      body.appendChild(r1);
+      var r2 = el("div", "param-row");
+      r2.appendChild(el("span", "param-label", "Threshold"));
+      var c2 = el("div", "param-control");
+      c2.appendChild(numberInput("paramTemplateThresh" + sfx, 0.50, 1.00, 0.70, 0.01));
+      r2.appendChild(c2);
+      body.appendChild(r2);
+    } else if (stepType === "flow") {
+      var r1 = el("div", "param-row");
+      r1.appendChild(el("span", "param-label", "Magnitude"));
+      var c1 = el("div", "param-control");
+      c1.appendChild(numberInput("paramFlowMag" + sfx, 0.5, 20, 2.0, 0.5));
+      r1.appendChild(c1);
+      body.appendChild(r1);
+    } else if (stepType === "scene") {
+      var r1 = el("div", "param-row");
+      r1.appendChild(el("span", "param-label", "Scenes"));
+      var c1 = el("div", "param-control");
+      var addSceneBtn = el("button", "btn btn-small", "Add Scene");
+      c1.appendChild(addSceneBtn);
+      r1.appendChild(c1);
+      body.appendChild(r1);
+      var sceneList = el("div"); sceneList.id = "mtSceneList" + sfx;
+      body.appendChild(sceneList);
+      if (!state.multitoolSteps[idx]._scenes) state.multitoolSteps[idx]._scenes = [];
+      addSceneBtn.addEventListener("click", function() {
+        var name = prompt("Scene name:");
+        if (!name) return;
+        state.multitoolSteps[idx]._scenes.push({ name: name, timestamp: state.currentTimestamp });
+        var item = el("div", "param-row");
+        item.appendChild(el("span", null, name + " @ " + formatTimestamp(state.currentTimestamp)));
+        sceneList.appendChild(item);
+      });
+      var r2 = el("div", "param-row");
+      r2.appendChild(el("span", "param-label", "Threshold"));
+      var c2 = el("div", "param-control");
+      c2.appendChild(numberInput("paramSceneThresh" + sfx, 0.50, 1.00, 0.75, 0.01));
+      r2.appendChild(c2);
+      body.appendChild(r2);
+    }
+  }
+
+  function renderMultitoolParams(container) {
+    var stepsDiv = el("div", "multitool-steps");
+    state.multitoolSteps.forEach(function (step, idx) {
+      var card = el("div", "multitool-step");
+      var header = el("div", "multitool-step-header");
+      header.appendChild(el("span", "multitool-step-num", String(idx + 1)));
+      var typeSpan = el("span", "multitool-step-type");
+      typeSpan.style.color = taskTypeColor(step.type);
+      var icon = buildTypeIconSvg(step.type);
+      if (icon) typeSpan.appendChild(icon);
+      typeSpan.appendChild(document.createTextNode(" " + step.type.charAt(0).toUpperCase() + step.type.slice(1)));
+      header.appendChild(typeSpan);
+      var removeBtn = el("button", "multitool-step-remove");
+      removeBtn.title = "Remove step";
+      removeBtn.appendChild(svgDismissIcon());
+      (function (capturedIdx) {
+        removeBtn.addEventListener("click", function (e) {
+          e.stopPropagation();
+          state.multitoolSteps.splice(capturedIdx, 1);
+          renderWorkflowParams();
+          updateRunButton();
+        });
+      })(idx);
+      header.appendChild(removeBtn);
+      card.appendChild(header);
+
+      var body = el("div", "multitool-step-body" + (step.collapsed ? " collapsed" : ""));
+      renderMultitoolStepBody(body, step.type, idx);
+      card.appendChild(body);
+
+      header.addEventListener("click", function () {
+        step.collapsed = !step.collapsed;
+        body.classList.toggle("collapsed", step.collapsed);
+      });
+
+      stepsDiv.appendChild(card);
+    });
+    container.appendChild(stepsDiv);
+
+    // Add Step row
+    var addRow = el("div", "multitool-add-row");
+    var sel = document.createElement("select");
+    sel.id = "mtAddTypeSelect";
+    MULTITOOL_ALLOWED_TYPES.forEach(function (t) {
+      var opt = document.createElement("option");
+      opt.value = t.value; opt.textContent = t.label;
+      sel.appendChild(opt);
+    });
+    addRow.appendChild(sel);
+    var addBtn = el("button", "btn btn-small", "+ Add Step");
+    addBtn.addEventListener("click", function () {
+      var chosen = sel.value;
+      state.multitoolSteps.push({ type: chosen, collapsed: false });
+      renderWorkflowParams();
+      updateRunButton();
+    });
+    addRow.appendChild(addBtn);
+    container.appendChild(addRow);
+
+    if (state.multitoolSteps.length < 2) {
+      container.appendChild(el("div", "multitool-hint", "Add at least 2 tool steps to create a multi-factor filter."));
+    }
+  }
+
   function renderWorkflowParams() {
     var container = qs("#workflowParams");
     container.innerHTML = "";
@@ -2022,6 +2310,12 @@
     var intervalSlot = qs("#workflowIntervalSlot");
     if (intervalSlot) intervalSlot.innerHTML = "";
     var type = state.activeWorkflow;
+
+    if (type === "multitool") {
+      renderMultitoolParams(container);
+      renderIntervalSlot("paramMultitoolInterval", 0.5, 60, 1.0, 0.5);
+      return;
+    }
 
     if (type === "color") {
       // Color picker group: palette + brightness + hex/pipette
@@ -2646,11 +2940,14 @@
     var hasParticipants = state.runParticipants.length > 0 || !!state.selectedParticipant;
     // Template with uploaded image can run without a region (full-frame scan)
     var templateNoRegion = state.activeWorkflow === "template" && !!state.uploadedTemplate;
-    btn.disabled = (!hasRegion && !templateNoRegion) || !hasParticipants;
+    var multitoolReady = state.activeWorkflow === "multitool" && state.multitoolSteps.length >= 2;
+    btn.disabled = (!hasRegion && !templateNoRegion) || !hasParticipants || (state.activeWorkflow === "multitool" && !multitoolReady);
     if (!hasRegion && !templateNoRegion) {
       btn.setAttribute("data-tooltip", "Select a region first");
     } else if (!hasParticipants) {
       btn.setAttribute("data-tooltip", "Select participants to run");
+    } else if (state.activeWorkflow === "multitool" && !multitoolReady) {
+      btn.setAttribute("data-tooltip", "Add at least 2 steps");
     } else {
       btn.removeAttribute("data-tooltip");
     }
@@ -2706,9 +3003,87 @@
     });
   }
 
+  function gatherMultitoolStepParams(stepType, idx) {
+    var sfx = "_mt" + idx;
+    var p = {};
+    if (stepType === "color") {
+      p.target_color = {
+        h: parseFloat((qs("#paramColorH" + sfx) || {}).value) || 0,
+        s: parseFloat((qs("#paramColorS" + sfx) || {}).value) || 0,
+        v: parseFloat((qs("#paramColorV" + sfx) || {}).value) || 0,
+      };
+      var tol = parseFloat((qs("#paramColorTol" + sfx) || {}).value) || 30;
+      p.tolerance = {
+        h: Math.round(tol * 90 / 100),
+        s: Math.round(tol * 128 / 100),
+        v: Math.round(tol * 128 / 100),
+      };
+    } else if (stepType === "change") {
+      p.threshold = parseFloat((qs("#paramChangeThresh" + sfx) || {}).value) || 0.03;
+      p.noise_threshold = parseInt((qs("#paramChangeNoise" + sfx) || {}).value) || 30;
+    } else if (stepType === "similarity") {
+      var step = state.multitoolSteps[idx];
+      if (!step || step._refTs === undefined) {
+        showToast("Step " + (idx + 1) + ": capture a reference frame first");
+        return null;
+      }
+      p.reference_timestamp = step._refTs;
+      p.threshold = parseFloat((qs("#paramSimThresh" + sfx) || {}).value) || 0.90;
+    } else if (stepType === "text") {
+      p.search_string = (qs("#paramTextSearch" + sfx) || {}).value || "";
+      if (!p.search_string.trim()) {
+        showToast("Step " + (idx + 1) + ": enter a search string");
+        return null;
+      }
+      p.fuzzy_threshold = parseFloat((qs("#paramTextFuzzy" + sfx) || {}).value) || 0.80;
+    } else if (stepType === "numbers") {
+      p.operator = (qs("#paramNumOperator" + sfx) || {}).value || "gt";
+      p.target_value = parseFloat((qs("#paramNumTarget" + sfx) || {}).value);
+      if (isNaN(p.target_value)) {
+        showToast("Step " + (idx + 1) + ": enter a valid target number");
+        return null;
+      }
+    } else if (stepType === "template") {
+      var step = state.multitoolSteps[idx];
+      if (!step || step._refTs === undefined) {
+        showToast("Step " + (idx + 1) + ": capture a template frame first");
+        return null;
+      }
+      p.reference_timestamp = step._refTs;
+      p.threshold = parseFloat((qs("#paramTemplateThresh" + sfx) || {}).value) || 0.70;
+    } else if (stepType === "flow") {
+      p.magnitude_threshold = parseFloat((qs("#paramFlowMag" + sfx) || {}).value) || 2.0;
+    } else if (stepType === "scene") {
+      var step = state.multitoolSteps[idx];
+      if (!step || !step._scenes || step._scenes.length === 0) {
+        showToast("Step " + (idx + 1) + ": add at least one scene reference");
+        return null;
+      }
+      p.scene_references = step._scenes.map(function (ref) {
+        return { name: ref.name, timestamp: ref.timestamp };
+      });
+      p.threshold = parseFloat((qs("#paramSceneThresh" + sfx) || {}).value) || 0.75;
+    }
+    return p;
+  }
+
   function gatherWorkflowParams(type) {
     var params = {};
-    if (type === "color") {
+    if (type === "multitool") {
+      if (state.multitoolSteps.length < 2) {
+        showToast("Add at least 2 steps");
+        return null;
+      }
+      params.steps = [];
+      for (var i = 0; i < state.multitoolSteps.length; i++) {
+        var stepP = gatherMultitoolStepParams(state.multitoolSteps[i].type, i);
+        if (stepP === null) return null;
+        stepP.type = state.multitoolSteps[i].type;
+        params.steps.push(stepP);
+      }
+      params.interval = parseFloat((qs("#paramMultitoolInterval") || {}).value) || 1.0;
+      return params;
+    } else if (type === "color") {
       params.target_color = {
         h: parseFloat((qs("#paramColorH") || {}).value) || 0,
         s: parseFloat((qs("#paramColorS") || {}).value) || 0,
@@ -2928,6 +3303,7 @@
   }
 
   var TASK_TYPE_ICON_FILES = {
+    multitool: "link",
     color: "eye-dropper",
     change: "bolt",
     similarity: "photo",
@@ -3358,11 +3734,56 @@
       }
     }
 
+    // For multitool, rebuild steps state before rendering
+    if (task.type === "multitool") {
+      var mtParams = task.parameters || {};
+      state.multitoolSteps = (mtParams.steps || []).map(function (s) {
+        var step = { type: s.type, collapsed: true };
+        if (s.reference_timestamp !== undefined) step._refTs = s.reference_timestamp;
+        if (s.scene_references) step._scenes = s.scene_references.map(function (ref) {
+          return { name: ref.name, timestamp: ref.timestamp };
+        });
+        return step;
+      });
+    }
+
     // Rebuild param controls then set values
     renderWorkflowParams();
 
     var params = task.parameters || {};
-    if (task.type === "color") {
+    if (task.type === "multitool") {
+      setInputValue("#paramMultitoolInterval", params.interval || 1.0);
+      // Restore per-step values
+      (params.steps || []).forEach(function (s, i) {
+        var sfx = "_mt" + i;
+        if (s.type === "color" && s.target_color) {
+          setInputValue("#paramColorH" + sfx, s.target_color.h || 0);
+          setInputValue("#paramColorS" + sfx, s.target_color.s || 0);
+          setInputValue("#paramColorV" + sfx, s.target_color.v || 0);
+          var stol = s.tolerance ? Math.round(s.tolerance.h * 100 / 90) : 30;
+          setInputValue("#paramColorTol" + sfx, stol);
+          var rgb = hsvToRgb(s.target_color.h || 0, s.target_color.s || 0, s.target_color.v || 0);
+          setInputValue("#paramColorHex" + sfx, rgbToHex(rgb.r, rgb.g, rgb.b));
+        } else if (s.type === "change") {
+          setInputValue("#paramChangeThresh" + sfx, s.threshold || 0.03);
+          setInputValue("#paramChangeNoise" + sfx, s.noise_threshold || 30);
+        } else if (s.type === "similarity") {
+          setInputValue("#paramSimThresh" + sfx, s.threshold || 0.90);
+        } else if (s.type === "text") {
+          setInputValue("#paramTextSearch" + sfx, s.search_string || "");
+          setInputValue("#paramTextFuzzy" + sfx, s.fuzzy_threshold || 0.80);
+        } else if (s.type === "numbers") {
+          setInputValue("#paramNumOperator" + sfx, s.operator || "gt");
+          setInputValue("#paramNumTarget" + sfx, s.target_value || 0);
+        } else if (s.type === "template") {
+          setInputValue("#paramTemplateThresh" + sfx, s.threshold || 0.70);
+        } else if (s.type === "flow") {
+          setInputValue("#paramFlowMag" + sfx, s.magnitude_threshold || 2.0);
+        } else if (s.type === "scene") {
+          setInputValue("#paramSceneThresh" + sfx, s.threshold || 0.75);
+        }
+      });
+    } else if (task.type === "color") {
       setInputValue("#paramColorH", params.target_color ? params.target_color.h : 90);
       setInputValue("#paramColorS", params.target_color ? params.target_color.s : 200);
       setInputValue("#paramColorV", params.target_color ? params.target_color.v : 200);
@@ -3875,6 +4296,18 @@
         row.appendChild(el("span", "result-timestamp", formatTimestamp(r.timestamp)));
         row.appendChild(el("span", "result-detail", r.scene_name));
         row.appendChild(el("span", "result-score", (r.score * 100).toFixed(1) + "%"));
+      } else if (task.type === "multitool") {
+        row.dataset.timestamp = r.timestamp;
+        row.appendChild(el("span", "result-timestamp", formatTimestamp(r.timestamp)));
+        var badges = el("span", "result-detail multitool-badges");
+        (r.tool_types || []).forEach(function (t) {
+          var badge = el("span", "multitool-type-badge");
+          badge.style.color = taskTypeColor(t);
+          badge.textContent = t;
+          badges.appendChild(badge);
+        });
+        row.appendChild(badges);
+        row.appendChild(el("span", "result-score", ((r.min_confidence || 0) * 100).toFixed(1) + "%"));
       }
 
       if (matchedEvent) {

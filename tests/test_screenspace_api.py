@@ -558,3 +558,72 @@ def test_events_bulk_exclude_empty_ids(client):
         json={"ids": []},
     )
     assert resp.status_code == 400
+
+
+# ---- Multitool tasks ----
+
+
+def test_create_multitool_task_too_few_steps(client):
+    _create_region(client, "healthbar")
+    resp = client.post(
+        "/screenspace/api/tasks",
+        json={
+            "type": "multitool",
+            "participant": "P01",
+            "region": "healthbar",
+            "parameters": {"steps": [{"type": "color"}]},
+        },
+    )
+    assert resp.status_code == 400
+    data = resp.get_json()
+    assert "at least 2" in data["error"]
+
+
+def test_create_multitool_task_invalid_step_type(client):
+    _create_region(client, "healthbar")
+    resp = client.post(
+        "/screenspace/api/tasks",
+        json={
+            "type": "multitool",
+            "participant": "P01",
+            "region": "healthbar",
+            "parameters": {
+                "steps": [
+                    {"type": "color", "target_color": {"h": 0, "s": 0, "v": 0}},
+                    {"type": "timelapse"},
+                ]
+            },
+        },
+    )
+    assert resp.status_code == 400
+    data = resp.get_json()
+    assert "invalid type" in data["error"]
+
+
+def test_create_multitool_task_no_steps(client):
+    _create_region(client, "healthbar")
+    resp = client.post(
+        "/screenspace/api/tasks",
+        json={
+            "type": "multitool",
+            "participant": "P01",
+            "region": "healthbar",
+            "parameters": {},
+        },
+    )
+    assert resp.status_code == 400
+
+
+def _create_region(client, name, x=100, y=20, w=300, h=30):
+    client.post(
+        "/screenspace/api/regions",
+        json={
+            "name": name,
+            "x": x,
+            "y": y,
+            "w": w,
+            "h": h,
+            "canvas_width": 1920,
+            "canvas_height": 1080,
+        },
+    )
