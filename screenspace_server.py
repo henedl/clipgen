@@ -68,7 +68,7 @@ _VIDEO_CAP_MAX = 3
 _video_cap_lock = threading.Lock()
 _video_metadata_cache: Dict[str, Dict[str, Any]] = {}
 
-_assets_dir = Path(__file__).resolve().parent / "assets" / "web"
+_assets_dir = utils.get_bundled_assets_root() / "assets" / "web"
 
 # ---- Blueprint ----
 
@@ -90,7 +90,7 @@ def serve_static(filename: str) -> FlaskResponse:
 
 @screenspace_bp.route("/icons/<path:filename>")
 def serve_icons(filename: str) -> FlaskResponse:
-    icons_dir = Path(__file__).resolve().parent / "assets" / "icons"
+    icons_dir = utils.get_bundled_assets_root() / "assets" / "icons"
     return send_from_directory(icons_dir, filename)
 
 

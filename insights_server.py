@@ -40,7 +40,7 @@ _insights_data: Dict[str, Any] = {}
 _output_dir: Union[str, Path] = ""
 _sprite_cache: Dict[str, bytes] = {}
 
-_assets_dir = Path(__file__).resolve().parent / "assets" / "web"
+_assets_dir = utils.get_bundled_assets_root() / "assets" / "web"
 
 # ---- Blueprint ----
 

@@ -67,7 +67,7 @@ _settings_defaults: Dict[str, Any] = {
     name: getattr(config, name) for name in getattr(config, "STUDIO_SETTINGS", {})
 }
 
-_assets_dir = Path(__file__).resolve().parent / "assets" / "web"
+_assets_dir = utils.get_bundled_assets_root() / "assets" / "web"
 
 # ---- Blueprint ----
 

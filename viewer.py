@@ -28,7 +28,6 @@ Artifact manifest (save_manifest / load_manifest_*):
 """
 
 import json
-import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -191,10 +190,7 @@ def _generate_viewer_html(
     Shared implementation for timeline and gallery viewer generation.
     Returns the path to the generated HTML, or None on failure.
     """
-    if getattr(sys, "frozen", False):
-        assets_base = Path(sys.executable).resolve().parent
-    else:
-        assets_base = Path(__file__).resolve().parent
+    assets_base = utils.get_bundled_assets_root()
     assets_dir = assets_base / "assets" / "web"
     template_path = assets_dir / template_name
     js_path = assets_dir / js_name
