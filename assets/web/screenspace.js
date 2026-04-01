@@ -1869,6 +1869,75 @@
     if (tip) tip.classList.add("hidden");
   }
 
+  // ---- Tool info tooltip ----
+
+  var TOOL_INFO = {
+    color: "[TODO_INFO] Color tool: finds frames where a region's average color matches your chosen target within the tolerance range. Useful for tracking UI state indicators, health bars, or any element identified by a specific color.",
+    change: "[TODO_INFO] Change tool: detects frames where pixel differences in the region exceed the threshold. Good for spotting sudden visual changes like screen transitions, pop-ups appearing, or loading states completing.",
+    similarity: "[TODO_INFO] Similarity tool: compares each frame against a captured reference using structural similarity (SSIM). Use it to find moments that look like a specific reference frame — e.g. a particular menu, dialog, or game state.",
+    text: "[TODO_INFO] Text tool: performs OCR on the region and fuzzy-matches against your search text. Useful for detecting when specific labels, error messages, or button text appear on screen.",
+    numbers: "[TODO_INFO] Numbers tool: reads numeric values from the region via OCR and compares them against your target using the selected operator. Great for monitoring scores, timers, counters, or any on-screen number.",
+    timelapse: "[TODO_INFO] Timelapse tool: generates a sped-up video or GIF of the region over the selected time range. Unlike other tools, this produces a single artifact rather than detecting individual frames.",
+    template: "[TODO_INFO] Template tool: searches the full video frame for a captured or uploaded reference image using template matching. Works across the entire frame, not just the selected region — ideal for finding icons, buttons, or UI elements wherever they appear.",
+    flow: "[TODO_INFO] Flow tool: detects motion in the region via dense optical flow. Higher magnitude thresholds filter out subtle movements. Useful for detecting player movement, animations starting, or activity in a specific area.",
+    scene: "[TODO_INFO] Scene tool: classifies each frame by comparing it to your captured reference scenes. Useful for building a timeline of when different screens, menus, or game levels are active."
+  };
+
+  var _toolInfoPinned = false;
+
+  function showToolInfoTooltip(anchorEl) {
+    var tip = qs("#toolInfoTooltip");
+    if (!tip) return;
+    var type = state.activeWorkflow;
+    var text = TOOL_INFO[type] || "";
+    tip.innerHTML = "";
+
+    var header = el("div", "tool-info-header");
+    header.appendChild(el("strong", null, type.charAt(0).toUpperCase() + type.slice(1)));
+    var closeBtn = el("button", "tool-info-close hidden");
+    closeBtn.appendChild(svgDismissIcon());
+    closeBtn.addEventListener("click", function () {
+      hideToolInfoTooltip(true);
+    });
+    header.appendChild(closeBtn);
+    tip.appendChild(header);
+
+    tip.appendChild(el("p", "tool-info-body", text));
+
+    tip.classList.remove("hidden");
+    positionToolInfoTooltip(tip, anchorEl);
+  }
+
+  function positionToolInfoTooltip(tip, anchorEl) {
+    var rect = anchorEl.getBoundingClientRect();
+    var x = rect.left;
+    var y = rect.bottom + 6;
+    tip.style.left = x + "px";
+    tip.style.top = y + "px";
+    var tipRect = tip.getBoundingClientRect();
+    if (tipRect.right > window.innerWidth - 8) {
+      tip.style.left = (window.innerWidth - tipRect.width - 8) + "px";
+    }
+    if (tipRect.bottom > window.innerHeight - 8) {
+      tip.style.top = (rect.top - tipRect.height - 6) + "px";
+    }
+  }
+
+  function pinToolInfoTooltip() {
+    _toolInfoPinned = true;
+    var tip = qs("#toolInfoTooltip");
+    if (!tip) return;
+    var closeBtn = tip.querySelector(".tool-info-close");
+    if (closeBtn) closeBtn.classList.remove("hidden");
+  }
+
+  function hideToolInfoTooltip(force) {
+    if (_toolInfoPinned && !force) return;
+    _toolInfoPinned = false;
+    var tip = qs("#toolInfoTooltip");
+    if (tip) tip.classList.add("hidden");
+  }
+
   function computeTickInterval(visibleSeconds) {
     var candidates = [1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600];
     for (var i = 0; i < candidates.length; i++) {
@@ -1906,12 +1975,32 @@
   function initWorkflowTabs() {
     qsa(".wf-tab").forEach(function (tab) {
       tab.addEventListener("click", function () {
+        hideToolInfoTooltip(true);
         state.activeWorkflow = tab.dataset.type;
         qsa(".wf-tab").forEach(function (t) { t.classList.remove("active"); });
         tab.classList.add("active");
         renderWorkflowParams();
       });
     });
+    // Tool info icon in action row
+    var infoBtn = qs("#toolInfoBtn");
+    if (infoBtn) {
+      infoBtn.addEventListener("mouseenter", function () {
+        if (!_toolInfoPinned) showToolInfoTooltip(infoBtn);
+      });
+      infoBtn.addEventListener("mouseleave", function () {
+        hideToolInfoTooltip(false);
+      });
+      infoBtn.addEventListener("click", function (e) {
+        e.stopPropagation();
+        if (_toolInfoPinned) {
+          hideToolInfoTooltip(true);
+        } else {
+          showToolInfoTooltip(infoBtn);
+          pinToolInfoTooltip();
+        }
+      });
+    }
     renderWorkflowParams();
   }
 
@@ -1928,6 +2017,8 @@
   function renderWorkflowParams() {
     var container = qs("#workflowParams");
     container.innerHTML = "";
+    hideToolInfoTooltip(true);
+    _toolInfoPinned = false;
     var intervalSlot = qs("#workflowIntervalSlot");
     if (intervalSlot) intervalSlot.innerHTML = "";
     var type = state.activeWorkflow;
