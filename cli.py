@@ -419,11 +419,7 @@ def get_runtime_working_dir() -> str:
     """
     if getattr(sys, "frozen", False):
         return str(
-            Path(
-                getattr(
-                    sys, "_MEIPASS", str(Path(sys.executable).resolve().parent)
-                )
-            )
+            Path(getattr(sys, "_MEIPASS", str(Path(sys.executable).resolve().parent)))
         )
     return str(Path(__file__).resolve().parent)
 
