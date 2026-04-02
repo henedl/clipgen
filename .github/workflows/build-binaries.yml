@@ -6,6 +6,10 @@ on:
     tags:
       - "v*"
 
+permissions:
+  contents: read
+  actions: write
+
 jobs:
   build:
     strategy:
@@ -32,8 +36,8 @@ jobs:
 
       - name: Install dependencies
         run: |
-          uv sync
-          uv pip install pyinstaller
+          uv sync --torch-backend cpu
+          uv pip install pyinstaller==6.19.0
 
       - name: Build executable
         run: uv run pyinstaller --clean --noconfirm build/clipgen.spec
