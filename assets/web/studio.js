@@ -2332,9 +2332,6 @@
       setTitleSpinner("artifactsSpinner", false);
       state.generating = false;
       setGeneratingLock(false);
-      if (allArtifacts.length > 0) {
-        state.generatedArtifacts = state.generatedArtifacts.concat(allArtifacts);
-      }
       updateViewerButton();
       var msg = "Generated " + totalSuccess + " artifact(s)";
       if (totalFail > 0) msg += ", " + totalFail + " failed";
@@ -2367,7 +2364,11 @@
         if (data.ok) {
           for (var ci = 0; ci < cards.length; ci++) setCardResult(cards[ci], true);
           totalSuccess += (data.generated || 1);
-          if (data.artifacts) allArtifacts = allArtifacts.concat(data.artifacts);
+          if (data.artifacts) {
+            allArtifacts = allArtifacts.concat(data.artifacts);
+            state.generatedArtifacts = state.generatedArtifacts.concat(data.artifacts);
+            updateViewerButton();
+          }
         } else {
           for (var ci = 0; ci < cards.length; ci++) setCardResult(cards[ci], false);
           totalFail++;
@@ -2442,7 +2443,11 @@
               var res = data.results[ri];
               if (res.ok) {
                 totalSuccess++;
-                if (res.artifact) allArtifacts.push(res.artifact);
+                if (res.artifact) {
+                  allArtifacts.push(res.artifact);
+                  state.generatedArtifacts.push(res.artifact);
+                  updateViewerButton();
+                }
                 if (intakeCards[ri]) setCardResult(intakeCards[ri], true);
               } else {
                 totalFail++;

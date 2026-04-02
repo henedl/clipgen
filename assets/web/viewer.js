@@ -22,7 +22,7 @@
   var _filmstripObserver = null;
   var _filmstripThumbQueue = [];
   var _filmstripThumbActive = 0;
-  var FILMSTRIP_CONCURRENCY = 2;
+  var FILMSTRIP_CONCURRENCY = 4;
   var FILMSTRIP_STORAGE_KEY = "clipgen-viewer-filmstrip";
 
   var _cardScrub = null; // { mediaEl, videoEl, raf }
@@ -1342,6 +1342,7 @@
     if (!list) return;
     list.innerHTML = "";
 
+    var frag = document.createDocumentFragment();
     orderedArtifactsForList().forEach(function (a) {
       if (a.type === "transcript") return;
       var card = el("div", "artifact-card");
@@ -1395,8 +1396,9 @@
       card.addEventListener("mousemove", moveTooltip);
       card.addEventListener("mouseleave", hideTooltip);
 
-      list.appendChild(card);
+      frag.appendChild(card);
     });
+    list.appendChild(frag);
 
     updateListVisibility();
     if (state.selectedId) {

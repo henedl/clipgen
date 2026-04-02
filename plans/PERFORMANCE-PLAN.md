@@ -62,7 +62,7 @@ The backend already streams results during analysis, but the frontend polls at 3
 
 How fast clipgen *feels* to the user, independent of actual processing time.
 
-### - [ ] 1A. Streaming progress for Screenspace analysis tasks
+### - [x] 1A. Streaming progress for Screenspace analysis tasks
 
 **Prior art:** Backend already streams results during analysis (`910df4a`). Frontend polls every 3s (increased from 2s in `89bd136`) with skip-if-unchanged fingerprinting and tab-hidden pause.
 
@@ -72,7 +72,7 @@ How fast clipgen *feels* to the user, independent of actual processing time.
 
 **Trade-offs:** SSE adds a persistent connection per client. Flask's dev server handles this fine for single-user; production would need `gunicorn --worker-class gevent` or similar. Fallback: shorten poll interval to 500ms (cheap since `/api/tasks` is a dict read).
 
-### - [ ] 1B. Preload first frame when a video is selected in Screenspace
+### - [x] 1B. Preload first frame when a video is selected in Screenspace
 
 **Prior art:** Viewer already preloads clips as muted paused `<video>` elements (`8206470`). Same principle, different context.
 
@@ -82,7 +82,7 @@ How fast clipgen *feels* to the user, independent of actual processing time.
 
 **Trade-offs:** Negligible. Tiny network cost, large perceptual win.
 
-### - [ ] 1C. Optimistic UI updates in Studio
+### - [x] 1C. Optimistic UI updates in Studio
 
 **Current:** Generate actions in Studio stream progress via ndjson (`/api/generate`), but the clip list only refreshes after the stream closes. The user waits for the full batch to finish before seeing new artifacts.
 
@@ -90,7 +90,7 @@ How fast clipgen *feels* to the user, independent of actual processing time.
 
 **Trade-offs:** Requires handling partial state on cancel/error. Low risk since Studio already parses the ndjson stream line-by-line.
 
-### - [ ] 1D. Skeleton loading states for web UIs
+### - [x] 1D. Skeleton loading states for web UIs
 
 **Current:** Panels render empty, then fill. In Studio and Insights Builder, the clip/insight lists pop in after the initial API fetch completes.
 
@@ -98,7 +98,7 @@ How fast clipgen *feels* to the user, independent of actual processing time.
 
 **Trade-offs:** Pure CSS/HTML, no backend change. Small effort.
 
-### - [ ] 1E. Frontend DOM batching for large artifact lists
+### - [x] 1E. Frontend DOM batching for large artifact lists
 
 **Prior art:** DocumentFragment batching already applied to Studio grid rendering (`89bd136`). Not yet applied to Viewer or Screenspace result lists.
 
@@ -108,7 +108,7 @@ How fast clipgen *feels* to the user, independent of actual processing time.
 
 **Trade-offs:** None. Strictly better. Same pattern should be applied to Screenspace result lists and Viewer clip lists.
 
-### - [ ] 1F. Filmstrip thumbnail concurrency
+### - [x] 1F. Filmstrip thumbnail concurrency
 
 **Prior art:** Filmstrip concurrency was increased from 1→3 in `c5b604a`. Currently at 2 in viewer.js (may have been adjusted since).
 
@@ -394,15 +394,15 @@ Additional performance area: the raw speed of reading video frames and writing o
 | [ ] | 2 | 2C — Universal phash pre-filter (always-on candidate) | High — cheap filter, broad applicability, minimal quality loss |
 | [ ] | 3 | 5A — Cache uv in CI | High — near-instant CI installs |
 | [ ] | 4 | 3A — Parallel clip cutting | High — 3-4x faster batch generation |
-| [ ] | 5 | 1A — SSE for Screenspace progress | Medium — eliminates perceived stalls |
-| [ ] | 6 | 1B — Preload first frames | Medium — instant first interaction |
+| [x] | 5 | 1A — SSE for Screenspace progress | Medium — eliminates perceived stalls |
+| [x] | 6 | 1B — Preload first frames | Medium — instant first interaction |
 | [ ] | 7 | 3D — Transcript caching to disk | Medium — eliminates repeat transcription |
-| [ ] | 8 | 1E — DOM batching with fragments | Medium — smoother large lists |
+| [x] | 8 | 1E — DOM batching with fragments | Medium — smoother large lists |
 | [ ] | 9 | 5D — Parallel tests with xdist | Medium — faster CI feedback |
 | [ ] | 10 | 2F — Parallel region analysis | Medium — scales with CPU cores |
 | [ ] | 11 | 2E — Batch frame extraction via ffmpeg | Low-Medium — depends on video codec |
 | [ ] | 12 | 4A — Lazy-import heavy libs | Low-Medium — saves seconds on startup |
-| [ ] | 13 | 1C — Optimistic UI in Studio | Low-Medium — better feel during generation |
+| [x] | 13 | 1C — Optimistic UI in Studio | Low-Medium — better feel during generation |
 | [ ] | 14 | 5B — Skip torch for typecheck | Low — job already ~25s, marginal gain |
 | [ ] | 15 | 3B — Titlecard batching | Low — small per-clip overhead |
 | [ ] | 16 | 4C — Cache-busted static assets | Low — marginal for local tool |

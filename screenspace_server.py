@@ -36,7 +36,9 @@ API endpoints (all under /screenspace/):
 from __future__ import annotations
 
 import copy
+import json
 import math
+import queue as queue_mod
 import threading
 import uuid
 from collections import OrderedDict
@@ -67,6 +69,34 @@ _video_cap_cache: OrderedDict[str, Any] = OrderedDict()
 _VIDEO_CAP_MAX = 3
 _video_cap_lock = threading.Lock()
 _video_metadata_cache: Dict[str, Dict[str, Any]] = {}
+
+# ---- SSE (Server-Sent Events) client registry ----
+
+_sse_clients: list[queue_mod.Queue[str]] = []
+_sse_clients_lock = threading.Lock()
+
+
+def _notify_sse_clients(event_type: str = "update") -> None:
+    """Push a notification to all connected SSE clients."""
+    with _sse_clients_lock:
+        for q in _sse_clients:
+            try:
+                q.put_nowait(event_type)
+            except queue_mod.Full:
+                pass
+
+
+def _sse_task_payload() -> str:
+    """Build an SSE data line with current task state."""
+    tasks = _worker.get_all_tasks() if _worker else []
+    clean = [_clean_task(t) for t in tasks]
+    paused = _worker.is_paused if _worker else False
+    alive = _worker.is_alive if _worker else False
+    data = json.dumps(
+        {"ok": True, "tasks": clean, "paused": paused, "worker_alive": alive}
+    )
+    return f"data: {data}\n\n"
+
 
 _assets_dir = utils.get_bundled_assets_root() / "assets" / "web"
 
@@ -440,6 +470,44 @@ def api_stashes_restore(stash_id: str) -> FlaskResponse:
 
 
 # ---- Tasks CRUD ----
+
+
+@screenspace_bp.route("/api/tasks/stream")
+def api_tasks_stream() -> FlaskResponse:
+    """SSE endpoint for live task updates (replaces polling)."""
+    client_q: queue_mod.Queue[str] = queue_mod.Queue(maxsize=64)
+    with _sse_clients_lock:
+        _sse_clients.append(client_q)
+
+    def generate():  # type: ignore[no-untyped-def]
+        try:
+            # Send current state immediately on connect
+            yield _sse_task_payload()
+            while True:
+                try:
+                    client_q.get(timeout=15)
+                    # Drain any queued notifications (coalesce rapid updates)
+                    while not client_q.empty():
+                        try:
+                            client_q.get_nowait()
+                        except queue_mod.Empty:
+                            break
+                    yield _sse_task_payload()
+                except queue_mod.Empty:
+                    # Keepalive comment to prevent connection timeout
+                    yield ": keepalive\n\n"
+        except GeneratorExit:
+            pass
+        finally:
+            with _sse_clients_lock:
+                if client_q in _sse_clients:
+                    _sse_clients.remove(client_q)
+
+    return Response(
+        generate(),
+        mimetype="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @screenspace_bp.route("/api/tasks")
@@ -860,6 +928,7 @@ def api_tasks_create() -> FlaskResponse:
 
     _worker.enqueue(task)
     _manifest.setdefault("tasks", []).append(task)
+    _notify_sse_clients("task_created")
 
     return jsonify({"ok": True, "task": _clean_task(task)})
 
@@ -876,8 +945,10 @@ def api_tasks_cancel(task_id: str) -> FlaskResponse:
             t for t in _manifest.get("tasks", []) if t["id"] != task_id
         ]
         _persist_manifest()
+        _notify_sse_clients("task_dismissed")
         return jsonify({"ok": True})
     if _worker.cancel(task_id):
+        _notify_sse_clients("task_cancelled")
         return jsonify({"ok": True})
     return jsonify({"ok": False, "error": "Task not found or already finished"}), 400
 
@@ -891,6 +962,7 @@ def api_tasks_reorder() -> FlaskResponse:
     if not data or "task_ids" not in data:
         return jsonify({"ok": False, "error": "task_ids list required"}), 400
     _worker.reorder(data["task_ids"])
+    _notify_sse_clients("reorder")
     return jsonify({"ok": True})
 
 
@@ -900,6 +972,7 @@ def api_tasks_pause() -> FlaskResponse:
     if not _worker:
         return jsonify({"ok": False, "error": "Worker not initialized"}), 500
     _worker.pause()
+    _notify_sse_clients("pause")
     return jsonify({"ok": True, "paused": True})
 
 
@@ -909,6 +982,7 @@ def api_tasks_resume() -> FlaskResponse:
     if not _worker:
         return jsonify({"ok": False, "error": "Worker not initialized"}), 500
     _worker.resume()
+    _notify_sse_clients("resume")
     return jsonify({"ok": True, "paused": False})
 
 
@@ -1075,6 +1149,7 @@ def _init_screenspace_state(
 
     _worker = screenspace.ScreenspaceWorker()
     _worker.on_task_complete = _persist_manifest
+    _worker.on_progress_update = lambda: _notify_sse_clients("progress")
     _worker.restore_tasks(_manifest.get("tasks", []))
     _worker.start()
 

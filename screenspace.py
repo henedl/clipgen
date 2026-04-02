@@ -2106,6 +2106,8 @@ class ScreenspaceWorker:
         self._running = False
         self._paused = threading.Event()
         self.on_task_complete: Optional[Callable[[], None]] = None
+        self.on_progress_update: Optional[Callable[[], None]] = None
+        self._last_progress_notify: float = 0.0
 
     def start(self) -> None:
         """Start the worker thread."""
@@ -2356,6 +2358,11 @@ class ScreenspaceWorker:
                         self.on_task_complete()
                     except Exception as exc:
                         utils.warning_print(f"on_task_complete callback failed: {exc}")
+                if self.on_progress_update:
+                    try:
+                        self.on_progress_update()
+                    except Exception:
+                        pass
             except Exception as exc:
                 utils.warning_print(f"Worker loop error: {exc}")
 
@@ -2377,6 +2384,12 @@ class ScreenspaceWorker:
                     offset = t.get("_progress_offset", 0.0)
                     scale = t.get("_progress_scale", 1.0)
                     t["progress"] = min(offset + progress * scale, 1.0)
+            # Throttled SSE notification (~2 updates/sec)
+            now = time.monotonic()
+            if now - self._last_progress_notify >= 0.5:
+                self._last_progress_notify = now
+                if self.on_progress_update:
+                    self.on_progress_update()
 
         def _cancel_flag() -> bool:
             with self._lock:
@@ -2393,6 +2406,12 @@ class ScreenspaceWorker:
                         t["_raw_results"].append(result_dict)
                     if t.get("parameters", {}).get("detect_first"):
                         t["_cancelled"] = True
+            # Throttled SSE notification for new results
+            now = time.monotonic()
+            if now - self._last_progress_notify >= 0.5:
+                self._last_progress_notify = now
+                if self.on_progress_update:
+                    self.on_progress_update()
 
         try:
             result = self._dispatch(task, _on_progress, _cancel_flag, _on_result)
