@@ -8,31 +8,7 @@
   padding: 0;
 }
 
-:root {
-  --color-bg: #f4f2ee;
-  --color-surface: #ffffff;
-  --color-surface-alt: #f1ece4;
-  --color-text: #111827;
-  --color-text-dim: #6b7280;
-  --color-accent: #1d4f72;
-  --color-border: #e0ddd7;
-  --color-selected: rgba(29, 79, 114, 0.08);
-  --color-panel-bg: rgba(255, 255, 255, 0.97);
-  --color-panel-border: rgba(148, 163, 184, 0.22);
-  --color-panel-shadow: rgba(15, 23, 42, 0.12);
-  --color-grid: rgba(0, 0, 0, 0.03);
-  --font-mono: "SF Mono", "Fira Code", "Cascadia Code", Consolas, monospace;
-  --color-task-multitool: #2563eb;
-  --color-task-color: #8b5cf6;
-  --color-task-change: #f97316;
-  --color-task-similarity: #0ea5e9;
-  --color-task-text: #10b981;
-  --color-task-numbers: #eab308;
-  --color-task-timelapse: #ec4899;
-  --color-task-template: #f43f5e;
-  --color-task-flow: #6366f1;
-  --color-task-scene: #14b8a6;
-}
+/* Page-specific variables — shared tokens are in tokens.css */
 
 html {
   font-size: 16px;
@@ -2034,61 +2010,7 @@ body {
 
 /* Dark mode — system preference */
 
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) {
-    --color-bg: #020617;
-    --color-surface: #020617;
-    --color-surface-alt: #0b1120;
-    --color-text: #e5e7eb;
-    --color-text-dim: #9ca3af;
-    --color-accent: #38bdf8;
-    --color-border: #1f2933;
-    --color-selected: rgba(56, 189, 248, 0.2);
-    --color-panel-bg: rgba(15, 23, 42, 0.98);
-    --color-panel-border: rgba(148, 163, 184, 0.35);
-    --color-panel-shadow: rgba(0, 0, 0, 0.7);
-    --color-grid: rgba(255, 255, 255, 0.04);
-    --color-task-multitool: #60a5fa;
-    --color-task-color: #a78bfa;
-    --color-task-change: #fb923c;
-    --color-task-similarity: #22d3ee;
-    --color-task-text: #34d399;
-    --color-task-numbers: #facc15;
-    --color-task-timelapse: #f472b6;
-    --color-task-template: #fb7185;
-    --color-task-flow: #818cf8;
-    --color-task-scene: #2dd4bf;
-  }
-}
-
-/* Dark mode — manual toggle */
-
-html[data-theme="dark"] {
-  --color-bg: #020617;
-  --color-surface: #020617;
-  --color-surface-alt: #0b1120;
-  --color-text: #e5e7eb;
-  --color-text-dim: #9ca3af;
-  --color-accent: #38bdf8;
-  --color-border: #1f2933;
-  --color-selected: rgba(56, 189, 248, 0.2);
-  --color-panel-bg: rgba(15, 23, 42, 0.98);
-  --color-panel-border: rgba(148, 163, 184, 0.35);
-  --color-panel-shadow: rgba(0, 0, 0, 0.7);
-  --color-grid: rgba(255, 255, 255, 0.04);
-  --color-task-multitool: #60a5fa;
-  --color-task-color: #a78bfa;
-  --color-task-change: #fb923c;
-  --color-task-similarity: #22d3ee;
-  --color-task-text: #34d399;
-  --color-task-numbers: #facc15;
-  --color-task-timelapse: #f472b6;
-  --color-task-template: #fb7185;
-  --color-task-flow: #818cf8;
-  --color-task-scene: #2dd4bf;
-}
-
-/* Dark element overrides */
+/* Dark element overrides — shared dark tokens are in tokens.css */
 
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) .modal-card {
