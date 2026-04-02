@@ -44,6 +44,17 @@ INTERACTIVE_ARTIFACTS: List[Dict[str, Any]] = []
 INTERACTIVE_REELS: List[Dict[str, Any]] = []
 
 
+def _is_valid_artifact(a: Dict[str, Any]) -> bool:
+    """Return True if artifact has minimum required fields for viewer rendering."""
+    if not a.get("id"):
+        return False
+    if not a.get("file"):
+        return False
+    if a.get("start") is None and a.get("end") is None:
+        return False
+    return True
+
+
 def build_artifact_records_for_clip(
     clip: utils.ClipRecord,
     base_video: str,
@@ -120,6 +131,18 @@ def finalize_timeline_data(
     screenspace_events: Optional[List[Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
     """Construct the full window.CLIPGEN_DATA structure for the timeline viewer."""
+    valid_artifacts = [a for a in artifacts if _is_valid_artifact(a)]
+    dropped = len(artifacts) - len(valid_artifacts)
+    if dropped:
+        dropped_ids = [
+            a.get("id", "<no-id>") for a in artifacts if not _is_valid_artifact(a)
+        ]
+        utils.warning_print(
+            f"Skipped {dropped} artifact(s) with missing required fields "
+            f"(ids: {', '.join(str(i) for i in dropped_ids[:5])})."
+        )
+    artifacts = valid_artifacts
+
     max_time = 0.0
     for a in artifacts:
         end = a.get("end") or a.get("start") or 0
@@ -383,7 +406,14 @@ def load_manifest_artifacts() -> List[Dict[str, Any]]:
         return []
     try:
         data = json.loads(manifest_path.read_text(encoding="utf-8"))
-        return data.get("artifacts", [])
+        raw = data.get("artifacts", [])
+        valid = [a for a in raw if _is_valid_artifact(a)]
+        if len(valid) < len(raw):
+            utils.warning_print(
+                f"Manifest contained {len(raw) - len(valid)} artifact(s) with "
+                "missing fields; skipped."
+            )
+        return valid
     except (OSError, json.JSONDecodeError, AttributeError):
         return []
 

@@ -638,7 +638,9 @@
       return;
     }
 
-    state.artifacts = (data.artifacts || []).map(function (a, i) {
+    state.artifacts = (data.artifacts || []).filter(function (a) {
+      return a.id && a.file && (a.start != null || a.end != null);
+    }).map(function (a, i) {
       return Object.assign({}, a, { _idx: i });
     });
 
