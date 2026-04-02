@@ -36,7 +36,8 @@ jobs:
 
       - name: Install dependencies
         run: |
-          uv sync --torch-backend cpu
+          uv venv
+          uv pip install . --torch-backend cpu
           uv pip install pyinstaller==6.19.0
 
       - name: Build executable
