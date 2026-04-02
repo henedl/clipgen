@@ -432,6 +432,7 @@ def scan_video_frames(
     end_seconds: Optional[float] = None,
     fps: float = 0.0,
     duration: float = 0.0,
+    fast_opts: Optional[Dict[str, Any]] = None,
 ) -> None:
     """Iterate through video at interval, extract region, call callback.
 
@@ -441,6 +442,10 @@ def scan_video_frames(
     When *fps* and *duration* are provided, skips internal metadata reads.
     Uses sequential frame reading (grab/retrieve) for small intervals
     to avoid expensive H.264 seeking.
+
+    *fast_opts* enables fast-scan optimizations when provided:
+    - ``phash_skip``: skip frames whose perceptual hash is unchanged
+    - ``max_region_dim``: downscale extracted region to this max dimension
     """
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
@@ -453,6 +458,14 @@ def scan_video_frames(
         duration = total_frames / fps if fps > 0 else 0.0
     if end_seconds is None or end_seconds > duration:
         end_seconds = duration
+
+    # Fast-scan state
+    _phash_skip = bool(fast_opts and fast_opts.get("phash_skip"))
+    _max_dim = (fast_opts or {}).get("max_region_dim", 0)
+    _phash_thresh = (fast_opts or {}).get(
+        "phash_threshold", config.SCREENSPACE_FAST_SCAN_PHASH_THRESHOLD
+    )
+    _prev_phash: List[Optional[imagehash.ImageHash]] = [None]
 
     use_sequential = interval_seconds <= config.SCREENSPACE_SEQUENTIAL_READ_MAX_INTERVAL
 
@@ -476,6 +489,24 @@ def scan_video_frames(
                     break
                 ts = start_seconds + frame_idx / fps
                 cropped = extract_region(frame, region)
+                if _max_dim > 0:
+                    rh, rw = cropped.shape[:2]
+                    if rh > _max_dim or rw > _max_dim:
+                        sc = _max_dim / max(rh, rw)
+                        cropped = cv2.resize(
+                            cropped,
+                            (int(rw * sc), int(rh * sc)),
+                            interpolation=cv2.INTER_AREA,
+                        )
+                if _phash_skip:
+                    fh = compute_phash(cropped)
+                    if (
+                        _prev_phash[0] is not None
+                        and fh - _prev_phash[0] <= _phash_thresh
+                    ):
+                        frame_idx += 1
+                        continue
+                    _prev_phash[0] = fh
                 result = callback(ts, cropped)
                 if result is False:
                     break
@@ -488,6 +519,21 @@ def scan_video_frames(
             if not ret:
                 break
             cropped = extract_region(frame, region)
+            if _max_dim > 0:
+                rh, rw = cropped.shape[:2]
+                if rh > _max_dim or rw > _max_dim:
+                    sc = _max_dim / max(rh, rw)
+                    cropped = cv2.resize(
+                        cropped,
+                        (int(rw * sc), int(rh * sc)),
+                        interpolation=cv2.INTER_AREA,
+                    )
+            if _phash_skip:
+                fh = compute_phash(cropped)
+                if _prev_phash[0] is not None and fh - _prev_phash[0] <= _phash_thresh:
+                    ts += interval_seconds
+                    continue
+                _prev_phash[0] = fh
             result = callback(ts, cropped)
             if result is False:
                 break
@@ -505,10 +551,15 @@ def scan_video_full_frames(
     end_seconds: Optional[float] = None,
     fps: float = 0.0,
     duration: float = 0.0,
+    fast_opts: Optional[Dict[str, Any]] = None,
 ) -> None:
     """Like :func:`scan_video_frames` but passes the full frame (no region crop).
 
     Used by template detection which searches the entire frame.
+
+    *fast_opts* enables fast-scan optimizations (see :func:`scan_video_frames`).
+    ``max_region_dim`` downscales the full frame; ``phash_skip`` skips
+    perceptually identical frames.
     """
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
@@ -521,6 +572,14 @@ def scan_video_full_frames(
         duration = total_frames / fps if fps > 0 else 0.0
     if end_seconds is None or end_seconds > duration:
         end_seconds = duration
+
+    # Fast-scan state
+    _phash_skip = bool(fast_opts and fast_opts.get("phash_skip"))
+    _max_dim = (fast_opts or {}).get("max_region_dim", 0)
+    _phash_thresh = (fast_opts or {}).get(
+        "phash_threshold", config.SCREENSPACE_FAST_SCAN_PHASH_THRESHOLD
+    )
+    _prev_phash: List[Optional[imagehash.ImageHash]] = [None]
 
     use_sequential = interval_seconds <= config.SCREENSPACE_SEQUENTIAL_READ_MAX_INTERVAL
 
@@ -543,6 +602,24 @@ def scan_video_full_frames(
                 if not ret:
                     break
                 ts = start_seconds + frame_idx / fps
+                if _max_dim > 0:
+                    fh, fw = frame.shape[:2]
+                    if fh > _max_dim or fw > _max_dim:
+                        sc = _max_dim / max(fh, fw)
+                        frame = cv2.resize(
+                            frame,
+                            (int(fw * sc), int(fh * sc)),
+                            interpolation=cv2.INTER_AREA,
+                        )
+                if _phash_skip:
+                    ph = compute_phash(frame)
+                    if (
+                        _prev_phash[0] is not None
+                        and ph - _prev_phash[0] <= _phash_thresh
+                    ):
+                        frame_idx += 1
+                        continue
+                    _prev_phash[0] = ph
                 result = callback(ts, frame)
                 if result is False:
                     break
@@ -554,6 +631,21 @@ def scan_video_full_frames(
             ret, frame = cap.read()
             if not ret:
                 break
+            if _max_dim > 0:
+                fh, fw = frame.shape[:2]
+                if fh > _max_dim or fw > _max_dim:
+                    sc = _max_dim / max(fh, fw)
+                    frame = cv2.resize(
+                        frame,
+                        (int(fw * sc), int(fh * sc)),
+                        interpolation=cv2.INTER_AREA,
+                    )
+            if _phash_skip:
+                ph = compute_phash(frame)
+                if _prev_phash[0] is not None and ph - _prev_phash[0] <= _phash_thresh:
+                    ts += interval_seconds
+                    continue
+                _prev_phash[0] = ph
             result = callback(ts, frame)
             if result is False:
                 break
@@ -611,6 +703,7 @@ def scan_color(
     on_progress: Optional[Callable[[float], None]] = None,
     cancel_flag: Optional[Callable[[], bool]] = None,
     on_result: Optional[Callable[[Dict[str, Any]], None]] = None,
+    fast_opts: Optional[Dict[str, Any]] = None,
 ) -> List[Dict[str, Any]]:
     """Scan video for frames where region color matches target.
 
@@ -672,6 +765,7 @@ def scan_color(
         end_seconds=end_seconds,
         fps=vid_fps,
         duration=vid_duration,
+        fast_opts=fast_opts,
     )
 
     if on_progress:
@@ -691,6 +785,7 @@ def scan_changes(
     on_progress: Optional[Callable[[float], None]] = None,
     cancel_flag: Optional[Callable[[], bool]] = None,
     on_result: Optional[Callable[[Dict[str, Any]], None]] = None,
+    fast_opts: Optional[Dict[str, Any]] = None,
 ) -> List[Dict[str, Any]]:
     """Scan video for change points in a region.
 
@@ -751,6 +846,7 @@ def scan_changes(
         end_seconds=end_seconds,
         fps=vid_fps,
         duration=vid_duration,
+        fast_opts=fast_opts,
     )
 
     if on_progress:
@@ -770,6 +866,7 @@ def scan_similarity(
     on_progress: Optional[Callable[[float], None]] = None,
     cancel_flag: Optional[Callable[[], bool]] = None,
     on_result: Optional[Callable[[Dict[str, Any]], None]] = None,
+    fast_opts: Optional[Dict[str, Any]] = None,
 ) -> List[Dict[str, Any]]:
     """Find frames where region is similar to a reference.
 
@@ -859,6 +956,7 @@ def scan_similarity(
         end_seconds=end_seconds,
         fps=vid_fps,
         duration=vid_duration,
+        fast_opts=fast_opts,
     )
 
     if on_progress:
@@ -880,6 +978,7 @@ def scan_text(
     on_progress: Optional[Callable[[float], None]] = None,
     cancel_flag: Optional[Callable[[], bool]] = None,
     on_result: Optional[Callable[[Dict[str, Any]], None]] = None,
+    fast_opts: Optional[Dict[str, Any]] = None,
 ) -> List[Dict[str, Any]]:
     """Scan for text appearances in a region using EasyOCR.
 
@@ -953,6 +1052,7 @@ def scan_text(
         end_seconds=end_seconds,
         fps=vid_fps,
         duration=vid_duration,
+        fast_opts=fast_opts,
     )
 
     if on_progress:
@@ -979,6 +1079,7 @@ def scan_numbers(
     on_progress: Optional[Callable[[float], None]] = None,
     cancel_flag: Optional[Callable[[], bool]] = None,
     on_result: Optional[Callable[[Dict[str, Any]], None]] = None,
+    fast_opts: Optional[Dict[str, Any]] = None,
 ) -> List[Dict[str, Any]]:
     """Scan for numeric values in a region and apply a comparison.
 
@@ -1071,6 +1172,7 @@ def scan_numbers(
         end_seconds=end_seconds,
         fps=vid_fps,
         duration=vid_duration,
+        fast_opts=fast_opts,
     )
 
     if on_progress:
@@ -1116,6 +1218,7 @@ def scan_template(
     on_progress: Optional[Callable[[float], None]] = None,
     cancel_flag: Optional[Callable[[], bool]] = None,
     on_result: Optional[Callable[[Dict[str, Any]], None]] = None,
+    fast_opts: Optional[Dict[str, Any]] = None,
 ) -> List[Dict[str, Any]]:
     """Scan video for frames containing the template image.
 
@@ -1145,13 +1248,29 @@ def scan_template(
 
     results: List[Dict[str, Any]] = []
 
+    _tmpl_downscale = bool(fast_opts and fast_opts.get("template_downscale"))
+
     def _cb(ts: float, frame: np.ndarray) -> Optional[bool]:
         if cancel_flag and cancel_flag():
             return False
+        work_frame = frame
+        scale_back = 1
+        if _tmpl_downscale:
+            fh, fw = frame.shape[:2]
+            nw, nh = fw // 2, fh // 2
+            if nw > 0 and nh > 0:
+                work_frame = cv2.resize(frame, (nw, nh), interpolation=cv2.INTER_AREA)
+                scale_back = 2
         matches = match_template(
-            frame, template_image, threshold=threshold, mask=template_mask
+            work_frame, template_image, threshold=threshold, mask=template_mask
         )
         if matches:
+            if scale_back > 1:
+                for m in matches:
+                    m["x"] *= scale_back
+                    m["y"] *= scale_back
+                    m["w"] *= scale_back
+                    m["h"] *= scale_back
             best = max(m["score"] for m in matches)
             rd = {
                 "timestamp": ts,
@@ -1180,6 +1299,7 @@ def scan_template(
         end_seconds=end_seconds,
         fps=vid_fps,
         duration=vid_duration,
+        fast_opts=fast_opts,
     )
 
     if on_progress:
@@ -1198,6 +1318,7 @@ def scan_flow(
     on_progress: Optional[Callable[[float], None]] = None,
     cancel_flag: Optional[Callable[[], bool]] = None,
     on_result: Optional[Callable[[Dict[str, Any]], None]] = None,
+    fast_opts: Optional[Dict[str, Any]] = None,
 ) -> List[Dict[str, Any]]:
     """Scan video for motion in a region using dense optical flow.
 
@@ -1263,6 +1384,7 @@ def scan_flow(
         end_seconds=end_seconds,
         fps=vid_fps,
         duration=vid_duration,
+        fast_opts=fast_opts,
     )
 
     if on_progress:
@@ -1282,6 +1404,7 @@ def scan_scene(
     on_progress: Optional[Callable[[float], None]] = None,
     cancel_flag: Optional[Callable[[], bool]] = None,
     on_result: Optional[Callable[[Dict[str, Any]], None]] = None,
+    fast_opts: Optional[Dict[str, Any]] = None,
 ) -> List[Dict[str, Any]]:
     """Classify frames by similarity to reference scene fingerprints.
 
@@ -1369,6 +1492,7 @@ def scan_scene(
         end_seconds=end_seconds,
         fps=vid_fps,
         duration=vid_duration,
+        fast_opts=fast_opts,
     )
 
     if on_progress:
@@ -1607,6 +1731,7 @@ def scan_multitool(
     on_progress: Optional[Callable[[float], None]] = None,
     cancel_flag: Optional[Callable[[], bool]] = None,
     on_result: Optional[Callable[[Dict[str, Any]], None]] = None,
+    fast_opts: Optional[Dict[str, Any]] = None,
 ) -> List[Dict[str, Any]]:
     """Run a multi-factor scan chaining several tool types.
 
@@ -1699,6 +1824,7 @@ def scan_multitool(
         end_seconds=scan_end,
         fps=vid_fps,
         duration=vid_duration,
+        fast_opts=fast_opts,
     )
 
     if on_progress:
@@ -2327,6 +2453,27 @@ class ScreenspaceWorker:
         params = task.get("parameters", {})
         task_type = task["type"]
 
+        # Fast scan: apply interval multiplier and build optimization dict
+        scan_mode = params.get("scan_mode", "normal")
+        fast_opts: Optional[Dict[str, Any]] = None
+        if scan_mode == "fast":
+            multiplier = config.SCREENSPACE_FAST_SCAN_INTERVAL_MULTIPLIER
+            if params.get("interval", 0) > 0:
+                params["interval"] = params["interval"] * multiplier
+            _fast_dims = {
+                "color": 32,
+                "change": 128,
+                "similarity": 128,
+                "flow": 128,
+                "scene": 64,
+            }
+            fast_opts = {
+                "phash_skip": True,
+                "max_region_dim": _fast_dims.get(task_type, 0),
+            }
+            if task_type == "template":
+                fast_opts["template_downscale"] = True
+
         if task_type == "color":
             return scan_color(
                 video_path,
@@ -2339,6 +2486,7 @@ class ScreenspaceWorker:
                 on_progress=on_progress,
                 cancel_flag=cancel_flag,
                 on_result=on_result,
+                fast_opts=fast_opts,
             )
         elif task_type == "change":
             return scan_changes(
@@ -2352,6 +2500,7 @@ class ScreenspaceWorker:
                 on_progress=on_progress,
                 cancel_flag=cancel_flag,
                 on_result=on_result,
+                fast_opts=fast_opts,
             )
         elif task_type == "similarity":
             ref_frame = params.get("reference_frame")
@@ -2368,6 +2517,7 @@ class ScreenspaceWorker:
                 on_progress=on_progress,
                 cancel_flag=cancel_flag,
                 on_result=on_result,
+                fast_opts=fast_opts,
             )
         elif task_type == "text":
             return scan_text(
@@ -2382,6 +2532,7 @@ class ScreenspaceWorker:
                 on_progress=on_progress,
                 cancel_flag=cancel_flag,
                 on_result=on_result,
+                fast_opts=fast_opts,
             )
         elif task_type == "numbers":
             return scan_numbers(
@@ -2398,6 +2549,7 @@ class ScreenspaceWorker:
                 on_progress=on_progress,
                 cancel_flag=cancel_flag,
                 on_result=on_result,
+                fast_opts=fast_opts,
             )
         elif task_type == "timelapse":
             output_path = params.get("output_path", "")
@@ -2418,18 +2570,32 @@ class ScreenspaceWorker:
             template_img = params.get("template_image")
             if template_img is None:
                 raise ValueError("Template scan requires a template_image parameter")
+            tmpl_mask = params.get("template_mask")
+            # Fast scan: downscale template + mask by 2x
+            if scan_mode == "fast" and template_img is not None:
+                th, tw = template_img.shape[:2]
+                ntw, nth = tw // 2, th // 2
+                if ntw > 0 and nth > 0:
+                    template_img = cv2.resize(
+                        template_img, (ntw, nth), interpolation=cv2.INTER_AREA
+                    )
+                    if tmpl_mask is not None:
+                        tmpl_mask = cv2.resize(
+                            tmpl_mask, (ntw, nth), interpolation=cv2.INTER_AREA
+                        )
             return scan_template(
                 video_path,
                 region,
                 template_image=template_img,
                 threshold=params.get("threshold", 0),
                 interval_seconds=params.get("interval", 0),
-                template_mask=params.get("template_mask"),
+                template_mask=tmpl_mask,
                 start_seconds=params.get("start_seconds", 0.0),
                 end_seconds=params.get("end_seconds"),
                 on_progress=on_progress,
                 cancel_flag=cancel_flag,
                 on_result=on_result,
+                fast_opts=fast_opts,
             )
         elif task_type == "flow":
             return scan_flow(
@@ -2442,6 +2608,7 @@ class ScreenspaceWorker:
                 on_progress=on_progress,
                 cancel_flag=cancel_flag,
                 on_result=on_result,
+                fast_opts=fast_opts,
             )
         elif task_type == "scene":
             ref_scenes = params.get("reference_scenes")
@@ -2458,11 +2625,21 @@ class ScreenspaceWorker:
                 on_progress=on_progress,
                 cancel_flag=cancel_flag,
                 on_result=on_result,
+                fast_opts=fast_opts,
             )
         elif task_type == "multitool":
             steps = params.get("steps", [])
             if not steps or len(steps) < 2:
                 raise ValueError("Multitool requires at least 2 steps")
+            # Fast scan: multiply the interval used by scan_multitool
+            # (reads from steps[0]["interval"] with fallback to default)
+            if scan_mode == "fast" and steps:
+                mt_interval = steps[0].get(
+                    "interval", config.SCREENSPACE_DEFAULT_INTERVAL
+                )
+                steps[0]["interval"] = (
+                    mt_interval * config.SCREENSPACE_FAST_SCAN_INTERVAL_MULTIPLIER
+                )
             return scan_multitool(
                 video_path,
                 region,
@@ -2472,6 +2649,7 @@ class ScreenspaceWorker:
                 on_progress=on_progress,
                 cancel_flag=cancel_flag,
                 on_result=on_result,
+                fast_opts=fast_opts,
             )
         else:
             raise ValueError(f"Unknown task type: {task_type}")

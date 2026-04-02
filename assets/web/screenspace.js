@@ -116,6 +116,7 @@
     pipetteActive: false,
     runParticipants: [],
     runRegions: [],
+    scanMode: "normal",
     taskEvents: {},
     showExcluded: true,
     certaintyCutoff: 0,
@@ -568,6 +569,60 @@
     var chevron = el("span", "chevron");
     chevron.appendChild(svgChevronDownIcon());
     btn.appendChild(chevron);
+  }
+
+  function renderScanModePicker() {
+    var wrap = qs("#runScanModePicker");
+    if (!wrap) return;
+    wrap.innerHTML = "";
+
+    var btn = el("button", "run-picker-btn");
+    btn.type = "button";
+
+    function updateBtn() {
+      btn.innerHTML = "";
+      var isFast = state.scanMode === "fast";
+      if (isFast) {
+        var icon = el("span", "scan-mode-fast-icon");
+        var url = 'url("/screenspace/icons/chevron-double-right.svg")';
+        icon.style.maskImage = url;
+        icon.style.webkitMaskImage = url;
+        btn.appendChild(icon);
+      }
+      btn.appendChild(el("span", "run-picker-btn-text", isFast ? "Fast" : "Normal"));
+      var chev = el("span", "chevron");
+      chev.appendChild(svgChevronDownIcon());
+      btn.appendChild(chev);
+    }
+    updateBtn();
+
+    var panel = el("div", "run-picker-panel hidden");
+    ["normal", "fast"].forEach(function (mode) {
+      var lbl = document.createElement("label");
+      var rb = document.createElement("input");
+      rb.type = "radio";
+      rb.name = "scanMode";
+      rb.value = mode;
+      rb.checked = state.scanMode === mode;
+      rb.addEventListener("change", function () {
+        state.scanMode = mode;
+        updateBtn();
+        closeRunPicker();
+      });
+      lbl.appendChild(rb);
+      lbl.appendChild(document.createTextNode(mode === "fast" ? "Fast" : "Normal"));
+      panel.appendChild(lbl);
+    });
+
+    btn.addEventListener("click", function (e) {
+      e.stopPropagation();
+      var open = !panel.classList.contains("hidden");
+      panel.classList.toggle("hidden", open);
+      btn.classList.toggle("open", !open);
+    });
+
+    wrap.appendChild(btn);
+    wrap.appendChild(panel);
   }
 
   function selectParticipant(pid, initialTimestamp) {
@@ -3266,6 +3321,7 @@
       if (participants.length === 0) return;
       var params = gatherWorkflowParams(type);
       if (params === null) return;
+      if (state.scanMode === "fast") params.scan_mode = "fast";
 
       if (state.inMarker !== null) params.start_seconds = state.inMarker;
       if (state.outMarker !== null) params.end_seconds = state.outMarker;
@@ -3284,7 +3340,9 @@
             };
             return apiPost("api/tasks", body).then(function (data) {
               if (data.ok) {
-                state.tasks.push(data.task);
+                if (!state.tasks.some(function (t) { return t.id === data.task.id; })) {
+                  state.tasks.push(data.task);
+                }
                 renderTaskList();
               } else {
                 showToast(data.error || "Failed to create task for " + pid);
@@ -3304,7 +3362,9 @@
               };
               return apiPost("api/tasks", body).then(function (data) {
                 if (data.ok) {
-                  state.tasks.push(data.task);
+                  if (!state.tasks.some(function (t) { return t.id === data.task.id; })) {
+                    state.tasks.push(data.task);
+                  }
                   renderTaskList();
                 } else {
                   showToast(data.error || "Failed to create task for " + pid + " / " + regionName);
@@ -4281,6 +4341,18 @@
       badge.appendChild(iconSpan);
       card.appendChild(badge);
 
+      // Fast scan badge
+      if ((task.parameters || {}).scan_mode === "fast") {
+        var fb = el("span", "task-fast-badge");
+        var bi = el("span", "task-fast-badge-icon");
+        var burl = 'url("/screenspace/icons/chevron-double-right.svg")';
+        bi.style.maskImage = burl;
+        bi.style.webkitMaskImage = burl;
+        fb.appendChild(bi);
+        fb.appendChild(document.createTextNode("Fast"));
+        card.appendChild(fb);
+      }
+
       // Info
       var info = el("div", "task-card-info");
       var meta = el("span", "task-card-meta");
@@ -4555,14 +4627,60 @@
     var results = state.selectedTaskResults;
     var task = state.selectedTaskId ? findTask(state.selectedTaskId) : null;
 
+    // Manage fast scan label — between panel-header and resultsList
+    var fastLabel = qs("#fastScanLabel");
+    if (!fastLabel) {
+      fastLabel = el("div", "fast-scan-label hidden");
+      fastLabel.id = "fastScanLabel";
+      container.parentNode.insertBefore(fastLabel, container);
+    }
+
     if (!results || !task) {
       container.innerHTML = '<div class="panel-empty">Click a task to view results.</div>';
       countEl.textContent = "";
       actionsEl.classList.add("hidden");
+      fastLabel.classList.add("hidden");
       return;
     }
 
     actionsEl.classList.remove("hidden");
+
+    if ((task.parameters || {}).scan_mode === "fast") {
+      fastLabel.classList.remove("hidden");
+      fastLabel.innerHTML = "";
+      var fIcon = el("span", "fast-scan-label-icon");
+      var fUrl = 'url("/screenspace/icons/chevron-double-right.svg")';
+      fIcon.style.maskImage = fUrl;
+      fIcon.style.webkitMaskImage = fUrl;
+      fastLabel.appendChild(fIcon);
+      fastLabel.appendChild(document.createTextNode("Fast scan results"));
+      var rerunBtn = el("button", "ss-btn ss-btn-sm fast-scan-rerun-btn", "Re-Run Normal");
+      (function (t) {
+        rerunBtn.addEventListener("click", function () {
+          var params = {};
+          Object.keys(t.parameters || {}).forEach(function (k) { params[k] = t.parameters[k]; });
+          delete params.scan_mode;
+          apiPost("api/tasks", {
+            type: t.type,
+            participant: t.participant,
+            region: t.region || "",
+            parameters: params,
+          }).then(function (data) {
+            if (data.ok) {
+              state.tasks.push(data.task);
+              renderTaskList();
+              startSSE();
+              showToast("Re-queued in Normal mode");
+            } else {
+              showToast(data.error || "Failed to re-queue task");
+            }
+          });
+        });
+      })(task);
+      fastLabel.appendChild(rerunBtn);
+    } else {
+      fastLabel.classList.add("hidden");
+    }
 
     // Show/hide certainty controls based on whether the tool has confidence scores
     var hasConf = task && { change: 1, similarity: 1, text: 1, template: 1, scene: 1, flow: 1, multitool: 1 }[task.type];
@@ -5007,6 +5125,7 @@
           state.runParticipants = [first];
         }
         renderRunParticipantPicker();
+        renderScanModePicker();
       })
       .catch(function () { showToast("Failed to load participants"); });
 
