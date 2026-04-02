@@ -3202,6 +3202,7 @@
   // ---- Screenspace Intake ----
 
   var INTAKE_DETECTOR_COLORS = {
+    multitool: "#2563eb",
     color: "#8b5cf6",
     change: "#f97316",
     similarity: "#0ea5e9",
@@ -3214,6 +3215,7 @@
   };
 
   var INTAKE_DETECTOR_ICON_FILES = {
+    multitool: "link",
     color: "eye-dropper",
     change: "bolt",
     similarity: "photo",

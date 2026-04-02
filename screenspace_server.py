@@ -841,7 +841,10 @@ def api_tasks_create() -> FlaskResponse:
                             }
                         ), 400
                     ref_region = screenspace.extract_region(frame, step_rc)
-                    ref_scenes_list.append({"name": ref["name"], "frame": ref_region})
+                    scene_entry: dict = {"name": ref["name"], "frame": ref_region}
+                    if "threshold" in ref:
+                        scene_entry["threshold"] = float(ref["threshold"])
+                    ref_scenes_list.append(scene_entry)
                 cap.release()
                 step["reference_scenes"] = ref_scenes_list
 

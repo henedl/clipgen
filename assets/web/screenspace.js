@@ -8,7 +8,7 @@
   var FRAME_STEP = 1.0;
 
   var TASK_COLORS = {
-    multitool: "#64748b",
+    multitool: "#2563eb",
     color: "#8b5cf6",
     change: "#f97316",
     similarity: "#0ea5e9",
@@ -2182,6 +2182,9 @@
       var capBtn = el("button", "btn btn-small", "Capture Frame");
       var tsLabel = el("span", "param-value", "—");
       tsLabel.id = "paramSimRef" + sfx;
+      if (state.multitoolSteps[idx]._refTs !== undefined) {
+        tsLabel.textContent = formatTimestamp(state.multitoolSteps[idx]._refTs);
+      }
       capBtn.addEventListener("click", function () {
         state.multitoolSteps[idx]._refTs = state.currentTimestamp;
         tsLabel.textContent = formatTimestamp(state.currentTimestamp);
@@ -2248,6 +2251,9 @@
       var capBtn = el("button", "btn btn-small", "Capture Frame");
       var tsLabel = el("span", "param-value", "—");
       tsLabel.id = "paramTemplateRef" + sfx;
+      if (state.multitoolSteps[idx]._refTs !== undefined) {
+        tsLabel.textContent = formatTimestamp(state.multitoolSteps[idx]._refTs);
+      }
       capBtn.addEventListener("click", function () {
         state.multitoolSteps[idx]._refTs = state.currentTimestamp;
         tsLabel.textContent = formatTimestamp(state.currentTimestamp);
@@ -2270,30 +2276,68 @@
       r1.appendChild(c1);
       body.appendChild(r1);
     } else if (stepType === "scene") {
-      var r1 = el("div", "param-row");
-      r1.appendChild(el("span", "param-label", "Scenes"));
-      var c1 = el("div", "param-control");
-      var addSceneBtn = el("button", "btn btn-small", "Add Scene");
-      c1.appendChild(addSceneBtn);
-      r1.appendChild(c1);
-      body.appendChild(r1);
-      var sceneList = el("div"); sceneList.id = "mtSceneList" + sfx;
-      body.appendChild(sceneList);
+      var sceneList = el("div", "scene-reference-list");
+      sceneList.id = "mtSceneList" + sfx;
       if (!state.multitoolSteps[idx]._scenes) state.multitoolSteps[idx]._scenes = [];
-      addSceneBtn.addEventListener("click", function() {
-        var name = prompt("Scene name:");
-        if (!name) return;
-        state.multitoolSteps[idx]._scenes.push({ name: name, timestamp: state.currentTimestamp });
-        var item = el("div", "param-row");
-        item.appendChild(el("span", null, name + " @ " + formatTimestamp(state.currentTimestamp)));
-        sceneList.appendChild(item);
-      });
-      var r2 = el("div", "param-row");
-      r2.appendChild(el("span", "param-label", "Threshold"));
-      var c2 = el("div", "param-control");
-      c2.appendChild(numberInput("paramSceneThresh" + sfx, 0.50, 1.00, 0.75, 0.01));
-      r2.appendChild(c2);
-      body.appendChild(r2);
+      var renderMtScenes = (function (listEl, stepIdx) {
+        return function () {
+          listEl.innerHTML = "";
+          state.multitoolSteps[stepIdx]._scenes.forEach(function (ref, refIdx) {
+            if (ref.threshold === undefined) ref.threshold = 0.75;
+            var item = el("div", "scene-ref-item");
+            item.appendChild(el("span", "scene-ref-name", ref.name));
+            item.appendChild(el("span", "param-value", formatTimestamp(ref.timestamp)));
+            var threshSlider = document.createElement("input");
+            threshSlider.type = "range";
+            threshSlider.min = "0.50";
+            threshSlider.max = "1.00";
+            threshSlider.step = "0.01";
+            threshSlider.value = String(ref.threshold);
+            threshSlider.className = "scene-ref-thresh";
+            var threshVal = el("span", "param-value", String(ref.threshold));
+            threshSlider.addEventListener("input", (function (si, ri) {
+              return function () {
+                state.multitoolSteps[si]._scenes[ri].threshold = parseFloat(threshSlider.value);
+                threshVal.textContent = threshSlider.value;
+              };
+            })(stepIdx, refIdx));
+            item.appendChild(threshSlider);
+            item.appendChild(threshVal);
+            var rmBtn = el("button", "btn btn-small", "\u00d7");
+            rmBtn.addEventListener("click", (function (si, ri) {
+              return function () {
+                state.multitoolSteps[si]._scenes.splice(ri, 1);
+                renderMtScenes();
+              };
+            })(stepIdx, refIdx));
+            item.appendChild(rmBtn);
+            listEl.appendChild(item);
+          });
+        };
+      })(sceneList, idx);
+      renderMtScenes();
+      body.appendChild(sceneList);
+      var addScRow = el("div", "param-row");
+      addScRow.appendChild(el("span", "param-label", "Add Scene"));
+      var addScCtrl = el("div", "param-control");
+      var scNameInp = textInput("paramSceneName" + sfx, "e.g. menu, gameplay");
+      addScCtrl.appendChild(scNameInp);
+      var scCapBtn = el("button", "btn btn-small", "Capture");
+      (function (capturedIdx, capturedRender, capturedNameInp) {
+        scCapBtn.addEventListener("click", function () {
+          var name = capturedNameInp.value.trim();
+          if (!name) { showToast("Enter a scene name"); return; }
+          state.multitoolSteps[capturedIdx]._scenes.push({
+            name: name, timestamp: state.currentTimestamp, threshold: 0.75
+          });
+          capturedNameInp.value = "";
+          capturedRender();
+          showToast("Scene '" + name + "' at " + formatTimestamp(state.currentTimestamp));
+        });
+      })(idx, renderMtScenes, scNameInp);
+      addScCtrl.appendChild(scCapBtn);
+      addScRow.appendChild(addScCtrl);
+      body.appendChild(addScRow);
     }
   }
 
@@ -2309,6 +2353,55 @@
   function clearMultitoolDragIndicators(container) {
     var cards = container.querySelectorAll(".multitool-step.drag-over");
     for (var i = 0; i < cards.length; i++) cards[i].classList.remove("drag-over");
+  }
+
+  function taskToMultitoolStep(task) {
+    var type = task.type;
+    var allowed = MULTITOOL_ALLOWED_TYPES.some(function (t) { return t.value === type; });
+    if (!allowed) return null;
+    var params = task.parameters || {};
+    var step = { type: type, collapsed: false };
+    if (task.region) step.region = task.region;
+    if (params.reference_timestamp !== undefined) step._refTs = params.reference_timestamp;
+    if (params.scene_references) step._scenes = params.scene_references.map(function (ref) {
+      return { name: ref.name, timestamp: ref.timestamp, threshold: ref.threshold || 0.75 };
+    });
+    step._importedParams = params;
+    return step;
+  }
+
+  function restoreImportedStepValues() {
+    state.multitoolSteps.forEach(function (step, i) {
+      if (!step._importedParams) return;
+      var s = step._importedParams;
+      var sfx = "_mt" + i;
+      if (step.type === "color" && s.target_color) {
+        setInputValue("#paramColorH" + sfx, s.target_color.h || 0);
+        setInputValue("#paramColorS" + sfx, s.target_color.s || 0);
+        setInputValue("#paramColorV" + sfx, s.target_color.v || 0);
+        var stol = s.tolerance ? Math.round(s.tolerance.h * 100 / 90) : 30;
+        setInputValue("#paramColorTol" + sfx, stol);
+        var rgb = hsvToRgb(s.target_color.h || 0, s.target_color.s || 0, s.target_color.v || 0);
+        setInputValue("#paramColorHex" + sfx, rgbToHex(rgb.r, rgb.g, rgb.b));
+      } else if (step.type === "change") {
+        setInputValue("#paramChangeThresh" + sfx, s.threshold || 0.03);
+        setInputValue("#paramChangeNoise" + sfx, s.noise_threshold || 30);
+      } else if (step.type === "similarity") {
+        setInputValue("#paramSimThresh" + sfx, s.threshold || 0.90);
+      } else if (step.type === "text") {
+        setInputValue("#paramTextSearch" + sfx, s.search_string || "");
+        setInputValue("#paramTextFuzzy" + sfx, s.fuzzy_threshold || 0.80);
+      } else if (step.type === "numbers") {
+        setInputValue("#paramNumOperator" + sfx, s.operator || "gt");
+        setInputValue("#paramNumTarget" + sfx, s.target_value || 0);
+      } else if (step.type === "template") {
+        setInputValue("#paramTemplateThresh" + sfx, s.threshold || 0.70);
+      } else if (step.type === "flow") {
+        setInputValue("#paramFlowMag" + sfx, s.magnitude_threshold || 2.0);
+      }
+      delete step._importedParams;
+    });
+    syncValueDisplays();
   }
 
   function renderMultitoolParams(container) {
@@ -2380,19 +2473,47 @@
       e.preventDefault();
       e.dataTransfer.dropEffect = "move";
       clearMultitoolDragIndicators(stepsDiv);
-      var cards = stepsDiv.querySelectorAll(".multitool-step:not(.dragging)");
-      var insertIdx = getMultitoolDropIndex(stepsDiv, e.clientY);
-      if (insertIdx < cards.length) {
-        cards[insertIdx].classList.add("drag-over");
+      var isTaskDrop = e.dataTransfer.types.indexOf("application/x-task-id") >= 0;
+      if (isTaskDrop) {
+        stepsDiv.classList.add("drag-over-append");
+      } else {
+        var cards = stepsDiv.querySelectorAll(".multitool-step:not(.dragging)");
+        var insertIdx = getMultitoolDropIndex(stepsDiv, e.clientY);
+        if (insertIdx < cards.length) {
+          cards[insertIdx].classList.add("drag-over");
+        }
       }
     });
     stepsDiv.addEventListener("dragleave", function (e) {
       var card = e.target.closest(".multitool-step");
       if (card) card.classList.remove("drag-over");
+      if (!stepsDiv.contains(e.relatedTarget)) {
+        stepsDiv.classList.remove("drag-over-append");
+      }
     });
     stepsDiv.addEventListener("drop", function (e) {
       e.preventDefault();
       clearMultitoolDragIndicators(stepsDiv);
+      stepsDiv.classList.remove("drag-over-append");
+
+      // Check for task card drop (import task as step)
+      var taskId = e.dataTransfer.getData("application/x-task-id");
+      if (taskId) {
+        var task = findTask(taskId);
+        if (!task) return;
+        var step = taskToMultitoolStep(task);
+        if (!step) {
+          showToast(task.type + " cannot be added as a multitool step");
+          return;
+        }
+        state.multitoolSteps.push(step);
+        renderWorkflowParams();
+        restoreImportedStepValues();
+        showToast("Imported " + task.type + " task as step");
+        return;
+      }
+
+      // Step reorder
       var fromIdx = parseInt(e.dataTransfer.getData("text/plain"), 10);
       if (isNaN(fromIdx)) return;
       var toIdx = getMultitoolDropIndex(stepsDiv, e.clientY);
@@ -2446,6 +2567,11 @@
     if (type === "multitool") {
       renderMultitoolParams(container);
       renderIntervalSlot("paramMultitoolInterval", 0.5, 60, 1.0, 0.5);
+      addParamRow(container, "Event label", textInput("paramEventLabel", "e.g. low_health"));
+      var dfCb = document.createElement("input");
+      dfCb.type = "checkbox";
+      dfCb.id = "paramDetectFirst";
+      addParamRow(container, "Detect first", dfCb);
       return;
     }
 
@@ -3247,9 +3373,8 @@
         return null;
       }
       p.scene_references = step._scenes.map(function (ref) {
-        return { name: ref.name, timestamp: ref.timestamp };
+        return { name: ref.name, timestamp: ref.timestamp, threshold: ref.threshold || 0.75 };
       });
-      p.threshold = parseFloat((qs("#paramSceneThresh" + sfx) || {}).value) || 0.75;
     }
     p.region = state.multitoolSteps[idx].region || "";
     return p;
@@ -3270,6 +3395,10 @@
         params.steps.push(stepP);
       }
       params.interval = parseFloat((qs("#paramMultitoolInterval") || {}).value) || 1.0;
+      var mtLabelEl = qs("#paramEventLabel");
+      if (mtLabelEl && mtLabelEl.value.trim()) params.event_label = mtLabelEl.value.trim();
+      var mtDfEl = qs("#paramDetectFirst");
+      if (mtDfEl && mtDfEl.checked) params.detect_first = true;
       return params;
     } else if (type === "color") {
       params.target_color = {
@@ -3733,6 +3862,7 @@
       card.classList.add("dragging");
       e.dataTransfer.setData("text/plain", card.dataset.taskId);
       e.dataTransfer.setData("application/x-task-status", task.status);
+      e.dataTransfer.setData("application/x-task-id", card.dataset.taskId);
       e.dataTransfer.effectAllowed = "move";
     });
 
@@ -3929,7 +4059,7 @@
         if (s.region) step.region = s.region;
         if (s.reference_timestamp !== undefined) step._refTs = s.reference_timestamp;
         if (s.scene_references) step._scenes = s.scene_references.map(function (ref) {
-          return { name: ref.name, timestamp: ref.timestamp };
+          return { name: ref.name, timestamp: ref.timestamp, threshold: ref.threshold || 0.75 };
         });
         return step;
       });
@@ -3941,6 +4071,11 @@
     var params = task.parameters || {};
     if (task.type === "multitool") {
       setInputValue("#paramMultitoolInterval", params.interval || 1.0);
+      if (params.event_label) setInputValue("#paramEventLabel", params.event_label);
+      if (params.detect_first) {
+        var dfEl = qs("#paramDetectFirst");
+        if (dfEl) dfEl.checked = true;
+      }
       // Restore per-step values
       (params.steps || []).forEach(function (s, i) {
         var sfx = "_mt" + i;
@@ -3968,8 +4103,6 @@
           setInputValue("#paramTemplateThresh" + sfx, s.threshold || 0.70);
         } else if (s.type === "flow") {
           setInputValue("#paramFlowMag" + sfx, s.magnitude_threshold || 2.0);
-        } else if (s.type === "scene") {
-          setInputValue("#paramSceneThresh" + sfx, s.threshold || 0.75);
         }
       });
     } else if (task.type === "color") {
@@ -4145,7 +4278,12 @@
       // Info
       var info = el("div", "task-card-info");
       var meta = el("span", "task-card-meta");
-      meta.textContent = task.participant + " \u00b7 " + (task.region || "");
+      var eventLabel = (task.parameters || {}).event_label;
+      if (eventLabel) {
+        meta.textContent = eventLabel;
+      } else {
+        meta.textContent = task.participant + " \u00b7 " + (task.region || "");
+      }
       info.appendChild(meta);
 
       if (task.status === "running" || task.status === "paused") {
@@ -4594,7 +4732,9 @@
         (r.tool_types || []).forEach(function (t) {
           var badge = el("span", "multitool-type-badge");
           badge.style.color = taskTypeColor(t);
-          badge.textContent = t;
+          badge.title = t;
+          var icon = buildTypeIconSvg(t);
+          if (icon) badge.appendChild(icon);
           badges.appendChild(badge);
         });
         row.appendChild(badges);
