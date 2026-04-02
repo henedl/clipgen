@@ -680,6 +680,54 @@ def test_create_multitool_task_no_global_region_ok(client):
     assert "No video" in data["error"]
 
 
+def test_fast_scan_mode_passes_validation(client):
+    """scan_mode in parameters should not cause a validation error.
+
+    P01 has no video, so task creation fails at the video-existence check
+    (not at parameter validation).  This confirms scan_mode is accepted
+    and passes through to the task parameters.
+    """
+    screenspace_server._manifest["regions"]["fstest"] = {
+        "x": 0,
+        "y": 0,
+        "w": 10,
+        "h": 10,
+    }
+    resp = client.post(
+        "/screenspace/api/tasks",
+        json={
+            "type": "color",
+            "participant": "P01",
+            "region": "fstest",
+            "parameters": {
+                "scan_mode": "fast",
+                "target_color": {"h": 0, "s": 0, "v": 0},
+                "tolerance": {"h": 10, "s": 50, "v": 50},
+                "interval": 1.0,
+            },
+        },
+    )
+    data = resp.get_json()
+    # Should fail at video check, not at parameter validation
+    assert resp.status_code == 400
+    assert "video" in data["error"].lower()
+
+
+def test_clean_task_preserves_scan_mode():
+    """_clean_task should keep scan_mode in parameters (not stripped)."""
+    task = {
+        "id": "ss_test",
+        "type": "color",
+        "parameters": {
+            "scan_mode": "fast",
+            "target_color": {"h": 0, "s": 0, "v": 0},
+            "interval": 1.0,
+        },
+    }
+    cleaned = screenspace_server._clean_task(task)
+    assert cleaned["parameters"]["scan_mode"] == "fast"
+
+
 def _create_region(client, name, x=100, y=20, w=300, h=30):
     client.post(
         "/screenspace/api/regions",

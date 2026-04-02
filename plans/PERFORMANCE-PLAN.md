@@ -124,7 +124,7 @@ How fast clipgen *feels* to the user, independent of actual processing time.
 
 The heaviest computation in clipgen. Several of the experiments below trade result precision for speed — these are best offered as an explicit **"Fast Scan" mode** that the user opts into, rather than silently degrading quality. The UX contract: fast scan gives you quick, approximate results to orient yourself; if something looks interesting, re-run at full fidelity.
 
-### - [ ] 2.0. Fast Scan mode — design concept
+### - [x] 2.0. Fast Scan mode — design concept
 
 A toggle (button or dropdown next to the Run button, or a config flag `SCREENSPACE_FAST_SCAN`) that bundles several of the strategies below into a single user-facing choice:
 
@@ -139,7 +139,7 @@ When fast scan completes, the results panel could show a subtle label ("Fast sca
 
 The individual levers are described below. Any of them could also be adopted independently (always-on) if testing shows the quality trade-off is negligible.
 
-### - [ ] 2A. Adaptive resolution: low-res scan, high-res confirm
+### - [x] 2A. Adaptive resolution: low-res scan, high-res confirm
 
 **Prior art:** Downsampling already exists per-tool (`253d592`): color→64px, SSIM→256px, optical flow→256px, scene fingerprint→128px. These were introduced as fixed targets.
 
@@ -153,7 +153,7 @@ Concrete example for change detection:
 
 **Trade-offs:** Adds ~10% overhead for frames that trigger (double read + re-evaluate). Net win depends on what fraction of frames are uneventful — for most videos, >90%. In fast scan mode without re-confirmation, some borderline events may be missed, but the user has opted into that trade-off.
 
-### - [ ] 2B. Variable frame intervals (coarse-to-fine)
+### - [x] 2B. Variable frame intervals (coarse-to-fine)
 
 **Current:** Fixed interval (default 1.0s, config.py:127). Every frame is sampled uniformly regardless of content.
 
@@ -165,7 +165,7 @@ This is particularly valuable for long videos (30+ minutes) where large stretche
 
 **Trade-offs:** More complex scan logic. The two-phase UX needs thoughtful design. In normal mode, the current uniform interval is kept unchanged.
 
-### - [ ] 2C. Universal phash pre-filter for static frames
+### - [x] 2C. Universal phash pre-filter for static frames
 
 **Prior art:** pHash pre-filter introduced for similarity scans in `253d592`. Static-frame skipping added for similarity in `910df4a`. OCR skip-on-unchanged also uses a fast mean pixel diff (~0.1ms vs ~500-1000ms OCR). Infrastructure exists — threshold constant `SCREENSPACE_PHASH_THRESHOLD`, phash computation, hamming distance check.
 
@@ -177,7 +177,7 @@ This could be always-on (not just fast scan), since phash is very cheap (~0.1ms 
 
 **Trade-offs:** Risk: aggressive skipping could miss subtle changes that specific tools are designed to detect (e.g. a small counter incrementing in one corner while the rest of the frame is static). Mitigate by computing phash only over the analysis region, not the full frame. Use tool-specific thresholds if needed (tighter for change detection, looser for color analysis).
 
-### - [ ] 2D. Template matching at reduced resolution
+### - [x] 2D. Template matching at reduced resolution
 
 **Current:** Template matching runs at full frame resolution with a blur kernel of 3. `cv2.matchTemplate()` is O(W*H) per template — expensive for full-HD frames.
 
@@ -394,8 +394,8 @@ Additional performance area: the raw speed of reading video frames and writing o
 
 | Status | # | Experiment | Expected Impact |
 |--------|---|-----------|----------------|
-| [ ] | 1 | 2.0 — **Fast Scan mode** (bundles 2A-2D) | High — 3-5x faster Screenspace with explicit quality trade-off |
-| [ ] | 2 | 2C — Universal phash pre-filter (always-on candidate) | High — cheap filter, broad applicability, minimal quality loss |
+| [x] | 1 | 2.0 — **Fast Scan mode** (bundles 2A-2D) | High — 3-5x faster Screenspace with explicit quality trade-off |
+| [x] | 2 | 2C — Universal phash pre-filter (always-on candidate) | High — cheap filter, broad applicability, minimal quality loss |
 | [x] | 3 | 5A — Cache uv in CI | High — near-instant CI installs |
 | [ ] | 4 | 3A — Parallel clip cutting | High — 3-4x faster batch generation |
 | [x] | 5 | 1A — SSE for Screenspace progress | Medium — eliminates perceived stalls |

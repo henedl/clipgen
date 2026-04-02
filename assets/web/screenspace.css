@@ -755,6 +755,11 @@ body {
   display: flex;
   align-items: center;
   gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+#runBtn {
+  flex-shrink: 0;
 }
 
 #runBtn {
@@ -870,6 +875,69 @@ body {
 
 .run-picker-toggle-all:hover {
   text-decoration: underline;
+}
+
+.scan-mode-fast-icon {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  background: var(--color-warning, #f59e0b);
+  mask-size: contain;
+  mask-repeat: no-repeat;
+  -webkit-mask-size: contain;
+  -webkit-mask-repeat: no-repeat;
+  flex-shrink: 0;
+}
+
+.task-fast-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: var(--text-xs);
+  color: var(--color-warning, #f59e0b);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.task-fast-badge-icon {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  background: currentColor;
+  mask-size: contain;
+  mask-repeat: no-repeat;
+  -webkit-mask-size: contain;
+  -webkit-mask-repeat: no-repeat;
+}
+
+.fast-scan-label {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: var(--text-xs);
+  color: var(--color-warning, #f59e0b);
+  padding: var(--space-1) var(--space-2);
+  background: color-mix(in srgb, var(--color-warning, #f59e0b) 8%, transparent);
+  border-radius: var(--radius-sm);
+  margin-bottom: var(--space-2);
+}
+
+.fast-scan-label.hidden { display: none; }
+
+.fast-scan-label-icon {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  background: currentColor;
+  mask-size: contain;
+  mask-repeat: no-repeat;
+  -webkit-mask-size: contain;
+  -webkit-mask-repeat: no-repeat;
+  flex-shrink: 0;
+}
+
+.fast-scan-rerun-btn {
+  margin-left: auto;
 }
 
 #workflowParams {

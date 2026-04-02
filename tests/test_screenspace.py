@@ -1032,3 +1032,139 @@ class TestScanMultitool:
                 {"x": 0, "y": 0, "w": 100, "h": 100},
                 steps=[{"type": "color"}],
             )
+
+
+# ---------------------------------------------------------------------------
+# Fast Scan mode
+# ---------------------------------------------------------------------------
+
+
+class TestFastScanDispatchIntervalMultiplier:
+    """Verify _dispatch() applies interval multiplier in fast scan mode."""
+
+    def test_interval_multiplied_for_fast_scan(self, monkeypatch):
+        captured = {}
+
+        def fake_scan_color(
+            video_path,
+            region,
+            *,
+            target_color,
+            tolerance,
+            interval_seconds=0,
+            start_seconds=0.0,
+            end_seconds=None,
+            on_progress=None,
+            cancel_flag=None,
+            on_result=None,
+            fast_opts=None,
+        ):
+            captured["interval"] = interval_seconds
+            captured["fast_opts"] = fast_opts
+            return []
+
+        monkeypatch.setattr(screenspace, "scan_color", fake_scan_color)
+
+        worker = screenspace.ScreenspaceWorker()
+        task = {
+            "id": "ss_test1",
+            "type": "color",
+            "video_path": "/fake.mp4",
+            "region_coords": {"x": 0, "y": 0, "w": 100, "h": 100},
+            "parameters": {
+                "scan_mode": "fast",
+                "interval": 1.0,
+                "target_color": {"h": 0, "s": 0, "v": 0},
+                "tolerance": {"h": 10, "s": 50, "v": 50},
+            },
+        }
+        worker._dispatch(task, lambda p: None, lambda: False, None)
+
+        expected = 1.0 * config.SCREENSPACE_FAST_SCAN_INTERVAL_MULTIPLIER
+        assert captured["interval"] == expected
+        assert captured["fast_opts"] is not None
+        assert captured["fast_opts"]["phash_skip"] is True
+        assert captured["fast_opts"]["max_region_dim"] == 32
+
+    def test_normal_scan_no_fast_opts(self, monkeypatch):
+        captured = {}
+
+        def fake_scan_color(
+            video_path,
+            region,
+            *,
+            target_color,
+            tolerance,
+            interval_seconds=0,
+            start_seconds=0.0,
+            end_seconds=None,
+            on_progress=None,
+            cancel_flag=None,
+            on_result=None,
+            fast_opts=None,
+        ):
+            captured["interval"] = interval_seconds
+            captured["fast_opts"] = fast_opts
+            return []
+
+        monkeypatch.setattr(screenspace, "scan_color", fake_scan_color)
+
+        worker = screenspace.ScreenspaceWorker()
+        task = {
+            "id": "ss_test2",
+            "type": "color",
+            "video_path": "/fake.mp4",
+            "region_coords": {"x": 0, "y": 0, "w": 100, "h": 100},
+            "parameters": {
+                "interval": 1.0,
+                "target_color": {"h": 0, "s": 0, "v": 0},
+                "tolerance": {"h": 10, "s": 50, "v": 50},
+            },
+        }
+        worker._dispatch(task, lambda p: None, lambda: False, None)
+
+        assert captured["interval"] == 1.0
+        assert captured["fast_opts"] is None
+
+    def test_template_dispatch_gets_downscale_flag(self, monkeypatch):
+        captured = {}
+
+        def fake_scan_template(
+            video_path,
+            region,
+            *,
+            template_image,
+            threshold=0,
+            interval_seconds=0,
+            template_mask=None,
+            start_seconds=0.0,
+            end_seconds=None,
+            on_progress=None,
+            cancel_flag=None,
+            on_result=None,
+            fast_opts=None,
+        ):
+            captured["fast_opts"] = fast_opts
+            captured["template_shape"] = template_image.shape
+            return []
+
+        monkeypatch.setattr(screenspace, "scan_template", fake_scan_template)
+
+        worker = screenspace.ScreenspaceWorker()
+        tmpl = np.zeros((100, 200, 3), dtype=np.uint8)
+        task = {
+            "id": "ss_test3",
+            "type": "template",
+            "video_path": "/fake.mp4",
+            "region_coords": {"x": 0, "y": 0, "w": 100, "h": 100},
+            "parameters": {
+                "scan_mode": "fast",
+                "interval": 1.0,
+                "template_image": tmpl,
+            },
+        }
+        worker._dispatch(task, lambda p: None, lambda: False, None)
+
+        assert captured["fast_opts"]["template_downscale"] is True
+        # Template should be downscaled by 2x in _dispatch
+        assert captured["template_shape"] == (50, 100, 3)
