@@ -8,36 +8,13 @@
   padding: 0;
 }
 
+/* Page-specific variables — shared tokens are in tokens.css */
 :root {
-  --color-bg: #f4f2ee;
-  --color-surface: #ffffff;
-  --color-surface-alt: #f1ece4;
-  --color-text: #111827;
-  --color-text-dim: #6b7280;
-  --color-accent: #1d4f72;
-  --color-clip: #3659b3;
-  --color-screen: #0ea5e9;
-  --color-gif: #f97316;
-  --color-border: #e0ddd7;
-  --color-selected: rgba(29, 79, 114, 0.08);
-  --color-panel-bg: rgba(255, 255, 255, 0.97);
-  --color-panel-border: rgba(148, 163, 184, 0.22);
-  --color-panel-shadow: rgba(15, 23, 42, 0.12);
-  --color-grid: rgba(0, 0, 0, 0.03);
-  --font-mono: "SF Mono", "Fira Code", "Cascadia Code", Consolas, monospace;
   --color-cell-text: #dbeafe;
   --color-cell-valid: #93c5fd;
   --color-cell-selected: #c4b5fd;
   --color-heatmap: 168, 130, 214;
   --color-cell-hover: rgba(29, 79, 114, 0.06);
-  --sev-critical: #b91c1c;
-  --sev-high: #dc2626;
-  --sev-medium: #ea580c;
-  --sev-low: #ca8a04;
-  --sev-na: #0891b2;
-  --sev-positive: #16a34a;
-  --sev-very-positive: #15803d;
-  --sev-unknown: #64748b;
 }
 
 html {
@@ -1679,70 +1656,24 @@ html[data-theme="dark"] .queue-card-error .queue-card-thumb {
 
 /* ---- Dark mode ---- */
 
-/* OS preference (applies when user hasn't manually toggled) */
+/* OS preference — page-specific dark overrides (shared tokens in tokens.css) */
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
-    --color-bg: #020617;
-    --color-surface: #020617;
-    --color-surface-alt: #0b1120;
-    --color-text: #e5e7eb;
-    --color-text-dim: #9ca3af;
-    --color-accent: #38bdf8;
-    --color-clip: #60a5fa;
-    --color-screen: #22d3ee;
-    --color-gif: #fb923c;
-    --color-border: #1f2933;
-    --color-selected: rgba(56, 189, 248, 0.2);
-    --color-panel-bg: rgba(15, 23, 42, 0.98);
-    --color-panel-border: rgba(148, 163, 184, 0.35);
-    --color-panel-shadow: rgba(0, 0, 0, 0.7);
-    --color-grid: rgba(255, 255, 255, 0.04);
     --color-cell-text: #1e3a5f;
     --color-cell-valid: #1d4ed8;
     --color-cell-selected: #6d28d9;
     --color-cell-hover: rgba(56, 189, 248, 0.08);
     --color-heatmap: 192, 160, 235;
-    --sev-critical: #f87171;
-    --sev-high: #fb7185;
-    --sev-medium: #fdba74;
-    --sev-low: #fde047;
-    --sev-na: #67e8f9;
-    --sev-positive: #86efac;
-    --sev-very-positive: #4ade80;
-    --sev-unknown: #94a3b8;
   }
 }
 
-/* Manual toggle */
+/* Manual toggle — page-specific dark overrides */
 html[data-theme="dark"] {
-  --color-bg: #020617;
-  --color-surface: #020617;
-  --color-surface-alt: #0b1120;
-  --color-text: #e5e7eb;
-  --color-text-dim: #9ca3af;
-  --color-accent: #38bdf8;
-  --color-clip: #60a5fa;
-  --color-screen: #22d3ee;
-  --color-gif: #fb923c;
-  --color-border: #1f2933;
-  --color-selected: rgba(56, 189, 248, 0.2);
-  --color-panel-bg: rgba(15, 23, 42, 0.98);
-  --color-panel-border: rgba(148, 163, 184, 0.35);
-  --color-panel-shadow: rgba(0, 0, 0, 0.7);
-  --color-grid: rgba(255, 255, 255, 0.04);
   --color-cell-text: #1e3a5f;
   --color-cell-valid: #1d4ed8;
   --color-cell-selected: #6d28d9;
   --color-heatmap: 192, 160, 235;
   --color-cell-hover: rgba(56, 189, 248, 0.08);
-  --sev-critical: #f87171;
-  --sev-high: #fb7185;
-  --sev-medium: #fdba74;
-  --sev-low: #fde047;
-  --sev-na: #67e8f9;
-  --sev-positive: #86efac;
-  --sev-very-positive: #4ade80;
-  --sev-unknown: #94a3b8;
 }
 
 /* Dark element overrides (shared by both @media and data-theme via specificity) */
