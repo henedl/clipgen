@@ -920,7 +920,7 @@ def api_tasks_results(task_id: str) -> FlaskResponse:
     task = _worker.get_task(task_id)
     if task is None:
         return jsonify({"ok": False, "error": "Task not found"}), 404
-    return jsonify({"ok": True, "results": task.get("result")})
+    return jsonify({"ok": True, "results": _sanitize_floats(task.get("result"))})
 
 
 # ---- Events CRUD ----
@@ -941,7 +941,7 @@ def api_events_list() -> FlaskResponse:
     task_id = request.args.get("task_id")
     if task_id:
         events = [e for e in events if e.get("task_id") == task_id]
-    return jsonify({"ok": True, "events": events})
+    return jsonify({"ok": True, "events": _sanitize_floats(events)})
 
 
 @screenspace_bp.route("/api/events/<event_id>/exclude", methods=["PUT"])

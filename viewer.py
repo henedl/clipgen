@@ -28,6 +28,7 @@ Artifact manifest (save_manifest / load_manifest_*):
 """
 
 import json
+import math
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -151,6 +152,17 @@ def finalize_timeline_data(
     return data
 
 
+def _sanitize_event_metadata(obj: Any) -> Any:
+    """Replace non-finite floats (inf, nan) with None for JSON safety."""
+    if isinstance(obj, float):
+        return obj if math.isfinite(obj) else None
+    if isinstance(obj, dict):
+        return {k: _sanitize_event_metadata(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_sanitize_event_metadata(v) for v in obj]
+    return obj
+
+
 def load_screenspace_events_for_viewer() -> List[Dict[str, Any]]:
     """Load non-excluded events from screenspace manifest for viewer export."""
     import screenspace
@@ -166,7 +178,7 @@ def load_screenspace_events_for_viewer() -> List[Dict[str, Any]]:
             "timeOut": e["time_out"],
             "confidence": e["confidence"],
             "region": e.get("region", ""),
-            "metadata": e.get("metadata", {}),
+            "metadata": _sanitize_event_metadata(e.get("metadata", {})),
         }
         for e in manifest.get("events", [])
         if not e.get("excluded")

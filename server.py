@@ -116,17 +116,20 @@ def _resolve_source_video(participant: str) -> Optional[Path]:
 # ---- API endpoints ----
 
 
-@studio_bp.route("/api/thumbnail/<participant>/<int:start_seconds>")
-def api_thumbnail(participant: str, start_seconds: int) -> FlaskResponse:
+@studio_bp.route("/api/thumbnail/<participant>/<start_seconds>")
+def api_thumbnail(participant: str, start_seconds: str) -> FlaskResponse:
     if _sheet_context is None:
         return jsonify({"ok": False, "error": "No sheet loaded"}), 500
 
-    start_seconds = max(0, start_seconds)
+    try:
+        start_sec = max(0, int(start_seconds))
+    except (ValueError, TypeError):
+        return jsonify({"ok": False, "error": "Invalid timestamp"}), 400
     video_path = _resolve_source_video(participant)
     if video_path is None or not video_path.is_file():
         return jsonify({"ok": False, "error": "Source video not found"}), 404
 
-    cache_key = (str(video_path), start_seconds)
+    cache_key = (str(video_path), start_sec)
     cached = _thumbnail_cache.get(cache_key)
     if cached is not None:
         return Response(
@@ -136,7 +139,7 @@ def api_thumbnail(participant: str, start_seconds: int) -> FlaskResponse:
         )
 
     jpeg_bytes = video.extract_thumbnail_bytes(
-        str(video_path), start_seconds, width=config.STUDIO_THUMBNAIL_WIDTH
+        str(video_path), start_sec, width=config.STUDIO_THUMBNAIL_WIDTH
     )
     if jpeg_bytes is None:
         return jsonify({"ok": False, "error": "Thumbnail extraction failed"}), 404
