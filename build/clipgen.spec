@@ -16,6 +16,17 @@ datas += collect_data_files("rich")
 datas += [("../assets", "assets")]
 
 
+excludes = [
+    # Test frameworks — not needed in production binary
+    "pytest", "_pytest", "py", "pluggy", "iniconfig",
+    # Torch submodules clipgen never uses
+    "tensorboard", "torch.distributed",
+    # GUI toolkit pulled in transitively — clipgen is CLI-only
+    "tkinter", "_tkinter",
+    # Other unused transitive dependencies
+    "matplotlib", "IPython", "notebook", "jupyter",
+]
+
 a = Analysis(
     ["../clipgen.py"],
     pathex=[".."],
@@ -25,7 +36,7 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=[],
+    excludes=excludes,
     noarchive=False,
 )
 pyz = PYZ(a.pure)
@@ -39,7 +50,7 @@ exe = EXE(
     name="clipgen",
     debug=False,
     bootloader_ignore_signals=False,
-    strip=False,
+    strip=True,
     upx=True,
     upx_exclude=[],
     runtime_tmpdir=None,

@@ -13,8 +13,10 @@ dependencies = [
     "imagehash>=4.3.0",
     "scikit-image>=0.22.0",
     "easyocr>=1.7.0",
-    "pytest",
 ]
+
+[project.optional-dependencies]
+dev = ["pytest"]
 
 [tool.setuptools]
 packages = []

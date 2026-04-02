@@ -230,9 +230,13 @@ dependencies = [
     { name = "imagehash" },
     { name = "opencv-python-headless" },
     { name = "openpyxl" },
-    { name = "pytest" },
     { name = "rich" },
     { name = "scikit-image" },
+]
+
+[package.optional-dependencies]
+dev = [
+    { name = "pytest" },
 ]
 
 [package.metadata]
@@ -245,10 +249,11 @@ requires-dist = [
     { name = "imagehash", specifier = ">=4.3.0" },
     { name = "opencv-python-headless", specifier = ">=4.8.0" },
     { name = "openpyxl", specifier = ">=3.1.5" },
-    { name = "pytest" },
+    { name = "pytest", marker = "extra == 'dev'" },
     { name = "rich", specifier = ">=13.0.0" },
     { name = "scikit-image", specifier = ">=0.22.0" },
 ]
+provides-extras = ["dev"]
 
 [[package]]
 name = "colorama"
