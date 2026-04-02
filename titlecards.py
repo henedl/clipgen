@@ -7,7 +7,7 @@ to a color fill when no source frame is available. Duration is set by
 config.TITLECARD_DURATION_SECONDS (default 2s). Enabled via config.TITLECARDS_ENABLED
 or the --titlecards / --no-titlecards CLI flags.
 
-Key functions:
+Key functions: 
   build_titlecard_frame(clip, resolution) – build the title card FFmpeg segment
   build_endcard_frame(resolution)         – build the endcard FFmpeg segment
   prepend_titlecard_to_clip(clip, clip_path) – prepend title card to an existing clip file
