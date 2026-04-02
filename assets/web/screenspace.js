@@ -7,18 +7,15 @@
   var POLL_INTERVAL = 3000;
   var FRAME_STEP = 1.0;
 
-  var TASK_COLORS = {
-    multitool: "#2563eb",
-    color: "#8b5cf6",
-    change: "#f97316",
-    similarity: "#0ea5e9",
-    text: "#10b981",
-    numbers: "#eab308",
-    timelapse: "#ec4899",
-    template: "#f43f5e",
-    flow: "#6366f1",
-    scene: "#14b8a6",
-  };
+  var TASK_COLORS = (function () {
+    var types = ["multitool", "color", "change", "similarity", "text", "numbers", "timelapse", "template", "flow", "scene"];
+    var style = getComputedStyle(document.documentElement);
+    var map = {};
+    types.forEach(function (t) {
+      map[t] = style.getPropertyValue("--color-task-" + t).trim() || "#888";
+    });
+    return map;
+  })();
 
   var SS_TYPE_ICON_PATHS = {
     multitool: { viewBox: "0 0 16 16", paths: [

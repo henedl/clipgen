@@ -9,7 +9,13 @@
 - Never write a class when a function will do.
 - Treat spreadsheet layout and timestamp semantics as domain rules; if tests conflict with these, reconsider or adjust the tests rather than changing core semantics to satisfy them.
 - All web UIs use vanilla JavaScript (ES5-style `.then()` chaining, not async/await), hand-written CSS with CSS variables for theming, and plain HTML. No React, TypeScript, CSS frameworks, or build tools.
-- **CSS design tokens**: Use tokens from `assets/web/tokens.css` for spacing (`--space-N`), font sizes (`--text-N`), border radius (`--radius-N`), shadows (`--shadow-N`), transitions (`--duration-N`), and z-index (`--z-N`). Never write raw `rem`/`px` values for these properties in new code. When editing existing CSS, convert touched values to tokens.
+- **CSS design tokens**: `assets/web/tokens.css` is the single source of truth for shared design values. Never redefine these in page CSS; page-specific variables (e.g. `--color-cell-text` in studio, `--color-overlay-bg` in gallery) stay in their own files.
+  - **Layout**: spacing (`--space-N`), font sizes (`--text-N`), border radius (`--radius-N`), shadows (`--shadow-N`), transitions (`--duration-N`), z-index (`--z-N`). Never write raw `rem`/`px` for these in new code; convert touched values to tokens when editing.
+  - **Core theme**: `--color-bg`, `--color-surface`, `--color-surface-alt`, `--color-text`, `--color-text-dim`, `--color-accent`, `--color-border`, `--color-selected`, `--color-panel-bg/border/shadow`, `--color-grid`, `--font-mono` — light/dark variants included.
+  - **Severity**: `--sev-critical`, `--sev-high`, `--sev-medium`, `--sev-low`, `--sev-na`, `--sev-positive`, `--sev-very-positive`, `--sev-unknown`.
+  - **Content types**: `--color-clip`, `--color-screen`, `--color-gif`.
+  - **Screenspace tasks**: `--color-task-{tool}` for multitool, color, change, similarity, text, numbers, timelapse, template, flow, scene. In JS, read via `getComputedStyle(document.documentElement).getPropertyValue("--color-task-" + type)` — do not hardcode hex values.
+  - **Insight categories**: `--color-causes`, `--color-behaviors`, `--color-impacts` (+ `-bg` variants).
 - Thin server, thick client: keep the Flask server focused on data/media endpoints; UI logic, state management, and rendering happen client-side.
 - Plan-driven development: detailed implementation plans with specific files, line numbers, code structure, and verification steps are written before coding begins. Follow attached plans closely.
 - Features are often built incrementally across multiple sessions. Check for existing groundwork before starting from scratch.

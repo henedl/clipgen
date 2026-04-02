@@ -638,7 +638,9 @@
       return;
     }
 
-    state.artifacts = (data.artifacts || []).map(function (a, i) {
+    state.artifacts = (data.artifacts || []).filter(function (a) {
+      return a.id && a.file && (a.start != null || a.end != null);
+    }).map(function (a, i) {
       return Object.assign({}, a, { _idx: i });
     });
 
@@ -2018,17 +2020,15 @@
 
   // ---- Screenspace track ----
 
-  var SS_DETECTOR_COLORS = {
-    multitool: "#2563eb",
-    color: "#8b5cf6",
-    change: "#f97316",
-    similarity: "#0ea5e9",
-    text: "#10b981",
-    numbers: "#eab308",
-    template: "#f43f5e",
-    flow: "#6366f1",
-    scene: "#14b8a6",
-  };
+  var SS_DETECTOR_COLORS = (function () {
+    var types = ["multitool", "color", "change", "similarity", "text", "numbers", "template", "flow", "scene"];
+    var style = getComputedStyle(document.documentElement);
+    var map = {};
+    types.forEach(function (t) {
+      map[t] = style.getPropertyValue("--color-task-" + t).trim() || "#888";
+    });
+    return map;
+  })();
 
   var SS_DETECTOR_ICON_PATHS = {
     multitool: { viewBox: "0 0 16 16", paths: [
