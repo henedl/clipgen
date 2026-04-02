@@ -73,6 +73,39 @@ def test_finalize_timeline_data_includes_reels():
     assert data["reels"] == reels
 
 
+# ---- finalize_timeline_data: artifact validation ----
+
+
+def test_finalize_timeline_data_drops_artifact_missing_file():
+    good = _make_artifact("a1c1s0")
+    bad = {"id": "a1", "type": "clip", "start": 0, "end": 10}
+    data = viewer.finalize_timeline_data([good, bad])
+    assert len(data["artifacts"]) == 1
+    assert data["artifacts"][0]["id"] == "a1c1s0"
+
+
+def test_finalize_timeline_data_drops_artifact_missing_start_and_end():
+    good = _make_artifact("a1c1s0")
+    bad = {"id": "a2", "type": "clip", "file": "clip.mp4", "start": None, "end": None}
+    data = viewer.finalize_timeline_data([good, bad])
+    assert len(data["artifacts"]) == 1
+    assert data["artifacts"][0]["id"] == "a1c1s0"
+
+
+def test_finalize_timeline_data_keeps_artifact_with_only_start():
+    art = _make_artifact("a1c1s0", end=None)
+    data = viewer.finalize_timeline_data([art])
+    assert len(data["artifacts"]) == 1
+
+
+def test_finalize_timeline_data_keeps_valid_artifacts_unmodified():
+    arts = [_make_artifact("a1c1s0"), _make_artifact("a2c1s0")]
+    data = viewer.finalize_timeline_data(arts)
+    assert len(data["artifacts"]) == 2
+    ids = {a["id"] for a in data["artifacts"]}
+    assert ids == {"a1c1s0", "a2c1s0"}
+
+
 # ---- finalize_gallery_data ----
 
 
