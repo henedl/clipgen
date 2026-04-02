@@ -620,6 +620,11 @@ body {
   font-size: var(--text-base);
 }
 
+.skeleton-card {
+  height: 120px;
+  margin-bottom: var(--space-3);
+}
+
 /* ---- Insight Cards ---- */
 
 .insight-card {

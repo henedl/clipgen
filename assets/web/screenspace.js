@@ -107,6 +107,7 @@
     hoveredTaskId: null,
     selectedTaskResults: null,
     pollTimer: null,
+    eventSource: null,
     queuePaused: false,
     timelineDragging: false,
     panelHeight: 340,
@@ -133,6 +134,7 @@
   var _overlayRaf = 0;
   var _cachedOverlayRect = null;
   var _lastPollFingerprint = "";
+  var _preloadedFrames = {};
 
   var _cachedThemeColors = null;
 
@@ -621,6 +623,10 @@
     _pendingFrameTs = null;
     _loadedFrameTs = timestamp;
 
+    // Use preloaded frame 0 if available
+    var preloaded = (timestamp === 0 && _preloadedFrames[state.selectedParticipant])
+      ? _preloadedFrames[state.selectedParticipant] : null;
+
     var img = new Image();
     img.onload = function () {
       state.frameImage = img;
@@ -648,7 +654,7 @@
         _fetchFrame(_pendingFrameTs);
       }
     };
-    img.src = frameUrl(state.selectedParticipant, timestamp);
+    img.src = preloaded || frameUrl(state.selectedParticipant, timestamp);
   }
 
   function initFrameControls() {
@@ -3311,7 +3317,7 @@
       var totalTasks = isMultitool ? participants.length : participants.length * regions.length;
       chain.then(function () {
         showToast(totalTasks + " task" + (totalTasks !== 1 ? "s" : "") + " queued: " + type);
-        startPolling();
+        startSSE();
       }).catch(function (err) { showToast("Error: " + err.message); });
     });
   }
@@ -4335,7 +4341,64 @@
     container.appendChild(frag);
   }
 
-  // ---- Polling ----
+  // ---- SSE (Server-Sent Events) with polling fallback ----
+
+  function handleTaskData(data) {
+    if (!data.ok) return;
+    var oldSelected = state.selectedTaskId;
+    var oldTask = oldSelected ? findTask(oldSelected) : null;
+    var wasRunning = oldTask && (oldTask.status === "queued" || oldTask.status === "running");
+    state.tasks = data.tasks;
+    if (data.paused !== undefined) {
+      state.queuePaused = data.paused;
+      updatePauseButton();
+    }
+    var fp = JSON.stringify(data.tasks.map(function (t) {
+      return t.id + ":" + t.status + ":" + t.progress;
+    }));
+    var changed = fp !== _lastPollFingerprint;
+    _lastPollFingerprint = fp;
+    if (changed) {
+      renderTaskList();
+      renderTimeline();
+    }
+    // Auto-update results for selected running task
+    if (oldSelected) {
+      var selTask = findTask(oldSelected);
+      if (selTask && selTask.status === "running" && selTask.result) {
+        state.selectedTaskResults = selTask.result;
+        renderResults();
+      }
+    }
+    // Auto-load results when selected task completes
+    if (wasRunning && oldSelected) {
+      var newTask = findTask(oldSelected);
+      if (newTask && newTask.status === "completed") {
+        loadAndShowResults(oldSelected);
+      }
+    }
+  }
+
+  function startSSE() {
+    if (state.eventSource) return;
+    var es = new EventSource("api/tasks/stream");
+    state.eventSource = es;
+
+    es.onmessage = function (e) {
+      var data;
+      try { data = JSON.parse(e.data); } catch (_) { return; }
+      handleTaskData(data);
+    };
+
+    es.onerror = function () {
+      // Connection lost — fall back to polling
+      es.close();
+      state.eventSource = null;
+      startPolling();
+    };
+  }
+
+  // ---- Polling (fallback) ----
 
   function startPolling() {
     if (state.pollTimer) return;
@@ -4353,41 +4416,7 @@
     }
 
     apiGet("api/tasks")
-      .then(function (data) {
-        if (!data.ok) return;
-        var oldSelected = state.selectedTaskId;
-        var oldTask = oldSelected ? findTask(oldSelected) : null;
-        var wasRunning = oldTask && (oldTask.status === "queued" || oldTask.status === "running");
-        state.tasks = data.tasks;
-        if (data.paused !== undefined) {
-          state.queuePaused = data.paused;
-          updatePauseButton();
-        }
-        var fp = JSON.stringify(data.tasks.map(function (t) {
-          return t.id + ":" + t.status + ":" + t.progress;
-        }));
-        var changed = fp !== _lastPollFingerprint;
-        _lastPollFingerprint = fp;
-        if (changed) {
-          renderTaskList();
-          renderTimeline();
-        }
-        // Auto-update results for selected running task
-        if (oldSelected) {
-          var selTask = findTask(oldSelected);
-          if (selTask && selTask.status === "running" && selTask.result) {
-            state.selectedTaskResults = selTask.result;
-            renderResults();
-          }
-        }
-        // Auto-load results when selected task completes
-        if (wasRunning && oldSelected) {
-          var newTask = findTask(oldSelected);
-          if (newTask && newTask.status === "completed") {
-            loadAndShowResults(oldSelected);
-          }
-        }
-      })
+      .then(function (data) { handleTaskData(data); })
       .catch(function () {});
   }
 
@@ -4586,6 +4615,7 @@
     if (showToggle) showToggle.classList.toggle("hidden", events.length === 0);
 
     var visibleCount = 0;
+    var frag = document.createDocumentFragment();
 
     countEl.textContent = "(" + results.length + ")";
     container.innerHTML = "";
@@ -4753,8 +4783,9 @@
         row.appendChild(btn);
       }
 
-      container.appendChild(row);
+      frag.appendChild(row);
     });
+    container.appendChild(frag);
   }
 
   // ---- Keyboard shortcuts ----
@@ -4962,6 +4993,14 @@
         if (!data.ok) return;
         state.participants = (data.participants || []).filter(function (p) { return p.has_video; });
         renderParticipantSelect();
+        // Preload frame 0 for all participants (instant first-frame display)
+        state.participants.forEach(function (p) {
+          var url = frameUrl(p.id, 0);
+          fetch(url)
+            .then(function (r) { return r.blob(); })
+            .then(function (blob) { _preloadedFrames[p.id] = URL.createObjectURL(blob); })
+            .catch(function () {});
+        });
         if (state.participants.length > 0) {
           var first = state.participants[0].id;
           selectParticipant(first);
@@ -4999,7 +5038,7 @@
           renderTaskList();
           renderTimeline();
           if (state.tasks.some(function (t) { return t.status === "queued" || t.status === "running"; })) {
-            startPolling();
+            startSSE();
           }
         }
       })

@@ -54,3 +54,18 @@
   --z-overlay: 2000;
   --z-toast: 3000;
 }
+
+/* Skeleton loading placeholder */
+.skeleton {
+  background: linear-gradient(90deg, var(--color-surface-alt, #e5e7eb) 25%, var(--color-surface, #f3f4f6) 50%, var(--color-surface-alt, #e5e7eb) 75%);
+  background-size: 200% 100%;
+  animation: skeleton-shimmer 1.5s ease-in-out infinite;
+  border-radius: var(--radius-sm);
+}
+@keyframes skeleton-shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .skeleton { animation: none; }
+}

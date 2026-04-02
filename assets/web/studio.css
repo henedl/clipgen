@@ -452,9 +452,12 @@ body {
 }
 
 #sheetLoading {
-  padding: var(--space-6);
-  text-align: center;
-  color: var(--color-text-dim);
+  padding: var(--space-5);
+}
+
+.skeleton-row {
+  height: 36px;
+  margin-bottom: var(--space-2);
 }
 
 #viewerArtifactCount {
