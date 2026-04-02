@@ -293,7 +293,7 @@ Startup, mode-switching, and media loading.
 
 Faster feedback loops for development.
 
-### - [ ] 5A. Cache uv dependencies between CI runs
+### - [x] 5A. Cache uv dependencies between CI runs
 
 **Current:** Each CI run does a fresh `uv venv && uv pip install . --torch-backend cpu` with no caching (tests.yml:34-36). The install step downloads all dependencies every time.
 
@@ -309,15 +309,17 @@ Faster feedback loops for development.
 
 **Trade-offs:** None. The `setup-uv` action has built-in cache support. Cache invalidation is automatic when `uv.lock` changes.
 
-### - [ ] 5B. Run lint and typecheck without installing dependencies
+### - [x] 5B. Run lint and typecheck without installing dependencies — skipped
 
 **Current:** The lint job uses `uvx ruff check` (no install needed, good). The typecheck job installs all dependencies including CPU-only torch (tests.yml:69-72) just to run `uvx ty check`. Total typecheck job is ~25 seconds.
 
 **Experiment:** Check if `ty check` can run without the full dependency install.
 
+**Result:** `ty check` needs installed packages to resolve third-party imports. Without them, every import of `gspread`, `flask`, `cv2`, `torch`, etc. produces `Unresolved import` errors that drown out real type errors. The caching from 5A makes the install fast on cache hits (~5-10s vs ~90s), so this is a non-issue.
+
 **Trade-offs:** The job is already fast (~25s). Savings would be marginal — low priority.
 
-### - [ ] 5C. Path-scoped test runs
+### - [x] 5C. Path-scoped test runs
 
 **Prior art:** Workflow-level path filters already skip CI entirely for non-Python changes (`b253685`). This experiment goes further — scoping *within* Python changes.
 
@@ -332,11 +334,13 @@ Implement via a matrix job or a script that maps changed files to test paths.
 
 **Trade-offs:** Adds CI complexity. Risk of missing cross-cutting regressions. Mitigate by always running the full suite on pushes to master, but scoped tests on PR checks.
 
-### - [ ] 5D. Parallel test execution with pytest-xdist
+### - [x] 5D. Parallel test execution with pytest-xdist — skipped
 
 **Current:** Tests run sequentially in a single pytest process (tests.yml:39).
 
 **Experiment:** Add `pytest-xdist` and run tests with `-n auto` to parallelize across CPU cores. The test suite (19 files, mock-heavy, no shared state) is a good candidate for parallelization.
+
+**Result:** The test suite runs in 0.62s (224 tests). pytest-xdist adds ~2-3s startup overhead per worker. On `ubuntu-latest` (2 vCPUs), the best case with xdist would be: 0.31s (tests) + 3s (startup) = ~3.3s — a 5x regression. Not worth implementing until the test suite grows significantly.
 
 **Trade-offs:** Slight overhead for test discovery. Need to verify no tests rely on shared module-level state (e.g. config mutations). Quick win if tests are already isolated.
 
@@ -392,18 +396,18 @@ Additional performance area: the raw speed of reading video frames and writing o
 |--------|---|-----------|----------------|
 | [ ] | 1 | 2.0 — **Fast Scan mode** (bundles 2A-2D) | High — 3-5x faster Screenspace with explicit quality trade-off |
 | [ ] | 2 | 2C — Universal phash pre-filter (always-on candidate) | High — cheap filter, broad applicability, minimal quality loss |
-| [ ] | 3 | 5A — Cache uv in CI | High — near-instant CI installs |
+| [x] | 3 | 5A — Cache uv in CI | High — near-instant CI installs |
 | [ ] | 4 | 3A — Parallel clip cutting | High — 3-4x faster batch generation |
 | [x] | 5 | 1A — SSE for Screenspace progress | Medium — eliminates perceived stalls |
 | [x] | 6 | 1B — Preload first frames | Medium — instant first interaction |
 | [ ] | 7 | 3D — Transcript caching to disk | Medium — eliminates repeat transcription |
 | [x] | 8 | 1E — DOM batching with fragments | Medium — smoother large lists |
-| [ ] | 9 | 5D — Parallel tests with xdist | Medium — faster CI feedback |
+| [x] | 9 | 5D — Parallel tests with xdist — skipped (suite runs in 0.62s, xdist overhead would regress) | Medium — faster CI feedback |
 | [ ] | 10 | 2F — Parallel region analysis | Medium — scales with CPU cores |
 | [ ] | 11 | 2E — Batch frame extraction via ffmpeg | Low-Medium — depends on video codec |
 | [ ] | 12 | 4A — Lazy-import heavy libs | Low-Medium — saves seconds on startup |
 | [x] | 13 | 1C — Optimistic UI in Studio | Low-Medium — better feel during generation |
-| [ ] | 14 | 5B — Skip torch for typecheck | Low — job already ~25s, marginal gain |
+| [x] | 14 | 5B — Skip torch for typecheck — skipped (ty needs installed deps) | Low — job already ~25s, marginal gain |
 | [ ] | 15 | 3B — Titlecard batching | Low — small per-clip overhead |
 | [ ] | 16 | 4C — Cache-busted static assets | Low — marginal for local tool |
 | [ ] | 17 | 7A — Hardware decode | Low — platform-specific, complex |
