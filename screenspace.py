@@ -1610,9 +1610,10 @@ def scan_multitool(
 ) -> List[Dict[str, Any]]:
     """Run a multi-factor scan chaining several tool types.
 
-    Step 0 runs a full scan on the video.  Each subsequent step only
-    checks the timestamps that passed the previous step.  The final
-    results are timestamps that survived all steps.
+    Iterates the video once, checking all steps per frame.  A frame
+    must pass every step (in order) to be included in the results.
+    Results are emitted incrementally via *on_result* as each passing
+    frame is found.
 
     Each entry in *steps* is a dict with ``"type"`` plus the tool's
     own parameters (e.g. ``target_color``, ``tolerance`` for color).
@@ -1620,234 +1621,85 @@ def scan_multitool(
     Returns a list of ``{timestamp, tool_types, steps, min_confidence}``
     dicts.
     """
-    num_steps = len(steps)
-    if num_steps < 2:
+    if len(steps) < 2:
         raise ValueError("Multitool requires at least 2 steps")
 
-    # ---- Step 0: full scan via the appropriate scan_* function ----
-    step0 = steps[0]
-    step0_type = step0["type"]
-    step0_region = step0.get("region_coords", region)
-    step0_collected: List[Dict[str, Any]] = []
+    interval = steps[0].get("interval", config.SCREENSPACE_DEFAULT_INTERVAL)
 
-    def _collect(rd: Dict[str, Any]) -> None:
-        step0_collected.append(rd)
+    # Compute iteration range (intersection of all per-step ranges)
+    scan_start = start_seconds
+    scan_end = end_seconds
+    for step in steps:
+        s_start = step.get("start_seconds")
+        if s_start is not None:
+            scan_start = max(scan_start, s_start)
+        s_end = step.get("end_seconds")
+        if s_end is not None:
+            scan_end = min(scan_end, s_end) if scan_end is not None else s_end
 
-    def _scaled_progress_0(p: float) -> None:
-        if on_progress:
-            on_progress(p / num_steps)
+    cap = cv2.VideoCapture(video_path)
+    if not cap.isOpened():
+        return []
+    vid_fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+    total_frames = cap.get(cv2.CAP_PROP_FRAME_COUNT)
+    vid_duration = total_frames / vid_fps if vid_fps > 0 else 0.0
+    cap.release()
+
+    if scan_end is None or scan_end > vid_duration:
+        scan_end = vid_duration
+    total_range = scan_end - scan_start
+
+    tool_types = [s["type"] for s in steps]
+    step_regions = [s.get("region_coords", region) for s in steps]
+    prev_frame: List[Optional[np.ndarray]] = [None]
+    results: List[Dict[str, Any]] = []
 
     def _cancel() -> bool:
         return bool(cancel_flag and cancel_flag())
 
-    interval = step0.get("interval", config.SCREENSPACE_DEFAULT_INTERVAL)
-    s0_start = step0.get("start_seconds", start_seconds)
-    s0_end = step0.get("end_seconds", end_seconds)
-
-    if step0_type == "color":
-        scan_color(
-            video_path,
-            step0_region,
-            target_color=step0.get("target_color", {"h": 0, "s": 0, "v": 0}),
-            tolerance=step0.get("tolerance", {"h": 10, "s": 50, "v": 50}),
-            interval_seconds=interval,
-            start_seconds=s0_start,
-            end_seconds=s0_end,
-            on_progress=_scaled_progress_0,
-            cancel_flag=_cancel,
-            on_result=_collect,
-        )
-    elif step0_type == "change":
-        scan_changes(
-            video_path,
-            step0_region,
-            threshold=step0.get("threshold", 0),
-            interval_seconds=interval,
-            noise_threshold=step0.get("noise_threshold", 0),
-            start_seconds=s0_start,
-            end_seconds=s0_end,
-            on_progress=_scaled_progress_0,
-            cancel_flag=_cancel,
-            on_result=_collect,
-        )
-    elif step0_type == "similarity":
-        ref_frame = step0.get("reference_frame")
-        if ref_frame is None:
-            raise ValueError("Similarity step requires a reference_frame parameter")
-        scan_similarity(
-            video_path,
-            step0_region,
-            reference_frame=ref_frame,
-            threshold=step0.get("threshold", 0),
-            interval_seconds=interval,
-            start_seconds=s0_start,
-            end_seconds=s0_end,
-            on_progress=_scaled_progress_0,
-            cancel_flag=_cancel,
-            on_result=_collect,
-        )
-    elif step0_type == "text":
-        scan_text(
-            video_path,
-            step0_region,
-            search_string=step0.get("search_string", ""),
-            interval_seconds=interval,
-            fuzzy_threshold=step0.get("fuzzy_threshold", 0),
-            languages=step0.get("languages"),
-            start_seconds=s0_start,
-            end_seconds=s0_end,
-            on_progress=_scaled_progress_0,
-            cancel_flag=_cancel,
-            on_result=_collect,
-        )
-    elif step0_type == "numbers":
-        scan_numbers(
-            video_path,
-            step0_region,
-            operator=step0.get("operator", "gt"),
-            target_value=step0.get("target_value", 0),
-            interval_seconds=interval,
-            range_min=step0.get("range_min"),
-            range_max=step0.get("range_max"),
-            languages=step0.get("languages"),
-            start_seconds=s0_start,
-            end_seconds=s0_end,
-            on_progress=_scaled_progress_0,
-            cancel_flag=_cancel,
-            on_result=_collect,
-        )
-    elif step0_type == "template":
-        template_img = step0.get("template_image")
-        if template_img is None:
-            raise ValueError("Template step requires a template_image parameter")
-        scan_template(
-            video_path,
-            step0_region,
-            template_image=template_img,
-            threshold=step0.get("threshold", 0),
-            interval_seconds=interval,
-            template_mask=step0.get("template_mask"),
-            start_seconds=s0_start,
-            end_seconds=s0_end,
-            on_progress=_scaled_progress_0,
-            cancel_flag=_cancel,
-            on_result=_collect,
-        )
-    elif step0_type == "flow":
-        scan_flow(
-            video_path,
-            step0_region,
-            magnitude_threshold=step0.get("magnitude_threshold", 0),
-            interval_seconds=interval,
-            start_seconds=s0_start,
-            end_seconds=s0_end,
-            on_progress=_scaled_progress_0,
-            cancel_flag=_cancel,
-            on_result=_collect,
-        )
-    elif step0_type == "scene":
-        ref_scenes = step0.get("reference_scenes")
-        if not ref_scenes:
-            raise ValueError("Scene step requires reference_scenes parameter")
-        scan_scene(
-            video_path,
-            step0_region,
-            reference_scenes=ref_scenes,
-            threshold=step0.get("threshold", 0),
-            interval_seconds=interval,
-            start_seconds=s0_start,
-            end_seconds=s0_end,
-            on_progress=_scaled_progress_0,
-            cancel_flag=_cancel,
-            on_result=_collect,
-        )
-    else:
-        raise ValueError(f"Unsupported step 0 type: {step0_type}")
-
-    if _cancel():
-        return []
-
-    # Build working set: {timestamp: [step0_result_dict]}
-    working: Dict[float, List[Dict[str, Any]]] = {}
-    for rd in step0_collected:
-        ts = rd.get("timestamp", rd.get("start", 0.0))
-        working[ts] = [rd]
-
-    if not working:
-        if on_progress:
-            on_progress(1.0)
-        return []
-
-    # ---- Steps 1..N-1: check surviving timestamps ----
-    for step_idx in range(1, num_steps):
+    def _cb(ts: float, frame: np.ndarray) -> Optional[bool]:
         if _cancel():
-            return []
-        step = steps[step_idx]
-        step_type = step["type"]
-        step_region = step.get("region_coords", region)
-        new_working: Dict[float, List[Dict[str, Any]]] = {}
+            return False
 
-        cap = cv2.VideoCapture(video_path)
-        if not cap.isOpened():
-            break
-
-        timestamps = sorted(working.keys())
-        total_ts = len(timestamps)
-
-        for ti, ts in enumerate(timestamps):
-            if _cancel():
-                break
-
-            # Read frame at timestamp
-            cap.set(cv2.CAP_PROP_POS_MSEC, ts * 1000.0)
-            ret, frame = cap.read()
-            if not ret:
-                continue
-
-            # For change/flow, read previous frame
-            prev_frame = None
-            if step_type in ("change", "flow"):
-                prev_ts = max(0.0, ts - interval)
-                cap.set(cv2.CAP_PROP_POS_MSEC, prev_ts * 1000.0)
-                ret2, prev_frame = cap.read()
-                if not ret2:
-                    prev_frame = None
-
-            passed, result_dict = check_frame_for_tool(
-                frame, prev_frame, step_region, step_type, step
+        step_results: List[Dict[str, Any]] = []
+        for i, step in enumerate(steps):
+            passed, rd = check_frame_for_tool(
+                frame, prev_frame[0], step_regions[i], step["type"], step
             )
-            if passed and result_dict is not None:
-                new_working[ts] = working[ts] + [result_dict]
+            if not passed or rd is None:
+                break
+            step_results.append(rd)
 
-            if on_progress and total_ts > 0:
-                step_base = step_idx / num_steps
-                step_frac = (ti + 1) / total_ts / num_steps
-                on_progress(step_base + step_frac)
+        prev_frame[0] = frame
 
-        cap.release()
-        working = new_working
+        if len(step_results) == len(steps):
+            confidences = [
+                _extract_confidence(steps[i]["type"], sr)
+                for i, sr in enumerate(step_results)
+            ]
+            rd = {
+                "timestamp": round(ts, 2),
+                "tool_types": tool_types,
+                "steps": step_results,
+                "min_confidence": round(min(confidences), 4),
+            }
+            results.append(rd)
+            if on_result:
+                on_result(rd)
 
-        if not working:
-            break
+        if on_progress and total_range > 0:
+            on_progress((ts - scan_start) / total_range)
+        return None
 
-    # ---- Build final results ----
-    tool_types = [s["type"] for s in steps]
-    results: List[Dict[str, Any]] = []
-    for ts in sorted(working.keys()):
-        step_results = working[ts]
-        confidences = []
-        for i, sr in enumerate(step_results):
-            confidences.append(_extract_confidence(steps[i]["type"], sr))
-        min_conf = min(confidences) if confidences else 0.0
-        rd = {
-            "timestamp": round(ts, 2),
-            "tool_types": tool_types,
-            "steps": step_results,
-            "min_confidence": round(min_conf, 4),
-        }
-        results.append(rd)
-        if on_result:
-            on_result(rd)
+    scan_video_full_frames(
+        video_path,
+        interval,
+        _cb,
+        start_seconds=scan_start,
+        end_seconds=scan_end,
+        fps=vid_fps,
+        duration=vid_duration,
+    )
 
     if on_progress:
         on_progress(1.0)
