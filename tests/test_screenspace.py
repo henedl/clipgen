@@ -61,21 +61,25 @@ class TestColorMatches:
     def test_exact_match(self):
         region = np.full((10, 10, 3), [255, 0, 0], dtype=np.uint8)
         hsv = screenspace.average_color_hsv(region)
-        assert screenspace.color_matches(region, hsv, {"h": 5, "s": 10, "v": 10})
+        matched, conf = screenspace.color_matches(region, hsv, {"h": 5, "s": 10, "v": 10})
+        assert matched
+        assert conf > 0.0
 
     def test_mismatch(self):
         blue = np.full((10, 10, 3), [255, 0, 0], dtype=np.uint8)
         red_target = {"h": 0.0, "s": 255.0, "v": 255.0}
-        assert not screenspace.color_matches(
+        matched, _conf = screenspace.color_matches(
             blue, red_target, {"h": 5, "s": 10, "v": 10}
         )
+        assert not matched
 
     def test_hue_wraparound(self):
         # BGR red: (0, 0, 255) -> HSV ~(0, 255, 255)
         region = np.full((10, 10, 3), [0, 0, 255], dtype=np.uint8)
         # Target near the wrap boundary
         target = {"h": 175.0, "s": 255.0, "v": 255.0}
-        assert screenspace.color_matches(region, target, {"h": 10, "s": 10, "v": 10})
+        matched, _conf = screenspace.color_matches(region, target, {"h": 10, "s": 10, "v": 10})
+        assert matched
 
 
 class TestComputeFrameDiff:

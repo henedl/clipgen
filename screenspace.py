@@ -114,17 +114,34 @@ def color_matches(
     region_pixels: np.ndarray,
     target_color: Dict[str, float],
     tolerance: Dict[str, float],
-) -> bool:
+) -> Tuple[bool, float]:
     """Check if region's average HSV color is within tolerance of target.
 
     Handles hue wraparound (red at 0/180 boundary).
+
+    Returns:
+        Tuple of (matches, confidence) where confidence is 0.0–1.0.
     """
     avg = average_color_hsv(region_pixels)
     hue_diff = abs(avg["h"] - target_color["h"])
-    hue_ok = min(hue_diff, 180.0 - hue_diff) <= tolerance["h"]
-    s_ok = abs(avg["s"] - target_color["s"]) <= tolerance["s"]
-    v_ok = abs(avg["v"] - target_color["v"]) <= tolerance["v"]
-    return hue_ok and s_ok and v_ok
+    hue_dist = min(hue_diff, 180.0 - hue_diff)
+    s_dist = abs(avg["s"] - target_color["s"])
+    v_dist = abs(avg["v"] - target_color["v"])
+    matched = (
+        hue_dist <= tolerance["h"]
+        and s_dist <= tolerance["s"]
+        and v_dist <= tolerance["v"]
+    )
+    conf = max(
+        0.0,
+        1.0
+        - max(
+            hue_dist / max(tolerance["h"], 1e-6),
+            s_dist / max(tolerance["s"], 1e-6),
+            v_dist / max(tolerance["v"], 1e-6),
+        ),
+    )
+    return matched, conf
 
 
 def compute_frame_diff(
@@ -292,7 +309,7 @@ def compute_optical_flow(
         ``flow_grid`` (sparse grid of motion vectors for visualization).
     """
     if pyr_scale <= 0.0:
-        pyr_scale = config.SCREENSPACE_FLOW_PYRE_SCALE
+        pyr_scale = config.SCREENSPACE_FLOW_PYR_SCALE
 
     # Resize to max 256px for speed
     max_dim = 256
@@ -875,7 +892,8 @@ def _scan_via_ffmpeg_pipe(
                 break
 
         return True  # ffmpeg pipe succeeded (even if video had 0 frames)
-    except Exception:
+    except Exception as exc:
+        utils.warning_print(f"ffmpeg pipe scan failed, falling back to cv2: {exc}")
         return False
 
 
@@ -986,27 +1004,10 @@ def scan_color(
     def _cb(ts: float, pixels: np.ndarray) -> Optional[bool]:
         if cancel_flag and cancel_flag():
             return False
-        avg = average_color_hsv(pixels)
-        hue_diff = abs(avg["h"] - target_color["h"])
-        hue_dist = min(hue_diff, 180.0 - hue_diff)
-        s_dist = abs(avg["s"] - target_color["s"])
-        v_dist = abs(avg["v"] - target_color["v"])
-        if (
-            hue_dist <= tolerance["h"]
-            and s_dist <= tolerance["s"]
-            and v_dist <= tolerance["v"]
-        ):
+        matched, conf = color_matches(pixels, target_color, tolerance)
+        if matched:
             matches.append(ts)
             if on_result:
-                conf = max(
-                    0.0,
-                    1.0
-                    - max(
-                        hue_dist / max(tolerance["h"], 1e-6),
-                        s_dist / max(tolerance["s"], 1e-6),
-                        v_dist / max(tolerance["v"], 1e-6),
-                    ),
-                )
                 on_result({"timestamp": ts, "_confidence": conf})
         if on_progress and total_range > 0:
             on_progress((ts - start_seconds) / total_range)
@@ -1311,6 +1312,33 @@ _NUMBERS_RE = re.compile(r"-?\d+(?:\.\d+)?")
 _VALID_OPERATORS = ("eq", "gt", "lt", "gte", "lte", "range")
 
 
+def _number_matches(
+    value: float,
+    operator: str,
+    target_value: float = 0,
+    range_min: Optional[float] = None,
+    range_max: Optional[float] = None,
+) -> bool:
+    """Check if *value* satisfies the given numeric comparison."""
+    if operator == "eq":
+        return value == target_value
+    elif operator == "gt":
+        return value > target_value
+    elif operator == "lt":
+        return value < target_value
+    elif operator == "gte":
+        return value >= target_value
+    elif operator == "lte":
+        return value <= target_value
+    elif operator == "range":
+        return (
+            range_min is not None
+            and range_max is not None
+            and range_min <= value <= range_max
+        )
+    return False
+
+
 def scan_numbers(
     video_path: str,
     region: Dict[str, int],
@@ -1361,25 +1389,6 @@ def scan_numbers(
     results: List[Dict[str, Any]] = []
     prev_gray: List[Optional[np.ndarray]] = [None]
 
-    def _check(value: float) -> bool:
-        if operator == "eq":
-            return value == target_value
-        elif operator == "gt":
-            return value > target_value
-        elif operator == "lt":
-            return value < target_value
-        elif operator == "gte":
-            return value >= target_value
-        elif operator == "lte":
-            return value <= target_value
-        elif operator == "range":
-            return (
-                range_min is not None
-                and range_max is not None
-                and range_min <= value <= range_max
-            )
-        return False
-
     def _cb(ts: float, pixels: np.ndarray) -> Optional[bool]:
         if cancel_flag and cancel_flag():
             return False
@@ -1396,7 +1405,7 @@ def scan_numbers(
             cleaned = text.replace(",", "")
             for match in _NUMBERS_RE.findall(cleaned):
                 num = float(match)
-                if _check(num):
+                if _number_matches(num, operator, target_value, range_min, range_max):
                     rd = {"timestamp": ts, "number_found": num}
                     results.append(rd)
                     if on_result:
@@ -1902,8 +1911,6 @@ def scan_inactivity(
 # Multitool: per-frame evaluation and multi-factor scan
 # ---------------------------------------------------------------------------
 
-_NUMBERS_CHECK_RE = re.compile(r"-?\d+(?:\.\d+)?")
-
 
 def _extract_confidence(tool_type: str, result: Dict[str, Any]) -> float:
     """Extract a normalized [0, 1] confidence from a tool-specific result dict."""
@@ -1951,21 +1958,8 @@ def check_frame_for_tool(
         pixels = extract_region(frame, region)
         target = parameters.get("target_color", {"h": 0, "s": 0, "v": 0})
         tol = parameters.get("tolerance", {"h": 10, "s": 50, "v": 50})
-        avg = average_color_hsv(pixels)
-        hue_diff = abs(avg["h"] - target["h"])
-        hue_dist = min(hue_diff, 180.0 - hue_diff)
-        s_dist = abs(avg["s"] - target["s"])
-        v_dist = abs(avg["v"] - target["v"])
-        if hue_dist <= tol["h"] and s_dist <= tol["s"] and v_dist <= tol["v"]:
-            conf = max(
-                0.0,
-                1.0
-                - max(
-                    hue_dist / max(tol["h"], 1e-6),
-                    s_dist / max(tol["s"], 1e-6),
-                    v_dist / max(tol["v"], 1e-6),
-                ),
-            )
+        matched, conf = color_matches(pixels, target, tol)
+        if matched:
             return True, {"_confidence": conf}
         return False, None
 
@@ -2037,26 +2031,9 @@ def check_frame_for_tool(
         ocr_results = reader.readtext(pixels, detail=1)
         for _, text, _conf in ocr_results:
             cleaned = text.replace(",", "")
-            for match in _NUMBERS_CHECK_RE.findall(cleaned):
+            for match in _NUMBERS_RE.findall(cleaned):
                 num = float(match)
-                passed = False
-                if operator == "eq":
-                    passed = num == target_value
-                elif operator == "gt":
-                    passed = num > target_value
-                elif operator == "lt":
-                    passed = num < target_value
-                elif operator == "gte":
-                    passed = num >= target_value
-                elif operator == "lte":
-                    passed = num <= target_value
-                elif operator == "range":
-                    passed = (
-                        range_min is not None
-                        and range_max is not None
-                        and range_min <= num <= range_max
-                    )
-                if passed:
+                if _number_matches(num, operator, target_value, range_min, range_max):
                     return True, {"number_found": num}
         return False, None
 
@@ -2867,27 +2844,16 @@ class ScreenspaceWorker:
                     if t.get("_paused_flag"):
                         t["status"] = TASK_STATUS_PAUSED
                         t["result"] = result
-                    elif t.get("_cancelled"):
-                        if t.get("parameters", {}).get("detect_first"):
-                            t["status"] = TASK_STATUS_COMPLETED
-                            partial = t.pop("_partial_results", None)
-                            if partial and isinstance(result, list):
-                                result = partial + result
-                            t["result"] = result
-                            t["progress"] = 1.0
-                            t.pop("_progress_offset", None)
-                            t.pop("_progress_scale", None)
-                            raw = t.pop("_raw_results", [])
-                            t["_generated_events"] = self._generate_events_from_results(
-                                t, raw
-                            )
-                        else:
-                            t["status"] = TASK_STATUS_CANCELLED
+                    elif t.get("_cancelled") and not t.get("parameters", {}).get(
+                        "detect_first"
+                    ):
+                        t["status"] = TASK_STATUS_CANCELLED
                     else:
-                        t["status"] = TASK_STATUS_COMPLETED
+                        # Normal completion or detect_first early stop
                         partial = t.pop("_partial_results", None)
                         if partial and isinstance(result, list):
                             result = partial + result
+                        t["status"] = TASK_STATUS_COMPLETED
                         t["result"] = result
                         t["progress"] = 1.0
                         t.pop("_progress_offset", None)
@@ -2896,7 +2862,6 @@ class ScreenspaceWorker:
                         t["_generated_events"] = self._generate_events_from_results(
                             t, raw
                         )
-                        # Generate heatmap artifacts for template/flow tasks
                         if isinstance(result, list) and result:
                             self._generate_heatmap(t, result)
                     t["completed_at"] = datetime.now(timezone.utc).isoformat()
