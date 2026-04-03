@@ -646,7 +646,6 @@ body {
   display: flex;
   flex-direction: column;
   min-height: 0;
-  overflow: hidden;
 }
 
 #workflowTabs {
@@ -756,6 +755,8 @@ body {
   align-items: center;
   gap: var(--space-2);
   flex-wrap: wrap;
+  padding-top: var(--space-3);
+  flex-shrink: 0;
 }
 
 #runBtn {
@@ -767,15 +768,41 @@ body {
 }
 
 #workflowIntervalSlot {
-  display: flex;
+  display: inline-flex;
   align-items: center;
-  gap: 2px;
   font-size: var(--text-xs);
   color: var(--color-text-dim);
 }
 
+.interval-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-right: none;
+  border-radius: calc(var(--radius) - 2px) 0 0 calc(var(--radius) - 2px);
+  flex-shrink: 0;
+}
+
+.interval-icon-mask {
+  display: block;
+  width: 12px;
+  height: 12px;
+  background: var(--color-text-dim);
+  mask-size: contain;
+  mask-repeat: no-repeat;
+  -webkit-mask-size: contain;
+  -webkit-mask-repeat: no-repeat;
+}
+
 #workflowIntervalSlot .param-control input[type="number"] {
-  width: 3.5rem;
+  width: 3rem;
+  height: 28px;
+  border-radius: 0 calc(var(--radius) - 2px) calc(var(--radius) - 2px) 0;
+  text-align: center;
 }
 
 /* Run participant picker */
@@ -887,6 +914,44 @@ body {
   -webkit-mask-size: contain;
   -webkit-mask-repeat: no-repeat;
   flex-shrink: 0;
+}
+
+.scan-toggle-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: calc(var(--radius) - 2px);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.scan-toggle-btn:hover {
+  background: var(--color-surface-alt);
+}
+
+.scan-toggle-icon {
+  display: block;
+  width: 14px;
+  height: 14px;
+  background: var(--color-text-dim);
+  mask-size: contain;
+  mask-repeat: no-repeat;
+  -webkit-mask-size: contain;
+  -webkit-mask-repeat: no-repeat;
+}
+
+.scan-toggle-btn.active {
+  background: color-mix(in srgb, var(--color-warning, #f59e0b) 12%, transparent);
+  border-color: var(--color-warning, #f59e0b);
+}
+
+.scan-toggle-btn.active .scan-toggle-icon {
+  background: var(--color-warning, #f59e0b);
 }
 
 .task-fast-badge {
@@ -1369,6 +1434,35 @@ body {
 }
 
 .btn[data-tooltip]:disabled:hover::after {
+  opacity: 1;
+}
+
+/* Generic hover tooltip (excludes .btn which has its own disabled tooltip) */
+
+[data-tooltip]:not(.btn) {
+  position: relative;
+}
+
+[data-tooltip]:not(.btn)::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 50%;
+  transform: translateX(-50%);
+  padding: var(--space-1) var(--space-3);
+  background: var(--color-text);
+  color: var(--color-bg);
+  font-size: var(--text-xs);
+  font-weight: 400;
+  white-space: nowrap;
+  border-radius: var(--radius-sm);
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity var(--duration-fast);
+  z-index: var(--z-float);
+}
+
+[data-tooltip]:not(.btn):hover::after {
   opacity: 1;
 }
 
