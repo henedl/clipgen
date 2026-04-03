@@ -331,6 +331,94 @@ def test_create_non_template_task_still_requires_region(client):
     assert "region" in resp.get_json()["error"].lower()
 
 
+def test_create_similarity_task_invalid_reference_timestamp(client, monkeypatch):
+    _create_region(client, "r")
+    _enable_video_task_setup(monkeypatch, "P01")
+    resp = client.post(
+        "/screenspace/api/tasks",
+        json={
+            "type": "similarity",
+            "participant": "P01",
+            "region": "r",
+            "parameters": {"reference_timestamp": "not-a-number"},
+        },
+    )
+    assert resp.status_code == 400
+    assert "reference_timestamp" in resp.get_json()["error"]
+
+
+def test_create_template_task_invalid_reference_timestamp(client, monkeypatch):
+    _create_region(client, "r")
+    _enable_video_task_setup(monkeypatch, "P01")
+    resp = client.post(
+        "/screenspace/api/tasks",
+        json={
+            "type": "template",
+            "participant": "P01",
+            "region": "r",
+            "parameters": {"reference_timestamp": "not-a-number"},
+        },
+    )
+    assert resp.status_code == 400
+    assert "reference_timestamp" in resp.get_json()["error"]
+
+
+def test_create_scene_task_invalid_scene_references(client, monkeypatch):
+    _create_region(client, "r")
+    _enable_video_task_setup(monkeypatch, "P01")
+    resp = client.post(
+        "/screenspace/api/tasks",
+        json={
+            "type": "scene",
+            "participant": "P01",
+            "region": "r",
+            "parameters": {
+                "scene_references": [{"name": "Main menu", "timestamp": "x"}]
+            },
+        },
+    )
+    assert resp.status_code == 400
+    assert "scene_references[0].timestamp" in resp.get_json()["error"]
+
+
+def test_create_multitool_task_invalid_step_reference_timestamp(client, monkeypatch):
+    _create_region(client, "healthbar")
+    _create_region(client, "statusbar", x=0, y=0, w=100, h=20)
+    _enable_video_task_setup(monkeypatch, "P01")
+    resp = client.post(
+        "/screenspace/api/tasks",
+        json={
+            "type": "multitool",
+            "participant": "P01",
+            "region": "healthbar",
+            "parameters": {
+                "steps": [
+                    {
+                        "type": "similarity",
+                        "region": "healthbar",
+                        "reference_timestamp": "bad",
+                    },
+                    {"type": "change", "region": "statusbar"},
+                ]
+            },
+        },
+    )
+    assert resp.status_code == 400
+    assert "Step 0: reference_timestamp" in resp.get_json()["error"]
+
+
+def test_create_task_persists_manifest(client, monkeypatch):
+    _create_region(client, "r")
+    _enable_video_task_setup(monkeypatch, "P01")
+    calls = _install_persist_spy(monkeypatch)
+    resp = client.post(
+        "/screenspace/api/tasks",
+        json={"type": "color", "participant": "P01", "region": "r"},
+    )
+    assert resp.status_code == 200
+    assert calls == [{"drain_events": False}]
+
+
 def test_get_task_not_found(client):
     resp = client.get("/screenspace/api/tasks/ss_nonexist")
     assert resp.status_code == 404
@@ -339,6 +427,19 @@ def test_get_task_not_found(client):
 def test_cancel_task_not_found(client):
     resp = client.delete("/screenspace/api/tasks/ss_nonexist")
     assert resp.status_code == 400
+
+
+def test_cancel_task_persists_manifest(client, monkeypatch):
+    worker = screenspace_server._worker
+    assert worker is not None
+    task = screenspace.create_task(
+        "color", "P01", "s.mp4", "/v.mp4", "r", {"x": 0, "y": 0, "w": 1, "h": 1}
+    )
+    worker.enqueue(task)
+    calls = _install_persist_spy(monkeypatch)
+    resp = client.delete(f"/screenspace/api/tasks/{task['id']}")
+    assert resp.status_code == 200
+    assert calls == [{"drain_events": False}]
 
 
 def test_dismiss_queued_task(client):
@@ -391,11 +492,61 @@ def test_reorder_missing_body(client):
 
 
 def test_reorder_valid(client):
+    worker = screenspace_server._worker
+    assert worker is not None
+    task = screenspace.create_task(
+        "color", "P01", "s.mp4", "/v.mp4", "r", {"x": 0, "y": 0, "w": 1, "h": 1}
+    )
+    worker.enqueue(task)
     resp = client.put(
         "/screenspace/api/tasks/reorder",
-        json={"task_ids": ["ss_a", "ss_b"]},
+        json={"task_ids": [task["id"]]},
     )
     assert resp.status_code == 200
+
+
+def test_reorder_persists_manifest(client, monkeypatch):
+    worker = screenspace_server._worker
+    assert worker is not None
+    task = screenspace.create_task(
+        "color", "P01", "s.mp4", "/v.mp4", "r", {"x": 0, "y": 0, "w": 1, "h": 1}
+    )
+    worker.enqueue(task)
+    calls = _install_persist_spy(monkeypatch)
+    resp = client.put(
+        "/screenspace/api/tasks/reorder",
+        json={"task_ids": [task["id"]]},
+    )
+    assert resp.status_code == 200
+    assert calls == [{"drain_events": False}]
+
+
+def test_pause_persists_manifest(client, monkeypatch):
+    calls = _install_persist_spy(monkeypatch)
+    resp = client.post("/screenspace/api/tasks/pause")
+    assert resp.status_code == 200
+    assert calls == [{"drain_events": False}]
+
+
+def test_resume_persists_manifest(client, monkeypatch):
+    worker = screenspace_server._worker
+    assert worker is not None
+    task = screenspace.create_task(
+        "color",
+        "P01",
+        "s.mp4",
+        "/v.mp4",
+        "r",
+        {"x": 0, "y": 0, "w": 1, "h": 1},
+        parameters={"start_seconds": 0.0, "end_seconds": 10.0},
+    )
+    worker.enqueue(task)
+    with worker._lock:
+        worker._tasks[task["id"]]["status"] = screenspace.TASK_STATUS_PAUSED
+    calls = _install_persist_spy(monkeypatch)
+    resp = client.post("/screenspace/api/tasks/resume")
+    assert resp.status_code == 200
+    assert calls == [{"drain_events": False}]
 
 
 # ---- Video ----
@@ -503,6 +654,14 @@ def test_event_exclude(client):
     data = resp.get_json()
     assert data["ok"] is True
     assert screenspace_server._manifest["events"][0]["excluded"] is True
+
+
+def test_event_exclude_uses_persist_manifest_helper(client, monkeypatch):
+    screenspace_server._manifest["events"] = [_sample_event("ev_1")]
+    calls = _install_persist_spy(monkeypatch)
+    resp = client.put("/screenspace/api/events/ev_1/exclude")
+    assert resp.status_code == 200
+    assert calls == [{"drain_events": False}]
 
 
 def test_event_include(client):
@@ -728,6 +887,32 @@ def test_clean_task_preserves_scan_mode():
     assert cleaned["parameters"]["scan_mode"] == "fast"
 
 
+def test_create_region_uses_persist_manifest_helper(client, monkeypatch):
+    calls = _install_persist_spy(monkeypatch)
+    resp = client.post(
+        "/screenspace/api/regions",
+        json={
+            "name": "healthbar",
+            "x": 100,
+            "y": 20,
+            "w": 300,
+            "h": 30,
+            "canvas_width": 1920,
+            "canvas_height": 1080,
+        },
+    )
+    assert resp.status_code == 200
+    assert calls == [{"drain_events": False}]
+
+
+def test_create_stash_uses_persist_manifest_helper(client, monkeypatch):
+    _create_region(client, "stashme")
+    calls = _install_persist_spy(monkeypatch)
+    resp = client.post("/screenspace/api/stashes")
+    assert resp.status_code == 200
+    assert calls == [{"drain_events": False}]
+
+
 def _create_region(client, name, x=100, y=20, w=300, h=30):
     client.post(
         "/screenspace/api/regions",
@@ -741,6 +926,27 @@ def _create_region(client, name, x=100, y=20, w=300, h=30):
             "canvas_height": 1080,
         },
     )
+
+
+def _enable_video_task_setup(monkeypatch, participant_id):
+    for participant in screenspace_server._participants:
+        if participant["id"] == participant_id:
+            participant["has_video"] = True
+    monkeypatch.setattr(
+        screenspace_server.video,
+        "probe_video_properties",
+        lambda _path: {"width": 1920, "height": 1080},
+    )
+
+
+def _install_persist_spy(monkeypatch):
+    calls = []
+
+    def spy(*, drain_events=True):
+        calls.append({"drain_events": drain_events})
+
+    monkeypatch.setattr(screenspace_server, "_persist_manifest", spy)
+    return calls
 
 
 # ---- VideoCapture pool size (4D) ----

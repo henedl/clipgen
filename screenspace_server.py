@@ -333,15 +333,8 @@ def api_regions_create() -> FlaskResponse:
     if "description" in data:
         region["description"] = str(data["description"])
 
-    import screenspace
-
     _manifest.setdefault("regions", {})[name] = region
-    screenspace.save_screenspace_manifest(
-        _manifest.get("regions", {}),
-        _manifest.get("tasks", []),
-        _manifest.get("events", []),
-        stashes=_manifest.get("stashes", []),
-    )
+    _persist_manifest(drain_events=False)
 
     return jsonify({"ok": True, "region": region})
 
@@ -353,15 +346,8 @@ def api_regions_delete(name: str) -> FlaskResponse:
     if name not in regions:
         return jsonify({"ok": False, "error": f"Region '{name}' not found"}), 404
 
-    import screenspace
-
     del regions[name]
-    screenspace.save_screenspace_manifest(
-        regions,
-        _manifest.get("tasks", []),
-        _manifest.get("events", []),
-        stashes=_manifest.get("stashes", []),
-    )
+    _persist_manifest(drain_events=False)
 
     return jsonify({"ok": True})
 
@@ -388,16 +374,9 @@ def api_stashes_create() -> FlaskResponse:
         "createdAt": datetime.now(timezone.utc).isoformat(),
         "regions": copy.deepcopy(regions),
     }
-    import screenspace
-
     _manifest.setdefault("stashes", []).append(stash)
     _manifest["regions"] = {}
-    screenspace.save_screenspace_manifest(
-        _manifest.get("regions", {}),
-        _manifest.get("tasks", []),
-        _manifest.get("events", []),
-        stashes=_manifest.get("stashes", []),
-    )
+    _persist_manifest(drain_events=False)
     return jsonify({"ok": True, "stash": stash})
 
 
@@ -413,18 +392,11 @@ def api_stashes_update(stash_id: str) -> FlaskResponse:
     if stash is None:
         return jsonify({"ok": False, "error": "Stash not found"}), 404
 
-    import screenspace
-
     name = data.get("name", "").strip()
     if name:
         stash["name"] = name
 
-    screenspace.save_screenspace_manifest(
-        _manifest.get("regions", {}),
-        _manifest.get("tasks", []),
-        _manifest.get("events", []),
-        stashes=stashes,
-    )
+    _persist_manifest(drain_events=False)
     return jsonify({"ok": True, "stash": stash})
 
 
@@ -436,15 +408,8 @@ def api_stashes_delete(stash_id: str) -> FlaskResponse:
     if idx is None:
         return jsonify({"ok": False, "error": "Stash not found"}), 404
 
-    import screenspace
-
     stashes.pop(idx)
-    screenspace.save_screenspace_manifest(
-        _manifest.get("regions", {}),
-        _manifest.get("tasks", []),
-        _manifest.get("events", []),
-        stashes=stashes,
-    )
+    _persist_manifest(drain_events=False)
     return jsonify({"ok": True})
 
 
@@ -456,16 +421,9 @@ def api_stashes_restore(stash_id: str) -> FlaskResponse:
     if idx is None:
         return jsonify({"ok": False, "error": "Stash not found"}), 404
 
-    import screenspace
-
     stash = stashes[idx]
     _manifest["regions"] = copy.deepcopy(stash["regions"])
-    screenspace.save_screenspace_manifest(
-        _manifest["regions"],
-        _manifest.get("tasks", []),
-        _manifest.get("events", []),
-        stashes=stashes,
-    )
+    _persist_manifest(drain_events=False)
     return jsonify({"ok": True, "regions": _manifest["regions"]})
 
 
@@ -567,9 +525,16 @@ def api_tasks_create() -> FlaskResponse:
         return jsonify({"ok": False, "error": "participant is required"}), 400
 
     region_name = data.get("region", "").strip()
+    raw_parameters = data.get("parameters")
+    if raw_parameters is None:
+        parameters: Dict[str, Any] = {}
+    elif isinstance(raw_parameters, dict):
+        parameters = raw_parameters
+    else:
+        return jsonify({"ok": False, "error": "parameters must be an object"}), 400
 
     # Template tasks with an uploaded image scan the full frame; no region needed
-    has_uploaded_template = task_type == "template" and data.get("parameters", {}).get(
+    has_uploaded_template = task_type == "template" and parameters.get(
         "template_image_data"
     )
 
@@ -579,8 +544,7 @@ def api_tasks_create() -> FlaskResponse:
 
     # Early validation for multitool steps (before video path lookup)
     if task_type == "multitool":
-        parameters_early = data.get("parameters", {})
-        mt_steps = parameters_early.get("steps")
+        mt_steps = parameters.get("steps")
         if not mt_steps or not isinstance(mt_steps, list) or len(mt_steps) < 2:
             return jsonify(
                 {"ok": False, "error": "Multitool requires at least 2 steps"}
@@ -614,9 +578,7 @@ def api_tasks_create() -> FlaskResponse:
 
     # Multitool validates per-step regions; non-multitool validates global region
     if task_type == "multitool":
-        mt_steps_early: list[dict[str, Any]] = data.get("parameters", {}).get(
-            "steps", []
-        )
+        mt_steps_early: list[dict[str, Any]] = parameters.get("steps", [])
         for i, step in enumerate(mt_steps_early):
             step_region = (step.get("region") or "").strip()
             if not step_region:
@@ -661,9 +623,7 @@ def api_tasks_create() -> FlaskResponse:
         region_coords = _resolve_region_coords(region_name)
     elif task_type == "multitool":
         # Multitool uses per-step regions; use first step's region for top-level metadata
-        first_step_region = (
-            data.get("parameters", {}).get("steps", [{}])[0].get("region", "")
-        )
+        first_step_region = parameters.get("steps", [{}])[0].get("region", "")
         if first_step_region and first_step_region in all_known_regions:
             region_name = first_step_region
             region_coords = _resolve_region_coords(first_step_region)
@@ -674,19 +634,56 @@ def api_tasks_create() -> FlaskResponse:
         # Full-frame template scan -- sentinel region
         region_name = "full_frame"
         region_coords = {"x": 0, "y": 0, "w": 0, "h": 0}
-    parameters = data.get("parameters", {})
 
     import screenspace
+
+    try:
+        if task_type == "similarity":
+            parameters["reference_timestamp"] = _coerce_float(
+                parameters.get("reference_timestamp"),
+                "reference_timestamp",
+                required=True,
+            )
+        elif task_type == "template" and not parameters.get("template_image_data"):
+            parameters["reference_timestamp"] = _coerce_float(
+                parameters.get("reference_timestamp"),
+                "reference_timestamp",
+                required=True,
+            )
+        elif task_type == "scene":
+            parameters["scene_references"] = _validate_scene_references(
+                parameters.get("scene_references")
+            )
+        elif task_type == "multitool":
+            for i, step in enumerate(parameters.get("steps", [])):
+                step_context = f"Step {i}: "
+                if step["type"] == "similarity":
+                    step["reference_timestamp"] = _coerce_float(
+                        step.get("reference_timestamp"),
+                        "reference_timestamp",
+                        required=True,
+                        context=step_context,
+                    )
+                elif step["type"] == "template" and not step.get("template_image_data"):
+                    step["reference_timestamp"] = _coerce_float(
+                        step.get("reference_timestamp"),
+                        "reference_timestamp",
+                        required=True,
+                        context=step_context,
+                    )
+                elif step["type"] == "scene":
+                    step["scene_references"] = _validate_scene_references(
+                        step.get("scene_references"),
+                        context=step_context,
+                    )
+    except ValueError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
 
     # Similarity tasks: extract reference frame from video at given timestamp
     if task_type == "similarity":
         import cv2
 
-        ref_ts = parameters.get("reference_timestamp")
-        if ref_ts is None:
-            return jsonify(
-                {"ok": False, "error": "Similarity scan requires reference_timestamp"}
-            ), 400
+        ref_ts = cast(float, parameters["reference_timestamp"])
         cap = cv2.VideoCapture(video_path)
         if not cap.isOpened():
             return jsonify(
@@ -732,14 +729,7 @@ def api_tasks_create() -> FlaskResponse:
             else:
                 parameters["template_image"] = img
         else:
-            ref_ts = parameters.get("reference_timestamp")
-            if ref_ts is None:
-                return jsonify(
-                    {
-                        "ok": False,
-                        "error": "Template scan requires reference_timestamp or uploaded image",
-                    }
-                ), 400
+            ref_ts = cast(float, parameters["reference_timestamp"])
             cap = cv2.VideoCapture(video_path)
             if not cap.isOpened():
                 return jsonify(
@@ -760,11 +750,7 @@ def api_tasks_create() -> FlaskResponse:
     if task_type == "scene":
         import cv2
 
-        scene_refs = parameters.get("scene_references")
-        if not scene_refs or not isinstance(scene_refs, list):
-            return jsonify(
-                {"ok": False, "error": "Scene scan requires scene_references list"}
-            ), 400
+        scene_refs = cast(List[Dict[str, Any]], parameters["scene_references"])
         cap = cv2.VideoCapture(video_path)
         if not cap.isOpened():
             return jsonify(
@@ -811,14 +797,7 @@ def api_tasks_create() -> FlaskResponse:
             step_rc = step["region_coords"]
 
             if stype == "similarity":
-                ref_ts = step.get("reference_timestamp")
-                if ref_ts is None:
-                    return jsonify(
-                        {
-                            "ok": False,
-                            "error": f"Step {i}: similarity requires reference_timestamp",
-                        }
-                    ), 400
+                ref_ts = cast(float, step["reference_timestamp"])
                 cap = cv2.VideoCapture(video_path)
                 if not cap.isOpened():
                     return jsonify({"ok": False, "error": "Could not open video"}), 500
@@ -860,14 +839,7 @@ def api_tasks_create() -> FlaskResponse:
                     else:
                         step["template_image"] = img
                 else:
-                    ref_ts = step.get("reference_timestamp")
-                    if ref_ts is None:
-                        return jsonify(
-                            {
-                                "ok": False,
-                                "error": f"Step {i}: template requires reference_timestamp or uploaded image",
-                            }
-                        ), 400
+                    ref_ts = cast(float, step["reference_timestamp"])
                     cap = cv2.VideoCapture(video_path)
                     if not cap.isOpened():
                         return jsonify(
@@ -886,14 +858,7 @@ def api_tasks_create() -> FlaskResponse:
                     step["template_image"] = screenspace.extract_region(frame, step_rc)
 
             elif stype == "scene":
-                scene_refs = step.get("scene_references")
-                if not scene_refs or not isinstance(scene_refs, list):
-                    return jsonify(
-                        {
-                            "ok": False,
-                            "error": f"Step {i}: scene requires scene_references list",
-                        }
-                    ), 400
+                scene_refs = cast(List[Dict[str, Any]], step["scene_references"])
                 cap = cv2.VideoCapture(video_path)
                 if not cap.isOpened():
                     return jsonify({"ok": False, "error": "Could not open video"}), 500
@@ -928,7 +893,7 @@ def api_tasks_create() -> FlaskResponse:
     )
 
     _worker.enqueue(task)
-    _manifest.setdefault("tasks", []).append(task)
+    _persist_manifest(drain_events=False)
     _notify_sse_clients("task_created")
 
     return jsonify({"ok": True, "task": _clean_task(task)})
@@ -942,13 +907,11 @@ def api_tasks_cancel(task_id: str) -> FlaskResponse:
     if request.args.get("dismiss") == "true":
         if not _worker.remove_task(task_id):
             return jsonify({"ok": False, "error": "Task not found"}), 404
-        _manifest["tasks"] = [
-            t for t in _manifest.get("tasks", []) if t["id"] != task_id
-        ]
-        _persist_manifest()
+        _persist_manifest(drain_events=False)
         _notify_sse_clients("task_dismissed")
         return jsonify({"ok": True})
     if _worker.cancel(task_id):
+        _persist_manifest(drain_events=False)
         _notify_sse_clients("task_cancelled")
         return jsonify({"ok": True})
     return jsonify({"ok": False, "error": "Task not found or already finished"}), 400
@@ -963,6 +926,7 @@ def api_tasks_reorder() -> FlaskResponse:
     if not data or "task_ids" not in data:
         return jsonify({"ok": False, "error": "task_ids list required"}), 400
     _worker.reorder(data["task_ids"])
+    _persist_manifest(drain_events=False)
     _notify_sse_clients("reorder")
     return jsonify({"ok": True})
 
@@ -973,6 +937,7 @@ def api_tasks_pause() -> FlaskResponse:
     if not _worker:
         return jsonify({"ok": False, "error": "Worker not initialized"}), 500
     _worker.pause()
+    _persist_manifest(drain_events=False)
     _notify_sse_clients("pause")
     return jsonify({"ok": True, "paused": True})
 
@@ -983,6 +948,7 @@ def api_tasks_resume() -> FlaskResponse:
     if not _worker:
         return jsonify({"ok": False, "error": "Worker not initialized"}), 500
     _worker.resume()
+    _persist_manifest(drain_events=False)
     _notify_sse_clients("resume")
     return jsonify({"ok": True, "paused": False})
 
@@ -1025,7 +991,7 @@ def api_event_exclude(event_id: str) -> FlaskResponse:
     for e in _manifest.get("events", []):
         if e["id"] == event_id:
             e["excluded"] = True
-            _persist_manifest()
+            _persist_manifest(drain_events=False)
             return jsonify({"ok": True})
     return jsonify({"ok": False, "error": "Event not found"}), 404
 
@@ -1036,7 +1002,7 @@ def api_event_include(event_id: str) -> FlaskResponse:
     for e in _manifest.get("events", []):
         if e["id"] == event_id:
             e["excluded"] = False
-            _persist_manifest()
+            _persist_manifest(drain_events=False)
             return jsonify({"ok": True})
     return jsonify({"ok": False, "error": "Event not found"}), 404
 
@@ -1053,7 +1019,7 @@ def api_events_bulk_exclude() -> FlaskResponse:
         if e["id"] in ids:
             e["excluded"] = True
             count += 1
-    _persist_manifest()
+    _persist_manifest(drain_events=False)
     return jsonify({"ok": True, "updated": count})
 
 
@@ -1069,11 +1035,65 @@ def api_events_bulk_include() -> FlaskResponse:
         if e["id"] in ids:
             e["excluded"] = False
             count += 1
-    _persist_manifest()
+    _persist_manifest(drain_events=False)
     return jsonify({"ok": True, "updated": count})
 
 
 # ---- Helpers ----
+
+
+def _coerce_float(
+    value: Any,
+    field_name: str,
+    *,
+    required: bool = False,
+    context: str = "",
+) -> float:
+    """Validate and coerce a request field to a finite float."""
+    if value is None:
+        if required:
+            raise ValueError(f"{context}{field_name} is required")
+        raise ValueError(f"{context}{field_name} must be a number")
+    try:
+        number = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{context}{field_name} must be a number") from exc
+    if not math.isfinite(number):
+        raise ValueError(f"{context}{field_name} must be a finite number")
+    return number
+
+
+def _validate_scene_references(
+    scene_refs: Any, *, context: str = ""
+) -> List[Dict[str, Any]]:
+    """Validate scene reference payloads and normalize numeric fields."""
+    if not scene_refs or not isinstance(scene_refs, list):
+        raise ValueError(f"{context}scene_references must be a non-empty list")
+    validated_refs = []
+    for i, ref_raw in enumerate(scene_refs):
+        if not isinstance(ref_raw, dict):
+            raise ValueError(f"{context}scene_references[{i}] must be an object")
+        ref_data = cast(Dict[str, Any], ref_raw)
+        name = str(ref_data.get("name", "")).strip()
+        if not name:
+            raise ValueError(f"{context}scene_references[{i}].name is required")
+        ref: Dict[str, Any] = {
+            "name": name,
+            "timestamp": _coerce_float(
+                ref_data.get("timestamp"),
+                f"scene_references[{i}].timestamp",
+                required=True,
+                context=context,
+            ),
+        }
+        if "threshold" in ref_data and ref_data.get("threshold") is not None:
+            ref["threshold"] = _coerce_float(
+                ref_data.get("threshold"),
+                f"scene_references[{i}].threshold",
+                context=context,
+            )
+        validated_refs.append(ref)
+    return validated_refs
 
 
 def _sanitize_floats(obj: Any) -> Any:
@@ -1176,19 +1196,20 @@ def _discover_participant_videos(study_name: str) -> None:
                 )
 
 
-def _persist_manifest() -> None:
-    """Save manifest after a task completes."""
+def _persist_manifest(*, drain_events: bool = True) -> None:
+    """Persist the current manifest state through a single synchronized path."""
     import screenspace
 
     with _persist_lock:
-        if _worker:
+        if _worker and drain_events:
             new_events = _worker.drain_new_events()
             if new_events:
                 _manifest.setdefault("events", []).extend(new_events)
-            tasks = _worker.get_all_tasks()
-            screenspace.save_screenspace_manifest(
-                _manifest.get("regions", {}),
-                tasks,
-                _manifest.get("events", []),
-                stashes=_manifest.get("stashes", []),
-            )
+        tasks = _worker.get_all_tasks() if _worker else _manifest.get("tasks", [])
+        _manifest["tasks"] = tasks
+        screenspace.save_screenspace_manifest(
+            _manifest.get("regions", {}),
+            tasks,
+            _manifest.get("events", []),
+            stashes=_manifest.get("stashes", []),
+        )
