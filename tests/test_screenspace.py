@@ -61,7 +61,9 @@ class TestColorMatches:
     def test_exact_match(self):
         region = np.full((10, 10, 3), [255, 0, 0], dtype=np.uint8)
         hsv = screenspace.average_color_hsv(region)
-        matched, conf = screenspace.color_matches(region, hsv, {"h": 5, "s": 10, "v": 10})
+        matched, conf = screenspace.color_matches(
+            region, hsv, {"h": 5, "s": 10, "v": 10}
+        )
         assert matched
         assert conf > 0.0
 
@@ -78,7 +80,9 @@ class TestColorMatches:
         region = np.full((10, 10, 3), [0, 0, 255], dtype=np.uint8)
         # Target near the wrap boundary
         target = {"h": 175.0, "s": 255.0, "v": 255.0}
-        matched, _conf = screenspace.color_matches(region, target, {"h": 10, "s": 10, "v": 10})
+        matched, _conf = screenspace.color_matches(
+            region, target, {"h": 10, "s": 10, "v": 10}
+        )
         assert matched
 
 

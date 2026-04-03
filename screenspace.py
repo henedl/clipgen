@@ -517,7 +517,11 @@ def scan_video_frames(
 
     def _process_frame(raw_frame: np.ndarray, ts: float) -> Optional[bool]:
         """Apply region crop, downscale, phash skip, then call callback."""
-        pixels = raw_frame if full_frame else extract_region(raw_frame, region)
+        if full_frame:
+            pixels = raw_frame
+        else:
+            assert region is not None
+            pixels = extract_region(raw_frame, region)
         if _max_dim > 0:
             ph, pw = pixels.shape[:2]
             if ph > _max_dim or pw > _max_dim:
@@ -1065,9 +1069,7 @@ def scan_similarity(
             # Always resize candidate to match reference dimensions for SSIM
             ph, pw = pixels.shape[:2]
             if pw != cmp_w or ph != cmp_h:
-                cand = cv2.resize(
-                    pixels, (cmp_w, cmp_h), interpolation=cv2.INTER_AREA
-                )
+                cand = cv2.resize(pixels, (cmp_w, cmp_h), interpolation=cv2.INTER_AREA)
             else:
                 cand = pixels
             cand_gray = cv2.cvtColor(
@@ -2486,7 +2488,7 @@ class ScreenspaceWorker:
             resume_at = start + progress * (end - start)
 
             with self._lock:
-                task["_partial_results"] = list(task.get("result", []))
+                task["_partial_results"] = list(task.get("result") or [])
                 task["_progress_offset"] = progress
                 task["_progress_scale"] = max(1.0 - progress, 0.001)
                 task.pop("_paused_flag", None)
