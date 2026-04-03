@@ -766,6 +766,7 @@ def _ffmpeg_pipe_frames(
 
     frame_size = out_w * out_h * 3
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    assert proc.stdout is not None  # guaranteed by stdout=PIPE
     frame_idx = 0
     try:
         while True:
@@ -1465,6 +1466,7 @@ def generate_timelapse(
     cmd += ["-progress", "pipe:1"]
     try:
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        assert proc.stdout is not None  # guaranteed by stdout=PIPE
     except (FileNotFoundError, OSError):
         return None
 
@@ -2596,8 +2598,6 @@ class ScreenspaceWorker:
                             future.result()
                         except Exception as exc:
                             utils.warning_print(f"Worker task {tid} raised: {exc}")
-
-                    if done_ids:
                         if self.on_task_complete:
                             try:
                                 self.on_task_complete()
