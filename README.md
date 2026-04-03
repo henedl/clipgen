@@ -203,8 +203,8 @@ Output: `dist/clipgen` (macOS) or `dist/clipgen.exe` (Windows).
 
 ## Testing
 
-- Run the smoke test suite before releases and when adding features:
-  - `uv run pytest -c tests/pytest.ini`
+- Run the smoke test suite before releases and when adding features (pytest is optional `dev` only — not required for `uv sync` / running clipgen):
+  - `uv run --extra dev pytest -c tests/pytest.ini`
 - Contributor rule:
   - Every new CLI mode, flag, or selector should include at least one smoke test in the same PR.
 
