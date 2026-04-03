@@ -35,6 +35,7 @@ API endpoints (all under /screenspace/):
 
 from __future__ import annotations
 
+import binascii
 import copy
 import json
 import math
@@ -59,6 +60,36 @@ import video
 
 FlaskResponse = Union[Response, Tuple[Response, int]]
 
+_VALID_TASK_TYPES = (
+    "multitool",
+    "color",
+    "change",
+    "similarity",
+    "text",
+    "numbers",
+    "timelapse",
+    "template",
+    "flow",
+    "scene",
+    "inactivity",
+)
+_VALID_STEP_TYPES = (
+    "color",
+    "change",
+    "similarity",
+    "text",
+    "numbers",
+    "template",
+    "flow",
+    "scene",
+)
+_TASK_BINARY_KEYS = (
+    "reference_frame",
+    "template_image",
+    "template_mask",
+    "reference_scenes",
+)
+
 # ---- Module-level state (set once by _init_screenspace_state) ----
 
 _manifest: Dict[str, Any] = {}
@@ -73,7 +104,7 @@ _video_metadata_cache: Dict[str, Dict[str, Any]] = {}
 
 _sse_clients: list[queue_mod.Queue[str]] = []
 _sse_clients_lock = threading.Lock()
-_persist_lock = threading.Lock()
+_manifest_lock = threading.Lock()
 
 
 def _notify_sse_clients(event_type: str = "update") -> None:
@@ -224,16 +255,15 @@ def api_video_info(participant: str) -> FlaskResponse:
 
     import cv2
 
-    cap = cv2.VideoCapture(video_path)
-    if not cap.isOpened():
-        return jsonify({"ok": False, "error": "Could not open video file"}), 500
-
-    vid_fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
-    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    total_frames = cap.get(cv2.CAP_PROP_FRAME_COUNT)
+    with _video_cap_lock:
+        cap = _get_video_cap(video_path)
+        if cap is None:
+            return jsonify({"ok": False, "error": "Could not open video file"}), 500
+        vid_fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        total_frames = cap.get(cv2.CAP_PROP_FRAME_COUNT)
     duration = round(total_frames / vid_fps) if vid_fps > 0 else 0
-    cap.release()
 
     info: Dict[str, Any] = {
         "participant": participant,
@@ -333,8 +363,9 @@ def api_regions_create() -> FlaskResponse:
     if "description" in data:
         region["description"] = str(data["description"])
 
-    _manifest.setdefault("regions", {})[name] = region
-    _persist_manifest(drain_events=False)
+    with _manifest_lock:
+        _manifest.setdefault("regions", {})[name] = region
+        _do_persist(drain_events=False)
 
     return jsonify({"ok": True, "region": region})
 
@@ -346,8 +377,9 @@ def api_regions_delete(name: str) -> FlaskResponse:
     if name not in regions:
         return jsonify({"ok": False, "error": f"Region '{name}' not found"}), 404
 
-    del regions[name]
-    _persist_manifest(drain_events=False)
+    with _manifest_lock:
+        del regions[name]
+        _do_persist(drain_events=False)
 
     return jsonify({"ok": True})
 
@@ -374,9 +406,10 @@ def api_stashes_create() -> FlaskResponse:
         "createdAt": datetime.now(timezone.utc).isoformat(),
         "regions": copy.deepcopy(regions),
     }
-    _manifest.setdefault("stashes", []).append(stash)
-    _manifest["regions"] = {}
-    _persist_manifest(drain_events=False)
+    with _manifest_lock:
+        _manifest.setdefault("stashes", []).append(stash)
+        _manifest["regions"] = {}
+        _do_persist(drain_events=False)
     return jsonify({"ok": True, "stash": stash})
 
 
@@ -393,10 +426,10 @@ def api_stashes_update(stash_id: str) -> FlaskResponse:
         return jsonify({"ok": False, "error": "Stash not found"}), 404
 
     name = data.get("name", "").strip()
-    if name:
-        stash["name"] = name
-
-    _persist_manifest(drain_events=False)
+    with _manifest_lock:
+        if name:
+            stash["name"] = name
+        _do_persist(drain_events=False)
     return jsonify({"ok": True, "stash": stash})
 
 
@@ -408,8 +441,9 @@ def api_stashes_delete(stash_id: str) -> FlaskResponse:
     if idx is None:
         return jsonify({"ok": False, "error": "Stash not found"}), 404
 
-    stashes.pop(idx)
-    _persist_manifest(drain_events=False)
+    with _manifest_lock:
+        stashes.pop(idx)
+        _do_persist(drain_events=False)
     return jsonify({"ok": True})
 
 
@@ -422,8 +456,9 @@ def api_stashes_restore(stash_id: str) -> FlaskResponse:
         return jsonify({"ok": False, "error": "Stash not found"}), 404
 
     stash = stashes[idx]
-    _manifest["regions"] = copy.deepcopy(stash["regions"])
-    _persist_manifest(drain_events=False)
+    with _manifest_lock:
+        _manifest["regions"] = copy.deepcopy(stash["regions"])
+        _do_persist(drain_events=False)
     return jsonify({"ok": True, "regions": _manifest["regions"]})
 
 
@@ -502,22 +537,12 @@ def api_tasks_create() -> FlaskResponse:
         return jsonify({"ok": False, "error": "JSON body required"}), 400
 
     task_type = data.get("type", "").strip()
-    valid_types = (
-        "multitool",
-        "color",
-        "change",
-        "similarity",
-        "text",
-        "numbers",
-        "timelapse",
-        "template",
-        "flow",
-        "scene",
-        "inactivity",
-    )
-    if task_type not in valid_types:
+    if task_type not in _VALID_TASK_TYPES:
         return jsonify(
-            {"ok": False, "error": f"type must be one of: {', '.join(valid_types)}"}
+            {
+                "ok": False,
+                "error": f"type must be one of: {', '.join(_VALID_TASK_TYPES)}",
+            }
         ), 400
 
     participant = data.get("participant", "").strip()
@@ -549,16 +574,6 @@ def api_tasks_create() -> FlaskResponse:
             return jsonify(
                 {"ok": False, "error": "Multitool requires at least 2 steps"}
             ), 400
-        allowed_step_types = (
-            "color",
-            "change",
-            "similarity",
-            "text",
-            "numbers",
-            "template",
-            "flow",
-            "scene",
-        )
         for i, step_raw in enumerate(mt_steps):
             if not isinstance(step_raw, dict):
                 return jsonify(
@@ -566,7 +581,7 @@ def api_tasks_create() -> FlaskResponse:
                 ), 400
             step_v = cast(Dict[str, Any], step_raw)
             stype = step_v.get("type", "")
-            if stype not in allowed_step_types:
+            if stype not in _VALID_STEP_TYPES:
                 return jsonify(
                     {"ok": False, "error": f"Step {i}: invalid type '{stype}'"}
                 ), 400
@@ -713,7 +728,7 @@ def api_tasks_create() -> FlaskResponse:
                 img_bytes = base64.b64decode(upload_b64)
                 img_arr = np.frombuffer(img_bytes, dtype=np.uint8)
                 img = cv2.imdecode(img_arr, cv2.IMREAD_UNCHANGED)
-            except Exception:
+            except (ValueError, binascii.Error):
                 return jsonify(
                     {"ok": False, "error": "Could not decode uploaded image"}
                 ), 400
@@ -784,103 +799,106 @@ def api_tasks_create() -> FlaskResponse:
         import numpy as np
 
         steps = parameters.get("steps", [])
-        for i, step in enumerate(steps):
-            stype = step.get("type", "")
+        _needs_video = any(
+            s.get("type") in ("similarity", "scene")
+            or (s.get("type") == "template" and not s.get("template_image_data"))
+            for s in steps
+        )
+        cap = None
+        if _needs_video:
+            cap = cv2.VideoCapture(video_path)
+            if not cap.isOpened():
+                return jsonify({"ok": False, "error": "Could not open video"}), 500
+        try:
+            for i, step in enumerate(steps):
+                stype = step.get("type", "")
 
-            # Resolve this step's region to pixel coords
-            step_region_name = (step.get("region") or "").strip()
-            if step_region_name and step_region_name in all_known_regions:
-                step["region_coords"] = _resolve_region_coords(step_region_name)
-            else:
-                step["region_coords"] = region_coords  # fallback to top-level
-
-            step_rc = step["region_coords"]
-
-            if stype == "similarity":
-                ref_ts = cast(float, step["reference_timestamp"])
-                cap = cv2.VideoCapture(video_path)
-                if not cap.isOpened():
-                    return jsonify({"ok": False, "error": "Could not open video"}), 500
-                cap.set(cv2.CAP_PROP_POS_MSEC, float(ref_ts) * 1000.0)
-                ret, frame = cap.read()
-                cap.release()
-                if not ret:
-                    return jsonify(
-                        {
-                            "ok": False,
-                            "error": f"Step {i}: could not read reference frame",
-                        }
-                    ), 400
-                step["reference_frame"] = screenspace.extract_region(frame, step_rc)
-
-            elif stype == "template":
-                upload_b64 = step.pop("template_image_data", None)
-                if upload_b64:
-                    try:
-                        img_bytes = base64.b64decode(upload_b64)
-                        img_arr = np.frombuffer(img_bytes, dtype=np.uint8)
-                        img = cv2.imdecode(img_arr, cv2.IMREAD_UNCHANGED)
-                    except Exception:
-                        return jsonify(
-                            {
-                                "ok": False,
-                                "error": f"Step {i}: could not decode uploaded image",
-                            }
-                        ), 400
-                    if img is None:
-                        return jsonify(
-                            {"ok": False, "error": f"Step {i}: invalid image data"}
-                        ), 400
-                    if len(img.shape) == 2:
-                        img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
-                    if img.shape[2] == 4:
-                        step["template_mask"] = img[:, :, 3]
-                        step["template_image"] = cv2.cvtColor(img, cv2.COLOR_BGRA2BGR)
-                    else:
-                        step["template_image"] = img
+                # Resolve this step's region to pixel coords
+                step_region_name = (step.get("region") or "").strip()
+                if step_region_name and step_region_name in all_known_regions:
+                    step["region_coords"] = _resolve_region_coords(step_region_name)
                 else:
-                    ref_ts = cast(float, step["reference_timestamp"])
-                    cap = cv2.VideoCapture(video_path)
-                    if not cap.isOpened():
-                        return jsonify(
-                            {"ok": False, "error": "Could not open video"}
-                        ), 500
-                    cap.set(cv2.CAP_PROP_POS_MSEC, float(ref_ts) * 1000.0)
-                    ret, frame = cap.read()
-                    cap.release()
-                    if not ret:
-                        return jsonify(
-                            {
-                                "ok": False,
-                                "error": f"Step {i}: could not read template frame",
-                            }
-                        ), 400
-                    step["template_image"] = screenspace.extract_region(frame, step_rc)
+                    step["region_coords"] = region_coords  # fallback to top-level
 
-            elif stype == "scene":
-                scene_refs = cast(List[Dict[str, Any]], step["scene_references"])
-                cap = cv2.VideoCapture(video_path)
-                if not cap.isOpened():
-                    return jsonify({"ok": False, "error": "Could not open video"}), 500
-                ref_scenes_list = []
-                for ref in scene_refs:
-                    cap.set(cv2.CAP_PROP_POS_MSEC, float(ref["timestamp"]) * 1000.0)
-                    ret, frame = cap.read()
+                step_rc = step["region_coords"]
+
+                if stype == "similarity":
+                    ref_ts = cast(float, step["reference_timestamp"])
+                    cap.set(cv2.CAP_PROP_POS_MSEC, float(ref_ts) * 1000.0)  # type: ignore[union-attr]
+                    ret, frame = cap.read()  # type: ignore[union-attr]
                     if not ret:
-                        cap.release()
                         return jsonify(
                             {
                                 "ok": False,
-                                "error": f"Step {i}: could not read frame for scene '{ref['name']}'",
+                                "error": f"Step {i}: could not read reference frame",
                             }
                         ), 400
-                    ref_region = screenspace.extract_region(frame, step_rc)
-                    scene_entry: dict = {"name": ref["name"], "frame": ref_region}
-                    if "threshold" in ref:
-                        scene_entry["threshold"] = float(ref["threshold"])
-                    ref_scenes_list.append(scene_entry)
+                    step["reference_frame"] = screenspace.extract_region(frame, step_rc)
+
+                elif stype == "template":
+                    upload_b64 = step.pop("template_image_data", None)
+                    if upload_b64:
+                        try:
+                            img_bytes = base64.b64decode(upload_b64)
+                            img_arr = np.frombuffer(img_bytes, dtype=np.uint8)
+                            img = cv2.imdecode(img_arr, cv2.IMREAD_UNCHANGED)
+                        except (ValueError, binascii.Error):
+                            return jsonify(
+                                {
+                                    "ok": False,
+                                    "error": f"Step {i}: could not decode uploaded image",
+                                }
+                            ), 400
+                        if img is None:
+                            return jsonify(
+                                {"ok": False, "error": f"Step {i}: invalid image data"}
+                            ), 400
+                        if len(img.shape) == 2:
+                            img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
+                        if img.shape[2] == 4:
+                            step["template_mask"] = img[:, :, 3]
+                            step["template_image"] = cv2.cvtColor(
+                                img, cv2.COLOR_BGRA2BGR
+                            )
+                        else:
+                            step["template_image"] = img
+                    else:
+                        ref_ts = cast(float, step["reference_timestamp"])
+                        cap.set(cv2.CAP_PROP_POS_MSEC, float(ref_ts) * 1000.0)  # type: ignore[union-attr]
+                        ret, frame = cap.read()  # type: ignore[union-attr]
+                        if not ret:
+                            return jsonify(
+                                {
+                                    "ok": False,
+                                    "error": f"Step {i}: could not read template frame",
+                                }
+                            ), 400
+                        step["template_image"] = screenspace.extract_region(
+                            frame, step_rc
+                        )
+
+                elif stype == "scene":
+                    scene_refs = cast(List[Dict[str, Any]], step["scene_references"])
+                    ref_scenes_list = []
+                    for ref in scene_refs:
+                        cap.set(cv2.CAP_PROP_POS_MSEC, float(ref["timestamp"]) * 1000.0)  # type: ignore[union-attr]
+                        ret, frame = cap.read()  # type: ignore[union-attr]
+                        if not ret:
+                            return jsonify(
+                                {
+                                    "ok": False,
+                                    "error": f"Step {i}: could not read frame for scene '{ref['name']}'",
+                                }
+                            ), 400
+                        ref_region = screenspace.extract_region(frame, step_rc)
+                        scene_entry: dict = {"name": ref["name"], "frame": ref_region}
+                        if "threshold" in ref:
+                            scene_entry["threshold"] = float(ref["threshold"])
+                        ref_scenes_list.append(scene_entry)
+                    step["reference_scenes"] = ref_scenes_list
+        finally:
+            if cap is not None:
                 cap.release()
-                step["reference_scenes"] = ref_scenes_list
 
     task = screenspace.create_task(
         task_type=task_type,
@@ -990,8 +1008,9 @@ def api_event_exclude(event_id: str) -> FlaskResponse:
     """Set an event as excluded."""
     for e in _manifest.get("events", []):
         if e["id"] == event_id:
-            e["excluded"] = True
-            _persist_manifest(drain_events=False)
+            with _manifest_lock:
+                e["excluded"] = True
+                _do_persist(drain_events=False)
             return jsonify({"ok": True})
     return jsonify({"ok": False, "error": "Event not found"}), 404
 
@@ -1001,8 +1020,9 @@ def api_event_include(event_id: str) -> FlaskResponse:
     """Set an event as included."""
     for e in _manifest.get("events", []):
         if e["id"] == event_id:
-            e["excluded"] = False
-            _persist_manifest(drain_events=False)
+            with _manifest_lock:
+                e["excluded"] = False
+                _do_persist(drain_events=False)
             return jsonify({"ok": True})
     return jsonify({"ok": False, "error": "Event not found"}), 404
 
@@ -1014,12 +1034,13 @@ def api_events_bulk_exclude() -> FlaskResponse:
     ids = set(data.get("ids", []))
     if not ids:
         return jsonify({"ok": False, "error": "ids list required"}), 400
-    count = 0
-    for e in _manifest.get("events", []):
-        if e["id"] in ids:
-            e["excluded"] = True
-            count += 1
-    _persist_manifest(drain_events=False)
+    with _manifest_lock:
+        count = 0
+        for e in _manifest.get("events", []):
+            if e["id"] in ids:
+                e["excluded"] = True
+                count += 1
+        _do_persist(drain_events=False)
     return jsonify({"ok": True, "updated": count})
 
 
@@ -1030,12 +1051,13 @@ def api_events_bulk_include() -> FlaskResponse:
     ids = set(data.get("ids", []))
     if not ids:
         return jsonify({"ok": False, "error": "ids list required"}), 400
-    count = 0
-    for e in _manifest.get("events", []):
-        if e["id"] in ids:
-            e["excluded"] = False
-            count += 1
-    _persist_manifest(drain_events=False)
+    with _manifest_lock:
+        count = 0
+        for e in _manifest.get("events", []):
+            if e["id"] in ids:
+                e["excluded"] = False
+                count += 1
+        _do_persist(drain_events=False)
     return jsonify({"ok": True, "updated": count})
 
 
@@ -1048,12 +1070,15 @@ def _coerce_float(
     *,
     required: bool = False,
     context: str = "",
-) -> float:
-    """Validate and coerce a request field to a finite float."""
+) -> Optional[float]:
+    """Validate and coerce a request field to a finite float.
+
+    Returns None when value is None and required=False.
+    """
     if value is None:
         if required:
             raise ValueError(f"{context}{field_name} is required")
-        raise ValueError(f"{context}{field_name} must be a number")
+        return None
     try:
         number = float(value)
     except (TypeError, ValueError) as exc:
@@ -1111,18 +1136,12 @@ def _clean_task(task: Dict[str, Any]) -> Dict[str, Any]:
     """Remove internal fields from a task dict for API responses."""
     cleaned = {k: v for k, v in task.items() if not k.startswith("_")}
     if "parameters" in cleaned:
-        _binary_keys = (
-            "reference_frame",
-            "template_image",
-            "template_mask",
-            "reference_scenes",
-        )
         cleaned["parameters"] = {
-            k: v for k, v in cleaned["parameters"].items() if k not in _binary_keys
+            k: v for k, v in cleaned["parameters"].items() if k not in _TASK_BINARY_KEYS
         }
         # Strip binary data and internal coords from multitool step parameters
         if "steps" in cleaned["parameters"]:
-            _step_strip_keys = _binary_keys + ("region_coords",)
+            _step_strip_keys = _TASK_BINARY_KEYS + ("region_coords",)
             cleaned["parameters"]["steps"] = [
                 {k: v for k, v in s.items() if k not in _step_strip_keys}
                 for s in cleaned["parameters"]["steps"]
@@ -1177,7 +1196,6 @@ def _init_screenspace_state(
 
 def _discover_participant_videos(study_name: str) -> None:
     """Scan input directory for source video files and populate _participants."""
-    global _participants
     input_dir = Path(utils.get_effective_input_dir())
     if not input_dir.is_dir():
         return
@@ -1196,20 +1214,25 @@ def _discover_participant_videos(study_name: str) -> None:
                 )
 
 
-def _persist_manifest(*, drain_events: bool = True) -> None:
-    """Persist the current manifest state through a single synchronized path."""
+def _do_persist(*, drain_events: bool = True) -> None:
+    """Persist manifest to disk — caller must hold _manifest_lock."""
     import screenspace
 
-    with _persist_lock:
-        if _worker and drain_events:
-            new_events = _worker.drain_new_events()
-            if new_events:
-                _manifest.setdefault("events", []).extend(new_events)
-        tasks = _worker.get_all_tasks() if _worker else _manifest.get("tasks", [])
-        _manifest["tasks"] = tasks
-        screenspace.save_screenspace_manifest(
-            _manifest.get("regions", {}),
-            tasks,
-            _manifest.get("events", []),
-            stashes=_manifest.get("stashes", []),
-        )
+    if _worker and drain_events:
+        new_events = _worker.drain_new_events()
+        if new_events:
+            _manifest.setdefault("events", []).extend(new_events)
+    tasks = _worker.get_all_tasks() if _worker else _manifest.get("tasks", [])
+    _manifest["tasks"] = tasks
+    screenspace.save_screenspace_manifest(
+        _manifest.get("regions", {}),
+        tasks,
+        _manifest.get("events", []),
+        stashes=_manifest.get("stashes", []),
+    )
+
+
+def _persist_manifest(*, drain_events: bool = True) -> None:
+    """Persist the current manifest state through a single synchronized path."""
+    with _manifest_lock:
+        _do_persist(drain_events=drain_events)
