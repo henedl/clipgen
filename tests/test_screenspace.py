@@ -652,6 +652,13 @@ class TestScreenspaceWorker:
             t = worker.get_task(t2["id"])
             assert t is not None
             assert t["status"] in ("completed", "failed")
+            # on_task_complete fires in the _run loop after the future is
+            # collected, which may lag behind the task status change.
+            # Wait for the callback to actually fire for task 2.
+            for _ in range(20):
+                if call_count["n"] >= 2:
+                    break
+                time.sleep(0.1)
             assert call_count["n"] >= 2
         finally:
             worker.stop()
