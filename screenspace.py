@@ -2486,10 +2486,9 @@ class ScreenspaceWorker:
             resume_at = start + progress * (end - start)
 
             with self._lock:
-                task["_partial_results"] = task.get("result", [])
+                task["_partial_results"] = list(task.get("result", []))
                 task["_progress_offset"] = progress
                 task["_progress_scale"] = max(1.0 - progress, 0.001)
-                task.pop("result", None)
                 task.pop("_paused_flag", None)
                 params["start_seconds"] = resume_at
                 task["status"] = TASK_STATUS_QUEUED
