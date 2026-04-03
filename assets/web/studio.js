@@ -1273,6 +1273,10 @@
   function bindGridEvents() {
     var grid = qs("#sheetGrid");
 
+    grid.addEventListener("selectstart", function (ev) {
+      ev.preventDefault();
+    });
+
     grid.addEventListener("click", function (ev) {
       // Batch select: click # header
       var batchTh = ev.target.closest(".col-row-num-header");
