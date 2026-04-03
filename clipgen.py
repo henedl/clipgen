@@ -854,8 +854,9 @@ def process_clips(
     # -- Phase 2: Execute ffmpeg work ------------------------------------------
     workers = _resolve_clip_workers()
     use_parallel = workers >= 2 and len(prepared) >= 2
+    _EMPTY_RESULT: Tuple[int, List[Tuple[str, str, str]]] = (0, [])
     # Pre-allocate results in original order for deterministic artifact output
-    results: List[Optional[Tuple[int, List[Tuple[str, str, str]]]]] = [None] * len(
+    results: List[Tuple[int, List[Tuple[str, str, str]]]] = [_EMPTY_RESULT] * len(
         prepared
     )
 
@@ -971,7 +972,7 @@ def process_clips(
     outputs_skipped = skipped_no_times + skipped_no_video
 
     for idx, (clip, base_video) in enumerate(prepared):
-        generated_count, segment_details = results[idx]  # type: ignore[misc]
+        generated_count, segment_details = results[idx]
         outputs_generated += generated_count
         if generated_count < len(clip["times"]):
             outputs_skipped += len(clip["times"]) - generated_count
@@ -984,9 +985,9 @@ def process_clips(
 
     if config.TRANSCRIBE_ENABLED:
         transcribe_items = [
-            (clip, base_video, results[idx][1])  # type: ignore[index]
+            (clip, base_video, results[idx][1])
             for idx, (clip, base_video) in enumerate(prepared)
-            if results[idx] and results[idx][1]  # type: ignore[index]
+            if results[idx][1]
         ]
         if transcribe_items:
             progress = utils.create_progress_bar()
