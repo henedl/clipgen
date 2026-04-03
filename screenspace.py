@@ -1147,14 +1147,14 @@ def scan_similarity(
     # Pre-resize and preprocess reference frame once
     max_dim = 256
     rh, rw = reference_frame.shape[:2]
-    needs_resize = rh > max_dim or rw > max_dim
-    if needs_resize:
+    if rh > max_dim or rw > max_dim:
         scale = max_dim / max(rh, rw)
-        new_w, new_h = int(rw * scale), int(rh * scale)
+        cmp_w, cmp_h = int(rw * scale), int(rh * scale)
         ref_resized = cv2.resize(
-            reference_frame, (new_w, new_h), interpolation=cv2.INTER_AREA
+            reference_frame, (cmp_w, cmp_h), interpolation=cv2.INTER_AREA
         )
     else:
+        cmp_w, cmp_h = rw, rh
         ref_resized = reference_frame
     bk = config.SCREENSPACE_BLUR_KERNEL
     ref_gray = cv2.cvtColor(
@@ -1166,33 +1166,34 @@ def scan_similarity(
     def _cb(ts: float, pixels: np.ndarray) -> Optional[bool]:
         if cancel_flag and cancel_flag():
             return False
-        if pixels.shape == reference_frame.shape:
-            # Static-frame skip
-            gray = cv2.cvtColor(pixels, cv2.COLOR_BGR2GRAY)
-            if prev_skip_gray[0] is not None:
-                if float(np.mean(cv2.absdiff(prev_skip_gray[0], gray))) < 2.0:
-                    if on_progress and total_range > 0:
-                        on_progress((ts - start_seconds) / total_range)
-                    return None
-            prev_skip_gray[0] = gray
+        # Static-frame skip
+        gray = cv2.cvtColor(pixels, cv2.COLOR_BGR2GRAY)
+        if prev_skip_gray[0] is not None:
+            if float(np.mean(cv2.absdiff(prev_skip_gray[0], gray))) < 2.0:
+                if on_progress and total_range > 0:
+                    on_progress((ts - start_seconds) / total_range)
+                return None
+        prev_skip_gray[0] = gray
 
-            frame_phash = compute_phash(pixels)
-            if ref_phash - frame_phash <= phash_threshold:
-                if needs_resize:
-                    cand = cv2.resize(
-                        pixels, (new_w, new_h), interpolation=cv2.INTER_AREA
-                    )
-                else:
-                    cand = pixels
-                cand_gray = cv2.cvtColor(
-                    cv2.GaussianBlur(cand, (bk, bk), 0), cv2.COLOR_BGR2GRAY
+        frame_phash = compute_phash(pixels)
+        if ref_phash - frame_phash <= phash_threshold:
+            # Always resize candidate to match reference dimensions for SSIM
+            ph, pw = pixels.shape[:2]
+            if pw != cmp_w or ph != cmp_h:
+                cand = cv2.resize(
+                    pixels, (cmp_w, cmp_h), interpolation=cv2.INTER_AREA
                 )
-                score = float(ssim(ref_gray, cand_gray))
-                if score >= threshold:
-                    rd = {"timestamp": ts, "score": round(score, 4)}
-                    results.append(rd)
-                    if on_result:
-                        on_result(rd)
+            else:
+                cand = pixels
+            cand_gray = cv2.cvtColor(
+                cv2.GaussianBlur(cand, (bk, bk), 0), cv2.COLOR_BGR2GRAY
+            )
+            score = float(ssim(ref_gray, cand_gray))
+            if score >= threshold:
+                rd = {"timestamp": ts, "score": round(score, 4)}
+                results.append(rd)
+                if on_result:
+                    on_result(rd)
         if on_progress and total_range > 0:
             on_progress((ts - start_seconds) / total_range)
         return None
@@ -2108,7 +2109,11 @@ def check_frame_for_tool(
         best_name = ""
         best_score = 0.0
         for ref in ref_scenes:
-            ref_fp = compute_scene_fingerprint(ref["frame"])
+            # Cache fingerprint on the reference dict to avoid recomputing per frame
+            ref_fp = ref.get("_cached_fingerprint")
+            if ref_fp is None:
+                ref_fp = compute_scene_fingerprint(ref["frame"])
+                ref["_cached_fingerprint"] = ref_fp
             score = compare_scene_fingerprints(fp, ref_fp)
             if score > best_score:
                 best_score = score
@@ -2497,7 +2502,6 @@ class ScreenspaceWorker:
         self._paused = threading.Event()
         self.on_task_complete: Optional[Callable[[], None]] = None
         self.on_progress_update: Optional[Callable[[], None]] = None
-        self._last_progress_notify: float = 0.0
 
     def start(self) -> None:
         """Start the worker thread."""
@@ -2562,13 +2566,26 @@ class ScreenspaceWorker:
         """Reorder queued tasks by the given ID sequence.
 
         Assigns new priorities so that earlier IDs in the list have
-        lower (higher-priority) values.
+        lower (higher-priority) values.  Drains and re-inserts queue
+        items so the PriorityQueue heap reflects the new ordering.
         """
         with self._lock:
             for i, tid in enumerate(task_ids):
                 task = self._tasks.get(tid)
                 if task and task["status"] == TASK_STATUS_QUEUED:
                     task["priority"] = i + 1
+
+            # Drain the queue and re-insert with updated priorities
+            pending_items: List[Any] = []
+            while not self._queue.empty():
+                try:
+                    pending_items.append(self._queue.get_nowait())
+                except queue.Empty:
+                    break
+            for priority, created_at, tid in pending_items:
+                task = self._tasks.get(tid) if isinstance(tid, str) else None
+                new_priority = task["priority"] if task else priority
+                self._queue.put((new_priority, created_at, tid))
         return True
 
     @property
@@ -2806,6 +2823,16 @@ class ScreenspaceWorker:
                 t["result"] = list(t.get("_partial_results", []))
                 t["_raw_results"] = list(t.get("_partial_results", []))
 
+        # Per-task throttle for SSE notifications (avoids cross-task race)
+        last_notify: List[float] = [0.0]
+
+        def _throttled_notify() -> None:
+            now = time.monotonic()
+            if now - last_notify[0] >= 0.5:
+                last_notify[0] = now
+                if self.on_progress_update:
+                    self.on_progress_update()
+
         def _on_progress(progress: float) -> None:
             with self._lock:
                 t = self._tasks.get(task_id)
@@ -2813,12 +2840,7 @@ class ScreenspaceWorker:
                     offset = t.get("_progress_offset", 0.0)
                     scale = t.get("_progress_scale", 1.0)
                     t["progress"] = min(offset + progress * scale, 1.0)
-            # Throttled SSE notification (~2 updates/sec)
-            now = time.monotonic()
-            if now - self._last_progress_notify >= 0.5:
-                self._last_progress_notify = now
-                if self.on_progress_update:
-                    self.on_progress_update()
+            _throttled_notify()
 
         def _cancel_flag() -> bool:
             with self._lock:
@@ -2835,12 +2857,7 @@ class ScreenspaceWorker:
                         t["_raw_results"].append(result_dict)
                     if t.get("parameters", {}).get("detect_first"):
                         t["_cancelled"] = True
-            # Throttled SSE notification for new results
-            now = time.monotonic()
-            if now - self._last_progress_notify >= 0.5:
-                self._last_progress_notify = now
-                if self.on_progress_update:
-                    self.on_progress_update()
+            _throttled_notify()
 
         try:
             result = self._dispatch(task, _on_progress, _cancel_flag, _on_result)
