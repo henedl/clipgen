@@ -624,14 +624,22 @@ def _process_single_clip_segments(
                 end_pos=end_time,
                 reencode=config.REENCODING,
             )
+            clip_resolution = None
             if ok and config.TITLECARDS_ENABLED:
                 import titlecards
 
-                ok = titlecards.prepend_titlecard_to_clip(clip, out_name)
+                props = video.probe_video_properties(out_name)
+                if props:
+                    clip_resolution = f"{props['width']}x{props['height']}"
+                ok = titlecards.prepend_titlecard_to_clip(
+                    clip, out_name, resolution=clip_resolution
+                )
             if ok:
                 import titlecards
 
-                ok = titlecards.append_endcard_to_clip(out_name)
+                ok = titlecards.append_endcard_to_clip(
+                    out_name, resolution=clip_resolution
+                )
         elif output_format == "screen":
             ok = video.extract_screenshot(
                 input_file=base_video,
@@ -722,9 +730,15 @@ def _transcribe_segments(
     import transcripts
 
     if base_video not in transcript_cache:
-        transcript_cache[base_video] = transcripts.transcribe_video(
-            str(utils.resolve_input_path(base_video))
-        )
+        resolved = str(utils.resolve_input_path(base_video))
+        cached = transcripts.load_transcript_cache(resolved)
+        if cached is not None:
+            transcript_cache[base_video] = cached
+        else:
+            result = transcripts.transcribe_video(resolved)
+            transcript_cache[base_video] = result
+            if result is not None:
+                transcripts.save_transcript_cache(result, resolved)
     full_transcript = transcript_cache[base_video]
     if not full_transcript:
         return
@@ -1031,6 +1045,11 @@ def process_clips(
         "screen": "screenshot(s)",
         "gif": "GIF(s)",
     }.get(output_format, "file(s)")
+    if config.TITLECARDS_ENABLED:
+        import titlecards
+
+        titlecards.clear_endcard_cache()
+
     if outputs_skipped > 0:
         utils.standard_print(
             f"* Summary: {outputs_generated} {item_name} generated, {outputs_skipped} skipped due to errors."

@@ -35,13 +35,13 @@ import uuid
 from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Callable, Dict, Iterator, List, Optional, Tuple
 
 import cv2
-import imagehash
 import numpy as np
-from PIL import Image
-from skimage.metrics import structural_similarity as ssim
+
+if TYPE_CHECKING:
+    import imagehash
 
 import config
 import utils
@@ -179,12 +179,17 @@ def regions_are_similar(
     b_blur = cv2.GaussianBlur(region_b, (k, k), 0)
     a_gray = cv2.cvtColor(a_blur, cv2.COLOR_BGR2GRAY)
     b_gray = cv2.cvtColor(b_blur, cv2.COLOR_BGR2GRAY)
+    from skimage.metrics import structural_similarity as ssim
+
     score = float(ssim(a_gray, b_gray))
     return score >= threshold, score
 
 
 def compute_phash(region_pixels: np.ndarray) -> imagehash.ImageHash:
     """Compute perceptual hash of a region for fast similarity scanning."""
+    import imagehash
+    from PIL import Image
+
     rgb = cv2.cvtColor(region_pixels, cv2.COLOR_BGR2RGB)
     pil_img = Image.fromarray(rgb)
     return imagehash.phash(pil_img)
@@ -1119,6 +1124,8 @@ def scan_similarity(
     Returns list of ``{timestamp, score}`` dicts, sorted by score
     descending.
     """
+    from skimage.metrics import structural_similarity as ssim
+
     if threshold <= 0:
         threshold = config.SCREENSPACE_SSIM_THRESHOLD
     if interval_seconds <= 0:
@@ -2295,6 +2302,8 @@ def generate_heatmap_gif(
     Divides *results* into *num_frames* temporal buckets, progressively
     accumulates heatmap data, and writes frames as an animated GIF.
     """
+    from PIL import Image
+
     if not results:
         return None
 

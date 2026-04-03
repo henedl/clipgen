@@ -219,7 +219,7 @@ Speed of generating clips, screenshots, GIFs, and reels.
 
 **Trade-offs:** Disk I/O may become the bottleneck on HDDs. On SSDs, 3-4x speedup is realistic. Source video reads are sequential (same file), but ffmpeg handles concurrent reads from the same input well since it seeks independently.
 
-### - [ ] 3B. Titlecard batching
+### - [x] 3B. Titlecard batching
 
 **Current:** Each clip gets its own titlecard via a separate ffmpeg subprocess (titlecards.py:53-101). For 20 clips, that's 20 extra ffmpeg invocations.
 
@@ -235,7 +235,7 @@ Speed of generating clips, screenshots, GIFs, and reels.
 
 **Trade-offs:** Diagnostic-only. No risk, helps users help themselves.
 
-### - [ ] 3D. Transcript caching across sessions
+### - [x] 3D. Transcript caching across sessions
 
 **Prior art:** Skip-if-exists pattern already proven for artifact regeneration in Studio (`cbee9eb`). Same principle: check for cached output before doing expensive work.
 
@@ -251,7 +251,7 @@ Speed of generating clips, screenshots, GIFs, and reels.
 
 Startup, mode-switching, and media loading.
 
-### - [ ] 4A. Lazy-import EasyOCR and scikit-image in Screenspace
+### - [x] 4A. Lazy-import EasyOCR and scikit-image in Screenspace
 
 **Prior art:** Deferred imports for cv2, screenspace, gspread, and openpyxl already done in `8e85ac0`, saving 3-6s on startup. Same pattern to extend.
 
@@ -400,14 +400,14 @@ Additional performance area: the raw speed of reading video frames and writing o
 | [x] | 4 | 3A — Parallel clip cutting | High — 3-4x faster batch generation |
 | [x] | 5 | 1A — SSE for Screenspace progress | Medium — eliminates perceived stalls |
 | [x] | 6 | 1B — Preload first frames | Medium — instant first interaction |
-| [ ] | 7 | 3D — Transcript caching to disk | Medium — eliminates repeat transcription |
+| [x] | 7 | 3D — Transcript caching to disk | Medium — eliminates repeat transcription |
 | [x] | 8 | 1E — DOM batching with fragments | Medium — smoother large lists |
 | [x] | 9 | 5D — Parallel tests with xdist — skipped (suite runs in 0.62s, xdist overhead would regress) | Medium — faster CI feedback |
 | [x] | 10 | 2F — Parallel region analysis | Medium — scales with CPU cores |
 | [x] | 11 | 2E — Batch frame extraction via ffmpeg | Low-Medium — depends on video codec |
-| [ ] | 12 | 4A — Lazy-import heavy libs | Low-Medium — saves seconds on startup |
+| [x] | 12 | 4A — Lazy-import heavy libs | Low-Medium — saves seconds on startup |
 | [x] | 13 | 1C — Optimistic UI in Studio | Low-Medium — better feel during generation |
 | [x] | 14 | 5B — Skip torch for typecheck — skipped (ty needs installed deps) | Low — job already ~25s, marginal gain |
-| [ ] | 15 | 3B — Titlecard batching | Low — small per-clip overhead |
+| [x] | 15 | 3B — Titlecard batching | Low — small per-clip overhead |
 | [ ] | 16 | 4C — Cache-busted static assets | Low — marginal for local tool |
 | [ ] | 17 | 7A — Hardware decode | Low — platform-specific, complex |
