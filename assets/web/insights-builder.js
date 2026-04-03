@@ -1055,6 +1055,7 @@
       var fields = el("div", "insight-fields");
       var titleInput = document.createElement("input");
       titleInput.type = "text";
+      titleInput.autocomplete = "off";
       titleInput.value = insight.title || "";
       titleInput.placeholder = "Insight title";
       titleInput.addEventListener("input", function () {
@@ -1114,6 +1115,7 @@
       tcDiv.appendChild(el("label", "", "Timeline context"));
       var tcInput = document.createElement("input");
       tcInput.type = "text";
+      tcInput.autocomplete = "off";
       tcInput.value = insight.timelineContext || "";
       tcInput.placeholder = "e.g. During onboarding (first 5 minutes)";
       tcInput.addEventListener("input", function () {

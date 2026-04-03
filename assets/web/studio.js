@@ -1950,6 +1950,7 @@
     var input = document.createElement("input");
     input.className = "stash-card-name-input";
     input.type = "text";
+    input.autocomplete = "off";
     input.value = stash.name;
 
     function commit() {
