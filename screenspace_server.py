@@ -824,8 +824,9 @@ def api_tasks_create() -> FlaskResponse:
 
                 if stype == "similarity":
                     ref_ts = cast(float, step["reference_timestamp"])
-                    cap.set(cv2.CAP_PROP_POS_MSEC, float(ref_ts) * 1000.0)  # type: ignore[union-attr]
-                    ret, frame = cap.read()  # type: ignore[union-attr]
+                    assert cap is not None
+                    cap.set(cv2.CAP_PROP_POS_MSEC, float(ref_ts) * 1000.0)
+                    ret, frame = cap.read()
                     if not ret:
                         return jsonify(
                             {
@@ -864,8 +865,9 @@ def api_tasks_create() -> FlaskResponse:
                             step["template_image"] = img
                     else:
                         ref_ts = cast(float, step["reference_timestamp"])
-                        cap.set(cv2.CAP_PROP_POS_MSEC, float(ref_ts) * 1000.0)  # type: ignore[union-attr]
-                        ret, frame = cap.read()  # type: ignore[union-attr]
+                        assert cap is not None
+                        cap.set(cv2.CAP_PROP_POS_MSEC, float(ref_ts) * 1000.0)
+                        ret, frame = cap.read()
                         if not ret:
                             return jsonify(
                                 {
@@ -880,9 +882,10 @@ def api_tasks_create() -> FlaskResponse:
                 elif stype == "scene":
                     scene_refs = cast(List[Dict[str, Any]], step["scene_references"])
                     ref_scenes_list = []
+                    assert cap is not None
                     for ref in scene_refs:
-                        cap.set(cv2.CAP_PROP_POS_MSEC, float(ref["timestamp"]) * 1000.0)  # type: ignore[union-attr]
-                        ret, frame = cap.read()  # type: ignore[union-attr]
+                        cap.set(cv2.CAP_PROP_POS_MSEC, float(ref["timestamp"]) * 1000.0)
+                        ret, frame = cap.read()
                         if not ret:
                             return jsonify(
                                 {
