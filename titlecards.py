@@ -16,13 +16,21 @@ Key functions:
 
 import os
 import tempfile
+import threading
 from pathlib import Path
-from typing import Optional
+from typing import Dict, Optional
 
 import config
 import utils
 import video
 from utils import ClipRecord
+
+# ---------------------------------------------------------------------------
+# Endcard cache — keyed by resolution, shared across threads
+# ---------------------------------------------------------------------------
+
+_endcard_cache: Dict[str, str] = {}
+_endcard_lock = threading.Lock()
 
 
 def _get_video_resolution(filepath: str) -> Optional[str]:
@@ -195,7 +203,40 @@ def build_endcard_frame(resolution: str) -> Optional[str]:
     )
 
 
-def prepend_titlecard_to_clip(clip: ClipRecord, clip_path: str) -> bool:
+def get_or_build_endcard(resolution: str) -> Optional[str]:
+    """Return a cached endcard path for the given resolution, building if needed."""
+    with _endcard_lock:
+        cached = _endcard_cache.get(resolution)
+        if cached and Path(cached).is_file():
+            return cached
+    path = build_endcard_frame(resolution)
+    if path:
+        with _endcard_lock:
+            existing = _endcard_cache.get(resolution)
+            if existing and Path(existing).is_file():
+                try:
+                    Path(path).unlink()
+                except OSError:
+                    pass
+                return existing
+            _endcard_cache[resolution] = path
+    return path
+
+
+def clear_endcard_cache() -> None:
+    """Remove all cached endcard temp files."""
+    with _endcard_lock:
+        for path in _endcard_cache.values():
+            try:
+                Path(path).unlink(missing_ok=True)
+            except (OSError, TypeError):
+                pass
+        _endcard_cache.clear()
+
+
+def prepend_titlecard_to_clip(
+    clip: ClipRecord, clip_path: str, resolution: Optional[str] = None
+) -> bool:
     """Prepend a generated titlecard to an existing clip file in-place.
 
     Returns True when the clip is usable (with or without titlecard), False on hard failure.
@@ -216,7 +257,8 @@ def prepend_titlecard_to_clip(clip: ClipRecord, clip_path: str) -> bool:
         )
         return False
 
-    resolution = _get_video_resolution(clip_path)
+    if not resolution:
+        resolution = _get_video_resolution(clip_path)
     if not resolution:
         utils.warning_print(
             f"Could not determine video resolution for '{clip_path}'. "
@@ -290,7 +332,7 @@ def prepend_titlecard_to_clip(clip: ClipRecord, clip_path: str) -> bool:
                 pass
 
 
-def append_endcard_to_clip(clip_path: str) -> bool:
+def append_endcard_to_clip(clip_path: str, resolution: Optional[str] = None) -> bool:
     """Append an endcard segment to an existing clip file in-place."""
     if not config.TITLECARDS_ENABLED:
         return True
@@ -308,7 +350,8 @@ def append_endcard_to_clip(clip_path: str) -> bool:
         )
         return False
 
-    resolution = _get_video_resolution(clip_path)
+    if not resolution:
+        resolution = _get_video_resolution(clip_path)
     if not resolution:
         utils.warning_print(
             f"Could not determine video resolution for '{clip_path}'. "
@@ -316,7 +359,7 @@ def append_endcard_to_clip(clip_path: str) -> bool:
         )
         return True
 
-    endcard_path = build_endcard_frame(resolution)
+    endcard_path = get_or_build_endcard(resolution)
     if not endcard_path:
         return True
 
@@ -372,10 +415,9 @@ def append_endcard_to_clip(clip_path: str) -> bool:
         os.replace(output_temp_path, clip_path)
         return True
     finally:
-        for temp in (endcard_path, output_temp_path):
-            if not temp:
-                continue
+        # Only clean up the concat output temp — endcard is managed by the cache
+        if output_temp_path:
             try:
-                Path(temp).unlink()
+                Path(output_temp_path).unlink()
             except OSError:
                 pass

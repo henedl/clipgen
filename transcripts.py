@@ -25,6 +25,8 @@ filenames match the corresponding clip filename with the transcript extension.
 
 from __future__ import annotations
 
+import json
+import os
 import re
 from datetime import datetime, timezone
 from pathlib import Path
@@ -149,6 +151,47 @@ def transcribe_video(
         )
     except Exception as exc:
         utils.warning_print(f"Transcription failed for {Path(video_path).name}: {exc}")
+        return None
+
+
+# ---------------------------------------------------------------------------
+# Disk cache (sidecar JSON next to source video)
+# ---------------------------------------------------------------------------
+
+
+def save_transcript_cache(result: TranscriptResult, video_path: str) -> bool:
+    """Save transcript to a sidecar JSON file next to the source video."""
+    cache_path = Path(video_path).with_suffix(".transcript.json")
+    try:
+        data = {
+            "segments": result["segments"],
+            "language": result["language"],
+            "source_file": result["source_file"],
+            "model": result["model"],
+            "video_mtime": os.path.getmtime(video_path),
+        }
+        cache_path.write_text(json.dumps(data, separators=(",", ":")), encoding="utf-8")
+        return True
+    except OSError:
+        return False
+
+
+def load_transcript_cache(video_path: str) -> Optional[TranscriptResult]:
+    """Load cached transcript if sidecar exists and source video hasn't changed."""
+    cache_path = Path(video_path).with_suffix(".transcript.json")
+    if not cache_path.is_file():
+        return None
+    try:
+        data = json.loads(cache_path.read_text(encoding="utf-8"))
+        if data.get("video_mtime") != os.path.getmtime(video_path):
+            return None
+        return TranscriptResult(
+            segments=[TranscriptSegment(**s) for s in data["segments"]],
+            language=data["language"],
+            source_file=data["source_file"],
+            model=data["model"],
+        )
+    except (OSError, json.JSONDecodeError, KeyError, TypeError):
         return None
 
 
