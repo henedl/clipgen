@@ -959,9 +959,7 @@ def api_regenerate() -> FlaskResponse:
         return jsonify({"ok": False, "error": str(e)}), 500
 
 
-def _handle_stash_crud(
-    load_fn: Any, save_fn: Any, id_prefix: str
-) -> FlaskResponse:
+def _handle_stash_crud(load_fn: Any, save_fn: Any, id_prefix: str) -> FlaskResponse:
     """Shared create/update/delete logic for stash endpoints."""
     import uuid
     from datetime import datetime, timezone
