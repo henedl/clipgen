@@ -573,53 +573,29 @@
     if (!wrap) return;
     wrap.innerHTML = "";
 
-    var btn = el("button", "run-picker-btn");
+    var btn = document.createElement("button");
     btn.type = "button";
+    btn.className = "scan-toggle-btn";
 
-    function updateBtn() {
-      btn.innerHTML = "";
+    var icon = el("span", "scan-toggle-icon");
+    var url = 'url("/screenspace/icons/chevron-double-right.svg")';
+    icon.style.maskImage = url;
+    icon.style.webkitMaskImage = url;
+    btn.appendChild(icon);
+
+    function updateState() {
       var isFast = state.scanMode === "fast";
-      if (isFast) {
-        var icon = el("span", "scan-mode-fast-icon");
-        var url = 'url("/screenspace/icons/chevron-double-right.svg")';
-        icon.style.maskImage = url;
-        icon.style.webkitMaskImage = url;
-        btn.appendChild(icon);
-      }
-      btn.appendChild(el("span", "run-picker-btn-text", isFast ? "Fast" : "Normal"));
-      var chev = el("span", "chevron");
-      chev.appendChild(svgChevronDownIcon());
-      btn.appendChild(chev);
+      btn.classList.toggle("active", isFast);
+      btn.setAttribute("data-tooltip", isFast ? "Fast scan enabled" : "Enable fast scan");
     }
-    updateBtn();
+    updateState();
 
-    var panel = el("div", "run-picker-panel hidden");
-    ["normal", "fast"].forEach(function (mode) {
-      var lbl = document.createElement("label");
-      var rb = document.createElement("input");
-      rb.type = "radio";
-      rb.name = "scanMode";
-      rb.value = mode;
-      rb.checked = state.scanMode === mode;
-      rb.addEventListener("change", function () {
-        state.scanMode = mode;
-        updateBtn();
-        closeRunPicker();
-      });
-      lbl.appendChild(rb);
-      lbl.appendChild(document.createTextNode(mode === "fast" ? "Fast" : "Normal"));
-      panel.appendChild(lbl);
-    });
-
-    btn.addEventListener("click", function (e) {
-      e.stopPropagation();
-      var open = !panel.classList.contains("hidden");
-      panel.classList.toggle("hidden", open);
-      btn.classList.toggle("open", !open);
+    btn.addEventListener("click", function () {
+      state.scanMode = state.scanMode === "fast" ? "normal" : "fast";
+      updateState();
     });
 
     wrap.appendChild(btn);
-    wrap.appendChild(panel);
   }
 
   function selectParticipant(pid, initialTimestamp) {
@@ -2115,7 +2091,14 @@
     var slot = qs("#workflowIntervalSlot");
     if (!slot) return;
     slot.innerHTML = "";
-    slot.appendChild(el("span", null, "Interval\u202f(s)"));
+    slot.setAttribute("data-tooltip", "Interval (seconds)");
+    var iconWrap = el("div", "interval-icon");
+    var iconMask = el("span", "interval-icon-mask");
+    var clockUrl = 'url("/screenspace/icons/clock.svg")';
+    iconMask.style.maskImage = clockUrl;
+    iconMask.style.webkitMaskImage = clockUrl;
+    iconWrap.appendChild(iconMask);
+    slot.appendChild(iconWrap);
     var ctrl = el("div", "param-control");
     ctrl.appendChild(numberInput(inputId, min, max, def, step));
     slot.appendChild(ctrl);
