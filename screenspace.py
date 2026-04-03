@@ -1,17 +1,18 @@
 # -*- coding: utf-8 -*-
 """Screenspace analysis engine for clipgen.
 
-Ten analysis tools (passed as 'type' when creating a task):
-  multitool  – chain multiple tools; each subsequent step only checks frames that passed previous steps
-  color      – frames where a region's average HSV color matches a target within tolerance
-  change     – frames where pixel diff ratio exceeds SCREENSPACE_CHANGE_RATIO_THRESHOLD
-  similarity – frames matching a reference capture via SSIM (SCREENSPACE_SSIM_THRESHOLD)
-  text       – OCR fuzzy search for a query string (SCREENSPACE_OCR_FUZZY_THRESHOLD); requires EasyOCR
-  numbers    – OCR numeric comparison with a relational condition (eq/gt/lt/gte/lte/range)
-  timelapse  – sped-up video of a region over a time range
-  template   – find a reference image/template anywhere in the full frame via cv2.matchTemplate
-  flow       – detect motion in a region via dense optical flow (cv2.calcOpticalFlowFarneback)
-  scene      – classify frames by similarity to user-captured reference scenes
+Eleven analysis tools (passed as 'type' when creating a task):
+  multitool   – chain multiple tools; each subsequent step only checks frames that passed previous steps
+  color       – frames where a region's average HSV color matches a target within tolerance
+  change      – frames where pixel diff ratio exceeds SCREENSPACE_CHANGE_RATIO_THRESHOLD
+  similarity  – frames matching a reference capture via SSIM (SCREENSPACE_SSIM_THRESHOLD)
+  text        – OCR fuzzy search for a query string (SCREENSPACE_OCR_FUZZY_THRESHOLD); requires EasyOCR
+  numbers     – OCR numeric comparison with a relational condition (eq/gt/lt/gte/lte/range)
+  timelapse   – sped-up video of a region over a time range
+  template    – find a reference image/template anywhere in the full frame via cv2.matchTemplate
+  flow        – detect motion in a region via dense optical flow (cv2.calcOpticalFlowFarneback)
+  scene       – classify frames by similarity to user-captured reference scenes
+  inactivity  – detect spans of near-duplicate frames via perceptual hashing (loading screens, frozen states)
 
 Workflow: user draws regions on a frame → enqueues tasks → ScreenspaceWorker processes in
 a background thread → results are timestamps or artifact files → state persisted to
@@ -1792,6 +1793,110 @@ def scan_scene(
     return results
 
 
+def scan_inactivity(
+    video_path: str,
+    region: Dict[str, int],
+    threshold: int = 0,
+    min_duration: float = 0.0,
+    interval_seconds: float = 0.0,
+    *,
+    start_seconds: float = 0.0,
+    end_seconds: Optional[float] = None,
+    on_progress: Optional[Callable[[float], None]] = None,
+    cancel_flag: Optional[Callable[[], bool]] = None,
+    on_result: Optional[Callable[[Dict[str, Any]], None]] = None,
+    fast_opts: Optional[Dict[str, Any]] = None,
+) -> List[Dict[str, Any]]:
+    """Scan video for inactivity spans (near-duplicate consecutive frames).
+
+    Uses perceptual hashing to compare consecutive frames.  When frames
+    remain similar (Hamming distance <= *threshold*) for at least
+    *min_duration* seconds, a span result is emitted.
+
+    Returns list of ``{start, end, duration, avg_distance}`` dicts.
+    """
+    if threshold <= 0:
+        threshold = config.SCREENSPACE_INACTIVITY_PHASH_THRESHOLD
+    if min_duration <= 0:
+        min_duration = config.SCREENSPACE_INACTIVITY_MIN_DURATION
+    if interval_seconds <= 0:
+        interval_seconds = config.SCREENSPACE_DEFAULT_INTERVAL
+
+    vid_fps, vid_duration = _probe_video_meta(video_path)
+    if vid_fps <= 0:
+        return []
+
+    if end_seconds is None or end_seconds > vid_duration:
+        end_seconds = vid_duration
+    total_range = end_seconds - start_seconds
+
+    results: List[Dict[str, Any]] = []
+    prev_hash: List[Optional[imagehash.ImageHash]] = [None]
+    span_start: List[Optional[float]] = [None]
+    span_distances: List[List[int]] = [[]]
+    last_ts: List[float] = [start_seconds]
+
+    def _flush_span(span_end: float) -> None:
+        if span_start[0] is not None:
+            dur = span_end - span_start[0]
+            if dur >= min_duration:
+                dists = span_distances[0]
+                avg_dist = sum(dists) / len(dists) if dists else 0.0
+                rd = {
+                    "start": round(span_start[0], 2),
+                    "end": round(span_end, 2),
+                    "duration": round(dur, 2),
+                    "avg_distance": round(avg_dist, 2),
+                }
+                results.append(rd)
+                if on_result:
+                    on_result(rd)
+        span_start[0] = None
+        span_distances[0] = []
+
+    def _cb(ts: float, pixels: np.ndarray) -> Optional[bool]:
+        if cancel_flag and cancel_flag():
+            return False
+
+        curr_hash = compute_phash(pixels)
+        last_ts[0] = ts
+
+        if prev_hash[0] is not None:
+            dist = int(curr_hash - prev_hash[0])
+            if dist <= threshold:
+                # Frame is similar — extend or start span
+                if span_start[0] is None:
+                    span_start[0] = ts - interval_seconds
+                span_distances[0].append(dist)
+            else:
+                # Frame changed — flush any active span
+                _flush_span(ts - interval_seconds)
+        prev_hash[0] = curr_hash
+
+        if on_progress and total_range > 0:
+            on_progress((ts - start_seconds) / total_range)
+        return None
+
+    scan_video_frames(
+        video_path,
+        region,
+        interval_seconds,
+        _cb,
+        start_seconds=start_seconds,
+        end_seconds=end_seconds,
+        fps=vid_fps,
+        duration=vid_duration,
+        fast_opts=fast_opts,
+    )
+
+    # Flush final span if video ended during an inactive period
+    _flush_span(last_ts[0])
+
+    if on_progress:
+        on_progress(1.0)
+    return results
+
+
 # ---------------------------------------------------------------------------
 # Multitool: per-frame evaluation and multi-factor scan
 # ---------------------------------------------------------------------------
@@ -1819,6 +1924,8 @@ def _extract_confidence(tool_type: str, result: Dict[str, Any]) -> float:
         return result.get("score", 0.0)
     elif tool_type == "multitool":
         return result.get("min_confidence", 0.0)
+    elif tool_type == "inactivity":
+        return min(result.get("duration", 0.0) / 30.0, 1.0)
     return 1.0
 
 
@@ -2008,6 +2115,21 @@ def check_frame_for_tool(
                 best_name = ref["name"]
         if best_score >= threshold:
             return True, {"scene_name": best_name, "score": round(best_score, 4)}
+        return False, None
+
+    elif tool_type == "inactivity":
+        if prev_frame is None:
+            return False, None
+        pixels = extract_region(frame, region)
+        prev_pixels = extract_region(prev_frame, region)
+        thresh = parameters.get(
+            "threshold", config.SCREENSPACE_INACTIVITY_PHASH_THRESHOLD
+        )
+        curr_h = compute_phash(pixels)
+        prev_h = compute_phash(prev_pixels)
+        dist = int(curr_h - prev_h)
+        if dist <= thresh:
+            return True, {"distance": dist}
         return False, None
 
     return False, None
@@ -2547,7 +2669,13 @@ class ScreenspaceWorker:
             elif task_type == "multitool":
                 metadata["tool_types"] = r.get("tool_types", [])
                 metadata["steps"] = r.get("steps", [])
-            events.append(create_event(task, ts, confidence, metadata))
+            elif task_type == "inactivity":
+                metadata["duration"] = r.get("duration", 0.0)
+                metadata["avg_distance"] = r.get("avg_distance", 0.0)
+            ev = create_event(task, ts, confidence, metadata)
+            if task_type == "inactivity" and "end" in r:
+                ev["time_out"] = round(r["end"], 2)
+            events.append(ev)
         return events
 
     def _generate_heatmap(
@@ -2790,6 +2918,7 @@ class ScreenspaceWorker:
                 "similarity": 128,
                 "flow": 128,
                 "scene": 64,
+                "inactivity": 64,
             }
             fast_opts = {
                 "phash_skip": True,
@@ -2973,6 +3102,20 @@ class ScreenspaceWorker:
                 video_path,
                 region,
                 steps=steps,
+                start_seconds=params.get("start_seconds", 0.0),
+                end_seconds=params.get("end_seconds"),
+                on_progress=on_progress,
+                cancel_flag=cancel_flag,
+                on_result=on_result,
+                fast_opts=fast_opts,
+            )
+        elif task_type == "inactivity":
+            return scan_inactivity(
+                video_path,
+                region,
+                threshold=params.get("threshold", 0),
+                min_duration=params.get("min_duration", 0.0),
+                interval_seconds=params.get("interval", 0),
                 start_seconds=params.get("start_seconds", 0.0),
                 end_seconds=params.get("end_seconds"),
                 on_progress=on_progress,

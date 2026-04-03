@@ -444,6 +444,18 @@ class TestGenerateEventsFromResults:
         assert events[0]["metadata"]["scene_name"] == "menu"
         assert events[0]["metadata"]["score"] == 0.92
 
+    def test_inactivity_events(self):
+        worker, task = self._make_worker_and_task("inactivity")
+        raw = [{"start": 5.0, "end": 15.0, "duration": 10.0, "avg_distance": 2.5}]
+        events = worker._generate_events_from_results(task, raw)
+        assert len(events) == 1
+        assert events[0]["time_in"] == 5.0
+        assert events[0]["time_out"] == 15.0
+        assert events[0]["metadata"]["duration"] == 10.0
+        assert events[0]["metadata"]["avg_distance"] == 2.5
+        # confidence = min(10.0/30.0, 1.0) ≈ 0.3333
+        assert abs(events[0]["confidence"] - 0.3333) < 0.01
+
 
 class TestManifestWithEvents:
     def test_roundtrip_with_events(self, tmp_path, monkeypatch):
@@ -1002,6 +1014,38 @@ class TestCheckFrameForTool:
         assert passed is False
         assert result is None
 
+    def test_inactivity_needs_prev_frame(self):
+        frame = np.zeros((100, 100, 3), dtype=np.uint8)
+        region = {"x": 0, "y": 0, "w": 100, "h": 100}
+        passed, result = screenspace.check_frame_for_tool(
+            frame, None, region, "inactivity", {"threshold": 10}
+        )
+        assert passed is False
+        assert result is None
+
+    def test_inactivity_identical_frames(self):
+        frame = np.full((100, 100, 3), 128, dtype=np.uint8)
+        region = {"x": 0, "y": 0, "w": 100, "h": 100}
+        passed, result = screenspace.check_frame_for_tool(
+            frame, frame.copy(), region, "inactivity", {"threshold": 10}
+        )
+        assert passed is True
+        assert result is not None
+        assert "distance" in result
+        assert result["distance"] == 0
+
+    def test_inactivity_different_frames(self):
+        frame_a = np.zeros((100, 100, 3), dtype=np.uint8)
+        # Random noise frame produces a very different perceptual hash
+        rng = np.random.RandomState(42)
+        frame_b = rng.randint(0, 256, (100, 100, 3), dtype=np.uint8)
+        region = {"x": 0, "y": 0, "w": 100, "h": 100}
+        passed, result = screenspace.check_frame_for_tool(
+            frame_b, frame_a, region, "inactivity", {"threshold": 2}
+        )
+        assert passed is False
+        assert result is None
+
     def test_unknown_type(self):
         frame = np.zeros((100, 100, 3), dtype=np.uint8)
         region = {"x": 0, "y": 0, "w": 100, "h": 100}
@@ -1029,6 +1073,12 @@ class TestExtractConfidence:
         assert (
             screenspace._extract_confidence("multitool", {"min_confidence": 0.7}) == 0.7
         )
+
+    def test_inactivity_short(self):
+        assert screenspace._extract_confidence("inactivity", {"duration": 3.0}) == 0.1
+
+    def test_inactivity_capped(self):
+        assert screenspace._extract_confidence("inactivity", {"duration": 60.0}) == 1.0
 
     def test_unknown_type(self):
         assert screenspace._extract_confidence("bogus", {}) == 1.0
@@ -1738,3 +1788,153 @@ class TestTimelapseDispatchPassesMarkers:
         assert captured["end_seconds"] == 45.0
         assert captured["on_progress"] is not None
         assert captured["cancel_flag"] is not None
+
+
+# ---------------------------------------------------------------------------
+# Inactivity tool
+# ---------------------------------------------------------------------------
+
+
+class TestScanInactivity:
+    """Tests for scan_inactivity() function."""
+
+    def test_identical_frames_detected(self, monkeypatch):
+        """Identical consecutive frames should produce an inactivity span."""
+        frame = np.full((50, 50, 3), 128, dtype=np.uint8)
+        timestamps = [0.0, 1.0, 2.0, 3.0, 4.0]
+        call_idx = [0]
+
+        def fake_scan(video_path, region, interval, callback, **kwargs):
+            for ts in timestamps:
+                result = callback(ts, frame.copy())
+                if result is False:
+                    break
+                call_idx[0] += 1
+
+        monkeypatch.setattr(screenspace, "scan_video_frames", fake_scan)
+        monkeypatch.setattr(screenspace, "_probe_video_meta", lambda p: (30.0, 5.0))
+
+        results = screenspace.scan_inactivity(
+            "/fake.mp4",
+            {"x": 0, "y": 0, "w": 50, "h": 50},
+            threshold=15,
+            min_duration=2.0,
+            interval_seconds=1.0,
+        )
+        assert len(results) == 1
+        assert results[0]["start"] == 0.0
+        assert results[0]["end"] == 4.0
+        assert results[0]["duration"] == 4.0
+        assert results[0]["avg_distance"] == 0.0
+
+    def test_different_frames_not_detected(self, monkeypatch):
+        """Frames with very different content should not produce a span."""
+        timestamps = [0.0, 1.0, 2.0, 3.0]
+        # Use random noise frames with different seeds for visually distinct content
+        frames = [
+            np.random.RandomState(seed).randint(0, 256, (50, 50, 3)).astype(np.uint8)
+            for seed in [10, 20, 30, 40]
+        ]
+
+        def fake_scan(video_path, region, interval, callback, **kwargs):
+            for i, ts in enumerate(timestamps):
+                result = callback(ts, frames[i])
+                if result is False:
+                    break
+
+        monkeypatch.setattr(screenspace, "scan_video_frames", fake_scan)
+        monkeypatch.setattr(screenspace, "_probe_video_meta", lambda p: (30.0, 4.0))
+
+        results = screenspace.scan_inactivity(
+            "/fake.mp4",
+            {"x": 0, "y": 0, "w": 50, "h": 50},
+            threshold=2,
+            min_duration=2.0,
+            interval_seconds=1.0,
+        )
+        assert len(results) == 0
+
+    def test_min_duration_filtering(self, monkeypatch):
+        """Spans shorter than min_duration should be discarded."""
+        frame = np.full((50, 50, 3), 128, dtype=np.uint8)
+        # Random noise frame to ensure phash is very different from the solid frame
+        diff_frame = (
+            np.random.RandomState(99).randint(0, 256, (50, 50, 3)).astype(np.uint8)
+        )
+        # 2 identical frames then a different one — span is only 1s
+        timestamps = [0.0, 1.0, 2.0]
+        frame_seq = [frame, frame.copy(), diff_frame]
+
+        def fake_scan(video_path, region, interval, callback, **kwargs):
+            for i, ts in enumerate(timestamps):
+                result = callback(ts, frame_seq[i])
+                if result is False:
+                    break
+
+        monkeypatch.setattr(screenspace, "scan_video_frames", fake_scan)
+        monkeypatch.setattr(screenspace, "_probe_video_meta", lambda p: (30.0, 3.0))
+
+        results = screenspace.scan_inactivity(
+            "/fake.mp4",
+            {"x": 0, "y": 0, "w": 50, "h": 50},
+            threshold=15,
+            min_duration=5.0,
+            interval_seconds=1.0,
+        )
+        assert len(results) == 0
+
+    def test_on_result_callback(self, monkeypatch):
+        """on_result should fire once per completed span."""
+        frame = np.full((50, 50, 3), 128, dtype=np.uint8)
+        timestamps = [0.0, 1.0, 2.0, 3.0, 4.0]
+        emitted = []
+
+        def fake_scan(video_path, region, interval, callback, **kwargs):
+            for ts in timestamps:
+                result = callback(ts, frame.copy())
+                if result is False:
+                    break
+
+        monkeypatch.setattr(screenspace, "scan_video_frames", fake_scan)
+        monkeypatch.setattr(screenspace, "_probe_video_meta", lambda p: (30.0, 5.0))
+
+        screenspace.scan_inactivity(
+            "/fake.mp4",
+            {"x": 0, "y": 0, "w": 50, "h": 50},
+            threshold=15,
+            min_duration=2.0,
+            interval_seconds=1.0,
+            on_result=lambda r: emitted.append(r),
+        )
+        assert len(emitted) == 1
+        assert emitted[0]["duration"] == 4.0
+
+    def test_dispatch_routes_to_scan_inactivity(self, monkeypatch):
+        """ScreenspaceWorker._dispatch() should route inactivity tasks."""
+        captured = {}
+
+        def fake_scan_inactivity(video_path, region, **kwargs):
+            captured.update(kwargs)
+            return []
+
+        monkeypatch.setattr(screenspace, "scan_inactivity", fake_scan_inactivity)
+
+        worker = screenspace.ScreenspaceWorker()
+        task = screenspace.create_task(
+            "inactivity",
+            "P01",
+            "s_P01.mp4",
+            "/fake.mp4",
+            "region1",
+            {"x": 0, "y": 0, "w": 100, "h": 100},
+            parameters={
+                "threshold": 8,
+                "min_duration": 5.0,
+                "interval": 2.0,
+            },
+        )
+        worker._dispatch(task, lambda p: None, lambda: False, None)
+
+        assert captured["threshold"] == 8
+        assert captured["min_duration"] == 5.0
+        assert captured["interval_seconds"] == 2.0

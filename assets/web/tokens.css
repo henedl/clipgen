@@ -95,6 +95,7 @@
   --color-task-template: #f43f5e;
   --color-task-flow: #6366f1;
   --color-task-scene: #14b8a6;
+  --color-task-inactivity: #78716c;
 
   /* Insight category colors */
   --color-causes: #ea580c;
@@ -153,6 +154,7 @@
     --color-task-template: #fb7185;
     --color-task-flow: #818cf8;
     --color-task-scene: #2dd4bf;
+    --color-task-inactivity: #a8a29e;
     --color-causes: #fb923c;
     --color-behaviors: #60a5fa;
     --color-impacts: #f87171;

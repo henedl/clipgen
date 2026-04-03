@@ -8,7 +8,7 @@
   var FRAME_STEP = 1.0;
 
   var TASK_COLORS = (function () {
-    var types = ["multitool", "color", "change", "similarity", "text", "numbers", "timelapse", "template", "flow", "scene"];
+    var types = ["multitool", "color", "change", "similarity", "text", "numbers", "timelapse", "template", "flow", "scene", "inactivity"];
     var style = getComputedStyle(document.documentElement);
     var map = {};
     types.forEach(function (t) {
@@ -46,6 +46,9 @@
     ]},
     scene: { viewBox: "0 0 16 16", paths: [
       { d: "M2 3.5A1.5 1.5 0 0 1 3.5 2h2A1.5 1.5 0 0 1 7 3.5v2A1.5 1.5 0 0 1 5.5 7h-2A1.5 1.5 0 0 1 2 5.5v-2ZM9 3.5A1.5 1.5 0 0 1 10.5 2h2A1.5 1.5 0 0 1 14 3.5v2A1.5 1.5 0 0 1 12.5 7h-2A1.5 1.5 0 0 1 9 5.5v-2ZM2 10.5A1.5 1.5 0 0 1 3.5 9h2A1.5 1.5 0 0 1 7 10.5v2A1.5 1.5 0 0 1 5.5 14h-2A1.5 1.5 0 0 1 2 12.5v-2ZM9 10.5A1.5 1.5 0 0 1 10.5 9h2A1.5 1.5 0 0 1 14 10.5v2A1.5 1.5 0 0 1 12.5 14h-2A1.5 1.5 0 0 1 9 12.5v-2Z" }
+    ]},
+    inactivity: { viewBox: "0 0 16 16", paths: [
+      { d: "M15 8C15 11.866 11.866 15 8 15C4.13401 15 1 11.866 1 8C1 4.13401 4.13401 1 8 1C11.866 1 15 4.13401 15 8ZM5.5 5.5C5.5 5.22386 5.72386 5 6 5H6.5C6.77614 5 7 5.22386 7 5.5V10.5C7 10.7761 6.77614 11 6.5 11H6C5.72386 11 5.5 10.7761 5.5 10.5V5.5ZM9.5 5C9.22386 5 9 5.22386 9 5.5V10.5C9 10.7761 9.22386 11 9.5 11H10C10.2761 11 10.5 10.7761 10.5 10.5V5.5C10.5 5.22386 10.2761 5 10 5H9.5Z", fillRule: "evenodd" }
     ]}
   };
 
@@ -1784,7 +1787,7 @@
       var color = taskTypeColor(task.type);
       var dimmed = focused && task.id !== focused;
       var taskExcluded = excludedByTask[task.id] || {};
-      if (task.type === "color" && task.status === "completed") {
+      if ((task.type === "color" || task.type === "inactivity") && task.status === "completed") {
         // Completed color: merged spans
         task.result.forEach(function (span) {
           var isExcluded = taskExcluded[span.start.toFixed(2)];
@@ -1904,7 +1907,10 @@
 
     var details = el("div", "ss-tooltip-details");
     details.appendChild(el("span", "", hit.task.participant + " \u00b7 " + (hit.task.region || "")));
-    if (hit.task.type === "color" && r.duration !== undefined) {
+    if (hit.task.type === "inactivity" && r.duration !== undefined) {
+      details.appendChild(el("span", "", "Duration: " + r.duration.toFixed(1) + "s"));
+      if (r.avg_distance !== undefined) details.appendChild(el("span", "", "Avg distance: " + r.avg_distance));
+    } else if (hit.task.type === "color" && r.duration !== undefined) {
       details.appendChild(el("span", "", "Duration: " + r.duration.toFixed(1) + "s"));
     } else if (hit.task.type === "change" && r.magnitude !== undefined) {
       details.appendChild(el("span", "", "Magnitude: " + (r.magnitude * 100).toFixed(1) + "%"));
@@ -1962,7 +1968,8 @@
     timelapse: "[TODO_INFO] Timelapse tool: generates a sped-up video or GIF of the region over the selected time range. Unlike other tools, this produces a single artifact rather than detecting individual frames.",
     template: "[TODO_INFO] Template tool: searches the full video frame for a captured or uploaded reference image using template matching. Works across the entire frame, not just the selected region — ideal for finding icons, buttons, or UI elements wherever they appear.",
     flow: "[TODO_INFO] Flow tool: detects motion in the region via dense optical flow. Higher magnitude thresholds filter out subtle movements. Useful for detecting player movement, animations starting, or activity in a specific area.",
-    scene: "[TODO_INFO] Scene tool: classifies each frame by comparing it to your captured reference scenes. Useful for building a timeline of when different screens, menus, or game levels are active."
+    scene: "[TODO_INFO] Scene tool: classifies each frame by comparing it to your captured reference scenes. Useful for building a timeline of when different screens, menus, or game levels are active.",
+    inactivity: "Inactivity tool: detects spans of near-duplicate frames in a region using perceptual hashing. Surfaces loading screens, frozen states, or repeated animation loops. Set the minimum duration to filter out brief pauses."
   };
 
   var _toolInfoPinned = false;
@@ -2113,6 +2120,7 @@
     { value: "template", label: "Template" },
     { value: "flow", label: "Flow" },
     { value: "scene", label: "Scene" },
+    { value: "inactivity", label: "Inactivity" },
   ];
 
   function renderMultitoolStepBody(body, stepType, idx) {
@@ -2378,6 +2386,18 @@
       addScCtrl.appendChild(scCapBtn);
       addScRow.appendChild(addScCtrl);
       body.appendChild(addScRow);
+    } else if (stepType === "inactivity") {
+      var r1 = el("div", "param-row");
+      r1.appendChild(el("span", "param-label", "Sensitivity"));
+      var c1 = el("div", "param-control");
+      var inactSlider = rangeInput("paramInactThresh" + sfx, 0, 30, 10, 1);
+      c1.appendChild(inactSlider);
+      var inactVal = el("span", "param-value");
+      inactVal.textContent = inactSlider.value;
+      inactSlider.addEventListener("input", function () { inactVal.textContent = inactSlider.value; });
+      c1.appendChild(inactVal);
+      r1.appendChild(c1);
+      body.appendChild(r1);
     }
   }
 
@@ -2973,6 +2993,10 @@
       addScRow.appendChild(addScCtrl);
       container.appendChild(addScRow);
       renderIntervalSlot("paramSceneInterval", 0.5, 60, 1.0, 0.5);
+    } else if (type === "inactivity") {
+      addParamRow(container, "Sensitivity", rangeInput("paramInactThresh", 0, 30, 10, 1), "paramInactThreshVal");
+      addParamRow(container, "Min duration (s)", numberInput("paramInactMinDur", 0.5, 60, 2.0, 0.5));
+      renderIntervalSlot("paramInactInterval", 0.5, 60, 1.0, 0.5);
     }
 
     if (type !== "timelapse") {
@@ -3429,6 +3453,8 @@
       p.scene_references = step._scenes.map(function (ref) {
         return { name: ref.name, timestamp: ref.timestamp, threshold: ref.threshold || 0.75 };
       });
+    } else if (stepType === "inactivity") {
+      p.threshold = parseInt((qs("#paramInactThresh" + sfx) || {}).value) || 10;
     }
     p.region = state.multitoolSteps[idx].region || "";
     return p;
@@ -3539,6 +3565,10 @@
         return { name: ref.name, timestamp: ref.timestamp, threshold: ref.threshold || 0.75 };
       });
       params.interval = parseFloat((qs("#paramSceneInterval") || {}).value) || 1.0;
+    } else if (type === "inactivity") {
+      params.threshold = parseInt((qs("#paramInactThresh") || {}).value) || 10;
+      params.min_duration = parseFloat((qs("#paramInactMinDur") || {}).value) || 2.0;
+      params.interval = parseFloat((qs("#paramInactInterval") || {}).value) || 1.0;
     }
     var labelEl = qs("#paramEventLabel");
     if (labelEl && labelEl.value.trim()) {
@@ -4673,7 +4703,7 @@
     }
 
     // Show/hide certainty controls based on whether the tool has confidence scores
-    var hasConf = task && { change: 1, similarity: 1, text: 1, template: 1, scene: 1, flow: 1, multitool: 1 }[task.type];
+    var hasConf = task && { change: 1, similarity: 1, text: 1, template: 1, scene: 1, flow: 1, multitool: 1, inactivity: 1 }[task.type];
     var certLabel = qs("#certaintyCutoffLabel");
     var exclBtn = qs("#excludeNonVisibleBtn");
     if (certLabel) certLabel.classList.toggle("hidden", !hasConf);
@@ -4806,6 +4836,7 @@
         else if (task.type === "flow") confValue = Math.min(r.magnitude / 10, 1);
         else if (task.type === "scene") confValue = r.score;
         else if (task.type === "multitool") confValue = r.min_confidence;
+        else if (task.type === "inactivity") confValue = Math.min((r.duration || 0) / 30, 1);
         if (confValue !== null && confValue < state.certaintyCutoff) return;
       }
 
@@ -4820,6 +4851,11 @@
         row.dataset.timestamp = r.start;
         row.appendChild(el("span", "result-timestamp", formatTimestamp(r.start) + " \u2013 " + formatTimestamp(r.end)));
         row.appendChild(el("span", "result-detail", r.duration.toFixed(1) + "s"));
+      } else if (task.type === "inactivity") {
+        row.dataset.timestamp = r.start;
+        row.appendChild(el("span", "result-timestamp", formatTimestamp(r.start) + " \u2013 " + formatTimestamp(r.end)));
+        row.appendChild(el("span", "result-detail", r.duration.toFixed(1) + "s"));
+        row.appendChild(el("span", "result-score", "d:" + (r.avg_distance !== undefined ? r.avg_distance : "?")));
       } else if (task.type === "change") {
         row.dataset.timestamp = r.timestamp;
         row.appendChild(el("span", "result-timestamp", formatTimestamp(r.timestamp)));

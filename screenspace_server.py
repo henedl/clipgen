@@ -555,6 +555,7 @@ def api_tasks_create() -> FlaskResponse:
         "template",
         "flow",
         "scene",
+        "inactivity",
     )
     if task_type not in valid_types:
         return jsonify(
