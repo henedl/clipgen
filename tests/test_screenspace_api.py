@@ -945,7 +945,7 @@ def _install_persist_spy(monkeypatch):
     def spy(*, drain_events=True):
         calls.append({"drain_events": drain_events})
 
-    monkeypatch.setattr(screenspace_server, "_persist_manifest", spy)
+    monkeypatch.setattr(screenspace_server, "_do_persist", spy)
     return calls
 
 
