@@ -14,8 +14,10 @@ This script supports full unicode/UTF-8 for international characters in:
 - File paths
 """
 
+import concurrent.futures
 import difflib
 import hashlib
+import os
 import sys
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
@@ -445,6 +447,14 @@ def _is_excel_worksheet(worksheet: Any) -> bool:
 # ---- Clip processing pipeline ----
 
 
+def _resolve_clip_workers() -> int:
+    """Return the effective parallel worker count for clip generation."""
+    workers = config.CLIP_PARALLEL_WORKERS
+    if workers <= 0:
+        workers = min(4, os.cpu_count() or 1)
+    return workers
+
+
 def _check_source_video(
     clip: ClipRecord,
     missing_videos: Set[str],
@@ -771,76 +781,250 @@ def process_clips(
 ) -> Tuple[int, List[Dict[str, Any]]]:
     """Process and generate outputs from the clips list.
 
+    Uses a three-phase approach:
+    1. Sequential preparation (user prompts, fuzzy video matching)
+    2. Parallel ffmpeg execution via ThreadPoolExecutor (when workers >= 2)
+    3. Sequential post-processing (artifact records, transcription)
+
     Returns:
         Tuple of (count of files generated, list of artifact records).
     """
     if config.DEBUGGING:
         ic(len(clips_list))
 
+    if not clips_list:
+        utils.warning_print(
+            "No clips to process. No timestamps were found or selected."
+        )
+        return (0, [])
+
+    utils.standard_print(
+        "\n* ffmpeg is set to never prompt for input and will always overwrite.\n"
+        "  Only warns if close to crashing.\n"
+    )
+
     all_artifacts: List[Dict[str, Any]] = []
     fuzzy_matches: Dict[str, Optional[str]] = {}
     transcript_cache: Dict[str, Any] = {}
+    missing_videos: Set[str] = set()
 
-    def _update_secondary(description: str) -> None:
-        if _active_progress is not None and _active_secondary_task is not None:
-            _active_progress.update(_active_secondary_task, description=description)
+    # -- Phase 1: Sequential preparation (handles user prompts) ---------------
+    prepared: List[Tuple[ClipRecord, str]] = []
+    skipped_no_times = 0
+    skipped_no_video = 0
 
-    def _advance_secondary() -> None:
-        if _active_progress is not None and _active_secondary_task is not None:
-            _active_progress.update(_active_secondary_task, advance=1)
+    global _active_progress, _active_secondary_task
+    progress = utils.create_progress_bar()
+    if progress:
+        _active_progress = progress
+        with progress:
+            prep_task = progress.add_task("Preparing clips", total=len(clips_list))
+            for clip in clips_list:
+                clip, base_video = _prepare_and_check_clip(
+                    clip, missing_videos, fuzzy_matches
+                )
+                if not clip["times"]:
+                    skipped_no_times += 1
+                elif base_video is None:
+                    skipped_no_video += len(clip["times"])
+                else:
+                    prepared.append((clip, base_video))
+                progress.update(prep_task, advance=1)
+        _active_progress = None
+    else:
+        for clip in clips_list:
+            clip, base_video = _prepare_and_check_clip(
+                clip, missing_videos, fuzzy_matches
+            )
+            if not clip["times"]:
+                skipped_no_times += 1
+            elif base_video is None:
+                skipped_no_video += len(clip["times"])
+            else:
+                prepared.append((clip, base_video))
 
-    def process_single_clip(clip: Any, missing_videos: Set[str]) -> Tuple[int, int]:
-        """Process a single clip and return (generated, skipped)."""
-        clip, base_video = _prepare_and_check_clip(clip, missing_videos, fuzzy_matches)
-        if not clip["times"]:
-            _advance_secondary()
-            return (0, 1)
-        if base_video is None:
-            _advance_secondary()
-            return (0, len(clip["times"]))
-
-        generated_count, segment_details = _process_single_clip_segments(
-            clip,
-            base_video,
-            missing_videos,
-            output_format=output_format,
-            collect_paths=True,
-            include_severity=include_severity,
+    if not prepared:
+        utils.warning_print(
+            "No clips to process. No timestamps were found or selected."
         )
+        if missing_videos:
+            utils.standard_print(f"* Missing source video files: {len(missing_videos)}")
+        return (0, [])
+
+    # -- Phase 2: Execute ffmpeg work ------------------------------------------
+    workers = _resolve_clip_workers()
+    use_parallel = workers >= 2 and len(prepared) >= 2
+    _EMPTY_RESULT: Tuple[int, List[Tuple[str, str, str]]] = (0, [])
+    # Pre-allocate results in original order for deterministic artifact output
+    results: List[Tuple[int, List[Tuple[str, str, str]]]] = [_EMPTY_RESULT] * len(
+        prepared
+    )
+
+    if use_parallel:
+        progress = utils.create_progress_bar()
+        if progress:
+            with progress:
+                cut_task = progress.add_task("Processing clips", total=len(prepared))
+                with concurrent.futures.ThreadPoolExecutor(
+                    max_workers=workers,
+                ) as pool:
+                    future_to_idx = {
+                        pool.submit(
+                            _process_single_clip_segments,
+                            clip,
+                            base_video,
+                            missing_videos,
+                            output_format=output_format,
+                            collect_paths=True,
+                            include_severity=include_severity,
+                        ): idx
+                        for idx, (clip, base_video) in enumerate(prepared)
+                    }
+                    for future in concurrent.futures.as_completed(future_to_idx):
+                        idx = future_to_idx[future]
+                        try:
+                            results[idx] = future.result()
+                        except Exception as exc:
+                            clip, _ = prepared[idx]
+                            desc = (clip.get("desc") or "")[
+                                : config.PROGRESS_DESCRIPTION_LENGTH
+                            ]
+                            utils.error_print(
+                                f"Clip failed: [{clip.get('participant', '')}] {desc}",
+                                [str(exc)],
+                            )
+                            results[idx] = (0, [])
+                        progress.update(cut_task, advance=1)
+        else:
+            with concurrent.futures.ThreadPoolExecutor(
+                max_workers=workers,
+            ) as pool:
+                future_to_idx = {
+                    pool.submit(
+                        _process_single_clip_segments,
+                        clip,
+                        base_video,
+                        missing_videos,
+                        output_format=output_format,
+                        collect_paths=True,
+                        include_severity=include_severity,
+                    ): idx
+                    for idx, (clip, base_video) in enumerate(prepared)
+                }
+                for future in concurrent.futures.as_completed(future_to_idx):
+                    idx = future_to_idx[future]
+                    try:
+                        results[idx] = future.result()
+                    except Exception as exc:
+                        clip, _ = prepared[idx]
+                        desc = (clip.get("desc") or "")[
+                            : config.PROGRESS_DESCRIPTION_LENGTH
+                        ]
+                        utils.error_print(
+                            f"Clip failed: [{clip.get('participant', '')}] {desc}",
+                            [str(exc)],
+                        )
+                        results[idx] = (0, [])
+    else:
+        # Sequential execution (workers=1 or single clip)
+        progress = utils.create_progress_bar()
+        if progress:
+            with progress:
+                cut_task = progress.add_task("Processing clips", total=len(prepared))
+                for idx, (clip, base_video) in enumerate(prepared):
+                    desc_preview = (clip.get("desc") or "")[
+                        : config.PROGRESS_DESCRIPTION_LENGTH
+                    ]
+                    participant = clip.get("participant", "")
+                    progress.update(
+                        cut_task,
+                        description=f"[{participant}] {desc_preview}...",
+                    )
+                    results[idx] = _process_single_clip_segments(
+                        clip,
+                        base_video,
+                        missing_videos,
+                        output_format=output_format,
+                        collect_paths=True,
+                        include_severity=include_severity,
+                    )
+                    progress.update(cut_task, advance=1)
+        else:
+            for idx, (clip, base_video) in enumerate(prepared):
+                if (
+                    getattr(config, "VERBOSITY", config.STANDARD) >= config.VERBOSE
+                    and len(prepared) > 1
+                ):
+                    utils.verbose_print(
+                        f"Processing clip {idx + 1} of {len(prepared)}..."
+                    )
+                results[idx] = _process_single_clip_segments(
+                    clip,
+                    base_video,
+                    missing_videos,
+                    output_format=output_format,
+                    collect_paths=True,
+                    include_severity=include_severity,
+                )
+
+    # -- Phase 3: Build artifacts and transcribe (sequential) ------------------
+    outputs_generated = 0
+    outputs_skipped = skipped_no_times + skipped_no_video
+
+    for idx, (clip, base_video) in enumerate(prepared):
+        generated_count, segment_details = results[idx]
+        outputs_generated += generated_count
+        if generated_count < len(clip["times"]):
+            outputs_skipped += len(clip["times"]) - generated_count
         if segment_details:
             all_artifacts.extend(
                 viewer.build_artifact_records_for_clip(
                     clip, base_video, segment_details, output_format
                 )
             )
-            if config.TRANSCRIBE_ENABLED:
-                participant = clip.get("participant", "")
-                desc_preview = (clip.get("desc") or "")[
-                    : config.PROGRESS_DESCRIPTION_LENGTH
-                ]
-                _update_secondary(f"[{participant}] {desc_preview}...")
-                _transcribe_segments(
-                    clip, base_video, segment_details, all_artifacts, transcript_cache
-                )
-        _advance_secondary()
-        skipped_count = (
-            len(clip["times"]) - generated_count
-            if generated_count < len(clip["times"])
-            else 0
-        )
-        return (generated_count, skipped_count)
 
-    results, _ = _run_clip_pipeline(
-        clips_list,
-        empty_warning="No clips to process. No timestamps were found or selected.",
-        intro_message="\n* ffmpeg is set to never prompt for input and will always overwrite.\n  Only warns if close to crashing.\n",
-        task_label="Processing clips",
-        per_clip_fn=process_single_clip,
-        show_fallback_counter=True,
-        secondary_task_label="Transcribing" if config.TRANSCRIBE_ENABLED else None,
-    )
-    outputs_generated = sum(generated_count for generated_count, _ in results)
-    outputs_skipped = sum(skipped_count for _, skipped_count in results)
+    if config.TRANSCRIBE_ENABLED:
+        transcribe_items = [
+            (clip, base_video, results[idx][1])
+            for idx, (clip, base_video) in enumerate(prepared)
+            if results[idx][1]
+        ]
+        if transcribe_items:
+            progress = utils.create_progress_bar()
+            if progress:
+                with progress:
+                    t_task = progress.add_task(
+                        "Transcribing", total=len(transcribe_items)
+                    )
+                    for clip, base_video, segment_details in transcribe_items:
+                        desc_preview = (clip.get("desc") or "")[
+                            : config.PROGRESS_DESCRIPTION_LENGTH
+                        ]
+                        participant = clip.get("participant", "")
+                        progress.update(
+                            t_task,
+                            description=f"[{participant}] {desc_preview}...",
+                        )
+                        _transcribe_segments(
+                            clip,
+                            base_video,
+                            segment_details,
+                            all_artifacts,
+                            transcript_cache,
+                        )
+                        progress.update(t_task, advance=1)
+            else:
+                for clip, base_video, segment_details in transcribe_items:
+                    _transcribe_segments(
+                        clip,
+                        base_video,
+                        segment_details,
+                        all_artifacts,
+                        transcript_cache,
+                    )
+
+    if missing_videos:
+        utils.standard_print(f"* Missing source video files: {len(missing_videos)}")
 
     item_name = {
         "clip": "video(s)",
