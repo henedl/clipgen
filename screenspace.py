@@ -114,17 +114,34 @@ def color_matches(
     region_pixels: np.ndarray,
     target_color: Dict[str, float],
     tolerance: Dict[str, float],
-) -> bool:
+) -> Tuple[bool, float]:
     """Check if region's average HSV color is within tolerance of target.
 
     Handles hue wraparound (red at 0/180 boundary).
+
+    Returns:
+        Tuple of (matches, confidence) where confidence is 0.0–1.0.
     """
     avg = average_color_hsv(region_pixels)
     hue_diff = abs(avg["h"] - target_color["h"])
-    hue_ok = min(hue_diff, 180.0 - hue_diff) <= tolerance["h"]
-    s_ok = abs(avg["s"] - target_color["s"]) <= tolerance["s"]
-    v_ok = abs(avg["v"] - target_color["v"]) <= tolerance["v"]
-    return hue_ok and s_ok and v_ok
+    hue_dist = min(hue_diff, 180.0 - hue_diff)
+    s_dist = abs(avg["s"] - target_color["s"])
+    v_dist = abs(avg["v"] - target_color["v"])
+    matched = (
+        hue_dist <= tolerance["h"]
+        and s_dist <= tolerance["s"]
+        and v_dist <= tolerance["v"]
+    )
+    conf = max(
+        0.0,
+        1.0
+        - max(
+            hue_dist / max(tolerance["h"], 1e-6),
+            s_dist / max(tolerance["s"], 1e-6),
+            v_dist / max(tolerance["v"], 1e-6),
+        ),
+    )
+    return matched, conf
 
 
 def compute_frame_diff(
@@ -292,7 +309,7 @@ def compute_optical_flow(
         ``flow_grid`` (sparse grid of motion vectors for visualization).
     """
     if pyr_scale <= 0.0:
-        pyr_scale = config.SCREENSPACE_FLOW_PYRE_SCALE
+        pyr_scale = config.SCREENSPACE_FLOW_PYR_SCALE
 
     # Resize to max 256px for speed
     max_dim = 256
@@ -435,7 +452,7 @@ def compare_scene_fingerprints(
 
 def scan_video_frames(
     video_path: str,
-    region: Dict[str, int],
+    region: Optional[Dict[str, int]],
     interval_seconds: float,
     callback: Callable[[float, np.ndarray], Optional[bool]],
     *,
@@ -448,7 +465,8 @@ def scan_video_frames(
     """Iterate through video at interval, extract region, call callback.
 
     The *callback* receives ``(timestamp_seconds, region_pixels)`` and may
-    return ``False`` to stop iteration early.
+    return ``False`` to stop iteration early.  When *region* is ``None``
+    the full frame is passed (used by template detection).
 
     When *fps* and *duration* are provided, skips internal metadata reads.
     Uses sequential frame reading (grab/retrieve) for small intervals
@@ -458,11 +476,13 @@ def scan_video_frames(
     - ``phash_skip``: skip frames whose perceptual hash is unchanged
     - ``max_region_dim``: downscale extracted region to this max dimension
     """
+    full_frame = region is None
+
     # Try ffmpeg pipe extraction first (faster H.264 decoding)
     if config.SCREENSPACE_BATCH_EXTRACT:
         if _scan_via_ffmpeg_pipe(
             video_path,
-            region,
+            None if full_frame else region,
             interval_seconds,
             callback,
             start_seconds=start_seconds,
@@ -470,7 +490,7 @@ def scan_video_frames(
             fps=fps,
             duration=duration,
             fast_opts=fast_opts,
-            full_frame=False,
+            full_frame=full_frame,
         ):
             return
 
@@ -495,6 +515,27 @@ def scan_video_frames(
     )
     _prev_phash: List[Optional[imagehash.ImageHash]] = [None]
 
+    def _process_frame(raw_frame: np.ndarray, ts: float) -> Optional[bool]:
+        """Apply region crop, downscale, phash skip, then call callback."""
+        if full_frame:
+            pixels = raw_frame
+        else:
+            assert region is not None
+            pixels = extract_region(raw_frame, region)
+        if _max_dim > 0:
+            ph, pw = pixels.shape[:2]
+            if ph > _max_dim or pw > _max_dim:
+                sc = _max_dim / max(ph, pw)
+                pixels = cv2.resize(
+                    pixels, (int(pw * sc), int(ph * sc)), interpolation=cv2.INTER_AREA
+                )
+        if _phash_skip:
+            fh = compute_phash(pixels)
+            if _prev_phash[0] is not None and fh - _prev_phash[0] <= _phash_thresh:
+                return None  # skip
+            _prev_phash[0] = fh
+        return callback(ts, pixels)
+
     use_sequential = interval_seconds <= config.SCREENSPACE_SEQUENTIAL_READ_MAX_INTERVAL
 
     if use_sequential:
@@ -516,26 +557,7 @@ def scan_video_frames(
                 if not ret:
                     break
                 ts = start_seconds + frame_idx / fps
-                cropped = extract_region(frame, region)
-                if _max_dim > 0:
-                    rh, rw = cropped.shape[:2]
-                    if rh > _max_dim or rw > _max_dim:
-                        sc = _max_dim / max(rh, rw)
-                        cropped = cv2.resize(
-                            cropped,
-                            (int(rw * sc), int(rh * sc)),
-                            interpolation=cv2.INTER_AREA,
-                        )
-                if _phash_skip:
-                    fh = compute_phash(cropped)
-                    if (
-                        _prev_phash[0] is not None
-                        and fh - _prev_phash[0] <= _phash_thresh
-                    ):
-                        frame_idx += 1
-                        continue
-                    _prev_phash[0] = fh
-                result = callback(ts, cropped)
+                result = _process_frame(frame, ts)
                 if result is False:
                     break
             frame_idx += 1
@@ -546,23 +568,7 @@ def scan_video_frames(
             ret, frame = cap.read()
             if not ret:
                 break
-            cropped = extract_region(frame, region)
-            if _max_dim > 0:
-                rh, rw = cropped.shape[:2]
-                if rh > _max_dim or rw > _max_dim:
-                    sc = _max_dim / max(rh, rw)
-                    cropped = cv2.resize(
-                        cropped,
-                        (int(rw * sc), int(rh * sc)),
-                        interpolation=cv2.INTER_AREA,
-                    )
-            if _phash_skip:
-                fh = compute_phash(cropped)
-                if _prev_phash[0] is not None and fh - _prev_phash[0] <= _phash_thresh:
-                    ts += interval_seconds
-                    continue
-                _prev_phash[0] = fh
-            result = callback(ts, cropped)
+            result = _process_frame(frame, ts)
             if result is False:
                 break
             ts += interval_seconds
@@ -583,120 +589,19 @@ def scan_video_full_frames(
 ) -> None:
     """Like :func:`scan_video_frames` but passes the full frame (no region crop).
 
-    Used by template detection which searches the entire frame.
-
-    *fast_opts* enables fast-scan optimizations (see :func:`scan_video_frames`).
-    ``max_region_dim`` downscales the full frame; ``phash_skip`` skips
-    perceptually identical frames.
+    Thin wrapper that calls ``scan_video_frames`` with ``region=None``.
     """
-    # Try ffmpeg pipe extraction first (faster H.264 decoding)
-    if config.SCREENSPACE_BATCH_EXTRACT:
-        if _scan_via_ffmpeg_pipe(
-            video_path,
-            None,
-            interval_seconds,
-            callback,
-            start_seconds=start_seconds,
-            end_seconds=end_seconds if end_seconds is not None else 0.0,
-            fps=fps,
-            duration=duration,
-            fast_opts=fast_opts,
-            full_frame=True,
-        ):
-            return
-
-    # Fallback: cv2.VideoCapture-based extraction
-    cap = cv2.VideoCapture(video_path)
-    if not cap.isOpened():
-        return
-
-    if fps <= 0:
-        fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
-    if duration <= 0:
-        total_frames = cap.get(cv2.CAP_PROP_FRAME_COUNT)
-        duration = total_frames / fps if fps > 0 else 0.0
-    if end_seconds is None or end_seconds > duration:
-        end_seconds = duration
-
-    # Fast-scan state
-    _phash_skip = bool(fast_opts and fast_opts.get("phash_skip"))
-    _max_dim = (fast_opts or {}).get("max_region_dim", 0)
-    _phash_thresh = (fast_opts or {}).get(
-        "phash_threshold", config.SCREENSPACE_FAST_SCAN_PHASH_THRESHOLD
+    scan_video_frames(
+        video_path,
+        None,
+        interval_seconds,
+        callback,
+        start_seconds=start_seconds,
+        end_seconds=end_seconds,
+        fps=fps,
+        duration=duration,
+        fast_opts=fast_opts,
     )
-    _prev_phash: List[Optional[imagehash.ImageHash]] = [None]
-
-    use_sequential = interval_seconds <= config.SCREENSPACE_SEQUENTIAL_READ_MAX_INTERVAL
-
-    if use_sequential:
-        frame_interval = max(1, round(interval_seconds * fps))
-        if start_seconds > 0:
-            cap.set(cv2.CAP_PROP_POS_MSEC, start_seconds * 1000.0)
-        frame_idx = 0
-        end_frame = int(end_seconds * fps)
-        start_frame = int(start_seconds * fps)
-        while True:
-            grabbed = cap.grab()
-            if not grabbed:
-                break
-            abs_frame = start_frame + frame_idx
-            if abs_frame > end_frame:
-                break
-            if frame_idx % frame_interval == 0:
-                ret, frame = cap.retrieve()
-                if not ret:
-                    break
-                ts = start_seconds + frame_idx / fps
-                if _max_dim > 0:
-                    fh, fw = frame.shape[:2]
-                    if fh > _max_dim or fw > _max_dim:
-                        sc = _max_dim / max(fh, fw)
-                        frame = cv2.resize(
-                            frame,
-                            (int(fw * sc), int(fh * sc)),
-                            interpolation=cv2.INTER_AREA,
-                        )
-                if _phash_skip:
-                    ph = compute_phash(frame)
-                    if (
-                        _prev_phash[0] is not None
-                        and ph - _prev_phash[0] <= _phash_thresh
-                    ):
-                        frame_idx += 1
-                        continue
-                    _prev_phash[0] = ph
-                result = callback(ts, frame)
-                if result is False:
-                    break
-            frame_idx += 1
-    else:
-        ts = start_seconds
-        while ts <= end_seconds:
-            cap.set(cv2.CAP_PROP_POS_MSEC, ts * 1000.0)
-            ret, frame = cap.read()
-            if not ret:
-                break
-            if _max_dim > 0:
-                fh, fw = frame.shape[:2]
-                if fh > _max_dim or fw > _max_dim:
-                    sc = _max_dim / max(fh, fw)
-                    frame = cv2.resize(
-                        frame,
-                        (int(fw * sc), int(fh * sc)),
-                        interpolation=cv2.INTER_AREA,
-                    )
-            if _phash_skip:
-                ph = compute_phash(frame)
-                if _prev_phash[0] is not None and ph - _prev_phash[0] <= _phash_thresh:
-                    ts += interval_seconds
-                    continue
-                _prev_phash[0] = ph
-            result = callback(ts, frame)
-            if result is False:
-                break
-            ts += interval_seconds
-
-    cap.release()
 
 
 # ---------------------------------------------------------------------------
@@ -875,7 +780,8 @@ def _scan_via_ffmpeg_pipe(
                 break
 
         return True  # ffmpeg pipe succeeded (even if video had 0 frames)
-    except Exception:
+    except Exception as exc:
+        utils.warning_print(f"ffmpeg pipe scan failed, falling back to cv2: {exc}")
         return False
 
 
@@ -986,27 +892,10 @@ def scan_color(
     def _cb(ts: float, pixels: np.ndarray) -> Optional[bool]:
         if cancel_flag and cancel_flag():
             return False
-        avg = average_color_hsv(pixels)
-        hue_diff = abs(avg["h"] - target_color["h"])
-        hue_dist = min(hue_diff, 180.0 - hue_diff)
-        s_dist = abs(avg["s"] - target_color["s"])
-        v_dist = abs(avg["v"] - target_color["v"])
-        if (
-            hue_dist <= tolerance["h"]
-            and s_dist <= tolerance["s"]
-            and v_dist <= tolerance["v"]
-        ):
+        matched, conf = color_matches(pixels, target_color, tolerance)
+        if matched:
             matches.append(ts)
             if on_result:
-                conf = max(
-                    0.0,
-                    1.0
-                    - max(
-                        hue_dist / max(tolerance["h"], 1e-6),
-                        s_dist / max(tolerance["s"], 1e-6),
-                        v_dist / max(tolerance["v"], 1e-6),
-                    ),
-                )
                 on_result({"timestamp": ts, "_confidence": conf})
         if on_progress and total_range > 0:
             on_progress((ts - start_seconds) / total_range)
@@ -1147,14 +1036,14 @@ def scan_similarity(
     # Pre-resize and preprocess reference frame once
     max_dim = 256
     rh, rw = reference_frame.shape[:2]
-    needs_resize = rh > max_dim or rw > max_dim
-    if needs_resize:
+    if rh > max_dim or rw > max_dim:
         scale = max_dim / max(rh, rw)
-        new_w, new_h = int(rw * scale), int(rh * scale)
+        cmp_w, cmp_h = int(rw * scale), int(rh * scale)
         ref_resized = cv2.resize(
-            reference_frame, (new_w, new_h), interpolation=cv2.INTER_AREA
+            reference_frame, (cmp_w, cmp_h), interpolation=cv2.INTER_AREA
         )
     else:
+        cmp_w, cmp_h = rw, rh
         ref_resized = reference_frame
     bk = config.SCREENSPACE_BLUR_KERNEL
     ref_gray = cv2.cvtColor(
@@ -1166,33 +1055,32 @@ def scan_similarity(
     def _cb(ts: float, pixels: np.ndarray) -> Optional[bool]:
         if cancel_flag and cancel_flag():
             return False
-        if pixels.shape == reference_frame.shape:
-            # Static-frame skip
-            gray = cv2.cvtColor(pixels, cv2.COLOR_BGR2GRAY)
-            if prev_skip_gray[0] is not None:
-                if float(np.mean(cv2.absdiff(prev_skip_gray[0], gray))) < 2.0:
-                    if on_progress and total_range > 0:
-                        on_progress((ts - start_seconds) / total_range)
-                    return None
-            prev_skip_gray[0] = gray
+        # Static-frame skip
+        gray = cv2.cvtColor(pixels, cv2.COLOR_BGR2GRAY)
+        if prev_skip_gray[0] is not None:
+            if float(np.mean(cv2.absdiff(prev_skip_gray[0], gray))) < 2.0:
+                if on_progress and total_range > 0:
+                    on_progress((ts - start_seconds) / total_range)
+                return None
+        prev_skip_gray[0] = gray
 
-            frame_phash = compute_phash(pixels)
-            if ref_phash - frame_phash <= phash_threshold:
-                if needs_resize:
-                    cand = cv2.resize(
-                        pixels, (new_w, new_h), interpolation=cv2.INTER_AREA
-                    )
-                else:
-                    cand = pixels
-                cand_gray = cv2.cvtColor(
-                    cv2.GaussianBlur(cand, (bk, bk), 0), cv2.COLOR_BGR2GRAY
-                )
-                score = float(ssim(ref_gray, cand_gray))
-                if score >= threshold:
-                    rd = {"timestamp": ts, "score": round(score, 4)}
-                    results.append(rd)
-                    if on_result:
-                        on_result(rd)
+        frame_phash = compute_phash(pixels)
+        if ref_phash - frame_phash <= phash_threshold:
+            # Always resize candidate to match reference dimensions for SSIM
+            ph, pw = pixels.shape[:2]
+            if pw != cmp_w or ph != cmp_h:
+                cand = cv2.resize(pixels, (cmp_w, cmp_h), interpolation=cv2.INTER_AREA)
+            else:
+                cand = pixels
+            cand_gray = cv2.cvtColor(
+                cv2.GaussianBlur(cand, (bk, bk), 0), cv2.COLOR_BGR2GRAY
+            )
+            score = float(ssim(ref_gray, cand_gray))
+            if score >= threshold:
+                rd = {"timestamp": ts, "score": round(score, 4)}
+                results.append(rd)
+                if on_result:
+                    on_result(rd)
         if on_progress and total_range > 0:
             on_progress((ts - start_seconds) / total_range)
         return None
@@ -1310,6 +1198,33 @@ _NUMBERS_RE = re.compile(r"-?\d+(?:\.\d+)?")
 _VALID_OPERATORS = ("eq", "gt", "lt", "gte", "lte", "range")
 
 
+def _number_matches(
+    value: float,
+    operator: str,
+    target_value: float = 0,
+    range_min: Optional[float] = None,
+    range_max: Optional[float] = None,
+) -> bool:
+    """Check if *value* satisfies the given numeric comparison."""
+    if operator == "eq":
+        return value == target_value
+    elif operator == "gt":
+        return value > target_value
+    elif operator == "lt":
+        return value < target_value
+    elif operator == "gte":
+        return value >= target_value
+    elif operator == "lte":
+        return value <= target_value
+    elif operator == "range":
+        return (
+            range_min is not None
+            and range_max is not None
+            and range_min <= value <= range_max
+        )
+    return False
+
+
 def scan_numbers(
     video_path: str,
     region: Dict[str, int],
@@ -1360,25 +1275,6 @@ def scan_numbers(
     results: List[Dict[str, Any]] = []
     prev_gray: List[Optional[np.ndarray]] = [None]
 
-    def _check(value: float) -> bool:
-        if operator == "eq":
-            return value == target_value
-        elif operator == "gt":
-            return value > target_value
-        elif operator == "lt":
-            return value < target_value
-        elif operator == "gte":
-            return value >= target_value
-        elif operator == "lte":
-            return value <= target_value
-        elif operator == "range":
-            return (
-                range_min is not None
-                and range_max is not None
-                and range_min <= value <= range_max
-            )
-        return False
-
     def _cb(ts: float, pixels: np.ndarray) -> Optional[bool]:
         if cancel_flag and cancel_flag():
             return False
@@ -1395,7 +1291,7 @@ def scan_numbers(
             cleaned = text.replace(",", "")
             for match in _NUMBERS_RE.findall(cleaned):
                 num = float(match)
-                if _check(num):
+                if _number_matches(num, operator, target_value, range_min, range_max):
                     rd = {"timestamp": ts, "number_found": num}
                     results.append(rd)
                     if on_result:
@@ -1901,8 +1797,6 @@ def scan_inactivity(
 # Multitool: per-frame evaluation and multi-factor scan
 # ---------------------------------------------------------------------------
 
-_NUMBERS_CHECK_RE = re.compile(r"-?\d+(?:\.\d+)?")
-
 
 def _extract_confidence(tool_type: str, result: Dict[str, Any]) -> float:
     """Extract a normalized [0, 1] confidence from a tool-specific result dict."""
@@ -1950,21 +1844,8 @@ def check_frame_for_tool(
         pixels = extract_region(frame, region)
         target = parameters.get("target_color", {"h": 0, "s": 0, "v": 0})
         tol = parameters.get("tolerance", {"h": 10, "s": 50, "v": 50})
-        avg = average_color_hsv(pixels)
-        hue_diff = abs(avg["h"] - target["h"])
-        hue_dist = min(hue_diff, 180.0 - hue_diff)
-        s_dist = abs(avg["s"] - target["s"])
-        v_dist = abs(avg["v"] - target["v"])
-        if hue_dist <= tol["h"] and s_dist <= tol["s"] and v_dist <= tol["v"]:
-            conf = max(
-                0.0,
-                1.0
-                - max(
-                    hue_dist / max(tol["h"], 1e-6),
-                    s_dist / max(tol["s"], 1e-6),
-                    v_dist / max(tol["v"], 1e-6),
-                ),
-            )
+        matched, conf = color_matches(pixels, target, tol)
+        if matched:
             return True, {"_confidence": conf}
         return False, None
 
@@ -2036,26 +1917,9 @@ def check_frame_for_tool(
         ocr_results = reader.readtext(pixels, detail=1)
         for _, text, _conf in ocr_results:
             cleaned = text.replace(",", "")
-            for match in _NUMBERS_CHECK_RE.findall(cleaned):
+            for match in _NUMBERS_RE.findall(cleaned):
                 num = float(match)
-                passed = False
-                if operator == "eq":
-                    passed = num == target_value
-                elif operator == "gt":
-                    passed = num > target_value
-                elif operator == "lt":
-                    passed = num < target_value
-                elif operator == "gte":
-                    passed = num >= target_value
-                elif operator == "lte":
-                    passed = num <= target_value
-                elif operator == "range":
-                    passed = (
-                        range_min is not None
-                        and range_max is not None
-                        and range_min <= num <= range_max
-                    )
-                if passed:
+                if _number_matches(num, operator, target_value, range_min, range_max):
                     return True, {"number_found": num}
         return False, None
 
@@ -2108,7 +1972,11 @@ def check_frame_for_tool(
         best_name = ""
         best_score = 0.0
         for ref in ref_scenes:
-            ref_fp = compute_scene_fingerprint(ref["frame"])
+            # Cache fingerprint on the reference dict to avoid recomputing per frame
+            ref_fp = ref.get("_cached_fingerprint")
+            if ref_fp is None:
+                ref_fp = compute_scene_fingerprint(ref["frame"])
+                ref["_cached_fingerprint"] = ref_fp
             score = compare_scene_fingerprints(fp, ref_fp)
             if score > best_score:
                 best_score = score
@@ -2497,7 +2365,6 @@ class ScreenspaceWorker:
         self._paused = threading.Event()
         self.on_task_complete: Optional[Callable[[], None]] = None
         self.on_progress_update: Optional[Callable[[], None]] = None
-        self._last_progress_notify: float = 0.0
 
     def start(self) -> None:
         """Start the worker thread."""
@@ -2562,13 +2429,26 @@ class ScreenspaceWorker:
         """Reorder queued tasks by the given ID sequence.
 
         Assigns new priorities so that earlier IDs in the list have
-        lower (higher-priority) values.
+        lower (higher-priority) values.  Drains and re-inserts queue
+        items so the PriorityQueue heap reflects the new ordering.
         """
         with self._lock:
             for i, tid in enumerate(task_ids):
                 task = self._tasks.get(tid)
                 if task and task["status"] == TASK_STATUS_QUEUED:
                     task["priority"] = i + 1
+
+            # Drain the queue and re-insert with updated priorities
+            pending_items: List[Any] = []
+            while not self._queue.empty():
+                try:
+                    pending_items.append(self._queue.get_nowait())
+                except queue.Empty:
+                    break
+            for priority, created_at, tid in pending_items:
+                task = self._tasks.get(tid) if isinstance(tid, str) else None
+                new_priority = task["priority"] if task else priority
+                self._queue.put((new_priority, created_at, tid))
         return True
 
     @property
@@ -2608,10 +2488,9 @@ class ScreenspaceWorker:
             resume_at = start + progress * (end - start)
 
             with self._lock:
-                task["_partial_results"] = task.get("result", [])
+                task["_partial_results"] = list(task.get("result") or [])
                 task["_progress_offset"] = progress
                 task["_progress_scale"] = max(1.0 - progress, 0.001)
-                task.pop("result", None)
                 task.pop("_paused_flag", None)
                 params["start_seconds"] = resume_at
                 task["status"] = TASK_STATUS_QUEUED
@@ -2806,6 +2685,16 @@ class ScreenspaceWorker:
                 t["result"] = list(t.get("_partial_results", []))
                 t["_raw_results"] = list(t.get("_partial_results", []))
 
+        # Per-task throttle for SSE notifications (avoids cross-task race)
+        last_notify: List[float] = [0.0]
+
+        def _throttled_notify() -> None:
+            now = time.monotonic()
+            if now - last_notify[0] >= 0.5:
+                last_notify[0] = now
+                if self.on_progress_update:
+                    self.on_progress_update()
+
         def _on_progress(progress: float) -> None:
             with self._lock:
                 t = self._tasks.get(task_id)
@@ -2813,12 +2702,7 @@ class ScreenspaceWorker:
                     offset = t.get("_progress_offset", 0.0)
                     scale = t.get("_progress_scale", 1.0)
                     t["progress"] = min(offset + progress * scale, 1.0)
-            # Throttled SSE notification (~2 updates/sec)
-            now = time.monotonic()
-            if now - self._last_progress_notify >= 0.5:
-                self._last_progress_notify = now
-                if self.on_progress_update:
-                    self.on_progress_update()
+            _throttled_notify()
 
         def _cancel_flag() -> bool:
             with self._lock:
@@ -2835,12 +2719,7 @@ class ScreenspaceWorker:
                         t["_raw_results"].append(result_dict)
                     if t.get("parameters", {}).get("detect_first"):
                         t["_cancelled"] = True
-            # Throttled SSE notification for new results
-            now = time.monotonic()
-            if now - self._last_progress_notify >= 0.5:
-                self._last_progress_notify = now
-                if self.on_progress_update:
-                    self.on_progress_update()
+            _throttled_notify()
 
         try:
             result = self._dispatch(task, _on_progress, _cancel_flag, _on_result)
@@ -2850,27 +2729,16 @@ class ScreenspaceWorker:
                     if t.get("_paused_flag"):
                         t["status"] = TASK_STATUS_PAUSED
                         t["result"] = result
-                    elif t.get("_cancelled"):
-                        if t.get("parameters", {}).get("detect_first"):
-                            t["status"] = TASK_STATUS_COMPLETED
-                            partial = t.pop("_partial_results", None)
-                            if partial and isinstance(result, list):
-                                result = partial + result
-                            t["result"] = result
-                            t["progress"] = 1.0
-                            t.pop("_progress_offset", None)
-                            t.pop("_progress_scale", None)
-                            raw = t.pop("_raw_results", [])
-                            t["_generated_events"] = self._generate_events_from_results(
-                                t, raw
-                            )
-                        else:
-                            t["status"] = TASK_STATUS_CANCELLED
+                    elif t.get("_cancelled") and not t.get("parameters", {}).get(
+                        "detect_first"
+                    ):
+                        t["status"] = TASK_STATUS_CANCELLED
                     else:
-                        t["status"] = TASK_STATUS_COMPLETED
+                        # Normal completion or detect_first early stop
                         partial = t.pop("_partial_results", None)
                         if partial and isinstance(result, list):
                             result = partial + result
+                        t["status"] = TASK_STATUS_COMPLETED
                         t["result"] = result
                         t["progress"] = 1.0
                         t.pop("_progress_offset", None)
@@ -2879,7 +2747,6 @@ class ScreenspaceWorker:
                         t["_generated_events"] = self._generate_events_from_results(
                             t, raw
                         )
-                        # Generate heatmap artifacts for template/flow tasks
                         if isinstance(result, list) and result:
                             self._generate_heatmap(t, result)
                     t["completed_at"] = datetime.now(timezone.utc).isoformat()

@@ -1798,7 +1798,7 @@
     });
 
     state.tasks.forEach(function (task) {
-      if ((task.status !== "completed" && task.status !== "running") || !task.result) return;
+      if (!task.result || task.status === "cancelled") return;
       if (task.participant && task.participant !== state.selectedParticipant) return;
       var color = taskTypeColor(task.type);
       var dimmed = focused && task.id !== focused;
