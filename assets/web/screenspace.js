@@ -2170,7 +2170,7 @@
       row1.appendChild(el("span", "param-label", "Hex color"));
       var ctrl1 = el("div", "param-control");
       var hexIn = document.createElement("input");
-      hexIn.type = "text"; hexIn.id = "paramColorHex" + sfx;
+      hexIn.type = "text"; hexIn.id = "paramColorHex" + sfx; hexIn.autocomplete = "off";
       hexIn.className = "color-hex-input"; hexIn.placeholder = "#000000"; hexIn.maxLength = 7;
       hexIn.style.width = "5.5rem";
       ctrl1.appendChild(hexIn);
@@ -2262,7 +2262,7 @@
       r1.appendChild(el("span", "param-label", "Search"));
       var c1 = el("div", "param-control");
       var searchIn = document.createElement("input");
-      searchIn.type = "text"; searchIn.id = "paramTextSearch" + sfx;
+      searchIn.type = "text"; searchIn.id = "paramTextSearch" + sfx; searchIn.autocomplete = "off";
       searchIn.placeholder = "Search text...";
       searchIn.style.flex = "1"; searchIn.style.fontSize = "var(--text-xs)";
       searchIn.style.padding = "var(--space-1)";
@@ -2657,6 +2657,7 @@
 
       var hexInput = document.createElement("input");
       hexInput.type = "text";
+      hexInput.autocomplete = "off";
       hexInput.id = "paramColorHex";
       hexInput.className = "color-hex-input";
       hexInput.placeholder = "#000000";
@@ -3046,6 +3047,7 @@
   function textInput(id, placeholder) {
     var inp = document.createElement("input");
     inp.type = "text";
+    inp.autocomplete = "off";
     inp.id = id;
     inp.placeholder = placeholder || "";
     return inp;
