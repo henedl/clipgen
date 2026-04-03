@@ -27,12 +27,14 @@ Studio API endpoints (all under /studio/):
   GET  /api/status             – reports which interfaces are active (studio/insights/screenspace)
 """
 
+import hashlib
 import json
 import os
 import sys
 import webbrowser
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, Iterator, List, Optional, Tuple, Union
 
 from flask import (
     Blueprint,
@@ -68,6 +70,20 @@ _settings_defaults: Dict[str, Any] = {
 }
 
 _assets_dir = utils.get_bundled_assets_root() / "assets" / "web"
+
+
+@contextmanager
+def _override_config(**overrides: Any) -> Iterator[None]:
+    """Temporarily override config attributes, restoring originals on exit."""
+    saved = {name: getattr(config, name) for name in overrides}
+    for name, value in overrides.items():
+        setattr(config, name, value)
+    try:
+        yield
+    finally:
+        for name, value in saved.items():
+            setattr(config, name, value)
+
 
 # ---- Blueprint ----
 
@@ -251,20 +267,25 @@ def _save_manifest_quiet() -> None:
             is_excel=clipgen._is_excel_worksheet(_worksheet) if _worksheet else False,
             mode="studio",
         )
-    except Exception:
-        pass
+    except Exception as e:
+        utils.warning_print(f"Failed to save manifest: {e}")
 
 
 def _generate_intake_clips(
-    items: List[Dict[str, Any]], output_format: str = "clip"
+    items: List[Dict[str, Any]],
+    output_format: str = "clip",
+    study: str = "",
 ) -> List[Dict[str, Any]]:
-    """Generate clips from intake items and return successful artifact dicts."""
-    import hashlib
+    """Generate clips from intake items and return successful artifact dicts.
 
+    Each returned dict has an extra ``"_ok"`` key (True on success, False if
+    the video was missing or ffmpeg failed) plus an ``"_error"`` string so
+    callers can report per-item results without duplicating the loop.
+    """
     import screenspace_server
 
     output_dir = Path(utils.get_effective_output_dir())
-    artifacts: List[Dict[str, Any]] = []
+    results: List[Dict[str, Any]] = []
 
     for item in items:
         participant = item.get("participant", "")
@@ -280,15 +301,22 @@ def _generate_intake_clips(
                 break
 
         if not video_path:
+            results.append({"_ok": False, "_error": f"No video for {participant}"})
             continue
 
         span_hash = hashlib.md5(f"{participant}_{start}_{end}".encode()).hexdigest()[:8]
-        out_name = f"intake_{span_hash}{config.FILEFORMAT}"
+        safe_event_type = utils.sanitize_filename(event_type) if event_type else ""
+        desc_part = f"{safe_event_type} " if safe_event_type else ""
+        out_name = (
+            f"{study} {participant} {desc_part}intake {span_hash}{config.FILEFORMAT}"
+            if study
+            else f"intake_{span_hash}{config.FILEFORMAT}"
+        )
         out_path = str(output_dir / out_name)
         out_path = files.get_unique_filename(out_path)
 
-        start_str = utils.seconds_to_timestamp(int(start))
-        end_str = utils.seconds_to_timestamp(int(end))
+        start_str = utils.seconds_to_timestamp(int(round(start)))
+        end_str = utils.seconds_to_timestamp(int(round(end)))
 
         success = video.run_ffmpeg(
             video_path, out_path, start_str, end_str, config.REENCODING
@@ -302,7 +330,7 @@ def _generate_intake_clips(
                 "start": start,
                 "end": end,
                 "thumbnail": "",
-                "study": "",
+                "study": study,
                 "participant": participant,
                 "category": "",
                 "severity": "",
@@ -315,10 +343,14 @@ def _generate_intake_clips(
                 "event_ids": event_ids,
                 "intake_label": event_type,
                 "sourceVideo": Path(video_path).name,
+                "_ok": True,
+                "_error": "",
             }
-            artifacts.append(artifact)
+            results.append(artifact)
+        else:
+            results.append({"_ok": False, "_error": "ffmpeg failed"})
 
-    return artifacts
+    return results
 
 
 def _load_stashes() -> List[Dict[str, Any]]:
@@ -405,7 +437,11 @@ def _load_studio_settings() -> Dict[str, Any]:
         expected_type = type(default) if default is not None else str
         try:
             if expected_type is bool:
-                coerced = bool(value)
+                coerced = (
+                    value
+                    if isinstance(value, bool)
+                    else str(value).lower() in ("true", "1", "yes", "on")
+                )
             elif expected_type is int:
                 coerced = int(value)
             elif expected_type is float:
@@ -492,18 +528,17 @@ def api_generate() -> FlaskResponse:
         return jsonify({"ok": False, "error": str(e)}), 500
 
     def stream() -> Any:
-        original_tc_enabled = config.TITLECARDS_ENABLED
-        original_tc_duration = config.TITLECARD_DURATION_SECONDS
+        overrides: Dict[str, Any] = {}
         if tc_enabled is not None:
-            config.TITLECARDS_ENABLED = bool(tc_enabled)
+            overrides["TITLECARDS_ENABLED"] = bool(tc_enabled)
         if tc_duration is not None:
             try:
                 val = int(tc_duration)
                 if val > 0:
-                    config.TITLECARD_DURATION_SECONDS = val
+                    overrides["TITLECARD_DURATION_SECONDS"] = val
             except (ValueError, TypeError):
                 pass
-        try:
+        with _override_config(**overrides):
             clip_cells: set[str] = set()
             for clip in clips:
                 cell_str = clip["participant"] + "." + str(clip["cell"].row)
@@ -555,9 +590,6 @@ def api_generate() -> FlaskResponse:
                         + "\n"
                     )
             _save_manifest_quiet()
-        finally:
-            config.TITLECARDS_ENABLED = original_tc_enabled
-            config.TITLECARD_DURATION_SECONDS = original_tc_duration
 
     return Response(
         stream(), mimetype="application/x-ndjson", headers={"X-Accel-Buffering": "no"}
@@ -572,21 +604,19 @@ def api_highlights_preview() -> FlaskResponse:
     data = request.get_json(silent=True) or {}
     highlights_duration = data.get("highlights_duration")
 
-    original_duration = config.HIGHLIGHTS_REEL_DURATION_SECONDS
+    overrides: Dict[str, Any] = {}
     if highlights_duration is not None:
         try:
             val = int(highlights_duration)
             if val > 0:
-                config.HIGHLIGHTS_REEL_DURATION_SECONDS = val
+                overrides["HIGHLIGHTS_REEL_DURATION_SECONDS"] = val
         except (ValueError, TypeError):
             pass
 
-    try:
+    with _override_config(**overrides):
         clips = spreadsheet.generate_list(
             _worksheet, "reel", reel_input="highlights, batch", skip_prompts=True
         )
-    finally:
-        config.HIGHLIGHTS_REEL_DURATION_SECONDS = original_duration
 
     if not clips:
         return jsonify(
@@ -622,81 +652,75 @@ def api_reel() -> FlaskResponse:
     if not cell_strings:
         return jsonify({"ok": False, "error": "No cells specified"}), 400
 
-    try:
-        reel_input = ", ".join(cell_strings)
-
-        original_duration = config.HIGHLIGHTS_REEL_DURATION_SECONDS
-        original_tc_enabled = config.TITLECARDS_ENABLED
-        original_tc_duration = config.TITLECARD_DURATION_SECONDS
-        if highlights_duration is not None:
-            try:
-                val = int(highlights_duration)
-                if val > 0:
-                    config.HIGHLIGHTS_REEL_DURATION_SECONDS = val
-            except (ValueError, TypeError):
-                pass
-        if tc_enabled is not None:
-            config.TITLECARDS_ENABLED = bool(tc_enabled)
-        if tc_duration is not None:
-            try:
-                val = int(tc_duration)
-                if val > 0:
-                    config.TITLECARD_DURATION_SECONDS = val
-            except (ValueError, TypeError):
-                pass
-
+    overrides: Dict[str, Any] = {}
+    if highlights_duration is not None:
         try:
+            val = int(highlights_duration)
+            if val > 0:
+                overrides["HIGHLIGHTS_REEL_DURATION_SECONDS"] = val
+        except (ValueError, TypeError):
+            pass
+    if tc_enabled is not None:
+        overrides["TITLECARDS_ENABLED"] = bool(tc_enabled)
+    if tc_duration is not None:
+        try:
+            val = int(tc_duration)
+            if val > 0:
+                overrides["TITLECARD_DURATION_SECONDS"] = val
+        except (ValueError, TypeError):
+            pass
+
+    with _override_config(**overrides):
+        try:
+            reel_input = ", ".join(cell_strings)
+
+            # generate_list needs HIGHLIGHTS override only during this call
             clips = spreadsheet.generate_list(
                 _worksheet, "reel", reel_input=reel_input, skip_prompts=True
             )
-        finally:
-            config.HIGHLIGHTS_REEL_DURATION_SECONDS = original_duration
 
-        if not clips:
-            return jsonify(
-                {"ok": False, "error": "No clips found for the specified cells"}
-            ), 400
+            if not clips:
+                return jsonify(
+                    {"ok": False, "error": "No clips found for the specified cells"}
+                ), 400
 
-        # Check if an identical reel already exists
-        components: List[Dict[str, Any]] = []
-        for clip in clips:
-            files.prepare_clip(clip)
-            cell = clip.get("cell")
-            for start_str, end_str in clip.get("times", []):
-                components.append(
-                    {
-                        "cellRow": getattr(cell, "row", None),
-                        "cellCol": getattr(cell, "col", None),
-                        "start": utils.timestamp_to_seconds(start_str),
-                        "end": utils.timestamp_to_seconds(end_str),
-                    }
-                )
-        if components:
-            expected_id = clipgen.compute_reel_id(components)
-            for reel in _generated_reels:
-                if (
-                    reel.get("id") == expected_id
-                    and Path(utils.resolve_output_path(reel["file"])).is_file()
-                ):
-                    return jsonify(
+            # Check if an identical reel already exists
+            components: List[Dict[str, Any]] = []
+            for clip in clips:
+                files.prepare_clip(clip)
+                cell = clip.get("cell")
+                for start_str, end_str in clip.get("times", []):
+                    components.append(
                         {
-                            "ok": True,
-                            "generated": 1,
-                            "reels": [reel],
-                            "skipped": True,
+                            "cellRow": getattr(cell, "row", None),
+                            "cellCol": getattr(cell, "col", None),
+                            "start": utils.timestamp_to_seconds(start_str),
+                            "end": utils.timestamp_to_seconds(end_str),
                         }
                     )
+            if components:
+                expected_id = clipgen.compute_reel_id(components)
+                for reel in _generated_reels:
+                    if (
+                        reel.get("id") == expected_id
+                        and Path(utils.resolve_output_path(reel["file"])).is_file()
+                    ):
+                        return jsonify(
+                            {
+                                "ok": True,
+                                "generated": 1,
+                                "reels": [reel],
+                                "skipped": True,
+                            }
+                        )
 
-        generated, reel_records = clipgen.process_reel(clips)
-        _generated_reels.extend(reel_records)
-        _save_manifest_quiet()
-        return jsonify({"ok": True, "generated": generated, "reels": reel_records})
+            generated, reel_records = clipgen.process_reel(clips)
+            _generated_reels.extend(reel_records)
+            _save_manifest_quiet()
+            return jsonify({"ok": True, "generated": generated, "reels": reel_records})
 
-    except Exception as e:
-        return jsonify({"ok": False, "error": str(e)}), 500
-    finally:
-        config.TITLECARDS_ENABLED = original_tc_enabled
-        config.TITLECARD_DURATION_SECONDS = original_tc_duration
+        except Exception as e:
+            return jsonify({"ok": False, "error": str(e)}), 500
 
 
 @studio_bp.route("/api/viewer", methods=["POST"])
@@ -753,7 +777,11 @@ def api_timeline_viewer() -> FlaskResponse:
         # Generate intake clips if requested
         intake_artifacts: List[Dict[str, Any]] = []
         if include_intake and intake_items:
-            intake_artifacts = _generate_intake_clips(intake_items)
+            raw = _generate_intake_clips(intake_items)
+            for r in raw:
+                if r.pop("_ok", False):
+                    r.pop("_error", None)
+                    intake_artifacts.append(r)
             artifacts = artifacts + intake_artifacts
             _generated_artifacts.extend(intake_artifacts)
 
@@ -857,7 +885,7 @@ def api_open_viewer() -> FlaskResponse:
     p = Path(file_path).resolve()
     output_dir = Path(utils.get_effective_output_dir()).resolve()
 
-    if p.suffix != ".html" or not str(p).startswith(str(output_dir)):
+    if p.suffix != ".html" or not p.is_relative_to(output_dir):
         return jsonify({"ok": False, "error": "Invalid file path"}), 403
 
     if not p.is_file():
@@ -931,19 +959,16 @@ def api_regenerate() -> FlaskResponse:
         return jsonify({"ok": False, "error": str(e)}), 500
 
 
-@studio_bp.route("/api/stashes", methods=["GET"])
-def api_stashes_get() -> FlaskResponse:
-    return jsonify({"ok": True, "stashes": _load_stashes()})
-
-
-@studio_bp.route("/api/stashes", methods=["POST"])
-def api_stashes_post() -> FlaskResponse:
+def _handle_stash_crud(
+    load_fn: Any, save_fn: Any, id_prefix: str
+) -> FlaskResponse:
+    """Shared create/update/delete logic for stash endpoints."""
     import uuid
     from datetime import datetime, timezone
 
     data = request.get_json(silent=True) or {}
     action = data.get("action", "create")
-    stashes = _load_stashes()
+    stashes = load_fn()
 
     if action == "create":
         items = data.get("items", [])
@@ -954,7 +979,7 @@ def api_stashes_post() -> FlaskResponse:
             item.get("segDuration", 0) for item in items
         )
         stash = {
-            "id": f"stash_{uuid.uuid4().hex[:8]}",
+            "id": f"{id_prefix}_{uuid.uuid4().hex[:8]}",
             "name": name or f"Stash {len(stashes) + 1}",
             "items": items,
             "count": len(items),
@@ -962,7 +987,7 @@ def api_stashes_post() -> FlaskResponse:
             "createdAt": datetime.now(timezone.utc).isoformat(),
         }
         stashes.append(stash)
-        _save_stashes(stashes)
+        save_fn(stashes)
         return jsonify({"ok": True, "stash": stash})
 
     if action == "update":
@@ -974,7 +999,7 @@ def api_stashes_post() -> FlaskResponse:
                 name = data.get("name")
                 if name is not None:
                     s["name"] = name
-                _save_stashes(stashes)
+                save_fn(stashes)
                 return jsonify({"ok": True, "stash": s})
         return jsonify({"ok": False, "error": "Stash not found"}), 404
 
@@ -985,11 +1010,21 @@ def api_stashes_post() -> FlaskResponse:
         for i, s in enumerate(stashes):
             if s["id"] == stash_id:
                 stashes.pop(i)
-                _save_stashes(stashes)
+                save_fn(stashes)
                 return jsonify({"ok": True})
         return jsonify({"ok": False, "error": "Stash not found"}), 404
 
     return jsonify({"ok": False, "error": f"Unknown action: {action}"}), 400
+
+
+@studio_bp.route("/api/stashes", methods=["GET"])
+def api_stashes_get() -> FlaskResponse:
+    return jsonify({"ok": True, "stashes": _load_stashes()})
+
+
+@studio_bp.route("/api/stashes", methods=["POST"])
+def api_stashes_post() -> FlaskResponse:
+    return _handle_stash_crud(_load_stashes, _save_stashes, "stash")
 
 
 @studio_bp.route("/api/artifact-stashes", methods=["GET"])
@@ -999,58 +1034,7 @@ def api_artifact_stashes_get() -> FlaskResponse:
 
 @studio_bp.route("/api/artifact-stashes", methods=["POST"])
 def api_artifact_stashes_post() -> FlaskResponse:
-    import uuid
-    from datetime import datetime, timezone
-
-    data = request.get_json(silent=True) or {}
-    action = data.get("action", "create")
-    stashes = _load_artifact_stashes()
-
-    if action == "create":
-        items = data.get("items", [])
-        if not items:
-            return jsonify({"ok": False, "error": "No items to stash"}), 400
-        name = data.get("name", "")
-        total_duration = data.get("totalDuration") or sum(
-            item.get("segDuration", 0) for item in items
-        )
-        stash = {
-            "id": f"astash_{uuid.uuid4().hex[:8]}",
-            "name": name or f"Stash {len(stashes) + 1}",
-            "items": items,
-            "count": len(items),
-            "totalDuration": total_duration,
-            "createdAt": datetime.now(timezone.utc).isoformat(),
-        }
-        stashes.append(stash)
-        _save_artifact_stashes(stashes)
-        return jsonify({"ok": True, "stash": stash})
-
-    if action == "update":
-        stash_id = data.get("id")
-        if not stash_id:
-            return jsonify({"ok": False, "error": "No stash ID"}), 400
-        for s in stashes:
-            if s["id"] == stash_id:
-                name = data.get("name")
-                if name is not None:
-                    s["name"] = name
-                _save_artifact_stashes(stashes)
-                return jsonify({"ok": True, "stash": s})
-        return jsonify({"ok": False, "error": "Stash not found"}), 404
-
-    if action == "delete":
-        stash_id = data.get("id")
-        if not stash_id:
-            return jsonify({"ok": False, "error": "No stash ID"}), 400
-        for i, s in enumerate(stashes):
-            if s["id"] == stash_id:
-                stashes.pop(i)
-                _save_artifact_stashes(stashes)
-                return jsonify({"ok": True})
-        return jsonify({"ok": False, "error": "Stash not found"}), 404
-
-    return jsonify({"ok": False, "error": f"Unknown action: {action}"}), 400
+    return _handle_stash_crud(_load_artifact_stashes, _save_artifact_stashes, "astash")
 
 
 @studio_bp.route("/api/settings", methods=["GET"])
@@ -1114,79 +1098,24 @@ def api_settings_put() -> FlaskResponse:
 @studio_bp.route("/api/generate-intake", methods=["POST"])
 def api_generate_intake() -> FlaskResponse:
     """Generate clips from Screenspace intake spans."""
-    import hashlib
-
-    import screenspace_server
-
     data = request.get_json(silent=True) or {}
     items = data.get("items", [])
     if not items:
         return jsonify({"ok": False, "error": "No intake items specified"}), 400
 
     output_format = data.get("format", "clip")
-    output_dir = Path(utils.get_effective_output_dir())
     study = _sheet_context.study_name if _sheet_context else ""
+
+    raw = _generate_intake_clips(items, output_format=output_format, study=study)
     results: List[Dict[str, Any]] = []
-
-    for item in items:
-        participant = item.get("participant", "")
-        start = float(item.get("start", 0))
-        end = float(item.get("end", 0))
-        event_type = item.get("event_type", "")
-        event_ids = item.get("event_ids", [])
-
-        video_path = None
-        for p in screenspace_server._participants:
-            if p["id"] == participant and p.get("has_video"):
-                video_path = p["video_path"]
-                break
-
-        if not video_path:
-            results.append({"ok": False, "error": f"No video for {participant}"})
-            continue
-
-        span_hash = hashlib.md5(f"{participant}_{start}_{end}".encode()).hexdigest()[:8]
-        safe_event_type = utils.sanitize_filename(event_type) if event_type else ""
-        desc_part = f"{safe_event_type} " if safe_event_type else ""
-        out_name = (
-            f"{study} {participant} {desc_part}intake {span_hash}{config.FILEFORMAT}"
-        )
-        out_path = str(output_dir / out_name)
-        out_path = files.get_unique_filename(out_path)
-
-        start_str = utils.seconds_to_timestamp(int(start))
-        end_str = utils.seconds_to_timestamp(int(end))
-
-        success = video.run_ffmpeg(
-            video_path, out_path, start_str, end_str, config.REENCODING
-        )
-
-        if success:
-            artifact: Dict[str, Any] = {
-                "id": f"intake_{span_hash}_s0",
-                "type": output_format,
-                "file": Path(out_path).name,
-                "start": start,
-                "end": end,
-                "thumbnail": "",
-                "study": study,
-                "participant": participant,
-                "category": "",
-                "severity": "",
-                "description": event_type or "Screenspace intake",
-                "cellRow": None,
-                "cellCol": None,
-                "cellA1": "",
-                "annotations": [],
-                "source": "screenspace",
-                "event_ids": event_ids,
-                "intake_label": event_type,
-                "sourceVideo": Path(video_path).name,
-            }
-            _generated_artifacts.append(artifact)
-            results.append({"ok": True, "artifact": artifact})
+    for r in raw:
+        ok = r.pop("_ok", False)
+        error = r.pop("_error", "")
+        if ok:
+            _generated_artifacts.append(r)
+            results.append({"ok": True, "artifact": r})
         else:
-            results.append({"ok": False, "error": "ffmpeg failed"})
+            results.append({"ok": False, "error": error})
 
     _save_manifest_quiet()
     return jsonify({"ok": True, "results": results})
@@ -1195,7 +1124,6 @@ def api_generate_intake() -> FlaskResponse:
 @studio_bp.route("/api/reel-direct", methods=["POST"])
 def api_reel_direct() -> FlaskResponse:
     """Build a reel from direct timestamp segments (for intake / mixed queues)."""
-    import hashlib
     import tempfile
 
     import screenspace_server
@@ -1207,15 +1135,14 @@ def api_reel_direct() -> FlaskResponse:
 
     tc_enabled = data.get("titlecards_enabled")
     tc_duration = data.get("titlecard_duration")
-    original_tc_enabled = config.TITLECARDS_ENABLED
-    original_tc_duration = config.TITLECARD_DURATION_SECONDS
+    overrides: Dict[str, Any] = {}
     if tc_enabled is not None:
-        config.TITLECARDS_ENABLED = bool(tc_enabled)
+        overrides["TITLECARDS_ENABLED"] = bool(tc_enabled)
     if tc_duration is not None:
         try:
             val = int(tc_duration)
             if val > 0:
-                config.TITLECARD_DURATION_SECONDS = val
+                overrides["TITLECARD_DURATION_SECONDS"] = val
         except (ValueError, TypeError):
             pass
 
@@ -1223,68 +1150,73 @@ def api_reel_direct() -> FlaskResponse:
     clip_paths: List[str] = []
     temp_clips: List[str] = []
 
-    try:
-        for seg in segments:
-            participant = seg.get("participant", "")
-            start = float(seg.get("start", 0))
-            end = float(seg.get("end", 0))
-            if end <= start:
-                continue
+    with _override_config(**overrides):
+        try:
+            for seg in segments:
+                participant = seg.get("participant", "")
+                start = float(seg.get("start", 0))
+                end = float(seg.get("end", 0))
+                if end <= start:
+                    continue
 
-            video_path = None
-            for p in screenspace_server._participants:
-                if p["id"] == participant and p.get("has_video"):
-                    video_path = p["video_path"]
-                    break
+                video_path = None
+                for p in screenspace_server._participants:
+                    if p["id"] == participant and p.get("has_video"):
+                        video_path = p["video_path"]
+                        break
 
-            if not video_path:
-                continue
+                if not video_path:
+                    continue
 
-            start_str = utils.seconds_to_timestamp(int(start))
-            end_str = utils.seconds_to_timestamp(int(end))
+                start_str = utils.seconds_to_timestamp(int(round(start)))
+                end_str = utils.seconds_to_timestamp(int(round(end)))
 
-            fd, tmp_path = tempfile.mkstemp(
-                suffix=config.FILEFORMAT, dir=str(output_dir)
+                fd, tmp_path = tempfile.mkstemp(
+                    suffix=config.FILEFORMAT, dir=str(output_dir)
+                )
+                os.close(fd)
+                temp_clips.append(tmp_path)
+
+                ok = video.run_ffmpeg(
+                    video_path, tmp_path, start_str, end_str, config.REENCODING
+                )
+                if ok:
+                    clip_paths.append(tmp_path)
+
+            if not clip_paths:
+                return (
+                    jsonify({"ok": False, "error": "No clips could be generated"}),
+                    400,
+                )
+
+            reel_study = _sheet_context.study_name if _sheet_context else ""
+            reel_base = f"{reel_study} intake reel" if reel_study else "intake_reel"
+            reel_name = files.get_unique_filename(
+                str(output_dir / f"{reel_base}{config.FILEFORMAT}")
             )
-            os.close(fd)
-            temp_clips.append(tmp_path)
+            ok = video.concatenate_clips(clip_paths, reel_name, reencode_on_fail=True)
 
-            ok = video.run_ffmpeg(
-                video_path, tmp_path, start_str, end_str, config.REENCODING
-            )
             if ok:
-                clip_paths.append(tmp_path)
-
-        if not clip_paths:
-            return jsonify({"ok": False, "error": "No clips could be generated"}), 400
-
-        reel_study = _sheet_context.study_name if _sheet_context else ""
-        reel_base = f"{reel_study} intake reel" if reel_study else "intake_reel"
-        reel_name = files.get_unique_filename(
-            str(output_dir / f"{reel_base}{config.FILEFORMAT}")
-        )
-        ok = video.concatenate_clips(clip_paths, reel_name, reencode_on_fail=True)
-
-        if ok:
-            reel_record: Dict[str, Any] = {
-                "id": f"reel_intake_{hashlib.md5(reel_name.encode()).hexdigest()[:8]}",
-                "file": Path(reel_name).name,
-                "source": "screenspace",
-                "description": f"Intake reel ({len(clip_paths)} segments)",
-            }
-            _generated_reels.append(reel_record)
-            _save_manifest_quiet()
-            return jsonify({"ok": True, "generated": 1, "reels": [reel_record]})
-        else:
-            return jsonify({"ok": False, "error": "Reel concatenation failed"}), 500
-    finally:
-        config.TITLECARDS_ENABLED = original_tc_enabled
-        config.TITLECARD_DURATION_SECONDS = original_tc_duration
-        for tmp in temp_clips:
-            try:
-                Path(tmp).unlink(missing_ok=True)
-            except OSError:
-                pass
+                reel_record: Dict[str, Any] = {
+                    "id": f"reel_intake_{hashlib.md5(reel_name.encode()).hexdigest()[:8]}",
+                    "file": Path(reel_name).name,
+                    "source": "screenspace",
+                    "description": f"Intake reel ({len(clip_paths)} segments)",
+                }
+                _generated_reels.append(reel_record)
+                _save_manifest_quiet()
+                return jsonify({"ok": True, "generated": 1, "reels": [reel_record]})
+            else:
+                return (
+                    jsonify({"ok": False, "error": "Reel concatenation failed"}),
+                    500,
+                )
+        finally:
+            for tmp in temp_clips:
+                try:
+                    Path(tmp).unlink(missing_ok=True)
+                except OSError:
+                    pass
 
 
 # ---- State initialization ----
