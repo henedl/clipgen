@@ -136,6 +136,10 @@
   var _cachedOverlayRect = null;
   var _lastPollFingerprint = "";
   var _preloadedFrames = {};
+  var _participantRequestVersion = 0;
+  var _frameRequestVersion = 0;
+  var _resultsRequestVersion = 0;
+  var _heatmapOverlayRequestVersion = 0;
 
   var _cachedThemeColors = null;
 
@@ -602,19 +606,27 @@
   }
 
   function selectParticipant(pid, initialTimestamp) {
+    var participantRequestVersion = ++_participantRequestVersion;
+    _frameRequestVersion += 1;
+    _heatmapOverlayRequestVersion += 1;
     state.selectedParticipant = pid;
     state.currentTimestamp = 0;
     state.videoInfo = null;
+    state.frameImage = null;
+    state.frameLoading = false;
     state.referenceTimestamp = null;
     state.sceneReferences = [];
     state.resultOverlay = null;
     state.heatmapOverlay = null;
+    _pendingFrameTs = null;
+    _loadedFrameTs = null;
     qs("#participantSelect").value = pid;
     qs("#videoInfo").textContent = "";
     qs("#frameEmpty").classList.remove("hidden");
 
     apiGet("api/video/info/" + encodeURIComponent(pid))
       .then(function (data) {
+        if (participantRequestVersion !== _participantRequestVersion || pid !== state.selectedParticipant) return;
         if (!data.ok) return;
         state.videoInfo = data.info;
         var parts = [];
@@ -650,16 +662,19 @@
   }
 
   function _fetchFrame(timestamp) {
+    var participantId = state.selectedParticipant;
+    var frameRequestVersion = ++_frameRequestVersion;
     state.frameLoading = true;
     _pendingFrameTs = null;
     _loadedFrameTs = timestamp;
 
     // Use preloaded frame 0 if available
-    var preloaded = (timestamp === 0 && _preloadedFrames[state.selectedParticipant])
-      ? _preloadedFrames[state.selectedParticipant] : null;
+    var preloaded = (timestamp === 0 && _preloadedFrames[participantId])
+      ? _preloadedFrames[participantId] : null;
 
     var img = new Image();
     img.onload = function () {
+      if (frameRequestVersion !== _frameRequestVersion || participantId !== state.selectedParticipant) return;
       state.frameImage = img;
       state.frameLoading = false;
       qs("#frameEmpty").classList.add("hidden");
@@ -680,12 +695,13 @@
       }
     };
     img.onerror = function () {
+      if (frameRequestVersion !== _frameRequestVersion || participantId !== state.selectedParticipant) return;
       state.frameLoading = false;
       if (_pendingFrameTs !== null && _pendingFrameTs !== _loadedFrameTs) {
         _fetchFrame(_pendingFrameTs);
       }
     };
-    img.src = preloaded || frameUrl(state.selectedParticipant, timestamp);
+    img.src = preloaded || frameUrl(participantId, timestamp);
   }
 
   function initFrameControls() {
@@ -3898,6 +3914,7 @@
       var task = findTask(taskId);
       if (task && (task.status === "completed" || task.status === "paused" || task.status === "running")) {
         if (state.selectedTaskId === taskId) {
+          _resultsRequestVersion += 1;
           state.selectedTaskId = null;
           state.selectedTaskResults = null;
           renderResults();
@@ -4618,6 +4635,9 @@
   }
 
   function loadAndShowResults(taskId) {
+    var resultsRequestVersion = ++_resultsRequestVersion;
+    var selectedTaskId = taskId;
+    _heatmapOverlayRequestVersion += 1;
     state.resultOverlay = null;
     state.heatmapOverlay = null;
     state.hoveredResultSceneName = null;
@@ -4628,12 +4648,14 @@
     if (valSpan) valSpan.textContent = "0%";
     apiGet("api/tasks/" + taskId + "/results")
       .then(function (data) {
-        state.selectedTaskId = taskId;
+        if (resultsRequestVersion !== _resultsRequestVersion || state.selectedTaskId !== selectedTaskId) return null;
         state.selectedTaskResults = data.results;
-        return apiGet("api/events?task_id=" + taskId);
+        return apiGet("api/events?task_id=" + selectedTaskId);
       })
       .then(function (evData) {
-        state.taskEvents[taskId] = evData.events || [];
+        if (!evData) return;
+        if (resultsRequestVersion !== _resultsRequestVersion || state.selectedTaskId !== selectedTaskId) return;
+        state.taskEvents[selectedTaskId] = evData.events || [];
         renderResults();
         renderTaskList();
       })
@@ -4766,20 +4788,27 @@
       var overlayBtn = el("button", "ss-btn ss-btn-sm", state.heatmapOverlay ? "Hide Overlay" : "Overlay on Frame");
       overlayBtn.addEventListener("click", function () {
         if (state.heatmapOverlay) {
+          _heatmapOverlayRequestVersion += 1;
           state.heatmapOverlay = null;
           overlayBtn.textContent = "Overlay on Frame";
           renderOverlay();
         } else {
-          state.heatmapOverlay = { src: "media/" + task.heatmap, type: task.type, region: task.region };
+          var overlaySrc = "media/" + task.heatmap;
+          var overlayRequestVersion = ++_heatmapOverlayRequestVersion;
+          state.heatmapOverlay = { src: overlaySrc, type: task.type, region: task.region };
           overlayBtn.textContent = "Hide Overlay";
           var hmImg = new Image();
           hmImg.onload = function () {
-            if (state.heatmapOverlay) {
+            if (
+              overlayRequestVersion === _heatmapOverlayRequestVersion
+              && state.heatmapOverlay
+              && state.heatmapOverlay.src === overlaySrc
+            ) {
               state.heatmapOverlay._img = hmImg;
               renderOverlay();
             }
           };
-          hmImg.src = "media/" + task.heatmap;
+          hmImg.src = overlaySrc;
         }
       });
       heatmapLabel.appendChild(overlayBtn);
