@@ -126,7 +126,7 @@ Required columns: **ID**, **Observation**, **Category**. Participant columns fol
 
 ## Testing notes
 
-- Run the test suite with `uv run pytest -c tests/pytest.ini` from the project root.
+- Run the test suite from the project root with `uv run --extra dev pytest -c tests/pytest.ini`. The `dev` optional extra (tests/CI only) supplies pytest; default `uv sync` does not install it.
 - Tests cover: CLI argument parsing, CLI mode dispatch, clip pipeline, file/artifact handling, Google/Excel adapters, insights data model, insights API, manifest operations, selectors, spreadsheet generation, studio API, titlecards, transcripts, timestamp utilities, video commands, viewer data, and viewer inlining.
 - Every new CLI mode, flag, or selector should include at least one smoke test in the same PR.
 - With `config.DEBUGGING = True`, icecream is enabled, [video.py](video.py) does not invoke ffmpeg, and [transcripts.py](transcripts.py) returns stub results without loading a Whisper model.
