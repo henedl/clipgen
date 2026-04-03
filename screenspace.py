@@ -452,7 +452,7 @@ def compare_scene_fingerprints(
 
 def scan_video_frames(
     video_path: str,
-    region: Dict[str, int],
+    region: Optional[Dict[str, int]],
     interval_seconds: float,
     callback: Callable[[float, np.ndarray], Optional[bool]],
     *,
@@ -465,7 +465,8 @@ def scan_video_frames(
     """Iterate through video at interval, extract region, call callback.
 
     The *callback* receives ``(timestamp_seconds, region_pixels)`` and may
-    return ``False`` to stop iteration early.
+    return ``False`` to stop iteration early.  When *region* is ``None``
+    the full frame is passed (used by template detection).
 
     When *fps* and *duration* are provided, skips internal metadata reads.
     Uses sequential frame reading (grab/retrieve) for small intervals
@@ -475,11 +476,13 @@ def scan_video_frames(
     - ``phash_skip``: skip frames whose perceptual hash is unchanged
     - ``max_region_dim``: downscale extracted region to this max dimension
     """
+    full_frame = region is None
+
     # Try ffmpeg pipe extraction first (faster H.264 decoding)
     if config.SCREENSPACE_BATCH_EXTRACT:
         if _scan_via_ffmpeg_pipe(
             video_path,
-            region,
+            None if full_frame else region,
             interval_seconds,
             callback,
             start_seconds=start_seconds,
@@ -487,7 +490,7 @@ def scan_video_frames(
             fps=fps,
             duration=duration,
             fast_opts=fast_opts,
-            full_frame=False,
+            full_frame=full_frame,
         ):
             return
 
@@ -512,6 +515,23 @@ def scan_video_frames(
     )
     _prev_phash: List[Optional[imagehash.ImageHash]] = [None]
 
+    def _process_frame(raw_frame: np.ndarray, ts: float) -> Optional[bool]:
+        """Apply region crop, downscale, phash skip, then call callback."""
+        pixels = raw_frame if full_frame else extract_region(raw_frame, region)
+        if _max_dim > 0:
+            ph, pw = pixels.shape[:2]
+            if ph > _max_dim or pw > _max_dim:
+                sc = _max_dim / max(ph, pw)
+                pixels = cv2.resize(
+                    pixels, (int(pw * sc), int(ph * sc)), interpolation=cv2.INTER_AREA
+                )
+        if _phash_skip:
+            fh = compute_phash(pixels)
+            if _prev_phash[0] is not None and fh - _prev_phash[0] <= _phash_thresh:
+                return None  # skip
+            _prev_phash[0] = fh
+        return callback(ts, pixels)
+
     use_sequential = interval_seconds <= config.SCREENSPACE_SEQUENTIAL_READ_MAX_INTERVAL
 
     if use_sequential:
@@ -533,26 +553,7 @@ def scan_video_frames(
                 if not ret:
                     break
                 ts = start_seconds + frame_idx / fps
-                cropped = extract_region(frame, region)
-                if _max_dim > 0:
-                    rh, rw = cropped.shape[:2]
-                    if rh > _max_dim or rw > _max_dim:
-                        sc = _max_dim / max(rh, rw)
-                        cropped = cv2.resize(
-                            cropped,
-                            (int(rw * sc), int(rh * sc)),
-                            interpolation=cv2.INTER_AREA,
-                        )
-                if _phash_skip:
-                    fh = compute_phash(cropped)
-                    if (
-                        _prev_phash[0] is not None
-                        and fh - _prev_phash[0] <= _phash_thresh
-                    ):
-                        frame_idx += 1
-                        continue
-                    _prev_phash[0] = fh
-                result = callback(ts, cropped)
+                result = _process_frame(frame, ts)
                 if result is False:
                     break
             frame_idx += 1
@@ -563,23 +564,7 @@ def scan_video_frames(
             ret, frame = cap.read()
             if not ret:
                 break
-            cropped = extract_region(frame, region)
-            if _max_dim > 0:
-                rh, rw = cropped.shape[:2]
-                if rh > _max_dim or rw > _max_dim:
-                    sc = _max_dim / max(rh, rw)
-                    cropped = cv2.resize(
-                        cropped,
-                        (int(rw * sc), int(rh * sc)),
-                        interpolation=cv2.INTER_AREA,
-                    )
-            if _phash_skip:
-                fh = compute_phash(cropped)
-                if _prev_phash[0] is not None and fh - _prev_phash[0] <= _phash_thresh:
-                    ts += interval_seconds
-                    continue
-                _prev_phash[0] = fh
-            result = callback(ts, cropped)
+            result = _process_frame(frame, ts)
             if result is False:
                 break
             ts += interval_seconds
@@ -600,120 +585,19 @@ def scan_video_full_frames(
 ) -> None:
     """Like :func:`scan_video_frames` but passes the full frame (no region crop).
 
-    Used by template detection which searches the entire frame.
-
-    *fast_opts* enables fast-scan optimizations (see :func:`scan_video_frames`).
-    ``max_region_dim`` downscales the full frame; ``phash_skip`` skips
-    perceptually identical frames.
+    Thin wrapper that calls ``scan_video_frames`` with ``region=None``.
     """
-    # Try ffmpeg pipe extraction first (faster H.264 decoding)
-    if config.SCREENSPACE_BATCH_EXTRACT:
-        if _scan_via_ffmpeg_pipe(
-            video_path,
-            None,
-            interval_seconds,
-            callback,
-            start_seconds=start_seconds,
-            end_seconds=end_seconds if end_seconds is not None else 0.0,
-            fps=fps,
-            duration=duration,
-            fast_opts=fast_opts,
-            full_frame=True,
-        ):
-            return
-
-    # Fallback: cv2.VideoCapture-based extraction
-    cap = cv2.VideoCapture(video_path)
-    if not cap.isOpened():
-        return
-
-    if fps <= 0:
-        fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
-    if duration <= 0:
-        total_frames = cap.get(cv2.CAP_PROP_FRAME_COUNT)
-        duration = total_frames / fps if fps > 0 else 0.0
-    if end_seconds is None or end_seconds > duration:
-        end_seconds = duration
-
-    # Fast-scan state
-    _phash_skip = bool(fast_opts and fast_opts.get("phash_skip"))
-    _max_dim = (fast_opts or {}).get("max_region_dim", 0)
-    _phash_thresh = (fast_opts or {}).get(
-        "phash_threshold", config.SCREENSPACE_FAST_SCAN_PHASH_THRESHOLD
+    scan_video_frames(
+        video_path,
+        None,
+        interval_seconds,
+        callback,
+        start_seconds=start_seconds,
+        end_seconds=end_seconds,
+        fps=fps,
+        duration=duration,
+        fast_opts=fast_opts,
     )
-    _prev_phash: List[Optional[imagehash.ImageHash]] = [None]
-
-    use_sequential = interval_seconds <= config.SCREENSPACE_SEQUENTIAL_READ_MAX_INTERVAL
-
-    if use_sequential:
-        frame_interval = max(1, round(interval_seconds * fps))
-        if start_seconds > 0:
-            cap.set(cv2.CAP_PROP_POS_MSEC, start_seconds * 1000.0)
-        frame_idx = 0
-        end_frame = int(end_seconds * fps)
-        start_frame = int(start_seconds * fps)
-        while True:
-            grabbed = cap.grab()
-            if not grabbed:
-                break
-            abs_frame = start_frame + frame_idx
-            if abs_frame > end_frame:
-                break
-            if frame_idx % frame_interval == 0:
-                ret, frame = cap.retrieve()
-                if not ret:
-                    break
-                ts = start_seconds + frame_idx / fps
-                if _max_dim > 0:
-                    fh, fw = frame.shape[:2]
-                    if fh > _max_dim or fw > _max_dim:
-                        sc = _max_dim / max(fh, fw)
-                        frame = cv2.resize(
-                            frame,
-                            (int(fw * sc), int(fh * sc)),
-                            interpolation=cv2.INTER_AREA,
-                        )
-                if _phash_skip:
-                    ph = compute_phash(frame)
-                    if (
-                        _prev_phash[0] is not None
-                        and ph - _prev_phash[0] <= _phash_thresh
-                    ):
-                        frame_idx += 1
-                        continue
-                    _prev_phash[0] = ph
-                result = callback(ts, frame)
-                if result is False:
-                    break
-            frame_idx += 1
-    else:
-        ts = start_seconds
-        while ts <= end_seconds:
-            cap.set(cv2.CAP_PROP_POS_MSEC, ts * 1000.0)
-            ret, frame = cap.read()
-            if not ret:
-                break
-            if _max_dim > 0:
-                fh, fw = frame.shape[:2]
-                if fh > _max_dim or fw > _max_dim:
-                    sc = _max_dim / max(fh, fw)
-                    frame = cv2.resize(
-                        frame,
-                        (int(fw * sc), int(fh * sc)),
-                        interpolation=cv2.INTER_AREA,
-                    )
-            if _phash_skip:
-                ph = compute_phash(frame)
-                if _prev_phash[0] is not None and ph - _prev_phash[0] <= _phash_thresh:
-                    ts += interval_seconds
-                    continue
-                _prev_phash[0] = ph
-            result = callback(ts, frame)
-            if result is False:
-                break
-            ts += interval_seconds
-
-    cap.release()
 
 
 # ---------------------------------------------------------------------------
