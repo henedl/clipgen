@@ -599,11 +599,14 @@ def get_file_duration(filepath: str) -> Optional[int]:
 
 
 def probe_video_properties(filepath: str) -> Optional[Dict[str, Any]]:
-    """Probe video file for stream properties (resolution, codecs).
+    """Probe video file for stream properties (resolution, codecs, timing).
 
     Returns:
         Dict with 'width' (int), 'height' (int), 'video_codec' (str),
-        'audio_codec' (str or None if no audio stream), or None if probe fails.
+        'audio_codec' (str or None if no audio stream),
+        'fps' (float, 0.0 if unknown), 'duration' (float seconds, 0.0 if unknown),
+        'nb_frames' (int, 0 if unknown),
+        or None if probe fails.
     """
     if config.DEBUGGING:
         return {
@@ -611,6 +614,9 @@ def probe_video_properties(filepath: str) -> Optional[Dict[str, Any]]:
             "height": 1080,
             "video_codec": "h264",
             "audio_codec": "aac",
+            "fps": 30.0,
+            "duration": 300.0,
+            "nb_frames": 9000,
         }
 
     resolved = str(Path(filepath).resolve())
@@ -625,7 +631,9 @@ def probe_video_properties(filepath: str) -> Optional[Dict[str, Any]]:
         "-v",
         "error",
         "-show_entries",
-        "stream=width,height,codec_name,codec_type",
+        "stream=width,height,codec_name,codec_type,r_frame_rate,nb_frames",
+        "-show_entries",
+        "format=duration",
         "-of",
         "json",
         filepath,
@@ -644,23 +652,49 @@ def probe_video_properties(filepath: str) -> Optional[Dict[str, Any]]:
     width = height = 0
     video_codec: Optional[str] = None
     audio_codec: Optional[str] = None
+    fps = 0.0
+    nb_frames = 0
     for stream in streams:
         codec_type = stream.get("codec_type", "")
         if codec_type == "video" and video_codec is None:
             width = int(stream.get("width", 0))
             height = int(stream.get("height", 0))
             video_codec = stream.get("codec_name")
+            # Parse r_frame_rate (e.g. "30/1", "30000/1001")
+            rfr = stream.get("r_frame_rate", "")
+            if "/" in rfr:
+                parts = rfr.split("/")
+                try:
+                    num, den = float(parts[0]), float(parts[1])
+                    fps = num / den if den > 0 else 0.0
+                except (ValueError, IndexError):
+                    pass
+            nb_frames = int(stream.get("nb_frames", 0) or 0)
         elif codec_type == "audio" and audio_codec is None:
             audio_codec = stream.get("codec_name")
 
     if not video_codec or width <= 0 or height <= 0:
         return None
 
+    # Duration from format-level metadata (more reliable than stream-level)
+    fmt_duration = 0.0
+    fmt = data.get("format", {})
+    try:
+        fmt_duration = float(fmt.get("duration", 0))
+    except (ValueError, TypeError):
+        pass
+    # Fallback: compute from frame count and fps
+    if fmt_duration <= 0 and nb_frames > 0 and fps > 0:
+        fmt_duration = nb_frames / fps
+
     result = {
         "width": width,
         "height": height,
         "video_codec": video_codec,
         "audio_codec": audio_codec,
+        "fps": fps,
+        "duration": fmt_duration,
+        "nb_frames": nb_frames,
     }
     _video_properties_cache[resolved] = result
     return result

@@ -66,7 +66,6 @@ _worker: Optional["screenspace.ScreenspaceWorker"] = None
 _output_dir: str = ""
 _participants: List[Dict[str, Any]] = []
 _video_cap_cache: OrderedDict[str, Any] = OrderedDict()
-_VIDEO_CAP_MAX = 3
 _video_cap_lock = threading.Lock()
 _video_metadata_cache: Dict[str, Dict[str, Any]] = {}
 
@@ -74,6 +73,7 @@ _video_metadata_cache: Dict[str, Dict[str, Any]] = {}
 
 _sse_clients: list[queue_mod.Queue[str]] = []
 _sse_clients_lock = threading.Lock()
+_persist_lock = threading.Lock()
 
 
 def _notify_sse_clients(event_type: str = "update") -> None:
@@ -169,7 +169,7 @@ def _get_video_cap(video_path: str) -> Optional["cv2.VideoCapture"]:
     if not cap.isOpened():
         return None
     _video_cap_cache[video_path] = cap
-    if len(_video_cap_cache) > _VIDEO_CAP_MAX:
+    if len(_video_cap_cache) > config.SCREENSPACE_VIDEO_CAP_POOL_SIZE:
         _, old_cap = _video_cap_cache.popitem(last=False)
         old_cap.release()
     return cap
@@ -1179,14 +1179,15 @@ def _persist_manifest() -> None:
     """Save manifest after a task completes."""
     import screenspace
 
-    if _worker:
-        new_events = _worker.drain_new_events()
-        if new_events:
-            _manifest.setdefault("events", []).extend(new_events)
-        tasks = _worker.get_all_tasks()
-        screenspace.save_screenspace_manifest(
-            _manifest.get("regions", {}),
-            tasks,
-            _manifest.get("events", []),
-            stashes=_manifest.get("stashes", []),
-        )
+    with _persist_lock:
+        if _worker:
+            new_events = _worker.drain_new_events()
+            if new_events:
+                _manifest.setdefault("events", []).extend(new_events)
+            tasks = _worker.get_all_tasks()
+            screenspace.save_screenspace_manifest(
+                _manifest.get("regions", {}),
+                tasks,
+                _manifest.get("events", []),
+                stashes=_manifest.get("stashes", []),
+            )

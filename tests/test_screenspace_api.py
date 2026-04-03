@@ -741,3 +741,43 @@ def _create_region(client, name, x=100, y=20, w=300, h=30):
             "canvas_height": 1080,
         },
     )
+
+
+# ---- VideoCapture pool size (4D) ----
+
+
+def test_video_cap_pool_uses_config(monkeypatch):
+    """Eviction respects config.SCREENSPACE_VIDEO_CAP_POOL_SIZE."""
+    from collections import OrderedDict
+    from unittest import mock
+
+    monkeypatch.setattr(config, "SCREENSPACE_VIDEO_CAP_POOL_SIZE", 2)
+
+    # Replace module-level cache with a fresh one
+    original_cache = screenspace_server._video_cap_cache
+    screenspace_server._video_cap_cache = OrderedDict()
+
+    try:
+        fake_caps = {}
+
+        def fake_videocapture(path):
+            cap = mock.MagicMock()
+            cap.isOpened.return_value = True
+            fake_caps[path] = cap
+            return cap
+
+        monkeypatch.setattr("cv2.VideoCapture", fake_videocapture)
+
+        # Open 3 captures with pool size of 2
+        screenspace_server._get_video_cap("/a.mp4")
+        screenspace_server._get_video_cap("/b.mp4")
+        screenspace_server._get_video_cap("/c.mp4")
+
+        # Pool should have evicted the oldest (/a.mp4)
+        assert len(screenspace_server._video_cap_cache) == 2
+        assert "/a.mp4" not in screenspace_server._video_cap_cache
+        assert "/b.mp4" in screenspace_server._video_cap_cache
+        assert "/c.mp4" in screenspace_server._video_cap_cache
+        fake_caps["/a.mp4"].release.assert_called_once()
+    finally:
+        screenspace_server._video_cap_cache = original_cache

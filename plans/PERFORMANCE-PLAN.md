@@ -185,7 +185,7 @@ This could be always-on (not just fast scan), since phash is very cheap (~0.1ms 
 
 **Trade-offs:** 4x speedup for the most expensive per-frame operation. Slightly reduced precision for small template features (<20px). Could also be adopted as the default for the initial pass in normal mode, with full-res confirmation for frames that match.
 
-### - [ ] 2E. Batch frame extraction via ffmpeg instead of cv2
+### - [x] 2E. Batch frame extraction via ffmpeg instead of cv2
 
 **Current:** Frames are extracted one-at-a-time via `cv2.VideoCapture.grab()/retrieve()` or seek-based access (screenspace.py:457-496).
 
@@ -193,7 +193,7 @@ This could be always-on (not just fast scan), since phash is very cheap (~0.1ms 
 
 **Trade-offs:** Requires temp disk space for frames (or memory for pipe). Loses the ability to skip frames mid-scan (e.g. phash skip). Best combined with the coarse-to-fine approach: batch extract at coarse intervals, then targeted extraction for refinements. This optimization is independent of fast scan mode — it's a backend improvement that could apply always.
 
-### - [ ] 2F. Parallel analysis of independent regions
+### - [x] 2F. Parallel analysis of independent regions
 
 **Prior art:** Threading lock around VideoCapture seek+read was added in `370b3e4` to fix concurrent access crashes. This confirms that concurrent VideoCapture usage needs careful synchronization — each thread needs its own capture object.
 
@@ -277,7 +277,7 @@ Startup, mode-switching, and media loading.
 
 **Trade-offs:** Need to append version param to asset URLs. Small change.
 
-### - [ ] 4D. VideoCapture pool size for Screenspace
+### - [x] 4D. VideoCapture pool size for Screenspace
 
 **Prior art:** LRU VideoCapture cache was expanded from 1→3 in `89bd136`. Same direction, further increment.
 
@@ -403,8 +403,8 @@ Additional performance area: the raw speed of reading video frames and writing o
 | [ ] | 7 | 3D — Transcript caching to disk | Medium — eliminates repeat transcription |
 | [x] | 8 | 1E — DOM batching with fragments | Medium — smoother large lists |
 | [x] | 9 | 5D — Parallel tests with xdist — skipped (suite runs in 0.62s, xdist overhead would regress) | Medium — faster CI feedback |
-| [ ] | 10 | 2F — Parallel region analysis | Medium — scales with CPU cores |
-| [ ] | 11 | 2E — Batch frame extraction via ffmpeg | Low-Medium — depends on video codec |
+| [x] | 10 | 2F — Parallel region analysis | Medium — scales with CPU cores |
+| [x] | 11 | 2E — Batch frame extraction via ffmpeg | Low-Medium — depends on video codec |
 | [ ] | 12 | 4A — Lazy-import heavy libs | Low-Medium — saves seconds on startup |
 | [x] | 13 | 1C — Optimistic UI in Studio | Low-Medium — better feel during generation |
 | [x] | 14 | 5B — Skip torch for typecheck — skipped (ty needs installed deps) | Low — job already ~25s, marginal gain |

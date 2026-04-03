@@ -1,7 +1,10 @@
 """Tests for Screenspace analysis primitives, manifest I/O, and worker."""
 
+import io
 import json
+import threading
 import time
+from unittest import mock
 
 import numpy as np
 import pytest
@@ -1168,3 +1171,563 @@ class TestFastScanDispatchIntervalMultiplier:
         assert captured["fast_opts"]["template_downscale"] is True
         # Template should be downscaled by 2x in _dispatch
         assert captured["template_shape"] == (50, 100, 3)
+
+
+# ---------------------------------------------------------------------------
+# 2E: ffmpeg pipe extraction
+# ---------------------------------------------------------------------------
+
+
+class TestFfmpegPipeFrames:
+    def test_yields_frames_from_raw_bytes(self, monkeypatch):
+        """Generator yields correct (ts, frame) tuples from raw BGR pipe."""
+        w, h = 4, 2
+        # Two solid-color frames
+        frame1 = np.full((h, w, 3), 100, dtype=np.uint8)
+        frame2 = np.full((h, w, 3), 200, dtype=np.uint8)
+        raw = frame1.tobytes() + frame2.tobytes()
+
+        fake_proc = mock.MagicMock()
+        fake_proc.stdout = io.BytesIO(raw)
+        fake_proc.terminate = mock.MagicMock()
+        fake_proc.wait = mock.MagicMock()
+
+        monkeypatch.setattr("shutil.which", lambda _: "/usr/bin/ffmpeg")
+        monkeypatch.setattr("subprocess.Popen", lambda *a, **kw: fake_proc)
+
+        frames = list(
+            screenspace._ffmpeg_pipe_frames(
+                "/fake.mp4",
+                1.0,
+                start_seconds=5.0,
+                end_seconds=10.0,
+                frame_width=w,
+                frame_height=h,
+            )
+        )
+        assert len(frames) == 2
+        assert frames[0][0] == 5.0
+        assert frames[1][0] == 6.0
+        assert frames[0][1].shape == (h, w, 3)
+        assert np.all(frames[0][1] == 100)
+        assert np.all(frames[1][1] == 200)
+
+    def test_empty_when_no_ffmpeg(self, monkeypatch):
+        monkeypatch.setattr("shutil.which", lambda _: None)
+        frames = list(
+            screenspace._ffmpeg_pipe_frames(
+                "/fake.mp4", 1.0, frame_width=10, frame_height=10
+            )
+        )
+        assert frames == []
+
+
+class TestScanViaFfmpegPipe:
+    def test_returns_false_when_no_ffmpeg(self, monkeypatch):
+        monkeypatch.setattr("shutil.which", lambda _: None)
+        result = screenspace._scan_via_ffmpeg_pipe(
+            "/fake.mp4", None, 1.0, lambda ts, f: None, duration=10.0
+        )
+        assert result is False
+
+    def test_returns_false_when_probe_fails(self, monkeypatch):
+        monkeypatch.setattr("shutil.which", lambda _: "/usr/bin/ffmpeg")
+        monkeypatch.setattr("video.probe_video_properties", lambda _: None)
+        result = screenspace._scan_via_ffmpeg_pipe(
+            "/fake.mp4", None, 1.0, lambda ts, f: None, duration=10.0
+        )
+        assert result is False
+
+    def test_calls_callback_with_frames(self, monkeypatch):
+        w, h = 4, 2
+        frame_data = np.full((h, w, 3), 42, dtype=np.uint8)
+        raw = frame_data.tobytes()
+
+        fake_proc = mock.MagicMock()
+        fake_proc.stdout = io.BytesIO(raw)
+        fake_proc.terminate = mock.MagicMock()
+        fake_proc.wait = mock.MagicMock()
+
+        monkeypatch.setattr("shutil.which", lambda _: "/usr/bin/ffmpeg")
+        monkeypatch.setattr("subprocess.Popen", lambda *a, **kw: fake_proc)
+        monkeypatch.setattr(
+            "video.probe_video_properties",
+            lambda _: {"width": w, "height": h, "video_codec": "h264"},
+        )
+
+        received = []
+
+        def cb(ts, frame):
+            received.append((ts, frame.copy()))
+
+        result = screenspace._scan_via_ffmpeg_pipe(
+            "/fake.mp4", None, 1.0, cb, duration=10.0, full_frame=True
+        )
+        assert result is True
+        assert len(received) == 1
+        assert received[0][0] == 0.0
+        assert np.all(received[0][1] == 42)
+
+    def test_builds_crop_filter_for_region(self, monkeypatch):
+        w, h = 8, 6
+        region = {"x": 1, "y": 2, "w": 4, "h": 3}
+
+        captured_cmd = {}
+
+        def fake_popen(cmd, **kw):
+            captured_cmd["args"] = cmd
+            proc = mock.MagicMock()
+            # Return empty bytes so the generator exits immediately
+            proc.stdout = io.BytesIO(b"")
+            proc.terminate = mock.MagicMock()
+            proc.wait = mock.MagicMock()
+            return proc
+
+        monkeypatch.setattr("shutil.which", lambda _: "/usr/bin/ffmpeg")
+        monkeypatch.setattr("subprocess.Popen", fake_popen)
+        monkeypatch.setattr(
+            "video.probe_video_properties",
+            lambda _: {"width": w, "height": h, "video_codec": "h264"},
+        )
+
+        screenspace._scan_via_ffmpeg_pipe(
+            "/fake.mp4", region, 1.0, lambda ts, f: None, duration=10.0
+        )
+
+        cmd_str = " ".join(captured_cmd["args"])
+        assert "crop=4:3:1:2" in cmd_str
+
+    def test_stops_on_callback_false(self, monkeypatch):
+        w, h = 4, 2
+        frame = np.full((h, w, 3), 1, dtype=np.uint8)
+        raw = frame.tobytes() * 5  # 5 frames
+
+        fake_proc = mock.MagicMock()
+        fake_proc.stdout = io.BytesIO(raw)
+        fake_proc.terminate = mock.MagicMock()
+        fake_proc.wait = mock.MagicMock()
+
+        monkeypatch.setattr("shutil.which", lambda _: "/usr/bin/ffmpeg")
+        monkeypatch.setattr("subprocess.Popen", lambda *a, **kw: fake_proc)
+        monkeypatch.setattr(
+            "video.probe_video_properties",
+            lambda _: {"width": w, "height": h, "video_codec": "h264"},
+        )
+
+        call_count = [0]
+
+        def cb(ts, frame):
+            call_count[0] += 1
+            if call_count[0] >= 2:
+                return False
+
+        result = screenspace._scan_via_ffmpeg_pipe(
+            "/fake.mp4", None, 1.0, cb, duration=10.0, full_frame=True
+        )
+        assert result is True
+        assert call_count[0] == 2
+
+
+class TestScanVideoFramesFfmpegIntegration:
+    def test_tries_ffmpeg_first_when_enabled(self, monkeypatch):
+        """With BATCH_EXTRACT=True and ffmpeg succeeding, cv2 is not used."""
+        monkeypatch.setattr(config, "SCREENSPACE_BATCH_EXTRACT", True)
+        monkeypatch.setattr(
+            screenspace,
+            "_scan_via_ffmpeg_pipe",
+            lambda *a, **kw: True,
+        )
+        cv2_called = [False]
+
+        def fake_cap(path):
+            cv2_called[0] = True
+            cap = mock.MagicMock()
+            cap.isOpened.return_value = False
+            return cap
+
+        monkeypatch.setattr(screenspace.cv2, "VideoCapture", fake_cap)
+
+        screenspace.scan_video_frames(
+            "/fake.mp4",
+            {"x": 0, "y": 0, "w": 10, "h": 10},
+            1.0,
+            lambda ts, f: None,
+        )
+        assert cv2_called[0] is False
+
+    def test_falls_back_to_cv2_when_ffmpeg_fails(self, monkeypatch):
+        """With BATCH_EXTRACT=True but ffmpeg failing, cv2 path is entered."""
+        monkeypatch.setattr(config, "SCREENSPACE_BATCH_EXTRACT", True)
+        monkeypatch.setattr(
+            screenspace,
+            "_scan_via_ffmpeg_pipe",
+            lambda *a, **kw: False,
+        )
+        cv2_called = [False]
+
+        def fake_cap2(path):
+            cv2_called[0] = True
+            cap = mock.MagicMock()
+            cap.isOpened.return_value = False
+            return cap
+
+        monkeypatch.setattr(screenspace.cv2, "VideoCapture", fake_cap2)
+
+        screenspace.scan_video_frames(
+            "/fake.mp4",
+            {"x": 0, "y": 0, "w": 10, "h": 10},
+            1.0,
+            lambda ts, f: None,
+        )
+        assert cv2_called[0] is True
+
+    def test_skipped_when_batch_extract_disabled(self, monkeypatch):
+        """With BATCH_EXTRACT=False, ffmpeg pipe is never attempted."""
+        monkeypatch.setattr(config, "SCREENSPACE_BATCH_EXTRACT", False)
+        pipe_called = [False]
+
+        def fake_pipe(*a, **kw):
+            pipe_called[0] = True
+            return True
+
+        monkeypatch.setattr(screenspace, "_scan_via_ffmpeg_pipe", fake_pipe)
+
+        # cv2 fallback — won't actually process since file doesn't exist
+        cap_mock = mock.MagicMock()
+        cap_mock.isOpened.return_value = False
+        monkeypatch.setattr(screenspace.cv2, "VideoCapture", lambda _: cap_mock)
+
+        screenspace.scan_video_frames(
+            "/fake.mp4",
+            {"x": 0, "y": 0, "w": 10, "h": 10},
+            1.0,
+            lambda ts, f: None,
+        )
+        assert pipe_called[0] is False
+
+
+# ---------------------------------------------------------------------------
+# 2F: Parallel worker
+# ---------------------------------------------------------------------------
+
+
+class TestWorkerParallel:
+    def test_two_tasks_run_concurrently(self, monkeypatch):
+        """With PARALLEL_WORKERS=2, two tasks reach RUNNING simultaneously."""
+        monkeypatch.setattr(config, "SCREENSPACE_PARALLEL_WORKERS", 2)
+
+        barrier = threading.Barrier(2, timeout=5)
+        reached_running = {"count": 0}
+
+        def slow_dispatch(self, task, on_progress, cancel_flag, on_result=None):
+            reached_running["count"] += 1
+            barrier.wait()  # both tasks must reach here
+            time.sleep(0.05)
+            return []
+
+        monkeypatch.setattr(screenspace.ScreenspaceWorker, "_dispatch", slow_dispatch)
+
+        worker = screenspace.ScreenspaceWorker()
+        worker.start()
+
+        t1 = screenspace.create_task(
+            "color",
+            "P01",
+            "s.mp4",
+            "/v.mp4",
+            "r1",
+            {"x": 0, "y": 0, "w": 1, "h": 1},
+        )
+        t2 = screenspace.create_task(
+            "color",
+            "P02",
+            "s.mp4",
+            "/v2.mp4",
+            "r2",
+            {"x": 0, "y": 0, "w": 1, "h": 1},
+        )
+        worker.enqueue(t1)
+        worker.enqueue(t2)
+
+        # Wait for both tasks to complete
+        for _ in range(100):
+            tasks = worker.get_all_tasks()
+            statuses = [t["status"] for t in tasks]
+            if all(s in ("completed", "failed") for s in statuses):
+                break
+            time.sleep(0.05)
+
+        worker.stop()
+        # Both tasks reached the barrier (ran concurrently)
+        assert reached_running["count"] == 2
+
+    def test_sequential_when_workers_1(self, monkeypatch):
+        """With PARALLEL_WORKERS=1, tasks execute one at a time."""
+        monkeypatch.setattr(config, "SCREENSPACE_PARALLEL_WORKERS", 1)
+
+        max_concurrent = {"value": 0, "current": 0}
+        lock = threading.Lock()
+
+        def counting_dispatch(self, task, on_progress, cancel_flag, on_result=None):
+            with lock:
+                max_concurrent["current"] += 1
+                max_concurrent["value"] = max(
+                    max_concurrent["value"], max_concurrent["current"]
+                )
+            time.sleep(0.1)
+            with lock:
+                max_concurrent["current"] -= 1
+            return []
+
+        monkeypatch.setattr(
+            screenspace.ScreenspaceWorker, "_dispatch", counting_dispatch
+        )
+
+        worker = screenspace.ScreenspaceWorker()
+        worker.start()
+
+        for i in range(3):
+            t = screenspace.create_task(
+                "color",
+                f"P0{i}",
+                "s.mp4",
+                f"/v{i}.mp4",
+                f"r{i}",
+                {"x": 0, "y": 0, "w": 1, "h": 1},
+            )
+            worker.enqueue(t)
+
+        for _ in range(100):
+            tasks = worker.get_all_tasks()
+            if all(t["status"] in ("completed", "failed") for t in tasks):
+                break
+            time.sleep(0.05)
+
+        worker.stop()
+        assert max_concurrent["value"] == 1
+
+    def test_parallel_pause_flags_all_running(self, monkeypatch):
+        """Pausing flags all running tasks."""
+        monkeypatch.setattr(config, "SCREENSPACE_PARALLEL_WORKERS", 2)
+
+        gate = threading.Event()
+
+        def blocking_dispatch(self, task, on_progress, cancel_flag, on_result=None):
+            gate.wait(timeout=5)
+            return []
+
+        monkeypatch.setattr(
+            screenspace.ScreenspaceWorker, "_dispatch", blocking_dispatch
+        )
+
+        worker = screenspace.ScreenspaceWorker()
+        worker.start()
+
+        t1 = screenspace.create_task(
+            "color",
+            "P01",
+            "s.mp4",
+            "/v.mp4",
+            "r1",
+            {"x": 0, "y": 0, "w": 1, "h": 1},
+        )
+        t2 = screenspace.create_task(
+            "color",
+            "P02",
+            "s.mp4",
+            "/v2.mp4",
+            "r2",
+            {"x": 0, "y": 0, "w": 1, "h": 1},
+        )
+        worker.enqueue(t1)
+        worker.enqueue(t2)
+
+        # Wait for both to be RUNNING
+        for _ in range(50):
+            tasks = worker.get_all_tasks()
+            running = [t for t in tasks if t["status"] == "running"]
+            if len(running) == 2:
+                break
+            time.sleep(0.05)
+
+        worker.pause()
+        # Check both have _paused_flag
+        with worker._lock:
+            for tid in [t1["id"], t2["id"]]:
+                assert worker._tasks[tid].get("_paused_flag") is True
+
+        gate.set()
+        worker.stop()
+
+
+class TestOcrReaderLock:
+    def test_ocr_lock_prevents_duplicate_creation(self, monkeypatch):
+        """Only one EasyOCR Reader is created even with concurrent calls."""
+        call_count = {"n": 0}
+        fake_reader = mock.MagicMock()
+
+        def fake_reader_init(languages, verbose=False):
+            call_count["n"] += 1
+            time.sleep(0.05)  # simulate slow init
+            return fake_reader
+
+        # Clear cache
+        screenspace._ocr_readers.clear()
+
+        mock_easyocr = mock.MagicMock()
+        mock_easyocr.Reader = fake_reader_init
+        monkeypatch.setitem(__import__("sys").modules, "easyocr", mock_easyocr)
+
+        threads = []
+        for _ in range(4):
+            t = threading.Thread(target=screenspace._get_ocr_reader, args=(["en"],))
+            threads.append(t)
+            t.start()
+        for t in threads:
+            t.join()
+
+        assert call_count["n"] == 1
+        screenspace._ocr_readers.clear()
+
+
+# ---------------------------------------------------------------------------
+# Timelapse bug fixes
+# ---------------------------------------------------------------------------
+
+
+class TestBuildTimelapseCommandMarkers:
+    def test_start_seconds_adds_ss_flag(self):
+        cmd = screenspace.build_timelapse_command(
+            "/video.mp4",
+            {"x": 0, "y": 0, "w": 100, "h": 100},
+            10.0,
+            "/out.mp4",
+            start_seconds=30.0,
+        )
+        ss_idx = cmd.index("-ss")
+        assert cmd[ss_idx + 1] == "30.0"
+        # -ss must appear before -i for fast seeking
+        i_idx = cmd.index("-i")
+        assert ss_idx < i_idx
+
+    def test_end_seconds_adds_t_flag(self):
+        cmd = screenspace.build_timelapse_command(
+            "/video.mp4",
+            {"x": 0, "y": 0, "w": 100, "h": 100},
+            10.0,
+            "/out.mp4",
+            start_seconds=10.0,
+            end_seconds=40.0,
+        )
+        t_idx = cmd.index("-t")
+        assert cmd[t_idx + 1] == "30.0"  # 40 - 10
+
+    def test_no_markers_omits_flags(self):
+        cmd = screenspace.build_timelapse_command(
+            "/video.mp4",
+            {"x": 0, "y": 0, "w": 100, "h": 100},
+            10.0,
+            "/out.mp4",
+        )
+        assert "-ss" not in cmd
+        assert "-t" not in cmd
+
+
+class TestGenerateTimelapseProgress:
+    def test_reports_progress_from_ffmpeg_output(self, monkeypatch):
+        """on_progress is called with values parsed from ffmpeg -progress."""
+        # Simulate ffmpeg -progress output with out_time_us lines
+        progress_output = (
+            b"out_time_us=0\n"
+            b"progress=continue\n"
+            b"out_time_us=5000000\n"
+            b"progress=continue\n"
+            b"out_time_us=10000000\n"
+            b"progress=end\n"
+        )
+
+        fake_proc = mock.MagicMock()
+        fake_proc.stdout = io.BytesIO(progress_output)
+        fake_proc.returncode = 0
+        fake_proc.wait = mock.MagicMock()
+
+        monkeypatch.setattr("subprocess.Popen", lambda *a, **kw: fake_proc)
+
+        progress_values = []
+
+        result = screenspace.generate_timelapse(
+            "/video.mp4",
+            {"x": 0, "y": 0, "w": 100, "h": 100},
+            10.0,
+            "/out.mp4",
+            start_seconds=0.0,
+            end_seconds=100.0,  # 100s input / 10x speedup = 10s output = 10_000_000 us
+            on_progress=lambda p: progress_values.append(round(p, 2)),
+        )
+
+        assert result == "/out.mp4"
+        # Should have: 0.0 (initial), 0.0 (out_time_us=0), 0.5 (5M/10M), 0.99 (capped)
+        assert 0.0 in progress_values
+        assert any(0.4 <= v <= 0.6 for v in progress_values)  # ~0.5 from 5M/10M
+        assert 1.0 in progress_values  # final
+
+    def test_cancel_flag_terminates_process(self, monkeypatch):
+        """cancel_flag=True stops ffmpeg and returns None."""
+        # Output enough lines so the loop iterates
+        progress_output = b"out_time_us=0\nprogress=continue\n" * 5
+
+        fake_proc = mock.MagicMock()
+        fake_proc.stdout = io.BytesIO(progress_output)
+        fake_proc.returncode = -15  # SIGTERM
+        fake_proc.wait = mock.MagicMock()
+        fake_proc.terminate = mock.MagicMock()
+
+        monkeypatch.setattr("subprocess.Popen", lambda *a, **kw: fake_proc)
+
+        result = screenspace.generate_timelapse(
+            "/video.mp4",
+            {"x": 0, "y": 0, "w": 100, "h": 100},
+            10.0,
+            "/out.mp4",
+            start_seconds=0.0,
+            end_seconds=100.0,
+            cancel_flag=lambda: True,
+        )
+
+        assert result is None
+        fake_proc.terminate.assert_called_once()
+
+
+class TestTimelapseDispatchPassesMarkers:
+    def test_dispatch_forwards_start_end_to_timelapse(self, monkeypatch):
+        """_dispatch passes start_seconds and end_seconds to generate_timelapse."""
+        captured = {}
+
+        def fake_generate(
+            video_path, region, speedup_factor, output_path, output_format="mp4", **kw
+        ):
+            captured.update(kw)
+            return output_path
+
+        monkeypatch.setattr(screenspace, "generate_timelapse", fake_generate)
+
+        worker = screenspace.ScreenspaceWorker()
+        task = screenspace.create_task(
+            "timelapse",
+            "P01",
+            "s_P01.mp4",
+            "/fake.mp4",
+            "region1",
+            {"x": 0, "y": 0, "w": 100, "h": 100},
+            parameters={
+                "speedup_factor": 5.0,
+                "start_seconds": 15.0,
+                "end_seconds": 45.0,
+            },
+        )
+        worker._dispatch(task, lambda p: None, lambda: False, None)
+
+        assert captured["start_seconds"] == 15.0
+        assert captured["end_seconds"] == 45.0
+        assert captured["on_progress"] is not None
+        assert captured["cancel_flag"] is not None

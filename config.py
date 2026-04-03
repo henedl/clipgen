@@ -9,7 +9,7 @@ from icecream import ic
 REENCODING: bool = False
 AUDIO_NORMALIZE: bool = False
 FILEFORMAT: str = ".mp4"
-VERSIONNUM: str = "0.10.14"
+VERSIONNUM: str = "0.10.15"
 TITLECARDS_ENABLED: bool = (
     False  # use --titlecards / --no-titlecards to override per run
 )
@@ -150,6 +150,15 @@ SCREENSPACE_FLOW_GRID_SIZE: int = 8
 SCREENSPACE_FLOW_GRID_MIN_MAG: float = 0.5
 SCREENSPACE_FAST_SCAN_INTERVAL_MULTIPLIER: float = 3.0
 SCREENSPACE_FAST_SCAN_PHASH_THRESHOLD: int = 12  # tighter than general 15
+SCREENSPACE_BATCH_EXTRACT: bool = (
+    True  # use ffmpeg pipe for frame extraction; falls back to cv2
+)
+SCREENSPACE_PARALLEL_WORKERS: int = (
+    2  # max concurrent analysis tasks in ScreenspaceWorker
+)
+SCREENSPACE_VIDEO_CAP_POOL_SIZE: int = (
+    6  # max cached VideoCapture objects for API frame endpoint
+)
 
 # Highlights reel constants
 HIGHLIGHTS_REEL_DURATION_SECONDS: int = 180  # 3-minute budget for highlights reel
