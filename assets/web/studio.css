@@ -447,6 +447,7 @@ body {
   overflow: auto;
   border: 1px solid var(--color-border);
   border-radius: var(--radius);
+  user-select: none;
 }
 
 #sheetGrid table {
