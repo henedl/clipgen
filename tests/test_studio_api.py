@@ -501,6 +501,8 @@ def test_api_timeline_viewer_with_intake(client, monkeypatch):
         "participant": "P02",
         "start": 10.0,
         "end": 15.0,
+        "_ok": True,
+        "_error": "",
     }
 
     monkeypatch.setattr(spreadsheet, "generate_list", lambda *a, **kw: fake_clips)
