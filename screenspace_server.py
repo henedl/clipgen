@@ -450,7 +450,7 @@ def api_stashes_delete(stash_id: str) -> FlaskResponse:
 
 @screenspace_bp.route("/api/stashes/<stash_id>/restore", methods=["POST"])
 def api_stashes_restore(stash_id: str) -> FlaskResponse:
-    """Restore a stash: replace active regions with stashed ones, remove stash."""
+    """Restore a stash: replace active regions with stashed ones (stash is kept)."""
     stashes = _manifest.get("stashes", [])
     idx = next((i for i, s in enumerate(stashes) if s["id"] == stash_id), None)
     if idx is None:
@@ -458,7 +458,7 @@ def api_stashes_restore(stash_id: str) -> FlaskResponse:
 
     import screenspace
 
-    stash = stashes.pop(idx)
+    stash = stashes[idx]
     _manifest["regions"] = copy.deepcopy(stash["regions"])
     screenspace.save_screenspace_manifest(
         _manifest["regions"],

@@ -1223,7 +1223,6 @@
       state.regions = data.regions || {};
       state.activeRegion = null;
       state.pendingRegion = null;
-      state.stashes = state.stashes.filter(function (s) { return s.id !== stashId; });
       renderRegionChips();
       renderOverlay();
       updateRegionButtons();
