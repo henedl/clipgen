@@ -9,7 +9,7 @@ from icecream import ic
 REENCODING: bool = False
 AUDIO_NORMALIZE: bool = False
 FILEFORMAT: str = ".mp4"
-VERSIONNUM: str = "0.10.15"
+VERSIONNUM: str = "0.10.16"
 TITLECARDS_ENABLED: bool = (
     False  # use --titlecards / --no-titlecards to override per run
 )
@@ -98,6 +98,7 @@ GALLERY_GIF_DURATION_SECONDS: int = 3  # Default per-GIF duration in gallery mod
 GALLERY_PARALLEL_WORKERS: int = (
     4  # Max concurrent ffmpeg processes for gallery GIF extraction
 )
+CLIP_PARALLEL_WORKERS: int = 0  # Max concurrent ffmpeg processes for clip/screenshot/GIF generation; 0 = auto (min(4, cpu_count))
 MAX_FILESIZE_MB: int = 0  # Maximum output file size in MB (0 = disabled)
 MIN_SOURCE_VIDEO_SIZE_MB: int = 100  # Minimum file size (MB) to consider as a source video candidate during fuzzy matching
 MANIFEST_FILENAME: str = "clipgen_manifest.json"  # cumulative artifact manifest; consumed by Insights Builder and --regenerate
@@ -246,6 +247,7 @@ SETTINGS_DESCRIPTIONS: Dict[str, str] = {
     "MANIFEST_ENABLED": "Write a manifest JSON file alongside generated artifacts for session tracking.",
     "STUDIO_CELL_EXPAND_HOVER": "Expand overflowing timestamp cells on hover in the Sheet Preview.",
     "FILMSTRIP_ENABLED": "Show thumbnail images on timeline markers instead of solid colors (in the HTML viewer).",
+    "CLIP_PARALLEL_WORKERS": "Number of concurrent ffmpeg processes for clip generation. 0 = auto, 1 = sequential.",
 }
 
 # Studio-exposed settings with UI metadata (group, type, constraints).
@@ -285,5 +287,11 @@ STUDIO_SETTINGS: Dict[str, Dict[str, Any]] = {
         "step": 10,
     },
     "MANIFEST_ENABLED": {"group": "Generation", "type": "bool"},
+    "CLIP_PARALLEL_WORKERS": {
+        "group": "Generation",
+        "type": "int",
+        "min": 0,
+        "step": 1,
+    },
     "STUDIO_CELL_EXPAND_HOVER": {"group": "Sheet Preview", "type": "bool"},
 }

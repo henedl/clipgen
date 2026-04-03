@@ -1,6 +1,7 @@
 from unittest.mock import Mock
 
 import clipgen
+import config
 
 
 def _prepared_clip(raw_clip, times):
@@ -19,6 +20,7 @@ def test_process_clips_counts_generated_segments_for_all_formats(
     )
     monkeypatch.setattr(clipgen.Path, "is_file", lambda self: True)
     monkeypatch.setattr(clipgen.utils, "create_progress_bar", lambda: None)
+    monkeypatch.setattr(config, "CLIP_PARALLEL_WORKERS", 1)
 
     call_counter = {"n": 0}
 
@@ -77,6 +79,7 @@ def test_process_clips_skips_when_source_video_missing(monkeypatch, make_clip):
     )
     monkeypatch.setattr(clipgen.Path, "is_file", lambda self: False)
     monkeypatch.setattr(clipgen.utils, "create_progress_bar", lambda: None)
+    monkeypatch.setattr(config, "CLIP_PARALLEL_WORKERS", 1)
     run_ffmpeg = Mock(return_value=True)
     monkeypatch.setattr(clipgen.video, "run_ffmpeg", run_ffmpeg)
 
@@ -150,3 +153,49 @@ def test_process_reel_returns_zero_when_no_segments_generated(monkeypatch, make_
     result, _artifacts = clipgen.process_reel(raw_clips, output_file="reel.mp4")
     assert result == 0
     concat.assert_not_called()
+
+
+def test_process_clips_parallel_generates_all(monkeypatch, make_clip):
+    """Multiple clips processed in parallel should all generate successfully."""
+    clips = [make_clip(row=i, col=2) for i in range(3, 7)]
+    monkeypatch.setattr(
+        clipgen.files,
+        "prepare_clip",
+        lambda clip: _prepared_clip(clip, [("00:10", "00:20")]),
+    )
+    monkeypatch.setattr(clipgen.Path, "is_file", lambda self: True)
+    monkeypatch.setattr(clipgen.utils, "create_progress_bar", lambda: None)
+    monkeypatch.setattr(config, "CLIP_PARALLEL_WORKERS", 4)
+
+    call_counter = {"n": 0}
+
+    def unique_name(_template, file_format=None):
+        call_counter["n"] += 1
+        return f"out_{call_counter['n']}{file_format or '.mp4'}"
+
+    monkeypatch.setattr(clipgen.files, "get_unique_filename", unique_name)
+    run_ffmpeg = Mock(return_value=True)
+    monkeypatch.setattr(clipgen.video, "run_ffmpeg", run_ffmpeg)
+
+    count, _artifacts = clipgen.process_clips(clips, output_format="clip")
+    assert count == 4
+    assert run_ffmpeg.call_count == 4
+
+
+def test_resolve_clip_workers(monkeypatch):
+    """Auto-detect returns min(4, cpu_count); explicit values pass through."""
+    monkeypatch.setattr(config, "CLIP_PARALLEL_WORKERS", 0)
+    monkeypatch.setattr(clipgen.os, "cpu_count", lambda: 8)
+    assert clipgen._resolve_clip_workers() == 4
+
+    monkeypatch.setattr(clipgen.os, "cpu_count", lambda: 2)
+    assert clipgen._resolve_clip_workers() == 2
+
+    monkeypatch.setattr(clipgen.os, "cpu_count", lambda: None)
+    assert clipgen._resolve_clip_workers() == 1
+
+    monkeypatch.setattr(config, "CLIP_PARALLEL_WORKERS", 6)
+    assert clipgen._resolve_clip_workers() == 6
+
+    monkeypatch.setattr(config, "CLIP_PARALLEL_WORKERS", 1)
+    assert clipgen._resolve_clip_workers() == 1

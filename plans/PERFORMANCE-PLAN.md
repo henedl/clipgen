@@ -209,7 +209,7 @@ This could be always-on (not just fast scan), since phash is very cheap (~0.1ms 
 
 Speed of generating clips, screenshots, GIFs, and reels.
 
-### - [ ] 3A. Parallel clip cutting
+### - [x] 3A. Parallel clip cutting
 
 **Prior art:** ThreadPoolExecutor with 4 workers already used for gallery GIF extraction (`c5b604a`), achieving 3-4x speedup. Same pattern, same module (video.py), different function.
 
@@ -397,7 +397,7 @@ Additional performance area: the raw speed of reading video frames and writing o
 | [x] | 1 | 2.0 — **Fast Scan mode** (bundles 2A-2D) | High — 3-5x faster Screenspace with explicit quality trade-off |
 | [x] | 2 | 2C — Universal phash pre-filter (always-on candidate) | High — cheap filter, broad applicability, minimal quality loss |
 | [x] | 3 | 5A — Cache uv in CI | High — near-instant CI installs |
-| [ ] | 4 | 3A — Parallel clip cutting | High — 3-4x faster batch generation |
+| [x] | 4 | 3A — Parallel clip cutting | High — 3-4x faster batch generation |
 | [x] | 5 | 1A — SSE for Screenspace progress | Medium — eliminates perceived stalls |
 | [x] | 6 | 1B — Preload first frames | Medium — instant first interaction |
 | [ ] | 7 | 3D — Transcript caching to disk | Medium — eliminates repeat transcription |
