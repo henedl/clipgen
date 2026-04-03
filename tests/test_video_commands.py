@@ -94,6 +94,9 @@ def test_probe_video_properties_parses_output(monkeypatch):
         "height": 1080,
         "video_codec": "h264",
         "audio_codec": "aac",
+        "fps": 0.0,
+        "duration": 0.0,
+        "nb_frames": 0,
     }
 
 
@@ -238,7 +241,7 @@ def test_concatenate_clips_warns_on_mismatch(monkeypatch):
     warnings = []
     original_warning = video.utils.warning_print
 
-    def capture_warning(msg: str, details: list[str] | None = None):
+    def capture_warning(msg, details=None):
         warnings.append(msg)
         original_warning(msg, details)
 

@@ -27,12 +27,15 @@ import json
 import math
 import queue
 import re
+import shutil
+import subprocess
 import threading
 import time
 import uuid
+from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple
 
 import cv2
 import imagehash
@@ -50,6 +53,7 @@ import video
 # ---------------------------------------------------------------------------
 
 _ocr_readers: Dict[tuple, Any] = {}
+_ocr_lock = threading.Lock()
 
 
 def _get_ocr_reader(languages: List[str]) -> Any:
@@ -57,9 +61,10 @@ def _get_ocr_reader(languages: List[str]) -> Any:
     import easyocr
 
     key = tuple(sorted(languages))
-    if key not in _ocr_readers:
-        _ocr_readers[key] = easyocr.Reader(list(key), verbose=False)
-    return _ocr_readers[key]
+    with _ocr_lock:
+        if key not in _ocr_readers:
+            _ocr_readers[key] = easyocr.Reader(list(key), verbose=False)
+        return _ocr_readers[key]
 
 
 # ---------------------------------------------------------------------------
@@ -447,6 +452,23 @@ def scan_video_frames(
     - ``phash_skip``: skip frames whose perceptual hash is unchanged
     - ``max_region_dim``: downscale extracted region to this max dimension
     """
+    # Try ffmpeg pipe extraction first (faster H.264 decoding)
+    if config.SCREENSPACE_BATCH_EXTRACT:
+        if _scan_via_ffmpeg_pipe(
+            video_path,
+            region,
+            interval_seconds,
+            callback,
+            start_seconds=start_seconds,
+            end_seconds=end_seconds if end_seconds is not None else 0.0,
+            fps=fps,
+            duration=duration,
+            fast_opts=fast_opts,
+            full_frame=False,
+        ):
+            return
+
+    # Fallback: cv2.VideoCapture-based extraction
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
         return
@@ -561,6 +583,23 @@ def scan_video_full_frames(
     ``max_region_dim`` downscales the full frame; ``phash_skip`` skips
     perceptually identical frames.
     """
+    # Try ffmpeg pipe extraction first (faster H.264 decoding)
+    if config.SCREENSPACE_BATCH_EXTRACT:
+        if _scan_via_ffmpeg_pipe(
+            video_path,
+            None,
+            interval_seconds,
+            callback,
+            start_seconds=start_seconds,
+            end_seconds=end_seconds if end_seconds is not None else 0.0,
+            fps=fps,
+            duration=duration,
+            fast_opts=fast_opts,
+            full_frame=True,
+        ):
+            return
+
+    # Fallback: cv2.VideoCapture-based extraction
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
         return
@@ -654,28 +693,227 @@ def scan_video_full_frames(
     cap.release()
 
 
+# ---------------------------------------------------------------------------
+# Batch frame extraction via ffmpeg pipe (experiment 2E)
+# ---------------------------------------------------------------------------
+
+
+def _ffmpeg_pipe_frames(
+    video_path: str,
+    interval_seconds: float,
+    *,
+    start_seconds: float = 0.0,
+    end_seconds: float = 0.0,
+    region: Optional[Dict[str, int]] = None,
+    frame_width: int = 0,
+    frame_height: int = 0,
+    max_dim: int = 0,
+) -> Iterator[Tuple[float, np.ndarray]]:
+    """Yield ``(timestamp, frame)`` tuples extracted via an ffmpeg pipe.
+
+    Uses a single ffmpeg process with ``-f rawvideo`` piped to stdout,
+    which is typically faster than per-frame ``cv2.VideoCapture`` seeking
+    for H.264 content.
+
+    *region* applies an ffmpeg ``crop`` filter so only the ROI pixels are
+    decoded and transferred.  *max_dim* adds a ``scale`` filter to cap the
+    largest output dimension (useful for fast-scan downscaling).
+
+    The caller can stop iteration at any time (e.g. on cancel); the
+    ``finally`` block ensures the subprocess is cleaned up.
+    """
+    if not shutil.which("ffmpeg"):
+        return
+
+    # Determine output dimensions
+    filters = [f"fps=1/{interval_seconds}"]
+
+    if region:
+        filters.append(f"crop={region['w']}:{region['h']}:{region['x']}:{region['y']}")
+        out_w, out_h = region["w"], region["h"]
+    else:
+        out_w, out_h = frame_width, frame_height
+
+    if out_w <= 0 or out_h <= 0:
+        return
+
+    if max_dim > 0 and (out_w > max_dim or out_h > max_dim):
+        scale = max_dim / max(out_w, out_h)
+        out_w = int(out_w * scale)
+        out_h = int(out_h * scale)
+        # Ensure even dimensions for rawvideo
+        out_w += out_w % 2
+        out_h += out_h % 2
+        filters.append(f"scale={out_w}:{out_h}")
+
+    cmd: List[str] = ["ffmpeg"]
+    if start_seconds > 0:
+        cmd += ["-ss", str(start_seconds)]
+    cmd += ["-i", video_path]
+    if end_seconds > start_seconds:
+        cmd += ["-t", str(end_seconds - start_seconds)]
+    cmd += [
+        "-vf",
+        ",".join(filters),
+        "-pix_fmt",
+        "bgr24",
+        "-f",
+        "rawvideo",
+        "-loglevel",
+        "error",
+        "pipe:1",
+    ]
+
+    frame_size = out_w * out_h * 3
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    assert proc.stdout is not None  # guaranteed by stdout=PIPE
+    frame_idx = 0
+    try:
+        while True:
+            raw = proc.stdout.read(frame_size)
+            if len(raw) < frame_size:
+                break
+            frame = np.frombuffer(raw, dtype=np.uint8).reshape((out_h, out_w, 3)).copy()
+            ts = start_seconds + frame_idx * interval_seconds
+            if end_seconds > 0 and ts > end_seconds:
+                break
+            yield (ts, frame)
+            frame_idx += 1
+    finally:
+        if proc.stdout:
+            proc.stdout.close()
+        proc.terminate()
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait()
+
+
+def _scan_via_ffmpeg_pipe(
+    video_path: str,
+    region: Optional[Dict[str, int]],
+    interval_seconds: float,
+    callback: Callable[[float, np.ndarray], Optional[bool]],
+    *,
+    start_seconds: float = 0.0,
+    end_seconds: float = 0.0,
+    fps: float = 0.0,
+    duration: float = 0.0,
+    fast_opts: Optional[Dict[str, Any]] = None,
+    full_frame: bool = False,
+) -> bool:
+    """Try to scan frames via ffmpeg pipe, calling *callback* for each.
+
+    Returns ``True`` if the ffmpeg path succeeded (caller should skip the
+    cv2 fallback), ``False`` if it failed and the caller should fall back
+    to cv2-based extraction.
+    """
+    if not shutil.which("ffmpeg"):
+        return False
+
+    props = video.probe_video_properties(video_path)
+    if not props:
+        return False
+    frame_width = props.get("width", 0)
+    frame_height = props.get("height", 0)
+    if frame_width <= 0 or frame_height <= 0:
+        return False
+
+    if end_seconds <= 0:
+        end_seconds = duration
+
+    # Fast-scan state
+    _phash_skip = bool(fast_opts and fast_opts.get("phash_skip"))
+    _max_dim = (fast_opts or {}).get("max_region_dim", 0)
+    _phash_thresh = (fast_opts or {}).get(
+        "phash_threshold", config.SCREENSPACE_FAST_SCAN_PHASH_THRESHOLD
+    )
+    _prev_phash: List[Optional[imagehash.ImageHash]] = [None]
+
+    pipe_region = None if full_frame else region
+    # For the pipe, push max_dim downscaling into ffmpeg when phash_skip is off.
+    # When phash_skip is on, we need the un-downscaled frame for hashing, so
+    # we downscale in Python after the hash check.
+    pipe_max_dim = _max_dim if (not _phash_skip and _max_dim > 0) else 0
+
+    try:
+        for ts, frame in _ffmpeg_pipe_frames(
+            video_path,
+            interval_seconds,
+            start_seconds=start_seconds,
+            end_seconds=end_seconds,
+            region=pipe_region,
+            frame_width=frame_width,
+            frame_height=frame_height,
+            max_dim=pipe_max_dim,
+        ):
+            if _phash_skip:
+                fh = compute_phash(frame)
+                if _prev_phash[0] is not None and fh - _prev_phash[0] <= _phash_thresh:
+                    continue
+                _prev_phash[0] = fh
+                # Downscale after phash if needed
+                if _max_dim > 0:
+                    rh, rw = frame.shape[:2]
+                    if rh > _max_dim or rw > _max_dim:
+                        sc = _max_dim / max(rh, rw)
+                        frame = cv2.resize(
+                            frame,
+                            (int(rw * sc), int(rh * sc)),
+                            interpolation=cv2.INTER_AREA,
+                        )
+
+            result = callback(ts, frame)
+            if result is False:
+                break
+
+        return True  # ffmpeg pipe succeeded (even if video had 0 frames)
+    except Exception:
+        return False
+
+
 def build_timelapse_command(
     video_path: str,
     region: Dict[str, int],
     speedup_factor: float,
     output_path: str,
     output_format: str = "mp4",
+    *,
+    start_seconds: float = 0.0,
+    end_seconds: Optional[float] = None,
+    sample_interval: float = 0.0,
 ) -> List[str]:
-    """Construct ffmpeg argv for a cropped timelapse."""
+    """Construct ffmpeg argv for a cropped timelapse.
+
+    *sample_interval* (seconds) controls frame sampling: when > 0, only one
+    frame per interval is kept before cropping and speed-up.  0 means every
+    frame is used (default).
+    """
     x, y, w, h = region["x"], region["y"], region["w"], region["h"]
-    vf = f"crop={w}:{h}:{x}:{y},setpts=PTS/{speedup_factor}"
+    filters: List[str] = []
+    if sample_interval > 0:
+        filters.append(f"fps=1/{sample_interval}")
+    filters.append(f"crop={w}:{h}:{x}:{y}")
+    filters.append(f"setpts=PTS/{speedup_factor}")
+    vf = ",".join(filters)
 
     cmd = [
         "ffmpeg",
         "-y",
         "-loglevel",
         config.FFMPEG_LOGLEVEL,
-        "-i",
-        video_path,
-        "-vf",
-        vf,
-        "-an",
     ]
+
+    if start_seconds > 0:
+        cmd += ["-ss", str(start_seconds)]
+
+    cmd += ["-i", video_path]
+
+    if end_seconds is not None and end_seconds > start_seconds:
+        cmd += ["-t", str(end_seconds - start_seconds)]
+
+    cmd += ["-vf", vf, "-an"]
 
     if output_format == "gif":
         cmd.extend(["-loop", "0"])
@@ -684,6 +922,22 @@ def build_timelapse_command(
 
     cmd.append(output_path)
     return cmd
+
+
+def _probe_video_meta(video_path: str) -> Tuple[float, float]:
+    """Return ``(fps, duration)`` via ffprobe, falling back to cv2."""
+    props = video.probe_video_properties(video_path)
+    if props and props.get("fps", 0) > 0 and props.get("duration", 0) > 0:
+        return (props["fps"], props["duration"])
+    # Fallback for containers where ffprobe can't report duration/fps
+    cap = cv2.VideoCapture(video_path)
+    if not cap.isOpened():
+        return (0.0, 0.0)
+    fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+    total = cap.get(cv2.CAP_PROP_FRAME_COUNT)
+    dur = total / fps if fps > 0 else 0.0
+    cap.release()
+    return (fps, dur)
 
 
 # ---------------------------------------------------------------------------
@@ -713,13 +967,9 @@ def scan_color(
     if interval_seconds <= 0:
         interval_seconds = config.SCREENSPACE_DEFAULT_INTERVAL
 
-    cap = cv2.VideoCapture(video_path)
-    if not cap.isOpened():
+    vid_fps, vid_duration = _probe_video_meta(video_path)
+    if vid_fps <= 0:
         return []
-    vid_fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
-    total_frames = cap.get(cv2.CAP_PROP_FRAME_COUNT)
-    vid_duration = total_frames / vid_fps if vid_fps > 0 else 0.0
-    cap.release()
 
     if end_seconds is None or end_seconds > vid_duration:
         end_seconds = vid_duration
@@ -798,13 +1048,9 @@ def scan_changes(
     if noise_threshold <= 0:
         noise_threshold = config.SCREENSPACE_NOISE_THRESHOLD
 
-    cap = cv2.VideoCapture(video_path)
-    if not cap.isOpened():
+    vid_fps, vid_duration = _probe_video_meta(video_path)
+    if vid_fps <= 0:
         return []
-    vid_fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
-    total_frames = cap.get(cv2.CAP_PROP_FRAME_COUNT)
-    vid_duration = total_frames / vid_fps if vid_fps > 0 else 0.0
-    cap.release()
 
     if end_seconds is None or end_seconds > vid_duration:
         end_seconds = vid_duration
@@ -878,13 +1124,9 @@ def scan_similarity(
     if interval_seconds <= 0:
         interval_seconds = config.SCREENSPACE_DEFAULT_INTERVAL
 
-    cap = cv2.VideoCapture(video_path)
-    if not cap.isOpened():
+    vid_fps, vid_duration = _probe_video_meta(video_path)
+    if vid_fps <= 0:
         return []
-    vid_fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
-    total_frames = cap.get(cv2.CAP_PROP_FRAME_COUNT)
-    vid_duration = total_frames / vid_fps if vid_fps > 0 else 0.0
-    cap.release()
 
     if end_seconds is None or end_seconds > vid_duration:
         end_seconds = vid_duration
@@ -999,13 +1241,9 @@ def scan_text(
 
     reader = _get_ocr_reader(languages)
 
-    cap = cv2.VideoCapture(video_path)
-    if not cap.isOpened():
+    vid_fps, vid_duration = _probe_video_meta(video_path)
+    if vid_fps <= 0:
         return []
-    vid_fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
-    total_frames = cap.get(cv2.CAP_PROP_FRAME_COUNT)
-    vid_duration = total_frames / vid_fps if vid_fps > 0 else 0.0
-    cap.release()
 
     if end_seconds is None or end_seconds > vid_duration:
         end_seconds = vid_duration
@@ -1103,13 +1341,9 @@ def scan_numbers(
 
     reader = _get_ocr_reader(languages)
 
-    cap = cv2.VideoCapture(video_path)
-    if not cap.isOpened():
+    vid_fps, vid_duration = _probe_video_meta(video_path)
+    if vid_fps <= 0:
         return []
-    vid_fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
-    total_frames = cap.get(cv2.CAP_PROP_FRAME_COUNT)
-    vid_duration = total_frames / vid_fps if vid_fps > 0 else 0.0
-    cap.release()
 
     if end_seconds is None or end_seconds > vid_duration:
         end_seconds = vid_duration
@@ -1186,21 +1420,84 @@ def generate_timelapse(
     speedup_factor: float,
     output_path: str,
     output_format: str = "mp4",
+    *,
+    start_seconds: float = 0.0,
+    end_seconds: Optional[float] = None,
+    sample_interval: float = 0.0,
+    on_progress: Optional[Callable[[float], None]] = None,
+    cancel_flag: Optional[Callable[[], bool]] = None,
 ) -> Optional[str]:
     """Generate a cropped timelapse via ffmpeg.
+
+    *sample_interval* controls frame sampling (seconds between captured
+    frames).  0 means every frame is used.
+
+    Reports encoding progress through *on_progress* by parsing ffmpeg's
+    ``-progress`` output.  Checks *cancel_flag* periodically to allow
+    early termination.
 
     Returns output file path on success, ``None`` on failure.
     """
     cmd = build_timelapse_command(
-        video_path, region, speedup_factor, output_path, output_format
+        video_path,
+        region,
+        speedup_factor,
+        output_path,
+        output_format,
+        start_seconds=start_seconds,
+        end_seconds=end_seconds,
+        sample_interval=sample_interval,
     )
-    result = video.run_ffmpeg_process(
-        cmd,
-        input_file=video_path,
-        output_file=output_path,
-        os_error_message="Failed to generate timelapse",
+
+    # Estimate output duration for progress calculation.
+    input_duration = 0.0
+    if end_seconds is not None and end_seconds > start_seconds:
+        input_duration = end_seconds - start_seconds
+    else:
+        _, vid_dur = _probe_video_meta(video_path)
+        if vid_dur > 0:
+            input_duration = max(vid_dur - start_seconds, 0.0)
+
+    expected_out_us = (
+        (input_duration / speedup_factor * 1_000_000) if input_duration > 0 else 0
     )
-    if result is None or result.returncode != 0:
+
+    # Use Popen with -progress to get real-time encoding updates
+    cmd += ["-progress", "pipe:1"]
+    try:
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        assert proc.stdout is not None  # guaranteed by stdout=PIPE
+    except (FileNotFoundError, OSError):
+        return None
+
+    if on_progress:
+        on_progress(0.0)
+
+    try:
+        for line in proc.stdout:
+            text = line.decode("utf-8", errors="replace").strip()
+            if text.startswith("out_time_us=") and expected_out_us > 0 and on_progress:
+                try:
+                    us = int(text.split("=", 1)[1])
+                    on_progress(min(us / expected_out_us, 0.99))
+                except (ValueError, ZeroDivisionError):
+                    pass
+            if cancel_flag and cancel_flag():
+                proc.terminate()
+                try:
+                    proc.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                    proc.wait()
+                return None
+    finally:
+        if proc.stdout:
+            proc.stdout.close()
+        proc.wait()
+
+    if on_progress:
+        on_progress(1.0)
+    if proc.returncode != 0:
         return None
     return output_path
 
@@ -1234,13 +1531,9 @@ def scan_template(
     if interval_seconds <= 0:
         interval_seconds = config.SCREENSPACE_DEFAULT_INTERVAL
 
-    cap = cv2.VideoCapture(video_path)
-    if not cap.isOpened():
+    vid_fps, vid_duration = _probe_video_meta(video_path)
+    if vid_fps <= 0:
         return []
-    vid_fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
-    total_frames = cap.get(cv2.CAP_PROP_FRAME_COUNT)
-    vid_duration = total_frames / vid_fps if vid_fps > 0 else 0.0
-    cap.release()
 
     if end_seconds is None or end_seconds > vid_duration:
         end_seconds = vid_duration
@@ -1330,13 +1623,9 @@ def scan_flow(
     if interval_seconds <= 0:
         interval_seconds = config.SCREENSPACE_DEFAULT_INTERVAL
 
-    cap = cv2.VideoCapture(video_path)
-    if not cap.isOpened():
+    vid_fps, vid_duration = _probe_video_meta(video_path)
+    if vid_fps <= 0:
         return []
-    vid_fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
-    total_frames = cap.get(cv2.CAP_PROP_FRAME_COUNT)
-    vid_duration = total_frames / vid_fps if vid_fps > 0 else 0.0
-    cap.release()
 
     if end_seconds is None or end_seconds > vid_duration:
         end_seconds = vid_duration
@@ -1431,13 +1720,9 @@ def scan_scene(
     if not ref_fps:
         return []
 
-    cap = cv2.VideoCapture(video_path)
-    if not cap.isOpened():
+    vid_fps, vid_duration = _probe_video_meta(video_path)
+    if vid_fps <= 0:
         return []
-    vid_fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
-    total_frames = cap.get(cv2.CAP_PROP_FRAME_COUNT)
-    vid_duration = total_frames / vid_fps if vid_fps > 0 else 0.0
-    cap.release()
 
     if end_seconds is None or end_seconds > vid_duration:
         end_seconds = vid_duration
@@ -1762,13 +2047,9 @@ def scan_multitool(
         if s_end is not None:
             scan_end = min(scan_end, s_end) if scan_end is not None else s_end
 
-    cap = cv2.VideoCapture(video_path)
-    if not cap.isOpened():
+    vid_fps, vid_duration = _probe_video_meta(video_path)
+    if vid_fps <= 0:
         return []
-    vid_fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
-    total_frames = cap.get(cv2.CAP_PROP_FRAME_COUNT)
-    vid_duration = total_frames / vid_fps if vid_fps > 0 else 0.0
-    cap.release()
 
     if scan_end is None or scan_end > vid_duration:
         scan_end = vid_duration
@@ -2109,7 +2390,7 @@ class ScreenspaceWorker:
         self._running = False
         self._queue.put((0, "", _SENTINEL))
         if self._thread is not None:
-            self._thread.join(timeout=5)
+            self._thread.join(timeout=15)
 
     def enqueue(self, task: Dict[str, Any]) -> str:
         """Add a task to the queue. Returns the task ID."""
@@ -2192,11 +2473,7 @@ class ScreenspaceWorker:
             start = params.get("start_seconds", 0.0)
             end = params.get("end_seconds")
             if end is None:
-                cap = cv2.VideoCapture(task["video_path"])
-                fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
-                total = cap.get(cv2.CAP_PROP_FRAME_COUNT)
-                end = total / fps if fps > 0 else 0.0
-                cap.release()
+                _, end = _probe_video_meta(task["video_path"])
             resume_at = start + progress * (end - start)
 
             with self._lock:
@@ -2306,43 +2583,80 @@ class ScreenspaceWorker:
                 task["heatmap_gif"] = Path(gp).name
 
     def _run(self) -> None:
-        """Worker loop."""
-        while self._running:
-            try:
-                item = self._queue.get(timeout=1)
-            except queue.Empty:
-                continue
+        """Worker loop with concurrent task execution via ThreadPoolExecutor."""
+        max_workers = config.SCREENSPACE_PARALLEL_WORKERS
+        with ThreadPoolExecutor(max_workers=max_workers) as pool:
+            active: Dict[str, Future[None]] = {}
 
-            try:
-                priority, created_at, task_id = item
-                if task_id is _SENTINEL:
-                    break
+            while self._running:
+                try:
+                    # 1. Collect completed futures
+                    done_ids = [tid for tid, f in active.items() if f.done()]
+                    for tid in done_ids:
+                        future = active.pop(tid)
+                        try:
+                            future.result()
+                        except Exception as exc:
+                            utils.warning_print(f"Worker task {tid} raised: {exc}")
+                        if self.on_task_complete:
+                            try:
+                                self.on_task_complete()
+                            except Exception as exc:
+                                utils.warning_print(
+                                    f"on_task_complete callback failed: {exc}"
+                                )
+                        if self.on_progress_update:
+                            try:
+                                self.on_progress_update()
+                            except Exception:
+                                pass
 
-                if self._paused.is_set():
-                    self._queue.put(item)
-                    time.sleep(0.25)
-                    continue
-
-                with self._lock:
-                    task = self._tasks.get(task_id)
-                    if task is None or task["status"] != TASK_STATUS_QUEUED:
+                    # 2. If paused, wait
+                    if self._paused.is_set():
+                        time.sleep(0.25)
                         continue
-                    task["status"] = TASK_STATUS_RUNNING
 
-                self._execute_task(task)
+                    # 3. Submit new tasks if capacity available
+                    if len(active) >= max_workers:
+                        time.sleep(0.1)
+                        continue
 
-                if self.on_task_complete:
                     try:
-                        self.on_task_complete()
-                    except Exception as exc:
-                        utils.warning_print(f"on_task_complete callback failed: {exc}")
-                if self.on_progress_update:
-                    try:
-                        self.on_progress_update()
-                    except Exception:
-                        pass
-            except Exception as exc:
-                utils.warning_print(f"Worker loop error: {exc}")
+                        item = self._queue.get(timeout=0.25)
+                    except queue.Empty:
+                        continue
+
+                    priority, created_at, task_id = item
+                    if task_id is _SENTINEL:
+                        # Wait for active tasks to finish
+                        for f in active.values():
+                            try:
+                                f.result(timeout=10)
+                            except Exception:
+                                pass
+                        if self.on_task_complete:
+                            try:
+                                self.on_task_complete()
+                            except Exception:
+                                pass
+                        break
+
+                    if self._paused.is_set():
+                        self._queue.put(item)
+                        time.sleep(0.25)
+                        continue
+
+                    with self._lock:
+                        task = self._tasks.get(task_id)
+                        if task is None or task["status"] != TASK_STATUS_QUEUED:
+                            continue
+                        task["status"] = TASK_STATUS_RUNNING
+
+                    future = pool.submit(self._execute_task, task)
+                    active[task_id] = future
+
+                except Exception as exc:
+                    utils.warning_print(f"Worker loop error: {exc}")
 
     def _execute_task(self, task: Dict[str, Any]) -> None:
         """Dispatch task to the appropriate workflow function."""
@@ -2454,9 +2768,10 @@ class ScreenspaceWorker:
         task_type = task["type"]
 
         # Fast scan: apply interval multiplier and build optimization dict
+        # (timelapse has its own sample_interval and does not use fast scan)
         scan_mode = params.get("scan_mode", "normal")
         fast_opts: Optional[Dict[str, Any]] = None
-        if scan_mode == "fast":
+        if scan_mode == "fast" and task_type != "timelapse":
             multiplier = config.SCREENSPACE_FAST_SCAN_INTERVAL_MULTIPLIER
             if params.get("interval", 0) > 0:
                 params["interval"] = params["interval"] * multiplier
@@ -2565,6 +2880,11 @@ class ScreenspaceWorker:
                 speedup_factor=params.get("speedup_factor", 10.0),
                 output_path=output_path,
                 output_format=params.get("output_format", "mp4"),
+                start_seconds=params.get("start_seconds", 0.0),
+                end_seconds=params.get("end_seconds"),
+                sample_interval=params.get("sample_interval", 0.0),
+                on_progress=on_progress,
+                cancel_flag=cancel_flag,
             )
         elif task_type == "template":
             template_img = params.get("template_image")

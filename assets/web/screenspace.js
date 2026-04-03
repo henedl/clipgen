@@ -2861,6 +2861,9 @@
       renderIntervalSlot("paramNumInterval", 0.5, 60, 2.0, 0.5);
     } else if (type === "timelapse") {
       addParamRow(container, "Speed", numberInput("paramTlSpeed", 2, 100, 10, 1));
+      addParamRow(container, "Sample every", numberInput("paramTlSampleInterval", 0, 60, 0, 0.5), "paramTlSampleIntervalVal");
+      var siHint = el("span", "param-hint", "seconds (0 = every frame)");
+      container.lastChild.querySelector(".param-control").appendChild(siHint);
       var fmtRow = el("div", "param-row");
       fmtRow.appendChild(el("span", "param-label", "Format"));
       var fmtControl = el("div", "param-control");
@@ -2997,6 +3000,10 @@
       dfCb.id = "paramDetectFirst";
       addParamRow(container, "Detect first", dfCb);
     }
+
+    // Hide scan mode picker for timelapse (fast scan doesn't apply)
+    var scanPicker = qs("#runScanModePicker");
+    if (scanPicker) scanPicker.style.display = type === "timelapse" ? "none" : "";
 
     updateRunButton();
   }
@@ -3320,7 +3327,7 @@
       if (participants.length === 0) return;
       var params = gatherWorkflowParams(type);
       if (params === null) return;
-      if (state.scanMode === "fast") params.scan_mode = "fast";
+      if (state.scanMode === "fast" && type !== "timelapse") params.scan_mode = "fast";
 
       if (state.inMarker !== null) params.start_seconds = state.inMarker;
       if (state.outMarker !== null) params.end_seconds = state.outMarker;
@@ -3524,6 +3531,8 @@
       params.interval = parseFloat((qs("#paramNumInterval") || {}).value) || 2.0;
     } else if (type === "timelapse") {
       params.speedup_factor = parseFloat((qs("#paramTlSpeed") || {}).value) || 10;
+      var si = parseFloat((qs("#paramTlSampleInterval") || {}).value);
+      if (si > 0) params.sample_interval = si;
       params.output_format = (qs("#paramTlFormat") || {}).value || "mp4";
     } else if (type === "template") {
       if (state.uploadedTemplate) {
