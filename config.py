@@ -9,7 +9,7 @@ from icecream import ic
 REENCODING: bool = False
 AUDIO_NORMALIZE: bool = False
 FILEFORMAT: str = ".mp4"
-VERSIONNUM: str = "0.10.16"
+VERSIONNUM: str = "0.10.17"
 TITLECARDS_ENABLED: bool = (
     False  # use --titlecards / --no-titlecards to override per run
 )
@@ -159,6 +159,12 @@ SCREENSPACE_PARALLEL_WORKERS: int = (
 )
 SCREENSPACE_VIDEO_CAP_POOL_SIZE: int = (
     6  # max cached VideoCapture objects for API frame endpoint
+)
+SCREENSPACE_INACTIVITY_PHASH_THRESHOLD: int = (
+    10  # max Hamming distance for "same frame" in Inactivity tool
+)
+SCREENSPACE_INACTIVITY_MIN_DURATION: float = (
+    2.0  # min seconds to report an inactivity span
 )
 
 # Highlights reel constants

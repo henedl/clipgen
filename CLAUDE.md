@@ -28,7 +28,7 @@ clipgen is a Python CLI tool that generates clips from timestamps stored in a Go
 | [google_api.py](google_api.py) | Google Sheets auth, worksheet selection by priority, spreadsheet listing/search |
 | [excel_io.py](excel_io.py) | Excel adapter: `ExcelSheetAdapter` mimics gspread Worksheet interface for local .xlsx |
 | [server.py](server.py) | Combined Flask server for Studio + Insights + Screenspace; registers blueprints per active mode, `start_combined_server()` handles all three on one port |
-| [screenspace.py](screenspace.py) | Screenspace analysis engine: image analysis primitives, six analysis workflows, background task queue worker (`ScreenspaceWorker`), manifest persistence |
+| [screenspace.py](screenspace.py) | Screenspace analysis engine: image analysis primitives, eleven analysis tools (color, change, similarity, text, numbers, timelapse, template, flow, scene, inactivity + multitool chaining), background task queue worker (`ScreenspaceWorker`), manifest persistence |
 | [screenspace_server.py](screenspace_server.py) | Screenspace Flask REST API: region CRUD, video frame extraction, task queue management, results retrieval |
 | [insights.py](insights.py) | Insights data model: CRUD operations for insight records, insights manifest read/write |
 | [insights_server.py](insights_server.py) | Insights Builder Flask REST API: insight CRUD, artifact browsing, sprite sheet generation, viewer export |
@@ -52,7 +52,7 @@ Opt-in via `--insights`; no spreadsheet required — reads from `clipgen_manifes
 
 ### Screenspace ([screenspace.py](screenspace.py), [screenspace_server.py](screenspace_server.py))
 
-Opt-in via `--screenspace` or interactive `ss`/`screenspace`; no spreadsheet required. Served at `/screenspace/` by the combined Flask server. Analysis tool descriptions (color/change/similarity/text/numbers/timelapse) and API endpoints are documented in the [screenspace.py](screenspace.py) and [screenspace_server.py](screenspace_server.py) module docstrings.
+Opt-in via `--screenspace` or interactive `ss`/`screenspace`; no spreadsheet required. Served at `/screenspace/` by the combined Flask server. Analysis tool descriptions (color/change/similarity/text/numbers/timelapse/template/flow/scene/inactivity) and API endpoints are documented in the [screenspace.py](screenspace.py) and [screenspace_server.py](screenspace_server.py) module docstrings.
 
 ### Artifact Manifest
 

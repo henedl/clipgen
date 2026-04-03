@@ -3223,6 +3223,7 @@
     template: "#f43f5e",
     flow: "#6366f1",
     scene: "#14b8a6",
+    inactivity: "#78716c",
   };
 
   var INTAKE_DETECTOR_ICON_FILES = {
@@ -3236,6 +3237,7 @@
     template: "viewfinder-circle",
     flow: "arrows-right-left",
     scene: "squares-2x2",
+    inactivity: "pause-circle",
   };
 
   function clusterIntakeEvents(events, thresholdSec) {
