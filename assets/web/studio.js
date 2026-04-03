@@ -251,6 +251,19 @@
     return 3600;
   }
 
+  function setCardDragImage(ev, card) {
+    var clone = card.cloneNode(true);
+    clone.style.position = "absolute";
+    clone.style.top = "-9999px";
+    clone.style.left = "-9999px";
+    clone.style.width = card.offsetWidth + "px";
+    clone.style.zIndex = "-1";
+    document.body.appendChild(clone);
+    var rect = card.getBoundingClientRect();
+    ev.dataTransfer.setDragImage(clone, ev.clientX - rect.left, ev.clientY - rect.top);
+    setTimeout(function () { document.body.removeChild(clone); }, 0);
+  }
+
   // ---- Filtering ----
 
   function severityRank(label) {
@@ -1629,6 +1642,7 @@
           }
           ev.dataTransfer.setData("application/json", JSON.stringify(data));
           ev.dataTransfer.effectAllowed = "copyMove";
+          setCardDragImage(ev, this);
         });
       })(item, isIntake);
 
@@ -3549,6 +3563,7 @@
             event_ids: cluster.events.map(function (e) { return e.id; }),
           }));
           ev.dataTransfer.effectAllowed = "copyMove";
+          setCardDragImage(ev, this);
         });
       })(c);
 
