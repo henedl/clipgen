@@ -1073,21 +1073,22 @@ def _validate_scene_references(
     for i, ref_raw in enumerate(scene_refs):
         if not isinstance(ref_raw, dict):
             raise ValueError(f"{context}scene_references[{i}] must be an object")
-        name = str(ref_raw.get("name", "")).strip()
+        ref_data = cast(Dict[str, Any], ref_raw)
+        name = str(ref_data.get("name", "")).strip()
         if not name:
             raise ValueError(f"{context}scene_references[{i}].name is required")
         ref: Dict[str, Any] = {
             "name": name,
             "timestamp": _coerce_float(
-                ref_raw.get("timestamp"),
+                ref_data.get("timestamp"),
                 f"scene_references[{i}].timestamp",
                 required=True,
                 context=context,
             ),
         }
-        if "threshold" in ref_raw and ref_raw.get("threshold") is not None:
+        if "threshold" in ref_data and ref_data.get("threshold") is not None:
             ref["threshold"] = _coerce_float(
-                ref_raw.get("threshold"),
+                ref_data.get("threshold"),
                 f"scene_references[{i}].threshold",
                 context=context,
             )
