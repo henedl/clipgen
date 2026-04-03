@@ -34,6 +34,7 @@
     intakeFilterText: "",
     intakeFilterDetector: "",
     intakeFilterNew: false,
+    intakeFilterParticipants: [],
     intakeHoveredIdx: -1,
     activePreviewTab: "sheet",
   };
@@ -3424,11 +3425,48 @@
     }
   }
 
+  function buildParticipantPills() {
+    var container = qs("#intakeFilterParticipants");
+    if (!container) return;
+    var seen = {};
+    var participants = [];
+    for (var i = 0; i < state.intakeClusters.length; i++) {
+      var p = state.intakeClusters[i].participant;
+      if (p && !seen[p]) { seen[p] = true; participants.push(p); }
+    }
+    participants.sort();
+    var key = participants.join(",");
+    if (container.dataset.participants === key) {
+      syncParticipantPillStates();
+      return;
+    }
+    container.dataset.participants = key;
+    state.intakeFilterParticipants = state.intakeFilterParticipants.filter(function (p) { return seen[p]; });
+    container.innerHTML = "";
+    for (var j = 0; j < participants.length; j++) {
+      var btn = el("button", "intake-filter-participant", participants[j]);
+      btn.dataset.participant = participants[j];
+      if (state.intakeFilterParticipants.indexOf(participants[j]) !== -1) btn.classList.add("active");
+      container.appendChild(btn);
+    }
+  }
+
+  function syncParticipantPillStates() {
+    var btns = qsa(".intake-filter-participant");
+    for (var i = 0; i < btns.length; i++) {
+      var p = btns[i].dataset.participant;
+      if (state.intakeFilterParticipants.indexOf(p) !== -1) btns[i].classList.add("active");
+      else btns[i].classList.remove("active");
+    }
+  }
+
   function renderIntake(hasNew) {
     var container = qs("#intakeCards");
     var addAllBtn = qs("#intakeAddAllBtn");
     var reelAllBtn = qs("#intakeReelAllBtn");
     var tabBadge = qs("#intakeTabBadge");
+
+    buildParticipantPills();
 
     if (!state.intakeClusters.length) {
       if (tabBadge) tabBadge.classList.add("hidden");
@@ -3553,8 +3591,10 @@
     var text = state.intakeFilterText.toLowerCase();
     var det = state.intakeFilterDetector;
     var onlyNew = state.intakeFilterNew;
-    if (!text && !det && !onlyNew) return clusters;
+    var parts = state.intakeFilterParticipants;
+    if (!text && !det && !onlyNew && !parts.length) return clusters;
     return clusters.filter(function (c) {
+      if (parts.length && parts.indexOf(c.participant) === -1) return false;
       if (det && c.detector !== det) return false;
       if (text && (c.event_type || "").toLowerCase().indexOf(text) === -1
           && (c.region || "").toLowerCase().indexOf(text) === -1
@@ -3686,6 +3726,19 @@
         var all = qsa(".intake-filter-det");
         for (var j = 0; j < all.length; j++) all[j].classList.remove("active");
         if (state.intakeFilterDetector) this.classList.add("active");
+        renderIntake(false);
+      });
+    }
+    var partContainer = qs("#intakeFilterParticipants");
+    if (partContainer) {
+      partContainer.addEventListener("click", function (e) {
+        var btn = e.target.closest(".intake-filter-participant");
+        if (!btn) return;
+        var val = btn.dataset.participant;
+        var idx = state.intakeFilterParticipants.indexOf(val);
+        if (idx === -1) state.intakeFilterParticipants.push(val);
+        else state.intakeFilterParticipants.splice(idx, 1);
+        syncParticipantPillStates();
         renderIntake(false);
       });
     }
