@@ -1269,6 +1269,7 @@ def start_combined_server(
     """
     import insights_server
     import screenspace_server
+    import transcripts_server
 
     combined = Flask(__name__, static_folder=None)
 
@@ -1289,6 +1290,15 @@ def start_combined_server(
     )
     combined.register_blueprint(
         screenspace_server.screenspace_bp, url_prefix="/screenspace"
+    )
+
+    # Always register Transcripts (auto-discovers videos from input dir)
+    transcripts_server._init_transcripts_state(
+        sheet_context=_sheet_context if has_studio else None,
+        participant_list=_resolve_participants() if has_studio else None,
+    )
+    combined.register_blueprint(
+        transcripts_server.transcripts_bp, url_prefix="/transcripts"
     )
 
     @combined.after_request
@@ -1316,6 +1326,7 @@ def start_combined_server(
                 "studio": has_studio,
                 "insights": True,
                 "screenspace": True,
+                "transcripts": True,
             }
         )
 

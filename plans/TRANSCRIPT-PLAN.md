@@ -85,35 +85,35 @@ Dedicated page at `/transcripts/` for transcript curation, editing, and transcri
 
 ### Server and routing
 
-- [ ] New `transcripts_server.py` — Flask blueprint registered at `/transcripts/`
-- [ ] `_init_transcripts_state()` — reuse the shared participant video discovery utility (factored out of Screenspace's `_discover_participant_videos`), loads source transcripts from transcripts manifest
-- [ ] Factor `_discover_participant_videos()` from `screenspace_server.py` into a shared utility in `utils.py` or `files.py`; both Screenspace and Transcript workspaces call it
-- [ ] Always register transcript blueprint in `start_combined_server()` (like Screenspace), not gated by `--transcripts`. The `--transcripts` flag controls whether `TranscriptWorker` starts and the workspace is the active landing page.
-- [ ] `--transcripts` CLI flag to launch the workspace; works standalone (no spreadsheet required) as long as source media files exist in the input directory
-- [ ] Can combine with `-i/-o`, `-v`; cannot combine with mode flags, format flags, or `--viewer`
-- [ ] Video serving: add `/transcripts/media/<filename>` route serving source videos from the input directory (following Screenspace's `/screenspace/media/` pattern)
-- [ ] Manifest write synchronization: use `threading.Lock` for all `transcripts_manifest.json` writes (following Screenspace's `_manifest_lock` pattern in `screenspace_server.py`)
+- [x] New `transcripts_server.py` — Flask blueprint registered at `/transcripts/`
+- [x] `_init_transcripts_state()` — reuse the shared participant video discovery utility (factored out of Screenspace's `_discover_participant_videos`), loads source transcripts from transcripts manifest
+- [x] Factor `_discover_participant_videos()` from `screenspace_server.py` into a shared utility in `utils.py` or `files.py`; both Screenspace and Transcript workspaces call it
+- [x] Always register transcript blueprint in `start_combined_server()` (like Screenspace), not gated by `--transcripts`. The `--transcripts` flag controls whether `TranscriptWorker` starts and the workspace is the active landing page.
+- [x] `--transcripts` CLI flag to launch the workspace; works standalone (no spreadsheet required) as long as source media files exist in the input directory
+- [x] Can combine with `-i/-o`, `-v`; cannot combine with mode flags, format flags, or `--viewer`
+- [x] Video serving: add `/transcripts/media/<filename>` route serving source videos from the input directory (following Screenspace's `/screenspace/media/` pattern)
+- [x] Manifest write synchronization: use `threading.Lock` for all `transcripts_manifest.json` writes (following Screenspace's `_manifest_lock` pattern in `screenspace_server.py`)
 
 ### Assets
 
-- [ ] `transcripts.html`, `transcripts.js`, `transcripts.css` in `assets/web/`
-- [ ] Served directly by Flask (no inlining), consistent with Studio and Screenspace
+- [x] `transcripts.html`, `transcripts.js`, `transcripts.css` in `assets/web/`
+- [x] Served directly by Flask (no inlining), consistent with Studio and Screenspace
 
 ### Workspace layout
 
 The workspace is a full-page environment for deep transcript work:
 
-- [ ] **Header**: participant selector (dropdown of discovered source videos), transcription status indicator, navigation back to Studio/other workspaces
-- [ ] **Main area — transcript view**: scrollable transcript for the selected participant, displayed as a segment list with timestamps on the left and text on the right
-- [ ] **Video player**: inline video playback for the selected participant's source video; clicking a transcript segment seeks to that position
-- [ ] **Playback-synced highlighting**: active segment highlighted as video plays, auto-scroll to keep current segment visible
-- [ ] **Corrections log**: accessible from header menu, shows study-local corrections with delete action; inline editing is the primary correction flow, the log is for review and cleanup
+- [x] **Header**: participant selector (dropdown of discovered source videos), transcription status indicator, navigation back to Studio/other workspaces
+- [x] **Main area — transcript view**: scrollable transcript for the selected participant, displayed as a segment list with timestamps on the left and text on the right
+- [x] **Video player**: inline video playback for the selected participant's source video; clicking a transcript segment seeks to that position
+- [x] **Playback-synced highlighting**: active segment highlighted as video plays, auto-scroll to keep current segment visible
+- [x] **Corrections log**: accessible from header menu, shows study-local corrections with delete action; inline editing is the primary correction flow, the log is for review and cleanup
 
 ### Transcription queue
 
 The workspace can trigger and monitor transcription jobs, not just view results. Architecture follows the `ScreenspaceWorker` pattern (simplified):
 
-- [ ] **`TranscriptWorker`**: thread-based background worker modeled after `ScreenspaceWorker`
+- [x] **`TranscriptWorker`**: thread-based background worker modeled after `ScreenspaceWorker`
   - `PriorityQueue` for task ordering
   - Task lifecycle: QUEUED → RUNNING → COMPLETED / FAILED / CANCELLED (no PAUSE/RESUME — Whisper doesn't produce meaningful partial results)
   - `on_task_complete` callback for manifest persistence (wired same as Screenspace)
@@ -121,41 +121,41 @@ The workspace can trigger and monitor transcription jobs, not just view results.
   - Task dict: `{id, participant, video_path, status, progress, result, created_at, completed_at}`
   - Task ID format: `tr_<8hex>` (following Screenspace's `ss_<8hex>`)
   - No task reordering (not needed for a simple "transcribe all participants" queue)
-- [ ] **Queue UI**: list of participants with transcription status (not started / queued / in progress / complete)
-- [ ] **Enqueue**: select one or more participants to transcribe; starts a background transcription job on the server
-- [ ] **Progress**: show progress for in-flight transcription (estimated from audio duration vs. last segment's timestamp); frontend polls via same fingerprint pattern as Screenspace
-- [ ] **Idempotent**: participants already transcribed show as complete; re-transcribe option available with confirmation
-- [ ] **API endpoints**:
+- [x] **Queue UI**: list of participants with transcription status (not started / queued / in progress / complete)
+- [x] **Enqueue**: select one or more participants to transcribe; starts a background transcription job on the server
+- [x] **Progress**: show progress for in-flight transcription (estimated from audio duration vs. last segment's timestamp); frontend polls via same fingerprint pattern as Screenspace
+- [x] **Idempotent**: participants already transcribed show as complete; re-transcribe option available with confirmation
+- [x] **API endpoints**:
   - `POST /transcripts/api/transcribe` — enqueue participant(s) for transcription
   - `GET /transcripts/api/transcribe/status` — poll transcription job status
-- [ ] Transcription results are stored to `source_transcripts` in the transcripts manifest, same as `--pre-transcribe`
+- [x] Transcription results are stored to `source_transcripts` in the transcripts manifest, same as `--pre-transcribe`
 - [ ] Re-transcription staleness: when a participant is re-transcribed, flag any clip artifacts with embedded `transcript` fields for that participant as stale. Surface a "transcript outdated" badge in the workspace UI.
 
 ### API endpoints
 
-- [ ] `GET /transcripts/api/participants` — list discovered source videos with transcription status
-- [ ] `GET /transcripts/api/transcript/<participant>` — return full source transcript segments for a participant
-- [ ] `PUT /transcripts/api/transcript/<participant>/segment` — edit a segment's text, identified by segment `id` (not array index or timestamps — indices change on re-transcription, timestamps may not be unique); creates a correction entry
-- [ ] `GET /transcripts/api/vtt/<participant>` — serve transcript data as WebVTT for native `<track>` subtitle support (`transcripts.py` already has `_format_vtt()`)
-- [ ] `GET /transcripts/api/corrections` — list all study-local corrections
-- [ ] `POST /transcripts/api/corrections` — add a correction manually
-- [ ] `DELETE /transcripts/api/corrections/<id>` — remove a correction
-- [ ] `GET /transcripts/api/search?q=<query>` — keyword search across all transcribed participants; returns matching segments with participant ID and timestamps (Studio calls this directly via `../transcripts/api/search`, no duplicate endpoint needed)
-- [ ] Update `/api/status` in `server.py` to report `transcripts: true/false` alongside `studio`, `insights`, `screenspace`
+- [x] `GET /transcripts/api/participants` — list discovered source videos with transcription status
+- [x] `GET /transcripts/api/transcript/<participant>` — return full source transcript segments for a participant
+- [x] `PUT /transcripts/api/transcript/<participant>/segment` — edit a segment's text, identified by segment `id` (not array index or timestamps — indices change on re-transcription, timestamps may not be unique); creates a correction entry
+- [x] `GET /transcripts/api/vtt/<participant>` — serve transcript data as WebVTT for native `<track>` subtitle support (`transcripts.py` already has `_format_vtt()`)
+- [x] `GET /transcripts/api/corrections` — list all study-local corrections
+- [x] `POST /transcripts/api/corrections` — add a correction manually
+- [x] `DELETE /transcripts/api/corrections/<id>` — remove a correction
+- [x] `GET /transcripts/api/search?q=<query>` — keyword search across all transcribed participants; returns matching segments with participant ID and timestamps (Studio calls this directly via `../transcripts/api/search`, no duplicate endpoint needed)
+- [x] Update `/api/status` in `server.py` to report `transcripts: true/false` alongside `studio`, `insights`, `screenspace`
 
 ### Editing
 
-- [ ] Click-to-edit on any transcript segment text
-- [ ] On save, original and edited text are compared; if different, a correction entry is created automatically (`{"from": original, "to": edited}`)
-- [ ] Edited segments are visually marked (subtle indicator that the text was corrected)
-- [ ] Corrections apply immediately to all identical occurrences across all participants' transcripts (post-processing pass)
+- [x] Click-to-edit on any transcript segment text
+- [x] On save, original and edited text are compared; if different, a correction entry is created automatically (`{"from": original, "to": edited}`)
+- [x] Edited segments are visually marked (subtle indicator that the text was corrected)
+- [x] Corrections apply immediately to all identical occurrences across all participants' transcripts (post-processing pass)
 
 ### Search
 
-- [ ] Search bar in the workspace header — keyword search across all transcribed participants
-- [ ] Results shown as a filterable list: participant, timestamp, matching segment text with query highlighted
-- [ ] Click a result to jump to that participant's transcript at the matching segment
-- [ ] Occurrence count displayed per participant and total
+- [x] Search bar in the workspace header — keyword search across all transcribed participants
+- [x] Results shown as a filterable list: participant, timestamp, matching segment text with query highlighted
+- [x] Click a result to jump to that participant's transcript at the matching segment
+- [x] Occurrence count displayed per participant and total
 
 ---
 

@@ -4,6 +4,7 @@ from pathlib import Path
 
 import config
 import transcripts
+import utils
 from transcripts import TranscriptResult, TranscriptSegment
 
 
@@ -465,3 +466,114 @@ class TestManifestSegment:
         assert seg["start"] == 0.0
         assert seg["end"] == 1.0
         assert seg["text"] == "hi"
+
+
+# ---------------------------------------------------------------------------
+# Shared participant video discovery
+# ---------------------------------------------------------------------------
+
+
+class TestDiscoverParticipantVideos:
+    def test_discovers_participant_videos(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(config, "INPUT_DIR", str(tmp_path))
+        (tmp_path / "study_P01.mp4").touch()
+        (tmp_path / "study_P02.mp4").touch()
+        (tmp_path / "study_G01.mp4").touch()
+        (tmp_path / "other.mp4").touch()  # no underscore-separated participant ID
+        result = utils.discover_participant_videos()
+        ids = [p["id"] for p in result]
+        assert "P01" in ids
+        assert "P02" in ids
+        assert "G01" in ids
+        assert len(result) == 3
+        for p in result:
+            assert p["has_video"] is True
+
+    def test_empty_dir(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(config, "INPUT_DIR", str(tmp_path))
+        result = utils.discover_participant_videos()
+        assert result == []
+
+    def test_nonexistent_dir(self, monkeypatch):
+        monkeypatch.setattr(config, "INPUT_DIR", "/nonexistent/path")
+        result = utils.discover_participant_videos()
+        assert result == []
+
+    def test_ignores_non_participant_prefix(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(config, "INPUT_DIR", str(tmp_path))
+        (tmp_path / "study_X01.mp4").touch()
+        (tmp_path / "study_notes.mp4").touch()
+        result = utils.discover_participant_videos()
+        assert result == []
+
+
+# ---------------------------------------------------------------------------
+# TranscriptWorker and task creation
+# ---------------------------------------------------------------------------
+
+
+class TestCreateTranscriptTask:
+    def test_task_shape(self):
+        task = transcripts.create_transcript_task("P01", "/path/to/video.mp4")
+        assert task["id"].startswith("tr_")
+        assert len(task["id"]) == 11  # "tr_" + 8 hex chars
+        assert task["participant"] == "P01"
+        assert task["video_path"] == "/path/to/video.mp4"
+        assert task["status"] == "queued"
+        assert task["progress"] == 0.0
+        assert task["result"] is None
+        assert task["error"] is None
+        assert task["created_at"] is not None
+        assert task["completed_at"] is None
+
+    def test_unique_ids(self):
+        t1 = transcripts.create_transcript_task("P01", "/path/v.mp4")
+        t2 = transcripts.create_transcript_task("P01", "/path/v.mp4")
+        assert t1["id"] != t2["id"]
+
+
+class TestTranscriptWorker:
+    def test_restore_tasks(self):
+        worker = transcripts.TranscriptWorker()
+        tasks = [
+            {"id": "tr_abc12345", "status": "completed", "participant": "P01"},
+            {"id": "tr_def67890", "status": "failed", "participant": "P02"},
+        ]
+        worker.restore_tasks(tasks)
+        all_tasks = worker.get_all_tasks()
+        assert len(all_tasks) == 2
+        ids = {t["id"] for t in all_tasks}
+        assert "tr_abc12345" in ids
+        assert "tr_def67890" in ids
+
+    def test_get_task(self):
+        worker = transcripts.TranscriptWorker()
+        worker.restore_tasks([{"id": "tr_test1234", "status": "completed"}])
+        task = worker.get_task("tr_test1234")
+        assert task is not None
+        assert task["id"] == "tr_test1234"
+        assert worker.get_task("nonexistent") is None
+
+    def test_cancel_queued_task(self):
+        worker = transcripts.TranscriptWorker()
+        task = transcripts.create_transcript_task("P01", "/v.mp4")
+        worker.enqueue(task)
+        assert worker.cancel(task["id"]) is True
+        t = worker.get_task(task["id"])
+        assert t is not None
+        assert t["status"] == "cancelled"
+
+    def test_cancel_nonexistent(self):
+        worker = transcripts.TranscriptWorker()
+        assert worker.cancel("nonexistent") is False
+
+    def test_is_alive_before_start(self):
+        worker = transcripts.TranscriptWorker()
+        assert worker.is_alive is False
+
+    def test_start_and_stop(self):
+        worker = transcripts.TranscriptWorker()
+        worker.start()
+        assert worker.is_alive is True
+        worker.stop()
+        assert worker.is_alive is False

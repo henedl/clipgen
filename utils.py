@@ -1200,3 +1200,37 @@ def get_current_time() -> str:
         Current time in format 'YYYY-MM-DD HH:MM:SS'
     """
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
+# ---- Participant video discovery ----
+
+
+def discover_participant_videos(study_name: str = "") -> list[dict[str, Any]]:
+    """Scan input directory for source video files and return participant info dicts.
+
+    Extracts participant IDs from filenames matching ``{study}_{participant}{FILEFORMAT}``.
+    Only files whose participant segment starts with a recognised prefix
+    (``config.PARTICIPANT_PREFIXES``) are included.
+
+    Returns:
+        List of ``{"id": str, "video_path": str, "has_video": True}`` dicts,
+        sorted by filename.
+    """
+    input_dir = Path(get_effective_input_dir())
+    if not input_dir.is_dir():
+        return []
+    participants: list[dict[str, Any]] = []
+    for path in sorted(input_dir.glob(f"*{config.FILEFORMAT}")):
+        name = path.stem
+        parts = name.rsplit("_", 1)
+        if len(parts) == 2:
+            pid = parts[1]
+            if pid and pid[0] in config.PARTICIPANT_PREFIXES:
+                participants.append(
+                    {
+                        "id": pid,
+                        "video_path": str(path),
+                        "has_video": True,
+                    }
+                )
+    return participants

@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>clipgen Transcripts</title>
+  <link rel="stylesheet" href="tokens.css">
+  <link rel="stylesheet" href="transcripts.css">
+</head>
+<body>
+  <header id="trHeader">
+    <div id="headerTop">
+      <h1>clipgen <span class="header-light">Transcripts</span></h1>
+      <div id="headerActions">
+        <a id="studioLink" href="/studio/" class="nav-link hidden">Studio</a>
+        <a id="insightsLink" href="/insights/" class="nav-link hidden">Insights</a>
+        <a id="screenspaceLink" href="/screenspace/" class="nav-link hidden">Screenspace</a>
+        <label class="participant-label">
+          Source
+          <select id="participantSelect"><option value="">No participants</option></select>
+        </label>
+        <span id="transcriptStatus" class="transcript-status"></span>
+        <button id="queueBtn" type="button" class="btn btn-small">Queue</button>
+        <button id="correctionsBtn" type="button" class="btn btn-small">Corrections</button>
+        <button id="themeToggle" type="button" aria-label="Toggle dark mode" aria-pressed="false">
+          <span class="theme-toggle-icon theme-icon-sun"></span>
+          <span class="theme-toggle-icon theme-icon-moon"></span>
+        </button>
+      </div>
+    </div>
+    <div id="headerSearch">
+      <input id="searchInput" type="text" placeholder="Search across all transcripts..." autocomplete="off">
+      <span id="searchCount" class="search-count"></span>
+      <div id="searchResults" class="hidden"></div>
+    </div>
+  </header>
+
+  <main id="trMain">
+    <section id="videoSection">
+      <video id="videoPlayer" controls preload="metadata">
+        <track id="subtitleTrack" kind="subtitles" label="Transcript" default>
+      </video>
+      <div id="videoEmpty" class="video-empty">
+        <p>Select a participant to view their source video</p>
+      </div>
+    </section>
+
+    <section id="transcriptSection">
+      <div id="segmentList"></div>
+      <div id="transcriptEmpty" class="transcript-empty">
+        <p>No transcript available</p>
+        <p class="empty-hint">Use the Queue panel to transcribe this participant's video</p>
+      </div>
+    </section>
+  </main>
+
+  <!-- Transcription queue panel -->
+  <aside id="queuePanel" class="hidden">
+    <div class="panel-header">
+      <h3>Transcription Queue</h3>
+      <div class="panel-header-actions">
+        <button id="transcribeAllBtn" class="btn btn-small">Transcribe All</button>
+        <button id="closeQueueBtn" class="btn btn-small">Close</button>
+      </div>
+    </div>
+    <div id="queueList"></div>
+  </aside>
+
+  <!-- Corrections modal -->
+  <div id="correctionsModal" class="modal hidden">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h3>Corrections Dictionary</h3>
+        <button id="closeCorrectionsBtn" class="btn btn-small">Close</button>
+      </div>
+      <div id="addCorrectionForm" class="correction-form">
+        <input id="correctionFrom" type="text" placeholder="Original text" autocomplete="off">
+        <span class="correction-arrow">&rarr;</span>
+        <input id="correctionTo" type="text" placeholder="Corrected text" autocomplete="off">
+        <button id="addCorrectionBtn" class="btn btn-small">Add</button>
+      </div>
+      <div id="correctionsList"></div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast hidden"></div>
+
+  <script src="transcripts.js"></script>
+</body>
+</html>
