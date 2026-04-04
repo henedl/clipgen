@@ -16,7 +16,7 @@
     searchQuery: "",
     searchResults: null,
     activeSegmentIndex: -1,
-    editingWordEl: null,
+    editingTextEl: null,
     pollTimer: null,
   };
 
@@ -243,7 +243,7 @@
   function renderSegments() {
     var container = qs("#segmentList");
     var empty = qs("#transcriptEmpty");
-    state.editingWordEl = null;
+    state.editingTextEl = null;
 
     if (state.segments.length === 0) {
       container.innerHTML = "";
@@ -278,18 +278,22 @@
     var rows = container.querySelectorAll(".segment-row");
     for (var j = 0; j < rows.length; j++) {
       (function (row) {
+        var textEl = row.querySelector(".segment-text");
         row.querySelector(".segment-timestamp").addEventListener("click", function (e) {
           e.stopPropagation();
           var start = parseFloat(row.getAttribute("data-start"));
           seekVideo(start);
         });
-        var wordSpans = row.querySelectorAll(".segment-word");
-        for (var k = 0; k < wordSpans.length; k++) {
-          wordSpans[k].addEventListener("click", function (e) {
-            e.stopPropagation();
-            startWordEditing(this);
-          });
-        }
+        textEl.addEventListener("click", function (e) {
+          e.stopPropagation();
+          if (state.editingTextEl === textEl) return;
+          var start = parseFloat(row.getAttribute("data-start"));
+          seekVideo(start);
+        });
+        textEl.addEventListener("dblclick", function (e) {
+          e.stopPropagation();
+          startSegmentEditing(textEl);
+        });
       })(rows[j]);
     }
   }
@@ -364,92 +368,144 @@
     }
   }
 
-  // ---- Inline word editing ----
+  // ---- Inline segment editing ----
 
-  function startWordEditing(wordEl) {
-    if (state.editingWordEl === wordEl) return;
-    if (state.editingWordEl) finishWordEditing(state.editingWordEl);
+  function startSegmentEditing(textEl) {
+    if (state.editingTextEl === textEl) return;
+    if (state.editingTextEl) finishSegmentEditing(state.editingTextEl, false);
 
-    state.editingWordEl = wordEl;
-    var original = wordEl.getAttribute("data-original");
-
-    wordEl.setAttribute("contenteditable", "true");
-    wordEl.setAttribute("spellcheck", "false");
-    wordEl.classList.add("segment-word-editing");
-
-    var range = document.createRange();
-    range.selectNodeContents(wordEl);
-    var sel = window.getSelection();
-    sel.removeAllRanges();
-    sel.addRange(range);
-    wordEl.focus();
+    state.editingTextEl = textEl;
+    textEl.setAttribute("data-original-text", textEl.textContent);
+    textEl.setAttribute("contenteditable", "true");
+    textEl.setAttribute("spellcheck", "false");
+    textEl.classList.add("segment-text-editing");
 
     function onBlur() {
-      wordEl.removeEventListener("blur", onBlur);
-      wordEl.removeEventListener("keydown", onKeydown);
-      wordEl.removeEventListener("paste", onPaste);
-      finishWordEditing(wordEl);
+      textEl.removeEventListener("blur", onBlur);
+      textEl.removeEventListener("keydown", onKeydown);
+      textEl.removeEventListener("paste", onPaste);
+      finishSegmentEditing(textEl, false);
     }
 
     function onKeydown(e) {
-      if (e.key === "Enter") {
+      if (e.key === "Enter" && !e.shiftKey) {
         e.preventDefault();
-        wordEl.blur();
+        textEl.blur();
       }
       if (e.key === "Escape") {
-        wordEl.textContent = original;
-        wordEl.blur();
-      }
-      if (e.key === "Tab") {
         e.preventDefault();
-        wordEl.blur();
+        textEl.removeEventListener("blur", onBlur);
+        textEl.removeEventListener("keydown", onKeydown);
+        textEl.removeEventListener("paste", onPaste);
+        finishSegmentEditing(textEl, true);
       }
     }
 
     function onPaste(e) {
       e.preventDefault();
       var text = (e.clipboardData || window.clipboardData).getData("text/plain");
-      text = text.replace(/\s+/g, " ").trim();
+      text = text.replace(/[\r\n]+/g, " ").trim();
       document.execCommand("insertText", false, text);
     }
 
-    wordEl.addEventListener("blur", onBlur);
-    wordEl.addEventListener("keydown", onKeydown);
-    wordEl.addEventListener("paste", onPaste);
+    textEl.addEventListener("blur", onBlur);
+    textEl.addEventListener("keydown", onKeydown);
+    textEl.addEventListener("paste", onPaste);
   }
 
-  function finishWordEditing(wordEl) {
-    var original = wordEl.getAttribute("data-original");
-    var newText = wordEl.textContent.trim();
+  function finishSegmentEditing(textEl, cancel) {
+    var originalText = textEl.getAttribute("data-original-text") || "";
+    var newText = textEl.textContent.trim();
 
-    wordEl.removeAttribute("contenteditable");
-    wordEl.classList.remove("segment-word-editing");
+    textEl.removeAttribute("contenteditable");
+    textEl.removeAttribute("data-original-text");
+    textEl.classList.remove("segment-text-editing");
+    if (state.editingTextEl === textEl) state.editingTextEl = null;
 
-    if (state.editingWordEl === wordEl) state.editingWordEl = null;
-
-    if (!newText) {
-      wordEl.textContent = original;
+    if (cancel || !newText || newText === originalText) {
+      // Reload to restore clean word spans
+      var pid = state.selectedParticipant;
+      if (pid) loadTranscript(pid);
       return;
     }
-    if (newText === original) return;
 
-    wordEl.textContent = newText;
-    wordEl.setAttribute("data-original", newText);
-    saveWordCorrection(original, newText);
+    var corrections = extractCorrections(originalText, newText);
+    if (corrections.length === 0) return;
+
+    saveCorrections(corrections);
   }
 
-  function saveWordCorrection(fromText, toText) {
-    apiPost("api/corrections", {
-      from: fromText,
-      to: toText,
-    }).then(function (data) {
-      if (data.ok && data.correction) {
-        showToast("Correction created");
-        var pid = state.selectedParticipant;
-        if (pid) {
-          loadTranscript(pid);
-          loadCorrections();
+  function extractCorrections(oldText, newText) {
+    var oldWords = oldText.trim().split(/\s+/).filter(Boolean);
+    var newWords = newText.trim().split(/\s+/).filter(Boolean);
+    if (oldWords.join(" ") === newWords.join(" ")) return [];
+
+    // LCS table for word-level alignment
+    var m = oldWords.length, n = newWords.length;
+    var dp = [];
+    for (var i = 0; i <= m; i++) {
+      dp[i] = [];
+      for (var j = 0; j <= n; j++) {
+        if (i === 0 || j === 0) dp[i][j] = 0;
+        else if (oldWords[i - 1] === newWords[j - 1]) dp[i][j] = dp[i - 1][j - 1] + 1;
+        else dp[i][j] = Math.max(dp[i - 1][j], dp[i][j - 1]);
+      }
+    }
+
+    // Backtrack to get edit operations
+    var ops = [];
+    var i = m, j = n;
+    while (i > 0 || j > 0) {
+      if (i > 0 && j > 0 && oldWords[i - 1] === newWords[j - 1]) {
+        ops.unshift({ type: "eq" });
+        i--; j--;
+      } else if (j > 0 && (i === 0 || dp[i][j - 1] >= dp[i - 1][j])) {
+        ops.unshift({ type: "ins", word: newWords[j - 1] });
+        j--;
+      } else {
+        ops.unshift({ type: "del", word: oldWords[i - 1] });
+        i--;
+      }
+    }
+
+    // Group consecutive non-equal ops into from→to correction pairs
+    var corrections = [];
+    var k = 0;
+    while (k < ops.length) {
+      if (ops[k].type !== "eq") {
+        var fromParts = [];
+        var toParts = [];
+        while (k < ops.length && ops[k].type !== "eq") {
+          if (ops[k].type === "del") fromParts.push(ops[k].word);
+          else toParts.push(ops[k].word);
+          k++;
         }
+        if (fromParts.length > 0 && toParts.length > 0) {
+          corrections.push({ from: fromParts.join(" "), to: toParts.join(" ") });
+        }
+      } else {
+        k++;
+      }
+    }
+    return corrections;
+  }
+
+  function saveCorrections(corrections) {
+    var chain = Promise.resolve();
+    corrections.forEach(function (c) {
+      chain = chain.then(function () {
+        return apiPost("api/corrections", { from: c.from, to: c.to });
+      });
+    });
+    chain.then(function () {
+      var msg = corrections.length === 1
+        ? "Correction created"
+        : corrections.length + " corrections created";
+      showToast(msg);
+      var pid = state.selectedParticipant;
+      if (pid) {
+        loadTranscript(pid);
+        loadCorrections();
       }
     }).catch(function () {
       showToast("Failed to save correction");
