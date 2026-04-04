@@ -472,6 +472,7 @@ class TestManifestSegment:
 # Shared participant video discovery
 # ---------------------------------------------------------------------------
 
+
 class TestDiscoverParticipantVideos:
     def test_discovers_participant_videos(self, tmp_path, monkeypatch):
         monkeypatch.setattr(config, "INPUT_DIR", str(tmp_path))
