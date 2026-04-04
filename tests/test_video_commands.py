@@ -396,3 +396,57 @@ def test_check_ffmpeg_tools_available_missing(monkeypatch):
     monkeypatch.setattr(video.shutil, "which", lambda _tool: None)
     ok = video.check_ffmpeg_tools_available()
     assert ok is False
+
+
+# ---- extract_frame_at_timestamp ----
+
+
+def test_extract_frame_at_timestamp_returns_frame(monkeypatch):
+    """Successful extraction returns a numpy array with correct shape."""
+    import numpy as np
+
+    w, h = 320, 240
+    monkeypatch.setattr(
+        video,
+        "probe_video_properties",
+        lambda _: {"width": w, "height": h, "fps": 30.0, "duration": 10.0},
+    )
+    fake_frame = np.zeros(h * w * 3, dtype=np.uint8)
+    monkeypatch.setattr(
+        video.subprocess,
+        "run",
+        lambda *a, **kw: subprocess.CompletedProcess(a, 0, stdout=fake_frame.tobytes()),
+    )
+
+    frame = video.extract_frame_at_timestamp("/fake.mp4", 1.5)
+    assert frame is not None
+    assert frame.shape == (h, w, 3)
+
+
+def test_extract_frame_at_timestamp_returns_none_on_probe_failure(monkeypatch):
+    """Returns None when probe_video_properties fails."""
+    monkeypatch.setattr(video, "probe_video_properties", lambda _: None)
+    assert video.extract_frame_at_timestamp("/fake.mp4", 0.0) is None
+
+
+def test_extract_frame_at_timestamp_returns_none_on_short_output(monkeypatch):
+    """Returns None when ffmpeg outputs fewer bytes than expected."""
+    monkeypatch.setattr(
+        video,
+        "probe_video_properties",
+        lambda _: {"width": 320, "height": 240, "fps": 30.0, "duration": 10.0},
+    )
+    monkeypatch.setattr(
+        video.subprocess,
+        "run",
+        lambda *a, **kw: subprocess.CompletedProcess(a, 0, stdout=b"short"),
+    )
+    assert video.extract_frame_at_timestamp("/fake.mp4", 0.0) is None
+
+
+def test_extract_frame_at_timestamp_debug_mode(monkeypatch):
+    """In debug mode, returns a stub frame without calling ffmpeg."""
+    monkeypatch.setattr(video.config, "DEBUGGING", True)
+    frame = video.extract_frame_at_timestamp("/fake.mp4", 0.0)
+    assert frame is not None
+    assert frame.shape == (1080, 1920, 3)

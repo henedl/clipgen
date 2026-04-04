@@ -15,7 +15,7 @@ icecream                    2.1.10     MIT
 rich                        14.3.3     MIT
 faster-whisper              1.2.1      MIT
 CTranslate2                 4.7.1      MIT
-opencv-python-headless      4.13.0     MIT (bindings) + Apache 2.0 (OpenCV)
+opencv-python-headless      4.13.0     MIT (bindings) + Apache 2.0 (OpenCV)*
 Flask                       3.1.3      BSD-3-Clause
 Werkzeug                    3.1.6      BSD-3-Clause
 Jinja2                      3.1.6      BSD-3-Clause
@@ -29,6 +29,13 @@ Pillow                      12.1.1     HPND (MIT-CMU)
 EasyOCR                     1.7.2      Apache-2.0
 google-auth                 2.49.1     Apache-2.0
 google-auth-oauthlib        1.3.0      Apache-2.0
+
+* The opencv-python-headless pip package bundles FFmpeg shared libraries
+  (LGPL 2.1) and GPL-licensed codecs (libx264, libx265).  clipgen's
+  PyInstaller build EXCLUDES these libraries from the binary — only OpenCV's
+  image-processing core (Apache 2.0) and its Python bindings (MIT) are
+  shipped.  Video decoding uses the system-installed ffmpeg, which is not
+  bundled.
 
 
 ===============================================================================
