@@ -388,8 +388,11 @@
     for (var i = 0; i < segments.length; i++) {
       var seg = segments[i];
       var segId = pid + ":" + i;
+      var cachedColor = _streamingMarks[segId];
+      var markClass = "segment-mark" + (cachedColor ? " marked" : "");
+      var markStyle = cachedColor ? ' style="background:' + cachedColor + '"' : "";
       html += '<div class="segment-row segment-streaming" data-index="' + i + '" data-start="' + seg.start + '">';
-      html += '<span class="segment-mark" data-segment-id="' + escapeHtml(segId) + '"></span>';
+      html += '<span class="' + markClass + '" data-segment-id="' + escapeHtml(segId) + '"' + markStyle + '></span>';
       html += '<span class="segment-timestamp">' + fmtTime(seg.start) + '</span>';
       html += '<span class="segment-text">' + escapeHtml(seg.text) + '</span>';
       html += '</div>';
@@ -421,6 +424,9 @@
       container.scrollTop = container.scrollHeight;
     }
   }
+
+  // Cache marks made during streaming so they survive DOM rebuilds
+  var _streamingMarks = {};
 
   var _pendingSeekTime = null;
   var _seekRaf = 0;
@@ -701,6 +707,7 @@
         showToast("Marked");
         markEl.classList.add("marked");
         markEl.style.background = cat.color;
+        _streamingMarks[segmentId] = cat.color;
       }
     });
   }
@@ -1188,6 +1195,7 @@
 
       // Refresh participants and transcript as each task completes
       if (newlyCompleted.length > 0) {
+        _streamingMarks = {};
         loadParticipants().then(function () {
           if (state.selectedParticipant && newlyCompleted.indexOf(state.selectedParticipant) >= 0) {
             state.streamingParticipant = null;

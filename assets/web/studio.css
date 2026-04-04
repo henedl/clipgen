@@ -2110,7 +2110,8 @@ html[data-theme="dark"] .log-panel {
   color: var(--color-text);
 }
 
-#intakeTimeline {
+#intakeTimeline,
+#trIntakeTimeline {
   width: 100%;
   height: 48px;
   border-radius: calc(var(--radius) - 2px);

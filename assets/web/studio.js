@@ -3372,6 +3372,7 @@
   var SS_BADGE_SVG = '<svg viewBox="0 0 16 16" fill="currentColor"><path d="M3.5 2C2.67157 2 2 2.67157 2 3.5V5.5C2 6.32843 2.67157 7 3.5 7H5.5C6.32843 7 7 6.32843 7 5.5V3.5C7 2.67157 6.32843 2 5.5 2H3.5Z"/><path d="M3.5 9C2.67157 9 2 9.67157 2 10.5V12.5C2 13.3284 2.67157 14 3.5 14H5.5C6.32843 14 7 13.3284 7 12.5V10.5C7 9.67157 6.32843 9 5.5 9H3.5Z"/><path d="M9 3.5C9 2.67157 9.67157 2 10.5 2H12.5C13.3284 2 14 2.67157 14 3.5V5.5C14 6.32843 13.3284 7 12.5 7H10.5C9.67157 7 9 6.32843 9 5.5V3.5Z"/><path d="M10.5 9C9.67157 9 9 9.67157 9 10.5V12.5C9 13.3284 9.67157 14 10.5 14H12.5C13.3284 14 14 13.3284 14 12.5V10.5C14 9.67157 13.3284 9 12.5 9H10.5Z"/></svg>';
 
   var _intakeHitRects = [];
+  var _trIntakeHitRects = [];
 
   function sizeIntakeCanvas() {
     var canvas = qs("#intakeTimeline");
@@ -3972,9 +3973,24 @@
       card.draggable = true;
       card.dataset.trIntakeIdx = i;
 
-      // Thumbnail area with category dot and duration
+      // Thumbnail area with frame, category dot, and duration
       var thumb = document.createElement("div");
       thumb.className = "queue-card-thumb";
+
+      var segDuration = Math.max(0, c.end - c.start);
+      var img = document.createElement("img");
+      img.src = "../screenspace/api/video/frame/" + encodeURIComponent(c.participant) + "/" + c.start;
+      img.loading = "lazy";
+      img.alt = "";
+      img.draggable = false;
+      (function (cardEl, thumbEl) {
+        img.addEventListener("error", function () {
+          this.remove();
+          thumbEl.appendChild(el("span", "", "\u2715"));
+          cardEl.classList.add("queue-card-error");
+        });
+      })(card, thumb);
+      thumb.appendChild(img);
 
       var catColor = (TR_INTAKE_CATEGORIES[c.category] || TR_INTAKE_CATEGORIES.bookmark).color;
       var dot = document.createElement("span");
@@ -3984,7 +4000,7 @@
 
       var dur = document.createElement("span");
       dur.className = "queue-card-duration";
-      dur.textContent = formatDuration(Math.max(0, c.end - c.start));
+      dur.textContent = formatDuration(segDuration);
       thumb.appendChild(dur);
       card.appendChild(thumb);
 
@@ -4085,49 +4101,101 @@
     var canvas = qs("#trIntakeTimeline");
     if (!canvas) return;
     var ctx = canvas.getContext("2d");
-    var w = canvas.clientWidth;
-    var h = 48;
+    var dpr = window.devicePixelRatio || 1;
+    var w = canvas.width / dpr;
+    var h = canvas.height / dpr;
+    if (w <= 0 || h <= 0) return;
+
+    var cs = getComputedStyle(document.documentElement);
+    var surfaceAlt = cs.getPropertyValue("--color-surface-alt").trim() || "#f1ece4";
+    var borderColor = cs.getPropertyValue("--color-border").trim() || "#e0ddd7";
+    var textDim = cs.getPropertyValue("--color-text-dim").trim() || "#888";
+    var fontMono = cs.getPropertyValue("--font-mono").trim() || "monospace";
+
     ctx.clearRect(0, 0, w, h);
+    ctx.fillStyle = surfaceAlt;
+    ctx.fillRect(0, 0, w, h);
 
     var filtered = filteredTranscriptIntakeClusters();
-    if (filtered.length === 0) return;
+    if (!filtered.length) {
+      ctx.fillStyle = textDim;
+      ctx.font = "12px -apple-system, sans-serif";
+      ctx.textAlign = "center";
+      ctx.fillText("No marks", w / 2, h / 2 + 4);
+      ctx.textAlign = "start";
+      _trIntakeHitRects = [];
+      return;
+    }
 
-    // Find time range
-    var minT = Infinity, maxT = 0;
+    var maxEnd = 0;
     for (var i = 0; i < filtered.length; i++) {
-      if (filtered[i].start < minT) minT = filtered[i].start;
-      if (filtered[i].end > maxT) maxT = filtered[i].end;
+      if (filtered[i].end > maxEnd) maxEnd = filtered[i].end;
     }
-    if (maxT <= minT) maxT = minT + 1;
-    var range = maxT - minT;
-    var pad = 8;
-    var usableW = w - pad * 2;
+    var duration = Math.max(maxEnd * 1.05, 60);
 
-    // Draw time ruler
-    ctx.fillStyle = getComputedStyle(document.documentElement).getPropertyValue("--color-text-dim") || "#888";
-    ctx.font = "10px monospace";
+    function timeToX(t) {
+      return (t / duration) * w;
+    }
+
+    // Time ruler ticks
+    var tickInterval = intakeComputeTickInterval(duration);
+    var firstTick = Math.ceil(0 / tickInterval) * tickInterval;
+    ctx.strokeStyle = borderColor;
+    ctx.fillStyle = textDim;
+    ctx.font = "10px " + fontMono;
     ctx.textAlign = "center";
-    var tickCount = Math.min(Math.floor(usableW / 60), 10);
-    for (var t = 0; t <= tickCount; t++) {
-      var frac = t / tickCount;
-      var sec = minT + frac * range;
-      var x = pad + frac * usableW;
-      ctx.fillText(formatDuration(sec), x, 10);
-      ctx.fillRect(x, 12, 1, 4);
+    ctx.lineWidth = 1;
+    for (var t = firstTick; t <= duration; t += tickInterval) {
+      var x = timeToX(t);
+      ctx.beginPath();
+      ctx.moveTo(x, 0);
+      ctx.lineTo(x, 8);
+      ctx.stroke();
+      ctx.fillText(formatDuration(t), x, 18);
     }
+    ctx.textAlign = "start";
 
-    // Draw cluster markers
-    for (var j = 0; j < filtered.length; j++) {
-      var c = filtered[j];
-      var x1 = pad + ((c.start - minT) / range) * usableW;
-      var x2 = pad + ((c.end - minT) / range) * usableW;
-      var mw = Math.max(x2 - x1, 4);
+    // Cluster markers
+    var markerY = 22;
+    var markerH = h - markerY - 4;
+    _trIntakeHitRects = [];
+
+    for (var ci = 0; ci < filtered.length; ci++) {
+      var c = filtered[ci];
       var color = (TR_INTAKE_CATEGORIES[c.category] || TR_INTAKE_CATEGORIES.bookmark).color;
-      ctx.fillStyle = color;
-      ctx.globalAlpha = j === state.trIntakeHoveredIdx ? 1.0 : 0.6;
-      ctx.fillRect(x1, 20, mw, 24);
+      var highlighted = state.trIntakeHoveredIdx === ci;
+      var dimmed = state.trIntakeHoveredIdx !== -1 && !highlighted;
+      var alpha = highlighted ? 0.85 : (dimmed ? 0.15 : 0.5);
+
+      var x1 = timeToX(c.start);
+      var x2 = timeToX(c.end);
+      var mw = Math.max(x2 - x1, 3);
+
+      ctx.fillStyle = hexToRgba(color, alpha);
+      ctx.fillRect(x1, markerY, mw, markerH);
+
+      _trIntakeHitRects.push({ x1: x1, x2: x1 + mw, y: markerY, h: markerH, clusterIdx: ci });
     }
-    ctx.globalAlpha = 1.0;
+  }
+
+  function trIntakeHitTest(mx, my) {
+    for (var i = _trIntakeHitRects.length - 1; i >= 0; i--) {
+      var hr = _trIntakeHitRects[i];
+      if (mx >= hr.x1 && mx <= hr.x2 && my >= hr.y && my <= hr.y + hr.h) return hr;
+    }
+    return null;
+  }
+
+  function highlightTrIntakeCard(idx) {
+    var cards = qsa(".tr-intake-queue-card");
+    for (var i = 0; i < cards.length; i++) {
+      if (i === idx) {
+        cards[i].classList.add("intake-highlight");
+        cards[i].scrollIntoView({ block: "nearest", behavior: "smooth" });
+      } else {
+        cards[i].classList.remove("intake-highlight");
+      }
+    }
   }
 
   function initTranscriptIntake() {
@@ -4164,13 +4232,63 @@
         .catch(function () {});
     });
 
+    // Card hover → highlight timeline marker
+    trIntakeCards.addEventListener("mouseover", function (e) {
+      var card = e.target.closest(".tr-intake-queue-card");
+      if (!card) return;
+      var idx = parseInt(card.dataset.trIntakeIdx);
+      if (state.trIntakeHoveredIdx !== idx) {
+        state.trIntakeHoveredIdx = idx;
+        renderTrIntakeTimeline();
+      }
+    });
+    trIntakeCards.addEventListener("mouseleave", function () {
+      if (state.trIntakeHoveredIdx !== -1) {
+        state.trIntakeHoveredIdx = -1;
+        renderTrIntakeTimeline();
+      }
+    });
+
+    // Timeline canvas interactions
+    var trIntakeCanvas = qs("#trIntakeTimeline");
+    if (trIntakeCanvas) {
+      trIntakeCanvas.addEventListener("mousemove", function (e) {
+        var rect = trIntakeCanvas.getBoundingClientRect();
+        var mx = e.clientX - rect.left;
+        var my = e.clientY - rect.top;
+        var hit = trIntakeHitTest(mx, my);
+        var idx = hit ? hit.clusterIdx : -1;
+        if (state.trIntakeHoveredIdx !== idx) {
+          state.trIntakeHoveredIdx = idx;
+          renderTrIntakeTimeline();
+          highlightTrIntakeCard(idx);
+        }
+      });
+      trIntakeCanvas.addEventListener("mouseleave", function () {
+        if (state.trIntakeHoveredIdx !== -1) {
+          state.trIntakeHoveredIdx = -1;
+          renderTrIntakeTimeline();
+          highlightTrIntakeCard(-1);
+        }
+      });
+      trIntakeCanvas.addEventListener("click", function (e) {
+        var rect = trIntakeCanvas.getBoundingClientRect();
+        var mx = e.clientX - rect.left;
+        var my = e.clientY - rect.top;
+        var hit = trIntakeHitTest(mx, my);
+        if (!hit) return;
+        var cluster = filteredTranscriptIntakeClusters()[hit.clusterIdx];
+        if (!cluster) return;
+        if (e.shiftKey) trIntakeAddToReel(cluster);
+        else trIntakeAddToArtifacts(cluster);
+      });
+    }
+
     // Cluster threshold change
     var thresholdInput = qs("#trIntakeClusterThreshold");
     if (thresholdInput) {
       thresholdInput.addEventListener("change", function () {
-        var val = parseInt(this.value) || 5;
-        state.trIntakeClusters = clusterTranscriptMarks(state.trIntakeMarks, val);
-        renderTranscriptIntake();
+        pollTranscriptIntakeMarks();
       });
     }
 
