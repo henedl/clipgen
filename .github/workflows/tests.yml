@@ -32,8 +32,8 @@ jobs:
         run: |
           REPO="${{ github.repository }}"
           SHA="${{ github.sha }}"
-          MERGED=$(gh api "repos/${REPO}/commits/${SHA}/pulls" \
-            --jq '[.[] | select(.state == "closed" and .merged_at != null)] | length')
+          MERGED=$(gh api "repos/${REPO}/pulls?state=closed&sort=updated&direction=desc&per_page=5" \
+            --jq "[.[] | select(.merge_commit_sha == \"${SHA}\")] | length")
           if [[ "$MERGED" -gt 0 ]]; then
             echo "skip=true" >> "$GITHUB_OUTPUT"
             echo "Commit $SHA is from a merged PR — skipping redundant checks"
