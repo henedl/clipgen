@@ -129,7 +129,7 @@ The workspace can trigger and monitor transcription jobs, not just view results.
   - `POST /transcripts/api/transcribe` — enqueue participant(s) for transcription
   - `GET /transcripts/api/transcribe/status` — poll transcription job status
 - [x] Transcription results are stored to `source_transcripts` in the transcripts manifest, same as `--pre-transcribe`
-- [ ] Re-transcription staleness: when a participant is re-transcribed, flag any clip artifacts with embedded `transcript` fields for that participant as stale. Surface a "transcript outdated" badge in the workspace UI.
+- [x] Re-transcription staleness: when a participant is re-transcribed, flag any clip artifacts with embedded `transcript` fields for that participant as stale. Surface a "transcript outdated" badge in the workspace UI.
 
 ### API endpoints
 
@@ -230,8 +230,8 @@ Pre-filter transcript content via a marking/curation system in the Transcript wo
 ### Studio generation integration
 
 - [x] Update drop handlers in `initDropTargets()` to recognize `source: "transcript"` for both artifact and reel zones
-- [ ] Update `onGenerateArtifacts()` to partition transcript items and route to `api/generate-intake` with `source: "transcript"`
-- [ ] Update `_generate_intake_clips()` in `server.py` to look up video path in `transcripts_server._participants` when `source === "transcript"`
+- [x] Update `onGenerateArtifacts()` to partition transcript items and route to `api/generate-intake` with `source: "transcript"`
+- [x] Update `_generate_intake_clips()` in `server.py` to look up video path in `transcripts_server._participants` when `source === "transcript"`
 
 ### Cross-referencing with Screenspace events (deferred)
 

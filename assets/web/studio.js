@@ -46,6 +46,10 @@
     trIntakeHoveredIdx: -1,
   };
 
+  function isIntakeSource(source) {
+    return source === "screenspace" || source === "transcript";
+  }
+
   var SEVERITY_ORDER = [
     { label: "Critical", rank: -4 },
     { label: "High", rank: -3 },
@@ -1622,7 +1626,7 @@
 
     for (var i = 0; i < n; i++) {
       var item = state.artifactQueue[i];
-      var isIntake = item.source === "screenspace";
+      var isIntake = isIntakeSource(item.source);
       var segStart, segDuration;
       if (item.segStart !== undefined && item.segDuration !== undefined) {
         segStart = item.segStart;
@@ -1638,7 +1642,7 @@
       var card = el("div", "queue-card" + (isIntake ? " queue-card-intake" : ""));
       card.setAttribute("data-participant", item.participant);
       card.setAttribute("data-row", isIntake ? "" : item.row);
-      if (isIntake) card.setAttribute("data-source", "screenspace");
+      if (isIntake) card.setAttribute("data-source", item.source);
       card.setAttribute("data-seg-idx", segIdx);
       card.setAttribute("draggable", "true");
       (function (itm, isI) {
@@ -1648,7 +1652,7 @@
             desc: itm.desc,
             segStart: itm.segStart,
             segDuration: itm.segDuration,
-            source: isI ? "screenspace" : "artifact",
+            source: isI ? itm.source : "artifact",
           };
           if (!isI) {
             data.row = itm.row;
@@ -1658,6 +1662,7 @@
           } else {
             data.event_type = itm.event_type;
             data.event_ids = itm.event_ids;
+            data.mark_ids = itm.mark_ids;
           }
           ev.dataTransfer.setData("application/json", JSON.stringify(data));
           ev.dataTransfer.effectAllowed = "copyMove";
@@ -1684,7 +1689,11 @@
       thumb.appendChild(el("span", "queue-card-duration", formatDuration(segDuration)));
       if (isIntake) {
         var ssBadge = el("span", "queue-card-source-badge");
-        ssBadge.innerHTML = '<svg viewBox="0 0 16 16" fill="currentColor"><path d="M3.5 2C2.67157 2 2 2.67157 2 3.5V5.5C2 6.32843 2.67157 7 3.5 7H5.5C6.32843 7 7 6.32843 7 5.5V3.5C7 2.67157 6.32843 2 5.5 2H3.5Z"/><path d="M3.5 9C2.67157 9 2 9.67157 2 10.5V12.5C2 13.3284 2.67157 14 3.5 14H5.5C6.32843 14 7 13.3284 7 12.5V10.5C7 9.67157 6.32843 9 5.5 9H3.5Z"/><path d="M9 3.5C9 2.67157 9.67157 2 10.5 2H12.5C13.3284 2 14 2.67157 14 3.5V5.5C14 6.32843 13.3284 7 12.5 7H10.5C9.67157 7 9 6.32843 9 5.5V3.5Z"/><path d="M10.5 9C9.67157 9 9 9.67157 9 10.5V12.5C9 13.3284 9.67157 14 10.5 14H12.5C13.3284 14 14 13.3284 14 12.5V10.5C14 9.67157 13.3284 9 12.5 9H10.5Z"/></svg>';
+        if (item.source === "transcript") {
+          ssBadge.innerHTML = '<svg viewBox="0 0 16 16" fill="currentColor"><path d="M3 3h10v1.5H3zM3 7h8v1.5H3zM3 11h10v1.5H3z"/></svg>';
+        } else {
+          ssBadge.innerHTML = '<svg viewBox="0 0 16 16" fill="currentColor"><path d="M3.5 2C2.67157 2 2 2.67157 2 3.5V5.5C2 6.32843 2.67157 7 3.5 7H5.5C6.32843 7 7 6.32843 7 5.5V3.5C7 2.67157 6.32843 2 5.5 2H3.5Z"/><path d="M3.5 9C2.67157 9 2 9.67157 2 10.5V12.5C2 13.3284 2.67157 14 3.5 14H5.5C6.32843 14 7 13.3284 7 12.5V10.5C7 9.67157 6.32843 9 5.5 9H3.5Z"/><path d="M9 3.5C9 2.67157 9.67157 2 10.5 2H12.5C13.3284 2 14 2.67157 14 3.5V5.5C14 6.32843 13.3284 7 12.5 7H10.5C9.67157 7 9 6.32843 9 5.5V3.5Z"/><path d="M10.5 9C9.67157 9 9 9.67157 9 10.5V12.5C9 13.3284 9.67157 14 10.5 14H12.5C13.3284 14 14 13.3284 14 12.5V10.5C14 9.67157 13.3284 9 12.5 9H10.5Z"/></svg>';
+        }
         thumb.appendChild(ssBadge);
       }
       card.appendChild(thumb);
@@ -1749,7 +1758,7 @@
     var totalDur = 0;
     for (var i = 0; i < n; i++) {
       var item = state.reelQueue[i];
-      var isIntake = item.source === "screenspace";
+      var isIntake = isIntakeSource(item.source);
       var segStart, segDuration;
       if (item.segStart !== undefined && item.segDuration !== undefined) {
         segStart = item.segStart;
@@ -1767,7 +1776,7 @@
       card.setAttribute("data-reel-idx", i);
       card.setAttribute("data-participant", item.participant);
       card.setAttribute("data-row", isIntake ? "" : item.row);
-      if (isIntake) card.setAttribute("data-source", "screenspace");
+      if (isIntake) card.setAttribute("data-source", item.source);
       card.setAttribute("data-seg-idx", segIdx);
       card.setAttribute("draggable", "true");
 
@@ -1790,7 +1799,11 @@
       thumb.appendChild(el("span", "queue-card-duration", formatDuration(segDuration)));
       if (isIntake) {
         var ssBadge = el("span", "queue-card-source-badge");
-        ssBadge.innerHTML = '<svg viewBox="0 0 16 16" fill="currentColor"><path d="M3.5 2C2.67157 2 2 2.67157 2 3.5V5.5C2 6.32843 2.67157 7 3.5 7H5.5C6.32843 7 7 6.32843 7 5.5V3.5C7 2.67157 6.32843 2 5.5 2H3.5Z"/><path d="M3.5 9C2.67157 9 2 9.67157 2 10.5V12.5C2 13.3284 2.67157 14 3.5 14H5.5C6.32843 14 7 13.3284 7 12.5V10.5C7 9.67157 6.32843 9 5.5 9H3.5Z"/><path d="M9 3.5C9 2.67157 9.67157 2 10.5 2H12.5C13.3284 2 14 2.67157 14 3.5V5.5C14 6.32843 13.3284 7 12.5 7H10.5C9.67157 7 9 6.32843 9 5.5V3.5Z"/><path d="M10.5 9C9.67157 9 9 9.67157 9 10.5V12.5C9 13.3284 9.67157 14 10.5 14H12.5C13.3284 14 14 13.3284 14 12.5V10.5C14 9.67157 13.3284 9 12.5 9H10.5Z"/></svg>';
+        if (item.source === "transcript") {
+          ssBadge.innerHTML = '<svg viewBox="0 0 16 16" fill="currentColor"><path d="M3 3h10v1.5H3zM3 7h8v1.5H3zM3 11h10v1.5H3z"/></svg>';
+        } else {
+          ssBadge.innerHTML = '<svg viewBox="0 0 16 16" fill="currentColor"><path d="M3.5 2C2.67157 2 2 2.67157 2 3.5V5.5C2 6.32843 2.67157 7 3.5 7H5.5C6.32843 7 7 6.32843 7 5.5V3.5C7 2.67157 6.32843 2 5.5 2H3.5Z"/><path d="M3.5 9C2.67157 9 2 9.67157 2 10.5V12.5C2 13.3284 2.67157 14 3.5 14H5.5C6.32843 14 7 13.3284 7 12.5V10.5C7 9.67157 6.32843 9 5.5 9H3.5Z"/><path d="M9 3.5C9 2.67157 9.67157 2 10.5 2H12.5C13.3284 2 14 2.67157 14 3.5V5.5C14 6.32843 13.3284 7 12.5 7H10.5C9.67157 7 9 6.32843 9 5.5V3.5Z"/><path d="M10.5 9C9.67157 9 9 9.67157 9 10.5V12.5C9 13.3284 9.67157 14 10.5 14H12.5C13.3284 14 14 13.3284 14 12.5V10.5C14 9.67157 13.3284 9 12.5 9H10.5Z"/></svg>';
+        }
         thumb.appendChild(ssBadge);
       }
       card.appendChild(thumb);
@@ -2349,7 +2362,7 @@
     var sheetItems = [];
     var intakeItems = [];
     for (var ci = 0; ci < items.length; ci++) {
-      if (items[ci].source === "screenspace") {
+      if (isIntakeSource(items[ci].source)) {
         intakeItems.push(items[ci]);
       } else {
         sheetItems.push(items[ci]);
@@ -2466,6 +2479,8 @@
           end: itm.segStart + itm.segDuration,
           event_type: itm.event_type || itm.desc || "",
           event_ids: itm.event_ids || [],
+          source: itm.source || "screenspace",
+          mark_ids: itm.mark_ids || [],
         };
       });
 
@@ -2476,7 +2491,7 @@
       })
         .then(function (r) { return r.json(); })
         .then(function (data) {
-          var intakeCards = list.querySelectorAll('[data-source="screenspace"]');
+          var intakeCards = list.querySelectorAll('[data-source="screenspace"], [data-source="transcript"]');
           if (data.ok && data.results) {
             for (var ri = 0; ri < data.results.length; ri++) {
               var res = data.results[ri];
@@ -2497,7 +2512,7 @@
           finishBranch();
         })
         .catch(function () {
-          var intakeCards = list.querySelectorAll('[data-source="screenspace"]');
+          var intakeCards = list.querySelectorAll('[data-source="screenspace"], [data-source="transcript"]');
           for (var j = 0; j < intakeCards.length; j++) setCardResult(intakeCards[j], false);
           totalFail += intakeItems.length;
           finishBranch();
@@ -2514,7 +2529,7 @@
     // Determine if we have intake items — use direct endpoint for mixed/intake reels
     var hasIntake = false;
     for (var ci = 0; ci < state.reelQueue.length; ci++) {
-      if (state.reelQueue[ci].source === "screenspace") { hasIntake = true; break; }
+      if (isIntakeSource(state.reelQueue[ci].source)) { hasIntake = true; break; }
     }
 
     var reelBody;
@@ -2537,6 +2552,7 @@
           participant: item.participant,
           start: segStart,
           end: segStart + segDuration,
+          source: item.source || "screenspace",
         });
       }
       reelBody = { segments: segments };

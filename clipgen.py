@@ -741,6 +741,7 @@ def _embed_transcript_on_artifacts(
     corrections = manifest.get("corrections", [])
 
     full_transcript = None
+    transcript_version = ""
     if participant and participant in source_transcripts:
         entry = source_transcripts[participant]
         raw_segments = entry.get("segments", [])
@@ -751,6 +752,7 @@ def _embed_transcript_on_artifacts(
             source_file=entry.get("source_file", str(base_video)),
             model=entry.get("model", ""),
         )
+        transcript_version = entry.get("transcribed_at", "")
     elif base_video in transcript_cache and transcript_cache[base_video]:
         full_transcript = transcript_cache[base_video]
 
@@ -777,6 +779,8 @@ def _embed_transcript_on_artifacts(
             )
         if transcript_segments:
             artifacts[art_idx]["transcript"] = transcript_segments
+            if transcript_version:
+                artifacts[art_idx]["transcript_version"] = transcript_version
 
 
 def _transcribe_segments(

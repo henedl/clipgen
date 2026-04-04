@@ -271,19 +271,41 @@ def _save_manifest_quiet() -> None:
         utils.warning_print(f"Failed to save manifest: {e}")
 
 
+def _resolve_intake_video_path(
+    participant: str, source: str = ""
+) -> Optional[str]:
+    """Resolve a video path for an intake participant.
+
+    Tries the source-specific participant list first, then falls back to the
+    other.  Both lists are populated from the same source videos so the
+    fallback is a safety net.
+    """
+    import screenspace_server
+    import transcripts_server
+
+    lists = (
+        [transcripts_server._participants, screenspace_server._participants]
+        if source == "transcript"
+        else [screenspace_server._participants, transcripts_server._participants]
+    )
+    for plist in lists:
+        for p in plist:
+            if p["id"] == participant and p.get("has_video"):
+                return p["video_path"]
+    return None
+
+
 def _generate_intake_clips(
     items: List[Dict[str, Any]],
     output_format: str = "clip",
     study: str = "",
 ) -> List[Dict[str, Any]]:
-    """Generate clips from intake items and return successful artifact dicts.
+    """Generate clips from intake items (Screenspace or Transcript).
 
     Each returned dict has an extra ``"_ok"`` key (True on success, False if
     the video was missing or ffmpeg failed) plus an ``"_error"`` string so
     callers can report per-item results without duplicating the loop.
     """
-    import screenspace_server
-
     output_dir = Path(utils.get_effective_output_dir())
     results: List[Dict[str, Any]] = []
 
@@ -293,12 +315,10 @@ def _generate_intake_clips(
         end = float(item.get("end", 0))
         event_type = item.get("event_type", "")
         event_ids = item.get("event_ids", [])
+        source = item.get("source", "screenspace")
+        mark_ids = item.get("mark_ids", [])
 
-        video_path = None
-        for p in screenspace_server._participants:
-            if p["id"] == participant and p.get("has_video"):
-                video_path = p["video_path"]
-                break
+        video_path = _resolve_intake_video_path(participant, source)
 
         if not video_path:
             results.append({"_ok": False, "_error": f"No video for {participant}"})
@@ -323,6 +343,11 @@ def _generate_intake_clips(
         )
 
         if success:
+            default_desc = (
+                "Transcript intake"
+                if source == "transcript"
+                else "Screenspace intake"
+            )
             artifact: Dict[str, Any] = {
                 "id": f"intake_{span_hash}_s0",
                 "type": output_format,
@@ -334,18 +359,29 @@ def _generate_intake_clips(
                 "participant": participant,
                 "category": "",
                 "severity": "",
-                "description": event_type or "Screenspace intake",
+                "description": event_type or default_desc,
                 "cellRow": None,
                 "cellCol": None,
                 "cellA1": "",
                 "annotations": [],
-                "source": "screenspace",
+                "source": source,
                 "event_ids": event_ids,
+                "mark_ids": mark_ids,
                 "intake_label": event_type,
                 "sourceVideo": Path(video_path).name,
                 "_ok": True,
                 "_error": "",
             }
+            if source == "transcript":
+                import transcripts_server
+
+                with transcripts_server._manifest_lock:
+                    src_entry = transcripts_server._manifest.get(
+                        "source_transcripts", {}
+                    ).get(participant, {})
+                artifact["transcript_version"] = src_entry.get(
+                    "transcribed_at", ""
+                )
             results.append(artifact)
         else:
             results.append({"_ok": False, "_error": "ffmpeg failed"})
@@ -1095,7 +1131,7 @@ def api_settings_put() -> FlaskResponse:
 
 @studio_bp.route("/api/generate-intake", methods=["POST"])
 def api_generate_intake() -> FlaskResponse:
-    """Generate clips from Screenspace intake spans."""
+    """Generate clips from intake spans (Screenspace or Transcript)."""
     data = request.get_json(silent=True) or {}
     items = data.get("items", [])
     if not items:
@@ -1123,8 +1159,6 @@ def api_generate_intake() -> FlaskResponse:
 def api_reel_direct() -> FlaskResponse:
     """Build a reel from direct timestamp segments (for intake / mixed queues)."""
     import tempfile
-
-    import screenspace_server
 
     data = request.get_json(silent=True) or {}
     segments = data.get("segments", [])
@@ -1157,11 +1191,8 @@ def api_reel_direct() -> FlaskResponse:
                 if end <= start:
                     continue
 
-                video_path = None
-                for p in screenspace_server._participants:
-                    if p["id"] == participant and p.get("has_video"):
-                        video_path = p["video_path"]
-                        break
+                source = seg.get("source", "screenspace")
+                video_path = _resolve_intake_video_path(participant, source)
 
                 if not video_path:
                     continue
@@ -1198,7 +1229,7 @@ def api_reel_direct() -> FlaskResponse:
                 reel_record: Dict[str, Any] = {
                     "id": f"reel_intake_{hashlib.md5(reel_name.encode()).hexdigest()[:8]}",
                     "file": Path(reel_name).name,
-                    "source": "screenspace",
+                    "source": "intake",
                     "description": f"Intake reel ({len(clip_paths)} segments)",
                 }
                 _generated_reels.append(reel_record)

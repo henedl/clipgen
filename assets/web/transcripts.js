@@ -182,7 +182,7 @@
     state.participants.forEach(function (p) {
       var opt = document.createElement("option");
       opt.value = p.id;
-      opt.textContent = p.id + (p.has_transcript ? " \u2713" : "");
+      opt.textContent = p.id + (p.has_transcript ? " \u2713" : "") + (p.has_stale_artifacts ? " \u26a0" : "");
       sel.appendChild(opt);
     });
     if (state.selectedParticipant) {
@@ -240,12 +240,21 @@
     });
     if (p.has_transcript) {
       statusEl.textContent = p.segment_count + " segments";
+      if (p.has_stale_artifacts) {
+        statusEl.textContent += " \u2022 artifacts outdated";
+        statusEl.classList.add("transcript-stale");
+      } else {
+        statusEl.classList.remove("transcript-stale");
+      }
     } else if (taskForPid && taskForPid.status === "running") {
       statusEl.textContent = "transcribing\u2026 " + Math.round((taskForPid.progress || 0) * 100) + "%";
+      statusEl.classList.remove("transcript-stale");
     } else if (taskForPid && taskForPid.status === "queued") {
       statusEl.textContent = "queued";
+      statusEl.classList.remove("transcript-stale");
     } else {
       statusEl.textContent = "not transcribed";
+      statusEl.classList.remove("transcript-stale");
     }
 
     // Load transcript
@@ -1073,7 +1082,11 @@
       if (!p.has_transcript && (!taskByPid[p.id] || taskByPid[p.id].status === "failed" || taskByPid[p.id].status === "cancelled")) {
         html += '<div class="queue-item-action"><button class="btn btn-small" data-transcribe="' + escapeHtml(p.id) + '">Transcribe</button></div>';
       } else if (p.has_transcript && (!taskByPid[p.id] || taskByPid[p.id].status === "completed")) {
-        html += '<div class="queue-item-action"><button class="btn btn-small" data-retranscribe="' + escapeHtml(p.id) + '">Re-transcribe</button></div>';
+        html += '<div class="queue-item-action"><button class="btn btn-small" data-retranscribe="' + escapeHtml(p.id) + '">Re-transcribe</button>';
+        if (p.has_stale_artifacts) {
+          html += '<span class="queue-stale-badge">artifacts outdated</span>';
+        }
+        html += '</div>';
       }
 
       html += '</div>';
