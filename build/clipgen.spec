@@ -39,36 +39,6 @@ a = Analysis(
     excludes=excludes,
     noarchive=False,
 )
-
-# Exclude FFmpeg libraries bundled inside opencv-python-headless.
-# These include GPL-licensed codecs (libx264, libx265) that would make the
-# entire binary GPL if distributed.  clipgen uses system ffmpeg for video
-# operations; only OpenCV's image-processing functions (no VideoCapture) are
-# needed at runtime.
-_FFMPEG_LIB_PREFIXES = (
-    # FFmpeg core libraries (LGPL 2.1, but tainted GPL by bundled codecs)
-    "libavcodec",
-    "libavdevice",
-    "libavfilter",
-    "libavformat",
-    "libavutil",
-    "libswresample",
-    "libswscale",
-    "libpostproc",
-    # GPL 2.0 codec libraries
-    "libx264",
-    "libx265",
-    # NOTE: libavif (AVIF image codec, BSD) is NOT excluded — it is not part
-    # of FFmpeg and is needed by OpenCV for image I/O.
-)
-
-def _is_ffmpeg_lib(name):
-    """True for FFmpeg shared libraries bundled inside the cv2 package."""
-    base = name.rsplit("/", 1)[-1] if "/" in name else name
-    return any(base.startswith(p) for p in _FFMPEG_LIB_PREFIXES)
-
-a.binaries = [b for b in a.binaries if not _is_ffmpeg_lib(b[0])]
-
 pyz = PYZ(a.pure)
 
 exe = EXE(
