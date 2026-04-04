@@ -240,14 +240,35 @@ def api_corrections_add() -> FlaskResponse:
     if not from_text or not to_text:
         return jsonify({"ok": False, "error": "'from' and 'to' required"}), 400
 
-    correction = {
-        "id": f"c_{uuid.uuid4().hex[:8]}",
-        "from": from_text,
-        "to": to_text,
-        "created": datetime.now(timezone.utc).isoformat(),
-    }
     with _manifest_lock:
-        _manifest.setdefault("corrections", []).append(correction)
+        corrections = _manifest.setdefault("corrections", [])
+
+        # Check for an existing correction whose `to` chains into this `from`.
+        # e.g. existing "teh"→"the" + new "the"→"they" → update to "teh"→"they".
+        # If the update would make from == to, delete the correction instead.
+        chained = None
+        for c in corrections:
+            if c.get("to", "").lower() == from_text.lower():
+                chained = c
+                break
+
+        if chained:
+            if chained["from"].lower() == to_text.lower():
+                corrections.remove(chained)
+                _persist_manifest()
+                return jsonify(
+                    {"ok": True, "correction": None, "removed": chained["id"]}
+                )
+            chained["to"] = to_text
+            correction = chained
+        else:
+            correction = {
+                "id": f"c_{uuid.uuid4().hex[:8]}",
+                "from": from_text,
+                "to": to_text,
+                "created": datetime.now(timezone.utc).isoformat(),
+            }
+            corrections.append(correction)
 
     _persist_manifest()
     return jsonify({"ok": True, "correction": correction})
