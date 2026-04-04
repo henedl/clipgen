@@ -37,6 +37,13 @@
     intakeFilterParticipants: [],
     intakeHoveredIdx: -1,
     activePreviewTab: "sheet",
+    trIntakeMarks: [],
+    trIntakeClusters: [],
+    trIntakePollTimer: null,
+    trIntakeFilterCategory: "",
+    trIntakeFilterParticipants: [],
+    trIntakeShowAll: false,
+    trIntakeHoveredIdx: -1,
   };
 
   var SEVERITY_ORDER = [
@@ -576,27 +583,39 @@
     var filterToggle = qs("#filterToggle");
     var refreshBtn = qs("#refreshSheet");
     var intakePanel = qs("#intakePanel");
+    var trIntakePanel = qs("#trIntakePanel");
+
+    // Hide everything first
+    grid.classList.add("hidden");
+    intakePanel.classList.add("hidden");
+    if (trIntakePanel) trIntakePanel.classList.add("hidden");
+    if (filterBar) filterBar.classList.add("hidden");
+    if (filterToggle) filterToggle.classList.add("hidden");
+    if (refreshBtn) refreshBtn.classList.add("hidden");
+
+    // Stop both intake poll timers
+    if (state.intakePollTimer) { clearInterval(state.intakePollTimer); state.intakePollTimer = null; }
+    if (state.trIntakePollTimer) { clearInterval(state.trIntakePollTimer); state.trIntakePollTimer = null; }
 
     if (state.activePreviewTab === "sheet") {
       grid.classList.remove("hidden");
-      intakePanel.classList.add("hidden");
       if (filterToggle) filterToggle.classList.remove("hidden");
       if (refreshBtn) refreshBtn.classList.remove("hidden");
       if (state.filtersVisible && filterBar) filterBar.classList.remove("hidden");
-      // Pause intake polling when leaving intake tab
-      if (state.intakePollTimer) { clearInterval(state.intakePollTimer); state.intakePollTimer = null; }
-    } else {
-      grid.classList.add("hidden");
-      if (filterBar) filterBar.classList.add("hidden");
-      if (filterToggle) filterToggle.classList.add("hidden");
-      if (refreshBtn) refreshBtn.classList.add("hidden");
+    } else if (state.activePreviewTab === "intake") {
       intakePanel.classList.remove("hidden");
-      // Resume intake polling when entering intake tab
-      if (!state.intakePollTimer && !document.hidden) {
+      if (!document.hidden) {
         pollIntakeEvents();
         state.intakePollTimer = setInterval(pollIntakeEvents, 10000);
       }
       setTimeout(sizeIntakeCanvas, 0);
+    } else if (state.activePreviewTab === "transcript-intake") {
+      if (trIntakePanel) trIntakePanel.classList.remove("hidden");
+      if (!document.hidden) {
+        pollTranscriptIntakeMarks();
+        state.trIntakePollTimer = setInterval(pollTranscriptIntakeMarks, 10000);
+      }
+      setTimeout(sizeTrIntakeCanvas, 0);
     }
     computeGridMaxHeight();
   }
@@ -1434,7 +1453,7 @@
           addToQueue(state.artifactQueue, info.items[i], renderArtifactQueue);
         return;
       }
-      if (info.source === "screenspace") {
+      if (info.source === "screenspace" || info.source === "transcript") {
         state.artifactQueue.push(info);
         renderArtifactQueue();
         return;
@@ -1451,7 +1470,7 @@
           addToQueue(state.reelQueue, info.items[i], renderReelQueue);
         return;
       }
-      if (info.source === "screenspace") {
+      if (info.source === "screenspace" || info.source === "transcript") {
         state.reelQueue.push(info);
         renderReelQueue();
         return;
@@ -3223,6 +3242,8 @@
         if (data.transcripts) {
           var link = qs("#transcriptsLink");
           if (link) link.classList.remove("hidden");
+          var trIntakeTab = qs('.preview-tab[data-tab="transcript-intake"]');
+          if (trIntakeTab) trIntakeTab.classList.remove("hidden");
         }
       })
       .catch(function () {});
@@ -3791,6 +3812,436 @@
     });
   }
 
+  // ---- Transcript Intake ----
+
+  var TR_INTAKE_CATEGORIES = {
+    pain_point: { label: "Pain Point", color: "#dc2626" },
+    delight:    { label: "Delight",    color: "#16a34a" },
+    quote:      { label: "Quote",      color: "#2563eb" },
+    insight:    { label: "Insight",    color: "#f97316" },
+    task:       { label: "Task Issue", color: "#8b5cf6" },
+    bookmark:   { label: "Bookmark",   color: "#0891b2" },
+  };
+
+  function pollTranscriptIntakeMarks() {
+    fetch("../transcripts/api/marks")
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        if (!data.ok) return;
+        state.trIntakeMarks = data.marks.filter(function (m) { return m.valid; });
+        var threshold = parseInt((qs("#trIntakeClusterThreshold") || {}).value) || 5;
+        state.trIntakeClusters = clusterTranscriptMarks(state.trIntakeMarks, threshold);
+
+        // If "Show all" is enabled, also fetch all segments as unmark items
+        if (state.trIntakeShowAll) {
+          fetch("../transcripts/api/participants")
+            .then(function (r2) { return r2.json(); })
+            .then(function (pData) {
+              if (!pData.ok) return;
+              var transcribed = pData.participants.filter(function (p) { return p.has_transcript; });
+              var promises = transcribed.map(function (p) {
+                return fetch("../transcripts/api/transcript/" + p.id).then(function (r3) { return r3.json(); });
+              });
+              Promise.all(promises).then(function (results) {
+                var markedIds = {};
+                for (var i = 0; i < state.trIntakeMarks.length; i++) markedIds[state.trIntakeMarks[i].segment_id] = true;
+                var allItems = state.trIntakeMarks.slice();
+                for (var j = 0; j < results.length; j++) {
+                  if (!results[j].ok) continue;
+                  var pid = results[j].participant;
+                  var segs = results[j].segments;
+                  for (var k = 0; k < segs.length; k++) {
+                    if (!markedIds[segs[k].id]) {
+                      allItems.push({
+                        id: null,
+                        segment_id: segs[k].id,
+                        category: null,
+                        label: null,
+                        valid: true,
+                        participant: pid,
+                        start: segs[k].start,
+                        end: segs[k].end,
+                        text: segs[k].text,
+                      });
+                    }
+                  }
+                }
+                state.trIntakeClusters = clusterTranscriptMarks(allItems, threshold);
+                renderTranscriptIntake();
+              });
+            });
+        } else {
+          renderTranscriptIntake();
+        }
+      })
+      .catch(function () {});
+  }
+
+  function clusterTranscriptMarks(marks, thresholdSec) {
+    if (!marks.length) return [];
+    var sorted = marks.slice().sort(function (a, b) {
+      if (a.participant !== b.participant) return a.participant < b.participant ? -1 : 1;
+      return a.start - b.start;
+    });
+    var clusters = [];
+    var cur = null;
+    for (var i = 0; i < sorted.length; i++) {
+      var m = sorted[i];
+      if (!cur || m.participant !== cur.participant || m.start - cur.end > thresholdSec) {
+        if (cur) clusters.push(cur);
+        cur = {
+          participant: m.participant,
+          start: m.start,
+          end: m.end,
+          marks: [m],
+          category: m.category || "bookmark",
+          label: m.label || "",
+          text: m.text || "",
+        };
+      } else {
+        cur.end = Math.max(cur.end, m.end);
+        cur.marks.push(m);
+        if (m.text) cur.text += " " + m.text;
+        if (m.label && !cur.label) cur.label = m.label;
+      }
+    }
+    if (cur) clusters.push(cur);
+    return clusters;
+  }
+
+  function filteredTranscriptIntakeClusters() {
+    var clusters = state.trIntakeClusters;
+    var cat = state.trIntakeFilterCategory;
+    var parts = state.trIntakeFilterParticipants;
+    if (!cat && !parts.length) return clusters;
+    return clusters.filter(function (c) {
+      if (parts.length && parts.indexOf(c.participant) === -1) return false;
+      if (cat && c.category !== cat) return false;
+      return true;
+    });
+  }
+
+  function renderTranscriptIntake() {
+    var filtered = filteredTranscriptIntakeClusters();
+    var container = qs("#trIntakeCards");
+    var addAllBtn = qs("#trIntakeAddAllBtn");
+    var reelAllBtn = qs("#trIntakeReelAllBtn");
+    var badge = qs("#trIntakeTabBadge");
+
+    if (badge) {
+      if (state.trIntakeMarks.length > 0) {
+        badge.textContent = state.trIntakeMarks.length;
+        badge.classList.remove("hidden");
+      } else {
+        badge.classList.add("hidden");
+      }
+    }
+
+    if (addAllBtn) addAllBtn.disabled = filtered.length === 0;
+    if (reelAllBtn) reelAllBtn.disabled = filtered.length === 0;
+
+    buildTrIntakeParticipantPills();
+
+    if (filtered.length === 0) {
+      container.innerHTML = '<div class="drop-target-empty">Transcript marks will appear here</div>';
+      renderTrIntakeTimeline();
+      return;
+    }
+
+    container.innerHTML = "";
+    for (var i = 0; i < filtered.length; i++) {
+      var c = filtered[i];
+      var card = document.createElement("div");
+      card.className = "queue-card intake-queue-card tr-intake-queue-card";
+      card.draggable = true;
+      card.dataset.trIntakeIdx = i;
+
+      // Thumbnail area with category dot and duration
+      var thumb = document.createElement("div");
+      thumb.className = "queue-card-thumb";
+
+      var catColor = (TR_INTAKE_CATEGORIES[c.category] || TR_INTAKE_CATEGORIES.bookmark).color;
+      var dot = document.createElement("span");
+      dot.className = "tr-intake-card-category-dot";
+      dot.style.background = catColor;
+      thumb.appendChild(dot);
+
+      var dur = document.createElement("span");
+      dur.className = "queue-card-duration";
+      dur.textContent = formatDuration(Math.max(0, c.end - c.start));
+      thumb.appendChild(dur);
+      card.appendChild(thumb);
+
+      // Metadata
+      var meta = document.createElement("div");
+      meta.className = "queue-card-meta";
+      var ref = document.createElement("span");
+      ref.className = "queue-card-ref";
+      ref.textContent = c.participant + " \u00b7 " + formatDuration(c.start) + "\u2013" + formatDuration(c.end);
+      meta.appendChild(ref);
+
+      // Text snippet
+      var textSnippet = document.createElement("span");
+      textSnippet.className = "tr-intake-card-text";
+      var txt = c.label || c.text || "";
+      textSnippet.textContent = txt.length > 80 ? txt.substring(0, 80) + "\u2026" : txt;
+      meta.appendChild(textSnippet);
+      card.appendChild(meta);
+
+      // Drag support
+      (function (cluster) {
+        card.addEventListener("dragstart", function (ev) {
+          ev.dataTransfer.setData("application/json", JSON.stringify({
+            participant: cluster.participant,
+            desc: cluster.category || "transcript",
+            segStart: cluster.start,
+            segDuration: cluster.end - cluster.start,
+            source: "transcript",
+            mark_ids: cluster.marks.map(function (m) { return m.id; }),
+          }));
+          ev.dataTransfer.effectAllowed = "copyMove";
+          setCardDragImage(ev, this);
+        });
+      })(c);
+
+      container.appendChild(card);
+    }
+
+    renderTrIntakeTimeline();
+  }
+
+  function trIntakeAddToArtifacts(cluster) {
+    state.artifactQueue.push({
+      participant: cluster.participant,
+      segStart: cluster.start,
+      segDuration: cluster.end - cluster.start,
+      desc: cluster.category || "transcript",
+      source: "transcript",
+      mark_ids: cluster.marks.map(function (m) { return m.id; }),
+    });
+    renderArtifactQueue();
+  }
+
+  function trIntakeAddToReel(cluster) {
+    state.reelQueue.push({
+      participant: cluster.participant,
+      segStart: cluster.start,
+      segDuration: cluster.end - cluster.start,
+      desc: cluster.category || "transcript",
+      source: "transcript",
+      mark_ids: cluster.marks.map(function (m) { return m.id; }),
+    });
+    renderReelQueue();
+  }
+
+  function buildTrIntakeParticipantPills() {
+    var container = qs("#trIntakeFilterParticipants");
+    if (!container) return;
+    var pids = {};
+    for (var i = 0; i < state.trIntakeClusters.length; i++) {
+      pids[state.trIntakeClusters[i].participant] = true;
+    }
+    var sorted = Object.keys(pids).sort();
+    container.innerHTML = "";
+    for (var j = 0; j < sorted.length; j++) {
+      var btn = document.createElement("button");
+      btn.className = "intake-filter-participant" + (state.trIntakeFilterParticipants.indexOf(sorted[j]) >= 0 ? " active" : "");
+      btn.textContent = sorted[j];
+      btn.dataset.participant = sorted[j];
+      container.appendChild(btn);
+    }
+  }
+
+  function sizeTrIntakeCanvas() {
+    var canvas = qs("#trIntakeTimeline");
+    if (!canvas) return;
+    var w = canvas.clientWidth;
+    if (w <= 0) return;
+    var dpr = window.devicePixelRatio || 1;
+    canvas.width = w * dpr;
+    canvas.height = 48 * dpr;
+    var ctx = canvas.getContext("2d");
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    renderTrIntakeTimeline();
+  }
+
+  function renderTrIntakeTimeline() {
+    var canvas = qs("#trIntakeTimeline");
+    if (!canvas) return;
+    var ctx = canvas.getContext("2d");
+    var w = canvas.clientWidth;
+    var h = 48;
+    ctx.clearRect(0, 0, w, h);
+
+    var filtered = filteredTranscriptIntakeClusters();
+    if (filtered.length === 0) return;
+
+    // Find time range
+    var minT = Infinity, maxT = 0;
+    for (var i = 0; i < filtered.length; i++) {
+      if (filtered[i].start < minT) minT = filtered[i].start;
+      if (filtered[i].end > maxT) maxT = filtered[i].end;
+    }
+    if (maxT <= minT) maxT = minT + 1;
+    var range = maxT - minT;
+    var pad = 8;
+    var usableW = w - pad * 2;
+
+    // Draw time ruler
+    ctx.fillStyle = getComputedStyle(document.documentElement).getPropertyValue("--color-text-dim") || "#888";
+    ctx.font = "10px monospace";
+    ctx.textAlign = "center";
+    var tickCount = Math.min(Math.floor(usableW / 60), 10);
+    for (var t = 0; t <= tickCount; t++) {
+      var frac = t / tickCount;
+      var sec = minT + frac * range;
+      var x = pad + frac * usableW;
+      ctx.fillText(formatDuration(sec), x, 10);
+      ctx.fillRect(x, 12, 1, 4);
+    }
+
+    // Draw cluster markers
+    for (var j = 0; j < filtered.length; j++) {
+      var c = filtered[j];
+      var x1 = pad + ((c.start - minT) / range) * usableW;
+      var x2 = pad + ((c.end - minT) / range) * usableW;
+      var mw = Math.max(x2 - x1, 4);
+      var color = (TR_INTAKE_CATEGORIES[c.category] || TR_INTAKE_CATEGORIES.bookmark).color;
+      ctx.fillStyle = color;
+      ctx.globalAlpha = j === state.trIntakeHoveredIdx ? 1.0 : 0.6;
+      ctx.fillRect(x1, 20, mw, 24);
+    }
+    ctx.globalAlpha = 1.0;
+  }
+
+  function initTranscriptIntake() {
+    var trIntakeCards = qs("#trIntakeCards");
+    if (!trIntakeCards) return;
+
+    // Click: normal = Artifacts, shift = Reel
+    trIntakeCards.addEventListener("click", function (e) {
+      var card = e.target.closest(".tr-intake-queue-card");
+      if (!card) return;
+      var idx = parseInt(card.dataset.trIntakeIdx);
+      var cluster = filteredTranscriptIntakeClusters()[idx];
+      if (!cluster) return;
+      if (e.shiftKey) trIntakeAddToReel(cluster);
+      else trIntakeAddToArtifacts(cluster);
+    });
+
+    // Right-click: dismiss — remove marks
+    trIntakeCards.addEventListener("contextmenu", function (e) {
+      var card = e.target.closest(".tr-intake-queue-card");
+      if (!card) return;
+      e.preventDefault();
+      var idx = parseInt(card.dataset.trIntakeIdx);
+      var cluster = filteredTranscriptIntakeClusters()[idx];
+      if (!cluster) return;
+      var ids = cluster.marks.map(function (m) { return m.id; }).filter(Boolean);
+      if (!ids.length) return;
+      fetch("../transcripts/api/marks/" + ids[0], {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ids: ids }),
+      })
+        .then(function () { pollTranscriptIntakeMarks(); })
+        .catch(function () {});
+    });
+
+    // Cluster threshold change
+    var thresholdInput = qs("#trIntakeClusterThreshold");
+    if (thresholdInput) {
+      thresholdInput.addEventListener("change", function () {
+        var val = parseInt(this.value) || 5;
+        state.trIntakeClusters = clusterTranscriptMarks(state.trIntakeMarks, val);
+        renderTranscriptIntake();
+      });
+    }
+
+    // "Show all" toggle
+    var showAllToggle = qs("#trIntakeShowAll");
+    if (showAllToggle) {
+      showAllToggle.addEventListener("change", function () {
+        state.trIntakeShowAll = this.checked;
+        pollTranscriptIntakeMarks();
+      });
+    }
+
+    // Category pills
+    var catPills = qs("#trIntakeCategoryPills");
+    if (catPills) {
+      var cats = Object.keys(TR_INTAKE_CATEGORIES);
+      for (var i = 0; i < cats.length; i++) {
+        (function (key) {
+          var cat = TR_INTAKE_CATEGORIES[key];
+          var btn = document.createElement("button");
+          btn.className = "intake-filter-det tr-intake-filter-cat";
+          btn.style.setProperty("--det-color", cat.color);
+          btn.textContent = cat.label;
+          btn.dataset.category = key;
+          btn.addEventListener("click", function () {
+            if (state.trIntakeFilterCategory === key) {
+              state.trIntakeFilterCategory = "";
+              btn.classList.remove("active");
+            } else {
+              state.trIntakeFilterCategory = key;
+              var all = catPills.querySelectorAll(".tr-intake-filter-cat");
+              for (var j = 0; j < all.length; j++) all[j].classList.remove("active");
+              btn.classList.add("active");
+            }
+            renderTranscriptIntake();
+          });
+          catPills.appendChild(btn);
+        })(cats[i]);
+      }
+    }
+
+    // Participant pills (delegated)
+    var partPills = qs("#trIntakeFilterParticipants");
+    if (partPills) {
+      partPills.addEventListener("click", function (e) {
+        var btn = e.target.closest(".intake-filter-participant");
+        if (!btn) return;
+        var pid = btn.dataset.participant;
+        var idx = state.trIntakeFilterParticipants.indexOf(pid);
+        if (idx >= 0) {
+          state.trIntakeFilterParticipants.splice(idx, 1);
+          btn.classList.remove("active");
+        } else {
+          state.trIntakeFilterParticipants.push(pid);
+          btn.classList.add("active");
+        }
+        renderTranscriptIntake();
+      });
+    }
+
+    // Add All buttons
+    var addAllBtn = qs("#trIntakeAddAllBtn");
+    if (addAllBtn) {
+      addAllBtn.addEventListener("click", function () {
+        var filtered = filteredTranscriptIntakeClusters();
+        for (var i = 0; i < filtered.length; i++) trIntakeAddToArtifacts(filtered[i]);
+      });
+    }
+    var reelAllBtn = qs("#trIntakeReelAllBtn");
+    if (reelAllBtn) {
+      reelAllBtn.addEventListener("click", function () {
+        var filtered = filteredTranscriptIntakeClusters();
+        for (var i = 0; i < filtered.length; i++) trIntakeAddToReel(filtered[i]);
+      });
+    }
+
+    // Visibility change — pause/resume polling
+    document.addEventListener("visibilitychange", function () {
+      if (document.hidden) {
+        if (state.trIntakePollTimer) { clearInterval(state.trIntakePollTimer); state.trIntakePollTimer = null; }
+      } else if (state.activePreviewTab === "transcript-intake") {
+        pollTranscriptIntakeMarks();
+        if (!state.trIntakePollTimer) state.trIntakePollTimer = setInterval(pollTranscriptIntakeMarks, 10000);
+      }
+    });
+  }
+
   document.addEventListener("click", function (ev) {
     var wrap = qs(".filter-cat-wrap");
     if (wrap && !wrap.contains(ev.target)) {
@@ -3816,9 +4267,11 @@
     updateViewerButton();
     checkNavLinks();
     initIntake();
+    initTranscriptIntake();
     window.addEventListener("resize", function () {
       computeGridMaxHeight();
       sizeIntakeCanvas();
+      sizeTrIntakeCanvas();
     });
 
     document.addEventListener("dragstart", function (ev) {

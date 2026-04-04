@@ -5,6 +5,16 @@
   var POLL_INTERVAL = 3000;
   var SEARCH_DEBOUNCE = 300;
 
+  // Mark categories — mirrored from transcripts.py MARK_CATEGORIES
+  var MARK_CATEGORIES = {
+    pain_point: { label: "Pain Point", color: "#dc2626" },
+    delight:    { label: "Delight",    color: "#16a34a" },
+    quote:      { label: "Quote",      color: "#2563eb" },
+    insight:    { label: "Insight",    color: "#f97316" },
+    task:       { label: "Task Issue", color: "#8b5cf6" },
+    bookmark:   { label: "Bookmark",   color: "#0891b2" },
+  };
+
   // ---- State ----
 
   var state = {
@@ -18,6 +28,7 @@
     activeSegmentIndex: -1,
     editingTextEl: null,
     pollTimer: null,
+    lastMarkCategory: "bookmark",
   };
 
   // ---- Helpers ----
@@ -279,7 +290,13 @@
       var seg = state.segments[i];
       var activeClass = i === state.activeSegmentIndex ? " active" : "";
       var correctedClass = seg.corrected ? " segment-corrected" : "";
+      var markObj = seg.marks && seg.marks.length > 0 ? seg.marks[0] : null;
+      var markClass = markObj ? "segment-mark marked" : "segment-mark";
+      var markStyle = markObj ? ' style="background:' + (MARK_CATEGORIES[markObj.category] || MARK_CATEGORIES.bookmark).color + '"' : "";
+      var markLabel = markObj && markObj.label ? ' title="' + escapeHtml(markObj.label) + '"' : "";
+
       html += '<div class="segment-row' + activeClass + correctedClass + '" data-index="' + i + '" data-start="' + seg.start + '">';
+      html += '<span class="' + markClass + '" data-segment-id="' + escapeHtml(seg.id) + '"' + markStyle + markLabel + '></span>';
       html += '<span class="segment-timestamp">' + fmtTime(seg.start) + '</span>';
       // Split text into word spans
       var tokens = seg.text.split(/(\s+)/);
@@ -301,6 +318,7 @@
     for (var j = 0; j < rows.length; j++) {
       (function (row) {
         var textEl = row.querySelector(".segment-text");
+        var markEl = row.querySelector(".segment-mark");
         row.querySelector(".segment-timestamp").addEventListener("click", function (e) {
           e.stopPropagation();
           var start = parseFloat(row.getAttribute("data-start"));
@@ -315,6 +333,18 @@
         textEl.addEventListener("dblclick", function (e) {
           e.stopPropagation();
           startSegmentEditing(textEl);
+        });
+        markEl.addEventListener("click", function (e) {
+          e.stopPropagation();
+          var segId = markEl.getAttribute("data-segment-id");
+          var idx = parseInt(row.getAttribute("data-index"), 10);
+          var seg = state.segments[idx];
+          var mark = seg && seg.marks && seg.marks.length > 0 ? seg.marks[0] : null;
+          if (mark) {
+            showMarkPopover(markEl, segId, mark);
+          } else {
+            toggleMark(segId);
+          }
         });
       })(rows[j]);
     }
@@ -575,6 +605,132 @@
     });
   }
 
+  // ---- Marks ----
+
+  function toggleMark(segmentId) {
+    apiPost("api/marks", {
+      segment_ids: [segmentId],
+      category: state.lastMarkCategory,
+    }).then(function (data) {
+      if (data.ok) {
+        showToast("Marked");
+        if (state.selectedParticipant) loadTranscript(state.selectedParticipant);
+      }
+    });
+  }
+
+  function removeMark(markId) {
+    apiDelete("api/marks/" + markId).then(function (data) {
+      if (data.ok) {
+        showToast("Mark removed");
+        hideMarkPopover();
+        if (state.selectedParticipant) loadTranscript(state.selectedParticipant);
+      }
+    });
+  }
+
+  function updateMarkCategory(markId, category) {
+    state.lastMarkCategory = category;
+    apiPut("api/marks/" + markId, { category: category }).then(function (data) {
+      if (data.ok) {
+        hideMarkPopover();
+        if (state.selectedParticipant) loadTranscript(state.selectedParticipant);
+      }
+    });
+  }
+
+  function updateMarkLabel(markId, label) {
+    apiPut("api/marks/" + markId, { label: label || null });
+  }
+
+  function showMarkPopover(anchorEl, segmentId, markObj) {
+    var popover = qs("#markPopover");
+    hideMarkPopover();
+
+    // Build category pills
+    var catContainer = popover.querySelector(".mark-popover-categories");
+    catContainer.innerHTML = "";
+    var cats = Object.keys(MARK_CATEGORIES);
+    for (var i = 0; i < cats.length; i++) {
+      (function (key) {
+        var cat = MARK_CATEGORIES[key];
+        var pill = document.createElement("button");
+        pill.className = "mark-cat-pill" + (markObj.category === key ? " active" : "");
+        pill.style.background = cat.color;
+        pill.title = cat.label;
+        pill.addEventListener("click", function (e) {
+          e.stopPropagation();
+          updateMarkCategory(markObj.id, key);
+        });
+        catContainer.appendChild(pill);
+      })(cats[i]);
+    }
+
+    // Label input
+    var labelInput = popover.querySelector(".mark-popover-label");
+    labelInput.value = markObj.label || "";
+    labelInput._markId = markObj.id;
+    labelInput.onblur = function () {
+      var val = labelInput.value.trim();
+      if (val !== (markObj.label || "")) {
+        updateMarkLabel(markObj.id, val);
+      }
+    };
+    labelInput.onkeydown = function (e) {
+      if (e.key === "Enter") { e.preventDefault(); labelInput.blur(); hideMarkPopover(); }
+      if (e.key === "Escape") { e.preventDefault(); hideMarkPopover(); }
+    };
+
+    // Remove button
+    var removeBtn = popover.querySelector(".mark-popover-remove");
+    removeBtn.onclick = function (e) {
+      e.stopPropagation();
+      removeMark(markObj.id);
+    };
+
+    // Position below anchor
+    var rect = anchorEl.getBoundingClientRect();
+    popover.style.top = (rect.bottom + window.scrollY + 4) + "px";
+    popover.style.left = (rect.left + window.scrollX - 4) + "px";
+    popover.classList.remove("hidden");
+
+    // Close on outside click (deferred so this click doesn't trigger it)
+    setTimeout(function () {
+      document.addEventListener("click", _popoverOutsideClick);
+    }, 0);
+  }
+
+  function _popoverOutsideClick(e) {
+    var popover = qs("#markPopover");
+    if (popover && !popover.contains(e.target)) {
+      hideMarkPopover();
+    }
+  }
+
+  function hideMarkPopover() {
+    var popover = qs("#markPopover");
+    if (popover) popover.classList.add("hidden");
+    document.removeEventListener("click", _popoverOutsideClick);
+  }
+
+  function markAllSearchResults() {
+    if (!state.searchResults || !state.searchResults.results) return;
+    var ids = [];
+    state.searchResults.results.forEach(function (r) {
+      if (r.segment_id) ids.push(r.segment_id);
+    });
+    if (ids.length === 0) return;
+    apiPost("api/marks", {
+      segment_ids: ids,
+      category: state.lastMarkCategory,
+    }).then(function (data) {
+      if (data.ok) {
+        showToast("Marked " + data.marks.length + " segment" + (data.marks.length === 1 ? "" : "s"));
+        if (state.selectedParticipant) loadTranscript(state.selectedParticipant);
+      }
+    });
+  }
+
   // ---- Search ----
 
   var _searchTimer = null;
@@ -629,6 +785,18 @@
 
     countEl.textContent = data.total_count + " match" + (data.total_count === 1 ? "" : "es");
 
+    // Add "Mark All" button next to count
+    var markAllBtn = qs("#searchMarkAllBtn");
+    if (!markAllBtn) {
+      markAllBtn = document.createElement("button");
+      markAllBtn.id = "searchMarkAllBtn";
+      markAllBtn.className = "btn btn-small";
+      markAllBtn.textContent = "Mark All";
+      countEl.parentNode.insertBefore(markAllBtn, countEl.nextSibling);
+    }
+    markAllBtn.classList.remove("hidden");
+    markAllBtn.onclick = function () { markAllSearchResults(); };
+
     // Group results by participant
     var groups = {};
     var order = [];
@@ -677,6 +845,8 @@
   function hideSearchResults() {
     qs("#searchResults").classList.add("hidden");
     qs("#searchCount").textContent = "";
+    var markAllBtn = qs("#searchMarkAllBtn");
+    if (markAllBtn) markAllBtn.classList.add("hidden");
     state.searchResults = null;
   }
 

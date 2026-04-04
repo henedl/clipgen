@@ -373,12 +373,12 @@ class TestGetCorrectionsKeywords:
 class TestTranscriptsManifest:
     def test_empty_manifest_default(self):
         m = transcripts._empty_transcripts_manifest()
-        assert m == {"source_transcripts": {}, "corrections": []}
+        assert m == {"source_transcripts": {}, "corrections": [], "marks": []}
 
     def test_load_missing_file(self, tmp_path, monkeypatch):
         monkeypatch.setattr(config, "OUTPUT_DIR", str(tmp_path))
         m = transcripts.load_transcripts_manifest()
-        assert m == {"source_transcripts": {}, "corrections": []}
+        assert m == {"source_transcripts": {}, "corrections": [], "marks": []}
 
     def test_save_and_load_roundtrip(self, tmp_path, monkeypatch):
         monkeypatch.setattr(config, "OUTPUT_DIR", str(tmp_path))
@@ -451,7 +451,7 @@ class TestTranscriptsManifest:
         monkeypatch.setattr(config, "OUTPUT_DIR", str(tmp_path))
         (tmp_path / config.TRANSCRIPTS_MANIFEST_FILENAME).write_text("not json")
         m = transcripts.load_transcripts_manifest()
-        assert m == {"source_transcripts": {}, "corrections": []}
+        assert m == {"source_transcripts": {}, "corrections": [], "marks": []}
 
 
 # ---------------------------------------------------------------------------

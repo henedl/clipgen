@@ -159,46 +159,85 @@ The workspace can trigger and monitor transcription jobs, not just view results.
 
 ---
 
-## Phase 3: Studio Transcript Intake
+## Phase 3: Segment Marking + Studio Transcript Intake
 
-Surface transcript data inside Studio as a lightweight intake tab for cross-referencing during artifact work.
+Pre-filter transcript content via a marking/curation system in the Transcript workspace, then surface curated marks in Studio as an intake tab for artifact generation. Follows the Screenspace Intake precedent: raw data → human curation → clustered cards → artifacts.
 
-### Intake tab
+### Key design decisions
 
-- [ ] Third tab in Studio's `#sheetPreview` area: **"Transcript Intake"** alongside "Sheet Preview" and "Screenspace Intake"
-- [ ] Tab only appears when source transcripts exist in the transcripts manifest (at least one participant transcribed); hidden otherwise
-- [ ] Loads transcript data via the Transcript workspace API (`../transcripts/api/...`), following the same cross-blueprint pattern Studio uses for Screenspace events (`../screenspace/api/events`)
+- **Marks are individual segment flags** stored as a separate manifest structure (like corrections). Raw segments stay immutable. Merging into groups happens at display time in Studio's clustering algorithm.
+- **Optional color categories** (pain point, delight, quote, insight, task, bookmark) + optional free-text labels on each mark.
+- **Studio Intake defaults to marks only**, with a toggle to show all segments.
+- **Search → bulk mark** leverages the existing search API (which returns `segment_id`).
+- **Full transcript text remains available in Viewers** (Phase 4) — marks only control the Transcript→Studio intake pipeline.
 
-### Intake tab contents
+### Mark data model
 
-- [ ] **Participant filter**: dropdown or chip bar to filter by participant
-- [ ] **Search**: keyword search across transcript content, scoped to selected participant(s) or all; calls `../transcripts/api/search`
-- [ ] **Segment list**: matching transcript segments displayed as compact cards — timestamp, participant badge, text snippet
-- [ ] **"New only" toggle**: filter to segments not yet associated with any artifact (helps find uncaptured moments)
-- [ ] **Drag to artifact area**: segments dragged using the standardized drag data format:
+- [x] Marks stored in `transcripts_manifest.json` under a top-level `"marks"` key (parallel to `"source_transcripts"` and `"corrections"`)
+- [x] Mark schema: `{"id": "m_{hex8}", "segment_id": "P01:42", "category": str|null, "label": str|null, "created": iso8601}`
+- [x] One mark per segment (POST deduplicates on `segment_id` — if mark exists, update it)
+- [x] `MARK_CATEGORIES` constant in `transcripts.py`: `pain_point` (#dc2626), `delight` (#16a34a), `quote` (#2563eb), `insight` (#f97316), `task` (#8b5cf6), `bookmark` (#0891b2)
+- [x] Re-transcription resilience: marks reference segment IDs that are index-based. When segment IDs change, marks API returns `valid: false` for unresolvable marks. UI shows orphaned marks dimmed with option to dismiss.
+
+### Manifest changes (`transcripts.py`)
+
+- [x] `_empty_transcripts_manifest()` → add `"marks": []`
+- [x] `load_transcripts_manifest()` → add `"marks": data.get("marks") or []` to returned dict
+- [x] `save_transcripts_manifest()` → add `marks` parameter (default `None` = preserve on-disk marks); include in serialized data
+
+### Mark API endpoints (`transcripts_server.py`)
+
+- [x] `GET /transcripts/api/marks` — list all marks, enriched with resolved segment data (participant, start, end, text, valid flag) + categories definition
+- [x] `POST /transcripts/api/marks` — create marks; body: `{segment_ids: [...], category?, label?}`; each segment gets its own `m_{hex8}` ID
+- [x] `PUT /transcripts/api/marks/<id>` — update category or label
+- [x] `DELETE /transcripts/api/marks/<id>` — remove a mark; also support bulk: `DELETE /transcripts/api/marks` with `{ids: [...]}`
+- [x] Update `_do_persist()` to pass `marks=_manifest.get("marks")` to `save_transcripts_manifest()`
+- [x] Enrich `api_transcript()` response with per-segment marks (build `marks_by_segment_id` lookup)
+
+### Transcript workspace marking UI
+
+- [x] **Gutter mark column**: add a mark dot before the timestamp in each `.segment-row` — `[mark-dot] [timestamp] [text]`. Unmarked: empty circle (border only). Marked: filled circle with category color.
+- [x] **`toggleMark(segmentId)`**: click gutter dot — if unmarked → POST create mark (uses `state.lastMarkCategory`); if marked → show popover
+- [x] **`showMarkPopover(el, segmentId, markObj)`**: floating popover with 6 category color pills, label text input, "Remove" action. Single shared DOM element repositioned each time.
+- [x] **`markAllSearchResults()`**: collect all `segment_id` from `state.searchResults.results`, POST bulk create. "Mark All" button shown in search results header next to count.
+- [x] Add `markPopover` HTML element to `transcripts.html`
+- [x] CSS for `.segment-mark`, `.segment-mark.marked`, `.mark-popover`, category pills
+
+### Studio Transcript Intake tab
+
+- [x] Third tab in Studio's `#sheetPreview` area: **"Transcript Intake"** alongside "Sheet Preview" and "Screenspace Intake"
+- [x] Tab only appears when `/api/status` reports `transcripts: true`; hidden otherwise
+- [x] `#transcriptIntakePanel` with: merge gap threshold input (1–60s, default 5), "Show all segments" toggle, "Add All to Artifacts"/"Add All to Reel" buttons, category filter pills, participant filter pills, canvas timeline, cards grid
+- [x] `pollTranscriptIntakeMarks()` — fetch `../transcripts/api/marks`, cluster, render; polled every 10s when tab active (same pattern as `pollIntakeEvents()`)
+- [x] `clusterTranscriptMarks(marks, thresholdSec)` — group by participant, merge marks whose segments are within `thresholdSec` gap (same algorithm shape as `clusterIntakeEvents()`)
+- [x] Cards show: category color dot, participant + time range, truncated transcript text (~80 chars), duration badge
+- [x] **Drag data format**:
   ```javascript
   {
     participant: str,
-    desc: str,             // matched text snippet (truncated)
-    segStart: float,       // segment start in seconds
-    segDuration: float,    // segment end - start
+    desc: str,              // category label or "transcript"
+    segStart: float,        // cluster start in seconds
+    segDuration: float,     // cluster end - start
     source: "transcript",
-    search_query: str,     // provenance: the search term that found this
-    segment_ids: [str],    // provenance: segment IDs (e.g., ["P01:42", "P01:43"])
+    mark_ids: [str],        // provenance: mark IDs (e.g., ["m_abc123", "m_def456"])
   }
   ```
-- [ ] Artifacts generated from transcript intake carry `source: "transcript"`, `segment_ids: [...]`, `intake_label: "search: <query>"` — matching the Screenspace pattern in `server.py`
+- [x] Artifacts generated from transcript intake carry `source: "transcript"`, `mark_ids: [...]` — matching the Screenspace pattern in `server.py`
+- [x] Update `syncPreviewTab()` for three-tab switching with independent poll timers
+- [x] `filteredTranscriptIntakeClusters()` — filter by category pills, participant pills
+- [x] `renderTranscriptIntakeTimeline()` — canvas timeline with category-colored markers
 
-### Cross-referencing with Screenspace events
+### Studio generation integration
+
+- [x] Update drop handlers in `initDropTargets()` to recognize `source: "transcript"` for both artifact and reel zones
+- [ ] Update `onGenerateArtifacts()` to partition transcript items and route to `api/generate-intake` with `source: "transcript"`
+- [ ] Update `_generate_intake_clips()` in `server.py` to look up video path in `transcripts_server._participants` when `source === "transcript"`
+
+### Cross-referencing with Screenspace events (deferred)
 
 - [ ] **On Screenspace intake cards**: when transcript data is available, show a "transcript context" line with the text at the card's time range (client-side join by participant + timestamp)
 - [ ] **On transcript search results**: when Screenspace events exist at the same timestamp, show a detector badge on the segment card (e.g., "change event detected here")
 - [ ] Cross-referencing is pure client-side — both data sources available in memory, joined by participant + timestamp at display time
-
-### Studio API additions
-
-- [ ] `GET /studio/api/transcripts` — return transcript summary from transcripts manifest (participant list with segment counts); full segment data fetched via `../transcripts/api/transcript/<participant>`
-- [ ] No duplicate search endpoint — Studio calls `../transcripts/api/search` directly
 
 ---
 
@@ -258,3 +297,6 @@ Not in scope for Phases 1–4, but the segment schema is designed to accommodate
 - **Standalone discovery** — the workspace discovers source media from the input directory without a spreadsheet. Reuses the shared video discovery utility (factored from Screenspace's `_discover_participant_videos`). Participant ID extraction from filenames (`{study}_{participant}.mp4`) must be robust to naming variations.
 - **Sidecar cache removal** — researchers who relied on `.transcript.json` files for non-manifest workflows will lose that caching. The manifest becomes the only persistence path. If this causes friction, consider a lightweight in-memory LRU cache in `_transcribe_segments()` as a session-only speedup.
 - **Always-on blueprint overhead** — registering the transcript blueprint unconditionally means its routes exist even when no transcripts have been generated. Endpoints return empty results. The `/api/status` response should clearly indicate whether transcript data is available vs. whether the endpoint is reachable.
+- **Mark orphaning on re-transcription** — segment IDs are index-based and reassigned on every save. Re-transcription changes indices, orphaning existing marks. The marks API returns a `valid` flag so the UI can show orphaned marks dimmed. Low cost of a few orphaned marks vs. high cost of silently deleting user curation.
+- **Mark categories are hardcoded** — not user-configurable for V1. If needed later, categories can move to a `"mark_categories"` key in the manifest with the hardcoded set as defaults.
+- **Clustering threshold in Studio** — the time-gap merge threshold for transcript marks (default 5s) may need different tuning than Screenspace events. Transcript segments are typically 2–5s each, so a 5s gap means adjacent marked segments always merge. Monitor whether users want finer control.

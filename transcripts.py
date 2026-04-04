@@ -19,8 +19,8 @@ Key functions:
   get_transcript_extension(fmt) → file extension string for a format
 
 Manifest I/O:
-  load_transcripts_manifest() → dict with source_transcripts and corrections keys
-  save_transcripts_manifest(source_transcripts, corrections) → assigns segment IDs, writes JSON
+  load_transcripts_manifest() → dict with source_transcripts, corrections, and marks keys
+  save_transcripts_manifest(source_transcripts, corrections, marks=None) → assigns segment IDs, writes JSON
 
 Corrections:
   apply_corrections(segments, corrections) → new segment list with from→to substitutions applied
@@ -72,6 +72,20 @@ class ManifestSegment(TypedDict):
     start: float
     end: float
     text: str
+
+
+# ---------------------------------------------------------------------------
+# Mark categories (shared constant — mirrored in transcripts.js)
+# ---------------------------------------------------------------------------
+
+MARK_CATEGORIES: dict[str, dict[str, str]] = {
+    "pain_point": {"label": "Pain Point", "color": "#dc2626"},
+    "delight": {"label": "Delight", "color": "#16a34a"},
+    "quote": {"label": "Quote", "color": "#2563eb"},
+    "insight": {"label": "Insight", "color": "#f97316"},
+    "task": {"label": "Task Issue", "color": "#8b5cf6"},
+    "bookmark": {"label": "Bookmark", "color": "#0891b2"},
+}
 
 
 # ---------------------------------------------------------------------------
@@ -187,7 +201,7 @@ def transcribe_video(
 
 
 def _empty_transcripts_manifest() -> dict[str, Any]:
-    return {"source_transcripts": {}, "corrections": []}
+    return {"source_transcripts": {}, "corrections": [], "marks": []}
 
 
 def load_transcripts_manifest() -> dict[str, Any]:
@@ -210,23 +224,43 @@ def load_transcripts_manifest() -> dict[str, Any]:
     return {
         "source_transcripts": data.get("source_transcripts") or {},
         "corrections": data.get("corrections") or [],
+        "marks": data.get("marks") or [],
     }
 
 
 def save_transcripts_manifest(
     source_transcripts: dict[str, Any],
     corrections: list[dict[str, Any]],
+    marks: list[dict[str, Any]] | None = None,
 ) -> Optional[Path]:
     """Write the transcripts manifest to disk.
 
     Assigns segment IDs (``"{participant}:{index}"``) at storage time.
+    *marks* defaults to ``None`` which preserves whatever marks are already on
+    disk (load → merge → save).  Pass an explicit list to overwrite.
     Returns the manifest path on success, or ``None`` on failure.
     """
     for participant_id, entry in source_transcripts.items():
         for idx, seg in enumerate(entry.get("segments", [])):
             seg["id"] = f"{participant_id}:{idx}"
 
-    data = {"source_transcripts": source_transcripts, "corrections": corrections}
+    # When marks is None, preserve existing marks from disk
+    if marks is None:
+        manifest_path = (
+            Path(utils.get_effective_output_dir())
+            / config.TRANSCRIPTS_MANIFEST_FILENAME
+        )
+        try:
+            existing = json.loads(manifest_path.read_text(encoding="utf-8"))
+            marks = existing.get("marks") or []
+        except (OSError, json.JSONDecodeError):
+            marks = []
+
+    data = {
+        "source_transcripts": source_transcripts,
+        "corrections": corrections,
+        "marks": marks,
+    }
     manifest_path = (
         Path(utils.get_effective_output_dir()) / config.TRANSCRIPTS_MANIFEST_FILENAME
     )
