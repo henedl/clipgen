@@ -700,6 +700,64 @@ def probe_video_properties(filepath: str) -> Optional[Dict[str, Any]]:
     return result
 
 
+def extract_frame_at_timestamp(
+    video_path: str,
+    timestamp_seconds: float,
+) -> Optional[Any]:
+    """Extract a single video frame at the given timestamp via ffmpeg.
+
+    Returns a BGR numpy array (H x W x 3) or None if extraction fails.
+    Requires ffprobe to determine resolution and ffmpeg to decode the frame.
+    """
+    if config.DEBUGGING:
+        import numpy as np
+
+        return np.zeros((1080, 1920, 3), dtype=np.uint8)
+
+    props = probe_video_properties(video_path)
+    if props is None or props.get("width", 0) <= 0 or props.get("height", 0) <= 0:
+        return None
+
+    width, height = props["width"], props["height"]
+    cmd = [
+        "ffmpeg",
+        "-ss",
+        str(timestamp_seconds),
+        "-i",
+        video_path,
+        "-frames:v",
+        "1",
+        "-pix_fmt",
+        "bgr24",
+        "-f",
+        "rawvideo",
+        "-loglevel",
+        "error",
+        "pipe:1",
+    ]
+    try:
+        result = subprocess.run(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=10,
+        )
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+        return None
+
+    frame_size = width * height * 3
+    if len(result.stdout) < frame_size:
+        return None
+
+    import numpy as np
+
+    return (
+        np.frombuffer(result.stdout[:frame_size], dtype=np.uint8)
+        .reshape((height, width, 3))
+        .copy()
+    )
+
+
 def get_duration(start_time: str, end_time: Optional[str]) -> Optional[int]:
     """Calculate the duration between two timestamps.
 

@@ -478,102 +478,22 @@ def scan_video_frames(
     """
     full_frame = region is None
 
-    # Try ffmpeg pipe extraction first (faster H.264 decoding)
-    if config.SCREENSPACE_BATCH_EXTRACT:
-        if _scan_via_ffmpeg_pipe(
-            video_path,
-            None if full_frame else region,
-            interval_seconds,
-            callback,
-            start_seconds=start_seconds,
-            end_seconds=end_seconds if end_seconds is not None else 0.0,
-            fps=fps,
-            duration=duration,
-            fast_opts=fast_opts,
-            full_frame=full_frame,
-        ):
-            return
-
-    # Fallback: cv2.VideoCapture-based extraction
-    cap = cv2.VideoCapture(video_path)
-    if not cap.isOpened():
-        return
-
-    if fps <= 0:
-        fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
-    if duration <= 0:
-        total_frames = cap.get(cv2.CAP_PROP_FRAME_COUNT)
-        duration = total_frames / fps if fps > 0 else 0.0
-    if end_seconds is None or end_seconds > duration:
-        end_seconds = duration
-
-    # Fast-scan state
-    _phash_skip = bool(fast_opts and fast_opts.get("phash_skip"))
-    _max_dim = (fast_opts or {}).get("max_region_dim", 0)
-    _phash_thresh = (fast_opts or {}).get(
-        "phash_threshold", config.SCREENSPACE_FAST_SCAN_PHASH_THRESHOLD
-    )
-    _prev_phash: List[Optional[imagehash.ImageHash]] = [None]
-
-    def _process_frame(raw_frame: np.ndarray, ts: float) -> Optional[bool]:
-        """Apply region crop, downscale, phash skip, then call callback."""
-        if full_frame:
-            pixels = raw_frame
-        else:
-            assert region is not None
-            pixels = extract_region(raw_frame, region)
-        if _max_dim > 0:
-            ph, pw = pixels.shape[:2]
-            if ph > _max_dim or pw > _max_dim:
-                sc = _max_dim / max(ph, pw)
-                pixels = cv2.resize(
-                    pixels, (int(pw * sc), int(ph * sc)), interpolation=cv2.INTER_AREA
-                )
-        if _phash_skip:
-            fh = compute_phash(pixels)
-            if _prev_phash[0] is not None and fh - _prev_phash[0] <= _phash_thresh:
-                return None  # skip
-            _prev_phash[0] = fh
-        return callback(ts, pixels)
-
-    use_sequential = interval_seconds <= config.SCREENSPACE_SEQUENTIAL_READ_MAX_INTERVAL
-
-    if use_sequential:
-        frame_interval = max(1, round(interval_seconds * fps))
-        if start_seconds > 0:
-            cap.set(cv2.CAP_PROP_POS_MSEC, start_seconds * 1000.0)
-        frame_idx = 0
-        end_frame = int(end_seconds * fps)
-        start_frame = int(start_seconds * fps)
-        while True:
-            grabbed = cap.grab()
-            if not grabbed:
-                break
-            abs_frame = start_frame + frame_idx
-            if abs_frame > end_frame:
-                break
-            if frame_idx % frame_interval == 0:
-                ret, frame = cap.retrieve()
-                if not ret:
-                    break
-                ts = start_seconds + frame_idx / fps
-                result = _process_frame(frame, ts)
-                if result is False:
-                    break
-            frame_idx += 1
-    else:
-        ts = start_seconds
-        while ts <= end_seconds:
-            cap.set(cv2.CAP_PROP_POS_MSEC, ts * 1000.0)
-            ret, frame = cap.read()
-            if not ret:
-                break
-            result = _process_frame(frame, ts)
-            if result is False:
-                break
-            ts += interval_seconds
-
-    cap.release()
+    # Extract frames via ffmpeg pipe (faster H.264 decoding, no cv2.VideoCapture)
+    if not _scan_via_ffmpeg_pipe(
+        video_path,
+        None if full_frame else region,
+        interval_seconds,
+        callback,
+        start_seconds=start_seconds,
+        end_seconds=end_seconds if end_seconds is not None else 0.0,
+        fps=fps,
+        duration=duration,
+        fast_opts=fast_opts,
+        full_frame=full_frame,
+    ):
+        utils.warning_print(
+            f"ffmpeg pipe extraction failed for {Path(video_path).name}"
+        )
 
 
 def scan_video_full_frames(
@@ -837,19 +757,11 @@ def build_timelapse_command(
 
 
 def _probe_video_meta(video_path: str) -> Tuple[float, float]:
-    """Return ``(fps, duration)`` via ffprobe, falling back to cv2."""
+    """Return ``(fps, duration)`` via ffprobe."""
     props = video.probe_video_properties(video_path)
     if props and props.get("fps", 0) > 0 and props.get("duration", 0) > 0:
         return (props["fps"], props["duration"])
-    # Fallback for containers where ffprobe can't report duration/fps
-    cap = cv2.VideoCapture(video_path)
-    if not cap.isOpened():
-        return (0.0, 0.0)
-    fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
-    total = cap.get(cv2.CAP_PROP_FRAME_COUNT)
-    dur = total / fps if fps > 0 else 0.0
-    cap.release()
-    return (fps, dur)
+    return (0.0, 0.0)
 
 
 # ---------------------------------------------------------------------------

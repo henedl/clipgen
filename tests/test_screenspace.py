@@ -1394,23 +1394,13 @@ class TestScanViaFfmpegPipe:
 
 
 class TestScanVideoFramesFfmpegIntegration:
-    def test_tries_ffmpeg_first_when_enabled(self, monkeypatch):
-        """With BATCH_EXTRACT=True and ffmpeg succeeding, cv2 is not used."""
-        monkeypatch.setattr(config, "SCREENSPACE_BATCH_EXTRACT", True)
+    def test_ffmpeg_pipe_succeeds(self, monkeypatch):
+        """When ffmpeg pipe succeeds, scan completes without error."""
         monkeypatch.setattr(
             screenspace,
             "_scan_via_ffmpeg_pipe",
             lambda *a, **kw: True,
         )
-        cv2_called = [False]
-
-        def fake_cap(path):
-            cv2_called[0] = True
-            cap = mock.MagicMock()
-            cap.isOpened.return_value = False
-            return cap
-
-        monkeypatch.setattr(screenspace.cv2, "VideoCapture", fake_cap)
 
         screenspace.scan_video_frames(
             "/fake.mp4",
@@ -1418,25 +1408,20 @@ class TestScanVideoFramesFfmpegIntegration:
             1.0,
             lambda ts, f: None,
         )
-        assert cv2_called[0] is False
 
-    def test_falls_back_to_cv2_when_ffmpeg_fails(self, monkeypatch):
-        """With BATCH_EXTRACT=True but ffmpeg failing, cv2 path is entered."""
-        monkeypatch.setattr(config, "SCREENSPACE_BATCH_EXTRACT", True)
+    def test_warns_when_ffmpeg_pipe_fails(self, monkeypatch):
+        """When ffmpeg pipe fails, a warning is emitted."""
         monkeypatch.setattr(
             screenspace,
             "_scan_via_ffmpeg_pipe",
             lambda *a, **kw: False,
         )
-        cv2_called = [False]
-
-        def fake_cap2(path):
-            cv2_called[0] = True
-            cap = mock.MagicMock()
-            cap.isOpened.return_value = False
-            return cap
-
-        monkeypatch.setattr(screenspace.cv2, "VideoCapture", fake_cap2)
+        warnings = []
+        monkeypatch.setattr(
+            screenspace.utils,
+            "warning_print",
+            lambda msg, *a, **kw: warnings.append(msg),
+        )
 
         screenspace.scan_video_frames(
             "/fake.mp4",
@@ -1444,31 +1429,8 @@ class TestScanVideoFramesFfmpegIntegration:
             1.0,
             lambda ts, f: None,
         )
-        assert cv2_called[0] is True
-
-    def test_skipped_when_batch_extract_disabled(self, monkeypatch):
-        """With BATCH_EXTRACT=False, ffmpeg pipe is never attempted."""
-        monkeypatch.setattr(config, "SCREENSPACE_BATCH_EXTRACT", False)
-        pipe_called = [False]
-
-        def fake_pipe(*a, **kw):
-            pipe_called[0] = True
-            return True
-
-        monkeypatch.setattr(screenspace, "_scan_via_ffmpeg_pipe", fake_pipe)
-
-        # cv2 fallback — won't actually process since file doesn't exist
-        cap_mock = mock.MagicMock()
-        cap_mock.isOpened.return_value = False
-        monkeypatch.setattr(screenspace.cv2, "VideoCapture", lambda _: cap_mock)
-
-        screenspace.scan_video_frames(
-            "/fake.mp4",
-            {"x": 0, "y": 0, "w": 10, "h": 10},
-            1.0,
-            lambda ts, f: None,
-        )
-        assert pipe_called[0] is False
+        assert len(warnings) == 1
+        assert "ffmpeg" in warnings[0].lower()
 
 
 # ---------------------------------------------------------------------------

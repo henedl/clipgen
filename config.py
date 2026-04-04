@@ -158,9 +158,6 @@ SCREENSPACE_BATCH_EXTRACT: bool = (
 SCREENSPACE_PARALLEL_WORKERS: int = (
     2  # max concurrent analysis tasks in ScreenspaceWorker
 )
-SCREENSPACE_VIDEO_CAP_POOL_SIZE: int = (
-    6  # max cached VideoCapture objects for API frame endpoint
-)
 SCREENSPACE_INACTIVITY_PHASH_THRESHOLD: int = (
     10  # max Hamming distance for "same frame" in Inactivity tool
 )

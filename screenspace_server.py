@@ -42,13 +42,11 @@ import math
 import queue as queue_mod
 import threading
 import uuid
-from collections import OrderedDict
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union, cast
 
 if TYPE_CHECKING:
-    import cv2
     import screenspace
 
 from flask import Blueprint, Response, jsonify, request, send_from_directory
@@ -96,8 +94,6 @@ _manifest: Dict[str, Any] = {}
 _worker: Optional["screenspace.ScreenspaceWorker"] = None
 _output_dir: str = ""
 _participants: List[Dict[str, Any]] = []
-_video_cap_cache: OrderedDict[str, Any] = OrderedDict()
-_video_cap_lock = threading.Lock()
 _video_metadata_cache: Dict[str, Dict[str, Any]] = {}
 
 # ---- SSE (Server-Sent Events) client registry ----
@@ -184,28 +180,6 @@ def _find_participant_video(participant_id: str) -> Optional[str]:
     return None
 
 
-def _get_video_cap(video_path: str) -> Optional["cv2.VideoCapture"]:
-    """Return a cached VideoCapture for *video_path*, opening a new one if needed."""
-    import cv2
-
-    if video_path in _video_cap_cache:
-        cap = _video_cap_cache[video_path]
-        if cap.isOpened():
-            _video_cap_cache.move_to_end(video_path)
-            return cap
-        # Stale entry
-        cap.release()
-        del _video_cap_cache[video_path]
-    cap = cv2.VideoCapture(video_path)
-    if not cap.isOpened():
-        return None
-    _video_cap_cache[video_path] = cap
-    if len(_video_cap_cache) > config.SCREENSPACE_VIDEO_CAP_POOL_SIZE:
-        _, old_cap = _video_cap_cache.popitem(last=False)
-        old_cap.release()
-    return cap
-
-
 @screenspace_bp.route("/api/video/frame/<participant>/<timestamp>")
 def api_video_frame(participant: str, timestamp: str) -> FlaskResponse:
     """Extract and return a single JPEG frame at the given timestamp."""
@@ -220,18 +194,11 @@ def api_video_frame(participant: str, timestamp: str) -> FlaskResponse:
             {"ok": False, "error": f"No video for participant {participant}"}
         ), 404
 
-    import cv2
-
-    with _video_cap_lock:
-        cap = _get_video_cap(video_path)
-        if cap is None:
-            return jsonify({"ok": False, "error": "Could not open video file"}), 500
-
-        cap.set(cv2.CAP_PROP_POS_MSEC, ts * 1000.0)
-        ret, frame = cap.read()
-
-    if not ret:
+    frame = video.extract_frame_at_timestamp(video_path, ts)
+    if frame is None:
         return jsonify({"ok": False, "error": "Could not read frame at timestamp"}), 400
+
+    import cv2
 
     _, jpeg = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
     return Response(
@@ -253,17 +220,15 @@ def api_video_info(participant: str) -> FlaskResponse:
             {"ok": False, "error": f"No video for participant {participant}"}
         ), 404
 
-    import cv2
+    props = video.probe_video_properties(video_path)
+    if props is None:
+        return jsonify({"ok": False, "error": "Could not probe video file"}), 500
 
-    with _video_cap_lock:
-        cap = _get_video_cap(video_path)
-        if cap is None:
-            return jsonify({"ok": False, "error": "Could not open video file"}), 500
-        vid_fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
-        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        total_frames = cap.get(cv2.CAP_PROP_FRAME_COUNT)
-    duration = round(total_frames / vid_fps) if vid_fps > 0 else 0
+    vid_fps = props.get("fps", 0.0) or 30.0
+    width = props.get("width", 0)
+    height = props.get("height", 0)
+    duration_seconds = props.get("duration", 0.0)
+    duration = round(duration_seconds) if duration_seconds > 0 else 0
 
     info: Dict[str, Any] = {
         "participant": participant,
@@ -696,18 +661,9 @@ def api_tasks_create() -> FlaskResponse:
 
     # Similarity tasks: extract reference frame from video at given timestamp
     if task_type == "similarity":
-        import cv2
-
         ref_ts = cast(float, parameters["reference_timestamp"])
-        cap = cv2.VideoCapture(video_path)
-        if not cap.isOpened():
-            return jsonify(
-                {"ok": False, "error": "Could not open video for reference frame"}
-            ), 500
-        cap.set(cv2.CAP_PROP_POS_MSEC, float(ref_ts) * 1000.0)
-        ret, frame = cap.read()
-        cap.release()
-        if not ret:
+        frame = video.extract_frame_at_timestamp(video_path, float(ref_ts))
+        if frame is None:
             return jsonify(
                 {"ok": False, "error": "Could not read reference frame"}
             ), 400
@@ -745,15 +701,8 @@ def api_tasks_create() -> FlaskResponse:
                 parameters["template_image"] = img
         else:
             ref_ts = cast(float, parameters["reference_timestamp"])
-            cap = cv2.VideoCapture(video_path)
-            if not cap.isOpened():
-                return jsonify(
-                    {"ok": False, "error": "Could not open video for template capture"}
-                ), 500
-            cap.set(cv2.CAP_PROP_POS_MSEC, float(ref_ts) * 1000.0)
-            ret, frame = cap.read()
-            cap.release()
-            if not ret:
+            frame = video.extract_frame_at_timestamp(video_path, float(ref_ts))
+            if frame is None:
                 return jsonify(
                     {"ok": False, "error": "Could not read template frame"}
                 ), 400
@@ -763,20 +712,13 @@ def api_tasks_create() -> FlaskResponse:
 
     # Scene tasks: extract reference frame for each scene type
     if task_type == "scene":
-        import cv2
-
         scene_refs = cast(List[Dict[str, Any]], parameters["scene_references"])
-        cap = cv2.VideoCapture(video_path)
-        if not cap.isOpened():
-            return jsonify(
-                {"ok": False, "error": "Could not open video for scene references"}
-            ), 500
         reference_scenes = []
         for ref in scene_refs:
-            cap.set(cv2.CAP_PROP_POS_MSEC, float(ref["timestamp"]) * 1000.0)
-            ret, frame = cap.read()
-            if not ret:
-                cap.release()
+            frame = video.extract_frame_at_timestamp(
+                video_path, float(ref["timestamp"])
+            )
+            if frame is None:
                 return jsonify(
                     {
                         "ok": False,
@@ -788,7 +730,6 @@ def api_tasks_create() -> FlaskResponse:
             if "threshold" in ref:
                 scene_entry["threshold"] = float(ref["threshold"])
             reference_scenes.append(scene_entry)
-        cap.release()
         parameters["reference_scenes"] = reference_scenes
 
     # Multitool tasks: resolve per-step regions and prepare parameters
@@ -799,109 +740,87 @@ def api_tasks_create() -> FlaskResponse:
         import numpy as np
 
         steps = parameters.get("steps", [])
-        _needs_video = any(
-            s.get("type") in ("similarity", "scene")
-            or (s.get("type") == "template" and not s.get("template_image_data"))
-            for s in steps
-        )
-        cap = None
-        if _needs_video:
-            cap = cv2.VideoCapture(video_path)
-            if not cap.isOpened():
-                return jsonify({"ok": False, "error": "Could not open video"}), 500
-        try:
-            for i, step in enumerate(steps):
-                stype = step.get("type", "")
+        for i, step in enumerate(steps):
+            stype = step.get("type", "")
 
-                # Resolve this step's region to pixel coords
-                step_region_name = (step.get("region") or "").strip()
-                if step_region_name and step_region_name in all_known_regions:
-                    step["region_coords"] = _resolve_region_coords(step_region_name)
-                else:
-                    step["region_coords"] = region_coords  # fallback to top-level
+            # Resolve this step's region to pixel coords
+            step_region_name = (step.get("region") or "").strip()
+            if step_region_name and step_region_name in all_known_regions:
+                step["region_coords"] = _resolve_region_coords(step_region_name)
+            else:
+                step["region_coords"] = region_coords  # fallback to top-level
 
-                step_rc = step["region_coords"]
+            step_rc = step["region_coords"]
 
-                if stype == "similarity":
-                    ref_ts = cast(float, step["reference_timestamp"])
-                    assert cap is not None
-                    cap.set(cv2.CAP_PROP_POS_MSEC, float(ref_ts) * 1000.0)
-                    ret, frame = cap.read()
-                    if not ret:
+            if stype == "similarity":
+                ref_ts = cast(float, step["reference_timestamp"])
+                frame = video.extract_frame_at_timestamp(video_path, float(ref_ts))
+                if frame is None:
+                    return jsonify(
+                        {
+                            "ok": False,
+                            "error": f"Step {i}: could not read reference frame",
+                        }
+                    ), 400
+                step["reference_frame"] = screenspace.extract_region(frame, step_rc)
+
+            elif stype == "template":
+                upload_b64 = step.pop("template_image_data", None)
+                if upload_b64:
+                    try:
+                        img_bytes = base64.b64decode(upload_b64)
+                        img_arr = np.frombuffer(img_bytes, dtype=np.uint8)
+                        img = cv2.imdecode(img_arr, cv2.IMREAD_UNCHANGED)
+                    except (ValueError, binascii.Error):
                         return jsonify(
                             {
                                 "ok": False,
-                                "error": f"Step {i}: could not read reference frame",
+                                "error": f"Step {i}: could not decode uploaded image",
                             }
                         ), 400
-                    step["reference_frame"] = screenspace.extract_region(frame, step_rc)
-
-                elif stype == "template":
-                    upload_b64 = step.pop("template_image_data", None)
-                    if upload_b64:
-                        try:
-                            img_bytes = base64.b64decode(upload_b64)
-                            img_arr = np.frombuffer(img_bytes, dtype=np.uint8)
-                            img = cv2.imdecode(img_arr, cv2.IMREAD_UNCHANGED)
-                        except (ValueError, binascii.Error):
-                            return jsonify(
-                                {
-                                    "ok": False,
-                                    "error": f"Step {i}: could not decode uploaded image",
-                                }
-                            ), 400
-                        if img is None:
-                            return jsonify(
-                                {"ok": False, "error": f"Step {i}: invalid image data"}
-                            ), 400
-                        if len(img.shape) == 2:
-                            img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
-                        if img.shape[2] == 4:
-                            step["template_mask"] = img[:, :, 3]
-                            step["template_image"] = cv2.cvtColor(
-                                img, cv2.COLOR_BGRA2BGR
-                            )
-                        else:
-                            step["template_image"] = img
+                    if img is None:
+                        return jsonify(
+                            {"ok": False, "error": f"Step {i}: invalid image data"}
+                        ), 400
+                    if len(img.shape) == 2:
+                        img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
+                    if img.shape[2] == 4:
+                        step["template_mask"] = img[:, :, 3]
+                        step["template_image"] = cv2.cvtColor(img, cv2.COLOR_BGRA2BGR)
                     else:
-                        ref_ts = cast(float, step["reference_timestamp"])
-                        assert cap is not None
-                        cap.set(cv2.CAP_PROP_POS_MSEC, float(ref_ts) * 1000.0)
-                        ret, frame = cap.read()
-                        if not ret:
-                            return jsonify(
-                                {
-                                    "ok": False,
-                                    "error": f"Step {i}: could not read template frame",
-                                }
-                            ), 400
-                        step["template_image"] = screenspace.extract_region(
-                            frame, step_rc
-                        )
+                        step["template_image"] = img
+                else:
+                    ref_ts = cast(float, step["reference_timestamp"])
+                    frame = video.extract_frame_at_timestamp(video_path, float(ref_ts))
+                    if frame is None:
+                        return jsonify(
+                            {
+                                "ok": False,
+                                "error": f"Step {i}: could not read template frame",
+                            }
+                        ), 400
+                    step["template_image"] = screenspace.extract_region(frame, step_rc)
 
-                elif stype == "scene":
-                    scene_refs = cast(List[Dict[str, Any]], step["scene_references"])
-                    ref_scenes_list = []
-                    assert cap is not None
-                    for ref in scene_refs:
-                        cap.set(cv2.CAP_PROP_POS_MSEC, float(ref["timestamp"]) * 1000.0)
-                        ret, frame = cap.read()
-                        if not ret:
-                            return jsonify(
-                                {
-                                    "ok": False,
-                                    "error": f"Step {i}: could not read frame for scene '{ref['name']}'",
-                                }
-                            ), 400
-                        ref_region = screenspace.extract_region(frame, step_rc)
-                        scene_entry: dict = {"name": ref["name"], "frame": ref_region}
-                        if "threshold" in ref:
-                            scene_entry["threshold"] = float(ref["threshold"])
-                        ref_scenes_list.append(scene_entry)
-                    step["reference_scenes"] = ref_scenes_list
-        finally:
-            if cap is not None:
-                cap.release()
+            elif stype == "scene":
+                scene_refs = cast(List[Dict[str, Any]], step["scene_references"])
+                ref_scenes_list = []
+                for ref in scene_refs:
+                    frame = video.extract_frame_at_timestamp(
+                        video_path, float(ref["timestamp"])
+                    )
+                    if frame is None:
+                        return jsonify(
+                            {
+                                "ok": False,
+                                "error": f"Step {i}: could not read frame for scene '{ref['name']}'",
+                            }
+                        ), 400
+                    ref_region = screenspace.extract_region(frame, step_rc)
+                    scene_entry: dict = {"name": ref["name"], "frame": ref_region}
+                    if "threshold" in ref:
+                        scene_entry["threshold"] = float(ref["threshold"])
+                    ref_scenes_list.append(scene_entry)
+                step["reference_scenes"] = ref_scenes_list
 
     task = screenspace.create_task(
         task_type=task_type,
