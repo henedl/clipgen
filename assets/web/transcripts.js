@@ -141,6 +141,14 @@
       if (!data.ok) return;
       state.participants = data.participants;
       renderParticipantSelect();
+
+      // Preserve current selection if still valid
+      if (state.selectedParticipant) {
+        for (var i = 0; i < state.participants.length; i++) {
+          if (state.participants[i].id === state.selectedParticipant) return;
+        }
+      }
+
       // Auto-select first participant with a transcript, or just the first
       var first = null;
       for (var i = 0; i < state.participants.length; i++) {
@@ -182,9 +190,19 @@
     }
     if (!p) return;
 
-    // Set video source
+    // Clean up previous video state
     var video = qs("#videoPlayer");
     var videoEmpty = qs("#videoEmpty");
+    video.pause();
+    _pendingSeekTime = null;
+    cancelAnimationFrame(_seekRaf);
+    _seekRaf = 0;
+    if (_pendingSeekListener) {
+      video.removeEventListener("loadedmetadata", _pendingSeekListener);
+      _pendingSeekListener = null;
+    }
+
+    // Set video source
     if (p.has_video) {
       video.src = "media/" + p.video_filename;
       video.classList.remove("hidden");
@@ -195,6 +213,7 @@
       track.src = "api/vtt/" + pid;
     } else {
       video.removeAttribute("src");
+      video.load();
       video.classList.add("hidden");
       videoEmpty.classList.remove("hidden");
     }
@@ -240,10 +259,13 @@
 
   // ---- Segment rendering ----
 
+  var _cachedSegmentRows = null;
+
   function renderSegments() {
     var container = qs("#segmentList");
     var empty = qs("#transcriptEmpty");
     state.editingTextEl = null;
+    _cachedSegmentRows = null;
 
     if (state.segments.length === 0) {
       container.innerHTML = "";
@@ -298,12 +320,45 @@
     }
   }
 
+  var _pendingSeekTime = null;
+  var _seekRaf = 0;
+  var _pendingSeekListener = null;
+
   function seekVideo(time) {
     var video = qs("#videoPlayer");
-    if (video && video.src) {
-      video.currentTime = time;
-      if (video.paused) video.play();
+    if (!video || !video.src) return;
+
+    // Remove any previous deferred-seek listener
+    if (_pendingSeekListener) {
+      video.removeEventListener("loadedmetadata", _pendingSeekListener);
+      _pendingSeekListener = null;
     }
+
+    // If metadata hasn't loaded yet, defer the seek
+    if (video.readyState < 1) {
+      _pendingSeekTime = time;
+      _pendingSeekListener = function () {
+        video.removeEventListener("loadedmetadata", _pendingSeekListener);
+        _pendingSeekListener = null;
+        var t = _pendingSeekTime;
+        _pendingSeekTime = null;
+        if (t !== null) seekVideo(t);
+      };
+      video.addEventListener("loadedmetadata", _pendingSeekListener);
+      return;
+    }
+
+    // Coalesce rapid seeks into one per animation frame
+    _pendingSeekTime = time;
+    cancelAnimationFrame(_seekRaf);
+    _seekRaf = requestAnimationFrame(function () {
+      var t = _pendingSeekTime;
+      _pendingSeekTime = null;
+      _seekRaf = 0;
+      if (t === null) return;
+      video.currentTime = t;
+      if (video.paused) video.play();
+    });
   }
 
   // ---- Video sync ----
@@ -326,21 +381,24 @@
     if (!video || !video.src) return;
     var t = video.currentTime;
 
-    // Find active segment
-    var newIndex = -1;
-    for (var i = 0; i < state.segments.length; i++) {
-      var seg = state.segments[i];
-      if (t >= seg.start && t < seg.end) {
-        newIndex = i;
-        break;
-      }
+    // Binary search for active segment (sorted, non-overlapping)
+    var lo = 0, hi = state.segments.length - 1, newIndex = -1;
+    while (lo <= hi) {
+      var mid = (lo + hi) >> 1;
+      if (state.segments[mid].start <= t) { newIndex = mid; lo = mid + 1; }
+      else { hi = mid - 1; }
     }
+    if (newIndex >= 0 && t >= state.segments[newIndex].end) newIndex = -1;
 
     if (newIndex === state.activeSegmentIndex) return;
 
+    // Cache segment row elements
+    if (!_cachedSegmentRows) {
+      _cachedSegmentRows = qs("#segmentList").querySelectorAll(".segment-row");
+    }
+    var rows = _cachedSegmentRows;
+
     // Remove old active
-    var container = qs("#segmentList");
-    var rows = container.querySelectorAll(".segment-row");
     if (state.activeSegmentIndex >= 0 && state.activeSegmentIndex < rows.length) {
       rows[state.activeSegmentIndex].classList.remove("active");
     }
@@ -349,7 +407,6 @@
     state.activeSegmentIndex = newIndex;
     if (newIndex >= 0 && newIndex < rows.length) {
       rows[newIndex].classList.add("active");
-      // Auto-scroll to keep active segment visible
       scrollToSegment(rows[newIndex]);
     }
   }
@@ -625,13 +682,8 @@
 
   function jumpToResult(pid, start) {
     hideSearchResults();
-    if (pid !== state.selectedParticipant) {
-      selectParticipant(pid);
-      // Wait for transcript to load, then seek
-      setTimeout(function () { seekVideo(start); }, 300);
-    } else {
-      seekVideo(start);
-    }
+    if (pid !== state.selectedParticipant) selectParticipant(pid);
+    seekVideo(start);
   }
 
   // ---- Queue panel ----
@@ -655,61 +707,89 @@
     });
   }
 
+  function queueItemState(p, taskByPid) {
+    var task = taskByPid[p.id];
+    var status = "not started";
+    var statusClass = "";
+    var progress = 0;
+    var showProgress = false;
+
+    if (p.has_transcript && (!task || task.status === "completed")) {
+      status = "completed";
+      statusClass = "status-completed";
+      progress = 100;
+    } else if (task) {
+      status = task.status;
+      if (task.status === "running") {
+        statusClass = "status-running";
+        progress = Math.round(task.progress * 100);
+        showProgress = true;
+      } else if (task.status === "queued") {
+        statusClass = "";
+      } else if (task.status === "failed") {
+        statusClass = "status-failed";
+        status = "failed";
+      } else if (task.status === "completed") {
+        statusClass = "status-completed";
+        progress = 100;
+      }
+    }
+    return { status: status, statusClass: statusClass, progress: progress, showProgress: showProgress };
+  }
+
   function renderQueue() {
     var container = qs("#queueList");
     if (!container) return;
 
-    // Build lookup of task status by participant
     var taskByPid = {};
     state.tasks.forEach(function (t) {
-      // Keep the most recent task per participant
       if (!taskByPid[t.participant] || t.created_at > taskByPid[t.participant].created_at) {
         taskByPid[t.participant] = t;
       }
     });
 
-    var html = "";
-    state.participants.forEach(function (p) {
-      var task = taskByPid[p.id];
-      var status = "not started";
-      var statusClass = "";
-      var progress = 0;
-      var showProgress = false;
-
-      if (p.has_transcript && (!task || task.status === "completed")) {
-        status = "completed";
-        statusClass = "status-completed";
-        progress = 100;
-      } else if (task) {
-        status = task.status;
-        if (task.status === "running") {
-          statusClass = "status-running";
-          progress = Math.round(task.progress * 100);
-          showProgress = true;
-        } else if (task.status === "queued") {
-          statusClass = "";
-        } else if (task.status === "failed") {
-          statusClass = "status-failed";
-          status = "failed";
-        } else if (task.status === "completed") {
-          statusClass = "status-completed";
-          progress = 100;
+    // Try in-place update when item list and status categories match (avoids layout thrash)
+    var existing = container.querySelectorAll(".queue-item[data-pid]");
+    if (existing.length === state.participants.length) {
+      var canPatch = true;
+      for (var k = 0; k < state.participants.length; k++) {
+        var s = queueItemState(state.participants[k], taskByPid);
+        if (existing[k].getAttribute("data-pid") !== state.participants[k].id ||
+            existing[k].getAttribute("data-status") !== s.status) {
+          canPatch = false; break;
         }
       }
+      if (canPatch) {
+        for (var k = 0; k < state.participants.length; k++) {
+          var item = existing[k];
+          var s = queueItemState(state.participants[k], taskByPid);
+          var statusEl = item.querySelector(".queue-item-status");
+          statusEl.className = "queue-item-status" + (s.statusClass ? " " + s.statusClass : "");
+          statusEl.textContent = s.status + (s.showProgress ? " " + s.progress + "%" : "");
+          var bar = item.querySelector(".queue-progress-bar");
+          if (bar) bar.style.width = s.progress + "%";
+        }
+        return;
+      }
+    }
 
-      html += '<div class="queue-item">';
+    // Full rebuild when structure changes
+    var html = "";
+    state.participants.forEach(function (p) {
+      var s = queueItemState(p, taskByPid);
+      html += '<div class="queue-item" data-pid="' + escapeHtml(p.id) + '" data-status="' + s.status + '">';
       html += '<div class="queue-item-header">';
       html += '<span class="queue-item-id">' + escapeHtml(p.id) + '</span>';
-      html += '<span class="queue-item-status ' + statusClass + '">' + status + (showProgress ? " " + progress + "%" : "") + '</span>';
+      html += '<span class="queue-item-status ' + s.statusClass + '">' + s.status + (s.showProgress ? " " + s.progress + "%" : "") + '</span>';
       html += '</div>';
 
-      if (showProgress || progress === 100) {
-        html += '<div class="queue-progress"><div class="queue-progress-bar" style="width:' + progress + '%"></div></div>';
+      if (s.showProgress || s.progress === 100) {
+        html += '<div class="queue-progress"><div class="queue-progress-bar" style="width:' + s.progress + '%"></div></div>';
       }
 
-      if (!p.has_transcript && (!task || task.status === "failed" || task.status === "cancelled")) {
+      if (!p.has_transcript && (!taskByPid[p.id] || taskByPid[p.id].status === "failed" || taskByPid[p.id].status === "cancelled")) {
         html += '<div class="queue-item-action"><button class="btn btn-small" data-transcribe="' + escapeHtml(p.id) + '">Transcribe</button></div>';
-      } else if (p.has_transcript && (!task || task.status === "completed")) {
+      } else if (p.has_transcript && (!taskByPid[p.id] || taskByPid[p.id].status === "completed")) {
         html += '<div class="queue-item-action"><button class="btn btn-small" data-retranscribe="' + escapeHtml(p.id) + '">Re-transcribe</button></div>';
       }
 
@@ -774,30 +854,35 @@
     }
   }
 
+  var _refreshedCompletedPids = {};
+
   function pollTaskStatus() {
     apiGet("api/transcribe/status").then(function (data) {
       if (!data.ok) return;
       state.tasks = data.tasks;
 
-      // Check if any tasks are still active
       var hasActive = false;
-      var justCompleted = [];
+      var newlyCompleted = [];
       data.tasks.forEach(function (t) {
         if (t.status === "queued" || t.status === "running") hasActive = true;
-        if (t.status === "completed") justCompleted.push(t.participant);
+        if (t.status === "completed" && !_refreshedCompletedPids[t.participant]) {
+          newlyCompleted.push(t.participant);
+          _refreshedCompletedPids[t.participant] = true;
+        }
       });
+
+      // Refresh participants and transcript as each task completes
+      if (newlyCompleted.length > 0) {
+        loadParticipants().then(function () {
+          if (state.selectedParticipant && newlyCompleted.indexOf(state.selectedParticipant) >= 0) {
+            loadTranscript(state.selectedParticipant);
+          }
+        });
+      }
 
       if (!hasActive) {
         stopPolling();
-        // Refresh participants to pick up new transcript data
-        if (justCompleted.length > 0) {
-          loadParticipants().then(function () {
-            // Reload current transcript if it was just completed
-            if (state.selectedParticipant && justCompleted.indexOf(state.selectedParticipant) >= 0) {
-              loadTranscript(state.selectedParticipant);
-            }
-          });
-        }
+        _refreshedCompletedPids = {};
       }
 
       // Update queue panel if visible
