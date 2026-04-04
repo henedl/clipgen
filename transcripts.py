@@ -6,6 +6,7 @@ The Whisper model is lazy-loaded on first use and cached at module level for the
 Data types (defined below):
   TranscriptSegment – TypedDict: start (float), end (float), text (str)
   TranscriptResult  – TypedDict: segments, language, source_file, model
+  ManifestSegment   – TypedDict: id (str), start, end, text — enriched segment for manifest storage
 
 Key functions:
   transcribe_video(path, *, language, initial_prompt, context_keywords)
@@ -17,16 +18,23 @@ Key functions:
   read_transcript(filepath) → TranscriptResult (parses any supported format)
   get_transcript_extension(fmt) → file extension string for a format
 
-Pipeline integration: clipgen.process_clips() calls _transcribe_segments() which caches the
-full-video result per source video, then filters and writes per-clip transcripts. Transcript
-artifacts (type "transcript") are added to the artifact list for manifest tracking. Output
-filenames match the corresponding clip filename with the transcript extension.
+Manifest I/O:
+  load_transcripts_manifest() → dict with source_transcripts and corrections keys
+  save_transcripts_manifest(source_transcripts, corrections) → assigns segment IDs, writes JSON
+
+Corrections:
+  apply_corrections(segments, corrections) → new segment list with from→to substitutions applied
+  get_corrections_keywords(corrections) → unique "to" values for Whisper context_keywords
+
+Pipeline integration: clipgen.process_clips() calls _transcribe_segments() which checks the
+transcripts manifest for pre-existing source transcripts, then falls back to live Whisper.
+Transcript segments are embedded on clip/reel artifact records as a ``transcript`` field.
+Standalone transcript file output (type "transcript" artifacts) is opt-in via --transcribe.
 """
 
 from __future__ import annotations
 
 import json
-import os
 import re
 from datetime import datetime, timezone
 from pathlib import Path
@@ -51,6 +59,15 @@ class TranscriptResult(TypedDict):
     language: str
     source_file: str
     model: str
+
+
+class ManifestSegment(TypedDict):
+    """Segment stored in transcripts_manifest.json — includes an ID for provenance tracking."""
+
+    id: str  # e.g. "P01:42"
+    start: float
+    end: float
+    text: str
 
 
 # ---------------------------------------------------------------------------
@@ -155,44 +172,118 @@ def transcribe_video(
 
 
 # ---------------------------------------------------------------------------
-# Disk cache (sidecar JSON next to source video)
+# Transcripts manifest (source-video transcripts + corrections dictionary)
 # ---------------------------------------------------------------------------
 
 
-def save_transcript_cache(result: TranscriptResult, video_path: str) -> bool:
-    """Save transcript to a sidecar JSON file next to the source video."""
-    cache_path = Path(video_path).with_suffix(".transcript.json")
-    try:
-        data = {
-            "segments": result["segments"],
-            "language": result["language"],
-            "source_file": result["source_file"],
-            "model": result["model"],
-            "video_mtime": os.path.getmtime(video_path),
-        }
-        cache_path.write_text(json.dumps(data, separators=(",", ":")), encoding="utf-8")
-        return True
-    except OSError:
-        return False
+def _empty_transcripts_manifest() -> dict[str, Any]:
+    return {"source_transcripts": {}, "corrections": []}
 
 
-def load_transcript_cache(video_path: str) -> Optional[TranscriptResult]:
-    """Load cached transcript if sidecar exists and source video hasn't changed."""
-    cache_path = Path(video_path).with_suffix(".transcript.json")
-    if not cache_path.is_file():
-        return None
+def load_transcripts_manifest() -> dict[str, Any]:
+    """Load the transcripts manifest from the output directory.
+
+    Returns a dict with ``source_transcripts`` and ``corrections`` keys.
+    Missing or corrupt files return an empty manifest.
+    """
+    manifest_path = (
+        Path(utils.get_effective_output_dir()) / config.TRANSCRIPTS_MANIFEST_FILENAME
+    )
+    if not manifest_path.is_file():
+        return _empty_transcripts_manifest()
     try:
-        data = json.loads(cache_path.read_text(encoding="utf-8"))
-        if data.get("video_mtime") != os.path.getmtime(video_path):
-            return None
-        return TranscriptResult(
-            segments=[TranscriptSegment(**s) for s in data["segments"]],
-            language=data["language"],
-            source_file=data["source_file"],
-            model=data["model"],
+        data = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return _empty_transcripts_manifest()
+    if not isinstance(data, dict):
+        return _empty_transcripts_manifest()
+    return {
+        "source_transcripts": data.get("source_transcripts") or {},
+        "corrections": data.get("corrections") or [],
+    }
+
+
+def save_transcripts_manifest(
+    source_transcripts: dict[str, Any],
+    corrections: list[dict[str, Any]],
+) -> Optional[Path]:
+    """Write the transcripts manifest to disk.
+
+    Assigns segment IDs (``"{participant}:{index}"``) at storage time.
+    Returns the manifest path on success, or ``None`` on failure.
+    """
+    for participant_id, entry in source_transcripts.items():
+        for idx, seg in enumerate(entry.get("segments", [])):
+            seg["id"] = f"{participant_id}:{idx}"
+
+    data = {"source_transcripts": source_transcripts, "corrections": corrections}
+    manifest_path = (
+        Path(utils.get_effective_output_dir()) / config.TRANSCRIPTS_MANIFEST_FILENAME
+    )
+    try:
+        manifest_path.write_text(
+            json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
         )
-    except (OSError, json.JSONDecodeError, KeyError, TypeError):
+        return manifest_path
+    except OSError as exc:
+        utils.warning_print(f"Failed to save transcripts manifest: {exc}")
         return None
+
+
+# ---------------------------------------------------------------------------
+# Corrections
+# ---------------------------------------------------------------------------
+
+
+def apply_corrections(
+    segments: list[TranscriptSegment],
+    corrections: list[dict[str, Any]],
+) -> list[TranscriptSegment]:
+    """Apply corrections to transcript segments as post-processing.
+
+    Returns a new list of segments with ``from -> to`` substitutions applied.
+    Never mutates the input. Case-insensitive, word-boundary matching.
+    """
+    if not corrections:
+        return list(segments)
+
+    pairs = [(c["from"], c["to"]) for c in corrections if c.get("from") and c.get("to")]
+    if not pairs:
+        return list(segments)
+
+    corrected: list[TranscriptSegment] = []
+    total_applied = 0
+    for seg in segments:
+        text = seg["text"]
+        seg_applied = 0
+        for from_text, to_text in pairs:
+            pattern = re.compile(re.escape(from_text), re.IGNORECASE)
+            new_text, count = pattern.subn(to_text, text)
+            if count > 0:
+                text = new_text
+                seg_applied += count
+        total_applied += seg_applied
+        corrected.append(
+            TranscriptSegment(start=seg["start"], end=seg["end"], text=text)
+        )
+
+    if total_applied > 0:
+        utils.verbose_print(
+            f"  Auto-applied {total_applied} correction(s) across {len(segments)} segment(s)."
+        )
+    return corrected
+
+
+def get_corrections_keywords(corrections: list[dict[str, Any]]) -> list[str]:
+    """Extract unique ``to`` values from corrections for use as Whisper context keywords."""
+    seen: set[str] = set()
+    keywords: list[str] = []
+    for c in corrections:
+        to_val = c.get("to", "").strip()
+        if to_val and to_val not in seen:
+            seen.add(to_val)
+            keywords.append(to_val)
+    return keywords
 
 
 # ---------------------------------------------------------------------------

@@ -9,7 +9,7 @@ from icecream import ic
 REENCODING: bool = False
 AUDIO_NORMALIZE: bool = False
 FILEFORMAT: str = ".mp4"
-VERSIONNUM: str = "0.10.19"
+VERSIONNUM: str = "0.10.20"
 TITLECARDS_ENABLED: bool = (
     False  # use --titlecards / --no-titlecards to override per run
 )
@@ -125,6 +125,7 @@ STUDIO_THUMBNAIL_WIDTH: int = 200
 
 # Screenspace constants
 SCREENSPACE_MANIFEST_FILENAME: str = "screenspace_manifest.json"
+TRANSCRIPTS_MANIFEST_FILENAME: str = "transcripts_manifest.json"
 SCREENSPACE_DEFAULT_INTERVAL: float = (
     1.0  # default frame sampling interval (seconds) for analysis tasks
 )
