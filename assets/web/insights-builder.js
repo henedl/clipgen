@@ -1501,6 +1501,10 @@
           var link = qs("#screenspaceLink");
           if (link) link.classList.remove("hidden");
         }
+        if (data.transcripts) {
+          var link = qs("#transcriptsLink");
+          if (link) link.classList.remove("hidden");
+        }
       })
       .catch(function () {});
   }

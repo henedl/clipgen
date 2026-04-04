@@ -51,7 +51,6 @@ if TYPE_CHECKING:
 
 from flask import Blueprint, Response, jsonify, request, send_from_directory
 
-import config
 import files
 import utils
 import video
@@ -1118,22 +1117,8 @@ def _init_screenspace_state(
 
 def _discover_participant_videos(study_name: str) -> None:
     """Scan input directory for source video files and populate _participants."""
-    input_dir = Path(utils.get_effective_input_dir())
-    if not input_dir.is_dir():
-        return
-    for path in sorted(input_dir.glob(f"*{config.FILEFORMAT}")):
-        name = path.stem
-        parts = name.rsplit("_", 1)
-        if len(parts) == 2:
-            pid = parts[1]
-            if pid and pid[0] in config.PARTICIPANT_PREFIXES:
-                _participants.append(
-                    {
-                        "id": pid,
-                        "video_path": str(path),
-                        "has_video": True,
-                    }
-                )
+    global _participants  # noqa: PLW0603
+    _participants = utils.discover_participant_videos(study_name)
 
 
 def _do_persist(*, drain_events: bool = True) -> None:

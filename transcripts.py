@@ -34,11 +34,15 @@ Standalone transcript file output (type "transcript" artifacts) is opt-in via --
 
 from __future__ import annotations
 
+import copy
 import json
+import queue
 import re
+import threading
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, List, Optional, TypedDict
+from typing import Any, Callable, Dict, List, Optional, TypedDict
 
 import config
 import utils
@@ -115,6 +119,7 @@ def transcribe_video(
     language: Optional[str] = None,
     initial_prompt: Optional[str] = None,
     context_keywords: Optional[List[str]] = None,
+    on_segment: Optional[Callable[[float], None]] = None,
 ) -> Optional[TranscriptResult]:
     """Transcribe a video file and return timestamped segments.
 
@@ -123,6 +128,8 @@ def transcribe_video(
         language: Language code (e.g. "en"). None = auto-detect.
         initial_prompt: Override the default initial prompt.
         context_keywords: Extra keywords to append to the prompt.
+        on_segment: Optional callback invoked after each segment with the
+            segment's end time (seconds).  Useful for progress tracking.
 
     Returns:
         TranscriptResult with segments, or None on failure.
@@ -152,11 +159,14 @@ def transcribe_video(
             language=lang,
             initial_prompt=prompt,
         )
-        segments: list[TranscriptSegment] = [
-            TranscriptSegment(start=seg.start, end=seg.end, text=seg.text.strip())
-            for seg in segments_iter
-            if seg.text.strip()
-        ]
+        segments: list[TranscriptSegment] = []
+        for seg in segments_iter:
+            text = seg.text.strip()
+            if not text:
+                continue
+            segments.append(TranscriptSegment(start=seg.start, end=seg.end, text=text))
+            if on_segment is not None:
+                on_segment(seg.end)
         detected_lang = (
             info.language if hasattr(info, "language") else (lang or "unknown")
         )
@@ -564,3 +574,179 @@ def _parse_markdown(text: str, filepath: str) -> TranscriptResult:
     return TranscriptResult(
         segments=segments, language=language, source_file=filepath, model=model
     )
+
+
+# ---------------------------------------------------------------------------
+# TranscriptWorker — background transcription task queue
+# ---------------------------------------------------------------------------
+
+TASK_STATUS_QUEUED = "queued"
+TASK_STATUS_RUNNING = "running"
+TASK_STATUS_COMPLETED = "completed"
+TASK_STATUS_FAILED = "failed"
+TASK_STATUS_CANCELLED = "cancelled"
+
+_TRANSCRIPT_SENTINEL = object()
+
+
+def create_transcript_task(participant: str, video_path: str) -> Dict[str, Any]:
+    """Create a new transcription task dict ready to enqueue."""
+    return {
+        "id": f"tr_{uuid.uuid4().hex[:8]}",
+        "participant": participant,
+        "video_path": video_path,
+        "status": TASK_STATUS_QUEUED,
+        "progress": 0.0,
+        "result": None,
+        "error": None,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "completed_at": None,
+    }
+
+
+class TranscriptWorker:
+    """Background thread that processes transcription tasks sequentially.
+
+    Simplified version of ``ScreenspaceWorker`` — no pause/resume, no
+    reordering, no concurrent execution, no event generation.
+    """
+
+    def __init__(self) -> None:
+        self._queue: queue.PriorityQueue[Any] = queue.PriorityQueue()
+        self._tasks: Dict[str, Dict[str, Any]] = {}
+        self._lock = threading.Lock()
+        self._thread: Optional[threading.Thread] = None
+        self._running = False
+        self.on_task_complete: Optional[Callable[[], None]] = None
+
+    def start(self) -> None:
+        """Start the worker thread."""
+        self._running = True
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+
+    def stop(self) -> None:
+        """Signal the worker thread to stop."""
+        self._running = False
+        self._queue.put((0, _TRANSCRIPT_SENTINEL))
+        if self._thread is not None:
+            self._thread.join(timeout=15)
+
+    def restore_tasks(self, tasks: List[Dict[str, Any]]) -> None:
+        """Load historical tasks (completed/failed/cancelled) for display."""
+        with self._lock:
+            for t in tasks:
+                if t.get("id"):
+                    self._tasks[t["id"]] = copy.deepcopy(t)
+
+    def enqueue(self, task: Dict[str, Any]) -> str:
+        """Add a task to the queue. Returns the task ID."""
+        task_id = task["id"]
+        with self._lock:
+            self._tasks[task_id] = task
+        self._queue.put((100, task_id))
+        return task_id
+
+    def cancel(self, task_id: str) -> bool:
+        """Cancel a queued task. Returns True if cancelled."""
+        with self._lock:
+            task = self._tasks.get(task_id)
+            if task and task["status"] == TASK_STATUS_QUEUED:
+                task["status"] = TASK_STATUS_CANCELLED
+                return True
+        return False
+
+    def get_task(self, task_id: str) -> Optional[Dict[str, Any]]:
+        """Return a task dict by ID (thread-safe copy)."""
+        with self._lock:
+            t = self._tasks.get(task_id)
+            return copy.deepcopy(t) if t else None
+
+    def get_all_tasks(self) -> List[Dict[str, Any]]:
+        """Return all tasks (thread-safe copies)."""
+        with self._lock:
+            return [copy.deepcopy(t) for t in self._tasks.values()]
+
+    @property
+    def is_alive(self) -> bool:
+        """Return whether the worker thread is alive."""
+        return self._thread is not None and self._thread.is_alive()
+
+    def _run(self) -> None:
+        """Worker loop: dequeue and execute tasks sequentially."""
+        while self._running:
+            try:
+                item = self._queue.get(timeout=0.5)
+            except queue.Empty:
+                continue
+
+            _priority, task_id = item
+            if task_id is _TRANSCRIPT_SENTINEL:
+                break
+
+            with self._lock:
+                task = self._tasks.get(task_id)
+                if task is None or task["status"] != TASK_STATUS_QUEUED:
+                    continue
+                task["status"] = TASK_STATUS_RUNNING
+
+            self._execute_task(task)
+
+            if self.on_task_complete:
+                try:
+                    self.on_task_complete()
+                except Exception:
+                    pass
+
+    def _execute_task(self, task: Dict[str, Any]) -> None:
+        """Run a single transcription task."""
+        import video as video_mod
+
+        video_path = task["video_path"]
+
+        # Probe video duration for progress estimation
+        duration = 0.0
+        props = video_mod.probe_video_properties(video_path)
+        if props:
+            duration = props.get("duration", 0.0)
+
+        # Load corrections for context keywords
+        manifest = load_transcripts_manifest()
+        corrections = manifest.get("corrections", [])
+        context_kw = get_corrections_keywords(corrections) or None
+
+        def _on_seg(end_time: float) -> None:
+            if duration > 0:
+                with self._lock:
+                    task["progress"] = min(end_time / duration, 0.99)
+
+        try:
+            result = transcribe_video(
+                video_path,
+                context_keywords=context_kw,
+                on_segment=_on_seg,
+            )
+            if result is None:
+                with self._lock:
+                    task["status"] = TASK_STATUS_FAILED
+                    task["error"] = "Transcription returned None"
+                    task["completed_at"] = datetime.now(timezone.utc).isoformat()
+                return
+
+            with self._lock:
+                task["status"] = TASK_STATUS_COMPLETED
+                task["progress"] = 1.0
+                task["result"] = {
+                    "segments": result["segments"],
+                    "language": result["language"],
+                    "model": result["model"],
+                    "source_file": result["source_file"],
+                    "transcribed_at": datetime.now(timezone.utc).isoformat(),
+                }
+                task["completed_at"] = datetime.now(timezone.utc).isoformat()
+
+        except Exception as exc:
+            with self._lock:
+                task["status"] = TASK_STATUS_FAILED
+                task["error"] = str(exc)
+                task["completed_at"] = datetime.now(timezone.utc).isoformat()

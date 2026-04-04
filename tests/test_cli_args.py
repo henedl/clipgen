@@ -30,6 +30,7 @@ def _base_args(**overrides):
         "titlecards": None,
         "filmstrip": None,
         "screenspace": False,
+        "transcripts": False,
         "pre_transcribe": None,
     }
     args.update(overrides)

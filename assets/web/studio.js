@@ -3220,6 +3220,10 @@
           var intakeTab = qs('.preview-tab[data-tab="intake"]');
           if (intakeTab) intakeTab.classList.remove("hidden");
         }
+        if (data.transcripts) {
+          var link = qs("#transcriptsLink");
+          if (link) link.classList.remove("hidden");
+        }
       })
       .catch(function () {});
   }

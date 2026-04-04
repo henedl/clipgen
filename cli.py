@@ -289,6 +289,11 @@ Note: Non-interactive mode (using -b, -l, -r, -C, -c, -p, -k, -S, -M, -R, or -T)
         help="Launch the Screenspace analysis interface for video frame analysis",
     )
     viewer_manifest.add_argument(
+        "--transcripts",
+        action="store_true",
+        help="Launch the Transcript workspace for viewing, editing, and managing transcriptions",
+    )
+    viewer_manifest.add_argument(
         "--gallery",
         type=str,
         nargs="?",
@@ -1120,6 +1125,7 @@ def main() -> None:
             timeline_viewer,
             studio_mode,
             getattr(args, "screenspace", False),
+            getattr(args, "transcripts", False),
         ]
         if any(conflicting):
             utils.error_print(
@@ -1151,12 +1157,45 @@ def main() -> None:
             timeline_viewer,
             studio_mode,
             insights_mode,
+            getattr(args, "transcripts", False),
         ]
         if any(conflicting):
             utils.error_print(
                 "--screenspace cannot be combined with mode, format, or --viewer/--regenerate/--studio/--insights flags.",
                 [
                     "Only -s (spreadsheet), -i/-o (directories), and -v (verbose) may be used alongside --screenspace."
+                ],
+            )
+            sys.exit(1)
+
+    transcripts_mode = getattr(args, "transcripts", False)
+    if transcripts_mode:
+        conflicting = [
+            args.batch,
+            args.lines,
+            args.range,
+            args.category,
+            args.cell,
+            args.participant,
+            args.keyword,
+            args.severity,
+            mixed_selectors,
+            args.reel,
+            args.chronologic,
+            args.screen,
+            args.gif,
+            args.viewer,
+            getattr(args, "regenerate", False),
+            timeline_viewer,
+            studio_mode,
+            insights_mode,
+            screenspace_mode,
+        ]
+        if any(conflicting):
+            utils.error_print(
+                "--transcripts cannot be combined with mode, format, or --viewer/--regenerate/--studio/--insights/--screenspace flags.",
+                [
+                    "Only -s (spreadsheet), -i/-o (directories), and -v (verbose) may be used alongside --transcripts."
                 ],
             )
             sys.exit(1)
@@ -1180,6 +1219,7 @@ def main() -> None:
             timeline_viewer,
             studio_mode,
             screenspace_mode,
+            transcripts_mode,
         ]
         if any(conflicting):
             utils.error_print(
@@ -1213,11 +1253,12 @@ def main() -> None:
             studio_mode,
             insights_mode,
             screenspace_mode,
+            transcripts_mode,
             gallery_arg is not None,
         ]
         if any(conflicting):
             utils.error_print(
-                "--pre-transcribe cannot be combined with mode, format, or --studio/--insights/--screenspace flags.",
+                "--pre-transcribe cannot be combined with mode, format, or --studio/--insights/--screenspace/--transcripts flags.",
                 [
                     "Only -s (spreadsheet), -i/-o (directories), and -v (verbose) may be used alongside --pre-transcribe."
                 ],
@@ -1331,6 +1372,13 @@ def main() -> None:
         server.start_combined_server(worksheet=None, default_page="screenspace")
         sys.exit(0)
 
+    # Standalone transcripts: no spreadsheet needed, discovers videos from input dir
+    if getattr(args, "transcripts", False) and not args.spreadsheet:
+        import server
+
+        server.start_combined_server(worksheet=None, default_page="transcripts")
+        sys.exit(0)
+
     # Standalone gallery: generate interval captures + gallery viewer, no spreadsheet needed
     if gallery_arg is not None:
         _run_gallery_cli(args)
@@ -1387,6 +1435,14 @@ def main() -> None:
 
                 server.start_combined_server(
                     worksheet=worksheet, default_page="screenspace"
+                )
+                sys.exit(0)
+
+            if getattr(args, "transcripts", False):
+                import server
+
+                server.start_combined_server(
+                    worksheet=worksheet, default_page="transcripts"
                 )
                 sys.exit(0)
 

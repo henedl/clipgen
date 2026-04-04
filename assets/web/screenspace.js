@@ -335,6 +335,7 @@
     fetch("../api/status").then(function (r) { return r.json(); }).then(function (data) {
       if (data.studio) qs("#studioLink").classList.remove("hidden");
       if (data.insights) qs("#insightsLink").classList.remove("hidden");
+      if (data.transcripts) qs("#transcriptsLink").classList.remove("hidden");
     }).catch(function () {});
   }
 
