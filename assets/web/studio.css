@@ -2271,3 +2271,43 @@ html[data-theme="dark"] .log-panel {
 .queue-card-intake .queue-card-ref {
   font-size: var(--text-xs);
 }
+
+/* Transcript Intake */
+
+.tr-intake-toggle {
+  font-size: var(--text-xs);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+  color: var(--color-text-dim);
+}
+
+.tr-intake-queue-card .queue-card-thumb {
+  background: var(--color-surface-alt);
+  min-height: 36px;
+}
+
+.tr-intake-card-category-dot {
+  position: absolute;
+  top: 4px;
+  left: 4px;
+  width: 10px;
+  height: 10px;
+  border-radius: var(--radius-full);
+  border: 1px solid rgba(255, 255, 255, 0.5);
+}
+
+.tr-intake-card-text {
+  font-size: var(--text-xs);
+  color: var(--color-text-dim);
+  line-height: 1.3;
+  max-height: 2.6em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: block;
+}
+
+.tr-intake-filter-cat {
+  font-size: var(--text-xs);
+}
