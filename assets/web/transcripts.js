@@ -16,7 +16,7 @@
     searchQuery: "",
     searchResults: null,
     activeSegmentIndex: -1,
-    editingSegmentId: null,
+    editingWordEl: null,
     pollTimer: null,
   };
 
@@ -243,6 +243,7 @@
   function renderSegments() {
     var container = qs("#segmentList");
     var empty = qs("#transcriptEmpty");
+    state.editingWordEl = null;
 
     if (state.segments.length === 0) {
       container.innerHTML = "";
@@ -258,7 +259,17 @@
       var correctedClass = seg.corrected ? " segment-corrected" : "";
       html += '<div class="segment-row' + activeClass + correctedClass + '" data-index="' + i + '" data-start="' + seg.start + '">';
       html += '<span class="segment-timestamp">' + fmtTime(seg.start) + '</span>';
-      html += '<span class="segment-text" data-id="' + escapeHtml(seg.id) + '">' + escapeHtml(seg.text) + '</span>';
+      // Split text into word spans
+      var tokens = seg.text.split(/(\s+)/);
+      var wordHtml = "";
+      for (var w = 0; w < tokens.length; w++) {
+        if (/^\s+$/.test(tokens[w])) {
+          wordHtml += tokens[w];
+        } else if (tokens[w]) {
+          wordHtml += '<span class="segment-word" data-original="' + escapeHtml(tokens[w]) + '">' + escapeHtml(tokens[w]) + '</span>';
+        }
+      }
+      html += '<span class="segment-text" data-id="' + escapeHtml(seg.id) + '">' + wordHtml + '</span>';
       html += '</div>';
     }
     container.innerHTML = html;
@@ -272,16 +283,13 @@
           var start = parseFloat(row.getAttribute("data-start"));
           seekVideo(start);
         });
-        row.querySelector(".segment-text").addEventListener("click", function (e) {
-          e.stopPropagation();
-          var start = parseFloat(row.getAttribute("data-start"));
-          seekVideo(start);
-        });
-        row.querySelector(".segment-text").addEventListener("dblclick", function (e) {
-          e.stopPropagation();
-          var segId = this.getAttribute("data-id");
-          startEditing(segId, this);
-        });
+        var wordSpans = row.querySelectorAll(".segment-word");
+        for (var k = 0; k < wordSpans.length; k++) {
+          wordSpans[k].addEventListener("click", function (e) {
+            e.stopPropagation();
+            startWordEditing(this);
+          });
+        }
       })(rows[j]);
     }
   }
@@ -356,63 +364,95 @@
     }
   }
 
-  // ---- Inline editing ----
+  // ---- Inline word editing ----
 
-  function startEditing(segmentId, textEl) {
-    if (state.editingSegmentId === segmentId) return;
-    state.editingSegmentId = segmentId;
+  function startWordEditing(wordEl) {
+    if (state.editingWordEl === wordEl) return;
+    if (state.editingWordEl) finishWordEditing(state.editingWordEl);
 
-    var currentText = textEl.textContent;
-    var input = document.createElement("textarea");
-    input.className = "segment-text-input";
-    input.value = currentText;
-    input.autocomplete = "off";
-    input.rows = 2;
-    textEl.innerHTML = "";
-    textEl.appendChild(input);
-    input.focus();
-    input.select();
+    state.editingWordEl = wordEl;
+    var original = wordEl.getAttribute("data-original");
 
-    function save() {
-      var newText = input.value.trim();
-      state.editingSegmentId = null;
-      if (!newText || newText === currentText) {
-        textEl.textContent = currentText;
-        return;
-      }
-      textEl.textContent = newText;
-      saveSegmentEdit(segmentId, newText);
+    wordEl.setAttribute("contenteditable", "true");
+    wordEl.setAttribute("spellcheck", "false");
+    wordEl.classList.add("segment-word-editing");
+
+    var range = document.createRange();
+    range.selectNodeContents(wordEl);
+    var sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(range);
+    wordEl.focus();
+
+    function onBlur() {
+      wordEl.removeEventListener("blur", onBlur);
+      wordEl.removeEventListener("keydown", onKeydown);
+      wordEl.removeEventListener("paste", onPaste);
+      finishWordEditing(wordEl);
     }
 
-    input.addEventListener("blur", save);
-    input.addEventListener("keydown", function (e) {
-      if (e.key === "Enter" && !e.shiftKey) {
+    function onKeydown(e) {
+      if (e.key === "Enter") {
         e.preventDefault();
-        input.blur();
+        wordEl.blur();
       }
       if (e.key === "Escape") {
-        state.editingSegmentId = null;
-        textEl.textContent = currentText;
+        wordEl.textContent = original;
+        wordEl.blur();
       }
-    });
+      if (e.key === "Tab") {
+        e.preventDefault();
+        wordEl.blur();
+      }
+    }
+
+    function onPaste(e) {
+      e.preventDefault();
+      var text = (e.clipboardData || window.clipboardData).getData("text/plain");
+      text = text.replace(/\s+/g, " ").trim();
+      document.execCommand("insertText", false, text);
+    }
+
+    wordEl.addEventListener("blur", onBlur);
+    wordEl.addEventListener("keydown", onKeydown);
+    wordEl.addEventListener("paste", onPaste);
   }
 
-  function saveSegmentEdit(segmentId, newText) {
-    var pid = state.selectedParticipant;
-    if (!pid) return;
+  function finishWordEditing(wordEl) {
+    var original = wordEl.getAttribute("data-original");
+    var newText = wordEl.textContent.trim();
 
-    apiPut("api/transcript/" + pid + "/segment", {
-      segment_id: segmentId,
-      text: newText,
+    wordEl.removeAttribute("contenteditable");
+    wordEl.classList.remove("segment-word-editing");
+
+    if (state.editingWordEl === wordEl) state.editingWordEl = null;
+
+    if (!newText) {
+      wordEl.textContent = original;
+      return;
+    }
+    if (newText === original) return;
+
+    wordEl.textContent = newText;
+    wordEl.setAttribute("data-original", newText);
+    saveWordCorrection(original, newText);
+  }
+
+  function saveWordCorrection(fromText, toText) {
+    apiPost("api/corrections", {
+      from: fromText,
+      to: toText,
     }).then(function (data) {
       if (data.ok && data.correction) {
         showToast("Correction created");
-        // Reload transcript to show updated corrections
-        loadTranscript(pid);
-        loadCorrections();
+        var pid = state.selectedParticipant;
+        if (pid) {
+          loadTranscript(pid);
+          loadCorrections();
+        }
       }
     }).catch(function () {
-      showToast("Failed to save edit");
+      showToast("Failed to save correction");
     });
   }
 
