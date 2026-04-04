@@ -19,7 +19,32 @@ on:
       - ".github/workflows/tests.yml"
 
 jobs:
+  gate:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    outputs:
+      skip: ${{ steps.check.outputs.skip }}
+    steps:
+      - name: Check if commit is from a merged PR
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          REPO="${{ github.repository }}"
+          SHA="${{ github.sha }}"
+          MERGED=$(gh api "repos/${REPO}/commits/${SHA}/pulls" \
+            --jq '[.[] | select(.state == "closed" and .merged_at != null)] | length')
+          if [[ "$MERGED" -gt 0 ]]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "Commit $SHA is from a merged PR — skipping redundant checks"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+            echo "Commit $SHA is a direct push — running checks"
+          fi
+
   smoke-tests:
+    needs: [gate]
+    if: always() && (needs.gate.outputs.skip != 'true')
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -136,6 +161,8 @@ jobs:
           fi
 
   lint:
+    needs: [gate]
+    if: always() && (needs.gate.outputs.skip != 'true')
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -153,6 +180,8 @@ jobs:
         run: uvx ruff format --check
 
   typecheck:
+    needs: [gate]
+    if: always() && (needs.gate.outputs.skip != 'true')
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
