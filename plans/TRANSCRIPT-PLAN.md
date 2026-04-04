@@ -24,6 +24,10 @@ Transcripts in clipgen are currently a "write to disk and forget" feature. This 
 - **Dedicated workspace at `/transcripts/`** — a full-page curation environment (own Flask blueprint, own HTML/JS/CSS assets) following the Screenspace pattern. Works standalone with source media files; no spreadsheet required.
 - **Transcript segments are NOT events.** Segments are dense continuous coverage (thousands per video); Screenspace events are sparse point detections (dozens per analysis). Clustering is nonsensical for continuous data. The useful interaction between transcripts and events is cross-referencing by timestamp, not unification into a single model.
 - **Studio Transcript Intake tab** — a third tab in Studio's preview area (alongside Sheet Preview and Screenspace Intake) for browsing and searching transcript content without leaving Studio. Appears when source transcripts exist in the manifest. Remains a separate tab from Screenspace Intake — different interaction model (search-based vs. detection-based).
+- **Segment IDs are a manifest-layer concept.** Raw `TranscriptSegment` remains `{start, end, text}`. The `id` field (e.g. `"P01:42"`) is assigned when segments are stored in `transcripts_manifest.json`, not at transcription time. Filter results and file output use the base schema without IDs.
+- **Corrections are read-time post-processing.** Raw Whisper output is stored verbatim in the manifest. Corrections are applied as a transform layer when serving segments via API or embedding on artifacts. This means re-transcription cleanly replaces raw segments and existing corrections auto-apply to new text.
+- **Sidecar transcript cache is deprecated.** The `.transcript.json` files next to source videos are replaced by `transcripts_manifest.json` as the single persistence layer. Remove `save_transcript_cache()` and `load_transcript_cache()` from `transcripts.py` and their call sites in `clipgen.py:_transcribe_segments()`.
+- **Re-transcription uses badge-only invalidation.** When a participant is re-transcribed, derived clip `transcript` fields become stale. The workspace surfaces a "transcript outdated" indicator. Full cascade re-derivation is deferred — researchers re-generate clips to pick up updates.
 
 ---
 
@@ -38,7 +42,7 @@ Embed transcript data on artifacts and build the corrections system.
 - [ ] Store full-video transcript results in a separate `transcripts_manifest.json` under a `source_transcripts` key, keyed by participant ID
 - [ ] Add `TRANSCRIPTS_MANIFEST_FILENAME` to `config.py` alongside `SCREENSPACE_MANIFEST_FILENAME`
 - [ ] Add `load_transcripts_manifest()` / `save_transcripts_manifest()` to `transcripts.py` following the `load_screenspace_manifest()` / `save_screenspace_manifest()` pattern
-- [ ] Schema: `{"source_transcripts": {"P01": {"segments": [...], "language": str, "model": str, "source_file": str, "transcribed_at": iso8601}}, "corrections": [...]}`
+- [ ] Schema: `{"source_transcripts": {"P01": {"segments": [{start, end, text}, ...], "language": str, "model": str, "source_file": str, "transcribed_at": iso8601}}, "corrections": [...]}` — segments store raw Whisper output; `id` field is added at manifest storage time (e.g. `"P01:42"`); corrections are applied as a read-time layer, not stored on segments
 - [ ] Operation is idempotent: re-running `--pre-transcribe` skips participants already present in `source_transcripts` within the transcripts manifest; force-retranscribe with an explicit flag if needed
 - [ ] Requires a spreadsheet (to resolve participant IDs and source video paths); can combine with `-s`, `-i/-o`, `-v`
 - [ ] Cannot combine with mode flags or `--studio`/`--insights`
@@ -46,22 +50,32 @@ Embed transcript data on artifacts and build the corrections system.
 ### Transcript as artifact property
 
 - [ ] Add `transcript` field to clip artifact records in `process_clips()` — after `filter_segments()`, embed the segments list directly on the clip's artifact dict
-- [ ] Source priority: if a source transcript exists in the transcripts manifest for the clip's participant, derive via `filter_segments()`; otherwise fall back to on-the-fly Whisper transcription (if `--transcribe` or `TRANSCRIBE_ENABLED`)
-- [ ] Segment schema: `{"id": str, "start": float, "end": float, "text": str}` — `id` is index-based (e.g., `"P01:42"` for participant + segment index) for provenance tracking
-- [ ] Add merged `transcript` field to reel artifact records — assembled from constituent clips' transcript segments during reel building, ordered to match the reel
+- [ ] Source priority: if a source transcript exists in the transcripts manifest for the clip's participant, derive via `filter_segments()`; otherwise fall back to on-the-fly Whisper transcription (if `--transcribe` or `TRANSCRIBE_ENABLED`). The sidecar `.transcript.json` cache is removed.
+- [ ] Segment schema in manifest: `{"id": str, "start": float, "end": float, "text": str}` — `id` is index-based (e.g., `"P01:42"` for participant + segment index) for provenance tracking. Raw `TranscriptSegment` TypedDict stays `{start, end, text}` — `id` is assigned at manifest storage, not transcription.
+- [ ] Add merged `transcript` field to reel artifact records — assembled from constituent clips' transcript segments during reel building, ordered to match the reel. Segment timestamps in the merged reel transcript must be offset by cumulative titlecard/transition durations. Use the reel's `components` metadata (which stores per-component start/end in reel-relative time) to compute offsets.
 - [ ] Keep standalone transcript file output and transcript-type manifest entries as-is (opt-in via `--transcribe`, for researchers who just want text files)
 
 ### Corrections dictionary
 
 - [ ] Corrections stored inside `transcripts_manifest.json` under the `corrections` key (study-local only; global dictionary deferred until multi-study need is proven)
 - [ ] Schema: `{"corrections": [{"id": str, "from": str, "to": str, "created": iso8601}]}`
-- [ ] Load corrections from the transcripts manifest at transcription time
+- [ ] Load corrections from the transcripts manifest at transcription time. Corrections are applied at read-time as post-processing on raw segments. Raw Whisper output in `source_transcripts` is never mutated. This enables clean re-transcription (replace raw segments, corrections auto-apply).
 
 ### Corrections integration with Whisper
 
 - [ ] Feed correction targets (the `"to"` values) as `context_keywords` to `transcribe_video()` — these get appended to Whisper's `initial_prompt`
 - [ ] Post-processing pass after transcription: apply known `"from" → "to"` corrections to segment text
 - [ ] Auto-applied corrections should be flagged or logged so the researcher knows what was changed
+
+### Sidecar cache removal
+
+- [ ] Remove sidecar cache: delete `save_transcript_cache()` and `load_transcript_cache()` from `transcripts.py`; remove cache call sites in `clipgen.py:_transcribe_segments()`
+- [ ] Update `_transcribe_segments()` in `clipgen.py` to check `transcripts_manifest.json` for pre-existing source transcripts. New read priority: in-memory cache -> transcripts manifest -> live Whisper.
+
+### Manifest-layer enrichment
+
+- [ ] Add `apply_corrections(segments, corrections)` function to `transcripts.py` — applies `from -> to` substitutions to segment text, returns corrected copy without mutating input
+- [ ] Assign segment IDs at manifest storage time: `"{participant}:{index}"` format, computed in `save_transcripts_manifest()`
 
 ---
 
@@ -73,9 +87,12 @@ Dedicated page at `/transcripts/` for transcript curation, editing, and transcri
 
 - [ ] New `transcripts_server.py` — Flask blueprint registered at `/transcripts/`
 - [ ] `_init_transcripts_state()` — reuse the shared participant video discovery utility (factored out of Screenspace's `_discover_participant_videos`), loads source transcripts from transcripts manifest
-- [ ] Register blueprint in `start_combined_server()` alongside Studio, Insights, and Screenspace
+- [ ] Factor `_discover_participant_videos()` from `screenspace_server.py` into a shared utility in `utils.py` or `files.py`; both Screenspace and Transcript workspaces call it
+- [ ] Always register transcript blueprint in `start_combined_server()` (like Screenspace), not gated by `--transcripts`. The `--transcripts` flag controls whether `TranscriptWorker` starts and the workspace is the active landing page.
 - [ ] `--transcripts` CLI flag to launch the workspace; works standalone (no spreadsheet required) as long as source media files exist in the input directory
 - [ ] Can combine with `-i/-o`, `-v`; cannot combine with mode flags, format flags, or `--viewer`
+- [ ] Video serving: add `/transcripts/media/<filename>` route serving source videos from the input directory (following Screenspace's `/screenspace/media/` pattern)
+- [ ] Manifest write synchronization: use `threading.Lock` for all `transcripts_manifest.json` writes (following Screenspace's `_manifest_lock` pattern in `screenspace_server.py`)
 
 ### Assets
 
@@ -112,12 +129,13 @@ The workspace can trigger and monitor transcription jobs, not just view results.
   - `POST /transcripts/api/transcribe` — enqueue participant(s) for transcription
   - `GET /transcripts/api/transcribe/status` — poll transcription job status
 - [ ] Transcription results are stored to `source_transcripts` in the transcripts manifest, same as `--pre-transcribe`
+- [ ] Re-transcription staleness: when a participant is re-transcribed, flag any clip artifacts with embedded `transcript` fields for that participant as stale. Surface a "transcript outdated" badge in the workspace UI.
 
 ### API endpoints
 
 - [ ] `GET /transcripts/api/participants` — list discovered source videos with transcription status
 - [ ] `GET /transcripts/api/transcript/<participant>` — return full source transcript segments for a participant
-- [ ] `PUT /transcripts/api/transcript/<participant>/segment` — edit a segment's text, identified by `{start, end}` timestamps (not array index — indices change on re-transcription); creates a correction entry
+- [ ] `PUT /transcripts/api/transcript/<participant>/segment` — edit a segment's text, identified by segment `id` (not array index or timestamps — indices change on re-transcription, timestamps may not be unique); creates a correction entry
 - [ ] `GET /transcripts/api/vtt/<participant>` — serve transcript data as WebVTT for native `<track>` subtitle support (`transcripts.py` already has `_format_vtt()`)
 - [ ] `GET /transcripts/api/corrections` — list all study-local corrections
 - [ ] `POST /transcripts/api/corrections` — add a correction manually
@@ -238,3 +256,5 @@ Not in scope for Phases 1–4, but the segment schema is designed to accommodate
 - **Pre-transcribe runtime** — full-session transcription is slow; the idempotency guarantee (skip already-stored participants) means re-running is safe and partial runs can be completed incrementally
 - **Background transcription in workspace** — running Whisper in a background thread while serving the Flask app; need to ensure thread safety for manifest writes and that the GIL doesn't starve the server. Same single-threaded-by-nature constraint as Screenspace's task queue worker.
 - **Standalone discovery** — the workspace discovers source media from the input directory without a spreadsheet. Reuses the shared video discovery utility (factored from Screenspace's `_discover_participant_videos`). Participant ID extraction from filenames (`{study}_{participant}.mp4`) must be robust to naming variations.
+- **Sidecar cache removal** — researchers who relied on `.transcript.json` files for non-manifest workflows will lose that caching. The manifest becomes the only persistence path. If this causes friction, consider a lightweight in-memory LRU cache in `_transcribe_segments()` as a session-only speedup.
+- **Always-on blueprint overhead** — registering the transcript blueprint unconditionally means its routes exist even when no transcripts have been generated. Endpoints return empty results. The `/api/status` response should clearly indicate whether transcript data is available vs. whether the endpoint is reachable.
