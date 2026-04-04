@@ -87,6 +87,8 @@ def serve_media(filename: str) -> FlaskResponse:
 @transcripts_bp.route("/api/participants")
 def api_participants() -> FlaskResponse:
     """List discovered source videos with transcription status."""
+    import viewer
+
     result = []
     with _manifest_lock:
         src = _manifest.get("source_transcripts", {})
@@ -107,6 +109,30 @@ def api_participants() -> FlaskResponse:
                 info["model"] = entry.get("model", "")
                 info["transcribed_at"] = entry.get("transcribed_at", "")
             result.append(info)
+
+    # Check for stale artifacts (transcript outdated relative to source)
+    artifacts = viewer.load_manifest_artifacts()
+    for info in result:
+        if not info.get("has_transcript"):
+            info["has_stale_artifacts"] = False
+            continue
+        pid = info["id"]
+        current_ta = info.get("transcribed_at", "")
+        if not current_ta:
+            info["has_stale_artifacts"] = False
+            continue
+        has_stale = False
+        for art in artifacts:
+            if art.get("participant") != pid:
+                continue
+            if not art.get("transcript"):
+                continue
+            art_tv = art.get("transcript_version", "")
+            if not art_tv or art_tv < current_ta:
+                has_stale = True
+                break
+        info["has_stale_artifacts"] = has_stale
+
     return jsonify({"ok": True, "participants": result})
 
 

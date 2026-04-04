@@ -182,7 +182,7 @@
     state.participants.forEach(function (p) {
       var opt = document.createElement("option");
       opt.value = p.id;
-      opt.textContent = p.id + (p.has_transcript ? " \u2713" : "");
+      opt.textContent = p.id + (p.has_transcript ? " \u2713" : "") + (p.has_stale_artifacts ? " \u26a0" : "");
       sel.appendChild(opt);
     });
     if (state.selectedParticipant) {
@@ -240,12 +240,21 @@
     });
     if (p.has_transcript) {
       statusEl.textContent = p.segment_count + " segments";
+      if (p.has_stale_artifacts) {
+        statusEl.textContent += " \u2022 artifacts outdated";
+        statusEl.classList.add("transcript-stale");
+      } else {
+        statusEl.classList.remove("transcript-stale");
+      }
     } else if (taskForPid && taskForPid.status === "running") {
       statusEl.textContent = "transcribing\u2026 " + Math.round((taskForPid.progress || 0) * 100) + "%";
+      statusEl.classList.remove("transcript-stale");
     } else if (taskForPid && taskForPid.status === "queued") {
       statusEl.textContent = "queued";
+      statusEl.classList.remove("transcript-stale");
     } else {
       statusEl.textContent = "not transcribed";
+      statusEl.classList.remove("transcript-stale");
     }
 
     // Load transcript
@@ -379,8 +388,11 @@
     for (var i = 0; i < segments.length; i++) {
       var seg = segments[i];
       var segId = pid + ":" + i;
+      var cachedColor = _streamingMarks[segId];
+      var markClass = "segment-mark" + (cachedColor ? " marked" : "");
+      var markStyle = cachedColor ? ' style="background:' + cachedColor + '"' : "";
       html += '<div class="segment-row segment-streaming" data-index="' + i + '" data-start="' + seg.start + '">';
-      html += '<span class="segment-mark" data-segment-id="' + escapeHtml(segId) + '"></span>';
+      html += '<span class="' + markClass + '" data-segment-id="' + escapeHtml(segId) + '"' + markStyle + '></span>';
       html += '<span class="segment-timestamp">' + fmtTime(seg.start) + '</span>';
       html += '<span class="segment-text">' + escapeHtml(seg.text) + '</span>';
       html += '</div>';
@@ -412,6 +424,9 @@
       container.scrollTop = container.scrollHeight;
     }
   }
+
+  // Cache marks made during streaming so they survive DOM rebuilds
+  var _streamingMarks = {};
 
   var _pendingSeekTime = null;
   var _seekRaf = 0;
@@ -692,6 +707,7 @@
         showToast("Marked");
         markEl.classList.add("marked");
         markEl.style.background = cat.color;
+        _streamingMarks[segmentId] = cat.color;
       }
     });
   }
@@ -1073,7 +1089,11 @@
       if (!p.has_transcript && (!taskByPid[p.id] || taskByPid[p.id].status === "failed" || taskByPid[p.id].status === "cancelled")) {
         html += '<div class="queue-item-action"><button class="btn btn-small" data-transcribe="' + escapeHtml(p.id) + '">Transcribe</button></div>';
       } else if (p.has_transcript && (!taskByPid[p.id] || taskByPid[p.id].status === "completed")) {
-        html += '<div class="queue-item-action"><button class="btn btn-small" data-retranscribe="' + escapeHtml(p.id) + '">Re-transcribe</button></div>';
+        html += '<div class="queue-item-action"><button class="btn btn-small" data-retranscribe="' + escapeHtml(p.id) + '">Re-transcribe</button>';
+        if (p.has_stale_artifacts) {
+          html += '<span class="queue-stale-badge">artifacts outdated</span>';
+        }
+        html += '</div>';
       }
 
       html += '</div>';
@@ -1175,6 +1195,7 @@
 
       // Refresh participants and transcript as each task completes
       if (newlyCompleted.length > 0) {
+        _streamingMarks = {};
         loadParticipants().then(function () {
           if (state.selectedParticipant && newlyCompleted.indexOf(state.selectedParticipant) >= 0) {
             state.streamingParticipant = null;
