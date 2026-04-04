@@ -46,11 +46,20 @@ a = Analysis(
 # operations; only OpenCV's image-processing functions (no VideoCapture) are
 # needed at runtime.
 _FFMPEG_LIB_PREFIXES = (
-    "libav",        # libavcodec, libavformat, libavfilter, libavutil, libavdevice
-    "libsw",        # libswresample, libswscale
-    "libpostproc",  # FFmpeg post-processing
-    "libx264",      # GPL 2.0 — H.264 encoder
-    "libx265",      # GPL 2.0 — H.265 encoder
+    # FFmpeg core libraries (LGPL 2.1, but tainted GPL by bundled codecs)
+    "libavcodec",
+    "libavdevice",
+    "libavfilter",
+    "libavformat",
+    "libavutil",
+    "libswresample",
+    "libswscale",
+    "libpostproc",
+    # GPL 2.0 codec libraries
+    "libx264",
+    "libx265",
+    # NOTE: libavif (AVIF image codec, BSD) is NOT excluded — it is not part
+    # of FFmpeg and is needed by OpenCV for image I/O.
 )
 
 def _is_ffmpeg_lib(name):
