@@ -133,7 +133,7 @@ def transcribe_video(
     language: Optional[str] = None,
     initial_prompt: Optional[str] = None,
     context_keywords: Optional[List[str]] = None,
-    on_segment: Optional[Callable[[float], None]] = None,
+    on_segment: Optional[Callable[[float, "TranscriptSegment"], None]] = None,
 ) -> Optional[TranscriptResult]:
     """Transcribe a video file and return timestamped segments.
 
@@ -143,7 +143,8 @@ def transcribe_video(
         initial_prompt: Override the default initial prompt.
         context_keywords: Extra keywords to append to the prompt.
         on_segment: Optional callback invoked after each segment with the
-            segment's end time (seconds).  Useful for progress tracking.
+            segment's end time (seconds) and the TranscriptSegment.
+            Useful for progress tracking and streaming partial results.
 
     Returns:
         TranscriptResult with segments, or None on failure.
@@ -180,7 +181,7 @@ def transcribe_video(
                 continue
             segments.append(TranscriptSegment(start=seg.start, end=seg.end, text=text))
             if on_segment is not None:
-                on_segment(seg.end)
+                on_segment(seg.end, segments[-1])
         detected_lang = (
             info.language if hasattr(info, "language") else (lang or "unknown")
         )
@@ -631,6 +632,7 @@ def create_transcript_task(participant: str, video_path: str) -> Dict[str, Any]:
         "video_path": video_path,
         "status": TASK_STATUS_QUEUED,
         "progress": 0.0,
+        "partial_segments": [],
         "result": None,
         "error": None,
         "created_at": datetime.now(timezone.utc).isoformat(),
@@ -749,10 +751,11 @@ class TranscriptWorker:
         corrections = manifest.get("corrections", [])
         context_kw = get_corrections_keywords(corrections) or None
 
-        def _on_seg(end_time: float) -> None:
-            if duration > 0:
-                with self._lock:
+        def _on_seg(end_time: float, segment: TranscriptSegment) -> None:
+            with self._lock:
+                if duration > 0:
                     task["progress"] = min(end_time / duration, 0.99)
+                task["partial_segments"].append(segment)
 
         try:
             result = transcribe_video(
@@ -764,12 +767,14 @@ class TranscriptWorker:
                 with self._lock:
                     task["status"] = TASK_STATUS_FAILED
                     task["error"] = "Transcription returned None"
+                    task["partial_segments"] = []
                     task["completed_at"] = datetime.now(timezone.utc).isoformat()
                 return
 
             with self._lock:
                 task["status"] = TASK_STATUS_COMPLETED
                 task["progress"] = 1.0
+                task["partial_segments"] = []
                 task["result"] = {
                     "segments": result["segments"],
                     "language": result["language"],
@@ -783,4 +788,5 @@ class TranscriptWorker:
             with self._lock:
                 task["status"] = TASK_STATUS_FAILED
                 task["error"] = str(exc)
+                task["partial_segments"] = []
                 task["completed_at"] = datetime.now(timezone.utc).isoformat()
