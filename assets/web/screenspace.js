@@ -575,6 +575,19 @@
     btn.appendChild(chevron);
   }
 
+  var FAST_SCAN_DESCRIPTIONS = {
+    color: "Lower resolution, skips unchanged frames",
+    change: "Lower resolution, skips unchanged frames",
+    similarity: "Lower resolution, skips unchanged frames",
+    text: "Skips unchanged frames",
+    numbers: "Skips unchanged frames",
+    template: "Downscales template 2\u00D7, skips unchanged frames",
+    flow: "Lower resolution, skips unchanged frames",
+    scene: "Lower resolution, skips unchanged frames",
+    inactivity: "Lower resolution, skips unchanged frames",
+    multitool: "Skips unchanged frames, widens interval"
+  };
+
   function renderScanModePicker() {
     var wrap = qs("#runScanModePicker");
     if (!wrap) return;
@@ -590,12 +603,29 @@
     icon.style.webkitMaskImage = url;
     btn.appendChild(icon);
 
+    var tip = el("div", "scan-toggle-tooltip");
+    document.body.appendChild(tip);
+
     function updateState() {
       var isFast = state.scanMode === "fast";
       btn.classList.toggle("active", isFast);
-      btn.setAttribute("data-tooltip", isFast ? "Fast scan enabled" : "Enable fast scan");
+      var label = isFast ? "Fast scan enabled" : "Enable fast scan";
+      var desc = FAST_SCAN_DESCRIPTIONS[state.activeWorkflow];
+      if (desc) label += "\n" + desc;
+      tip.textContent = label;
     }
     updateState();
+    btn._updateScanState = updateState;
+
+    btn.addEventListener("mouseenter", function () {
+      var r = btn.getBoundingClientRect();
+      tip.style.left = (r.left + r.width / 2) + "px";
+      tip.style.top = (r.top - tip.offsetHeight - 6) + "px";
+      tip.classList.add("visible");
+    });
+    btn.addEventListener("mouseleave", function () {
+      tip.classList.remove("visible");
+    });
 
     btn.addEventListener("click", function () {
       state.scanMode = state.scanMode === "fast" ? "normal" : "fast";
@@ -3026,6 +3056,8 @@
     // Hide scan mode picker for timelapse (fast scan doesn't apply)
     var scanPicker = qs("#runScanModePicker");
     if (scanPicker) scanPicker.style.display = type === "timelapse" ? "none" : "";
+    var scanBtn = scanPicker && scanPicker.querySelector(".scan-toggle-btn");
+    if (scanBtn && scanBtn._updateScanState) scanBtn._updateScanState();
 
     updateRunButton();
   }
