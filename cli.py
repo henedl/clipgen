@@ -10,6 +10,7 @@ import argparse
 import io
 import os
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, List, NamedTuple, Optional, Tuple
 
@@ -47,8 +48,8 @@ def parse_arguments() -> argparse.Namespace:
 
     Returns:
         argparse.Namespace with mode flags/values, spreadsheet, yes, verbose, screen, gif,
-        transcribe, transcript_format, viewer, manifest, timeline_viewer, input, output,
-        titlecards, and related attributes.
+        transcribe, transcript_format, pre_transcribe, viewer, manifest, timeline_viewer,
+        input, output, titlecards, and related attributes.
     """
     parser = argparse.ArgumentParser(
         description=(
@@ -215,6 +216,13 @@ Note: Non-interactive mode (using -b, -l, -r, -C, -c, -p, -k, -S, -M, -R, or -T)
         choices=["md", "srt", "vtt"],
         metavar="FMT",
         help="Transcript format: md (default), srt, or vtt",
+    )
+    transcription.add_argument(
+        "--pre-transcribe",
+        nargs="*",
+        metavar="ID",
+        default=None,
+        help="Pre-transcribe source videos. No IDs = all participants. Specify IDs to transcribe specific participants (e.g., P01 P03).",
     )
 
     paths = parser.add_argument_group("spreadsheet & directories")
@@ -768,6 +776,97 @@ def _run_gallery_cli(args: argparse.Namespace) -> None:
         utils.info_print(f"Gallery viewer created: {gallery_path}")
 
 
+def _run_pre_transcribe(worksheet: Any, args: Any) -> None:
+    """Pre-transcribe source videos for specified participants."""
+    import transcripts
+
+    ctx = spreadsheet.build_sheet_context(worksheet)
+    if ctx is None:
+        utils.error_print("Cannot build sheet context.")
+        sys.exit(1)
+
+    available = spreadsheet.get_participant_list(
+        ctx.header_row, ctx.id_cell, ctx.num_participants
+    )
+
+    requested_ids = getattr(args, "pre_transcribe", [])
+    if not requested_ids:
+        target_ids = list(available)
+    else:
+        target_ids = []
+        for raw_id in requested_ids:
+            pid = utils.normalize_participant_id(raw_id).strip()
+            if pid in available:
+                target_ids.append(pid)
+            else:
+                utils.warning_print(
+                    f"Participant '{raw_id}' not found in spreadsheet. "
+                    f"Available: {', '.join(available)}"
+                )
+
+    if not target_ids:
+        utils.error_print("No valid participants to transcribe.")
+        return
+
+    manifest = transcripts.load_transcripts_manifest()
+    source_transcripts = manifest["source_transcripts"]
+    corrections = manifest["corrections"]
+    context_keywords = transcripts.get_corrections_keywords(corrections) or None
+
+    skipped = 0
+    transcribed = 0
+
+    for pid in target_ids:
+        if pid in source_transcripts:
+            utils.info_print(f"Skipping {pid}: already transcribed.")
+            skipped += 1
+            continue
+
+        col_idx = spreadsheet.find_participant_column(ctx.header_row, ctx.id_cell, pid)
+        override = None
+        if (
+            col_idx is not None
+            and ctx.filename_row_idx is not None
+            and ctx.filename_row_idx < len(ctx.sheet_data)
+            and col_idx < len(ctx.sheet_data[ctx.filename_row_idx])
+        ):
+            override = ctx.sheet_data[ctx.filename_row_idx][col_idx].strip() or None
+
+        video_filename = files.get_source_video_filename(ctx.study_name, pid, override)
+        video_path = utils.resolve_input_path(video_filename)
+        if not video_path.is_file():
+            utils.error_print(f"Source video not found for {pid}: {video_path}")
+            continue
+
+        utils.info_print(f"Transcribing {pid}: {video_path.name}...")
+        result = transcripts.transcribe_video(
+            str(video_path),
+            context_keywords=context_keywords,
+        )
+        if result is None:
+            utils.error_print(f"Transcription failed for {pid}.")
+            continue
+
+        source_transcripts[pid] = {
+            "segments": [
+                {"start": s["start"], "end": s["end"], "text": s["text"]}
+                for s in result["segments"]
+            ],
+            "language": result["language"],
+            "model": result["model"],
+            "source_file": result["source_file"],
+            "transcribed_at": datetime.now(timezone.utc).isoformat(),
+        }
+        transcribed += 1
+
+        transcripts.save_transcripts_manifest(source_transcripts, corrections)
+        utils.info_print(f"  {pid}: {len(result['segments'])} segments stored.")
+
+    utils.info_print(
+        f"Pre-transcription complete: {transcribed} transcribed, {skipped} skipped."
+    )
+
+
 def _run_timeline_viewer_mode(worksheet: Any, args: Any) -> None:
     """Export all clips via batch mode and generate a per-participant timeline viewer."""
     clips_list = spreadsheet.generate_list(worksheet, "batch", skip_prompts=True)
@@ -1093,6 +1192,40 @@ def main() -> None:
             )
             sys.exit(1)
 
+    pre_transcribe_mode = getattr(args, "pre_transcribe", None) is not None
+    if pre_transcribe_mode:
+        conflicting = [
+            args.batch,
+            args.lines,
+            args.range,
+            args.category,
+            args.cell,
+            args.participant,
+            args.keyword,
+            args.severity,
+            mixed_selectors,
+            args.reel,
+            args.chronologic,
+            args.highlights,
+            args.screen,
+            args.gif,
+            args.viewer,
+            getattr(args, "regenerate", False),
+            timeline_viewer,
+            studio_mode,
+            insights_mode,
+            screenspace_mode,
+            gallery_arg is not None,
+        ]
+        if any(conflicting):
+            utils.error_print(
+                "--pre-transcribe cannot be combined with mode, format, or --studio/--insights/--screenspace flags.",
+                [
+                    "Only -s (spreadsheet), -i/-o (directories), and -v (verbose) may be used alongside --pre-transcribe."
+                ],
+            )
+            sys.exit(1)
+
     cli_mode = (
         args.batch
         or args.lines
@@ -1257,6 +1390,10 @@ def main() -> None:
                 server.start_combined_server(
                     worksheet=worksheet, default_page="screenspace"
                 )
+                sys.exit(0)
+
+            if pre_transcribe_mode:
+                _run_pre_transcribe(worksheet, args)
                 sys.exit(0)
 
             # Execute based on mode

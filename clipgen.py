@@ -719,26 +719,98 @@ def _run_clip_pipeline(
     return (results, missing_videos)
 
 
+def _embed_transcript_on_artifacts(
+    clip: Any,
+    base_video: str,
+    artifacts: List[Dict[str, Any]],
+    segment_details: List[Tuple[str, str, str]],
+    transcript_cache: Dict[str, Any],
+    transcripts_manifest: Optional[Dict[str, Any]] = None,
+) -> None:
+    """Embed transcript segments on clip artifact records.
+
+    Source priority: transcripts manifest -> in-memory cache. Modifies artifacts in-place.
+    """
+    import transcripts
+
+    participant = clip.get("participant", "")
+    manifest = transcripts_manifest or transcripts.load_transcripts_manifest()
+    source_transcripts = manifest.get("source_transcripts", {})
+    corrections = manifest.get("corrections", [])
+
+    full_transcript = None
+    if participant and participant in source_transcripts:
+        entry = source_transcripts[participant]
+        raw_segments = entry.get("segments", [])
+        corrected = transcripts.apply_corrections(raw_segments, corrections)
+        full_transcript = transcripts.TranscriptResult(
+            segments=corrected,
+            language=entry.get("language", ""),
+            source_file=entry.get("source_file", str(base_video)),
+            model=entry.get("model", ""),
+        )
+    elif base_video in transcript_cache and transcript_cache[base_video]:
+        full_transcript = transcript_cache[base_video]
+
+    if not full_transcript:
+        return
+
+    for art_idx, (_out_path, start_str, end_str) in enumerate(segment_details):
+        if art_idx >= len(artifacts):
+            break
+        start_sec = utils.timestamp_to_seconds(start_str) or 0.0
+        end_sec = utils.timestamp_to_seconds(end_str) or 0.0
+        clipped = transcripts.filter_segments(
+            full_transcript, start_sec, end_sec, offset_to_zero=True
+        )
+        transcript_segments = []
+        for seg_idx, seg in enumerate(clipped["segments"]):
+            transcript_segments.append(
+                {
+                    "id": f"{participant}:{seg_idx}",
+                    "start": seg["start"],
+                    "end": seg["end"],
+                    "text": seg["text"],
+                }
+            )
+        if transcript_segments:
+            artifacts[art_idx]["transcript"] = transcript_segments
+
+
 def _transcribe_segments(
     clip: Any,
     base_video: str,
     segment_details: List[Tuple[str, str, str]],
     all_artifacts: List[Dict[str, Any]],
     transcript_cache: Dict[str, Any],
+    transcripts_manifest: Optional[Dict[str, Any]] = None,
 ) -> None:
     """Transcribe segments of a clip and write transcript files."""
     import transcripts
 
     if base_video not in transcript_cache:
-        resolved = str(utils.resolve_input_path(base_video))
-        cached = transcripts.load_transcript_cache(resolved)
-        if cached is not None:
-            transcript_cache[base_video] = cached
+        participant = clip.get("participant", "")
+        manifest = transcripts_manifest or transcripts.load_transcripts_manifest()
+        source_transcripts = manifest.get("source_transcripts", {})
+        corrections = manifest.get("corrections", [])
+
+        if participant and participant in source_transcripts:
+            entry = source_transcripts[participant]
+            raw_segments = entry.get("segments", [])
+            corrected = transcripts.apply_corrections(raw_segments, corrections)
+            transcript_cache[base_video] = transcripts.TranscriptResult(
+                segments=corrected,
+                language=entry.get("language", ""),
+                source_file=entry.get("source_file", str(base_video)),
+                model=entry.get("model", ""),
+            )
         else:
-            result = transcripts.transcribe_video(resolved)
+            resolved = str(utils.resolve_input_path(base_video))
+            context_keywords = transcripts.get_corrections_keywords(corrections) or None
+            result = transcripts.transcribe_video(
+                resolved, context_keywords=context_keywords
+            )
             transcript_cache[base_video] = result
-            if result is not None:
-                transcripts.save_transcript_cache(result, resolved)
     full_transcript = transcript_cache[base_video]
     if not full_transcript:
         return
@@ -820,6 +892,7 @@ def process_clips(
     all_artifacts: List[Dict[str, Any]] = []
     fuzzy_matches: Dict[str, Optional[str]] = {}
     transcript_cache: Dict[str, Any] = {}
+    transcripts_manifest: Optional[Dict[str, Any]] = None  # lazy-loaded
     missing_videos: Set[str] = set()
 
     # -- Phase 1: Sequential preparation (handles user prompts) ---------------
@@ -985,17 +1058,29 @@ def process_clips(
     outputs_generated = 0
     outputs_skipped = skipped_no_times + skipped_no_video
 
+    # Lazy-load transcripts manifest once for embedding + transcription
+    import transcripts as _tr_mod
+
+    transcripts_manifest = _tr_mod.load_transcripts_manifest()
+
     for idx, (clip, base_video) in enumerate(prepared):
         generated_count, segment_details = results[idx]
         outputs_generated += generated_count
         if generated_count < len(clip["times"]):
             outputs_skipped += len(clip["times"]) - generated_count
         if segment_details:
-            all_artifacts.extend(
-                viewer.build_artifact_records_for_clip(
-                    clip, base_video, segment_details, output_format
-                )
+            clip_artifacts = viewer.build_artifact_records_for_clip(
+                clip, base_video, segment_details, output_format
             )
+            _embed_transcript_on_artifacts(
+                clip,
+                base_video,
+                clip_artifacts,
+                segment_details,
+                transcript_cache,
+                transcripts_manifest,
+            )
+            all_artifacts.extend(clip_artifacts)
 
     if config.TRANSCRIBE_ENABLED:
         transcribe_items = [
@@ -1025,6 +1110,7 @@ def process_clips(
                             segment_details,
                             all_artifacts,
                             transcript_cache,
+                            transcripts_manifest,
                         )
                         progress.update(t_task, advance=1)
             else:
@@ -1035,6 +1121,7 @@ def process_clips(
                         segment_details,
                         all_artifacts,
                         transcript_cache,
+                        transcripts_manifest,
                     )
 
     if missing_videos:
@@ -1063,6 +1150,65 @@ def compute_reel_id(components: List[Dict[str, Any]]) -> str:
         f"{c['cellRow']}:{c['cellCol']}:{c['start']}:{c['end']}" for c in components
     )
     return "reel_" + hashlib.sha256("|".join(parts).encode()).hexdigest()[:8]
+
+
+def _build_reel_transcript(
+    components: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """Assemble merged transcript for a reel from its components.
+
+    Segments are derived from each component's source transcript,
+    with timestamps offset by cumulative component durations + titlecard durations.
+    """
+    import transcripts
+
+    manifest = transcripts.load_transcripts_manifest()
+    source_transcripts = manifest.get("source_transcripts", {})
+    corrections = manifest.get("corrections", [])
+
+    merged_segments: List[Dict[str, Any]] = []
+    cumulative_offset = 0.0
+    seg_counter = 0
+    titlecard_duration = (
+        config.TITLECARD_DURATION_SECONDS if config.TITLECARDS_ENABLED else 0
+    )
+
+    for comp in components:
+        participant = comp.get("participant", "")
+        comp_start = comp.get("start", 0.0)
+        comp_end = comp.get("end", 0.0)
+        comp_duration = comp_end - comp_start
+
+        full_transcript = None
+        if participant and participant in source_transcripts:
+            entry = source_transcripts[participant]
+            raw_segments = entry.get("segments", [])
+            corrected = transcripts.apply_corrections(raw_segments, corrections)
+            full_transcript = transcripts.TranscriptResult(
+                segments=corrected,
+                language=entry.get("language", ""),
+                source_file=entry.get("source_file", ""),
+                model=entry.get("model", ""),
+            )
+
+        if full_transcript:
+            clipped = transcripts.filter_segments(
+                full_transcript, comp_start, comp_end, offset_to_zero=True
+            )
+            for seg in clipped["segments"]:
+                merged_segments.append(
+                    {
+                        "id": f"reel:{seg_counter}",
+                        "start": seg["start"] + cumulative_offset + titlecard_duration,
+                        "end": seg["end"] + cumulative_offset + titlecard_duration,
+                        "text": seg["text"],
+                    }
+                )
+                seg_counter += 1
+
+        cumulative_offset += comp_duration + titlecard_duration
+
+    return merged_segments
 
 
 def process_reel(
@@ -1163,13 +1309,18 @@ def process_reel(
         return (0, [])
 
     reel_id = compute_reel_id(components)
-    reel_record = {
+    reel_record: Dict[str, Any] = {
         "id": reel_id,
         "file": Path(output_file).name,
         "study": study_name,
         "description": f"Reel: {len(components)} segments",
         "components": components,
     }
+
+    reel_transcript = _build_reel_transcript(components)
+    if reel_transcript:
+        reel_record["transcript"] = reel_transcript
+
     return (1, [reel_record])
 
 

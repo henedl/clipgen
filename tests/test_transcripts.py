@@ -282,3 +282,186 @@ class TestTranscribeVideoDebug:
         result = transcripts.transcribe_video("/fake/video.mp4", language="de")
         assert result is not None
         assert result["language"] == "de"
+
+
+# ---------------------------------------------------------------------------
+# apply_corrections
+# ---------------------------------------------------------------------------
+
+
+class TestApplyCorrections:
+    def test_no_corrections_returns_copy(self):
+        segs = [transcripts.TranscriptSegment(start=0, end=1, text="hello")]
+        result = transcripts.apply_corrections(segs, [])
+        assert result == segs
+        assert result is not segs
+
+    def test_single_correction(self):
+        segs = [transcripts.TranscriptSegment(start=0, end=1, text="teh quick fox")]
+        corrections = [{"from": "teh", "to": "the"}]
+        result = transcripts.apply_corrections(segs, corrections)
+        assert result[0]["text"] == "the quick fox"
+
+    def test_multiple_corrections(self):
+        segs = [transcripts.TranscriptSegment(start=0, end=1, text="teh quck fox")]
+        corrections = [
+            {"from": "teh", "to": "the"},
+            {"from": "quck", "to": "quick"},
+        ]
+        result = transcripts.apply_corrections(segs, corrections)
+        assert result[0]["text"] == "the quick fox"
+
+    def test_no_mutation_of_input(self):
+        segs = [transcripts.TranscriptSegment(start=0, end=1, text="teh fox")]
+        original_text = segs[0]["text"]
+        transcripts.apply_corrections(segs, [{"from": "teh", "to": "the"}])
+        assert segs[0]["text"] == original_text
+
+    def test_case_insensitive(self):
+        segs = [transcripts.TranscriptSegment(start=0, end=1, text="Teh quick TEH fox")]
+        corrections = [{"from": "teh", "to": "the"}]
+        result = transcripts.apply_corrections(segs, corrections)
+        assert result[0]["text"] == "the quick the fox"
+
+    def test_correction_not_found(self):
+        segs = [transcripts.TranscriptSegment(start=0, end=1, text="hello world")]
+        corrections = [{"from": "xyz", "to": "abc"}]
+        result = transcripts.apply_corrections(segs, corrections)
+        assert result[0]["text"] == "hello world"
+
+    def test_skips_empty_from_or_to(self):
+        segs = [transcripts.TranscriptSegment(start=0, end=1, text="hello")]
+        corrections = [{"from": "", "to": "x"}, {"from": "y", "to": ""}]
+        result = transcripts.apply_corrections(segs, corrections)
+        assert result[0]["text"] == "hello"
+
+
+# ---------------------------------------------------------------------------
+# get_corrections_keywords
+# ---------------------------------------------------------------------------
+
+
+class TestGetCorrectionsKeywords:
+    def test_empty(self):
+        assert transcripts.get_corrections_keywords([]) == []
+
+    def test_extracts_unique_to_values(self):
+        corrections = [
+            {"from": "a", "to": "alpha"},
+            {"from": "b", "to": "beta"},
+            {"from": "c", "to": "alpha"},  # duplicate
+        ]
+        result = transcripts.get_corrections_keywords(corrections)
+        assert result == ["alpha", "beta"]
+
+    def test_strips_whitespace(self):
+        corrections = [{"from": "a", "to": "  alpha  "}]
+        result = transcripts.get_corrections_keywords(corrections)
+        assert result == ["alpha"]
+
+    def test_skips_empty_to(self):
+        corrections = [{"from": "a", "to": ""}, {"from": "b", "to": "  "}]
+        assert transcripts.get_corrections_keywords(corrections) == []
+
+
+# ---------------------------------------------------------------------------
+# Transcripts manifest I/O
+# ---------------------------------------------------------------------------
+
+
+class TestTranscriptsManifest:
+    def test_empty_manifest_default(self):
+        m = transcripts._empty_transcripts_manifest()
+        assert m == {"source_transcripts": {}, "corrections": []}
+
+    def test_load_missing_file(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(config, "OUTPUT_DIR", str(tmp_path))
+        m = transcripts.load_transcripts_manifest()
+        assert m == {"source_transcripts": {}, "corrections": []}
+
+    def test_save_and_load_roundtrip(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(config, "OUTPUT_DIR", str(tmp_path))
+        source = {
+            "P01": {
+                "segments": [{"start": 0.0, "end": 1.0, "text": "hello"}],
+                "language": "en",
+                "model": "base",
+                "source_file": "video.mp4",
+                "transcribed_at": "2025-01-01T00:00:00+00:00",
+            }
+        }
+        corrections = [
+            {
+                "id": "c1",
+                "from": "helo",
+                "to": "hello",
+                "created": "2025-01-01T00:00:00+00:00",
+            }
+        ]
+        path = transcripts.save_transcripts_manifest(source, corrections)
+        assert path is not None
+
+        loaded = transcripts.load_transcripts_manifest()
+        assert loaded["corrections"] == corrections
+        assert "P01" in loaded["source_transcripts"]
+        assert len(loaded["source_transcripts"]["P01"]["segments"]) == 1
+
+    def test_segment_ids_assigned_on_save(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(config, "OUTPUT_DIR", str(tmp_path))
+        source = {
+            "P01": {
+                "segments": [
+                    {"start": 0.0, "end": 1.0, "text": "first"},
+                    {"start": 1.0, "end": 2.0, "text": "second"},
+                ],
+                "language": "en",
+                "model": "base",
+                "source_file": "v.mp4",
+                "transcribed_at": "2025-01-01T00:00:00+00:00",
+            }
+        }
+        transcripts.save_transcripts_manifest(source, [])
+        loaded = transcripts.load_transcripts_manifest()
+        segs = loaded["source_transcripts"]["P01"]["segments"]
+        assert segs[0]["id"] == "P01:0"
+        assert segs[1]["id"] == "P01:1"
+
+    def test_corrections_preserved(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(config, "OUTPUT_DIR", str(tmp_path))
+        corrections = [
+            {
+                "id": "c1",
+                "from": "teh",
+                "to": "the",
+                "created": "2025-01-01T00:00:00+00:00",
+            },
+            {
+                "id": "c2",
+                "from": "recieve",
+                "to": "receive",
+                "created": "2025-01-01T00:00:00+00:00",
+            },
+        ]
+        transcripts.save_transcripts_manifest({}, corrections)
+        loaded = transcripts.load_transcripts_manifest()
+        assert loaded["corrections"] == corrections
+
+    def test_load_corrupt_file(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(config, "OUTPUT_DIR", str(tmp_path))
+        (tmp_path / config.TRANSCRIPTS_MANIFEST_FILENAME).write_text("not json")
+        m = transcripts.load_transcripts_manifest()
+        assert m == {"source_transcripts": {}, "corrections": []}
+
+
+# ---------------------------------------------------------------------------
+# ManifestSegment type
+# ---------------------------------------------------------------------------
+
+
+class TestManifestSegment:
+    def test_fields(self):
+        seg = transcripts.ManifestSegment(id="P01:0", start=0.0, end=1.0, text="hi")
+        assert seg["id"] == "P01:0"
+        assert seg["start"] == 0.0
+        assert seg["end"] == 1.0
+        assert seg["text"] == "hi"

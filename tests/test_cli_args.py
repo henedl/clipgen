@@ -30,6 +30,7 @@ def _base_args(**overrides):
         "titlecards": None,
         "filmstrip": None,
         "screenspace": False,
+        "pre_transcribe": None,
     }
     args.update(overrides)
     return Namespace(**args)
@@ -239,3 +240,24 @@ def test_run_cli_mode_reel_cli_dispatch(monkeypatch, make_clip):
 )
 def test_is_excel_spreadsheet_arg(value, expected):
     assert cli._is_excel_spreadsheet_arg(value) is expected
+
+
+# ---- --pre-transcribe flag parsing ----
+
+
+def test_pre_transcribe_absent(monkeypatch):
+    monkeypatch.setattr("sys.argv", ["clipgen.py"])
+    args = cli.parse_arguments()
+    assert args.pre_transcribe is None
+
+
+def test_pre_transcribe_no_ids(monkeypatch):
+    monkeypatch.setattr("sys.argv", ["clipgen.py", "--pre-transcribe"])
+    args = cli.parse_arguments()
+    assert args.pre_transcribe == []
+
+
+def test_pre_transcribe_with_ids(monkeypatch):
+    monkeypatch.setattr("sys.argv", ["clipgen.py", "--pre-transcribe", "P01", "P03"])
+    args = cli.parse_arguments()
+    assert args.pre_transcribe == ["P01", "P03"]

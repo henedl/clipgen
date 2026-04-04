@@ -37,45 +37,45 @@ Embed transcript data on artifacts and build the corrections system.
 
 ### Pre-transcription CLI (`--pre-transcribe`)
 
-- [ ] Add `--pre-transcribe [ID...]` CLI flag — accepts zero or more participant IDs; no IDs = enqueue all participants found in the spreadsheet
-- [ ] For each target participant, transcribe their source video (`{study}_{participant}.mp4`) using `transcribe_video()`
-- [ ] Store full-video transcript results in a separate `transcripts_manifest.json` under a `source_transcripts` key, keyed by participant ID
-- [ ] Add `TRANSCRIPTS_MANIFEST_FILENAME` to `config.py` alongside `SCREENSPACE_MANIFEST_FILENAME`
-- [ ] Add `load_transcripts_manifest()` / `save_transcripts_manifest()` to `transcripts.py` following the `load_screenspace_manifest()` / `save_screenspace_manifest()` pattern
-- [ ] Schema: `{"source_transcripts": {"P01": {"segments": [{start, end, text}, ...], "language": str, "model": str, "source_file": str, "transcribed_at": iso8601}}, "corrections": [...]}` — segments store raw Whisper output; `id` field is added at manifest storage time (e.g. `"P01:42"`); corrections are applied as a read-time layer, not stored on segments
-- [ ] Operation is idempotent: re-running `--pre-transcribe` skips participants already present in `source_transcripts` within the transcripts manifest; force-retranscribe with an explicit flag if needed
-- [ ] Requires a spreadsheet (to resolve participant IDs and source video paths); can combine with `-s`, `-i/-o`, `-v`
-- [ ] Cannot combine with mode flags or `--studio`/`--insights`
+- [x] Add `--pre-transcribe [ID...]` CLI flag — accepts zero or more participant IDs; no IDs = enqueue all participants found in the spreadsheet
+- [x] For each target participant, transcribe their source video (`{study}_{participant}.mp4`) using `transcribe_video()`
+- [x] Store full-video transcript results in a separate `transcripts_manifest.json` under a `source_transcripts` key, keyed by participant ID
+- [x] Add `TRANSCRIPTS_MANIFEST_FILENAME` to `config.py` alongside `SCREENSPACE_MANIFEST_FILENAME`
+- [x] Add `load_transcripts_manifest()` / `save_transcripts_manifest()` to `transcripts.py` following the `load_screenspace_manifest()` / `save_screenspace_manifest()` pattern
+- [x] Schema: `{"source_transcripts": {"P01": {"segments": [{start, end, text}, ...], "language": str, "model": str, "source_file": str, "transcribed_at": iso8601}}, "corrections": [...]}` — segments store raw Whisper output; `id` field is added at manifest storage time (e.g. `"P01:42"`); corrections are applied as a read-time layer, not stored on segments
+- [x] Operation is idempotent: re-running `--pre-transcribe` skips participants already present in `source_transcripts` within the transcripts manifest; force-retranscribe with an explicit flag if needed
+- [x] Requires a spreadsheet (to resolve participant IDs and source video paths); can combine with `-s`, `-i/-o`, `-v`
+- [x] Cannot combine with mode flags or `--studio`/`--insights`
 
 ### Transcript as artifact property
 
-- [ ] Add `transcript` field to clip artifact records in `process_clips()` — after `filter_segments()`, embed the segments list directly on the clip's artifact dict
-- [ ] Source priority: if a source transcript exists in the transcripts manifest for the clip's participant, derive via `filter_segments()`; otherwise fall back to on-the-fly Whisper transcription (if `--transcribe` or `TRANSCRIBE_ENABLED`). The sidecar `.transcript.json` cache is removed.
-- [ ] Segment schema in manifest: `{"id": str, "start": float, "end": float, "text": str}` — `id` is index-based (e.g., `"P01:42"` for participant + segment index) for provenance tracking. Raw `TranscriptSegment` TypedDict stays `{start, end, text}` — `id` is assigned at manifest storage, not transcription.
-- [ ] Add merged `transcript` field to reel artifact records — assembled from constituent clips' transcript segments during reel building, ordered to match the reel. Segment timestamps in the merged reel transcript must be offset by cumulative titlecard/transition durations. Use the reel's `components` metadata (which stores per-component start/end in reel-relative time) to compute offsets.
-- [ ] Keep standalone transcript file output and transcript-type manifest entries as-is (opt-in via `--transcribe`, for researchers who just want text files)
+- [x] Add `transcript` field to clip artifact records in `process_clips()` — after `filter_segments()`, embed the segments list directly on the clip's artifact dict
+- [x] Source priority: if a source transcript exists in the transcripts manifest for the clip's participant, derive via `filter_segments()`; otherwise fall back to on-the-fly Whisper transcription (if `--transcribe` or `TRANSCRIBE_ENABLED`). The sidecar `.transcript.json` cache is removed.
+- [x] Segment schema in manifest: `{"id": str, "start": float, "end": float, "text": str}` — `id` is index-based (e.g., `"P01:42"` for participant + segment index) for provenance tracking. Raw `TranscriptSegment` TypedDict stays `{start, end, text}` — `id` is assigned at manifest storage, not transcription.
+- [x] Add merged `transcript` field to reel artifact records — assembled from constituent clips' transcript segments during reel building, ordered to match the reel. Segment timestamps in the merged reel transcript must be offset by cumulative titlecard/transition durations. Use the reel's `components` metadata (which stores per-component start/end in reel-relative time) to compute offsets.
+- [x] Keep standalone transcript file output and transcript-type manifest entries as-is (opt-in via `--transcribe`, for researchers who just want text files)
 
 ### Corrections dictionary
 
-- [ ] Corrections stored inside `transcripts_manifest.json` under the `corrections` key (study-local only; global dictionary deferred until multi-study need is proven)
-- [ ] Schema: `{"corrections": [{"id": str, "from": str, "to": str, "created": iso8601}]}`
-- [ ] Load corrections from the transcripts manifest at transcription time. Corrections are applied at read-time as post-processing on raw segments. Raw Whisper output in `source_transcripts` is never mutated. This enables clean re-transcription (replace raw segments, corrections auto-apply).
+- [x] Corrections stored inside `transcripts_manifest.json` under the `corrections` key (study-local only; global dictionary deferred until multi-study need is proven)
+- [x] Schema: `{"corrections": [{"id": str, "from": str, "to": str, "created": iso8601}]}`
+- [x] Load corrections from the transcripts manifest at transcription time. Corrections are applied at read-time as post-processing on raw segments. Raw Whisper output in `source_transcripts` is never mutated. This enables clean re-transcription (replace raw segments, corrections auto-apply).
 
 ### Corrections integration with Whisper
 
-- [ ] Feed correction targets (the `"to"` values) as `context_keywords` to `transcribe_video()` — these get appended to Whisper's `initial_prompt`
-- [ ] Post-processing pass after transcription: apply known `"from" → "to"` corrections to segment text
-- [ ] Auto-applied corrections should be flagged or logged so the researcher knows what was changed
+- [x] Feed correction targets (the `"to"` values) as `context_keywords` to `transcribe_video()` — these get appended to Whisper's `initial_prompt`
+- [x] Post-processing pass after transcription: apply known `"from" → "to"` corrections to segment text
+- [x] Auto-applied corrections should be flagged or logged so the researcher knows what was changed
 
 ### Sidecar cache removal
 
-- [ ] Remove sidecar cache: delete `save_transcript_cache()` and `load_transcript_cache()` from `transcripts.py`; remove cache call sites in `clipgen.py:_transcribe_segments()`
-- [ ] Update `_transcribe_segments()` in `clipgen.py` to check `transcripts_manifest.json` for pre-existing source transcripts. New read priority: in-memory cache -> transcripts manifest -> live Whisper.
+- [x] Remove sidecar cache: delete `save_transcript_cache()` and `load_transcript_cache()` from `transcripts.py`; remove cache call sites in `clipgen.py:_transcribe_segments()`
+- [x] Update `_transcribe_segments()` in `clipgen.py` to check `transcripts_manifest.json` for pre-existing source transcripts. New read priority: in-memory cache -> transcripts manifest -> live Whisper.
 
 ### Manifest-layer enrichment
 
-- [ ] Add `apply_corrections(segments, corrections)` function to `transcripts.py` — applies `from -> to` substitutions to segment text, returns corrected copy without mutating input
-- [ ] Assign segment IDs at manifest storage time: `"{participant}:{index}"` format, computed in `save_transcripts_manifest()`
+- [x] Add `apply_corrections(segments, corrections)` function to `transcripts.py` — applies `from -> to` substitutions to segment text, returns corrected copy without mutating input
+- [x] Assign segment IDs at manifest storage time: `"{participant}:{index}"` format, computed in `save_transcripts_manifest()`
 
 ---
 
