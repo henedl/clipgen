@@ -491,17 +491,23 @@
   }
 
   function saveCorrections(corrections) {
+    var created = 0, updated = 0, removed = 0;
     var chain = Promise.resolve();
     corrections.forEach(function (c) {
       chain = chain.then(function () {
-        return apiPost("api/corrections", { from: c.from, to: c.to });
+        return apiPost("api/corrections", { from: c.from, to: c.to }).then(function (data) {
+          if (data.ok) {
+            if (data.removed) removed++;
+            else if (data.correction) updated++;  // covers both new and updated
+          }
+        });
       });
     });
     chain.then(function () {
-      var msg = corrections.length === 1
-        ? "Correction created"
-        : corrections.length + " corrections created";
-      showToast(msg);
+      var parts = [];
+      if (updated) parts.push(updated === 1 ? "1 correction saved" : updated + " corrections saved");
+      if (removed) parts.push(removed === 1 ? "1 reverted" : removed + " reverted");
+      showToast(parts.join(", ") || "No changes");
       var pid = state.selectedParticipant;
       if (pid) {
         loadTranscript(pid);
