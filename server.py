@@ -271,9 +271,7 @@ def _save_manifest_quiet() -> None:
         utils.warning_print(f"Failed to save manifest: {e}")
 
 
-def _resolve_intake_video_path(
-    participant: str, source: str = ""
-) -> Optional[str]:
+def _resolve_intake_video_path(participant: str, source: str = "") -> Optional[str]:
     """Resolve a video path for an intake participant.
 
     Tries the source-specific participant list first, then falls back to the
@@ -344,9 +342,7 @@ def _generate_intake_clips(
 
         if success:
             default_desc = (
-                "Transcript intake"
-                if source == "transcript"
-                else "Screenspace intake"
+                "Transcript intake" if source == "transcript" else "Screenspace intake"
             )
             artifact: Dict[str, Any] = {
                 "id": f"intake_{span_hash}_s0",
@@ -379,9 +375,7 @@ def _generate_intake_clips(
                     src_entry = transcripts_server._manifest.get(
                         "source_transcripts", {}
                     ).get(participant, {})
-                artifact["transcript_version"] = src_entry.get(
-                    "transcribed_at", ""
-                )
+                artifact["transcript_version"] = src_entry.get("transcribed_at", "")
             results.append(artifact)
         else:
             results.append({"_ok": False, "_error": "ffmpeg failed"})
