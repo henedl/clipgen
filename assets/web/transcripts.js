@@ -29,6 +29,7 @@
     editingTextEl: null,
     pollTimer: null,
     lastMarkCategory: "bookmark",
+    streamingParticipant: null,
   };
 
   // ---- Helpers ----
@@ -231,17 +232,32 @@
 
     // Update status
     var statusEl = qs("#transcriptStatus");
+    var taskForPid = null;
+    state.tasks.forEach(function (t) {
+      if (t.participant === pid && (t.status === "running" || t.status === "queued")) {
+        taskForPid = t;
+      }
+    });
     if (p.has_transcript) {
       statusEl.textContent = p.segment_count + " segments";
+    } else if (taskForPid && taskForPid.status === "running") {
+      statusEl.textContent = "transcribing\u2026 " + Math.round((taskForPid.progress || 0) * 100) + "%";
+    } else if (taskForPid && taskForPid.status === "queued") {
+      statusEl.textContent = "queued";
     } else {
       statusEl.textContent = "not transcribed";
     }
 
     // Load transcript
     if (p.has_transcript) {
+      state.streamingParticipant = null;
       loadTranscript(pid);
+    } else if (taskForPid && taskForPid.status === "running" && taskForPid.partial_segments && taskForPid.partial_segments.length > 0) {
+      renderPartialSegments(taskForPid.partial_segments, taskForPid.progress);
+      state.streamingParticipant = pid;
     } else {
       state.segments = [];
+      state.streamingParticipant = null;
       renderSegments();
     }
   }
@@ -347,6 +363,53 @@
           }
         });
       })(rows[j]);
+    }
+  }
+
+  function renderPartialSegments(segments, progress) {
+    var container = qs("#segmentList");
+    var empty = qs("#transcriptEmpty");
+    var pid = state.streamingParticipant || state.selectedParticipant;
+    empty.classList.add("hidden");
+
+    // Only auto-scroll if user is near the bottom
+    var nearBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 100;
+
+    var html = "";
+    for (var i = 0; i < segments.length; i++) {
+      var seg = segments[i];
+      var segId = pid + ":" + i;
+      html += '<div class="segment-row segment-streaming" data-index="' + i + '" data-start="' + seg.start + '">';
+      html += '<span class="segment-mark" data-segment-id="' + escapeHtml(segId) + '"></span>';
+      html += '<span class="segment-timestamp">' + fmtTime(seg.start) + '</span>';
+      html += '<span class="segment-text">' + escapeHtml(seg.text) + '</span>';
+      html += '</div>';
+    }
+    html += '<div class="streaming-indicator">';
+    html += '<span class="streaming-dot"></span>';
+    html += 'Transcribing\u2026 ' + Math.round(progress * 100) + '%';
+    html += '</div>';
+
+    container.innerHTML = html;
+
+    // Click-to-seek on timestamps and mark clicks
+    var rows = container.querySelectorAll(".segment-streaming");
+    for (var j = 0; j < rows.length; j++) {
+      (function (row) {
+        row.querySelector(".segment-timestamp").addEventListener("click", function (e) {
+          e.stopPropagation();
+          seekVideo(parseFloat(row.getAttribute("data-start")));
+        });
+        row.querySelector(".segment-mark").addEventListener("click", function (e) {
+          e.stopPropagation();
+          var segId = this.getAttribute("data-segment-id");
+          toggleMarkStreaming(segId, this);
+        });
+      })(rows[j]);
+    }
+
+    if (nearBottom) {
+      container.scrollTop = container.scrollHeight;
     }
   }
 
@@ -619,6 +682,20 @@
     });
   }
 
+  function toggleMarkStreaming(segmentId, markEl) {
+    var cat = MARK_CATEGORIES[state.lastMarkCategory] || MARK_CATEGORIES.bookmark;
+    apiPost("api/marks", {
+      segment_ids: [segmentId],
+      category: state.lastMarkCategory,
+    }).then(function (data) {
+      if (data.ok) {
+        showToast("Marked");
+        markEl.classList.add("marked");
+        markEl.style.background = cat.color;
+      }
+    });
+  }
+
   function removeMark(markId) {
     apiDelete("api/marks/" + markId).then(function (data) {
       if (data.ok) {
@@ -767,9 +844,45 @@
     state.searchQuery = query;
     apiGet("api/search?q=" + encodeURIComponent(query)).then(function (data) {
       if (!data.ok) return;
+      // Merge client-side search of partial segments for the streaming participant
+      if (state.streamingParticipant) {
+        var partials = _searchPartialSegments(query, state.streamingParticipant);
+        if (partials.length > 0) {
+          data.results = data.results.concat(partials);
+          data.total_count += partials.length;
+          data.counts_by_participant[state.streamingParticipant] =
+            (data.counts_by_participant[state.streamingParticipant] || 0) + partials.length;
+        }
+      }
       state.searchResults = data;
       renderSearchResults(data);
     });
+  }
+
+  function _searchPartialSegments(query, pid) {
+    var results = [];
+    var lowerQ = query.toLowerCase();
+    var task = null;
+    state.tasks.forEach(function (t) {
+      if (t.participant === pid && t.status === "running" && t.partial_segments) {
+        task = t;
+      }
+    });
+    if (!task) return results;
+    for (var i = 0; i < task.partial_segments.length; i++) {
+      var seg = task.partial_segments[i];
+      if (seg.text.toLowerCase().indexOf(lowerQ) >= 0) {
+        results.push({
+          participant: pid,
+          segment_id: pid + ":" + i,
+          start: seg.start,
+          end: seg.end,
+          text: seg.text,
+          count: 1,
+        });
+      }
+    }
+    return results;
   }
 
   function renderSearchResults(data) {
@@ -1031,6 +1144,25 @@
       if (!data.ok) return;
       state.tasks = data.tasks;
 
+      // Stream partial segments for the selected participant's running task
+      var selectedRunningTask = null;
+      if (state.selectedParticipant) {
+        data.tasks.forEach(function (t) {
+          if (t.participant === state.selectedParticipant && t.status === "running" && t.partial_segments) {
+            selectedRunningTask = t;
+          }
+        });
+      }
+      if (selectedRunningTask && selectedRunningTask.partial_segments.length > 0) {
+        renderPartialSegments(selectedRunningTask.partial_segments, selectedRunningTask.progress);
+        state.streamingParticipant = state.selectedParticipant;
+        // Update status text
+        var statusEl = qs("#transcriptStatus");
+        if (statusEl) statusEl.textContent = "transcribing\u2026 " + Math.round(selectedRunningTask.progress * 100) + "%";
+      } else if (state.streamingParticipant) {
+        state.streamingParticipant = null;
+      }
+
       var hasActive = false;
       var newlyCompleted = [];
       data.tasks.forEach(function (t) {
@@ -1045,6 +1177,7 @@
       if (newlyCompleted.length > 0) {
         loadParticipants().then(function () {
           if (state.selectedParticipant && newlyCompleted.indexOf(state.selectedParticipant) >= 0) {
+            state.streamingParticipant = null;
             loadTranscript(state.selectedParticipant);
           }
         });

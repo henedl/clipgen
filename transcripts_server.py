@@ -586,17 +586,18 @@ def api_transcribe_status() -> FlaskResponse:
     tasks = []
     if _worker:
         for t in _worker.get_all_tasks():
-            tasks.append(
-                {
-                    "id": t["id"],
-                    "participant": t["participant"],
-                    "status": t["status"],
-                    "progress": t["progress"],
-                    "error": t.get("error"),
-                    "created_at": t.get("created_at"),
-                    "completed_at": t.get("completed_at"),
-                }
-            )
+            task_info = {
+                "id": t["id"],
+                "participant": t["participant"],
+                "status": t["status"],
+                "progress": t["progress"],
+                "error": t.get("error"),
+                "created_at": t.get("created_at"),
+                "completed_at": t.get("completed_at"),
+            }
+            if t["status"] == transcripts.TASK_STATUS_RUNNING:
+                task_info["partial_segments"] = t.get("partial_segments", [])
+            tasks.append(task_info)
     return jsonify(
         {
             "ok": True,

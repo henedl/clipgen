@@ -503,6 +503,32 @@ body {
   border-left-color: var(--color-accent);
 }
 
+.segment-streaming {
+  opacity: 0.85;
+}
+
+.streaming-indicator {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  color: var(--color-text-dim);
+  font-size: var(--text-sm);
+}
+
+.streaming-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: var(--radius-full);
+  background: var(--color-accent);
+  animation: streaming-pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes streaming-pulse {
+  0%, 100% { opacity: 0.3; }
+  50% { opacity: 1; }
+}
+
 .segment-timestamp {
   flex: 0 0 5rem;
   font-family: var(--font-mono);
