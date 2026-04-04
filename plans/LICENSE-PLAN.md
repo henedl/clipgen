@@ -2,7 +2,21 @@
 
 ## Context
 
-clipgen bundles 20+ third-party libraries into a PyInstaller binary. All licenses (MIT, BSD, Apache 2.0, HPND) require attribution. The `build/THIRD-PARTY-LICENSES` file contains the full notices. This plan covers how to get that file to end users.
+clipgen bundles 20+ third-party libraries into a PyInstaller binary. All licenses (MIT, BSD, Apache 2.0, HPND, LGPL) require attribution. The `build/THIRD-PARTY-LICENSES` file contains the full notices. This plan covers how to get that file to end users.
+
+## Architectural decisions
+
+### OpenCV and FFmpeg (decided 2026-04-04)
+
+`opencv-python-headless` bundles FFmpeg shared libraries (libavcodec, libavformat, etc.) inside `cv2/.dylibs/`. The `cv2.abi3.so` binary hard-links against these at load time — they **cannot** be excluded from a PyInstaller build without breaking `import cv2`.
+
+The opencv-python project builds FFmpeg as **LGPL 2.1** (without `--enable-gpl`). The `libx264`/`libx265` dylibs are present as transitive dynamic dependencies but are not compiled into FFmpeg, so they do not taint the FFmpeg license.
+
+**Decision:** Keep FFmpeg libraries bundled. Comply with LGPL 2.1 terms by:
+1. Including the LGPL license text (via `cv2/LICENSE-3RD-PARTY.txt` in the bundle)
+2. Attributing FFmpeg and listing the bundled libraries in `build/THIRD-PARTY-LICENSES`
+3. Providing source code pointers (ffmpeg.org, github.com/opencv/opencv-python)
+4. Not calling `cv2.VideoCapture` or any FFmpeg-backed cv2 API — video decoding uses system ffmpeg via subprocess
 
 ## Steps
 
