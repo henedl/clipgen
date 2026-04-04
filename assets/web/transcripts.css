@@ -257,6 +257,10 @@ body {
   white-space: nowrap;
 }
 
+#searchMarkAllBtn {
+  flex-shrink: 0;
+}
+
 #searchResults {
   position: absolute;
   top: 100%;
@@ -388,10 +392,103 @@ body {
   opacity: 0.7;
 }
 
+/* Segment mark gutter */
+
+.segment-mark {
+  flex: 0 0 14px;
+  width: 12px;
+  height: 12px;
+  border-radius: var(--radius-full);
+  border: 2px solid var(--color-border);
+  cursor: pointer;
+  margin-top: 5px;
+  transition: border-color var(--duration-fast), background var(--duration-fast), box-shadow var(--duration-fast);
+}
+
+.segment-mark:hover {
+  border-color: var(--color-accent);
+  box-shadow: 0 0 0 2px rgba(29, 79, 114, 0.15);
+}
+
+.segment-mark.marked {
+  border-color: transparent;
+}
+
+.segment-mark.marked:hover {
+  box-shadow: 0 0 0 2px rgba(29, 79, 114, 0.25);
+}
+
+/* Mark popover */
+
+.mark-popover {
+  position: fixed;
+  background: var(--color-panel-bg);
+  border: 1px solid var(--color-panel-border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lg);
+  padding: var(--space-3);
+  z-index: var(--z-dropdown);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 200px;
+}
+
+.mark-popover.hidden {
+  display: none;
+}
+
+.mark-popover-categories {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.mark-cat-pill {
+  width: 20px;
+  height: 20px;
+  border-radius: var(--radius-full);
+  border: 2px solid transparent;
+  cursor: pointer;
+  transition: transform var(--duration-fast), box-shadow var(--duration-fast);
+  padding: 0;
+}
+
+.mark-cat-pill:hover {
+  transform: scale(1.2);
+}
+
+.mark-cat-pill.active {
+  box-shadow: 0 0 0 2px var(--color-panel-bg), 0 0 0 4px currentColor;
+}
+
+.mark-popover-label {
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--color-border);
+  border-radius: calc(var(--radius) - 2px);
+  background: var(--color-surface);
+  color: var(--color-text);
+  font-size: var(--text-xs);
+  outline: none;
+}
+
+.mark-popover-label:focus {
+  border-color: var(--color-accent);
+}
+
+.mark-popover-remove {
+  align-self: flex-start;
+  color: var(--color-text-dim);
+}
+
+.mark-popover-remove:hover {
+  color: var(--sev-critical);
+  border-color: var(--sev-critical);
+}
+
 .segment-row {
   display: flex;
   gap: var(--space-3);
-  padding: var(--space-2) var(--space-5);
+  padding: var(--space-2) var(--space-3) var(--space-2) var(--space-3);
   border-left: 3px solid transparent;
   cursor: pointer;
   transition: background var(--duration-fast), border-color var(--duration-fast);
