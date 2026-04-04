@@ -426,9 +426,7 @@ def get_runtime_working_dir() -> str:
     executable directory so local assets resolve from where the binary lives.
     """
     if getattr(sys, "frozen", False):
-        return str(
-            Path(getattr(sys, "_MEIPASS", str(Path(sys.executable).resolve().parent)))
-        )
+        return str(Path(sys.executable).resolve().parent)
     return str(Path(__file__).resolve().parent)
 
 
