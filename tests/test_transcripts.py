@@ -4,6 +4,7 @@ from pathlib import Path
 
 import config
 import transcripts
+import utils
 from transcripts import TranscriptResult, TranscriptSegment
 
 
@@ -471,9 +472,6 @@ class TestManifestSegment:
 # Shared participant video discovery
 # ---------------------------------------------------------------------------
 
-import utils
-
-
 class TestDiscoverParticipantVideos:
     def test_discovers_participant_videos(self, tmp_path, monkeypatch):
         monkeypatch.setattr(config, "INPUT_DIR", str(tmp_path))
@@ -561,6 +559,7 @@ class TestTranscriptWorker:
         worker.enqueue(task)
         assert worker.cancel(task["id"]) is True
         t = worker.get_task(task["id"])
+        assert t is not None
         assert t["status"] == "cancelled"
 
     def test_cancel_nonexistent(self):
