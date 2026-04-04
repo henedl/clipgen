@@ -256,7 +256,9 @@ def api_corrections_add() -> FlaskResponse:
             if chained["from"].lower() == to_text.lower():
                 corrections.remove(chained)
                 _persist_manifest()
-                return jsonify({"ok": True, "correction": None, "removed": chained["id"]})
+                return jsonify(
+                    {"ok": True, "correction": None, "removed": chained["id"]}
+                )
             chained["to"] = to_text
             correction = chained
         else:
