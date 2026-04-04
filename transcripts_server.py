@@ -15,6 +15,10 @@ API endpoints (all under /transcripts/):
   GET  /api/corrections                           - list all study-local corrections
   POST /api/corrections                           - add a correction manually
   DELETE /api/corrections/<id>                    - remove a correction
+  GET  /api/marks                                 - list all marks with resolved segment data
+  POST /api/marks                                 - create marks for segments
+  PUT  /api/marks/<id>                            - update a mark's category or label
+  DELETE /api/marks/<id>                          - remove a mark (or bulk delete with JSON body)
   GET  /api/search?q=<query>                      - keyword search across all participants
   POST /api/transcribe                            - enqueue participant(s) for transcription
   GET  /api/transcribe/status                     - poll transcription task status
@@ -124,15 +128,23 @@ def api_transcript(participant: str) -> FlaskResponse:
     # Apply corrections to get corrected text
     corrected_segments = transcripts.apply_corrections(raw_segments, corrections)
 
-    # Build response segments with corrected flag
+    # Build marks-by-segment-id lookup
+    marks_by_seg: Dict[str, List[Dict[str, Any]]] = {}
+    for mark in _manifest.get("marks", []):
+        sid = mark.get("segment_id", "")
+        marks_by_seg.setdefault(sid, []).append(mark)
+
+    # Build response segments with corrected flag and marks
     segments = []
     for raw, corrected in zip(raw_segments, corrected_segments):
+        seg_id = raw.get("id", "")
         seg: Dict[str, Any] = {
-            "id": raw.get("id", ""),
+            "id": seg_id,
             "start": corrected["start"],
             "end": corrected["end"],
             "text": corrected["text"],
             "corrected": raw["text"] != corrected["text"],
+            "marks": marks_by_seg.get(seg_id, []),
         }
         segments.append(seg)
 
@@ -292,6 +304,175 @@ def api_corrections_delete(correction_id: str) -> FlaskResponse:
     return jsonify({"ok": True})
 
 
+# ---- Marks ----
+
+
+def _resolve_mark(mark: Dict[str, Any]) -> Dict[str, Any]:
+    """Enrich a mark with its segment's data (participant, start, end, text, valid)."""
+    seg_id = mark.get("segment_id", "")
+    # segment IDs are "{participant}:{index}"
+    parts = seg_id.split(":", 1)
+    if len(parts) != 2:
+        return {
+            **mark,
+            "valid": False,
+            "participant": "",
+            "start": 0,
+            "end": 0,
+            "text": "",
+        }
+    pid, idx_str = parts
+    try:
+        idx = int(idx_str)
+    except ValueError:
+        return {
+            **mark,
+            "valid": False,
+            "participant": pid,
+            "start": 0,
+            "end": 0,
+            "text": "",
+        }
+
+    src = _manifest.get("source_transcripts", {})
+    entry = src.get(pid, {})
+    segments = entry.get("segments", [])
+    if idx < 0 or idx >= len(segments):
+        return {
+            **mark,
+            "valid": False,
+            "participant": pid,
+            "start": 0,
+            "end": 0,
+            "text": "",
+        }
+
+    raw_seg = segments[idx]
+    corrections = _manifest.get("corrections", [])
+    corrected = transcripts.apply_corrections([raw_seg], corrections)
+    seg = corrected[0]
+    return {
+        **mark,
+        "valid": True,
+        "participant": pid,
+        "start": seg["start"],
+        "end": seg["end"],
+        "text": seg["text"],
+    }
+
+
+@transcripts_bp.route("/api/marks")
+def api_marks_list() -> FlaskResponse:
+    """List all marks, enriched with resolved segment data."""
+    with _manifest_lock:
+        raw_marks = list(_manifest.get("marks", []))
+        resolved = [_resolve_mark(m) for m in raw_marks]
+    return jsonify(
+        {
+            "ok": True,
+            "marks": resolved,
+            "categories": transcripts.MARK_CATEGORIES,
+        }
+    )
+
+
+@transcripts_bp.route("/api/marks", methods=["POST"])
+def api_marks_add() -> FlaskResponse:
+    """Create marks for one or more segments."""
+    data = request.get_json(silent=True)
+    if not data:
+        return jsonify({"ok": False, "error": "Missing JSON body"}), 400
+
+    segment_ids = data.get("segment_ids", [])
+    if not segment_ids:
+        return jsonify({"ok": False, "error": "segment_ids required"}), 400
+
+    category = data.get("category") or None
+    label = data.get("label") or None
+    now = datetime.now(timezone.utc).isoformat()
+
+    created = []
+    with _manifest_lock:
+        marks = _manifest.setdefault("marks", [])
+        existing_by_seg = {m["segment_id"]: m for m in marks}
+
+        for sid in segment_ids:
+            if sid in existing_by_seg:
+                # Update existing mark
+                m = existing_by_seg[sid]
+                if category is not None:
+                    m["category"] = category
+                if label is not None:
+                    m["label"] = label
+                created.append(m)
+            else:
+                m = {
+                    "id": f"m_{uuid.uuid4().hex[:8]}",
+                    "segment_id": sid,
+                    "category": category,
+                    "label": label,
+                    "created": now,
+                }
+                marks.append(m)
+                existing_by_seg[sid] = m
+                created.append(m)
+
+    _persist_manifest()
+    return jsonify({"ok": True, "marks": created})
+
+
+@transcripts_bp.route("/api/marks/<mark_id>", methods=["PUT"])
+def api_marks_update(mark_id: str) -> FlaskResponse:
+    """Update a mark's category or label."""
+    data = request.get_json(silent=True)
+    if not data:
+        return jsonify({"ok": False, "error": "Missing JSON body"}), 400
+
+    with _manifest_lock:
+        marks = _manifest.get("marks", [])
+        target = None
+        for m in marks:
+            if m.get("id") == mark_id:
+                target = m
+                break
+        if not target:
+            return jsonify({"ok": False, "error": "Mark not found"}), 404
+
+        if "category" in data:
+            target["category"] = data["category"] or None
+        if "label" in data:
+            target["label"] = data["label"] or None
+
+    _persist_manifest()
+    return jsonify({"ok": True, "mark": target})
+
+
+@transcripts_bp.route("/api/marks/<mark_id>", methods=["DELETE"])
+def api_marks_delete(mark_id: str) -> FlaskResponse:
+    """Remove a mark by ID, or bulk-delete with JSON body {ids: [...]}."""
+    # Bulk delete: DELETE /api/marks with {ids: [...]} — mark_id may be a placeholder
+    data = request.get_json(silent=True)
+    ids_to_remove: List[str] = []
+
+    if data and data.get("ids"):
+        ids_to_remove = data["ids"]
+    else:
+        ids_to_remove = [mark_id]
+
+    with _manifest_lock:
+        marks = _manifest.get("marks", [])
+        remove_set = set(ids_to_remove)
+        before = len(marks)
+        _manifest["marks"] = [m for m in marks if m.get("id") not in remove_set]
+        removed = before - len(_manifest["marks"])
+
+    if removed == 0:
+        return jsonify({"ok": False, "error": "Mark not found"}), 404
+
+    _persist_manifest()
+    return jsonify({"ok": True, "removed": removed})
+
+
 # ---- Search ----
 
 
@@ -449,6 +630,7 @@ def _do_persist() -> None:
     transcripts.save_transcripts_manifest(
         _manifest.get("source_transcripts", {}),
         _manifest.get("corrections", []),
+        marks=_manifest.get("marks"),
     )
 
 
