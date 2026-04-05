@@ -388,7 +388,8 @@
     for (var i = 0; i < segments.length; i++) {
       var seg = segments[i];
       var segId = pid + ":" + i;
-      var cachedColor = _streamingMarks[segId];
+      var cachedMark = _streamingMarks[segId];
+      var cachedColor = cachedMark ? cachedMark.color : null;
       var markClass = "segment-mark" + (cachedColor ? " marked" : "");
       var markStyle = cachedColor ? ' style="background:' + cachedColor + '"' : "";
       html += '<div class="segment-row segment-streaming" data-index="' + i + '" data-start="' + seg.start + '">';
@@ -415,7 +416,12 @@
         row.querySelector(".segment-mark").addEventListener("click", function (e) {
           e.stopPropagation();
           var segId = this.getAttribute("data-segment-id");
-          toggleMarkStreaming(segId, this);
+          var existing = _streamingMarks[segId];
+          if (existing) {
+            showMarkPopover(this, segId, existing);
+          } else {
+            toggleMarkStreaming(segId, this);
+          }
         });
       })(rows[j]);
     }
@@ -425,8 +431,29 @@
     }
   }
 
-  // Cache marks made during streaming so they survive DOM rebuilds
+  // Cache marks made during streaming so they survive DOM rebuilds.
+  // Each entry: { color, id, category, label }
   var _streamingMarks = {};
+  var _streamingMarksLoaded = false;
+
+  function _loadStreamingMarks(pid) {
+    if (_streamingMarksLoaded) return;
+    _streamingMarksLoaded = true;
+    apiGet("api/marks").then(function (data) {
+      if (!data.ok) return;
+      data.marks.forEach(function (m) {
+        if (!m.valid || m.participant !== pid) return;
+        if (_streamingMarks[m.segment_id]) return; // don't overwrite fresh marks
+        var cat = MARK_CATEGORIES[m.category] || MARK_CATEGORIES.bookmark;
+        _streamingMarks[m.segment_id] = {
+          color: cat.color,
+          id: m.id,
+          category: m.category,
+          label: m.label || "",
+        };
+      });
+    });
+  }
 
   var _pendingSeekTime = null;
   var _seekRaf = 0;
@@ -703,11 +730,17 @@
       segment_ids: [segmentId],
       category: state.lastMarkCategory,
     }).then(function (data) {
-      if (data.ok) {
+      if (data.ok && data.marks && data.marks.length > 0) {
+        var m = data.marks[0];
         showToast("Marked");
         markEl.classList.add("marked");
         markEl.style.background = cat.color;
-        _streamingMarks[segmentId] = cat.color;
+        _streamingMarks[segmentId] = {
+          color: cat.color,
+          id: m.id,
+          category: m.category,
+          label: m.label || "",
+        };
       }
     });
   }
@@ -717,7 +750,14 @@
       if (data.ok) {
         showToast("Mark removed");
         hideMarkPopover();
-        if (state.selectedParticipant) loadTranscript(state.selectedParticipant);
+        if (state.streamingParticipant) {
+          for (var key in _streamingMarks) {
+            if (_streamingMarks[key].id === markId) { delete _streamingMarks[key]; break; }
+          }
+          pollTaskStatus();
+        } else if (state.selectedParticipant) {
+          loadTranscript(state.selectedParticipant);
+        }
       }
     });
   }
@@ -727,13 +767,33 @@
     apiPut("api/marks/" + markId, { category: category }).then(function (data) {
       if (data.ok) {
         hideMarkPopover();
-        if (state.selectedParticipant) loadTranscript(state.selectedParticipant);
+        if (state.streamingParticipant) {
+          var cat = MARK_CATEGORIES[category] || MARK_CATEGORIES.bookmark;
+          for (var key in _streamingMarks) {
+            if (_streamingMarks[key].id === markId) {
+              _streamingMarks[key].category = category;
+              _streamingMarks[key].color = cat.color;
+              break;
+            }
+          }
+          pollTaskStatus();
+        } else if (state.selectedParticipant) {
+          loadTranscript(state.selectedParticipant);
+        }
       }
     });
   }
 
   function updateMarkLabel(markId, label) {
     apiPut("api/marks/" + markId, { label: label || null });
+    if (state.streamingParticipant) {
+      for (var key in _streamingMarks) {
+        if (_streamingMarks[key].id === markId) {
+          _streamingMarks[key].label = label || "";
+          break;
+        }
+      }
+    }
   }
 
   function showMarkPopover(anchorEl, segmentId, markObj) {
@@ -1176,6 +1236,7 @@
       if (selectedRunningTask && selectedRunningTask.partial_segments.length > 0) {
         renderPartialSegments(selectedRunningTask.partial_segments, selectedRunningTask.progress);
         state.streamingParticipant = state.selectedParticipant;
+        _loadStreamingMarks(state.selectedParticipant);
         // Update status text
         var statusEl = qs("#transcriptStatus");
         if (statusEl) statusEl.textContent = "transcribing\u2026 " + Math.round(selectedRunningTask.progress * 100) + "%";
@@ -1196,6 +1257,7 @@
       // Refresh participants and transcript as each task completes
       if (newlyCompleted.length > 0) {
         _streamingMarks = {};
+        _streamingMarksLoaded = false;
         loadParticipants().then(function () {
           if (state.selectedParticipant && newlyCompleted.indexOf(state.selectedParticipant) >= 0) {
             state.streamingParticipant = null;
@@ -1204,7 +1266,9 @@
         });
       }
 
-      if (!hasActive) {
+      if (hasActive) {
+        startPolling();
+      } else {
         stopPolling();
         _refreshedCompletedPids = {};
       }
@@ -1319,6 +1383,15 @@
     initQueuePanel();
     initCorrectionsModal();
     initVideoSync();
+
+    // Pause polling when tab is hidden; resume when visible
+    document.addEventListener("visibilitychange", function () {
+      if (document.hidden) {
+        stopPolling();
+      } else {
+        pollTaskStatus();
+      }
+    });
 
     // Participant select handler
     qs("#participantSelect").addEventListener("change", function () {
