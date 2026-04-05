@@ -33,7 +33,7 @@ Clip record (returned by generation functions):
 
 import re
 from dataclasses import dataclass
-from typing import Any, Dict, List, NamedTuple, Optional, Set, Tuple
+from typing import Any, Dict, List, NamedTuple, Optional, Sequence, Set, Tuple
 
 import gspread
 from icecream import ic
@@ -736,6 +736,7 @@ def _validate_row_range(
 def generate_list(
     sheet: Any,
     mode: str,
+    ctx: Optional[SheetContext] = None,
     line_numbers: Optional[List[int]] = None,
     range_start: Optional[int] = None,
     range_end: Optional[int] = None,
@@ -755,6 +756,7 @@ def generate_list(
     Args:
         sheet: The gspread worksheet object
         mode: One of 'batch', 'line', 'range', 'category', 'cell', 'participant', 'keyword', 'reel'
+        ctx: Pre-built SheetContext to reuse (skips the sheet API call when provided)
         line_numbers: List of line numbers for 'line' mode
         range_start: Start line for 'range' mode
         range_end: End line for 'range' mode
@@ -770,7 +772,8 @@ def generate_list(
     if config.DEBUGGING:
         ic(mode, line_numbers, range_start, range_end)
 
-    ctx = build_sheet_context(sheet)
+    if ctx is None:
+        ctx = build_sheet_context(sheet)
     if ctx is None:
         return []
 
@@ -1231,11 +1234,12 @@ def _clip_duration_seconds(clip: Any) -> float:
     return total if total > 0 else float(config.DEFAULT_DURATION_SECONDS)
 
 
-def _clip_highlight_score(clip: Any, existing_filenames: Set[str]) -> float:
+def _clip_highlight_score(clip: Any, lowered_filenames: Sequence[str]) -> float:
     """Score a clip for highlights reel selection.
 
     Higher score = more important. Combines severity, uniqueness (no existing
     artifact), and keyword annotation, weighted by config constants.
+    ``lowered_filenames`` must already be lowercased by the caller.
     """
     # Severity: map to 0-1 range
     severity_scores = {"critical": 1.0, "high": 0.75, "medium": 0.5, "low": 0.25}
@@ -1248,11 +1252,8 @@ def _clip_highlight_score(clip: Any, existing_filenames: Set[str]) -> float:
     desc = (clip.get("desc") or "").lower()[:30]
     has_existing = (
         any(
-            study in f.lower()
-            and participant in f.lower()
-            and desc
-            and desc in f.lower()
-            for f in existing_filenames
+            study in f and participant in f and desc and desc in f
+            for f in lowered_filenames
         )
         if study and participant and desc
         else False
@@ -1282,9 +1283,10 @@ def score_and_truncate_clips(
     sorted highest-first. Clips are accumulated until the total duration exceeds
     the budget.
     """
+    lowered = [f.lower() for f in existing_filenames]
     scored = sorted(
         clips,
-        key=lambda c: _clip_highlight_score(c, existing_filenames),
+        key=lambda c: _clip_highlight_score(c, lowered),
         reverse=True,
     )
     result: List[ClipRecord] = []

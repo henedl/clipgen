@@ -105,7 +105,7 @@ def test_api_reel_highlights_duration_override(client, monkeypatch):
     original = config.HIGHLIGHTS_REEL_DURATION_SECONDS
     captured = {}
 
-    def fake_generate_list(ws, mode, *, reel_input, skip_prompts):
+    def fake_generate_list(ws, mode, *, ctx=None, reel_input, skip_prompts):
         captured["duration"] = config.HIGHLIGHTS_REEL_DURATION_SECONDS
         return []
 
@@ -127,7 +127,7 @@ def test_api_reel_highlights_duration_restored_on_error(client, monkeypatch):
     monkeypatch.setattr(server, "_worksheet", object())
     original = config.HIGHLIGHTS_REEL_DURATION_SECONDS
 
-    def raise_generate_list(ws, mode, *, reel_input, skip_prompts):
+    def raise_generate_list(ws, mode, *, ctx=None, reel_input, skip_prompts):
         raise RuntimeError("boom")
 
     monkeypatch.setattr("spreadsheet.generate_list", raise_generate_list)
@@ -268,7 +268,7 @@ def test_api_generate_skips_existing_artifacts(client, monkeypatch, tmp_path):
 
     cell = types.SimpleNamespace(row=5, col=2, value="1:00")
 
-    def fake_generate_list(ws, mode, *, cell_specs, skip_prompts):
+    def fake_generate_list(ws, mode, *, ctx=None, cell_specs, skip_prompts):
         return [{"participant": "P01", "cell": cell}]
 
     def fake_parse_cell_specs(text):
@@ -309,7 +309,7 @@ def test_api_generate_regenerates_when_file_missing(client, monkeypatch, tmp_pat
 
     cell = types.SimpleNamespace(row=5, col=2, value="1:00")
 
-    def fake_generate_list(ws, mode, *, cell_specs, skip_prompts):
+    def fake_generate_list(ws, mode, *, ctx=None, cell_specs, skip_prompts):
         return [{"participant": "P01", "cell": cell}]
 
     monkeypatch.setattr("spreadsheet.generate_list", fake_generate_list)
@@ -362,7 +362,7 @@ def test_api_reel_skips_existing_reel(client, monkeypatch, tmp_path):
     }
     monkeypatch.setattr(server, "_generated_reels", [existing_reel])
 
-    def fake_generate_list(ws, mode, *, reel_input, skip_prompts):
+    def fake_generate_list(ws, mode, *, ctx=None, reel_input, skip_prompts):
         return [
             {
                 "participant": "P01",
@@ -856,7 +856,7 @@ def test_api_generate_titlecard_override(client, monkeypatch):
 
     cell = types.SimpleNamespace(row=5, col=2, value="1:00")
 
-    def fake_generate_list(ws, mode, *, cell_specs, skip_prompts):
+    def fake_generate_list(ws, mode, *, ctx=None, cell_specs, skip_prompts):
         return [{"participant": "P01", "cell": cell}]
 
     def fake_process_clips(clips, *, output_format):
@@ -898,7 +898,7 @@ def test_api_generate_titlecard_restored_on_error(client, monkeypatch):
 
     cell = types.SimpleNamespace(row=5, col=2, value="1:00")
 
-    def fake_generate_list(ws, mode, *, cell_specs, skip_prompts):
+    def fake_generate_list(ws, mode, *, ctx=None, cell_specs, skip_prompts):
         return [{"participant": "P01", "cell": cell}]
 
     def fake_process_clips(clips, *, output_format):
@@ -933,7 +933,7 @@ def test_api_reel_titlecard_override(client, monkeypatch):
     original_duration = config.TITLECARD_DURATION_SECONDS
     captured = {}
 
-    def fake_generate_list(ws, mode, *, reel_input, skip_prompts):
+    def fake_generate_list(ws, mode, *, ctx=None, reel_input, skip_prompts):
         captured["enabled"] = config.TITLECARDS_ENABLED
         captured["duration"] = config.TITLECARD_DURATION_SECONDS
         return []
@@ -963,7 +963,7 @@ def test_api_reel_titlecard_restored_on_error(client, monkeypatch):
     original_enabled = config.TITLECARDS_ENABLED
     original_duration = config.TITLECARD_DURATION_SECONDS
 
-    def raise_generate_list(ws, mode, *, reel_input, skip_prompts):
+    def raise_generate_list(ws, mode, *, ctx=None, reel_input, skip_prompts):
         raise RuntimeError("boom")
 
     monkeypatch.setattr("spreadsheet.generate_list", raise_generate_list)
