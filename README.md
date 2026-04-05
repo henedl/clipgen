@@ -2,9 +2,9 @@
 
 clipgen is a program for quickly generating video clips, screenshots, and GIFs based on your research notes and recordings. It includes web-based interfaces for interactive clip generation (Studio), structured UX findings (Insights Builder), extracting and modifying transcripts (Transcripts), and video frame analysis (Screenspace).
 
-The target audience for the program is user experience researchers and UX professionals who prefer to manage videos and analysis locally. The developer intends specifically to support games user researchers conducting playtests.
+The target audience for the program is user experience researchers and UX professionals who prefer to manage videos and analysis locally. The author intends specifically to support games user researchers conducting playtests.
 
-clipgen is written in Python and interacts with a local video files through [ffmpeg](https://www.ffmpeg.org) and expects structured data in a Google Sheets document or local Excel file. clipgen can be run from source or a binary.
+clipgen is written in Python and interacts with a local video files through [ffmpeg](https://www.ffmpeg.org) and expects structured data in a Google Sheets document or local Excel file. clipgen can be run from source or a compiled binary.
 
 ## How to use
 
@@ -47,6 +47,15 @@ clipgen supports a range of generation modes, selectable interactively or via CL
 - **Gallery**: `--gallery VIDEO` — interval screenshots/GIFs with a browser-viewable gallery
 - **Browse**: interactive terminal spreadsheet viewer (no output)
 
+### About the spreadsheet
+
+clipgen assumes that you are using a spreadsheet with a particular layout. A reference spreadsheet is [available here](https://docs.google.com/spreadsheets/d/1O51wnzRrYyz63tT6qy1HlJyVzdh9RT3t6QL5NohrcPc/edit?usp=sharing) - feel free to make a copy and use it in your studies.
+
+Timestamps must be separated by characters ```+ , ;```
+Ranges must be separated by character ```-```
+
+An optional `Baseline time` row supports clock/absolute timestamps: add a baseline timestamp per participant column (e.g. `09:12:00`), and clipgen automatically converts those timestamps to relative offsets before cutting clips. Columns without a baseline value use relative timestamps.
+
 ## Features
 
 ### Studio - interactive artifact composing
@@ -77,15 +86,6 @@ Available analysis tools:
 
 clipgen features local **Transcripts**, generated via [faster-whisper](https://github.com/SYSTRAN/faster-whisper).
 
-### About the spreadsheet
-
-clipgen assumes that you are using a spreadsheet with a particular layout. A reference spreadsheet is [available here](https://docs.google.com/spreadsheets/d/1O51wnzRrYyz63tT6qy1HlJyVzdh9RT3t6QL5NohrcPc/edit?usp=sharing) - feel free to make a copy and use it in your studies.
-
-Timestamps must be separated by characters ```+ , ;```
-Ranges must be separated by character ```-```
-
-An optional `Baseline time` row supports clock/absolute timestamps: add a baseline timestamp per participant column (e.g. `09:12:00`), and clipgen automatically converts those timestamps to relative offsets before cutting clips. Columns without a baseline value use relative timestamps.
-
 ## Building from source
 
 Cross-platform executables (macOS and Windows) are built automatically via GitHub Actions (`.github/workflows/build-binaries.yml`) on version tag pushes. To build locally with PyInstaller:
@@ -97,6 +97,6 @@ pyinstaller --clean --noconfirm build/clipgen.spec
 
 Output: `dist/clipgen` (macOS) or `dist/clipgen.exe` (Windows).
 
-## AI Disclosure
+## AI disclosure
 
 The author has used an LLM coding agent for assistance in writing parts of this program. If you want to avoid software connected to LLMs; I get it. All code in this reposity prior to 2026 was written by a human, if you would like to fork the project.
