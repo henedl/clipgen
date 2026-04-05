@@ -2362,6 +2362,39 @@ html[data-theme="dark"] .log-panel {
   display: block;
 }
 
+/* Cross-reference badges on intake cards */
+.xref-badge-stack {
+  position: absolute;
+  bottom: 4px;
+  left: 4px;
+  display: flex;
+  flex-direction: row;
+  z-index: 1;
+}
+
+.xref-badge-stack .xref-badge {
+  position: relative;
+  padding: 3px;
+  border-radius: var(--radius-sm);
+  color: #fff;
+  line-height: 0;
+  transition: margin var(--duration-fast) ease;
+}
+
+.xref-badge-stack .xref-badge + .xref-badge {
+  margin-left: -10px;
+}
+
+.queue-card:hover .xref-badge-stack .xref-badge + .xref-badge {
+  margin-left: 3px;
+}
+
+.xref-badge svg {
+  width: 10px;
+  height: 10px;
+  display: block;
+}
+
 .tr-intake-filter-cat {
   font-size: var(--text-xs);
 }
