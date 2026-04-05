@@ -14,7 +14,7 @@ Topics are sorted roughly by expected user impact within each category.
 
 | Area | Commit | What was done | Related experiment |
 |------|--------|--------------|-------------------|
-| **Frontend rendering** | `89bd136` (#105) | RAF-throttle canvas ops, cache `getBoundingClientRect()` and `getComputedStyle()`, split playhead to separate canvas layer, DocumentFragment batching, skip re-render on unchanged poll data, debounce intake search (250ms), pause polling when tab hidden | 1E (DOM batching) — partially done; 1A (SSE) — poll improved but still polling |
+| **Frontend rendering** | `89bd136` (#105) | RAF-throttle canvas ops, cache `getBoundingClientRect()` and `getComputedStyle()`, split playhead to separate canvas layer, DocumentFragment batching, skip re-render on unchanged poll data, debounce intake search (250ms), pause polling when tab hidden | 1E (DOM batching) — Studio grid; Viewer list + Screenspace lists also use fragments now; Insights Builder still a candidate (see §8) |
 | **Frontend rendering** | `18607ae` (#75) | Decouple timeline playhead from frame loading, coalesce frame requests, RAF-throttle frame requests, cache VideoCapture and computed styles | 1A, 1E — foundational work |
 | **Video preview** | `8206470` (#103) | Preload clips as muted paused `<video>`, RAF-throttled scrub, 60ms debounce on hover | 1B (preloading) — done for viewer clips, not Screenspace frames |
 | **Sprite scrubbing** | `444d129` (#106) | Replaced canvas sprite system with direct `<video>` seek — simpler and faster, net -65 lines | Shows simplification > optimization |
@@ -22,7 +22,7 @@ Topics are sorted roughly by expected user impact within each category.
 | **Screenspace streaming** | `910df4a` (#71) | Stream results during execution, cache EasyOCR readers, pre-resize similarity refs, cache preprocessed frames, static-frame skip in similarity | 1A (streaming) — results stream exists but frontend still polls |
 | **Startup** | `8e85ac0` (#100) | Reduce `build_sheet_context()` from 7→1 API calls (saved 3-6s), defer cv2/screenspace/gspread imports | 4A (lazy imports) — partially done |
 | **Sprites** | `c4f2541` (#13) | On-demand sprite generation, in-memory cache | Already optimized |
-| **Gallery/filmstrip** | `c5b604a` (#76) | Batch screenshots in single ffmpeg pass (4-6x faster), parallel GIF extraction with ThreadPoolExecutor (4 workers, 3-4x faster), increase filmstrip concurrency 1→3 | 1F (filmstrip concurrency) — moved from 1→3, plan suggests 4-6; 3A (parallel cutting) — proven pattern to replicate |
+| **Gallery/filmstrip** | `c5b604a` (#76) | Batch screenshots in single ffmpeg pass (4-6x faster), parallel GIF extraction with ThreadPoolExecutor (4 workers, 3-4x faster), increase filmstrip concurrency 1→3 | 1F — later raised to 4 concurrent loads in viewer.js; 3A (parallel cutting) — proven pattern; Studio multi-cell path still sequential (see §8.2) |
 | **Artifact reuse** | `cbee9eb` (#26) | Skip regeneration when output file exists, seed session from manifest | Reduces redundant work — same principle as 3D (transcript caching) |
 | **Region reuse** | `2f70455` (#52), `0e7bb96` (#90) | Normalized coordinates (0-1 fractions), region stashing and restore | Enables cross-resolution analysis — relevant to 2A |
 | **CI** | `b253685` (#79) | Path filters to skip tests on non-Python changes, scope push trigger to master | 5C (path-scoped tests) — partially done at workflow level |
@@ -32,7 +32,7 @@ Topics are sorted roughly by expected user impact within each category.
 ### Proven patterns to extend
 
 **1. RAF-throttling and cache-on-interaction** (3 commits, all kept)
-The pattern of caching expensive DOM/style lookups at interaction start and clearing on interaction end has been applied to Studio grid and Screenspace canvas but not yet to the Viewer timeline or Insights Builder. Extending this is low-risk.
+The pattern of caching expensive DOM/style lookups at interaction start and clearing on interaction end has been applied to Studio grid and Screenspace canvas. **Insights Builder** is still a good place to extend the same pattern where heavy lists repaint often.
 
 **2. Sequential frame reading** (`253d592`)
 The switch from random-access seeking to sequential `grab()/retrieve()` for intervals ≤3s (`SCREENSPACE_SEQUENTIAL_READ_MAX_INTERVAL`) was a significant win because H.264 keyframe decoding is expensive. Our experiment 2B (variable intervals) should preserve this: the coarse pass at 3-5s intervals still falls within sequential-read range, so it gets both the content-skip benefit *and* the decode-path benefit.
@@ -100,21 +100,21 @@ How fast clipgen *feels* to the user, independent of actual processing time.
 
 ### - [x] 1E. Frontend DOM batching for large artifact lists
 
-**Prior art:** DocumentFragment batching already applied to Studio grid rendering (`89bd136`). Not yet applied to Viewer or Screenspace result lists.
+**Prior art:** DocumentFragment batching already applied to Studio grid rendering (`89bd136`).
 
-**Current:** viewer.js builds artifact cards via individual `appendChild()` calls inside a loop (viewer.js:1343-1398), triggering layout recalculation on each append.
+**Status (audit):** `renderList()` in [assets/web/viewer.js](../assets/web/viewer.js) and results rendering in [assets/web/screenspace.js](../assets/web/screenspace.js) now build a `DocumentFragment` and append once. **Remaining candidate:** [assets/web/insights-builder.js](../assets/web/insights-builder.js) artifact grid and insight cards still append per item in a loop — apply the same fragment pattern (or virtual scrolling for very large lists; pairs with 6A).
 
 **Experiment:** Build cards inside a `DocumentFragment`, then append the fragment in a single DOM write. For 200+ artifacts this eliminates hundreds of reflows.
 
-**Trade-offs:** None. Strictly better. Same pattern should be applied to Screenspace result lists and Viewer clip lists.
+**Trade-offs:** None. Strictly better for the Insights Builder lists still on the per-append path.
 
 ### - [x] 1F. Filmstrip thumbnail concurrency
 
-**Prior art:** Filmstrip concurrency was increased from 1→3 in `c5b604a`. Currently at 2 in viewer.js (may have been adjusted since).
+**Prior art:** Filmstrip concurrency was increased from 1→3 in `c5b604a`, then raised further in viewer.js.
 
-**Current:** The viewer loads filmstrip thumbnails 2-at-a-time (`FILMSTRIP_CONCURRENCY = 2`, viewer.js:25). On fast local networks, this leaves bandwidth on the table.
+**Status (audit):** `FILMSTRIP_CONCURRENCY = 4` in [assets/web/viewer.js](../assets/web/viewer.js). Optional next step: adaptive ramp (2→6) or `meta` override for slow links.
 
-**Experiment:** Increase to 4-6 concurrent loads, or use an adaptive strategy (start at 2, ramp up if loads complete quickly).
+**Experiment:** If needed, increase to 5–6 concurrent loads or use an adaptive strategy (start at 2, ramp up if loads complete quickly).
 
 **Trade-offs:** Marginal risk of saturating a slow connection. Could make configurable via `window.CLIPGEN_DATA.meta`.
 
@@ -213,9 +213,9 @@ Speed of generating clips, screenshots, GIFs, and reels.
 
 **Prior art:** ThreadPoolExecutor with 4 workers already used for gallery GIF extraction (`c5b604a`), achieving 3-4x speedup. Same pattern, same module (video.py), different function.
 
-**Current:** `process_clips()` in clipgen.py generates clips sequentially — one ffmpeg subprocess at a time. For a batch of 20 clips from the same source video, this leaves CPU idle between I/O-bound ffmpeg calls.
+**Status (audit):** [clipgen.py](../clipgen.py) `process_clips()` uses a thread pool when `len(prepared) >= 2` and workers ≥ 2. **Gap:** Studio [`/api/generate`](../server.py) calls `process_clips([clip], …)` once per cell inside the ndjson stream, so multi-cell batches stay **sequential** and do not use parallel cutting. See **§8.2** for follow-up.
 
-**Experiment:** Use `ThreadPoolExecutor` (already used for gallery GIFs, video.py:1309) to run N clip cuts in parallel. Default to `min(4, cpu_count)` workers, configurable via config.
+**Experiment (original):** Use `ThreadPoolExecutor` to run N clip cuts in parallel. Default to `min(4, cpu_count)` workers, configurable via config — **landed for multi-clip `process_clips` calls**.
 
 **Trade-offs:** Disk I/O may become the bottleneck on HDDs. On SSDs, 3-4x speedup is realistic. Source video reads are sequential (same file), but ffmpeg handles concurrent reads from the same input well since it seeks independently.
 
@@ -356,7 +356,7 @@ Additional performance area: how efficiently clipgen handles data in memory.
 
 **Experiment:** Paginate the `/api/results/<task_id>` endpoint. Send the first 100 events immediately, then load more on scroll. Or filter server-side by time range based on the visible timeline viewport.
 
-**Trade-offs:** Adds pagination state. Alternatively, use virtual scrolling on the frontend (see 1E) to handle large DOM lists without reducing the data transfer.
+**Trade-offs:** Adds pagination state. Alternatively, use virtual scrolling on the frontend (complements 1E; strong pairing with Insights Builder large grids) to handle large DOM lists without reducing the data transfer.
 
 ### - [ ] 6B. Compress manifest files
 
@@ -365,6 +365,8 @@ Additional performance area: how efficiently clipgen handles data in memory.
 **Experiment:** Use compact JSON separators (`(",", ":")`) when writing manifests, and optionally gzip large manifests on disk (read with `gzip.open`).
 
 **Trade-offs:** Compact JSON is a one-liner change. Gzip adds complexity for marginal gain unless manifests exceed 10+ MB.
+
+**Related (audit):** [viewer.py](../viewer.py) `save_manifest()` calls `load_manifest_artifacts()` and `load_manifest_reels()` separately — each reads and `json.loads` the **same** manifest file. A single read/parse that extracts both keys would cut duplicate I/O on every save (small, safe win).
 
 ---
 
@@ -390,6 +392,50 @@ Additional performance area: the raw speed of reading video frames and writing o
 
 ---
 
+## 8. Follow-up findings (codebase audit)
+
+Additional opportunities identified in a fresh pass over the codebase (April 2026). **Transcript-related work is excluded** here by request. Line references drift over time — verify in source.
+
+### 8.1. Reuse `SheetContext` in `generate_list` (Studio / API latency + quota)
+
+**Issue:** [`spreadsheet.generate_list()`](../spreadsheet.py) always calls [`build_sheet_context(sheet)`](../spreadsheet.py), which performs `sheet.get_all_values()` (one full sheet fetch for Google Sheets). The combined server already holds [`_sheet_context`](../server.py) from `_init_studio_state` and refreshes it only via `POST /api/sheet/refresh`.
+
+**Impact:** Routes such as `/api/generate`, `/api/reel`, and `/api/highlights-preview` pay an **extra full-sheet download** on every call, even when the user has not refreshed. This hurts latency and risks Google API rate limits (see AGENTS.md guidance on `get_all_values()`).
+
+**Direction:** Optional `ctx: SheetContext | None` on `generate_list` (and callers); when provided and valid, skip `build_sheet_context`. Invalidate when the sheet is explicitly refreshed.
+
+### 8.2. Studio multi-cell generate vs parallel clip cutting (3A gap)
+
+**Issue:** Parallel ffmpeg in `process_clips` only activates when **multiple clips** are prepared in **one** call. Studio streams one `process_clips([clip], …)` per selected cell.
+
+**Direction:** Batch all clips for one generate request into a single `process_clips` (then map results back to ndjson lines), or parallelize at the server layer with careful handling of `_generated_artifacts`, manifest saves, and thread safety.
+
+### 8.3. Reel generation: sequential intermediate segments
+
+**Issue:** [`process_reel()`](../clipgen.py) uses [`_run_clip_pipeline()`](../clipgen.py), which runs `per_clip_fn` in a simple `for` loop — no thread pool. Each segment spawns ffmpeg separately, unlike `process_clips` phase 2.
+
+**Direction:** Parallelize segment generation after preparation (same worker discipline as 3A), or share executor logic between reel and batch clip paths.
+
+### 8.4. Screenshot artifact pipeline vs gallery batch extract
+
+**Issue:** Gallery uses [`_batch_extract_screenshots()`](../video.py) (one ffmpeg pass for many timestamps). The clip/screenshot path uses [`extract_screenshot()`](../video.py) per segment in [`_process_single_clip_segments()`](../clipgen.py).
+
+**Direction:** For many screenshot outputs from the **same source file**, consider grouping timestamps into a batch pass (then applying per-clip filenames/metadata) — same spirit as 2E but scoped to artifact screenshots.
+
+### 8.5. Highlights scoring vs output directory size
+
+**Issue:** [`_clip_highlight_score()`](../spreadsheet.py) runs an `any(… for f in existing_filenames)` over `discover_clips()` **per clip**. Large output directories make this **O(clips × files)**.
+
+**Direction:** One pass over `existing_filenames` to build a normalized lookup (or substring index) reused for all clips.
+
+### 8.6. Plan document drift (corrected above)
+
+- **1E:** Viewer + Screenspace use `DocumentFragment`; Insights Builder remains.
+- **1F:** Filmstrip concurrency is 4 in viewer.js, not 2.
+- **3A:** Parallel cutting is implemented for multi-clip `process_clips`; Studio single-clip loop is the remaining gap (**§8.2**).
+
+---
+
 ## Summary: Estimated Impact Ranking
 
 | Status | # | Experiment | Expected Impact |
@@ -411,3 +457,9 @@ Additional performance area: the raw speed of reading video frames and writing o
 | [x] | 15 | 3B — Titlecard batching | Low — small per-clip overhead |
 | [ ] | 16 | 4C — Cache-busted static assets | Low — marginal for local tool |
 | [ ] | 17 | 7A — Hardware decode | Low — platform-specific, complex |
+| [ ] | 18 | **8.1** — Reuse `SheetContext` in `generate_list` / Studio | High — latency + Sheets quota |
+| [ ] | 19 | **8.2** — Studio batch `process_clips` (unlock 3A) | High — wall time multi-cell |
+| [ ] | 20 | **8.3** — Parallel reel segment ffmpeg | Medium — reel wall time |
+| [ ] | 21 | **8.4** — Batch screenshot extraction (clip pipeline) | Medium — many screens / same video |
+| [ ] | 22 | **8.5** — Highlights scoring index + manifest single-read | Low — scales with artifacts |
+| [ ] | 23 | **1E (remainder)** — Insights Builder DOM batching / virtual scroll | Low–Medium — perceived smoothness |
