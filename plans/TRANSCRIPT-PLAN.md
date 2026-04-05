@@ -241,14 +241,15 @@ Hover-to-reveal full transcript text on intake cards and other transcript-bearin
 - [x] **Tooltip toggle**: button in Studio header (`#tooltipToggle`, chat-bubble icon) next to the dark mode toggle. On by default (`state.trIntakeTooltipsEnabled`). Dims to 40% opacity when off.
 - [ ] **Timeline Viewer**: extend tooltip behavior to transcript sidebar segments (Phase 4)
 - [ ] **Insights Builder**: extend tooltip behavior to artifact transcript text when browsing evidence (Phase 4)
-- [ ] **Screenspace Intake cards**: show transcript context tooltip on Screenspace intake cards when transcript data is available at the card's time range (deferred, alongside cross-referencing)
-- [ ] **Toggle in all frontends**: add tooltip toggle to all viewers and workspaces where transcript data is surfaced. Scoping to Studio intake first to validate the interaction pattern.
+- [x] **Screenspace Intake cards**: show transcript context tooltip on Screenspace intake cards when transcript data is available at the card's time range (deferred, alongside cross-referencing)
+- [x] **Toggle in all frontends**: add tooltip toggle to all viewers and workspaces where transcript data is surfaced. Scoping to Studio intake first to validate the interaction pattern.
 
-### Cross-referencing with Screenspace events (deferred)
+### Cross-referencing with Screenspace and Spreadsheet events
 
-- [ ] **On Screenspace intake cards**: when transcript data is available, show a "transcript context" line with the text at the card's time range (client-side join by participant + timestamp)
-- [ ] **On transcript search results**: when Screenspace events exist at the same timestamp, show a detector badge on the segment card (e.g., "change event detected here")
-- [ ] Cross-referencing is pure client-side — both data sources available in memory, joined by participant + timestamp at display time
+- [x] **On Screenspace intake cards**: when transcript data is available, show a "transcript context" line with the text at the card's time range (client-side join by participant + timestamp). Also shows sheet observation text when available.
+- [x] **On Transcript intake cards**: when Screenspace events exist at the same timestamp, show detector color dots. Also shows sheet observation text when available.
+- [x] **On transcript search results**: when Screenspace events exist at the same timestamp, show a detector badge on the segment card (e.g., "change event detected here"). Also shows sheet observation text when available.
+- [x] Cross-referencing is pure client-side — all data sources available in memory, joined by participant + timestamp at display time. Uses `findOverlappingData()` (studio.js) and `findOverlapsForSearch()` (transcripts.js).
 
 ---
 

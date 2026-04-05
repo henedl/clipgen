@@ -15,7 +15,24 @@
     bookmark:   { label: "Bookmark",   color: "#0891b2" },
   };
 
+  // Cross-reference badge SVGs and colors — mirrored from studio.js
+  var SS_BADGE_SVG = '<svg viewBox="0 0 16 16" fill="currentColor"><path d="M3.5 2C2.67157 2 2 2.67157 2 3.5V5.5C2 6.32843 2.67157 7 3.5 7H5.5C6.32843 7 7 6.32843 7 5.5V3.5C7 2.67157 6.32843 2 5.5 2H3.5Z"/><path d="M3.5 9C2.67157 9 2 9.67157 2 10.5V12.5C2 13.3284 2.67157 14 3.5 14H5.5C6.32843 14 7 13.3284 7 12.5V10.5C7 9.67157 6.32843 9 5.5 9H3.5Z"/><path d="M9 3.5C9 2.67157 9.67157 2 10.5 2H12.5C13.3284 2 14 2.67157 14 3.5V5.5C14 6.32843 13.3284 7 12.5 7H10.5C9.67157 7 9 6.32843 9 5.5V3.5Z"/><path d="M10.5 9C9.67157 9 9 9.67157 9 10.5V12.5C9 13.3284 9.67157 14 10.5 14H12.5C13.3284 14 14 13.3284 14 12.5V10.5C14 9.67157 13.3284 9 12.5 9H10.5Z"/></svg>';
+  var SHEET_BADGE_SVG = '<svg viewBox="0 0 16 16" fill="currentColor"><path fill-rule="evenodd" clip-rule="evenodd" d="M15 11C15 12.1046 14.1046 13 13 13H3C1.89543 13 1 12.1046 1 11V5C1 3.89543 1.89543 3 3 3H13C14.1046 3 15 3.89543 15 5V11ZM7.25 7.5C7.25 7.22386 7.02614 7 6.75 7H3C2.72386 7 2.5 7.22386 2.5 7.5V8C2.5 8.27614 2.72386 8.5 3 8.5H6.75C7.02614 8.5 7.25 8.27614 7.25 8V7.5ZM8.75 10.5C8.75 10.2239 8.97386 10 9.25 10H13C13.2761 10 13.5 10.2239 13.5 10.5V11C13.5 11.2761 13.2761 11.5 13 11.5H9.25C8.97386 11.5 8.75 11.2761 8.75 11V10.5ZM13.5 8V7.5C13.5 7.22386 13.2761 7 13 7H9.25C8.97386 7 8.75 7.22386 8.75 7.5V8C8.75 8.27614 8.97386 8.5 9.25 8.5H13C13.2761 8.5 13.5 8.27614 13.5 8ZM6.75 11.5C7.02614 11.5 7.25 11.2761 7.25 11V10.5C7.25 10.2239 7.02614 10 6.75 10H3C2.72386 10 2.5 10.2239 2.5 10.5V11C2.5 11.2761 2.72386 11.5 3 11.5H6.75Z"/></svg>';
+
+  var XREF_BADGE_COLOR = {
+    screenspace: "rgba(52, 152, 219, 0.85)",
+    sheet: "rgba(234, 179, 8, 0.85)",
+  };
+
   // ---- State ----
+
+  // Screenspace detector colors — mirrored from studio.js INTAKE_DETECTOR_COLORS
+  var SS_DETECTOR_COLORS = {
+    multitool: "#2563eb", color: "#8b5cf6", change: "#f97316",
+    similarity: "#0ea5e9", text: "#10b981", numbers: "#eab308",
+    timelapse: "#ec4899", template: "#f43f5e", flow: "#6366f1",
+    scene: "#14b8a6", inactivity: "#78716c",
+  };
 
   var state = {
     participants: [],
@@ -30,6 +47,14 @@
     pollTimer: null,
     lastMarkCategory: "bookmark",
     streamingParticipant: null,
+    ssEvents: [],
+    ssEventsLoaded: false,
+    sheetRows: [],
+    sheetParticipants: [],
+    sheetDefaultDuration: 60,
+    sheetLoaded: false,
+    xrefPollTimer: null,
+    tooltipsEnabled: true,
   };
 
   // ---- Helpers ----
@@ -143,7 +168,96 @@
       if (data.studio) qs("#studioLink").classList.remove("hidden");
       if (data.insights) qs("#insightsLink").classList.remove("hidden");
       if (data.screenspace) qs("#screenspaceLink").classList.remove("hidden");
+      if (data.screenspace || data.studio) {
+        loadCrossRefData();
+        state.xrefPollTimer = setInterval(loadCrossRefData, 30000);
+      }
     }).catch(function () {});
+  }
+
+  // ---- Cross-reference data ----
+
+  function loadCrossRefData() {
+    fetch("../screenspace/api/events?excluded=false")
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        if (data.ok) {
+          state.ssEvents = data.events || [];
+          state.ssEventsLoaded = true;
+          if (state.searchResults) renderSearchResults(state.searchResults);
+        }
+      })
+      .catch(function () {});
+
+    fetch("../studio/api/sheet")
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        if (data.ok) {
+          state.sheetRows = data.rows || [];
+          state.sheetParticipants = data.participants || [];
+          state.sheetDefaultDuration = data.defaultDuration || 60;
+          state.sheetLoaded = true;
+          if (state.searchResults) renderSearchResults(state.searchResults);
+        }
+      })
+      .catch(function () {});
+  }
+
+  function parseTS(str) {
+    var parts = str.split(":");
+    if (parts.length === 3) return (+parts[0]) * 3600 + (+parts[1]) * 60 + (+parts[2]);
+    if (parts.length === 2) return (+parts[0]) * 60 + (+parts[1]);
+    return NaN;
+  }
+
+  function parseSheetTimestamps(raw) {
+    var DEFAULT_DUR = state.sheetDefaultDuration || 60;
+    var cleaned = raw.toLowerCase().replace(/!key/g, "").replace(/[+;,]/g, " ");
+    var tokens = cleaned.split(/\s+/).filter(function (t) { return t && t !== "x"; });
+    var segments = [];
+    for (var i = 0; i < tokens.length; i++) {
+      var tok = tokens[i].replace(/\.$/, "").replace(/\./g, ":");
+      var dashIdx = -1;
+      for (var d = 1; d < tok.length; d++) {
+        if (tok[d] === "-" && tok[d - 1] >= "0" && tok[d - 1] <= "9") { dashIdx = d; break; }
+      }
+      if (dashIdx > 0) {
+        var s = parseTS(tok.substring(0, dashIdx));
+        var e = parseTS(tok.substring(dashIdx + 1));
+        if (!isNaN(s) && !isNaN(e)) segments.push({ start: Math.floor(s), duration: Math.max(0, e - s) });
+      } else if (tok.indexOf(":") > 0) {
+        var sec = parseTS(tok);
+        if (!isNaN(sec)) segments.push({ start: Math.floor(sec), duration: DEFAULT_DUR });
+      }
+    }
+    return segments;
+  }
+
+  function findOverlapsForSearch(participant, start, end) {
+    var result = { screenspaceEvents: [], sheetObservations: [] };
+
+    for (var i = 0; i < state.ssEvents.length; i++) {
+      var ev = state.ssEvents[i];
+      if (ev.participant === participant && ev.time_in < end && ev.time_out > start) {
+        result.screenspaceEvents.push(ev);
+      }
+    }
+
+    for (var j = 0; j < state.sheetRows.length; j++) {
+      var row = state.sheetRows[j];
+      var cell = row.cells[participant];
+      if (!cell || !cell.valid) continue;
+      var segs = parseSheetTimestamps(cell.value);
+      for (var k = 0; k < segs.length; k++) {
+        var segEnd = segs[k].start + segs[k].duration;
+        if (segs[k].start < end && segEnd > start) {
+          result.sheetObservations.push({ observation: row.observation, category: row.category });
+          break;
+        }
+      }
+    }
+
+    return result;
   }
 
   // ---- Participants ----
@@ -322,7 +436,29 @@
 
       html += '<div class="segment-row' + activeClass + correctedClass + '" data-index="' + i + '" data-start="' + seg.start + '">';
       html += '<span class="' + markClass + '" data-segment-id="' + escapeHtml(seg.id) + '"' + markStyle + markLabel + '></span>';
-      html += '<span class="segment-timestamp">' + fmtTime(seg.start) + '</span>';
+      html += '<span class="segment-timestamp">' + fmtTime(seg.start);
+      // Cross-reference badges in gutter (inside timestamp, positioned at right edge)
+      if (state.tooltipsEnabled) {
+        var xref = findOverlapsForSearch(state.selectedParticipant, seg.start, seg.end);
+        if (xref.screenspaceEvents.length > 0 || xref.sheetObservations.length > 0) {
+          html += '<span class="segment-xref-badges">';
+          if (xref.screenspaceEvents.length > 0) {
+            var evTypes = [];
+            var evSeen = {};
+            for (var ei = 0; ei < xref.screenspaceEvents.length; ei++) {
+              var et = xref.screenspaceEvents[ei].event_type || xref.screenspaceEvents[ei].detector;
+              if (!evSeen[et]) { evSeen[et] = true; evTypes.push(et); }
+            }
+            html += '<span class="segment-xref-badge" style="background:' + XREF_BADGE_COLOR.screenspace + '" title="' + escapeHtml(evTypes.join(", ")) + '">' + SS_BADGE_SVG + '</span>';
+          }
+          if (xref.sheetObservations.length > 0) {
+            var obsTitle = xref.sheetObservations[0].observation;
+            html += '<span class="segment-xref-badge" style="background:' + XREF_BADGE_COLOR.sheet + '" title="' + escapeHtml(obsTitle) + '">' + SHEET_BADGE_SVG + '</span>';
+          }
+          html += '</span>';
+        }
+      }
+      html += '</span>';
       // Split text into word spans
       var tokens = seg.text.split(/(\s+)/);
       var wordHtml = "";
@@ -1002,9 +1138,27 @@
       var count = data.counts_by_participant[pid] || 0;
       html += '<div class="search-group-header">' + escapeHtml(pid) + ' (' + count + ')</div>';
       groups[pid].forEach(function (r) {
+        var xref = findOverlapsForSearch(r.participant, r.start, r.end);
         html += '<div class="search-result-row" data-participant="' + escapeHtml(r.participant) + '" data-start="' + r.start + '">';
         html += '<span class="search-result-time">' + fmtTime(r.start) + '</span>';
         html += '<span class="search-result-text">' + highlightQuery(r.text, state.searchQuery) + '</span>';
+        if (state.tooltipsEnabled && xref.screenspaceEvents.length > 0) {
+          var seen = {};
+          html += '<span class="search-xref-events">';
+          for (var ei = 0; ei < xref.screenspaceEvents.length; ei++) {
+            var det = xref.screenspaceEvents[ei].detector;
+            if (seen[det]) continue;
+            seen[det] = true;
+            var evColor = SS_DETECTOR_COLORS[det] || "#888";
+            html += '<span class="search-xref-dot" style="background:' + evColor + '" title="' + escapeHtml(xref.screenspaceEvents[ei].event_type || det) + '"></span>';
+          }
+          html += '</span>';
+        }
+        if (state.tooltipsEnabled && xref.sheetObservations.length > 0) {
+          var obsText = xref.sheetObservations[0].observation;
+          var truncObs = obsText.length > 50 ? obsText.substring(0, 50) + "\u2026" : obsText;
+          html += '<span class="search-xref-sheet" title="' + escapeHtml(obsText) + '">' + escapeHtml(truncObs) + '</span>';
+        }
         html += '</div>';
       });
     });
@@ -1374,10 +1528,22 @@
     });
   }
 
+  function initTooltipToggle() {
+    var btn = qs("#tooltipToggle");
+    if (!btn) return;
+    btn.addEventListener("click", function () {
+      state.tooltipsEnabled = !state.tooltipsEnabled;
+      btn.setAttribute("aria-pressed", state.tooltipsEnabled ? "true" : "false");
+      if (state.searchResults) renderSearchResults(state.searchResults);
+      if (state.segments.length > 0) renderSegments();
+    });
+  }
+
   // ---- Boot ----
 
   document.addEventListener("DOMContentLoaded", function () {
     initThemeToggle();
+    initTooltipToggle();
     checkNavLinks();
     initSearch();
     initQueuePanel();
