@@ -1386,8 +1386,7 @@ def main() -> None:
 
     # Standalone regenerate: re-export all media artifacts and reels from saved manifest
     if getattr(args, "regenerate", False) and not cli_mode:
-        existing_artifacts = viewer.load_manifest_artifacts()
-        existing_reels = viewer.load_manifest_reels()
+        existing_artifacts, existing_reels = viewer._load_manifest_both()
         if not existing_artifacts and not existing_reels:
             utils.error_print(
                 "No manifest found or manifest is empty.",

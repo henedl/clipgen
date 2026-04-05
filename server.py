@@ -27,6 +27,7 @@ Studio API endpoints (all under /studio/):
   GET  /api/status             – reports which interfaces are active (studio/insights/screenspace)
 """
 
+import concurrent.futures
 import hashlib
 import json
 import os
@@ -552,7 +553,11 @@ def api_generate() -> FlaskResponse:
             ), 400
 
         clips = spreadsheet.generate_list(
-            _worksheet, "cell", cell_specs=cell_specs, skip_prompts=True
+            _worksheet,
+            "cell",
+            ctx=_sheet_context,
+            cell_specs=cell_specs,
+            skip_prompts=True,
         )
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
@@ -570,6 +575,9 @@ def api_generate() -> FlaskResponse:
                 pass
         with _override_config(**overrides):
             clip_cells: set[str] = set()
+
+            # Pass 1: yield already-existing artifacts, collect clips that need generation
+            to_generate: List[Tuple[Any, str]] = []
             for clip in clips:
                 cell_str = clip["participant"] + "." + str(clip["cell"].row)
                 clip_cells.add(cell_str)
@@ -590,29 +598,75 @@ def api_generate() -> FlaskResponse:
                         )
                         + "\n"
                     )
-                    continue
+                else:
+                    to_generate.append((clip, cell_str))
 
-                try:
-                    generated, artifacts = clipgen.process_clips(
-                        [clip], output_format=output_format
-                    )
-                    _generated_artifacts.extend(artifacts)
-                    yield (
-                        json.dumps(
-                            {
-                                "cell": cell_str,
-                                "ok": generated > 0,
-                                "generated": generated,
-                                "artifacts": artifacts,
-                            }
-                        )
-                        + "\n"
-                    )
-                except Exception as e:
-                    yield (
-                        json.dumps({"cell": cell_str, "ok": False, "error": str(e)})
-                        + "\n"
-                    )
+            # Pass 2: generate in parallel and yield as each completes
+            if to_generate:
+                workers = min(4, os.cpu_count() or 1)
+                if workers >= 2 and len(to_generate) >= 2:
+                    with concurrent.futures.ThreadPoolExecutor(
+                        max_workers=workers
+                    ) as pool:
+                        future_to_cell: Dict[
+                            concurrent.futures.Future, Tuple[Any, str]
+                        ] = {
+                            pool.submit(
+                                clipgen.process_clips,
+                                [clip],
+                                output_format=output_format,
+                            ): (clip, cell_str)
+                            for clip, cell_str in to_generate
+                        }
+                        for future in concurrent.futures.as_completed(future_to_cell):
+                            clip, cell_str = future_to_cell[future]
+                            try:
+                                generated, artifacts = future.result()
+                                _generated_artifacts.extend(artifacts)
+                                yield (
+                                    json.dumps(
+                                        {
+                                            "cell": cell_str,
+                                            "ok": generated > 0,
+                                            "generated": generated,
+                                            "artifacts": artifacts,
+                                        }
+                                    )
+                                    + "\n"
+                                )
+                            except Exception as e:
+                                yield (
+                                    json.dumps(
+                                        {"cell": cell_str, "ok": False, "error": str(e)}
+                                    )
+                                    + "\n"
+                                )
+                else:
+                    for clip, cell_str in to_generate:
+                        try:
+                            generated, artifacts = clipgen.process_clips(
+                                [clip], output_format=output_format
+                            )
+                            _generated_artifacts.extend(artifacts)
+                            yield (
+                                json.dumps(
+                                    {
+                                        "cell": cell_str,
+                                        "ok": generated > 0,
+                                        "generated": generated,
+                                        "artifacts": artifacts,
+                                    }
+                                )
+                                + "\n"
+                            )
+                        except Exception as e:
+                            yield (
+                                json.dumps(
+                                    {"cell": cell_str, "ok": False, "error": str(e)}
+                                )
+                                + "\n"
+                            )
+
             for cs in cell_strings:
                 if cs not in clip_cells:
                     yield (
@@ -645,7 +699,11 @@ def api_highlights_preview() -> FlaskResponse:
 
     with _override_config(**overrides):
         clips = spreadsheet.generate_list(
-            _worksheet, "reel", reel_input="highlights, batch", skip_prompts=True
+            _worksheet,
+            "reel",
+            ctx=_sheet_context,
+            reel_input="highlights, batch",
+            skip_prompts=True,
         )
 
     if not clips:
@@ -706,7 +764,11 @@ def api_reel() -> FlaskResponse:
 
             # generate_list needs HIGHLIGHTS override only during this call
             clips = spreadsheet.generate_list(
-                _worksheet, "reel", reel_input=reel_input, skip_prompts=True
+                _worksheet,
+                "reel",
+                ctx=_sheet_context,
+                reel_input=reel_input,
+                skip_prompts=True,
             )
 
             if not clips:
@@ -794,7 +856,9 @@ def api_timeline_viewer() -> FlaskResponse:
         include_intake = req.get("include_intake", False)
         intake_items = req.get("intake_items", [])
 
-        clips_list = spreadsheet.generate_list(_worksheet, "batch", skip_prompts=True)
+        clips_list = spreadsheet.generate_list(
+            _worksheet, "batch", ctx=_sheet_context, skip_prompts=True
+        )
         if not clips_list:
             return jsonify({"ok": False, "error": "No clips found in sheet"}), 400
 
@@ -968,8 +1032,7 @@ def api_manifest() -> FlaskResponse:
 @studio_bp.route("/api/regenerate", methods=["POST"])
 def api_regenerate() -> FlaskResponse:
     try:
-        artifacts = viewer.load_manifest_artifacts()
-        reels = viewer.load_manifest_reels()
+        artifacts, reels = viewer._load_manifest_both()
         if not artifacts and not reels:
             return jsonify(
                 {
@@ -1257,8 +1320,7 @@ def _init_studio_state(worksheet: Any) -> None:
     _load_studio_settings()
     _worksheet = worksheet
     _sheet_context = spreadsheet.build_sheet_context(worksheet)
-    _generated_artifacts = viewer.load_manifest_artifacts()
-    _generated_reels = viewer.load_manifest_reels()
+    _generated_artifacts, _generated_reels = viewer._load_manifest_both()
     _thumbnail_cache = {}
 
     if _sheet_context is None:

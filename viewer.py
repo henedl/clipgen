@@ -31,7 +31,7 @@ import json
 import math
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import gspread
 
@@ -399,11 +399,14 @@ def generate_insights_viewer(
     )
 
 
-def load_manifest_artifacts() -> List[Dict[str, Any]]:
-    """Load artifact records from the manifest file, or return [] if unavailable."""
+def _load_manifest_both() -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """Load artifact and reel records from the manifest in a single read.
+
+    Returns (artifacts, reels). Both default to [] on missing/corrupt file.
+    """
     manifest_path = Path(utils.get_effective_output_dir()) / config.MANIFEST_FILENAME
     if not manifest_path.is_file():
-        return []
+        return ([], [])
     try:
         data = json.loads(manifest_path.read_text(encoding="utf-8"))
         raw = data.get("artifacts", [])
@@ -413,21 +416,21 @@ def load_manifest_artifacts() -> List[Dict[str, Any]]:
                 f"Manifest contained {len(raw) - len(valid)} artifact(s) with "
                 "missing fields; skipped."
             )
-        return valid
+        return (valid, data.get("reels", []))
     except (OSError, json.JSONDecodeError, AttributeError):
-        return []
+        return ([], [])
+
+
+def load_manifest_artifacts() -> List[Dict[str, Any]]:
+    """Load artifact records from the manifest file, or return [] if unavailable."""
+    artifacts, _ = _load_manifest_both()
+    return artifacts
 
 
 def load_manifest_reels() -> List[Dict[str, Any]]:
     """Load reel records from the manifest file, or return [] if unavailable."""
-    manifest_path = Path(utils.get_effective_output_dir()) / config.MANIFEST_FILENAME
-    if not manifest_path.is_file():
-        return []
-    try:
-        data = json.loads(manifest_path.read_text(encoding="utf-8"))
-        return data.get("reels", [])
-    except (OSError, json.JSONDecodeError, AttributeError):
-        return []
+    _, reels = _load_manifest_both()
+    return reels
 
 
 def save_manifest(
@@ -446,13 +449,12 @@ def save_manifest(
     Deduplicates by ``id``; newer entries win.
     Returns the manifest path on success, or None on failure.
     """
-    existing = load_manifest_artifacts()
+    existing, existing_reels = _load_manifest_both()
     merged = {a["id"]: a for a in existing}
     for a in new_artifacts:
         merged[a["id"]] = a
     all_artifacts = list(merged.values())
 
-    existing_reels = load_manifest_reels()
     reel_merged = {r["id"]: r for r in existing_reels}
     for r in new_reels or []:
         reel_merged[r["id"]] = r

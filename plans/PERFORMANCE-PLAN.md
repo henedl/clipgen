@@ -400,36 +400,39 @@ Additional opportunities identified in a fresh pass over the codebase (April 202
 
 **Issue:** [`spreadsheet.generate_list()`](../spreadsheet.py) always calls [`build_sheet_context(sheet)`](../spreadsheet.py), which performs `sheet.get_all_values()` (one full sheet fetch for Google Sheets). The combined server already holds [`_sheet_context`](../server.py) from `_init_studio_state` and refreshes it only via `POST /api/sheet/refresh`.
 
-**Impact:** Routes such as `/api/generate`, `/api/reel`, and `/api/highlights-preview` pay an **extra full-sheet download** on every call, even when the user has not refreshed. This hurts latency and risks Google API rate limits (see AGENTS.md guidance on `get_all_values()`).
+**Impact:** Routes `/api/generate`, `/api/reel`, `/api/highlights-preview`, and `/api/export-viewer` each pay an **extra full-sheet download** on every call, even when the user has not refreshed. This hurts latency and risks Google API rate limits (see AGENTS.md guidance on `get_all_values()`).
 
-**Direction:** Optional `ctx: SheetContext | None` on `generate_list` (and callers); when provided and valid, skip `build_sheet_context`. Invalidate when the sheet is explicitly refreshed.
+**Direction:** Add `ctx: Optional[SheetContext] = None` as the third parameter of `generate_list()`. When provided, skip the `build_sheet_context` call. The 4 server.py call sites pass `_sheet_context`; all CLI callers (clipgen.py, cli.py, interactive.py) pass nothing and get the current behavior. Test fakes in `test_studio_api.py` need the new kwarg added to their signatures.
 
 ### 8.2. Studio multi-cell generate vs parallel clip cutting (3A gap)
 
-**Issue:** Parallel ffmpeg in `process_clips` only activates when **multiple clips** are prepared in **one** call. Studio streams one `process_clips([clip], …)` per selected cell.
+**Issue:** Parallel ffmpeg in `process_clips` only activates when **multiple clips** are prepared in **one** call (`len(prepared) >= 2`). Studio's `/api/generate` route streams one `process_clips([clip], …)` per selected cell inside a for-loop generator, so the parallel path is never reached.
 
-**Direction:** Batch all clips for one generate request into a single `process_clips` (then map results back to ndjson lines), or parallelize at the server layer with careful handling of `_generated_artifacts`, manifest saves, and thread safety.
+**Direction:** Restructure the `stream()` generator in `/api/generate` into two passes: (1) yield ndjson lines for already-existing artifacts immediately, collecting non-skipped clips; (2) submit all non-skipped clips to a `ThreadPoolExecutor` and yield per-clip ndjson lines as futures complete via `as_completed()`. Each future calls `process_clips([clip], ...)` independently. This preserves the ndjson streaming contract (one JSON line per clip) while running ffmpeg in parallel across clips. `_generated_artifacts.extend()` stays in the main generator thread (no lock needed). Manifest save still happens once at the end.
 
 ### 8.3. Reel generation: sequential intermediate segments
 
 **Issue:** [`process_reel()`](../clipgen.py) uses [`_run_clip_pipeline()`](../clipgen.py), which runs `per_clip_fn` in a simple `for` loop — no thread pool. Each segment spawns ffmpeg separately, unlike `process_clips` phase 2.
 
-**Direction:** Parallelize segment generation after preparation (same worker discipline as 3A), or share executor logic between reel and batch clip paths.
+**Direction:** Add `parallel: bool = False` to `_run_clip_pipeline()`. When `True` and `len(clips_list) >= 2`, use a `ThreadPoolExecutor` (same worker count as `_resolve_clip_workers()`). To ensure ordering, pre-allocate results by index and fill via `as_completed`. Refactor `process_reel_clip` to return component metadata instead of appending to a shared closure list — assemble `components` from the ordered results after the pool completes.
 
-### 8.4. Screenshot artifact pipeline vs gallery batch extract
+### 8.4. Screenshot artifact pipeline vs gallery batch extract — deferred
 
 **Issue:** Gallery uses [`_batch_extract_screenshots()`](../video.py) (one ffmpeg pass for many timestamps). The clip/screenshot path uses [`extract_screenshot()`](../video.py) per segment in [`_process_single_clip_segments()`](../clipgen.py).
 
-**Direction:** For many screenshot outputs from the **same source file**, consider grouping timestamps into a batch pass (then applying per-clip filenames/metadata) — same spirit as 2E but scoped to artifact screenshots.
+**Assessment:** Gallery's batch extract relies on an fps filter for evenly-spaced timestamps from a single video — it does not apply to the clip pipeline's arbitrary timestamps across multiple source videos. The existing `ThreadPoolExecutor` in `process_clips` Phase 2 already parallelizes per-clip `extract_screenshot()` calls, providing the same wall-time benefit. **Deferred** — marginal gain does not justify the complexity of grouping timestamps by source video and remapping batch output filenames.
 
 ### 8.5. Highlights scoring vs output directory size
 
-**Issue:** [`_clip_highlight_score()`](../spreadsheet.py) runs an `any(… for f in existing_filenames)` over `discover_clips()` **per clip**. Large output directories make this **O(clips × files)**.
+**Issue:** [`_clip_highlight_score()`](../spreadsheet.py) runs an `any(… for f in existing_filenames)` over `discover_clips()` **per clip**, calling `.lower()` on every filename for every clip. Large output directories make this **O(clips × F × lower_cost)**.
 
-**Direction:** One pass over `existing_filenames` to build a normalized lookup (or substring index) reused for all clips.
+**Direction:** Pre-lowercase the filenames once in `score_and_truncate_clips()` before entering the sort. Pass the pre-lowered list to `_clip_highlight_score()` and remove the per-filename `.lower()` calls inside. This keeps the same O(clips × files) scan structure (substring matching inherently requires it) but eliminates redundant string allocations — the dominant cost for typical directory sizes.
 
-### 8.6. Plan document drift (corrected above)
+### 8.6. Manifest double-read + plan document drift
 
+**Manifest double-read:** [`save_manifest()`](../viewer.py) calls `load_manifest_artifacts()` and `load_manifest_reels()` separately — each reads and `json.loads` the same manifest file. Add `_load_manifest_both()` that reads the file once and returns `(artifacts, reels)`. Update `save_manifest` and 4 other back-to-back call sites across server.py, clipgen.py, and cli.py. Leave standalone `load_manifest_artifacts()` / `load_manifest_reels()` in place for single-use callers and test mocks.
+
+**Plan corrections (applied in earlier sections):**
 - **1E:** Viewer + Screenspace use `DocumentFragment`; Insights Builder remains.
 - **1F:** Filmstrip concurrency is 4 in viewer.js, not 2.
 - **3A:** Parallel cutting is implemented for multi-clip `process_clips`; Studio single-clip loop is the remaining gap (**§8.2**).
@@ -460,6 +463,7 @@ Additional opportunities identified in a fresh pass over the codebase (April 202
 | [ ] | 18 | **8.1** — Reuse `SheetContext` in `generate_list` / Studio | High — latency + Sheets quota |
 | [ ] | 19 | **8.2** — Studio batch `process_clips` (unlock 3A) | High — wall time multi-cell |
 | [ ] | 20 | **8.3** — Parallel reel segment ffmpeg | Medium — reel wall time |
-| [ ] | 21 | **8.4** — Batch screenshot extraction (clip pipeline) | Medium — many screens / same video |
-| [ ] | 22 | **8.5** — Highlights scoring index + manifest single-read | Low — scales with artifacts |
-| [ ] | 23 | **1E (remainder)** — Insights Builder DOM batching / virtual scroll | Low–Medium — perceived smoothness |
+| deferred | 21 | **8.4** — Batch screenshot extraction (clip pipeline) — deferred (existing parallelism covers this) | Medium — many screens / same video |
+| [ ] | 22 | **8.5** — Highlights scoring pre-lowercase | Low — scales with artifacts |
+| [ ] | 23 | **8.6** — Manifest single-read (`_load_manifest_both`) | Low — eliminates duplicate file parse |
+| [ ] | 24 | **1E (remainder)** — Insights Builder DOM batching / virtual scroll | Low–Medium — perceived smoothness |

@@ -671,8 +671,14 @@ def _run_clip_pipeline(
     per_clip_fn: Callable[[Any, Set[str]], Any],
     show_fallback_counter: bool = False,
     secondary_task_label: Optional[str] = None,
+    parallel: bool = False,
 ) -> Tuple[List[Any], Set[str]]:
-    """Run shared clip-processing pipeline and return per-clip results."""
+    """Run shared clip-processing pipeline and return per-clip results.
+
+    When *parallel* is True and there are at least 2 clips, a ThreadPoolExecutor
+    is used to run ``per_clip_fn`` concurrently (same worker count as
+    ``_resolve_clip_workers()``).  Results are collected in original order.
+    """
     if not clips_list:
         utils.warning_print(empty_warning)
         return ([], set())
@@ -684,37 +690,91 @@ def _run_clip_pipeline(
         return per_clip_fn(clip, missing_videos)
 
     total_clips = len(clips_list)
-    progress = utils.create_progress_bar()
-    results: List[Any] = []
+    workers = _resolve_clip_workers() if parallel else 0
+    use_parallel = parallel and workers >= 2 and total_clips >= 2
 
-    if progress:
-        global _active_progress, _active_secondary_task
-        _active_progress = progress
-        with progress:
-            task = progress.add_task(task_label, total=total_clips)
-            if secondary_task_label:
-                _active_secondary_task = progress.add_task(
-                    secondary_task_label, total=total_clips
-                )
-            for clip in clips_list:
-                desc_preview = (clip.get("desc") or "")[
-                    : config.PROGRESS_DESCRIPTION_LENGTH
-                ]
-                participant = clip.get("participant", "")
-                progress.update(task, description=f"[{participant}] {desc_preview}...")
-                results.append(wrapped_process(clip))
-                progress.update(task, advance=1)
-        _active_progress = None
-        _active_secondary_task = None
+    if use_parallel:
+        results: List[Any] = [None] * total_clips
+        progress = utils.create_progress_bar()
+        if progress:
+            global _active_progress, _active_secondary_task
+            _active_progress = progress
+            with progress:
+                task = progress.add_task(task_label, total=total_clips)
+                with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
+                    future_to_idx = {
+                        pool.submit(wrapped_process, clip): idx
+                        for idx, clip in enumerate(clips_list)
+                    }
+                    for future in concurrent.futures.as_completed(future_to_idx):
+                        idx = future_to_idx[future]
+                        try:
+                            results[idx] = future.result()
+                        except Exception as exc:
+                            clip = clips_list[idx]
+                            desc = (clip.get("desc") or "")[
+                                : config.PROGRESS_DESCRIPTION_LENGTH
+                            ]
+                            utils.error_print(
+                                f"Clip failed: [{clip.get('participant', '')}] {desc}",
+                                [str(exc)],
+                            )
+                            results[idx] = []
+                        progress.update(task, advance=1)
+            _active_progress = None
+            _active_secondary_task = None
+        else:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
+                future_to_idx = {
+                    pool.submit(wrapped_process, clip): idx
+                    for idx, clip in enumerate(clips_list)
+                }
+                for future in concurrent.futures.as_completed(future_to_idx):
+                    idx = future_to_idx[future]
+                    try:
+                        results[idx] = future.result()
+                    except Exception as exc:
+                        clip = clips_list[idx]
+                        desc = (clip.get("desc") or "")[
+                            : config.PROGRESS_DESCRIPTION_LENGTH
+                        ]
+                        utils.error_print(
+                            f"Clip failed: [{clip.get('participant', '')}] {desc}",
+                            [str(exc)],
+                        )
+                        results[idx] = []
     else:
-        for index, clip in enumerate(clips_list, start=1):
-            if (
-                show_fallback_counter
-                and getattr(config, "VERBOSITY", config.STANDARD) >= config.VERBOSE
-                and total_clips > 1
-            ):
-                utils.verbose_print(f"Processing clip {index} of {total_clips}...")
-            results.append(wrapped_process(clip))
+        results = []
+        progress = utils.create_progress_bar()
+        if progress:
+            _active_progress = progress
+            with progress:
+                task = progress.add_task(task_label, total=total_clips)
+                if secondary_task_label:
+                    _active_secondary_task = progress.add_task(
+                        secondary_task_label, total=total_clips
+                    )
+                for clip in clips_list:
+                    desc_preview = (clip.get("desc") or "")[
+                        : config.PROGRESS_DESCRIPTION_LENGTH
+                    ]
+                    participant = clip.get("participant", "")
+                    progress.update(
+                        task, description=f"[{participant}] {desc_preview}..."
+                    )
+                    results.append(wrapped_process(clip))
+                    progress.update(task, advance=1)
+            _active_progress = None
+            _active_secondary_task = None
+        else:
+            for index, clip in enumerate(clips_list, start=1):
+                if (
+                    show_fallback_counter
+                    and getattr(config, "VERBOSITY", config.STANDARD) >= config.VERBOSE
+                    and total_clips > 1
+                ):
+                    utils.verbose_print(f"Processing clip {index} of {total_clips}...")
+                results.append(wrapped_process(clip))
 
     if missing_videos:
         utils.standard_print(f"* Missing source video files: {len(missing_videos)}")
@@ -1242,15 +1302,14 @@ def process_reel(
             break
 
     fuzzy_matches: Dict[str, Optional[str]] = {}
-    components: List[Dict[str, Any]] = []
 
     def process_reel_clip(
         clip: Any, missing_videos: Set[str]
-    ) -> List[Tuple[str, str, str]]:
-        """Process one clip for reel mode and return generated segment paths."""
+    ) -> Tuple[List[Tuple[str, str, str]], List[Dict[str, Any]]]:
+        """Process one clip for reel mode and return (segment_paths, component_dicts)."""
         clip, base_video = _prepare_and_check_clip(clip, missing_videos, fuzzy_matches)
         if base_video is None:
-            return []
+            return ([], [])
         _, segment_paths = _process_single_clip_segments(
             clip,
             base_video,
@@ -1258,8 +1317,9 @@ def process_reel(
             filename_prefix="_reel_part_",
             collect_paths=True,
         )
+        clip_components = []
         for _out_path, start_str, end_str in segment_paths:
-            components.append(
+            clip_components.append(
                 {
                     "cellRow": getattr(clip.get("cell"), "row", None),
                     "cellCol": getattr(clip.get("cell"), "col", None),
@@ -1272,18 +1332,23 @@ def process_reel(
                     "severity": clip.get("severity", ""),
                 }
             )
-        return segment_paths
+        return (segment_paths, clip_components)
 
-    all_segment_paths, _ = _run_clip_pipeline(
+    all_results, _ = _run_clip_pipeline(
         clips_list,
         empty_warning="No clips to process for reel. No timestamps were found or selected.",
         intro_message="* Reel mode: generating individual clips, then concatenating into one file.",
         task_label="Generating reel clips",
         per_clip_fn=process_reel_clip,
+        parallel=True,
     )
-    clip_paths = [
-        entry[0] for segment_paths in all_segment_paths for entry in segment_paths
-    ]
+    # Assemble ordered paths and components from per-clip results
+    components: List[Dict[str, Any]] = []
+    clip_paths = []
+    for segment_paths, clip_components in all_results:
+        for entry in segment_paths:
+            clip_paths.append(entry[0])
+        components.extend(clip_components)
     if not clip_paths:
         utils.warning_print("No clips were generated for the reel.")
         return (0, [])
@@ -1909,8 +1974,7 @@ def _run_viewer_mode(worksheet: Any) -> None:
 
 def _run_regenerate_mode() -> None:
     """Regenerate all media artifacts and reels from saved manifest."""
-    existing_artifacts = viewer.load_manifest_artifacts()
-    existing_reels = viewer.load_manifest_reels()
+    existing_artifacts, existing_reels = viewer._load_manifest_both()
     if not existing_artifacts and not existing_reels:
         utils.info_print(
             "No manifest file found.\nGenerate clips first with --manifest to save one."
