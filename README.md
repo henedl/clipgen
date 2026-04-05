@@ -1,39 +1,43 @@
 # clipgen
 
-clipgen is a Python program that uses [ffmpeg](https://www.ffmpeg.org) and a Google Sheet or local Excel file to quickly generate video clips, screenshots, and GIFs based on timestamps in your research notes. It also includes web-based interfaces for interactive clip generation (Studio), structured UX findings (Insights Builder), and video frame analysis (Screenspace).
+clipgen is a program for quickly generating video clips, screenshots, and GIFs based on your research notes and recordings. It includes web-based interfaces for interactive clip generation (Studio), structured UX findings (Insights Builder), extracting and modifying transcripts (Transcripts), and video frame analysis (Screenspace).
 
-The target audience is UX Researchers and professionals who prefer to manage playtest videos locally.
+The target audience for the program is user experience researchers and UX professionals who prefer to manage videos and analysis locally. The developer intends specifically to support games user researchers conducting playtests.
+
+clipgen is written in Python and interacts with a local video files through [ffmpeg](https://www.ffmpeg.org) and expects structured data in a Google Sheets document or local Excel file. clipgen can be run from source or a binary.
 
 ## How to use
 
 ### Pre-requisites
 
-1. Install [uv](https://docs.astral.sh/uv/) and run `uv sync` to install Python dependencies.
+1. To run from source: install [uv](https://docs.astral.sh/uv/) and run `uv sync` to install Python dependencies.
 2. Install ffmpeg and ensure it is available in your `PATH`.
 3. For Google Sheets: configure Google authentication per [gspread's setup guide](https://docs.gspread.org/en/master/oauth2.html). Place `credentials.json` in `./config/gspread/` or the same folder as `clipgen.py`.
 
 ### Starting clipgen
 
-Place your video files in the same directory as `clipgen.py`, named `{study}_{participant}.mp4` (e.g. `mystudy_P01.mp4`). Then run:
+Place your video files in the same directory as the program and name them following this syntax: `{study}_{participant}.mp4` (e.g. `mystudy_P01.mp4`).
+
+Then run the program interactively by launching the binary or:
 
 ```shell
 uv run clipgen.py
 ```
 
-Or launch directly with a mode flag:
+clipgen can also be launched noninteractively, meaning you can script it as part of your workflows. For example:
 
 ```shell
-uv run clipgen.py -b                    # Batch: all clips
-uv run clipgen.py -l 5+7+12            # Lines: rows 5, 7, 12
-uv run clipgen.py -r 5-12              # Range: rows 5–12
-uv run clipgen.py -C "Onboarding"      # Category
-uv run clipgen.py --screen -b          # Screenshots instead of clips
-uv run clipgen.py --gif -b             # GIFs instead of clips
+uv run clipgen.py -R -H                # Highlight reel of the most severe issues
+uv run clipgen.py -b -y                # Batch: all clips in study
+uv run clipgen.py -l 5+7+12 -y         # Lines: rows 5, 7, 12
+uv run clipgen.py -r 5-12 -y           # Range: rows 5–12
+uv run clipgen.py -C "Onboarding" -y   # Category
+uv run clipgen.py --gif -b -y          # GIFs instead of clips
 ```
 
 Run `uv run clipgen.py --help` for the full flag reference.
 
-### Modes
+### Terminal modes
 
 clipgen supports a range of generation modes, selectable interactively or via CLI flags:
 
@@ -41,145 +45,37 @@ clipgen supports a range of generation modes, selectable interactively or via CL
 - **Output formats**: clips (default), `--screen` (screenshots), `--gif` (GIFs)
 - **Reels**: `reel` (-R), `chronologic` (-T), `highlights` (-H), `reellate` (interactive)
 - **Gallery**: `--gallery VIDEO` — interval screenshots/GIFs with a browser-viewable gallery
-- **Browse**: interactive spreadsheet viewer (no output)
+- **Browse**: interactive terminal spreadsheet viewer (no output)
 
-### Timeline viewer
+## Features
 
-clipgen can generate an interactive HTML timeline viewer that visualizes all artifacts (clips, screenshots, GIFs) from a run.
+### Studio - interactive artifact composing
 
-- **CLI**: Pass `--viewer` alongside any mode flag to generate the viewer after clip processing:
-
-``` shell
-uv run clipgen.py -b --viewer
-uv run clipgen.py -l 5+7 --screen --viewer
-```
-
-- **Interactive mode**: During an interactive session, clipgen keeps track of all generated artifacts. You can choose the `viewer` mode from the mode selection prompt to generate a timeline viewer for everything created so far in that session.
-
-The viewer is a standalone `clips_viewer.html` file written to the same directory as the generated artifacts. Open it in any browser (works with `file://` — no server needed). It provides:
-
-- A timeline showing all artifacts positioned by their timestamps.
-- A filterable sidebar list sorted by time.
-- Filters by category, participant, and artifact type.
-- A detail panel with inline video/image preview.
-
-### Studio
-
-clipgen can launch a web-based Studio interface for interactive artifact generation and reel building from your spreadsheet data.
-
-- **CLI**: Pass `--studio` to launch the Studio. A spreadsheet is required (Google Sheets or Excel):
-
-``` shell
-uv run clipgen.py --studio
-uv run clipgen.py --studio -s "My Study"
-```
-
-The Studio opens in your browser at `http://127.0.0.1:8089/studio/` and provides:
+clipgen can launch a web-based **Studio** interface for interactive artifact generation and reel building from your spreadsheet data. Studio opens in your browser and provides, among other things:
 
 - An interactive spreadsheet grid with color-coded timestamp cells.
 - Click cells to queue clips, screenshots, or GIFs for generation; shift-click or right-click cells for reel queue.
-- Format selection: video clip (.mp4), screenshot (.png), or GIF (.gif).
 - Drag-to-reorder reel building from queued cells.
-- Build a timeline viewer or export a manifest from generated artifacts.
 - Regenerate all artifacts from a saved manifest.
-- Dark/light theme toggle.
 
-### Insights Builder
+### Screenspace - run visual analysis to extract findings
 
-clipgen includes an Insights Builder for authoring structured UX research findings from generated artifacts. No spreadsheet is required — it reads artifacts from a previously saved manifest.
+clipgen includes **Screenspace** for analyzing video frames. Draw regions of interest and run automated analysis tasks to find patterns across the video.
 
-- **CLI**: Pass `--insights` to launch the Insights Builder:
+Available analysis tools:
 
-``` shell
-uv run clipgen.py --insights
-uv run clipgen.py --insights -i ./output -o ./output
-```
+- **Color**: match a region's color
+- **Change**: detect content changes
+- **Similarity**: find frames matching a reference
+- **Text**: OCR fuzzy search
+- **Numbers**: OCR numeric comparison
+- **Timelapse**: sped-up region video
+- **Template**: pattern matching frame contents
+- **Inactivity**: detect periods with no change
 
-The Insights Builder opens in your browser at `http://127.0.0.1:8089/insights/` and provides:
+### Transcripts - generate transcripts using local models
 
-- A media library sidebar showing all artifacts from `clipgen_manifest.json`, with filters by participant, category, severity, and type.
-- Hover-to-scrub previews via auto-generated sprite sheets.
-- Create, edit, and delete insights with structured sections: causes, behaviors, and impacts — each with narrative text and artifact references.
-- Severity and status (draft/final) per insight.
-- Export to a standalone `insights_viewer.html` file that shows finalized insights with embedded artifact references.
-
-When `--studio` is used, the Insights Builder is also available via the `/insights/` path on the same server, so both interfaces share a single port.
-
-### Screenspace
-
-clipgen includes a Screenspace interface for analyzing video frames. Draw regions of interest and run automated analysis tasks to find patterns across the video.
-
-- **CLI**: Pass `--screenspace` to launch. No spreadsheet required — clipgen discovers participant videos automatically:
-
-``` shell
-uv run clipgen.py --screenspace
-uv run clipgen.py --screenspace -s "My Study"
-```
-
-Screenspace opens at `http://127.0.0.1:8089/screenspace/`. Available analysis tools: **Color** (match a region's color), **Change** (detect content changes), **Similarity** (find frames matching a reference), **Text** (OCR fuzzy search), **Numbers** (OCR numeric comparison), **Timelapse** (sped-up region video). Tasks run in a pausable background queue with drag-to-reorder.
-
-### Architecture overview
-
-End-to-end data flow from spreadsheet input to video artifacts and optional HTML timeline viewer:
-
-```mermaid
-flowchart LR
-  user["User"] --> entry["clipgen.py (entry point)"]
-  entry --> cli["cli.py (CLI parsing, setup, dispatch)"]
-
-  cli --> sheetSource["Spreadsheet source selection"]
-  sheetSource --> googleSheets["google_api.py (Google Sheets)"]
-  sheetSource --> excelSheets["excel_io.py (Excel .xlsx)"]
-
-  googleSheets --> spreadsheetLayer["spreadsheet.py (rows, selectors)"]
-  excelSheets --> spreadsheetLayer
-
-  spreadsheetLayer --> filesLayer["files.py (prepare_clip, filenames)"]
-  filesLayer --> utilsLayer["utils.py (timestamps, annotations)"]
-  filesLayer --> videoLayer["video.py (ffmpeg/ffprobe)"]
-
-  utilsLayer --> videoLayer
-  videoLayer --> artifacts["Clips / screenshots / GIFs / reels"]
-
-  artifacts --> transcriptLayer["transcripts.py (faster-whisper)"]
-  transcriptLayer --> transcriptFiles["Transcript files (.md / .srt / .vtt)"]
-
-  artifacts --> viewer["assets/web (timeline viewer)"]
-
-  cli --> server["server.py (Flask)"]
-  server --> studioUI["Studio (assets/web)"]
-  server --> insightsUI["Insights Builder (assets/web)"]
-  server --> spreadsheetLayer
-  server --> videoLayer
-  insightsUI --> insightsData["insights.py (data model)"]
-  server --> screenspaceUI["Screenspace (assets/web)"]
-  screenspaceUI --> screenspaceEngine["screenspace.py (analysis engine)"]
-```
-
-1. **Input and selection**: `clipgen.py` reads CLI arguments, selects mode, and chooses a spreadsheet source (Google Sheets via `google_api.py` or local Excel via `excel_io.py`).
-2. **Spreadsheet layer**: `spreadsheet.py` parses headers, validates layout, interprets the selected mode/selector, and yields logical clip records with per-participant timestamps.
-3. **Clip preparation**: `files.py` (with `utils.py`) parses and normalizes timestamps/annotations into `times` ranges, sanitizes study/participant/category names, and generates safe output filenames.
-4. **Rendering**: `video.py` uses ffmpeg/ffprobe to cut clips, screenshots, GIFs, or reels from `{study}_{participant}.mp4`, honoring limits and other settings in `config.py`.
-5. **Optional transcription**: When `--transcribe` is set, `transcripts.py` uses faster-whisper to transcribe source videos (cached per video), filters segments to each clip's time range, and writes transcript files alongside artifacts.
-6. **Optional viewer**: When requested, `clipgen.py` uses the templates in `assets/web` to build an HTML timeline viewer from the generated artifacts.
-7. **Web interfaces**: When `--studio`, `--insights`, or `--screenspace` is passed, `server.py` starts a combined Flask server. Studio serves an interactive spreadsheet grid backed by the same spreadsheet/video pipeline. Insights Builder reads `clipgen_manifest.json` and provides CRUD for structured research findings, persisted to `insights_manifest.json`. Screenspace provides video frame analysis with a pausable task queue, persisted to `screenspace_manifest.json`.
-
-### Manifest
-
-clipgen can write a cumulative artifact manifest (`clipgen_manifest.json`) alongside generated clips. The manifest tracks all artifacts and reels across runs, and is required by the Insights Builder and the `--regenerate` flag.
-
-- **CLI**: Pass `--manifest` alongside any mode flag to enable manifest writing:
-
-``` shell
-uv run clipgen.py -b --manifest
-uv run clipgen.py -b --viewer --manifest
-```
-
-To regenerate all media artifacts from a saved manifest (no spreadsheet needed):
-
-``` shell
-uv run clipgen.py --regenerate
-```
+clipgen features local **Transcripts**, generated via [faster-whisper](https://github.com/SYSTRAN/faster-whisper).
 
 ### About the spreadsheet
 
@@ -201,17 +97,6 @@ pyinstaller --clean --noconfirm build/clipgen.spec
 
 Output: `dist/clipgen` (macOS) or `dist/clipgen.exe` (Windows).
 
-## Testing
-
-- Run the smoke test suite before releases and when adding features (pytest is optional `dev` only — not required for `uv sync` / running clipgen):
-  - `uv run --extra dev pytest -c tests/pytest.ini`
-- Contributor rule:
-  - Every new CLI mode, flag, or selector should include at least one smoke test in the same PR.
-
 ## AI Disclosure
 
-The author has used an LLM coding agent for assistance in writing parts of this program; if you want to avoid software connected to LLMs, I get it. All code in this reposity prior to 2026 was written by a human, if you would like to fork the project.
-
-## Credits
-
-- Icons: [Heroicons](https://heroicons.com/) (Micro set) by Tailwind Labs, Inc. — MIT License.
+The author has used an LLM coding agent for assistance in writing parts of this program. If you want to avoid software connected to LLMs; I get it. All code in this reposity prior to 2026 was written by a human, if you would like to fork the project.
