@@ -174,6 +174,58 @@ body {
   transform: translateX(0) scale(1);
 }
 
+#tooltipToggle {
+  position: relative;
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-full);
+  border: 1px solid var(--color-border);
+  background: var(--color-surface-alt);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  cursor: pointer;
+  transition: background var(--duration-fast) ease, border-color var(--duration-fast) ease, transform var(--duration-fast) ease, box-shadow var(--duration-normal) ease;
+  flex-shrink: 0;
+  color: var(--color-text);
+}
+
+#tooltipToggle:hover {
+  background: var(--color-surface);
+  box-shadow: 0 0 0 1px rgba(148, 163, 184, 0.3);
+}
+
+#tooltipToggle:active {
+  transform: scale(0.96);
+}
+
+#tooltipToggle:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+#tooltipToggle[aria-pressed="false"] {
+  opacity: 0.4;
+}
+
+/* Transcript intake tooltip */
+
+.tr-intake-tooltip {
+  position: fixed;
+  max-width: 320px;
+  padding: var(--space-2) var(--space-3);
+  background: var(--color-text);
+  color: var(--color-bg);
+  font-size: var(--text-xs);
+  line-height: 1.4;
+  border-radius: var(--radius-sm);
+  pointer-events: none;
+  z-index: var(--z-toast);
+  word-wrap: break-word;
+  white-space: pre-wrap;
+}
+
 /* Sheet preview */
 
 #sheetPreview {
@@ -239,7 +291,8 @@ body {
   margin-left: var(--space-1);
 }
 
-#intakePanel {
+#intakePanel,
+#trIntakePanel {
   flex: 1;
   overflow: hidden;
   padding: 0 var(--space-1);
