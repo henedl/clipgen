@@ -212,6 +212,7 @@ Pre-filter transcript content via a marking/curation system in the Transcript wo
 - [x] `clusterTranscriptMarks(marks, thresholdSec)` — group by participant, merge marks whose segments are within `thresholdSec` gap (same algorithm shape as `clusterIntakeEvents()`)
 - [x] Cards show: category color dot, participant + time range, truncated transcript text (~80 chars), duration badge
 - [x] **Drag data format**:
+
   ```javascript
   {
     participant: str,
@@ -222,6 +223,7 @@ Pre-filter transcript content via a marking/curation system in the Transcript wo
     mark_ids: [str],        // provenance: mark IDs (e.g., ["m_abc123", "m_def456"])
   }
   ```
+  
 - [x] Artifacts generated from transcript intake carry `source: "transcript"`, `mark_ids: [...]` — matching the Screenspace pattern in `server.py`
 - [x] Update `syncPreviewTab()` for three-tab switching with independent poll timers
 - [x] `filteredTranscriptIntakeClusters()` — filter by category pills, participant pills, text search
@@ -274,6 +276,7 @@ Surface transcripts in output-facing viewers and the Insights Builder.
 - [ ] **Transcript sidebar** (not a timeline track row): scrollable transcript panel alongside video playback. Transcript data is continuous — every second has text — so track markers would produce a solid unbroken bar that communicates nothing. Screenspace events work as track markers because they're sparse.
 - [ ] Playback-synced transcript highlighting — active segment highlighted as video plays, auto-scroll to keep current segment visible
 - [ ] Data contract: add optional `transcripts` key to `window.CLIPGEN_DATA`:
+
   ```javascript
   {
     "transcripts": {
@@ -282,6 +285,7 @@ Surface transcripts in output-facing viewers and the Insights Builder.
     }
   }
   ```
+
 - [ ] Add `transcripts` parameter to `finalize_timeline_data()` and a `load_transcripts_for_viewer()` helper following the `load_screenspace_events_for_viewer()` pattern in `viewer.py`
 - [ ] Type filter updated to include transcript-bearing artifacts
 - [ ] Show Screenspace event badges inline with transcript text at corresponding timestamps (cross-referencing in the viewer)
