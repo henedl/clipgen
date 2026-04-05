@@ -333,8 +333,16 @@ def api_corrections_delete(correction_id: str) -> FlaskResponse:
 # ---- Marks ----
 
 
-def _resolve_mark(mark: Dict[str, Any]) -> Dict[str, Any]:
-    """Enrich a mark with its segment's data (participant, start, end, text, valid)."""
+def _resolve_mark(
+    mark: Dict[str, Any],
+    partial_lookup: Optional[Dict[str, list]] = None,
+) -> Dict[str, Any]:
+    """Enrich a mark with its segment's data (participant, start, end, text, valid).
+
+    *partial_lookup* maps participant IDs to ``partial_segments`` lists from
+    running transcription tasks, allowing marks made during streaming to
+    resolve before the transcript is persisted.
+    """
     seg_id = mark.get("segment_id", "")
     # segment IDs are "{participant}:{index}"
     parts = seg_id.split(":", 1)
@@ -360,39 +368,69 @@ def _resolve_mark(mark: Dict[str, Any]) -> Dict[str, Any]:
             "text": "",
         }
 
+    # Try persisted transcript first
     src = _manifest.get("source_transcripts", {})
     entry = src.get(pid, {})
     segments = entry.get("segments", [])
-    if idx < 0 or idx >= len(segments):
+    if 0 <= idx < len(segments):
+        raw_seg = segments[idx]
+        corrections = _manifest.get("corrections", [])
+        corrected = transcripts.apply_corrections([raw_seg], corrections)
+        seg = corrected[0]
         return {
             **mark,
-            "valid": False,
+            "valid": True,
             "participant": pid,
-            "start": 0,
-            "end": 0,
-            "text": "",
+            "start": seg["start"],
+            "end": seg["end"],
+            "text": seg["text"],
         }
 
-    raw_seg = segments[idx]
-    corrections = _manifest.get("corrections", [])
-    corrected = transcripts.apply_corrections([raw_seg], corrections)
-    seg = corrected[0]
+    # Fall back to partial segments from a running transcription task
+    if partial_lookup:
+        partial_segs = partial_lookup.get(pid, [])
+        if 0 <= idx < len(partial_segs):
+            seg = partial_segs[idx]
+            return {
+                **mark,
+                "valid": True,
+                "participant": pid,
+                "start": seg["start"],
+                "end": seg["end"],
+                "text": seg["text"],
+            }
+
     return {
         **mark,
-        "valid": True,
+        "valid": False,
         "participant": pid,
-        "start": seg["start"],
-        "end": seg["end"],
-        "text": seg["text"],
+        "start": 0,
+        "end": 0,
+        "text": "",
     }
+
+
+def _build_partial_lookup() -> Dict[str, list]:
+    """Build a participant→partial_segments map from running transcription tasks."""
+    if not _worker:
+        return {}
+    lookup: Dict[str, list] = {}
+    for task in _worker.get_all_tasks():
+        if task["status"] == transcripts.TASK_STATUS_RUNNING:
+            segs = task.get("partial_segments", [])
+            if segs:
+                lookup[task["participant"]] = segs
+    return lookup
 
 
 @transcripts_bp.route("/api/marks")
 def api_marks_list() -> FlaskResponse:
     """List all marks, enriched with resolved segment data."""
+    # Build partial lookup outside _manifest_lock (get_all_tasks acquires worker lock)
+    partial_lookup = _build_partial_lookup()
     with _manifest_lock:
         raw_marks = list(_manifest.get("marks", []))
-        resolved = [_resolve_mark(m) for m in raw_marks]
+        resolved = [_resolve_mark(m, partial_lookup) for m in raw_marks]
     return jsonify(
         {
             "ok": True,
