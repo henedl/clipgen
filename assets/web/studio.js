@@ -42,8 +42,10 @@
     trIntakePollTimer: null,
     trIntakeFilterCategory: "",
     trIntakeFilterParticipants: [],
+    trIntakeFilterText: "",
     trIntakeShowAll: false,
     trIntakeHoveredIdx: -1,
+    trIntakeTooltipsEnabled: true,
   };
 
   function isIntakeSource(source) {
@@ -3930,10 +3932,14 @@
     var clusters = state.trIntakeClusters;
     var cat = state.trIntakeFilterCategory;
     var parts = state.trIntakeFilterParticipants;
-    if (!cat && !parts.length) return clusters;
+    var text = state.trIntakeFilterText.toLowerCase();
+    if (!cat && !parts.length && !text) return clusters;
     return clusters.filter(function (c) {
       if (parts.length && parts.indexOf(c.participant) === -1) return false;
       if (cat && c.category !== cat) return false;
+      if (text && (c.text || "").toLowerCase().indexOf(text) === -1
+          && (c.label || "").toLowerCase().indexOf(text) === -1
+          && (c.participant || "").toLowerCase().indexOf(text) === -1) return false;
       return true;
     });
   }
@@ -4201,6 +4207,7 @@
   function initTranscriptIntake() {
     var trIntakeCards = qs("#trIntakeCards");
     if (!trIntakeCards) return;
+    var trTooltip = qs("#trIntakeTooltip");
 
     // Click: normal = Artifacts, shift = Reel
     trIntakeCards.addEventListener("click", function (e) {
@@ -4232,7 +4239,7 @@
         .catch(function () {});
     });
 
-    // Card hover → highlight timeline marker
+    // Card hover → highlight timeline marker + tooltip
     trIntakeCards.addEventListener("mouseover", function (e) {
       var card = e.target.closest(".tr-intake-queue-card");
       if (!card) return;
@@ -4241,12 +4248,33 @@
         state.trIntakeHoveredIdx = idx;
         renderTrIntakeTimeline();
       }
+      if (trTooltip && state.trIntakeTooltipsEnabled) {
+        var cluster = filteredTranscriptIntakeClusters()[idx];
+        var fullText = cluster ? (cluster.text || cluster.label || "") : "";
+        if (fullText) {
+          trTooltip.textContent = fullText;
+          trTooltip.classList.remove("hidden");
+          var rect = card.getBoundingClientRect();
+          var ttW = trTooltip.offsetWidth;
+          var ttH = trTooltip.offsetHeight;
+          var left = rect.left + rect.width / 2 - ttW / 2;
+          var top = rect.top - ttH - 6;
+          if (top < 4) top = rect.bottom + 6;
+          if (left < 4) left = 4;
+          if (left + ttW > window.innerWidth - 4) left = window.innerWidth - ttW - 4;
+          trTooltip.style.left = left + "px";
+          trTooltip.style.top = top + "px";
+        } else {
+          trTooltip.classList.add("hidden");
+        }
+      }
     });
     trIntakeCards.addEventListener("mouseleave", function () {
       if (state.trIntakeHoveredIdx !== -1) {
         state.trIntakeHoveredIdx = -1;
         renderTrIntakeTimeline();
       }
+      if (trTooltip) trTooltip.classList.add("hidden");
     });
 
     // Timeline canvas interactions
@@ -4349,6 +4377,17 @@
       });
     }
 
+    // Text search filter
+    var trSearchEl = qs("#trIntakeFilterSearch");
+    var _trIntakeSearchTimer = 0;
+    if (trSearchEl) {
+      trSearchEl.addEventListener("input", function () {
+        state.trIntakeFilterText = this.value;
+        clearTimeout(_trIntakeSearchTimer);
+        _trIntakeSearchTimer = setTimeout(function () { renderTranscriptIntake(); }, 250);
+      });
+    }
+
     // Add All buttons
     var addAllBtn = qs("#trIntakeAddAllBtn");
     if (addAllBtn) {
@@ -4376,6 +4415,19 @@
     });
   }
 
+  function initTooltipToggle() {
+    var btn = qs("#tooltipToggle");
+    if (!btn) return;
+    btn.addEventListener("click", function () {
+      state.trIntakeTooltipsEnabled = !state.trIntakeTooltipsEnabled;
+      btn.setAttribute("aria-pressed", state.trIntakeTooltipsEnabled ? "true" : "false");
+      if (!state.trIntakeTooltipsEnabled) {
+        var tt = qs("#trIntakeTooltip");
+        if (tt) tt.classList.add("hidden");
+      }
+    });
+  }
+
   document.addEventListener("click", function (ev) {
     var wrap = qs(".filter-cat-wrap");
     if (wrap && !wrap.contains(ev.target)) {
@@ -4388,6 +4440,7 @@
 
   document.addEventListener("DOMContentLoaded", function () {
     initThemeToggle();
+    initTooltipToggle();
     initFilterToggle();
     initPreviewTabs();
     initDropTargets();

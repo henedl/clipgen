@@ -224,7 +224,7 @@ Pre-filter transcript content via a marking/curation system in the Transcript wo
   ```
 - [x] Artifacts generated from transcript intake carry `source: "transcript"`, `mark_ids: [...]` — matching the Screenspace pattern in `server.py`
 - [x] Update `syncPreviewTab()` for three-tab switching with independent poll timers
-- [x] `filteredTranscriptIntakeClusters()` — filter by category pills, participant pills
+- [x] `filteredTranscriptIntakeClusters()` — filter by category pills, participant pills, text search
 - [x] `renderTranscriptIntakeTimeline()` — canvas timeline with category-colored markers
 
 ### Studio generation integration
@@ -232,6 +232,17 @@ Pre-filter transcript content via a marking/curation system in the Transcript wo
 - [x] Update drop handlers in `initDropTargets()` to recognize `source: "transcript"` for both artifact and reel zones
 - [x] Update `onGenerateArtifacts()` to partition transcript items and route to `api/generate-intake` with `source: "transcript"`
 - [x] Update `_generate_intake_clips()` in `server.py` to look up video path in `transcripts_server._participants` when `source === "transcript"`
+
+### Transcript tooltips
+
+Hover-to-reveal full transcript text on intake cards and other transcript-bearing UI elements.
+
+- [x] **Studio Transcript Intake cards**: hovering a card shows a fixed-position tooltip with the full (untruncated) transcript text. Tooltip appears instantly on hover, disappears instantly on mouseout. Shared DOM element (`#trIntakeTooltip`) positioned near the card with viewport clamping.
+- [x] **Tooltip toggle**: button in Studio header (`#tooltipToggle`, chat-bubble icon) next to the dark mode toggle. On by default (`state.trIntakeTooltipsEnabled`). Dims to 40% opacity when off.
+- [ ] **Timeline Viewer**: extend tooltip behavior to transcript sidebar segments (Phase 4)
+- [ ] **Insights Builder**: extend tooltip behavior to artifact transcript text when browsing evidence (Phase 4)
+- [ ] **Screenspace Intake cards**: show transcript context tooltip on Screenspace intake cards when transcript data is available at the card's time range (deferred, alongside cross-referencing)
+- [ ] **Toggle in all frontends**: add tooltip toggle to all viewers and workspaces where transcript data is surfaced. Scoping to Studio intake first to validate the interaction pattern.
 
 ### Cross-referencing with Screenspace events (deferred)
 
