@@ -24,7 +24,6 @@
 - **Icons**: Prefer SVG icons from `assets/icons/` (316 Heroicons outline, kebab-case names like `pencil-square.svg`) over crafting new inline SVG paths or using text/emoji glyphs in web UIs.
 - **Linting/formatting**: Run `uv run ruff check --fix && uv run ruff format` after editing Python files. Run `uv run ty check` for type checking.
 - **Pre-commit format gate**: Before every `git commit`, run `uv run ruff format --check` on all modified `.py` files. If any would be reformatted, run `uv run ruff format` on them before committing. This catches files missed by the per-file PostToolUse hook (e.g. in worktrees where the hook is absent). The most common CI lint failure by far is unformatted Python code.
-- **Import ordering**: Keep all `import` and `from ... import` statements at the top of Python modules, before any non-import code (ruff E402). In test files, if an import must follow `sys.path` manipulation, place both the path setup and the import together in a top-of-file block.
 - Commit early and commit often, so we can roll back changes more easily.
 - If a problem is reoccurring and survives fix attempts, check git logs for clues.
 - Never edit .gitignore automatically, always confirm changes to this file with the user.
