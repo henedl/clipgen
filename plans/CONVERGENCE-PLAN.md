@@ -31,13 +31,22 @@ It is not a replacement for the three intake tabs. Researchers who want to work 
 
 ### Data Source
 
-All session JSONs are already in memory when Studio is active. No new loading infrastructure is required. The Convergence Browser reads from the same in-memory data the cross-reference system already uses.
+All session JSONs are already in memory when Studio is active. No new loading infrastructure is required. The Convergence Browser reads from the same in-memory data the cross-reference system already uses: `state.sheetData`, `state.intakeClusters`/`state.intakeEvents`, and `state.trIntakeClusters`/`state.trIntakeMarks`.
+
+#### Baseline Time Normalization (prerequisite)
+
+ScreenSpace events and transcript marks are already video-relative (seconds from video start). Spreadsheet timestamps may be absolute clock times (e.g. `09:12:00`) when a baseline row exists in the study spreadsheet. Currently, baseline-to-relative conversion only happens server-side in `files.prepare_clip()`. The client's `parseClipTimestamps()` does not apply baseline correction — it parses raw `MM:SS` / `HH:MM:SS` strings to seconds without offset.
+
+The Convergence Browser must baseline-adjust sheet timestamps client-side before plotting them alongside ScreenSpace and transcript events. The baseline offset per participant is derivable from the sheet data (the baseline row's value for each participant column). Without this, sheet timestamps and detector timestamps will be misaligned for studies that use clock-style entry.
 
 ### Layout
 
 - **Horizontal axis**: session-relative time (normalized across participants by study design — all participants start at minute 0 and proceed through the same tasks)
 - **Rows**: one row per participant, each with sub-tracks per stream (spreadsheet, ScreenSpace, transcript)
-- **Convergence overlay**: a density layer showing where N or more participants have flagged events within the same time window — visualized as tightness as well as count, so clustered flags are distinguishable from spread ones
+- **Convergence overlay**: a dual-layer density visualization:
+  - **Summary lane** at the top of the participant rows — a single horizontal band spanning the full timeline width. Color intensity encodes convergence strength (participant count × temporal tightness). The researcher scans this lane for hot spots, then looks down at participant rows to see who contributed. Rendered as a canvas layer for smooth continuous gradients.
+  - **Per-participant row shading** — subtle background gradient on each participant's row showing that participant's contribution to active convergence zones. Secondary to the summary lane; helps answer "which participants drove this convergence?" at a glance.
+  - Clustered flags (tight distribution) are visually distinguishable from spread ones (wide distribution) through the summary lane's intensity profile.
 
 ### Filters
 
@@ -47,18 +56,58 @@ Filters operate as **prerequisites for convergence calculation**, not post-filte
 
 Controls:
 
-- Filter by stream (spreadsheet / ScreenSpace / transcript)
-- Filter by event type (populated from loaded JSONs)
+- Filter by stream (spreadsheet / ScreenSpace / transcript) — or **"all streams"** toggle to treat events from all streams as candidates for convergence, enabling cross-stream questions ("where do spreadsheet pain-point flags AND ScreenSpace change events co-occur across participants?")
+- Filter by event type (populated from loaded JSONs) — when a single stream is selected, shows that stream's types; when "all streams" is active, shows types from all streams grouped by source
 - Convergence threshold (minimum number of participants)
+- Convergence window (±W seconds — how close in time events must be to count as convergent; default from existing cluster threshold)
 - Time range
+
+### Convergence Algorithm
+
+Convergence zones are identified using a sweep-line approach — not fixed time bins, which break down given ScreenSpace density variance.
+
+1. **Filter**: collect the union of all events matching the active stream/type filters, across all participants.
+2. **Sort** the merged event list by start time.
+3. **Sweep**: for each event, count how many distinct participants have at least one event within ±W seconds (where W is the user-configurable convergence window).
+4. **Threshold**: regions where the distinct-participant count ≥ the convergence threshold become convergence zones.
+5. **Merge**: adjacent or overlapping convergence zones are merged into contiguous regions.
+
+This is O(n log n) and efficient for client-side computation. The configurable window reuses the threshold-slider pattern already present in the intake tabs (the same interaction model as `clusterIntakeEvents` in the existing codebase, extended to work across participants rather than within a single participant's stream).
+
+The key difference from per-participant clustering: the existing intake clustering groups events within one participant by temporal proximity. The convergence algorithm groups events across participants — asking not "which of P01's events belong together?" but "at this moment, how many different participants had something happen?"
 
 ### Display Normalisation
 
 Per-track density is normalised for display so sparse tracks don't visually disappear alongside dense ones. Absolute event counts are preserved in the underlying data; this is a display concern only.
 
+Method: per-participant min-max scaling within the filtered event type. Because filters operate as prerequisites (a single event type or "all streams" is selected before convergence runs), normalisation only needs to handle density variation across participants within that subset — not across wildly different detector types simultaneously.
+
 ### Selection
 
-Click or lasso a region or moment to select it. Selected artifacts are sent directly to the existing artifact or reel field in Studio. The Convergence Browser does not generate its own output format — it is a curation surface that feeds the existing generation pipeline.
+Two selection modes:
+
+- **Click** a convergence zone in the summary lane to select that zone's time range. The zone is already algorithm-identified — clicking it is a single action.
+- **Drag-to-select** on the timeline: mousedown → mousemove → mouseup creates a custom time range selection. This lets the researcher define an arbitrary region, not just one the algorithm identified — useful for exploring near-misses or partial convergence.
+
+Selection highlights the time range across all participant rows and opens a detail panel.
+
+The Convergence Browser does not generate its own output format — it is a curation surface that feeds the existing generation pipeline.
+
+### Detail Panel
+
+When a convergence zone or custom range is selected, a detail panel appears showing per-participant event breakdowns within that range. This is the drill-down path from "4 participants converged here" to "here is exactly what each participant's data looks like at this moment."
+
+The detail panel reuses the cross-reference join pattern already in Studio (`findOverlappingData` — given a participant and time range, returns matching events from all three streams). Each participant within the selection gets a section showing their events, with cross-reference badges indicating cross-stream overlap.
+
+From the detail panel, the researcher can:
+
+- Add individual events to the artifact or reel queue (one per participant, consistent with the existing per-participant dispatch in `api/generate` and `api/generate-intake` — no new queue item shape or backend changes needed)
+- Add all events in the selection as a batch (N individual items, one per participant)
+- Dismiss the selection to continue exploring
+
+### Video Preview
+
+Hovering over event markers in participant rows shows a video frame preview, consistent with all other interactive surfaces in Studio. This reuses the existing video frame endpoint (`../screenspace/api/video/frame/{participant}/{time}`) with a 60ms hover debounce.
 
 ---
 
@@ -72,14 +121,37 @@ Click or lasso a region or moment to select it. Selected artifacts are sent dire
 
 **Additive, not disruptive.** The three existing intake tabs are unchanged. The Convergence Browser is an additional entry point for a different mode of working.
 
+**Complements, not replaces, cross-reference badges.** The existing cross-reference badge system on intake cards answers a per-event, per-participant question: "what else happened at this moment for this participant across streams?" The Convergence Browser answers a different question: "across participants, where did this type of event cluster in time?" Both are useful; neither subsumes the other.
+
 ---
 
 ## Integration Points
 
-- Reads from: all session JSONs currently in Studio memory
-- Writes to: existing artifact field and reel field
-- Relationship to Timeline Viewer: borrows its visual structure; the Timeline Viewer remains a separate static generation artifact for stakeholder output
+- Reads from: all session JSONs currently in Studio memory (`state.sheetData`, `state.intakeEvents`/`state.intakeClusters`, `state.trIntakeMarks`/`state.trIntakeClusters`)
+- Writes to: existing artifact queue and reel queue — N individual items (one per participant), no new queue shape or backend endpoints required
+- Relationship to Timeline Viewer: borrows its visual structure (percentage-based positioning, participant rows, track expansion); the Timeline Viewer remains a separate static generation artifact for stakeholder output
 - Relationship to Metadata Overview (Tab 5): the cross-stream collision data visible in the Metadata Overview provides useful context before entering the Convergence Browser
+- Relationship to cross-reference badges: the Convergence Browser's detail panel reuses the `findOverlappingData()` join and `buildXrefBadges()` rendering for per-event cross-stream context
+
+### Tab Visibility
+
+The Convergence tab is hidden by default, like the existing intake tabs. It appears only when multiple participants' data is loaded — convergence across a single participant is meaningless. The visibility condition is: `state.sheetData.participants.length > 1` OR multiple distinct participants exist across intake/transcript data. This follows the existing `checkNavLinks()` gating pattern.
+
+### Data Freshness
+
+When the Convergence tab is active and new ScreenSpace or transcript events arrive via the existing polling cycle, the browser does **not** auto-recalculate. Instead, it shows a "new data available" refresh indicator. The researcher clicks to recalculate when ready. Auto-recalculation during active exploration or with an active selection would be disorienting — the view would shift under the researcher's cursor.
+
+---
+
+## Rendering & Performance
+
+**Hybrid rendering.** The density overlay (summary lane, per-row shading) is rendered on a canvas layer for smooth continuous gradients. Individual event markers on participant rows are DOM elements with percentage-based CSS positioning, enabling native hover, click, and drag interactions without manual hit-testing. This matches the Timeline Viewer's approach (DOM markers, canvas optional for screenspace overlay).
+
+**Debounce filter changes.** Filter and threshold adjustments trigger convergence recalculation after a 200–300ms debounce, not on every keystroke or slider tick. The convergence result is cached and only recomputed when filters actually change.
+
+**Participant row ordering.** Default order matches the spreadsheet column order (consistent with how participants appear in other tabs). An optional sort-by-convergence-density reordering surfaces the most convergent participants at the top.
+
+**Scale.** At a fixed row height (~60px with sub-tracks), more than ~8 participants requires vertical scrolling. The time axis and participant labels should be sticky (CSS `position: sticky`) so orientation is maintained during scroll. The convergence summary lane at the top should also be sticky.
 
 ---
 
