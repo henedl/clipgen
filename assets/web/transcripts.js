@@ -517,6 +517,12 @@
     var pid = state.streamingParticipant || state.selectedParticipant;
     empty.classList.add("hidden");
 
+    // If user is actively editing a segment, skip DOM rebuild to preserve edit state
+    if (state.editingTextEl && state.editingTextEl.isConnected) return;
+
+    // Invalidate cached segment rows since we're rebuilding DOM
+    _cachedSegmentRows = null;
+
     // Only auto-scroll if user is near the bottom
     var nearBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 100;
 
@@ -541,13 +547,23 @@
 
     container.innerHTML = html;
 
-    // Click-to-seek on timestamps and mark clicks
+    // Click-to-seek on timestamps/text, dblclick-to-edit, and mark clicks
     var rows = container.querySelectorAll(".segment-streaming");
     for (var j = 0; j < rows.length; j++) {
       (function (row) {
+        var textEl = row.querySelector(".segment-text");
         row.querySelector(".segment-timestamp").addEventListener("click", function (e) {
           e.stopPropagation();
           seekVideo(parseFloat(row.getAttribute("data-start")));
+        });
+        textEl.addEventListener("click", function (e) {
+          e.stopPropagation();
+          if (state.editingTextEl === textEl) return;
+          seekVideo(parseFloat(row.getAttribute("data-start")));
+        });
+        textEl.addEventListener("dblclick", function (e) {
+          e.stopPropagation();
+          startSegmentEditing(textEl);
         });
         row.querySelector(".segment-mark").addEventListener("click", function (e) {
           e.stopPropagation();
@@ -751,6 +767,8 @@
     if (state.editingTextEl === textEl) state.editingTextEl = null;
 
     if (cancel || !newText || newText === originalText) {
+      // During streaming, skip reload — next poll will re-render
+      if (state.streamingParticipant) return;
       // Reload to restore clean word spans
       var pid = state.selectedParticipant;
       if (pid) loadTranscript(pid);
@@ -836,6 +854,8 @@
       if (updated) parts.push(updated === 1 ? "1 correction saved" : updated + " corrections saved");
       if (removed) parts.push(removed === 1 ? "1 reverted" : removed + " reverted");
       showToast(parts.join(", ") || "No changes");
+      // During streaming, skip reload — corrections are persisted and will apply on completion
+      if (state.streamingParticipant) return;
       var pid = state.selectedParticipant;
       if (pid) {
         loadTranscript(pid);
