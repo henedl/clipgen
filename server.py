@@ -386,78 +386,32 @@ def _generate_intake_clips(
 
 
 def _load_stashes() -> List[Dict[str, Any]]:
-    stash_path = (
-        Path(utils.get_effective_output_dir()) / config.STASHES_MANIFEST_FILENAME
-    )
-    if not stash_path.is_file():
-        return []
-    try:
-        data = json.loads(stash_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return []
+    data = utils.load_json_manifest(config.STASHES_MANIFEST_FILENAME, default=[])
     if not isinstance(data, list):
         return []
     return data
 
 
 def _save_stashes(stashes: List[Dict[str, Any]]) -> Optional[Path]:
-    stash_path = (
-        Path(utils.get_effective_output_dir()) / config.STASHES_MANIFEST_FILENAME
-    )
-    try:
-        stash_path.parent.mkdir(parents=True, exist_ok=True)
-        stash_path.write_text(
-            json.dumps(stashes, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
-        return stash_path
-    except OSError:
-        return None
+    return utils.save_json_manifest(config.STASHES_MANIFEST_FILENAME, stashes)
 
 
 def _load_artifact_stashes() -> List[Dict[str, Any]]:
-    stash_path = (
-        Path(utils.get_effective_output_dir())
-        / config.ARTIFACT_STASHES_MANIFEST_FILENAME
+    data = utils.load_json_manifest(
+        config.ARTIFACT_STASHES_MANIFEST_FILENAME, default=[]
     )
-    if not stash_path.is_file():
-        return []
-    try:
-        data = json.loads(stash_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return []
     if not isinstance(data, list):
         return []
     return data
 
 
 def _save_artifact_stashes(stashes: List[Dict[str, Any]]) -> Optional[Path]:
-    stash_path = (
-        Path(utils.get_effective_output_dir())
-        / config.ARTIFACT_STASHES_MANIFEST_FILENAME
-    )
-    try:
-        stash_path.parent.mkdir(parents=True, exist_ok=True)
-        stash_path.write_text(
-            json.dumps(stashes, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
-        return stash_path
-    except OSError:
-        return None
+    return utils.save_json_manifest(config.ARTIFACT_STASHES_MANIFEST_FILENAME, stashes)
 
 
 def _load_studio_settings() -> Dict[str, Any]:
     """Load studio_settings.json and apply non-default values to config module."""
-    settings_path = (
-        Path(utils.get_effective_output_dir()) / config.STUDIO_SETTINGS_FILENAME
-    )
-    if not settings_path.is_file():
-        return {}
-    try:
-        data = json.loads(settings_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return {}
+    data = utils.load_json_manifest(config.STUDIO_SETTINGS_FILENAME, default={})
     if not isinstance(data, dict):
         return {}
 
@@ -489,29 +443,21 @@ def _load_studio_settings() -> Dict[str, Any]:
 
 def _save_studio_settings(overrides: Dict[str, Any]) -> Optional[Path]:
     """Write only non-default settings to studio_settings.json."""
-    settings_path = (
-        Path(utils.get_effective_output_dir()) / config.STUDIO_SETTINGS_FILENAME
-    )
     to_save = {}
     for name, value in overrides.items():
         if name in _settings_defaults and value != _settings_defaults[name]:
             to_save[name] = value
     if not to_save:
+        settings_path = (
+            Path(utils.get_effective_output_dir()) / config.STUDIO_SETTINGS_FILENAME
+        )
         if settings_path.is_file():
             try:
                 settings_path.unlink()
             except OSError:
                 pass
         return None
-    try:
-        settings_path.parent.mkdir(parents=True, exist_ok=True)
-        settings_path.write_text(
-            json.dumps(to_save, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
-        return settings_path
-    except OSError:
-        return None
+    return utils.save_json_manifest(config.STUDIO_SETTINGS_FILENAME, to_save)
 
 
 def _find_existing_artifacts(

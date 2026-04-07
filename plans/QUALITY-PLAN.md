@@ -8,9 +8,9 @@ Addressing organic growth, duplication, and overly defensive patterns identified
 
 The same load/save JSON pattern is repeated in `viewer.py`, `insights.py`, `screenspace.py`, `transcripts.py`, and `server.py` (stashes, settings).
 
-- [ ] Add `utils.load_json_manifest(path, default)` and `utils.save_json_manifest(path, data)` helpers
-- [ ] Replace all 5+ load sites and 5+ save sites with calls to the shared helpers
-- [ ] Ensure consistent error handling (log on write failure, return default on read failure)
+- [x] Add `utils.load_json_manifest(path, default)` and `utils.save_json_manifest(path, data)` helpers
+- [x] Replace all 5+ load sites and 5+ save sites with calls to the shared helpers
+- [x] Ensure consistent error handling (log on write failure, return default on read failure)
 
 ---
 
@@ -18,8 +18,8 @@ The same load/save JSON pattern is repeated in `viewer.py`, `insights.py`, `scre
 
 `prompt_category_selection`, `prompt_severity_selection`, and `prompt_keyword_selection` in `interactive.py` are near-identical 70-line functions differing only in source list, display formatter, and fuzzy-match strategy.
 
-- [ ] Extract a generic `prompt_multi_selection()` that accepts: item list, display callback, fuzzy-match callback, and prompt text
-- [ ] Rewrite the three functions as thin wrappers calling the generic helper
+- [x] Extract a generic `prompt_multi_selection()` that accepts: item list, display callback, fuzzy-match callback, and prompt text
+- [x] Rewrite the three functions as thin wrappers calling the generic helper
 
 ---
 

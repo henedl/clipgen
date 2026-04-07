@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import copy
 import difflib
-import json
+
 import math
 import queue
 import re
@@ -2920,15 +2920,7 @@ def load_screenspace_manifest() -> Dict[str, Any]:
 
     Returns a dict with ``regions`` and ``tasks`` keys.
     """
-    manifest_path = (
-        Path(utils.get_effective_output_dir()) / config.SCREENSPACE_MANIFEST_FILENAME
-    )
-    if not manifest_path.is_file():
-        return _empty_screenspace_manifest()
-    try:
-        data = json.loads(manifest_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return _empty_screenspace_manifest()
+    data = utils.load_json_manifest(config.SCREENSPACE_MANIFEST_FILENAME)
     if not isinstance(data, dict):
         return _empty_screenspace_manifest()
     return {
@@ -2950,9 +2942,6 @@ def save_screenspace_manifest(
     Strips internal fields (prefixed with ``_``) from tasks before writing.
     Returns the manifest path on success, or ``None`` on failure.
     """
-    manifest_path = (
-        Path(utils.get_effective_output_dir()) / config.SCREENSPACE_MANIFEST_FILENAME
-    )
     clean_tasks = []
     for task in tasks:
         ct = {k: v for k, v in task.items() if not k.startswith("_")}
@@ -2979,24 +2968,16 @@ def save_screenspace_manifest(
                 {k: v for k, v in r.items() if k != "flow_grid"} for r in ct["result"]
             ]
         clean_tasks.append(ct)
-    try:
-        manifest_path.write_text(
-            json.dumps(
-                {
-                    "regions": regions,
-                    "tasks": clean_tasks,
-                    "events": events or [],
-                    "stashes": stashes or [],
-                },
-                ensure_ascii=False,
-                indent=2,
-            ),
-            encoding="utf-8",
-        )
-        return manifest_path
-    except OSError as e:
-        utils.warning_print(f"Could not write screenspace manifest: {e}")
-        return None
+    return utils.save_json_manifest(
+        config.SCREENSPACE_MANIFEST_FILENAME,
+        {
+            "regions": regions,
+            "tasks": clean_tasks,
+            "events": events or [],
+            "stashes": stashes or [],
+        },
+        warn_label="screenspace manifest",
+    )
 
 
 def create_event(
