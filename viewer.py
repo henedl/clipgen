@@ -404,21 +404,17 @@ def _load_manifest_both() -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
 
     Returns (artifacts, reels). Both default to [] on missing/corrupt file.
     """
-    manifest_path = Path(utils.get_effective_output_dir()) / config.MANIFEST_FILENAME
-    if not manifest_path.is_file():
+    data = utils.load_json_manifest(config.MANIFEST_FILENAME)
+    if not isinstance(data, dict):
         return ([], [])
-    try:
-        data = json.loads(manifest_path.read_text(encoding="utf-8"))
-        raw = data.get("artifacts", [])
-        valid = [a for a in raw if _is_valid_artifact(a)]
-        if len(valid) < len(raw):
-            utils.warning_print(
-                f"Manifest contained {len(raw) - len(valid)} artifact(s) with "
-                "missing fields; skipped."
-            )
-        return (valid, data.get("reels", []))
-    except (OSError, json.JSONDecodeError, AttributeError):
-        return ([], [])
+    raw = data.get("artifacts", [])
+    valid = [a for a in raw if _is_valid_artifact(a)]
+    if len(valid) < len(raw):
+        utils.warning_print(
+            f"Manifest contained {len(raw) - len(valid)} artifact(s) with "
+            "missing fields; skipped."
+        )
+    return (valid, data.get("reels", []))
 
 
 def load_manifest_artifacts() -> List[Dict[str, Any]]:
@@ -471,12 +467,6 @@ def save_manifest(
         output_format=output_format,
     )
 
-    manifest_path = Path(utils.get_effective_output_dir()) / config.MANIFEST_FILENAME
-    try:
-        manifest_path.write_text(
-            json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
-        )
-        return manifest_path
-    except OSError as e:
-        utils.warning_print(f"Could not write manifest: {e}")
-        return None
+    return utils.save_json_manifest(
+        config.MANIFEST_FILENAME, data, warn_label="manifest"
+    )

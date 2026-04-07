@@ -14,7 +14,7 @@ the caller should re-prompt or abort).
 import shutil
 import sys
 import webbrowser
-from typing import Any, List, Optional, Tuple
+from typing import Any, Callable, List, Optional, Tuple
 
 import config
 import spreadsheet
@@ -38,75 +38,108 @@ def prompt_batch_confirm(ctx: SheetContext) -> bool:
     return yn == "y"
 
 
-def prompt_category_selection(ctx: SheetContext) -> Optional[List[str]]:
-    """Show categories, prompt for selection, return selected names or None."""
-    all_categories = spreadsheet.collect_categories(ctx)
-    if not all_categories:
-        utils.info_print("No categories found in the spreadsheet.")
-        return None
-    utils.info_print("Available categories:")
-    for i, cat in enumerate(all_categories, 1):
-        utils.info_print(f"  {i}. {cat}")
+def prompt_multi_selection(
+    items: List[str],
+    *,
+    header: str,
+    prompt_text: str,
+    confirm_label: str,
+    no_match_msg: str,
+    display_item: Optional[Callable[[int, str], None]] = None,
+    confirm_display: Callable[[str], str] = lambda x: x,
+    normalize_token: Callable[[str], str] = str.lower,
+    fuzzy_match: Optional[Callable[[str, List[str]], Optional[str]]] = None,
+) -> List[str]:
+    """Generic multi-selection prompt: display items, accept indices or text, confirm.
+
+    *display_item(index, item)* prints one item (default: ``"  {i}. {item}"``).
+    *confirm_display(item)* formats an item for the confirmation list.
+    *normalize_token* is applied to both user input and items for comparison.
+    *fuzzy_match(token, items)* is an optional fallback when exact match fails.
+    """
+    utils.info_print(header)
+    for i, item in enumerate(items, 1):
+        if display_item is not None:
+            display_item(i, item)
+        else:
+            utils.info_print(f"  {i}. {item}")
+
     while True:
-        selection = utils.read_user_input(
-            '\nEnter category numbers (comma-separated, e.g., "1,3,5") or "all":\n>> '
-        )
+        selection = utils.read_user_input(f"\n{prompt_text}\n>> ")
         if selection.lower() == "all":
-            return all_categories
+            return items
+
         try:
             indices = [int(x.strip()) for x in selection.split(",")]
-            selected_categories = []
-            invalid_indices = []
+            selected: List[str] = []
+            invalid_indices: List[int] = []
             for idx in indices:
-                if 1 <= idx <= len(all_categories):
-                    if all_categories[idx - 1] not in selected_categories:
-                        selected_categories.append(all_categories[idx - 1])
+                if 1 <= idx <= len(items):
+                    if items[idx - 1] not in selected:
+                        selected.append(items[idx - 1])
                 else:
                     invalid_indices.append(idx)
             if invalid_indices:
                 utils.info_print(
                     f"  Invalid index(es): {', '.join(str(i) for i in invalid_indices)}"
                 )
-            if selected_categories:
-                utils.info_print("Selected categories:")
-                for cat in selected_categories:
-                    utils.info_print(f"  - {cat}")
+            if selected:
+                utils.info_print(confirm_label)
+                for item in selected:
+                    utils.info_print(f"  - {confirm_display(item)}")
                 yn = utils.read_user_input("\nIs this correct? [y/n]\n>> ")
                 if yn == "y":
-                    return selected_categories
+                    return selected
             else:
-                utils.info_print("No valid categories selected. Please try again.")
+                utils.info_print("No valid selections. Please try again.")
         except ValueError:
             tokens = [t.strip() for t in selection.split(",") if t.strip()]
-            matched_categories = []
-            unmatched = []
+            matched: List[str] = []
+            unmatched: List[str] = []
             for token in tokens:
+                normalized = normalize_token(token)
                 exact = next(
-                    (c for c in all_categories if c.lower() == token.lower()), None
+                    (it for it in items if normalize_token(it) == normalized),
+                    None,
                 )
                 if exact:
-                    if exact not in matched_categories:
-                        matched_categories.append(exact)
+                    if exact not in matched:
+                        matched.append(exact)
                     continue
-                suggestion = utils.suggest_close_match(token, all_categories)
-                if suggestion is not None:
-                    if suggestion not in matched_categories:
-                        matched_categories.append(suggestion)
-                else:
-                    unmatched.append(token)
+                if fuzzy_match is not None:
+                    suggestion = fuzzy_match(token, items)
+                    if suggestion is not None:
+                        if suggestion not in matched:
+                            matched.append(suggestion)
+                        continue
+                unmatched.append(token)
             if unmatched:
                 utils.info_print(f"Could not match: {', '.join(unmatched)}")
-            if matched_categories:
-                utils.info_print("Selected categories:")
-                for cat in matched_categories:
-                    utils.info_print(f"  - {cat}")
+            if matched:
+                utils.info_print(confirm_label)
+                for item in matched:
+                    utils.info_print(f"  - {confirm_display(item)}")
                 yn = utils.read_user_input("\nIs this correct? [y/n]\n>> ")
                 if yn == "y":
-                    return matched_categories
+                    return matched
             else:
-                utils.info_print(
-                    "No valid categories matched. Enter numbers (e.g. 1,3,5) or category names."
-                )
+                utils.info_print(no_match_msg)
+
+
+def prompt_category_selection(ctx: SheetContext) -> Optional[List[str]]:
+    """Show categories, prompt for selection, return selected names or None."""
+    all_categories = spreadsheet.collect_categories(ctx)
+    if not all_categories:
+        utils.info_print("No categories found in the spreadsheet.")
+        return None
+    return prompt_multi_selection(
+        all_categories,
+        header="Available categories:",
+        prompt_text='Enter category numbers (comma-separated, e.g., "1,3,5") or "all":',
+        confirm_label="Selected categories:",
+        no_match_msg="No valid categories matched. Enter numbers (e.g. 1,3,5) or category names.",
+        fuzzy_match=utils.suggest_close_match,
+    )
 
 
 def prompt_severity_selection(ctx: SheetContext) -> Optional[List[str]]:
@@ -115,73 +148,27 @@ def prompt_severity_selection(ctx: SheetContext) -> Optional[List[str]]:
     if not all_severities:
         utils.info_print("No severity values found in the spreadsheet.")
         return None
-    utils.info_print("Available severity levels (most severe first):")
-    for i, sev in enumerate(all_severities, 1):
+
+    def _display_severity(index: int, sev: str) -> None:
         count = severity_counts.get(sev, 0)
         count_label = "1 row" if count == 1 else f"{count} rows"
         display = f"{utils.format_severity_display(sev)} \u2014 {count_label}"
         style = utils.get_severity_style(sev)
         if utils._use_rich() and utils.console is not None and style:
-            utils.console.print(f"  {i}. [{style}]{display}[/{style}]")
+            utils.console.print(f"  {index}. [{style}]{display}[/{style}]")
         else:
-            utils.info_print(f"  {i}. {display}")
-    while True:
-        selection = utils.read_user_input(
-            '\nEnter severity numbers (comma-separated, e.g., "1,2") or "all":\n>> '
-        )
-        if selection.lower() == "all":
-            return all_severities
-        try:
-            indices = [int(x.strip()) for x in selection.split(",")]
-            selected = []
-            invalid_indices = []
-            for idx in indices:
-                if 1 <= idx <= len(all_severities):
-                    if all_severities[idx - 1] not in selected:
-                        selected.append(all_severities[idx - 1])
-                else:
-                    invalid_indices.append(idx)
-            if invalid_indices:
-                utils.info_print(
-                    f"  Invalid index(es): {', '.join(str(i) for i in invalid_indices)}"
-                )
-            if selected:
-                utils.info_print("Selected severities:")
-                for sev in selected:
-                    utils.info_print(f"  - {utils.format_severity_display(sev)}")
-                yn = utils.read_user_input("\nIs this correct? [y/n]\n>> ")
-                if yn == "y":
-                    return selected
-            else:
-                utils.info_print("No valid severities selected. Please try again.")
-        except ValueError:
-            tokens = [t.strip() for t in selection.split(",") if t.strip()]
-            matched = []
-            unmatched = []
-            for token in tokens:
-                normalized = utils.normalize_severity(token)
-                exact = next(
-                    (s for s in all_severities if s.lower() == normalized.lower()),
-                    None,
-                )
-                if exact:
-                    if exact not in matched:
-                        matched.append(exact)
-                else:
-                    unmatched.append(token)
-            if unmatched:
-                utils.info_print(f"Could not match: {', '.join(unmatched)}")
-            if matched:
-                utils.info_print("Selected severities:")
-                for sev in matched:
-                    utils.info_print(f"  - {utils.format_severity_display(sev)}")
-                yn = utils.read_user_input("\nIs this correct? [y/n]\n>> ")
-                if yn == "y":
-                    return matched
-            else:
-                utils.info_print(
-                    "No valid severities matched. Enter numbers or severity names."
-                )
+            utils.info_print(f"  {index}. {display}")
+
+    return prompt_multi_selection(
+        all_severities,
+        header="Available severity levels (most severe first):",
+        prompt_text='Enter severity numbers (comma-separated, e.g., "1,2") or "all":',
+        confirm_label="Selected severities:",
+        no_match_msg="No valid severities matched. Enter numbers or severity names.",
+        display_item=_display_severity,
+        confirm_display=utils.format_severity_display,
+        normalize_token=lambda t: utils.normalize_severity(t).lower(),
+    )
 
 
 def prompt_line_selection(ctx: SheetContext) -> Optional[List[int]]:
@@ -408,66 +395,22 @@ def prompt_keyword_selection(ctx: SheetContext) -> Optional[List[str]]:
         if yn == "y":
             return [aid]
         return None
-    utils.info_print("Available annotation types:")
-    for i, aid in enumerate(all_annotations, 1):
+
+    def _display_annotation(index: int, aid: str) -> None:
         count = annotation_counts.get(aid, 0)
         count_label = "1 cell" if count == 1 else f"{count} cells"
-        utils.info_print(f"  {i}. !{aid} — {count_label}")
-    while True:
-        selection = utils.read_user_input(
-            '\nEnter annotation numbers (comma-separated, e.g., "1,2") or "all":\n>> '
-        )
-        if selection.lower() == "all":
-            return all_annotations
-        try:
-            indices = [int(x.strip()) for x in selection.split(",")]
-            selected = []
-            invalid_indices = []
-            for idx in indices:
-                if 1 <= idx <= len(all_annotations):
-                    if all_annotations[idx - 1] not in selected:
-                        selected.append(all_annotations[idx - 1])
-                else:
-                    invalid_indices.append(idx)
-            if invalid_indices:
-                utils.info_print(
-                    f"  Invalid index(es): {', '.join(str(i) for i in invalid_indices)}"
-                )
-            if selected:
-                utils.info_print("Selected annotations:")
-                for aid in selected:
-                    utils.info_print(f"  - !{aid}")
-                yn = utils.read_user_input("\nIs this correct? [y/n]\n>> ")
-                if yn == "y":
-                    return selected
-            else:
-                utils.info_print("No valid annotations selected. Please try again.")
-        except ValueError:
-            tokens = [
-                t.strip().lower().lstrip("!") for t in selection.split(",") if t.strip()
-            ]
-            matched = []
-            unmatched = []
-            for token in tokens:
-                exact = next((a for a in all_annotations if a.lower() == token), None)
-                if exact:
-                    if exact not in matched:
-                        matched.append(exact)
-                else:
-                    unmatched.append(token)
-            if unmatched:
-                utils.info_print(f"Could not match: {', '.join(unmatched)}")
-            if matched:
-                utils.info_print("Selected annotations:")
-                for aid in matched:
-                    utils.info_print(f"  - !{aid}")
-                yn = utils.read_user_input("\nIs this correct? [y/n]\n>> ")
-                if yn == "y":
-                    return matched
-            else:
-                utils.info_print(
-                    "No valid annotations matched. Enter numbers or annotation names."
-                )
+        utils.info_print(f"  {index}. !{aid} \u2014 {count_label}")
+
+    return prompt_multi_selection(
+        all_annotations,
+        header="Available annotation types:",
+        prompt_text='Enter annotation numbers (comma-separated, e.g., "1,2") or "all":',
+        confirm_label="Selected annotations:",
+        no_match_msg="No valid annotations matched. Enter numbers or annotation names.",
+        display_item=_display_annotation,
+        confirm_display=lambda aid: f"!{aid}",
+        normalize_token=lambda t: t.strip().lower().lstrip("!"),
+    )
 
 
 # ---- Browse mode ----

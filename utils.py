@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import difflib
+import json
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -492,6 +493,41 @@ def resolve_output_path(name: str) -> Path:
     if path.is_absolute():
         return path
     return base / path
+
+
+def load_json_manifest(filename: str, *, default: Any = None) -> Any:
+    """Load a JSON manifest from the output directory.
+
+    Returns parsed data, or *default* on missing/corrupt file.
+    """
+    path = Path(get_effective_output_dir()) / filename
+    if not path.is_file():
+        return default
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return default
+
+
+def save_json_manifest(
+    filename: str, data: Any, *, warn_label: str = ""
+) -> Path | None:
+    """Write *data* as JSON to *filename* in the output directory.
+
+    Creates parent dirs.  Returns the path on success, ``None`` on failure.
+    Logs a warning on write failure using *warn_label*.
+    """
+    path = Path(get_effective_output_dir()) / filename
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+        return path
+    except OSError as exc:
+        if warn_label:
+            warning_print(f"Could not write {warn_label}: {exc}")
+        return None
 
 
 def get_bundled_assets_root() -> Path:

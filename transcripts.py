@@ -35,7 +35,7 @@ Standalone transcript file output (type "transcript" artifacts) is opt-in via --
 from __future__ import annotations
 
 import copy
-import json
+
 import queue
 import re
 import threading
@@ -211,15 +211,7 @@ def load_transcripts_manifest() -> dict[str, Any]:
     Returns a dict with ``source_transcripts`` and ``corrections`` keys.
     Missing or corrupt files return an empty manifest.
     """
-    manifest_path = (
-        Path(utils.get_effective_output_dir()) / config.TRANSCRIPTS_MANIFEST_FILENAME
-    )
-    if not manifest_path.is_file():
-        return _empty_transcripts_manifest()
-    try:
-        data = json.loads(manifest_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return _empty_transcripts_manifest()
+    data = utils.load_json_manifest(config.TRANSCRIPTS_MANIFEST_FILENAME)
     if not isinstance(data, dict):
         return _empty_transcripts_manifest()
     return {
@@ -247,32 +239,21 @@ def save_transcripts_manifest(
 
     # When marks is None, preserve existing marks from disk
     if marks is None:
-        manifest_path = (
-            Path(utils.get_effective_output_dir())
-            / config.TRANSCRIPTS_MANIFEST_FILENAME
+        existing = utils.load_json_manifest(
+            config.TRANSCRIPTS_MANIFEST_FILENAME, default={}
         )
-        try:
-            existing = json.loads(manifest_path.read_text(encoding="utf-8"))
-            marks = existing.get("marks") or []
-        except (OSError, json.JSONDecodeError):
-            marks = []
+        marks = (existing.get("marks") or []) if isinstance(existing, dict) else []
 
     data = {
         "source_transcripts": source_transcripts,
         "corrections": corrections,
         "marks": marks,
     }
-    manifest_path = (
-        Path(utils.get_effective_output_dir()) / config.TRANSCRIPTS_MANIFEST_FILENAME
+    return utils.save_json_manifest(
+        config.TRANSCRIPTS_MANIFEST_FILENAME,
+        data,
+        warn_label="transcripts manifest",
     )
-    try:
-        manifest_path.write_text(
-            json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
-        )
-        return manifest_path
-    except OSError as exc:
-        utils.warning_print(f"Failed to save transcripts manifest: {exc}")
-        return None
 
 
 # ---------------------------------------------------------------------------

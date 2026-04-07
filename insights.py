@@ -25,7 +25,7 @@ Key functions:
 
 from __future__ import annotations
 
-import json
+
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -45,16 +45,7 @@ def load_insights_manifest() -> Dict[str, Any]:
     Returns a dict with 'meta' and 'insights' keys.
     Handles missing 'summary' field on legacy insights (defaults to "").
     """
-    manifest_path = (
-        Path(utils.get_effective_output_dir()) / config.INSIGHTS_MANIFEST_FILENAME
-    )
-    if not manifest_path.is_file():
-        return _empty_manifest()
-    try:
-        data = json.loads(manifest_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return _empty_manifest()
-
+    data = utils.load_json_manifest(config.INSIGHTS_MANIFEST_FILENAME)
     if not isinstance(data, dict):
         return _empty_manifest()
 
@@ -78,20 +69,11 @@ def save_insights_manifest(
     meta["generatedAt"] = datetime.now(timezone.utc).isoformat()
     meta.setdefault("version", config.VERSIONNUM)
 
-    manifest_path = (
-        Path(utils.get_effective_output_dir()) / config.INSIGHTS_MANIFEST_FILENAME
+    return utils.save_json_manifest(
+        config.INSIGHTS_MANIFEST_FILENAME,
+        {"meta": meta, "insights": insights},
+        warn_label="insights manifest",
     )
-    try:
-        manifest_path.write_text(
-            json.dumps(
-                {"meta": meta, "insights": insights}, ensure_ascii=False, indent=2
-            ),
-            encoding="utf-8",
-        )
-        return manifest_path
-    except OSError as e:
-        utils.warning_print(f"Could not write insights manifest: {e}")
-        return None
 
 
 def create_insight(
