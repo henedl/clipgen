@@ -23,23 +23,20 @@ Key functions:
   delete_insight()  – remove an insight by id
 """
 
-from __future__ import annotations
-
-
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import config
 import utils
 
 
-def _empty_manifest() -> Dict[str, Any]:
+def _empty_manifest() -> dict[str, Any]:
     return {"meta": {}, "insights": []}
 
 
-def load_insights_manifest() -> Dict[str, Any]:
+def load_insights_manifest() -> dict[str, Any]:
     """Load the insights manifest from the output directory.
 
     Returns a dict with 'meta' and 'insights' keys.
@@ -59,8 +56,8 @@ def load_insights_manifest() -> Dict[str, Any]:
 
 
 def save_insights_manifest(
-    meta: Dict[str, Any], insights: List[Dict[str, Any]]
-) -> Optional[Path]:
+    meta: dict[str, Any], insights: list[dict[str, Any]]
+) -> Path | None:
     """Write the full insights manifest to disk.
 
     Returns the manifest path on success, or None on failure.
@@ -78,7 +75,7 @@ def save_insights_manifest(
 
 def create_insight(
     title: str = "", severity: str = "", status: str = "draft"
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Create a new insight dict with all fields initialized."""
     now = datetime.now(timezone.utc).isoformat()
     return {
@@ -97,10 +94,10 @@ def create_insight(
 
 
 def update_insight(
-    insights: List[Dict[str, Any]],
+    insights: list[dict[str, Any]],
     insight_id: str,
-    updates: Dict[str, Any],
-) -> Optional[Dict[str, Any]]:
+    updates: dict[str, Any],
+) -> dict[str, Any] | None:
     """Find an insight by ID, merge updates, set updatedAt.
 
     Returns the updated insight, or None if not found.
@@ -115,7 +112,7 @@ def update_insight(
     return None
 
 
-def delete_insight(insights: List[Dict[str, Any]], insight_id: str) -> bool:
+def delete_insight(insights: list[dict[str, Any]], insight_id: str) -> bool:
     """Remove an insight by ID. Returns True if found and removed."""
     for i, insight in enumerate(insights):
         if insight["id"] == insight_id:

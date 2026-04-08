@@ -16,12 +16,10 @@ API endpoints (all under /insights/):
   POST /api/generate-viewer          – export standalone insights_viewer.html
 """
 
-from __future__ import annotations
-
 import tempfile
 from math import ceil, sqrt
 from pathlib import Path
-from typing import Any, Dict, List, Tuple, Union
+from typing import Any
 
 from flask import Blueprint, Response, jsonify, request, send_from_directory
 
@@ -31,14 +29,14 @@ import utils
 import video
 import viewer
 
-FlaskResponse = Union[Response, Tuple[Response, int]]
+FlaskResponse = Response | tuple[Response, int]
 
 # ---- Module-level state (set once by _init_insights_state) ----
 
-_artifacts: List[Dict[str, Any]] = []
-_insights_data: Dict[str, Any] = {}
-_output_dir: Union[str, Path] = ""
-_sprite_cache: Dict[str, bytes] = {}
+_artifacts: list[dict[str, Any]] = []
+_insights_data: dict[str, Any] = {}
+_output_dir: str | Path = ""
+_sprite_cache: dict[str, bytes] = {}
 
 _assets_dir = utils.get_bundled_assets_root() / "assets" / "web"
 
@@ -207,7 +205,7 @@ def _save_insights() -> None:
     insights.save_insights_manifest(meta, _insights_data.get("insights", []))
 
 
-def _compute_sprite_metadata(duration_seconds: float) -> Dict[str, Any]:
+def _compute_sprite_metadata(duration_seconds: float) -> dict[str, Any]:
     """Compute sprite sheet layout metadata from a clip duration (no I/O)."""
     frame_count = config.SPRITE_SHEET_FRAME_COUNT
     thumb_width = config.SPRITE_SHEET_THUMB_WIDTH

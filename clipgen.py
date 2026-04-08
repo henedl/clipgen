@@ -20,7 +20,7 @@ import hashlib
 import os
 import sys
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Set, Tuple
+from typing import Any, Callable
 
 import gspread
 from icecream import ic
@@ -152,9 +152,7 @@ _STANDARD_MODES = {
 # ---- Spreadsheet opening and selection ----
 
 
-def _open_worksheet(
-    open_callable: Callable[[], Any], error_context: str
-) -> Optional[Any]:
+def _open_worksheet(open_callable: Callable[[], Any], error_context: str) -> Any | None:
     """Try to open a worksheet via a callable; catch gspread errors and print a consistent message."""
     try:
         return google_api.get_worksheet(open_callable())
@@ -169,10 +167,10 @@ def _open_worksheet(
 
 def open_spreadsheet_by_url(
     gspread_client: Any, url: str, *, use_spinner: bool = False
-) -> Optional[Any]:
+) -> Any | None:
     """Open a spreadsheet by URL."""
 
-    def open_fn() -> Optional[Any]:
+    def open_fn() -> Any | None:
         return _open_worksheet(lambda: gspread_client.open_by_url(url), "by URL")
 
     if use_spinner:
@@ -181,8 +179,8 @@ def open_spreadsheet_by_url(
 
 
 def open_spreadsheet_by_index(
-    gspread_client: Any, doc_list: List[str], index: int, *, use_spinner: bool = False
-) -> Optional[Any]:
+    gspread_client: Any, doc_list: list[str], index: int, *, use_spinner: bool = False
+) -> Any | None:
     """Open a spreadsheet by 1-based index number from the document list."""
     if index < 1 or index > len(doc_list):
         utils.error_print(
@@ -193,7 +191,7 @@ def open_spreadsheet_by_index(
     if not use_spinner:
         utils.standard_print(f"Opening document: {doc_name}")
 
-    def open_fn() -> Optional[Any]:
+    def open_fn() -> Any | None:
         return _open_worksheet(
             lambda: gspread_client.open(doc_name), f"at index {index}"
         )
@@ -205,12 +203,12 @@ def open_spreadsheet_by_index(
 
 def open_spreadsheet_by_name(
     gspread_client: Any,
-    doc_list: List[str],
+    doc_list: list[str],
     name: str,
     *,
     use_spinner: bool = False,
     prompt_prefix: str = "No exact match found. Did you mean",
-) -> Optional[Any]:
+) -> Any | None:
     """Open a spreadsheet by name search against the document list."""
     chosen_index = google_api.find_spreadsheet_by_name(name, doc_list)
     if chosen_index < 0:
@@ -226,7 +224,7 @@ def open_spreadsheet_by_name(
     if not use_spinner:
         utils.standard_print(f"Opening document: {matched_name}")
 
-    def open_fn() -> Optional[Any]:
+    def open_fn() -> Any | None:
         return _open_worksheet(lambda: gspread_client.open(matched_name), f"'{name}'")
 
     if use_spinner:
@@ -235,8 +233,8 @@ def open_spreadsheet_by_name(
 
 
 def _handle_spreadsheet_command(
-    gspread_client: Any, doc_list: List[str], input_name: str
-) -> Optional[Any]:
+    gspread_client: Any, doc_list: list[str], input_name: str
+) -> Any | None:
     """Handle one spreadsheet selection command. Returns worksheet when one was opened, None to show prompt again."""
     if not input_name:
         return None
@@ -281,7 +279,7 @@ def _handle_spreadsheet_command(
     )
 
 
-def select_spreadsheet(gspread_client: Any, doc_list: List[str]) -> Any:
+def select_spreadsheet(gspread_client: Any, doc_list: list[str]) -> Any:
     """Interactive spreadsheet selection. Returns the selected worksheet."""
     consecutive_open_failures = 0
     utils.print_mode_heading("Spreadsheet selection", "mode.spreadsheet")
@@ -368,8 +366,8 @@ _ALL_MODE_HELP = _SELECTION_MODE_HELP + [
 
 
 def _resolve_unrecognized_input(
-    worksheet: Any, user_input: str, *, help_lines: List[str]
-) -> Optional[List[ClipRecord]]:
+    worksheet: Any, user_input: str, *, help_lines: list[str]
+) -> list[ClipRecord] | None:
     """Try auto-detection and mixed-selector parsing for input that didn't match a mode alias.
 
     Attempts, in order: single-type auto-detection (line/range/cell/participant)
@@ -415,7 +413,7 @@ def _resolve_unrecognized_input(
     return spreadsheet.generate_list(worksheet, "reel", reel_input=user_input)
 
 
-def _run_standard_mode(mode: str, worksheet: Any) -> Optional[List[ClipRecord]]:
+def _run_standard_mode(mode: str, worksheet: Any) -> list[ClipRecord] | None:
     """Run a standard interactive mode (batch/line/range/category/cell/participant/keyword).
 
     Prompts the user for mode-specific input, then generates clips.
@@ -459,10 +457,10 @@ def _resolve_clip_workers() -> int:
 
 def _check_source_video(
     clip: ClipRecord,
-    missing_videos: Set[str],
+    missing_videos: set[str],
     skip_detail: str,
-    fuzzy_matches: Dict[str, Optional[str]],
-) -> Optional[str]:
+    fuzzy_matches: dict[str, str | None],
+) -> str | None:
     """Return the expected source video path if it exists; log a detailed error once per missing file.
 
     The expected filename is derived from clip['study'] and clip['participant'] by default,
@@ -539,9 +537,9 @@ def _check_source_video(
 
 def _prepare_and_check_clip(
     clip: ClipRecord,
-    missing_videos: Set[str],
-    fuzzy_matches: Dict[str, Optional[str]],
-) -> Tuple[ClipRecord, Optional[str]]:
+    missing_videos: set[str],
+    fuzzy_matches: dict[str, str | None],
+) -> tuple[ClipRecord, str | None]:
     """Prepare one clip and validate that its source video exists.
 
     Returns:
@@ -564,13 +562,13 @@ def _prepare_and_check_clip(
 def _process_single_clip_segments(
     clip: ClipRecord,
     base_video: str,
-    missing_videos: Set[str],
+    missing_videos: set[str],
     *,
     filename_prefix: str = "",
     output_format: str = "clip",
     collect_paths: bool = False,
     include_severity: bool = False,
-) -> Tuple[int, List[Tuple[str, str, str]]]:
+) -> tuple[int, list[tuple[str, str, str]]]:
     """Process one clip's segments: run ffmpeg for each (start, end), optionally collect output paths.
 
     Caller must have already called prepare_clip(clip). Does not add to missing_videos; caller handles that.
@@ -587,7 +585,7 @@ def _process_single_clip_segments(
         (number of segments successfully generated, list of output paths if collect_paths else [])
     """
     generated = 0
-    output_paths: List[Tuple[str, str, str]] = []
+    output_paths: list[tuple[str, str, str]] = []
     extension_map = {
         "clip": config.FILEFORMAT,
         "screen": ".png",
@@ -663,16 +661,16 @@ def _process_single_clip_segments(
 
 
 def _run_clip_pipeline(
-    clips_list: List[Any],
+    clips_list: list[Any],
     *,
     empty_warning: str,
     intro_message: str,
     task_label: str,
-    per_clip_fn: Callable[[Any, Set[str]], Any],
+    per_clip_fn: Callable[[Any, set[str]], Any],
     show_fallback_counter: bool = False,
-    secondary_task_label: Optional[str] = None,
+    secondary_task_label: str | None = None,
     parallel: bool = False,
-) -> Tuple[List[Any], Set[str]]:
+) -> tuple[list[Any], set[str]]:
     """Run shared clip-processing pipeline and return per-clip results.
 
     When *parallel* is True and there are at least 2 clips, a ThreadPoolExecutor
@@ -684,7 +682,7 @@ def _run_clip_pipeline(
         return ([], set())
 
     utils.standard_print(intro_message)
-    missing_videos: Set[str] = set()
+    missing_videos: set[str] = set()
 
     def wrapped_process(clip: Any) -> Any:
         return per_clip_fn(clip, missing_videos)
@@ -694,7 +692,7 @@ def _run_clip_pipeline(
     use_parallel = parallel and workers >= 2 and total_clips >= 2
 
     if use_parallel:
-        results: List[Any] = [None] * total_clips
+        results: list[Any] = [None] * total_clips
         progress = utils.create_progress_bar()
         if progress:
             global _active_progress, _active_secondary_task
@@ -784,10 +782,10 @@ def _run_clip_pipeline(
 def _embed_transcript_on_artifacts(
     clip: Any,
     base_video: str,
-    artifacts: List[Dict[str, Any]],
-    segment_details: List[Tuple[str, str, str]],
-    transcript_cache: Dict[str, Any],
-    transcripts_manifest: Optional[Dict[str, Any]] = None,
+    artifacts: list[dict[str, Any]],
+    segment_details: list[tuple[str, str, str]],
+    transcript_cache: dict[str, Any],
+    transcripts_manifest: dict[str, Any] | None = None,
 ) -> None:
     """Embed transcript segments on clip artifact records.
 
@@ -846,10 +844,10 @@ def _embed_transcript_on_artifacts(
 def _transcribe_segments(
     clip: Any,
     base_video: str,
-    segment_details: List[Tuple[str, str, str]],
-    all_artifacts: List[Dict[str, Any]],
-    transcript_cache: Dict[str, Any],
-    transcripts_manifest: Optional[Dict[str, Any]] = None,
+    segment_details: list[tuple[str, str, str]],
+    all_artifacts: list[dict[str, Any]],
+    transcript_cache: dict[str, Any],
+    transcripts_manifest: dict[str, Any] | None = None,
 ) -> None:
     """Transcribe segments of a clip and write transcript files."""
     import transcripts
@@ -927,10 +925,10 @@ def _transcribe_segments(
 
 
 def process_clips(
-    clips_list: List[ClipRecord],
+    clips_list: list[ClipRecord],
     output_format: str = "clip",
     include_severity: bool = False,
-) -> Tuple[int, List[Dict[str, Any]]]:
+) -> tuple[int, list[dict[str, Any]]]:
     """Process and generate outputs from the clips list.
 
     Uses a three-phase approach:
@@ -955,14 +953,14 @@ def process_clips(
         "  Only warns if close to crashing.\n"
     )
 
-    all_artifacts: List[Dict[str, Any]] = []
-    fuzzy_matches: Dict[str, Optional[str]] = {}
-    transcript_cache: Dict[str, Any] = {}
-    transcripts_manifest: Optional[Dict[str, Any]] = None  # lazy-loaded
-    missing_videos: Set[str] = set()
+    all_artifacts: list[dict[str, Any]] = []
+    fuzzy_matches: dict[str, str | None] = {}
+    transcript_cache: dict[str, Any] = {}
+    transcripts_manifest: dict[str, Any] | None = None  # lazy-loaded
+    missing_videos: set[str] = set()
 
     # -- Phase 1: Sequential preparation (handles user prompts) ---------------
-    prepared: List[Tuple[ClipRecord, str]] = []
+    prepared: list[tuple[ClipRecord, str]] = []
     skipped_no_times = 0
     skipped_no_video = 0
 
@@ -1007,9 +1005,9 @@ def process_clips(
     # -- Phase 2: Execute ffmpeg work ------------------------------------------
     workers = _resolve_clip_workers()
     use_parallel = workers >= 2 and len(prepared) >= 2
-    _EMPTY_RESULT: Tuple[int, List[Tuple[str, str, str]]] = (0, [])
+    _EMPTY_RESULT: tuple[int, list[tuple[str, str, str]]] = (0, [])
     # Pre-allocate results in original order for deterministic artifact output
-    results: List[Tuple[int, List[Tuple[str, str, str]]]] = [_EMPTY_RESULT] * len(
+    results: list[tuple[int, list[tuple[str, str, str]]]] = [_EMPTY_RESULT] * len(
         prepared
     )
 
@@ -1210,7 +1208,7 @@ def process_clips(
     return (outputs_generated, all_artifacts)
 
 
-def compute_reel_id(components: List[Dict[str, Any]]) -> str:
+def compute_reel_id(components: list[dict[str, Any]]) -> str:
     """Compute a deterministic reel ID from its component metadata."""
     parts = sorted(
         f"{c['cellRow']}:{c['cellCol']}:{c['start']}:{c['end']}" for c in components
@@ -1219,8 +1217,8 @@ def compute_reel_id(components: List[Dict[str, Any]]) -> str:
 
 
 def _build_reel_transcript(
-    components: List[Dict[str, Any]],
-) -> List[Dict[str, Any]]:
+    components: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
     """Assemble merged transcript for a reel from its components.
 
     Segments are derived from each component's source transcript,
@@ -1232,7 +1230,7 @@ def _build_reel_transcript(
     source_transcripts = manifest.get("source_transcripts", {})
     corrections = manifest.get("corrections", [])
 
-    merged_segments: List[Dict[str, Any]] = []
+    merged_segments: list[dict[str, Any]] = []
     cumulative_offset = 0.0
     seg_counter = 0
     titlecard_duration = (
@@ -1278,9 +1276,9 @@ def _build_reel_transcript(
 
 
 def process_reel(
-    clips_list: List[ClipRecord],
-    output_file: Optional[str] = None,
-) -> Tuple[int, List[Dict[str, Any]]]:
+    clips_list: list[ClipRecord],
+    output_file: str | None = None,
+) -> tuple[int, list[dict[str, Any]]]:
     """Process clips for reel mode: generate individual clips, concatenate into one video, clean up.
 
     Returns:
@@ -1301,11 +1299,11 @@ def process_reel(
             study_name = s
             break
 
-    fuzzy_matches: Dict[str, Optional[str]] = {}
+    fuzzy_matches: dict[str, str | None] = {}
 
     def process_reel_clip(
-        clip: Any, missing_videos: Set[str]
-    ) -> Tuple[List[Tuple[str, str, str]], List[Dict[str, Any]]]:
+        clip: Any, missing_videos: set[str]
+    ) -> tuple[list[tuple[str, str, str]], list[dict[str, Any]]]:
         """Process one clip for reel mode and return (segment_paths, component_dicts)."""
         clip, base_video = _prepare_and_check_clip(clip, missing_videos, fuzzy_matches)
         if base_video is None:
@@ -1343,7 +1341,7 @@ def process_reel(
         parallel=True,
     )
     # Assemble ordered paths and components from per-clip results
-    components: List[Dict[str, Any]] = []
+    components: list[dict[str, Any]] = []
     clip_paths = []
     for segment_paths, clip_components in all_results:
         for entry in segment_paths:
@@ -1380,7 +1378,7 @@ def process_reel(
         return (0, [])
 
     reel_id = compute_reel_id(components)
-    reel_record: Dict[str, Any] = {
+    reel_record: dict[str, Any] = {
         "id": reel_id,
         "file": Path(output_file).name,
         "study": study_name,
@@ -1396,8 +1394,8 @@ def process_reel(
 
 
 def regenerate_from_manifest(
-    artifacts: List[Dict[str, Any]],
-    reels: Optional[List[Dict[str, Any]]] = None,
+    artifacts: list[dict[str, Any]],
+    reels: list[dict[str, Any]] | None = None,
 ) -> int:
     """Regenerate media artifacts and reels from manifest entries.
 
@@ -1415,7 +1413,7 @@ def regenerate_from_manifest(
         return 0
 
     utils.print_mode_heading("Regenerating artifacts", "mode.regenerate")
-    missing_videos: Set[str] = set()
+    missing_videos: set[str] = set()
     generated = 0
 
     progress = utils.create_progress_bar()
@@ -1457,7 +1455,7 @@ def regenerate_from_manifest(
 
 
 def _regenerate_single_artifact(
-    artifact: Dict[str, Any], missing_videos: Set[str]
+    artifact: dict[str, Any], missing_videos: set[str]
 ) -> bool:
     """Regenerate one artifact from its manifest entry. Returns True on success."""
     source_name = artifact.get("sourceVideo", "")
@@ -1510,13 +1508,13 @@ def _regenerate_single_artifact(
         return False
 
 
-def _regenerate_reel(reel: Dict[str, Any], missing_videos: Set[str]) -> bool:
+def _regenerate_reel(reel: dict[str, Any], missing_videos: set[str]) -> bool:
     """Regenerate a reel from its manifest entry by cutting components then concatenating."""
     components = reel.get("components", [])
     if not components:
         return False
 
-    temp_paths: List[str] = []
+    temp_paths: list[str] = []
     for comp in components:
         source = comp.get("sourceVideo", "")
         source_path = str(utils.resolve_input_path(source))
@@ -1578,7 +1576,7 @@ def _print_completion_message(
     )
 
 
-def _prompt_chronologic_participant_selection(worksheet: Any) -> Optional[str]:
+def _prompt_chronologic_participant_selection(worksheet: Any) -> str | None:
     """Prompt user to pick exactly one participant for chronologic reels."""
     ctx = spreadsheet.build_sheet_context(worksheet)
     if ctx is None:
@@ -1634,7 +1632,7 @@ def _prompt_chronologic_participant_selection(worksheet: Any) -> Optional[str]:
 
 def _run_reel_mode_interactive(
     worksheet: Any,
-) -> Tuple[List[ClipRecord], bool, Optional[str]]:
+) -> tuple[list[ClipRecord], bool, str | None]:
     """Run reel mode UI: instructions, input, generate_list, preview, confirm, output filename.
     Returns (clips_list, True, reel_output_file or None) when user confirms; caller may loop on continue.
     """
@@ -1761,7 +1759,7 @@ def _run_reel_mode_interactive(
     return (clips_list, True, reel_output_file)
 
 
-def _parse_clip_selection(selection_input: str, num_clips: int) -> List[int]:
+def _parse_clip_selection(selection_input: str, num_clips: int) -> list[int]:
     """Parse user selection input into list of clip indices.
 
     Supports formats: "A + B + C", "A, B, C", "A B C", or mixed.
@@ -1787,7 +1785,7 @@ def _parse_clip_selection(selection_input: str, num_clips: int) -> List[int]:
     return indices
 
 
-def _run_reellate_mode_interactive() -> Tuple[bool, Optional[str]]:
+def _run_reellate_mode_interactive() -> tuple[bool, str | None]:
     """Run reel-late mode UI: discover clips, display list, select, concatenate.
 
     Returns (True, output_file) when reel was generated; (False, None) otherwise.
@@ -2017,7 +2015,7 @@ def _run_gallery_mode_interactive() -> None:
         utils.info_print(f"  {i}. {v.name}  ({size_mb:.0f} MB)")
 
     selection = utils.read_user_input("Select a video (number or filename):\n>> ")
-    video_path: Optional[Path] = None
+    video_path: Path | None = None
     try:
         idx = int(selection) - 1
         if 0 <= idx < len(videos):
@@ -2088,8 +2086,8 @@ def _run_gallery_mode_interactive() -> None:
 
 
 def _dispatch_interactive_mode(
-    mode: Optional[str], worksheet: Any, raw_input: str
-) -> Optional[Tuple[List[ClipRecord], bool, Optional[str]]]:
+    mode: str | None, worksheet: Any, raw_input: str
+) -> tuple[list[ClipRecord], bool, str | None] | None:
     """Dispatch a resolved mode or raw input. Returns result tuple, or None to re-prompt."""
     # Special modes with their own interactive flows
     if mode == "browse":

@@ -24,13 +24,11 @@ API endpoints (all under /transcripts/):
   GET  /api/transcribe/status                     - poll transcription task status
 """
 
-from __future__ import annotations
-
 import threading
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any
 
 from flask import Blueprint, Response, jsonify, request, send_from_directory
 
@@ -38,14 +36,14 @@ import files
 import transcripts
 import utils
 
-FlaskResponse = Union[Response, Tuple[Response, int]]
+FlaskResponse = Response | tuple[Response, int]
 
 # ---- Module-level state (set once by _init_transcripts_state) ----
 
-_manifest: Dict[str, Any] = {}
-_worker: Optional[transcripts.TranscriptWorker] = None
+_manifest: dict[str, Any] = {}
+_worker: transcripts.TranscriptWorker | None = None
 _input_dir: str = ""
-_participants: List[Dict[str, Any]] = []
+_participants: list[dict[str, Any]] = []
 _manifest_lock = threading.Lock()
 
 _assets_dir = utils.get_bundled_assets_root() / "assets" / "web"
@@ -96,7 +94,7 @@ def api_participants() -> FlaskResponse:
             pid = p["id"]
             entry = src.get(pid, {})
             has_transcript = bool(entry.get("segments"))
-            info: Dict[str, Any] = {
+            info: dict[str, Any] = {
                 "id": pid,
                 "video_path": p["video_path"],
                 "has_video": p["has_video"],
@@ -155,7 +153,7 @@ def api_transcript(participant: str) -> FlaskResponse:
     corrected_segments = transcripts.apply_corrections(raw_segments, corrections)
 
     # Build marks-by-segment-id lookup
-    marks_by_seg: Dict[str, List[Dict[str, Any]]] = {}
+    marks_by_seg: dict[str, list[dict[str, Any]]] = {}
     for mark in _manifest.get("marks", []):
         sid = mark.get("segment_id", "")
         marks_by_seg.setdefault(sid, []).append(mark)
@@ -164,7 +162,7 @@ def api_transcript(participant: str) -> FlaskResponse:
     segments = []
     for raw, corrected in zip(raw_segments, corrected_segments):
         seg_id = raw.get("id", "")
-        seg: Dict[str, Any] = {
+        seg: dict[str, Any] = {
             "id": seg_id,
             "start": corrected["start"],
             "end": corrected["end"],
@@ -334,9 +332,9 @@ def api_corrections_delete(correction_id: str) -> FlaskResponse:
 
 
 def _resolve_mark(
-    mark: Dict[str, Any],
-    partial_lookup: Optional[Dict[str, list]] = None,
-) -> Dict[str, Any]:
+    mark: dict[str, Any],
+    partial_lookup: dict[str, list] | None = None,
+) -> dict[str, Any]:
     """Enrich a mark with its segment's data (participant, start, end, text, valid).
 
     *partial_lookup* maps participant IDs to ``partial_segments`` lists from
@@ -410,11 +408,11 @@ def _resolve_mark(
     }
 
 
-def _build_partial_lookup() -> Dict[str, list]:
+def _build_partial_lookup() -> dict[str, list]:
     """Build a participant→partial_segments map from running transcription tasks."""
     if not _worker:
         return {}
-    lookup: Dict[str, list] = {}
+    lookup: dict[str, list] = {}
     for task in _worker.get_all_tasks():
         if task["status"] == transcripts.TASK_STATUS_RUNNING:
             segs = task.get("partial_segments", [])
@@ -516,7 +514,7 @@ def api_marks_delete(mark_id: str) -> FlaskResponse:
     """Remove a mark by ID, or bulk-delete with JSON body {ids: [...]}."""
     # Bulk delete: DELETE /api/marks with {ids: [...]} — mark_id may be a placeholder
     data = request.get_json(silent=True)
-    ids_to_remove: List[str] = []
+    ids_to_remove: list[str] = []
 
     if data and data.get("ids"):
         ids_to_remove = data["ids"]
@@ -556,8 +554,8 @@ def api_search() -> FlaskResponse:
         )
 
     query_lower = query.lower()
-    results: List[Dict[str, Any]] = []
-    counts: Dict[str, int] = {}
+    results: list[dict[str, Any]] = []
+    counts: dict[str, int] = {}
 
     with _manifest_lock:
         src = _manifest.get("source_transcripts", {})
@@ -704,7 +702,7 @@ def _do_persist() -> None:
 
 def _init_transcripts_state(
     sheet_context: Any = None,
-    participant_list: Optional[List[str]] = None,
+    participant_list: list[str] | None = None,
 ) -> None:
     """Initialize module-level state for Transcript routes.
 

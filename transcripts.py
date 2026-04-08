@@ -32,8 +32,6 @@ Transcript segments are embedded on clip/reel artifact records as a ``transcript
 Standalone transcript file output (type "transcript" artifacts) is opt-in via --transcribe.
 """
 
-from __future__ import annotations
-
 import copy
 
 import queue
@@ -42,7 +40,7 @@ import threading
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, TypedDict
+from typing import Any, Callable, TypedDict
 
 import config
 import utils
@@ -93,7 +91,7 @@ MARK_CATEGORIES: dict[str, dict[str, str]] = {
 # ---------------------------------------------------------------------------
 
 _cached_model: Any = None
-_cached_model_name: Optional[str] = None
+_cached_model_name: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -130,11 +128,11 @@ def _load_model() -> Any:
 def transcribe_video(
     video_path: str,
     *,
-    language: Optional[str] = None,
-    initial_prompt: Optional[str] = None,
-    context_keywords: Optional[List[str]] = None,
-    on_segment: Optional[Callable[[float, "TranscriptSegment"], None]] = None,
-) -> Optional[TranscriptResult]:
+    language: str | None = None,
+    initial_prompt: str | None = None,
+    context_keywords: list[str] | None = None,
+    on_segment: Callable[[float, "TranscriptSegment"], None] | None = None,
+) -> TranscriptResult | None:
     """Transcribe a video file and return timestamped segments.
 
     Args:
@@ -225,7 +223,7 @@ def save_transcripts_manifest(
     source_transcripts: dict[str, Any],
     corrections: list[dict[str, Any]],
     marks: list[dict[str, Any]] | None = None,
-) -> Optional[Path]:
+) -> Path | None:
     """Write the transcripts manifest to disk.
 
     Assigns segment IDs (``"{participant}:{index}"``) at storage time.
@@ -436,7 +434,7 @@ def _format_vtt(result: TranscriptResult) -> str:
 _FORMAT_EXT = {"md": ".md", "srt": ".srt", "vtt": ".vtt"}
 
 
-def get_transcript_extension(fmt: Optional[str] = None) -> str:
+def get_transcript_extension(fmt: str | None = None) -> str:
     """Return the file extension for the given transcript format."""
     return _FORMAT_EXT.get(fmt or config.TRANSCRIBE_FORMAT, ".md")
 
@@ -445,7 +443,7 @@ def write_transcript(
     result: TranscriptResult,
     output_path: str,
     *,
-    fmt: Optional[str] = None,
+    fmt: str | None = None,
 ) -> bool:
     """Write a formatted transcript file to *output_path*.
 
@@ -465,7 +463,7 @@ def write_transcript(
         return False
 
 
-def read_transcript(filepath: str) -> Optional[TranscriptResult]:
+def read_transcript(filepath: str) -> TranscriptResult | None:
     """Parse a transcript file back into a TranscriptResult.
 
     Detects format from file extension (.md, .srt, .vtt).
@@ -605,7 +603,7 @@ TASK_STATUS_CANCELLED = "cancelled"
 _TRANSCRIPT_SENTINEL = object()
 
 
-def create_transcript_task(participant: str, video_path: str) -> Dict[str, Any]:
+def create_transcript_task(participant: str, video_path: str) -> dict[str, Any]:
     """Create a new transcription task dict ready to enqueue."""
     return {
         "id": f"tr_{uuid.uuid4().hex[:8]}",
@@ -630,11 +628,11 @@ class TranscriptWorker:
 
     def __init__(self) -> None:
         self._queue: queue.PriorityQueue[Any] = queue.PriorityQueue()
-        self._tasks: Dict[str, Dict[str, Any]] = {}
+        self._tasks: dict[str, dict[str, Any]] = {}
         self._lock = threading.Lock()
-        self._thread: Optional[threading.Thread] = None
+        self._thread: threading.Thread | None = None
         self._running = False
-        self.on_task_complete: Optional[Callable[[], None]] = None
+        self.on_task_complete: Callable[[], None] | None = None
 
     def start(self) -> None:
         """Start the worker thread."""
@@ -649,14 +647,14 @@ class TranscriptWorker:
         if self._thread is not None:
             self._thread.join(timeout=15)
 
-    def restore_tasks(self, tasks: List[Dict[str, Any]]) -> None:
+    def restore_tasks(self, tasks: list[dict[str, Any]]) -> None:
         """Load historical tasks (completed/failed/cancelled) for display."""
         with self._lock:
             for t in tasks:
                 if t.get("id"):
                     self._tasks[t["id"]] = copy.deepcopy(t)
 
-    def enqueue(self, task: Dict[str, Any]) -> str:
+    def enqueue(self, task: dict[str, Any]) -> str:
         """Add a task to the queue. Returns the task ID."""
         task_id = task["id"]
         with self._lock:
@@ -673,13 +671,13 @@ class TranscriptWorker:
                 return True
         return False
 
-    def get_task(self, task_id: str) -> Optional[Dict[str, Any]]:
+    def get_task(self, task_id: str) -> dict[str, Any] | None:
         """Return a task dict by ID (thread-safe copy)."""
         with self._lock:
             t = self._tasks.get(task_id)
             return copy.deepcopy(t) if t else None
 
-    def get_all_tasks(self) -> List[Dict[str, Any]]:
+    def get_all_tasks(self) -> list[dict[str, Any]]:
         """Return all tasks (thread-safe copies)."""
         with self._lock:
             return [copy.deepcopy(t) for t in self._tasks.values()]
@@ -715,7 +713,7 @@ class TranscriptWorker:
                 except Exception:
                     pass
 
-    def _execute_task(self, task: Dict[str, Any]) -> None:
+    def _execute_task(self, task: dict[str, Any]) -> None:
         """Run a single transcription task."""
         import video as video_mod
 

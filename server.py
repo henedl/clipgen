@@ -35,7 +35,8 @@ import sys
 import webbrowser
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Dict, Iterator, List, Optional, Tuple, Union
+from collections.abc import Iterator
+from typing import Any
 
 from flask import (
     Blueprint,
@@ -55,18 +56,18 @@ import utils
 import video
 import viewer
 
-FlaskResponse = Union[Response, Tuple[Response, int]]
+FlaskResponse = Response | tuple[Response, int]
 
 # ---- Module-level state (set once by _init_studio_state) ----
 
 _worksheet: Any = None
-_sheet_context: Optional[spreadsheet.SheetContext] = None
-_generated_artifacts: List[Dict[str, Any]] = []
-_generated_reels: List[Dict[str, Any]] = []
-_thumbnail_cache: Dict[tuple, bytes] = {}
+_sheet_context: spreadsheet.SheetContext | None = None
+_generated_artifacts: list[dict[str, Any]] = []
+_generated_reels: list[dict[str, Any]] = []
+_thumbnail_cache: dict[tuple, bytes] = {}
 
 # Snapshot config defaults before any settings file is loaded.
-_settings_defaults: Dict[str, Any] = {
+_settings_defaults: dict[str, Any] = {
     name: getattr(config, name) for name in getattr(config, "STUDIO_SETTINGS", {})
 }
 
@@ -107,7 +108,7 @@ def serve_static(filename: str) -> FlaskResponse:
 # ---- Helpers ----
 
 
-def _resolve_source_video(participant: str) -> Optional[Path]:
+def _resolve_source_video(participant: str) -> Path | None:
     """Return the resolved path to a participant's source video, or None."""
     if _sheet_context is None:
         return None
@@ -179,7 +180,7 @@ def api_sheet() -> FlaskResponse:
         ctx.header_row, ctx.id_cell, ctx.num_participants
     )
 
-    rows: List[Dict[str, Any]] = []
+    rows: list[dict[str, Any]] = []
     for row_idx in range(ctx.first_data_row_idx, len(ctx.sheet_data)):
         if ctx.baseline_row_idx is not None and row_idx == ctx.baseline_row_idx:
             continue
@@ -199,7 +200,7 @@ def api_sheet() -> FlaskResponse:
             if sev_col < len(row_data) and row_data[sev_col].strip():
                 severity = utils.normalize_severity(row_data[sev_col])
 
-        cells: Dict[str, Dict[str, Any]] = {}
+        cells: dict[str, dict[str, Any]] = {}
         for p_idx, pid in enumerate(participants):
             col_idx = ctx.id_cell.col + p_idx
             value = row_data[col_idx] if col_idx < len(row_data) else ""
@@ -273,7 +274,7 @@ def _save_manifest_quiet() -> None:
         utils.warning_print(f"Failed to save manifest: {e}")
 
 
-def _resolve_intake_video_path(participant: str, source: str = "") -> Optional[str]:
+def _resolve_intake_video_path(participant: str, source: str = "") -> str | None:
     """Resolve a video path for an intake participant.
 
     Tries the source-specific participant list first, then falls back to the
@@ -296,10 +297,10 @@ def _resolve_intake_video_path(participant: str, source: str = "") -> Optional[s
 
 
 def _generate_intake_clips(
-    items: List[Dict[str, Any]],
+    items: list[dict[str, Any]],
     output_format: str = "clip",
     study: str = "",
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """Generate clips from intake items (Screenspace or Transcript).
 
     Each returned dict has an extra ``"_ok"`` key (True on success, False if
@@ -307,7 +308,7 @@ def _generate_intake_clips(
     callers can report per-item results without duplicating the loop.
     """
     output_dir = Path(utils.get_effective_output_dir())
-    results: List[Dict[str, Any]] = []
+    results: list[dict[str, Any]] = []
 
     for item in items:
         participant = item.get("participant", "")
@@ -346,7 +347,7 @@ def _generate_intake_clips(
             default_desc = (
                 "Transcript intake" if source == "transcript" else "Screenspace intake"
             )
-            artifact: Dict[str, Any] = {
+            artifact: dict[str, Any] = {
                 "id": f"intake_{span_hash}_s0",
                 "type": output_format,
                 "file": Path(out_path).name,
@@ -385,18 +386,18 @@ def _generate_intake_clips(
     return results
 
 
-def _load_stashes() -> List[Dict[str, Any]]:
+def _load_stashes() -> list[dict[str, Any]]:
     data = utils.load_json_manifest(config.STASHES_MANIFEST_FILENAME, default=[])
     if not isinstance(data, list):
         return []
     return data
 
 
-def _save_stashes(stashes: List[Dict[str, Any]]) -> Optional[Path]:
+def _save_stashes(stashes: list[dict[str, Any]]) -> Path | None:
     return utils.save_json_manifest(config.STASHES_MANIFEST_FILENAME, stashes)
 
 
-def _load_artifact_stashes() -> List[Dict[str, Any]]:
+def _load_artifact_stashes() -> list[dict[str, Any]]:
     data = utils.load_json_manifest(
         config.ARTIFACT_STASHES_MANIFEST_FILENAME, default=[]
     )
@@ -405,17 +406,17 @@ def _load_artifact_stashes() -> List[Dict[str, Any]]:
     return data
 
 
-def _save_artifact_stashes(stashes: List[Dict[str, Any]]) -> Optional[Path]:
+def _save_artifact_stashes(stashes: list[dict[str, Any]]) -> Path | None:
     return utils.save_json_manifest(config.ARTIFACT_STASHES_MANIFEST_FILENAME, stashes)
 
 
-def _load_studio_settings() -> Dict[str, Any]:
+def _load_studio_settings() -> dict[str, Any]:
     """Load studio_settings.json and apply non-default values to config module."""
     data = utils.load_json_manifest(config.STUDIO_SETTINGS_FILENAME, default={})
     if not isinstance(data, dict):
         return {}
 
-    applied: Dict[str, Any] = {}
+    applied: dict[str, Any] = {}
     for name, value in data.items():
         if name not in config.STUDIO_SETTINGS:
             continue
@@ -441,7 +442,7 @@ def _load_studio_settings() -> Dict[str, Any]:
     return applied
 
 
-def _save_studio_settings(overrides: Dict[str, Any]) -> Optional[Path]:
+def _save_studio_settings(overrides: dict[str, Any]) -> Path | None:
     """Write only non-default settings to studio_settings.json."""
     to_save = {}
     for name, value in overrides.items():
@@ -462,7 +463,7 @@ def _save_studio_settings(overrides: Dict[str, Any]) -> Optional[Path]:
 
 def _find_existing_artifacts(
     cell_row: int, cell_col: int, artifact_type: str
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """Return cached artifact records for a cell+type whose files still exist on disk."""
     matches = [
         a
@@ -510,7 +511,7 @@ def api_generate() -> FlaskResponse:
         return jsonify({"ok": False, "error": str(e)}), 500
 
     def stream() -> Any:
-        overrides: Dict[str, Any] = {}
+        overrides: dict[str, Any] = {}
         if tc_enabled is not None:
             overrides["TITLECARDS_ENABLED"] = bool(tc_enabled)
         if tc_duration is not None:
@@ -524,7 +525,7 @@ def api_generate() -> FlaskResponse:
             clip_cells: set[str] = set()
 
             # Pass 1: yield already-existing artifacts, collect clips that need generation
-            to_generate: List[Tuple[Any, str]] = []
+            to_generate: list[tuple[Any, str]] = []
             for clip in clips:
                 cell_str = clip["participant"] + "." + str(clip["cell"].row)
                 clip_cells.add(cell_str)
@@ -555,8 +556,8 @@ def api_generate() -> FlaskResponse:
                     with concurrent.futures.ThreadPoolExecutor(
                         max_workers=workers
                     ) as pool:
-                        future_to_cell: Dict[
-                            concurrent.futures.Future, Tuple[Any, str]
+                        future_to_cell: dict[
+                            concurrent.futures.Future, tuple[Any, str]
                         ] = {
                             pool.submit(
                                 clipgen.process_clips,
@@ -635,7 +636,7 @@ def api_highlights_preview() -> FlaskResponse:
     data = request.get_json(silent=True) or {}
     highlights_duration = data.get("highlights_duration")
 
-    overrides: Dict[str, Any] = {}
+    overrides: dict[str, Any] = {}
     if highlights_duration is not None:
         try:
             val = int(highlights_duration)
@@ -687,7 +688,7 @@ def api_reel() -> FlaskResponse:
     if not cell_strings:
         return jsonify({"ok": False, "error": "No cells specified"}), 400
 
-    overrides: Dict[str, Any] = {}
+    overrides: dict[str, Any] = {}
     if highlights_duration is not None:
         try:
             val = int(highlights_duration)
@@ -724,7 +725,7 @@ def api_reel() -> FlaskResponse:
                 ), 400
 
             # Check if an identical reel already exists
-            components: List[Dict[str, Any]] = []
+            components: list[dict[str, Any]] = []
             for clip in clips:
                 files.prepare_clip(clip)
                 cell = clip.get("cell")
@@ -816,7 +817,7 @@ def api_timeline_viewer() -> FlaskResponse:
         _generated_artifacts.extend(artifacts)
 
         # Generate intake clips if requested
-        intake_artifacts: List[Dict[str, Any]] = []
+        intake_artifacts: list[dict[str, Any]] = []
         if include_intake and intake_items:
             raw = _generate_intake_clips(intake_items)
             for r in raw:
@@ -1102,7 +1103,7 @@ def api_settings_put() -> FlaskResponse:
     if not isinstance(settings_data, dict):
         return jsonify({"ok": False, "error": "Invalid settings payload"}), 400
 
-    applied: Dict[str, Any] = {}
+    applied: dict[str, Any] = {}
     for name, value in settings_data.items():
         if name not in config.STUDIO_SETTINGS:
             continue
@@ -1145,7 +1146,7 @@ def api_generate_intake() -> FlaskResponse:
     study = _sheet_context.study_name if _sheet_context else ""
 
     raw = _generate_intake_clips(items, output_format=output_format, study=study)
-    results: List[Dict[str, Any]] = []
+    results: list[dict[str, Any]] = []
     for r in raw:
         ok = r.pop("_ok", False)
         error = r.pop("_error", "")
@@ -1171,7 +1172,7 @@ def api_reel_direct() -> FlaskResponse:
 
     tc_enabled = data.get("titlecards_enabled")
     tc_duration = data.get("titlecard_duration")
-    overrides: Dict[str, Any] = {}
+    overrides: dict[str, Any] = {}
     if tc_enabled is not None:
         overrides["TITLECARDS_ENABLED"] = bool(tc_enabled)
     if tc_duration is not None:
@@ -1183,8 +1184,8 @@ def api_reel_direct() -> FlaskResponse:
             pass
 
     output_dir = Path(utils.get_effective_output_dir())
-    clip_paths: List[str] = []
-    temp_clips: List[str] = []
+    clip_paths: list[str] = []
+    temp_clips: list[str] = []
 
     with _override_config(**overrides):
         try:
@@ -1230,7 +1231,7 @@ def api_reel_direct() -> FlaskResponse:
             ok = video.concatenate_clips(clip_paths, reel_name, reencode_on_fail=True)
 
             if ok:
-                reel_record: Dict[str, Any] = {
+                reel_record: dict[str, Any] = {
                     "id": f"reel_intake_{hashlib.md5(reel_name.encode()).hexdigest()[:8]}",
                     "file": Path(reel_name).name,
                     "source": "intake",
@@ -1278,7 +1279,7 @@ def _init_studio_state(worksheet: Any) -> None:
 # ---- Entry point ----
 
 
-def _resolve_participants() -> Optional[List[str]]:
+def _resolve_participants() -> list[str] | None:
     """Extract participant IDs from the loaded sheet context."""
     if _sheet_context is None:
         return None
@@ -1291,7 +1292,7 @@ def _resolve_participants() -> Optional[List[str]]:
 
 def start_combined_server(
     worksheet: Any = None,
-    port: Optional[int] = None,
+    port: int | None = None,
     default_page: str = "studio",
 ) -> None:
     """Start a combined Studio + Insights + Screenspace server on one port.

@@ -20,8 +20,6 @@ screenspace_manifest.json. Region coordinates are normalized (0–1); source_wid
 are stored for denormalization to target video resolution.
 """
 
-from __future__ import annotations
-
 import copy
 import difflib
 
@@ -36,7 +34,8 @@ import uuid
 from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable, Dict, Iterator, List, Optional, Tuple
+from collections.abc import Iterator
+from typing import TYPE_CHECKING, Any, Callable
 
 import cv2
 import numpy as np
@@ -53,11 +52,11 @@ import video
 # Module-level caches
 # ---------------------------------------------------------------------------
 
-_ocr_readers: Dict[tuple, Any] = {}
+_ocr_readers: dict[tuple, Any] = {}
 _ocr_lock = threading.Lock()
 
 
-def _get_ocr_reader(languages: List[str]) -> Any:
+def _get_ocr_reader(languages: list[str]) -> Any:
     """Return a cached EasyOCR Reader for the given language set."""
     import easyocr
 
@@ -73,7 +72,7 @@ def _get_ocr_reader(languages: List[str]) -> Any:
 # ---------------------------------------------------------------------------
 
 
-def extract_region(frame: np.ndarray, region: Dict[str, int]) -> np.ndarray:
+def extract_region(frame: np.ndarray, region: dict[str, int]) -> np.ndarray:
     """Crop a rectangular region from a frame.
 
     Args:
@@ -91,7 +90,7 @@ def extract_region(frame: np.ndarray, region: Dict[str, int]) -> np.ndarray:
     return frame[y:y2, x:x2]
 
 
-def average_color_hsv(region_pixels: np.ndarray) -> Dict[str, float]:
+def average_color_hsv(region_pixels: np.ndarray) -> dict[str, float]:
     """Compute mean HSV color of a region.
 
     Args:
@@ -112,9 +111,9 @@ def average_color_hsv(region_pixels: np.ndarray) -> Dict[str, float]:
 
 def color_matches(
     region_pixels: np.ndarray,
-    target_color: Dict[str, float],
-    tolerance: Dict[str, float],
-) -> Tuple[bool, float]:
+    target_color: dict[str, float],
+    tolerance: dict[str, float],
+) -> tuple[bool, float]:
     """Check if region's average HSV color is within tolerance of target.
 
     Handles hue wraparound (red at 0/180 boundary).
@@ -177,7 +176,7 @@ def regions_are_similar(
     region_a: np.ndarray,
     region_b: np.ndarray,
     threshold: float = 0.0,
-) -> Tuple[bool, float]:
+) -> tuple[bool, float]:
     """SSIM-based similarity check with blur preprocessing.
 
     Returns:
@@ -203,7 +202,7 @@ def regions_are_similar(
     return score >= threshold, score
 
 
-def compute_phash(region_pixels: np.ndarray) -> imagehash.ImageHash:
+def compute_phash(region_pixels: np.ndarray) -> "imagehash.ImageHash":
     """Compute perceptual hash of a region for fast similarity scanning."""
     import imagehash
     from PIL import Image
@@ -218,8 +217,8 @@ def match_template(
     template: np.ndarray,
     threshold: float = 0.0,
     nms_overlap: float = 0.0,
-    mask: Optional[np.ndarray] = None,
-) -> List[Dict[str, Any]]:
+    mask: np.ndarray | None = None,
+) -> list[dict[str, Any]]:
     """Find all locations where template appears in frame.
 
     Uses ``cv2.matchTemplate`` with ``TM_CCOEFF_NORMED``.  Non-maximum
@@ -263,7 +262,7 @@ def match_template(
     # Collect raw detections sorted by score descending.
     # TM_CCOEFF_NORMED can produce inf/nan when a frame patch has zero
     # variance (constant colour) — skip those positions.
-    detections: List[Dict[str, Any]] = []
+    detections: list[dict[str, Any]] = []
     for pt_y, pt_x in zip(locs[0], locs[1]):
         score = float(result[pt_y, pt_x])
         if not math.isfinite(score):
@@ -274,7 +273,7 @@ def match_template(
     detections.sort(key=lambda d: d["score"], reverse=True)
 
     # Non-maximum suppression
-    kept: List[Dict[str, Any]] = []
+    kept: list[dict[str, Any]] = []
     for det in detections:
         overlaps = False
         for k_det in kept:
@@ -300,7 +299,7 @@ def compute_optical_flow(
     curr_gray: np.ndarray,
     pyr_scale: float = 0.0,
     return_grid: bool = False,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Compute dense optical flow between two grayscale frames.
 
     Returns:
@@ -337,7 +336,7 @@ def compute_optical_flow(
     else:
         dominant_angle = 0.0
 
-    result: Dict[str, Any] = {
+    result: dict[str, Any] = {
         "magnitude": round(mean_mag, 4),
         "angle": round(dominant_angle, 1),
     }
@@ -348,7 +347,7 @@ def compute_optical_flow(
         gh, gw = mag.shape[:2]
         step_y = max(1, gh // grid_size)
         step_x = max(1, gw // grid_size)
-        grid: List[Dict[str, float]] = []
+        grid: list[dict[str, float]] = []
         for gy in range(0, gh, step_y):
             for gx in range(0, gw, step_x):
                 cell_mag = float(np.mean(mag[gy : gy + step_y, gx : gx + step_x]))
@@ -368,7 +367,7 @@ def compute_optical_flow(
     return result
 
 
-def compute_scene_fingerprint(region_pixels: np.ndarray) -> Dict[str, Any]:
+def compute_scene_fingerprint(region_pixels: np.ndarray) -> dict[str, Any]:
     """Compute a feature-based fingerprint for scene classification.
 
     Combines HSV histogram, edge density, and color statistics into a
@@ -405,7 +404,7 @@ def compute_scene_fingerprint(region_pixels: np.ndarray) -> Dict[str, Any]:
     )
 
     # Color stats per channel
-    color_stats: List[float] = []
+    color_stats: list[float] = []
     for ch in range(3):
         channel = region_pixels[:, :, ch].astype(np.float64)
         color_stats.extend([float(np.mean(channel)), float(np.std(channel))])
@@ -418,8 +417,8 @@ def compute_scene_fingerprint(region_pixels: np.ndarray) -> Dict[str, Any]:
 
 
 def compare_scene_fingerprints(
-    fp_a: Dict[str, Any],
-    fp_b: Dict[str, Any],
+    fp_a: dict[str, Any],
+    fp_b: dict[str, Any],
 ) -> float:
     """Compare two scene fingerprints.
 
@@ -452,15 +451,15 @@ def compare_scene_fingerprints(
 
 def scan_video_frames(
     video_path: str,
-    region: Optional[Dict[str, int]],
+    region: dict[str, int] | None,
     interval_seconds: float,
-    callback: Callable[[float, np.ndarray], Optional[bool]],
+    callback: Callable[[float, np.ndarray], bool | None],
     *,
     start_seconds: float = 0.0,
-    end_seconds: Optional[float] = None,
+    end_seconds: float | None = None,
     fps: float = 0.0,
     duration: float = 0.0,
-    fast_opts: Optional[Dict[str, Any]] = None,
+    fast_opts: dict[str, Any] | None = None,
 ) -> None:
     """Iterate through video at interval, extract region, call callback.
 
@@ -499,13 +498,13 @@ def scan_video_frames(
 def scan_video_full_frames(
     video_path: str,
     interval_seconds: float,
-    callback: Callable[[float, np.ndarray], Optional[bool]],
+    callback: Callable[[float, np.ndarray], bool | None],
     *,
     start_seconds: float = 0.0,
-    end_seconds: Optional[float] = None,
+    end_seconds: float | None = None,
     fps: float = 0.0,
     duration: float = 0.0,
-    fast_opts: Optional[Dict[str, Any]] = None,
+    fast_opts: dict[str, Any] | None = None,
 ) -> None:
     """Like :func:`scan_video_frames` but passes the full frame (no region crop).
 
@@ -535,11 +534,11 @@ def _ffmpeg_pipe_frames(
     *,
     start_seconds: float = 0.0,
     end_seconds: float = 0.0,
-    region: Optional[Dict[str, int]] = None,
+    region: dict[str, int] | None = None,
     frame_width: int = 0,
     frame_height: int = 0,
     max_dim: int = 0,
-) -> Iterator[Tuple[float, np.ndarray]]:
+) -> Iterator[tuple[float, np.ndarray]]:
     """Yield ``(timestamp, frame)`` tuples extracted via an ffmpeg pipe.
 
     Uses a single ffmpeg process with ``-f rawvideo`` piped to stdout,
@@ -577,7 +576,7 @@ def _ffmpeg_pipe_frames(
         out_h += out_h % 2
         filters.append(f"scale={out_w}:{out_h}")
 
-    cmd: List[str] = ["ffmpeg"]
+    cmd: list[str] = ["ffmpeg"]
     if start_seconds > 0:
         cmd += ["-ss", str(start_seconds)]
     cmd += ["-i", video_path]
@@ -623,15 +622,15 @@ def _ffmpeg_pipe_frames(
 
 def _scan_via_ffmpeg_pipe(
     video_path: str,
-    region: Optional[Dict[str, int]],
+    region: dict[str, int] | None,
     interval_seconds: float,
-    callback: Callable[[float, np.ndarray], Optional[bool]],
+    callback: Callable[[float, np.ndarray], bool | None],
     *,
     start_seconds: float = 0.0,
     end_seconds: float = 0.0,
     fps: float = 0.0,
     duration: float = 0.0,
-    fast_opts: Optional[Dict[str, Any]] = None,
+    fast_opts: dict[str, Any] | None = None,
     full_frame: bool = False,
 ) -> bool:
     """Try to scan frames via ffmpeg pipe, calling *callback* for each.
@@ -660,7 +659,7 @@ def _scan_via_ffmpeg_pipe(
     _phash_thresh = (fast_opts or {}).get(
         "phash_threshold", config.SCREENSPACE_FAST_SCAN_PHASH_THRESHOLD
     )
-    _prev_phash: List[Optional[imagehash.ImageHash]] = [None]
+    _prev_phash: list["imagehash.ImageHash | None"] = [None]
 
     pipe_region = None if full_frame else region
     # For the pipe, push max_dim downscaling into ffmpeg when phash_skip is off.
@@ -707,15 +706,15 @@ def _scan_via_ffmpeg_pipe(
 
 def build_timelapse_command(
     video_path: str,
-    region: Dict[str, int],
+    region: dict[str, int],
     speedup_factor: float,
     output_path: str,
     output_format: str = "mp4",
     *,
     start_seconds: float = 0.0,
-    end_seconds: Optional[float] = None,
+    end_seconds: float | None = None,
     sample_interval: float = 0.0,
-) -> List[str]:
+) -> list[str]:
     """Construct ffmpeg argv for a cropped timelapse.
 
     *sample_interval* (seconds) controls frame sampling: when > 0, only one
@@ -723,7 +722,7 @@ def build_timelapse_command(
     frame is used (default).
     """
     x, y, w, h = region["x"], region["y"], region["w"], region["h"]
-    filters: List[str] = []
+    filters: list[str] = []
     if sample_interval > 0:
         filters.append(f"fps=1/{sample_interval}")
     filters.append(f"crop={w}:{h}:{x}:{y}")
@@ -756,7 +755,7 @@ def build_timelapse_command(
     return cmd
 
 
-def _probe_video_meta(video_path: str) -> Tuple[float, float]:
+def _probe_video_meta(video_path: str) -> tuple[float, float]:
     """Return ``(fps, duration)`` via ffprobe."""
     props = video.probe_video_properties(video_path)
     if props and props.get("fps", 0) > 0 and props.get("duration", 0) > 0:
@@ -771,18 +770,18 @@ def _probe_video_meta(video_path: str) -> Tuple[float, float]:
 
 def scan_color(
     video_path: str,
-    region: Dict[str, int],
-    target_color: Dict[str, float],
-    tolerance: Dict[str, float],
+    region: dict[str, int],
+    target_color: dict[str, float],
+    tolerance: dict[str, float],
     interval_seconds: float = 0.0,
     *,
     start_seconds: float = 0.0,
-    end_seconds: Optional[float] = None,
-    on_progress: Optional[Callable[[float], None]] = None,
-    cancel_flag: Optional[Callable[[], bool]] = None,
-    on_result: Optional[Callable[[Dict[str, Any]], None]] = None,
-    fast_opts: Optional[Dict[str, Any]] = None,
-) -> List[Dict[str, Any]]:
+    end_seconds: float | None = None,
+    on_progress: Callable[[float], None] | None = None,
+    cancel_flag: Callable[[], bool] | None = None,
+    on_result: Callable[[dict[str, Any]], None] | None = None,
+    fast_opts: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
     """Scan video for frames where region color matches target.
 
     Returns list of ``{start, end, duration}`` spans (consecutive matches
@@ -799,9 +798,9 @@ def scan_color(
         end_seconds = vid_duration
     total_range = end_seconds - start_seconds
 
-    matches: List[float] = []
+    matches: list[float] = []
 
-    def _cb(ts: float, pixels: np.ndarray) -> Optional[bool]:
+    def _cb(ts: float, pixels: np.ndarray) -> bool | None:
         if cancel_flag and cancel_flag():
             return False
         matched, conf = color_matches(pixels, target_color, tolerance)
@@ -832,18 +831,18 @@ def scan_color(
 
 def scan_changes(
     video_path: str,
-    region: Dict[str, int],
+    region: dict[str, int],
     threshold: float = 0.0,
     interval_seconds: float = 0.0,
     *,
     noise_threshold: int = 0,
     start_seconds: float = 0.0,
-    end_seconds: Optional[float] = None,
-    on_progress: Optional[Callable[[float], None]] = None,
-    cancel_flag: Optional[Callable[[], bool]] = None,
-    on_result: Optional[Callable[[Dict[str, Any]], None]] = None,
-    fast_opts: Optional[Dict[str, Any]] = None,
-) -> List[Dict[str, Any]]:
+    end_seconds: float | None = None,
+    on_progress: Callable[[float], None] | None = None,
+    cancel_flag: Callable[[], bool] | None = None,
+    on_result: Callable[[dict[str, Any]], None] | None = None,
+    fast_opts: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
     """Scan video for change points in a region.
 
     Returns list of ``{timestamp, magnitude}`` dicts.
@@ -863,13 +862,13 @@ def scan_changes(
         end_seconds = vid_duration
     total_range = end_seconds - start_seconds
 
-    results: List[Dict[str, Any]] = []
-    prev_gray: List[Optional[np.ndarray]] = [None]
+    results: list[dict[str, Any]] = []
+    prev_gray: list[np.ndarray | None] = [None]
     k = config.SCREENSPACE_BLUR_KERNEL
     mk = config.SCREENSPACE_MORPH_KERNEL
     morph_kernel = np.ones((mk, mk), np.uint8)
 
-    def _cb(ts: float, pixels: np.ndarray) -> Optional[bool]:
+    def _cb(ts: float, pixels: np.ndarray) -> bool | None:
         if cancel_flag and cancel_flag():
             return False
         curr_gray = cv2.cvtColor(
@@ -909,18 +908,18 @@ def scan_changes(
 
 def scan_similarity(
     video_path: str,
-    region: Dict[str, int],
+    region: dict[str, int],
     reference_frame: np.ndarray,
     threshold: float = 0.0,
     interval_seconds: float = 0.0,
     *,
     start_seconds: float = 0.0,
-    end_seconds: Optional[float] = None,
-    on_progress: Optional[Callable[[float], None]] = None,
-    cancel_flag: Optional[Callable[[], bool]] = None,
-    on_result: Optional[Callable[[Dict[str, Any]], None]] = None,
-    fast_opts: Optional[Dict[str, Any]] = None,
-) -> List[Dict[str, Any]]:
+    end_seconds: float | None = None,
+    on_progress: Callable[[float], None] | None = None,
+    cancel_flag: Callable[[], bool] | None = None,
+    on_result: Callable[[dict[str, Any]], None] | None = None,
+    fast_opts: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
     """Find frames where region is similar to a reference.
 
     Returns list of ``{timestamp, score}`` dicts, sorted by score
@@ -941,7 +940,7 @@ def scan_similarity(
         end_seconds = vid_duration
     total_range = end_seconds - start_seconds
 
-    results: List[Dict[str, Any]] = []
+    results: list[dict[str, Any]] = []
     ref_phash = compute_phash(reference_frame)
     phash_threshold = config.SCREENSPACE_PHASH_THRESHOLD
 
@@ -962,9 +961,9 @@ def scan_similarity(
         cv2.GaussianBlur(ref_resized, (bk, bk), 0), cv2.COLOR_BGR2GRAY
     )
 
-    prev_skip_gray: List[Optional[np.ndarray]] = [None]
+    prev_skip_gray: list[np.ndarray | None] = [None]
 
-    def _cb(ts: float, pixels: np.ndarray) -> Optional[bool]:
+    def _cb(ts: float, pixels: np.ndarray) -> bool | None:
         if cancel_flag and cancel_flag():
             return False
         # Static-frame skip
@@ -1017,19 +1016,19 @@ def scan_similarity(
 
 def scan_text(
     video_path: str,
-    region: Dict[str, int],
+    region: dict[str, int],
     search_string: str,
     interval_seconds: float = 2.0,
     *,
     fuzzy_threshold: float = 0.0,
-    languages: Optional[List[str]] = None,
+    languages: list[str] | None = None,
     start_seconds: float = 0.0,
-    end_seconds: Optional[float] = None,
-    on_progress: Optional[Callable[[float], None]] = None,
-    cancel_flag: Optional[Callable[[], bool]] = None,
-    on_result: Optional[Callable[[Dict[str, Any]], None]] = None,
-    fast_opts: Optional[Dict[str, Any]] = None,
-) -> List[Dict[str, Any]]:
+    end_seconds: float | None = None,
+    on_progress: Callable[[float], None] | None = None,
+    cancel_flag: Callable[[], bool] | None = None,
+    on_result: Callable[[dict[str, Any]], None] | None = None,
+    fast_opts: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
     """Scan for text appearances in a region using EasyOCR.
 
     EasyOCR is lazy-imported. Raises ``ImportError`` with install
@@ -1057,11 +1056,11 @@ def scan_text(
         end_seconds = vid_duration
     total_range = end_seconds - start_seconds
 
-    results: List[Dict[str, Any]] = []
+    results: list[dict[str, Any]] = []
     search_lower = search_string.lower()
-    prev_gray: List[Optional[np.ndarray]] = [None]
+    prev_gray: list[np.ndarray | None] = [None]
 
-    def _cb(ts: float, pixels: np.ndarray) -> Optional[bool]:
+    def _cb(ts: float, pixels: np.ndarray) -> bool | None:
         if cancel_flag and cancel_flag():
             return False
         gray = cv2.cvtColor(pixels, cv2.COLOR_BGR2GRAY)
@@ -1114,8 +1113,8 @@ def _number_matches(
     value: float,
     operator: str,
     target_value: float = 0,
-    range_min: Optional[float] = None,
-    range_max: Optional[float] = None,
+    range_min: float | None = None,
+    range_max: float | None = None,
 ) -> bool:
     """Check if *value* satisfies the given numeric comparison."""
     if operator == "eq":
@@ -1139,21 +1138,21 @@ def _number_matches(
 
 def scan_numbers(
     video_path: str,
-    region: Dict[str, int],
+    region: dict[str, int],
     operator: str,
     target_value: float = 0,
     interval_seconds: float = 2.0,
     *,
-    range_min: Optional[float] = None,
-    range_max: Optional[float] = None,
-    languages: Optional[List[str]] = None,
+    range_min: float | None = None,
+    range_max: float | None = None,
+    languages: list[str] | None = None,
     start_seconds: float = 0.0,
-    end_seconds: Optional[float] = None,
-    on_progress: Optional[Callable[[float], None]] = None,
-    cancel_flag: Optional[Callable[[], bool]] = None,
-    on_result: Optional[Callable[[Dict[str, Any]], None]] = None,
-    fast_opts: Optional[Dict[str, Any]] = None,
-) -> List[Dict[str, Any]]:
+    end_seconds: float | None = None,
+    on_progress: Callable[[float], None] | None = None,
+    cancel_flag: Callable[[], bool] | None = None,
+    on_result: Callable[[dict[str, Any]], None] | None = None,
+    fast_opts: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
     """Scan for numeric values in a region and apply a comparison.
 
     Uses EasyOCR to detect text, parses numbers from it, and returns
@@ -1184,10 +1183,10 @@ def scan_numbers(
         end_seconds = vid_duration
     total_range = end_seconds - start_seconds
 
-    results: List[Dict[str, Any]] = []
-    prev_gray: List[Optional[np.ndarray]] = [None]
+    results: list[dict[str, Any]] = []
+    prev_gray: list[np.ndarray | None] = [None]
 
-    def _cb(ts: float, pixels: np.ndarray) -> Optional[bool]:
+    def _cb(ts: float, pixels: np.ndarray) -> bool | None:
         if cancel_flag and cancel_flag():
             return False
         gray = cv2.cvtColor(pixels, cv2.COLOR_BGR2GRAY)
@@ -1232,17 +1231,17 @@ def scan_numbers(
 
 def generate_timelapse(
     video_path: str,
-    region: Dict[str, int],
+    region: dict[str, int],
     speedup_factor: float,
     output_path: str,
     output_format: str = "mp4",
     *,
     start_seconds: float = 0.0,
-    end_seconds: Optional[float] = None,
+    end_seconds: float | None = None,
     sample_interval: float = 0.0,
-    on_progress: Optional[Callable[[float], None]] = None,
-    cancel_flag: Optional[Callable[[], bool]] = None,
-) -> Optional[str]:
+    on_progress: Callable[[float], None] | None = None,
+    cancel_flag: Callable[[], bool] | None = None,
+) -> str | None:
     """Generate a cropped timelapse via ffmpeg.
 
     *sample_interval* controls frame sampling (seconds between captured
@@ -1320,19 +1319,19 @@ def generate_timelapse(
 
 def scan_template(
     video_path: str,
-    region: Dict[str, int],
+    region: dict[str, int],
     template_image: np.ndarray,
     threshold: float = 0.0,
     interval_seconds: float = 0.0,
     *,
-    template_mask: Optional[np.ndarray] = None,
+    template_mask: np.ndarray | None = None,
     start_seconds: float = 0.0,
-    end_seconds: Optional[float] = None,
-    on_progress: Optional[Callable[[float], None]] = None,
-    cancel_flag: Optional[Callable[[], bool]] = None,
-    on_result: Optional[Callable[[Dict[str, Any]], None]] = None,
-    fast_opts: Optional[Dict[str, Any]] = None,
-) -> List[Dict[str, Any]]:
+    end_seconds: float | None = None,
+    on_progress: Callable[[float], None] | None = None,
+    cancel_flag: Callable[[], bool] | None = None,
+    on_result: Callable[[dict[str, Any]], None] | None = None,
+    fast_opts: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
     """Scan video for frames containing the template image.
 
     The template is searched across the **full frame** (not limited to a
@@ -1355,11 +1354,11 @@ def scan_template(
         end_seconds = vid_duration
     total_range = end_seconds - start_seconds
 
-    results: List[Dict[str, Any]] = []
+    results: list[dict[str, Any]] = []
 
     _tmpl_downscale = bool(fast_opts and fast_opts.get("template_downscale"))
 
-    def _cb(ts: float, frame: np.ndarray) -> Optional[bool]:
+    def _cb(ts: float, frame: np.ndarray) -> bool | None:
         if cancel_flag and cancel_flag():
             return False
         work_frame = frame
@@ -1418,17 +1417,17 @@ def scan_template(
 
 def scan_flow(
     video_path: str,
-    region: Dict[str, int],
+    region: dict[str, int],
     magnitude_threshold: float = 0.0,
     interval_seconds: float = 0.0,
     *,
     start_seconds: float = 0.0,
-    end_seconds: Optional[float] = None,
-    on_progress: Optional[Callable[[float], None]] = None,
-    cancel_flag: Optional[Callable[[], bool]] = None,
-    on_result: Optional[Callable[[Dict[str, Any]], None]] = None,
-    fast_opts: Optional[Dict[str, Any]] = None,
-) -> List[Dict[str, Any]]:
+    end_seconds: float | None = None,
+    on_progress: Callable[[float], None] | None = None,
+    cancel_flag: Callable[[], bool] | None = None,
+    on_result: Callable[[dict[str, Any]], None] | None = None,
+    fast_opts: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
     """Scan video for motion in a region using dense optical flow.
 
     Returns list of ``{timestamp, magnitude, angle}`` dicts where
@@ -1447,10 +1446,10 @@ def scan_flow(
         end_seconds = vid_duration
     total_range = end_seconds - start_seconds
 
-    results: List[Dict[str, Any]] = []
-    prev_gray: List[Optional[np.ndarray]] = [None]
+    results: list[dict[str, Any]] = []
+    prev_gray: list[np.ndarray | None] = [None]
 
-    def _cb(ts: float, pixels: np.ndarray) -> Optional[bool]:
+    def _cb(ts: float, pixels: np.ndarray) -> bool | None:
         if cancel_flag and cancel_flag():
             return False
         curr_gray = cv2.cvtColor(pixels, cv2.COLOR_BGR2GRAY)
@@ -1459,7 +1458,7 @@ def scan_flow(
                 prev_gray[0], curr_gray, return_grid=True
             )
             if flow_result["magnitude"] >= magnitude_threshold:
-                rd: Dict[str, Any] = {
+                rd: dict[str, Any] = {
                     "timestamp": ts,
                     "magnitude": flow_result["magnitude"],
                     "angle": flow_result["angle"],
@@ -1499,18 +1498,18 @@ def scan_flow(
 
 def scan_scene(
     video_path: str,
-    region: Dict[str, int],
-    reference_scenes: List[Dict[str, Any]],
+    region: dict[str, int],
+    reference_scenes: list[dict[str, Any]],
     threshold: float = 0.0,
     interval_seconds: float = 0.0,
     *,
     start_seconds: float = 0.0,
-    end_seconds: Optional[float] = None,
-    on_progress: Optional[Callable[[float], None]] = None,
-    cancel_flag: Optional[Callable[[], bool]] = None,
-    on_result: Optional[Callable[[Dict[str, Any]], None]] = None,
-    fast_opts: Optional[Dict[str, Any]] = None,
-) -> List[Dict[str, Any]]:
+    end_seconds: float | None = None,
+    on_progress: Callable[[float], None] | None = None,
+    cancel_flag: Callable[[], bool] | None = None,
+    on_result: Callable[[dict[str, Any]], None] | None = None,
+    fast_opts: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
     """Classify frames by similarity to reference scene fingerprints.
 
     *reference_scenes* is a list of ``{name: str, frame: np.ndarray}``
@@ -1527,7 +1526,7 @@ def scan_scene(
         interval_seconds = config.SCREENSPACE_DEFAULT_INTERVAL
 
     # Pre-compute fingerprints for reference scenes (with per-scene thresholds)
-    ref_fps: List[Tuple[str, Dict[str, Any], float]] = []
+    ref_fps: list[tuple[str, dict[str, Any], float]] = []
     for ref in reference_scenes:
         fp = compute_scene_fingerprint(ref["frame"])
         ref_thresh = float(ref.get("threshold", default_threshold))
@@ -1544,10 +1543,10 @@ def scan_scene(
         end_seconds = vid_duration
     total_range = end_seconds - start_seconds
 
-    results: List[Dict[str, Any]] = []
-    prev_skip_gray: List[Optional[np.ndarray]] = [None]
+    results: list[dict[str, Any]] = []
+    prev_skip_gray: list[np.ndarray | None] = [None]
 
-    def _cb(ts: float, pixels: np.ndarray) -> Optional[bool]:
+    def _cb(ts: float, pixels: np.ndarray) -> bool | None:
         if cancel_flag and cancel_flag():
             return False
 
@@ -1603,18 +1602,18 @@ def scan_scene(
 
 def scan_inactivity(
     video_path: str,
-    region: Dict[str, int],
+    region: dict[str, int],
     threshold: int = 0,
     min_duration: float = 0.0,
     interval_seconds: float = 0.0,
     *,
     start_seconds: float = 0.0,
-    end_seconds: Optional[float] = None,
-    on_progress: Optional[Callable[[float], None]] = None,
-    cancel_flag: Optional[Callable[[], bool]] = None,
-    on_result: Optional[Callable[[Dict[str, Any]], None]] = None,
-    fast_opts: Optional[Dict[str, Any]] = None,
-) -> List[Dict[str, Any]]:
+    end_seconds: float | None = None,
+    on_progress: Callable[[float], None] | None = None,
+    cancel_flag: Callable[[], bool] | None = None,
+    on_result: Callable[[dict[str, Any]], None] | None = None,
+    fast_opts: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
     """Scan video for inactivity spans (near-duplicate consecutive frames).
 
     Uses perceptual hashing to compare consecutive frames.  When frames
@@ -1638,11 +1637,11 @@ def scan_inactivity(
         end_seconds = vid_duration
     total_range = end_seconds - start_seconds
 
-    results: List[Dict[str, Any]] = []
-    prev_hash: List[Optional[imagehash.ImageHash]] = [None]
-    span_start: List[Optional[float]] = [None]
-    span_distances: List[List[int]] = [[]]
-    last_ts: List[float] = [start_seconds]
+    results: list[dict[str, Any]] = []
+    prev_hash: list["imagehash.ImageHash | None"] = [None]
+    span_start: list[float | None] = [None]
+    span_distances: list[list[int]] = [[]]
+    last_ts: list[float] = [start_seconds]
 
     def _flush_span(span_end: float) -> None:
         if span_start[0] is not None:
@@ -1662,7 +1661,7 @@ def scan_inactivity(
         span_start[0] = None
         span_distances[0] = []
 
-    def _cb(ts: float, pixels: np.ndarray) -> Optional[bool]:
+    def _cb(ts: float, pixels: np.ndarray) -> bool | None:
         if cancel_flag and cancel_flag():
             return False
 
@@ -1710,7 +1709,7 @@ def scan_inactivity(
 # ---------------------------------------------------------------------------
 
 
-def _extract_confidence(tool_type: str, result: Dict[str, Any]) -> float:
+def _extract_confidence(tool_type: str, result: dict[str, Any]) -> float:
     """Extract a normalized [0, 1] confidence from a tool-specific result dict."""
     if tool_type == "color":
         return result.get("_confidence", 1.0)
@@ -1737,11 +1736,11 @@ def _extract_confidence(tool_type: str, result: Dict[str, Any]) -> float:
 
 def check_frame_for_tool(
     frame: np.ndarray,
-    prev_frame: Optional[np.ndarray],
-    region: Dict[str, int],
+    prev_frame: np.ndarray | None,
+    region: dict[str, int],
     tool_type: str,
-    parameters: Dict[str, Any],
-) -> Tuple[bool, Optional[Dict[str, Any]]]:
+    parameters: dict[str, Any],
+) -> tuple[bool, dict[str, Any] | None]:
     """Evaluate whether a single frame passes a tool's criteria.
 
     Used by :func:`scan_multitool` for steps 1+ in the chain.  Returns
@@ -1917,16 +1916,16 @@ def check_frame_for_tool(
 
 def scan_multitool(
     video_path: str,
-    region: Dict[str, int],
-    steps: List[Dict[str, Any]],
+    region: dict[str, int],
+    steps: list[dict[str, Any]],
     *,
     start_seconds: float = 0.0,
-    end_seconds: Optional[float] = None,
-    on_progress: Optional[Callable[[float], None]] = None,
-    cancel_flag: Optional[Callable[[], bool]] = None,
-    on_result: Optional[Callable[[Dict[str, Any]], None]] = None,
-    fast_opts: Optional[Dict[str, Any]] = None,
-) -> List[Dict[str, Any]]:
+    end_seconds: float | None = None,
+    on_progress: Callable[[float], None] | None = None,
+    cancel_flag: Callable[[], bool] | None = None,
+    on_result: Callable[[dict[str, Any]], None] | None = None,
+    fast_opts: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
     """Run a multi-factor scan chaining several tool types.
 
     Iterates the video once, checking all steps per frame.  A frame
@@ -1966,17 +1965,17 @@ def scan_multitool(
 
     tool_types = [s["type"] for s in steps]
     step_regions = [s.get("region_coords", region) for s in steps]
-    prev_frame: List[Optional[np.ndarray]] = [None]
-    results: List[Dict[str, Any]] = []
+    prev_frame: list[np.ndarray | None] = [None]
+    results: list[dict[str, Any]] = []
 
     def _cancel() -> bool:
         return bool(cancel_flag and cancel_flag())
 
-    def _cb(ts: float, frame: np.ndarray) -> Optional[bool]:
+    def _cb(ts: float, frame: np.ndarray) -> bool | None:
         if _cancel():
             return False
 
-        step_results: List[Dict[str, Any]] = []
+        step_results: list[dict[str, Any]] = []
         for i, step in enumerate(steps):
             passed, rd = check_frame_for_tool(
                 frame, prev_frame[0], step_regions[i], step["type"], step
@@ -2023,13 +2022,13 @@ def scan_multitool(
 
 
 def _merge_timestamp_spans(
-    timestamps: List[float], interval: float
-) -> List[Dict[str, Any]]:
+    timestamps: list[float], interval: float
+) -> list[dict[str, Any]]:
     """Merge consecutive matched timestamps into spans."""
     if not timestamps:
         return []
     timestamps.sort()
-    spans: List[Dict[str, Any]] = []
+    spans: list[dict[str, Any]] = []
     start = timestamps[0]
     end = timestamps[0]
     gap = interval * 1.5
@@ -2078,9 +2077,9 @@ def create_task(
     source_video: str,
     video_path: str,
     region_name: str,
-    region_coords: Dict[str, int],
-    parameters: Optional[Dict[str, Any]] = None,
-) -> Dict[str, Any]:
+    region_coords: dict[str, int],
+    parameters: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """Build a new task dict with all fields initialized."""
     return {
         "id": f"ss_{uuid.uuid4().hex[:8]}",
@@ -2108,11 +2107,11 @@ def create_task(
 
 
 def generate_template_heatmap(
-    results: List[Dict[str, Any]],
+    results: list[dict[str, Any]],
     frame_width: int,
     frame_height: int,
     output_path: str,
-) -> Optional[str]:
+) -> str | None:
     """Generate a heatmap PNG from accumulated template match bounding boxes.
 
     Each pixel's intensity reflects how many times (weighted by score) it fell
@@ -2137,11 +2136,11 @@ def generate_template_heatmap(
 
 
 def generate_flow_heatmap(
-    results: List[Dict[str, Any]],
+    results: list[dict[str, Any]],
     region_width: int,
     region_height: int,
     output_path: str,
-) -> Optional[str]:
+) -> str | None:
     """Generate a heatmap PNG from accumulated optical flow magnitudes.
 
     Uses ``flow_grid`` data from each result to paint per-cell motion
@@ -2171,7 +2170,7 @@ def generate_flow_heatmap(
 
 def _accumulate_heatmap_result(
     accumulator: np.ndarray,
-    result: Dict[str, Any],
+    result: dict[str, Any],
     heatmap_type: str,
 ) -> None:
     """Add a single result's contribution to a heatmap accumulator."""
@@ -2191,14 +2190,14 @@ def _accumulate_heatmap_result(
 
 
 def generate_heatmap_gif(
-    results: List[Dict[str, Any]],
+    results: list[dict[str, Any]],
     width: int,
     height: int,
     output_path: str,
     heatmap_type: str = "template",
     num_frames: int = 24,
     frame_duration_ms: int = 120,
-) -> Optional[str]:
+) -> str | None:
     """Generate an animated GIF showing heatmap accumulation over time.
 
     Divides *results* into *num_frames* temporal buckets, progressively
@@ -2227,7 +2226,7 @@ def generate_heatmap_gif(
 
     # Second pass: build progressive frames
     accumulator = np.zeros((acc_h, acc_w), dtype=np.float32)
-    frames: List[Image.Image] = []
+    frames: list[Image.Image] = []
     bucket_size = max(1, len(results) // num_frames)
 
     for frame_idx in range(num_frames):
@@ -2270,13 +2269,13 @@ class ScreenspaceWorker:
 
     def __init__(self) -> None:
         self._queue: queue.PriorityQueue[Any] = queue.PriorityQueue()
-        self._tasks: Dict[str, Dict[str, Any]] = {}
+        self._tasks: dict[str, dict[str, Any]] = {}
         self._lock = threading.Lock()
-        self._thread: Optional[threading.Thread] = None
+        self._thread: threading.Thread | None = None
         self._running = False
         self._paused = threading.Event()
-        self.on_task_complete: Optional[Callable[[], None]] = None
-        self.on_progress_update: Optional[Callable[[], None]] = None
+        self.on_task_complete: Callable[[], None] | None = None
+        self.on_progress_update: Callable[[], None] | None = None
 
     def start(self) -> None:
         """Start the worker thread."""
@@ -2284,7 +2283,7 @@ class ScreenspaceWorker:
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._thread.start()
 
-    def restore_tasks(self, tasks: List[Dict[str, Any]]) -> None:
+    def restore_tasks(self, tasks: list[dict[str, Any]]) -> None:
         """Load historical tasks into the worker (completed/failed/cancelled).
 
         Only non-queued tasks are restored for display; queued tasks are not
@@ -2302,7 +2301,7 @@ class ScreenspaceWorker:
         if self._thread is not None:
             self._thread.join(timeout=15)
 
-    def enqueue(self, task: Dict[str, Any]) -> str:
+    def enqueue(self, task: dict[str, Any]) -> str:
         """Add a task to the queue. Returns the task ID."""
         task_id = task["id"]
         with self._lock:
@@ -2324,7 +2323,7 @@ class ScreenspaceWorker:
                 return True
         return False
 
-    def get_task(self, task_id: str) -> Optional[Dict[str, Any]]:
+    def get_task(self, task_id: str) -> dict[str, Any] | None:
         """Return a task dict by ID (thread-safe copy)."""
         with self._lock:
             task = self._tasks.get(task_id)
@@ -2332,12 +2331,12 @@ class ScreenspaceWorker:
                 return None
             return copy.deepcopy(task)
 
-    def get_all_tasks(self) -> List[Dict[str, Any]]:
+    def get_all_tasks(self) -> list[dict[str, Any]]:
         """Return all tasks (thread-safe copies)."""
         with self._lock:
             return [copy.deepcopy(t) for t in self._tasks.values()]
 
-    def reorder(self, task_ids: List[str]) -> bool:
+    def reorder(self, task_ids: list[str]) -> bool:
         """Reorder queued tasks by the given ID sequence.
 
         Assigns new priorities so that earlier IDs in the list have
@@ -2351,7 +2350,7 @@ class ScreenspaceWorker:
                     task["priority"] = i + 1
 
             # Drain the queue and re-insert with updated priorities
-            pending_items: List[Any] = []
+            pending_items: list[Any] = []
             while not self._queue.empty():
                 try:
                     pending_items.append(self._queue.get_nowait())
@@ -2384,7 +2383,7 @@ class ScreenspaceWorker:
     def resume(self) -> None:
         """Resume the queue. Re-enqueues paused tasks from where they left off."""
         self._paused.clear()
-        to_resume: List[Dict[str, Any]] = []
+        to_resume: list[dict[str, Any]] = []
         with self._lock:
             for task in self._tasks.values():
                 if task["status"] == TASK_STATUS_PAUSED:
@@ -2420,26 +2419,26 @@ class ScreenspaceWorker:
             self._tasks.pop(task_id, None)
             return True
 
-    def drain_new_events(self) -> List[Dict[str, Any]]:
+    def drain_new_events(self) -> list[dict[str, Any]]:
         """Collect and clear ``_generated_events`` from all tasks. Thread-safe."""
-        events: List[Dict[str, Any]] = []
+        events: list[dict[str, Any]] = []
         with self._lock:
             for t in self._tasks.values():
                 events.extend(t.pop("_generated_events", []))
         return events
 
     def _generate_events_from_results(
-        self, task: Dict[str, Any], raw_results: List[Dict[str, Any]]
-    ) -> List[Dict[str, Any]]:
+        self, task: dict[str, Any], raw_results: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
         """Convert raw task results into ScreenspaceEvent records."""
         task_type = task.get("type", "")
         if task_type == "timelapse":
             return []
-        events: List[Dict[str, Any]] = []
+        events: list[dict[str, Any]] = []
         for r in raw_results:
             ts = r.get("timestamp", r.get("start", 0.0))
             confidence = _extract_confidence(task_type, r)
-            metadata: Dict[str, Any] = {}
+            metadata: dict[str, Any] = {}
             if task_type == "change":
                 metadata["magnitude"] = r.get("magnitude", 0.0)
             elif task_type == "similarity":
@@ -2470,7 +2469,7 @@ class ScreenspaceWorker:
         return events
 
     def _generate_heatmap(
-        self, task: Dict[str, Any], results: List[Dict[str, Any]]
+        self, task: dict[str, Any], results: list[dict[str, Any]]
     ) -> None:
         """Generate a heatmap PNG for template or flow tasks."""
         task_type = task.get("type", "")
@@ -2514,7 +2513,7 @@ class ScreenspaceWorker:
         """Worker loop with concurrent task execution via ThreadPoolExecutor."""
         max_workers = config.SCREENSPACE_PARALLEL_WORKERS
         with ThreadPoolExecutor(max_workers=max_workers) as pool:
-            active: Dict[str, Future[None]] = {}
+            active: dict[str, Future[None]] = {}
 
             while self._running:
                 try:
@@ -2586,7 +2585,7 @@ class ScreenspaceWorker:
                 except Exception as exc:
                     utils.warning_print(f"Worker loop error: {exc}")
 
-    def _execute_task(self, task: Dict[str, Any]) -> None:
+    def _execute_task(self, task: dict[str, Any]) -> None:
         """Dispatch task to the appropriate workflow function."""
         task_id = task["id"]
 
@@ -2598,7 +2597,7 @@ class ScreenspaceWorker:
                 t["_raw_results"] = list(t.get("_partial_results", []))
 
         # Per-task throttle for SSE notifications (avoids cross-task race)
-        last_notify: List[float] = [0.0]
+        last_notify: list[float] = [0.0]
 
         def _throttled_notify() -> None:
             now = time.monotonic()
@@ -2621,7 +2620,7 @@ class ScreenspaceWorker:
                 t = self._tasks.get(task_id)
                 return bool(t and (t.get("_cancelled") or t.get("_paused_flag")))
 
-        def _on_result(result_dict: Dict[str, Any]) -> None:
+        def _on_result(result_dict: dict[str, Any]) -> None:
             with self._lock:
                 t = self._tasks.get(task_id)
                 if t:
@@ -2672,10 +2671,10 @@ class ScreenspaceWorker:
 
     def _dispatch(
         self,
-        task: Dict[str, Any],
+        task: dict[str, Any],
         on_progress: Callable[[float], None],
         cancel_flag: Callable[[], bool],
-        on_result: Optional[Callable[[Dict[str, Any]], None]] = None,
+        on_result: Callable[[dict[str, Any]], None] | None = None,
     ) -> Any:
         """Route task to the correct workflow function."""
         video_path = task["video_path"]
@@ -2686,7 +2685,7 @@ class ScreenspaceWorker:
         # Fast scan: apply interval multiplier and build optimization dict
         # (timelapse has its own sample_interval and does not use fast scan)
         scan_mode = params.get("scan_mode", "normal")
-        fast_opts: Optional[Dict[str, Any]] = None
+        fast_opts: dict[str, Any] | None = None
         if scan_mode == "fast" and task_type != "timelapse":
             multiplier = config.SCREENSPACE_FAST_SCAN_INTERVAL_MULTIPLIER
             if params.get("interval", 0) > 0:
@@ -2911,11 +2910,11 @@ class ScreenspaceWorker:
 # ---------------------------------------------------------------------------
 
 
-def _empty_screenspace_manifest() -> Dict[str, Any]:
+def _empty_screenspace_manifest() -> dict[str, Any]:
     return {"regions": {}, "tasks": [], "events": [], "stashes": []}
 
 
-def load_screenspace_manifest() -> Dict[str, Any]:
+def load_screenspace_manifest() -> dict[str, Any]:
     """Load the screenspace manifest from the output directory.
 
     Returns a dict with ``regions`` and ``tasks`` keys.
@@ -2932,11 +2931,11 @@ def load_screenspace_manifest() -> Dict[str, Any]:
 
 
 def save_screenspace_manifest(
-    regions: Dict[str, Dict[str, Any]],
-    tasks: List[Dict[str, Any]],
-    events: Optional[List[Dict[str, Any]]] = None,
-    stashes: Optional[List[Dict[str, Any]]] = None,
-) -> Optional[Path]:
+    regions: dict[str, dict[str, Any]],
+    tasks: list[dict[str, Any]],
+    events: list[dict[str, Any]] | None = None,
+    stashes: list[dict[str, Any]] | None = None,
+) -> Path | None:
     """Write the screenspace manifest to disk.
 
     Strips internal fields (prefixed with ``_``) from tasks before writing.
@@ -2981,11 +2980,11 @@ def save_screenspace_manifest(
 
 
 def create_event(
-    task: Dict[str, Any],
+    task: dict[str, Any],
     timestamp: float,
     confidence: float,
-    metadata: Optional[Dict[str, Any]] = None,
-) -> Dict[str, Any]:
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """Create a ScreenspaceEvent from a task result entry."""
     event_label = task.get("parameters", {}).get("event_label", "")
     if not event_label:

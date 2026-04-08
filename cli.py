@@ -12,7 +12,7 @@ import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, List, NamedTuple, Optional, Tuple
+from typing import Any, NamedTuple
 
 from icecream import ic
 
@@ -30,10 +30,10 @@ from utils import ClipRecord
 
 
 class CliModeArgs(NamedTuple):
-    line_numbers: Optional[List[int]]
-    range_start: Optional[int]
-    range_end: Optional[int]
-    cell_specs: Optional[List[Tuple[str, int]]]
+    line_numbers: list[int] | None
+    range_start: int | None
+    range_end: int | None
+    cell_specs: list[tuple[str, int]] | None
 
 
 # ---- Argument parsing ----
@@ -471,7 +471,7 @@ def authenticate_google() -> Any:
 # ---- Worksheet selection ----
 
 
-def _is_excel_spreadsheet_arg(spreadsheet_arg: Optional[str]) -> bool:
+def _is_excel_spreadsheet_arg(spreadsheet_arg: str | None) -> bool:
     """Return True if the -s argument points to a local Excel file."""
     if not spreadsheet_arg:
         return False
@@ -480,7 +480,7 @@ def _is_excel_spreadsheet_arg(spreadsheet_arg: Optional[str]) -> bool:
 
 
 def select_worksheet(
-    gspread_client: Any, doc_list: List[str], args: Any, cli_mode: bool
+    gspread_client: Any, doc_list: list[str], args: Any, cli_mode: bool
 ) -> Any:
     """Select worksheet based on command-line arguments or interactive selection.
 
@@ -587,7 +587,7 @@ def _generate_cli_clips(
     worksheet: Any,
     args: Any,
     cli_mode_args: CliModeArgs,
-) -> List[ClipRecord]:
+) -> list[ClipRecord]:
     """Resolve CLI arguments into a list of clip records."""
     skip_prompts = args.yes
     mixed_selectors = getattr(args, "mixed", None)
@@ -608,13 +608,13 @@ def _generate_cli_clips(
         or args.highlights
     )
 
-    def _parse_cli_categories(raw: Optional[str]) -> List[str]:
+    def _parse_cli_categories(raw: str | None) -> list[str]:
         """Parse CLI category string into a list of category names."""
         if not raw:
             return []
         combined = raw.replace(",", "+")
         seen = set()
-        result: List[str] = []
+        result: list[str] = []
         for token in combined.split("+"):
             name = token.strip()
             if not name:
@@ -626,12 +626,12 @@ def _generate_cli_clips(
 
     cli_categories = _parse_cli_categories(getattr(args, "category", None))
 
-    def _parse_cli_severities(raw: Optional[str]) -> List[str]:
+    def _parse_cli_severities(raw: str | None) -> list[str]:
         if not raw:
             return []
         combined = raw.replace(",", "+")
         seen = set()
-        result: List[str] = []
+        result: list[str] = []
         for token in combined.split("+"):
             name = utils.normalize_severity(token.strip())
             if not name:
@@ -659,7 +659,7 @@ def _generate_cli_clips(
                 f"Invalid highlights duration '{args.highlights}', using default ({config.HIGHLIGHTS_REEL_DURATION_SECONDS}s)."
             )
 
-    mode_dispatch: List[tuple] = [
+    mode_dispatch: list[tuple] = [
         (
             args.batch or (output_format != "clip" and not selection_mode_set),
             "batch",
@@ -694,8 +694,8 @@ def _generate_cli_clips(
 
 
 def _resolve_chronologic_output_file(
-    args: Any, clips_list: List[ClipRecord]
-) -> Optional[str]:
+    args: Any, clips_list: list[ClipRecord]
+) -> str | None:
     """Build the output filename for chronologic reel mode."""
     if not args.chronologic:
         return None
@@ -713,8 +713,8 @@ def _resolve_chronologic_output_file(
 
 
 def _resolve_highlights_output_file(
-    clips_list: List[ClipRecord],
-) -> Optional[str]:
+    clips_list: list[ClipRecord],
+) -> str | None:
     """Build the output filename for highlights reel mode."""
     study_name = clips_list[0].get("study", "").strip() if clips_list else ""
     if study_name:
@@ -1411,7 +1411,7 @@ def main() -> None:
 
     # Authenticate with Google (once per run) – skip for local Excel files
     gspread_client = None
-    doc_list: List[str] = []
+    doc_list: list[str] = []
     if not _is_excel_spreadsheet_arg(getattr(args, "spreadsheet", None)):
         import google_api
 

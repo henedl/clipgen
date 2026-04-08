@@ -14,7 +14,7 @@ the caller should re-prompt or abort).
 import shutil
 import sys
 import webbrowser
-from typing import Any, Callable, List, Optional, Tuple
+from typing import Any, Callable
 
 import config
 import spreadsheet
@@ -39,17 +39,17 @@ def prompt_batch_confirm(ctx: SheetContext) -> bool:
 
 
 def prompt_multi_selection(
-    items: List[str],
+    items: list[str],
     *,
     header: str,
     prompt_text: str,
     confirm_label: str,
     no_match_msg: str,
-    display_item: Optional[Callable[[int, str], None]] = None,
+    display_item: Callable[[int, str], None] | None = None,
     confirm_display: Callable[[str], str] = lambda x: x,
     normalize_token: Callable[[str], str] = str.lower,
-    fuzzy_match: Optional[Callable[[str, List[str]], Optional[str]]] = None,
-) -> List[str]:
+    fuzzy_match: Callable[[str, list[str]], str | None] | None = None,
+) -> list[str]:
     """Generic multi-selection prompt: display items, accept indices or text, confirm.
 
     *display_item(index, item)* prints one item (default: ``"  {i}. {item}"``).
@@ -71,8 +71,8 @@ def prompt_multi_selection(
 
         try:
             indices = [int(x.strip()) for x in selection.split(",")]
-            selected: List[str] = []
-            invalid_indices: List[int] = []
+            selected: list[str] = []
+            invalid_indices: list[int] = []
             for idx in indices:
                 if 1 <= idx <= len(items):
                     if items[idx - 1] not in selected:
@@ -94,8 +94,8 @@ def prompt_multi_selection(
                 utils.info_print("No valid selections. Please try again.")
         except ValueError:
             tokens = [t.strip() for t in selection.split(",") if t.strip()]
-            matched: List[str] = []
-            unmatched: List[str] = []
+            matched: list[str] = []
+            unmatched: list[str] = []
             for token in tokens:
                 normalized = normalize_token(token)
                 exact = next(
@@ -126,7 +126,7 @@ def prompt_multi_selection(
                 utils.info_print(no_match_msg)
 
 
-def prompt_category_selection(ctx: SheetContext) -> Optional[List[str]]:
+def prompt_category_selection(ctx: SheetContext) -> list[str] | None:
     """Show categories, prompt for selection, return selected names or None."""
     all_categories = spreadsheet.collect_categories(ctx)
     if not all_categories:
@@ -142,7 +142,7 @@ def prompt_category_selection(ctx: SheetContext) -> Optional[List[str]]:
     )
 
 
-def prompt_severity_selection(ctx: SheetContext) -> Optional[List[str]]:
+def prompt_severity_selection(ctx: SheetContext) -> list[str] | None:
     """Show severities sorted most severe first, prompt for selection, return selected or None."""
     all_severities, severity_counts = spreadsheet.collect_severities(ctx)
     if not all_severities:
@@ -171,7 +171,7 @@ def prompt_severity_selection(ctx: SheetContext) -> Optional[List[str]]:
     )
 
 
-def prompt_line_selection(ctx: SheetContext) -> Optional[List[int]]:
+def prompt_line_selection(ctx: SheetContext) -> list[int] | None:
     """Prompt for line numbers, validate bounds, show descriptions, confirm.
 
     Returns validated line numbers list, or None if user cancels.
@@ -212,7 +212,7 @@ def prompt_line_selection(ctx: SheetContext) -> Optional[List[int]]:
             return valid_lines
 
 
-def prompt_range_selection(ctx: SheetContext) -> Optional[Tuple[int, int]]:
+def prompt_range_selection(ctx: SheetContext) -> tuple[int, int] | None:
     """Prompt for start/end row, validate, confirm. Returns (start, end) or None."""
     max_row = len(ctx.sheet_data)
     while True:
@@ -238,7 +238,7 @@ def prompt_range_selection(ctx: SheetContext) -> Optional[Tuple[int, int]]:
             return (start_line, end_line)
 
 
-def prompt_cell_selection(ctx: SheetContext) -> Optional[List[Tuple[str, int]]]:
+def prompt_cell_selection(ctx: SheetContext) -> list[tuple[str, int]] | None:
     """Prompt for cell specs (e.g. P01.11), validate, preview, confirm.
 
     Returns list of (participant_id, row_number) tuples, or None if user cancels.
@@ -303,7 +303,7 @@ def prompt_cell_selection(ctx: SheetContext) -> Optional[List[Tuple[str, int]]]:
             return None
 
 
-def prompt_participant_selection(ctx: SheetContext) -> Optional[List[str]]:
+def prompt_participant_selection(ctx: SheetContext) -> list[str] | None:
     """Show available participants, prompt for selection, validate, confirm.
 
     Returns list of participant IDs, or None if no participants found.
@@ -379,7 +379,7 @@ def prompt_participant_selection(ctx: SheetContext) -> Optional[List[str]]:
             return unique_ids
 
 
-def prompt_keyword_selection(ctx: SheetContext) -> Optional[List[str]]:
+def prompt_keyword_selection(ctx: SheetContext) -> list[str] | None:
     """Show annotation types found in the sheet, prompt for selection, return selected or None."""
     all_annotations, annotation_counts = spreadsheet.collect_annotations(ctx)
     if not all_annotations:

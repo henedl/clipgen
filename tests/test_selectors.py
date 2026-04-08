@@ -1,7 +1,6 @@
 import spreadsheet
 from spreadsheet import SheetContext
 from types import SimpleNamespace
-from typing import List
 
 from utils import ClipRecord
 
@@ -238,7 +237,7 @@ def test_generate_keyword_timestamps_honors_header_and_segment_annotations(
 def test_sort_clips_chronologically_orders_by_start_time():
     import gspread
 
-    clips: List[ClipRecord] = [
+    clips: list[ClipRecord] = [
         {"cell": gspread.cell.Cell(3, 2, "00:30-00:40")},
         {"cell": gspread.cell.Cell(2, 2, "01:00-01:10")},
         {"cell": gspread.cell.Cell(4, 2, "invalid")},
