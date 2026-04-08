@@ -270,7 +270,7 @@ def info_print(message: str) -> None:
 
 def create_browse_table(
     rows_data: list[BrowseRow], participant_headers: list[str]
-) -> "Table" | None:
+) -> "Table | None":
     """Create a Rich Table for browse mode display.
 
     Args:
