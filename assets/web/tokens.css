@@ -221,3 +221,12 @@ html[data-theme="dark"] {
 @media (prefers-reduced-motion: reduce) {
   .skeleton { animation: none; }
 }
+/* Cross-reference badge icon (mask-image from assets/icons/) */
+.xref-badge-icon {
+  display: block;
+  background-color: currentColor;
+  mask-size: contain;
+  mask-repeat: no-repeat;
+  -webkit-mask-size: contain;
+  -webkit-mask-repeat: no-repeat;
+}

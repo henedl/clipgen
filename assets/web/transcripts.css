@@ -609,10 +609,9 @@ body {
   pointer-events: auto;
 }
 
-.segment-xref-badge svg {
+.segment-xref-badge .xref-badge-icon {
   width: 9px;
   height: 9px;
-  display: block;
 }
 
 .segment-text {
