@@ -27,9 +27,9 @@ The same load/save JSON pattern is repeated in `viewer.py`, `insights.py`, `scre
 
 `formatTime()`, `qs()`/`qsa()`/`el()`, `severityClass()`, and `apiGet()`/`apiPost()` are cloned across 4-7 standalone JS files.
 
-- [ ] Evaluate whether a shared `utils.js` can be injected at build/inline time alongside each HTML file
-- [ ] If not feasible, document the canonical version of each utility and add a comment pointing to it in each copy, so future changes are propagated deliberately
-- [ ] Standardize `apiGet`/`apiPost` error handling (screenspace.js checks `!r.ok`, transcripts.js doesn't)
+- [x] Evaluate whether a shared `utils.js` can be injected at build/inline time alongside each HTML file
+- [x] If not feasible, document the canonical version of each utility and add a comment pointing to it in each copy, so future changes are propagated deliberately
+- [x] Standardize `apiGet`/`apiPost` error handling (screenspace.js checks `!r.ok`, transcripts.js doesn't)
 
 ---
 
@@ -37,8 +37,8 @@ The same load/save JSON pattern is repeated in `viewer.py`, `insights.py`, `scre
 
 `transcripts.js` manually mirrors `MARK_CATEGORIES`, `SS_DETECTOR_COLORS`, and badge SVGs from Python/other JS with "mirrored from" comments.
 
-- [ ] Evaluate serving these values from a `/api/constants` endpoint or injecting them into `window.CLIPGEN_DATA` at page load
-- [ ] If kept as manual mirrors, add a test or CI check that compares the JS and Python values
+- [x] Evaluate serving these values from a `/api/constants` endpoint or injecting them into `window.CLIPGEN_DATA` at page load
+- [x] If kept as manual mirrors, add a test or CI check that compares the JS and Python values
 
 ---
 
@@ -46,8 +46,8 @@ The same load/save JSON pattern is repeated in `viewer.py`, `insights.py`, `scre
 
 9 `except Exception:` blocks across `clipgen.py`, `viewer.py`, `screenspace.py`, `transcripts.py`, and `video.py` swallow errors too broadly.
 
-- [ ] Replace each with the narrowest applicable exception type (e.g., `ValueError` for cell A1 conversion, `OSError` for file I/O, `FileNotFoundError` for ffmpeg)
-- [ ] Extract the duplicated cell_a1 conversion pattern (`clipgen.py:894`, `viewer.py:89`) into a shared `utils.safe_cell_a1(row, col)` helper
+- [x] Replace each with the narrowest applicable exception type (e.g., `ValueError` for cell A1 conversion, `OSError` for file I/O, `FileNotFoundError` for ffmpeg)
+- [x] Extract the duplicated cell_a1 conversion pattern (`clipgen.py:894`, `viewer.py:89`) into a shared `utils.safe_cell_a1(row, col)` helper
 
 ---
 
@@ -55,11 +55,11 @@ The same load/save JSON pattern is repeated in `viewer.py`, `insights.py`, `scre
 
 Six functions exceed 150 lines with mixed concerns.
 
-- [ ] `cli.py main()` (~388 lines): extract config-override application, mode detection, and dispatch into separate functions
-- [ ] `interactive.py browse_spreadsheet()` (~358 lines): extract display, search, and nested helper functions to module level
-- [ ] `screenspace_server.py api_tasks_create()` (~313 lines): separate validation, parameter normalization, and task creation
-- [ ] `screenspace.js renderWorkflowParams()` (~536 lines): split into per-workflow-type render functions
-- [ ] `studio.js renderIntake()` (~437 lines): separate clustering, filtering, and rendering logic
+- [x] `cli.py main()` (~388 lines): extract config-override application, mode detection, and dispatch into separate functions
+- [x] `interactive.py browse_spreadsheet()` (~358 lines): extract display, search, and nested helper functions to module level
+- [x] `screenspace_server.py api_tasks_create()` (~313 lines): separate validation, parameter normalization, and task creation
+- [x] `screenspace.js renderWorkflowParams()` (~536 lines): split into per-workflow-type render functions
+- [x] `studio.js renderIntake()` (~437 lines): already 94 lines, no refactoring needed
 
 ---
 
@@ -95,7 +95,7 @@ Both `viewer.html` and `timeline-viewer.html` exist. Studio/CLI per-participant 
 `config.py` is 301 lines of flat globals mutated from `cli.py`. `server.py` works around this with `_settings_defaults` snapshots and an `_override_config()` context manager.
 
 - [ ] Group related constants (screenspace thresholds, ffmpeg params, file format settings) into named sections or lightweight dataclass-like groupings
-- [ ] Extract the CLI config-override block (`cli.py:1300-1312`) into a dedicated `apply_cli_overrides(args)` function
+- [x] Extract the CLI config-override block (`cli.py:1300-1312`) into a dedicated `apply_cli_overrides(args)` function
 
 ---
 

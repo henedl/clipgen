@@ -668,51 +668,45 @@ def browse_spreadsheet(sheet: Any, *, process_fn=None) -> None:
         utils.check_navigation_keywords(value)
         return value
 
-    # Navigation loop
-    while True:
-        raw_input = _read_browse_key().strip()
-        user_input = raw_input.lower()
+    def _handle_navigation(cmd: str, cur: int) -> tuple[bool, int]:
+        """Handle navigation commands: up/down/page/jump/open/format switch.
 
-        if user_input == _NOOP:
-            continue
-        elif user_input in ("quit", "q"):
-            utils.info_print("Exiting browse mode.")
-            break
-        elif user_input in ("up", "u"):
-            if current_row > first_data_row:
-                new_row = max(
-                    first_data_row, current_row - config.BROWSE_LINES_TO_SCROLL
-                )
-                current_row = new_row
-                display_rows(current_row, config.BROWSE_LINES_TO_DISPLAY)
+        Returns (handled, new_current_row).
+        """
+        nonlocal output_format
+        if cmd in ("up", "u"):
+            if cur > first_data_row:
+                cur = max(first_data_row, cur - config.BROWSE_LINES_TO_SCROLL)
+                display_rows(cur, config.BROWSE_LINES_TO_DISPLAY)
             else:
                 utils.info_print("Already at the first row.")
-        elif user_input in ("down", "d", ""):
-            if current_row < last_data_row:
-                new_row = min(
-                    last_data_row, current_row + config.BROWSE_LINES_TO_SCROLL
-                )
-                current_row = new_row
-                display_rows(current_row, config.BROWSE_LINES_TO_DISPLAY)
+            return True, cur
+        if cmd in ("down", "d", ""):
+            if cur < last_data_row:
+                cur = min(last_data_row, cur + config.BROWSE_LINES_TO_SCROLL)
+                display_rows(cur, config.BROWSE_LINES_TO_DISPLAY)
             else:
                 utils.info_print("Already at the last row.")
-        elif user_input in ("pageup", "pu"):
-            new_row = max(first_data_row, current_row - config.BROWSE_LINES_TO_DISPLAY)
-            if new_row != current_row:
-                current_row = new_row
-                display_rows(current_row, config.BROWSE_LINES_TO_DISPLAY)
+            return True, cur
+        if cmd in ("pageup", "pu"):
+            new_row = max(first_data_row, cur - config.BROWSE_LINES_TO_DISPLAY)
+            if new_row != cur:
+                cur = new_row
+                display_rows(cur, config.BROWSE_LINES_TO_DISPLAY)
             else:
                 utils.info_print("Already at the first row.")
-        elif user_input in ("pagedown", "pd"):
-            new_row = min(last_data_row, current_row + config.BROWSE_LINES_TO_DISPLAY)
-            if new_row != current_row:
-                current_row = new_row
-                display_rows(current_row, config.BROWSE_LINES_TO_DISPLAY)
+            return True, cur
+        if cmd in ("pagedown", "pd"):
+            new_row = min(last_data_row, cur + config.BROWSE_LINES_TO_DISPLAY)
+            if new_row != cur:
+                cur = new_row
+                display_rows(cur, config.BROWSE_LINES_TO_DISPLAY)
             else:
                 utils.info_print("Already at the last row.")
-        elif user_input.startswith("jump ") or user_input.startswith("j "):
+            return True, cur
+        if cmd.startswith("jump ") or cmd.startswith("j "):
             try:
-                parts = user_input.split()
+                parts = cmd.split()
                 if len(parts) >= 2:
                     target_row = int(parts[1]) - 1
                     if target_row < first_data_row:
@@ -724,15 +718,16 @@ def browse_spreadsheet(sheet: Any, *, process_fn=None) -> None:
                             f"Row number must be at most {last_data_row + 1}."
                         )
                     else:
-                        current_row = target_row
-                        display_rows(current_row, config.BROWSE_LINES_TO_DISPLAY)
+                        cur = target_row
+                        display_rows(cur, config.BROWSE_LINES_TO_DISPLAY)
                 else:
                     utils.info_print("Usage: jump <row_number> or j <row_number>")
             except ValueError:
                 utils.info_print(
                     "Invalid row number. Usage: jump <row_number> or j <row_number>"
                 )
-        elif user_input in ("open", "o"):
+            return True, cur
+        if cmd in ("open", "o"):
             spreadsheet_url = getattr(getattr(sheet, "spreadsheet", None), "url", None)
             if not spreadsheet_url:
                 utils.info_print(
@@ -747,75 +742,98 @@ def browse_spreadsheet(sheet: Any, *, process_fn=None) -> None:
                     utils.info_print("Spreadsheet opened in your default browser.")
                 except OSError as e:
                     utils.error_print("Could not open browser.", [f"Error: {e}"])
-        elif user_input in ("screen", "sc"):
+            return True, cur
+        if cmd in ("screen", "sc"):
             output_format = "screen"
             utils.info_print("Switched to screenshot mode.")
-        elif user_input == "gif":
+            return True, cur
+        if cmd == "gif":
             output_format = "gif"
             utils.info_print("Switched to GIF mode.")
-        elif user_input == "clip":
+            return True, cur
+        if cmd == "clip":
             output_format = "clip"
             utils.info_print("Switched to clip mode.")
-        else:
-            # Try selector parsing for artifact generation
-            if process_fn is not None:
-                parsed = spreadsheet.parse_reel_input(raw_input)
-                has_selectors = (
-                    parsed.get("batch")
-                    or parsed.get("keyword")
-                    or parsed["lines"]
-                    or parsed["ranges"]
-                    or parsed["cells"]
-                    or parsed["participants"]
-                    or parsed["categories"]
-                )
-                if has_selectors:
-                    if parsed.get("chronologic"):
-                        utils.info_print(
-                            "Chronologic selector is not supported in browse mode."
-                        )
-                    else:
-                        clips = spreadsheet.generate_list(
-                            sheet, "reel", reel_input=raw_input
-                        )
-                        if clips:
-                            format_label = {
-                                "clip": "clip(s)",
-                                "screen": "screenshot(s)",
-                                "gif": "GIF(s)",
-                            }.get(output_format, "file(s)")
-                            utils.info_print(
-                                f"Generating {len(clips)} {format_label}..."
-                            )
-                            outputs_generated, _ = process_fn(clips, output_format)
-                            utils.info_print(
-                                f"Done! Generated {outputs_generated} {format_label}."
-                            )
-                        else:
-                            utils.info_print("No clips found for the given selectors.")
-                    continue
+            return True, cur
+        return False, cur
 
-            # Treat unrecognized input as a search query
-            matches = _search_rows(user_input)
-            if not matches:
-                matches = _search_rows(user_input, fuzzy=True)
-                if matches:
+    def _handle_selector_or_search(raw: str, cmd: str, cur: int) -> int:
+        """Try selector-based generation, then fall back to search.
+
+        Returns new current_row.
+        """
+        if process_fn is not None:
+            parsed = spreadsheet.parse_reel_input(raw)
+            has_selectors = (
+                parsed.get("batch")
+                or parsed.get("keyword")
+                or parsed["lines"]
+                or parsed["ranges"]
+                or parsed["cells"]
+                or parsed["participants"]
+                or parsed["categories"]
+            )
+            if has_selectors:
+                if parsed.get("chronologic"):
                     utils.info_print(
-                        f"No exact matches for '{user_input}'. Showing approximate matches:"
-                    )
-            if matches:
-                match_row_nums = [str(m + 1) for m in matches]
-                if len(match_row_nums) > 20:
-                    shown = ", ".join(match_row_nums[:20])
-                    extra = len(match_row_nums) - 20
-                    utils.info_print(
-                        f"Found {len(matches)} matching row(s): {shown} \u2026 and {extra} more"
+                        "Chronologic selector is not supported in browse mode."
                     )
                 else:
-                    utils.info_print(
-                        f"Found {len(matches)} matching row(s): {', '.join(match_row_nums)}"
-                    )
-                current_row = matches[0]
-                display_rows(current_row, config.BROWSE_LINES_TO_DISPLAY)
+                    clips = spreadsheet.generate_list(sheet, "reel", reel_input=raw)
+                    if clips:
+                        format_label = {
+                            "clip": "clip(s)",
+                            "screen": "screenshot(s)",
+                            "gif": "GIF(s)",
+                        }.get(output_format, "file(s)")
+                        utils.info_print(f"Generating {len(clips)} {format_label}...")
+                        outputs_generated, _ = process_fn(clips, output_format)
+                        utils.info_print(
+                            f"Done! Generated {outputs_generated} {format_label}."
+                        )
+                    else:
+                        utils.info_print("No clips found for the given selectors.")
+                return cur
+
+        # Treat unrecognized input as a search query
+        matches = _search_rows(cmd)
+        if not matches:
+            matches = _search_rows(cmd, fuzzy=True)
+            if matches:
+                utils.info_print(
+                    f"No exact matches for '{cmd}'. Showing approximate matches:"
+                )
+        if matches:
+            match_row_nums = [str(m + 1) for m in matches]
+            if len(match_row_nums) > 20:
+                shown = ", ".join(match_row_nums[:20])
+                extra = len(match_row_nums) - 20
+                utils.info_print(
+                    f"Found {len(matches)} matching row(s): {shown} \u2026 and {extra} more"
+                )
             else:
-                utils.info_print(f"No rows matching '{user_input}'.")
+                utils.info_print(
+                    f"Found {len(matches)} matching row(s): {', '.join(match_row_nums)}"
+                )
+            cur = matches[0]
+            display_rows(cur, config.BROWSE_LINES_TO_DISPLAY)
+        else:
+            utils.info_print(f"No rows matching '{cmd}'.")
+        return cur
+
+    # Navigation loop
+    while True:
+        raw_input = _read_browse_key().strip()
+        user_input = raw_input.lower()
+
+        if user_input == _NOOP:
+            continue
+        if user_input in ("quit", "q"):
+            utils.info_print("Exiting browse mode.")
+            break
+
+        handled, current_row = _handle_navigation(user_input, current_row)
+        if handled:
+            continue
+
+        current_row = _handle_selector_or_search(raw_input, user_input, current_row)

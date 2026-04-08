@@ -2603,6 +2603,353 @@
     }
   }
 
+  function renderColorParams(container) {
+    var pickerGroup = el("div", "color-picker-group");
+
+    var palette = document.createElement("canvas");
+    palette.id = "colorPalette";
+    palette.className = "color-palette-canvas";
+    pickerGroup.appendChild(palette);
+
+    var bright = document.createElement("canvas");
+    bright.id = "colorBrightness";
+    bright.className = "color-brightness-strip";
+    pickerGroup.appendChild(bright);
+
+    var inputRow = el("div", "color-input-row");
+    var preview = el("div", "color-preview");
+    preview.id = "colorPreview";
+    inputRow.appendChild(preview);
+
+    var hexInput = document.createElement("input");
+    hexInput.type = "text";
+    hexInput.autocomplete = "off";
+    hexInput.id = "paramColorHex";
+    hexInput.className = "color-hex-input";
+    hexInput.placeholder = "#000000";
+    hexInput.maxLength = 7;
+    inputRow.appendChild(hexInput);
+
+    var pipetteBtn = el("button", "btn btn-small btn-pipette");
+    pipetteBtn.id = "pipetteBtn";
+    pipetteBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path fill-rule="evenodd" clip-rule="evenodd" d="M15 4C15 5.39788 14.0439 6.57245 12.75 6.90549V8.5C12.75 8.69891 12.671 8.88968 12.5303 9.03033L12.0303 9.53033C11.7374 9.82322 11.2626 9.82322 10.9697 9.53033L10.25 8.81069L5.57322 13.4875C5.24503 13.8157 4.79992 14.0001 4.33579 14.0001H3.66421C3.59791 14.0001 3.53432 14.0264 3.48744 14.0733L2.78033 14.7804C2.63968 14.921 2.44891 15.0001 2.25 15.0001C2.05109 15.0001 1.86032 14.921 1.71967 14.7804L1.21967 14.2804C0.926777 13.9875 0.926777 13.5126 1.21967 13.2197L1.92678 12.5126C1.97366 12.4657 2 12.4021 2 12.3358V11.6643C2 11.2001 2.18437 10.755 2.51256 10.4268L7.18937 5.75003L6.46967 5.03033C6.17678 4.73744 6.17678 4.26256 6.46967 3.96967L6.96967 3.46967C7.11032 3.32902 7.30109 3.25 7.5 3.25H9.09451C9.42755 1.95608 10.6021 1 12 1C13.6569 1 15 2.34315 15 4ZM9.18937 7.75003L8.25003 6.81069L3.57322 11.4875C3.52634 11.5344 3.5 11.598 3.5 11.6643V12.3358C3.5 12.3938 3.49713 12.4514 3.49146 12.5086C3.54862 12.5029 3.60627 12.5001 3.66421 12.5001H4.33579C4.40209 12.5001 4.46568 12.4737 4.51256 12.4268L9.18937 7.75003Z"/></svg>';
+    pipetteBtn.title = "Pick color from video frame";
+    pipetteBtn.addEventListener("click", function () {
+      if (state.pipetteActive) deactivatePipette();
+      else activatePipette();
+    });
+    inputRow.appendChild(pipetteBtn);
+
+    var sampleBtn = el("button", "btn btn-small", "From Region");
+    sampleBtn.addEventListener("click", sampleColorFromRegion);
+    inputRow.appendChild(sampleBtn);
+
+    pickerGroup.appendChild(inputRow);
+
+    var hiddenH = document.createElement("input");
+    hiddenH.type = "hidden"; hiddenH.id = "paramColorH"; hiddenH.value = "90";
+    var hiddenS = document.createElement("input");
+    hiddenS.type = "hidden"; hiddenS.id = "paramColorS"; hiddenS.value = "200";
+    var hiddenV = document.createElement("input");
+    hiddenV.type = "hidden"; hiddenV.id = "paramColorV"; hiddenV.value = "200";
+    pickerGroup.appendChild(hiddenH);
+    pickerGroup.appendChild(hiddenS);
+    pickerGroup.appendChild(hiddenV);
+
+    container.appendChild(pickerGroup);
+
+    var paletteDragging = false;
+    var brightDragging = false;
+    function pickFromPalette(e) {
+      var rect = palette.getBoundingClientRect();
+      var x = clamp(e.clientX - rect.left, 0, rect.width);
+      var y = clamp(e.clientY - rect.top, 0, rect.height);
+      var h = Math.round((x / rect.width) * 180);
+      var s = Math.round((1 - y / rect.height) * 255);
+      var curV = parseFloat(qs("#paramColorV").value) || 0;
+      setTargetColor(h, s, curV);
+    }
+    palette.addEventListener("mousedown", function (e) {
+      e.preventDefault();
+      paletteDragging = true;
+      pickFromPalette(e);
+    });
+
+    function pickFromBrightness(e) {
+      var rect = bright.getBoundingClientRect();
+      var x = clamp(e.clientX - rect.left, 0, rect.width);
+      var v = Math.round((x / rect.width) * 255);
+      var curH = parseFloat(qs("#paramColorH").value) || 0;
+      var curS = parseFloat(qs("#paramColorS").value) || 0;
+      setTargetColor(curH, curS, v);
+    }
+    bright.addEventListener("mousedown", function (e) {
+      e.preventDefault();
+      brightDragging = true;
+      pickFromBrightness(e);
+    });
+
+    if (_paletteDocListeners) {
+      document.removeEventListener("mousemove", _paletteDocListeners.move);
+      document.removeEventListener("mouseup", _paletteDocListeners.up);
+    }
+    function onDocMove(e) {
+      if (paletteDragging) pickFromPalette(e);
+      if (brightDragging) pickFromBrightness(e);
+    }
+    function onDocUp() { paletteDragging = false; brightDragging = false; }
+    document.addEventListener("mousemove", onDocMove);
+    document.addEventListener("mouseup", onDocUp);
+    _paletteDocListeners = { move: onDocMove, up: onDocUp };
+
+    hexInput.addEventListener("input", function () {
+      var rgb = hexToRgb(hexInput.value);
+      if (rgb) {
+        var hsv = rgbToHsv(rgb.r, rgb.g, rgb.b);
+        var hEl = qs("#paramColorH"), sEl = qs("#paramColorS"), vEl = qs("#paramColorV");
+        if (hEl) hEl.value = hsv.h;
+        if (sEl) sEl.value = hsv.s;
+        if (vEl) vEl.value = hsv.v;
+        updateColorPreview();
+        renderColorPalette();
+        renderBrightnessStrip();
+      }
+    });
+
+    var tolSlider = rangeInput("paramColorTol", 0, 100, 30);
+    addParamRow(container, "Tolerance", tolSlider, "paramColorTolVal");
+    tolSlider.addEventListener("input", function () {
+      renderColorPalette();
+    });
+    renderIntervalSlot("paramColorInterval", 0.5, 60, 1.0, 0.5);
+
+    renderColorPalette();
+    renderBrightnessStrip();
+    updateColorPreview();
+    var initRgb = hsvToRgb(90, 200, 200);
+    hexInput.value = rgbToHex(initRgb.r, initRgb.g, initRgb.b);
+  }
+
+  function renderSimilarityParams(container) {
+    var refRow = el("div", "param-row");
+    var refLabel = el("span", "param-label", "Reference");
+    var refControl = el("div", "param-control");
+    var refBtn = el("button", "btn btn-small", "Capture Current Frame");
+    refBtn.addEventListener("click", function () {
+      state.referenceTimestamp = state.currentTimestamp;
+      renderWorkflowParams();
+      showToast("Reference frame captured at " + formatTimestamp(state.currentTimestamp));
+    });
+    refControl.appendChild(refBtn);
+    if (state.referenceTimestamp !== null) {
+      var refTs = el("span", "param-value", formatTimestamp(state.referenceTimestamp));
+      refControl.appendChild(refTs);
+    }
+    refRow.appendChild(refLabel);
+    refRow.appendChild(refControl);
+    container.appendChild(refRow);
+    addParamRow(container, "Threshold", rangeInput("paramSimThresh", 0.50, 1.00, 0.90, 0.01), "paramSimThreshVal");
+    renderIntervalSlot("paramSimInterval", 0.5, 60, 1.0, 0.5);
+  }
+
+  function renderTextParams(container) {
+    addParamRow(container, "Search text", textInput("paramTextSearch", "Enter text to find..."));
+    addParamRow(container, "Fuzzy Thr.", rangeInput("paramTextFuzzy", 0.50, 1.00, 0.80, 0.01), "paramTextFuzzyVal");
+    renderIntervalSlot("paramTextInterval", 0.5, 60, 2.0, 0.5);
+    var langRow = el("div", "param-row");
+    langRow.appendChild(el("span", "param-label", "Language"));
+    var langControl = el("div", "param-control");
+    var langSel = document.createElement("select");
+    langSel.id = "paramTextLang";
+    [["en", "English"], ["es", "Spanish"], ["fr", "French"], ["de", "German"],
+     ["ja", "Japanese"], ["ko", "Korean"], ["zh", "Chinese"]].forEach(function (pair) {
+      var opt = el("option", null, pair[1]);
+      opt.value = pair[0];
+      langSel.appendChild(opt);
+    });
+    langControl.appendChild(langSel);
+    langRow.appendChild(langControl);
+    container.appendChild(langRow);
+  }
+
+  function renderNumbersParams(container) {
+    var opRow = el("div", "param-row");
+    opRow.appendChild(el("span", "param-label", "Operator"));
+    var opControl = el("div", "param-control");
+    var opSel = document.createElement("select");
+    opSel.id = "paramNumOperator";
+    [["gt", "Greater than (>)"], ["lt", "Less than (<)"], ["eq", "Equal to (=)"],
+     ["gte", "Greater or equal (\u2265)"], ["lte", "Less or equal (\u2264)"], ["range", "In range"]].forEach(function (pair) {
+      var opt = el("option", null, pair[1]);
+      opt.value = pair[0];
+      opSel.appendChild(opt);
+    });
+    opSel.addEventListener("change", function () {
+      var rangeRow = qs("#paramNumRangeRow");
+      var targetRow = qs("#paramNumTargetRow");
+      if (opSel.value === "range") {
+        if (rangeRow) rangeRow.style.display = "";
+        if (targetRow) targetRow.style.display = "none";
+      } else {
+        if (rangeRow) rangeRow.style.display = "none";
+        if (targetRow) targetRow.style.display = "";
+      }
+    });
+    opControl.appendChild(opSel);
+    opRow.appendChild(opControl);
+    container.appendChild(opRow);
+    var targetRow = el("div", "param-row");
+    targetRow.id = "paramNumTargetRow";
+    targetRow.appendChild(el("span", "param-label", "Target value"));
+    var targetCtrl = el("div", "param-control");
+    targetCtrl.appendChild(numberInput("paramNumTarget", -999999, 999999, 100, 1));
+    targetRow.appendChild(targetCtrl);
+    container.appendChild(targetRow);
+    var numRangeRow = el("div", "param-row");
+    numRangeRow.id = "paramNumRangeRow";
+    numRangeRow.style.display = "none";
+    numRangeRow.appendChild(el("span", "param-label", "Range"));
+    var rangeCtrl = el("div", "param-control");
+    rangeCtrl.appendChild(numberInput("paramNumMin", -999999, 999999, 0, 1));
+    rangeCtrl.appendChild(el("span", "param-value", "\u2013"));
+    rangeCtrl.appendChild(numberInput("paramNumMax", -999999, 999999, 100, 1));
+    numRangeRow.appendChild(rangeCtrl);
+    container.appendChild(numRangeRow);
+    renderIntervalSlot("paramNumInterval", 0.5, 60, 2.0, 0.5);
+  }
+
+  function renderTimelapseParams(container) {
+    addParamRow(container, "Speed", numberInput("paramTlSpeed", 2, 100, 10, 1));
+    addParamRow(container, "Sample every", numberInput("paramTlSampleInterval", 0, 60, 0, 0.5), "paramTlSampleIntervalVal");
+    var siHint = el("span", "param-hint", "seconds (0 = every frame)");
+    container.lastChild.querySelector(".param-control").appendChild(siHint);
+    var fmtRow = el("div", "param-row");
+    fmtRow.appendChild(el("span", "param-label", "Format"));
+    var fmtControl = el("div", "param-control");
+    var fmtSel = document.createElement("select");
+    fmtSel.id = "paramTlFormat";
+    [["mp4", "Video (.mp4)"], ["gif", "GIF (.gif)"]].forEach(function (pair) {
+      var opt = el("option", null, pair[1]);
+      opt.value = pair[0];
+      fmtSel.appendChild(opt);
+    });
+    fmtControl.appendChild(fmtSel);
+    fmtRow.appendChild(fmtControl);
+    container.appendChild(fmtRow);
+  }
+
+  function renderTemplateParams(container) {
+    var tmplRefRow = el("div", "param-row");
+    tmplRefRow.appendChild(el("span", "param-label", "Template"));
+    var tmplRefCtrl = el("div", "param-control");
+    var tmplCapBtn = el("button", "btn btn-small", "Capture Region");
+    tmplCapBtn.addEventListener("click", function () {
+      state.referenceTimestamp = state.currentTimestamp;
+      state.uploadedTemplate = null;
+      renderWorkflowParams();
+      showToast("Template captured at " + formatTimestamp(state.currentTimestamp));
+    });
+    tmplRefCtrl.appendChild(tmplCapBtn);
+
+    var tmplFileInput = document.createElement("input");
+    tmplFileInput.type = "file";
+    tmplFileInput.accept = "image/png";
+    tmplFileInput.style.display = "none";
+    tmplFileInput.addEventListener("change", function () {
+      var file = tmplFileInput.files[0];
+      if (!file) return;
+      var reader = new FileReader();
+      reader.onload = function (e) {
+        var dataUrl = e.target.result;
+        var b64 = dataUrl.split(",")[1];
+        state.uploadedTemplate = { name: file.name, data: b64 };
+        state.referenceTimestamp = null;
+        renderWorkflowParams();
+        showToast("Template loaded: " + file.name);
+      };
+      reader.readAsDataURL(file);
+    });
+    var tmplUploadBtn = el("button", "btn btn-small", "Upload PNG");
+    tmplUploadBtn.addEventListener("click", function () { tmplFileInput.click(); });
+    tmplRefCtrl.appendChild(tmplUploadBtn);
+    tmplRefCtrl.appendChild(tmplFileInput);
+
+    if (state.uploadedTemplate) {
+      var uploadInfo = el("span", "param-value template-upload-info");
+      var uploadThumb = document.createElement("img");
+      uploadThumb.src = "data:image/png;base64," + state.uploadedTemplate.data;
+      uploadThumb.alt = state.uploadedTemplate.name;
+      uploadInfo.appendChild(uploadThumb);
+      uploadInfo.appendChild(document.createTextNode(state.uploadedTemplate.name));
+      var clearBtn = el("button", "btn btn-small", "\u00d7");
+      clearBtn.addEventListener("click", function () {
+        state.uploadedTemplate = null;
+        renderWorkflowParams();
+      });
+      uploadInfo.appendChild(clearBtn);
+      tmplRefCtrl.appendChild(uploadInfo);
+    } else if (state.referenceTimestamp !== null) {
+      tmplRefCtrl.appendChild(el("span", "param-value", formatTimestamp(state.referenceTimestamp)));
+    }
+    tmplRefRow.appendChild(tmplRefCtrl);
+    container.appendChild(tmplRefRow);
+    addParamRow(container, "Threshold", rangeInput("paramTemplateThresh", 0.50, 1.00, 0.70, 0.01), "paramTemplateThreshVal");
+    renderIntervalSlot("paramTemplateInterval", 0.5, 60, 1.0, 0.5);
+  }
+
+  function renderSceneParams(container) {
+    var sceneList = el("div", "scene-reference-list");
+    sceneList.id = "sceneRefList";
+    state.sceneReferences.forEach(function (ref, i) {
+      if (ref.threshold === undefined) ref.threshold = 0.75;
+      var item = el("div", "scene-ref-item");
+      item.appendChild(el("span", "scene-ref-name", ref.name));
+      item.appendChild(el("span", "param-value", formatTimestamp(ref.timestamp)));
+      var threshSlider = document.createElement("input");
+      threshSlider.type = "range";
+      threshSlider.min = "0.50";
+      threshSlider.max = "1.00";
+      threshSlider.step = "0.01";
+      threshSlider.value = String(ref.threshold);
+      threshSlider.className = "scene-ref-thresh";
+      var threshVal = el("span", "param-value", String(ref.threshold));
+      threshSlider.addEventListener("input", (function (idx) {
+        return function () {
+          state.sceneReferences[idx].threshold = parseFloat(threshSlider.value);
+          threshVal.textContent = threshSlider.value;
+        };
+      })(i));
+      item.appendChild(threshSlider);
+      item.appendChild(threshVal);
+      var rmBtn = el("button", "btn btn-small", "\u00d7");
+      rmBtn.addEventListener("click", function () {
+        state.sceneReferences.splice(i, 1);
+        renderWorkflowParams();
+      });
+      item.appendChild(rmBtn);
+      sceneList.appendChild(item);
+    });
+    container.appendChild(sceneList);
+    var addScRow = el("div", "param-row");
+    addScRow.appendChild(el("span", "param-label", "Add Scene"));
+    var addScCtrl = el("div", "param-control");
+    var scNameInp = textInput("paramSceneName", "e.g. menu, gameplay");
+    addScCtrl.appendChild(scNameInp);
+    var scCapBtn = el("button", "btn btn-small", "Capture");
+    scCapBtn.addEventListener("click", function () {
+      var nameEl = qs("#paramSceneName");
+      var name = nameEl ? nameEl.value.trim() : "";
+      if (!name) { showToast("Enter a scene name"); return; }
+      state.sceneReferences.push({ name: name, timestamp: state.currentTimestamp, threshold: 0.75 });
+      renderWorkflowParams();
+      showToast("Scene '" + name + "' at " + formatTimestamp(state.currentTimestamp));
+    });
+    addScCtrl.appendChild(scCapBtn);
+    addScRow.appendChild(addScCtrl);
+    container.appendChild(addScRow);
+    renderIntervalSlot("paramSceneInterval", 0.5, 60, 1.0, 0.5);
+  }
+
   function renderWorkflowParams() {
     var container = qs("#workflowParams");
     container.innerHTML = "";
@@ -2612,7 +2959,6 @@
     if (intervalSlot) intervalSlot.innerHTML = "";
     var type = state.activeWorkflow;
 
-    // Hide global region picker for multitool (per-step regions instead)
     var regionPickerWrap = qs("#runRegionPicker");
     if (regionPickerWrap) regionPickerWrap.style.display = type === "multitool" ? "none" : "";
 
@@ -2627,365 +2973,23 @@
       return;
     }
 
-    if (type === "color") {
-      // Color picker group: palette + brightness + hex/pipette
-      var pickerGroup = el("div", "color-picker-group");
-
-      // Hue-Saturation palette canvas
-      var palette = document.createElement("canvas");
-      palette.id = "colorPalette";
-      palette.className = "color-palette-canvas";
-      pickerGroup.appendChild(palette);
-
-      // Brightness strip
-      var bright = document.createElement("canvas");
-      bright.id = "colorBrightness";
-      bright.className = "color-brightness-strip";
-      pickerGroup.appendChild(bright);
-
-      // Color input row: preview swatch + hex input + pipette button
-      var inputRow = el("div", "color-input-row");
-      var preview = el("div", "color-preview");
-      preview.id = "colorPreview";
-      inputRow.appendChild(preview);
-
-      var hexInput = document.createElement("input");
-      hexInput.type = "text";
-      hexInput.autocomplete = "off";
-      hexInput.id = "paramColorHex";
-      hexInput.className = "color-hex-input";
-      hexInput.placeholder = "#000000";
-      hexInput.maxLength = 7;
-      inputRow.appendChild(hexInput);
-
-      var pipetteBtn = el("button", "btn btn-small btn-pipette");
-      pipetteBtn.id = "pipetteBtn";
-      pipetteBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path fill-rule="evenodd" clip-rule="evenodd" d="M15 4C15 5.39788 14.0439 6.57245 12.75 6.90549V8.5C12.75 8.69891 12.671 8.88968 12.5303 9.03033L12.0303 9.53033C11.7374 9.82322 11.2626 9.82322 10.9697 9.53033L10.25 8.81069L5.57322 13.4875C5.24503 13.8157 4.79992 14.0001 4.33579 14.0001H3.66421C3.59791 14.0001 3.53432 14.0264 3.48744 14.0733L2.78033 14.7804C2.63968 14.921 2.44891 15.0001 2.25 15.0001C2.05109 15.0001 1.86032 14.921 1.71967 14.7804L1.21967 14.2804C0.926777 13.9875 0.926777 13.5126 1.21967 13.2197L1.92678 12.5126C1.97366 12.4657 2 12.4021 2 12.3358V11.6643C2 11.2001 2.18437 10.755 2.51256 10.4268L7.18937 5.75003L6.46967 5.03033C6.17678 4.73744 6.17678 4.26256 6.46967 3.96967L6.96967 3.46967C7.11032 3.32902 7.30109 3.25 7.5 3.25H9.09451C9.42755 1.95608 10.6021 1 12 1C13.6569 1 15 2.34315 15 4ZM9.18937 7.75003L8.25003 6.81069L3.57322 11.4875C3.52634 11.5344 3.5 11.598 3.5 11.6643V12.3358C3.5 12.3938 3.49713 12.4514 3.49146 12.5086C3.54862 12.5029 3.60627 12.5001 3.66421 12.5001H4.33579C4.40209 12.5001 4.46568 12.4737 4.51256 12.4268L9.18937 7.75003Z"/></svg>';
-      pipetteBtn.title = "Pick color from video frame";
-      pipetteBtn.addEventListener("click", function () {
-        if (state.pipetteActive) deactivatePipette();
-        else activatePipette();
-      });
-      inputRow.appendChild(pipetteBtn);
-
-      var sampleBtn = el("button", "btn btn-small", "From Region");
-      sampleBtn.addEventListener("click", sampleColorFromRegion);
-      inputRow.appendChild(sampleBtn);
-
-      pickerGroup.appendChild(inputRow);
-
-      // Hidden inputs for gatherWorkflowParams() contract
-      var hiddenH = document.createElement("input");
-      hiddenH.type = "hidden"; hiddenH.id = "paramColorH"; hiddenH.value = "90";
-      var hiddenS = document.createElement("input");
-      hiddenS.type = "hidden"; hiddenS.id = "paramColorS"; hiddenS.value = "200";
-      var hiddenV = document.createElement("input");
-      hiddenV.type = "hidden"; hiddenV.id = "paramColorV"; hiddenV.value = "200";
-      pickerGroup.appendChild(hiddenH);
-      pickerGroup.appendChild(hiddenS);
-      pickerGroup.appendChild(hiddenV);
-
-      container.appendChild(pickerGroup);
-
-      // Palette canvas events
-      var paletteDragging = false;
-      var brightDragging = false;
-      function pickFromPalette(e) {
-        var rect = palette.getBoundingClientRect();
-        var x = clamp(e.clientX - rect.left, 0, rect.width);
-        var y = clamp(e.clientY - rect.top, 0, rect.height);
-        var h = Math.round((x / rect.width) * 180);
-        var s = Math.round((1 - y / rect.height) * 255);
-        var curV = parseFloat(qs("#paramColorV").value) || 0;
-        setTargetColor(h, s, curV);
-      }
-      palette.addEventListener("mousedown", function (e) {
-        e.preventDefault();
-        paletteDragging = true;
-        pickFromPalette(e);
-      });
-
-      // Brightness strip events
-      function pickFromBrightness(e) {
-        var rect = bright.getBoundingClientRect();
-        var x = clamp(e.clientX - rect.left, 0, rect.width);
-        var v = Math.round((x / rect.width) * 255);
-        var curH = parseFloat(qs("#paramColorH").value) || 0;
-        var curS = parseFloat(qs("#paramColorS").value) || 0;
-        setTargetColor(curH, curS, v);
-      }
-      bright.addEventListener("mousedown", function (e) {
-        e.preventDefault();
-        brightDragging = true;
-        pickFromBrightness(e);
-      });
-
-      // Remove previous document-level listeners before adding new ones
-      if (_paletteDocListeners) {
-        document.removeEventListener("mousemove", _paletteDocListeners.move);
-        document.removeEventListener("mouseup", _paletteDocListeners.up);
-      }
-      function onDocMove(e) {
-        if (paletteDragging) pickFromPalette(e);
-        if (brightDragging) pickFromBrightness(e);
-      }
-      function onDocUp() { paletteDragging = false; brightDragging = false; }
-      document.addEventListener("mousemove", onDocMove);
-      document.addEventListener("mouseup", onDocUp);
-      _paletteDocListeners = { move: onDocMove, up: onDocUp };
-
-      // Hex input event
-      hexInput.addEventListener("input", function () {
-        var rgb = hexToRgb(hexInput.value);
-        if (rgb) {
-          var hsv = rgbToHsv(rgb.r, rgb.g, rgb.b);
-          // Update hidden inputs and visuals without re-setting the hex field
-          var hEl = qs("#paramColorH"), sEl = qs("#paramColorS"), vEl = qs("#paramColorV");
-          if (hEl) hEl.value = hsv.h;
-          if (sEl) sEl.value = hsv.s;
-          if (vEl) vEl.value = hsv.v;
-          updateColorPreview();
-          renderColorPalette();
-          renderBrightnessStrip();
-        }
-      });
-
-      // Unified tolerance slider
-      var tolSlider = rangeInput("paramColorTol", 0, 100, 30);
-      addParamRow(container, "Tolerance", tolSlider, "paramColorTolVal");
-      tolSlider.addEventListener("input", function () {
-        renderColorPalette();
-      });
-      renderIntervalSlot("paramColorInterval", 0.5, 60, 1.0, 0.5);
-
-      // Initial render of palette and preview
-      renderColorPalette();
-      renderBrightnessStrip();
-      updateColorPreview();
-      var initRgb = hsvToRgb(90, 200, 200);
-      hexInput.value = rgbToHex(initRgb.r, initRgb.g, initRgb.b);
-    } else if (type === "change") {
+    if (type === "color") renderColorParams(container);
+    else if (type === "change") {
       addParamRow(container, "Threshold", rangeInput("paramChangeThresh", 0.01, 0.50, 0.03, 0.01), "paramChangeThreshVal");
       addParamRow(container, "Noise Thr.", rangeInput("paramChangeNoise", 0, 100, 30, 1), "paramChangeNoiseVal");
       renderIntervalSlot("paramChangeInterval", 0.5, 60, 1.0, 0.5);
-    } else if (type === "similarity") {
-      var refRow = el("div", "param-row");
-      var refLabel = el("span", "param-label", "Reference");
-      var refControl = el("div", "param-control");
-      var refBtn = el("button", "btn btn-small", "Capture Current Frame");
-      refBtn.addEventListener("click", function () {
-        state.referenceTimestamp = state.currentTimestamp;
-        renderWorkflowParams();
-        showToast("Reference frame captured at " + formatTimestamp(state.currentTimestamp));
-      });
-      refControl.appendChild(refBtn);
-      if (state.referenceTimestamp !== null) {
-        var refTs = el("span", "param-value", formatTimestamp(state.referenceTimestamp));
-        refControl.appendChild(refTs);
-      }
-      refRow.appendChild(refLabel);
-      refRow.appendChild(refControl);
-      container.appendChild(refRow);
-      addParamRow(container, "Threshold", rangeInput("paramSimThresh", 0.50, 1.00, 0.90, 0.01), "paramSimThreshVal");
-      renderIntervalSlot("paramSimInterval", 0.5, 60, 1.0, 0.5);
-    } else if (type === "text") {
-      addParamRow(container, "Search text", textInput("paramTextSearch", "Enter text to find..."));
-      addParamRow(container, "Fuzzy Thr.", rangeInput("paramTextFuzzy", 0.50, 1.00, 0.80, 0.01), "paramTextFuzzyVal");
-      renderIntervalSlot("paramTextInterval", 0.5, 60, 2.0, 0.5);
-      var langRow = el("div", "param-row");
-      langRow.appendChild(el("span", "param-label", "Language"));
-      var langControl = el("div", "param-control");
-      var langSel = document.createElement("select");
-      langSel.id = "paramTextLang";
-      [["en", "English"], ["es", "Spanish"], ["fr", "French"], ["de", "German"],
-       ["ja", "Japanese"], ["ko", "Korean"], ["zh", "Chinese"]].forEach(function (pair) {
-        var opt = el("option", null, pair[1]);
-        opt.value = pair[0];
-        langSel.appendChild(opt);
-      });
-      langControl.appendChild(langSel);
-      langRow.appendChild(langControl);
-      container.appendChild(langRow);
-    } else if (type === "numbers") {
-      // Operator selector
-      var opRow = el("div", "param-row");
-      opRow.appendChild(el("span", "param-label", "Operator"));
-      var opControl = el("div", "param-control");
-      var opSel = document.createElement("select");
-      opSel.id = "paramNumOperator";
-      [["gt", "Greater than (>)"], ["lt", "Less than (<)"], ["eq", "Equal to (=)"],
-       ["gte", "Greater or equal (\u2265)"], ["lte", "Less or equal (\u2264)"], ["range", "In range"]].forEach(function (pair) {
-        var opt = el("option", null, pair[1]);
-        opt.value = pair[0];
-        opSel.appendChild(opt);
-      });
-      opSel.addEventListener("change", function () {
-        var rangeRow = qs("#paramNumRangeRow");
-        var targetRow = qs("#paramNumTargetRow");
-        if (opSel.value === "range") {
-          if (rangeRow) rangeRow.style.display = "";
-          if (targetRow) targetRow.style.display = "none";
-        } else {
-          if (rangeRow) rangeRow.style.display = "none";
-          if (targetRow) targetRow.style.display = "";
-        }
-      });
-      opControl.appendChild(opSel);
-      opRow.appendChild(opControl);
-      container.appendChild(opRow);
-      // Target value (for non-range operators)
-      var targetRow = el("div", "param-row");
-      targetRow.id = "paramNumTargetRow";
-      targetRow.appendChild(el("span", "param-label", "Target value"));
-      var targetCtrl = el("div", "param-control");
-      targetCtrl.appendChild(numberInput("paramNumTarget", -999999, 999999, 100, 1));
-      targetRow.appendChild(targetCtrl);
-      container.appendChild(targetRow);
-      // Range min/max (hidden by default)
-      var numRangeRow = el("div", "param-row");
-      numRangeRow.id = "paramNumRangeRow";
-      numRangeRow.style.display = "none";
-      numRangeRow.appendChild(el("span", "param-label", "Range"));
-      var rangeCtrl = el("div", "param-control");
-      rangeCtrl.appendChild(numberInput("paramNumMin", -999999, 999999, 0, 1));
-      rangeCtrl.appendChild(el("span", "param-value", "\u2013"));
-      rangeCtrl.appendChild(numberInput("paramNumMax", -999999, 999999, 100, 1));
-      numRangeRow.appendChild(rangeCtrl);
-      container.appendChild(numRangeRow);
-      renderIntervalSlot("paramNumInterval", 0.5, 60, 2.0, 0.5);
-    } else if (type === "timelapse") {
-      addParamRow(container, "Speed", numberInput("paramTlSpeed", 2, 100, 10, 1));
-      addParamRow(container, "Sample every", numberInput("paramTlSampleInterval", 0, 60, 0, 0.5), "paramTlSampleIntervalVal");
-      var siHint = el("span", "param-hint", "seconds (0 = every frame)");
-      container.lastChild.querySelector(".param-control").appendChild(siHint);
-      var fmtRow = el("div", "param-row");
-      fmtRow.appendChild(el("span", "param-label", "Format"));
-      var fmtControl = el("div", "param-control");
-      var fmtSel = document.createElement("select");
-      fmtSel.id = "paramTlFormat";
-      [["mp4", "Video (.mp4)"], ["gif", "GIF (.gif)"]].forEach(function (pair) {
-        var opt = el("option", null, pair[1]);
-        opt.value = pair[0];
-        fmtSel.appendChild(opt);
-      });
-      fmtControl.appendChild(fmtSel);
-      fmtRow.appendChild(fmtControl);
-      container.appendChild(fmtRow);
-    } else if (type === "template") {
-      var tmplRefRow = el("div", "param-row");
-      tmplRefRow.appendChild(el("span", "param-label", "Template"));
-      var tmplRefCtrl = el("div", "param-control");
-      var tmplCapBtn = el("button", "btn btn-small", "Capture Region");
-      tmplCapBtn.addEventListener("click", function () {
-        state.referenceTimestamp = state.currentTimestamp;
-        state.uploadedTemplate = null;
-        renderWorkflowParams();
-        showToast("Template captured at " + formatTimestamp(state.currentTimestamp));
-      });
-      tmplRefCtrl.appendChild(tmplCapBtn);
-
-      // Upload PNG button
-      var tmplFileInput = document.createElement("input");
-      tmplFileInput.type = "file";
-      tmplFileInput.accept = "image/png";
-      tmplFileInput.style.display = "none";
-      tmplFileInput.addEventListener("change", function () {
-        var file = tmplFileInput.files[0];
-        if (!file) return;
-        var reader = new FileReader();
-        reader.onload = function (e) {
-          // Store base64 data (strip the data:image/png;base64, prefix)
-          var dataUrl = e.target.result;
-          var b64 = dataUrl.split(",")[1];
-          state.uploadedTemplate = { name: file.name, data: b64 };
-          state.referenceTimestamp = null;
-          renderWorkflowParams();
-          showToast("Template loaded: " + file.name);
-        };
-        reader.readAsDataURL(file);
-      });
-      var tmplUploadBtn = el("button", "btn btn-small", "Upload PNG");
-      tmplUploadBtn.addEventListener("click", function () { tmplFileInput.click(); });
-      tmplRefCtrl.appendChild(tmplUploadBtn);
-      tmplRefCtrl.appendChild(tmplFileInput);
-
-      // Status indicator
-      if (state.uploadedTemplate) {
-        var uploadInfo = el("span", "param-value template-upload-info");
-        var uploadThumb = document.createElement("img");
-        uploadThumb.src = "data:image/png;base64," + state.uploadedTemplate.data;
-        uploadThumb.alt = state.uploadedTemplate.name;
-        uploadInfo.appendChild(uploadThumb);
-        uploadInfo.appendChild(document.createTextNode(state.uploadedTemplate.name));
-        var clearBtn = el("button", "btn btn-small", "\u00d7");
-        clearBtn.addEventListener("click", function () {
-          state.uploadedTemplate = null;
-          renderWorkflowParams();
-        });
-        uploadInfo.appendChild(clearBtn);
-        tmplRefCtrl.appendChild(uploadInfo);
-      } else if (state.referenceTimestamp !== null) {
-        tmplRefCtrl.appendChild(el("span", "param-value", formatTimestamp(state.referenceTimestamp)));
-      }
-      tmplRefRow.appendChild(tmplRefCtrl);
-      container.appendChild(tmplRefRow);
-      addParamRow(container, "Threshold", rangeInput("paramTemplateThresh", 0.50, 1.00, 0.70, 0.01), "paramTemplateThreshVal");
-      renderIntervalSlot("paramTemplateInterval", 0.5, 60, 1.0, 0.5);
-    } else if (type === "flow") {
+    }
+    else if (type === "similarity") renderSimilarityParams(container);
+    else if (type === "text") renderTextParams(container);
+    else if (type === "numbers") renderNumbersParams(container);
+    else if (type === "timelapse") renderTimelapseParams(container);
+    else if (type === "template") renderTemplateParams(container);
+    else if (type === "flow") {
       addParamRow(container, "Magnitude", rangeInput("paramFlowMag", 0.5, 20.0, 2.0, 0.5), "paramFlowMagVal");
       renderIntervalSlot("paramFlowInterval", 0.5, 60, 1.0, 0.5);
-    } else if (type === "scene") {
-      var sceneList = el("div", "scene-reference-list");
-      sceneList.id = "sceneRefList";
-      state.sceneReferences.forEach(function (ref, i) {
-        if (ref.threshold === undefined) ref.threshold = 0.75;
-        var item = el("div", "scene-ref-item");
-        item.appendChild(el("span", "scene-ref-name", ref.name));
-        item.appendChild(el("span", "param-value", formatTimestamp(ref.timestamp)));
-        var threshSlider = document.createElement("input");
-        threshSlider.type = "range";
-        threshSlider.min = "0.50";
-        threshSlider.max = "1.00";
-        threshSlider.step = "0.01";
-        threshSlider.value = String(ref.threshold);
-        threshSlider.className = "scene-ref-thresh";
-        var threshVal = el("span", "param-value", String(ref.threshold));
-        threshSlider.addEventListener("input", (function (idx) {
-          return function () {
-            state.sceneReferences[idx].threshold = parseFloat(threshSlider.value);
-            threshVal.textContent = threshSlider.value;
-          };
-        })(i));
-        item.appendChild(threshSlider);
-        item.appendChild(threshVal);
-        var rmBtn = el("button", "btn btn-small", "\u00d7");
-        rmBtn.addEventListener("click", function () {
-          state.sceneReferences.splice(i, 1);
-          renderWorkflowParams();
-        });
-        item.appendChild(rmBtn);
-        sceneList.appendChild(item);
-      });
-      container.appendChild(sceneList);
-      var addScRow = el("div", "param-row");
-      addScRow.appendChild(el("span", "param-label", "Add Scene"));
-      var addScCtrl = el("div", "param-control");
-      var scNameInp = textInput("paramSceneName", "e.g. menu, gameplay");
-      addScCtrl.appendChild(scNameInp);
-      var scCapBtn = el("button", "btn btn-small", "Capture");
-      scCapBtn.addEventListener("click", function () {
-        var nameEl = qs("#paramSceneName");
-        var name = nameEl ? nameEl.value.trim() : "";
-        if (!name) { showToast("Enter a scene name"); return; }
-        state.sceneReferences.push({ name: name, timestamp: state.currentTimestamp, threshold: 0.75 });
-        renderWorkflowParams();
-        showToast("Scene '" + name + "' at " + formatTimestamp(state.currentTimestamp));
-      });
-      addScCtrl.appendChild(scCapBtn);
-      addScRow.appendChild(addScCtrl);
-      container.appendChild(addScRow);
-      renderIntervalSlot("paramSceneInterval", 0.5, 60, 1.0, 0.5);
-    } else if (type === "inactivity") {
+    }
+    else if (type === "scene") renderSceneParams(container);
+    else if (type === "inactivity") {
       addParamRow(container, "Sensitivity", rangeInput("paramInactThresh", 0, 30, 10, 1), "paramInactThreshVal");
       addParamRow(container, "Min duration (s)", numberInput("paramInactMinDur", 0.5, 60, 2.0, 0.5));
       renderIntervalSlot("paramInactInterval", 0.5, 60, 1.0, 0.5);
@@ -2999,7 +3003,6 @@
       addParamRow(container, "Detect first", dfCb);
     }
 
-    // Hide scan mode picker for timelapse (fast scan doesn't apply)
     var scanPicker = qs("#runScanModePicker");
     if (scanPicker) scanPicker.style.display = type === "timelapse" ? "none" : "";
     var scanBtn = scanPicker && scanPicker.querySelector(".scan-toggle-btn");

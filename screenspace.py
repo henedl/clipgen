@@ -2535,8 +2535,10 @@ class ScreenspaceWorker:
                         if self.on_progress_update:
                             try:
                                 self.on_progress_update()
-                            except Exception:
-                                pass
+                            except Exception as exc:
+                                utils.warning_print(
+                                    f"on_progress_update callback failed: {exc}"
+                                )
 
                     # 2. If paused, wait
                     if self._paused.is_set():
@@ -2556,16 +2558,20 @@ class ScreenspaceWorker:
                     priority, created_at, task_id = item
                     if task_id is _SENTINEL:
                         # Wait for active tasks to finish
-                        for f in active.values():
+                        for drain_tid, f in active.items():
                             try:
                                 f.result(timeout=10)
-                            except Exception:
-                                pass
+                            except Exception as exc:
+                                utils.debug_print(
+                                    f"Task {drain_tid} raised during shutdown: {exc}"
+                                )
                         if self.on_task_complete:
                             try:
                                 self.on_task_complete()
-                            except Exception:
-                                pass
+                            except Exception as exc:
+                                utils.warning_print(
+                                    f"on_task_complete callback failed during shutdown: {exc}"
+                                )
                         break
 
                     if self._paused.is_set():

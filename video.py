@@ -1362,7 +1362,8 @@ def _batch_extract_screenshots(
                 }
             )
         return artifacts if artifacts else None
-    except Exception:
+    except (OSError, ValueError, KeyError) as exc:
+        utils.debug_print(f"Batch screenshot extraction failed: {exc}")
         return None
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
@@ -1410,7 +1411,8 @@ def _parallel_extract_gifs(
                 completed += 1
                 try:
                     ok = future.result()
-                except Exception:
+                except (OSError, RuntimeError) as exc:
+                    utils.debug_print(f"GIF extraction task failed: {exc}")
                     ok = False
                 if ok:
                     artifacts.append(
@@ -1423,7 +1425,8 @@ def _parallel_extract_gifs(
                         }
                     )
                 utils.standard_print(f"  Captured {completed}/{total} at {ts_str}")
-    except Exception:
+    except (OSError, RuntimeError) as exc:
+        utils.debug_print(f"Parallel GIF extraction failed: {exc}")
         return None
 
     artifacts.sort(key=lambda a: a["timestamp"])
