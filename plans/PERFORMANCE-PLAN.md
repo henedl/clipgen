@@ -227,7 +227,7 @@ Speed of generating clips, screenshots, GIFs, and reels.
 
 **Trade-offs:** Complex filter_complex commands are harder to debug. The "generate once, reuse" approach is simpler and covers the common case where clips from the same video share a titlecard frame.
 
-### - [ ] 3C. Stream-copy reel detection improvements
+### - [x] 3C. Stream-copy reel detection improvements
 
 **Current:** Reel concatenation already uses the fast concat demuxer (stream copy) when all clips share the same codec/resolution (video.py:1115-1209), falling back to filter_complex re-encoding otherwise.
 
@@ -458,12 +458,13 @@ Additional opportunities identified in a fresh pass over the codebase (April 202
 | [x] | 13 | 1C — Optimistic UI in Studio | Low-Medium — better feel during generation |
 | [x] | 14 | 5B — Skip torch for typecheck — skipped (ty needs installed deps) | Low — job already ~25s, marginal gain |
 | [x] | 15 | 3B — Titlecard batching | Low — small per-clip overhead |
+| [x] | — | 3C — Stream-copy reel detection warnings | Low — diagnostic-only, no risk |
 | [ ] | 16 | 4C — Cache-busted static assets | Low — marginal for local tool |
 | [ ] | 17 | 7A — Hardware decode | Low — platform-specific, complex |
-| [ ] | 18 | **8.1** — Reuse `SheetContext` in `generate_list` / Studio | High — latency + Sheets quota |
-| [ ] | 19 | **8.2** — Studio batch `process_clips` (unlock 3A) | High — wall time multi-cell |
-| [ ] | 20 | **8.3** — Parallel reel segment ffmpeg | Medium — reel wall time |
+| [x] | 18 | **8.1** — Reuse `SheetContext` in `generate_list` / Studio | High — latency + Sheets quota |
+| [x] | 19 | **8.2** — Studio batch `process_clips` (unlock 3A) | High — wall time multi-cell |
+| [x] | 20 | **8.3** — Parallel reel segment ffmpeg | Medium — reel wall time |
 | deferred | 21 | **8.4** — Batch screenshot extraction (clip pipeline) — deferred (existing parallelism covers this) | Medium — many screens / same video |
-| [ ] | 22 | **8.5** — Highlights scoring pre-lowercase | Low — scales with artifacts |
-| [ ] | 23 | **8.6** — Manifest single-read (`_load_manifest_both`) | Low — eliminates duplicate file parse |
+| [x] | 22 | **8.5** — Highlights scoring pre-lowercase | Low — scales with artifacts |
+| [x] | 23 | **8.6** — Manifest single-read (`_load_manifest_both`) | Low — eliminates duplicate file parse |
 | [ ] | 24 | **1E (remainder)** — Insights Builder DOM batching / virtual scroll | Low–Medium — perceived smoothness |
