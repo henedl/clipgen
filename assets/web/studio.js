@@ -83,40 +83,6 @@
 
   // ---- Helpers ----
 
-  function qs(sel) {
-    return document.querySelector(sel);
-  }
-  function qsa(sel) {
-    return document.querySelectorAll(sel);
-  }
-
-  function el(tag, cls, text) {
-    var e = document.createElement(tag);
-    if (cls) e.className = cls;
-    if (text !== undefined) e.textContent = text;
-    return e;
-  }
-
-  function truncate(str, max) {
-    if (!str) return "";
-    return str.length > max ? str.slice(0, max) + "\u2026" : str;
-  }
-
-  function severityClass(raw) {
-    if (!raw) return "";
-    var k = raw.trim().toLowerCase();
-    var map = {
-      critical: "sev-critical",
-      high: "sev-high",
-      medium: "sev-medium",
-      low: "sev-low",
-      "n/a": "sev-na",
-      positive: "sev-positive",
-      "very positive": "sev-very-positive",
-    };
-    return map[k] || "sev-unknown";
-  }
-
   function cellKey(participant, rowNum) {
     return participant + "." + rowNum;
   }
@@ -3323,19 +3289,7 @@
 
   // ---- Screenspace Intake ----
 
-  var INTAKE_DETECTOR_COLORS = {
-    multitool: "#2563eb",
-    color: "#8b5cf6",
-    change: "#f97316",
-    similarity: "#0ea5e9",
-    text: "#10b981",
-    numbers: "#eab308",
-    timelapse: "#ec4899",
-    template: "#f43f5e",
-    flow: "#6366f1",
-    scene: "#14b8a6",
-    inactivity: "#78716c",
-  };
+  var INTAKE_DETECTOR_COLORS = DETECTOR_COLORS;
 
   var INTAKE_DETECTOR_ICON_FILES = {
     multitool: "link",
@@ -3425,17 +3379,17 @@
       });
   }
 
-  var SS_BADGE_SVG = '<svg viewBox="0 0 16 16" fill="currentColor"><path d="M3.5 2C2.67157 2 2 2.67157 2 3.5V5.5C2 6.32843 2.67157 7 3.5 7H5.5C6.32843 7 7 6.32843 7 5.5V3.5C7 2.67157 6.32843 2 5.5 2H3.5Z"/><path d="M3.5 9C2.67157 9 2 9.67157 2 10.5V12.5C2 13.3284 2.67157 14 3.5 14H5.5C6.32843 14 7 13.3284 7 12.5V10.5C7 9.67157 6.32843 9 5.5 9H3.5Z"/><path d="M9 3.5C9 2.67157 9.67157 2 10.5 2H12.5C13.3284 2 14 2.67157 14 3.5V5.5C14 6.32843 13.3284 7 12.5 7H10.5C9.67157 7 9 6.32843 9 5.5V3.5Z"/><path d="M10.5 9C9.67157 9 9 9.67157 9 10.5V12.5C9 13.3284 9.67157 14 10.5 14H12.5C13.3284 14 14 13.3284 14 12.5V10.5C14 9.67157 13.3284 9 12.5 9H10.5Z"/></svg>';
-  var TR_BADGE_SVG = '<svg viewBox="0 0 16 16" fill="currentColor"><path fill-rule="evenodd" clip-rule="evenodd" d="M1 8.74053C1 9.72321 1.71341 10.5653 2.68906 10.6827C3.5937 10.7915 4.50678 10.8729 5.42746 10.926C5.78969 10.9469 6.11506 11.1572 6.27733 11.4817L7.32918 13.5854C7.45622 13.8395 7.71592 14 8 14C8.28408 14 8.54378 13.8395 8.67082 13.5854L9.72265 11.4817C9.88492 11.1572 10.2103 10.9469 10.5725 10.9261C11.4932 10.873 12.4063 10.7916 13.3109 10.6828C14.2866 10.5654 15 9.72332 15 8.74062V4.25938C15 3.27668 14.2866 2.43458 13.3109 2.3172C11.57 2.10777 9.79777 2 8.00039 2C6.20273 2 4.43025 2.10781 2.68906 2.3173C1.71341 2.43469 1 3.27679 1 4.25947V8.74053ZM4 5.25C4 4.83579 4.33579 4.5 4.75 4.5H11.25C11.6642 4.5 12 4.83579 12 5.25C12 5.66421 11.6642 6 11.25 6H4.75C4.33579 6 4 5.66421 4 5.25ZM4.75 7C4.33579 7 4 7.33579 4 7.75C4 8.16421 4.33579 8.5 4.75 8.5H7.25C7.66421 8.5 8 8.16421 8 7.75C8 7.33579 7.66421 7 7.25 7H4.75Z"/></svg>';
-  var SHEET_BADGE_SVG = '<svg viewBox="0 0 16 16" fill="currentColor"><path fill-rule="evenodd" clip-rule="evenodd" d="M15 11C15 12.1046 14.1046 13 13 13H3C1.89543 13 1 12.1046 1 11V5C1 3.89543 1.89543 3 3 3H13C14.1046 3 15 3.89543 15 5V11ZM7.25 7.5C7.25 7.22386 7.02614 7 6.75 7H3C2.72386 7 2.5 7.22386 2.5 7.5V8C2.5 8.27614 2.72386 8.5 3 8.5H6.75C7.02614 8.5 7.25 8.27614 7.25 8V7.5ZM8.75 10.5C8.75 10.2239 8.97386 10 9.25 10H13C13.2761 10 13.5 10.2239 13.5 10.5V11C13.5 11.2761 13.2761 11.5 13 11.5H9.25C8.97386 11.5 8.75 11.2761 8.75 11V10.5ZM13.5 8V7.5C13.5 7.22386 13.2761 7 13 7H9.25C8.97386 7 8.75 7.22386 8.75 7.5V8C8.75 8.27614 8.97386 8.5 9.25 8.5H13C13.2761 8.5 13.5 8.27614 13.5 8ZM6.75 11.5C7.02614 11.5 7.25 11.2761 7.25 11V10.5C7.25 10.2239 7.02614 10 6.75 10H3C2.72386 10 2.5 10.2239 2.5 10.5V11C2.5 11.2761 2.72386 11.5 3 11.5H6.75Z"/></svg>';
+  var XREF_ICON_BASE = "../screenspace/icons/";
 
-  var XREF_BADGE_COLOR = {
-    screenspace: "rgba(52, 152, 219, 0.85)",
-    transcript: "rgba(16, 163, 74, 0.85)",
-    sheet: "rgba(234, 179, 8, 0.85)",
-  };
+  function xrefBadgeIcon(iconName) {
+    var span = el("span", "xref-badge-icon");
+    var url = 'url("' + XREF_ICON_BASE + iconName + '.svg")';
+    span.style.maskImage = url;
+    span.style.webkitMaskImage = url;
+    return span;
+  }
 
-  // selfBadge: optional { svg, color, title } to prepend as the "self" source badge
+  // selfBadge: optional { icon, color, title } to prepend as the "self" source badge
   function buildXrefBadges(xref, selfSource, selfBadge) {
     var badges = [];
     if (selfBadge) badges.push(selfBadge);
@@ -3446,7 +3400,7 @@
         var et = xref.screenspaceEvents[i].event_type || xref.screenspaceEvents[i].detector;
         if (!seen[et]) { seen[et] = true; types.push(et); }
       }
-      badges.push({ svg: SS_BADGE_SVG, color: XREF_BADGE_COLOR.screenspace, title: types.join(", ") });
+      badges.push({ icon: XREF_BADGES.screenspace.icon, color: XREF_BADGES.screenspace.color, title: types.join(", ") });
     }
     if (selfSource !== "transcript" && xref.transcriptSnippets.length > 0) {
       var trTexts = [];
@@ -3454,14 +3408,14 @@
         var t = xref.transcriptSnippets[j].text;
         trTexts.push(t.length > 80 ? t.substring(0, 80) + "\u2026" : t);
       }
-      badges.push({ svg: TR_BADGE_SVG, color: XREF_BADGE_COLOR.transcript, title: trTexts.join("\n") });
+      badges.push({ icon: XREF_BADGES.transcript.icon, color: XREF_BADGES.transcript.color, title: trTexts.join("\n") });
     }
     if (xref.sheetObservations.length > 0) {
       var obsTexts = [];
       for (var k = 0; k < xref.sheetObservations.length && k < 3; k++) {
         obsTexts.push(xref.sheetObservations[k].observation);
       }
-      badges.push({ svg: SHEET_BADGE_SVG, color: XREF_BADGE_COLOR.sheet, title: obsTexts.join("\n") });
+      badges.push({ icon: XREF_BADGES.sheet.icon, color: XREF_BADGES.sheet.color, title: obsTexts.join("\n") });
     }
     if (badges.length === 0) return null;
     var container = el("span", "xref-badge-stack");
@@ -3469,7 +3423,7 @@
       var badge = el("span", "xref-badge");
       badge.style.background = badges[b].color;
       badge.style.zIndex = badges.length - b;
-      badge.innerHTML = badges[b].svg;
+      badge.appendChild(xrefBadgeIcon(badges[b].icon));
       badge.title = badges[b].title;
       container.appendChild(badge);
     }
@@ -3688,7 +3642,7 @@
 
       // Source + cross-reference badges (SS self-badge leads the stack)
       var xref = findOverlappingData(c.participant, c.start, c.end);
-      var ssSelf = { svg: SS_BADGE_SVG, color: XREF_BADGE_COLOR.screenspace, title: c.event_type || "Screenspace" };
+      var ssSelf = { icon: XREF_BADGES.screenspace.icon, color: XREF_BADGES.screenspace.color, title: c.event_type || "Screenspace" };
       var badgeStack = buildXrefBadges(xref, "screenspace", ssSelf);
       if (badgeStack) thumb.appendChild(badgeStack);
       if (xref.transcriptSnippets.length > 0) {
@@ -4132,7 +4086,7 @@
 
       // Source + cross-reference badges (TR self-badge leads the stack)
       var xref = findOverlappingData(c.participant, c.start, c.end);
-      var trSelf = { svg: TR_BADGE_SVG, color: XREF_BADGE_COLOR.transcript, title: c.label || c.category || "Transcript" };
+      var trSelf = { icon: XREF_BADGES.transcript.icon, color: XREF_BADGES.transcript.color, title: c.label || c.category || "Transcript" };
       var badgeStack = buildXrefBadges(xref, "transcript", trSelf);
       if (badgeStack) thumb.appendChild(badgeStack);
 

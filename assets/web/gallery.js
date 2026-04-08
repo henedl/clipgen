@@ -6,20 +6,6 @@
   var state = { artifacts: [], lightboxIndex: -1 };
   var THEME_STORAGE_KEY = "clipgen-gallery-theme";
 
-  function qs(sel) { return document.querySelector(sel); }
-
-  function formatTime(sec) {
-    if (sec == null || isNaN(sec)) return "--:--";
-    sec = Math.round(sec);
-    var h = Math.floor(sec / 3600);
-    var m = Math.floor((sec % 3600) / 60);
-    var s = sec % 60;
-    if (h > 0) return h + ":" + pad2(m) + ":" + pad2(s);
-    return m + ":" + pad2(s);
-  }
-
-  function pad2(n) { return n < 10 ? "0" + n : "" + n; }
-
   // ---- Theme ----
 
   function initThemeToggle() {

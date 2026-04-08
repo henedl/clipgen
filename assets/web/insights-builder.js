@@ -47,46 +47,6 @@
 
   // ---- Helpers ----
 
-  function qs(sel) {
-    return document.querySelector(sel);
-  }
-  function qsa(sel) {
-    return document.querySelectorAll(sel);
-  }
-  function el(tag, cls, text) {
-    var e = document.createElement(tag);
-    if (cls) e.className = cls;
-    if (text !== undefined) e.textContent = text;
-    return e;
-  }
-  function truncate(str, max) {
-    if (!str) return "";
-    return str.length > max ? str.slice(0, max) + "\u2026" : str;
-  }
-
-  function severityClass(raw) {
-    if (!raw) return "";
-    var k = raw.trim().toLowerCase();
-    var map = {
-      critical: "sev-critical",
-      high: "sev-high",
-      medium: "sev-medium",
-      low: "sev-low",
-      "n/a": "sev-na",
-      positive: "sev-positive",
-      "very positive": "sev-very-positive",
-    };
-    return map[k] || "sev-unknown";
-  }
-
-  function formatTime(seconds) {
-    if (seconds == null) return "";
-    var s = Math.round(seconds);
-    var m = Math.floor(s / 60);
-    var sec = s % 60;
-    return m + ":" + (sec < 10 ? "0" : "") + sec;
-  }
-
   function countBucketArtifacts(insight) {
     var c = (insight.causes || {}).artifacts || [];
     var b = (insight.behaviors || {}).artifacts || [];

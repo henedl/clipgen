@@ -44,21 +44,7 @@
 
   // ---- Helpers ----
 
-  function formatTime(sec) {
-    if (sec == null || isNaN(sec)) return "--:--";
-    sec = Math.round(sec);
-    var h = Math.floor(sec / 3600);
-    var m = Math.floor((sec % 3600) / 60);
-    var s = sec % 60;
-    if (h > 0) {
-      return h + ":" + pad2(m) + ":" + pad2(s);
-    }
-    return m + ":" + pad2(s);
-  }
-
-  function pad2(n) {
-    return n < 10 ? "0" + n : "" + n;
-  }
+  var severityClassForLabel = severityClass;
 
   var SEVERITY_SORT = {
     "sev-critical": -4,
@@ -70,21 +56,6 @@
     "sev-very-positive": 2,
     "sev-unknown": 998,
   };
-
-  function severityClassForLabel(raw) {
-    if (!raw || !String(raw).trim()) return "";
-    var k = String(raw).trim().toLowerCase();
-    var map = {
-      critical: "sev-critical",
-      high: "sev-high",
-      medium: "sev-medium",
-      low: "sev-low",
-      "n/a": "sev-na",
-      positive: "sev-positive",
-      "very positive": "sev-very-positive",
-    };
-    return map[k] || "sev-unknown";
-  }
 
   function markerTypeClass(type) {
     var t = type || "clip";
@@ -133,21 +104,6 @@
     pillEl.classList.remove("hidden");
     pillEl.textContent = sev;
     pillEl.className = "detail-badge detail-severity " + severityClassForLabel(sev);
-  }
-
-  function qs(sel) {
-    return document.querySelector(sel);
-  }
-
-  function qsa(sel) {
-    return document.querySelectorAll(sel);
-  }
-
-  function el(tag, cls, text) {
-    var e = document.createElement(tag);
-    if (cls) e.className = cls;
-    if (text !== undefined) e.textContent = text;
-    return e;
   }
 
   // ---- Clip thumbnails ----
@@ -2020,15 +1976,7 @@
 
   // ---- Screenspace track ----
 
-  var SS_DETECTOR_COLORS = (function () {
-    var types = ["multitool", "color", "change", "similarity", "text", "numbers", "template", "flow", "scene", "inactivity"];
-    var style = getComputedStyle(document.documentElement);
-    var map = {};
-    types.forEach(function (t) {
-      map[t] = style.getPropertyValue("--color-task-" + t).trim() || "#888";
-    });
-    return map;
-  })();
+  var SS_DETECTOR_COLORS = DETECTOR_COLORS;
 
   var SS_DETECTOR_ICON_PATHS = {
     multitool: { viewBox: "0 0 16 16", paths: [

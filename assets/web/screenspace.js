@@ -7,15 +7,7 @@
   var POLL_INTERVAL = 3000;
   var FRAME_STEP = 1.0;
 
-  var TASK_COLORS = (function () {
-    var types = ["multitool", "color", "change", "similarity", "text", "numbers", "timelapse", "template", "flow", "scene", "inactivity"];
-    var style = getComputedStyle(document.documentElement);
-    var map = {};
-    types.forEach(function (t) {
-      map[t] = style.getPropertyValue("--color-task-" + t).trim() || "#888";
-    });
-    return map;
-  })();
+  var TASK_COLORS = DETECTOR_COLORS;
 
   var SS_TYPE_ICON_PATHS = {
     multitool: { viewBox: "0 0 16 16", paths: [
@@ -161,15 +153,6 @@
 
   // ---- Helpers ----
 
-  function qs(sel) { return document.querySelector(sel); }
-  function qsa(sel) { return document.querySelectorAll(sel); }
-  function el(tag, cls, text) {
-    var e = document.createElement(tag);
-    if (cls) e.className = cls;
-    if (text !== undefined) e.textContent = text;
-    return e;
-  }
-
   function formatDuration(secs) {
     secs = Math.round(secs);
     if (secs >= 3600) {
@@ -233,44 +216,6 @@
 
   function taskTypeColor(type) {
     return TASK_COLORS[type] || "#888";
-  }
-
-  // ---- API helpers ----
-
-  function apiGet(path) {
-    return fetch(path).then(function (r) {
-      if (!r.ok) throw new Error("Server error " + r.status);
-      return r.json();
-    });
-  }
-
-  function apiPost(path, body) {
-    return fetch(path, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    }).then(function (r) {
-      if (!r.ok) throw new Error("Server error " + r.status);
-      return r.json();
-    });
-  }
-
-  function apiDelete(path) {
-    return fetch(path, { method: "DELETE" }).then(function (r) {
-      if (!r.ok) throw new Error("Server error " + r.status);
-      return r.json();
-    });
-  }
-
-  function apiPut(path, body) {
-    return fetch(path, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    }).then(function (r) {
-      if (!r.ok) throw new Error("Server error " + r.status);
-      return r.json();
-    });
   }
 
   function frameUrl(pid, ts) {

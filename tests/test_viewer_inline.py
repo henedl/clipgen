@@ -21,6 +21,7 @@ def test_generate_timeline_viewer_inlines_css_and_js(tmp_path, monkeypatch):
     # The output should inline CSS/JS instead of linking external files.
     assert '<link rel="stylesheet" href="viewer.css">' not in html
     assert '<script src="viewer.js" defer></script>' not in html
+    assert '<script src="utils.js" defer></script>' not in html
 
     # Expect a style block that contains a recognizable piece of the source CSS.
     assert "<style>" in html
@@ -32,3 +33,6 @@ def test_generate_timeline_viewer_inlines_css_and_js(tmp_path, monkeypatch):
         "clipgen Timeline Viewer \u2013 viewer.js" in html
         or "window.CLIPGEN_DATA" in html
     )
+
+    # Shared utilities from utils.js should be inlined into the script block.
+    assert "clipgen shared utilities" in html or "var severityClass" in html
