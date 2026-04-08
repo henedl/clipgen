@@ -1118,3 +1118,13 @@ def test_save_studio_settings_non_defaults_only(monkeypatch, tmp_path):
     )
     assert result is None
     assert not settings_file.is_file()
+
+
+def test_api_reel_cancel_endpoint(client):
+    """POST /api/reel/cancel should set the cancel event and return ok."""
+    server._reel_cancel_event.clear()
+    resp = client.post("/studio/api/reel/cancel")
+    data = resp.get_json()
+    assert resp.status_code == 200
+    assert data["ok"] is True
+    assert server._reel_cancel_event.is_set()

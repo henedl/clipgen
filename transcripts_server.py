@@ -22,6 +22,7 @@ API endpoints (all under /transcripts/):
   GET  /api/search?q=<query>                      - keyword search across all participants
   POST /api/transcribe                            - enqueue participant(s) for transcription
   GET  /api/transcribe/status                     - poll transcription task status
+  DELETE /api/transcribe/<task_id>                 - cancel or dismiss a transcription task
 """
 
 import threading
@@ -647,6 +648,25 @@ def api_transcribe_status() -> FlaskResponse:
             "worker_alive": _worker.is_alive if _worker else False,
         }
     )
+
+
+@transcripts_bp.route("/api/transcribe/<task_id>", methods=["DELETE"])
+def api_transcribe_cancel(task_id: str) -> FlaskResponse:
+    """Cancel or dismiss a transcription task. ?dismiss=true fully removes it."""
+    if not _worker:
+        return jsonify({"ok": False, "error": "Worker not initialized"}), 500
+
+    if request.args.get("dismiss") == "true":
+        if not _worker.remove_task(task_id):
+            return jsonify({"ok": False, "error": "Task not found"}), 404
+        _persist_manifest()
+        return jsonify({"ok": True})
+
+    if _worker.cancel(task_id):
+        _persist_manifest()
+        return jsonify({"ok": True})
+
+    return jsonify({"ok": False, "error": "Task not found or already finished"}), 400
 
 
 # ---- Manifest persistence ----

@@ -14,6 +14,7 @@ Studio API endpoints (all under /studio/):
   POST /api/highlights-preview – preview highlights reel selection without generating
   POST /api/reel               – build a reel from specified cells
   POST /api/reel-direct        – build a reel from explicit clip paths
+  POST /api/reel/cancel        – cancel an in-progress reel build
   POST /api/viewer             – generate timeline viewer from session artifacts
   POST /api/timeline-viewer    – batch-export all clips and generate timeline viewer
   POST /api/gallery            – generate gallery from a video file
@@ -32,6 +33,7 @@ import hashlib
 import json
 import os
 import sys
+import threading
 import webbrowser
 from contextlib import contextmanager
 from pathlib import Path
@@ -64,6 +66,7 @@ _sheet_context: spreadsheet.SheetContext | None = None
 _generated_artifacts: list[dict[str, Any]] = []
 _generated_reels: list[dict[str, Any]] = []
 _thumbnail_cache: dict[tuple, bytes] = {}
+_reel_cancel_event = threading.Event()
 
 # Snapshot config defaults before any settings file is loaded.
 _settings_defaults: dict[str, Any] = {
@@ -740,7 +743,19 @@ def api_reel() -> FlaskResponse:
                             }
                         )
 
-            generated, reel_records = pipeline.process_reel(clips)
+            _reel_cancel_event.clear()
+            cancel_flag = _reel_cancel_event.is_set
+            generated, reel_records = pipeline.process_reel(
+                clips, cancel_flag=cancel_flag
+            )
+            if _reel_cancel_event.is_set():
+                return jsonify(
+                    {
+                        "ok": False,
+                        "error": "Reel generation cancelled",
+                        "cancelled": True,
+                    }
+                )
             _generated_reels.extend(reel_records)
             _save_manifest_quiet()
             return jsonify({"ok": True, "generated": generated, "reels": reel_records})
@@ -1173,9 +1188,14 @@ def api_reel_direct() -> FlaskResponse:
     clip_paths: list[str] = []
     temp_clips: list[str] = []
 
+    _reel_cancel_event.clear()
+
     with _override_config(**overrides):
         try:
             for seg in segments:
+                if _reel_cancel_event.is_set():
+                    break
+
                 participant = seg.get("participant", "")
                 start = float(seg.get("start", 0))
                 end = float(seg.get("end", 0))
@@ -1202,6 +1222,15 @@ def api_reel_direct() -> FlaskResponse:
                 )
                 if ok:
                     clip_paths.append(tmp_path)
+
+            if _reel_cancel_event.is_set():
+                return jsonify(
+                    {
+                        "ok": False,
+                        "error": "Reel generation cancelled",
+                        "cancelled": True,
+                    }
+                )
 
             if not clip_paths:
                 return (
@@ -1237,6 +1266,13 @@ def api_reel_direct() -> FlaskResponse:
                     Path(tmp).unlink(missing_ok=True)
                 except OSError:
                     pass
+
+
+@studio_bp.route("/api/reel/cancel", methods=["POST"])
+def api_reel_cancel() -> FlaskResponse:
+    """Signal cancellation for the in-progress reel build."""
+    _reel_cancel_event.set()
+    return jsonify({"ok": True})
 
 
 # ---- State initialization ----

@@ -563,9 +563,42 @@ class TestTranscriptWorker:
         assert t is not None
         assert t["status"] == "cancelled"
 
+    def test_cancel_running_task(self):
+        worker = transcripts.TranscriptWorker()
+        task = transcripts.create_transcript_task("P01", "/v.mp4")
+        worker.enqueue(task)
+        # Simulate the worker picking up the task
+        with worker._lock:
+            worker._tasks[task["id"]]["status"] = "running"
+        assert worker.cancel(task["id"]) is True
+        t = worker.get_task(task["id"])
+        assert t is not None
+        assert t["_cancelled"] is True
+
     def test_cancel_nonexistent(self):
         worker = transcripts.TranscriptWorker()
         assert worker.cancel("nonexistent") is False
+
+    def test_remove_task(self):
+        worker = transcripts.TranscriptWorker()
+        task = transcripts.create_transcript_task("P01", "/v.mp4")
+        worker.enqueue(task)
+        assert worker.remove_task(task["id"]) is True
+        assert worker.get_task(task["id"]) is None
+
+    def test_remove_running_task_sets_cancelled(self):
+        worker = transcripts.TranscriptWorker()
+        task = transcripts.create_transcript_task("P01", "/v.mp4")
+        worker.enqueue(task)
+        with worker._lock:
+            worker._tasks[task["id"]]["status"] = "running"
+        assert worker.remove_task(task["id"]) is True
+        # Task is removed, but the _cancelled flag was set before removal
+        assert worker.get_task(task["id"]) is None
+
+    def test_remove_nonexistent(self):
+        worker = transcripts.TranscriptWorker()
+        assert worker.remove_task("nonexistent") is False
 
     def test_is_alive_before_start(self):
         worker = transcripts.TranscriptWorker()

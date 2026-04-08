@@ -1344,6 +1344,15 @@ html[data-theme="dark"] .queue-card-error .queue-card-thumb {
   font-size: var(--text-xs);
 }
 
+.btn-cancel {
+  color: var(--sev-critical);
+  border-color: var(--sev-critical);
+}
+
+.btn-cancel:hover {
+  background: rgba(220, 38, 38, 0.1);
+}
+
 .btn-icon svg {
   flex-shrink: 0;
 }

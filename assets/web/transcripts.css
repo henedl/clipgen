@@ -737,6 +737,28 @@ body {
   color: var(--sev-critical);
 }
 
+.queue-item-status.status-cancelled {
+  color: var(--color-text-dim);
+}
+
+.queue-item-cancel {
+  background: none;
+  border: none;
+  color: var(--color-text-dim);
+  cursor: pointer;
+  padding: 0.1rem 0.3rem;
+  border-radius: var(--radius-sm);
+  transition: background var(--duration-fast), color var(--duration-fast);
+  font-size: var(--text-sm);
+  line-height: 1;
+  margin-left: auto;
+}
+
+.queue-item-cancel:hover {
+  background: rgba(220, 38, 38, 0.1);
+  color: var(--sev-critical);
+}
+
 .queue-progress {
   height: 4px;
   background: var(--color-surface-alt);

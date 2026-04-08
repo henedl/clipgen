@@ -268,6 +268,7 @@ def _run_clip_pipeline(
     show_fallback_counter: bool = False,
     secondary_task_label: str | None = None,
     parallel: bool = False,
+    cancel_flag: Callable[[], bool] | None = None,
 ) -> tuple[list[Any], set[str]]:
     """Run shared clip-processing pipeline and return per-clip results.
 
@@ -303,6 +304,10 @@ def _run_clip_pipeline(
                         for idx, clip in enumerate(clips_list)
                     }
                     for future in concurrent.futures.as_completed(future_to_idx):
+                        if cancel_flag and cancel_flag():
+                            for f in future_to_idx:
+                                f.cancel()
+                            break
                         idx = future_to_idx[future]
                         try:
                             results[idx] = future.result()
@@ -326,6 +331,10 @@ def _run_clip_pipeline(
                     for idx, clip in enumerate(clips_list)
                 }
                 for future in concurrent.futures.as_completed(future_to_idx):
+                    if cancel_flag and cancel_flag():
+                        for f in future_to_idx:
+                            f.cancel()
+                        break
                     idx = future_to_idx[future]
                     try:
                         results[idx] = future.result()
@@ -351,6 +360,8 @@ def _run_clip_pipeline(
                         secondary_task_label, total=total_clips
                     )
                 for clip in clips_list:
+                    if cancel_flag and cancel_flag():
+                        break
                     desc_preview = (clip.get("desc") or "")[
                         : config.PROGRESS_DESCRIPTION_LENGTH
                     ]
@@ -364,6 +375,8 @@ def _run_clip_pipeline(
             _active_secondary_task = None
         else:
             for index, clip in enumerate(clips_list, start=1):
+                if cancel_flag and cancel_flag():
+                    break
                 if (
                     show_fallback_counter
                     and getattr(config, "VERBOSITY", config.STANDARD) >= config.VERBOSE
@@ -869,6 +882,7 @@ def _build_reel_transcript(
 def process_reel(
     clips_list: list[ClipRecord],
     output_file: str | None = None,
+    cancel_flag: Callable[[], bool] | None = None,
 ) -> tuple[int, list[dict[str, Any]]]:
     """Process clips for reel mode: generate individual clips, concatenate into one video, clean up.
 
@@ -930,7 +944,22 @@ def process_reel(
         task_label="Generating reel clips",
         per_clip_fn=process_reel_clip,
         parallel=True,
+        cancel_flag=cancel_flag,
     )
+
+    # If cancelled, clean up any partial clip files and bail out
+    if cancel_flag and cancel_flag():
+        for item in all_results:
+            if item is None:
+                continue
+            segment_paths, _ = item
+            for entry in segment_paths:
+                try:
+                    Path(entry[0]).unlink(missing_ok=True)
+                except OSError:
+                    pass
+        return (0, [])
+
     # Assemble ordered paths and components from per-clip results
     components: list[dict[str, Any]] = []
     clip_paths = []

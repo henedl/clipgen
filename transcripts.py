@@ -603,6 +603,10 @@ TASK_STATUS_CANCELLED = "cancelled"
 _TRANSCRIPT_SENTINEL = object()
 
 
+class _TranscriptionCancelled(Exception):
+    """Raised inside the on_segment callback to abort a running transcription."""
+
+
 def create_transcript_task(participant: str, video_path: str) -> dict[str, Any]:
     """Create a new transcription task dict ready to enqueue."""
     return {
@@ -616,6 +620,7 @@ def create_transcript_task(participant: str, video_path: str) -> dict[str, Any]:
         "error": None,
         "created_at": datetime.now(timezone.utc).isoformat(),
         "completed_at": None,
+        "_cancelled": False,
     }
 
 
@@ -663,13 +668,29 @@ class TranscriptWorker:
         return task_id
 
     def cancel(self, task_id: str) -> bool:
-        """Cancel a queued task. Returns True if cancelled."""
+        """Cancel a queued or running task. Returns True if cancelled."""
         with self._lock:
             task = self._tasks.get(task_id)
-            if task and task["status"] == TASK_STATUS_QUEUED:
+            if task is None:
+                return False
+            if task["status"] in (TASK_STATUS_QUEUED, TASK_STATUS_CANCELLED):
                 task["status"] = TASK_STATUS_CANCELLED
                 return True
+            if task["status"] == TASK_STATUS_RUNNING:
+                task["_cancelled"] = True
+                return True
         return False
+
+    def remove_task(self, task_id: str) -> bool:
+        """Cancel (if active) and fully remove a task."""
+        with self._lock:
+            task = self._tasks.get(task_id)
+            if task is None:
+                return False
+            if task["status"] == TASK_STATUS_RUNNING:
+                task["_cancelled"] = True
+            self._tasks.pop(task_id, None)
+            return True
 
     def get_task(self, task_id: str) -> dict[str, Any] | None:
         """Return a task dict by ID (thread-safe copy)."""
@@ -732,6 +753,8 @@ class TranscriptWorker:
 
         def _on_seg(end_time: float, segment: TranscriptSegment) -> None:
             with self._lock:
+                if task.get("_cancelled"):
+                    raise _TranscriptionCancelled
                 if duration > 0:
                     task["progress"] = min(end_time / duration, 0.99)
                 task["partial_segments"].append(segment)
@@ -761,6 +784,12 @@ class TranscriptWorker:
                     "source_file": result["source_file"],
                     "transcribed_at": datetime.now(timezone.utc).isoformat(),
                 }
+                task["completed_at"] = datetime.now(timezone.utc).isoformat()
+
+        except _TranscriptionCancelled:
+            with self._lock:
+                task["status"] = TASK_STATUS_CANCELLED
+                task["partial_segments"] = []
                 task["completed_at"] = datetime.now(timezone.utc).isoformat()
 
         except Exception as exc:

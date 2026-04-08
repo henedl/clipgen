@@ -1183,6 +1183,7 @@
     var statusClass = "";
     var progress = 0;
     var showProgress = false;
+    var taskId = null;
 
     if (p.has_transcript && (!task || task.status === "completed")) {
       status = "completed";
@@ -1190,6 +1191,7 @@
       progress = 100;
     } else if (task) {
       status = task.status;
+      taskId = task.id;
       if (task.status === "running") {
         statusClass = "status-running";
         progress = Math.round(task.progress * 100);
@@ -1199,12 +1201,14 @@
       } else if (task.status === "failed") {
         statusClass = "status-failed";
         status = "failed";
+      } else if (task.status === "cancelled") {
+        statusClass = "status-cancelled";
       } else if (task.status === "completed") {
         statusClass = "status-completed";
         progress = 100;
       }
     }
-    return { status: status, statusClass: statusClass, progress: progress, showProgress: showProgress };
+    return { status: status, statusClass: statusClass, progress: progress, showProgress: showProgress, taskId: taskId };
   }
 
   function renderQueue() {
@@ -1251,6 +1255,9 @@
       html += '<div class="queue-item-header">';
       html += '<span class="queue-item-id">' + escapeHtml(p.id) + '</span>';
       html += '<span class="queue-item-status ' + s.statusClass + '">' + s.status + (s.showProgress ? " " + s.progress + "%" : "") + '</span>';
+      if (s.taskId && (s.status === "running" || s.status === "queued")) {
+        html += '<button class="queue-item-cancel" data-cancel-task="' + escapeHtml(s.taskId) + '" title="Cancel">&times;</button>';
+      }
       html += '</div>';
 
       if (s.showProgress || s.progress === 100) {
@@ -1286,6 +1293,16 @@
       retranscribeBtns[j].addEventListener("click", function () {
         var pid = this.getAttribute("data-retranscribe");
         transcribeParticipants([pid], true);
+      });
+    }
+
+    var cancelBtns = container.querySelectorAll("[data-cancel-task]");
+    for (var c = 0; c < cancelBtns.length; c++) {
+      cancelBtns[c].addEventListener("click", function () {
+        var taskId = this.getAttribute("data-cancel-task");
+        apiDelete("api/transcribe/" + taskId).then(function () {
+          pollTaskStatus();
+        });
       });
     }
   }
