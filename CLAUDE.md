@@ -32,7 +32,7 @@ clipgen is a Python CLI tool that generates clips from timestamps stored in a Go
 | [screenspace_server.py](screenspace_server.py) | Screenspace Flask REST API: region CRUD, video frame extraction, task queue management, results retrieval |
 | [insights.py](insights.py) | Insights data model: CRUD operations for insight records, insights manifest read/write |
 | [insights_server.py](insights_server.py) | Insights Builder Flask REST API: insight CRUD, artifact browsing, sprite sheet generation, viewer export |
-| [assets/web/](assets/web/) | Static HTML/JS/CSS templates: timeline viewer (`viewer.html/js/css`), gallery (`gallery.html/js/css`), studio (`studio.html/js/css`), insights builder (`insights-builder.html/js/css`), insights viewer (`insights-viewer.html/js/css`), screenspace (`screenspace.html/js/css`) |
+| [assets/web/](assets/web/) | Static HTML/JS/CSS templates: timeline viewer (`viewer.html/js/css`), gallery (`gallery.html/js/css`), studio (`studio.html/js/css`), insights builder (`insights-builder.html/js/css`), insights viewer (`insights-viewer.html/js/css`), screenspace (`screenspace.html/js/css`). Shared utilities and constants live in `utils.js` (loaded before each page's main script) |
 
 ### Timeline HTML Viewer
 
@@ -92,7 +92,7 @@ Source video filenames follow `{study}_{participant}.mp4` (e.g. `mystudy_P01.mp4
 
 ## SVG icons
 
-316 Heroicons (outline, 24×24) live in [assets/icons/](assets/icons/) with kebab-case filenames. Use these for all web UI icons rather than writing new inline SVG paths. See the comment near `svgEditIcon()` in `screenspace.js` for the `createElementNS()` pattern.
+316 Heroicons (outline, 24×24) live in [assets/icons/](assets/icons/) with kebab-case filenames. Use these for all web UI icons rather than writing new inline SVG paths. The canonical pattern is CSS `mask-image` referencing `.svg` files — see `XREF_BADGES` in `utils.js` and `.xref-badge-icon` in `tokens.css`. Icon routes already exist per blueprint (`/screenspace/icons/`, `/transcripts/icons/`, etc.).
 
 ## Conventions and patterns
 
