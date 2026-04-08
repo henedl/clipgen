@@ -47,7 +47,7 @@ from typing import TYPE_CHECKING, Any, cast
 if TYPE_CHECKING:
     import screenspace
 
-from flask import Blueprint, Response, jsonify, request, send_from_directory
+from flask import Blueprint, Response, jsonify, request
 
 import files
 import utils
@@ -122,37 +122,17 @@ def _sse_task_payload() -> str:
     return f"data: {data}\n\n"
 
 
-_assets_dir = utils.get_bundled_assets_root() / "assets" / "web"
-
 # ---- Blueprint ----
 
 screenspace_bp = Blueprint("screenspace", __name__)
 
-
-# ---- Static file serving ----
-
-
-@screenspace_bp.route("/")
-def serve_index() -> FlaskResponse:
-    return send_from_directory(_assets_dir, "screenspace.html")
-
-
-@screenspace_bp.route("/<path:filename>")
-def serve_static(filename: str) -> FlaskResponse:
-    return send_from_directory(_assets_dir, filename)
-
-
-@screenspace_bp.route("/icons/<path:filename>")
-def serve_icons(filename: str) -> FlaskResponse:
-    icons_dir = utils.get_bundled_assets_root() / "assets" / "icons"
-    return send_from_directory(icons_dir, filename)
-
-
-@screenspace_bp.route("/media/<path:filename>")
-def serve_media(filename: str) -> FlaskResponse:
-    if not _output_dir:
-        return jsonify({"ok": False, "error": "Output directory not configured"}), 500
-    return send_from_directory(_output_dir, filename)
+utils.register_static_routes(
+    screenspace_bp,
+    "screenspace.html",
+    media_dir_getter=lambda: _output_dir,
+    media_error="Output directory not configured",
+    icons=True,
+)
 
 
 # ---- Participants ----

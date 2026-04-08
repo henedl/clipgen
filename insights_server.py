@@ -21,7 +21,7 @@ from math import ceil, sqrt
 from pathlib import Path
 from typing import Any
 
-from flask import Blueprint, Response, jsonify, request, send_from_directory
+from flask import Blueprint, Response, jsonify, request
 
 import config
 import insights
@@ -38,29 +38,16 @@ _insights_data: dict[str, Any] = {}
 _output_dir: str | Path = ""
 _sprite_cache: dict[str, bytes] = {}
 
-_assets_dir = utils.get_bundled_assets_root() / "assets" / "web"
-
 # ---- Blueprint ----
 
 insights_bp = Blueprint("insights", __name__)
 
-
-# ---- Static file serving ----
-
-
-@insights_bp.route("/")
-def serve_index() -> FlaskResponse:
-    return send_from_directory(_assets_dir, "insights-builder.html")
-
-
-@insights_bp.route("/<path:filename>")
-def serve_static(filename: str) -> FlaskResponse:
-    return send_from_directory(_assets_dir, filename)
-
-
-@insights_bp.route("/media/<path:filename>")
-def serve_media(filename: str) -> FlaskResponse:
-    return send_from_directory(_output_dir, filename)
+utils.register_static_routes(
+    insights_bp,
+    "insights-builder.html",
+    media_dir_getter=lambda: _output_dir,
+    media_error="Output directory not configured",
+)
 
 
 # ---- API endpoints ----

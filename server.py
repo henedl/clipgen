@@ -45,13 +45,12 @@ from flask import (
     jsonify,
     redirect,
     request,
-    send_from_directory,
 )
 
-import clipgen
 import config
 import files
 import spreadsheet
+import pipeline
 import utils
 import video
 import viewer
@@ -71,8 +70,6 @@ _settings_defaults: dict[str, Any] = {
     name: getattr(config, name) for name in getattr(config, "STUDIO_SETTINGS", {})
 }
 
-_assets_dir = utils.get_bundled_assets_root() / "assets" / "web"
-
 
 @contextmanager
 def _override_config(**overrides: Any) -> Iterator[None]:
@@ -91,18 +88,7 @@ def _override_config(**overrides: Any) -> Iterator[None]:
 
 studio_bp = Blueprint("studio", __name__)
 
-
-# ---- Static file serving ----
-
-
-@studio_bp.route("/")
-def serve_index() -> FlaskResponse:
-    return send_from_directory(_assets_dir, "studio.html")
-
-
-@studio_bp.route("/<path:filename>")
-def serve_static(filename: str) -> FlaskResponse:
-    return send_from_directory(_assets_dir, filename)
+utils.register_static_routes(studio_bp, "studio.html")
 
 
 # ---- Helpers ----
@@ -267,7 +253,7 @@ def _save_manifest_quiet() -> None:
             new_reels=reels or None,
             study=study,
             worksheet_title=getattr(_worksheet, "title", ""),
-            is_excel=clipgen._is_excel_worksheet(_worksheet) if _worksheet else False,
+            is_excel=pipeline.is_excel_worksheet(_worksheet) if _worksheet else False,
             mode="studio",
         )
     except Exception as e:
@@ -560,7 +546,7 @@ def api_generate() -> FlaskResponse:
                             concurrent.futures.Future, tuple[Any, str]
                         ] = {
                             pool.submit(
-                                clipgen.process_clips,
+                                pipeline.process_clips,
                                 [clip],
                                 output_format=output_format,
                             ): (clip, cell_str)
@@ -592,7 +578,7 @@ def api_generate() -> FlaskResponse:
                 else:
                     for clip, cell_str in to_generate:
                         try:
-                            generated, artifacts = clipgen.process_clips(
+                            generated, artifacts = pipeline.process_clips(
                                 [clip], output_format=output_format
                             )
                             _generated_artifacts.extend(artifacts)
@@ -739,7 +725,7 @@ def api_reel() -> FlaskResponse:
                         }
                     )
             if components:
-                expected_id = clipgen.compute_reel_id(components)
+                expected_id = pipeline.compute_reel_id(components)
                 for reel in _generated_reels:
                     if (
                         reel.get("id") == expected_id
@@ -754,7 +740,7 @@ def api_reel() -> FlaskResponse:
                             }
                         )
 
-            generated, reel_records = clipgen.process_reel(clips)
+            generated, reel_records = pipeline.process_reel(clips)
             _generated_reels.extend(reel_records)
             _save_manifest_quiet()
             return jsonify({"ok": True, "generated": generated, "reels": reel_records})
@@ -810,7 +796,7 @@ def api_timeline_viewer() -> FlaskResponse:
         if not clips_list:
             return jsonify({"ok": False, "error": "No clips found in sheet"}), 400
 
-        generated, artifacts = clipgen.process_clips(clips_list, output_format="clip")
+        generated, artifacts = pipeline.process_clips(clips_list, output_format="clip")
         if not artifacts:
             return jsonify({"ok": False, "error": "No artifacts were generated"}), 400
 
@@ -833,7 +819,7 @@ def api_timeline_viewer() -> FlaskResponse:
             artifacts,
             study=study,
             worksheet_title=getattr(_worksheet, "title", ""),
-            is_excel=clipgen._is_excel_worksheet(_worksheet),
+            is_excel=pipeline.is_excel_worksheet(_worksheet),
             mode="timeline-viewer",
             output_format="clip",
             screenspace_events=ss_events or None,
@@ -966,7 +952,7 @@ def api_manifest() -> FlaskResponse:
             new_reels=reels or None,
             study=study,
             worksheet_title=getattr(_worksheet, "title", ""),
-            is_excel=clipgen._is_excel_worksheet(_worksheet) if _worksheet else False,
+            is_excel=pipeline.is_excel_worksheet(_worksheet) if _worksheet else False,
             mode="studio",
         )
         if manifest_path:
@@ -993,7 +979,7 @@ def api_regenerate() -> FlaskResponse:
         reel_count = len(reels)
         total = media_count + reel_count
 
-        regenerated = clipgen.regenerate_from_manifest(artifacts, reels=reels)
+        regenerated = pipeline.regenerate_from_manifest(artifacts, reels=reels)
         return jsonify({"ok": True, "regenerated": regenerated, "total": total})
 
     except Exception as e:

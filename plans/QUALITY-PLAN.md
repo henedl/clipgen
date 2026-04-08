@@ -67,8 +67,8 @@ Six functions exceed 150 lines with mixed concerns.
 
 `server.py`, `insights_server.py`, `screenspace_server.py`, and `transcripts_server.py` each independently implement `serve_index()` and `serve_static()` routes with their own module-level `_assets_dir`/`_output_dir` state.
 
-- [ ] Create a shared factory or helper that registers standard static-serving routes on a Blueprint given an assets directory
-- [ ] Replace the 4 independent implementations
+- [x] Create a shared factory or helper that registers standard static-serving routes on a Blueprint given an assets directory
+- [x] Replace the 4 independent implementations
 
 ---
 
@@ -76,8 +76,8 @@ Six functions exceed 150 lines with mixed concerns.
 
 `server.py` imports `clipgen` (the script-style entry point) to call `process_clips` and related functions. The web layer should not depend on the CLI entry point.
 
-- [ ] Identify which functions in `clipgen.py` the server actually needs (clip processing pipeline)
-- [ ] Evaluate whether those can be accessed without importing the full entry-point module (e.g., moving them to a `pipeline.py` or keeping them but making `clipgen.py` a thin wrapper)
+- [x] Identify which functions in `clipgen.py` the server actually needs (clip processing pipeline)
+- [x] Evaluate whether those can be accessed without importing the full entry-point module (e.g., moving them to a `pipeline.py` or keeping them but making `clipgen.py` a thin wrapper)
 
 ---
 
