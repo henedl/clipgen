@@ -710,8 +710,8 @@ class TranscriptWorker:
             if self.on_task_complete:
                 try:
                     self.on_task_complete()
-                except Exception:
-                    pass
+                except Exception as exc:
+                    utils.warning_print(f"on_task_complete callback failed: {exc}")
 
     def _execute_task(self, task: dict[str, Any]) -> None:
         """Run a single transcription task."""

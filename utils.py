@@ -692,6 +692,16 @@ def letter_to_index(letter: str) -> int:
     return column_index - 1
 
 
+def safe_cell_a1(row: int | None, col: int | None) -> str:
+    """Convert 1-based row/col to A1 notation, returning '' on failure."""
+    import gspread.utils
+
+    try:
+        return gspread.utils.rowcol_to_a1(row, col) if row and col else ""
+    except (TypeError, ValueError):
+        return ""
+
+
 # ---- Timestamp parsing pipeline ----
 #
 # Reading order: token splitting/cleaning → add_duration → _parse_single_timestamp_token

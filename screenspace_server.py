@@ -488,16 +488,14 @@ def api_tasks_get(task_id: str) -> FlaskResponse:
     return jsonify({"ok": True, "task": _clean_task(task)})
 
 
-@screenspace_bp.route("/api/tasks", methods=["POST"])
-def api_tasks_create() -> FlaskResponse:
-    """Enqueue a new analysis task."""
-    if not _worker:
-        return jsonify({"ok": False, "error": "Worker not initialized"}), 500
+def _validate_task_request(
+    data: dict[str, Any],
+) -> tuple[str, str, str, dict[str, Any], dict[str, Any]] | FlaskResponse:
+    """Validate the task creation request body.
 
-    data = request.get_json(silent=True)
-    if not data:
-        return jsonify({"ok": False, "error": "JSON body required"}), 400
-
+    Returns (task_type, participant, region_name, parameters, all_known_regions)
+    on success, or a Flask error response on failure.
+    """
     task_type = data.get("type", "").strip()
     if task_type not in _VALID_TASK_TYPES:
         return jsonify(
@@ -529,7 +527,7 @@ def api_tasks_create() -> FlaskResponse:
     if not region_name and not has_uploaded_template and task_type != "multitool":
         return jsonify({"ok": False, "error": "region is required"}), 400
 
-    # Early validation for multitool steps (before video path lookup)
+    # Early validation for multitool steps
     if task_type == "multitool":
         mt_steps = parameters.get("steps")
         if not mt_steps or not isinstance(mt_steps, list) or len(mt_steps) < 2:
@@ -553,7 +551,7 @@ def api_tasks_create() -> FlaskResponse:
     for stash in _manifest.get("stashes", []):
         all_known_regions.update(stash.get("regions", {}))
 
-    # Multitool validates per-step regions; non-multitool validates global region
+    # Validate regions
     if task_type == "multitool":
         mt_steps_early: list[dict[str, Any]] = parameters.get("steps", [])
         for i, step in enumerate(mt_steps_early):
@@ -575,45 +573,16 @@ def api_tasks_create() -> FlaskResponse:
                 {"ok": False, "error": f"Region '{region_name}' not found"}
             ), 400
 
-    video_path = _find_participant_video(participant)
-    if video_path is None:
-        return jsonify(
-            {"ok": False, "error": f"No video for participant {participant}"}
-        ), 400
+    return task_type, participant, region_name, parameters, all_known_regions
 
-    source_video = ""
-    for p in _participants:
-        if p["id"] == participant:
-            source_video = Path(p["video_path"]).name
-            break
 
-    props = video.probe_video_properties(video_path)
+def _coerce_task_params(
+    task_type: str, parameters: dict[str, Any]
+) -> dict[str, Any] | FlaskResponse:
+    """Coerce and validate type-specific parameter values.
 
-    def _resolve_region_coords(name: str) -> dict[str, Any]:
-        """Convert a named region to pixel coordinates."""
-        rd = all_known_regions[name]
-        if props and props.get("width") and props.get("height"):
-            return _denormalize_region(rd, props["width"], props["height"])
-        return {k: rd[k] for k in ("x", "y", "w", "h") if k in rd}
-
-    if region_name and region_name in all_known_regions:
-        region_coords = _resolve_region_coords(region_name)
-    elif task_type == "multitool":
-        # Multitool uses per-step regions; use first step's region for top-level metadata
-        first_step_region = parameters.get("steps", [{}])[0].get("region", "")
-        if first_step_region and first_step_region in all_known_regions:
-            region_name = first_step_region
-            region_coords = _resolve_region_coords(first_step_region)
-        else:
-            region_name = "per_step"
-            region_coords = {"x": 0, "y": 0, "w": 0, "h": 0}
-    else:
-        # Full-frame template scan -- sentinel region
-        region_name = "full_frame"
-        region_coords = {"x": 0, "y": 0, "w": 0, "h": 0}
-
-    import screenspace
-
+    Returns the updated parameters on success, or a Flask error response on failure.
+    """
     try:
         if task_type == "similarity":
             parameters["reference_timestamp"] = _coerce_float(
@@ -656,7 +625,21 @@ def api_tasks_create() -> FlaskResponse:
     except ValueError as exc:
         return jsonify({"ok": False, "error": str(exc)}), 400
 
-    # Similarity tasks: extract reference frame from video at given timestamp
+    return parameters
+
+
+def _extract_task_media(
+    task_type: str,
+    parameters: dict[str, Any],
+    video_path: str,
+    region_coords: dict[str, Any],
+) -> dict[str, Any] | FlaskResponse:
+    """Extract reference frames / template images for non-multitool tasks.
+
+    Returns the updated parameters on success, or a Flask error response on failure.
+    """
+    import screenspace
+
     if task_type == "similarity":
         ref_ts = cast(float, parameters["reference_timestamp"])
         frame = video.extract_frame_at_timestamp(video_path, float(ref_ts))
@@ -667,7 +650,6 @@ def api_tasks_create() -> FlaskResponse:
         ref_region = screenspace.extract_region(frame, region_coords)
         parameters["reference_frame"] = ref_region
 
-    # Template tasks: use uploaded PNG or extract template region from video
     if task_type == "template":
         import base64
 
@@ -676,7 +658,6 @@ def api_tasks_create() -> FlaskResponse:
 
         upload_b64 = parameters.pop("template_image_data", None)
         if upload_b64:
-            # Decode uploaded PNG (may have alpha channel for masking)
             try:
                 img_bytes = base64.b64decode(upload_b64)
                 img_arr = np.frombuffer(img_bytes, dtype=np.uint8)
@@ -688,10 +669,8 @@ def api_tasks_create() -> FlaskResponse:
             if img is None:
                 return jsonify({"ok": False, "error": "Invalid image data"}), 400
             if len(img.shape) == 2:
-                # Grayscale → convert to BGR
                 img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
             if img.shape[2] == 4:
-                # Extract alpha as mask, convert to BGR for template
                 parameters["template_mask"] = img[:, :, 3]
                 parameters["template_image"] = cv2.cvtColor(img, cv2.COLOR_BGRA2BGR)
             else:
@@ -707,7 +686,6 @@ def api_tasks_create() -> FlaskResponse:
                 frame, region_coords
             )
 
-    # Scene tasks: extract reference frame for each scene type
     if task_type == "scene":
         scene_refs = cast(list[dict[str, Any]], parameters["scene_references"])
         reference_scenes = []
@@ -729,95 +707,190 @@ def api_tasks_create() -> FlaskResponse:
             reference_scenes.append(scene_entry)
         parameters["reference_scenes"] = reference_scenes
 
-    # Multitool tasks: resolve per-step regions and prepare parameters
-    if task_type == "multitool":
-        import base64
+    return parameters
 
-        import cv2
-        import numpy as np
 
-        steps = parameters.get("steps", [])
-        for i, step in enumerate(steps):
-            stype = step.get("type", "")
+def _prepare_multitool_steps(
+    parameters: dict[str, Any],
+    all_known_regions: dict[str, Any],
+    video_path: str,
+    region_coords: dict[str, Any],
+    resolve_region_fn: Any,
+) -> dict[str, Any] | FlaskResponse:
+    """Resolve per-step regions and extract media for multitool tasks.
 
-            # Resolve this step's region to pixel coords
-            step_region_name = (step.get("region") or "").strip()
-            if step_region_name and step_region_name in all_known_regions:
-                step["region_coords"] = _resolve_region_coords(step_region_name)
+    Returns the updated parameters on success, or a Flask error response on failure.
+    """
+    import base64
+
+    import cv2
+    import numpy as np
+    import screenspace
+
+    steps = parameters.get("steps", [])
+    for i, step in enumerate(steps):
+        stype = step.get("type", "")
+
+        # Resolve this step's region to pixel coords
+        step_region_name = (step.get("region") or "").strip()
+        if step_region_name and step_region_name in all_known_regions:
+            step["region_coords"] = resolve_region_fn(step_region_name)
+        else:
+            step["region_coords"] = region_coords  # fallback to top-level
+
+        step_rc = step["region_coords"]
+
+        if stype == "similarity":
+            ref_ts = cast(float, step["reference_timestamp"])
+            frame = video.extract_frame_at_timestamp(video_path, float(ref_ts))
+            if frame is None:
+                return jsonify(
+                    {
+                        "ok": False,
+                        "error": f"Step {i}: could not read reference frame",
+                    }
+                ), 400
+            step["reference_frame"] = screenspace.extract_region(frame, step_rc)
+
+        elif stype == "template":
+            upload_b64 = step.pop("template_image_data", None)
+            if upload_b64:
+                try:
+                    img_bytes = base64.b64decode(upload_b64)
+                    img_arr = np.frombuffer(img_bytes, dtype=np.uint8)
+                    img = cv2.imdecode(img_arr, cv2.IMREAD_UNCHANGED)
+                except (ValueError, binascii.Error):
+                    return jsonify(
+                        {
+                            "ok": False,
+                            "error": f"Step {i}: could not decode uploaded image",
+                        }
+                    ), 400
+                if img is None:
+                    return jsonify(
+                        {"ok": False, "error": f"Step {i}: invalid image data"}
+                    ), 400
+                if len(img.shape) == 2:
+                    img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
+                if img.shape[2] == 4:
+                    step["template_mask"] = img[:, :, 3]
+                    step["template_image"] = cv2.cvtColor(img, cv2.COLOR_BGRA2BGR)
+                else:
+                    step["template_image"] = img
             else:
-                step["region_coords"] = region_coords  # fallback to top-level
-
-            step_rc = step["region_coords"]
-
-            if stype == "similarity":
                 ref_ts = cast(float, step["reference_timestamp"])
                 frame = video.extract_frame_at_timestamp(video_path, float(ref_ts))
                 if frame is None:
                     return jsonify(
                         {
                             "ok": False,
-                            "error": f"Step {i}: could not read reference frame",
+                            "error": f"Step {i}: could not read template frame",
                         }
                     ), 400
-                step["reference_frame"] = screenspace.extract_region(frame, step_rc)
+                step["template_image"] = screenspace.extract_region(frame, step_rc)
 
-            elif stype == "template":
-                upload_b64 = step.pop("template_image_data", None)
-                if upload_b64:
-                    try:
-                        img_bytes = base64.b64decode(upload_b64)
-                        img_arr = np.frombuffer(img_bytes, dtype=np.uint8)
-                        img = cv2.imdecode(img_arr, cv2.IMREAD_UNCHANGED)
-                    except (ValueError, binascii.Error):
-                        return jsonify(
-                            {
-                                "ok": False,
-                                "error": f"Step {i}: could not decode uploaded image",
-                            }
-                        ), 400
-                    if img is None:
-                        return jsonify(
-                            {"ok": False, "error": f"Step {i}: invalid image data"}
-                        ), 400
-                    if len(img.shape) == 2:
-                        img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
-                    if img.shape[2] == 4:
-                        step["template_mask"] = img[:, :, 3]
-                        step["template_image"] = cv2.cvtColor(img, cv2.COLOR_BGRA2BGR)
-                    else:
-                        step["template_image"] = img
-                else:
-                    ref_ts = cast(float, step["reference_timestamp"])
-                    frame = video.extract_frame_at_timestamp(video_path, float(ref_ts))
-                    if frame is None:
-                        return jsonify(
-                            {
-                                "ok": False,
-                                "error": f"Step {i}: could not read template frame",
-                            }
-                        ), 400
-                    step["template_image"] = screenspace.extract_region(frame, step_rc)
+        elif stype == "scene":
+            scene_refs = cast(list[dict[str, Any]], step["scene_references"])
+            ref_scenes_list = []
+            for ref in scene_refs:
+                frame = video.extract_frame_at_timestamp(
+                    video_path, float(ref["timestamp"])
+                )
+                if frame is None:
+                    return jsonify(
+                        {
+                            "ok": False,
+                            "error": f"Step {i}: could not read frame for scene '{ref['name']}'",
+                        }
+                    ), 400
+                ref_region = screenspace.extract_region(frame, step_rc)
+                scene_entry: dict = {"name": ref["name"], "frame": ref_region}
+                if "threshold" in ref:
+                    scene_entry["threshold"] = float(ref["threshold"])
+                ref_scenes_list.append(scene_entry)
+            step["reference_scenes"] = ref_scenes_list
 
-            elif stype == "scene":
-                scene_refs = cast(list[dict[str, Any]], step["scene_references"])
-                ref_scenes_list = []
-                for ref in scene_refs:
-                    frame = video.extract_frame_at_timestamp(
-                        video_path, float(ref["timestamp"])
-                    )
-                    if frame is None:
-                        return jsonify(
-                            {
-                                "ok": False,
-                                "error": f"Step {i}: could not read frame for scene '{ref['name']}'",
-                            }
-                        ), 400
-                    ref_region = screenspace.extract_region(frame, step_rc)
-                    scene_entry: dict = {"name": ref["name"], "frame": ref_region}
-                    if "threshold" in ref:
-                        scene_entry["threshold"] = float(ref["threshold"])
-                    ref_scenes_list.append(scene_entry)
-                step["reference_scenes"] = ref_scenes_list
+    return parameters
+
+
+@screenspace_bp.route("/api/tasks", methods=["POST"])
+def api_tasks_create() -> FlaskResponse:
+    """Enqueue a new analysis task."""
+    if not _worker:
+        return jsonify({"ok": False, "error": "Worker not initialized"}), 500
+
+    data = request.get_json(silent=True)
+    if not data:
+        return jsonify({"ok": False, "error": "JSON body required"}), 400
+
+    validated = _validate_task_request(data)
+    if isinstance(validated, Response) or (
+        isinstance(validated, tuple) and len(validated) == 2
+    ):
+        return cast(FlaskResponse, validated)
+    assert isinstance(validated, tuple) and len(validated) == 5  # success tuple
+    task_type, participant, region_name, parameters, all_known_regions = cast(
+        tuple[str, str, str, dict[str, Any], dict[str, Any]], validated
+    )
+
+    video_path = _find_participant_video(participant)
+    if video_path is None:
+        return jsonify(
+            {"ok": False, "error": f"No video for participant {participant}"}
+        ), 400
+
+    source_video = ""
+    for p in _participants:
+        if p["id"] == participant:
+            source_video = Path(p["video_path"]).name
+            break
+
+    props = video.probe_video_properties(video_path)
+
+    def _resolve_region_coords(name: str) -> dict[str, Any]:
+        """Convert a named region to pixel coordinates."""
+        rd = all_known_regions[name]
+        if props and props.get("width") and props.get("height"):
+            return _denormalize_region(rd, props["width"], props["height"])
+        return {k: rd[k] for k in ("x", "y", "w", "h") if k in rd}
+
+    if region_name and region_name in all_known_regions:
+        region_coords = _resolve_region_coords(region_name)
+    elif task_type == "multitool":
+        first_step_region = parameters.get("steps", [{}])[0].get("region", "")
+        if first_step_region and first_step_region in all_known_regions:
+            region_name = first_step_region
+            region_coords = _resolve_region_coords(first_step_region)
+        else:
+            region_name = "per_step"
+            region_coords = {"x": 0, "y": 0, "w": 0, "h": 0}
+    else:
+        region_name = "full_frame"
+        region_coords = {"x": 0, "y": 0, "w": 0, "h": 0}
+
+    coerced = _coerce_task_params(task_type, parameters)
+    if isinstance(coerced, tuple):
+        return coerced  # Flask error response
+    parameters = cast(dict[str, Any], coerced)
+
+    extracted = _extract_task_media(task_type, parameters, video_path, region_coords)
+    if isinstance(extracted, tuple):
+        return extracted  # Flask error response
+    parameters = cast(dict[str, Any], extracted)
+
+    if task_type == "multitool":
+        prepared = _prepare_multitool_steps(
+            parameters,
+            all_known_regions,
+            video_path,
+            region_coords,
+            _resolve_region_coords,
+        )
+        if isinstance(prepared, tuple):
+            return prepared  # Flask error response
+        parameters = cast(dict[str, Any], prepared)
+
+    import screenspace
 
     task = screenspace.create_task(
         task_type=task_type,

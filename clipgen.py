@@ -883,14 +883,7 @@ def _transcribe_segments(
     cell = clip.get("cell")
     cell_row = getattr(cell, "row", None)
     cell_col = getattr(cell, "col", None)
-    try:
-        cell_a1 = (
-            gspread.utils.rowcol_to_a1(cell_row, cell_col)
-            if cell_row and cell_col
-            else ""
-        )
-    except Exception:
-        cell_a1 = ""
+    cell_a1 = utils.safe_cell_a1(cell_row, cell_col)
     annotations = list(clip.get("cell_annotations", []))
 
     for seg_idx, (out_path, start_str, end_str) in enumerate(segment_details):

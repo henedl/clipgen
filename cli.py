@@ -1035,16 +1035,15 @@ def run_cli_mode(worksheet: Any, args: Any, cli_mode_args: CliModeArgs) -> None:
 # ---- Main entry point ----
 
 
-def main() -> None:
-    """Main entry point for clipgen."""
-    setup_encoding()
+def _validate_mode_conflicts(
+    args: Any,
+) -> tuple[bool, bool, bool, bool, bool, Any, bool]:
+    """Validate mutually exclusive mode flags and exit on conflict.
 
-    # Parse command-line arguments
-    args = parse_arguments()
-    if config.DEBUGGING:
-        ic(args)
-
-    # Determine if running in CLI mode (any mode argument provided)
+    Returns:
+        (timeline_viewer, studio_mode, insights_mode, screenspace_mode,
+         transcripts_mode, gallery_arg, pre_transcribe_mode)
+    """
     mixed_selectors = getattr(args, "mixed", None)
     timeline_viewer = getattr(args, "timeline_viewer", False)
 
@@ -1265,74 +1264,55 @@ def main() -> None:
             )
             sys.exit(1)
 
-    cli_mode = (
-        args.batch
-        or args.lines
-        or args.range
-        or args.category
-        or args.cell
-        or args.participant
-        or args.keyword
-        or args.severity
-        or mixed_selectors
-        or args.reel
-        or args.chronologic
-        or args.highlights
-        or args.screen
-        or args.gif
-        or timeline_viewer
+    return (
+        timeline_viewer,
+        studio_mode,
+        insights_mode,
+        screenspace_mode,
+        transcripts_mode,
+        gallery_arg,
+        pre_transcribe_mode,
     )
 
-    # Set verbosity: quiet by default in CLI mode, standard in interactive mode
+
+def _apply_config_overrides(args: Any, cli_mode: bool) -> CliModeArgs:
+    """Apply per-run config overrides from CLI args.
+
+    Returns parsed CLI mode arguments.
+    """
     if cli_mode:
         config.VERBOSITY = config.VERBOSE if args.verbose else config.QUIET
     else:
         config.VERBOSITY = config.VERBOSE if args.verbose else config.STANDARD
 
-    # Optional per-run override for titlecards setting
     if getattr(args, "titlecards", None) is not None:
         config.TITLECARDS_ENABLED = bool(args.titlecards)
-
-    # Optional per-run override for filmstrip setting
     if getattr(args, "filmstrip", None) is not None:
         config.FILMSTRIP_ENABLED = bool(args.filmstrip)
-
-    # Optional per-run overrides for input/output directories
     if getattr(args, "input", None) is not None:
         config.INPUT_DIR = args.input
     if getattr(args, "output", None) is not None:
         config.OUTPUT_DIR = args.output
-
     if getattr(args, "manifest", False):
         config.MANIFEST_ENABLED = True
-
     if getattr(args, "transcribe", False):
         config.TRANSCRIBE_ENABLED = True
     if getattr(args, "transcript_format", None):
         config.TRANSCRIBE_FORMAT = args.transcript_format
 
-    # Parse CLI arguments for line, range, and cell modes
-    cli_mode_args = parse_cli_mode_args(args)
+    return parse_cli_mode_args(args)
 
-    # Change working directory to runtime location (script/executable)
-    os.chdir(get_runtime_working_dir())
-    utils.standard_print(
-        "-------------------------------------------------------------------------------"
-    )
-    utils.standard_print(
-        f"Welcome to clipgen v{config.VERSIONNUM}\nWorking directory: {os.getcwd()}\nPlace video files and the credentials.json file in this directory."
-    )
-    utils.debug_print(
-        "Debug mode is ON. Several limitations apply and more things will be printed."
-    )
 
-    # Sanity-check input/output directories before proceeding
-    utils.validate_runtime_directories()
+def _dispatch_standalone_mode(
+    args: Any,
+    cli_mode: bool,
+    gallery_arg: Any,
+) -> bool:
+    """Handle standalone modes that don't need a spreadsheet.
 
-    if not video.check_ffmpeg_tools_available():
-        sys.exit(1)
-
-    # Standalone viewer: regenerate viewer from saved manifest, no spreadsheet needed
+    Returns True if a standalone mode was dispatched (caller should exit).
+    """
+    # Standalone viewer: regenerate viewer from saved manifest
     if getattr(args, "viewer", False) and not cli_mode:
         existing_artifacts = viewer.load_manifest_artifacts()
         if not existing_artifacts:
@@ -1356,35 +1336,35 @@ def main() -> None:
         viewer_path = viewer.generate_timeline_viewer(data)
         if viewer_path:
             utils.info_print(f"Timeline viewer created from manifest: {viewer_path}")
-        sys.exit(0)
+        return True
 
-    # Standalone insights builder: no spreadsheet needed, reads from manifest
+    # Standalone insights builder
     if getattr(args, "insights", False):
         import server
 
         server.start_combined_server(worksheet=None, default_page="insights")
-        sys.exit(0)
+        return True
 
-    # Standalone screenspace: can work without spreadsheet (discovers videos from input dir)
+    # Standalone screenspace (no spreadsheet)
     if getattr(args, "screenspace", False) and not args.spreadsheet:
         import server
 
         server.start_combined_server(worksheet=None, default_page="screenspace")
-        sys.exit(0)
+        return True
 
-    # Standalone transcripts: no spreadsheet needed, discovers videos from input dir
+    # Standalone transcripts (no spreadsheet)
     if getattr(args, "transcripts", False) and not args.spreadsheet:
         import server
 
         server.start_combined_server(worksheet=None, default_page="transcripts")
-        sys.exit(0)
+        return True
 
-    # Standalone gallery: generate interval captures + gallery viewer, no spreadsheet needed
+    # Standalone gallery
     if gallery_arg is not None:
         _run_gallery_cli(args)
-        sys.exit(0)
+        return True
 
-    # Standalone regenerate: re-export all media artifacts and reels from saved manifest
+    # Standalone regenerate from manifest
     if getattr(args, "regenerate", False) and not cli_mode:
         existing_artifacts, existing_reels = viewer._load_manifest_both()
         if not existing_artifacts and not existing_reels:
@@ -1407,6 +1387,71 @@ def main() -> None:
             existing_artifacts, reels=existing_reels
         )
         utils.info_print(f"Regenerated {regenerated} of {total} item(s).")
+        return True
+
+    return False
+
+
+def main() -> None:
+    """Main entry point for clipgen."""
+    setup_encoding()
+
+    args = parse_arguments()
+    if config.DEBUGGING:
+        ic(args)
+
+    # Validate mutually exclusive mode flags
+    (
+        timeline_viewer,
+        studio_mode,
+        insights_mode,
+        screenspace_mode,
+        transcripts_mode,
+        gallery_arg,
+        pre_transcribe_mode,
+    ) = _validate_mode_conflicts(args)
+
+    # Determine if running in CLI mode (any mode argument provided)
+    mixed_selectors = getattr(args, "mixed", None)
+    cli_mode = (
+        args.batch
+        or args.lines
+        or args.range
+        or args.category
+        or args.cell
+        or args.participant
+        or args.keyword
+        or args.severity
+        or mixed_selectors
+        or args.reel
+        or args.chronologic
+        or args.highlights
+        or args.screen
+        or args.gif
+        or timeline_viewer
+    )
+
+    cli_mode_args = _apply_config_overrides(args, cli_mode)
+
+    # Change working directory to runtime location (script/executable)
+    os.chdir(get_runtime_working_dir())
+    utils.standard_print(
+        "-------------------------------------------------------------------------------"
+    )
+    utils.standard_print(
+        f"Welcome to clipgen v{config.VERSIONNUM}\nWorking directory: {os.getcwd()}\nPlace video files and the credentials.json file in this directory."
+    )
+    utils.debug_print(
+        "Debug mode is ON. Several limitations apply and more things will be printed."
+    )
+
+    # Sanity-check input/output directories before proceeding
+    utils.validate_runtime_directories()
+
+    if not video.check_ffmpeg_tools_available():
+        sys.exit(1)
+
+    if _dispatch_standalone_mode(args, cli_mode, gallery_arg):
         sys.exit(0)
 
     # Authenticate with Google (once per run) – skip for local Excel files
