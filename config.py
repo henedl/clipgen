@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """Configuration constants for clipgen."""
 
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any
 
 from icecream import ic
 
@@ -17,7 +17,7 @@ FILMSTRIP_ENABLED: bool = False  # use --filmstrip / --no-filmstrip to override 
 TITLECARD_DURATION_SECONDS: int = (
     2  # duration in seconds; falls back to color fill when no source frame available
 )
-WORKSHEET_PRIORITY: List[str] = [  # tried in order before falling back to first sheet
+WORKSHEET_PRIORITY: list[str] = [  # tried in order before falling back to first sheet
     "Sheet1",
     "Data",
     "data",
@@ -56,8 +56,8 @@ FILENAME_HEADER: str = "Filename"
 SEVERITY_HEADER: str = (
     "Severity"  # optional column; when present adds severity metadata to clips
 )
-PARTICIPANT_PREFIXES: Tuple[str, ...] = ("P", "G")  # 'P' for individual, 'G' for group
-SEVERITY_NUMERIC_TO_LABEL: Dict[str, str] = {
+PARTICIPANT_PREFIXES: tuple[str, ...] = ("P", "G")  # 'P' for individual, 'G' for group
+SEVERITY_NUMERIC_TO_LABEL: dict[str, str] = {
     "-4": "Critical",
     "-3": "High",
     "-2": "Medium",
@@ -66,7 +66,7 @@ SEVERITY_NUMERIC_TO_LABEL: Dict[str, str] = {
     "1": "Positive",
     "2": "Very Positive",
 }
-SEVERITY_LABEL_TO_NUMERIC: Dict[str, int] = {
+SEVERITY_LABEL_TO_NUMERIC: dict[str, int] = {
     "critical": -4,
     "high": -3,
     "medium": -2,
@@ -75,12 +75,12 @@ SEVERITY_LABEL_TO_NUMERIC: Dict[str, int] = {
     "positive": 1,
     "very positive": 2,
 }
-ANNOTATION_KEYPHRASES: Dict[
+ANNOTATION_KEYPHRASES: dict[
     str, str
 ] = {  # cell token → annotation name; stripped before timestamp parsing
     "!key": "key",
 }
-IGNORED_TIMESTAMP_TOKENS: Set[str] = {
+IGNORED_TIMESTAMP_TOKENS: set[str] = {
     "x"
 }  # tokens skipped silently during timestamp parsing
 
@@ -218,7 +218,7 @@ SOURCE_VIDEO_PATTERN: str = r"_[PG]\d+\.mp4$"
 # Transcription constants (faster-whisper)
 TRANSCRIBE_ENABLED: bool = False  # use --transcribe CLI flag to enable per run
 TRANSCRIBE_MODEL: str = "base"  # tiny, base, small, medium, large-v3
-TRANSCRIBE_LANGUAGE: Optional[str] = None  # None = auto-detect
+TRANSCRIBE_LANGUAGE: str | None = None  # None = auto-detect
 TRANSCRIBE_COMPUTE_TYPE: str = "int8"  # int8 (fastest), float16, float32
 TRANSCRIBE_FORMAT: str = "md"  # md, srt, vtt
 TRANSCRIBE_INITIAL_PROMPT: str = "This is a recorded user experience research session."  # biases Whisper toward UX research terminology
@@ -230,7 +230,7 @@ RICH_PANELS: bool = True  # Use bordered panels for errors/warnings/success mess
 RICH_PROGRESS: bool = True  # Show progress bars during batch/reel processing
 
 # Settings descriptions (used by interactive settings helpers)
-SETTINGS_DESCRIPTIONS: Dict[str, str] = {
+SETTINGS_DESCRIPTIONS: dict[str, str] = {
     "REENCODING": "Re-encode clips via ffmpeg instead of stream-copying. Slower but fixes some codec issues.",
     "AUDIO_NORMALIZE": "Normalize audio levels across generated clips for consistent volume.",
     "FILEFORMAT": "Output container format for generated video clips.",
@@ -256,7 +256,7 @@ SETTINGS_DESCRIPTIONS: Dict[str, str] = {
 
 # Studio-exposed settings with UI metadata (group, type, constraints).
 # Keys must match module-level attributes above and entries in SETTINGS_DESCRIPTIONS.
-STUDIO_SETTINGS: Dict[str, Dict[str, Any]] = {
+STUDIO_SETTINGS: dict[str, dict[str, Any]] = {
     "REENCODING": {"group": "Video Output", "type": "bool"},
     "AUDIO_NORMALIZE": {"group": "Video Output", "type": "bool"},
     "FILEFORMAT": {

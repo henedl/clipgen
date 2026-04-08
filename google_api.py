@@ -2,7 +2,6 @@
 """Google Sheets API integration for clipgen."""
 
 import time
-from typing import List
 
 import gspread
 from icecream import ic
@@ -86,7 +85,7 @@ def get_all_spreadsheets(connection: gspread.Client) -> list[str]:
     return []
 
 
-def find_spreadsheet_by_name(search_name: str, doc_list: List[str]) -> int:
+def find_spreadsheet_by_name(search_name: str, doc_list: list[str]) -> int:
     """Find a matching Google Sheet name from doc_list.
 
     Args:

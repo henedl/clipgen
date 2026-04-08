@@ -33,8 +33,6 @@ API endpoints (all under /screenspace/):
   PUT  /api/events/bulk-include            – bulk include events by task/time range
 """
 
-from __future__ import annotations
-
 import binascii
 import copy
 import json
@@ -44,7 +42,7 @@ import threading
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union, cast
+from typing import TYPE_CHECKING, Any, cast
 
 if TYPE_CHECKING:
     import screenspace
@@ -55,7 +53,7 @@ import files
 import utils
 import video
 
-FlaskResponse = Union[Response, Tuple[Response, int]]
+FlaskResponse = Response | tuple[Response, int]
 
 _VALID_TASK_TYPES = (
     "multitool",
@@ -89,11 +87,11 @@ _TASK_BINARY_KEYS = (
 
 # ---- Module-level state (set once by _init_screenspace_state) ----
 
-_manifest: Dict[str, Any] = {}
-_worker: Optional["screenspace.ScreenspaceWorker"] = None
+_manifest: dict[str, Any] = {}
+_worker: "screenspace.ScreenspaceWorker | None" = None
 _output_dir: str = ""
-_participants: List[Dict[str, Any]] = []
-_video_metadata_cache: Dict[str, Dict[str, Any]] = {}
+_participants: list[dict[str, Any]] = []
+_video_metadata_cache: dict[str, dict[str, Any]] = {}
 
 # ---- SSE (Server-Sent Events) client registry ----
 
@@ -169,7 +167,7 @@ def api_participants() -> FlaskResponse:
 # ---- Video frame extraction ----
 
 
-def _find_participant_video(participant_id: str) -> Optional[str]:
+def _find_participant_video(participant_id: str) -> str | None:
     """Resolve the video path for a participant."""
     for p in _participants:
         if p["id"] == participant_id:
@@ -229,7 +227,7 @@ def api_video_info(participant: str) -> FlaskResponse:
     duration_seconds = props.get("duration", 0.0)
     duration = round(duration_seconds) if duration_seconds > 0 else 0
 
-    info: Dict[str, Any] = {
+    info: dict[str, Any] = {
         "participant": participant,
         "duration": duration,
         "fps": vid_fps,
@@ -251,7 +249,7 @@ def _normalize_region(
     h: float,
     frame_w: int,
     frame_h: int,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Convert pixel coordinates to normalized 0-1 fractions."""
     return {
         "x": x / frame_w,
@@ -264,8 +262,8 @@ def _normalize_region(
 
 
 def _denormalize_region(
-    region: Dict[str, Any], target_w: int, target_h: int
-) -> Dict[str, int]:
+    region: dict[str, Any], target_w: int, target_h: int
+) -> dict[str, int]:
     """Convert normalized region to pixel coordinates for a target resolution.
 
     Legacy regions (without ``source_width``) pass through unchanged.
@@ -307,7 +305,7 @@ def api_regions_create() -> FlaskResponse:
 
     canvas_w = data.get("canvas_width")
     canvas_h = data.get("canvas_height")
-    region: Dict[str, Any]
+    region: dict[str, Any]
     if (
         isinstance(canvas_w, (int, float))
         and isinstance(canvas_h, (int, float))
@@ -516,7 +514,7 @@ def api_tasks_create() -> FlaskResponse:
     region_name = data.get("region", "").strip()
     raw_parameters = data.get("parameters")
     if raw_parameters is None:
-        parameters: Dict[str, Any] = {}
+        parameters: dict[str, Any] = {}
     elif isinstance(raw_parameters, dict):
         parameters = raw_parameters
     else:
@@ -543,7 +541,7 @@ def api_tasks_create() -> FlaskResponse:
                 return jsonify(
                     {"ok": False, "error": f"Step {i}: must be an object"}
                 ), 400
-            step_v = cast(Dict[str, Any], step_raw)
+            step_v = cast(dict[str, Any], step_raw)
             stype = step_v.get("type", "")
             if stype not in _VALID_STEP_TYPES:
                 return jsonify(
@@ -551,7 +549,7 @@ def api_tasks_create() -> FlaskResponse:
                 ), 400
 
     # Build combined region lookup dict (active + stashes)
-    all_known_regions: Dict[str, Any] = dict(_manifest.get("regions", {}))
+    all_known_regions: dict[str, Any] = dict(_manifest.get("regions", {}))
     for stash in _manifest.get("stashes", []):
         all_known_regions.update(stash.get("regions", {}))
 
@@ -591,7 +589,7 @@ def api_tasks_create() -> FlaskResponse:
 
     props = video.probe_video_properties(video_path)
 
-    def _resolve_region_coords(name: str) -> Dict[str, Any]:
+    def _resolve_region_coords(name: str) -> dict[str, Any]:
         """Convert a named region to pixel coordinates."""
         rd = all_known_regions[name]
         if props and props.get("width") and props.get("height"):
@@ -711,7 +709,7 @@ def api_tasks_create() -> FlaskResponse:
 
     # Scene tasks: extract reference frame for each scene type
     if task_type == "scene":
-        scene_refs = cast(List[Dict[str, Any]], parameters["scene_references"])
+        scene_refs = cast(list[dict[str, Any]], parameters["scene_references"])
         reference_scenes = []
         for ref in scene_refs:
             frame = video.extract_frame_at_timestamp(
@@ -801,7 +799,7 @@ def api_tasks_create() -> FlaskResponse:
                     step["template_image"] = screenspace.extract_region(frame, step_rc)
 
             elif stype == "scene":
-                scene_refs = cast(List[Dict[str, Any]], step["scene_references"])
+                scene_refs = cast(list[dict[str, Any]], step["scene_references"])
                 ref_scenes_list = []
                 for ref in scene_refs:
                     frame = video.extract_frame_at_timestamp(
@@ -991,7 +989,7 @@ def _coerce_float(
     *,
     required: bool = False,
     context: str = "",
-) -> Optional[float]:
+) -> float | None:
     """Validate and coerce a request field to a finite float.
 
     Returns None when value is None and required=False.
@@ -1011,7 +1009,7 @@ def _coerce_float(
 
 def _validate_scene_references(
     scene_refs: Any, *, context: str = ""
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """Validate scene reference payloads and normalize numeric fields."""
     if not scene_refs or not isinstance(scene_refs, list):
         raise ValueError(f"{context}scene_references must be a non-empty list")
@@ -1019,11 +1017,11 @@ def _validate_scene_references(
     for i, ref_raw in enumerate(scene_refs):
         if not isinstance(ref_raw, dict):
             raise ValueError(f"{context}scene_references[{i}] must be an object")
-        ref_data = cast(Dict[str, Any], ref_raw)
+        ref_data = cast(dict[str, Any], ref_raw)
         name = str(ref_data.get("name", "")).strip()
         if not name:
             raise ValueError(f"{context}scene_references[{i}].name is required")
-        ref: Dict[str, Any] = {
+        ref: dict[str, Any] = {
             "name": name,
             "timestamp": _coerce_float(
                 ref_data.get("timestamp"),
@@ -1053,7 +1051,7 @@ def _sanitize_floats(obj: Any) -> Any:
     return obj
 
 
-def _clean_task(task: Dict[str, Any]) -> Dict[str, Any]:
+def _clean_task(task: dict[str, Any]) -> dict[str, Any]:
     """Remove internal fields from a task dict for API responses."""
     cleaned = {k: v for k, v in task.items() if not k.startswith("_")}
     if "parameters" in cleaned:
@@ -1075,7 +1073,7 @@ def _clean_task(task: Dict[str, Any]) -> Dict[str, Any]:
 
 def _init_screenspace_state(
     sheet_context: Any = None,
-    participant_list: Optional[List[str]] = None,
+    participant_list: list[str] | None = None,
 ) -> None:
     """Initialize module-level state for Screenspace routes.
 

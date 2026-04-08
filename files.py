@@ -3,7 +3,6 @@
 
 import re
 from pathlib import Path
-from typing import List, Optional
 
 import gspread
 from icecream import ic
@@ -13,7 +12,7 @@ import utils
 from utils import ClipRecord
 
 
-def get_unique_filename(filename: str, file_format: Optional[str] = None) -> str:
+def get_unique_filename(filename: str, file_format: str | None = None) -> str:
     """Generate a unique filename by appending an incremented number.
 
     If a file with the given name already exists, appends '-1', '-2', etc.
@@ -49,7 +48,7 @@ def get_unique_filename(filename: str, file_format: Optional[str] = None) -> str
 
 
 def get_source_video_filename(
-    study: str, participant: str, override: Optional[str] = None
+    study: str, participant: str, override: str | None = None
 ) -> str:
     """Resolve the expected source video filename for a clip.
 
@@ -155,7 +154,7 @@ def prepare_clip(clip: ClipRecord) -> ClipRecord:
     return clip
 
 
-def discover_clips() -> List[str]:
+def discover_clips() -> list[str]:
     """Find generated clips in the effective output directory.
 
     Scans for .mp4 files and excludes source videos (those matching the

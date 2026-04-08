@@ -31,7 +31,7 @@ import json
 import math
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 import gspread
 
@@ -40,11 +40,11 @@ import files
 import utils
 
 # Mutable lists of records collected during an interactive session.
-INTERACTIVE_ARTIFACTS: List[Dict[str, Any]] = []
-INTERACTIVE_REELS: List[Dict[str, Any]] = []
+INTERACTIVE_ARTIFACTS: list[dict[str, Any]] = []
+INTERACTIVE_REELS: list[dict[str, Any]] = []
 
 
-def _is_valid_artifact(a: Dict[str, Any]) -> bool:
+def _is_valid_artifact(a: dict[str, Any]) -> bool:
     """Return True if artifact has minimum required fields for viewer rendering."""
     if not a.get("id"):
         return False
@@ -60,7 +60,7 @@ def build_artifact_records_for_clip(
     base_video: str,
     segment_details: list,
     output_format: str,
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """Build artifact metadata records from a processed clip's successful outputs.
 
     Args:
@@ -72,7 +72,7 @@ def build_artifact_records_for_clip(
     Returns:
         List of artifact dicts ready for JSON serialization
     """
-    artifacts: List[Dict[str, Any]] = []
+    artifacts: list[dict[str, Any]] = []
     artifact_type = (
         output_format if output_format in ("clip", "screen", "gif") else "clip"
     )
@@ -119,17 +119,17 @@ def build_artifact_records_for_clip(
 
 
 def finalize_timeline_data(
-    artifacts: List[Dict[str, Any]],
+    artifacts: list[dict[str, Any]],
     *,
-    reels: Optional[List[Dict[str, Any]]] = None,
+    reels: list[dict[str, Any]] | None = None,
     study: str = "",
     participant: str = "",
     worksheet_title: str = "",
     is_excel: bool = False,
     mode: str = "",
     output_format: str = "clip",
-    screenspace_events: Optional[List[Dict[str, Any]]] = None,
-) -> Dict[str, Any]:
+    screenspace_events: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     """Construct the full window.CLIPGEN_DATA structure for the timeline viewer."""
     valid_artifacts = [a for a in artifacts if _is_valid_artifact(a)]
     dropped = len(artifacts) - len(valid_artifacts)
@@ -151,7 +151,7 @@ def finalize_timeline_data(
 
     duration = max_time * 1.05 if max_time > 0 else 0.0
 
-    data: Dict[str, Any] = {
+    data: dict[str, Any] = {
         "meta": {
             "study": study,
             "participant": participant,
@@ -186,7 +186,7 @@ def _sanitize_event_metadata(obj: Any) -> Any:
     return obj
 
 
-def load_screenspace_events_for_viewer() -> List[Dict[str, Any]]:
+def load_screenspace_events_for_viewer() -> list[dict[str, Any]]:
     """Load non-excluded events from screenspace manifest for viewer export."""
     import screenspace
 
@@ -212,14 +212,14 @@ _CLIPGEN_DATA_PLACEHOLDER = "<!-- CLIPGEN_DATA_HERE -->"
 
 
 def _generate_viewer_html(
-    data: Dict[str, Any],
+    data: dict[str, Any],
     *,
     template_name: str,
     js_name: str,
     css_name: str,
     output_basename: str,
     viewer_label: str,
-) -> Optional[Path]:
+) -> Path | None:
     """Build a self-contained HTML viewer by inlining JS/CSS and injecting data.
 
     Shared implementation for timeline and gallery viewer generation.
@@ -309,11 +309,11 @@ def _generate_viewer_html(
 
 
 def generate_timeline_viewer(
-    data: Dict[str, Any],
+    data: dict[str, Any],
     *,
     output_basename: str = "clips_viewer.html",
     template_name: str = "viewer.html",
-) -> Optional[Path]:
+) -> Path | None:
     """Create a per-run timeline viewer HTML file with inlined JS/CSS."""
     return _generate_viewer_html(
         data,
@@ -326,13 +326,13 @@ def generate_timeline_viewer(
 
 
 def finalize_gallery_data(
-    artifacts: List[Dict[str, Any]],
+    artifacts: list[dict[str, Any]],
     *,
     source_video: str = "",
     video_duration: int = 0,
     output_format: str = "screen",
     interval: int = 10,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Construct the window.CLIPGEN_DATA structure for the gallery viewer."""
     return {
         "meta": {
@@ -348,10 +348,10 @@ def finalize_gallery_data(
 
 
 def generate_gallery_viewer(
-    data: Dict[str, Any],
+    data: dict[str, Any],
     *,
     output_basename: str = "gallery_viewer.html",
-) -> Optional[Path]:
+) -> Path | None:
     """Create a gallery viewer HTML file with inlined JS/CSS."""
     return _generate_viewer_html(
         data,
@@ -364,12 +364,12 @@ def generate_gallery_viewer(
 
 
 def finalize_insights_viewer_data(
-    insights_list: List[Dict[str, Any]],
-    artifacts: List[Dict[str, Any]],
+    insights_list: list[dict[str, Any]],
+    artifacts: list[dict[str, Any]],
     *,
     study: str = "",
     timeline_viewer_file: str = "",
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Construct the window.CLIPGEN_DATA structure for the insights viewer."""
     # Show only "final" insights if any exist, otherwise show all
     final_insights = [i for i in insights_list if i.get("status") == "final"]
@@ -396,10 +396,10 @@ def finalize_insights_viewer_data(
 
 
 def generate_insights_viewer(
-    data: Dict[str, Any],
+    data: dict[str, Any],
     *,
     output_basename: str = "insights_viewer.html",
-) -> Optional[Path]:
+) -> Path | None:
     """Create an insights viewer HTML file with inlined JS/CSS."""
     return _generate_viewer_html(
         data,
@@ -411,7 +411,7 @@ def generate_insights_viewer(
     )
 
 
-def _load_manifest_both() -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+def _load_manifest_both() -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Load artifact and reel records from the manifest in a single read.
 
     Returns (artifacts, reels). Both default to [] on missing/corrupt file.
@@ -429,29 +429,29 @@ def _load_manifest_both() -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
     return (valid, data.get("reels", []))
 
 
-def load_manifest_artifacts() -> List[Dict[str, Any]]:
+def load_manifest_artifacts() -> list[dict[str, Any]]:
     """Load artifact records from the manifest file, or return [] if unavailable."""
     artifacts, _ = _load_manifest_both()
     return artifacts
 
 
-def load_manifest_reels() -> List[Dict[str, Any]]:
+def load_manifest_reels() -> list[dict[str, Any]]:
     """Load reel records from the manifest file, or return [] if unavailable."""
     _, reels = _load_manifest_both()
     return reels
 
 
 def save_manifest(
-    new_artifacts: List[Dict[str, Any]],
+    new_artifacts: list[dict[str, Any]],
     *,
-    new_reels: Optional[List[Dict[str, Any]]] = None,
+    new_reels: list[dict[str, Any]] | None = None,
     study: str = "",
     participant: str = "",
     worksheet_title: str = "",
     is_excel: bool = False,
     mode: str = "",
     output_format: str = "clip",
-) -> Optional[Path]:
+) -> Path | None:
     """Merge new artifacts and reels into the manifest file and write it back.
 
     Deduplicates by ``id``; newer entries win.

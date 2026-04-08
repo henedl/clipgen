@@ -33,7 +33,8 @@ Clip record (returned by generation functions):
 
 import re
 from dataclasses import dataclass
-from typing import Any, Dict, List, NamedTuple, Optional, Sequence, Set, Tuple
+from collections.abc import Sequence
+from typing import Any, NamedTuple
 
 import gspread
 from icecream import ic
@@ -54,18 +55,18 @@ class SheetContext:
     Avoids threading the same 7-8 parameters through every function.
     """
 
-    sheet_data: List[List[str]]
+    sheet_data: list[list[str]]
     id_cell: Any
     observation_cell: Any
     category_cell: Any
     num_participants: int
     study_name: str
-    baseline_row_idx: Optional[int] = None
-    filename_row_idx: Optional[int] = None
+    baseline_row_idx: int | None = None
+    filename_row_idx: int | None = None
     severity_cell: Any = None
 
     @property
-    def header_row(self) -> List[str]:
+    def header_row(self) -> list[str]:
         return self.sheet_data[self.id_cell.row - 1] if self.id_cell.row > 0 else []
 
     @property
@@ -84,7 +85,7 @@ class _CellLike(NamedTuple):
     col: int
 
 
-def _find_in_data(sheet_data: List[List[str]], text: str) -> Optional[_CellLike]:
+def _find_in_data(sheet_data: list[list[str]], text: str) -> _CellLike | None:
     """Find first cell with exact text match in pre-loaded sheet data.
 
     Returns _CellLike(row, col) with 1-based coordinates, or None.
@@ -97,8 +98,8 @@ def _find_in_data(sheet_data: List[List[str]], text: str) -> Optional[_CellLike]
 
 
 def validate_spreadsheet_headers(
-    sheet_data: List[List[str]],
-) -> Optional[Tuple[_CellLike, _CellLike, _CellLike]]:
+    sheet_data: list[list[str]],
+) -> tuple[_CellLike, _CellLike, _CellLike] | None:
     """Validate that required headers exist in pre-loaded sheet data.
 
     Args:
@@ -135,10 +136,10 @@ def validate_spreadsheet_headers(
     return (id_cell, observation_cell, category_cell)
 
 
-_BASELINE_ROW_CACHE: Dict[int, Optional[int]] = {}
+_BASELINE_ROW_CACHE: dict[int, int | None] = {}
 
 
-def _detect_baseline_row(sheet_data: List[List[str]]) -> Optional[int]:
+def _detect_baseline_row(sheet_data: list[list[str]]) -> int | None:
     """Detect the sheet-wide baseline row marked by a 'Baseline time' label.
 
     Scans the sheet once for a row where any cell value starts with 'Baseline time'
@@ -149,7 +150,7 @@ def _detect_baseline_row(sheet_data: List[List[str]]) -> Optional[int]:
     if cache_key in _BASELINE_ROW_CACHE:
         return _BASELINE_ROW_CACHE[cache_key]
 
-    baseline_row_idx: Optional[int] = None
+    baseline_row_idx: int | None = None
     for row_idx, row in enumerate(sheet_data):
         for value in row:
             if not value:
@@ -164,7 +165,7 @@ def _detect_baseline_row(sheet_data: List[List[str]]) -> Optional[int]:
     return baseline_row_idx
 
 
-def get_num_participants(header_row: List[str], id_cell: Any, col_count: int) -> int:
+def get_num_participants(header_row: list[str], id_cell: Any, col_count: int) -> int:
     """Count the number of participant columns in the worksheet.
 
     Looks for columns starting with participant prefixes (P or G) and stops
@@ -193,7 +194,7 @@ def get_num_participants(header_row: List[str], id_cell: Any, col_count: int) ->
     return num_participants
 
 
-def build_sheet_context(sheet: Any) -> Optional[SheetContext]:
+def build_sheet_context(sheet: Any) -> SheetContext | None:
     """Validate headers, load sheet data, and build a SheetContext.
 
     Makes exactly one API call (get_all_values); all header lookups use local data.
@@ -230,7 +231,7 @@ def build_sheet_context(sheet: Any) -> Optional[SheetContext]:
     num_participants = get_num_participants(header_row, id_cell, col_count)
 
     filename_cell = _find_in_data(sheet_data, config.FILENAME_HEADER)
-    filename_row_idx: Optional[int] = None
+    filename_row_idx: int | None = None
     if filename_cell is not None:
         filename_row_idx = filename_cell.row - 1
 
@@ -263,8 +264,8 @@ def build_sheet_context(sheet: Any) -> Optional[SheetContext]:
 
 
 def get_participant_list(
-    header_row: List[str], id_cell: Any, num_participants: int
-) -> List[str]:
+    header_row: list[str], id_cell: Any, num_participants: int
+) -> list[str]:
     """Return list of participant IDs from the header row.
 
     Args:
@@ -284,7 +285,7 @@ def get_participant_list(
     return participants
 
 
-def parse_participant_selection(input_str: str) -> List[str]:
+def parse_participant_selection(input_str: str) -> list[str]:
     """Parse a participant selection string into a list of IDs.
 
     Splits on + or , and returns non-empty stripped tokens.
@@ -302,7 +303,7 @@ def parse_participant_selection(input_str: str) -> List[str]:
     return [s.strip() for s in combined.split("+") if s.strip()]
 
 
-def parse_cell_specifications(cell_input: str) -> List[Tuple[str, int]]:
+def parse_cell_specifications(cell_input: str) -> list[tuple[str, int]]:
     """Parse cell specification string into list of (participant_id, row_number) tuples.
 
     Expected format: "P01.11" (participant_id.row_number). Multiple cells separated by
@@ -475,7 +476,7 @@ def parse_reel_input(input_string: str) -> ReelInput:
     return result
 
 
-def detect_mode_from_input(input_string: str) -> Tuple[Optional[str], dict]:
+def detect_mode_from_input(input_string: str) -> tuple[str | None, dict]:
     """Detect mode from input syntax (for implicit mode selection).
 
     Only line, range, cell, and participant modes are auto-detected. Batch, browse,
@@ -528,8 +529,8 @@ def detect_mode_from_input(input_string: str) -> Tuple[Optional[str], dict]:
 
 
 def find_participant_column(
-    header_row: List[str], id_cell: Any, participant_id: str
-) -> Optional[int]:
+    header_row: list[str], id_cell: Any, participant_id: str
+) -> int | None:
     """Find the column index for a given participant ID.
 
     Args:
@@ -612,7 +613,7 @@ def _make_clip_record(
     return result
 
 
-def get_line_timestamps(ctx: SheetContext, line_index: int) -> List[ClipRecord]:
+def get_line_timestamps(ctx: SheetContext, line_index: int) -> list[ClipRecord]:
     """Extract timestamp data from a single row in the spreadsheet as clip records.
 
     Processes all participant columns in the specified row and creates
@@ -703,7 +704,7 @@ def get_line_timestamps(ctx: SheetContext, line_index: int) -> List[ClipRecord]:
 
 def _validate_row_range(
     start_line: int, end_line: int, max_row: int
-) -> Optional[Tuple[int, int]]:
+) -> tuple[int, int] | None:
     """Validate row range; print error and return None if invalid.
 
     Args:
@@ -736,18 +737,18 @@ def _validate_row_range(
 def generate_list(
     sheet: Any,
     mode: str,
-    ctx: Optional[SheetContext] = None,
-    line_numbers: Optional[List[int]] = None,
-    range_start: Optional[int] = None,
-    range_end: Optional[int] = None,
+    ctx: SheetContext | None = None,
+    line_numbers: list[int] | None = None,
+    range_start: int | None = None,
+    range_end: int | None = None,
     skip_prompts: bool = False,
-    cell_specs: Optional[List[Tuple[str, int]]] = None,
-    participant_id: Optional[str] = None,
-    reel_input: Optional[str] = None,
-    categories: Optional[List[str]] = None,
-    severities: Optional[List[str]] = None,
-    annotation_ids: Optional[List[str]] = None,
-) -> List[ClipRecord]:
+    cell_specs: list[tuple[str, int]] | None = None,
+    participant_id: str | None = None,
+    reel_input: str | None = None,
+    categories: list[str] | None = None,
+    severities: list[str] | None = None,
+    annotation_ids: list[str] | None = None,
+) -> list[ClipRecord]:
     """Generate clip records from a sheet based on mode and resolved parameters.
 
     This function is pure: it takes resolved parameters (no interactive prompts).
@@ -887,7 +888,7 @@ def generate_list(
     return []
 
 
-def generate_batch_timestamps(ctx: SheetContext) -> List[ClipRecord]:
+def generate_batch_timestamps(ctx: SheetContext) -> list[ClipRecord]:
     """Generate clip records for all rows in batch mode."""
     utils.debug_print("Running method generate_batch_timestamps()")
     clips = []
@@ -900,8 +901,8 @@ def generate_batch_timestamps(ctx: SheetContext) -> List[ClipRecord]:
 
 
 def generate_keyword_timestamps(
-    ctx: SheetContext, annotation_ids: Optional[List[str]] = None
-) -> List[ClipRecord]:
+    ctx: SheetContext, annotation_ids: list[str] | None = None
+) -> list[ClipRecord]:
     """Generate annotation-marked clips from the entire sheet based on cell content.
 
     Args:
@@ -918,7 +919,7 @@ def generate_keyword_timestamps(
         else list(utils.get_known_annotation_map().values())
     )
 
-    filtered_clips: List[ClipRecord] = []
+    filtered_clips: list[ClipRecord] = []
     for clip in clips:
         _, segment_annotations, _ = utils.parse_cell_annotations(clip["cell"].value)
         matched_indexes: set = set()
@@ -931,7 +932,7 @@ def generate_keyword_timestamps(
     return filtered_clips
 
 
-def collect_categories(ctx: SheetContext) -> List[str]:
+def collect_categories(ctx: SheetContext) -> list[str]:
     """Scan sheet and return unique categories in order of first appearance."""
     categories = []
     category_col = ctx.category_cell.col - 1
@@ -943,8 +944,8 @@ def collect_categories(ctx: SheetContext) -> List[str]:
 
 
 def generate_category_timestamps(
-    ctx: SheetContext, selected_categories: List[str]
-) -> List[ClipRecord]:
+    ctx: SheetContext, selected_categories: list[str]
+) -> list[ClipRecord]:
     """Generate clip records for all rows matching any of the selected categories."""
     utils.debug_print("Starting method generate_category_timestamps()")
     clips = []
@@ -959,12 +960,12 @@ def generate_category_timestamps(
     return clips
 
 
-def collect_severities(ctx: SheetContext) -> Tuple[List[str], Dict[str, int]]:
+def collect_severities(ctx: SheetContext) -> tuple[list[str], dict[str, int]]:
     """Scan sheet and return unique severity values sorted most severe first, plus row counts."""
     if ctx.severity_cell is None:
         return [], {}
-    severities: List[str] = []
-    counts: Dict[str, int] = {}
+    severities: list[str] = []
+    counts: dict[str, int] = {}
     severity_col = ctx.severity_cell.col - 1
     for i in range(ctx.first_data_row_idx, len(ctx.sheet_data)):
         if severity_col < len(ctx.sheet_data[i]):
@@ -979,10 +980,10 @@ def collect_severities(ctx: SheetContext) -> Tuple[List[str], Dict[str, int]]:
     return severities, counts
 
 
-def collect_annotations(ctx: SheetContext) -> Tuple[List[str], Dict[str, int]]:
+def collect_annotations(ctx: SheetContext) -> tuple[list[str], dict[str, int]]:
     """Scan sheet and return unique annotation IDs found in timestamp cells, plus cell counts."""
-    annotation_ids: List[str] = []
-    counts: Dict[str, int] = {}
+    annotation_ids: list[str] = []
+    counts: dict[str, int] = {}
     for i in range(ctx.first_data_row_idx, len(ctx.sheet_data)):
         if ctx.filename_row_idx is not None and i == ctx.filename_row_idx:
             continue
@@ -1002,8 +1003,8 @@ def collect_annotations(ctx: SheetContext) -> Tuple[List[str], Dict[str, int]]:
 
 
 def generate_severity_timestamps(
-    ctx: SheetContext, selected_severities: List[str]
-) -> List[ClipRecord]:
+    ctx: SheetContext, selected_severities: list[str]
+) -> list[ClipRecord]:
     """Generate clip records for all rows matching any of the selected severities."""
     if ctx.severity_cell is None:
         utils.warning_print("No Severity column found in the spreadsheet.")
@@ -1023,8 +1024,8 @@ def generate_severity_timestamps(
 
 
 def generate_line_timestamps(
-    ctx: SheetContext, line_numbers: List[int]
-) -> List[ClipRecord]:
+    ctx: SheetContext, line_numbers: list[int]
+) -> list[ClipRecord]:
     """Generate clip records for one or more line/row numbers.
 
     Args:
@@ -1071,7 +1072,7 @@ def generate_line_timestamps(
 
 def generate_range_timestamps(
     ctx: SheetContext, start_line: int, end_line: int
-) -> List[ClipRecord]:
+) -> list[ClipRecord]:
     """Generate clip records for a range of rows.
 
     Args:
@@ -1088,7 +1089,7 @@ def generate_range_timestamps(
 
 def generate_participant_timestamps(
     ctx: SheetContext, participant_id: str
-) -> List[ClipRecord]:
+) -> list[ClipRecord]:
     """Generate clip records for all rows in a single participant's column."""
     utils.debug_print("Starting method generate_participant_timestamps()")
     col_idx = find_participant_column(ctx.header_row, ctx.id_cell, participant_id)
@@ -1114,8 +1115,8 @@ def generate_participant_timestamps(
 
 
 def generate_cell_timestamps(
-    ctx: SheetContext, cell_specs: List[Tuple[str, int]]
-) -> List[ClipRecord]:
+    ctx: SheetContext, cell_specs: list[tuple[str, int]]
+) -> list[ClipRecord]:
     """Generate clip records for specific cells.
 
     Args:
@@ -1188,7 +1189,7 @@ def generate_cell_timestamps(
     return clips
 
 
-def sort_clips_chronologically(clips: List[ClipRecord]) -> None:
+def sort_clips_chronologically(clips: list[ClipRecord]) -> None:
     """Sort clip records in-place by earliest start timestamp in each clip cell.
 
     Cells are normalized through parse_cell_annotations first, then parsed via
@@ -1210,7 +1211,7 @@ def sort_clips_chronologically(clips: List[ClipRecord]) -> None:
     clips.sort(key=_clip_start_seconds)
 
 
-def sort_clips_by_severity(clips: List[ClipRecord]) -> None:
+def sort_clips_by_severity(clips: list[ClipRecord]) -> None:
     """Sort clip records in-place by severity (most severe first).
 
     Clips without severity or with unrecognized severity sort last.
@@ -1273,10 +1274,10 @@ def _clip_highlight_score(clip: Any, lowered_filenames: Sequence[str]) -> float:
 
 
 def score_and_truncate_clips(
-    clips: List[ClipRecord],
-    existing_filenames: Set[str],
+    clips: list[ClipRecord],
+    existing_filenames: set[str],
     duration_budget: int,
-) -> List[ClipRecord]:
+) -> list[ClipRecord]:
     """Score clips by importance and select the best ones that fit within a duration budget.
 
     Clips are scored by severity, uniqueness, and keyword annotations, then
@@ -1289,7 +1290,7 @@ def score_and_truncate_clips(
         key=lambda c: _clip_highlight_score(c, lowered),
         reverse=True,
     )
-    result: List[ClipRecord] = []
+    result: list[ClipRecord] = []
     total_seconds = 0.0
     for clip in scored:
         dur = _clip_duration_seconds(clip)
@@ -1302,7 +1303,7 @@ def score_and_truncate_clips(
 
 def generate_reel_timestamps(
     ctx: SheetContext, reel_input_string: str
-) -> List[ClipRecord]:
+) -> list[ClipRecord]:
     """Generate clip records for reel mode by combining multiple selector types and deduplicating.
 
     Parses reel input (batch, keyword, chronologic, lines, ranges, categories, cells, participants),
@@ -1359,7 +1360,7 @@ def generate_reel_timestamps(
     ):
         selectors["batch"] = True
 
-    all_issues: List[ClipRecord] = []
+    all_issues: list[ClipRecord] = []
 
     if selectors["keyword"]:
         all_issues.extend(generate_keyword_timestamps(ctx))
@@ -1377,8 +1378,8 @@ def generate_reel_timestamps(
         all_issues.extend(generate_participant_timestamps(ctx, participant_id))
 
     # Deduplicate by cell (row, col)
-    seen: Set[Tuple[int, int]] = set()
-    deduped: List[ClipRecord] = []
+    seen: set[tuple[int, int]] = set()
+    deduped: list[ClipRecord] = []
     for issue in all_issues:
         key = (issue["cell"].row, issue["cell"].col)
         if key not in seen:

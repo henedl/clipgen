@@ -18,7 +18,6 @@ import os
 import tempfile
 import threading
 from pathlib import Path
-from typing import Dict, Optional
 
 import config
 import utils
@@ -29,11 +28,11 @@ from utils import ClipRecord
 # Endcard cache — keyed by resolution, shared across threads
 # ---------------------------------------------------------------------------
 
-_endcard_cache: Dict[str, str] = {}
+_endcard_cache: dict[str, str] = {}
 _endcard_lock = threading.Lock()
 
 
-def _get_video_resolution(filepath: str) -> Optional[str]:
+def _get_video_resolution(filepath: str) -> str | None:
     """Return 'WIDTHxHEIGHT' resolution string for the first video stream."""
     props = video.probe_video_properties(filepath)
     if props is None:
@@ -63,9 +62,9 @@ def _build_card_frame(
     resolution: str,
     background_path: Path,
     label: str,
-    drawtext_filter: Optional[str] = None,
+    drawtext_filter: str | None = None,
     allow_color_fallback: bool = False,
-) -> Optional[str]:
+) -> str | None:
     """Generate a short title/end card video segment.
 
     Shared implementation for titlecard and endcard frame generation.
@@ -183,7 +182,7 @@ def _build_card_frame(
     return card_path
 
 
-def build_titlecard_frame(clip: ClipRecord, resolution: str) -> Optional[str]:
+def build_titlecard_frame(clip: ClipRecord, resolution: str) -> str | None:
     """Generate a short titlecard video segment for a clip."""
     return _build_card_frame(
         resolution=resolution,
@@ -194,7 +193,7 @@ def build_titlecard_frame(clip: ClipRecord, resolution: str) -> Optional[str]:
     )
 
 
-def build_endcard_frame(resolution: str) -> Optional[str]:
+def build_endcard_frame(resolution: str) -> str | None:
     """Generate a short endcard video segment if assets/endcard.png exists."""
     return _build_card_frame(
         resolution=resolution,
@@ -203,7 +202,7 @@ def build_endcard_frame(resolution: str) -> Optional[str]:
     )
 
 
-def get_or_build_endcard(resolution: str) -> Optional[str]:
+def get_or_build_endcard(resolution: str) -> str | None:
     """Return a cached endcard path for the given resolution, building if needed."""
     with _endcard_lock:
         cached = _endcard_cache.get(resolution)
@@ -235,7 +234,7 @@ def clear_endcard_cache() -> None:
 
 
 def prepend_titlecard_to_clip(
-    clip: ClipRecord, clip_path: str, resolution: Optional[str] = None
+    clip: ClipRecord, clip_path: str, resolution: str | None = None
 ) -> bool:
     """Prepend a generated titlecard to an existing clip file in-place.
 
@@ -332,7 +331,7 @@ def prepend_titlecard_to_clip(
                 pass
 
 
-def append_endcard_to_clip(clip_path: str, resolution: Optional[str] = None) -> bool:
+def append_endcard_to_clip(clip_path: str, resolution: str | None = None) -> bool:
     """Append an endcard segment to an existing clip file in-place."""
     if not config.TITLECARDS_ENABLED:
         return True

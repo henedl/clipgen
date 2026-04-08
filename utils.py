@@ -1,8 +1,6 @@
 # -*- coding: utf-8 -*-
 """Utility functions for clipgen."""
 
-from __future__ import annotations
-
 import difflib
 import json
 import sys

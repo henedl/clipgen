@@ -6,7 +6,7 @@ so spreadsheet.py and clipgen can use local Excel files the same way as Google S
 """
 
 from pathlib import Path
-from typing import Any, List, NamedTuple, Optional
+from typing import Any, NamedTuple
 
 import openpyxl
 
@@ -35,13 +35,13 @@ class ExcelSheetAdapter:
         self._ws = ws
         self.title = getattr(ws, "title", Path(workbook_path).stem)
         self._workbook_path = workbook_path
-        self._data: List[List[str]] = []
+        self._data: list[list[str]] = []
         self._load_data()
         self.spreadsheet = _SpreadsheetLike(title=Path(workbook_path).stem)
 
     def _load_data(self) -> None:
         """Load all cell values into _data as List[List[str]], padded to max column."""
-        rows: List[List[str]] = []
+        rows: list[list[str]] = []
         max_col = 0
         for row in self._ws.iter_rows(values_only=True):
             str_row = [
@@ -58,7 +58,7 @@ class ExcelSheetAdapter:
                 row.append("")
         self._data = rows
 
-    def find(self, text: str) -> Optional[_CellLike]:
+    def find(self, text: str) -> _CellLike | None:
         """Find first cell with exact match. Returns cell-like with .row, .col (1-based)."""
         for row_idx, row in enumerate(self._data):
             for col_idx, cell_value in enumerate(row):
@@ -66,11 +66,11 @@ class ExcelSheetAdapter:
                     return _CellLike(row=row_idx + 1, col=col_idx + 1)
         return None
 
-    def get_all_values(self) -> List[List[str]]:
+    def get_all_values(self) -> list[list[str]]:
         """Return all sheet data as list of rows (list of strings)."""
         return self._data
 
-    def row_values(self, row_1based: int) -> List[str]:
+    def row_values(self, row_1based: int) -> list[str]:
         """Return one row as list of strings. row_1based is 1-based."""
         idx = row_1based - 1
         if 0 <= idx < len(self._data):
@@ -102,7 +102,7 @@ def _get_worksheet_from_workbook(wb: Any) -> Any:
     raise ValueError("Workbook contains no worksheets")
 
 
-def open_excel_workbook(path: str) -> Optional[ExcelSheetAdapter]:
+def open_excel_workbook(path: str) -> ExcelSheetAdapter | None:
     """Load an .xlsx file and return an ExcelSheetAdapter for the chosen worksheet.
 
     Args:
@@ -126,12 +126,12 @@ def open_excel_workbook(path: str) -> Optional[ExcelSheetAdapter]:
         return None
 
 
-def list_excel_in_cwd() -> List[str]:
+def list_excel_in_cwd() -> list[str]:
     """Return list of .xlsx file paths in the current working directory (case-insensitive extension)."""
     return sorted(str(p) for p in Path.cwd().iterdir() if p.suffix.lower() == ".xlsx")
 
 
-def select_excel_file() -> Optional[ExcelSheetAdapter]:
+def select_excel_file() -> ExcelSheetAdapter | None:
     """Discover .xlsx in cwd: 0 -> error; 1 -> open and return; 2+ -> list and prompt.
 
     Returns:

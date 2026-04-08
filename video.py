@@ -11,7 +11,7 @@ import tempfile
 from collections import Counter
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 from icecream import ic
 
@@ -21,11 +21,11 @@ import utils
 
 INVALID_END_TIMESTAMP = None
 
-_file_duration_cache: Dict[str, int] = {}
-_video_properties_cache: Dict[str, Dict[str, Any]] = {}
+_file_duration_cache: dict[str, int] = {}
+_video_properties_cache: dict[str, dict[str, Any]] = {}
 
 
-def _ffmpeg_install_guidance_lines() -> List[str]:
+def _ffmpeg_install_guidance_lines() -> list[str]:
     """Return actionable install guidance based on the current platform."""
     platform_specific = []
     if sys.platform == "darwin":
@@ -72,12 +72,12 @@ def check_ffmpeg_tools_available() -> bool:
 
 
 def run_ffmpeg_process(
-    ffmpeg_command: List[str],
+    ffmpeg_command: list[str],
     *,
     input_file: str,
     output_file: str,
     os_error_message: str,
-) -> Optional[subprocess.CompletedProcess[str]]:
+) -> subprocess.CompletedProcess[str] | None:
     """Run an ffmpeg subprocess and wrap common OS-level failures."""
     try:
         return subprocess.run(ffmpeg_command, encoding="utf-8", capture_output=True)
@@ -104,8 +104,8 @@ def run_ffmpeg_process(
 
 
 def _add_ffmpeg_stderr(
-    error_details: List[str], ffmpeg_result: subprocess.CompletedProcess[str]
-) -> List[str]:
+    error_details: list[str], ffmpeg_result: subprocess.CompletedProcess[str]
+) -> list[str]:
     """Append trimmed ffmpeg stderr output to an error details list when available."""
     if ffmpeg_result.stderr:
         error_details.append(f"ffmpeg error: {ffmpeg_result.stderr.strip()}")
@@ -129,7 +129,7 @@ def build_ffmpeg_cut_command(
     duration_seconds: int,
     reencode: bool,
     audio_normalize: bool,
-) -> List[str]:
+) -> list[str]:
     """Build ffmpeg argv for cutting a clip. Caller runs subprocess.
 
     Args:
@@ -381,7 +381,7 @@ def extract_thumbnail_bytes(
     start_seconds: int,
     *,
     width: int = 200,
-) -> Optional[bytes]:
+) -> bytes | None:
     """Extract a small JPEG thumbnail frame from a video at *start_seconds*.
 
     Uses fast input seeking (``-ss`` before ``-i``) so performance is
@@ -530,7 +530,7 @@ def extract_gif(
     return True
 
 
-def get_file_duration(filepath: str) -> Optional[int]:
+def get_file_duration(filepath: str) -> int | None:
     """Calls ffprobe to get duration of video container.
 
     Args:
@@ -598,7 +598,7 @@ def get_file_duration(filepath: str) -> Optional[int]:
         return None
 
 
-def probe_video_properties(filepath: str) -> Optional[Dict[str, Any]]:
+def probe_video_properties(filepath: str) -> dict[str, Any] | None:
     """Probe video file for stream properties (resolution, codecs, timing).
 
     Returns:
@@ -650,8 +650,8 @@ def probe_video_properties(filepath: str) -> Optional[Dict[str, Any]]:
 
     streams = data.get("streams", [])
     width = height = 0
-    video_codec: Optional[str] = None
-    audio_codec: Optional[str] = None
+    video_codec: str | None = None
+    audio_codec: str | None = None
     fps = 0.0
     nb_frames = 0
     for stream in streams:
@@ -703,7 +703,7 @@ def probe_video_properties(filepath: str) -> Optional[Dict[str, Any]]:
 def extract_frame_at_timestamp(
     video_path: str,
     timestamp_seconds: float,
-) -> Optional[Any]:
+) -> Any | None:
     """Extract a single video frame at the given timestamp via ffmpeg.
 
     Returns a BGR numpy array (H x W x 3) or None if extraction fails.
@@ -758,7 +758,7 @@ def extract_frame_at_timestamp(
     )
 
 
-def get_duration(start_time: str, end_time: Optional[str]) -> Optional[int]:
+def get_duration(start_time: str, end_time: str | None) -> int | None:
     """Calculate the duration between two timestamps.
 
     Args:
@@ -1009,15 +1009,15 @@ def compress_to_size(filepath: str, target_size_mb: float) -> bool:
 
 
 def _detect_clip_mismatches(
-    clip_paths: List[str],
-) -> Tuple[List[Optional[Dict[str, Any]]], bool, bool]:
+    clip_paths: list[str],
+) -> tuple[list[dict[str, Any] | None], bool, bool]:
     """Probe clips and detect property mismatches.
 
     Returns:
         (properties_list, has_resolution_mismatch, has_audio_presence_mismatch)
         properties_list parallels clip_paths (None entries for failed probes).
     """
-    props_list: List[Optional[Dict[str, Any]]] = [
+    props_list: list[dict[str, Any] | None] = [
         probe_video_properties(p) for p in clip_paths
     ]
     probed = [p for p in props_list if p is not None]
@@ -1052,8 +1052,8 @@ def _detect_clip_mismatches(
 
 
 def _pick_target_resolution(
-    props_list: List[Optional[Dict[str, Any]]],
-) -> Tuple[int, int]:
+    props_list: list[dict[str, Any] | None],
+) -> tuple[int, int]:
     """Choose target resolution from probed properties (most common, ties broken by largest)."""
     resolutions = Counter(
         (p["width"], p["height"]) for p in props_list if p is not None
@@ -1066,17 +1066,17 @@ def _pick_target_resolution(
 
 
 def _build_filter_complex_concat(
-    clip_paths: List[str],
-    props_list: List[Optional[Dict[str, Any]]],
+    clip_paths: list[str],
+    props_list: list[dict[str, Any] | None],
     target_w: int,
     target_h: int,
-) -> Tuple[str, bool]:
+) -> tuple[str, bool]:
     """Build a filter_complex string that scales/pads all inputs to target resolution.
 
     Returns:
         (filter_complex_string, has_any_audio)
     """
-    filter_parts: List[str] = []
+    filter_parts: list[str] = []
     has_any_audio = any(
         p is not None and p.get("audio_codec") is not None for p in props_list
     )
@@ -1110,7 +1110,7 @@ def _build_filter_complex_concat(
 
 
 def concatenate_clips(
-    clip_paths: List[str], output_file: str, reencode_on_fail: bool = True
+    clip_paths: list[str], output_file: str, reencode_on_fail: bool = True
 ) -> bool:
     """Concatenate multiple video clips into a single file.
 
@@ -1156,8 +1156,8 @@ def concatenate_clips(
 
 
 def _concatenate_filter_complex(
-    clip_paths: List[str],
-    props_list: List[Optional[Dict[str, Any]]],
+    clip_paths: list[str],
+    props_list: list[dict[str, Any] | None],
     output_file: str,
 ) -> bool:
     """Concatenate clips using filter_complex (handles resolution/audio mismatches)."""
@@ -1205,7 +1205,7 @@ def _concatenate_filter_complex(
 
 
 def _concatenate_demuxer(
-    clip_paths: List[str], output_file: str, reencode_on_fail: bool
+    clip_paths: list[str], output_file: str, reencode_on_fail: bool
 ) -> bool:
     """Concatenate clips using concat demuxer (fast path for matching properties)."""
     with tempfile.NamedTemporaryFile(
@@ -1306,9 +1306,9 @@ def _concatenate_demuxer(
 
 def _batch_extract_screenshots(
     input_file: str,
-    timestamps: List[int],
+    timestamps: list[int],
     interval_seconds: int,
-) -> Optional[List[Dict[str, Any]]]:
+) -> list[dict[str, Any]] | None:
     """Extract all gallery screenshots in a single ffmpeg pass.
 
     Uses fps=1/interval filter to avoid spawning one process per frame.
@@ -1342,7 +1342,7 @@ def _batch_extract_screenshots(
         if ffmpeg_result is None or ffmpeg_result.returncode != 0:
             return None
 
-        artifacts: List[Dict[str, Any]] = []
+        artifacts: list[dict[str, Any]] = []
         for i, ts in enumerate(timestamps):
             frame_file = os.path.join(tmpdir, f"frame_{i + 1:04d}.png")
             if not os.path.isfile(frame_file):
@@ -1370,16 +1370,16 @@ def _batch_extract_screenshots(
 
 def _parallel_extract_gifs(
     input_file: str,
-    timestamps: List[int],
+    timestamps: list[int],
     interval_seconds: int,
     gif_duration_seconds: int,
     duration: int,
-) -> Optional[List[Dict[str, Any]]]:
+) -> list[dict[str, Any]] | None:
     """Extract gallery GIFs using parallel ffmpeg processes.
 
     Returns artifact list on success, or None to signal fallback.
     """
-    tasks: List[Tuple[str, str, str, int, float]] = []
+    tasks: list[tuple[str, str, str, int, float]] = []
     for ts in timestamps:
         ts_str = utils.seconds_to_timestamp(ts)
         ts_safe = ts_str.replace(":", "_")
@@ -1394,7 +1394,7 @@ def _parallel_extract_gifs(
         return None
 
     total = len(tasks)
-    artifacts: List[Dict[str, Any]] = []
+    artifacts: list[dict[str, Any]] = []
     completed = 0
 
     try:
@@ -1436,7 +1436,7 @@ def generate_interval_captures(
     interval_seconds: int = 10,
     output_format: str = "screen",
     gif_duration_seconds: int = 3,
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """Generate screenshots or GIFs at regular intervals throughout a video.
 
     Args:
@@ -1467,7 +1467,7 @@ def generate_interval_captures(
     ext = ".png" if output_format == "screen" else ".gif"
     timestamps = list(range(0, duration, interval_seconds))
     total = len(timestamps)
-    artifacts: List[Dict[str, Any]] = []
+    artifacts: list[dict[str, Any]] = []
 
     utils.standard_print(
         f"Generating {total} {output_format}{'s' if total != 1 else ''} "
@@ -1534,10 +1534,10 @@ def generate_sprite_sheet(
     input_file: str,
     output_file: str,
     *,
-    frame_count: Optional[int] = None,
-    thumb_width: Optional[int] = None,
-    min_interval: Optional[int] = None,
-) -> Optional[Dict[str, Any]]:
+    frame_count: int | None = None,
+    thumb_width: int | None = None,
+    min_interval: int | None = None,
+) -> dict[str, Any] | None:
     """Generate a sprite sheet (contact sheet) from a video file.
 
     Extracts frames at regular intervals and tiles them into a single PNG.
