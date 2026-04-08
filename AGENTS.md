@@ -27,6 +27,7 @@
 - Commit early and commit often, so we can roll back changes more easily.
 - If a problem is reoccurring and survives fix attempts, check git logs for clues.
 - Never edit .gitignore automatically, always confirm changes to this file with the user.
+- When working through a plan file, e.g. FEATURE-PLAN.md, always make sure to check off items after they are completed.
 
 ## Learned Workspace Facts
 
