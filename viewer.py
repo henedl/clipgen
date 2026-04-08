@@ -260,6 +260,14 @@ def _generate_viewer_html(
         except OSError:
             pass
 
+    # Prepend shared utilities so standalone viewers have them
+    utils_js_path = assets_dir / "utils.js"
+    if utils_js_path.is_file():
+        try:
+            js_text = utils_js_path.read_text(encoding="utf-8") + "\n" + js_text
+        except OSError:
+            pass
+
     # Inline CSS
     css_link_tag = f'<link rel="stylesheet" href="{css_name}">'
     inline_css_block = f"<style>\n{css_text}\n</style>"
@@ -267,6 +275,10 @@ def _generate_viewer_html(
         template_html = template_html.replace(css_link_tag, inline_css_block)
     elif "</head>" in template_html:
         template_html = template_html.replace("</head>", f"{inline_css_block}\n</head>")
+
+    # Remove utils.js script tag (content already prepended to main JS)
+    utils_js_tag = '<script src="utils.js" defer></script>\n  '
+    template_html = template_html.replace(utils_js_tag, "")
 
     # Inline JS
     js_script_tag = f'<script src="{js_name}" defer></script>'
