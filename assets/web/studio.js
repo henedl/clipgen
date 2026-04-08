@@ -83,40 +83,6 @@
 
   // ---- Helpers ----
 
-  function qs(sel) {
-    return document.querySelector(sel);
-  }
-  function qsa(sel) {
-    return document.querySelectorAll(sel);
-  }
-
-  function el(tag, cls, text) {
-    var e = document.createElement(tag);
-    if (cls) e.className = cls;
-    if (text !== undefined) e.textContent = text;
-    return e;
-  }
-
-  function truncate(str, max) {
-    if (!str) return "";
-    return str.length > max ? str.slice(0, max) + "\u2026" : str;
-  }
-
-  function severityClass(raw) {
-    if (!raw) return "";
-    var k = raw.trim().toLowerCase();
-    var map = {
-      critical: "sev-critical",
-      high: "sev-high",
-      medium: "sev-medium",
-      low: "sev-low",
-      "n/a": "sev-na",
-      positive: "sev-positive",
-      "very positive": "sev-very-positive",
-    };
-    return map[k] || "sev-unknown";
-  }
-
   function cellKey(participant, rowNum) {
     return participant + "." + rowNum;
   }
@@ -3323,19 +3289,7 @@
 
   // ---- Screenspace Intake ----
 
-  var INTAKE_DETECTOR_COLORS = {
-    multitool: "#2563eb",
-    color: "#8b5cf6",
-    change: "#f97316",
-    similarity: "#0ea5e9",
-    text: "#10b981",
-    numbers: "#eab308",
-    timelapse: "#ec4899",
-    template: "#f43f5e",
-    flow: "#6366f1",
-    scene: "#14b8a6",
-    inactivity: "#78716c",
-  };
+  var INTAKE_DETECTOR_COLORS = DETECTOR_COLORS;
 
   var INTAKE_DETECTOR_ICON_FILES = {
     multitool: "link",
