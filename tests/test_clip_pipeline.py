@@ -184,18 +184,20 @@ def test_process_clips_parallel_generates_all(monkeypatch, make_clip):
 
 def test_resolve_clip_workers(monkeypatch):
     """Auto-detect returns min(4, cpu_count); explicit values pass through."""
+    import pipeline
+
     monkeypatch.setattr(config, "CLIP_PARALLEL_WORKERS", 0)
-    monkeypatch.setattr(clipgen.os, "cpu_count", lambda: 8)
-    assert clipgen._resolve_clip_workers() == 4
+    monkeypatch.setattr(pipeline.os, "cpu_count", lambda: 8)
+    assert pipeline._resolve_clip_workers() == 4
 
-    monkeypatch.setattr(clipgen.os, "cpu_count", lambda: 2)
-    assert clipgen._resolve_clip_workers() == 2
+    monkeypatch.setattr(pipeline.os, "cpu_count", lambda: 2)
+    assert pipeline._resolve_clip_workers() == 2
 
-    monkeypatch.setattr(clipgen.os, "cpu_count", lambda: None)
-    assert clipgen._resolve_clip_workers() == 1
+    monkeypatch.setattr(pipeline.os, "cpu_count", lambda: None)
+    assert pipeline._resolve_clip_workers() == 1
 
     monkeypatch.setattr(config, "CLIP_PARALLEL_WORKERS", 6)
-    assert clipgen._resolve_clip_workers() == 6
+    assert pipeline._resolve_clip_workers() == 6
 
     monkeypatch.setattr(config, "CLIP_PARALLEL_WORKERS", 1)
-    assert clipgen._resolve_clip_workers() == 1
+    assert pipeline._resolve_clip_workers() == 1

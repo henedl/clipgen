@@ -279,7 +279,7 @@ def test_api_generate_skips_existing_artifacts(client, monkeypatch, tmp_path):
 
     process_called = []
     monkeypatch.setattr(
-        "clipgen.process_clips",
+        "pipeline.process_clips",
         lambda *a, **kw: process_called.append(1) or (1, []),
     )
 
@@ -323,7 +323,7 @@ def test_api_generate_regenerates_when_file_missing(client, monkeypatch, tmp_pat
         "cellCol": 2,
     }
     monkeypatch.setattr(
-        "clipgen.process_clips",
+        "pipeline.process_clips",
         lambda *a, **kw: (1, [new_artifact]),
     )
 
@@ -340,7 +340,7 @@ def test_api_reel_skips_existing_reel(client, monkeypatch, tmp_path):
     """An identical reel is returned without re-running process_reel."""
     import types
 
-    import clipgen as clipgen_mod
+    import pipeline
 
     monkeypatch.setattr(server, "_worksheet", object())
     monkeypatch.setattr("config.OUTPUT_DIR", str(tmp_path))
@@ -352,7 +352,7 @@ def test_api_reel_skips_existing_reel(client, monkeypatch, tmp_path):
 
     # Compute expected reel ID using the same function the server will use
     components = [{"cellRow": 5, "cellCol": 2, "start": 60.0, "end": 90.0}]
-    expected_id = clipgen_mod.compute_reel_id(components)
+    expected_id = pipeline.compute_reel_id(components)
 
     existing_reel = {
         "id": expected_id,
@@ -378,7 +378,7 @@ def test_api_reel_skips_existing_reel(client, monkeypatch, tmp_path):
 
     process_called = []
     monkeypatch.setattr(
-        "clipgen.process_reel",
+        "pipeline.process_reel",
         lambda *a, **kw: process_called.append(1) or (1, []),
     )
 
@@ -440,7 +440,7 @@ def test_api_viewer_400_when_no_artifacts(client):
 
 
 def test_api_timeline_viewer_without_intake(client, monkeypatch):
-    import clipgen
+    import pipeline
     import spreadsheet
     import viewer
 
@@ -459,8 +459,8 @@ def test_api_timeline_viewer_without_intake(client, monkeypatch):
         }
     ]
     monkeypatch.setattr(spreadsheet, "generate_list", lambda *a, **kw: fake_clips)
-    monkeypatch.setattr(clipgen, "process_clips", lambda *a, **kw: (1, fake_artifacts))
-    monkeypatch.setattr(clipgen, "_is_excel_worksheet", lambda ws: False)
+    monkeypatch.setattr(pipeline, "process_clips", lambda *a, **kw: (1, fake_artifacts))
+    monkeypatch.setattr(pipeline, "is_excel_worksheet", lambda ws: False)
     monkeypatch.setattr(viewer, "load_screenspace_events_for_viewer", lambda: [])
     monkeypatch.setattr(viewer, "finalize_timeline_data", lambda *a, **kw: {"meta": {}})
     monkeypatch.setattr(
@@ -476,7 +476,7 @@ def test_api_timeline_viewer_without_intake(client, monkeypatch):
 
 
 def test_api_timeline_viewer_with_intake(client, monkeypatch):
-    import clipgen
+    import pipeline
     import spreadsheet
     import viewer
 
@@ -506,8 +506,10 @@ def test_api_timeline_viewer_with_intake(client, monkeypatch):
     }
 
     monkeypatch.setattr(spreadsheet, "generate_list", lambda *a, **kw: fake_clips)
-    monkeypatch.setattr(clipgen, "process_clips", lambda *a, **kw: (1, sheet_artifacts))
-    monkeypatch.setattr(clipgen, "_is_excel_worksheet", lambda ws: False)
+    monkeypatch.setattr(
+        pipeline, "process_clips", lambda *a, **kw: (1, sheet_artifacts)
+    )
+    monkeypatch.setattr(pipeline, "is_excel_worksheet", lambda ws: False)
     monkeypatch.setattr(viewer, "load_screenspace_events_for_viewer", lambda: [])
     monkeypatch.setattr(server, "_save_manifest_quiet", lambda: None)
 
@@ -866,7 +868,7 @@ def test_api_generate_titlecard_override(client, monkeypatch):
 
     monkeypatch.setattr("spreadsheet.generate_list", fake_generate_list)
     monkeypatch.setattr("spreadsheet.parse_cell_specifications", lambda t: [("P01", 5)])
-    monkeypatch.setattr("clipgen.process_clips", fake_process_clips)
+    monkeypatch.setattr("pipeline.process_clips", fake_process_clips)
     monkeypatch.setattr(server, "_generated_artifacts", [])
 
     resp = client.post(
@@ -906,7 +908,7 @@ def test_api_generate_titlecard_restored_on_error(client, monkeypatch):
 
     monkeypatch.setattr("spreadsheet.generate_list", fake_generate_list)
     monkeypatch.setattr("spreadsheet.parse_cell_specifications", lambda t: [("P01", 5)])
-    monkeypatch.setattr("clipgen.process_clips", fake_process_clips)
+    monkeypatch.setattr("pipeline.process_clips", fake_process_clips)
     monkeypatch.setattr(server, "_generated_artifacts", [])
 
     resp = client.post(

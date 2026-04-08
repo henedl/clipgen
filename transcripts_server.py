@@ -30,7 +30,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from flask import Blueprint, Response, jsonify, request, send_from_directory
+from flask import Blueprint, Response, jsonify, request
 
 import files
 import transcripts
@@ -46,37 +46,17 @@ _input_dir: str = ""
 _participants: list[dict[str, Any]] = []
 _manifest_lock = threading.Lock()
 
-_assets_dir = utils.get_bundled_assets_root() / "assets" / "web"
-
 # ---- Blueprint ----
 
 transcripts_bp = Blueprint("transcripts", __name__)
 
-
-# ---- Static file serving ----
-
-
-@transcripts_bp.route("/")
-def serve_index() -> FlaskResponse:
-    return send_from_directory(_assets_dir, "transcripts.html")
-
-
-@transcripts_bp.route("/<path:filename>")
-def serve_static(filename: str) -> FlaskResponse:
-    return send_from_directory(_assets_dir, filename)
-
-
-@transcripts_bp.route("/icons/<path:filename>")
-def serve_icons(filename: str) -> FlaskResponse:
-    icons_dir = utils.get_bundled_assets_root() / "assets" / "icons"
-    return send_from_directory(icons_dir, filename)
-
-
-@transcripts_bp.route("/media/<path:filename>")
-def serve_media(filename: str) -> FlaskResponse:
-    if not _input_dir:
-        return jsonify({"ok": False, "error": "Input directory not configured"}), 500
-    return send_from_directory(_input_dir, filename)
+utils.register_static_routes(
+    transcripts_bp,
+    "transcripts.html",
+    media_dir_getter=lambda: _input_dir,
+    media_error="Input directory not configured",
+    icons=True,
+)
 
 
 # ---- Participants ----
