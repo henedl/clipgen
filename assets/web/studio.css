@@ -2389,10 +2389,9 @@ html[data-theme="dark"] .log-panel {
   margin-left: 3px;
 }
 
-.xref-badge svg {
+.xref-badge .xref-badge-icon {
   width: 10px;
   height: 10px;
-  display: block;
 }
 
 .tr-intake-filter-cat {

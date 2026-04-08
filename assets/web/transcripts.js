@@ -5,34 +5,8 @@
   var POLL_INTERVAL = 3000;
   var SEARCH_DEBOUNCE = 300;
 
-  // Mark categories — mirrored from transcripts.py MARK_CATEGORIES
-  var MARK_CATEGORIES = {
-    pain_point: { label: "Pain Point", color: "#dc2626" },
-    delight:    { label: "Delight",    color: "#16a34a" },
-    quote:      { label: "Quote",      color: "#2563eb" },
-    insight:    { label: "Insight",    color: "#f97316" },
-    task:       { label: "Task Issue", color: "#8b5cf6" },
-    bookmark:   { label: "Bookmark",   color: "#0891b2" },
-  };
-
-  // Cross-reference badge SVGs and colors — mirrored from studio.js
-  var SS_BADGE_SVG = '<svg viewBox="0 0 16 16" fill="currentColor"><path d="M3.5 2C2.67157 2 2 2.67157 2 3.5V5.5C2 6.32843 2.67157 7 3.5 7H5.5C6.32843 7 7 6.32843 7 5.5V3.5C7 2.67157 6.32843 2 5.5 2H3.5Z"/><path d="M3.5 9C2.67157 9 2 9.67157 2 10.5V12.5C2 13.3284 2.67157 14 3.5 14H5.5C6.32843 14 7 13.3284 7 12.5V10.5C7 9.67157 6.32843 9 5.5 9H3.5Z"/><path d="M9 3.5C9 2.67157 9.67157 2 10.5 2H12.5C13.3284 2 14 2.67157 14 3.5V5.5C14 6.32843 13.3284 7 12.5 7H10.5C9.67157 7 9 6.32843 9 5.5V3.5Z"/><path d="M10.5 9C9.67157 9 9 9.67157 9 10.5V12.5C9 13.3284 9.67157 14 10.5 14H12.5C13.3284 14 14 13.3284 14 12.5V10.5C14 9.67157 13.3284 9 12.5 9H10.5Z"/></svg>';
-  var SHEET_BADGE_SVG = '<svg viewBox="0 0 16 16" fill="currentColor"><path fill-rule="evenodd" clip-rule="evenodd" d="M15 11C15 12.1046 14.1046 13 13 13H3C1.89543 13 1 12.1046 1 11V5C1 3.89543 1.89543 3 3 3H13C14.1046 3 15 3.89543 15 5V11ZM7.25 7.5C7.25 7.22386 7.02614 7 6.75 7H3C2.72386 7 2.5 7.22386 2.5 7.5V8C2.5 8.27614 2.72386 8.5 3 8.5H6.75C7.02614 8.5 7.25 8.27614 7.25 8V7.5ZM8.75 10.5C8.75 10.2239 8.97386 10 9.25 10H13C13.2761 10 13.5 10.2239 13.5 10.5V11C13.5 11.2761 13.2761 11.5 13 11.5H9.25C8.97386 11.5 8.75 11.2761 8.75 11V10.5ZM13.5 8V7.5C13.5 7.22386 13.2761 7 13 7H9.25C8.97386 7 8.75 7.22386 8.75 7.5V8C8.75 8.27614 8.97386 8.5 9.25 8.5H13C13.2761 8.5 13.5 8.27614 13.5 8ZM6.75 11.5C7.02614 11.5 7.25 11.2761 7.25 11V10.5C7.25 10.2239 7.02614 10 6.75 10H3C2.72386 10 2.5 10.2239 2.5 10.5V11C2.5 11.2761 2.72386 11.5 3 11.5H6.75Z"/></svg>';
-
-  var XREF_BADGE_COLOR = {
-    screenspace: "rgba(52, 152, 219, 0.85)",
-    sheet: "rgba(234, 179, 8, 0.85)",
-  };
-
-  // ---- State ----
-
-  // Screenspace detector colors — mirrored from studio.js INTAKE_DETECTOR_COLORS
-  var SS_DETECTOR_COLORS = {
-    multitool: "#2563eb", color: "#8b5cf6", change: "#f97316",
-    similarity: "#0ea5e9", text: "#10b981", numbers: "#eab308",
-    timelapse: "#ec4899", template: "#f43f5e", flow: "#6366f1",
-    scene: "#14b8a6", inactivity: "#78716c",
-  };
+  var fmtTime = formatTime;
+  var SS_DETECTOR_COLORS = DETECTOR_COLORS;
 
   var state = {
     participants: [],
@@ -58,43 +32,6 @@
   };
 
   // ---- Helpers ----
-
-  function qs(sel) { return document.querySelector(sel); }
-
-  function apiGet(path) {
-    return fetch(path).then(function (r) { return r.json(); });
-  }
-
-  function apiPost(path, body) {
-    return fetch(path, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    }).then(function (r) { return r.json(); });
-  }
-
-  function apiPut(path, body) {
-    return fetch(path, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    }).then(function (r) { return r.json(); });
-  }
-
-  function apiDelete(path) {
-    return fetch(path, { method: "DELETE" }).then(function (r) { return r.json(); });
-  }
-
-  function fmtTime(seconds) {
-    var total = Math.floor(seconds);
-    var h = Math.floor(total / 3600);
-    var m = Math.floor((total % 3600) / 60);
-    var s = total % 60;
-    if (h > 0) return h + ":" + pad2(m) + ":" + pad2(s);
-    return m + ":" + pad2(s);
-  }
-
-  function pad2(n) { return n < 10 ? "0" + n : "" + n; }
 
   function escapeHtml(str) {
     var div = document.createElement("div");
@@ -449,11 +386,11 @@
               var et = xref.screenspaceEvents[ei].event_type || xref.screenspaceEvents[ei].detector;
               if (!evSeen[et]) { evSeen[et] = true; evTypes.push(et); }
             }
-            html += '<span class="segment-xref-badge" style="background:' + XREF_BADGE_COLOR.screenspace + '" title="' + escapeHtml(evTypes.join(", ")) + '">' + SS_BADGE_SVG + '</span>';
+            html += '<span class="segment-xref-badge" style="background:' + XREF_BADGES.screenspace.color + '" title="' + escapeHtml(evTypes.join(", ")) + '"><span class="xref-badge-icon" style="mask-image:url(icons/' + XREF_BADGES.screenspace.icon + '.svg);-webkit-mask-image:url(icons/' + XREF_BADGES.screenspace.icon + '.svg)"></span></span>';
           }
           if (xref.sheetObservations.length > 0) {
             var obsTitle = xref.sheetObservations[0].observation;
-            html += '<span class="segment-xref-badge" style="background:' + XREF_BADGE_COLOR.sheet + '" title="' + escapeHtml(obsTitle) + '">' + SHEET_BADGE_SVG + '</span>';
+            html += '<span class="segment-xref-badge" style="background:' + XREF_BADGES.sheet.color + '" title="' + escapeHtml(obsTitle) + '"><span class="xref-badge-icon" style="mask-image:url(icons/' + XREF_BADGES.sheet.icon + '.svg);-webkit-mask-image:url(icons/' + XREF_BADGES.sheet.icon + '.svg)"></span></span>';
           }
           html += '</span>';
         }
