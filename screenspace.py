@@ -202,7 +202,7 @@ def regions_are_similar(
     return score >= threshold, score
 
 
-def compute_phash(region_pixels: np.ndarray) -> imagehash.ImageHash:
+def compute_phash(region_pixels: np.ndarray) -> "imagehash.ImageHash":
     """Compute perceptual hash of a region for fast similarity scanning."""
     import imagehash
     from PIL import Image
@@ -659,7 +659,7 @@ def _scan_via_ffmpeg_pipe(
     _phash_thresh = (fast_opts or {}).get(
         "phash_threshold", config.SCREENSPACE_FAST_SCAN_PHASH_THRESHOLD
     )
-    _prev_phash: list[imagehash.ImageHash | None] = [None]
+    _prev_phash: list["imagehash.ImageHash | None"] = [None]
 
     pipe_region = None if full_frame else region
     # For the pipe, push max_dim downscaling into ffmpeg when phash_skip is off.
@@ -1638,7 +1638,7 @@ def scan_inactivity(
     total_range = end_seconds - start_seconds
 
     results: list[dict[str, Any]] = []
-    prev_hash: list[imagehash.ImageHash | None] = [None]
+    prev_hash: list["imagehash.ImageHash | None"] = [None]
     span_start: list[float | None] = [None]
     span_distances: list[list[int]] = [[]]
     last_ts: list[float] = [start_seconds]
