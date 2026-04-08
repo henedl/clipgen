@@ -976,14 +976,39 @@ def process_reel(
     elif output_file is None:
         output_file = files.get_unique_filename(f"reel{config.FILEFORMAT}")
 
+    # Check cancel flag before starting concatenation
+    if cancel_flag and cancel_flag():
+        for path in clip_paths:
+            try:
+                Path(path).unlink(missing_ok=True)
+            except OSError:
+                pass
+        return (0, [])
+
     def _concat() -> bool:
-        return video.concatenate_clips(clip_paths, output_file, reencode_on_fail=True)
+        return video.concatenate_clips(
+            clip_paths, output_file, reencode_on_fail=True, cancel_flag=cancel_flag
+        )
 
     ok = (
         utils.run_with_spinner("Concatenating clips into final reel...", _concat)
         if utils.use_progress()
         else _concat()
     )
+
+    # If cancelled during concatenation, clean up output and temp clips
+    if cancel_flag and cancel_flag():
+        try:
+            Path(output_file).unlink(missing_ok=True)
+        except OSError:
+            pass
+        for path in clip_paths:
+            try:
+                Path(path).unlink(missing_ok=True)
+            except OSError:
+                pass
+        return (0, [])
+
     for path in clip_paths:
         try:
             clip_path = Path(path)

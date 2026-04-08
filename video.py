@@ -9,6 +9,7 @@ import subprocess
 import sys
 import tempfile
 from collections import Counter
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -77,9 +78,35 @@ def run_ffmpeg_process(
     input_file: str,
     output_file: str,
     os_error_message: str,
+    cancel_flag: Callable[[], bool] | None = None,
 ) -> subprocess.CompletedProcess[str] | None:
-    """Run an ffmpeg subprocess and wrap common OS-level failures."""
+    """Run an ffmpeg subprocess and wrap common OS-level failures.
+
+    When *cancel_flag* is supplied and returns ``True`` during execution,
+    the ffmpeg process is terminated and ``None`` is returned.
+    """
     try:
+        if cancel_flag is not None:
+            proc = subprocess.Popen(
+                ffmpeg_command,
+                encoding="utf-8",
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+            while proc.poll() is None:
+                if cancel_flag():
+                    proc.terminate()
+                    proc.wait(timeout=5)
+                    return None
+                try:
+                    proc.wait(timeout=0.5)
+                except subprocess.TimeoutExpired:
+                    continue
+            stdout = proc.stdout.read() if proc.stdout else ""
+            stderr = proc.stderr.read() if proc.stderr else ""
+            return subprocess.CompletedProcess(
+                ffmpeg_command, proc.returncode, stdout, stderr
+            )
         return subprocess.run(ffmpeg_command, encoding="utf-8", capture_output=True)
     except FileNotFoundError:
         utils.error_print(
@@ -1110,7 +1137,10 @@ def _build_filter_complex_concat(
 
 
 def concatenate_clips(
-    clip_paths: list[str], output_file: str, reencode_on_fail: bool = True
+    clip_paths: list[str],
+    output_file: str,
+    reencode_on_fail: bool = True,
+    cancel_flag: Callable[[], bool] | None = None,
 ) -> bool:
     """Concatenate multiple video clips into a single file.
 
@@ -1150,15 +1180,20 @@ def concatenate_clips(
         utils.warning_print(
             "Re-encoding all clips to produce a compatible reel (this may take longer)."
         )
-        return _concatenate_filter_complex(clip_paths, props_list, output_file)
+        return _concatenate_filter_complex(
+            clip_paths, props_list, output_file, cancel_flag=cancel_flag
+        )
 
-    return _concatenate_demuxer(clip_paths, output_file, reencode_on_fail)
+    return _concatenate_demuxer(
+        clip_paths, output_file, reencode_on_fail, cancel_flag=cancel_flag
+    )
 
 
 def _concatenate_filter_complex(
     clip_paths: list[str],
     props_list: list[dict[str, Any] | None],
     output_file: str,
+    cancel_flag: Callable[[], bool] | None = None,
 ) -> bool:
     """Concatenate clips using filter_complex (handles resolution/audio mismatches)."""
     target_w, target_h = _pick_target_resolution(props_list)
@@ -1182,6 +1217,7 @@ def _concatenate_filter_complex(
             input_file=clip_paths[0],
             output_file=output_file,
             os_error_message="Filter-complex concatenation failed.",
+            cancel_flag=cancel_flag,
         )
         if result is None or result.returncode != 0:
             error_details = [
@@ -1205,7 +1241,10 @@ def _concatenate_filter_complex(
 
 
 def _concatenate_demuxer(
-    clip_paths: list[str], output_file: str, reencode_on_fail: bool
+    clip_paths: list[str],
+    output_file: str,
+    reencode_on_fail: bool,
+    cancel_flag: Callable[[], bool] | None = None,
 ) -> bool:
     """Concatenate clips using concat demuxer (fast path for matching properties)."""
     with tempfile.NamedTemporaryFile(
@@ -1240,6 +1279,7 @@ def _concatenate_demuxer(
             input_file=concat_list_file,
             output_file=output_file,
             os_error_message="Concatenation failed.",
+            cancel_flag=cancel_flag,
         )
         if ffmpeg_result is None:
             return False
@@ -1270,6 +1310,7 @@ def _concatenate_demuxer(
                 input_file=concat_list_file,
                 output_file=output_file,
                 os_error_message="Concatenation failed during re-encoding fallback.",
+                cancel_flag=cancel_flag,
             )
             if ffmpeg_result is None:
                 return False

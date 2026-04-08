@@ -189,6 +189,8 @@ def transcribe_video(
             source_file=str(video_path),
             model=config.TRANSCRIBE_MODEL,
         )
+    except _TranscriptionCancelled:
+        raise
     except Exception as exc:
         utils.warning_print(f"Transcription failed for {Path(video_path).name}: {exc}")
         return None
@@ -752,9 +754,11 @@ class TranscriptWorker:
         context_kw = get_corrections_keywords(corrections) or None
 
         def _on_seg(end_time: float, segment: TranscriptSegment) -> None:
+            # Check cancel flag outside the lock to avoid deadlock — the
+            # except handler also acquires self._lock.
+            if task.get("_cancelled"):
+                raise _TranscriptionCancelled
             with self._lock:
-                if task.get("_cancelled"):
-                    raise _TranscriptionCancelled
                 if duration > 0:
                     task["progress"] = min(end_time / duration, 0.99)
                 task["partial_segments"].append(segment)
