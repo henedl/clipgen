@@ -2,6 +2,7 @@ from unittest.mock import Mock
 
 import clipgen
 import config
+import pipeline
 
 
 def _prepared_clip(raw_clip, times):
@@ -201,3 +202,35 @@ def test_resolve_clip_workers(monkeypatch):
 
     monkeypatch.setattr(config, "CLIP_PARALLEL_WORKERS", 1)
     assert pipeline._resolve_clip_workers() == 1
+
+
+def test_run_clip_pipeline_cancel_flag(monkeypatch):
+    """cancel_flag should stop processing remaining clips."""
+    monkeypatch.setattr(pipeline.utils, "create_progress_bar", lambda: None)
+
+    processed = []
+
+    def per_clip_fn(clip, missing_videos):
+        processed.append(clip["id"])
+        return clip["id"]
+
+    clips = [{"id": i, "desc": "", "participant": ""} for i in range(5)]
+
+    # Cancel after the first clip is processed
+    call_count = {"n": 0}
+
+    def cancel_after_first():
+        call_count["n"] += 1
+        return call_count["n"] > 1
+
+    results, _ = pipeline._run_clip_pipeline(
+        clips,
+        empty_warning="",
+        intro_message="",
+        task_label="test",
+        per_clip_fn=per_clip_fn,
+        cancel_flag=cancel_after_first,
+    )
+    # Should have processed only the first clip before cancel was detected
+    assert len(results) == 1
+    assert processed == [0]

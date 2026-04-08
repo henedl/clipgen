@@ -2247,6 +2247,7 @@
     qs("#stashArtifactsBtn").addEventListener("click", stashCurrentArtifacts);
     qs("#generateBtn").addEventListener("click", onGenerate);
     qs("#buildReelBtn").addEventListener("click", onBuildReel);
+    qs("#cancelReelBtn").addEventListener("click", onCancelReel);
     qs("#buildViewerBtn").addEventListener("click", onBuildViewer);
     qs("#buildTimelineViewerBtn").addEventListener("click", onBuildTimelineViewer);
     qs("#buildHighlightsBtn").addEventListener("click", onBuildHighlights);
@@ -2327,6 +2328,14 @@
     var p = card.getAttribute("data-participant");
     var r = card.getAttribute("data-row");
     if (p && r) delete state.cellResults[cellKey(p, parseInt(r, 10))];
+  }
+
+  function clearCardStatus(card) {
+    card.classList.remove("queue-card-queued", "queue-card-success", "queue-card-fail");
+    var overlay = card.querySelector(".card-gen-overlay");
+    if (overlay) overlay.remove();
+    var badge = card.querySelector(".card-result-badge");
+    if (badge) badge.remove();
   }
 
   function setCardResult(card, success) {
@@ -2542,11 +2551,17 @@
     }
   }
 
+  function onCancelReel() {
+    qs("#cancelReelBtn").classList.add("hidden");
+    fetch("api/reel/cancel", { method: "POST" });
+  }
+
   function onBuildReel() {
     if (state.generating || state.reelQueue.length === 0) return;
     state.generating = true;
     setGeneratingLock(true);
     setTitleSpinner("reelSpinner", true);
+    qs("#cancelReelBtn").classList.remove("hidden");
 
     // Determine if we have intake items — use direct endpoint for mixed/intake reels
     var hasIntake = false;
@@ -2614,13 +2629,21 @@
         state.generating = false;
         setTitleSpinner("reelSpinner", false);
         setGeneratingLock(false);
+        qs("#cancelReelBtn").classList.add("hidden");
 
+        var cancelled = !!data.cancelled;
         var cards = list.querySelectorAll(".queue-card");
         for (var j = 0; j < cards.length; j++) {
-          setCardResult(cards[j], !!data.ok);
+          if (cancelled) {
+            clearCardStatus(cards[j]);
+          } else {
+            setCardResult(cards[j], !!data.ok);
+          }
         }
 
-        if (data.ok) {
+        if (cancelled) {
+          showResult(null, "Reel generation cancelled");
+        } else if (data.ok) {
           showResult("Reel built successfully", null);
         } else {
           showResult(null, data.error || "Reel build failed");
@@ -2631,6 +2654,7 @@
         state.generating = false;
         setTitleSpinner("reelSpinner", false);
         setGeneratingLock(false);
+        qs("#cancelReelBtn").classList.add("hidden");
 
         var cards = list.querySelectorAll(".queue-card");
         for (var j = 0; j < cards.length; j++) {
