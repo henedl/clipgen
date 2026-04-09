@@ -121,7 +121,7 @@
       card.setAttribute("data-index", i);
 
       var img = document.createElement("img");
-      img.src = a.file;
+      img.src = a.data || a.file;
       img.alt = a.timestamp_formatted || formatTime(a.timestamp);
       img.loading = "lazy";
       card.appendChild(img);
@@ -169,7 +169,7 @@
     var content = qs("#lightboxContent");
     content.innerHTML = "";
     var img = document.createElement("img");
-    img.src = a.file;
+    img.src = a.data || a.file;
     img.alt = a.timestamp_formatted || formatTime(a.timestamp);
     content.appendChild(img);
 

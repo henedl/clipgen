@@ -308,6 +308,11 @@ Note: Non-interactive mode (using -b, -l, -r, -C, -c, -p, -k, -S, -M, -R, or -T)
         metavar="SECONDS",
         help=f"Capture interval in seconds for gallery mode (default: {config.GALLERY_INTERVAL_SECONDS})",
     )
+    viewer_manifest.add_argument(
+        "--bundle",
+        action="store_true",
+        help="Embed gallery images as base64 data URIs in the HTML (makes it fully self-contained)",
+    )
 
     run_opts = parser.add_argument_group("run options")
     run_opts.add_argument(
@@ -757,6 +762,7 @@ def _run_gallery_cli(args: argparse.Namespace) -> None:
 
     output_format = "gif" if getattr(args, "gif", False) else "screen"
     interval = getattr(args, "interval", None) or config.GALLERY_INTERVAL_SECONDS
+    bundle = getattr(args, "bundle", False) or config.GALLERY_BUNDLE_ENABLED
 
     artifacts = video.generate_interval_captures(
         str(video_path),
@@ -774,6 +780,7 @@ def _run_gallery_cli(args: argparse.Namespace) -> None:
         video_duration=duration,
         output_format=output_format,
         interval=interval,
+        bundle=bundle,
     )
     gallery_path = viewer.generate_gallery_viewer(data)
     if gallery_path:
@@ -1223,7 +1230,7 @@ def _validate_mode_conflicts(
             utils.error_print(
                 "--gallery cannot be combined with selection modes, --viewer, --regenerate, --studio, or --timeline-viewer.",
                 [
-                    "Only --gif, --interval, -i/-o (directories), and -v (verbose) may be used alongside --gallery."
+                    "Only --gif, --interval, --bundle, -i/-o (directories), and -v (verbose) may be used alongside --gallery."
                 ],
             )
             sys.exit(1)

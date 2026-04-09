@@ -2864,6 +2864,7 @@
     var format = qs("#galleryFormat").value;
     var interval = parseInt(qs("#galleryInterval").value, 10);
     if (!interval || interval < 1) interval = 10;
+    var bundle = qs("#galleryBundle").checked;
 
     drawer.classList.remove("open");
     btn.style.minWidth = "";
@@ -2880,7 +2881,7 @@
     fetch("api/gallery", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ participant: participant, format: format, interval: interval }),
+      body: JSON.stringify({ participant: participant, format: format, interval: interval, bundle: bundle }),
     })
       .then(function (r) {
         if (!r.ok) throw new Error("Server error " + r.status);

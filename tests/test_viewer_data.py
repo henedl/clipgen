@@ -176,6 +176,57 @@ def test_finalize_insights_viewer_shows_all_when_no_finals():
 # ---- HTML generation (gallery + insights viewer) ----
 
 
+# ---- finalize_gallery_data bundling ----
+
+
+def test_finalize_gallery_data_bundle_embeds_png(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    # Create a tiny PNG file (1x1 pixel)
+    png_bytes = (
+        b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01"
+        b"\x00\x00\x00\x01\x08\x02\x00\x00\x00\x90wS\xde\x00"
+        b"\x00\x00\x0cIDATx\x9cc\xf8\x0f\x00\x00\x01\x01\x00"
+        b"\x05\x18\xd8N\x00\x00\x00\x00IEND\xaeB`\x82"
+    )
+    (tmp_path / "cap_0_00.png").write_bytes(png_bytes)
+
+    artifacts = [{"file": "cap_0_00.png", "timestamp": 0.0, "type": "screen"}]
+    data = viewer.finalize_gallery_data(artifacts, bundle=True)
+
+    assert data["meta"]["bundled"] is True
+    data_uri = str(artifacts[0]["data"])
+    assert data_uri.startswith("data:image/png;base64,")
+
+
+def test_finalize_gallery_data_bundle_embeds_gif(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    gif_bytes = b"GIF89a\x01\x00\x01\x00\x00\xff\x00,\x00\x00\x00\x00\x01\x00\x01\x00\x00\x02\x00;"
+    (tmp_path / "cap_0_00.gif").write_bytes(gif_bytes)
+
+    artifacts = [{"file": "cap_0_00.gif", "timestamp": 0.0, "type": "gif"}]
+    viewer.finalize_gallery_data(artifacts, bundle=True)
+
+    data_uri = str(artifacts[0]["data"])
+    assert data_uri.startswith("data:image/gif;base64,")
+
+
+def test_finalize_gallery_data_bundle_skips_missing_file(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    artifacts = [{"file": "missing.png", "timestamp": 0.0, "type": "screen"}]
+    data = viewer.finalize_gallery_data(artifacts, bundle=True)
+
+    assert "data" not in artifacts[0]
+    assert data["meta"]["bundled"] is True
+
+
+def test_finalize_gallery_data_no_bundle_by_default():
+    artifacts = [{"file": "cap.png", "timestamp": 0.0, "type": "screen"}]
+    data = viewer.finalize_gallery_data(artifacts)
+
+    assert data["meta"]["bundled"] is False
+    assert "data" not in artifacts[0]
+
+
 def test_generate_gallery_viewer_inlines_css_and_js(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
 
