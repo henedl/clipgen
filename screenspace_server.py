@@ -11,6 +11,7 @@ API endpoints (all under /screenspace/):
   GET  /api/participants                    – list discovered participant videos
   GET  /api/video/frame/<participant>/<ts>  – extract a JPEG frame at timestamp
   GET  /api/video/info/<participant>        – video metadata (duration, resolution, fps)
+  GET  /api/video/stream/<participant>     – stream source video (mp4, range-aware)
   GET  /api/regions                         – list regions
   POST /api/regions                         – create or update a region
   DELETE /api/regions/<name>               – delete a region
@@ -47,7 +48,7 @@ from typing import TYPE_CHECKING, Any, cast
 if TYPE_CHECKING:
     import screenspace
 
-from flask import Blueprint, Response, jsonify, request
+from flask import Blueprint, Response, jsonify, request, send_file
 
 import files
 import utils
@@ -217,6 +218,18 @@ def api_video_info(participant: str) -> FlaskResponse:
     _video_metadata_cache[participant] = info
 
     return jsonify({"ok": True, "info": info})
+
+
+@screenspace_bp.route("/api/video/stream/<participant>")
+def api_video_stream(participant: str) -> FlaskResponse:
+    """Stream the source video file for a participant (range-request aware)."""
+    video_path = _find_participant_video(participant)
+    if video_path is None:
+        return (
+            jsonify({"ok": False, "error": f"No video for participant {participant}"}),
+            404,
+        )
+    return send_file(video_path, mimetype="video/mp4", conditional=True)
 
 
 # ---- Region coordinate normalization ----

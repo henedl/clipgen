@@ -225,6 +225,21 @@ body {
   background: #0a0a0a;
 }
 
+#videoPlayer {
+  display: none;
+  width: 100%;
+  height: auto;
+  background: #0a0a0a;
+}
+
+#videoPlayer.active {
+  display: block;
+}
+
+#frameCanvas.video-active {
+  display: none;
+}
+
 #overlayCanvas {
   position: absolute;
   top: 0;
@@ -410,6 +425,14 @@ body {
 
 .region-toggle-btn.active {
   color: var(--color-accent);
+}
+
+.region-actions-sep {
+  width: 1px;
+  height: 1rem;
+  background: var(--color-border);
+  margin: 0 var(--space-1);
+  flex-shrink: 0;
 }
 
 /* Stash area */
