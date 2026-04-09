@@ -28,6 +28,7 @@
     sheetLoaded: false,
     xrefPollTimer: null,
     tooltipsEnabled: true,
+    summaryCollapsed: false,
   };
 
   // ---- Helpers ----
@@ -311,13 +312,16 @@
     if (p.has_transcript) {
       state.streamingParticipant = null;
       loadTranscript(pid);
+      loadSummary(pid);
     } else if (taskForPid && taskForPid.status === "running" && taskForPid.partial_segments && taskForPid.partial_segments.length > 0) {
       renderPartialSegments(taskForPid.partial_segments, taskForPid.progress);
       state.streamingParticipant = pid;
+      clearSummary();
     } else {
       state.segments = [];
       state.streamingParticipant = null;
       renderSegments();
+      clearSummary();
     }
   }
 
@@ -326,6 +330,7 @@
     qs("#videoEmpty").classList.remove("hidden");
     qs("#segmentList").innerHTML = "";
     qs("#transcriptEmpty").classList.remove("hidden");
+    clearSummary();
   }
 
   // ---- Transcript loading ----
@@ -340,6 +345,122 @@
       state.segments = data.segments;
       state.activeSegmentIndex = -1;
       renderSegments();
+    });
+  }
+
+  // ---- AI Summary ----
+
+  var _summaryPollTimer = null;
+
+  function loadSummary(pid) {
+    var section = qs("#summarySection");
+
+    apiGet("api/summary/" + pid).then(function (data) {
+      if (data.ok && data.summary) {
+        _stopSummaryPoll();
+        renderSummary(data.summary);
+      } else if (data.generating) {
+        renderSummaryGenerating();
+        _startSummaryPoll(pid);
+      } else {
+        section.classList.add("hidden");
+      }
+    }).catch(function () {
+      // Ollama unavailable or no summary — stay hidden
+      section.classList.add("hidden");
+    });
+  }
+
+  function _startSummaryPoll(pid) {
+    _stopSummaryPoll();
+    _summaryPollTimer = setInterval(function () {
+      if (state.selectedParticipant !== pid) {
+        _stopSummaryPoll();
+        return;
+      }
+      apiGet("api/summary/" + pid).then(function (data) {
+        if (data.ok && data.summary) {
+          _stopSummaryPoll();
+          renderSummary(data.summary);
+        } else if (!data.generating) {
+          // Generation finished without result — stop polling
+          _stopSummaryPoll();
+          qs("#summarySection").classList.add("hidden");
+        }
+      }).catch(function () {
+        _stopSummaryPoll();
+        qs("#summarySection").classList.add("hidden");
+      });
+    }, 3000);
+  }
+
+  function _stopSummaryPoll() {
+    if (_summaryPollTimer) {
+      clearInterval(_summaryPollTimer);
+      _summaryPollTimer = null;
+    }
+  }
+
+  function renderSummaryGenerating() {
+    var section = qs("#summarySection");
+    var content = qs("#summaryContent");
+    content.innerHTML = '<p class="summary-generating">Generating summary\u2026</p>';
+    section.classList.remove("hidden");
+    section.classList.toggle("collapsed", state.summaryCollapsed);
+    qs("#summaryToggle").setAttribute("aria-expanded", state.summaryCollapsed ? "false" : "true");
+  }
+
+  function renderSummary(text) {
+    var section = qs("#summarySection");
+    var content = qs("#summaryContent");
+    var lines = text.split("\n");
+    var paragraphs = [];
+    var bullets = [];
+    var inBullets = false;
+
+    for (var i = 0; i < lines.length; i++) {
+      var line = lines[i].trim();
+      if (!line) continue;
+      if (line.indexOf("- ") === 0 || line.indexOf("* ") === 0) {
+        inBullets = true;
+        bullets.push(escapeHtml(line.substring(2)));
+      } else if (!inBullets) {
+        paragraphs.push(escapeHtml(line));
+      } else {
+        bullets.push(escapeHtml(line));
+      }
+    }
+
+    var html = "";
+    if (paragraphs.length > 0) {
+      html += "<p>" + paragraphs.join(" ") + "</p>";
+    }
+    if (bullets.length > 0) {
+      html += "<ul>";
+      for (var j = 0; j < bullets.length; j++) {
+        html += "<li>" + bullets[j] + "</li>";
+      }
+      html += "</ul>";
+    }
+
+    content.innerHTML = html;
+    section.classList.remove("hidden");
+    section.classList.toggle("collapsed", state.summaryCollapsed);
+    qs("#summaryToggle").setAttribute("aria-expanded", state.summaryCollapsed ? "false" : "true");
+  }
+
+  function clearSummary() {
+    _stopSummaryPoll();
+    qs("#summarySection").classList.add("hidden");
+    qs("#summaryContent").innerHTML = "";
+  }
+
+  function initSummaryToggle() {
+    qs("#summaryHeader").addEventListener("click", function () {
+      var section = qs("#summarySection");
+      state.summaryCollapsed = !state.summaryCollapsed;
+      section.classList.toggle("collapsed", state.summaryCollapsed);
+      qs("#summaryToggle").setAttribute("aria-expanded", state.summaryCollapsed ? "false" : "true");
     });
   }
 
@@ -1409,6 +1530,7 @@
           if (state.selectedParticipant && newlyCompleted.indexOf(state.selectedParticipant) >= 0) {
             state.streamingParticipant = null;
             loadTranscript(state.selectedParticipant);
+            loadSummary(state.selectedParticipant);
           }
         });
       }
@@ -1542,6 +1664,7 @@
     initQueuePanel();
     initCorrectionsModal();
     initVideoSync();
+    initSummaryToggle();
 
     // Pause polling when tab is hidden; resume when visible
     document.addEventListener("visibilitychange", function () {
