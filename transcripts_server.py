@@ -12,6 +12,7 @@ API endpoints (all under /transcripts/):
   GET  /api/transcript/<participant>              - full transcript segments (corrections applied)
   PUT  /api/transcript/<participant>/segment      - edit a segment's text, creates correction
   GET  /api/vtt/<participant>                     - serve transcript as WebVTT
+  GET  /api/summary/<participant>                - AI-generated transcript summary
   GET  /api/corrections                           - list all study-local corrections
   POST /api/corrections                           - add a correction manually
   DELETE /api/corrections/<id>                    - remove a correction
@@ -33,7 +34,9 @@ from typing import Any
 
 from flask import Blueprint, Response, jsonify, request
 
+import config
 import files
+import ollama_client
 import transcripts
 import utils
 
@@ -46,6 +49,10 @@ _worker: transcripts.TranscriptWorker | None = None
 _input_dir: str = ""
 _participants: list[dict[str, Any]] = []
 _manifest_lock = threading.Lock()
+_summary_threads: set[threading.Thread] = set()
+_generating_summaries: set[str] = (
+    set()
+)  # participant IDs with in-flight summary generation
 
 # ---- Blueprint ----
 
@@ -87,6 +94,7 @@ def api_participants() -> FlaskResponse:
                 info["language"] = entry.get("language", "")
                 info["model"] = entry.get("model", "")
                 info["transcribed_at"] = entry.get("transcribed_at", "")
+                info["has_summary"] = bool(entry.get("summary"))
             result.append(info)
 
     # Check for stale artifacts (transcript outdated relative to source)
@@ -232,6 +240,21 @@ def api_vtt(participant: str) -> FlaskResponse:
     )
     vtt_text = transcripts._format_vtt(result)
     return Response(vtt_text, content_type="text/vtt")
+
+
+# ---- AI Summary ----
+
+
+@transcripts_bp.route("/api/summary/<participant>")
+def api_summary(participant: str) -> FlaskResponse:
+    """Return AI-generated summary, generation status, or 404."""
+    with _manifest_lock:
+        entry = _manifest.get("source_transcripts", {}).get(participant)
+    if not entry or not entry.get("summary"):
+        if participant in _generating_summaries:
+            return jsonify({"ok": False, "generating": True})
+        return jsonify({"ok": False}), 404
+    return jsonify({"ok": True, "summary": entry["summary"]})
 
 
 # ---- Corrections ----
@@ -680,14 +703,18 @@ def _persist_manifest() -> None:
 
 def _do_persist() -> None:
     """Persist manifest to disk - caller must hold _manifest_lock."""
-    # Collect completed task results into source_transcripts
+    # Collect completed task results into source_transcripts (merge, not replace,
+    # so that extra keys like "summary" added by other threads are preserved)
     if _worker:
         for task in _worker.get_all_tasks():
             if task["status"] == transcripts.TASK_STATUS_COMPLETED and task.get(
                 "result"
             ):
                 pid = task["participant"]
-                _manifest.setdefault("source_transcripts", {})[pid] = task["result"]
+                src = _manifest.setdefault("source_transcripts", {})
+                existing = src.get(pid, {})
+                existing.update(task["result"])
+                src[pid] = existing
         _manifest["tasks"] = _worker.get_all_tasks()
 
     transcripts.save_transcripts_manifest(
@@ -695,6 +722,60 @@ def _do_persist() -> None:
         _manifest.get("corrections", []),
         marks=_manifest.get("marks"),
     )
+
+
+# ---- AI Summary generation ----
+
+
+def _on_task_complete() -> None:
+    """Persist manifest, then trigger summary generation for newly completed participants."""
+    newly_completed: list[str] = []
+    if _worker:
+        for task in _worker.get_all_tasks():
+            if task["status"] == transcripts.TASK_STATUS_COMPLETED and task.get(
+                "result"
+            ):
+                pid = task["participant"]
+                with _manifest_lock:
+                    existing = _manifest.get("source_transcripts", {}).get(pid, {})
+                    if not existing.get("summary"):
+                        newly_completed.append(pid)
+
+    _persist_manifest()
+
+    if not config.OLLAMA_SUMMARY_ENABLED:
+        return
+    for pid in newly_completed:
+        _trigger_summary_generation(pid)
+
+
+def _trigger_summary_generation(participant: str) -> None:
+    """Spawn daemon thread to generate AI summary for a participant."""
+
+    def _run() -> None:
+        try:
+            with _manifest_lock:
+                entry = _manifest.get("source_transcripts", {}).get(participant)
+                if not entry or not entry.get("segments"):
+                    return
+                segments = list(entry["segments"])
+            summary = ollama_client.summarize_transcript(segments)
+            if summary:
+                with _manifest_lock:
+                    entry = _manifest.get("source_transcripts", {}).get(participant)
+                    if entry:
+                        entry["summary"] = summary
+                _persist_manifest()
+        except Exception as exc:
+            utils.warning_print(f"Summary generation failed for {participant}: {exc}")
+        finally:
+            _generating_summaries.discard(participant)
+            _summary_threads.discard(t)
+
+    _generating_summaries.add(participant)
+    t = threading.Thread(target=_run, daemon=True, name=f"summary-{participant}")
+    _summary_threads.add(t)
+    t.start()
 
 
 # ---- State initialization ----
@@ -734,6 +815,6 @@ def _init_transcripts_state(
         _participants = utils.discover_participant_videos(study_name)
 
     _worker = transcripts.TranscriptWorker()
-    _worker.on_task_complete = _persist_manifest
+    _worker.on_task_complete = _on_task_complete
     _worker.restore_tasks(_manifest.get("tasks", []))
     _worker.start()

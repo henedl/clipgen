@@ -22,7 +22,7 @@ dev = ["pytest"]
 packages = []
 py-modules = [
     "cli", "clipgen", "config", "excel_io", "files", "google_api",
-    "insights", "insights_server", "interactive", "screenspace",
+    "insights", "insights_server", "interactive", "ollama_client", "screenspace",
     "screenspace_server", "server", "spreadsheet", "titlecards",
     "transcripts", "utils", "video", "viewer",
 ]

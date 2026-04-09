@@ -245,6 +245,12 @@ TRANSCRIBE_FORMAT: str = "md"  # md, srt, vtt
 TRANSCRIBE_INITIAL_PROMPT: str = "This is a recorded user experience research session."  # biases Whisper toward UX research terminology
 TRANSCRIBE_BEAM_SIZE: int = 5  # beam search width
 
+# ── Ollama (Local AI) ───────────────────────────────────────────────
+OLLAMA_SUMMARY_ENABLED: bool = True  # auto-generate transcript summaries via Ollama
+OLLAMA_SUMMARY_MODEL: str = "qwen3.5:0.8b"  # model for short transcripts
+OLLAMA_SUMMARY_MODEL_LARGE: str = "qwen3.5:9b"  # model for longer transcripts
+OLLAMA_BASE_URL: str = "http://localhost:11434"  # Ollama server address
+
 # ── Rich Output ──────────────────────────────────────────────────────
 RICH_COLORS: bool = True  # Enable/disable colored output (set False for piped output)
 RICH_PANELS: bool = True  # Use bordered panels for errors/warnings/success messages
@@ -274,6 +280,10 @@ SETTINGS_DESCRIPTIONS: dict[str, str] = {
     "FILMSTRIP_ENABLED": "Show thumbnail images on timeline markers instead of solid colors (in the HTML viewer).",
     "GALLERY_BUNDLE_ENABLED": "Embed gallery images as base64 data URIs in the HTML file, making it fully self-contained.",
     "CLIP_PARALLEL_WORKERS": "Number of concurrent ffmpeg processes for clip generation. 0 = auto, 1 = sequential.",
+    "OLLAMA_SUMMARY_ENABLED": "Auto-generate AI summaries of transcripts using a local Ollama model.",
+    "OLLAMA_SUMMARY_MODEL": "Ollama model for short transcripts (fast, small).",
+    "OLLAMA_SUMMARY_MODEL_LARGE": "Ollama model for longer transcripts (slower, more capable).",
+    "OLLAMA_BASE_URL": "Base URL of the local Ollama server.",
 }
 
 # Studio-exposed settings with UI metadata (group, type, constraints).
@@ -319,4 +329,8 @@ STUDIO_SETTINGS: dict[str, dict[str, Any]] = {
         "step": 1,
     },
     "STUDIO_CELL_EXPAND_HOVER": {"group": "Sheet Preview", "type": "bool"},
+    "OLLAMA_SUMMARY_ENABLED": {"group": "AI Summary", "type": "bool"},
+    "OLLAMA_SUMMARY_MODEL": {"group": "AI Summary", "type": "str"},
+    "OLLAMA_SUMMARY_MODEL_LARGE": {"group": "AI Summary", "type": "str"},
+    "OLLAMA_BASE_URL": {"group": "AI Summary", "type": "str"},
 }
