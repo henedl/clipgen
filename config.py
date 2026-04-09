@@ -1,15 +1,35 @@
 # -*- coding: utf-8 -*-
-"""Configuration constants for clipgen."""
+"""Configuration constants for clipgen.
+
+Sections
+--------
+  Core Runtime         Feature toggles, version, verbosity, debugging
+  Directories          Input/output path overrides
+  Spreadsheet          Column headers, participant prefixes, severity maps, annotations
+  Files & Durations    Clip limits, gallery, manifests, server port, workers
+  Sprite Sheets        Insights builder hover-to-scrub thumbnails
+  Screenspace          Analysis thresholds, sampling, matching, performance
+  Highlights Reel      Duration budget and scoring weights
+  Browse Mode          Interactive table display settings
+  Spreadsheet Commands Special command keywords for document selection
+  Display / Preview    Text truncation limits
+  Timestamps           Format constants for timestamp parsing
+  FFmpeg               Encoding parameters, compression
+  Source Video          Filename pattern for participant videos
+  Transcription        faster-whisper model and format settings
+  Rich Output          Terminal color/panel/progress settings
+  Settings Metadata    Descriptions and Studio UI metadata
+"""
 
 from typing import Any
 
 from icecream import ic
 
-# Configuration Constants
+# ── Core Runtime ─────────────────────────────────────────────────────
 REENCODING: bool = False
 AUDIO_NORMALIZE: bool = False
 FILEFORMAT: str = ".mp4"
-VERSIONNUM: str = "0.10.30"
+VERSIONNUM: str = "0.10.31"
 TITLECARDS_ENABLED: bool = (
     False  # use --titlecards / --no-titlecards to override per run
 )
@@ -35,7 +55,7 @@ STANDARD: int = 1
 VERBOSE: int = 2
 VERBOSITY: int = STANDARD
 
-# Directory configuration
+# ── Directories ──────────────────────────────────────────────────────
 # When left empty, clipgen will use the current working directory for
 # both input (source videos) and output (generated artifacts), matching
 # the existing default behavior.
@@ -48,7 +68,7 @@ if DEBUGGING:
 else:
     ic.disable()
 
-# Spreadsheet Structure Constants
+# ── Spreadsheet ──────────────────────────────────────────────────────
 ID_HEADER: str = "ID"
 OBSERVATION_HEADER: str = "Observation"
 CATEGORY_HEADER: str = "Category"
@@ -84,7 +104,7 @@ IGNORED_TIMESTAMP_TOKENS: set[str] = {
     "x"
 }  # tokens skipped silently during timestamp parsing
 
-# File and Duration Constants
+# ── Files & Durations ────────────────────────────────────────────────
 MAX_FILENAME_LENGTH: int = 255
 MAX_CLIP_DURATION_SECONDS: int = (
     600  # 10 min; prompts user for confirmation before generating longer clips
@@ -117,13 +137,13 @@ STUDIO_SETTINGS_FILENAME: str = "studio_settings.json"
 STUDIO_CELL_EXPAND_HOVER: bool = True
 GOOGLE_API_MAX_RETRIES: int = 3  # Retries for transient Google API errors (5xx)
 
-# Sprite sheet constants (for insights builder hover-to-scrub)
+# ── Sprite Sheets ────────────────────────────────────────────────────
 SPRITE_SHEET_FRAME_COUNT: int = 20
 SPRITE_SHEET_THUMB_WIDTH: int = 160
 SPRITE_SHEET_MIN_INTERVAL: int = 1
 STUDIO_THUMBNAIL_WIDTH: int = 200
 
-# Screenspace constants
+# ── Screenspace ──────────────────────────────────────────────────────
 SCREENSPACE_MANIFEST_FILENAME: str = "screenspace_manifest.json"
 TRANSCRIPTS_MANIFEST_FILENAME: str = "transcripts_manifest.json"
 SCREENSPACE_DEFAULT_INTERVAL: float = (
@@ -165,7 +185,7 @@ SCREENSPACE_INACTIVITY_MIN_DURATION: float = (
     2.0  # min seconds to report an inactivity span
 )
 
-# Highlights reel constants
+# ── Highlights Reel ──────────────────────────────────────────────────
 HIGHLIGHTS_REEL_DURATION_SECONDS: int = 180  # 3-minute budget for highlights reel
 HIGHLIGHTS_WEIGHT_SEVERITY: float = (
     1.0  # scoring weight for severity in highlights reel ranking
@@ -173,13 +193,13 @@ HIGHLIGHTS_WEIGHT_SEVERITY: float = (
 HIGHLIGHTS_WEIGHT_UNIQUENESS: float = 0.5  # scoring weight for participant uniqueness
 HIGHLIGHTS_WEIGHT_KEYWORD: float = 0.3  # scoring weight for !key annotation
 
-# Browse Mode Constants
+# ── Browse Mode ──────────────────────────────────────────────────────
 BROWSE_LINES_TO_DISPLAY: int = 5  # Number of rows to show at once when browsing
 BROWSE_LINES_TO_SCROLL: int = 5  # Number of rows to move when scrolling up/down
 BROWSE_DESCRIPTION_MAX_WIDTH: int = 40  # Max width for description column in table
 BROWSE_TIMESTAMP_MAX_WIDTH: int = 15  # Max width for each timestamp column
 
-# Spreadsheet Selection Commands
+# ── Spreadsheet Commands ─────────────────────────────────────────────
 COMMAND_LIST_ALL: str = "all"
 COMMAND_LIST_NEW: str = "new"
 COMMAND_OPEN_LAST: str = "last"
@@ -190,7 +210,7 @@ NUM_NEWEST_DOCS_TO_SHOW: int = (
     3  # Number of newest documents to show when using 'new' command
 )
 
-# Display / preview constants
+# ── Display / Preview ────────────────────────────────────────────────
 DESCRIPTION_PREVIEW_LENGTH: int = 50  # Max chars for description in previews
 PROGRESS_DESCRIPTION_LENGTH: int = 30  # Max chars for description in progress bar
 REEL_PREVIEW_CLIP_COUNT: int = 10  # Number of clips to show in reel mode preview
@@ -198,12 +218,12 @@ MAX_SKIPPED_TIMESTAMPS_TO_SHOW: int = (
     3  # Max skipped timestamps to list in parse_timestamps warning
 )
 
-# Timestamp format constants
+# ── Timestamps ───────────────────────────────────────────────────────
 SECONDS_PER_HOUR: int = 3600
 SECONDS_PER_MINUTE: int = 60
 MAX_MMSS_LENGTH: int = 5  # Max length of an MM:SS timestamp string
 
-# ffmpeg constants
+# ── FFmpeg ────────────────────────────────────────────────────────────
 FFMPEG_LOGLEVEL: str = "16"  # ffmpeg -loglevel value (16 = error)
 FFMPEG_SCREENSHOT_QUALITY: str = "2"  # -q:v value for screenshots (1=best, 31=worst)
 GIF_FPS: int = 10
@@ -212,10 +232,10 @@ AUDIO_BITRATE_KBPS: int = 128
 COMPRESSION_SIZE_FACTOR: float = 0.95  # Target 95% of max to leave headroom
 MIN_VIDEO_BITRATE_KBPS: int = 100
 
-# Source video pattern
+# ── Source Video ──────────────────────────────────────────────────────
 SOURCE_VIDEO_PATTERN: str = r"_[PG]\d+\.mp4$"
 
-# Transcription constants (faster-whisper)
+# ── Transcription ────────────────────────────────────────────────────
 TRANSCRIBE_ENABLED: bool = False  # use --transcribe CLI flag to enable per run
 TRANSCRIBE_MODEL: str = "base"  # tiny, base, small, medium, large-v3
 TRANSCRIBE_LANGUAGE: str | None = None  # None = auto-detect
@@ -224,12 +244,12 @@ TRANSCRIBE_FORMAT: str = "md"  # md, srt, vtt
 TRANSCRIBE_INITIAL_PROMPT: str = "This is a recorded user experience research session."  # biases Whisper toward UX research terminology
 TRANSCRIBE_BEAM_SIZE: int = 5  # beam search width
 
-# Rich output settings
+# ── Rich Output ──────────────────────────────────────────────────────
 RICH_COLORS: bool = True  # Enable/disable colored output (set False for piped output)
 RICH_PANELS: bool = True  # Use bordered panels for errors/warnings/success messages
 RICH_PROGRESS: bool = True  # Show progress bars during batch/reel processing
 
-# Settings descriptions (used by interactive settings helpers)
+# ── Settings Metadata ────────────────────────────────────────────────
 SETTINGS_DESCRIPTIONS: dict[str, str] = {
     "REENCODING": "Re-encode clips via ffmpeg instead of stream-copying. Slower but fixes some codec issues.",
     "AUDIO_NORMALIZE": "Normalize audio levels across generated clips for consistent volume.",
@@ -255,7 +275,6 @@ SETTINGS_DESCRIPTIONS: dict[str, str] = {
 }
 
 # Studio-exposed settings with UI metadata (group, type, constraints).
-# Keys must match module-level attributes above and entries in SETTINGS_DESCRIPTIONS.
 STUDIO_SETTINGS: dict[str, dict[str, Any]] = {
     "REENCODING": {"group": "Video Output", "type": "bool"},
     "AUDIO_NORMALIZE": {"group": "Video Output", "type": "bool"},

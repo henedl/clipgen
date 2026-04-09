@@ -4,7 +4,6 @@
   "use strict";
 
   var THEME_STORAGE_KEY = "clipgen-screenspace-theme";
-  var POLL_INTERVAL = 3000;
   var FRAME_STEP = 1.0;
 
   var TASK_COLORS = DETECTOR_COLORS;

@@ -2,7 +2,6 @@
   "use strict";
 
   var THEME_STORAGE_KEY = "clipgen-transcripts-theme";
-  var POLL_INTERVAL = 3000;
   var SEARCH_DEBOUNCE = 300;
 
   var fmtTime = formatTime;
