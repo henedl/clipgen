@@ -102,7 +102,7 @@ How fast clipgen *feels* to the user, independent of actual processing time.
 
 **Prior art:** DocumentFragment batching already applied to Studio grid rendering (`89bd136`).
 
-**Status (audit):** `renderList()` in [assets/web/viewer.js](../assets/web/viewer.js) and results rendering in [assets/web/screenspace.js](../assets/web/screenspace.js) now build a `DocumentFragment` and append once. **Remaining candidate:** [assets/web/insights-builder.js](../assets/web/insights-builder.js) artifact grid and insight cards still append per item in a loop — apply the same fragment pattern (or virtual scrolling for very large lists; pairs with 6A).
+**Status (audit):** `renderList()` in [assets/web/viewer.js](../assets/web/viewer.js) and results rendering in [assets/web/screenspace.js](../assets/web/screenspace.js) now build a `DocumentFragment` and append once. **Done:** [assets/web/insights-builder.js](../assets/web/insights-builder.js) now also uses `DocumentFragment` for artifact grid (`renderArtifactGrid`), insight cards (`renderInsightCards`), bucket preview cards (`createBucketSection`), popover buttons (`showAddPopover`), and filter selects (`fillSelect`).
 
 **Experiment:** Build cards inside a `DocumentFragment`, then append the fragment in a single DOM write. For 200+ artifacts this eliminates hundreds of reflows.
 
@@ -467,4 +467,4 @@ Additional opportunities identified in a fresh pass over the codebase (April 202
 | deferred | 21 | **8.4** — Batch screenshot extraction (clip pipeline) — deferred (existing parallelism covers this) | Medium — many screens / same video |
 | [x] | 22 | **8.5** — Highlights scoring pre-lowercase | Low — scales with artifacts |
 | [x] | 23 | **8.6** — Manifest single-read (`_load_manifest_both`) | Low — eliminates duplicate file parse |
-| [ ] | 24 | **1E (remainder)** — Insights Builder DOM batching / virtual scroll | Low–Medium — perceived smoothness |
+| [x] | 24 | **1E (remainder)** — Insights Builder DOM batching / virtual scroll | Low–Medium — perceived smoothness |

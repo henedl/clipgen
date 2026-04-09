@@ -181,16 +181,18 @@
 
   function fillSelect(sel, values, allLabel) {
     while (sel.options.length > 0) sel.remove(0);
+    var frag = document.createDocumentFragment();
     var opt = document.createElement("option");
     opt.value = "";
     opt.textContent = allLabel;
-    sel.appendChild(opt);
+    frag.appendChild(opt);
     for (var i = 0; i < values.length; i++) {
       var o = document.createElement("option");
       o.value = values[i];
       o.textContent = values[i];
-      sel.appendChild(o);
+      frag.appendChild(o);
     }
+    sel.appendChild(frag);
   }
 
   function populateFilters() {
@@ -409,9 +411,11 @@
       grid.appendChild(el("div", "empty-state", "No artifacts match filters."));
       return;
     }
+    var frag = document.createDocumentFragment();
     for (var i = 0; i < ordered.length; i++) {
-      grid.appendChild(createArtifactCard(ordered[i]));
+      frag.appendChild(createArtifactCard(ordered[i]));
     }
+    grid.appendChild(frag);
   }
 
   function createArtifactCard(artifact) {
@@ -754,6 +758,7 @@
 
     if (expandedIds.length > 1) {
       insightSelect.classList.remove("hidden");
+      var frag = document.createDocumentFragment();
       for (var i = 0; i < state.insights.length; i++) {
         var ins = state.insights[i];
         if (!state.expandedInsightIds[ins.id]) continue;
@@ -763,8 +768,9 @@
           state._popoverTargetInsight = this.dataset.insightId;
           insightSelect.classList.add("hidden");
         });
-        insightSelect.appendChild(btn);
+        frag.appendChild(btn);
       }
+      insightSelect.appendChild(frag);
     } else {
       insightSelect.classList.add("hidden");
       if (expandedIds.length === 1) {
@@ -970,9 +976,11 @@
       return;
     }
 
+    var frag = document.createDocumentFragment();
     for (var i = 0; i < state.insights.length; i++) {
-      container.appendChild(createInsightCard(state.insights[i]));
+      frag.appendChild(createInsightCard(state.insights[i]));
     }
+    container.appendChild(frag);
   }
 
   function createInsightCard(insight) {
@@ -1144,14 +1152,16 @@
     if (bucket.artifacts.length === 0) {
       dropzone.appendChild(el("div", "bucket-empty-hint", "Drag artifacts here"));
     } else {
+      var frag = document.createDocumentFragment();
       for (var i = 0; i < bucket.artifacts.length; i++) {
         var art = findArtifact(bucket.artifacts[i]);
         if (art) {
-          dropzone.appendChild(
+          frag.appendChild(
             createPreviewCard(art, insight.id, bucketName, i)
           );
         }
       }
+      dropzone.appendChild(frag);
     }
 
     // Drop events
