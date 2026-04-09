@@ -1034,12 +1034,7 @@ def scan_text(
     EasyOCR is lazy-imported. Raises ``ImportError`` with install
     instructions if missing.
     """
-    try:
-        import easyocr  # noqa: F401 — validate availability
-    except ImportError:
-        raise ImportError(
-            "EasyOCR is required for text scan. Install with: uv add easyocr"
-        ) from None
+    utils.require_optional("easyocr", "text scan")
 
     if fuzzy_threshold <= 0:
         fuzzy_threshold = config.SCREENSPACE_OCR_FUZZY_THRESHOLD
@@ -1163,12 +1158,7 @@ def scan_numbers(
             f"Unknown operator '{operator}'. Must be one of: {', '.join(_VALID_OPERATORS)}"
         )
 
-    try:
-        import easyocr  # noqa: F401 — validate availability
-    except ImportError:
-        raise ImportError(
-            "EasyOCR is required for numbers scan. Install with: uv add easyocr"
-        ) from None
+    utils.require_optional("easyocr", "numbers scan")
 
     if languages is None:
         languages = ["en"]

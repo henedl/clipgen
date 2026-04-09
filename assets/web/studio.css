@@ -14,7 +14,7 @@
   --color-cell-valid: #93c5fd;
   --color-cell-selected: #c4b5fd;
   --color-heatmap: 168, 130, 214;
-  --color-cell-hover: rgba(29, 79, 114, 0.06);
+  --color-cell-hover: var(--color-accent-hover);
 }
 
 html {
@@ -684,7 +684,7 @@ body {
 
 #sheetGrid .col-participant.header-highlight,
 #sheetGrid .col-row-num-clickable.header-highlight {
-  background-color: rgba(29, 79, 114, 0.15);
+  background-color: var(--color-accent-highlight);
   color: var(--color-accent);
 }
 
@@ -1725,7 +1725,7 @@ html[data-theme="dark"] .queue-card-error .queue-card-thumb {
     --color-cell-text: #1e3a5f;
     --color-cell-valid: #1d4ed8;
     --color-cell-selected: #6d28d9;
-    --color-cell-hover: rgba(56, 189, 248, 0.08);
+    --color-cell-hover: var(--color-accent-hover);
     --color-heatmap: 192, 160, 235;
   }
 }
@@ -1736,14 +1736,14 @@ html[data-theme="dark"] {
   --color-cell-valid: #1d4ed8;
   --color-cell-selected: #6d28d9;
   --color-heatmap: 192, 160, 235;
-  --color-cell-hover: rgba(56, 189, 248, 0.08);
+  --color-cell-hover: var(--color-accent-hover);
 }
 
 /* Dark element overrides (shared by both @media and data-theme via specificity) */
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) #sheetGrid .col-participant.header-highlight,
   :root:not([data-theme="light"]) #sheetGrid .col-row-num-clickable.header-highlight {
-    background-color: rgba(56, 189, 248, 0.18);
+    background-color: var(--color-accent-highlight);
   }
   :root:not([data-theme="light"]) .status-card,
   :root:not([data-theme="light"]) .confirm-card {
@@ -1778,7 +1778,7 @@ html[data-theme="dark"] {
 
 html[data-theme="dark"] #sheetGrid .col-participant.header-highlight,
 html[data-theme="dark"] #sheetGrid .col-row-num-clickable.header-highlight {
-  background-color: rgba(56, 189, 248, 0.18);
+  background-color: var(--color-accent-highlight);
 }
 
 html[data-theme="dark"] .status-card,

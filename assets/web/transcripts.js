@@ -2,7 +2,6 @@
   "use strict";
 
   var THEME_STORAGE_KEY = "clipgen-transcripts-theme";
-  var POLL_INTERVAL = 3000;
   var SEARCH_DEBOUNCE = 300;
 
   var fmtTime = formatTime;
@@ -407,6 +406,7 @@
         }
       }
       html += '<span class="segment-text" data-id="' + escapeHtml(seg.id) + '">' + wordHtml + '</span>';
+      html += '<span class="segment-copy" title="Copy text"><span class="segment-copy-icon"></span></span>';
       html += '</div>';
     }
     container.innerHTML = html;
@@ -444,6 +444,15 @@
             toggleMark(segId);
           }
         });
+        row.querySelector(".segment-copy").addEventListener("click", function (e) {
+          e.stopPropagation();
+          var idx = parseInt(row.getAttribute("data-index"), 10);
+          var seg = state.segments[idx];
+          if (!seg) return;
+          navigator.clipboard.writeText(seg.text).then(function () {
+            showToast("Copied to clipboard");
+          });
+        });
       })(rows[j]);
     }
   }
@@ -475,6 +484,7 @@
       html += '<span class="' + markClass + '" data-segment-id="' + escapeHtml(segId) + '"' + markStyle + '></span>';
       html += '<span class="segment-timestamp">' + fmtTime(seg.start) + '</span>';
       html += '<span class="segment-text">' + escapeHtml(seg.text) + '</span>';
+      html += '<span class="segment-copy" title="Copy text"><span class="segment-copy-icon"></span></span>';
       html += '</div>';
     }
     html += '<div class="streaming-indicator">';
@@ -511,6 +521,15 @@
           } else {
             toggleMarkStreaming(segId, this);
           }
+        });
+        row.querySelector(".segment-copy").addEventListener("click", function (e) {
+          e.stopPropagation();
+          var idx = parseInt(row.getAttribute("data-index"), 10);
+          var seg = segments[idx];
+          if (!seg) return;
+          navigator.clipboard.writeText(seg.text).then(function () {
+            showToast("Copied to clipboard");
+          });
         });
       })(rows[j]);
     }

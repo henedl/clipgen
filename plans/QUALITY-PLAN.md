@@ -94,7 +94,7 @@ Both `viewer.html` and `timeline-viewer.html` exist. Studio/CLI per-participant 
 
 `config.py` is 301 lines of flat globals mutated from `cli.py`. `server.py` works around this with `_settings_defaults` snapshots and an `_override_config()` context manager.
 
-- [ ] Group related constants (screenspace thresholds, ffmpeg params, file format settings) into named sections or lightweight dataclass-like groupings
+- [x] Group related constants (screenspace thresholds, ffmpeg params, file format settings) into named sections or lightweight dataclass-like groupings
 - [x] Extract the CLI config-override block (`cli.py:1300-1312`) into a dedicated `apply_cli_overrides(args)` function
 
 ---
@@ -103,9 +103,9 @@ Both `viewer.html` and `timeline-viewer.html` exist. Studio/CLI per-participant 
 
 8 function-local imports of `transcripts`, `screenspace`, `screenspace_server`, and `transcripts_server` are scattered across the codebase as circular-dependency workarounds.
 
-- [ ] Map the actual dependency graph to determine which cycles are real vs. vestigial
-- [ ] Where possible, resolve by moving the needed function to a non-cyclic location or by restructuring imports
-- [ ] For genuinely optional heavy deps (easyocr), create a shared `utils.try_import(name)` pattern
+- [x] Map the actual dependency graph to determine which cycles are real vs. vestigial
+- [x] Where possible, resolve by moving the needed function to a non-cyclic location or by restructuring imports
+- [x] For genuinely optional heavy deps (easyocr), create a shared `utils.try_import(name)` pattern
 
 ---
 
@@ -113,6 +113,6 @@ Both `viewer.html` and `timeline-viewer.html` exist. Studio/CLI per-participant 
 
 Scattered `rgba()` values, canvas dimensions, poll intervals, and font-size scaling factors are hardcoded in JS and CSS.
 
-- [ ] Add opacity-variant tokens to `tokens.css` (e.g., `--alpha-subtle`, `--alpha-overlay`)
-- [ ] Replace hardcoded accent-with-opacity values in `studio.css` with token-derived values
-- [ ] Define `POLL_INTERVAL` in one place (currently duplicated in `screenspace.js` and `transcripts.js`)
+- [x] Add opacity-variant tokens to `tokens.css` (e.g., `--alpha-subtle`, `--alpha-overlay`)
+- [x] Replace hardcoded accent-with-opacity values in `studio.css` with token-derived values
+- [x] Define `POLL_INTERVAL` in one place (currently duplicated in `screenspace.js` and `transcripts.js`)

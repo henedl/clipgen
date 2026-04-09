@@ -25,6 +25,8 @@ from icecream import ic
 
 import config
 import files
+import titlecards
+import transcripts
 import utils
 import video
 import viewer
@@ -224,8 +226,6 @@ def _process_single_clip_segments(
             )
             clip_resolution = None
             if ok and config.TITLECARDS_ENABLED:
-                import titlecards
-
                 props = video.probe_video_properties(out_name)
                 if props:
                     clip_resolution = f"{props['width']}x{props['height']}"
@@ -233,8 +233,6 @@ def _process_single_clip_segments(
                     clip, out_name, resolution=clip_resolution
                 )
             if ok:
-                import titlecards
-
                 ok = titlecards.append_endcard_to_clip(
                     out_name, resolution=clip_resolution
                 )
@@ -402,7 +400,6 @@ def _embed_transcript_on_artifacts(
 
     Source priority: transcripts manifest -> in-memory cache. Modifies artifacts in-place.
     """
-    import transcripts
 
     participant = clip.get("participant", "")
     manifest = transcripts_manifest or transcripts.load_transcripts_manifest()
@@ -461,8 +458,6 @@ def _transcribe_segments(
     transcripts_manifest: dict[str, Any] | None = None,
 ) -> None:
     """Transcribe segments of a clip and write transcript files."""
-    import transcripts
-
     if base_video not in transcript_cache:
         participant = clip.get("participant", "")
         manifest = transcripts_manifest or transcripts.load_transcripts_manifest()
@@ -726,10 +721,8 @@ def process_clips(
     outputs_generated = 0
     outputs_skipped = skipped_no_times + skipped_no_video
 
-    # Lazy-load transcripts manifest once for embedding + transcription
-    import transcripts as _tr_mod
-
-    transcripts_manifest = _tr_mod.load_transcripts_manifest()
+    # Load transcripts manifest once for embedding + transcription
+    transcripts_manifest = transcripts.load_transcripts_manifest()
 
     for idx, (clip, base_video) in enumerate(prepared):
         generated_count, segment_details = results[idx]
@@ -801,8 +794,6 @@ def process_clips(
         "gif": "GIF(s)",
     }.get(output_format, "file(s)")
     if config.TITLECARDS_ENABLED:
-        import titlecards
-
         titlecards.clear_endcard_cache()
 
     if outputs_skipped > 0:
@@ -828,8 +819,6 @@ def _build_reel_transcript(
     Segments are derived from each component's source transcript,
     with timestamps offset by cumulative component durations + titlecard durations.
     """
-    import transcripts
-
     manifest = transcripts.load_transcripts_manifest()
     source_transcripts = manifest.get("source_transcripts", {})
     corrections = manifest.get("corrections", [])

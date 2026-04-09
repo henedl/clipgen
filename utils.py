@@ -493,6 +493,16 @@ def resolve_output_path(name: str) -> Path:
     return base / path
 
 
+def require_optional(module_name: str, feature_label: str) -> None:
+    """Raise ImportError with install instructions if *module_name* is missing."""
+    try:
+        __import__(module_name)
+    except ImportError:
+        raise ImportError(
+            f"{module_name} is required for {feature_label}. Install with: uv add {module_name}"
+        ) from None
+
+
 def load_json_manifest(filename: str, *, default: Any = None) -> Any:
     """Load a JSON manifest from the output directory.
 

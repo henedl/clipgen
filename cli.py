@@ -20,6 +20,7 @@ import clipgen
 import config
 import files
 import spreadsheet
+import transcripts
 import utils
 import video
 import viewer
@@ -781,8 +782,6 @@ def _run_gallery_cli(args: argparse.Namespace) -> None:
 
 def _run_pre_transcribe(worksheet: Any, args: Any) -> None:
     """Pre-transcribe source videos for specified participants."""
-    import transcripts
-
     ctx = spreadsheet.build_sheet_context(worksheet)
     if ctx is None:
         utils.error_print("Cannot build sheet context.")

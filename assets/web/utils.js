@@ -94,6 +94,10 @@ var apiDelete = function (path) {
   });
 };
 
+// ---- Polling ----
+
+var POLL_INTERVAL = 3000;
+
 // ---- Mark categories (mirrored from transcripts.py MARK_CATEGORIES) ----
 // Kept in sync by tests/test_shared_constants.py — update both together.
 
