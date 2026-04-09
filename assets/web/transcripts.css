@@ -659,6 +659,42 @@ body {
   background: none;
 }
 
+/* Copy button */
+
+.segment-copy {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  padding: var(--space-1);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity var(--duration-fast), background var(--duration-fast);
+  color: var(--color-text-dim);
+}
+
+.segment-row:hover .segment-copy {
+  opacity: 1;
+}
+
+.segment-copy:hover {
+  background: var(--color-selected);
+  color: var(--color-text);
+}
+
+.segment-copy-icon {
+  display: block;
+  width: 14px;
+  height: 14px;
+  background-color: currentColor;
+  mask-image: url(icons/clipboard.svg);
+  -webkit-mask-image: url(icons/clipboard.svg);
+  mask-size: contain;
+  -webkit-mask-size: contain;
+  mask-repeat: no-repeat;
+  -webkit-mask-repeat: no-repeat;
+}
+
 /* Queue panel */
 
 #queuePanel {
