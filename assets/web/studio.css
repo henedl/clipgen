@@ -1520,6 +1520,11 @@ html[data-theme="dark"] .queue-card-error .queue-card-thumb {
   font-family: var(--font-mono);
 }
 
+.gallery-drawer-checkbox {
+  margin: 0;
+  cursor: pointer;
+}
+
 /* Title spinner */
 
 .title-spinner {

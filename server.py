@@ -870,6 +870,7 @@ def api_gallery() -> FlaskResponse:
     participant = data.get("participant", "")
     output_format = data.get("format", "screen")
     interval = data.get("interval", config.GALLERY_INTERVAL_SECONDS)
+    bundle = bool(data.get("bundle", config.GALLERY_BUNDLE_ENABLED))
 
     if not participant:
         return jsonify({"ok": False, "error": "No participant specified"}), 400
@@ -907,6 +908,7 @@ def api_gallery() -> FlaskResponse:
             video_duration=duration,
             output_format=output_format,
             interval=interval,
+            bundle=bundle,
         )
         gallery_path = viewer.generate_gallery_viewer(gallery_data)
         if gallery_path:

@@ -27,6 +27,7 @@ Artifact manifest (save_manifest / load_manifest_*):
   Consumed by Insights Builder, --regenerate, and standalone --viewer.
 """
 
+import base64
 import json
 import math
 from datetime import datetime, timezone
@@ -324,8 +325,27 @@ def finalize_gallery_data(
     video_duration: int = 0,
     output_format: str = "screen",
     interval: int = 10,
+    bundle: bool = False,
 ) -> dict[str, Any]:
     """Construct the window.CLIPGEN_DATA structure for the gallery viewer."""
+    if bundle:
+        mime_map = {"screen": "image/png", "gif": "image/gif"}
+        output_dir = Path(utils.get_effective_output_dir())
+        for a in artifacts:
+            file_path = output_dir / a["file"]
+            if not file_path.is_file():
+                utils.warning_print(
+                    f"Bundle: file not found, skipping embed: {a['file']}"
+                )
+                continue
+            mime = mime_map.get(a.get("type", "screen"), "image/png")
+            try:
+                raw = file_path.read_bytes()
+                encoded = base64.b64encode(raw).decode("ascii")
+                a["data"] = f"data:{mime};base64,{encoded}"
+            except OSError as e:
+                utils.warning_print(f"Bundle: could not read {a['file']}: {e}")
+
     return {
         "meta": {
             "sourceVideo": source_video,
@@ -334,6 +354,7 @@ def finalize_gallery_data(
             "format": output_format,
             "interval": interval,
             "videoDuration": video_duration,
+            "bundled": bundle,
         },
         "artifacts": artifacts,
     }

@@ -29,7 +29,7 @@ from icecream import ic
 REENCODING: bool = False
 AUDIO_NORMALIZE: bool = False
 FILEFORMAT: str = ".mp4"
-VERSIONNUM: str = "0.10.31"
+VERSIONNUM: str = "0.10.32"
 TITLECARDS_ENABLED: bool = (
     False  # use --titlecards / --no-titlecards to override per run
 )
@@ -118,6 +118,7 @@ GALLERY_GIF_DURATION_SECONDS: int = 3  # Default per-GIF duration in gallery mod
 GALLERY_PARALLEL_WORKERS: int = (
     4  # Max concurrent ffmpeg processes for gallery GIF extraction
 )
+GALLERY_BUNDLE_ENABLED: bool = False  # embed images as base64 data URIs in gallery HTML
 CLIP_PARALLEL_WORKERS: int = 0  # Max concurrent ffmpeg processes for clip/screenshot/GIF generation; 0 = auto (min(4, cpu_count))
 MAX_FILESIZE_MB: int = 0  # Maximum output file size in MB (0 = disabled)
 MIN_SOURCE_VIDEO_SIZE_MB: int = 100  # Minimum file size (MB) to consider as a source video candidate during fuzzy matching
@@ -271,6 +272,7 @@ SETTINGS_DESCRIPTIONS: dict[str, str] = {
     "MANIFEST_ENABLED": "Write a manifest JSON file alongside generated artifacts for session tracking.",
     "STUDIO_CELL_EXPAND_HOVER": "Expand overflowing timestamp cells on hover in the Sheet Preview.",
     "FILMSTRIP_ENABLED": "Show thumbnail images on timeline markers instead of solid colors (in the HTML viewer).",
+    "GALLERY_BUNDLE_ENABLED": "Embed gallery images as base64 data URIs in the HTML file, making it fully self-contained.",
     "CLIP_PARALLEL_WORKERS": "Number of concurrent ffmpeg processes for clip generation. 0 = auto, 1 = sequential.",
 }
 
