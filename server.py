@@ -322,8 +322,7 @@ def _generate_intake_clips(
             if study
             else f"intake_{span_hash}{config.FILEFORMAT}"
         )
-        out_path = str(output_dir / out_name)
-        out_path = files.get_unique_filename(out_path)
+        out_path = files.get_unique_filename(out_name)
 
         start_str = utils.seconds_to_timestamp(int(round(start)))
         end_str = utils.seconds_to_timestamp(int(round(end)))
@@ -1243,7 +1242,7 @@ def api_reel_direct() -> FlaskResponse:
             reel_study = _sheet_context.study_name if _sheet_context else ""
             reel_base = f"{reel_study} intake reel" if reel_study else "intake_reel"
             reel_name = files.get_unique_filename(
-                str(output_dir / f"{reel_base}{config.FILEFORMAT}")
+                f"{reel_base}{config.FILEFORMAT}"
             )
             ok = video.concatenate_clips(clip_paths, reel_name, reencode_on_fail=True)
 
