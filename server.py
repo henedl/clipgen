@@ -1240,9 +1240,7 @@ def api_reel_direct() -> FlaskResponse:
 
             reel_study = _sheet_context.study_name if _sheet_context else ""
             reel_base = f"{reel_study} intake reel" if reel_study else "intake_reel"
-            reel_name = files.get_unique_filename(
-                f"{reel_base}{config.FILEFORMAT}"
-            )
+            reel_name = files.get_unique_filename(f"{reel_base}{config.FILEFORMAT}")
             ok = video.concatenate_clips(clip_paths, reel_name, reencode_on_fail=True)
 
             if ok:
