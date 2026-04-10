@@ -29,6 +29,8 @@
     xrefPollTimer: null,
     tooltipsEnabled: true,
     summaryCollapsed: false,
+    summaryEditing: false,
+    summaryText: "",
   };
 
   // ---- Helpers ----
@@ -408,9 +410,14 @@
     section.classList.remove("hidden");
     section.classList.toggle("collapsed", state.summaryCollapsed);
     qs("#summaryToggle").setAttribute("aria-expanded", state.summaryCollapsed ? "false" : "true");
+    qs("#summaryActions").classList.add("hidden");
+    state.summaryEditing = false;
+    state.summaryText = "";
   }
 
   function renderSummary(text) {
+    state.summaryText = text;
+    state.summaryEditing = false;
     var section = qs("#summarySection");
     var content = qs("#summaryContent");
     var lines = text.split("\n");
@@ -447,12 +454,17 @@
     section.classList.remove("hidden");
     section.classList.toggle("collapsed", state.summaryCollapsed);
     qs("#summaryToggle").setAttribute("aria-expanded", state.summaryCollapsed ? "false" : "true");
+    qs("#summaryActions").classList.remove("hidden");
+    _setSummaryEditMode(false);
   }
 
   function clearSummary() {
     _stopSummaryPoll();
     qs("#summarySection").classList.add("hidden");
     qs("#summaryContent").innerHTML = "";
+    qs("#summaryActions").classList.add("hidden");
+    state.summaryEditing = false;
+    state.summaryText = "";
   }
 
   function initSummaryToggle() {
@@ -461,6 +473,83 @@
       state.summaryCollapsed = !state.summaryCollapsed;
       section.classList.toggle("collapsed", state.summaryCollapsed);
       qs("#summaryToggle").setAttribute("aria-expanded", state.summaryCollapsed ? "false" : "true");
+    });
+  }
+
+  function _setSummaryEditMode(editing) {
+    var btn = qs("#summaryEdit");
+    var icon = btn.querySelector(".summary-action-icon");
+    if (editing) {
+      icon.classList.remove("summary-action-edit");
+      icon.classList.add("summary-action-save");
+      btn.title = "Save summary";
+      btn.setAttribute("aria-label", "Save summary");
+    } else {
+      icon.classList.remove("summary-action-save");
+      icon.classList.add("summary-action-edit");
+      btn.title = "Edit summary";
+      btn.setAttribute("aria-label", "Edit summary");
+    }
+  }
+
+  function initSummaryActions() {
+    qs("#summaryRegenerate").addEventListener("click", function (e) {
+      e.stopPropagation();
+      var pid = state.selectedParticipant;
+      if (!pid) return;
+      var previousText = state.summaryText;
+      renderSummaryGenerating();
+      apiPost("api/summary/" + pid + "/regenerate", {}).then(function (data) {
+        if (data.ok && data.generating) {
+          _startSummaryPoll(pid);
+        }
+      }).catch(function () {
+        showToast("Failed to regenerate summary");
+        if (previousText) {
+          renderSummary(previousText);
+        }
+      });
+    });
+
+    qs("#summaryCopy").addEventListener("click", function (e) {
+      e.stopPropagation();
+      var text = state.summaryEditing
+        ? qs("#summaryContent textarea").value
+        : state.summaryText;
+      if (!text) return;
+      navigator.clipboard.writeText(text).then(function () {
+        showToast("Summary copied");
+      });
+    });
+
+    qs("#summaryEdit").addEventListener("click", function (e) {
+      e.stopPropagation();
+      var pid = state.selectedParticipant;
+      if (!pid) return;
+      if (!state.summaryEditing) {
+        var ta = document.createElement("textarea");
+        ta.className = "summary-edit-textarea";
+        ta.value = state.summaryText;
+        ta.autocomplete = "off";
+        ta.addEventListener("click", function (ev) { ev.stopPropagation(); });
+        qs("#summaryContent").innerHTML = "";
+        qs("#summaryContent").appendChild(ta);
+        ta.focus();
+        state.summaryEditing = true;
+        _setSummaryEditMode(true);
+      } else {
+        var newText = qs("#summaryContent textarea").value.trim();
+        if (!newText) {
+          showToast("Summary cannot be empty");
+          return;
+        }
+        apiPut("api/summary/" + pid, { summary: newText }).then(function () {
+          renderSummary(newText);
+          showToast("Summary saved");
+        }).catch(function () {
+          showToast("Failed to save summary");
+        });
+      }
     });
   }
 
@@ -1665,6 +1754,7 @@
     initCorrectionsModal();
     initVideoSync();
     initSummaryToggle();
+    initSummaryActions();
 
     // Pause polling when tab is hidden; resume when visible
     document.addEventListener("visibilitychange", function () {
