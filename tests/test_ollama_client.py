@@ -256,7 +256,7 @@ class TestSummarizeTranscript:
     @patch("ollama_client.generate")
     def test_uses_large_model_for_long_text(self, mock_generate):
         mock_generate.return_value = "ok"
-        # Long text (over _LARGE_MODEL_THRESHOLD of 1500 chars)
-        segments = [{"text": "word " * 400}]
+        # Long text (over _LARGE_MODEL_THRESHOLD of 8000 chars)
+        segments = [{"text": "word " * 1700}]
         ollama_client.summarize_transcript(segments)
         assert mock_generate.call_args[1]["model"] == "qwen3.5:9b"
