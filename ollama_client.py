@@ -172,7 +172,7 @@ Transcript:
 {text}"""
 
 _MIN_TEXT_LENGTH = 50  # skip summarization for very short transcripts
-_LARGE_MODEL_THRESHOLD = 1500  # chars — use the larger model above this
+_LARGE_MODEL_THRESHOLD = 8000  # chars — use the larger model above this
 
 
 def summarize_transcript(
