@@ -518,6 +518,82 @@ body {
   font-style: italic;
 }
 
+.summary-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  margin-left: auto;
+}
+
+.summary-actions + .summary-toggle-btn {
+  margin-left: 0;
+}
+
+.summary-action-btn {
+  width: 24px;
+  height: 24px;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-sm);
+}
+
+.summary-action-btn:hover {
+  background: var(--color-surface-alt);
+}
+
+.summary-action-icon {
+  width: 14px;
+  height: 14px;
+  background: var(--color-text-dim);
+  mask-size: contain;
+  -webkit-mask-size: contain;
+  mask-repeat: no-repeat;
+  -webkit-mask-repeat: no-repeat;
+}
+
+.summary-action-regenerate {
+  mask-image: url(icons/arrow-path.svg);
+  -webkit-mask-image: url(icons/arrow-path.svg);
+}
+
+.summary-action-copy {
+  mask-image: url(icons/clipboard-document.svg);
+  -webkit-mask-image: url(icons/clipboard-document.svg);
+}
+
+.summary-action-edit {
+  mask-image: url(icons/pencil-square.svg);
+  -webkit-mask-image: url(icons/pencil-square.svg);
+}
+
+.summary-action-save {
+  mask-image: url(icons/check.svg);
+  -webkit-mask-image: url(icons/check.svg);
+}
+
+.summary-edit-textarea {
+  width: 100%;
+  min-height: 120px;
+  font-size: var(--text-sm);
+  line-height: 1.6;
+  color: var(--color-text);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  padding: var(--space-2);
+  font-family: inherit;
+  resize: vertical;
+}
+
+.summary-edit-textarea:focus {
+  outline: none;
+  border-color: var(--color-accent);
+}
+
 /* Transcript segments */
 
 #transcriptSection {

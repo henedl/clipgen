@@ -13,6 +13,8 @@ API endpoints (all under /transcripts/):
   PUT  /api/transcript/<participant>/segment      - edit a segment's text, creates correction
   GET  /api/vtt/<participant>                     - serve transcript as WebVTT
   GET  /api/summary/<participant>                - AI-generated transcript summary
+  POST /api/summary/<participant>/regenerate    - re-trigger AI summary generation
+  PUT  /api/summary/<participant>               - save user-edited summary
   GET  /api/corrections                           - list all study-local corrections
   POST /api/corrections                           - add a correction manually
   DELETE /api/corrections/<id>                    - remove a correction
@@ -255,6 +257,39 @@ def api_summary(participant: str) -> FlaskResponse:
             return jsonify({"ok": False, "generating": True})
         return jsonify({"ok": False}), 404
     return jsonify({"ok": True, "summary": entry["summary"]})
+
+
+@transcripts_bp.route("/api/summary/<participant>/regenerate", methods=["POST"])
+def api_summary_regenerate(participant: str) -> FlaskResponse:
+    """Clear existing summary and re-trigger AI generation."""
+    if not config.OLLAMA_SUMMARY_ENABLED:
+        return jsonify({"ok": False, "error": "Summary generation is disabled"}), 400
+    if participant in _generating_summaries:
+        return jsonify({"ok": True, "generating": True})
+    with _manifest_lock:
+        entry = _manifest.get("source_transcripts", {}).get(participant)
+    if not entry or not entry.get("segments"):
+        return jsonify({"ok": False, "error": "No transcript found"}), 404
+    with _manifest_lock:
+        entry["summary"] = ""
+    _persist_manifest()
+    _trigger_summary_generation(participant)
+    return jsonify({"ok": True, "generating": True})
+
+
+@transcripts_bp.route("/api/summary/<participant>", methods=["PUT"])
+def api_summary_save(participant: str) -> FlaskResponse:
+    """Save a user-edited summary for a participant."""
+    data = request.get_json(silent=True)
+    if not data or not data.get("summary", "").strip():
+        return jsonify({"ok": False, "error": "Summary text is required"}), 400
+    with _manifest_lock:
+        entry = _manifest.get("source_transcripts", {}).get(participant)
+        if not entry:
+            return jsonify({"ok": False, "error": "Participant not found"}), 404
+        entry["summary"] = data["summary"].strip()
+    _persist_manifest()
+    return jsonify({"ok": True})
 
 
 # ---- Corrections ----
