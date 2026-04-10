@@ -296,7 +296,6 @@ def _generate_intake_clips(
     the video was missing or ffmpeg failed) plus an ``"_error"`` string so
     callers can report per-item results without duplicating the loop.
     """
-    output_dir = Path(utils.get_effective_output_dir())
     results: list[dict[str, Any]] = []
 
     for item in items:
