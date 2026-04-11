@@ -3,8 +3,6 @@
 (function () {
   "use strict";
 
-  var THEME_STORAGE_KEY = "clipgen-insights-viewer-theme";
-
   var data = null;
   var artifactMap = {};
 
@@ -15,62 +13,6 @@
     var b = (insight.behaviors || {}).artifacts || [];
     var i = (insight.impacts || {}).artifacts || [];
     return c.length + b.length + i.length;
-  }
-
-  // ---- Theme ----
-
-  function initThemeToggle() {
-    var stored = null;
-    try {
-      stored = window.localStorage.getItem(THEME_STORAGE_KEY);
-    } catch (_) {}
-    var root = document.documentElement;
-    if (stored === "light" || stored === "dark") {
-      root.setAttribute("data-theme", stored);
-    }
-    updateThemeButton(stored);
-
-    var btn = qs("#themeToggle");
-    if (btn)
-      btn.addEventListener("click", function () {
-        var current = root.getAttribute("data-theme");
-        var next;
-        if (current === "dark") next = "light";
-        else if (current === "light") next = "dark";
-        else {
-          try {
-            next =
-              window.matchMedia &&
-              window.matchMedia("(prefers-color-scheme: dark)").matches
-                ? "light"
-                : "dark";
-          } catch (_) {
-            next = "dark";
-          }
-        }
-        root.setAttribute("data-theme", next);
-        try {
-          window.localStorage.setItem(THEME_STORAGE_KEY, next);
-        } catch (_) {}
-        updateThemeButton(next);
-      });
-  }
-
-  function updateThemeButton(explicitTheme) {
-    var btn = qs("#themeToggle");
-    if (!btn) return;
-    var effective = explicitTheme;
-    if (effective !== "light" && effective !== "dark") {
-      var prefersDark = false;
-      try {
-        prefersDark =
-          window.matchMedia &&
-          window.matchMedia("(prefers-color-scheme: dark)").matches;
-      } catch (_) {}
-      effective = prefersDark ? "dark" : "light";
-    }
-    btn.setAttribute("data-theme", effective);
-    btn.setAttribute("aria-pressed", effective === "dark" ? "true" : "false");
   }
 
   // ---- Render index ----

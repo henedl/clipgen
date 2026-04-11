@@ -3,7 +3,6 @@
 (function () {
   "use strict";
 
-  var THEME_STORAGE_KEY = "clipgen-screenspace-theme";
   var FRAME_STEP = 1.0;
 
   var TASK_COLORS = DETECTOR_COLORS;
@@ -225,58 +224,6 @@
 
   function videoStreamUrl(pid) {
     return "api/video/stream/" + encodeURIComponent(pid);
-  }
-
-  // ---- Theme toggle (matches Studio) ----
-
-  function initThemeToggle() {
-    applyStoredThemePreference();
-    var btn = qs("#themeToggle");
-    if (!btn) return;
-    btn.addEventListener("click", function () {
-      toggleThemePreference();
-    });
-  }
-
-  function applyStoredThemePreference() {
-    var stored = null;
-    try { stored = window.localStorage.getItem(THEME_STORAGE_KEY); } catch (_) {}
-    var root = document.documentElement;
-    if (stored === "light" || stored === "dark") {
-      root.setAttribute("data-theme", stored);
-    } else {
-      root.removeAttribute("data-theme");
-    }
-    updateThemeToggleButton(stored);
-  }
-
-  function toggleThemePreference() {
-    var root = document.documentElement;
-    var current = root.getAttribute("data-theme");
-    var next;
-    if (current === "dark") {
-      next = "light";
-    } else if (current === "light") {
-      next = "dark";
-    } else {
-      var prefersDark = false;
-      try {
-        prefersDark = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
-      } catch (_) {}
-      next = prefersDark ? "light" : "dark";
-    }
-    root.setAttribute("data-theme", next);
-    try { window.localStorage.setItem(THEME_STORAGE_KEY, next); } catch (_) {}
-    updateThemeToggleButton(next);
-    refreshThemeColors();
-    renderTimeline();
-  }
-
-  function updateThemeToggleButton(theme) {
-    var btn = qs("#themeToggle");
-    if (!btn) return;
-    btn.setAttribute("data-theme", theme || "");
-    btn.setAttribute("aria-pressed", theme === "dark" ? "true" : "false");
   }
 
   // ---- Nav links ----
@@ -5267,7 +5214,7 @@
   // ---- Init ----
 
   document.addEventListener("DOMContentLoaded", function () {
-    initThemeToggle();
+    initThemeToggle(function () { refreshThemeColors(); renderTimeline(); });
     initFrameControls();
     initVideoPlayback();
     initRegionDrawing();

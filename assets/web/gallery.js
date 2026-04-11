@@ -4,58 +4,6 @@
 
   var data = window.CLIPGEN_DATA || null;
   var state = { artifacts: [], lightboxIndex: -1 };
-  var THEME_STORAGE_KEY = "clipgen-gallery-theme";
-
-  // ---- Theme ----
-
-  function initThemeToggle() {
-    applyStoredThemePreference();
-    var btn = qs("#themeToggle");
-    if (!btn) return;
-    btn.addEventListener("click", function () { toggleThemePreference(); });
-  }
-
-  function applyStoredThemePreference() {
-    var stored = null;
-    try { stored = window.localStorage.getItem(THEME_STORAGE_KEY); } catch (_) {}
-    var root = document.documentElement;
-    if (stored === "light" || stored === "dark") {
-      root.setAttribute("data-theme", stored);
-    } else {
-      root.removeAttribute("data-theme");
-    }
-    updateThemeToggleButton(stored);
-  }
-
-  function toggleThemePreference() {
-    var root = document.documentElement;
-    var current = root.getAttribute("data-theme");
-    var next;
-    if (current === "dark") next = "light";
-    else if (current === "light") next = "dark";
-    else {
-      try {
-        next = window.matchMedia("(prefers-color-scheme: dark)").matches ? "light" : "dark";
-      } catch (_) { next = "dark"; }
-    }
-    root.setAttribute("data-theme", next);
-    try { window.localStorage.setItem(THEME_STORAGE_KEY, next); } catch (_) {}
-    updateThemeToggleButton(next);
-  }
-
-  function updateThemeToggleButton(explicitTheme) {
-    var btn = qs("#themeToggle");
-    if (!btn) return;
-    var effective = explicitTheme;
-    if (effective !== "light" && effective !== "dark") {
-      try {
-        effective = window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
-      } catch (_) { effective = "light"; }
-    }
-    btn.setAttribute("data-theme", effective);
-    btn.setAttribute("aria-pressed", effective === "dark" ? "true" : "false");
-  }
-
   // ---- Init ----
 
   document.addEventListener("DOMContentLoaded", function () {
