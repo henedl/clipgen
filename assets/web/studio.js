@@ -3,7 +3,6 @@
 (function () {
   "use strict";
 
-  var THEME_STORAGE_KEY = "clipgen-studio-theme";
   var QUEUE_STORAGE_KEY = "clipgen-studio-queues";
 
   var state = {
@@ -644,62 +643,6 @@
       setTimeout(sizeTrIntakeCanvas, 0);
     }
     computeGridMaxHeight();
-  }
-
-  // ---- Theme ----
-
-  function initThemeToggle() {
-    applyStoredThemePreference();
-    var btn = qs("#themeToggle");
-    if (!btn) return;
-    btn.addEventListener("click", function () {
-      toggleThemePreference();
-    });
-  }
-
-  function applyStoredThemePreference() {
-    var stored = null;
-    try {
-      stored = window.localStorage.getItem(THEME_STORAGE_KEY);
-    } catch (_) {}
-    var root = document.documentElement;
-    if (stored === "light" || stored === "dark") {
-      root.setAttribute("data-theme", stored);
-    } else {
-      root.removeAttribute("data-theme");
-    }
-    updateThemeToggleButton(stored);
-  }
-
-  function toggleThemePreference() {
-    var root = document.documentElement;
-    var current = root.getAttribute("data-theme");
-    var next;
-    if (current === "dark") {
-      next = "light";
-    } else if (current === "light") {
-      next = "dark";
-    } else {
-      var prefersDark = false;
-      try {
-        prefersDark =
-          window.matchMedia &&
-          window.matchMedia("(prefers-color-scheme: dark)").matches;
-      } catch (_) {}
-      next = prefersDark ? "light" : "dark";
-    }
-    root.setAttribute("data-theme", next);
-    try {
-      window.localStorage.setItem(THEME_STORAGE_KEY, next);
-    } catch (_) {}
-    updateThemeToggleButton(next);
-  }
-
-  function updateThemeToggleButton(theme) {
-    var btn = qs("#themeToggle");
-    if (!btn) return;
-    btn.setAttribute("data-theme", theme || "");
-    btn.setAttribute("aria-pressed", theme === "dark" ? "true" : "false");
   }
 
   // ---- Queue persistence (sessionStorage) ----
@@ -4514,11 +4457,14 @@
   }
 
   function initTooltipToggle() {
+    state.trIntakeTooltipsEnabled = getStoredTooltipPref();
     var btn = qs("#tooltipToggle");
     if (!btn) return;
+    btn.setAttribute("aria-pressed", state.trIntakeTooltipsEnabled ? "true" : "false");
     btn.addEventListener("click", function () {
       state.trIntakeTooltipsEnabled = !state.trIntakeTooltipsEnabled;
       btn.setAttribute("aria-pressed", state.trIntakeTooltipsEnabled ? "true" : "false");
+      setStoredTooltipPref(state.trIntakeTooltipsEnabled);
       if (!state.trIntakeTooltipsEnabled) {
         var tt = qs("#trIntakeTooltip");
         if (tt) tt.classList.add("hidden");

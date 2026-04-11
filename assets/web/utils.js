@@ -146,3 +146,105 @@ var DETECTOR_COLORS = (function () {
     return fallback;
   }
 })();
+
+// ---- Shared settings (localStorage) ----
+
+var THEME_STORAGE_KEY = "clipgen-theme";
+var TOOLTIP_STORAGE_KEY = "clipgen-tooltips";
+
+// Old per-UI theme keys — checked on every page load so stragglers are migrated.
+var _THEME_OLD_KEYS = [
+  "clipgen-studio-theme", "clipgen-screenspace-theme",
+  "clipgen-insights-theme", "clipgen-insights-viewer-theme",
+  "clipgen-gallery-theme", "clipgen-viewer-theme", "clipgen-transcripts-theme",
+];
+
+var _migrateThemeKey = function () {
+  try {
+    var shared = window.localStorage.getItem(THEME_STORAGE_KEY);
+    if (!shared) {
+      for (var i = 0; i < _THEME_OLD_KEYS.length; i++) {
+        var val = window.localStorage.getItem(_THEME_OLD_KEYS[i]);
+        if (val === "light" || val === "dark") {
+          window.localStorage.setItem(THEME_STORAGE_KEY, val);
+          break;
+        }
+      }
+    }
+    for (var j = 0; j < _THEME_OLD_KEYS.length; j++) {
+      window.localStorage.removeItem(_THEME_OLD_KEYS[j]);
+    }
+  } catch (_) {}
+};
+
+var applyStoredThemePreference = function () {
+  _migrateThemeKey();
+  var stored = null;
+  try { stored = window.localStorage.getItem(THEME_STORAGE_KEY); } catch (_) {}
+  var root = document.documentElement;
+  if (stored === "light" || stored === "dark") {
+    root.setAttribute("data-theme", stored);
+  } else {
+    root.removeAttribute("data-theme");
+  }
+  updateThemeToggleButton(stored);
+};
+
+var toggleThemePreference = function () {
+  var root = document.documentElement;
+  var current = root.getAttribute("data-theme");
+  var next;
+  if (current === "dark") {
+    next = "light";
+  } else if (current === "light") {
+    next = "dark";
+  } else {
+    var prefersDark = false;
+    try {
+      prefersDark = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
+    } catch (_) {}
+    next = prefersDark ? "light" : "dark";
+  }
+  root.setAttribute("data-theme", next);
+  try { window.localStorage.setItem(THEME_STORAGE_KEY, next); } catch (_) {}
+  updateThemeToggleButton(next);
+};
+
+var updateThemeToggleButton = function (explicitTheme) {
+  var btn = qs("#themeToggle");
+  if (!btn) return;
+  var effective = explicitTheme;
+  if (effective !== "light" && effective !== "dark") {
+    var prefersDark = false;
+    try {
+      prefersDark = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
+    } catch (_) {}
+    effective = prefersDark ? "dark" : "light";
+  }
+  btn.setAttribute("data-theme", effective);
+  btn.setAttribute("aria-pressed", effective === "dark" ? "true" : "false");
+};
+
+var initThemeToggle = function (onToggle) {
+  applyStoredThemePreference();
+  var btn = qs("#themeToggle");
+  if (!btn) return;
+  btn.addEventListener("click", function () {
+    toggleThemePreference();
+    if (onToggle) onToggle();
+  });
+};
+
+var getStoredTooltipPref = function () {
+  try {
+    var v = window.localStorage.getItem(TOOLTIP_STORAGE_KEY);
+    if (v === "false") return false;
+  } catch (_) {}
+  return true;
+};
+
+var setStoredTooltipPref = function (enabled) {
+  try {
+    window.localStorage.setItem(TOOLTIP_STORAGE_KEY, enabled ? "true" : "false");
+  } catch (_) {}
+};
