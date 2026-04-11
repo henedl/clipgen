@@ -260,3 +260,156 @@ class TestSummarizeTranscript:
         segments = [{"text": "word " * 1700}]
         ollama_client.summarize_transcript(segments)
         assert mock_generate.call_args[1]["model"] == "qwen3.5:9b"
+
+
+class TestSplitSummarySentences:
+    def test_splits_paragraph_on_sentence_boundaries(self):
+        text = "First sentence. Second sentence. Third sentence."
+        result = ollama_client._split_summary_sentences(text)
+        assert result == ["First sentence.", "Second sentence.", "Third sentence."]
+
+    def test_treats_bullets_as_individual_sentences(self):
+        text = "Overview.\n- Bullet one\n- Bullet two\n* Star bullet"
+        result = ollama_client._split_summary_sentences(text)
+        assert result == ["Overview.", "Bullet one", "Bullet two", "Star bullet"]
+
+    def test_skips_empty_lines(self):
+        text = "First.\n\n- Bullet\n\n"
+        result = ollama_client._split_summary_sentences(text)
+        assert result == ["First.", "Bullet"]
+
+    def test_handles_exclamation_and_question_marks(self):
+        text = "Was it good? It was great! Done."
+        result = ollama_client._split_summary_sentences(text)
+        assert result == ["Was it good?", "It was great!", "Done."]
+
+    def test_returns_empty_for_empty_input(self):
+        assert ollama_client._split_summary_sentences("") == []
+        assert ollama_client._split_summary_sentences("  \n\n  ") == []
+
+
+class TestFormatSegmentChunk:
+    def test_formats_segments_as_timestamped_lines(self):
+        segments = [
+            {"start": 0, "end": 5, "text": "Hello"},
+            {"start": 65, "end": 70, "text": "World"},
+        ]
+        result = ollama_client._format_segment_chunk(segments, 0)
+        assert result == "[0:00] Hello\n[1:05] World"
+
+    def test_skips_segments_with_empty_text(self):
+        segments = [
+            {"start": 0, "end": 5, "text": "Hello"},
+            {"start": 10, "end": 15, "text": ""},
+            {"start": 20, "end": 25, "text": "End"},
+        ]
+        result = ollama_client._format_segment_chunk(segments, 0)
+        assert result == "[0:00] Hello\n[0:20] End"
+
+
+class TestParseCitationResponse:
+    def _make_segments(self, starts):
+        return [{"start": s, "end": s + 5, "text": f"seg at {s}"} for s in starts]
+
+    def test_parses_basic_format(self):
+        segments = self._make_segments([45, 62, 120])
+        response = "1: 0:45, 2:00\n2: NONE\n3: 0:45"
+        result = ollama_client._parse_citation_response(response, segments)
+        # Claim 1 (index 0) matches segments at 45 and 120
+        assert 0 in result
+        assert len(result[0]) == 2
+        assert result[0][0]["segment_index"] == 0  # start=45 (0:45)
+        assert result[0][1]["segment_index"] == 2  # start=120 (2:00)
+        # Claim 2 (index 1) is NONE
+        assert 1 not in result
+        # Claim 3 (index 2) matches segment at 45
+        assert 2 in result
+        assert result[2][0]["segment_index"] == 0
+
+    def test_handles_bracketed_timestamps(self):
+        segments = self._make_segments([45])
+        response = "1: [0:45]"
+        result = ollama_client._parse_citation_response(response, segments)
+        assert 0 in result
+        assert result[0][0]["start"] == 45
+
+    def test_handles_hms_format(self):
+        segments = self._make_segments([3661])
+        response = "1: 1:01:01"
+        result = ollama_client._parse_citation_response(response, segments)
+        assert 0 in result
+        assert result[0][0]["segment_index"] == 0
+
+    def test_ignores_unparseable_lines(self):
+        segments = self._make_segments([10])
+        response = "This is gibberish\n1: 0:10\nmore nonsense"
+        result = ollama_client._parse_citation_response(response, segments)
+        assert 0 in result
+        assert result[0][0]["start"] == 10
+
+    def test_returns_empty_for_all_none(self):
+        segments = self._make_segments([10, 20])
+        response = "1: NONE\n2: NONE"
+        result = ollama_client._parse_citation_response(response, segments)
+        assert result == {}
+
+    def test_rejects_timestamps_beyond_tolerance(self):
+        segments = self._make_segments([100])
+        response = "1: 0:10"  # 10s is 90s away from 100s
+        result = ollama_client._parse_citation_response(response, segments)
+        assert result == {}
+
+
+class TestFindCitations:
+    def test_returns_none_for_empty_summary(self):
+        segments = [{"start": 0, "end": 5, "text": "Hello"}]
+        assert ollama_client.find_citations("", segments) is None
+
+    def test_returns_none_for_empty_segments(self):
+        assert ollama_client.find_citations("A summary.", []) is None
+
+    @patch("ollama_client.generate")
+    def test_always_uses_large_model(self, mock_generate):
+        mock_generate.return_value = "1: NONE"
+        segments = [{"start": 0, "end": 5, "text": "Some text here"}]
+        ollama_client.find_citations("A summary sentence.", segments)
+        assert mock_generate.call_args[1]["model"] == "qwen3.5:9b"
+
+    @patch("ollama_client.generate")
+    def test_returns_citations_on_success(self, mock_generate):
+        mock_generate.return_value = "1: 0:00\n2: 0:10"
+        segments = [
+            {"start": 0, "end": 5, "text": "First part"},
+            {"start": 10, "end": 15, "text": "Second part"},
+        ]
+        summary = "First claim.\n- Bullet claim"
+        result = ollama_client.find_citations(summary, segments)
+        assert result is not None
+        assert len(result) == 2
+        assert result[0]["sentence"] == "First claim."
+        assert result[0]["refs"][0]["start"] == 0
+        assert result[1]["sentence"] == "Bullet claim"
+        assert result[1]["refs"][0]["start"] == 10
+
+    @patch("ollama_client.generate")
+    def test_returns_empty_refs_when_generate_fails(self, mock_generate):
+        mock_generate.return_value = None
+        segments = [{"start": 0, "end": 5, "text": "Some text"}]
+        result = ollama_client.find_citations("A sentence.", segments)
+        # Returns citations list but with empty refs
+        assert result is not None
+        assert len(result) == 1
+        assert result[0]["refs"] == []
+
+    @patch("ollama_client.generate")
+    def test_multiple_refs_per_claim(self, mock_generate):
+        mock_generate.return_value = "1: 0:00, 0:10"
+        segments = [
+            {"start": 0, "end": 5, "text": "Part A"},
+            {"start": 10, "end": 15, "text": "Part B"},
+        ]
+        result = ollama_client.find_citations("A claim.", segments)
+        assert result is not None
+        assert len(result[0]["refs"]) == 2
+        assert result[0]["refs"][0]["start"] == 0
+        assert result[0]["refs"][1]["start"] == 10

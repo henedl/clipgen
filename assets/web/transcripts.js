@@ -31,6 +31,8 @@
     summaryCollapsed: false,
     summaryEditing: false,
     summaryText: "",
+    summaryCitations: null,
+    citationsGenerating: false,
   };
 
   // ---- Helpers ----
@@ -361,6 +363,17 @@
       if (data.ok && data.summary) {
         _stopSummaryPoll();
         renderSummary(data.summary);
+        // Handle citations
+        if (data.citations && data.citations.length > 0) {
+          state.summaryCitations = data.citations;
+          state.citationsGenerating = false;
+          renderCitations();
+        } else if (data.citations_generating) {
+          state.summaryCitations = null;
+          state.citationsGenerating = true;
+          renderCitationsStatus();
+          _startCitationsPoll(pid);
+        }
       } else if (data.generating) {
         renderSummaryGenerating();
         _startSummaryPoll(pid);
@@ -384,6 +397,17 @@
         if (data.ok && data.summary) {
           _stopSummaryPoll();
           renderSummary(data.summary);
+          // Summary just arrived — check citation status
+          if (data.citations && data.citations.length > 0) {
+            state.summaryCitations = data.citations;
+            state.citationsGenerating = false;
+            renderCitations();
+          } else if (data.citations_generating) {
+            state.summaryCitations = null;
+            state.citationsGenerating = true;
+            renderCitationsStatus();
+            _startCitationsPoll(pid);
+          }
         } else if (!data.generating) {
           // Generation finished without result — stop polling
           _stopSummaryPoll();
@@ -421,7 +445,7 @@
     var section = qs("#summarySection");
     var content = qs("#summaryContent");
     var lines = text.split("\n");
-    var paragraphs = [];
+    var paragraphSentences = [];
     var bullets = [];
     var inBullets = false;
 
@@ -432,20 +456,34 @@
         inBullets = true;
         bullets.push(escapeHtml(line.substring(2)));
       } else if (!inBullets) {
-        paragraphs.push(escapeHtml(line));
+        // Split paragraph into individual sentences for citation targeting
+        var parts = line.split(/(?<=[.!?])\s+/);
+        for (var k = 0; k < parts.length; k++) {
+          var part = parts[k].trim();
+          if (part) paragraphSentences.push(escapeHtml(part));
+        }
       } else {
         bullets.push(escapeHtml(line));
       }
     }
 
+    // Build HTML with data-cite-index on each sentence/bullet
+    var citeIdx = 0;
     var html = "";
-    if (paragraphs.length > 0) {
-      html += "<p>" + paragraphs.join(" ") + "</p>";
+    if (paragraphSentences.length > 0) {
+      html += "<p>";
+      for (var si = 0; si < paragraphSentences.length; si++) {
+        if (si > 0) html += " ";
+        html += '<span data-cite-index="' + citeIdx + '">' + paragraphSentences[si] + "</span>";
+        citeIdx++;
+      }
+      html += "</p>";
     }
     if (bullets.length > 0) {
       html += "<ul>";
       for (var j = 0; j < bullets.length; j++) {
-        html += "<li>" + bullets[j] + "</li>";
+        html += '<li data-cite-index="' + citeIdx + '">' + bullets[j] + "</li>";
+        citeIdx++;
       }
       html += "</ul>";
     }
@@ -456,15 +494,115 @@
     qs("#summaryToggle").setAttribute("aria-expanded", state.summaryCollapsed ? "false" : "true");
     qs("#summaryActions").classList.remove("hidden");
     _setSummaryEditMode(false);
+
+    // Re-apply citations if already loaded
+    if (state.summaryCitations) {
+      renderCitations();
+    }
   }
 
   function clearSummary() {
     _stopSummaryPoll();
+    _stopCitationsPoll();
     qs("#summarySection").classList.add("hidden");
     qs("#summaryContent").innerHTML = "";
     qs("#summaryActions").classList.add("hidden");
     state.summaryEditing = false;
     state.summaryText = "";
+    state.summaryCitations = null;
+    state.citationsGenerating = false;
+  }
+
+  // ---- Citation rendering (Pass 2) ----
+
+  var _citationsPollTimer = null;
+
+  function renderCitations() {
+    // Remove any existing status text
+    var existing = qs("#summaryContent .citations-status");
+    if (existing) existing.remove();
+
+    // Remove any previously rendered citation links
+    var oldLinks = qs("#summaryContent").querySelectorAll(".citation-link");
+    for (var r = 0; r < oldLinks.length; r++) oldLinks[r].remove();
+
+    if (!state.summaryCitations) return;
+
+    var refNum = 1;
+    for (var i = 0; i < state.summaryCitations.length; i++) {
+      var cite = state.summaryCitations[i];
+      if (!cite.refs || cite.refs.length === 0) continue;
+      var el = qs('#summaryContent [data-cite-index="' + i + '"]');
+      if (!el) continue;
+      for (var j = 0; j < cite.refs.length; j++) {
+        var ref = cite.refs[j];
+        var sup = document.createElement("sup");
+        sup.className = "citation-link";
+        sup.dataset.start = String(ref.start);
+        sup.title = fmtTime(ref.start);
+        sup.textContent = "[" + refNum + "]";
+        (function (startTime) {
+          sup.addEventListener("click", function (e) {
+            e.stopPropagation();
+            seekVideo(startTime);
+          });
+        })(ref.start);
+        el.appendChild(sup);
+        refNum++;
+      }
+    }
+  }
+
+  function renderCitationsStatus() {
+    // Remove any existing status
+    var existing = qs("#summaryContent .citations-status");
+    if (existing) existing.remove();
+
+    var p = document.createElement("p");
+    p.className = "citations-status";
+    p.textContent = "Finding sources\u2026";
+    qs("#summaryContent").appendChild(p);
+  }
+
+  var _CITATIONS_POLL_TIMEOUT = 90000; // stop polling after 90 seconds
+
+  function _startCitationsPoll(pid) {
+    _stopCitationsPoll();
+    var started = Date.now();
+    _citationsPollTimer = setInterval(function () {
+      if (state.selectedParticipant !== pid || Date.now() - started > _CITATIONS_POLL_TIMEOUT) {
+        _stopCitationsPoll();
+        state.citationsGenerating = false;
+        var status = qs("#summaryContent .citations-status");
+        if (status) status.remove();
+        return;
+      }
+      apiGet("api/citations/" + pid).then(function (data) {
+        if (data.ok && data.citations) {
+          _stopCitationsPoll();
+          state.summaryCitations = data.citations;
+          state.citationsGenerating = false;
+          renderCitations();
+        } else if (!data.generating) {
+          _stopCitationsPoll();
+          state.citationsGenerating = false;
+          var status = qs("#summaryContent .citations-status");
+          if (status) status.remove();
+        }
+      }).catch(function () {
+        _stopCitationsPoll();
+        state.citationsGenerating = false;
+        var status = qs("#summaryContent .citations-status");
+        if (status) status.remove();
+      });
+    }, 3000);
+  }
+
+  function _stopCitationsPoll() {
+    if (_citationsPollTimer) {
+      clearInterval(_citationsPollTimer);
+      _citationsPollTimer = null;
+    }
   }
 
   function initSummaryToggle() {
@@ -498,6 +636,9 @@
       var pid = state.selectedParticipant;
       if (!pid) return;
       var previousText = state.summaryText;
+      state.summaryCitations = null;
+      state.citationsGenerating = false;
+      _stopCitationsPoll();
       renderSummaryGenerating();
       apiPost("api/summary/" + pid + "/regenerate", {}).then(function (data) {
         if (data.ok && data.generating) {
@@ -508,6 +649,26 @@
         if (previousText) {
           renderSummary(previousText);
         }
+      });
+    });
+
+    qs("#citationsRegenerate").addEventListener("click", function (e) {
+      e.stopPropagation();
+      var pid = state.selectedParticipant;
+      if (!pid) return;
+      state.summaryCitations = null;
+      state.citationsGenerating = true;
+      renderCitations(); // clear existing links
+      renderCitationsStatus();
+      apiPost("api/citations/" + pid + "/regenerate", {}).then(function (data) {
+        if (data.ok && data.generating) {
+          _startCitationsPoll(pid);
+        }
+      }).catch(function () {
+        showToast("Failed to regenerate citations");
+        state.citationsGenerating = false;
+        var status = qs("#summaryContent .citations-status");
+        if (status) status.remove();
       });
     });
 
@@ -544,6 +705,9 @@
           return;
         }
         apiPut("api/summary/" + pid, { summary: newText }).then(function () {
+          state.summaryCitations = null;
+          state.citationsGenerating = false;
+          _stopCitationsPoll();
           renderSummary(newText);
           showToast("Summary saved");
         }).catch(function () {
