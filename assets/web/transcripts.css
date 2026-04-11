@@ -575,6 +575,34 @@ body {
   -webkit-mask-image: url(icons/check.svg);
 }
 
+.summary-action-citations {
+  mask-image: url(icons/hashtag.svg);
+  -webkit-mask-image: url(icons/hashtag.svg);
+}
+
+.citation-link {
+  display: inline;
+  font-size: 0.7em;
+  vertical-align: super;
+  color: var(--color-accent);
+  cursor: pointer;
+  text-decoration: none;
+  margin-left: 1px;
+  font-weight: 600;
+  line-height: 1;
+}
+
+.citation-link:hover {
+  text-decoration: underline;
+}
+
+.citations-status {
+  color: var(--color-text-dim);
+  font-style: italic;
+  font-size: var(--text-xs);
+  margin-top: var(--space-2);
+}
+
 .summary-edit-textarea {
   width: 100%;
   min-height: 120px;

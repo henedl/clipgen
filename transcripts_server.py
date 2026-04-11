@@ -15,6 +15,8 @@ API endpoints (all under /transcripts/):
   GET  /api/summary/<participant>                - AI-generated transcript summary
   POST /api/summary/<participant>/regenerate    - re-trigger AI summary generation
   PUT  /api/summary/<participant>               - save user-edited summary
+  GET  /api/citations/<participant>             - citation refs for summary sentences
+  POST /api/citations/<participant>/regenerate  - re-trigger citation generation
   GET  /api/corrections                           - list all study-local corrections
   POST /api/corrections                           - add a correction manually
   DELETE /api/corrections/<id>                    - remove a correction
@@ -55,6 +57,10 @@ _summary_threads: set[threading.Thread] = set()
 _generating_summaries: set[str] = (
     set()
 )  # participant IDs with in-flight summary generation
+_citation_threads: set[threading.Thread] = set()
+_generating_citations: set[str] = (
+    set()
+)  # participant IDs with in-flight citation generation
 
 # ---- Blueprint ----
 
@@ -256,7 +262,12 @@ def api_summary(participant: str) -> FlaskResponse:
         if participant in _generating_summaries:
             return jsonify({"ok": False, "generating": True})
         return jsonify({"ok": False}), 404
-    return jsonify({"ok": True, "summary": entry["summary"]})
+    resp: dict[str, Any] = {"ok": True, "summary": entry["summary"]}
+    citations = entry.get("citations")
+    if citations:
+        resp["citations"] = citations
+    resp["citations_generating"] = participant in _generating_citations
+    return jsonify(resp)
 
 
 @transcripts_bp.route("/api/summary/<participant>/regenerate", methods=["POST"])
@@ -272,6 +283,7 @@ def api_summary_regenerate(participant: str) -> FlaskResponse:
         return jsonify({"ok": False, "error": "No transcript found"}), 404
     with _manifest_lock:
         entry["summary"] = ""
+        entry.pop("citations", None)
     _persist_manifest()
     _trigger_summary_generation(participant)
     return jsonify({"ok": True, "generating": True})
@@ -288,8 +300,45 @@ def api_summary_save(participant: str) -> FlaskResponse:
         if not entry:
             return jsonify({"ok": False, "error": "Participant not found"}), 404
         entry["summary"] = data["summary"].strip()
+        entry.pop("citations", None)  # invalidate citations on edit
     _persist_manifest()
     return jsonify({"ok": True})
+
+
+# ---- Citations ----
+
+
+@transcripts_bp.route("/api/citations/<participant>")
+def api_citations(participant: str) -> FlaskResponse:
+    """Return citation refs for a participant's summary, or generation status."""
+    with _manifest_lock:
+        entry = _manifest.get("source_transcripts", {}).get(participant)
+    if not entry:
+        return jsonify({"ok": False}), 404
+    citations = entry.get("citations") if entry else None
+    if citations:
+        return jsonify({"ok": True, "citations": citations})
+    if participant in _generating_citations:
+        return jsonify({"ok": False, "generating": True})
+    return jsonify({"ok": False}), 404
+
+
+@transcripts_bp.route("/api/citations/<participant>/regenerate", methods=["POST"])
+def api_citations_regenerate(participant: str) -> FlaskResponse:
+    """Clear existing citations and re-trigger citation generation (Pass 2)."""
+    if not config.OLLAMA_SUMMARY_ENABLED:
+        return jsonify({"ok": False, "error": "Summary generation is disabled"}), 400
+    if participant in _generating_citations:
+        return jsonify({"ok": True, "generating": True})
+    with _manifest_lock:
+        entry = _manifest.get("source_transcripts", {}).get(participant)
+    if not entry or not entry.get("summary") or not entry.get("segments"):
+        return jsonify({"ok": False, "error": "No summary or transcript found"}), 404
+    with _manifest_lock:
+        entry.pop("citations", None)
+    _persist_manifest()
+    _trigger_citation_generation(participant)
+    return jsonify({"ok": True, "generating": True})
 
 
 # ---- Corrections ----
@@ -801,6 +850,8 @@ def _trigger_summary_generation(participant: str) -> None:
                     if entry:
                         entry["summary"] = summary
                 _persist_manifest()
+                # Chain into Pass 2: citation linking
+                _trigger_citation_generation(participant)
         except Exception as exc:
             utils.warning_print(f"Summary generation failed for {participant}: {exc}")
         finally:
@@ -810,6 +861,39 @@ def _trigger_summary_generation(participant: str) -> None:
     _generating_summaries.add(participant)
     t = threading.Thread(target=_run, daemon=True, name=f"summary-{participant}")
     _summary_threads.add(t)
+    t.start()
+
+
+# ---- Citation generation (Pass 2) ----
+
+
+def _trigger_citation_generation(participant: str) -> None:
+    """Spawn daemon thread to find citation refs for a participant's summary."""
+
+    def _run() -> None:
+        try:
+            with _manifest_lock:
+                entry = _manifest.get("source_transcripts", {}).get(participant)
+                if not entry or not entry.get("summary") or not entry.get("segments"):
+                    return
+                summary = entry["summary"]
+                segments = list(entry["segments"])
+            citations = ollama_client.find_citations(summary, segments)
+            if citations is not None:
+                with _manifest_lock:
+                    entry = _manifest.get("source_transcripts", {}).get(participant)
+                    if entry:
+                        entry["citations"] = citations
+                _persist_manifest()
+        except Exception as exc:
+            utils.warning_print(f"Citation generation failed for {participant}: {exc}")
+        finally:
+            _generating_citations.discard(participant)
+            _citation_threads.discard(t)
+
+    _generating_citations.add(participant)
+    t = threading.Thread(target=_run, daemon=True, name=f"citations-{participant}")
+    _citation_threads.add(t)
     t.start()
 
 
