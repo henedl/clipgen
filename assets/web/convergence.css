@@ -1,0 +1,64 @@
+/* Convergence Browser */
+
+#convergencePanel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  height: 100%;
+}
+
+/* Filters */
+.convergence-filters {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  padding: 0 var(--space-3);
+}
+
+/* Stream toggle pills */
+.cv-stream-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: var(--space-1) var(--space-2);
+  font-size: var(--text-xs);
+  border: 1px solid color-mix(in srgb, var(--det-color) 40%, transparent);
+  border-radius: var(--radius-full);
+  background: transparent;
+  color: var(--color-text);
+  cursor: pointer;
+  transition: background var(--duration-fast), color var(--duration-fast);
+}
+
+.cv-stream-toggle:hover {
+  background: color-mix(in srgb, var(--det-color) 15%, transparent);
+}
+
+.cv-stream-toggle.active {
+  background: var(--det-color);
+  color: #fff;
+}
+
+/* Timeline container */
+.convergence-timeline-container {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  position: relative;
+}
+
+/* Detail panel */
+.convergence-detail {
+  border-top: 1px solid var(--color-border);
+  padding: var(--space-3);
+  max-height: 40%;
+  overflow-y: auto;
+}
+
+/* Event type pills container */
+#cvEventTypePills {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
