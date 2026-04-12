@@ -462,14 +462,14 @@ Small canvas behind DOM markers per participant row. For each convergence zone, 
 
 #### Verification
 
-- [ ] All participants appear as rows with correct sub-tracks
-- [ ] Sheet events are baseline-adjusted (verify against raw sheet values)
-- [ ] Single-stream filter shows only that stream's markers
-- [ ] Event type filter recalculates convergence for that type
-- [ ] Window slider widens/narrows convergence zones
-- [ ] Min participants threshold shows/hides zones
-- [ ] Summary lane gradient reflects convergence density
-- [ ] "New data available" banner appears after external changes, refresh incorporates them
+- [x] All participants appear as rows with correct sub-tracks
+- [x] Sheet events are baseline-adjusted (verify against raw sheet values)
+- [x] Single-stream filter shows only that stream's markers
+- [x] Event type filter recalculates convergence for that type
+- [x] Window slider widens/narrows convergence zones
+- [x] Min participants threshold shows/hides zones
+- [x] Summary lane gradient reflects convergence density
+- [x] "New data available" banner appears after external changes, refresh incorporates them
 
 ---
 
