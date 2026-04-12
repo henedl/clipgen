@@ -4557,4 +4557,10 @@
   });
 
   window._studioState = state;
+  window._studioParseClipTimestamps = parseClipTimestamps;
+  window._studioParseTimestampToSeconds = parseTimestampToSeconds;
+  window._studioHexToRgba = hexToRgba;
+  window._studioIntakeComputeTickInterval = intakeComputeTickInterval;
+  window._studioFormatDuration = formatDuration;
+  window._studioFindOverlappingData = findOverlappingData;
 })();
