@@ -23,6 +23,7 @@ Studio API endpoints (all under /studio/):
   GET/POST /api/stashes        – reel stash CRUD
   GET/POST /api/artifact-stashes – artifact stash CRUD
   POST /api/generate-intake    – generate artifacts from an intake/screenspace manifest
+  GET  /api/sheet/baseline      – per-participant baseline timestamps for convergence
   GET  /api/settings           – read current config settings
   PUT  /api/settings           – update config settings
   GET  /api/status             – reports which interfaces are active (studio/insights/screenspace)
@@ -225,6 +226,36 @@ def api_sheet() -> FlaskResponse:
             "rows": rows,
         }
     )
+
+
+@studio_bp.route("/api/sheet/baseline")
+def api_sheet_baseline() -> FlaskResponse:
+    """Return per-participant baseline timestamps for clock-to-relative conversion.
+
+    Response: {"ok": true, "baselines": {"P01": "09:12:00", "P02": "", ...}}
+    Empty baselines dict when no baseline row exists.
+    """
+    if _sheet_context is None:
+        return jsonify({"ok": False, "error": "No sheet loaded"}), 500
+
+    ctx = _sheet_context
+    if ctx.baseline_row_idx is None:
+        return jsonify({"ok": True, "baselines": {}})
+
+    participants = spreadsheet.get_participant_list(
+        ctx.header_row, ctx.id_cell, ctx.num_participants
+    )
+    baselines: dict[str, str] = {}
+    for p_idx, pid in enumerate(participants):
+        col_idx = ctx.id_cell.col + p_idx
+        value = ""
+        if 0 <= ctx.baseline_row_idx < len(ctx.sheet_data) and col_idx < len(
+            ctx.sheet_data[ctx.baseline_row_idx]
+        ):
+            value = ctx.sheet_data[ctx.baseline_row_idx][col_idx].strip()
+        baselines[pid] = value
+
+    return jsonify({"ok": True, "baselines": baselines})
 
 
 @studio_bp.route("/api/sheet/refresh", methods=["POST"])
