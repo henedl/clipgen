@@ -64,6 +64,81 @@ def test_api_sheet_refresh_500_when_build_fails(client, monkeypatch):
     assert "Failed to refresh" in data["error"]
 
 
+def test_api_sheet_baseline_500_when_no_context(client):
+    resp = client.get("/studio/api/sheet/baseline")
+    assert resp.status_code == 500
+    data = resp.get_json()
+    assert data["ok"] is False
+    assert "No sheet loaded" in data["error"]
+
+
+def test_api_sheet_baseline_no_baseline_row(client, monkeypatch):
+    import types
+
+    ctx = types.SimpleNamespace(
+        header_row=["ID", "P01", "P02"],
+        id_cell=types.SimpleNamespace(col=1),
+        num_participants=2,
+        baseline_row_idx=None,
+        sheet_data=[["study"], ["ID", "P01", "P02"]],
+    )
+    monkeypatch.setattr(server, "_sheet_context", ctx)
+
+    resp = client.get("/studio/api/sheet/baseline")
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["ok"] is True
+    assert data["baselines"] == {}
+
+
+def test_api_sheet_baseline_with_values(client, monkeypatch):
+    import types
+
+    ctx = types.SimpleNamespace(
+        header_row=["ID", "P01", "P02"],
+        id_cell=types.SimpleNamespace(col=1),
+        num_participants=2,
+        baseline_row_idx=2,
+        sheet_data=[
+            ["study"],
+            ["ID", "P01", "P02"],
+            ["Baseline time", "09:12:00", "09:15:30"],
+        ],
+    )
+    monkeypatch.setattr(server, "_sheet_context", ctx)
+
+    resp = client.get("/studio/api/sheet/baseline")
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["ok"] is True
+    assert data["baselines"] == {"P01": "09:12:00", "P02": "09:15:30"}
+
+
+def test_api_sheet_baseline_partial(client, monkeypatch):
+    import types
+
+    ctx = types.SimpleNamespace(
+        header_row=["ID", "P01", "P02", "P03"],
+        id_cell=types.SimpleNamespace(col=1),
+        num_participants=3,
+        baseline_row_idx=2,
+        sheet_data=[
+            ["study"],
+            ["ID", "P01", "P02", "P03"],
+            ["Baseline time", "09:12:00", "", "09:20:00"],
+        ],
+    )
+    monkeypatch.setattr(server, "_sheet_context", ctx)
+
+    resp = client.get("/studio/api/sheet/baseline")
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["ok"] is True
+    assert data["baselines"]["P01"] == "09:12:00"
+    assert data["baselines"]["P02"] == ""
+    assert data["baselines"]["P03"] == "09:20:00"
+
+
 def test_api_generate_500_when_no_worksheet(client):
     resp = client.post("/studio/api/generate", json={"cells": ["P01.3"]})
     assert resp.status_code == 500

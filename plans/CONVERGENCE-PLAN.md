@@ -163,3 +163,482 @@ When the Convergence tab is active and new ScreenSpace or transcript events arri
 - The most common researcher query is temporal distribution ("when did this happen across participants, and is that spread tight or wide?") — threshold filtering alone doesn't capture this
 - Task region as a concept is too rigid for freeform playtests; temporal distribution is the more honest and useful framing
 - The Convergence Browser makes the intermediate curation step explicit: curate → query/filter → generate, rather than curate → generate
+
+---
+
+## Implementation Plan
+
+### Architecture
+
+The Convergence Browser is implemented as a **separate JS/CSS file pair** (`convergence.js` + `convergence.css`), integrated into Studio via minimal HTML additions and a bridge API exposed from `studio.js`. One new server endpoint provides baseline timestamp data. Studio.js is already 4,500 lines — keeping convergence logic in its own file prevents further bloat while maintaining the same vanilla JS patterns.
+
+**Files to create:**
+| File | Purpose | Est. size |
+|------|---------|-----------|
+| `assets/web/convergence.js` | All Convergence Browser logic (IIFE, ES5) | ~1,000 lines |
+| `assets/web/convergence.css` | All Convergence Browser styles | ~350 lines |
+
+**Files to modify:**
+| File | Changes |
+|------|---------|
+| `assets/web/studio.html` | Tab button, panel container, script/css includes (~15 lines) |
+| `assets/web/studio.js` | State fields, tab switching, bridge exports (~30 lines) |
+| `server.py` | `/api/sheet/baseline` endpoint (~25 lines) |
+| `tests/test_studio_api.py` | Baseline endpoint tests (~40 lines) |
+
+**Bridge pattern:** `studio.js` exposes select internal functions on `window` for `convergence.js` to consume:
+- `window._studioState` — reference to the shared state object (same in-memory data, no copies)
+- `window._studioFindOverlappingData` — cross-reference join (studio.js:227)
+- `window._studioBuildXrefBadges` — badge rendering (studio.js:3361)
+- `window._studioParseClipTimestamps` — timestamp parsing (studio.js:166)
+- `window._studioHexToRgba` — color utility
+- `window._studioIntakeComputeTickInterval` — time axis tick calculation
+- `window._studioRenderArtifactQueue` / `_studioRenderReelQueue` / `_studioSaveQueues` — queue re-rendering after dispatch
+
+`convergence.js` also uses globals from `utils.js` directly: `qs`, `qsa`, `el`, `formatTime`, `MARK_CATEGORIES`, `XREF_BADGES`, `DETECTOR_COLORS`.
+
+---
+
+### Phase 0: Baseline Time Normalization ✓
+
+**Goal:** Expose per-participant baseline timestamps to the client so sheet timestamps can be converted from absolute clock time to video-relative seconds.
+
+**What becomes functional:** Nothing user-visible. Infrastructure for Phase 2.
+
+#### 0.1 — New server endpoint
+
+**File:** `server.py` (add near existing `/api/sheet` at line 162)
+
+```
+GET /api/sheet/baseline → {"ok": true, "baselines": {"P01": "09:12:00", "P02": "", ...}}
+```
+
+Reads `_sheet_context.baseline_row_idx` and iterates participant columns — the same access pattern already in `spreadsheet.py:582-587` (`prepare_clip`). Empty string = relative timestamps (no adjustment needed). Non-empty = clock-format baseline.
+
+Returns `{"ok": true, "baselines": {}}` when no baseline row exists.
+
+**Why a separate endpoint:** Avoids changing the `/api/sheet` response shape that the sheet grid depends on. Baseline data is only needed by the Convergence Browser.
+
+#### 0.2 — Client-side baseline parsing
+
+**File:** `convergence.js`
+
+- `parseTimestampToSeconds(str)` — same logic as studio.js:154, but accessible outside the IIFE. Move to `utils.js` as a shared global (or duplicate in convergence.js — small function, either is acceptable).
+- `getBaselineAdjustedSheetEvents(sheetData, baselines)` — iterates `state.sheetData.rows`, parses each valid cell, subtracts `baselines[participant]` from `startSeconds` when the participant has a non-empty baseline.
+
+#### 0.3 — Tests
+
+**File:** `tests/test_studio_api.py`
+
+- `test_api_sheet_baseline_no_context` — returns 500
+- `test_api_sheet_baseline_no_baseline_row` — returns `{"ok": true, "baselines": {}}`
+- `test_api_sheet_baseline_with_values` — returns per-participant baseline strings
+- `test_api_sheet_baseline_partial` — some participants have baselines, some don't
+
+---
+
+### Phase 1: Tab Shell and Panel Skeleton
+
+**Goal:** The Convergence tab appears when multiple participants are loaded. Clicking it shows an empty panel with filter controls.
+
+**What becomes functional:** Tab navigation works. Filter UI renders. Panel is structurally complete but shows no data.
+
+*Can start in parallel with Phase 0.*
+
+#### 1.1 — HTML additions
+
+**File:** `studio.html`
+
+- Add `<link rel="stylesheet" href="convergence.css">` after existing CSS includes (line 8)
+- Add tab button after transcript-intake tab (line 83): `<button class="preview-tab hidden" data-tab="convergence">Convergence</button>`
+- Add panel div after `#trIntakePanel` (line 152):
+  ```html
+  <div id="convergencePanel" class="hidden">
+    <div id="convergenceControls" class="area-controls"></div>
+    <div id="convergenceFilters" class="convergence-filters"></div>
+    <div id="convergenceTimeline" class="convergence-timeline-container"></div>
+    <div id="convergenceDetail" class="convergence-detail hidden"></div>
+  </div>
+  ```
+- Add `<script src="convergence.js"></script>` after `studio.js` (line 317)
+
+#### 1.2 — State additions in studio.js
+
+**File:** `studio.js` (lines 8-48, state object)
+
+```javascript
+convergenceBaselines: {},
+convergenceDataVersion: 0,
+convergenceStale: false,
+```
+
+#### 1.3 — Tab visibility gating
+
+**File:** `studio.js`
+
+New function `checkConvergenceTabVisibility()` — called after `loadSheetData()` resolves (line 683) and after `pollIntakeEvents`/`pollTranscriptIntakeMarks` update data. Shows the tab when:
+
+```javascript
+(state.sheetData && state.sheetData.participants.length > 1)
+|| (uniqueParticipants(state.intakeEvents) > 1)
+|| (uniqueParticipants(state.trIntakeMarks) > 1)
+```
+
+This differs from the existing `checkNavLinks()` pattern (which queries `/api/status` for server capability flags) because the convergence gate is about loaded data, not server features.
+
+#### 1.4 — Tab switching integration
+
+**File:** `studio.js`, `syncPreviewTab()` (line 605)
+
+- Add `#convergencePanel` to the "hide everything" block (line 614-619)
+- Add `else if (state.activePreviewTab === "convergence")` branch that shows the panel and calls `window.convergenceActivate()` — the entry point from `convergence.js`
+
+#### 1.5 — Convergence.js skeleton
+
+**File:** `convergence.js` (new, IIFE)
+
+Internal state:
+```javascript
+var cvState = {
+  active: false,
+  baselines: null,           // {P01: 33120, ...} in seconds, null = not fetched
+  events: [],                // unified events from all sources
+  filteredEvents: [],
+  convergenceZones: [],
+  selection: null,           // {start, end} or null
+  filters: {
+    streams: [],             // subset of ["sheet", "screenspace", "transcript"]
+    eventTypes: [],
+    minParticipants: 2,
+    windowSec: 5,
+    timeRange: null,
+  },
+  dataVersion: 0,
+  duration: 0,
+  participants: [],
+};
+```
+
+Exposes `window.convergenceActivate`, `window.convergenceDeactivate`, `window.convergenceInit`.
+
+#### 1.6 — Filter controls
+
+**File:** `convergence.js`
+
+`buildFilterControls()` renders into `#convergenceControls` and `#convergenceFilters`:
+
+- **Stream toggles** (sheet / screenspace / transcript / all) — styled like `.intake-filter-det` pills, colored with `XREF_BADGES` values
+- **Event type pills** — dynamically populated from loaded data. When a single stream is selected, show that stream's types. When "all" is active, show types grouped by source
+- **Min participants** — `<input type="number" min="2">`, default 2, `.intake-cluster-input` pattern (studio.html:110)
+- **Window** — `<input type="number" min="1" max="60" value="5">`, label "±s"
+- All filter changes debounced 250ms before triggering recalculation
+
+#### 1.7 — CSS skeleton
+
+**File:** `convergence.css` (new)
+
+Initial styles using `tokens.css` variables throughout:
+- `#convergencePanel` — flex column layout matching `#intakePanel` pattern
+- `.convergence-filters` — horizontal flex wrap
+- `.convergence-timeline-container` — flex: 1, min-height: 0, overflow-y: auto
+- Filter pill styles reusing `.intake-filter-det` visual pattern
+
+#### Verification
+
+- [ ] Load multi-participant study → Convergence tab appears
+- [ ] Load single-participant study → tab hidden
+- [ ] Click Convergence tab → empty panel with filter controls
+- [ ] Switch between all four tabs → correct panel visibility, no poll timer leaks
+
+---
+
+### Phase 2: Data Collection, Algorithm, and Timeline Rendering
+
+**Goal:** The Convergence tab loads data from all three sources, runs the sweep-line convergence algorithm, and renders the multi-participant timeline with convergence summary lane.
+
+**What becomes functional:** Researcher can see all participants on a shared timeline, see convergence zones highlighted, and use filters to explore event types.
+
+**Depends on:** Phase 0 + Phase 1.
+
+#### 2.1 — Data collection
+
+**File:** `convergence.js`
+
+`collectAllEvents()` gathers events from all three sources into a unified shape:
+
+```javascript
+{ participant, start, end, source, eventType, label, id, rawData }
+```
+
+- **Sheet:** iterate `state.sheetData.rows`, parse each valid cell via `parseClipTimestamps()`, apply baseline offset from `cvState.baselines[participant]`. Source = "sheet", eventType = row.category
+- **Screenspace:** iterate `state.intakeEvents` (raw events, not clusters — finer granularity). Source = "screenspace", eventType = `event.event_type`, start = `time_in`, end = `time_out`
+- **Transcript:** iterate `state.trIntakeMarks`. Source = "transcript", eventType = `mark.category`, start/end from mark
+
+`cvState.duration` = `max(all event end times) * 1.05` (matching studio.js:3451 pattern).
+
+`cvState.participants` = union of all participants, sorted by spreadsheet column order (from `state.sheetData.participants`), with non-sheet participants appended alphabetically.
+
+#### 2.2 — Baseline fetch
+
+`convergenceActivate()` fetches baseline data on first activation:
+
+```javascript
+if (!cvState.baselines) {
+  fetch("api/sheet/baseline").then(...).then(function (data) {
+    // parse each baseline string to seconds via parseTimestampToSeconds
+    cvState.baselines = parsed;
+    recalculate();
+  });
+} else {
+  checkStaleness();
+}
+```
+
+#### 2.3 — Convergence algorithm
+
+`computeConvergenceZones(events, windowSec, minParticipants)`:
+
+1. **Sort** events by start time
+2. **Sweep:** for each event, count distinct participants with events within ±windowSec
+3. **Threshold:** regions where distinct-participant count ≥ minParticipants become zones
+4. **Merge:** overlapping zones into contiguous regions
+5. **Enrich:** per zone — participant count, contributing events, tightness (stddev of start times), strength score (`participantCount/total × 1/(1 + tightness/window)`)
+
+O(n × k) effective complexity where k = avg events per window. Sub-millisecond for typical study sizes.
+
+#### 2.4 — Filter pipeline
+
+`applyFilters()`:
+1. Filter `cvState.events` by active streams → event types → time range
+2. Store in `cvState.filteredEvents`
+3. Run `computeConvergenceZones()` on filtered set
+4. Store in `cvState.convergenceZones`
+
+`recalculate()` = `collectAllEvents()` → `applyFilters()` → `render()`. Filter changes (debounced) skip collection and only re-run `applyFilters()` + `render()`.
+
+#### 2.5 — Timeline layout
+
+`renderTimeline()` builds inside `#convergenceTimeline`:
+
+```
+[sticky] time axis          — tick marks via intakeComputeTickInterval pattern
+[sticky] summary lane       — canvas, 32px, convergence density gradient
+[scroll] participant rows
+  per participant:
+    [sticky-left] label     — participant ID, 52px wide, monospace
+    tracks container        — relative positioned
+      sheet sub-track       — 14px, DOM markers
+      screenspace sub-track — 14px, DOM markers
+      transcript sub-track  — 14px, DOM markers
+      row shading canvas    — behind markers, convergence contribution
+```
+
+**Event markers:** DOM elements with percentage-based positioning (matching viewer.js:1041-1049):
+```javascript
+marker.style.left = ((event.start / cvState.duration) * 100) + "%";
+marker.style.width = Math.max(((event.end - event.start) / cvState.duration * 100), 0.3) + "%";
+```
+
+Color-coded by source: sheet = `XREF_BADGES.sheet.color`, screenspace = `DETECTOR_COLORS[eventType]`, transcript = `MARK_CATEGORIES[eventType].color`.
+
+**Display normalization:** per participant, per sub-track — normalize marker opacity between 0.3 and 1.0 so sparse tracks don't vanish next to dense ones.
+
+#### 2.6 — Summary lane (canvas)
+
+`renderSummaryLane()` following studio.js:3404-3496 pattern:
+
+- DPR-aware canvas sizing
+- For each pixel column, sample convergence strength at that time position
+- Draw with `--color-accent` at variable alpha proportional to strength
+- Store hit rects in `_summaryHitRects` for Phase 3 click interaction
+
+#### 2.7 — Per-participant row shading (canvas)
+
+Small canvas behind DOM markers per participant row. For each convergence zone, shade proportionally to how many events that participant contributed. Subtle (max alpha 0.15) — secondary to the summary lane.
+
+#### 2.8 — Data freshness indicator
+
+`checkStaleness()` compares current data lengths/IDs against what was collected at `cvState.dataVersion`. If changed, show a "New data available — Refresh" banner. No auto-recalculation. Check triggered on `visibilitychange` when convergence tab is active.
+
+#### Verification
+
+- [ ] All participants appear as rows with correct sub-tracks
+- [ ] Sheet events are baseline-adjusted (verify against raw sheet values)
+- [ ] Single-stream filter shows only that stream's markers
+- [ ] Event type filter recalculates convergence for that type
+- [ ] Window slider widens/narrows convergence zones
+- [ ] Min participants threshold shows/hides zones
+- [ ] Summary lane gradient reflects convergence density
+- [ ] "New data available" banner appears after external changes, refresh incorporates them
+
+---
+
+### Phase 3: Selection, Detail Panel, and Queue Dispatch
+
+**Goal:** Researcher can select convergence zones or arbitrary time ranges, see per-participant event breakdowns, and send items to the artifact/reel queues.
+
+**What becomes functional:** Complete curation workflow — discovery → inspection → queue dispatch.
+
+**Depends on:** Phase 2.
+
+#### 3.1 — Click-to-select convergence zone
+
+Click handler on summary lane canvas using `_summaryHitRects`. Sets `cvState.selection`. Draws semi-transparent overlay across all participant rows (`<div class="convergence-selection-overlay">` with percentage positioning, pointer-events: none).
+
+#### 3.2 — Drag-to-select arbitrary range
+
+Mousedown/mousemove/mouseup on participant rows container. Draws selection preview during drag. On mouseup, if range > 1s, set `cvState.selection = {start, end, zone: null}` and render detail panel. Minimum drag threshold prevents accidental selections.
+
+#### 3.3 — Detail panel
+
+`renderDetailPanel()` populates `#convergenceDetail`:
+
+```
+Header: "2:15 – 2:45 · 4 participants" [Close ×]
+Per participant section:
+  P01 heading
+    event list: time range | source badge | type | description
+    cross-reference badges via findOverlappingData + buildXrefBadges
+    [Add to Artifacts] [Add to Reel] per event
+Actions bar:
+  [Add All to Artifacts] [Add All to Reel]
+```
+
+Uses `findOverlappingData(participant, start, end)` (studio.js:227) and `buildXrefBadges()` (studio.js:3361) via the bridge API.
+
+#### 3.4 — Queue dispatch
+
+Push items to `state.artifactQueue` / `state.reelQueue` using existing item shapes:
+
+- **Screenspace events:** `{participant, segStart, segDuration, desc, source: "screenspace", event_type, event_ids: [id]}`
+- **Transcript marks:** `{participant, segStart, segDuration, desc, source: "transcript", mark_ids: [id]}`
+- **Sheet events:** `{participant, segStart, segDuration, desc, source: "screenspace", row}` — dispatched through the intake generation path (`/api/generate-intake`)
+
+After pushing, call `renderArtifactQueue()` / `renderReelQueue()` / `saveQueues()` via bridge.
+
+"Add All" iterates all events in the selection across all participants, pushing each as an individual queue item (one per participant — consistent with existing per-participant dispatch).
+
+#### 3.5 — Selection dismissal
+
+- Close button on detail panel
+- Click empty space in timeline
+- Escape key
+
+#### Verification
+
+- [ ] Click convergence zone → detail panel opens with correct events
+- [ ] Cross-reference badges appear on events with overlapping data
+- [ ] "Add to Artifacts" adds individual event to queue
+- [ ] "Add All to Reel" adds all events from selection
+- [ ] Drag-to-select works for arbitrary ranges
+- [ ] Dismiss clears overlays and hides detail panel
+- [ ] Generated artifacts from convergence queue items succeed
+
+---
+
+### Phase 4: Video Preview and Interactive Polish
+
+**Goal:** Hover interactions, video frame previews, keyboard shortcuts, visual refinements.
+
+**What becomes functional:** Full interactive experience matching the polish level of existing Studio tabs.
+
+**Depends on:** Phase 3.
+
+#### 4.1 — Video frame preview
+
+60ms debounced hover on event markers (matching viewer.js pattern). Floating `<img>` near marker:
+- Screenspace: `../screenspace/api/video/frame/{participant}/{timestamp}`
+- Transcript/Sheet: `api/thumbnail/{participant}/{start_seconds}`
+
+#### 4.2 — Marker hover highlighting
+
+On hover, dim all other markers (opacity 0.15 — matching studio.js:3484-3485). Highlight corresponding summary lane region.
+
+#### 4.3 — Tooltips on convergence zones
+
+Hover summary lane → tooltip: "4 participants · 2:15–2:45 · 12 events"
+
+#### 4.4 — Keyboard navigation
+
+- **Escape:** dismiss selection
+- **←/→:** navigate between convergence zones when one is selected
+
+#### 4.5 — Participant row reordering
+
+Sort toggle: "Sort by convergence density" reorders rows so most-convergent participants appear at top. Default = spreadsheet column order.
+
+#### 4.6 — CSS polish
+
+- Hover transitions (use `--duration-fast` token)
+- Cursor: crosshair on timeline, pointer on markers
+- Frame preview: `--shadow-md`, `--radius-sm`, 240px max-width
+- Dark theme: all colors via CSS custom properties from `tokens.css`
+- `@media (prefers-reduced-motion: reduce)` — disable transitions
+
+#### Verification
+
+- [ ] Frame preview appears on hover with correct image
+- [ ] Convergence zone tooltip shows on hover
+- [ ] Escape dismisses, arrows navigate
+- [ ] Participant sort reorders rows
+- [ ] Dark mode works
+- [ ] Reduced motion preference respected
+
+---
+
+### Phase 5: Edge Cases and Robustness
+
+**Goal:** Handle all edge cases, performance at scale, integration testing.
+
+**Depends on:** Phase 4.
+
+#### 5.1 — Sticky scroll
+
+With >8 participants: time axis and summary lane sticky at top, participant labels sticky at left. Verify no z-index conflicts.
+
+#### 5.2 — Dense data performance
+
+If >500 markers per sub-track, cluster adjacent markers within 1px of each other (display optimization only — algorithm data unchanged). Canvas rendering already handles density efficiently.
+
+#### 5.3 — Empty states
+
+- No matching events: "No events match the current filters"
+- No convergence zones: "No convergence detected. Try widening the window or lowering the threshold."
+- Single participant (defensive): tab hidden by Phase 1 gating
+
+#### 5.4 — Baseline edge cases
+
+- No baseline row: `baselines = {}`, no adjustment
+- Partial baselines: apply offset only to participants with non-empty values
+- Malformed baseline: treat as 0, console warning
+
+#### 5.5 — Resize handling
+
+Debounced 200ms re-render. Re-size all canvases. Percentage-based DOM markers auto-adjust.
+
+#### 5.6 — Tests
+
+**File:** `tests/test_studio_api.py` — baseline endpoint tests (Phase 0).
+
+**Manual integration tests:**
+- [ ] Study with clock-format timestamps: sheet events align with screenspace events in the Convergence Browser
+- [ ] Study with no baseline row: sheet timestamps display correctly as-is
+- [ ] Generate artifacts from detail panel → appear in queue → generate successfully
+- [ ] Build reel from convergence-selected events across participants → generates correctly
+
+---
+
+### Dependency Graph
+
+```
+Phase 0 (Baseline endpoint)──────┐
+                                  ├──→ Phase 2 (Algorithm + Rendering)
+Phase 1 (Tab shell + filters)────┘         │
+                                      Phase 3 (Selection + Queue)
+                                            │
+                                      Phase 4 (Preview + Polish)
+                                            │
+                                      Phase 5 (Edge cases + Tests)
+```
+
+Phases 0 and 1 can be developed in parallel.
