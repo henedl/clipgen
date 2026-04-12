@@ -345,10 +345,10 @@ Initial styles using `tokens.css` variables throughout:
 
 #### Verification
 
-- [ ] Load multi-participant study → Convergence tab appears
-- [ ] Load single-participant study → tab hidden
-- [ ] Click Convergence tab → empty panel with filter controls
-- [ ] Switch between all four tabs → correct panel visibility, no poll timer leaks
+- [x] Load multi-participant study → Convergence tab appears
+- [x] Load single-participant study → tab hidden
+- [x] Click Convergence tab → empty panel with filter controls
+- [x] Switch between all four tabs → correct panel visibility, no poll timer leaks
 
 ---
 

@@ -45,6 +45,9 @@
     trIntakeShowAll: false,
     trIntakeHoveredIdx: -1,
     trIntakeTooltipsEnabled: true,
+    convergenceBaselines: {},
+    convergenceDataVersion: 0,
+    convergenceStale: false,
   };
 
   function isIntakeSource(source) {
@@ -609,11 +612,13 @@
     var refreshBtn = qs("#refreshSheet");
     var intakePanel = qs("#intakePanel");
     var trIntakePanel = qs("#trIntakePanel");
+    var convergencePanel = qs("#convergencePanel");
 
     // Hide everything first
     grid.classList.add("hidden");
     intakePanel.classList.add("hidden");
     if (trIntakePanel) trIntakePanel.classList.add("hidden");
+    if (convergencePanel) convergencePanel.classList.add("hidden");
     if (filterBar) filterBar.classList.add("hidden");
     if (filterToggle) filterToggle.classList.add("hidden");
     if (refreshBtn) refreshBtn.classList.add("hidden");
@@ -621,6 +626,7 @@
     // Stop both intake poll timers
     if (state.intakePollTimer) { clearInterval(state.intakePollTimer); state.intakePollTimer = null; }
     if (state.trIntakePollTimer) { clearInterval(state.trIntakePollTimer); state.trIntakePollTimer = null; }
+    if (window.convergenceDeactivate) window.convergenceDeactivate();
 
     if (state.activePreviewTab === "sheet") {
       grid.classList.remove("hidden");
@@ -641,6 +647,9 @@
         state.trIntakePollTimer = setInterval(pollTranscriptIntakeMarks, 10000);
       }
       setTimeout(sizeTrIntakeCanvas, 0);
+    } else if (state.activePreviewTab === "convergence") {
+      if (convergencePanel) convergencePanel.classList.remove("hidden");
+      if (window.convergenceActivate) window.convergenceActivate();
     }
     computeGridMaxHeight();
   }
@@ -712,6 +721,7 @@
           updateCellClasses();
         }
         loadManifestState();
+        checkConvergenceTabVisibility();
       })
       .catch(function (err) {
         qs("#sheetLoading").textContent = "Failed to load sheet: " + err;
@@ -3231,6 +3241,34 @@
 
   // ---- Init ----
 
+  function checkConvergenceTabVisibility() {
+    var tab = qs('.preview-tab[data-tab="convergence"]');
+    if (!tab) return;
+    var multipleParticipants = false;
+    if (state.sheetData && state.sheetData.participants && state.sheetData.participants.length > 1) {
+      multipleParticipants = true;
+    }
+    if (!multipleParticipants && state.intakeEvents.length > 0) {
+      var seenSS = {};
+      for (var i = 0; i < state.intakeEvents.length; i++) {
+        seenSS[state.intakeEvents[i].participant] = true;
+      }
+      if (Object.keys(seenSS).length > 1) multipleParticipants = true;
+    }
+    if (!multipleParticipants && state.trIntakeMarks.length > 0) {
+      var seenTr = {};
+      for (var j = 0; j < state.trIntakeMarks.length; j++) {
+        seenTr[state.trIntakeMarks[j].participant] = true;
+      }
+      if (Object.keys(seenTr).length > 1) multipleParticipants = true;
+    }
+    if (multipleParticipants) {
+      tab.classList.remove("hidden");
+    } else {
+      tab.classList.add("hidden");
+    }
+  }
+
   function checkNavLinks() {
     fetch("../api/status")
       .then(function (r) { return r.json(); })
@@ -3341,6 +3379,7 @@
         var threshold = parseInt((qs("#intakeClusterThreshold") || {}).value) || 5;
         state.intakeClusters = clusterIntakeEvents(events, threshold);
         renderIntake(hasNew);
+        checkConvergenceTabVisibility();
       })
       .catch(function (err) {
         console.warn("[Intake] poll failed:", err);
@@ -3930,10 +3969,12 @@
                 }
                 state.trIntakeClusters = clusterTranscriptMarks(allItems, threshold);
                 renderTranscriptIntake();
+                checkConvergenceTabVisibility();
               });
             });
         } else {
           renderTranscriptIntake();
+          checkConvergenceTabVisibility();
         }
       })
       .catch(function () {});
@@ -4503,6 +4544,7 @@
       computeGridMaxHeight();
       sizeIntakeCanvas();
       sizeTrIntakeCanvas();
+      if (window.convergenceResize) window.convergenceResize();
     });
 
     document.addEventListener("dragstart", function (ev) {
@@ -4513,4 +4555,6 @@
       hideEmptyStashAreas();
     });
   });
+
+  window._studioState = state;
 })();
