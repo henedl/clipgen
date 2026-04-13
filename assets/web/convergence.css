@@ -97,6 +97,7 @@
   height: 20px;
   background: var(--color-surface-alt);
   border-bottom: 1px solid var(--color-border);
+  padding-left: 52px;
 }
 
 .cv-tick {
@@ -125,6 +126,7 @@
   z-index: calc(var(--z-float) - 1);
   height: 32px;
   border-bottom: 1px solid var(--color-border);
+  padding-left: 52px;
 }
 
 .cv-summary-canvas {

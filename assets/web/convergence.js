@@ -729,11 +729,18 @@
   // --- Selection ---
 
   function setSelection(start, end, zone) {
+    // Clamp to valid range
+    start = Math.max(0, start);
+    end = Math.min(cvState.duration, end);
+    if (end - start < 0.5) return;
+
     var events = [];
     for (var i = 0; i < cvState.filteredEvents.length; i++) {
       var ev = cvState.filteredEvents[i];
       if (ev.start < end && ev.end > start) events.push(ev);
     }
+    if (events.length === 0) return;
+
     cvState.selection = { start: start, end: end, zone: zone || null, events: events };
     renderSelectionOverlay();
     renderDetailPanel();
@@ -1043,11 +1050,23 @@
       item.source = "transcript";
       item.mark_ids = [event.rawData.id || event.rawData.segment_id || event.id];
     } else {
-      // Sheet events: route through intake path with computed times
-      item.desc = event.label || event.eventType;
-      item.source = "screenspace";
-      item.event_type = event.eventType;
-      item.event_ids = [];
+      // Sheet events: use grid item format (no source) so thumbnails route
+      // through api/thumbnail and generation through the sheet path
+      var rawRow = event.rawData;
+      var cellValue = (rawRow.cells && rawRow.cells[event.participant])
+        ? rawRow.cells[event.participant].value : "";
+      var parts = event.id.split("_");
+      var segIdx = parseInt(parts[parts.length - 1]) || 0;
+      var segs = window._studioParseClipTimestamps(cellValue);
+      item.row = rawRow.rowNum;
+      item.desc = rawRow.observation || event.label || event.eventType;
+      item.timestamp = cellValue;
+      item.segIdx = segIdx;
+      item.segTotal = segs.length;
+      if (segs[segIdx]) {
+        item.segStart = segs[segIdx].startSeconds;
+        item.segDuration = segs[segIdx].duration;
+      }
     }
     return item;
   }
