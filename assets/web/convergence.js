@@ -16,6 +16,7 @@
       eventTypes: [],
       minParticipants: 2,
       windowSec: 5,
+      clusterSec: 5,
       timeRange: null,
     },
     dataVersion: 0,
@@ -112,10 +113,9 @@
     }
 
     // Screenspace events (clustered)
-    var ssThresholdEl = qs("#intakeClusterThreshold");
-    var ssThreshold = ssThresholdEl ? (parseInt(ssThresholdEl.value, 10) || 5) : 5;
+    var clusterSec = cvState.filters.clusterSec;
     var ssClusters = window._studioClusterIntakeEvents
-      ? window._studioClusterIntakeEvents(state.intakeEvents, ssThreshold)
+      ? window._studioClusterIntakeEvents(state.intakeEvents, clusterSec)
       : [];
     for (var i = 0; i < ssClusters.length; i++) {
       var cl = ssClusters[i];
@@ -136,10 +136,8 @@
     }
 
     // Transcript marks (clustered)
-    var trThresholdEl = qs("#trIntakeClusterThreshold");
-    var trThreshold = trThresholdEl ? (parseInt(trThresholdEl.value, 10) || 5) : 5;
     var trClusters = window._studioClusterTranscriptMarks
-      ? window._studioClusterTranscriptMarks(state.trIntakeMarks, trThreshold)
+      ? window._studioClusterTranscriptMarks(state.trIntakeMarks, clusterSec)
       : [];
     for (var j = 0; j < trClusters.length; j++) {
       var tc = trClusters[j];
@@ -395,8 +393,24 @@
     winLabel.appendChild(winInput);
     winLabel.appendChild(winSuffix);
 
+    var clusterLabel = el("label", "intake-cluster-label");
+    clusterLabel.textContent = "Cluster ";
+    var clusterInput = document.createElement("input");
+    clusterInput.type = "number";
+    clusterInput.id = "cvClusterThreshold";
+    clusterInput.min = "1";
+    clusterInput.max = "60";
+    clusterInput.value = String(cvState.filters.clusterSec);
+    clusterInput.className = "intake-cluster-input";
+    clusterInput.autocomplete = "off";
+    clusterInput.addEventListener("input", debouncedRecalculate);
+    var clusterSuffix = document.createTextNode("s");
+    clusterLabel.appendChild(clusterInput);
+    clusterLabel.appendChild(clusterSuffix);
+
     controls.appendChild(minLabel);
     controls.appendChild(winLabel);
+    controls.appendChild(clusterLabel);
 
     // --- Filters bar: stream toggles + event type pills ---
     for (var i = 0; i < STREAM_DEFS.length; i++) {
@@ -453,7 +467,13 @@
     var inputs = controls.querySelectorAll("input[type=number]");
     if (inputs[0]) cvState.filters.minParticipants = Math.max(2, parseInt(inputs[0].value, 10) || 2);
     if (inputs[1]) cvState.filters.windowSec = Math.max(1, parseInt(inputs[1].value, 10) || 5);
+    if (inputs[2]) cvState.filters.clusterSec = Math.max(1, parseInt(inputs[2].value, 10) || 5);
   }
+
+  var debouncedRecalculate = debounce(function () {
+    syncFilterInputs();
+    recalculate();
+  }, 250);
 
   function onFilterChange() {
     syncFilterInputs();
@@ -486,9 +506,12 @@
   // --- Tick Interval (pixel-aware) ---
 
   function computeConvergenceTickInterval(duration, trackWidthPx) {
-    var labelWidth = duration >= 3600 ? 60 : 40;
-    var minGap = 8;
-    var maxTicks = Math.max(2, Math.floor(trackWidthPx / (labelWidth + minGap)));
+    // Each tick label is centered on its mark. To prevent overlap the
+    // minimum distance between ticks must be at least one full label
+    // width plus comfortable padding.  10px monospace "H:MM:SS" ≈ 50px,
+    // "M:SS" ≈ 30px; add 30px padding so labels breathe.
+    var slotWidth = duration >= 3600 ? 80 : 60;
+    var maxTicks = Math.max(2, Math.floor(trackWidthPx / slotWidth));
     var candidates = [1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600];
     for (var i = 0; i < candidates.length; i++) {
       if (duration / candidates[i] <= maxTicks) return candidates[i];

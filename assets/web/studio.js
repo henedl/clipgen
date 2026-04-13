@@ -1037,12 +1037,47 @@
     var dragging = false;
     var startY = 0;
     var startOffset = 0;
+    var dragAvailable = 0; // stable available-space snapshot for the drag
+    var dragMaxOff = 0;    // stable upper bound for dividerOffset
 
     function onDown(e) {
       e.preventDefault();
       dragging = true;
       startY = e.clientY || (e.touches && e.touches[0].clientY) || 0;
       startOffset = state.dividerOffset;
+
+      // Snapshot layout values once so they stay stable for the whole drag.
+      // Re-reading bottom.offsetHeight each frame causes oscillation when
+      // the upper panel shrinks and the bottom panel's visible area grows.
+      var header = qs("#studioHeader");
+      var preview = qs("#sheetPreview");
+      var divider = qs("#panelDivider");
+      var bottom = qs("#bottomPanel");
+      if (header && preview && divider && bottom) {
+        var previewHeader = preview.querySelector(".sheet-preview-header");
+        var filterBar = qs("#filterBar");
+        var previewStyle = getComputedStyle(preview);
+        var previewPadTop = parseFloat(previewStyle.paddingTop) || 0;
+        var previewPadBot = parseFloat(previewStyle.paddingBottom) || 0;
+        var phHeight = previewHeader ? previewHeader.offsetHeight : 0;
+        var phStyle = previewHeader ? getComputedStyle(previewHeader) : null;
+        var phMargin = phStyle
+          ? (parseFloat(phStyle.marginTop) || 0) + (parseFloat(phStyle.marginBottom) || 0)
+          : 0;
+        var fbHeight = filterBar && !filterBar.classList.contains("hidden") ? filterBar.offsetHeight : 0;
+        var fbStyle = filterBar && !filterBar.classList.contains("hidden") ? getComputedStyle(filterBar) : null;
+        var fbMargin = fbStyle
+          ? (parseFloat(fbStyle.marginTop) || 0) + (parseFloat(fbStyle.marginBottom) || 0)
+          : 0;
+        var headerRect = header.getBoundingClientRect();
+        var sheetChrome = previewPadTop + phHeight + phMargin + fbHeight + fbMargin + previewPadBot;
+        dragAvailable = window.innerHeight - headerRect.top - headerRect.height
+          - sheetChrome - divider.offsetHeight - bottom.offsetHeight;
+      }
+
+      var MIN_GRID = 100;
+      dragMaxOff = Math.max(0, dragAvailable - MIN_GRID);
+
       handle.classList.add("active");
       document.body.style.cursor = "row-resize";
       document.body.style.userSelect = "none";
@@ -1061,24 +1096,20 @@
       var clientY = e.clientY || (e.touches && e.touches[0].clientY) || 0;
       requestAnimationFrame(function () {
         var delta = startY - clientY;
-        var contentH = 0;
-        if (state.activePreviewTab === "sheet") {
-          var grid = qs("#sheetGrid");
-          var table = grid ? grid.querySelector("table") : null;
-          contentH = table ? table.offsetHeight : 0;
-        } else if (state.activePreviewTab === "intake") {
-          var ip = qs("#intakePanel");
-          contentH = ip ? ip.scrollHeight : 0;
-        } else if (state.activePreviewTab === "transcript-intake") {
-          var tp = qs("#trIntakePanel");
-          contentH = tp ? tp.scrollHeight : 0;
-        } else if (state.activePreviewTab === "convergence") {
-          var cp = qs("#convergencePanel");
-          contentH = cp ? cp.scrollHeight : 0;
-        }
-        var maxOff = Math.max(0, contentH - 100);
-        state.dividerOffset = Math.max(0, Math.min(maxOff, startOffset + delta));
-        computeGridMaxHeight();
+        state.dividerOffset = Math.max(0, Math.min(dragMaxOff, startOffset + delta));
+
+        // Apply maxHeight directly using the stable snapshot
+        var MIN_GRID = 100;
+        var maxH = Math.max(MIN_GRID, dragAvailable - state.dividerOffset) + "px";
+        var grid = qs("#sheetGrid");
+        if (grid) grid.style.maxHeight = maxH;
+        var intakePanel = qs("#intakePanel");
+        if (intakePanel) intakePanel.style.maxHeight = maxH;
+        var trIntakePanel = qs("#trIntakePanel");
+        if (trIntakePanel) trIntakePanel.style.maxHeight = maxH;
+        var convergencePanel = qs("#convergencePanel");
+        if (convergencePanel) convergencePanel.style.maxHeight = maxH;
+
         rafPending = false;
       });
     }
@@ -1089,6 +1120,7 @@
       handle.classList.remove("active");
       document.body.style.cursor = "";
       document.body.style.userSelect = "";
+      computeGridMaxHeight(); // finalize with fresh layout values
     }
 
     document.addEventListener("mouseup", onUp);
