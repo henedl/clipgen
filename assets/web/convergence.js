@@ -1,4 +1,4 @@
-/* Convergence Browser – Phase 1 + Phase 2 + Phase 3 */
+/* Convergence Browser – Phase 1–4 */
 
 (function () {
   "use strict";
@@ -22,10 +22,16 @@
     dataVersion: 0,
     duration: 0,
     participants: [],
+    hoveredMarkerIdx: -1,
+    sortByDensity: false,
     _snapshot: null,
   };
 
   var _summaryHitRects = [];
+  var _cvFrameCache = {};
+  var _cvFramePreviewEl = null;
+  var _cvHoverDebounce = null;
+  var _cvZoneTooltipEl = null;
 
   // --- Utilities ---
 
@@ -114,6 +120,118 @@
       if (m) return { r: +m[1], g: +m[2], b: +m[3] };
     } catch (_) { /* fall through */ }
     return { r: 59, g: 130, b: 246 };
+  }
+
+  // --- Tooltip Positioning ---
+
+  function cvPositionTooltip(tooltipEl, anchorRect) {
+    var ttW = tooltipEl.offsetWidth;
+    var ttH = tooltipEl.offsetHeight;
+    var left = anchorRect.left + anchorRect.width / 2 - ttW / 2;
+    var top = anchorRect.top - ttH - 6;
+    if (top < 4) top = anchorRect.bottom + 6;
+    if (left < 4) left = 4;
+    if (left + ttW > window.innerWidth - 4) left = window.innerWidth - ttW - 4;
+    tooltipEl.style.left = left + "px";
+    tooltipEl.style.top = top + "px";
+  }
+
+  // --- Frame Preview ---
+
+  function cvFrameUrl(source, participant, startSec) {
+    if (source === "screenspace") {
+      return "../screenspace/api/video/frame/" + encodeURIComponent(participant)
+        + "/" + Math.floor(startSec) + "?w=240";
+    }
+    return "api/thumbnail/" + encodeURIComponent(participant) + "/" + Math.floor(startSec);
+  }
+
+  function cvEnsureFramePreview() {
+    if (_cvFramePreviewEl) return _cvFramePreviewEl;
+    var wrap = el("div", "cv-frame-preview hidden");
+    var img = document.createElement("img");
+    img.className = "cv-frame-preview-img";
+    img.alt = "";
+    wrap.appendChild(img);
+    var lbl = el("div", "cv-frame-preview-label");
+    wrap.appendChild(lbl);
+    document.body.appendChild(wrap);
+    _cvFramePreviewEl = wrap;
+    return wrap;
+  }
+
+  function cvShowFramePreview(markerEl, event) {
+    var preview = cvEnsureFramePreview();
+    var img = preview.querySelector("img");
+    var lbl = preview.querySelector(".cv-frame-preview-label");
+    var url = cvFrameUrl(event.source, event.participant, event.start);
+
+    var cached = _cvFrameCache[url];
+    if (cached && cached !== "error" && cached !== "loading") {
+      img.src = cached;
+    } else if (cached === "error") {
+      cvHideFramePreview();
+      return;
+    } else if (!cached) {
+      _cvFrameCache[url] = "loading";
+      img.src = "";
+      fetch(url)
+        .then(function (r) {
+          if (!r.ok) throw new Error("status " + r.status);
+          return r.blob();
+        })
+        .then(function (blob) {
+          var objUrl = URL.createObjectURL(blob);
+          _cvFrameCache[url] = objUrl;
+          // Only update if still showing this preview
+          if (!preview.classList.contains("hidden") && img.parentNode) {
+            img.src = objUrl;
+          }
+        })
+        .catch(function () {
+          _cvFrameCache[url] = "error";
+          cvHideFramePreview();
+        });
+    }
+
+    lbl.textContent = event.participant + " \u00b7 " + formatTime(event.start);
+    preview.classList.remove("hidden");
+    cvPositionTooltip(preview, markerEl.getBoundingClientRect());
+  }
+
+  function cvHideFramePreview() {
+    clearTimeout(_cvHoverDebounce);
+    _cvHoverDebounce = null;
+    if (_cvFramePreviewEl) _cvFramePreviewEl.classList.add("hidden");
+  }
+
+  // --- Zone Tooltip ---
+
+  function cvEnsureZoneTooltip() {
+    if (_cvZoneTooltipEl) return _cvZoneTooltipEl;
+    var tip = el("div", "cv-zone-tooltip hidden");
+    document.body.appendChild(tip);
+    _cvZoneTooltipEl = tip;
+    return tip;
+  }
+
+  // --- Density Sort ---
+
+  function cvComputeDensityOrder() {
+    var counts = {};
+    for (var i = 0; i < cvState.participants.length; i++) {
+      counts[cvState.participants[i]] = 0;
+    }
+    for (var zi = 0; zi < cvState.convergenceZones.length; zi++) {
+      var zone = cvState.convergenceZones[zi];
+      for (var ei = 0; ei < zone.events.length; ei++) {
+        var pid = zone.events[ei].participant;
+        if (counts[pid] !== undefined) counts[pid]++;
+      }
+    }
+    var ordered = cvState.participants.slice();
+    ordered.sort(function (a, b) { return (counts[b] || 0) - (counts[a] || 0); });
+    return ordered;
   }
 
   // --- Data Collection ---
@@ -451,9 +569,20 @@
     clusterLabel.appendChild(clusterInput);
     clusterLabel.appendChild(clusterSuffix);
 
+    var sortBtn = document.createElement("button");
+    sortBtn.className = "cv-sort-toggle";
+    sortBtn.id = "cvSortToggle";
+    sortBtn.textContent = "Sort by density";
+    sortBtn.addEventListener("click", function () {
+      cvState.sortByDensity = !cvState.sortByDensity;
+      sortBtn.classList.toggle("active", cvState.sortByDensity);
+      render();
+    });
+
     controls.appendChild(minLabel);
     controls.appendChild(winLabel);
     controls.appendChild(clusterLabel);
+    controls.appendChild(sortBtn);
 
     // --- Filters bar: stream toggles + event type pills ---
     for (var i = 0; i < STREAM_DEFS.length; i++) {
@@ -662,8 +791,11 @@
       filteredIdxById[fe.id] = ei;
     }
 
-    for (var pi = 0; pi < cvState.participants.length; pi++) {
-      var pid = cvState.participants[pi];
+    var displayParticipants = cvState.sortByDensity
+      ? cvComputeDensityOrder() : cvState.participants;
+
+    for (var pi = 0; pi < displayParticipants.length; pi++) {
+      var pid = displayParticipants[pi];
       var row = el("div", "cv-participant-row");
 
       var label = el("div", "cv-participant-label");
@@ -714,7 +846,72 @@
 
     // Attach interaction handlers
     var summaryCanvas = container.querySelector(".cv-summary-canvas");
-    if (summaryCanvas) summaryCanvas.addEventListener("click", handleSummaryClick);
+    if (summaryCanvas) {
+      summaryCanvas.addEventListener("click", handleSummaryClick);
+
+      // Zone tooltip on summary lane hover
+      summaryCanvas.addEventListener("mousemove", function (e) {
+        var rect = summaryCanvas.getBoundingClientRect();
+        var mx = e.clientX - rect.left;
+        var hit = null;
+        for (var i = 0; i < _summaryHitRects.length; i++) {
+          if (mx >= _summaryHitRects[i].x1 && mx <= _summaryHitRects[i].x2) {
+            hit = _summaryHitRects[i]; break;
+          }
+        }
+        var tip = cvEnsureZoneTooltip();
+        if (hit) {
+          var zone = cvState.convergenceZones[hit.zoneIdx];
+          if (zone) {
+            tip.textContent = zone.participantCount + " participant"
+              + (zone.participantCount !== 1 ? "s" : "")
+              + " \u00b7 " + formatTime(zone.start) + "\u2013" + formatTime(zone.end)
+              + " \u00b7 " + zone.events.length + " event"
+              + (zone.events.length !== 1 ? "s" : "");
+            tip.classList.remove("hidden");
+            cvPositionTooltip(tip, {
+              left: e.clientX - 4, top: rect.top,
+              width: 8, height: rect.height, bottom: rect.bottom,
+            });
+          }
+        } else {
+          tip.classList.add("hidden");
+        }
+      });
+      summaryCanvas.addEventListener("mouseleave", function () {
+        cvEnsureZoneTooltip().classList.add("hidden");
+      });
+    }
+
+    // Marker hover: frame preview + dimming
+    rowsContainer.addEventListener("mouseover", function (e) {
+      var marker = e.target.closest(".cv-event-marker");
+      if (!marker) return;
+      var idx = parseInt(marker.dataset.cvIdx, 10);
+      if (isNaN(idx)) return;
+      clearTimeout(_cvHoverDebounce);
+      _cvHoverDebounce = setTimeout(function () {
+        var ev = cvState.filteredEvents[idx];
+        if (!ev) return;
+        cvShowFramePreview(marker, ev);
+        cvState.hoveredMarkerIdx = idx;
+        var rows = marker.closest(".cv-participant-rows");
+        if (rows) rows.classList.add("cv-markers-dimmed");
+        renderSummaryLane();
+      }, 60);
+    });
+    rowsContainer.addEventListener("mouseout", function (e) {
+      var marker = e.target.closest(".cv-event-marker");
+      if (!marker) return;
+      clearTimeout(_cvHoverDebounce);
+      _cvHoverDebounce = null;
+      cvHideFramePreview();
+      cvState.hoveredMarkerIdx = -1;
+      var rows = marker.closest(".cv-participant-rows");
+      if (rows) rows.classList.remove("cv-markers-dimmed");
+      renderSummaryLane();
+    });
+
     rowsContainer.addEventListener("mousedown", onDragMousedown);
   }
 
@@ -764,6 +961,16 @@
 
       ctx.fillStyle = "rgba(" + accent.r + "," + accent.g + "," + accent.b + "," + alpha + ")";
       ctx.fillRect(x1, 0, zw, 32);
+
+      // Highlight zone containing hovered marker
+      if (cvState.hoveredMarkerIdx !== -1) {
+        var hovEvt = cvState.filteredEvents[cvState.hoveredMarkerIdx];
+        if (hovEvt && hovEvt.start >= zone.start && hovEvt.start <= zone.end) {
+          ctx.strokeStyle = "rgba(" + accent.r + "," + accent.g + "," + accent.b + ",0.9)";
+          ctx.lineWidth = 2;
+          ctx.strokeRect(x1 + 1, 1, zw - 2, 30);
+        }
+      }
 
       _summaryHitRects.push({ x1: x1, x2: x1 + zw, y: 0, h: 32, zoneIdx: zi });
     }
@@ -1063,8 +1270,10 @@
     }
 
     var participantsDiv = el("div", "cv-detail-participants");
-    for (var pi = 0; pi < cvState.participants.length; pi++) {
-      var pid = cvState.participants[pi];
+    var detailParticipants = cvState.sortByDensity
+      ? cvComputeDensityOrder() : cvState.participants;
+    for (var pi = 0; pi < detailParticipants.length; pi++) {
+      var pid = detailParticipants[pi];
       var pEvents = eventsByPid[pid];
       if (!pEvents || !pEvents.length) continue;
 
@@ -1270,10 +1479,34 @@
       }
     });
 
-    // Escape key dismisses selection
+    // Keyboard shortcuts
     document.addEventListener("keydown", function (e) {
-      if (e.key === "Escape" && cvState.active && cvState.selection) {
+      if (!cvState.active) return;
+
+      if (e.key === "Escape" && cvState.selection) {
         clearSelection();
+        return;
+      }
+
+      if ((e.key === "ArrowLeft" || e.key === "ArrowRight") && cvState.selection && cvState.selection.zone) {
+        var zones = cvState.convergenceZones;
+        if (!zones.length) return;
+        var currentIdx = -1;
+        var selZone = cvState.selection.zone;
+        for (var i = 0; i < zones.length; i++) {
+          if (zones[i].start === selZone.start && zones[i].end === selZone.end) {
+            currentIdx = i; break;
+          }
+        }
+        if (currentIdx === -1) return;
+        var nextIdx = e.key === "ArrowLeft"
+          ? Math.max(0, currentIdx - 1)
+          : Math.min(zones.length - 1, currentIdx + 1);
+        if (nextIdx !== currentIdx) {
+          var nextZone = zones[nextIdx];
+          setSelection(nextZone.start, nextZone.end, nextZone);
+        }
+        e.preventDefault();
       }
     });
   }
