@@ -111,7 +111,7 @@ def test_api_sheet_baseline_with_values(client, monkeypatch):
     assert resp.status_code == 200
     data = resp.get_json()
     assert data["ok"] is True
-    assert data["baselines"] == {"P01": "09:12:00", "P02": "09:15:30"}
+    assert data["baselines"] == {"P01": 33120, "P02": 33330}
 
 
 def test_api_sheet_baseline_partial(client, monkeypatch):
@@ -134,9 +134,9 @@ def test_api_sheet_baseline_partial(client, monkeypatch):
     assert resp.status_code == 200
     data = resp.get_json()
     assert data["ok"] is True
-    assert data["baselines"]["P01"] == "09:12:00"
-    assert data["baselines"]["P02"] == ""
-    assert data["baselines"]["P03"] == "09:20:00"
+    assert data["baselines"]["P01"] == 33120
+    assert data["baselines"]["P02"] == 0
+    assert data["baselines"]["P03"] == 33600
 
 
 def test_api_generate_500_when_no_worksheet(client):

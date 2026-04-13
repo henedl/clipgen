@@ -16,6 +16,7 @@
       eventTypes: [],
       minParticipants: 2,
       windowSec: 5,
+      clusterSec: 5,
       timeRange: null,
     },
     dataVersion: 0,
@@ -45,6 +46,47 @@
     if (source === "screenspace") return DETECTOR_COLORS[eventType] || "#888";
     if (source === "transcript") return (MARK_CATEGORIES[eventType] || {}).color || "#0891b2";
     return XREF_BADGES.sheet.color;
+  }
+
+  function clockToSeconds(ts) {
+    // Like parseTimestampToSeconds but treats 2-part as HH:MM (clock time)
+    // rather than MM:SS.  Matches Python utils._clock_to_seconds.
+    var parts = ts.split(":");
+    if (parts.length === 3)
+      return parseInt(parts[0], 10) * 3600 + parseInt(parts[1], 10) * 60 + parseInt(parts[2], 10);
+    if (parts.length === 2)
+      return parseInt(parts[0], 10) * 3600 + parseInt(parts[1], 10) * 60;
+    return NaN;
+  }
+
+  function parseClockSegments(raw) {
+    // Like _studioParseClipTimestamps but uses clockToSeconds for cells
+    // that contain absolute clock times (when a baseline row exists).
+    var DEFAULT_DUR = 60;
+    var sd = window._studioState && window._studioState.sheetData;
+    if (sd && sd.defaultDuration) DEFAULT_DUR = sd.defaultDuration;
+    var cleaned = raw.toLowerCase().replace(/!key/g, "").replace(/[+;,]/g, " ");
+    var tokens = cleaned.split(/\s+/).filter(function (t) { return t && t !== "x"; });
+    var segments = [];
+    for (var i = 0; i < tokens.length; i++) {
+      var tok = tokens[i].replace(/\.$/, "").replace(/\./g, ":");
+      var dashIdx = -1;
+      for (var d = 1; d < tok.length; d++) {
+        if (tok[d] === "-" && tok[d - 1] >= "0" && tok[d - 1] <= "9") { dashIdx = d; break; }
+      }
+      if (dashIdx > 0) {
+        var s = clockToSeconds(tok.substring(0, dashIdx));
+        var e = clockToSeconds(tok.substring(dashIdx + 1));
+        if (!isNaN(s) && !isNaN(e))
+          segments.push({ startSeconds: Math.floor(s), duration: Math.max(0, e - s) });
+      } else if (tok.indexOf(":") > 0) {
+        var sec = clockToSeconds(tok);
+        if (!isNaN(sec))
+          segments.push({ startSeconds: Math.floor(sec), duration: DEFAULT_DUR });
+      }
+    }
+    if (segments.length === 0) segments.push({ startSeconds: 0, duration: DEFAULT_DUR });
+    return segments;
   }
 
   function stddev(nums) {
@@ -90,8 +132,10 @@
           var pid = participants[p];
           var cell = row.cells[pid];
           if (!cell || !cell.valid) continue;
-          var segs = window._studioParseClipTimestamps(cell.value);
           var baselineOffset = (cvState.baselines && cvState.baselines[pid]) || 0;
+          var segs = baselineOffset
+            ? parseClockSegments(cell.value)
+            : window._studioParseClipTimestamps(cell.value);
           for (var s = 0; s < segs.length; s++) {
             var start = segs[s].startSeconds - baselineOffset;
             var end = start + segs[s].duration;
@@ -111,36 +155,49 @@
       }
     }
 
-    // Screenspace events (raw, not clusters)
-    for (var i = 0; i < state.intakeEvents.length; i++) {
-      var ev = state.intakeEvents[i];
+    // Screenspace events (clustered)
+    var clusterSec = cvState.filters.clusterSec;
+    var ssClusters = window._studioClusterIntakeEvents
+      ? window._studioClusterIntakeEvents(state.intakeEvents, clusterSec)
+      : [];
+    for (var i = 0; i < ssClusters.length; i++) {
+      var cl = ssClusters[i];
+      var clCount = cl.events ? cl.events.length : 1;
       events.push({
-        participant: ev.participant,
-        start: ev.time_in,
-        end: ev.time_out,
+        participant: cl.participant,
+        start: cl.start,
+        end: cl.end,
         source: "screenspace",
-        eventType: ev.event_type || ev.detector || "unknown",
-        label: (ev.event_type || ev.detector || "") + " detection",
-        id: ev.id || ("ss_" + i),
-        rawData: ev,
+        eventType: cl.event_type || cl.detector || "unknown",
+        label: (cl.event_type || cl.detector || "") + " detection"
+          + (clCount > 1 ? " (" + clCount + " events)" : ""),
+        id: "ss_cl_" + i,
+        rawData: cl,
+        clusterCount: clCount,
       });
-      participantSet[ev.participant] = true;
+      participantSet[cl.participant] = true;
     }
 
-    // Transcript marks
-    for (var j = 0; j < state.trIntakeMarks.length; j++) {
-      var mark = state.trIntakeMarks[j];
+    // Transcript marks (clustered)
+    var trClusters = window._studioClusterTranscriptMarks
+      ? window._studioClusterTranscriptMarks(state.trIntakeMarks, clusterSec)
+      : [];
+    for (var j = 0; j < trClusters.length; j++) {
+      var tc = trClusters[j];
+      var tcCount = tc.marks ? tc.marks.length : 1;
       events.push({
-        participant: mark.participant,
-        start: mark.start,
-        end: mark.end,
+        participant: tc.participant,
+        start: tc.start,
+        end: tc.end,
         source: "transcript",
-        eventType: mark.category || "bookmark",
-        label: mark.text || mark.label || "",
-        id: mark.id || mark.segment_id || ("tr_" + j),
-        rawData: mark,
+        eventType: tc.category || "bookmark",
+        label: (tc.label || tc.text || "")
+          + (tcCount > 1 ? " (" + tcCount + " marks)" : ""),
+        id: "tr_cl_" + j,
+        rawData: tc,
+        clusterCount: tcCount,
       });
-      participantSet[mark.participant] = true;
+      participantSet[tc.participant] = true;
     }
 
     // Duration
@@ -379,8 +436,24 @@
     winLabel.appendChild(winInput);
     winLabel.appendChild(winSuffix);
 
+    var clusterLabel = el("label", "intake-cluster-label");
+    clusterLabel.textContent = "Cluster ";
+    var clusterInput = document.createElement("input");
+    clusterInput.type = "number";
+    clusterInput.id = "cvClusterThreshold";
+    clusterInput.min = "1";
+    clusterInput.max = "60";
+    clusterInput.value = String(cvState.filters.clusterSec);
+    clusterInput.className = "intake-cluster-input";
+    clusterInput.autocomplete = "off";
+    clusterInput.addEventListener("input", debouncedRecalculate);
+    var clusterSuffix = document.createTextNode("s");
+    clusterLabel.appendChild(clusterInput);
+    clusterLabel.appendChild(clusterSuffix);
+
     controls.appendChild(minLabel);
     controls.appendChild(winLabel);
+    controls.appendChild(clusterLabel);
 
     // --- Filters bar: stream toggles + event type pills ---
     for (var i = 0; i < STREAM_DEFS.length; i++) {
@@ -437,7 +510,13 @@
     var inputs = controls.querySelectorAll("input[type=number]");
     if (inputs[0]) cvState.filters.minParticipants = Math.max(2, parseInt(inputs[0].value, 10) || 2);
     if (inputs[1]) cvState.filters.windowSec = Math.max(1, parseInt(inputs[1].value, 10) || 5);
+    if (inputs[2]) cvState.filters.clusterSec = Math.max(1, parseInt(inputs[2].value, 10) || 5);
   }
+
+  var debouncedRecalculate = debounce(function () {
+    syncFilterInputs();
+    recalculate();
+  }, 250);
 
   function onFilterChange() {
     syncFilterInputs();
@@ -466,6 +545,23 @@
   }
 
   var debouncedFilterChange = debounce(onFilterChange, 250);
+
+  // --- Tick Interval (pixel-aware) ---
+
+  function computeConvergenceTickInterval(duration, trackWidthPx) {
+    // Each tick label is centered on its mark. To prevent overlap the
+    // minimum distance between ticks must be at least one full label
+    // width plus comfortable padding.  10px monospace "H:MM:SS" ≈ 50px,
+    // "M:SS" ≈ 30px; add 30px padding so labels breathe.
+    var slotWidth = duration >= 3600 ? 80 : 60;
+    var maxTicks = Math.max(2, Math.floor(trackWidthPx / slotWidth));
+    var candidates = [1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600,
+      7200, 10800, 21600, 43200];
+    for (var i = 0; i < candidates.length; i++) {
+      if (duration / candidates[i] <= maxTicks) return candidates[i];
+    }
+    return 43200;
+  }
 
   // --- Rendering ---
 
@@ -508,7 +604,8 @@
     var axisSpacer = el("div", "cv-axis-spacer");
     axis.appendChild(axisSpacer);
     var axisTrack = el("div", "cv-axis-track");
-    var tickInterval = window._studioIntakeComputeTickInterval(cvState.duration);
+    var trackWidthPx = (container.clientWidth || 500) - 52;
+    var tickInterval = computeConvergenceTickInterval(cvState.duration, trackWidthPx);
     for (var t = tickInterval; t <= cvState.duration; t += tickInterval) {
       var tick = el("div", "cv-tick");
       tick.style.left = (t / cvState.duration * 100) + "%";
@@ -596,7 +693,11 @@
           marker.style.left = (mev.start / cvState.duration * 100) + "%";
           marker.style.width = Math.max((mev.end - mev.start) / cvState.duration * 100, 0.3) + "%";
           marker.style.background = getEventTypeColor(mev.source, mev.eventType);
-          marker.title = mev.eventType + " (" + formatTime(mev.start) + ")";
+          var tooltipText = mev.eventType + " (" + formatTime(mev.start) + ")";
+          if (mev.clusterCount && mev.clusterCount > 1) {
+            tooltipText += " [" + mev.clusterCount + " events]";
+          }
+          marker.title = tooltipText;
           if (filteredIdxById[mev.id] !== undefined) marker.dataset.cvIdx = filteredIdxById[mev.id];
           subTrack.appendChild(marker);
         }
@@ -1068,11 +1169,19 @@
       item.desc = event.eventType;
       item.source = "screenspace";
       item.event_type = event.eventType;
-      item.event_ids = [event.rawData.id || event.id];
+      if (event.rawData.events && event.rawData.events.length > 0) {
+        item.event_ids = event.rawData.events.map(function (e) { return e.id; });
+      } else {
+        item.event_ids = [event.rawData.id || event.id];
+      }
     } else if (event.source === "transcript") {
       item.desc = event.eventType || "transcript";
       item.source = "transcript";
-      item.mark_ids = [event.rawData.id || event.rawData.segment_id || event.id];
+      if (event.rawData.marks && event.rawData.marks.length > 0) {
+        item.mark_ids = event.rawData.marks.map(function (m) { return m.id || m.segment_id; });
+      } else {
+        item.mark_ids = [event.rawData.id || event.rawData.segment_id || event.id];
+      }
     } else {
       // Sheet events: use grid item format (no source) so thumbnails route
       // through api/thumbnail and generation through the sheet path
@@ -1137,20 +1246,9 @@
     }
 
     if (cvState.baselines === null) {
-      // First activation: fetch baselines then recalculate
+      // First activation: fetch baselines (server returns seconds)
       apiGet("api/sheet/baseline").then(function (data) {
-        var parsed = {};
-        if (data.ok && data.baselines) {
-          var keys = Object.keys(data.baselines);
-          for (var i = 0; i < keys.length; i++) {
-            var val = data.baselines[keys[i]];
-            if (val) {
-              var sec = window._studioParseTimestampToSeconds(val);
-              parsed[keys[i]] = isNaN(sec) ? 0 : sec;
-            }
-          }
-        }
-        cvState.baselines = parsed;
+        cvState.baselines = (data.ok && data.baselines) ? data.baselines : {};
         recalculate();
       }).catch(function () {
         cvState.baselines = {};
@@ -1186,7 +1284,7 @@
   window.convergenceInit = init;
   window.convergenceResize = debounce(function () {
     if (!cvState.active) return;
-    renderCanvases();
+    render();
   }, 200);
 
   init();

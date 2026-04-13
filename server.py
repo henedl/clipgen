@@ -230,9 +230,11 @@ def api_sheet() -> FlaskResponse:
 
 @studio_bp.route("/api/sheet/baseline")
 def api_sheet_baseline() -> FlaskResponse:
-    """Return per-participant baseline timestamps for clock-to-relative conversion.
+    """Return per-participant baseline offsets in seconds for convergence.
 
-    Response: {"ok": true, "baselines": {"P01": "09:12:00", "P02": "", ...}}
+    Response: {"ok": true, "baselines": {"P01": 33120, "P02": 0, ...}}
+    Values are integers (seconds) parsed via _clock_to_seconds which
+    correctly treats "22:00" as HH:MM (22 hours) rather than MM:SS.
     Empty baselines dict when no baseline row exists.
     """
     if _sheet_context is None:
@@ -245,7 +247,7 @@ def api_sheet_baseline() -> FlaskResponse:
     participants = spreadsheet.get_participant_list(
         ctx.header_row, ctx.id_cell, ctx.num_participants
     )
-    baselines: dict[str, str] = {}
+    baselines: dict[str, int] = {}
     for p_idx, pid in enumerate(participants):
         col_idx = ctx.id_cell.col + p_idx
         value = ""
@@ -253,7 +255,7 @@ def api_sheet_baseline() -> FlaskResponse:
             ctx.sheet_data[ctx.baseline_row_idx]
         ):
             value = ctx.sheet_data[ctx.baseline_row_idx][col_idx].strip()
-        baselines[pid] = value
+        baselines[pid] = utils._clock_to_seconds(value) or 0
 
     return jsonify({"ok": True, "baselines": baselines})
 
