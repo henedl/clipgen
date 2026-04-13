@@ -1087,10 +1087,10 @@
       item.timestamp = cellValue;
       item.segIdx = segIdx;
       item.segTotal = segs.length;
-      if (segs[segIdx]) {
-        item.segStart = segs[segIdx].startSeconds;
-        item.segDuration = segs[segIdx].duration;
-      }
+      // Use baseline-adjusted times for thumbnails; row+timestamp
+      // fields are preserved for server-side generation
+      item.segStart = event.start;
+      item.segDuration = event.end - event.start;
     }
     return item;
   }
