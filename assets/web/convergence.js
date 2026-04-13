@@ -820,15 +820,19 @@
 
   // --- Drag-to-Select ---
 
-  var _drag = { active: false, startX: 0, startTime: 0, preview: null, moved: false };
+  var _drag = { active: false, startX: 0, startTime: 0, preview: null, moved: false,
+    tracksRect: null };
 
   function timeFromMouseX(e) {
-    var rowsContainer = qs(".cv-participant-rows");
-    if (!rowsContainer) return 0;
-    // Use the first tracks container for coordinate reference
-    var tracksEl = rowsContainer.querySelector(".cv-tracks-container");
-    if (!tracksEl) return 0;
-    var rect = tracksEl.getBoundingClientRect();
+    // Use cached rect during drag for consistency, otherwise query live
+    var rect = _drag.tracksRect;
+    if (!rect) {
+      var rowsContainer = qs(".cv-participant-rows");
+      if (!rowsContainer) return 0;
+      var tracksEl = rowsContainer.querySelector(".cv-tracks-container");
+      if (!tracksEl) return 0;
+      rect = tracksEl.getBoundingClientRect();
+    }
     var frac = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
     return frac * cvState.duration;
   }
@@ -838,6 +842,9 @@
     if (e.target.closest(".cv-event-marker")) return;
     if (!e.target.closest(".cv-tracks-container") && !e.target.closest(".cv-sub-track")) return;
 
+    // Cache the tracks rect for consistent coordinate conversion during drag
+    var tracksEl = e.target.closest(".cv-tracks-container") || e.target.closest(".cv-sub-track").parentElement;
+    _drag.tracksRect = tracksEl ? tracksEl.getBoundingClientRect() : null;
     _drag.startX = e.clientX;
     _drag.startTime = timeFromMouseX(e);
     _drag.active = true;
@@ -857,8 +864,6 @@
     var curTime = timeFromMouseX(e);
     var s = Math.min(_drag.startTime, curTime);
     var en = Math.max(_drag.startTime, curTime);
-    var leftPct = (s / cvState.duration * 100) + "%";
-    var widthPct = ((en - s) / cvState.duration * 100) + "%";
 
     if (!_drag.preview) {
       // Clear any existing selection while dragging
@@ -867,8 +872,18 @@
       var rowsContainer = qs(".cv-participant-rows");
       if (rowsContainer) rowsContainer.appendChild(_drag.preview);
     }
-    _drag.preview.style.left = leftPct;
-    _drag.preview.style.width = widthPct;
+
+    // Position preview using pixels relative to the tracks container,
+    // offset by the label column width within the rows container
+    if (_drag.tracksRect) {
+      var rowsContainer = qs(".cv-participant-rows");
+      var rowsRect = rowsContainer ? rowsContainer.getBoundingClientRect() : _drag.tracksRect;
+      var labelOffset = _drag.tracksRect.left - rowsRect.left;
+      var leftPx = labelOffset + (s / cvState.duration) * _drag.tracksRect.width;
+      var widthPx = ((en - s) / cvState.duration) * _drag.tracksRect.width;
+      _drag.preview.style.left = leftPx + "px";
+      _drag.preview.style.width = widthPx + "px";
+    }
   }
 
   function onDragMouseup(e) {
@@ -887,6 +902,7 @@
     var s = Math.min(_drag.startTime, curTime);
     var en = Math.max(_drag.startTime, curTime);
 
+    _drag.tracksRect = null;
     if (en - s < 1) return; // minimum 1-second range
     setSelection(s, en, null);
   }
