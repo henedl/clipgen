@@ -1,4 +1,4 @@
-/* Convergence Browser – Phase 1 + Phase 2 */
+/* Convergence Browser – Phase 1 + Phase 2 + Phase 3 */
 
 (function () {
   "use strict";
@@ -276,6 +276,7 @@
   }
 
   function recalculate() {
+    clearSelection();
     collectAllEvents();
     populateEventTypePills();
     applyFilters();
@@ -441,6 +442,26 @@
   function onFilterChange() {
     syncFilterInputs();
     applyFilters();
+    // Preserve or clear selection after filter change
+    if (cvState.selection) {
+      if (cvState.selection.zone) {
+        // Zone-based selection: clear if zone no longer exists
+        clearSelection();
+      } else {
+        // Drag-based: re-collect events in the same time range
+        var sel = cvState.selection;
+        var events = [];
+        for (var i = 0; i < cvState.filteredEvents.length; i++) {
+          var ev = cvState.filteredEvents[i];
+          if (ev.start < sel.end && ev.end > sel.start) events.push(ev);
+        }
+        if (events.length === 0) {
+          clearSelection();
+        } else {
+          sel.events = events;
+        }
+      }
+    }
     render();
   }
 
@@ -450,7 +471,13 @@
 
   function render() {
     renderTimeline();
-    requestAnimationFrame(renderCanvases);
+    requestAnimationFrame(function () {
+      renderCanvases();
+      if (cvState.selection) {
+        renderSelectionOverlay();
+        renderDetailPanel();
+      }
+    });
   }
 
   function renderTimeline() {
@@ -476,8 +503,11 @@
 
     var frag = document.createDocumentFragment();
 
-    // Time axis
+    // Time axis (flex row: spacer + tick area, matching participant row layout)
     var axis = el("div", "cv-time-axis");
+    var axisSpacer = el("div", "cv-axis-spacer");
+    axis.appendChild(axisSpacer);
+    var axisTrack = el("div", "cv-axis-track");
     var tickInterval = window._studioIntakeComputeTickInterval(cvState.duration);
     for (var t = tickInterval; t <= cvState.duration; t += tickInterval) {
       var tick = el("div", "cv-tick");
@@ -485,15 +515,20 @@
       var tickLabel = el("span", "cv-tick-label");
       tickLabel.textContent = window._studioFormatDuration(t);
       tick.appendChild(tickLabel);
-      axis.appendChild(tick);
+      axisTrack.appendChild(tick);
     }
+    axis.appendChild(axisTrack);
     frag.appendChild(axis);
 
-    // Summary lane
+    // Summary lane (flex row: spacer + canvas, matching participant row layout)
     var summaryWrap = el("div", "cv-summary-lane-wrap");
+    var summarySpacer = el("div", "cv-axis-spacer");
+    summaryWrap.appendChild(summarySpacer);
+    var summaryTrack = el("div", "cv-summary-track");
     var summaryCanvas = document.createElement("canvas");
     summaryCanvas.className = "cv-summary-canvas";
-    summaryWrap.appendChild(summaryCanvas);
+    summaryTrack.appendChild(summaryCanvas);
+    summaryWrap.appendChild(summaryTrack);
     frag.appendChild(summaryWrap);
 
     // Staleness banner placeholder
@@ -521,11 +556,13 @@
 
     // Index filtered events by participant and source for fast lookup
     var eventIndex = {}; // pid -> source -> events[]
+    var filteredIdxById = {}; // event.id -> index in filteredEvents
     for (var ei = 0; ei < cvState.filteredEvents.length; ei++) {
       var fe = cvState.filteredEvents[ei];
       if (!eventIndex[fe.participant]) eventIndex[fe.participant] = {};
       if (!eventIndex[fe.participant][fe.source]) eventIndex[fe.participant][fe.source] = [];
       eventIndex[fe.participant][fe.source].push(fe);
+      filteredIdxById[fe.id] = ei;
     }
 
     for (var pi = 0; pi < cvState.participants.length; pi++) {
@@ -560,6 +597,7 @@
           marker.style.width = Math.max((mev.end - mev.start) / cvState.duration * 100, 0.3) + "%";
           marker.style.background = getEventTypeColor(mev.source, mev.eventType);
           marker.title = mev.eventType + " (" + formatTime(mev.start) + ")";
+          if (filteredIdxById[mev.id] !== undefined) marker.dataset.cvIdx = filteredIdxById[mev.id];
           subTrack.appendChild(marker);
         }
 
@@ -572,6 +610,11 @@
 
     frag.appendChild(rowsContainer);
     container.appendChild(frag);
+
+    // Attach interaction handlers
+    var summaryCanvas = container.querySelector(".cv-summary-canvas");
+    if (summaryCanvas) summaryCanvas.addEventListener("click", handleSummaryClick);
+    rowsContainer.addEventListener("mousedown", onDragMousedown);
   }
 
   function renderCanvases() {
@@ -691,6 +734,399 @@
     }
   }
 
+  // --- Selection ---
+
+  function setSelection(start, end, zone) {
+    // Clamp to valid range
+    start = Math.max(0, start);
+    end = Math.min(cvState.duration, end);
+    if (end - start < 0.5) return;
+
+    var events = [];
+    for (var i = 0; i < cvState.filteredEvents.length; i++) {
+      var ev = cvState.filteredEvents[i];
+      if (ev.start < end && ev.end > start) events.push(ev);
+    }
+    if (events.length === 0) return;
+
+    cvState.selection = { start: start, end: end, zone: zone || null, events: events };
+    renderSelectionOverlay();
+    renderDetailPanel();
+  }
+
+  function clearSelection() {
+    cvState.selection = null;
+    var overlays = qsa(".cv-selection-overlay");
+    for (var i = 0; i < overlays.length; i++) overlays[i].remove();
+    var preview = qs(".cv-drag-preview");
+    if (preview) preview.remove();
+    var detail = qs("#convergenceDetail");
+    if (detail) {
+      detail.classList.add("hidden");
+      detail.innerHTML = "";
+    }
+  }
+
+  function renderSelectionOverlay() {
+    // Remove existing overlays
+    var old = qsa(".cv-selection-overlay");
+    for (var i = 0; i < old.length; i++) old[i].remove();
+
+    if (!cvState.selection) return;
+    var sel = cvState.selection;
+    var leftPct = (sel.start / cvState.duration * 100) + "%";
+    var widthPct = ((sel.end - sel.start) / cvState.duration * 100) + "%";
+
+    // Summary lane overlay (inside the track, not the spacer)
+    var summaryTrack = qs(".cv-summary-track");
+    if (summaryTrack) {
+      var so = el("div", "cv-selection-overlay");
+      so.style.left = leftPct;
+      so.style.width = widthPct;
+      summaryTrack.appendChild(so);
+    }
+
+    // Per-participant row overlays
+    var tracks = qsa(".cv-tracks-container");
+    for (var t = 0; t < tracks.length; t++) {
+      var ro = el("div", "cv-selection-overlay cv-selection-overlay-row");
+      ro.style.left = leftPct;
+      ro.style.width = widthPct;
+      tracks[t].appendChild(ro);
+    }
+  }
+
+  // --- Summary Lane Click ---
+
+  function handleSummaryClick(e) {
+    var canvas = qs(".cv-summary-canvas");
+    if (!canvas) return;
+    var rect = canvas.getBoundingClientRect();
+    var mouseX = e.clientX - rect.left;
+
+    for (var i = 0; i < _summaryHitRects.length; i++) {
+      var hr = _summaryHitRects[i];
+      if (mouseX >= hr.x1 && mouseX <= hr.x2) {
+        var zone = cvState.convergenceZones[hr.zoneIdx];
+        if (zone) {
+          setSelection(zone.start, zone.end, zone);
+          return;
+        }
+      }
+    }
+    // Clicked empty space on summary lane
+    clearSelection();
+  }
+
+  // --- Drag-to-Select ---
+
+  var _drag = { active: false, startX: 0, startTime: 0, preview: null, moved: false,
+    tracksRect: null };
+
+  function timeFromMouseX(e) {
+    // Use cached rect during drag for consistency, otherwise query live
+    var rect = _drag.tracksRect;
+    if (!rect) {
+      var rowsContainer = qs(".cv-participant-rows");
+      if (!rowsContainer) return 0;
+      var tracksEl = rowsContainer.querySelector(".cv-tracks-container");
+      if (!tracksEl) return 0;
+      rect = tracksEl.getBoundingClientRect();
+    }
+    var frac = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+    return frac * cvState.duration;
+  }
+
+  function onDragMousedown(e) {
+    if (e.button !== 0) return;
+    if (e.target.closest(".cv-event-marker")) return;
+    if (!e.target.closest(".cv-tracks-container") && !e.target.closest(".cv-sub-track")) return;
+
+    // Cache the tracks rect for consistent coordinate conversion during drag
+    var tracksEl = e.target.closest(".cv-tracks-container") || e.target.closest(".cv-sub-track").parentElement;
+    _drag.tracksRect = tracksEl ? tracksEl.getBoundingClientRect() : null;
+    _drag.startX = e.clientX;
+    _drag.startTime = timeFromMouseX(e);
+    _drag.active = true;
+    _drag.moved = false;
+    _drag.preview = null;
+
+    document.addEventListener("mousemove", onDragMousemove);
+    document.addEventListener("mouseup", onDragMouseup);
+    e.preventDefault();
+  }
+
+  function onDragMousemove(e) {
+    if (!_drag.active) return;
+    if (Math.abs(e.clientX - _drag.startX) < 5) return;
+    _drag.moved = true;
+
+    var curTime = timeFromMouseX(e);
+    var s = Math.min(_drag.startTime, curTime);
+    var en = Math.max(_drag.startTime, curTime);
+
+    if (!_drag.preview) {
+      // Clear any existing selection while dragging
+      clearSelection();
+      _drag.preview = el("div", "cv-drag-preview");
+      var rowsContainer = qs(".cv-participant-rows");
+      if (rowsContainer) rowsContainer.appendChild(_drag.preview);
+    }
+
+    // Position preview using pixels relative to the tracks container,
+    // offset by the label column width within the rows container
+    if (_drag.tracksRect) {
+      var rowsContainer = qs(".cv-participant-rows");
+      var rowsRect = rowsContainer ? rowsContainer.getBoundingClientRect() : _drag.tracksRect;
+      var labelOffset = _drag.tracksRect.left - rowsRect.left;
+      var leftPx = labelOffset + (s / cvState.duration) * _drag.tracksRect.width;
+      var widthPx = ((en - s) / cvState.duration) * _drag.tracksRect.width;
+      _drag.preview.style.left = leftPx + "px";
+      _drag.preview.style.width = widthPx + "px";
+    }
+  }
+
+  function onDragMouseup(e) {
+    document.removeEventListener("mousemove", onDragMousemove);
+    document.removeEventListener("mouseup", onDragMouseup);
+
+    if (!_drag.active) return;
+    _drag.active = false;
+
+    if (_drag.preview) _drag.preview.remove();
+    _drag.preview = null;
+
+    if (!_drag.moved) return;
+
+    var curTime = timeFromMouseX(e);
+    var s = Math.min(_drag.startTime, curTime);
+    var en = Math.max(_drag.startTime, curTime);
+
+    _drag.tracksRect = null;
+    if (en - s < 1) return; // minimum 1-second range
+    setSelection(s, en, null);
+  }
+
+  // --- Detail Panel ---
+
+  function renderDetailPanel() {
+    var panel = qs("#convergenceDetail");
+    if (!panel || !cvState.selection) return;
+
+    panel.innerHTML = "";
+    panel.classList.remove("hidden");
+
+    var sel = cvState.selection;
+    var frag = document.createDocumentFragment();
+
+    // Header
+    var header = el("div", "cv-detail-header");
+    var headerText = el("span", "cv-detail-header-text");
+    var participantSet = {};
+    for (var i = 0; i < sel.events.length; i++) participantSet[sel.events[i].participant] = true;
+    var participantCount = Object.keys(participantSet).length;
+    headerText.textContent = formatTime(sel.start) + " \u2013 " + formatTime(sel.end)
+      + " \u00b7 " + participantCount + " participant" + (participantCount !== 1 ? "s" : "")
+      + " \u00b7 " + sel.events.length + " event" + (sel.events.length !== 1 ? "s" : "");
+    header.appendChild(headerText);
+
+    var closeBtn = document.createElement("button");
+    closeBtn.className = "cv-detail-close";
+    closeBtn.textContent = "\u00d7";
+    closeBtn.title = "Close";
+    closeBtn.addEventListener("click", clearSelection);
+    header.appendChild(closeBtn);
+    frag.appendChild(header);
+
+    // Actions bar
+    var actions = el("div", "cv-detail-actions");
+    var addAllArt = document.createElement("button");
+    addAllArt.className = "cv-detail-btn";
+    addAllArt.textContent = "Add All to Artifacts";
+    addAllArt.addEventListener("click", function () { dispatchAllToArtifacts(); });
+    actions.appendChild(addAllArt);
+
+    var addAllReel = document.createElement("button");
+    addAllReel.className = "cv-detail-btn";
+    addAllReel.textContent = "Add All to Reel";
+    addAllReel.addEventListener("click", function () { dispatchAllToReel(); });
+    actions.appendChild(addAllReel);
+    frag.appendChild(actions);
+
+    // Group events by participant (maintain participant order)
+    var eventsByPid = {};
+    for (var j = 0; j < sel.events.length; j++) {
+      var ev = sel.events[j];
+      if (!eventsByPid[ev.participant]) eventsByPid[ev.participant] = [];
+      eventsByPid[ev.participant].push(ev);
+    }
+
+    var participantsDiv = el("div", "cv-detail-participants");
+    for (var pi = 0; pi < cvState.participants.length; pi++) {
+      var pid = cvState.participants[pi];
+      var pEvents = eventsByPid[pid];
+      if (!pEvents || !pEvents.length) continue;
+
+      var pSection = el("div", "cv-detail-participant");
+      var pidLabel = el("div", "cv-detail-pid");
+      pidLabel.textContent = pid + " (" + pEvents.length + " event" + (pEvents.length !== 1 ? "s" : "") + ")";
+      pSection.appendChild(pidLabel);
+
+      var eventsDiv = el("div", "cv-detail-events");
+      for (var ei = 0; ei < pEvents.length; ei++) {
+        eventsDiv.appendChild(buildDetailEventRow(pEvents[ei]));
+      }
+      pSection.appendChild(eventsDiv);
+      participantsDiv.appendChild(pSection);
+    }
+    frag.appendChild(participantsDiv);
+
+    panel.appendChild(frag);
+  }
+
+  function buildDetailEventRow(event) {
+    var row = el("div", "cv-detail-event");
+
+    // Time range
+    var time = el("span", "cv-detail-time");
+    time.textContent = formatTime(event.start) + " \u2013 " + formatTime(event.end);
+    row.appendChild(time);
+
+    // Source badge
+    var badge = el("span", "cv-detail-source-badge");
+    var dot = el("span", "cv-detail-source-dot");
+    dot.style.background = getEventTypeColor(event.source, event.eventType);
+    badge.appendChild(dot);
+    badge.appendChild(document.createTextNode(event.source));
+    row.appendChild(badge);
+
+    // Event type
+    var typeSpan = el("span", "cv-detail-type");
+    typeSpan.textContent = event.eventType;
+    row.appendChild(typeSpan);
+
+    // Label (truncated)
+    if (event.label) {
+      var labelSpan = el("span", "cv-detail-label");
+      labelSpan.textContent = event.label.length > 60 ? event.label.substring(0, 60) + "\u2026" : event.label;
+      labelSpan.title = event.label;
+      row.appendChild(labelSpan);
+    }
+
+    // Cross-reference badges
+    if (window._studioFindOverlappingData && window._studioBuildXrefBadges) {
+      var xref = window._studioFindOverlappingData(event.participant, event.start, event.end);
+      var badges = window._studioBuildXrefBadges(xref, event.source);
+      if (badges) {
+        badges.style.position = "relative";
+        badges.style.bottom = "auto";
+        badges.style.left = "auto";
+        row.appendChild(badges);
+      }
+    }
+
+    // Action buttons
+    var btnWrap = el("span", "cv-detail-event-actions");
+
+    var artBtn = document.createElement("button");
+    artBtn.className = "cv-detail-add-art";
+    artBtn.textContent = "Artifact";
+    artBtn.title = "Add to Artifacts";
+    artBtn.addEventListener("click", (function (ev) {
+      return function (e) {
+        e.stopPropagation();
+        dispatchToArtifacts(ev);
+      };
+    })(event));
+    btnWrap.appendChild(artBtn);
+
+    var reelBtn = document.createElement("button");
+    reelBtn.className = "cv-detail-add-reel";
+    reelBtn.textContent = "Reel";
+    reelBtn.title = "Add to Reel";
+    reelBtn.addEventListener("click", (function (ev) {
+      return function (e) {
+        e.stopPropagation();
+        dispatchToReel(ev);
+      };
+    })(event));
+    btnWrap.appendChild(reelBtn);
+
+    row.appendChild(btnWrap);
+    return row;
+  }
+
+  // --- Queue Dispatch ---
+
+  function buildQueueItem(event) {
+    var item = {
+      participant: event.participant,
+      segStart: event.start,
+      segDuration: event.end - event.start,
+    };
+    if (event.source === "screenspace") {
+      item.desc = event.eventType;
+      item.source = "screenspace";
+      item.event_type = event.eventType;
+      item.event_ids = [event.rawData.id || event.id];
+    } else if (event.source === "transcript") {
+      item.desc = event.eventType || "transcript";
+      item.source = "transcript";
+      item.mark_ids = [event.rawData.id || event.rawData.segment_id || event.id];
+    } else {
+      // Sheet events: use grid item format (no source) so thumbnails route
+      // through api/thumbnail and generation through the sheet path
+      var rawRow = event.rawData;
+      var cellValue = (rawRow.cells && rawRow.cells[event.participant])
+        ? rawRow.cells[event.participant].value : "";
+      var parts = event.id.split("_");
+      var segIdx = parseInt(parts[parts.length - 1]) || 0;
+      var segs = window._studioParseClipTimestamps(cellValue);
+      item.row = rawRow.rowNum;
+      item.desc = rawRow.observation || event.label || event.eventType;
+      item.timestamp = cellValue;
+      item.segIdx = segIdx;
+      item.segTotal = segs.length;
+      // Use baseline-adjusted times for thumbnails; row+timestamp
+      // fields are preserved for server-side generation
+      item.segStart = event.start;
+      item.segDuration = event.end - event.start;
+    }
+    return item;
+  }
+
+  function dispatchToArtifacts(event) {
+    var state = getState();
+    state.artifactQueue.push(buildQueueItem(event));
+    if (window._studioRenderArtifactQueue) window._studioRenderArtifactQueue();
+  }
+
+  function dispatchToReel(event) {
+    var state = getState();
+    state.reelQueue.push(buildQueueItem(event));
+    if (window._studioRenderReelQueue) window._studioRenderReelQueue();
+  }
+
+  function dispatchAllToArtifacts() {
+    if (!cvState.selection) return;
+    var state = getState();
+    var events = cvState.selection.events;
+    for (var i = 0; i < events.length; i++) {
+      state.artifactQueue.push(buildQueueItem(events[i]));
+    }
+    if (window._studioRenderArtifactQueue) window._studioRenderArtifactQueue();
+  }
+
+  function dispatchAllToReel() {
+    if (!cvState.selection) return;
+    var state = getState();
+    var events = cvState.selection.events;
+    for (var i = 0; i < events.length; i++) {
+      state.reelQueue.push(buildQueueItem(events[i]));
+    }
+    if (window._studioRenderReelQueue) window._studioRenderReelQueue();
+  }
+
   // --- Lifecycle ---
 
   function activate() {
@@ -733,6 +1169,13 @@
     document.addEventListener("visibilitychange", function () {
       if (!document.hidden && cvState.active) {
         checkStaleness();
+      }
+    });
+
+    // Escape key dismisses selection
+    document.addEventListener("keydown", function (e) {
+      if (e.key === "Escape" && cvState.active && cvState.selection) {
+        clearSelection();
       }
     });
   }
