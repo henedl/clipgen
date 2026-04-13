@@ -486,6 +486,59 @@
     multitool: "Skips unchanged frames, widens interval"
   };
 
+  var PARAM_DESCRIPTIONS = {
+    _shared: {
+      "Event label":      "Tag added to each detected event for filtering",
+      "Detect first":     "Stop after the first match is found",
+      "Region":           "Which screen region this step analyzes",
+    },
+    color: {
+      "Tolerance":        "How far from the target color still counts as a match",
+      "Hex color":        "Target color in hex notation",
+    },
+    change: {
+      "Threshold":        "Minimum pixel-change ratio to trigger a detection",
+      "Noise Thr.":       "Ignore changes below this pixel intensity",
+      "Noise":            "Ignore changes below this pixel intensity",
+    },
+    similarity: {
+      "Reference":        "Capture a frame to compare against",
+      "Threshold":        "Minimum similarity score to count as a match",
+    },
+    text: {
+      "Search text":      "Exact or partial text to find on screen",
+      "Search":           "Exact or partial text to find on screen",
+      "Fuzzy Thr.":       "Minimum fuzzy-match score (1.0 = exact match)",
+      "Fuzzy":            "Minimum fuzzy-match score (1.0 = exact match)",
+      "Language":         "OCR language for text recognition",
+    },
+    numbers: {
+      "Operator":         "Comparison operator for the detected number",
+      "Target value":     "Number to compare the detected value against",
+      "Target":           "Number to compare the detected value against",
+      "Range":            "Min and max bounds for the in-range check",
+    },
+    timelapse: {
+      "Speed":            "Playback speed multiplier for the output",
+      "Sample every":     "Seconds between captured frames (0 = every frame)",
+      "Format":           "Output file format: video or animated GIF",
+    },
+    template: {
+      "Template":         "Capture or upload a reference image to match",
+      "Threshold":        "Minimum match score to trigger a detection",
+    },
+    flow: {
+      "Magnitude":        "Minimum optical-flow magnitude to count as motion",
+    },
+    scene: {
+      "Add Scene":        "Name and capture a reference frame for a scene",
+    },
+    inactivity: {
+      "Sensitivity":      "Pixel-change level below which the frame is idle",
+      "Min duration (s)": "Seconds of stillness required to trigger",
+    },
+  };
+
   function renderScanModePicker() {
     var wrap = qs("#runScanModePicker");
     if (!wrap) return;
@@ -531,6 +584,56 @@
     });
 
     wrap.appendChild(btn);
+  }
+
+  function initParamTooltips() {
+    var tip = el("div", "param-label-tooltip");
+    document.body.appendChild(tip);
+
+    var container = qs("#workflowParams");
+    if (!container) return;
+
+    function getToolType(labelEl) {
+      var stepCard = labelEl.closest(".multitool-step");
+      if (stepCard) {
+        var idx = parseInt(stepCard.dataset.stepIdx, 10);
+        var step = state.multitoolSteps[idx];
+        return step ? step.type : null;
+      }
+      return state.activeWorkflow;
+    }
+
+    function getDescription(labelText, toolType) {
+      if (!toolType) return null;
+      var toolMap = PARAM_DESCRIPTIONS[toolType];
+      if (toolMap && toolMap[labelText]) return toolMap[labelText];
+      var shared = PARAM_DESCRIPTIONS._shared;
+      if (shared && shared[labelText]) return shared[labelText];
+      return null;
+    }
+
+    container.addEventListener("mouseenter", function (e) {
+      var label = e.target.closest(".param-label");
+      if (!label) return;
+      var text = label.textContent.trim();
+      var desc = getDescription(text, getToolType(label));
+      if (!desc) return;
+
+      tip.textContent = desc;
+      var r = label.getBoundingClientRect();
+      tip.style.left = (r.left + r.width / 2) + "px";
+      tip.style.transform = "translateX(-50%)";
+      // Position above; flip below if clipped
+      var above = r.top - tip.offsetHeight - 6;
+      tip.style.top = (above < 0 ? r.bottom + 6 : above) + "px";
+      tip.classList.add("visible");
+    }, true);
+
+    container.addEventListener("mouseleave", function (e) {
+      if (e.target.closest && e.target.closest(".param-label")) {
+        tip.classList.remove("visible");
+      }
+    }, true);
   }
 
   function selectParticipant(pid, initialTimestamp) {
@@ -5220,6 +5323,7 @@
     initRegionDrawing();
     initTimeline();
     initWorkflowTabs();
+    initParamTooltips();
     initRunButton();
     initTaskQueue();
     initPauseButton();
