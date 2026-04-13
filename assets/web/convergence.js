@@ -512,11 +512,12 @@
     // "M:SS" ≈ 30px; add 30px padding so labels breathe.
     var slotWidth = duration >= 3600 ? 80 : 60;
     var maxTicks = Math.max(2, Math.floor(trackWidthPx / slotWidth));
-    var candidates = [1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600];
+    var candidates = [1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600,
+      7200, 10800, 21600, 43200];
     for (var i = 0; i < candidates.length; i++) {
       if (duration / candidates[i] <= maxTicks) return candidates[i];
     }
-    return 3600;
+    return 43200;
   }
 
   // --- Rendering ---
