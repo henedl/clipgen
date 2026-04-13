@@ -503,8 +503,11 @@
 
     var frag = document.createDocumentFragment();
 
-    // Time axis
+    // Time axis (flex row: spacer + tick area, matching participant row layout)
     var axis = el("div", "cv-time-axis");
+    var axisSpacer = el("div", "cv-axis-spacer");
+    axis.appendChild(axisSpacer);
+    var axisTrack = el("div", "cv-axis-track");
     var tickInterval = window._studioIntakeComputeTickInterval(cvState.duration);
     for (var t = tickInterval; t <= cvState.duration; t += tickInterval) {
       var tick = el("div", "cv-tick");
@@ -512,15 +515,20 @@
       var tickLabel = el("span", "cv-tick-label");
       tickLabel.textContent = window._studioFormatDuration(t);
       tick.appendChild(tickLabel);
-      axis.appendChild(tick);
+      axisTrack.appendChild(tick);
     }
+    axis.appendChild(axisTrack);
     frag.appendChild(axis);
 
-    // Summary lane
+    // Summary lane (flex row: spacer + canvas, matching participant row layout)
     var summaryWrap = el("div", "cv-summary-lane-wrap");
+    var summarySpacer = el("div", "cv-axis-spacer");
+    summaryWrap.appendChild(summarySpacer);
+    var summaryTrack = el("div", "cv-summary-track");
     var summaryCanvas = document.createElement("canvas");
     summaryCanvas.className = "cv-summary-canvas";
-    summaryWrap.appendChild(summaryCanvas);
+    summaryTrack.appendChild(summaryCanvas);
+    summaryWrap.appendChild(summaryTrack);
     frag.appendChild(summaryWrap);
 
     // Staleness banner placeholder
@@ -769,13 +777,13 @@
     var leftPct = (sel.start / cvState.duration * 100) + "%";
     var widthPct = ((sel.end - sel.start) / cvState.duration * 100) + "%";
 
-    // Summary lane overlay
-    var summaryWrap = qs(".cv-summary-lane-wrap");
-    if (summaryWrap) {
+    // Summary lane overlay (inside the track, not the spacer)
+    var summaryTrack = qs(".cv-summary-track");
+    if (summaryTrack) {
       var so = el("div", "cv-selection-overlay");
       so.style.left = leftPct;
       so.style.width = widthPct;
-      summaryWrap.appendChild(so);
+      summaryTrack.appendChild(so);
     }
 
     // Per-participant row overlays
