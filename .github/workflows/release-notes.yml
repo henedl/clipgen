@@ -1,5 +1,7 @@
-# Creates a GitHub Release when a version tag v* is pushed, with notes generated
-# from merged PRs and commits (same backend as the Releases UI).
+# Creates a GitHub Release for a version tag v*, with notes generated from merged
+# PRs and commits (same backend as the Releases UI).
+#
+# Trigger: push of tag v*, or Actions → Run workflow (supply an existing remote tag).
 #
 # Does not update config.VERSIONNUM — keep the tag aligned with the version you ship.
 # Runs in parallel with build-binaries.yml on the same tag; attach artifacts to this
@@ -10,6 +12,12 @@ on:
   push:
     tags:
       - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing git tag to publish (e.g. v0.10.43). Must match v* and exist on the remote."
+        required: true
+        type: string
 
 permissions:
   contents: write
@@ -20,13 +28,15 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref }}
 
       - name: Create GitHub Release with generated notes
         env:
           GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref_name }}
         run: |
           set -euo pipefail
-          TAG="${GITHUB_REF_NAME}"
           REPO="${{ github.repository }}"
 
           if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
