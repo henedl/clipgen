@@ -111,36 +111,52 @@
       }
     }
 
-    // Screenspace events (raw, not clusters)
-    for (var i = 0; i < state.intakeEvents.length; i++) {
-      var ev = state.intakeEvents[i];
+    // Screenspace events (clustered)
+    var ssThresholdEl = qs("#intakeClusterThreshold");
+    var ssThreshold = ssThresholdEl ? (parseInt(ssThresholdEl.value, 10) || 5) : 5;
+    var ssClusters = window._studioClusterIntakeEvents
+      ? window._studioClusterIntakeEvents(state.intakeEvents, ssThreshold)
+      : [];
+    for (var i = 0; i < ssClusters.length; i++) {
+      var cl = ssClusters[i];
+      var clCount = cl.events ? cl.events.length : 1;
       events.push({
-        participant: ev.participant,
-        start: ev.time_in,
-        end: ev.time_out,
+        participant: cl.participant,
+        start: cl.start,
+        end: cl.end,
         source: "screenspace",
-        eventType: ev.event_type || ev.detector || "unknown",
-        label: (ev.event_type || ev.detector || "") + " detection",
-        id: ev.id || ("ss_" + i),
-        rawData: ev,
+        eventType: cl.event_type || cl.detector || "unknown",
+        label: (cl.event_type || cl.detector || "") + " detection"
+          + (clCount > 1 ? " (" + clCount + " events)" : ""),
+        id: "ss_cl_" + i,
+        rawData: cl,
+        clusterCount: clCount,
       });
-      participantSet[ev.participant] = true;
+      participantSet[cl.participant] = true;
     }
 
-    // Transcript marks
-    for (var j = 0; j < state.trIntakeMarks.length; j++) {
-      var mark = state.trIntakeMarks[j];
+    // Transcript marks (clustered)
+    var trThresholdEl = qs("#trIntakeClusterThreshold");
+    var trThreshold = trThresholdEl ? (parseInt(trThresholdEl.value, 10) || 5) : 5;
+    var trClusters = window._studioClusterTranscriptMarks
+      ? window._studioClusterTranscriptMarks(state.trIntakeMarks, trThreshold)
+      : [];
+    for (var j = 0; j < trClusters.length; j++) {
+      var tc = trClusters[j];
+      var tcCount = tc.marks ? tc.marks.length : 1;
       events.push({
-        participant: mark.participant,
-        start: mark.start,
-        end: mark.end,
+        participant: tc.participant,
+        start: tc.start,
+        end: tc.end,
         source: "transcript",
-        eventType: mark.category || "bookmark",
-        label: mark.text || mark.label || "",
-        id: mark.id || mark.segment_id || ("tr_" + j),
-        rawData: mark,
+        eventType: tc.category || "bookmark",
+        label: (tc.label || tc.text || "")
+          + (tcCount > 1 ? " (" + tcCount + " marks)" : ""),
+        id: "tr_cl_" + j,
+        rawData: tc,
+        clusterCount: tcCount,
       });
-      participantSet[mark.participant] = true;
+      participantSet[tc.participant] = true;
     }
 
     // Duration
@@ -467,6 +483,19 @@
 
   var debouncedFilterChange = debounce(onFilterChange, 250);
 
+  // --- Tick Interval (pixel-aware) ---
+
+  function computeConvergenceTickInterval(duration, trackWidthPx) {
+    var labelWidth = duration >= 3600 ? 60 : 40;
+    var minGap = 8;
+    var maxTicks = Math.max(2, Math.floor(trackWidthPx / (labelWidth + minGap)));
+    var candidates = [1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600];
+    for (var i = 0; i < candidates.length; i++) {
+      if (duration / candidates[i] <= maxTicks) return candidates[i];
+    }
+    return 3600;
+  }
+
   // --- Rendering ---
 
   function render() {
@@ -508,7 +537,8 @@
     var axisSpacer = el("div", "cv-axis-spacer");
     axis.appendChild(axisSpacer);
     var axisTrack = el("div", "cv-axis-track");
-    var tickInterval = window._studioIntakeComputeTickInterval(cvState.duration);
+    var trackWidthPx = (container.clientWidth || 500) - 52;
+    var tickInterval = computeConvergenceTickInterval(cvState.duration, trackWidthPx);
     for (var t = tickInterval; t <= cvState.duration; t += tickInterval) {
       var tick = el("div", "cv-tick");
       tick.style.left = (t / cvState.duration * 100) + "%";
@@ -596,7 +626,11 @@
           marker.style.left = (mev.start / cvState.duration * 100) + "%";
           marker.style.width = Math.max((mev.end - mev.start) / cvState.duration * 100, 0.3) + "%";
           marker.style.background = getEventTypeColor(mev.source, mev.eventType);
-          marker.title = mev.eventType + " (" + formatTime(mev.start) + ")";
+          var tooltipText = mev.eventType + " (" + formatTime(mev.start) + ")";
+          if (mev.clusterCount && mev.clusterCount > 1) {
+            tooltipText += " [" + mev.clusterCount + " events]";
+          }
+          marker.title = tooltipText;
           if (filteredIdxById[mev.id] !== undefined) marker.dataset.cvIdx = filteredIdxById[mev.id];
           subTrack.appendChild(marker);
         }
@@ -1068,11 +1102,19 @@
       item.desc = event.eventType;
       item.source = "screenspace";
       item.event_type = event.eventType;
-      item.event_ids = [event.rawData.id || event.id];
+      if (event.rawData.events && event.rawData.events.length > 0) {
+        item.event_ids = event.rawData.events.map(function (e) { return e.id; });
+      } else {
+        item.event_ids = [event.rawData.id || event.id];
+      }
     } else if (event.source === "transcript") {
       item.desc = event.eventType || "transcript";
       item.source = "transcript";
-      item.mark_ids = [event.rawData.id || event.rawData.segment_id || event.id];
+      if (event.rawData.marks && event.rawData.marks.length > 0) {
+        item.mark_ids = event.rawData.marks.map(function (m) { return m.id || m.segment_id; });
+      } else {
+        item.mark_ids = [event.rawData.id || event.rawData.segment_id || event.id];
+      }
     } else {
       // Sheet events: use grid item format (no source) so thumbnails route
       // through api/thumbnail and generation through the sheet path
@@ -1186,7 +1228,7 @@
   window.convergenceInit = init;
   window.convergenceResize = debounce(function () {
     if (!cvState.active) return;
-    renderCanvases();
+    render();
   }, 200);
 
   init();

@@ -1025,6 +1025,10 @@
     grid.style.maxHeight = maxH;
     var intakePanel = qs("#intakePanel");
     if (intakePanel) intakePanel.style.maxHeight = maxH;
+    var trIntakePanel = qs("#trIntakePanel");
+    if (trIntakePanel) trIntakePanel.style.maxHeight = maxH;
+    var convergencePanel = qs("#convergencePanel");
+    if (convergencePanel) convergencePanel.style.maxHeight = maxH;
   }
 
   function initPanelDivider() {
@@ -1057,10 +1061,22 @@
       var clientY = e.clientY || (e.touches && e.touches[0].clientY) || 0;
       requestAnimationFrame(function () {
         var delta = startY - clientY;
-        var grid = qs("#sheetGrid");
-        var table = grid ? grid.querySelector("table") : null;
-        var tableH = table ? table.offsetHeight : 0;
-        var maxOff = Math.max(0, tableH - 100);
+        var contentH = 0;
+        if (state.activePreviewTab === "sheet") {
+          var grid = qs("#sheetGrid");
+          var table = grid ? grid.querySelector("table") : null;
+          contentH = table ? table.offsetHeight : 0;
+        } else if (state.activePreviewTab === "intake") {
+          var ip = qs("#intakePanel");
+          contentH = ip ? ip.scrollHeight : 0;
+        } else if (state.activePreviewTab === "transcript-intake") {
+          var tp = qs("#trIntakePanel");
+          contentH = tp ? tp.scrollHeight : 0;
+        } else if (state.activePreviewTab === "convergence") {
+          var cp = qs("#convergencePanel");
+          contentH = cp ? cp.scrollHeight : 0;
+        }
+        var maxOff = Math.max(0, contentH - 100);
         state.dividerOffset = Math.max(0, Math.min(maxOff, startOffset + delta));
         computeGridMaxHeight();
         rafPending = false;
@@ -4567,4 +4583,6 @@
   window._studioRenderArtifactQueue = renderArtifactQueue;
   window._studioRenderReelQueue = renderReelQueue;
   window._studioSaveQueues = saveQueues;
+  window._studioClusterIntakeEvents = clusterIntakeEvents;
+  window._studioClusterTranscriptMarks = clusterTranscriptMarks;
 })();
