@@ -577,12 +577,12 @@ Sort toggle: "Sort by convergence density" reorders rows so most-convergent part
 
 #### Verification
 
-- [ ] Frame preview appears on hover with correct image
-- [ ] Convergence zone tooltip shows on hover
-- [ ] Escape dismisses, arrows navigate
-- [ ] Participant sort reorders rows
-- [ ] Dark mode works
-- [ ] Reduced motion preference respected
+- [x] Frame preview appears on hover with correct image
+- [x] Convergence zone tooltip shows on hover
+- [x] Escape dismisses, arrows navigate
+- [x] Participant sort reorders rows
+- [x] Dark mode works
+- [x] Reduced motion preference respected
 
 ---
 
