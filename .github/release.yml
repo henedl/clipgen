@@ -1,0 +1,21 @@
+# Shapes automatically generated release notes (PR titles grouped by labels).
+# https://docs.github.com/en/repositories/releasing-projects-on-github/automatically-generated-release-notes
+changelog:
+  exclude:
+    labels:
+      - ignore-for-release
+    authors:
+      - dependabot[bot]
+  categories:
+    - title: Features
+      labels:
+        - enhancement
+        - feature
+    - title: Fixes
+      labels:
+        - bug
+        - fix
+    - title: Documentation
+      labels:
+        - documentation
+        - docs
