@@ -3,6 +3,7 @@
 This document contains stable project facts — architecture, data structures, genuine gotchas, conventions (the things that don't change run-to-run).
 
 @AGENTS.md contains learned behavioral preferences — the things that evolved from past mistakes.
+@CLOUD.md contains instructions specifically for cloud agents.
 
 ## Project overview
 
