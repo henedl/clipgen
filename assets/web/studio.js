@@ -4563,4 +4563,8 @@
   window._studioIntakeComputeTickInterval = intakeComputeTickInterval;
   window._studioFormatDuration = formatDuration;
   window._studioFindOverlappingData = findOverlappingData;
+  window._studioBuildXrefBadges = buildXrefBadges;
+  window._studioRenderArtifactQueue = renderArtifactQueue;
+  window._studioRenderReelQueue = renderReelQueue;
+  window._studioSaveQueues = saveQueues;
 })();
