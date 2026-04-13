@@ -1647,20 +1647,22 @@
 
       var thumb = el("div", "queue-card-thumb");
       var img = document.createElement("img");
-      img.src = isIntake
-        ? ("../screenspace/api/video/frame/" + encodeURIComponent(item.participant) + "/" + segStart)
-        : ("api/thumbnail/" + encodeURIComponent(item.participant) + "/" + segStart);
-      img.loading = "lazy";
       img.alt = "";
       img.draggable = false;
-      (function (cardEl, thumbEl) {
-        img.addEventListener("error", function () {
-          this.remove();
-          thumbEl.appendChild(el("span", "", "\u2715"));
-          cardEl.classList.add("queue-card-error");
-        });
-      })(card, thumb);
       thumb.appendChild(img);
+      if (isIntake) {
+        ssObserveThumb(card, img, thumb, item.participant, segStart);
+      } else {
+        img.src = "api/thumbnail/" + encodeURIComponent(item.participant) + "/" + segStart;
+        img.loading = "lazy";
+        (function (cardEl, thumbEl) {
+          img.addEventListener("error", function () {
+            this.remove();
+            thumbEl.appendChild(el("span", "", "\u2715"));
+            cardEl.classList.add("queue-card-error");
+          });
+        })(card, thumb);
+      }
       thumb.appendChild(el("span", "queue-card-duration", formatDuration(segDuration)));
       if (isIntake) {
         var ssBadge = el("span", "queue-card-source-badge");
@@ -1757,20 +1759,22 @@
 
       var thumb = el("div", "queue-card-thumb");
       var img = document.createElement("img");
-      img.src = isIntake
-        ? ("../screenspace/api/video/frame/" + encodeURIComponent(item.participant) + "/" + segStart)
-        : ("api/thumbnail/" + encodeURIComponent(item.participant) + "/" + segStart);
-      img.loading = "lazy";
       img.alt = "";
       img.draggable = false;
-      (function (cardEl, thumbEl) {
-        img.addEventListener("error", function () {
-          this.remove();
-          thumbEl.appendChild(el("span", "", "\u2715"));
-          cardEl.classList.add("queue-card-error");
-        });
-      })(card, thumb);
       thumb.appendChild(img);
+      if (isIntake) {
+        ssObserveThumb(card, img, thumb, item.participant, segStart);
+      } else {
+        img.src = "api/thumbnail/" + encodeURIComponent(item.participant) + "/" + segStart;
+        img.loading = "lazy";
+        (function (cardEl, thumbEl) {
+          img.addEventListener("error", function () {
+            this.remove();
+            thumbEl.appendChild(el("span", "", "\u2715"));
+            cardEl.classList.add("queue-card-error");
+          });
+        })(card, thumb);
+      }
       thumb.appendChild(el("span", "queue-card-duration", formatDuration(segDuration)));
       if (isIntake) {
         var ssBadge = el("span", "queue-card-source-badge");
@@ -3311,6 +3315,93 @@
     inactivity: "pause-circle",
   };
 
+  // ---- Screenspace thumbnail queue (throttled + cached) ----
+
+  var _ssThumbQueue = [];
+  var _ssThumbActive = 0;
+  var _SS_THUMB_MAX = 3;
+  var _ssThumbCache = {}; // url -> objectURL | "error"
+
+  function ssThumbUrl(participant, timestamp) {
+    return "../screenspace/api/video/frame/" + encodeURIComponent(participant) + "/" + timestamp + "?w=200";
+  }
+
+  function ssProcessQueue() {
+    while (_ssThumbActive < _SS_THUMB_MAX && _ssThumbQueue.length) {
+      var item = _ssThumbQueue.shift();
+      if (!item.img.parentNode) continue;
+      _ssThumbActive++;
+      (function (entry) {
+        fetch(entry.url)
+          .then(function (r) {
+            if (!r.ok) throw new Error("status " + r.status);
+            return r.blob();
+          })
+          .then(function (blob) {
+            var objUrl = URL.createObjectURL(blob);
+            _ssThumbCache[entry.url] = objUrl;
+            if (entry.img.parentNode) entry.img.src = objUrl;
+          })
+          .catch(function () {
+            _ssThumbCache[entry.url] = "error";
+            if (entry.img.parentNode) {
+              entry.img.remove();
+              entry.thumbEl.appendChild(el("span", "", "\u2715"));
+              entry.cardEl.classList.add("queue-card-error");
+            }
+          })
+          .then(function () {
+            _ssThumbActive--;
+            ssProcessQueue();
+          });
+      })(item);
+    }
+  }
+
+  function ssEnqueueThumb(img, cardEl, thumbEl, participant, timestamp) {
+    var url = ssThumbUrl(participant, timestamp);
+    var cached = _ssThumbCache[url];
+    if (cached && cached !== "error") { img.src = cached; return; }
+    if (cached === "error") {
+      img.remove();
+      thumbEl.appendChild(el("span", "", "\u2715"));
+      cardEl.classList.add("queue-card-error");
+      return;
+    }
+    _ssThumbQueue.push({ img: img, cardEl: cardEl, thumbEl: thumbEl, url: url });
+    ssProcessQueue();
+  }
+
+  var _ssThumbObservers = {};
+
+  function ssGetObserver(root) {
+    var key = root ? (root.id || "anon") : "viewport";
+    if (_ssThumbObservers[key]) return _ssThumbObservers[key];
+    var obs = new IntersectionObserver(function (entries) {
+      entries.forEach(function (entry) {
+        if (!entry.isIntersecting) return;
+        obs.unobserve(entry.target);
+        var d = entry.target.dataset;
+        var imgEl = entry.target.querySelector(".queue-card-thumb img");
+        var tEl = entry.target.querySelector(".queue-card-thumb");
+        if (imgEl && tEl) ssEnqueueThumb(imgEl, entry.target, tEl, d.ssThumbPid, d.ssThumbTs);
+      });
+    }, { root: root || null, rootMargin: "200px 0px" });
+    _ssThumbObservers[key] = obs;
+    return obs;
+  }
+
+  function ssObserveThumb(card, img, thumbEl, participant, timestamp) {
+    card.dataset.ssThumbPid = participant;
+    card.dataset.ssThumbTs = timestamp;
+    var scrollParent = card.closest(".intake-cards-grid") || card.closest("#artifactsList") || card.closest("#reelList");
+    ssGetObserver(scrollParent).observe(card);
+  }
+
+  function ssClearPending() {
+    _ssThumbQueue = [];
+  }
+
   function clusterIntakeEvents(events, thresholdSec) {
     if (!events.length) return [];
     var sorted = events.slice().sort(function (a, b) {
@@ -3590,6 +3681,7 @@
   }
 
   function renderIntake(hasNew) {
+    ssClearPending();
     var container = qs("#intakeCards");
     var addAllBtn = qs("#intakeAddAllBtn");
     var reelAllBtn = qs("#intakeReelAllBtn");
@@ -3629,18 +3721,10 @@
 
       var thumb = el("div", "queue-card-thumb");
       var img = document.createElement("img");
-      img.src = "../screenspace/api/video/frame/" + encodeURIComponent(c.participant) + "/" + c.start;
-      img.loading = "lazy";
       img.alt = "";
       img.draggable = false;
-      (function (cardEl, thumbEl) {
-        img.addEventListener("error", function () {
-          this.remove();
-          thumbEl.appendChild(el("span", "", "\u2715"));
-          cardEl.classList.add("queue-card-error");
-        });
-      })(card, thumb);
       thumb.appendChild(img);
+      ssObserveThumb(card, img, thumb, c.participant, c.start);
       thumb.appendChild(el("span", "queue-card-duration", formatDuration(segDuration)));
 
       var detDot = el("span", "intake-card-det-dot");
@@ -4029,6 +4113,7 @@
   }
 
   function renderTranscriptIntake() {
+    ssClearPending();
     var filtered = filteredTranscriptIntakeClusters();
     var container = qs("#trIntakeCards");
     var addAllBtn = qs("#trIntakeAddAllBtn");
@@ -4069,18 +4154,10 @@
 
       var segDuration = Math.max(0, c.end - c.start);
       var img = document.createElement("img");
-      img.src = "../screenspace/api/video/frame/" + encodeURIComponent(c.participant) + "/" + c.start;
-      img.loading = "lazy";
       img.alt = "";
       img.draggable = false;
-      (function (cardEl, thumbEl) {
-        img.addEventListener("error", function () {
-          this.remove();
-          thumbEl.appendChild(el("span", "", "\u2715"));
-          cardEl.classList.add("queue-card-error");
-        });
-      })(card, thumb);
       thumb.appendChild(img);
+      ssObserveThumb(card, img, thumb, c.participant, c.start);
 
       var catColor = (TR_INTAKE_CATEGORIES[c.category] || TR_INTAKE_CATEGORIES.bookmark).color;
       var dot = document.createElement("span");
