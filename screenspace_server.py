@@ -93,6 +93,7 @@ _worker: "screenspace.ScreenspaceWorker | None" = None
 _output_dir: str = ""
 _participants: list[dict[str, Any]] = []
 _video_metadata_cache: dict[str, dict[str, Any]] = {}
+_frame_cache: dict[tuple[str, float, int], bytes] = {}
 
 # ---- SSE (Server-Sent Events) client registry ----
 
@@ -160,7 +161,12 @@ def _find_participant_video(participant_id: str) -> str | None:
 
 @screenspace_bp.route("/api/video/frame/<participant>/<timestamp>")
 def api_video_frame(participant: str, timestamp: str) -> FlaskResponse:
-    """Extract and return a single JPEG frame at the given timestamp."""
+    """Extract and return a single JPEG frame at the given timestamp.
+
+    Optional query parameter ``w`` requests a scaled-down thumbnail
+    (e.g. ``?w=200`` for a 200 px-wide JPEG).  Without ``w`` the frame
+    is returned at full resolution.  Results are cached in-memory.
+    """
     try:
         ts = float(timestamp)
     except (ValueError, TypeError):
@@ -172,17 +178,37 @@ def api_video_frame(participant: str, timestamp: str) -> FlaskResponse:
             {"ok": False, "error": f"No video for participant {participant}"}
         ), 404
 
-    frame = video.extract_frame_at_timestamp(video_path, ts)
-    if frame is None:
-        return jsonify({"ok": False, "error": "Could not read frame at timestamp"}), 400
+    width = request.args.get("w", 0, type=int)
+    cache_key = (video_path, round(ts, 2), width)
+    cached = _frame_cache.get(cache_key)
+    if cached is not None:
+        return Response(
+            cached,
+            mimetype="image/jpeg",
+            headers={"Cache-Control": "public, max-age=86400"},
+        )
 
-    import cv2
+    if width > 0:
+        jpeg_bytes = video.extract_thumbnail_bytes(video_path, int(ts), width=width)
+    else:
+        frame = video.extract_frame_at_timestamp(video_path, ts)
+        if frame is None:
+            return jsonify(
+                {"ok": False, "error": "Could not read frame at timestamp"}
+            ), 400
+        import cv2
 
-    _, jpeg = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+        _, jpeg = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+        jpeg_bytes = jpeg.tobytes()
+
+    if jpeg_bytes is None:
+        return jsonify({"ok": False, "error": "Could not extract frame"}), 400
+
+    _frame_cache[cache_key] = jpeg_bytes
     return Response(
-        jpeg.tobytes(),
+        jpeg_bytes,
         mimetype="image/jpeg",
-        headers={"Cache-Control": "public, max-age=60"},
+        headers={"Cache-Control": "public, max-age=86400"},
     )
 
 

@@ -1424,4 +1424,4 @@ def start_combined_server(
     utils.info_print(f"clipgen server running at http://127.0.0.1:{port}")
     webbrowser.open(url)
 
-    combined.run(host="127.0.0.1", port=port, debug=False)
+    combined.run(host="127.0.0.1", port=port, debug=False, threaded=True)
