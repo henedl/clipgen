@@ -15,7 +15,9 @@ Key functions:
 
 import json
 import re
+import shutil
 import subprocess
+import sys
 import time
 import urllib.error
 import urllib.request
@@ -87,11 +89,44 @@ def _is_connection_refused(exc: Exception) -> bool:
     return False
 
 
+def _ollama_install_guidance_lines() -> list[str]:
+    """Return actionable install guidance based on the current platform."""
+    platform_specific = []
+    if sys.platform == "darwin":
+        platform_specific = [
+            "macOS: install with Homebrew: brew install ollama",
+        ]
+    elif sys.platform.startswith("linux"):
+        platform_specific = [
+            "Linux: curl -fsSL https://ollama.com/install.sh | sh",
+        ]
+    elif sys.platform.startswith("win"):
+        platform_specific = [
+            "Windows: winget install Ollama.Ollama",
+        ]
+    else:
+        platform_specific = [
+            "Download from: https://ollama.com/download",
+        ]
+
+    return platform_specific + [
+        "Then verify in a new terminal:",
+        "  ollama --version",
+    ]
+
+
 def _start_server() -> bool:
     """Attempt to start ``ollama serve`` and wait for it to become available.
 
     Returns True if the server is responding after startup, False otherwise.
     """
+    if shutil.which("ollama") is None:
+        utils.warning_print(
+            "Ollama is not installed.",
+            details=_ollama_install_guidance_lines(),
+        )
+        return False
+
     utils.info_print("Starting Ollama server...")
     try:
         subprocess.Popen(
@@ -99,9 +134,6 @@ def _start_server() -> bool:
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
-    except FileNotFoundError:
-        utils.warning_print("Ollama binary not found — is Ollama installed?")
-        return False
     except OSError as exc:
         utils.warning_print(f"Failed to start Ollama: {exc}")
         return False

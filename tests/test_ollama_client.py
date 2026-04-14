@@ -223,20 +223,32 @@ class TestAutoStartServer:
         assert result is None
         mock_start.assert_not_called()
 
+    @patch("ollama_client.shutil.which", return_value="/usr/local/bin/ollama")
     @patch("ollama_client.subprocess.Popen")
     @patch("ollama_client.is_available")
-    def test_start_server_polls_until_available(self, mock_avail, mock_popen):
+    def test_start_server_polls_until_available(
+        self, mock_avail, mock_popen, mock_which
+    ):
         """_start_server polls is_available until it returns True."""
         mock_avail.side_effect = [False, False, True]
         assert ollama_client._start_server() is True
         assert mock_avail.call_count == 3
         mock_popen.assert_called_once()
 
-    @patch("ollama_client.subprocess.Popen")
-    def test_start_server_returns_false_when_binary_missing(self, mock_popen):
+    @patch("ollama_client.shutil.which", return_value=None)
+    def test_start_server_returns_false_when_binary_missing(self, mock_which):
         """_start_server returns False when ollama is not installed."""
-        mock_popen.side_effect = FileNotFoundError("ollama not found")
         assert ollama_client._start_server() is False
+
+    @patch("ollama_client.shutil.which", return_value=None)
+    @patch("ollama_client.utils.warning_print")
+    def test_start_server_shows_install_guidance(self, mock_warn, mock_which):
+        """_start_server shows install guidance when ollama is not in PATH."""
+        ollama_client._start_server()
+        mock_warn.assert_called_once()
+        assert "not installed" in mock_warn.call_args[0][0].lower()
+        details = mock_warn.call_args[1]["details"]
+        assert any("ollama --version" in line for line in details)
 
 
 class TestSummarizeTranscript:
