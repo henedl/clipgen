@@ -85,6 +85,19 @@ MARK_CATEGORIES: dict[str, dict[str, str]] = {
     "bookmark": {"label": "Bookmark", "color": "#0891b2"},
 }
 
+# Known faster-whisper model variants with approximate download sizes.
+WHISPER_MODELS: list[dict[str, Any]] = [
+    {"name": "tiny", "size_mb": 40, "description": "Fastest, least accurate"},
+    {"name": "base", "size_mb": 140, "description": "Fast, good for short segments"},
+    {"name": "small", "size_mb": 500, "description": "Balanced speed and accuracy"},
+    {"name": "medium", "size_mb": 1500, "description": "Slower, more accurate"},
+    {
+        "name": "large-v3",
+        "size_mb": 2900,
+        "description": "Best accuracy, requires significant RAM",
+    },
+]
+
 
 # ---------------------------------------------------------------------------
 # Module-level model cache

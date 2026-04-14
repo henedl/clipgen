@@ -225,6 +225,21 @@ Note: Non-interactive mode (using -b, -l, -r, -C, -c, -p, -k, -S, -M, -R, or -T)
         default=None,
         help="Pre-transcribe source videos. No IDs = all participants. Specify IDs to transcribe specific participants (e.g., P01 P03).",
     )
+    transcription.add_argument(
+        "--whisper-model",
+        type=str,
+        choices=["tiny", "base", "small", "medium", "large-v3"],
+        metavar="MODEL",
+        help="Whisper model for transcription: tiny, base, small, medium, large-v3 (default: base)",
+    )
+
+    ai_opts = parser.add_argument_group("AI models")
+    ai_opts.add_argument(
+        "--ollama-model",
+        type=str,
+        metavar="MODEL",
+        help="Ollama model name for transcript summaries (sets both small and large model, e.g. gemma3:4b)",
+    )
 
     paths = parser.add_argument_group("spreadsheet & directories")
     paths.add_argument(
@@ -1305,6 +1320,11 @@ def _apply_config_overrides(args: Any, cli_mode: bool) -> CliModeArgs:
         config.TRANSCRIBE_ENABLED = True
     if getattr(args, "transcript_format", None):
         config.TRANSCRIBE_FORMAT = args.transcript_format
+    if getattr(args, "whisper_model", None):
+        config.TRANSCRIBE_MODEL = args.whisper_model
+    if getattr(args, "ollama_model", None):
+        config.OLLAMA_SUMMARY_MODEL = args.ollama_model
+        config.OLLAMA_SUMMARY_MODEL_LARGE = args.ollama_model
 
     return parse_cli_mode_args(args)
 

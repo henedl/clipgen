@@ -1084,6 +1084,27 @@ def test_api_settings_get(client):
         assert "type" in s
 
 
+def test_api_settings_includes_transcription_settings(client):
+    """GET /api/settings includes new Transcription group settings."""
+    resp = client.get("/studio/api/settings")
+    data = resp.get_json()
+    names = {s["name"] for s in data["settings"]}
+    assert "TRANSCRIBE_ENABLED" in names
+    assert "TRANSCRIBE_MODEL" in names
+    assert "TRANSCRIBE_FORMAT" in names
+
+
+def test_api_settings_includes_provider_field(client):
+    """model_select settings include a provider field."""
+    resp = client.get("/studio/api/settings")
+    data = resp.get_json()
+    model_settings = [s for s in data["settings"] if s["type"] == "model_select"]
+    assert len(model_settings) >= 3  # TRANSCRIBE_MODEL + 2 OLLAMA models
+    for s in model_settings:
+        assert "provider" in s
+        assert s["provider"] in ("whisper", "ollama")
+
+
 def test_api_settings_put_applies_values(client, monkeypatch):
     """PUT /api/settings applies values to config and returns applied dict."""
     import config

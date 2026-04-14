@@ -29,7 +29,7 @@ from icecream import ic
 REENCODING: bool = False
 AUDIO_NORMALIZE: bool = False
 FILEFORMAT: str = ".mp4"
-VERSIONNUM: str = "0.10.43"
+VERSIONNUM: str = "0.10.44"
 TITLECARDS_ENABLED: bool = (
     False  # use --titlecards / --no-titlecards to override per run
 )
@@ -329,8 +329,27 @@ STUDIO_SETTINGS: dict[str, dict[str, Any]] = {
         "step": 1,
     },
     "STUDIO_CELL_EXPAND_HOVER": {"group": "Sheet Preview", "type": "bool"},
+    "TRANSCRIBE_ENABLED": {"group": "Transcription", "type": "bool"},
+    "TRANSCRIBE_MODEL": {
+        "group": "Transcription",
+        "type": "model_select",
+        "provider": "whisper",
+    },
+    "TRANSCRIBE_FORMAT": {
+        "group": "Transcription",
+        "type": "select",
+        "options": ["md", "srt", "vtt"],
+    },
     "OLLAMA_SUMMARY_ENABLED": {"group": "AI Summary", "type": "bool"},
-    "OLLAMA_SUMMARY_MODEL": {"group": "AI Summary", "type": "str"},
-    "OLLAMA_SUMMARY_MODEL_LARGE": {"group": "AI Summary", "type": "str"},
+    "OLLAMA_SUMMARY_MODEL": {
+        "group": "AI Summary",
+        "type": "model_select",
+        "provider": "ollama",
+    },
+    "OLLAMA_SUMMARY_MODEL_LARGE": {
+        "group": "AI Summary",
+        "type": "model_select",
+        "provider": "ollama",
+    },
     "OLLAMA_BASE_URL": {"group": "AI Summary", "type": "str"},
 }
