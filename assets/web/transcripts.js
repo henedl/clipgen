@@ -1859,6 +1859,278 @@
     });
   }
 
+  // ---- Settings Popover ----
+
+  var _trModelsCache = null;
+  var _trModelsCachePromise = null;
+  var _trSettingsData = null;
+  var _trSettingsSaveTimer = null;
+
+  var TR_SETTINGS_GROUPS = ["Transcription", "AI Summary"];
+
+  function _trFetchModels() {
+    if (_trModelsCache) return Promise.resolve(_trModelsCache);
+    if (_trModelsCachePromise) return _trModelsCachePromise;
+    _trModelsCachePromise = fetch("../api/models")
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        if (data.ok) _trModelsCache = data;
+        return data;
+      })
+      .catch(function () { return null; });
+    return _trModelsCachePromise;
+  }
+
+  function _trFormatSize(mb) {
+    if (mb >= 1024) return (mb / 1024).toFixed(1) + " GB";
+    return mb + " MB";
+  }
+
+  function _trLoadModelsForSelect(sel, provider, currentValue) {
+    _trFetchModels().then(function (data) {
+      if (!data || !data.ok) { sel.disabled = false; return; }
+
+      var models = [];
+      if (provider === "whisper") {
+        models = (data.whisper && data.whisper.models) || [];
+      } else if (provider === "ollama") {
+        models = (data.ollama && data.ollama.models) || [];
+      }
+
+      sel.innerHTML = "";
+      var hasCurrentValue = false;
+      for (var i = 0; i < models.length; i++) {
+        var m = models[i];
+        var opt = document.createElement("option");
+        opt.value = m.name;
+        var label = m.name;
+        if (m.size_mb) label += " (" + _trFormatSize(m.size_mb) + ")";
+        if (m.parameter_size) label += " \u00B7 " + m.parameter_size;
+        if (m.description) label += " \u2014 " + m.description;
+        opt.textContent = label;
+        if (m.name === currentValue) {
+          opt.selected = true;
+          hasCurrentValue = true;
+        }
+        sel.appendChild(opt);
+      }
+      if (!hasCurrentValue && currentValue) {
+        var custom = document.createElement("option");
+        custom.value = currentValue;
+        custom.textContent = currentValue + " (current)";
+        custom.selected = true;
+        sel.insertBefore(custom, sel.firstChild);
+      }
+      sel.disabled = false;
+    });
+  }
+
+  function _trFindSetting(name) {
+    if (!_trSettingsData) return null;
+    for (var i = 0; i < _trSettingsData.length; i++) {
+      if (_trSettingsData[i].name === name) return _trSettingsData[i];
+    }
+    return null;
+  }
+
+  function _trScheduleSave() {
+    if (_trSettingsSaveTimer) clearTimeout(_trSettingsSaveTimer);
+    _trSettingsSaveTimer = setTimeout(_trSaveSettings, 400);
+  }
+
+  function _trSaveSettings() {
+    if (!_trSettingsData) return;
+    var payload = {};
+    for (var i = 0; i < _trSettingsData.length; i++) {
+      var s = _trSettingsData[i];
+      if (s.value !== s.default) payload[s.name] = s.value;
+    }
+    var statusEl = qs("#trSettingsSaveStatus");
+    fetch("../api/settings", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ settings: payload }),
+    })
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        if (statusEl) {
+          statusEl.textContent = data.ok ? "Saved" : "Error";
+          setTimeout(function () { statusEl.textContent = ""; }, 1500);
+        }
+      })
+      .catch(function () {
+        if (statusEl) statusEl.textContent = "Error";
+      });
+  }
+
+  function _trUpdateChanged(settingName) {
+    var row = qs('.tr-settings-row[data-setting="' + settingName + '"]');
+    if (!row) return;
+    var s = _trFindSetting(settingName);
+    if (!s) return;
+    if (s.value !== s.default) {
+      row.classList.add("settings-changed");
+    } else {
+      row.classList.remove("settings-changed");
+    }
+  }
+
+  function _trBuildRow(s) {
+    var row = document.createElement("div");
+    row.className = "tr-settings-row";
+    if (s.value !== s.default) row.classList.add("settings-changed");
+    row.setAttribute("data-setting", s.name);
+
+    var labelDiv = document.createElement("div");
+    labelDiv.className = "tr-settings-label";
+    var nameEl = document.createElement("div");
+    nameEl.className = "tr-settings-label-name";
+    nameEl.textContent = s.name
+      .replace(/_/g, " ").toLowerCase()
+      .replace(/\b\w/g, function (c) { return c.toUpperCase(); })
+      .replace(/Mb$/i, "(MB)").replace(/Seconds$/i, "(s)");
+    var descEl = document.createElement("div");
+    descEl.className = "tr-settings-label-desc";
+    descEl.textContent = s.description;
+    labelDiv.appendChild(nameEl);
+    labelDiv.appendChild(descEl);
+
+    var controlDiv = document.createElement("div");
+    controlDiv.className = "tr-settings-control";
+    var settingName = s.name;
+
+    if (s.type === "bool") {
+      var toggle = document.createElement("input");
+      toggle.type = "checkbox";
+      toggle.checked = !!s.value;
+      toggle.addEventListener("change", function () {
+        var setting = _trFindSetting(settingName);
+        if (setting) setting.value = this.checked;
+        _trUpdateChanged(settingName);
+        _trScheduleSave();
+      });
+      controlDiv.appendChild(toggle);
+    } else if (s.type === "select" && s.options) {
+      var sel = document.createElement("select");
+      for (var oi = 0; oi < s.options.length; oi++) {
+        var opt = document.createElement("option");
+        opt.value = s.options[oi];
+        opt.textContent = s.options[oi];
+        if (s.options[oi] === s.value) opt.selected = true;
+        sel.appendChild(opt);
+      }
+      sel.addEventListener("change", function () {
+        var setting = _trFindSetting(settingName);
+        if (setting) setting.value = this.value;
+        _trUpdateChanged(settingName);
+        _trScheduleSave();
+      });
+      controlDiv.appendChild(sel);
+    } else if (s.type === "model_select") {
+      var msel = document.createElement("select");
+      var curOpt = document.createElement("option");
+      curOpt.value = s.value;
+      curOpt.textContent = s.value;
+      curOpt.selected = true;
+      msel.appendChild(curOpt);
+      msel.disabled = true;
+      msel.addEventListener("change", function () {
+        var setting = _trFindSetting(settingName);
+        if (setting) setting.value = this.value;
+        _trUpdateChanged(settingName);
+        _trScheduleSave();
+      });
+      controlDiv.appendChild(msel);
+      _trLoadModelsForSelect(msel, s.provider, s.value);
+    } else if (s.type === "str") {
+      var txtInput = document.createElement("input");
+      txtInput.type = "text";
+      txtInput.autocomplete = "off";
+      txtInput.value = s.value || "";
+      txtInput.placeholder = String(s.default || "");
+      txtInput.addEventListener("change", function () {
+        var setting = _trFindSetting(settingName);
+        if (setting) setting.value = this.value;
+        _trUpdateChanged(settingName);
+        _trScheduleSave();
+      });
+      controlDiv.appendChild(txtInput);
+    }
+
+    row.appendChild(labelDiv);
+    row.appendChild(controlDiv);
+    return row;
+  }
+
+  function _trRenderSettings() {
+    var container = qs("#trSettingsContent");
+    if (!container || !_trSettingsData) return;
+    container.innerHTML = "";
+
+    var groups = {};
+    for (var i = 0; i < _trSettingsData.length; i++) {
+      var s = _trSettingsData[i];
+      if (TR_SETTINGS_GROUPS.indexOf(s.group) === -1) continue;
+      if (!groups[s.group]) groups[s.group] = [];
+      groups[s.group].push(s);
+    }
+
+    for (var gi = 0; gi < TR_SETTINGS_GROUPS.length; gi++) {
+      var groupName = TR_SETTINGS_GROUPS[gi];
+      if (!groups[groupName]) continue;
+      var header = document.createElement("div");
+      header.className = "tr-settings-group-label";
+      header.textContent = groupName;
+      container.appendChild(header);
+      var items = groups[groupName];
+      for (var si = 0; si < items.length; si++) {
+        container.appendChild(_trBuildRow(items[si]));
+      }
+    }
+  }
+
+  function _trLoadSettings() {
+    fetch("../api/settings")
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        if (!data.ok) return;
+        _trSettingsData = data.settings;
+        _trRenderSettings();
+      })
+      .catch(function () {});
+  }
+
+  function initTranscriptSettings() {
+    var btn = qs("#trSettingsBtn");
+    var popover = qs("#trSettingsPopover");
+    var closeBtn = qs("#trSettingsClose");
+    if (!btn || !popover) return;
+
+    btn.addEventListener("click", function () {
+      var isOpen = !popover.classList.contains("hidden");
+      if (isOpen) {
+        popover.classList.add("hidden");
+      } else {
+        popover.classList.remove("hidden");
+        _trModelsCache = null;
+        _trModelsCachePromise = null;
+        _trLoadSettings();
+      }
+    });
+
+    if (closeBtn) {
+      closeBtn.addEventListener("click", function () {
+        popover.classList.add("hidden");
+      });
+    }
+
+    document.addEventListener("click", function (e) {
+      if (popover.classList.contains("hidden")) return;
+      if (popover.contains(e.target) || btn.contains(e.target)) return;
+      popover.classList.add("hidden");
+    });
+  }
+
   // ---- Boot ----
 
   document.addEventListener("DOMContentLoaded", function () {
@@ -1871,6 +2143,7 @@
     initVideoSync();
     initSummaryToggle();
     initSummaryActions();
+    initTranscriptSettings();
 
     // Pause polling when tab is hidden; resume when visible
     document.addEventListener("visibilitychange", function () {

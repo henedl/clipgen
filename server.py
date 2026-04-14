@@ -1125,6 +1125,7 @@ def api_settings_get() -> FlaskResponse:
                 "options": meta.get("options"),
                 "min": meta.get("min"),
                 "step": meta.get("step"),
+                "provider": meta.get("provider"),
             }
         )
     return jsonify({"ok": True, "settings": settings})
@@ -1415,6 +1416,112 @@ def start_combined_server(
                 "insights": True,
                 "screenspace": True,
                 "transcripts": True,
+            }
+        )
+
+    # ---- Shared settings (available from any page) ----
+
+    # Load persisted settings unconditionally so Transcripts/Screenspace can
+    # read and write model preferences even when Studio is not active.
+    if not has_studio:
+        _load_studio_settings()
+
+    @combined.route("/api/settings", methods=["GET"])
+    def combined_settings_get() -> FlaskResponse:
+        settings = []
+        for name, meta in config.STUDIO_SETTINGS.items():
+            settings.append(
+                {
+                    "name": name,
+                    "value": getattr(config, name),
+                    "default": _settings_defaults.get(name),
+                    "description": config.SETTINGS_DESCRIPTIONS.get(name, ""),
+                    "group": meta.get("group", ""),
+                    "type": meta.get("type", "str"),
+                    "options": meta.get("options"),
+                    "min": meta.get("min"),
+                    "step": meta.get("step"),
+                    "provider": meta.get("provider"),
+                }
+            )
+        return jsonify({"ok": True, "settings": settings})
+
+    @combined.route("/api/settings", methods=["PUT"])
+    def combined_settings_put() -> FlaskResponse:
+        data = request.get_json(silent=True) or {}
+        settings_data = data.get("settings")
+        if not isinstance(settings_data, dict):
+            return jsonify({"ok": False, "error": "Invalid settings payload"}), 400
+
+        applied: dict[str, Any] = {}
+        for name, value in settings_data.items():
+            if name not in config.STUDIO_SETTINGS:
+                continue
+            default = _settings_defaults.get(name)
+            expected_type = type(default) if default is not None else str
+            try:
+                if expected_type is bool:
+                    coerced = (
+                        value
+                        if isinstance(value, bool)
+                        else str(value).lower() in ("true", "1", "yes", "on")
+                    )
+                elif expected_type is int:
+                    coerced = int(value)
+                elif expected_type is float:
+                    coerced = float(value)
+                else:
+                    coerced = str(value)
+            except (ValueError, TypeError):
+                continue
+            setattr(config, name, coerced)
+            applied[name] = coerced
+
+        _save_studio_settings(applied)
+        return jsonify({"ok": True, "applied": applied})
+
+    # ---- Model discovery ----
+
+    @combined.route("/api/models")
+    def api_models() -> Response:
+        import ollama_client
+        import transcripts
+
+        whisper_models = [
+            {
+                "name": m["name"],
+                "size_mb": m["size_mb"],
+                "description": m["description"],
+                "selected": m["name"] == config.TRANSCRIBE_MODEL,
+            }
+            for m in transcripts.WHISPER_MODELS
+        ]
+
+        ollama_models: list[dict[str, Any]] = []
+        ollama_available = False
+        raw = ollama_client.list_models()
+        if raw is not None:
+            ollama_available = True
+            for m in raw:
+                size_mb = round(m["size_bytes"] / (1024 * 1024))
+                ollama_models.append(
+                    {
+                        "name": m["name"],
+                        "size_mb": size_mb,
+                        "parameter_size": m["parameter_size"],
+                        "family": m["family"],
+                    }
+                )
+
+        return jsonify(
+            {
+                "ok": True,
+                "whisper": {"models": whisper_models},
+                "ollama": {
+                    "available": ollama_available,
+                    "models": ollama_models,
+                    "base_url": config.OLLAMA_BASE_URL,
+                },
             }
         )
 

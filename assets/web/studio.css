@@ -1937,6 +1937,31 @@ html[data-theme="dark"] .filter-cat-btn {
   font-size: var(--text-sm);
 }
 
+.settings-model-dropdown {
+  min-width: 14rem;
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--color-border);
+  border-radius: calc(var(--radius) - 2px);
+  background: var(--color-surface);
+  color: var(--color-text);
+  font-size: var(--text-sm);
+}
+
+.settings-model-dropdown:disabled {
+  opacity: 0.5;
+}
+
+.settings-control input[type="text"] {
+  width: 14rem;
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--color-border);
+  border-radius: calc(var(--radius) - 2px);
+  background: var(--color-surface);
+  color: var(--color-text);
+  font-size: var(--text-sm);
+  font-family: var(--font-mono);
+}
+
 .settings-toggle {
   position: relative;
   width: 36px;

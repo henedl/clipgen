@@ -27,6 +27,61 @@ class TestIsAvailable:
         assert ollama_client.is_available() is False
 
 
+class TestListModels:
+    @patch("ollama_client.urllib.request.urlopen")
+    def test_returns_models_on_success(self, mock_urlopen):
+        response_data = json.dumps(
+            {
+                "models": [
+                    {
+                        "name": "qwen3.5:0.8b",
+                        "size": 531490688,
+                        "details": {
+                            "parameter_size": "0.8B",
+                            "quantization_level": "Q4_K_M",
+                            "family": "qwen3.5",
+                        },
+                    },
+                    {
+                        "name": "gemma3:4b",
+                        "size": 2100000000,
+                        "details": {
+                            "parameter_size": "4B",
+                            "quantization_level": "Q4_0",
+                            "family": "gemma3",
+                        },
+                    },
+                ]
+            }
+        ).encode("utf-8")
+        mock_resp = io.BytesIO(response_data)
+        mock_urlopen.return_value.__enter__ = lambda s: mock_resp
+        mock_urlopen.return_value.__exit__ = lambda s, *a: None
+        result = ollama_client.list_models()
+        assert result is not None
+        assert len(result) == 2
+        assert result[0]["name"] == "qwen3.5:0.8b"
+        assert result[0]["size_bytes"] == 531490688
+        assert result[0]["parameter_size"] == "0.8B"
+        assert result[0]["family"] == "qwen3.5"
+        assert result[1]["name"] == "gemma3:4b"
+
+    @patch("ollama_client.urllib.request.urlopen")
+    def test_returns_none_on_connection_error(self, mock_urlopen):
+        mock_urlopen.side_effect = urllib.error.URLError("Connection refused")
+        assert ollama_client.list_models() is None
+
+    @patch("ollama_client.urllib.request.urlopen")
+    def test_returns_empty_list_for_no_models(self, mock_urlopen):
+        response_data = json.dumps({"models": []}).encode("utf-8")
+        mock_resp = io.BytesIO(response_data)
+        mock_urlopen.return_value.__enter__ = lambda s: mock_resp
+        mock_urlopen.return_value.__exit__ = lambda s, *a: None
+        result = ollama_client.list_models()
+        assert result is not None
+        assert len(result) == 0
+
+
 class TestGenerate:
     @patch("ollama_client.urllib.request.urlopen")
     def test_returns_response_text_on_success(self, mock_urlopen):

@@ -48,6 +48,34 @@ def is_available() -> bool:
         return False
 
 
+def list_models() -> list[dict[str, Any]] | None:
+    """List installed Ollama models with metadata.
+
+    Calls GET /api/tags on the Ollama server and parses the response into a
+    list of dicts with keys: name, size_bytes, parameter_size, quantization,
+    family.  Returns None on any failure (server unreachable, bad JSON, etc.).
+    """
+    try:
+        req = urllib.request.Request(f"{config.OLLAMA_BASE_URL}/api/tags")
+        with urllib.request.urlopen(req, timeout=_HEALTH_TIMEOUT) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            models = []
+            for m in data.get("models", []):
+                details = m.get("details", {})
+                models.append(
+                    {
+                        "name": m.get("name", ""),
+                        "size_bytes": m.get("size", 0),
+                        "parameter_size": details.get("parameter_size", ""),
+                        "quantization": details.get("quantization_level", ""),
+                        "family": details.get("family", ""),
+                    }
+                )
+            return models
+    except (urllib.error.URLError, OSError, ValueError, json.JSONDecodeError):
+        return None
+
+
 def _is_connection_refused(exc: Exception) -> bool:
     """Check whether an exception indicates connection refused (server not running)."""
     if isinstance(exc, urllib.error.URLError) and isinstance(

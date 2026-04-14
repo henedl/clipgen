@@ -3043,6 +3043,66 @@
 
   // ---- Settings ----
 
+  var _modelsCache = null;
+  var _modelsCachePromise = null;
+
+  function _fetchModels() {
+    if (_modelsCache) return Promise.resolve(_modelsCache);
+    if (_modelsCachePromise) return _modelsCachePromise;
+    _modelsCachePromise = fetch("../api/models")
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        if (data.ok) _modelsCache = data;
+        return data;
+      })
+      .catch(function () { return null; });
+    return _modelsCachePromise;
+  }
+
+  function _formatSize(mb) {
+    if (mb >= 1024) return (mb / 1024).toFixed(1) + " GB";
+    return mb + " MB";
+  }
+
+  function _loadModelsForSelect(sel, provider, currentValue) {
+    _fetchModels().then(function (data) {
+      if (!data || !data.ok) { sel.disabled = false; return; }
+
+      var models = [];
+      if (provider === "whisper") {
+        models = (data.whisper && data.whisper.models) || [];
+      } else if (provider === "ollama") {
+        models = (data.ollama && data.ollama.models) || [];
+      }
+
+      sel.innerHTML = "";
+      var hasCurrentValue = false;
+      for (var i = 0; i < models.length; i++) {
+        var m = models[i];
+        var opt = document.createElement("option");
+        opt.value = m.name;
+        var label = m.name;
+        if (m.size_mb) label += " (" + _formatSize(m.size_mb) + ")";
+        if (m.parameter_size) label += " \u00B7 " + m.parameter_size;
+        if (m.description) label += " \u2014 " + m.description;
+        opt.textContent = label;
+        if (m.name === currentValue) {
+          opt.selected = true;
+          hasCurrentValue = true;
+        }
+        sel.appendChild(opt);
+      }
+      if (!hasCurrentValue && currentValue) {
+        var custom = document.createElement("option");
+        custom.value = currentValue;
+        custom.textContent = currentValue + " (current)";
+        custom.selected = true;
+        sel.insertBefore(custom, sel.firstChild);
+      }
+      sel.disabled = false;
+    });
+  }
+
   function openSettings() {
     qs("#settingsOverlay").classList.remove("hidden");
     loadSettings();
@@ -3138,6 +3198,36 @@
         scheduleSaveSettings();
       });
       controlDiv.appendChild(sel);
+    } else if (s.type === "model_select") {
+      var msel = document.createElement("select");
+      msel.className = "settings-model-dropdown";
+      var curOpt = document.createElement("option");
+      curOpt.value = s.value;
+      curOpt.textContent = s.value;
+      curOpt.selected = true;
+      msel.appendChild(curOpt);
+      msel.disabled = true;
+      msel.addEventListener("change", function () {
+        var setting = findSetting(settingName);
+        if (setting) setting.value = this.value;
+        updateSettingChanged(settingName);
+        scheduleSaveSettings();
+      });
+      controlDiv.appendChild(msel);
+      _loadModelsForSelect(msel, s.provider, s.value);
+    } else if (s.type === "str") {
+      var txtInput = document.createElement("input");
+      txtInput.type = "text";
+      txtInput.autocomplete = "off";
+      txtInput.value = s.value || "";
+      txtInput.placeholder = String(s.default || "");
+      txtInput.addEventListener("change", function () {
+        var setting = findSetting(settingName);
+        if (setting) setting.value = this.value;
+        updateSettingChanged(settingName);
+        scheduleSaveSettings();
+      });
+      controlDiv.appendChild(txtInput);
     } else {
       var input = document.createElement("input");
       input.type = "number";

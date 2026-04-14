@@ -262,3 +262,46 @@ def test_pre_transcribe_with_ids(monkeypatch):
     monkeypatch.setattr("sys.argv", ["clipgen.py", "--pre-transcribe", "P01", "P03"])
     args = cli.parse_arguments()
     assert args.pre_transcribe == ["P01", "P03"]
+
+
+def test_whisper_model_flag_parses(monkeypatch):
+    monkeypatch.setattr("sys.argv", ["clipgen.py", "--whisper-model", "medium"])
+    args = cli.parse_arguments()
+    assert args.whisper_model == "medium"
+
+
+def test_whisper_model_flag_rejects_invalid(monkeypatch):
+    monkeypatch.setattr("sys.argv", ["clipgen.py", "--whisper-model", "huge"])
+    with pytest.raises(SystemExit):
+        cli.parse_arguments()
+
+
+def test_ollama_model_flag_parses(monkeypatch):
+    monkeypatch.setattr("sys.argv", ["clipgen.py", "--ollama-model", "gemma3:4b"])
+    args = cli.parse_arguments()
+    assert args.ollama_model == "gemma3:4b"
+
+
+def test_whisper_model_applies_to_config(monkeypatch):
+    import config
+
+    original = config.TRANSCRIBE_MODEL
+    monkeypatch.setattr("sys.argv", ["clipgen.py", "--whisper-model", "small"])
+    args = cli.parse_arguments()
+    cli._apply_config_overrides(args, cli_mode=True)
+    assert config.TRANSCRIBE_MODEL == "small"
+    config.TRANSCRIBE_MODEL = original
+
+
+def test_ollama_model_applies_to_both_config(monkeypatch):
+    import config
+
+    orig_small = config.OLLAMA_SUMMARY_MODEL
+    orig_large = config.OLLAMA_SUMMARY_MODEL_LARGE
+    monkeypatch.setattr("sys.argv", ["clipgen.py", "--ollama-model", "gemma3:4b"])
+    args = cli.parse_arguments()
+    cli._apply_config_overrides(args, cli_mode=True)
+    assert config.OLLAMA_SUMMARY_MODEL == "gemma3:4b"
+    assert config.OLLAMA_SUMMARY_MODEL_LARGE == "gemma3:4b"
+    config.OLLAMA_SUMMARY_MODEL = orig_small
+    config.OLLAMA_SUMMARY_MODEL_LARGE = orig_large
