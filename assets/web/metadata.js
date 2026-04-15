@@ -1301,41 +1301,27 @@
     state.intakeFilterText = eventType;
     var searchInput = qs("#intakeFilterSearch");
     if (searchInput) searchInput.value = eventType;
-    state.activePreviewTab = "intake";
-    var allTabs = qsa(".preview-tab");
-    for (var i = 0; i < allTabs.length; i++) {
-      allTabs[i].classList.remove("active");
-      if (allTabs[i].dataset.tab === "intake") allTabs[i].classList.add("active");
-    }
-    if (window._studioSyncPreviewTab) {
-      window._studioSyncPreviewTab();
-    } else {
-      // Fallback: trigger click on the intake tab
-      var intakeTab = qs('.preview-tab[data-tab="intake"]');
-      if (intakeTab) intakeTab.click();
-    }
+    switchToTab("intake");
   }
 
   function drillDownTranscriptCategory(category) {
     state.trIntakeFilterCategory = category;
-    state.activePreviewTab = "transcript-intake";
-    var allTabs = qsa(".preview-tab");
-    for (var i = 0; i < allTabs.length; i++) {
-      allTabs[i].classList.remove("active");
-      if (allTabs[i].dataset.tab === "transcript-intake") allTabs[i].classList.add("active");
-    }
-    var trTab = qs('.preview-tab[data-tab="transcript-intake"]');
-    if (trTab) trTab.click();
+    switchToTab("transcript-intake");
   }
 
   function drillDownParticipant(participant) {
-    // Add to intake participant filter and switch
-    if (state.intakeFilterParticipants.indexOf(participant) === -1) {
-      state.intakeFilterParticipants = [participant];
+    state.intakeFilterParticipants = [participant];
+    switchToTab("intake");
+  }
+
+  function switchToTab(tabName) {
+    state.activePreviewTab = tabName;
+    var allTabs = qsa(".preview-tab");
+    for (var i = 0; i < allTabs.length; i++) {
+      allTabs[i].classList.remove("active");
+      if (allTabs[i].dataset.tab === tabName) allTabs[i].classList.add("active");
     }
-    state.activePreviewTab = "intake";
-    var intakeTab = qs('.preview-tab[data-tab="intake"]');
-    if (intakeTab) intakeTab.click();
+    if (window._studioSyncPreviewTab) window._studioSyncPreviewTab();
   }
 
   // --- JSON Export ---
