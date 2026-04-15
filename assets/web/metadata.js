@@ -662,42 +662,6 @@
     histContainer.appendChild(histTooltip);
     strip.appendChild(histContainer);
 
-    // Summary row: severity bar + session small multiples
-    var summaryRow = el("div", "md-summary-row");
-
-    // Compact severity bar with inline legend
-    if (cache.hasSheet) {
-      var sevWrap = el("div", "md-summary-sev-wrap");
-      var sevLabel = el("div", "md-summary-label", "Severity");
-      sevWrap.appendChild(sevLabel);
-      var sevBar = renderSeverityBar(cache.severityDist, true);
-      if (sevBar) {
-        sevWrap.appendChild(sevBar);
-        var sevLegend = el("div", "md-summary-sev-legend");
-        for (var si = 0; si < SEVERITY_ORDER.length; si++) {
-          var sLabel = SEVERITY_ORDER[si].label;
-          var sCount = cache.severityDist[sLabel] || 0;
-          if (sCount === 0) continue;
-          var sItem = el("span", "md-severity-legend-item");
-          var sDot = el("span", "md-sev-dot");
-          var sCls = severityClass(sLabel);
-          if (sCls) sDot.classList.add(sCls);
-          sItem.appendChild(sDot);
-          sItem.appendChild(document.createTextNode(" " + sLabel + " " + sCount));
-          sevLegend.appendChild(sItem);
-        }
-        sevWrap.appendChild(sevLegend);
-      }
-      summaryRow.appendChild(sevWrap);
-    }
-
-    // Compact session multiples
-    if (cache.sessionSummary.length) {
-      var multiples = renderSmallMultiples(cache, true);
-      if (multiples) summaryRow.appendChild(multiples);
-    }
-
-    strip.appendChild(summaryRow);
     return strip;
   }
 
