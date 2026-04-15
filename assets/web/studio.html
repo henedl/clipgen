@@ -7,6 +7,7 @@
   <link rel="stylesheet" href="tokens.css">
   <link rel="stylesheet" href="studio.css">
   <link rel="stylesheet" href="convergence.css">
+  <link rel="stylesheet" href="metadata.css">
 </head>
 <body>
   <header id="studioHeader">
@@ -83,6 +84,7 @@
         <button class="preview-tab hidden" data-tab="intake">Screenspace Intake <span id="intakeTabBadge" class="intake-tab-badge hidden">0</span></button>
         <button class="preview-tab hidden" data-tab="transcript-intake">Transcript Intake <span id="trIntakeTabBadge" class="intake-tab-badge hidden">0</span></button>
         <button class="preview-tab hidden" data-tab="convergence">Convergence</button>
+        <button class="preview-tab" data-tab="metadata">Metadata</button>
       </div>
       <button id="filterToggle" class="btn btn-small btn-icon" title="Filter rows">
         <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
@@ -158,6 +160,7 @@
       <div id="convergenceTimeline" class="convergence-timeline-container"></div>
       <div id="convergenceDetail" class="convergence-detail hidden"></div>
     </div>
+    <div id="metadataPanel" class="hidden"></div>
   </section>
 
   <div id="panelDivider"><div class="divider-handle"></div></div>
@@ -324,5 +327,6 @@
   <script src="utils.js"></script>
   <script src="studio.js"></script>
   <script src="convergence.js"></script>
+  <script src="metadata.js"></script>
 </body>
 </html>

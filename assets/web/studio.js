@@ -613,12 +613,14 @@
     var intakePanel = qs("#intakePanel");
     var trIntakePanel = qs("#trIntakePanel");
     var convergencePanel = qs("#convergencePanel");
+    var metadataPanel = qs("#metadataPanel");
 
     // Hide everything first
     grid.classList.add("hidden");
     intakePanel.classList.add("hidden");
     if (trIntakePanel) trIntakePanel.classList.add("hidden");
     if (convergencePanel) convergencePanel.classList.add("hidden");
+    if (metadataPanel) metadataPanel.classList.add("hidden");
     if (filterBar) filterBar.classList.add("hidden");
     if (filterToggle) filterToggle.classList.add("hidden");
     if (refreshBtn) refreshBtn.classList.add("hidden");
@@ -627,6 +629,7 @@
     if (state.intakePollTimer) { clearInterval(state.intakePollTimer); state.intakePollTimer = null; }
     if (state.trIntakePollTimer) { clearInterval(state.trIntakePollTimer); state.trIntakePollTimer = null; }
     if (window.convergenceDeactivate) window.convergenceDeactivate();
+    if (window.metadataDeactivate) window.metadataDeactivate();
 
     if (state.activePreviewTab === "sheet") {
       grid.classList.remove("hidden");
@@ -650,6 +653,9 @@
     } else if (state.activePreviewTab === "convergence") {
       if (convergencePanel) convergencePanel.classList.remove("hidden");
       if (window.convergenceActivate) window.convergenceActivate();
+    } else if (state.activePreviewTab === "metadata") {
+      if (metadataPanel) metadataPanel.classList.remove("hidden");
+      if (window.metadataActivate) window.metadataActivate();
     }
     computeGridMaxHeight();
   }
@@ -1029,6 +1035,8 @@
     if (trIntakePanel) trIntakePanel.style.maxHeight = maxH;
     var convergencePanel = qs("#convergencePanel");
     if (convergencePanel) convergencePanel.style.maxHeight = maxH;
+    var metadataPanel = qs("#metadataPanel");
+    if (metadataPanel) metadataPanel.style.maxHeight = maxH;
   }
 
   function initPanelDivider() {
@@ -4760,6 +4768,7 @@
       sizeIntakeCanvas();
       sizeTrIntakeCanvas();
       if (window.convergenceResize) window.convergenceResize();
+      if (window.metadataResize) window.metadataResize();
     });
 
     document.addEventListener("dragstart", function (ev) {
@@ -4784,4 +4793,8 @@
   window._studioSaveQueues = saveQueues;
   window._studioClusterIntakeEvents = clusterIntakeEvents;
   window._studioClusterTranscriptMarks = clusterTranscriptMarks;
+  window._studioROW_FUNCTIONS = ROW_FUNCTIONS;
+  window._studioSEVERITY_ORDER = SEVERITY_ORDER;
+  window._studioSeverityRank = severityRank;
+  window._studioSyncPreviewTab = syncPreviewTab;
 })();
