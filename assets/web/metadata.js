@@ -532,7 +532,8 @@
     panel.appendChild(renderHeaderBar(cache));
     renderFreshnessBanner(panel);
     panel.appendChild(renderSummaryStrip(cache));
-    panel.appendChild(renderCoverageMatrix(cache));
+    panel.appendChild(renderSection("coverage", "Data Coverage Matrix",
+      cache.participants.length + " participants", renderCoverageBody, cache, false, null));
     panel.appendChild(renderSection("event-types", "Per Event Type \u2014 Screenspace",
       cache.eventTypeStats.length + " types", renderEventTypeBody, cache, !cache.hasScreenspace,
       "No screenspace events available."));
@@ -701,14 +702,7 @@
 
   // --- Section 1: Coverage Matrix ---
 
-  function renderCoverageMatrix(cache) {
-    var section = el("div", "md-section md-coverage-section");
-    section.dataset.section = "coverage";
-    var header = el("div", "md-section-header md-coverage-header");
-    header.appendChild(el("h3", "", "Data Coverage Matrix"));
-    section.appendChild(header);
-
-    var body = el("div", "md-section-body");
+  function renderCoverageBody(body, cache) {
     var table = el("table", "md-table md-coverage-table");
     var thead = el("thead");
     var hrow = el("tr");
@@ -721,7 +715,6 @@
 
     var tbody = el("tbody");
     var participants = cache.participants;
-    // Per-column max for normalization
     var maxSheet = 0, maxSS = 0, maxTR = 0;
     for (var i = 0; i < participants.length; i++) {
       var c = cache.coverage[participants[i]];
@@ -746,7 +739,6 @@
       row.appendChild(makeCoverageCell(cov.screenspace, maxSS, hm));
       row.appendChild(makeCoverageCell(cov.transcript, maxTR, hm));
 
-      // Drill-down: click participant name
       nameCell.addEventListener("click", (function (p) {
         return function () { drillDownParticipant(p); };
       })(pid));
@@ -755,8 +747,6 @@
     }
     table.appendChild(tbody);
     body.appendChild(table);
-    section.appendChild(body);
-    return section;
   }
 
   function makeCoverageCell(value, max, hm) {

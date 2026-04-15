@@ -220,19 +220,6 @@
   padding: 0 var(--space-4) var(--space-4);
 }
 
-/* Non-collapsible coverage */
-.md-coverage-section .md-section-header {
-  cursor: default;
-}
-
-.md-coverage-section .md-section-header:hover {
-  background: none;
-}
-
-.md-coverage-section .md-section-chevron {
-  display: none;
-}
-
 /* ---- Tables ---- */
 
 .md-table {
