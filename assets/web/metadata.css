@@ -616,3 +616,75 @@
 .md-sentiment-bar {
   margin-bottom: var(--space-3);
 }
+
+/* ---- Collision window input ---- */
+
+.md-collision-window-label {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: var(--text-xs);
+  color: var(--color-text-dim);
+  white-space: nowrap;
+}
+
+.md-collision-input {
+  width: 44px;
+  padding: var(--space-1);
+  font-size: var(--text-xs);
+  font-family: var(--font-mono);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  color: var(--color-text);
+  text-align: center;
+}
+
+/* ---- Collisions section ---- */
+
+.md-collision-note {
+  font-size: var(--text-xs);
+  color: var(--color-text-dim);
+  margin-bottom: var(--space-3);
+}
+
+.md-collision-pair {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  margin-bottom: var(--space-2);
+}
+
+.md-collision-pair-label {
+  font-size: var(--text-sm);
+  font-weight: 600;
+}
+
+.md-collision-pair-stats {
+  font-size: var(--text-xs);
+  color: var(--color-text-dim);
+}
+
+.md-collision-bars {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin-top: var(--space-1);
+}
+
+.md-collision-bar {
+  height: 5px;
+  border-radius: 2px;
+  transition: width var(--duration-fast);
+}
+
+.md-collision-bar-a {
+  background: rgba(52, 152, 219, 0.6);
+}
+
+.md-collision-bar-b {
+  background: rgba(234, 179, 8, 0.6);
+}

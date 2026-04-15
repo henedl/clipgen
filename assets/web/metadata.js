@@ -29,6 +29,7 @@
     baselines: null,
     filterParticipants: [],
     collapsedSections: {},
+    collisionWindow: 5,
   };
 
   // --- Helpers ---
@@ -477,6 +478,104 @@
     return { bins: bins, binWidth: binWidth, maxTime: maxTime, maxCount: maxCount };
   }
 
+  function computeCollisions(participants, rows, events, marks, windowSec) {
+    // Build per-participant interval lists for each stream
+    // Screenspace: use clusters (5s threshold) to avoid double-counting
+    var ssClusters = clusterIntakeEvents(events, 5);
+    // Transcript: use clusters (5s threshold)
+    var trClusters = clusterTranscriptMarks(marks, 5);
+
+    // Group by participant
+    var ssByP = {}, trByP = {}, shByP = {};
+    for (var i = 0; i < participants.length; i++) {
+      ssByP[participants[i]] = [];
+      trByP[participants[i]] = [];
+      shByP[participants[i]] = [];
+    }
+    for (var a = 0; a < ssClusters.length; a++) {
+      var sc = ssClusters[a];
+      if (ssByP[sc.participant]) ssByP[sc.participant].push({ start: sc.start, end: sc.end });
+    }
+    for (var b = 0; b < trClusters.length; b++) {
+      var tc = trClusters[b];
+      if (trByP[tc.participant]) trByP[tc.participant].push({ start: tc.start, end: tc.end });
+    }
+    for (var r = 0; r < rows.length; r++) {
+      for (var p = 0; p < participants.length; p++) {
+        var pid = participants[p];
+        var cell = rows[r].cells[pid];
+        if (!cell || !cell.valid) continue;
+        var segs = parseSheetTimestamps(cell.value, pid);
+        for (var s = 0; s < segs.length; s++) {
+          shByP[pid].push({ start: segs[s].startSeconds, end: segs[s].startSeconds + segs[s].duration });
+        }
+      }
+    }
+
+    // Sort each list by start time
+    function sortIntervals(arr) {
+      arr.sort(function (a, b) { return a.start - b.start; });
+    }
+    for (var sp = 0; sp < participants.length; sp++) {
+      sortIntervals(ssByP[participants[sp]]);
+      sortIntervals(trByP[participants[sp]]);
+      sortIntervals(shByP[participants[sp]]);
+    }
+
+    function countPairCollisions(listA, listB, w) {
+      // For each interval in A, check if any in B overlaps within ±w
+      // Returns { aHits, bHits } — count of items in A/B that have at least one match
+      var aHit = 0, bHitSet = {};
+      for (var i = 0; i < listA.length; i++) {
+        var a = listA[i];
+        var matched = false;
+        for (var j = 0; j < listB.length; j++) {
+          var b = listB[j];
+          if (b.start > a.end + w) break; // sorted, no more overlaps possible
+          if (a.start - w < b.end && a.end + w > b.start) {
+            matched = true;
+            bHitSet[j] = true;
+          }
+        }
+        if (matched) aHit++;
+      }
+      return { aHits: aHit, bHits: Object.keys(bHitSet).length };
+    }
+
+    function computePair(byA, byB, w) {
+      var totalCollisions = 0, participantsWith = 0;
+      var totalA = 0, totalB = 0, totalAHits = 0, totalBHits = 0;
+      for (var i = 0; i < participants.length; i++) {
+        var pid = participants[i];
+        var la = byA[pid], lb = byB[pid];
+        totalA += la.length;
+        totalB += lb.length;
+        if (!la.length || !lb.length) continue;
+        var result = countPairCollisions(la, lb, w);
+        totalAHits += result.aHits;
+        totalBHits += result.bHits;
+        totalCollisions += result.aHits;
+        if (result.aHits > 0) participantsWith++;
+      }
+      return {
+        collision_count: totalCollisions,
+        participants_with: participantsWith,
+        participants_total: participants.length,
+        pct_a: totalA > 0 ? Math.round((totalAHits / totalA) * 100) : 0,
+        pct_b: totalB > 0 ? Math.round((totalBHits / totalB) * 100) : 0,
+        total_a: totalA,
+        total_b: totalB,
+      };
+    }
+
+    return {
+      window_seconds: windowSec,
+      screenspace_spreadsheet: computePair(ssByP, shByP, windowSec),
+      screenspace_transcript: computePair(ssByP, trByP, windowSec),
+      transcript_spreadsheet: computePair(trByP, shByP, windowSec),
+    };
+  }
+
   function isRowEmpty(row, participants) {
     for (var j = 0; j < participants.length; j++) {
       var c = row.cells[participants[j]];
@@ -511,6 +610,7 @@
       categoryBreakdown: computeCategoryBreakdown(rows, activeP),
       sessionSummary: computeSessionSummary(activeP, rows, events, marks),
       histogramData: computeHistogramData(activeP, rows, events, marks),
+      collisionStats: computeCollisions(activeP, rows, events, marks, mdState.collisionWindow),
     };
   }
 
@@ -549,6 +649,10 @@
     panel.appendChild(renderSection("cat-breakdown", "Category Breakdown \u2014 Spreadsheet",
       null, renderCategoryBreakdownBody, cache, !cache.hasSheet,
       "No spreadsheet data available."));
+    var streamCount = (cache.hasScreenspace ? 1 : 0) + (cache.hasSheet ? 1 : 0) + (cache.hasTranscript ? 1 : 0);
+    panel.appendChild(renderSection("collisions", "Cross-Stream Collisions",
+      null, renderCollisionBody, cache, streamCount < 2,
+      "Cross-stream collisions require data from at least two streams."));
     panel.appendChild(renderSection("sessions", "Session-Level Summary",
       cache.sessionSummary.length + " participants", renderSessionSummaryBody, cache, false, null));
 
@@ -586,6 +690,27 @@
     }
     bar.appendChild(pills);
 
+    var windowLabel = el("label", "md-collision-window-label");
+    windowLabel.textContent = "Collision window ";
+    var windowInput = document.createElement("input");
+    windowInput.type = "number";
+    windowInput.min = "1";
+    windowInput.max = "60";
+    windowInput.value = String(mdState.collisionWindow);
+    windowInput.className = "md-collision-input";
+    windowInput.autocomplete = "off";
+    windowInput.addEventListener("change", function () {
+      var val = parseInt(this.value, 10);
+      if (isNaN(val) || val < 1) val = 1;
+      if (val > 60) val = 60;
+      this.value = String(val);
+      mdState.collisionWindow = val;
+      recomputeCollisions();
+    });
+    windowLabel.appendChild(windowInput);
+    windowLabel.appendChild(document.createTextNode(" s"));
+    bar.appendChild(windowLabel);
+
     var actions = el("div", "md-header-actions");
 
     var refreshBtn = el("button", "btn btn-small btn-icon md-refresh-btn");
@@ -598,10 +723,16 @@
     actions.appendChild(refreshBtn);
 
     var exportBtn = el("button", "btn btn-small btn-icon md-export-btn");
-    exportBtn.innerHTML = '<span class="md-icon md-icon-export"></span> Export JSON';
+    exportBtn.innerHTML = '<span class="md-icon md-icon-export"></span> JSON';
     exportBtn.title = "Download metadata as JSON";
     exportBtn.addEventListener("click", exportJSON);
     actions.appendChild(exportBtn);
+
+    var csvBtn = el("button", "btn btn-small btn-icon md-export-btn");
+    csvBtn.innerHTML = '<span class="md-icon md-icon-export"></span> CSV';
+    csvBtn.title = "Download metadata as CSV (4 files)";
+    csvBtn.addEventListener("click", exportCSV);
+    actions.appendChild(csvBtn);
 
     bar.appendChild(actions);
     return bar;
@@ -1123,6 +1254,61 @@
     }
   }
 
+  // --- Section 7: Cross-Stream Collisions ---
+
+  function renderCollisionBody(body, cache) {
+    var cs = cache.collisionStats;
+    if (!cs) {
+      body.appendChild(el("div", "drop-target-empty", "No collision data."));
+      return;
+    }
+
+    var pairs = [
+      { key: "screenspace_spreadsheet", labelA: "Screenspace", labelB: "Spreadsheet" },
+      { key: "screenspace_transcript", labelA: "Screenspace", labelB: "Transcript" },
+      { key: "transcript_spreadsheet", labelA: "Transcript", labelB: "Spreadsheet" },
+    ];
+
+    var note = el("div", "md-collision-note",
+      "Collisions within \u00b1" + cs.window_seconds + "s window. Based on clusters, not raw events.");
+    body.appendChild(note);
+
+    for (var i = 0; i < pairs.length; i++) {
+      var pair = pairs[i];
+      var data = cs[pair.key];
+      // Skip pairs where both streams are empty
+      if (data.total_a === 0 && data.total_b === 0) continue;
+
+      var row = el("div", "md-collision-pair");
+
+      var pairLabel = el("span", "md-collision-pair-label",
+        pair.labelA + " \u2194 " + pair.labelB);
+      row.appendChild(pairLabel);
+
+      var stats = el("span", "md-collision-pair-stats");
+      stats.innerHTML =
+        "<strong>" + data.collision_count + "</strong> collisions &middot; " +
+        data.participants_with + "/" + data.participants_total + " participants &middot; " +
+        data.pct_a + "% of " + pair.labelA.toLowerCase() + " &middot; " +
+        data.pct_b + "% of " + pair.labelB.toLowerCase();
+      row.appendChild(stats);
+
+      // Visual: two small percentage bars
+      var bars = el("div", "md-collision-bars");
+      var barA = el("div", "md-collision-bar md-collision-bar-a");
+      barA.style.width = data.pct_a + "%";
+      barA.title = data.pct_a + "% of " + pair.labelA.toLowerCase() + " clusters overlap";
+      bars.appendChild(barA);
+      var barB = el("div", "md-collision-bar md-collision-bar-b");
+      barB.style.width = data.pct_b + "%";
+      barB.title = data.pct_b + "% of " + pair.labelB.toLowerCase() + " items overlap";
+      bars.appendChild(barB);
+      row.appendChild(bars);
+
+      body.appendChild(row);
+    }
+  }
+
   // --- Section 8: Session Summary ---
 
   function renderSmallMultiples(cache, compact) {
@@ -1376,6 +1562,7 @@
       severity_distribution: cache.severityDist,
       category_breakdown: cache.categoryBreakdown,
       session_summary: cache.sessionSummary,
+      cross_stream_collisions: cache.collisionStats,
     };
     var blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
     var url = URL.createObjectURL(blob);
@@ -1386,6 +1573,101 @@
     a.click();
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
+  }
+
+  // --- CSV Export ---
+
+  function csvEscape(val) {
+    var s = String(val == null ? "" : val);
+    if (s.indexOf(",") >= 0 || s.indexOf('"') >= 0 || s.indexOf("\n") >= 0) {
+      return '"' + s.replace(/"/g, '""') + '"';
+    }
+    return s;
+  }
+
+  function csvRow(fields) {
+    return fields.map(csvEscape).join(",");
+  }
+
+  function downloadCSV(filename, content) {
+    var blob = new Blob([content], { type: "text/csv" });
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
+
+  function exportCSV() {
+    var cache = mdState.cache;
+    if (!cache) return;
+    var prefix = getStudyName().replace(/[^a-zA-Z0-9_-]/g, "_");
+    var delay = 0;
+
+    // 1. Events CSV
+    if (cache.eventTypeStats.length) {
+      var evLines = [csvRow(["event_type", "detector", "total_count", "participant_coverage",
+        "participant_total", "first_occurrence_sec", "last_occurrence_sec",
+        "mean_time_sec", "mean_confidence", "mean_duration_sec"])];
+      for (var i = 0; i < cache.eventTypeStats.length; i++) {
+        var e = cache.eventTypeStats[i];
+        evLines.push(csvRow([e.event_type, e.detector, e.total_count, e.participant_coverage,
+          e.participant_total, e.first_sec.toFixed(1), e.last_sec.toFixed(1),
+          e.mean_time.toFixed(1), e.mean_confidence.toFixed(2), e.mean_duration.toFixed(1)]));
+      }
+      setTimeout(function () { downloadCSV(prefix + "_metadata_events.csv", evLines.join("\n")); }, delay);
+      delay += 200;
+    }
+
+    // 2. Sessions CSV
+    if (cache.sessionSummary.length) {
+      var cats = ["pain_point", "delight", "quote", "insight", "task", "bookmark"];
+      var sesHeader = ["participant", "spreadsheet_valid_cells", "spreadsheet_timestamps",
+        "screenspace_events", "screenspace_event_types", "transcript_marks"];
+      for (var c = 0; c < cats.length; c++) sesHeader.push("transcript_" + cats[c] + "s");
+      sesHeader.push("outlier");
+      var sesLines = [csvRow(sesHeader)];
+      for (var j = 0; j < cache.sessionSummary.length; j++) {
+        var s = cache.sessionSummary[j];
+        var row = [s.participant, s.sheet_valid_cells, s.sheet_timestamps,
+          s.ss_events, s.ss_event_types, s.tr_marks];
+        for (var k = 0; k < cats.length; k++) row.push(s.tr_by_category[cats[k]] || 0);
+        row.push(s.outlier_flags.length > 0 ? "true" : "false");
+        sesLines.push(csvRow(row));
+      }
+      setTimeout(function () { downloadCSV(prefix + "_metadata_sessions.csv", sesLines.join("\n")); }, delay);
+      delay += 200;
+    }
+
+    // 3. Collisions CSV
+    if (cache.collisionStats) {
+      var colLines = [csvRow(["pair", "window_seconds", "collision_count", "participants_with_collisions"])];
+      var pairs = ["screenspace_spreadsheet", "screenspace_transcript", "transcript_spreadsheet"];
+      for (var p = 0; p < pairs.length; p++) {
+        var cd = cache.collisionStats[pairs[p]];
+        colLines.push(csvRow([pairs[p], cache.collisionStats.window_seconds,
+          cd.collision_count, cd.participants_with]));
+      }
+      setTimeout(function () { downloadCSV(prefix + "_metadata_collisions.csv", colLines.join("\n")); }, delay);
+      delay += 200;
+    }
+
+    // 4. Observations CSV
+    if (cache.observationStats.length) {
+      var obsLines = [csvRow(["observation", "category", "severity", "total_timestamps",
+        "unique_participants", "first_occurrence_sec", "last_occurrence_sec"])];
+      for (var o = 0; o < cache.observationStats.length; o++) {
+        var ob = cache.observationStats[o];
+        obsLines.push(csvRow([ob.observation, ob.category, ob.severity,
+          ob.total_timestamps, ob.unique_participants,
+          ob.earliest_sec !== null ? ob.earliest_sec.toFixed(1) : "",
+          ob.latest_sec !== null ? ob.latest_sec.toFixed(1) : ""]));
+      }
+      setTimeout(function () { downloadCSV(prefix + "_metadata_observations.csv", obsLines.join("\n")); }, delay);
+    }
   }
 
   // --- Staleness detection ---
@@ -1421,6 +1703,35 @@
     renderAll(mdState.cache);
     takeSnapshot();
     setTimeout(initHistogramHover, 0);
+  }
+
+  function recomputeCollisions() {
+    if (!mdState.cache) return;
+    var events = getFilteredEvents(mdState.filterParticipants);
+    var marks = getFilteredMarks(mdState.filterParticipants);
+    var allRows = state.sheetData ? state.sheetData.rows : [];
+    var rows = [];
+    for (var i = 0; i < allRows.length; i++) {
+      if (!isRowEmpty(allRows[i], mdState.cache.participants)) rows.push(allRows[i]);
+    }
+    mdState.cache.collisionStats = computeCollisions(
+      mdState.cache.participants, rows, events, marks, mdState.collisionWindow);
+    // Re-render only the collision section
+    var section = qs('.md-section[data-section="collisions"]');
+    if (section) {
+      var body = section.querySelector(".md-section-body");
+      if (body) {
+        body.innerHTML = "";
+        var streamCount = (mdState.cache.hasScreenspace ? 1 : 0) +
+          (mdState.cache.hasSheet ? 1 : 0) + (mdState.cache.hasTranscript ? 1 : 0);
+        if (streamCount < 2) {
+          body.appendChild(el("div", "drop-target-empty",
+            "Cross-stream collisions require data from at least two streams."));
+        } else {
+          renderCollisionBody(body, mdState.cache);
+        }
+      }
+    }
   }
 
   function activate() {
