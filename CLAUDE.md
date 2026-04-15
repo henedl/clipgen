@@ -23,6 +23,8 @@ clipgen is a Python CLI tool that generates clips from timestamps stored in a Go
 | [interactive.py](interactive.py) | Interactive prompt helpers for all modes (line/range/cell/category/participant selection, browse mode); keeps generation functions pure |
 | [video.py](video.py) | ffmpeg/ffprobe operations: cut clips, screenshots, GIFs, concatenate reels, optional filesize compression |
 | [transcripts.py](transcripts.py) | Transcription via faster-whisper: `transcribe_video()`, segment filtering, write/read transcript files (Markdown/SRT/VTT) |
+| [ollama_client.py](ollama_client.py) | Ollama HTTP transport: `is_available()`, `list_models()`, `generate()`, auto-start of `ollama serve`. Pure transport — no prompt or response-parsing logic lives here. |
+| [thinking_agents.py](thinking_agents.py) | Registry of Ollama-powered "thinking agents" that reason over transcripts (summary, citations). Owns prompts, model selection, response parsing, and the `AGENTS` list. New agents are added by appending an `Agent` entry — no orchestrator edits needed. |
 | [titlecards.py](titlecards.py) | Titlecard/endcard generation: `build_titlecard_frame()`, `build_endcard_frame()`, `prepend_titlecard_to_clip()`, `append_endcard_to_clip()` — prepends/appends short FFmpeg video cards with text overlays |
 | [files.py](files.py) | Filename handling (unique names, truncation), `prepare_clip()` (parse timestamps + annotations, sanitize desc/category), clip discovery for reel-late |
 | [utils.py](utils.py) | Timestamp parsing, cell/header annotation parsing, rich/plain output helpers, progress bar utilities, keyword-aware input helpers |
@@ -63,6 +65,24 @@ Opt-in via `--manifest` or `config.MANIFEST_ENABLED`. Writes `clipgen_manifest.j
 ### Transcription ([transcripts.py](transcripts.py))
 
 Opt-in via `--transcribe` or `config.TRANSCRIBE_ENABLED`. Uses faster-whisper; model is lazy-loaded and cached per session. Data types, key function signatures, and pipeline integration details are documented in the [transcripts.py](transcripts.py) module docstring.
+
+### Local AI: Ollama thinking-agent pipeline
+
+Two layers, kept strictly separate:
+
+1. **Transport** — [ollama_client.py](ollama_client.py) is a thin HTTP wrapper around the Ollama REST API. Every LLM call in the project routes through `ollama_client.generate()`. It knows nothing about prompts, transcripts, or parsing. On connection-refused it auto-starts `ollama serve` and retries once.
+2. **Agents** — [thinking_agents.py](thinking_agents.py) defines the `Agent` shape (prompt building + model selection + response parsing + `depends_on` metadata + target `manifest_field`) and exports an ordered `AGENTS` list. The two built-in agents are `summary` (Pass 1: paragraph + bullets) and `citations` (Pass 2: supporting segments per claim, depends on `summary`).
+
+**Orchestration** lives in [transcripts_server.py](transcripts_server.py) as three small helpers — `_next_eligible_agent()`, `_run_agent()`, `_run_agent_chain()`. When a transcript completes (or a user hits Regenerate), the chain is re-entered and the first eligible agent is spawned in a daemon thread. An agent is eligible when it is enabled in config, its `manifest_field` is empty on the transcript entry, its `depends_on` agents' fields are populated, and it is not already running for that participant. After each agent finishes, the chain advances.
+
+Results are written into `source_transcripts[participant][manifest_field]` in `transcripts_manifest.json`. In-flight tracking is keyed per-agent via `_agent_in_flight[agent_key]`, surfaced to the frontend through generic `_is_generating(participant, agent_key)` checks at the API endpoints.
+
+**Adding a new agent** (e.g. keyword extractor, pain-point tagger):
+1. Add an `OLLAMA_<NAME>_ENABLED` toggle (and any `_MODEL` keys) to [config.py](config.py).
+2. Write a `run` callable in [thinking_agents.py](thinking_agents.py) that takes the transcript entry dict and returns the value to store (or `None` to skip).
+3. Append an `Agent` entry to `AGENTS` (respect topological order — dependencies before dependents).
+
+No edits to [transcripts_server.py](transcripts_server.py) or [ollama_client.py](ollama_client.py) are needed — the orchestrator picks up the new agent automatically. If the UI should surface the new result, add one endpoint or extend the existing response shape.
 
 ### Titlecards ([titlecards.py](titlecards.py))
 
