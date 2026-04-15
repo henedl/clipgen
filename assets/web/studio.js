@@ -16,6 +16,8 @@
     artifactStashes: [],
     settingsData: null,
     dividerOffset: 0,
+    bottomCollapsed: false,
+    dividerOffsetBeforeCollapse: 0,
     activeFunction: "",
     cellExpandHover: true,
     filtersVisible: false,
@@ -994,7 +996,7 @@
 
   // ---- Panel divider (resizable split between sheet preview and bottom panel) ----
 
-  function computeGridMaxHeight() {
+  function computeGridMaxHeight(bottomHeightOverride) {
     var header = qs("#studioHeader");
     var preview = qs("#sheetPreview");
     var divider = qs("#panelDivider");
@@ -1020,8 +1022,9 @@
 
     var headerRect = header.getBoundingClientRect();
     var sheetChrome = previewPadTop + phHeight + phMargin + fbHeight + fbMargin + previewPadBot;
+    var bottomH = bottomHeightOverride !== undefined ? bottomHeightOverride : bottom.offsetHeight;
     var available = window.innerHeight - headerRect.top - headerRect.height
-      - sheetChrome - divider.offsetHeight - bottom.offsetHeight;
+      - sheetChrome - divider.offsetHeight - bottomH;
 
     var MIN_GRID = 100;
     var maxAllowed = Math.max(0, available - MIN_GRID);
@@ -1049,6 +1052,7 @@
     var dragMaxOff = 0;    // stable upper bound for dividerOffset
 
     function onDown(e) {
+      if (state.bottomCollapsed) return;
       e.preventDefault();
       dragging = true;
       startY = e.clientY || (e.touches && e.touches[0].clientY) || 0;
@@ -1133,6 +1137,89 @@
 
     document.addEventListener("mouseup", onUp);
     document.addEventListener("touchend", onUp);
+
+    handle.addEventListener("dblclick", function (e) {
+      e.preventDefault();
+      toggleBottomPanel();
+    });
+  }
+
+  function toggleBottomPanel() {
+    var bottom = qs("#bottomPanel");
+    if (!bottom || bottom._transitioning) return;
+    bottom._transitioning = true;
+    var divider = qs("#panelDivider");
+
+    if (state.bottomCollapsed) {
+      // --- Restore ---
+      state.bottomCollapsed = false;
+      state.dividerOffset = 0;
+
+      // Measure target bottom height (temporarily lift the inline constraint)
+      bottom.style.transition = "none";
+      bottom.style.maxHeight = "none";
+      var targetH = bottom.offsetHeight;
+
+      // Transition divider margin from 20px → 0 alongside the bottom panel grow
+      if (divider) divider.style.marginBottom = "0";
+
+      document.body.classList.add("bottom-animating");
+
+      // Keep bottom-collapsed during animation so flex layout smoothly adjusts
+      bottom.style.maxHeight = "0px";
+      bottom.offsetHeight; // reflow — margin transition starts, bottom at 0
+      bottom.style.transition = "";
+      bottom.style.maxHeight = targetH + "px";
+
+      onCollapseTransitionEnd(bottom, function () {
+        document.body.classList.remove("bottom-collapsed");
+        document.body.classList.remove("bottom-animating");
+        if (divider) divider.style.marginBottom = "";
+        bottom.style.maxHeight = "";
+        bottom._transitioning = false;
+        computeGridMaxHeight();
+      });
+    } else {
+      // --- Collapse ---
+      state.bottomCollapsed = true;
+      state.dividerOffsetBeforeCollapse = state.dividerOffset;
+      state.dividerOffset = 0;
+
+      // Clear grid maxHeight — collapsed CSS flex rules fill the space instead
+      var panels = ["#sheetGrid", "#intakePanel", "#trIntakePanel", "#convergencePanel", "#metadataPanel"];
+      for (var i = 0; i < panels.length; i++) {
+        var p = qs(panels[i]);
+        if (p) p.style.maxHeight = "";
+      }
+
+      document.body.classList.add("bottom-animating");
+      var currentH = bottom.offsetHeight;
+      bottom.style.maxHeight = currentH + "px";
+      document.body.classList.add("bottom-collapsed");
+      bottom.offsetHeight; // reflow
+      bottom.style.maxHeight = "0px";
+
+      onCollapseTransitionEnd(bottom, function () {
+        bottom._transitioning = false;
+        document.body.classList.remove("bottom-animating");
+        computeGridMaxHeight(0);
+      });
+    }
+  }
+
+  function onCollapseTransitionEnd(el, cb) {
+    var fired = false;
+    function done() {
+      if (fired) return;
+      fired = true;
+      el.removeEventListener("transitionend", handler);
+      cb();
+    }
+    function handler(e) {
+      if (e.target === el && e.propertyName === "max-height") done();
+    }
+    el.addEventListener("transitionend", handler);
+    setTimeout(done, 400);
   }
 
   function renderDataRow(row, participants, showSeverity) {
