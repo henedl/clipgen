@@ -665,9 +665,6 @@
   function renderHeaderBar(cache) {
     var bar = el("div", "md-header-bar");
 
-    var title = el("h2", "md-title", "Metadata Overview");
-    bar.appendChild(title);
-
     var pills = el("div", "md-participant-pills");
     var allP = cache.allParticipants;
     for (var i = 0; i < allP.length; i++) {
@@ -689,27 +686,6 @@
       pills.appendChild(pill);
     }
     bar.appendChild(pills);
-
-    var windowLabel = el("label", "md-collision-window-label");
-    windowLabel.textContent = "Collision window ";
-    var windowInput = document.createElement("input");
-    windowInput.type = "number";
-    windowInput.min = "1";
-    windowInput.max = "60";
-    windowInput.value = String(mdState.collisionWindow);
-    windowInput.className = "md-collision-input";
-    windowInput.autocomplete = "off";
-    windowInput.addEventListener("change", function () {
-      var val = parseInt(this.value, 10);
-      if (isNaN(val) || val < 1) val = 1;
-      if (val > 60) val = 60;
-      this.value = String(val);
-      mdState.collisionWindow = val;
-      recomputeCollisions();
-    });
-    windowLabel.appendChild(windowInput);
-    windowLabel.appendChild(document.createTextNode(" s"));
-    bar.appendChild(windowLabel);
 
     var actions = el("div", "md-header-actions");
 
@@ -1263,15 +1239,37 @@
       return;
     }
 
+    // Window input — co-located with the data it affects
+    var windowRow = el("div", "md-collision-window-row");
+    var windowLabel = el("label", "md-collision-window-label");
+    windowLabel.textContent = "Time window \u00b1 ";
+    var windowInput = document.createElement("input");
+    windowInput.type = "number";
+    windowInput.min = "1";
+    windowInput.max = "60";
+    windowInput.value = String(mdState.collisionWindow);
+    windowInput.className = "md-collision-input";
+    windowInput.autocomplete = "off";
+    windowInput.addEventListener("change", function () {
+      var val = parseInt(this.value, 10);
+      if (isNaN(val) || val < 1) val = 1;
+      if (val > 60) val = 60;
+      this.value = String(val);
+      mdState.collisionWindow = val;
+      recomputeCollisions();
+    });
+    windowLabel.appendChild(windowInput);
+    windowLabel.appendChild(document.createTextNode(" s"));
+    windowRow.appendChild(windowLabel);
+    var windowNote = el("span", "md-collision-note", "Based on clusters, not raw events.");
+    windowRow.appendChild(windowNote);
+    body.appendChild(windowRow);
+
     var pairs = [
       { key: "screenspace_spreadsheet", labelA: "Screenspace", labelB: "Spreadsheet" },
       { key: "screenspace_transcript", labelA: "Screenspace", labelB: "Transcript" },
       { key: "transcript_spreadsheet", labelA: "Transcript", labelB: "Spreadsheet" },
     ];
-
-    var note = el("div", "md-collision-note",
-      "Collisions within \u00b1" + cs.window_seconds + "s window. Based on clusters, not raw events.");
-    body.appendChild(note);
 
     for (var i = 0; i < pairs.length; i++) {
       var pair = pairs[i];

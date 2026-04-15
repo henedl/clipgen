@@ -642,10 +642,16 @@
 
 /* ---- Collisions section ---- */
 
+.md-collision-window-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin-bottom: var(--space-3);
+}
+
 .md-collision-note {
   font-size: var(--text-xs);
   color: var(--color-text-dim);
-  margin-bottom: var(--space-3);
 }
 
 .md-collision-pair {
