@@ -40,7 +40,7 @@ from flask import Blueprint, Response, jsonify, request
 
 import config
 import files
-import ollama_client
+import thinking_agents
 import transcripts
 import utils
 
@@ -53,14 +53,21 @@ _worker: transcripts.TranscriptWorker | None = None
 _input_dir: str = ""
 _participants: list[dict[str, Any]] = []
 _manifest_lock = threading.Lock()
-_summary_threads: set[threading.Thread] = set()
-_generating_summaries: set[str] = (
-    set()
-)  # participant IDs with in-flight summary generation
-_citation_threads: set[threading.Thread] = set()
-_generating_citations: set[str] = (
-    set()
-)  # participant IDs with in-flight citation generation
+# Tracks in-flight thinking-agent runs, keyed by agent key (e.g. "summary",
+# "citations"). Each value is a set of participant IDs currently being
+# processed by that agent.
+_agent_threads: dict[str, set[threading.Thread]] = {
+    a["key"]: set() for a in thinking_agents.AGENTS
+}
+_agent_in_flight: dict[str, set[str]] = {
+    a["key"]: set() for a in thinking_agents.AGENTS
+}
+
+
+def _is_generating(participant: str, agent_key: str) -> bool:
+    """Return True if *agent_key* is currently running for *participant*."""
+    return participant in _agent_in_flight.get(agent_key, set())
+
 
 # ---- Blueprint ----
 
@@ -259,14 +266,14 @@ def api_summary(participant: str) -> FlaskResponse:
     with _manifest_lock:
         entry = _manifest.get("source_transcripts", {}).get(participant)
     if not entry or not entry.get("summary"):
-        if participant in _generating_summaries:
+        if _is_generating(participant, "summary"):
             return jsonify({"ok": False, "generating": True})
         return jsonify({"ok": False}), 404
     resp: dict[str, Any] = {"ok": True, "summary": entry["summary"]}
     citations = entry.get("citations")
     if citations:
         resp["citations"] = citations
-    resp["citations_generating"] = participant in _generating_citations
+    resp["citations_generating"] = _is_generating(participant, "citations")
     return jsonify(resp)
 
 
@@ -275,7 +282,7 @@ def api_summary_regenerate(participant: str) -> FlaskResponse:
     """Clear existing summary and re-trigger AI generation."""
     if not config.OLLAMA_SUMMARY_ENABLED:
         return jsonify({"ok": False, "error": "Summary generation is disabled"}), 400
-    if participant in _generating_summaries:
+    if _is_generating(participant, "summary"):
         return jsonify({"ok": True, "generating": True})
     with _manifest_lock:
         entry = _manifest.get("source_transcripts", {}).get(participant)
@@ -285,7 +292,7 @@ def api_summary_regenerate(participant: str) -> FlaskResponse:
         entry["summary"] = ""
         entry.pop("citations", None)
     _persist_manifest()
-    _trigger_summary_generation(participant)
+    _run_agent_chain(participant)
     return jsonify({"ok": True, "generating": True})
 
 
@@ -318,7 +325,7 @@ def api_citations(participant: str) -> FlaskResponse:
     citations = entry.get("citations") if entry else None
     if citations:
         return jsonify({"ok": True, "citations": citations})
-    if participant in _generating_citations:
+    if _is_generating(participant, "citations"):
         return jsonify({"ok": False, "generating": True})
     return jsonify({"ok": False}), 404
 
@@ -328,7 +335,7 @@ def api_citations_regenerate(participant: str) -> FlaskResponse:
     """Clear existing citations and re-trigger citation generation (Pass 2)."""
     if not config.OLLAMA_SUMMARY_ENABLED:
         return jsonify({"ok": False, "error": "Summary generation is disabled"}), 400
-    if participant in _generating_citations:
+    if _is_generating(participant, "citations"):
         return jsonify({"ok": True, "generating": True})
     with _manifest_lock:
         entry = _manifest.get("source_transcripts", {}).get(participant)
@@ -337,7 +344,7 @@ def api_citations_regenerate(participant: str) -> FlaskResponse:
     with _manifest_lock:
         entry.pop("citations", None)
     _persist_manifest()
-    _trigger_citation_generation(participant)
+    _run_agent("citations", participant)
     return jsonify({"ok": True, "generating": True})
 
 
@@ -808,11 +815,12 @@ def _do_persist() -> None:
     )
 
 
-# ---- AI Summary generation ----
+# ---- Thinking-agent orchestration ----
 
 
 def _on_task_complete() -> None:
-    """Persist manifest, then trigger summary generation for newly completed participants."""
+    """Persist manifest, then trigger the thinking-agent chain for newly
+    completed participants (those without a summary yet)."""
     newly_completed: list[str] = []
     if _worker:
         for task in _worker.get_all_tasks():
@@ -827,14 +835,69 @@ def _on_task_complete() -> None:
 
     _persist_manifest()
 
-    if not config.OLLAMA_SUMMARY_ENABLED:
-        return
     for pid in newly_completed:
-        _trigger_summary_generation(pid)
+        _run_agent_chain(pid)
 
 
-def _trigger_summary_generation(participant: str) -> None:
-    """Spawn daemon thread to generate AI summary for a participant."""
+def _agent_enabled(agent: thinking_agents.Agent) -> bool:
+    """Return True if *agent* is enabled in the current config."""
+    return bool(getattr(config, agent["enabled_config_key"], False))
+
+
+def _agent_dependencies_met(
+    agent: thinking_agents.Agent, entry: dict[str, Any]
+) -> bool:
+    """Return True if every dependency agent's manifest field is populated
+    on *entry*."""
+    for dep_key in agent["depends_on"]:
+        dep = thinking_agents.get_agent(dep_key)
+        if dep is None:
+            return False
+        if not entry.get(dep["manifest_field"]):
+            return False
+    return True
+
+
+def _next_eligible_agent(participant: str) -> thinking_agents.Agent | None:
+    """Find the first agent that should run next for *participant*.
+
+    An agent is eligible when:
+      - it is enabled,
+      - its result is not already on the entry,
+      - all of its dependencies are satisfied,
+      - it is not already running for this participant.
+    """
+    with _manifest_lock:
+        entry = _manifest.get("source_transcripts", {}).get(participant)
+        if not entry or not entry.get("segments"):
+            return None
+        for agent in thinking_agents.AGENTS:
+            if not _agent_enabled(agent):
+                continue
+            if entry.get(agent["manifest_field"]):
+                continue
+            if _is_generating(participant, agent["key"]):
+                continue
+            if not _agent_dependencies_met(agent, entry):
+                continue
+            return agent
+    return None
+
+
+def _run_agent(agent_key: str, participant: str) -> None:
+    """Spawn a daemon thread to run a single agent for *participant*.
+
+    On success, the agent's result is written to the manifest and the chain
+    advances to the next eligible agent. Guards against double-spawning via
+    ``_agent_in_flight``.
+    """
+    agent = thinking_agents.get_agent(agent_key)
+    if agent is None:
+        return
+    if not _agent_enabled(agent):
+        return
+    if _is_generating(participant, agent_key):
+        return
 
     def _run() -> None:
         try:
@@ -842,59 +905,45 @@ def _trigger_summary_generation(participant: str) -> None:
                 entry = _manifest.get("source_transcripts", {}).get(participant)
                 if not entry or not entry.get("segments"):
                     return
-                segments = list(entry["segments"])
-            summary = ollama_client.summarize_transcript(segments)
-            if summary:
+                # Snapshot the entry so the agent does not hold the lock
+                # during the (potentially slow) model call.
+                snapshot = dict(entry)
+            result = agent["run"](snapshot)
+            if result is not None:
                 with _manifest_lock:
                     entry = _manifest.get("source_transcripts", {}).get(participant)
-                    if entry:
-                        entry["summary"] = summary
+                    if entry is not None:
+                        entry[agent["manifest_field"]] = result
                 _persist_manifest()
-                # Chain into Pass 2: citation linking
-                _trigger_citation_generation(participant)
+                # Chain into the next eligible agent (e.g. summary → citations)
+                _run_agent_chain(participant)
         except Exception as exc:
-            utils.warning_print(f"Summary generation failed for {participant}: {exc}")
+            utils.warning_print(
+                f"{agent_key} generation failed for {participant}: {exc}"
+            )
         finally:
-            _generating_summaries.discard(participant)
-            _summary_threads.discard(t)
+            _agent_in_flight[agent_key].discard(participant)
+            _agent_threads[agent_key].discard(t)
 
-    _generating_summaries.add(participant)
-    t = threading.Thread(target=_run, daemon=True, name=f"summary-{participant}")
-    _summary_threads.add(t)
+    _agent_in_flight[agent_key].add(participant)
+    t = threading.Thread(
+        target=_run,
+        daemon=True,
+        name=f"{agent['thread_name_prefix']}-{participant}",
+    )
+    _agent_threads[agent_key].add(t)
     t.start()
 
 
-# ---- Citation generation (Pass 2) ----
+def _run_agent_chain(participant: str) -> None:
+    """Advance the thinking-agent chain for *participant* by one step.
 
-
-def _trigger_citation_generation(participant: str) -> None:
-    """Spawn daemon thread to find citation refs for a participant's summary."""
-
-    def _run() -> None:
-        try:
-            with _manifest_lock:
-                entry = _manifest.get("source_transcripts", {}).get(participant)
-                if not entry or not entry.get("summary") or not entry.get("segments"):
-                    return
-                summary = entry["summary"]
-                segments = list(entry["segments"])
-            citations = ollama_client.find_citations(summary, segments)
-            if citations is not None:
-                with _manifest_lock:
-                    entry = _manifest.get("source_transcripts", {}).get(participant)
-                    if entry:
-                        entry["citations"] = citations
-                _persist_manifest()
-        except Exception as exc:
-            utils.warning_print(f"Citation generation failed for {participant}: {exc}")
-        finally:
-            _generating_citations.discard(participant)
-            _citation_threads.discard(t)
-
-    _generating_citations.add(participant)
-    t = threading.Thread(target=_run, daemon=True, name=f"citations-{participant}")
-    _citation_threads.add(t)
-    t.start()
+    Starts the first eligible agent (if any). When that agent completes,
+    ``_run_agent`` re-enters this function to start the next step.
+    """
+    agent = _next_eligible_agent(participant)
+    if agent is not None:
+        _run_agent(agent["key"], participant)
 
 
 # ---- State initialization ----
