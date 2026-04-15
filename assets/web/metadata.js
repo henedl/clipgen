@@ -1250,14 +1250,16 @@
     windowInput.value = String(mdState.collisionWindow);
     windowInput.className = "md-collision-input";
     windowInput.autocomplete = "off";
-    windowInput.addEventListener("change", function () {
-      var val = parseInt(this.value, 10);
+    var debouncedRecompute = debounce(function () {
+      var val = parseInt(windowInput.value, 10);
       if (isNaN(val) || val < 1) val = 1;
       if (val > 60) val = 60;
-      this.value = String(val);
+      windowInput.value = String(val);
       mdState.collisionWindow = val;
       recomputeCollisions();
-    });
+    }, 300);
+    windowInput.addEventListener("input", debouncedRecompute);
+    windowInput.addEventListener("change", debouncedRecompute);
     windowLabel.appendChild(windowInput);
     windowLabel.appendChild(document.createTextNode(" s"));
     windowRow.appendChild(windowLabel);
