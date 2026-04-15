@@ -1035,6 +1035,8 @@
     if (trIntakePanel) trIntakePanel.style.maxHeight = maxH;
     var convergencePanel = qs("#convergencePanel");
     if (convergencePanel) convergencePanel.style.maxHeight = maxH;
+    var metadataPanel = qs("#metadataPanel");
+    if (metadataPanel) metadataPanel.style.maxHeight = maxH;
   }
 
   function initPanelDivider() {
