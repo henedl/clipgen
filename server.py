@@ -92,7 +92,7 @@ def _override_config(**overrides: Any) -> Iterator[None]:
 
 studio_bp = Blueprint("studio", __name__)
 
-utils.register_static_routes(studio_bp, "studio.html")
+utils.register_static_routes(studio_bp, "studio.html", icons=True)
 
 
 # ---- Helpers ----
