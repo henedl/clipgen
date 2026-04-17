@@ -118,6 +118,10 @@
     resultOverlay: null,
     heatmapOverlay: null,
     uploadedTemplate: null,
+    uploadedTemplateImg: null,
+    templateScalePreview: 1.0,
+    templateOverlayPos: null,
+    draggingTemplate: null,
     multitoolSteps: [],
     hoveredResultSceneName: null,
     videoPlaying: false,
@@ -1028,6 +1032,16 @@
       var displayW = _cachedOverlayRect.width || overlay.width;
       var s = overlay.width / displayW;
       var ctx = overlay.getContext("2d");
+      var tHit = templateOverlayBounds();
+      if (tHit
+          && pos.x >= tHit.x && pos.x <= tHit.x + tHit.w
+          && pos.y >= tHit.y && pos.y <= tHit.y + tHit.h) {
+        state.draggingTemplate = { offsetX: pos.x - tHit.x, offsetY: pos.y - tHit.y };
+        document.body.style.cursor = "grabbing";
+        document.body.style.userSelect = "none";
+        scheduleOverlayRender();
+        return;
+      }
       var hit = findHitRegion(pos.x, pos.y, s, ctx);
       if (hit && hit.handle === "resize") {
         var origR = state.regions[hit.name];
@@ -1064,6 +1078,16 @@
       var pos = canvasCoords(overlay, e, rect);
       var displayW = rect.width || overlay.width;
       var s = overlay.width / displayW;
+      if (state.draggingTemplate) {
+        var tImg = state.uploadedTemplateImg;
+        var tw = Math.max(1, Math.round(tImg.naturalWidth * (state.templateScalePreview || 1.0)));
+        var thh = Math.max(1, Math.round(tImg.naturalHeight * (state.templateScalePreview || 1.0)));
+        var nx = clamp(pos.x - state.draggingTemplate.offsetX, 0, overlay.width - tw);
+        var ny = clamp(pos.y - state.draggingTemplate.offsetY, 0, overlay.height - thh);
+        state.templateOverlayPos = { x: nx, y: ny };
+        scheduleOverlayRender();
+        return;
+      }
       if (state.resizingRegion) {
         var rName = state.resizingRegion.name;
         var rPx = regionToPixels(state.regions[rName]);
@@ -1090,15 +1114,30 @@
         return;
       }
       var ctx = overlay.getContext("2d");
-      var hit = findHitRegion(pos.x, pos.y, s, ctx);
+      var tBoundsHover = templateOverlayBounds();
+      var overTemplate = tBoundsHover
+        && pos.x >= tBoundsHover.x && pos.x <= tBoundsHover.x + tBoundsHover.w
+        && pos.y >= tBoundsHover.y && pos.y <= tBoundsHover.y + tBoundsHover.h;
+      var hit = overTemplate ? null : findHitRegion(pos.x, pos.y, s, ctx);
       state.hoveredRegion = hit;
-      overlay.style.cursor = hit ? (hit.handle === "resize" ? "nwse-resize" : "grab") : "crosshair";
+      if (overTemplate) {
+        overlay.style.cursor = "grab";
+      } else {
+        overlay.style.cursor = hit ? (hit.handle === "resize" ? "nwse-resize" : "grab") : "crosshair";
+      }
       scheduleOverlayRender();
     });
 
     overlay.addEventListener("mouseup", function (e) {
       if (state.pipetteActive) return;
       _cachedOverlayRect = null;
+      if (state.draggingTemplate) {
+        state.draggingTemplate = null;
+        document.body.style.cursor = "";
+        document.body.style.userSelect = "";
+        flushOverlayRender();
+        return;
+      }
       if (state.resizingRegion) {
         var rName = state.resizingRegion.name;
         state.resizingRegion = null;
@@ -1137,11 +1176,21 @@
 
     // Document-level listeners so drag/resize continues outside the canvas
     document.addEventListener("mousemove", function (e) {
-      if (!state.resizingRegion && !state.draggingRegion) return;
+      if (!state.resizingRegion && !state.draggingRegion && !state.draggingTemplate) return;
       var rect = _cachedOverlayRect || overlay.getBoundingClientRect();
       var pos = canvasCoords(overlay, e, rect);
       var displayW = rect.width || overlay.width;
       var s = overlay.width / displayW;
+      if (state.draggingTemplate) {
+        var tImg = state.uploadedTemplateImg;
+        var tw = Math.max(1, Math.round(tImg.naturalWidth * (state.templateScalePreview || 1.0)));
+        var thh = Math.max(1, Math.round(tImg.naturalHeight * (state.templateScalePreview || 1.0)));
+        var nx = clamp(pos.x - state.draggingTemplate.offsetX, 0, overlay.width - tw);
+        var ny = clamp(pos.y - state.draggingTemplate.offsetY, 0, overlay.height - thh);
+        state.templateOverlayPos = { x: nx, y: ny };
+        scheduleOverlayRender();
+        return;
+      }
       if (state.resizingRegion) {
         var rName = state.resizingRegion.name;
         var rPx = regionToPixels(state.regions[rName]);
@@ -1162,6 +1211,13 @@
 
     document.addEventListener("mouseup", function () {
       _cachedOverlayRect = null;
+      if (state.draggingTemplate) {
+        state.draggingTemplate = null;
+        document.body.style.cursor = "";
+        document.body.style.userSelect = "";
+        flushOverlayRender();
+        return;
+      }
       if (state.resizingRegion) {
         var rName = state.resizingRegion.name;
         state.resizingRegion = null;
@@ -1502,6 +1558,38 @@
     }
   }
 
+  function templateOverlayBounds() {
+    if (state.activeWorkflow !== "template") return null;
+    var tImg = state.uploadedTemplateImg;
+    if (!tImg || !tImg.naturalWidth) return null;
+    var canvas = qs("#overlayCanvas");
+    if (!canvas || !canvas.width) return null;
+    var scale = state.templateScalePreview || 1.0;
+    var w = Math.max(1, Math.round(tImg.naturalWidth * scale));
+    var h = Math.max(1, Math.round(tImg.naturalHeight * scale));
+    var x, y;
+    if (state.templateOverlayPos) {
+      x = state.templateOverlayPos.x;
+      y = state.templateOverlayPos.y;
+    } else {
+      var regs = state.previewRegions || state.regions;
+      var activeR = state.activeRegion && regs[state.activeRegion];
+      if (activeR) {
+        var aPx = regionToPixels(activeR);
+        x = aPx.x;
+        y = aPx.y;
+      } else {
+        var displayW = canvas.getBoundingClientRect().width || canvas.width;
+        var s = canvas.width / displayW;
+        x = Math.round(10 * s);
+        y = Math.round(10 * s);
+      }
+    }
+    x = Math.max(0, Math.min(canvas.width - w, x));
+    y = Math.max(0, Math.min(canvas.height - h, y));
+    return { x: x, y: y, w: w, h: h };
+  }
+
   function renderOverlay() {
     var canvas = qs("#overlayCanvas");
     if (!canvas.width || !canvas.height) return;
@@ -1602,6 +1690,30 @@
       ctx.font = Math.round(11 * s) + "px " + getThemeColors().fontMono;
       ctx.fillStyle = "rgba(255,255,255,0.9)";
       ctx.fillText(p.w + "\u00d7" + p.h + " px", p.x + Math.round(4 * s), p.y + p.h + Math.round(14 * s));
+    }
+
+    // Template preview: overlay the uploaded PNG at its effective in-video
+    // size (native PNG pixels * template_scale) so the user can see how
+    // large it will match. Canvas is sized in native video pixels, so the
+    // display-to-video ratio is applied automatically when the browser
+    // scales the canvas to fit the viewport. The overlay is draggable so
+    // the user can position it against specific elements in the frame.
+    var tBounds = templateOverlayBounds();
+    if (tBounds) {
+      var tImg = state.uploadedTemplateImg;
+      ctx.globalAlpha = state.draggingTemplate ? 0.9 : 0.75;
+      ctx.drawImage(tImg, tBounds.x, tBounds.y, tBounds.w, tBounds.h);
+      ctx.globalAlpha = 1.0;
+      ctx.strokeStyle = taskTypeColor("template");
+      ctx.lineWidth = (state.draggingTemplate ? 2 : 1.5) * s;
+      ctx.setLineDash([4 * s, 3 * s]);
+      ctx.strokeRect(tBounds.x, tBounds.y, tBounds.w, tBounds.h);
+      ctx.setLineDash([]);
+      ctx.font = Math.round(11 * s) + "px " + getThemeColors().fontMono;
+      ctx.fillStyle = taskTypeColor("template");
+      ctx.fillText(tBounds.w + "\u00d7" + tBounds.h + " px",
+        tBounds.x + Math.round(4 * s),
+        tBounds.y + tBounds.h + Math.round(14 * s));
     }
 
     // Result overlay: template match bounding boxes / flow motion arrows
@@ -3054,6 +3166,11 @@
         var b64 = dataUrl.split(",")[1];
         state.uploadedTemplate = { name: file.name, data: b64 };
         state.referenceTimestamp = null;
+        state.templateOverlayPos = null;
+        var previewImg = new Image();
+        previewImg.onload = function () { renderOverlay(); };
+        previewImg.src = dataUrl;
+        state.uploadedTemplateImg = previewImg;
         renderWorkflowParams();
         showToast("Template loaded: " + file.name);
       };
@@ -3065,6 +3182,12 @@
     tmplRefCtrl.appendChild(tmplFileInput);
 
     if (state.uploadedTemplate) {
+      if (!state.uploadedTemplateImg) {
+        var liveImg = new Image();
+        liveImg.onload = function () { renderOverlay(); };
+        liveImg.src = "data:image/png;base64," + state.uploadedTemplate.data;
+        state.uploadedTemplateImg = liveImg;
+      }
       var uploadInfo = el("span", "param-value template-upload-info");
       var uploadThumb = document.createElement("img");
       uploadThumb.src = "data:image/png;base64," + state.uploadedTemplate.data;
@@ -3074,7 +3197,10 @@
       var clearBtn = el("button", "btn btn-small", "\u00d7");
       clearBtn.addEventListener("click", function () {
         state.uploadedTemplate = null;
+        state.uploadedTemplateImg = null;
+        state.templateOverlayPos = null;
         renderWorkflowParams();
+        renderOverlay();
       });
       uploadInfo.appendChild(clearBtn);
       tmplRefCtrl.appendChild(uploadInfo);
@@ -3084,6 +3210,18 @@
     tmplRefRow.appendChild(tmplRefCtrl);
     container.appendChild(tmplRefRow);
     addParamRow(container, "Threshold", rangeInput("paramTemplateThresh", 0.50, 1.00, 0.70, 0.01), "paramTemplateThreshVal");
+    addParamRow(container, "Template scale", rangeInput("paramTemplateScale", 25, 200, 100, 5), "paramTemplateScaleVal");
+    var scaleHint = el("span", "param-hint", "% \u2014 resize the uploaded PNG before matching");
+    container.lastChild.querySelector(".param-control").appendChild(scaleHint);
+    var scaleSlider = qs("#paramTemplateScale");
+    if (scaleSlider) {
+      state.templateScalePreview = (parseFloat(scaleSlider.value) || 100) / 100;
+      scaleSlider.addEventListener("input", function () {
+        state.templateScalePreview = (parseFloat(scaleSlider.value) || 100) / 100;
+        renderOverlay();
+      });
+    }
+
     renderIntervalSlot("paramTemplateInterval", 0.5, 60, 1.0, 0.5);
   }
 
@@ -3897,6 +4035,10 @@
       }
       params.threshold = parseFloat((qs("#paramTemplateThresh") || {}).value) || 0.70;
       params.interval = parseFloat((qs("#paramTemplateInterval") || {}).value) || 1.0;
+      var scalePct = parseFloat((qs("#paramTemplateScale") || {}).value);
+      if (!isNaN(scalePct) && scalePct > 0 && scalePct !== 100) {
+        params.template_scale = scalePct / 100;
+      }
     } else if (type === "flow") {
       params.magnitude_threshold = parseFloat((qs("#paramFlowMag") || {}).value) || 2.0;
       params.interval = parseFloat((qs("#paramFlowInterval") || {}).value) || 1.0;

@@ -229,8 +229,25 @@ def _prepare_template(
     """
     k = config.SCREENSPACE_BLUR_KERNEL
     tmpl_gray = cv2.cvtColor(cv2.GaussianBlur(template, (k, k), 0), cv2.COLOR_BGR2GRAY)
-    gray_mask = cv2.GaussianBlur(mask, (k, k), 0) if mask is not None else None
-    degenerate = float(np.std(tmpl_gray)) < 1e-6
+    # Binarize the alpha mask (>= 128 -> 255, else 0) instead of blurring it.
+    # Soft-blurred masks let semi-transparent edge pixels contribute partially
+    # to cv2.matchTemplate, which inflates TM_CCOEFF_NORMED scores for
+    # mostly-transparent PNG icons and produces false positives.
+    if mask is not None:
+        _, gray_mask = cv2.threshold(mask, 127, 255, cv2.THRESH_BINARY)
+    else:
+        gray_mask = None
+    # Degenerate if the pixels that will actually contribute to matching have
+    # no variance. TM_CCOEFF_NORMED normalizes by the masked template std —
+    # when that is ~0 (e.g. a mostly-transparent PNG with a flat opaque patch,
+    # especially after scaling down) the denominator underflows and every
+    # position gets a near-1.0 score.
+    if gray_mask is not None:
+        masked = tmpl_gray[gray_mask > 0]
+        contributing_std = float(masked.std()) if masked.size else 0.0
+    else:
+        contributing_std = float(np.std(tmpl_gray))
+    degenerate = contributing_std < 1.0
     return (tmpl_gray, gray_mask, degenerate)
 
 
@@ -257,16 +274,32 @@ def _match_template_prepared(
     result = cv2.matchTemplate(
         frame_gray, tmpl_gray, cv2.TM_CCOEFF_NORMED, mask=gray_mask
     )
+    # Normalized correlation can produce inf/nan when a frame patch (or the
+    # masked template region) has near-zero variance — neutralize those
+    # before thresholding so they don't explode into thousands of false
+    # positives.
+    if not np.all(np.isfinite(result)):
+        result = np.where(np.isfinite(result), result, -1.0)
     locs = np.where(result >= threshold)
     if len(locs[0]) == 0:
         return []
 
-    # Collect raw detections sorted by score descending.
-    # TM_CCOEFF_NORMED can produce inf/nan when a frame patch has zero
-    # variance (constant colour) — skip those positions.
+    # Guard against pathological matchTemplate outputs (e.g. low-variance
+    # masked templates at certain scales) that can produce tens of thousands
+    # of above-threshold candidates. The O(n^2) NMS below would otherwise
+    # freeze the worker. Cap to the top _MAX_CANDIDATES by raw score.
+    _MAX_CANDIDATES = 5000
+    scores = result[locs]
+    if len(locs[0]) > _MAX_CANDIDATES:
+        top_idx = np.argpartition(scores, -_MAX_CANDIDATES)[-_MAX_CANDIDATES:]
+        ys, xs = locs[0][top_idx], locs[1][top_idx]
+        scores = scores[top_idx]
+    else:
+        ys, xs = locs[0], locs[1]
+
     detections: list[dict[str, Any]] = []
-    for pt_y, pt_x in zip(locs[0], locs[1]):
-        score = float(result[pt_y, pt_x])
+    for pt_y, pt_x, raw in zip(ys, xs, scores):
+        score = float(raw)
         if not math.isfinite(score):
             continue
         detections.append(
@@ -1353,6 +1386,7 @@ def scan_template(
     interval_seconds: float = 0.0,
     *,
     template_mask: np.ndarray | None = None,
+    template_scale: float = 1.0,
     start_seconds: float = 0.0,
     end_seconds: float | None = None,
     on_progress: Callable[[float], None] | None = None,
@@ -1362,10 +1396,10 @@ def scan_template(
 ) -> list[dict[str, Any]]:
     """Scan video for frames containing the template image.
 
-    The template is searched across the **full frame** (not limited to a
-    region).  *region* is unused for cropping but kept in the signature
-    for consistency with other workflows.  An optional *template_mask*
-    restricts matching to non-transparent regions of an uploaded PNG.
+    *template_scale* resizes the uploaded template before matching
+    (e.g. ``0.5`` for a template captured at 2x the in-video scale).  An
+    optional *template_mask* restricts matching to non-transparent regions
+    of an uploaded PNG.
 
     Returns list of ``{timestamp, matches, best_score, match_count}`` dicts.
     """
@@ -1386,10 +1420,27 @@ def scan_template(
 
     _tmpl_downscale = bool(fast_opts and fast_opts.get("template_downscale"))
 
+    # Resize the template (and mask) once up front based on user-supplied
+    # scale. The opt-in slider lets users compensate when their uploaded
+    # PNG is captured at a different pixel scale than its in-video
+    # rendering (e.g. a 50x50 icon appearing as 24x24 on screen).
+    scaled_template = template_image
+    scaled_mask = template_mask
+    if template_scale > 0 and abs(template_scale - 1.0) > 1e-6:
+        th, tw = template_image.shape[:2]
+        nw = max(8, int(round(tw * template_scale)))
+        nh = max(8, int(round(th * template_scale)))
+        interp = cv2.INTER_AREA if template_scale < 1.0 else cv2.INTER_CUBIC
+        scaled_template = cv2.resize(template_image, (nw, nh), interpolation=interp)
+        if template_mask is not None:
+            scaled_mask = cv2.resize(
+                template_mask, (nw, nh), interpolation=cv2.INTER_NEAREST
+            )
+
     # Hoist the constant template prep (blur + grayscale + variance check)
     # out of the per-frame callback. A degenerate template yields [] every
     # frame, so bail early before even opening the ffmpeg pipe.
-    _prepared = _prepare_template(template_image, template_mask)
+    _prepared = _prepare_template(scaled_template, scaled_mask)
     if _prepared[2]:  # degenerate template
         if on_progress:
             on_progress(1.0)
@@ -1403,10 +1454,12 @@ def scan_template(
         work_frame = frame
         scale_back = 1
         if _tmpl_downscale:
-            fh, fw = frame.shape[:2]
+            fh, fw = work_frame.shape[:2]
             nw, nh = fw // 2, fh // 2
             if nw > 0 and nh > 0:
-                work_frame = cv2.resize(frame, (nw, nh), interpolation=cv2.INTER_AREA)
+                work_frame = cv2.resize(
+                    work_frame, (nw, nh), interpolation=cv2.INTER_AREA
+                )
                 scale_back = 2
         matches = _match_template_prepared(
             work_frame, _prepared, threshold, _nms_overlap
@@ -2881,6 +2934,7 @@ class ScreenspaceWorker:
                 threshold=params.get("threshold", 0),
                 interval_seconds=params.get("interval", 0),
                 template_mask=tmpl_mask,
+                template_scale=float(params.get("template_scale", 1.0)),
                 start_seconds=params.get("start_seconds", 0.0),
                 end_seconds=params.get("end_seconds"),
                 on_progress=on_progress,
