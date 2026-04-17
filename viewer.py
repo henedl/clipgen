@@ -30,6 +30,7 @@ Artifact manifest (save_manifest / load_manifest_*):
 import base64
 import json
 import math
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -424,14 +425,68 @@ def generate_insights_viewer(
     )
 
 
+# Module-level cache for the parsed manifest, keyed on the file's path and
+# mtime_ns. Studio/Insights/Transcripts all hit `load_manifest_artifacts()`
+# repeatedly on every request; re-reading and re-parsing the JSON each time is
+# pure overhead. The cache is invalidated automatically whenever the file is
+# rewritten (save_manifest bumps mtime) so no explicit bust is required in the
+# normal happy path — _reset_manifest_cache() exists only for tests that reuse
+# the same output directory across mutations without touching mtime.
+_MANIFEST_CACHE_LOCK = threading.Lock()
+_manifest_cache: dict[str, Any] = {
+    "path": None,
+    "mtime_ns": None,
+    "artifacts": [],
+    "reels": [],
+}
+
+
+def _reset_manifest_cache() -> None:
+    """Drop the in-memory manifest cache. Intended for test fixtures."""
+    with _MANIFEST_CACHE_LOCK:
+        _manifest_cache["path"] = None
+        _manifest_cache["mtime_ns"] = None
+        _manifest_cache["artifacts"] = []
+        _manifest_cache["reels"] = []
+
+
 def _load_manifest_both() -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Load artifact and reel records from the manifest in a single read.
 
     Returns (artifacts, reels). Both default to [] on missing/corrupt file.
+
+    Memoizes the parsed result keyed on the manifest's path + mtime_ns so
+    repeated calls from the same process share a single read/parse until the
+    file is rewritten. Returns shallow copies so callers that mutate the
+    returned lists do not corrupt the cached state.
     """
+    path = Path(utils.get_effective_output_dir()) / config.MANIFEST_FILENAME
+    path_str = str(path)
+    try:
+        mtime_ns: int | None = path.stat().st_mtime_ns if path.is_file() else None
+    except OSError:
+        mtime_ns = None
+
+    with _MANIFEST_CACHE_LOCK:
+        if (
+            mtime_ns is not None
+            and _manifest_cache["path"] == path_str
+            and _manifest_cache["mtime_ns"] == mtime_ns
+        ):
+            return (
+                list(_manifest_cache["artifacts"]),
+                list(_manifest_cache["reels"]),
+            )
+
     data = utils.load_json_manifest(config.MANIFEST_FILENAME)
     if not isinstance(data, dict):
+        with _MANIFEST_CACHE_LOCK:
+            _manifest_cache["path"] = path_str
+            _manifest_cache["mtime_ns"] = mtime_ns
+            _manifest_cache["artifacts"] = []
+            _manifest_cache["reels"] = []
         return ([], [])
+
     raw = data.get("artifacts", [])
     valid = [a for a in raw if _is_valid_artifact(a)]
     if len(valid) < len(raw):
@@ -439,7 +494,15 @@ def _load_manifest_both() -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
             f"Manifest contained {len(raw) - len(valid)} artifact(s) with "
             "missing fields; skipped."
         )
-    return (valid, data.get("reels", []))
+    reels = data.get("reels", [])
+
+    with _MANIFEST_CACHE_LOCK:
+        _manifest_cache["path"] = path_str
+        _manifest_cache["mtime_ns"] = mtime_ns
+        _manifest_cache["artifacts"] = valid
+        _manifest_cache["reels"] = reels
+
+    return (list(valid), list(reels))
 
 
 def load_manifest_artifacts() -> list[dict[str, Any]]:
@@ -492,6 +555,11 @@ def save_manifest(
         output_format=output_format,
     )
 
-    return utils.save_json_manifest(
+    result = utils.save_json_manifest(
         config.MANIFEST_FILENAME, data, warn_label="manifest"
     )
+    # Invalidate the cache so the next load picks up what we just wrote,
+    # even if the filesystem's mtime resolution elides the change.
+    if result is not None:
+        _reset_manifest_cache()
+    return result

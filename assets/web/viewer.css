@@ -623,6 +623,11 @@ body {
   overflow: hidden;
   cursor: pointer;
   transition: box-shadow var(--duration-fast), border-color var(--duration-fast);
+  /* Let the browser skip layout/paint for offscreen cards. The intrinsic size
+     matches a typical rendered card (~260px wide x ~200px tall) closely enough
+     for the sidebar scrollbar to stay stable. */
+  content-visibility: auto;
+  contain-intrinsic-size: 260px 200px;
 }
 
 .artifact-card:hover {

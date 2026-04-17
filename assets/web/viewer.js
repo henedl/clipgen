@@ -180,8 +180,8 @@
 
   // ---- Sidebar video scrub ----
 
-  function cardScrubEnter(ev) {
-    var mediaEl = ev.currentTarget;
+  function cardScrubEnter(mediaEl, ev) {
+    if (!mediaEl) return;
     var card = mediaEl.closest(".artifact-card");
     if (!card) return;
     var id = card.dataset.id;
@@ -222,10 +222,9 @@
     };
   }
 
-  function cardScrubMove(ev) {
+  function cardScrubMove(mediaEl, ev) {
     if (!_cardScrub) return;
-    var mediaEl = ev.currentTarget;
-    if (mediaEl !== _cardScrub.mediaEl) return;
+    if (!mediaEl || mediaEl !== _cardScrub.mediaEl) return;
     var vid = _cardScrub.videoEl;
     if (!vid.duration || !isFinite(vid.duration)) return;
     if (vid.readyState < 1) return;
@@ -1229,10 +1228,74 @@
     updateSortToolbarUI();
   }
 
+  // Single pair of delegated listeners on #artifactList that dispatch to the
+  // scrub/tooltip/click handlers based on the event target. Installed once on
+  // first render and reused on subsequent renders — avoids attaching 4+
+  // listeners per card (O(N) with the artifact count).
+  var _artifactListDelegated = false;
+  var _hoveredCardId = null;
+  var _hoveredMediaEl = null;
+
+  function _ensureArtifactListDelegation() {
+    if (_artifactListDelegated) return;
+    var list = qs("#artifactList");
+    if (!list) return;
+    _artifactListDelegated = true;
+
+    list.addEventListener("click", function (ev) {
+      var card = ev.target.closest && ev.target.closest(".artifact-card");
+      if (!card || !list.contains(card)) return;
+      var id = card.dataset.id;
+      if (id) selectArtifact(id);
+    });
+
+    list.addEventListener("mouseover", function (ev) {
+      var card = ev.target.closest && ev.target.closest(".artifact-card");
+      if (!card || !list.contains(card)) return;
+      var id = card.dataset.id;
+      if (id !== _hoveredCardId) {
+        _hoveredCardId = id;
+        var a = findArtifact(id);
+        if (a) showTooltipForArtifact(a, ev);
+      }
+      var media = ev.target.closest && ev.target.closest(".artifact-media");
+      if (media && media !== _hoveredMediaEl) {
+        _hoveredMediaEl = media;
+        cardScrubEnter(media, ev);
+      }
+    });
+
+    list.addEventListener("mouseout", function (ev) {
+      var related = ev.relatedTarget;
+      if (_hoveredCardId) {
+        var card = document.querySelector(
+          '#artifactList .artifact-card[data-id="' + _hoveredCardId + '"]'
+        );
+        if (card && (!related || !card.contains(related))) {
+          _hoveredCardId = null;
+          hideTooltip();
+        }
+      }
+      if (_hoveredMediaEl) {
+        if (!related || !_hoveredMediaEl.contains(related)) {
+          _hoveredMediaEl = null;
+          cardScrubLeave();
+        }
+      }
+    });
+
+    list.addEventListener("mousemove", function (ev) {
+      if (_hoveredCardId) moveTooltip(ev);
+      if (_hoveredMediaEl) cardScrubMove(_hoveredMediaEl, ev);
+    });
+  }
+
   function renderList() {
     var list = qs("#artifactList");
     if (!list) return;
     list.innerHTML = "";
+    _hoveredCardId = null;
+    _hoveredMediaEl = null;
 
     var frag = document.createDocumentFragment();
     orderedArtifactsForList().forEach(function (a) {
@@ -1258,11 +1321,6 @@
           media.classList.add("thumb-pending");
         }
       }
-      if (a.type === "clip") {
-        media.addEventListener("mouseenter", cardScrubEnter);
-        media.addEventListener("mousemove", cardScrubMove);
-        media.addEventListener("mouseleave", cardScrubLeave);
-      }
       card.appendChild(media);
 
       var meta = el("div", "artifact-meta");
@@ -1279,18 +1337,10 @@
       ));
       card.appendChild(meta);
 
-      card.addEventListener("click", function () {
-        selectArtifact(a.id);
-      });
-      card.addEventListener("mouseenter", function (ev) {
-        showTooltipForArtifact(a, ev);
-      });
-      card.addEventListener("mousemove", moveTooltip);
-      card.addEventListener("mouseleave", hideTooltip);
-
       frag.appendChild(card);
     });
     list.appendChild(frag);
+    _ensureArtifactListDelegation();
 
     updateListVisibility();
     if (state.selectedId) {
@@ -1305,9 +1355,11 @@
   function updateListVisibility() {
     qsa("#artifactList .artifact-card").forEach(function (card) {
       var id = card.dataset.id;
-      if (state._filteredIds[id]) {
+      var shouldShow = !!state._filteredIds[id];
+      var isHidden = card.classList.contains("filtered-out");
+      if (shouldShow && isHidden) {
         card.classList.remove("filtered-out");
-      } else {
+      } else if (!shouldShow && !isHidden) {
         card.classList.add("filtered-out");
       }
     });
