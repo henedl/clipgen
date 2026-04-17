@@ -212,45 +212,47 @@ def compute_phash(region_pixels: np.ndarray) -> "imagehash.ImageHash":
     return imagehash.phash(pil_img)
 
 
-def match_template(
-    frame: np.ndarray,
-    template: np.ndarray,
-    threshold: float = 0.0,
-    nms_overlap: float = 0.0,
-    mask: np.ndarray | None = None,
-) -> list[dict[str, Any]]:
-    """Find all locations where template appears in frame.
+# Prepared template payload shared across frames in a scan: grayscale blurred
+# template, grayscale blurred mask (or None), and a "degenerate" flag set when
+# the template has near-zero variance (TM_CCOEFF_NORMED is undefined there).
+_PreparedTemplate = tuple[np.ndarray, "np.ndarray | None", bool]
 
-    Uses ``cv2.matchTemplate`` with ``TM_CCOEFF_NORMED``.  Non-maximum
-    suppression removes overlapping detections.  An optional *mask*
-    (same size as *template*, single-channel) restricts matching to
-    non-transparent regions — useful for uploaded PNGs with alpha.
 
-    Returns:
-        List of ``{x, y, w, h, score}`` dicts for each match above *threshold*.
+def _prepare_template(
+    template: np.ndarray, mask: np.ndarray | None
+) -> _PreparedTemplate:
+    """Compute the per-scan-constant grayscale template and mask once.
+
+    Hoisted out of :func:`match_template` so callers that run the same
+    template against many frames (scan_template, evaluate_region) can pay
+    the blur+cvtColor cost a single time instead of per-frame.
     """
-    if threshold <= 0.0:
-        threshold = config.SCREENSPACE_TEMPLATE_MATCH_THRESHOLD
-    if nms_overlap <= 0.0:
-        nms_overlap = config.SCREENSPACE_TEMPLATE_NMS_OVERLAP
+    k = config.SCREENSPACE_BLUR_KERNEL
+    tmpl_gray = cv2.cvtColor(cv2.GaussianBlur(template, (k, k), 0), cv2.COLOR_BGR2GRAY)
+    gray_mask = cv2.GaussianBlur(mask, (k, k), 0) if mask is not None else None
+    degenerate = float(np.std(tmpl_gray)) < 1e-6
+    return (tmpl_gray, gray_mask, degenerate)
+
+
+def _match_template_prepared(
+    frame: np.ndarray,
+    prepared: _PreparedTemplate,
+    threshold: float,
+    nms_overlap: float,
+) -> list[dict[str, Any]]:
+    """Match a frame against an already-prepared template payload."""
+    tmpl_gray, gray_mask, degenerate = prepared
+    if degenerate:
+        # A constant (zero-variance) template produces undefined TM_CCOEFF_NORMED
+        # results — every position may score ~1.0.  Bail out early.
+        return []
 
     k = config.SCREENSPACE_BLUR_KERNEL
     frame_gray = cv2.cvtColor(cv2.GaussianBlur(frame, (k, k), 0), cv2.COLOR_BGR2GRAY)
-    tmpl_gray = cv2.cvtColor(cv2.GaussianBlur(template, (k, k), 0), cv2.COLOR_BGR2GRAY)
 
     th, tw = tmpl_gray.shape[:2]
     if th > frame_gray.shape[0] or tw > frame_gray.shape[1]:
         return []
-
-    # A constant (zero-variance) template produces undefined TM_CCOEFF_NORMED
-    # results — every position may score ~1.0.  Bail out early.
-    if float(np.std(tmpl_gray)) < 1e-6:
-        return []
-
-    # Blur the mask to match the blurred template/frame
-    gray_mask = None
-    if mask is not None:
-        gray_mask = cv2.GaussianBlur(mask, (k, k), 0)
 
     result = cv2.matchTemplate(
         frame_gray, tmpl_gray, cv2.TM_CCOEFF_NORMED, mask=gray_mask
@@ -292,6 +294,40 @@ def match_template(
         if not overlaps:
             kept.append(det)
     return kept
+
+
+def match_template(
+    frame: np.ndarray,
+    template: np.ndarray,
+    threshold: float = 0.0,
+    nms_overlap: float = 0.0,
+    mask: np.ndarray | None = None,
+    *,
+    prepared: _PreparedTemplate | None = None,
+) -> list[dict[str, Any]]:
+    """Find all locations where template appears in frame.
+
+    Uses ``cv2.matchTemplate`` with ``TM_CCOEFF_NORMED``.  Non-maximum
+    suppression removes overlapping detections.  An optional *mask*
+    (same size as *template*, single-channel) restricts matching to
+    non-transparent regions — useful for uploaded PNGs with alpha.
+
+    When calling repeatedly with the same *template* / *mask* (e.g. one
+    scan over many frames), build a *prepared* tuple once with
+    :func:`_prepare_template` and pass it in to skip the per-call blur
+    and grayscale conversion of the template.
+
+    Returns:
+        List of ``{x, y, w, h, score}`` dicts for each match above *threshold*.
+    """
+    if threshold <= 0.0:
+        threshold = config.SCREENSPACE_TEMPLATE_MATCH_THRESHOLD
+    if nms_overlap <= 0.0:
+        nms_overlap = config.SCREENSPACE_TEMPLATE_NMS_OVERLAP
+
+    if prepared is None:
+        prepared = _prepare_template(template, mask)
+    return _match_template_prepared(frame, prepared, threshold, nms_overlap)
 
 
 def compute_optical_flow(
@@ -603,7 +639,9 @@ def _ffmpeg_pipe_frames(
             raw = proc.stdout.read(frame_size)
             if len(raw) < frame_size:
                 break
-            frame = np.frombuffer(raw, dtype=np.uint8).reshape((out_h, out_w, 3)).copy()
+            # Read-only view on the ffmpeg pipe bytes; callers treat frames as
+            # read-only and must .copy() if they retain past the next yield.
+            frame = np.frombuffer(raw, dtype=np.uint8).reshape((out_h, out_w, 3))
             ts = start_seconds + frame_idx * interval_seconds
             if end_seconds > 0 and ts > end_seconds:
                 break
@@ -1348,6 +1386,17 @@ def scan_template(
 
     _tmpl_downscale = bool(fast_opts and fast_opts.get("template_downscale"))
 
+    # Hoist the constant template prep (blur + grayscale + variance check)
+    # out of the per-frame callback. A degenerate template yields [] every
+    # frame, so bail early before even opening the ffmpeg pipe.
+    _prepared = _prepare_template(template_image, template_mask)
+    if _prepared[2]:  # degenerate template
+        if on_progress:
+            on_progress(1.0)
+        return results
+
+    _nms_overlap = config.SCREENSPACE_TEMPLATE_NMS_OVERLAP
+
     def _cb(ts: float, frame: np.ndarray) -> bool | None:
         if cancel_flag and cancel_flag():
             return False
@@ -1359,8 +1408,8 @@ def scan_template(
             if nw > 0 and nh > 0:
                 work_frame = cv2.resize(frame, (nw, nh), interpolation=cv2.INTER_AREA)
                 scale_back = 2
-        matches = match_template(
-            work_frame, template_image, threshold=threshold, mask=template_mask
+        matches = _match_template_prepared(
+            work_frame, _prepared, threshold, _nms_overlap
         )
         if matches:
             if scale_back > 1:
@@ -1832,8 +1881,18 @@ def check_frame_for_tool(
             "threshold", config.SCREENSPACE_TEMPLATE_MATCH_THRESHOLD
         )
         template_mask = parameters.get("template_mask")
+        # Cache the per-task-constant grayscale/mask on the parameters dict so
+        # multitool scans amortize the prep across frames.
+        prepared = parameters.get("_prepared_template")
+        if prepared is None:
+            prepared = _prepare_template(template_img, template_mask)
+            parameters["_prepared_template"] = prepared
         matches = match_template(
-            frame, template_img, threshold=threshold, mask=template_mask
+            frame,
+            template_img,
+            threshold=threshold,
+            mask=template_mask,
+            prepared=prepared,
         )
         if matches:
             best = max(m["score"] for m in matches)
