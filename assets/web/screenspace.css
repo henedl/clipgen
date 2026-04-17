@@ -1400,6 +1400,7 @@ body {
 }
 
 .template-upload-info img {
+  flex-shrink: 0;
   height: 24px;
   width: auto;
   border-radius: var(--radius-sm);

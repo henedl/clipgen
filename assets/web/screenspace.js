@@ -3177,7 +3177,7 @@
         previewImg.src = dataUrl;
         state.uploadedTemplateImg = previewImg;
         renderWorkflowParams();
-        showToast("Template loaded: " + file.name);
+        showToast("Template loaded");
       };
       reader.readAsDataURL(file);
     });
@@ -3201,9 +3201,9 @@
       var uploadInfo = el("span", "param-value template-upload-info");
       var uploadThumb = document.createElement("img");
       uploadThumb.src = "data:image/png;base64," + state.uploadedTemplate.data;
-      uploadThumb.alt = state.uploadedTemplate.name;
+      uploadThumb.alt = "Uploaded template";
+      uploadThumb.title = state.uploadedTemplate.name;
       uploadInfo.appendChild(uploadThumb);
-      uploadInfo.appendChild(document.createTextNode(state.uploadedTemplate.name));
       var clearBtn = el("button", "btn btn-small", "\u00d7");
       clearBtn.addEventListener("click", function () {
         state.uploadedTemplate = null;
