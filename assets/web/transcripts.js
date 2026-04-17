@@ -26,6 +26,8 @@
     sheetDefaultDuration: 60,
     sheetLoaded: false,
     xrefPollTimer: null,
+    xrefEligible: false,
+    xrefIndex: { eventsByParticipant: {}, sheetByParticipant: {} },
     tooltipsEnabled: true,
     summaryCollapsed: false,
     summaryEditing: false,
@@ -59,13 +61,26 @@
       if (data.insights) qs("#insightsLink").classList.remove("hidden");
       if (data.screenspace) qs("#screenspaceLink").classList.remove("hidden");
       if (data.screenspace || data.studio) {
-        loadCrossRefData();
-        state.xrefPollTimer = setInterval(loadCrossRefData, 30000);
+        state.xrefEligible = true;
+        startXrefPolling();
       }
     }).catch(function () {});
   }
 
   // ---- Cross-reference data ----
+
+  function startXrefPolling() {
+    if (!state.xrefEligible || state.xrefPollTimer) return;
+    loadCrossRefData();
+    state.xrefPollTimer = setInterval(loadCrossRefData, 30000);
+  }
+
+  function stopXrefPolling() {
+    if (state.xrefPollTimer) {
+      clearInterval(state.xrefPollTimer);
+      state.xrefPollTimer = null;
+    }
+  }
 
   function loadCrossRefData() {
     fetch("../screenspace/api/events?excluded=false")
@@ -74,6 +89,7 @@
         if (data.ok) {
           state.ssEvents = data.events || [];
           state.ssEventsLoaded = true;
+          _buildEventsIndex();
           if (state.searchResults) renderSearchResults(state.searchResults);
         }
       })
@@ -87,6 +103,7 @@
           state.sheetParticipants = data.participants || [];
           state.sheetDefaultDuration = data.defaultDuration || 60;
           state.sheetLoaded = true;
+          _buildSheetIndex();
           if (state.searchResults) renderSearchResults(state.searchResults);
         }
       })
@@ -123,27 +140,100 @@
     return segments;
   }
 
+  // Per-participant indexes keyed on start time. Rebuilt when loadCrossRefData
+  // receives fresh data, so findOverlapsForSearch can binary-search instead of
+  // linearly scanning ssEvents / sheetRows (and re-parsing sheet timestamps)
+  // on every rendered segment.
+
+  function _buildEventsIndex() {
+    var byP = {};
+    for (var i = 0; i < state.ssEvents.length; i++) {
+      var ev = state.ssEvents[i];
+      var p = ev.participant;
+      if (!byP[p]) byP[p] = [];
+      byP[p].push({ in: ev.time_in, out: ev.time_out, ev: ev });
+    }
+    for (var k in byP) {
+      byP[k].sort(function (a, b) { return a.in - b.in; });
+    }
+    state.xrefIndex.eventsByParticipant = byP;
+  }
+
+  function _buildSheetIndex() {
+    var byP = {};
+    for (var j = 0; j < state.sheetRows.length; j++) {
+      var row = state.sheetRows[j];
+      if (!row.cells) continue;
+      for (var p in row.cells) {
+        var cell = row.cells[p];
+        if (!cell || !cell.valid) continue;
+        var segs = parseSheetTimestamps(cell.value);
+        if (segs.length === 0) continue;
+        if (!byP[p]) byP[p] = [];
+        for (var k = 0; k < segs.length; k++) {
+          byP[p].push({
+            start: segs[k].start,
+            end: segs[k].start + segs[k].duration,
+            observation: row.observation,
+            category: row.category,
+            rowIdx: j,
+          });
+        }
+      }
+    }
+    for (var pp in byP) {
+      byP[pp].sort(function (a, b) { return a.start - b.start; });
+    }
+    state.xrefIndex.sheetByParticipant = byP;
+  }
+
+  // Binary search: return the first index where arr[i].key >= value, using the
+  // provided key function.
+  function _lowerBound(arr, value, keyFn) {
+    var lo = 0;
+    var hi = arr.length;
+    while (lo < hi) {
+      var mid = (lo + hi) >>> 1;
+      if (keyFn(arr[mid]) < value) lo = mid + 1;
+      else hi = mid;
+    }
+    return lo;
+  }
+
   function findOverlapsForSearch(participant, start, end) {
     var result = { screenspaceEvents: [], sheetObservations: [] };
 
-    for (var i = 0; i < state.ssEvents.length; i++) {
-      var ev = state.ssEvents[i];
-      if (ev.participant === participant && ev.time_in < end && ev.time_out > start) {
-        result.screenspaceEvents.push(ev);
+    var events = state.xrefIndex.eventsByParticipant[participant];
+    if (events && events.length > 0) {
+      // Candidates are entries where `in < end`. Since events are sorted by
+      // `in`, lower-bound on `end` gives us the exclusive upper cursor.
+      var upper = _lowerBound(events, end, function (e) { return e.in; });
+      for (var i = 0; i < upper; i++) {
+        if (events[i].out > start) result.screenspaceEvents.push(events[i].ev);
       }
     }
 
-    for (var j = 0; j < state.sheetRows.length; j++) {
-      var row = state.sheetRows[j];
-      var cell = row.cells[participant];
-      if (!cell || !cell.valid) continue;
-      var segs = parseSheetTimestamps(cell.value);
-      for (var k = 0; k < segs.length; k++) {
-        var segEnd = segs[k].start + segs[k].duration;
-        if (segs[k].start < end && segEnd > start) {
-          result.sheetObservations.push({ observation: row.observation, category: row.category });
-          break;
-        }
+    var segs = state.xrefIndex.sheetByParticipant[participant];
+    if (segs && segs.length > 0) {
+      var upper2 = _lowerBound(segs, end, function (s) { return s.start; });
+      // Preserve the original "first observation per row" behavior by de-duping
+      // on rowIdx. Row-iteration order matched sheet row order before; replicate
+      // that by collecting matches and sorting by rowIdx.
+      var seenRow = {};
+      var matches = [];
+      for (var m = 0; m < upper2; m++) {
+        if (segs[m].end <= start) continue;
+        var rid = segs[m].rowIdx;
+        if (seenRow[rid]) continue;
+        seenRow[rid] = true;
+        matches.push(segs[m]);
+      }
+      matches.sort(function (a, b) { return a.rowIdx - b.rowIdx; });
+      for (var n = 0; n < matches.length; n++) {
+        result.sheetObservations.push({
+          observation: matches[n].observation,
+          category: matches[n].category,
+        });
       }
     }
 
@@ -734,50 +824,45 @@
     }
     container.innerHTML = html;
 
-    // Attach event listeners
-    var rows = container.querySelectorAll(".segment-row");
-    for (var j = 0; j < rows.length; j++) {
-      (function (row) {
-        var textEl = row.querySelector(".segment-text");
-        var markEl = row.querySelector(".segment-mark");
-        row.querySelector(".segment-timestamp").addEventListener("click", function (e) {
-          e.stopPropagation();
-          var start = parseFloat(row.getAttribute("data-start"));
-          seekVideo(start);
-        });
-        textEl.addEventListener("click", function (e) {
-          e.stopPropagation();
-          if (state.editingTextEl === textEl) return;
-          var start = parseFloat(row.getAttribute("data-start"));
-          seekVideo(start);
-        });
-        textEl.addEventListener("dblclick", function (e) {
-          e.stopPropagation();
-          startSegmentEditing(textEl);
-        });
-        markEl.addEventListener("click", function (e) {
-          e.stopPropagation();
-          var segId = markEl.getAttribute("data-segment-id");
-          var idx = parseInt(row.getAttribute("data-index"), 10);
-          var seg = state.segments[idx];
-          var mark = seg && seg.marks && seg.marks.length > 0 ? seg.marks[0] : null;
-          if (mark) {
-            showMarkPopover(markEl, segId, mark);
-          } else {
-            toggleMark(segId);
-          }
-        });
-        row.querySelector(".segment-copy").addEventListener("click", function (e) {
-          e.stopPropagation();
-          var idx = parseInt(row.getAttribute("data-index"), 10);
-          var seg = state.segments[idx];
-          if (!seg) return;
-          navigator.clipboard.writeText(seg.text).then(function () {
-            showToast("Copied to clipboard");
-          });
-        });
-      })(rows[j]);
-    }
+    _ensureSegmentListDelegation();
+    _partialRender.count = 0;
+    _partialRender.pid = null;
+    _partialRender.segments = null;
+    _partialRender.marksVersion = _streamingMarksVersion;
+  }
+
+  // Append-only state for renderPartialSegments. Each streaming poll appends new
+  // trailing segments to #segmentList instead of rebuilding the entire list. A
+  // full rebuild is only performed when the participant changes, when the
+  // segment count drops (restart), or when the in-memory marks cache changes.
+
+  var _partialRender = {
+    pid: null,
+    count: 0,
+    segments: null,
+    marksVersion: 0,
+  };
+
+  function _renderPartialSegmentRow(seg, i, pid) {
+    var segId = pid + ":" + i;
+    var cachedMark = _streamingMarks[segId];
+    var cachedColor = cachedMark ? cachedMark.color : null;
+    var markClass = "segment-mark" + (cachedColor ? " marked" : "");
+    var markStyle = cachedColor ? ' style="background:' + cachedColor + '"' : "";
+    var html = '<div class="segment-row segment-streaming" data-index="' + i + '" data-start="' + seg.start + '">';
+    html += '<span class="' + markClass + '" data-segment-id="' + escapeHtml(segId) + '"' + markStyle + '></span>';
+    html += '<span class="segment-timestamp">' + fmtTime(seg.start) + '</span>';
+    html += '<span class="segment-text">' + escapeHtml(seg.text) + '</span>';
+    html += '<span class="segment-copy" title="Copy text"><span class="segment-copy-icon"></span></span>';
+    html += '</div>';
+    return html;
+  }
+
+  function _streamingIndicatorHtml(progress) {
+    return '<div class="streaming-indicator">' +
+      '<span class="streaming-dot"></span>' +
+      'Transcribing\u2026 ' + Math.round(progress * 100) + '%' +
+      '</div>';
   }
 
   function renderPartialSegments(segments, progress) {
@@ -786,92 +871,149 @@
     var pid = state.streamingParticipant || state.selectedParticipant;
     empty.classList.add("hidden");
 
-    // If user is actively editing a segment, skip DOM rebuild to preserve edit state
+    // If user is actively editing a segment, skip DOM mutation to preserve edit state
     if (state.editingTextEl && state.editingTextEl.isConnected) return;
 
-    // Invalidate cached segment rows since we're rebuilding DOM
+    // Row list changes shape on both append and rebuild paths.
     _cachedSegmentRows = null;
 
-    // Only auto-scroll if user is near the bottom
     var nearBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 100;
 
-    var html = "";
-    for (var i = 0; i < segments.length; i++) {
-      var seg = segments[i];
-      var segId = pid + ":" + i;
-      var cachedMark = _streamingMarks[segId];
-      var cachedColor = cachedMark ? cachedMark.color : null;
-      var markClass = "segment-mark" + (cachedColor ? " marked" : "");
-      var markStyle = cachedColor ? ' style="background:' + cachedColor + '"' : "";
-      html += '<div class="segment-row segment-streaming" data-index="' + i + '" data-start="' + seg.start + '">';
-      html += '<span class="' + markClass + '" data-segment-id="' + escapeHtml(segId) + '"' + markStyle + '></span>';
-      html += '<span class="segment-timestamp">' + fmtTime(seg.start) + '</span>';
-      html += '<span class="segment-text">' + escapeHtml(seg.text) + '</span>';
-      html += '<span class="segment-copy" title="Copy text"><span class="segment-copy-icon"></span></span>';
-      html += '</div>';
-    }
-    html += '<div class="streaming-indicator">';
-    html += '<span class="streaming-dot"></span>';
-    html += 'Transcribing\u2026 ' + Math.round(progress * 100) + '%';
-    html += '</div>';
+    var canAppend =
+      _partialRender.pid === pid &&
+      _partialRender.marksVersion === _streamingMarksVersion &&
+      segments.length >= _partialRender.count &&
+      container.querySelector(".segment-streaming") !== null;
 
-    container.innerHTML = html;
-
-    // Click-to-seek on timestamps/text, dblclick-to-edit, and mark clicks
-    var rows = container.querySelectorAll(".segment-streaming");
-    for (var j = 0; j < rows.length; j++) {
-      (function (row) {
-        var textEl = row.querySelector(".segment-text");
-        row.querySelector(".segment-timestamp").addEventListener("click", function (e) {
-          e.stopPropagation();
-          seekVideo(parseFloat(row.getAttribute("data-start")));
-        });
-        textEl.addEventListener("click", function (e) {
-          e.stopPropagation();
-          if (state.editingTextEl === textEl) return;
-          seekVideo(parseFloat(row.getAttribute("data-start")));
-        });
-        textEl.addEventListener("dblclick", function (e) {
-          e.stopPropagation();
-          startSegmentEditing(textEl);
-        });
-        row.querySelector(".segment-mark").addEventListener("click", function (e) {
-          e.stopPropagation();
-          var segId = this.getAttribute("data-segment-id");
-          var existing = _streamingMarks[segId];
-          if (existing) {
-            showMarkPopover(this, segId, existing);
-          } else {
-            toggleMarkStreaming(segId, this);
-          }
-        });
-        row.querySelector(".segment-copy").addEventListener("click", function (e) {
-          e.stopPropagation();
-          var idx = parseInt(row.getAttribute("data-index"), 10);
-          var seg = segments[idx];
-          if (!seg) return;
-          navigator.clipboard.writeText(seg.text).then(function () {
-            showToast("Copied to clipboard");
-          });
-        });
-      })(rows[j]);
+    if (canAppend && segments.length > _partialRender.count) {
+      // Append only the new trailing rows, then move/refresh the indicator.
+      var indicator = container.querySelector(".streaming-indicator");
+      if (indicator) indicator.parentNode.removeChild(indicator);
+      var tmp = document.createElement("div");
+      var fragHtml = "";
+      for (var a = _partialRender.count; a < segments.length; a++) {
+        fragHtml += _renderPartialSegmentRow(segments[a], a, pid);
+      }
+      tmp.innerHTML = fragHtml;
+      var frag = document.createDocumentFragment();
+      while (tmp.firstChild) frag.appendChild(tmp.firstChild);
+      container.appendChild(frag);
+      container.insertAdjacentHTML("beforeend", _streamingIndicatorHtml(progress));
+    } else if (canAppend && segments.length === _partialRender.count) {
+      // Same segment count - only refresh the progress indicator.
+      var ind = container.querySelector(".streaming-indicator");
+      if (ind) ind.parentNode.removeChild(ind);
+      container.insertAdjacentHTML("beforeend", _streamingIndicatorHtml(progress));
+    } else {
+      // Full rebuild: pid change, restart, or marks cache changed.
+      var html = "";
+      for (var i = 0; i < segments.length; i++) {
+        html += _renderPartialSegmentRow(segments[i], i, pid);
+      }
+      html += _streamingIndicatorHtml(progress);
+      container.innerHTML = html;
+      _ensureSegmentListDelegation();
     }
+
+    _partialRender.pid = pid;
+    _partialRender.count = segments.length;
+    _partialRender.segments = segments;
+    _partialRender.marksVersion = _streamingMarksVersion;
 
     if (nearBottom) {
       container.scrollTop = container.scrollHeight;
     }
   }
 
+  // ---- Segment list event delegation ----
+
+  var _segmentListDelegated = false;
+
+  function _ensureSegmentListDelegation() {
+    if (_segmentListDelegated) return;
+    var container = qs("#segmentList");
+    if (!container) return;
+    _segmentListDelegated = true;
+
+    container.addEventListener("click", function (e) {
+      var row = e.target.closest(".segment-row");
+      if (!row) return;
+      var isStreaming = row.classList.contains("segment-streaming");
+      var idx = parseInt(row.getAttribute("data-index"), 10);
+      var start = parseFloat(row.getAttribute("data-start"));
+
+      var markEl = e.target.closest(".segment-mark");
+      if (markEl && row.contains(markEl)) {
+        e.stopPropagation();
+        var segId = markEl.getAttribute("data-segment-id");
+        if (isStreaming) {
+          var existing = _streamingMarks[segId];
+          if (existing) showMarkPopover(markEl, segId, existing);
+          else toggleMarkStreaming(segId, markEl);
+        } else {
+          var seg = state.segments[idx];
+          var mark = seg && seg.marks && seg.marks.length > 0 ? seg.marks[0] : null;
+          if (mark) showMarkPopover(markEl, segId, mark);
+          else toggleMark(segId);
+        }
+        return;
+      }
+
+      var copyEl = e.target.closest(".segment-copy");
+      if (copyEl && row.contains(copyEl)) {
+        e.stopPropagation();
+        var src = isStreaming ? (_partialRender.segments || []) : state.segments;
+        var segCopy = src[idx];
+        if (!segCopy) return;
+        navigator.clipboard.writeText(segCopy.text).then(function () {
+          showToast("Copied to clipboard");
+        });
+        return;
+      }
+
+      var tsEl = e.target.closest(".segment-timestamp");
+      if (tsEl && row.contains(tsEl)) {
+        e.stopPropagation();
+        seekVideo(start);
+        return;
+      }
+
+      var textEl = e.target.closest(".segment-text");
+      if (textEl && row.contains(textEl)) {
+        e.stopPropagation();
+        if (state.editingTextEl === textEl) return;
+        seekVideo(start);
+        return;
+      }
+    });
+
+    container.addEventListener("dblclick", function (e) {
+      var row = e.target.closest(".segment-row");
+      if (!row) return;
+      var textEl = e.target.closest(".segment-text");
+      if (!textEl || !row.contains(textEl)) return;
+      e.stopPropagation();
+      startSegmentEditing(textEl);
+    });
+  }
+
   // Cache marks made during streaming so they survive DOM rebuilds.
-  // Each entry: { color, id, category, label }
+  // Each entry: { color, id, category, label }. `version` is bumped on any
+  // write to invalidate renderPartialSegments' append-only fast path.
   var _streamingMarks = {};
+  var _streamingMarksVersion = 0;
   var _streamingMarksLoaded = false;
+
+  function _bumpStreamingMarksVersion() {
+    _streamingMarksVersion++;
+  }
 
   function _loadStreamingMarks(pid) {
     if (_streamingMarksLoaded) return;
     _streamingMarksLoaded = true;
     apiGet("api/marks").then(function (data) {
       if (!data.ok) return;
+      var added = false;
       data.marks.forEach(function (m) {
         if (!m.valid || m.participant !== pid) return;
         if (_streamingMarks[m.segment_id]) return; // don't overwrite fresh marks
@@ -882,7 +1024,9 @@
           category: m.category,
           label: m.label || "",
         };
+        added = true;
       });
+      if (added) _bumpStreamingMarksVersion();
     });
   }
 
@@ -1176,6 +1320,7 @@
           category: m.category,
           label: m.label || "",
         };
+        _bumpStreamingMarksVersion();
       }
     });
   }
@@ -1187,7 +1332,11 @@
         hideMarkPopover();
         if (state.streamingParticipant) {
           for (var key in _streamingMarks) {
-            if (_streamingMarks[key].id === markId) { delete _streamingMarks[key]; break; }
+            if (_streamingMarks[key].id === markId) {
+              delete _streamingMarks[key];
+              _bumpStreamingMarksVersion();
+              break;
+            }
           }
           pollTaskStatus();
         } else if (state.selectedParticipant) {
@@ -1208,6 +1357,7 @@
             if (_streamingMarks[key].id === markId) {
               _streamingMarks[key].category = category;
               _streamingMarks[key].color = cat.color;
+              _bumpStreamingMarksVersion();
               break;
             }
           }
@@ -1728,6 +1878,7 @@
       if (newlyCompleted.length > 0) {
         _streamingMarks = {};
         _streamingMarksLoaded = false;
+        _bumpStreamingMarksVersion();
         loadParticipants().then(function () {
           if (state.selectedParticipant && newlyCompleted.indexOf(state.selectedParticipant) >= 0) {
             state.streamingParticipant = null;
@@ -2149,8 +2300,10 @@
     document.addEventListener("visibilitychange", function () {
       if (document.hidden) {
         stopPolling();
+        stopXrefPolling();
       } else {
         pollTaskStatus();
+        startXrefPolling();
       }
     });
 
