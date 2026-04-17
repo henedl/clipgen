@@ -147,6 +147,17 @@
       </div>
       <div id="workflowBody">
         <div id="workflowParams"></div>
+        <div id="modelViewPanel" class="model-view-panel collapsed">
+          <button id="modelViewToggle" class="model-view-toggle" type="button" aria-expanded="false">
+            <span class="model-view-icon"></span>
+            <span class="model-view-label">Model view</span>
+            <span class="model-view-hint">what the CV model sees</span>
+          </button>
+          <div id="modelViewBody" class="model-view-body hidden">
+            <div id="modelViewMeta" class="model-view-meta">Select a region to preview.</div>
+            <img id="modelViewImage" alt="Preprocessed preview" />
+          </div>
+        </div>
       </div>
     </section>
     <div id="taskQueuePanel">
