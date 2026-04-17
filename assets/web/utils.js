@@ -152,33 +152,7 @@ var DETECTOR_COLORS = (function () {
 var THEME_STORAGE_KEY = "clipgen-theme";
 var TOOLTIP_STORAGE_KEY = "clipgen-tooltips";
 
-// Old per-UI theme keys — checked on every page load so stragglers are migrated.
-var _THEME_OLD_KEYS = [
-  "clipgen-studio-theme", "clipgen-screenspace-theme",
-  "clipgen-insights-theme", "clipgen-insights-viewer-theme",
-  "clipgen-gallery-theme", "clipgen-viewer-theme", "clipgen-transcripts-theme",
-];
-
-var _migrateThemeKey = function () {
-  try {
-    var shared = window.localStorage.getItem(THEME_STORAGE_KEY);
-    if (!shared) {
-      for (var i = 0; i < _THEME_OLD_KEYS.length; i++) {
-        var val = window.localStorage.getItem(_THEME_OLD_KEYS[i]);
-        if (val === "light" || val === "dark") {
-          window.localStorage.setItem(THEME_STORAGE_KEY, val);
-          break;
-        }
-      }
-    }
-    for (var j = 0; j < _THEME_OLD_KEYS.length; j++) {
-      window.localStorage.removeItem(_THEME_OLD_KEYS[j]);
-    }
-  } catch (_) {}
-};
-
 var applyStoredThemePreference = function () {
-  _migrateThemeKey();
   var stored = null;
   try { stored = window.localStorage.getItem(THEME_STORAGE_KEY); } catch (_) {}
   var root = document.documentElement;
