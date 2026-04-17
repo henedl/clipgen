@@ -12,7 +12,17 @@ clipgen is a self-contained Python CLI tool with no databases or Docker services
 
 ## Running commands
 
-| Task | Command ||------|---------|| Lint | `uvx ruff check` and `uvx ruff format --check` || Type check | `uvx ty check` || Tests | `uv run --no-sync pytest -c tests/pytest.ini` || Run app (CLI help) | `uv run clipgen.py --help` || Run Screenspace UI | `uv run clipgen.py --screenspace -i DIR -o DIR` (no spreadsheet needed) || Run Insights UI | `uv run clipgen.py --insights -i DIR -o DIR` (reads from manifest) || Run Studio UI | `uv run clipgen.py --studio` (requires a spreadsheet) |All web UIs serve on `http://127.0.0.1:8089`. The Flask server starts automatically when launching `--studio`, `--screenspace`, or `--insights`.
+| Task | Command |
+|------|---------|
+| Lint | `uvx ruff check` and `uvx ruff format --check` |
+| Type check | `uvx ty check` |
+| Tests | `uv run --no-sync pytest -c tests/pytest.ini` |
+| Run app (CLI help) | `uv run clipgen.py --help` |
+| Run Screenspace UI | `uv run clipgen.py --screenspace -i DIR -o DIR` (no spreadsheet needed) |
+| Run Insights UI | `uv run clipgen.py --insights -i DIR -o DIR` (reads from manifest) |
+| Run Studio UI | `uv run clipgen.py --studio` (requires a spreadsheet) |
+
+All web UIs serve on `http://127.0.0.1:8089`. The Flask server starts automatically when launching `--studio`, `--screenspace`, or `--insights`.
 
 ## Gotchas
 

@@ -10,7 +10,7 @@ API endpoints (all under /screenspace/):
   GET  /media/<filename>                    – serve artifact media files
   GET  /api/participants                    – list discovered participant videos
   GET  /api/video/frame/<participant>/<ts>  – extract a JPEG frame at timestamp
-  GET  /api/preview/<participant>/<ts>      – PNG of the active tool's preprocessed view
+  GET|POST /api/preview/<participant>/<ts>   – PNG of the active tool's preprocessed view
   GET  /api/video/info/<participant>        – video metadata (duration, resolution, fps)
   GET  /api/video/stream/<participant>     – stream source video (mp4, range-aware)
   GET  /api/regions                         – list regions
@@ -86,6 +86,35 @@ _TASK_BINARY_KEYS = (
     "template_mask",
     "reference_scenes",
 )
+
+
+def _template_bgr_and_mask_from_b64(upload_b64: str) -> tuple[Any, Any]:
+    """Decode a base64-encoded image file into a BGR template and optional uint8 mask.
+
+    RGBA inputs yield ``(bgr, alpha_mask)``; RGB/gray yield ``(bgr, None)``.
+
+    Raises:
+        ValueError: invalid base64 or undecodable image bytes.
+    """
+    import base64
+
+    import cv2
+    import numpy as np
+
+    try:
+        img_bytes = base64.b64decode(upload_b64)
+    except (ValueError, binascii.Error) as exc:
+        raise ValueError("Could not decode uploaded image") from exc
+    img_arr = np.frombuffer(img_bytes, dtype=np.uint8)
+    img = cv2.imdecode(img_arr, cv2.IMREAD_UNCHANGED)
+    if img is None:
+        raise ValueError("Invalid image data")
+    if len(img.shape) == 2:
+        return cv2.cvtColor(img, cv2.COLOR_GRAY2BGR), None
+    if img.shape[2] == 4:
+        return cv2.cvtColor(img, cv2.COLOR_BGRA2BGR), img[:, :, 3]
+    return img, None
+
 
 # ---- Module-level state (set once by _init_screenspace_state) ----
 
@@ -213,7 +242,7 @@ def api_video_frame(participant: str, timestamp: str) -> FlaskResponse:
     )
 
 
-@screenspace_bp.route("/api/preview/<participant>/<timestamp>")
+@screenspace_bp.route("/api/preview/<participant>/<timestamp>", methods=["GET", "POST"])
 def api_preview(participant: str, timestamp: str) -> FlaskResponse:
     """Render what the selected tool's CV pipeline sees at ``timestamp``.
 
@@ -224,10 +253,15 @@ def api_preview(participant: str, timestamp: str) -> FlaskResponse:
       tool=<name>          one of the 11 screenspace tool types
       region=x,y,w,h       normalized 0–1 region coordinates (required for most tools)
       prev=<seconds>       prior timestamp for change/flow (defaults to ts-1s)
-      ref=<seconds>        reference timestamp for similarity (full-frame region crop)
+      ref=<seconds>        reference timestamp for similarity (region crop) or template
+                           capture preview (same as ``reference_timestamp`` in tasks)
       noise=<int>          change tool's noise_threshold override
       h,s,v=<int>          color tool's target HSV override
       magnitude=<float>    flow tool's magnitude threshold override
+
+    For **template** with an **uploaded** PNG, send ``POST`` with JSON body
+    ``{"template_image_data": "<base64>"}`` (same field as task enqueue); query
+    string still supplies ``tool``, ``region`` (optional), and ``_`` cache-bust.
     """
     import screenspace_preview
 
@@ -320,6 +354,42 @@ def api_preview(participant: str, timestamp: str) -> FlaskResponse:
                     params["reference_frame"] = _ss.extract_region(
                         ref_frame, region_coords
                     )
+
+    elif tool == "template":
+        import screenspace as _ss_tpl
+
+        upload_b64: str | None = None
+        if request.method == "POST":
+            body = request.get_json(silent=True)
+            if isinstance(body, dict):
+                raw = body.get("template_image_data")
+                if isinstance(raw, str) and raw.strip():
+                    upload_b64 = raw.strip()
+        if upload_b64:
+            try:
+                bgr, mask = _template_bgr_and_mask_from_b64(upload_b64)
+            except ValueError:
+                return jsonify(
+                    {"ok": False, "error": "Could not decode uploaded image"}
+                ), 400
+            params["template_image"] = bgr
+            if mask is not None:
+                params["template_mask"] = mask
+        else:
+            ref_ts_raw = request.args.get("ref")
+            if ref_ts_raw is not None and region_coords is not None:
+                try:
+                    ref_ts_tpl = float(ref_ts_raw)
+                except ValueError:
+                    ref_ts_tpl = None  # type: ignore[assignment]
+                if ref_ts_tpl is not None:
+                    ref_frame_tpl = video.extract_frame_at_timestamp(
+                        video_path, ref_ts_tpl
+                    )
+                    if ref_frame_tpl is not None:
+                        params["template_image"] = _ss_tpl.extract_region(
+                            ref_frame_tpl, region_coords
+                        )
 
     img = screenspace_preview.build_preview(
         frame, prev_frame, region_coords, tool, params
@@ -799,30 +869,17 @@ def _extract_task_media(
         parameters["reference_frame"] = ref_region
 
     if task_type == "template":
-        import base64
-
-        import cv2
-        import numpy as np
-
         upload_b64 = parameters.pop("template_image_data", None)
         if upload_b64:
             try:
-                img_bytes = base64.b64decode(upload_b64)
-                img_arr = np.frombuffer(img_bytes, dtype=np.uint8)
-                img = cv2.imdecode(img_arr, cv2.IMREAD_UNCHANGED)
-            except (ValueError, binascii.Error):
+                bgr, mask = _template_bgr_and_mask_from_b64(upload_b64)
+            except ValueError:
                 return jsonify(
                     {"ok": False, "error": "Could not decode uploaded image"}
                 ), 400
-            if img is None:
-                return jsonify({"ok": False, "error": "Invalid image data"}), 400
-            if len(img.shape) == 2:
-                img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
-            if img.shape[2] == 4:
-                parameters["template_mask"] = img[:, :, 3]
-                parameters["template_image"] = cv2.cvtColor(img, cv2.COLOR_BGRA2BGR)
-            else:
-                parameters["template_image"] = img
+            parameters["template_image"] = bgr
+            if mask is not None:
+                parameters["template_mask"] = mask
         else:
             ref_ts = cast(float, parameters["reference_timestamp"])
             frame = video.extract_frame_at_timestamp(video_path, float(ref_ts))
@@ -869,10 +926,6 @@ def _prepare_multitool_steps(
 
     Returns the updated parameters on success, or a Flask error response on failure.
     """
-    import base64
-
-    import cv2
-    import numpy as np
     import screenspace
 
     steps = parameters.get("steps", [])
@@ -904,27 +957,17 @@ def _prepare_multitool_steps(
             upload_b64 = step.pop("template_image_data", None)
             if upload_b64:
                 try:
-                    img_bytes = base64.b64decode(upload_b64)
-                    img_arr = np.frombuffer(img_bytes, dtype=np.uint8)
-                    img = cv2.imdecode(img_arr, cv2.IMREAD_UNCHANGED)
-                except (ValueError, binascii.Error):
+                    bgr, mask = _template_bgr_and_mask_from_b64(upload_b64)
+                except ValueError:
                     return jsonify(
                         {
                             "ok": False,
                             "error": f"Step {i}: could not decode uploaded image",
                         }
                     ), 400
-                if img is None:
-                    return jsonify(
-                        {"ok": False, "error": f"Step {i}: invalid image data"}
-                    ), 400
-                if len(img.shape) == 2:
-                    img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
-                if img.shape[2] == 4:
-                    step["template_mask"] = img[:, :, 3]
-                    step["template_image"] = cv2.cvtColor(img, cv2.COLOR_BGRA2BGR)
-                else:
-                    step["template_image"] = img
+                step["template_image"] = bgr
+                if mask is not None:
+                    step["template_mask"] = mask
             else:
                 ref_ts = cast(float, step["reference_timestamp"])
                 frame = video.extract_frame_at_timestamp(video_path, float(ref_ts))

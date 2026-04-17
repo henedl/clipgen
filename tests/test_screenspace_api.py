@@ -321,6 +321,84 @@ def test_create_template_task_no_region_with_upload(client):
     assert "video" in data["error"].lower()
 
 
+def test_api_preview_template_capture_includes_template_panel(
+    client, monkeypatch
+) -> None:
+    """GET template preview with ref+region yields a wider composite than without ref."""
+    import cv2
+    import numpy as np
+    import video
+
+    _enable_video_task_setup(monkeypatch, "P01")
+    frame = np.zeros((240, 320, 3), dtype=np.uint8)
+    frame[50:110, 80:180] = (10, 180, 90)
+    monkeypatch.setattr(
+        video, "extract_frame_at_timestamp", lambda _path, _ts: frame.copy()
+    )
+
+    region = "0.25,0.2083333333,0.3125,0.25"
+    r_noref = client.get(
+        f"/screenspace/api/preview/P01/0.500?tool=template&region={region}"
+    )
+    r_with = client.get(
+        f"/screenspace/api/preview/P01/0.500?tool=template&region={region}&ref=0.0"
+    )
+    assert r_noref.status_code == 200
+    assert r_with.status_code == 200
+    a = cv2.imdecode(np.frombuffer(r_noref.data, np.uint8), cv2.IMREAD_COLOR)
+    b = cv2.imdecode(np.frombuffer(r_with.data, np.uint8), cv2.IMREAD_COLOR)
+    assert a is not None and b is not None
+    assert b.shape[1] > a.shape[1]
+
+
+def test_api_preview_template_post_upload(client, monkeypatch) -> None:
+    """POST template preview with template_image_data includes the template patch."""
+    import base64
+
+    import cv2
+    import numpy as np
+    import video
+
+    _enable_video_task_setup(monkeypatch, "P01")
+    frame = np.zeros((240, 320, 3), dtype=np.uint8)
+    monkeypatch.setattr(
+        video, "extract_frame_at_timestamp", lambda _path, _ts: frame.copy()
+    )
+
+    tile = np.zeros((40, 50, 3), dtype=np.uint8)
+    tile[:] = (40, 50, 60)
+    ok, buf = cv2.imencode(".png", tile)
+    assert ok
+    b64 = base64.b64encode(buf.tobytes()).decode()
+
+    resp = client.post(
+        "/screenspace/api/preview/P01/0.0?tool=template",
+        json={"template_image_data": b64},
+    )
+    assert resp.status_code == 200
+    assert resp.mimetype == "image/png"
+    out = cv2.imdecode(np.frombuffer(resp.data, np.uint8), cv2.IMREAD_COLOR)
+    assert out is not None
+    assert out.shape[1] > 400
+
+
+def test_api_preview_template_post_invalid_image(client, monkeypatch) -> None:
+    _enable_video_task_setup(monkeypatch, "P01")
+    import numpy as np
+    import video
+
+    monkeypatch.setattr(
+        video,
+        "extract_frame_at_timestamp",
+        lambda _path, _ts: np.zeros((240, 320, 3), dtype=np.uint8),
+    )
+    resp = client.post(
+        "/screenspace/api/preview/P01/0.0?tool=template",
+        json={"template_image_data": "qqqq"},
+    )
+    assert resp.status_code == 400
+
+
 def test_create_non_template_task_still_requires_region(client):
     """Non-template tasks still require a region."""
     resp = client.post(

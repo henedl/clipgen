@@ -3476,8 +3476,22 @@
 
     var tool = state.activeWorkflow;
     var regionStr = _normalizedRegionString();
-    var fullFrameTools = { template: true };
-    if (!fullFrameTools[tool] && !regionStr) {
+
+    if (tool === "template") {
+      if (state.uploadedTemplate && state.uploadedTemplate.data) {
+        // POST with template_image_data — region optional
+      } else if (state.referenceTimestamp != null) {
+        if (!regionStr) {
+          meta.textContent = "Select or draw a region to preview the captured template.";
+          img.removeAttribute("src");
+          return;
+        }
+      } else {
+        meta.textContent = "Capture a template region or upload a PNG to preview.";
+        img.removeAttribute("src");
+        return;
+      }
+    } else if (!regionStr) {
       meta.textContent = "Select or draw a region to preview.";
       img.removeAttribute("src");
       return;
@@ -3493,6 +3507,13 @@
     if (tool === "similarity" && state.referenceTimestamp != null) {
       qsParts.push("ref=" + Number(state.referenceTimestamp).toFixed(3));
     }
+    if (
+      tool === "template" &&
+      state.referenceTimestamp != null &&
+      !(state.uploadedTemplate && state.uploadedTemplate.data)
+    ) {
+      qsParts.push("ref=" + Number(state.referenceTimestamp).toFixed(3));
+    }
     Object.keys(params).forEach(function (k) {
       qsParts.push(encodeURIComponent(k) + "=" + encodeURIComponent(params[k]));
     });
@@ -3503,16 +3524,58 @@
       + "/" + ts + "?" + qsParts.join("&");
 
     meta.textContent = "Loading preview…";
+
+    function applyPreviewError() {
+      if (gen !== _modelViewGen) return;
+      meta.textContent = "Preview unavailable.";
+      img.removeAttribute("src");
+    }
+
+    function applyPreviewOkFromBlob(blob) {
+      if (gen !== _modelViewGen) return;
+      if (img._modelViewObjectUrl) {
+        URL.revokeObjectURL(img._modelViewObjectUrl);
+        img._modelViewObjectUrl = null;
+      }
+      var u = URL.createObjectURL(blob);
+      img._modelViewObjectUrl = u;
+      img.src = u;
+      meta.textContent = MODEL_VIEW_META[tool] || "";
+    }
+
+    var useTemplatePost = tool === "template" && state.uploadedTemplate && state.uploadedTemplate.data;
+    if (useTemplatePost) {
+      fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ template_image_data: state.uploadedTemplate.data }),
+      })
+        .then(function (r) {
+          if (!r.ok) throw new Error("preview http " + r.status);
+          return r.blob();
+        })
+        .then(function (blob) {
+          if (gen !== _modelViewGen) return;
+          applyPreviewOkFromBlob(blob);
+        })
+        .catch(function () {
+          applyPreviewError();
+        });
+      return;
+    }
+
     var tmp = new Image();
     tmp.onload = function () {
       if (gen !== _modelViewGen) return;
+      if (img._modelViewObjectUrl) {
+        URL.revokeObjectURL(img._modelViewObjectUrl);
+        img._modelViewObjectUrl = null;
+      }
       img.src = tmp.src;
       meta.textContent = MODEL_VIEW_META[tool] || "";
     };
     tmp.onerror = function () {
-      if (gen !== _modelViewGen) return;
-      meta.textContent = "Preview unavailable.";
-      img.removeAttribute("src");
+      applyPreviewError();
     };
     tmp.src = url;
   }
