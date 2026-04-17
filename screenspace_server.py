@@ -766,6 +766,10 @@ def _coerce_task_params(
                         step.get("scene_references"),
                         context=step_context,
                     )
+                if step.get("type") == "template":
+                    _coerce_template_controls(step)
+        if task_type == "template":
+            _coerce_template_controls(parameters)
     except ValueError as exc:
         return jsonify({"ok": False, "error": str(exc)}), 400
 
@@ -1222,6 +1226,21 @@ def _coerce_float(
     if not math.isfinite(number):
         raise ValueError(f"{context}{field_name} must be a finite number")
     return number
+
+
+def _coerce_template_controls(params: dict[str, Any], *, context: str = "") -> None:
+    """Validate template-tool controls: template_scale."""
+    import config
+
+    if "template_scale" in params and params["template_scale"] is not None:
+        scale = _coerce_float(
+            params["template_scale"], "template_scale", context=context
+        )
+        if scale is None or scale <= 0:
+            raise ValueError(f"{context}template_scale must be a positive number")
+        lo = config.SCREENSPACE_TEMPLATE_SCALE_MIN
+        hi = config.SCREENSPACE_TEMPLATE_SCALE_MAX
+        params["template_scale"] = max(lo, min(hi, scale))
 
 
 def _validate_scene_references(
