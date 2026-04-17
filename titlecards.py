@@ -10,8 +10,7 @@ or the --titlecards / --no-titlecards CLI flags.
 Key functions:
   build_titlecard_frame(clip, resolution) – build the title card FFmpeg segment
   build_endcard_frame(resolution)         – build the endcard FFmpeg segment
-  prepend_titlecard_to_clip(clip, clip_path) – prepend title card to an existing clip file
-  append_endcard_to_clip(clip_path)          – append endcard to an existing clip file
+  wrap_clip_with_cards(clip, clip_path)   – single-pass prepend+append via one ffmpeg encode
 """
 
 import os
@@ -30,14 +29,6 @@ from utils import ClipRecord
 
 _endcard_cache: dict[str, str] = {}
 _endcard_lock = threading.Lock()
-
-
-def _get_video_resolution(filepath: str) -> str | None:
-    """Return 'WIDTHxHEIGHT' resolution string for the first video stream."""
-    props = video.probe_video_properties(filepath)
-    if props is None:
-        return None
-    return f"{props['width']}x{props['height']}"
 
 
 def _build_drawtext_filter(text: str) -> str:
@@ -233,188 +224,214 @@ def clear_endcard_cache() -> None:
         _endcard_cache.clear()
 
 
-def prepend_titlecard_to_clip(
-    clip: ClipRecord, clip_path: str, resolution: str | None = None
-) -> bool:
-    """Prepend a generated titlecard to an existing clip file in-place.
+def _input_count(input_args: list[str]) -> int:
+    """Return the number of ffmpeg -i inputs present in *input_args*."""
+    return sum(1 for tok in input_args if tok == "-i")
 
-    Returns True when the clip is usable (with or without titlecard), False on hard failure.
+
+def _build_wrap_filter_and_inputs(
+    *,
+    titlecard_path: str | None,
+    clip_path: str,
+    endcard_path: str | None,
+    has_clip_audio: bool,
+    card_duration: int,
+) -> tuple[list[str], str, list[str]]:
+    """Construct the ffmpeg input args, filter_complex string, and map args for wrapping.
+
+    Returns a tuple of (input_args, filter_complex, map_args). Caller appends codec
+    options and the output path. The clip itself is always one of the inputs; title
+    and end cards are optional. Audio is preserved (with silence padding aligned to
+    card durations) when the clip has an audio stream, otherwise the output is
+    video-only so we don't depend on clip duration probing.
+    """
+    input_args: list[str] = []
+    video_labels: list[str] = []
+    audio_labels: list[str] = []
+
+    def add_input(args: list[str]) -> int:
+        idx = _input_count(input_args)
+        input_args.extend(args)
+        return idx
+
+    def anullsrc_input(duration: int) -> list[str]:
+        return [
+            "-f",
+            "lavfi",
+            "-t",
+            str(duration),
+            "-i",
+            "anullsrc=channel_layout=stereo:sample_rate=48000",
+        ]
+
+    # Video inputs, in playback order: title, clip, end.
+    title_idx: int | None = None
+    end_idx: int | None = None
+
+    if titlecard_path:
+        title_idx = add_input(["-i", titlecard_path])
+        video_labels.append(f"[{title_idx}:v]")
+
+    clip_idx = add_input(["-i", clip_path])
+    video_labels.append(f"[{clip_idx}:v]")
+
+    if endcard_path:
+        end_idx = add_input(["-i", endcard_path])
+        video_labels.append(f"[{end_idx}:v]")
+
+    filter_parts: list[str] = []
+
+    if has_clip_audio:
+        # Matching silent audio tracks for each card so concat sees a 1:1 v/a pairing.
+        title_a_label: str | None = None
+        end_a_label: str | None = None
+        if title_idx is not None:
+            idx = add_input(anullsrc_input(card_duration))
+            title_a_label = f"[{idx}:a]"
+        if end_idx is not None:
+            idx = add_input(anullsrc_input(card_duration))
+            end_a_label = f"[{idx}:a]"
+
+        # Normalize clip audio to a consistent rate/layout so concat doesn't reject it.
+        filter_parts.append(
+            f"[{clip_idx}:a]aresample=48000,"
+            "aformat=channel_layouts=stereo:sample_rates=48000[aclip]"
+        )
+
+        if title_a_label:
+            audio_labels.append(title_a_label)
+        audio_labels.append("[aclip]")
+        if end_a_label:
+            audio_labels.append(end_a_label)
+
+        interleaved: list[str] = []
+        for v_label, a_label in zip(video_labels, audio_labels):
+            interleaved.append(v_label)
+            interleaved.append(a_label)
+        n = len(video_labels)
+        filter_parts.append(f"{''.join(interleaved)}concat=n={n}:v=1:a=1[v][a]")
+        map_args = ["-map", "[v]", "-map", "[a]"]
+    else:
+        n = len(video_labels)
+        filter_parts.append(f"{''.join(video_labels)}concat=n={n}:v=1:a=0[v]")
+        map_args = ["-map", "[v]"]
+
+    return (input_args, ";".join(filter_parts), map_args)
+
+
+def wrap_clip_with_cards(
+    clip: ClipRecord,
+    clip_path: str,
+    resolution: str | None = None,
+) -> bool:
+    """Prepend a titlecard and append an endcard to a clip in a single ffmpeg encode.
+
+    Replaces the previous two-invocation (prepend then append) flow so the clip body
+    is decoded and re-encoded once instead of twice. Returns True when the clip file
+    is usable afterwards (either wrapped or left untouched on soft failure), and
+    False only on a hard failure (e.g. the clip file is missing).
     """
     if not config.TITLECARDS_ENABLED:
         return True
 
     if config.DEBUGGING:
         utils.debug_print(
-            f"Debugging enabled, skipping titlecard prepend for '{clip_path}'."
+            f"Debugging enabled, skipping titlecard/endcard wrap for '{clip_path}'."
         )
         return True
 
     clip_file = Path(clip_path)
     if not clip_file.is_file():
         utils.warning_print(
-            f"Cannot prepend titlecard; clip file not found: '{clip_path}'"
+            f"Cannot wrap clip with titlecards; clip file not found: '{clip_path}'"
         )
         return False
 
-    if not resolution:
-        resolution = _get_video_resolution(clip_path)
+    # One probe gives us both audio presence and (when needed) resolution; it's
+    # cached by resolved path in video.probe_video_properties.
+    probed = video.probe_video_properties(clip_path)
+    if not resolution and probed:
+        resolution = f"{probed['width']}x{probed['height']}"
     if not resolution:
         utils.warning_print(
             f"Could not determine video resolution for '{clip_path}'. "
-            "Skipping titlecard for this clip."
+            "Skipping title/endcard for this clip."
         )
         return True
+
+    has_clip_audio = bool(probed and probed.get("audio_codec"))
 
     titlecard_path = build_titlecard_frame(clip, resolution)
-    if not titlecard_path:
+    endcard_path = get_or_build_endcard(resolution)
+
+    if not titlecard_path and not endcard_path:
+        # Both cards failed to build; nothing to do, keep clip as-is.
         return True
 
-    output_temp_path = None
+    input_args, filter_complex, map_args = _build_wrap_filter_and_inputs(
+        titlecard_path=titlecard_path,
+        clip_path=clip_path,
+        endcard_path=endcard_path,
+        has_clip_audio=has_clip_audio,
+        card_duration=config.TITLECARD_DURATION_SECONDS,
+    )
+
+    output_temp_path: str | None = None
     try:
         with tempfile.NamedTemporaryFile(
             suffix=config.FILEFORMAT, delete=False
         ) as out_tmp:
             output_temp_path = out_tmp.name
 
-        ffmpeg_command = [
+        ffmpeg_command: list[str] = [
             "ffmpeg",
             "-y",
             "-loglevel",
             config.FFMPEG_LOGLEVEL,
-            "-i",
-            titlecard_path,
-            "-i",
-            clip_path,
+            *input_args,
             "-filter_complex",
-            "[0:v][1:v]concat=n=2:v=1:a=0[v]",
-            "-map",
-            "[v]",
-            "-map",
-            "1:a?",
+            filter_complex,
+            *map_args,
             "-c:v",
             "libx264",
-            "-c:a",
-            "aac",
-            output_temp_path,
+            "-pix_fmt",
+            "yuv420p",
         ]
+        if has_clip_audio:
+            ffmpeg_command.extend(["-c:a", "aac"])
+        ffmpeg_command.append(output_temp_path)
+
         utils.debug_print(
-            "ffmpeg prepend titlecard filter concat command: "
-            + " ".join(ffmpeg_command)
+            "ffmpeg wrap clip with cards command: " + " ".join(ffmpeg_command)
         )
         ffmpeg_result = video.run_ffmpeg_process(
             ffmpeg_command,
             input_file=clip_path,
             output_file=output_temp_path,
-            os_error_message="Filter-based concat failed while prepending titlecard.",
+            os_error_message="Filter-based concat failed while wrapping clip with cards.",
         )
         if ffmpeg_result is None or ffmpeg_result.returncode != 0:
             utils.warning_print(
-                f"Could not prepend titlecard to '{clip_path}'. Original clip will be kept.",
+                f"Could not wrap '{clip_path}' with title/endcard. Original clip will be kept.",
                 [ffmpeg_result.stderr.strip()]
                 if ffmpeg_result and ffmpeg_result.stderr
                 else None,
             )
             return True
 
-        if not video.verify_output_file(output_temp_path, "Prepend titlecard"):
+        if not video.verify_output_file(output_temp_path, "Wrap clip with cards"):
             return True
 
         os.replace(output_temp_path, clip_path)
+        output_temp_path = None
         return True
     finally:
-        for temp in (titlecard_path, output_temp_path):
-            if not temp:
-                continue
+        # Titlecards are per-clip temps; endcards are managed by _endcard_cache.
+        if titlecard_path:
             try:
-                Path(temp).unlink()
+                Path(titlecard_path).unlink()
             except OSError:
                 pass
-
-
-def append_endcard_to_clip(clip_path: str, resolution: str | None = None) -> bool:
-    """Append an endcard segment to an existing clip file in-place."""
-    if not config.TITLECARDS_ENABLED:
-        return True
-
-    if config.DEBUGGING:
-        utils.debug_print(
-            f"Debugging enabled, skipping endcard append for '{clip_path}'."
-        )
-        return True
-
-    clip_file = Path(clip_path)
-    if not clip_file.is_file():
-        utils.warning_print(
-            f"Cannot append endcard; clip file not found: '{clip_path}'"
-        )
-        return False
-
-    if not resolution:
-        resolution = _get_video_resolution(clip_path)
-    if not resolution:
-        utils.warning_print(
-            f"Could not determine video resolution for '{clip_path}'. "
-            "Skipping endcard for this clip."
-        )
-        return True
-
-    endcard_path = get_or_build_endcard(resolution)
-    if not endcard_path:
-        return True
-
-    output_temp_path = None
-    try:
-        with tempfile.NamedTemporaryFile(
-            suffix=config.FILEFORMAT, delete=False
-        ) as out_tmp:
-            output_temp_path = out_tmp.name
-
-        ffmpeg_command = [
-            "ffmpeg",
-            "-y",
-            "-loglevel",
-            config.FFMPEG_LOGLEVEL,
-            "-i",
-            clip_path,
-            "-i",
-            endcard_path,
-            "-filter_complex",
-            "[0:v][1:v]concat=n=2:v=1:a=0[v]",
-            "-map",
-            "[v]",
-            "-map",
-            "0:a?",
-            "-c:v",
-            "libx264",
-            "-c:a",
-            "aac",
-            output_temp_path,
-        ]
-        utils.debug_print(
-            "ffmpeg append endcard filter concat command: " + " ".join(ffmpeg_command)
-        )
-        ffmpeg_result = video.run_ffmpeg_process(
-            ffmpeg_command,
-            input_file=clip_path,
-            output_file=output_temp_path,
-            os_error_message="Filter-based concat failed while appending endcard.",
-        )
-        if ffmpeg_result is None or ffmpeg_result.returncode != 0:
-            utils.warning_print(
-                f"Could not append endcard to '{clip_path}'. Original clip will be kept.",
-                [ffmpeg_result.stderr.strip()]
-                if ffmpeg_result and ffmpeg_result.stderr
-                else None,
-            )
-            return True
-
-        if not video.verify_output_file(output_temp_path, "Append endcard"):
-            return True
-
-        os.replace(output_temp_path, clip_path)
-        return True
-    finally:
-        # Only clean up the concat output temp — endcard is managed by the cache
         if output_temp_path:
             try:
                 Path(output_temp_path).unlink()

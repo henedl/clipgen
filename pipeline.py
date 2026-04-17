@@ -200,6 +200,15 @@ def _process_single_clip_segments(
         f"[{clip['severity']}]" if include_severity and clip.get("severity") else ""
     )
     template = f"{filename_prefix}[{clip['category']}]{severity_tag} {clip['study']} {clip['participant']} {clip['desc']}{file_extension}"
+
+    # Probe the source video once so wrap_clip_with_cards doesn't need to re-probe
+    # each generated output; stream-copy cuts preserve source resolution.
+    source_resolution: str | None = None
+    if output_format == "clip" and config.TITLECARDS_ENABLED:
+        props = video.probe_video_properties(base_video)
+        if props:
+            source_resolution = f"{props['width']}x{props['height']}"
+
     for start_time, end_time in clip["times"]:
         try:
             out_name = files.get_unique_filename(template, file_format=file_extension)
@@ -224,17 +233,9 @@ def _process_single_clip_segments(
                 end_pos=end_time,
                 reencode=config.REENCODING,
             )
-            clip_resolution = None
             if ok and config.TITLECARDS_ENABLED:
-                props = video.probe_video_properties(out_name)
-                if props:
-                    clip_resolution = f"{props['width']}x{props['height']}"
-                ok = titlecards.prepend_titlecard_to_clip(
-                    clip, out_name, resolution=clip_resolution
-                )
-            if ok:
-                ok = titlecards.append_endcard_to_clip(
-                    out_name, resolution=clip_resolution
+                ok = titlecards.wrap_clip_with_cards(
+                    clip, out_name, resolution=source_resolution
                 )
         elif output_format == "screen":
             ok = video.extract_screenshot(
