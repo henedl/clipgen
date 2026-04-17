@@ -28,6 +28,8 @@ API endpoints (all under /transcripts/):
   POST /api/transcribe                            - enqueue participant(s) for transcription
   GET  /api/transcribe/status                     - poll transcription task status
   DELETE /api/transcribe/<task_id>                 - cancel or dismiss a transcription task
+  POST /api/transcribe/warmup                     - background-load Whisper when prewarm is enabled
+  GET  /api/transcribe/model-status               - whether the Whisper model is loaded or warming
 """
 
 import threading
@@ -53,6 +55,8 @@ _worker: transcripts.TranscriptWorker | None = None
 _input_dir: str = ""
 _participants: list[dict[str, Any]] = []
 _manifest_lock = threading.Lock()
+_transcript_model_warming = False
+_transcript_model_warming_lock = threading.Lock()
 # Tracks in-flight thinking-agent runs, keyed by agent key (e.g. "summary",
 # "citations"). Each value is a set of participant IDs currently being
 # processed by that agent.
@@ -67,6 +71,14 @@ _agent_in_flight: dict[str, set[str]] = {
 def _is_generating(participant: str, agent_key: str) -> bool:
     """Return True if *agent_key* is currently running for *participant*."""
     return participant in _agent_in_flight.get(agent_key, set())
+
+
+def _transcribe_prewarm_setting() -> str:
+    """Return a validated TRANSCRIBE_PREWARM value for API clients."""
+    v = getattr(config, "TRANSCRIBE_PREWARM", "queue_open")
+    if v in ("off", "queue_open", "page_load"):
+        return v
+    return "queue_open"
 
 
 # ---- Blueprint ----
@@ -135,7 +147,13 @@ def api_participants() -> FlaskResponse:
                 break
         info["has_stale_artifacts"] = has_stale
 
-    return jsonify({"ok": True, "participants": result})
+    return jsonify(
+        {
+            "ok": True,
+            "participants": result,
+            "transcribe_prewarm": _transcribe_prewarm_setting(),
+        }
+    )
 
 
 # ---- Transcript data ----
@@ -693,6 +711,60 @@ def api_search() -> FlaskResponse:
 
 
 # ---- Transcription queue ----
+
+
+@transcripts_bp.route("/api/transcribe/warmup", methods=["POST"])
+def api_transcribe_warmup() -> FlaskResponse:
+    """Background-load the Whisper model when automatic prewarm is not ``off``."""
+    if _transcribe_prewarm_setting() == "off":
+        return jsonify(
+            {
+                "ok": True,
+                "skipped": True,
+                "reason": "prewarm_disabled",
+            }
+        )
+
+    if transcripts.is_transcription_model_loaded():
+        return jsonify({"ok": True, "already_loaded": True})
+
+    global _transcript_model_warming  # noqa: PLW0603
+
+    with _transcript_model_warming_lock:
+        if _transcript_model_warming:
+            return jsonify({"ok": True, "already_warming": True})
+        if transcripts.is_transcription_model_loaded():
+            return jsonify({"ok": True, "already_loaded": True})
+        _transcript_model_warming = True
+
+    def _run_warmup() -> None:
+        global _transcript_model_warming  # noqa: PLW0603
+        try:
+            transcripts.warmup_transcription_model()
+        finally:
+            with _transcript_model_warming_lock:
+                _transcript_model_warming = False
+
+    threading.Thread(
+        target=_run_warmup, daemon=True, name="transcript-model-warmup"
+    ).start()
+    return jsonify({"ok": True, "started": True})
+
+
+@transcripts_bp.route("/api/transcribe/model-status")
+def api_transcribe_model_status() -> FlaskResponse:
+    """Report whether faster-whisper is loaded or a warm-up is in progress."""
+    with _transcript_model_warming_lock:
+        warming = _transcript_model_warming
+    return jsonify(
+        {
+            "ok": True,
+            "loaded": transcripts.is_transcription_model_loaded(),
+            "warming": warming,
+            "model": config.TRANSCRIBE_MODEL,
+            "prewarm": _transcribe_prewarm_setting(),
+        }
+    )
 
 
 @transcripts_bp.route("/api/transcribe", methods=["POST"])
