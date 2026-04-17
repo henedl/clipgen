@@ -1571,6 +1571,40 @@ body {
   flex-shrink: 0;
 }
 
+/* Template tool: compact icon-only capture / upload */
+.ss-template-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 28px;
+  min-height: 28px;
+  padding: var(--space-1);
+}
+
+.ss-template-icon-btn__glyph {
+  display: block;
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  background-color: currentColor;
+  mask-size: contain;
+  mask-repeat: no-repeat;
+  mask-position: center;
+  -webkit-mask-size: contain;
+  -webkit-mask-repeat: no-repeat;
+  -webkit-mask-position: center;
+}
+
+.ss-template-icon-btn--capture .ss-template-icon-btn__glyph {
+  mask-image: url("/screenspace/icons/viewfinder-circle.svg");
+  -webkit-mask-image: url("/screenspace/icons/viewfinder-circle.svg");
+}
+
+.ss-template-icon-btn--upload .ss-template-icon-btn__glyph {
+  mask-image: url("/screenspace/icons/arrow-up-tray.svg");
+  -webkit-mask-image: url("/screenspace/icons/arrow-up-tray.svg");
+}
+
 .btn[data-tooltip] {
   position: relative;
 }

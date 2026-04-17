@@ -3144,7 +3144,12 @@
     var tmplRefRow = el("div", "param-row");
     tmplRefRow.appendChild(el("span", "param-label", "Template"));
     var tmplRefCtrl = el("div", "param-control");
-    var tmplCapBtn = el("button", "btn btn-small", "Capture Region");
+    var tmplCapBtn = el("button", "btn btn-small ss-template-icon-btn ss-template-icon-btn--capture");
+    tmplCapBtn.setAttribute("type", "button");
+    tmplCapBtn.title = "Capture Region";
+    tmplCapBtn.setAttribute("aria-label", "Capture Region");
+    var tmplCapGlyph = el("span", "ss-template-icon-btn__glyph");
+    tmplCapBtn.appendChild(tmplCapGlyph);
     tmplCapBtn.addEventListener("click", function () {
       state.referenceTimestamp = state.currentTimestamp;
       state.uploadedTemplate = null;
@@ -3176,7 +3181,12 @@
       };
       reader.readAsDataURL(file);
     });
-    var tmplUploadBtn = el("button", "btn btn-small", "Upload PNG");
+    var tmplUploadBtn = el("button", "btn btn-small ss-template-icon-btn ss-template-icon-btn--upload");
+    tmplUploadBtn.setAttribute("type", "button");
+    tmplUploadBtn.title = "Upload PNG";
+    tmplUploadBtn.setAttribute("aria-label", "Upload PNG");
+    var tmplUploadGlyph = el("span", "ss-template-icon-btn__glyph");
+    tmplUploadBtn.appendChild(tmplUploadGlyph);
     tmplUploadBtn.addEventListener("click", function () { tmplFileInput.click(); });
     tmplRefCtrl.appendChild(tmplUploadBtn);
     tmplRefCtrl.appendChild(tmplFileInput);
