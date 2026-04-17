@@ -36,21 +36,11 @@
     citationsGenerating: false,
   };
 
-  // ---- Helpers ----
+  // ---- Helpers (showToast: 2500ms hide; shared default in utils.js is 3000ms) ----
 
-  function escapeHtml(str) {
-    var div = document.createElement("div");
-    div.appendChild(document.createTextNode(str));
-    return div.innerHTML;
-  }
-
+  var _utilsShowToast = window.showToast;
   function showToast(msg) {
-    var el = qs("#toast");
-    if (!el) return;
-    el.textContent = msg;
-    el.classList.remove("hidden");
-    clearTimeout(el._timer);
-    el._timer = setTimeout(function () { el.classList.add("hidden"); }, 2500);
+    _utilsShowToast(msg, { durationMs: 2500 });
   }
 
   // ---- Nav links ----

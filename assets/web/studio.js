@@ -219,13 +219,6 @@
     return m2 + ":" + (s2 < 10 ? "0" : "") + s2;
   }
 
-  function hexToRgba(hex, alpha) {
-    var r = parseInt(hex.slice(1, 3), 16);
-    var g = parseInt(hex.slice(3, 5), 16);
-    var b = parseInt(hex.slice(5, 7), 16);
-    return "rgba(" + r + "," + g + "," + b + "," + alpha + ")";
-  }
-
   // Cross-referencing: find overlapping data from other sources for a given
   // participant + time range. Used by both Screenspace and Transcript intake
   // card renderers to surface context from sibling data sources.

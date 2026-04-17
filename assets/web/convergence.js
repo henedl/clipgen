@@ -35,15 +35,6 @@
 
   // --- Utilities ---
 
-  function debounce(fn, ms) {
-    var timer;
-    return function () {
-      var ctx = this, args = arguments;
-      clearTimeout(timer);
-      timer = setTimeout(function () { fn.apply(ctx, args); }, ms);
-    };
-  }
-
   function getState() {
     return window._studioState;
   }

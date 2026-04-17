@@ -189,14 +189,6 @@
     return Math.max(min, Math.min(max, val));
   }
 
-  function showToast(msg) {
-    var t = qs("#toast");
-    t.textContent = msg;
-    t.classList.remove("hidden");
-    clearTimeout(t._timer);
-    t._timer = setTimeout(function () { t.classList.add("hidden"); }, 3000);
-  }
-
   function regionColorForIndex(i) {
     return REGION_COLORS[i % REGION_COLORS.length];
   }
@@ -1676,13 +1668,6 @@
       }
       ctx.globalAlpha = 1.0;
     }
-  }
-
-  function hexToRgba(hex, alpha) {
-    var r = parseInt(hex.slice(1, 3), 16);
-    var g = parseInt(hex.slice(3, 5), 16);
-    var b = parseInt(hex.slice(5, 7), 16);
-    return "rgba(" + r + "," + g + "," + b + "," + alpha + ")";
   }
 
   // ---- Timeline ----

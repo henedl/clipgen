@@ -39,6 +39,45 @@ var truncate = function (str, max) {
   return str.length > max ? str.slice(0, max) + "\u2026" : str;
 };
 
+// ---- Debounce / escaping / color / toast (shared across Studio tabs + web UIs) ----
+
+var debounce = function (fn, ms) {
+  var timer;
+  return function () {
+    var ctx = this, args = arguments;
+    clearTimeout(timer);
+    timer = setTimeout(function () { fn.apply(ctx, args); }, ms);
+  };
+};
+
+var escapeHtml = function (str) {
+  var div = document.createElement("div");
+  div.appendChild(document.createTextNode(str));
+  return div.innerHTML;
+};
+
+var hexToRgba = function (hex, alpha) {
+  var r = parseInt(hex.slice(1, 3), 16);
+  var g = parseInt(hex.slice(3, 5), 16);
+  var b = parseInt(hex.slice(5, 7), 16);
+  return "rgba(" + r + "," + g + "," + b + "," + alpha + ")";
+};
+
+var SHOW_TOAST_DEFAULT_MS = 3000;
+
+var showToast = function (msg, opts) {
+  var durationMs = SHOW_TOAST_DEFAULT_MS;
+  if (opts != null && opts.durationMs != null) durationMs = opts.durationMs;
+  var toastEl = qs("#toast");
+  if (!toastEl) return;
+  toastEl.textContent = msg;
+  toastEl.classList.remove("hidden");
+  clearTimeout(toastEl._timer);
+  toastEl._timer = setTimeout(function () {
+    toastEl.classList.add("hidden");
+  }, durationMs);
+};
+
 // ---- Severity ----
 
 var severityClass = function (raw) {

@@ -34,14 +34,6 @@
 
   // --- Helpers ---
 
-  function debounce(fn, ms) {
-    var timer;
-    return function () {
-      clearTimeout(timer);
-      timer = setTimeout(fn, ms);
-    };
-  }
-
   function median(arr) {
     if (!arr.length) return 0;
     var sorted = arr.slice().sort(function (a, b) { return a - b; });

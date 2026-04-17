@@ -60,16 +60,6 @@
     return null;
   }
 
-  function showToast(msg) {
-    var t = qs("#toast");
-    t.textContent = msg;
-    t.classList.remove("hidden");
-    clearTimeout(t._timer);
-    t._timer = setTimeout(function () {
-      t.classList.add("hidden");
-    }, 3000);
-  }
-
   // ---- Data loading ----
 
   function loadData() {
