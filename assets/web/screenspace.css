@@ -1074,6 +1074,99 @@ body {
   overflow-y: auto;
 }
 
+/* Model view panel (preview of preprocessed input per tool) */
+
+.model-view-panel {
+  border-top: 1px solid var(--color-border);
+  margin-top: var(--space-2);
+  padding-top: var(--space-1);
+  flex-shrink: 0;
+}
+
+.model-view-toggle {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  width: 100%;
+  padding: var(--space-1) var(--space-2);
+  background: transparent;
+  border: none;
+  color: var(--color-text-dim);
+  font-size: var(--text-xs);
+  text-align: left;
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+}
+
+.model-view-toggle:hover {
+  background: var(--color-surface-alt);
+  color: var(--color-text);
+}
+
+.model-view-icon {
+  width: 14px;
+  height: 14px;
+  background-color: currentColor;
+  mask-image: url("/screenspace/icons/eye.svg");
+  mask-size: contain;
+  mask-repeat: no-repeat;
+  mask-position: center;
+  -webkit-mask-image: url("/screenspace/icons/eye.svg");
+  -webkit-mask-size: contain;
+  -webkit-mask-repeat: no-repeat;
+  -webkit-mask-position: center;
+  flex-shrink: 0;
+}
+
+.model-view-panel.collapsed .model-view-icon {
+  mask-image: url("/screenspace/icons/eye-slash.svg");
+  -webkit-mask-image: url("/screenspace/icons/eye-slash.svg");
+}
+
+.model-view-label {
+  font-weight: 600;
+}
+
+.model-view-hint {
+  margin-left: auto;
+  opacity: 0.7;
+  font-style: italic;
+}
+
+.model-view-body {
+  margin-top: var(--space-1);
+  padding: var(--space-2);
+  background: var(--color-surface-alt);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.model-view-body.hidden {
+  display: none;
+}
+
+.model-view-meta {
+  font-size: var(--text-xs);
+  color: var(--color-text-dim);
+}
+
+#modelViewImage {
+  max-width: 100%;
+  max-height: 220px;
+  align-self: flex-start;
+  image-rendering: pixelated;
+  background: var(--color-bg);
+  border-radius: var(--radius-sm);
+}
+
+#modelViewImage:not([src]),
+#modelViewImage[src=""] {
+  display: none;
+}
+
 /* Multitool step list */
 
 .multitool-steps {

@@ -121,6 +121,7 @@
     hoveredResultSceneName: null,
     videoPlaying: false,
     videoMuted: false,
+    modelViewOpen: false,
   };
 
   var _timelineHitRects = [];
@@ -704,6 +705,7 @@
       updateVideoButtons();
     }
     seekPlayhead(timestamp);
+    refreshModelView({ debounce: true });
     if (state.frameLoading) {
       _pendingFrameTs = timestamp;
       return;
@@ -1317,6 +1319,7 @@
     });
     renderRunRegionPicker();
     updateRegionChipsOverflow();
+    refreshModelView({ debounce: true });
   }
 
   function updateRegionChipsOverflow() {
@@ -3175,6 +3178,7 @@
     if (scanBtn && scanBtn._updateScanState) scanBtn._updateScanState();
 
     updateRunButton();
+    refreshModelView();
   }
 
   function addParamRow(container, label, control, valueDisplayId) {
@@ -3192,10 +3196,166 @@
         if (state.activeWorkflow === "color" && control.id && control.id.startsWith("paramColor")) {
           updateColorPreview();
         }
+        refreshModelView({ debounce: true });
+      });
+    } else {
+      control.addEventListener("input", function () {
+        refreshModelView({ debounce: true });
       });
     }
     row.appendChild(ctrl);
     container.appendChild(row);
+  }
+
+  // ---- Model view (preprocessed preview) ----
+
+  var _modelViewGen = 0;
+  var _modelViewTimer = 0;
+
+  var MODEL_VIEW_META = {
+    color: "Downscaled region (≤64 px) with mean HSV vs. target swatch.",
+    change: "Gray-blur + abs-diff + thresholded mask (prev = 1 s earlier).",
+    similarity: "Gray-blurred region (≤256 px); reference appears once captured.",
+    text: "Grayscale region fed to OCR.",
+    numbers: "Grayscale region fed to OCR.",
+    timelapse: "Region crop — FFmpeg encodes this unmodified.",
+    template: "Gray-blurred frame, template, and normalized match heatmap.",
+    flow: "Prev + current gray frames with dense optical-flow vectors.",
+    scene: "Region (≤128 px), Canny edges, and 8-bin hue histogram.",
+    inactivity: "Region and pHash bit grid (white = 1, black = 0).",
+    multitool: "Preview of the first tool step.",
+  };
+
+  function initModelView() {
+    var btn = qs("#modelViewToggle");
+    if (btn) btn.addEventListener("click", toggleModelView);
+  }
+
+  function toggleModelView() {
+    state.modelViewOpen = !state.modelViewOpen;
+    var panel = qs("#modelViewPanel");
+    var body = qs("#modelViewBody");
+    var btn = qs("#modelViewToggle");
+    if (state.modelViewOpen) {
+      panel.classList.remove("collapsed");
+      body.classList.remove("hidden");
+      btn.setAttribute("aria-expanded", "true");
+      refreshModelView();
+    } else {
+      panel.classList.add("collapsed");
+      body.classList.add("hidden");
+      btn.setAttribute("aria-expanded", "false");
+    }
+  }
+
+  function refreshModelView(opts) {
+    if (!state.modelViewOpen) return;
+    if (_modelViewTimer) {
+      clearTimeout(_modelViewTimer);
+      _modelViewTimer = 0;
+    }
+    if (opts && opts.debounce) {
+      _modelViewTimer = setTimeout(_doRefreshModelView, 150);
+    } else {
+      _doRefreshModelView();
+    }
+  }
+
+  function _normalizedRegionString() {
+    if (state.pendingRegion) {
+      var p = state.pendingRegion;
+      var c = qs("#overlayCanvas");
+      if (!c.width || !c.height) return null;
+      return [p.x / c.width, p.y / c.height, p.w / c.width, p.h / c.height]
+        .map(function (v) { return Number(v).toFixed(6); })
+        .join(",");
+    }
+    if (state.activeRegion && state.regions[state.activeRegion]) {
+      var r = state.regions[state.activeRegion];
+      if (r.source_width) {
+        return [r.x, r.y, r.w, r.h]
+          .map(function (v) { return Number(v).toFixed(6); })
+          .join(",");
+      }
+      var canvas = qs("#overlayCanvas");
+      if (!canvas.width || !canvas.height) return null;
+      return [r.x / canvas.width, r.y / canvas.height, r.w / canvas.width, r.h / canvas.height]
+        .map(function (v) { return Number(v).toFixed(6); })
+        .join(",");
+    }
+    return null;
+  }
+
+  function _collectPreviewParams(tool) {
+    var out = {};
+    if (tool === "color") {
+      var hEl = qs("#paramColorH"), sEl = qs("#paramColorS"), vEl = qs("#paramColorV");
+      if (hEl) out.h = hEl.value;
+      if (sEl) out.s = sEl.value;
+      if (vEl) out.v = vEl.value;
+    } else if (tool === "change") {
+      var n = qs("#paramChangeNoise");
+      if (n) out.noise = n.value;
+    } else if (tool === "flow") {
+      var m = qs("#paramFlowMag");
+      if (m) out.magnitude = m.value;
+    }
+    return out;
+  }
+
+  function _doRefreshModelView() {
+    var gen = ++_modelViewGen;
+    var meta = qs("#modelViewMeta");
+    var img = qs("#modelViewImage");
+    if (!meta || !img) return;
+
+    if (!state.selectedParticipant) {
+      meta.textContent = "Select a participant to preview.";
+      img.removeAttribute("src");
+      return;
+    }
+
+    var tool = state.activeWorkflow;
+    var regionStr = _normalizedRegionString();
+    var fullFrameTools = { template: true };
+    if (!fullFrameTools[tool] && !regionStr) {
+      meta.textContent = "Select or draw a region to preview.";
+      img.removeAttribute("src");
+      return;
+    }
+
+    var params = _collectPreviewParams(tool);
+    var qsParts = ["tool=" + encodeURIComponent(tool)];
+    if (regionStr) qsParts.push("region=" + regionStr);
+    if (tool === "change" || tool === "flow") {
+      var prevTs = Math.max(0, (state.currentTimestamp || 0) - 1);
+      qsParts.push("prev=" + prevTs.toFixed(3));
+    }
+    if (tool === "similarity" && state.referenceTimestamp != null) {
+      qsParts.push("ref=" + Number(state.referenceTimestamp).toFixed(3));
+    }
+    Object.keys(params).forEach(function (k) {
+      qsParts.push(encodeURIComponent(k) + "=" + encodeURIComponent(params[k]));
+    });
+    qsParts.push("_=" + gen);
+
+    var ts = Number(state.currentTimestamp || 0).toFixed(3);
+    var url = "api/preview/" + encodeURIComponent(state.selectedParticipant)
+      + "/" + ts + "?" + qsParts.join("&");
+
+    meta.textContent = "Loading preview…";
+    var tmp = new Image();
+    tmp.onload = function () {
+      if (gen !== _modelViewGen) return;
+      img.src = tmp.src;
+      meta.textContent = MODEL_VIEW_META[tool] || "";
+    };
+    tmp.onerror = function () {
+      if (gen !== _modelViewGen) return;
+      meta.textContent = "Preview unavailable.";
+      img.removeAttribute("src");
+    };
+    tmp.src = url;
   }
 
   function rangeInput(id, min, max, value, step) {
@@ -5323,6 +5483,7 @@
     initRegionDrawing();
     initTimeline();
     initWorkflowTabs();
+    initModelView();
     initParamTooltips();
     initRunButton();
     initTaskQueue();

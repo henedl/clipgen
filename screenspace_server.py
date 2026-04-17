@@ -10,6 +10,7 @@ API endpoints (all under /screenspace/):
   GET  /media/<filename>                    – serve artifact media files
   GET  /api/participants                    – list discovered participant videos
   GET  /api/video/frame/<participant>/<ts>  – extract a JPEG frame at timestamp
+  GET  /api/preview/<participant>/<ts>      – PNG of the active tool's preprocessed view
   GET  /api/video/info/<participant>        – video metadata (duration, resolution, fps)
   GET  /api/video/stream/<participant>     – stream source video (mp4, range-aware)
   GET  /api/regions                         – list regions
@@ -209,6 +210,130 @@ def api_video_frame(participant: str, timestamp: str) -> FlaskResponse:
         jpeg_bytes,
         mimetype="image/jpeg",
         headers={"Cache-Control": "public, max-age=86400"},
+    )
+
+
+@screenspace_bp.route("/api/preview/<participant>/<timestamp>")
+def api_preview(participant: str, timestamp: str) -> FlaskResponse:
+    """Render what the selected tool's CV pipeline sees at ``timestamp``.
+
+    Returns a PNG composite image (grayscale crop, diff mask, edge map, flow
+    vectors, pHash bit grid, etc.) tailored to the active tool.  Optional query
+    params:
+
+      tool=<name>          one of the 11 screenspace tool types
+      region=x,y,w,h       normalized 0–1 region coordinates (required for most tools)
+      prev=<seconds>       prior timestamp for change/flow (defaults to ts-1s)
+      ref=<seconds>        reference timestamp for similarity (full-frame region crop)
+      noise=<int>          change tool's noise_threshold override
+      h,s,v=<int>          color tool's target HSV override
+      magnitude=<float>    flow tool's magnitude threshold override
+    """
+    import screenspace_preview
+
+    try:
+        ts = float(timestamp)
+    except (ValueError, TypeError):
+        return jsonify({"ok": False, "error": "Invalid timestamp"}), 400
+
+    video_path = _find_participant_video(participant)
+    if video_path is None:
+        return jsonify(
+            {"ok": False, "error": f"No video for participant {participant}"}
+        ), 404
+
+    tool = (request.args.get("tool") or "").strip() or "color"
+    if tool not in _VALID_TASK_TYPES:
+        return jsonify({"ok": False, "error": f"Unknown tool: {tool}"}), 400
+
+    frame = video.extract_frame_at_timestamp(video_path, ts)
+    if frame is None:
+        return jsonify({"ok": False, "error": "Could not read frame"}), 400
+    frame_h, frame_w = frame.shape[:2]
+
+    region_coords: dict[str, int] | None = None
+    region_str = request.args.get("region", "").strip()
+    if region_str:
+        parts = region_str.split(",")
+        if len(parts) == 4:
+            try:
+                rx, ry, rw, rh = (float(p) for p in parts)
+            except ValueError:
+                return jsonify({"ok": False, "error": "Invalid region"}), 400
+            region_coords = {
+                "x": int(round(rx * frame_w)),
+                "y": int(round(ry * frame_h)),
+                "w": int(round(rw * frame_w)),
+                "h": int(round(rh * frame_h)),
+            }
+
+    # Prev frame for tools that consume a temporal pair
+    prev_frame = None
+    if tool in ("change", "flow"):
+        prev_ts_raw = request.args.get("prev")
+        if prev_ts_raw is not None:
+            try:
+                prev_ts = float(prev_ts_raw)
+            except ValueError:
+                prev_ts = max(0.0, ts - 1.0)
+        else:
+            prev_ts = max(0.0, ts - 1.0)
+        if prev_ts < ts:
+            prev_frame = video.extract_frame_at_timestamp(video_path, prev_ts)
+
+    # Build params dict for the preview (subset of task parameters)
+    params: dict[str, Any] = {}
+    if tool == "color":
+        for key in ("h", "s", "v"):
+            raw = request.args.get(key)
+            if raw is not None:
+                try:
+                    params[key] = float(raw)
+                except ValueError:
+                    pass
+    elif tool == "change":
+        raw = request.args.get("noise")
+        if raw is not None:
+            try:
+                params["noise_threshold"] = int(float(raw))
+            except ValueError:
+                pass
+    elif tool == "flow":
+        raw = request.args.get("magnitude")
+        if raw is not None:
+            try:
+                params["magnitude_threshold"] = float(raw)
+            except ValueError:
+                pass
+    elif tool == "similarity":
+        ref_ts_raw = request.args.get("ref")
+        if ref_ts_raw is not None and region_coords is not None:
+            try:
+                ref_ts = float(ref_ts_raw)
+            except ValueError:
+                ref_ts = None  # type: ignore[assignment]
+            if ref_ts is not None:
+                ref_frame = video.extract_frame_at_timestamp(video_path, ref_ts)
+                if ref_frame is not None:
+                    import screenspace as _ss
+
+                    params["reference_frame"] = _ss.extract_region(
+                        ref_frame, region_coords
+                    )
+
+    img = screenspace_preview.build_preview(
+        frame, prev_frame, region_coords, tool, params
+    )
+    if img is None or getattr(img, "size", 0) == 0:
+        return jsonify({"ok": False, "error": "Could not build preview"}), 500
+
+    png_bytes = screenspace_preview.encode_png(img)
+    if not png_bytes:
+        return jsonify({"ok": False, "error": "Could not encode preview"}), 500
+    return Response(
+        png_bytes,
+        mimetype="image/png",
+        headers={"Cache-Control": "no-cache"},
     )
 
 
