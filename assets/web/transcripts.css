@@ -112,6 +112,14 @@ body {
   color: var(--color-text-dim);
 }
 
+.tr-model-hint {
+  font-size: var(--text-xs);
+  color: var(--color-text-dim);
+  max-width: 14rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 /* Buttons */
 
 .btn {

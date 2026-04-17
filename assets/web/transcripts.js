@@ -34,7 +34,12 @@
     summaryText: "",
     summaryCitations: null,
     citationsGenerating: false,
+    transcribePrewarm: "queue_open",
   };
+
+  var _transcriptionWarmupPosted = false;
+  var _modelHintPollTimer = null;
+  var _hadActiveTranscriptionLastPoll = false;
 
   // ---- Helpers (showToast: 2500ms hide; shared default in utils.js is 3000ms) ----
 
@@ -232,11 +237,135 @@
 
   // ---- Participants ----
 
+  function needsTranscription() {
+    for (var i = 0; i < state.participants.length; i++) {
+      var p = state.participants[i];
+      if (p.has_video && !p.has_transcript) return true;
+    }
+    return false;
+  }
+
+  function hasActiveTranscriptionTasks() {
+    for (var i = 0; i < state.tasks.length; i++) {
+      var st = state.tasks[i].status;
+      if (st === "queued" || st === "running") return true;
+    }
+    return false;
+  }
+
+  function applyTranscriptionModelHint(data) {
+    var el = qs("#trModelHint");
+    if (!el || !data || !data.ok) return;
+    if (hasActiveTranscriptionTasks()) {
+      el.textContent = "";
+      el.classList.add("hidden");
+      return;
+    }
+    if (data.prewarm === "off") {
+      el.textContent = "";
+      el.classList.add("hidden");
+      return;
+    }
+    if (data.loaded) {
+      el.textContent = "Transcription model ready";
+      el.classList.remove("hidden");
+      return;
+    }
+    if (data.warming) {
+      el.textContent = "Transcription model loading\u2026";
+      el.classList.remove("hidden");
+      return;
+    }
+    el.textContent = "";
+    el.classList.add("hidden");
+  }
+
+  function refreshTranscriptionModelHintOnce() {
+    apiGet("api/transcribe/model-status")
+      .then(function (data) {
+        applyTranscriptionModelHint(data);
+      })
+      .catch(function () {});
+  }
+
+  function stopModelHintPoll() {
+    if (_modelHintPollTimer) {
+      clearInterval(_modelHintPollTimer);
+      _modelHintPollTimer = null;
+    }
+  }
+
+  function startModelHintPoll() {
+    stopModelHintPoll();
+    var ticks = 0;
+    var poll = function () {
+      ticks++;
+      if (ticks > 120) {
+        stopModelHintPoll();
+        return;
+      }
+      apiGet("api/transcribe/model-status")
+        .then(function (data) {
+          if (!data.ok) return;
+          applyTranscriptionModelHint(data);
+          if (data.loaded) {
+            stopModelHintPoll();
+            return;
+          }
+          if (!data.warming) {
+            stopModelHintPoll();
+          }
+        })
+        .catch(function () {});
+    };
+    poll();
+    _modelHintPollTimer = setInterval(poll, 1500);
+  }
+
+  function tryPostTranscriptionWarmup() {
+    if (_transcriptionWarmupPosted) return;
+    if (state.transcribePrewarm === "off") return;
+    if (!needsTranscription()) return;
+    _transcriptionWarmupPosted = true;
+    apiPost("api/transcribe/warmup", {})
+      .then(function (data) {
+        if (!data.ok) {
+          _transcriptionWarmupPosted = false;
+          return;
+        }
+        if (data.skipped) {
+          _transcriptionWarmupPosted = false;
+          refreshTranscriptionModelHintOnce();
+          return;
+        }
+        if (data.already_loaded) {
+          refreshTranscriptionModelHintOnce();
+          return;
+        }
+        if (data.started || data.already_warming) {
+          startModelHintPoll();
+          return;
+        }
+        _transcriptionWarmupPosted = false;
+      })
+      .catch(function () {
+        _transcriptionWarmupPosted = false;
+      });
+  }
+
   function loadParticipants() {
     return apiGet("api/participants").then(function (data) {
       if (!data.ok) return;
       state.participants = data.participants;
+      state.transcribePrewarm = data.transcribe_prewarm || "queue_open";
       renderParticipantSelect();
+
+      if (!needsTranscription()) {
+        _transcriptionWarmupPosted = false;
+      } else if (state.transcribePrewarm === "page_load") {
+        tryPostTranscriptionWarmup();
+      }
+      refreshTranscriptionModelHintOnce();
 
       // Preserve current selection if still valid
       if (state.selectedParticipant) {
@@ -1647,6 +1776,9 @@
       if (!panel.classList.contains("hidden")) {
         renderQueue();
         pollTaskStatus();
+        if (state.transcribePrewarm === "queue_open") {
+          tryPostTranscriptionWarmup();
+        }
       }
     });
 
@@ -1884,6 +2016,17 @@
         stopPolling();
         _refreshedCompletedPids = {};
       }
+
+      var hintEl = qs("#trModelHint");
+      if (hintEl) {
+        if (hasActive) {
+          hintEl.textContent = "";
+          hintEl.classList.add("hidden");
+        } else if (_hadActiveTranscriptionLastPoll) {
+          refreshTranscriptionModelHintOnce();
+        }
+      }
+      _hadActiveTranscriptionLastPoll = hasActive;
 
       // Update queue panel if visible
       if (!qs("#queuePanel").classList.contains("hidden")) {

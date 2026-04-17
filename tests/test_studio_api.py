@@ -1092,6 +1092,7 @@ def test_api_settings_includes_transcription_settings(client):
     assert "TRANSCRIBE_ENABLED" in names
     assert "TRANSCRIBE_MODEL" in names
     assert "TRANSCRIBE_FORMAT" in names
+    assert "TRANSCRIBE_PREWARM" in names
 
 
 def test_api_settings_includes_provider_field(client):

@@ -2,6 +2,7 @@
 """Transcription support for clipgen via faster-whisper (CTranslate2-based Whisper).
 
 The Whisper model is lazy-loaded on first use and cached at module level for the session.
+Loads are serialized with a lock so background warm-up and transcription cannot race.
 
 Data types (defined below):
   TranscriptSegment – TypedDict: start (float), end (float), text (str)
@@ -105,6 +106,7 @@ WHISPER_MODELS: list[dict[str, Any]] = [
 
 _cached_model: Any = None
 _cached_model_name: str | None = None
+_model_load_lock = threading.Lock()
 
 
 # ---------------------------------------------------------------------------
@@ -112,30 +114,55 @@ _cached_model_name: str | None = None
 # ---------------------------------------------------------------------------
 
 
+def is_transcription_model_loaded() -> bool:
+    """Return True if the cached Whisper model matches the current config name."""
+    if config.DEBUGGING:
+        return True
+    model_name = config.TRANSCRIBE_MODEL
+    return _cached_model is not None and _cached_model_name == model_name
+
+
+def warmup_transcription_model() -> bool:
+    """Ensure the Whisper model is loaded into the module cache.
+
+    Returns True when a model is available for transcription (including DEBUGGING
+    stub mode). Returns False if loading failed (e.g. missing faster-whisper).
+    """
+    if config.DEBUGGING:
+        return True
+    return _load_model() is not None
+
+
 def _load_model() -> Any:
-    """Lazy-load the WhisperModel, caching it for reuse."""
+    """Lazy-load the WhisperModel, caching it for reuse (thread-safe)."""
     global _cached_model, _cached_model_name  # noqa: PLW0603
 
     model_name = config.TRANSCRIBE_MODEL
     if _cached_model is not None and _cached_model_name == model_name:
         return _cached_model
 
-    try:
-        from faster_whisper import WhisperModel
-    except ImportError:
-        utils.error_print(
-            "faster-whisper is not installed.",
-            details=["Install it with: uv add faster-whisper"],
+    with _model_load_lock:
+        if _cached_model is not None and _cached_model_name == model_name:
+            return _cached_model
+
+        try:
+            from faster_whisper import WhisperModel
+        except ImportError:
+            utils.error_print(
+                "faster-whisper is not installed.",
+                details=["Install it with: uv add faster-whisper"],
+            )
+            return None
+
+        def _do_load() -> Any:
+            return WhisperModel(model_name, compute_type=config.TRANSCRIBE_COMPUTE_TYPE)
+
+        utils.info_print(f"Loading transcription model '{model_name}'...")
+        _cached_model = utils.run_with_spinner(
+            "Loading transcription model...", _do_load
         )
-        return None
-
-    def _do_load() -> Any:
-        return WhisperModel(model_name, compute_type=config.TRANSCRIBE_COMPUTE_TYPE)
-
-    utils.info_print(f"Loading transcription model '{model_name}'...")
-    _cached_model = utils.run_with_spinner("Loading transcription model...", _do_load)
-    _cached_model_name = model_name
-    return _cached_model
+        _cached_model_name = model_name
+        return _cached_model
 
 
 def transcribe_video(

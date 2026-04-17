@@ -29,7 +29,7 @@ from icecream import ic
 REENCODING: bool = False
 AUDIO_NORMALIZE: bool = False
 FILEFORMAT: str = ".mp4"
-VERSIONNUM: str = "0.10.55"
+VERSIONNUM: str = "0.10.56"
 TITLECARDS_ENABLED: bool = (
     False  # use --titlecards / --no-titlecards to override per run
 )
@@ -244,6 +244,8 @@ TRANSCRIBE_COMPUTE_TYPE: str = "int8"  # int8 (fastest), float16, float32
 TRANSCRIBE_FORMAT: str = "md"  # md, srt, vtt
 TRANSCRIBE_INITIAL_PROMPT: str = "This is a recorded user experience research session."  # biases Whisper toward UX research terminology
 TRANSCRIBE_BEAM_SIZE: int = 5  # beam search width
+# When to pre-load faster-whisper in the Transcripts web UI: off, queue_open (open Queue panel), page_load (after participants load).
+TRANSCRIBE_PREWARM: str = "queue_open"
 
 # ── Ollama (Local AI) ───────────────────────────────────────────────
 OLLAMA_SUMMARY_ENABLED: bool = True  # auto-generate transcript summaries via Ollama
@@ -274,6 +276,7 @@ SETTINGS_DESCRIPTIONS: dict[str, str] = {
     "TRANSCRIBE_ENABLED": "Generate transcripts alongside clips using faster-whisper.",
     "TRANSCRIBE_MODEL": "Whisper model size: tiny, base, small, medium, large-v3.",
     "TRANSCRIBE_FORMAT": "Transcript output format: md (Markdown), srt, or vtt.",
+    "TRANSCRIBE_PREWARM": "When the Transcripts page pre-loads the Whisper model: off, queue_open (opening Queue), or page_load (after listing participants).",
     "HIGHLIGHTS_REEL_DURATION_SECONDS": "Maximum duration in seconds for the highlights reel time budget.",
     "MANIFEST_ENABLED": "Write a manifest JSON file alongside generated artifacts for session tracking.",
     "STUDIO_CELL_EXPAND_HOVER": "Expand overflowing timestamp cells on hover in the Sheet Preview.",
@@ -339,6 +342,11 @@ STUDIO_SETTINGS: dict[str, dict[str, Any]] = {
         "group": "Transcription",
         "type": "select",
         "options": ["md", "srt", "vtt"],
+    },
+    "TRANSCRIBE_PREWARM": {
+        "group": "Transcription",
+        "type": "select",
+        "options": ["off", "queue_open", "page_load"],
     },
     "OLLAMA_SUMMARY_ENABLED": {"group": "AI Summary", "type": "bool"},
     "OLLAMA_SUMMARY_MODEL": {
