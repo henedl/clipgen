@@ -526,13 +526,14 @@ After pushing, call `renderArtifactQueue()` / `renderReelQueue()` / `saveQueues(
 
 #### Verification
 
-- [ ] Click convergence zone → detail panel opens with correct events
-- [ ] Cross-reference badges appear on events with overlapping data
-- [ ] "Add to Artifacts" adds individual event to queue
-- [ ] "Add All to Reel" adds all events from selection
-- [ ] Drag-to-select works for arbitrary ranges
-- [ ] Dismiss clears overlays and hides detail panel
-- [ ] Generated artifacts from convergence queue items succeed
+- [x] Click convergence zone → detail panel opens with correct events
+- [x] Cross-reference badges appear on events with overlapping data
+- [x] "Add to Artifacts" adds individual event to queue
+- [x] "Add All to Reel" adds all events from selection
+- [x] Drag-to-select works for arbitrary ranges
+- [x] Dismiss clears overlays and hides detail panel
+
+(End-to-end artifact generation from convergence-queued items is exercised in Phase 5.6.)
 
 ---
 
@@ -596,9 +597,11 @@ Sort toggle: "Sort by convergence density" reorders rows so most-convergent part
 
 With >8 participants: time axis and summary lane sticky at top, participant labels sticky at left. Verify no z-index conflicts.
 
-#### 5.2 — Dense data performance
+#### 5.2 — Dense data performance (deferred)
 
-If >500 markers per sub-track, cluster adjacent markers within 1px of each other (display optimization only — algorithm data unchanged). Canvas rendering already handles density efficiently.
+**Status:** Deferred. Canvas rendering already handles density efficiently, and no study so far has produced DOM-pressure symptoms from per-sub-track marker counts.
+
+**If reopened:** cluster adjacent DOM markers within 1px of each other when a sub-track exceeds ~500 markers. Display-only — algorithm data unchanged. The marker loop in `renderTimeline()` (convergence.js lines 820–835) is the single site to modify; link each cluster's DOM node back to a representative filtered-event index (`dataset.cvIdx`) so hover/selection keeps working.
 
 #### 5.3 — Empty states
 
@@ -620,11 +623,13 @@ Debounced 200ms re-render. Re-size all canvases. Percentage-based DOM markers au
 
 **File:** `tests/test_studio_api.py` — baseline endpoint tests (Phase 0).
 
-**Manual integration tests:**
+**Manual integration tests** (require a real multi-participant study with loaded video assets; these are the acceptance gate before shipping):
+
 - [ ] Study with clock-format timestamps: sheet events align with screenspace events in the Convergence Browser
 - [ ] Study with no baseline row: sheet timestamps display correctly as-is
 - [ ] Generate artifacts from detail panel → appear in queue → generate successfully
 - [ ] Build reel from convergence-selected events across participants → generates correctly
+- [ ] Generated artifacts from convergence queue items succeed (end-to-end)
 
 ---
 
