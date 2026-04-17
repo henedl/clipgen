@@ -4,6 +4,7 @@
   "use strict";
 
   var FRAME_STEP = 1.0;
+  var VIDEO_SPEEDS = [0.5, 1, 2, 3, 5];
 
   var TASK_COLORS = DETECTOR_COLORS;
 
@@ -121,11 +122,13 @@
     hoveredResultSceneName: null,
     videoPlaying: false,
     videoMuted: false,
+    videoPlaybackRate: 1,
     modelViewOpen: false,
   };
 
   var _timelineHitRects = [];
   var _overlayRaf = 0;
+  var _playheadRaf = 0;
   var _cachedOverlayRect = null;
   var _lastPollFingerprint = "";
   var _preloadedFrames = {};
@@ -657,6 +660,7 @@
     videoEl.classList.remove("active");
     videoEl.removeAttribute("src");
     videoEl.load();
+    applyPlaybackRate();
     qs("#frameCanvas").classList.remove("video-active");
     updateVideoButtons();
     _pendingFrameTs = null;
@@ -810,6 +814,15 @@
       updateVideoButtons();
     });
 
+    qs("#videoSpeedBtn").addEventListener("click", function () {
+      var idx = VIDEO_SPEEDS.indexOf(state.videoPlaybackRate);
+      state.videoPlaybackRate = VIDEO_SPEEDS[(idx + 1) % VIDEO_SPEEDS.length];
+      applyPlaybackRate();
+      updateVideoButtons();
+    });
+
+    updateVideoButtons();
+
     video.addEventListener("ended", function () {
       pauseVideo();
     });
@@ -819,7 +832,12 @@
       var t = video.currentTime;
       state.currentTimestamp = t;
       qs("#timestampInput").value = formatTimestamp(t);
-      renderPlayhead();
+      if (!_playheadRaf) {
+        _playheadRaf = requestAnimationFrame(function () {
+          _playheadRaf = 0;
+          renderPlayhead();
+        });
+      }
     });
   }
 
@@ -841,6 +859,7 @@
     state.videoPlaying = true;
     updateVideoButtons();
 
+    applyPlaybackRate();
     var playPromise = video.play();
     if (playPromise && playPromise.then) {
       playPromise.catch(function () {
@@ -864,6 +883,17 @@
     updateVideoButtons();
   }
 
+  function applyPlaybackRate() {
+    var v = qs("#videoPlayer");
+    v.defaultPlaybackRate = state.videoPlaybackRate;
+    v.playbackRate = state.videoPlaybackRate;
+    // Disable pitch preservation: the time-stretch filter is CPU-heavy and
+    // causes visible judder at >=3x. Audio pitch will rise at high speeds.
+    v.preservesPitch = false;
+    v.mozPreservesPitch = false;
+    v.webkitPreservesPitch = false;
+  }
+
   function updateVideoButtons() {
     var playBtn = qs("#videoPlayBtn");
     var muteBtn = qs("#videoMuteBtn");
@@ -875,6 +905,12 @@
     muteBtn.innerHTML = "";
     muteBtn.appendChild(state.videoMuted ? svgSpeakerMuteIcon() : svgSpeakerIcon());
     muteBtn.classList.toggle("active", !state.videoMuted);
+
+    var speedBtn = qs("#videoSpeedBtn");
+    if (speedBtn) {
+      speedBtn.textContent = state.videoPlaybackRate + "x";
+      speedBtn.classList.toggle("active", state.videoPlaybackRate !== 1);
+    }
   }
 
   // ---- Region drawing ----
