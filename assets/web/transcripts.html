@@ -19,8 +19,8 @@
           Source
           <select id="participantSelect"><option value="">No participants</option></select>
         </label>
-        <span id="transcriptStatus" class="transcript-status"></span>
-        <span id="trModelHint" class="tr-model-hint hidden" aria-live="polite"></span>
+        <span id="trStatusIndicator" class="status-indicator" tabindex="0" role="status" aria-label="Transcription status"></span>
+        <span id="trStatusSr" class="sr-only" aria-live="polite"></span>
         <button id="queueBtn" type="button" class="btn btn-small">Queue</button>
         <button id="correctionsBtn" type="button" class="btn btn-small">Corrections</button>
         <button id="trSettingsBtn" type="button" class="btn btn-small btn-icon" title="AI Model Settings">
