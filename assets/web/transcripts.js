@@ -35,11 +35,14 @@
     summaryCitations: null,
     citationsGenerating: false,
     transcribePrewarm: "queue_open",
+    modelStatus: null,
+    modelFailSince: 0,
   };
 
   var _transcriptionWarmupPosted = false;
   var _modelHintPollTimer = null;
   var _hadActiveTranscriptionLastPoll = false;
+  var MODEL_FAIL_GRACE_MS = 10000;
 
   // ---- Helpers (showToast: 2500ms hide; shared default in utils.js is 3000ms) ----
 
@@ -242,39 +245,131 @@
     return false;
   }
 
-  function hasActiveTranscriptionTasks() {
-    for (var i = 0; i < state.tasks.length; i++) {
-      var st = state.tasks[i].status;
-      if (st === "queued" || st === "running") return true;
+  function applyTranscriptionModelHint(data) {
+    if (!data || !data.ok) return;
+    state.modelStatus = data;
+    // Track how long we've been in an apparent "failed to load" state, so
+    // the indicator doesn't flash red on cold load before the first response.
+    var looksFailed = !data.loaded && !data.warming && data.prewarm !== "off";
+    if (looksFailed) {
+      if (state.modelFailSince === 0) state.modelFailSince = Date.now();
+    } else {
+      state.modelFailSince = 0;
     }
-    return false;
+    updateStatusIndicator();
   }
 
-  function applyTranscriptionModelHint(data) {
-    var el = qs("#trModelHint");
-    if (!el || !data || !data.ok) return;
-    if (hasActiveTranscriptionTasks()) {
-      el.textContent = "";
-      el.classList.add("hidden");
-      return;
+  // ---- Status indicator ----
+
+  function _taskForSelectedParticipant() {
+    var pid = state.selectedParticipant;
+    if (!pid) return null;
+    var latest = null;
+    for (var i = 0; i < state.tasks.length; i++) {
+      var t = state.tasks[i];
+      if (t.participant !== pid) continue;
+      // Priority: running > queued > failed > completed/cancelled > stale
+      if (!latest) { latest = t; continue; }
+      var order = { running: 5, queued: 4, failed: 3, completed: 2, cancelled: 1 };
+      if ((order[t.status] || 0) > (order[latest.status] || 0)) latest = t;
     }
-    if (data.prewarm === "off") {
-      el.textContent = "";
-      el.classList.add("hidden");
-      return;
+    return latest;
+  }
+
+  function _selectedParticipantRow() {
+    var pid = state.selectedParticipant;
+    if (!pid) return null;
+    for (var i = 0; i < state.participants.length; i++) {
+      if (state.participants[i].id === pid) return state.participants[i];
     }
-    if (data.loaded) {
-      el.textContent = "Transcription model ready";
-      el.classList.remove("hidden");
-      return;
+    return null;
+  }
+
+  function _modelLine() {
+    var ms = state.modelStatus;
+    if (!ms) return "Model: loading\u2026";
+    if (ms.loaded) return "Model: ready" + (ms.model ? " \u00B7 " + ms.model : "");
+    if (ms.warming) return "Model: loading\u2026";
+    if (ms.prewarm === "off") return "Model: idle (loads on demand)";
+    if (state.modelFailSince && Date.now() - state.modelFailSince >= MODEL_FAIL_GRACE_MS) {
+      return "Model: failed to load";
     }
-    if (data.warming) {
-      el.textContent = "Transcription model loading\u2026";
-      el.classList.remove("hidden");
-      return;
+    return "Model: not loaded";
+  }
+
+  function _modelHasFailed() {
+    var ms = state.modelStatus;
+    if (!ms) return false;
+    if (ms.loaded || ms.warming) return false;
+    if (ms.prewarm === "off") return false;
+    return state.modelFailSince > 0 && Date.now() - state.modelFailSince >= MODEL_FAIL_GRACE_MS;
+  }
+
+  function computeIndicatorState() {
+    var pid = state.selectedParticipant;
+    var task = _taskForSelectedParticipant();
+    var row = _selectedParticipantRow();
+    var cls = "status-indicator--ready";
+    var taskLine;
+
+    if (!pid) {
+      taskLine = "No participant selected";
+    } else if (task && task.status === "running") {
+      cls = "status-indicator--working";
+      var pct = Math.round((task.progress || 0) * 100);
+      taskLine = pid + ": transcribing\u2026 " + pct + "%";
+    } else if (task && task.status === "queued") {
+      cls = "status-indicator--working";
+      taskLine = pid + ": queued";
+    } else if (task && task.status === "failed") {
+      cls = "status-indicator--error";
+      taskLine = pid + ": transcription failed" + (task.error ? " (" + task.error + ")" : "");
+    } else if (row && row.has_transcript) {
+      taskLine = pid + ": " + (row.segment_count || 0) + " segments";
+      if (row.has_stale_artifacts) taskLine += " \u00B7 artifacts outdated";
+    } else if (row && row.has_video) {
+      taskLine = pid + ": not transcribed";
+    } else {
+      taskLine = pid + ": no source video";
     }
-    el.textContent = "";
-    el.classList.add("hidden");
+
+    // Model failure overrides non-task-active states (keep working class if a
+    // task is currently running — the user can see the task is progressing).
+    if (cls !== "status-indicator--working" && _modelHasFailed()) {
+      cls = "status-indicator--error";
+    }
+
+    var lines = [_modelLine(), taskLine];
+    var ariaLabel;
+    if (cls === "status-indicator--working") ariaLabel = taskLine;
+    else if (cls === "status-indicator--error") ariaLabel = lines.join(" \u2014 ");
+    else ariaLabel = "Ready \u2014 " + taskLine;
+
+    return { cls: cls, ariaLabel: ariaLabel, lines: lines };
+  }
+
+  function updateStatusIndicator() {
+    var indicator = qs("#trStatusIndicator");
+    if (!indicator) return;
+    var s = computeIndicatorState();
+    indicator.classList.remove(
+      "status-indicator--ready",
+      "status-indicator--error",
+      "status-indicator--working"
+    );
+    indicator.classList.add(s.cls);
+    indicator.setAttribute("aria-label", s.ariaLabel);
+    var sr = qs("#trStatusSr");
+    if (sr) sr.textContent = s.lines.join(" \u2014 ");
+  }
+
+  function initStatusIndicatorTooltip() {
+    var indicator = qs("#trStatusIndicator");
+    if (!indicator) return;
+    attachHoverTooltip(indicator, function () {
+      return computeIndicatorState().lines.join("\n");
+    }, { multiline: true, align: "center" });
+    updateStatusIndicator();
   }
 
   function refreshTranscriptionModelHintOnce() {
@@ -440,32 +535,14 @@
       videoEmpty.classList.remove("hidden");
     }
 
-    // Update status
-    var statusEl = qs("#transcriptStatus");
     var taskForPid = null;
     state.tasks.forEach(function (t) {
       if (t.participant === pid && (t.status === "running" || t.status === "queued")) {
         taskForPid = t;
       }
     });
-    if (p.has_transcript) {
-      statusEl.textContent = p.segment_count + " segments";
-      if (p.has_stale_artifacts) {
-        statusEl.textContent += " \u2022 artifacts outdated";
-        statusEl.classList.add("transcript-stale");
-      } else {
-        statusEl.classList.remove("transcript-stale");
-      }
-    } else if (taskForPid && taskForPid.status === "running") {
-      statusEl.textContent = "transcribing\u2026 " + Math.round((taskForPid.progress || 0) * 100) + "%";
-      statusEl.classList.remove("transcript-stale");
-    } else if (taskForPid && taskForPid.status === "queued") {
-      statusEl.textContent = "queued";
-      statusEl.classList.remove("transcript-stale");
-    } else {
-      statusEl.textContent = "not transcribed";
-      statusEl.classList.remove("transcript-stale");
-    }
+
+    updateStatusIndicator();
 
     // Load transcript
     if (p.has_transcript) {
@@ -1963,6 +2040,11 @@
       if (!data.ok) return;
       state.tasks = data.tasks;
 
+      // Re-render the status circle immediately so completed tasks reflect
+      // before the async loadParticipants()/loadTranscript() chain resolves.
+      // This is what keeps the indicator from freezing at "95%".
+      updateStatusIndicator();
+
       // Stream partial segments for the selected participant's running task
       var selectedRunningTask = null;
       if (state.selectedParticipant) {
@@ -1976,9 +2058,6 @@
         renderPartialSegments(selectedRunningTask.partial_segments, selectedRunningTask.progress);
         state.streamingParticipant = state.selectedParticipant;
         _loadStreamingMarks(state.selectedParticipant);
-        // Update status text
-        var statusEl = qs("#transcriptStatus");
-        if (statusEl) statusEl.textContent = "transcribing\u2026 " + Math.round(selectedRunningTask.progress * 100) + "%";
       } else if (state.streamingParticipant) {
         state.streamingParticipant = null;
       }
@@ -2004,6 +2083,7 @@
             loadTranscript(state.selectedParticipant);
             loadSummary(state.selectedParticipant);
           }
+          updateStatusIndicator();
         });
       }
 
@@ -2014,14 +2094,8 @@
         _refreshedCompletedPids = {};
       }
 
-      var hintEl = qs("#trModelHint");
-      if (hintEl) {
-        if (hasActive) {
-          hintEl.textContent = "";
-          hintEl.classList.add("hidden");
-        } else if (_hadActiveTranscriptionLastPoll) {
-          refreshTranscriptionModelHintOnce();
-        }
+      if (!hasActive && _hadActiveTranscriptionLastPoll) {
+        refreshTranscriptionModelHintOnce();
       }
       _hadActiveTranscriptionLastPoll = hasActive;
 
@@ -2417,6 +2491,7 @@
   document.addEventListener("DOMContentLoaded", function () {
     initThemeToggle();
     initTooltipToggle();
+    initStatusIndicatorTooltip();
     checkNavLinks();
     initFrontendSwitcher();
     initSearch();

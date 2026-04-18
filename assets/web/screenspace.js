@@ -544,29 +544,20 @@
     icon.style.webkitMaskImage = url;
     btn.appendChild(icon);
 
-    var tip = el("div", "scan-toggle-tooltip");
-    document.body.appendChild(tip);
-
     function updateState() {
       var isFast = state.scanMode === "fast";
       btn.classList.toggle("active", isFast);
-      var label = isFast ? "Fast scan enabled" : "Enable fast scan";
-      var desc = FAST_SCAN_DESCRIPTIONS[state.activeWorkflow];
-      if (desc) label += "\n" + desc;
-      tip.textContent = label;
     }
     updateState();
     btn._updateScanState = updateState;
 
-    btn.addEventListener("mouseenter", function () {
-      var r = btn.getBoundingClientRect();
-      tip.style.left = (r.left + r.width / 2) + "px";
-      tip.style.top = (r.top - tip.offsetHeight - 6) + "px";
-      tip.classList.add("visible");
-    });
-    btn.addEventListener("mouseleave", function () {
-      tip.classList.remove("visible");
-    });
+    attachHoverTooltip(btn, function () {
+      var isFast = state.scanMode === "fast";
+      var label = isFast ? "Fast scan enabled" : "Enable fast scan";
+      var desc = FAST_SCAN_DESCRIPTIONS[state.activeWorkflow];
+      if (desc) label += "\n" + desc;
+      return label;
+    }, { align: "center", multiline: true });
 
     btn.addEventListener("click", function () {
       state.scanMode = state.scanMode === "fast" ? "normal" : "fast";
@@ -577,11 +568,10 @@
   }
 
   function initParamTooltips() {
-    var tip = el("div", "param-label-tooltip");
-    document.body.appendChild(tip);
-
     var container = qs("#workflowParams");
     if (!container) return;
+
+    var tooltip = createTooltip({ align: "center" });
 
     function getToolType(labelEl) {
       var stepCard = labelEl.closest(".multitool-step");
@@ -608,20 +598,12 @@
       var text = label.textContent.trim();
       var desc = getDescription(text, getToolType(label));
       if (!desc) return;
-
-      tip.textContent = desc;
-      var r = label.getBoundingClientRect();
-      tip.style.left = (r.left + r.width / 2) + "px";
-      tip.style.transform = "translateX(-50%)";
-      // Position above; flip below if clipped
-      var above = r.top - tip.offsetHeight - 6;
-      tip.style.top = (above < 0 ? r.bottom + 6 : above) + "px";
-      tip.classList.add("visible");
+      tooltip.show(label, desc);
     }, true);
 
     container.addEventListener("mouseleave", function (e) {
       if (e.target.closest && e.target.closest(".param-label")) {
-        tip.classList.remove("visible");
+        tooltip.hide();
       }
     }, true);
   }
