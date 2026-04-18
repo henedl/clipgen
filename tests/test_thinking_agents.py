@@ -115,21 +115,13 @@ class TestSummarizeTranscript:
         assert mock_generate.call_args[1]["model"] == "llama3.1:8b"
 
     @patch("thinking_agents.ollama_client.generate")
-    def test_uses_small_model_for_short_text(self, mock_generate):
+    def test_uses_default_model_when_no_override(self, mock_generate):
         mock_generate.return_value = "ok"
         segments = [
             {
                 "text": "A sufficiently long segment of text for the minimum length check."
             },
         ]
-        thinking_agents.summarize_transcript(segments)
-        assert mock_generate.call_args[1]["model"] == "qwen3.5:0.8b"
-
-    @patch("thinking_agents.ollama_client.generate")
-    def test_uses_large_model_for_long_text(self, mock_generate):
-        mock_generate.return_value = "ok"
-        # Long text (over _LARGE_MODEL_THRESHOLD of 8000 chars)
-        segments = [{"text": "word " * 1700}]
         thinking_agents.summarize_transcript(segments)
         assert mock_generate.call_args[1]["model"] == "qwen3.5:9b"
 
@@ -241,7 +233,7 @@ class TestFindCitations:
         assert thinking_agents.find_citations("A summary.", []) is None
 
     @patch("thinking_agents.ollama_client.generate")
-    def test_always_uses_large_model(self, mock_generate):
+    def test_uses_default_model(self, mock_generate):
         mock_generate.return_value = "1: NONE"
         segments = [{"start": 0, "end": 5, "text": "Some text here"}]
         thinking_agents.find_citations("A summary sentence.", segments)

@@ -238,7 +238,7 @@ Note: Non-interactive mode (using -b, -l, -r, -C, -c, -p, -k, -S, -M, -R, or -T)
         "--ollama-model",
         type=str,
         metavar="MODEL",
-        help="Ollama model name for transcript summaries (sets both small and large model, e.g. gemma3:4b)",
+        help="Ollama model for transcript summaries and citations (e.g. gemma3:4b)",
     )
 
     paths = parser.add_argument_group("spreadsheet & directories")
@@ -1326,7 +1326,6 @@ def _apply_config_overrides(args: Any, cli_mode: bool) -> CliModeArgs:
         config.TRANSCRIBE_MODEL = args.whisper_model
     if getattr(args, "ollama_model", None):
         config.OLLAMA_SUMMARY_MODEL = args.ollama_model
-        config.OLLAMA_SUMMARY_MODEL_LARGE = args.ollama_model
 
     return parse_cli_mode_args(args)
 

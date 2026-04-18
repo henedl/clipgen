@@ -293,15 +293,12 @@ def test_whisper_model_applies_to_config(monkeypatch):
     config.TRANSCRIBE_MODEL = original
 
 
-def test_ollama_model_applies_to_both_config(monkeypatch):
+def test_ollama_model_applies_to_config(monkeypatch):
     import config
 
-    orig_small = config.OLLAMA_SUMMARY_MODEL
-    orig_large = config.OLLAMA_SUMMARY_MODEL_LARGE
+    original = config.OLLAMA_SUMMARY_MODEL
     monkeypatch.setattr("sys.argv", ["clipgen.py", "--ollama-model", "gemma3:4b"])
     args = cli.parse_arguments()
     cli._apply_config_overrides(args, cli_mode=True)
     assert config.OLLAMA_SUMMARY_MODEL == "gemma3:4b"
-    assert config.OLLAMA_SUMMARY_MODEL_LARGE == "gemma3:4b"
-    config.OLLAMA_SUMMARY_MODEL = orig_small
-    config.OLLAMA_SUMMARY_MODEL_LARGE = orig_large
+    config.OLLAMA_SUMMARY_MODEL = original

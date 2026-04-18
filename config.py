@@ -252,8 +252,7 @@ TRANSCRIBE_PREWARM: str = "queue_open"
 
 # ── Ollama (Local AI) ───────────────────────────────────────────────
 OLLAMA_SUMMARY_ENABLED: bool = True  # auto-generate transcript summaries via Ollama
-OLLAMA_SUMMARY_MODEL: str = "qwen3.5:0.8b"  # model for short transcripts
-OLLAMA_SUMMARY_MODEL_LARGE: str = "qwen3.5:9b"  # model for longer transcripts
+OLLAMA_SUMMARY_MODEL: str = "qwen3.5:9b"  # model for transcript summaries and citations
 OLLAMA_BASE_URL: str = "http://localhost:11434"  # Ollama server address
 
 # ── Rich Output ──────────────────────────────────────────────────────
@@ -287,8 +286,7 @@ SETTINGS_DESCRIPTIONS: dict[str, str] = {
     "GALLERY_BUNDLE_ENABLED": "Embed gallery images as base64 data URIs in the HTML file, making it fully self-contained.",
     "CLIP_PARALLEL_WORKERS": "Number of concurrent ffmpeg processes for clip generation. 0 = auto, 1 = sequential.",
     "OLLAMA_SUMMARY_ENABLED": "Auto-generate AI summaries of transcripts using a local Ollama model.",
-    "OLLAMA_SUMMARY_MODEL": "Ollama model for short transcripts (fast, small).",
-    "OLLAMA_SUMMARY_MODEL_LARGE": "Ollama model for longer transcripts (slower, more capable).",
+    "OLLAMA_SUMMARY_MODEL": "Ollama model used for transcript summaries and citation linking.",
     "OLLAMA_BASE_URL": "Base URL of the local Ollama server.",
 }
 
@@ -353,11 +351,6 @@ STUDIO_SETTINGS: dict[str, dict[str, Any]] = {
     },
     "OLLAMA_SUMMARY_ENABLED": {"group": "AI Summary", "type": "bool"},
     "OLLAMA_SUMMARY_MODEL": {
-        "group": "AI Summary",
-        "type": "model_select",
-        "provider": "ollama",
-    },
-    "OLLAMA_SUMMARY_MODEL_LARGE": {
         "group": "AI Summary",
         "type": "model_select",
         "provider": "ollama",

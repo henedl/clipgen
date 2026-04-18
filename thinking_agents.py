@@ -77,7 +77,6 @@ Transcript:
 {text}"""
 
 _MIN_TEXT_LENGTH = 50  # skip summarization for very short transcripts
-_LARGE_MODEL_THRESHOLD = 8000  # chars — use the larger model above this
 _MAX_TRANSCRIPT_CHARS = 6000  # truncate long transcripts to fit context window
 
 
@@ -97,19 +96,15 @@ def summarize_transcript(
 ) -> str | None:
     """Summarize transcript segments into a paragraph + bullet points.
 
-    Automatically selects between ``OLLAMA_SUMMARY_MODEL`` (short transcripts)
-    and ``OLLAMA_SUMMARY_MODEL_LARGE`` (long transcripts) unless an explicit
-    model override is provided.
+    Uses ``config.OLLAMA_SUMMARY_MODEL`` unless an explicit model override is
+    provided.
     """
     text = " ".join(seg.get("text", "").strip() for seg in segments).strip()
     if len(text) < _MIN_TEXT_LENGTH:
         return None
 
     if model is None:
-        if len(text) > _LARGE_MODEL_THRESHOLD:
-            model = config.OLLAMA_SUMMARY_MODEL_LARGE
-        else:
-            model = config.OLLAMA_SUMMARY_MODEL
+        model = config.OLLAMA_SUMMARY_MODEL
 
     text = _truncate_middle(text, _MAX_TRANSCRIPT_CHARS)
 
@@ -155,7 +150,7 @@ Format your response exactly as:
 Write NONE if no segments clearly support a claim."""
 
 _MAX_REFS_PER_CLAIM = 4  # hard cap enforced during parsing
-_MAX_CITATION_TRANSCRIPT_CHARS = 12000  # generous limit for 9B context window
+_MAX_CITATION_TRANSCRIPT_CHARS = 12000  # generous context-window limit
 
 _CITATION_LINE_RE = re.compile(r"^(\d+)\s*:\s*(.+)$", re.MULTILINE)
 _TIMESTAMP_RE = re.compile(r"(\d{1,2}:\d{2}(?::\d{2})?)")
@@ -268,7 +263,7 @@ def find_citations(
     if not sentences or not segments:
         return None
 
-    model = config.OLLAMA_SUMMARY_MODEL_LARGE
+    model = config.OLLAMA_SUMMARY_MODEL
 
     claims_text = "\n".join(f"{i + 1}. {s}" for i, s in enumerate(sentences))
     transcript_text = _truncate_middle(
