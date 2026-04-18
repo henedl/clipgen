@@ -759,6 +759,11 @@ def _validate_task_request(
                 return jsonify(
                     {"ok": False, "error": f"Step {i}: invalid type '{stype}'"}
                 ), 400
+            logic = step_v.get("logic")
+            if logic is not None and logic not in ("AND", "NOT"):
+                return jsonify(
+                    {"ok": False, "error": f"Step {i}: logic must be 'AND' or 'NOT'"}
+                ), 400
 
     # Build combined region lookup dict (active + stashes)
     all_known_regions: dict[str, Any] = dict(_manifest.get("regions", {}))

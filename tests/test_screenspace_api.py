@@ -837,6 +837,27 @@ def test_create_multitool_task_invalid_step_type(client):
     assert "invalid type" in data["error"]
 
 
+def test_create_multitool_task_invalid_step_logic(client):
+    _create_region(client, "healthbar")
+    resp = client.post(
+        "/screenspace/api/tasks",
+        json={
+            "type": "multitool",
+            "participant": "P01",
+            "region": "healthbar",
+            "parameters": {
+                "steps": [
+                    {"type": "color", "region": "healthbar"},
+                    {"type": "change", "region": "healthbar", "logic": "MAYBE"},
+                ]
+            },
+        },
+    )
+    assert resp.status_code == 400
+    data = resp.get_json()
+    assert "logic must be" in data["error"]
+
+
 def test_create_multitool_task_no_steps(client):
     _create_region(client, "healthbar")
     resp = client.post(
