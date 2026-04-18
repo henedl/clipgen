@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Insights Builder Flask blueprint for clipgen.
+"""Insights Flask blueprint for clipgen.
 
 Registered at /insights/ by start_combined_server(). When --insights is used without
 a spreadsheet, only this blueprint is active.
@@ -47,6 +47,7 @@ utils.register_static_routes(
     "insights-builder.html",
     media_dir_getter=lambda: _output_dir,
     media_error="Output directory not configured",
+    icons=True,
 )
 
 

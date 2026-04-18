@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Combined Flask server for clipgen Studio, Insights Builder, and Screenspace.
+"""Combined Flask server for clipgen Studio, Insights, and Screenspace.
 
 Entry point: start_combined_server(worksheet, port, default_page) registers
 Studio, Insights, and Screenspace blueprints on one app at config.SERVER_PORT (8089).

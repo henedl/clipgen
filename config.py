@@ -29,7 +29,7 @@ from icecream import ic
 REENCODING: bool = False
 AUDIO_NORMALIZE: bool = False
 FILEFORMAT: str = ".mp4"
-VERSIONNUM: str = "0.10.62"
+VERSIONNUM: str = "0.10.65"
 TITLECARDS_ENABLED: bool = (
     False  # use --titlecards / --no-titlecards to override per run
 )
@@ -122,7 +122,7 @@ GALLERY_BUNDLE_ENABLED: bool = False  # embed images as base64 data URIs in gall
 CLIP_PARALLEL_WORKERS: int = 0  # Max concurrent ffmpeg processes for clip/screenshot/GIF generation; 0 = auto (min(4, cpu_count))
 MAX_FILESIZE_MB: int = 0  # Maximum output file size in MB (0 = disabled)
 MIN_SOURCE_VIDEO_SIZE_MB: int = 100  # Minimum file size (MB) to consider as a source video candidate during fuzzy matching
-MANIFEST_FILENAME: str = "clipgen_manifest.json"  # cumulative artifact manifest; consumed by Insights Builder and --regenerate
+MANIFEST_FILENAME: str = "clipgen_manifest.json"  # cumulative artifact manifest; consumed by Insights and --regenerate
 MANIFEST_ENABLED: bool = (
     False  # use --manifest CLI flag or set True to write manifest alongside artifacts
 )
@@ -130,7 +130,7 @@ SERVER_PORT: int = (
     8089  # port for the combined Studio/Insights/Screenspace Flask server
 )
 INSIGHTS_MANIFEST_FILENAME: str = (
-    "insights_manifest.json"  # insights data manifest; read/written by Insights Builder
+    "insights_manifest.json"  # insights data manifest; read/written by Insights
 )
 STASHES_MANIFEST_FILENAME: str = "reel_stashes.json"
 ARTIFACT_STASHES_MANIFEST_FILENAME: str = "artifact_stashes.json"

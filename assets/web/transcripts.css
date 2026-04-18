@@ -74,21 +74,6 @@ body {
   margin-left: auto;
 }
 
-.nav-link {
-  font-size: var(--text-sm);
-  color: var(--color-accent);
-  text-decoration: none;
-  padding: var(--space-1) var(--space-3);
-  border-radius: var(--radius-md);
-  border: 1px solid var(--color-border);
-  transition: background var(--duration-fast), border-color var(--duration-fast);
-}
-
-.nav-link:hover {
-  background: rgba(0, 0, 0, 0.04);
-  border-color: var(--color-accent);
-}
-
 .participant-label {
   font-size: var(--text-sm);
   color: var(--color-text-dim);
@@ -1294,10 +1279,6 @@ body {
 }
 
 /* Dark mode overrides */
-
-:root:not([data-theme="light"]) .nav-link:hover {
-  background: rgba(255, 255, 255, 0.06);
-}
 
 :root:not([data-theme="light"]) .btn-primary:hover {
   background: #1e6b91;

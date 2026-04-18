@@ -3,18 +3,15 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>clipgen Insight Builder</title>
+  <title>clipgen Insights</title>
   <link rel="stylesheet" href="tokens.css">
   <link rel="stylesheet" href="insights-builder.css">
 </head>
 <body>
   <header id="builderHeader">
     <div id="headerTop">
-      <h1>clipgen <span class="header-light">Insight Builder</span></h1>
+      <h1>clipgen <span class="frontend-switcher" data-current="insights"><span class="frontend-switcher-trigger" tabindex="0" role="button" aria-haspopup="true" aria-expanded="false"><span class="header-light">Insights</span><span class="frontend-switcher-chevron" aria-hidden="true"></span></span><span class="frontend-switcher-panel" role="menu" aria-hidden="true"><a class="frontend-switcher-item" href="/studio/" data-frontend="studio" role="menuitem">Studio</a><a class="frontend-switcher-item" href="/screenspace/" data-frontend="screenspace" role="menuitem">Screenspace</a><a class="frontend-switcher-item" href="/transcripts/" data-frontend="transcripts" role="menuitem">Transcripts</a></span></span></h1>
       <div id="headerActions">
-        <a id="studioLink" href="/studio/" class="nav-link hidden">Studio</a>
-        <a id="screenspaceLink" href="/screenspace/" class="nav-link hidden">Screenspace</a>
-        <a id="transcriptsLink" href="/transcripts/" class="nav-link hidden">Transcripts</a>
         <span id="unsavedIndicator" class="hidden">Unsaved changes</span>
         <button id="discardBtn" class="btn" disabled>Discard</button>
         <button id="saveAllBtn" class="btn btn-primary" disabled>Save</button>

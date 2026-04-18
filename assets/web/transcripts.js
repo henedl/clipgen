@@ -52,9 +52,6 @@
 
   function checkNavLinks() {
     fetch("../api/status").then(function (r) { return r.json(); }).then(function (data) {
-      if (data.studio) qs("#studioLink").classList.remove("hidden");
-      if (data.insights) qs("#insightsLink").classList.remove("hidden");
-      if (data.screenspace) qs("#screenspaceLink").classList.remove("hidden");
       if (data.screenspace || data.studio) {
         state.xrefEligible = true;
         startXrefPolling();
@@ -2421,6 +2418,7 @@
     initThemeToggle();
     initTooltipToggle();
     checkNavLinks();
+    initFrontendSwitcher();
     initSearch();
     initQueuePanel();
     initCorrectionsModal();

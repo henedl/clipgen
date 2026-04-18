@@ -297,7 +297,7 @@ Note: Non-interactive mode (using -b, -l, -r, -C, -c, -p, -k, -S, -M, -R, or -T)
     viewer_manifest.add_argument(
         "--insights",
         action="store_true",
-        help="Launch the Insights Builder for authoring research findings from generated artifacts",
+        help="Launch Insights for authoring research findings from generated artifacts",
     )
     viewer_manifest.add_argument(
         "--screenspace",
