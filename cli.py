@@ -459,11 +459,13 @@ def get_runtime_working_dir() -> str:
 # ---- Google authentication ----
 
 
-def authenticate_google() -> Any:
+def authenticate_google() -> Any | None:
     """Authenticate with Google Sheets API.
 
     Returns:
-        Google client connection object
+        Google client connection object on success, or None if authentication
+        failed. Callers are responsible for deciding whether to fall back to a
+        local Excel file or exit.
     """
     import gspread
 
@@ -472,7 +474,7 @@ def authenticate_google() -> Any:
         gspread_client = gspread.oauth(credentials_filename="credentials.json")
         utils.debug_print("Login successful!")
         return gspread_client
-    except gspread.exceptions.GSpreadException as e:
+    except (gspread.exceptions.GSpreadException, FileNotFoundError, OSError) as e:
         utils.error_print(
             "Could not authenticate with Google.",
             [
@@ -486,7 +488,7 @@ def authenticate_google() -> Any:
                 "  4. For OAuth flow, delete any existing token files and re-authenticate",
             ],
         )
-        sys.exit(1)
+        return None
 
 
 # ---- Worksheet selection ----
@@ -1487,12 +1489,34 @@ def main() -> None:
         import google_api
 
         gspread_client = authenticate_google()
-        doc_list = google_api.get_all_spreadsheets(gspread_client)
+        if gspread_client is None:
+            # Auth failed. CLI mode or an explicit -s argument can't recover
+            # interactively — point the user at the Excel option and exit.
+            if cli_mode or getattr(args, "spreadsheet", None):
+                utils.error_print(
+                    "Google authentication failed.",
+                    [
+                        "Use -s path/to/file.xlsx to work with a local Excel file instead.",
+                    ],
+                )
+                sys.exit(1)
+            # Interactive mode: fall through with gspread_client=None; the
+            # while loop below will prompt for an Excel file instead.
+        else:
+            doc_list = google_api.get_all_spreadsheets(gspread_client)
 
     # Outer loop so 'top' can return to spreadsheet selection
     while True:
         try:
-            worksheet = select_worksheet(gspread_client, doc_list, args, cli_mode)
+            if gspread_client is None and not getattr(args, "spreadsheet", None):
+                import excel_io
+
+                worksheet = excel_io.prompt_for_excel_fallback()
+                if worksheet is None:
+                    sys.exit(0)
+                utils.standard_print("Using local Excel file.")
+            else:
+                worksheet = select_worksheet(gspread_client, doc_list, args, cli_mode)
 
             if getattr(args, "studio", False):
                 import server
