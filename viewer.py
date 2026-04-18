@@ -24,7 +24,7 @@ Insights viewer (generate_insights_viewer()):
 
 Artifact manifest (save_manifest / load_manifest_*):
   Merges new artifacts/reels into clipgen_manifest.json, deduplicating by id (newer wins).
-  Consumed by Insights Builder, --regenerate, and standalone --viewer.
+  Consumed by Insights, --regenerate, and standalone --viewer.
 """
 
 import base64

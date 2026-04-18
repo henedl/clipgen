@@ -3503,19 +3503,11 @@
     fetch("../api/status")
       .then(function (r) { return r.json(); })
       .then(function (data) {
-        if (data.insights) {
-          var link = qs("#insightsLink");
-          if (link) link.classList.remove("hidden");
-        }
         if (data.screenspace) {
-          var link = qs("#screenspaceLink");
-          if (link) link.classList.remove("hidden");
           var intakeTab = qs('.preview-tab[data-tab="intake"]');
           if (intakeTab) intakeTab.classList.remove("hidden");
         }
         if (data.transcripts) {
-          var link = qs("#transcriptsLink");
-          if (link) link.classList.remove("hidden");
           var trIntakeTab = qs('.preview-tab[data-tab="transcript-intake"]');
           if (trIntakeTab) trIntakeTab.classList.remove("hidden");
         }
@@ -4841,6 +4833,7 @@
     loadArtifactStashes();
     updateViewerButton();
     checkNavLinks();
+    initFrontendSwitcher();
     initIntake();
     initTranscriptIntake();
     window.addEventListener("resize", function () {
