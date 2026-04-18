@@ -157,7 +157,7 @@ class TestGenerate:
         call_args = mock_urlopen.call_args
         req = call_args[0][0]
         body = json.loads(req.data.decode("utf-8"))
-        assert body["model"] == "qwen3.5:0.8b"
+        assert body["model"] == "qwen3.5:9b"
 
     @patch("ollama_client.urllib.request.urlopen")
     def test_uses_custom_model(self, mock_urlopen):

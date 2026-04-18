@@ -1100,7 +1100,7 @@ def test_api_settings_includes_provider_field(client):
     resp = client.get("/studio/api/settings")
     data = resp.get_json()
     model_settings = [s for s in data["settings"] if s["type"] == "model_select"]
-    assert len(model_settings) >= 3  # TRANSCRIBE_MODEL + 2 OLLAMA models
+    assert len(model_settings) >= 2  # TRANSCRIBE_MODEL + OLLAMA_SUMMARY_MODEL
     for s in model_settings:
         assert "provider" in s
         assert s["provider"] in ("whisper", "ollama")
