@@ -20,6 +20,47 @@ var el = function (tag, cls, text) {
   return e;
 };
 
+// ---- Hover tooltips (dark pill, pairs with .cg-tooltip in tokens.css) ----
+
+var createTooltip = function (opts) {
+  opts = opts || {};
+  var cls = "cg-tooltip";
+  if (opts.multiline) cls += " cg-tooltip--multiline";
+  if (opts.align === "center") cls += " cg-tooltip--centered";
+  var tip = document.createElement("div");
+  tip.className = cls;
+  document.body.appendChild(tip);
+  return {
+    el: tip,
+    show: function (anchor, text) {
+      tip.textContent = text || "";
+      var r = anchor.getBoundingClientRect();
+      // Set text before measuring so offsetHeight reflects final size.
+      var x = opts.align === "center" ? r.left + r.width / 2 : r.left;
+      var above = r.top - tip.offsetHeight - 6;
+      tip.style.left = x + "px";
+      tip.style.top = (above < 0 ? r.bottom + 6 : above) + "px";
+      tip.classList.add("is-visible");
+    },
+    hide: function () {
+      tip.classList.remove("is-visible");
+    },
+  };
+};
+
+var attachHoverTooltip = function (anchor, getText, opts) {
+  var t = createTooltip(opts);
+  var show = function () {
+    var text = typeof getText === "function" ? getText() : getText;
+    if (text) t.show(anchor, text);
+  };
+  anchor.addEventListener("mouseenter", show);
+  anchor.addEventListener("focus", show);
+  anchor.addEventListener("mouseleave", t.hide);
+  anchor.addEventListener("blur", t.hide);
+  return t;
+};
+
 // ---- Formatting ----
 
 var pad2 = function (n) { return n < 10 ? "0" + n : "" + n; };
