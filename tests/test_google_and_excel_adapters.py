@@ -77,3 +77,63 @@ def test_excel_sheet_adapter_basic_access(tmp_path, monkeypatch):
     row2 = adapter.row_values(2)
     assert "P01" in row2
     assert adapter.col_count >= 5
+
+
+def _make_workbook(path):
+    import openpyxl
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Sheet1"
+    ws["A1"] = "ID"
+    wb.save(path)
+    wb.close()
+
+
+def test_prompt_for_excel_fallback_picks_by_index(tmp_path, monkeypatch):
+    wb_path = tmp_path / "alpha.xlsx"
+    _make_workbook(wb_path)
+    monkeypatch.chdir(tmp_path)
+
+    inputs = iter(["1"])
+    monkeypatch.setattr(excel_io.utils, "read_user_input", lambda _prompt: next(inputs))
+
+    adapter = excel_io.prompt_for_excel_fallback()
+    assert adapter is not None
+    assert adapter.spreadsheet.title == "alpha"
+
+
+def test_prompt_for_excel_fallback_accepts_path(tmp_path, monkeypatch):
+    # No .xlsx in cwd — user pastes an absolute path.
+    cwd = tmp_path / "empty"
+    cwd.mkdir()
+    elsewhere = tmp_path / "data" / "other.xlsx"
+    elsewhere.parent.mkdir()
+    _make_workbook(elsewhere)
+    monkeypatch.chdir(cwd)
+
+    inputs = iter([str(elsewhere)])
+    monkeypatch.setattr(excel_io.utils, "read_user_input", lambda _prompt: next(inputs))
+
+    adapter = excel_io.prompt_for_excel_fallback()
+    assert adapter is not None
+    assert adapter.spreadsheet.title == "other"
+
+
+def test_prompt_for_excel_fallback_cancel_returns_none(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+
+    inputs = iter([""])
+    monkeypatch.setattr(excel_io.utils, "read_user_input", lambda _prompt: next(inputs))
+
+    assert excel_io.prompt_for_excel_fallback() is None
+
+
+def test_prompt_for_excel_fallback_help_then_cancel(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+
+    inputs = iter(["help", ""])
+    monkeypatch.setattr(excel_io.utils, "read_user_input", lambda _prompt: next(inputs))
+
+    # 'help' should not exit the loop; subsequent empty input cancels.
+    assert excel_io.prompt_for_excel_fallback() is None

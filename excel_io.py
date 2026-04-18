@@ -171,3 +171,85 @@ def select_excel_file() -> ExcelSheetAdapter | None:
             if Path(p).name == choice:
                 return open_excel_workbook(p)
         utils.info_print(f'No file named "{choice}". Enter an index or exact filename.')
+
+
+def _print_credentials_help() -> None:
+    """Print troubleshooting steps for setting up Google credentials."""
+    utils.info_print(
+        "Google Sheets access requires a 'credentials.json' file in the working directory."
+    )
+    utils.info_print(f"Working directory: {Path.cwd()}")
+    utils.info_print("Troubleshooting steps:")
+    utils.info_print("  1. Ensure 'credentials.json' exists in the working directory")
+    utils.info_print("  2. Verify the credentials file is valid JSON")
+    utils.info_print(
+        "  3. Check that the service account has access to Google Sheets API"
+    )
+    utils.info_print(
+        "  4. For OAuth flow, delete any existing token files and re-authenticate"
+    )
+
+
+def prompt_for_excel_fallback() -> ExcelSheetAdapter | None:
+    """Offer an Excel fallback when Google auth fails.
+
+    Lists .xlsx files in cwd and also accepts a pasted path, 'help' for
+    credentials troubleshooting, or an empty input to cancel. Returns the
+    opened ExcelSheetAdapter, or None if the user cancelled.
+    """
+    utils.info_print(
+        "No Google credentials available — you can work with a local Excel file instead."
+    )
+    paths = list_excel_in_cwd()
+    if paths:
+        utils.info_print("Excel files in current directory:")
+        for i, p in enumerate(paths, 1):
+            utils.info_print(f"  {i}. {Path(p).name}")
+    else:
+        utils.info_print("(No .xlsx files found in the current directory.)")
+
+    while True:
+        choice = utils.read_user_input(
+            "\nEnter an index, filename, path to a .xlsx file, "
+            "'help' for credentials setup tips, or Enter to cancel:\n>> "
+        ).strip()
+        if not choice:
+            return None
+        if choice.lower() == "help":
+            _print_credentials_help()
+            continue
+        if choice.isdigit() and paths:
+            idx = int(choice)
+            if 1 <= idx <= len(paths):
+                adapter = open_excel_workbook(paths[idx - 1])
+                if adapter is not None:
+                    return adapter
+                continue
+            utils.info_print(
+                f"Invalid index. Enter a number between 1 and {len(paths)}."
+            )
+            continue
+        # Exact filename match inside cwd.
+        matched = False
+        for p in paths:
+            if Path(p).name == choice:
+                adapter = open_excel_workbook(p)
+                if adapter is not None:
+                    return adapter
+                matched = True
+                break
+        if matched:
+            continue
+        # Treat as a path (absolute or relative to cwd).
+        candidate = Path(choice).expanduser()
+        if not candidate.is_absolute():
+            candidate = Path.cwd() / candidate
+        if candidate.suffix.lower() != ".xlsx":
+            utils.info_print(
+                "Path must end in .xlsx. Try again, or press Enter to cancel."
+            )
+            continue
+        adapter = open_excel_workbook(str(candidate))
+        if adapter is not None:
+            return adapter
+        # open_excel_workbook already printed the error; loop for retry.
