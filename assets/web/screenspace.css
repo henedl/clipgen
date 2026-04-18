@@ -1229,6 +1229,72 @@ body {
   display: none;
 }
 
+.multitool-operator-row {
+  display: flex;
+  align-items: center;
+}
+
+.multitool-operator-rail {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  margin-left: var(--space-3);
+}
+
+.multitool-operator-line {
+  width: 2px;
+  height: var(--space-2);
+  background: var(--color-border);
+}
+
+.multitool-operator-btn {
+  width: 1.25rem;
+  height: 1.25rem;
+  border-radius: var(--radius-full);
+  border: 1px solid var(--color-border);
+  background: var(--color-bg);
+  color: var(--color-text-dim);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  padding: 0;
+  transition: color var(--duration-fast),
+              border-color var(--duration-fast),
+              background var(--duration-fast);
+}
+
+.multitool-operator-btn:hover {
+  color: var(--color-text);
+  border-color: var(--color-accent);
+  background: var(--color-surface-hover);
+}
+
+.multitool-operator-btn.is-not {
+  color: var(--sev-high);
+  border-color: var(--sev-high);
+}
+
+.multitool-operator-icon {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  background-color: currentColor;
+  -webkit-mask-image: url("/screenspace/icons/plus.svg");
+          mask-image: url("/screenspace/icons/plus.svg");
+  -webkit-mask-repeat: no-repeat;
+          mask-repeat: no-repeat;
+  -webkit-mask-size: contain;
+          mask-size: contain;
+  -webkit-mask-position: center;
+          mask-position: center;
+}
+
+.multitool-operator-btn.is-not .multitool-operator-icon {
+  -webkit-mask-image: url("/screenspace/icons/no-symbol.svg");
+          mask-image: url("/screenspace/icons/no-symbol.svg");
+}
+
 .multitool-add-row {
   display: flex;
   align-items: center;

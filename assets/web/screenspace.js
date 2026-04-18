@@ -2686,7 +2686,7 @@
     var allowed = MULTITOOL_ALLOWED_TYPES.some(function (t) { return t.value === type; });
     if (!allowed) return null;
     var params = task.parameters || {};
-    var step = { type: type, collapsed: false };
+    var step = { type: type, collapsed: false, logic: "AND" };
     if (task.region) step.region = task.region;
     if (params.reference_timestamp !== undefined) step._refTs = params.reference_timestamp;
     if (params.scene_references) step._scenes = params.scene_references.map(function (ref) {
@@ -2733,6 +2733,31 @@
   function renderMultitoolParams(container) {
     var stepsDiv = el("div", "multitool-steps");
     state.multitoolSteps.forEach(function (step, idx) {
+      if (idx > 0) {
+        var opRow = el("div", "multitool-operator-row");
+        var rail = el("div", "multitool-operator-rail");
+        rail.appendChild(el("div", "multitool-operator-line"));
+        var opBtn = el("button", "multitool-operator-btn");
+        opBtn.type = "button";
+        var current = (step.logic || "AND").toUpperCase();
+        opBtn.classList.add(current === "NOT" ? "is-not" : "is-and");
+        opBtn.title = current === "NOT"
+          ? "NOT — frame rejected if this matches (click to switch to AND)"
+          : "AND — frame must also match (click to switch to NOT)";
+        opBtn.appendChild(el("span", "multitool-operator-icon"));
+        (function (capturedIdx) {
+          opBtn.addEventListener("click", function (e) {
+            e.stopPropagation();
+            var s = state.multitoolSteps[capturedIdx];
+            s.logic = (s.logic || "AND").toUpperCase() === "NOT" ? "AND" : "NOT";
+            renderWorkflowParams();
+          });
+        })(idx);
+        rail.appendChild(opBtn);
+        rail.appendChild(el("div", "multitool-operator-line"));
+        opRow.appendChild(rail);
+        stepsDiv.appendChild(opRow);
+      }
       var card = el("div", "multitool-step");
       card.dataset.stepIdx = String(idx);
       var header = el("div", "multitool-step-header");
@@ -2865,7 +2890,7 @@
     var addBtn = el("button", "btn btn-small", "+ Add Step");
     addBtn.addEventListener("click", function () {
       var chosen = sel.value;
-      state.multitoolSteps.push({ type: chosen, collapsed: false });
+      state.multitoolSteps.push({ type: chosen, collapsed: false, logic: "AND" });
       renderWorkflowParams();
       updateRunButton();
     });
@@ -3999,6 +4024,9 @@
         var stepP = gatherMultitoolStepParams(state.multitoolSteps[i].type, i);
         if (stepP === null) return null;
         stepP.type = state.multitoolSteps[i].type;
+        if (i > 0) {
+          stepP.logic = (state.multitoolSteps[i].logic || "AND").toUpperCase();
+        }
         params.steps.push(stepP);
       }
       params.interval = parseFloat((qs("#paramMultitoolInterval") || {}).value) || 1.0;
@@ -4707,6 +4735,7 @@
       var mtParams = task.parameters || {};
       state.multitoolSteps = (mtParams.steps || []).map(function (s) {
         var step = { type: s.type, collapsed: true };
+        step.logic = (s.logic || "AND").toUpperCase();
         if (s.region) step.region = s.region;
         if (s.reference_timestamp !== undefined) step._refTs = s.reference_timestamp;
         if (s.scene_references) step._scenes = s.scene_references.map(function (ref) {

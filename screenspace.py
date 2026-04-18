@@ -2078,26 +2078,37 @@ def scan_multitool(
             return False
 
         step_results: list[dict[str, Any]] = []
+        chain_ok = True
         for i, step in enumerate(steps):
             passed, rd = check_frame_for_tool(
                 frame, prev_frame[0], step_regions[i], step["type"], step
             )
-            if not passed or rd is None:
-                break
-            step_results.append(rd)
+            logic = (step.get("logic") or "AND").upper() if i > 0 else "AND"
+            if logic == "NOT":
+                if passed:
+                    chain_ok = False
+                    break
+                step_results.append({"negated": True, "type": step["type"]})
+            else:
+                if not passed or rd is None:
+                    chain_ok = False
+                    break
+                step_results.append(rd)
 
         prev_frame[0] = frame
 
-        if len(step_results) == len(steps):
-            confidences = [
-                _extract_confidence(steps[i]["type"], sr)
-                for i, sr in enumerate(step_results)
-            ]
+        if chain_ok and len(step_results) == len(steps):
+            confidences = []
+            for i, sr in enumerate(step_results):
+                logic = (steps[i].get("logic") or "AND").upper() if i > 0 else "AND"
+                if logic == "NOT":
+                    continue
+                confidences.append(_extract_confidence(steps[i]["type"], sr))
             rd = {
                 "timestamp": round(ts, 2),
                 "tool_types": tool_types,
                 "steps": step_results,
-                "min_confidence": round(min(confidences), 4),
+                "min_confidence": round(min(confidences), 4) if confidences else 1.0,
             }
             results.append(rd)
             if on_result:

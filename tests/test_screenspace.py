@@ -1242,6 +1242,70 @@ class TestScanMultitool:
                 steps=[{"type": "color"}],
             )
 
+    @staticmethod
+    def _setup_stubs(monkeypatch, check_fn):
+        monkeypatch.setattr(screenspace, "_probe_video_meta", lambda _p: (30.0, 10.0))
+
+        def fake_scan(
+            video_path,
+            interval_seconds,
+            callback,
+            *,
+            start_seconds=0.0,
+            end_seconds=None,
+            fps=0.0,
+            duration=0.0,
+            fast_opts=None,
+        ):
+            frame = np.zeros((10, 10, 3), dtype=np.uint8)
+            callback(1.0, frame)
+
+        monkeypatch.setattr(screenspace, "scan_video_full_frames", fake_scan)
+        monkeypatch.setattr(screenspace, "check_frame_for_tool", check_fn)
+
+    def test_not_operator_rejects_when_negated_match(self, monkeypatch):
+        def check(frame, prev, region, ttype, step):
+            return True, {"_confidence": 0.9}
+
+        self._setup_stubs(monkeypatch, check)
+        results = screenspace.scan_multitool(
+            "/fake.mp4",
+            {"x": 0, "y": 0, "w": 10, "h": 10},
+            steps=[{"type": "color"}, {"type": "change", "logic": "NOT"}],
+        )
+        assert results == []
+
+    def test_not_operator_passes_when_negated_misses(self, monkeypatch):
+        def check(frame, prev, region, ttype, step):
+            if ttype == "color":
+                return True, {"_confidence": 0.8}
+            return False, None
+
+        self._setup_stubs(monkeypatch, check)
+        results = screenspace.scan_multitool(
+            "/fake.mp4",
+            {"x": 0, "y": 0, "w": 10, "h": 10},
+            steps=[{"type": "color"}, {"type": "change", "logic": "NOT"}],
+        )
+        assert len(results) == 1
+        assert results[0]["steps"][1] == {"negated": True, "type": "change"}
+        assert results[0]["min_confidence"] == 0.8
+
+    def test_and_default_when_logic_missing(self, monkeypatch):
+        def check(frame, prev, region, ttype, step):
+            if ttype == "color":
+                return True, {"_confidence": 0.7}
+            return True, {"magnitude": 0.5}
+
+        self._setup_stubs(monkeypatch, check)
+        results = screenspace.scan_multitool(
+            "/fake.mp4",
+            {"x": 0, "y": 0, "w": 10, "h": 10},
+            steps=[{"type": "color"}, {"type": "change"}],
+        )
+        assert len(results) == 1
+        assert results[0]["min_confidence"] == 0.5
+
 
 # ---------------------------------------------------------------------------
 # Fast Scan mode
