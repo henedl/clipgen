@@ -12,13 +12,8 @@
     <div id="headerTop">
       <h1>clipgen <span class="frontend-switcher" data-current="transcripts"><span class="frontend-switcher-trigger" tabindex="0" role="button" aria-haspopup="true" aria-expanded="false"><span class="header-light">Transcripts</span><span class="frontend-switcher-chevron" aria-hidden="true"></span></span><span class="frontend-switcher-panel" role="menu" aria-hidden="true"><a class="frontend-switcher-item" href="/studio/" data-frontend="studio" role="menuitem">Studio</a><a class="frontend-switcher-item" href="/insights/" data-frontend="insights" role="menuitem">Insights</a><a class="frontend-switcher-item" href="/screenspace/" data-frontend="screenspace" role="menuitem">Screenspace</a></span></span></h1>
       <div id="headerActions">
-        <label class="participant-label">
-          Source
-          <select id="participantSelect"><option value="">No participants</option></select>
-        </label>
         <span id="trStatusIndicator" class="status-indicator" tabindex="0" role="status" aria-label="Transcription status"></span>
         <span id="trStatusSr" class="sr-only" aria-live="polite"></span>
-        <button id="queueBtn" type="button" class="btn btn-small">Queue</button>
         <button id="correctionsBtn" type="button" class="btn btn-small">Corrections</button>
         <button id="trSettingsBtn" type="button" class="btn btn-small btn-icon" title="AI Model Settings">
           <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
@@ -35,6 +30,9 @@
           <span class="theme-toggle-icon theme-icon-moon"></span>
         </button>
       </div>
+    </div>
+    <div id="participantPills" class="pill-row" role="tablist" aria-label="Participants">
+      <span class="pill-row-empty">No participants</span>
     </div>
     <div id="headerSearch">
       <input id="searchInput" type="text" placeholder="Search across all transcripts..." autocomplete="off">
@@ -88,18 +86,6 @@
       </div>
     </section>
   </main>
-
-  <!-- Transcription queue panel -->
-  <aside id="queuePanel" class="hidden">
-    <div class="panel-header">
-      <h3>Transcription Queue</h3>
-      <div class="panel-header-actions">
-        <button id="transcribeAllBtn" class="btn btn-small">Transcribe All</button>
-        <button id="closeQueueBtn" class="btn btn-small">Close</button>
-      </div>
-    </div>
-    <div id="queueList"></div>
-  </aside>
 
   <!-- Corrections modal -->
   <div id="correctionsModal" class="modal hidden">
