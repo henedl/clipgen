@@ -102,6 +102,8 @@
     queuePaused: false,
     timelineDragging: false,
     panelHeight: 340,
+    panelHeightBeforeCollapse: 340,
+    bottomCollapsed: false,
     previewMaxWidth: 100,
     taskFilter: null,
     pipetteActive: false,
@@ -5784,11 +5786,13 @@
     var MAX_H = Math.round(window.innerHeight * 0.6);
 
     function onDown(e) {
+      if (state.bottomCollapsed) return;
       e.preventDefault();
       dragging = true;
       startY = e.clientY || (e.touches && e.touches[0].clientY) || 0;
       startHeight = state.panelHeight;
       handle.classList.add("active");
+      document.body.classList.add("panel-dragging");
       document.body.style.cursor = "row-resize";
       document.body.style.userSelect = "none";
     }
@@ -5817,12 +5821,76 @@
       if (!dragging) return;
       dragging = false;
       handle.classList.remove("active");
+      document.body.classList.remove("panel-dragging");
       document.body.style.cursor = "";
       document.body.style.userSelect = "";
     }
 
     document.addEventListener("mouseup", onUp);
     document.addEventListener("touchend", onUp);
+
+    handle.addEventListener("dblclick", function (e) {
+      e.preventDefault();
+      toggleBottomPanel();
+    });
+  }
+
+  function toggleBottomPanel() {
+    var panel = qs("#bottomPanel");
+    if (!panel || panel._transitioning) return;
+    panel._transitioning = true;
+
+    if (state.bottomCollapsed) {
+      // --- Restore ---
+      state.bottomCollapsed = false;
+      var maxH = Math.round(window.innerHeight * 0.6);
+      var targetH = Math.min(state.panelHeightBeforeCollapse || 340, maxH);
+
+      document.body.classList.add("bottom-animating");
+      document.body.classList.remove("bottom-collapsed");
+
+      panel.style.height = "0px";
+      panel.offsetHeight; // reflow — pin start frame
+      panel.style.height = targetH + "px";
+
+      onCollapseTransitionEnd(panel, function () {
+        state.panelHeight = targetH;
+        panel._transitioning = false;
+        document.body.classList.remove("bottom-animating");
+      });
+    } else {
+      // --- Collapse ---
+      state.bottomCollapsed = true;
+      state.panelHeightBeforeCollapse = state.panelHeight;
+
+      var currentH = panel.offsetHeight;
+      document.body.classList.add("bottom-animating");
+
+      panel.style.height = currentH + "px";
+      panel.offsetHeight; // reflow
+      document.body.classList.add("bottom-collapsed");
+      panel.style.height = "0px";
+
+      onCollapseTransitionEnd(panel, function () {
+        panel._transitioning = false;
+        document.body.classList.remove("bottom-animating");
+      });
+    }
+  }
+
+  function onCollapseTransitionEnd(el, cb) {
+    var fired = false;
+    function done() {
+      if (fired) return;
+      fired = true;
+      el.removeEventListener("transitionend", handler);
+      cb();
+    }
+    function handler(e) {
+      if (e.target === el && e.propertyName === "height") done();
+    }
+    el.addEventListener("transitionend", handler);
+    setTimeout(done, 400);
   }
 
   // ---- Preview resize ----
