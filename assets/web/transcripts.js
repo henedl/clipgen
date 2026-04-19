@@ -416,6 +416,12 @@
     _modelHintPollTimer = setInterval(poll, 1500);
   }
 
+  function maybeWarmOnPillHover(p, s) {
+    if (state.transcribePrewarm !== "queue_open") return;
+    if (!s || s.status === "completed") return;
+    tryPostTranscriptionWarmup();
+  }
+
   function tryPostTranscriptionWarmup() {
     if (_transcriptionWarmupPosted) return;
     if (state.transcribePrewarm === "off") return;
@@ -1951,6 +1957,9 @@
     if (state.pillOptionsOpen === p.id) {
       wrap.classList.add("pill-wrap--options-open");
     }
+    wrap.addEventListener("mouseenter", function () {
+      maybeWarmOnPillHover(p, s);
+    });
     return wrap;
   }
 
