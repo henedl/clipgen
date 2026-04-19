@@ -158,30 +158,49 @@
         </div>
       </div>
     </section>
-    <div id="taskQueuePanel">
-      <div class="panel-header">
-        <h3>Task Queue <span id="taskCount">(0)</span></h3>
-        <div class="panel-header-actions">
+    <div id="rightPane">
+      <div id="rightPaneTabs">
+        <button class="rp-tab active" data-tab="queue" type="button">
+          <span class="rp-tab-icon rp-tab-icon-queue"></span>
+          <span class="rp-tab-label">Task Queue</span>
+          <span class="rp-tab-count" id="taskCount">(0)</span>
+        </button>
+        <span class="rp-tab-sep">/</span>
+        <button class="rp-tab" data-tab="results" type="button">
+          <span class="rp-tab-icon rp-tab-icon-results"></span>
+          <span class="rp-tab-label">Results</span>
+          <span class="rp-tab-crumb" id="resultsTabCrumb"></span>
+          <span class="rp-tab-chevron"></span>
+        </button>
+        <div class="rp-tab-actions" data-for="queue">
           <button id="taskFilterDoneBtn" class="panel-header-btn task-filter-btn" title="Show completed" data-filter="completed"></button>
           <button id="taskFilterFailedBtn" class="panel-header-btn task-filter-btn" title="Show failed" data-filter="failed"></button>
           <button id="taskQueuePauseBtn" class="panel-header-btn" title="Pause queue"></button>
         </div>
-      </div>
-      <div id="taskList">
-        <div class="panel-empty">No tasks yet. Configure a workflow and click Run.</div>
-      </div>
-    </div>
-    <div id="resultsPanel">
-      <div class="panel-header">
-        <h3>Results <span id="resultCount"></span></h3>
-        <div id="resultsActions" class="hidden">
-          <label id="showExcludedToggle" class="results-toggle"><input type="checkbox" id="showExcludedCb" checked> Show excluded</label>
-          <label id="certaintyCutoffLabel" class="results-certainty-label hidden">Certainty <input type="range" id="certaintyCutoff" min="0" max="100" value="0" step="1" class="results-certainty-slider"><span id="certaintyCutoffVal">0%</span></label>
-          <button id="excludeNonVisibleBtn" class="btn btn-small hidden">Exclude Hidden</button>
+        <div class="rp-tab-actions hidden" data-for="results" id="resultsActions">
+          <div id="certaintyCutoffWrap" class="rp-certainty-wrap hidden">
+            <input type="range" id="certaintyCutoff" min="0" max="100" value="0" step="1" class="rp-certainty-slider">
+          </div>
+          <button id="showExcludedBtn" class="rp-icon-btn active" type="button" aria-label="Show excluded">
+            <span class="rp-icon-btn-icon rp-icon-eye"></span>
+          </button>
+          <button id="excludeNonVisibleBtn" class="rp-icon-btn hidden" type="button" aria-label="Exclude hidden">
+            <span class="rp-icon-btn-icon rp-icon-scissors"></span>
+          </button>
         </div>
+        <div id="resultsSwitcherPanel" class="rp-switcher-panel hidden"></div>
       </div>
-      <div id="resultsList">
-        <div class="panel-empty">Click a completed task to view results.</div>
+      <div id="rightPaneBody">
+        <div id="taskQueuePanel" class="rp-tab-panel">
+          <div id="taskList">
+            <div class="panel-empty">No tasks yet. Configure a workflow and click Run.</div>
+          </div>
+        </div>
+        <div id="resultsPanel" class="rp-tab-panel hidden">
+          <div id="resultsList">
+            <div class="panel-empty">Click a completed task to view results.</div>
+          </div>
+        </div>
       </div>
     </div>
   </div>

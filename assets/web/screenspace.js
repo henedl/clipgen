@@ -128,6 +128,8 @@
     videoMuted: false,
     videoPlaybackRate: 1,
     modelViewOpen: false,
+    rightPaneTab: "queue",
+    resultsSwitcherOpen: false,
   };
 
   var _timelineHitRects = [];
@@ -4447,6 +4449,158 @@
     });
   }
 
+  var TOOL_LABELS = {
+    multitool: "Multitool",
+    color: "Color",
+    change: "Change",
+    similarity: "Similarity",
+    text: "Text",
+    numbers: "Numbers",
+    timelapse: "Timelapse",
+    template: "Template",
+    flow: "Flow",
+    scene: "Scene",
+    inactivity: "Inactivity",
+  };
+
+  function selectableTasks() {
+    return state.tasks.filter(function (t) {
+      return t.status === "completed" || t.status === "paused" || t.status === "running";
+    });
+  }
+
+  function setRightPaneTab(tab) {
+    state.rightPaneTab = tab;
+    qsa("#rightPaneTabs .rp-tab").forEach(function (b) {
+      b.classList.toggle("active", b.dataset.tab === tab);
+    });
+    var qp = qs("#taskQueuePanel");
+    var rp = qs("#resultsPanel");
+    if (qp) qp.classList.toggle("hidden", tab !== "queue");
+    if (rp) rp.classList.toggle("hidden", tab !== "results");
+    qsa("#rightPaneTabs .rp-tab-actions").forEach(function (a) {
+      a.classList.toggle("hidden", a.dataset.for !== tab);
+    });
+    closeResultsSwitcher();
+  }
+
+  function updateResultsCrumb() {
+    var crumbEl = qs("#resultsTabCrumb");
+    if (!crumbEl) return;
+    var task = state.selectedTaskId ? findTask(state.selectedTaskId) : null;
+    if (!task) {
+      crumbEl.textContent = "";
+      crumbEl.style.color = "";
+      return;
+    }
+    var sameType = state.tasks
+      .filter(function (t) {
+        return t.type === task.type &&
+          (t.status === "completed" || t.status === "paused" || t.status === "running");
+      });
+    var idx = -1;
+    for (var i = 0; i < sameType.length; i++) {
+      if (sameType[i].id === task.id) { idx = i; break; }
+    }
+    var label = TOOL_LABELS[task.type] || task.type;
+    var ordinal = idx >= 0 ? idx + 1 : 1;
+    var participant = task.participant || "";
+    crumbEl.textContent = ": " + label + " " + ordinal + (participant ? " \u00b7 " + participant : "");
+    crumbEl.style.color = taskTypeColor(task.type);
+  }
+
+  function openResultsSwitcher() {
+    var panel = qs("#resultsSwitcherPanel");
+    if (!panel) return;
+    panel.innerHTML = "";
+    var tasks = selectableTasks();
+    if (tasks.length === 0) {
+      var empty = el("div", "rp-switcher-empty", "No completed tasks yet.");
+      panel.appendChild(empty);
+    } else {
+      var frag = document.createDocumentFragment();
+      tasks.forEach(function (t) {
+        var item = el("button", "rp-switcher-item");
+        item.type = "button";
+        item.dataset.taskId = t.id;
+        if (t.id === state.selectedTaskId) item.classList.add("active");
+        var badge = el("span", "rp-switcher-item-badge");
+        badge.style.background = taskTypeColor(t.type);
+        item.appendChild(badge);
+        var label = TOOL_LABELS[t.type] || t.type;
+        var primary = el("span", null, label + " \u00b7 " + (t.participant || ""));
+        item.appendChild(primary);
+        if (t.region) {
+          var meta = el("span", "rp-switcher-item-meta", t.region);
+          item.appendChild(meta);
+        }
+        item.addEventListener("click", function (e) {
+          e.stopPropagation();
+          var taskId = t.id;
+          closeResultsSwitcher();
+          var task = findTask(taskId);
+          if (!task) return;
+          if (task.participant && task.participant !== state.selectedParticipant) {
+            selectParticipant(task.participant);
+          }
+          state.selectedTaskId = taskId;
+          setRightPaneTab("results");
+          loadAndShowResults(taskId);
+          renderTaskList();
+        });
+        frag.appendChild(item);
+      });
+      panel.appendChild(frag);
+    }
+    var tab = qs('.rp-tab[data-tab="results"]');
+    var tabsEl = qs("#rightPaneTabs");
+    if (tab && tabsEl) {
+      var tabRect = tab.getBoundingClientRect();
+      var tabsRect = tabsEl.getBoundingClientRect();
+      var tabCenter = tabRect.left - tabsRect.left + tabRect.width / 2;
+      panel.style.left = tabCenter + "px";
+      panel.style.transform = "translateX(-50%)";
+    }
+    panel.classList.remove("hidden");
+    state.resultsSwitcherOpen = true;
+    if (tab) tab.classList.add("switcher-open");
+  }
+
+  function closeResultsSwitcher() {
+    var panel = qs("#resultsSwitcherPanel");
+    if (panel) panel.classList.add("hidden");
+    state.resultsSwitcherOpen = false;
+    var tab = qs('.rp-tab[data-tab="results"]');
+    if (tab) tab.classList.remove("switcher-open");
+  }
+
+  function initRightPaneTabs() {
+    qsa("#rightPaneTabs .rp-tab").forEach(function (btn) {
+      btn.addEventListener("click", function (e) {
+        e.stopPropagation();
+        var tab = btn.dataset.tab;
+        if (tab === "queue") {
+          setRightPaneTab("queue");
+          return;
+        }
+        if (tab === "results") {
+          if (state.rightPaneTab === "results" && state.selectedTaskId) {
+            if (state.resultsSwitcherOpen) closeResultsSwitcher();
+            else openResultsSwitcher();
+          } else {
+            setRightPaneTab("results");
+          }
+        }
+      });
+    });
+    document.addEventListener("click", function (e) {
+      if (!state.resultsSwitcherOpen) return;
+      if (e.target.closest("#resultsSwitcherPanel")) return;
+      if (e.target.closest('.rp-tab[data-tab="results"]')) return;
+      closeResultsSwitcher();
+    });
+  }
+
   function initTaskQueue() {
     var taskListEl = qs("#taskList");
 
@@ -4469,6 +4623,7 @@
                 state.selectedTaskId = null;
                 state.selectedTaskResults = null;
                 renderResults();
+                setRightPaneTab("queue");
               }
               renderTaskList();
               renderTimeline();
@@ -4496,11 +4651,14 @@
           renderResults();
           renderTaskList();
           renderTimeline();
+          updateResultsCrumb();
+          setRightPaneTab("queue");
         } else {
           if (task.participant && task.participant !== state.selectedParticipant) {
             selectParticipant(task.participant);
           }
           state.selectedTaskId = taskId;
+          setRightPaneTab("results");
           loadAndShowResults(taskId);
           renderTaskList();
         }
@@ -5025,6 +5183,7 @@
     });
     container.innerHTML = "";
     container.appendChild(frag);
+    updateResultsCrumb();
   }
 
   // ---- SSE (Server-Sent Events) with polling fallback ----
@@ -5170,16 +5329,34 @@
       }
     });
 
-    qs("#showExcludedCb").addEventListener("change", function () {
-      state.showExcluded = this.checked;
+    var showExcludedBtn = qs("#showExcludedBtn");
+    function updateShowExcludedIcon() {
+      var iconSpan = showExcludedBtn.querySelector(".rp-icon-btn-icon");
+      iconSpan.classList.toggle("rp-icon-eye", state.showExcluded);
+      iconSpan.classList.toggle("rp-icon-eye-slash", !state.showExcluded);
+      showExcludedBtn.classList.toggle("active", state.showExcluded);
+    }
+    updateShowExcludedIcon();
+    showExcludedBtn.addEventListener("click", function () {
+      state.showExcluded = !state.showExcluded;
+      updateShowExcludedIcon();
       renderResults();
     });
+    attachHoverTooltip(showExcludedBtn, function () {
+      return state.showExcluded ? "Hiding excluded results is off" : "Hiding excluded results is on";
+    }, { align: "center" });
 
-    qs("#certaintyCutoff").addEventListener("input", function () {
+    var certaintySlider = qs("#certaintyCutoff");
+    certaintySlider.addEventListener("input", function () {
       state.certaintyCutoff = parseInt(this.value, 10) / 100;
-      qs("#certaintyCutoffVal").textContent = this.value + "%";
       renderResults();
     });
+    attachHoverTooltip(certaintySlider, function () {
+      return "Certainty threshold: " + certaintySlider.value + "%";
+    }, { align: "center" });
+
+    var exclBtn = qs("#excludeNonVisibleBtn");
+    attachHoverTooltip(exclBtn, "Exclude results below the certainty threshold", { align: "center" });
 
     qs("#excludeNonVisibleBtn").addEventListener("click", function () {
       var events = state.taskEvents[state.selectedTaskId] || [];
@@ -5221,8 +5398,6 @@
     state.certaintyCutoff = 0;
     var slider = qs("#certaintyCutoff");
     if (slider) slider.value = "0";
-    var valSpan = qs("#certaintyCutoffVal");
-    if (valSpan) valSpan.textContent = "0%";
     apiGet("api/tasks/" + taskId + "/results")
       .then(function (data) {
         if (resultsRequestVersion !== _resultsRequestVersion || state.selectedTaskId !== selectedTaskId) return null;
@@ -5235,13 +5410,14 @@
         state.taskEvents[selectedTaskId] = evData.events || [];
         renderResults();
         renderTaskList();
+        updateResultsCrumb();
       })
       .catch(function () { showToast("Failed to load results"); });
   }
 
   function renderResults() {
     var container = qs("#resultsList");
-    var countEl = qs("#resultCount");
+    var countEl = qs("#resultCount") || { textContent: "" };
     var actionsEl = qs("#resultsActions");
     var results = state.selectedTaskResults;
     var task = state.selectedTaskId ? findTask(state.selectedTaskId) : null;
@@ -5303,9 +5479,9 @@
 
     // Show/hide certainty controls based on whether the tool has confidence scores
     var hasConf = task && { change: 1, similarity: 1, text: 1, template: 1, scene: 1, flow: 1, multitool: 1, inactivity: 1 }[task.type];
-    var certLabel = qs("#certaintyCutoffLabel");
+    var certWrap = qs("#certaintyCutoffWrap");
     var exclBtn = qs("#excludeNonVisibleBtn");
-    if (certLabel) certLabel.classList.toggle("hidden", !hasConf);
+    if (certWrap) certWrap.classList.toggle("hidden", !hasConf);
     if (exclBtn) exclBtn.classList.toggle("hidden", !hasConf);
 
     // Timelapse: single file result
@@ -5348,7 +5524,7 @@
     // For color results (spans), build a consumed-index tracker per timestamp
     var eventTsIndex = {};
 
-    var showToggle = qs("#showExcludedToggle");
+    var showToggle = qs("#showExcludedBtn");
     if (showToggle) showToggle.classList.toggle("hidden", events.length === 0);
 
     var visibleCount = 0;
@@ -5724,6 +5900,7 @@
     initParamTooltips();
     initRunButton();
     initTaskQueue();
+    initRightPaneTabs();
     initPauseButton();
     initTaskFilters();
     initResultsPanel();
