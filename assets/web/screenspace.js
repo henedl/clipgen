@@ -2751,8 +2751,13 @@
           opBtn.addEventListener("click", function (e) {
             e.stopPropagation();
             var s = state.multitoolSteps[capturedIdx];
-            s.logic = (s.logic || "AND").toUpperCase() === "NOT" ? "AND" : "NOT";
-            renderWorkflowParams();
+            var next = (s.logic || "AND").toUpperCase() === "NOT" ? "AND" : "NOT";
+            s.logic = next;
+            opBtn.classList.toggle("is-not", next === "NOT");
+            opBtn.classList.toggle("is-and", next === "AND");
+            opBtn.title = next === "NOT"
+              ? "NOT — frame rejected if this matches (click to switch to AND)"
+              : "AND — frame must also match (click to switch to NOT)";
           });
         })(idx);
         rail.appendChild(opBtn);
