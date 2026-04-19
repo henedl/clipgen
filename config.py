@@ -29,7 +29,7 @@ from icecream import ic
 REENCODING: bool = False
 AUDIO_NORMALIZE: bool = False
 FILEFORMAT: str = ".mp4"
-VERSIONNUM: str = "0.10.74"
+VERSIONNUM: str = "0.10.75"
 TITLECARDS_ENABLED: bool = (
     False  # use --titlecards / --no-titlecards to override per run
 )
@@ -278,7 +278,7 @@ SETTINGS_DESCRIPTIONS: dict[str, str] = {
     "TRANSCRIBE_ENABLED": "Generate transcripts alongside clips using faster-whisper.",
     "TRANSCRIBE_MODEL": "Whisper model size: tiny, base, small, medium, large-v3.",
     "TRANSCRIBE_FORMAT": "Transcript output format: md (Markdown), srt, or vtt.",
-    "TRANSCRIBE_PREWARM": "When the Transcripts page pre-loads the Whisper model: off, queue_open (opening Queue), or page_load (after listing participants).",
+    "TRANSCRIBE_PREWARM": "When the Transcripts page pre-loads the Whisper model: off, queue_open (opening a pill's options pane or hovering a pill that needs transcription), or page_load (after listing participants).",
     "HIGHLIGHTS_REEL_DURATION_SECONDS": "Maximum duration in seconds for the highlights reel time budget.",
     "MANIFEST_ENABLED": "Write a manifest JSON file alongside generated artifacts for session tracking.",
     "STUDIO_CELL_EXPAND_HOVER": "Expand overflowing timestamp cells on hover in the Sheet Preview.",
