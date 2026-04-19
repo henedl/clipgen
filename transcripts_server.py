@@ -776,6 +776,7 @@ def api_transcribe() -> FlaskResponse:
 
     participant_ids = data.get("participants", [])
     force = data.get("force", False)
+    overrides = data.get("overrides") or {}
 
     if not participant_ids:
         return jsonify({"ok": False, "error": "No participants specified"}), 400
@@ -795,7 +796,15 @@ def api_transcribe() -> FlaskResponse:
             if not force and pid in src and src[pid].get("segments"):
                 continue
 
-            task = transcripts.create_transcript_task(pid, p["video_path"])
+            o = overrides.get(pid) or {}
+            model_override = o.get("model") or None
+            language_override = o.get("language") or None
+            task = transcripts.create_transcript_task(
+                pid,
+                p["video_path"],
+                model=model_override,
+                language=language_override,
+            )
             if _worker:
                 _worker.enqueue(task)
             enqueued.append(

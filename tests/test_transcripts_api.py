@@ -1,10 +1,13 @@
 """Smoke tests for Transcripts Flask API (prewarm + model status)."""
 
+from typing import cast
+
 import pytest
 
 Flask = pytest.importorskip("flask").Flask
 
 import config  # noqa: E402
+import transcripts  # noqa: E402
 import transcripts_server  # noqa: E402
 import viewer  # noqa: E402
 
@@ -80,3 +83,57 @@ def test_warmup_already_loaded_in_debugging(tr_client, monkeypatch):
     data = resp.get_json()
     assert data["ok"] is True
     assert data.get("already_loaded") is True
+
+
+def test_transcribe_applies_per_participant_overrides(tr_client, monkeypatch):
+    """POST /api/transcribe threads {model, language} overrides onto the task."""
+
+    captured: list[dict] = []
+
+    class _StubWorker:
+        def enqueue(self, task):
+            captured.append(task)
+
+    transcripts_server._participants = [
+        {"id": "P01", "video_path": "/tmp/P01.mp4", "has_video": True}
+    ]
+    transcripts_server._worker = cast("transcripts.TranscriptWorker", _StubWorker())
+
+    resp = tr_client.post(
+        "/transcripts/api/transcribe",
+        json={
+            "participants": ["P01"],
+            "force": True,
+            "overrides": {"P01": {"model": "tiny", "language": "sv"}},
+        },
+    )
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["ok"] is True
+    assert len(captured) == 1
+    assert captured[0]["model"] == "tiny"
+    assert captured[0]["language"] == "sv"
+
+
+def test_transcribe_without_overrides_defaults_to_none(tr_client):
+    """Missing overrides → task uses None (worker falls back to config defaults)."""
+
+    captured: list[dict] = []
+
+    class _StubWorker:
+        def enqueue(self, task):
+            captured.append(task)
+
+    transcripts_server._participants = [
+        {"id": "P01", "video_path": "/tmp/P01.mp4", "has_video": True}
+    ]
+    transcripts_server._worker = cast("transcripts.TranscriptWorker", _StubWorker())
+
+    resp = tr_client.post(
+        "/transcripts/api/transcribe",
+        json={"participants": ["P01"], "force": True},
+    )
+    assert resp.status_code == 200
+    assert len(captured) == 1
+    assert captured[0]["model"] is None
+    assert captured[0]["language"] is None
