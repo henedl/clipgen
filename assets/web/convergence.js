@@ -46,7 +46,7 @@
   }
 
   function clockToSeconds(ts) {
-    // Like parseTimestampToSeconds but treats 2-part as HH:MM (clock time)
+    // Like utils.parseTimestamp but treats 2-part as HH:MM (clock time)
     // rather than MM:SS.  Matches Python utils._clock_to_seconds.
     var parts = ts.split(":");
     if (parts.length === 3)
@@ -113,20 +113,6 @@
     return { r: 59, g: 130, b: 246 };
   }
 
-  // --- Tooltip Positioning ---
-
-  function cvPositionTooltip(tooltipEl, anchorRect) {
-    var ttW = tooltipEl.offsetWidth;
-    var ttH = tooltipEl.offsetHeight;
-    var left = anchorRect.left + anchorRect.width / 2 - ttW / 2;
-    var top = anchorRect.top - ttH - 6;
-    if (top < 4) top = anchorRect.bottom + 6;
-    if (left < 4) left = 4;
-    if (left + ttW > window.innerWidth - 4) left = window.innerWidth - ttW - 4;
-    tooltipEl.style.left = left + "px";
-    tooltipEl.style.top = top + "px";
-  }
-
   // --- Frame Preview ---
 
   function cvFrameUrl(source, participant, startSec) {
@@ -166,6 +152,7 @@
     } else if (!cached) {
       _cvFrameCache[url] = "loading";
       img.src = "";
+      // TODO: utils.apiGet returns JSON; needs an apiGetBlob helper to migrate.
       fetch(url)
         .then(function (r) {
           if (!r.ok) throw new Error("status " + r.status);
@@ -187,7 +174,7 @@
 
     lbl.textContent = event.participant + " \u00b7 " + formatTime(event.start);
     preview.classList.remove("hidden");
-    cvPositionTooltip(preview, markerEl.getBoundingClientRect());
+    positionTooltipAnchored(preview, markerEl.getBoundingClientRect());
   }
 
   function cvHideFramePreview() {
@@ -860,7 +847,7 @@
               + " \u00b7 " + zone.events.length + " event"
               + (zone.events.length !== 1 ? "s" : "");
             tip.classList.remove("hidden");
-            cvPositionTooltip(tip, {
+            positionTooltipAnchored(tip, {
               left: e.clientX - 4, top: rect.top,
               width: 8, height: rect.height, bottom: rect.bottom,
             });
@@ -1505,7 +1492,6 @@
   // --- Window exports ---
   window.convergenceActivate = activate;
   window.convergenceDeactivate = deactivate;
-  window.convergenceInit = init;
   window.convergenceResize = debounce(function () {
     if (!cvState.active) return;
     render();

@@ -44,8 +44,6 @@
 
   // ---- Helpers ----
 
-  var severityClassForLabel = severityClass;
-
   var SEVERITY_SORT = {
     "sev-critical": -4,
     "sev-high": -3,
@@ -68,7 +66,7 @@
     var parts = ["artifact-marker", markerTypeClass(a.type)];
     var sev = (a.severity || "").trim();
     if (sev) {
-      parts.push(severityClassForLabel(sev));
+      parts.push(severityClass(sev));
     }
     return parts.join(" ");
   }
@@ -83,8 +81,8 @@
       labels.push(s);
     });
     labels.sort(function (a, b) {
-      var ca = severityClassForLabel(a);
-      var cb = severityClassForLabel(b);
+      var ca = severityClass(a);
+      var cb = severityClass(b);
       var na = SEVERITY_SORT.hasOwnProperty(ca) ? SEVERITY_SORT[ca] : 999;
       var nb = SEVERITY_SORT.hasOwnProperty(cb) ? SEVERITY_SORT[cb] : 999;
       if (na !== nb) return na - nb;
@@ -103,7 +101,7 @@
     }
     pillEl.classList.remove("hidden");
     pillEl.textContent = sev;
-    pillEl.className = "detail-badge detail-severity " + severityClassForLabel(sev);
+    pillEl.className = "detail-badge detail-severity " + severityClass(sev);
   }
 
   // ---- Clip thumbnails ----
@@ -752,7 +750,7 @@
     leg.appendChild(prefix);
     labels.forEach(function (lab) {
       var wrap = el("span", "severity-legend-item");
-      var sw = el("span", "legend-severity-swatch " + severityClassForLabel(lab));
+      var sw = el("span", "legend-severity-swatch " + severityClass(lab));
       wrap.appendChild(sw);
       wrap.appendChild(document.createTextNode(lab));
       leg.appendChild(wrap);
@@ -908,7 +906,7 @@
     var items = artifacts.map(function (a) {
       var s = a.start || 0;
       var e = a.end || a.start || 0;
-      var cls = severityClassForLabel(a.severity);
+      var cls = severityClass(a.severity);
       var sevVal = cls && SEVERITY_SORT.hasOwnProperty(cls) ? SEVERITY_SORT[cls] : 999;
       return { id: a.id, duration: e - s, start: s, sevVal: sevVal };
     });
@@ -1120,8 +1118,8 @@
         else if (ae) r = 1;
         else if (be) r = -1;
         else {
-          var ca = severityClassForLabel(a.severity);
-          var cb = severityClassForLabel(b.severity);
+          var ca = severityClass(a.severity);
+          var cb = severityClass(b.severity);
           var na = SEVERITY_SORT.hasOwnProperty(ca) ? SEVERITY_SORT[ca] : 999;
           var nb = SEVERITY_SORT.hasOwnProperty(cb) ? SEVERITY_SORT[cb] : 999;
           if (dir === "desc") r = na - nb;
@@ -1329,7 +1327,7 @@
       badges.appendChild(el("span", "badge badge-" + markerTypeClass(a.type), a.type || "clip"));
       if (a.category) badges.appendChild(el("span", "badge badge-category", a.category));
       var sev = (a.severity || "").trim();
-      if (sev) badges.appendChild(el("span", "badge badge-severity " + severityClassForLabel(sev), sev));
+      if (sev) badges.appendChild(el("span", "badge badge-severity " + severityClass(sev), sev));
       meta.appendChild(badges);
       meta.appendChild(el("div", "artifact-desc", a.description || "(no description)"));
       meta.appendChild(el("div", "artifact-time",

@@ -155,19 +155,6 @@
     if (td) td.classList.add("header-highlight");
   }
 
-  function parseTimestampToSeconds(ts) {
-    var parts = ts.split(":");
-    if (parts.length === 3)
-      return (
-        parseInt(parts[0], 10) * 3600 +
-        parseInt(parts[1], 10) * 60 +
-        parseInt(parts[2], 10)
-      );
-    if (parts.length === 2)
-      return parseInt(parts[0], 10) * 60 + parseInt(parts[1], 10);
-    return NaN;
-  }
-
   function parseClipTimestamps(raw) {
     var DEFAULT_DUR = (state.sheetData && state.sheetData.defaultDuration) || 60;
     var cleaned = raw
@@ -188,14 +175,14 @@
         }
       }
       if (dashIdx > 0) {
-        var s = parseTimestampToSeconds(tok.substring(0, dashIdx));
-        var e = parseTimestampToSeconds(tok.substring(dashIdx + 1));
-        if (!isNaN(s) && !isNaN(e)) {
+        var s = parseTimestamp(tok.substring(0, dashIdx));
+        var e = parseTimestamp(tok.substring(dashIdx + 1));
+        if (s !== null && e !== null) {
           segments.push({ startSeconds: Math.floor(s), duration: Math.max(0, e - s) });
         }
       } else if (tok.indexOf(":") > 0) {
-        var sec = parseTimestampToSeconds(tok);
-        if (!isNaN(sec)) {
+        var sec = parseTimestamp(tok);
+        if (sec !== null) {
           segments.push({ startSeconds: Math.floor(sec), duration: DEFAULT_DUR });
         }
       }
@@ -259,18 +246,6 @@
     }
 
     return result;
-  }
-
-  function positionTooltip(tooltipEl, anchorRect) {
-    var ttW = tooltipEl.offsetWidth;
-    var ttH = tooltipEl.offsetHeight;
-    var left = anchorRect.left + anchorRect.width / 2 - ttW / 2;
-    var top = anchorRect.top - ttH - 6;
-    if (top < 4) top = anchorRect.bottom + 6;
-    if (left < 4) left = 4;
-    if (left + ttW > window.innerWidth - 4) left = window.innerWidth - ttW - 4;
-    tooltipEl.style.left = left + "px";
-    tooltipEl.style.top = top + "px";
   }
 
   function intakeComputeTickInterval(visLen) {
@@ -679,11 +654,7 @@
   // ---- Data loading ----
 
   function loadSheetData() {
-    fetch("api/sheet")
-      .then(function (r) {
-        if (!r.ok) throw new Error("Server error " + r.status);
-        return r.json();
-      })
+    apiGet("api/sheet")
       .then(function (data) {
         if (!data.ok) {
           qs("#sheetLoading").textContent =
@@ -736,6 +707,7 @@
     var svg = btn.querySelector("svg");
     if (svg) svg.style.animation = "spin 0.7s linear infinite";
 
+    // TODO: no r.ok check; migrating to apiPost would add throw on HTTP error.
     fetch("api/sheet/refresh", { method: "POST" })
       .then(function (r) { return r.json(); })
       .then(function (data) {
@@ -755,6 +727,7 @@
   }
 
   function loadManifestState() {
+    // TODO: no r.ok check; migrating to apiGet would add throw on HTTP error.
     fetch("api/manifest")
       .then(function (r) { return r.json(); })
       .then(function (data) {
@@ -989,6 +962,24 @@
 
   // ---- Panel divider (resizable split between sheet preview and bottom panel) ----
 
+  // Tab panels whose height tracks the divider. Keep in sync with the markup in studio.html;
+  // every preview tab that shares the upper pane must appear here so the drag/collapse/resize
+  // code paths apply the same maxHeight to each.
+  var UPPER_PANE_PANELS = [
+    "#sheetGrid",
+    "#intakePanel",
+    "#trIntakePanel",
+    "#convergencePanel",
+    "#metadataPanel",
+  ];
+
+  function applyUpperPaneMaxHeight(value) {
+    for (var i = 0; i < UPPER_PANE_PANELS.length; i++) {
+      var p = qs(UPPER_PANE_PANELS[i]);
+      if (p) p.style.maxHeight = value;
+    }
+  }
+
   function computeGridMaxHeight(bottomHeightOverride) {
     var header = qs("#studioHeader");
     var preview = qs("#sheetPreview");
@@ -1024,15 +1015,7 @@
     state.dividerOffset = Math.min(state.dividerOffset, maxAllowed);
 
     var maxH = Math.max(MIN_GRID, available - state.dividerOffset) + "px";
-    grid.style.maxHeight = maxH;
-    var intakePanel = qs("#intakePanel");
-    if (intakePanel) intakePanel.style.maxHeight = maxH;
-    var trIntakePanel = qs("#trIntakePanel");
-    if (trIntakePanel) trIntakePanel.style.maxHeight = maxH;
-    var convergencePanel = qs("#convergencePanel");
-    if (convergencePanel) convergencePanel.style.maxHeight = maxH;
-    var metadataPanel = qs("#metadataPanel");
-    if (metadataPanel) metadataPanel.style.maxHeight = maxH;
+    applyUpperPaneMaxHeight(maxH);
   }
 
   function initPanelDivider() {
@@ -1106,14 +1089,7 @@
         // Apply maxHeight directly using the stable snapshot
         var MIN_GRID = 100;
         var maxH = Math.max(MIN_GRID, dragAvailable - state.dividerOffset) + "px";
-        var grid = qs("#sheetGrid");
-        if (grid) grid.style.maxHeight = maxH;
-        var intakePanel = qs("#intakePanel");
-        if (intakePanel) intakePanel.style.maxHeight = maxH;
-        var trIntakePanel = qs("#trIntakePanel");
-        if (trIntakePanel) trIntakePanel.style.maxHeight = maxH;
-        var convergencePanel = qs("#convergencePanel");
-        if (convergencePanel) convergencePanel.style.maxHeight = maxH;
+        applyUpperPaneMaxHeight(maxH);
 
         rafPending = false;
       });
@@ -1179,11 +1155,7 @@
       state.dividerOffset = 0;
 
       // Clear grid maxHeight — collapsed CSS flex rules fill the space instead
-      var panels = ["#sheetGrid", "#intakePanel", "#trIntakePanel", "#convergencePanel", "#metadataPanel"];
-      for (var i = 0; i < panels.length; i++) {
-        var p = qs(panels[i]);
-        if (p) p.style.maxHeight = "";
-      }
+      applyUpperPaneMaxHeight("");
 
       document.body.classList.add("bottom-animating");
       var currentH = bottom.offsetHeight;
@@ -1965,6 +1937,7 @@
   // ---- Stashed reels ----
 
   function loadStashes() {
+    // TODO: no r.ok check; migrating to apiGet would surface HTTP errors via the catch.
     fetch("api/stashes")
       .then(function (r) { return r.json(); })
       .then(function (data) {
@@ -2061,6 +2034,7 @@
 
     var items = state.reelQueue.slice();
     var totalDuration = computeReelDuration(items);
+    // TODO: no r.ok check; migrating to apiPost would surface HTTP errors via the catch.
     fetch("api/stashes", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -2090,6 +2064,7 @@
   }
 
   function deleteStash(stashId, endpoint, stateArray, renderFn) {
+    // TODO: no r.ok check; migrating to apiPost would surface HTTP errors via the catch.
     fetch(endpoint, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -2129,6 +2104,7 @@
       });
       parent.replaceChild(span, input);
 
+      // TODO: fire-and-forget; needs custom shape, no migration to apiPost.
       fetch(endpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -2150,6 +2126,7 @@
 
   function createStashViaAPI(endpoint, items, onSuccess) {
     var totalDuration = computeReelDuration(items);
+    // TODO: no r.ok check; migrating to apiPost would surface HTTP errors via the catch.
     fetch(endpoint, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -2165,6 +2142,7 @@
   // ---- Stashed artifacts ----
 
   function loadArtifactStashes() {
+    // TODO: no r.ok check; migrating to apiGet would surface HTTP errors via the catch.
     fetch("api/artifact-stashes")
       .then(function (r) { return r.json(); })
       .then(function (data) {
@@ -2248,6 +2226,7 @@
 
     var items = state.artifactQueue.slice();
     var totalDuration = computeReelDuration(items);
+    // TODO: no r.ok check; migrating to apiPost would surface HTTP errors via the catch.
     fetch("api/artifact-stashes", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -2374,6 +2353,7 @@
     qs("#statusDismiss").addEventListener("click", hideOverlay);
     qs("#statusOpen").addEventListener("click", function () {
       if (_lastViewerFile) {
+        // TODO: fire-and-forget with no response handling; no clean migration to apiPost.
         fetch("api/open-viewer", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -2559,6 +2539,8 @@
         if (tcDur) genBody.titlecard_duration = parseInt(tcDur.value, 10) || 2;
       }
 
+      // TODO: streaming NDJSON response — not a JSON body. apiPost doesn't apply;
+      // manual fetch is required to get a reader and parse line-delimited progress events.
       fetch("api/generate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -2608,6 +2590,8 @@
         };
       });
 
+      // TODO: skips r.ok check — success is signaled by data.ok from server. Migrating to apiPost
+      // would add an r.ok throw that this handler doesn't currently trigger.
       fetch("api/generate-intake", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -2646,6 +2630,7 @@
 
   function onCancelReel() {
     qs("#cancelReelBtn").classList.add("hidden");
+    // TODO: fire-and-forget POST with no body; apiPost would send JSON.stringify(undefined).
     fetch("api/reel/cancel", { method: "POST" });
   }
 
@@ -2709,15 +2694,7 @@
       setCardQueued(reelCards[i]);
     }
 
-    fetch(endpoint, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(reelBody),
-    })
-      .then(function (r) {
-        if (!r.ok) throw new Error("Server error " + r.status);
-        return r.json();
-      })
+    apiPost(endpoint, reelBody)
       .then(function (data) {
         state.generating = false;
         setTitleSpinner("reelSpinner", false);
@@ -2765,15 +2742,7 @@
 
     showOverlay("Building timeline viewer...");
 
-    fetch("api/viewer", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({}),
-    })
-      .then(function (r) {
-        if (!r.ok) throw new Error("Server error " + r.status);
-        return r.json();
-      })
+    apiPost("api/viewer", {})
       .then(function (data) {
         state.generating = false;
         if (data.ok) {
@@ -2825,15 +2794,7 @@
       showOverlay("Building timeline viewer\u2026");
     }
 
-    fetch("api/timeline-viewer", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    })
-      .then(function (r) {
-        if (!r.ok) throw new Error("Server error " + r.status);
-        return r.json();
-      })
+    apiPost("api/timeline-viewer", body)
       .then(function (data) {
         state.generating = false;
         if (data.ok) {
@@ -2885,15 +2846,7 @@
     state.generating = true;
     showOverlay("Finding best clips (" + duration + "s budget)...");
 
-    fetch("api/highlights-preview", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ highlights_duration: duration }),
-    })
-      .then(function (r) {
-        if (!r.ok) throw new Error("Server error " + r.status);
-        return r.json();
-      })
+    apiPost("api/highlights-preview", { highlights_duration: duration })
       .then(function (data) {
         state.generating = false;
         if (data.ok && data.clips && data.clips.length > 0) {
@@ -2971,15 +2924,7 @@
     state.generating = true;
     showOverlay("Generating gallery viewer for " + participant + "...");
 
-    fetch("api/gallery", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ participant: participant, format: format, interval: interval, bundle: bundle }),
-    })
-      .then(function (r) {
-        if (!r.ok) throw new Error("Server error " + r.status);
-        return r.json();
-      })
+    apiPost("api/gallery", { participant: participant, format: format, interval: interval, bundle: bundle })
       .then(function (data) {
         state.generating = false;
         if (data.ok) {
@@ -3137,6 +3082,7 @@
   function _fetchModels() {
     if (_modelsCache) return Promise.resolve(_modelsCache);
     if (_modelsCachePromise) return _modelsCachePromise;
+    // TODO: skips r.ok; cross-mode URL (../api/...) — apiGet would migrate if it accepts absolute paths.
     _modelsCachePromise = fetch("../api/models")
       .then(function (r) { return r.json(); })
       .then(function (data) {
@@ -3202,6 +3148,7 @@
 
   function loadSettings() {
     qs("#settingsContent").textContent = "Loading settings\u2026";
+    // TODO: skips r.ok check — handler reacts only to data.ok. apiGet would throw on non-2xx.
     fetch("api/settings")
       .then(function (r) { return r.json(); })
       .then(function (data) {
@@ -3373,6 +3320,8 @@
     var statusEl = qs("#settingsSaveStatus");
     if (statusEl) statusEl.textContent = "Saving\u2026";
 
+    // TODO: skips r.ok — "Save failed" is shown when data.ok is false; apiPut would convert
+    // non-2xx into a catch branch that also shows the same message, but changes status-code semantics.
     fetch("api/settings", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
@@ -3401,6 +3350,8 @@
     }
     renderSettings();
 
+    // TODO: skips r.ok; response payload is ignored beyond success path. Migrating to apiPut
+    // would surface non-2xx via .catch — currently any failure is silently swallowed.
     fetch("api/settings", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
@@ -3452,6 +3403,7 @@
       TITLECARD_DURATION_SECONDS: parseInt(dur.value, 10) || 2,
     };
 
+    // TODO: skips r.ok; only reacts to data.ok. Silent on HTTP failure — apiPut would expose it via .catch.
     fetch("api/settings", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
@@ -3500,6 +3452,8 @@
   }
 
   function checkNavLinks() {
+    // TODO: skips r.ok; a failed request silently leaves tabs hidden. apiGet would catch but
+    // the current code already swallows errors via the .catch below.
     fetch("../api/status")
       .then(function (r) { return r.json(); })
       .then(function (data) {
@@ -3550,6 +3504,7 @@
       if (!item.img.parentNode) continue;
       _ssThumbActive++;
       (function (entry) {
+        // TODO: returns a blob (image), not JSON. apiGet doesn't cover blob responses.
         fetch(entry.url)
           .then(function (r) {
             if (!r.ok) throw new Error("status " + r.status);
@@ -3669,11 +3624,7 @@
   }
 
   function pollIntakeEvents() {
-    fetch("../screenspace/api/events?excluded=false")
-      .then(function (r) {
-        if (!r.ok) throw new Error("status " + r.status);
-        return r.json();
-      })
+    apiGet("../screenspace/api/events?excluded=false")
       .then(function (data) {
         if (!data.ok) return;
         var events = data.events || [];
@@ -4001,6 +3952,8 @@
 
   function intakeDismissCluster(cluster) {
     var ids = cluster.events.map(function (e) { return e.id; });
+    // TODO: response body ignored; apiPut would parse JSON unnecessarily. Refactor if a
+    // fire-and-forget apiPutVoid helper is added.
     fetch("../screenspace/api/events/bulk-exclude", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
@@ -4097,7 +4050,7 @@
         if (tooltipText) {
           trTooltip.textContent = tooltipText;
           trTooltip.classList.remove("hidden");
-          positionTooltip(trTooltip, card.getBoundingClientRect());
+          positionTooltipAnchored(trTooltip, card.getBoundingClientRect());
         } else {
           trTooltip.classList.add("hidden");
         }
@@ -4227,6 +4180,7 @@
   };
 
   function pollTranscriptIntakeMarks() {
+    // TODO: skips r.ok; migrating to apiGet would catch HTTP errors currently silently swallowed.
     fetch("../transcripts/api/marks")
       .then(function (r) { return r.json(); })
       .then(function (data) {
@@ -4237,12 +4191,14 @@
 
         // If "Show all" is enabled, also fetch all segments as unmark items
         if (state.trIntakeShowAll) {
+          // TODO: skips r.ok (same pattern).
           fetch("../transcripts/api/participants")
             .then(function (r2) { return r2.json(); })
             .then(function (pData) {
               if (!pData.ok) return;
               var transcribed = pData.participants.filter(function (p) { return p.has_transcript; });
               var promises = transcribed.map(function (p) {
+                // TODO: skips r.ok (same pattern).
                 return fetch("../transcripts/api/transcript/" + p.id).then(function (r3) { return r3.json(); });
               });
               Promise.all(promises).then(function (results) {
@@ -4616,6 +4572,7 @@
       if (!cluster) return;
       var ids = cluster.marks.map(function (m) { return m.id; }).filter(Boolean);
       if (!ids.length) return;
+      // TODO: DELETE with a JSON body — apiDelete takes no body, so this custom fetch stays.
       fetch("../transcripts/api/marks/" + ids[0], {
         method: "DELETE",
         headers: { "Content-Type": "application/json" },
@@ -4640,7 +4597,7 @@
         if (fullText) {
           trTooltip.textContent = fullText;
           trTooltip.classList.remove("hidden");
-          positionTooltip(trTooltip, card.getBoundingClientRect());
+          positionTooltipAnchored(trTooltip, card.getBoundingClientRect());
         } else {
           trTooltip.classList.add("hidden");
         }
@@ -4855,15 +4812,12 @@
 
   window._studioState = state;
   window._studioParseClipTimestamps = parseClipTimestamps;
-  window._studioParseTimestampToSeconds = parseTimestampToSeconds;
   window._studioHexToRgba = hexToRgba;
-  window._studioIntakeComputeTickInterval = intakeComputeTickInterval;
   window._studioFormatDuration = formatDuration;
   window._studioFindOverlappingData = findOverlappingData;
   window._studioBuildXrefBadges = buildXrefBadges;
   window._studioRenderArtifactQueue = renderArtifactQueue;
   window._studioRenderReelQueue = renderReelQueue;
-  window._studioSaveQueues = saveQueues;
   window._studioClusterIntakeEvents = clusterIntakeEvents;
   window._studioClusterTranscriptMarks = clusterTranscriptMarks;
   window._studioROW_FUNCTIONS = ROW_FUNCTIONS;

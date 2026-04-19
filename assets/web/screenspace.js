@@ -66,6 +66,11 @@
   var TIMELINE_CANVAS_HEIGHT = 64;
 
   var _paletteDocListeners = null;
+  // Cached HSV hidden inputs for the single-tool color picker. Populated by
+  // renderColorParams() when the panel is built; reused by setTargetColor,
+  // updateColorPreview, _collectPreviewParams, etc. so they don't re-query
+  // the DOM on every drag tick. Null when no color tool panel is active.
+  var _colorHiddenInputs = null;
 
   var REGION_COLORS = [
     "#3b82f6", "#ef4444", "#22c55e", "#f59e0b",
@@ -182,19 +187,6 @@
     var m = Math.floor(secs / 60);
     var s = secs % 60;
     return m + ":" + (s < 10 ? "0" : "") + s.toFixed(1);
-  }
-
-  function parseTimestampInput(str) {
-    str = (str || "").trim();
-    var parts = str.split(":");
-    if (parts.length === 3) return (+parts[0]) * 3600 + (+parts[1]) * 60 + (+parts[2]);
-    if (parts.length === 2) return (+parts[0]) * 60 + (+parts[1]);
-    var n = parseFloat(str);
-    return isNaN(n) ? null : n;
-  }
-
-  function clamp(val, min, max) {
-    return Math.max(min, Math.min(max, val));
   }
 
   function regionColorForIndex(i) {
@@ -738,7 +730,7 @@
     var input = qs("#timestampInput");
 
     input.addEventListener("change", function () {
-      var ts = parseTimestampInput(input.value);
+      var ts = parseTimestamp(input.value);
       if (ts !== null && state.videoInfo) {
         ts = clamp(ts, 0, state.videoInfo.duration || 0);
         loadFrame(ts);
@@ -2963,6 +2955,7 @@
     pickerGroup.appendChild(hiddenH);
     pickerGroup.appendChild(hiddenS);
     pickerGroup.appendChild(hiddenV);
+    _colorHiddenInputs = { h: hiddenH, s: hiddenS, v: hiddenV, hex: hexInput };
 
     container.appendChild(pickerGroup);
 
@@ -2974,7 +2967,7 @@
       var y = clamp(e.clientY - rect.top, 0, rect.height);
       var h = Math.round((x / rect.width) * 180);
       var s = Math.round((1 - y / rect.height) * 255);
-      var curV = parseFloat(qs("#paramColorV").value) || 0;
+      var curV = parseFloat(hiddenV.value) || 0;
       setTargetColor(h, s, curV);
     }
     palette.addEventListener("mousedown", function (e) {
@@ -2987,8 +2980,8 @@
       var rect = bright.getBoundingClientRect();
       var x = clamp(e.clientX - rect.left, 0, rect.width);
       var v = Math.round((x / rect.width) * 255);
-      var curH = parseFloat(qs("#paramColorH").value) || 0;
-      var curS = parseFloat(qs("#paramColorS").value) || 0;
+      var curH = parseFloat(hiddenH.value) || 0;
+      var curS = parseFloat(hiddenS.value) || 0;
       setTargetColor(curH, curS, v);
     }
     bright.addEventListener("mousedown", function (e) {
@@ -3014,10 +3007,9 @@
       var rgb = hexToRgb(hexInput.value);
       if (rgb) {
         var hsv = rgbToHsv(rgb.r, rgb.g, rgb.b);
-        var hEl = qs("#paramColorH"), sEl = qs("#paramColorS"), vEl = qs("#paramColorV");
-        if (hEl) hEl.value = hsv.h;
-        if (sEl) sEl.value = hsv.s;
-        if (vEl) vEl.value = hsv.v;
+        hiddenH.value = hsv.h;
+        hiddenS.value = hsv.s;
+        hiddenV.value = hsv.v;
         updateColorPreview();
         renderColorPalette();
         renderBrightnessStrip();
@@ -3297,6 +3289,7 @@
   function renderWorkflowParams() {
     var container = qs("#workflowParams");
     container.innerHTML = "";
+    _colorHiddenInputs = null;
     hideToolInfoTooltip(true);
     _toolInfoPinned = false;
     var intervalSlot = qs("#workflowIntervalSlot");
@@ -3464,10 +3457,10 @@
   function _collectPreviewParams(tool) {
     var out = {};
     if (tool === "color") {
-      var hEl = qs("#paramColorH"), sEl = qs("#paramColorS"), vEl = qs("#paramColorV");
-      if (hEl) out.h = hEl.value;
-      if (sEl) out.s = sEl.value;
-      if (vEl) out.v = vEl.value;
+      var c = _colorHiddenInputs;
+      if (c) {
+        out.h = c.h.value; out.s = c.s.value; out.v = c.v.value;
+      }
     } else if (tool === "change") {
       var n = qs("#paramChangeNoise");
       if (n) out.noise = n.value;
@@ -3561,6 +3554,7 @@
 
     var useTemplatePost = tool === "template" && state.uploadedTemplate && state.uploadedTemplate.data;
     if (useTemplatePost) {
+      // TODO: utils.apiPost returns JSON; needs an apiPostBlob helper to migrate.
       fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -3670,11 +3664,9 @@
 
   function updateColorPreview() {
     var preview = qs("#colorPreview");
-    if (!preview) return;
-    var h = parseFloat((qs("#paramColorH") || {}).value) || 0;
-    var s = parseFloat((qs("#paramColorS") || {}).value) || 0;
-    var v = parseFloat((qs("#paramColorV") || {}).value) || 0;
-    var rgb = hsvToRgb(h, s, v);
+    var c = _colorHiddenInputs;
+    if (!preview || !c) return;
+    var rgb = hsvToRgb(parseFloat(c.h.value) || 0, parseFloat(c.s.value) || 0, parseFloat(c.v.value) || 0);
     preview.style.background = rgbToHex(rgb.r, rgb.g, rgb.b);
   }
 
@@ -3682,13 +3674,12 @@
     h = clamp(Math.round(h), 0, 180);
     s = clamp(Math.round(s), 0, 255);
     v = clamp(Math.round(v), 0, 255);
-    var hEl = qs("#paramColorH"), sEl = qs("#paramColorS"), vEl = qs("#paramColorV");
-    if (hEl) hEl.value = h;
-    if (sEl) sEl.value = s;
-    if (vEl) vEl.value = v;
-    var rgb = hsvToRgb(h, s, v);
-    var hexEl = qs("#paramColorHex");
-    if (hexEl) hexEl.value = rgbToHex(rgb.r, rgb.g, rgb.b);
+    var c = _colorHiddenInputs;
+    if (c) {
+      c.h.value = h; c.s.value = s; c.v.value = v;
+      var rgb = hsvToRgb(h, s, v);
+      c.hex.value = rgbToHex(rgb.r, rgb.g, rgb.b);
+    }
     updateColorPreview();
     renderColorPalette();
     renderBrightnessStrip();
@@ -3728,7 +3719,10 @@
     ctx.fillRect(0, 0, w, h);
 
     // Black overlay for brightness
-    var curV = parseFloat((qs("#paramColorV") || {}).value) || 0;
+    var c = _colorHiddenInputs;
+    var curH = c ? parseFloat(c.h.value) || 0 : 0;
+    var curS = c ? parseFloat(c.s.value) || 0 : 0;
+    var curV = c ? parseFloat(c.v.value) || 0 : 0;
     var darkness = 1 - curV / 255;
     if (darkness > 0) {
       ctx.fillStyle = "rgba(0,0,0," + darkness + ")";
@@ -3736,8 +3730,6 @@
     }
 
     // Current position
-    var curH = parseFloat((qs("#paramColorH") || {}).value) || 0;
-    var curS = parseFloat((qs("#paramColorS") || {}).value) || 0;
     var cx = (curH / 180) * w;
     var cy = (1 - curS / 255) * h;
 
@@ -3777,8 +3769,10 @@
     var size = sizeCanvasToDisplay(canvas);
     var w = size.w, h = size.h, dpr = size.dpr;
     var ctx = canvas.getContext("2d");
-    var curH = parseFloat((qs("#paramColorH") || {}).value) || 0;
-    var curS = parseFloat((qs("#paramColorS") || {}).value) || 0;
+    var c = _colorHiddenInputs;
+    var curH = c ? parseFloat(c.h.value) || 0 : 0;
+    var curS = c ? parseFloat(c.s.value) || 0 : 0;
+    var curV = c ? parseFloat(c.v.value) || 0 : 0;
 
     // Gradient from black (left) to fully saturated color (right)
     var fullRgb = hsvToRgb(curH, curS, 255);
@@ -3789,7 +3783,6 @@
     ctx.fillRect(0, 0, w, h);
 
     // Position indicator
-    var curV = parseFloat((qs("#paramColorV") || {}).value) || 0;
     var ix = (curV / 255) * w;
     var r = 4 * dpr;
     ctx.beginPath();
@@ -6006,6 +5999,7 @@
         // Preload frame 0 for all participants (instant first-frame display)
         state.participants.forEach(function (p) {
           var url = frameUrl(p.id, 0);
+          // TODO: fire-and-forget blob preload; needs apiGetBlob helper to migrate.
           fetch(url)
             .then(function (r) { return r.blob(); })
             .then(function (blob) { _preloadedFrames[p.id] = URL.createObjectURL(blob); })
