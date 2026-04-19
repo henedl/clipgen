@@ -1370,7 +1370,6 @@ body {
 
 .param-control input[type="range"] {
   width: 80px;
-  accent-color: var(--color-accent);
 }
 
 .param-control input[type="number"],
@@ -2386,10 +2385,15 @@ body.panel-dragging #bottomPanel {
   display: none;
 }
 
-.rp-certainty-slider {
+/* Shared slider styling — used by all Screenspace range inputs.
+   Per-variant widths live with each slider's own rule
+   (.rp-certainty-slider = 34px, .scene-ref-thresh = 60px,
+   .param-control input[type="range"] = 80px). */
+.rp-certainty-slider,
+.param-control input[type="range"],
+.scene-ref-thresh {
   -webkit-appearance: none;
   appearance: none;
-  width: 34px;
   height: 4px;
   background: var(--color-border);
   border-radius: 2px;
@@ -2397,7 +2401,13 @@ body.panel-dragging #bottomPanel {
   outline: none;
 }
 
-.rp-certainty-slider::-webkit-slider-thumb {
+.rp-certainty-slider {
+  width: 34px;
+}
+
+.rp-certainty-slider::-webkit-slider-thumb,
+.param-control input[type="range"]::-webkit-slider-thumb,
+.scene-ref-thresh::-webkit-slider-thumb {
   -webkit-appearance: none;
   appearance: none;
   width: 12px;
@@ -2406,15 +2416,37 @@ body.panel-dragging #bottomPanel {
   background: var(--color-accent);
   border: none;
   cursor: pointer;
+  transition: box-shadow var(--duration-fast) ease;
 }
 
-.rp-certainty-slider::-moz-range-thumb {
+.rp-certainty-slider::-moz-range-thumb,
+.param-control input[type="range"]::-moz-range-thumb,
+.scene-ref-thresh::-moz-range-thumb {
   width: 12px;
   height: 12px;
   border-radius: 50%;
   background: var(--color-accent);
   border: none;
   cursor: pointer;
+  transition: box-shadow var(--duration-fast) ease;
+}
+
+.rp-certainty-slider:hover::-webkit-slider-thumb,
+.param-control input[type="range"]:hover::-webkit-slider-thumb,
+.scene-ref-thresh:hover::-webkit-slider-thumb,
+.rp-certainty-slider:focus-visible::-webkit-slider-thumb,
+.param-control input[type="range"]:focus-visible::-webkit-slider-thumb,
+.scene-ref-thresh:focus-visible::-webkit-slider-thumb {
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--color-accent) 25%, transparent);
+}
+
+.rp-certainty-slider:hover::-moz-range-thumb,
+.param-control input[type="range"]:hover::-moz-range-thumb,
+.scene-ref-thresh:hover::-moz-range-thumb,
+.rp-certainty-slider:focus-visible::-moz-range-thumb,
+.param-control input[type="range"]:focus-visible::-moz-range-thumb,
+.scene-ref-thresh:focus-visible::-moz-range-thumb {
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--color-accent) 25%, transparent);
 }
 
 .result-timestamp {
