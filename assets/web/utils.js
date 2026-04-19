@@ -80,6 +80,47 @@ var truncate = function (str, max) {
   return str.length > max ? str.slice(0, max) + "\u2026" : str;
 };
 
+// Parse "HH:MM:SS", "MM:SS", or a bare float to seconds. Returns null on failure.
+var parseTimestamp = function (str) {
+  str = (str == null ? "" : String(str)).trim();
+  if (!str) return null;
+  var parts = str.split(":");
+  if (parts.length === 3) {
+    var h = parseFloat(parts[0]), m = parseFloat(parts[1]), s = parseFloat(parts[2]);
+    if (isNaN(h) || isNaN(m) || isNaN(s)) return null;
+    return h * 3600 + m * 60 + s;
+  }
+  if (parts.length === 2) {
+    var m2 = parseFloat(parts[0]), s2 = parseFloat(parts[1]);
+    if (isNaN(m2) || isNaN(s2)) return null;
+    return m2 * 60 + s2;
+  }
+  var n = parseFloat(str);
+  return isNaN(n) ? null : n;
+};
+
+// ---- Math ----
+
+var clamp = function (val, min, max) {
+  return Math.max(min, Math.min(max, val));
+};
+
+// ---- Tooltip positioning ----
+
+// Position a tooltip element centered above an anchor rect, flipping below
+// if there's no room above and clamping to the viewport horizontally.
+var positionTooltipAnchored = function (tooltipEl, anchorRect) {
+  var ttW = tooltipEl.offsetWidth;
+  var ttH = tooltipEl.offsetHeight;
+  var left = anchorRect.left + anchorRect.width / 2 - ttW / 2;
+  var top = anchorRect.top - ttH - 6;
+  if (top < 4) top = anchorRect.bottom + 6;
+  if (left < 4) left = 4;
+  if (left + ttW > window.innerWidth - 4) left = window.innerWidth - ttW - 4;
+  tooltipEl.style.left = left + "px";
+  tooltipEl.style.top = top + "px";
+};
+
 // ---- Debounce / escaping / color / toast (shared across Studio tabs + web UIs) ----
 
 var debounce = function (fn, ms) {

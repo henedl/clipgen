@@ -79,12 +79,15 @@
       overlay.textContent = a.timestamp_formatted || formatTime(a.timestamp);
       card.appendChild(overlay);
 
-      card.addEventListener("click", (function (idx) {
-        return function () { openLightbox(idx); };
-      })(i));
-
       grid.appendChild(card);
     }
+
+    grid.addEventListener("click", function (e) {
+      var card = e.target.closest(".gallery-card");
+      if (!card) return;
+      var idx = parseInt(card.getAttribute("data-index"), 10);
+      if (!isNaN(idx)) openLightbox(idx);
+    });
   }
 
   // ---- Lightbox ----

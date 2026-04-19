@@ -3,7 +3,6 @@
 
   var SEARCH_DEBOUNCE = 300;
 
-  var fmtTime = formatTime;
   var SS_DETECTOR_COLORS = DETECTOR_COLORS;
 
   var state = {
@@ -54,6 +53,7 @@
   // ---- Nav links ----
 
   function checkNavLinks() {
+    // TODO: skips r.ok; silent on HTTP errors.
     fetch("../api/status").then(function (r) { return r.json(); }).then(function (data) {
       if (data.screenspace || data.studio) {
         state.xrefEligible = true;
@@ -78,6 +78,7 @@
   }
 
   function loadCrossRefData() {
+    // TODO: skips r.ok; silent on HTTP errors (polling every 30s, so caller tolerates it).
     fetch("../screenspace/api/events?excluded=false")
       .then(function (r) { return r.json(); })
       .then(function (data) {
@@ -90,6 +91,7 @@
       })
       .catch(function () {});
 
+    // TODO: skips r.ok (same pattern).
     fetch("../studio/api/sheet")
       .then(function (r) { return r.json(); })
       .then(function (data) {
@@ -753,7 +755,7 @@
         var sup = document.createElement("sup");
         sup.className = "citation-link";
         sup.dataset.start = String(ref.start);
-        sup.title = fmtTime(ref.start);
+        sup.title = formatTime(ref.start);
         sup.textContent = "[" + refNum + "]";
         (function (startTime) {
           sup.addEventListener("click", function (e) {
@@ -960,7 +962,7 @@
 
       html += '<div class="segment-row' + activeClass + correctedClass + '" data-index="' + i + '" data-start="' + seg.start + '">';
       html += '<span class="' + markClass + '" data-segment-id="' + escapeHtml(seg.id) + '"' + markStyle + markLabel + '></span>';
-      html += '<span class="segment-timestamp">' + fmtTime(seg.start);
+      html += '<span class="segment-timestamp">' + formatTime(seg.start);
       // Cross-reference badges in gutter (inside timestamp, positioned at right edge)
       if (state.tooltipsEnabled) {
         var xref = findOverlapsForSearch(state.selectedParticipant, seg.start, seg.end);
@@ -1026,7 +1028,7 @@
     var markStyle = cachedColor ? ' style="background:' + cachedColor + '"' : "";
     var html = '<div class="segment-row segment-streaming" data-index="' + i + '" data-start="' + seg.start + '">';
     html += '<span class="' + markClass + '" data-segment-id="' + escapeHtml(segId) + '"' + markStyle + '></span>';
-    html += '<span class="segment-timestamp">' + fmtTime(seg.start) + '</span>';
+    html += '<span class="segment-timestamp">' + formatTime(seg.start) + '</span>';
     html += '<span class="segment-text">' + escapeHtml(seg.text) + '</span>';
     html += '<span class="segment-copy" title="Copy text"><span class="segment-copy-icon"></span></span>';
     html += '</div>';
@@ -1764,7 +1766,7 @@
       groups[pid].forEach(function (r) {
         var xref = findOverlapsForSearch(r.participant, r.start, r.end);
         html += '<div class="search-result-row" data-participant="' + escapeHtml(r.participant) + '" data-start="' + r.start + '">';
-        html += '<span class="search-result-time">' + fmtTime(r.start) + '</span>';
+        html += '<span class="search-result-time">' + formatTime(r.start) + '</span>';
         html += '<span class="search-result-text">' + highlightQuery(r.text, state.searchQuery) + '</span>';
         if (state.tooltipsEnabled && xref.screenspaceEvents.length > 0) {
           var seen = {};
@@ -2475,6 +2477,7 @@
   function _trFetchModels() {
     if (_trModelsCache) return Promise.resolve(_trModelsCache);
     if (_trModelsCachePromise) return _trModelsCachePromise;
+    // TODO: skips r.ok; cross-mode URL. apiGet would work if it accepts relative paths.
     _trModelsCachePromise = fetch("../api/models")
       .then(function (r) { return r.json(); })
       .then(function (data) {
@@ -2550,6 +2553,8 @@
       if (s.value !== s.default) payload[s.name] = s.value;
     }
     var statusEl = qs("#trSettingsSaveStatus");
+    // TODO: skips r.ok; "Error" is set from data.ok only. apiPut would route HTTP errors
+    // into .catch (currently also sets "Error"), so semantics are equivalent but less explicit.
     fetch("../api/settings", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
@@ -2694,6 +2699,7 @@
   }
 
   function _trLoadSettings() {
+    // TODO: skips r.ok; silent on HTTP errors.
     fetch("../api/settings")
       .then(function (r) { return r.json(); })
       .then(function (data) {

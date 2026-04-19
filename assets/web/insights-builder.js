@@ -64,12 +64,8 @@
 
   function loadData() {
     Promise.all([
-      fetch("api/artifacts").then(function (r) {
-        return r.json();
-      }),
-      fetch("api/insights").then(function (r) {
-        return r.json();
-      }),
+      apiGet("api/artifacts"),
+      apiGet("api/insights"),
     ]).then(function (results) {
       state.artifacts = results[0].artifacts || [];
       state.insights = results[1].insights || [];
@@ -544,6 +540,7 @@
   function loadAudioBuffer(filePath) {
     if (_audioBuffers[filePath]) return Promise.resolve(_audioBuffers[filePath]);
     if (_audioLoading[filePath]) return _audioLoading[filePath];
+    // TODO: returns arrayBuffer (audio), not JSON. apiGet doesn't cover non-JSON responses.
     _audioLoading[filePath] = fetch("media/" + encodeURIComponent(filePath))
       .then(function (r) { return r.arrayBuffer(); })
       .then(function (buf) { return getAudioContext().decodeAudioData(buf); })
@@ -765,14 +762,7 @@
   }
 
   function createNewInsight() {
-    fetch("api/insights", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ title: "Untitled insight" }),
-    })
-      .then(function (r) {
-        return r.json();
-      })
+    apiPost("api/insights", { title: "Untitled insight" })
       .then(function (data) {
         if (data.ok) {
           state.insights.push(data.insight);
@@ -786,10 +776,7 @@
 
   function deleteInsight(insightId) {
     if (!confirm("Delete this insight? This cannot be undone.")) return;
-    fetch("api/insights/" + insightId, { method: "DELETE" })
-      .then(function (r) {
-        return r.json();
-      })
+    apiDelete("api/insights/" + insightId)
       .then(function (data) {
         if (data.ok) {
           state.insights = state.insights.filter(function (ins) {
@@ -831,13 +818,7 @@
         }
       }
       if (!insight) return Promise.resolve();
-      return fetch("api/insights/" + id, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(insight),
-      }).then(function (r) {
-        return r.json();
-      });
+      return apiPut("api/insights/" + id, insight);
     });
     Promise.all(promises).then(function () {
       state.dirtyIds = {};
@@ -855,14 +836,7 @@
       }
     }
     if (!insight) return;
-    fetch("api/insights/" + insightId, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(insight),
-    })
-      .then(function (r) {
-        return r.json();
-      })
+    apiPut("api/insights/" + insightId, insight)
       .then(function () {
         delete state.dirtyIds[insightId];
         updateDirtyUI();
@@ -872,10 +846,7 @@
 
   function discardAll() {
     if (!confirm("Discard all unsaved changes?")) return;
-    fetch("api/insights")
-      .then(function (r) {
-        return r.json();
-      })
+    apiGet("api/insights")
       .then(function (data) {
         state.insights = data.insights || [];
         state.dirtyIds = {};
@@ -1250,9 +1221,9 @@
       rafPending = true;
       var clientX = e.clientX;
       requestAnimationFrame(function () {
-        var panelLeft = sidebar.parentElement.getBoundingClientRect().left;
-        var maxW = sidebar.parentElement.offsetWidth * 0.6;
-        var w = Math.max(280, Math.min(maxW, clientX - panelLeft));
+        var parentRect = sidebar.parentElement.getBoundingClientRect();
+        var maxW = parentRect.width * 0.6;
+        var w = Math.max(280, Math.min(maxW, clientX - parentRect.left));
         sidebar.style.width = w + "px";
         rafPending = false;
       });
@@ -1363,10 +1334,7 @@
     qs("#generateViewerBtn").addEventListener("click", function () {
       this.disabled = true;
       var btn = this;
-      fetch("api/generate-viewer", { method: "POST" })
-        .then(function (r) {
-          return r.json();
-        })
+      apiPost("api/generate-viewer", {})
         .then(function (data) {
           btn.disabled = false;
           if (data.ok) {
