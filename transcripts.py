@@ -10,8 +10,9 @@ Data types (defined below):
   ManifestSegment   – TypedDict: id (str), start, end, text — enriched segment for manifest storage
 
 Key functions:
-  transcribe_video(path, *, language, initial_prompt, context_keywords)
-    → TranscriptResult; context_keywords are appended to the initial prompt
+  transcribe_video(path, *, model_name, language, initial_prompt, context_keywords)
+    → TranscriptResult; context_keywords are appended to the initial prompt;
+      model_name overrides config.TRANSCRIBE_MODEL for one call
   filter_segments(result, start_sec, end_sec, *, offset_to_zero)
     → TranscriptResult for a clip's time range; offset_to_zero=True shifts to clip-relative times
   write_transcript(result, output_path, *, fmt)
@@ -133,11 +134,15 @@ def warmup_transcription_model() -> bool:
     return _load_model() is not None
 
 
-def _load_model() -> Any:
-    """Lazy-load the WhisperModel, caching it for reuse (thread-safe)."""
+def _load_model(model_name: str | None = None) -> Any:
+    """Lazy-load the WhisperModel, caching it for reuse (thread-safe).
+
+    When *model_name* is None, uses ``config.TRANSCRIBE_MODEL``. Passing a
+    different name swaps the cached model.
+    """
     global _cached_model, _cached_model_name  # noqa: PLW0603
 
-    model_name = config.TRANSCRIBE_MODEL
+    model_name = model_name or config.TRANSCRIBE_MODEL
     if _cached_model is not None and _cached_model_name == model_name:
         return _cached_model
 
@@ -168,6 +173,7 @@ def _load_model() -> Any:
 def transcribe_video(
     video_path: str,
     *,
+    model_name: str | None = None,
     language: str | None = None,
     initial_prompt: str | None = None,
     context_keywords: list[str] | None = None,
@@ -177,6 +183,8 @@ def transcribe_video(
 
     Args:
         video_path: Path to the video file.
+        model_name: Whisper model size override (e.g. "tiny", "large-v3").
+            None uses ``config.TRANSCRIBE_MODEL``.
         language: Language code (e.g. "en"). None = auto-detect.
         initial_prompt: Override the default initial prompt.
         context_keywords: Extra keywords to append to the prompt.
@@ -187,15 +195,16 @@ def transcribe_video(
     Returns:
         TranscriptResult with segments, or None on failure.
     """
+    resolved_model = model_name or config.TRANSCRIBE_MODEL
     if config.DEBUGGING:
         return TranscriptResult(
             segments=[],
             language=language or "en",
             source_file=str(video_path),
-            model=config.TRANSCRIBE_MODEL,
+            model=resolved_model,
         )
 
-    model = _load_model()
+    model = _load_model(resolved_model)
     if model is None:
         return None
 
@@ -227,7 +236,7 @@ def transcribe_video(
             segments=segments,
             language=detected_lang,
             source_file=str(video_path),
-            model=config.TRANSCRIBE_MODEL,
+            model=resolved_model,
         )
     except _TranscriptionCancelled:
         raise
@@ -649,12 +658,25 @@ class _TranscriptionCancelled(Exception):
     """Raised inside the on_segment callback to abort a running transcription."""
 
 
-def create_transcript_task(participant: str, video_path: str) -> dict[str, Any]:
-    """Create a new transcription task dict ready to enqueue."""
+def create_transcript_task(
+    participant: str,
+    video_path: str,
+    *,
+    model: str | None = None,
+    language: str | None = None,
+) -> dict[str, Any]:
+    """Create a new transcription task dict ready to enqueue.
+
+    *model* and *language* are optional per-participant overrides; when None,
+    the worker falls back to ``config.TRANSCRIBE_MODEL`` and whisper
+    auto-detect respectively.
+    """
     return {
         "id": f"tr_{uuid.uuid4().hex[:8]}",
         "participant": participant,
         "video_path": video_path,
+        "model": model,
+        "language": language,
         "status": TASK_STATUS_QUEUED,
         "progress": 0.0,
         "partial_segments": [],
@@ -806,6 +828,8 @@ class TranscriptWorker:
         try:
             result = transcribe_video(
                 video_path,
+                model_name=task.get("model"),
+                language=task.get("language"),
                 context_keywords=context_kw,
                 on_segment=_on_seg,
             )

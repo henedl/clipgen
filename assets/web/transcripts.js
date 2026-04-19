@@ -450,7 +450,7 @@
       if (!data.ok) return;
       state.participants = data.participants;
       state.transcribePrewarm = data.transcribe_prewarm || "queue_open";
-      renderParticipantSelect();
+      renderPills();
 
       if (!needsTranscription()) {
         _transcriptionWarmupPosted = false;
@@ -477,28 +477,10 @@
     });
   }
 
-  function renderParticipantSelect() {
-    var sel = qs("#participantSelect");
-    sel.innerHTML = "";
-    if (state.participants.length === 0) {
-      sel.innerHTML = '<option value="">No participants</option>';
-      return;
-    }
-    state.participants.forEach(function (p) {
-      var opt = document.createElement("option");
-      opt.value = p.id;
-      opt.textContent = p.id + (p.has_transcript ? " \u2713" : "") + (p.has_stale_artifacts ? " \u26a0" : "");
-      sel.appendChild(opt);
-    });
-    if (state.selectedParticipant) {
-      sel.value = state.selectedParticipant;
-    }
-  }
 
   function selectParticipant(pid) {
     state.selectedParticipant = pid;
-    var sel = qs("#participantSelect");
-    sel.value = pid;
+    renderPills();
 
     // Find participant info
     var p = null;
@@ -1841,67 +1823,65 @@
     seekVideo(start);
   }
 
-  // ---- Queue panel ----
+  // ---- Participant pills ----
 
-  function initQueuePanel() {
-    qs("#queueBtn").addEventListener("click", function () {
-      var panel = qs("#queuePanel");
-      panel.classList.toggle("hidden");
-      if (!panel.classList.contains("hidden")) {
-        renderQueue();
-        pollTaskStatus();
-        if (state.transcribePrewarm === "queue_open") {
-          tryPostTranscriptionWarmup();
-        }
-      }
-    });
+  // Icon shown on the trigger by default (left), and on hover (right).
+  // The trigger click always invokes the appropriate action for the status.
+  var PILL_TRIGGER = {
+    idle: { rest: "icons/microphone.svg", hover: "icons/microphone.svg", label: "Transcribe", action: "transcribe" },
+    failed: { rest: "icons/exclamation-triangle.svg", hover: "icons/microphone.svg", label: "Retry transcription", action: "transcribe" },
+    queued: { rest: "icons/clock.svg", hover: "icons/stop-circle.svg", label: "Cancel", action: "cancel" },
+    running: { rest: "icons/arrow-path.svg", hover: "icons/stop-circle.svg", label: "Cancel transcription", action: "cancel" },
+    completed: { rest: "icons/check-circle.svg", hover: "icons/arrow-path.svg", label: "Re-transcribe", action: "retranscribe" }
+  };
 
-    qs("#closeQueueBtn").addEventListener("click", function () {
-      qs("#queuePanel").classList.add("hidden");
-    });
+  var PILL_LANGUAGES = [
+    { code: "", label: "Auto-detect" },
+    { code: "en", label: "English" },
+    { code: "sv", label: "Swedish" },
+    { code: "es", label: "Spanish" },
+    { code: "fr", label: "French" },
+    { code: "de", label: "German" },
+    { code: "it", label: "Italian" },
+    { code: "pt", label: "Portuguese" },
+    { code: "nl", label: "Dutch" },
+    { code: "no", label: "Norwegian" },
+    { code: "da", label: "Danish" },
+    { code: "fi", label: "Finnish" }
+  ];
 
-    qs("#transcribeAllBtn").addEventListener("click", function () {
-      transcribeAll();
-    });
-  }
+  // UI-only state for pills (reset on reload)
+  state.pillOverrides = {};    // pid → { model, language }
+  state.pillOptionsOpen = null; // pid of the pill whose options pane is open
 
-  function queueItemState(p, taskByPid) {
+  function pillState(p, taskByPid) {
     var task = taskByPid[p.id];
-    var status = "not started";
-    var statusClass = "";
+    var status = "idle";
     var progress = 0;
-    var showProgress = false;
     var taskId = null;
 
-    if (p.has_transcript && (!task || task.status === "completed")) {
-      status = "completed";
-      statusClass = "status-completed";
-      progress = 100;
-    } else if (task) {
+    if (task && (task.status === "running" || task.status === "queued")) {
       status = task.status;
       taskId = task.id;
-      if (task.status === "running") {
-        statusClass = "status-running";
-        progress = Math.round(task.progress * 100);
-        showProgress = true;
-      } else if (task.status === "queued") {
-        statusClass = "";
-      } else if (task.status === "failed") {
-        statusClass = "status-failed";
-        status = "failed";
-      } else if (task.status === "cancelled") {
-        statusClass = "status-cancelled";
-      } else if (task.status === "completed") {
-        statusClass = "status-completed";
-        progress = 100;
-      }
+      if (task.status === "running") progress = Math.round((task.progress || 0) * 100);
+    } else if (task && task.status === "failed") {
+      status = "failed";
+      taskId = task.id;
+    } else if (p.has_transcript) {
+      status = "completed";
+      progress = 100;
     }
-    return { status: status, statusClass: statusClass, progress: progress, showProgress: showProgress, taskId: taskId };
+    return { status: status, progress: progress, taskId: taskId };
   }
 
-  function renderQueue() {
-    var container = qs("#queueList");
+  function renderPills() {
+    var container = qs("#participantPills");
     if (!container) return;
+
+    if (state.participants.length === 0) {
+      container.innerHTML = '<span class="pill-row-empty">No participants</span>';
+      return;
+    }
 
     var taskByPid = {};
     state.tasks.forEach(function (t) {
@@ -1910,105 +1890,377 @@
       }
     });
 
-    // Try in-place update when item list and status categories match (avoids layout thrash)
-    var existing = container.querySelectorAll(".queue-item[data-pid]");
+    // In-place patch when structure unchanged (avoids layout thrash + preserves
+    // the open options pane across polling ticks)
+    var existing = container.querySelectorAll(".pill-wrap[data-pid]");
     if (existing.length === state.participants.length) {
       var canPatch = true;
       for (var k = 0; k < state.participants.length; k++) {
-        var s = queueItemState(state.participants[k], taskByPid);
-        if (existing[k].getAttribute("data-pid") !== state.participants[k].id ||
-            existing[k].getAttribute("data-status") !== s.status) {
+        var p0 = state.participants[k];
+        var s0 = pillState(p0, taskByPid);
+        if (existing[k].getAttribute("data-pid") !== p0.id ||
+            existing[k].getAttribute("data-status") !== s0.status ||
+            existing[k].getAttribute("data-active") !== (state.selectedParticipant === p0.id ? "1" : "0")) {
           canPatch = false; break;
         }
       }
       if (canPatch) {
         for (var k = 0; k < state.participants.length; k++) {
-          var item = existing[k];
-          var s = queueItemState(state.participants[k], taskByPid);
-          var statusEl = item.querySelector(".queue-item-status");
-          statusEl.className = "queue-item-status" + (s.statusClass ? " " + s.statusClass : "");
-          statusEl.textContent = s.status + (s.showProgress ? " " + s.progress + "%" : "");
-          var bar = item.querySelector(".queue-progress-bar");
-          if (bar) bar.style.width = s.progress + "%";
+          var wrap = existing[k];
+          var p0 = state.participants[k];
+          var s0 = pillState(p0, taskByPid);
+          var bar = wrap.querySelector(".pill-progress");
+          if (bar) bar.style.width = s0.progress + "%";
         }
         return;
       }
     }
 
-    // Full rebuild when structure changes
-    var html = "";
+    // Full rebuild
+    var openPid = state.pillOptionsOpen;
+    var frag = document.createDocumentFragment();
     state.participants.forEach(function (p) {
-      var s = queueItemState(p, taskByPid);
-      html += '<div class="queue-item" data-pid="' + escapeHtml(p.id) + '" data-status="' + s.status + '">';
-      html += '<div class="queue-item-header">';
-      html += '<span class="queue-item-id">' + escapeHtml(p.id) + '</span>';
-      html += '<span class="queue-item-status ' + s.statusClass + '">' + s.status + (s.showProgress ? " " + s.progress + "%" : "") + '</span>';
-      if (s.taskId && (s.status === "running" || s.status === "queued")) {
-        html += '<button class="queue-item-cancel" data-cancel-task="' + escapeHtml(s.taskId) + '" title="Cancel">&times;</button>';
+      frag.appendChild(buildPillWrap(p, taskByPid));
+    });
+    container.innerHTML = "";
+    container.appendChild(frag);
+    // The pane is mounted on <body>, not inside the rebuilt wrap — reposition
+    // it to the new wrap's rect, or tear it down if the pill disappeared.
+    if (openPid !== null) {
+      var newWrap = _findPillWrap(openPid);
+      var floating = document.querySelector("body > .pill-options");
+      if (newWrap && floating) {
+        _positionPillOptions(floating, newWrap);
+      } else {
+        closePillOptions();
       }
-      html += '</div>';
+    }
+  }
 
-      if (s.showProgress || s.progress === 100) {
-        html += '<div class="queue-progress"><div class="queue-progress-bar" style="width:' + s.progress + '%"></div></div>';
-      }
+  function buildPillWrap(p, taskByPid) {
+    var s = pillState(p, taskByPid);
+    var wrap = document.createElement("div");
+    var isActive = state.selectedParticipant === p.id;
+    wrap.className = "pill-wrap";
+    wrap.setAttribute("data-pid", p.id);
+    wrap.setAttribute("data-status", s.status);
+    wrap.setAttribute("data-active", isActive ? "1" : "0");
+    wrap.appendChild(buildPill(p, s, isActive));
+    if (state.pillOptionsOpen === p.id) {
+      wrap.classList.add("pill-wrap--options-open");
+    }
+    return wrap;
+  }
 
-      if (!p.has_transcript && (!taskByPid[p.id] || taskByPid[p.id].status === "failed" || taskByPid[p.id].status === "cancelled")) {
-        html += '<div class="queue-item-action"><button class="btn btn-small" data-transcribe="' + escapeHtml(p.id) + '">Transcribe</button></div>';
-      } else if (p.has_transcript && (!taskByPid[p.id] || taskByPid[p.id].status === "completed")) {
-        html += '<div class="queue-item-action"><button class="btn btn-small" data-retranscribe="' + escapeHtml(p.id) + '">Re-transcribe</button>';
-        if (p.has_stale_artifacts) {
-          html += '<span class="queue-stale-badge">artifacts outdated</span>';
+  function buildPill(p, s, isActive) {
+    var pill = document.createElement("div");
+    var classes = ["pill", "pill--" + s.status];
+    if (isActive) classes.push("pill--active");
+    pill.className = classes.join(" ");
+    pill.setAttribute("role", "tab");
+    pill.setAttribute("aria-selected", isActive ? "true" : "false");
+
+    // Progress fill (background layer)
+    var prog = document.createElement("div");
+    prog.className = "pill-progress";
+    prog.style.width = s.progress + "%";
+    pill.appendChild(prog);
+
+    // Trigger — status icon doubles as action button (hover swaps the glyph)
+    pill.appendChild(buildPillTrigger(p, s));
+
+    var idSpan = document.createElement("span");
+    idSpan.className = "pill-id";
+    idSpan.textContent = p.id;
+    pill.appendChild(idSpan);
+
+    // Stale badge (inline)
+    if (p.has_stale_artifacts) {
+      var stale = document.createElement("span");
+      stale.className = "pill-stale-badge";
+      stale.textContent = "stale";
+      stale.title = "Artifacts built from an older transcript";
+      pill.appendChild(stale);
+    }
+
+    // Chevron for options pane
+    var chevBtn = document.createElement("button");
+    chevBtn.type = "button";
+    chevBtn.className = "pill-chevron-btn";
+    chevBtn.setAttribute("aria-label", "Transcription options");
+    chevBtn.setAttribute("aria-expanded", state.pillOptionsOpen === p.id ? "true" : "false");
+    var chev = document.createElement("span");
+    chev.className = "pill-chevron";
+    chevBtn.appendChild(chev);
+    chevBtn.addEventListener("click", function (e) {
+      e.stopPropagation();
+      togglePillOptions(p.id);
+    });
+    pill.appendChild(chevBtn);
+
+    // Clicking the pill body (not its buttons) selects the participant
+    pill.addEventListener("click", function () {
+      if (p.id !== state.selectedParticipant) selectParticipant(p.id);
+    });
+
+    return pill;
+  }
+
+  function buildPillTrigger(p, s) {
+    var cfg = PILL_TRIGGER[s.status] || PILL_TRIGGER.idle;
+    var btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "pill-trigger pill-trigger--" + s.status;
+    btn.setAttribute("aria-label", cfg.label);
+    btn.setAttribute("title", cfg.label);
+
+    // Two stacked icons; CSS hides one and shows the other on hover/focus.
+    var rest = document.createElement("span");
+    rest.className = "pill-trigger-icon pill-trigger-icon--rest";
+    rest.style.maskImage = "url(" + cfg.rest + ")";
+    rest.style.webkitMaskImage = "url(" + cfg.rest + ")";
+    btn.appendChild(rest);
+
+    var hover = document.createElement("span");
+    hover.className = "pill-trigger-icon pill-trigger-icon--hover";
+    hover.style.maskImage = "url(" + cfg.hover + ")";
+    hover.style.webkitMaskImage = "url(" + cfg.hover + ")";
+    btn.appendChild(hover);
+
+    btn.addEventListener("click", function (e) {
+      e.stopPropagation();
+      if (cfg.action === "cancel") {
+        if (s.taskId) {
+          apiDelete("api/transcribe/" + s.taskId).then(function () { pollTaskStatus(); });
         }
-        html += '</div>';
+      } else if (cfg.action === "retranscribe") {
+        startTranscribe(p.id, true);
+      } else {
+        startTranscribe(p.id, false);
       }
-
-      html += '</div>';
     });
+    return btn;
+  }
 
-    container.innerHTML = html;
+  function buildPillOptions(p, s) {
+    var pane = document.createElement("div");
+    pane.className = "pill-options";
+    pane.addEventListener("click", function (e) { e.stopPropagation(); });
 
-    // Attach event listeners
-    var transcribeBtns = container.querySelectorAll("[data-transcribe]");
-    for (var i = 0; i < transcribeBtns.length; i++) {
-      transcribeBtns[i].addEventListener("click", function () {
-        var pid = this.getAttribute("data-transcribe");
-        transcribeParticipants([pid], false);
+    var ov = state.pillOverrides[p.id] || {};
+
+    // Model row
+    var modelRow = document.createElement("div");
+    modelRow.className = "pill-options-row";
+    var modelLabel = document.createElement("label");
+    modelLabel.textContent = "Model";
+    var modelSelect = document.createElement("select");
+    modelSelect.innerHTML = '<option value="">Loading…</option>';
+    _trFetchModels().then(function (data) {
+      var models = (data && data.whisper && data.whisper.models) || [];
+      if (models.length === 0) {
+        modelSelect.innerHTML = '<option value="">Default</option>';
+        return;
+      }
+      var defaultName = "";
+      var opts = '<option value="">Default</option>';
+      models.forEach(function (m) {
+        if (m.selected) defaultName = m.name;
+        opts += '<option value="' + escapeHtml(m.name) + '">' + escapeHtml(m.name) + '</option>';
+      });
+      modelSelect.innerHTML = opts;
+      modelSelect.options[0].textContent = "Default (" + (defaultName || "base") + ")";
+      modelSelect.value = ov.model || "";
+    });
+    modelSelect.addEventListener("change", function () {
+      _setOverride(p.id, "model", this.value);
+    });
+    modelRow.appendChild(modelLabel);
+    modelRow.appendChild(modelSelect);
+    pane.appendChild(modelRow);
+
+    // Language row
+    var langRow = document.createElement("div");
+    langRow.className = "pill-options-row";
+    var langLabel = document.createElement("label");
+    langLabel.textContent = "Language";
+    var langSelect = document.createElement("select");
+    var lh = "";
+    for (var i = 0; i < PILL_LANGUAGES.length; i++) {
+      var L = PILL_LANGUAGES[i];
+      lh += '<option value="' + escapeHtml(L.code) + '">' + escapeHtml(L.label) + '</option>';
+    }
+    langSelect.innerHTML = lh;
+    langSelect.value = ov.language || "";
+    langSelect.addEventListener("change", function () {
+      _setOverride(p.id, "language", this.value);
+    });
+    langRow.appendChild(langLabel);
+    langRow.appendChild(langSelect);
+    pane.appendChild(langRow);
+
+    // Footer: transcribe / re-transcribe
+    var footer = document.createElement("div");
+    footer.className = "pill-options-footer";
+    var runBtn = document.createElement("button");
+    runBtn.type = "button";
+    runBtn.className = "btn btn-small";
+    if (p.has_transcript && s.status !== "running" && s.status !== "queued") {
+      runBtn.textContent = "Re-transcribe";
+      runBtn.addEventListener("click", function () {
+        closePillOptions();
+        startTranscribe(p.id, true);
+      });
+    } else if (s.status === "running" || s.status === "queued") {
+      runBtn.textContent = "Cancel";
+      runBtn.className = "btn btn-small";
+      runBtn.addEventListener("click", function () {
+        if (s.taskId) {
+          apiDelete("api/transcribe/" + s.taskId).then(function () { pollTaskStatus(); });
+        }
+        closePillOptions();
+      });
+    } else {
+      runBtn.textContent = "Transcribe";
+      runBtn.addEventListener("click", function () {
+        closePillOptions();
+        startTranscribe(p.id, false);
       });
     }
+    footer.appendChild(runBtn);
+    pane.appendChild(footer);
 
-    var retranscribeBtns = container.querySelectorAll("[data-retranscribe]");
-    for (var j = 0; j < retranscribeBtns.length; j++) {
-      retranscribeBtns[j].addEventListener("click", function () {
-        var pid = this.getAttribute("data-retranscribe");
-        transcribeParticipants([pid], true);
-      });
+    return pane;
+  }
+
+  function _setOverride(pid, key, value) {
+    if (!state.pillOverrides[pid]) state.pillOverrides[pid] = {};
+    if (value) state.pillOverrides[pid][key] = value;
+    else delete state.pillOverrides[pid][key];
+  }
+
+  function _findPillWrap(pid) {
+    var container = qs("#participantPills");
+    if (!container) return null;
+    var wraps = container.querySelectorAll(".pill-wrap[data-pid]");
+    for (var i = 0; i < wraps.length; i++) {
+      if (wraps[i].getAttribute("data-pid") === pid) return wraps[i];
     }
+    return null;
+  }
 
-    var cancelBtns = container.querySelectorAll("[data-cancel-task]");
-    for (var c = 0; c < cancelBtns.length; c++) {
-      cancelBtns[c].addEventListener("click", function () {
-        var taskId = this.getAttribute("data-cancel-task");
-        apiDelete("api/transcribe/" + taskId).then(function () {
-          pollTaskStatus();
-        });
-      });
+  function _positionPillOptions(pane, wrap) {
+    var rect = wrap.getBoundingClientRect();
+    pane.style.top = rect.bottom + 4 + "px";
+    pane.style.left = rect.left + "px";
+  }
+
+  function _closeOpenPaneInDom() {
+    if (state.pillOptionsOpen === null) return;
+    var wrap = _findPillWrap(state.pillOptionsOpen);
+    if (wrap) {
+      wrap.classList.remove("pill-wrap--options-open");
+      var chev = wrap.querySelector(".pill-chevron-btn");
+      if (chev) chev.setAttribute("aria-expanded", "false");
+    }
+    var floating = document.querySelector("body > .pill-options");
+    if (floating) floating.remove();
+    if (state.pillOptionsReposition) {
+      window.removeEventListener("resize", state.pillOptionsReposition);
+      window.removeEventListener("scroll", state.pillOptionsReposition, true);
+      state.pillOptionsReposition = null;
+    }
+    state.pillOptionsOpen = null;
+  }
+
+  function togglePillOptions(pid) {
+    // Close whichever pane is currently open (possibly same pill → toggle off)
+    var wasOpen = state.pillOptionsOpen === pid;
+    _closeOpenPaneInDom();
+    if (wasOpen) return;
+
+    var wrap = _findPillWrap(pid);
+    if (!wrap) return;
+    var p = null;
+    for (var i = 0; i < state.participants.length; i++) {
+      if (state.participants[i].id === pid) { p = state.participants[i]; break; }
+    }
+    if (!p) return;
+    var taskByPid = {};
+    state.tasks.forEach(function (t) {
+      if (!taskByPid[t.participant] || t.created_at > taskByPid[t.participant].created_at) {
+        taskByPid[t.participant] = t;
+      }
+    });
+    var s = pillState(p, taskByPid);
+
+    // Mount the pane on <body> (not inside #participantPills) so it escapes the
+    // pill row's overflow clipping and renders above the search bar.
+    var pane = buildPillOptions(p, s);
+    pane.setAttribute("data-pid", pid);
+    document.body.appendChild(pane);
+    _positionPillOptions(pane, wrap);
+
+    wrap.classList.add("pill-wrap--options-open");
+    var chev = wrap.querySelector(".pill-chevron-btn");
+    if (chev) chev.setAttribute("aria-expanded", "true");
+    state.pillOptionsOpen = pid;
+
+    var reposition = function () {
+      var w = _findPillWrap(pid);
+      var floating = document.querySelector("body > .pill-options[data-pid='" + pid + "']");
+      if (w && floating) _positionPillOptions(floating, w);
+    };
+    state.pillOptionsReposition = reposition;
+    window.addEventListener("resize", reposition);
+    window.addEventListener("scroll", reposition, true);
+
+    if (state.transcribePrewarm === "queue_open") {
+      tryPostTranscriptionWarmup();
     }
   }
 
-  function transcribeAll() {
-    var pids = [];
-    state.participants.forEach(function (p) {
-      if (p.has_video && !p.has_transcript) pids.push(p.id);
-    });
-    if (pids.length === 0) {
-      showToast("All participants already transcribed");
-      return;
-    }
-    transcribeParticipants(pids, false);
+  function closePillOptions() {
+    _closeOpenPaneInDom();
   }
 
-  function transcribeParticipants(pids, force) {
-    apiPost("api/transcribe", { participants: pids, force: force }).then(function (data) {
+  function initPillOutsideClick() {
+    document.addEventListener("click", function (e) {
+      if (state.pillOptionsOpen === null) return;
+      var wrap = _findPillWrap(state.pillOptionsOpen);
+      if (wrap && wrap.contains(e.target)) return;
+      var floating = document.querySelector("body > .pill-options");
+      if (floating && floating.contains(e.target)) return;
+      closePillOptions();
+    });
+  }
+
+  function initPillWheelScroll() {
+    var el = qs("#participantPills");
+    if (!el) return;
+    el.addEventListener("wheel", function (e) {
+      if (el.scrollWidth > el.clientWidth) {
+        e.preventDefault();
+        el.scrollLeft += e.deltaY;
+      }
+    }, { passive: false });
+  }
+
+  function startTranscribe(pid, force) {
+    var overrides = {};
+    var ov = state.pillOverrides[pid];
+    if (ov && (ov.model || ov.language)) {
+      overrides[pid] = {};
+      if (ov.model) overrides[pid].model = ov.model;
+      if (ov.language) overrides[pid].language = ov.language;
+    }
+    transcribeParticipants([pid], force, overrides);
+  }
+
+  function transcribeParticipants(pids, force, overrides) {
+    var body = { participants: pids, force: force };
+    if (overrides && Object.keys(overrides).length > 0) body.overrides = overrides;
+    apiPost("api/transcribe", body).then(function (data) {
       if (!data.ok) {
         showToast("Failed to enqueue transcription");
         return;
@@ -2099,10 +2351,7 @@
       }
       _hadActiveTranscriptionLastPoll = hasActive;
 
-      // Update queue panel if visible
-      if (!qs("#queuePanel").classList.contains("hidden")) {
-        renderQueue();
-      }
+      renderPills();
     });
   }
 
@@ -2495,7 +2744,8 @@
     checkNavLinks();
     initFrontendSwitcher();
     initSearch();
-    initQueuePanel();
+    initPillOutsideClick();
+    initPillWheelScroll();
     initCorrectionsModal();
     initVideoSync();
     initSummaryToggle();
@@ -2511,11 +2761,6 @@
         pollTaskStatus();
         startXrefPolling();
       }
-    });
-
-    // Participant select handler
-    qs("#participantSelect").addEventListener("change", function () {
-      if (this.value) selectParticipant(this.value);
     });
 
     // Load initial data
