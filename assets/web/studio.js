@@ -2337,11 +2337,18 @@
     qs("#titlecardDuration").addEventListener("change", persistTitlecardSettings);
 
     qs("#refreshSheet").addEventListener("click", refreshSheetData);
-    qs("#settingsBtn").addEventListener("click", openSettings);
-    qs("#settingsClose").addEventListener("click", closeSettings);
-    qs("#settingsResetBtn").addEventListener("click", resetSettings);
-    qs("#settingsOverlay").addEventListener("click", function (e) {
-      if (e.target === qs("#settingsOverlay")) closeSettings();
+    qs("#settingsBtn").addEventListener("click", function () {
+      openSettingsModal({
+        initialTab: "General",
+        onSave: function (_applied, full) {
+          state.settingsData = full;
+          syncInlineControls();
+        },
+        onReset: function (_scope, full) {
+          state.settingsData = full;
+          syncInlineControls();
+        },
+      });
     });
 
     qs("#logBtn").addEventListener("click", openLog);
@@ -3019,10 +3026,6 @@
     else qs("#confirmOverlay").classList.add("hidden");
   }
 
-  // ---- Settings ----
-
-  var _settingsSaveTimer = null;
-
   // ---- Artifact log ----
 
   function openLog() {
@@ -3074,217 +3077,9 @@
     countEl.textContent = n + " artifact" + (n !== 1 ? "s" : "");
   }
 
-  // ---- Settings ----
+  // ---- Settings (shared modal lives in settings-modal.js) ----
 
-  var _modelsCache = null;
-  var _modelsCachePromise = null;
-
-  function _fetchModels() {
-    if (_modelsCache) return Promise.resolve(_modelsCache);
-    if (_modelsCachePromise) return _modelsCachePromise;
-    // TODO: skips r.ok; cross-mode URL (../api/...) — apiGet would migrate if it accepts absolute paths.
-    _modelsCachePromise = fetch("../api/models")
-      .then(function (r) { return r.json(); })
-      .then(function (data) {
-        if (data.ok) _modelsCache = data;
-        return data;
-      })
-      .catch(function () { return null; });
-    return _modelsCachePromise;
-  }
-
-  function _formatSize(mb) {
-    if (mb >= 1024) return (mb / 1024).toFixed(1) + " GB";
-    return mb + " MB";
-  }
-
-  function _loadModelsForSelect(sel, provider, currentValue) {
-    _fetchModels().then(function (data) {
-      if (!data || !data.ok) { sel.disabled = false; return; }
-
-      var models = [];
-      if (provider === "whisper") {
-        models = (data.whisper && data.whisper.models) || [];
-      } else if (provider === "ollama") {
-        models = (data.ollama && data.ollama.models) || [];
-      }
-
-      sel.innerHTML = "";
-      var hasCurrentValue = false;
-      for (var i = 0; i < models.length; i++) {
-        var m = models[i];
-        var opt = document.createElement("option");
-        opt.value = m.name;
-        var label = m.name;
-        if (m.size_mb) label += " (" + _formatSize(m.size_mb) + ")";
-        if (m.parameter_size) label += " \u00B7 " + m.parameter_size;
-        if (m.description) label += " \u2014 " + m.description;
-        opt.textContent = label;
-        if (m.name === currentValue) {
-          opt.selected = true;
-          hasCurrentValue = true;
-        }
-        sel.appendChild(opt);
-      }
-      if (!hasCurrentValue && currentValue) {
-        var custom = document.createElement("option");
-        custom.value = currentValue;
-        custom.textContent = currentValue + " (current)";
-        custom.selected = true;
-        sel.insertBefore(custom, sel.firstChild);
-      }
-      sel.disabled = false;
-    });
-  }
-
-  function openSettings() {
-    qs("#settingsOverlay").classList.remove("hidden");
-    loadSettings();
-  }
-
-  function closeSettings() {
-    qs("#settingsOverlay").classList.add("hidden");
-  }
-
-  function loadSettings() {
-    qs("#settingsContent").textContent = "Loading settings\u2026";
-    // TODO: skips r.ok check — handler reacts only to data.ok. apiGet would throw on non-2xx.
-    fetch("api/settings")
-      .then(function (r) { return r.json(); })
-      .then(function (data) {
-        if (!data.ok) {
-          qs("#settingsContent").textContent = "Failed to load settings.";
-          return;
-        }
-        state.settingsData = data.settings;
-        renderSettings();
-      })
-      .catch(function () {
-        qs("#settingsContent").textContent = "Failed to load settings.";
-      });
-  }
-
-  function renderSettings() {
-    var container = qs("#settingsContent");
-    container.innerHTML = "";
-
-    var groups = {};
-    var groupOrder = [];
-    for (var i = 0; i < state.settingsData.length; i++) {
-      var s = state.settingsData[i];
-      if (!groups[s.group]) {
-        groups[s.group] = [];
-        groupOrder.push(s.group);
-      }
-      groups[s.group].push(s);
-    }
-
-    for (var gi = 0; gi < groupOrder.length; gi++) {
-      var groupName = groupOrder[gi];
-      container.appendChild(el("div", "settings-group-label", groupName));
-      var items = groups[groupName];
-      for (var si = 0; si < items.length; si++) {
-        container.appendChild(buildSettingRow(items[si]));
-      }
-    }
-  }
-
-  function buildSettingRow(s) {
-    var row = el("div", "settings-row");
-    if (s.value !== s.default) row.classList.add("settings-changed");
-    row.setAttribute("data-setting", s.name);
-
-    var labelDiv = el("div", "settings-label");
-    var friendlyName = s.name
-      .replace(/_/g, " ").toLowerCase()
-      .replace(/\b\w/g, function (c) { return c.toUpperCase(); })
-      .replace(/Mb$/i, "(MB)").replace(/Seconds$/i, "(s)");
-    labelDiv.appendChild(el("div", "settings-label-name", friendlyName));
-    labelDiv.appendChild(el("div", "settings-label-desc", s.description));
-
-    var controlDiv = el("div", "settings-control");
-    var settingName = s.name;
-
-    if (s.type === "bool") {
-      var toggle = document.createElement("input");
-      toggle.type = "checkbox";
-      toggle.className = "settings-toggle";
-      toggle.checked = !!s.value;
-      toggle.addEventListener("change", function () {
-        var setting = findSetting(settingName);
-        if (setting) setting.value = this.checked;
-        updateSettingChanged(settingName);
-        scheduleSaveSettings();
-      });
-      controlDiv.appendChild(toggle);
-    } else if (s.type === "select" && s.options) {
-      var sel = document.createElement("select");
-      for (var oi = 0; oi < s.options.length; oi++) {
-        var opt = document.createElement("option");
-        opt.value = s.options[oi];
-        opt.textContent = s.options[oi];
-        if (s.options[oi] === s.value) opt.selected = true;
-        sel.appendChild(opt);
-      }
-      sel.addEventListener("change", function () {
-        var setting = findSetting(settingName);
-        if (setting) setting.value = this.value;
-        updateSettingChanged(settingName);
-        scheduleSaveSettings();
-      });
-      controlDiv.appendChild(sel);
-    } else if (s.type === "model_select") {
-      var msel = document.createElement("select");
-      msel.className = "settings-model-dropdown";
-      var curOpt = document.createElement("option");
-      curOpt.value = s.value;
-      curOpt.textContent = s.value;
-      curOpt.selected = true;
-      msel.appendChild(curOpt);
-      msel.disabled = true;
-      msel.addEventListener("change", function () {
-        var setting = findSetting(settingName);
-        if (setting) setting.value = this.value;
-        updateSettingChanged(settingName);
-        scheduleSaveSettings();
-      });
-      controlDiv.appendChild(msel);
-      _loadModelsForSelect(msel, s.provider, s.value);
-    } else if (s.type === "str") {
-      var txtInput = document.createElement("input");
-      txtInput.type = "text";
-      txtInput.autocomplete = "off";
-      txtInput.value = s.value || "";
-      txtInput.placeholder = String(s.default || "");
-      txtInput.addEventListener("change", function () {
-        var setting = findSetting(settingName);
-        if (setting) setting.value = this.value;
-        updateSettingChanged(settingName);
-        scheduleSaveSettings();
-      });
-      controlDiv.appendChild(txtInput);
-    } else {
-      var input = document.createElement("input");
-      input.type = "number";
-      if (s.min !== undefined && s.min !== null) input.min = s.min;
-      if (s.step !== undefined && s.step !== null) input.step = s.step;
-      input.value = s.value;
-      input.placeholder = String(s.default);
-      input.addEventListener("change", function () {
-        var setting = findSetting(settingName);
-        if (setting) setting.value = parseInt(this.value, 10) || 0;
-        updateSettingChanged(settingName);
-        scheduleSaveSettings();
-      });
-      controlDiv.appendChild(input);
-    }
-
-    row.appendChild(labelDiv);
-    row.appendChild(controlDiv);
-    return row;
-  }
-
-  function findSetting(name) {
+  function _findSetting(name) {
     if (!state.settingsData) return null;
     for (var i = 0; i < state.settingsData.length; i++) {
       if (state.settingsData[i].name === name) return state.settingsData[i];
@@ -3292,88 +3087,11 @@
     return null;
   }
 
-  function updateSettingChanged(name) {
-    var setting = findSetting(name);
-    if (!setting) return;
-    var row = qs('.settings-row[data-setting="' + name + '"]');
-    if (!row) return;
-    if (setting.value !== setting.default) {
-      row.classList.add("settings-changed");
-    } else {
-      row.classList.remove("settings-changed");
-    }
-  }
-
-  function scheduleSaveSettings() {
-    if (_settingsSaveTimer) clearTimeout(_settingsSaveTimer);
-    _settingsSaveTimer = setTimeout(saveSettings, 400);
-  }
-
-  function saveSettings() {
-    if (!state.settingsData) return;
-    var payload = {};
-    for (var i = 0; i < state.settingsData.length; i++) {
-      var s = state.settingsData[i];
-      payload[s.name] = s.value;
-    }
-
-    var statusEl = qs("#settingsSaveStatus");
-    if (statusEl) statusEl.textContent = "Saving\u2026";
-
-    // TODO: skips r.ok — "Save failed" is shown when data.ok is false; apiPut would convert
-    // non-2xx into a catch branch that also shows the same message, but changes status-code semantics.
-    fetch("api/settings", {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ settings: payload }),
-    })
-      .then(function (r) { return r.json(); })
-      .then(function (data) {
-        if (statusEl) {
-          statusEl.textContent = data.ok ? "Saved" : "Save failed";
-          setTimeout(function () { statusEl.textContent = ""; }, 2000);
-        }
-        if (data.ok) syncInlineControls();
-      })
-      .catch(function () {
-        if (statusEl) statusEl.textContent = "Save failed";
-      });
-  }
-
-  function resetSettings() {
-    if (!state.settingsData) return;
-    var payload = {};
-    for (var i = 0; i < state.settingsData.length; i++) {
-      var s = state.settingsData[i];
-      s.value = s.default;
-      payload[s.name] = s.default;
-    }
-    renderSettings();
-
-    // TODO: skips r.ok; response payload is ignored beyond success path. Migrating to apiPut
-    // would surface non-2xx via .catch — currently any failure is silently swallowed.
-    fetch("api/settings", {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ settings: payload }),
-    })
-      .then(function (r) { return r.json(); })
-      .then(function () {
-        var statusEl = qs("#settingsSaveStatus");
-        if (statusEl) {
-          statusEl.textContent = "Reset to defaults";
-          setTimeout(function () { statusEl.textContent = ""; }, 2000);
-        }
-        syncInlineControls();
-      })
-      .catch(function () {});
-  }
-
   function syncInlineControls() {
     if (!state.settingsData) return;
-    var tcEnabled = findSetting("TITLECARDS_ENABLED");
-    var tcDuration = findSetting("TITLECARD_DURATION_SECONDS");
-    var hlDuration = findSetting("HIGHLIGHTS_REEL_DURATION_SECONDS");
+    var tcEnabled = _findSetting("TITLECARDS_ENABLED");
+    var tcDuration = _findSetting("TITLECARD_DURATION_SECONDS");
+    var hlDuration = _findSetting("HIGHLIGHTS_REEL_DURATION_SECONDS");
 
     if (tcEnabled) {
       var cb = qs("#titlecardEnabled");
@@ -3387,7 +3105,7 @@
       var hl = qs("#highlightsDuration");
       if (hl) hl.value = hlDuration.value;
     }
-    var cellExpand = findSetting("STUDIO_CELL_EXPAND_HOVER");
+    var cellExpand = _findSetting("STUDIO_CELL_EXPAND_HOVER");
     if (cellExpand) {
       state.cellExpandHover = !!cellExpand.value;
     }
@@ -3412,8 +3130,8 @@
       .then(function (r) { return r.json(); })
       .then(function (data) {
         if (data.ok && state.settingsData) {
-          var tcE = findSetting("TITLECARDS_ENABLED");
-          var tcD = findSetting("TITLECARD_DURATION_SECONDS");
+          var tcE = _findSetting("TITLECARDS_ENABLED");
+          var tcD = _findSetting("TITLECARD_DURATION_SECONDS");
           if (tcE) tcE.value = cb.checked;
           if (tcD) tcD.value = parseInt(dur.value, 10) || 2;
         }

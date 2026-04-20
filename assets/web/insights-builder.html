@@ -6,6 +6,7 @@
   <title>clipgen Insights</title>
   <link rel="stylesheet" href="tokens.css">
   <link rel="stylesheet" href="insights-builder.css">
+  <link rel="stylesheet" href="settings-modal.css">
 </head>
 <body>
   <header id="builderHeader">
@@ -16,6 +17,9 @@
         <button id="discardBtn" class="btn" disabled>Discard</button>
         <button id="saveAllBtn" class="btn btn-primary" disabled>Save</button>
         <button id="generateViewerBtn" class="btn">Generate Viewer</button>
+        <button id="settingsBtn" type="button" class="btn btn-small btn-icon" title="Settings" aria-label="Settings">
+          <span class="settings-trigger-icon"></span>
+        </button>
         <button id="themeToggle" type="button" aria-label="Toggle dark mode" aria-pressed="false">
           <span class="theme-toggle-icon theme-icon-sun"></span>
           <span class="theme-toggle-icon theme-icon-moon"></span>
@@ -89,6 +93,7 @@
 
   <script src="utils.js" defer></script>
   <script src="grid-bg.js" defer></script>
+  <script src="settings-modal.js" defer></script>
   <script src="insights-builder.js" defer></script>
 </body>
 </html>

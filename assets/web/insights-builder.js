@@ -1330,6 +1330,16 @@
       bucketBtns[i].addEventListener("click", onPopoverBucketClick);
     }
 
+    // Settings
+    var settingsBtn = qs("#settingsBtn");
+    if (settingsBtn) {
+      settingsBtn.addEventListener("click", function () {
+        if (typeof window.openSettingsModal === "function") {
+          window.openSettingsModal({ initialTab: "General" });
+        }
+      });
+    }
+
     // Generate viewer
     qs("#generateViewerBtn").addEventListener("click", function () {
       this.disabled = true;
