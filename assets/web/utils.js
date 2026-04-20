@@ -8,6 +8,12 @@
  * running inside their own IIFEs can access them via scope chain.
  */
 
+// ---- Feature flags ----
+
+// Animated canvas dot-grid background (grid-bg.js). When false, falls back to
+// the static CSS line-grid defined in tokens.css.
+var CLIPGEN_ANIMATED_BG = true;
+
 // ---- DOM helpers ----
 
 var qs = function (sel) { return document.querySelector(sel); };

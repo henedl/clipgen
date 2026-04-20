@@ -213,6 +213,25 @@ html[data-theme="dark"] {
   --color-impacts-bg: rgba(248, 113, 113, 0.1);
 }
 
+/* Animated dot-grid background canvas (paired with grid-bg.js) */
+#cg-grid-bg {
+  position: fixed;
+  inset: 0;
+  width: 100vw;
+  height: 100vh;
+  pointer-events: none;
+  z-index: -1;
+}
+
+/* Static CSS line-grid fallback. Applied when grid-bg.js has not mounted the
+ * animated canvas (flag off, script failed to load, or before JS runs). */
+body:not(.cg-grid-bg-on) {
+  background-image:
+    linear-gradient(to right, var(--color-grid) 1px, transparent 1px),
+    linear-gradient(to bottom, var(--color-grid) 1px, transparent 1px);
+  background-size: 40px 40px;
+}
+
 /* Skeleton loading placeholder */
 .skeleton {
   background: linear-gradient(90deg, var(--color-surface-alt, #e5e7eb) 25%, var(--color-surface, #f3f4f6) 50%, var(--color-surface-alt, #e5e7eb) 75%);
