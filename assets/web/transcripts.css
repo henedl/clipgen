@@ -1182,6 +1182,28 @@ body {
   margin-top: var(--space-1);
 }
 
+.pill-options-agents {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--color-border);
+}
+
+.pill-agent-btn {
+  min-width: 72px;
+}
+
+.pill-agent-btn--stop {
+  border-color: var(--sev-high);
+  color: var(--sev-high);
+}
+
+.pill-agent-btn--stop:hover:not(:disabled) {
+  background: var(--sev-high);
+  color: #fff;
+}
+
 /* Modal */
 
 .modal {
