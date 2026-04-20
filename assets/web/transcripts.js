@@ -1862,6 +1862,13 @@
   state.pillOverrides = {};    // pid → { model, language }
   state.pillOptionsOpen = null; // pid of the pill whose options pane is open
 
+  function _dotStateTranscription(p, task) {
+    if (task && (task.status === "running" || task.status === "queued")) return "running";
+    if (task && task.status === "failed") return "failed";
+    if (p.has_transcript) return "done";
+    return "idle";
+  }
+
   function pillState(p, taskByPid) {
     var task = taskByPid[p.id];
     var status = "idle";
@@ -1879,7 +1886,12 @@
       status = "completed";
       progress = 100;
     }
-    return { status: status, progress: progress, taskId: taskId };
+    var agents = {
+      transcription: _dotStateTranscription(p, task),
+      summary: (p.agents && p.agents.summary) || "idle",
+      citations: (p.agents && p.agents.citations) || "idle",
+    };
+    return { status: status, progress: progress, taskId: taskId, agents: agents };
   }
 
   function renderPills() {
@@ -1906,9 +1918,11 @@
       for (var k = 0; k < state.participants.length; k++) {
         var p0 = state.participants[k];
         var s0 = pillState(p0, taskByPid);
+        var agentsAttr = s0.agents.transcription + "," + s0.agents.summary + "," + s0.agents.citations;
         if (existing[k].getAttribute("data-pid") !== p0.id ||
             existing[k].getAttribute("data-status") !== s0.status ||
-            existing[k].getAttribute("data-active") !== (state.selectedParticipant === p0.id ? "1" : "0")) {
+            existing[k].getAttribute("data-active") !== (state.selectedParticipant === p0.id ? "1" : "0") ||
+            existing[k].getAttribute("data-agents") !== agentsAttr) {
           canPatch = false; break;
         }
       }
@@ -1953,7 +1967,9 @@
     wrap.setAttribute("data-pid", p.id);
     wrap.setAttribute("data-status", s.status);
     wrap.setAttribute("data-active", isActive ? "1" : "0");
+    wrap.setAttribute("data-agents", s.agents.transcription + "," + s.agents.summary + "," + s.agents.citations);
     wrap.appendChild(buildPill(p, s, isActive));
+    wrap.appendChild(buildPillDots(p, s));
     if (state.pillOptionsOpen === p.id) {
       wrap.classList.add("pill-wrap--options-open");
     }
@@ -1961,6 +1977,43 @@
       maybeWarmOnPillHover(p, s);
     });
     return wrap;
+  }
+
+  function _dotStateLabel(st) {
+    if (st === "done") return "done";
+    if (st === "running") return "in progress\u2026";
+    if (st === "failed") return "failed";
+    return "not started";
+  }
+
+  function buildPillDots(p, s) {
+    var ag = s.agents;
+    var labels = ["Transcription", "Summary", "Citations"];
+    var keys = ["transcription", "summary", "citations"];
+    var anyActive = false;
+    for (var i = 0; i < keys.length; i++) {
+      if (ag[keys[i]] !== "idle") { anyActive = true; break; }
+    }
+    if (!anyActive) {
+      var empty = document.createElement("div");
+      empty.className = "pill-dots pill-dots--empty";
+      return empty;
+    }
+    var row = document.createElement("div");
+    row.className = "pill-dots";
+    for (var j = 0; j < keys.length; j++) {
+      var dot = document.createElement("span");
+      dot.className = "pill-dot pill-dot--" + ag[keys[j]];
+      row.appendChild(dot);
+    }
+    attachHoverTooltip(row, function () {
+      var lines = [];
+      for (var k = 0; k < keys.length; k++) {
+        lines.push(labels[k] + ": " + _dotStateLabel(ag[keys[k]]));
+      }
+      return lines.join("\n");
+    }, { multiline: true, align: "center" });
+    return row;
   }
 
   function buildPill(p, s, isActive) {
@@ -2298,6 +2351,14 @@
 
   var _refreshedCompletedPids = {};
 
+  function _anyAgentActive() {
+    for (var i = 0; i < state.participants.length; i++) {
+      var ag = state.participants[i].agents;
+      if (ag && (ag.summary === "running" || ag.citations === "running")) return true;
+    }
+    return false;
+  }
+
   function pollTaskStatus() {
     apiGet("api/transcribe/status").then(function (data) {
       if (!data.ok) return;
@@ -2335,24 +2396,38 @@
         }
       });
 
-      // Refresh participants and transcript as each task completes
+      // Refresh participants and transcript as each task completes.
+      // Thinking-agents (summary → citations) are spawned on whisper completion
+      // and on server startup, so we always refresh after anything completes
+      // or if any agent is currently running on any pill.
+      var needsRefresh = newlyCompleted.length > 0 || _anyAgentActive();
       if (newlyCompleted.length > 0) {
         _streamingMarks = {};
         _streamingMarksLoaded = false;
         _bumpStreamingMarksVersion();
+      }
+      if (needsRefresh) {
         loadParticipants().then(function () {
-          if (state.selectedParticipant && newlyCompleted.indexOf(state.selectedParticipant) >= 0) {
+          if (newlyCompleted.length > 0 && state.selectedParticipant &&
+              newlyCompleted.indexOf(state.selectedParticipant) >= 0) {
             state.streamingParticipant = null;
             loadTranscript(state.selectedParticipant);
             loadSummary(state.selectedParticipant);
           }
           updateStatusIndicator();
+          // Agents typically kick in right after whisper completes; keep the
+          // poll alive so dot transitions (running → done → next) are seen.
+          if (_anyAgentActive()) startPolling();
+          else if (!hasActive) {
+            stopPolling();
+            _refreshedCompletedPids = {};
+          }
         });
       }
 
-      if (hasActive) {
+      if (hasActive || _anyAgentActive()) {
         startPolling();
-      } else {
+      } else if (!needsRefresh) {
         stopPolling();
         _refreshedCompletedPids = {};
       }
