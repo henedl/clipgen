@@ -14,9 +14,11 @@ API endpoints (all under /transcripts/):
   GET  /api/vtt/<participant>                     - serve transcript as WebVTT
   GET  /api/summary/<participant>                - AI-generated transcript summary
   POST /api/summary/<participant>/regenerate    - re-trigger AI summary generation
+  POST /api/summary/<participant>/stop          - flag in-flight summary for discard
   PUT  /api/summary/<participant>               - save user-edited summary
   GET  /api/citations/<participant>             - citation refs for summary sentences
   POST /api/citations/<participant>/regenerate  - re-trigger citation generation
+  POST /api/citations/<participant>/stop        - flag in-flight citations for discard
   GET  /api/corrections                           - list all study-local corrections
   POST /api/corrections                           - add a correction manually
   DELETE /api/corrections/<id>                    - remove a correction
@@ -64,6 +66,13 @@ _agent_threads: dict[str, set[threading.Thread]] = {
     a["key"]: set() for a in thinking_agents.AGENTS
 }
 _agent_in_flight: dict[str, set[str]] = {
+    a["key"]: set() for a in thinking_agents.AGENTS
+}
+# Participants flagged for cancellation. The Ollama call still runs to
+# completion in its daemon thread; when it returns, _run_agent discards the
+# result and skips the chain advance. Lets the UI flip to idle instantly
+# without needing a cancel-aware HTTP layer (see plan: discard-on-return).
+_agent_cancel_requested: dict[str, set[str]] = {
     a["key"]: set() for a in thinking_agents.AGENTS
 }
 
@@ -320,9 +329,11 @@ def api_summary(participant: str) -> FlaskResponse:
 
 @transcripts_bp.route("/api/summary/<participant>/regenerate", methods=["POST"])
 def api_summary_regenerate(participant: str) -> FlaskResponse:
-    """Clear existing summary and re-trigger AI generation."""
-    if not config.OLLAMA_SUMMARY_ENABLED:
-        return jsonify({"ok": False, "error": "Summary generation is disabled"}), 400
+    """Clear existing summary and re-trigger AI generation.
+
+    Manual trigger: runs even when config.OLLAMA_SUMMARY_ENABLED is False
+    so the frontend's per-participant controls can force a run.
+    """
     if _is_generating(participant, "summary"):
         return jsonify({"ok": True, "generating": True})
     with _manifest_lock:
@@ -333,8 +344,22 @@ def api_summary_regenerate(participant: str) -> FlaskResponse:
         entry["summary"] = ""
         entry.pop("citations", None)
     _persist_manifest()
-    _run_agent_chain(participant)
+    _run_agent_chain(participant, force=True)
     return jsonify({"ok": True, "generating": True})
+
+
+@transcripts_bp.route("/api/summary/<participant>/stop", methods=["POST"])
+def api_summary_stop(participant: str) -> FlaskResponse:
+    """Flag an in-flight summary run for cancellation (discard-on-return).
+
+    The Ollama call keeps running in the background, but its result is thrown
+    away when it returns. The UI sees idle immediately.
+    """
+    if not _is_generating(participant, "summary"):
+        return jsonify({"ok": True, "running": False})
+    _agent_cancel_requested["summary"].add(participant)
+    _agent_in_flight["summary"].discard(participant)
+    return jsonify({"ok": True, "running": False})
 
 
 @transcripts_bp.route("/api/summary/<participant>", methods=["PUT"])
@@ -373,9 +398,10 @@ def api_citations(participant: str) -> FlaskResponse:
 
 @transcripts_bp.route("/api/citations/<participant>/regenerate", methods=["POST"])
 def api_citations_regenerate(participant: str) -> FlaskResponse:
-    """Clear existing citations and re-trigger citation generation (Pass 2)."""
-    if not config.OLLAMA_SUMMARY_ENABLED:
-        return jsonify({"ok": False, "error": "Summary generation is disabled"}), 400
+    """Clear existing citations and re-trigger citation generation (Pass 2).
+
+    Manual trigger: runs even when config.OLLAMA_SUMMARY_ENABLED is False.
+    """
     if _is_generating(participant, "citations"):
         return jsonify({"ok": True, "generating": True})
     with _manifest_lock:
@@ -385,8 +411,18 @@ def api_citations_regenerate(participant: str) -> FlaskResponse:
     with _manifest_lock:
         entry.pop("citations", None)
     _persist_manifest()
-    _run_agent("citations", participant)
+    _run_agent("citations", participant, force=True)
     return jsonify({"ok": True, "generating": True})
+
+
+@transcripts_bp.route("/api/citations/<participant>/stop", methods=["POST"])
+def api_citations_stop(participant: str) -> FlaskResponse:
+    """Flag an in-flight citations run for cancellation (discard-on-return)."""
+    if not _is_generating(participant, "citations"):
+        return jsonify({"ok": True, "running": False})
+    _agent_cancel_requested["citations"].add(participant)
+    _agent_in_flight["citations"].discard(participant)
+    return jsonify({"ok": True, "running": False})
 
 
 # ---- Corrections ----
@@ -962,11 +998,13 @@ def _agent_dependencies_met(
     return True
 
 
-def _next_eligible_agent(participant: str) -> thinking_agents.Agent | None:
+def _next_eligible_agent(
+    participant: str, force: bool = False
+) -> thinking_agents.Agent | None:
     """Find the first agent that should run next for *participant*.
 
     An agent is eligible when:
-      - it is enabled,
+      - it is enabled (unless *force* is True — manual triggers bypass this),
       - its result is not already on the entry,
       - all of its dependencies are satisfied,
       - it is not already running for this participant.
@@ -976,7 +1014,7 @@ def _next_eligible_agent(participant: str) -> thinking_agents.Agent | None:
         if not entry or not entry.get("segments"):
             return None
         for agent in thinking_agents.AGENTS:
-            if not _agent_enabled(agent):
+            if not force and not _agent_enabled(agent):
                 continue
             if entry.get(agent["manifest_field"]):
                 continue
@@ -988,17 +1026,18 @@ def _next_eligible_agent(participant: str) -> thinking_agents.Agent | None:
     return None
 
 
-def _run_agent(agent_key: str, participant: str) -> None:
+def _run_agent(agent_key: str, participant: str, force: bool = False) -> None:
     """Spawn a daemon thread to run a single agent for *participant*.
 
     On success, the agent's result is written to the manifest and the chain
     advances to the next eligible agent. Guards against double-spawning via
-    ``_agent_in_flight``.
+    ``_agent_in_flight``. Pass *force* to bypass the config enabled check
+    (used by manual triggers from the UI).
     """
     agent = thinking_agents.get_agent(agent_key)
     if agent is None:
         return
-    if not _agent_enabled(agent):
+    if not force and not _agent_enabled(agent):
         return
     if _is_generating(participant, agent_key):
         return
@@ -1013,20 +1052,27 @@ def _run_agent(agent_key: str, participant: str) -> None:
                 # during the (potentially slow) model call.
                 snapshot = dict(entry)
             result = agent["run"](snapshot)
+            # Discard-on-return: if the UI asked to stop while the model was
+            # running, throw away the result and do not advance the chain.
+            if participant in _agent_cancel_requested[agent_key]:
+                return
             if result is not None:
                 with _manifest_lock:
                     entry = _manifest.get("source_transcripts", {}).get(participant)
                     if entry is not None:
                         entry[agent["manifest_field"]] = result
                 _persist_manifest()
-                # Chain into the next eligible agent (e.g. summary → citations)
-                _run_agent_chain(participant)
+                # Chain into the next eligible agent (e.g. summary → citations).
+                # Propagate *force* so a manual run cascades through disabled
+                # downstream agents too.
+                _run_agent_chain(participant, force=force)
         except Exception as exc:
             utils.warning_print(
                 f"{agent_key} generation failed for {participant}: {exc}"
             )
         finally:
             _agent_in_flight[agent_key].discard(participant)
+            _agent_cancel_requested[agent_key].discard(participant)
             _agent_threads[agent_key].discard(t)
 
     _agent_in_flight[agent_key].add(participant)
@@ -1039,15 +1085,16 @@ def _run_agent(agent_key: str, participant: str) -> None:
     t.start()
 
 
-def _run_agent_chain(participant: str) -> None:
+def _run_agent_chain(participant: str, force: bool = False) -> None:
     """Advance the thinking-agent chain for *participant* by one step.
 
     Starts the first eligible agent (if any). When that agent completes,
-    ``_run_agent`` re-enters this function to start the next step.
+    ``_run_agent`` re-enters this function to start the next step. Pass
+    *force* to bypass config enable checks for manual/UI-triggered runs.
     """
-    agent = _next_eligible_agent(participant)
+    agent = _next_eligible_agent(participant, force=force)
     if agent is not None:
-        _run_agent(agent["key"], participant)
+        _run_agent(agent["key"], participant, force=force)
 
 
 # ---- State initialization ----
