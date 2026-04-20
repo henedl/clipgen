@@ -912,6 +912,47 @@ body {
   flex: 0 0 auto;
 }
 
+.pill-dots {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 4px;
+  height: 8px;
+  margin-top: 3px;
+}
+
+.pill-dots--empty { visibility: hidden; }
+
+.pill-dot {
+  width: 4px;
+  height: 4px;
+  border-radius: var(--radius-full);
+  box-sizing: border-box;
+  border: 1px solid var(--color-text-dim);
+  background: transparent;
+  transition: background-color var(--duration-fast), border-color var(--duration-fast);
+}
+
+.pill-dot--done {
+  background: var(--color-text);
+  border-color: var(--color-text);
+}
+
+.pill-dot--running {
+  background: var(--color-text);
+  border-color: var(--color-text);
+  animation: pill-dot-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes pill-dot-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pill-dot--running { animation: none; opacity: 0.7; }
+}
+
 .pill {
   position: relative;
   overflow: hidden;

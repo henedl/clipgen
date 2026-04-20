@@ -73,6 +73,24 @@ def _is_generating(participant: str, agent_key: str) -> bool:
     return participant in _agent_in_flight.get(agent_key, set())
 
 
+def _step_state_transcription(entry: dict[str, Any]) -> str:
+    # Only the persisted result is known here; live running/queued/failed for
+    # Whisper is merged in on the frontend from /api/transcribe/status.
+    return "done" if entry.get("segments") else "idle"
+
+
+def _step_state_agent(pid: str, entry: dict[str, Any], agent_key: str) -> str:
+    field_name = next(
+        (a["manifest_field"] for a in thinking_agents.AGENTS if a["key"] == agent_key),
+        agent_key,
+    )
+    if _is_generating(pid, agent_key):
+        return "running"
+    if entry.get(field_name):
+        return "done"
+    return "idle"
+
+
 def _transcribe_prewarm_setting() -> str:
     """Return a validated TRANSCRIBE_PREWARM value for API clients."""
     v = getattr(config, "TRANSCRIBE_PREWARM", "queue_open")
@@ -116,6 +134,11 @@ def api_participants() -> FlaskResponse:
                 "has_transcript": has_transcript,
                 "segment_count": len(entry.get("segments", [])),
                 "video_filename": Path(p["video_path"]).name,
+                "agents": {
+                    "transcription": _step_state_transcription(entry),
+                    "summary": _step_state_agent(pid, entry, "summary"),
+                    "citations": _step_state_agent(pid, entry, "citations"),
+                },
             }
             if has_transcript:
                 info["language"] = entry.get("language", "")
