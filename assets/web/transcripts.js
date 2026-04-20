@@ -1947,16 +1947,33 @@
     container.innerHTML = "";
     container.appendChild(frag);
     // The pane is mounted on <body>, not inside the rebuilt wrap — reposition
-    // it to the new wrap's rect, or tear it down if the pill disappeared.
+    // it to the new wrap's rect and re-render its contents so the agent rows
+    // reflect the latest state. Tear it down if the pill disappeared.
     if (openPid !== null) {
       var newWrap = _findPillWrap(openPid);
       var floating = document.querySelector("body > .pill-options");
       if (newWrap && floating) {
-        _positionPillOptions(floating, newWrap);
+        _refreshPillOptionsContent(openPid, taskByPid);
+        var refreshed = document.querySelector("body > .pill-options[data-pid='" + openPid + "']");
+        if (refreshed) _positionPillOptions(refreshed, newWrap);
       } else {
         closePillOptions();
       }
     }
+  }
+
+  function _refreshPillOptionsContent(pid, taskByPid) {
+    var floating = document.querySelector("body > .pill-options[data-pid='" + pid + "']");
+    if (!floating) return;
+    var p = null;
+    for (var i = 0; i < state.participants.length; i++) {
+      if (state.participants[i].id === pid) { p = state.participants[i]; break; }
+    }
+    if (!p) return;
+    var s = pillState(p, taskByPid);
+    var fresh = buildPillOptions(p, s);
+    fresh.setAttribute("data-pid", pid);
+    floating.parentNode.replaceChild(fresh, floating);
   }
 
   function buildPillWrap(p, taskByPid) {
@@ -2163,38 +2180,139 @@
     langRow.appendChild(langSelect);
     pane.appendChild(langRow);
 
-    // Footer: transcribe / re-transcribe
-    var footer = document.createElement("div");
-    footer.className = "pill-options-footer";
-    var runBtn = document.createElement("button");
-    runBtn.type = "button";
-    runBtn.className = "btn btn-small";
-    if (p.has_transcript && s.status !== "running" && s.status !== "queued") {
-      runBtn.textContent = "Re-transcribe";
-      runBtn.addEventListener("click", function () {
-        closePillOptions();
-        startTranscribe(p.id, true);
-      });
-    } else if (s.status === "running" || s.status === "queued") {
-      runBtn.textContent = "Cancel";
-      runBtn.className = "btn btn-small";
-      runBtn.addEventListener("click", function () {
+    // Agent rows — manual run / re-run / stop controls with dependency gating.
+    // Order: Transcription → Summary → Citations. Summary requires
+    // transcription; citations requires summary. Re-running summary cascades
+    // to citations server-side (see transcripts_server.py).
+    pane.appendChild(buildPillAgentsSection(p, s));
+
+    return pane;
+  }
+
+  function buildPillAgentsSection(p, s) {
+    var section = document.createElement("div");
+    section.className = "pill-options-agents";
+
+    // 1. Transcription
+    section.appendChild(buildAgentRow({
+      pid: p.id,
+      label: "Transcription",
+      agent: "transcription",
+      depMet: true,
+      agentState: s.agents.transcription,
+      hasResult: !!p.has_transcript,
+      cascadeWarning: !!(p.agents && (p.agents.summary === "done" || p.agents.citations === "done")),
+      onStart: function () { startTranscribe(p.id, !!p.has_transcript); },
+      onStop: function () {
         if (s.taskId) {
           apiDelete("api/transcribe/" + s.taskId).then(function () { pollTaskStatus(); });
         }
-        closePillOptions();
-      });
-    } else {
-      runBtn.textContent = "Transcribe";
-      runBtn.addEventListener("click", function () {
-        closePillOptions();
-        startTranscribe(p.id, false);
-      });
-    }
-    footer.appendChild(runBtn);
-    pane.appendChild(footer);
+      },
+    }));
 
-    return pane;
+    // 2. Summary
+    section.appendChild(buildAgentRow({
+      pid: p.id,
+      label: "Summary",
+      agent: "summary",
+      depLabel: "transcription",
+      depMet: s.agents.transcription === "done",
+      agentState: s.agents.summary,
+      hasResult: !!(p.agents && p.agents.summary === "done"),
+      cascadeWarning: !!(p.agents && p.agents.citations === "done"),
+      onStart: function () {
+        apiPost("api/summary/" + p.id + "/regenerate", {}).catch(function () {
+          showToast("Failed to start summary");
+        });
+      },
+      onStop: function () {
+        apiPost("api/summary/" + p.id + "/stop", {}).catch(function () {
+          showToast("Failed to stop summary");
+        });
+      },
+    }));
+
+    // 3. Citations
+    section.appendChild(buildAgentRow({
+      pid: p.id,
+      label: "Citations",
+      agent: "citations",
+      depLabel: "summary",
+      depMet: s.agents.summary === "done",
+      agentState: s.agents.citations,
+      hasResult: !!(p.agents && p.agents.citations === "done"),
+      cascadeWarning: false,
+      onStart: function () {
+        apiPost("api/citations/" + p.id + "/regenerate", {}).catch(function () {
+          showToast("Failed to start citations");
+        });
+      },
+      onStop: function () {
+        apiPost("api/citations/" + p.id + "/stop", {}).catch(function () {
+          showToast("Failed to stop citations");
+        });
+      },
+    }));
+
+    return section;
+  }
+
+  function buildAgentRow(opts) {
+    var row = document.createElement("div");
+    row.className = "pill-options-row pill-options-agent-row";
+    row.setAttribute("data-agent", opts.agent);
+
+    var label = document.createElement("label");
+    label.textContent = opts.label;
+    row.appendChild(label);
+
+    var btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "btn btn-small pill-agent-btn";
+
+    var running = opts.agentState === "running";
+    var mode = "start"; // start | stop | disabled
+    var title = "";
+
+    if (running) {
+      btn.textContent = "Stop";
+      btn.classList.add("pill-agent-btn--stop");
+      mode = "stop";
+    } else if (!opts.depMet) {
+      btn.textContent = "Run";
+      mode = "disabled";
+      title = "Requires " + opts.depLabel + " to finish first";
+    } else if (opts.hasResult) {
+      btn.textContent = "Re-run";
+      if (opts.cascadeWarning) {
+        title = opts.agent === "transcription"
+          ? "Re-transcribing invalidates Summary and Citations"
+          : "Re-running will also re-run Citations";
+      }
+    } else {
+      btn.textContent = "Run";
+    }
+
+    if (mode === "disabled") btn.setAttribute("disabled", "disabled");
+    if (title) btn.title = title;
+
+    btn.addEventListener("click", function (e) {
+      e.stopPropagation();
+      if (btn.hasAttribute("disabled")) return;
+      // Optimistic UI swap; the next poll re-renders via _refreshPillOptionsContent.
+      if (mode === "stop") {
+        btn.textContent = "Stopping\u2026";
+        btn.setAttribute("disabled", "disabled");
+        opts.onStop();
+      } else {
+        btn.textContent = "Starting\u2026";
+        btn.setAttribute("disabled", "disabled");
+        opts.onStart();
+      }
+    });
+
+    row.appendChild(btn);
+    return row;
   }
 
   function _setOverride(pid, key, value) {
