@@ -6,6 +6,7 @@
   <title>clipgen Screenspace</title>
   <link rel="stylesheet" href="tokens.css">
   <link rel="stylesheet" href="screenspace.css">
+  <link rel="stylesheet" href="settings-modal.css">
 </head>
 <body>
   <header id="ssHeader">
@@ -17,6 +18,9 @@
           <select id="participantSelect"><option value="">No participants</option></select>
         </label>
         <span id="videoInfo" class="video-info"></span>
+        <button id="settingsBtn" type="button" class="btn btn-small btn-icon" title="Settings" aria-label="Settings">
+          <span class="settings-trigger-icon"></span>
+        </button>
         <button id="themeToggle" type="button" aria-label="Toggle dark mode" aria-pressed="false">
           <span class="theme-toggle-icon theme-icon-sun"></span>
           <span class="theme-toggle-icon theme-icon-moon"></span>
@@ -228,6 +232,7 @@
 
   <script src="utils.js"></script>
   <script src="grid-bg.js"></script>
+  <script src="settings-modal.js"></script>
   <script src="screenspace.js"></script>
 </body>
 </html>

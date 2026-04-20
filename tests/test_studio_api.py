@@ -1082,17 +1082,33 @@ def test_api_settings_get(client):
         assert "description" in s
         assert "group" in s
         assert "type" in s
+        assert "tab" in s
 
 
 def test_api_settings_includes_transcription_settings(client):
-    """GET /api/settings includes new Transcription group settings."""
+    """GET /api/settings includes Transcription-tab settings."""
     resp = client.get("/studio/api/settings")
     data = resp.get_json()
-    names = {s["name"] for s in data["settings"]}
-    assert "TRANSCRIBE_ENABLED" in names
-    assert "TRANSCRIBE_MODEL" in names
-    assert "TRANSCRIBE_FORMAT" in names
-    assert "TRANSCRIBE_PREWARM" in names
+    by_name = {s["name"]: s for s in data["settings"]}
+    for name in (
+        "TRANSCRIBE_ENABLED",
+        "TRANSCRIBE_MODEL",
+        "TRANSCRIBE_FORMAT",
+        "TRANSCRIBE_PREWARM",
+    ):
+        assert name in by_name
+        assert by_name[name]["tab"] == "Transcription"
+
+
+def test_api_settings_includes_cli_settings(client):
+    """GET /api/settings includes CLI-tab Rich settings."""
+    resp = client.get("/studio/api/settings")
+    data = resp.get_json()
+    by_name = {s["name"]: s for s in data["settings"]}
+    for name in ("RICH_COLORS", "RICH_PANELS", "RICH_PROGRESS"):
+        assert name in by_name
+        assert by_name[name]["tab"] == "CLI"
+        assert by_name[name]["type"] == "bool"
 
 
 def test_api_settings_includes_provider_field(client):
@@ -1169,6 +1185,81 @@ def test_api_settings_put_invalid_payload(client):
     assert resp.status_code == 400
     data = resp.get_json()
     assert data["ok"] is False
+
+
+def test_api_settings_reset_tab(client, monkeypatch):
+    """PUT {reset: 'tab:<Name>'} resets only that tab's settings to defaults."""
+    import config
+
+    monkeypatch.setattr(server, "_save_studio_settings", lambda o: None)
+    original_enabled = config.TRANSCRIBE_ENABLED
+    original_reenc = config.REENCODING
+
+    # Move two settings off their defaults: one in the target tab, one outside.
+    config.TRANSCRIBE_ENABLED = not server._settings_defaults["TRANSCRIBE_ENABLED"]
+    config.REENCODING = not server._settings_defaults["REENCODING"]
+
+    try:
+        resp = client.put(
+            "/studio/api/settings",
+            json={"reset": "tab:Transcription"},
+        )
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["ok"] is True
+        applied = data["applied"]
+
+        # Target-tab settings are back to defaults.
+        assert (
+            applied["TRANSCRIBE_ENABLED"]
+            == server._settings_defaults["TRANSCRIBE_ENABLED"]
+        )
+        assert (
+            config.TRANSCRIBE_ENABLED == server._settings_defaults["TRANSCRIBE_ENABLED"]
+        )
+
+        # Settings outside that tab are not in applied and not reset.
+        assert "REENCODING" not in applied
+        assert config.REENCODING != server._settings_defaults["REENCODING"]
+    finally:
+        config.TRANSCRIBE_ENABLED = original_enabled
+        config.REENCODING = original_reenc
+
+
+def test_api_settings_reset_all(client, monkeypatch):
+    """PUT {reset: 'all'} resets every setting to its default."""
+    import config
+
+    monkeypatch.setattr(server, "_save_studio_settings", lambda o: None)
+    original_reenc = config.REENCODING
+    original_enabled = config.TRANSCRIBE_ENABLED
+
+    config.REENCODING = not server._settings_defaults["REENCODING"]
+    config.TRANSCRIBE_ENABLED = not server._settings_defaults["TRANSCRIBE_ENABLED"]
+
+    try:
+        resp = client.put("/studio/api/settings", json={"reset": "all"})
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["ok"] is True
+        applied = data["applied"]
+
+        for name, default in server._settings_defaults.items():
+            assert applied[name] == default
+            assert getattr(config, name) == default
+    finally:
+        config.REENCODING = original_reenc
+        config.TRANSCRIBE_ENABLED = original_enabled
+
+
+def test_api_settings_reset_unknown_tab(client, monkeypatch):
+    """Unknown tab resets nothing and returns ok with empty applied."""
+    monkeypatch.setattr(server, "_save_studio_settings", lambda o: None)
+    resp = client.put("/studio/api/settings", json={"reset": "tab:Bogus"})
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["ok"] is True
+    assert data["applied"] == {}
 
 
 def test_load_studio_settings(monkeypatch, tmp_path):

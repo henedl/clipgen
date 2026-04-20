@@ -1110,16 +1110,16 @@ def api_artifact_stashes_post() -> FlaskResponse:
     return _handle_stash_crud(_load_artifact_stashes, _save_artifact_stashes, "astash")
 
 
-@studio_bp.route("/api/settings", methods=["GET"])
-def api_settings_get() -> FlaskResponse:
-    settings = []
+def _settings_records() -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
     for name, meta in config.STUDIO_SETTINGS.items():
-        settings.append(
+        records.append(
             {
                 "name": name,
                 "value": getattr(config, name),
                 "default": _settings_defaults.get(name),
                 "description": config.SETTINGS_DESCRIPTIONS.get(name, ""),
+                "tab": meta.get("tab", "General"),
                 "group": meta.get("group", ""),
                 "type": meta.get("type", "str"),
                 "options": meta.get("options"),
@@ -1128,17 +1128,47 @@ def api_settings_get() -> FlaskResponse:
                 "provider": meta.get("provider"),
             }
         )
-    return jsonify({"ok": True, "settings": settings})
+    return records
 
 
-@studio_bp.route("/api/settings", methods=["PUT"])
-def api_settings_put() -> FlaskResponse:
-    data = request.get_json(silent=True) or {}
+def _apply_settings_payload(data: dict[str, Any]) -> tuple[dict[str, Any], str | None]:
+    """Apply a settings PUT payload (direct values or a reset directive).
+
+    Returns (applied, error). `error` is None on success.
+    """
+    reset = data.get("reset")
+    if reset is not None:
+        if reset == "all":
+            target_names = list(config.STUDIO_SETTINGS.keys())
+        elif isinstance(reset, str) and reset.startswith("tab:"):
+            tab_name = reset[len("tab:") :]
+            target_names = [
+                name
+                for name, meta in config.STUDIO_SETTINGS.items()
+                if meta.get("tab", "General") == tab_name
+            ]
+        else:
+            return {}, f"Invalid reset directive: {reset!r}"
+
+        applied: dict[str, Any] = {}
+        for name in target_names:
+            default = _settings_defaults.get(name)
+            setattr(config, name, default)
+            applied[name] = default
+
+        # Preserve other non-default overrides already on disk: merge the reset
+        # subset (now at defaults) with the current non-default values of
+        # everything else, and let _save_studio_settings drop any keys that
+        # equal their default (including the ones we just reset).
+        merged = {name: getattr(config, name) for name in config.STUDIO_SETTINGS.keys()}
+        _save_studio_settings(merged)
+        return applied, None
+
     settings_data = data.get("settings")
     if not isinstance(settings_data, dict):
-        return jsonify({"ok": False, "error": "Invalid settings payload"}), 400
+        return {}, "Invalid settings payload"
 
-    applied: dict[str, Any] = {}
+    applied = {}
     for name, value in settings_data.items():
         if name not in config.STUDIO_SETTINGS:
             continue
@@ -1146,7 +1176,7 @@ def api_settings_put() -> FlaskResponse:
         expected_type = type(default) if default is not None else str
         try:
             if expected_type is bool:
-                coerced = (
+                coerced: Any = (
                     value
                     if isinstance(value, bool)
                     else str(value).lower() in ("true", "1", "yes", "on")
@@ -1163,6 +1193,20 @@ def api_settings_put() -> FlaskResponse:
         applied[name] = coerced
 
     _save_studio_settings(applied)
+    return applied, None
+
+
+@studio_bp.route("/api/settings", methods=["GET"])
+def api_settings_get() -> FlaskResponse:
+    return jsonify({"ok": True, "settings": _settings_records()})
+
+
+@studio_bp.route("/api/settings", methods=["PUT"])
+def api_settings_put() -> FlaskResponse:
+    data = request.get_json(silent=True) or {}
+    applied, error = _apply_settings_payload(data)
+    if error is not None:
+        return jsonify({"ok": False, "error": error}), 400
     return jsonify({"ok": True, "applied": applied})
 
 
@@ -1428,56 +1472,14 @@ def start_combined_server(
 
     @combined.route("/api/settings", methods=["GET"])
     def combined_settings_get() -> FlaskResponse:
-        settings = []
-        for name, meta in config.STUDIO_SETTINGS.items():
-            settings.append(
-                {
-                    "name": name,
-                    "value": getattr(config, name),
-                    "default": _settings_defaults.get(name),
-                    "description": config.SETTINGS_DESCRIPTIONS.get(name, ""),
-                    "group": meta.get("group", ""),
-                    "type": meta.get("type", "str"),
-                    "options": meta.get("options"),
-                    "min": meta.get("min"),
-                    "step": meta.get("step"),
-                    "provider": meta.get("provider"),
-                }
-            )
-        return jsonify({"ok": True, "settings": settings})
+        return jsonify({"ok": True, "settings": _settings_records()})
 
     @combined.route("/api/settings", methods=["PUT"])
     def combined_settings_put() -> FlaskResponse:
         data = request.get_json(silent=True) or {}
-        settings_data = data.get("settings")
-        if not isinstance(settings_data, dict):
-            return jsonify({"ok": False, "error": "Invalid settings payload"}), 400
-
-        applied: dict[str, Any] = {}
-        for name, value in settings_data.items():
-            if name not in config.STUDIO_SETTINGS:
-                continue
-            default = _settings_defaults.get(name)
-            expected_type = type(default) if default is not None else str
-            try:
-                if expected_type is bool:
-                    coerced = (
-                        value
-                        if isinstance(value, bool)
-                        else str(value).lower() in ("true", "1", "yes", "on")
-                    )
-                elif expected_type is int:
-                    coerced = int(value)
-                elif expected_type is float:
-                    coerced = float(value)
-                else:
-                    coerced = str(value)
-            except (ValueError, TypeError):
-                continue
-            setattr(config, name, coerced)
-            applied[name] = coerced
-
-        _save_studio_settings(applied)
+        applied, error = _apply_settings_payload(data)
+        if error is not None:
+            return jsonify({"ok": False, "error": error}), 400
         return jsonify({"ok": True, "applied": applied})
 
     # ---- Model discovery ----

@@ -5975,6 +5975,16 @@
     initKeyboard();
     initFrontendSwitcher();
 
+    // Settings
+    var settingsBtn = qs("#settingsBtn");
+    if (settingsBtn) {
+      settingsBtn.addEventListener("click", function () {
+        if (typeof window.openSettingsModal === "function") {
+          window.openSettingsModal({ initialTab: "General" });
+        }
+      });
+    }
+
     // Participant select
     qs("#participantSelect").addEventListener("change", function () {
       var pid = this.value;

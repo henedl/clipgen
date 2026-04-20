@@ -29,7 +29,7 @@ from icecream import ic
 REENCODING: bool = False
 AUDIO_NORMALIZE: bool = False
 FILEFORMAT: str = ".mp4"
-VERSIONNUM: str = "0.10.83"
+VERSIONNUM: str = "0.10.84"
 TITLECARDS_ENABLED: bool = (
     False  # use --titlecards / --no-titlecards to override per run
 )
@@ -290,70 +290,109 @@ SETTINGS_DESCRIPTIONS: dict[str, str] = {
     "OLLAMA_BASE_URL": "Base URL of the local Ollama server.",
 }
 
-# Studio-exposed settings with UI metadata (group, type, constraints).
+# Studio-exposed settings with UI metadata (tab, group, type, constraints).
 STUDIO_SETTINGS: dict[str, dict[str, Any]] = {
-    "REENCODING": {"group": "Video Output", "type": "bool"},
-    "AUDIO_NORMALIZE": {"group": "Video Output", "type": "bool"},
+    "MANIFEST_ENABLED": {"tab": "General", "group": "Manifest", "type": "bool"},
+    "CLIP_PARALLEL_WORKERS": {
+        "tab": "General",
+        "group": "Workers",
+        "type": "int",
+        "min": 0,
+        "step": 1,
+    },
+    "STUDIO_CELL_EXPAND_HOVER": {
+        "tab": "General",
+        "group": "Sheet Preview",
+        "type": "bool",
+    },
+    "REENCODING": {"tab": "Video & Clips", "group": "Video Output", "type": "bool"},
+    "AUDIO_NORMALIZE": {
+        "tab": "Video & Clips",
+        "group": "Video Output",
+        "type": "bool",
+    },
     "FILEFORMAT": {
+        "tab": "Video & Clips",
         "group": "Video Output",
         "type": "select",
         "options": [".mp4", ".webm", ".mkv"],
     },
-    "MAX_FILESIZE_MB": {"group": "Video Output", "type": "int", "min": 0, "step": 1},
+    "MAX_FILESIZE_MB": {
+        "tab": "Video & Clips",
+        "group": "Video Output",
+        "type": "int",
+        "min": 0,
+        "step": 1,
+    },
     "DEFAULT_DURATION_SECONDS": {
+        "tab": "Video & Clips",
         "group": "Clip Behavior",
         "type": "int",
         "min": 1,
         "step": 1,
     },
     "MAX_CLIP_DURATION_SECONDS": {
+        "tab": "Video & Clips",
         "group": "Clip Behavior",
         "type": "int",
         "min": 1,
         "step": 1,
     },
-    "TITLECARDS_ENABLED": {"group": "Titlecards", "type": "bool"},
+    "TITLECARDS_ENABLED": {
+        "tab": "Video & Clips",
+        "group": "Titlecards",
+        "type": "bool",
+    },
     "TITLECARD_DURATION_SECONDS": {
+        "tab": "Video & Clips",
         "group": "Titlecards",
         "type": "int",
         "min": 1,
         "step": 1,
     },
     "HIGHLIGHTS_REEL_DURATION_SECONDS": {
-        "group": "Generation",
+        "tab": "Video & Clips",
+        "group": "Highlights",
         "type": "int",
         "min": 10,
         "step": 10,
     },
-    "MANIFEST_ENABLED": {"group": "Generation", "type": "bool"},
-    "CLIP_PARALLEL_WORKERS": {
-        "group": "Generation",
-        "type": "int",
-        "min": 0,
-        "step": 1,
+    "TRANSCRIBE_ENABLED": {
+        "tab": "Transcription",
+        "group": "Transcription",
+        "type": "bool",
     },
-    "STUDIO_CELL_EXPAND_HOVER": {"group": "Sheet Preview", "type": "bool"},
-    "TRANSCRIBE_ENABLED": {"group": "Transcription", "type": "bool"},
     "TRANSCRIBE_MODEL": {
+        "tab": "Transcription",
         "group": "Transcription",
         "type": "model_select",
         "provider": "whisper",
     },
     "TRANSCRIBE_FORMAT": {
+        "tab": "Transcription",
         "group": "Transcription",
         "type": "select",
         "options": ["md", "srt", "vtt"],
     },
     "TRANSCRIBE_PREWARM": {
+        "tab": "Transcription",
         "group": "Transcription",
         "type": "select",
         "options": ["off", "queue_open", "page_load"],
     },
-    "OLLAMA_SUMMARY_ENABLED": {"group": "AI Summary", "type": "bool"},
+    "OLLAMA_SUMMARY_ENABLED": {
+        "tab": "AI / Ollama",
+        "group": "AI Summary",
+        "type": "bool",
+    },
     "OLLAMA_SUMMARY_MODEL": {
+        "tab": "AI / Ollama",
         "group": "AI Summary",
         "type": "model_select",
         "provider": "ollama",
     },
-    "OLLAMA_BASE_URL": {"group": "AI Summary", "type": "str"},
+    "OLLAMA_BASE_URL": {"tab": "AI / Ollama", "group": "AI Summary", "type": "str"},
+    "RICH_COLORS": {"tab": "CLI", "group": "Terminal Output", "type": "bool"},
+    "RICH_PANELS": {"tab": "CLI", "group": "Terminal Output", "type": "bool"},
+    "RICH_PROGRESS": {"tab": "CLI", "group": "Terminal Output", "type": "bool"},
 }
