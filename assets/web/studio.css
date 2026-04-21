@@ -715,6 +715,7 @@ col.col-participant-col {
 /* Timestamp cells */
 
 .ts-cell {
+  --ts-intensity: 1;
   cursor: pointer;
   text-align: center;
   font-family: var(--font-mono);
@@ -745,6 +746,31 @@ col.col-participant-col {
 .ts-cell.empty {
   color: var(--color-text-dim);
   cursor: default;
+}
+
+.ts-cell.valid-ts.sev-critical {
+  color: color-mix(in srgb, var(--sev-critical) calc(var(--ts-intensity) * 100%), var(--color-text-dim));
+}
+.ts-cell.valid-ts.sev-high {
+  color: color-mix(in srgb, var(--sev-high) calc(var(--ts-intensity) * 100%), var(--color-text-dim));
+}
+.ts-cell.valid-ts.sev-medium {
+  color: color-mix(in srgb, var(--sev-medium) calc(var(--ts-intensity) * 100%), var(--color-text-dim));
+}
+.ts-cell.valid-ts.sev-low {
+  color: color-mix(in srgb, var(--sev-low) calc(var(--ts-intensity) * 100%), var(--color-text-dim));
+}
+.ts-cell.valid-ts.sev-na {
+  color: color-mix(in srgb, var(--sev-na) calc(var(--ts-intensity) * 100%), var(--color-text-dim));
+}
+.ts-cell.valid-ts.sev-positive {
+  color: color-mix(in srgb, var(--sev-positive) calc(var(--ts-intensity) * 100%), var(--color-text-dim));
+}
+.ts-cell.valid-ts.sev-very-positive {
+  color: color-mix(in srgb, var(--sev-very-positive) calc(var(--ts-intensity) * 100%), var(--color-text-dim));
+}
+.ts-cell.valid-ts.sev-unknown {
+  color: color-mix(in srgb, var(--sev-unknown) calc(var(--ts-intensity) * 100%), var(--color-text-dim));
 }
 
 /* Floating expanded cell overlay */
