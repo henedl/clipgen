@@ -2278,7 +2278,3 @@ html[data-theme="dark"] .log-panel {
   width: 10px;
   height: 10px;
 }
-
-.tr-intake-filter-cat {
-  font-size: var(--text-xs);
-}
