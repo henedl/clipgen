@@ -20,6 +20,7 @@
     dividerOffsetBeforeCollapse: 0,
     activeFunction: "",
     cellExpandHover: true,
+    cellColorCoding: true,
     filtersVisible: false,
     filters: {
       categories: [],
@@ -682,6 +683,9 @@
         if (data.cellExpandHover !== undefined) {
           state.cellExpandHover = data.cellExpandHover;
         }
+        if (data.cellColorCoding !== undefined) {
+          state.cellColorCoding = data.cellColorCoding;
+        }
         var tcGroup = qs("#titlecardGroup");
         if (tcGroup && qs("#artifactFormat").value === "clip") {
           tcGroup.classList.remove("hidden");
@@ -1226,6 +1230,21 @@
         td.textContent = cellData.value;
         if (cellData.valid) {
           td.classList.add("valid-ts");
+          if (state.cellColorCoding) {
+            if (row.severity) {
+              var sevCellCls = severityClass(row.severity);
+              if (sevCellCls) td.classList.add(sevCellCls);
+            }
+            var segs = parseClipTimestamps(cellData.value);
+            var totalDur = 0;
+            for (var k = 0; k < segs.length; k++) totalDur += segs[k].duration;
+            var intensity;
+            if (totalDur < 15) intensity = 0.55;
+            else if (totalDur < 45) intensity = 0.7;
+            else if (totalDur < 90) intensity = 0.85;
+            else intensity = 1;
+            td.style.setProperty("--ts-intensity", intensity);
+          }
         } else {
           td.classList.add("has-text");
         }
@@ -3108,6 +3127,14 @@
     var cellExpand = _findSetting("STUDIO_CELL_EXPAND_HOVER");
     if (cellExpand) {
       state.cellExpandHover = !!cellExpand.value;
+    }
+    var cellColor = _findSetting("STUDIO_SHEET_CELL_COLOR_CODING");
+    if (cellColor) {
+      var newVal = !!cellColor.value;
+      if (newVal !== state.cellColorCoding) {
+        state.cellColorCoding = newVal;
+        if (state.sheetData) renderGrid();
+      }
     }
   }
 
