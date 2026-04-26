@@ -185,6 +185,32 @@ def test_baseline_row_detection_and_relative_conversion():
     assert prepared_p02["times"] == [("09:20:00", "09:21:00")]
 
 
+def test_baseline_subtracts_from_both_ends_of_multiple_ranges():
+    # Regression: when a cell holds multiple baselined HH:MM:SS-HH:MM:SS pairs,
+    # baseline must be subtracted from both ends of *each* pair independently.
+    sheet_data = [
+        ["study", "", "", "", ""],
+        ["Baseline time", "09:12:00", "", "", ""],
+        ["ID", "P01", "P02", "Observation", "Category"],
+        ["1", "09:13:00-09:14:00, 09:15:30-09:16:00", "", "Obs", "CatA"],
+    ]
+    id_cell = SimpleNamespace(row=3, col=1)
+    observation_cell = SimpleNamespace(row=3, col=4)
+    category_cell = SimpleNamespace(row=3, col=5)
+    ctx = _make_context(
+        sheet_data=sheet_data,
+        id_cell=id_cell,
+        observation_cell=observation_cell,
+        category_cell=category_cell,
+        num_participants=2,
+        study_name="study",
+        baseline_row_idx=spreadsheet._detect_baseline_row(sheet_data),
+    )
+    clips = spreadsheet.get_line_timestamps(ctx, 3)
+    prepared = files.prepare_clip(clips[0])
+    assert prepared["times"] == [("0:01:00", "0:02:00"), ("0:03:30", "0:04:00")]
+
+
 def test_no_baseline_row_means_relative_timestamps_only():
     # Same layout as above, but without any 'Baseline time' marker row.
     sheet_data = [

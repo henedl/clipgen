@@ -45,52 +45,8 @@
     return (state.sheetData && state.sheetData.study) || "study";
   }
 
-  // Baseline-aware timestamp parsing (matches convergence.js pattern)
-  function clockToSeconds(ts) {
-    var parts = ts.split(":");
-    if (parts.length === 3)
-      return parseInt(parts[0], 10) * 3600 + parseInt(parts[1], 10) * 60 + parseInt(parts[2], 10);
-    if (parts.length === 2)
-      return parseInt(parts[0], 10) * 3600 + parseInt(parts[1], 10) * 60;
-    return NaN;
-  }
-
-  function parseClockSegments(raw) {
-    var DEFAULT_DUR = (state.sheetData && state.sheetData.defaultDuration) || 60;
-    var cleaned = raw.toLowerCase().replace(/!key/g, "").replace(/[+;,]/g, " ");
-    var tokens = cleaned.split(/\s+/).filter(function (t) { return t && t !== "x"; });
-    var segments = [];
-    for (var i = 0; i < tokens.length; i++) {
-      var tok = tokens[i].replace(/\.$/, "").replace(/\./g, ":");
-      var dashIdx = -1;
-      for (var d = 1; d < tok.length; d++) {
-        if (tok[d] === "-" && tok[d - 1] >= "0" && tok[d - 1] <= "9") { dashIdx = d; break; }
-      }
-      if (dashIdx > 0) {
-        var s = clockToSeconds(tok.substring(0, dashIdx));
-        var e = clockToSeconds(tok.substring(dashIdx + 1));
-        if (!isNaN(s) && !isNaN(e))
-          segments.push({ startSeconds: Math.floor(s), duration: Math.max(0, e - s) });
-      } else if (tok.indexOf(":") > 0) {
-        var sec = clockToSeconds(tok);
-        if (!isNaN(sec))
-          segments.push({ startSeconds: Math.floor(sec), duration: DEFAULT_DUR });
-      }
-    }
-    return segments;
-  }
-
   function parseSheetTimestamps(cellValue, participant) {
-    var baselineOffset = (mdState.baselines && mdState.baselines[participant]) || 0;
-    var segs = baselineOffset
-      ? parseClockSegments(cellValue)
-      : parseClipTimestamps(cellValue);
-    if (baselineOffset) {
-      for (var i = 0; i < segs.length; i++) {
-        segs[i].startSeconds = Math.max(0, segs[i].startSeconds - baselineOffset);
-      }
-    }
-    return segs;
+    return parseClipTimestamps(cellValue, participant);
   }
 
   // --- Participant helpers ---
