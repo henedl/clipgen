@@ -189,6 +189,10 @@ SCREENSPACE_INACTIVITY_PHASH_THRESHOLD: int = (
 SCREENSPACE_INACTIVITY_MIN_DURATION: float = (
     2.0  # min seconds to report an inactivity span
 )
+SCREENSPACE_CV_RESOLUTION_SCALE: float = (
+    1.0  # multiplier applied to extracted region frames before CV analysis
+    # (1.0 = no change; >1 sharper but slower and more memory; <1 faster but coarser)
+)
 
 # ── Highlights Reel ──────────────────────────────────────────────────
 HIGHLIGHTS_REEL_DURATION_SECONDS: int = 180  # 3-minute budget for highlights reel
@@ -296,6 +300,7 @@ SETTINGS_DESCRIPTIONS: dict[str, str] = {
     "SCREENSHOT_FORMAT": "File format for screenshot artifacts. WebP is smaller but requires modern browsers (Safari 16+).",
     "GIF_FORMAT": "File format for animated artifacts. WebM (VP9) is the smallest and most-compatible modern option; animated WebP is also small but requires Safari 16+; GIF works everywhere but is large.",
     "WEBP_QUALITY": "WebP encoding quality (0-100). Higher values mean better quality and larger files.",
+    "SCREENSPACE_CV_RESOLUTION_SCALE": "Scale extracted region frames before CV analysis. Higher (e.g. 2.0) gives the models more signal on noisy/compressed video at the cost of speed and memory; lower speeds up scans on large footage. 1.0 = unchanged.",
 }
 
 # Studio-exposed settings with UI metadata (tab, group, type, constraints).
@@ -425,6 +430,14 @@ STUDIO_SETTINGS: dict[str, dict[str, Any]] = {
         "provider": "ollama",
     },
     "OLLAMA_BASE_URL": {"tab": "AI / Ollama", "group": "AI Summary", "type": "str"},
+    "SCREENSPACE_CV_RESOLUTION_SCALE": {
+        "tab": "Screenspace",
+        "group": "Analysis Quality",
+        "type": "float",
+        "min": 0.25,
+        "max": 4.0,
+        "step": 0.25,
+    },
     "RICH_COLORS": {"tab": "CLI", "group": "Terminal Output", "type": "bool"},
     "RICH_PANELS": {"tab": "CLI", "group": "Terminal Output", "type": "bool"},
     "RICH_PROGRESS": {"tab": "CLI", "group": "Terminal Output", "type": "bool"},

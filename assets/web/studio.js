@@ -72,7 +72,7 @@
       var total = 0;
       for (var j = 0; j < participants.length; j++) {
         var c = row.cells[participants[j]];
-        if (c && c.valid) total += parseClipTimestamps(c.value).length;
+        if (c && c.valid) total += parseClipTimestamps(c.value, participants[j]).length;
       }
       return total;
     },
@@ -126,7 +126,7 @@
   }
 
   function expandCellToSegments(info) {
-    var segments = parseClipTimestamps(info.timestamp);
+    var segments = parseClipTimestamps(info.timestamp, info.participant);
     var entries = [];
     for (var i = 0; i < segments.length; i++) {
       entries.push({
@@ -156,38 +156,13 @@
     if (td) td.classList.add("header-highlight");
   }
 
-  function parseClipTimestamps(raw) {
+  function parseClipTimestamps(raw, participantId) {
     var DEFAULT_DUR = (state.sheetData && state.sheetData.defaultDuration) || 60;
-    var cleaned = raw
-      .toLowerCase()
-      .replace(/!key/g, "")
-      .replace(/[+;,]/g, " ");
-    var tokens = cleaned.split(/\s+/).filter(function (t) {
-      return t && t !== "x";
-    });
-    var segments = [];
-    for (var i = 0; i < tokens.length; i++) {
-      var tok = tokens[i].replace(/\.$/, "").replace(/\./g, ":");
-      var dashIdx = -1;
-      for (var d = 1; d < tok.length; d++) {
-        if (tok[d] === "-" && tok[d - 1] >= "0" && tok[d - 1] <= "9") {
-          dashIdx = d;
-          break;
-        }
-      }
-      if (dashIdx > 0) {
-        var s = parseTimestamp(tok.substring(0, dashIdx));
-        var e = parseTimestamp(tok.substring(dashIdx + 1));
-        if (s !== null && e !== null) {
-          segments.push({ startSeconds: Math.floor(s), duration: Math.max(0, e - s) });
-        }
-      } else if (tok.indexOf(":") > 0) {
-        var sec = parseTimestamp(tok);
-        if (sec !== null) {
-          segments.push({ startSeconds: Math.floor(sec), duration: DEFAULT_DUR });
-        }
-      }
+    var baselineSeconds = 0;
+    if (participantId && state.convergenceBaselines) {
+      baselineSeconds = state.convergenceBaselines[participantId] || 0;
     }
+    var segments = parseClipSegmentsForCell(raw, baselineSeconds, DEFAULT_DUR);
     if (segments.length === 0) {
       segments.push({ startSeconds: 0, duration: DEFAULT_DUR });
     }
@@ -235,7 +210,7 @@
         var row = state.sheetData.rows[k];
         var cell = row.cells[participant];
         if (!cell || !cell.valid) continue;
-        var segs = parseClipTimestamps(cell.value);
+        var segs = parseClipTimestamps(cell.value, participant);
         for (var s = 0; s < segs.length; s++) {
           var segEnd = segs[s].startSeconds + segs[s].duration;
           if (segs[s].startSeconds < end && segEnd > start) {
@@ -666,6 +641,16 @@
         renderHeader();
         renderFilterBar();
         renderGrid();
+        // Load per-participant baselines so the grid color-codes durations
+        // and segment metadata in the video-relative frame (matches Python
+        // prepare_clip behavior) instead of raw clock-time spans. Re-render
+        // once they arrive so cell intensities reflect baselined durations.
+        apiGet("api/sheet/baseline")
+          .then(function (bdata) {
+            state.convergenceBaselines = (bdata.ok && bdata.baselines) ? bdata.baselines : {};
+            if (Object.keys(state.convergenceBaselines).length > 0) renderGrid();
+          })
+          .catch(function () { state.convergenceBaselines = {}; });
         computeGridMaxHeight();
         populateGalleryParticipants(data.participants || []);
         var durInput = qs("#highlightsDuration");
@@ -1235,7 +1220,7 @@
               var sevCellCls = severityClass(row.severity);
               if (sevCellCls) td.classList.add(sevCellCls);
             }
-            var segs = parseClipTimestamps(cellData.value);
+            var segs = parseClipTimestamps(cellData.value, pid);
             var totalDur = 0;
             for (var k = 0; k < segs.length; k++) totalDur += segs[k].duration;
             var intensity;
@@ -1734,7 +1719,7 @@
         segStart = item.segStart;
         segDuration = item.segDuration;
       } else {
-        var parsed = parseClipTimestamps(item.timestamp)[0];
+        var parsed = parseClipTimestamps(item.timestamp, item.participant)[0];
         segStart = parsed.startSeconds;
         segDuration = parsed.duration;
       }
@@ -1868,7 +1853,7 @@
         segStart = item.segStart;
         segDuration = item.segDuration;
       } else {
-        var parsed = parseClipTimestamps(item.timestamp)[0];
+        var parsed = parseClipTimestamps(item.timestamp, item.participant)[0];
         segStart = parsed.startSeconds;
         segDuration = parsed.duration;
       }
@@ -2040,7 +2025,7 @@
     for (var i = 0; i < items.length; i++) {
       var dur = items[i].segDuration;
       if (dur === undefined || dur === null) {
-        var segs = parseClipTimestamps(items[i].timestamp);
+        var segs = parseClipTimestamps(items[i].timestamp, items[i].participant);
         dur = segs.length > 0 ? segs[0].duration : 0;
       }
       total += dur || 0;
@@ -2685,7 +2670,7 @@
           segStart = item.segStart;
           segDuration = item.segDuration;
         } else {
-          var parsed = parseClipTimestamps(item.timestamp)[0];
+          var parsed = parseClipTimestamps(item.timestamp, item.participant)[0];
           segStart = parsed.startSeconds;
           segDuration = parsed.duration;
         }

@@ -12,6 +12,7 @@
   var TAB_ORDER = [
     "General",
     "Video & Clips",
+    "Screenspace",
     "Transcription",
     "AI / Ollama",
     "CLI",
@@ -356,6 +357,28 @@
         _scheduleSave();
       });
       controlDiv.appendChild(txtInput);
+    } else if (s.type === "float") {
+      var fInput = document.createElement("input");
+      fInput.type = "number";
+      if (s.min !== undefined && s.min !== null) fInput.min = s.min;
+      if (s.max !== undefined && s.max !== null) fInput.max = s.max;
+      fInput.step = s.step !== undefined && s.step !== null ? s.step : "any";
+      fInput.value = s.value;
+      fInput.placeholder = String(s.default);
+      fInput.addEventListener("change", function () {
+        var setting = _findSetting(settingName);
+        if (setting) {
+          var n = parseFloat(this.value);
+          if (isNaN(n)) n = setting.default;
+          if (setting.min !== undefined && setting.min !== null && n < setting.min) n = setting.min;
+          if (setting.max !== undefined && setting.max !== null && n > setting.max) n = setting.max;
+          setting.value = n;
+          this.value = n;
+        }
+        _updateChanged(settingName);
+        _scheduleSave();
+      });
+      controlDiv.appendChild(fInput);
     } else {
       var input = document.createElement("input");
       input.type = "number";
