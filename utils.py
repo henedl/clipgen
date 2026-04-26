@@ -663,6 +663,50 @@ def get_severity_style(severity_label: str) -> str:
     return _STYLE_MAP.get(severity_label.strip().lower(), "")
 
 
+def severity_css_class(severity_label: str) -> str:
+    """Map a canonical severity label to its tokens.css CSS class.
+
+    "Critical" → "sev-critical", "Very Positive" → "sev-very-positive",
+    "N/A" → "sev-na", unknown → "sev-unknown".
+    """
+    label = severity_label.strip().lower()
+    if not label:
+        return ""
+    if label not in config.SEVERITY_LABEL_TO_NUMERIC:
+        return "sev-unknown"
+    return "sev-" + label.replace("/", "").replace(" ", "-")
+
+
+# ---- Frontend config payload ----
+
+
+def get_frontend_config() -> dict[str, Any]:
+    """Return canonical config the JS layer needs (severity, timestamp tokens).
+
+    Embedded in API responses (server.py /api/sheet-data) and exported viewer
+    payloads (viewer.py finalize_*) so JS does not duplicate config.py.
+    The hardcoded fallback in assets/web/utils.js mirrors this; the contract
+    is asserted by tests/test_shared_constants.py.
+    """
+    severity = []
+    for numeric_str, label in sorted(
+        config.SEVERITY_NUMERIC_TO_LABEL.items(), key=lambda kv: int(kv[0])
+    ):
+        severity.append(
+            {
+                "label": label,
+                "rank": int(numeric_str),
+                "cssClass": severity_css_class(label),
+            }
+        )
+    return {
+        "defaultDuration": config.DEFAULT_DURATION_SECONDS,
+        "severity": severity,
+        "annotationKeyphrases": sorted(get_known_annotation_map().keys()),
+        "ignoredTimestampTokens": sorted(get_ignored_timestamp_tokens()),
+    }
+
+
 # ---- Column index / letter conversion ----
 
 

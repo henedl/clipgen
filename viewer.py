@@ -155,6 +155,7 @@ def finalize_timeline_data(
             "sourceFileType": "excel" if is_excel else "google",
             "filmstripEnabled": config.FILMSTRIP_ENABLED,
         },
+        "config": utils.get_frontend_config(),
         "artifacts": artifacts,
         "timeline": {
             "duration": duration,
@@ -376,6 +377,7 @@ def finalize_gallery_data(
             "videoDuration": video_duration,
             "bundled": bundle,
         },
+        "config": utils.get_frontend_config(),
         "artifacts": artifacts,
     }
 
@@ -423,6 +425,7 @@ def finalize_insights_viewer_data(
             "version": config.VERSIONNUM,
             "timelineViewerFile": timeline_viewer_file,
         },
+        "config": utils.get_frontend_config(),
         "insights": visible,
         "artifacts": referenced_artifacts,
     }

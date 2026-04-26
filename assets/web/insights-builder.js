@@ -4,33 +4,12 @@
   "use strict";
 
   var SIDEBAR_WIDTH_KEY = "clipgen-insights-sidebar-width";
-  var SEVERITY_OPTIONS = [
-    "",
-    "Critical",
-    "High",
-    "Medium",
-    "Low",
-    "N/A",
-    "Positive",
-    "Very Positive",
-  ];
 
   var SORT_DEFAULT_DIR = {
     severity: "desc",
     chrono: "asc",
     duration: "desc",
     alpha: "asc",
-  };
-
-  var SEVERITY_SORT = {
-    "sev-critical": -4,
-    "sev-high": -3,
-    "sev-medium": -2,
-    "sev-low": -1,
-    "sev-na": 0,
-    "sev-positive": 1,
-    "sev-very-positive": 2,
-    "sev-unknown": 998,
   };
 
   var state = {
@@ -67,6 +46,7 @@
       apiGet("api/artifacts"),
       apiGet("api/insights"),
     ]).then(function (results) {
+      clipgenApplyConfig(results[0].config);
       state.artifacts = results[0].artifacts || [];
       state.insights = results[1].insights || [];
       state.filteredArtifacts = state.artifacts.slice();
@@ -213,10 +193,10 @@
         else if (ae) r = 1;
         else if (be) r = -1;
         else {
-          var ca = severityClass(a.severity);
-          var cb = severityClass(b.severity);
-          var na = SEVERITY_SORT.hasOwnProperty(ca) ? SEVERITY_SORT[ca] : 999;
-          var nb = SEVERITY_SORT.hasOwnProperty(cb) ? SEVERITY_SORT[cb] : 999;
+          var na = severityRank(a.severity);
+          var nb = severityRank(b.severity);
+          if (na === null) na = 999;
+          if (nb === null) nb = 999;
           if (dir === "desc") r = na - nb;
           else r = nb - na;
         }
@@ -931,11 +911,14 @@
       fields.appendChild(titleInput);
 
       var sevSelect = document.createElement("select");
-      for (var s = 0; s < SEVERITY_OPTIONS.length; s++) {
+      var sevOpts = [""].concat(
+        CLIPGEN_CONFIG.severity.map(function (s) { return s.label; })
+      );
+      for (var s = 0; s < sevOpts.length; s++) {
         var opt = document.createElement("option");
-        opt.value = SEVERITY_OPTIONS[s];
-        opt.textContent = SEVERITY_OPTIONS[s] || "No severity";
-        if (SEVERITY_OPTIONS[s] === insight.severity) opt.selected = true;
+        opt.value = sevOpts[s];
+        opt.textContent = sevOpts[s] || "No severity";
+        if (sevOpts[s] === insight.severity) opt.selected = true;
         sevSelect.appendChild(opt);
       }
       sevSelect.addEventListener("change", function () {

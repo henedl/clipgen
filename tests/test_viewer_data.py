@@ -38,7 +38,7 @@ def test_finalize_timeline_data_duration_and_structure():
         mode="batch",
     )
 
-    assert set(data.keys()) == {"meta", "artifacts", "timeline"}
+    assert set(data.keys()) == {"meta", "config", "artifacts", "timeline"}
     assert data["timeline"]["duration"] == 50.0 * 1.05
     assert data["timeline"]["startOffset"] == 0.0
     assert data["meta"]["study"] == "s"

@@ -189,8 +189,7 @@
           var cell = row.cells[pid];
           if (!cell || !cell.valid) continue;
           var baselineOffset = (cvState.baselines && cvState.baselines[pid]) || 0;
-          var defaultDur = (state.sheetData && state.sheetData.defaultDuration) || 60;
-          var segs = parseClipSegmentsForCell(cell.value, baselineOffset, defaultDur);
+          var segs = parseClipSegmentsForCell(cell.value, baselineOffset, CLIPGEN_CONFIG.defaultDuration);
           for (var s = 0; s < segs.length; s++) {
             var start = segs[s].startSeconds;
             var end = start + segs[s].duration;
@@ -1336,9 +1335,8 @@
         ? rawRow.cells[event.participant].value : "";
       var parts = event.id.split("_");
       var segIdx = parseInt(parts[parts.length - 1]) || 0;
-      var defaultDur2 = (state.sheetData && state.sheetData.defaultDuration) || 60;
       var baselineOffset2 = (cvState.baselines && cvState.baselines[event.participant]) || 0;
-      var segs = parseClipSegmentsForCell(cellValue, baselineOffset2, defaultDur2);
+      var segs = parseClipSegmentsForCell(cellValue, baselineOffset2, CLIPGEN_CONFIG.defaultDuration);
       item.row = rawRow.rowNum;
       item.desc = rawRow.observation || event.label || event.eventType;
       item.timestamp = cellValue;

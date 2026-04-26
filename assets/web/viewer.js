@@ -3,6 +3,7 @@
   "use strict";
 
   var data = window.CLIPGEN_DATA || null;
+  if (data) clipgenApplyConfig(data.config);
 
   var state = {
     artifacts: [],
@@ -44,17 +45,6 @@
 
   // ---- Helpers ----
 
-  var SEVERITY_SORT = {
-    "sev-critical": -4,
-    "sev-high": -3,
-    "sev-medium": -2,
-    "sev-low": -1,
-    "sev-na": 0,
-    "sev-positive": 1,
-    "sev-very-positive": 2,
-    "sev-unknown": 998,
-  };
-
   function markerTypeClass(type) {
     var t = type || "clip";
     if (t === "transcript") return "transcript";
@@ -81,10 +71,10 @@
       labels.push(s);
     });
     labels.sort(function (a, b) {
-      var ca = severityClass(a);
-      var cb = severityClass(b);
-      var na = SEVERITY_SORT.hasOwnProperty(ca) ? SEVERITY_SORT[ca] : 999;
-      var nb = SEVERITY_SORT.hasOwnProperty(cb) ? SEVERITY_SORT[cb] : 999;
+      var na = severityRank(a);
+      var nb = severityRank(b);
+      if (na === null) na = 999;
+      if (nb === null) nb = 999;
       if (na !== nb) return na - nb;
       return a.localeCompare(b);
     });
@@ -906,8 +896,8 @@
     var items = artifacts.map(function (a) {
       var s = a.start || 0;
       var e = a.end || a.start || 0;
-      var cls = severityClass(a.severity);
-      var sevVal = cls && SEVERITY_SORT.hasOwnProperty(cls) ? SEVERITY_SORT[cls] : 999;
+      var rank = severityRank(a.severity);
+      var sevVal = rank !== null ? rank : 999;
       return { id: a.id, duration: e - s, start: s, sevVal: sevVal };
     });
     items.sort(function (a, b) {
@@ -1118,10 +1108,10 @@
         else if (ae) r = 1;
         else if (be) r = -1;
         else {
-          var ca = severityClass(a.severity);
-          var cb = severityClass(b.severity);
-          var na = SEVERITY_SORT.hasOwnProperty(ca) ? SEVERITY_SORT[ca] : 999;
-          var nb = SEVERITY_SORT.hasOwnProperty(cb) ? SEVERITY_SORT[cb] : 999;
+          var na = severityRank(a.severity);
+          var nb = severityRank(b.severity);
+          if (na === null) na = 999;
+          if (nb === null) nb = 999;
           if (dir === "desc") r = na - nb;
           else r = nb - na;
         }

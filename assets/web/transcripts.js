@@ -22,7 +22,6 @@
     ssEventsLoaded: false,
     sheetRows: [],
     sheetParticipants: [],
-    sheetDefaultDuration: 60,
     sheetLoaded: false,
     xrefPollTimer: null,
     xrefEligible: false,
@@ -96,9 +95,9 @@
       .then(function (r) { return r.json(); })
       .then(function (data) {
         if (data.ok) {
+          clipgenApplyConfig(data.config);
           state.sheetRows = data.rows || [];
           state.sheetParticipants = data.participants || [];
-          state.sheetDefaultDuration = data.defaultDuration || 60;
           state.sheetLoaded = true;
           _buildSheetIndex();
           if (state.searchResults) renderSearchResults(state.searchResults);
@@ -107,34 +106,13 @@
       .catch(function () {});
   }
 
-  function parseTS(str) {
-    var parts = str.split(":");
-    if (parts.length === 3) return (+parts[0]) * 3600 + (+parts[1]) * 60 + (+parts[2]);
-    if (parts.length === 2) return (+parts[0]) * 60 + (+parts[1]);
-    return NaN;
-  }
-
   function parseSheetTimestamps(raw) {
-    var DEFAULT_DUR = state.sheetDefaultDuration || 60;
-    var cleaned = raw.toLowerCase().replace(/!key/g, "").replace(/[+;,]/g, " ");
-    var tokens = cleaned.split(/\s+/).filter(function (t) { return t && t !== "x"; });
-    var segments = [];
-    for (var i = 0; i < tokens.length; i++) {
-      var tok = tokens[i].replace(/\.$/, "").replace(/\./g, ":");
-      var dashIdx = -1;
-      for (var d = 1; d < tok.length; d++) {
-        if (tok[d] === "-" && tok[d - 1] >= "0" && tok[d - 1] <= "9") { dashIdx = d; break; }
-      }
-      if (dashIdx > 0) {
-        var s = parseTS(tok.substring(0, dashIdx));
-        var e = parseTS(tok.substring(dashIdx + 1));
-        if (!isNaN(s) && !isNaN(e)) segments.push({ start: Math.floor(s), duration: Math.max(0, e - s) });
-      } else if (tok.indexOf(":") > 0) {
-        var sec = parseTS(tok);
-        if (!isNaN(sec)) segments.push({ start: Math.floor(sec), duration: DEFAULT_DUR });
-      }
-    }
-    return segments;
+    // Cross-reference search; baselines are not applied here so timestamps
+    // are interpreted in their relative form (MM:SS for 2-part).
+    var segs = parseClipSegmentsForCell(raw, 0, CLIPGEN_CONFIG.defaultDuration);
+    return segs.map(function (s) {
+      return { start: s.startSeconds, duration: s.duration };
+    });
   }
 
   // Per-participant indexes keyed on start time. Rebuilt when loadCrossRefData

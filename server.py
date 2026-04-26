@@ -223,6 +223,7 @@ def api_sheet() -> FlaskResponse:
             "cellExpandHover": config.STUDIO_CELL_EXPAND_HOVER,
             "cellColorCoding": config.STUDIO_SHEET_CELL_COLOR_CODING,
             "defaultDuration": config.DEFAULT_DURATION_SECONDS,
+            "config": utils.get_frontend_config(),
             "participants": participants,
             "rows": rows,
         }

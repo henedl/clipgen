@@ -103,3 +103,10 @@ Patterns distilled from recurring post-review and post-merge fixes across the pr
 - **Data contract completeness**: When creating records consumed by the frontend (artifacts, events, tasks), include all fields the renderer expects — even optional ones. Missing fields cause empty/broken cards.
 - **New flags in mode detection**: When adding a CLI flag, verify it appears in the mode-detection logic (`cli.py`), not just in argparse definition.
 - **Bundled/frozen paths**: Use `utils.get_bundled_assets_root()` for asset resolution, never raw `Path(__file__).parent`. Test that asset paths resolve in both source and PyInstaller environments.
+- **No duplicated constants between Python and JS.** Any value that lives in `config.py` (or a Python helper) and that the frontend also needs — severity labels, default clip duration, annotation keyphrases (`!key`), ignored timestamp tokens (`x`) — must flow through `utils.get_frontend_config()`, not be hardcoded in JS. When adding a new one:
+  1. Extend `get_frontend_config()` in `utils.py`.
+  2. Confirm every consumer already embeds `"config": utils.get_frontend_config()` (server.py `/api/sheet`, insights_server.py `/api/artifacts`, viewer.py `finalize_timeline_data` / gallery / insights viewer). Add it if missing.
+  3. Add the default to `CLIPGEN_CONFIG` in `assets/web/utils.js` and extend `clipgenApplyConfig` to copy the new key.
+  4. Add an assertion in `tests/test_shared_constants.py` that the JS default matches the Python value.
+
+  Why: severity tables, `!key`, `x`, and the 60s default each previously drifted across 3–5 JS files (`studio.js`, `viewer.js`, `insights-builder.js`, `metadata.js`, `transcripts.js`) because they were independently hardcoded. Renaming `!key` in `config.py` would update the backend silently while the frontend kept stripping the old token. Same risk class as `MARK_CATEGORIES` (already guarded by `test_shared_constants.py`).

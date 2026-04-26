@@ -57,16 +57,6 @@
     return source === "screenspace" || source === "transcript";
   }
 
-  var SEVERITY_ORDER = [
-    { label: "Critical", rank: -4 },
-    { label: "High", rank: -3 },
-    { label: "Medium", rank: -2 },
-    { label: "Low", rank: -1 },
-    { label: "N/A", rank: 0 },
-    { label: "Positive", rank: 1 },
-    { label: "Very Positive", rank: 2 },
-  ];
-
   var ROW_FUNCTIONS = {
     Count: function (row, participants) {
       var total = 0;
@@ -157,7 +147,7 @@
   }
 
   function parseClipTimestamps(raw, participantId) {
-    var DEFAULT_DUR = (state.sheetData && state.sheetData.defaultDuration) || 60;
+    var DEFAULT_DUR = CLIPGEN_CONFIG.defaultDuration;
     var baselineSeconds = 0;
     if (participantId && state.convergenceBaselines) {
       baselineSeconds = state.convergenceBaselines[participantId] || 0;
@@ -246,15 +236,6 @@
   }
 
   // ---- Filtering ----
-
-  function severityRank(label) {
-    if (!label) return null;
-    var k = label.trim().toLowerCase();
-    for (var i = 0; i < SEVERITY_ORDER.length; i++) {
-      if (SEVERITY_ORDER[i].label.toLowerCase() === k) return SEVERITY_ORDER[i].rank;
-    }
-    return null;
-  }
 
   function hasActiveFilters() {
     var f = state.filters;
@@ -396,10 +377,10 @@
       sevMinDefault.value = "";
       sevMinDefault.textContent = "Any";
       sevMin.appendChild(sevMinDefault);
-      for (var si = 0; si < SEVERITY_ORDER.length; si++) {
+      for (var si = 0; si < CLIPGEN_CONFIG.severity.length; si++) {
         var opt = document.createElement("option");
-        opt.value = SEVERITY_ORDER[si].label;
-        opt.textContent = SEVERITY_ORDER[si].label;
+        opt.value = CLIPGEN_CONFIG.severity[si].label;
+        opt.textContent = CLIPGEN_CONFIG.severity[si].label;
         sevMin.appendChild(opt);
       }
 
@@ -410,10 +391,10 @@
       sevMaxDefault.value = "";
       sevMaxDefault.textContent = "Any";
       sevMax.appendChild(sevMaxDefault);
-      for (var sj = 0; sj < SEVERITY_ORDER.length; sj++) {
+      for (var sj = 0; sj < CLIPGEN_CONFIG.severity.length; sj++) {
         var opt2 = document.createElement("option");
-        opt2.value = SEVERITY_ORDER[sj].label;
-        opt2.textContent = SEVERITY_ORDER[sj].label;
+        opt2.value = CLIPGEN_CONFIG.severity[sj].label;
+        opt2.textContent = CLIPGEN_CONFIG.severity[sj].label;
         sevMax.appendChild(opt2);
       }
 
@@ -638,6 +619,7 @@
           return;
         }
         state.sheetData = data;
+        clipgenApplyConfig(data.config);
         renderHeader();
         renderFilterBar();
         renderGrid();
@@ -4484,7 +4466,5 @@
   window._studioClusterIntakeEvents = clusterIntakeEvents;
   window._studioClusterTranscriptMarks = clusterTranscriptMarks;
   window._studioROW_FUNCTIONS = ROW_FUNCTIONS;
-  window._studioSEVERITY_ORDER = SEVERITY_ORDER;
-  window._studioSeverityRank = severityRank;
   window._studioSyncPreviewTab = syncPreviewTab;
 })();

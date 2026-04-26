@@ -69,7 +69,13 @@ def api_artifacts() -> FlaskResponse:
         duration = (end or 0) - (start or 0)
         if duration > 0:
             art["spriteData"] = _compute_sprite_metadata(duration)
-    return jsonify({"ok": True, "artifacts": fresh_artifacts})
+    return jsonify(
+        {
+            "ok": True,
+            "artifacts": fresh_artifacts,
+            "config": utils.get_frontend_config(),
+        }
+    )
 
 
 @insights_bp.route("/api/insights")

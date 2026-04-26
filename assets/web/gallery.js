@@ -3,6 +3,7 @@
   "use strict";
 
   var data = window.CLIPGEN_DATA || null;
+  if (data) clipgenApplyConfig(data.config);
   var state = { artifacts: [], lightboxIndex: -1 };
   // ---- Init ----
 
