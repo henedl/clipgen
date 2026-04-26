@@ -29,7 +29,7 @@ from icecream import ic
 REENCODING: bool = False
 AUDIO_NORMALIZE: bool = False
 FILEFORMAT: str = ".mp4"
-VERSIONNUM: str = "0.10.91"
+VERSIONNUM: str = "0.10.94"
 TITLECARDS_ENABLED: bool = (
     False  # use --titlecards / --no-titlecards to override per run
 )
@@ -235,6 +235,9 @@ MAX_MMSS_LENGTH: int = 5  # Max length of an MM:SS timestamp string
 # ── FFmpeg ────────────────────────────────────────────────────────────
 FFMPEG_LOGLEVEL: str = "16"  # ffmpeg -loglevel value (16 = error)
 FFMPEG_SCREENSHOT_QUALITY: str = "2"  # -q:v value for screenshots (1=best, 31=worst)
+SCREENSHOT_FORMAT: str = ".png"  # ".png" | ".jpg" | ".webp"
+GIF_FORMAT: str = ".gif"  # ".gif" | ".webp" | ".webm" (WebM uses VP9 silent-loop video)
+WEBP_QUALITY: int = 80  # 0-100, used by libwebp when output is .webp
 GIF_FPS: int = 10
 GIF_SCALE_WIDTH: int = 480
 AUDIO_BITRATE_KBPS: int = 128
@@ -294,6 +297,9 @@ SETTINGS_DESCRIPTIONS: dict[str, str] = {
     "OLLAMA_SUMMARY_ENABLED": "Auto-generate AI summaries of transcripts using a local Ollama model.",
     "OLLAMA_SUMMARY_MODEL": "Ollama model used for transcript summaries and citation linking.",
     "OLLAMA_BASE_URL": "Base URL of the local Ollama server.",
+    "SCREENSHOT_FORMAT": "File format for screenshot artifacts. WebP is smaller but requires modern browsers (Safari 16+).",
+    "GIF_FORMAT": "File format for animated artifacts. WebM (VP9) is the smallest and most-compatible modern option; animated WebP is also small but requires Safari 16+; GIF works everywhere but is large.",
+    "WEBP_QUALITY": "WebP encoding quality (0-100). Higher values mean better quality and larger files.",
     "SCREENSPACE_CV_RESOLUTION_SCALE": "Scale extracted region frames before CV analysis. Higher (e.g. 2.0) gives the models more signal on noisy/compressed video at the cost of speed and memory; lower speeds up scans on large footage. 1.0 = unchanged.",
 }
 
@@ -316,6 +322,26 @@ STUDIO_SETTINGS: dict[str, dict[str, Any]] = {
         "tab": "General",
         "group": "Sheet Preview",
         "type": "bool",
+    },
+    "SCREENSHOT_FORMAT": {
+        "tab": "General",
+        "group": "Image Output",
+        "type": "select",
+        "options": [".png", ".jpg", ".webp"],
+    },
+    "GIF_FORMAT": {
+        "tab": "General",
+        "group": "Image Output",
+        "type": "select",
+        "options": [".gif", ".webp", ".webm"],
+    },
+    "WEBP_QUALITY": {
+        "tab": "General",
+        "group": "Image Output",
+        "type": "int",
+        "min": 0,
+        "max": 100,
+        "step": 1,
     },
     "REENCODING": {"tab": "Video & Clips", "group": "Video Output", "type": "bool"},
     "AUDIO_NORMALIZE": {

@@ -342,7 +342,14 @@ def finalize_gallery_data(
 ) -> dict[str, Any]:
     """Construct the window.CLIPGEN_DATA structure for the gallery viewer."""
     if bundle:
-        mime_map = {"screen": "image/png", "gif": "image/gif"}
+        ext_mime_map = {
+            ".png": "image/png",
+            ".jpg": "image/jpeg",
+            ".jpeg": "image/jpeg",
+            ".gif": "image/gif",
+            ".webp": "image/webp",
+            ".webm": "video/webm",
+        }
         output_dir = Path(utils.get_effective_output_dir())
         for a in artifacts:
             file_path = output_dir / a["file"]
@@ -351,7 +358,7 @@ def finalize_gallery_data(
                     f"Bundle: file not found, skipping embed: {a['file']}"
                 )
                 continue
-            mime = mime_map.get(a.get("type", "screen"), "image/png")
+            mime = ext_mime_map.get(file_path.suffix.lower(), "image/png")
             try:
                 raw = file_path.read_bytes()
                 encoded = base64.b64encode(raw).decode("ascii")

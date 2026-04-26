@@ -207,8 +207,12 @@
       .then(function (r) { return r.json(); })
       .then(function (data) {
         if (_statusEl) {
-          _statusEl.textContent = data.ok ? "Saved" : "Save failed";
-          setTimeout(function () { if (_statusEl) _statusEl.textContent = ""; }, 2000);
+          if (data.ok) {
+            _statusEl.textContent = "Saved";
+            setTimeout(function () { if (_statusEl) _statusEl.textContent = ""; }, 2000);
+          } else {
+            _statusEl.textContent = data.error ? "Save failed: " + data.error : "Save failed";
+          }
         }
         if (data.ok && typeof _opts.onSave === "function") {
           _opts.onSave(data.applied || {}, _settings.slice());

@@ -188,8 +188,8 @@ def _process_single_clip_segments(
     output_paths: list[tuple[str, str, str]] = []
     extension_map = {
         "clip": config.FILEFORMAT,
-        "screen": ".png",
-        "gif": ".gif",
+        "screen": config.SCREENSHOT_FORMAT,
+        "gif": config.GIF_FORMAT,
     }
     file_extension = extension_map.get(output_format)
     if not file_extension:

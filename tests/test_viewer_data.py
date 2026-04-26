@@ -210,6 +210,22 @@ def test_finalize_gallery_data_bundle_embeds_gif(tmp_path, monkeypatch):
     assert data_uri.startswith("data:image/gif;base64,")
 
 
+def test_finalize_gallery_data_bundle_picks_mime_by_extension(tmp_path, monkeypatch):
+    """Bundle MIME is chosen by file extension, not artifact type. WebM gifs
+    must be embedded as video/webm so the viewer's <video> element loads them."""
+    monkeypatch.chdir(tmp_path)
+    cases = [
+        ("cap.webp", b"RIFF\x00\x00\x00\x00WEBPVP8 ", "data:image/webp;base64,"),
+        ("cap.webm", b"\x1a\x45\xdf\xa3", "data:video/webm;base64,"),
+        ("cap.jpg", b"\xff\xd8\xff\xe0", "data:image/jpeg;base64,"),
+    ]
+    for filename, payload, expected_prefix in cases:
+        (tmp_path / filename).write_bytes(payload)
+        artifacts = [{"file": filename, "timestamp": 0.0, "type": "gif"}]
+        viewer.finalize_gallery_data(artifacts, bundle=True)
+        assert str(artifacts[0]["data"]).startswith(expected_prefix), filename
+
+
 def test_finalize_gallery_data_bundle_skips_missing_file(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     artifacts = [{"file": "missing.png", "timestamp": 0.0, "type": "screen"}]

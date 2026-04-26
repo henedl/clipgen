@@ -29,6 +29,9 @@ dist/
 /*.flv
 /*.mov
 /*.mkv
+/*.webm
+/*.webp
+/*.jpg
 /*.xlsx
 output/
 .cursor/

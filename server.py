@@ -1170,6 +1170,24 @@ def _apply_settings_payload(data: dict[str, Any]) -> tuple[dict[str, Any], str |
     if not isinstance(settings_data, dict):
         return {}, "Invalid settings payload"
 
+    for webp_name in ("SCREENSHOT_FORMAT", "GIF_FORMAT"):
+        if webp_name not in settings_data:
+            continue
+        new_value = str(settings_data[webp_name]).lower()
+        current_value = str(getattr(config, webp_name, "")).lower()
+        # Only validate when the user is *changing* the value to .webp; an
+        # unchanged .webp value already on disk shouldn't block edits to other
+        # fields.
+        if (
+            new_value == ".webp"
+            and current_value != ".webp"
+            and not video.check_webp_support()
+        ):
+            return {}, (
+                f"WebP not available: ffmpeg has no libwebp encoder. "
+                f"Install an ffmpeg build with libwebp to set {webp_name} to .webp."
+            )
+
     applied = {}
     for name, value in settings_data.items():
         if name not in config.STUDIO_SETTINGS:
