@@ -467,17 +467,28 @@
       }
       refreshTranscriptionModelHintOnce();
 
-      // Preserve current selection if still valid
+      // Preserve current in-memory selection if still valid (soft refresh)
       if (state.selectedParticipant) {
         for (var i = 0; i < state.participants.length; i++) {
           if (state.participants[i].id === state.selectedParticipant) return;
         }
       }
 
+      // Restore from localStorage if present and still valid (fresh page load)
+      var storedPid = getStoredUIState("transcripts").selectedParticipant;
+      if (storedPid) {
+        for (var j = 0; j < state.participants.length; j++) {
+          if (state.participants[j].id === storedPid) {
+            selectParticipant(storedPid);
+            return;
+          }
+        }
+      }
+
       // Auto-select first participant with a transcript, or just the first
       var first = null;
-      for (var i = 0; i < state.participants.length; i++) {
-        if (state.participants[i].has_transcript) { first = state.participants[i]; break; }
+      for (var k = 0; k < state.participants.length; k++) {
+        if (state.participants[k].has_transcript) { first = state.participants[k]; break; }
       }
       if (!first && state.participants.length > 0) first = state.participants[0];
       if (first) selectParticipant(first.id);
@@ -488,6 +499,7 @@
 
   function selectParticipant(pid) {
     state.selectedParticipant = pid;
+    setStoredUIStateField("transcripts", "selectedParticipant", pid);
     renderPills();
 
     // Find participant info

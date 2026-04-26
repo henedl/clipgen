@@ -609,6 +609,7 @@
     _frameRequestVersion += 1;
     _heatmapOverlayRequestVersion += 1;
     state.selectedParticipant = pid;
+    setStoredUIStateField("screenspace", "selectedParticipant", pid);
     state.currentTimestamp = 0;
     state.videoInfo = null;
     state.frameImage = null;
@@ -4488,6 +4489,7 @@
 
   function setRightPaneTab(tab) {
     state.rightPaneTab = tab;
+    setStoredUIStateField("screenspace", "rightPaneTab", tab);
     qsa("#rightPaneTabs .rp-tab").forEach(function (b) {
       b.classList.toggle("active", b.dataset.tab === tab);
     });
@@ -6073,9 +6075,21 @@
             .catch(function () {});
         });
         if (state.participants.length > 0) {
-          var first = state.participants[0].id;
-          selectParticipant(first);
-          state.runParticipants = [first];
+          var stored = getStoredUIState("screenspace");
+          var pickId = state.participants[0].id;
+          if (stored.selectedParticipant) {
+            for (var spi = 0; spi < state.participants.length; spi++) {
+              if (state.participants[spi].id === stored.selectedParticipant) {
+                pickId = stored.selectedParticipant;
+                break;
+              }
+            }
+          }
+          selectParticipant(pickId);
+          state.runParticipants = [pickId];
+          if (stored.rightPaneTab === "queue" || stored.rightPaneTab === "results") {
+            setRightPaneTab(stored.rightPaneTab);
+          }
         }
         renderRunParticipantPicker();
         renderScanModePicker();
