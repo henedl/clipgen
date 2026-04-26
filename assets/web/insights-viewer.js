@@ -197,6 +197,7 @@
       );
       return;
     }
+    clipgenApplyConfig(data.config);
 
     // Build artifact lookup
     var artifacts = data.artifacts || [];

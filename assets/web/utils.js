@@ -14,6 +14,47 @@
 // the static CSS line-grid defined in tokens.css.
 var CLIPGEN_ANIMATED_BG = true;
 
+// ---- Canonical config (mirror of config.py via utils.get_frontend_config)
+//
+// Source of truth: every API response (server.py /api/sheet-data,
+// insights_server.py /api/artifacts) and every exported viewer payload
+// (viewer.py finalize_*) embeds a `config` field. Pages call
+// clipgenApplyConfig(payload) to overlay the live values onto these defaults.
+// The hardcoded defaults below cover purely-offline contexts (re-opened
+// older exported viewers); tests/test_shared_constants.py asserts they
+// match config.py.
+
+var CLIPGEN_CONFIG = {
+  defaultDuration: 60,
+  severity: [
+    { label: "Critical",      rank: -4, cssClass: "sev-critical" },
+    { label: "High",          rank: -3, cssClass: "sev-high" },
+    { label: "Medium",        rank: -2, cssClass: "sev-medium" },
+    { label: "Low",           rank: -1, cssClass: "sev-low" },
+    { label: "N/A",           rank:  0, cssClass: "sev-na" },
+    { label: "Positive",      rank:  1, cssClass: "sev-positive" },
+    { label: "Very Positive", rank:  2, cssClass: "sev-very-positive" },
+  ],
+  annotationKeyphrases: ["!key"],
+  ignoredTimestampTokens: ["x"],
+};
+
+var clipgenApplyConfig = function (payload) {
+  if (!payload || typeof payload !== "object") return;
+  if (typeof payload.defaultDuration === "number") {
+    CLIPGEN_CONFIG.defaultDuration = payload.defaultDuration;
+  }
+  if (Array.isArray(payload.severity) && payload.severity.length) {
+    CLIPGEN_CONFIG.severity = payload.severity;
+  }
+  if (Array.isArray(payload.annotationKeyphrases)) {
+    CLIPGEN_CONFIG.annotationKeyphrases = payload.annotationKeyphrases;
+  }
+  if (Array.isArray(payload.ignoredTimestampTokens)) {
+    CLIPGEN_CONFIG.ignoredTimestampTokens = payload.ignoredTimestampTokens;
+  }
+};
+
 // ---- DOM helpers ----
 
 var qs = function (sel) { return document.querySelector(sel); };
@@ -151,12 +192,23 @@ var parseClockTimestamp = function (str) {
 // (2-part = HH:MM) and the baseline is subtracted from both ends of each
 // range. Mirrors files.prepare_clip + utils.convert_clock_pairs_to_relative.
 // Pairs that resolve to negative or zero-length intervals are skipped.
+// defaultDuration: required (per-clip duration when only a start time is
+// given). Callers must pass CLIPGEN_CONFIG.defaultDuration; a missing value
+// is a contract bug.
 var parseClipSegmentsForCell = function (raw, baselineSeconds, defaultDuration) {
-  var DEFAULT_DUR = defaultDuration || 60;
+  var DEFAULT_DUR = defaultDuration;
   var hasBaseline = baselineSeconds && baselineSeconds > 0;
   var tsParse = hasBaseline ? parseClockTimestamp : parseTimestamp;
-  var cleaned = String(raw || "").toLowerCase().replace(/!key/g, "").replace(/[+;,]/g, " ");
-  var tokens = cleaned.split(/\s+/).filter(function (t) { return t && t !== "x"; });
+  var cleaned = String(raw || "").toLowerCase();
+  for (var ki = 0; ki < CLIPGEN_CONFIG.annotationKeyphrases.length; ki++) {
+    var phrase = CLIPGEN_CONFIG.annotationKeyphrases[ki];
+    cleaned = cleaned.split(phrase).join("");
+  }
+  cleaned = cleaned.replace(/[+;,]/g, " ");
+  var ignored = CLIPGEN_CONFIG.ignoredTimestampTokens;
+  var tokens = cleaned.split(/\s+/).filter(function (t) {
+    return t && ignored.indexOf(t) === -1;
+  });
   var segments = [];
   for (var i = 0; i < tokens.length; i++) {
     var tok = tokens[i].replace(/\.$/, "").replace(/\./g, ":");
@@ -249,20 +301,47 @@ var showToast = function (msg, opts) {
 };
 
 // ---- Severity ----
+//
+// Read severity metadata from CLIPGEN_CONFIG.severity (kept in sync with
+// config.py SEVERITY_NUMERIC_TO_LABEL via tests/test_shared_constants.py).
 
 var severityClass = function (raw) {
   if (!raw || !String(raw).trim()) return "";
   var k = String(raw).trim().toLowerCase();
-  var map = {
-    critical: "sev-critical",
-    high: "sev-high",
-    medium: "sev-medium",
-    low: "sev-low",
-    "n/a": "sev-na",
-    positive: "sev-positive",
-    "very positive": "sev-very-positive",
-  };
-  return map[k] || "sev-unknown";
+  for (var i = 0; i < CLIPGEN_CONFIG.severity.length; i++) {
+    if (CLIPGEN_CONFIG.severity[i].label.toLowerCase() === k) {
+      return CLIPGEN_CONFIG.severity[i].cssClass;
+    }
+  }
+  return "sev-unknown";
+};
+
+// Numeric rank (most-severe = lowest, e.g. Critical = -4) used by sorters
+// and Studio's severity filter. Returns null for empty or unrecognized input
+// — callers decide how to treat unknown (Studio filters them out; viewer
+// and insights sort them last).
+var severityRank = function (raw) {
+  if (!raw || !String(raw).trim()) return null;
+  var k = String(raw).trim().toLowerCase();
+  for (var i = 0; i < CLIPGEN_CONFIG.severity.length; i++) {
+    if (CLIPGEN_CONFIG.severity[i].label.toLowerCase() === k) {
+      return CLIPGEN_CONFIG.severity[i].rank;
+    }
+  }
+  return null;
+};
+
+// Same as severityRank but keyed by CSS class (sev-critical, sev-high, ...).
+// Useful when the caller has already resolved the class via severityClass().
+// Returns null for unknown class so sort callers can fall back to 999.
+var severityRankByClass = function (cssClass) {
+  if (!cssClass) return null;
+  for (var i = 0; i < CLIPGEN_CONFIG.severity.length; i++) {
+    if (CLIPGEN_CONFIG.severity[i].cssClass === cssClass) {
+      return CLIPGEN_CONFIG.severity[i].rank;
+    }
+  }
+  return null;
 };
 
 // ---- API helpers (always check r.ok) ----

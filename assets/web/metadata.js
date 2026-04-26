@@ -16,8 +16,8 @@
   var clusterIntakeEvents;
   var clusterTranscriptMarks;
   var ROW_FUNCTIONS;
-  var SEVERITY_ORDER;
-  var severityRank;
+  // CLIPGEN_CONFIG.severity and severityRank are read directly from utils.js
+  // (CLIPGEN_CONFIG.severity / severityRank) and need no per-module alias.
 
   var MD_HISTOGRAM_HEIGHT = 140;
 
@@ -261,17 +261,17 @@
 
   function computeSeverityDistribution(rows) {
     var dist = {};
-    for (var i = 0; i < SEVERITY_ORDER.length; i++) {
-      dist[SEVERITY_ORDER[i].label] = 0;
+    for (var i = 0; i < CLIPGEN_CONFIG.severity.length; i++) {
+      dist[CLIPGEN_CONFIG.severity[i].label] = 0;
     }
     for (var j = 0; j < rows.length; j++) {
       var sev = (rows[j].severity || "").trim();
       if (!sev) continue;
       // Match against known labels (case-insensitive)
       var matched = false;
-      for (var k = 0; k < SEVERITY_ORDER.length; k++) {
-        if (SEVERITY_ORDER[k].label.toLowerCase() === sev.toLowerCase()) {
-          dist[SEVERITY_ORDER[k].label]++;
+      for (var k = 0; k < CLIPGEN_CONFIG.severity.length; k++) {
+        if (CLIPGEN_CONFIG.severity[k].label.toLowerCase() === sev.toLowerCase()) {
+          dist[CLIPGEN_CONFIG.severity[k].label]++;
           matched = true;
           break;
         }
@@ -1083,8 +1083,8 @@
   function renderSeverityBar(dist, compact) {
     var total = 0;
     var entries = [];
-    for (var i = 0; i < SEVERITY_ORDER.length; i++) {
-      var label = SEVERITY_ORDER[i].label;
+    for (var i = 0; i < CLIPGEN_CONFIG.severity.length; i++) {
+      var label = CLIPGEN_CONFIG.severity[i].label;
       var count = dist[label] || 0;
       if (count > 0) {
         entries.push({ label: label, count: count });
@@ -1095,8 +1095,8 @@
     var keys = Object.keys(dist);
     for (var k = 0; k < keys.length; k++) {
       var found = false;
-      for (var s = 0; s < SEVERITY_ORDER.length; s++) {
-        if (SEVERITY_ORDER[s].label === keys[k]) { found = true; break; }
+      for (var s = 0; s < CLIPGEN_CONFIG.severity.length; s++) {
+        if (CLIPGEN_CONFIG.severity[s].label === keys[k]) { found = true; break; }
       }
       if (!found && dist[keys[k]] > 0) {
         entries.push({ label: keys[k], count: dist[keys[k]] });
@@ -1130,8 +1130,8 @@
 
     // Legend / exact counts
     var legend = el("div", "md-severity-legend");
-    for (var i = 0; i < SEVERITY_ORDER.length; i++) {
-      var label = SEVERITY_ORDER[i].label;
+    for (var i = 0; i < CLIPGEN_CONFIG.severity.length; i++) {
+      var label = CLIPGEN_CONFIG.severity[i].label;
       var count = cache.severityDist[label] || 0;
       if (count === 0) continue;
       var item = el("span", "md-severity-legend-item");
@@ -1691,8 +1691,6 @@
       clusterIntakeEvents = window._studioClusterIntakeEvents;
       clusterTranscriptMarks = window._studioClusterTranscriptMarks;
       ROW_FUNCTIONS = window._studioROW_FUNCTIONS;
-      SEVERITY_ORDER = window._studioSEVERITY_ORDER;
-      severityRank = window._studioSeverityRank;
     }
     if (mdState._snapshot) {
       checkStaleness();
