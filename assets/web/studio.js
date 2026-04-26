@@ -524,12 +524,36 @@
         var target = this.dataset.tab;
         if (target === state.activePreviewTab) return;
         state.activePreviewTab = target;
+        setStoredUIStateField("studio", "activeTab", target);
         var allTabs = qsa(".preview-tab");
         for (var j = 0; j < allTabs.length; j++) allTabs[j].classList.remove("active");
         this.classList.add("active");
         syncPreviewTab();
       });
     }
+    restoreStoredPreviewTab();
+  }
+
+  var _previewTabRestored = false;
+  function restoreStoredPreviewTab() {
+    if (_previewTabRestored) return;
+    var stored = getStoredUIState("studio").activeTab;
+    if (!stored) return;
+    var match = null;
+    var tabs = qsa(".preview-tab");
+    for (var i = 0; i < tabs.length; i++) {
+      if (tabs[i].dataset.tab === stored && !tabs[i].classList.contains("hidden")) {
+        match = tabs[i];
+        break;
+      }
+    }
+    if (!match) return;
+    _previewTabRestored = true;
+    if (stored === state.activePreviewTab) return;
+    state.activePreviewTab = stored;
+    for (var k = 0; k < tabs.length; k++) tabs[k].classList.remove("active");
+    match.classList.add("active");
+    syncPreviewTab();
   }
 
   function syncPreviewTab() {
@@ -3107,6 +3131,7 @@
     } else {
       tab.classList.add("hidden");
     }
+    restoreStoredPreviewTab();
   }
 
   function checkNavLinks() {
@@ -3120,6 +3145,7 @@
           var trIntakeTab = qs('.preview-tab[data-tab="transcript-intake"]');
           if (trIntakeTab) trIntakeTab.classList.remove("hidden");
         }
+        restoreStoredPreviewTab();
       })
       .catch(function () {});
   }

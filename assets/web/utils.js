@@ -604,3 +604,30 @@ var setStoredTooltipPref = function (enabled) {
     window.localStorage.setItem(TOOLTIP_STORAGE_KEY, enabled ? "true" : "false");
   } catch (_) {}
 };
+
+// ---- Per-page UI state (localStorage) ----
+
+var UI_STATE_STORAGE_KEY = "clipgen-ui-state";
+
+var getStoredUIState = function (page) {
+  try {
+    var raw = window.localStorage.getItem(UI_STATE_STORAGE_KEY);
+    if (!raw) return {};
+    var all = JSON.parse(raw);
+    return (all && typeof all[page] === "object" && all[page]) ? all[page] : {};
+  } catch (_) { return {}; }
+};
+
+var setStoredUIStateField = function (page, field, value) {
+  try {
+    var raw = window.localStorage.getItem(UI_STATE_STORAGE_KEY);
+    var all = {};
+    if (raw) {
+      try { all = JSON.parse(raw) || {}; } catch (_) { all = {}; }
+    }
+    if (!all[page] || typeof all[page] !== "object") all[page] = {};
+    if (value === null || value === undefined) delete all[page][field];
+    else all[page][field] = value;
+    window.localStorage.setItem(UI_STATE_STORAGE_KEY, JSON.stringify(all));
+  } catch (_) {}
+};
