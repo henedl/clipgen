@@ -72,6 +72,56 @@ def check_ffmpeg_tools_available() -> bool:
     return False
 
 
+_webp_support_cache: bool | None = None
+_webp_missing_warned: bool = False
+
+
+def check_webp_support() -> bool:
+    """Return True when ffmpeg has a libwebp encoder available.
+
+    Queries `ffmpeg -encoders` (not `-codecs`) — only the encoders listing is
+    authoritative for "can ffmpeg write this format". The codecs listing
+    includes the webp muxer/decoder even on builds without libwebp. Looks for
+    a line starting with `libwebp` or `libwebp_anim`. Result is cached.
+    """
+    global _webp_support_cache
+    if _webp_support_cache is not None:
+        return _webp_support_cache
+    try:
+        result = subprocess.run(
+            ["ffmpeg", "-hide_banner", "-encoders"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        stdout = result.stdout or ""
+        _webp_support_cache = False
+        for line in stdout.splitlines():
+            tokens = line.strip().split()
+            if len(tokens) >= 2 and tokens[1] in ("libwebp", "libwebp_anim"):
+                _webp_support_cache = True
+                break
+    except (OSError, subprocess.SubprocessError):
+        _webp_support_cache = False
+    return _webp_support_cache
+
+
+def _warn_webp_unavailable_once(output_file: str) -> None:
+    """Print a single clear error per session when WebP is requested but unsupported."""
+    global _webp_missing_warned
+    if _webp_missing_warned:
+        return
+    _webp_missing_warned = True
+    utils.error_print(
+        "WebP output requested but ffmpeg has no libwebp encoder.",
+        [
+            f"Tried to write: '{output_file}'",
+            "Install an ffmpeg build with libwebp, or change SCREENSHOT_FORMAT/GIF_FORMAT back to .png/.jpg/.gif.",
+            "Skipping all WebP outputs for this run.",
+        ],
+    )
+
+
 def run_ffmpeg_process(
     ffmpeg_command: list[str],
     *,
@@ -332,6 +382,9 @@ def extract_screenshot(input_file: str, output_file: str, timestamp: str) -> boo
     """
     if config.DEBUGGING:
         ic(input_file, output_file, timestamp)
+    if output_file.lower().endswith(".webp") and not check_webp_support():
+        _warn_webp_unavailable_once(output_file)
+        return False
     if not Path(input_file).is_file():
         utils.error_print(
             f"Input video file not found: '{input_file}'",
@@ -470,6 +523,9 @@ def extract_gif(
     """
     if config.DEBUGGING:
         ic(input_file, output_file, timestamp, duration_seconds)
+    if output_file.lower().endswith(".webp") and not check_webp_support():
+        _warn_webp_unavailable_once(output_file)
+        return False
     if not Path(input_file).is_file():
         utils.error_print(
             f"Input video file not found: '{input_file}'",
@@ -511,6 +567,10 @@ def extract_gif(
         )
         return False
 
+    out_lower = output_file.lower()
+    is_webm = out_lower.endswith(".webm")
+    is_webp = out_lower.endswith(".webp")
+
     ffmpeg_command = [
         "ffmpeg",
         "-y",
@@ -524,10 +584,26 @@ def extract_gif(
         input_file,
         "-vf",
         f"fps={config.GIF_FPS},scale={config.GIF_SCALE_WIDTH}:-1:flags=lanczos",
-        "-loop",
-        "0",
-        output_file,
     ]
+    if is_webm:
+        # Silent VP9 loop; the loop is controlled by the <video loop> attribute
+        # in the viewer, not by the container. -an strips audio.
+        ffmpeg_command += [
+            "-c:v",
+            "libvpx-vp9",
+            "-b:v",
+            "0",
+            "-crf",
+            "32",
+            "-row-mt",
+            "1",
+            "-an",
+        ]
+    else:
+        ffmpeg_command += ["-loop", "0"]
+        if is_webp:
+            ffmpeg_command += ["-quality", str(config.WEBP_QUALITY)]
+    ffmpeg_command.append(output_file)
     utils.debug_print(f"ffmpeg gif command: {' '.join(ffmpeg_command)}")
 
     ffmpeg_result = run_ffmpeg_process(
@@ -1355,6 +1431,10 @@ def _batch_extract_screenshots(
     Uses fps=1/interval filter to avoid spawning one process per frame.
     Returns artifact list on success, or None to signal fallback.
     """
+    ext = config.SCREENSHOT_FORMAT
+    if ext.lower() == ".webp" and not check_webp_support():
+        _warn_webp_unavailable_once(f"frame_*{ext}")
+        return None
     tmpdir = tempfile.mkdtemp(prefix="clipgen_gallery_")
     try:
         ffmpeg_command = [
@@ -1368,7 +1448,7 @@ def _batch_extract_screenshots(
             f"fps=1/{interval_seconds}",
             "-q:v",
             config.FFMPEG_SCREENSHOT_QUALITY,
-            os.path.join(tmpdir, "frame_%04d.png"),
+            os.path.join(tmpdir, f"frame_%04d{ext}"),
         ]
         utils.debug_print(
             f"ffmpeg batch screenshot command: {' '.join(ffmpeg_command)}"
@@ -1377,7 +1457,7 @@ def _batch_extract_screenshots(
         ffmpeg_result = run_ffmpeg_process(
             ffmpeg_command,
             input_file=input_file,
-            output_file=os.path.join(tmpdir, "frame_*.png"),
+            output_file=os.path.join(tmpdir, f"frame_*{ext}"),
             os_error_message="ffmpeg could not run for batch screenshot extraction.",
         )
         if ffmpeg_result is None or ffmpeg_result.returncode != 0:
@@ -1385,13 +1465,13 @@ def _batch_extract_screenshots(
 
         artifacts: list[dict[str, Any]] = []
         for i, ts in enumerate(timestamps):
-            frame_file = os.path.join(tmpdir, f"frame_{i + 1:04d}.png")
+            frame_file = os.path.join(tmpdir, f"frame_{i + 1:04d}{ext}")
             if not os.path.isfile(frame_file):
                 continue
             ts_str = utils.seconds_to_timestamp(ts)
             ts_safe = ts_str.replace(":", "_")
-            filename = f"gallery_{ts_safe}.png"
-            output_path = files.get_unique_filename(filename, file_format=".png")
+            filename = f"gallery_{ts_safe}{ext}"
+            output_path = files.get_unique_filename(filename, file_format=ext)
             shutil.move(frame_file, output_path)
             artifacts.append(
                 {
@@ -1421,12 +1501,13 @@ def _parallel_extract_gifs(
 
     Returns artifact list on success, or None to signal fallback.
     """
+    ext = config.GIF_FORMAT
     tasks: list[tuple[str, str, str, int, float]] = []
     for ts in timestamps:
         ts_str = utils.seconds_to_timestamp(ts)
         ts_safe = ts_str.replace(":", "_")
-        filename = f"gallery_{ts_safe}.gif"
-        output_path = files.get_unique_filename(filename, file_format=".gif")
+        filename = f"gallery_{ts_safe}{ext}"
+        output_path = files.get_unique_filename(filename, file_format=ext)
         gif_dur = min(gif_duration_seconds, duration - ts)
         if gif_dur <= 0:
             break
@@ -1508,7 +1589,7 @@ def generate_interval_captures(
         utils.error_print("Interval must be a positive number of seconds.")
         return []
 
-    ext = ".png" if output_format == "screen" else ".gif"
+    ext = config.SCREENSHOT_FORMAT if output_format == "screen" else config.GIF_FORMAT
     timestamps = list(range(0, duration, interval_seconds))
     total = len(timestamps)
     artifacts: list[dict[str, Any]] = []

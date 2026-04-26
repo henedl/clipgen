@@ -1478,6 +1478,24 @@ def main() -> None:
     if not video.check_ffmpeg_tools_available():
         sys.exit(1)
 
+    webp_formats = [
+        name
+        for name, value in (
+            ("SCREENSHOT_FORMAT", config.SCREENSHOT_FORMAT),
+            ("GIF_FORMAT", config.GIF_FORMAT),
+        )
+        if value.lower() == ".webp"
+    ]
+    if webp_formats and not video.check_webp_support():
+        utils.error_print(
+            "WebP output is configured but ffmpeg lacks libwebp support.",
+            [
+                f"Affected config: {', '.join(webp_formats)}",
+                "Install an ffmpeg build with libwebp, or change the format(s) back to .png/.jpg/.gif in config.py.",
+            ],
+        )
+        sys.exit(1)
+
     if _dispatch_standalone_mode(args, cli_mode, gallery_arg):
         sys.exit(0)
 

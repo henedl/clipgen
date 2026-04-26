@@ -206,8 +206,12 @@
       .then(function (r) { return r.json(); })
       .then(function (data) {
         if (_statusEl) {
-          _statusEl.textContent = data.ok ? "Saved" : "Save failed";
-          setTimeout(function () { if (_statusEl) _statusEl.textContent = ""; }, 2000);
+          if (data.ok) {
+            _statusEl.textContent = "Saved";
+            setTimeout(function () { if (_statusEl) _statusEl.textContent = ""; }, 2000);
+          } else {
+            _statusEl.textContent = data.error ? "Save failed: " + data.error : "Save failed";
+          }
         }
         if (data.ok && typeof _opts.onSave === "function") {
           _opts.onSave(data.applied || {}, _settings.slice());
@@ -356,6 +360,7 @@
       var input = document.createElement("input");
       input.type = "number";
       if (s.min !== undefined && s.min !== null) input.min = s.min;
+      if (s.max !== undefined && s.max !== null) input.max = s.max;
       if (s.step !== undefined && s.step !== null) input.step = s.step;
       input.value = s.value;
       input.placeholder = String(s.default);

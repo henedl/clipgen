@@ -26,6 +26,28 @@ var el = function (tag, cls, text) {
   return e;
 };
 
+// True when an animated artifact's filename should render via <video> rather
+// than <img>. Used by the gallery, viewer, and insights builder so they all
+// agree which extensions are looping video. Keep as the single source of truth.
+var isVideoLoop = function (filename) {
+  return /\.webm$/i.test(filename || "");
+};
+
+// Create a looping, silent, autoplay <video> element for animated artifacts
+// stored as .webm. Centralized so the attribute set is consistent everywhere.
+var createLoopVideo = function (src, alt) {
+  var v = document.createElement("video");
+  v.src = src;
+  v.autoplay = true;
+  v.loop = true;
+  v.muted = true;
+  v.setAttribute("muted", "");
+  v.setAttribute("playsinline", "");
+  v.preload = "auto";
+  if (alt) v.setAttribute("aria-label", alt);
+  return v;
+};
+
 // ---- Hover tooltips (dark pill, pairs with .cg-tooltip in tokens.css) ----
 
 var createTooltip = function (opts) {

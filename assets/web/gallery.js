@@ -68,11 +68,17 @@
       card.className = "gallery-card";
       card.setAttribute("data-index", i);
 
-      var img = document.createElement("img");
-      img.src = a.data || a.file;
-      img.alt = a.timestamp_formatted || formatTime(a.timestamp);
-      img.loading = "lazy";
-      card.appendChild(img);
+      var src = a.data || a.file;
+      var altText = a.timestamp_formatted || formatTime(a.timestamp);
+      if (isVideoLoop(a.file)) {
+        card.appendChild(createLoopVideo(src, altText));
+      } else {
+        var img = document.createElement("img");
+        img.src = src;
+        img.alt = altText;
+        img.loading = "lazy";
+        card.appendChild(img);
+      }
 
       var overlay = document.createElement("span");
       overlay.className = "timestamp-overlay";
@@ -119,10 +125,16 @@
     var a = state.artifacts[index];
     var content = qs("#lightboxContent");
     content.innerHTML = "";
-    var img = document.createElement("img");
-    img.src = a.data || a.file;
-    img.alt = a.timestamp_formatted || formatTime(a.timestamp);
-    content.appendChild(img);
+    var src = a.data || a.file;
+    var altText = a.timestamp_formatted || formatTime(a.timestamp);
+    if (isVideoLoop(a.file)) {
+      content.appendChild(createLoopVideo(src, altText));
+    } else {
+      var img = document.createElement("img");
+      img.src = src;
+      img.alt = altText;
+      content.appendChild(img);
+    }
 
     var caption = qs("#lightboxCaption");
     if (caption) {

@@ -1484,10 +1484,14 @@
       img.alt = a.description || "screenshot";
       preview.appendChild(img);
     } else if (a.type === "gif") {
-      var gifImg = document.createElement("img");
-      gifImg.src = a.file;
-      gifImg.alt = a.description || "gif";
-      preview.appendChild(gifImg);
+      if (isVideoLoop(a.file)) {
+        preview.appendChild(createLoopVideo(a.file, a.description || "gif"));
+      } else {
+        var gifImg = document.createElement("img");
+        gifImg.src = a.file;
+        gifImg.alt = a.description || "gif";
+        preview.appendChild(gifImg);
+      }
     } else {
       var vid = document.createElement("video");
       vid.controls = true;
@@ -1559,10 +1563,14 @@
     }
 
     if (a.type === "gif") {
-      var gifImg = document.createElement("img");
-      gifImg.src = a.file;
-      gifImg.alt = a.description || "gif";
-      preview.appendChild(gifImg);
+      if (isVideoLoop(a.file)) {
+        preview.appendChild(createLoopVideo(a.file, a.description || "gif"));
+      } else {
+        var gifImg = document.createElement("img");
+        gifImg.src = a.file;
+        gifImg.alt = a.description || "gif";
+        preview.appendChild(gifImg);
+      }
       _preview = { id: id, videoEl: null, wrapEl: null };
       return;
     }
@@ -1945,10 +1953,14 @@
       img.alt = a.description || "screenshot";
       preview.appendChild(img);
     } else if (a.type === "gif") {
-      var gifImg = document.createElement("img");
-      gifImg.src = a.file;
-      gifImg.alt = a.description || "gif";
-      preview.appendChild(gifImg);
+      if (isVideoLoop(a.file)) {
+        preview.appendChild(createLoopVideo(a.file, a.description || "gif"));
+      } else {
+        var gifImg = document.createElement("img");
+        gifImg.src = a.file;
+        gifImg.alt = a.description || "gif";
+        preview.appendChild(gifImg);
+      }
     } else {
       var vid = document.createElement("video");
       vid.controls = true;

@@ -181,7 +181,8 @@ body {
   box-shadow: var(--shadow-lg);
 }
 
-.gallery-card img {
+.gallery-card img,
+.gallery-card video {
   width: 100%;
   display: block;
   aspect-ratio: 16 / 9;
@@ -237,7 +238,8 @@ body {
   justify-content: center;
 }
 
-#lightboxContent img {
+#lightboxContent img,
+#lightboxContent video {
   max-width: 90vw;
   max-height: 80vh;
   object-fit: contain;

@@ -354,14 +354,18 @@
       media.addEventListener("mousemove", spriteHover);
       media.addEventListener("mouseleave", spriteReset);
     } else {
-      var img = document.createElement("img");
       var fileSrc = "media/" + encodeURIComponent(artifact.file);
-      img.src = fileSrc;
-      img.alt = artifact.description || "";
-      img.loading = "lazy";
-      media.appendChild(img);
-      if (artifact.type === "gif") {
-        setupGifHover(card, img, fileSrc);
+      if (isVideoLoop(artifact.file)) {
+        media.appendChild(createLoopVideo(fileSrc, artifact.description || ""));
+      } else {
+        var img = document.createElement("img");
+        img.src = fileSrc;
+        img.alt = artifact.description || "";
+        img.loading = "lazy";
+        media.appendChild(img);
+        if (artifact.type === "gif") {
+          setupGifHover(card, img, fileSrc);
+        }
       }
     }
     card.appendChild(media);
@@ -1140,14 +1144,18 @@
       media.addEventListener("mousemove", spriteHover);
       media.addEventListener("mouseleave", spriteReset);
     } else {
-      var img = document.createElement("img");
       var fileSrc = "media/" + encodeURIComponent(artifact.file);
-      img.src = fileSrc;
-      img.alt = artifact.description || "";
-      img.loading = "lazy";
-      media.appendChild(img);
-      if (artifact.type === "gif") {
-        setupGifHover(card, img, fileSrc);
+      if (isVideoLoop(artifact.file)) {
+        media.appendChild(createLoopVideo(fileSrc, artifact.description || ""));
+      } else {
+        var img = document.createElement("img");
+        img.src = fileSrc;
+        img.alt = artifact.description || "";
+        img.loading = "lazy";
+        media.appendChild(img);
+        if (artifact.type === "gif") {
+          setupGifHover(card, img, fileSrc);
+        }
       }
     }
     card.appendChild(media);

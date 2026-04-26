@@ -398,6 +398,139 @@ def test_check_ffmpeg_tools_available_missing(monkeypatch):
     assert ok is False
 
 
+_FFMPEG_ENCODERS_WITH_WEBP = (
+    "Encoders:\n"
+    " V..... = Video\n"
+    " ------\n"
+    " V..... libwebp_anim    libwebp WebP image (codec webp)\n"
+    " V..... libwebp         libwebp WebP image (codec webp)\n"
+)
+
+_FFMPEG_ENCODERS_NO_WEBP = (
+    "Encoders:\n V..... = Video\n ------\n V..... libx264         H.264 (codec h264)\n"
+)
+
+# The codecs listing mentions 'webp' even on builds without libwebp; the old
+# check matched this and produced a false positive. Used here as a regression
+# guard.
+_FFMPEG_CODECS_WITHOUT_LIBWEBP_ENCODER = (
+    "Codecs:\n D..... = Decoder\n .EV..L webp     WebP (encoders: )\n"
+)
+
+
+def test_check_webp_support_detects_libwebp(monkeypatch):
+    monkeypatch.setattr(video, "_webp_support_cache", None)
+    monkeypatch.setattr(
+        video.subprocess,
+        "run",
+        lambda *_a, **_kw: subprocess.CompletedProcess(
+            [], 0, stdout=_FFMPEG_ENCODERS_WITH_WEBP, stderr=""
+        ),
+    )
+    assert video.check_webp_support() is True
+
+    monkeypatch.setattr(video, "_webp_support_cache", None)
+    monkeypatch.setattr(
+        video.subprocess,
+        "run",
+        lambda *_a, **_kw: subprocess.CompletedProcess(
+            [], 0, stdout=_FFMPEG_ENCODERS_NO_WEBP, stderr=""
+        ),
+    )
+    assert video.check_webp_support() is False
+
+
+def test_check_webp_support_ignores_codecs_listing(monkeypatch):
+    """Regression: the codecs listing is not authoritative; only -encoders is."""
+    monkeypatch.setattr(video, "_webp_support_cache", None)
+    monkeypatch.setattr(
+        video.subprocess,
+        "run",
+        lambda *_a, **_kw: subprocess.CompletedProcess(
+            [], 0, stdout=_FFMPEG_CODECS_WITHOUT_LIBWEBP_ENCODER, stderr=""
+        ),
+    )
+    assert video.check_webp_support() is False
+
+
+def test_extract_gif_includes_webp_quality_for_webp_output(monkeypatch):
+    import config as cfg
+
+    monkeypatch.setattr(cfg, "DEBUGGING", False)
+    monkeypatch.setattr(video, "get_file_duration", lambda _f: 600)
+    monkeypatch.setattr(video, "verify_output_file", lambda *_a, **_kw: True)
+    monkeypatch.setattr(video.Path, "is_file", lambda self: True)
+    monkeypatch.setattr(
+        video.Path, "stat", lambda self: type("S", (), {"st_size": 1})()
+    )
+    monkeypatch.setattr(video, "check_webp_support", lambda: True)
+
+    captured: dict = {}
+
+    def fake_run(cmd, **_kw):
+        captured["cmd"] = cmd
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(video, "run_ffmpeg_process", fake_run)
+
+    ok = video.extract_gif("/in.mp4", "/out.webp", "0:10", 3)
+    assert ok is True
+    assert "-quality" in captured["cmd"]
+    assert str(cfg.WEBP_QUALITY) in captured["cmd"]
+
+    captured.clear()
+    ok = video.extract_gif("/in.mp4", "/out.gif", "0:10", 3)
+    assert ok is True
+    assert "-quality" not in captured["cmd"]
+
+
+def test_extract_gif_uses_vp9_for_webm_output(monkeypatch):
+    import config as cfg
+
+    monkeypatch.setattr(cfg, "DEBUGGING", False)
+    monkeypatch.setattr(video, "get_file_duration", lambda _f: 600)
+    monkeypatch.setattr(video, "verify_output_file", lambda *_a, **_kw: True)
+    monkeypatch.setattr(video.Path, "is_file", lambda self: True)
+    monkeypatch.setattr(
+        video.Path, "stat", lambda self: type("S", (), {"st_size": 1})()
+    )
+
+    captured: dict = {}
+
+    def fake_run(cmd, **_kw):
+        captured["cmd"] = cmd
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(video, "run_ffmpeg_process", fake_run)
+
+    ok = video.extract_gif("/in.mp4", "/out.webm", "0:10", 3)
+    assert ok is True
+    cmd = captured["cmd"]
+    assert "libvpx-vp9" in cmd
+    assert "-an" in cmd
+    # WebM container does not honor -loop; that flag must not be added.
+    assert "-loop" not in cmd
+    # WebP-only quality flag must not leak into the WebM command either.
+    assert "-quality" not in cmd
+
+
+def test_extract_gif_rejects_webp_when_unsupported(monkeypatch):
+    monkeypatch.setattr(video, "check_webp_support", lambda: False)
+    monkeypatch.setattr(video, "_webp_missing_warned", False)
+
+    called = {"run": False}
+
+    def fake_run(*_a, **_kw):
+        called["run"] = True
+        return subprocess.CompletedProcess([], 0, stdout="", stderr="")
+
+    monkeypatch.setattr(video, "run_ffmpeg_process", fake_run)
+
+    ok = video.extract_gif("/in.mp4", "/out.webp", "0:10", 3)
+    assert ok is False
+    assert called["run"] is False
+
+
 # ---- extract_frame_at_timestamp ----
 
 
