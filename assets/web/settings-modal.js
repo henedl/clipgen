@@ -379,6 +379,9 @@
         _scheduleSave();
       });
       controlDiv.appendChild(fInput);
+    } else if (s.type === "mark_categories") {
+      row.classList.add("settings-row-stacked");
+      _renderMarkCategoriesEditor(controlDiv, settingName);
     } else {
       var input = document.createElement("input");
       input.type = "number";
@@ -399,6 +402,120 @@
     row.appendChild(labelDiv);
     row.appendChild(controlDiv);
     return row;
+  }
+
+  function _slugifyKey(label, existingKeys) {
+    var base = String(label || "").toLowerCase()
+      .replace(/[^a-z0-9]+/g, "_")
+      .replace(/^_+|_+$/g, "");
+    if (!base) base = "category";
+    var key = base;
+    var n = 2;
+    while (existingKeys.indexOf(key) !== -1) {
+      key = base + "_" + n;
+      n++;
+    }
+    return key;
+  }
+
+  function _renderMarkCategoriesEditor(container, settingName) {
+    container.innerHTML = "";
+    var setting = _findSetting(settingName);
+    if (!setting) return;
+    var value = setting.value && typeof setting.value === "object" ? setting.value : {};
+
+    var editor = el("div", "mark-cat-editor");
+    var keys = Object.keys(value);
+    for (var i = 0; i < keys.length; i++) {
+      (function (key) {
+        var entry = value[key] || { label: "", color: "#888888" };
+        var rowEl = el("div", "mark-cat-row");
+
+        var keyEl = el("span", "mark-cat-key", key);
+        keyEl.title = key;
+        rowEl.appendChild(keyEl);
+
+        var labelInput = document.createElement("input");
+        labelInput.type = "text";
+        labelInput.className = "mark-cat-label";
+        labelInput.autocomplete = "off";
+        labelInput.value = entry.label || "";
+        labelInput.placeholder = "Label";
+        labelInput.addEventListener("change", function () {
+          var s = _findSetting(settingName);
+          if (!s || !s.value || !s.value[key]) return;
+          var v = this.value.trim() || key;
+          s.value[key].label = v;
+          this.value = v;
+          _updateChanged(settingName);
+          _scheduleSave();
+        });
+        rowEl.appendChild(labelInput);
+
+        var colorInput = document.createElement("input");
+        colorInput.type = "color";
+        colorInput.className = "mark-cat-color";
+        colorInput.value = entry.color || "#888888";
+        colorInput.addEventListener("change", function () {
+          var s = _findSetting(settingName);
+          if (!s || !s.value || !s.value[key]) return;
+          s.value[key].color = this.value;
+          _updateChanged(settingName);
+          _scheduleSave();
+        });
+        rowEl.appendChild(colorInput);
+
+        var delBtn = el("button", "btn btn-small mark-cat-delete", "Remove");
+        delBtn.type = "button";
+        delBtn.addEventListener("click", function () {
+          var s = _findSetting(settingName);
+          if (!s || !s.value) return;
+          delete s.value[key];
+          _updateChanged(settingName);
+          _renderMarkCategoriesEditor(container, settingName);
+          _scheduleSave();
+        });
+        rowEl.appendChild(delBtn);
+
+        editor.appendChild(rowEl);
+      })(keys[i]);
+    }
+
+    var addRow = el("div", "mark-cat-add-row");
+    var addLabel = document.createElement("input");
+    addLabel.type = "text";
+    addLabel.className = "mark-cat-label";
+    addLabel.autocomplete = "off";
+    addLabel.placeholder = "New category label";
+    addRow.appendChild(addLabel);
+
+    var addColor = document.createElement("input");
+    addColor.type = "color";
+    addColor.className = "mark-cat-color";
+    addColor.value = "#888888";
+    addRow.appendChild(addColor);
+
+    var addBtn = el("button", "btn btn-small", "Add");
+    addBtn.type = "button";
+    addBtn.addEventListener("click", function () {
+      var s = _findSetting(settingName);
+      if (!s) return;
+      var label = addLabel.value.trim();
+      if (!label) {
+        addLabel.focus();
+        return;
+      }
+      if (!s.value || typeof s.value !== "object") s.value = {};
+      var newKey = _slugifyKey(label, Object.keys(s.value));
+      s.value[newKey] = { label: label, color: addColor.value };
+      _updateChanged(settingName);
+      _renderMarkCategoriesEditor(container, settingName);
+      _scheduleSave();
+    });
+    addRow.appendChild(addBtn);
+
+    editor.appendChild(addRow);
+    container.appendChild(editor);
   }
 
   function _render() {

@@ -29,7 +29,7 @@ from icecream import ic
 REENCODING: bool = False
 AUDIO_NORMALIZE: bool = False
 FILEFORMAT: str = ".mp4"
-VERSIONNUM: str = "0.10.95"
+VERSIONNUM: str = "0.10.96"
 TITLECARDS_ENABLED: bool = (
     False  # use --titlecards / --no-titlecards to override per run
 )
@@ -257,6 +257,15 @@ TRANSCRIBE_INITIAL_PROMPT: str = "This is a recorded user experience research se
 TRANSCRIBE_BEAM_SIZE: int = 5  # beam search width
 # When to pre-load faster-whisper in the Transcripts web UI: off, queue_open (open Queue panel), page_load (after participants load).
 TRANSCRIBE_PREWARM: str = "queue_open"
+# Mark categories shown in the Transcripts mark popover. Each value is {label, color}.
+MARK_CATEGORIES: dict[str, dict[str, str]] = {
+    "pain_point": {"label": "Pain Point", "color": "#dc2626"},
+    "delight": {"label": "Delight", "color": "#16a34a"},
+    "quote": {"label": "Quote", "color": "#2563eb"},
+    "insight": {"label": "Insight", "color": "#f97316"},
+    "task": {"label": "Task Issue", "color": "#8b5cf6"},
+    "bookmark": {"label": "Bookmark", "color": "#0891b2"},
+}
 
 # ── Ollama (Local AI) ───────────────────────────────────────────────
 OLLAMA_SUMMARY_ENABLED: bool = True  # auto-generate transcript summaries via Ollama
@@ -287,6 +296,7 @@ SETTINGS_DESCRIPTIONS: dict[str, str] = {
     "TRANSCRIBE_MODEL": "Whisper model size: tiny, base, small, medium, large-v3.",
     "TRANSCRIBE_FORMAT": "Transcript output format: md (Markdown), srt, or vtt.",
     "TRANSCRIBE_PREWARM": "When the Transcripts page pre-loads the Whisper model: off, queue_open (opening a pill's options pane or hovering a pill that needs transcription), or page_load (after listing participants).",
+    "MARK_CATEGORIES": "Categories available when marking transcript segments. Each entry has a label and a color swatch.",
     "HIGHLIGHTS_REEL_DURATION_SECONDS": "Maximum duration in seconds for the highlights reel time budget.",
     "MANIFEST_ENABLED": "Write a manifest JSON file alongside generated artifacts for session tracking.",
     "STUDIO_CELL_EXPAND_HOVER": "Expand overflowing timestamp cells on hover in the Sheet Preview.",
@@ -417,6 +427,11 @@ STUDIO_SETTINGS: dict[str, dict[str, Any]] = {
         "group": "Transcription",
         "type": "select",
         "options": ["off", "queue_open", "page_load"],
+    },
+    "MARK_CATEGORIES": {
+        "tab": "Transcription",
+        "group": "Markers",
+        "type": "mark_categories",
     },
     "OLLAMA_SUMMARY_ENABLED": {
         "tab": "AI / Ollama",
