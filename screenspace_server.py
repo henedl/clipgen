@@ -51,6 +51,7 @@ if TYPE_CHECKING:
 
 from flask import Blueprint, Response, jsonify, request, send_file
 
+import config
 import files
 import utils
 import video
@@ -1087,6 +1088,11 @@ def api_tasks_create() -> FlaskResponse:
         parameters = cast(dict[str, Any], prepared)
 
     import screenspace
+
+    # Snapshot the global CV resolution scale into the task so the manifest
+    # records what scale produced each result (useful when re-running with
+    # a different scale to compare outputs).
+    parameters.setdefault("cv_resolution_scale", config.SCREENSPACE_CV_RESOLUTION_SCALE)
 
     task = screenspace.create_task(
         task_type=task_type,

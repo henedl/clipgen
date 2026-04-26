@@ -29,7 +29,7 @@ from icecream import ic
 REENCODING: bool = False
 AUDIO_NORMALIZE: bool = False
 FILEFORMAT: str = ".mp4"
-VERSIONNUM: str = "0.10.90"
+VERSIONNUM: str = "0.10.91"
 TITLECARDS_ENABLED: bool = (
     False  # use --titlecards / --no-titlecards to override per run
 )
@@ -189,6 +189,10 @@ SCREENSPACE_INACTIVITY_PHASH_THRESHOLD: int = (
 SCREENSPACE_INACTIVITY_MIN_DURATION: float = (
     2.0  # min seconds to report an inactivity span
 )
+SCREENSPACE_CV_RESOLUTION_SCALE: float = (
+    1.0  # multiplier applied to extracted region frames before CV analysis
+    # (1.0 = no change; >1 sharper but slower and more memory; <1 faster but coarser)
+)
 
 # ── Highlights Reel ──────────────────────────────────────────────────
 HIGHLIGHTS_REEL_DURATION_SECONDS: int = 180  # 3-minute budget for highlights reel
@@ -290,6 +294,7 @@ SETTINGS_DESCRIPTIONS: dict[str, str] = {
     "OLLAMA_SUMMARY_ENABLED": "Auto-generate AI summaries of transcripts using a local Ollama model.",
     "OLLAMA_SUMMARY_MODEL": "Ollama model used for transcript summaries and citation linking.",
     "OLLAMA_BASE_URL": "Base URL of the local Ollama server.",
+    "SCREENSPACE_CV_RESOLUTION_SCALE": "Scale extracted region frames before CV analysis. Higher (e.g. 2.0) gives the models more signal on noisy/compressed video at the cost of speed and memory; lower speeds up scans on large footage. 1.0 = unchanged.",
 }
 
 # Studio-exposed settings with UI metadata (tab, group, type, constraints).
@@ -399,6 +404,14 @@ STUDIO_SETTINGS: dict[str, dict[str, Any]] = {
         "provider": "ollama",
     },
     "OLLAMA_BASE_URL": {"tab": "AI / Ollama", "group": "AI Summary", "type": "str"},
+    "SCREENSPACE_CV_RESOLUTION_SCALE": {
+        "tab": "Screenspace",
+        "group": "Analysis Quality",
+        "type": "float",
+        "min": 0.25,
+        "max": 4.0,
+        "step": 0.25,
+    },
     "RICH_COLORS": {"tab": "CLI", "group": "Terminal Output", "type": "bool"},
     "RICH_PANELS": {"tab": "CLI", "group": "Terminal Output", "type": "bool"},
     "RICH_PROGRESS": {"tab": "CLI", "group": "Terminal Output", "type": "bool"},

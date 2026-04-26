@@ -1125,6 +1125,7 @@ def _settings_records() -> list[dict[str, Any]]:
                 "type": meta.get("type", "str"),
                 "options": meta.get("options"),
                 "min": meta.get("min"),
+                "max": meta.get("max"),
                 "step": meta.get("step"),
                 "provider": meta.get("provider"),
             }

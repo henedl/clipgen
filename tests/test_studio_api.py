@@ -1111,6 +1111,21 @@ def test_api_settings_includes_cli_settings(client):
         assert by_name[name]["type"] == "bool"
 
 
+def test_api_settings_includes_screenspace_cv_resolution_scale(client):
+    """GET /api/settings exposes the Screenspace CV resolution scale knob."""
+    resp = client.get("/studio/api/settings")
+    data = resp.get_json()
+    by_name = {s["name"]: s for s in data["settings"]}
+    assert "SCREENSPACE_CV_RESOLUTION_SCALE" in by_name
+    s = by_name["SCREENSPACE_CV_RESOLUTION_SCALE"]
+    assert s["tab"] == "Screenspace"
+    assert s["type"] == "float"
+    assert s["min"] == 0.25
+    assert s["max"] == 4.0
+    assert s["step"] == 0.25
+    assert isinstance(s["value"], float)
+
+
 def test_api_settings_includes_provider_field(client):
     """model_select settings include a provider field."""
     resp = client.get("/studio/api/settings")
