@@ -45,46 +45,6 @@
     return XREF_BADGES.sheet.color;
   }
 
-  function clockToSeconds(ts) {
-    // Like utils.parseTimestamp but treats 2-part as HH:MM (clock time)
-    // rather than MM:SS.  Matches Python utils._clock_to_seconds.
-    var parts = ts.split(":");
-    if (parts.length === 3)
-      return parseInt(parts[0], 10) * 3600 + parseInt(parts[1], 10) * 60 + parseInt(parts[2], 10);
-    if (parts.length === 2)
-      return parseInt(parts[0], 10) * 3600 + parseInt(parts[1], 10) * 60;
-    return NaN;
-  }
-
-  function parseClockSegments(raw) {
-    // Like _studioParseClipTimestamps but uses clockToSeconds for cells
-    // that contain absolute clock times (when a baseline row exists).
-    var DEFAULT_DUR = 60;
-    var sd = window._studioState && window._studioState.sheetData;
-    if (sd && sd.defaultDuration) DEFAULT_DUR = sd.defaultDuration;
-    var cleaned = raw.toLowerCase().replace(/!key/g, "").replace(/[+;,]/g, " ");
-    var tokens = cleaned.split(/\s+/).filter(function (t) { return t && t !== "x"; });
-    var segments = [];
-    for (var i = 0; i < tokens.length; i++) {
-      var tok = tokens[i].replace(/\.$/, "").replace(/\./g, ":");
-      var dashIdx = -1;
-      for (var d = 1; d < tok.length; d++) {
-        if (tok[d] === "-" && tok[d - 1] >= "0" && tok[d - 1] <= "9") { dashIdx = d; break; }
-      }
-      if (dashIdx > 0) {
-        var s = clockToSeconds(tok.substring(0, dashIdx));
-        var e = clockToSeconds(tok.substring(dashIdx + 1));
-        if (!isNaN(s) && !isNaN(e))
-          segments.push({ startSeconds: Math.floor(s), duration: Math.max(0, e - s) });
-      } else if (tok.indexOf(":") > 0) {
-        var sec = clockToSeconds(tok);
-        if (!isNaN(sec))
-          segments.push({ startSeconds: Math.floor(sec), duration: DEFAULT_DUR });
-      }
-    }
-    if (segments.length === 0) segments.push({ startSeconds: 0, duration: DEFAULT_DUR });
-    return segments;
-  }
 
   function stddev(nums) {
     if (nums.length < 2) return 0;
@@ -229,11 +189,10 @@
           var cell = row.cells[pid];
           if (!cell || !cell.valid) continue;
           var baselineOffset = (cvState.baselines && cvState.baselines[pid]) || 0;
-          var segs = baselineOffset
-            ? parseClockSegments(cell.value)
-            : window._studioParseClipTimestamps(cell.value);
+          var defaultDur = (state.sheetData && state.sheetData.defaultDuration) || 60;
+          var segs = parseClipSegmentsForCell(cell.value, baselineOffset, defaultDur);
           for (var s = 0; s < segs.length; s++) {
-            var start = segs[s].startSeconds - baselineOffset;
+            var start = segs[s].startSeconds;
             var end = start + segs[s].duration;
             events.push({
               participant: pid,
@@ -1377,7 +1336,9 @@
         ? rawRow.cells[event.participant].value : "";
       var parts = event.id.split("_");
       var segIdx = parseInt(parts[parts.length - 1]) || 0;
-      var segs = window._studioParseClipTimestamps(cellValue);
+      var defaultDur2 = (state.sheetData && state.sheetData.defaultDuration) || 60;
+      var baselineOffset2 = (cvState.baselines && cvState.baselines[event.participant]) || 0;
+      var segs = parseClipSegmentsForCell(cellValue, baselineOffset2, defaultDur2);
       item.row = rawRow.rowNum;
       item.desc = rawRow.observation || event.label || event.eventType;
       item.timestamp = cellValue;

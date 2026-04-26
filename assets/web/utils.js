@@ -105,6 +105,66 @@ var parseTimestamp = function (str) {
   return isNaN(n) ? null : n;
 };
 
+// Parse a timestamp string in clock semantics: 2-part is HH:MM (not MM:SS).
+// Mirrors Python utils._clock_to_seconds. Returns null on failure.
+var parseClockTimestamp = function (str) {
+  str = (str == null ? "" : String(str)).trim();
+  if (!str) return null;
+  var parts = str.split(":");
+  if (parts.length === 3) {
+    var h = parseFloat(parts[0]), m = parseFloat(parts[1]), s = parseFloat(parts[2]);
+    if (isNaN(h) || isNaN(m) || isNaN(s)) return null;
+    return h * 3600 + m * 60 + s;
+  }
+  if (parts.length === 2) {
+    var h2 = parseFloat(parts[0]), m2 = parseFloat(parts[1]);
+    if (isNaN(h2) || isNaN(m2)) return null;
+    return h2 * 3600 + m2 * 60;
+  }
+  return null;
+};
+
+// Parse a Sheet cell's timestamp tokens into [{startSeconds, duration}].
+// When baselineSeconds > 0, tokens are treated as absolute clock times
+// (2-part = HH:MM) and the baseline is subtracted from both ends of each
+// range. Mirrors files.prepare_clip + utils.convert_clock_pairs_to_relative.
+// Pairs that resolve to negative or zero-length intervals are skipped.
+var parseClipSegmentsForCell = function (raw, baselineSeconds, defaultDuration) {
+  var DEFAULT_DUR = defaultDuration || 60;
+  var hasBaseline = baselineSeconds && baselineSeconds > 0;
+  var tsParse = hasBaseline ? parseClockTimestamp : parseTimestamp;
+  var cleaned = String(raw || "").toLowerCase().replace(/!key/g, "").replace(/[+;,]/g, " ");
+  var tokens = cleaned.split(/\s+/).filter(function (t) { return t && t !== "x"; });
+  var segments = [];
+  for (var i = 0; i < tokens.length; i++) {
+    var tok = tokens[i].replace(/\.$/, "").replace(/\./g, ":");
+    var dashIdx = -1;
+    for (var d = 1; d < tok.length; d++) {
+      if (tok[d] === "-" && tok[d - 1] >= "0" && tok[d - 1] <= "9") { dashIdx = d; break; }
+    }
+    if (dashIdx > 0) {
+      var s = tsParse(tok.substring(0, dashIdx));
+      var e = tsParse(tok.substring(dashIdx + 1));
+      if (s === null || e === null) continue;
+      if (hasBaseline) {
+        s -= baselineSeconds;
+        e -= baselineSeconds;
+        if (s < 0 || e <= 0 || e <= s) continue;
+      }
+      segments.push({ startSeconds: Math.floor(s), duration: Math.max(0, e - s) });
+    } else if (tok.indexOf(":") > 0) {
+      var sec = tsParse(tok);
+      if (sec === null) continue;
+      if (hasBaseline) {
+        sec -= baselineSeconds;
+        if (sec < 0) continue;
+      }
+      segments.push({ startSeconds: Math.floor(sec), duration: DEFAULT_DUR });
+    }
+  }
+  return segments;
+};
+
 // ---- Math ----
 
 var clamp = function (val, min, max) {
