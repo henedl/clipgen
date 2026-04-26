@@ -2663,13 +2663,28 @@
     }
   }
 
-  function getMultitoolDropIndex(container, clientY) {
+  var _multitoolDragMidpoints = null;
+
+  function _cacheMultitoolDragMidpoints(container) {
     var cards = container.querySelectorAll(".multitool-step:not(.dragging)");
+    var mids = new Array(cards.length);
     for (var i = 0; i < cards.length; i++) {
-      var rect = cards[i].getBoundingClientRect();
-      if (clientY < rect.top + rect.height / 2) return i;
+      var r = cards[i].getBoundingClientRect();
+      mids[i] = r.top + r.height / 2;
     }
-    return cards.length;
+    _multitoolDragMidpoints = mids;
+  }
+
+  function getMultitoolDropIndex(container, clientY) {
+    var mids = _multitoolDragMidpoints;
+    if (!mids) {
+      _cacheMultitoolDragMidpoints(container);
+      mids = _multitoolDragMidpoints;
+    }
+    for (var i = 0; i < mids.length; i++) {
+      if (clientY < mids[i]) return i;
+    }
+    return mids.length;
   }
 
   function clearMultitoolDragIndicators(container) {
@@ -2811,6 +2826,7 @@
       card.classList.add("dragging");
       e.dataTransfer.setData("text/plain", card.dataset.stepIdx);
       e.dataTransfer.effectAllowed = "move";
+      _cacheMultitoolDragMidpoints(stepsDiv);
     });
     stepsDiv.addEventListener("dragend", function (e) {
       var card = e.target.closest(".multitool-step");
@@ -2819,6 +2835,7 @@
         card.removeAttribute("draggable");
       }
       clearMultitoolDragIndicators(stepsDiv);
+      _multitoolDragMidpoints = null;
     });
     stepsDiv.addEventListener("dragover", function (e) {
       if (e.dataTransfer.types.indexOf("text/plain") < 0) return;
@@ -4701,6 +4718,7 @@
       e.dataTransfer.setData("application/x-task-status", task.status);
       e.dataTransfer.setData("application/x-task-id", card.dataset.taskId);
       e.dataTransfer.effectAllowed = "move";
+      _cacheTaskDragMidpoints(taskListEl);
     });
 
     taskListEl.addEventListener("dragend", function (e) {
@@ -4710,6 +4728,7 @@
         card.removeAttribute("draggable");
       }
       clearDragIndicators(taskListEl);
+      _taskDragCache = null;
     });
 
     taskListEl.addEventListener("dragover", function (e) {
@@ -4811,30 +4830,42 @@
     });
   }
 
-  function getDropIndex(container, clientY) {
+  // Cached at dragstart: { all: number[], statusGrouped: { queued: number[], finished: number[] } }
+  var _taskDragCache = null;
+
+  function _cacheTaskDragMidpoints(container) {
     var cards = container.querySelectorAll(".task-card:not(.dragging)");
+    var all = new Array(cards.length);
+    var queued = [];
+    var finished = [];
     for (var i = 0; i < cards.length; i++) {
-      var rect = cards[i].getBoundingClientRect();
-      if (clientY < rect.top + rect.height / 2) return i;
+      var r = cards[i].getBoundingClientRect();
+      var mid = r.top + r.height / 2;
+      all[i] = mid;
+      var t = findTask(cards[i].dataset.taskId);
+      if (!t) continue;
+      if (t.status === "queued") queued.push(mid);
+      else if (t.status === "completed" || t.status === "failed") finished.push(mid);
     }
-    return cards.length;
+    _taskDragCache = { all: all, queued: queued, finished: finished };
+  }
+
+  function getDropIndex(container, clientY) {
+    if (!_taskDragCache) _cacheTaskDragMidpoints(container);
+    var mids = _taskDragCache.all;
+    for (var i = 0; i < mids.length; i++) {
+      if (clientY < mids[i]) return i;
+    }
+    return mids.length;
   }
 
   function getDropIndexAmongStatus(container, clientY, group) {
-    var cards = container.querySelectorAll(".task-card:not(.dragging)");
-    var idx = 0;
-    for (var i = 0; i < cards.length; i++) {
-      var t = findTask(cards[i].dataset.taskId);
-      if (!t) continue;
-      var match = group === "queued"
-        ? t.status === "queued"
-        : (t.status === "completed" || t.status === "failed");
-      if (!match) continue;
-      var rect = cards[i].getBoundingClientRect();
-      if (clientY < rect.top + rect.height / 2) return idx;
-      idx++;
+    if (!_taskDragCache) _cacheTaskDragMidpoints(container);
+    var mids = group === "queued" ? _taskDragCache.queued : _taskDragCache.finished;
+    for (var i = 0; i < mids.length; i++) {
+      if (clientY < mids[i]) return i;
     }
-    return idx;
+    return mids.length;
   }
 
   function clearDragIndicators(container) {
@@ -5247,7 +5278,15 @@
 
   function startPolling() {
     if (state.pollTimer) return;
+    if (document.hidden) return;
     state.pollTimer = setInterval(pollTasks, POLL_INTERVAL);
+  }
+
+  function stopPolling() {
+    if (state.pollTimer) {
+      clearInterval(state.pollTimer);
+      state.pollTimer = null;
+    }
   }
 
   function pollTasks() {
@@ -5255,8 +5294,7 @@
       return t.status === "queued" || t.status === "running" || t.status === "paused";
     });
     if (!hasActive) {
-      clearInterval(state.pollTimer);
-      state.pollTimer = null;
+      stopPolling();
       return;
     }
 
@@ -5264,6 +5302,25 @@
       .then(function (data) { handleTaskData(data); })
       .catch(function () {});
   }
+
+  function stopSSE() {
+    if (state.eventSource) {
+      state.eventSource.close();
+      state.eventSource = null;
+    }
+  }
+
+  document.addEventListener("visibilitychange", function () {
+    if (document.hidden) {
+      stopSSE();
+      stopPolling();
+      return;
+    }
+    var hasActive = state.tasks.some(function (t) {
+      return t.status === "queued" || t.status === "running" || t.status === "paused";
+    });
+    if (hasActive) startSSE();
+  });
 
   // ---- Results ----
 

@@ -696,9 +696,7 @@
     var svg = btn.querySelector("svg");
     if (svg) svg.style.animation = "spin 0.7s linear infinite";
 
-    // TODO: no r.ok check; migrating to apiPost would add throw on HTTP error.
-    fetch("api/sheet/refresh", { method: "POST" })
-      .then(function (r) { return r.json(); })
+    apiPost("api/sheet/refresh")
       .then(function (data) {
         if (!data.ok) {
           showResult(null, "Refresh failed: " + (data.error || "Unknown error"));
@@ -716,9 +714,7 @@
   }
 
   function loadManifestState() {
-    // TODO: no r.ok check; migrating to apiGet would add throw on HTTP error.
-    fetch("api/manifest")
-      .then(function (r) { return r.json(); })
+    apiGet("api/manifest")
       .then(function (data) {
         if (!data.ok || !state.sheetData) return;
         var artifacts = data.artifacts || [];
@@ -1941,9 +1937,7 @@
   // ---- Stashed reels ----
 
   function loadStashes() {
-    // TODO: no r.ok check; migrating to apiGet would surface HTTP errors via the catch.
-    fetch("api/stashes")
-      .then(function (r) { return r.json(); })
+    apiGet("api/stashes")
       .then(function (data) {
         if (data.ok) {
           state.stashes = data.stashes || [];
@@ -2038,13 +2032,7 @@
 
     var items = state.reelQueue.slice();
     var totalDuration = computeReelDuration(items);
-    // TODO: no r.ok check; migrating to apiPost would surface HTTP errors via the catch.
-    fetch("api/stashes", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ action: "create", items: items, name: "", totalDuration: totalDuration }),
-    })
-      .then(function (r) { return r.json(); })
+    apiPost("api/stashes", { action: "create", items: items, name: "", totalDuration: totalDuration })
       .then(function (data) {
         if (data.ok) {
           state.stashes.push(data.stash);
@@ -2068,13 +2056,7 @@
   }
 
   function deleteStash(stashId, endpoint, stateArray, renderFn) {
-    // TODO: no r.ok check; migrating to apiPost would surface HTTP errors via the catch.
-    fetch(endpoint, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ action: "delete", id: stashId }),
-    })
-      .then(function (r) { return r.json(); })
+    apiPost(endpoint, { action: "delete", id: stashId })
       .then(function (data) {
         if (data.ok) {
           for (var i = 0; i < stateArray.length; i++) {
@@ -2108,12 +2090,7 @@
       });
       parent.replaceChild(span, input);
 
-      // TODO: fire-and-forget; needs custom shape, no migration to apiPost.
-      fetch(endpoint, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "update", id: stash.id, name: newName }),
-      }).catch(function () {});
+      apiPost(endpoint, { action: "update", id: stash.id, name: newName }).catch(function () {});
     }
 
     input.addEventListener("blur", commit);
@@ -2130,13 +2107,7 @@
 
   function createStashViaAPI(endpoint, items, onSuccess) {
     var totalDuration = computeReelDuration(items);
-    // TODO: no r.ok check; migrating to apiPost would surface HTTP errors via the catch.
-    fetch(endpoint, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ action: "create", items: items, name: "", totalDuration: totalDuration }),
-    })
-      .then(function (r) { return r.json(); })
+    apiPost(endpoint, { action: "create", items: items, name: "", totalDuration: totalDuration })
       .then(function (data) {
         if (data.ok) onSuccess(data.stash);
       })
@@ -2146,9 +2117,7 @@
   // ---- Stashed artifacts ----
 
   function loadArtifactStashes() {
-    // TODO: no r.ok check; migrating to apiGet would surface HTTP errors via the catch.
-    fetch("api/artifact-stashes")
-      .then(function (r) { return r.json(); })
+    apiGet("api/artifact-stashes")
       .then(function (data) {
         if (data.ok) {
           state.artifactStashes = data.stashes || [];
@@ -2230,13 +2199,7 @@
 
     var items = state.artifactQueue.slice();
     var totalDuration = computeReelDuration(items);
-    // TODO: no r.ok check; migrating to apiPost would surface HTTP errors via the catch.
-    fetch("api/artifact-stashes", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ action: "create", items: items, name: "", totalDuration: totalDuration }),
-    })
-      .then(function (r) { return r.json(); })
+    apiPost("api/artifact-stashes", { action: "create", items: items, name: "", totalDuration: totalDuration })
       .then(function (data) {
         if (data.ok) {
           state.artifactStashes.push(data.stash);
@@ -2364,12 +2327,7 @@
     qs("#statusDismiss").addEventListener("click", hideOverlay);
     qs("#statusOpen").addEventListener("click", function () {
       if (_lastViewerFile) {
-        // TODO: fire-and-forget with no response handling; no clean migration to apiPost.
-        fetch("api/open-viewer", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ file: _lastViewerFile }),
-        });
+        apiPost("api/open-viewer", { file: _lastViewerFile }).catch(function () {});
       }
       hideOverlay();
     });
@@ -2601,14 +2559,7 @@
         };
       });
 
-      // TODO: skips r.ok check — success is signaled by data.ok from server. Migrating to apiPost
-      // would add an r.ok throw that this handler doesn't currently trigger.
-      fetch("api/generate-intake", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ items: intakePayload, format: format }),
-      })
-        .then(function (r) { return r.json(); })
+      apiPost("api/generate-intake", { items: intakePayload, format: format })
         .then(function (data) {
           var intakeCards = list.querySelectorAll('[data-source="screenspace"], [data-source="transcript"]');
           if (data.ok && data.results) {
@@ -2641,8 +2592,7 @@
 
   function onCancelReel() {
     qs("#cancelReelBtn").classList.add("hidden");
-    // TODO: fire-and-forget POST with no body; apiPost would send JSON.stringify(undefined).
-    fetch("api/reel/cancel", { method: "POST" });
+    apiPost("api/reel/cancel").catch(function () {});
   }
 
   function onBuildReel() {
@@ -3133,13 +3083,7 @@
       TITLECARD_DURATION_SECONDS: parseInt(dur.value, 10) || 2,
     };
 
-    // TODO: skips r.ok; only reacts to data.ok. Silent on HTTP failure — apiPut would expose it via .catch.
-    fetch("api/settings", {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ settings: payload }),
-    })
-      .then(function (r) { return r.json(); })
+    apiPut("api/settings", { settings: payload })
       .then(function (data) {
         if (data.ok && state.settingsData) {
           var tcE = _findSetting("TITLECARDS_ENABLED");
@@ -3182,10 +3126,7 @@
   }
 
   function checkNavLinks() {
-    // TODO: skips r.ok; a failed request silently leaves tabs hidden. apiGet would catch but
-    // the current code already swallows errors via the .catch below.
-    fetch("../api/status")
-      .then(function (r) { return r.json(); })
+    apiGet("../api/status")
       .then(function (data) {
         if (data.screenspace) {
           var intakeTab = qs('.preview-tab[data-tab="intake"]');
@@ -3627,7 +3568,7 @@
       thumb.appendChild(el("span", "queue-card-duration", formatDuration(segDuration)));
 
       var detDot = el("span", "intake-card-det-dot");
-      detDot.style.background = INTAKE_DETECTOR_COLORS[c.detector] || "#888";
+      detDot.style.background = "var(--color-task-" + c.detector + ", #888)";
       thumb.appendChild(detDot);
 
       // Source + cross-reference badges (SS self-badge leads the stack)
@@ -3682,13 +3623,7 @@
 
   function intakeDismissCluster(cluster) {
     var ids = cluster.events.map(function (e) { return e.id; });
-    // TODO: response body ignored; apiPut would parse JSON unnecessarily. Refactor if a
-    // fire-and-forget apiPutVoid helper is added.
-    fetch("../screenspace/api/events/bulk-exclude", {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ids: ids }),
-    })
+    apiPut("../screenspace/api/events/bulk-exclude", { ids: ids })
       .then(function () { pollIntakeEvents(); })
       .catch(function () {});
   }
@@ -3883,11 +3818,8 @@
       });
     }
 
-    // Start polling immediately — silently fails if Screenspace is unavailable
-    pollIntakeEvents();
-    state.intakePollTimer = setInterval(pollIntakeEvents, 10000);
-
-    // Pause polling when browser tab or intake panel is not visible
+    // Polling is started by syncPreviewTab() when the intake tab becomes active.
+    // Pause polling when browser tab is not visible; resume when intake tab is active.
     document.addEventListener("visibilitychange", function () {
       if (document.hidden) {
         if (state.intakePollTimer) { clearInterval(state.intakePollTimer); state.intakePollTimer = null; }
@@ -3900,19 +3832,23 @@
 
   // ---- Transcript Intake ----
 
+  // Colors resolve to CSS tokens (see tokens.css `--cat-*`) so dark mode tracks the theme.
   var TR_INTAKE_CATEGORIES = {
-    pain_point: { label: "Pain Point", color: "#dc2626" },
-    delight:    { label: "Delight",    color: "#16a34a" },
-    quote:      { label: "Quote",      color: "#2563eb" },
-    insight:    { label: "Insight",    color: "#f97316" },
-    task:       { label: "Task Issue", color: "#8b5cf6" },
-    bookmark:   { label: "Bookmark",   color: "#0891b2" },
+    pain_point: { label: "Pain Point", token: "--cat-pain-point" },
+    delight:    { label: "Delight",    token: "--cat-delight" },
+    quote:      { label: "Quote",      token: "--cat-quote" },
+    insight:    { label: "Insight",    token: "--cat-insight" },
+    task:       { label: "Task Issue", token: "--cat-task" },
+    bookmark:   { label: "Bookmark",   token: "--cat-bookmark" },
   };
 
+  function trIntakeCategoryColor(key) {
+    var entry = TR_INTAKE_CATEGORIES[key] || TR_INTAKE_CATEGORIES.bookmark;
+    return getComputedStyle(document.documentElement).getPropertyValue(entry.token).trim();
+  }
+
   function pollTranscriptIntakeMarks() {
-    // TODO: skips r.ok; migrating to apiGet would catch HTTP errors currently silently swallowed.
-    fetch("../transcripts/api/marks")
-      .then(function (r) { return r.json(); })
+    apiGet("../transcripts/api/marks")
       .then(function (data) {
         if (!data.ok) return;
         state.trIntakeMarks = data.marks.filter(function (m) { return m.valid; });
@@ -3921,15 +3857,12 @@
 
         // If "Show all" is enabled, also fetch all segments as unmark items
         if (state.trIntakeShowAll) {
-          // TODO: skips r.ok (same pattern).
-          fetch("../transcripts/api/participants")
-            .then(function (r2) { return r2.json(); })
+          apiGet("../transcripts/api/participants")
             .then(function (pData) {
               if (!pData.ok) return;
               var transcribed = pData.participants.filter(function (p) { return p.has_transcript; });
               var promises = transcribed.map(function (p) {
-                // TODO: skips r.ok (same pattern).
-                return fetch("../transcripts/api/transcript/" + p.id).then(function (r3) { return r3.json(); });
+                return apiGet("../transcripts/api/transcript/" + p.id);
               });
               Promise.all(promises).then(function (results) {
                 var markedIds = {};
@@ -3959,7 +3892,8 @@
                 renderTranscriptIntake();
                 checkConvergenceTabVisibility();
               });
-            });
+            })
+            .catch(function () {});
         } else {
           renderTranscriptIntake();
           checkConvergenceTabVisibility();
@@ -4063,10 +3997,9 @@
       thumb.appendChild(img);
       ssObserveThumb(card, img, thumb, c.participant, c.start);
 
-      var catColor = (TR_INTAKE_CATEGORIES[c.category] || TR_INTAKE_CATEGORIES.bookmark).color;
       var dot = document.createElement("span");
       dot.className = "tr-intake-card-category-dot";
-      dot.style.background = catColor;
+      dot.style.background = "var(" + (TR_INTAKE_CATEGORIES[c.category] || TR_INTAKE_CATEGORIES.bookmark).token + ")";
       thumb.appendChild(dot);
 
       var dur = document.createElement("span");
@@ -4240,7 +4173,7 @@
 
     for (var ci = 0; ci < filtered.length; ci++) {
       var c = filtered[ci];
-      var color = (TR_INTAKE_CATEGORIES[c.category] || TR_INTAKE_CATEGORIES.bookmark).color;
+      var color = trIntakeCategoryColor(c.category);
       var highlighted = state.trIntakeHoveredIdx === ci;
       var dimmed = state.trIntakeHoveredIdx !== -1 && !highlighted;
       var alpha = highlighted ? 0.85 : (dimmed ? 0.15 : 0.5);
@@ -4402,7 +4335,7 @@
           var cat = TR_INTAKE_CATEGORIES[key];
           var btn = document.createElement("button");
           btn.className = "intake-filter-det tr-intake-filter-cat";
-          btn.style.setProperty("--det-color", cat.color);
+          btn.style.setProperty("--det-color", "var(" + cat.token + ")");
           btn.textContent = cat.label;
           btn.dataset.category = key;
           btn.addEventListener("click", function () {

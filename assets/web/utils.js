@@ -329,32 +329,37 @@ var XREF_BADGES = {
 };
 
 // ---- Detector colors ----
-// Read from CSS custom properties (tokens.css) with hardcoded fallback
-// for exported viewers that may lack tokens.css at parse time.
+// Read from CSS custom properties (tokens.css). Mutable so the same object
+// reference can be re-populated after a theme toggle without breaking callers.
+// Hardcoded fallback supports exported viewers that may lack tokens.css.
 
-var DETECTOR_COLORS = (function () {
-  var types = [
-    "multitool", "color", "change", "similarity", "text",
-    "numbers", "timelapse", "template", "flow", "scene", "inactivity",
-  ];
-  var fallback = {
-    multitool: "#2563eb", color: "#8b5cf6", change: "#f97316",
-    similarity: "#0ea5e9", text: "#10b981", numbers: "#eab308",
-    timelapse: "#ec4899", template: "#f43f5e", flow: "#6366f1",
-    scene: "#14b8a6", inactivity: "#78716c",
-  };
+var DETECTOR_COLORS = {};
+var _DETECTOR_TYPES = [
+  "multitool", "color", "change", "similarity", "text",
+  "numbers", "timelapse", "template", "flow", "scene", "inactivity",
+];
+var _DETECTOR_FALLBACK = {
+  multitool: "#2563eb", color: "#8b5cf6", change: "#f97316",
+  similarity: "#0ea5e9", text: "#10b981", numbers: "#eab308",
+  timelapse: "#ec4899", template: "#f43f5e", flow: "#6366f1",
+  scene: "#14b8a6", inactivity: "#78716c",
+};
+
+function refreshDetectorColors() {
   try {
     var style = getComputedStyle(document.documentElement);
-    var map = {};
-    types.forEach(function (t) {
+    _DETECTOR_TYPES.forEach(function (t) {
       var val = style.getPropertyValue("--color-task-" + t).trim();
-      map[t] = val || fallback[t] || "#888";
+      DETECTOR_COLORS[t] = val || _DETECTOR_FALLBACK[t] || "#888";
     });
-    return map;
   } catch (_) {
-    return fallback;
+    _DETECTOR_TYPES.forEach(function (t) {
+      DETECTOR_COLORS[t] = _DETECTOR_FALLBACK[t] || "#888";
+    });
   }
-})();
+}
+
+refreshDetectorColors();
 
 // ---- Shared settings (localStorage) ----
 
@@ -391,6 +396,7 @@ var toggleThemePreference = function () {
   root.setAttribute("data-theme", next);
   try { window.localStorage.setItem(THEME_STORAGE_KEY, next); } catch (_) {}
   updateThemeToggleButton(next);
+  refreshDetectorColors();
 };
 
 var updateThemeToggleButton = function (explicitTheme) {

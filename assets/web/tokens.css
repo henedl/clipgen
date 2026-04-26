@@ -107,6 +107,17 @@
   --color-behaviors-bg: rgba(37, 99, 235, 0.06);
   --color-impacts-bg: rgba(220, 38, 38, 0.06);
 
+  /* Transcript intake category colors */
+  --cat-pain-point: var(--sev-high);
+  --cat-delight: var(--sev-positive);
+  --cat-quote: #2563eb;
+  --cat-insight: #f97316;
+  --cat-task: #8b5cf6;
+  --cat-bookmark: #0891b2;
+
+  /* In-progress / working pulse */
+  --color-pulse: #a855f7;
+
   /* Transitions */
   --duration-fast: 150ms;
   --duration-normal: 250ms;
@@ -165,6 +176,11 @@
     --color-causes-bg: rgba(251, 146, 60, 0.1);
     --color-behaviors-bg: rgba(96, 165, 250, 0.1);
     --color-impacts-bg: rgba(248, 113, 113, 0.1);
+    --cat-quote: #60a5fa;
+    --cat-insight: #fb923c;
+    --cat-task: #a78bfa;
+    --cat-bookmark: #22d3ee;
+    --color-pulse: #c084fc;
   }
 }
 
@@ -211,6 +227,11 @@ html[data-theme="dark"] {
   --color-causes-bg: rgba(251, 146, 60, 0.1);
   --color-behaviors-bg: rgba(96, 165, 250, 0.1);
   --color-impacts-bg: rgba(248, 113, 113, 0.1);
+  --cat-quote: #60a5fa;
+  --cat-insight: #fb923c;
+  --cat-task: #a78bfa;
+  --cat-bookmark: #22d3ee;
+  --color-pulse: #c084fc;
 }
 
 /* Animated dot-grid background canvas (paired with grid-bg.js) */

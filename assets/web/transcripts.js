@@ -1781,8 +1781,7 @@
             var det = xref.screenspaceEvents[ei].detector;
             if (seen[det]) continue;
             seen[det] = true;
-            var evColor = SS_DETECTOR_COLORS[det] || "#888";
-            html += '<span class="search-xref-dot" style="background:' + evColor + '" title="' + escapeHtml(xref.screenspaceEvents[ei].event_type || det) + '"></span>';
+            html += '<span class="search-xref-dot" style="background:var(--color-task-' + det + ', #888)" title="' + escapeHtml(xref.screenspaceEvents[ei].event_type || det) + '"></span>';
           }
           html += '</span>';
         }

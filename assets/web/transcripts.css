@@ -86,7 +86,7 @@ body {
 .status-indicator--ready { background: var(--sev-very-positive); }
 .status-indicator--error { background: var(--sev-critical); }
 .status-indicator--working {
-  background: #a855f7;
+  background: var(--color-pulse);
   animation: status-pulse 1s ease-in-out infinite;
 }
 @keyframes status-pulse {
@@ -649,7 +649,7 @@ body {
 
 .segment-mark:hover {
   border-color: var(--color-accent);
-  box-shadow: 0 0 0 2px rgba(29, 79, 114, 0.15);
+  box-shadow: 0 0 0 2px var(--color-accent-highlight);
 }
 
 .segment-mark.marked {
@@ -657,7 +657,7 @@ body {
 }
 
 .segment-mark.marked:hover {
-  box-shadow: 0 0 0 2px rgba(29, 79, 114, 0.25);
+  box-shadow: 0 0 0 2px var(--color-accent-highlight);
 }
 
 /* Mark popover */

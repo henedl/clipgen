@@ -62,6 +62,7 @@
     var grid = qs("#galleryGrid");
     if (!grid) return;
 
+    var frag = document.createDocumentFragment();
     for (var i = 0; i < state.artifacts.length; i++) {
       var a = state.artifacts[i];
       var card = document.createElement("div");
@@ -85,8 +86,9 @@
       overlay.textContent = a.timestamp_formatted || formatTime(a.timestamp);
       card.appendChild(overlay);
 
-      grid.appendChild(card);
+      frag.appendChild(card);
     }
+    grid.appendChild(frag);
 
     grid.addEventListener("click", function (e) {
       var card = e.target.closest(".gallery-card");

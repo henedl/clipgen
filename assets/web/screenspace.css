@@ -1987,11 +1987,11 @@ body.panel-dragging #bottomPanel {
 }
 .task-filter-btn.active[data-filter="completed"] {
   opacity: 1;
-  color: #16a34a;
+  color: var(--sev-positive);
 }
 .task-filter-btn.active[data-filter="failed"] {
   opacity: 1;
-  color: #dc2626;
+  color: var(--sev-high);
 }
 
 .panel-header h3 {
