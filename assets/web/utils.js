@@ -307,8 +307,12 @@ var apiDelete = function (path) {
 
 var POLL_INTERVAL = 3000;
 
-// ---- Mark categories (mirrored from transcripts.py MARK_CATEGORIES) ----
-// Kept in sync by tests/test_shared_constants.py — update both together.
+// ---- Mark categories ----
+// Hardcoded fallback that mirrors config.MARK_CATEGORIES defaults; the live
+// values are repopulated in place by setMarkCategories() once the page fetches
+// settings from the server. Existing references to MARK_CATEGORIES keep
+// working because we mutate this object rather than replace it.
+// Verified against config.MARK_CATEGORIES by tests/test_shared_constants.py.
 
 var MARK_CATEGORIES = {
   pain_point: { label: "Pain Point", color: "#dc2626" },
@@ -318,6 +322,25 @@ var MARK_CATEGORIES = {
   task:       { label: "Task Issue", color: "#8b5cf6" },
   bookmark:   { label: "Bookmark",   color: "#0891b2" },
 };
+
+function setMarkCategories(next) {
+  if (!next || typeof next !== "object") return;
+  for (var k in MARK_CATEGORIES) {
+    if (Object.prototype.hasOwnProperty.call(MARK_CATEGORIES, k)) {
+      delete MARK_CATEGORIES[k];
+    }
+  }
+  for (var key in next) {
+    if (!Object.prototype.hasOwnProperty.call(next, key)) continue;
+    var entry = next[key];
+    if (entry && typeof entry === "object") {
+      MARK_CATEGORIES[key] = {
+        label: entry.label || key,
+        color: entry.color || "#888888",
+      };
+    }
+  }
+}
 
 // ---- Cross-reference badge metadata ----
 // Icon names reference files in assets/icons/; rendered via CSS mask-image.

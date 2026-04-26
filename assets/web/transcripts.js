@@ -1196,6 +1196,7 @@
     _streamingMarksLoaded = true;
     apiGet("api/marks").then(function (data) {
       if (!data.ok) return;
+      if (data.categories) setMarkCategories(data.categories);
       var added = false;
       data.marks.forEach(function (m) {
         if (!m.valid || m.participant !== pid) return;
@@ -2686,19 +2687,51 @@
     return _trModelsCachePromise;
   }
 
+  function _applySettingsSnapshot(applied, settings) {
+    var nextCats = null;
+    if (applied && applied.MARK_CATEGORIES) {
+      nextCats = applied.MARK_CATEGORIES;
+    } else if (settings) {
+      for (var i = 0; i < settings.length; i++) {
+        if (settings[i].name === "MARK_CATEGORIES") {
+          nextCats = settings[i].value;
+          break;
+        }
+      }
+    }
+    if (nextCats) {
+      setMarkCategories(nextCats);
+      if (!MARK_CATEGORIES[state.lastMarkCategory]) {
+        var firstKey = Object.keys(MARK_CATEGORIES)[0];
+        state.lastMarkCategory = firstKey || "bookmark";
+      }
+      // Refresh streaming mark colors and re-render the visible transcript.
+      for (var sid in _streamingMarks) {
+        var sm = _streamingMarks[sid];
+        var cat = MARK_CATEGORIES[sm.category];
+        if (cat) sm.color = cat.color;
+      }
+      _bumpStreamingMarksVersion();
+      hideMarkPopover();
+      if (state.selectedParticipant) loadTranscript(state.selectedParticipant);
+    }
+  }
+
   function initTranscriptSettings() {
     var btn = qs("#settingsBtn");
     if (!btn) return;
     btn.addEventListener("click", function () {
       openSettingsModal({
         initialTab: "Transcription",
-        onSave: function () {
+        onSave: function (applied, settings) {
           _trModelsCache = null;
           _trModelsCachePromise = null;
+          _applySettingsSnapshot(applied, settings);
         },
-        onReset: function () {
+        onReset: function (scope, settings) {
           _trModelsCache = null;
           _trModelsCachePromise = null;
+          _applySettingsSnapshot(null, settings);
         },
       });
     });
@@ -2734,6 +2767,17 @@
 
     // Load initial data
     loadParticipants();
+
+    // Fetch live mark categories so the popover/pill renders match overrides.
+    apiGet("api/marks").then(function (data) {
+      if (data && data.ok && data.categories) {
+        setMarkCategories(data.categories);
+        if (!MARK_CATEGORIES[state.lastMarkCategory]) {
+          var firstKey = Object.keys(MARK_CATEGORIES)[0];
+          state.lastMarkCategory = firstKey || "bookmark";
+        }
+      }
+    });
 
     // Check for active tasks on load
     pollTaskStatus();

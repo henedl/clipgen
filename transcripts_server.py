@@ -605,7 +605,7 @@ def api_marks_list() -> FlaskResponse:
         {
             "ok": True,
             "marks": resolved,
-            "categories": transcripts.MARK_CATEGORIES,
+            "categories": config.MARK_CATEGORIES,
         }
     )
 
