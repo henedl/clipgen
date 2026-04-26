@@ -529,6 +529,7 @@ def scan_video_frames(
     fps: float = 0.0,
     duration: float = 0.0,
     fast_opts: dict[str, Any] | None = None,
+    cv_scale: float | None = None,
 ) -> None:
     """Iterate through video at interval, extract region, call callback.
 
@@ -545,6 +546,8 @@ def scan_video_frames(
     - ``max_region_dim``: downscale extracted region to this max dimension
     """
     full_frame = region is None
+    if cv_scale is None:
+        cv_scale = config.SCREENSPACE_CV_RESOLUTION_SCALE
 
     # Extract frames via ffmpeg pipe (faster H.264 decoding, no cv2.VideoCapture)
     if not _scan_via_ffmpeg_pipe(
@@ -558,6 +561,7 @@ def scan_video_frames(
         duration=duration,
         fast_opts=fast_opts,
         full_frame=full_frame,
+        cv_scale=cv_scale,
     ):
         utils.warning_print(
             f"ffmpeg pipe extraction failed for {Path(video_path).name}"
@@ -574,6 +578,7 @@ def scan_video_full_frames(
     fps: float = 0.0,
     duration: float = 0.0,
     fast_opts: dict[str, Any] | None = None,
+    cv_scale: float | None = None,
 ) -> None:
     """Like :func:`scan_video_frames` but passes the full frame (no region crop).
 
@@ -589,6 +594,7 @@ def scan_video_full_frames(
         fps=fps,
         duration=duration,
         fast_opts=fast_opts,
+        cv_scale=cv_scale,
     )
 
 
@@ -607,6 +613,7 @@ def _ffmpeg_pipe_frames(
     frame_width: int = 0,
     frame_height: int = 0,
     max_dim: int = 0,
+    cv_scale: float = 1.0,
 ) -> Iterator[tuple[float, np.ndarray]]:
     """Yield ``(timestamp, frame)`` tuples extracted via an ffmpeg pipe.
 
@@ -635,6 +642,17 @@ def _ffmpeg_pipe_frames(
 
     if out_w <= 0 or out_h <= 0:
         return
+
+    # Global CV resolution scale: applied after the region crop, before any
+    # max_dim cap. Skipped at 1.0 so default-config runs are byte-identical
+    # to pre-feature behavior.
+    if cv_scale > 0 and abs(cv_scale - 1.0) > 1e-6:
+        scaled_w = max(2, int(round(out_w * cv_scale)))
+        scaled_h = max(2, int(round(out_h * cv_scale)))
+        scaled_w += scaled_w % 2
+        scaled_h += scaled_h % 2
+        filters.append(f"scale={scaled_w}:{scaled_h}:flags=lanczos")
+        out_w, out_h = scaled_w, scaled_h
 
     if max_dim > 0 and (out_w > max_dim or out_h > max_dim):
         scale = max_dim / max(out_w, out_h)
@@ -703,6 +721,7 @@ def _scan_via_ffmpeg_pipe(
     duration: float = 0.0,
     fast_opts: dict[str, Any] | None = None,
     full_frame: bool = False,
+    cv_scale: float = 1.0,
 ) -> bool:
     """Try to scan frames via ffmpeg pipe, calling *callback* for each.
 
@@ -748,6 +767,7 @@ def _scan_via_ffmpeg_pipe(
             frame_width=frame_width,
             frame_height=frame_height,
             max_dim=pipe_max_dim,
+            cv_scale=cv_scale,
         ):
             if _phash_skip:
                 fh = compute_phash(frame)
@@ -1420,17 +1440,25 @@ def scan_template(
 
     _tmpl_downscale = bool(fast_opts and fast_opts.get("template_downscale"))
 
-    # Resize the template (and mask) once up front based on user-supplied
-    # scale. The opt-in slider lets users compensate when their uploaded
-    # PNG is captured at a different pixel scale than its in-video
-    # rendering (e.g. a 50x50 icon appearing as 24x24 on screen).
+    # Combine the user-supplied template_scale with the global CV resolution
+    # scale so the template matches at the same relative size on the
+    # (possibly upscaled) extracted frames. The opt-in template_scale slider
+    # lets users compensate when their uploaded PNG is captured at a
+    # different pixel scale than its in-video rendering (e.g. a 50x50 icon
+    # appearing as 24x24 on screen).
+    _cv_scale_template = (
+        config.SCREENSPACE_CV_RESOLUTION_SCALE
+        if config.SCREENSPACE_CV_RESOLUTION_SCALE > 0
+        else 1.0
+    )
+    effective_template_scale = template_scale * _cv_scale_template
     scaled_template = template_image
     scaled_mask = template_mask
-    if template_scale > 0 and abs(template_scale - 1.0) > 1e-6:
+    if effective_template_scale > 0 and abs(effective_template_scale - 1.0) > 1e-6:
         th, tw = template_image.shape[:2]
-        nw = max(8, int(round(tw * template_scale)))
-        nh = max(8, int(round(th * template_scale)))
-        interp = cv2.INTER_AREA if template_scale < 1.0 else cv2.INTER_CUBIC
+        nw = max(8, int(round(tw * effective_template_scale)))
+        nh = max(8, int(round(th * effective_template_scale)))
+        interp = cv2.INTER_AREA if effective_template_scale < 1.0 else cv2.INTER_CUBIC
         scaled_template = cv2.resize(template_image, (nw, nh), interpolation=interp)
         if template_mask is not None:
             scaled_mask = cv2.resize(
@@ -1447,6 +1475,14 @@ def scan_template(
         return results
 
     _nms_overlap = config.SCREENSPACE_TEMPLATE_NMS_OVERLAP
+    # Frame is already at cv_scale * original due to ffmpeg scaling. We need
+    # to undo both the user-set cv_scale and the fast-scan internal 2x
+    # downscale to report match boxes in original-frame pixels.
+    _cv_scale = (
+        config.SCREENSPACE_CV_RESOLUTION_SCALE
+        if config.SCREENSPACE_CV_RESOLUTION_SCALE > 0
+        else 1.0
+    )
 
     def _cb(ts: float, frame: np.ndarray) -> bool | None:
         if cancel_flag and cancel_flag():
@@ -1465,12 +1501,15 @@ def scan_template(
             work_frame, _prepared, threshold, _nms_overlap
         )
         if matches:
-            if scale_back > 1:
+            # Undo fast-scan downscale, then undo cv_scale, so reported
+            # coords are in the original (un-scaled) frame coordinate space.
+            inv = scale_back / _cv_scale
+            if abs(inv - 1.0) > 1e-6:
                 for m in matches:
-                    m["x"] *= scale_back
-                    m["y"] *= scale_back
-                    m["w"] *= scale_back
-                    m["h"] *= scale_back
+                    m["x"] = int(round(m["x"] * inv))
+                    m["y"] = int(round(m["y"] * inv))
+                    m["w"] = int(round(m["w"] * inv))
+                    m["h"] = int(round(m["h"] * inv))
             best = max(m["score"] for m in matches)
             rd = {
                 "timestamp": ts,

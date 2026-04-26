@@ -5980,7 +5980,7 @@
     if (settingsBtn) {
       settingsBtn.addEventListener("click", function () {
         if (typeof window.openSettingsModal === "function") {
-          window.openSettingsModal({ initialTab: "General" });
+          window.openSettingsModal({ initialTab: "Screenspace" });
         }
       });
     }
