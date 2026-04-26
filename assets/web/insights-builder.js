@@ -1094,8 +1094,9 @@
         if (oldIdx === -1) return;
         arts.splice(oldIdx, 1);
 
-        // Calculate new position based on mouse
-        var cards = this.querySelectorAll(".preview-card");
+        // Calculate new position based on mouse (rects measured before splice;
+        // the moved card is .dragging so it's filtered out below).
+        var cards = this.querySelectorAll(".preview-card:not(.dragging)");
         var insertIdx = arts.length;
         for (var ci = 0; ci < cards.length; ci++) {
           var rect = cards[ci].getBoundingClientRect();
@@ -1106,7 +1107,7 @@
         }
         arts.splice(insertIdx, 0, artifactId);
         markDirty(targetInsightId);
-        renderInsightCards();
+        rebuildBucketDropzone(this, ins, targetBucket);
       } else {
         addArtifactToInsight(targetInsightId, targetBucket, artifactId);
       }
@@ -1121,6 +1122,21 @@
       if (state.insights[i].id === id) return state.insights[i];
     }
     return null;
+  }
+
+  function rebuildBucketDropzone(dropzone, insight, bucketName) {
+    var bucket = insight[bucketName] || { artifacts: [], narrative: "" };
+    dropzone.innerHTML = "";
+    if (bucket.artifacts.length === 0) {
+      dropzone.appendChild(el("div", "bucket-empty-hint", "Drag artifacts here"));
+      return;
+    }
+    var frag = document.createDocumentFragment();
+    for (var i = 0; i < bucket.artifacts.length; i++) {
+      var art = findArtifact(bucket.artifacts[i]);
+      if (art) frag.appendChild(createPreviewCard(art, insight.id, bucketName, i));
+    }
+    dropzone.appendChild(frag);
   }
 
   // ---- Preview cards (in buckets) ----

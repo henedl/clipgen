@@ -2086,7 +2086,7 @@
       marker.className = "screenspace-marker ss-type-" + c.type;
       marker.style.left = left + "%";
       marker.style.width = width + "%";
-      marker.style.background = SS_DETECTOR_COLORS[c.type] || "#888";
+      marker.style.background = "var(--color-task-" + c.type + ", #888)";
       marker.addEventListener("mouseenter", function (cluster) {
         return function (ev) { showTooltipForScreenspaceCluster(cluster, ev); };
       }(c));
@@ -2112,7 +2112,7 @@
       item.className = "legend-item";
       var swatch = document.createElement("span");
       swatch.className = "legend-swatch";
-      swatch.style.background = SS_DETECTOR_COLORS[t] || "#888";
+      swatch.style.background = "var(--color-task-" + t + ", #888)";
       item.appendChild(swatch);
       item.appendChild(document.createTextNode(" " + t.charAt(0).toUpperCase() + t.slice(1)));
       legendEl.appendChild(item);
