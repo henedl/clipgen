@@ -74,19 +74,6 @@ class ManifestSegment(TypedDict):
     text: str
 
 
-# ---------------------------------------------------------------------------
-# Mark categories (shared constant — mirrored in transcripts.js)
-# ---------------------------------------------------------------------------
-
-MARK_CATEGORIES: dict[str, dict[str, str]] = {
-    "pain_point": {"label": "Pain Point", "color": "#dc2626"},
-    "delight": {"label": "Delight", "color": "#16a34a"},
-    "quote": {"label": "Quote", "color": "#2563eb"},
-    "insight": {"label": "Insight", "color": "#f97316"},
-    "task": {"label": "Task Issue", "color": "#8b5cf6"},
-    "bookmark": {"label": "Bookmark", "color": "#0891b2"},
-}
-
 # Known faster-whisper model variants with approximate download sizes.
 WHISPER_MODELS: list[dict[str, Any]] = [
     {"name": "tiny", "size_mb": 40, "description": "Fastest, least accurate"},

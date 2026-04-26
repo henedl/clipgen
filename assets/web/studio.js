@@ -2292,10 +2292,12 @@
         onSave: function (_applied, full) {
           state.settingsData = full;
           syncInlineControls();
+          _syncMarkCategoriesFromSettings(full);
         },
         onReset: function (_scope, full) {
           state.settingsData = full;
           syncInlineControls();
+          _syncMarkCategoriesFromSettings(full);
         },
       });
     });
@@ -3829,10 +3831,21 @@
     return getComputedStyle(document.documentElement).getPropertyValue(entry.token).trim();
   }
 
+  function _syncMarkCategoriesFromSettings(settings) {
+    if (!settings) return;
+    for (var i = 0; i < settings.length; i++) {
+      if (settings[i].name === "MARK_CATEGORIES" && settings[i].value) {
+        setMarkCategories(settings[i].value);
+        return;
+      }
+    }
+  }
+
   function pollTranscriptIntakeMarks() {
     apiGet("../transcripts/api/marks")
       .then(function (data) {
         if (!data.ok) return;
+        if (data.categories) setMarkCategories(data.categories);
         state.trIntakeMarks = data.marks.filter(function (m) { return m.valid; });
         var threshold = parseInt((qs("#trIntakeClusterThreshold") || {}).value) || 5;
         state.trIntakeClusters = clusterTranscriptMarks(state.trIntakeMarks, threshold);

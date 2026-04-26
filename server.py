@@ -30,9 +30,11 @@ Studio API endpoints (all under /studio/):
 """
 
 import concurrent.futures
+import copy
 import hashlib
 import json
 import os
+import re
 import sys
 import threading
 import webbrowser
@@ -70,9 +72,38 @@ _thumbnail_cache: dict[tuple, bytes] = {}
 _reel_cancel_event = threading.Event()
 
 # Snapshot config defaults before any settings file is loaded.
+# Deep-copied so dict-valued defaults are not aliased to live config state.
 _settings_defaults: dict[str, Any] = {
-    name: getattr(config, name) for name in getattr(config, "STUDIO_SETTINGS", {})
+    name: copy.deepcopy(getattr(config, name))
+    for name in getattr(config, "STUDIO_SETTINGS", {})
 }
+
+_HEX_COLOR_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
+_MARK_KEY_RE = re.compile(r"^[a-z0-9_]+$")
+
+
+def _coerce_mark_categories(value: Any) -> dict[str, dict[str, str]] | None:
+    """Validate and normalize a mark_categories payload.
+
+    Returns the cleaned dict, or None if the payload is structurally invalid.
+    """
+    if not isinstance(value, dict):
+        return None
+    cleaned: dict[str, dict[str, str]] = {}
+    for raw_key, raw_entry in value.items():
+        if not isinstance(raw_key, str):
+            return None
+        key = raw_key.strip()
+        if not key or not _MARK_KEY_RE.match(key):
+            return None
+        if not isinstance(raw_entry, dict):
+            return None
+        label = str(raw_entry.get("label", "")).strip()
+        color = str(raw_entry.get("color", "")).strip()
+        if not label or not _HEX_COLOR_RE.match(color):
+            return None
+        cleaned[key] = {"label": label, "color": color}
+    return cleaned
 
 
 @contextmanager
@@ -442,7 +473,15 @@ def _load_studio_settings() -> dict[str, Any]:
     for name, value in data.items():
         if name not in config.STUDIO_SETTINGS:
             continue
+        meta = config.STUDIO_SETTINGS[name]
         default = _settings_defaults.get(name)
+        if meta.get("type") == "mark_categories":
+            cleaned = _coerce_mark_categories(value)
+            if cleaned is None:
+                continue
+            setattr(config, name, cleaned)
+            applied[name] = cleaned
+            continue
         expected_type = type(default) if default is not None else str
         try:
             if expected_type is bool:
@@ -1155,7 +1194,7 @@ def _apply_settings_payload(data: dict[str, Any]) -> tuple[dict[str, Any], str |
 
         applied: dict[str, Any] = {}
         for name in target_names:
-            default = _settings_defaults.get(name)
+            default = copy.deepcopy(_settings_defaults.get(name))
             setattr(config, name, default)
             applied[name] = default
 
@@ -1193,7 +1232,15 @@ def _apply_settings_payload(data: dict[str, Any]) -> tuple[dict[str, Any], str |
     for name, value in settings_data.items():
         if name not in config.STUDIO_SETTINGS:
             continue
+        meta = config.STUDIO_SETTINGS[name]
         default = _settings_defaults.get(name)
+        if meta.get("type") == "mark_categories":
+            cleaned = _coerce_mark_categories(value)
+            if cleaned is None:
+                return {}, f"Invalid {name} payload"
+            setattr(config, name, cleaned)
+            applied[name] = cleaned
+            continue
         expected_type = type(default) if default is not None else str
         try:
             if expected_type is bool:
