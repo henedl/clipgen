@@ -170,19 +170,6 @@
 
   // ---- Helpers ----
 
-  function formatDuration(secs) {
-    secs = Math.round(secs);
-    if (secs >= 3600) {
-      var h = Math.floor(secs / 3600);
-      var m = Math.floor((secs % 3600) / 60);
-      var s = secs % 60;
-      return h + ":" + (m < 10 ? "0" : "") + m + ":" + (s < 10 ? "0" : "") + s;
-    }
-    var m2 = Math.floor(secs / 60);
-    var s2 = secs % 60;
-    return m2 + ":" + (s2 < 10 ? "0" : "") + s2;
-  }
-
   function formatTimestamp(secs) {
     var m = Math.floor(secs / 60);
     var s = secs % 60;
