@@ -190,7 +190,6 @@ def test_load_manifest_filters_malformed_entries(tmp_path, monkeypatch):
     good = _make_artifact("a4c2s0")
     bad = {"id": "a1", "type": "clip"}  # missing file, start, end
     raw_data = {
-        "schema": config.MANIFEST_SCHEMA,
         "meta": {},
         "artifacts": [bad, good],
         "timeline": {"duration": 0, "startOffset": 0},
@@ -206,7 +205,6 @@ def test_save_manifest_does_not_preserve_preexisting_malformed(tmp_path, monkeyp
     # Seed manifest with a malformed artifact
     bad = {"id": "ghost", "type": "clip"}
     raw_data = {
-        "schema": config.MANIFEST_SCHEMA,
         "meta": {},
         "artifacts": [bad],
         "timeline": {"duration": 0, "startOffset": 0},

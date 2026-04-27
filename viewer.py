@@ -489,20 +489,6 @@ def _load_manifest_both() -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
             _manifest_cache["reels"] = []
         return ([], [])
 
-    schema = data.get("schema")
-    if schema != config.MANIFEST_SCHEMA:
-        utils.warning_print(
-            f"Manifest schema {schema} does not match expected "
-            f"{config.MANIFEST_SCHEMA}; ignoring legacy entries.",
-            ["Re-run clipgen to regenerate the manifest in the current schema."],
-        )
-        with _MANIFEST_CACHE_LOCK:
-            _manifest_cache["path"] = path_str
-            _manifest_cache["mtime_ns"] = mtime_ns
-            _manifest_cache["artifacts"] = []
-            _manifest_cache["reels"] = []
-        return ([], [])
-
     raw = data.get("artifacts", [])
     valid = [a for a in raw if _is_valid_artifact(a)]
     if len(valid) < len(raw):
@@ -570,7 +556,6 @@ def save_manifest(
         mode=mode,
         output_format=output_format,
     )
-    data["schema"] = config.MANIFEST_SCHEMA
 
     result = utils.save_json_manifest(
         config.MANIFEST_FILENAME, data, warn_label="manifest"

@@ -629,8 +629,8 @@
       var raw = sessionStorage.getItem(QUEUE_STORAGE_KEY);
       if (!raw) return;
       var saved = JSON.parse(raw);
-      if (saved.artifactQueue) state.artifactQueue = saved.artifactQueue.map(migrateStashItem);
-      if (saved.reelQueue) state.reelQueue = saved.reelQueue.map(migrateStashItem);
+      if (saved.artifactQueue) state.artifactQueue = saved.artifactQueue;
+      if (saved.reelQueue) state.reelQueue = saved.reelQueue;
     } catch (e) { /* ignore parse errors */ }
   }
 
@@ -2035,19 +2035,8 @@
       .catch(function () {});
   }
 
-  // Normalize legacy stash items written before queue items moved to {start, end}.
-  function migrateStashItem(item) {
-    if (item.start === undefined && item.segStart !== undefined) {
-      item.start = item.segStart;
-      item.end = item.segStart + (item.segDuration || 0);
-      delete item.segStart;
-      delete item.segDuration;
-    }
-    return item;
-  }
-
   function recallStash(stash) {
-    state.reelQueue = stash.items.slice().map(migrateStashItem);
+    state.reelQueue = stash.items.slice();
     renderReelQueue();
     updateCellClasses();
   }
@@ -2214,7 +2203,7 @@
   }
 
   function recallArtifactStash(stash) {
-    state.artifactQueue = stash.items.slice().map(migrateStashItem);
+    state.artifactQueue = stash.items.slice();
     renderArtifactQueue();
     updateCellClasses();
   }
