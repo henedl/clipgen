@@ -96,9 +96,10 @@ def test_build_artifact_records_for_clip_and_finalize_timeline_data(
         "category": "CatA",
         "desc": "Obs one",
         "cell_annotations": ["key"],
+        "times": [("00:10", "00:20")],
     }
     base_video = "study_P01.mp4"
-    segment_details = [("out_1.mp4", "00:10", "00:20")]
+    segment_details = [("out_1.mp4", 0)]
 
     artifacts = viewer.build_artifact_records_for_clip(
         clip,

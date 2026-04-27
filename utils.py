@@ -756,6 +756,79 @@ def safe_cell_a1(row: int | None, col: int | None) -> str:
         return ""
 
 
+def _clip_metadata_fields(
+    clip: "ClipRecord", base_video: str, start_str: str, end_str: str
+) -> dict[str, Any]:
+    """Extract the shared per-segment metadata that every persisted record needs.
+
+    Used by both ``build_artifact_record`` (manifest artifacts) and
+    ``build_reel_component`` (reel-component records). The two shapes only differ
+    by file-specific fields (id/file/type/thumbnail), so the body of every
+    persisted record flows from one place.
+    """
+    cell = clip.get("cell")
+    cell_row = getattr(cell, "row", None)
+    cell_col = getattr(cell, "col", None)
+    return {
+        "start": timestamp_to_seconds(start_str),
+        "end": timestamp_to_seconds(end_str),
+        "study": clip.get("study", ""),
+        "participant": clip.get("participant", ""),
+        "category": clip.get("category", ""),
+        "severity": clip.get("severity", ""),
+        "description": clip.get("desc", ""),
+        "cellRow": cell_row,
+        "cellCol": cell_col,
+        "cellA1": safe_cell_a1(cell_row, cell_col),
+        "annotations": list(clip.get("cell_annotations", [])),
+        "sourceVideo": base_video,
+    }
+
+
+def build_artifact_record(
+    clip: "ClipRecord",
+    base_video: str,
+    out_path: str,
+    start_str: str,
+    end_str: str,
+    *,
+    artifact_type: str,
+    seg_idx: int,
+) -> dict[str, Any]:
+    """Build one artifact dict from a clip record + one segment.
+
+    Single source of truth for the artifact record shape used by clipgen_manifest
+    and the timeline viewer. Callers may add or override fields after the call
+    (e.g. transcripts append ``transcriptFormat``).
+    """
+    cell = clip.get("cell")
+    cell_row = getattr(cell, "row", None)
+    cell_col = getattr(cell, "col", None)
+    return {
+        "id": f"a{cell_row or 0}c{cell_col or 0}s{seg_idx}",
+        "type": artifact_type,
+        "file": Path(out_path).name,
+        "thumbnail": "",
+        **_clip_metadata_fields(clip, base_video, start_str, end_str),
+    }
+
+
+def build_reel_component(
+    clip: "ClipRecord",
+    base_video: str,
+    start_str: str,
+    end_str: str,
+) -> dict[str, Any]:
+    """Build one reel-component dict from a clip record + one segment.
+
+    Reel components describe an input segment used to assemble a reel — they
+    share the artifact record's per-segment metadata shape but omit the
+    file/id/type fields (the rendered output is the reel itself, not the
+    component). Stored in the ``components`` list of a reel manifest entry.
+    """
+    return _clip_metadata_fields(clip, base_video, start_str, end_str)
+
+
 # ---- Timestamp parsing pipeline ----
 #
 # Reading order: token splitting/cleaning → add_duration → _parse_single_timestamp_token

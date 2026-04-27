@@ -28,6 +28,7 @@
 - If a problem is reoccurring and survives fix attempts, check git logs for clues.
 - Never edit .gitignore automatically, always confirm changes to this file with the user.
 - When working through a plan file, e.g. FEATURE-PLAN.md, always make sure to check off items after they are completed.
+- **No backwards-compatibility layers.** Do not add migration shims, schema-version checks for hard-break detection, legacy-format readers, or "warn and ignore" branches for old persisted state (manifests, stashes, sessionStorage queues, settings files, etc.). The user base is small and the work is ephemeral; just change the shape and let users re-run. Tests covering persisted shapes get updated to the new shape, not gated behind a version flag.
 
 ## Learned Workspace Facts
 

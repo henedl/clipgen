@@ -125,8 +125,8 @@
         desc: info.desc,
         timestamp: info.timestamp,
         segIdx: i,
-        segStart: segments[i].startSeconds,
-        segDuration: segments[i].duration,
+        start: segments[i].startSeconds,
+        end: segments[i].startSeconds + segments[i].duration,
         segTotal: segments.length,
       });
     }
@@ -178,7 +178,8 @@
   function findOverlappingData(participant, start, end) {
     var result = { transcriptSnippets: [], screenspaceEvents: [], sheetObservations: [] };
 
-    // Transcript marks/clusters
+    // Transcript marks/clusters — keep a small projection because `text` has
+    // fallback logic (text || label) that consumers expect already resolved.
     for (var i = 0; i < state.trIntakeClusters.length; i++) {
       var tc = state.trIntakeClusters[i];
       if (tc.participant === participant && tc.start < end && tc.end > start) {
@@ -186,15 +187,16 @@
       }
     }
 
-    // Screenspace event clusters
+    // Screenspace event clusters — pass through the original object; consumers
+    // only read detector / event_type and the extra fields are harmless.
     for (var j = 0; j < state.intakeClusters.length; j++) {
       var sc = state.intakeClusters[j];
       if (sc.participant === participant && sc.start < end && sc.end > start) {
-        result.screenspaceEvents.push({ detector: sc.detector, event_type: sc.event_type, start: sc.start, end: sc.end });
+        result.screenspaceEvents.push(sc);
       }
     }
 
-    // Sheet observations
+    // Sheet observations — pass through the row directly.
     if (state.sheetData && state.sheetData.rows) {
       for (var k = 0; k < state.sheetData.rows.length; k++) {
         var row = state.sheetData.rows[k];
@@ -204,7 +206,7 @@
         for (var s = 0; s < segs.length; s++) {
           var segEnd = segs[s].startSeconds + segs[s].duration;
           if (segs[s].startSeconds < end && segEnd > start) {
-            result.sheetObservations.push({ observation: row.observation, category: row.category, severity: row.severity });
+            result.sheetObservations.push(row);
             break;
           }
         }
@@ -1655,8 +1657,8 @@
           desc: reelItem.desc,
           timestamp: reelItem.timestamp,
           segIdx: reelItem.segIdx,
-          segStart: reelItem.segStart,
-          segDuration: reelItem.segDuration,
+          start: reelItem.start,
+          end: reelItem.end,
           segTotal: reelItem.segTotal,
           source: "reel",
         };
@@ -1716,15 +1718,6 @@
     for (var i = 0; i < n; i++) {
       var item = state.artifactQueue[i];
       var isIntake = isIntakeSource(item.source);
-      var segStart, segDuration;
-      if (item.segStart !== undefined && item.segDuration !== undefined) {
-        segStart = item.segStart;
-        segDuration = item.segDuration;
-      } else {
-        var parsed = parseClipTimestamps(item.timestamp, item.participant)[0];
-        segStart = parsed.startSeconds;
-        segDuration = parsed.duration;
-      }
       var segTotal = item.segTotal || 1;
       var segIdx = item.segIdx || 0;
 
@@ -1739,8 +1732,8 @@
           var data = {
             participant: itm.participant,
             desc: itm.desc,
-            segStart: itm.segStart,
-            segDuration: itm.segDuration,
+            start: itm.start,
+            end: itm.end,
             source: isI ? itm.source : "artifact",
           };
           if (!isI) {
@@ -1765,9 +1758,9 @@
       img.draggable = false;
       thumb.appendChild(img);
       if (isIntake) {
-        ssObserveThumb(card, img, thumb, item.participant, segStart);
+        ssObserveThumb(card, img, thumb, item.participant, item.start);
       } else {
-        img.src = "api/thumbnail/" + encodeURIComponent(item.participant) + "/" + segStart;
+        img.src = "api/thumbnail/" + encodeURIComponent(item.participant) + "/" + item.start;
         img.loading = "lazy";
         (function (cardEl, thumbEl) {
           img.addEventListener("error", function () {
@@ -1777,7 +1770,7 @@
           });
         })(card, thumb);
       }
-      thumb.appendChild(el("span", "queue-card-duration", formatDuration(segDuration)));
+      thumb.appendChild(el("span", "queue-card-duration", formatDuration(item.end - item.start)));
       if (isIntake) {
         var ssBadge = el("span", "queue-card-source-badge");
         if (item.source === "transcript") {
@@ -1850,15 +1843,7 @@
     for (var i = 0; i < n; i++) {
       var item = state.reelQueue[i];
       var isIntake = isIntakeSource(item.source);
-      var segStart, segDuration;
-      if (item.segStart !== undefined && item.segDuration !== undefined) {
-        segStart = item.segStart;
-        segDuration = item.segDuration;
-      } else {
-        var parsed = parseClipTimestamps(item.timestamp, item.participant)[0];
-        segStart = parsed.startSeconds;
-        segDuration = parsed.duration;
-      }
+      var segDuration = item.end - item.start;
       var segTotal = item.segTotal || 1;
       var segIdx = item.segIdx || 0;
       totalDur += segDuration;
@@ -1877,9 +1862,9 @@
       img.draggable = false;
       thumb.appendChild(img);
       if (isIntake) {
-        ssObserveThumb(card, img, thumb, item.participant, segStart);
+        ssObserveThumb(card, img, thumb, item.participant, item.start);
       } else {
-        img.src = "api/thumbnail/" + encodeURIComponent(item.participant) + "/" + segStart;
+        img.src = "api/thumbnail/" + encodeURIComponent(item.participant) + "/" + item.start;
         img.loading = "lazy";
         (function (cardEl, thumbEl) {
           img.addEventListener("error", function () {
@@ -2023,12 +2008,7 @@
   function computeReelDuration(items) {
     var total = 0;
     for (var i = 0; i < items.length; i++) {
-      var dur = items[i].segDuration;
-      if (dur === undefined || dur === null) {
-        var segs = parseClipTimestamps(items[i].timestamp, items[i].participant);
-        dur = segs.length > 0 ? segs[0].duration : 0;
-      }
-      total += dur || 0;
+      total += Math.max(0, items[i].end - items[i].start);
     }
     return total;
   }
@@ -2558,8 +2538,8 @@
       var intakePayload = intakeItems.map(function (itm) {
         return {
           participant: itm.participant,
-          start: itm.segStart,
-          end: itm.segStart + itm.segDuration,
+          start: itm.start,
+          end: itm.end,
           event_type: itm.event_type || itm.desc || "",
           event_ids: itm.event_ids || [],
           source: itm.source || "screenspace",
@@ -2623,19 +2603,10 @@
       var segments = [];
       for (var si = 0; si < state.reelQueue.length; si++) {
         var item = state.reelQueue[si];
-        var segStart, segDuration;
-        if (item.segStart !== undefined && item.segDuration !== undefined) {
-          segStart = item.segStart;
-          segDuration = item.segDuration;
-        } else {
-          var parsed = parseClipTimestamps(item.timestamp, item.participant)[0];
-          segStart = parsed.startSeconds;
-          segDuration = parsed.duration;
-        }
         segments.push({
           participant: item.participant,
-          start: segStart,
-          end: segStart + segDuration,
+          start: item.start,
+          end: item.end,
           source: item.source || "screenspace",
         });
       }
@@ -3603,8 +3574,8 @@
           ev.dataTransfer.setData("application/json", JSON.stringify({
             participant: cluster.participant,
             desc: cluster.event_type,
-            segStart: cluster.start,
-            segDuration: cluster.end - cluster.start,
+            start: cluster.start,
+            end: cluster.end,
             source: "screenspace",
             event_type: cluster.event_type,
             event_ids: cluster.events.map(function (e) { return e.id; }),
@@ -3621,8 +3592,8 @@
   function intakeAddToArtifacts(cluster) {
     state.artifactQueue.push({
       participant: cluster.participant,
-      segStart: cluster.start,
-      segDuration: cluster.end - cluster.start,
+      start: cluster.start,
+      end: cluster.end,
       desc: cluster.event_type,
       source: "screenspace",
       event_type: cluster.event_type,
@@ -3641,8 +3612,8 @@
   function intakeAddToReel(cluster) {
     state.reelQueue.push({
       participant: cluster.participant,
-      segStart: cluster.start,
-      segDuration: cluster.end - cluster.start,
+      start: cluster.start,
+      end: cluster.end,
       desc: cluster.event_type,
       source: "screenspace",
       event_type: cluster.event_type,
@@ -4058,8 +4029,8 @@
           ev.dataTransfer.setData("application/json", JSON.stringify({
             participant: cluster.participant,
             desc: cluster.category || "transcript",
-            segStart: cluster.start,
-            segDuration: cluster.end - cluster.start,
+            start: cluster.start,
+            end: cluster.end,
             source: "transcript",
             mark_ids: cluster.marks.map(function (m) { return m.id; }),
           }));
@@ -4077,8 +4048,8 @@
   function trIntakeAddToArtifacts(cluster) {
     state.artifactQueue.push({
       participant: cluster.participant,
-      segStart: cluster.start,
-      segDuration: cluster.end - cluster.start,
+      start: cluster.start,
+      end: cluster.end,
       desc: cluster.category || "transcript",
       source: "transcript",
       mark_ids: cluster.marks.map(function (m) { return m.id; }),
@@ -4089,8 +4060,8 @@
   function trIntakeAddToReel(cluster) {
     state.reelQueue.push({
       participant: cluster.participant,
-      segStart: cluster.start,
-      segDuration: cluster.end - cluster.start,
+      start: cluster.start,
+      end: cluster.end,
       desc: cluster.category || "transcript",
       source: "transcript",
       mark_ids: cluster.marks.map(function (m) { return m.id; }),

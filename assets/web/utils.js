@@ -144,6 +144,16 @@ var formatTime = function (sec) {
   return m + ":" + pad2(s);
 };
 
+var artifactDurationSec = function (a) {
+  var s = Number(a.start);
+  var e = Number(a.end);
+  if (isNaN(s)) s = 0;
+  if (isNaN(e)) e = isNaN(s) ? 0 : s;
+  var d = e - s;
+  if (isNaN(d) || d < 0) return 0;
+  return d;
+};
+
 var truncate = function (str, max) {
   if (!str) return "";
   return str.length > max ? str.slice(0, max) + "\u2026" : str;

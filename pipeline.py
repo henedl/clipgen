@@ -168,7 +168,7 @@ def _process_single_clip_segments(
     output_format: str = "clip",
     collect_paths: bool = False,
     include_severity: bool = False,
-) -> tuple[int, list[tuple[str, str, str]]]:
+) -> tuple[int, list[tuple[str, int]]]:
     """Process one clip's segments: run ffmpeg for each (start, end), optionally collect output paths.
 
     Caller must have already called prepare_clip(clip). Does not add to missing_videos; caller handles that.
@@ -178,14 +178,16 @@ def _process_single_clip_segments(
         base_video: Path to source video file
         missing_videos: Set of already-reported missing paths (read-only here)
         filename_prefix: Prefix for output filename (e.g. '_reel_part_' for reel)
-        collect_paths: If True, return list of output paths; otherwise return empty list
+        collect_paths: If True, return list of (output_path, time_index) pairs; otherwise return empty list
         include_severity: If True and clip has severity, include [Severity] in filename
 
     Returns:
-        (number of segments successfully generated, list of output paths if collect_paths else [])
+        (number of segments successfully generated, list of (out_path, time_index) pairs
+        if collect_paths else []). The ``time_index`` indexes into ``clip['times']``;
+        downstream callers look up start/end strings there rather than carrying duplicates.
     """
     generated = 0
-    output_paths: list[tuple[str, str, str]] = []
+    output_paths: list[tuple[str, int]] = []
     extension_map = {
         "clip": config.FILEFORMAT,
         "screen": config.SCREENSHOT_FORMAT,
@@ -209,7 +211,7 @@ def _process_single_clip_segments(
         if props:
             source_resolution = f"{props['width']}x{props['height']}"
 
-    for start_time, end_time in clip["times"]:
+    for time_idx, (start_time, end_time) in enumerate(clip["times"]):
         try:
             out_name = files.get_unique_filename(template, file_format=file_extension)
             if config.DEBUGGING:
@@ -253,7 +255,7 @@ def _process_single_clip_segments(
         if ok:
             generated += 1
             if collect_paths:
-                output_paths.append((out_name, start_time, end_time))
+                output_paths.append((out_name, time_idx))
     return (generated, output_paths)
 
 
@@ -393,13 +395,14 @@ def _embed_transcript_on_artifacts(
     clip: Any,
     base_video: str,
     artifacts: list[dict[str, Any]],
-    segment_details: list[tuple[str, str, str]],
+    segment_details: list[tuple[str, int]],
     transcript_cache: dict[str, Any],
     transcripts_manifest: dict[str, Any] | None = None,
 ) -> None:
     """Embed transcript segments on clip artifact records.
 
     Source priority: transcripts manifest -> in-memory cache. Modifies artifacts in-place.
+    ``segment_details`` is a list of (out_path, time_index) pairs aligned to ``artifacts``.
     """
 
     participant = clip.get("participant", "")
@@ -426,9 +429,11 @@ def _embed_transcript_on_artifacts(
     if not full_transcript:
         return
 
-    for art_idx, (_out_path, start_str, end_str) in enumerate(segment_details):
+    times = clip.get("times", [])
+    for art_idx, (_out_path, time_idx) in enumerate(segment_details):
         if art_idx >= len(artifacts):
             break
+        start_str, end_str = times[time_idx]
         start_sec = utils.timestamp_to_seconds(start_str) or 0.0
         end_sec = utils.timestamp_to_seconds(end_str) or 0.0
         clipped = transcripts.filter_segments(
@@ -453,12 +458,16 @@ def _embed_transcript_on_artifacts(
 def _transcribe_segments(
     clip: Any,
     base_video: str,
-    segment_details: list[tuple[str, str, str]],
+    segment_details: list[tuple[str, int]],
     all_artifacts: list[dict[str, Any]],
     transcript_cache: dict[str, Any],
     transcripts_manifest: dict[str, Any] | None = None,
 ) -> None:
-    """Transcribe segments of a clip and write transcript files."""
+    """Transcribe segments of a clip and write transcript files.
+
+    ``segment_details`` is a list of (out_path, time_index) pairs;
+    start/end strings are looked up via ``clip['times'][time_index]``.
+    """
     if base_video not in transcript_cache:
         participant = clip.get("participant", "")
         manifest = transcripts_manifest or transcripts.load_transcripts_manifest()
@@ -487,13 +496,10 @@ def _transcribe_segments(
         return
 
     ext = transcripts.get_transcript_extension()
-    cell = clip.get("cell")
-    cell_row = getattr(cell, "row", None)
-    cell_col = getattr(cell, "col", None)
-    cell_a1 = utils.safe_cell_a1(cell_row, cell_col)
-    annotations = list(clip.get("cell_annotations", []))
+    times = clip.get("times", [])
 
-    for seg_idx, (out_path, start_str, end_str) in enumerate(segment_details):
+    for seg_idx, (out_path, time_idx) in enumerate(segment_details):
+        start_str, end_str = times[time_idx]
         start_sec = utils.timestamp_to_seconds(start_str) or 0.0
         end_sec = utils.timestamp_to_seconds(end_str) or 0.0
         clipped = transcripts.filter_segments(
@@ -501,27 +507,18 @@ def _transcribe_segments(
         )
         t_path = files.get_unique_filename(Path(out_path).stem + ext, file_format=ext)
         if transcripts.write_transcript(clipped, t_path):
-            all_artifacts.append(
-                {
-                    "id": f"a{cell_row}c{cell_col}s{seg_idx}_transcript",
-                    "type": "transcript",
-                    "file": Path(t_path).name,
-                    "start": start_sec,
-                    "end": end_sec,
-                    "thumbnail": "",
-                    "study": clip.get("study", ""),
-                    "participant": clip.get("participant", ""),
-                    "category": clip.get("category", ""),
-                    "severity": clip.get("severity", ""),
-                    "description": clip.get("desc", ""),
-                    "cellRow": cell_row,
-                    "cellCol": cell_col,
-                    "cellA1": cell_a1,
-                    "annotations": annotations,
-                    "sourceVideo": base_video,
-                    "transcriptFormat": config.TRANSCRIBE_FORMAT,
-                }
+            artifact = utils.build_artifact_record(
+                clip,
+                base_video,
+                t_path,
+                start_str,
+                end_str,
+                artifact_type="transcript",
+                seg_idx=seg_idx,
             )
+            artifact["id"] += "_transcript"
+            artifact["transcriptFormat"] = config.TRANSCRIBE_FORMAT
+            all_artifacts.append(artifact)
 
 
 def process_clips(
@@ -605,11 +602,9 @@ def process_clips(
     # -- Phase 2: Execute ffmpeg work ------------------------------------------
     workers = _resolve_clip_workers()
     use_parallel = workers >= 2 and len(prepared) >= 2
-    _EMPTY_RESULT: tuple[int, list[tuple[str, str, str]]] = (0, [])
+    _EMPTY_RESULT: tuple[int, list[tuple[str, int]]] = (0, [])
     # Pre-allocate results in original order for deterministic artifact output
-    results: list[tuple[int, list[tuple[str, str, str]]]] = [_EMPTY_RESULT] * len(
-        prepared
-    )
+    results: list[tuple[int, list[tuple[str, int]]]] = [_EMPTY_RESULT] * len(prepared)
 
     if use_parallel:
         progress = utils.create_progress_bar()
@@ -898,7 +893,7 @@ def process_reel(
 
     def process_reel_clip(
         clip: Any, missing_videos: set[str]
-    ) -> tuple[list[tuple[str, str, str]], list[dict[str, Any]]]:
+    ) -> tuple[list[tuple[str, int]], list[dict[str, Any]]]:
         """Process one clip for reel mode and return (segment_paths, component_dicts)."""
         clip, base_video = _prepare_and_check_clip(clip, missing_videos, fuzzy_matches)
         if base_video is None:
@@ -910,21 +905,11 @@ def process_reel(
             filename_prefix="_reel_part_",
             collect_paths=True,
         )
-        clip_components = []
-        for _out_path, start_str, end_str in segment_paths:
-            clip_components.append(
-                {
-                    "cellRow": getattr(clip.get("cell"), "row", None),
-                    "cellCol": getattr(clip.get("cell"), "col", None),
-                    "participant": clip.get("participant", ""),
-                    "sourceVideo": base_video,
-                    "start": utils.timestamp_to_seconds(start_str),
-                    "end": utils.timestamp_to_seconds(end_str),
-                    "category": clip.get("category", ""),
-                    "description": clip.get("desc", ""),
-                    "severity": clip.get("severity", ""),
-                }
-            )
+        times = clip.get("times", [])
+        clip_components = [
+            utils.build_reel_component(clip, base_video, *times[time_idx])
+            for _out_path, time_idx in segment_paths
+        ]
         return (segment_paths, clip_components)
 
     all_results, _ = _run_clip_pipeline(
