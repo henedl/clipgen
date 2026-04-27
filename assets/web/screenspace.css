@@ -31,6 +31,31 @@ body {
   display: none !important;
 }
 
+/* Task-type icons (mask-image, color follows currentColor).
+ * Used in tooltip headers, multitool step badges, and result rows. */
+.ss-task-icon {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  background-color: currentColor;
+  mask-size: contain;
+  mask-repeat: no-repeat;
+  mask-position: center;
+  -webkit-mask-size: contain;
+  -webkit-mask-repeat: no-repeat;
+  -webkit-mask-position: center;
+}
+.ss-task-icon--multitool   { mask-image: url(icons/wrench-screwdriver.svg);  -webkit-mask-image: url(icons/wrench-screwdriver.svg); }
+.ss-task-icon--color       { mask-image: url(icons/eye-dropper.svg);         -webkit-mask-image: url(icons/eye-dropper.svg); }
+.ss-task-icon--change      { mask-image: url(icons/bolt.svg);                -webkit-mask-image: url(icons/bolt.svg); }
+.ss-task-icon--similarity  { mask-image: url(icons/photo.svg);               -webkit-mask-image: url(icons/photo.svg); }
+.ss-task-icon--text        { mask-image: url(icons/language.svg);            -webkit-mask-image: url(icons/language.svg); }
+.ss-task-icon--numbers     { mask-image: url(icons/hashtag.svg);             -webkit-mask-image: url(icons/hashtag.svg); }
+.ss-task-icon--template    { mask-image: url(icons/viewfinder-circle.svg);   -webkit-mask-image: url(icons/viewfinder-circle.svg); }
+.ss-task-icon--flow        { mask-image: url(icons/arrows-right-left.svg);   -webkit-mask-image: url(icons/arrows-right-left.svg); }
+.ss-task-icon--scene       { mask-image: url(icons/squares-2x2.svg);         -webkit-mask-image: url(icons/squares-2x2.svg); }
+.ss-task-icon--inactivity  { mask-image: url(icons/pause-circle.svg);        -webkit-mask-image: url(icons/pause-circle.svg); }
+
 /* Header */
 
 #ssHeader {
