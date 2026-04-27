@@ -2367,251 +2367,233 @@
     regionRow.appendChild(regionCtrl);
     body.appendChild(regionRow);
 
-    if (stepType === "color") {
-      var row1 = el("div", "param-row");
-      row1.appendChild(el("span", "param-label", "Hex color"));
-      var ctrl1 = el("div", "param-control");
-      var hexIn = document.createElement("input");
-      hexIn.type = "text"; hexIn.id = "paramColorHex" + sfx; hexIn.autocomplete = "off";
-      hexIn.className = "color-hex-input"; hexIn.placeholder = "#000000"; hexIn.maxLength = 7;
-      hexIn.style.width = "5.5rem";
-      ctrl1.appendChild(hexIn);
-      // Pipette button for multitool color step
-      var pipBtn = el("button", "btn btn-small btn-pipette");
-      pipBtn.title = "Pick color from frame";
-      pipBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path fill-rule="evenodd" clip-rule="evenodd" d="M15 4C15 5.39788 14.0439 6.57245 12.75 6.90549V8.5C12.75 8.69891 12.671 8.88968 12.5303 9.03033L12.0303 9.53033C11.7374 9.82322 11.2626 9.82322 10.9697 9.53033L10.25 8.81069L5.57322 13.4875C5.24503 13.8157 4.79992 14.0001 4.33579 14.0001H3.66421C3.59791 14.0001 3.53432 14.0264 3.48744 14.0733L2.78033 14.7804C2.63968 14.921 2.44891 15.0001 2.25 15.0001C2.05109 15.0001 1.86032 14.921 1.71967 14.7804L1.21967 14.2804C0.926777 13.9875 0.926777 13.5126 1.21967 13.2197L1.92678 12.5126C1.97366 12.4657 2 12.4021 2 12.3358V11.6643C2 11.2001 2.18437 10.755 2.51256 10.4268L7.18937 5.75003L6.46967 5.03033C6.17678 4.73744 6.17678 4.26256 6.46967 3.96967L6.96967 3.46967C7.11032 3.32902 7.30109 3.25 7.5 3.25H9.09451C9.42755 1.95608 10.6021 1 12 1C13.6569 1 15 2.34315 15 4ZM9.18937 7.75003L8.25003 6.81069L3.57322 11.4875C3.52634 11.5344 3.5 11.598 3.5 11.6643V12.3358C3.5 12.3938 3.49713 12.4514 3.49146 12.5086C3.54862 12.5029 3.60627 12.5001 3.66421 12.5001H4.33579C4.40209 12.5001 4.46568 12.4737 4.51256 12.4268L9.18937 7.75003Z"/></svg>';
-      (function(capturedIdx) {
-        pipBtn.addEventListener("click", function() {
-          if (state.pipetteActive) { deactivatePipette(); return; }
-          state._mtPipetteStep = capturedIdx;
-          activatePipette();
-        });
-      })(idx);
-      ctrl1.appendChild(pipBtn);
-      // Hidden HSV fields
-      var hH = document.createElement("input"); hH.type = "hidden"; hH.id = "paramColorH" + sfx; hH.value = "0";
-      var hS = document.createElement("input"); hS.type = "hidden"; hS.id = "paramColorS" + sfx; hS.value = "0";
-      var hV = document.createElement("input"); hV.type = "hidden"; hV.id = "paramColorV" + sfx; hV.value = "0";
-      ctrl1.appendChild(hH); ctrl1.appendChild(hS); ctrl1.appendChild(hV);
-      row1.appendChild(ctrl1);
-      body.appendChild(row1);
-      // Listen for hex input changes to update hidden HSV
-      hexIn.addEventListener("input", function() {
-        var hex = hexIn.value.replace("#", "");
-        if (hex.length === 6) {
-          var r = parseInt(hex.substring(0, 2), 16) || 0;
-          var g = parseInt(hex.substring(2, 4), 16) || 0;
-          var b = parseInt(hex.substring(4, 6), 16) || 0;
-          // Convert RGB to HSV (OpenCV convention: H 0-180, S 0-255, V 0-255)
-          var rr = r / 255, gg = g / 255, bb = b / 255;
-          var mx = Math.max(rr, gg, bb), mn = Math.min(rr, gg, bb);
-          var d = mx - mn, h = 0, s = mx === 0 ? 0 : d / mx, v = mx;
-          if (d !== 0) {
-            if (mx === rr) h = ((gg - bb) / d + (gg < bb ? 6 : 0)) / 6;
-            else if (mx === gg) h = ((bb - rr) / d + 2) / 6;
-            else h = ((rr - gg) / d + 4) / 6;
-          }
-          hH.value = Math.round(h * 180);
-          hS.value = Math.round(s * 255);
-          hV.value = Math.round(v * 255);
-        }
-      });
-      var row2 = el("div", "param-row");
-      row2.appendChild(el("span", "param-label", "Tolerance"));
-      var ctrl2 = el("div", "param-control");
-      ctrl2.appendChild(numberInput("paramColorTol" + sfx, 0, 100, 30, 1));
-      row2.appendChild(ctrl2);
-      body.appendChild(row2);
-    } else if (stepType === "change") {
-      var r1 = el("div", "param-row");
-      r1.appendChild(el("span", "param-label", "Threshold"));
-      var c1 = el("div", "param-control");
-      c1.appendChild(numberInput("paramChangeThresh" + sfx, 0.01, 0.50, 0.03, 0.01));
-      r1.appendChild(c1);
-      body.appendChild(r1);
-      var r2 = el("div", "param-row");
-      r2.appendChild(el("span", "param-label", "Noise"));
-      var c2 = el("div", "param-control");
-      c2.appendChild(numberInput("paramChangeNoise" + sfx, 0, 100, 30, 1));
-      r2.appendChild(c2);
-      body.appendChild(r2);
-    } else if (stepType === "similarity") {
-      var r1 = el("div", "param-row");
-      r1.appendChild(el("span", "param-label", "Reference"));
-      var c1 = el("div", "param-control");
-      var capBtn = el("button", "btn btn-small", "Capture Frame");
-      var tsLabel = el("span", "param-value", "—");
-      tsLabel.id = "paramSimRef" + sfx;
-      if (state.multitoolSteps[idx]._refTs !== undefined) {
-        tsLabel.textContent = formatTimestamp(state.multitoolSteps[idx]._refTs);
-      }
-      capBtn.addEventListener("click", function () {
-        state.multitoolSteps[idx]._refTs = state.currentTimestamp;
-        tsLabel.textContent = formatTimestamp(state.currentTimestamp);
-      });
-      c1.appendChild(capBtn);
-      c1.appendChild(tsLabel);
-      r1.appendChild(c1);
-      body.appendChild(r1);
-      var r2 = el("div", "param-row");
-      r2.appendChild(el("span", "param-label", "Threshold"));
-      var c2 = el("div", "param-control");
-      c2.appendChild(numberInput("paramSimThresh" + sfx, 0.50, 1.00, 0.90, 0.01));
-      r2.appendChild(c2);
-      body.appendChild(r2);
-    } else if (stepType === "text") {
-      var r1 = el("div", "param-row");
-      r1.appendChild(el("span", "param-label", "Search"));
-      var c1 = el("div", "param-control");
-      var searchIn = document.createElement("input");
-      searchIn.type = "text"; searchIn.id = "paramTextSearch" + sfx; searchIn.autocomplete = "off";
-      searchIn.placeholder = "Search text...";
-      searchIn.style.flex = "1"; searchIn.style.fontSize = "var(--text-xs)";
-      searchIn.style.padding = "var(--space-1)";
-      searchIn.style.border = "1px solid var(--color-border)";
-      searchIn.style.borderRadius = "var(--radius-sm)";
-      searchIn.style.background = "var(--color-bg)";
-      searchIn.style.color = "var(--color-text)";
-      c1.appendChild(searchIn);
-      r1.appendChild(c1);
-      body.appendChild(r1);
-      var r2 = el("div", "param-row");
-      r2.appendChild(el("span", "param-label", "Fuzzy"));
-      var c2 = el("div", "param-control");
-      c2.appendChild(numberInput("paramTextFuzzy" + sfx, 0.50, 1.00, 0.80, 0.01));
-      r2.appendChild(c2);
-      body.appendChild(r2);
-    } else if (stepType === "numbers") {
-      var r1 = el("div", "param-row");
-      r1.appendChild(el("span", "param-label", "Operator"));
-      var c1 = el("div", "param-control");
-      var sel = document.createElement("select");
-      sel.id = "paramNumOperator" + sfx;
-      sel.style.fontSize = "var(--text-xs)";
-      [["gt",">"],["lt","<"],["eq","="],["gte","≥"],["lte","≤"],["range","range"]].forEach(function(pair) {
-        var opt = document.createElement("option"); opt.value = pair[0]; opt.textContent = pair[1];
-        sel.appendChild(opt);
-      });
-      c1.appendChild(sel);
-      r1.appendChild(c1);
-      body.appendChild(r1);
-      var r2 = el("div", "param-row");
-      r2.appendChild(el("span", "param-label", "Target"));
-      var c2 = el("div", "param-control");
-      var targetIn = document.createElement("input");
-      targetIn.type = "number"; targetIn.id = "paramNumTarget" + sfx; targetIn.style.width = "4rem";
-      targetIn.style.fontSize = "var(--text-xs)";
-      c2.appendChild(targetIn);
-      r2.appendChild(c2);
-      body.appendChild(r2);
-    } else if (stepType === "template") {
-      var r1 = el("div", "param-row");
-      r1.appendChild(el("span", "param-label", "Template"));
-      var c1 = el("div", "param-control");
-      var capBtn = el("button", "btn btn-small", "Capture Frame");
-      var tsLabel = el("span", "param-value", "—");
-      tsLabel.id = "paramTemplateRef" + sfx;
-      if (state.multitoolSteps[idx]._refTs !== undefined) {
-        tsLabel.textContent = formatTimestamp(state.multitoolSteps[idx]._refTs);
-      }
-      capBtn.addEventListener("click", function () {
-        state.multitoolSteps[idx]._refTs = state.currentTimestamp;
-        tsLabel.textContent = formatTimestamp(state.currentTimestamp);
-      });
-      c1.appendChild(capBtn);
-      c1.appendChild(tsLabel);
-      r1.appendChild(c1);
-      body.appendChild(r1);
-      var r2 = el("div", "param-row");
-      r2.appendChild(el("span", "param-label", "Threshold"));
-      var c2 = el("div", "param-control");
-      c2.appendChild(numberInput("paramTemplateThresh" + sfx, 0.50, 1.00, 0.70, 0.01));
-      r2.appendChild(c2);
-      body.appendChild(r2);
-    } else if (stepType === "flow") {
-      var r1 = el("div", "param-row");
-      r1.appendChild(el("span", "param-label", "Magnitude"));
-      var c1 = el("div", "param-control");
-      c1.appendChild(numberInput("paramFlowMag" + sfx, 0.5, 20, 2.0, 0.5));
-      r1.appendChild(c1);
-      body.appendChild(r1);
-    } else if (stepType === "scene") {
-      var sceneList = el("div", "scene-reference-list");
-      sceneList.id = "mtSceneList" + sfx;
-      if (!state.multitoolSteps[idx]._scenes) state.multitoolSteps[idx]._scenes = [];
-      var renderMtScenes = (function (listEl, stepIdx) {
-        return function () {
-          listEl.innerHTML = "";
-          state.multitoolSteps[stepIdx]._scenes.forEach(function (ref, refIdx) {
-            if (ref.threshold === undefined) ref.threshold = 0.75;
-            var item = el("div", "scene-ref-item");
-            item.appendChild(el("span", "scene-ref-name", ref.name));
-            item.appendChild(el("span", "param-value", formatTimestamp(ref.timestamp)));
-            var threshSlider = document.createElement("input");
-            threshSlider.type = "range";
-            threshSlider.min = "0.50";
-            threshSlider.max = "1.00";
-            threshSlider.step = "0.01";
-            threshSlider.value = String(ref.threshold);
-            threshSlider.className = "scene-ref-thresh";
-            var threshVal = el("span", "param-value", String(ref.threshold));
-            threshSlider.addEventListener("input", (function (si, ri) {
-              return function () {
-                state.multitoolSteps[si]._scenes[ri].threshold = parseFloat(threshSlider.value);
-                threshVal.textContent = threshSlider.value;
-              };
-            })(stepIdx, refIdx));
-            item.appendChild(threshSlider);
-            item.appendChild(threshVal);
-            var rmBtn = el("button", "btn btn-small", "\u00d7");
-            rmBtn.addEventListener("click", (function (si, ri) {
-              return function () {
-                state.multitoolSteps[si]._scenes.splice(ri, 1);
-                renderMtScenes();
-              };
-            })(stepIdx, refIdx));
-            item.appendChild(rmBtn);
-            listEl.appendChild(item);
-          });
-        };
-      })(sceneList, idx);
-      renderMtScenes();
-      body.appendChild(sceneList);
-      var addScRow = el("div", "param-row");
-      addScRow.appendChild(el("span", "param-label", "Add Scene"));
-      var addScCtrl = el("div", "param-control");
-      var scNameInp = textInput("paramSceneName" + sfx, "e.g. menu, gameplay");
-      addScCtrl.appendChild(scNameInp);
-      var scCapBtn = el("button", "btn btn-small", "Capture");
-      (function (capturedIdx, capturedRender, capturedNameInp) {
-        scCapBtn.addEventListener("click", function () {
-          var name = capturedNameInp.value.trim();
-          if (!name) { showToast("Enter a scene name"); return; }
-          state.multitoolSteps[capturedIdx]._scenes.push({
-            name: name, timestamp: state.currentTimestamp, threshold: 0.75
-          });
-          capturedNameInp.value = "";
-          capturedRender();
-          showToast("Scene '" + name + "' at " + formatTimestamp(state.currentTimestamp));
-        });
-      })(idx, renderMtScenes, scNameInp);
-      addScCtrl.appendChild(scCapBtn);
-      addScRow.appendChild(addScCtrl);
-      body.appendChild(addScRow);
-    } else if (stepType === "inactivity") {
-      var r1 = el("div", "param-row");
-      r1.appendChild(el("span", "param-label", "Sensitivity"));
-      var c1 = el("div", "param-control");
-      var inactSlider = rangeInput("paramInactThresh" + sfx, 0, 30, 10, 1);
-      c1.appendChild(inactSlider);
-      var inactVal = el("span", "param-value");
-      inactVal.textContent = inactSlider.value;
-      inactSlider.addEventListener("input", function () { inactVal.textContent = inactSlider.value; });
-      c1.appendChild(inactVal);
-      r1.appendChild(c1);
-      body.appendChild(r1);
-    }
+    var renderer = MULTITOOL_PARAM_RENDERERS[stepType];
+    if (renderer) renderer(body, idx, sfx);
   }
+
+  function _mtRenderColor(body, idx, sfx) {
+    var row1 = el("div", "param-row");
+    row1.appendChild(el("span", "param-label", "Hex color"));
+    var ctrl1 = el("div", "param-control");
+    var hexIn = document.createElement("input");
+    hexIn.type = "text"; hexIn.id = "paramColorHex" + sfx; hexIn.autocomplete = "off";
+    hexIn.className = "color-hex-input"; hexIn.placeholder = "#000000"; hexIn.maxLength = 7;
+    hexIn.style.width = "5.5rem";
+    ctrl1.appendChild(hexIn);
+    var pipBtn = el("button", "btn btn-small btn-pipette");
+    pipBtn.title = "Pick color from frame";
+    pipBtn.appendChild(buildTypeIcon("color"));
+    pipBtn.addEventListener("click", function () {
+      if (state.pipetteActive) { deactivatePipette(); return; }
+      state._mtPipetteStep = idx;
+      activatePipette();
+    });
+    ctrl1.appendChild(pipBtn);
+    var hH = document.createElement("input"); hH.type = "hidden"; hH.id = "paramColorH" + sfx; hH.value = "0";
+    var hS = document.createElement("input"); hS.type = "hidden"; hS.id = "paramColorS" + sfx; hS.value = "0";
+    var hV = document.createElement("input"); hV.type = "hidden"; hV.id = "paramColorV" + sfx; hV.value = "0";
+    ctrl1.appendChild(hH); ctrl1.appendChild(hS); ctrl1.appendChild(hV);
+    row1.appendChild(ctrl1);
+    body.appendChild(row1);
+    hexIn.addEventListener("input", function () {
+      var hex = hexIn.value.replace("#", "");
+      if (hex.length === 6) {
+        var r = parseInt(hex.substring(0, 2), 16) || 0;
+        var g = parseInt(hex.substring(2, 4), 16) || 0;
+        var b = parseInt(hex.substring(4, 6), 16) || 0;
+        // OpenCV HSV: H 0-180, S 0-255, V 0-255
+        var rr = r / 255, gg = g / 255, bb = b / 255;
+        var mx = Math.max(rr, gg, bb), mn = Math.min(rr, gg, bb);
+        var d = mx - mn, h = 0, s = mx === 0 ? 0 : d / mx, v = mx;
+        if (d !== 0) {
+          if (mx === rr) h = ((gg - bb) / d + (gg < bb ? 6 : 0)) / 6;
+          else if (mx === gg) h = ((bb - rr) / d + 2) / 6;
+          else h = ((rr - gg) / d + 4) / 6;
+        }
+        hH.value = Math.round(h * 180);
+        hS.value = Math.round(s * 255);
+        hV.value = Math.round(v * 255);
+      }
+    });
+    _mtAddNumberRow(body, "Tolerance", "paramColorTol" + sfx, 0, 100, 30, 1);
+  }
+
+  function _mtRenderChange(body, idx, sfx) {
+    _mtAddNumberRow(body, "Threshold", "paramChangeThresh" + sfx, 0.01, 0.50, 0.03, 0.01);
+    _mtAddNumberRow(body, "Noise", "paramChangeNoise" + sfx, 0, 100, 30, 1);
+  }
+
+  function _mtRenderSimilarity(body, idx, sfx) {
+    _mtAddCaptureRefRow(body, idx, "Reference", "paramSimRef" + sfx);
+    _mtAddNumberRow(body, "Threshold", "paramSimThresh" + sfx, 0.50, 1.00, 0.90, 0.01);
+  }
+
+  function _mtRenderText(body, idx, sfx) {
+    var r1 = el("div", "param-row");
+    r1.appendChild(el("span", "param-label", "Search"));
+    var c1 = el("div", "param-control");
+    var searchIn = document.createElement("input");
+    searchIn.type = "text"; searchIn.id = "paramTextSearch" + sfx; searchIn.autocomplete = "off";
+    searchIn.placeholder = "Search text...";
+    searchIn.style.flex = "1"; searchIn.style.fontSize = "var(--text-xs)";
+    searchIn.style.padding = "var(--space-1)";
+    searchIn.style.border = "1px solid var(--color-border)";
+    searchIn.style.borderRadius = "var(--radius-sm)";
+    searchIn.style.background = "var(--color-bg)";
+    searchIn.style.color = "var(--color-text)";
+    c1.appendChild(searchIn);
+    r1.appendChild(c1);
+    body.appendChild(r1);
+    _mtAddNumberRow(body, "Fuzzy", "paramTextFuzzy" + sfx, 0.50, 1.00, 0.80, 0.01);
+  }
+
+  function _mtRenderNumbers(body, idx, sfx) {
+    var r1 = el("div", "param-row");
+    r1.appendChild(el("span", "param-label", "Operator"));
+    var c1 = el("div", "param-control");
+    var sel = document.createElement("select");
+    sel.id = "paramNumOperator" + sfx;
+    sel.style.fontSize = "var(--text-xs)";
+    [["gt",">"],["lt","<"],["eq","="],["gte","≥"],["lte","≤"],["range","range"]].forEach(function (pair) {
+      var opt = document.createElement("option"); opt.value = pair[0]; opt.textContent = pair[1];
+      sel.appendChild(opt);
+    });
+    c1.appendChild(sel);
+    r1.appendChild(c1);
+    body.appendChild(r1);
+    var r2 = el("div", "param-row");
+    r2.appendChild(el("span", "param-label", "Target"));
+    var c2 = el("div", "param-control");
+    var targetIn = document.createElement("input");
+    targetIn.type = "number"; targetIn.id = "paramNumTarget" + sfx; targetIn.style.width = "4rem";
+    targetIn.style.fontSize = "var(--text-xs)";
+    c2.appendChild(targetIn);
+    r2.appendChild(c2);
+    body.appendChild(r2);
+  }
+
+  function _mtRenderTemplate(body, idx, sfx) {
+    _mtAddCaptureRefRow(body, idx, "Template", "paramTemplateRef" + sfx);
+    _mtAddNumberRow(body, "Threshold", "paramTemplateThresh" + sfx, 0.50, 1.00, 0.70, 0.01);
+  }
+
+  function _mtRenderFlow(body, idx, sfx) {
+    _mtAddNumberRow(body, "Magnitude", "paramFlowMag" + sfx, 0.5, 20, 2.0, 0.5);
+  }
+
+  function _mtRenderScene(body, idx, sfx) {
+    var sceneList = el("div", "scene-reference-list");
+    sceneList.id = "mtSceneList" + sfx;
+    if (!state.multitoolSteps[idx]._scenes) state.multitoolSteps[idx]._scenes = [];
+    function renderMtScenes() {
+      sceneList.innerHTML = "";
+      state.multitoolSteps[idx]._scenes.forEach(function (ref, refIdx) {
+        if (ref.threshold === undefined) ref.threshold = 0.75;
+        var item = el("div", "scene-ref-item");
+        item.appendChild(el("span", "scene-ref-name", ref.name));
+        item.appendChild(el("span", "param-value", formatTimestamp(ref.timestamp)));
+        var threshSlider = document.createElement("input");
+        threshSlider.type = "range";
+        threshSlider.min = "0.50"; threshSlider.max = "1.00"; threshSlider.step = "0.01";
+        threshSlider.value = String(ref.threshold);
+        threshSlider.className = "scene-ref-thresh";
+        var threshVal = el("span", "param-value", String(ref.threshold));
+        threshSlider.addEventListener("input", (function (ri) {
+          return function () {
+            state.multitoolSteps[idx]._scenes[ri].threshold = parseFloat(threshSlider.value);
+            threshVal.textContent = threshSlider.value;
+          };
+        })(refIdx));
+        item.appendChild(threshSlider);
+        item.appendChild(threshVal);
+        var rmBtn = el("button", "btn btn-small", "\u00d7");
+        rmBtn.addEventListener("click", (function (ri) {
+          return function () {
+            state.multitoolSteps[idx]._scenes.splice(ri, 1);
+            renderMtScenes();
+          };
+        })(refIdx));
+        item.appendChild(rmBtn);
+        sceneList.appendChild(item);
+      });
+    }
+    renderMtScenes();
+    body.appendChild(sceneList);
+    var addScRow = el("div", "param-row");
+    addScRow.appendChild(el("span", "param-label", "Add Scene"));
+    var addScCtrl = el("div", "param-control");
+    var scNameInp = textInput("paramSceneName" + sfx, "e.g. menu, gameplay");
+    addScCtrl.appendChild(scNameInp);
+    var scCapBtn = el("button", "btn btn-small", "Capture");
+    scCapBtn.addEventListener("click", function () {
+      var name = scNameInp.value.trim();
+      if (!name) { showToast("Enter a scene name"); return; }
+      state.multitoolSteps[idx]._scenes.push({
+        name: name, timestamp: state.currentTimestamp, threshold: 0.75,
+      });
+      scNameInp.value = "";
+      renderMtScenes();
+      showToast("Scene '" + name + "' at " + formatTimestamp(state.currentTimestamp));
+    });
+    addScCtrl.appendChild(scCapBtn);
+    addScRow.appendChild(addScCtrl);
+    body.appendChild(addScRow);
+  }
+
+  function _mtRenderInactivity(body, idx, sfx) {
+    var r1 = el("div", "param-row");
+    r1.appendChild(el("span", "param-label", "Sensitivity"));
+    var c1 = el("div", "param-control");
+    var inactSlider = rangeInput("paramInactThresh" + sfx, 0, 30, 10, 1);
+    c1.appendChild(inactSlider);
+    var inactVal = el("span", "param-value");
+    inactVal.textContent = inactSlider.value;
+    inactSlider.addEventListener("input", function () { inactVal.textContent = inactSlider.value; });
+    c1.appendChild(inactVal);
+    r1.appendChild(c1);
+    body.appendChild(r1);
+  }
+
+  // Helpers used by multiple per-type renderers above.
+  function _mtAddNumberRow(body, label, id, min, max, def, step) {
+    var r = el("div", "param-row");
+    r.appendChild(el("span", "param-label", label));
+    var c = el("div", "param-control");
+    c.appendChild(numberInput(id, min, max, def, step));
+    r.appendChild(c);
+    body.appendChild(r);
+  }
+  function _mtAddCaptureRefRow(body, idx, label, tsLabelId) {
+    var r = el("div", "param-row");
+    r.appendChild(el("span", "param-label", label));
+    var c = el("div", "param-control");
+    var capBtn = el("button", "btn btn-small", "Capture Frame");
+    var tsLabel = el("span", "param-value", "\u2014");
+    tsLabel.id = tsLabelId;
+    if (state.multitoolSteps[idx]._refTs !== undefined) {
+      tsLabel.textContent = formatTimestamp(state.multitoolSteps[idx]._refTs);
+    }
+    capBtn.addEventListener("click", function () {
+      state.multitoolSteps[idx]._refTs = state.currentTimestamp;
+      tsLabel.textContent = formatTimestamp(state.currentTimestamp);
+    });
+    c.appendChild(capBtn);
+    c.appendChild(tsLabel);
+    r.appendChild(c);
+    body.appendChild(r);
+  }
+
+  var MULTITOOL_PARAM_RENDERERS = {
+    color:      _mtRenderColor,
+    change:     _mtRenderChange,
+    similarity: _mtRenderSimilarity,
+    text:       _mtRenderText,
+    numbers:    _mtRenderNumbers,
+    template:   _mtRenderTemplate,
+    flow:       _mtRenderFlow,
+    scene:      _mtRenderScene,
+    inactivity: _mtRenderInactivity,
+  };
 
   var _multitoolDragMidpoints = null;
 
