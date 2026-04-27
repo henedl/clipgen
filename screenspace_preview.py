@@ -9,7 +9,12 @@ diff masks, edge maps, flow vectors, pHash bit grids, etc.
 The produced image is always a single ``numpy.ndarray`` of shape (H, W, 3) in
 BGR uint8, suitable for ``cv2.imencode('.png', img)``.
 
-Entry point: :func:`build_preview`.
+Entry points:
+
+- :func:`build_preview` — labeled multi-panel composite for the side panel.
+- :func:`build_overlay_layer` — single layer at native region / frame
+  resolution, suitable for painting on top of the live frame canvas. The
+  catalog of overlay-eligible layers per tool lives in :data:`OVERLAY_LAYERS`.
 """
 
 from typing import Any
@@ -67,6 +72,229 @@ def build_preview(
             )
         return _placeholder("Add a step to see its preview")
     return _placeholder(f"Unknown tool: {tool}")
+
+
+# ---------------------------------------------------------------------------
+# Overlay layers — single-layer images sized to the region (or frame) that
+# the frontend paints on top of the live frame canvas as a "blink comparator".
+# Tools whose preview output isn't pixel-aligned (timelapse, inactivity) are
+# omitted on purpose; the toggle stays disabled in those cases.
+# ---------------------------------------------------------------------------
+
+
+# (layer_id, label, scope) per tool. Scope is "region" (sized to the region
+# rect) or "frame" (sized to the full frame).
+OVERLAY_LAYERS: dict[str, list[tuple[str, str, str]]] = {
+    "color": [("region", "Region (≤64 px)", "region")],
+    "change": [
+        ("gray_blur", "Gray blur", "region"),
+        ("abs_diff", "Abs diff", "region"),
+        ("mask", "Threshold mask", "region"),
+    ],
+    "similarity": [("gray", "Current gray", "region")],
+    "text": [("gray", "OCR input (gray)", "region")],
+    "numbers": [("gray", "OCR input (gray)", "region")],
+    "template": [("match_heatmap", "Match heatmap", "frame")],
+    "flow": [("flow_vectors", "Flow vectors", "region")],
+    "scene": [("edges", "Canny edges", "region")],
+}
+
+
+def overlay_layer_scope(tool: str, layer: str) -> str | None:
+    """Return the scope ("region" or "frame") for a given tool/layer, or None."""
+    if tool == "multitool":
+        return None
+    for layer_id, _label, scope in OVERLAY_LAYERS.get(tool, []):
+        if layer_id == layer:
+            return scope
+    return None
+
+
+def build_overlay_layer(
+    frame: "np.ndarray",
+    prev_frame: "np.ndarray | None",
+    region: dict[str, int] | None,
+    tool: str,
+    layer: str,
+    params: dict[str, Any],
+) -> "np.ndarray | None":
+    """Build a single overlay layer for the given tool, sized to the region or frame.
+
+    Returns BGR uint8. Returns None if the layer can't be produced (e.g. missing
+    prev frame for change/flow). Caller is responsible for validating that
+    ``(tool, layer)`` is in :data:`OVERLAY_LAYERS`.
+    """
+    if tool == "multitool":
+        steps = params.get("steps") or []
+        if not steps:
+            return None
+        step = steps[0]
+        return build_overlay_layer(
+            frame,
+            prev_frame,
+            region,
+            step.get("type", ""),
+            layer,
+            step.get("parameters") or {},
+        )
+
+    scope = overlay_layer_scope(tool, layer)
+    if scope is None:
+        return None
+
+    if scope == "region":
+        pixels = _clip_region_pixels(frame, region)
+        if pixels is None:
+            return None
+    # scope == "frame" doesn't need region pixels
+
+    if tool == "color" and layer == "region":
+        return pixels.copy()
+
+    if tool == "change":
+        return _overlay_change(pixels, prev_frame, region, layer, params)
+
+    if tool == "similarity" and layer == "gray":
+        k = config.SCREENSPACE_BLUR_KERNEL
+        gray = cv2.cvtColor(cv2.GaussianBlur(pixels, (k, k), 0), cv2.COLOR_BGR2GRAY)
+        return _gray_to_bgr(gray)
+
+    if tool in ("text", "numbers") and layer == "gray":
+        return _gray_to_bgr(cv2.cvtColor(pixels, cv2.COLOR_BGR2GRAY))
+
+    if tool == "scene" and layer == "edges":
+        gray = cv2.cvtColor(pixels, cv2.COLOR_BGR2GRAY)
+        edges = cv2.Canny(gray, 100, 200)
+        return _gray_to_bgr(edges)
+
+    if tool == "flow" and layer == "flow_vectors":
+        return _overlay_flow(pixels, prev_frame, region, params)
+
+    if tool == "template" and layer == "match_heatmap":
+        return _overlay_template_heatmap(frame, params)
+
+    return None
+
+
+def _overlay_change(
+    pixels: "np.ndarray",
+    prev_frame: "np.ndarray | None",
+    region: dict[str, int] | None,
+    layer: str,
+    params: dict[str, Any],
+) -> "np.ndarray | None":
+    k = config.SCREENSPACE_BLUR_KERNEL
+    curr_gray = cv2.cvtColor(cv2.GaussianBlur(pixels, (k, k), 0), cv2.COLOR_BGR2GRAY)
+    if layer == "gray_blur":
+        return _gray_to_bgr(curr_gray)
+    if prev_frame is None:
+        return None
+    prev_pixels = _clip_region_pixels(prev_frame, region)
+    if prev_pixels is None or prev_pixels.shape[:2] != pixels.shape[:2]:
+        return None
+    prev_gray = cv2.cvtColor(
+        cv2.GaussianBlur(prev_pixels, (k, k), 0), cv2.COLOR_BGR2GRAY
+    )
+    diff = cv2.absdiff(prev_gray, curr_gray)
+    if layer == "abs_diff":
+        return _gray_to_bgr(diff)
+    if layer == "mask":
+        noise = int(params.get("noise_threshold", config.SCREENSPACE_NOISE_THRESHOLD))
+        _, mask = cv2.threshold(diff, noise, 255, cv2.THRESH_BINARY)
+        mk = config.SCREENSPACE_MORPH_KERNEL
+        mask_clean = cv2.morphologyEx(mask, cv2.MORPH_OPEN, np.ones((mk, mk), np.uint8))
+        # Render mask as cyan-on-black so it reads against varying frame content
+        # when alpha-blended onto the live frame canvas.
+        out = np.zeros((mask_clean.shape[0], mask_clean.shape[1], 3), dtype=np.uint8)
+        out[mask_clean > 0] = (220, 220, 0)  # BGR cyan-ish
+        return out
+    return None
+
+
+def _overlay_flow(
+    pixels: "np.ndarray",
+    prev_frame: "np.ndarray | None",
+    region: dict[str, int] | None,
+    params: dict[str, Any],  # noqa: ARG001 — magnitude param affects threshold display only
+) -> "np.ndarray | None":
+    if prev_frame is None:
+        return None
+    prev_pixels = _clip_region_pixels(prev_frame, region)
+    if prev_pixels is None or prev_pixels.shape[:2] != pixels.shape[:2]:
+        return None
+    curr_gray = cv2.cvtColor(pixels, cv2.COLOR_BGR2GRAY)
+    prev_gray = cv2.cvtColor(prev_pixels, cv2.COLOR_BGR2GRAY)
+
+    # Compute flow at native region resolution for crisp overlay.
+    flow_out = np.zeros((*prev_gray.shape[:2], 2), dtype=np.float32)
+    flow = cv2.calcOpticalFlowFarneback(
+        prev_gray,
+        curr_gray,
+        flow_out,
+        config.SCREENSPACE_FLOW_PYR_SCALE,
+        3,
+        15,
+        3,
+        5,
+        1.2,
+        0,
+    )
+    vis = cv2.cvtColor(curr_gray, cv2.COLOR_GRAY2BGR)
+    grid_size = config.SCREENSPACE_FLOW_GRID_SIZE
+    gh, gw = flow.shape[:2]
+    step_y = max(1, gh // grid_size)
+    step_x = max(1, gw // grid_size)
+    min_mag = config.SCREENSPACE_FLOW_GRID_MIN_MAG
+    for gy in range(0, gh, step_y):
+        for gx in range(0, gw, step_x):
+            cy = gy + step_y // 2
+            cx = gx + step_x // 2
+            if cy >= gh or cx >= gw:
+                continue
+            fx, fy = float(flow[cy, cx, 0]), float(flow[cy, cx, 1])
+            m = float(np.sqrt(fx * fx + fy * fy))
+            if m < min_mag:
+                continue
+            scale = 4.0
+            end = (int(cx + fx * scale), int(cy + fy * scale))
+            cv2.arrowedLine(vis, (cx, cy), end, (40, 220, 40), 1, tipLength=0.3)
+    return vis
+
+
+def _overlay_template_heatmap(
+    frame: "np.ndarray", params: dict[str, Any]
+) -> "np.ndarray | None":
+    template = params.get("template_image")
+    if not (isinstance(template, np.ndarray) and template.size > 0):
+        return None
+    k = config.SCREENSPACE_BLUR_KERNEL
+    frame_gray = cv2.cvtColor(cv2.GaussianBlur(frame, (k, k), 0), cv2.COLOR_BGR2GRAY)
+    tmpl_gray = cv2.cvtColor(cv2.GaussianBlur(template, (k, k), 0), cv2.COLOR_BGR2GRAY)
+    if (
+        tmpl_gray.shape[0] > frame_gray.shape[0]
+        or tmpl_gray.shape[1] > frame_gray.shape[1]
+        or float(np.std(tmpl_gray)) < 1e-6
+    ):
+        return None
+    mask = params.get("template_mask")
+    gray_mask = None
+    if isinstance(mask, np.ndarray) and mask.size > 0:
+        gray_mask = cv2.GaussianBlur(mask, (k, k), 0)
+    result = cv2.matchTemplate(
+        frame_gray, tmpl_gray, cv2.TM_CCOEFF_NORMED, mask=gray_mask
+    )
+    result = np.nan_to_num(result, nan=0.0, posinf=1.0, neginf=-1.0)
+    norm = np.empty_like(result)
+    cv2.normalize(result, norm, 0, 255, cv2.NORM_MINMAX)
+    heat = cv2.applyColorMap(norm.astype(np.uint8), cv2.COLORMAP_JET)
+    # Pad to frame size so the overlay aligns 1:1 with the frame canvas.
+    fh, fw = frame.shape[:2]
+    hh, hw = heat.shape[:2]
+    if (hh, hw) == (fh, fw):
+        return heat
+    out = np.zeros((fh, fw, 3), dtype=np.uint8)
+    out[:hh, :hw] = heat
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -521,10 +749,14 @@ def _preview_inactivity(
     )
 
 
-def encode_png(img: "np.ndarray") -> bytes:
-    """Encode a BGR image as PNG bytes — convenience for the Flask route."""
-    # Cap overall width so the UI pane never has to scale huge images down.
-    if img.shape[1] > _MAX_WIDTH:
+def encode_png(img: "np.ndarray", *, cap_width: bool = True) -> bytes:
+    """Encode a BGR image as PNG bytes — convenience for the Flask route.
+
+    By default caps width at :data:`_MAX_WIDTH` for the side-panel composite.
+    Pass ``cap_width=False`` for overlay layers, which need native resolution
+    so they paint pixel-true on top of the frame canvas.
+    """
+    if cap_width and img.shape[1] > _MAX_WIDTH:
         img = _fit_width(img, _MAX_WIDTH)
     ok, buf = cv2.imencode(".png", img)
     if not ok:

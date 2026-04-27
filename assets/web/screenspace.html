@@ -157,6 +157,14 @@
           </button>
           <div id="modelViewBody" class="model-view-body hidden">
             <div id="modelViewMeta" class="model-view-meta">Select a region to preview.</div>
+            <div id="modelViewOverlayRow" class="model-view-overlay-row">
+              <label class="model-view-overlay-toggle">
+                <input id="modelViewOverlayToggle" type="checkbox" />
+                <span>Overlay on frame</span>
+              </label>
+              <select id="modelViewOverlayLayer" class="model-view-overlay-layer hidden" aria-label="Overlay layer"></select>
+              <span class="model-view-overlay-hint">hold <kbd>B</kbd> to blink</span>
+            </div>
             <img id="modelViewImage" alt="Preprocessed preview" />
           </div>
         </div>

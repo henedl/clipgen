@@ -91,6 +91,12 @@
     videoMuted: false,
     videoPlaybackRate: 1,
     modelViewOpen: false,
+    overlayEnabled: false,
+    overlayLayer: null,
+    overlayBlinkActive: false,
+    overlayImage: null,
+    overlayImageObjectUrl: null,
+    overlayLayerSpec: {},
     rightPaneTab: "queue",
     resultsSwitcherOpen: false,
   };
@@ -1698,6 +1704,29 @@
       }
       ctx.globalAlpha = 1.0;
     }
+
+    // Model-view overlay (toggle or held-key blink comparator)
+    var overlayActive = (state.overlayEnabled || state.overlayBlinkActive)
+      && state.overlayImage
+      && _overlayEligibleForActiveTool();
+    if (overlayActive) {
+      ctx.globalAlpha = state.overlayBlinkActive ? 1.0 : 0.7;
+      var scope = state.overlayImageScope || "region";
+      if (scope === "frame") {
+        ctx.drawImage(state.overlayImage, 0, 0, canvas.width, canvas.height);
+      } else {
+        var oRegion = state.pendingRegion
+          ? state.pendingRegion
+          : (state.activeRegion ? state.regions[state.activeRegion] : null);
+        if (oRegion) {
+          var oPx = regionToPixels(oRegion);
+          if (oPx && oPx.w && oPx.h) {
+            ctx.drawImage(state.overlayImage, oPx.x, oPx.y, oPx.w, oPx.h);
+          }
+        }
+      }
+      ctx.globalAlpha = 1.0;
+    }
   }
 
   // ---- Timeline ----
@@ -3295,6 +3324,7 @@
     if (scanBtn && scanBtn._updateScanState) scanBtn._updateScanState();
 
     updateRunButton();
+    _updateOverlayUi();
     refreshModelView();
   }
 
@@ -3346,6 +3376,126 @@
   function initModelView() {
     var btn = qs("#modelViewToggle");
     if (btn) btn.addEventListener("click", toggleModelView);
+
+    // Restore persisted overlay preferences (sessionStorage, per-tab).
+    try {
+      var stored = sessionStorage.getItem("ss_overlayEnabled");
+      if (stored === "1") state.overlayEnabled = true;
+    } catch (e) { /* sessionStorage may be unavailable */ }
+    try {
+      var layer = sessionStorage.getItem("ss_overlayLayer");
+      if (layer) state.overlayLayer = layer;
+    } catch (e) { /* ignore */ }
+
+    var toggle = qs("#modelViewOverlayToggle");
+    if (toggle) {
+      toggle.checked = !!state.overlayEnabled;
+      toggle.addEventListener("change", function () {
+        state.overlayEnabled = !!toggle.checked;
+        try { sessionStorage.setItem("ss_overlayEnabled", state.overlayEnabled ? "1" : "0"); } catch (e) { /* ignore */ }
+        if (state.overlayEnabled && !state.overlayImage) refreshModelView();
+        renderOverlay();
+      });
+    }
+
+    var sel = qs("#modelViewOverlayLayer");
+    if (sel) {
+      sel.addEventListener("change", function () {
+        state.overlayLayer = sel.value || null;
+        try { sessionStorage.setItem("ss_overlayLayer", state.overlayLayer || ""); } catch (e) { /* ignore */ }
+        // Force a refetch of the overlay image at the new layer.
+        if (state.overlayImageObjectUrl) {
+          URL.revokeObjectURL(state.overlayImageObjectUrl);
+          state.overlayImageObjectUrl = null;
+        }
+        state.overlayImage = null;
+        refreshModelView();
+        renderOverlay();
+      });
+    }
+
+    // Fetch the overlay-layer catalog once at init.
+    apiGet("api/preview/layers")
+      .then(function (data) {
+        if (data && data.ok && data.layers) {
+          state.overlayLayerSpec = data.layers;
+          _updateOverlayUi();
+        }
+      })
+      .catch(function () { /* leave catalog empty; toggle stays disabled */ });
+  }
+
+  function _activeOverlayTool() {
+    var tool = state.activeWorkflow;
+    if (tool === "multitool") {
+      var first = (state.multitoolSteps || [])[0];
+      tool = first && first.type ? first.type : null;
+    }
+    return tool;
+  }
+
+  function _activeOverlayLayers() {
+    var tool = _activeOverlayTool();
+    if (!tool) return [];
+    return state.overlayLayerSpec[tool] || [];
+  }
+
+  function _overlayEligibleForActiveTool() {
+    return _activeOverlayLayers().length > 0;
+  }
+
+  function _resolveOverlayLayer() {
+    var layers = _activeOverlayLayers();
+    if (!layers.length) return null;
+    if (state.overlayLayer) {
+      for (var i = 0; i < layers.length; i++) {
+        if (layers[i].id === state.overlayLayer) return layers[i];
+      }
+    }
+    return layers[0];
+  }
+
+  function _updateOverlayUi() {
+    var toggle = qs("#modelViewOverlayToggle");
+    var sel = qs("#modelViewOverlayLayer");
+    var label = toggle && toggle.parentElement;
+    var layers = _activeOverlayLayers();
+    var eligible = layers.length > 0;
+
+    if (toggle) {
+      toggle.disabled = !eligible;
+      if (label) {
+        if (eligible) {
+          label.classList.remove("disabled");
+          label.removeAttribute("title");
+        } else {
+          label.classList.add("disabled");
+          label.setAttribute("title", "This tool's preview isn't pixel-aligned to the frame");
+        }
+      }
+      if (!eligible && toggle.checked) {
+        toggle.checked = false;
+        // Don't persist away the user's preference; just disable for this tool.
+      }
+    }
+
+    if (sel) {
+      if (layers.length > 1) {
+        sel.classList.remove("hidden");
+        sel.innerHTML = "";
+        var resolved = _resolveOverlayLayer();
+        layers.forEach(function (layer) {
+          var opt = document.createElement("option");
+          opt.value = layer.id;
+          opt.textContent = layer.label;
+          if (resolved && layer.id === resolved.id) opt.selected = true;
+          sel.appendChild(opt);
+        });
+      } else {
+        sel.classList.add("hidden");
+        sel.innerHTML = "";
+      }
+    }
   }
 
   function toggleModelView() {
@@ -3366,7 +3516,7 @@
   }
 
   function refreshModelView(opts) {
-    if (!state.modelViewOpen) return;
+    if (!state.modelViewOpen && !state.overlayEnabled && !state.overlayBlinkActive) return;
     if (_modelViewTimer) {
       clearTimeout(_modelViewTimer);
       _modelViewTimer = 0;
@@ -3501,6 +3651,54 @@
       meta.textContent = MODEL_VIEW_META[tool] || "";
     }
 
+    function _refetchOverlayLayer() {
+      if (gen !== _modelViewGen) return;
+      var resolved = _resolveOverlayLayer();
+      if (!resolved) {
+        if (state.overlayImageObjectUrl) {
+          URL.revokeObjectURL(state.overlayImageObjectUrl);
+          state.overlayImageObjectUrl = null;
+        }
+        state.overlayImage = null;
+        return;
+      }
+      var layerQs = qsParts.concat(["layer=" + encodeURIComponent(resolved.id)]);
+      var layerUrl = "api/preview/" + encodeURIComponent(state.selectedParticipant)
+        + "/" + ts + "?" + layerQs.join("&");
+      function fetchAsImage(blob) {
+        if (gen !== _modelViewGen) return;
+        if (state.overlayImageObjectUrl) {
+          URL.revokeObjectURL(state.overlayImageObjectUrl);
+          state.overlayImageObjectUrl = null;
+        }
+        var ou = URL.createObjectURL(blob);
+        state.overlayImageObjectUrl = ou;
+        var oi = new Image();
+        oi.onload = function () {
+          if (gen !== _modelViewGen) return;
+          state.overlayImage = oi;
+          state.overlayImageScope = resolved.scope;
+          renderOverlay();
+        };
+        oi.src = ou;
+      }
+      if (useTemplatePost) {
+        fetch(layerUrl, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ template_image_data: state.uploadedTemplate.data }),
+        })
+          .then(function (r) { if (!r.ok) throw new Error("layer http " + r.status); return r.blob(); })
+          .then(fetchAsImage)
+          .catch(function () { /* leave previous overlay image */ });
+      } else {
+        fetch(layerUrl)
+          .then(function (r) { if (!r.ok) throw new Error("layer http " + r.status); return r.blob(); })
+          .then(fetchAsImage)
+          .catch(function () { /* leave previous overlay image */ });
+      }
+    }
+
     var useTemplatePost = tool === "template" && state.uploadedTemplate && state.uploadedTemplate.data;
     if (useTemplatePost) {
       // TODO: utils.apiPost returns JSON; needs an apiPostBlob helper to migrate.
@@ -3516,6 +3714,7 @@
         .then(function (blob) {
           if (gen !== _modelViewGen) return;
           applyPreviewOkFromBlob(blob);
+          _refetchOverlayLayer();
         })
         .catch(function () {
           applyPreviewError();
@@ -3532,6 +3731,7 @@
       }
       img.src = tmp.src;
       meta.textContent = MODEL_VIEW_META[tool] || "";
+      _refetchOverlayLayer();
     };
     tmp.onerror = function () {
       applyPreviewError();
@@ -5724,6 +5924,14 @@
         } else {
           playVideo();
         }
+      } else if (e.key === "b" || e.key === "B") {
+        if (e.repeat) return;
+        if (e.metaKey || e.ctrlKey || e.altKey) return;
+        if (!_overlayEligibleForActiveTool()) return;
+        e.preventDefault();
+        state.overlayBlinkActive = true;
+        if (!state.overlayImage) refreshModelView();
+        renderOverlay();
       } else if (e.key === "Escape") {
         if (state.pipetteActive) {
           deactivatePipette();
@@ -5751,6 +5959,24 @@
           updateRunButton();
         }
         hideRegionNameModal();
+      }
+    });
+
+    document.addEventListener("keyup", function (e) {
+      if (e.key === "b" || e.key === "B") {
+        if (state.overlayBlinkActive) {
+          state.overlayBlinkActive = false;
+          renderOverlay();
+        }
+      }
+    });
+
+    // Defensive: clear blink state on window blur so a held key doesn't get
+    // stuck on if the user alt-tabs.
+    window.addEventListener("blur", function () {
+      if (state.overlayBlinkActive) {
+        state.overlayBlinkActive = false;
+        renderOverlay();
       }
     });
   }

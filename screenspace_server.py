@@ -10,7 +10,8 @@ API endpoints (all under /screenspace/):
   GET  /media/<filename>                    – serve artifact media files
   GET  /api/participants                    – list discovered participant videos
   GET  /api/video/frame/<participant>/<ts>  – extract a JPEG frame at timestamp
-  GET|POST /api/preview/<participant>/<ts>   – PNG of the active tool's preprocessed view
+  GET|POST /api/preview/<participant>/<ts>   – PNG of the active tool's preprocessed view (?layer=<id> for single-layer overlay)
+  GET  /api/preview/layers                   – JSON catalog of overlay-eligible layers per tool
   GET  /api/video/info/<participant>        – video metadata (duration, resolution, fps)
   GET  /api/video/stream/<participant>     – stream source video (mp4, range-aware)
   GET  /api/regions                         – list regions
@@ -259,6 +260,10 @@ def api_preview(participant: str, timestamp: str) -> FlaskResponse:
       noise=<int>          change tool's noise_threshold override
       h,s,v=<int>          color tool's target HSV override
       magnitude=<float>    flow tool's magnitude threshold override
+      layer=<id>           if set, return that single overlay layer at native
+                           region/frame resolution instead of the labeled
+                           composite. See ``screenspace_preview.OVERLAY_LAYERS``
+                           for valid (tool, layer) pairs.
 
     For **template** with an **uploaded** PNG, send ``POST`` with JSON body
     ``{"template_image_data": "<base64>"}`` (same field as task enqueue); query
@@ -392,6 +397,42 @@ def api_preview(participant: str, timestamp: str) -> FlaskResponse:
                             ref_frame_tpl, region_coords
                         )
 
+    layer = (request.args.get("layer") or "").strip()
+    if layer:
+        # For multitool, the catalog comes from the first step's tool.
+        catalog_tool = tool
+        if tool == "multitool":
+            steps = params.get("steps") or []
+            catalog_tool = (
+                steps[0].get("type", "") if steps and isinstance(steps[0], dict) else ""
+            )
+        valid = {
+            lid
+            for lid, _label, _scope in screenspace_preview.OVERLAY_LAYERS.get(
+                catalog_tool, []
+            )
+        }
+        if layer not in valid:
+            return jsonify(
+                {
+                    "ok": False,
+                    "error": f"Layer '{layer}' not available for tool '{tool}'",
+                }
+            ), 400
+        layer_img = screenspace_preview.build_overlay_layer(
+            frame, prev_frame, region_coords, tool, layer, params
+        )
+        if layer_img is None or getattr(layer_img, "size", 0) == 0:
+            return jsonify({"ok": False, "error": "Could not build overlay layer"}), 500
+        png_bytes = screenspace_preview.encode_png(layer_img, cap_width=False)
+        if not png_bytes:
+            return jsonify({"ok": False, "error": "Could not encode overlay"}), 500
+        return Response(
+            png_bytes,
+            mimetype="image/png",
+            headers={"Cache-Control": "no-cache"},
+        )
+
     img = screenspace_preview.build_preview(
         frame, prev_frame, region_coords, tool, params
     )
@@ -406,6 +447,24 @@ def api_preview(participant: str, timestamp: str) -> FlaskResponse:
         mimetype="image/png",
         headers={"Cache-Control": "no-cache"},
     )
+
+
+@screenspace_bp.route("/api/preview/layers")
+def api_preview_layers() -> FlaskResponse:
+    """Return the per-tool overlay-layer catalog as JSON.
+
+    Shape: ``{tool: [{id, label, scope}, ...], ...}``. Tools whose previews
+    aren't pixel-aligned (timelapse, inactivity) are intentionally absent.
+    """
+    import screenspace_preview
+
+    out = {
+        tool: [
+            {"id": lid, "label": label, "scope": scope} for lid, label, scope in layers
+        ]
+        for tool, layers in screenspace_preview.OVERLAY_LAYERS.items()
+    }
+    return jsonify({"ok": True, "layers": out})
 
 
 @screenspace_bp.route("/api/video/info/<participant>")

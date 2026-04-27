@@ -395,6 +395,77 @@ def test_api_preview_template_post_invalid_image(client, monkeypatch) -> None:
     assert resp.status_code == 400
 
 
+def test_api_preview_layers_catalog(client) -> None:
+    """The catalog endpoint returns each tool's overlay layers."""
+    resp = client.get("/screenspace/api/preview/layers")
+    assert resp.status_code == 200
+    payload = resp.get_json()
+    assert payload["ok"] is True
+    layers = payload["layers"]
+    # Tools with no overlay-eligible layers must not appear.
+    assert "timelapse" not in layers
+    assert "inactivity" not in layers
+    # Multi-layer tools list each layer with id/label/scope.
+    change_layers = layers["change"]
+    assert {layer["id"] for layer in change_layers} == {"gray_blur", "abs_diff", "mask"}
+    assert all(layer["scope"] == "region" for layer in change_layers)
+    # Template's match heatmap is frame-scoped.
+    template_layers = layers["template"]
+    assert any(
+        layer["id"] == "match_heatmap" and layer["scope"] == "frame"
+        for layer in template_layers
+    )
+
+
+def test_api_preview_layer_returns_native_resolution_png(client, monkeypatch) -> None:
+    """layer= returns a region-sized PNG (no max-width cap)."""
+    import cv2
+    import numpy as np
+    import video
+
+    _enable_video_task_setup(monkeypatch, "P01")
+    monkeypatch.setattr(
+        video,
+        "extract_frame_at_timestamp",
+        lambda _path, _ts: np.full((240, 320, 3), 50, dtype=np.uint8),
+    )
+
+    region = "0.25,0.2083333333,0.3125,0.25"  # ~ 100x60 px
+    resp = client.get(
+        f"/screenspace/api/preview/P01/0.500?tool=color&region={region}&layer=region"
+    )
+    assert resp.status_code == 200
+    assert resp.mimetype == "image/png"
+    img = cv2.imdecode(np.frombuffer(resp.data, np.uint8), cv2.IMREAD_COLOR)
+    assert img is not None
+    # Native size matches the requested region in pixels.
+    assert img.shape[:2] == (60, 100)
+
+
+def test_api_preview_layer_invalid_returns_400(client, monkeypatch) -> None:
+    """Asking for a layer the tool doesn't expose returns 400."""
+    import numpy as np
+    import video
+
+    _enable_video_task_setup(monkeypatch, "P01")
+    monkeypatch.setattr(
+        video,
+        "extract_frame_at_timestamp",
+        lambda _path, _ts: np.zeros((240, 320, 3), dtype=np.uint8),
+    )
+    region = "0.25,0.2083333333,0.3125,0.25"
+    # timelapse is intentionally excluded from OVERLAY_LAYERS.
+    resp = client.get(
+        f"/screenspace/api/preview/P01/0.500?tool=timelapse&region={region}&layer=anything"
+    )
+    assert resp.status_code == 400
+    # bogus layer for a valid tool also rejected.
+    resp = client.get(
+        f"/screenspace/api/preview/P01/0.500?tool=color&region={region}&layer=bogus"
+    )
+    assert resp.status_code == 400
+
+
 def test_create_non_template_task_still_requires_region(client):
     """Non-template tasks still require a region."""
     resp = client.post(
