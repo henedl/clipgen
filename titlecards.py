@@ -177,7 +177,7 @@ def build_titlecard_frame(clip: ClipRecord, resolution: str) -> str | None:
     """Generate a short titlecard video segment for a clip."""
     return _build_card_frame(
         resolution=resolution,
-        background_path=Path("assets") / "titlecard.png",
+        background_path=utils.get_bundled_assets_root() / "assets" / "titlecard.png",
         label="titlecard",
         drawtext_filter=_build_drawtext_filter(str(clip.get("desc", ""))),
         allow_color_fallback=True,
@@ -188,7 +188,7 @@ def build_endcard_frame(resolution: str) -> str | None:
     """Generate a short endcard video segment if assets/endcard.png exists."""
     return _build_card_frame(
         resolution=resolution,
-        background_path=Path("assets") / "endcard.png",
+        background_path=utils.get_bundled_assets_root() / "assets" / "endcard.png",
         label="endcard",
     )
 

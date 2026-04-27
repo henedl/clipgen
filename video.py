@@ -145,8 +145,7 @@ def run_ffmpeg_process(
             )
             while proc.poll() is None:
                 if cancel_flag():
-                    proc.terminate()
-                    proc.wait(timeout=5)
+                    utils.terminate_subprocess(proc)
                     return None
                 try:
                     proc.wait(timeout=0.5)

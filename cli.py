@@ -12,7 +12,7 @@ import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, NamedTuple
+from typing import Any, Callable, NamedTuple
 
 from icecream import ic
 
@@ -1058,6 +1058,102 @@ def run_cli_mode(worksheet: Any, args: Any, cli_mode_args: CliModeArgs) -> None:
 # ---- Main entry point ----
 
 
+_BASE_SELECTOR_ATTRS = (
+    "batch",
+    "lines",
+    "range",
+    "category",
+    "cell",
+    "participant",
+    "keyword",
+    "severity",
+    "mixed",
+    "reel",
+    "chronologic",
+    "screen",
+    "gif",
+    "viewer",
+    "regenerate",
+)
+
+
+class _ModeSpec(NamedTuple):
+    """Declarative description of one exclusive mode for conflict validation."""
+
+    key: str  # attribute on args (also returned in result dict)
+    truthy: Callable[[Any], bool]  # how to detect this mode is active
+    error: str
+    hint: str
+    selector_attrs: tuple[str, ...] = _BASE_SELECTOR_ATTRS
+    blocks_modes: tuple[str, ...] = ()  # earlier mode keys that conflict
+
+
+_EXCLUSIVE_MODES: tuple[_ModeSpec, ...] = (
+    _ModeSpec(
+        key="timeline_viewer",
+        truthy=lambda a: bool(getattr(a, "timeline_viewer", False)),
+        error="--timeline-viewer cannot be combined with mode, format, or --viewer/--regenerate flags.",
+        hint="Only -s (spreadsheet) and -v (verbose) may be used alongside --timeline-viewer.",
+    ),
+    _ModeSpec(
+        key="studio",
+        truthy=lambda a: bool(getattr(a, "studio", False)),
+        error="--studio cannot be combined with mode, format, or --viewer/--regenerate flags.",
+        hint="Only -s (spreadsheet), -i/-o (directories), and -v (verbose) may be used alongside --studio.",
+        blocks_modes=("timeline_viewer",),
+    ),
+    _ModeSpec(
+        key="insights",
+        truthy=lambda a: bool(getattr(a, "insights", False)),
+        error="--insights cannot be combined with mode, format, or --viewer/--regenerate/--studio/--screenspace flags.",
+        hint="Only -i/-o (directories) and -v (verbose) may be used alongside --insights.",
+        blocks_modes=("timeline_viewer", "studio", "screenspace", "transcripts"),
+    ),
+    _ModeSpec(
+        key="screenspace",
+        truthy=lambda a: bool(getattr(a, "screenspace", False)),
+        error="--screenspace cannot be combined with mode, format, or --viewer/--regenerate/--studio/--insights flags.",
+        hint="Only -s (spreadsheet), -i/-o (directories), and -v (verbose) may be used alongside --screenspace.",
+        blocks_modes=("timeline_viewer", "studio", "insights", "transcripts"),
+    ),
+    _ModeSpec(
+        key="transcripts",
+        truthy=lambda a: bool(getattr(a, "transcripts", False)),
+        error="--transcripts cannot be combined with mode, format, or --viewer/--regenerate/--studio/--insights/--screenspace flags.",
+        hint="Only -s (spreadsheet), -i/-o (directories), and -v (verbose) may be used alongside --transcripts.",
+        blocks_modes=("timeline_viewer", "studio", "insights", "screenspace"),
+    ),
+    _ModeSpec(
+        key="gallery",
+        # `gallery` carries an optional VIDEO arg, so use `is not None` to detect it.
+        truthy=lambda a: getattr(a, "gallery", None) is not None,
+        error="--gallery cannot be combined with selection modes, --viewer, --regenerate, --studio, or --timeline-viewer.",
+        hint="Only --gif, --interval, --bundle, -i/-o (directories), and -v (verbose) may be used alongside --gallery.",
+        # Gallery permits --screen and --gif as output-format toggles.
+        selector_attrs=tuple(
+            a for a in _BASE_SELECTOR_ATTRS if a not in ("screen", "gif")
+        ),
+        blocks_modes=("timeline_viewer", "studio", "screenspace", "transcripts"),
+    ),
+    _ModeSpec(
+        key="pre_transcribe",
+        truthy=lambda a: getattr(a, "pre_transcribe", None) is not None,
+        error="--pre-transcribe cannot be combined with mode, format, or --studio/--insights/--screenspace/--transcripts flags.",
+        hint="Only -s (spreadsheet), -i/-o (directories), and -v (verbose) may be used alongside --pre-transcribe.",
+        # pre-transcribe additionally conflicts with --highlights.
+        selector_attrs=_BASE_SELECTOR_ATTRS + ("highlights",),
+        blocks_modes=(
+            "timeline_viewer",
+            "studio",
+            "insights",
+            "screenspace",
+            "transcripts",
+            "gallery",
+        ),
+    ),
+)
+
+
 def _validate_mode_conflicts(
     args: Any,
 ) -> tuple[bool, bool, bool, bool, bool, Any, bool]:
@@ -1067,234 +1163,24 @@ def _validate_mode_conflicts(
         (timeline_viewer, studio_mode, insights_mode, screenspace_mode,
          transcripts_mode, gallery_arg, pre_transcribe_mode)
     """
-    mixed_selectors = getattr(args, "mixed", None)
-    timeline_viewer = getattr(args, "timeline_viewer", False)
-
-    if timeline_viewer:
-        conflicting = [
-            args.batch,
-            args.lines,
-            args.range,
-            args.category,
-            args.cell,
-            args.participant,
-            args.keyword,
-            args.severity,
-            mixed_selectors,
-            args.reel,
-            args.chronologic,
-            args.screen,
-            args.gif,
-            args.viewer,
-            getattr(args, "regenerate", False),
-        ]
-        if any(conflicting):
-            utils.error_print(
-                "--timeline-viewer cannot be combined with mode, format, or --viewer/--regenerate flags.",
-                [
-                    "Only -s (spreadsheet) and -v (verbose) may be used alongside --timeline-viewer."
-                ],
-            )
-            sys.exit(1)
-
-    studio_mode = getattr(args, "studio", False)
-    if studio_mode:
-        conflicting = [
-            args.batch,
-            args.lines,
-            args.range,
-            args.category,
-            args.cell,
-            args.participant,
-            args.keyword,
-            args.severity,
-            mixed_selectors,
-            args.reel,
-            args.chronologic,
-            args.screen,
-            args.gif,
-            args.viewer,
-            getattr(args, "regenerate", False),
-            timeline_viewer,
-        ]
-        if any(conflicting):
-            utils.error_print(
-                "--studio cannot be combined with mode, format, or --viewer/--regenerate flags.",
-                [
-                    "Only -s (spreadsheet), -i/-o (directories), and -v (verbose) may be used alongside --studio."
-                ],
-            )
-            sys.exit(1)
-
-    insights_mode = getattr(args, "insights", False)
-    if insights_mode:
-        conflicting = [
-            args.batch,
-            args.lines,
-            args.range,
-            args.category,
-            args.cell,
-            args.participant,
-            args.keyword,
-            args.severity,
-            mixed_selectors,
-            args.reel,
-            args.chronologic,
-            args.screen,
-            args.gif,
-            args.viewer,
-            getattr(args, "regenerate", False),
-            timeline_viewer,
-            studio_mode,
-            getattr(args, "screenspace", False),
-            getattr(args, "transcripts", False),
-        ]
-        if any(conflicting):
-            utils.error_print(
-                "--insights cannot be combined with mode, format, or --viewer/--regenerate/--studio/--screenspace flags.",
-                [
-                    "Only -i/-o (directories) and -v (verbose) may be used alongside --insights."
-                ],
-            )
-            sys.exit(1)
-
-    screenspace_mode = getattr(args, "screenspace", False)
-    if screenspace_mode:
-        conflicting = [
-            args.batch,
-            args.lines,
-            args.range,
-            args.category,
-            args.cell,
-            args.participant,
-            args.keyword,
-            args.severity,
-            mixed_selectors,
-            args.reel,
-            args.chronologic,
-            args.screen,
-            args.gif,
-            args.viewer,
-            getattr(args, "regenerate", False),
-            timeline_viewer,
-            studio_mode,
-            insights_mode,
-            getattr(args, "transcripts", False),
-        ]
-        if any(conflicting):
-            utils.error_print(
-                "--screenspace cannot be combined with mode, format, or --viewer/--regenerate/--studio/--insights flags.",
-                [
-                    "Only -s (spreadsheet), -i/-o (directories), and -v (verbose) may be used alongside --screenspace."
-                ],
-            )
-            sys.exit(1)
-
-    transcripts_mode = getattr(args, "transcripts", False)
-    if transcripts_mode:
-        conflicting = [
-            args.batch,
-            args.lines,
-            args.range,
-            args.category,
-            args.cell,
-            args.participant,
-            args.keyword,
-            args.severity,
-            mixed_selectors,
-            args.reel,
-            args.chronologic,
-            args.screen,
-            args.gif,
-            args.viewer,
-            getattr(args, "regenerate", False),
-            timeline_viewer,
-            studio_mode,
-            insights_mode,
-            screenspace_mode,
-        ]
-        if any(conflicting):
-            utils.error_print(
-                "--transcripts cannot be combined with mode, format, or --viewer/--regenerate/--studio/--insights/--screenspace flags.",
-                [
-                    "Only -s (spreadsheet), -i/-o (directories), and -v (verbose) may be used alongside --transcripts."
-                ],
-            )
-            sys.exit(1)
-
-    gallery_arg = getattr(args, "gallery", None)
-    if gallery_arg is not None:
-        conflicting = [
-            args.batch,
-            args.lines,
-            args.range,
-            args.category,
-            args.cell,
-            args.participant,
-            args.keyword,
-            args.severity,
-            mixed_selectors,
-            args.reel,
-            args.chronologic,
-            args.viewer,
-            getattr(args, "regenerate", False),
-            timeline_viewer,
-            studio_mode,
-            screenspace_mode,
-            transcripts_mode,
-        ]
-        if any(conflicting):
-            utils.error_print(
-                "--gallery cannot be combined with selection modes, --viewer, --regenerate, --studio, or --timeline-viewer.",
-                [
-                    "Only --gif, --interval, --bundle, -i/-o (directories), and -v (verbose) may be used alongside --gallery."
-                ],
-            )
-            sys.exit(1)
-
-    pre_transcribe_mode = getattr(args, "pre_transcribe", None) is not None
-    if pre_transcribe_mode:
-        conflicting = [
-            args.batch,
-            args.lines,
-            args.range,
-            args.category,
-            args.cell,
-            args.participant,
-            args.keyword,
-            args.severity,
-            mixed_selectors,
-            args.reel,
-            args.chronologic,
-            args.highlights,
-            args.screen,
-            args.gif,
-            args.viewer,
-            getattr(args, "regenerate", False),
-            timeline_viewer,
-            studio_mode,
-            insights_mode,
-            screenspace_mode,
-            transcripts_mode,
-            gallery_arg is not None,
-        ]
-        if any(conflicting):
-            utils.error_print(
-                "--pre-transcribe cannot be combined with mode, format, or --studio/--insights/--screenspace/--transcripts flags.",
-                [
-                    "Only -s (spreadsheet), -i/-o (directories), and -v (verbose) may be used alongside --pre-transcribe."
-                ],
-            )
+    active = {spec.key: spec.truthy(args) for spec in _EXCLUSIVE_MODES}
+    for spec in _EXCLUSIVE_MODES:
+        if not active[spec.key]:
+            continue
+        conflicts = [getattr(args, attr, None) for attr in spec.selector_attrs]
+        conflicts.extend(active[m] for m in spec.blocks_modes)
+        if any(conflicts):
+            utils.error_print(spec.error, [spec.hint])
             sys.exit(1)
 
     return (
-        timeline_viewer,
-        studio_mode,
-        insights_mode,
-        screenspace_mode,
-        transcripts_mode,
-        gallery_arg,
-        pre_transcribe_mode,
+        active["timeline_viewer"],
+        active["studio"],
+        active["insights"],
+        active["screenspace"],
+        active["transcripts"],
+        getattr(args, "gallery", None),
+        active["pre_transcribe"],
     )
 
 

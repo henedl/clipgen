@@ -56,6 +56,14 @@ _ocr_readers: dict[tuple, Any] = {}
 _ocr_lock = threading.Lock()
 
 
+ScanCallback = Callable[[float, np.ndarray], bool | None]
+"""Per-frame callback signature for scan_video_frames and friends.
+
+Receives ``(timestamp_seconds, region_pixels)`` and may return ``False`` to stop
+iteration early. Used by all eight scan tools (color, change, similarity, text,
+numbers, flow, scene, inactivity)."""
+
+
 def _get_ocr_reader(languages: list[str]) -> Any:
     """Return a cached EasyOCR Reader for the given language set."""
     import easyocr
@@ -522,7 +530,7 @@ def scan_video_frames(
     video_path: str,
     region: dict[str, int] | None,
     interval_seconds: float,
-    callback: Callable[[float, np.ndarray], bool | None],
+    callback: ScanCallback,
     *,
     start_seconds: float = 0.0,
     end_seconds: float | None = None,
@@ -571,7 +579,7 @@ def scan_video_frames(
 def scan_video_full_frames(
     video_path: str,
     interval_seconds: float,
-    callback: Callable[[float, np.ndarray], bool | None],
+    callback: ScanCallback,
     *,
     start_seconds: float = 0.0,
     end_seconds: float | None = None,
@@ -701,19 +709,14 @@ def _ffmpeg_pipe_frames(
     finally:
         if proc.stdout:
             proc.stdout.close()
-        proc.terminate()
-        try:
-            proc.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-            proc.wait()
+        utils.terminate_subprocess(proc)
 
 
 def _scan_via_ffmpeg_pipe(
     video_path: str,
     region: dict[str, int] | None,
     interval_seconds: float,
-    callback: Callable[[float, np.ndarray], bool | None],
+    callback: ScanCallback,
     *,
     start_seconds: float = 0.0,
     end_seconds: float = 0.0,
@@ -1379,12 +1382,7 @@ def generate_timelapse(
                 except (ValueError, ZeroDivisionError):
                     pass
             if cancel_flag and cancel_flag():
-                proc.terminate()
-                try:
-                    proc.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    proc.kill()
-                    proc.wait()
+                utils.terminate_subprocess(proc)
                 return None
     finally:
         if proc.stdout:
