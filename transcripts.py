@@ -42,7 +42,7 @@ import threading
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, TypedDict
+from typing import Any, Callable, Literal, TypedDict
 
 import config
 import utils
@@ -387,31 +387,22 @@ def filter_segments(
 # ---------------------------------------------------------------------------
 
 
-def _fmt_display(seconds: float) -> str:
-    """Format seconds as M:SS or H:MM:SS for Markdown display."""
+def _format_timestamp(seconds: float, fmt: Literal["display", "srt", "vtt"]) -> str:
+    """Format a seconds value for transcript output.
+
+    ``display`` is M:SS / H:MM:SS for Markdown. ``srt`` is HH:MM:SS,mmm.
+    ``vtt`` is MM:SS.mmm or HH:MM:SS.mmm.
+    """
     total = int(seconds)
     h, remainder = divmod(total, 3600)
     m, s = divmod(remainder, 60)
-    if h > 0:
-        return f"{h}:{m:02d}:{s:02d}"
-    return f"{m}:{s:02d}"
-
-
-def _fmt_srt(seconds: float) -> str:
-    """Format seconds as HH:MM:SS,mmm for SRT."""
-    total = int(seconds)
+    if fmt == "display":
+        if h > 0:
+            return f"{h}:{m:02d}:{s:02d}"
+        return f"{m}:{s:02d}"
     ms = int((seconds - total) * 1000)
-    h, remainder = divmod(total, 3600)
-    m, s = divmod(remainder, 60)
-    return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
-
-
-def _fmt_vtt(seconds: float) -> str:
-    """Format seconds as MM:SS.mmm for VTT."""
-    total = int(seconds)
-    ms = int((seconds - total) * 1000)
-    h, remainder = divmod(total, 3600)
-    m, s = divmod(remainder, 60)
+    if fmt == "srt":
+        return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
     if h > 0:
         return f"{h:02d}:{m:02d}:{s:02d}.{ms:03d}"
     return f"{m:02d}:{s:02d}.{ms:03d}"
@@ -436,7 +427,9 @@ def _format_markdown(result: TranscriptResult) -> str:
         "",
     ]
     for seg in result["segments"]:
-        lines.append(f"**[{_fmt_display(seg['start'])} - {_fmt_display(seg['end'])}]**")
+        start = _format_timestamp(seg["start"], "display")
+        end = _format_timestamp(seg["end"], "display")
+        lines.append(f"**[{start} - {end}]**")
         lines.append(seg["text"])
         lines.append("")
     return "\n".join(lines)
@@ -445,16 +438,18 @@ def _format_markdown(result: TranscriptResult) -> str:
 def _format_srt(result: TranscriptResult) -> str:
     blocks: list[str] = []
     for i, seg in enumerate(result["segments"], start=1):
-        blocks.append(
-            f"{i}\n{_fmt_srt(seg['start'])} --> {_fmt_srt(seg['end'])}\n{seg['text']}"
-        )
+        start = _format_timestamp(seg["start"], "srt")
+        end = _format_timestamp(seg["end"], "srt")
+        blocks.append(f"{i}\n{start} --> {end}\n{seg['text']}")
     return "\n\n".join(blocks) + "\n" if blocks else ""
 
 
 def _format_vtt(result: TranscriptResult) -> str:
     lines = ["WEBVTT", ""]
     for seg in result["segments"]:
-        lines.append(f"{_fmt_vtt(seg['start'])} --> {_fmt_vtt(seg['end'])}")
+        start = _format_timestamp(seg["start"], "vtt")
+        end = _format_timestamp(seg["end"], "vtt")
+        lines.append(f"{start} --> {end}")
         lines.append(seg["text"])
         lines.append("")
     return "\n".join(lines)

@@ -3,6 +3,7 @@
 
 import difflib
 import json
+import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -549,6 +550,16 @@ def get_bundled_assets_root() -> Path:
             getattr(sys, "_MEIPASS", str(Path(sys.executable).resolve().parent))
         )
     return Path(__file__).resolve().parent
+
+
+def terminate_subprocess(proc: subprocess.Popen, timeout: int = 5) -> None:
+    """Terminate a subprocess, escalating to kill if it ignores SIGTERM."""
+    proc.terminate()
+    try:
+        proc.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait()
 
 
 # ---- Filename and study name helpers ----
