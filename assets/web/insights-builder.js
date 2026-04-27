@@ -170,16 +170,6 @@
 
   // ---- Sorting ----
 
-  function artifactDurationSec(a) {
-    var s = Number(a.start);
-    var e = Number(a.end);
-    if (isNaN(s)) s = 0;
-    if (isNaN(e)) e = isNaN(s) ? 0 : s;
-    var d = e - s;
-    if (isNaN(d) || d < 0) return 0;
-    return d;
-  }
-
   function orderedArtifactsForList() {
     if (!state.listSort) return state.filteredArtifacts;
     var key = state.listSort.key;

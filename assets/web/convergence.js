@@ -1307,8 +1307,8 @@
   function buildQueueItem(event) {
     var item = {
       participant: event.participant,
-      segStart: event.start,
-      segDuration: event.end - event.start,
+      start: event.start,
+      end: event.end,
     };
     if (event.source === "screenspace") {
       item.desc = event.eventType;
@@ -1342,10 +1342,6 @@
       item.timestamp = cellValue;
       item.segIdx = segIdx;
       item.segTotal = segs.length;
-      // Use baseline-adjusted times for thumbnails; row+timestamp
-      // fields are preserved for server-side generation
-      item.segStart = event.start;
-      item.segDuration = event.end - event.start;
     }
     return item;
   }
