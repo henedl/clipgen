@@ -29,7 +29,7 @@ from icecream import ic
 REENCODING: bool = False
 AUDIO_NORMALIZE: bool = False
 FILEFORMAT: str = ".mp4"
-VERSIONNUM: str = "0.10.97"
+VERSIONNUM: str = "0.10.98"
 TITLECARDS_ENABLED: bool = (
     False  # use --titlecards / --no-titlecards to override per run
 )
@@ -123,6 +123,7 @@ CLIP_PARALLEL_WORKERS: int = 0  # Max concurrent ffmpeg processes for clip/scree
 MAX_FILESIZE_MB: int = 0  # Maximum output file size in MB (0 = disabled)
 MIN_SOURCE_VIDEO_SIZE_MB: int = 100  # Minimum file size (MB) to consider as a source video candidate during fuzzy matching
 MANIFEST_FILENAME: str = "clipgen_manifest.json"  # cumulative artifact manifest; consumed by Insights and --regenerate
+MANIFEST_SCHEMA: int = 2  # bumped when artifact/reel record shape changes; legacy manifests are ignored on load
 MANIFEST_ENABLED: bool = (
     False  # use --manifest CLI flag or set True to write manifest alongside artifacts
 )

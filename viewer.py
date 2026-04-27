@@ -59,7 +59,7 @@ def _is_valid_artifact(a: dict[str, Any]) -> bool:
 def build_artifact_records_for_clip(
     clip: utils.ClipRecord,
     base_video: str,
-    segment_details: list,
+    segment_details: list[tuple[str, int]],
     output_format: str,
 ) -> list[dict[str, Any]]:
     """Build artifact metadata records from a processed clip's successful outputs.
@@ -67,49 +67,29 @@ def build_artifact_records_for_clip(
     Args:
         clip: Prepared clip dict with 'times', 'category', 'study', etc.
         base_video: Source video filename
-        segment_details: List of (output_path, start_time_str, end_time_str) tuples
+        segment_details: List of (output_path, time_index) pairs.
+            ``time_index`` is the index into ``clip['times']`` for this segment.
         output_format: 'clip', 'screen', or 'gif'
 
     Returns:
         List of artifact dicts ready for JSON serialization
     """
-    artifacts: list[dict[str, Any]] = []
     artifact_type = (
         output_format if output_format in ("clip", "screen", "gif") else "clip"
     )
-
-    cell = clip.get("cell")
-    cell_row = getattr(cell, "row", None)
-    cell_col = getattr(cell, "col", None)
-    cell_a1 = utils.safe_cell_a1(cell_row, cell_col)
-
-    annotations = list(clip.get("cell_annotations", []))
-
-    for seg_idx, (out_path, start_str, end_str) in enumerate(segment_details):
-        start_sec = utils.timestamp_to_seconds(start_str)
-        end_sec = utils.timestamp_to_seconds(end_str)
-
-        artifacts.append(
-            {
-                "id": f"a{cell_row or 0}c{cell_col or 0}s{seg_idx}",
-                "type": artifact_type,
-                "file": Path(out_path).name,
-                "start": start_sec,
-                "end": end_sec,
-                "thumbnail": "",
-                "study": clip.get("study", ""),
-                "participant": clip.get("participant", ""),
-                "category": clip.get("category", ""),
-                "severity": clip.get("severity", ""),
-                "description": clip.get("desc", ""),
-                "cellRow": cell_row,
-                "cellCol": cell_col,
-                "cellA1": cell_a1,
-                "annotations": annotations,
-                "sourceVideo": base_video,
-            }
+    times = clip.get("times", [])
+    return [
+        utils.build_artifact_record(
+            clip,
+            base_video,
+            out_path,
+            times[time_idx][0],
+            times[time_idx][1],
+            artifact_type=artifact_type,
+            seg_idx=seg_idx,
         )
-    return artifacts
+        for seg_idx, (out_path, time_idx) in enumerate(segment_details)
+    ]
 
 
 def finalize_timeline_data(
@@ -509,6 +489,20 @@ def _load_manifest_both() -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
             _manifest_cache["reels"] = []
         return ([], [])
 
+    schema = data.get("schema")
+    if schema != config.MANIFEST_SCHEMA:
+        utils.warning_print(
+            f"Manifest schema {schema} does not match expected "
+            f"{config.MANIFEST_SCHEMA}; ignoring legacy entries.",
+            ["Re-run clipgen to regenerate the manifest in the current schema."],
+        )
+        with _MANIFEST_CACHE_LOCK:
+            _manifest_cache["path"] = path_str
+            _manifest_cache["mtime_ns"] = mtime_ns
+            _manifest_cache["artifacts"] = []
+            _manifest_cache["reels"] = []
+        return ([], [])
+
     raw = data.get("artifacts", [])
     valid = [a for a in raw if _is_valid_artifact(a)]
     if len(valid) < len(raw):
@@ -576,6 +570,7 @@ def save_manifest(
         mode=mode,
         output_format=output_format,
     )
+    data["schema"] = config.MANIFEST_SCHEMA
 
     result = utils.save_json_manifest(
         config.MANIFEST_FILENAME, data, warn_label="manifest"

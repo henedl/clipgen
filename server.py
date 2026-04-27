@@ -785,19 +785,15 @@ def api_reel() -> FlaskResponse:
                     {"ok": False, "error": "No clips found for the specified cells"}
                 ), 400
 
-            # Check if an identical reel already exists
+            # Check if an identical reel already exists. compute_reel_id only
+            # hashes cellRow/cellCol/start/end, so the components built here
+            # don't need an accurate sourceVideo — they are throwaway.
             components: list[dict[str, Any]] = []
             for clip in clips:
                 files.prepare_clip(clip)
-                cell = clip.get("cell")
                 for start_str, end_str in clip.get("times", []):
                     components.append(
-                        {
-                            "cellRow": getattr(cell, "row", None),
-                            "cellCol": getattr(cell, "col", None),
-                            "start": utils.timestamp_to_seconds(start_str),
-                            "end": utils.timestamp_to_seconds(end_str),
-                        }
+                        utils.build_reel_component(clip, "", start_str, end_str)
                     )
             if components:
                 expected_id = pipeline.compute_reel_id(components)
