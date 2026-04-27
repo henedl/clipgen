@@ -8,59 +8,18 @@
 
   var TASK_COLORS = DETECTOR_COLORS;
 
-  var SS_TYPE_ICON_PATHS = {
-    multitool: { viewBox: "0 0 16 16", paths: [
-      { d: "M8.91421 6.02513C9.2071 5.73223 9.68197 5.73223 9.97487 6.02513C11.3417 7.39196 11.3417 9.60804 9.97487 10.9749L7.97487 12.9749C6.60803 14.3417 4.39195 14.3417 3.02512 12.9749C1.82824 11.778 1.67995 9.93153 2.57781 8.57265C2.80615 8.22706 3.27142 8.13202 3.61701 8.36036C3.9626 8.5887 4.05765 9.05397 3.8293 9.39956C3.31651 10.1757 3.40282 11.2313 4.08578 11.9142C4.86683 12.6953 6.13316 12.6953 6.91421 11.9142L8.91421 9.91421C9.69525 9.13316 9.69525 7.86683 8.91421 7.08579C8.62131 6.79289 8.62131 6.31802 8.91421 6.02513Z", fillRule: "evenodd" },
-      { d: "M7.08578 9.97487C6.79289 10.2678 6.31801 10.2678 6.02512 9.97487C4.65828 8.60804 4.65829 6.39196 6.02512 5.02513L8.02512 3.02513C9.39195 1.65829 11.608 1.65829 12.9749 3.02513C14.1717 4.22201 14.32 6.06847 13.4222 7.42735C13.1938 7.77294 12.7286 7.86798 12.383 7.63964C12.0374 7.4113 11.9423 6.94603 12.1707 6.60044C12.6835 5.82435 12.5972 4.76874 11.9142 4.08579C11.1332 3.30474 9.86683 3.30474 9.08578 4.08579L7.08578 6.08579C6.30473 6.86683 6.30473 8.13316 7.08578 8.91421C7.37867 9.20711 7.37867 9.68198 7.08578 9.97487Z", fillRule: "evenodd" }
-    ]},
-    color: { viewBox: "0 0 16 16", paths: [
-      { d: "M15 4C15 5.39788 14.0439 6.57245 12.75 6.90549V8.5C12.75 8.69891 12.671 8.88968 12.5303 9.03033L12.0303 9.53033C11.7374 9.82322 11.2626 9.82322 10.9697 9.53033L10.25 8.81069L5.57322 13.4875C5.24503 13.8157 4.79992 14.0001 4.33579 14.0001H3.66421C3.59791 14.0001 3.53432 14.0264 3.48744 14.0733L2.78033 14.7804C2.63968 14.921 2.44891 15.0001 2.25 15.0001C2.05109 15.0001 1.86032 14.921 1.71967 14.7804L1.21967 14.2804C0.926777 13.9875 0.926777 13.5126 1.21967 13.2197L1.92678 12.5126C1.97366 12.4657 2 12.4021 2 12.3358V11.6643C2 11.2001 2.18437 10.755 2.51256 10.4268L7.18937 5.75003L6.46967 5.03033C6.17678 4.73744 6.17678 4.26256 6.46967 3.96967L6.96967 3.46967C7.11032 3.32902 7.30109 3.25 7.5 3.25H9.09451C9.42755 1.95608 10.6021 1 12 1C13.6569 1 15 2.34315 15 4ZM9.18937 7.75003L8.25003 6.81069L3.57322 11.4875C3.52634 11.5344 3.5 11.598 3.5 11.6643V12.3358C3.5 12.3938 3.49713 12.4514 3.49146 12.5086C3.54862 12.5029 3.60627 12.5001 3.66421 12.5001H4.33579C4.40209 12.5001 4.46568 12.4737 4.51256 12.4268L9.18937 7.75003Z", fillRule: "evenodd" }
-    ]},
-    change: { viewBox: "0 0 16 16", paths: [
-      { d: "M9.58011 1.07655C9.88578 1.22638 10.0522 1.56328 9.98545 1.89709L9.16486 6H13.25C13.5437 6 13.8103 6.17136 13.9323 6.43847C14.0542 6.70558 14.0091 7.0193 13.8168 7.2412L7.31678 14.7412C7.09383 14.9984 6.72559 15.0733 6.41991 14.9234C6.11424 14.7736 5.94781 14.4367 6.01458 14.1029L6.83516 10H2.75001C2.45637 10 2.18974 9.82864 2.06777 9.56153C1.9458 9.29442 1.99093 8.9807 2.18324 8.7588L8.68324 1.2588C8.90619 1.00155 9.27444 0.92672 9.58011 1.07655Z", fillRule: "evenodd" }
-    ]},
-    similarity: { viewBox: "0 0 16 16", paths: [
-      { d: "M2 4C2 2.89543 2.89543 2 4 2H12C13.1046 2 14 2.89543 14 4V12C14 13.1046 13.1046 14 12 14H4C2.89543 14 2 13.1046 2 12V4ZM12.5 9.70711C12.5 9.5745 12.4473 9.44732 12.3536 9.35355L11.3536 8.35355C11.1583 8.15829 10.8417 8.15829 10.6464 8.35355L9.35355 9.64645C9.15829 9.84171 8.84171 9.84171 8.64645 9.64645L6.35355 7.35355C6.15829 7.15829 5.84171 7.15829 5.64645 7.35355L3.64645 9.35355C3.55268 9.44732 3.5 9.5745 3.5 9.70711V12C3.5 12.2761 3.72386 12.5 4 12.5H12C12.2761 12.5 12.5 12.2761 12.5 12V9.70711ZM12 5C12 5.55228 11.5523 6 11 6C10.4477 6 10 5.55228 10 5C10 4.44772 10.4477 4 11 4C11.5523 4 12 4.44772 12 5Z", fillRule: "evenodd" }
-    ]},
-    text: { viewBox: "0 0 16 16", paths: [
-      { d: "M11 5C11.299 5 11.5693 5.17751 11.6882 5.45179L14.9382 12.9518C15.1029 13.3319 14.9283 13.7735 14.5482 13.9382C14.1682 14.1029 13.7266 13.9283 13.5619 13.5482L12.8908 11.9997H9.10923L8.4382 13.5482C8.2735 13.9283 7.83189 14.1029 7.45182 13.9382C7.07176 13.7735 6.89717 13.3319 7.06186 12.9518L10.3119 5.45179C10.4307 5.17751 10.7011 5 11 5ZM9.75923 10.4997H12.2408L11 7.63628L9.75923 10.4997Z", fillRule: "evenodd" },
-      { d: "M5.00003 1C5.41424 1 5.75003 1.33579 5.75003 1.75V3.01104C6.16299 3.02322 6.5735 3.04541 6.98131 3.0774C7.44038 3.11341 7.89601 3.16182 8.34786 3.22231C8.75842 3.27727 9.04668 3.65464 8.99172 4.06519C8.93676 4.47574 8.55938 4.76401 8.14883 4.70905C7.92894 4.67961 7.70808 4.65321 7.48628 4.6299C7.1301 5.85717 6.59808 7.00928 5.91941 8.05729C6.15555 8.36066 6.40658 8.65193 6.67142 8.92999C6.95709 9.22993 6.94553 9.70466 6.64559 9.99034C6.34565 10.276 5.87092 10.2644 5.58525 9.96451C5.38294 9.7521 5.18774 9.53284 5.00002 9.30711C4.18402 10.2884 3.22645 11.1474 2.15883 11.853C1.81326 12.0813 1.34799 11.9863 1.11962 11.6408C0.891239 11.2952 0.986242 10.8299 1.33181 10.6015C2.3813 9.90797 3.31021 9.04714 4.08066 8.05729C3.88359 7.75296 3.69887 7.43984 3.52724 7.11865C3.33202 6.75332 3.46992 6.29891 3.83524 6.10369C4.20057 5.90847 4.65498 6.04637 4.8502 6.4117C4.89895 6.50293 4.9489 6.59343 5.00002 6.68318C5.38798 6.00207 5.7083 5.27759 5.95187 4.51891C5.63619 4.50635 5.31887 4.5 5.00003 4.5C3.93193 4.5 2.88086 4.57121 1.85122 4.70905C1.44067 4.76401 1.0633 4.47574 1.00834 4.06519C0.95338 3.65464 1.24164 3.27727 1.65219 3.22231C2.50548 3.10808 3.37219 3.03692 4.25003 3.01104V1.75C4.25003 1.33579 4.58582 1 5.00003 1Z", fillRule: "evenodd" }
-    ]},
-    numbers: { viewBox: "0 0 16 16", paths: [
-      { d: "M7.48677 2.89033C7.56427 2.48344 7.29725 2.09075 6.89035 2.01325C6.48345 1.93574 6.09077 2.20277 6.01326 2.60967L5.55827 4.99835H3.60963C3.19542 4.99835 2.85963 5.33414 2.85963 5.74835C2.85963 6.16257 3.19542 6.49835 3.60963 6.49835H5.27256L4.7016 9.49589H2.74963C2.33542 9.49589 1.99963 9.83168 1.99963 10.2459C1.99963 10.6601 2.33542 10.9959 2.74963 10.9959H4.41588L4.01326 13.1097C3.93576 13.5166 4.20278 13.9092 4.60968 13.9868C5.01658 14.0643 5.40926 13.7972 5.48677 13.3903L5.94285 10.9959H8.91589L8.51326 13.1097C8.43576 13.5166 8.70278 13.9092 9.10968 13.9868C9.51658 14.0643 9.90927 13.7972 9.98677 13.3903L10.4429 10.9959H12.3896C12.8038 10.9959 13.1396 10.6601 13.1396 10.2459C13.1396 9.83168 12.8038 9.49589 12.3896 9.49589H10.7286L11.2995 6.49835H13.2496C13.6638 6.49835 13.9996 6.16257 13.9996 5.74835C13.9996 5.33414 13.6638 4.99835 13.2496 4.99835H11.5852L11.9868 2.89033C12.0643 2.48344 11.7972 2.09075 11.3903 2.01325C10.9835 1.93574 10.5908 2.20277 10.5133 2.60967L10.0583 4.99835H7.08524L7.48677 2.89033ZM6.79953 6.49835L6.22857 9.49589H9.2016L9.77256 6.49835H6.79953Z", fillRule: "evenodd" }
-    ]},
-    template: { viewBox: "0 0 16 16", paths: [
-      { d: "M2 3.5A1.5 1.5 0 0 1 3.5 2H5a.75.75 0 0 1 0 1.5H3.5v1.75a.75.75 0 0 1-1.5 0V3.5ZM11 2a.75.75 0 0 0 0 1.5h1.5v1.75a.75.75 0 0 0 1.5 0V3.5A1.5 1.5 0 0 0 12.5 2H11ZM2.75 10.75a.75.75 0 0 1 .75.75v1.5H5a.75.75 0 0 1 0 1.5H3.5A1.5 1.5 0 0 1 2 13v-1.5a.75.75 0 0 1 .75-.75ZM13.25 10.75a.75.75 0 0 1 .75.75V13a1.5 1.5 0 0 1-1.5 1.5H11a.75.75 0 0 1 0-1.5h1.5v-1.5a.75.75 0 0 1 .75-.75ZM10 8a2 2 0 1 1-4 0 2 2 0 0 1 4 0Z", fillRule: "evenodd" }
-    ]},
-    flow: { viewBox: "0 0 16 16", paths: [
-      { d: "M5.28 10.22a.75.75 0 0 1 0 1.06l-1.47 1.47h8.44a.75.75 0 0 1 0 1.5H3.81l1.47 1.47a.75.75 0 0 1-1.06 1.06l-2.75-2.75a.75.75 0 0 1 0-1.06l2.75-2.75a.75.75 0 0 1 1.06 0ZM10.72.22a.75.75 0 0 1 1.06 0l2.75 2.75a.75.75 0 0 1 0 1.06l-2.75 2.75a.75.75 0 1 1-1.06-1.06l1.47-1.47H3.75a.75.75 0 0 1 0-1.5h8.44L10.72 1.28a.75.75 0 0 1 0-1.06Z", fillRule: "evenodd" }
-    ]},
-    scene: { viewBox: "0 0 16 16", paths: [
-      { d: "M2 3.5A1.5 1.5 0 0 1 3.5 2h2A1.5 1.5 0 0 1 7 3.5v2A1.5 1.5 0 0 1 5.5 7h-2A1.5 1.5 0 0 1 2 5.5v-2ZM9 3.5A1.5 1.5 0 0 1 10.5 2h2A1.5 1.5 0 0 1 14 3.5v2A1.5 1.5 0 0 1 12.5 7h-2A1.5 1.5 0 0 1 9 5.5v-2ZM2 10.5A1.5 1.5 0 0 1 3.5 9h2A1.5 1.5 0 0 1 7 10.5v2A1.5 1.5 0 0 1 5.5 14h-2A1.5 1.5 0 0 1 2 12.5v-2ZM9 10.5A1.5 1.5 0 0 1 10.5 9h2A1.5 1.5 0 0 1 14 10.5v2A1.5 1.5 0 0 1 12.5 14h-2A1.5 1.5 0 0 1 9 12.5v-2Z" }
-    ]},
-    inactivity: { viewBox: "0 0 16 16", paths: [
-      { d: "M15 8C15 11.866 11.866 15 8 15C4.13401 15 1 11.866 1 8C1 4.13401 4.13401 1 8 1C11.866 1 15 4.13401 15 8ZM5.5 5.5C5.5 5.22386 5.72386 5 6 5H6.5C6.77614 5 7 5.22386 7 5.5V10.5C7 10.7761 6.77614 11 6.5 11H6C5.72386 11 5.5 10.7761 5.5 10.5V5.5ZM9.5 5C9.22386 5 9 5.22386 9 5.5V10.5C9 10.7761 9.22386 11 9.5 11H10C10.2761 11 10.5 10.7761 10.5 10.5V5.5C10.5 5.22386 10.2761 5 10 5H9.5Z", fillRule: "evenodd" }
-    ]}
+  var SS_TASK_ICON_TYPES = {
+    multitool: 1, color: 1, change: 1, similarity: 1, text: 1,
+    numbers: 1, template: 1, flow: 1, scene: 1, inactivity: 1,
   };
 
-  function buildTypeIconSvg(type) {
-    var info = SS_TYPE_ICON_PATHS[type];
-    if (!info) return null;
-    var svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-    svg.setAttribute("width", "14");
-    svg.setAttribute("height", "14");
-    svg.setAttribute("viewBox", info.viewBox);
-    svg.setAttribute("fill", "currentColor");
-    info.paths.forEach(function (p) {
-      var path = document.createElementNS("http://www.w3.org/2000/svg", "path");
-      path.setAttribute("d", p.d);
-      if (p.fillRule) {
-        path.setAttribute("fill-rule", p.fillRule);
-        path.setAttribute("clip-rule", p.fillRule);
-      }
-      svg.appendChild(path);
-    });
-    return svg;
+  // Build a span that renders the task icon via mask-image (see .ss-task-icon
+  // family in screenspace.css). Color follows currentColor on the parent.
+  function buildTypeIcon(type) {
+    if (!SS_TASK_ICON_TYPES[type]) return null;
+    var span = document.createElement("span");
+    span.className = "ss-task-icon ss-task-icon--" + type;
+    return span;
   }
 
   var TIMELINE_CANVAS_HEIGHT = 64;
@@ -72,10 +31,7 @@
   // the DOM on every drag tick. Null when no color tool panel is active.
   var _colorHiddenInputs = null;
 
-  var REGION_COLORS = [
-    "#3b82f6", "#ef4444", "#22c55e", "#f59e0b",
-    "#8b5cf6", "#06b6d4", "#ec4899", "#14b8a6",
-  ];
+  var REGION_COLOR_COUNT = 8;
 
   var state = {
     participants: [],
@@ -154,12 +110,17 @@
 
   function refreshThemeColors() {
     var cs = getComputedStyle(document.documentElement);
+    var regionPalette = [];
+    for (var i = 1; i <= REGION_COLOR_COUNT; i++) {
+      regionPalette.push(cs.getPropertyValue("--region-color-" + i).trim() || "#3b82f6");
+    }
     _cachedThemeColors = {
       surfaceAlt: cs.getPropertyValue("--color-surface-alt").trim() || "#f1ece4",
       border: cs.getPropertyValue("--color-border").trim() || "#e0ddd7",
       textDim: cs.getPropertyValue("--color-text-dim").trim() || "#6b7280",
       accent: cs.getPropertyValue("--color-accent").trim() || "#1d4f72",
       fontMono: cs.getPropertyValue("--font-mono").trim() || "monospace",
+      regionPalette: regionPalette,
     };
   }
 
@@ -170,19 +131,6 @@
 
   // ---- Helpers ----
 
-  function formatDuration(secs) {
-    secs = Math.round(secs);
-    if (secs >= 3600) {
-      var h = Math.floor(secs / 3600);
-      var m = Math.floor((secs % 3600) / 60);
-      var s = secs % 60;
-      return h + ":" + (m < 10 ? "0" : "") + m + ":" + (s < 10 ? "0" : "") + s;
-    }
-    var m2 = Math.floor(secs / 60);
-    var s2 = secs % 60;
-    return m2 + ":" + (s2 < 10 ? "0" : "") + s2;
-  }
-
   function formatTimestamp(secs) {
     var m = Math.floor(secs / 60);
     var s = secs % 60;
@@ -190,13 +138,14 @@
   }
 
   function regionColorForIndex(i) {
-    return REGION_COLORS[i % REGION_COLORS.length];
+    var palette = getThemeColors().regionPalette;
+    return palette[i % palette.length];
   }
 
   function regionColorByName(name) {
     var names = Object.keys(state.regions);
     var idx = names.indexOf(name);
-    return idx >= 0 ? regionColorForIndex(idx) : REGION_COLORS[0];
+    return idx >= 0 ? regionColorForIndex(idx) : regionColorForIndex(0);
   }
 
   function regionToPixels(r) {
@@ -2148,7 +2097,7 @@
     tip.style.borderLeft = "3px solid " + color;
 
     var header = el("div", "ss-tooltip-header");
-    var icon = buildTypeIconSvg(hit.task.type);
+    var icon = buildTypeIcon(hit.task.type);
     if (icon) {
       icon.style.color = color;
       icon.style.flexShrink = "0";
@@ -2418,251 +2367,233 @@
     regionRow.appendChild(regionCtrl);
     body.appendChild(regionRow);
 
-    if (stepType === "color") {
-      var row1 = el("div", "param-row");
-      row1.appendChild(el("span", "param-label", "Hex color"));
-      var ctrl1 = el("div", "param-control");
-      var hexIn = document.createElement("input");
-      hexIn.type = "text"; hexIn.id = "paramColorHex" + sfx; hexIn.autocomplete = "off";
-      hexIn.className = "color-hex-input"; hexIn.placeholder = "#000000"; hexIn.maxLength = 7;
-      hexIn.style.width = "5.5rem";
-      ctrl1.appendChild(hexIn);
-      // Pipette button for multitool color step
-      var pipBtn = el("button", "btn btn-small btn-pipette");
-      pipBtn.title = "Pick color from frame";
-      pipBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path fill-rule="evenodd" clip-rule="evenodd" d="M15 4C15 5.39788 14.0439 6.57245 12.75 6.90549V8.5C12.75 8.69891 12.671 8.88968 12.5303 9.03033L12.0303 9.53033C11.7374 9.82322 11.2626 9.82322 10.9697 9.53033L10.25 8.81069L5.57322 13.4875C5.24503 13.8157 4.79992 14.0001 4.33579 14.0001H3.66421C3.59791 14.0001 3.53432 14.0264 3.48744 14.0733L2.78033 14.7804C2.63968 14.921 2.44891 15.0001 2.25 15.0001C2.05109 15.0001 1.86032 14.921 1.71967 14.7804L1.21967 14.2804C0.926777 13.9875 0.926777 13.5126 1.21967 13.2197L1.92678 12.5126C1.97366 12.4657 2 12.4021 2 12.3358V11.6643C2 11.2001 2.18437 10.755 2.51256 10.4268L7.18937 5.75003L6.46967 5.03033C6.17678 4.73744 6.17678 4.26256 6.46967 3.96967L6.96967 3.46967C7.11032 3.32902 7.30109 3.25 7.5 3.25H9.09451C9.42755 1.95608 10.6021 1 12 1C13.6569 1 15 2.34315 15 4ZM9.18937 7.75003L8.25003 6.81069L3.57322 11.4875C3.52634 11.5344 3.5 11.598 3.5 11.6643V12.3358C3.5 12.3938 3.49713 12.4514 3.49146 12.5086C3.54862 12.5029 3.60627 12.5001 3.66421 12.5001H4.33579C4.40209 12.5001 4.46568 12.4737 4.51256 12.4268L9.18937 7.75003Z"/></svg>';
-      (function(capturedIdx) {
-        pipBtn.addEventListener("click", function() {
-          if (state.pipetteActive) { deactivatePipette(); return; }
-          state._mtPipetteStep = capturedIdx;
-          activatePipette();
-        });
-      })(idx);
-      ctrl1.appendChild(pipBtn);
-      // Hidden HSV fields
-      var hH = document.createElement("input"); hH.type = "hidden"; hH.id = "paramColorH" + sfx; hH.value = "0";
-      var hS = document.createElement("input"); hS.type = "hidden"; hS.id = "paramColorS" + sfx; hS.value = "0";
-      var hV = document.createElement("input"); hV.type = "hidden"; hV.id = "paramColorV" + sfx; hV.value = "0";
-      ctrl1.appendChild(hH); ctrl1.appendChild(hS); ctrl1.appendChild(hV);
-      row1.appendChild(ctrl1);
-      body.appendChild(row1);
-      // Listen for hex input changes to update hidden HSV
-      hexIn.addEventListener("input", function() {
-        var hex = hexIn.value.replace("#", "");
-        if (hex.length === 6) {
-          var r = parseInt(hex.substring(0, 2), 16) || 0;
-          var g = parseInt(hex.substring(2, 4), 16) || 0;
-          var b = parseInt(hex.substring(4, 6), 16) || 0;
-          // Convert RGB to HSV (OpenCV convention: H 0-180, S 0-255, V 0-255)
-          var rr = r / 255, gg = g / 255, bb = b / 255;
-          var mx = Math.max(rr, gg, bb), mn = Math.min(rr, gg, bb);
-          var d = mx - mn, h = 0, s = mx === 0 ? 0 : d / mx, v = mx;
-          if (d !== 0) {
-            if (mx === rr) h = ((gg - bb) / d + (gg < bb ? 6 : 0)) / 6;
-            else if (mx === gg) h = ((bb - rr) / d + 2) / 6;
-            else h = ((rr - gg) / d + 4) / 6;
-          }
-          hH.value = Math.round(h * 180);
-          hS.value = Math.round(s * 255);
-          hV.value = Math.round(v * 255);
-        }
-      });
-      var row2 = el("div", "param-row");
-      row2.appendChild(el("span", "param-label", "Tolerance"));
-      var ctrl2 = el("div", "param-control");
-      ctrl2.appendChild(numberInput("paramColorTol" + sfx, 0, 100, 30, 1));
-      row2.appendChild(ctrl2);
-      body.appendChild(row2);
-    } else if (stepType === "change") {
-      var r1 = el("div", "param-row");
-      r1.appendChild(el("span", "param-label", "Threshold"));
-      var c1 = el("div", "param-control");
-      c1.appendChild(numberInput("paramChangeThresh" + sfx, 0.01, 0.50, 0.03, 0.01));
-      r1.appendChild(c1);
-      body.appendChild(r1);
-      var r2 = el("div", "param-row");
-      r2.appendChild(el("span", "param-label", "Noise"));
-      var c2 = el("div", "param-control");
-      c2.appendChild(numberInput("paramChangeNoise" + sfx, 0, 100, 30, 1));
-      r2.appendChild(c2);
-      body.appendChild(r2);
-    } else if (stepType === "similarity") {
-      var r1 = el("div", "param-row");
-      r1.appendChild(el("span", "param-label", "Reference"));
-      var c1 = el("div", "param-control");
-      var capBtn = el("button", "btn btn-small", "Capture Frame");
-      var tsLabel = el("span", "param-value", "—");
-      tsLabel.id = "paramSimRef" + sfx;
-      if (state.multitoolSteps[idx]._refTs !== undefined) {
-        tsLabel.textContent = formatTimestamp(state.multitoolSteps[idx]._refTs);
-      }
-      capBtn.addEventListener("click", function () {
-        state.multitoolSteps[idx]._refTs = state.currentTimestamp;
-        tsLabel.textContent = formatTimestamp(state.currentTimestamp);
-      });
-      c1.appendChild(capBtn);
-      c1.appendChild(tsLabel);
-      r1.appendChild(c1);
-      body.appendChild(r1);
-      var r2 = el("div", "param-row");
-      r2.appendChild(el("span", "param-label", "Threshold"));
-      var c2 = el("div", "param-control");
-      c2.appendChild(numberInput("paramSimThresh" + sfx, 0.50, 1.00, 0.90, 0.01));
-      r2.appendChild(c2);
-      body.appendChild(r2);
-    } else if (stepType === "text") {
-      var r1 = el("div", "param-row");
-      r1.appendChild(el("span", "param-label", "Search"));
-      var c1 = el("div", "param-control");
-      var searchIn = document.createElement("input");
-      searchIn.type = "text"; searchIn.id = "paramTextSearch" + sfx; searchIn.autocomplete = "off";
-      searchIn.placeholder = "Search text...";
-      searchIn.style.flex = "1"; searchIn.style.fontSize = "var(--text-xs)";
-      searchIn.style.padding = "var(--space-1)";
-      searchIn.style.border = "1px solid var(--color-border)";
-      searchIn.style.borderRadius = "var(--radius-sm)";
-      searchIn.style.background = "var(--color-bg)";
-      searchIn.style.color = "var(--color-text)";
-      c1.appendChild(searchIn);
-      r1.appendChild(c1);
-      body.appendChild(r1);
-      var r2 = el("div", "param-row");
-      r2.appendChild(el("span", "param-label", "Fuzzy"));
-      var c2 = el("div", "param-control");
-      c2.appendChild(numberInput("paramTextFuzzy" + sfx, 0.50, 1.00, 0.80, 0.01));
-      r2.appendChild(c2);
-      body.appendChild(r2);
-    } else if (stepType === "numbers") {
-      var r1 = el("div", "param-row");
-      r1.appendChild(el("span", "param-label", "Operator"));
-      var c1 = el("div", "param-control");
-      var sel = document.createElement("select");
-      sel.id = "paramNumOperator" + sfx;
-      sel.style.fontSize = "var(--text-xs)";
-      [["gt",">"],["lt","<"],["eq","="],["gte","≥"],["lte","≤"],["range","range"]].forEach(function(pair) {
-        var opt = document.createElement("option"); opt.value = pair[0]; opt.textContent = pair[1];
-        sel.appendChild(opt);
-      });
-      c1.appendChild(sel);
-      r1.appendChild(c1);
-      body.appendChild(r1);
-      var r2 = el("div", "param-row");
-      r2.appendChild(el("span", "param-label", "Target"));
-      var c2 = el("div", "param-control");
-      var targetIn = document.createElement("input");
-      targetIn.type = "number"; targetIn.id = "paramNumTarget" + sfx; targetIn.style.width = "4rem";
-      targetIn.style.fontSize = "var(--text-xs)";
-      c2.appendChild(targetIn);
-      r2.appendChild(c2);
-      body.appendChild(r2);
-    } else if (stepType === "template") {
-      var r1 = el("div", "param-row");
-      r1.appendChild(el("span", "param-label", "Template"));
-      var c1 = el("div", "param-control");
-      var capBtn = el("button", "btn btn-small", "Capture Frame");
-      var tsLabel = el("span", "param-value", "—");
-      tsLabel.id = "paramTemplateRef" + sfx;
-      if (state.multitoolSteps[idx]._refTs !== undefined) {
-        tsLabel.textContent = formatTimestamp(state.multitoolSteps[idx]._refTs);
-      }
-      capBtn.addEventListener("click", function () {
-        state.multitoolSteps[idx]._refTs = state.currentTimestamp;
-        tsLabel.textContent = formatTimestamp(state.currentTimestamp);
-      });
-      c1.appendChild(capBtn);
-      c1.appendChild(tsLabel);
-      r1.appendChild(c1);
-      body.appendChild(r1);
-      var r2 = el("div", "param-row");
-      r2.appendChild(el("span", "param-label", "Threshold"));
-      var c2 = el("div", "param-control");
-      c2.appendChild(numberInput("paramTemplateThresh" + sfx, 0.50, 1.00, 0.70, 0.01));
-      r2.appendChild(c2);
-      body.appendChild(r2);
-    } else if (stepType === "flow") {
-      var r1 = el("div", "param-row");
-      r1.appendChild(el("span", "param-label", "Magnitude"));
-      var c1 = el("div", "param-control");
-      c1.appendChild(numberInput("paramFlowMag" + sfx, 0.5, 20, 2.0, 0.5));
-      r1.appendChild(c1);
-      body.appendChild(r1);
-    } else if (stepType === "scene") {
-      var sceneList = el("div", "scene-reference-list");
-      sceneList.id = "mtSceneList" + sfx;
-      if (!state.multitoolSteps[idx]._scenes) state.multitoolSteps[idx]._scenes = [];
-      var renderMtScenes = (function (listEl, stepIdx) {
-        return function () {
-          listEl.innerHTML = "";
-          state.multitoolSteps[stepIdx]._scenes.forEach(function (ref, refIdx) {
-            if (ref.threshold === undefined) ref.threshold = 0.75;
-            var item = el("div", "scene-ref-item");
-            item.appendChild(el("span", "scene-ref-name", ref.name));
-            item.appendChild(el("span", "param-value", formatTimestamp(ref.timestamp)));
-            var threshSlider = document.createElement("input");
-            threshSlider.type = "range";
-            threshSlider.min = "0.50";
-            threshSlider.max = "1.00";
-            threshSlider.step = "0.01";
-            threshSlider.value = String(ref.threshold);
-            threshSlider.className = "scene-ref-thresh";
-            var threshVal = el("span", "param-value", String(ref.threshold));
-            threshSlider.addEventListener("input", (function (si, ri) {
-              return function () {
-                state.multitoolSteps[si]._scenes[ri].threshold = parseFloat(threshSlider.value);
-                threshVal.textContent = threshSlider.value;
-              };
-            })(stepIdx, refIdx));
-            item.appendChild(threshSlider);
-            item.appendChild(threshVal);
-            var rmBtn = el("button", "btn btn-small", "\u00d7");
-            rmBtn.addEventListener("click", (function (si, ri) {
-              return function () {
-                state.multitoolSteps[si]._scenes.splice(ri, 1);
-                renderMtScenes();
-              };
-            })(stepIdx, refIdx));
-            item.appendChild(rmBtn);
-            listEl.appendChild(item);
-          });
-        };
-      })(sceneList, idx);
-      renderMtScenes();
-      body.appendChild(sceneList);
-      var addScRow = el("div", "param-row");
-      addScRow.appendChild(el("span", "param-label", "Add Scene"));
-      var addScCtrl = el("div", "param-control");
-      var scNameInp = textInput("paramSceneName" + sfx, "e.g. menu, gameplay");
-      addScCtrl.appendChild(scNameInp);
-      var scCapBtn = el("button", "btn btn-small", "Capture");
-      (function (capturedIdx, capturedRender, capturedNameInp) {
-        scCapBtn.addEventListener("click", function () {
-          var name = capturedNameInp.value.trim();
-          if (!name) { showToast("Enter a scene name"); return; }
-          state.multitoolSteps[capturedIdx]._scenes.push({
-            name: name, timestamp: state.currentTimestamp, threshold: 0.75
-          });
-          capturedNameInp.value = "";
-          capturedRender();
-          showToast("Scene '" + name + "' at " + formatTimestamp(state.currentTimestamp));
-        });
-      })(idx, renderMtScenes, scNameInp);
-      addScCtrl.appendChild(scCapBtn);
-      addScRow.appendChild(addScCtrl);
-      body.appendChild(addScRow);
-    } else if (stepType === "inactivity") {
-      var r1 = el("div", "param-row");
-      r1.appendChild(el("span", "param-label", "Sensitivity"));
-      var c1 = el("div", "param-control");
-      var inactSlider = rangeInput("paramInactThresh" + sfx, 0, 30, 10, 1);
-      c1.appendChild(inactSlider);
-      var inactVal = el("span", "param-value");
-      inactVal.textContent = inactSlider.value;
-      inactSlider.addEventListener("input", function () { inactVal.textContent = inactSlider.value; });
-      c1.appendChild(inactVal);
-      r1.appendChild(c1);
-      body.appendChild(r1);
-    }
+    var renderer = MULTITOOL_PARAM_RENDERERS[stepType];
+    if (renderer) renderer(body, idx, sfx);
   }
+
+  function _mtRenderColor(body, idx, sfx) {
+    var row1 = el("div", "param-row");
+    row1.appendChild(el("span", "param-label", "Hex color"));
+    var ctrl1 = el("div", "param-control");
+    var hexIn = document.createElement("input");
+    hexIn.type = "text"; hexIn.id = "paramColorHex" + sfx; hexIn.autocomplete = "off";
+    hexIn.className = "color-hex-input"; hexIn.placeholder = "#000000"; hexIn.maxLength = 7;
+    hexIn.style.width = "5.5rem";
+    ctrl1.appendChild(hexIn);
+    var pipBtn = el("button", "btn btn-small btn-pipette");
+    pipBtn.title = "Pick color from frame";
+    pipBtn.appendChild(buildTypeIcon("color"));
+    pipBtn.addEventListener("click", function () {
+      if (state.pipetteActive) { deactivatePipette(); return; }
+      state._mtPipetteStep = idx;
+      activatePipette();
+    });
+    ctrl1.appendChild(pipBtn);
+    var hH = document.createElement("input"); hH.type = "hidden"; hH.id = "paramColorH" + sfx; hH.value = "0";
+    var hS = document.createElement("input"); hS.type = "hidden"; hS.id = "paramColorS" + sfx; hS.value = "0";
+    var hV = document.createElement("input"); hV.type = "hidden"; hV.id = "paramColorV" + sfx; hV.value = "0";
+    ctrl1.appendChild(hH); ctrl1.appendChild(hS); ctrl1.appendChild(hV);
+    row1.appendChild(ctrl1);
+    body.appendChild(row1);
+    hexIn.addEventListener("input", function () {
+      var hex = hexIn.value.replace("#", "");
+      if (hex.length === 6) {
+        var r = parseInt(hex.substring(0, 2), 16) || 0;
+        var g = parseInt(hex.substring(2, 4), 16) || 0;
+        var b = parseInt(hex.substring(4, 6), 16) || 0;
+        // OpenCV HSV: H 0-180, S 0-255, V 0-255
+        var rr = r / 255, gg = g / 255, bb = b / 255;
+        var mx = Math.max(rr, gg, bb), mn = Math.min(rr, gg, bb);
+        var d = mx - mn, h = 0, s = mx === 0 ? 0 : d / mx, v = mx;
+        if (d !== 0) {
+          if (mx === rr) h = ((gg - bb) / d + (gg < bb ? 6 : 0)) / 6;
+          else if (mx === gg) h = ((bb - rr) / d + 2) / 6;
+          else h = ((rr - gg) / d + 4) / 6;
+        }
+        hH.value = Math.round(h * 180);
+        hS.value = Math.round(s * 255);
+        hV.value = Math.round(v * 255);
+      }
+    });
+    _mtAddNumberRow(body, "Tolerance", "paramColorTol" + sfx, 0, 100, 30, 1);
+  }
+
+  function _mtRenderChange(body, idx, sfx) {
+    _mtAddNumberRow(body, "Threshold", "paramChangeThresh" + sfx, 0.01, 0.50, 0.03, 0.01);
+    _mtAddNumberRow(body, "Noise", "paramChangeNoise" + sfx, 0, 100, 30, 1);
+  }
+
+  function _mtRenderSimilarity(body, idx, sfx) {
+    _mtAddCaptureRefRow(body, idx, "Reference", "paramSimRef" + sfx);
+    _mtAddNumberRow(body, "Threshold", "paramSimThresh" + sfx, 0.50, 1.00, 0.90, 0.01);
+  }
+
+  function _mtRenderText(body, idx, sfx) {
+    var r1 = el("div", "param-row");
+    r1.appendChild(el("span", "param-label", "Search"));
+    var c1 = el("div", "param-control");
+    var searchIn = document.createElement("input");
+    searchIn.type = "text"; searchIn.id = "paramTextSearch" + sfx; searchIn.autocomplete = "off";
+    searchIn.placeholder = "Search text...";
+    searchIn.style.flex = "1"; searchIn.style.fontSize = "var(--text-xs)";
+    searchIn.style.padding = "var(--space-1)";
+    searchIn.style.border = "1px solid var(--color-border)";
+    searchIn.style.borderRadius = "var(--radius-sm)";
+    searchIn.style.background = "var(--color-bg)";
+    searchIn.style.color = "var(--color-text)";
+    c1.appendChild(searchIn);
+    r1.appendChild(c1);
+    body.appendChild(r1);
+    _mtAddNumberRow(body, "Fuzzy", "paramTextFuzzy" + sfx, 0.50, 1.00, 0.80, 0.01);
+  }
+
+  function _mtRenderNumbers(body, idx, sfx) {
+    var r1 = el("div", "param-row");
+    r1.appendChild(el("span", "param-label", "Operator"));
+    var c1 = el("div", "param-control");
+    var sel = document.createElement("select");
+    sel.id = "paramNumOperator" + sfx;
+    sel.style.fontSize = "var(--text-xs)";
+    [["gt",">"],["lt","<"],["eq","="],["gte","≥"],["lte","≤"],["range","range"]].forEach(function (pair) {
+      var opt = document.createElement("option"); opt.value = pair[0]; opt.textContent = pair[1];
+      sel.appendChild(opt);
+    });
+    c1.appendChild(sel);
+    r1.appendChild(c1);
+    body.appendChild(r1);
+    var r2 = el("div", "param-row");
+    r2.appendChild(el("span", "param-label", "Target"));
+    var c2 = el("div", "param-control");
+    var targetIn = document.createElement("input");
+    targetIn.type = "number"; targetIn.id = "paramNumTarget" + sfx; targetIn.style.width = "4rem";
+    targetIn.style.fontSize = "var(--text-xs)";
+    c2.appendChild(targetIn);
+    r2.appendChild(c2);
+    body.appendChild(r2);
+  }
+
+  function _mtRenderTemplate(body, idx, sfx) {
+    _mtAddCaptureRefRow(body, idx, "Template", "paramTemplateRef" + sfx);
+    _mtAddNumberRow(body, "Threshold", "paramTemplateThresh" + sfx, 0.50, 1.00, 0.70, 0.01);
+  }
+
+  function _mtRenderFlow(body, idx, sfx) {
+    _mtAddNumberRow(body, "Magnitude", "paramFlowMag" + sfx, 0.5, 20, 2.0, 0.5);
+  }
+
+  function _mtRenderScene(body, idx, sfx) {
+    var sceneList = el("div", "scene-reference-list");
+    sceneList.id = "mtSceneList" + sfx;
+    if (!state.multitoolSteps[idx]._scenes) state.multitoolSteps[idx]._scenes = [];
+    function renderMtScenes() {
+      sceneList.innerHTML = "";
+      state.multitoolSteps[idx]._scenes.forEach(function (ref, refIdx) {
+        if (ref.threshold === undefined) ref.threshold = 0.75;
+        var item = el("div", "scene-ref-item");
+        item.appendChild(el("span", "scene-ref-name", ref.name));
+        item.appendChild(el("span", "param-value", formatTimestamp(ref.timestamp)));
+        var threshSlider = document.createElement("input");
+        threshSlider.type = "range";
+        threshSlider.min = "0.50"; threshSlider.max = "1.00"; threshSlider.step = "0.01";
+        threshSlider.value = String(ref.threshold);
+        threshSlider.className = "scene-ref-thresh";
+        var threshVal = el("span", "param-value", String(ref.threshold));
+        threshSlider.addEventListener("input", (function (ri) {
+          return function () {
+            state.multitoolSteps[idx]._scenes[ri].threshold = parseFloat(threshSlider.value);
+            threshVal.textContent = threshSlider.value;
+          };
+        })(refIdx));
+        item.appendChild(threshSlider);
+        item.appendChild(threshVal);
+        var rmBtn = el("button", "btn btn-small", "\u00d7");
+        rmBtn.addEventListener("click", (function (ri) {
+          return function () {
+            state.multitoolSteps[idx]._scenes.splice(ri, 1);
+            renderMtScenes();
+          };
+        })(refIdx));
+        item.appendChild(rmBtn);
+        sceneList.appendChild(item);
+      });
+    }
+    renderMtScenes();
+    body.appendChild(sceneList);
+    var addScRow = el("div", "param-row");
+    addScRow.appendChild(el("span", "param-label", "Add Scene"));
+    var addScCtrl = el("div", "param-control");
+    var scNameInp = textInput("paramSceneName" + sfx, "e.g. menu, gameplay");
+    addScCtrl.appendChild(scNameInp);
+    var scCapBtn = el("button", "btn btn-small", "Capture");
+    scCapBtn.addEventListener("click", function () {
+      var name = scNameInp.value.trim();
+      if (!name) { showToast("Enter a scene name"); return; }
+      state.multitoolSteps[idx]._scenes.push({
+        name: name, timestamp: state.currentTimestamp, threshold: 0.75,
+      });
+      scNameInp.value = "";
+      renderMtScenes();
+      showToast("Scene '" + name + "' at " + formatTimestamp(state.currentTimestamp));
+    });
+    addScCtrl.appendChild(scCapBtn);
+    addScRow.appendChild(addScCtrl);
+    body.appendChild(addScRow);
+  }
+
+  function _mtRenderInactivity(body, idx, sfx) {
+    var r1 = el("div", "param-row");
+    r1.appendChild(el("span", "param-label", "Sensitivity"));
+    var c1 = el("div", "param-control");
+    var inactSlider = rangeInput("paramInactThresh" + sfx, 0, 30, 10, 1);
+    c1.appendChild(inactSlider);
+    var inactVal = el("span", "param-value");
+    inactVal.textContent = inactSlider.value;
+    inactSlider.addEventListener("input", function () { inactVal.textContent = inactSlider.value; });
+    c1.appendChild(inactVal);
+    r1.appendChild(c1);
+    body.appendChild(r1);
+  }
+
+  // Helpers used by multiple per-type renderers above.
+  function _mtAddNumberRow(body, label, id, min, max, def, step) {
+    var r = el("div", "param-row");
+    r.appendChild(el("span", "param-label", label));
+    var c = el("div", "param-control");
+    c.appendChild(numberInput(id, min, max, def, step));
+    r.appendChild(c);
+    body.appendChild(r);
+  }
+  function _mtAddCaptureRefRow(body, idx, label, tsLabelId) {
+    var r = el("div", "param-row");
+    r.appendChild(el("span", "param-label", label));
+    var c = el("div", "param-control");
+    var capBtn = el("button", "btn btn-small", "Capture Frame");
+    var tsLabel = el("span", "param-value", "\u2014");
+    tsLabel.id = tsLabelId;
+    if (state.multitoolSteps[idx]._refTs !== undefined) {
+      tsLabel.textContent = formatTimestamp(state.multitoolSteps[idx]._refTs);
+    }
+    capBtn.addEventListener("click", function () {
+      state.multitoolSteps[idx]._refTs = state.currentTimestamp;
+      tsLabel.textContent = formatTimestamp(state.currentTimestamp);
+    });
+    c.appendChild(capBtn);
+    c.appendChild(tsLabel);
+    r.appendChild(c);
+    body.appendChild(r);
+  }
+
+  var MULTITOOL_PARAM_RENDERERS = {
+    color:      _mtRenderColor,
+    change:     _mtRenderChange,
+    similarity: _mtRenderSimilarity,
+    text:       _mtRenderText,
+    numbers:    _mtRenderNumbers,
+    template:   _mtRenderTemplate,
+    flow:       _mtRenderFlow,
+    scene:      _mtRenderScene,
+    inactivity: _mtRenderInactivity,
+  };
 
   var _multitoolDragMidpoints = null;
 
@@ -2789,7 +2720,7 @@
       header.appendChild(el("span", "multitool-step-num", String(idx + 1)));
       var typeSpan = el("span", "multitool-step-type");
       typeSpan.style.color = taskTypeColor(step.type);
-      var icon = buildTypeIconSvg(step.type);
+      var icon = buildTypeIcon(step.type);
       if (icon) typeSpan.appendChild(icon);
       typeSpan.appendChild(document.createTextNode(" " + step.type.charAt(0).toUpperCase() + step.type.slice(1)));
       header.appendChild(typeSpan);
@@ -5748,7 +5679,7 @@
           var badge = el("span", "multitool-type-badge");
           badge.style.color = taskTypeColor(t);
           badge.title = t;
-          var icon = buildTypeIconSvg(t);
+          var icon = buildTypeIcon(t);
           if (icon) badge.appendChild(icon);
           badges.appendChild(badge);
         });

@@ -116,18 +116,6 @@ body {
   color: var(--color-accent);
 }
 
-.btn-primary {
-  background: var(--color-accent);
-  color: #fff;
-  border-color: var(--color-accent);
-}
-
-.btn-primary:hover {
-  background: #164563;
-  border-color: #164563;
-  color: #fff;
-}
-
 .btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
@@ -1332,9 +1320,3 @@ body {
   display: none;
 }
 
-/* Dark mode overrides */
-
-:root:not([data-theme="light"]) .btn-primary:hover {
-  background: #1e6b91;
-  border-color: #1e6b91;
-}

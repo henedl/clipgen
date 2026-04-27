@@ -108,16 +108,6 @@ body {
   cursor: not-allowed;
 }
 
-.btn-primary {
-  background: var(--color-accent);
-  color: #fff;
-  border-color: var(--color-accent);
-}
-
-.btn-primary:hover {
-  background: #174060;
-}
-
 .btn-small {
   padding: var(--space-1) var(--space-2);
   font-size: var(--text-xs);

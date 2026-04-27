@@ -144,6 +144,19 @@ var formatTime = function (sec) {
   return m + ":" + pad2(s);
 };
 
+// Like formatTime but rounds rather than floors. Used where the value is a
+// duration (e.g. clip length, ruler ticks) and rounding to the nearest second
+// reads more naturally than truncating.
+var formatDuration = function (sec) {
+  if (sec == null || isNaN(sec)) return "--:--";
+  var total = Math.round(sec);
+  var h = Math.floor(total / 3600);
+  var m = Math.floor((total % 3600) / 60);
+  var s = total % 60;
+  if (h > 0) return h + ":" + pad2(m) + ":" + pad2(s);
+  return m + ":" + pad2(s);
+};
+
 var artifactDurationSec = function (a) {
   var s = Number(a.start);
   var e = Number(a.end);
