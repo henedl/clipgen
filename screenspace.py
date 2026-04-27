@@ -3074,19 +3074,10 @@ def _empty_screenspace_manifest() -> dict[str, Any]:
 
 
 def load_screenspace_manifest() -> dict[str, Any]:
-    """Load the screenspace manifest from the output directory.
-
-    Returns a dict with ``regions`` and ``tasks`` keys.
-    """
-    data = utils.load_json_manifest(config.SCREENSPACE_MANIFEST_FILENAME)
-    if not isinstance(data, dict):
-        return _empty_screenspace_manifest()
-    return {
-        "regions": data.get("regions", {}),
-        "tasks": data.get("tasks", []),
-        "events": data.get("events", []),
-        "stashes": data.get("stashes", []),
-    }
+    """Load the screenspace manifest from the output directory."""
+    return utils.load_json_manifest(
+        config.SCREENSPACE_MANIFEST_FILENAME, default=_empty_screenspace_manifest()
+    )
 
 
 def save_screenspace_manifest(

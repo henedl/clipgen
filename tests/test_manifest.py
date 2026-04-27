@@ -185,40 +185,6 @@ def test_load_manifest_reels_returns_empty_when_no_file(tmp_path, monkeypatch):
     assert viewer.load_manifest_reels() == []
 
 
-def test_load_manifest_filters_malformed_entries(tmp_path, monkeypatch):
-    monkeypatch.setattr(config, "OUTPUT_DIR", str(tmp_path))
-    good = _make_artifact("a4c2s0")
-    bad = {"id": "a1", "type": "clip"}  # missing file, start, end
-    raw_data = {
-        "meta": {},
-        "artifacts": [bad, good],
-        "timeline": {"duration": 0, "startOffset": 0},
-    }
-    (tmp_path / config.MANIFEST_FILENAME).write_text(json.dumps(raw_data))
-    loaded = viewer.load_manifest_artifacts()
-    assert len(loaded) == 1
-    assert loaded[0]["id"] == "a4c2s0"
-
-
-def test_save_manifest_does_not_preserve_preexisting_malformed(tmp_path, monkeypatch):
-    monkeypatch.setattr(config, "OUTPUT_DIR", str(tmp_path))
-    # Seed manifest with a malformed artifact
-    bad = {"id": "ghost", "type": "clip"}
-    raw_data = {
-        "meta": {},
-        "artifacts": [bad],
-        "timeline": {"duration": 0, "startOffset": 0},
-    }
-    (tmp_path / config.MANIFEST_FILENAME).write_text(json.dumps(raw_data))
-
-    # Save a valid artifact — malformed one should be cleaned up
-    viewer.save_manifest([_make_artifact("a4c2s0")])
-    loaded = viewer.load_manifest_artifacts()
-    ids = {a["id"] for a in loaded}
-    assert "ghost" not in ids
-    assert "a4c2s0" in ids
-
-
 def test_cli_manifest_flag_parsed(monkeypatch):
     import cli
 

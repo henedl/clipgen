@@ -440,10 +440,7 @@ def _generate_intake_clips(
 
 
 def _load_stashes() -> list[dict[str, Any]]:
-    data = utils.load_json_manifest(config.STASHES_MANIFEST_FILENAME, default=[])
-    if not isinstance(data, list):
-        return []
-    return data
+    return utils.load_json_manifest(config.STASHES_MANIFEST_FILENAME, default=[])
 
 
 def _save_stashes(stashes: list[dict[str, Any]]) -> Path | None:
@@ -451,12 +448,9 @@ def _save_stashes(stashes: list[dict[str, Any]]) -> Path | None:
 
 
 def _load_artifact_stashes() -> list[dict[str, Any]]:
-    data = utils.load_json_manifest(
+    return utils.load_json_manifest(
         config.ARTIFACT_STASHES_MANIFEST_FILENAME, default=[]
     )
-    if not isinstance(data, list):
-        return []
-    return data
 
 
 def _save_artifact_stashes(stashes: list[dict[str, Any]]) -> Path | None:
@@ -466,8 +460,6 @@ def _save_artifact_stashes(stashes: list[dict[str, Any]]) -> Path | None:
 def _load_studio_settings() -> dict[str, Any]:
     """Load studio_settings.json and apply non-default values to config module."""
     data = utils.load_json_manifest(config.STUDIO_SETTINGS_FILENAME, default={})
-    if not isinstance(data, dict):
-        return {}
 
     applied: dict[str, Any] = {}
     for name, value in data.items():

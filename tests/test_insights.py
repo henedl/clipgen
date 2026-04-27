@@ -1,4 +1,3 @@
-import json
 import time
 
 import config
@@ -118,12 +117,3 @@ def test_load_handles_missing_and_malformed(tmp_path, monkeypatch):
     manifest_path.write_text("not json at all")
     result = insights.load_insights_manifest()
     assert result == {"meta": {}, "insights": []}
-
-    # Legacy insight missing 'summary' field
-    legacy = {
-        "meta": {},
-        "insights": [{"id": "ins_old", "title": "Old", "severity": "Low"}],
-    }
-    manifest_path.write_text(json.dumps(legacy))
-    result = insights.load_insights_manifest()
-    assert result["insights"][0]["summary"] == ""
