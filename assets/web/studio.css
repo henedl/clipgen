@@ -1363,18 +1363,6 @@ html[data-theme="dark"] .queue-card-error .queue-card-thumb {
   color: var(--color-accent);
 }
 
-.btn-primary {
-  background: var(--color-accent);
-  color: #fff;
-  border-color: var(--color-accent);
-}
-
-.btn-primary:hover {
-  background: #164563;
-  border-color: #164563;
-  color: #fff;
-}
-
 .btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;

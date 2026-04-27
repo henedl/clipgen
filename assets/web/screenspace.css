@@ -1539,18 +1539,6 @@ body {
   color: var(--color-accent);
 }
 
-.btn-primary {
-  background: var(--color-accent);
-  color: #fff;
-  border-color: var(--color-accent);
-}
-
-.btn-primary:hover {
-  background: #164563;
-  border-color: #164563;
-  color: #fff;
-}
-
 .btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
@@ -1559,12 +1547,6 @@ body {
 .btn:disabled:hover {
   border-color: var(--color-border);
   color: var(--color-text);
-}
-
-.btn-primary:disabled:hover {
-  background: var(--color-accent);
-  border-color: var(--color-accent);
-  color: #fff;
 }
 
 .btn-small {
@@ -2726,10 +2708,6 @@ body.panel-dragging #bottomPanel {
   :root:not([data-theme="light"]) .modal-card {
     background: var(--color-surface-alt);
   }
-  :root:not([data-theme="light"]) .btn-primary:hover {
-    background: #0284c7;
-    border-color: #0284c7;
-  }
   :root:not([data-theme="light"]) .region-chip.active {
     background: rgba(255, 255, 255, 0.08);
   }
@@ -2737,11 +2715,6 @@ body.panel-dragging #bottomPanel {
 
 html[data-theme="dark"] .modal-card {
   background: var(--color-surface-alt);
-}
-
-html[data-theme="dark"] .btn-primary:hover {
-  background: #0284c7;
-  border-color: #0284c7;
 }
 
 html[data-theme="dark"] .region-chip.active {

@@ -9,7 +9,7 @@
  * Z-INDEX:    --z-float (10) | --z-dropdown (100) | --z-modal (1000) | --z-overlay (2000) | --z-toast (3000)
  *
  * THEME:      --color-bg | --color-surface | --color-surface-alt | --color-text | --color-text-dim
- *             --color-accent | --color-border | --color-selected | --color-accent-hover | --color-accent-highlight
+ *             --color-accent | --color-border | --color-selected | --color-accent-hover | --color-accent-highlight | --color-accent-strong-hover
  *             --color-panel-bg | --color-panel-border | --color-panel-shadow | --color-grid
  *             --font-mono
  * SEVERITY:   --sev-critical | --sev-high | --sev-medium | --sev-low | --sev-na
@@ -59,6 +59,7 @@
   --color-selected: rgba(29, 79, 114, 0.08);
   --color-accent-hover: rgba(29, 79, 114, 0.06);
   --color-accent-highlight: rgba(29, 79, 114, 0.15);
+  --color-accent-strong-hover: #164563;
   --color-panel-bg: rgba(255, 255, 255, 0.97);
   --color-panel-border: rgba(148, 163, 184, 0.22);
   --color-panel-shadow: rgba(15, 23, 42, 0.12);
@@ -144,6 +145,7 @@
     --color-selected: rgba(56, 189, 248, 0.2);
     --color-accent-hover: rgba(56, 189, 248, 0.08);
     --color-accent-highlight: rgba(56, 189, 248, 0.18);
+    --color-accent-strong-hover: #0284c7;
     --color-panel-bg: rgba(15, 23, 42, 0.98);
     --color-panel-border: rgba(148, 163, 184, 0.35);
     --color-panel-shadow: rgba(0, 0, 0, 0.7);
@@ -196,6 +198,7 @@ html[data-theme="dark"] {
   --color-selected: rgba(56, 189, 248, 0.2);
   --color-accent-hover: rgba(56, 189, 248, 0.08);
   --color-accent-highlight: rgba(56, 189, 248, 0.18);
+  --color-accent-strong-hover: #0284c7;
   --color-panel-bg: rgba(15, 23, 42, 0.98);
   --color-panel-border: rgba(148, 163, 184, 0.35);
   --color-panel-shadow: rgba(0, 0, 0, 0.7);
@@ -310,6 +313,25 @@ body:not(.cg-grid-bg-on) {
 .cg-tooltip.is-visible { opacity: 1; }
 .cg-tooltip--centered { transform: translateX(-50%); }
 .cg-tooltip--multiline { white-space: pre-line; }
+
+/* Primary CTA button — shared across Studio / Screenspace / Transcripts / Insights.
+ * Page CSS still defines the base .btn (size, padding, border-radius) so visual
+ * weight stays page-specific; only the primary variant's color treatment is shared. */
+.btn-primary {
+  background: var(--color-accent);
+  color: #fff;
+  border-color: var(--color-accent);
+}
+.btn-primary:hover {
+  background: var(--color-accent-strong-hover);
+  border-color: var(--color-accent-strong-hover);
+  color: #fff;
+}
+.btn-primary:disabled:hover {
+  background: var(--color-accent);
+  border-color: var(--color-accent);
+  color: #fff;
+}
 
 /* Frontend switcher — unified dropdown across Studio / Screenspace / Transcripts / Insights */
 .frontend-switcher {
