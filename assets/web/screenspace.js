@@ -72,10 +72,7 @@
   // the DOM on every drag tick. Null when no color tool panel is active.
   var _colorHiddenInputs = null;
 
-  var REGION_COLORS = [
-    "#3b82f6", "#ef4444", "#22c55e", "#f59e0b",
-    "#8b5cf6", "#06b6d4", "#ec4899", "#14b8a6",
-  ];
+  var REGION_COLOR_COUNT = 8;
 
   var state = {
     participants: [],
@@ -154,12 +151,17 @@
 
   function refreshThemeColors() {
     var cs = getComputedStyle(document.documentElement);
+    var regionPalette = [];
+    for (var i = 1; i <= REGION_COLOR_COUNT; i++) {
+      regionPalette.push(cs.getPropertyValue("--region-color-" + i).trim() || "#3b82f6");
+    }
     _cachedThemeColors = {
       surfaceAlt: cs.getPropertyValue("--color-surface-alt").trim() || "#f1ece4",
       border: cs.getPropertyValue("--color-border").trim() || "#e0ddd7",
       textDim: cs.getPropertyValue("--color-text-dim").trim() || "#6b7280",
       accent: cs.getPropertyValue("--color-accent").trim() || "#1d4f72",
       fontMono: cs.getPropertyValue("--font-mono").trim() || "monospace",
+      regionPalette: regionPalette,
     };
   }
 
@@ -177,13 +179,14 @@
   }
 
   function regionColorForIndex(i) {
-    return REGION_COLORS[i % REGION_COLORS.length];
+    var palette = getThemeColors().regionPalette;
+    return palette[i % palette.length];
   }
 
   function regionColorByName(name) {
     var names = Object.keys(state.regions);
     var idx = names.indexOf(name);
-    return idx >= 0 ? regionColorForIndex(idx) : REGION_COLORS[0];
+    return idx >= 0 ? regionColorForIndex(idx) : regionColorForIndex(0);
   }
 
   function regionToPixels(r) {
