@@ -5,6 +5,13 @@
 
   var QUEUE_STORAGE_KEY = "clipgen-studio-queues";
 
+  // Build a mask-image icon span as an HTML string. Sizing comes from a
+  // parent rule (e.g. .filter-clear .cg-icon) or from extraClass. See
+  // .cg-icon family in studio.css.
+  function iconHTML(name, extraClass) {
+    return '<span class="cg-icon cg-icon--' + name + (extraClass ? " " + extraClass : "") + '"></span>';
+  }
+
   var state = {
     sheetData: null,
     artifactQueue: [],
@@ -339,7 +346,7 @@
       catClear.type = "button";
       catClear.title = "Clear category filter";
       catClear.innerHTML =
-        '<svg viewBox="0 0 16 16" fill="currentColor"><path d="M5.28 4.22a.75.75 0 0 0-1.06 1.06L6.94 8l-2.72 2.72a.75.75 0 1 0 1.06 1.06L8 9.06l2.72 2.72a.75.75 0 1 0 1.06-1.06L9.06 8l2.72-2.72a.75.75 0 0 0-1.06-1.06L8 6.94 5.28 4.22Z"/></svg>';
+        iconHTML("x-mark");
       catClear.addEventListener("click", function () {
         state.filters.categories = [];
         var cbs = catPanel.querySelectorAll("input[type=checkbox]");
@@ -405,7 +412,7 @@
       sevClear.type = "button";
       sevClear.title = "Clear severity filter";
       sevClear.innerHTML =
-        '<svg viewBox="0 0 16 16" fill="currentColor"><path d="M5.28 4.22a.75.75 0 0 0-1.06 1.06L6.94 8l-2.72 2.72a.75.75 0 1 0 1.06 1.06L8 9.06l2.72 2.72a.75.75 0 1 0 1.06-1.06L9.06 8l2.72-2.72a.75.75 0 0 0-1.06-1.06L8 6.94 5.28 4.22Z"/></svg>';
+        iconHTML("x-mark");
       sevClear.addEventListener("click", function () {
         state.filters.sevMin = "";
         state.filters.sevMax = "";
@@ -457,7 +464,7 @@
     fnClear.type = "button";
     fnClear.title = "Clear function filter";
     fnClear.innerHTML =
-      '<svg viewBox="0 0 16 16" fill="currentColor"><path d="M5.28 4.22a.75.75 0 0 0-1.06 1.06L6.94 8l-2.72 2.72a.75.75 0 1 0 1.06 1.06L8 9.06l2.72 2.72a.75.75 0 1 0 1.06-1.06L9.06 8l2.72-2.72a.75.75 0 0 0-1.06-1.06L8 6.94 5.28 4.22Z"/></svg>';
+      iconHTML("x-mark");
     fnClear.addEventListener("click", function () {
       state.filters.fnMin = null;
       state.filters.fnMax = null;
@@ -1761,9 +1768,9 @@
       if (isIntake) {
         var ssBadge = el("span", "queue-card-source-badge");
         if (item.source === "transcript") {
-          ssBadge.innerHTML = '<svg viewBox="0 0 16 16" fill="currentColor"><path d="M3 3h10v1.5H3zM3 7h8v1.5H3zM3 11h10v1.5H3z"/></svg>';
+          ssBadge.innerHTML = iconHTML("bars-3");
         } else {
-          ssBadge.innerHTML = '<svg viewBox="0 0 16 16" fill="currentColor"><path d="M3.5 2C2.67157 2 2 2.67157 2 3.5V5.5C2 6.32843 2.67157 7 3.5 7H5.5C6.32843 7 7 6.32843 7 5.5V3.5C7 2.67157 6.32843 2 5.5 2H3.5Z"/><path d="M3.5 9C2.67157 9 2 9.67157 2 10.5V12.5C2 13.3284 2.67157 14 3.5 14H5.5C6.32843 14 7 13.3284 7 12.5V10.5C7 9.67157 6.32843 9 5.5 9H3.5Z"/><path d="M9 3.5C9 2.67157 9.67157 2 10.5 2H12.5C13.3284 2 14 2.67157 14 3.5V5.5C14 6.32843 13.3284 7 12.5 7H10.5C9.67157 7 9 6.32843 9 5.5V3.5Z"/><path d="M10.5 9C9.67157 9 9 9.67157 9 10.5V12.5C9 13.3284 9.67157 14 10.5 14H12.5C13.3284 14 14 13.3284 14 12.5V10.5C14 9.67157 13.3284 9 12.5 9H10.5Z"/></svg>';
+          ssBadge.innerHTML = iconHTML("squares-2x2");
         }
         thumb.appendChild(ssBadge);
       }
@@ -1781,7 +1788,7 @@
       card.appendChild(meta);
 
       var removeBtn = el("button", "queue-card-remove");
-      removeBtn.innerHTML = '<svg width="10" height="10" viewBox="0 0 10 10"><path d="M2.5 2.5l5 5M7.5 2.5l-5 5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>';
+      removeBtn.innerHTML = iconHTML("x-mark");
       removeBtn.title = "Remove";
       (function (idx) {
         removeBtn.addEventListener("click", function (ev) {
@@ -1865,9 +1872,9 @@
       if (isIntake) {
         var ssBadge = el("span", "queue-card-source-badge");
         if (item.source === "transcript") {
-          ssBadge.innerHTML = '<svg viewBox="0 0 16 16" fill="currentColor"><path d="M3 3h10v1.5H3zM3 7h8v1.5H3zM3 11h10v1.5H3z"/></svg>';
+          ssBadge.innerHTML = iconHTML("bars-3");
         } else {
-          ssBadge.innerHTML = '<svg viewBox="0 0 16 16" fill="currentColor"><path d="M3.5 2C2.67157 2 2 2.67157 2 3.5V5.5C2 6.32843 2.67157 7 3.5 7H5.5C6.32843 7 7 6.32843 7 5.5V3.5C7 2.67157 6.32843 2 5.5 2H3.5Z"/><path d="M3.5 9C2.67157 9 2 9.67157 2 10.5V12.5C2 13.3284 2.67157 14 3.5 14H5.5C6.32843 14 7 13.3284 7 12.5V10.5C7 9.67157 6.32843 9 5.5 9H3.5Z"/><path d="M9 3.5C9 2.67157 9.67157 2 10.5 2H12.5C13.3284 2 14 2.67157 14 3.5V5.5C14 6.32843 13.3284 7 12.5 7H10.5C9.67157 7 9 6.32843 9 5.5V3.5Z"/><path d="M10.5 9C9.67157 9 9 9.67157 9 10.5V12.5C9 13.3284 9.67157 14 10.5 14H12.5C13.3284 14 14 13.3284 14 12.5V10.5C14 9.67157 13.3284 9 12.5 9H10.5Z"/></svg>';
+          ssBadge.innerHTML = iconHTML("squares-2x2");
         }
         thumb.appendChild(ssBadge);
       }
@@ -1886,7 +1893,7 @@
       card.appendChild(meta);
 
       var removeBtn = el("button", "queue-card-remove");
-      removeBtn.innerHTML = '<svg width="10" height="10" viewBox="0 0 10 10"><path d="M2.5 2.5l5 5M7.5 2.5l-5 5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>';
+      removeBtn.innerHTML = iconHTML("x-mark");
       removeBtn.title = "Remove";
       (function (idx) {
         removeBtn.addEventListener("click", function (ev) {
@@ -2332,9 +2339,7 @@
 
   function createResultBadge(success) {
     var badge = el("div", "card-gen-badge " + (success ? "card-gen-badge-ok" : "card-gen-badge-fail"));
-    badge.innerHTML = success
-      ? '<svg width="12" height="12" viewBox="0 0 12 12"><path d="M2.5 6.5l2.5 2.5 4.5-5" fill="none" stroke="#fff" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>'
-      : '<svg width="12" height="12" viewBox="0 0 12 12"><path d="M3 3l6 6M9 3l-6 6" fill="none" stroke="#fff" stroke-width="1.5" stroke-linecap="round"/></svg>';
+    badge.innerHTML = iconHTML(success ? "check" : "x-mark");
     return badge;
   }
 
@@ -2749,10 +2754,7 @@
     var btn = qs("#buildHighlightsBtn");
     var isOpen = drawer.classList.contains("open");
 
-    var checkHTML =
-      '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' +
-      '<path d="M3 8.5l3.5 3.5 6.5-8"/>' +
-      "</svg>";
+    var checkHTML = iconHTML("check", "cg-icon--confirm");
 
     if (!isOpen) {
       _highlightsBtnOrigHTML = btn.innerHTML;
@@ -2819,10 +2821,7 @@
     var btn = qs("#galleryBtn");
     var isOpen = drawer.classList.contains("open");
 
-    var checkHTML =
-      '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' +
-      '<path d="M3 8.5l3.5 3.5 6.5-8"/>' +
-      "</svg>";
+    var checkHTML = iconHTML("check", "cg-icon--confirm");
 
     if (!isOpen) {
       _galleryBtnOrigHTML = btn.innerHTML;

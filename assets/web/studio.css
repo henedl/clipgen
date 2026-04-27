@@ -21,6 +21,29 @@ html {
   font-size: 16px;
 }
 
+/* Mask-image icons (color follows currentColor on the parent).
+ * Sizing is set by the surrounding rule (.filter-clear .cg-icon, etc.). */
+.cg-icon {
+  display: inline-block;
+  background-color: currentColor;
+  mask-size: contain;
+  mask-repeat: no-repeat;
+  mask-position: center;
+  -webkit-mask-size: contain;
+  -webkit-mask-repeat: no-repeat;
+  -webkit-mask-position: center;
+}
+.cg-icon--x-mark      { mask-image: url(icons/x-mark.svg);      -webkit-mask-image: url(icons/x-mark.svg); }
+.cg-icon--check       { mask-image: url(icons/check.svg);       -webkit-mask-image: url(icons/check.svg); }
+.cg-icon--bars-3      { mask-image: url(icons/bars-3.svg);      -webkit-mask-image: url(icons/bars-3.svg); }
+.cg-icon--squares-2x2 { mask-image: url(icons/squares-2x2.svg); -webkit-mask-image: url(icons/squares-2x2.svg); }
+.cg-icon--confirm {
+  width: 14px;
+  height: 14px;
+  vertical-align: text-bottom;
+  margin-right: 4px;
+}
+
 body {
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   background-color: var(--color-bg);
@@ -457,7 +480,7 @@ body {
   color: var(--color-text);
 }
 
-.filter-clear svg {
+.filter-clear .cg-icon {
   width: 12px;
   height: 12px;
 }
@@ -986,6 +1009,11 @@ col.col-participant-col {
 
 .queue-card-remove:hover {
   background: #dc2626;
+}
+
+.queue-card-remove .cg-icon {
+  width: 10px;
+  height: 10px;
 }
 
 .queue-card-error {
@@ -1626,7 +1654,10 @@ html[data-theme="dark"] .queue-card-error .queue-card-thumb {
   background: #dc2626;
 }
 
-.card-gen-badge svg {
+.card-gen-badge .cg-icon {
+  width: 12px;
+  height: 12px;
+  color: #fff;
   display: block;
 }
 
@@ -2189,7 +2220,7 @@ html[data-theme="dark"] .log-panel {
   z-index: 1;
 }
 
-.queue-card-source-badge svg {
+.queue-card-source-badge .cg-icon {
   width: 10px;
   height: 10px;
   display: block;
