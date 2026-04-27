@@ -479,12 +479,7 @@ def _normalize_region(
 def _denormalize_region(
     region: dict[str, Any], target_w: int, target_h: int
 ) -> dict[str, int]:
-    """Convert normalized region to pixel coordinates for a target resolution.
-
-    Legacy regions (without ``source_width``) pass through unchanged.
-    """
-    if "source_width" not in region:
-        return {"x": region["x"], "y": region["y"], "w": region["w"], "h": region["h"]}
+    """Convert normalized region to pixel coordinates for a target resolution."""
     return {
         "x": int(round(region["x"] * target_w)),
         "y": int(round(region["y"] * target_h)),
@@ -520,23 +515,25 @@ def api_regions_create() -> FlaskResponse:
 
     canvas_w = data.get("canvas_width")
     canvas_h = data.get("canvas_height")
-    region: dict[str, Any]
     if (
-        isinstance(canvas_w, (int, float))
-        and isinstance(canvas_h, (int, float))
-        and canvas_w > 0
-        and canvas_h > 0
+        not isinstance(canvas_w, (int, float))
+        or not isinstance(canvas_h, (int, float))
+        or canvas_w <= 0
+        or canvas_h <= 0
     ):
-        region = _normalize_region(
-            data["x"], data["y"], data["w"], data["h"], int(canvas_w), int(canvas_h)
+        return (
+            jsonify(
+                {
+                    "ok": False,
+                    "error": "'canvas_width' and 'canvas_height' must be positive numbers",
+                }
+            ),
+            400,
         )
-    else:
-        region = {
-            "x": int(data["x"]),
-            "y": int(data["y"]),
-            "w": int(data["w"]),
-            "h": int(data["h"]),
-        }
+
+    region = _normalize_region(
+        data["x"], data["y"], data["w"], data["h"], int(canvas_w), int(canvas_h)
+    )
     if "description" in data:
         region["description"] = str(data["description"])
 

@@ -1,7 +1,6 @@
 """Tests for Screenspace analysis primitives, manifest I/O, and worker."""
 
 import io
-import json
 import threading
 import time
 from unittest import mock
@@ -438,13 +437,6 @@ class TestManifest:
         monkeypatch.setattr(config, "OUTPUT_DIR", str(tmp_path))
         manifest_path = tmp_path / config.SCREENSPACE_MANIFEST_FILENAME
         manifest_path.write_text("not json")
-        result = screenspace.load_screenspace_manifest()
-        assert result == {"regions": {}, "tasks": [], "events": [], "stashes": []}
-
-    def test_load_non_dict(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(config, "OUTPUT_DIR", str(tmp_path))
-        manifest_path = tmp_path / config.SCREENSPACE_MANIFEST_FILENAME
-        manifest_path.write_text(json.dumps([1, 2, 3]))
         result = screenspace.load_screenspace_manifest()
         assert result == {"regions": {}, "tasks": [], "events": [], "stashes": []}
 

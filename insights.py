@@ -40,19 +40,10 @@ def load_insights_manifest() -> dict[str, Any]:
     """Load the insights manifest from the output directory.
 
     Returns a dict with 'meta' and 'insights' keys.
-    Handles missing 'summary' field on legacy insights (defaults to "").
     """
-    data = utils.load_json_manifest(config.INSIGHTS_MANIFEST_FILENAME)
-    if not isinstance(data, dict):
-        return _empty_manifest()
-
-    for insight in data.get("insights", []):
-        insight.setdefault("summary", "")
-
-    return {
-        "meta": data.get("meta", {}),
-        "insights": data.get("insights", []),
-    }
+    return utils.load_json_manifest(
+        config.INSIGHTS_MANIFEST_FILENAME, default=_empty_manifest()
+    )
 
 
 def save_insights_manifest(

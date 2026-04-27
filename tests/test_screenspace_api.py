@@ -117,7 +117,15 @@ def test_create_region_missing_coords(client):
 def test_delete_region(client):
     client.post(
         "/screenspace/api/regions",
-        json={"name": "temp", "x": 0, "y": 0, "w": 10, "h": 10},
+        json={
+            "name": "temp",
+            "x": 0,
+            "y": 0,
+            "w": 10,
+            "h": 10,
+            "canvas_width": 1920,
+            "canvas_height": 1080,
+        },
     )
     resp = client.delete("/screenspace/api/regions/temp")
     assert resp.status_code == 200
@@ -155,19 +163,15 @@ def test_create_region_normalizes_coords(client):
     assert r["source_height"] == 1080
 
 
-def test_create_region_legacy_no_canvas_dims(client):
+def test_create_region_rejects_missing_canvas_dims(client):
     resp = client.post(
         "/screenspace/api/regions",
-        json={"name": "legacy", "x": 100, "y": 20, "w": 300, "h": 30},
+        json={"name": "no_canvas", "x": 100, "y": 20, "w": 300, "h": 30},
     )
+    assert resp.status_code == 400
     data = resp.get_json()
-    assert data["ok"] is True
-    r = data["region"]
-    assert r["x"] == 100
-    assert r["y"] == 20
-    assert r["w"] == 300
-    assert r["h"] == 30
-    assert "source_width" not in r
+    assert data["ok"] is False
+    assert "canvas_width" in data["error"]
 
 
 def test_denormalize_region():
@@ -183,14 +187,6 @@ def test_denormalize_region():
     }
     px = _denormalize_region(region, 1920, 1080)
     assert px == {"x": 960, "y": 540, "w": 192, "h": 108}
-
-
-def test_denormalize_legacy_region():
-    from screenspace_server import _denormalize_region
-
-    region = {"x": 100, "y": 20, "w": 300, "h": 30}
-    px = _denormalize_region(region, 1280, 720)
-    assert px == {"x": 100, "y": 20, "w": 300, "h": 30}
 
 
 def test_denormalize_cross_resolution():

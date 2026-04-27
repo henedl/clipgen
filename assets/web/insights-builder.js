@@ -26,10 +26,11 @@
   // ---- Helpers ----
 
   function countBucketArtifacts(insight) {
-    var c = (insight.causes || {}).artifacts || [];
-    var b = (insight.behaviors || {}).artifacts || [];
-    var i = (insight.impacts || {}).artifacts || [];
-    return c.length + b.length + i.length;
+    return (
+      insight.causes.artifacts.length +
+      insight.behaviors.artifacts.length +
+      insight.impacts.artifacts.length
+    );
   }
 
   function findArtifact(id) {
@@ -993,7 +994,7 @@
       el("div", "bucket-label bucket-label-" + bucketName, bucketName)
     );
 
-    var bucket = insight[bucketName] || { narrative: "", artifacts: [] };
+    var bucket = insight[bucketName];
 
     // Narrative
     var narrative = document.createElement("textarea");
@@ -1004,10 +1005,9 @@
       impacts: "What were the consequences?",
     };
     narrative.placeholder = placeholders[bucketName] || "";
-    narrative.value = bucket.narrative || "";
+    narrative.value = bucket.narrative;
     narrative.addEventListener("input", function () {
       bucket.narrative = this.value;
-      if (!insight[bucketName]) insight[bucketName] = bucket;
       markDirty(insight.id);
     });
     section.appendChild(narrative);

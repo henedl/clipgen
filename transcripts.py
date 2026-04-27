@@ -244,17 +244,11 @@ def _empty_transcripts_manifest() -> dict[str, Any]:
 def load_transcripts_manifest() -> dict[str, Any]:
     """Load the transcripts manifest from the output directory.
 
-    Returns a dict with ``source_transcripts`` and ``corrections`` keys.
-    Missing or corrupt files return an empty manifest.
+    Returns a dict with ``source_transcripts``, ``corrections``, and ``marks`` keys.
     """
-    data = utils.load_json_manifest(config.TRANSCRIPTS_MANIFEST_FILENAME)
-    if not isinstance(data, dict):
-        return _empty_transcripts_manifest()
-    return {
-        "source_transcripts": data.get("source_transcripts") or {},
-        "corrections": data.get("corrections") or [],
-        "marks": data.get("marks") or [],
-    }
+    return utils.load_json_manifest(
+        config.TRANSCRIPTS_MANIFEST_FILENAME, default=_empty_transcripts_manifest()
+    )
 
 
 def save_transcripts_manifest(
@@ -276,9 +270,10 @@ def save_transcripts_manifest(
     # When marks is None, preserve existing marks from disk
     if marks is None:
         existing = utils.load_json_manifest(
-            config.TRANSCRIPTS_MANIFEST_FILENAME, default={}
+            config.TRANSCRIPTS_MANIFEST_FILENAME,
+            default=_empty_transcripts_manifest(),
         )
-        marks = (existing.get("marks") or []) if isinstance(existing, dict) else []
+        marks = existing["marks"]
 
     data = {
         "source_transcripts": source_transcripts,

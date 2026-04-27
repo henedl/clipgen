@@ -9,10 +9,11 @@
   // ---- Helpers ----
 
   function countArtifacts(insight) {
-    var c = (insight.causes || {}).artifacts || [];
-    var b = (insight.behaviors || {}).artifacts || [];
-    var i = (insight.impacts || {}).artifacts || [];
-    return c.length + b.length + i.length;
+    return (
+      insight.causes.artifacts.length +
+      insight.behaviors.artifacts.length +
+      insight.impacts.artifacts.length
+    );
   }
 
   // ---- Render index ----
@@ -114,10 +115,7 @@
     ];
     for (var i = 0; i < buckets.length; i++) {
       var bucket = insight[buckets[i].key];
-      if (!bucket) continue;
-      var hasContent =
-        (bucket.narrative && bucket.narrative.trim()) ||
-        (bucket.artifacts && bucket.artifacts.length > 0);
+      var hasContent = bucket.narrative.trim() || bucket.artifacts.length > 0;
       if (!hasContent) continue;
 
       var section = el("div", "detail-bucket");
@@ -129,11 +127,11 @@
         )
       );
 
-      if (bucket.narrative && bucket.narrative.trim()) {
+      if (bucket.narrative.trim()) {
         section.appendChild(el("div", "detail-narrative", bucket.narrative));
       }
 
-      if (bucket.artifacts && bucket.artifacts.length > 0) {
+      if (bucket.artifacts.length > 0) {
         var grid = el("div", "detail-artifacts-grid");
         for (var j = 0; j < bucket.artifacts.length; j++) {
           var art = artifactMap[bucket.artifacts[j]];
