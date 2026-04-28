@@ -232,6 +232,22 @@ Note: Non-interactive mode (using -b, -l, -r, -C, -c, -p, -k, -S, -M, -R, or -T)
         metavar="MODEL",
         help="Whisper model for transcription: tiny, base, small, medium, large-v3 (default: base)",
     )
+    transcription.add_argument(
+        "--summarize",
+        nargs="*",
+        metavar="ID",
+        default=None,
+        help="Run the summary thinking agent over already-transcribed participants. "
+        "No IDs = all transcribed. Existing summaries are kept unless -y is passed.",
+    )
+    transcription.add_argument(
+        "--citations",
+        nargs="*",
+        metavar="ID",
+        default=None,
+        help="Run the citation thinking agent over participants that already have a summary. "
+        "No IDs = all eligible. Existing citations are kept unless -y is passed.",
+    )
 
     ai_opts = parser.add_argument_group("AI models")
     ai_opts.add_argument(
@@ -327,6 +343,141 @@ Note: Non-interactive mode (using -b, -l, -r, -C, -c, -p, -k, -S, -M, -R, or -T)
         "--bundle",
         action="store_true",
         help="Embed gallery images as base64 data URIs in the HTML (makes it fully self-contained)",
+    )
+
+    screenspace_cli = parser.add_argument_group("screenspace cli")
+    ss_modes = screenspace_cli.add_mutually_exclusive_group()
+    ss_modes.add_argument(
+        "--ss-task",
+        nargs=3,
+        metavar=("TYPE", "PARTICIPANT", "REGION"),
+        default=None,
+        help=(
+            "Run a Screenspace analysis task headlessly. "
+            "TYPE is one of color, change, similarity, text, numbers, timelapse, "
+            "template, flow, inactivity. REGION must already exist in the active "
+            "manifest or in a stash (use --ss-list-regions / --ss-list-stashes)."
+        ),
+    )
+    ss_modes.add_argument(
+        "--ss-list-regions",
+        action="store_true",
+        help="List active Screenspace regions from the manifest and exit.",
+    )
+    ss_modes.add_argument(
+        "--ss-list-stashes",
+        action="store_true",
+        help="List Screenspace region stashes and exit.",
+    )
+    ss_modes.add_argument(
+        "--ss-list-tasks",
+        nargs="?",
+        const="",
+        default=None,
+        metavar="STATUS",
+        help=(
+            "List Screenspace tasks from the manifest. Optional STATUS filter: "
+            "queued, running, completed, failed, cancelled, paused."
+        ),
+    )
+
+    screenspace_cli.add_argument(
+        "--ss-target-color",
+        type=str,
+        metavar="HEX",
+        help="Target colour as #RRGGBB hex (color tool).",
+    )
+    screenspace_cli.add_argument(
+        "--ss-tolerance",
+        type=str,
+        metavar="H,S,V",
+        help="HSV tolerance triple as comma-separated ints (color tool).",
+    )
+    screenspace_cli.add_argument(
+        "--ss-threshold",
+        type=float,
+        metavar="FLOAT",
+        help="Match threshold (color, change, similarity, template, flow, inactivity).",
+    )
+    screenspace_cli.add_argument(
+        "--ss-reference-timestamp",
+        type=float,
+        metavar="SECONDS",
+        help="Reference frame timestamp (similarity, template).",
+    )
+    screenspace_cli.add_argument(
+        "--ss-text",
+        type=str,
+        metavar="STR",
+        help="Search string (text tool).",
+    )
+    screenspace_cli.add_argument(
+        "--ss-fuzzy-threshold",
+        type=float,
+        metavar="FLOAT",
+        help=f"OCR fuzzy-match threshold for the text tool (default: {config.SCREENSPACE_OCR_FUZZY_THRESHOLD}).",
+    )
+    screenspace_cli.add_argument(
+        "--ss-operator",
+        type=str,
+        choices=["eq", "gt", "lt", "gte", "lte", "range"],
+        metavar="OP",
+        help="Numeric comparison operator (numbers tool).",
+    )
+    screenspace_cli.add_argument(
+        "--ss-target-value",
+        type=float,
+        metavar="FLOAT",
+        help="Target numeric value (numbers tool, non-range operators).",
+    )
+    screenspace_cli.add_argument(
+        "--ss-range-min",
+        type=float,
+        metavar="FLOAT",
+        help="Range minimum (numbers tool, range operator).",
+    )
+    screenspace_cli.add_argument(
+        "--ss-range-max",
+        type=float,
+        metavar="FLOAT",
+        help="Range maximum (numbers tool, range operator).",
+    )
+    screenspace_cli.add_argument(
+        "--ss-speedup",
+        type=float,
+        metavar="FACTOR",
+        help="Speed-up factor (timelapse tool).",
+    )
+    screenspace_cli.add_argument(
+        "--ss-output-format",
+        type=str,
+        choices=["mp4", "gif"],
+        metavar="FMT",
+        help="Output format (timelapse tool).",
+    )
+    screenspace_cli.add_argument(
+        "--ss-start",
+        type=float,
+        metavar="SECONDS",
+        help="Start time in seconds (timelapse and other range-aware tools).",
+    )
+    screenspace_cli.add_argument(
+        "--ss-end",
+        type=float,
+        metavar="SECONDS",
+        help="End time in seconds (timelapse and other range-aware tools).",
+    )
+    screenspace_cli.add_argument(
+        "--ss-interval",
+        type=float,
+        metavar="SECONDS",
+        help=f"Frame sampling interval (default: {config.SCREENSPACE_DEFAULT_INTERVAL}).",
+    )
+    screenspace_cli.add_argument(
+        "--ss-event-label",
+        type=str,
+        metavar="STR",
+        help="Override the auto-generated event label written to the manifest.",
     )
 
     run_opts = parser.add_argument_group("run options")
@@ -893,6 +1044,505 @@ def _run_pre_transcribe(worksheet: Any, args: Any) -> None:
     )
 
 
+# ---- Screenspace CLI ----
+
+
+_SS_VALID_TASK_TYPES = (
+    "color",
+    "change",
+    "similarity",
+    "text",
+    "numbers",
+    "timelapse",
+    "template",
+    "flow",
+    "inactivity",
+)
+
+
+def _ss_load_known_regions(manifest: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    """Combine active manifest regions with all stash regions (last-write-wins)."""
+    known: dict[str, dict[str, Any]] = dict(manifest.get("regions", {}))
+    for stash in manifest.get("stashes", []):
+        known.update(stash.get("regions", {}))
+    return known
+
+
+def _ss_resolve_video_for_participant(participant_id: str) -> str | None:
+    """Resolve the source video path for a participant via filename discovery.
+
+    Mirrors how screenspace_server falls back when no spreadsheet is loaded.
+    """
+    discovered = utils.discover_participant_videos("")
+    for entry in discovered:
+        if entry["id"] == participant_id and entry.get("has_video"):
+            return entry["video_path"]
+    return None
+
+
+def _ss_hex_to_hsv(hex_str: str) -> dict[str, int]:
+    """Convert a #RRGGBB hex string to OpenCV HSV (H 0–180, S 0–255, V 0–255)."""
+    import cv2
+    import numpy as np
+
+    s = hex_str.strip().lstrip("#")
+    if len(s) != 6:
+        raise ValueError(f"Invalid hex colour {hex_str!r} (expected #RRGGBB)")
+    try:
+        r, g, b = int(s[0:2], 16), int(s[2:4], 16), int(s[4:6], 16)
+    except ValueError as exc:
+        raise ValueError(f"Invalid hex colour {hex_str!r}") from exc
+    bgr = np.array([[[b, g, r]]], dtype=np.uint8)
+    hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)[0][0]
+    return {"h": int(hsv[0]), "s": int(hsv[1]), "v": int(hsv[2])}
+
+
+def _ss_parse_tolerance(tol_str: str) -> dict[str, int]:
+    """Parse a comma-separated H,S,V tolerance triple."""
+    parts = [p.strip() for p in tol_str.split(",")]
+    if len(parts) != 3:
+        raise ValueError(
+            f"Tolerance must be three comma-separated ints (got {tol_str!r})"
+        )
+    try:
+        h, s, v = (int(parts[0]), int(parts[1]), int(parts[2]))
+    except ValueError as exc:
+        raise ValueError(
+            f"Tolerance must be three comma-separated ints (got {tol_str!r})"
+        ) from exc
+    return {"h": h, "s": s, "v": v}
+
+
+def _ss_build_params(
+    args: argparse.Namespace,
+    task_type: str,
+    region_coords: dict[str, int],
+    video_path: str,
+) -> dict[str, Any]:
+    """Build a `parameters` dict for create_task() from per-tool CLI flags.
+
+    Validates that the required flags for ``task_type`` are present. For
+    ``similarity`` and ``template`` extracts the reference frame from the
+    video at ``--ss-reference-timestamp`` (mirrors the server-side path in
+    screenspace_server._extract_task_media).
+    """
+    import screenspace
+
+    params: dict[str, Any] = {}
+
+    if args.ss_interval is not None:
+        params["interval"] = args.ss_interval
+    if args.ss_start is not None:
+        params["start_seconds"] = args.ss_start
+    if args.ss_end is not None:
+        params["end_seconds"] = args.ss_end
+    if args.ss_event_label:
+        params["event_label"] = args.ss_event_label
+
+    if task_type == "color":
+        if not args.ss_target_color:
+            raise ValueError("color task requires --ss-target-color HEX")
+        if not args.ss_tolerance:
+            raise ValueError("color task requires --ss-tolerance H,S,V")
+        params["target_color"] = _ss_hex_to_hsv(args.ss_target_color)
+        params["tolerance"] = _ss_parse_tolerance(args.ss_tolerance)
+
+    elif task_type == "change":
+        if args.ss_threshold is None:
+            raise ValueError("change task requires --ss-threshold FLOAT")
+        params["threshold"] = args.ss_threshold
+
+    elif task_type == "similarity":
+        if args.ss_reference_timestamp is None:
+            raise ValueError(
+                "similarity task requires --ss-reference-timestamp SECONDS"
+            )
+        if args.ss_threshold is None:
+            raise ValueError("similarity task requires --ss-threshold FLOAT")
+        params["reference_timestamp"] = args.ss_reference_timestamp
+        params["threshold"] = args.ss_threshold
+        frame = video.extract_frame_at_timestamp(
+            video_path, float(args.ss_reference_timestamp)
+        )
+        if frame is None:
+            raise ValueError(
+                f"Could not extract reference frame at {args.ss_reference_timestamp}s"
+            )
+        params["reference_frame"] = screenspace.extract_region(frame, region_coords)
+
+    elif task_type == "text":
+        if not args.ss_text:
+            raise ValueError("text task requires --ss-text STR")
+        params["search_string"] = args.ss_text
+        if args.ss_fuzzy_threshold is not None:
+            params["fuzzy_threshold"] = args.ss_fuzzy_threshold
+
+    elif task_type == "numbers":
+        if not args.ss_operator:
+            raise ValueError("numbers task requires --ss-operator OP")
+        params["operator"] = args.ss_operator
+        if args.ss_operator == "range":
+            if args.ss_range_min is None or args.ss_range_max is None:
+                raise ValueError(
+                    "numbers task with operator=range requires "
+                    "--ss-range-min and --ss-range-max"
+                )
+            params["range_min"] = args.ss_range_min
+            params["range_max"] = args.ss_range_max
+        else:
+            if args.ss_target_value is None:
+                raise ValueError(
+                    f"numbers task with operator={args.ss_operator} requires --ss-target-value"
+                )
+            params["target_value"] = args.ss_target_value
+
+    elif task_type == "timelapse":
+        if args.ss_speedup is None:
+            raise ValueError("timelapse task requires --ss-speedup FACTOR")
+        params["speedup_factor"] = args.ss_speedup
+        if args.ss_output_format:
+            params["output_format"] = args.ss_output_format
+
+    elif task_type == "template":
+        if args.ss_reference_timestamp is None:
+            raise ValueError("template task requires --ss-reference-timestamp SECONDS")
+        if args.ss_threshold is None:
+            raise ValueError("template task requires --ss-threshold FLOAT")
+        params["reference_timestamp"] = args.ss_reference_timestamp
+        params["threshold"] = args.ss_threshold
+        frame = video.extract_frame_at_timestamp(
+            video_path, float(args.ss_reference_timestamp)
+        )
+        if frame is None:
+            raise ValueError(
+                f"Could not extract template frame at {args.ss_reference_timestamp}s"
+            )
+        params["template_image"] = screenspace.extract_region(frame, region_coords)
+
+    elif task_type == "flow":
+        if args.ss_threshold is None:
+            raise ValueError("flow task requires --ss-threshold FLOAT (magnitude)")
+        params["magnitude_threshold"] = args.ss_threshold
+
+    elif task_type == "inactivity":
+        if args.ss_threshold is None:
+            raise ValueError("inactivity task requires --ss-threshold FLOAT")
+        params["threshold"] = args.ss_threshold
+
+    params.setdefault("cv_resolution_scale", config.SCREENSPACE_CV_RESOLUTION_SCALE)
+    return params
+
+
+def _run_ss_list_regions(args: argparse.Namespace) -> None:
+    """List active Screenspace regions from the manifest."""
+    import screenspace
+
+    manifest = screenspace.load_screenspace_manifest()
+    regions = manifest.get("regions", {})
+    if not regions:
+        utils.info_print("No active Screenspace regions in manifest.")
+        return
+    utils.info_print(f"Active regions ({len(regions)}):")
+    for name in sorted(regions.keys()):
+        rd = regions[name]
+        sw = rd.get("source_width", "?")
+        sh = rd.get("source_height", "?")
+        utils.info_print(
+            f"  {name}: x={rd.get('x', 0):.3f} y={rd.get('y', 0):.3f} "
+            f"w={rd.get('w', 0):.3f} h={rd.get('h', 0):.3f}  source={sw}x{sh}"
+        )
+
+
+def _run_ss_list_stashes(args: argparse.Namespace) -> None:
+    """List Screenspace region stashes."""
+    import screenspace
+
+    manifest = screenspace.load_screenspace_manifest()
+    stashes = manifest.get("stashes", [])
+    if not stashes:
+        utils.info_print("No Screenspace region stashes in manifest.")
+        return
+    utils.info_print(f"Stashes ({len(stashes)}):")
+    for stash in stashes:
+        regions = stash.get("regions", {})
+        names = ", ".join(sorted(regions.keys())) or "(empty)"
+        utils.info_print(
+            f"  {stash.get('id', '?')}  {stash.get('name', '(unnamed)')}: "
+            f"{len(regions)} region(s) — {names}"
+        )
+
+
+def _run_ss_list_tasks(args: argparse.Namespace) -> None:
+    """List Screenspace tasks from the manifest, optionally filtered by status."""
+    import screenspace
+
+    manifest = screenspace.load_screenspace_manifest()
+    tasks = manifest.get("tasks", [])
+    status_filter = (args.ss_list_tasks or "").strip().lower() or None
+    if status_filter:
+        tasks = [t for t in tasks if (t.get("status") or "").lower() == status_filter]
+    if not tasks:
+        if status_filter:
+            utils.info_print(f"No Screenspace tasks with status={status_filter}.")
+        else:
+            utils.info_print("No Screenspace tasks in manifest.")
+        return
+    label = f" (status={status_filter})" if status_filter else ""
+    utils.info_print(f"Tasks{label}: {len(tasks)}")
+    for t in tasks:
+        result = t.get("result")
+        result_count = len(result) if isinstance(result, list) else 0
+        utils.info_print(
+            f"  {t.get('id', '?')}  {t.get('type', '?'):10s}  "
+            f"{t.get('participant', '?'):8s}  region={t.get('region', '?'):16s}  "
+            f"status={t.get('status', '?'):10s}  results={result_count}"
+        )
+
+
+def _run_ss_task(args: argparse.Namespace) -> None:
+    """Run a Screenspace analysis task synchronously and persist the result."""
+    import time
+
+    import screenspace
+
+    task_type, participant, region_name = args.ss_task
+    if task_type not in _SS_VALID_TASK_TYPES:
+        utils.error_print(
+            f"Unknown screenspace task type {task_type!r}.",
+            [f"Valid types: {', '.join(_SS_VALID_TASK_TYPES)}"],
+        )
+        sys.exit(1)
+
+    manifest = screenspace.load_screenspace_manifest()
+    known_regions = _ss_load_known_regions(manifest)
+    if region_name not in known_regions:
+        available = sorted(known_regions.keys())
+        hint = (
+            f"Available regions: {', '.join(available)}"
+            if available
+            else "No regions defined. Use --screenspace to define regions in the web UI first."
+        )
+        utils.error_print(f"Region {region_name!r} not found.", [hint])
+        sys.exit(1)
+
+    video_path = _ss_resolve_video_for_participant(participant)
+    if video_path is None:
+        utils.error_print(
+            f"No video found for participant {participant!r}.",
+            ["Place the source video in the input directory before running --ss-task."],
+        )
+        sys.exit(1)
+
+    props = video.probe_video_properties(video_path)
+    rd = known_regions[region_name]
+    if props and props.get("width") and props.get("height"):
+        region_coords = screenspace.denormalize_region(
+            rd, props["width"], props["height"]
+        )
+    else:
+        region_coords = {k: int(rd[k]) for k in ("x", "y", "w", "h") if k in rd}
+
+    try:
+        parameters = _ss_build_params(args, task_type, region_coords, video_path)
+    except ValueError as exc:
+        utils.error_print(str(exc))
+        sys.exit(1)
+
+    source_video = Path(video_path).name
+    task = screenspace.create_task(
+        task_type=task_type,
+        participant=participant,
+        source_video=source_video,
+        video_path=video_path,
+        region_name=region_name,
+        region_coords=region_coords,
+        parameters=parameters,
+    )
+
+    worker = screenspace.ScreenspaceWorker()
+    worker.restore_tasks(manifest.get("tasks", []))
+    worker.start()
+    task_id = worker.enqueue(task)
+    utils.info_print(f"Running {task_type} on {participant} (region: {region_name})...")
+
+    last_progress = -1.0
+    final_task: dict[str, Any] | None = None
+    try:
+        while True:
+            current = worker.get_task(task_id)
+            if current is None:
+                break
+            status = current.get("status", "")
+            progress = float(current.get("progress", 0.0))
+            if progress - last_progress > 0.05:
+                utils.info_print(f"  {status}: {int(progress * 100)}%")
+                last_progress = progress
+            if status in ("completed", "failed", "cancelled"):
+                final_task = current
+                break
+            time.sleep(0.25)
+    finally:
+        new_events = worker.drain_new_events()
+        all_tasks = worker.get_all_tasks()
+        events = list(manifest.get("events", [])) + new_events
+        screenspace.save_screenspace_manifest(
+            manifest.get("regions", {}),
+            all_tasks,
+            events,
+            stashes=manifest.get("stashes", []),
+        )
+        worker.stop()
+
+    if final_task is None:
+        utils.error_print("Task did not complete (no final state).")
+        sys.exit(1)
+
+    status = final_task.get("status", "")
+    if status == "completed":
+        result = final_task.get("result")
+        result_count = len(result) if isinstance(result, list) else 0
+        if task_type == "timelapse":
+            output = (
+                result[0].get("output_path")
+                if isinstance(result, list) and result
+                else None
+            )
+            if output:
+                utils.info_print(f"Timelapse written to {output}")
+            else:
+                utils.info_print("Timelapse complete.")
+        else:
+            utils.info_print(f"Completed: {result_count} result(s).")
+    elif status == "failed":
+        utils.error_print(f"Task failed: {final_task.get('error', 'unknown error')}")
+        sys.exit(1)
+    else:
+        utils.info_print(f"Task ended with status={status}.")
+
+
+# ---- Thinking-agent CLI ----
+
+
+def _select_transcript_targets(
+    requested: list[str] | None,
+    source_transcripts: dict[str, Any],
+) -> list[str]:
+    """Resolve a requested participant list against transcripted participants.
+
+    ``requested`` is the value of ``args.summarize`` or ``args.citations`` —
+    None should never reach here, but ``[]`` means "all transcripted".
+    Unknown IDs print a warning and are dropped.
+    """
+    if not requested:
+        return list(source_transcripts.keys())
+    targets: list[str] = []
+    for raw_id in requested:
+        pid = utils.normalize_participant_id(raw_id).strip()
+        if pid in source_transcripts:
+            targets.append(pid)
+        else:
+            utils.warning_print(
+                f"Participant {raw_id!r} has no transcript; skipping. "
+                f"Available: {', '.join(sorted(source_transcripts.keys()))}"
+            )
+    return targets
+
+
+def _run_summarize(args: argparse.Namespace) -> None:
+    """Run the summary thinking agent over already-transcribed participants."""
+    import thinking_agents
+
+    manifest = transcripts.load_transcripts_manifest()
+    source_transcripts = manifest["source_transcripts"]
+    corrections = manifest["corrections"]
+    marks = manifest.get("marks")
+
+    targets = _select_transcript_targets(args.summarize, source_transcripts)
+    if not targets:
+        utils.error_print("No transcribed participants to summarize.")
+        return
+
+    summarized = 0
+    skipped = 0
+    for pid in targets:
+        entry = source_transcripts.get(pid)
+        if not entry:
+            utils.warning_print(f"{pid}: no transcript entry; skipping.")
+            skipped += 1
+            continue
+        if entry.get("summary") and not args.yes:
+            utils.info_print(f"{pid}: summary already present; skip (-y to overwrite).")
+            skipped += 1
+            continue
+        utils.info_print(f"Summarizing {pid}...")
+        summary = thinking_agents.summarize_transcript(entry.get("segments") or [])
+        if not summary:
+            utils.warning_print(
+                f"{pid}: summary not produced (transcript too short or Ollama unavailable)."
+            )
+            skipped += 1
+            continue
+        entry["summary"] = summary
+        transcripts.save_transcripts_manifest(source_transcripts, corrections, marks)
+        utils.info_print(f"  {pid}: summary stored ({len(summary)} chars).")
+        summarized += 1
+
+    utils.info_print(f"Summary complete: {summarized} summarized, {skipped} skipped.")
+
+
+def _run_citations(args: argparse.Namespace) -> None:
+    """Run the citation thinking agent over participants with summaries."""
+    import thinking_agents
+
+    manifest = transcripts.load_transcripts_manifest()
+    source_transcripts = manifest["source_transcripts"]
+    corrections = manifest["corrections"]
+    marks = manifest.get("marks")
+
+    targets = _select_transcript_targets(args.citations, source_transcripts)
+    if not targets:
+        utils.error_print("No transcribed participants for citation generation.")
+        return
+
+    cited = 0
+    skipped = 0
+    for pid in targets:
+        entry = source_transcripts.get(pid)
+        if not entry:
+            utils.warning_print(f"{pid}: no transcript entry; skipping.")
+            skipped += 1
+            continue
+        if not entry.get("summary"):
+            utils.warning_print(f"{pid}: no summary yet; run --summarize first.")
+            skipped += 1
+            continue
+        if entry.get("citations") and not args.yes:
+            utils.info_print(
+                f"{pid}: citations already present; skip (-y to overwrite)."
+            )
+            skipped += 1
+            continue
+        utils.info_print(f"Finding citations for {pid}...")
+        citations = thinking_agents.find_citations(
+            entry["summary"], entry.get("segments") or []
+        )
+        if not citations:
+            utils.warning_print(
+                f"{pid}: no citations produced (Ollama unavailable or empty summary)."
+            )
+            skipped += 1
+            continue
+        entry["citations"] = citations
+        transcripts.save_transcripts_manifest(source_transcripts, corrections, marks)
+        total_refs = sum(len(c.get("refs") or []) for c in citations)
+        utils.info_print(
+            f"  {pid}: {len(citations)} claim(s), {total_refs} ref(s) stored."
+        )
+        cited += 1
+
+    utils.info_print(f"Citations complete: {cited} processed, {skipped} skipped.")
+
+
 def _run_timeline_viewer_mode(worksheet: Any, args: Any) -> None:
     """Export all clips via batch mode and generate a per-participant timeline viewer."""
     clips_list = spreadsheet.generate_list(worksheet, "batch", skip_prompts=True)
@@ -1151,17 +1801,140 @@ _EXCLUSIVE_MODES: tuple[_ModeSpec, ...] = (
             "gallery",
         ),
     ),
+    _ModeSpec(
+        key="ss_task",
+        truthy=lambda a: getattr(a, "ss_task", None) is not None,
+        error="--ss-task cannot be combined with mode, format, or other standalone flags.",
+        hint="Use --ss-task with -i/-o (directories) and -v (verbose) only.",
+        selector_attrs=_BASE_SELECTOR_ATTRS + ("highlights",),
+        blocks_modes=(
+            "timeline_viewer",
+            "studio",
+            "insights",
+            "screenspace",
+            "transcripts",
+            "gallery",
+            "pre_transcribe",
+            "ss_list_regions",
+            "ss_list_stashes",
+            "ss_list_tasks",
+            "summarize",
+            "citations",
+        ),
+    ),
+    _ModeSpec(
+        key="ss_list_regions",
+        truthy=lambda a: bool(getattr(a, "ss_list_regions", False)),
+        error="--ss-list-regions cannot be combined with other modes.",
+        hint="Use --ss-list-regions on its own (with -i/-o for directories).",
+        selector_attrs=_BASE_SELECTOR_ATTRS + ("highlights",),
+        blocks_modes=(
+            "timeline_viewer",
+            "studio",
+            "insights",
+            "screenspace",
+            "transcripts",
+            "gallery",
+            "pre_transcribe",
+            "ss_task",
+            "ss_list_stashes",
+            "ss_list_tasks",
+            "summarize",
+            "citations",
+        ),
+    ),
+    _ModeSpec(
+        key="ss_list_stashes",
+        truthy=lambda a: bool(getattr(a, "ss_list_stashes", False)),
+        error="--ss-list-stashes cannot be combined with other modes.",
+        hint="Use --ss-list-stashes on its own (with -i/-o for directories).",
+        selector_attrs=_BASE_SELECTOR_ATTRS + ("highlights",),
+        blocks_modes=(
+            "timeline_viewer",
+            "studio",
+            "insights",
+            "screenspace",
+            "transcripts",
+            "gallery",
+            "pre_transcribe",
+            "ss_task",
+            "ss_list_regions",
+            "ss_list_tasks",
+            "summarize",
+            "citations",
+        ),
+    ),
+    _ModeSpec(
+        key="ss_list_tasks",
+        truthy=lambda a: getattr(a, "ss_list_tasks", None) is not None,
+        error="--ss-list-tasks cannot be combined with other modes.",
+        hint="Use --ss-list-tasks on its own (with -i/-o for directories).",
+        selector_attrs=_BASE_SELECTOR_ATTRS + ("highlights",),
+        blocks_modes=(
+            "timeline_viewer",
+            "studio",
+            "insights",
+            "screenspace",
+            "transcripts",
+            "gallery",
+            "pre_transcribe",
+            "ss_task",
+            "ss_list_regions",
+            "ss_list_stashes",
+            "summarize",
+            "citations",
+        ),
+    ),
+    _ModeSpec(
+        key="summarize",
+        truthy=lambda a: getattr(a, "summarize", None) is not None,
+        error="--summarize cannot be combined with mode, format, or other standalone flags.",
+        hint="Use --summarize with -i/-o (directories), -v (verbose), and --ollama-model.",
+        selector_attrs=_BASE_SELECTOR_ATTRS + ("highlights",),
+        blocks_modes=(
+            "timeline_viewer",
+            "studio",
+            "insights",
+            "screenspace",
+            "transcripts",
+            "gallery",
+            "pre_transcribe",
+            "ss_task",
+            "ss_list_regions",
+            "ss_list_stashes",
+            "ss_list_tasks",
+            "citations",
+        ),
+    ),
+    _ModeSpec(
+        key="citations",
+        truthy=lambda a: getattr(a, "citations", None) is not None,
+        error="--citations cannot be combined with mode, format, or other standalone flags.",
+        hint="Use --citations with -i/-o (directories), -v (verbose), and --ollama-model.",
+        selector_attrs=_BASE_SELECTOR_ATTRS + ("highlights",),
+        blocks_modes=(
+            "timeline_viewer",
+            "studio",
+            "insights",
+            "screenspace",
+            "transcripts",
+            "gallery",
+            "pre_transcribe",
+            "ss_task",
+            "ss_list_regions",
+            "ss_list_stashes",
+            "ss_list_tasks",
+            "summarize",
+        ),
+    ),
 )
 
 
-def _validate_mode_conflicts(
-    args: Any,
-) -> tuple[bool, bool, bool, bool, bool, Any, bool]:
+def _validate_mode_conflicts(args: Any) -> dict[str, Any]:
     """Validate mutually exclusive mode flags and exit on conflict.
 
-    Returns:
-        (timeline_viewer, studio_mode, insights_mode, screenspace_mode,
-         transcripts_mode, gallery_arg, pre_transcribe_mode)
+    Returns a dict keyed by mode name. Boolean for each mode plus
+    ``"gallery_arg"`` (the optional VIDEO argument from --gallery).
     """
     active = {spec.key: spec.truthy(args) for spec in _EXCLUSIVE_MODES}
     for spec in _EXCLUSIVE_MODES:
@@ -1173,15 +1946,9 @@ def _validate_mode_conflicts(
             utils.error_print(spec.error, [spec.hint])
             sys.exit(1)
 
-    return (
-        active["timeline_viewer"],
-        active["studio"],
-        active["insights"],
-        active["screenspace"],
-        active["transcripts"],
-        getattr(args, "gallery", None),
-        active["pre_transcribe"],
-    )
+    result: dict[str, Any] = dict(active)
+    result["gallery_arg"] = getattr(args, "gallery", None)
+    return result
 
 
 def _apply_config_overrides(args: Any, cli_mode: bool) -> CliModeArgs:
@@ -1258,6 +2025,28 @@ def _dispatch_standalone_mode(
         server.start_combined_server(worksheet=None, default_page="insights")
         return True
 
+    # Standalone Screenspace CLI tasks (no UI)
+    if getattr(args, "ss_list_regions", False):
+        _run_ss_list_regions(args)
+        return True
+    if getattr(args, "ss_list_stashes", False):
+        _run_ss_list_stashes(args)
+        return True
+    if getattr(args, "ss_list_tasks", None) is not None:
+        _run_ss_list_tasks(args)
+        return True
+    if getattr(args, "ss_task", None) is not None:
+        _run_ss_task(args)
+        return True
+
+    # Standalone thinking-agent CLI passes
+    if getattr(args, "summarize", None) is not None:
+        _run_summarize(args)
+        return True
+    if getattr(args, "citations", None) is not None:
+        _run_citations(args)
+        return True
+
     # Standalone screenspace (no spreadsheet)
     if getattr(args, "screenspace", False) and not args.spreadsheet:
         import server
@@ -1314,15 +2103,10 @@ def main() -> None:
         ic(args)
 
     # Validate mutually exclusive mode flags
-    (
-        timeline_viewer,
-        studio_mode,
-        insights_mode,
-        screenspace_mode,
-        transcripts_mode,
-        gallery_arg,
-        pre_transcribe_mode,
-    ) = _validate_mode_conflicts(args)
+    modes = _validate_mode_conflicts(args)
+    timeline_viewer = modes["timeline_viewer"]
+    gallery_arg = modes["gallery_arg"]
+    pre_transcribe_mode = modes["pre_transcribe"]
 
     # Determine if running in CLI mode (any mode argument provided)
     mixed_selectors = getattr(args, "mixed", None)
@@ -1342,6 +2126,13 @@ def main() -> None:
         or args.screen
         or args.gif
         or timeline_viewer
+        or modes["ss_task"]
+        or modes["ss_list_regions"]
+        or modes["ss_list_stashes"]
+        or modes["ss_list_tasks"]
+        or modes["summarize"]
+        or modes["citations"]
+        or pre_transcribe_mode
     )
 
     cli_mode_args = _apply_config_overrides(args, cli_mode)

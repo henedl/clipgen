@@ -98,6 +98,27 @@ def extract_region(frame: np.ndarray, region: dict[str, int]) -> np.ndarray:
     return frame[y:y2, x:x2]
 
 
+def denormalize_region(
+    region: dict[str, Any], target_w: int, target_h: int
+) -> dict[str, int]:
+    """Convert a normalized region (0–1 floats) to pixel coordinates.
+
+    Args:
+        region: Dict with normalized ``x``, ``y``, ``w``, ``h`` keys.
+        target_w: Target frame width in pixels.
+        target_h: Target frame height in pixels.
+
+    Returns:
+        Dict with integer pixel ``x``, ``y``, ``w``, ``h`` keys.
+    """
+    return {
+        "x": int(round(region["x"] * target_w)),
+        "y": int(round(region["y"] * target_h)),
+        "w": int(round(region["w"] * target_w)),
+        "h": int(round(region["h"] * target_h)),
+    }
+
+
 def average_color_hsv(region_pixels: np.ndarray) -> dict[str, float]:
     """Compute mean HSV color of a region.
 

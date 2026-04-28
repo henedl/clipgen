@@ -535,18 +535,6 @@ def _normalize_region(
     }
 
 
-def _denormalize_region(
-    region: dict[str, Any], target_w: int, target_h: int
-) -> dict[str, int]:
-    """Convert normalized region to pixel coordinates for a target resolution."""
-    return {
-        "x": int(round(region["x"] * target_w)),
-        "y": int(round(region["y"] * target_h)),
-        "w": int(round(region["w"] * target_w)),
-        "h": int(round(region["h"] * target_h)),
-    }
-
-
 # ---- Regions CRUD ----
 
 
@@ -1100,11 +1088,13 @@ def api_tasks_create() -> FlaskResponse:
 
     props = video.probe_video_properties(video_path)
 
+    import screenspace
+
     def _resolve_region_coords(name: str) -> dict[str, Any]:
         """Convert a named region to pixel coordinates."""
         rd = all_known_regions[name]
         if props and props.get("width") and props.get("height"):
-            return _denormalize_region(rd, props["width"], props["height"])
+            return screenspace.denormalize_region(rd, props["width"], props["height"])
         return {k: rd[k] for k in ("x", "y", "w", "h") if k in rd}
 
     if region_name and region_name in all_known_regions:
@@ -1142,8 +1132,6 @@ def api_tasks_create() -> FlaskResponse:
         if isinstance(prepared, tuple):
             return prepared  # Flask error response
         parameters = cast(dict[str, Any], prepared)
-
-    import screenspace
 
     # Snapshot the global CV resolution scale into the task so the manifest
     # records what scale produced each result (useful when re-running with
