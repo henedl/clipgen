@@ -175,7 +175,7 @@ def test_create_region_rejects_missing_canvas_dims(client):
 
 
 def test_denormalize_region():
-    from screenspace_server import _denormalize_region
+    from screenspace import denormalize_region
 
     region = {
         "x": 0.5,
@@ -185,12 +185,12 @@ def test_denormalize_region():
         "source_width": 1920,
         "source_height": 1080,
     }
-    px = _denormalize_region(region, 1920, 1080)
+    px = denormalize_region(region, 1920, 1080)
     assert px == {"x": 960, "y": 540, "w": 192, "h": 108}
 
 
 def test_denormalize_cross_resolution():
-    from screenspace_server import _denormalize_region
+    from screenspace import denormalize_region
 
     region = {
         "x": 0.5,
@@ -200,7 +200,7 @@ def test_denormalize_cross_resolution():
         "source_width": 1920,
         "source_height": 1080,
     }
-    px = _denormalize_region(region, 1280, 720)
+    px = denormalize_region(region, 1280, 720)
     assert px == {"x": 640, "y": 360, "w": 128, "h": 72}
 
 
