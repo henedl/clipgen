@@ -634,6 +634,7 @@
     state.currentTimestamp = timestamp;
     qs("#timestampInput").value = formatTimestamp(timestamp);
     renderPlayhead();
+    persistVideoTime(timestamp);
   }
 
   var _pendingFrameTs = null;
@@ -780,6 +781,7 @@
       var t = video.currentTime;
       state.currentTimestamp = t;
       qs("#timestampInput").value = formatTimestamp(t);
+      persistVideoTime(t);
       if (!_playheadRaf) {
         _playheadRaf = requestAnimationFrame(function () {
           _playheadRaf = 0;
@@ -787,6 +789,15 @@
         });
       }
     });
+  }
+
+  function persistVideoTime(t) {
+    if (!state.selectedParticipant || !isFinite(t)) return;
+    var stored = getStoredUIState("screenspace");
+    var map = (stored.videoTimeByParticipant && typeof stored.videoTimeByParticipant === "object")
+      ? stored.videoTimeByParticipant : {};
+    map[state.selectedParticipant] = t;
+    setStoredUIStateField("screenspace", "videoTimeByParticipant", map);
   }
 
   function playVideo() {
@@ -2347,6 +2358,7 @@
       tab.addEventListener("click", function () {
         hideToolInfoTooltip(true);
         state.activeWorkflow = tab.dataset.type;
+        setStoredUIStateField("screenspace", "activeWorkflow", state.activeWorkflow);
         qsa(".wf-tab").forEach(function (t) { t.classList.remove("active"); });
         tab.classList.add("active");
         renderWorkflowParams();
@@ -6245,7 +6257,12 @@
     qs("#participantSelect").addEventListener("change", function () {
       var pid = this.value;
       if (pid) {
-        selectParticipant(pid);
+        var stored = getStoredUIState("screenspace");
+        var ts;
+        if (stored.videoTimeByParticipant && typeof stored.videoTimeByParticipant[pid] === "number") {
+          ts = stored.videoTimeByParticipant[pid];
+        }
+        selectParticipant(pid, ts);
         state.runParticipants = [pid];
         renderRunParticipantPicker();
       }
@@ -6282,10 +6299,18 @@
               }
             }
           }
-          selectParticipant(pickId);
+          var initialTs;
+          if (stored.videoTimeByParticipant && typeof stored.videoTimeByParticipant[pickId] === "number") {
+            initialTs = stored.videoTimeByParticipant[pickId];
+          }
+          selectParticipant(pickId, initialTs);
           state.runParticipants = [pickId];
           if (stored.rightPaneTab === "queue" || stored.rightPaneTab === "results") {
             setRightPaneTab(stored.rightPaneTab);
+          }
+          if (stored.activeWorkflow) {
+            var wfTab = qs('.wf-tab[data-type="' + stored.activeWorkflow + '"]');
+            if (wfTab) wfTab.click();
           }
         }
         renderRunParticipantPicker();

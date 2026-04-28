@@ -531,6 +531,16 @@
       // Set VTT track
       var track = qs("#subtitleTrack");
       track.src = "api/vtt/" + pid;
+
+      var storedMap = getStoredUIState("transcripts").videoTimeByParticipant;
+      if (storedMap && typeof storedMap[pid] === "number") {
+        var savedTime = storedMap[pid];
+        var restoreTime = function () {
+          video.removeEventListener("loadedmetadata", restoreTime);
+          if (state.selectedParticipant === pid) video.currentTime = savedTime;
+        };
+        video.addEventListener("loadedmetadata", restoreTime);
+      }
     } else {
       video.removeAttribute("src");
       video.load();
@@ -1284,13 +1294,26 @@
 
   function initVideoSync() {
     var video = qs("#videoPlayer");
+    var save = function () { persistVideoTime(video.currentTime); };
     video.addEventListener("timeupdate", function () {
+      save();
       if (_syncRaf) return;
       _syncRaf = requestAnimationFrame(function () {
         _syncRaf = 0;
         highlightActiveSegment();
       });
     });
+    // Native scrubbing on a paused video doesn't always fire timeupdate.
+    video.addEventListener("seeked", save);
+  }
+
+  function persistVideoTime(t) {
+    if (!state.selectedParticipant || !isFinite(t)) return;
+    var stored = getStoredUIState("transcripts");
+    var map = (stored.videoTimeByParticipant && typeof stored.videoTimeByParticipant === "object")
+      ? stored.videoTimeByParticipant : {};
+    map[state.selectedParticipant] = t;
+    setStoredUIStateField("transcripts", "videoTimeByParticipant", map);
   }
 
   function highlightActiveSegment() {
