@@ -123,6 +123,9 @@
     return cov;
   }
 
+  // Group Screenspace events by event_type. First pass builds a per-key
+  // accumulator (counts, sums, min/max, per-participant subgroups); second
+  // pass converts each accumulator into the row shape the UI consumes.
   function computeEventTypeStats(events, participants) {
     var groups = {};
     for (var i = 0; i < events.length; i++) {
@@ -142,41 +145,41 @@
           per_participant: {},
         };
       }
-      var g = groups[key];
-      g.total_count++;
-      if (ev.time_in < g.first_sec) g.first_sec = ev.time_in;
-      if (ev.time_out > g.last_sec) g.last_sec = ev.time_out;
-      g.sum_time += ev.time_in;
-      g.sum_confidence += (ev.confidence || 0);
-      g.sum_duration += ((ev.time_out || 0) - (ev.time_in || 0));
-      g.participants_seen[ev.participant] = true;
-      if (!g.per_participant[ev.participant]) {
-        g.per_participant[ev.participant] = { count: 0, sum_time: 0 };
+      var group = groups[key];
+      group.total_count++;
+      if (ev.time_in < group.first_sec) group.first_sec = ev.time_in;
+      if (ev.time_out > group.last_sec) group.last_sec = ev.time_out;
+      group.sum_time += ev.time_in;
+      group.sum_confidence += (ev.confidence || 0);
+      group.sum_duration += ((ev.time_out || 0) - (ev.time_in || 0));
+      group.participants_seen[ev.participant] = true;
+      if (!group.per_participant[ev.participant]) {
+        group.per_participant[ev.participant] = { count: 0, sum_time: 0 };
       }
-      g.per_participant[ev.participant].count++;
-      g.per_participant[ev.participant].sum_time += ev.time_in;
+      group.per_participant[ev.participant].count++;
+      group.per_participant[ev.participant].sum_time += ev.time_in;
     }
     var result = [];
     var keys = Object.keys(groups);
     for (var j = 0; j < keys.length; j++) {
-      var g2 = groups[keys[j]];
+      var group = groups[keys[j]];
       var pp = {};
-      var ppKeys = Object.keys(g2.per_participant);
+      var ppKeys = Object.keys(group.per_participant);
       for (var k = 0; k < ppKeys.length; k++) {
-        var ppd = g2.per_participant[ppKeys[k]];
+        var ppd = group.per_participant[ppKeys[k]];
         pp[ppKeys[k]] = { count: ppd.count, mean_time: ppd.sum_time / ppd.count };
       }
       result.push({
-        event_type: g2.event_type,
-        detector: g2.detector,
-        total_count: g2.total_count,
-        participant_coverage: Object.keys(g2.participants_seen).length,
+        event_type: group.event_type,
+        detector: group.detector,
+        total_count: group.total_count,
+        participant_coverage: Object.keys(group.participants_seen).length,
         participant_total: participants.length,
-        first_sec: g2.first_sec === Infinity ? 0 : g2.first_sec,
-        last_sec: g2.last_sec === -Infinity ? 0 : g2.last_sec,
-        mean_time: g2.total_count ? g2.sum_time / g2.total_count : 0,
-        mean_confidence: g2.total_count ? g2.sum_confidence / g2.total_count : 0,
-        mean_duration: g2.total_count ? g2.sum_duration / g2.total_count : 0,
+        first_sec: group.first_sec === Infinity ? 0 : group.first_sec,
+        last_sec: group.last_sec === -Infinity ? 0 : group.last_sec,
+        mean_time: group.total_count ? group.sum_time / group.total_count : 0,
+        mean_confidence: group.total_count ? group.sum_confidence / group.total_count : 0,
+        mean_duration: group.total_count ? group.sum_duration / group.total_count : 0,
         per_participant: pp,
       });
     }
@@ -184,6 +187,10 @@
     return result;
   }
 
+  // Group Transcript marks by category. Same two-pass shape as
+  // computeEventTypeStats above. Marks may arrive with `time_in/time_out`
+  // (from the transcripts API) or `start/end` (from the studio queue
+  // shape); the fallback covers both.
   function computeTranscriptCategoryStats(marks, participants) {
     var groups = {};
     for (var i = 0; i < marks.length; i++) {
@@ -199,28 +206,28 @@
           per_participant: {},
         };
       }
-      var g = groups[cat];
-      g.total_count++;
-      var tin = m.time_in !== undefined ? m.time_in : m.start;
-      var tout = m.time_out !== undefined ? m.time_out : m.end;
-      if (tin < g.first_sec) g.first_sec = tin;
-      if (tout > g.last_sec) g.last_sec = tout;
-      g.participants_seen[m.participant] = true;
-      if (!g.per_participant[m.participant]) g.per_participant[m.participant] = 0;
-      g.per_participant[m.participant]++;
+      var group = groups[cat];
+      group.total_count++;
+      var timeIn = m.time_in !== undefined ? m.time_in : m.start;
+      var timeOut = m.time_out !== undefined ? m.time_out : m.end;
+      if (timeIn < group.first_sec) group.first_sec = timeIn;
+      if (timeOut > group.last_sec) group.last_sec = timeOut;
+      group.participants_seen[m.participant] = true;
+      if (!group.per_participant[m.participant]) group.per_participant[m.participant] = 0;
+      group.per_participant[m.participant]++;
     }
     var result = [];
     var keys = Object.keys(groups);
     for (var j = 0; j < keys.length; j++) {
-      var g2 = groups[keys[j]];
+      var group = groups[keys[j]];
       result.push({
-        category: g2.category,
-        total_count: g2.total_count,
-        participant_coverage: Object.keys(g2.participants_seen).length,
+        category: group.category,
+        total_count: group.total_count,
+        participant_coverage: Object.keys(group.participants_seen).length,
         participant_total: participants.length,
-        first_sec: g2.first_sec === Infinity ? 0 : g2.first_sec,
-        last_sec: g2.last_sec === -Infinity ? 0 : g2.last_sec,
-        per_participant: g2.per_participant,
+        first_sec: group.first_sec === Infinity ? 0 : group.first_sec,
+        last_sec: group.last_sec === -Infinity ? 0 : group.last_sec,
+        per_participant: group.per_participant,
       });
     }
     result.sort(function (a, b) { return b.total_count - a.total_count; });
@@ -396,8 +403,8 @@
     }
     // Transcript
     for (var m = 0; m < marks.length; m++) {
-      var tin = marks[m].time_in !== undefined ? marks[m].time_in : marks[m].start;
-      allTimes.push({ time: tin, stream: "transcript" });
+      var timeIn = marks[m].time_in !== undefined ? marks[m].time_in : marks[m].start;
+      allTimes.push({ time: timeIn, stream: "transcript" });
     }
     if (!allTimes.length) return { bins: [], binWidth: 0, maxTime: 0, maxCount: 0 };
 

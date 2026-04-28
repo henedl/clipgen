@@ -1,4 +1,15 @@
-/* clipgen Timeline Viewer – viewer.js */
+/* clipgen Timeline Viewer.
+ *
+ * Renders the artifact timeline + list + filmstrip overlay. Artifacts come
+ * from `window.CLIPGEN_DATA` injected by the Python side — the same data
+ * contract is used both in-app (Studio embeds this viewer) and in the
+ * exported standalone viewer (artifacts inlined as base64), so we never
+ * assume a live backend is reachable.
+ *
+ * Lazy thumbnails: clip cards request thumbnails as they scroll into view
+ * via _thumbObserver / _thumbQueue, with results cached in _thumbCache for
+ * the session. Filmstrip mode does the same with its own observer/queue.
+ */
 (function () {
   "use strict";
 
@@ -251,6 +262,11 @@
     _cardScrub = null;
   }
 
+  // Lazy clip thumbnails. Called on initial render and again after any list
+  // rebuild — we tear down the previous observer first so old card elements
+  // (now detached) don't keep firing intersection callbacks. Each card is
+  // either served from `_thumbCache` immediately or queued for generation;
+  // unobserve fires once the card has been seen so we don't re-enqueue.
   function initClipThumbnails() {
     if (_thumbObserver) { _thumbObserver.disconnect(); _thumbObserver = null; }
     _thumbQueue = [];

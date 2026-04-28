@@ -1,4 +1,15 @@
-/* Convergence Browser – Phase 1–4 */
+/* Convergence Browser.
+ *
+ * Pulls events from multiple participants/streams (Screenspace detector
+ * events + Transcripts marks + sheet timestamps) onto a single timeline,
+ * then clusters moments where many participants do the same thing within a
+ * short window into "convergence zones". Renders a marker timeline and a
+ * frame-preview panel.
+ *
+ * `cvState._snapshot` records the last (ss, tr, sh) input lengths the view
+ * was built against, so we can detect when upstream data changed and the
+ * view needs to be rebuilt.
+ */
 
 (function () {
   "use strict";
@@ -287,22 +298,33 @@
   }
 
   // --- Convergence Algorithm ---
+  //
+  // Two passes:
+  //   1. For each event, count distinct participants whose events overlap
+  //      the window [start - W, start + W]. Events meeting `minParticipants`
+  //      are "qualifying".
+  //   2. Walk qualifying events in time order and merge any two within W of
+  //      each other into a single zone. This collapses contiguous bursts of
+  //      activity into one entry instead of one-zone-per-event.
+  //
+  // The inner loop in pass 1 is O(n²) in the worst case but breaks early on
+  // the sorted array once we pass the right edge of the window.
 
   function computeConvergenceZones(events, windowSec, minParticipants) {
     if (!events.length) return [];
 
-    // Sort by start time
     var sorted = events.slice().sort(function (a, b) { return a.start - b.start; });
 
-    // For each event, find distinct participants within ±windowSec
-    var qualifying = []; // indices of events that meet threshold
+    // Pass 1: per-event distinct-participant count within ±windowSec
+    var qualifying = []; // indices into sorted[] that meet threshold
     for (var i = 0; i < sorted.length; i++) {
       var center = sorted[i].start;
       var seen = {};
       for (var j = 0; j < sorted.length; j++) {
         if (sorted[j].start > center + windowSec) break;
+        // Skip if event j ends before the window opens.
         if (sorted[j].end < center - windowSec && sorted[j].start < center - windowSec) continue;
-        // Event j overlaps the window [center - W, center + W]
+        // Event j overlaps the window [center - W, center + W].
         if (sorted[j].start <= center + windowSec && sorted[j].end >= center - windowSec) {
           seen[sorted[j].participant] = true;
         }
