@@ -1,4 +1,20 @@
-/* clipgen Studio */
+/* clipgen Studio page.
+ *
+ * Main hub: spreadsheet grid on top, artifact + reel queues + generated
+ * outputs below, with intake panels that surface Screenspace and Transcript
+ * activity for cross-referencing.
+ *
+ * Key shapes on `state`:
+ *   sheetData                  — rows/cells from the loaded spreadsheet.
+ *   artifactQueue / reelQueue  — pending generation work; persisted to
+ *                                sessionStorage under QUEUE_STORAGE_KEY.
+ *   generatedArtifacts         — completed outputs surfaced to the UI.
+ *   cellResults                — per-cell success/error status overlaid
+ *                                onto the sheet grid (keyed by cellKey()).
+ *   intakeEvents / intakeClusters / intakeSeenIds — Screenspace polling
+ *                                snapshot; trIntakeMarks/Clusters mirror
+ *                                this for Transcripts.
+ */
 
 (function () {
   "use strict";
@@ -715,6 +731,12 @@
       });
   }
 
+  // On page load, reconcile the persisted manifest against the live sheet:
+  // for each manifest artifact, find its (participant, row) in sheetData,
+  // mark that cell green, and re-enqueue any artifact whose cell still has
+  // a valid timestamp but isn't already queued. The `seen` dedup guards
+  // against multiple artifacts mapping to the same cell (e.g. two clips
+  // generated from the same timestamp).
   function loadManifestState() {
     apiGet("api/manifest")
       .then(function (data) {

@@ -1,3 +1,17 @@
+/* clipgen Transcripts page.
+ *
+ * Editor for per-participant Whisper transcripts, plus cross-references into
+ * Screenspace events and the source spreadsheet. Two long-running side flows
+ * piggyback on the same `state`:
+ *
+ *   - Transcription warmup: a single `tryPostTranscriptionWarmup()` post that
+ *     asks the backend to preload the Whisper model. `_transcriptionWarmupPosted`
+ *     guards it so we never double-post per page load.
+ *   - Summary / citations: Ollama-generated; `_summaryPollTimer` and
+ *     `_citationsPollTimer` poll the backend until the result lands or the
+ *     user navigates away.
+ */
+
 (function () {
   "use strict";
 
@@ -400,6 +414,15 @@
     tryPostTranscriptionWarmup();
   }
 
+  // Ask the backend to preload the Whisper model. Idempotent per page load
+  // via `_transcriptionWarmupPosted`; we reset the flag whenever the post
+  // didn't actually lead to a load (skipped / error / no-op response) so a
+  // later trigger (e.g. pill hover) can retry. Five response branches:
+  //   skipped         — backend declined (e.g. no GPU policy met); keep flag
+  //                     down so a later hover can re-prompt.
+  //   already_loaded  — model is in memory; nothing to poll.
+  //   started / warming — kick off the model-hint poller until it finishes.
+  //   !ok / catch     — treat as transient; clear flag for retry.
   function tryPostTranscriptionWarmup() {
     if (_transcriptionWarmupPosted) return;
     if (state.transcribePrewarm === "off") return;
@@ -565,6 +588,16 @@
   }
 
   // ---- AI Summary ----
+  //
+  // Two cooperating pollers:
+  //   _summaryPollTimer   — runs while the backend is still generating the
+  //                         summary. Stops as soon as a summary lands, or
+  //                         when the user switches participant.
+  //   _citationsPollTimer — runs after the summary arrives if citations are
+  //                         still being computed (citations depend on summary).
+  // Both are cleared by their own _stop*Poll() helpers; either also stops if
+  // `state.selectedParticipant` no longer matches the participant the timer
+  // was started for.
 
   var _summaryPollTimer = null;
 

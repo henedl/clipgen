@@ -1,4 +1,20 @@
-/* clipgen Screenspace */
+/* clipgen Screenspace page.
+ *
+ * Frame canvas + overlay editor for defining regions and templates on a video
+ * frame, then running detector tasks (color/change/similarity/text/numbers/
+ * timelapse/template/flow/scene/inactivity, plus the multitool chain).
+ *
+ * Two patterns recur and are worth knowing up front:
+ *
+ *   - Request versioning. Frame fetches and participant switches are async,
+ *     and a fast user can issue several before the first lands. Every async
+ *     entry point bumps a `_*RequestVersion` counter and stale callbacks
+ *     compare against the latest version on resolution. See `_fetchFrame`.
+ *   - Overlay interactions. The overlay canvas is a small state machine over
+ *     four mutually-exclusive modes (drag template / drag region / resize
+ *     region / draw region), driven by `state.draggingTemplate`,
+ *     `state.draggingRegion`, `state.resizingRegion`, `state.drawingRegion`.
+ */
 
 (function () {
   "use strict";
@@ -559,6 +575,11 @@
     }, true);
   }
 
+  // Switching participants must clear the entire frame/overlay/playback
+  // pipeline together — keeping any one of these around (frameImage, video
+  // src, scene refs, pending fetch ids) would let the previous participant's
+  // state leak into the new one. Bumping the request-version counters also
+  // invalidates any in-flight frame/heatmap loads from the prior participant.
   function selectParticipant(pid, initialTimestamp) {
     var participantRequestVersion = ++_participantRequestVersion;
     _frameRequestVersion += 1;
@@ -637,6 +658,13 @@
     _fetchFrame(timestamp);
   }
 
+  // Frame loads are async and the user can scrub faster than the network.
+  // We coalesce: at most one in-flight image at a time. While one is loading,
+  // newer requests park their timestamp in `_pendingFrameTs` (loadFrame above)
+  // and the onload/onerror handler picks it up after the current load
+  // completes. `frameRequestVersion` plus the participant check rejects stale
+  // images whose participant has since changed, so we never paint a frame
+  // belonging to a participant the user already switched away from.
   function _fetchFrame(timestamp) {
     var participantId = state.selectedParticipant;
     var frameRequestVersion = ++_frameRequestVersion;
@@ -921,6 +949,18 @@
       .catch(function () { showToast("Failed to update region"); });
   }
 
+  // ---- Overlay interaction state machine ----
+  //
+  // Mousedown picks a mode based on what's under the cursor:
+  //   - inside the template overlay        → state.draggingTemplate
+  //   - on a region's resize handle        → state.resizingRegion
+  //   - inside a region body               → state.draggingRegion
+  //   - empty area                         → state.drawingRegion (new region)
+  //
+  // Mousemove updates whichever mode is active; mouseup commits and clears it.
+  // Document-level move/up listeners mirror the canvas handlers so a drag
+  // continues smoothly when the cursor leaves the overlay (the canvas-level
+  // handlers stop firing, the document ones take over).
   function initRegionDrawing() {
     var overlay = qs("#overlayCanvas");
 

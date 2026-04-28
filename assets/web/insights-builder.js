@@ -1,4 +1,15 @@
-/* clipgen Insights */
+/* clipgen Insights builder.
+ *
+ * Edit/create insight records that group artifacts under three buckets:
+ * causes, behaviors, impacts. Artifact grid on one side, insight list on
+ * the other; popover posters expand individual artifacts in place.
+ *
+ * Each insight has the three buckets `causes`, `behaviors`, `impacts`,
+ * each holding `{ narrative, artifacts: [artifactId, ...] }` (see the
+ * Python `insights.py` for the canonical record shape). `dirtyIds` tracks
+ * which insights have unsaved local edits so the autosave layer knows
+ * what to push.
+ */
 
 (function () {
   "use strict";
