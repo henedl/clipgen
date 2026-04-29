@@ -5,12 +5,43 @@ Agent-specific behavior (summarization, citation linking) lives in
 tests/test_thinking_agents.py.
 """
 
+import http.server
 import io
 import json
+import socketserver
+import threading
+import time
 import urllib.error
+from contextlib import contextmanager
 from unittest.mock import MagicMock, patch
 
 import ollama_client
+
+
+def _ndjson_lines(*chunks: dict) -> list[bytes]:
+    """Encode each chunk dict as a separate NDJSON line (bytes)."""
+    return [(json.dumps(c) + "\n").encode("utf-8") for c in chunks]
+
+
+def _make_streaming_resp(lines: list[bytes]) -> MagicMock:
+    """Build a mock response object whose readline() yields *lines* then b""."""
+    queue = list(lines) + [b""]
+    closed = {"flag": False}
+
+    def _readline() -> bytes:
+        if closed["flag"]:
+            return b""
+        if not queue:
+            return b""
+        return queue.pop(0)
+
+    def _close() -> None:
+        closed["flag"] = True
+
+    resp = MagicMock()
+    resp.readline.side_effect = _readline
+    resp.close.side_effect = _close
+    return resp
 
 
 class TestIsAvailable:
@@ -86,35 +117,80 @@ class TestListModels:
         assert len(result) == 0
 
 
-class TestGenerate:
+class TestUnloadModel:
     @patch("ollama_client.urllib.request.urlopen")
-    def test_returns_response_text_on_success(self, mock_urlopen):
-        response_data = json.dumps({"response": "Hello world"}).encode("utf-8")
-        mock_resp = io.BytesIO(response_data)
+    def test_sends_keep_alive_zero(self, mock_urlopen):
+        mock_resp = io.BytesIO(b"{}")
         mock_urlopen.return_value.__enter__ = lambda s: mock_resp
         mock_urlopen.return_value.__exit__ = lambda s, *a: None
+
+        assert ollama_client.unload_model("qwen3.5:9b") is True
+
+        call_args = mock_urlopen.call_args
+        req = call_args[0][0]
+        body = json.loads(req.data.decode("utf-8"))
+        assert body["model"] == "qwen3.5:9b"
+        assert body["keep_alive"] == 0
+        assert body["stream"] is False
+
+    @patch("ollama_client.urllib.request.urlopen")
+    def test_returns_false_on_connection_error(self, mock_urlopen):
+        mock_urlopen.side_effect = urllib.error.URLError("Connection refused")
+        assert ollama_client.unload_model("qwen3.5:9b") is False
+
+
+class TestGenerate:
+    @patch("ollama_client.urllib.request.urlopen")
+    def test_streams_and_concatenates_chunks(self, mock_urlopen):
+        lines = _ndjson_lines(
+            {"response": "Hello", "done": False},
+            {"response": " world", "done": False},
+            {"response": "", "done": True},
+        )
+        mock_urlopen.return_value = _make_streaming_resp(lines)
         result = ollama_client.generate("test prompt")
         assert result == "Hello world"
 
     @patch("ollama_client.urllib.request.urlopen")
-    def test_strips_think_tags_from_response(self, mock_urlopen):
-        raw = "<think>Let me analyze this...</think>\n\nHere is the summary."
-        response_data = json.dumps({"response": raw}).encode("utf-8")
-        mock_resp = io.BytesIO(response_data)
-        mock_urlopen.return_value.__enter__ = lambda s: mock_resp
-        mock_urlopen.return_value.__exit__ = lambda s, *a: None
+    def test_strips_think_tags_from_concatenated_response(self, mock_urlopen):
+        lines = _ndjson_lines(
+            {"response": "<think>Let me think...</think>", "done": False},
+            {"response": "\n\nHere is the summary.", "done": True},
+        )
+        mock_urlopen.return_value = _make_streaming_resp(lines)
         result = ollama_client.generate("test prompt")
         assert result == "Here is the summary."
 
     @patch("ollama_client.urllib.request.urlopen")
     def test_returns_none_when_only_think_tags(self, mock_urlopen):
-        raw = "<think>Thinking hard but producing nothing useful...</think>"
-        response_data = json.dumps({"response": raw}).encode("utf-8")
-        mock_resp = io.BytesIO(response_data)
-        mock_urlopen.return_value.__enter__ = lambda s: mock_resp
-        mock_urlopen.return_value.__exit__ = lambda s, *a: None
+        lines = _ndjson_lines(
+            {
+                "response": "<think>Thinking but producing nothing.</think>",
+                "done": True,
+            },
+        )
+        mock_urlopen.return_value = _make_streaming_resp(lines)
         result = ollama_client.generate("test prompt")
         assert result is None
+
+    @patch("ollama_client.urllib.request.urlopen")
+    def test_returns_none_on_empty_stream(self, mock_urlopen):
+        lines = _ndjson_lines({"response": "", "done": True})
+        mock_urlopen.return_value = _make_streaming_resp(lines)
+        result = ollama_client.generate("test prompt")
+        assert result is None
+
+    @patch("ollama_client.urllib.request.urlopen")
+    def test_skips_malformed_json_lines(self, mock_urlopen):
+        valid_lines = _ndjson_lines(
+            {"response": "Hello", "done": False},
+            {"response": " world", "done": True},
+        )
+        # Inject a malformed line between the two valid ones
+        lines = [valid_lines[0], b"not json\n", valid_lines[1]]
+        mock_urlopen.return_value = _make_streaming_resp(lines)
+        result = ollama_client.generate("test prompt")
+        assert result == "Hello world"
 
     @patch("ollama_client.urllib.request.urlopen")
     def test_returns_none_on_connection_error(self, mock_urlopen):
@@ -138,19 +214,9 @@ class TestGenerate:
         assert result is None
 
     @patch("ollama_client.urllib.request.urlopen")
-    def test_returns_none_on_invalid_json(self, mock_urlopen):
-        mock_resp = io.BytesIO(b"not json")
-        mock_urlopen.return_value.__enter__ = lambda s: mock_resp
-        mock_urlopen.return_value.__exit__ = lambda s, *a: None
-        result = ollama_client.generate("test prompt")
-        assert result is None
-
-    @patch("ollama_client.urllib.request.urlopen")
     def test_uses_config_model_by_default(self, mock_urlopen):
-        response_data = json.dumps({"response": "ok"}).encode("utf-8")
-        mock_resp = io.BytesIO(response_data)
-        mock_urlopen.return_value.__enter__ = lambda s: mock_resp
-        mock_urlopen.return_value.__exit__ = lambda s, *a: None
+        lines = _ndjson_lines({"response": "ok", "done": True})
+        mock_urlopen.return_value = _make_streaming_resp(lines)
 
         ollama_client.generate("test prompt")
 
@@ -161,10 +227,8 @@ class TestGenerate:
 
     @patch("ollama_client.urllib.request.urlopen")
     def test_uses_custom_model(self, mock_urlopen):
-        response_data = json.dumps({"response": "ok"}).encode("utf-8")
-        mock_resp = io.BytesIO(response_data)
-        mock_urlopen.return_value.__enter__ = lambda s: mock_resp
-        mock_urlopen.return_value.__exit__ = lambda s, *a: None
+        lines = _ndjson_lines({"response": "ok", "done": True})
+        mock_urlopen.return_value = _make_streaming_resp(lines)
 
         ollama_client.generate("test prompt", model="llama3.1:8b")
 
@@ -175,10 +239,8 @@ class TestGenerate:
 
     @patch("ollama_client.urllib.request.urlopen")
     def test_includes_system_prompt(self, mock_urlopen):
-        response_data = json.dumps({"response": "ok"}).encode("utf-8")
-        mock_resp = io.BytesIO(response_data)
-        mock_urlopen.return_value.__enter__ = lambda s: mock_resp
-        mock_urlopen.return_value.__exit__ = lambda s, *a: None
+        lines = _ndjson_lines({"response": "ok", "done": True})
+        mock_urlopen.return_value = _make_streaming_resp(lines)
 
         ollama_client.generate("test prompt", system="You are helpful.")
 
@@ -186,6 +248,162 @@ class TestGenerate:
         req = call_args[0][0]
         body = json.loads(req.data.decode("utf-8"))
         assert body["system"] == "You are helpful."
+
+    @patch("ollama_client.urllib.request.urlopen")
+    def test_request_body_uses_stream_true(self, mock_urlopen):
+        lines = _ndjson_lines({"response": "ok", "done": True})
+        mock_urlopen.return_value = _make_streaming_resp(lines)
+
+        ollama_client.generate("test prompt")
+
+        call_args = mock_urlopen.call_args
+        req = call_args[0][0]
+        body = json.loads(req.data.decode("utf-8"))
+        assert body["stream"] is True
+
+    @patch("ollama_client.urllib.request.urlopen")
+    def test_cancel_event_set_before_call_returns_none(self, mock_urlopen):
+        lines = _ndjson_lines({"response": "should not appear", "done": True})
+        resp = _make_streaming_resp(lines)
+        mock_urlopen.return_value = resp
+        evt = threading.Event()
+        evt.set()
+        result = ollama_client.generate("test prompt", cancel_event=evt)
+        assert result is None
+        # The watcher thread closed the response on event.set(), and the
+        # finally block also calls close(); either way it must be closed.
+        assert resp.close.call_count >= 1
+
+    @patch("ollama_client.urllib.request.urlopen")
+    def test_cancel_event_during_stream_aborts(self, mock_urlopen):
+        # readline blocks on a synchronisation event so the test thread can
+        # trigger cancellation while the worker is waiting for data.
+        block_event = threading.Event()
+
+        def _readline_blocking() -> bytes:
+            # Block until the test releases us — simulating a slow model.
+            block_event.wait(timeout=2.0)
+            return b""
+
+        resp = MagicMock()
+        resp.readline.side_effect = _readline_blocking
+        # When close() is called, unblock the readline so the worker exits.
+        resp.close.side_effect = lambda: block_event.set()
+        mock_urlopen.return_value = resp
+
+        evt = threading.Event()
+        # Trigger cancel from a side thread so we exercise the watcher path.
+        timer = threading.Timer(0.05, evt.set)
+        timer.start()
+        try:
+            result = ollama_client.generate("test prompt", cancel_event=evt)
+        finally:
+            timer.cancel()
+            block_event.set()  # safety net
+        assert result is None
+        assert resp.close.called
+
+    @patch("ollama_client.urllib.request.urlopen")
+    def test_no_cancel_event_works_normally(self, mock_urlopen):
+        # When no cancel_event is passed, no watcher thread spawns and the
+        # request completes normally.
+        lines = _ndjson_lines({"response": "fine", "done": True})
+        mock_urlopen.return_value = _make_streaming_resp(lines)
+        result = ollama_client.generate("test prompt")
+        assert result == "fine"
+
+
+class _StubOllamaHandler(http.server.BaseHTTPRequestHandler):
+    """Test HTTP handler that mimics Ollama /api/generate streaming.
+
+    Behavior is selected by the request body's ``prompt`` field:
+      - "complete" → send 3 NDJSON chunks, finish quickly.
+      - "block"    → send 1 chunk, then sleep so the connection blocks
+                     readline() until shut down.
+    """
+
+    def do_POST(self):  # noqa: N802
+        length = int(self.headers.get("Content-Length", 0))
+        body_bytes = self.rfile.read(length)
+        body = json.loads(body_bytes.decode("utf-8"))
+        prompt = body.get("prompt", "")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/x-ndjson")
+        self.send_header("Transfer-Encoding", "chunked")
+        self.end_headers()
+
+        def _write_chunk(piece: str) -> None:
+            data = (piece + "\n").encode("utf-8")
+            self.wfile.write(b"%x\r\n" % len(data))
+            self.wfile.write(data)
+            self.wfile.write(b"\r\n")
+            self.wfile.flush()
+
+        try:
+            if prompt == "complete":
+                _write_chunk('{"response":"Hello","done":false}')
+                _write_chunk('{"response":" world","done":false}')
+                _write_chunk('{"response":"","done":true}')
+                self.wfile.write(b"0\r\n\r\n")
+            elif prompt == "block":
+                _write_chunk('{"response":"Hello","done":false}')
+                # Block; the test will close the socket via cancel.
+                time.sleep(30)
+        except (BrokenPipeError, ConnectionResetError, OSError):
+            return
+
+    def log_message(self, *_args, **_kwargs) -> None:
+        return
+
+
+@contextmanager
+def _stub_ollama_server():
+    srv = socketserver.ThreadingTCPServer(("127.0.0.1", 0), _StubOllamaHandler)
+    srv.daemon_threads = True
+    port = srv.server_address[1]
+    thread = threading.Thread(target=srv.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{port}"
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+
+class TestGenerateAgainstRealServer:
+    """End-to-end tests against a real HTTP server.
+
+    Mocking urlopen is not sufficient to exercise the cancel path because the
+    abort relies on shutting down the underlying socket so a blocked
+    readline() returns. These tests run against a stub HTTP server that
+    blocks until the cancel actually closes the connection.
+    """
+
+    def test_streaming_completes_and_returns_text(self, monkeypatch):
+        with _stub_ollama_server() as url:
+            monkeypatch.setattr(ollama_client.config, "OLLAMA_BASE_URL", url)
+            result = ollama_client.generate("complete")
+            assert result == "Hello world"
+
+    def test_cancel_aborts_blocked_request_quickly(self, monkeypatch):
+        with _stub_ollama_server() as url:
+            monkeypatch.setattr(ollama_client.config, "OLLAMA_BASE_URL", url)
+            evt = threading.Event()
+            # Trigger cancel shortly after the request starts so the watcher
+            # has to shut down the underlying socket to unblock readline().
+            timer = threading.Timer(0.2, evt.set)
+            timer.start()
+            start = time.monotonic()
+            try:
+                result = ollama_client.generate("block", cancel_event=evt)
+            finally:
+                timer.cancel()
+            elapsed = time.monotonic() - start
+            assert result is None
+            # Real abort should return well under the 30s server sleep and
+            # under the urlopen connect timeout. Use a generous bound to
+            # avoid flake on slow CI.
+            assert elapsed < 5.0, f"Cancel took {elapsed:.2f}s — abort is broken"
 
 
 class TestAutoStartServer:
@@ -195,13 +413,12 @@ class TestAutoStartServer:
     @patch("ollama_client.urllib.request.urlopen")
     def test_retries_after_connection_refused(self, mock_urlopen, mock_start):
         """On ConnectionRefusedError, start server and retry successfully."""
-        response_data = json.dumps({"response": "retried ok"}).encode("utf-8")
-        mock_resp = io.BytesIO(response_data)
+        lines = _ndjson_lines({"response": "retried ok", "done": True})
 
-        # First call: connection refused; second call: success
+        # First call: connection refused; second call: streaming success
         mock_urlopen.side_effect = [
             urllib.error.URLError(ConnectionRefusedError("Connection refused")),
-            MagicMock(__enter__=lambda s: mock_resp, __exit__=lambda s, *a: None),
+            _make_streaming_resp(lines),
         ]
         result = ollama_client.generate("test prompt")
         assert result == "retried ok"
