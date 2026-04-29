@@ -174,12 +174,6 @@
     return palette[i % palette.length];
   }
 
-  function regionColorByName(name) {
-    var names = Object.keys(state.regions);
-    var idx = names.indexOf(name);
-    return idx >= 0 ? regionColorForIndex(idx) : regionColorForIndex(0);
-  }
-
   function regionToPixels(r) {
     if (!r.source_width) return r;
     var canvas = qs("#overlayCanvas");
@@ -305,7 +299,7 @@
     var panels = qsa(".run-picker-panel");
     var btns = qsa(".run-picker-btn");
     for (var i = 0; i < panels.length; i++) panels[i].classList.add("hidden");
-    for (var i = 0; i < btns.length; i++) btns[i].classList.remove("open");
+    for (i = 0; i < btns.length; i++) btns[i].classList.remove("open");
   }
 
   function activeRegionRef(name) {
@@ -397,16 +391,6 @@
       if (regionRefKey(refs[i]) === key) return refs[i];
     }
     return null;
-  }
-
-  function allAvailableRegionNames() {
-    var names = Object.keys(state.regions);
-    state.stashes.forEach(function (stash) {
-      Object.keys(stash.regions).forEach(function (n) {
-        if (names.indexOf(n) < 0) names.push(n);
-      });
-    });
-    return names;
   }
 
   function renderRunRegionPicker() {
@@ -1151,7 +1135,7 @@
         return;
       }
       _cachedOverlayRect = overlay.getBoundingClientRect();
-      var pos = canvasCoords(overlay, e, _cachedOverlayRect);
+      pos = canvasCoords(overlay, e, _cachedOverlayRect);
       var displayW = _cachedOverlayRect.width || overlay.width;
       var s = overlay.width / displayW;
       var ctx = overlay.getContext("2d");
@@ -3517,7 +3501,7 @@
 
     if (type !== "timelapse") {
       addParamRow(container, "Event label", textInput("paramEventLabel", "e.g. low_health"));
-      var dfCb = document.createElement("input");
+      dfCb = document.createElement("input");
       dfCb.type = "checkbox";
       dfCb.id = "paramDetectFirst";
       addParamRow(container, "Detect first", dfCb);
@@ -3586,18 +3570,18 @@
     try {
       var stored = sessionStorage.getItem("ss_overlayEnabled");
       if (stored === "1") state.overlayEnabled = true;
-    } catch (e) { /* sessionStorage may be unavailable */ }
+    } catch (_) { /* sessionStorage may be unavailable */ }
     try {
       var layer = sessionStorage.getItem("ss_overlayLayer");
       if (layer) state.overlayLayer = layer;
-    } catch (e) { /* ignore */ }
+    } catch (_) { /* ignore */ }
 
     var toggle = qs("#modelViewOverlayToggle");
     if (toggle) {
       toggle.checked = !!state.overlayEnabled;
       toggle.addEventListener("change", function () {
         state.overlayEnabled = !!toggle.checked;
-        try { sessionStorage.setItem("ss_overlayEnabled", state.overlayEnabled ? "1" : "0"); } catch (e) { /* ignore */ }
+        try { sessionStorage.setItem("ss_overlayEnabled", state.overlayEnabled ? "1" : "0"); } catch (_) { /* ignore */ }
         if (state.overlayEnabled && !state.overlayImage) refreshModelView();
         renderOverlay();
       });
@@ -3607,7 +3591,7 @@
     if (sel) {
       sel.addEventListener("change", function () {
         state.overlayLayer = sel.value || null;
-        try { sessionStorage.setItem("ss_overlayLayer", state.overlayLayer || ""); } catch (e) { /* ignore */ }
+        try { sessionStorage.setItem("ss_overlayLayer", state.overlayLayer || ""); } catch (_) { /* ignore */ }
         // Force a refetch of the overlay image at the new layer.
         if (state.overlayImageObjectUrl) {
           URL.revokeObjectURL(state.overlayImageObjectUrl);
@@ -4345,7 +4329,7 @@
         return null;
       }
     } else if (stepType === "template") {
-      var step = state.multitoolSteps[idx];
+      step = state.multitoolSteps[idx];
       if (!step || step._refTs === undefined) {
         showToast("Step " + (idx + 1) + ": capture a template frame first");
         return null;
@@ -4355,7 +4339,7 @@
     } else if (stepType === "flow") {
       p.magnitude_threshold = numberOrDefault((qs("#paramFlowMag" + sfx) || {}).value, 2.0);
     } else if (stepType === "scene") {
-      var step = state.multitoolSteps[idx];
+      step = state.multitoolSteps[idx];
       if (!step || !step._scenes || step._scenes.length === 0) {
         showToast("Step " + (idx + 1) + ": add at least one scene reference");
         return null;
@@ -5006,7 +4990,7 @@
       }
 
       // Select completed/paused/running task to view results; click again to deselect
-      var task = findTask(taskId);
+      task = findTask(taskId);
       if (task && (task.status === "completed" || task.status === "paused" || task.status === "running")) {
         if (state.selectedTaskId === taskId) {
           _resultsRequestVersion += 1;
@@ -5086,18 +5070,14 @@
 
       // Determine boundary between finished (completed/failed) and queued zones
       var finishedCount = 0;
-      var queuedStart = cards.length;
       for (var i = 0; i < cards.length; i++) {
         var t = findTask(cards[i].dataset.taskId);
         if (t && (t.status === "completed" || t.status === "failed")) finishedCount++;
-        else { queuedStart = i; break; }
+        else break;
       }
 
-      var dragStatus = e.dataTransfer.types.indexOf("application/x-task-status") >= 0
-        ? "unknown" : "unknown";
-      // Infer dragged status from position constraint:
-      // We stored it in dataTransfer but can't read it during dragover (security).
-      // Instead, find the dragging card to determine its status.
+      // Find the dragging card to determine its status (we can't read the
+      // status payload off dataTransfer during dragover for security reasons).
       var draggingCard = taskListEl.querySelector(".task-card.dragging");
       var draggingTask = draggingCard ? findTask(draggingCard.dataset.taskId) : null;
       var isQueuedDrag = draggingTask && draggingTask.status === "queued";
@@ -5300,7 +5280,7 @@
     // Rebuild param controls then set values
     renderWorkflowParams();
 
-    var params = task.parameters || {};
+    params = task.parameters || {};
     if (task.type === "multitool") {
       setInputValue("#paramMultitoolInterval", numberOrDefault(params.interval, 1.0));
       if (params.event_label) setInputValue("#paramEventLabel", params.event_label);
@@ -5563,7 +5543,7 @@
         card.title = task.error;
       }
       if (task.status === "completed" && task.result) {
-        var rLen = Array.isArray(task.result) ? task.result.length : (typeof task.result === "string" ? 1 : 0);
+        rLen = Array.isArray(task.result) ? task.result.length : (typeof task.result === "string" ? 1 : 0);
         statusText = rLen + " result" + (rLen !== 1 ? "s" : "");
       }
       card.appendChild(el("span", "task-card-status", statusText));
@@ -5956,7 +5936,6 @@
     var showToggle = qs("#showExcludedBtn");
     if (showToggle) showToggle.classList.toggle("hidden", events.length === 0);
 
-    var visibleCount = 0;
     var frag = document.createDocumentFragment();
 
     countEl.textContent = "(" + results.length + ")";
@@ -6057,7 +6036,6 @@
 
       var isExcluded = matchedEvent && matchedEvent.excluded;
       if (isExcluded && !state.showExcluded) return;
-      visibleCount++;
 
       var row = el("div", "result-row" + (isExcluded ? " excluded" : ""));
       row.dataset.resultIndex = rIdx;

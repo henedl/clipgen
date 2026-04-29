@@ -17,8 +17,6 @@
 
   var SEARCH_DEBOUNCE = 300;
 
-  var SS_DETECTOR_COLORS = DETECTOR_COLORS;
-
   // Speed cycle for the custom video controls. Transcript-friendly steps so
   // users can slow review or skim faster without large jumps.
   var VIDEO_SPEEDS = [0.75, 1, 1.25, 1.5, 2];
@@ -2016,7 +2014,7 @@
 
     // Backtrack to get edit operations
     var ops = [];
-    var i = m, j = n;
+    i = m; j = n;
     while (i > 0 || j > 0) {
       if (i > 0 && j > 0 && oldWords[i - 1] === newWords[j - 1]) {
         ops.unshift({ type: "eq" });
@@ -2053,7 +2051,7 @@
   }
 
   function saveCorrections(corrections) {
-    var created = 0, updated = 0, removed = 0;
+    var updated = 0, removed = 0;
     var chain = Promise.resolve();
     corrections.forEach(function (c) {
       chain = chain.then(function () {
@@ -2536,10 +2534,10 @@
         }
       }
       if (canPatch) {
-        for (var k = 0; k < state.participants.length; k++) {
+        for (k = 0; k < state.participants.length; k++) {
           var wrap = existing[k];
-          var p0 = state.participants[k];
-          var s0 = pillState(p0, taskByPid);
+          p0 = state.participants[k];
+          s0 = pillState(p0, taskByPid);
           var bar = wrap.querySelector(".pill-progress");
           if (bar) bar.style.width = s0.progress + "%";
         }
