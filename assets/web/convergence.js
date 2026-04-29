@@ -803,7 +803,7 @@
     container.appendChild(frag);
 
     // Attach interaction handlers
-    var summaryCanvas = container.querySelector(".cv-summary-canvas");
+    summaryCanvas = container.querySelector(".cv-summary-canvas");
     if (summaryCanvas) {
       summaryCanvas.addEventListener("click", handleSummaryClick);
 
@@ -1142,7 +1142,7 @@
     // Position preview using pixels relative to the tracks container,
     // offset by the label column width within the rows container
     if (_drag.tracksRect) {
-      var rowsContainer = qs(".cv-participant-rows");
+      rowsContainer = qs(".cv-participant-rows");
       var rowsRect = rowsContainer ? rowsContainer.getBoundingClientRect() : _drag.tracksRect;
       var labelOffset = _drag.tracksRect.left - rowsRect.left;
       var leftPx = labelOffset + (s / cvState.duration) * _drag.tracksRect.width;

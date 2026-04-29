@@ -631,7 +631,7 @@
         artifactQueue: state.artifactQueue,
         reelQueue: state.reelQueue,
       }));
-    } catch (e) { /* ignore quota errors */ }
+    } catch (_) { /* ignore quota errors */ }
   }
 
   function restoreQueues() {
@@ -641,7 +641,7 @@
       var saved = JSON.parse(raw);
       if (saved.artifactQueue) state.artifactQueue = saved.artifactQueue;
       if (saved.reelQueue) state.reelQueue = saved.reelQueue;
-    } catch (e) { /* ignore parse errors */ }
+    } catch (_) { /* ignore parse errors */ }
   }
 
   // ---- Data loading ----
@@ -2497,7 +2497,7 @@
             updateViewerButton();
           }
         } else {
-          for (var ci = 0; ci < cards.length; ci++) setCardResult(cards[ci], false);
+          for (ci = 0; ci < cards.length; ci++) setCardResult(cards[ci], false);
           totalFail++;
         }
       }
@@ -3133,20 +3133,6 @@
 
   var INTAKE_DETECTOR_COLORS = DETECTOR_COLORS;
 
-  var INTAKE_DETECTOR_ICON_FILES = {
-    multitool: "link",
-    color: "eye-dropper",
-    change: "bolt",
-    similarity: "photo",
-    text: "language",
-    numbers: "hashtag",
-    timelapse: "film",
-    template: "viewfinder-circle",
-    flow: "arrows-right-left",
-    scene: "squares-2x2",
-    inactivity: "pause-circle",
-  };
-
   // ---- Screenspace thumbnail queue (throttled + cached) ----
 
   var _ssThumbQueue = [];
@@ -3509,7 +3495,7 @@
     }
   }
 
-  function renderIntake(hasNew) {
+  function renderIntake(_hasNew) {
     ssClearPending();
     var container = qs("#intakeCards");
     var addAllBtn = qs("#intakeAddAllBtn");
@@ -3723,7 +3709,6 @@
     var intakeCanvas = qs("#intakeTimeline");
     intakeCanvas.addEventListener("mousemove", function (e) {
       var rect = intakeCanvas.getBoundingClientRect();
-      var dpr = window.devicePixelRatio || 1;
       var mx = (e.clientX - rect.left);
       var my = (e.clientY - rect.top);
       var hit = intakeHitTest(mx, my);
@@ -4475,7 +4460,6 @@
 
   window._studioState = state;
   window._studioParseClipTimestamps = parseClipTimestamps;
-  window._studioHexToRgba = hexToRgba;
   window._studioFormatDuration = formatDuration;
   window._studioFindOverlappingData = findOverlappingData;
   window._studioBuildXrefBadges = buildXrefBadges;

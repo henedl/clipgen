@@ -12,7 +12,6 @@
   // --- Aliases (set in init) ---
   var state;
   var parseClipTimestamps;
-  var hexToRgba;
   var clusterIntakeEvents;
   var clusterTranscriptMarks;
   var ROW_FUNCTIONS;
@@ -162,7 +161,7 @@
     var result = [];
     var keys = Object.keys(groups);
     for (var j = 0; j < keys.length; j++) {
-      var group = groups[keys[j]];
+      group = groups[keys[j]];
       var pp = {};
       var ppKeys = Object.keys(group.per_participant);
       for (var k = 0; k < ppKeys.length; k++) {
@@ -219,7 +218,7 @@
     var result = [];
     var keys = Object.keys(groups);
     for (var j = 0; j < keys.length; j++) {
-      var group = groups[keys[j]];
+      group = groups[keys[j]];
       result.push({
         category: group.category,
         total_count: group.total_count,
@@ -712,7 +711,7 @@
 
   // --- Summary charts strip ---
 
-  function renderSummaryStrip(cache) {
+  function renderSummaryStrip(_cache) {
     var strip = el("div", "md-summary-strip");
 
     // Histogram canvas
@@ -1694,7 +1693,6 @@
     if (!state) {
       state = window._studioState;
       parseClipTimestamps = window._studioParseClipTimestamps;
-      hexToRgba = window._studioHexToRgba;
       clusterIntakeEvents = window._studioClusterIntakeEvents;
       clusterTranscriptMarks = window._studioClusterTranscriptMarks;
       ROW_FUNCTIONS = window._studioROW_FUNCTIONS;

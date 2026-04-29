@@ -282,7 +282,7 @@
 
   function onSortButtonClick(ev) {
     var key = ev.currentTarget.getAttribute("data-sort");
-    if (!key || !SORT_DEFAULT_DIR.hasOwnProperty(key)) return;
+    if (!key || !Object.prototype.hasOwnProperty.call(SORT_DEFAULT_DIR, key)) return;
     if (state.listSort && state.listSort.key === key) {
       state.listSort.dir = state.listSort.dir === "asc" ? "desc" : "asc";
     } else {

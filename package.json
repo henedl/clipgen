@@ -1,5 +1,6 @@
 {
   "private": true,
+  "type": "module",
   "scripts": {
     "lint:js": "eslint assets/web --ext .js",
     "lint:js:fix": "eslint assets/web --ext .js --fix"
