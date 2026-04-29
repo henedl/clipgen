@@ -42,11 +42,35 @@
 
   <main id="trMain">
     <section id="videoSection">
-      <video id="videoPlayer" controls preload="auto">
-        <track id="subtitleTrack" kind="subtitles" label="Transcript" default>
-      </video>
-      <div id="videoEmpty" class="video-empty">
-        <p>Select a participant to view their source video</p>
+      <div id="videoFrame">
+        <video id="videoPlayer" preload="metadata" playsinline>
+          <track id="subtitleTrack" kind="subtitles" label="Transcript">
+        </video>
+        <div id="videoEmpty" class="video-empty">
+          <p>Select a participant to view their source video</p>
+        </div>
+      </div>
+      <div id="videoControls">
+        <button id="videoPlayBtn" class="player-btn" title="Play/Pause (Space)" aria-label="Play/Pause">
+          <span class="player-btn-icon player-icon-play"></span>
+        </button>
+        <button id="videoMuteBtn" class="player-btn" title="Toggle mute" aria-label="Toggle mute">
+          <span class="player-btn-icon player-icon-mute"></span>
+        </button>
+        <button id="videoSpeedBtn" class="player-btn player-speed-btn" title="Playback speed" aria-label="Playback speed">1x</button>
+        <button id="videoCcBtn" class="player-btn" title="Toggle captions" aria-label="Toggle captions" aria-pressed="false">
+          <span class="player-btn-icon player-icon-cc"></span>
+        </button>
+        <button id="videoPipBtn" class="player-btn" title="Toggle picture-in-picture" aria-label="Toggle picture-in-picture" aria-pressed="true">
+          <span class="player-btn-icon player-icon-pip"></span>
+        </button>
+        <span id="videoTime" class="player-time">0:00 / 0:00</span>
+      </div>
+      <div id="timelineRow">
+        <div id="timelineCanvasWrapper">
+          <canvas id="timelineCanvas"></canvas>
+          <canvas id="playheadCanvas"></canvas>
+        </div>
       </div>
     </section>
 
@@ -109,6 +133,8 @@
     <input class="mark-popover-label" type="text" placeholder="Label (optional)" autocomplete="off">
     <button class="mark-popover-remove btn btn-small">Remove</button>
   </div>
+
+  <div id="trTooltip" class="tr-tooltip hidden"></div>
 
   <div id="toast" class="toast hidden"></div>
 
