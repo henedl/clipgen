@@ -69,7 +69,7 @@ const SHARED_RULES = {
   "no-console": "off",
   "no-empty": ["error", { allowEmptyCatch: true }],
   "no-unused-vars": [
-    "warn",
+    "error",
     {
       argsIgnorePattern: "^_",
       varsIgnorePattern: "^_",
@@ -77,6 +77,9 @@ const SHARED_RULES = {
       caughtErrorsIgnorePattern: "^_",
     },
   ],
+  // Allow `x == null` / `x != null` — used as a deliberate "null or undefined"
+  // check throughout the codebase. Strict equality everywhere else.
+  eqeqeq: ["error", "always", { null: "ignore" }],
 };
 
 export default [
@@ -112,7 +115,7 @@ export default [
     rules: {
       ...SHARED_RULES,
       "no-unused-vars": [
-        "warn",
+        "error",
         {
           args: "after-used",
           argsIgnorePattern: "^_",
