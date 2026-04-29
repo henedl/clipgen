@@ -45,15 +45,13 @@ import threading
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, cast
-
-if TYPE_CHECKING:
-    import screenspace
+from typing import Any, cast
 
 from flask import Blueprint, Response, jsonify, request, send_file
 
 import config
 import files
+import screenspace
 import utils
 import video
 
@@ -535,6 +533,87 @@ def _normalize_region(
     }
 
 
+def _combined_region_lookup() -> dict[str, Any]:
+    """Return regions addressable by legacy name lookups, with active regions winning."""
+    regions: dict[str, Any] = {}
+    for stash in _manifest.get("stashes", []):
+        stash_regions = stash.get("regions", {})
+        if isinstance(stash_regions, dict):
+            regions.update(stash_regions)
+    active_regions = _manifest.get("regions", {})
+    if isinstance(active_regions, dict):
+        regions.update(active_regions)
+    return regions
+
+
+def _resolve_region_request(
+    region_name: str,
+    region_ref: Any,
+) -> tuple[str, dict[str, Any]] | FlaskResponse:
+    """Resolve a task region request without flattening active/stashed duplicates."""
+    active_regions = _manifest.get("regions", {})
+    if not isinstance(active_regions, dict):
+        active_regions = {}
+
+    if region_ref is None:
+        if region_name in active_regions:
+            return region_name, cast(dict[str, Any], active_regions[region_name])
+        for stash in _manifest.get("stashes", []):
+            stash_regions = stash.get("regions", {})
+            if isinstance(stash_regions, dict) and region_name in stash_regions:
+                return region_name, cast(dict[str, Any], stash_regions[region_name])
+        return jsonify({"ok": False, "error": f"Region '{region_name}' not found"}), 400
+
+    if not isinstance(region_ref, dict):
+        return jsonify({"ok": False, "error": "region_ref must be an object"}), 400
+
+    source = str(region_ref.get("source", "")).strip()
+    name = str(region_ref.get("name", "")).strip()
+    if not name:
+        return jsonify({"ok": False, "error": "region_ref.name is required"}), 400
+
+    if source == "active":
+        if name not in active_regions:
+            return jsonify({"ok": False, "error": f"Region '{name}' not found"}), 400
+        return name, cast(dict[str, Any], active_regions[name])
+
+    if source == "stash":
+        stash_id = str(region_ref.get("stash_id", "")).strip()
+        if not stash_id:
+            return jsonify(
+                {"ok": False, "error": "region_ref.stash_id is required"}
+            ), 400
+        for stash in _manifest.get("stashes", []):
+            if stash.get("id") != stash_id:
+                continue
+            stash_regions = stash.get("regions", {})
+            if not isinstance(stash_regions, dict) or name not in stash_regions:
+                return (
+                    jsonify(
+                        {
+                            "ok": False,
+                            "error": f"Region '{name}' not found in stash '{stash_id}'",
+                        }
+                    ),
+                    400,
+                )
+            return name, cast(dict[str, Any], stash_regions[name])
+        return jsonify({"ok": False, "error": f"Stash '{stash_id}' not found"}), 400
+
+    return (
+        jsonify(
+            {"ok": False, "error": "region_ref.source must be 'active' or 'stash'"}
+        ),
+        400,
+    )
+
+
+def _is_flask_error_response(value: Any) -> bool:
+    return isinstance(value, Response) or (
+        isinstance(value, tuple) and len(value) == 2 and isinstance(value[1], int)
+    )
+
+
 # ---- Regions CRUD ----
 
 
@@ -749,11 +828,14 @@ def api_tasks_get(task_id: str) -> FlaskResponse:
 
 def _validate_task_request(
     data: dict[str, Any],
-) -> tuple[str, str, str, dict[str, Any], dict[str, Any]] | FlaskResponse:
+) -> (
+    tuple[str, str, str, dict[str, Any], dict[str, Any], dict[str, Any] | None]
+    | FlaskResponse
+):
     """Validate the task creation request body.
 
-    Returns (task_type, participant, region_name, parameters, all_known_regions)
-    on success, or a Flask error response on failure.
+    Returns (task_type, participant, region_name, parameters, all_known_regions,
+    requested_region) on success, or a Flask error response on failure.
     """
     task_type = data.get("type", "").strip()
     if task_type not in _VALID_TASK_TYPES:
@@ -769,6 +851,7 @@ def _validate_task_request(
         return jsonify({"ok": False, "error": "participant is required"}), 400
 
     region_name = data.get("region", "").strip()
+    region_ref = data.get("region_ref")
     raw_parameters = data.get("parameters")
     if raw_parameters is None:
         parameters: dict[str, Any] = {}
@@ -783,7 +866,12 @@ def _validate_task_request(
     )
 
     # Multitool uses per-step regions; others need a global region (unless template upload)
-    if not region_name and not has_uploaded_template and task_type != "multitool":
+    has_region_request = bool(region_name) or region_ref is not None
+    if (
+        not has_region_request
+        and not has_uploaded_template
+        and task_type != "multitool"
+    ):
         return jsonify({"ok": False, "error": "region is required"}), 400
 
     # Early validation for multitool steps
@@ -810,34 +898,44 @@ def _validate_task_request(
                     {"ok": False, "error": f"Step {i}: logic must be 'AND' or 'NOT'"}
                 ), 400
 
-    # Build combined region lookup dict (active + stashes)
-    all_known_regions: dict[str, Any] = dict(_manifest.get("regions", {}))
-    for stash in _manifest.get("stashes", []):
-        all_known_regions.update(stash.get("regions", {}))
+    all_known_regions = _combined_region_lookup()
+    requested_region: dict[str, Any] | None = None
 
     # Validate regions
     if task_type == "multitool":
         mt_steps_early: list[dict[str, Any]] = parameters.get("steps", [])
         for i, step in enumerate(mt_steps_early):
             step_region = (step.get("region") or "").strip()
-            if not step_region:
+            step_region_ref = step.get("region_ref")
+            if not step_region and step_region_ref is None:
                 return jsonify(
                     {"ok": False, "error": f"Step {i}: region is required"}
                 ), 400
-            if step_region not in all_known_regions:
+            if step_region_ref is not None:
+                resolved = _resolve_region_request(step_region, step_region_ref)
+                if _is_flask_error_response(resolved):
+                    return cast(FlaskResponse, resolved)
+            elif step_region not in all_known_regions:
                 return jsonify(
                     {
                         "ok": False,
                         "error": f"Step {i}: region '{step_region}' not found",
                     }
                 ), 400
-    else:
-        if region_name and region_name not in all_known_regions:
-            return jsonify(
-                {"ok": False, "error": f"Region '{region_name}' not found"}
-            ), 400
+    elif has_region_request:
+        resolved = _resolve_region_request(region_name, region_ref)
+        if _is_flask_error_response(resolved):
+            return cast(FlaskResponse, resolved)
+        region_name, requested_region = resolved
 
-    return task_type, participant, region_name, parameters, all_known_regions
+    return (
+        task_type,
+        participant,
+        region_name,
+        parameters,
+        all_known_regions,
+        requested_region,
+    )
 
 
 def _coerce_task_params(
@@ -906,8 +1004,6 @@ def _extract_task_media(
 
     Returns the updated parameters on success, or a Flask error response on failure.
     """
-    import screenspace
-
     if task_type == "similarity":
         ref_ts = cast(float, parameters["reference_timestamp"])
         frame = video.extract_frame_at_timestamp(video_path, float(ref_ts))
@@ -976,16 +1072,20 @@ def _prepare_multitool_steps(
 
     Returns the updated parameters on success, or a Flask error response on failure.
     """
-    import screenspace
-
     steps = parameters.get("steps", [])
     for i, step in enumerate(steps):
         stype = step.get("type", "")
 
         # Resolve this step's region to pixel coords
         step_region_name = (step.get("region") or "").strip()
-        if step_region_name and step_region_name in all_known_regions:
-            step["region_coords"] = resolve_region_fn(step_region_name)
+        step_region_ref = step.get("region_ref")
+        if step_region_name or step_region_ref is not None:
+            resolved = _resolve_region_request(step_region_name, step_region_ref)
+            if _is_flask_error_response(resolved):
+                return cast(FlaskResponse, resolved)
+            resolved_name, resolved_region = resolved
+            step["region"] = resolved_name
+            step["region_coords"] = resolve_region_fn(resolved_name, resolved_region)
         else:
             step["region_coords"] = region_coords  # fallback to top-level
 
@@ -1069,9 +1169,17 @@ def api_tasks_create() -> FlaskResponse:
         isinstance(validated, tuple) and len(validated) == 2
     ):
         return cast(FlaskResponse, validated)
-    assert isinstance(validated, tuple) and len(validated) == 5  # success tuple
-    task_type, participant, region_name, parameters, all_known_regions = cast(
-        tuple[str, str, str, dict[str, Any], dict[str, Any]], validated
+    assert isinstance(validated, tuple) and len(validated) == 6  # success tuple
+    (
+        task_type,
+        participant,
+        region_name,
+        parameters,
+        all_known_regions,
+        requested_region,
+    ) = cast(
+        tuple[str, str, str, dict[str, Any], dict[str, Any], dict[str, Any] | None],
+        validated,
     )
 
     video_path = _find_participant_video(participant)
@@ -1088,17 +1196,17 @@ def api_tasks_create() -> FlaskResponse:
 
     props = video.probe_video_properties(video_path)
 
-    import screenspace
-
-    def _resolve_region_coords(name: str) -> dict[str, Any]:
+    def _resolve_region_coords(
+        name: str, region_data: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
         """Convert a named region to pixel coordinates."""
-        rd = all_known_regions[name]
+        rd = region_data if region_data is not None else all_known_regions[name]
         if props and props.get("width") and props.get("height"):
             return screenspace.denormalize_region(rd, props["width"], props["height"])
         return {k: rd[k] for k in ("x", "y", "w", "h") if k in rd}
 
-    if region_name and region_name in all_known_regions:
-        region_coords = _resolve_region_coords(region_name)
+    if requested_region is not None:
+        region_coords = _resolve_region_coords(region_name, requested_region)
     elif task_type == "multitool":
         first_step_region = parameters.get("steps", [{}])[0].get("region", "")
         if first_step_region and first_step_region in all_known_regions:
@@ -1147,6 +1255,13 @@ def api_tasks_create() -> FlaskResponse:
         region_coords=region_coords,
         parameters=parameters,
     )
+    if requested_region is not None:
+        request_region_ref = data.get("region_ref")
+        task["region_ref"] = (
+            request_region_ref
+            if isinstance(request_region_ref, dict)
+            else {"source": "active", "name": region_name}
+        )
 
     _worker.enqueue(task)
     _persist_manifest(drain_events=False)

@@ -564,6 +564,138 @@ def test_create_task_persists_manifest(client, monkeypatch):
     assert calls == [{"drain_events": False}]
 
 
+def test_create_task_region_ref_prefers_active_duplicate(client, monkeypatch):
+    _create_region(client, "target", x=96, y=54, w=192, h=108)
+    screenspace_server._manifest["stashes"] = [
+        {
+            "id": "stash_a",
+            "name": "Stashed Regions",
+            "regions": {
+                "target": {
+                    "x": 0.5,
+                    "y": 0.5,
+                    "w": 0.25,
+                    "h": 0.25,
+                    "source_width": 1920,
+                    "source_height": 1080,
+                }
+            },
+        }
+    ]
+    _enable_video_task_setup(monkeypatch, "P01")
+
+    resp = client.post(
+        "/screenspace/api/tasks",
+        json={
+            "type": "color",
+            "participant": "P01",
+            "region": "target",
+            "region_ref": {"source": "active", "name": "target"},
+        },
+    )
+
+    assert resp.status_code == 200
+    task = resp.get_json()["task"]
+    assert task["region"] == "target"
+    assert task["region_coords"] == {"x": 96, "y": 54, "w": 192, "h": 108}
+
+
+def test_create_task_region_ref_resolves_stash_duplicate(client, monkeypatch):
+    _create_region(client, "target", x=96, y=54, w=192, h=108)
+    screenspace_server._manifest["stashes"] = [
+        {
+            "id": "stash_a",
+            "name": "Stashed Regions",
+            "regions": {
+                "target": {
+                    "x": 0.5,
+                    "y": 0.5,
+                    "w": 0.25,
+                    "h": 0.25,
+                    "source_width": 1920,
+                    "source_height": 1080,
+                }
+            },
+        }
+    ]
+    _enable_video_task_setup(monkeypatch, "P01")
+
+    resp = client.post(
+        "/screenspace/api/tasks",
+        json={
+            "type": "color",
+            "participant": "P01",
+            "region": "target",
+            "region_ref": {
+                "source": "stash",
+                "stash_id": "stash_a",
+                "name": "target",
+            },
+        },
+    )
+
+    assert resp.status_code == 200
+    task = resp.get_json()["task"]
+    assert task["region"] == "target"
+    assert task["region_coords"] == {"x": 960, "y": 540, "w": 480, "h": 270}
+
+
+def test_create_multitool_step_region_ref_resolves_stash_duplicate(client, monkeypatch):
+    _create_region(client, "target", x=96, y=54, w=192, h=108)
+    _create_region(client, "other", x=10, y=10, w=100, h=50)
+    screenspace_server._manifest["stashes"] = [
+        {
+            "id": "stash_a",
+            "name": "Stashed Regions",
+            "regions": {
+                "target": {
+                    "x": 0.5,
+                    "y": 0.5,
+                    "w": 0.25,
+                    "h": 0.25,
+                    "source_width": 1920,
+                    "source_height": 1080,
+                }
+            },
+        }
+    ]
+    _enable_video_task_setup(monkeypatch, "P01")
+
+    resp = client.post(
+        "/screenspace/api/tasks",
+        json={
+            "type": "multitool",
+            "participant": "P01",
+            "region": "",
+            "parameters": {
+                "steps": [
+                    {
+                        "type": "color",
+                        "region": "target",
+                        "region_ref": {
+                            "source": "stash",
+                            "stash_id": "stash_a",
+                            "name": "target",
+                        },
+                    },
+                    {"type": "change", "region": "other"},
+                ]
+            },
+        },
+    )
+
+    assert resp.status_code == 200
+    worker = screenspace_server._worker
+    assert worker is not None
+    task = worker.get_all_tasks()[0]
+    assert task["parameters"]["steps"][0]["region_coords"] == {
+        "x": 960,
+        "y": 540,
+        "w": 480,
+        "h": 270,
+    }
+
+
 def test_get_task_not_found(client):
     resp = client.get("/screenspace/api/tasks/ss_nonexist")
     assert resp.status_code == 404

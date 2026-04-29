@@ -159,6 +159,16 @@
     return m + ":" + (s < 10 ? "0" : "") + s.toFixed(1);
   }
 
+  function numberOrDefault(value, fallback) {
+    var n = parseFloat(value);
+    return isNaN(n) ? fallback : n;
+  }
+
+  function intOrDefault(value, fallback) {
+    var n = parseInt(value, 10);
+    return isNaN(n) ? fallback : n;
+  }
+
   function regionColorForIndex(i) {
     var palette = getThemeColors().regionPalette;
     return palette[i % palette.length];
@@ -178,6 +188,17 @@
       y: Math.round(r.y * canvas.height),
       w: Math.round(r.w * canvas.width),
       h: Math.round(r.h * canvas.height),
+    };
+  }
+
+  function taskRegionPixels(task) {
+    var r = task && task.region_coords;
+    if (!r) return null;
+    return {
+      x: Math.round(Number(r.x) || 0),
+      y: Math.round(Number(r.y) || 0),
+      w: Math.round(Number(r.w) || 0),
+      h: Math.round(Number(r.h) || 0),
     };
   }
 
@@ -287,6 +308,97 @@
     for (var i = 0; i < btns.length; i++) btns[i].classList.remove("open");
   }
 
+  function activeRegionRef(name) {
+    return { source: "active", name: name };
+  }
+
+  function stashRegionRef(stash, name) {
+    return {
+      source: "stash",
+      stash_id: stash.id,
+      stash_name: stash.name,
+      name: name,
+    };
+  }
+
+  function normalizeRegionRef(ref) {
+    if (!ref) return null;
+    if (typeof ref === "string") return activeRegionRef(ref);
+    if (ref.source === "stash") {
+      var stashName = ref.stash_name;
+      if (!stashName) {
+        for (var i = 0; i < state.stashes.length; i++) {
+          if (state.stashes[i].id === ref.stash_id) {
+            stashName = state.stashes[i].name;
+            break;
+          }
+        }
+      }
+      return {
+        source: "stash",
+        stash_id: ref.stash_id,
+        stash_name: stashName,
+        name: ref.name,
+      };
+    }
+    return activeRegionRef(ref.name);
+  }
+
+  function regionRefKey(ref) {
+    var r = normalizeRegionRef(ref);
+    if (!r) return "";
+    return r.source === "stash" ? "stash:" + r.stash_id + ":" + r.name : "active:" + r.name;
+  }
+
+  function regionRefLabel(ref) {
+    var r = normalizeRegionRef(ref);
+    if (!r) return "";
+    return r.source === "stash" ? r.name + " · " + (r.stash_name || "stash") : r.name;
+  }
+
+  function regionRefPayload(ref) {
+    var r = normalizeRegionRef(ref);
+    if (!r) return null;
+    if (r.source === "stash") {
+      return { source: "stash", stash_id: r.stash_id, name: r.name };
+    }
+    return { source: "active", name: r.name };
+  }
+
+  function hasRunRegion(ref) {
+    var key = regionRefKey(ref);
+    return state.runRegions.some(function (r) { return regionRefKey(r) === key; });
+  }
+
+  function addRunRegion(ref) {
+    if (!hasRunRegion(ref)) state.runRegions.push(normalizeRegionRef(ref));
+  }
+
+  function removeRunRegion(ref) {
+    var key = regionRefKey(ref);
+    state.runRegions = state.runRegions.filter(function (r) { return regionRefKey(r) !== key; });
+  }
+
+  function allAvailableRegionRefs() {
+    var refs = Object.keys(state.regions).map(function (name) {
+      return activeRegionRef(name);
+    });
+    state.stashes.forEach(function (stash) {
+      Object.keys(stash.regions).forEach(function (name) {
+        refs.push(stashRegionRef(stash, name));
+      });
+    });
+    return refs;
+  }
+
+  function availableRegionRefByKey(key) {
+    var refs = allAvailableRegionRefs();
+    for (var i = 0; i < refs.length; i++) {
+      if (regionRefKey(refs[i]) === key) return refs[i];
+    }
+    return null;
+  }
+
   function allAvailableRegionNames() {
     var names = Object.keys(state.regions);
     state.stashes.forEach(function (stash) {
@@ -302,14 +414,19 @@
     if (!wrap) return;
     wrap.innerHTML = "";
     var names = Object.keys(state.regions);
-    var allNames = allAvailableRegionNames();
-    // Remove any runRegions that no longer exist in active or stashes
-    state.runRegions = state.runRegions.filter(function (r) { return allNames.indexOf(r) >= 0; });
+    var activeRefs = names.map(function (name) { return activeRegionRef(name); });
+    var allRefs = allAvailableRegionRefs();
+    var availableKeys = {};
+    allRefs.forEach(function (ref) { availableKeys[regionRefKey(ref)] = true; });
+    // Remove any runRegions that no longer exist in active or stashes.
+    state.runRegions = state.runRegions
+      .map(normalizeRegionRef)
+      .filter(function (r) { return r && availableKeys[regionRefKey(r)]; });
     // Auto-select the active region when no explicit selection has been made
     if (state.runRegions.length === 0 && state.activeRegion && names.indexOf(state.activeRegion) >= 0) {
-      state.runRegions = [state.activeRegion];
+      state.runRegions = [activeRegionRef(state.activeRegion)];
     }
-    if (allNames.length === 0) return;
+    if (allRefs.length === 0) return;
 
     var btn = el("button", "run-picker-btn");
     btn.type = "button";
@@ -319,10 +436,15 @@
 
     if (names.length > 0) {
       var toggleAll = el("span", "run-picker-toggle-all");
-      toggleAll.textContent = state.runRegions.length === names.length ? "Deselect all" : "Select all";
+      var allActiveSelected = activeRefs.every(function (ref) { return hasRunRegion(ref); });
+      toggleAll.textContent = allActiveSelected ? "Deselect all" : "Select all";
       toggleAll.addEventListener("click", function () {
-        var allSelected = state.runRegions.length === names.length;
-        state.runRegions = allSelected ? [] : names.slice();
+        var allSelected = activeRefs.every(function (ref) { return hasRunRegion(ref); });
+        if (allSelected) {
+          activeRefs.forEach(removeRunRegion);
+        } else {
+          activeRefs.forEach(addRunRegion);
+        }
         var cbs = panel.querySelectorAll(".run-picker-active-region input[type=checkbox]");
         for (var i = 0; i < cbs.length; i++) cbs[i].checked = !allSelected;
         toggleAll.textContent = allSelected ? "Select all" : "Deselect all";
@@ -333,19 +455,22 @@
 
       names.forEach(function (name, idx) {
         var color = regionColorForIndex(idx);
+        var ref = activeRegionRef(name);
         var lbl = document.createElement("label");
         lbl.className = "run-picker-active-region";
         var cb = document.createElement("input");
         cb.type = "checkbox";
-        cb.value = name;
-        cb.checked = state.runRegions.indexOf(name) >= 0;
+        cb.value = regionRefKey(ref);
+        cb.checked = hasRunRegion(ref);
         cb.addEventListener("change", function () {
           if (cb.checked) {
-            if (state.runRegions.indexOf(name) < 0) state.runRegions.push(name);
+            addRunRegion(ref);
           } else {
-            state.runRegions = state.runRegions.filter(function (r) { return r !== name; });
+            removeRunRegion(ref);
           }
-          toggleAll.textContent = state.runRegions.length === names.length ? "Deselect all" : "Select all";
+          toggleAll.textContent = activeRefs.every(function (activeRef) {
+            return hasRunRegion(activeRef);
+          }) ? "Deselect all" : "Select all";
           updateRegionPickerBtnText(btn);
           updateRunButton();
         });
@@ -380,17 +505,18 @@
 
       stashNames.forEach(function (name, idx) {
         var color = regionColorForIndex(idx);
+        var ref = stashRegionRef(stash, name);
         var lbl = document.createElement("label");
         lbl.className = "stash-folder-item";
         var cb = document.createElement("input");
         cb.type = "checkbox";
-        cb.value = name;
-        cb.checked = state.runRegions.indexOf(name) >= 0;
+        cb.value = regionRefKey(ref);
+        cb.checked = hasRunRegion(ref);
         cb.addEventListener("change", function () {
           if (cb.checked) {
-            if (state.runRegions.indexOf(name) < 0) state.runRegions.push(name);
+            addRunRegion(ref);
           } else {
-            state.runRegions = state.runRegions.filter(function (r) { return r !== name; });
+            removeRunRegion(ref);
           }
           updateRegionPickerBtnText(btn);
           updateRunButton();
@@ -421,7 +547,7 @@
   function updateRegionPickerBtnText(btn) {
     var n = state.runRegions.length;
     var text = n === 0 ? "No region"
-      : n === 1 ? state.runRegions[0]
+      : n === 1 ? regionRefLabel(state.runRegions[0])
       : n + " regions";
     btn.innerHTML = "";
     btn.appendChild(el("span", "run-picker-btn-text", text));
@@ -975,6 +1101,28 @@
   function initRegionDrawing() {
     var overlay = qs("#overlayCanvas");
 
+    function finishDrawingRegion(e) {
+      if (!state.drawingRegion) return false;
+      var rect = _cachedOverlayRect || overlay.getBoundingClientRect();
+      var pos = canvasCoords(overlay, e, rect);
+      pos.x = clamp(pos.x, 0, overlay.width);
+      pos.y = clamp(pos.y, 0, overlay.height);
+      state.drawingRegion.endX = pos.x;
+      state.drawingRegion.endY = pos.y;
+      var r = normalizeRect(
+        state.drawingRegion.startX, state.drawingRegion.startY,
+        state.drawingRegion.endX, state.drawingRegion.endY
+      );
+      state.drawingRegion = null;
+      _cachedOverlayRect = null;
+      if (r.w > 5 && r.h > 5) {
+        state.pendingRegion = r;
+      }
+      flushOverlayRender();
+      updateRegionButtons();
+      return true;
+    }
+
     overlay.addEventListener("mousedown", function (e) {
       if (e.button !== 0) return;
       if (state.videoPlaying) pauseVideo();
@@ -1105,8 +1253,8 @@
 
     overlay.addEventListener("mouseup", function (e) {
       if (state.pipetteActive) return;
-      _cachedOverlayRect = null;
       if (state.draggingTemplate) {
+        _cachedOverlayRect = null;
         state.draggingTemplate = null;
         document.body.style.cursor = "";
         document.body.style.userSelect = "";
@@ -1114,6 +1262,7 @@
         return;
       }
       if (state.resizingRegion) {
+        _cachedOverlayRect = null;
         var rName = state.resizingRegion.name;
         state.resizingRegion = null;
         document.body.style.cursor = "";
@@ -1124,6 +1273,7 @@
         return;
       }
       if (state.draggingRegion) {
+        _cachedOverlayRect = null;
         var dName = state.draggingRegion.name;
         state.draggingRegion = null;
         document.body.style.cursor = "";
@@ -1133,20 +1283,7 @@
         updateRegionButtons();
         return;
       }
-      if (!state.drawingRegion) return;
-      var pos = canvasCoords(overlay, e);
-      state.drawingRegion.endX = pos.x;
-      state.drawingRegion.endY = pos.y;
-      var r = normalizeRect(
-        state.drawingRegion.startX, state.drawingRegion.startY,
-        state.drawingRegion.endX, state.drawingRegion.endY
-      );
-      state.drawingRegion = null;
-      if (r.w > 5 && r.h > 5) {
-        state.pendingRegion = r;
-      }
-      flushOverlayRender();
-      updateRegionButtons();
+      finishDrawingRegion(e);
     });
 
     // Document-level listeners so drag/resize continues outside the canvas
@@ -1184,9 +1321,10 @@
       }
     });
 
-    document.addEventListener("mouseup", function () {
-      _cachedOverlayRect = null;
+    document.addEventListener("mouseup", function (e) {
+      if (finishDrawingRegion(e)) return;
       if (state.draggingTemplate) {
+        _cachedOverlayRect = null;
         state.draggingTemplate = null;
         document.body.style.cursor = "";
         document.body.style.userSelect = "";
@@ -1194,6 +1332,7 @@
         return;
       }
       if (state.resizingRegion) {
+        _cachedOverlayRect = null;
         var rName = state.resizingRegion.name;
         state.resizingRegion = null;
         document.body.style.cursor = "";
@@ -1202,6 +1341,7 @@
         flushOverlayRender();
         updateRegionButtons();
       } else if (state.draggingRegion) {
+        _cachedOverlayRect = null;
         var dName = state.draggingRegion.name;
         state.draggingRegion = null;
         document.body.style.cursor = "";
@@ -1209,6 +1349,8 @@
         saveRegionUpdate(dName);
         flushOverlayRender();
         updateRegionButtons();
+      } else {
+        _cachedOverlayRect = null;
       }
     });
 
@@ -1748,7 +1890,7 @@
       if (hm.type === "template") {
         ctx.drawImage(hm._img, 0, 0, canvas.width, canvas.height);
       } else if (hm.type === "flow") {
-        var rPx = regionToPixels(state.regions[hm.region] || {});
+        var rPx = hm.region_coords;
         if (rPx && rPx.w) {
           ctx.drawImage(hm._img, rPx.x, rPx.y, rPx.w, rPx.h);
         }
@@ -2426,22 +2568,29 @@
     var regionSel = document.createElement("select");
     regionSel.className = "multitool-step-region-select";
     regionSel.id = "paramStepRegion" + sfx;
-    var regionNames = allAvailableRegionNames();
-    regionNames.forEach(function (name) {
+    var regionRefs = allAvailableRegionRefs();
+    var selectedRef = normalizeRegionRef(state.multitoolSteps[idx].region_ref)
+      || (state.multitoolSteps[idx].region ? activeRegionRef(state.multitoolSteps[idx].region) : null);
+    var selectedKey = selectedRef ? regionRefKey(selectedRef) : "";
+    regionRefs.forEach(function (ref) {
       var opt = document.createElement("option");
-      opt.value = name;
-      opt.textContent = name;
-      if (name === state.multitoolSteps[idx].region) opt.selected = true;
+      opt.value = regionRefKey(ref);
+      opt.textContent = regionRefLabel(ref);
+      if (opt.value === selectedKey) opt.selected = true;
       regionSel.appendChild(opt);
     });
-    if (!state.multitoolSteps[idx].region && regionNames.length > 0) {
-      var defaultRegion = (state.runRegions.length > 0 ? state.runRegions[0] : state.activeRegion) || regionNames[0];
-      state.multitoolSteps[idx].region = defaultRegion;
-      regionSel.value = defaultRegion;
+    if (!state.multitoolSteps[idx].region && regionRefs.length > 0) {
+      var defaultRegionRef = state.runRegions.length > 0 ? normalizeRegionRef(state.runRegions[0]) : null;
+      defaultRegionRef = defaultRegionRef || (state.activeRegion ? activeRegionRef(state.activeRegion) : null) || regionRefs[0];
+      state.multitoolSteps[idx].region = defaultRegionRef.name;
+      state.multitoolSteps[idx].region_ref = regionRefPayload(defaultRegionRef);
+      regionSel.value = regionRefKey(defaultRegionRef);
     }
     (function (capturedIdx) {
       regionSel.addEventListener("change", function () {
-        state.multitoolSteps[capturedIdx].region = regionSel.value;
+        var ref = availableRegionRefByKey(regionSel.value);
+        state.multitoolSteps[capturedIdx].region = ref ? ref.name : "";
+        state.multitoolSteps[capturedIdx].region_ref = ref ? regionRefPayload(ref) : null;
       });
     })(idx);
     regionCtrl.appendChild(regionSel);
@@ -2712,9 +2861,10 @@
     var params = task.parameters || {};
     var step = { type: type, collapsed: false, logic: "AND" };
     if (task.region) step.region = task.region;
+    if (task.region_ref) step.region_ref = task.region_ref;
     if (params.reference_timestamp !== undefined) step._refTs = params.reference_timestamp;
     if (params.scene_references) step._scenes = params.scene_references.map(function (ref) {
-      return { name: ref.name, timestamp: ref.timestamp, threshold: ref.threshold || 0.75 };
+      return { name: ref.name, timestamp: ref.timestamp, threshold: numberOrDefault(ref.threshold, 0.75) };
     });
     step._importedParams = params;
     return step;
@@ -2726,28 +2876,31 @@
       var s = step._importedParams;
       var sfx = "_mt" + i;
       if (step.type === "color" && s.target_color) {
-        setInputValue("#paramColorH" + sfx, s.target_color.h || 0);
-        setInputValue("#paramColorS" + sfx, s.target_color.s || 0);
-        setInputValue("#paramColorV" + sfx, s.target_color.v || 0);
+        var h = numberOrDefault(s.target_color.h, 0);
+        var sat = numberOrDefault(s.target_color.s, 0);
+        var val = numberOrDefault(s.target_color.v, 0);
+        setInputValue("#paramColorH" + sfx, h);
+        setInputValue("#paramColorS" + sfx, sat);
+        setInputValue("#paramColorV" + sfx, val);
         var stol = s.tolerance ? Math.round(s.tolerance.h * 100 / 90) : 30;
         setInputValue("#paramColorTol" + sfx, stol);
-        var rgb = hsvToRgb(s.target_color.h || 0, s.target_color.s || 0, s.target_color.v || 0);
+        var rgb = hsvToRgb(h, sat, val);
         setInputValue("#paramColorHex" + sfx, rgbToHex(rgb.r, rgb.g, rgb.b));
       } else if (step.type === "change") {
-        setInputValue("#paramChangeThresh" + sfx, s.threshold || 0.03);
-        setInputValue("#paramChangeNoise" + sfx, s.noise_threshold || 30);
+        setInputValue("#paramChangeThresh" + sfx, numberOrDefault(s.threshold, 0.03));
+        setInputValue("#paramChangeNoise" + sfx, intOrDefault(s.noise_threshold, 30));
       } else if (step.type === "similarity") {
-        setInputValue("#paramSimThresh" + sfx, s.threshold || 0.90);
+        setInputValue("#paramSimThresh" + sfx, numberOrDefault(s.threshold, 0.90));
       } else if (step.type === "text") {
         setInputValue("#paramTextSearch" + sfx, s.search_string || "");
-        setInputValue("#paramTextFuzzy" + sfx, s.fuzzy_threshold || 0.80);
+        setInputValue("#paramTextFuzzy" + sfx, numberOrDefault(s.fuzzy_threshold, 0.80));
       } else if (step.type === "numbers") {
         setInputValue("#paramNumOperator" + sfx, s.operator || "gt");
-        setInputValue("#paramNumTarget" + sfx, s.target_value || 0);
+        setInputValue("#paramNumTarget" + sfx, numberOrDefault(s.target_value, 0));
       } else if (step.type === "template") {
-        setInputValue("#paramTemplateThresh" + sfx, s.threshold || 0.70);
+        setInputValue("#paramTemplateThresh" + sfx, numberOrDefault(s.threshold, 0.70));
       } else if (step.type === "flow") {
-        setInputValue("#paramFlowMag" + sfx, s.magnitude_threshold || 2.0);
+        setInputValue("#paramFlowMag" + sfx, numberOrDefault(s.magnitude_threshold, 2.0));
       }
       delete step._importedParams;
     });
@@ -2962,7 +3115,7 @@
 
     var pipetteBtn = el("button", "btn btn-small btn-pipette");
     pipetteBtn.id = "pipetteBtn";
-    pipetteBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path fill-rule="evenodd" clip-rule="evenodd" d="M15 4C15 5.39788 14.0439 6.57245 12.75 6.90549V8.5C12.75 8.69891 12.671 8.88968 12.5303 9.03033L12.0303 9.53033C11.7374 9.82322 11.2626 9.82322 10.9697 9.53033L10.25 8.81069L5.57322 13.4875C5.24503 13.8157 4.79992 14.0001 4.33579 14.0001H3.66421C3.59791 14.0001 3.53432 14.0264 3.48744 14.0733L2.78033 14.7804C2.63968 14.921 2.44891 15.0001 2.25 15.0001C2.05109 15.0001 1.86032 14.921 1.71967 14.7804L1.21967 14.2804C0.926777 13.9875 0.926777 13.5126 1.21967 13.2197L1.92678 12.5126C1.97366 12.4657 2 12.4021 2 12.3358V11.6643C2 11.2001 2.18437 10.755 2.51256 10.4268L7.18937 5.75003L6.46967 5.03033C6.17678 4.73744 6.17678 4.26256 6.46967 3.96967L6.96967 3.46967C7.11032 3.32902 7.30109 3.25 7.5 3.25H9.09451C9.42755 1.95608 10.6021 1 12 1C13.6569 1 15 2.34315 15 4ZM9.18937 7.75003L8.25003 6.81069L3.57322 11.4875C3.52634 11.5344 3.5 11.598 3.5 11.6643V12.3358C3.5 12.3938 3.49713 12.4514 3.49146 12.5086C3.54862 12.5029 3.60627 12.5001 3.66421 12.5001H4.33579C4.40209 12.5001 4.46568 12.4737 4.51256 12.4268L9.18937 7.75003Z"/></svg>';
+    pipetteBtn.appendChild(buildTypeIcon("color"));
     pipetteBtn.title = "Pick color from video frame";
     pipetteBtn.addEventListener("click", function () {
       if (state.pipetteActive) deactivatePipette();
@@ -2997,7 +3150,7 @@
       var y = clamp(e.clientY - rect.top, 0, rect.height);
       var h = Math.round((x / rect.width) * 180);
       var s = Math.round((1 - y / rect.height) * 255);
-      var curV = parseFloat(hiddenV.value) || 0;
+      var curV = numberOrDefault(hiddenV.value, 0);
       setTargetColor(h, s, curV);
     }
     palette.addEventListener("mousedown", function (e) {
@@ -3010,8 +3163,8 @@
       var rect = bright.getBoundingClientRect();
       var x = clamp(e.clientX - rect.left, 0, rect.width);
       var v = Math.round((x / rect.width) * 255);
-      var curH = parseFloat(hiddenH.value) || 0;
-      var curS = parseFloat(hiddenS.value) || 0;
+      var curH = numberOrDefault(hiddenH.value, 0);
+      var curS = numberOrDefault(hiddenS.value, 0);
       setTargetColor(curH, curS, v);
     }
     bright.addEventListener("mousedown", function (e) {
@@ -3253,9 +3406,9 @@
     container.lastChild.querySelector(".param-control").appendChild(scaleHint);
     var scaleSlider = qs("#paramTemplateScale");
     if (scaleSlider) {
-      state.templateScalePreview = (parseFloat(scaleSlider.value) || 100) / 100;
+      state.templateScalePreview = numberOrDefault(scaleSlider.value, 100) / 100;
       scaleSlider.addEventListener("input", function () {
-        state.templateScalePreview = (parseFloat(scaleSlider.value) || 100) / 100;
+        state.templateScalePreview = numberOrDefault(scaleSlider.value, 100) / 100;
         renderOverlay();
       });
     }
@@ -3867,7 +4020,7 @@
     var preview = qs("#colorPreview");
     var c = _colorHiddenInputs;
     if (!preview || !c) return;
-    var rgb = hsvToRgb(parseFloat(c.h.value) || 0, parseFloat(c.s.value) || 0, parseFloat(c.v.value) || 0);
+    var rgb = hsvToRgb(numberOrDefault(c.h.value, 0), numberOrDefault(c.s.value, 0), numberOrDefault(c.v.value, 0));
     preview.style.background = rgbToHex(rgb.r, rgb.g, rgb.b);
   }
 
@@ -3921,9 +4074,9 @@
 
     // Black overlay for brightness
     var c = _colorHiddenInputs;
-    var curH = c ? parseFloat(c.h.value) || 0 : 0;
-    var curS = c ? parseFloat(c.s.value) || 0 : 0;
-    var curV = c ? parseFloat(c.v.value) || 0 : 0;
+    var curH = c ? numberOrDefault(c.h.value, 0) : 0;
+    var curS = c ? numberOrDefault(c.s.value, 0) : 0;
+    var curV = c ? numberOrDefault(c.v.value, 0) : 0;
     var darkness = 1 - curV / 255;
     if (darkness > 0) {
       ctx.fillStyle = "rgba(0,0,0," + darkness + ")";
@@ -3935,7 +4088,7 @@
     var cy = (1 - curS / 255) * h;
 
     // Tolerance range visualization
-    var tol = parseFloat((qs("#paramColorTol") || {}).value) || 0;
+    var tol = numberOrDefault((qs("#paramColorTol") || {}).value, 0);
     if (tol > 0) {
       var tolH = tol * 90 / 100;
       var tolS = tol * 128 / 100;
@@ -3971,9 +4124,9 @@
     var w = size.w, h = size.h, dpr = size.dpr;
     var ctx = canvas.getContext("2d");
     var c = _colorHiddenInputs;
-    var curH = c ? parseFloat(c.h.value) || 0 : 0;
-    var curS = c ? parseFloat(c.s.value) || 0 : 0;
-    var curV = c ? parseFloat(c.v.value) || 0 : 0;
+    var curH = c ? numberOrDefault(c.h.value, 0) : 0;
+    var curS = c ? numberOrDefault(c.s.value, 0) : 0;
+    var curV = c ? numberOrDefault(c.v.value, 0) : 0;
 
     // Gradient from black (left) to fully saturated color (right)
     var fullRgb = hsvToRgb(curH, curS, 255);
@@ -4076,7 +4229,7 @@
       var type = state.activeWorkflow;
       var regions = state.runRegions.length > 0
         ? state.runRegions
-        : (state.activeRegion ? [state.activeRegion] : []);
+        : (state.activeRegion ? [activeRegionRef(state.activeRegion)] : []);
       // Multitool uses per-step regions; skip global region requirement
       var isMultitool = type === "multitool";
       // Template with uploaded image can run without a region (full-frame scan)
@@ -4119,14 +4272,16 @@
         });
       } else {
         participants.forEach(function (pid) {
-          regions.forEach(function (regionName) {
+          regions.forEach(function (regionRef) {
             chain = chain.then(function () {
+              var normalizedRegion = normalizeRegionRef(regionRef);
               var body = {
                 type: type,
                 participant: pid,
-                region: regionName,
+                region: normalizedRegion ? normalizedRegion.name : "",
                 parameters: params,
               };
+              if (normalizedRegion) body.region_ref = regionRefPayload(normalizedRegion);
               return apiPost("api/tasks", body).then(function (data) {
                 if (data.ok) {
                   if (!state.tasks.some(function (t) { return t.id === data.task.id; })) {
@@ -4134,7 +4289,7 @@
                   }
                   renderTaskList();
                 } else {
-                  showToast(data.error || "Failed to create task for " + pid + " / " + regionName);
+                  showToast(data.error || "Failed to create task for " + pid + " / " + regionRefLabel(normalizedRegion));
                 }
               });
             });
@@ -4154,19 +4309,19 @@
     var p = {};
     if (stepType === "color") {
       p.target_color = {
-        h: parseFloat((qs("#paramColorH" + sfx) || {}).value) || 0,
-        s: parseFloat((qs("#paramColorS" + sfx) || {}).value) || 0,
-        v: parseFloat((qs("#paramColorV" + sfx) || {}).value) || 0,
+        h: numberOrDefault((qs("#paramColorH" + sfx) || {}).value, 0),
+        s: numberOrDefault((qs("#paramColorS" + sfx) || {}).value, 0),
+        v: numberOrDefault((qs("#paramColorV" + sfx) || {}).value, 0),
       };
-      var tol = parseFloat((qs("#paramColorTol" + sfx) || {}).value) || 30;
+      var tol = numberOrDefault((qs("#paramColorTol" + sfx) || {}).value, 30);
       p.tolerance = {
         h: Math.round(tol * 90 / 100),
         s: Math.round(tol * 128 / 100),
         v: Math.round(tol * 128 / 100),
       };
     } else if (stepType === "change") {
-      p.threshold = parseFloat((qs("#paramChangeThresh" + sfx) || {}).value) || 0.03;
-      p.noise_threshold = parseInt((qs("#paramChangeNoise" + sfx) || {}).value) || 30;
+      p.threshold = numberOrDefault((qs("#paramChangeThresh" + sfx) || {}).value, 0.03);
+      p.noise_threshold = intOrDefault((qs("#paramChangeNoise" + sfx) || {}).value, 30);
     } else if (stepType === "similarity") {
       var step = state.multitoolSteps[idx];
       if (!step || step._refTs === undefined) {
@@ -4174,14 +4329,14 @@
         return null;
       }
       p.reference_timestamp = step._refTs;
-      p.threshold = parseFloat((qs("#paramSimThresh" + sfx) || {}).value) || 0.90;
+      p.threshold = numberOrDefault((qs("#paramSimThresh" + sfx) || {}).value, 0.90);
     } else if (stepType === "text") {
       p.search_string = (qs("#paramTextSearch" + sfx) || {}).value || "";
       if (!p.search_string.trim()) {
         showToast("Step " + (idx + 1) + ": enter a search string");
         return null;
       }
-      p.fuzzy_threshold = parseFloat((qs("#paramTextFuzzy" + sfx) || {}).value) || 0.80;
+      p.fuzzy_threshold = numberOrDefault((qs("#paramTextFuzzy" + sfx) || {}).value, 0.80);
     } else if (stepType === "numbers") {
       p.operator = (qs("#paramNumOperator" + sfx) || {}).value || "gt";
       p.target_value = parseFloat((qs("#paramNumTarget" + sfx) || {}).value);
@@ -4196,9 +4351,9 @@
         return null;
       }
       p.reference_timestamp = step._refTs;
-      p.threshold = parseFloat((qs("#paramTemplateThresh" + sfx) || {}).value) || 0.70;
+      p.threshold = numberOrDefault((qs("#paramTemplateThresh" + sfx) || {}).value, 0.70);
     } else if (stepType === "flow") {
-      p.magnitude_threshold = parseFloat((qs("#paramFlowMag" + sfx) || {}).value) || 2.0;
+      p.magnitude_threshold = numberOrDefault((qs("#paramFlowMag" + sfx) || {}).value, 2.0);
     } else if (stepType === "scene") {
       var step = state.multitoolSteps[idx];
       if (!step || !step._scenes || step._scenes.length === 0) {
@@ -4206,12 +4361,15 @@
         return null;
       }
       p.scene_references = step._scenes.map(function (ref) {
-        return { name: ref.name, timestamp: ref.timestamp, threshold: ref.threshold || 0.75 };
+        return { name: ref.name, timestamp: ref.timestamp, threshold: numberOrDefault(ref.threshold, 0.75) };
       });
     } else if (stepType === "inactivity") {
-      p.threshold = parseInt((qs("#paramInactThresh" + sfx) || {}).value) || 10;
+      p.threshold = intOrDefault((qs("#paramInactThresh" + sfx) || {}).value, 10);
     }
-    p.region = state.multitoolSteps[idx].region || "";
+    var stepRegionRef = normalizeRegionRef(state.multitoolSteps[idx].region_ref)
+      || (state.multitoolSteps[idx].region ? activeRegionRef(state.multitoolSteps[idx].region) : null);
+    p.region = stepRegionRef ? stepRegionRef.name : "";
+    if (stepRegionRef) p.region_ref = regionRefPayload(stepRegionRef);
     return p;
   }
 
@@ -4232,7 +4390,7 @@
         }
         params.steps.push(stepP);
       }
-      params.interval = parseFloat((qs("#paramMultitoolInterval") || {}).value) || 1.0;
+      params.interval = numberOrDefault((qs("#paramMultitoolInterval") || {}).value, 1.0);
       var mtLabelEl = qs("#paramEventLabel");
       if (mtLabelEl && mtLabelEl.value.trim()) params.event_label = mtLabelEl.value.trim();
       var mtDfEl = qs("#paramDetectFirst");
@@ -4240,37 +4398,37 @@
       return params;
     } else if (type === "color") {
       params.target_color = {
-        h: parseFloat((qs("#paramColorH") || {}).value) || 0,
-        s: parseFloat((qs("#paramColorS") || {}).value) || 0,
-        v: parseFloat((qs("#paramColorV") || {}).value) || 0,
+        h: numberOrDefault((qs("#paramColorH") || {}).value, 0),
+        s: numberOrDefault((qs("#paramColorS") || {}).value, 0),
+        v: numberOrDefault((qs("#paramColorV") || {}).value, 0),
       };
-      var tol = parseFloat((qs("#paramColorTol") || {}).value) || 30;
+      var tol = numberOrDefault((qs("#paramColorTol") || {}).value, 30);
       params.tolerance = {
         h: Math.round(tol * 90 / 100),
         s: Math.round(tol * 128 / 100),
         v: Math.round(tol * 128 / 100),
       };
-      params.interval = parseFloat((qs("#paramColorInterval") || {}).value) || 1.0;
+      params.interval = numberOrDefault((qs("#paramColorInterval") || {}).value, 1.0);
     } else if (type === "change") {
-      params.threshold = parseFloat((qs("#paramChangeThresh") || {}).value) || 0.03;
-      params.noise_threshold = parseInt((qs("#paramChangeNoise") || {}).value) || 30;
-      params.interval = parseFloat((qs("#paramChangeInterval") || {}).value) || 1.0;
+      params.threshold = numberOrDefault((qs("#paramChangeThresh") || {}).value, 0.03);
+      params.noise_threshold = intOrDefault((qs("#paramChangeNoise") || {}).value, 30);
+      params.interval = numberOrDefault((qs("#paramChangeInterval") || {}).value, 1.0);
     } else if (type === "similarity") {
       if (state.referenceTimestamp === null) {
         showToast("Capture a reference frame first");
         return null;
       }
       params.reference_timestamp = state.referenceTimestamp;
-      params.threshold = parseFloat((qs("#paramSimThresh") || {}).value) || 0.90;
-      params.interval = parseFloat((qs("#paramSimInterval") || {}).value) || 1.0;
+      params.threshold = numberOrDefault((qs("#paramSimThresh") || {}).value, 0.90);
+      params.interval = numberOrDefault((qs("#paramSimInterval") || {}).value, 1.0);
     } else if (type === "text") {
       params.search_string = (qs("#paramTextSearch") || {}).value || "";
       if (!params.search_string.trim()) {
         showToast("Enter a search string");
         return null;
       }
-      params.fuzzy_threshold = parseFloat((qs("#paramTextFuzzy") || {}).value) || 0.80;
-      params.interval = parseFloat((qs("#paramTextInterval") || {}).value) || 2.0;
+      params.fuzzy_threshold = numberOrDefault((qs("#paramTextFuzzy") || {}).value, 0.80);
+      params.interval = numberOrDefault((qs("#paramTextInterval") || {}).value, 2.0);
       var lang = (qs("#paramTextLang") || {}).value || "en";
       params.languages = [lang];
     } else if (type === "numbers") {
@@ -4294,9 +4452,9 @@
           return null;
         }
       }
-      params.interval = parseFloat((qs("#paramNumInterval") || {}).value) || 2.0;
+      params.interval = numberOrDefault((qs("#paramNumInterval") || {}).value, 2.0);
     } else if (type === "timelapse") {
-      params.speedup_factor = parseFloat((qs("#paramTlSpeed") || {}).value) || 10;
+      params.speedup_factor = numberOrDefault((qs("#paramTlSpeed") || {}).value, 10);
       var si = parseFloat((qs("#paramTlSampleInterval") || {}).value);
       if (si > 0) params.sample_interval = si;
       params.output_format = (qs("#paramTlFormat") || {}).value || "mp4";
@@ -4309,28 +4467,28 @@
         showToast("Capture a template region or upload a PNG");
         return null;
       }
-      params.threshold = parseFloat((qs("#paramTemplateThresh") || {}).value) || 0.70;
-      params.interval = parseFloat((qs("#paramTemplateInterval") || {}).value) || 1.0;
+      params.threshold = numberOrDefault((qs("#paramTemplateThresh") || {}).value, 0.70);
+      params.interval = numberOrDefault((qs("#paramTemplateInterval") || {}).value, 1.0);
       var scalePct = parseFloat((qs("#paramTemplateScale") || {}).value);
       if (!isNaN(scalePct) && scalePct > 0 && scalePct !== 100) {
         params.template_scale = scalePct / 100;
       }
     } else if (type === "flow") {
-      params.magnitude_threshold = parseFloat((qs("#paramFlowMag") || {}).value) || 2.0;
-      params.interval = parseFloat((qs("#paramFlowInterval") || {}).value) || 1.0;
+      params.magnitude_threshold = numberOrDefault((qs("#paramFlowMag") || {}).value, 2.0);
+      params.interval = numberOrDefault((qs("#paramFlowInterval") || {}).value, 1.0);
     } else if (type === "scene") {
       if (state.sceneReferences.length === 0) {
         showToast("Add at least one scene reference");
         return null;
       }
       params.scene_references = state.sceneReferences.map(function (ref) {
-        return { name: ref.name, timestamp: ref.timestamp, threshold: ref.threshold || 0.75 };
+        return { name: ref.name, timestamp: ref.timestamp, threshold: numberOrDefault(ref.threshold, 0.75) };
       });
-      params.interval = parseFloat((qs("#paramSceneInterval") || {}).value) || 1.0;
+      params.interval = numberOrDefault((qs("#paramSceneInterval") || {}).value, 1.0);
     } else if (type === "inactivity") {
-      params.threshold = parseInt((qs("#paramInactThresh") || {}).value) || 10;
-      params.min_duration = parseFloat((qs("#paramInactMinDur") || {}).value) || 2.0;
-      params.interval = parseFloat((qs("#paramInactInterval") || {}).value) || 1.0;
+      params.threshold = intOrDefault((qs("#paramInactThresh") || {}).value, 10);
+      params.min_duration = numberOrDefault((qs("#paramInactMinDur") || {}).value, 2.0);
+      params.interval = numberOrDefault((qs("#paramInactInterval") || {}).value, 1.0);
     }
     var labelEl = qs("#paramEventLabel");
     if (labelEl && labelEl.value.trim()) {
@@ -4474,6 +4632,10 @@
     text: "language",
     numbers: "hashtag",
     timelapse: "forward",
+    template: "viewfinder-circle",
+    flow: "arrows-right-left",
+    scene: "squares-2x2",
+    inactivity: "pause-circle",
   };
 
   function svgPlayIcon() {
@@ -5086,10 +5248,25 @@
     }
 
     // Select region
-    if (task.region && state.regions[task.region]) {
+    if (task.region_ref) {
+      var restoredRef = normalizeRegionRef(task.region_ref);
+      state.runRegions = restoredRef ? [restoredRef] : [];
+      state.pendingRegion = null;
+      if (restoredRef && restoredRef.source === "active" && state.regions[restoredRef.name]) {
+        state.activeRegion = restoredRef.name;
+      } else {
+        state.activeRegion = null;
+      }
+      renderRegionChips();
+      renderRunRegionPicker();
+      renderOverlay();
+      updateRegionButtons();
+    } else if (task.region && state.regions[task.region]) {
       state.activeRegion = task.region;
       state.pendingRegion = null;
+      state.runRegions = [activeRegionRef(task.region)];
       renderRegionChips();
+      renderRunRegionPicker();
       renderOverlay();
       updateRegionButtons();
     }
@@ -5111,9 +5288,10 @@
         var step = { type: s.type, collapsed: true };
         step.logic = (s.logic || "AND").toUpperCase();
         if (s.region) step.region = s.region;
+        if (s.region_ref) step.region_ref = s.region_ref;
         if (s.reference_timestamp !== undefined) step._refTs = s.reference_timestamp;
         if (s.scene_references) step._scenes = s.scene_references.map(function (ref) {
-          return { name: ref.name, timestamp: ref.timestamp, threshold: ref.threshold || 0.75 };
+          return { name: ref.name, timestamp: ref.timestamp, threshold: numberOrDefault(ref.threshold, 0.75) };
         });
         return step;
       });
@@ -5124,7 +5302,7 @@
 
     var params = task.parameters || {};
     if (task.type === "multitool") {
-      setInputValue("#paramMultitoolInterval", params.interval || 1.0);
+      setInputValue("#paramMultitoolInterval", numberOrDefault(params.interval, 1.0));
       if (params.event_label) setInputValue("#paramEventLabel", params.event_label);
       if (params.detect_first) {
         var dfEl = qs("#paramDetectFirst");
@@ -5133,30 +5311,37 @@
       // Restore per-step values
       (params.steps || []).forEach(function (s, i) {
         var sfx = "_mt" + i;
-        if (s.region) setInputValue("#paramStepRegion" + sfx, s.region);
+        if (s.region_ref) {
+          setInputValue("#paramStepRegion" + sfx, regionRefKey(s.region_ref));
+        } else if (s.region) {
+          setInputValue("#paramStepRegion" + sfx, regionRefKey(activeRegionRef(s.region)));
+        }
         if (s.type === "color" && s.target_color) {
-          setInputValue("#paramColorH" + sfx, s.target_color.h || 0);
-          setInputValue("#paramColorS" + sfx, s.target_color.s || 0);
-          setInputValue("#paramColorV" + sfx, s.target_color.v || 0);
+          var h = numberOrDefault(s.target_color.h, 0);
+          var sat = numberOrDefault(s.target_color.s, 0);
+          var val = numberOrDefault(s.target_color.v, 0);
+          setInputValue("#paramColorH" + sfx, h);
+          setInputValue("#paramColorS" + sfx, sat);
+          setInputValue("#paramColorV" + sfx, val);
           var stol = s.tolerance ? Math.round(s.tolerance.h * 100 / 90) : 30;
           setInputValue("#paramColorTol" + sfx, stol);
-          var rgb = hsvToRgb(s.target_color.h || 0, s.target_color.s || 0, s.target_color.v || 0);
+          var rgb = hsvToRgb(h, sat, val);
           setInputValue("#paramColorHex" + sfx, rgbToHex(rgb.r, rgb.g, rgb.b));
         } else if (s.type === "change") {
-          setInputValue("#paramChangeThresh" + sfx, s.threshold || 0.03);
-          setInputValue("#paramChangeNoise" + sfx, s.noise_threshold || 30);
+          setInputValue("#paramChangeThresh" + sfx, numberOrDefault(s.threshold, 0.03));
+          setInputValue("#paramChangeNoise" + sfx, intOrDefault(s.noise_threshold, 30));
         } else if (s.type === "similarity") {
-          setInputValue("#paramSimThresh" + sfx, s.threshold || 0.90);
+          setInputValue("#paramSimThresh" + sfx, numberOrDefault(s.threshold, 0.90));
         } else if (s.type === "text") {
           setInputValue("#paramTextSearch" + sfx, s.search_string || "");
-          setInputValue("#paramTextFuzzy" + sfx, s.fuzzy_threshold || 0.80);
+          setInputValue("#paramTextFuzzy" + sfx, numberOrDefault(s.fuzzy_threshold, 0.80));
         } else if (s.type === "numbers") {
           setInputValue("#paramNumOperator" + sfx, s.operator || "gt");
-          setInputValue("#paramNumTarget" + sfx, s.target_value || 0);
+          setInputValue("#paramNumTarget" + sfx, numberOrDefault(s.target_value, 0));
         } else if (s.type === "template") {
-          setInputValue("#paramTemplateThresh" + sfx, s.threshold || 0.70);
+          setInputValue("#paramTemplateThresh" + sfx, numberOrDefault(s.threshold, 0.70));
         } else if (s.type === "flow") {
-          setInputValue("#paramFlowMag" + sfx, s.magnitude_threshold || 2.0);
+          setInputValue("#paramFlowMag" + sfx, numberOrDefault(s.magnitude_threshold, 2.0));
         }
       });
     } else if (task.type === "color") {
@@ -5165,41 +5350,41 @@
       setInputValue("#paramColorV", params.target_color ? params.target_color.v : 200);
       var savedTol = params.tolerance ? Math.round(params.tolerance.h * 100 / 90) : 30;
       setInputValue("#paramColorTol", savedTol);
-      setInputValue("#paramColorInterval", params.interval || 1.0);
+      setInputValue("#paramColorInterval", numberOrDefault(params.interval, 1.0));
       updateColorPreview();
     } else if (task.type === "change") {
-      setInputValue("#paramChangeThresh", params.threshold || 0.03);
-      setInputValue("#paramChangeNoise", params.noise_threshold || 30);
-      setInputValue("#paramChangeInterval", params.interval || 1.0);
+      setInputValue("#paramChangeThresh", numberOrDefault(params.threshold, 0.03));
+      setInputValue("#paramChangeNoise", intOrDefault(params.noise_threshold, 30));
+      setInputValue("#paramChangeInterval", numberOrDefault(params.interval, 1.0));
     } else if (task.type === "similarity") {
-      setInputValue("#paramSimThresh", params.threshold || 0.90);
-      setInputValue("#paramSimInterval", params.interval || 1.0);
+      setInputValue("#paramSimThresh", numberOrDefault(params.threshold, 0.90));
+      setInputValue("#paramSimInterval", numberOrDefault(params.interval, 1.0));
     } else if (task.type === "text") {
       setInputValue("#paramTextSearch", params.search_string || "");
-      setInputValue("#paramTextFuzzy", params.fuzzy_threshold || 0.80);
-      setInputValue("#paramTextInterval", params.interval || 2.0);
+      setInputValue("#paramTextFuzzy", numberOrDefault(params.fuzzy_threshold, 0.80));
+      setInputValue("#paramTextInterval", numberOrDefault(params.interval, 2.0));
       if (params.languages && params.languages[0]) {
         setInputValue("#paramTextLang", params.languages[0]);
       }
     } else if (task.type === "timelapse") {
-      setInputValue("#paramTlSpeed", params.speedup_factor || 10);
+      setInputValue("#paramTlSpeed", numberOrDefault(params.speedup_factor, 10));
       setInputValue("#paramTlFormat", params.output_format || "mp4");
     } else if (task.type === "template") {
       if (params.reference_timestamp !== undefined) {
         state.referenceTimestamp = params.reference_timestamp;
       }
-      setInputValue("#paramTemplateThresh", params.threshold || 0.70);
-      setInputValue("#paramTemplateInterval", params.interval || 1.0);
+      setInputValue("#paramTemplateThresh", numberOrDefault(params.threshold, 0.70));
+      setInputValue("#paramTemplateInterval", numberOrDefault(params.interval, 1.0));
     } else if (task.type === "flow") {
-      setInputValue("#paramFlowMag", params.magnitude_threshold || 2.0);
-      setInputValue("#paramFlowInterval", params.interval || 1.0);
+      setInputValue("#paramFlowMag", numberOrDefault(params.magnitude_threshold, 2.0));
+      setInputValue("#paramFlowInterval", numberOrDefault(params.interval, 1.0));
     } else if (task.type === "scene") {
       if (params.scene_references) {
         state.sceneReferences = params.scene_references.map(function (ref) {
-          return { name: ref.name, timestamp: ref.timestamp, threshold: ref.threshold || 0.75 };
+          return { name: ref.name, timestamp: ref.timestamp, threshold: numberOrDefault(ref.threshold, 0.75) };
         });
       }
-      setInputValue("#paramSceneInterval", params.interval || 1.0);
+      setInputValue("#paramSceneInterval", numberOrDefault(params.interval, 1.0));
     }
 
     syncValueDisplays();
@@ -5541,7 +5726,7 @@
       if (task && rData && task.type === "template" && rData.matches) {
         state.resultOverlay = { type: "template", data: rData };
       } else if (task && rData && task.type === "flow" && rData.flow_grid) {
-        state.resultOverlay = { type: "flow", data: rData, region: regionToPixels(state.regions[task.region] || {}) };
+        state.resultOverlay = { type: "flow", data: rData, region: taskRegionPixels(task) };
       } else {
         state.resultOverlay = null;
       }
@@ -5697,12 +5882,14 @@
           var params = {};
           Object.keys(t.parameters || {}).forEach(function (k) { params[k] = t.parameters[k]; });
           delete params.scan_mode;
-          apiPost("api/tasks", {
+          var body = {
             type: t.type,
             participant: t.participant,
             region: t.region || "",
             parameters: params,
-          }).then(function (data) {
+          };
+          if (t.region_ref) body.region_ref = t.region_ref;
+          apiPost("api/tasks", body).then(function (data) {
             if (data.ok) {
               state.tasks.push(data.task);
               renderTaskList();
@@ -5790,7 +5977,11 @@
         } else {
           var overlaySrc = "media/" + task.heatmap;
           var overlayRequestVersion = ++_heatmapOverlayRequestVersion;
-          state.heatmapOverlay = { src: overlaySrc, type: task.type, region: task.region };
+          state.heatmapOverlay = {
+            src: overlaySrc,
+            type: task.type,
+            region_coords: taskRegionPixels(task),
+          };
           overlayBtn.textContent = "Hide Overlay";
           var hmImg = new Image();
           hmImg.onload = function () {
@@ -6003,6 +6194,11 @@
           document.body.style.cursor = "";
           document.body.style.userSelect = "";
           renderOverlay();
+        } else if (state.drawingRegion) {
+          state.drawingRegion = null;
+          _cachedOverlayRect = null;
+          renderOverlay();
+          updateRegionButtons();
         } else if (state.pendingRegion || state.activeRegion) {
           state.pendingRegion = null;
           state.activeRegion = null;
