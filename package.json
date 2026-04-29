@@ -1,0 +1,12 @@
+{
+  "private": true,
+  "scripts": {
+    "lint:js": "eslint assets/web --ext .js",
+    "lint:js:fix": "eslint assets/web --ext .js --fix"
+  },
+  "devDependencies": {
+    "@eslint/js": "latest",
+    "eslint": "latest",
+    "globals": "latest"
+  }
+}

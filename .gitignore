@@ -38,12 +38,16 @@ output/
 .vscode/
 .conductor/
 .venv/
+node_modules/
 .claude/
 /*.html
 /*.gif
 /*.png
 
 # Files we want to keep
+!package.json
+!bun.lock
+!bun.lockb
 !assets/titlecard.png
 !assets/endcard.png
 !assets/icons/*
