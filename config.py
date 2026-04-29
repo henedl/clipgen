@@ -29,7 +29,7 @@ from icecream import ic
 REENCODING: bool = False
 AUDIO_NORMALIZE: bool = False
 FILEFORMAT: str = ".mp4"
-VERSIONNUM: str = "0.10.108"
+VERSIONNUM: str = "0.10.112"
 TITLECARDS_ENABLED: bool = (
     False  # use --titlecards / --no-titlecards to override per run
 )
@@ -271,6 +271,7 @@ MARK_CATEGORIES: dict[str, dict[str, str]] = {
 OLLAMA_SUMMARY_ENABLED: bool = True  # auto-generate transcript summaries via Ollama
 OLLAMA_SUMMARY_MODEL: str = "qwen3.5:9b"  # model for transcript summaries and citations
 OLLAMA_BASE_URL: str = "http://localhost:11434"  # Ollama server address
+OLLAMA_UNLOAD_DELAY_SECONDS: float = 15.0  # after Stop, evict the model from memory if no new run starts within this delay
 
 # ── Rich Output ──────────────────────────────────────────────────────
 RICH_COLORS: bool = True  # Enable/disable colored output (set False for piped output)

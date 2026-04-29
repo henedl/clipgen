@@ -5,6 +5,7 @@ Covers the built-in summary and citation agents plus registry invariants.
 Transport-layer tests live in tests/test_ollama_client.py.
 """
 
+import threading
 from unittest.mock import patch
 
 import thinking_agents
@@ -124,6 +125,18 @@ class TestSummarizeTranscript:
         ]
         thinking_agents.summarize_transcript(segments)
         assert mock_generate.call_args[1]["model"] == "qwen3.5:9b"
+
+    @patch("thinking_agents.ollama_client.generate")
+    def test_passes_cancel_event_to_generate(self, mock_generate):
+        mock_generate.return_value = "ok"
+        evt = threading.Event()
+        segments = [
+            {
+                "text": "A sufficiently long segment of text for the minimum length check."
+            },
+        ]
+        thinking_agents.summarize_transcript(segments, cancel_event=evt)
+        assert mock_generate.call_args[1]["cancel_event"] is evt
 
 
 class TestSplitSummarySentences:
@@ -278,6 +291,14 @@ class TestFindCitations:
         assert result[0]["refs"][0]["start"] == 0
         assert result[0]["refs"][1]["start"] == 10
 
+    @patch("thinking_agents.ollama_client.generate")
+    def test_passes_cancel_event_to_generate(self, mock_generate):
+        mock_generate.return_value = "1: NONE"
+        evt = threading.Event()
+        segments = [{"start": 0, "end": 5, "text": "Some text here"}]
+        thinking_agents.find_citations("A claim.", segments, cancel_event=evt)
+        assert mock_generate.call_args[1]["cancel_event"] is evt
+
 
 class TestAgentRunCallables:
     """Smoke tests that the AGENTS registry's run callables dispatch to the
@@ -289,10 +310,20 @@ class TestAgentRunCallables:
         agent = thinking_agents.get_agent("summary")
         assert agent is not None
         entry = {"segments": [{"start": 0, "end": 1, "text": "hi"}]}
-        result = agent["run"](entry)
+        result = agent["run"](entry, None)
         assert result == "A summary"
         mock_sum.assert_called_once()
         assert mock_sum.call_args[0][0] == entry["segments"]
+
+    @patch("thinking_agents.summarize_transcript")
+    def test_summary_agent_forwards_cancel_event(self, mock_sum):
+        mock_sum.return_value = "A summary"
+        agent = thinking_agents.get_agent("summary")
+        assert agent is not None
+        evt = threading.Event()
+        entry = {"segments": [{"start": 0, "end": 1, "text": "hi"}]}
+        agent["run"](entry, evt)
+        assert mock_sum.call_args[1]["cancel_event"] is evt
 
     @patch("thinking_agents.find_citations")
     def test_citations_agent_run_invokes_find_citations(self, mock_find):
@@ -303,6 +334,21 @@ class TestAgentRunCallables:
             "summary": "A summary.",
             "segments": [{"start": 0, "end": 1, "text": "hi"}],
         }
-        result = agent["run"](entry)
+        result = agent["run"](entry, None)
         assert result == [{"sentence": "s", "refs": []}]
-        mock_find.assert_called_once_with(entry["summary"], entry["segments"])
+        mock_find.assert_called_once_with(
+            entry["summary"], entry["segments"], cancel_event=None
+        )
+
+    @patch("thinking_agents.find_citations")
+    def test_citations_agent_forwards_cancel_event(self, mock_find):
+        mock_find.return_value = [{"sentence": "s", "refs": []}]
+        agent = thinking_agents.get_agent("citations")
+        assert agent is not None
+        evt = threading.Event()
+        entry = {
+            "summary": "A summary.",
+            "segments": [{"start": 0, "end": 1, "text": "hi"}],
+        }
+        agent["run"](entry, evt)
+        assert mock_find.call_args[1]["cancel_event"] is evt

@@ -14,13 +14,16 @@ Key functions:
   is_available()  - check Ollama server connectivity
   list_models()   - enumerate installed models with metadata
   generate()      - send a prompt and get a text response
+  unload_model()  - ask Ollama to evict a model from memory immediately
 """
 
 import json
 import re
 import shutil
+import socket
 import subprocess
 import sys
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -35,6 +38,7 @@ _GENERATE_TIMEOUT = (
 )
 _START_POLL_INTERVAL = 0.5  # seconds between health-check polls after starting server
 _START_TIMEOUT = 10  # seconds to wait for server to become available after starting
+_CANCEL_WATCHER_POLL = 1.0  # seconds; bounds abort latency during long quiet stretches
 _THINK_RE = re.compile(r"<think>[\s\S]*?</think>\s*", re.DOTALL)
 
 
@@ -78,6 +82,33 @@ def list_models() -> list[dict[str, Any]] | None:
             return models
     except (urllib.error.URLError, OSError, ValueError, json.JSONDecodeError):
         return None
+
+
+def unload_model(model: str) -> bool:
+    """Ask Ollama to evict *model* from memory immediately.
+
+    Sends a minimal /api/generate request with ``keep_alive: 0``, which tells
+    Ollama to unload the model as soon as the call returns. Returns True if
+    the request was accepted, False on any failure.
+    """
+    body = {
+        "model": model,
+        "prompt": "",
+        "stream": False,
+        "keep_alive": 0,
+    }
+    data = json.dumps(body).encode("utf-8")
+    req = urllib.request.Request(
+        f"{config.OLLAMA_BASE_URL}/api/generate",
+        data=data,
+        headers={"Content-Type": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=_HEALTH_TIMEOUT) as resp:
+            resp.read()  # drain
+            return True
+    except (urllib.error.URLError, OSError, ValueError):
+        return False
 
 
 def _is_connection_refused(exc: Exception) -> bool:
@@ -151,27 +182,109 @@ def _start_server() -> bool:
     return False
 
 
+def _shutdown_response_socket(resp: Any) -> None:
+    """Force-close the underlying socket of a urllib HTTPResponse.
+
+    Plain ``resp.close()`` does NOT unblock a ``readline()`` blocked on a
+    socket from another thread. We have to reach down to the raw socket and
+    shut it down so the kernel returns from the syscall on the worker thread.
+
+    We deliberately do not call ``resp.close()`` here — that mutates
+    ``resp.fp`` and races with the worker's blocked read, which can surface
+    as ``AttributeError`` when the read wakes up. The worker's ``finally``
+    block will close the response after the loop returns.
+    """
+    try:
+        sock = resp.fp.raw._sock  # type: ignore[attr-defined]
+    except AttributeError:
+        sock = None
+    if sock is not None:
+        try:
+            sock.shutdown(socket.SHUT_RDWR)
+        except OSError:
+            pass
+
+
 def _do_generate(
     body: dict[str, Any],
+    cancel_event: threading.Event | None = None,
 ) -> str | None:
-    """Execute a single Ollama /api/generate request. Returns text or None."""
+    """Execute a single Ollama /api/generate request (streaming).
+
+    Reads the NDJSON stream chunk-by-chunk, accumulating ``response`` fields
+    until a chunk arrives with ``done: true``. When *cancel_event* is set, a
+    watcher thread shuts down the underlying socket so the blocked readline()
+    unblocks and the function returns ``None`` promptly — freeing Ollama for
+    another run.
+    """
     data = json.dumps(body).encode("utf-8")
     req = urllib.request.Request(
         f"{config.OLLAMA_BASE_URL}/api/generate",
         data=data,
         headers={"Content-Type": "application/json"},
     )
-    with urllib.request.urlopen(req, timeout=_GENERATE_TIMEOUT) as resp:
-        result = json.loads(resp.read().decode("utf-8"))
-        text = result.get("response", "")
-        # Strip <think>...</think> blocks produced by reasoning models (e.g. qwen3.5)
-        text = _THINK_RE.sub("", text).strip()
-        if not text:
-            utils.warning_print(
-                f"Ollama returned empty response (model: {body.get('model')})"
-            )
+    resp = urllib.request.urlopen(req, timeout=_GENERATE_TIMEOUT)
+    parts: list[str] = []
+    done_event = threading.Event()
+    watcher: threading.Thread | None = None
+    if cancel_event is not None:
+
+        def _watch() -> None:
+            while not done_event.is_set():
+                if cancel_event.wait(timeout=_CANCEL_WATCHER_POLL):
+                    _shutdown_response_socket(resp)
+                    return
+
+        watcher = threading.Thread(
+            target=_watch, daemon=True, name="ollama-cancel-watcher"
+        )
+        watcher.start()
+
+    try:
+        if cancel_event is not None and cancel_event.is_set():
             return None
-        return text
+        while True:
+            try:
+                line = resp.readline()
+            except (OSError, ValueError, AttributeError):
+                # Raised when the watcher shuts down the socket mid-read.
+                # http.client may surface this as AttributeError on Python
+                # 3.13+ when the chunked-encoding state machine tries to
+                # advance past a closed fp.
+                return None
+            if not line:
+                break
+            if cancel_event is not None and cancel_event.is_set():
+                return None
+            try:
+                chunk = json.loads(line.decode("utf-8"))
+            except (json.JSONDecodeError, UnicodeDecodeError):
+                continue  # skip malformed lines, keep reading
+            piece = chunk.get("response", "")
+            if piece:
+                parts.append(piece)
+            if chunk.get("done"):
+                break
+    finally:
+        done_event.set()
+        try:
+            resp.close()
+        except Exception:
+            pass
+        if watcher is not None:
+            watcher.join(timeout=0.5)
+
+    if cancel_event is not None and cancel_event.is_set():
+        return None
+    text = "".join(parts)
+    # Strip <think>...</think> blocks produced by reasoning models (e.g. qwen3.5)
+    text = _THINK_RE.sub("", text).strip()
+    if not text:
+        utils.warning_print(
+            f"Ollama returned empty response (model: {body.get('model')})"
+        )
+        return None
+    return text
 
 
 def generate(
@@ -180,6 +293,7 @@ def generate(
     model: str | None = None,
     system: str | None = None,
     think: bool | None = None,
+    cancel_event: threading.Event | None = None,
 ) -> str | None:
     """Send a prompt to Ollama and return the generated text.
 
@@ -192,14 +306,17 @@ def generate(
         system: Optional system prompt.
         think: Explicitly enable/disable thinking mode for reasoning models.
             When False, the model skips chain-of-thought and responds directly.
+        cancel_event: Optional event used to abort the in-flight request. When
+            set, the underlying HTTP response is closed and ``None`` is
+            returned promptly so Ollama is freed for another run.
 
-    Returns the generated text string, or None on any failure.
+    Returns the generated text string, or None on any failure or cancellation.
     """
     resolved_model = model or config.OLLAMA_SUMMARY_MODEL
     body: dict[str, Any] = {
         "model": resolved_model,
         "prompt": prompt,
-        "stream": False,
+        "stream": True,
     }
     if system:
         body["system"] = system
@@ -207,11 +324,13 @@ def generate(
         body["think"] = think
 
     try:
-        return _do_generate(body)
+        return _do_generate(body, cancel_event=cancel_event)
     except urllib.error.HTTPError as exc:
         utils.warning_print(f"Ollama generate failed (HTTP {exc.code}): {exc.reason}")
         return None
     except (urllib.error.URLError, OSError) as exc:
+        if cancel_event is not None and cancel_event.is_set():
+            return None
         if not _is_connection_refused(exc):
             utils.warning_print(f"Ollama generate failed (connection): {exc}")
             return None
@@ -219,13 +338,23 @@ def generate(
         if not _start_server():
             return None
         try:
-            return _do_generate(body)
-        except (urllib.error.URLError, urllib.error.HTTPError, OSError) as retry_exc:
+            return _do_generate(body, cancel_event=cancel_event)
+        except (
+            urllib.error.URLError,
+            urllib.error.HTTPError,
+            OSError,
+        ) as retry_exc:
+            if cancel_event is not None and cancel_event.is_set():
+                return None
             utils.warning_print(f"Ollama generate failed after retry: {retry_exc}")
             return None
         except (json.JSONDecodeError, KeyError, ValueError) as retry_exc:
+            if cancel_event is not None and cancel_event.is_set():
+                return None
             utils.warning_print(f"Ollama generate failed (response): {retry_exc}")
             return None
     except (json.JSONDecodeError, KeyError, ValueError) as exc:
+        if cancel_event is not None and cancel_event.is_set():
+            return None
         utils.warning_print(f"Ollama generate failed (response): {exc}")
         return None

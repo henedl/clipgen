@@ -22,6 +22,7 @@ Adding a new agent is a matter of writing a ``run`` callable, defining an
 from __future__ import annotations
 
 import re
+import threading
 from typing import Any, Callable, TypedDict
 
 import config
@@ -52,7 +53,9 @@ class Agent(TypedDict):
                           debugging).
       run:                Callable invoked inside the daemon thread. Receives
                           the transcript entry (the ``source_transcripts[pid]``
-                          dict) and returns the value to store under
+                          dict) and an optional ``threading.Event`` that, when
+                          set, signals the agent to abort its in-flight model
+                          call. Returns the value to store under
                           ``manifest_field``, or ``None`` to skip storage.
     """
 
@@ -61,7 +64,7 @@ class Agent(TypedDict):
     manifest_field: str
     depends_on: list[str]
     thread_name_prefix: str
-    run: Callable[[dict[str, Any]], Any]
+    run: Callable[[dict[str, Any], threading.Event | None], Any]
 
 
 # ---------------------------------------------------------------------------
@@ -93,11 +96,13 @@ def summarize_transcript(
     segments: list[dict[str, Any]],
     *,
     model: str | None = None,
+    cancel_event: threading.Event | None = None,
 ) -> str | None:
     """Summarize transcript segments into a paragraph + bullet points.
 
     Uses ``config.OLLAMA_SUMMARY_MODEL`` unless an explicit model override is
-    provided.
+    provided. If *cancel_event* is set during the model call, the request is
+    aborted and ``None`` is returned.
     """
     text = " ".join(seg.get("text", "").strip() for seg in segments).strip()
     if len(text) < _MIN_TEXT_LENGTH:
@@ -113,15 +118,17 @@ def summarize_transcript(
         f"{len(text)} chars) with model {model}"
     )
     prompt = _SUMMARIZE_PROMPT.format(text=text)
-    result = ollama_client.generate(prompt, model=model)
+    result = ollama_client.generate(prompt, model=model, cancel_event=cancel_event)
     if result:
         utils.verbose_print(f"Summary generated ({len(result)} chars)")
     return result
 
 
-def _run_summary(entry: dict[str, Any]) -> str | None:
+def _run_summary(
+    entry: dict[str, Any], cancel_event: threading.Event | None
+) -> str | None:
     segments = entry.get("segments") or []
-    return summarize_transcript(segments)
+    return summarize_transcript(segments, cancel_event=cancel_event)
 
 
 # ---------------------------------------------------------------------------
@@ -252,12 +259,16 @@ def _parse_citation_response(
 def find_citations(
     summary: str,
     segments: list[dict[str, Any]],
+    *,
+    cancel_event: threading.Event | None = None,
 ) -> list[dict[str, Any]] | None:
     """Find supporting transcript segments for each summary sentence.
 
     Sends the full transcript (truncated if very long) in a single model call
-    to avoid multi-chunk latency. Returns an ordered list of
-    ``{"sentence", "refs": [...]}`` dicts, or ``None`` if inputs are empty.
+    to avoid multi-chunk latency. If *cancel_event* is set during the model
+    call, the request is aborted and ``None`` is returned. Returns an ordered
+    list of ``{"sentence", "refs": [...]}`` dicts, or ``None`` if inputs are
+    empty or the run was cancelled.
     """
     sentences = _split_summary_sentences(summary)
     if not sentences or not segments:
@@ -277,7 +288,11 @@ def find_citations(
 
     prompt = _CITATION_PROMPT.format(claims=claims_text, transcript=transcript_text)
     response = ollama_client.generate(
-        prompt, model=model, system=_CITATION_SYSTEM, think=False
+        prompt,
+        model=model,
+        system=_CITATION_SYSTEM,
+        think=False,
+        cancel_event=cancel_event,
     )
 
     parsed: dict[int, list[dict[str, Any]]] = {}
@@ -296,10 +311,12 @@ def find_citations(
     return citations
 
 
-def _run_citations(entry: dict[str, Any]) -> list[dict[str, Any]] | None:
+def _run_citations(
+    entry: dict[str, Any], cancel_event: threading.Event | None
+) -> list[dict[str, Any]] | None:
     summary = entry.get("summary") or ""
     segments = entry.get("segments") or []
-    return find_citations(summary, segments)
+    return find_citations(summary, segments, cancel_event=cancel_event)
 
 
 # ---------------------------------------------------------------------------

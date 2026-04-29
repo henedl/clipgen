@@ -44,6 +44,7 @@ from flask import Blueprint, Response, jsonify, request
 
 import config
 import files
+import ollama_client
 import thinking_agents
 import transcripts
 import utils
@@ -68,13 +69,57 @@ _agent_threads: dict[str, set[threading.Thread]] = {
 _agent_in_flight: dict[str, set[str]] = {
     a["key"]: set() for a in thinking_agents.AGENTS
 }
-# Participants flagged for cancellation. The Ollama call still runs to
-# completion in its daemon thread; when it returns, _run_agent discards the
-# result and skips the chain advance. Lets the UI flip to idle instantly
-# without needing a cancel-aware HTTP layer (see plan: discard-on-return).
-_agent_cancel_requested: dict[str, set[str]] = {
-    a["key"]: set() for a in thinking_agents.AGENTS
+# Per-run cancel events. When the orchestrator starts an agent for a
+# participant, it registers a fresh ``threading.Event`` here; the Ollama
+# transport closes its streaming HTTP response on ``event.set()``, which
+# unblocks the read loop and frees the model promptly. The /stop endpoints
+# look up the event and call ``set()``. The discard-on-return check in
+# ``_run_agent`` keeps result-and-chain-advance gated on the same event as a
+# defense-in-depth measure for finish-vs-cancel races.
+_agent_cancel_events: dict[str, dict[str, threading.Event]] = {
+    a["key"]: {} for a in thinking_agents.AGENTS
 }
+
+# After a Stop, schedule a delayed Ollama model unload so the model is evicted
+# from memory if no follow-up run starts soon. Keyed by model name → Timer.
+# A new run for the same model cancels the pending unload so we don't churn
+# on rapid stop→run cycles.
+_pending_model_unloads: dict[str, threading.Timer] = {}
+_pending_model_unloads_lock = threading.Lock()
+
+
+def _schedule_model_unload(model: str) -> None:
+    """Schedule an Ollama model unload after ``config.OLLAMA_UNLOAD_DELAY_SECONDS``.
+
+    Replaces any pending unload timer for the same model so the delay always
+    measures from the most recent Stop.
+    """
+    delay = float(getattr(config, "OLLAMA_UNLOAD_DELAY_SECONDS", 15.0))
+    if delay <= 0:
+        ollama_client.unload_model(model)
+        return
+
+    def _unload() -> None:
+        with _pending_model_unloads_lock:
+            _pending_model_unloads.pop(model, None)
+        ollama_client.unload_model(model)
+
+    timer = threading.Timer(delay, _unload)
+    timer.daemon = True
+    with _pending_model_unloads_lock:
+        existing = _pending_model_unloads.pop(model, None)
+        if existing is not None:
+            existing.cancel()
+        _pending_model_unloads[model] = timer
+    timer.start()
+
+
+def _cancel_pending_unload(model: str) -> None:
+    """Cancel any pending unload for *model* (because a new run is starting)."""
+    with _pending_model_unloads_lock:
+        timer = _pending_model_unloads.pop(model, None)
+    if timer is not None:
+        timer.cancel()
 
 
 def _is_generating(participant: str, agent_key: str) -> bool:
@@ -350,15 +395,20 @@ def api_summary_regenerate(participant: str) -> FlaskResponse:
 
 @transcripts_bp.route("/api/summary/<participant>/stop", methods=["POST"])
 def api_summary_stop(participant: str) -> FlaskResponse:
-    """Flag an in-flight summary run for cancellation (discard-on-return).
+    """Abort an in-flight summary run.
 
-    The Ollama call keeps running in the background, but its result is thrown
-    away when it returns. The UI sees idle immediately.
+    Sets the cancel event so the streaming Ollama call closes its response
+    promptly, freeing the model for another run. The UI flips to idle
+    immediately. After a short delay, the model is unloaded from memory if
+    no new run has started in the meantime.
     """
     if not _is_generating(participant, "summary"):
         return jsonify({"ok": True, "running": False})
-    _agent_cancel_requested["summary"].add(participant)
+    event = _agent_cancel_events["summary"].get(participant)
+    if event is not None:
+        event.set()
     _agent_in_flight["summary"].discard(participant)
+    _schedule_model_unload(config.OLLAMA_SUMMARY_MODEL)
     return jsonify({"ok": True, "running": False})
 
 
@@ -417,11 +467,20 @@ def api_citations_regenerate(participant: str) -> FlaskResponse:
 
 @transcripts_bp.route("/api/citations/<participant>/stop", methods=["POST"])
 def api_citations_stop(participant: str) -> FlaskResponse:
-    """Flag an in-flight citations run for cancellation (discard-on-return)."""
+    """Abort an in-flight citations run.
+
+    Sets the cancel event so the streaming Ollama call closes its response
+    promptly, freeing the model for another run. The UI flips to idle
+    immediately. After a short delay, the model is unloaded from memory if
+    no new run has started in the meantime.
+    """
     if not _is_generating(participant, "citations"):
         return jsonify({"ok": True, "running": False})
-    _agent_cancel_requested["citations"].add(participant)
+    event = _agent_cancel_events["citations"].get(participant)
+    if event is not None:
+        event.set()
     _agent_in_flight["citations"].discard(participant)
+    _schedule_model_unload(config.OLLAMA_SUMMARY_MODEL)
     return jsonify({"ok": True, "running": False})
 
 
@@ -1042,6 +1101,11 @@ def _run_agent(agent_key: str, participant: str, force: bool = False) -> None:
     if _is_generating(participant, agent_key):
         return
 
+    cancel_event = threading.Event()
+    # If a Stop just scheduled an unload for this model, cancel it — the
+    # next request would only force a reload.
+    _cancel_pending_unload(config.OLLAMA_SUMMARY_MODEL)
+
     def _run() -> None:
         try:
             with _manifest_lock:
@@ -1051,10 +1115,10 @@ def _run_agent(agent_key: str, participant: str, force: bool = False) -> None:
                 # Snapshot the entry so the agent does not hold the lock
                 # during the (potentially slow) model call.
                 snapshot = dict(entry)
-            result = agent["run"](snapshot)
-            # Discard-on-return: if the UI asked to stop while the model was
-            # running, throw away the result and do not advance the chain.
-            if participant in _agent_cancel_requested[agent_key]:
+            result = agent["run"](snapshot, cancel_event)
+            # Defense in depth: if the model finished in the same tick as a
+            # Stop click, drop the result and skip the chain advance.
+            if cancel_event.is_set():
                 return
             if result is not None:
                 with _manifest_lock:
@@ -1072,10 +1136,13 @@ def _run_agent(agent_key: str, participant: str, force: bool = False) -> None:
             )
         finally:
             _agent_in_flight[agent_key].discard(participant)
-            _agent_cancel_requested[agent_key].discard(participant)
+            _agent_cancel_events[agent_key].pop(participant, None)
             _agent_threads[agent_key].discard(t)
 
+    # Register the event before starting the thread so a fast Stop click can
+    # never miss it.
     _agent_in_flight[agent_key].add(participant)
+    _agent_cancel_events[agent_key][participant] = cancel_event
     t = threading.Thread(
         target=_run,
         daemon=True,

@@ -646,10 +646,12 @@
           state.citationsGenerating = true;
           renderCitationsStatus();
           _startCitationsPoll(pid);
+          _refreshAgentStateNow();
         }
       } else if (data.generating) {
         renderSummaryGenerating();
         _startSummaryPoll(pid);
+        _refreshAgentStateNow();
       } else {
         section.classList.add("hidden");
       }
@@ -2828,12 +2830,16 @@
       hasResult: !!(p.agents && p.agents.summary === "done"),
       cascadeWarning: !!(p.agents && p.agents.citations === "done"),
       onStart: function () {
-        apiPost("api/summary/" + p.id + "/regenerate", {}).catch(function () {
+        apiPost("api/summary/" + p.id + "/regenerate", {}).then(function () {
+          _refreshAgentStateNow();
+        }).catch(function () {
           showToast("Failed to start summary");
         });
       },
       onStop: function () {
-        apiPost("api/summary/" + p.id + "/stop", {}).catch(function () {
+        apiPost("api/summary/" + p.id + "/stop", {}).then(function () {
+          _refreshAgentStateNow();
+        }).catch(function () {
           showToast("Failed to stop summary");
         });
       },
@@ -2850,12 +2856,16 @@
       hasResult: !!(p.agents && p.agents.citations === "done"),
       cascadeWarning: false,
       onStart: function () {
-        apiPost("api/citations/" + p.id + "/regenerate", {}).catch(function () {
+        apiPost("api/citations/" + p.id + "/regenerate", {}).then(function () {
+          _refreshAgentStateNow();
+        }).catch(function () {
           showToast("Failed to start citations");
         });
       },
       onStop: function () {
-        apiPost("api/citations/" + p.id + "/stop", {}).catch(function () {
+        apiPost("api/citations/" + p.id + "/stop", {}).then(function () {
+          _refreshAgentStateNow();
+        }).catch(function () {
           showToast("Failed to stop citations");
         });
       },
@@ -3082,6 +3092,17 @@
       if (ag && (ag.summary === "running" || ag.citations === "running")) return true;
     }
     return false;
+  }
+
+  // Called from pill agent onStart/onStop after the API POST resolves.
+  // Reloads participants so pill state reflects the new running/idle state
+  // immediately, and starts the poll loop so the pill keeps updating without
+  // waiting for the next external trigger (poll loop is otherwise gated on
+  // `_anyAgentActive()` which reads stale state right after a manual run).
+  function _refreshAgentStateNow() {
+    loadParticipants().then(function () {
+      if (_anyAgentActive()) startPolling();
+    });
   }
 
   function pollTaskStatus() {

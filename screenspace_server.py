@@ -45,7 +45,7 @@ import threading
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, TypeGuard, cast
 
 from flask import Blueprint, Response, jsonify, request, send_file
 
@@ -608,7 +608,7 @@ def _resolve_region_request(
     )
 
 
-def _is_flask_error_response(value: Any) -> bool:
+def _is_flask_error_response(value: Any) -> TypeGuard[FlaskResponse]:
     return isinstance(value, Response) or (
         isinstance(value, tuple) and len(value) == 2 and isinstance(value[1], int)
     )
@@ -914,7 +914,7 @@ def _validate_task_request(
             if step_region_ref is not None:
                 resolved = _resolve_region_request(step_region, step_region_ref)
                 if _is_flask_error_response(resolved):
-                    return cast(FlaskResponse, resolved)
+                    return resolved
             elif step_region not in all_known_regions:
                 return jsonify(
                     {
@@ -925,8 +925,8 @@ def _validate_task_request(
     elif has_region_request:
         resolved = _resolve_region_request(region_name, region_ref)
         if _is_flask_error_response(resolved):
-            return cast(FlaskResponse, resolved)
-        region_name, requested_region = resolved
+            return resolved
+        region_name, requested_region = cast(tuple[str, dict[str, Any]], resolved)
 
     return (
         task_type,
@@ -1082,8 +1082,8 @@ def _prepare_multitool_steps(
         if step_region_name or step_region_ref is not None:
             resolved = _resolve_region_request(step_region_name, step_region_ref)
             if _is_flask_error_response(resolved):
-                return cast(FlaskResponse, resolved)
-            resolved_name, resolved_region = resolved
+                return resolved
+            resolved_name, resolved_region = cast(tuple[str, dict[str, Any]], resolved)
             step["region"] = resolved_name
             step["region_coords"] = resolve_region_fn(resolved_name, resolved_region)
         else:
