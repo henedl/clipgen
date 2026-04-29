@@ -6,14 +6,22 @@ on:
       - master
     paths:
       - "**.py"
+      - "assets/web/**"
       - "tests/**"
+      - "package.json"
+      - "bun.lock"
+      - "eslint.config.js"
       - "pyproject.toml"
       - "uv.lock"
       - ".github/workflows/tests.yml"
   pull_request:
     paths:
       - "**.py"
+      - "assets/web/**"
       - "tests/**"
+      - "package.json"
+      - "bun.lock"
+      - "eslint.config.js"
       - "pyproject.toml"
       - "uv.lock"
       - ".github/workflows/tests.yml"
@@ -178,6 +186,23 @@ jobs:
 
       - name: Ruff format check
         run: uvx ruff format --check
+
+  js-lint:
+    needs: [gate]
+    if: always() && (needs.gate.outputs.skip != 'true')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Install JavaScript dependencies
+        run: bun install --frozen-lockfile
+
+      - name: ESLint
+        run: bun run lint:js
 
   typecheck:
     needs: [gate]
