@@ -19,6 +19,10 @@
 
   var SS_DETECTOR_COLORS = DETECTOR_COLORS;
 
+  // Speed cycle for the custom video controls. Transcript-friendly steps so
+  // users can slow review or skim faster without large jumps.
+  var VIDEO_SPEEDS = [0.75, 1, 1.25, 1.5, 2];
+
   var state = {
     participants: [],
     selectedParticipant: null,
@@ -49,6 +53,12 @@
     transcribePrewarm: "queue_open",
     modelStatus: null,
     modelFailSince: 0,
+    videoPlaying: false,
+    videoMuted: false,
+    videoPlaybackRate: 1,
+    ccEnabled: false,
+    pipActive: false,
+    pipEnabled: true,
   };
 
   var _transcriptionWarmupPosted = false;
@@ -528,9 +538,12 @@
       video.classList.remove("hidden");
       videoEmpty.classList.add("hidden");
 
-      // Set VTT track
+      // Set VTT track. Browsers reset textTracks[0].mode when the track src
+      // changes, so re-apply the user's preference now and again on the
+      // track's load event in initVideoPlayer.
       var track = qs("#subtitleTrack");
       track.src = "api/vtt/" + pid;
+      applyCaptionMode();
 
       var storedMap = getStoredUIState("transcripts").videoTimeByParticipant;
       if (storedMap && typeof storedMap[pid] === "number") {
@@ -570,6 +583,7 @@
       state.segments = [];
       state.streamingParticipant = null;
       renderSegments();
+      renderTimeline();
       clearSummary();
     }
   }
@@ -580,6 +594,8 @@
     qs("#segmentList").innerHTML = "";
     qs("#transcriptEmpty").classList.remove("hidden");
     clearSummary();
+    _markerHitRects = [];
+    renderTimeline();
   }
 
   // ---- Transcript loading ----
@@ -589,11 +605,13 @@
       if (!data.ok) {
         state.segments = [];
         renderSegments();
+        renderTimeline();
         return;
       }
       state.segments = data.segments;
       state.activeSegmentIndex = -1;
       renderSegments();
+      renderTimeline();
     });
   }
 
@@ -1139,6 +1157,24 @@
     if (nearBottom) {
       container.scrollTop = container.scrollHeight;
     }
+
+    // Mirror partial segments into state.segments so the marker timeline can
+    // resolve marker positions during streaming. Each row's id is the
+    // composed "<pid>:<index>" string, matching what _streamingMarks is keyed
+    // on via _renderPartialSegmentRow above.
+    var mirrored = [];
+    for (var mi = 0; mi < segments.length; mi++) {
+      var s = segments[mi];
+      mirrored.push({
+        id: pid + ":" + mi,
+        start: s.start,
+        end: s.end,
+        text: s.text,
+        marks: [],
+      });
+    }
+    state.segments = mirrored;
+    renderTimeline();
   }
 
   // ---- Segment list event delegation ----
@@ -1222,6 +1258,7 @@
 
   function _bumpStreamingMarksVersion() {
     _streamingMarksVersion++;
+    renderTimeline();
   }
 
   function _loadStreamingMarks(pid) {
@@ -1244,6 +1281,527 @@
         added = true;
       });
       if (added) _bumpStreamingMarksVersion();
+    });
+  }
+
+  // ---- Custom video player ----
+
+  var _markerHitRects = [];
+  var _playheadRaf = 0;
+  var _timelineTooltipRaf = 0;
+  var _lastTimelineHit = null;
+  var _timelineResizeObs = null;
+
+  function formatTimeShort(secs) {
+    if (!isFinite(secs) || secs < 0) secs = 0;
+    var total = Math.floor(secs);
+    var m = Math.floor(total / 60);
+    var s = total % 60;
+    return m + ":" + (s < 10 ? "0" : "") + s;
+  }
+
+  function setIconClass(span, klass) {
+    if (!span) return;
+    span.className = "player-btn-icon " + klass;
+  }
+
+  function updatePlayerButtons() {
+    var playBtn = qs("#videoPlayBtn");
+    var muteBtn = qs("#videoMuteBtn");
+    var speedBtn = qs("#videoSpeedBtn");
+    var ccBtn = qs("#videoCcBtn");
+    var pipBtn = qs("#videoPipBtn");
+    if (playBtn) {
+      var pIcon = playBtn.querySelector(".player-btn-icon");
+      setIconClass(pIcon, state.videoPlaying ? "player-icon-pause" : "player-icon-play");
+      playBtn.title = state.videoPlaying ? "Pause (Space)" : "Play/Pause (Space)";
+    }
+    if (muteBtn) {
+      var mIcon = muteBtn.querySelector(".player-btn-icon");
+      setIconClass(mIcon, state.videoMuted ? "player-icon-mute-off" : "player-icon-mute");
+      muteBtn.classList.toggle("active", !state.videoMuted);
+    }
+    if (speedBtn) {
+      speedBtn.textContent = state.videoPlaybackRate + "x";
+      speedBtn.classList.toggle("active", state.videoPlaybackRate !== 1);
+    }
+    if (ccBtn) {
+      ccBtn.classList.toggle("active", state.ccEnabled);
+      ccBtn.setAttribute("aria-pressed", state.ccEnabled ? "true" : "false");
+    }
+    if (pipBtn) {
+      pipBtn.classList.toggle("active", state.pipEnabled);
+      pipBtn.setAttribute("aria-pressed", state.pipEnabled ? "true" : "false");
+    }
+  }
+
+  function applyPlaybackRate() {
+    var v = qs("#videoPlayer");
+    if (!v) return;
+    v.defaultPlaybackRate = state.videoPlaybackRate;
+    v.playbackRate = state.videoPlaybackRate;
+    // Audio pitch will rise at high speeds, but the time-stretch filter is CPU
+    // heavy and causes judder at >=2x.
+    v.preservesPitch = false;
+    v.mozPreservesPitch = false;
+    v.webkitPreservesPitch = false;
+  }
+
+  function updateTimeLabel() {
+    var v = qs("#videoPlayer");
+    var label = qs("#videoTime");
+    if (!v || !label) return;
+    var dur = isFinite(v.duration) ? v.duration : 0;
+    label.textContent = formatTimeShort(v.currentTime || 0) + " / " + formatTimeShort(dur);
+  }
+
+  function applyCaptionMode() {
+    var v = qs("#videoPlayer");
+    if (!v || !v.textTracks || !v.textTracks.length) return;
+    v.textTracks[0].mode = state.ccEnabled ? "showing" : "hidden";
+  }
+
+  function sizeTimelineCanvas() {
+    var wrap = qs("#timelineCanvasWrapper");
+    var c1 = qs("#timelineCanvas");
+    var c2 = qs("#playheadCanvas");
+    if (!wrap || !c1 || !c2) return;
+    var rect = wrap.getBoundingClientRect();
+    if (rect.width === 0) return;
+    var dpr = window.devicePixelRatio || 1;
+    [c1, c2].forEach(function (c) {
+      var cssH = c === c2 ? c.offsetHeight || 48 : c.offsetHeight || 48;
+      var cssW = rect.width;
+      c.width = Math.round(cssW * dpr);
+      c.height = Math.round(cssH * dpr);
+      var ctx = c.getContext("2d");
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    });
+  }
+
+  function getThemeColor(name, fallback) {
+    var v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+    return v || fallback;
+  }
+
+  function computeTickInterval(visLen) {
+    var candidates = [1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600];
+    var target = visLen / 8;
+    for (var i = 0; i < candidates.length; i++) {
+      if (candidates[i] >= target) return candidates[i];
+    }
+    return candidates[candidates.length - 1];
+  }
+
+  function getMarkForSegment(seg) {
+    if (seg.marks && seg.marks.length > 0) return seg.marks[0];
+    var streaming = _streamingMarks[seg.id];
+    return streaming || null;
+  }
+
+  function renderTimeline() {
+    var canvas = qs("#timelineCanvas");
+    if (!canvas) return;
+    var ctx = canvas.getContext("2d");
+    var v = qs("#videoPlayer");
+    var cssW = canvas.offsetWidth;
+    var cssH = canvas.offsetHeight;
+    ctx.clearRect(0, 0, cssW, cssH);
+
+    var surfaceAlt = getThemeColor("--color-surface-alt", "#f1ece4");
+    var border = getThemeColor("--color-border", "#e0ddd7");
+    var textDim = getThemeColor("--color-text-dim", "#6b7280");
+
+    ctx.fillStyle = surfaceAlt;
+    ctx.fillRect(0, 0, cssW, cssH);
+
+    var dur = v && isFinite(v.duration) ? v.duration : 0;
+    if (dur <= 0) {
+      _markerHitRects = [];
+      ctx.fillStyle = textDim;
+      ctx.font = "11px -apple-system, sans-serif";
+      ctx.textAlign = "center";
+      ctx.fillText(state.selectedParticipant ? "Loading…" : "No video", cssW / 2, cssH / 2 + 4);
+      ctx.textAlign = "start";
+      renderPlayhead();
+      return;
+    }
+
+    function timeToX(t) { return (t / dur) * cssW; }
+
+    var tickInterval = computeTickInterval(dur);
+    var firstTick = Math.ceil(0 / tickInterval) * tickInterval;
+    ctx.strokeStyle = border;
+    ctx.fillStyle = textDim;
+    ctx.font = "10px " + getThemeColor("--font-mono", "monospace");
+    ctx.textAlign = "center";
+    ctx.lineWidth = 1;
+    for (var t = firstTick; t <= dur; t += tickInterval) {
+      var x = timeToX(t);
+      ctx.beginPath();
+      ctx.moveTo(x, 0);
+      ctx.lineTo(x, 6);
+      ctx.stroke();
+      ctx.fillText(formatTimeShort(t), x, 16);
+    }
+    ctx.textAlign = "start";
+
+    var markerY = 22;
+    var markerH = cssH - markerY - 4;
+    _markerHitRects = [];
+
+    for (var i = 0; i < state.segments.length; i++) {
+      var seg = state.segments[i];
+      var mark = getMarkForSegment(seg);
+      if (!mark) continue;
+      var cat = MARK_CATEGORIES[mark.category] || MARK_CATEGORIES.bookmark || { color: "#0891b2" };
+      var color = mark.color || cat.color;
+      var startX = timeToX(seg.start);
+      var endX = seg.end ? timeToX(seg.end) : startX + 2;
+      var barX = Math.max(0, startX - 1);
+      var barW = Math.max(2, Math.min(endX - startX, 6));
+      ctx.fillStyle = color;
+      ctx.fillRect(barX, markerY, barW, markerH);
+      _markerHitRects.push({
+        x1: barX - 3,
+        x2: barX + barW + 3,
+        y: markerY,
+        h: markerH,
+        segIndex: i,
+      });
+    }
+
+    renderPlayhead();
+  }
+
+  function renderPlayhead() {
+    var canvas = qs("#playheadCanvas");
+    var v = qs("#videoPlayer");
+    if (!canvas || !v) return;
+    var cssW = canvas.offsetWidth;
+    var cssH = canvas.offsetHeight;
+    var ctx = canvas.getContext("2d");
+    ctx.clearRect(0, 0, cssW, cssH);
+    var dur = isFinite(v.duration) ? v.duration : 0;
+    if (dur <= 0) return;
+    var px = (v.currentTime / dur) * cssW;
+    var accent = getThemeColor("--color-accent", "#1d4f72");
+    ctx.strokeStyle = accent;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(px, 0);
+    ctx.lineTo(px, cssH);
+    ctx.stroke();
+    ctx.fillStyle = accent;
+    ctx.beginPath();
+    ctx.moveTo(px - 4, 0);
+    ctx.lineTo(px + 4, 0);
+    ctx.lineTo(px, 5);
+    ctx.closePath();
+    ctx.fill();
+  }
+
+  function timelineXToTime(event) {
+    var canvas = qs("#timelineCanvas");
+    var v = qs("#videoPlayer");
+    if (!canvas || !v) return null;
+    var dur = isFinite(v.duration) ? v.duration : 0;
+    if (dur <= 0) return null;
+    var rect = canvas.getBoundingClientRect();
+    var frac = (event.clientX - rect.left) / rect.width;
+    if (frac < 0) frac = 0; else if (frac > 1) frac = 1;
+    return frac * dur;
+  }
+
+  function hitTestTimeline(clientX, clientY) {
+    var canvas = qs("#timelineCanvas");
+    if (!canvas) return null;
+    var rect = canvas.getBoundingClientRect();
+    var mx = clientX - rect.left;
+    var my = clientY - rect.top;
+    for (var i = _markerHitRects.length - 1; i >= 0; i--) {
+      var hr = _markerHitRects[i];
+      if (mx >= hr.x1 && mx <= hr.x2 && my >= hr.y && my <= hr.y + hr.h) return hr;
+    }
+    return null;
+  }
+
+  function showTimelineTooltip(hit, clientX, clientY) {
+    var tip = qs("#trTooltip");
+    if (!tip) return;
+    var seg = state.segments[hit.segIndex];
+    if (!seg) return;
+    var mark = getMarkForSegment(seg);
+    var cat = (mark && MARK_CATEGORIES[mark.category]) || MARK_CATEGORIES.bookmark || { label: "Mark", color: "#888" };
+    var snippet = (seg.text || "").trim().slice(0, 80);
+    if ((seg.text || "").length > 80) snippet += "…";
+    var extra = (seg.marks && seg.marks.length > 1) ? ' <span style="opacity:.7">+' + (seg.marks.length - 1) + ' more</span>' : "";
+    var label = mark && mark.label ? ' — ' + escapeHtml(mark.label) : "";
+    tip.innerHTML = '<span class="tr-tooltip-cat" style="color:' + (mark && mark.color || cat.color) + '">'
+      + escapeHtml(cat.label) + '</span>'
+      + escapeHtml(formatTimeShort(seg.start)) + label + extra
+      + '<br>' + escapeHtml(snippet);
+    tip.classList.remove("hidden");
+    var tipRect = tip.getBoundingClientRect();
+    var x = clientX + 12;
+    var y = clientY - tipRect.height - 12;
+    if (x + tipRect.width > window.innerWidth - 8) x = window.innerWidth - tipRect.width - 8;
+    if (y < 8) y = clientY + 16;
+    tip.style.left = x + "px";
+    tip.style.top = y + "px";
+  }
+
+  function hideTimelineTooltip() {
+    var tip = qs("#trTooltip");
+    if (tip) tip.classList.add("hidden");
+  }
+
+  function onMarkerClick(hit) {
+    var seg = state.segments[hit.segIndex];
+    if (!seg) return;
+    seekVideo(seg.start);
+    if (!_cachedSegmentRows) {
+      _cachedSegmentRows = qs("#segmentList").querySelectorAll(".segment-row");
+    }
+    var row = _cachedSegmentRows[hit.segIndex];
+    if (row) scrollToSegment(row);
+  }
+
+  function initVideoPlayer() {
+    var video = qs("#videoPlayer");
+    if (!video) return;
+
+    // Restore CC preference. We restore via getStoredUIState rather than a
+    // module-level constant so that switching browsers / clearing storage
+    // gives the user the documented default (off).
+    var stored = getStoredUIState("transcripts");
+    state.ccEnabled = !!(stored && stored.ccEnabled);
+
+    qs("#videoPlayBtn").addEventListener("click", function () {
+      if (video.paused) video.play();
+      else video.pause();
+    });
+    qs("#videoMuteBtn").addEventListener("click", function () {
+      state.videoMuted = !state.videoMuted;
+      video.muted = state.videoMuted;
+      updatePlayerButtons();
+    });
+    qs("#videoSpeedBtn").addEventListener("click", function () {
+      var idx = VIDEO_SPEEDS.indexOf(state.videoPlaybackRate);
+      state.videoPlaybackRate = VIDEO_SPEEDS[(idx + 1) % VIDEO_SPEEDS.length];
+      applyPlaybackRate();
+      updatePlayerButtons();
+    });
+    qs("#videoCcBtn").addEventListener("click", function () {
+      state.ccEnabled = !state.ccEnabled;
+      applyCaptionMode();
+      setStoredUIStateField("transcripts", "ccEnabled", state.ccEnabled);
+      updatePlayerButtons();
+    });
+    qs("#videoPipBtn").addEventListener("click", function () {
+      state.pipEnabled = !state.pipEnabled;
+      // When the user disables PiP while the player is detached, drop it
+      // back into flow immediately. _setPipActive is provided by initPipScroll
+      // and undefined until then; guard so the button still toggles state
+      // even if scroll wiring failed for some reason.
+      if (!state.pipEnabled && state.pipActive && typeof _setPipActive === "function") {
+        _setPipActive(false);
+      }
+      updatePlayerButtons();
+    });
+
+    video.addEventListener("play", function () {
+      state.videoPlaying = true;
+      updatePlayerButtons();
+    });
+    video.addEventListener("pause", function () {
+      state.videoPlaying = false;
+      updatePlayerButtons();
+    });
+    video.addEventListener("ended", function () {
+      state.videoPlaying = false;
+      updatePlayerButtons();
+    });
+    video.addEventListener("loadedmetadata", function () {
+      sizeTimelineCanvas();
+      applyCaptionMode();
+      applyPlaybackRate();
+      updateTimeLabel();
+      renderTimeline();
+    });
+
+    // The <track> can finish loading after the video metadata; re-apply the
+    // caption mode once cues are parsed or some browsers render nothing.
+    var track = qs("#subtitleTrack");
+    if (track) {
+      track.addEventListener("load", applyCaptionMode);
+    }
+    video.addEventListener("durationchange", function () {
+      updateTimeLabel();
+      renderTimeline();
+    });
+    video.addEventListener("timeupdate", function () {
+      updateTimeLabel();
+      if (_playheadRaf) return;
+      _playheadRaf = requestAnimationFrame(function () {
+        _playheadRaf = 0;
+        renderPlayhead();
+      });
+    });
+
+    updatePlayerButtons();
+  }
+
+  function initTimelineCanvas() {
+    var canvas = qs("#timelineCanvas");
+    if (!canvas) return;
+    sizeTimelineCanvas();
+
+    if (typeof ResizeObserver === "function") {
+      _timelineResizeObs = new ResizeObserver(function () {
+        sizeTimelineCanvas();
+        renderTimeline();
+      });
+      _timelineResizeObs.observe(qs("#timelineCanvasWrapper"));
+    } else {
+      window.addEventListener("resize", function () {
+        sizeTimelineCanvas();
+        renderTimeline();
+      });
+    }
+
+    canvas.addEventListener("click", function (e) {
+      var hit = hitTestTimeline(e.clientX, e.clientY);
+      if (hit) {
+        onMarkerClick(hit);
+        return;
+      }
+      var t = timelineXToTime(e);
+      if (t !== null) seekVideo(t);
+    });
+
+    canvas.addEventListener("mousemove", function (e) {
+      if (_timelineTooltipRaf) return;
+      var cx = e.clientX;
+      var cy = e.clientY;
+      _timelineTooltipRaf = requestAnimationFrame(function () {
+        _timelineTooltipRaf = 0;
+        var hit = hitTestTimeline(cx, cy);
+        if (hit) {
+          _lastTimelineHit = hit;
+          showTimelineTooltip(hit, cx, cy);
+          canvas.style.cursor = "pointer";
+        } else if (_lastTimelineHit) {
+          _lastTimelineHit = null;
+          hideTimelineTooltip();
+          canvas.style.cursor = "pointer";
+        }
+      });
+    });
+    canvas.addEventListener("mouseleave", function () {
+      _lastTimelineHit = null;
+      hideTimelineTooltip();
+    });
+  }
+
+  // ---- PiP scroll behaviour ----
+
+  // Hoisted so initVideoPlayer's PiP-toggle handler can drop the player back
+  // into flow when the user disables PiP. Assigned in initPipScroll.
+  var _setPipActive = null;
+
+  function initPipScroll() {
+    var section = qs("#videoSection");
+    // The transcript section is the only scrollable region on the page (body
+    // and #trMain are overflow:hidden). PiP triggers when the user scrolls
+    // it down past a real commit; only returning to the very top dismisses
+    // it. Asymmetric thresholds avoid the bounce that happens because flipping
+    // the section to position:fixed lets the transcript expand and shifts the
+    // scrollTop reading the trigger relies on.
+    var scroller = qs("#transcriptSection");
+    if (!section || !scroller) return;
+
+    var ENTER_THRESHOLD = 140;
+    var scrollRaf = 0;
+
+    function setPipActive(active) {
+      if (active === state.pipActive) return;
+      if (active) {
+        // Reserve the section's natural height on the transcript side so the
+        // transcript content does not jump up when the section detaches from
+        // flow. We restore the scroll position on the next frame because the
+        // browser may rebase scrollTop relative to the new content size when
+        // padding is added.
+        var h = Math.round(section.getBoundingClientRect().height);
+        if (h > 0) scroller.style.paddingTop = h + "px";
+        var keepTop = scroller.scrollTop;
+        state.pipActive = true;
+        section.classList.add("pip");
+        requestAnimationFrame(function () {
+          scroller.scrollTop = keepTop;
+          sizeTimelineCanvas();
+          renderTimeline();
+        });
+      } else {
+        var keepTop2 = scroller.scrollTop;
+        state.pipActive = false;
+        section.classList.remove("pip");
+        scroller.style.paddingTop = "";
+        requestAnimationFrame(function () {
+          scroller.scrollTop = keepTop2;
+          sizeTimelineCanvas();
+          renderTimeline();
+        });
+      }
+    }
+    _setPipActive = setPipActive;
+
+    function evaluatePip() {
+      if (!state.pipEnabled) return;
+      var top = scroller.scrollTop;
+      if (state.pipActive) {
+        // Only release PiP once the user is back at the very top, so the user
+        // makes a deliberate "scroll up" or "click PiP" gesture rather than
+        // having the player drop out as soon as they ease back.
+        if (top <= 0) setPipActive(false);
+      } else {
+        if (top > ENTER_THRESHOLD) setPipActive(true);
+      }
+    }
+
+    scroller.addEventListener("scroll", function () {
+      if (scrollRaf) return;
+      scrollRaf = requestAnimationFrame(function () {
+        scrollRaf = 0;
+        evaluatePip();
+      });
+    }, { passive: true });
+
+    section.addEventListener("click", function (e) {
+      if (!state.pipActive) return;
+      if (e.target.closest(".player-btn") || e.target.closest("#timelineCanvasWrapper")) return;
+      scroller.scrollTo({ top: 0, behavior: "smooth" });
+    });
+  }
+
+  // ---- Keyboard ----
+
+  function initPlayerKeyboard() {
+    document.addEventListener("keydown", function (e) {
+      if (e.code !== "Space" && e.key !== " ") return;
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      var t = e.target;
+      if (t && t.matches && t.matches("input, textarea, select, [contenteditable=true]")) return;
+      if (state.editingTextEl) return;
+      var modal = qs("#correctionsModal");
+      if (modal && !modal.classList.contains("hidden")) return;
+      var pop = qs("#markPopover");
+      if (pop && !pop.classList.contains("hidden")) return;
+      var v = qs("#videoPlayer");
+      if (!v || !v.src) return;
+      e.preventDefault();
+      if (v.paused) v.play();
+      else v.pause();
     });
   }
 
@@ -1347,7 +1905,10 @@
     state.activeSegmentIndex = newIndex;
     if (newIndex >= 0 && newIndex < rows.length) {
       rows[newIndex].classList.add("active");
-      scrollToSegment(rows[newIndex]);
+      // Only chase the playhead when PiP is active. With the embedded player
+      // visible at the top, the user is driving via the timeline and doesn't
+      // want the transcript pulled away from what they're reading.
+      if (state.pipActive) scrollToSegment(rows[newIndex]);
     }
   }
 
@@ -2795,7 +3356,11 @@
     initPillOutsideClick();
     initPillWheelScroll();
     initCorrectionsModal();
+    initVideoPlayer();
     initVideoSync();
+    initTimelineCanvas();
+    initPipScroll();
+    initPlayerKeyboard();
     initSummaryToggle();
     initSummaryActions();
     initTranscriptSettings();

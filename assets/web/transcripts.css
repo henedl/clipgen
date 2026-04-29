@@ -366,6 +366,12 @@ body {
   flex-shrink: 0;
   border-bottom: 1px solid var(--color-border);
   position: relative;
+  background: var(--color-panel-bg);
+}
+
+#videoFrame {
+  position: relative;
+  background: var(--color-surface-alt);
 }
 
 #videoPlayer {
@@ -375,8 +381,8 @@ body {
   background: var(--color-surface-alt);
 }
 
-#videoPlayer.hidden + .video-empty {
-  display: flex;
+#videoPlayer.hidden {
+  display: none;
 }
 
 .video-empty {
@@ -386,6 +392,183 @@ body {
   height: 180px;
   color: var(--color-text-dim);
   font-size: var(--text-sm);
+}
+
+.video-empty.hidden {
+  display: none;
+}
+
+#videoControls {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: var(--space-2) var(--space-4);
+  border-top: 1px solid var(--color-border);
+}
+
+.player-btn {
+  background: none;
+  border: none;
+  color: var(--color-text-dim);
+  cursor: pointer;
+  padding: var(--space-1);
+  border-radius: var(--radius-sm);
+  transition: background var(--duration-fast), color var(--duration-fast);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.player-btn:hover {
+  background: var(--color-surface-alt);
+  color: var(--color-accent);
+}
+
+.player-btn.active {
+  color: var(--color-accent);
+}
+
+.player-btn-icon {
+  width: 16px;
+  height: 16px;
+  display: inline-block;
+  background: currentColor;
+  mask-size: contain;
+  -webkit-mask-size: contain;
+  mask-repeat: no-repeat;
+  -webkit-mask-repeat: no-repeat;
+  mask-position: center;
+  -webkit-mask-position: center;
+}
+
+.player-icon-play {
+  mask-image: url(icons/play.svg);
+  -webkit-mask-image: url(icons/play.svg);
+}
+
+.player-icon-pause {
+  mask-image: url(icons/pause.svg);
+  -webkit-mask-image: url(icons/pause.svg);
+}
+
+.player-icon-mute {
+  mask-image: url(icons/speaker-wave.svg);
+  -webkit-mask-image: url(icons/speaker-wave.svg);
+}
+
+.player-icon-mute-off {
+  mask-image: url(icons/speaker-x-mark.svg);
+  -webkit-mask-image: url(icons/speaker-x-mark.svg);
+}
+
+.player-icon-cc {
+  mask-image: url(icons/chat-bubble-bottom-center-text.svg);
+  -webkit-mask-image: url(icons/chat-bubble-bottom-center-text.svg);
+}
+
+.player-icon-pip {
+  mask-image: url(icons/tv.svg);
+  -webkit-mask-image: url(icons/tv.svg);
+}
+
+.player-speed-btn {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+  min-width: 2.25rem;
+  padding: var(--space-1) var(--space-2);
+}
+
+.player-time {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-dim);
+  margin-left: auto;
+}
+
+#timelineRow {
+  padding: 0 var(--space-4) var(--space-2) var(--space-4);
+}
+
+#timelineCanvasWrapper {
+  position: relative;
+  width: 100%;
+}
+
+#timelineCanvas {
+  width: 100%;
+  height: 48px;
+  border-radius: calc(var(--radius) - 2px);
+  cursor: pointer;
+  display: block;
+}
+
+#playheadCanvas {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 48px;
+  pointer-events: none;
+}
+
+.tr-tooltip {
+  position: fixed;
+  pointer-events: none;
+  background: var(--color-text);
+  color: var(--color-bg);
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-sm);
+  font-size: var(--text-xs);
+  max-width: 320px;
+  line-height: 1.35;
+  z-index: var(--z-tooltip, 9000);
+  box-shadow: var(--shadow-2);
+}
+
+.tr-tooltip.hidden {
+  display: none;
+}
+
+.tr-tooltip-cat {
+  font-weight: 600;
+  margin-right: var(--space-1);
+}
+
+/* Picture-in-Picture */
+
+#videoSection.pip {
+  position: fixed;
+  right: var(--space-4);
+  bottom: var(--space-4);
+  width: 380px;
+  max-width: calc(100vw - var(--space-4) * 2);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-3, 0 12px 32px rgba(0, 0, 0, 0.25));
+  overflow: hidden;
+  z-index: var(--z-popover, 8000);
+  cursor: zoom-in;
+  transition: opacity var(--duration-2) ease, transform var(--duration-2) ease;
+}
+
+#videoSection.pip #videoPlayer {
+  max-height: 200px;
+}
+
+#videoSection.pip #timelineCanvas,
+#videoSection.pip #playheadCanvas {
+  height: 28px;
+}
+
+#videoSection.pip #timelineRow {
+  padding: 0 var(--space-2) var(--space-2) var(--space-2);
+}
+
+#videoSection.pip #videoControls {
+  padding: var(--space-1) var(--space-2);
 }
 
 /* ── AI Summary ─────────────────────────────────────────────── */
