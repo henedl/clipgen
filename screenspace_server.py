@@ -1577,6 +1577,40 @@ def _clean_task(task: dict[str, Any]) -> dict[str, Any]:
 # ---- State initialization ----
 
 
+def _backfill_missing_events(manifest: dict[str, Any]) -> None:
+    """Heal manifests where completed tasks have results but no events.
+
+    Why: events are generated only at task completion. Tasks completed before
+    the events system existed (or whose events were lost) leave the frontend
+    unable to render exclude toggles. Backfill so older results behave like
+    new ones.
+    """
+    import screenspace
+
+    events = manifest.setdefault("events", [])
+    task_ids_with_events = {e.get("task_id") for e in events if e.get("task_id")}
+    added = 0
+    for task in manifest.get("tasks", []):
+        if task.get("status") != screenspace.TASK_STATUS_COMPLETED:
+            continue
+        if task.get("id") in task_ids_with_events:
+            continue
+        result = task.get("result")
+        if not isinstance(result, list) or not result:
+            continue
+        new_events = screenspace.generate_events_from_results(task, result)
+        if new_events:
+            events.extend(new_events)
+            added += len(new_events)
+    if added:
+        screenspace.save_screenspace_manifest(
+            manifest.get("regions", {}),
+            manifest.get("tasks", []),
+            events,
+            stashes=manifest.get("stashes", []),
+        )
+
+
 def _init_screenspace_state(
     sheet_context: Any = None,
     participant_list: list[str] | None = None,
@@ -1592,6 +1626,7 @@ def _init_screenspace_state(
 
     _output_dir = str(utils.get_effective_output_dir())
     _manifest = screenspace.load_screenspace_manifest()
+    _backfill_missing_events(_manifest)
 
     _participants = []
     study_name = ""

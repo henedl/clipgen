@@ -2601,43 +2601,7 @@ class ScreenspaceWorker:
     def _generate_events_from_results(
         self, task: dict[str, Any], raw_results: list[dict[str, Any]]
     ) -> list[dict[str, Any]]:
-        """Convert raw task results into ScreenspaceEvent records."""
-        task_type = task.get("type", "")
-        if task_type == "timelapse":
-            return []
-        events: list[dict[str, Any]] = []
-        for r in raw_results:
-            ts = r.get("timestamp", r.get("start", 0.0))
-            confidence = _extract_confidence(task_type, r)
-            metadata: dict[str, Any] = {}
-            if task_type == "change":
-                metadata["magnitude"] = r.get("magnitude", 0.0)
-            elif task_type == "similarity":
-                metadata["score"] = r.get("score", 0.0)
-            elif task_type == "text":
-                metadata["text_found"] = r.get("text_found", "")
-            elif task_type == "numbers":
-                metadata["value"] = r.get("number_found", 0)
-            elif task_type == "template":
-                metadata["match_count"] = r.get("match_count", 0)
-                metadata["best_score"] = r.get("best_score", 0.0)
-            elif task_type == "flow":
-                metadata["magnitude"] = r.get("magnitude", 0.0)
-                metadata["angle"] = r.get("angle", 0.0)
-            elif task_type == "scene":
-                metadata["scene_name"] = r.get("scene_name", "")
-                metadata["score"] = r.get("score", 0.0)
-            elif task_type == "multitool":
-                metadata["tool_types"] = r.get("tool_types", [])
-                metadata["steps"] = r.get("steps", [])
-            elif task_type == "inactivity":
-                metadata["duration"] = r.get("duration", 0.0)
-                metadata["avg_distance"] = r.get("avg_distance", 0.0)
-            ev = create_event(task, ts, confidence, metadata)
-            if task_type == "inactivity" and "end" in r:
-                ev["time_out"] = round(r["end"], 2)
-            events.append(ev)
-        return events
+        return generate_events_from_results(task, raw_results)
 
     def _generate_heatmap(
         self, task: dict[str, Any], results: list[dict[str, Any]]
@@ -3146,6 +3110,48 @@ def save_screenspace_manifest(
         },
         warn_label="screenspace manifest",
     )
+
+
+def generate_events_from_results(
+    task: dict[str, Any], raw_results: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """Convert raw task results into ScreenspaceEvent records."""
+    task_type = task.get("type", "")
+    if task_type == "timelapse":
+        return []
+    events: list[dict[str, Any]] = []
+    for r in raw_results:
+        ts = r.get("timestamp", r.get("start", 0.0))
+        confidence = _extract_confidence(task_type, r)
+        metadata: dict[str, Any] = {}
+        if task_type == "change":
+            metadata["magnitude"] = r.get("magnitude", 0.0)
+        elif task_type == "similarity":
+            metadata["score"] = r.get("score", 0.0)
+        elif task_type == "text":
+            metadata["text_found"] = r.get("text_found", "")
+        elif task_type == "numbers":
+            metadata["value"] = r.get("number_found", 0)
+        elif task_type == "template":
+            metadata["match_count"] = r.get("match_count", 0)
+            metadata["best_score"] = r.get("best_score", 0.0)
+        elif task_type == "flow":
+            metadata["magnitude"] = r.get("magnitude", 0.0)
+            metadata["angle"] = r.get("angle", 0.0)
+        elif task_type == "scene":
+            metadata["scene_name"] = r.get("scene_name", "")
+            metadata["score"] = r.get("score", 0.0)
+        elif task_type == "multitool":
+            metadata["tool_types"] = r.get("tool_types", [])
+            metadata["steps"] = r.get("steps", [])
+        elif task_type == "inactivity":
+            metadata["duration"] = r.get("duration", 0.0)
+            metadata["avg_distance"] = r.get("avg_distance", 0.0)
+        ev = create_event(task, ts, confidence, metadata)
+        if task_type == "inactivity" and "end" in r:
+            ev["time_out"] = round(r["end"], 2)
+        events.append(ev)
+    return events
 
 
 def create_event(
