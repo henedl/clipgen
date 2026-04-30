@@ -160,9 +160,9 @@ Required columns: **ID**, **Observation**, **Category**. Participant columns fol
 - Every new CLI mode, flag, or selector should include at least one smoke test in the same PR.
 - With `config.DEBUGGING = True`, icecream is enabled, [video.py](video.py) does not invoke ffmpeg, and [transcripts.py](transcripts.py) returns stub results without loading a Whisper model.
 
-# Project learnings for agents
+## Project learnings for agents
 
-## Learned User Preferences
+### Learned User Preferences
 
 - When the user attaches an implementation plan that already has created todos, do not edit the plan file; mark those todos in_progress as you work and complete them without recreating the list.
 - Don't extract helpers unless it is called more than once.
@@ -192,7 +192,7 @@ Required columns: **ID**, **Observation**, **Category**. Participant columns fol
 - When working through a plan file, e.g. FEATURE-PLAN.md, always make sure to check off items after they are completed.
 - **No backwards-compatibility layers.** Do not add migration shims, schema-version checks for hard-break detection, legacy-format readers, or "warn and ignore" branches for old persisted state (manifests, stashes, sessionStorage queues, settings files, etc.). The user base is small and the work is ephemeral; just change the shape and let users re-run. Tests covering persisted shapes get updated to the new shape, not gated behind a version flag.
 
-## Learned Workspace Facts
+### Learned Workspace Facts
 
 - Baseline time row placement in the spreadsheet layer is tied to header/`id_cell` row math (e.g. offsets from `id_cell.row`); changing that offset without aligning tests and sheet layout has broken baseline timestamp handling before.
 - When making substantive code changes (fixes or features), increment the patch (last number) of VERSIONNUM in config.py.
@@ -205,32 +205,32 @@ Required columns: **ID**, **Observation**, **Category**. Participant columns fol
 - CI uses `uv pip install --torch-backend cpu` to avoid downloading ~2.5GB of CUDA/nvidia packages (tests never use CUDA). This override is CI-only (in `tests.yml`), not in `pyproject.toml`, so end-user installs still get GPU-capable torch. If Linux end users emerge and report CUDA issues, check that the CI-only approach hasn't leaked into project config.
 - Timelapse produces a single output file, not per-frame timeline events. It does not need icon/color entries in Viewer's `SS_DETECTOR_COLORS`/`SS_DETECTOR_ICON_PATHS` maps.
 
-## Performance Principles
+### Performance Principles
 
 Patterns that should be applied from the start when writing new features, so that dedicated optimization passes are not needed later.
 
-### Avoid redundant I/O and API calls
+#### Avoid redundant I/O and API calls
 
 - **Never re-fetch what you already have.** If a function needs data that a caller already holds (e.g. `SheetContext`, parsed manifest), accept it as an optional parameter rather than re-reading from disk or network. `generate_list()` now takes `ctx: Optional[SheetContext]`; follow this pattern for any function that calls `build_sheet_context`, `get_all_values`, or reads a manifest file.
 - **Read a file once, extract multiple keys.** When you need both artifacts and reels (or any two keys) from the same JSON file, use a single read/parse. See `viewer._load_manifest_both()`. Never call two separate load functions that each read the same file.
 - **Google Sheets API calls are precious.** Every `sheet.get_all_values()` / `sheet.find()` / `generate_list()` is a network round-trip subject to rate limits. In server routes, always reuse the cached `_sheet_context` rather than rebuilding it.
 
-### Design for parallelism from the start
+#### Design for parallelism from the start
 
 - **Batch first, iterate second.** When processing N independent items (clips, screenshots, reel segments), collect them into a list and process with `ThreadPoolExecutor`, not a sequential for-loop. Use `_resolve_clip_workers()` for the worker count and gate on `len(items) >= 2`.
 - **Return results, don't mutate shared state.** Functions that run inside a thread pool must return their output rather than appending to a closure list. Assemble ordered results from the return values after the pool completes (use a pre-allocated results list indexed by future). See `process_reel_clip` returning `(segment_paths, component_dicts)` instead of appending to a shared `components` list.
 - **Streaming + parallelism can coexist.** For ndjson-streaming routes, split into two passes: (1) yield cached/skipped items immediately, (2) submit remaining work to a thread pool and yield per-future results via `as_completed()`. This preserves the per-item streaming contract while enabling parallel execution. See `/api/generate` in `server.py`.
 
-### Pre-compute outside hot loops
+#### Pre-compute outside hot loops
 
 - **Normalize comparison data once.** If a loop compares against a set of strings (e.g. filename matching), lowercase / normalize the set once before the loop, not inside each iteration. Sorting callbacks (`key=lambda`) are called O(n log n) times — avoid per-call work that can be hoisted.
 - **Use `DocumentFragment` for DOM batching.** When rendering lists of cards/rows, build all elements in a fragment and append once. Never append per-item inside a loop. Viewer and Screenspace already do this; apply the same pattern in any new UI list.
 
-## Code Review Checklist
+### Code Review Checklist
 
 Patterns distilled from recurring post-review and post-merge fixes across the project's history.
 
-### Frontend (JS/CSS)
+#### Frontend (JS/CSS)
 
 - **CSS toggle completeness**: Every JS class toggle (`.hidden`, `.active`, `.disabled`, etc.) must have a corresponding CSS rule. Verify the rule exists in the stylesheet, not just the JS call.
 - **Falsy-safe DOM helpers**: Use `!== undefined` or `!= null` instead of `if (x)` when `0`, `""`, or `false` are valid values.
@@ -241,7 +241,7 @@ Patterns distilled from recurring post-review and post-merge fixes across the pr
 - **Flex layout**: Elements inside flex containers need explicit `flex: 1` or `min-width: 0` to avoid zero-width collapse. Verify new elements are visible after adding them to flex parents.
 - **Autocomplete off on text inputs**: Every `<input type="text">` (static or dynamic) must have `autocomplete="off"` to prevent browser autofill (e.g. contact names). For static HTML use the attribute directly; for JS-created inputs set `.autocomplete = "off"` after creation.
 
-### Backend (Python / Flask)
+#### Backend (Python / Flask)
 
 - **Route parameter types**: Prefer string route parameters with manual `float()`/`int()` parsing over Flask's `<float:x>` converter — JS may send integers where Flask expects floats, causing silent 404s.
 - **JSON serialization safety**: Filter `math.isfinite()` on any float derived from OpenCV or numpy before including in JSON responses. Non-finite floats produce invalid JSON that `JSON.parse` silently drops.
@@ -249,7 +249,7 @@ Patterns distilled from recurring post-review and post-merge fixes across the pr
 - **Dependency manifests**: When importing a new package, immediately add it to `pyproject.toml`. Missing dependencies surface as silent task failures.
 - **All call sites**: When modifying a shared function's signature or adding a new parameter, grep for every call site — not just the one you're working on. Functions like `finalize_timeline_data()` have 5+ callers across CLI, Studio, Viewer, and Screenspace.
 
-### Type Checking (ty)
+#### Type Checking (ty)
 
 `ty` is a blocking CI gate. These rules prevent the most common typecheck failures.
 
@@ -261,7 +261,7 @@ Patterns distilled from recurring post-review and post-merge fixes across the pr
 - **`list[T] | None` vs `list[T | None]`**: For optional list parameters, write `details: list[str] | None = None`. The form `list[str | None] = None` declares a non-optional list of nullable elements — a different type.
 - **Narrow properly, don't suppress**: Replace `# type: ignore[union-attr]` and similar with proper narrowing (`assert`, `isinstance`, `if is not None`). Suppressions hide real bugs.
 
-### Integration
+#### Integration
 
 - **Data contract completeness**: When creating records consumed by the frontend (artifacts, events, tasks), include all fields the renderer expects — even optional ones. Missing fields cause empty/broken cards.
 - **New flags in mode detection**: When adding a CLI flag, verify it appears in the mode-detection logic (`cli.py`), not just in argparse definition.
