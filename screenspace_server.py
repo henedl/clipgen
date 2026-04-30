@@ -30,6 +30,7 @@ API endpoints (all under /screenspace/):
   POST /api/tasks/resume                   – resume the worker
   GET  /api/tasks/<task_id>/results        – analysis results (timestamps, artifact paths)
   GET  /api/events                         – list result events across all tasks
+  GET  /api/export/events                  – export events as analysis-ready JSON (default) or CSV (?format=csv)
   PUT  /api/events/<event_id>/exclude      – mark an event excluded
   PUT  /api/events/<event_id>/include      – mark an event included
   PUT  /api/events/bulk-exclude            – bulk exclude events by task/time range
@@ -1354,6 +1355,54 @@ def api_events_list() -> FlaskResponse:
     if task_id:
         events = [e for e in events if e.get("task_id") == task_id]
     return jsonify({"ok": True, "events": _sanitize_floats(events)})
+
+
+@screenspace_bp.route("/api/export/events")
+def api_export_events() -> FlaskResponse:
+    """Export Screenspace events as analysis-ready JSON or CSV.
+
+    Query params:
+      format:      "json" (default) or "csv"
+      excluded:    "true" to keep only excluded, "false" to drop excluded; default keeps both
+      participant: keep only events for this participant id
+      detector:    keep only events from this detector type
+    """
+    import data_export
+
+    fmt = (request.args.get("format") or "json").lower()
+    excluded_filter = request.args.get("excluded")
+    participant = request.args.get("participant")
+    detector = request.args.get("detector")
+
+    if excluded_filter == "false":
+        include_excluded = False
+    elif excluded_filter == "true":
+        include_excluded = True
+    else:
+        include_excluded = True
+
+    records = data_export.build_screenspace_events(
+        _manifest,
+        include_excluded=include_excluded,
+        participants=[participant] if participant else None,
+        detectors=[detector] if detector else None,
+    )
+    if excluded_filter == "true":
+        records = [r for r in records if r.get("excluded")]
+
+    if fmt == "csv":
+        body = data_export.to_csv(
+            records,
+            preferred_column_order=data_export.SCREENSPACE_EVENT_COLUMNS,
+        )
+        response = Response(body, mimetype="text/csv")
+        response.headers["Content-Disposition"] = (
+            'attachment; filename="screenspace_events.csv"'
+        )
+        return response
+    if fmt == "json":
+        return jsonify({"ok": True, "events": _sanitize_floats(records)})
+    return jsonify({"ok": False, "error": f"Unsupported format: {fmt}"}), 400
 
 
 @screenspace_bp.route("/api/events/<event_id>/exclude", methods=["PUT"])

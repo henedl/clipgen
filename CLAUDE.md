@@ -36,6 +36,7 @@ clipgen is a Python CLI tool that generates clips from timestamps stored in a Go
 | [screenspace_server.py](screenspace_server.py) | Screenspace Flask REST API: region CRUD, video frame extraction, task queue management, results retrieval |
 | [insights.py](insights.py) | Insights data model: CRUD operations for insight records, insights manifest read/write |
 | [insights_server.py](insights_server.py) | Insights Flask REST API: insight CRUD, artifact browsing, sprite sheet generation, viewer export |
+| [data_export.py](data_export.py) | Analysis-ready JSON+CSV export from Screenspace, Insights, and Transcripts manifests; powers `--export` CLI flag and `/screenspace/api/export/events` endpoint |
 | [assets/web/](assets/web/) | Static HTML/JS/CSS templates: timeline viewer (`viewer.html/js/css`), gallery (`gallery.html/js/css`), studio (`studio.html/js/css`), insights (`insights-builder.html/js/css`), insights viewer (`insights-viewer.html/js/css`), screenspace (`screenspace.html/js/css`). Shared utilities and constants live in `utils.js` (loaded before each page's main script) |
 
 ### Timeline HTML Viewer

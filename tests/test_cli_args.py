@@ -54,6 +54,7 @@ def _base_args(**overrides):
         "ss_event_label": None,
         "summarize": None,
         "citations": None,
+        "export": False,
     }
     args.update(overrides)
     return Namespace(**args)
@@ -71,6 +72,38 @@ def test_parse_arguments_rejects_conflicting_output_flags(monkeypatch):
     with pytest.raises(SystemExit) as exc:
         cli.parse_arguments()
     assert exc.value.code == 2
+
+
+def test_parse_arguments_export_flag(monkeypatch):
+    monkeypatch.setattr("sys.argv", ["clipgen.py", "--export"])
+    args = cli.parse_arguments()
+    assert getattr(args, "export", False) is True
+
+
+def test_export_dispatch_calls_run_cli_export(monkeypatch):
+    """--export must dispatch to data_export.run_cli_export and exit cleanly."""
+    import data_export
+
+    args = _base_args(export=True)
+    called = {}
+
+    def fake_run():
+        called["yes"] = True
+        return 0
+
+    monkeypatch.setattr(data_export, "run_cli_export", fake_run)
+    with pytest.raises(SystemExit) as exc:
+        cli._dispatch_standalone_mode(args, cli_mode=True, gallery_arg=None)
+    assert exc.value.code == 0
+    assert called.get("yes") is True
+
+
+def test_export_conflicts_with_studio(monkeypatch):
+    monkeypatch.setattr("sys.argv", ["clipgen.py", "--export", "--studio"])
+    args = cli.parse_arguments()
+    with pytest.raises(SystemExit) as exc:
+        cli._validate_mode_conflicts(args)
+    assert exc.value.code == 1
 
 
 def test_parse_arguments_titlecards_flags(monkeypatch):

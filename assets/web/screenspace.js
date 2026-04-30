@@ -5753,6 +5753,45 @@
       return state.showExcluded ? "Hiding excluded results is off" : "Hiding excluded results is on";
     }, { align: "center" });
 
+    function downloadEventsExport(format) {
+      var url = "api/export/events?format=" + encodeURIComponent(format);
+      if (!state.showExcluded) url += "&excluded=false";
+      var a = document.createElement("a");
+      a.href = url;
+      var ext = format === "csv" ? "csv" : "json";
+      a.download = "screenspace_events." + ext;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+    }
+
+    var exportBtn = qs("#exportEventsBtn");
+    var exportMenu = qs("#exportEventsMenu");
+    if (exportBtn && exportMenu) {
+      attachHoverTooltip(exportBtn, "Export events", { align: "center" });
+      var closeExportMenu = function () {
+        exportMenu.classList.add("hidden");
+        exportBtn.setAttribute("aria-expanded", "false");
+      };
+      exportBtn.addEventListener("click", function (e) {
+        e.stopPropagation();
+        var open = exportMenu.classList.toggle("hidden");
+        exportBtn.setAttribute("aria-expanded", open ? "false" : "true");
+      });
+      exportMenu.addEventListener("click", function (e) {
+        var item = e.target.closest(".rp-export-item");
+        if (!item) return;
+        e.stopPropagation();
+        downloadEventsExport(item.dataset.format);
+        closeExportMenu();
+      });
+      document.addEventListener("click", function (e) {
+        if (exportMenu.classList.contains("hidden")) return;
+        if (e.target.closest("#exportEventsWrap")) return;
+        closeExportMenu();
+      });
+    }
+
     var certaintySlider = qs("#certaintyCutoff");
     certaintySlider.addEventListener("input", function () {
       state.certaintyCutoff = parseInt(this.value, 10) / 100;

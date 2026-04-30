@@ -43,6 +43,7 @@ node_modules/
 /*.html
 /*.gif
 /*.png
+*.csv
 
 # Files we want to keep
 !package.json
