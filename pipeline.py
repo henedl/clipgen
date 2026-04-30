@@ -168,6 +168,7 @@ def _process_single_clip_segments(
     output_format: str = "clip",
     collect_paths: bool = False,
     include_severity: bool = False,
+    cancel_flag: Callable[[], bool] | None = None,
 ) -> tuple[int, list[tuple[str, int]]]:
     """Process one clip's segments: run ffmpeg for each (start, end), optionally collect output paths.
 
@@ -180,6 +181,9 @@ def _process_single_clip_segments(
         filename_prefix: Prefix for output filename (e.g. '_reel_part_' for reel)
         collect_paths: If True, return list of (output_path, time_index) pairs; otherwise return empty list
         include_severity: If True and clip has severity, include [Severity] in filename
+        cancel_flag: Optional callable; checked before each segment and forwarded to
+            ffmpeg helpers so an in-flight encode can be terminated. Already-finished
+            segments are kept; the partial output of the killed segment is unlinked.
 
     Returns:
         (number of segments successfully generated, list of (out_path, time_index) pairs
@@ -212,6 +216,8 @@ def _process_single_clip_segments(
             source_resolution = f"{props['width']}x{props['height']}"
 
     for time_idx, (start_time, end_time) in enumerate(clip["times"]):
+        if cancel_flag and cancel_flag():
+            break
         try:
             out_name = files.get_unique_filename(template, file_format=file_extension)
             if config.DEBUGGING:
@@ -234,16 +240,21 @@ def _process_single_clip_segments(
                 start_pos=start_time,
                 end_pos=end_time,
                 reencode=config.REENCODING,
+                cancel_flag=cancel_flag,
             )
             if ok and config.TITLECARDS_ENABLED:
                 ok = titlecards.wrap_clip_with_cards(
-                    clip, out_name, resolution=source_resolution
+                    clip,
+                    out_name,
+                    resolution=source_resolution,
+                    cancel_flag=cancel_flag,
                 )
         elif output_format == "screen":
             ok = video.extract_screenshot(
                 input_file=base_video,
                 output_file=out_name,
                 timestamp=start_time,
+                cancel_flag=cancel_flag,
             )
         else:  # output_format == 'gif'
             ok = video.extract_gif(
@@ -251,11 +262,19 @@ def _process_single_clip_segments(
                 output_file=out_name,
                 timestamp=start_time,
                 duration_seconds=config.DEFAULT_GIF_DURATION_SECONDS,
+                cancel_flag=cancel_flag,
             )
         if ok:
             generated += 1
             if collect_paths:
                 output_paths.append((out_name, time_idx))
+        elif cancel_flag and cancel_flag():
+            # Killed mid-encode: the partial output is corrupt; remove it.
+            try:
+                Path(out_name).unlink(missing_ok=True)
+            except OSError:
+                pass
+            break
     return (generated, output_paths)
 
 
@@ -525,6 +544,8 @@ def process_clips(
     clips_list: list[ClipRecord],
     output_format: str = "clip",
     include_severity: bool = False,
+    *,
+    cancel_flag: Callable[[], bool] | None = None,
 ) -> tuple[int, list[dict[str, Any]]]:
     """Process and generate outputs from the clips list.
 
@@ -532,6 +553,11 @@ def process_clips(
     1. Sequential preparation (user prompts, fuzzy video matching)
     2. Parallel ffmpeg execution via ThreadPoolExecutor (when workers >= 2)
     3. Sequential post-processing (artifact records, transcription)
+
+    When *cancel_flag* is supplied and returns True, the pipeline short-circuits at
+    the next safe boundary. Already-completed segments are kept (each clip is a
+    standalone deliverable); in-flight ffmpeg encodes are terminated and their
+    partial outputs unlinked.
 
     Returns:
         Tuple of (count of files generated, list of artifact records).
@@ -568,6 +594,8 @@ def process_clips(
         with progress:
             prep_task = progress.add_task("Preparing clips", total=len(clips_list))
             for clip in clips_list:
+                if cancel_flag and cancel_flag():
+                    break
                 clip, base_video = _prepare_and_check_clip(
                     clip, missing_videos, fuzzy_matches
                 )
@@ -581,6 +609,8 @@ def process_clips(
         _active_progress = None
     else:
         for clip in clips_list:
+            if cancel_flag and cancel_flag():
+                break
             clip, base_video = _prepare_and_check_clip(
                 clip, missing_videos, fuzzy_matches
             )
@@ -623,10 +653,15 @@ def process_clips(
                             output_format=output_format,
                             collect_paths=True,
                             include_severity=include_severity,
+                            cancel_flag=cancel_flag,
                         ): idx
                         for idx, (clip, base_video) in enumerate(prepared)
                     }
                     for future in concurrent.futures.as_completed(future_to_idx):
+                        if cancel_flag and cancel_flag():
+                            for f in future_to_idx:
+                                f.cancel()
+                            break
                         idx = future_to_idx[future]
                         try:
                             results[idx] = future.result()
@@ -654,10 +689,15 @@ def process_clips(
                         output_format=output_format,
                         collect_paths=True,
                         include_severity=include_severity,
+                        cancel_flag=cancel_flag,
                     ): idx
                     for idx, (clip, base_video) in enumerate(prepared)
                 }
                 for future in concurrent.futures.as_completed(future_to_idx):
+                    if cancel_flag and cancel_flag():
+                        for f in future_to_idx:
+                            f.cancel()
+                        break
                     idx = future_to_idx[future]
                     try:
                         results[idx] = future.result()
@@ -678,6 +718,8 @@ def process_clips(
             with progress:
                 cut_task = progress.add_task("Processing clips", total=len(prepared))
                 for idx, (clip, base_video) in enumerate(prepared):
+                    if cancel_flag and cancel_flag():
+                        break
                     desc_preview = (clip.get("desc") or "")[
                         : config.PROGRESS_DESCRIPTION_LENGTH
                     ]
@@ -693,10 +735,13 @@ def process_clips(
                         output_format=output_format,
                         collect_paths=True,
                         include_severity=include_severity,
+                        cancel_flag=cancel_flag,
                     )
                     progress.update(cut_task, advance=1)
         else:
             for idx, (clip, base_video) in enumerate(prepared):
+                if cancel_flag and cancel_flag():
+                    break
                 if (
                     getattr(config, "VERBOSITY", config.STANDARD) >= config.VERBOSE
                     and len(prepared) > 1
@@ -711,6 +756,7 @@ def process_clips(
                     output_format=output_format,
                     collect_paths=True,
                     include_severity=include_severity,
+                    cancel_flag=cancel_flag,
                 )
 
     # -- Phase 3: Build artifacts and transcribe (sequential) ------------------
@@ -739,7 +785,7 @@ def process_clips(
             )
             all_artifacts.extend(clip_artifacts)
 
-    if config.TRANSCRIBE_ENABLED:
+    if config.TRANSCRIBE_ENABLED and not (cancel_flag and cancel_flag()):
         transcribe_items = [
             (clip, base_video, results[idx][1])
             for idx, (clip, base_video) in enumerate(prepared)

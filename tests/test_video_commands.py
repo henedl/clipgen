@@ -583,3 +583,87 @@ def test_extract_frame_at_timestamp_debug_mode(monkeypatch):
     frame = video.extract_frame_at_timestamp("/fake.mp4", 0.0)
     assert frame is not None
     assert frame.shape == (1080, 1920, 3)
+
+
+# -- cancel_flag forwarding --
+
+
+def _captured_run_ffmpeg(captured):
+    def _fake(_cmd, **kwargs):
+        captured.append(kwargs.get("cancel_flag"))
+        return subprocess.CompletedProcess(args=["ffmpeg"], returncode=0, stderr="")
+
+    return _fake
+
+
+def test_run_ffmpeg_forwards_cancel_flag(monkeypatch):
+    monkeypatch.setattr(video.Path, "is_file", lambda self: True)
+    monkeypatch.setattr(
+        video.Path, "stat", lambda self: type("_S", (), {"st_size": 1})()
+    )
+    monkeypatch.setattr(video, "get_duration", lambda *_a: 5)
+    monkeypatch.setattr(video, "get_file_duration", lambda *_a: 60)
+    monkeypatch.setattr(video, "verify_output_file", lambda *_a, **_kw: True)
+    monkeypatch.setattr(video.config, "MAX_FILESIZE_MB", 0)
+
+    captured: list = []
+    monkeypatch.setattr(video, "run_ffmpeg_process", _captured_run_ffmpeg(captured))
+
+    sentinel = lambda: False  # noqa: E731
+    ok = video.run_ffmpeg(
+        "in.mp4", "out.mp4", "00:10", "00:15", reencode=False, cancel_flag=sentinel
+    )
+    assert ok is True
+    assert captured == [sentinel]
+
+
+def test_extract_screenshot_forwards_cancel_flag(monkeypatch):
+    monkeypatch.setattr(video.Path, "is_file", lambda self: True)
+    monkeypatch.setattr(video, "get_file_duration", lambda *_a: 60)
+    monkeypatch.setattr(video, "verify_output_file", lambda *_a, **_kw: True)
+    monkeypatch.setattr(
+        video.Path, "stat", lambda self: type("_S", (), {"st_size": 1})()
+    )
+
+    captured: list = []
+    monkeypatch.setattr(video, "run_ffmpeg_process", _captured_run_ffmpeg(captured))
+
+    sentinel = lambda: False  # noqa: E731
+    ok = video.extract_screenshot("in.mp4", "out.png", "00:10", cancel_flag=sentinel)
+    assert ok is True
+    assert captured == [sentinel]
+
+
+def test_extract_gif_forwards_cancel_flag(monkeypatch):
+    monkeypatch.setattr(video.Path, "is_file", lambda self: True)
+    monkeypatch.setattr(video, "get_file_duration", lambda *_a: 60)
+    monkeypatch.setattr(video, "verify_output_file", lambda *_a, **_kw: True)
+    monkeypatch.setattr(
+        video.Path, "stat", lambda self: type("_S", (), {"st_size": 1})()
+    )
+
+    captured: list = []
+    monkeypatch.setattr(video, "run_ffmpeg_process", _captured_run_ffmpeg(captured))
+
+    sentinel = lambda: False  # noqa: E731
+    ok = video.extract_gif("in.mp4", "out.gif", "00:10", 5, cancel_flag=sentinel)
+    assert ok is True
+    assert captured == [sentinel]
+
+
+def test_compress_to_size_forwards_cancel_flag_to_both_passes(monkeypatch, tmp_path):
+    big = tmp_path / "big.mp4"
+    big.write_bytes(b"x" * 1024)
+    monkeypatch.setattr(video, "get_file_duration", lambda *_a: 10)
+    monkeypatch.setattr(video, "verify_output_file", lambda *_a, **_kw: True)
+
+    captured: list = []
+    monkeypatch.setattr(video, "run_ffmpeg_process", _captured_run_ffmpeg(captured))
+
+    # Stub os.replace and unlink so the test doesn't move/delete real files.
+    monkeypatch.setattr(video.os, "replace", lambda *_a, **_kw: None)
+
+    sentinel = lambda: False  # noqa: E731
+    # Target tiny size so compression runs both passes.
+    video.compress_to_size(str(big), 0.0001, cancel_flag=sentinel)
+    assert captured == [sentinel, sentinel]

@@ -307,7 +307,7 @@ def test_pipeline_skips_per_output_probe(monkeypatch, make_clip):
 
     wrap_calls = []
 
-    def fake_wrap(_clip, out_name, resolution=None):
+    def fake_wrap(_clip, out_name, resolution=None, **_kwargs):
         wrap_calls.append((out_name, resolution))
         return True
 
