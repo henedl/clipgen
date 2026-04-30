@@ -5,6 +5,7 @@
 Clipgen's transcript layer should follow the same **deterministic pre-pass → LLM → deterministic post-pass** architecture used by ghost-pepper. The LLM is the expensive middle step; the surrounding passes handle high-confidence substitutions cheaply and make the LLM's job smaller and more reliable.
 
 The goal is to produce clean, readable transcripts from Whisper output that can be:
+
 - Stored alongside clips in the manifest
 - Used as navigation/search within Studio
 - Fed back into Screenspace for event label disambiguation
@@ -16,6 +17,7 @@ The goal is to produce clean, readable transcripts from Whisper output that can 
 Use **Qwen 3 0.6B or 1.7B** (MLX-quantized) via `mlx_lm` or `llama-cpp-python`.
 
 Rationale:
+
 - Ghost-pepper's 0.8B default achieves acceptable quality at ~1–2s latency. UX research transcripts are typically longer than dictation inputs, so a 1.7B may be warranted.
 - Both sizes run entirely locally on Apple Silicon, consistent with clipgen's local-first design.
 - Qwen 3 supports `<think>` reasoning blocks — strip these in post-processing (see ghost-pepper's `sanitizeCleanupOutput` pattern).
@@ -25,7 +27,7 @@ Rationale:
 
 ## Pipeline Architecture
 
-```
+``` ascii
 Whisper output
      │
      ▼
@@ -57,7 +59,7 @@ If the LLM is unavailable or returns unusable output, fall back to deterministic
 
 Adapted from ghost-pepper's `defaultPrompt` for the UX research context.
 
-```
+``` ascii
 Your job is to clean up transcribed audio from a UX research session.
 The audio transcription engine can make mistakes and will sometimes
 transcribe things in a way that is not how they should be written in text.
@@ -102,7 +104,7 @@ Output: What happens if I click cancel?
 
 If session-specific context is available (product name, feature list, participant names), append it as an additional section:
 
-```
+``` yaml
 <SESSION-CONTEXT>
 Product: [product name]
 Features mentioned in this session: [list]
@@ -117,14 +119,16 @@ Participant name: [name], Facilitator name: [name]
 Structured as two lists, injected via `<CORRECTION-HINTS>`:
 
 **`commonly_misheard`** — wrong → right substitutions applied in pre-pass:
-```
+
+``` ascii
 clip gen → clipgen
 screen space → Screenspace
 G sheets → Google Sheets
 ```
 
 **`preferred_transcriptions`** — preserve-exactly terms re-applied in post-pass:
-```
+
+``` ascii
 clipgen
 Screenspace
 ffmpeg
@@ -174,6 +178,7 @@ The cleaned transcript feeds Screenspace's event detection in two ways:
 ## Chunking Strategy
 
 Whisper produces per-segment output. Process at the **segment level**, not the full transcript, to:
+
 - Keep LLM context windows small (faster, cheaper)
 - Preserve segment-level timestamps for Studio navigation
 - Allow incremental processing as clips are generated
