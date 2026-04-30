@@ -295,6 +295,37 @@ body {
   margin-left: var(--space-1);
 }
 
+.tab-status-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--color-pulse);
+  margin-right: var(--space-1);
+  vertical-align: middle;
+  animation: studio-tab-pulse 1s ease-in-out infinite;
+}
+
+.tab-status-dot.hidden {
+  display: none;
+}
+
+@keyframes studio-tab-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tab-status-dot {
+    animation: none;
+  }
+}
+
 #intakePanel,
 #trIntakePanel {
   flex: 1;

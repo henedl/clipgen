@@ -65,6 +65,8 @@
     trIntakeMarks: [],
     trIntakeClusters: [],
     trIntakePollTimer: null,
+    intakeStatusTimer: null,
+    trIntakeStatusTimer: null,
     trIntakeFilterCategory: "",
     trIntakeFilterParticipants: [],
     trIntakeFilterText: "",
@@ -3297,6 +3299,62 @@
     return clusters;
   }
 
+  function setTabDot(elId, on) {
+    var el = document.getElementById(elId);
+    if (!el) return;
+    if (on) el.classList.remove("hidden");
+    else el.classList.add("hidden");
+  }
+
+  function pollIntakeStatus() {
+    apiGet("../screenspace/api/tasks")
+      .then(function (data) {
+        if (!data || !data.ok) {
+          setTabDot("intakeTabDot", false);
+          return;
+        }
+        var tasks = data.tasks || [];
+        var running = false;
+        var hasQueued = false;
+        for (var i = 0; i < tasks.length; i++) {
+          if (tasks[i].status === "running") { running = true; break; }
+          if (tasks[i].status === "queued") hasQueued = true;
+        }
+        setTabDot("intakeTabDot", running || (data.worker_alive && hasQueued));
+      })
+      .catch(function () {
+        setTabDot("intakeTabDot", false);
+      });
+  }
+
+  function pollTrIntakeStatus() {
+    var statusP = apiGet("../transcripts/api/transcribe/status").catch(function () { return null; });
+    var modelP = apiGet("../transcripts/api/transcribe/model-status").catch(function () { return null; });
+    var partsP = apiGet("../transcripts/api/participants").catch(function () { return null; });
+    Promise.all([statusP, modelP, partsP]).then(function (results) {
+      var status = results[0];
+      var model = results[1];
+      var parts = results[2];
+      var running = false;
+      if (status && status.ok && Array.isArray(status.tasks)) {
+        for (var i = 0; i < status.tasks.length; i++) {
+          if (status.tasks[i].status === "running") { running = true; break; }
+        }
+      }
+      if (!running && model && model.ok && model.warming) running = true;
+      if (!running && parts && parts.ok && Array.isArray(parts.participants)) {
+        for (var j = 0; j < parts.participants.length; j++) {
+          var agents = parts.participants[j].agents || {};
+          if (agents.summary === "running" || agents.citations === "running") {
+            running = true;
+            break;
+          }
+        }
+      }
+      setTabDot("trIntakeTabDot", running);
+    });
+  }
+
   function pollIntakeEvents() {
     apiGet("../screenspace/api/events?excluded=false")
       .then(function (data) {
@@ -4469,6 +4527,10 @@
     initFrontendSwitcher();
     initIntake();
     initTranscriptIntake();
+    pollIntakeStatus();
+    pollTrIntakeStatus();
+    state.intakeStatusTimer = setInterval(pollIntakeStatus, 5000);
+    state.trIntakeStatusTimer = setInterval(pollTrIntakeStatus, 5000);
     window.addEventListener("resize", function () {
       computeGridMaxHeight();
       sizeIntakeCanvas();
