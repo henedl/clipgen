@@ -4177,8 +4177,6 @@
     var btn = qs("#runBtn");
     var hasRegion = state.runRegions.length > 0 || !!state.activeRegion;
     var hasParticipants = state.runParticipants.length > 0 || !!state.selectedParticipant;
-    // Template with uploaded image can run without a region (full-frame scan)
-    var templateNoRegion = state.activeWorkflow === "template" && !!state.uploadedTemplate;
     // Multitool uses per-step regions instead of a global region
     var isMultitool = state.activeWorkflow === "multitool";
     var multitoolReady = isMultitool && state.multitoolSteps.length >= 2;
@@ -4195,8 +4193,16 @@
         btn.removeAttribute("data-tooltip");
       }
     } else {
-      btn.disabled = (!hasRegion && !templateNoRegion) || !hasParticipants;
-      if (!hasRegion && !templateNoRegion) {
+      var isTemplate = state.activeWorkflow === "template";
+      var hasUploadedTemplate = !!state.uploadedTemplate;
+      // Template scans full frames regardless of region selection; the region
+      // (or uploaded image) only supplies the template patch.
+      var templateMissingPatch = isTemplate && !hasRegion && !hasUploadedTemplate;
+      var nonTemplateMissingRegion = !isTemplate && !hasRegion;
+      btn.disabled = nonTemplateMissingRegion || templateMissingPatch || !hasParticipants;
+      if (templateMissingPatch) {
+        btn.setAttribute("data-tooltip", "Upload a template image or pick a region first");
+      } else if (nonTemplateMissingRegion) {
         btn.setAttribute("data-tooltip", "Select a region first");
       } else if (!hasParticipants) {
         btn.setAttribute("data-tooltip", "Select participants to run");
