@@ -46,9 +46,6 @@ node_modules/
 *.csv
 
 # Files we want to keep
-!package.json
-!bun.lock
-!bun.lockb
 !assets/titlecard.png
 !assets/endcard.png
 !assets/icons/*
