@@ -1245,3 +1245,73 @@ def _install_persist_spy(monkeypatch):
 
     monkeypatch.setattr(screenspace_server, "_do_persist", spy)
     return calls
+
+
+# ---- Export endpoint ----
+
+
+def test_export_events_json(client):
+    screenspace_server._manifest["events"] = [
+        _sample_event("ev_1"),
+        _sample_event("ev_2", excluded=True),
+    ]
+    resp = client.get("/screenspace/api/export/events?format=json")
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["ok"] is True
+    assert len(data["events"]) == 2
+    # Metadata should be hoisted to top-level "magnitude"
+    assert any("magnitude" in e for e in data["events"])
+
+
+def test_export_events_csv(client):
+    import csv as _csv
+    import io as _io
+
+    screenspace_server._manifest["events"] = [
+        _sample_event("ev_1"),
+        _sample_event("ev_2", participant="P02"),
+    ]
+    resp = client.get("/screenspace/api/export/events?format=csv")
+    assert resp.status_code == 200
+    assert resp.content_type.startswith("text/csv")
+    assert 'attachment; filename="screenspace_events.csv"' in resp.headers.get(
+        "Content-Disposition", ""
+    )
+    text = resp.get_data(as_text=True)
+    reader = _csv.DictReader(_io.StringIO(text))
+    rows = list(reader)
+    assert len(rows) == 2
+    fieldnames = reader.fieldnames
+    assert fieldnames is not None
+    assert "magnitude" in fieldnames
+    assert fieldnames[0] == "id"
+
+
+def test_export_events_filter_excluded_false(client):
+    screenspace_server._manifest["events"] = [
+        _sample_event("ev_1"),
+        _sample_event("ev_2", excluded=True),
+    ]
+    resp = client.get("/screenspace/api/export/events?format=json&excluded=false")
+    data = resp.get_json()
+    assert len(data["events"]) == 1
+    assert data["events"][0]["id"] == "ev_1"
+
+
+def test_export_events_filter_participant(client):
+    screenspace_server._manifest["events"] = [
+        _sample_event("ev_1", participant="P01"),
+        _sample_event("ev_2", participant="P02"),
+    ]
+    resp = client.get("/screenspace/api/export/events?format=json&participant=P02")
+    data = resp.get_json()
+    assert len(data["events"]) == 1
+    assert data["events"][0]["participant"] == "P02"
+
+
+def test_export_events_unsupported_format(client):
+    resp = client.get("/screenspace/api/export/events?format=xml")
+    assert resp.status_code == 400
+    data = resp.get_json()
+    assert data["ok"] is False

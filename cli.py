@@ -296,6 +296,11 @@ Note: Non-interactive mode (using -b, -l, -r, -C, -c, -p, -k, -S, -M, -R, or -T)
         help="Write artifact metadata to a cumulative manifest JSON file alongside generated clips",
     )
     viewer_manifest.add_argument(
+        "--export",
+        action="store_true",
+        help="Export analysis-ready JSON+CSV from manifests in the output directory (Screenspace events, Insights, Transcripts). Skips manifests that aren't present.",
+    )
+    viewer_manifest.add_argument(
         "--timeline-viewer",
         action="store_true",
         help="Batch-export all clips and generate a per-participant timeline HTML viewer",
@@ -1757,21 +1762,27 @@ _EXCLUSIVE_MODES: tuple[_ModeSpec, ...] = (
         truthy=lambda a: bool(getattr(a, "insights", False)),
         error="--insights cannot be combined with mode, format, or --viewer/--regenerate/--studio/--screenspace flags.",
         hint="Only -i/-o (directories) and -v (verbose) may be used alongside --insights.",
-        blocks_modes=("timeline_viewer", "studio", "screenspace", "transcripts"),
+        blocks_modes=(
+            "timeline_viewer",
+            "studio",
+            "screenspace",
+            "transcripts",
+            "export",
+        ),
     ),
     _ModeSpec(
         key="screenspace",
         truthy=lambda a: bool(getattr(a, "screenspace", False)),
         error="--screenspace cannot be combined with mode, format, or --viewer/--regenerate/--studio/--insights flags.",
         hint="Only -s (spreadsheet), -i/-o (directories), and -v (verbose) may be used alongside --screenspace.",
-        blocks_modes=("timeline_viewer", "studio", "insights", "transcripts"),
+        blocks_modes=("timeline_viewer", "studio", "insights", "transcripts", "export"),
     ),
     _ModeSpec(
         key="transcripts",
         truthy=lambda a: bool(getattr(a, "transcripts", False)),
         error="--transcripts cannot be combined with mode, format, or --viewer/--regenerate/--studio/--insights/--screenspace flags.",
         hint="Only -s (spreadsheet), -i/-o (directories), and -v (verbose) may be used alongside --transcripts.",
-        blocks_modes=("timeline_viewer", "studio", "insights", "screenspace"),
+        blocks_modes=("timeline_viewer", "studio", "insights", "screenspace", "export"),
     ),
     _ModeSpec(
         key="gallery",
@@ -1783,7 +1794,13 @@ _EXCLUSIVE_MODES: tuple[_ModeSpec, ...] = (
         selector_attrs=tuple(
             a for a in _BASE_SELECTOR_ATTRS if a not in ("screen", "gif")
         ),
-        blocks_modes=("timeline_viewer", "studio", "screenspace", "transcripts"),
+        blocks_modes=(
+            "timeline_viewer",
+            "studio",
+            "screenspace",
+            "transcripts",
+            "export",
+        ),
     ),
     _ModeSpec(
         key="pre_transcribe",
@@ -1799,6 +1816,23 @@ _EXCLUSIVE_MODES: tuple[_ModeSpec, ...] = (
             "screenspace",
             "transcripts",
             "gallery",
+            "export",
+        ),
+    ),
+    _ModeSpec(
+        key="export",
+        truthy=lambda a: bool(getattr(a, "export", False)),
+        error="--export cannot be combined with mode, format, or other standalone flags.",
+        hint="Use --export with -i/-o (directories) and -v (verbose) only.",
+        selector_attrs=_BASE_SELECTOR_ATTRS + ("highlights",),
+        blocks_modes=(
+            "timeline_viewer",
+            "studio",
+            "insights",
+            "screenspace",
+            "transcripts",
+            "gallery",
+            "pre_transcribe",
         ),
     ),
     _ModeSpec(
@@ -1815,6 +1849,7 @@ _EXCLUSIVE_MODES: tuple[_ModeSpec, ...] = (
             "transcripts",
             "gallery",
             "pre_transcribe",
+            "export",
             "ss_list_regions",
             "ss_list_stashes",
             "ss_list_tasks",
@@ -1836,6 +1871,7 @@ _EXCLUSIVE_MODES: tuple[_ModeSpec, ...] = (
             "transcripts",
             "gallery",
             "pre_transcribe",
+            "export",
             "ss_task",
             "ss_list_stashes",
             "ss_list_tasks",
@@ -1857,6 +1893,7 @@ _EXCLUSIVE_MODES: tuple[_ModeSpec, ...] = (
             "transcripts",
             "gallery",
             "pre_transcribe",
+            "export",
             "ss_task",
             "ss_list_regions",
             "ss_list_tasks",
@@ -1878,6 +1915,7 @@ _EXCLUSIVE_MODES: tuple[_ModeSpec, ...] = (
             "transcripts",
             "gallery",
             "pre_transcribe",
+            "export",
             "ss_task",
             "ss_list_regions",
             "ss_list_stashes",
@@ -1899,6 +1937,7 @@ _EXCLUSIVE_MODES: tuple[_ModeSpec, ...] = (
             "transcripts",
             "gallery",
             "pre_transcribe",
+            "export",
             "ss_task",
             "ss_list_regions",
             "ss_list_stashes",
@@ -1920,6 +1959,7 @@ _EXCLUSIVE_MODES: tuple[_ModeSpec, ...] = (
             "transcripts",
             "gallery",
             "pre_transcribe",
+            "export",
             "ss_task",
             "ss_list_regions",
             "ss_list_stashes",
@@ -2024,6 +2064,12 @@ def _dispatch_standalone_mode(
 
         server.start_combined_server(worksheet=None, default_page="insights")
         return True
+
+    # Standalone analysis-data export
+    if getattr(args, "export", False):
+        import data_export
+
+        sys.exit(data_export.run_cli_export())
 
     # Standalone Screenspace CLI tasks (no UI)
     if getattr(args, "ss_list_regions", False):
@@ -2132,6 +2178,7 @@ def main() -> None:
         or modes["ss_list_tasks"]
         or modes["summarize"]
         or modes["citations"]
+        or modes["export"]
         or pre_transcribe_mode
     )
 

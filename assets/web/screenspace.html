@@ -199,6 +199,15 @@
           <button id="excludeNonVisibleBtn" class="rp-icon-btn hidden" type="button" aria-label="Exclude hidden">
             <span class="rp-icon-btn-icon rp-icon-scissors"></span>
           </button>
+          <div id="exportEventsWrap" class="rp-export-wrap">
+            <button id="exportEventsBtn" class="rp-icon-btn" type="button" aria-label="Export events" aria-haspopup="menu" aria-expanded="false">
+              <span class="rp-icon-btn-icon rp-icon-download"></span>
+            </button>
+            <div id="exportEventsMenu" class="rp-export-menu hidden" role="menu">
+              <button class="rp-export-item" type="button" role="menuitem" data-format="csv">CSV</button>
+              <button class="rp-export-item" type="button" role="menuitem" data-format="json">JSON</button>
+            </div>
+          </div>
         </div>
         <div id="resultsSwitcherPanel" class="rp-switcher-panel hidden"></div>
       </div>
