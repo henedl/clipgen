@@ -36,14 +36,6 @@
 
   // ---- Helpers ----
 
-  function countBucketArtifacts(insight) {
-    return (
-      insight.causes.artifacts.length +
-      insight.behaviors.artifacts.length +
-      insight.impacts.artifacts.length
-    );
-  }
-
   function findArtifact(id) {
     for (var i = 0; i < state.artifacts.length; i++) {
       if (state.artifacts[i].id === id) return state.artifacts[i];
@@ -75,51 +67,23 @@
     qs("#insightCount").textContent = state.insights.length + " insights";
   }
 
-  // ---- Filter system (ported from viewer.js) ----
-
-  function uniqueValues(field) {
-    var seen = {};
-    var vals = [];
-    for (var i = 0; i < state.artifacts.length; i++) {
-      var v = (state.artifacts[i][field] || "").trim();
-      if (v && !seen[v]) {
-        seen[v] = true;
-        vals.push(v);
-      }
-    }
-    return vals.sort();
-  }
-
-  function fillSelect(sel, values, allLabel) {
-    while (sel.options.length > 0) sel.remove(0);
-    var frag = document.createDocumentFragment();
-    var opt = document.createElement("option");
-    opt.value = "";
-    opt.textContent = allLabel;
-    frag.appendChild(opt);
-    for (var i = 0; i < values.length; i++) {
-      var o = document.createElement("option");
-      o.value = values[i];
-      o.textContent = values[i];
-      frag.appendChild(o);
-    }
-    sel.appendChild(frag);
-  }
+  // ---- Filter system ----
 
   function populateFilters() {
-    fillSelect(
+    var trimmed = { trim: true };
+    populateSelect(
       qs("#filterParticipant"),
-      uniqueValues("participant"),
+      uniqueFieldValues(state.artifacts, "participant", trimmed),
       "All participants"
     );
-    fillSelect(
+    populateSelect(
       qs("#filterCategory"),
-      uniqueValues("category"),
+      uniqueFieldValues(state.artifacts, "category", trimmed),
       "All categories"
     );
-    var sevs = uniqueValues("severity");
+    var sevs = uniqueFieldValues(state.artifacts, "severity", trimmed);
     var sevSel = qs("#filterSeverity");
-    fillSelect(sevSel, sevs, "All severities");
+    populateSelect(sevSel, sevs, "All severities");
     sevSel.parentElement.style.display = sevs.length ? "" : "none";
 
     var types = {};
@@ -881,7 +845,7 @@
     var statusCls = insight.status === "final" ? "status-final" : "status-draft";
     header.appendChild(el("span", "insight-status-badge " + statusCls, insight.status || "draft"));
 
-    var count = countBucketArtifacts(insight);
+    var count = countInsightArtifacts(insight);
     header.appendChild(el("span", "insight-collapsed-count", count + " artifact" + (count !== 1 ? "s" : "")));
 
     header.addEventListener("click", function () {

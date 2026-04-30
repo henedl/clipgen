@@ -107,6 +107,10 @@
 
   // ---- Clip thumbnails ----
 
+  // Off-DOM video element seeks to ~25% (clamped to 0.5–5s) and captures a
+  // 320x180 JPEG poster. The 8s timeout guards against clips that never fire
+  // 'seeked' (corrupt files, codec stalls); finish() is idempotent so timeout
+  // and seek both safely call it. Blob URL is owned by _thumbCache.
   function generateClipThumbnail(mediaEl, artifact, callback) {
     var done = false;
     function finish() {
@@ -699,11 +703,11 @@
   // ---- Filters ----
 
   function populateFilters() {
-    var categories = uniqueValues("category");
-    var participants = uniqueValues("participant");
+    var categories = uniqueFieldValues(state.artifacts, "category");
+    var participants = uniqueFieldValues(state.artifacts, "participant");
 
-    fillSelect("#filterCategory", categories, "All categories");
-    fillSelect("#filterParticipant", participants, "All participants");
+    populateSelect(qs("#filterCategory"), categories, "All categories");
+    populateSelect(qs("#filterParticipant"), participants, "All participants");
 
     var severities = sortedUniqueSeverities();
     var wrap = qs("#filterSeverityWrap");
@@ -712,7 +716,7 @@
         wrap.classList.add("hidden");
       } else {
         wrap.classList.remove("hidden");
-        fillSelect("#filterSeverity", severities, "All severities");
+        populateSelect(qs("#filterSeverity"), severities, "All severities");
       }
     }
   }
@@ -791,31 +795,6 @@
         fieldset.style.display = "";
       }
     }
-  }
-
-  function uniqueValues(field) {
-    var seen = {};
-    state.artifacts.forEach(function (a) {
-      var v = a[field];
-      if (v) seen[v] = true;
-    });
-    return Object.keys(seen).sort();
-  }
-
-  function fillSelect(sel, values, allLabel) {
-    var select = qs(sel);
-    if (!select) return;
-    select.innerHTML = "";
-    var optAll = document.createElement("option");
-    optAll.value = "";
-    optAll.textContent = allLabel;
-    select.appendChild(optAll);
-    values.forEach(function (v) {
-      var opt = document.createElement("option");
-      opt.value = v;
-      opt.textContent = v;
-      select.appendChild(opt);
-    });
   }
 
   function bindFilterEvents() {

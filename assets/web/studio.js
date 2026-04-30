@@ -1287,7 +1287,7 @@
     for (var k = 0; k < values.length; k++) {
       if (values[k] !== null && values[k] > max) max = values[k];
     }
-    var hm = getComputedStyle(document.documentElement).getPropertyValue("--color-heatmap").trim() || "168, 130, 214";
+    var hm = getCSSVar("--color-heatmap", "168, 130, 214");
     for (var m = 0; m < cells.length; m++) {
       if (values[m] !== null && max > 0) {
         var t = values[m] / max;
@@ -3846,7 +3846,7 @@
 
   function trIntakeCategoryColor(key) {
     var entry = TR_INTAKE_CATEGORIES[key] || TR_INTAKE_CATEGORIES.bookmark;
-    return getComputedStyle(document.documentElement).getPropertyValue(entry.token).trim();
+    return getCSSVar(entry.token, "");
   }
 
   function _syncMarkCategoriesFromSettings(settings) {

@@ -268,6 +268,25 @@ var clamp = function (val, min, max) {
   return Math.max(min, Math.min(max, val));
 };
 
+// Median of a numeric array. Returns 0 for empty input.
+var median = function (arr) {
+  if (!arr.length) return 0;
+  var sorted = arr.slice().sort(function (a, b) { return a - b; });
+  var mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+};
+
+// Population standard deviation. Returns 0 for arrays shorter than 2.
+var stddev = function (nums) {
+  if (nums.length < 2) return 0;
+  var sum = 0;
+  for (var i = 0; i < nums.length; i++) sum += nums[i];
+  var mean = sum / nums.length;
+  var sq = 0;
+  for (var j = 0; j < nums.length; j++) sq += (nums[j] - mean) * (nums[j] - mean);
+  return Math.sqrt(sq / nums.length);
+};
+
 // ---- Tooltip positioning ----
 
 // Position a tooltip element centered above an anchor rect, flipping below
@@ -306,6 +325,17 @@ var hexToRgba = function (hex, alpha) {
   var g = parseInt(hex.slice(3, 5), 16);
   var b = parseInt(hex.slice(5, 7), 16);
   return "rgba(" + r + "," + g + "," + b + "," + alpha + ")";
+};
+
+// Read a CSS custom property from :root, returning fallback when unset/empty.
+// Pages use this for theme-aware values (--color-accent, --color-heatmap, ...).
+var getCSSVar = function (name, fallback) {
+  try {
+    var v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+    return v || fallback;
+  } catch (_) {
+    return fallback;
+  }
 };
 
 var SHOW_TOAST_DEFAULT_MS = 3000;
@@ -451,6 +481,52 @@ var XREF_BADGES = {
   screenspace: { icon: "squares-2x2", color: "rgba(52, 152, 219, 0.85)" },
   transcript:  { icon: "chat-bubble-bottom-center-text", color: "rgba(16, 163, 74, 0.85)" },
   sheet:       { icon: "table-cells", color: "rgba(234, 179, 8, 0.85)" },
+};
+
+// ---- Insight helpers ----
+
+// Sum of artifacts across all three buckets of an insight record. Shared by
+// the insights builder and the exported insights viewer.
+var countInsightArtifacts = function (insight) {
+  return insight.causes.artifacts.length
+       + insight.behaviors.artifacts.length
+       + insight.impacts.artifacts.length;
+};
+
+// ---- Filter helpers (artifact grids in viewer + insights builder) ----
+
+// Sorted unique non-empty values of `field` across `items`.
+// opts.trim: trim string values before deduping (default false).
+var uniqueFieldValues = function (items, field, opts) {
+  var trim = opts && opts.trim;
+  var seen = {};
+  var out = [];
+  for (var i = 0; i < items.length; i++) {
+    var v = items[i][field];
+    if (v == null) continue;
+    if (trim) v = String(v).trim();
+    if (v && !seen[v]) { seen[v] = true; out.push(v); }
+  }
+  return out.sort();
+};
+
+// Replace a <select>'s options with [allLabel, ...values]. The "all" option
+// has empty value "" so callers can detect it via select.value === "".
+var populateSelect = function (selectEl, values, allLabel) {
+  if (!selectEl) return;
+  selectEl.innerHTML = "";
+  var frag = document.createDocumentFragment();
+  var allOpt = document.createElement("option");
+  allOpt.value = "";
+  allOpt.textContent = allLabel;
+  frag.appendChild(allOpt);
+  for (var i = 0; i < values.length; i++) {
+    var o = document.createElement("option");
+    o.value = values[i];
+    o.textContent = values[i];
+    frag.appendChild(o);
+  }
+  selectEl.appendChild(frag);
 };
 
 // ---- Detector colors ----

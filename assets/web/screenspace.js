@@ -4486,9 +4486,10 @@
   }
 
   // ---- Task queue ----
-  // SVG icons use createElementNS() to build inline SVG from Heroicons paths (assets/icons/).
-  // Pattern: create <svg> with createElementNS, set viewBox/width/height, then append <path>
-  // elements with the d attribute copied from the relevant .svg file in assets/icons/.
+  // TODO: These inline SVG builders predate the project rule against SVG paths
+  // in JS (AGENTS.md "Icons" / "SVG icons" sections). Migrate to the CSS
+  // mask-image pattern — see XREF_BADGES in utils.js and .xref-badge-icon in
+  // tokens.css for the canonical example.
 
   function svgEditIcon() {
     var svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");

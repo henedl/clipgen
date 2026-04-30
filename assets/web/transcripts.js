@@ -1379,11 +1379,6 @@
     });
   }
 
-  function getThemeColor(name, fallback) {
-    var v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
-    return v || fallback;
-  }
-
   function computeTickInterval(visLen) {
     var candidates = [1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600];
     var target = visLen / 8;
@@ -1408,9 +1403,9 @@
     var cssH = canvas.offsetHeight;
     ctx.clearRect(0, 0, cssW, cssH);
 
-    var surfaceAlt = getThemeColor("--color-surface-alt", "#f1ece4");
-    var border = getThemeColor("--color-border", "#e0ddd7");
-    var textDim = getThemeColor("--color-text-dim", "#6b7280");
+    var surfaceAlt = getCSSVar("--color-surface-alt", "#f1ece4");
+    var border = getCSSVar("--color-border", "#e0ddd7");
+    var textDim = getCSSVar("--color-text-dim", "#6b7280");
 
     ctx.fillStyle = surfaceAlt;
     ctx.fillRect(0, 0, cssW, cssH);
@@ -1433,7 +1428,7 @@
     var firstTick = Math.ceil(0 / tickInterval) * tickInterval;
     ctx.strokeStyle = border;
     ctx.fillStyle = textDim;
-    ctx.font = "10px " + getThemeColor("--font-mono", "monospace");
+    ctx.font = "10px " + getCSSVar("--font-mono", "monospace");
     ctx.textAlign = "center";
     ctx.lineWidth = 1;
     for (var t = firstTick; t <= dur; t += tickInterval) {
@@ -1485,7 +1480,7 @@
     var dur = isFinite(v.duration) ? v.duration : 0;
     if (dur <= 0) return;
     var px = (v.currentTime / dur) * cssW;
-    var accent = getThemeColor("--color-accent", "#1d4f72");
+    var accent = getCSSVar("--color-accent", "#1d4f72");
     ctx.strokeStyle = accent;
     ctx.lineWidth = 2;
     ctx.beginPath();
