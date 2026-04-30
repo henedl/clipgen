@@ -2287,6 +2287,7 @@
     qs("#stashReelBtn").addEventListener("click", stashCurrentReel);
     qs("#stashArtifactsBtn").addEventListener("click", stashCurrentArtifacts);
     qs("#generateBtn").addEventListener("click", onGenerate);
+    qs("#cancelGenerateBtn").addEventListener("click", onCancelGenerate);
     qs("#buildReelBtn").addEventListener("click", onBuildReel);
     qs("#cancelReelBtn").addEventListener("click", onCancelReel);
     qs("#buildViewerBtn").addEventListener("click", onBuildViewer);
@@ -2428,6 +2429,7 @@
     state.generating = true;
     setGeneratingLock(true);
     setTitleSpinner("artifactsSpinner", true);
+    qs("#cancelGenerateBtn").classList.remove("hidden");
 
     var format = qs("#artifactFormat").value;
     var list = qs("#artifactsList");
@@ -2452,6 +2454,7 @@
     var totalSuccess = 0;
     var totalFail = 0;
     var allArtifacts = [];
+    var cancelled = false;
     var pending = (sheetItems.length > 0 ? 1 : 0) + (intakeItems.length > 0 ? 1 : 0);
 
     function finishBranch() {
@@ -2459,13 +2462,24 @@
       setTitleSpinner("artifactsSpinner", false);
       state.generating = false;
       setGeneratingLock(false);
+      qs("#cancelGenerateBtn").classList.add("hidden");
       updateViewerButton();
-      var msg = "Generated " + totalSuccess + " artifact(s)";
-      if (totalFail > 0) msg += ", " + totalFail + " failed";
-      showResult(
-        totalSuccess > 0 ? msg : null,
-        totalSuccess === 0 && totalFail > 0 ? "All generations failed" : null
-      );
+      var msg;
+      var err = null;
+      if (cancelled) {
+        msg = totalSuccess > 0
+          ? "Cancelled after " + totalSuccess + " artifact(s)"
+          : null;
+        err = totalSuccess > 0 ? null : "Generation cancelled";
+      } else {
+        msg = "Generated " + totalSuccess + " artifact(s)";
+        if (totalFail > 0) msg += ", " + totalFail + " failed";
+        if (totalSuccess === 0 && totalFail > 0) {
+          msg = null;
+          err = "All generations failed";
+        }
+      }
+      showResult(msg, err);
       qs("#statusOverlay").classList.remove("hidden");
     }
 
@@ -2481,7 +2495,16 @@
       function handleLine(line) {
         var data;
         try { data = JSON.parse(line); } catch (_) { return; }
-        if (!data || !data.cell) return;
+        if (!data) return;
+        if (data.cancelled) {
+          cancelled = true;
+          var queuedCards = list.querySelectorAll(".queue-card.queued");
+          for (var qi = 0; qi < queuedCards.length; qi++) {
+            clearCardStatus(queuedCards[qi]);
+          }
+          return;
+        }
+        if (!data.cell) return;
         var dot = data.cell.lastIndexOf(".");
         var participant = data.cell.substring(0, dot);
         var row = data.cell.substring(dot + 1);
@@ -2595,6 +2618,11 @@
   function onCancelReel() {
     qs("#cancelReelBtn").classList.add("hidden");
     apiPost("api/reel/cancel").catch(function () {});
+  }
+
+  function onCancelGenerate() {
+    qs("#cancelGenerateBtn").classList.add("hidden");
+    apiPost("api/generate/cancel").catch(function () {});
   }
 
   function onBuildReel() {

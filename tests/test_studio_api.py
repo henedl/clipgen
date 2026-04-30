@@ -936,7 +936,7 @@ def test_api_generate_titlecard_override(client, monkeypatch):
     def fake_generate_list(ws, mode, *, ctx=None, cell_specs, skip_prompts):
         return [{"participant": "P01", "cell": cell}]
 
-    def fake_process_clips(clips, *, output_format):
+    def fake_process_clips(clips, *, output_format, cancel_flag=None):
         captured["enabled"] = config.TITLECARDS_ENABLED
         captured["duration"] = config.TITLECARD_DURATION_SECONDS
         return (1, [{"id": "a1", "type": "clip"}])
@@ -978,7 +978,7 @@ def test_api_generate_titlecard_restored_on_error(client, monkeypatch):
     def fake_generate_list(ws, mode, *, ctx=None, cell_specs, skip_prompts):
         return [{"participant": "P01", "cell": cell}]
 
-    def fake_process_clips(clips, *, output_format):
+    def fake_process_clips(clips, *, output_format, cancel_flag=None):
         raise RuntimeError("boom")
 
     monkeypatch.setattr("spreadsheet.generate_list", fake_generate_list)
@@ -1331,3 +1331,13 @@ def test_api_reel_cancel_endpoint(client):
     assert resp.status_code == 200
     assert data["ok"] is True
     assert server._reel_cancel_event.is_set()
+
+
+def test_api_generate_cancel_endpoint(client):
+    """POST /api/generate/cancel should set the cancel event and return ok."""
+    server._generate_cancel_event.clear()
+    resp = client.post("/studio/api/generate/cancel")
+    data = resp.get_json()
+    assert resp.status_code == 200
+    assert data["ok"] is True
+    assert server._generate_cancel_event.is_set()

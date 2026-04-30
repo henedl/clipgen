@@ -253,7 +253,13 @@ def build_ffmpeg_cut_command(
 
 
 def run_ffmpeg(
-    input_file: str, output_file: str, start_pos: str, end_pos: str, reencode: bool
+    input_file: str,
+    output_file: str,
+    start_pos: str,
+    end_pos: str,
+    reencode: bool,
+    *,
+    cancel_flag: Callable[[], bool] | None = None,
 ) -> bool:
     """Calls ffmpeg to cut a video clip. Requires ffmpeg in system PATH.
 
@@ -263,6 +269,8 @@ def run_ffmpeg(
         start_pos: Start timestamp (format: HH:MM:SS or MM:SS)
         end_pos: End timestamp (format: HH:MM:SS or MM:SS)
         reencode: If True, re-encode video; if False, use stream copy
+        cancel_flag: Optional callable; when it returns True the in-flight
+            ffmpeg subprocess is terminated and the function returns False.
 
     Returns:
         True if video was generated successfully, False otherwise.
@@ -340,6 +348,7 @@ def run_ffmpeg(
         input_file=input_file,
         output_file=output_file,
         os_error_message="ffmpeg could not successfully run.",
+        cancel_flag=cancel_flag,
     )
     if ffmpeg_result is None:
         return False
@@ -359,7 +368,9 @@ def run_ffmpeg(
         return False
 
     if config.MAX_FILESIZE_MB and config.MAX_FILESIZE_MB > 0:
-        if not compress_to_size(output_file, config.MAX_FILESIZE_MB):
+        if not compress_to_size(
+            output_file, config.MAX_FILESIZE_MB, cancel_flag=cancel_flag
+        ):
             utils.warning_print(f"Could not compress '{output_file}' to target size")
 
     utils.verbose_print(
@@ -368,13 +379,21 @@ def run_ffmpeg(
     return True
 
 
-def extract_screenshot(input_file: str, output_file: str, timestamp: str) -> bool:
+def extract_screenshot(
+    input_file: str,
+    output_file: str,
+    timestamp: str,
+    *,
+    cancel_flag: Callable[[], bool] | None = None,
+) -> bool:
     """Extract a single screenshot frame at the given timestamp.
 
     Args:
         input_file: Path to input video file
         output_file: Path for output screenshot file (.png)
         timestamp: Timestamp to capture (format: HH:MM:SS or MM:SS)
+        cancel_flag: Optional callable; when it returns True the in-flight
+            ffmpeg subprocess is terminated and the function returns False.
 
     Returns:
         True if screenshot was generated successfully, False otherwise.
@@ -433,6 +452,7 @@ def extract_screenshot(input_file: str, output_file: str, timestamp: str) -> boo
         input_file=input_file,
         output_file=output_file,
         os_error_message="ffmpeg could not successfully run for screenshot extraction.",
+        cancel_flag=cancel_flag,
     )
     if ffmpeg_result is None:
         return False
@@ -507,7 +527,12 @@ def extract_thumbnail_bytes(
 
 
 def extract_gif(
-    input_file: str, output_file: str, timestamp: str, duration_seconds: int
+    input_file: str,
+    output_file: str,
+    timestamp: str,
+    duration_seconds: int,
+    *,
+    cancel_flag: Callable[[], bool] | None = None,
 ) -> bool:
     """Extract a GIF segment starting at timestamp.
 
@@ -516,6 +541,8 @@ def extract_gif(
         output_file: Path for output GIF file (.gif)
         timestamp: Start timestamp (format: HH:MM:SS or MM:SS)
         duration_seconds: GIF duration in seconds
+        cancel_flag: Optional callable; when it returns True the in-flight
+            ffmpeg subprocess is terminated and the function returns False.
 
     Returns:
         True if GIF was generated successfully, False otherwise.
@@ -610,6 +637,7 @@ def extract_gif(
         input_file=input_file,
         output_file=output_file,
         os_error_message="ffmpeg could not successfully run for GIF extraction.",
+        cancel_flag=cancel_flag,
     )
     if ffmpeg_result is None:
         return False
@@ -935,12 +963,19 @@ def calculate_target_bitrate(
     return max(video_bitrate_kbps, config.MIN_VIDEO_BITRATE_KBPS)
 
 
-def compress_to_size(filepath: str, target_size_mb: float) -> bool:
+def compress_to_size(
+    filepath: str,
+    target_size_mb: float,
+    *,
+    cancel_flag: Callable[[], bool] | None = None,
+) -> bool:
     """Recompress video to fit within target filesize using two-pass encoding.
 
     Args:
         filepath: Path to the video file to compress
         target_size_mb: Maximum file size in megabytes
+        cancel_flag: Optional callable; when it returns True either pass of the
+            in-flight ffmpeg subprocess is terminated and the function returns False.
 
     Returns:
         True if compression succeeded or was unnecessary, False on error
@@ -1010,6 +1045,7 @@ def compress_to_size(filepath: str, target_size_mb: float) -> bool:
             input_file=filepath,
             output_file=null_output,
             os_error_message="ffmpeg could not successfully run during compression pass 1.",
+            cancel_flag=cancel_flag,
         )
         if pass1_result is None:
             return False
@@ -1053,6 +1089,7 @@ def compress_to_size(filepath: str, target_size_mb: float) -> bool:
             input_file=filepath,
             output_file=compressed_temp_path,
             os_error_message="ffmpeg could not successfully run during compression pass 2.",
+            cancel_flag=cancel_flag,
         )
         if pass2_result is None:
             return False

@@ -11,6 +11,7 @@ Studio API endpoints (all under /studio/):
   POST /api/sheet/refresh      – re-fetch spreadsheet data from source (Google/Excel)
   GET  /api/thumbnail/<p>/<t>  – JPEG thumbnail frame from participant video
   POST /api/generate           – generate clip/screen/gif artifacts for specified cells
+  POST /api/generate/cancel    – cancel an in-progress clip generation
   POST /api/highlights-preview – preview highlights reel selection without generating
   POST /api/reel               – build a reel from specified cells
   POST /api/reel-direct        – build a reel from explicit clip paths
@@ -70,6 +71,8 @@ _generated_artifacts: list[dict[str, Any]] = []
 _generated_reels: list[dict[str, Any]] = []
 _thumbnail_cache: dict[tuple, bytes] = {}
 _reel_cancel_event = threading.Event()
+# Single in-flight job assumed; a second /api/generate clears this.
+_generate_cancel_event = threading.Event()
 
 # Snapshot config defaults before any settings file is loaded.
 # Deep-copied so dict-valued defaults are not aliased to live config state.
@@ -574,6 +577,8 @@ def api_generate() -> FlaskResponse:
                     overrides["TITLECARD_DURATION_SECONDS"] = val
             except (ValueError, TypeError):
                 pass
+        _generate_cancel_event.clear()
+        cancel_flag = _generate_cancel_event.is_set
         with _override_config(**overrides):
             clip_cells: set[str] = set()
 
@@ -616,10 +621,15 @@ def api_generate() -> FlaskResponse:
                                 pipeline.process_clips,
                                 [clip],
                                 output_format=output_format,
+                                cancel_flag=cancel_flag,
                             ): (clip, cell_str)
                             for clip, cell_str in to_generate
                         }
                         for future in concurrent.futures.as_completed(future_to_cell):
+                            if cancel_flag():
+                                for f in future_to_cell:
+                                    f.cancel()
+                                break
                             clip, cell_str = future_to_cell[future]
                             try:
                                 generated, artifacts = future.result()
@@ -644,9 +654,13 @@ def api_generate() -> FlaskResponse:
                                 )
                 else:
                     for clip, cell_str in to_generate:
+                        if cancel_flag():
+                            break
                         try:
                             generated, artifacts = pipeline.process_clips(
-                                [clip], output_format=output_format
+                                [clip],
+                                output_format=output_format,
+                                cancel_flag=cancel_flag,
                             )
                             _generated_artifacts.extend(artifacts)
                             yield (
@@ -674,6 +688,8 @@ def api_generate() -> FlaskResponse:
                         json.dumps({"cell": cs, "ok": False, "error": "No clip found"})
                         + "\n"
                     )
+            if cancel_flag():
+                yield json.dumps({"cancelled": True}) + "\n"
             _save_manifest_quiet()
 
     return Response(
@@ -1352,7 +1368,12 @@ def api_reel_direct() -> FlaskResponse:
                 temp_clips.append(tmp_path)
 
                 ok = video.run_ffmpeg(
-                    video_path, tmp_path, start_str, end_str, config.REENCODING
+                    video_path,
+                    tmp_path,
+                    start_str,
+                    end_str,
+                    config.REENCODING,
+                    cancel_flag=_reel_cancel_event.is_set,
                 )
                 if ok:
                     clip_paths.append(tmp_path)
@@ -1404,6 +1425,13 @@ def api_reel_direct() -> FlaskResponse:
 def api_reel_cancel() -> FlaskResponse:
     """Signal cancellation for the in-progress reel build."""
     _reel_cancel_event.set()
+    return jsonify({"ok": True})
+
+
+@studio_bp.route("/api/generate/cancel", methods=["POST"])
+def api_generate_cancel() -> FlaskResponse:
+    """Signal cancellation for the in-progress clip generation."""
+    _generate_cancel_event.set()
     return jsonify({"ok": True})
 
 
