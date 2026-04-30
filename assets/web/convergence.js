@@ -57,20 +57,9 @@
   }
 
 
-  function stddev(nums) {
-    if (nums.length < 2) return 0;
-    var sum = 0;
-    for (var i = 0; i < nums.length; i++) sum += nums[i];
-    var mean = sum / nums.length;
-    var sqSum = 0;
-    for (var j = 0; j < nums.length; j++) sqSum += (nums[j] - mean) * (nums[j] - mean);
-    return Math.sqrt(sqSum / nums.length);
-  }
-
   function parseAccentColor() {
-    try {
-      var raw = getComputedStyle(document.documentElement).getPropertyValue("--color-accent").trim();
-      if (!raw) return { r: 59, g: 130, b: 246 };
+    var raw = getCSSVar("--color-accent", "");
+    if (raw) {
       if (raw.charAt(0) === "#") {
         return {
           r: parseInt(raw.slice(1, 3), 16),
@@ -80,7 +69,7 @@
       }
       var m = raw.match(/(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/);
       if (m) return { r: +m[1], g: +m[2], b: +m[3] };
-    } catch (_) { /* fall through */ }
+    }
     return { r: 59, g: 130, b: 246 };
   }
 

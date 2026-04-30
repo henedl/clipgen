@@ -33,13 +33,6 @@
 
   // --- Helpers ---
 
-  function median(arr) {
-    if (!arr.length) return 0;
-    var sorted = arr.slice().sort(function (a, b) { return a - b; });
-    var mid = Math.floor(sorted.length / 2);
-    return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
-  }
-
   function getStudyName() {
     return (state.sheetData && state.sheetData.study) || "study";
   }
@@ -784,7 +777,7 @@
       if (c.transcript > maxTR) maxTR = c.transcript;
     }
 
-    var hm = getComputedStyle(document.documentElement).getPropertyValue("--color-heatmap").trim() || "168, 130, 214";
+    var hm = getCSSVar("--color-heatmap", "168, 130, 214");
 
     for (var j = 0; j < participants.length; j++) {
       var pid = participants[j];

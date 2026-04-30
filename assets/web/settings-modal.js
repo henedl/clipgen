@@ -29,7 +29,7 @@
   var _modelsCache = null;
   var _modelsCachePromise = null;
 
-  function _apiRoot() {
+  function _getApiRoot() {
     // Each page is served under a different prefix (/studio/, /transcripts/,
     // /insights/, /screenspace/). Settings + models are registered at the
     // combined-app root, so request them from an absolute path.
@@ -44,7 +44,7 @@
   function _fetchModels() {
     if (_modelsCache) return Promise.resolve(_modelsCache);
     if (_modelsCachePromise) return _modelsCachePromise;
-    _modelsCachePromise = fetch(_apiRoot() + "/models")
+    _modelsCachePromise = fetch(_getApiRoot() + "/models")
       .then(function (r) { return r.json(); })
       .then(function (data) {
         if (data && data.ok) _modelsCache = data;
@@ -153,7 +153,7 @@
 
   function _load() {
     _panelsEl.textContent = "Loading settings\u2026";
-    fetch(_apiRoot() + "/settings")
+    fetch(_getApiRoot() + "/settings")
       .then(function (r) { return r.json(); })
       .then(function (data) {
         if (!data.ok) {
@@ -199,7 +199,7 @@
     }
     if (_statusEl) _statusEl.textContent = "Saving\u2026";
 
-    fetch(_apiRoot() + "/settings", {
+    fetch(_getApiRoot() + "/settings", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ settings: payload }),
@@ -224,7 +224,7 @@
   }
 
   function _resetTab(tabName) {
-    fetch(_apiRoot() + "/settings", {
+    fetch(_getApiRoot() + "/settings", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ reset: "tab:" + tabName }),
@@ -247,7 +247,7 @@
   }
 
   function _resetAll() {
-    fetch(_apiRoot() + "/settings", {
+    fetch(_getApiRoot() + "/settings", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ reset: "all" }),
@@ -270,7 +270,7 @@
   }
 
   function _reloadAfterReset(scope) {
-    fetch(_apiRoot() + "/settings")
+    fetch(_getApiRoot() + "/settings")
       .then(function (r) { return r.json(); })
       .then(function (data) {
         if (!data.ok) return;
