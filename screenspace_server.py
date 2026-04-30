@@ -827,6 +827,14 @@ def api_tasks_get(task_id: str) -> FlaskResponse:
     return jsonify({"ok": True, "task": _clean_task(task)})
 
 
+# ---- Task creation helpers ----
+#
+# Private helpers for api_tasks_create below: validation, parameter coercion,
+# media extraction, and multitool step preparation. Placed between the read-side
+# task routes above and the create/mutate routes below so the create endpoint's
+# dependencies are immediately visible when reading top-down.
+
+
 def _validate_task_request(
     data: dict[str, Any],
 ) -> (

@@ -845,6 +845,9 @@ def process_clips(
     return (outputs_generated, all_artifacts)
 
 
+# ---- Reel processing ----
+
+
 def compute_reel_id(components: list[dict[str, Any]]) -> str:
     """Compute a deterministic reel ID from its component metadata."""
     parts = sorted(
@@ -1057,6 +1060,9 @@ def process_reel(
         reel_record["transcript"] = reel_transcript
 
     return (1, [reel_record])
+
+
+# ---- Manifest regeneration ----
 
 
 def regenerate_from_manifest(
