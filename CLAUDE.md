@@ -112,7 +112,6 @@ Source video filenames follow `{study}_{participant}.mp4` (e.g. `mystudy_P01.mp4
 - **uv** – Use `uv run` instead of `python` to run scripts (e.g. `uv run clipgen.py`). Use `uv add` to add dependencies.
 - **Ruff** – Linting and formatting. A `PostToolUse` hook in `.claude/settings.json` automatically runs `uv run ruff check --fix` and `uv run ruff format` on every edited/written file. You can also run these manually: `uv run ruff check --fix` and `uv run ruff format`.
 - **ty** – Use `uv run ty check` for type checking.
-- **ESLint** – Lints `assets/web/*.js`. Run `bun run lint:js` (or `bun run lint:js:fix`). Run `scripts/install-git-hooks.sh` once per clone to install a pre-commit hook that runs the linter on staged JS files automatically.
 
 ## SVG icons
 
