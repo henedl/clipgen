@@ -287,14 +287,23 @@ def _overlay_template_heatmap(
     norm = np.empty_like(result)
     cv2.normalize(result, norm, 0, 255, cv2.NORM_MINMAX)
     heat = cv2.applyColorMap(norm.astype(np.uint8), cv2.COLORMAP_JET)
-    # Pad to frame size so the overlay aligns 1:1 with the frame canvas.
+    # matchTemplate output indexes the top-left anchor of each candidate match,
+    # so offset by half the template size to center the heatmap response over
+    # the match's actual location in the frame. Edge pixels (outside the valid
+    # match range) are filled by replicating nearest values so the overlay
+    # visually covers the whole frame rather than leaving a black border.
     fh, fw = frame.shape[:2]
     hh, hw = heat.shape[:2]
     if (hh, hw) == (fh, fw):
         return heat
-    out = np.zeros((fh, fw, 3), dtype=np.uint8)
-    out[:hh, :hw] = heat
-    return out
+    th, tw = tmpl_gray.shape[:2]
+    top = th // 2
+    left = tw // 2
+    bottom = fh - hh - top
+    right = fw - hw - left
+    return cv2.copyMakeBorder(
+        heat, top, bottom, left, right, borderType=cv2.BORDER_REPLICATE
+    )
 
 
 # ---------------------------------------------------------------------------
