@@ -344,17 +344,17 @@ body:not(.cg-grid-bg-on) {
 /* Primary CTA button — shared across Studio / Screenspace / Transcripts / Insights.
  * Page CSS still defines the base .btn (size, padding, border-radius) so visual
  * weight stays page-specific; only the primary variant's color treatment is shared. */
-.btn-primary {
+.btn.btn-primary {
   background: var(--color-accent);
   color: #fff;
   border-color: var(--color-accent);
 }
-.btn-primary:hover {
+.btn.btn-primary:hover {
   background: var(--color-accent-strong-hover);
   border-color: var(--color-accent-strong-hover);
   color: #fff;
 }
-.btn-primary:disabled:hover {
+.btn.btn-primary:disabled:hover {
   background: var(--color-accent);
   border-color: var(--color-accent);
   color: #fff;
