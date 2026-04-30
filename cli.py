@@ -1238,6 +1238,37 @@ def _ss_build_params(
     return params
 
 
+def _print_ss_table(
+    title: str,
+    columns: list[tuple[str, dict[str, Any]]],
+    rows: list[list[str]],
+    fallback_lines: list[str],
+) -> None:
+    """Render a Rich table when available, else fall back to plain info_print lines.
+
+    columns is a list of (name, kwargs) tuples passed to Table.add_column.
+    """
+    if utils._use_rich() and utils.console is not None:
+        from rich.table import Table
+
+        table = Table(
+            title=title,
+            show_header=True,
+            header_style="bold cyan",
+            border_style="dim",
+            row_styles=["", "dim"],
+            expand=False,
+        )
+        for name, kwargs in columns:
+            table.add_column(name, **kwargs)
+        for row in rows:
+            table.add_row(*row)
+        utils.console.print(table)
+    else:
+        for line in fallback_lines:
+            utils.info_print(line)
+
+
 def _run_ss_list_regions(args: argparse.Namespace) -> None:
     """List active Screenspace regions from the manifest."""
     import screenspace
@@ -1247,15 +1278,41 @@ def _run_ss_list_regions(args: argparse.Namespace) -> None:
     if not regions:
         utils.info_print("No active Screenspace regions in manifest.")
         return
-    utils.info_print(f"Active regions ({len(regions)}):")
+
+    rows: list[list[str]] = []
+    fallback: list[str] = [f"Active regions ({len(regions)}):"]
     for name in sorted(regions.keys()):
         rd = regions[name]
         sw = rd.get("source_width", "?")
         sh = rd.get("source_height", "?")
-        utils.info_print(
+        rows.append(
+            [
+                name,
+                f"{rd.get('x', 0):.3f}",
+                f"{rd.get('y', 0):.3f}",
+                f"{rd.get('w', 0):.3f}",
+                f"{rd.get('h', 0):.3f}",
+                f"{sw}x{sh}",
+            ]
+        )
+        fallback.append(
             f"  {name}: x={rd.get('x', 0):.3f} y={rd.get('y', 0):.3f} "
             f"w={rd.get('w', 0):.3f} h={rd.get('h', 0):.3f}  source={sw}x{sh}"
         )
+
+    _print_ss_table(
+        f"Active regions ({len(regions)})",
+        [
+            ("Name", {"style": "bold"}),
+            ("x", {"justify": "right"}),
+            ("y", {"justify": "right"}),
+            ("w", {"justify": "right"}),
+            ("h", {"justify": "right"}),
+            ("Source", {"justify": "right"}),
+        ],
+        rows,
+        fallback,
+    )
 
 
 def _run_ss_list_stashes(args: argparse.Namespace) -> None:
@@ -1267,14 +1324,36 @@ def _run_ss_list_stashes(args: argparse.Namespace) -> None:
     if not stashes:
         utils.info_print("No Screenspace region stashes in manifest.")
         return
-    utils.info_print(f"Stashes ({len(stashes)}):")
+
+    rows: list[list[str]] = []
+    fallback: list[str] = [f"Stashes ({len(stashes)}):"]
     for stash in stashes:
         regions = stash.get("regions", {})
         names = ", ".join(sorted(regions.keys())) or "(empty)"
-        utils.info_print(
+        rows.append(
+            [
+                str(stash.get("id", "?")),
+                str(stash.get("name", "(unnamed)")),
+                str(len(regions)),
+                names,
+            ]
+        )
+        fallback.append(
             f"  {stash.get('id', '?')}  {stash.get('name', '(unnamed)')}: "
             f"{len(regions)} region(s) — {names}"
         )
+
+    _print_ss_table(
+        f"Stashes ({len(stashes)})",
+        [
+            ("ID", {"style": "bold"}),
+            ("Name", {}),
+            ("Regions", {"justify": "right"}),
+            ("Names", {"overflow": "fold"}),
+        ],
+        rows,
+        fallback,
+    )
 
 
 def _run_ss_list_tasks(args: argparse.Namespace) -> None:
@@ -1292,16 +1371,42 @@ def _run_ss_list_tasks(args: argparse.Namespace) -> None:
         else:
             utils.info_print("No Screenspace tasks in manifest.")
         return
+
     label = f" (status={status_filter})" if status_filter else ""
-    utils.info_print(f"Tasks{label}: {len(tasks)}")
+    rows: list[list[str]] = []
+    fallback: list[str] = [f"Tasks{label}: {len(tasks)}"]
     for t in tasks:
         result = t.get("result")
         result_count = len(result) if isinstance(result, list) else 0
-        utils.info_print(
+        rows.append(
+            [
+                str(t.get("id", "?")),
+                str(t.get("type", "?")),
+                str(t.get("participant", "?")),
+                str(t.get("region", "?")),
+                str(t.get("status", "?")),
+                str(result_count),
+            ]
+        )
+        fallback.append(
             f"  {t.get('id', '?')}  {t.get('type', '?'):10s}  "
             f"{t.get('participant', '?'):8s}  region={t.get('region', '?'):16s}  "
             f"status={t.get('status', '?'):10s}  results={result_count}"
         )
+
+    _print_ss_table(
+        f"Tasks{label} ({len(tasks)})",
+        [
+            ("ID", {"style": "bold"}),
+            ("Type", {}),
+            ("Participant", {}),
+            ("Region", {}),
+            ("Status", {}),
+            ("Results", {"justify": "right"}),
+        ],
+        rows,
+        fallback,
+    )
 
 
 def _run_ss_task(args: argparse.Namespace) -> None:
@@ -1370,22 +1475,43 @@ def _run_ss_task(args: argparse.Namespace) -> None:
     task_id = worker.enqueue(task)
     utils.info_print(f"Running {task_type} on {participant} (region: {region_name})...")
 
-    last_progress = -1.0
     final_task: dict[str, Any] | None = None
+    progress_bar = utils.create_progress_bar()
     try:
-        while True:
-            current = worker.get_task(task_id)
-            if current is None:
-                break
-            status = current.get("status", "")
-            progress = float(current.get("progress", 0.0))
-            if progress - last_progress > 0.05:
-                utils.info_print(f"  {status}: {int(progress * 100)}%")
-                last_progress = progress
-            if status in ("completed", "failed", "cancelled"):
-                final_task = current
-                break
-            time.sleep(0.25)
+        if progress_bar:
+            with progress_bar:
+                ptask = progress_bar.add_task(f"{task_type} (queued)", total=100)
+                while True:
+                    current = worker.get_task(task_id)
+                    if current is None:
+                        break
+                    status = current.get("status", "")
+                    pct = int(float(current.get("progress", 0.0)) * 100)
+                    progress_bar.update(
+                        ptask,
+                        completed=pct,
+                        description=f"{task_type} ({status})",
+                    )
+                    if status in ("completed", "failed", "cancelled"):
+                        final_task = current
+                        progress_bar.update(ptask, completed=100)
+                        break
+                    time.sleep(0.25)
+        else:
+            last_progress = -1.0
+            while True:
+                current = worker.get_task(task_id)
+                if current is None:
+                    break
+                status = current.get("status", "")
+                progress = float(current.get("progress", 0.0))
+                if progress - last_progress > 0.05:
+                    utils.info_print(f"  {status}: {int(progress * 100)}%")
+                    last_progress = progress
+                if status in ("completed", "failed", "cancelled"):
+                    final_task = current
+                    break
+                time.sleep(0.25)
     finally:
         new_events = worker.drain_new_events()
         all_tasks = worker.get_all_tasks()

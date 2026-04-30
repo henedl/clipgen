@@ -356,10 +356,19 @@ def write_export_bundle(output_dir: Path | None = None) -> list[Path]:
     """
     base = Path(output_dir) if output_dir else Path(utils.get_effective_output_dir())
     written: list[Path] = []
-    for output_basename, surface_key, manifest_filename, preferred_cols in _SURFACES:
+    summaries: list[str] = []
+
+    progress = utils.create_progress_bar()
+
+    def _process_surface(
+        output_basename: str,
+        surface_key: str,
+        manifest_filename: str,
+        preferred_cols: tuple[str, ...],
+    ) -> None:
         manifest_path = base / manifest_filename
         if not manifest_path.is_file():
-            continue
+            return
         try:
             manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as err:
@@ -367,13 +376,13 @@ def write_export_bundle(output_dir: Path | None = None) -> list[Path]:
                 f"Skipping {manifest_filename}: could not read manifest.",
                 [f"Error: {err}"],
             )
-            continue
+            return
         records = _build_for_surface(surface_key, manifest)
         if not records:
-            utils.info_print(
+            summaries.append(
                 f"Skipping {output_basename}: manifest is present but contains no records."
             )
-            continue
+            return
         json_path = base / f"clipgen_export_{output_basename}.json"
         csv_path = base / f"clipgen_export_{output_basename}.csv"
         json_path.write_text(to_json(records), encoding="utf-8")
@@ -382,9 +391,37 @@ def write_export_bundle(output_dir: Path | None = None) -> list[Path]:
             encoding="utf-8",
         )
         written.extend([json_path, csv_path])
-        utils.info_print(
+        summaries.append(
             f"Exported {len(records)} record(s) to {json_path.name} and {csv_path.name}"
         )
+
+    if progress:
+        with progress:
+            ptask = progress.add_task("Exporting", total=len(_SURFACES))
+            for (
+                output_basename,
+                surface_key,
+                manifest_filename,
+                preferred_cols,
+            ) in _SURFACES:
+                progress.update(ptask, description=f"Exporting {output_basename}")
+                _process_surface(
+                    output_basename, surface_key, manifest_filename, preferred_cols
+                )
+                progress.update(ptask, advance=1)
+    else:
+        for (
+            output_basename,
+            surface_key,
+            manifest_filename,
+            preferred_cols,
+        ) in _SURFACES:
+            _process_surface(
+                output_basename, surface_key, manifest_filename, preferred_cols
+            )
+
+    for line in summaries:
+        utils.info_print(line)
     return written
 
 
