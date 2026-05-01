@@ -55,7 +55,7 @@ def save_insights_manifest(
     """
     meta = dict(meta)
     meta["generatedAt"] = datetime.now(timezone.utc).isoformat()
-    meta.setdefault("version", config.VERSIONNUM)
+    meta.setdefault("version", utils.get_version())
 
     return utils.save_json_manifest(
         config.INSIGHTS_MANIFEST_FILENAME,

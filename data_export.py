@@ -310,7 +310,7 @@ def to_json(records: list[dict[str, Any]]) -> str:
     """Serialize records to a JSON string with an export envelope."""
     payload = {
         "exported_at": datetime.now(timezone.utc).isoformat(),
-        "version": getattr(config, "VERSIONNUM", ""),
+        "version": utils.get_version(),
         "records": records,
     }
     return json.dumps(payload, ensure_ascii=False, indent=2, default=_scalar_safe)

@@ -3199,7 +3199,7 @@ def main() -> None:
         "-------------------------------------------------------------------------------"
     )
     utils.standard_print(
-        f"Welcome to clipgen v{config.VERSIONNUM}\nWorking directory: {os.getcwd()}\nPlace video files and the credentials.json file in this directory."
+        f"Welcome to clipgen v{utils.get_version()}\nWorking directory: {os.getcwd()}\nPlace video files and the credentials.json file in this directory."
     )
     utils.debug_print(
         "Debug mode is ON. Several limitations apply and more things will be printed."

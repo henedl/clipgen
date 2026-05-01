@@ -12,7 +12,7 @@ Run this before every `git commit` to catch formatting, lint, type, and test fai
 
 Report pass/fail per stage. If all pass, remind the agent:
 
-> If changes were substantive (bug fix or new feature), increment the **patch** (last) segment of `VERSIONNUM` in `config.py`. Skip the bump for docs-only, comment-only, or refactor-only changes that don't affect user-visible behavior.
+> If changes are substantive (bug fix or new feature), title the PR with `feat:` or `fix:` so [version-bump.yml](../../../.github/workflows/version-bump.yml) auto-bumps `build/VERSION` on merge. `docs:`, `chore:`, `refactor:`, `test:`, `build:`, `ci:`, or untyped titles do not bump.
 
 ## Common failures
 

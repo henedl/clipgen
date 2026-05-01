@@ -73,7 +73,7 @@ Required columns: **ID**, **Observation**, **Category**. Participant columns fol
 
 ## Version
 
-Bump the patch (last) segment of `VERSIONNUM` in [config.py](config.py) for substantive changes (bug fixes, features). Skip for docs-only, comment-only, or refactor-only changes that don't affect user-visible behavior. See [agents/skills/bump/SKILL.md](agents/skills/bump/SKILL.md).
+The version lives in [build/VERSION](build/VERSION) and is auto-bumped on merge to `master` by [.github/workflows/version-bump.yml](.github/workflows/version-bump.yml) based on PR title. Use `feat:` or `fix:` prefixes to trigger a patch bump; `docs:`, `chore:`, `refactor:`, `test:`, `build:`, `ci:`, or untyped titles do not bump. Do not edit `build/VERSION` by hand. See [agents/skills/bump/SKILL.md](agents/skills/bump/SKILL.md).
 
 ## Testing notes
 
@@ -101,7 +101,7 @@ See [agents/skills/test/SKILL.md](agents/skills/test/SKILL.md) for the command, 
 - Plan-driven development: detailed implementation plans with specific files, line numbers, code structure, and verification steps are written before coding begins. Follow attached plans closely.
 - Features are often built incrementally across multiple sessions. Check for existing groundwork before starting from scratch.
 - Manifest-driven state persistence: JSON manifest files (clipgen, insights, screenspace, stashes, settings) follow the pattern of load-on-startup, save-after-mutations.
-- No hardcoded version numbers in evergreen docs (CLAUDE.md, README.md). Reference `VERSIONNUM` in `config.py` instead.
+- No hardcoded version numbers in evergreen docs (CLAUDE.md, README.md). Reference `build/VERSION` or call `utils.get_version()` instead.
 - **Icons**: Prefer SVG icons from `assets/icons/` (316 Heroicons outline, kebab-case names like `pencil-square.svg`) over crafting new inline SVG paths or using text/emoji glyphs in web UIs. **Never define SVG path data in JavaScript.** Use the CSS `mask-image` pattern to reference `.svg` files: create a `<span>` with `mask-image: url("icons/icon-name.svg")` and `background-color: currentColor`. See `XREF_BADGES` in `utils.js` and `.xref-badge-icon` in `tokens.css` for the canonical example. Icon routes already exist per blueprint (`/screenspace/icons/`, `/transcripts/icons/`, etc.).
 - **Pre-commit check**: Before every `git commit`, run [agents/skills/check/SKILL.md](agents/skills/check/SKILL.md). Unformatted Python is the most common CI failure (the per-file PostToolUse hook is absent in worktrees).
 - Commit early and commit often, so we can roll back changes more easily.
@@ -113,6 +113,7 @@ See [agents/skills/test/SKILL.md](agents/skills/test/SKILL.md) for the command, 
 ### Learned Workspace Facts
 
 - Baseline time row placement in the spreadsheet layer is tied to header/`id_cell` row math (e.g. offsets from `id_cell.row`); changing that offset without aligning tests and sheet layout has broken baseline timestamp handling before.
+- The version (in `build/VERSION`, read by `utils.get_version()`) is auto-bumped on merge to `master` by `.github/workflows/version-bump.yml` based on the PR title. Use `feat:` or `fix:` prefixes to trigger a patch bump; `docs:`, `chore:`, `refactor:`, `test:`, `build:`, `ci:`, or untyped titles do not bump. Do not edit `build/VERSION` by hand.
 - Textual-based TUI support (tui.py, TEXTUAL_TUI) has been removed; prefer CLI prompts and the HTML timeline viewer for interactive features.
 - Browse mode scrolling is controlled via `BROWSE_LINES_TO_SCROLL` in `config.py`, with a default of 5 rows per up/down step.
 - Be careful about using the `generate_list()`, `sheet.find()`, `sheet.get_all_values()` methods as they are API calls to Google Sheets and are heavily rate-limited. Repeatedly calling the Google API will lead to rate-limiting without warnings, which can appear as bugs (e.g. silently skipping timestamps) and make development difficult.

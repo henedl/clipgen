@@ -9,6 +9,7 @@ import pytest
 
 import config
 import data_export
+import utils
 
 
 # ---- Fixtures -----------------------------------------------------------
@@ -321,7 +322,7 @@ def test_to_json_envelope_shape(screenspace_manifest):
     rows = data_export.build_screenspace_events(screenspace_manifest)
     parsed = json.loads(data_export.to_json(rows))
     assert set(parsed.keys()) == {"exported_at", "version", "records"}
-    assert parsed["version"] == config.VERSIONNUM
+    assert parsed["version"] == utils.get_version()
     assert len(parsed["records"]) == len(rows)
 
 

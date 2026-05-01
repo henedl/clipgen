@@ -379,7 +379,7 @@ def finalize_insights_viewer_data(
         "meta": {
             "study": study,
             "generatedAt": datetime.now(timezone.utc).isoformat(),
-            "version": config.VERSIONNUM,
+            "version": utils.get_version(),
             "timelineViewerFile": timeline_viewer_file,
         },
         "config": utils.get_frontend_config(),

@@ -1,18 +1,14 @@
-# clipgen-bump — Increment the patch version
+# clipgen-bump — Version bumping is automated
 
-## When to bump
+Do not bump the version manually. The version lives in [build/VERSION](../../../build/VERSION) and is auto-bumped on merge to `master` by [.github/workflows/version-bump.yml](../../../.github/workflows/version-bump.yml) based on the PR title.
 
-**Do bump** for: bug fixes, new features, any user-visible behavior change.
-**Do NOT bump** for: docs-only, comment-only, or refactor-only changes with no behavior change.
+## How to trigger a bump
 
-## How to bump
+- Title the PR with `feat: …` or `fix: …` (with optional scope, e.g. `feat(viewer): …`) → patch bump.
+- `docs: …`, `chore: …`, `refactor: …`, `test: …`, `build: …`, `ci: …`, or untyped titles → no bump.
 
-1. Read `VERSIONNUM` from `config.py` (e.g. `"0.9.4"`)
-2. Increment the **last segment only**: `"0.9.4"` → `"0.9.5"`
-3. Write the new value back to `config.py`
-4. Print: `VERSIONNUM: 0.9.4 → 0.9.5`
+## What not to do
 
-## Rules
-
-- Never edit version strings in `CLAUDE.md`, `README.md`, or any docs — they reference `config.py` by convention, not by literal value.
-- Only bump the patch (third) segment. Major and minor bumps are made manually by the human.
+- Do not edit `build/VERSION` by hand.
+- Do not edit version strings in `CLAUDE.md`, `README.md`, or any docs — they reference `build/VERSION` or `utils.get_version()` by convention, not by literal value.
+- Major and minor bumps are still made manually by the human (edit `build/VERSION` directly in a one-off PR).
