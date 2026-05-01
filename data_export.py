@@ -9,11 +9,13 @@ Exposed builders:
     build_insights_records(manifest)
     build_transcript_segments(manifest)
 
-CSV serialization:
+Serialization:
     to_csv(records, *, preferred_column_order)
+    to_json(records)
 
 Bundle writer (used by the --export CLI flag):
     write_export_bundle(output_dir) -> list[Path]
+    run_cli_export() -> int
 """
 
 from __future__ import annotations
@@ -24,7 +26,7 @@ import json
 import math
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import config
 import utils
@@ -32,7 +34,7 @@ import utils
 
 # ---- Column ordering ----------------------------------------------------
 
-_SCREENSPACE_EVENT_BASE_COLS = (
+SCREENSPACE_EVENT_COLUMNS: tuple[str, ...] = (
     "id",
     "participant",
     "source_video",
@@ -103,7 +105,10 @@ def _flatten_value_for_csv(value: Any) -> Any:
         if all(
             isinstance(item, (str, int, float, bool)) or item is None for item in value
         ):
-            return ";".join("" if item is None else str(item) for item in value)
+            return ";".join(
+                "" if (safe := _scalar_safe(item)) is None else str(safe)
+                for item in value
+            )
         return json.dumps(value, ensure_ascii=False)
     if isinstance(value, dict):
         return json.dumps(value, ensure_ascii=False)
@@ -192,9 +197,11 @@ def build_insights_records(manifest: dict[str, Any]) -> list[dict[str, Any]]:
     for ins in raw:
         if not isinstance(ins, dict):
             continue
-        causes = ins.get("causes", {}) or {}
-        behaviors = ins.get("behaviors", {}) or {}
-        impacts = ins.get("impacts", {}) or {}
+        causes = ins.get("causes") if isinstance(ins.get("causes"), dict) else {}
+        behaviors = (
+            ins.get("behaviors") if isinstance(ins.get("behaviors"), dict) else {}
+        )
+        impacts = ins.get("impacts") if isinstance(ins.get("impacts"), dict) else {}
         records.append(
             {
                 "id": ins.get("id", ""),
@@ -205,24 +212,12 @@ def build_insights_records(manifest: dict[str, Any]) -> list[dict[str, Any]]:
                 "createdAt": ins.get("createdAt", ""),
                 "updatedAt": ins.get("updatedAt", ""),
                 "timelineContext": ins.get("timelineContext", ""),
-                "causes_narrative": causes.get("narrative", "")
-                if isinstance(causes, dict)
-                else "",
-                "behaviors_narrative": behaviors.get("narrative", "")
-                if isinstance(behaviors, dict)
-                else "",
-                "impacts_narrative": impacts.get("narrative", "")
-                if isinstance(impacts, dict)
-                else "",
-                "causes_artifact_ids": list(causes.get("artifacts", []) or [])
-                if isinstance(causes, dict)
-                else [],
-                "behaviors_artifact_ids": list(behaviors.get("artifacts", []) or [])
-                if isinstance(behaviors, dict)
-                else [],
-                "impacts_artifact_ids": list(impacts.get("artifacts", []) or [])
-                if isinstance(impacts, dict)
-                else [],
+                "causes_narrative": causes.get("narrative", ""),
+                "behaviors_narrative": behaviors.get("narrative", ""),
+                "impacts_narrative": impacts.get("narrative", ""),
+                "causes_artifact_ids": list(causes.get("artifacts", []) or []),
+                "behaviors_artifact_ids": list(behaviors.get("artifacts", []) or []),
+                "impacts_artifact_ids": list(impacts.get("artifacts", []) or []),
             }
         )
     return records
@@ -313,39 +308,34 @@ def to_json(records: list[dict[str, Any]]) -> str:
         "version": utils.get_version(),
         "records": records,
     }
-    return json.dumps(payload, ensure_ascii=False, indent=2, default=_scalar_safe)
+    return json.dumps(payload, ensure_ascii=False, indent=2)
 
 
 # ---- Bundle writer ------------------------------------------------------
 
 
-_SURFACES: tuple[tuple[str, str, str, tuple[str, ...]], ...] = (
+_SurfaceBuilder = Callable[[dict[str, Any]], list[dict[str, Any]]]
+
+_SURFACES: tuple[tuple[str, _SurfaceBuilder, str, tuple[str, ...]], ...] = (
     (
         "screenspace_events",
-        "screenspace",
+        build_screenspace_events,
         config.SCREENSPACE_MANIFEST_FILENAME,
-        _SCREENSPACE_EVENT_BASE_COLS,
+        SCREENSPACE_EVENT_COLUMNS,
     ),
-    ("insights", "insights", config.INSIGHTS_MANIFEST_FILENAME, _INSIGHTS_BASE_COLS),
+    (
+        "insights",
+        build_insights_records,
+        config.INSIGHTS_MANIFEST_FILENAME,
+        _INSIGHTS_BASE_COLS,
+    ),
     (
         "transcripts",
-        "transcripts",
+        build_transcript_segments,
         config.TRANSCRIPTS_MANIFEST_FILENAME,
         _TRANSCRIPT_SEGMENT_BASE_COLS,
     ),
 )
-
-
-def _build_for_surface(
-    surface_key: str, manifest: dict[str, Any]
-) -> list[dict[str, Any]]:
-    if surface_key == "screenspace":
-        return build_screenspace_events(manifest)
-    if surface_key == "insights":
-        return build_insights_records(manifest)
-    if surface_key == "transcripts":
-        return build_transcript_segments(manifest)
-    raise ValueError(f"Unknown surface: {surface_key}")
 
 
 def write_export_bundle(output_dir: Path | None = None) -> list[Path]:
@@ -362,7 +352,7 @@ def write_export_bundle(output_dir: Path | None = None) -> list[Path]:
 
     def _process_surface(
         output_basename: str,
-        surface_key: str,
+        builder: _SurfaceBuilder,
         manifest_filename: str,
         preferred_cols: tuple[str, ...],
     ) -> None:
@@ -377,7 +367,7 @@ def write_export_bundle(output_dir: Path | None = None) -> list[Path]:
                 [f"Error: {err}"],
             )
             return
-        records = _build_for_surface(surface_key, manifest)
+        records = builder(manifest)
         if not records:
             summaries.append(
                 f"Skipping {output_basename}: manifest is present but contains no records."
@@ -400,24 +390,24 @@ def write_export_bundle(output_dir: Path | None = None) -> list[Path]:
             ptask = progress.add_task("Exporting", total=len(_SURFACES))
             for (
                 output_basename,
-                surface_key,
+                builder,
                 manifest_filename,
                 preferred_cols,
             ) in _SURFACES:
                 progress.update(ptask, description=f"Exporting {output_basename}")
                 _process_surface(
-                    output_basename, surface_key, manifest_filename, preferred_cols
+                    output_basename, builder, manifest_filename, preferred_cols
                 )
                 progress.update(ptask, advance=1)
     else:
         for (
             output_basename,
-            surface_key,
+            builder,
             manifest_filename,
             preferred_cols,
         ) in _SURFACES:
             _process_surface(
-                output_basename, surface_key, manifest_filename, preferred_cols
+                output_basename, builder, manifest_filename, preferred_cols
             )
 
     for line in summaries:
@@ -448,11 +438,6 @@ def run_cli_export() -> int:
     return 0
 
 
-SCREENSPACE_EVENT_COLUMNS: tuple[str, ...] = _SCREENSPACE_EVENT_BASE_COLS
-INSIGHTS_COLUMNS: tuple[str, ...] = _INSIGHTS_BASE_COLS
-TRANSCRIPT_SEGMENT_COLUMNS: tuple[str, ...] = _TRANSCRIPT_SEGMENT_BASE_COLS
-
-
 __all__ = [
     "build_screenspace_events",
     "build_insights_records",
@@ -462,6 +447,4 @@ __all__ = [
     "write_export_bundle",
     "run_cli_export",
     "SCREENSPACE_EVENT_COLUMNS",
-    "INSIGHTS_COLUMNS",
-    "TRANSCRIPT_SEGMENT_COLUMNS",
 ]
