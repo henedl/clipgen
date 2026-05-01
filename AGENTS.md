@@ -37,7 +37,7 @@ Source video filenames follow `{study}_{participant}.mp4` (e.g. `mystudy_P01.mp4
 
 ## Development tools
 
-- **uv** – Use `uv run` instead of `python` to run scripts (e.g. `uv run clipgen.py`). Use `uv add` to add dependencies.
+- **uv** – Always use `uv run` instead of `python` to run scripts (e.g. `uv run clipgen.py`). This ensures the correct venv is used, including in worktrees that don't yet have a `.venv`. Use `uv add` to add dependencies.
 - **Ruff** – Linting and formatting. A `PostToolUse` hook in `.claude/settings.json` automatically runs `uv run ruff check --fix` and `uv run ruff format` on every edited/written file. You can also run these manually: `uv run ruff check --fix` and `uv run ruff format`.
 - **ty** – Use `uv run ty check` for type checking.
 
@@ -73,15 +73,11 @@ Required columns: **ID**, **Observation**, **Category**. Participant columns fol
 
 ## Version
 
-- The version is stored as `VERSIONNUM` in [config.py](config.py).
-- **When making substantive code changes** (bug fixes or features), increment the **last segment only** (patch) in `config.py`, e.g. `0.9.0` → `0.9.1`. Do not bump for docs-only, comment-only, or refactor-only changes unless they affect user-visible behavior.
+Bump the patch (last) segment of `VERSIONNUM` in [config.py](config.py) for substantive changes (bug fixes, features). Skip for docs-only, comment-only, or refactor-only changes that don't affect user-visible behavior. See [agents/skills/bump/SKILL.md](agents/skills/bump/SKILL.md).
 
 ## Testing notes
 
-- Run the test suite from the project root with `uv run --extra dev pytest -c tests/pytest.ini`. The `dev` optional extra (tests/CI only) supplies pytest; default `uv sync` does not install it.
-- Tests cover: CLI argument parsing, CLI mode dispatch, clip pipeline, file/artifact handling, Google/Excel adapters, insights data model, insights API, manifest operations, selectors, spreadsheet generation, studio API, titlecards, transcripts, timestamp utilities, video commands, viewer data, and viewer inlining.
-- Every new CLI mode, flag, or selector should include at least one smoke test in the same PR.
-- With `config.DEBUGGING = True`, icecream is enabled, [video.py](video.py) does not invoke ffmpeg, and [transcripts.py](transcripts.py) returns stub results without loading a Whisper model.
+See [agents/skills/test/SKILL.md](agents/skills/test/SKILL.md) for the command, fixtures, and coverage areas. Every new CLI mode, flag, or selector should include at least one smoke test in the same PR.
 
 ## Project learnings for agents
 
@@ -107,8 +103,7 @@ Required columns: **ID**, **Observation**, **Category**. Participant columns fol
 - Manifest-driven state persistence: JSON manifest files (clipgen, insights, screenspace, stashes, settings) follow the pattern of load-on-startup, save-after-mutations.
 - No hardcoded version numbers in evergreen docs (CLAUDE.md, README.md). Reference `VERSIONNUM` in `config.py` instead.
 - **Icons**: Prefer SVG icons from `assets/icons/` (316 Heroicons outline, kebab-case names like `pencil-square.svg`) over crafting new inline SVG paths or using text/emoji glyphs in web UIs. **Never define SVG path data in JavaScript.** Use the CSS `mask-image` pattern to reference `.svg` files: create a `<span>` with `mask-image: url("icons/icon-name.svg")` and `background-color: currentColor`. See `XREF_BADGES` in `utils.js` and `.xref-badge-icon` in `tokens.css` for the canonical example. Icon routes already exist per blueprint (`/screenspace/icons/`, `/transcripts/icons/`, etc.).
-- **Linting/formatting**: Run `uv run ruff check --fix && uv run ruff format` after editing Python files. Run `uv run ty check` for type checking.
-- **Pre-commit format gate**: Before every `git commit`, run `uv run ruff format --check` on all modified `.py` files. If any would be reformatted, run `uv run ruff format` on them before committing. This catches files missed by the per-file PostToolUse hook (e.g. in worktrees where the hook is absent). The most common CI lint failure by far is unformatted Python code.
+- **Pre-commit check**: Before every `git commit`, run [agents/skills/check/SKILL.md](agents/skills/check/SKILL.md). Unformatted Python is the most common CI failure (the per-file PostToolUse hook is absent in worktrees).
 - Commit early and commit often, so we can roll back changes more easily.
 - If a problem is reoccurring and survives fix attempts, check git logs for clues.
 - Never edit .gitignore automatically, always confirm changes to this file with the user.
@@ -118,12 +113,8 @@ Required columns: **ID**, **Observation**, **Category**. Participant columns fol
 ### Learned Workspace Facts
 
 - Baseline time row placement in the spreadsheet layer is tied to header/`id_cell` row math (e.g. offsets from `id_cell.row`); changing that offset without aligning tests and sheet layout has broken baseline timestamp handling before.
-- When making substantive code changes (fixes or features), increment the patch (last number) of VERSIONNUM in config.py.
-- Interactive prompts use a keyword-aware helper: `quit`/`exit` exit the program, `top` returns to spreadsheet selection, and `back` returns to mode selection (or spreadsheet selection when already at mode selection).
 - Textual-based TUI support (tui.py, TEXTUAL_TUI) has been removed; prefer CLI prompts and the HTML timeline viewer for interactive features.
 - Browse mode scrolling is controlled via `BROWSE_LINES_TO_SCROLL` in `config.py`, with a default of 5 rows per up/down step.
-- Always use `uv run` to execute Python commands (e.g. `uv run clipgen.py`). This ensures the correct venv is used, even in worktrees where no `.venv` exists yet.
-- **Running tests:** from the project root, `uv run --extra dev pytest -c tests/pytest.ini`. Pytest is only in the optional `dev` extra (`pyproject.toml`); `uv sync` alone does not install it, intentionally, so runtime installs stay lean. Do not use ad-hoc `pip install pytest` — use this command so versions match `uv.lock`.
 - Be careful about using the `generate_list()`, `sheet.find()`, `sheet.get_all_values()` methods as they are API calls to Google Sheets and are heavily rate-limited. Repeatedly calling the Google API will lead to rate-limiting without warnings, which can appear as bugs (e.g. silently skipping timestamps) and make development difficult.
 - CI uses `uv pip install --torch-backend cpu` to avoid downloading ~2.5GB of CUDA/nvidia packages (tests never use CUDA). This override is CI-only (in `tests.yml`), not in `pyproject.toml`, so end-user installs still get GPU-capable torch. If Linux end users emerge and report CUDA issues, check that the CI-only approach hasn't leaked into project config.
 - Timelapse produces a single output file, not per-frame timeline events. It does not need icon/color entries in Viewer's `SS_DETECTOR_COLORS`/`SS_DETECTOR_ICON_PATHS` maps.
@@ -187,12 +178,6 @@ Patterns distilled from recurring post-review and post-merge fixes across the pr
 #### Integration
 
 - **Data contract completeness**: When creating records consumed by the frontend (artifacts, events, tasks), include all fields the renderer expects — even optional ones. Missing fields cause empty/broken cards.
-- **New flags in mode detection**: When adding a CLI flag, verify it appears in the mode-detection logic (`cli.py`), not just in argparse definition.
+- **New flags in mode detection**: When adding a CLI flag, verify it appears in the mode-detection logic (`cli.py`), not just in argparse definition. See [agents/skills/new-mode/SKILL.md](agents/skills/new-mode/SKILL.md) for the full checklist.
 - **Bundled/frozen paths**: Use `utils.get_bundled_assets_root()` for asset resolution, never raw `Path(__file__).parent`. Test that asset paths resolve in both source and PyInstaller environments.
-- **No duplicated constants between Python and JS.** Any value that lives in `config.py` (or a Python helper) and that the frontend also needs — severity labels, default clip duration, annotation keyphrases (`!key`), ignored timestamp tokens (`x`) — must flow through `utils.get_frontend_config()`, not be hardcoded in JS. When adding a new one:
-  1. Extend `get_frontend_config()` in `utils.py`.
-  2. Confirm every consumer already embeds `"config": utils.get_frontend_config()` (server.py `/api/sheet`, insights_server.py `/api/artifacts`, viewer.py `finalize_timeline_data` / gallery / insights viewer). Add it if missing.
-  3. Add the default to `CLIPGEN_CONFIG` in `assets/web/utils.js` and extend `clipgenApplyConfig` to copy the new key.
-  4. Add an assertion in `tests/test_shared_constants.py` that the JS default matches the Python value.
-
-  Why: severity tables, `!key`, `x`, and the 60s default each previously drifted across 3–5 JS files (`studio.js`, `viewer.js`, `insights-builder.js`, `metadata.js`, `transcripts.js`) because they were independently hardcoded. Renaming `!key` in `config.py` would update the backend silently while the frontend kept stripping the old token. Same risk class as `MARK_CATEGORIES` (already guarded by `test_shared_constants.py`).
+- **No duplicated constants between Python and JS.** Any value that lives in `config.py` (or a Python helper) and that the frontend also needs — severity labels, default clip duration, annotation keyphrases (`!key`), ignored timestamp tokens (`x`) — must flow through `utils.get_frontend_config()`, not be hardcoded in JS. Why: severity tables, `!key`, `x`, and the 60s default each previously drifted across 3–5 JS files (`studio.js`, `viewer.js`, `insights-builder.js`, `metadata.js`, `transcripts.js`) because they were independently hardcoded. Renaming `!key` in `config.py` would update the backend silently while the frontend kept stripping the old token. Procedure for adding a new mirrored constant: [agents/skills/sync-constants/SKILL.md](agents/skills/sync-constants/SKILL.md).
