@@ -115,6 +115,7 @@
     overlayLayerSpec: {},
     rightPaneTab: "queue",
     resultsSwitcherOpen: false,
+    amplitudeGraphEnabled: false,
   };
 
   var _timelineHitRects = [];
@@ -1911,6 +1912,12 @@
   function initTimeline() {
     qs("#zoomInBtn").appendChild(svgPlusIcon());
     qs("#zoomOutBtn").appendChild(svgMinusIcon());
+
+    var storedTimeline = getStoredUIState("screenspace");
+    if (storedTimeline.amplitudeGraphEnabled === true) {
+      state.amplitudeGraphEnabled = true;
+      qs("#amplitudeGraphBtn").classList.add("active");
+    }
     var canvas = qs("#timelineCanvas");
     sizeTimelineCanvas();
     window.addEventListener("resize", function () {
@@ -2062,6 +2069,12 @@
       updateMarkerInfo();
       renderTimeline();
     });
+    qs("#amplitudeGraphBtn").addEventListener("click", function () {
+      state.amplitudeGraphEnabled = !state.amplitudeGraphEnabled;
+      this.classList.toggle("active", state.amplitudeGraphEnabled);
+      setStoredUIStateField("screenspace", "amplitudeGraphEnabled", state.amplitudeGraphEnabled);
+      renderTimeline();
+    });
   }
 
   function clampTimelineOffset() {
@@ -2183,11 +2196,48 @@
       }
     }
 
-    // Result markers from completed and running tasks
-    var resultY = 24;
+    // Optional amplitude band: per-task-type event-density curves above the
+    // result markers. Drawn before markers so markers stay on top visually.
+    var ampOn = state.amplitudeGraphEnabled;
+    var AMP_BAND_H = 22;
+    var AMP_BAND_GAP = 2;
+    var resultY = ampOn ? 24 + AMP_BAND_H + AMP_BAND_GAP : 24;
     var resultH = h - resultY - 6;
     var focused = focusedTaskId();
     _timelineHitRects = [];
+
+    if (ampOn) {
+      var seriesByType = {};
+      state.tasks.forEach(function (task) {
+        if (!task.result || task.status === "cancelled") return;
+        if (task.participant && task.participant !== state.selectedParticipant) return;
+        if (task.type === "timelapse") return;
+        if (!seriesByType[task.type]) {
+          seriesByType[task.type] = { key: task.type, color: taskTypeColor(task.type), timestamps: [] };
+        }
+        var dst = seriesByType[task.type].timestamps;
+        var results = task.result || [];
+        for (var ri = 0; ri < results.length; ri++) {
+          var r = results[ri];
+          var ts = r.timestamp !== undefined ? r.timestamp : r.start;
+          if (ts !== undefined) dst.push(ts);
+        }
+      });
+      var seriesList = Object.keys(seriesByType).map(function (k) { return seriesByType[k]; });
+      var focusedTask = focused ? findTask(focused) : null;
+      var dimKey = focusedTask ? focusedTask.type : null;
+      drawAmplitudeBands(ctx, {
+        x: 0,
+        y: 24,
+        w: w,
+        h: AMP_BAND_H,
+        visStart: visStart,
+        visEnd: visEnd,
+        series: seriesList,
+        binPx: 2,
+        dimKey: dimKey,
+      });
+    }
 
     // Build excluded-timestamp lookup per task from cached events
     var excludedByTask = {};

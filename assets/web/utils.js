@@ -730,3 +730,106 @@ var setStoredUIStateField = function (page, field, value) {
     window.localStorage.setItem(UI_STATE_STORAGE_KEY, JSON.stringify(all));
   } catch (_) {}
 };
+
+// ---- Canvas helpers (timeline overlays) ----
+
+// Draw stacked per-series amplitude bands inside a canvas rect.
+//
+// Pure: no DOM lookups, no global state. Each timeline page (screenspace,
+// viewer, transcripts, convergence) builds a `series` array from its own
+// event shape and calls this helper from inside its renderTimeline().
+//
+// opts:
+//   x, y, w, h         band rect on the canvas (pixels, integer)
+//   visStart, visEnd   visible time window (seconds)
+//   series             [{ key, color, timestamps: number[] }, ...]
+//                      `key` is used for dim comparison; `color` is "#rrggbb";
+//                      `timestamps` are seconds (already filtered to visible scope
+//                      is fine but not required — out-of-window samples are skipped)
+//   binPx              column width in pixels for binning (default 2)
+//   dimKey             optional series key to keep at full opacity; all other series
+//                      render at reduced alpha. Pass null/undefined for no dimming.
+//
+// Each series is normalized against its OWN peak so quiet types still show
+// shape. Curves are drawn back-to-front so dimKey paints last when set.
+var drawAmplitudeBands = function (ctx, opts) {
+  var x = opts.x, y = opts.y, w = opts.w, h = opts.h;
+  var visStart = opts.visStart, visEnd = opts.visEnd;
+  var series = opts.series || [];
+  var binPx = opts.binPx || 2;
+  var dimKey = opts.dimKey;
+
+  if (w <= 0 || h <= 0 || series.length === 0) return;
+  var visLen = visEnd - visStart;
+  if (!(visLen > 0)) return;
+
+  var numBins = Math.max(1, Math.ceil(w / binPx));
+  var binSec = visLen / numBins;
+
+  // Bin each series and remember its own max
+  var binned = [];
+  for (var s = 0; s < series.length; s++) {
+    var ts = series[s].timestamps || [];
+    var bins = new Array(numBins);
+    for (var b = 0; b < numBins; b++) bins[b] = 0;
+    var maxCount = 0;
+    for (var i = 0; i < ts.length; i++) {
+      var t = ts[i];
+      if (t < visStart || t >= visEnd) continue;
+      var idx = Math.floor((t - visStart) / binSec);
+      if (idx < 0) idx = 0;
+      else if (idx >= numBins) idx = numBins - 1;
+      var c = bins[idx] + 1;
+      bins[idx] = c;
+      if (c > maxCount) maxCount = c;
+    }
+    binned.push({ key: series[s].key, color: series[s].color, bins: bins, max: maxCount });
+  }
+
+  // Order: dimmed series first, focused series last (paints on top)
+  var order = [];
+  for (var k = 0; k < binned.length; k++) {
+    if (dimKey && binned[k].key !== dimKey) order.push(k);
+  }
+  for (var k2 = 0; k2 < binned.length; k2++) {
+    if (!dimKey || binned[k2].key === dimKey) order.push(k2);
+  }
+
+  var baselineY = y + h;
+  for (var oi = 0; oi < order.length; oi++) {
+    var ser = binned[order[oi]];
+    if (ser.max <= 0) continue;
+    var dimmed = dimKey && ser.key !== dimKey;
+    var fillAlpha = dimmed ? 0.05 : 0.18;
+    var strokeAlpha = dimmed ? 0.25 : 1.0;
+
+    // Build the area path along bin tops
+    ctx.beginPath();
+    ctx.moveTo(x, baselineY);
+    for (var bi = 0; bi < numBins; bi++) {
+      var norm = ser.bins[bi] / ser.max;
+      var py = baselineY - norm * h;
+      var px = x + bi * binPx;
+      ctx.lineTo(px, py);
+      ctx.lineTo(px + binPx, py);
+    }
+    ctx.lineTo(x + numBins * binPx, baselineY);
+    ctx.closePath();
+    ctx.fillStyle = hexToRgba(ser.color, fillAlpha);
+    ctx.fill();
+
+    ctx.beginPath();
+    var started = false;
+    for (var bi2 = 0; bi2 < numBins; bi2++) {
+      var n2 = ser.bins[bi2] / ser.max;
+      var py2 = baselineY - n2 * h;
+      var px2 = x + bi2 * binPx;
+      if (!started) { ctx.moveTo(px2, py2); started = true; }
+      else ctx.lineTo(px2, py2);
+      ctx.lineTo(px2 + binPx, py2);
+    }
+    ctx.lineWidth = 1.5;
+    ctx.strokeStyle = strokeAlpha === 1.0 ? ser.color : hexToRgba(ser.color, strokeAlpha);
+    ctx.stroke();
+  }
+};
