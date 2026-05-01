@@ -88,6 +88,28 @@ def prepare_clip(clip: ClipRecord) -> ClipRecord:
     """
     if config.DEBUGGING:
         ic(clip)
+
+    # Pre-parsed fast path: callers (e.g. --ss-clips, --transcript-clips) build
+    # synthetic clips with timestamps already resolved. Skip the cell-based parse
+    # but still sanitize desc/category for use in filenames.
+    if clip.get("times"):
+        clip["cell_annotations"] = list(clip.get("cell_annotations") or [])
+        clip["segment_annotations"] = dict(clip.get("segment_annotations") or {})
+        raw_desc = clip.get("desc", "")
+        bracket_pos = raw_desc.rfind("]")
+        cleaned_desc = (
+            raw_desc[bracket_pos + 1 :].strip()
+            if bracket_pos >= 0
+            else raw_desc.strip()
+        )
+        clip["desc"] = utils.sanitize_filename(cleaned_desc)
+        clip["category"] = (
+            utils.sanitize_filename(clip["category"])
+            if clip.get("category")
+            else "uncategorized"
+        )
+        return clip
+
     utils.debug_print(
         f"prepare_clip() received clip with cell contents {clip['cell'].value}"
     )

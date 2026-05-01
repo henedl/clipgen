@@ -69,6 +69,21 @@ def _ss_args(**overrides):
         "ss_end": None,
         "ss_interval": None,
         "ss_event_label": None,
+        "ss_clips": False,
+        "transcript_clips": False,
+        "ss_clips_detector": None,
+        "ss_clips_region": None,
+        "ss_clips_participant": None,
+        "ss_clips_min_confidence": None,
+        "ss_clips_event_type": None,
+        "transcript_clips_participant": None,
+        "transcript_clips_mark": None,
+        "transcript_clips_text": None,
+        "cluster_gap": 5.0,
+        "clip_pre": 5.0,
+        "clip_post": 5.0,
+        "max_clip_duration": 0.0,
+        "export": False,
     }
     defaults.update(overrides)
     return Namespace(**defaults)

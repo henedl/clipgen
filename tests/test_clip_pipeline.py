@@ -183,6 +183,49 @@ def test_process_clips_parallel_generates_all(monkeypatch, make_clip):
     assert run_ffmpeg.call_count == 4
 
 
+def test_process_clips_accepts_pre_parsed_synthetic_clip(monkeypatch):
+    """Synthetic clips (e.g. --ss-clips) skip prepare_clip's cell parse and
+    produce artifacts with deterministic ids derived from the negative cell row."""
+    from types import SimpleNamespace
+
+    from utils import ClipRecord
+
+    cell = SimpleNamespace(value="", row=-1, col=1)
+    clip: ClipRecord = {
+        "cell": cell,
+        "study": "mystudy",
+        "participant": "P01",
+        "category": "screenspace-change",
+        "desc": "change region1",
+        "severity": "",
+        "times": [("0:00:10", "0:00:20")],
+        "source_filename": "mystudy_P01.mp4",
+    }
+    monkeypatch.setattr(clipgen.Path, "is_file", lambda self: True)
+    monkeypatch.setattr(clipgen.utils, "create_progress_bar", lambda: None)
+    monkeypatch.setattr(config, "CLIP_PARALLEL_WORKERS", 1)
+    monkeypatch.setattr(
+        clipgen.files,
+        "get_unique_filename",
+        lambda _template, file_format=None: f"out{file_format or '.mp4'}",
+    )
+    run_ffmpeg = Mock(return_value=True)
+    monkeypatch.setattr(clipgen.video, "run_ffmpeg", run_ffmpeg)
+
+    count, artifacts = clipgen.process_clips([clip], output_format="clip")
+    assert count == 1
+    assert len(artifacts) == 1
+    a = artifacts[0]
+    # Negative-row + col 1 produces stable id namespace; collision-proof vs.
+    # spreadsheet artifacts (which always have positive row/col).
+    assert a["id"] == "a-1c1s0"
+    assert a["cellRow"] == -1
+    assert a["cellCol"] == 1
+    # safe_cell_a1 returns "" for negative rows.
+    assert a["cellA1"] == ""
+    assert run_ffmpeg.call_count == 1
+
+
 def test_resolve_clip_workers(monkeypatch):
     """Auto-detect returns min(4, cpu_count); explicit values pass through."""
     import pipeline

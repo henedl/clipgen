@@ -758,12 +758,21 @@ def letter_to_index(letter: str) -> int:
 
 
 def safe_cell_a1(row: int | None, col: int | None) -> str:
-    """Convert 1-based row/col to A1 notation, returning '' on failure."""
+    """Convert 1-based row/col to A1 notation, returning '' on failure.
+
+    Returns an empty string when row/col are missing, non-int, or non-positive
+    (e.g. synthetic ClipRecords from --ss-clips / --transcript-clips use negative
+    rows to namespace artifact ids — those produce no spreadsheet A1 reference).
+    """
     import gspread.utils
 
+    if not isinstance(row, int) or not isinstance(col, int):
+        return ""
+    if row < 1 or col < 1:
+        return ""
     try:
-        return gspread.utils.rowcol_to_a1(row, col) if row and col else ""
-    except (TypeError, ValueError):
+        return gspread.utils.rowcol_to_a1(row, col)
+    except Exception:
         return ""
 
 
@@ -1196,6 +1205,58 @@ def convert_clock_pairs_to_relative(
             )
 
     return result
+
+
+def cluster_spans(
+    spans: list[tuple[float, float]],
+    *,
+    gap_seconds: float,
+    pad_pre: float = 0.0,
+    pad_post: float = 0.0,
+    max_duration: float = 0.0,
+) -> list[tuple[float, float, list[int]]]:
+    """Group (start, end) spans whose gap <= gap_seconds, then pad and optionally split.
+
+    Returns a list of (cluster_start, cluster_end, member_indices) tuples, where
+    member_indices are the original indices contributing to that cluster.
+
+    - gap_seconds <= 0 yields one cluster per input span (no merging).
+    - Padding is applied after clustering: cluster_start = max(0, start - pad_pre);
+      cluster_end is not clamped to a video duration (callers may clamp if needed —
+      ffmpeg tolerates an end past EOF).
+    - When max_duration > 0 and a padded cluster exceeds it, the cluster is split
+      into ceil(duration / max_duration) sub-clips that each claim all members.
+    - Input is not mutated; spans are sorted internally by (start, end).
+    """
+    if not spans:
+        return []
+    indexed = sorted(enumerate(spans), key=lambda kv: (kv[1][0], kv[1][1]))
+    groups: list[tuple[float, float, list[int]]] = []
+    cur_start, cur_end = indexed[0][1]
+    cur_members: list[int] = [indexed[0][0]]
+    for orig_idx, (s, e) in indexed[1:]:
+        if gap_seconds <= 0 or s - cur_end > gap_seconds:
+            groups.append((cur_start, cur_end, cur_members))
+            cur_start, cur_end, cur_members = s, e, [orig_idx]
+        else:
+            if e > cur_end:
+                cur_end = e
+            cur_members.append(orig_idx)
+    groups.append((cur_start, cur_end, cur_members))
+
+    out: list[tuple[float, float, list[int]]] = []
+    for s, e, members in groups:
+        ps = max(0.0, s - pad_pre)
+        pe = e + pad_post
+        if max_duration > 0 and (pe - ps) > max_duration:
+            t = ps
+            while t < pe:
+                sub_end = min(t + max_duration, pe)
+                out.append((t, sub_end, list(members)))
+                t = sub_end
+        else:
+            out.append((ps, pe, members))
+    return out
 
 
 # ---- Interactive control flow ----
