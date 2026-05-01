@@ -632,6 +632,61 @@ class TestManifestWithEvents:
         assert loaded["events"] == []
 
 
+class TestBackfillMissingEvents:
+    def _completed_template_task(self):
+        return {
+            "id": "ss_template1",
+            "type": "template",
+            "status": "completed",
+            "source_video": "study_P01.mp4",
+            "participant": "P01",
+            "region": "icon",
+            "parameters": {},
+            "result": [
+                {"timestamp": 5.0, "best_score": 0.9, "match_count": 1},
+                {"timestamp": 10.0, "best_score": 0.7, "match_count": 2},
+            ],
+        }
+
+    def test_backfills_when_no_events(self, tmp_path, monkeypatch):
+        import screenspace_server
+
+        monkeypatch.setattr(config, "OUTPUT_DIR", str(tmp_path))
+        manifest = {
+            "regions": {},
+            "tasks": [self._completed_template_task()],
+            "events": [],
+            "stashes": [],
+        }
+        screenspace_server._backfill_missing_events(manifest)
+        assert len(manifest["events"]) == 2
+        assert all(e["task_id"] == "ss_template1" for e in manifest["events"])
+        assert manifest["events"][0]["detector"] == "template"
+
+    def test_skips_tasks_with_existing_events(self, tmp_path, monkeypatch):
+        import screenspace_server
+
+        monkeypatch.setattr(config, "OUTPUT_DIR", str(tmp_path))
+        manifest = {
+            "regions": {},
+            "tasks": [self._completed_template_task()],
+            "events": [{"id": "ev_x", "task_id": "ss_template1"}],
+            "stashes": [],
+        }
+        screenspace_server._backfill_missing_events(manifest)
+        assert len(manifest["events"]) == 1
+
+    def test_skips_non_completed_tasks(self, tmp_path, monkeypatch):
+        import screenspace_server
+
+        monkeypatch.setattr(config, "OUTPUT_DIR", str(tmp_path))
+        task = self._completed_template_task()
+        task["status"] = "running"
+        manifest = {"regions": {}, "tasks": [task], "events": [], "stashes": []}
+        screenspace_server._backfill_missing_events(manifest)
+        assert manifest["events"] == []
+
+
 class TestDrainNewEvents:
     def test_drain_collects_and_clears(self):
         worker = screenspace.ScreenspaceWorker()
@@ -1483,6 +1538,36 @@ class TestFfmpegPipeFrames:
             )
         )
         assert frames == []
+
+    def test_uses_two_stage_seek_for_far_start(self, monkeypatch):
+        """Analysis pipe should two-stage seek so synthetic ts == decoded PTS."""
+        captured: dict = {}
+
+        def fake_popen(cmd, *a, **kw):
+            captured["cmd"] = list(cmd)
+            proc = mock.MagicMock()
+            proc.stdout = io.BytesIO(b"")
+            proc.terminate = mock.MagicMock()
+            proc.wait = mock.MagicMock()
+            return proc
+
+        monkeypatch.setattr("shutil.which", lambda _: "/usr/bin/ffmpeg")
+        monkeypatch.setattr("subprocess.Popen", fake_popen)
+
+        list(
+            screenspace._ffmpeg_pipe_frames(
+                "/fake.mp4",
+                1.0,
+                start_seconds=15.0,
+                end_seconds=20.0,
+                frame_width=4,
+                frame_height=2,
+            )
+        )
+        cmd = captured["cmd"]
+        i_idx = cmd.index("-i")
+        assert "-ss" in cmd[:i_idx], "expected fast pre-input seek"
+        assert "-ss" in cmd[i_idx + 2 :], "expected accurate post-input seek"
 
 
 class TestScanViaFfmpegPipe:

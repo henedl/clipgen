@@ -183,6 +183,49 @@ def test_process_clips_parallel_generates_all(monkeypatch, make_clip):
     assert run_ffmpeg.call_count == 4
 
 
+def test_process_clips_accepts_pre_parsed_synthetic_clip(monkeypatch):
+    """Synthetic clips (e.g. --ss-clips) skip prepare_clip's cell parse and
+    produce artifacts with deterministic ids derived from the negative cell row."""
+    from types import SimpleNamespace
+
+    from utils import ClipRecord
+
+    cell = SimpleNamespace(value="", row=-1, col=1)
+    clip: ClipRecord = {
+        "cell": cell,
+        "study": "mystudy",
+        "participant": "P01",
+        "category": "screenspace-change",
+        "desc": "change region1",
+        "severity": "",
+        "times": [("0:00:10", "0:00:20")],
+        "source_filename": "mystudy_P01.mp4",
+    }
+    monkeypatch.setattr(clipgen.Path, "is_file", lambda self: True)
+    monkeypatch.setattr(clipgen.utils, "create_progress_bar", lambda: None)
+    monkeypatch.setattr(config, "CLIP_PARALLEL_WORKERS", 1)
+    monkeypatch.setattr(
+        clipgen.files,
+        "get_unique_filename",
+        lambda _template, file_format=None: f"out{file_format or '.mp4'}",
+    )
+    run_ffmpeg = Mock(return_value=True)
+    monkeypatch.setattr(clipgen.video, "run_ffmpeg", run_ffmpeg)
+
+    count, artifacts = clipgen.process_clips([clip], output_format="clip")
+    assert count == 1
+    assert len(artifacts) == 1
+    a = artifacts[0]
+    # Negative-row + col 1 produces stable id namespace; collision-proof vs.
+    # spreadsheet artifacts (which always have positive row/col).
+    assert a["id"] == "a-1c1s0"
+    assert a["cellRow"] == -1
+    assert a["cellCol"] == 1
+    # safe_cell_a1 returns "" for negative rows.
+    assert a["cellA1"] == ""
+    assert run_ffmpeg.call_count == 1
+
+
 def test_resolve_clip_workers(monkeypatch):
     """Auto-detect returns min(4, cpu_count); explicit values pass through."""
     import pipeline
@@ -234,3 +277,136 @@ def test_run_clip_pipeline_cancel_flag(monkeypatch):
     # Should have processed only the first clip before cancel was detected
     assert len(results) == 1
     assert processed == [0]
+
+
+def test_process_clips_forwards_cancel_flag_to_segments(monkeypatch, make_clip):
+    """process_clips should forward cancel_flag into _process_single_clip_segments."""
+    raw_clip = make_clip()
+    monkeypatch.setattr(
+        clipgen.files,
+        "prepare_clip",
+        lambda clip: _prepared_clip(clip, [("00:10", "00:20")]),
+    )
+    monkeypatch.setattr(clipgen.Path, "is_file", lambda self: True)
+    monkeypatch.setattr(clipgen.utils, "create_progress_bar", lambda: None)
+    monkeypatch.setattr(config, "CLIP_PARALLEL_WORKERS", 1)
+
+    captured = {}
+
+    def fake_segments(*args, **kwargs):
+        captured["cancel_flag"] = kwargs.get("cancel_flag")
+        return (1, [])
+
+    monkeypatch.setattr(pipeline, "_process_single_clip_segments", fake_segments)
+
+    sentinel = lambda: False  # noqa: E731
+    clipgen.process_clips([raw_clip], output_format="clip", cancel_flag=sentinel)
+    assert captured["cancel_flag"] is sentinel
+
+
+def test_process_clips_sequential_short_circuits_on_cancel(monkeypatch, make_clip):
+    """Sequential branch should stop calling _process_single_clip_segments after cancel."""
+    clips = [make_clip(row=i, col=2) for i in range(3, 6)]
+    monkeypatch.setattr(
+        clipgen.files,
+        "prepare_clip",
+        lambda clip: _prepared_clip(clip, [("00:10", "00:20")]),
+    )
+    monkeypatch.setattr(clipgen.Path, "is_file", lambda self: True)
+    monkeypatch.setattr(clipgen.utils, "create_progress_bar", lambda: None)
+    monkeypatch.setattr(config, "CLIP_PARALLEL_WORKERS", 1)
+
+    cancelled = {"flag": False}
+
+    def seg_side_effect(*_args, **_kwargs):
+        # Trip cancel after the first segment finishes; no further calls expected.
+        cancelled["flag"] = True
+        return (1, [])
+
+    seg_mock = Mock(side_effect=seg_side_effect)
+    monkeypatch.setattr(pipeline, "_process_single_clip_segments", seg_mock)
+
+    clipgen.process_clips(
+        clips, output_format="clip", cancel_flag=lambda: cancelled["flag"]
+    )
+    assert seg_mock.call_count == 1
+
+
+def test_process_single_clip_segments_forwards_cancel_to_video(monkeypatch, make_clip):
+    """_process_single_clip_segments should pass cancel_flag to each video helper."""
+    raw_clip = _prepared_clip(make_clip(), [("00:10", "00:20")])
+
+    monkeypatch.setattr(
+        clipgen.files, "get_unique_filename", lambda *_a, **_k: "out.mp4"
+    )
+
+    captured = {}
+
+    def fake_run_ffmpeg(**kwargs):
+        captured["clip"] = kwargs.get("cancel_flag")
+        return True
+
+    def fake_screenshot(**kwargs):
+        captured["screen"] = kwargs.get("cancel_flag")
+        return True
+
+    def fake_gif(**kwargs):
+        captured["gif"] = kwargs.get("cancel_flag")
+        return True
+
+    monkeypatch.setattr(pipeline.video, "run_ffmpeg", fake_run_ffmpeg)
+    monkeypatch.setattr(pipeline.video, "extract_screenshot", fake_screenshot)
+    monkeypatch.setattr(pipeline.video, "extract_gif", fake_gif)
+    monkeypatch.setattr(config, "TITLECARDS_ENABLED", False)
+
+    sentinel = lambda: False  # noqa: E731
+    pipeline._process_single_clip_segments(
+        raw_clip, "src.mp4", set(), output_format="clip", cancel_flag=sentinel
+    )
+    pipeline._process_single_clip_segments(
+        raw_clip, "src.mp4", set(), output_format="screen", cancel_flag=sentinel
+    )
+    pipeline._process_single_clip_segments(
+        raw_clip, "src.mp4", set(), output_format="gif", cancel_flag=sentinel
+    )
+
+    assert captured["clip"] is sentinel
+    assert captured["screen"] is sentinel
+    assert captured["gif"] is sentinel
+
+
+def test_process_single_clip_segments_unlinks_partial_on_cancel(
+    monkeypatch, make_clip, tmp_path
+):
+    """When ffmpeg returns False due to cancel, the partial output should be removed."""
+    raw_clip = _prepared_clip(make_clip(), [("00:10", "00:20"), ("00:30", "00:40")])
+
+    out_path = tmp_path / "out.mp4"
+    monkeypatch.setattr(
+        clipgen.files,
+        "get_unique_filename",
+        lambda *_a, **_k: str(out_path),
+    )
+
+    # Simulate ffmpeg writing a partial file then returning False because cancel fired.
+    cancel_state = {"set": False}
+
+    def fake_run_ffmpeg(**_kwargs):
+        out_path.write_bytes(b"partial")
+        cancel_state["set"] = True
+        return False
+
+    monkeypatch.setattr(pipeline.video, "run_ffmpeg", fake_run_ffmpeg)
+    monkeypatch.setattr(config, "TITLECARDS_ENABLED", False)
+
+    generated, paths = pipeline._process_single_clip_segments(
+        raw_clip,
+        "src.mp4",
+        set(),
+        output_format="clip",
+        cancel_flag=lambda: cancel_state["set"],
+    )
+
+    assert generated == 0
+    assert paths == []
+    assert not out_path.exists()

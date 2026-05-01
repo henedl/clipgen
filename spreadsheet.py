@@ -699,6 +699,67 @@ def get_line_timestamps(ctx: SheetContext, line_index: int) -> list[ClipRecord]:
     return clips
 
 
+# ---- Sheet-wide collectors ----
+#
+# Discovery helpers that scan the whole sheet to enumerate the unique values of
+# a single dimension (categories, severities, annotation IDs). Used by
+# interactive prompts to populate selection menus before any clip records are
+# generated; not called from the generate_* functions below.
+
+
+def collect_categories(ctx: SheetContext) -> list[str]:
+    """Scan sheet and return unique categories in order of first appearance."""
+    categories = []
+    category_col = ctx.category_cell.col - 1
+    for i in range(ctx.first_data_row_idx, len(ctx.sheet_data)):
+        category = ctx.sheet_data[i][category_col].strip()
+        if category and category not in categories:
+            categories.append(category)
+    return categories
+
+
+def collect_severities(ctx: SheetContext) -> tuple[list[str], dict[str, int]]:
+    """Scan sheet and return unique severity values sorted most severe first, plus row counts."""
+    if ctx.severity_cell is None:
+        return [], {}
+    severities: list[str] = []
+    counts: dict[str, int] = {}
+    severity_col = ctx.severity_cell.col - 1
+    for i in range(ctx.first_data_row_idx, len(ctx.sheet_data)):
+        if severity_col < len(ctx.sheet_data[i]):
+            raw = ctx.sheet_data[i][severity_col].strip()
+            if raw:
+                normalized = utils.normalize_severity(raw)
+                if normalized:
+                    counts[normalized] = counts.get(normalized, 0) + 1
+                    if normalized not in severities:
+                        severities.append(normalized)
+    severities.sort(key=utils.severity_sort_key)
+    return severities, counts
+
+
+def collect_annotations(ctx: SheetContext) -> tuple[list[str], dict[str, int]]:
+    """Scan sheet and return unique annotation IDs found in timestamp cells, plus cell counts."""
+    annotation_ids: list[str] = []
+    counts: dict[str, int] = {}
+    for i in range(ctx.first_data_row_idx, len(ctx.sheet_data)):
+        if ctx.filename_row_idx is not None and i == ctx.filename_row_idx:
+            continue
+        for col_idx in range(ctx.id_cell.col, ctx.id_cell.col + ctx.num_participants):
+            if col_idx >= len(ctx.sheet_data[i]):
+                continue
+            cell_value = ctx.sheet_data[i][col_idx].strip()
+            if not cell_value:
+                continue
+            _, segment_annotations, _ = utils.parse_cell_annotations(cell_value)
+            for aid in segment_annotations:
+                counts[aid] = counts.get(aid, 0) + 1
+                if aid not in annotation_ids:
+                    annotation_ids.append(aid)
+    annotation_ids.sort()
+    return annotation_ids, counts
+
+
 # ---- Mode generators ----
 
 
@@ -932,17 +993,6 @@ def generate_keyword_timestamps(
     return filtered_clips
 
 
-def collect_categories(ctx: SheetContext) -> list[str]:
-    """Scan sheet and return unique categories in order of first appearance."""
-    categories = []
-    category_col = ctx.category_cell.col - 1
-    for i in range(ctx.first_data_row_idx, len(ctx.sheet_data)):
-        category = ctx.sheet_data[i][category_col].strip()
-        if category and category not in categories:
-            categories.append(category)
-    return categories
-
-
 def generate_category_timestamps(
     ctx: SheetContext, selected_categories: list[str]
 ) -> list[ClipRecord]:
@@ -958,48 +1008,6 @@ def generate_category_timestamps(
             utils.debug_print(f"Row {i + 1} matches category '{row_category}'")
             clips.extend(get_line_timestamps(ctx, i))
     return clips
-
-
-def collect_severities(ctx: SheetContext) -> tuple[list[str], dict[str, int]]:
-    """Scan sheet and return unique severity values sorted most severe first, plus row counts."""
-    if ctx.severity_cell is None:
-        return [], {}
-    severities: list[str] = []
-    counts: dict[str, int] = {}
-    severity_col = ctx.severity_cell.col - 1
-    for i in range(ctx.first_data_row_idx, len(ctx.sheet_data)):
-        if severity_col < len(ctx.sheet_data[i]):
-            raw = ctx.sheet_data[i][severity_col].strip()
-            if raw:
-                normalized = utils.normalize_severity(raw)
-                if normalized:
-                    counts[normalized] = counts.get(normalized, 0) + 1
-                    if normalized not in severities:
-                        severities.append(normalized)
-    severities.sort(key=utils.severity_sort_key)
-    return severities, counts
-
-
-def collect_annotations(ctx: SheetContext) -> tuple[list[str], dict[str, int]]:
-    """Scan sheet and return unique annotation IDs found in timestamp cells, plus cell counts."""
-    annotation_ids: list[str] = []
-    counts: dict[str, int] = {}
-    for i in range(ctx.first_data_row_idx, len(ctx.sheet_data)):
-        if ctx.filename_row_idx is not None and i == ctx.filename_row_idx:
-            continue
-        for col_idx in range(ctx.id_cell.col, ctx.id_cell.col + ctx.num_participants):
-            if col_idx >= len(ctx.sheet_data[i]):
-                continue
-            cell_value = ctx.sheet_data[i][col_idx].strip()
-            if not cell_value:
-                continue
-            _, segment_annotations, _ = utils.parse_cell_annotations(cell_value)
-            for aid in segment_annotations:
-                counts[aid] = counts.get(aid, 0) + 1
-                if aid not in annotation_ids:
-                    annotation_ids.append(aid)
-    annotation_ids.sort()
-    return annotation_ids, counts
 
 
 def generate_severity_timestamps(
@@ -1189,6 +1197,9 @@ def generate_cell_timestamps(
     return clips
 
 
+# ---- Clip sorting ----
+
+
 def sort_clips_chronologically(clips: list[ClipRecord]) -> None:
     """Sort clip records in-place by earliest start timestamp in each clip cell.
 
@@ -1217,6 +1228,9 @@ def sort_clips_by_severity(clips: list[ClipRecord]) -> None:
     Clips without severity or with unrecognized severity sort last.
     """
     clips.sort(key=lambda clip: utils.severity_sort_key(clip.get("severity", "")))
+
+
+# ---- Highlights reel scoring ----
 
 
 def _clip_duration_seconds(clip: Any) -> float:

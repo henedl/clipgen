@@ -30,6 +30,7 @@ API endpoints (all under /screenspace/):
   POST /api/tasks/resume                   – resume the worker
   GET  /api/tasks/<task_id>/results        – analysis results (timestamps, artifact paths)
   GET  /api/events                         – list result events across all tasks
+  GET  /api/export/events                  – export events as analysis-ready JSON (default) or CSV (?format=csv)
   PUT  /api/events/<event_id>/exclude      – mark an event excluded
   PUT  /api/events/<event_id>/include      – mark an event included
   PUT  /api/events/bulk-exclude            – bulk exclude events by task/time range
@@ -209,7 +210,7 @@ def api_video_frame(participant: str, timestamp: str) -> FlaskResponse:
         ), 404
 
     width = request.args.get("w", 0, type=int)
-    cache_key = (video_path, round(ts, 2), width)
+    cache_key = (video_path, round(ts, 3), width)
     cached = _frame_cache.get(cache_key)
     if cached is not None:
         return Response(
@@ -219,7 +220,7 @@ def api_video_frame(participant: str, timestamp: str) -> FlaskResponse:
         )
 
     if width > 0:
-        jpeg_bytes = video.extract_thumbnail_bytes(video_path, int(ts), width=width)
+        jpeg_bytes = video.extract_thumbnail_bytes(video_path, ts, width=width)
     else:
         frame = video.extract_frame_at_timestamp(video_path, ts)
         if frame is None:
@@ -826,6 +827,14 @@ def api_tasks_get(task_id: str) -> FlaskResponse:
     return jsonify({"ok": True, "task": _clean_task(task)})
 
 
+# ---- Task creation helpers ----
+#
+# Private helpers for api_tasks_create below: validation, parameter coercion,
+# media extraction, and multitool step preparation. Placed between the read-side
+# task routes above and the create/mutate routes below so the create endpoint's
+# dependencies are immediately visible when reading top-down.
+
+
 def _validate_task_request(
     data: dict[str, Any],
 ) -> (
@@ -1356,6 +1365,54 @@ def api_events_list() -> FlaskResponse:
     return jsonify({"ok": True, "events": _sanitize_floats(events)})
 
 
+@screenspace_bp.route("/api/export/events")
+def api_export_events() -> FlaskResponse:
+    """Export Screenspace events as analysis-ready JSON or CSV.
+
+    Query params:
+      format:      "json" (default) or "csv"
+      excluded:    "true" to keep only excluded, "false" to drop excluded; default keeps both
+      participant: keep only events for this participant id
+      detector:    keep only events from this detector type
+    """
+    import data_export
+
+    fmt = (request.args.get("format") or "json").lower()
+    excluded_filter = request.args.get("excluded")
+    participant = request.args.get("participant")
+    detector = request.args.get("detector")
+
+    if excluded_filter == "false":
+        include_excluded = False
+    elif excluded_filter == "true":
+        include_excluded = True
+    else:
+        include_excluded = True
+
+    records = data_export.build_screenspace_events(
+        _manifest,
+        include_excluded=include_excluded,
+        participants=[participant] if participant else None,
+        detectors=[detector] if detector else None,
+    )
+    if excluded_filter == "true":
+        records = [r for r in records if r.get("excluded")]
+
+    if fmt == "csv":
+        body = data_export.to_csv(
+            records,
+            preferred_column_order=data_export.SCREENSPACE_EVENT_COLUMNS,
+        )
+        response = Response(body, mimetype="text/csv")
+        response.headers["Content-Disposition"] = (
+            'attachment; filename="screenspace_events.csv"'
+        )
+        return response
+    if fmt == "json":
+        return jsonify({"ok": True, "events": _sanitize_floats(records)})
+    return jsonify({"ok": False, "error": f"Unsupported format: {fmt}"}), 400
+
+
 @screenspace_bp.route("/api/events/<event_id>/exclude", methods=["PUT"])
 def api_event_exclude(event_id: str) -> FlaskResponse:
     """Set an event as excluded."""
@@ -1520,6 +1577,40 @@ def _clean_task(task: dict[str, Any]) -> dict[str, Any]:
 # ---- State initialization ----
 
 
+def _backfill_missing_events(manifest: dict[str, Any]) -> None:
+    """Heal manifests where completed tasks have results but no events.
+
+    Why: events are generated only at task completion. Tasks completed before
+    the events system existed (or whose events were lost) leave the frontend
+    unable to render exclude toggles. Backfill so older results behave like
+    new ones.
+    """
+    import screenspace
+
+    events = manifest.setdefault("events", [])
+    task_ids_with_events = {e.get("task_id") for e in events if e.get("task_id")}
+    added = 0
+    for task in manifest.get("tasks", []):
+        if task.get("status") != screenspace.TASK_STATUS_COMPLETED:
+            continue
+        if task.get("id") in task_ids_with_events:
+            continue
+        result = task.get("result")
+        if not isinstance(result, list) or not result:
+            continue
+        new_events = screenspace.generate_events_from_results(task, result)
+        if new_events:
+            events.extend(new_events)
+            added += len(new_events)
+    if added:
+        screenspace.save_screenspace_manifest(
+            manifest.get("regions", {}),
+            manifest.get("tasks", []),
+            events,
+            stashes=manifest.get("stashes", []),
+        )
+
+
 def _init_screenspace_state(
     sheet_context: Any = None,
     participant_list: list[str] | None = None,
@@ -1535,6 +1626,7 @@ def _init_screenspace_state(
 
     _output_dir = str(utils.get_effective_output_dir())
     _manifest = screenspace.load_screenspace_manifest()
+    _backfill_missing_events(_manifest)
 
     _participants = []
     study_name = ""

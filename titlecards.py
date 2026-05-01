@@ -16,6 +16,7 @@ Key functions:
 import os
 import tempfile
 import threading
+from collections.abc import Callable
 from pathlib import Path
 
 import config
@@ -55,6 +56,7 @@ def _build_card_frame(
     label: str,
     drawtext_filter: str | None = None,
     allow_color_fallback: bool = False,
+    cancel_flag: Callable[[], bool] | None = None,
 ) -> str | None:
     """Generate a short title/end card video segment.
 
@@ -150,6 +152,7 @@ def _build_card_frame(
         input_file=input_label,
         output_file=card_path,
         os_error_message=f"ffmpeg could not successfully run for {label} generation.",
+        cancel_flag=cancel_flag,
     )
     if ffmpeg_result is None or ffmpeg_result.returncode != 0:
         utils.warning_print(
@@ -173,7 +176,12 @@ def _build_card_frame(
     return card_path
 
 
-def build_titlecard_frame(clip: ClipRecord, resolution: str) -> str | None:
+def build_titlecard_frame(
+    clip: ClipRecord,
+    resolution: str,
+    *,
+    cancel_flag: Callable[[], bool] | None = None,
+) -> str | None:
     """Generate a short titlecard video segment for a clip."""
     return _build_card_frame(
         resolution=resolution,
@@ -181,25 +189,35 @@ def build_titlecard_frame(clip: ClipRecord, resolution: str) -> str | None:
         label="titlecard",
         drawtext_filter=_build_drawtext_filter(str(clip.get("desc", ""))),
         allow_color_fallback=True,
+        cancel_flag=cancel_flag,
     )
 
 
-def build_endcard_frame(resolution: str) -> str | None:
+def build_endcard_frame(
+    resolution: str,
+    *,
+    cancel_flag: Callable[[], bool] | None = None,
+) -> str | None:
     """Generate a short endcard video segment if assets/endcard.png exists."""
     return _build_card_frame(
         resolution=resolution,
         background_path=utils.get_bundled_assets_root() / "assets" / "endcard.png",
         label="endcard",
+        cancel_flag=cancel_flag,
     )
 
 
-def get_or_build_endcard(resolution: str) -> str | None:
+def get_or_build_endcard(
+    resolution: str,
+    *,
+    cancel_flag: Callable[[], bool] | None = None,
+) -> str | None:
     """Return a cached endcard path for the given resolution, building if needed."""
     with _endcard_lock:
         cached = _endcard_cache.get(resolution)
         if cached and Path(cached).is_file():
             return cached
-    path = build_endcard_frame(resolution)
+    path = build_endcard_frame(resolution, cancel_flag=cancel_flag)
     if path:
         with _endcard_lock:
             existing = _endcard_cache.get(resolution)
@@ -323,13 +341,17 @@ def wrap_clip_with_cards(
     clip: ClipRecord,
     clip_path: str,
     resolution: str | None = None,
+    *,
+    cancel_flag: Callable[[], bool] | None = None,
 ) -> bool:
     """Prepend a titlecard and append an endcard to a clip in a single ffmpeg encode.
 
     Replaces the previous two-invocation (prepend then append) flow so the clip body
     is decoded and re-encoded once instead of twice. Returns True when the clip file
     is usable afterwards (either wrapped or left untouched on soft failure), and
-    False only on a hard failure (e.g. the clip file is missing).
+    False only on a hard failure (e.g. the clip file is missing). When *cancel_flag*
+    is supplied and returns True during a card or wrap encode, the in-flight ffmpeg
+    is terminated and the original clip file is left untouched.
     """
     if not config.TITLECARDS_ENABLED:
         return True
@@ -361,8 +383,8 @@ def wrap_clip_with_cards(
 
     has_clip_audio = bool(probed and probed.get("audio_codec"))
 
-    titlecard_path = build_titlecard_frame(clip, resolution)
-    endcard_path = get_or_build_endcard(resolution)
+    titlecard_path = build_titlecard_frame(clip, resolution, cancel_flag=cancel_flag)
+    endcard_path = get_or_build_endcard(resolution, cancel_flag=cancel_flag)
 
     if not titlecard_path and not endcard_path:
         # Both cards failed to build; nothing to do, keep clip as-is.
@@ -409,6 +431,7 @@ def wrap_clip_with_cards(
             input_file=clip_path,
             output_file=output_temp_path,
             os_error_message="Filter-based concat failed while wrapping clip with cards.",
+            cancel_flag=cancel_flag,
         )
         if ffmpeg_result is None or ffmpeg_result.returncode != 0:
             utils.warning_print(

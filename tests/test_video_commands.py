@@ -583,3 +583,181 @@ def test_extract_frame_at_timestamp_debug_mode(monkeypatch):
     frame = video.extract_frame_at_timestamp("/fake.mp4", 0.0)
     assert frame is not None
     assert frame.shape == (1080, 1920, 3)
+
+
+# ---- accurate_seek_args ----
+
+
+def test_accurate_seek_args_zero_returns_empty_lists():
+    pre, post = video.accurate_seek_args(0.0)
+    assert pre == []
+    assert post == []
+
+
+def test_accurate_seek_args_within_preseek_window_skips_pre():
+    """For ts within the preseek window, the entire seek goes after -i."""
+    ts = video.FFMPEG_PRESEEK_SECONDS / 2
+    pre, post = video.accurate_seek_args(ts)
+    assert pre == []
+    assert post == ["-ss", str(ts)]
+
+
+def test_accurate_seek_args_splits_for_far_target():
+    """For ts beyond the preseek window, we get a fast pre + small post."""
+    ts = video.FFMPEG_PRESEEK_SECONDS + 12.345
+    pre, post = video.accurate_seek_args(ts)
+    assert pre == ["-ss", str(ts - video.FFMPEG_PRESEEK_SECONDS)]
+    assert post == ["-ss", str(video.FFMPEG_PRESEEK_SECONDS)]
+
+
+# ---- two-stage seek wiring in extract_frame_at_timestamp ----
+
+
+def _captured_run(captured: dict):
+    def _run(*args, **kwargs):
+        captured["cmd"] = list(args[0])
+        return subprocess.CompletedProcess(args, 0, stdout=b"")
+
+    return _run
+
+
+def test_extract_frame_at_timestamp_uses_two_stage_seek(monkeypatch):
+    """Far targets get -ss before -i AND -ss after -i (frame-accurate)."""
+    monkeypatch.setattr(
+        video,
+        "probe_video_properties",
+        lambda _: {"width": 320, "height": 240, "fps": 30.0, "duration": 60.0},
+    )
+    captured: dict = {}
+    monkeypatch.setattr(video.subprocess, "run", _captured_run(captured))
+
+    video.extract_frame_at_timestamp("/fake.mp4", 12.5)
+    cmd = captured["cmd"]
+    i_idx = cmd.index("-i")
+    pre = cmd[:i_idx]
+    post = cmd[i_idx + 2 :]
+    assert "-ss" in pre, "expected fast pre-input seek"
+    assert "-ss" in post, "expected accurate post-input seek"
+
+
+def test_extract_frame_at_timestamp_post_only_seek_for_near_target(monkeypatch):
+    """For ts inside the preseek window, only post-input -ss is emitted."""
+    monkeypatch.setattr(
+        video,
+        "probe_video_properties",
+        lambda _: {"width": 320, "height": 240, "fps": 30.0, "duration": 60.0},
+    )
+    captured: dict = {}
+    monkeypatch.setattr(video.subprocess, "run", _captured_run(captured))
+
+    video.extract_frame_at_timestamp("/fake.mp4", 0.5)
+    cmd = captured["cmd"]
+    i_idx = cmd.index("-i")
+    assert "-ss" not in cmd[:i_idx]
+    assert "-ss" in cmd[i_idx + 2 :]
+
+
+# ---- two-stage seek + float ts in extract_thumbnail_bytes ----
+
+
+def test_extract_thumbnail_bytes_preserves_float_timestamp(monkeypatch, tmp_path):
+    """The float timestamp must reach ffmpeg without int() truncation."""
+    fake = tmp_path / "video.mp4"
+    fake.write_bytes(b"x")
+    captured: dict = {}
+    monkeypatch.setattr(video.subprocess, "run", _captured_run(captured))
+
+    video.extract_thumbnail_bytes(str(fake), 12.75, width=200)
+    cmd = captured["cmd"]
+    seek_values = [cmd[i + 1] for i, a in enumerate(cmd) if a == "-ss"]
+    assert seek_values, "expected at least one -ss flag"
+    assert any("12.75" in str(v) or "10.75" in str(v) for v in seek_values), (
+        f"float seconds should appear in either pre- or post-seek (got {seek_values})"
+    )
+    # And no integer-truncated whole-second-only command.
+    i_idx = cmd.index("-i")
+    assert "-ss" in cmd[i_idx + 2 :]
+
+
+# -- cancel_flag forwarding --
+
+
+def _captured_run_ffmpeg(captured):
+    def _fake(_cmd, **kwargs):
+        captured.append(kwargs.get("cancel_flag"))
+        return subprocess.CompletedProcess(args=["ffmpeg"], returncode=0, stderr="")
+
+    return _fake
+
+
+def test_run_ffmpeg_forwards_cancel_flag(monkeypatch):
+    monkeypatch.setattr(video.Path, "is_file", lambda self: True)
+    monkeypatch.setattr(
+        video.Path, "stat", lambda self: type("_S", (), {"st_size": 1})()
+    )
+    monkeypatch.setattr(video, "get_duration", lambda *_a: 5)
+    monkeypatch.setattr(video, "get_file_duration", lambda *_a: 60)
+    monkeypatch.setattr(video, "verify_output_file", lambda *_a, **_kw: True)
+    monkeypatch.setattr(video.config, "MAX_FILESIZE_MB", 0)
+
+    captured: list = []
+    monkeypatch.setattr(video, "run_ffmpeg_process", _captured_run_ffmpeg(captured))
+
+    sentinel = lambda: False  # noqa: E731
+    ok = video.run_ffmpeg(
+        "in.mp4", "out.mp4", "00:10", "00:15", reencode=False, cancel_flag=sentinel
+    )
+    assert ok is True
+    assert captured == [sentinel]
+
+
+def test_extract_screenshot_forwards_cancel_flag(monkeypatch):
+    monkeypatch.setattr(video.Path, "is_file", lambda self: True)
+    monkeypatch.setattr(video, "get_file_duration", lambda *_a: 60)
+    monkeypatch.setattr(video, "verify_output_file", lambda *_a, **_kw: True)
+    monkeypatch.setattr(
+        video.Path, "stat", lambda self: type("_S", (), {"st_size": 1})()
+    )
+
+    captured: list = []
+    monkeypatch.setattr(video, "run_ffmpeg_process", _captured_run_ffmpeg(captured))
+
+    sentinel = lambda: False  # noqa: E731
+    ok = video.extract_screenshot("in.mp4", "out.png", "00:10", cancel_flag=sentinel)
+    assert ok is True
+    assert captured == [sentinel]
+
+
+def test_extract_gif_forwards_cancel_flag(monkeypatch):
+    monkeypatch.setattr(video.Path, "is_file", lambda self: True)
+    monkeypatch.setattr(video, "get_file_duration", lambda *_a: 60)
+    monkeypatch.setattr(video, "verify_output_file", lambda *_a, **_kw: True)
+    monkeypatch.setattr(
+        video.Path, "stat", lambda self: type("_S", (), {"st_size": 1})()
+    )
+
+    captured: list = []
+    monkeypatch.setattr(video, "run_ffmpeg_process", _captured_run_ffmpeg(captured))
+
+    sentinel = lambda: False  # noqa: E731
+    ok = video.extract_gif("in.mp4", "out.gif", "00:10", 5, cancel_flag=sentinel)
+    assert ok is True
+    assert captured == [sentinel]
+
+
+def test_compress_to_size_forwards_cancel_flag_to_both_passes(monkeypatch, tmp_path):
+    big = tmp_path / "big.mp4"
+    big.write_bytes(b"x" * 1024)
+    monkeypatch.setattr(video, "get_file_duration", lambda *_a: 10)
+    monkeypatch.setattr(video, "verify_output_file", lambda *_a, **_kw: True)
+
+    captured: list = []
+    monkeypatch.setattr(video, "run_ffmpeg_process", _captured_run_ffmpeg(captured))
+
+    # Stub os.replace and unlink so the test doesn't move/delete real files.
+    monkeypatch.setattr(video.os, "replace", lambda *_a, **_kw: None)
+
+    sentinel = lambda: False  # noqa: E731
+    # Target tiny size so compression runs both passes.
+    video.compress_to_size(str(big), 0.0001, cancel_flag=sentinel)
+    assert captured == [sentinel, sentinel]

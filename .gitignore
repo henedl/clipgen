@@ -40,15 +40,14 @@ output/
 .conductor/
 .venv/
 node_modules/
-.claude/
+.claude/*
+!.claude/skills
 /*.html
 /*.gif
 /*.png
+*.csv
 
 # Files we want to keep
-!package.json
-!bun.lock
-!bun.lockb
 !assets/titlecard.png
 !assets/endcard.png
 !assets/icons/*

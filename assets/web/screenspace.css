@@ -648,6 +648,26 @@ body {
   margin: 0 var(--space-1);
 }
 
+.amplitude-btn-icon {
+  display: block;
+  width: 14px;
+  height: 14px;
+  background-color: currentColor;
+  mask-image: url("/screenspace/icons/signal.svg");
+  mask-size: contain;
+  mask-repeat: no-repeat;
+  mask-position: center;
+  -webkit-mask-image: url("/screenspace/icons/signal.svg");
+  -webkit-mask-size: contain;
+  -webkit-mask-repeat: no-repeat;
+  -webkit-mask-position: center;
+  flex-shrink: 0;
+}
+
+#amplitudeGraphBtn.active {
+  color: var(--color-accent);
+}
+
 .marker-info {
   font-size: var(--text-xs);
   font-family: var(--font-mono);
@@ -2434,6 +2454,54 @@ body.panel-dragging #bottomPanel {
 .rp-icon-scissors {
   mask-image: url("/screenspace/icons/scissors.svg");
   -webkit-mask-image: url("/screenspace/icons/scissors.svg");
+}
+
+.rp-icon-download {
+  mask-image: url("/screenspace/icons/arrow-down-tray.svg");
+  -webkit-mask-image: url("/screenspace/icons/arrow-down-tray.svg");
+}
+
+.rp-export-wrap {
+  position: relative;
+  display: inline-flex;
+}
+
+.rp-export-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  min-width: 8rem;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lg);
+  padding: var(--space-1);
+  z-index: 50;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.rp-export-menu.hidden {
+  display: none;
+}
+
+.rp-export-item {
+  display: flex;
+  align-items: center;
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  font-size: var(--text-xs);
+  color: var(--color-text);
+  background: none;
+  border: none;
+  text-align: left;
+  width: 100%;
+}
+
+.rp-export-item:hover {
+  background: var(--color-surface-alt);
 }
 
 /* Certainty slider wrapper */

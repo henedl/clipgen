@@ -6,19 +6,9 @@
   var data = null;
   var artifactMap = {};
 
-  // ---- Helpers ----
-
-  function countArtifacts(insight) {
-    return (
-      insight.causes.artifacts.length +
-      insight.behaviors.artifacts.length +
-      insight.impacts.artifacts.length
-    );
-  }
-
   // ---- Render index ----
 
-  function renderIndex() {
+  function renderInsightsIndex() {
     var container = qs("#insightsIndex");
     container.innerHTML = "";
 
@@ -55,7 +45,7 @@
       );
     }
 
-    var count = countArtifacts(insight);
+    var count = countInsightArtifacts(insight);
     card.appendChild(
       el("div", "index-card-count", count + " artifact" + (count !== 1 ? "s" : ""))
     );
@@ -226,7 +216,7 @@
       qs("#viewerFooter").classList.remove("hidden");
     }
 
-    renderIndex();
+    renderInsightsIndex();
   }
 
   if (document.readyState === "loading") {

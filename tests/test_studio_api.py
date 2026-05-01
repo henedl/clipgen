@@ -21,20 +21,77 @@ def client(monkeypatch):
         yield c
 
 
-def test_api_sheet_500_when_no_context(client):
-    resp = client.get("/studio/api/sheet")
+@pytest.mark.parametrize(
+    "method,path,payload,expected_err",
+    [
+        ("get", "/studio/api/sheet", None, "No sheet loaded"),
+        ("post", "/studio/api/sheet/refresh", None, "No worksheet"),
+        ("get", "/studio/api/sheet/baseline", None, "No sheet loaded"),
+        ("post", "/studio/api/generate", {"cells": ["P01.3"]}, None),
+        ("get", "/studio/api/thumbnail/P01/0", None, "No sheet loaded"),
+        ("post", "/studio/api/gallery", {"participant": "P01"}, "No sheet loaded"),
+        ("post", "/studio/api/timeline-viewer", {}, "No worksheet"),
+    ],
+    ids=[
+        "sheet",
+        "sheet_refresh",
+        "sheet_baseline",
+        "generate",
+        "thumbnail",
+        "gallery",
+        "timeline_viewer",
+    ],
+)
+def test_api_returns_500_when_no_context(client, method, path, payload, expected_err):
+    fn = getattr(client, method)
+    resp = fn(path, json=payload) if payload is not None else fn(path)
     assert resp.status_code == 500
     data = resp.get_json()
     assert data["ok"] is False
-    assert "No sheet loaded" in data["error"]
+    if expected_err:
+        assert expected_err in data["error"]
 
 
-def test_api_sheet_refresh_500_when_no_worksheet(client):
-    resp = client.post("/studio/api/sheet/refresh")
-    assert resp.status_code == 500
+@pytest.mark.parametrize(
+    "path,payload,context_attr,expected_err",
+    [
+        ("/studio/api/generate", {"cells": []}, "_worksheet", "No cells"),
+        (
+            "/studio/api/generate",
+            {"cells": ["P01.3"], "format": "pdf"},
+            "_worksheet",
+            "Invalid format",
+        ),
+        ("/studio/api/reel", {"cells": []}, "_worksheet", "No cells"),
+        (
+            "/studio/api/gallery",
+            {"participant": "", "format": "screen"},
+            "_sheet_context",
+            "No participant",
+        ),
+        (
+            "/studio/api/gallery",
+            {"participant": "P01", "format": "clip"},
+            "_sheet_context",
+            "Invalid format",
+        ),
+    ],
+    ids=[
+        "generate_no_cells",
+        "generate_bad_format",
+        "reel_no_cells",
+        "gallery_no_participant",
+        "gallery_bad_format",
+    ],
+)
+def test_api_returns_400_for_invalid_input(
+    client, monkeypatch, path, payload, context_attr, expected_err
+):
+    monkeypatch.setattr(server, context_attr, object())
+    resp = client.post(path, json=payload)
+    assert resp.status_code == 400
     data = resp.get_json()
-    assert data["ok"] is False
-    assert "No worksheet" in data["error"]
+    assert expected_err in data["error"]
 
 
 def test_api_sheet_refresh_success(client, monkeypatch):
@@ -62,14 +119,6 @@ def test_api_sheet_refresh_500_when_build_fails(client, monkeypatch):
     data = resp.get_json()
     assert data["ok"] is False
     assert "Failed to refresh" in data["error"]
-
-
-def test_api_sheet_baseline_500_when_no_context(client):
-    resp = client.get("/studio/api/sheet/baseline")
-    assert resp.status_code == 500
-    data = resp.get_json()
-    assert data["ok"] is False
-    assert "No sheet loaded" in data["error"]
 
 
 def test_api_sheet_baseline_no_baseline_row(client, monkeypatch):
@@ -139,39 +188,6 @@ def test_api_sheet_baseline_partial(client, monkeypatch):
     assert data["baselines"]["P03"] == 33600
 
 
-def test_api_generate_500_when_no_worksheet(client):
-    resp = client.post("/studio/api/generate", json={"cells": ["P01.3"]})
-    assert resp.status_code == 500
-    data = resp.get_json()
-    assert data["ok"] is False
-
-
-def test_api_generate_400_when_no_cells(client, monkeypatch):
-    monkeypatch.setattr(server, "_worksheet", object())
-    resp = client.post("/studio/api/generate", json={"cells": []})
-    assert resp.status_code == 400
-    data = resp.get_json()
-    assert "No cells" in data["error"]
-
-
-def test_api_generate_400_for_invalid_format(client, monkeypatch):
-    monkeypatch.setattr(server, "_worksheet", object())
-    resp = client.post(
-        "/studio/api/generate", json={"cells": ["P01.3"], "format": "pdf"}
-    )
-    assert resp.status_code == 400
-    data = resp.get_json()
-    assert "Invalid format" in data["error"]
-
-
-def test_api_reel_400_when_no_cells(client, monkeypatch):
-    monkeypatch.setattr(server, "_worksheet", object())
-    resp = client.post("/studio/api/reel", json={"cells": []})
-    assert resp.status_code == 400
-    data = resp.get_json()
-    assert "No cells" in data["error"]
-
-
 def test_api_reel_highlights_duration_override(client, monkeypatch):
     """highlights_duration temporarily overrides config and is restored after."""
     import config
@@ -213,14 +229,6 @@ def test_api_reel_highlights_duration_restored_on_error(client, monkeypatch):
     )
     assert resp.status_code == 500
     assert config.HIGHLIGHTS_REEL_DURATION_SECONDS == original
-
-
-def test_api_thumbnail_500_when_no_context(client):
-    resp = client.get("/studio/api/thumbnail/P01/0")
-    assert resp.status_code == 500
-    data = resp.get_json()
-    assert data["ok"] is False
-    assert "No sheet loaded" in data["error"]
 
 
 def test_api_thumbnail_returns_jpeg(client, monkeypatch, tmp_path):
@@ -466,34 +474,6 @@ def test_api_reel_skips_existing_reel(client, monkeypatch, tmp_path):
     assert process_called == []
 
 
-def test_api_gallery_500_when_no_context(client):
-    resp = client.post("/studio/api/gallery", json={"participant": "P01"})
-    assert resp.status_code == 500
-    data = resp.get_json()
-    assert data["ok"] is False
-    assert "No sheet loaded" in data["error"]
-
-
-def test_api_gallery_400_when_no_participant(client, monkeypatch):
-    monkeypatch.setattr(server, "_sheet_context", object())
-    resp = client.post(
-        "/studio/api/gallery", json={"participant": "", "format": "screen"}
-    )
-    assert resp.status_code == 400
-    data = resp.get_json()
-    assert "No participant" in data["error"]
-
-
-def test_api_gallery_400_for_invalid_format(client, monkeypatch):
-    monkeypatch.setattr(server, "_sheet_context", object())
-    resp = client.post(
-        "/studio/api/gallery", json={"participant": "P01", "format": "clip"}
-    )
-    assert resp.status_code == 400
-    data = resp.get_json()
-    assert "Invalid format" in data["error"]
-
-
 def test_api_gallery_404_when_video_not_found(client, monkeypatch):
     monkeypatch.setattr(server, "_sheet_context", object())
     monkeypatch.setattr(server, "_resolve_source_video", lambda p: None)
@@ -622,14 +602,6 @@ def test_api_timeline_viewer_with_intake(client, monkeypatch):
     assert data["generated"] == 2
     assert len(captured_artifacts) == 2
     assert captured_artifacts[1]["source"] == "screenspace"
-
-
-def test_api_timeline_viewer_500_when_no_worksheet(client):
-    resp = client.post("/studio/api/timeline-viewer", json={})
-    assert resp.status_code == 500
-    data = resp.get_json()
-    assert data["ok"] is False
-    assert "No worksheet" in data["error"]
 
 
 # ---- Stash API tests ----
@@ -936,7 +908,7 @@ def test_api_generate_titlecard_override(client, monkeypatch):
     def fake_generate_list(ws, mode, *, ctx=None, cell_specs, skip_prompts):
         return [{"participant": "P01", "cell": cell}]
 
-    def fake_process_clips(clips, *, output_format):
+    def fake_process_clips(clips, *, output_format, cancel_flag=None):
         captured["enabled"] = config.TITLECARDS_ENABLED
         captured["duration"] = config.TITLECARD_DURATION_SECONDS
         return (1, [{"id": "a1", "type": "clip"}])
@@ -978,7 +950,7 @@ def test_api_generate_titlecard_restored_on_error(client, monkeypatch):
     def fake_generate_list(ws, mode, *, ctx=None, cell_specs, skip_prompts):
         return [{"participant": "P01", "cell": cell}]
 
-    def fake_process_clips(clips, *, output_format):
+    def fake_process_clips(clips, *, output_format, cancel_flag=None):
         raise RuntimeError("boom")
 
     monkeypatch.setattr("spreadsheet.generate_list", fake_generate_list)
@@ -1331,3 +1303,13 @@ def test_api_reel_cancel_endpoint(client):
     assert resp.status_code == 200
     assert data["ok"] is True
     assert server._reel_cancel_event.is_set()
+
+
+def test_api_generate_cancel_endpoint(client):
+    """POST /api/generate/cancel should set the cancel event and return ok."""
+    server._generate_cancel_event.clear()
+    resp = client.post("/studio/api/generate/cancel")
+    data = resp.get_json()
+    assert resp.status_code == 200
+    assert data["ok"] is True
+    assert server._generate_cancel_event.is_set()

@@ -268,6 +268,25 @@ var clamp = function (val, min, max) {
   return Math.max(min, Math.min(max, val));
 };
 
+// Median of a numeric array. Returns 0 for empty input.
+var median = function (arr) {
+  if (!arr.length) return 0;
+  var sorted = arr.slice().sort(function (a, b) { return a - b; });
+  var mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+};
+
+// Population standard deviation. Returns 0 for arrays shorter than 2.
+var stddev = function (nums) {
+  if (nums.length < 2) return 0;
+  var sum = 0;
+  for (var i = 0; i < nums.length; i++) sum += nums[i];
+  var mean = sum / nums.length;
+  var sq = 0;
+  for (var j = 0; j < nums.length; j++) sq += (nums[j] - mean) * (nums[j] - mean);
+  return Math.sqrt(sq / nums.length);
+};
+
 // ---- Tooltip positioning ----
 
 // Position a tooltip element centered above an anchor rect, flipping below
@@ -306,6 +325,17 @@ var hexToRgba = function (hex, alpha) {
   var g = parseInt(hex.slice(3, 5), 16);
   var b = parseInt(hex.slice(5, 7), 16);
   return "rgba(" + r + "," + g + "," + b + "," + alpha + ")";
+};
+
+// Read a CSS custom property from :root, returning fallback when unset/empty.
+// Pages use this for theme-aware values (--color-accent, --color-heatmap, ...).
+var getCSSVar = function (name, fallback) {
+  try {
+    var v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+    return v || fallback;
+  } catch (_) {
+    return fallback;
+  }
 };
 
 var SHOW_TOAST_DEFAULT_MS = 3000;
@@ -451,6 +481,52 @@ var XREF_BADGES = {
   screenspace: { icon: "squares-2x2", color: "rgba(52, 152, 219, 0.85)" },
   transcript:  { icon: "chat-bubble-bottom-center-text", color: "rgba(16, 163, 74, 0.85)" },
   sheet:       { icon: "table-cells", color: "rgba(234, 179, 8, 0.85)" },
+};
+
+// ---- Insight helpers ----
+
+// Sum of artifacts across all three buckets of an insight record. Shared by
+// the insights builder and the exported insights viewer.
+var countInsightArtifacts = function (insight) {
+  return insight.causes.artifacts.length
+       + insight.behaviors.artifacts.length
+       + insight.impacts.artifacts.length;
+};
+
+// ---- Filter helpers (artifact grids in viewer + insights builder) ----
+
+// Sorted unique non-empty values of `field` across `items`.
+// opts.trim: trim string values before deduping (default false).
+var uniqueFieldValues = function (items, field, opts) {
+  var trim = opts && opts.trim;
+  var seen = {};
+  var out = [];
+  for (var i = 0; i < items.length; i++) {
+    var v = items[i][field];
+    if (v == null) continue;
+    if (trim) v = String(v).trim();
+    if (v && !seen[v]) { seen[v] = true; out.push(v); }
+  }
+  return out.sort();
+};
+
+// Replace a <select>'s options with [allLabel, ...values]. The "all" option
+// has empty value "" so callers can detect it via select.value === "".
+var populateSelect = function (selectEl, values, allLabel) {
+  if (!selectEl) return;
+  selectEl.innerHTML = "";
+  var frag = document.createDocumentFragment();
+  var allOpt = document.createElement("option");
+  allOpt.value = "";
+  allOpt.textContent = allLabel;
+  frag.appendChild(allOpt);
+  for (var i = 0; i < values.length; i++) {
+    var o = document.createElement("option");
+    o.value = values[i];
+    o.textContent = values[i];
+    frag.appendChild(o);
+  }
+  selectEl.appendChild(frag);
 };
 
 // ---- Detector colors ----
@@ -653,4 +729,107 @@ var setStoredUIStateField = function (page, field, value) {
     else all[page][field] = value;
     window.localStorage.setItem(UI_STATE_STORAGE_KEY, JSON.stringify(all));
   } catch (_) {}
+};
+
+// ---- Canvas helpers (timeline overlays) ----
+
+// Draw stacked per-series amplitude bands inside a canvas rect.
+//
+// Pure: no DOM lookups, no global state. Each timeline page (screenspace,
+// viewer, transcripts, convergence) builds a `series` array from its own
+// event shape and calls this helper from inside its renderTimeline().
+//
+// opts:
+//   x, y, w, h         band rect on the canvas (pixels, integer)
+//   visStart, visEnd   visible time window (seconds)
+//   series             [{ key, color, timestamps: number[] }, ...]
+//                      `key` is used for dim comparison; `color` is "#rrggbb";
+//                      `timestamps` are seconds (already filtered to visible scope
+//                      is fine but not required — out-of-window samples are skipped)
+//   binPx              column width in pixels for binning (default 2)
+//   dimKey             optional series key to keep at full opacity; all other series
+//                      render at reduced alpha. Pass null/undefined for no dimming.
+//
+// Each series is normalized against its OWN peak so quiet types still show
+// shape. Curves are drawn back-to-front so dimKey paints last when set.
+var drawAmplitudeBands = function (ctx, opts) {
+  var x = opts.x, y = opts.y, w = opts.w, h = opts.h;
+  var visStart = opts.visStart, visEnd = opts.visEnd;
+  var series = opts.series || [];
+  var binPx = opts.binPx || 2;
+  var dimKey = opts.dimKey;
+
+  if (w <= 0 || h <= 0 || series.length === 0) return;
+  var visLen = visEnd - visStart;
+  if (!(visLen > 0)) return;
+
+  var numBins = Math.max(1, Math.ceil(w / binPx));
+  var binSec = visLen / numBins;
+
+  // Bin each series and remember its own max
+  var binned = [];
+  for (var s = 0; s < series.length; s++) {
+    var ts = series[s].timestamps || [];
+    var bins = new Array(numBins);
+    for (var b = 0; b < numBins; b++) bins[b] = 0;
+    var maxCount = 0;
+    for (var i = 0; i < ts.length; i++) {
+      var t = ts[i];
+      if (t < visStart || t >= visEnd) continue;
+      var idx = Math.floor((t - visStart) / binSec);
+      if (idx < 0) idx = 0;
+      else if (idx >= numBins) idx = numBins - 1;
+      var c = bins[idx] + 1;
+      bins[idx] = c;
+      if (c > maxCount) maxCount = c;
+    }
+    binned.push({ key: series[s].key, color: series[s].color, bins: bins, max: maxCount });
+  }
+
+  // Order: dimmed series first, focused series last (paints on top)
+  var order = [];
+  for (var k = 0; k < binned.length; k++) {
+    if (dimKey && binned[k].key !== dimKey) order.push(k);
+  }
+  for (var k2 = 0; k2 < binned.length; k2++) {
+    if (!dimKey || binned[k2].key === dimKey) order.push(k2);
+  }
+
+  var baselineY = y + h;
+  for (var oi = 0; oi < order.length; oi++) {
+    var ser = binned[order[oi]];
+    if (ser.max <= 0) continue;
+    var dimmed = dimKey && ser.key !== dimKey;
+    var fillAlpha = dimmed ? 0.05 : 0.18;
+    var strokeAlpha = dimmed ? 0.25 : 1.0;
+
+    // Build the area path along bin tops
+    ctx.beginPath();
+    ctx.moveTo(x, baselineY);
+    for (var bi = 0; bi < numBins; bi++) {
+      var norm = ser.bins[bi] / ser.max;
+      var py = baselineY - norm * h;
+      var px = x + bi * binPx;
+      ctx.lineTo(px, py);
+      ctx.lineTo(px + binPx, py);
+    }
+    ctx.lineTo(x + numBins * binPx, baselineY);
+    ctx.closePath();
+    ctx.fillStyle = hexToRgba(ser.color, fillAlpha);
+    ctx.fill();
+
+    ctx.beginPath();
+    var started = false;
+    for (var bi2 = 0; bi2 < numBins; bi2++) {
+      var n2 = ser.bins[bi2] / ser.max;
+      var py2 = baselineY - n2 * h;
+      var px2 = x + bi2 * binPx;
+      if (!started) { ctx.moveTo(px2, py2); started = true; }
+      else ctx.lineTo(px2, py2);
+      ctx.lineTo(px2 + binPx, py2);
+    }
+    ctx.lineWidth = 1.5;
+    ctx.strokeStyle = strokeAlpha === 1.0 ? ser.color : hexToRgba(ser.color, strokeAlpha);
+    ctx.stroke();
+  }
 };

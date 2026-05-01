@@ -65,6 +65,32 @@ def test_discover_clips_excludes_source_videos(tmp_path, monkeypatch):
     assert sorted(clips) == ["study_P01-clip-1.mp4", "study_P01-clip-2.mp4"]
 
 
+def test_prepare_clip_pre_parsed_fast_path_keeps_times_and_sanitizes_desc():
+    # Synthetic clips (e.g. --ss-clips) arrive with times already parsed and a
+    # SimpleNamespace cell. prepare_clip should skip the cell-based parse,
+    # leave times untouched, and still sanitize desc/category for filenames.
+    cell = SimpleNamespace(value="", row=-1, col=1)
+    clip: ClipRecord = {
+        "cell": cell,
+        "study": "study",
+        "participant": "P01",
+        "category": "",
+        "desc": "[ignored-bracket] description / with ?",
+        "times": [("0:00:10", "0:00:20")],
+    }
+    prepared = files.prepare_clip(clip)
+    # Times preserved exactly.
+    assert prepared["times"] == [("0:00:10", "0:00:20")]
+    # Bracketed prefix stripped, special chars removed.
+    assert "ignored-bracket" not in prepared["desc"]
+    assert "?" not in prepared["desc"]
+    # Empty category becomes 'uncategorized'.
+    assert prepared["category"] == "uncategorized"
+    # Annotation containers initialized.
+    assert prepared["cell_annotations"] == []
+    assert prepared["segment_annotations"] == {}
+
+
 def test_prepare_clip_sanitizes_and_sets_defaults(monkeypatch, make_clip):
     raw_clip = make_clip()
     raw_clip["cell"].value = "00:10-00:20"

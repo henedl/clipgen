@@ -77,8 +77,8 @@
     <div class="sheet-preview-header">
       <div class="preview-tabs">
         <button class="preview-tab active" data-tab="sheet">Sheet Preview</button>
-        <button class="preview-tab hidden" data-tab="intake">Screenspace Intake <span id="intakeTabBadge" class="intake-tab-badge hidden">0</span></button>
-        <button class="preview-tab hidden" data-tab="transcript-intake">Transcript Intake <span id="trIntakeTabBadge" class="intake-tab-badge hidden">0</span></button>
+        <button class="preview-tab hidden" data-tab="intake"><span id="intakeTabDot" class="tab-status-dot hidden" aria-hidden="true"></span>Screenspace Intake <span id="intakeTabBadge" class="intake-tab-badge hidden">0</span></button>
+        <button class="preview-tab hidden" data-tab="transcript-intake"><span id="trIntakeTabDot" class="tab-status-dot hidden" aria-hidden="true"></span>Transcript Intake <span id="trIntakeTabBadge" class="intake-tab-badge hidden">0</span></button>
         <button class="preview-tab hidden" data-tab="convergence">Convergence</button>
         <button class="preview-tab" data-tab="metadata">Metadata</button>
       </div>
@@ -179,6 +179,7 @@
           <span class="titlecard-label-unit">s</span>
         </label>
         <button id="generateBtn" class="btn btn-primary" disabled data-tooltip="Add cells to the work area first">Generate</button>
+        <button id="cancelGenerateBtn" class="btn btn-small btn-cancel hidden">Cancel</button>
         <button id="buildViewerBtn" class="btn btn-primary" disabled data-tooltip="Generate artifacts first">Build Viewer</button>
         <button id="stashArtifactsBtn" class="btn btn-small btn-icon" disabled data-tooltip="Add cells to the work area first">
           <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">

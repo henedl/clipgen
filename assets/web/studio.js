@@ -65,6 +65,8 @@
     trIntakeMarks: [],
     trIntakeClusters: [],
     trIntakePollTimer: null,
+    intakeStatusTimer: null,
+    trIntakeStatusTimer: null,
     trIntakeFilterCategory: "",
     trIntakeFilterParticipants: [],
     trIntakeFilterText: "",
@@ -1287,7 +1289,7 @@
     for (var k = 0; k < values.length; k++) {
       if (values[k] !== null && values[k] > max) max = values[k];
     }
-    var hm = getComputedStyle(document.documentElement).getPropertyValue("--color-heatmap").trim() || "168, 130, 214";
+    var hm = getCSSVar("--color-heatmap", "168, 130, 214");
     for (var m = 0; m < cells.length; m++) {
       if (values[m] !== null && max > 0) {
         var t = values[m] / max;
@@ -2287,6 +2289,7 @@
     qs("#stashReelBtn").addEventListener("click", stashCurrentReel);
     qs("#stashArtifactsBtn").addEventListener("click", stashCurrentArtifacts);
     qs("#generateBtn").addEventListener("click", onGenerate);
+    qs("#cancelGenerateBtn").addEventListener("click", onCancelGenerate);
     qs("#buildReelBtn").addEventListener("click", onBuildReel);
     qs("#cancelReelBtn").addEventListener("click", onCancelReel);
     qs("#buildViewerBtn").addEventListener("click", onBuildViewer);
@@ -2428,6 +2431,7 @@
     state.generating = true;
     setGeneratingLock(true);
     setTitleSpinner("artifactsSpinner", true);
+    qs("#cancelGenerateBtn").classList.remove("hidden");
 
     var format = qs("#artifactFormat").value;
     var list = qs("#artifactsList");
@@ -2452,6 +2456,7 @@
     var totalSuccess = 0;
     var totalFail = 0;
     var allArtifacts = [];
+    var cancelled = false;
     var pending = (sheetItems.length > 0 ? 1 : 0) + (intakeItems.length > 0 ? 1 : 0);
 
     function finishBranch() {
@@ -2459,13 +2464,24 @@
       setTitleSpinner("artifactsSpinner", false);
       state.generating = false;
       setGeneratingLock(false);
+      qs("#cancelGenerateBtn").classList.add("hidden");
       updateViewerButton();
-      var msg = "Generated " + totalSuccess + " artifact(s)";
-      if (totalFail > 0) msg += ", " + totalFail + " failed";
-      showResult(
-        totalSuccess > 0 ? msg : null,
-        totalSuccess === 0 && totalFail > 0 ? "All generations failed" : null
-      );
+      var msg;
+      var err = null;
+      if (cancelled) {
+        msg = totalSuccess > 0
+          ? "Cancelled after " + totalSuccess + " artifact(s)"
+          : null;
+        err = totalSuccess > 0 ? null : "Generation cancelled";
+      } else {
+        msg = "Generated " + totalSuccess + " artifact(s)";
+        if (totalFail > 0) msg += ", " + totalFail + " failed";
+        if (totalSuccess === 0 && totalFail > 0) {
+          msg = null;
+          err = "All generations failed";
+        }
+      }
+      showResult(msg, err);
       qs("#statusOverlay").classList.remove("hidden");
     }
 
@@ -2481,7 +2497,16 @@
       function handleLine(line) {
         var data;
         try { data = JSON.parse(line); } catch (_) { return; }
-        if (!data || !data.cell) return;
+        if (!data) return;
+        if (data.cancelled) {
+          cancelled = true;
+          var queuedCards = list.querySelectorAll(".queue-card.queued");
+          for (var qi = 0; qi < queuedCards.length; qi++) {
+            clearCardStatus(queuedCards[qi]);
+          }
+          return;
+        }
+        if (!data.cell) return;
         var dot = data.cell.lastIndexOf(".");
         var participant = data.cell.substring(0, dot);
         var row = data.cell.substring(dot + 1);
@@ -2595,6 +2620,11 @@
   function onCancelReel() {
     qs("#cancelReelBtn").classList.add("hidden");
     apiPost("api/reel/cancel").catch(function () {});
+  }
+
+  function onCancelGenerate() {
+    qs("#cancelGenerateBtn").classList.add("hidden");
+    apiPost("api/generate/cancel").catch(function () {});
   }
 
   function onBuildReel() {
@@ -3269,6 +3299,62 @@
     return clusters;
   }
 
+  function setTabDot(elId, on) {
+    var el = document.getElementById(elId);
+    if (!el) return;
+    if (on) el.classList.remove("hidden");
+    else el.classList.add("hidden");
+  }
+
+  function pollIntakeStatus() {
+    apiGet("../screenspace/api/tasks")
+      .then(function (data) {
+        if (!data || !data.ok) {
+          setTabDot("intakeTabDot", false);
+          return;
+        }
+        var tasks = data.tasks || [];
+        var running = false;
+        var hasQueued = false;
+        for (var i = 0; i < tasks.length; i++) {
+          if (tasks[i].status === "running") { running = true; break; }
+          if (tasks[i].status === "queued") hasQueued = true;
+        }
+        setTabDot("intakeTabDot", running || (data.worker_alive && hasQueued));
+      })
+      .catch(function () {
+        setTabDot("intakeTabDot", false);
+      });
+  }
+
+  function pollTrIntakeStatus() {
+    var statusP = apiGet("../transcripts/api/transcribe/status").catch(function () { return null; });
+    var modelP = apiGet("../transcripts/api/transcribe/model-status").catch(function () { return null; });
+    var partsP = apiGet("../transcripts/api/participants").catch(function () { return null; });
+    Promise.all([statusP, modelP, partsP]).then(function (results) {
+      var status = results[0];
+      var model = results[1];
+      var parts = results[2];
+      var running = false;
+      if (status && status.ok && Array.isArray(status.tasks)) {
+        for (var i = 0; i < status.tasks.length; i++) {
+          if (status.tasks[i].status === "running") { running = true; break; }
+        }
+      }
+      if (!running && model && model.ok && model.warming) running = true;
+      if (!running && parts && parts.ok && Array.isArray(parts.participants)) {
+        for (var j = 0; j < parts.participants.length; j++) {
+          var agents = parts.participants[j].agents || {};
+          if (agents.summary === "running" || agents.citations === "running") {
+            running = true;
+            break;
+          }
+        }
+      }
+      setTabDot("trIntakeTabDot", running);
+    });
+  }
+
   function pollIntakeEvents() {
     apiGet("../screenspace/api/events?excluded=false")
       .then(function (data) {
@@ -3818,7 +3904,7 @@
 
   function trIntakeCategoryColor(key) {
     var entry = TR_INTAKE_CATEGORIES[key] || TR_INTAKE_CATEGORIES.bookmark;
-    return getComputedStyle(document.documentElement).getPropertyValue(entry.token).trim();
+    return getCSSVar(entry.token, "");
   }
 
   function _syncMarkCategoriesFromSettings(settings) {
@@ -4441,6 +4527,10 @@
     initFrontendSwitcher();
     initIntake();
     initTranscriptIntake();
+    pollIntakeStatus();
+    pollTrIntakeStatus();
+    state.intakeStatusTimer = setInterval(pollIntakeStatus, 5000);
+    state.trIntakeStatusTimer = setInterval(pollTrIntakeStatus, 5000);
     window.addEventListener("resize", function () {
       computeGridMaxHeight();
       sizeIntakeCanvas();

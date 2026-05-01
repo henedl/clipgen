@@ -2,6 +2,8 @@
 
 from pathlib import Path
 
+import pytest
+
 import config
 import transcripts
 import utils
@@ -38,40 +40,23 @@ def _empty_result() -> TranscriptResult:
 # ---------------------------------------------------------------------------
 
 
-class TestFmtDisplay:
-    def test_seconds_only(self):
-        assert transcripts._format_timestamp(5.0, "display") == "0:05"
-
-    def test_minutes_and_seconds(self):
-        assert transcripts._format_timestamp(125.0, "display") == "2:05"
-
-    def test_hours(self):
-        assert transcripts._format_timestamp(3661.5, "display") == "1:01:01"
-
-    def test_zero(self):
-        assert transcripts._format_timestamp(0.0, "display") == "0:00"
-
-
-class TestFmtSrt:
-    def test_basic(self):
-        assert transcripts._format_timestamp(0.0, "srt") == "00:00:00,000"
-
-    def test_with_milliseconds(self):
-        assert transcripts._format_timestamp(12.5, "srt") == "00:00:12,500"
-
-    def test_over_an_hour(self):
-        assert transcripts._format_timestamp(3661.5, "srt") == "01:01:01,500"
-
-
-class TestFmtVtt:
-    def test_under_an_hour(self):
-        assert transcripts._format_timestamp(12.5, "vtt") == "00:12.500"
-
-    def test_over_an_hour(self):
-        assert transcripts._format_timestamp(3661.5, "vtt") == "01:01:01.500"
-
-    def test_zero(self):
-        assert transcripts._format_timestamp(0.0, "vtt") == "00:00.000"
+@pytest.mark.parametrize(
+    "fmt,seconds,expected",
+    [
+        ("display", 0.0, "0:00"),
+        ("display", 5.0, "0:05"),
+        ("display", 125.0, "2:05"),
+        ("display", 3661.5, "1:01:01"),
+        ("srt", 0.0, "00:00:00,000"),
+        ("srt", 12.5, "00:00:12,500"),
+        ("srt", 3661.5, "01:01:01,500"),
+        ("vtt", 0.0, "00:00.000"),
+        ("vtt", 12.5, "00:12.500"),
+        ("vtt", 3661.5, "01:01:01.500"),
+    ],
+)
+def test_format_timestamp(fmt, seconds, expected):
+    assert transcripts._format_timestamp(seconds, fmt) == expected
 
 
 # ---------------------------------------------------------------------------

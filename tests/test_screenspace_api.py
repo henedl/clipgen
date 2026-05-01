@@ -98,20 +98,25 @@ def test_create_region_with_description(client):
     assert regions["score"]["description"] == "Score display"
 
 
-def test_create_region_missing_name(client):
-    resp = client.post(
-        "/screenspace/api/regions",
-        json={"x": 0, "y": 0, "w": 10, "h": 10},
-    )
+@pytest.mark.parametrize(
+    "payload,expected_err",
+    [
+        ({"x": 0, "y": 0, "w": 10, "h": 10}, None),
+        ({"name": "test", "x": 0, "y": 0}, None),
+        (
+            {"name": "no_canvas", "x": 100, "y": 20, "w": 300, "h": 30},
+            "canvas_width",
+        ),
+    ],
+    ids=["missing_name", "missing_coords", "missing_canvas_dims"],
+)
+def test_create_region_400_for_invalid_payload(client, payload, expected_err):
+    resp = client.post("/screenspace/api/regions", json=payload)
     assert resp.status_code == 400
-
-
-def test_create_region_missing_coords(client):
-    resp = client.post(
-        "/screenspace/api/regions",
-        json={"name": "test", "x": 0, "y": 0},
-    )
-    assert resp.status_code == 400
+    if expected_err:
+        data = resp.get_json()
+        assert data["ok"] is False
+        assert expected_err in data["error"]
 
 
 def test_delete_region(client):
@@ -163,17 +168,6 @@ def test_create_region_normalizes_coords(client):
     assert r["source_height"] == 1080
 
 
-def test_create_region_rejects_missing_canvas_dims(client):
-    resp = client.post(
-        "/screenspace/api/regions",
-        json={"name": "no_canvas", "x": 100, "y": 20, "w": 300, "h": 30},
-    )
-    assert resp.status_code == 400
-    data = resp.get_json()
-    assert data["ok"] is False
-    assert "canvas_width" in data["error"]
-
-
 def test_denormalize_region():
     from screenspace import denormalize_region
 
@@ -215,29 +209,23 @@ def test_list_tasks_empty(client):
     assert data["tasks"] == []
 
 
-def test_create_task_missing_region(client):
-    resp = client.post(
-        "/screenspace/api/tasks",
-        json={"type": "color", "participant": "P01"},
-    )
+@pytest.mark.parametrize(
+    "payload,expected_err",
+    [
+        ({"type": "color", "participant": "P01"}, "region"),
+        (
+            {"type": "color", "participant": "P01", "region": "nonexistent"},
+            None,
+        ),
+        ({"type": "invalid", "participant": "P01", "region": "r"}, None),
+    ],
+    ids=["missing_region", "unknown_region", "invalid_type"],
+)
+def test_create_task_400_for_invalid_payload(client, payload, expected_err):
+    resp = client.post("/screenspace/api/tasks", json=payload)
     assert resp.status_code == 400
-    assert "region" in resp.get_json()["error"].lower()
-
-
-def test_create_task_unknown_region(client):
-    resp = client.post(
-        "/screenspace/api/tasks",
-        json={"type": "color", "participant": "P01", "region": "nonexistent"},
-    )
-    assert resp.status_code == 400
-
-
-def test_create_task_invalid_type(client):
-    resp = client.post(
-        "/screenspace/api/tasks",
-        json={"type": "invalid", "participant": "P01", "region": "r"},
-    )
-    assert resp.status_code == 400
+    if expected_err:
+        assert expected_err in resp.get_json()["error"].lower()
 
 
 def test_create_task_no_video(client):
@@ -999,100 +987,60 @@ def test_events_bulk_exclude_empty_ids(client):
 # ---- Multitool tasks ----
 
 
-def test_create_multitool_task_too_few_steps(client):
-    _create_region(client, "healthbar")
-    resp = client.post(
-        "/screenspace/api/tasks",
-        json={
-            "type": "multitool",
-            "participant": "P01",
-            "region": "healthbar",
-            "parameters": {"steps": [{"type": "color"}]},
-        },
-    )
-    assert resp.status_code == 400
-    data = resp.get_json()
-    assert "at least 2" in data["error"]
-
-
-def test_create_multitool_task_invalid_step_type(client):
-    _create_region(client, "healthbar")
-    resp = client.post(
-        "/screenspace/api/tasks",
-        json={
-            "type": "multitool",
-            "participant": "P01",
-            "region": "healthbar",
-            "parameters": {
+@pytest.mark.parametrize(
+    "parameters,expected_err",
+    [
+        ({"steps": [{"type": "color"}]}, "at least 2"),
+        (
+            {
                 "steps": [
                     {"type": "color", "target_color": {"h": 0, "s": 0, "v": 0}},
                     {"type": "timelapse"},
                 ]
             },
-        },
-    )
-    assert resp.status_code == 400
-    data = resp.get_json()
-    assert "invalid type" in data["error"]
-
-
-def test_create_multitool_task_invalid_step_logic(client):
-    _create_region(client, "healthbar")
-    resp = client.post(
-        "/screenspace/api/tasks",
-        json={
-            "type": "multitool",
-            "participant": "P01",
-            "region": "healthbar",
-            "parameters": {
+            "invalid type",
+        ),
+        (
+            {
                 "steps": [
                     {"type": "color", "region": "healthbar"},
                     {"type": "change", "region": "healthbar", "logic": "MAYBE"},
                 ]
             },
-        },
-    )
-    assert resp.status_code == 400
-    data = resp.get_json()
-    assert "logic must be" in data["error"]
-
-
-def test_create_multitool_task_no_steps(client):
-    _create_region(client, "healthbar")
-    resp = client.post(
-        "/screenspace/api/tasks",
-        json={
-            "type": "multitool",
-            "participant": "P01",
-            "region": "healthbar",
-            "parameters": {},
-        },
-    )
-    assert resp.status_code == 400
-
-
-def test_create_multitool_task_missing_step_region(client):
-    _create_region(client, "healthbar")
-    resp = client.post(
-        "/screenspace/api/tasks",
-        json={
-            "type": "multitool",
-            "participant": "P01",
-            "region": "healthbar",
-            "parameters": {
+            "logic must be",
+        ),
+        ({}, None),
+        (
+            {
                 "steps": [
                     {"type": "color", "region": "healthbar"},
                     {"type": "change"},
                 ]
             },
-        },
-    )
-    assert resp.status_code == 400
-    data = resp.get_json()
-    assert "region is required" in data["error"]
-
-
-def test_create_multitool_task_unknown_step_region(client):
+            "region is required",
+        ),
+        (
+            {
+                "steps": [
+                    {"type": "color", "region": "healthbar"},
+                    {"type": "change", "region": "nonexistent"},
+                ]
+            },
+            "not found",
+        ),
+    ],
+    ids=[
+        "too_few_steps",
+        "invalid_step_type",
+        "invalid_step_logic",
+        "no_steps",
+        "missing_step_region",
+        "unknown_step_region",
+    ],
+)
+def test_create_multitool_task_400_for_invalid_payload(
+    client, parameters, expected_err
+):
     _create_region(client, "healthbar")
     resp = client.post(
         "/screenspace/api/tasks",
@@ -1100,17 +1048,12 @@ def test_create_multitool_task_unknown_step_region(client):
             "type": "multitool",
             "participant": "P01",
             "region": "healthbar",
-            "parameters": {
-                "steps": [
-                    {"type": "color", "region": "healthbar"},
-                    {"type": "change", "region": "nonexistent"},
-                ]
-            },
+            "parameters": parameters,
         },
     )
     assert resp.status_code == 400
-    data = resp.get_json()
-    assert "not found" in data["error"]
+    if expected_err:
+        assert expected_err in resp.get_json()["error"]
 
 
 def test_create_multitool_task_no_global_region_ok(client):
@@ -1245,3 +1188,73 @@ def _install_persist_spy(monkeypatch):
 
     monkeypatch.setattr(screenspace_server, "_do_persist", spy)
     return calls
+
+
+# ---- Export endpoint ----
+
+
+def test_export_events_json(client):
+    screenspace_server._manifest["events"] = [
+        _sample_event("ev_1"),
+        _sample_event("ev_2", excluded=True),
+    ]
+    resp = client.get("/screenspace/api/export/events?format=json")
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["ok"] is True
+    assert len(data["events"]) == 2
+    # Metadata should be hoisted to top-level "magnitude"
+    assert any("magnitude" in e for e in data["events"])
+
+
+def test_export_events_csv(client):
+    import csv as _csv
+    import io as _io
+
+    screenspace_server._manifest["events"] = [
+        _sample_event("ev_1"),
+        _sample_event("ev_2", participant="P02"),
+    ]
+    resp = client.get("/screenspace/api/export/events?format=csv")
+    assert resp.status_code == 200
+    assert resp.content_type.startswith("text/csv")
+    assert 'attachment; filename="screenspace_events.csv"' in resp.headers.get(
+        "Content-Disposition", ""
+    )
+    text = resp.get_data(as_text=True)
+    reader = _csv.DictReader(_io.StringIO(text))
+    rows = list(reader)
+    assert len(rows) == 2
+    fieldnames = reader.fieldnames
+    assert fieldnames is not None
+    assert "magnitude" in fieldnames
+    assert fieldnames[0] == "id"
+
+
+def test_export_events_filter_excluded_false(client):
+    screenspace_server._manifest["events"] = [
+        _sample_event("ev_1"),
+        _sample_event("ev_2", excluded=True),
+    ]
+    resp = client.get("/screenspace/api/export/events?format=json&excluded=false")
+    data = resp.get_json()
+    assert len(data["events"]) == 1
+    assert data["events"][0]["id"] == "ev_1"
+
+
+def test_export_events_filter_participant(client):
+    screenspace_server._manifest["events"] = [
+        _sample_event("ev_1", participant="P01"),
+        _sample_event("ev_2", participant="P02"),
+    ]
+    resp = client.get("/screenspace/api/export/events?format=json&participant=P02")
+    data = resp.get_json()
+    assert len(data["events"]) == 1
+    assert data["events"][0]["participant"] == "P02"
+
+
+def test_export_events_unsupported_format(client):
+    resp = client.get("/screenspace/api/export/events?format=xml")
+    assert resp.status_code == 400
+    data = resp.get_json()
+    assert data["ok"] is False
