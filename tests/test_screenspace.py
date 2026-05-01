@@ -1539,6 +1539,36 @@ class TestFfmpegPipeFrames:
         )
         assert frames == []
 
+    def test_uses_two_stage_seek_for_far_start(self, monkeypatch):
+        """Analysis pipe should two-stage seek so synthetic ts == decoded PTS."""
+        captured: dict = {}
+
+        def fake_popen(cmd, *a, **kw):
+            captured["cmd"] = list(cmd)
+            proc = mock.MagicMock()
+            proc.stdout = io.BytesIO(b"")
+            proc.terminate = mock.MagicMock()
+            proc.wait = mock.MagicMock()
+            return proc
+
+        monkeypatch.setattr("shutil.which", lambda _: "/usr/bin/ffmpeg")
+        monkeypatch.setattr("subprocess.Popen", fake_popen)
+
+        list(
+            screenspace._ffmpeg_pipe_frames(
+                "/fake.mp4",
+                1.0,
+                start_seconds=15.0,
+                end_seconds=20.0,
+                frame_width=4,
+                frame_height=2,
+            )
+        )
+        cmd = captured["cmd"]
+        i_idx = cmd.index("-i")
+        assert "-ss" in cmd[:i_idx], "expected fast pre-input seek"
+        assert "-ss" in cmd[i_idx + 2 :], "expected accurate post-input seek"
+
 
 class TestScanViaFfmpegPipe:
     def test_returns_false_when_no_ffmpeg(self, monkeypatch):
