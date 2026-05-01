@@ -6,6 +6,7 @@ This document contains stable project facts — architecture, data structures, g
 
 @agents/CLOUD.md contains instructions specifically for cloud agents.
 @agents/ARCHITECTURE.md contains an architecture overview of the program and describes how to launch frontends.
+@agents/skills/README.md contains agent skill procedures for development workflows and CLI usage.
 
 ## Project overview
 
