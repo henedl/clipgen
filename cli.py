@@ -10,6 +10,7 @@ import argparse
 import io
 import os
 import sys
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, NamedTuple
@@ -555,6 +556,39 @@ Note: Non-interactive mode (using -b, -l, -r, -C, -c, -p, -k, -S, -M, -R, or -T)
         type=str,
         metavar="STR",
         help="Substring match against segment text (case-insensitive).",
+    )
+    event_clips.add_argument(
+        "--transcript-mark",
+        type=str,
+        metavar="TERM",
+        help=(
+            "Batch-mark transcript segments whose text contains TERM "
+            "(case-insensitive substring, like the Transcripts UI search box). "
+            "Quote multi-word terms. Requires --transcript-mark-category. "
+            "Filter with --transcript-mark-participant. Optionally tag created "
+            "marks with --transcript-mark-label."
+        ),
+    )
+    event_clips.add_argument(
+        "--transcript-mark-category",
+        type=str,
+        metavar="CATEGORY",
+        help=(
+            "Mark category to apply (e.g. 'pain_point', 'insight'). "
+            "Must be a key in config.MARK_CATEGORIES."
+        ),
+    )
+    event_clips.add_argument(
+        "--transcript-mark-participant",
+        type=str,
+        metavar="ID",
+        help="Comma-separated participant IDs to include (--transcript-mark). Omit to mark all.",
+    )
+    event_clips.add_argument(
+        "--transcript-mark-label",
+        type=str,
+        metavar="TEXT",
+        help="Optional label written onto every created or updated mark.",
     )
     event_clips.add_argument(
         "--cluster-gap",
@@ -2163,6 +2197,145 @@ def _run_transcript_clips(args: argparse.Namespace) -> None:
     )
 
 
+def _post_marks_to_running_server(
+    segment_ids: list[str],
+    category: str,
+    label: str | None,
+) -> dict[str, Any] | None:
+    """POST marks to a Transcripts server running on localhost.
+
+    Returns the parsed response dict on success, or None when no server is
+    reachable. Routing through the API keeps the server's in-memory manifest in
+    sync — without this, a CLI-only disk write would be silently overwritten the
+    next time the running server persists its (now-stale) state.
+    """
+    import json
+    import urllib.error
+    import urllib.request
+
+    url = f"http://127.0.0.1:{config.SERVER_PORT}/transcripts/api/marks"
+    payload = json.dumps(
+        {"segment_ids": segment_ids, "category": category, "label": label}
+    ).encode("utf-8")
+    req = urllib.request.Request(
+        url,
+        data=payload,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=2.0) as resp:
+            body = resp.read().decode("utf-8")
+            data = json.loads(body)
+            if isinstance(data, dict) and data.get("ok"):
+                return data
+            return None
+    except (urllib.error.URLError, OSError, ValueError):
+        return None
+
+
+def _run_transcript_mark(args: argparse.Namespace) -> None:
+    """Batch-mark transcript segments whose text contains a search term.
+
+    Mirrors the Transcripts UI's "Mark all results" action: case-insensitive
+    substring match against corrected segment text, upsert into the manifest's
+    ``marks`` array (no duplicates per segment). When the Transcripts server is
+    running locally, POST through its API so its in-memory state stays in sync;
+    otherwise write the manifest directly.
+    """
+    term = (args.transcript_mark or "").strip()
+    if not term:
+        utils.error_print("--transcript-mark requires a non-empty TERM.")
+        return
+
+    category = (args.transcript_mark_category or "").strip()
+    if category not in config.MARK_CATEGORIES:
+        valid = ", ".join(sorted(config.MARK_CATEGORIES.keys()))
+        utils.error_print(
+            "--transcript-mark-category is required and must be a known category.",
+            [f"Valid categories: {valid}"],
+        )
+        return
+
+    label = args.transcript_mark_label
+    participants_filter = _split_csv_set(args.transcript_mark_participant)
+
+    manifest = transcripts.load_transcripts_manifest()
+    source_transcripts = manifest["source_transcripts"]
+    corrections = manifest.get("corrections", [])
+    marks: list[dict[str, Any]] = list(manifest.get("marks") or [])
+
+    if not source_transcripts:
+        utils.warning_print(
+            "No transcripts found.",
+            [
+                "Run --transcribe (with a clip mode) or --pre-transcribe / --transcripts "
+                "to generate transcripts first."
+            ],
+        )
+        return
+
+    needle = term.lower()
+    matching_seg_ids: list[tuple[str, str]] = []  # (participant, segment_id)
+    for pid, entry in source_transcripts.items():
+        if participants_filter and pid not in participants_filter:
+            continue
+        raw_segments = entry.get("segments") or []
+        if not raw_segments:
+            continue
+        corrected = transcripts.apply_corrections(raw_segments, corrections)
+        for raw, seg in zip(raw_segments, corrected):
+            if needle in str(seg.get("text", "")).lower():
+                seg_id = raw.get("id") or ""
+                if seg_id:
+                    matching_seg_ids.append((pid, seg_id))
+
+    if not matching_seg_ids:
+        utils.warning_print(f"No transcript segments contain {term!r}.")
+        return
+
+    seg_id_list = [sid for _, sid in matching_seg_ids]
+    touched_participants = {pid for pid, _ in matching_seg_ids}
+    total = len(seg_id_list)
+
+    server_response = _post_marks_to_running_server(seg_id_list, category, label)
+    if server_response is not None:
+        utils.info_print(
+            f"Marked {total} segment(s) across {len(touched_participants)} participant(s) "
+            f"via running Transcripts server."
+        )
+        return
+
+    existing_by_seg = {m["segment_id"]: m for m in marks if m.get("segment_id")}
+    now = datetime.now(timezone.utc).isoformat()
+    created = 0
+    updated = 0
+    for sid in seg_id_list:
+        existing = existing_by_seg.get(sid)
+        if existing is not None:
+            existing["category"] = category
+            if label is not None:
+                existing["label"] = label
+            updated += 1
+        else:
+            new_mark = {
+                "id": f"m_{uuid.uuid4().hex[:8]}",
+                "segment_id": sid,
+                "category": category,
+                "label": label,
+                "created": now,
+            }
+            marks.append(new_mark)
+            existing_by_seg[sid] = new_mark
+            created += 1
+
+    transcripts.save_transcripts_manifest(source_transcripts, corrections, marks=marks)
+    utils.info_print(
+        f"Marked {total} segment(s) across {len(touched_participants)} participant(s) "
+        f"(created {created}, updated {updated})."
+    )
+
+
 # ---- Thinking-agent CLI ----
 
 
@@ -2760,6 +2933,35 @@ _EXCLUSIVE_MODES: tuple[_ModeSpec, ...] = (
             "ss_clips",
         ),
     ),
+    _ModeSpec(
+        key="transcript_mark",
+        truthy=lambda a: getattr(a, "transcript_mark", None) is not None,
+        error="--transcript-mark cannot be combined with mode, format, or other standalone flags.",
+        hint=(
+            "Use --transcript-mark with -i/-o (directories), -v (verbose), "
+            "--transcript-mark-category, and optional "
+            "--transcript-mark-participant / --transcript-mark-label."
+        ),
+        selector_attrs=_BASE_SELECTOR_ATTRS + ("highlights",),
+        blocks_modes=(
+            "timeline_viewer",
+            "studio",
+            "insights",
+            "screenspace",
+            "transcripts",
+            "gallery",
+            "pre_transcribe",
+            "export",
+            "ss_task",
+            "ss_list_regions",
+            "ss_list_stashes",
+            "ss_list_tasks",
+            "summarize",
+            "citations",
+            "ss_clips",
+            "transcript_clips",
+        ),
+    ),
 )
 
 
@@ -2885,6 +3087,9 @@ def _dispatch_standalone_mode(
     if getattr(args, "transcript_clips", False):
         _run_transcript_clips(args)
         return True
+    if getattr(args, "transcript_mark", None) is not None:
+        _run_transcript_mark(args)
+        return True
 
     # Standalone thinking-agent CLI passes
     if getattr(args, "summarize", None) is not None:
@@ -2982,6 +3187,7 @@ def main() -> None:
         or modes["export"]
         or modes["ss_clips"]
         or modes["transcript_clips"]
+        or modes["transcript_mark"]
         or pre_transcribe_mode
     )
 

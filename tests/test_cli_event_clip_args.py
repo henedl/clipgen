@@ -505,3 +505,278 @@ def test_run_transcript_clips_with_mark_filter_uses_mark_category(monkeypatch):
     cli._run_transcript_clips(args)
 
     assert captured["clips"][0]["category"] == "mark-insight"
+
+
+# ---- --transcript-mark argparse + conflict ----
+
+
+def test_parse_transcript_mark_minimal(monkeypatch):
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "clipgen.py",
+            "--transcript-mark",
+            "checkout",
+            "--transcript-mark-category",
+            "insight",
+        ],
+    )
+    args = cli.parse_arguments()
+    assert args.transcript_mark == "checkout"
+    assert args.transcript_mark_category == "insight"
+    assert args.transcript_mark_participant is None
+    assert args.transcript_mark_label is None
+
+
+def test_parse_transcript_mark_with_filters(monkeypatch):
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "clipgen.py",
+            "--transcript-mark",
+            "checkout flow",
+            "--transcript-mark-category",
+            "pain_point",
+            "--transcript-mark-participant",
+            "P01,P02",
+            "--transcript-mark-label",
+            "follow up",
+        ],
+    )
+    args = cli.parse_arguments()
+    assert args.transcript_mark == "checkout flow"
+    assert args.transcript_mark_category == "pain_point"
+    assert args.transcript_mark_participant == "P01,P02"
+    assert args.transcript_mark_label == "follow up"
+
+
+def test_transcript_mark_conflicts_with_transcript_clips():
+    args = _ss_args(transcript_mark="x", transcript_clips=True)
+    with pytest.raises(SystemExit):
+        cli._validate_mode_conflicts(args)
+
+
+def test_transcript_mark_conflicts_with_studio():
+    args = _ss_args(transcript_mark="x", studio=True)
+    with pytest.raises(SystemExit):
+        cli._validate_mode_conflicts(args)
+
+
+def test_transcript_mark_alone_validates():
+    args = _ss_args(transcript_mark="x")
+    modes = cli._validate_mode_conflicts(args)
+    assert modes["transcript_mark"] is True
+    assert modes["transcript_clips"] is False
+
+
+# ---- _run_transcript_mark behavior ----
+
+
+@pytest.fixture
+def no_running_server(monkeypatch):
+    """Force _run_transcript_mark to take the direct-disk-write path."""
+    monkeypatch.setattr(cli, "_post_marks_to_running_server", lambda *_a, **_k: None)
+
+
+def _mark_manifest():
+    return {
+        "source_transcripts": {
+            "P01": {
+                "segments": [
+                    {
+                        "id": "P01:0",
+                        "start": 0.0,
+                        "end": 2.0,
+                        "text": "Checkout flow is slow",
+                    },
+                    {"id": "P01:1", "start": 2.0, "end": 4.0, "text": "Login is fine"},
+                ],
+                "source_file": "/data/study_P01.mp4",
+            },
+            "P02": {
+                "segments": [
+                    {
+                        "id": "P02:0",
+                        "start": 0.0,
+                        "end": 2.0,
+                        "text": "Talked about CHECKOUT",
+                    },
+                ],
+                "source_file": "/data/study_P02.mp4",
+            },
+        },
+        "corrections": [],
+        "marks": [],
+    }
+
+
+def test_run_transcript_mark_creates_marks_for_matches(monkeypatch, no_running_server):
+    import transcripts
+
+    manifest = _mark_manifest()
+    monkeypatch.setattr(transcripts, "load_transcripts_manifest", lambda: manifest)
+    saved: dict = {}
+
+    def fake_save(source_transcripts, corrections, marks=None):
+        saved["marks"] = marks
+        return None
+
+    monkeypatch.setattr(transcripts, "save_transcripts_manifest", fake_save)
+
+    args = _ss_args(transcript_mark="checkout", transcript_mark_category="insight")
+    cli._run_transcript_mark(args)
+
+    seg_ids = sorted(m["segment_id"] for m in saved["marks"])
+    assert seg_ids == ["P01:0", "P02:0"]
+    assert all(m["category"] == "insight" for m in saved["marks"])
+    assert all(m["label"] is None for m in saved["marks"])
+
+
+def test_run_transcript_mark_updates_existing_in_place(monkeypatch, no_running_server):
+    import transcripts
+
+    manifest = _mark_manifest()
+    manifest["marks"] = [
+        {
+            "id": "m_old1",
+            "segment_id": "P01:0",
+            "category": "bookmark",
+            "label": "old",
+            "created": "2025-01-01T00:00:00+00:00",
+        },
+        {
+            "id": "m_old2",
+            "segment_id": "P01:1",
+            "category": "delight",
+            "label": None,
+            "created": "2025-01-01T00:00:00+00:00",
+        },
+    ]
+    monkeypatch.setattr(transcripts, "load_transcripts_manifest", lambda: manifest)
+    saved: dict = {}
+    monkeypatch.setattr(
+        transcripts,
+        "save_transcripts_manifest",
+        lambda src, corr, marks=None: saved.update({"marks": marks}),
+    )
+
+    args = _ss_args(
+        transcript_mark="checkout",
+        transcript_mark_category="insight",
+        transcript_mark_label="new label",
+    )
+    cli._run_transcript_mark(args)
+
+    by_seg = {m["segment_id"]: m for m in saved["marks"]}
+    # P01:0 matched: updated in place (id preserved), category + label changed.
+    assert by_seg["P01:0"]["id"] == "m_old1"
+    assert by_seg["P01:0"]["category"] == "insight"
+    assert by_seg["P01:0"]["label"] == "new label"
+    # P01:1 did NOT match: untouched.
+    assert by_seg["P01:1"]["id"] == "m_old2"
+    assert by_seg["P01:1"]["category"] == "delight"
+    assert by_seg["P01:1"]["label"] is None
+    # P02:0 matched and was new: appended.
+    assert by_seg["P02:0"]["category"] == "insight"
+    # No duplicates.
+    assert len(saved["marks"]) == 3
+
+
+def test_run_transcript_mark_participant_filter(monkeypatch, no_running_server):
+    import transcripts
+
+    manifest = _mark_manifest()
+    monkeypatch.setattr(transcripts, "load_transcripts_manifest", lambda: manifest)
+    saved: dict = {}
+    monkeypatch.setattr(
+        transcripts,
+        "save_transcripts_manifest",
+        lambda src, corr, marks=None: saved.update({"marks": marks}),
+    )
+
+    args = _ss_args(
+        transcript_mark="checkout",
+        transcript_mark_category="insight",
+        transcript_mark_participant="P01",
+    )
+    cli._run_transcript_mark(args)
+
+    assert [m["segment_id"] for m in saved["marks"]] == ["P01:0"]
+
+
+def test_run_transcript_mark_invalid_category_does_not_save(
+    monkeypatch, capsys, no_running_server
+):
+    import transcripts
+
+    manifest = _mark_manifest()
+    monkeypatch.setattr(transcripts, "load_transcripts_manifest", lambda: manifest)
+    called: dict = {"saved": False}
+
+    def fake_save(*_a, **_k):
+        called["saved"] = True
+
+    monkeypatch.setattr(transcripts, "save_transcripts_manifest", fake_save)
+
+    args = _ss_args(
+        transcript_mark="checkout", transcript_mark_category="not_a_category"
+    )
+    cli._run_transcript_mark(args)
+
+    assert called["saved"] is False
+    out = capsys.readouterr().out
+    assert "transcript-mark-category" in out
+
+
+def test_run_transcript_mark_no_matches_warns(monkeypatch, capsys, no_running_server):
+    import transcripts
+
+    manifest = _mark_manifest()
+    monkeypatch.setattr(transcripts, "load_transcripts_manifest", lambda: manifest)
+    called: dict = {"saved": False}
+    monkeypatch.setattr(
+        transcripts,
+        "save_transcripts_manifest",
+        lambda *_a, **_k: called.update({"saved": True}),
+    )
+
+    args = _ss_args(transcript_mark="zzz", transcript_mark_category="insight")
+    cli._run_transcript_mark(args)
+
+    assert called["saved"] is False
+    out = capsys.readouterr().out
+    assert "No transcript segments contain" in out
+
+
+def test_run_transcript_mark_routes_through_running_server(monkeypatch, capsys):
+    """When the Transcripts server is running, posts via API and skips disk write."""
+    import transcripts
+
+    manifest = _mark_manifest()
+    monkeypatch.setattr(transcripts, "load_transcripts_manifest", lambda: manifest)
+
+    posted: dict = {}
+
+    def fake_post(seg_ids, category, label):
+        posted["seg_ids"] = list(seg_ids)
+        posted["category"] = category
+        posted["label"] = label
+        return {"ok": True, "marks": [{"segment_id": s} for s in seg_ids]}
+
+    monkeypatch.setattr(cli, "_post_marks_to_running_server", fake_post)
+
+    saved: dict = {"called": False}
+    monkeypatch.setattr(
+        transcripts,
+        "save_transcripts_manifest",
+        lambda *_a, **_k: saved.update({"called": True}),
+    )
+
+    args = _ss_args(transcript_mark="checkout", transcript_mark_category="insight")
+    cli._run_transcript_mark(args)
+
+    assert sorted(posted["seg_ids"]) == ["P01:0", "P02:0"]
+    assert posted["category"] == "insight"
+    assert saved["called"] is False
+    out = capsys.readouterr().out
+    assert "via running Transcripts server" in out
