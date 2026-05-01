@@ -22,8 +22,30 @@ import utils
 
 INVALID_END_TIMESTAMP = None
 
+# Two-stage ffmpeg seek window. We pre-seek (fast, key-frame-aligned) to
+# `target - FFMPEG_PRESEEK_SECONDS` and then seek the rest accurately after
+# `-i`. This keeps long-video performance while landing on the exact frame
+# the caller asked for, instead of the nearest preceding key-frame.
+FFMPEG_PRESEEK_SECONDS = 2.0
+
 _file_duration_cache: dict[str, int] = {}
 _video_properties_cache: dict[str, dict[str, Any]] = {}
+
+
+def accurate_seek_args(timestamp_seconds: float) -> tuple[list[str], list[str]]:
+    """Return ``(pre_input_args, post_input_args)`` for a frame-accurate seek.
+
+    Splits a seek into a fast pre-input ``-ss`` near the target plus a small
+    accurate post-input ``-ss`` for the residual. Callers splice the lists
+    around ``-i <video>``. For ``timestamp <= FFMPEG_PRESEEK_SECONDS`` the
+    pre-input list is empty and the full seek is post-input.
+    """
+    if timestamp_seconds <= 0:
+        return [], []
+    if timestamp_seconds <= FFMPEG_PRESEEK_SECONDS:
+        return [], ["-ss", str(timestamp_seconds)]
+    pre = timestamp_seconds - FFMPEG_PRESEEK_SECONDS
+    return ["-ss", str(pre)], ["-ss", str(FFMPEG_PRESEEK_SECONDS)]
 
 
 def _ffmpeg_install_guidance_lines() -> list[str]:
@@ -477,15 +499,17 @@ def extract_screenshot(
 
 def extract_thumbnail_bytes(
     input_file: str,
-    start_seconds: int,
+    start_seconds: float,
     *,
     width: int = 200,
 ) -> bytes | None:
     """Extract a small JPEG thumbnail frame from a video at *start_seconds*.
 
-    Uses fast input seeking (``-ss`` before ``-i``) so performance is
-    independent of file size.  Returns raw JPEG bytes on success or
-    ``None`` on any failure.
+    Uses two-stage seeking (fast pre-input ``-ss`` near the target, then a
+    small accurate ``-ss`` after ``-i``) so the returned thumbnail matches
+    the requested timestamp instead of snapping to the nearest preceding
+    key-frame. Returns raw JPEG bytes on success or ``None`` on any
+    failure.
     """
     if config.DEBUGGING:
         ic(input_file, start_seconds, width)
@@ -494,15 +518,16 @@ def extract_thumbnail_bytes(
     if not Path(input_file).is_file():
         return None
 
+    pre_seek, post_seek = accurate_seek_args(max(0.0, start_seconds))
     cmd = [
         "ffmpeg",
         "-y",
         "-loglevel",
         config.FFMPEG_LOGLEVEL,
-        "-ss",
-        str(max(0, start_seconds)),
+        *pre_seek,
         "-i",
         input_file,
+        *post_seek,
         "-vframes",
         "1",
         "-vf",
@@ -836,6 +861,9 @@ def extract_frame_at_timestamp(
 ) -> Any | None:
     """Extract a single video frame at the given timestamp via ffmpeg.
 
+    Uses two-stage seeking (fast pre-input ``-ss`` near the target, then a
+    small accurate ``-ss`` after ``-i``) so the returned frame is the one
+    at ``timestamp_seconds`` rather than the nearest preceding key-frame.
     Returns a BGR numpy array (H x W x 3) or None if extraction fails.
     Requires ffprobe to determine resolution and ffmpeg to decode the frame.
     """
@@ -849,12 +877,13 @@ def extract_frame_at_timestamp(
         return None
 
     width, height = props["width"], props["height"]
+    pre_seek, post_seek = accurate_seek_args(max(0.0, timestamp_seconds))
     cmd = [
         "ffmpeg",
-        "-ss",
-        str(timestamp_seconds),
+        *pre_seek,
         "-i",
         video_path,
+        *post_seek,
         "-frames:v",
         "1",
         "-pix_fmt",

@@ -692,10 +692,11 @@ def _ffmpeg_pipe_frames(
         out_h += out_h % 2
         filters.append(f"scale={out_w}:{out_h}")
 
-    cmd: list[str] = ["ffmpeg"]
-    if start_seconds > 0:
-        cmd += ["-ss", str(start_seconds)]
-    cmd += ["-i", video_path]
+    # Two-stage seek so each yielded frame's synthetic ts (computed below as
+    # start_seconds + frame_idx * interval_seconds) lines up with the actual
+    # decoded PTS instead of the nearest preceding key-frame.
+    pre_seek, post_seek = video.accurate_seek_args(max(0.0, start_seconds))
+    cmd: list[str] = ["ffmpeg", *pre_seek, "-i", video_path, *post_seek]
     if end_seconds > start_seconds:
         cmd += ["-t", str(end_seconds - start_seconds)]
     cmd += [

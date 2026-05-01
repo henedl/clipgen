@@ -210,7 +210,7 @@ def api_video_frame(participant: str, timestamp: str) -> FlaskResponse:
         ), 404
 
     width = request.args.get("w", 0, type=int)
-    cache_key = (video_path, round(ts, 2), width)
+    cache_key = (video_path, round(ts, 3), width)
     cached = _frame_cache.get(cache_key)
     if cached is not None:
         return Response(
@@ -220,7 +220,7 @@ def api_video_frame(participant: str, timestamp: str) -> FlaskResponse:
         )
 
     if width > 0:
-        jpeg_bytes = video.extract_thumbnail_bytes(video_path, int(ts), width=width)
+        jpeg_bytes = video.extract_thumbnail_bytes(video_path, ts, width=width)
     else:
         frame = video.extract_frame_at_timestamp(video_path, ts)
         if frame is None:
