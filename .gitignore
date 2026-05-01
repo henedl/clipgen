@@ -39,7 +39,8 @@ output/
 .conductor/
 .venv/
 node_modules/
-.claude/
+.claude/*
+!.claude/skills
 /*.html
 /*.gif
 /*.png
