@@ -73,6 +73,32 @@ uv run clipgen.py --transcript-clips --transcript-clips-participant P01 --cluste
 
 When a mark filter is set, the clip's category is `mark-{category}`; otherwise `transcript`. Clips are appended to `clipgen_manifest.json`.
 
+## Step 6: Batch-mark segments by text term
+
+Mark every transcript segment whose text contains a term — same effect as the Transcripts UI's search box + "Mark all results" button, but headless:
+
+```
+uv run clipgen.py --transcript-mark TERM --transcript-mark-category CAT [filters] -i INPUT_DIR -o OUTPUT_DIR
+```
+
+Required:
+- `--transcript-mark "checkout flow"` — word or phrase to find (quote multi-word terms). Case-insensitive substring match against corrected segment text.
+- `--transcript-mark-category insight` — one of `pain_point`, `delight`, `quote`, `insight`, `task`, `bookmark`.
+
+Optional:
+- `--transcript-mark-participant P01,P02` — restrict to specific participants. Omit to mark across all transcripts.
+- `--transcript-mark-label "follow up"` — label written onto every created/updated mark.
+
+Existing marks on matching segments are updated in place (category and, if given, label). Non-matching segments' marks are untouched. The created marks live in `transcripts_manifest.json` and are immediately consumable by `--transcript-clips --transcript-clips-mark CAT`.
+
+Example:
+
+```
+# Mark every "checkout" mention as an insight, then cut clips for them
+uv run clipgen.py --transcript-mark checkout --transcript-mark-category insight -i IN -o OUT
+uv run clipgen.py --transcript-clips --transcript-clips-mark insight -i IN -o OUT
+```
+
 ## Notes
 
 - `config.DEBUGGING = True` returns stub transcripts without loading the Whisper model — useful for development
