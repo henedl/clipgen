@@ -145,8 +145,11 @@ Required columns: **ID**, **Observation**, **Category**. Participant columns fol
 
 ## Version
 
-- The version is stored as `VERSIONNUM` in [config.py](config.py).
-- **When making substantive code changes** (bug fixes or features), increment the **last segment only** (patch) in `config.py`, e.g. `0.9.0` → `0.9.1`. Do not bump for docs-only, comment-only, or refactor-only changes unless they affect user-visible behavior.
+- The version is stored as a single line in [build/VERSION](build/VERSION) and read at runtime by `utils.get_version()`.
+- **Do not edit `build/VERSION` by hand.** A workflow ([.github/workflows/version-bump.yml](.github/workflows/version-bump.yml)) auto-bumps the patch on merge to `master` based on the PR title:
+  - `feat: …` or `fix: …` (with optional scope, e.g. `feat(viewer): …`) → patch bump.
+  - `docs: …`, `chore: …`, `refactor: …`, `test: …`, `build: …`, `ci: …`, or untyped titles → no bump.
+- Title your PRs accordingly so user-visible changes get a version bump and ancillary changes don't.
 
 ## Testing notes
 

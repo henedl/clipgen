@@ -2,6 +2,7 @@
 """Utility functions for clipgen."""
 
 import difflib
+import functools
 import json
 import subprocess
 import sys
@@ -550,6 +551,24 @@ def get_bundled_assets_root() -> Path:
             getattr(sys, "_MEIPASS", str(Path(sys.executable).resolve().parent))
         )
     return Path(__file__).resolve().parent
+
+
+@functools.cache
+def get_version() -> str:
+    """Return the project version, read from the `VERSION` file in `build/`.
+
+    In a PyInstaller bundle the file is copied to the bundle root by `clipgen.spec`,
+    so the source-tree `build/VERSION` and the bundled `VERSION` both resolve via
+    `get_bundled_assets_root()`. Falls back to "0.0.0+unknown" if neither exists —
+    a missing version must never crash the CLI banner.
+    """
+    root = get_bundled_assets_root()
+    for candidate in (root / "VERSION", root / "build" / "VERSION"):
+        try:
+            return candidate.read_text(encoding="utf-8").strip()
+        except OSError:
+            continue
+    return "0.0.0+unknown"
 
 
 def terminate_subprocess(proc: subprocess.Popen, timeout: int = 5) -> None:

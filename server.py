@@ -247,7 +247,7 @@ def api_sheet() -> FlaskResponse:
         {
             "ok": True,
             "study": ctx.study_name,
-            "version": config.VERSIONNUM,
+            "version": utils.get_version(),
             "highlightsDuration": config.HIGHLIGHTS_REEL_DURATION_SECONDS,
             "titlecardsEnabled": config.TITLECARDS_ENABLED,
             "titlecardDuration": config.TITLECARD_DURATION_SECONDS,

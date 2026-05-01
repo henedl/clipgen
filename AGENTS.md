@@ -20,7 +20,7 @@
 - Plan-driven development: detailed implementation plans with specific files, line numbers, code structure, and verification steps are written before coding begins. Follow attached plans closely.
 - Features are often built incrementally across multiple sessions. Check for existing groundwork before starting from scratch.
 - Manifest-driven state persistence: JSON manifest files (clipgen, insights, screenspace, stashes, settings) follow the pattern of load-on-startup, save-after-mutations.
-- No hardcoded version numbers in evergreen docs (CLAUDE.md, README.md). Reference `VERSIONNUM` in `config.py` instead.
+- No hardcoded version numbers in evergreen docs (CLAUDE.md, README.md). Reference `build/VERSION` or call `utils.get_version()` instead.
 - **Icons**: Prefer SVG icons from `assets/icons/` (316 Heroicons outline, kebab-case names like `pencil-square.svg`) over crafting new inline SVG paths or using text/emoji glyphs in web UIs. **Never define SVG path data in JavaScript.** Use the CSS `mask-image` pattern to reference `.svg` files: create a `<span>` with `mask-image: url("icons/icon-name.svg")` and `background-color: currentColor`. See `XREF_BADGES` in `utils.js` and `.xref-badge-icon` in `tokens.css` for the canonical example. Icon routes already exist per blueprint (`/screenspace/icons/`, `/transcripts/icons/`, etc.).
 - **Linting/formatting**: Run `uv run ruff check --fix && uv run ruff format` after editing Python files. Run `uv run ty check` for type checking. After editing frontend JavaScript under `assets/web/`, run `bun run lint:js`; use `bun run lint:js:fix` for safe auto-fixes. A pre-commit hook installed by `scripts/install-git-hooks.sh` also runs `bun run lint:js` on staged JS files automatically.
 - **Pre-commit format gate**: Before every `git commit`, run `uv run ruff format --check` on all modified `.py` files. If any would be reformatted, run `uv run ruff format` on them before committing. This catches files missed by the per-file PostToolUse hook (e.g. in worktrees where the hook is absent). The most common CI lint failure by far is unformatted Python code.
@@ -33,7 +33,7 @@
 ## Learned Workspace Facts
 
 - Baseline time row placement in the spreadsheet layer is tied to header/`id_cell` row math (e.g. offsets from `id_cell.row`); changing that offset without aligning tests and sheet layout has broken baseline timestamp handling before.
-- When making substantive code changes (fixes or features), increment the patch (last number) of VERSIONNUM in config.py.
+- The version (in `build/VERSION`, read by `utils.get_version()`) is auto-bumped on merge to `master` by `.github/workflows/version-bump.yml` based on the PR title. Use `feat:` or `fix:` prefixes to trigger a patch bump; `docs:`, `chore:`, `refactor:`, `test:`, `build:`, `ci:`, or untyped titles do not bump. Do not edit `build/VERSION` by hand.
 - Interactive prompts use a keyword-aware helper: `quit`/`exit` exit the program, `top` returns to spreadsheet selection, and `back` returns to mode selection (or spreadsheet selection when already at mode selection).
 - Textual-based TUI support (tui.py, TEXTUAL_TUI) has been removed; prefer CLI prompts and the HTML timeline viewer for interactive features.
 - Browse mode scrolling is controlled via `BROWSE_LINES_TO_SCROLL` in `config.py`, with a default of 5 rows per up/down step.
