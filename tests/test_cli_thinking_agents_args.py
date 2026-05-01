@@ -85,16 +85,17 @@ def _make_manifest(**entries):
 # ---- Argparse parsing ----
 
 
-def test_parse_summarize_with_no_ids(monkeypatch):
-    monkeypatch.setattr("sys.argv", ["clipgen.py", "--summarize"])
+@pytest.mark.parametrize(
+    "argv_extra,expected",
+    [
+        ([], []),
+        (["P01", "P03"], ["P01", "P03"]),
+    ],
+)
+def test_parse_summarize(monkeypatch, argv_extra, expected):
+    monkeypatch.setattr("sys.argv", ["clipgen.py", "--summarize", *argv_extra])
     args = cli.parse_arguments()
-    assert args.summarize == []
-
-
-def test_parse_summarize_with_ids(monkeypatch):
-    monkeypatch.setattr("sys.argv", ["clipgen.py", "--summarize", "P01", "P03"])
-    args = cli.parse_arguments()
-    assert args.summarize == ["P01", "P03"]
+    assert args.summarize == expected
 
 
 def test_parse_citations_with_ollama_model(monkeypatch):

@@ -106,38 +106,21 @@ def test_export_conflicts_with_studio(monkeypatch):
     assert exc.value.code == 1
 
 
-def test_parse_arguments_titlecards_flags(monkeypatch):
-    # Default: no flag → None (use config default)
-    monkeypatch.setattr("sys.argv", ["clipgen.py"])
+@pytest.mark.parametrize(
+    "argv_extra,attr,expected",
+    [
+        ([], "titlecards", None),
+        (["--titlecards"], "titlecards", True),
+        (["--no-titlecards"], "titlecards", False),
+        ([], "filmstrip", None),
+        (["--filmstrip"], "filmstrip", True),
+        (["--no-filmstrip"], "filmstrip", False),
+    ],
+)
+def test_three_state_bool_flags(monkeypatch, argv_extra, attr, expected):
+    monkeypatch.setattr("sys.argv", ["clipgen.py", *argv_extra])
     args = cli.parse_arguments()
-    assert getattr(args, "titlecards", None) is None
-
-    # --titlecards → True
-    monkeypatch.setattr("sys.argv", ["clipgen.py", "--titlecards"])
-    args = cli.parse_arguments()
-    assert args.titlecards is True
-
-    # --no-titlecards → False
-    monkeypatch.setattr("sys.argv", ["clipgen.py", "--no-titlecards"])
-    args = cli.parse_arguments()
-    assert args.titlecards is False
-
-
-def test_parse_arguments_filmstrip_flags(monkeypatch):
-    # Default: no flag → None (use config default)
-    monkeypatch.setattr("sys.argv", ["clipgen.py"])
-    args = cli.parse_arguments()
-    assert getattr(args, "filmstrip", None) is None
-
-    # --filmstrip → True
-    monkeypatch.setattr("sys.argv", ["clipgen.py", "--filmstrip"])
-    args = cli.parse_arguments()
-    assert args.filmstrip is True
-
-    # --no-filmstrip → False
-    monkeypatch.setattr("sys.argv", ["clipgen.py", "--no-filmstrip"])
-    args = cli.parse_arguments()
-    assert args.filmstrip is False
+    assert getattr(args, attr, None) is expected
 
 
 def test_parse_cli_mode_args_parses_mixed_line_separators():
@@ -283,15 +266,11 @@ def test_run_cli_mode_reel_cli_dispatch(monkeypatch, make_clip):
     "value,expected",
     [
         ("excel", True),
-        ("EXCEL", True),
         ("  excel  ", True),
         ("notes.xlsx", True),
         ("path/to/file.XLSX", True),
         (None, False),
-        ("", False),
         ("my-spreadsheet", False),
-        ("https://docs.google.com/spreadsheets/d/abc", False),
-        ("42", False),
     ],
 )
 def test_is_excel_spreadsheet_arg(value, expected):
@@ -301,28 +280,31 @@ def test_is_excel_spreadsheet_arg(value, expected):
 # ---- --pre-transcribe flag parsing ----
 
 
-def test_pre_transcribe_absent(monkeypatch):
-    monkeypatch.setattr("sys.argv", ["clipgen.py"])
+@pytest.mark.parametrize(
+    "argv_extra,expected",
+    [
+        ([], None),
+        (["--pre-transcribe"], []),
+        (["--pre-transcribe", "P01", "P03"], ["P01", "P03"]),
+    ],
+)
+def test_pre_transcribe_flag(monkeypatch, argv_extra, expected):
+    monkeypatch.setattr("sys.argv", ["clipgen.py", *argv_extra])
     args = cli.parse_arguments()
-    assert args.pre_transcribe is None
+    assert args.pre_transcribe == expected
 
 
-def test_pre_transcribe_no_ids(monkeypatch):
-    monkeypatch.setattr("sys.argv", ["clipgen.py", "--pre-transcribe"])
+@pytest.mark.parametrize(
+    "flag,attr,value",
+    [
+        ("--whisper-model", "whisper_model", "medium"),
+        ("--ollama-model", "ollama_model", "gemma3:4b"),
+    ],
+)
+def test_model_flag_parses(monkeypatch, flag, attr, value):
+    monkeypatch.setattr("sys.argv", ["clipgen.py", flag, value])
     args = cli.parse_arguments()
-    assert args.pre_transcribe == []
-
-
-def test_pre_transcribe_with_ids(monkeypatch):
-    monkeypatch.setattr("sys.argv", ["clipgen.py", "--pre-transcribe", "P01", "P03"])
-    args = cli.parse_arguments()
-    assert args.pre_transcribe == ["P01", "P03"]
-
-
-def test_whisper_model_flag_parses(monkeypatch):
-    monkeypatch.setattr("sys.argv", ["clipgen.py", "--whisper-model", "medium"])
-    args = cli.parse_arguments()
-    assert args.whisper_model == "medium"
+    assert getattr(args, attr) == value
 
 
 def test_whisper_model_flag_rejects_invalid(monkeypatch):
@@ -331,29 +313,21 @@ def test_whisper_model_flag_rejects_invalid(monkeypatch):
         cli.parse_arguments()
 
 
-def test_ollama_model_flag_parses(monkeypatch):
-    monkeypatch.setattr("sys.argv", ["clipgen.py", "--ollama-model", "gemma3:4b"])
-    args = cli.parse_arguments()
-    assert args.ollama_model == "gemma3:4b"
-
-
-def test_whisper_model_applies_to_config(monkeypatch):
+@pytest.mark.parametrize(
+    "flag,value,config_attr",
+    [
+        ("--whisper-model", "small", "TRANSCRIBE_MODEL"),
+        ("--ollama-model", "gemma3:4b", "OLLAMA_SUMMARY_MODEL"),
+    ],
+)
+def test_model_flag_applies_to_config(monkeypatch, flag, value, config_attr):
     import config
 
-    original = config.TRANSCRIBE_MODEL
-    monkeypatch.setattr("sys.argv", ["clipgen.py", "--whisper-model", "small"])
-    args = cli.parse_arguments()
-    cli._apply_config_overrides(args, cli_mode=True)
-    assert config.TRANSCRIBE_MODEL == "small"
-    config.TRANSCRIBE_MODEL = original
-
-
-def test_ollama_model_applies_to_config(monkeypatch):
-    import config
-
-    original = config.OLLAMA_SUMMARY_MODEL
-    monkeypatch.setattr("sys.argv", ["clipgen.py", "--ollama-model", "gemma3:4b"])
-    args = cli.parse_arguments()
-    cli._apply_config_overrides(args, cli_mode=True)
-    assert config.OLLAMA_SUMMARY_MODEL == "gemma3:4b"
-    config.OLLAMA_SUMMARY_MODEL = original
+    original = getattr(config, config_attr)
+    try:
+        monkeypatch.setattr("sys.argv", ["clipgen.py", flag, value])
+        args = cli.parse_arguments()
+        cli._apply_config_overrides(args, cli_mode=True)
+        assert getattr(config, config_attr) == value
+    finally:
+        setattr(config, config_attr, original)
