@@ -318,6 +318,14 @@ def test_to_csv_empty_records_returns_empty_string():
     assert data_export.to_csv([]) == ""
 
 
+def test_to_csv_scrubs_nonfinite_floats_inside_lists():
+    rows = [{"a": [1.0, float("nan"), float("inf"), 2.0]}]
+    csv_text = data_export.to_csv(rows)
+    reader = csv.DictReader(io.StringIO(csv_text))
+    row = next(reader)
+    assert row["a"] == "1.0;;;2.0"
+
+
 def test_to_json_envelope_shape(screenspace_manifest):
     rows = data_export.build_screenspace_events(screenspace_manifest)
     parsed = json.loads(data_export.to_json(rows))
