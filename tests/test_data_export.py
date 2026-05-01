@@ -141,47 +141,45 @@ def transcripts_manifest():
 # ---- Screenspace events builder -----------------------------------------
 
 
-def test_screenspace_events_default_excludes_marked(screenspace_manifest):
-    rows = data_export.build_screenspace_events(screenspace_manifest)
-    assert all(not r["excluded"] for r in rows)
-    assert len(rows) == 9
-    detectors = {r["detector"] for r in rows}
-    assert detectors == {
-        "color",
-        "change",
-        "similarity",
-        "text",
-        "numbers",
-        "template",
-        "flow",
-        "scene",
-        "inactivity",
-    }
+_ALL_DETECTORS = {
+    "color",
+    "change",
+    "similarity",
+    "text",
+    "numbers",
+    "template",
+    "flow",
+    "scene",
+    "inactivity",
+}
 
 
-def test_screenspace_events_include_excluded(screenspace_manifest):
-    rows = data_export.build_screenspace_events(
-        screenspace_manifest, include_excluded=True
-    )
-    assert len(rows) == 10
-    excluded_rows = [r for r in rows if r["excluded"]]
-    assert len(excluded_rows) == 1
-
-
-def test_screenspace_events_filters_participant(screenspace_manifest):
-    rows = data_export.build_screenspace_events(
-        screenspace_manifest, include_excluded=True, participants=["P02"]
-    )
-    assert len(rows) == 1
-    assert rows[0]["participant"] == "P02"
-
-
-def test_screenspace_events_filters_detector(screenspace_manifest):
-    rows = data_export.build_screenspace_events(
-        screenspace_manifest, detectors=["change", "flow"]
-    )
-    assert len(rows) == 2
-    assert {r["detector"] for r in rows} == {"change", "flow"}
+@pytest.mark.parametrize(
+    "kwargs,expected_count,expected_detectors,expected_participants,expected_excluded_count",
+    [
+        ({}, 9, _ALL_DETECTORS, None, 0),
+        ({"include_excluded": True}, 10, None, None, 1),
+        ({"include_excluded": True, "participants": ["P02"]}, 1, None, {"P02"}, None),
+        ({"detectors": ["change", "flow"]}, 2, {"change", "flow"}, None, None),
+    ],
+    ids=["default", "include_excluded", "participant_filter", "detector_filter"],
+)
+def test_screenspace_events_filters(
+    screenspace_manifest,
+    kwargs,
+    expected_count,
+    expected_detectors,
+    expected_participants,
+    expected_excluded_count,
+):
+    rows = data_export.build_screenspace_events(screenspace_manifest, **kwargs)
+    assert len(rows) == expected_count
+    if expected_detectors is not None:
+        assert {r["detector"] for r in rows} == expected_detectors
+    if expected_participants is not None:
+        assert {r["participant"] for r in rows} == expected_participants
+    if expected_excluded_count is not None:
+        assert sum(1 for r in rows if r["excluded"]) == expected_excluded_count
 
 
 def test_screenspace_events_metadata_hoisted(screenspace_manifest):
@@ -267,37 +265,23 @@ def test_insights_builder_handles_missing_subsections():
 # ---- Transcript segments builder ----------------------------------------
 
 
-def test_transcript_segments_one_row_per_segment(transcripts_manifest):
+def test_build_transcript_segments(transcripts_manifest):
+    """One row per segment, with participant metadata, mark joins, and duration."""
     rows = data_export.build_transcript_segments(transcripts_manifest)
-    assert len(rows) == 3
     by_id = {r["segment_id"]: r for r in rows}
-    assert "P01:0" in by_id
-    assert "P01:1" in by_id
-    assert "P02:0" in by_id
 
+    assert len(rows) == 3
+    assert set(by_id) == {"P01:0", "P01:1", "P02:0"}
 
-def test_transcript_segments_carries_participant_metadata(transcripts_manifest):
-    rows = data_export.build_transcript_segments(transcripts_manifest)
     for r in rows:
         assert r["language"] == "en"
         assert r["model"] == "base"
-        if r["participant"] == "P01":
-            assert r["source_file"] == "study_P01.mp4"
+    assert by_id["P01:0"]["source_file"] == "study_P01.mp4"
 
+    assert by_id["P01:1"]["mark_categories"] == ["pain_point"]
+    assert by_id["P01:1"]["mark_labels"] == ["confused"]
+    assert by_id["P01:0"]["mark_categories"] == []
 
-def test_transcript_segments_joins_marks(transcripts_manifest):
-    rows = data_export.build_transcript_segments(transcripts_manifest)
-    by_id = {r["segment_id"]: r for r in rows}
-    marked = by_id["P01:1"]
-    unmarked = by_id["P01:0"]
-    assert marked["mark_categories"] == ["pain_point"]
-    assert marked["mark_labels"] == ["confused"]
-    assert unmarked["mark_categories"] == []
-
-
-def test_transcript_segments_duration(transcripts_manifest):
-    rows = data_export.build_transcript_segments(transcripts_manifest)
-    by_id = {r["segment_id"]: r for r in rows}
     assert by_id["P01:0"]["duration"] == pytest.approx(5.0, abs=1e-6)
     assert by_id["P02:0"]["duration"] == pytest.approx(4.5, abs=1e-6)
 
@@ -348,48 +332,47 @@ def _write_manifest(tmp_path: Path, filename: str, content: dict) -> None:
     (tmp_path / filename).write_text(json.dumps(content), encoding="utf-8")
 
 
-def test_bundle_writes_all_three(
-    tmp_path, screenspace_manifest, insights_manifest, transcripts_manifest
+_EMPTY_SS_MANIFEST = {"regions": {}, "tasks": [], "events": [], "stashes": []}
+
+
+@pytest.mark.parametrize(
+    "manifest_specs,expected_count,expected_name_substrs",
+    [
+        (
+            ["screenspace", "insights", "transcripts"],
+            6,
+            {"screenspace_events", "insights", "transcripts"},
+        ),
+        (["screenspace"], 2, {"screenspace_events"}),
+        ([], 0, set()),
+        (["screenspace_empty"], 0, set()),
+    ],
+    ids=["all_three", "skips_missing", "no_manifests", "skips_empty"],
+)
+def test_bundle_writer(
+    tmp_path,
+    screenspace_manifest,
+    insights_manifest,
+    transcripts_manifest,
+    manifest_specs,
+    expected_count,
+    expected_name_substrs,
 ):
-    _write_manifest(
-        tmp_path, config.SCREENSPACE_MANIFEST_FILENAME, screenspace_manifest
-    )
-    _write_manifest(tmp_path, config.INSIGHTS_MANIFEST_FILENAME, insights_manifest)
-    _write_manifest(
-        tmp_path, config.TRANSCRIPTS_MANIFEST_FILENAME, transcripts_manifest
-    )
+    fixture_map = {
+        "screenspace": (config.SCREENSPACE_MANIFEST_FILENAME, screenspace_manifest),
+        "screenspace_empty": (config.SCREENSPACE_MANIFEST_FILENAME, _EMPTY_SS_MANIFEST),
+        "insights": (config.INSIGHTS_MANIFEST_FILENAME, insights_manifest),
+        "transcripts": (config.TRANSCRIPTS_MANIFEST_FILENAME, transcripts_manifest),
+    }
+    for spec in manifest_specs:
+        filename, content = fixture_map[spec]
+        _write_manifest(tmp_path, filename, content)
 
     written = data_export.write_export_bundle(tmp_path)
+    assert len(written) == expected_count
     names = {p.name for p in written}
-    assert "clipgen_export_screenspace_events.json" in names
-    assert "clipgen_export_screenspace_events.csv" in names
-    assert "clipgen_export_insights.json" in names
-    assert "clipgen_export_insights.csv" in names
-    assert "clipgen_export_transcripts.json" in names
-    assert "clipgen_export_transcripts.csv" in names
-    assert len(written) == 6
-
-
-def test_bundle_skips_missing_manifests(tmp_path, screenspace_manifest):
-    _write_manifest(
-        tmp_path, config.SCREENSPACE_MANIFEST_FILENAME, screenspace_manifest
-    )
-    written = data_export.write_export_bundle(tmp_path)
-    assert len(written) == 2
-    assert all("screenspace_events" in p.name for p in written)
-
-
-def test_bundle_returns_empty_when_no_manifests(tmp_path):
-    assert data_export.write_export_bundle(tmp_path) == []
-
-
-def test_bundle_skips_empty_manifest(tmp_path):
-    _write_manifest(
-        tmp_path,
-        config.SCREENSPACE_MANIFEST_FILENAME,
-        {"regions": {}, "tasks": [], "events": [], "stashes": []},
-    )
-    assert data_export.write_export_bundle(tmp_path) == []
+    for substr in expected_name_substrs:
+        assert any(substr in n for n in names), f"missing {substr!r} in {names}"
 
 
 def test_bundle_csv_has_data_rows(tmp_path, screenspace_manifest):

@@ -74,41 +74,41 @@ def test_parse_transcript_clips_with_mark(monkeypatch):
 # ---- Conflict validation ----
 
 
-def test_ss_clips_conflicts_with_transcript_clips():
-    args = _ss_args(ss_clips=True, transcript_clips=True)
-    with pytest.raises(SystemExit):
-        cli._validate_mode_conflicts(args)
-
-
-def test_ss_clips_conflicts_with_studio():
-    args = _ss_args(ss_clips=True, studio=True)
-    with pytest.raises(SystemExit):
-        cli._validate_mode_conflicts(args)
-
-
-def test_ss_clips_conflicts_with_ss_task():
-    args = _ss_args(
-        ss_clips=True,
-        ss_task=["color", "P01", "btn"],
-        ss_target_color="#FF0000",
-        ss_tolerance="20,30,30",
-        ss_threshold=0.85,
-    )
-    with pytest.raises(SystemExit):
-        cli._validate_mode_conflicts(args)
-
-
-def test_transcript_clips_conflicts_with_screenspace():
-    args = _ss_args(transcript_clips=True, screenspace=True)
-    with pytest.raises(SystemExit):
-        cli._validate_mode_conflicts(args)
-
-
-def test_ss_clips_alone_validates():
-    args = _ss_args(ss_clips=True)
-    modes = cli._validate_mode_conflicts(args)
-    assert modes["ss_clips"] is True
-    assert modes["transcript_clips"] is False
+@pytest.mark.parametrize(
+    "args_overrides,expects_exit",
+    [
+        ({"ss_clips": True, "transcript_clips": True}, True),
+        ({"ss_clips": True, "studio": True}, True),
+        (
+            {
+                "ss_clips": True,
+                "ss_task": ["color", "P01", "btn"],
+                "ss_target_color": "#FF0000",
+                "ss_tolerance": "20,30,30",
+                "ss_threshold": 0.85,
+            },
+            True,
+        ),
+        ({"transcript_clips": True, "screenspace": True}, True),
+        ({"ss_clips": True}, False),
+    ],
+    ids=[
+        "ss_clips_with_transcript_clips",
+        "ss_clips_with_studio",
+        "ss_clips_with_ss_task",
+        "transcript_clips_with_screenspace",
+        "ss_clips_alone",
+    ],
+)
+def test_clip_mode_conflicts(args_overrides, expects_exit):
+    args = _ss_args(**args_overrides)
+    if expects_exit:
+        with pytest.raises(SystemExit):
+            cli._validate_mode_conflicts(args)
+    else:
+        modes = cli._validate_mode_conflicts(args)
+        assert modes["ss_clips"] is True
+        assert modes["transcript_clips"] is False
 
 
 # ---- Filter helpers ----
@@ -133,60 +133,56 @@ def _ev(**overrides):
     return base
 
 
-def test_filter_ss_events_drops_excluded():
-    events = [_ev(id="a"), _ev(id="b", excluded=True)]
-    out = cli._filter_screenspace_events(
-        events,
-        detectors=None,
-        regions=None,
-        participants=None,
-        min_confidence=None,
-        event_type_substr=None,
-    )
-    assert [e["id"] for e in out] == ["a"]
+_NO_FILTERS = dict(
+    detectors=None,
+    regions=None,
+    participants=None,
+    min_confidence=None,
+    event_type_substr=None,
+)
 
 
-def test_filter_ss_events_min_confidence():
-    events = [_ev(id="lo", confidence=0.5), _ev(id="hi", confidence=0.95)]
-    out = cli._filter_screenspace_events(
-        events,
-        detectors=None,
-        regions=None,
-        participants=None,
-        min_confidence=0.8,
-        event_type_substr=None,
-    )
-    assert [e["id"] for e in out] == ["hi"]
-
-
-def test_filter_ss_events_detector_and_region():
-    events = [
-        _ev(id="a", detector="change", region="dialog"),
-        _ev(id="b", detector="color", region="dialog"),
-        _ev(id="c", detector="change", region="header"),
-    ]
-    out = cli._filter_screenspace_events(
-        events,
-        detectors={"change"},
-        regions={"dialog"},
-        participants=None,
-        min_confidence=None,
-        event_type_substr=None,
-    )
-    assert [e["id"] for e in out] == ["a"]
-
-
-def test_filter_ss_events_event_type_substr_case_insensitive():
-    events = [_ev(id="a", event_type="Login attempt"), _ev(id="b", event_type="logout")]
-    out = cli._filter_screenspace_events(
-        events,
-        detectors=None,
-        regions=None,
-        participants=None,
-        min_confidence=None,
-        event_type_substr="LOGIN",
-    )
-    assert [e["id"] for e in out] == ["a"]
+@pytest.mark.parametrize(
+    "events,filter_overrides,expected_ids",
+    [
+        (
+            [_ev(id="a"), _ev(id="b", excluded=True)],
+            {},
+            ["a"],
+        ),
+        (
+            [_ev(id="lo", confidence=0.5), _ev(id="hi", confidence=0.95)],
+            {"min_confidence": 0.8},
+            ["hi"],
+        ),
+        (
+            [
+                _ev(id="a", detector="change", region="dialog"),
+                _ev(id="b", detector="color", region="dialog"),
+                _ev(id="c", detector="change", region="header"),
+            ],
+            {"detectors": {"change"}, "regions": {"dialog"}},
+            ["a"],
+        ),
+        (
+            [
+                _ev(id="a", event_type="Login attempt"),
+                _ev(id="b", event_type="logout"),
+            ],
+            {"event_type_substr": "LOGIN"},
+            ["a"],
+        ),
+    ],
+    ids=[
+        "drops_excluded",
+        "min_confidence",
+        "detector_and_region",
+        "event_type_substr",
+    ],
+)
+def test_filter_ss_events(events, filter_overrides, expected_ids):
+    out = cli._filter_screenspace_events(events, **{**_NO_FILTERS, **filter_overrides})
+    assert [e["id"] for e in out] == expected_ids
 
 
 def test_filter_transcript_segments_by_mark_category():
@@ -510,44 +506,49 @@ def test_run_transcript_clips_with_mark_filter_uses_mark_category(monkeypatch):
 # ---- --transcript-mark argparse + conflict ----
 
 
-def test_parse_transcript_mark_minimal(monkeypatch):
-    monkeypatch.setattr(
-        "sys.argv",
-        [
-            "clipgen.py",
-            "--transcript-mark",
-            "checkout",
-            "--transcript-mark-category",
-            "insight",
-        ],
-    )
+@pytest.mark.parametrize(
+    "argv_extra,expected_attrs",
+    [
+        (
+            [
+                "--transcript-mark",
+                "checkout",
+                "--transcript-mark-category",
+                "insight",
+            ],
+            {
+                "transcript_mark": "checkout",
+                "transcript_mark_category": "insight",
+                "transcript_mark_participant": None,
+                "transcript_mark_label": None,
+            },
+        ),
+        (
+            [
+                "--transcript-mark",
+                "checkout flow",
+                "--transcript-mark-category",
+                "pain_point",
+                "--transcript-mark-participant",
+                "P01,P02",
+                "--transcript-mark-label",
+                "follow up",
+            ],
+            {
+                "transcript_mark": "checkout flow",
+                "transcript_mark_category": "pain_point",
+                "transcript_mark_participant": "P01,P02",
+                "transcript_mark_label": "follow up",
+            },
+        ),
+    ],
+    ids=["minimal", "with_filters"],
+)
+def test_parse_transcript_mark(monkeypatch, argv_extra, expected_attrs):
+    monkeypatch.setattr("sys.argv", ["clipgen.py", *argv_extra])
     args = cli.parse_arguments()
-    assert args.transcript_mark == "checkout"
-    assert args.transcript_mark_category == "insight"
-    assert args.transcript_mark_participant is None
-    assert args.transcript_mark_label is None
-
-
-def test_parse_transcript_mark_with_filters(monkeypatch):
-    monkeypatch.setattr(
-        "sys.argv",
-        [
-            "clipgen.py",
-            "--transcript-mark",
-            "checkout flow",
-            "--transcript-mark-category",
-            "pain_point",
-            "--transcript-mark-participant",
-            "P01,P02",
-            "--transcript-mark-label",
-            "follow up",
-        ],
-    )
-    args = cli.parse_arguments()
-    assert args.transcript_mark == "checkout flow"
-    assert args.transcript_mark_category == "pain_point"
-    assert args.transcript_mark_participant == "P01,P02"
-    assert args.transcript_mark_label == "follow up"
+    for attr, expected in expected_attrs.items():
+        assert getattr(args, attr) == expected
 
 
 def test_transcript_mark_conflicts_with_transcript_clips():
@@ -610,24 +611,42 @@ def _mark_manifest():
     }
 
 
-def test_run_transcript_mark_creates_marks_for_matches(monkeypatch, no_running_server):
+@pytest.mark.parametrize(
+    "args_overrides,expected_seg_ids",
+    [
+        (
+            dict(transcript_mark="checkout", transcript_mark_category="insight"),
+            ["P01:0", "P02:0"],
+        ),
+        (
+            dict(
+                transcript_mark="checkout",
+                transcript_mark_category="insight",
+                transcript_mark_participant="P01",
+            ),
+            ["P01:0"],
+        ),
+    ],
+    ids=["all_participants", "participant_filter"],
+)
+def test_run_transcript_mark_creates_marks(
+    monkeypatch, no_running_server, args_overrides, expected_seg_ids
+):
     import transcripts
 
     manifest = _mark_manifest()
     monkeypatch.setattr(transcripts, "load_transcripts_manifest", lambda: manifest)
     saved: dict = {}
+    monkeypatch.setattr(
+        transcripts,
+        "save_transcripts_manifest",
+        lambda src, corr, marks=None: saved.update({"marks": marks}),
+    )
 
-    def fake_save(source_transcripts, corrections, marks=None):
-        saved["marks"] = marks
-        return None
-
-    monkeypatch.setattr(transcripts, "save_transcripts_manifest", fake_save)
-
-    args = _ss_args(transcript_mark="checkout", transcript_mark_category="insight")
+    args = _ss_args(**args_overrides)
     cli._run_transcript_mark(args)
 
-    seg_ids = sorted(m["segment_id"] for m in saved["marks"])
-    assert seg_ids == ["P01:0", "P02:0"]
+    assert sorted(m["segment_id"] for m in saved["marks"]) == expected_seg_ids
     assert all(m["category"] == "insight" for m in saved["marks"])
     assert all(m["label"] is None for m in saved["marks"])
 
@@ -680,28 +699,6 @@ def test_run_transcript_mark_updates_existing_in_place(monkeypatch, no_running_s
     assert by_seg["P02:0"]["category"] == "insight"
     # No duplicates.
     assert len(saved["marks"]) == 3
-
-
-def test_run_transcript_mark_participant_filter(monkeypatch, no_running_server):
-    import transcripts
-
-    manifest = _mark_manifest()
-    monkeypatch.setattr(transcripts, "load_transcripts_manifest", lambda: manifest)
-    saved: dict = {}
-    monkeypatch.setattr(
-        transcripts,
-        "save_transcripts_manifest",
-        lambda src, corr, marks=None: saved.update({"marks": marks}),
-    )
-
-    args = _ss_args(
-        transcript_mark="checkout",
-        transcript_mark_category="insight",
-        transcript_mark_participant="P01",
-    )
-    cli._run_transcript_mark(args)
-
-    assert [m["segment_id"] for m in saved["marks"]] == ["P01:0"]
 
 
 def test_run_transcript_mark_invalid_category_does_not_save(
