@@ -162,100 +162,77 @@ def test_run_cli_mode_rejects_reel_with_gif():
     assert exc.value.code == 1
 
 
-def test_run_cli_mode_batch_happy_path_dispatch(monkeypatch, make_clip):
-    args = _base_args(batch=True, yes=True)
+@pytest.mark.parametrize(
+    "args_overrides,parsed_kwargs,mode,gen_kwargs,process_attr,process_kwargs",
+    [
+        (
+            {"batch": True, "yes": True},
+            {},
+            "batch",
+            {"skip_prompts": True},
+            "process_clips",
+            {"output_format": "clip", "include_severity": False},
+        ),
+        (
+            {"lines": "5", "screen": True, "yes": True},
+            {"line_numbers": [5]},
+            "line",
+            {"line_numbers": [5], "skip_prompts": True},
+            "process_clips",
+            {"output_format": "screen", "include_severity": False},
+        ),
+        (
+            {"category": "Observations,Onboarding", "yes": True},
+            {},
+            "category",
+            {"skip_prompts": True, "categories": ["Observations", "Onboarding"]},
+            "process_clips",
+            {"output_format": "clip", "include_severity": False},
+        ),
+        (
+            {"reel": "11, P01.5", "yes": True},
+            {},
+            "reel",
+            {"reel_input": "11, P01.5", "skip_prompts": True},
+            "process_reel",
+            None,
+        ),
+    ],
+    ids=["batch", "line_screen", "category", "reel"],
+)
+def test_run_cli_mode_dispatch(
+    monkeypatch,
+    make_clip,
+    args_overrides,
+    parsed_kwargs,
+    mode,
+    gen_kwargs,
+    process_attr,
+    process_kwargs,
+):
+    args = _base_args(**args_overrides)
     clips = [make_clip()]
     generate_list = Mock(return_value=clips)
-    process_clips = Mock(return_value=(1, []))
+    process_fn = Mock(return_value=(1, []))
     completion = Mock()
 
     monkeypatch.setattr(cli.spreadsheet, "generate_list", generate_list)
-    monkeypatch.setattr(clipgen, "process_clips", process_clips)
+    monkeypatch.setattr(clipgen, process_attr, process_fn)
     monkeypatch.setattr(clipgen, "_print_completion_message", completion)
 
-    cli.run_cli_mode(None, args, cli.CliModeArgs(None, None, None, None))
-
-    generate_list.assert_called_once_with(None, "batch", skip_prompts=True)
-    process_clips.assert_called_once_with(
-        clips, output_format="clip", include_severity=False
+    parsed_defaults = dict(
+        line_numbers=None, range_start=None, range_end=None, cell_specs=None
     )
-    completion.assert_called_once()
+    parsed_defaults.update(parsed_kwargs)
 
+    cli.run_cli_mode(None, args, cli.CliModeArgs(**parsed_defaults))
 
-def test_run_cli_mode_line_with_screen_output(monkeypatch, make_clip):
-    args = _base_args(lines="5", screen=True, yes=True)
-    clips = [make_clip()]
-    generate_list = Mock(return_value=clips)
-    process_clips = Mock(return_value=(1, []))
-    completion = Mock()
-
-    monkeypatch.setattr(cli.spreadsheet, "generate_list", generate_list)
-    monkeypatch.setattr(clipgen, "process_clips", process_clips)
-    monkeypatch.setattr(clipgen, "_print_completion_message", completion)
-
-    parsed = cli.CliModeArgs(
-        line_numbers=[5], range_start=None, range_end=None, cell_specs=None
-    )
-    cli.run_cli_mode(None, args, parsed)
-
-    generate_list.assert_called_once_with(
-        None,
-        "line",
-        line_numbers=[5],
-        skip_prompts=True,
-    )
-    process_clips.assert_called_once_with(
-        clips, output_format="screen", include_severity=False
-    )
-    completion.assert_called_once()
-
-
-def test_run_cli_mode_category_cli_dispatch(monkeypatch, make_clip):
-    args = _base_args(category="Observations,Onboarding", yes=True)
-    clips = [make_clip()]
-    generate_list = Mock(return_value=clips)
-    process_clips = Mock(return_value=(1, []))
-    completion = Mock()
-
-    monkeypatch.setattr(cli.spreadsheet, "generate_list", generate_list)
-    monkeypatch.setattr(clipgen, "process_clips", process_clips)
-    monkeypatch.setattr(clipgen, "_print_completion_message", completion)
-
-    parsed = cli.CliModeArgs(None, None, None, None)
-    cli.run_cli_mode(None, args, parsed)
-
-    generate_list.assert_called_once_with(
-        None,
-        "category",
-        skip_prompts=True,
-        categories=["Observations", "Onboarding"],
-    )
-    process_clips.assert_called_once_with(
-        clips, output_format="clip", include_severity=False
-    )
-    completion.assert_called_once()
-
-
-def test_run_cli_mode_reel_cli_dispatch(monkeypatch, make_clip):
-    args = _base_args(reel="11, P01.5", yes=True)
-    clips = [make_clip()]
-    generate_list = Mock(return_value=clips)
-    process_reel = Mock(return_value=(1, []))
-    completion = Mock()
-
-    monkeypatch.setattr(cli.spreadsheet, "generate_list", generate_list)
-    monkeypatch.setattr(clipgen, "process_reel", process_reel)
-    monkeypatch.setattr(clipgen, "_print_completion_message", completion)
-
-    parsed = cli.CliModeArgs(None, None, None, None)
-    cli.run_cli_mode(None, args, parsed)
-
-    generate_list.assert_called_once_with(
-        None, "reel", reel_input="11, P01.5", skip_prompts=True
-    )
-    assert process_reel.call_count == 1
-    # First positional argument should be the clips list returned from generate_list.
-    assert process_reel.call_args[0][0] is clips
+    generate_list.assert_called_once_with(None, mode, **gen_kwargs)
+    if process_kwargs is None:
+        assert process_fn.call_count == 1
+        assert process_fn.call_args[0][0] is clips
+    else:
+        process_fn.assert_called_once_with(clips, **process_kwargs)
     completion.assert_called_once()
 
 
