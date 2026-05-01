@@ -54,3 +54,15 @@ Source videos must be named `{study}_{participant}.mp4` — e.g. `mystudy_P01.mp
 | "annotated clips only" | `uv run clipgen.py -k -s "Study" -i . -o ./clips` |
 | "critical and high severity" | `uv run clipgen.py -S Critical,High -s "Study" -i . -o ./clips` |
 | "GIFs for the usability category" | `uv run clipgen.py --gif -C "Usability" -s "Study" -i . -o ./clips` |
+
+## Event-driven clips (no spreadsheet)
+
+When the user wants to cut clips from existing Screenspace events or transcript segments instead of a spreadsheet, use the manifest-driven modes — no `-s` needed:
+
+| Natural language | Command |
+|-----------------|---------|
+| "clips of every change event in the dialog region" | `uv run clipgen.py --ss-clips --ss-clips-detector change --ss-clips-region dialog -i . -o ./clips` |
+| "clips for every segment marked as an insight" | `uv run clipgen.py --transcript-clips --transcript-clips-mark insight -i . -o ./clips` |
+| "clips wherever P01 said 'checkout flow'" | `uv run clipgen.py --transcript-clips --transcript-clips-participant P01 --transcript-clips-text "checkout flow" -i . -o ./clips` |
+
+See `agents/skills/screenspace/SKILL.md` and `agents/skills/transcribe/SKILL.md` for the full filter and clustering reference.

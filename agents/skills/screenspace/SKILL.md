@@ -48,6 +48,42 @@ uv run clipgen.py --ss-list-tasks completed -i INPUT_DIR   # filter by status
 uv run clipgen.py --ss-list-stashes -i INPUT_DIR           # saved region stashes
 ```
 
+## Cut clips from events
+
+Turn the events you generated above into video clips, no UI required:
+
+```
+uv run clipgen.py --ss-clips [filters] [--cluster-gap N] [--clip-pre N --clip-post N] -i INPUT_DIR -o OUTPUT_DIR
+```
+
+Filters (all optional, comma-separated where listed):
+- `--ss-clips-detector change,color` — restrict to specific tool types
+- `--ss-clips-region dialog,header` — restrict to specific regions
+- `--ss-clips-participant P01,P02` — restrict to specific participants
+- `--ss-clips-min-confidence 0.8` — drop low-confidence events
+- `--ss-clips-event-type "login"` — case-insensitive substring on `event_type`
+
+Clustering & padding (defaults shown):
+- `--cluster-gap 5.0` — merge events within N seconds into one clip; `0` = one clip per event
+- `--clip-pre 5.0 --clip-post 5.0` — pad each cluster's start/end with N seconds
+- `--max-clip-duration 0` — when `>0`, split clusters longer than N seconds
+
+Examples:
+
+```
+# Cluster all change events into clips with default 5s gap and 5s pad
+uv run clipgen.py --ss-clips --ss-clips-detector change -i INPUT -o OUTPUT
+
+# One clip per event, no clustering
+uv run clipgen.py --ss-clips --ss-clips-detector change --cluster-gap 0 -i INPUT -o OUTPUT
+
+# High-confidence dialog events for one participant
+uv run clipgen.py --ss-clips --ss-clips-region dialog --ss-clips-participant P01 \
+    --ss-clips-min-confidence 0.8 -i INPUT -o OUTPUT
+```
+
+Generated clips are appended to `clipgen_manifest.json` (synthetic artifact ids using negative cell rows so they never collide with spreadsheet-derived clips). Reruns with the same filters update existing entries idempotently.
+
 ## Export results
 
 ```
