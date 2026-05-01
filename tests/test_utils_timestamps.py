@@ -40,6 +40,51 @@ def test_convert_clock_pairs_to_relative_uses_baseline_and_skips_invalid():
     assert converted == [("0:02:12", "0:02:45"), ("0:01:00", "0:01:30")]
 
 
+def test_cluster_spans_empty_returns_empty():
+    assert utils.cluster_spans([], gap_seconds=5.0) == []
+
+
+def test_cluster_spans_disabled_yields_one_per_input():
+    spans = [(0.0, 1.0), (10.0, 11.0), (5.0, 6.0)]
+    out = utils.cluster_spans(spans, gap_seconds=0.0)
+    # Sorted by start; one cluster per span, padding zero so identical bounds.
+    assert out == [
+        (0.0, 1.0, [0]),
+        (5.0, 6.0, [2]),
+        (10.0, 11.0, [1]),
+    ]
+
+
+def test_cluster_spans_merges_within_gap():
+    # gap=2.0 means spans with <= 2.0s separation merge.
+    spans = [(0.0, 1.0), (2.5, 3.0), (10.0, 11.0)]
+    out = utils.cluster_spans(spans, gap_seconds=2.0)
+    assert out == [(0.0, 3.0, [0, 1]), (10.0, 11.0, [2])]
+
+
+def test_cluster_spans_pads_and_clamps_low_to_zero():
+    spans = [(2.0, 3.0)]
+    out = utils.cluster_spans(spans, gap_seconds=0.0, pad_pre=10.0, pad_post=4.0)
+    assert out == [(0.0, 7.0, [0])]
+
+
+def test_cluster_spans_splits_on_max_duration():
+    spans = [(0.0, 30.0)]
+    out = utils.cluster_spans(spans, gap_seconds=0.0, max_duration=10.0)
+    assert out == [
+        (0.0, 10.0, [0]),
+        (10.0, 20.0, [0]),
+        (20.0, 30.0, [0]),
+    ]
+
+
+def test_cluster_spans_preserves_member_indices_for_unsorted_input():
+    # Index 1 is the earliest by start; should appear first in the cluster.
+    spans = [(5.0, 6.0), (0.0, 1.0)]
+    out = utils.cluster_spans(spans, gap_seconds=10.0)
+    assert out == [(0.0, 6.0, [1, 0])]
+
+
 def test_parse_cell_annotations_splits_segment_and_cell_annotations():
     # !key should annotate the preceding timestamp and also appear as a cell-level annotation.
     cleaned, segment_annotations, cell_annotations = utils.parse_cell_annotations(
