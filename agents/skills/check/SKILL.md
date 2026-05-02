@@ -12,7 +12,7 @@ Run this before every `git commit` to catch formatting, lint, type, and test fai
 
 Report pass/fail per stage. If all pass, remind the agent:
 
-> If changes are substantive (bug fix or new feature), title the PR with `feat:` or `fix:` so [version-bump.yml](../../../.github/workflows/version-bump.yml) auto-bumps `build/VERSION` on merge. `docs:`, `chore:`, `refactor:`, `test:`, `build:`, `ci:`, or untyped titles do not bump.
+> If this is a `feat:` PR, bump the patch number in `build/VERSION` and include it in the same commit. `fix:` / `docs:` / `chore:` / `refactor:` / `test:` / `build:` / `ci:` PRs do not bump. See [agents/skills/bump/SKILL.md](../bump/SKILL.md).
 
 ## Common failures
 

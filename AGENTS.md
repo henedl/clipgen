@@ -73,7 +73,7 @@ Required columns: **ID**, **Observation**, **Category**. Participant columns fol
 
 ## Version
 
-The version lives in [build/VERSION](build/VERSION) and is auto-bumped on merge to `master` by [.github/workflows/version-bump.yml](.github/workflows/version-bump.yml) based on PR title. Use `feat:` or `fix:` prefixes to trigger a patch bump; `docs:`, `chore:`, `refactor:`, `test:`, `build:`, `ci:`, or untyped titles do not bump. Do not edit `build/VERSION` by hand. See [agents/skills/bump/SKILL.md](agents/skills/bump/SKILL.md).
+The version lives in [build/VERSION](build/VERSION). Agents bump the patch number as part of any `feat:` PR; `fix:`, `refactor:`, `docs:`, `chore:`, `test:`, `build:`, and `ci:` PRs do not bump. The human may also bump manually at any time. There is no CI auto-bump. See [agents/skills/bump/SKILL.md](agents/skills/bump/SKILL.md).
 
 ## Testing notes
 
@@ -113,7 +113,7 @@ See [agents/skills/test/SKILL.md](agents/skills/test/SKILL.md) for the command, 
 ### Learned Workspace Facts
 
 - Baseline time row placement in the spreadsheet layer is tied to header/`id_cell` row math (e.g. offsets from `id_cell.row`); changing that offset without aligning tests and sheet layout has broken baseline timestamp handling before.
-- The version (in `build/VERSION`, read by `utils.get_version()`) is auto-bumped on merge to `master` by `.github/workflows/version-bump.yml` based on the PR title. Use `feat:` or `fix:` prefixes to trigger a patch bump; `docs:`, `chore:`, `refactor:`, `test:`, `build:`, `ci:`, or untyped titles do not bump. Do not edit `build/VERSION` by hand.
+- The version (in `build/VERSION`, read by `utils.get_version()`) is bumped by agents as part of any `feat:` PR. `fix:`, `docs:`, `chore:`, `refactor:`, `test:`, `build:`, `ci:`, or untyped titles do not bump. The human may also bump manually at any time. There is no CI auto-bump.
 - Textual-based TUI support (tui.py, TEXTUAL_TUI) has been removed; prefer CLI prompts and the HTML timeline viewer for interactive features.
 - Browse mode scrolling is controlled via `BROWSE_LINES_TO_SCROLL` in `config.py`, with a default of 5 rows per up/down step.
 - Be careful about using the `generate_list()`, `sheet.find()`, `sheet.get_all_values()` methods as they are API calls to Google Sheets and are heavily rate-limited. Repeatedly calling the Google API will lead to rate-limiting without warnings, which can appear as bugs (e.g. silently skipping timestamps) and make development difficult.
