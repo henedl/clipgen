@@ -472,6 +472,16 @@ body {
   -webkit-mask-image: url(icons/tv.svg);
 }
 
+.player-icon-collapse {
+  mask-image: url(icons/chevron-up.svg);
+  -webkit-mask-image: url(icons/chevron-up.svg);
+  transition: transform var(--duration-fast);
+}
+
+#videoSection.video-collapsed .player-icon-collapse {
+  transform: rotate(180deg);
+}
+
 .player-speed-btn {
   font-family: var(--font-mono);
   font-size: var(--text-xs);
@@ -569,6 +579,15 @@ body {
 
 #videoSection.pip #videoControls {
   padding: var(--space-1) var(--space-2);
+}
+
+#videoSection.video-collapsed #videoFrame,
+#videoSection.video-collapsed #timelineRow {
+  display: none;
+}
+
+#videoSection.pip #videoCollapseBtn {
+  display: none;
 }
 
 /* ── AI Summary ─────────────────────────────────────────────── */

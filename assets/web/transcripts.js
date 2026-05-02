@@ -57,6 +57,7 @@
     ccEnabled: false,
     pipActive: false,
     pipEnabled: true,
+    videoCollapsed: false,
   };
 
   var _transcriptionWarmupPosted = false;
@@ -1333,6 +1334,11 @@
       pipBtn.classList.toggle("active", state.pipEnabled);
       pipBtn.setAttribute("aria-pressed", state.pipEnabled ? "true" : "false");
     }
+    var collapseBtn = qs("#videoCollapseBtn");
+    if (collapseBtn) {
+      collapseBtn.title = state.videoCollapsed ? "Show video" : "Hide video";
+      collapseBtn.setAttribute("aria-expanded", state.videoCollapsed ? "false" : "true");
+    }
   }
 
   function applyPlaybackRate() {
@@ -1571,6 +1577,9 @@
     // gives the user the documented default (off).
     var stored = getStoredUIState("transcripts");
     state.ccEnabled = !!(stored && stored.ccEnabled);
+    state.videoCollapsed = !!(stored && stored.videoCollapsed);
+    var section = qs("#videoSection");
+    if (section) section.classList.toggle("video-collapsed", state.videoCollapsed);
 
     qs("#videoPlayBtn").addEventListener("click", function () {
       if (video.paused) video.play();
@@ -1602,6 +1611,13 @@
       if (!state.pipEnabled && state.pipActive && typeof _setPipActive === "function") {
         _setPipActive(false);
       }
+      updatePlayerButtons();
+    });
+    qs("#videoCollapseBtn").addEventListener("click", function () {
+      state.videoCollapsed = !state.videoCollapsed;
+      var sec = qs("#videoSection");
+      if (sec) sec.classList.toggle("video-collapsed", state.videoCollapsed);
+      setStoredUIStateField("transcripts", "videoCollapsed", state.videoCollapsed);
       updatePlayerButtons();
     });
 
