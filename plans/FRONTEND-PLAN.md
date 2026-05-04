@@ -118,7 +118,9 @@ present in exported HTML.
 
 **HTMLs that include the widget script tag** (Flask-served dev UIs):
 `studio.html`, `insights-builder.html`, `screenspace.html`,
-`transcripts.html`, `gallery.html`, `convergence.html`.
+`transcripts.html`, `gallery.html`. (Convergence is a sub-feature of
+Studio — `convergence.css/.js` only, no standalone HTML — so it inherits
+the widget through Studio.)
 
 **HTMLs that do not** (already-exported viewers):
 `viewer.html`, `insights-viewer.html`, `timeline-viewer.html`. They don't
@@ -423,7 +425,7 @@ The combined answers tighten the prep plan considerably. Concretely:
 (For your reference, in case you want to scope/branch differently.)
 
 - `assets/web/dev-token-tweak.js` — new shared widget (Pass 0)
-- `assets/web/{studio,insights-builder,screenspace,transcripts,gallery,convergence}.html` — add `<script src="dev-token-tweak.js" data-dev-only></script>` (Pass 0)
+- `assets/web/{studio,insights-builder,screenspace,transcripts,gallery}.html` — add `<script src="dev-token-tweak.js" data-dev-only></script>` (Pass 0)
 - `viewer.py` (`_generate_viewer_html()`, lines ~195–272) — strip `data-dev-only` script/link tags during inlining (Pass 0)
 - `assets/web/tokens.css` — receives new variables (Pass 1)
 - `assets/web/{viewer,gallery,studio,insights-builder,insights-viewer,screenspace,transcripts,convergence}.css` — `1120px` → `var(--layout-max-width)` (Pass 2)
