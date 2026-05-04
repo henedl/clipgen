@@ -40,10 +40,107 @@ This document is **research and preparation only**. It captures:
    scroll within panels (the fullscreen width compensates by allowing wider
    panels and side-by-side regions).
 
-## Recommended next step: an edge-to-edge spike
+## Pass 0 — Live token-tweak widget (foundation)
 
-Given decisions 1 + 4, the natural next move is a **discovery spike**, not a
-prep pass. Concretely:
+Before the spike, build a small dev-only debug widget that lets us tune CSS
+custom properties (design tokens) live in the browser. This is the
+iteration loop the spike, the prep passes, and the redesign sprint will all
+share. Doing it first removes the edit-save-reload cycle for every "what if
+the bound were 1400 vs 1600?" or "what if list rows had 8px more padding?"
+question that follows.
+
+### Design
+
+Mirror the theme-toggle precedent in `utils.js:567-626`.
+
+- **Single shared file** `assets/web/dev-token-tweak.js` (with inline
+  styles to keep it self-contained — single-use, per AGENTS.md).
+- **Mount**: floating panel (top-right by default), collapsible, draggable,
+  with an invisible-until-hovered trigger so the dev chrome stays quiet.
+- **Token discovery is dynamic but scoped.** At boot, walk
+  `document.styleSheets`, find the `:root` rule from `tokens.css`,
+  enumerate every `--*` custom property, then filter to
+  redesign-relevant prefixes:
+  - **Layout & density**: `--space-`, `--text-`, `--radius-`, `--shadow-`,
+    `--duration-`, plus the new tokens introduced in Pass 1 (`--layout-`,
+    `--sidebar-`, `--bp-`, `--button-`, `--card-width-`, `--icon-size-`).
+  - **Core theme colors**: `--color-bg`, `--color-surface`,
+    `--color-surface-alt`, `--color-text`, `--color-text-dim`,
+    `--color-accent` and its `*-hover/-highlight/-strong-hover` siblings,
+    `--color-border`, `--color-selected`, `--color-grid`, the
+    `--color-panel-*` cluster.
+  - **Excluded** as categorical (not redesign-tunable): `--sev-*`,
+    `--color-clip/screen/gif`, `--color-task-*`, `--region-color-*`,
+    `--cat-*`, `--color-causes/behaviors/impacts*`.
+
+  New tokens added in later passes appear automatically if they match an
+  included prefix; no widget edits required.
+- **Control inference from value shape**:
+  - Hex / `rgb()` / `hsl()` → `<input type="color">` (text input fallback
+    for `rgba()` with alpha and named colors).
+  - Ends in `px`/`rem`/`em` → range slider + numeric text box (synced;
+    range derived from the current value, e.g. ±2× with sensible step per
+    unit).
+  - Ends in `ms` → number input.
+  - Otherwise → text input.
+- **Apply** via `document.documentElement.style.setProperty(name, value)`.
+  After every change, call the existing `refreshDetectorColors()` in
+  `utils.js:549-561` (cheap and safe on every page).
+- **Persistence**: `localStorage["clipgen-token-overrides"]` storing
+  `{ tokenName: overrideValue }`. Load and apply on `DOMContentLoaded` so
+  reloads keep trial values. Same persistence shape as
+  `localStorage["clipgen-theme"]`.
+- **Reset**: per-token "✕" button clears the inline property; global
+  "Reset all" wipes the localStorage entry.
+- **Export**: "Copy as `:root` snippet" button emits a paste-ready CSS
+  block of just the overridden tokens, so once values feel right they can
+  drop straight into `tokens.css`.
+- **Theme-aware**: when the theme toggle flips light/dark, re-read
+  defaults from `getComputedStyle(document.documentElement)` so the widget
+  shows the right baseline per theme. Hook into the existing
+  `initThemeToggle()` flow rather than reinventing the listener.
+
+### Dev-only delivery (export gate)
+
+The widget must not ship in standalone exported HTML (`viewer.html`,
+`gallery.html`, `insights_viewer.html`, `timeline_viewer.html` finalized
+via `viewer.py`). One marker, applied by the HTML and honored by the
+inliner, handles this by construction:
+
+1. In dev-mode HTMLs, load via
+   `<script src="dev-token-tweak.js" data-dev-only></script>`.
+2. In `viewer.py:_generate_viewer_html()` (lines ~195-272), where script
+   tags are matched and inlined: skip and strip any `<script>` carrying
+   `data-dev-only`. Same treatment for any `<link ... data-dev-only>`.
+
+No runtime "is this an export?" probing in JS — the widget simply isn't
+present in exported HTML.
+
+**HTMLs that include the widget script tag** (Flask-served dev UIs):
+`studio.html`, `insights-builder.html`, `screenspace.html`,
+`transcripts.html`, `gallery.html`, `convergence.html`.
+
+**HTMLs that do not** (already-exported viewers):
+`viewer.html`, `insights-viewer.html`, `timeline-viewer.html`. They don't
+load `tokens.css` at source either — tokens are inlined at export.
+
+### Verification of Pass 0
+
+- Open each dev UI; widget appears top-right.
+- Drag a slider on `--space-3`; spacing changes immediately across the
+  page.
+- Reload; overrides persist via localStorage.
+- Toggle dark mode; widget shows the dark-theme defaults.
+- Run an export (`--gallery`, `--viewer`, or insights viewer export from
+  Insights Builder); `grep dev-token-tweak` of the exported HTML returns
+  nothing.
+
+## The spike: edge-to-edge with the widget in hand
+
+With Pass 0 in place, the next move is a **discovery spike** — strip every
+`max-width: 1120px` site, walk all 8 UIs, and use the widget to A/B
+candidate bounds and density values live rather than across separate
+branches. Concretely:
 
 - Branch off and remove (or set to `none`) every `max-width: 1120px` site
   identified below, in all 8 UIs at once. Touch nothing else.
@@ -54,7 +151,14 @@ prep pass. Concretely:
   the timeline viewer with filmstrip mode, etc.
 - Capture **what looks wrong, what disappears, what stretches grotesquely**.
   That list *is* the input for the bound decision and for the redesign.
-- Throw the spike branch away.
+- Use the widget to try candidate `--layout-max-width` values (1400, 1600,
+  1800, 2000) and tentative density adjustments in the moment, on the same
+  loaded screen states, so the bound decision rests on direct comparison
+  rather than memory.
+- Hit "Copy as `:root` snippet" before closing the spike — the captured
+  values become the seed for Pass 1's token defaults.
+- Throw the spike branch away (the snippet survives in your clipboard /
+  notes).
 
 Predicted findings (from this audit) the spike will surface:
 - Studio's `.queue-card`/`.stash-card`/`.preview-card` (140/160/200px) marooned
@@ -212,6 +316,11 @@ Add:
 - `--bottom-panel-height: 400px;`
 - `--icon-size-xs/sm/md/lg`: 12/14/16/20px
 
+Because the Pass 0 widget discovers tokens dynamically by prefix, every
+token added here is immediately tunable in the browser — seed values are
+first-pass guesses, not commitments. The seed values themselves come from
+the snippet exported at the end of the spike.
+
 Risk: zero. Tokens are unused.
 
 ### Pass 2 — migrate the 1120px sites to `var(--layout-max-width)`
@@ -313,6 +422,9 @@ The combined answers tighten the prep plan considerably. Concretely:
 
 (For your reference, in case you want to scope/branch differently.)
 
+- `assets/web/dev-token-tweak.js` — new shared widget (Pass 0)
+- `assets/web/{studio,insights-builder,screenspace,transcripts,gallery,convergence}.html` — add `<script src="dev-token-tweak.js" data-dev-only></script>` (Pass 0)
+- `viewer.py` (`_generate_viewer_html()`, lines ~195–272) — strip `data-dev-only` script/link tags during inlining (Pass 0)
 - `assets/web/tokens.css` — receives new variables (Pass 1)
 - `assets/web/{viewer,gallery,studio,insights-builder,insights-viewer,screenspace,transcripts,convergence}.css` — `1120px` → `var(--layout-max-width)` (Pass 2)
 - `assets/web/{studio,viewer,insights-builder,insights-viewer}.css` — card/sidebar width tokens (Pass 3)
@@ -326,3 +438,12 @@ The combined answers tighten the prep plan considerably. Concretely:
 - Open each UI at 1120px viewport — pixel-identical to before.
 - Run `uv run --extra dev pytest -c tests/pytest.ini` — `tests/test_shared_constants.py` covers the JS/Python token mirror; nothing else asserts on CSS values directly.
 - No tests cover CSS layout, so the verification is visual: screenshot each UI before and after each pass.
+
+For Pass 0 specifically (see also "Verification of Pass 0" above):
+- The widget appears on every dev UI, not on the three exported viewers.
+- Exporting any artifact (gallery, viewer, insights viewer) produces HTML
+  with no `dev-token-tweak` reference — `grep dev-token-tweak` on the
+  output is empty.
+- Overrides survive a reload, clear correctly via per-token reset and
+  global reset, and the `:root` snippet output round-trips back into
+  `tokens.css` without manual cleanup.
