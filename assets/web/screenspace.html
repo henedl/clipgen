@@ -11,30 +11,26 @@
   <link rel="apple-touch-icon" sizes="167x167" href="logos/apple-touch-icon-167.png">
   <link rel="apple-touch-icon" sizes="152x152" href="logos/apple-touch-icon-152.png">
   <link rel="apple-touch-icon" sizes="120x120" href="logos/apple-touch-icon-120.png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap">
   <link rel="stylesheet" href="tokens.css">
+  <link rel="stylesheet" href="topnav.css">
   <link rel="stylesheet" href="screenspace.css">
   <link rel="stylesheet" href="settings-modal.css">
 </head>
-<body>
-  <header id="ssHeader">
-    <div id="headerTop">
-      <h1><span class="brand-mark" aria-hidden="true"></span>clipgen <span class="frontend-switcher" data-current="screenspace"><span class="frontend-switcher-trigger" tabindex="0" role="button" aria-haspopup="true" aria-expanded="false"><span class="header-light">Screenspace</span><span class="frontend-switcher-chevron" aria-hidden="true"></span></span><span class="frontend-switcher-panel" role="menu" aria-hidden="true"><a class="frontend-switcher-item" href="/studio/" data-frontend="studio" role="menuitem">Studio</a><a class="frontend-switcher-item" href="/transcripts/" data-frontend="transcripts" role="menuitem">Transcripts</a></span></span></h1>
-      <div id="headerActions">
-        <label class="participant-label">
-          Source
-          <select id="participantSelect"><option value="">No participants</option></select>
-        </label>
-        <span id="videoInfo" class="video-info"></span>
-        <button id="settingsBtn" type="button" class="btn btn-small btn-icon" title="Settings" aria-label="Settings">
-          <span class="settings-trigger-icon"></span>
-        </button>
-        <button id="themeToggle" type="button" aria-label="Toggle dark mode" aria-pressed="false">
-          <span class="theme-toggle-icon theme-icon-sun"></span>
-          <span class="theme-toggle-icon theme-icon-moon"></span>
-        </button>
-      </div>
+<body data-frontend="screenspace">
+  <topnav-mount data-frontend="screenspace"></topnav-mount>
+
+  <div id="ssSubheader">
+    <div class="subheader-left">
+      <label class="participant-label">
+        Source
+        <select id="participantSelect"><option value="">No participants</option></select>
+      </label>
+      <span id="videoInfo" class="video-info"></span>
     </div>
-  </header>
+  </div>
 
   <main id="ssMain">
     <section id="viewerSection">
@@ -256,6 +252,7 @@
   <div id="toolInfoTooltip" class="tool-info-tooltip hidden"></div>
 
   <script src="utils.js"></script>
+  <script src="topnav.js"></script>
   <script src="dev-token-tweak.js" data-dev-only></script>
   <script src="grid-bg.js"></script>
   <script src="settings-modal.js"></script>

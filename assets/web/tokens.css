@@ -1,18 +1,37 @@
 /*
  * clipgen design tokens
  *
+ * Default theme is DARK. Light is opt-in via html[data-theme="light"] (or .theme-light).
+ * The redesign collapsed prefers-color-scheme handling — the product is dark-first;
+ * users toggle to light explicitly.
+ *
+ * Two parallel naming systems coexist intentionally:
+ *   1. Prototype-aligned names (--bg, --fg, --accent, --severity-*, --cell-data, ...)
+ *      — used by new redesign code. Source of truth.
+ *   2. Legacy names (--color-bg, --color-text, --color-accent, --sev-*, ...) — aliased
+ *      to the prototype names so existing pages keep rendering. Page CSS may continue
+ *      to reference the legacy names; they resolve through var() chains.
+ *
  * SPACING:    --space-1 (4px) | --space-2 (8px) | --space-3 (12px) | --space-4 (16px) | --space-5 (24px) | --space-6 (32px) | --space-8 (48px)
  * TEXT:       --text-xs (12px) | --text-sm (13px) | --text-base (14px) | --text-md (16px) | --text-lg (18px) | --text-xl (20px) | --text-2xl (24px)
  * RADIUS:     --radius-sm (4px) | --radius-md (8px) | --radius-lg (14px) | --radius-full (999px)
- * SHADOW:     --shadow-sm | --shadow-md | --shadow-lg | --shadow-xl | --shadow-focus
+ * SHADOW:     --shadow-sm | --shadow-md | --shadow-lg | --shadow-xl | --shadow-focus | --shadow-pop
  * DURATION:   --duration-fast (150ms) | --duration-normal (250ms) | --duration-slow (350ms)
  * Z-INDEX:    --z-float (10) | --z-dropdown (100) | --z-modal (1000) | --z-overlay (2000) | --z-toast (3000)
  *
- * THEME:      --color-bg | --color-surface | --color-surface-alt | --color-text | --color-text-dim
+ * SURFACES:   --bg | --bg-elevated | --bg-input | --bg-hover | --bg-active
+ * TEXT:       --fg | --fg-muted | --fg-faint | --fg-dim
+ * ACCENT:     --accent | --accent-hover | --accent-fg
+ * BORDERS:    --border | --border-strong | --hairline
+ * CELL DATA:  --cell-data | --cell-data-fg | --cell-data-bright (cyan-tinted timestamp chips)
+ * SEVERITY:   --severity-positive | --severity-medium | --severity-high | --severity-na
+ * FONTS:      --font-sans (Inter stack) | --font-mono (JetBrains Mono stack, with 'tnum')
+ *
+ * Legacy aliases (keep working, do not introduce new references):
+ *             --color-bg | --color-surface | --color-surface-alt | --color-text | --color-text-dim
  *             --color-accent | --color-border | --color-selected | --color-accent-hover | --color-accent-highlight | --color-accent-strong-hover
  *             --color-panel-bg | --color-panel-border | --color-panel-shadow | --color-grid
- *             --font-mono
- * SEVERITY:   --sev-critical | --sev-high | --sev-medium | --sev-low | --sev-na
+ *             --sev-critical | --sev-high | --sev-medium | --sev-low | --sev-na
  *             --sev-positive | --sev-very-positive | --sev-unknown
  * CONTENT:    --color-clip | --color-screen | --color-gif
  * TASK:       --color-task-multitool | --color-task-color | --color-task-change | --color-task-similarity
@@ -26,6 +45,10 @@
  * PANEL:      --bottom-panel-height
  * ICON SIZE:  --icon-size-xs (12px) | --icon-size-sm (14px) | --icon-size-md (16px) | --icon-size-lg (20px) | --icon-size-xl (24px)
  * BREAKPOINT: --bp-tablet (768px) — documentation/JS-read only, see note below
+ *
+ * Category hue palette (for chip rings, dots, density bars) — runtime via
+ * categoryHue(label) in utils.js, not pre-flattened. Hue values are documented
+ * in redesign/README.md and mirrored in utils.js.
  */
 
 :root {
@@ -46,7 +69,8 @@
   --text-lg: 1.125rem;
   --text-xl: 1.25rem;
   --text-2xl: 1.5rem;
-  --font-mono: "SF Mono", "Fira Code", "Cascadia Code", Consolas, monospace;
+  --font-sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 
   /* Border radius */
   --radius-sm: 4px;
@@ -55,57 +79,96 @@
   --radius-full: 999px;
   --radius: var(--radius-md);
 
-  /* Core theme colors */
-  --color-bg: #f4f2ee;
-  --color-surface: #ffffff;
-  --color-surface-alt: #f1ece4;
-  --color-text: #111827;
-  --color-text-dim: #6b7280;
-  --color-accent: #1d4f72;
-  --color-border: #e0ddd7;
-  --color-selected: rgba(29, 79, 114, 0.08);
-  --color-accent-hover: rgba(29, 79, 114, 0.06);
-  --color-accent-highlight: rgba(29, 79, 114, 0.15);
-  --color-accent-strong-hover: #164563;
-  --color-panel-bg: rgba(255, 255, 255, 0.97);
-  --color-panel-border: rgba(148, 163, 184, 0.22);
-  --color-panel-shadow: rgba(15, 23, 42, 0.12);
-  --color-grid: rgba(0, 0, 0, 0.03);
+  /* ---- Prototype tokens (dark default) ---- */
+
+  /* Surfaces */
+  --bg:               #0d0e10;
+  --bg-elevated:      #141518;
+  --bg-input:         #1a1c1f;
+  --bg-hover:         #1e2024;
+  --bg-active:        #25282d;
+
+  /* Text */
+  --fg:               #ffffff;
+  --fg-muted:         rgba(255, 255, 255, 0.62);
+  --fg-faint:         rgba(255, 255, 255, 0.42);
+  --fg-dim:           rgba(255, 255, 255, 0.28);
+
+  /* Accent */
+  --accent:           #2D6BFF;
+  --accent-hover:     #4781ff;
+  --accent-fg:        #ffffff;
+
+  /* Borders */
+  --border:           #23252a;
+  --border-strong:    #2e3138;
+  --hairline:         rgba(255, 255, 255, 0.06);
+
+  /* Cell data (timestamp chips on Studio Sheet) */
+  --cell-data:        #1d4d5a;
+  --cell-data-fg:     #7dd3e0;
+  --cell-data-bright: #2bc8c8;
+
+  /* Severity (prototype palette) */
+  --severity-positive: #4ade80;
+  --severity-medium:   #fbbf24;
+  --severity-high:     #f87171;
+  --severity-na:       rgba(255, 255, 255, 0.35);
+
+  /* Pop shadow — used by popovers, dropdowns, the annotation editor */
+  --shadow-pop: 0 12px 36px rgba(0, 0, 0, 0.45), 0 2px 8px rgba(0, 0, 0, 0.3);
+
+  /* ---- Legacy aliases — keep existing pages rendering against the new palette ---- */
+  --color-bg:                  var(--bg);
+  --color-surface:             var(--bg-elevated);
+  --color-surface-alt:         var(--bg-input);
+  --color-text:                var(--fg);
+  --color-text-dim:            var(--fg-muted);
+  --color-accent:              var(--accent);
+  --color-border:              var(--border);
+  --color-selected:            rgba(45, 107, 255, 0.18);
+  --color-accent-hover:        rgba(45, 107, 255, 0.10);
+  --color-accent-highlight:    rgba(45, 107, 255, 0.22);
+  --color-accent-strong-hover: var(--accent-hover);
+  --color-panel-bg:            rgba(20, 21, 24, 0.97);
+  --color-panel-border:        var(--border);
+  --color-panel-shadow:        rgba(0, 0, 0, 0.6);
+  --color-grid:                rgba(255, 255, 255, 0.04);
 
   /* Shadows (depend on theme colors above) */
-  --shadow-sm: 0 1px 3px var(--color-panel-shadow);
-  --shadow-md: 0 4px 12px var(--color-panel-shadow);
-  --shadow-lg: 0 8px 24px var(--color-panel-shadow);
-  --shadow-xl: 0 24px 60px var(--color-panel-shadow);
-  --shadow-focus: 0 0 0 2px var(--color-accent);
+  --shadow-sm:    0 1px 3px var(--color-panel-shadow);
+  --shadow-md:    0 4px 12px var(--color-panel-shadow);
+  --shadow-lg:    0 8px 24px var(--color-panel-shadow);
+  --shadow-xl:    0 24px 60px var(--color-panel-shadow);
+  --shadow-focus: 0 0 0 2px var(--accent);
 
-  /* Severity colors */
-  --sev-critical: #b91c1c;
-  --sev-high: #dc2626;
-  --sev-medium: #ea580c;
-  --sev-low: #ca8a04;
-  --sev-na: #0891b2;
-  --sev-positive: #16a34a;
-  --sev-very-positive: #15803d;
-  --sev-unknown: #64748b;
+  /* Severity legacy aliases (--sev-* → --severity-*) */
+  --sev-critical:      var(--severity-high);
+  --sev-high:          var(--severity-high);
+  --sev-medium:        var(--severity-medium);
+  --sev-low:           var(--severity-medium);
+  --sev-na:            var(--severity-na);
+  --sev-positive:      var(--severity-positive);
+  --sev-very-positive: var(--severity-positive);
+  --sev-unknown:       var(--fg-faint);
 
-  /* Content-type colors */
-  --color-clip: #3659b3;
-  --color-screen: #0ea5e9;
-  --color-gif: #f97316;
+  /* Content-type colors (kept distinct from severity for export viewers etc.) */
+  --color-clip:   #60a5fa;
+  --color-screen: #22d3ee;
+  --color-gif:    #fb923c;
 
   /* Screenspace task colors */
-  --color-task-multitool: #2563eb;
-  --color-task-color: #8b5cf6;
-  --color-task-change: #f97316;
-  --color-task-similarity: #0ea5e9;
-  --color-task-text: #10b981;
-  --color-task-numbers: #eab308;
-  --color-task-timelapse: #ec4899;
-  --color-task-template: #f43f5e;
-  --color-task-flow: #6366f1;
-  --color-task-scene: #14b8a6;
-  --color-task-inactivity: #78716c;
+  --color-task-multitool:  #60a5fa;
+  --color-task-color:      #a78bfa;
+  --color-task-change:     #fb923c;
+  --color-task-similarity: #22d3ee;
+  --color-task-text:       #34d399;
+  --color-task-numbers:    #facc15;
+  --color-task-timelapse:  #f472b6;
+  --color-task-template:   #fb7185;
+  --color-task-flow:       #818cf8;
+  --color-task-scene:      #2dd4bf;
+  --color-task-inactivity: #a8a29e;
 
   /* Transcript intake category colors */
   --cat-pain-point: var(--sev-high);
@@ -171,113 +234,103 @@
   --bp-tablet: 768px;
 }
 
-/* Dark theme — OS preference (applies when user hasn't manually toggled) */
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) {
-    --color-bg: #020617;
-    --color-surface: #020617;
-    --color-surface-alt: #0b1120;
-    --color-text: #e5e7eb;
-    --color-text-dim: #9ca3af;
-    --color-accent: #38bdf8;
-    --color-border: #1f2933;
-    --color-selected: rgba(56, 189, 248, 0.2);
-    --color-accent-hover: rgba(56, 189, 248, 0.08);
-    --color-accent-highlight: rgba(56, 189, 248, 0.18);
-    --color-accent-strong-hover: #0284c7;
-    --color-panel-bg: rgba(15, 23, 42, 0.98);
-    --color-panel-border: rgba(148, 163, 184, 0.35);
-    --color-panel-shadow: rgba(0, 0, 0, 0.7);
-    --color-grid: rgba(255, 255, 255, 0.04);
-    --sev-critical: #f87171;
-    --sev-high: #fb7185;
-    --sev-medium: #fdba74;
-    --sev-low: #fde047;
-    --sev-na: #67e8f9;
-    --sev-positive: #86efac;
-    --sev-very-positive: #4ade80;
-    --sev-unknown: #94a3b8;
-    --color-clip: #60a5fa;
-    --color-screen: #22d3ee;
-    --color-gif: #fb923c;
-    --color-task-multitool: #60a5fa;
-    --color-task-color: #a78bfa;
-    --color-task-change: #fb923c;
-    --color-task-similarity: #22d3ee;
-    --color-task-text: #34d399;
-    --color-task-numbers: #facc15;
-    --color-task-timelapse: #f472b6;
-    --color-task-template: #fb7185;
-    --color-task-flow: #818cf8;
-    --color-task-scene: #2dd4bf;
-    --color-task-inactivity: #a8a29e;
-    --cat-quote: #60a5fa;
-    --cat-insight: #fb923c;
-    --cat-task: #a78bfa;
-    --cat-bookmark: #22d3ee;
-    --region-color-1: #60a5fa;
-    --region-color-2: #fb7185;
-    --region-color-3: #86efac;
-    --region-color-4: #facc15;
-    --region-color-5: #a78bfa;
-    --region-color-6: #22d3ee;
-    --region-color-7: #f472b6;
-    --region-color-8: #2dd4bf;
-    --color-pulse: #c084fc;
-  }
+/* Light theme — opt-in via the theme toggle (sets data-theme="light"), or
+ * by adding .theme-light to a wrapper element (used by the prototype's
+ * Themed component pattern, kept available for embedded views).
+ *
+ * Severity tokens are intentionally NOT overridden here — the prototype
+ * keeps them constant across themes for visual consistency. */
+html[data-theme="light"],
+.theme-light {
+  /* Surfaces */
+  --bg:               #f5f4f0;
+  --bg-elevated:      #ffffff;
+  --bg-input:         #ffffff;
+  --bg-hover:         #ecebe6;
+  --bg-active:        #e2e1dc;
+
+  /* Text */
+  --fg:               #14151a;
+  --fg-muted:         rgba(20, 21, 26, 0.68);
+  --fg-faint:         rgba(20, 21, 26, 0.48);
+  --fg-dim:           rgba(20, 21, 26, 0.32);
+
+  /* Accent (same hue, slightly different hover for light bg) */
+  --accent:           #2D6BFF;
+  --accent-hover:     #1f5be6;
+  --accent-fg:        #ffffff;
+
+  /* Borders */
+  --border:           #e0ddd5;
+  --border-strong:    #c9c5bc;
+  --hairline:         rgba(0, 0, 0, 0.06);
+
+  /* Cell data */
+  --cell-data:        #b3e3ec;
+  --cell-data-fg:     #0a4956;
+  --cell-data-bright: #0a8a96;
+
+  /* Pop shadow — adjusted for light bg */
+  --shadow-pop: 0 12px 36px rgba(15, 23, 42, 0.18), 0 2px 8px rgba(15, 23, 42, 0.10);
+
+  /* Legacy alias re-tunes for light-bg readability */
+  --color-selected:         rgba(45, 107, 255, 0.10);
+  --color-accent-hover:     rgba(45, 107, 255, 0.06);
+  --color-accent-highlight: rgba(45, 107, 255, 0.15);
+  --color-panel-bg:         rgba(255, 255, 255, 0.97);
+  --color-panel-border:     rgba(148, 163, 184, 0.22);
+  --color-panel-shadow:     rgba(15, 23, 42, 0.12);
+  --color-grid:             rgba(0, 0, 0, 0.03);
+
+  /* Content / task / category / region — saturated variants for light bg */
+  --color-clip:   #3659b3;
+  --color-screen: #0ea5e9;
+  --color-gif:    #f97316;
+
+  --color-task-multitool:  #2563eb;
+  --color-task-color:      #8b5cf6;
+  --color-task-change:     #f97316;
+  --color-task-similarity: #0ea5e9;
+  --color-task-text:       #10b981;
+  --color-task-numbers:    #eab308;
+  --color-task-timelapse:  #ec4899;
+  --color-task-template:   #f43f5e;
+  --color-task-flow:       #6366f1;
+  --color-task-scene:      #14b8a6;
+  --color-task-inactivity: #78716c;
+
+  --cat-quote:    #2563eb;
+  --cat-insight:  #f97316;
+  --cat-task:     #8b5cf6;
+  --cat-bookmark: #0891b2;
+
+  --region-color-1: #3b82f6;
+  --region-color-2: #ef4444;
+  --region-color-3: #22c55e;
+  --region-color-4: #f59e0b;
+  --region-color-5: #8b5cf6;
+  --region-color-6: #06b6d4;
+  --region-color-7: #ec4899;
+  --region-color-8: #14b8a6;
+
+  --color-pulse: #a855f7;
 }
 
-/* Dark theme — manual toggle */
-html[data-theme="dark"] {
-  --color-bg: #020617;
-  --color-surface: #020617;
-  --color-surface-alt: #0b1120;
-  --color-text: #e5e7eb;
-  --color-text-dim: #9ca3af;
-  --color-accent: #38bdf8;
-  --color-border: #1f2933;
-  --color-selected: rgba(56, 189, 248, 0.2);
-  --color-accent-hover: rgba(56, 189, 248, 0.08);
-  --color-accent-highlight: rgba(56, 189, 248, 0.18);
-  --color-accent-strong-hover: #0284c7;
-  --color-panel-bg: rgba(15, 23, 42, 0.98);
-  --color-panel-border: rgba(148, 163, 184, 0.35);
-  --color-panel-shadow: rgba(0, 0, 0, 0.7);
-  --color-grid: rgba(255, 255, 255, 0.04);
-  --sev-critical: #f87171;
-  --sev-high: #fb7185;
-  --sev-medium: #fdba74;
-  --sev-low: #fde047;
-  --sev-na: #67e8f9;
-  --sev-positive: #86efac;
-  --sev-very-positive: #4ade80;
-  --sev-unknown: #94a3b8;
-  --color-clip: #60a5fa;
-  --color-screen: #22d3ee;
-  --color-gif: #fb923c;
-  --color-task-multitool: #60a5fa;
-  --color-task-color: #a78bfa;
-  --color-task-change: #fb923c;
-  --color-task-similarity: #22d3ee;
-  --color-task-text: #34d399;
-  --color-task-numbers: #facc15;
-  --color-task-timelapse: #f472b6;
-  --color-task-template: #fb7185;
-  --color-task-flow: #818cf8;
-  --color-task-scene: #2dd4bf;
-  --cat-quote: #60a5fa;
-  --cat-insight: #fb923c;
-  --cat-task: #a78bfa;
-  --cat-bookmark: #22d3ee;
-  --region-color-1: #60a5fa;
-  --region-color-2: #fb7185;
-  --region-color-3: #86efac;
-  --region-color-4: #facc15;
-  --region-color-5: #a78bfa;
-  --region-color-6: #22d3ee;
-  --region-color-7: #f472b6;
-  --region-color-8: #2dd4bf;
-  --color-pulse: #c084fc;
+/* Light theme: invert the brand-mark stroke if a logo image is used elsewhere
+ * (matches the prototype's filter on .cg-logo). */
+.theme-light .cg-logo,
+html[data-theme="light"] .cg-logo {
+  filter: invert(1) brightness(0.15);
+}
+
+/* ---- Shared utilities ---- */
+
+/* Tabular monospace — required on every timestamp, run number, version label.
+ * Pairs with elements.style font-family override or works alone. */
+.cg-mono {
+  font-family: var(--font-mono);
+  font-feature-settings: "tnum";
+  font-variant-numeric: tabular-nums;
 }
 
 /* Animated dot-grid background canvas (paired with grid-bg.js) */
@@ -475,115 +528,47 @@ body:not(.cg-grid-bg-on) {
   color: #fff;
 }
 
-/* Frontend switcher — unified dropdown across Studio / Screenspace / Transcripts */
-.frontend-switcher {
-  position: relative;
-  display: inline-flex;
-  vertical-align: baseline;
-}
-.frontend-switcher-trigger {
-  display: inline-flex;
-  align-items: baseline;
-  gap: var(--space-2);
-  cursor: pointer;
-  padding: 0 var(--space-2);
-  border-radius: var(--radius-sm);
-  color: inherit;
-  user-select: none;
-  transition: background-color var(--duration-fast);
-}
-.frontend-switcher-trigger:hover,
-.frontend-switcher.open .frontend-switcher-trigger {
-  background-color: var(--color-selected);
-}
-.frontend-switcher-trigger:focus-visible {
-  outline: none;
-  box-shadow: var(--shadow-focus);
-}
-.frontend-switcher-chevron {
-  display: inline-block;
-  width: var(--icon-size-sm);
-  height: var(--icon-size-sm);
-  align-self: center;
-  background-color: currentColor;
-  mask-image: url("icons/chevron-down.svg");
-  -webkit-mask-image: url("icons/chevron-down.svg");
-  mask-size: contain;
-  -webkit-mask-size: contain;
-  mask-repeat: no-repeat;
-  -webkit-mask-repeat: no-repeat;
-  mask-position: center;
-  -webkit-mask-position: center;
-  opacity: 0.6;
-  transition: transform var(--duration-fast), opacity var(--duration-fast);
-}
-.frontend-switcher.open .frontend-switcher-chevron,
-.frontend-switcher-trigger:hover .frontend-switcher-chevron {
-  opacity: 1;
-}
-.frontend-switcher.open .frontend-switcher-chevron {
-  transform: rotate(180deg);
-}
-.frontend-switcher-panel {
-  position: absolute;
-  top: calc(100% + 6px);
-  left: calc(-1 * var(--space-3));
-  min-width: 200px;
-  padding: var(--space-2);
-  background: rgba(255, 255, 255, 0.55);
-  backdrop-filter: blur(24px) saturate(180%);
-  -webkit-backdrop-filter: blur(24px) saturate(180%);
-  border: 1px solid rgba(255, 255, 255, 0.6);
-  border-radius: var(--radius-md);
-  box-shadow: var(--shadow-lg), inset 0 1px 0 rgba(255, 255, 255, 0.5);
-  z-index: var(--z-dropdown);
+/* The frontend-switcher dropdown was replaced by the unified TopNav. See
+ * topnav.{js,css}. The matching markup was removed from studio.html,
+ * screenspace.html, and transcripts.html in the same change. */
+
+/* ---- Sub-header — shared chrome between TopNav and page content ----
+ * Studio and Transcripts and Screenspace each have a subheader for page-level
+ * meta + tools. The container is shared for spacing/typography; specific
+ * children (sub-tabs, action buttons) live in page CSS. */
+.subheader,
+#studioSubheader,
+#ssSubheader,
+#trSubheader {
   display: flex;
-  flex-direction: column;
-  gap: 2px;
-  opacity: 0;
-  transform: translateY(-4px) scale(0.98);
-  transform-origin: top left;
-  pointer-events: none;
-  transition: opacity var(--duration-fast) ease, transform var(--duration-fast) ease;
+  align-items: center;
+  height: 44px;
+  padding: 0 16px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg);
+  font-size: 12.5px;
+  color: var(--fg-muted);
+  gap: 16px;
 }
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) .frontend-switcher-panel {
-    background: rgba(15, 23, 42, 0.55);
-    border-color: rgba(148, 163, 184, 0.25);
-    box-shadow: var(--shadow-lg), inset 0 1px 0 rgba(255, 255, 255, 0.08);
-  }
+
+.subheader-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
 }
-html[data-theme="dark"] .frontend-switcher-panel {
-  background: rgba(15, 23, 42, 0.55);
-  border-color: rgba(148, 163, 184, 0.25);
-  box-shadow: var(--shadow-lg), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+.subheader-tabs {
+  display: flex;
+  gap: 20px;
+  align-items: center;
+  height: 100%;
+  flex: 1 1 auto;
+  margin-left: 8px;
 }
-.frontend-switcher.open .frontend-switcher-panel {
-  opacity: 1;
-  transform: none;
-  pointer-events: auto;
-}
-.frontend-switcher-item {
-  display: block;
-  padding: var(--space-2) var(--space-3);
-  border-radius: var(--radius-sm);
-  color: var(--color-text);
-  font-size: var(--text-xl);
-  font-weight: 500;
-  text-decoration: none;
-  white-space: nowrap;
-  transition: background-color var(--duration-fast);
-}
-.frontend-switcher-item:hover,
-.frontend-switcher-item:focus-visible {
-  background-color: var(--color-selected);
-  outline: none;
-}
-@media (prefers-reduced-motion: reduce) {
-  .frontend-switcher-chevron,
-  .frontend-switcher-panel,
-  .frontend-switcher-trigger,
-  .frontend-switcher-item {
-    transition: none;
-  }
+.subheader-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+  flex: 0 0 auto;
 }

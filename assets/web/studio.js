@@ -596,13 +596,16 @@
     if (window.convergenceDeactivate) window.convergenceDeactivate();
     if (window.metadataDeactivate) window.metadataDeactivate();
 
+    var activePanel = null;
     if (state.activePreviewTab === "sheet") {
       grid.classList.remove("hidden");
+      activePanel = grid;
       if (filterToggle) filterToggle.classList.remove("hidden");
       if (refreshBtn) refreshBtn.classList.remove("hidden");
       if (state.filtersVisible && filterBar) filterBar.classList.remove("hidden");
     } else if (state.activePreviewTab === "intake") {
       intakePanel.classList.remove("hidden");
+      activePanel = intakePanel;
       if (!document.hidden) {
         pollIntakeEvents();
         state.intakePollTimer = setInterval(pollIntakeEvents, 10000);
@@ -610,6 +613,7 @@
       setTimeout(sizeIntakeCanvas, 0);
     } else if (state.activePreviewTab === "transcript-intake") {
       if (trIntakePanel) trIntakePanel.classList.remove("hidden");
+      activePanel = trIntakePanel;
       if (!document.hidden) {
         pollTranscriptIntakeMarks();
         state.trIntakePollTimer = setInterval(pollTranscriptIntakeMarks, 10000);
@@ -617,10 +621,20 @@
       setTimeout(sizeTrIntakeCanvas, 0);
     } else if (state.activePreviewTab === "convergence") {
       if (convergencePanel) convergencePanel.classList.remove("hidden");
+      activePanel = convergencePanel;
       if (window.convergenceActivate) window.convergenceActivate();
     } else if (state.activePreviewTab === "metadata") {
       if (metadataPanel) metadataPanel.classList.remove("hidden");
+      activePanel = metadataPanel;
       if (window.metadataActivate) window.metadataActivate();
+    }
+    if (activePanel) {
+      activePanel.classList.add("tab-slide-enter");
+      requestAnimationFrame(function () {
+        requestAnimationFrame(function () {
+          activePanel.classList.remove("tab-slide-enter");
+        });
+      });
     }
     computeGridMaxHeight();
   }
@@ -992,14 +1006,14 @@
   }
 
   function computeGridMaxHeight(bottomHeightOverride) {
-    var header = qs("#studioHeader");
+    var header = qs("#studioSubheader");
     var preview = qs("#sheetPreview");
     var divider = qs("#panelDivider");
     var bottom = qs("#bottomPanel");
     var grid = qs("#sheetGrid");
     if (!header || !preview || !divider || !bottom || !grid) return;
 
-    var previewHeader = preview.querySelector(".sheet-preview-header");
+    var previewHeader = null; /* moved to #studioSubheader (outside #sheetPreview) */
     var filterBar = qs("#filterBar");
     var previewStyle = getComputedStyle(preview);
     var previewPadTop = parseFloat(previewStyle.paddingTop) || 0;
@@ -1029,6 +1043,38 @@
     applyUpperPaneMaxHeight(maxH);
   }
 
+  // Per redesign: bottom strip absolute height bounds (the strip is the visible
+  // area below the divider). dividerOffset roughly equals that visible height,
+  // so we clamp dividerOffset to [BOTTOM_STRIP_MIN, BOTTOM_STRIP_MAX] minus the
+  // minimum upper-pane reservation.
+  var BOTTOM_STRIP_MIN = 60;
+  var BOTTOM_STRIP_MAX = 560;
+  var BOTTOM_STORAGE_KEY = "clipgen-studio-bottom-h";
+
+  function loadStoredBottomHeight() {
+    try {
+      var raw = window.localStorage.getItem(BOTTOM_STORAGE_KEY);
+      if (!raw) return;
+      var parsed = JSON.parse(raw);
+      if (parsed && typeof parsed.dividerOffset === "number") {
+        state.dividerOffset = Math.max(0, Math.min(BOTTOM_STRIP_MAX, parsed.dividerOffset));
+      }
+      if (parsed && parsed.collapsed) {
+        state.bottomCollapsed = true;
+        document.body.classList.add("bottom-collapsed");
+      }
+    } catch (_) {}
+  }
+
+  function persistBottomHeight() {
+    try {
+      window.localStorage.setItem(BOTTOM_STORAGE_KEY, JSON.stringify({
+        dividerOffset: state.dividerOffset,
+        collapsed: !!state.bottomCollapsed,
+      }));
+    } catch (_) {}
+  }
+
   function initPanelDivider() {
     var handle = qs("#panelDivider");
     if (!handle) return;
@@ -1048,12 +1094,12 @@
       // Snapshot layout values once so they stay stable for the whole drag.
       // Re-reading bottom.offsetHeight each frame causes oscillation when
       // the upper panel shrinks and the bottom panel's visible area grows.
-      var header = qs("#studioHeader");
+      var header = qs("#studioSubheader");
       var preview = qs("#sheetPreview");
       var divider = qs("#panelDivider");
       var bottom = qs("#bottomPanel");
       if (header && preview && divider && bottom) {
-        var previewHeader = preview.querySelector(".sheet-preview-header");
+        var previewHeader = null; /* moved to #studioSubheader (outside #sheetPreview) */
         var filterBar = qs("#filterBar");
         var previewStyle = getComputedStyle(preview);
         var previewPadTop = parseFloat(previewStyle.paddingTop) || 0;
@@ -1075,7 +1121,7 @@
       }
 
       var MIN_GRID = 100;
-      dragMaxOff = Math.max(0, dragAvailable - MIN_GRID);
+      dragMaxOff = Math.max(0, Math.min(BOTTOM_STRIP_MAX, dragAvailable - MIN_GRID));
 
       handle.classList.add("active");
       document.body.style.cursor = "row-resize";
@@ -1095,7 +1141,8 @@
       var clientY = e.clientY || (e.touches && e.touches[0].clientY) || 0;
       requestAnimationFrame(function () {
         var delta = startY - clientY;
-        state.dividerOffset = Math.max(0, Math.min(dragMaxOff, startOffset + delta));
+        var lowerBound = Math.min(BOTTOM_STRIP_MIN, dragMaxOff);
+        state.dividerOffset = Math.max(lowerBound, Math.min(dragMaxOff, startOffset + delta));
 
         // Apply maxHeight directly using the stable snapshot
         var MIN_GRID = 100;
@@ -1113,6 +1160,7 @@
       document.body.style.cursor = "";
       document.body.style.userSelect = "";
       computeGridMaxHeight(); // finalize with fresh layout values
+      persistBottomHeight();
     }
 
     document.addEventListener("mouseup", onUp);
@@ -1158,12 +1206,14 @@
         bottom.style.maxHeight = "";
         bottom._transitioning = false;
         computeGridMaxHeight();
+        persistBottomHeight();
       });
     } else {
       // --- Collapse ---
       state.bottomCollapsed = true;
       state.dividerOffsetBeforeCollapse = state.dividerOffset;
       state.dividerOffset = 0;
+      persistBottomHeight();
 
       // Clear grid maxHeight — collapsed CSS flex rules fill the space instead
       applyUpperPaneMaxHeight("");
@@ -1214,14 +1264,28 @@
     tr.appendChild(fnTd);
 
     var obsTd = el("td", "col-observation");
-    obsTd.textContent = truncate(row.observation, 50);
-    obsTd.title = row.observation;
+    obsTd.textContent = row.observation || "";
+    obsTd.title = row.observation || "";
     tr.appendChild(obsTd);
     tr.appendChild(el("td", "col-category", row.category || ""));
     if (showSeverity) {
       var sevCls = "col-severity";
-      if (row.severity) sevCls += " " + severityClass(row.severity);
-      tr.appendChild(el("td", sevCls, row.severity || ""));
+      var sevTd = el("td", sevCls);
+      if (row.severity) {
+        var sevSlug = severityClass(row.severity);
+        var pill = document.createElement("span");
+        pill.className = "sev-pill" + (sevSlug ? " " + sevSlug : "");
+        var dot = document.createElement("span");
+        dot.className = "sev-pill-dot";
+        dot.setAttribute("aria-hidden", "true");
+        pill.appendChild(dot);
+        var lbl = document.createElement("span");
+        lbl.className = "sev-pill-label";
+        lbl.textContent = row.severity;
+        pill.appendChild(lbl);
+        sevTd.appendChild(pill);
+      }
+      tr.appendChild(sevTd);
     }
 
     for (var j = 0; j < participants.length; j++) {
@@ -1234,24 +1298,12 @@
       td.setAttribute("data-category", row.category || "");
 
       if (cellData.hasText) {
-        td.textContent = cellData.value;
+        var chip = document.createElement("span");
+        chip.className = "ts-chip cg-mono";
+        chip.textContent = cellData.value;
+        td.appendChild(chip);
         if (cellData.valid) {
           td.classList.add("valid-ts");
-          if (state.cellColorCoding) {
-            if (row.severity) {
-              var sevCellCls = severityClass(row.severity);
-              if (sevCellCls) td.classList.add(sevCellCls);
-            }
-            var segs = parseClipTimestamps(cellData.value, pid);
-            var totalDur = 0;
-            for (var k = 0; k < segs.length; k++) totalDur += segs[k].duration;
-            var intensity;
-            if (totalDur < 15) intensity = 0.55;
-            else if (totalDur < 45) intensity = 0.7;
-            else if (totalDur < 90) intensity = 0.85;
-            else intensity = 1;
-            td.style.setProperty("--ts-intensity", intensity);
-          }
         } else {
           td.classList.add("has-text");
         }
@@ -4509,6 +4561,21 @@
     }
   });
 
+  function initTopNavActions() {
+    if (!window.ClipgenTopNav) return;
+    function clickIfExists(id) {
+      var el = document.getElementById(id);
+      if (el) el.click();
+    }
+    window.ClipgenTopNav.setQuickActions([
+      { icon: "film", label: "Open Timeline", action: function () { clickIfExists("buildTimelineViewerBtn"); } },
+      { icon: "photo", label: "Open Gallery", action: function () { clickIfExists("galleryBtn"); } },
+      { icon: "arrow-path", label: "Refresh sheet", action: function () { clickIfExists("refreshSheet"); } },
+      { divider: true },
+      { icon: "adjustments-horizontal", label: "Filter rows", action: function () { clickIfExists("filterToggle"); } },
+    ]);
+  }
+
   document.addEventListener("DOMContentLoaded", function () {
     initThemeToggle();
     initTooltipToggle();
@@ -4518,6 +4585,7 @@
     initWheelScroll();
     bindReelReorder();
     bindButtons();
+    loadStoredBottomHeight();
     initPanelDivider();
     loadSheetData();
     loadStashes();
@@ -4525,6 +4593,7 @@
     updateViewerButton();
     checkNavLinks();
     initFrontendSwitcher();
+    initTopNavActions();
     initIntake();
     initTranscriptIntake();
     pollIntakeStatus();
