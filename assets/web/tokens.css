@@ -151,7 +151,7 @@
   --z-overlay: 2000;
   --z-toast: 3000;
 
-  /* Layout (no consumers yet — Pass 2 migrates 1120px sites to var(--layout-max-width)) */
+  /* Layout */
   --layout-max-width: 1120px;
   --layout-padding-x: var(--space-5);
 
@@ -159,12 +159,12 @@
   --sidebar-width-default: 340px;
   --sidebar-width-wide: 420px;
 
-  /* Card widths (Pass 3 migrates studio queue/stash/preview cards) */
+  /* Card widths */
   --card-width-queue: 140px;
   --card-width-stash: 160px;
   --card-width-preview: 200px;
 
-  /* Bottom panel height (Pass 4 wires this through screenspace.css + screenspace.js) */
+  /* Bottom panel height (consumed by screenspace.css + screenspace.js) */
   --bottom-panel-height: 400px;
 
   /* Icon sizes */
