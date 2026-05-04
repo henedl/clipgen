@@ -16,6 +16,7 @@
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap">
   <link rel="stylesheet" href="tokens.css">
   <link rel="stylesheet" href="topnav.css">
+  <link rel="stylesheet" href="primitives.css">
   <link rel="stylesheet" href="studio.css">
   <link rel="stylesheet" href="settings-modal.css">
   <link rel="stylesheet" href="convergence.css">
@@ -85,6 +86,22 @@
   </div>
 
   <section id="sheetPreview">
+    <aside id="studioSidebar" data-open="true" aria-label="Sheet filters">
+      <button id="studioSidebarToggle" type="button" aria-label="Toggle sidebar"><span class="studio-sidebar-toggle-icon" aria-hidden="true"></span></button>
+      <section class="studio-sidebar-section" data-section="views">
+        <header class="studio-sidebar-header">Views</header>
+        <div class="studio-sidebar-body" data-target="views"></div>
+      </section>
+      <section class="studio-sidebar-section" data-section="categories">
+        <header class="studio-sidebar-header">Categories</header>
+        <div class="studio-sidebar-body" data-target="categories"></div>
+      </section>
+      <section class="studio-sidebar-section" data-section="participants">
+        <header class="studio-sidebar-header">Participants</header>
+        <div class="studio-sidebar-body" data-target="participants"></div>
+      </section>
+    </aside>
+    <div id="sheetMain">
     <div id="filterBar" class="hidden"></div>
     <div id="sheetGrid">
       <div id="sheetLoading">
@@ -98,27 +115,16 @@
     <div id="intakePanel" class="hidden">
       <div class="area-controls" id="intakeControls">
         <label class="intake-cluster-label">Cluster <input id="intakeClusterThreshold" type="number" min="1" max="60" value="5" class="intake-cluster-input">s</label>
-        <button id="intakeAddAllBtn" class="btn btn-small" disabled>Add All to Artifacts</button>
-        <button id="intakeReelAllBtn" class="btn btn-small" disabled>Add All to Reel</button>
+        <button id="intakeAddAllBtn" class="cg-btn cg-btn-sm" disabled><span>Add all to Artifacts</span></button>
+        <button id="intakeReelAllBtn" class="cg-btn cg-btn-solid cg-btn-sm" disabled><span>Add all to Reel</span></button>
       </div>
       <div class="intake-filters">
         <input id="intakeFilterSearch" type="text" placeholder="Search events&#x2026;" class="intake-filter-search" autocomplete="off">
-        <div class="intake-filter-pills">
-          <button class="intake-filter-det" data-detector="multitool" style="--det-color:#2563eb"><span class="intake-det-icon" data-icon="link"></span>multitool</button>
-          <button class="intake-filter-det" data-detector="color" style="--det-color:#8b5cf6"><span class="intake-det-icon" data-icon="eye-dropper"></span>color</button>
-          <button class="intake-filter-det" data-detector="change" style="--det-color:#f97316"><span class="intake-det-icon" data-icon="bolt"></span>change</button>
-          <button class="intake-filter-det" data-detector="similarity" style="--det-color:#0ea5e9"><span class="intake-det-icon" data-icon="photo"></span>similarity</button>
-          <button class="intake-filter-det" data-detector="text" style="--det-color:#10b981"><span class="intake-det-icon" data-icon="language"></span>text</button>
-          <button class="intake-filter-det" data-detector="numbers" style="--det-color:#eab308"><span class="intake-det-icon" data-icon="hashtag"></span>numbers</button>
-          <button class="intake-filter-det" data-detector="timelapse" style="--det-color:#ec4899"><span class="intake-det-icon" data-icon="film"></span>timelapse</button>
-          <button class="intake-filter-det" data-detector="template" style="--det-color:#f43f5e"><span class="intake-det-icon" data-icon="viewfinder-circle"></span>template</button>
-          <button class="intake-filter-det" data-detector="flow" style="--det-color:#6366f1"><span class="intake-det-icon" data-icon="arrows-right-left"></span>flow</button>
-          <button class="intake-filter-det" data-detector="scene" style="--det-color:#14b8a6"><span class="intake-det-icon" data-icon="squares-2x2"></span>scene</button>
-        </div>
-        <div id="intakeFilterParticipants" class="intake-filter-participant-pills"></div>
+        <div id="intakeDetectorPills" class="intake-chip-row"></div>
+        <div id="intakeFilterParticipants" class="intake-chip-row"></div>
         <label class="intake-filter-new-label"><input id="intakeFilterNew" type="checkbox"> New only</label>
       </div>
-      <canvas id="intakeTimeline"></canvas>
+      <div id="intakeTimeline" class="intake-density-host"></div>
       <div id="intakeCards" class="intake-cards-grid">
         <div class="drop-target-empty">Screenspace events will appear here</div>
       </div>
@@ -127,15 +133,15 @@
       <div class="area-controls" id="trIntakeControls">
         <label class="intake-cluster-label">Merge gap <input id="trIntakeClusterThreshold" type="number" min="1" max="60" value="5" class="intake-cluster-input">s</label>
         <label class="tr-intake-toggle"><input id="trIntakeShowAll" type="checkbox"> Show all</label>
-        <button id="trIntakeAddAllBtn" class="btn btn-small" disabled>Add All to Artifacts</button>
-        <button id="trIntakeReelAllBtn" class="btn btn-small" disabled>Add All to Reel</button>
+        <button id="trIntakeAddAllBtn" class="cg-btn cg-btn-sm" disabled><span>Add all to Artifacts</span></button>
+        <button id="trIntakeReelAllBtn" class="cg-btn cg-btn-solid cg-btn-sm" disabled><span>Add all to Reel</span></button>
       </div>
       <div class="intake-filters">
         <input id="trIntakeFilterSearch" type="text" placeholder="Search transcript&#x2026;" class="intake-filter-search" autocomplete="off">
-        <div id="trIntakeCategoryPills" class="intake-filter-pills"></div>
-        <div id="trIntakeFilterParticipants" class="intake-filter-participant-pills"></div>
+        <div id="trIntakeCategoryPills" class="intake-chip-row"></div>
+        <div id="trIntakeFilterParticipants" class="intake-chip-row"></div>
       </div>
-      <canvas id="trIntakeTimeline"></canvas>
+      <div id="trIntakeTimeline" class="intake-density-host"></div>
       <div id="trIntakeCards" class="intake-cards-grid">
         <div class="drop-target-empty">Transcript marks will appear here</div>
       </div>
@@ -147,11 +153,14 @@
       <div id="convergenceDetail" class="convergence-detail hidden"></div>
     </div>
     <div id="metadataPanel" class="hidden"></div>
+    </div>
   </section>
 
   <div id="panelDivider"><div class="divider-handle"></div></div>
 
   <div id="bottomPanel">
+  <div id="bottomColumns">
+  <section id="artifactColumn">
   <section id="dropAreas">
     <div id="artifactsArea" class="drop-area">
       <h3><svg id="artifactsSpinner" class="title-spinner" width="14" height="14" viewBox="0 0 14 14" fill="none"><circle cx="7" cy="7" r="5.5" stroke="currentColor" stroke-width="1.5" opacity="0.25"/><circle cx="7" cy="7" r="5.5" stroke="currentColor" stroke-width="1.5" stroke-dasharray="20 15" stroke-linecap="round"><animateTransform attributeName="transform" type="rotate" from="0 7 7" to="360 7 7" dur="0.7s" repeatCount="indefinite"/></circle></svg>Artifacts <span id="artifactsCount">(0)</span> <span id="viewerArtifactCount"></span></h3>
@@ -203,7 +212,9 @@
     </div>
     <div id="stashedArtifactsList"></div>
   </section>
+  </section>
 
+  <section id="reelColumn">
   <section id="reelArea">
     <div id="reelHeader">
       <h3><svg id="reelSpinner" class="title-spinner" width="14" height="14" viewBox="0 0 14 14" fill="none"><circle cx="7" cy="7" r="5.5" stroke="currentColor" stroke-width="1.5" opacity="0.25"/><circle cx="7" cy="7" r="5.5" stroke="currentColor" stroke-width="1.5" stroke-dasharray="20 15" stroke-linecap="round"><animateTransform attributeName="transform" type="rotate" from="0 7 7" to="360 7 7" dur="0.7s" repeatCount="indefinite"/></circle></svg>Reel <span id="reelCount">(0)</span> <span id="reelDuration"></span></h3>
@@ -257,6 +268,8 @@
     </div>
     <div id="stashedReelsList"></div>
   </section>
+  </section>
+  </div>
 
   </div>
 
@@ -298,6 +311,7 @@
 
   <div id="trIntakeTooltip" class="tr-intake-tooltip hidden"></div>
   <script src="utils.js"></script>
+  <script src="primitives.js"></script>
   <script src="topnav.js"></script>
   <script src="dev-token-tweak.js" data-dev-only></script>
   <script src="settings-modal.js"></script>

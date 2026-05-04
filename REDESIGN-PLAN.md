@@ -33,11 +33,12 @@ The prototype is a **design reference**, not production code. Production stack s
 
 | # | Session | Scope | Status |
 |---|---|---|---|
-| 1 | Foundation | Tokens (dark default + light alt), unified TopNav across all three surfaces, Studio Sheet "cells" rendering with severity pills, sub-tab bar with slide-fade transitions, bottom artifacts strip drag-resize | **In progress** |
-| 2 | Primitives | Extract shared primitives (`FilterChip`, `ParticipantPill`, `DensityTimeline`, `ClipCard`, `TranscriptCard`, `SparkBars`, `Btn`, `NavMenu`); apply to remaining Studio sub-tabs (Screenspace Intake, Transcript Intake, Convergence, Metadata) | Pending |
-| 3 | Screenspace | Safe layout: viewer + scrub timeline + detector panel + results panel; refresh detector iconography with design lead | Pending |
-| 4 | Transcripts | Safe layout: editable summary + sticky PiP video + annotation popover; cross-ref with sheet rows / screenspace events | Pending |
-| 5 | Polish | Animation finalization with design lead; viewer/gallery surfaces audit; light-theme parity check across all surfaces | Pending |
+| 1 | Foundation | Tokens (dark default + light alt), unified TopNav across all three surfaces, Studio Sheet "cells" rendering with severity pills, sub-tab bar with slide-fade transitions, bottom artifacts strip drag-resize | **Done** |
+| 2 | Studio primitives + sidebar + intake refresh | Extract `FilterChip` / `ParticipantPill` / `DensityTimeline` / `SparkBars` / `ClipCard` / `TranscriptCard` / `Btn` into shared `assets/web/primitives.{js,css}`. Add Sheet sidebar (VIEWS / CATEGORIES / PARTICIPANTS). Tighten sheet-cell padding + restyle hover-expand overlay. Refresh Screenspace Intake + Transcript Intake interiors. Restructure bottom strip into ARTIFACTS / REEL columns. Drop Studio-internal centering for full-bleed layout. | **Done** |
+| 3 | Convergence + Metadata + bottom-strip polish | Apply primitives + new visualisations (`SwimLane`, `KpiCard`, `CoverageMatrix`) inside Studio's Convergence and Metadata sub-tabs; unify bottom-strip cards with the new primitives; final dead-CSS sweep | Pending |
+| 4 | Screenspace | Safe layout: viewer + scrub timeline + detector panel + results panel; refresh detector iconography with design lead | Pending |
+| 5 | Transcripts | Safe layout: editable summary + sticky PiP video + annotation popover; cross-ref with sheet rows / screenspace events | Pending |
+| 6 | Polish | Animation finalization with design lead; viewer/gallery surfaces audit; light-theme parity check across all surfaces | Pending |
 
 ## Implementation rules (carry-overs from `redesign/AGENTS.md`)
 
@@ -89,3 +90,39 @@ The prototype is a **design reference**, not production code. Production stack s
 - `prefers-color-scheme: dark` handling complicated the theme flip more than expected. Cleanest fix was to drop OS-preference detection entirely (matching the prototype's strict dark-default) rather than try to honor it as a fallback. Users who liked auto-light on light-OS machines will need to manually toggle once.
 - Page-specific `#themeToggle` styling (`width: 32px; border: 1px solid; background: surface-alt`) had to be overridden by `.topnav-right #themeToggle` (specificity 0,1,1 beats 0,1,0). The sun/moon glyph CSS lives in studio/screenspace/transcripts CSS — those still apply correctly inside the TopNav cluster because the icon class names match.
 - Quick Actions menu items kept simple this session. Many would-be items (Open Timeline / Gallery) duplicate visible buttons in the Studio sub-header, which is fine for v1 — duplication beats refactoring the gallery drawer's two-state click flow this session.
+
+### Session 2 — primitives, Sheet sidebar, intake refresh, bottom-strip + full-bleed (2026-05-04)
+
+**Branch:** `henedl/redesign-pass-2`
+
+**Shipped:**
+
+- **Primitives** — new `assets/web/primitives.{js,css}` exports `FilterChip`, `ParticipantPill`, `DensityTimeline`, `SparkBars`, `ClipCard`, `TranscriptCard`, `Btn` as DOM-element factory functions on `window.ClipgenPrimitives`. Hue resolution falls back through `categoryHue(label)` from `utils.js`; active state uses inline `oklch()` style for chip fg/bg/border. Loaded by `studio.html` (`primitives.css` between `topnav.css` and `studio.css`; `primitives.js` after `utils.js`, before `topnav.js`). Generic blueprint static-route handles `/screenspace/primitives.{css,js}` and `/transcripts/primitives.{css,js}` 200s for sessions 4+5 with no server.py changes.
+- **Sheet sidebar** — collapsible `<aside id="studioSidebar">` with three sections (VIEWS / CATEGORIES / PARTICIPANTS). VIEWS chips drive `state.filters.sevMin/sevMax` via a small `SIDEBAR_VIEWS` map (All / Highlights / Positive / Medium / High). CATEGORIES toggle into `state.filters.categories`. PARTICIPANTS toggle into `state.sidebarParticipants`, which `renderGrid()` consumes by filtering `d.participants` into a local `visibleParticipants` array used for `<col>`, `<th>`, and `<td>` iteration. Sidebar collapse persists to `localStorage["clipgen-studio-sidebar-open"]`; `body[data-active-tab]` toggles the sidebar visibility per sub-tab.
+- **Sheet-cell conform** — `.ts-cell` padding tightened to `0 4px` with `height: 30px` so chips fit cells without floating gaps. `.ts-chip` font-family promoted to `var(--font-mono)` (was missing). Floating expand-overlay `.ts-cell-float` rewritten to mirror chip visuals (same `--cell-data` bg, `--cell-data-fg`, `cg-mono`/tnum, 11px, radius 3, 1px `--border-strong`); `showFloat()` no longer overrides `backgroundColor` from cell's computed style; toggles a `.has-text` modifier on the float for invalid-timestamp cells.
+- **Full-bleed layout** — removed the centering `max-width: var(--layout-max-width); margin: 0 auto;` on `#sheetPreview`, `#panelDivider`, `#dropAreas`, `#reelArea`, `#stashedReelsArea`, `#stashedArtifactsArea`. Studio surface and bottom strip now run edge-to-edge.
+- **Sheet sub-header layout** — `#sheetPreview` reflowed to flex-row (`#studioSidebar` + `#sheetMain`); `#sheetMain` carries the existing filter-bar + sheet-grid (and intake/convergence/metadata panels) and absorbs the inner padding.
+- **Screenspace Intake refresh** — replaced static detector pill markup with dynamic `createFilterChip` row (driven by an `INTAKE_DETECTORS` constant + per-detector counts), participant pill row with `createParticipantPill`, and the `<canvas id="intakeTimeline">` with a div-based `createDensityTimeline` host. Cards switched to `createClipCard` with `size: 'lg'`. Lazy-loaded thumbnails (`ssObserveThumb`) and cross-ref badges (`buildXrefBadges`) preserved via post-create DOM injection on `.clip-card-thumb`. Drag/click/hover handlers and `.queue-card.intake-queue-card` class kept for downstream selectors.
+- **Transcript Intake refresh** — same anatomy with `createTranscriptCard` (timeRange = `mm:ss–mm:ss`, text from cluster). New `buildTrIntakeCategoryPills()` consumes the `TR_INTAKE_CATEGORIES` map. `buildTrIntakeParticipantPills` rewritten on top of `createParticipantPill`. Tooltip flow (`#trIntakeTooltip`) untouched.
+- **Bottom-strip refresh** — wrapped `#dropAreas` + `#stashedArtifactsArea` in `#artifactColumn`, `#reelArea` + `#stashedReelsArea` in `#reelColumn`, both inside a new flex-row `#bottomColumns` with a `--hairline` divider between columns. ARTIFACTS now renders as a CSS grid (`auto-fill minmax(160px, 1fr)`); REEL stays a horizontal scroll. Section H3 labels restyled to uppercase 12.5px with mono count badges (matches prototype's "ARTIFACTS"/"REEL" labels).
+- **Cleanup** — deleted dead CSS blocks (`#studioHeader`, `#studioHeaderTop`, `#headerMeta`, the `.sheet-preview-header` carry-over comment) and the no-longer-used `.intake-filter-pills` / `.intake-filter-det` / `.intake-det-icon` / `.intake-filter-participant-pills` / `.intake-filter-participant` rules. Removed canvas helpers `sizeIntakeCanvas`, `renderIntakeTimeline`, `intakeHitTest`, `_intakeHitRects`, `sizeTrIntakeCanvas`, `renderTrIntakeTimeline`, `trIntakeHitTest`, `_trIntakeHitRects`, `intakeComputeTickInterval`, and `hexToRgba` (canvas-only). Dropped the no-op `cellColorCoding` setting from `state`, `studio.js` settings sync, `server.py` `/api/sheet` payload, and `config.py` (constant + description + Studio settings registration).
+
+**Verified:**
+
+- `node -c` syntax-checks clean for `studio.js` and `primitives.js` after each edit.
+- Quality gates pending in task 12 (run before commit).
+
+**Deferred to later sessions:**
+
+- Studio Convergence + Metadata sub-tab interiors — explicitly punted to session 3 per user direction. Will introduce `SwimLane`, `KpiCard`, `CoverageMatrix` primitives.
+- Bottom-strip cards still use the legacy `.queue-card` shape for queued/generating/done state. Unification with `.clip-card`/`.transcript-card` deferred (separate state model).
+- Screenspace surface (Safe layout) — session 4.
+- Transcripts surface (Safe + Editable summary + Sticky PiP) — session 5.
+- Detector iconography revision (handoff flagged as "not final") — session 6 polish.
+
+**Surprises / lessons:**
+
+- Generic blueprint route `/<path:filename>` already serves any file in `assets/web/`, so `primitives.{js,css}` is reachable from `/studio/`, `/screenspace/`, and `/transcripts/` without explicit per-blueprint registration. The plan's "mirror topnav routes" line was redundant.
+- `.ts-cell-float` JS was overriding the cell's computed `backgroundColor` inline at every show — that line silently fought every cell-conform CSS attempt in session 1. Removing the inline override was the actual fix; the new chip-styled CSS already had the right paint.
+- The intake render had a long-tail of canvas-coupled state (`_intakeHitRects`, `intakeHitTest`, hover-driven `renderIntakeTimeline()` repaints) that all dissolved with the SVG/div primitive. The same code shape repeated for transcript intake — both became ~120 lines lighter.
+- Removing `state.cellColorCoding` left the function `_findSetting("STUDIO_SHEET_CELL_COLOR_CODING")` dangling in `applySettingsFromAPI`; deleted the lookup in the same pass and dropped the constant from `config.py` so settings UI no longer surfaces a knob with no effect.

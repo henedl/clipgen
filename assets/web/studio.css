@@ -55,61 +55,8 @@ body {
   overflow: hidden;
 }
 
-/* Header */
-
-#studioHeader {
-  flex-shrink: 0;
-  padding: var(--space-5) var(--layout-padding-x) var(--space-3);
-  max-width: var(--layout-max-width);
-  width: 100%;
-  margin: var(--space-5) auto 0;
-  background: var(--color-panel-bg);
-  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
-  border: 1px solid var(--color-panel-border);
-  border-bottom: none;
-  box-shadow: var(--shadow-xl);
-}
-
-#studioHeaderTop {
-  display: flex;
-  align-items: center;
-  gap: var(--space-4);
-}
-
-#headerActions {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  margin-left: auto;
-}
-
 .hidden {
   display: none !important;
-}
-
-#studioHeader h1 {
-  font-size: var(--text-xl);
-  font-weight: 600;
-  letter-spacing: -0.01em;
-}
-
-.header-light {
-  font-weight: 400;
-  color: var(--color-text-dim);
-}
-
-#headerMeta {
-  display: flex;
-  gap: var(--space-5);
-  margin-top: var(--space-1);
-  font-size: var(--text-sm);
-  color: var(--color-text-dim);
-}
-
-#headerMeta span {
-  display: flex;
-  align-items: center;
-  gap: var(--space-1);
 }
 
 /* Theme toggle (matches viewer.css) */
@@ -236,14 +183,101 @@ body {
   flex: 0 1 auto;
   min-width: 0;
   display: flex;
-  flex-direction: column;
-  max-width: var(--layout-max-width);
-  width: 100%;
-  margin: 0 auto;
+  flex-direction: row;
   background: var(--color-panel-bg);
-  border-left: 1px solid var(--color-panel-border);
-  border-right: 1px solid var(--color-panel-border);
+}
+
+#sheetMain {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
   padding: 0 var(--space-5) var(--space-5);
+}
+
+/* ---- Sheet sidebar ---- */
+
+#studioSidebar {
+  flex: 0 0 220px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  border-right: 1px solid var(--hairline);
+  overflow: hidden;
+  transition: flex-basis 180ms ease-out;
+}
+#studioSidebar[data-open="false"] {
+  flex-basis: 36px;
+}
+#studioSidebar[data-open="false"] .studio-sidebar-section {
+  display: none;
+}
+
+#studioSidebarToggle {
+  align-self: flex-end;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--fg-muted);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: background-color var(--duration-fast), color var(--duration-fast);
+  flex-shrink: 0;
+}
+#studioSidebarToggle:hover {
+  background: var(--bg-hover);
+  color: var(--fg);
+}
+.studio-sidebar-toggle-icon {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  background-color: currentColor;
+  mask-image: url("icons/chevron-double-left.svg");
+  mask-size: contain;
+  mask-repeat: no-repeat;
+  mask-position: center;
+  -webkit-mask-image: url("icons/chevron-double-left.svg");
+  -webkit-mask-size: contain;
+  -webkit-mask-repeat: no-repeat;
+  -webkit-mask-position: center;
+  transition: transform 180ms ease-out;
+}
+#studioSidebar[data-open="false"] .studio-sidebar-toggle-icon {
+  transform: rotate(180deg);
+}
+
+.studio-sidebar-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.studio-sidebar-header {
+  font-size: 10.5px;
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--fg-faint);
+}
+
+.studio-sidebar-body {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  min-width: 0;
+}
+
+/* When the sheet sub-tab is not active, hide the sidebar entirely. */
+body[data-active-tab]:not([data-active-tab="sheet"]) #studioSidebar {
+  display: none;
 }
 
 #sheetPreview h3 {
@@ -253,9 +287,7 @@ body {
   padding-top: var(--space-2);
 }
 
-/* The .sheet-preview-header / .preview-tabs container moved out of #sheetPreview
- * into #studioSubheader. Sub-tab styling now follows the prototype's underline
- * pattern: 1px line flush with the subheader's bottom border. */
+/* Sub-tab underline-on-active styling (matches the prototype). */
 
 .preview-tab {
   display: inline-flex;
@@ -575,13 +607,9 @@ body {
 /* Panel divider (resizable handle between sheet preview and bottom panel) */
 
 #panelDivider {
-  max-width: var(--layout-max-width);
-  width: 100%;
-  margin: 0 auto;
   height: 12px;
   background: var(--color-panel-bg);
-  border-left: 1px solid var(--color-panel-border);
-  border-right: 1px solid var(--color-panel-border);
+  border-top: 1px solid var(--hairline);
   cursor: row-resize;
   display: flex;
   align-items: center;
@@ -837,7 +865,8 @@ col.col-participant-col {
 .ts-cell {
   cursor: pointer;
   text-align: center;
-  padding: 4px;
+  padding: 0 4px;
+  height: 30px;
   transition: background-color var(--duration-fast) ease;
   user-select: none;
   vertical-align: middle;
@@ -857,39 +886,58 @@ col.col-participant-col {
 
 .ts-chip {
   display: inline-block;
-  padding: 2px 5px;
+  padding: 2px 6px;
   border-radius: 3px;
+  font-family: var(--font-mono);
+  font-feature-settings: "tnum";
   font-size: 11px;
   line-height: 1.4;
   background: var(--cell-data);
   color: var(--cell-data-fg);
   white-space: nowrap;
-  font-feature-settings: "tnum";
 }
 
-/* "Has text but invalid timestamp" — show muted, no chip background */
+/* "Has text but invalid timestamp" — show muted, dashed-border outline */
 .ts-cell.has-text .ts-chip {
   background: transparent;
   color: var(--fg-muted);
-  border: 1px dashed var(--border);
+  border: 1px dashed var(--border-strong);
 }
 
-/* Floating expanded cell overlay */
+/* Floating expanded cell overlay — visually matches the inline .ts-chip
+ * (same cell-data background + cell-data-fg text, same mono+tnum font) so the
+ * hover-expand feels like the cell growing rather than a tooltip popping in. */
 
 .ts-cell-float {
   position: fixed;
   z-index: var(--z-float);
   box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
   font-family: var(--font-mono);
-  font-size: var(--text-xs);
-  padding: var(--space-2) var(--space-3);
+  font-feature-settings: "tnum";
+  font-size: 11px;
+  line-height: 1.4;
+  padding: 2px 6px;
+  background: var(--cell-data);
+  color: var(--cell-data-fg);
+  border: 1px solid var(--border-strong);
+  border-radius: 3px;
   text-align: center;
   white-space: nowrap;
   pointer-events: none;
   opacity: 0;
   transition: opacity 60ms ease;
-  border-bottom: 1px solid var(--color-border);
-  box-shadow: 2px 0 6px rgba(0, 0, 0, 0.15);
+}
+
+/* Float over a cell with text-but-invalid timestamp — match the dashed-border
+ * empty-chip look from the row below. */
+.ts-cell-float.has-text {
+  background: var(--bg);
+  color: var(--fg-muted);
+  border: 1px dashed var(--border-strong);
 }
 
 /* Empty row separator */
@@ -914,20 +962,35 @@ col.col-participant-col {
   overflow: hidden;
 }
 
+/* Two-column split: ARTIFACTS | REEL — matches the prototype's bottom strip
+ * anatomy (full-bleed, hairline divider between columns). */
+#bottomColumns {
+  display: flex;
+  align-items: stretch;
+  width: 100%;
+}
+
+#artifactColumn,
+#reelColumn {
+  flex: 1 1 50%;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+#artifactColumn {
+  border-right: 1px solid var(--hairline);
+}
+
 /* Drop areas */
 
 #dropAreas {
-  max-width: var(--layout-max-width);
-  margin: 0 auto;
   background: var(--color-panel-bg);
-  border: 1px solid var(--color-panel-border);
-  border-top: none;
-  border-radius: 0;
-  box-shadow: var(--shadow-xl);
-  padding: var(--space-4) var(--space-5) var(--space-5);
-  display: grid;
-  grid-template-columns: 1fr;
-  gap: var(--space-4);
+  padding: var(--space-3) var(--space-4) var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  flex: 1 1 auto;
+  min-height: 0;
 }
 
 .drop-area {
@@ -936,18 +999,28 @@ col.col-participant-col {
   gap: var(--space-2);
 }
 
-.drop-area h3 {
-  font-size: var(--text-base);
-  font-weight: 600;
+.drop-area h3,
+#reelArea h3 {
+  font-size: 12.5px;
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--fg);
   display: flex;
   align-items: center;
   gap: var(--space-2);
+  margin: 0;
 }
 
-.drop-area h3 span {
+.drop-area h3 span,
+#reelArea h3 span {
+  font-family: var(--font-mono);
+  font-feature-settings: "tnum";
   font-weight: 400;
-  color: var(--color-text-dim);
-  font-size: var(--text-sm);
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--fg-muted);
+  font-size: 11px;
 }
 
 .drop-target {
@@ -986,13 +1059,16 @@ col.col-participant-col {
 }
 
 #artifactsList {
-  flex-direction: row;
-  overflow-x: auto;
-  overflow-y: hidden;
-  max-height: none;
-  min-height: 100px;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
   gap: var(--space-2);
   padding: var(--space-2);
+  min-height: 100px;
+  overflow-y: auto;
+  align-content: start;
+}
+#artifactsList .drop-target-empty {
+  grid-column: 1 / -1;
 }
 
 /* Shared card base (artifact + reel) */
@@ -1111,33 +1187,13 @@ col.col-participant-col {
 /* Reel timeline */
 
 #reelArea {
-  max-width: var(--layout-max-width);
-  margin: 0 auto var(--space-5);
   background: var(--color-panel-bg);
-  border: 1px solid var(--color-panel-border);
-  border-top: none;
-  border-radius: 0 0 var(--radius-lg) var(--radius-lg);
-  box-shadow: var(--shadow-xl);
-  padding: var(--space-4) var(--space-5) var(--space-5);
-}
-
-#reelArea:has(+ #stashedReelsArea:not(.hidden)) {
-  border-radius: 0;
-  margin-bottom: 0;
-}
-
-#reelArea h3 {
-  font-size: var(--text-base);
-  font-weight: 600;
+  padding: var(--space-3) var(--space-4) var(--space-4);
   display: flex;
-  align-items: center;
-  gap: var(--space-2);
-}
-
-#reelArea h3 span {
-  font-weight: 400;
-  color: var(--color-text-dim);
-  font-size: var(--text-sm);
+  flex-direction: column;
+  gap: var(--space-3);
+  flex: 1 1 auto;
+  min-height: 0;
 }
 
 #reelHeader {
@@ -1184,13 +1240,7 @@ html[data-theme="dark"] .queue-card-error .queue-card-thumb {
 /* Stashed reels */
 
 #stashedReelsArea {
-  max-width: var(--layout-max-width);
-  margin: 0 auto var(--space-5);
   background: var(--color-panel-bg);
-  border: 1px solid var(--color-panel-border);
-  border-top: none;
-  border-radius: 0 0 var(--radius-lg) var(--radius-lg);
-  box-shadow: var(--shadow-xl);
   padding: var(--space-3) var(--space-5) var(--space-4);
 }
 
@@ -1320,13 +1370,7 @@ html[data-theme="dark"] .queue-card-error .queue-card-thumb {
 /* Stashed artifacts */
 
 #stashedArtifactsArea {
-  max-width: var(--layout-max-width);
-  margin: 0 auto;
   background: var(--color-panel-bg);
-  border: 1px solid var(--color-panel-border);
-  border-top: none;
-  border-radius: 0;
-  box-shadow: var(--shadow-xl);
   padding: var(--space-3) var(--space-5) var(--space-4);
 }
 
@@ -2166,9 +2210,24 @@ html[data-theme="dark"] .log-panel {
   align-content: flex-start;
 }
 
-.queue-card.intake-highlight {
-  border-color: var(--color-accent);
-  box-shadow: 0 0 0 2px var(--color-accent);
+.queue-card.intake-highlight,
+.clip-card.intake-highlight,
+.transcript-card.intake-highlight {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent);
+}
+
+/* Intake filter rows (new primitive-based chips + pills) */
+.intake-chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+}
+
+/* Intake density timeline host (created by primitives at render time) */
+.intake-density-host {
+  margin: var(--space-2) 0 var(--space-3);
 }
 
 .intake-card-det-dot {
@@ -2200,85 +2259,9 @@ html[data-theme="dark"] .log-panel {
   color: var(--color-text);
 }
 
-.intake-filter-pills {
-  display: flex;
-  gap: 4px;
-}
-
-.intake-filter-det {
-  display: inline-flex;
-  align-items: center;
-  gap: 2px;
-  font-size: 10px;
-  padding: 1px 6px;
-  border: 1px solid var(--det-color, var(--color-border));
-  border-radius: var(--radius-full);
-  background: transparent;
-  color: var(--det-color, var(--color-text-dim));
-  cursor: pointer;
-  font-weight: 600;
-  text-transform: uppercase;
-  transition: background var(--duration-fast), color var(--duration-fast);
-}
-
-.intake-det-icon {
-  display: inline-block;
-  width: 10px;
-  height: 10px;
-  flex-shrink: 0;
-  background-color: currentColor;
-  mask-size: contain;
-  mask-repeat: no-repeat;
-  mask-position: center;
-  -webkit-mask-size: contain;
-  -webkit-mask-repeat: no-repeat;
-  -webkit-mask-position: center;
-}
-
-.intake-filter-det:hover {
-  background: color-mix(in srgb, var(--det-color) 15%, transparent);
-}
-
-.intake-filter-det.active {
-  background: var(--det-color);
-  color: #fff;
-}
-
-.intake-filter-participant-pills {
-  display: flex;
-  gap: 4px;
-}
-
-.intake-filter-participant {
-  display: inline-flex;
-  align-items: center;
-  font-size: 10px;
-  padding: 1px 6px;
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-full);
-  background: transparent;
-  color: var(--color-text-dim);
-  cursor: pointer;
-  font-weight: 600;
-  text-transform: uppercase;
-  transition: background var(--duration-fast), color var(--duration-fast),
-              border-color var(--duration-fast);
-}
-
-.intake-filter-participant:hover {
-  background: color-mix(in srgb, var(--color-accent) 15%, transparent);
-  border-color: var(--color-accent);
-}
-
-.intake-filter-participant.active {
-  background: var(--color-accent);
-  color: #fff;
-  border-color: var(--color-accent);
-}
-
 .intake-filter-new-label {
   font-size: var(--text-xs);
-  color: var(--color-text-dim);
+  color: var(--fg-muted);
   display: flex;
   align-items: center;
   gap: 4px;

@@ -255,7 +255,6 @@ def api_sheet() -> FlaskResponse:
             "titlecardsEnabled": config.TITLECARDS_ENABLED,
             "titlecardDuration": config.TITLECARD_DURATION_SECONDS,
             "cellExpandHover": config.STUDIO_CELL_EXPAND_HOVER,
-            "cellColorCoding": config.STUDIO_SHEET_CELL_COLOR_CODING,
             "defaultDuration": config.DEFAULT_DURATION_SECONDS,
             "config": utils.get_frontend_config(),
             "participants": participants,
