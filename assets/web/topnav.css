@@ -1,0 +1,263 @@
+/* Unified top navigation — shared chrome across Studio, Screenspace, Transcripts.
+ * Replaces the per-page frontend-switcher. Mounted by topnav.js into a
+ * <topnav-mount> placeholder element.
+ *
+ * Anatomy:
+ *   [logo · clipgen]    [Studio | Screenspace | Transcripts]    [Quick actions ▾ | Log | Theme | v0.10.x]
+ */
+
+.topnav {
+  display: flex;
+  align-items: center;
+  height: 48px;
+  padding: 0 16px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg);
+  font-family: var(--font-sans);
+  color: var(--fg);
+  position: relative;
+  z-index: var(--z-dropdown);
+}
+
+.topnav-left,
+.topnav-right {
+  flex: 1 1 0;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.topnav-right { justify-content: flex-end; }
+
+.topnav-center {
+  flex: 0 0 auto;
+  display: flex;
+  gap: 28px;
+  align-items: center;
+  height: 100%;
+}
+
+/* ---- Brand ---- */
+
+.topnav-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 6px;
+  color: var(--fg);
+  text-decoration: none;
+  font-size: 14px;
+  font-weight: 500;
+  letter-spacing: -0.01em;
+}
+.topnav-brand .brand-mark {
+  font-size: 18px;
+  margin-right: 0;
+}
+.topnav-brand:hover {
+  color: var(--fg);
+}
+
+/* ---- Center tabs ---- */
+
+.topnav-tab {
+  display: inline-flex;
+  align-items: center;
+  height: 100%;
+  padding: 0 2px;
+  font-size: 13px;
+  color: var(--fg-muted);
+  text-decoration: none;
+  border-bottom: 1px solid transparent;
+  margin-bottom: -1px; /* sits on the topnav's bottom border */
+  cursor: pointer;
+  transition: color var(--duration-fast);
+}
+.topnav-tab:hover { color: var(--fg); }
+.topnav-tab.is-active {
+  color: var(--fg);
+  border-bottom-color: var(--fg);
+}
+
+/* ---- Right cluster ---- */
+
+.topnav-icon-btn,
+.topnav-qa-trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 30px;
+  padding: 0 10px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  color: var(--fg-muted);
+  font-family: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+  transition: background-color var(--duration-fast), color var(--duration-fast), border-color var(--duration-fast);
+}
+.topnav-icon-btn {
+  width: 30px;
+  padding: 0;
+}
+.topnav-icon-btn:hover,
+.topnav-qa-trigger:hover {
+  background: var(--bg-hover);
+  color: var(--fg);
+}
+.topnav-icon-btn:focus-visible,
+.topnav-qa-trigger:focus-visible {
+  outline: none;
+  box-shadow: var(--shadow-focus);
+}
+
+.topnav-qa-trigger {
+  gap: 6px;
+}
+.topnav-qa-trigger.is-open {
+  background: var(--bg-active);
+  color: var(--fg);
+}
+
+.topnav-icon {
+  display: inline-block;
+  width: 15px;
+  height: 15px;
+  background-color: currentColor;
+  mask-size: contain;
+  mask-repeat: no-repeat;
+  mask-position: center;
+  -webkit-mask-size: contain;
+  -webkit-mask-repeat: no-repeat;
+  -webkit-mask-position: center;
+}
+
+/* Caret on the trigger */
+.topnav-qa-caret {
+  width: 12px;
+  height: 12px;
+  mask-image: url("icons/chevron-down.svg");
+  -webkit-mask-image: url("icons/chevron-down.svg");
+  transition: transform var(--duration-fast);
+}
+.topnav-qa-trigger.is-open .topnav-qa-caret {
+  transform: rotate(180deg);
+}
+
+/* Divider between qa trigger and icon buttons */
+.topnav-divider {
+  width: 1px;
+  height: 20px;
+  background: var(--border);
+  margin: 0 4px;
+}
+
+/* Theme toggle inherits #themeToggle styling from page CSS today; the redesign
+ * adds an explicit appearance to keep it visually consistent inside the TopNav.
+ * Page-level #themeToggle rules are scoped narrowly enough not to fight us. */
+.topnav-right #themeToggle {
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  color: var(--fg-muted);
+  cursor: pointer;
+  transition: background-color var(--duration-fast), color var(--duration-fast);
+}
+.topnav-right #themeToggle:hover {
+  background: var(--bg-hover);
+  color: var(--fg);
+}
+
+/* Version pill — small mono text */
+.topnav-version {
+  margin-left: 6px;
+  padding: 2px 6px;
+  font-family: var(--font-mono);
+  font-feature-settings: "tnum";
+  font-size: 11px;
+  color: var(--fg-faint);
+  border-radius: 4px;
+}
+
+/* ---- Quick Actions menu ---- */
+
+.topnav-qa {
+  position: relative;
+}
+
+.topnav-qa-panel {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  min-width: 240px;
+  padding: 6px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  box-shadow: var(--shadow-pop);
+  display: none;
+  flex-direction: column;
+  z-index: var(--z-dropdown);
+  font-size: 12.5px;
+}
+.topnav-qa-panel.is-open {
+  display: flex;
+}
+
+.topnav-qa-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 10px;
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  color: var(--fg);
+  font-family: inherit;
+  font-size: inherit;
+  text-align: left;
+  cursor: pointer;
+  width: 100%;
+  transition: background-color var(--duration-fast);
+}
+.topnav-qa-item:hover {
+  background: var(--bg-hover);
+}
+.topnav-qa-item .topnav-icon {
+  color: var(--fg-muted);
+  flex-shrink: 0;
+}
+.topnav-qa-item:hover .topnav-icon {
+  color: var(--fg);
+}
+
+.topnav-qa-divider {
+  height: 1px;
+  background: var(--hairline);
+  margin: 4px 0;
+}
+
+.topnav-qa-header {
+  padding: 8px 10px 4px;
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--fg-faint);
+  font-weight: 500;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .topnav-tab,
+  .topnav-icon-btn,
+  .topnav-qa-trigger,
+  .topnav-qa-caret,
+  .topnav-right #themeToggle {
+    transition: none;
+  }
+}

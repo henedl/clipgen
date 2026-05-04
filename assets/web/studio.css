@@ -253,37 +253,63 @@ body {
   padding-top: var(--space-2);
 }
 
-.sheet-preview-header {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  margin-bottom: var(--space-2);
-}
-
-.preview-tabs {
-  display: flex;
-  flex: 1;
-}
+/* The .sheet-preview-header / .preview-tabs container moved out of #sheetPreview
+ * into #studioSubheader. Sub-tab styling now follows the prototype's underline
+ * pattern: 1px line flush with the subheader's bottom border. */
 
 .preview-tab {
-  font-size: var(--text-sm);
-  font-weight: 600;
-  padding: var(--space-2) var(--space-3);
+  display: inline-flex;
+  align-items: center;
+  height: 100%;
+  padding: 0 2px;
+  font-size: 12.5px;
+  font-weight: 400;
   background: none;
   border: none;
-  border-bottom: 2px solid transparent;
-  color: var(--color-text-dim);
+  border-bottom: 1px solid transparent;
+  margin-bottom: -1px; /* sits on subheader's bottom border */
+  color: var(--fg-muted);
   cursor: pointer;
-  transition: color var(--duration-fast), border-color var(--duration-fast);
+  transition: color var(--duration-fast);
+  font-family: inherit;
 }
 
 .preview-tab:hover {
-  color: var(--color-text);
+  color: var(--fg);
 }
 
 .preview-tab.active {
-  color: var(--color-text);
-  border-bottom-color: var(--color-accent);
+  color: var(--fg);
+  border-bottom-color: var(--fg);
+}
+
+/* Slide-fade transition for sub-tab content. Matches prototype TabSlide
+ * (lines 1766–1793): translateX 12 → 0 + opacity 0 → 1 over ~180ms.
+ * studio.js applies .tab-slide-enter on the newly-shown panel, then removes
+ * it after a double-rAF so the CSS transition fires. */
+#sheetGrid,
+#intakePanel,
+#trIntakePanel,
+#convergencePanel,
+#metadataPanel {
+  transition: opacity 180ms ease-out, transform 220ms cubic-bezier(0.2, 0.7, 0.3, 1);
+}
+.tab-slide-enter {
+  opacity: 0 !important;
+  transform: translateX(12px);
+}
+@media (prefers-reduced-motion: reduce) {
+  #sheetGrid,
+  #intakePanel,
+  #trIntakePanel,
+  #convergencePanel,
+  #metadataPanel {
+    transition: none;
+  }
+  .tab-slide-enter {
+    opacity: 1 !important;
+    transform: none;
+  }
 }
 
 .intake-tab-badge {
@@ -709,22 +735,59 @@ body.bottom-animating #stashedArtifactsArea {
   font-size: var(--text-sm);
 }
 
+/* Severity rendered as a pill (locked variant per redesign). The .col-severity
+ * td is just a layout container; the pill lives inside as a span chain. */
 .col-severity {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: var(--text-sm);
-  font-weight: 500;
+  font-size: 12px;
 }
 
-.col-severity.sev-critical { color: var(--sev-critical); }
-.col-severity.sev-high { color: var(--sev-high); }
-.col-severity.sev-medium { color: var(--sev-medium); }
-.col-severity.sev-low { color: var(--sev-low); }
-.col-severity.sev-na { color: var(--sev-na); }
-.col-severity.sev-positive { color: var(--sev-positive); }
-.col-severity.sev-very-positive { color: var(--sev-very-positive); }
-.col-severity.sev-unknown { color: var(--sev-unknown); }
+.sev-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 7px;
+  border-radius: var(--radius-full);
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--fg-muted);
+  font-size: 11px;
+  line-height: 1.4;
+  white-space: nowrap;
+}
+.sev-pill-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  flex-shrink: 0;
+}
+
+.sev-pill.sev-critical,
+.sev-pill.sev-high {
+  color: var(--severity-high);
+  background: color-mix(in srgb, var(--severity-high) 18%, transparent);
+}
+.sev-pill.sev-medium,
+.sev-pill.sev-low {
+  color: var(--severity-medium);
+  background: color-mix(in srgb, var(--severity-medium) 18%, transparent);
+}
+.sev-pill.sev-na,
+.sev-pill.sev-unknown {
+  color: var(--fg-muted);
+  background: rgba(255, 255, 255, 0.06);
+}
+.sev-pill.sev-positive,
+.sev-pill.sev-very-positive {
+  color: var(--severity-positive);
+  background: color-mix(in srgb, var(--severity-positive) 18%, transparent);
+}
+
+html[data-theme="light"] .sev-pill.sev-na,
+html[data-theme="light"] .sev-pill.sev-unknown,
+.theme-light .sev-pill.sev-na,
+.theme-light .sev-pill.sev-unknown {
+  background: rgba(0, 0, 0, 0.06);
+}
 
 /* Clickable header cells */
 
@@ -767,31 +830,21 @@ col.col-participant-col {
   font-size: var(--text-sm);
 }
 
-/* Timestamp cells */
+/* Participant cells — locked "cells" mode (timestamp chips on cyan cell-data
+ * background, uniform across severity). The td is the layout container; the
+ * visible chip lives inside as a span. */
 
 .ts-cell {
-  --ts-intensity: 1;
   cursor: pointer;
   text-align: center;
-  font-family: var(--font-mono);
-  font-size: var(--text-xs);
+  padding: 4px;
   transition: background-color var(--duration-fast) ease;
   user-select: none;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  vertical-align: middle;
 }
 
 .ts-cell:hover {
   background-color: var(--color-cell-hover);
-}
-
-.ts-cell.has-text {
-  background-color: var(--color-cell-text);
-}
-
-.ts-cell.valid-ts {
-  background-color: var(--color-cell-valid);
 }
 
 .ts-cell.selected {
@@ -799,33 +852,26 @@ col.col-participant-col {
 }
 
 .ts-cell.empty {
-  color: var(--color-text-dim);
   cursor: default;
 }
 
-.ts-cell.valid-ts.sev-critical {
-  color: color-mix(in srgb, var(--sev-critical) calc(var(--ts-intensity) * 100%), var(--color-text-dim));
+.ts-chip {
+  display: inline-block;
+  padding: 2px 5px;
+  border-radius: 3px;
+  font-size: 11px;
+  line-height: 1.4;
+  background: var(--cell-data);
+  color: var(--cell-data-fg);
+  white-space: nowrap;
+  font-feature-settings: "tnum";
 }
-.ts-cell.valid-ts.sev-high {
-  color: color-mix(in srgb, var(--sev-high) calc(var(--ts-intensity) * 100%), var(--color-text-dim));
-}
-.ts-cell.valid-ts.sev-medium {
-  color: color-mix(in srgb, var(--sev-medium) calc(var(--ts-intensity) * 100%), var(--color-text-dim));
-}
-.ts-cell.valid-ts.sev-low {
-  color: color-mix(in srgb, var(--sev-low) calc(var(--ts-intensity) * 100%), var(--color-text-dim));
-}
-.ts-cell.valid-ts.sev-na {
-  color: color-mix(in srgb, var(--sev-na) calc(var(--ts-intensity) * 100%), var(--color-text-dim));
-}
-.ts-cell.valid-ts.sev-positive {
-  color: color-mix(in srgb, var(--sev-positive) calc(var(--ts-intensity) * 100%), var(--color-text-dim));
-}
-.ts-cell.valid-ts.sev-very-positive {
-  color: color-mix(in srgb, var(--sev-very-positive) calc(var(--ts-intensity) * 100%), var(--color-text-dim));
-}
-.ts-cell.valid-ts.sev-unknown {
-  color: color-mix(in srgb, var(--sev-unknown) calc(var(--ts-intensity) * 100%), var(--color-text-dim));
+
+/* "Has text but invalid timestamp" — show muted, no chip background */
+.ts-cell.has-text .ts-chip {
+  background: transparent;
+  color: var(--fg-muted);
+  border: 1px dashed var(--border);
 }
 
 /* Floating expanded cell overlay */

@@ -632,6 +632,43 @@ function refreshDetectorColors() {
 
 refreshDetectorColors();
 
+// ---- Category hue palette (redesign) ----
+// Stable hue per detector / mark category, rendered at runtime via oklch().
+// Mirrors the table in redesign/README.md. New code should use these for
+// chip rings, dots, and density bars rather than pre-flattened hex tokens.
+var CATEGORY_HUES = {
+  multitool: 220, color: 280, change: 30, similarity: 200,
+  text: 170, numbers: 330, timelapse: 350, template: 18,
+  flow: 145, scene: 155, inactivity: 210,
+  "pain point": 350, "pain-point": 350,
+  delight: 140, quote: 40, insight: 220,
+  "task issue": 30, task: 30, bookmark: 280,
+  onboarding: 220, behavior: 145, layout: 280,
+  copy: 40, performance: 30, uncategorized: 220,
+};
+
+function categoryHue(label) {
+  if (!label) return 220;
+  var key = String(label).toLowerCase().trim();
+  if (Object.prototype.hasOwnProperty.call(CATEGORY_HUES, key)) {
+    return CATEGORY_HUES[key];
+  }
+  // Stable fallback hash so unknown labels still get a consistent color.
+  var h = 0;
+  for (var i = 0; i < key.length; i++) {
+    h = (h * 31 + key.charCodeAt(i)) | 0;
+  }
+  return ((h % 360) + 360) % 360;
+}
+
+function categoryColor(label, alpha) {
+  var hue = categoryHue(label);
+  if (alpha == null || alpha >= 1) {
+    return "oklch(0.7 0.16 " + hue + ")";
+  }
+  return "oklch(0.7 0.16 " + hue + " / " + alpha + ")";
+}
+
 // ---- Shared settings (localStorage) ----
 
 var THEME_STORAGE_KEY = "clipgen-theme";
@@ -640,30 +677,15 @@ var TOOLTIP_STORAGE_KEY = "clipgen-tooltips";
 var applyStoredThemePreference = function () {
   var stored = null;
   try { stored = window.localStorage.getItem(THEME_STORAGE_KEY); } catch (_) {}
-  var root = document.documentElement;
-  if (stored === "light" || stored === "dark") {
-    root.setAttribute("data-theme", stored);
-  } else {
-    root.removeAttribute("data-theme");
-  }
-  updateThemeToggleButton(stored);
+  var theme = stored === "light" ? "light" : "dark";
+  document.documentElement.setAttribute("data-theme", theme);
+  updateThemeToggleButton(theme);
 };
 
 var toggleThemePreference = function () {
   var root = document.documentElement;
-  var current = root.getAttribute("data-theme");
-  var next;
-  if (current === "dark") {
-    next = "light";
-  } else if (current === "light") {
-    next = "dark";
-  } else {
-    var prefersDark = false;
-    try {
-      prefersDark = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
-    } catch (_) {}
-    next = prefersDark ? "light" : "dark";
-  }
+  var current = root.getAttribute("data-theme") || "dark";
+  var next = current === "light" ? "dark" : "light";
   root.setAttribute("data-theme", next);
   try { window.localStorage.setItem(THEME_STORAGE_KEY, next); } catch (_) {}
   updateThemeToggleButton(next);
@@ -673,14 +695,7 @@ var toggleThemePreference = function () {
 var updateThemeToggleButton = function (explicitTheme) {
   var btn = qs("#themeToggle");
   if (!btn) return;
-  var effective = explicitTheme;
-  if (effective !== "light" && effective !== "dark") {
-    var prefersDark = false;
-    try {
-      prefersDark = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
-    } catch (_) {}
-    effective = prefersDark ? "dark" : "light";
-  }
+  var effective = explicitTheme === "light" ? "light" : "dark";
   btn.setAttribute("data-theme", effective);
   btn.setAttribute("aria-pressed", effective === "dark" ? "true" : "false");
 };
