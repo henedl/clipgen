@@ -64,8 +64,8 @@
 /* Icons via mask-image */
 .md-icon {
   display: inline-block;
-  width: 14px;
-  height: 14px;
+  width: var(--icon-size-sm);
+  height: var(--icon-size-sm);
   background-color: currentColor;
   mask-size: contain;
   mask-repeat: no-repeat;
@@ -195,8 +195,8 @@
 
 .md-section-chevron {
   display: inline-block;
-  width: 14px;
-  height: 14px;
+  width: var(--icon-size-sm);
+  height: var(--icon-size-sm);
   background-color: var(--color-text-dim);
   mask-image: url("icons/chevron-down.svg");
   -webkit-mask-image: url("icons/chevron-down.svg");
@@ -580,8 +580,8 @@
 
 .md-outlier-icon {
   display: inline-block;
-  width: 14px;
-  height: 14px;
+  width: var(--icon-size-sm);
+  height: var(--icon-size-sm);
   background-color: var(--sev-high);
   mask-image: url("icons/exclamation-triangle.svg");
   -webkit-mask-image: url("icons/exclamation-triangle.svg");

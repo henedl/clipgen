@@ -38,8 +38,8 @@ html {
 .cg-icon--bars-3      { mask-image: url(icons/bars-3.svg);      -webkit-mask-image: url(icons/bars-3.svg); }
 .cg-icon--squares-2x2 { mask-image: url(icons/squares-2x2.svg); -webkit-mask-image: url(icons/squares-2x2.svg); }
 .cg-icon--confirm {
-  width: 14px;
-  height: 14px;
+  width: var(--icon-size-sm);
+  height: var(--icon-size-sm);
   vertical-align: text-bottom;
   margin-right: 4px;
 }
@@ -59,7 +59,7 @@ body {
 
 #studioHeader {
   flex-shrink: 0;
-  padding: var(--space-5) var(--space-5) var(--space-3);
+  padding: var(--space-5) var(--layout-padding-x) var(--space-3);
   max-width: var(--layout-max-width);
   width: 100%;
   margin: var(--space-5) auto 0;
@@ -146,8 +146,8 @@ body {
 
 .theme-toggle-icon {
   position: absolute;
-  width: 16px;
-  height: 16px;
+  width: var(--icon-size-md);
+  height: var(--icon-size-md);
   border-radius: var(--radius-full);
   transition: opacity var(--duration-normal) ease, transform var(--duration-normal) ease;
 }
@@ -234,6 +234,7 @@ body {
 
 #sheetPreview {
   flex: 0 1 auto;
+  min-width: 0;
   display: flex;
   flex-direction: column;
   max-width: var(--layout-max-width);
@@ -512,8 +513,8 @@ body {
 }
 
 .filter-clear .cg-icon {
-  width: 12px;
-  height: 12px;
+  width: var(--icon-size-xs);
+  height: var(--icon-size-xs);
 }
 
 #sheetLoading {
@@ -2054,7 +2055,7 @@ html[data-theme="dark"] .log-panel {
 
 /* ---- Responsive ---- */
 
-@media (max-width: 768px) {
+@media (max-width: 768px) /* --bp-tablet */ {
   #studioHeader,
   #sheetPreview,
   #panelDivider,

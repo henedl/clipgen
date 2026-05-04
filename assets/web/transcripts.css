@@ -35,7 +35,7 @@ body {
 
 #trHeader {
   flex-shrink: 0;
-  padding: var(--space-5) var(--space-5) var(--space-3);
+  padding: var(--space-5) var(--layout-padding-x) var(--space-3);
   max-width: var(--layout-max-width);
   width: 100%;
   margin: var(--space-5) auto 0;
@@ -188,8 +188,8 @@ body {
 
 .theme-toggle-icon {
   position: absolute;
-  width: 16px;
-  height: 16px;
+  width: var(--icon-size-md);
+  height: var(--icon-size-md);
   border-radius: var(--radius-full);
   transition: opacity var(--duration-normal) ease, transform var(--duration-normal) ease;
 }
@@ -430,8 +430,8 @@ body {
 }
 
 .player-btn-icon {
-  width: 16px;
-  height: 16px;
+  width: var(--icon-size-md);
+  height: var(--icon-size-md);
   display: inline-block;
   background: currentColor;
   mask-size: contain;
@@ -607,8 +607,8 @@ body {
 }
 
 .summary-icon {
-  width: 14px;
-  height: 14px;
+  width: var(--icon-size-sm);
+  height: var(--icon-size-sm);
   flex-shrink: 0;
   background: var(--color-text-dim);
   mask-image: url(icons/sparkles.svg);
@@ -641,8 +641,8 @@ body {
 }
 
 .summary-chevron {
-  width: 14px;
-  height: 14px;
+  width: var(--icon-size-sm);
+  height: var(--icon-size-sm);
   background: var(--color-text-dim);
   mask-image: url(icons/chevron-down.svg);
   -webkit-mask-image: url(icons/chevron-down.svg);
@@ -721,8 +721,8 @@ body {
 }
 
 .summary-action-icon {
-  width: 14px;
-  height: 14px;
+  width: var(--icon-size-sm);
+  height: var(--icon-size-sm);
   background: var(--color-text-dim);
   mask-size: contain;
   -webkit-mask-size: contain;
@@ -1066,8 +1066,8 @@ body {
 
 .segment-copy-icon {
   display: block;
-  width: 14px;
-  height: 14px;
+  width: var(--icon-size-sm);
+  height: var(--icon-size-sm);
   background-color: currentColor;
   mask-image: url(icons/clipboard.svg);
   -webkit-mask-image: url(icons/clipboard.svg);
@@ -1229,8 +1229,8 @@ body {
   position: absolute;
   inset: 0;
   margin: auto;
-  width: 14px;
-  height: 14px;
+  width: var(--icon-size-sm);
+  height: var(--icon-size-sm);
   background-color: currentColor;
   mask-size: contain;
   mask-repeat: no-repeat;
@@ -1283,8 +1283,8 @@ body {
 
 .pill-chevron {
   display: inline-block;
-  width: 12px;
-  height: 12px;
+  width: var(--icon-size-xs);
+  height: var(--icon-size-xs);
   background-color: currentColor;
   color: var(--color-text-dim);
   mask-size: contain;

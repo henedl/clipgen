@@ -2958,9 +2958,7 @@
   }
 
   function _positionPillOptions(pane, wrap) {
-    var rect = wrap.getBoundingClientRect();
-    pane.style.top = rect.bottom + 4 + "px";
-    pane.style.left = rect.left + "px";
+    positionPopoverAnchored(pane, wrap.getBoundingClientRect());
   }
 
   function _closeOpenPaneInDom() {

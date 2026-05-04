@@ -25,10 +25,8 @@
  * SIDEBAR:    --sidebar-width-default | --sidebar-width-wide
  * CARD WIDTH: --card-width-queue | --card-width-stash | --card-width-preview
  * PANEL:      --bottom-panel-height
- * ICON SIZE:  --icon-size-xs (12px) | --icon-size-sm (14px) | --icon-size-md (16px) | --icon-size-lg (20px)
- *
- * NOTE: layout/sidebar/card-width/panel/icon-size tokens are seeded with current
- *   values; no consumers yet (they're tunable in the dev token-tweak widget).
+ * ICON SIZE:  --icon-size-xs (12px) | --icon-size-sm (14px) | --icon-size-md (16px) | --icon-size-lg (20px) | --icon-size-xl (24px)
+ * BREAKPOINT: --bp-tablet (768px) — documentation/JS-read only, see note below
  */
 
 :root {
@@ -172,6 +170,14 @@
   --icon-size-sm: 14px;
   --icon-size-md: 16px;
   --icon-size-lg: 20px;
+  --icon-size-xl: 24px;
+
+  /* Breakpoints — for documentation + JS reads only. CSS @media queries
+   * cannot consume var() in their conditions; tweaking the dev widget will
+   * not change layout breakpoints, only any JS that reads this value. Each
+   * @media (max-width: 768px) site carries a "--bp-tablet" comment marker
+   * so a grep finds them via the token name. */
+  --bp-tablet: 768px;
 }
 
 /* Dark theme — OS preference (applies when user hasn't manually toggled) */
@@ -418,8 +424,8 @@ body:not(.cg-grid-bg-on) {
 }
 .frontend-switcher-chevron {
   display: inline-block;
-  width: 14px;
-  height: 14px;
+  width: var(--icon-size-sm);
+  height: var(--icon-size-sm);
   align-self: center;
   background-color: currentColor;
   mask-image: url("icons/chevron-down.svg");

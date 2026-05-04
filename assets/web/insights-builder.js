@@ -652,11 +652,9 @@
       }
     }
 
-    // Position
-    var rect = e.currentTarget.getBoundingClientRect();
-    popover.style.top = Math.min(rect.bottom + 4, window.innerHeight - 160) + "px";
-    popover.style.left = Math.min(rect.left, window.innerWidth - 170) + "px";
+    // Position — make popover measurable first so offsetWidth/Height read correctly.
     popover.classList.remove("hidden");
+    positionPopoverAnchored(popover, e.currentTarget.getBoundingClientRect());
   }
 
   function onPopoverBucketClick(e) {
