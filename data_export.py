@@ -1,12 +1,11 @@
 # -*- coding: utf-8 -*-
-"""Analysis-ready data export for Screenspace, Insights, and Transcripts.
+"""Analysis-ready data export for Screenspace and Transcripts.
 
 Reads the on-disk manifests and produces flat, one-row-per-atomic-unit
 records suitable for direct loading into pandas / spreadsheets / BI tools.
 
 Exposed builders:
     build_screenspace_events(manifest, *, include_excluded, participants, detectors)
-    build_insights_records(manifest)
     build_transcript_segments(manifest)
 
 Serialization:
@@ -47,23 +46,6 @@ SCREENSPACE_EVENT_COLUMNS: tuple[str, ...] = (
     "confidence",
     "excluded",
     "task_id",
-)
-
-_INSIGHTS_BASE_COLS = (
-    "id",
-    "title",
-    "severity",
-    "status",
-    "summary",
-    "createdAt",
-    "updatedAt",
-    "timelineContext",
-    "causes_narrative",
-    "behaviors_narrative",
-    "impacts_narrative",
-    "causes_artifact_ids",
-    "behaviors_artifact_ids",
-    "impacts_artifact_ids",
 )
 
 _TRANSCRIPT_SEGMENT_BASE_COLS = (
@@ -190,39 +172,6 @@ def build_screenspace_events(
     return records
 
 
-def build_insights_records(manifest: dict[str, Any]) -> list[dict[str, Any]]:
-    """Flatten Insights into one row per insight with narratives hoisted."""
-    raw = manifest.get("insights", []) or []
-    records: list[dict[str, Any]] = []
-    for ins in raw:
-        if not isinstance(ins, dict):
-            continue
-        causes = ins.get("causes") if isinstance(ins.get("causes"), dict) else {}
-        behaviors = (
-            ins.get("behaviors") if isinstance(ins.get("behaviors"), dict) else {}
-        )
-        impacts = ins.get("impacts") if isinstance(ins.get("impacts"), dict) else {}
-        records.append(
-            {
-                "id": ins.get("id", ""),
-                "title": ins.get("title", ""),
-                "severity": ins.get("severity", ""),
-                "status": ins.get("status", ""),
-                "summary": ins.get("summary", ""),
-                "createdAt": ins.get("createdAt", ""),
-                "updatedAt": ins.get("updatedAt", ""),
-                "timelineContext": ins.get("timelineContext", ""),
-                "causes_narrative": causes.get("narrative", ""),
-                "behaviors_narrative": behaviors.get("narrative", ""),
-                "impacts_narrative": impacts.get("narrative", ""),
-                "causes_artifact_ids": list(causes.get("artifacts", []) or []),
-                "behaviors_artifact_ids": list(behaviors.get("artifacts", []) or []),
-                "impacts_artifact_ids": list(impacts.get("artifacts", []) or []),
-            }
-        )
-    return records
-
-
 def build_transcript_segments(manifest: dict[str, Any]) -> list[dict[str, Any]]:
     """One row per transcript segment, with participant and mark info joined."""
     source = manifest.get("source_transcripts", {}) or {}
@@ -322,12 +271,6 @@ _SURFACES: tuple[tuple[str, _SurfaceBuilder, str, tuple[str, ...]], ...] = (
         build_screenspace_events,
         config.SCREENSPACE_MANIFEST_FILENAME,
         SCREENSPACE_EVENT_COLUMNS,
-    ),
-    (
-        "insights",
-        build_insights_records,
-        config.INSIGHTS_MANIFEST_FILENAME,
-        _INSIGHTS_BASE_COLS,
     ),
     (
         "transcripts",
@@ -430,7 +373,7 @@ def run_cli_export() -> int:
             [
                 "No manifest files were found in the output directory.",
                 f"Expected one or more of: {config.SCREENSPACE_MANIFEST_FILENAME}, "
-                f"{config.INSIGHTS_MANIFEST_FILENAME}, {config.TRANSCRIPTS_MANIFEST_FILENAME}",
+                f"{config.TRANSCRIPTS_MANIFEST_FILENAME}",
             ],
         )
         return 1
@@ -440,7 +383,6 @@ def run_cli_export() -> int:
 
 __all__ = [
     "build_screenspace_events",
-    "build_insights_records",
     "build_transcript_segments",
     "to_csv",
     "to_json",

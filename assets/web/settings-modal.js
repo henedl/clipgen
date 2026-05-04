@@ -31,8 +31,8 @@
 
   function _getApiRoot() {
     // Each page is served under a different prefix (/studio/, /transcripts/,
-    // /insights/, /screenspace/). Settings + models are registered at the
-    // combined-app root, so request them from an absolute path.
+    // /screenspace/). Settings + models are registered at the combined-app
+    // root, so request them from an absolute path.
     return "/api";
   }
 

@@ -13,8 +13,7 @@ Any value shared between Python and the frontend must flow through `utils.get_fr
 
 3. **Server routes** — each must embed `"config": utils.get_frontend_config()` in its JSON response:
    - `server.py`: `/api/sheet` endpoint
-   - `insights_server.py`: `/api/artifacts` endpoint
-   - `viewer.py`: `finalize_timeline_data()`, gallery finalize, insights viewer finalize
+   - `viewer.py`: `finalize_timeline_data()`, gallery finalize
 
 4. **Test assertions** (`tests/test_shared_constants.py`)
    - Every mirrored value must have an assertion that the JS default matches the Python value

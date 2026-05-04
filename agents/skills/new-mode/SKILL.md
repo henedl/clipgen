@@ -18,7 +18,7 @@ Missing mode-detection is the most common integration bug when adding new flags.
 
 4. **Web UI (if applicable)** (`server.py`)
    - Register the blueprint: `app.register_blueprint(...)`
-   - Add it to the mutual-exclusion check at startup (only one of `--studio`, `--screenspace`, `--insights`, `--transcripts` can be active)
+   - Add it to the mutual-exclusion check at startup (only one of `--studio`, `--screenspace`, `--transcripts` can be active)
 
 5. **Tests**
    - Add at least one smoke test in `tests/test_cli_modes.py` (or a new test file for larger modes)

@@ -22,9 +22,9 @@ var CLIPGEN_DEV_TOKEN_TWEAK = true;
 
 // ---- Canonical config (mirror of config.py via utils.get_frontend_config)
 //
-// Source of truth: every API response (server.py /api/sheet-data,
-// insights_server.py /api/artifacts) and every exported viewer payload
-// (viewer.py finalize_*) embeds a `config` field. Pages call
+// Source of truth: every API response (server.py /api/sheet-data) and every
+// exported viewer payload (viewer.py finalize_*) embeds a `config` field.
+// Pages call
 // clipgenApplyConfig(payload) to overlay the live values onto these defaults.
 // The hardcoded defaults below cover purely-offline contexts (re-opened
 // older exported viewers); tests/test_shared_constants.py asserts they
@@ -74,8 +74,8 @@ var el = function (tag, cls, text) {
 };
 
 // True when an animated artifact's filename should render via <video> rather
-// than <img>. Used by the gallery, viewer, and insights builder so they all
-// agree which extensions are looping video. Keep as the single source of truth.
+// than <img>. Used by the gallery and viewer so they agree which extensions
+// are looping video. Keep as the single source of truth.
 var isVideoLoop = function (filename) {
   return /\.webm$/i.test(filename || "");
 };
@@ -395,7 +395,7 @@ var severityClass = function (raw) {
 // Numeric rank (most-severe = lowest, e.g. Critical = -4) used by sorters
 // and Studio's severity filter. Returns null for empty or unrecognized input
 // — callers decide how to treat unknown (Studio filters them out; viewer
-// and insights sort them last).
+// sorts them last).
 var severityRank = function (raw) {
   if (!raw || !String(raw).trim()) return null;
   var k = String(raw).trim().toLowerCase();
@@ -506,17 +506,7 @@ var XREF_BADGES = {
   sheet:       { icon: "table-cells", color: "rgba(234, 179, 8, 0.85)" },
 };
 
-// ---- Insight helpers ----
-
-// Sum of artifacts across all three buckets of an insight record. Shared by
-// the insights builder and the exported insights viewer.
-var countInsightArtifacts = function (insight) {
-  return insight.causes.artifacts.length
-       + insight.behaviors.artifacts.length
-       + insight.impacts.artifacts.length;
-};
-
-// ---- Filter helpers (artifact grids in viewer + insights builder) ----
+// ---- Filter helpers (artifact grids in viewer) ----
 
 // Sorted unique non-empty values of `field` across `items`.
 // opts.trim: trim string values before deduping (default false).
@@ -648,7 +638,7 @@ var initThemeToggle = function (onToggle) {
   });
 };
 
-// ---- Frontend switcher (shared across Studio / Screenspace / Transcripts / Insights) ----
+// ---- Frontend switcher (shared across Studio / Screenspace / Transcripts) ----
 
 var initFrontendSwitcher = function () {
   var root = qs(".frontend-switcher");

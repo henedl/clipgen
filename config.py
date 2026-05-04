@@ -7,7 +7,6 @@ Sections
   Directories          Input/output path overrides
   Spreadsheet          Column headers, participant prefixes, severity maps, annotations
   Files & Durations    Clip limits, gallery, manifests, server port, workers
-  Sprite Sheets        Insights builder hover-to-scrub thumbnails
   Screenspace          Analysis thresholds, sampling, matching, performance
   Highlights Reel      Duration budget and scoring weights
   Browse Mode          Interactive table display settings
@@ -121,15 +120,14 @@ GALLERY_BUNDLE_ENABLED: bool = False  # embed images as base64 data URIs in gall
 CLIP_PARALLEL_WORKERS: int = 0  # Max concurrent ffmpeg processes for clip/screenshot/GIF generation; 0 = auto (min(4, cpu_count))
 MAX_FILESIZE_MB: int = 0  # Maximum output file size in MB (0 = disabled)
 MIN_SOURCE_VIDEO_SIZE_MB: int = 100  # Minimum file size (MB) to consider as a source video candidate during fuzzy matching
-MANIFEST_FILENAME: str = "clipgen_manifest.json"  # cumulative artifact manifest; consumed by Insights and --regenerate
+MANIFEST_FILENAME: str = (
+    "clipgen_manifest.json"  # cumulative artifact manifest; consumed by --regenerate
+)
 MANIFEST_ENABLED: bool = (
     False  # use --manifest CLI flag or set True to write manifest alongside artifacts
 )
 SERVER_PORT: int = (
-    8089  # port for the combined Studio/Insights/Screenspace Flask server
-)
-INSIGHTS_MANIFEST_FILENAME: str = (
-    "insights_manifest.json"  # insights data manifest; read/written by Insights
+    8089  # port for the combined Studio/Screenspace/Transcripts Flask server
 )
 STASHES_MANIFEST_FILENAME: str = "reel_stashes.json"
 ARTIFACT_STASHES_MANIFEST_FILENAME: str = "artifact_stashes.json"
@@ -138,10 +136,6 @@ STUDIO_CELL_EXPAND_HOVER: bool = True
 STUDIO_SHEET_CELL_COLOR_CODING: bool = True
 GOOGLE_API_MAX_RETRIES: int = 3  # Retries for transient Google API errors (5xx)
 
-# ── Sprite Sheets ────────────────────────────────────────────────────
-SPRITE_SHEET_FRAME_COUNT: int = 20
-SPRITE_SHEET_THUMB_WIDTH: int = 160
-SPRITE_SHEET_MIN_INTERVAL: int = 1
 STUDIO_THUMBNAIL_WIDTH: int = 200
 
 # ── Screenspace ──────────────────────────────────────────────────────

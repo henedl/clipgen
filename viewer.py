@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Timeline and gallery viewer generation, manifest persistence, and insights viewer export.
+"""Timeline and gallery viewer generation, manifest persistence.
 
 Timeline viewer (--viewer / interactive 'viewer'):
   Injects window.CLIPGEN_DATA into viewer.html, replacing <!-- CLIPGEN_DATA_HERE -->.
@@ -17,14 +17,9 @@ Gallery viewer (--gallery):
   Key functions: finalize_gallery_data(), generate_gallery_viewer().
   Gallery artifacts are NOT written to the manifest by default.
 
-Insights viewer (generate_insights_viewer()):
-  Produces a standalone insights_viewer.html. Shows only 'final' insights when any exist;
-  falls back to all insights. Only artifacts referenced by visible insights are included.
-  Key functions: finalize_insights_viewer_data(), generate_insights_viewer().
-
 Artifact manifest (save_manifest / load_manifest_*):
   Merges new artifacts/reels into clipgen_manifest.json, deduplicating by id (newer wins).
-  Consumed by Insights, --regenerate, and standalone --viewer.
+  Consumed by --regenerate and standalone --viewer.
 """
 
 import base64
@@ -370,57 +365,8 @@ def generate_gallery_viewer(
     )
 
 
-def finalize_insights_viewer_data(
-    insights_list: list[dict[str, Any]],
-    artifacts: list[dict[str, Any]],
-    *,
-    study: str = "",
-    timeline_viewer_file: str = "",
-) -> dict[str, Any]:
-    """Construct the window.CLIPGEN_DATA structure for the insights viewer."""
-    # Show only "final" insights if any exist, otherwise show all
-    final_insights = [i for i in insights_list if i.get("status") == "final"]
-    visible = final_insights if final_insights else list(insights_list)
-
-    # Collect all referenced artifact IDs
-    referenced_ids: set = set()
-    for ins in visible:
-        for bucket in ("causes", "behaviors", "impacts"):
-            referenced_ids.update(ins.get(bucket, {}).get("artifacts", []))
-
-    referenced_artifacts = [a for a in artifacts if a.get("id") in referenced_ids]
-
-    return {
-        "meta": {
-            "study": study,
-            "generatedAt": datetime.now(timezone.utc).isoformat(),
-            "version": utils.get_version(),
-            "timelineViewerFile": timeline_viewer_file,
-        },
-        "config": utils.get_frontend_config(),
-        "insights": visible,
-        "artifacts": referenced_artifacts,
-    }
-
-
-def generate_insights_viewer(
-    data: dict[str, Any],
-    *,
-    output_basename: str = "insights_viewer.html",
-) -> Path | None:
-    """Create an insights viewer HTML file with inlined JS/CSS."""
-    return _generate_viewer_html(
-        data,
-        template_name="insights-viewer.html",
-        js_name="insights-viewer.js",
-        css_name="insights-viewer.css",
-        output_basename=output_basename,
-        viewer_label="Insights viewer",
-    )
-
-
 # Module-level cache for the parsed manifest, keyed on the file's path and
-# mtime_ns. Studio/Insights/Transcripts all hit `load_manifest_artifacts()`
+# mtime_ns. Studio/Transcripts all hit `load_manifest_artifacts()`
 # repeatedly on every request; re-reading and re-parsing the JSON each time is
 # pure overhead. The cache is invalidated automatically whenever the file is
 # rewritten (save_manifest bumps mtime) so no explicit bust is required in the

@@ -299,7 +299,7 @@ Note: Non-interactive mode (using -b, -l, -r, -C, -c, -p, -k, -S, -M, -R, or -T)
     viewer_manifest.add_argument(
         "--export",
         action="store_true",
-        help="Export analysis-ready JSON+CSV from manifests in the output directory (Screenspace events, Insights, Transcripts). Skips manifests that aren't present.",
+        help="Export analysis-ready JSON+CSV from manifests in the output directory (Screenspace events, Transcripts). Skips manifests that aren't present.",
     )
     viewer_manifest.add_argument(
         "--timeline-viewer",
@@ -315,11 +315,6 @@ Note: Non-interactive mode (using -b, -l, -r, -C, -c, -p, -k, -S, -M, -R, or -T)
         "--studio",
         action="store_true",
         help="Launch the Studio web interface for interactive artifact generation and reel building",
-    )
-    viewer_manifest.add_argument(
-        "--insights",
-        action="store_true",
-        help="Launch Insights for authoring research findings from generated artifacts",
     )
     viewer_manifest.add_argument(
         "--screenspace",
@@ -2669,31 +2664,18 @@ _EXCLUSIVE_MODES: tuple[_ModeSpec, ...] = (
         blocks_modes=("timeline_viewer",),
     ),
     _ModeSpec(
-        key="insights",
-        truthy=lambda a: bool(getattr(a, "insights", False)),
-        error="--insights cannot be combined with mode, format, or --viewer/--regenerate/--studio/--screenspace flags.",
-        hint="Only -i/-o (directories) and -v (verbose) may be used alongside --insights.",
-        blocks_modes=(
-            "timeline_viewer",
-            "studio",
-            "screenspace",
-            "transcripts",
-            "export",
-        ),
-    ),
-    _ModeSpec(
         key="screenspace",
         truthy=lambda a: bool(getattr(a, "screenspace", False)),
-        error="--screenspace cannot be combined with mode, format, or --viewer/--regenerate/--studio/--insights flags.",
+        error="--screenspace cannot be combined with mode, format, or --viewer/--regenerate/--studio flags.",
         hint="Only -s (spreadsheet), -i/-o (directories), and -v (verbose) may be used alongside --screenspace.",
-        blocks_modes=("timeline_viewer", "studio", "insights", "transcripts", "export"),
+        blocks_modes=("timeline_viewer", "studio", "transcripts", "export"),
     ),
     _ModeSpec(
         key="transcripts",
         truthy=lambda a: bool(getattr(a, "transcripts", False)),
-        error="--transcripts cannot be combined with mode, format, or --viewer/--regenerate/--studio/--insights/--screenspace flags.",
+        error="--transcripts cannot be combined with mode, format, or --viewer/--regenerate/--studio/--screenspace flags.",
         hint="Only -s (spreadsheet), -i/-o (directories), and -v (verbose) may be used alongside --transcripts.",
-        blocks_modes=("timeline_viewer", "studio", "insights", "screenspace", "export"),
+        blocks_modes=("timeline_viewer", "studio", "screenspace", "export"),
     ),
     _ModeSpec(
         key="gallery",
@@ -2716,14 +2698,13 @@ _EXCLUSIVE_MODES: tuple[_ModeSpec, ...] = (
     _ModeSpec(
         key="pre_transcribe",
         truthy=lambda a: getattr(a, "pre_transcribe", None) is not None,
-        error="--pre-transcribe cannot be combined with mode, format, or --studio/--insights/--screenspace/--transcripts flags.",
+        error="--pre-transcribe cannot be combined with mode, format, or --studio/--screenspace/--transcripts flags.",
         hint="Only -s (spreadsheet), -i/-o (directories), and -v (verbose) may be used alongside --pre-transcribe.",
         # pre-transcribe additionally conflicts with --highlights.
         selector_attrs=_BASE_SELECTOR_ATTRS + ("highlights",),
         blocks_modes=(
             "timeline_viewer",
             "studio",
-            "insights",
             "screenspace",
             "transcripts",
             "gallery",
@@ -2739,7 +2720,6 @@ _EXCLUSIVE_MODES: tuple[_ModeSpec, ...] = (
         blocks_modes=(
             "timeline_viewer",
             "studio",
-            "insights",
             "screenspace",
             "transcripts",
             "gallery",
@@ -2755,7 +2735,6 @@ _EXCLUSIVE_MODES: tuple[_ModeSpec, ...] = (
         blocks_modes=(
             "timeline_viewer",
             "studio",
-            "insights",
             "screenspace",
             "transcripts",
             "gallery",
@@ -2777,7 +2756,6 @@ _EXCLUSIVE_MODES: tuple[_ModeSpec, ...] = (
         blocks_modes=(
             "timeline_viewer",
             "studio",
-            "insights",
             "screenspace",
             "transcripts",
             "gallery",
@@ -2799,7 +2777,6 @@ _EXCLUSIVE_MODES: tuple[_ModeSpec, ...] = (
         blocks_modes=(
             "timeline_viewer",
             "studio",
-            "insights",
             "screenspace",
             "transcripts",
             "gallery",
@@ -2821,7 +2798,6 @@ _EXCLUSIVE_MODES: tuple[_ModeSpec, ...] = (
         blocks_modes=(
             "timeline_viewer",
             "studio",
-            "insights",
             "screenspace",
             "transcripts",
             "gallery",
@@ -2843,7 +2819,6 @@ _EXCLUSIVE_MODES: tuple[_ModeSpec, ...] = (
         blocks_modes=(
             "timeline_viewer",
             "studio",
-            "insights",
             "screenspace",
             "transcripts",
             "gallery",
@@ -2865,7 +2840,6 @@ _EXCLUSIVE_MODES: tuple[_ModeSpec, ...] = (
         blocks_modes=(
             "timeline_viewer",
             "studio",
-            "insights",
             "screenspace",
             "transcripts",
             "gallery",
@@ -2891,7 +2865,6 @@ _EXCLUSIVE_MODES: tuple[_ModeSpec, ...] = (
         blocks_modes=(
             "timeline_viewer",
             "studio",
-            "insights",
             "screenspace",
             "transcripts",
             "gallery",
@@ -2918,7 +2891,6 @@ _EXCLUSIVE_MODES: tuple[_ModeSpec, ...] = (
         blocks_modes=(
             "timeline_viewer",
             "studio",
-            "insights",
             "screenspace",
             "transcripts",
             "gallery",
@@ -2946,7 +2918,6 @@ _EXCLUSIVE_MODES: tuple[_ModeSpec, ...] = (
         blocks_modes=(
             "timeline_viewer",
             "studio",
-            "insights",
             "screenspace",
             "transcripts",
             "gallery",
@@ -3051,13 +3022,6 @@ def _dispatch_standalone_mode(
         viewer_path = viewer.generate_timeline_viewer(data)
         if viewer_path:
             utils.info_print(f"Timeline viewer created from manifest: {viewer_path}")
-        return True
-
-    # Standalone insights builder
-    if getattr(args, "insights", False):
-        import server
-
-        server.start_combined_server(worksheet=None, default_page="insights")
         return True
 
     # Standalone analysis-data export

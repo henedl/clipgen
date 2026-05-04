@@ -111,55 +111,6 @@ def test_finalize_gallery_data_structure():
     assert data["artifacts"] == gallery_artifacts
 
 
-# ---- finalize_insights_viewer_data ----
-
-
-def _make_insight(insight_id, status="draft", referenced_artifact_ids=None):
-    return {
-        "id": insight_id,
-        "title": f"Insight {insight_id}",
-        "status": status,
-        "causes": {"narrative": "", "artifacts": referenced_artifact_ids or []},
-        "behaviors": {"narrative": "", "artifacts": []},
-        "impacts": {"narrative": "", "artifacts": []},
-    }
-
-
-def test_finalize_insights_viewer_filters_to_final():
-    ins_list = [
-        _make_insight("i1", status="final", referenced_artifact_ids=["a1"]),
-        _make_insight("i2", status="draft", referenced_artifact_ids=["a2"]),
-        _make_insight("i3", status="final", referenced_artifact_ids=["a3"]),
-    ]
-    all_artifacts = [_make_artifact("a1"), _make_artifact("a2"), _make_artifact("a3")]
-
-    data = viewer.finalize_insights_viewer_data(ins_list, all_artifacts, study="s")
-
-    assert len(data["insights"]) == 2
-    ids = {i["id"] for i in data["insights"]}
-    assert ids == {"i1", "i3"}
-
-    art_ids = {a["id"] for a in data["artifacts"]}
-    assert art_ids == {"a1", "a3"}
-
-
-def test_finalize_insights_viewer_shows_all_when_no_finals():
-    ins_list = [
-        _make_insight("i1", status="draft", referenced_artifact_ids=["a1"]),
-        _make_insight("i2", status="draft", referenced_artifact_ids=["a2"]),
-    ]
-    all_artifacts = [_make_artifact("a1"), _make_artifact("a2")]
-
-    data = viewer.finalize_insights_viewer_data(ins_list, all_artifacts, study="s")
-
-    assert len(data["insights"]) == 2
-    art_ids = {a["id"] for a in data["artifacts"]}
-    assert art_ids == {"a1", "a2"}
-
-
-# ---- HTML generation (gallery + insights viewer) ----
-
-
 # ---- finalize_gallery_data bundling ----
 
 
@@ -238,22 +189,6 @@ def test_generate_gallery_viewer_inlines_css_and_js(tmp_path, monkeypatch):
     html = out_path.read_text(encoding="utf-8")
     assert '<link rel="stylesheet" href="gallery.css">' not in html
     assert '<script src="gallery.js" defer></script>' not in html
-    assert "<style>" in html
-    assert "<script defer>" in html
-    assert "window.CLIPGEN_DATA" in html
-
-
-def test_generate_insights_viewer_inlines_css_and_js(tmp_path, monkeypatch):
-    monkeypatch.chdir(tmp_path)
-
-    data = {"meta": {}, "insights": [], "artifacts": []}
-    out_path = viewer.generate_insights_viewer(data, output_basename="insights.html")
-    assert out_path is not None
-    assert out_path.is_file()
-
-    html = out_path.read_text(encoding="utf-8")
-    assert '<link rel="stylesheet" href="insights-viewer.css">' not in html
-    assert '<script src="insights-viewer.js" defer></script>' not in html
     assert "<style>" in html
     assert "<script defer>" in html
     assert "window.CLIPGEN_DATA" in html

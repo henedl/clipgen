@@ -1,0 +1,24 @@
+/* Card scrubber overlays. Loaded by any page that uses card-scrubber.js.
+   The container element (the one passed to clipgenCardScrubber.attach) must
+   be position: relative and overflow: hidden for these to render correctly. */
+
+.waveform-scrim {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  width: 100%;
+  height: 50%;
+  background: linear-gradient(to top, rgba(0, 0, 0, 0.55), transparent);
+  pointer-events: none;
+  z-index: 1;
+}
+
+.waveform-canvas {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  width: 100%;
+  height: 28%;
+  pointer-events: none;
+  z-index: 2;
+}
