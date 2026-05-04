@@ -67,37 +67,6 @@ def screenspace_manifest():
 
 
 @pytest.fixture
-def insights_manifest():
-    return {
-        "meta": {"version": "0.0.0"},
-        "insights": [
-            {
-                "id": "ins_abc12345",
-                "title": "Players miss the save button",
-                "summary": "Three of five players failed to find Save.",
-                "severity": "High",
-                "status": "final",
-                "createdAt": "2026-04-01T10:00:00+00:00",
-                "updatedAt": "2026-04-02T10:00:00+00:00",
-                "timelineContext": "early-game tutorial",
-                "causes": {
-                    "narrative": "Save icon is below the fold.",
-                    "artifacts": ["a1", "a2"],
-                },
-                "behaviors": {
-                    "narrative": "Users scroll up looking for it.",
-                    "artifacts": [],
-                },
-                "impacts": {
-                    "narrative": "Lost progress on quit.",
-                    "artifacts": ["a3"],
-                },
-            }
-        ],
-    }
-
-
-@pytest.fixture
 def transcripts_manifest():
     return {
         "source_transcripts": {
@@ -240,29 +209,6 @@ def test_screenspace_events_handles_nonfinite_floats():
     assert rows[0]["magnitude"] is None
 
 
-# ---- Insights builder ---------------------------------------------------
-
-
-def test_insights_builder_flattens_narratives(insights_manifest):
-    rows = data_export.build_insights_records(insights_manifest)
-    assert len(rows) == 1
-    r = rows[0]
-    assert r["title"] == "Players miss the save button"
-    assert r["causes_narrative"] == "Save icon is below the fold."
-    assert r["behaviors_narrative"] == "Users scroll up looking for it."
-    assert r["impacts_narrative"] == "Lost progress on quit."
-    assert r["causes_artifact_ids"] == ["a1", "a2"]
-    assert r["behaviors_artifact_ids"] == []
-    assert r["impacts_artifact_ids"] == ["a3"]
-
-
-def test_insights_builder_handles_missing_subsections():
-    manifest = {"insights": [{"id": "ins_x", "title": "T"}]}
-    rows = data_export.build_insights_records(manifest)
-    assert rows[0]["causes_narrative"] == ""
-    assert rows[0]["behaviors_artifact_ids"] == []
-
-
 # ---- Transcript segments builder ----------------------------------------
 
 
@@ -348,20 +294,19 @@ _EMPTY_SS_MANIFEST = {"regions": {}, "tasks": [], "events": [], "stashes": []}
     "manifest_specs,expected_count,expected_name_substrs",
     [
         (
-            ["screenspace", "insights", "transcripts"],
-            6,
-            {"screenspace_events", "insights", "transcripts"},
+            ["screenspace", "transcripts"],
+            4,
+            {"screenspace_events", "transcripts"},
         ),
         (["screenspace"], 2, {"screenspace_events"}),
         ([], 0, set()),
         (["screenspace_empty"], 0, set()),
     ],
-    ids=["all_three", "skips_missing", "no_manifests", "skips_empty"],
+    ids=["all_surfaces", "skips_missing", "no_manifests", "skips_empty"],
 )
 def test_bundle_writer(
     tmp_path,
     screenspace_manifest,
-    insights_manifest,
     transcripts_manifest,
     manifest_specs,
     expected_count,
@@ -370,7 +315,6 @@ def test_bundle_writer(
     fixture_map = {
         "screenspace": (config.SCREENSPACE_MANIFEST_FILENAME, screenspace_manifest),
         "screenspace_empty": (config.SCREENSPACE_MANIFEST_FILENAME, _EMPTY_SS_MANIFEST),
-        "insights": (config.INSIGHTS_MANIFEST_FILENAME, insights_manifest),
         "transcripts": (config.TRANSCRIPTS_MANIFEST_FILENAME, transcripts_manifest),
     }
     for spec in manifest_specs:

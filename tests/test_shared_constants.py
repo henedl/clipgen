@@ -137,20 +137,11 @@ def test_studio_api_payload_includes_config():
     )
 
 
-def test_insights_api_payload_includes_config():
-    src = (Path(__file__).resolve().parent.parent / "insights_server.py").read_text(
-        "utf-8"
-    )
-    assert '"config": utils.get_frontend_config()' in src, (
-        "insights_server.py /api/artifacts response must embed `config`"
-    )
-
-
 def test_exported_viewer_payloads_include_config():
-    """finalize_timeline_data / gallery / insights viewer all embed `config`."""
+    """finalize_timeline_data / gallery viewer embed `config`."""
     src = (Path(__file__).resolve().parent.parent / "viewer.py").read_text("utf-8")
     occurrences = src.count('"config": utils.get_frontend_config()')
-    assert occurrences >= 3, (
-        f"Expected at least 3 occurrences of config payload in viewer.py "
-        f"(timeline/gallery/insights viewer), found {occurrences}"
+    assert occurrences >= 2, (
+        f"Expected at least 2 occurrences of config payload in viewer.py "
+        f"(timeline/gallery), found {occurrences}"
     )

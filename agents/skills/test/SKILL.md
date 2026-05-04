@@ -25,6 +25,6 @@ CLI argument tests use a local `_args(**overrides)` helper that builds a full ar
 
 ## Test coverage areas
 
-CLI args, CLI modes, clip pipeline, file/artifact handling, Google/Excel adapters, insights, manifest, selectors, spreadsheet generation, studio API, titlecards, transcripts, timestamp utilities, video commands, viewer data, viewer inlining, Screenspace, shared constants.
+CLI args, CLI modes, clip pipeline, file/artifact handling, Google/Excel adapters, manifest, selectors, spreadsheet generation, studio API, titlecards, transcripts, timestamp utilities, video commands, viewer data, viewer inlining, Screenspace, shared constants.
 
 Every new CLI mode, flag, or selector needs at least one smoke test.

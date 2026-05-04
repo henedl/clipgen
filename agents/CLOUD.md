@@ -19,12 +19,12 @@ clipgen is a self-contained Python CLI tool with no databases or Docker services
 | Tests | `uv run --no-sync pytest -c tests/pytest.ini` |
 | Run app (CLI help) | `uv run clipgen.py --help` |
 | Run Screenspace UI | `uv run clipgen.py --screenspace -i DIR -o DIR` (no spreadsheet needed) |
-| Run Insights UI | `uv run clipgen.py --insights -i DIR -o DIR` (reads from manifest) |
+| Run Transcripts UI | `uv run clipgen.py --transcripts -i DIR -o DIR` (no spreadsheet needed) |
 | Run Studio UI | `uv run clipgen.py --studio` (requires a spreadsheet) |
 
 `--no-sync` on the tests command is a cloud-specific optimization: it relies on the prior `uv pip install ".[dev]" --torch-backend cpu` step having already installed pytest and CPU torch, and skips the lockfile resolution that would otherwise re-pull the (much larger) GPU torch packages. Locally — where you have not done the cpu-only install — use AGENTS.md's `uv run --extra dev pytest ...` instead.
 
-All web UIs serve on `http://127.0.0.1:8089`. The Flask server starts automatically when launching `--studio`, `--screenspace`, or `--insights`.
+All web UIs serve on `http://127.0.0.1:8089`. The Flask server starts automatically when launching `--studio`, `--screenspace`, or `--transcripts`.
 
 ## Gotchas
 

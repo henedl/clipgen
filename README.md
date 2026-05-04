@@ -1,6 +1,6 @@
 # clipgen
 
-clipgen is a program for quickly generating video clips, screenshots, and GIFs based on your research notes and recordings. It includes web-based interfaces for interactive clip generation (Studio), structured UX findings (Insights), extracting and modifying transcripts (Transcripts), and video frame analysis (Screenspace).
+clipgen is a program for quickly generating video clips, screenshots, and GIFs based on your research notes and recordings. It includes web-based interfaces for interactive clip generation (Studio), extracting and modifying transcripts (Transcripts), and video frame analysis (Screenspace).
 
 The target audience for the program is user experience researchers and UX professionals who prefer to manage videos and analysis locally. The author intends specifically to support games user researchers conducting playtests.
 

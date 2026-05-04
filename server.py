@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
-"""Combined Flask server for clipgen Studio, Insights, and Screenspace.
+"""Combined Flask server for clipgen Studio, Screenspace, and Transcripts.
 
 Entry point: start_combined_server(worksheet, port, default_page) registers
-Studio, Insights, and Screenspace blueprints on one app at config.SERVER_PORT (8089).
+Studio, Screenspace, and Transcripts blueprints on one app at config.SERVER_PORT (8089).
 Module-level state: _worksheet, _sheet_context, _generated_artifacts, _generated_reels
 (initialized by _init_studio_state()).
 
@@ -27,7 +27,7 @@ Studio API endpoints (all under /studio/):
   GET  /api/sheet/baseline      – per-participant baseline timestamps for convergence
   GET  /api/settings           – read current config settings
   PUT  /api/settings           – update config settings
-  GET  /api/status             – reports which interfaces are active (studio/insights/screenspace)
+  GET  /api/status             – reports which interfaces are active (studio/screenspace/transcripts)
 """
 
 import concurrent.futures
@@ -1477,22 +1477,16 @@ def start_combined_server(
     port: int | None = None,
     default_page: str = "studio",
 ) -> None:
-    """Start a combined Studio + Insights + Screenspace server on one port.
+    """Start a combined Studio + Screenspace + Transcripts server on one port.
 
-    When worksheet is provided, both Studio and Insights are available.
-    When worksheet is None, only Insights is registered.
-    Screenspace is always registered (auto-discovers videos when no
-    spreadsheet is provided).
+    When worksheet is provided, Studio is available alongside Screenspace and
+    Transcripts. Screenspace and Transcripts are always registered (they
+    auto-discover videos when no spreadsheet is provided).
     """
-    import insights_server
     import screenspace_server
     import transcripts_server
 
     combined = Flask(__name__, static_folder=None)
-
-    # Always register Insights (only needs manifest files on disk)
-    insights_server._init_insights_state()
-    combined.register_blueprint(insights_server.insights_bp, url_prefix="/insights")
 
     # Register Studio only if a worksheet is available
     has_studio = worksheet is not None
@@ -1520,7 +1514,7 @@ def start_combined_server(
 
     @combined.after_request
     def _set_cache_headers(response):
-        # Skip if a route already set Cache-Control (e.g. thumbnails, sprites)
+        # Skip if a route already set Cache-Control (e.g. thumbnails)
         if "Cache-Control" in response.headers:
             return response
         ct = response.content_type or ""
@@ -1541,7 +1535,6 @@ def start_combined_server(
         return jsonify(
             {
                 "studio": has_studio,
-                "insights": True,
                 "screenspace": True,
                 "transcripts": True,
             }

@@ -18,7 +18,6 @@
  * TASK:       --color-task-multitool | --color-task-color | --color-task-change | --color-task-similarity
  *             --color-task-text | --color-task-numbers | --color-task-timelapse | --color-task-template
  *             --color-task-flow | --color-task-scene
- * INSIGHTS:   --color-causes | --color-behaviors | --color-impacts (+ -bg variants)
  * REGIONS:    --region-color-1..8 — palette cycled by Screenspace region index
  *
  * LAYOUT:     --layout-max-width | --layout-padding-x
@@ -107,14 +106,6 @@
   --color-task-flow: #6366f1;
   --color-task-scene: #14b8a6;
   --color-task-inactivity: #78716c;
-
-  /* Insight category colors */
-  --color-causes: #ea580c;
-  --color-behaviors: #2563eb;
-  --color-impacts: #dc2626;
-  --color-causes-bg: rgba(234, 88, 12, 0.06);
-  --color-behaviors-bg: rgba(37, 99, 235, 0.06);
-  --color-impacts-bg: rgba(220, 38, 38, 0.06);
 
   /* Transcript intake category colors */
   --cat-pain-point: var(--sev-high);
@@ -220,12 +211,6 @@
     --color-task-flow: #818cf8;
     --color-task-scene: #2dd4bf;
     --color-task-inactivity: #a8a29e;
-    --color-causes: #fb923c;
-    --color-behaviors: #60a5fa;
-    --color-impacts: #f87171;
-    --color-causes-bg: rgba(251, 146, 60, 0.1);
-    --color-behaviors-bg: rgba(96, 165, 250, 0.1);
-    --color-impacts-bg: rgba(248, 113, 113, 0.1);
     --cat-quote: #60a5fa;
     --cat-insight: #fb923c;
     --cat-task: #a78bfa;
@@ -280,12 +265,6 @@ html[data-theme="dark"] {
   --color-task-template: #fb7185;
   --color-task-flow: #818cf8;
   --color-task-scene: #2dd4bf;
-  --color-causes: #fb923c;
-  --color-behaviors: #60a5fa;
-  --color-impacts: #f87171;
-  --color-causes-bg: rgba(251, 146, 60, 0.1);
-  --color-behaviors-bg: rgba(96, 165, 250, 0.1);
-  --color-impacts-bg: rgba(248, 113, 113, 0.1);
   --cat-quote: #60a5fa;
   --cat-insight: #fb923c;
   --cat-task: #a78bfa;
@@ -399,7 +378,7 @@ body:not(.cg-grid-bg-on) {
 .cg-tooltip--centered { transform: translateX(-50%); }
 .cg-tooltip--multiline { white-space: pre-line; }
 
-/* Primary CTA button — shared across Studio / Screenspace / Transcripts / Insights.
+/* Primary CTA button — shared across Studio / Screenspace / Transcripts.
  * Page CSS still defines the base .btn (size, padding, border-radius) so visual
  * weight stays page-specific; only the primary variant's color treatment is shared. */
 .btn.btn-primary {
@@ -418,7 +397,7 @@ body:not(.cg-grid-bg-on) {
   color: #fff;
 }
 
-/* Frontend switcher — unified dropdown across Studio / Screenspace / Transcripts / Insights */
+/* Frontend switcher — unified dropdown across Studio / Screenspace / Transcripts */
 .frontend-switcher {
   position: relative;
   display: inline-flex;
