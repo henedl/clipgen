@@ -95,6 +95,63 @@ var createLoopVideo = function (src, alt) {
   return v;
 };
 
+// ---- Brand mark hydration ----
+//
+// Fetches assets/logos/favicon.svg and injects it as inline <svg> into every
+// .brand-mark element so the three F-paths can be animated via CSS
+// stroke-dashoffset (see .brand-mark.is-animated rules in tokens.css).
+//
+// The draw-on cascade plays only the first time a browser session sees the
+// mark (sessionStorage key BRAND_MARK_PLAYED_KEY). Navigating between Studio,
+// Screenspace, and Transcripts within the same tab re-injects the SVG but
+// skips the animation — closing the tab/browser clears the flag and the
+// next visit replays.
+//
+// On fetch failure (e.g. file:// open with no server, blocked by CSP) the
+// existing mask-image fallback in tokens.css renders the static mark — no
+// flicker, no broken state.
+//
+// Loading from the file rather than inlining means future drop-in replacement
+// of assets/logos/favicon.svg propagates without code edits.
+var BRAND_MARK_PLAYED_KEY = "clipgen.brand-mark.played";
+
+var clipgenInitBrandMark = function () {
+  var marks = document.querySelectorAll(".brand-mark");
+  if (!marks.length) return;
+  var played = false;
+  try { played = window.sessionStorage.getItem(BRAND_MARK_PLAYED_KEY) === "1"; } catch (_) {}
+  fetch("logos/favicon.svg")
+    .then(function (r) { return r.ok ? r.text() : null; })
+    .then(function (text) {
+      if (!text) return;
+      var doc = new DOMParser().parseFromString(text, "image/svg+xml");
+      var src = doc.documentElement;
+      if (!src || src.tagName.toLowerCase() !== "svg") return;
+      var paths = src.querySelectorAll("path");
+      if (paths.length !== 3) return;
+      paths[0].setAttribute("class", "brand-mark__line brand-mark__line--1");
+      paths[1].setAttribute("class", "brand-mark__line brand-mark__line--2");
+      paths[2].setAttribute("class", "brand-mark__line brand-mark__line--3");
+      src.setAttribute("aria-hidden", "true");
+      src.setAttribute("focusable", "false");
+      Array.prototype.forEach.call(marks, function (mark) {
+        mark.replaceChildren(src.cloneNode(true));
+        mark.classList.add("is-hydrated");
+        if (!played) mark.classList.add("is-animated");
+      });
+      if (!played) {
+        try { window.sessionStorage.setItem(BRAND_MARK_PLAYED_KEY, "1"); } catch (_) {}
+      }
+    })
+    .catch(function () { /* fall back to mask-image in tokens.css */ });
+};
+
+if (document.readyState === "loading") {
+  document.addEventListener("DOMContentLoaded", clipgenInitBrandMark);
+} else {
+  clipgenInitBrandMark();
+}
+
 // ---- Hover tooltips (dark pill, pairs with .cg-tooltip in tokens.css) ----
 
 var createTooltip = function (opts) {
