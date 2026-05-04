@@ -49,6 +49,14 @@
 
   var REGION_COLOR_COUNT = 8;
 
+  // Re-reads each call so dev-token-tweak widget overrides take effect live.
+  function bottomPanelHeightFromToken() {
+    var v = getComputedStyle(document.documentElement)
+      .getPropertyValue("--bottom-panel-height")
+      .trim();
+    return parseInt(v, 10) || 400;
+  }
+
   var state = {
     participants: [],
     selectedParticipant: null,
@@ -78,8 +86,8 @@
     eventSource: null,
     queuePaused: false,
     timelineDragging: false,
-    panelHeight: 340,
-    panelHeightBeforeCollapse: 340,
+    panelHeight: bottomPanelHeightFromToken(),
+    panelHeightBeforeCollapse: bottomPanelHeightFromToken(),
     bottomCollapsed: false,
     previewMaxWidth: 100,
     taskFilter: null,
@@ -6375,7 +6383,7 @@
       // --- Restore ---
       state.bottomCollapsed = false;
       var maxH = Math.round(window.innerHeight * 0.6);
-      var targetH = Math.min(state.panelHeightBeforeCollapse || 340, maxH);
+      var targetH = Math.min(state.panelHeightBeforeCollapse || bottomPanelHeightFromToken(), maxH);
 
       document.body.classList.add("bottom-animating");
       document.body.classList.remove("bottom-collapsed");

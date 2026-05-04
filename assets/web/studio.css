@@ -60,7 +60,7 @@ body {
 #studioHeader {
   flex-shrink: 0;
   padding: var(--space-5) var(--space-5) var(--space-3);
-  max-width: 1120px;
+  max-width: var(--layout-max-width);
   width: 100%;
   margin: var(--space-5) auto 0;
   background: var(--color-panel-bg);
@@ -236,7 +236,7 @@ body {
   flex: 0 1 auto;
   display: flex;
   flex-direction: column;
-  max-width: 1120px;
+  max-width: var(--layout-max-width);
   width: 100%;
   margin: 0 auto;
   background: var(--color-panel-bg);
@@ -548,7 +548,7 @@ body {
 /* Panel divider (resizable handle between sheet preview and bottom panel) */
 
 #panelDivider {
-  max-width: 1120px;
+  max-width: var(--layout-max-width);
   width: 100%;
   margin: 0 auto;
   height: 12px;
@@ -870,7 +870,7 @@ col.col-participant-col {
 /* Drop areas */
 
 #dropAreas {
-  max-width: 1120px;
+  max-width: var(--layout-max-width);
   margin: 0 auto;
   background: var(--color-panel-bg);
   border: 1px solid var(--color-panel-border);
@@ -952,7 +952,7 @@ col.col-participant-col {
 
 .queue-card {
   flex-shrink: 0;
-  width: 140px;
+  width: var(--card-width-queue);
   border: 1px solid var(--color-border);
   border-radius: calc(var(--radius) - 2px);
   background: var(--color-surface);
@@ -1064,7 +1064,7 @@ col.col-participant-col {
 /* Reel timeline */
 
 #reelArea {
-  max-width: 1120px;
+  max-width: var(--layout-max-width);
   margin: 0 auto var(--space-5);
   background: var(--color-panel-bg);
   border: 1px solid var(--color-panel-border);
@@ -1137,7 +1137,7 @@ html[data-theme="dark"] .queue-card-error .queue-card-thumb {
 /* Stashed reels */
 
 #stashedReelsArea {
-  max-width: 1120px;
+  max-width: var(--layout-max-width);
   margin: 0 auto var(--space-5);
   background: var(--color-panel-bg);
   border: 1px solid var(--color-panel-border);
@@ -1178,7 +1178,7 @@ html[data-theme="dark"] .queue-card-error .queue-card-thumb {
 
 .stash-card {
   flex-shrink: 0;
-  width: 160px;
+  width: var(--card-width-stash);
   border: 1px solid var(--color-border);
   border-radius: calc(var(--radius) - 2px);
   background: var(--color-surface);
@@ -1273,7 +1273,7 @@ html[data-theme="dark"] .queue-card-error .queue-card-thumb {
 /* Stashed artifacts */
 
 #stashedArtifactsArea {
-  max-width: 1120px;
+  max-width: var(--layout-max-width);
   margin: 0 auto;
   background: var(--color-panel-bg);
   border: 1px solid var(--color-panel-border);

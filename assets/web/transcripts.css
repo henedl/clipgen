@@ -36,7 +36,7 @@ body {
 #trHeader {
   flex-shrink: 0;
   padding: var(--space-5) var(--space-5) var(--space-3);
-  max-width: 1120px;
+  max-width: var(--layout-max-width);
   width: 100%;
   margin: var(--space-5) auto 0;
   background: var(--color-panel-bg);
@@ -347,7 +347,7 @@ body {
 /* Main content */
 
 #trMain {
-  max-width: 1120px;
+  max-width: var(--layout-max-width);
   width: 100%;
   margin: 0 auto;
   background: var(--color-panel-bg);
