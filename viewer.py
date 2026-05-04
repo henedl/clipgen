@@ -30,6 +30,7 @@ Artifact manifest (save_manifest / load_manifest_*):
 import base64
 import json
 import math
+import re
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
@@ -243,6 +244,20 @@ def _generate_viewer_html(
     # Remove grid-bg.js script tag (content already prepended to main JS)
     grid_bg_tag = '<script src="grid-bg.js" defer></script>\n  '
     template_html = template_html.replace(grid_bg_tag, "")
+
+    # Strip dev-only tags (e.g. dev-token-tweak.js) so they never ship in exports.
+    template_html = re.sub(
+        r"<script\b[^>]*\bdata-dev-only\b[^>]*>\s*</script>\s*",
+        "",
+        template_html,
+        flags=re.IGNORECASE,
+    )
+    template_html = re.sub(
+        r"<link\b[^>]*\bdata-dev-only\b[^>]*/?>\s*",
+        "",
+        template_html,
+        flags=re.IGNORECASE,
+    )
 
     # Inline JS
     js_script_tag = f'<script src="{js_name}" defer></script>'
