@@ -112,6 +112,7 @@
   var state = {
     overrides: loadOverrides(),
     tokens: [],
+    referenced: {},
     panel: null,
     collapsed: loadCollapsed(),
   };
@@ -160,6 +161,38 @@
       }
     }
     return Object.keys(seen).sort();
+  }
+
+  // Walk every rule (including nested @media/@supports) and collect every
+  // var(--token-name) reference. Used to flag tokens with no consumers in
+  // the page CSS — those are the redesign-seeded tokens whose Pass-N
+  // migration hasn't landed yet, so tweaking them does nothing visible.
+  function findReferencedTokens() {
+    var referenced = {};
+    var sheets = document.styleSheets;
+    for (var s = 0; s < sheets.length; s++) {
+      var rules;
+      try { rules = sheets[s].cssRules; } catch (_) { continue; }
+      if (!rules) continue;
+      scanRules(rules, referenced);
+    }
+    return referenced;
+  }
+
+  function scanRules(rules, referenced) {
+    for (var r = 0; r < rules.length; r++) {
+      var rule = rules[r];
+      if (rule.cssRules) scanRules(rule.cssRules, referenced);
+      if (!rule.style) continue;
+      for (var p = 0; p < rule.style.length; p++) {
+        var prop = rule.style[p];
+        var val = rule.style.getPropertyValue(prop);
+        if (!val || val.indexOf("var(") === -1) continue;
+        var re = /var\(\s*(--[a-zA-Z0-9_-]+)/g;
+        var m;
+        while ((m = re.exec(val)) !== null) referenced[m[1]] = true;
+      }
+    }
   }
 
   function getDefaultValue(name) {
@@ -250,6 +283,8 @@
       "#cgTokenTweak .cg-tt-row{display:grid;grid-template-columns:1fr auto auto;align-items:center;gap:6px;",
       "padding:3px 8px;}",
       "#cgTokenTweak .cg-tt-row.cg-tt-row-overridden{background:var(--color-accent-hover,rgba(29,79,114,0.06));}",
+      "#cgTokenTweak .cg-tt-row-unused{opacity:0.42;}",
+      "#cgTokenTweak .cg-tt-row-unused .cg-tt-name::after{content:' (unused)';font-style:italic;opacity:0.7;font-size:9px;}",
       "#cgTokenTweak .cg-tt-name{font:11px/1.3 var(--font-mono,monospace);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;",
       "min-width:0;}",
       "#cgTokenTweak .cg-tt-control{display:flex;align-items:center;gap:4px;}",
@@ -429,11 +464,15 @@
     row.className = "cg-tt-row";
     row.setAttribute("data-token", name);
     if (state.overrides[name] != null) row.classList.add("cg-tt-row-overridden");
+    var unused = !state.referenced[name];
+    if (unused) row.classList.add("cg-tt-row-unused");
 
     var label = document.createElement("div");
     label.className = "cg-tt-name";
     label.textContent = name;
-    label.title = name;
+    label.title = unused
+      ? name + "\n\nNo consumers in current page CSS — tweaking this is a no-op until a Pass-N migration wires it up."
+      : name;
     row.appendChild(label);
 
     var control = buildControl(name);
@@ -665,6 +704,9 @@
     if (!document.body) return;
     if (document.getElementById("cgTokenTweak")) return;
     state.tokens = discoverTokens();
+    // Scan reference usage *before* injecting widget styles, so the widget's
+    // own var() references don't count as page-CSS consumers.
+    state.referenced = findReferencedTokens();
     injectStyles();
     state.panel = buildPanel();
     document.body.appendChild(state.panel);
