@@ -323,16 +323,21 @@ body:not(.cg-grid-bg-on) {
   -webkit-mask-repeat: no-repeat;
 }
 
-/* Brand mark — three nested L-shapes. Inline data URL so it renders both in
-   Flask-served pages and in exported self-contained viewers. Color follows
-   currentColor; size follows the parent's font-size via 1em. */
+/* Brand mark — three nested L-shapes.
+   Default: mask-image fallback so the mark always renders even without JS or
+   when opened offline (e.g. self-contained timeline viewer export). The data
+   URL must stay in sync with assets/logos/favicon.svg path data + stroke-width.
+   Hydrated state: clipgenInitBrandMark in utils.js fetches favicon.svg, injects
+   inline <svg>, and adds .is-animated. The three <path>s then draw on with a
+   staggered cascade matching assets/logos/clipgen-mark.jsx. */
 .brand-mark {
-  --brand-mark-svg: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100' fill='none' stroke='%23000' stroke-width='11' stroke-linecap='square' stroke-linejoin='miter'><path d='M 18 18 L 82 18 L 82 82'/><path d='M 18 40 L 60 40 L 60 82'/><path d='M 18 62 L 38 62 L 38 82'/></svg>");
+  --brand-mark-svg: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100' fill='none' stroke='%23000' stroke-width='13' stroke-linecap='square' stroke-linejoin='miter'><path d='M 18 18 L 82 18 L 82 82'/><path d='M 18 40 L 60 40 L 60 82'/><path d='M 18 62 L 38 62 L 38 82'/></svg>");
   display: inline-block;
   width: 1em;
   height: 1em;
   vertical-align: -0.125em;
   margin-right: 0.35em;
+  flex-shrink: 0;
   background-color: currentColor;
   mask-image: var(--brand-mark-svg);
   -webkit-mask-image: var(--brand-mark-svg);
@@ -342,6 +347,79 @@ body:not(.cg-grid-bg-on) {
   -webkit-mask-repeat: no-repeat;
   mask-position: center;
   -webkit-mask-position: center;
+}
+
+/* Hydrated state — JS injected an inline <svg> child, so drop the mask paint
+   and let the live SVG render. Applies on every page load once the fetch
+   succeeds, regardless of whether the cascade animation runs. */
+.brand-mark.is-hydrated {
+  background-color: transparent;
+  mask-image: none;
+  -webkit-mask-image: none;
+  color: currentColor;
+}
+/* Lock down every SVG-rendering property on the injected mark. The brand mark
+   is decorative chrome that must look identical across Studio, Screenspace,
+   and Transcripts; pinning these on the <path> elements (rather than relying
+   on inheritance from the <svg> root attribute) prevents any page-level CSS
+   from accidentally overriding stroke / fill / stroke-width and shifting the
+   visual weight. !important is intentional — these rules must beat any rule
+   in studio.css, screenspace.css, or transcripts.css that targets `svg` or
+   `path` generically. */
+.brand-mark.is-hydrated > svg {
+  display: block !important;
+  width: 100% !important;
+  height: 100% !important;
+  overflow: visible !important;
+  fill: none !important;
+  stroke: currentColor !important;
+  stroke-width: 13 !important;
+  stroke-linecap: square !important;
+  stroke-linejoin: miter !important;
+  shape-rendering: geometricPrecision;
+}
+
+/* Path lengths in viewBox units (Manhattan):
+   line 1 = 64+64 = 128, line 2 = 42+42 = 84, line 3 = 20+20 = 40.
+   Apply stroke-dasharray on every hydrated path (not only animated) so the
+   first-hydration animation cascade and subsequent same-session paint go
+   through the identical dashed-stroke render pipeline. */
+.brand-mark.is-hydrated .brand-mark__line {
+  fill: none !important;
+  stroke: currentColor !important;
+  stroke-width: 13 !important;
+  stroke-linecap: square !important;
+  stroke-linejoin: miter !important;
+  stroke-dasharray: var(--brand-mark-line-len);
+  stroke-dashoffset: 0;
+}
+.brand-mark.is-hydrated .brand-mark__line--1 { --brand-mark-line-len: 128; }
+.brand-mark.is-hydrated .brand-mark__line--2 { --brand-mark-line-len: 84;  }
+.brand-mark.is-hydrated .brand-mark__line--3 { --brand-mark-line-len: 40;  }
+
+/* Animated cascade — only added on the first hydration in a browser session
+   (gated by sessionStorage in clipgenInitBrandMark). Subsequent navigations
+   between Studio / Screenspace / Transcripts within the same tab render the
+   mark fully drawn without replaying. Timing matches StackedFAnimated in
+   assets/logos/clipgen-mark.jsx — line 1 starts at 50ms, line 2 at 500ms,
+   line 3 at 900ms; each draws over 450ms so the cascade ends at 1350ms. */
+.brand-mark.is-animated .brand-mark__line {
+  stroke-dashoffset: var(--brand-mark-line-len);
+  animation: brand-mark-draw 450ms cubic-bezier(0.65, 0, 0.35, 1) forwards;
+}
+.brand-mark.is-animated .brand-mark__line--1 { animation-delay: 50ms; }
+.brand-mark.is-animated .brand-mark__line--2 { animation-delay: 500ms; }
+.brand-mark.is-animated .brand-mark__line--3 { animation-delay: 900ms; }
+
+@keyframes brand-mark-draw {
+  to { stroke-dashoffset: 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .brand-mark.is-animated .brand-mark__line {
+    animation: none;
+    stroke-dashoffset: 0;
+  }
 }
 
 /* ---- Components ---- */
