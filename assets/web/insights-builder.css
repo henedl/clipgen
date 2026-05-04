@@ -23,7 +23,7 @@ body {
 /* ---- Header ---- */
 
 #builderHeader {
-  padding: var(--space-5) var(--space-5) var(--space-2);
+  padding: var(--space-5) var(--layout-padding-x) var(--space-2);
   max-width: var(--layout-max-width);
   margin: var(--space-5) auto 0;
   background: var(--color-panel-bg);
@@ -151,8 +151,8 @@ body {
 
 .theme-toggle-icon {
   position: absolute;
-  width: 16px;
-  height: 16px;
+  width: var(--icon-size-md);
+  height: var(--icon-size-md);
   border-radius: var(--radius-full);
   transition: opacity var(--duration-normal) ease, transform var(--duration-normal) ease;
 }
@@ -1018,7 +1018,7 @@ body {
 
 /* ---- Responsive ---- */
 
-@media (max-width: 768px) {
+@media (max-width: 768px) /* --bp-tablet */ {
   #builderHeader,
   #builderLayout {
     margin-left: var(--space-2);

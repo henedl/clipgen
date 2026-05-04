@@ -309,6 +309,23 @@ var positionTooltipAnchored = function (tooltipEl, anchorRect) {
   tooltipEl.style.top = top + "px";
 };
 
+// Position a popover element bottom-left aligned with an anchor rect, flipping
+// above if there's no room below, and clamping to the viewport with 4px
+// margins. Reads the popover's actual offsetWidth/Height — the popover must
+// be in the DOM and visible (not display:none) before calling.
+var positionPopoverAnchored = function (popoverEl, anchorRect) {
+  var w = popoverEl.offsetWidth;
+  var h = popoverEl.offsetHeight;
+  var top = anchorRect.bottom + 4;
+  if (top + h > window.innerHeight - 4) top = anchorRect.top - h - 4;
+  if (top < 4) top = 4;
+  var left = anchorRect.left;
+  if (left + w > window.innerWidth - 4) left = window.innerWidth - w - 4;
+  if (left < 4) left = 4;
+  popoverEl.style.left = left + "px";
+  popoverEl.style.top = top + "px";
+};
+
 // ---- Debounce / escaping / color / toast (shared across Studio tabs + web UIs) ----
 
 var debounce = function (fn, ms) {

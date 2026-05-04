@@ -35,8 +35,8 @@ body {
  * Used in tooltip headers, multitool step badges, and result rows. */
 .ss-task-icon {
   display: inline-block;
-  width: 14px;
-  height: 14px;
+  width: var(--icon-size-sm);
+  height: var(--icon-size-sm);
   background-color: currentColor;
   mask-size: contain;
   mask-repeat: no-repeat;
@@ -60,7 +60,7 @@ body {
 
 #ssHeader {
   flex-shrink: 0;
-  padding: var(--space-5) var(--space-5) var(--space-3);
+  padding: var(--space-5) var(--layout-padding-x) var(--space-3);
   max-width: var(--layout-max-width);
   width: 100%;
   margin: var(--space-5) auto 0;
@@ -152,8 +152,8 @@ body {
 
 .theme-toggle-icon {
   position: absolute;
-  width: 16px;
-  height: 16px;
+  width: var(--icon-size-md);
+  height: var(--icon-size-md);
   border-radius: var(--radius-full);
   transition: opacity var(--duration-normal) ease, transform var(--duration-normal) ease;
 }
@@ -650,8 +650,8 @@ body {
 
 .amplitude-btn-icon {
   display: block;
-  width: 14px;
-  height: 14px;
+  width: var(--icon-size-sm);
+  height: var(--icon-size-sm);
   background-color: currentColor;
   mask-image: url("/screenspace/icons/signal.svg");
   mask-size: contain;
@@ -963,8 +963,8 @@ body {
 
 .scan-mode-fast-icon {
   display: inline-block;
-  width: 12px;
-  height: 12px;
+  width: var(--icon-size-xs);
+  height: var(--icon-size-xs);
   background: var(--color-warning, #f59e0b);
   mask-size: contain;
   mask-repeat: no-repeat;
@@ -1102,8 +1102,8 @@ body {
 }
 
 .model-view-icon {
-  width: 14px;
-  height: 14px;
+  width: var(--icon-size-sm);
+  height: var(--icon-size-sm);
   background-color: currentColor;
   mask-image: url("/screenspace/icons/eye.svg");
   mask-size: contain;
@@ -1377,8 +1377,8 @@ body {
 
 .multitool-operator-icon {
   display: inline-block;
-  width: 12px;
-  height: 12px;
+  width: var(--icon-size-xs);
+  height: var(--icon-size-xs);
   background-color: currentColor;
   -webkit-mask-image: url("/screenspace/icons/plus.svg");
           mask-image: url("/screenspace/icons/plus.svg");
@@ -1680,8 +1680,8 @@ body {
 
 .ss-template-icon-btn__glyph {
   display: block;
-  width: 16px;
-  height: 16px;
+  width: var(--icon-size-md);
+  height: var(--icon-size-md);
   flex-shrink: 0;
   background-color: currentColor;
   mask-size: contain;
@@ -1902,8 +1902,8 @@ body.panel-dragging #bottomPanel {
 }
 
 .rp-tab-icon {
-  width: 14px;
-  height: 14px;
+  width: var(--icon-size-sm);
+  height: var(--icon-size-sm);
   background: currentColor;
   mask-size: contain;
   -webkit-mask-size: contain;
@@ -1925,8 +1925,8 @@ body.panel-dragging #bottomPanel {
 }
 
 .rp-tab-chevron {
-  width: 12px;
-  height: 12px;
+  width: var(--icon-size-xs);
+  height: var(--icon-size-xs);
   background: currentColor;
   mask-image: url("/screenspace/icons/chevron-down.svg");
   -webkit-mask-image: url("/screenspace/icons/chevron-down.svg");
@@ -2429,8 +2429,8 @@ body.panel-dragging #bottomPanel {
 }
 
 .rp-icon-btn-icon {
-  width: 14px;
-  height: 14px;
+  width: var(--icon-size-sm);
+  height: var(--icon-size-sm);
   background: currentColor;
   mask-size: contain;
   -webkit-mask-size: contain;
@@ -2884,7 +2884,7 @@ html[data-theme="dark"] .stash-card-name:focus {
 
 /* Responsive */
 
-@media (max-width: 768px) {
+@media (max-width: 768px) /* --bp-tablet */ {
   #ssHeader,
   #ssMain,
   #panelDivider,
