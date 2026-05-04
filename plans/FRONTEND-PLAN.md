@@ -99,6 +99,11 @@ Mirror the theme-toggle precedent in `utils.js:567-626`.
   defaults from `getComputedStyle(document.documentElement)` so the widget
   shows the right baseline per theme. Hook into the existing
   `initThemeToggle()` flow rather than reinventing the listener.
+- **Feature-flag gated**: a `CLIPGEN_DEV_TOKEN_TWEAK` flag in `utils.js`
+  (alongside the existing `CLIPGEN_ANIMATED_BG`) lets the widget be
+  disabled without ripping out the script tag — flip to `false` for a
+  build or when redesign work is paused. The widget bails at load if the
+  flag is `false`.
 
 ### Dev-only delivery (export gate)
 

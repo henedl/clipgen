@@ -14,6 +14,10 @@
 (function () {
   "use strict";
 
+  // Gated by the CLIPGEN_DEV_TOKEN_TWEAK feature flag in utils.js. Flip that
+  // flag to false to disable the widget without removing the script tag.
+  if (typeof window !== "undefined" && window.CLIPGEN_DEV_TOKEN_TWEAK === false) return;
+
   var STORAGE_KEY = "clipgen-token-overrides";
   var COLLAPSED_KEY = "clipgen-token-tweak-collapsed";
 

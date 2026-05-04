@@ -14,6 +14,12 @@
 // the static CSS line-grid defined in tokens.css.
 var CLIPGEN_ANIMATED_BG = true;
 
+// Live token-tweak debug widget (dev-token-tweak.js). When false, the widget
+// script bails on load and never mounts. Flip to false during a build, or
+// when not iterating on the redesign. The widget never ships in exports
+// either way — viewer.py strips data-dev-only tags during inlining.
+var CLIPGEN_DEV_TOKEN_TWEAK = true;
+
 // ---- Canonical config (mirror of config.py via utils.get_frontend_config)
 //
 // Source of truth: every API response (server.py /api/sheet-data,
