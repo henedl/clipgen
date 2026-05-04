@@ -23,6 +23,9 @@ build/*
 !build/clipgen.spec
 !build/THIRD-PARTY-LICENSES
 !build/VERSION
+!build/clipgen.icns
+!build/clipgen.ico
+!build/render_icons.py
 dist/
 
 # Working docs

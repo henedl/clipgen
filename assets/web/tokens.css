@@ -344,6 +344,27 @@ body:not(.cg-grid-bg-on) {
   -webkit-mask-repeat: no-repeat;
 }
 
+/* Brand mark — three nested L-shapes. Inline data URL so it renders both in
+   Flask-served pages and in exported self-contained viewers. Color follows
+   currentColor; size follows the parent's font-size via 1em. */
+.brand-mark {
+  --brand-mark-svg: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100' fill='none' stroke='%23000' stroke-width='11' stroke-linecap='square' stroke-linejoin='miter'><path d='M 18 18 L 82 18 L 82 82'/><path d='M 18 40 L 60 40 L 60 82'/><path d='M 18 62 L 38 62 L 38 82'/></svg>");
+  display: inline-block;
+  width: 1em;
+  height: 1em;
+  vertical-align: -0.125em;
+  margin-right: 0.35em;
+  background-color: currentColor;
+  mask-image: var(--brand-mark-svg);
+  -webkit-mask-image: var(--brand-mark-svg);
+  mask-size: contain;
+  -webkit-mask-size: contain;
+  mask-repeat: no-repeat;
+  -webkit-mask-repeat: no-repeat;
+  mask-position: center;
+  -webkit-mask-position: center;
+}
+
 /* ---- Components ---- */
 
 /* Visually-hidden text (keeps content in the a11y tree) */

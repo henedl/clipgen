@@ -1,0 +1,10 @@
+
+
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 380 100" fill="#0a0a0a">
+  <g fill="none" stroke="#0a0a0a" stroke-width="11" stroke-linecap="square" stroke-linejoin="miter">
+    <path d="M 18 18 L 82 18 L 82 82"></path>
+    <path d="M 18 40 L 60 40 L 60 82"></path>
+    <path d="M 18 62 L 38 62 L 38 82"></path>
+  </g>
+  <text x="120" y="71" font-family="Inter Tight, system-ui, sans-serif" font-weight="600" font-size="60" letter-spacing="-1.2">clipgen</text>
+</svg>

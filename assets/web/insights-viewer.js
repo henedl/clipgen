@@ -197,6 +197,7 @@
     if (data.meta) {
       if (data.meta.study) {
         qs("#studyTitle").innerHTML =
+          '<span class="brand-mark" aria-hidden="true"></span>' +
           data.meta.study +
           ' <span class="header-light">Insights</span>';
       }
