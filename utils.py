@@ -1508,11 +1508,13 @@ def register_static_routes(
     media_dir_getter: Any = None,
     media_error: str = "Media directory not configured",
     icons: bool = False,
+    logos: bool = True,
 ) -> None:
     """Register standard static-file serving routes on a Flask Blueprint.
 
     Always registers ``/`` (index) and ``/<path:filename>`` (static assets).
-    Optionally registers ``/icons/<path:filename>`` and ``/media/<path:filename>``.
+    Optionally registers ``/icons/<path:filename>``, ``/logos/<path:filename>``,
+    and ``/media/<path:filename>``.
 
     Args:
         bp: Flask Blueprint to register routes on.
@@ -1521,6 +1523,9 @@ def register_static_routes(
             When provided, a ``/media/<path:filename>`` route is registered.
         media_error: Error message returned (500) when the media dir is falsy.
         icons: When True, registers ``/icons/<path:filename>`` from ``assets/icons/``.
+        logos: When True (default), registers ``/logos/<path:filename>`` from
+            ``assets/logos/`` so favicons and the brand mark are available to
+            every served page.
     """
     from flask import Response, jsonify, send_from_directory
 
@@ -1540,6 +1545,13 @@ def register_static_routes(
         @bp.route("/icons/<path:filename>")
         def serve_icons(filename: str) -> Response:
             return send_from_directory(icons_dir, filename)
+
+    if logos:
+        logos_dir = get_bundled_assets_root() / "assets" / "logos"
+
+        @bp.route("/logos/<path:filename>")
+        def serve_logos(filename: str) -> Response:
+            return send_from_directory(logos_dir, filename)
 
     if media_dir_getter is not None:
 

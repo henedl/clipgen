@@ -1,5 +1,11 @@
 # clipgen.spec
 # Build with: pyinstaller --clean --noconfirm build/clipgen.spec
+#
+# App icon: build/clipgen.icns (macOS) and build/clipgen.ico (Windows) are
+# regenerated from the brand mark with `uv run build/render_icons.py`.
+# PyInstaller picks the right format per host platform from the list below.
+
+import sys
 
 from PyInstaller.utils.hooks import collect_data_files, collect_submodules
 
@@ -61,5 +67,5 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon=None,
+    icon=("clipgen.icns" if sys.platform == "darwin" else "clipgen.ico"),
 )
