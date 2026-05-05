@@ -190,9 +190,23 @@ body {
 #sheetMain {
   flex: 1 1 auto;
   min-width: 0;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   padding: 0 var(--space-5) var(--space-5);
+  overflow: hidden;
+}
+
+/* Sub-tab panels are flex children of #sheetMain. Without explicit
+ * min-width/height: 0 they inherit `min-*: auto` (= content size), and a wide
+ * fixed-layout table or canvas can force the panel out of its flex allocation
+ * — which broke the layout the moment the sheet sidebar expanded. */
+#sheetGrid,
+#intakePanel,
+#trIntakePanel,
+#convergencePanel,
+#metadataPanel {
+  min-width: 0;
 }
 
 /* ---- Sheet sidebar ---- */
@@ -201,14 +215,14 @@ body {
   flex: 0 0 220px;
   display: flex;
   flex-direction: column;
-  gap: var(--space-3);
-  padding: var(--space-3);
+  padding: var(--space-3) 0;
+  background: var(--bg);
   border-right: 1px solid var(--hairline);
   overflow: hidden;
   transition: flex-basis 180ms ease-out;
 }
 #studioSidebar[data-open="false"] {
-  flex-basis: 36px;
+  flex-basis: 32px;
 }
 #studioSidebar[data-open="false"] .studio-sidebar-section {
   display: none;
@@ -216,8 +230,9 @@ body {
 
 #studioSidebarToggle {
   align-self: flex-end;
-  width: 24px;
-  height: 24px;
+  width: 22px;
+  height: 22px;
+  margin: 0 8px 4px;
   padding: 0;
   background: transparent;
   border: 1px solid var(--border);
@@ -236,8 +251,8 @@ body {
 }
 .studio-sidebar-toggle-icon {
   display: inline-block;
-  width: 12px;
-  height: 12px;
+  width: 11px;
+  height: 11px;
   background-color: currentColor;
   mask-image: url("icons/chevron-double-left.svg");
   mask-size: contain;
@@ -256,23 +271,110 @@ body {
 .studio-sidebar-section {
   display: flex;
   flex-direction: column;
-  gap: 6px;
   min-width: 0;
+}
+.studio-sidebar-section + .studio-sidebar-section {
+  margin-top: var(--space-4);
+}
+.studio-sidebar-section[data-section="participants"] {
+  margin-top: auto;
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--hairline);
 }
 
 .studio-sidebar-header {
-  font-size: 10.5px;
+  padding: 0 16px 6px;
+  font-size: 11px;
   font-weight: 500;
-  letter-spacing: 0.06em;
+  letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--fg-faint);
 }
 
-.studio-sidebar-body {
+/* Vertical-list layout for VIEWS / CATEGORIES — each option a full-width row. */
+.studio-sidebar-section[data-section="views"] .studio-sidebar-body,
+.studio-sidebar-section[data-section="categories"] .studio-sidebar-body {
   display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
+  flex-direction: column;
   min-width: 0;
+}
+.studio-sidebar-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 16px;
+  font-size: 12.5px;
+  font-family: inherit;
+  font-weight: inherit;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  border-left: 2px solid transparent;
+  color: var(--fg-muted);
+  cursor: pointer;
+  user-select: none;
+  transition: background-color 120ms ease-out, color 120ms ease-out, border-color 120ms ease-out;
+}
+.studio-sidebar-row:hover {
+  background: var(--bg-hover);
+  color: var(--fg);
+}
+.studio-sidebar-row.is-active {
+  background: var(--bg-hover);
+  color: var(--fg);
+  border-left-color: var(--accent);
+}
+.studio-sidebar-row-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: var(--radius-full);
+  background: currentColor;
+  flex-shrink: 0;
+}
+.studio-sidebar-row-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.studio-sidebar-row-count {
+  font-family: var(--font-mono);
+  font-feature-settings: "tnum";
+  font-size: 11px;
+  color: var(--fg-faint);
+  flex-shrink: 0;
+}
+
+/* Compact 6-col grid for PARTICIPANTS. */
+.studio-sidebar-section[data-section="participants"] .studio-sidebar-body {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 3px;
+  padding: 0 16px;
+}
+.studio-sidebar-pill {
+  font-family: var(--font-mono);
+  font-feature-settings: "tnum";
+  font-size: 9px;
+  padding: 4px 0;
+  text-align: center;
+  background: var(--bg-input);
+  color: var(--fg-muted);
+  border: 1px solid transparent;
+  border-radius: 2px;
+  cursor: pointer;
+  user-select: none;
+  transition: background-color 120ms ease-out, color 120ms ease-out, border-color 120ms ease-out;
+}
+.studio-sidebar-pill:hover {
+  color: var(--fg);
+  background: var(--bg-hover);
+}
+.studio-sidebar-pill.is-active {
+  background: var(--bg-active);
+  color: var(--fg);
+  border-color: var(--border-strong);
 }
 
 /* When the sheet sub-tab is not active, hide the sidebar entirely. */
@@ -1239,185 +1341,174 @@ html[data-theme="dark"] .queue-card-error .queue-card-thumb {
 
 /* Stashed reels */
 
-#stashedReelsArea {
+/* Stash row — single horizontal flex row at the bottom of each bottom-strip
+ * column (matches the prototype's ARTIFACTS / REEL Stashes layout). The
+ * existing JS still targets `#stashedReelsArea` / `#stashedArtifactsArea`,
+ * so the IDs stay; the visual is fully reworked. */
+#stashedReelsArea,
+#stashedArtifactsArea {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 14px;
+  border-top: 1px solid var(--hairline);
   background: var(--color-panel-bg);
-  padding: var(--space-3) var(--space-5) var(--space-4);
+  flex-shrink: 0;
 }
 
-#stashedReelsHeader {
-  display: flex;
+#stashedReelsHeader,
+#stashedArtifactsHeader {
+  flex: 0 0 auto;
+}
+
+#stashedReelsHeader h3,
+#stashedArtifactsHeader h3 {
+  margin: 0;
+  font-size: 10.5px;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--fg-faint);
+  display: inline-flex;
   align-items: center;
-  justify-content: space-between;
-  margin-bottom: var(--space-2);
+  gap: 4px;
 }
-
-#stashedReelsHeader h3 {
-  font-size: var(--text-sm);
-  font-weight: 600;
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-}
-
-#stashedReelsHeader h3 span {
+#stashedReelsHeader h3 span,
+#stashedArtifactsHeader h3 span {
+  font-family: var(--font-mono);
+  font-feature-settings: "tnum";
+  font-size: 10.5px;
   font-weight: 400;
-  color: var(--color-text-dim);
-  font-size: var(--text-sm);
+  letter-spacing: 0;
+  color: var(--fg-faint);
+  text-transform: none;
 }
 
-#stashedReelsList {
+#stashedReelsList,
+#stashedArtifactsList {
+  flex: 1 1 auto;
   display: flex;
-  flex-direction: row;
-  gap: var(--space-2);
+  gap: 6px;
   overflow-x: auto;
-  padding: var(--space-1) 0;
+  min-width: 0;
 }
 
+/* Stash chip — folder-icon + name + count (the "old" 160px panel-card
+ * is gone; the chip is compact and inline). The icon's stacked shadow gives
+ * it a faux-folder depth tied to a category hue. */
 .stash-card {
   flex-shrink: 0;
-  width: var(--card-width-stash);
-  border: 1px solid var(--color-border);
-  border-radius: calc(var(--radius) - 2px);
-  background: var(--color-surface);
-  padding: var(--space-2) var(--space-3);
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 10px 5px 5px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--fg);
   cursor: pointer;
-  position: relative;
-  transition: box-shadow var(--duration-fast), border-color var(--duration-fast);
   user-select: none;
+  position: relative;
+  transition: border-color 120ms ease-out, background-color 120ms ease-out;
+}
+.stash-card:hover {
+  border-color: var(--border-strong);
+  background: var(--bg-hover);
 }
 
-.stash-card:hover {
-  border-color: var(--color-accent);
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+.stash-card-icon {
+  flex: 0 0 auto;
+  width: 26px;
+  height: 18px;
+  border-radius: 2px;
+  background: oklch(0.32 0.06 220);
+  box-shadow:
+    2px -2px 0 -1px oklch(0.26 0.05 220),
+    4px -4px 0 -2px oklch(0.22 0.04 220);
+  margin-right: 4px;
 }
 
 .stash-card-name {
-  display: block;
-  font-size: var(--text-sm);
-  font-weight: 600;
+  font-size: 12px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  max-width: 140px;
   cursor: text;
   padding: 1px 2px;
   border-radius: var(--radius-sm);
   border: 1px solid transparent;
   transition: border-color var(--duration-fast);
 }
-
 .stash-card-name:hover {
-  border-color: var(--color-border);
+  border-color: var(--border);
 }
 
 .stash-card-name-input {
-  display: block;
-  font-size: var(--text-sm);
-  font-weight: 600;
-  width: 100%;
+  font-size: 12px;
+  width: 140px;
   padding: 1px 2px;
-  border: 1px solid var(--color-accent);
+  border: 1px solid var(--accent);
   border-radius: var(--radius-sm);
-  background: var(--color-surface);
-  color: var(--color-text);
+  background: var(--bg-input);
+  color: var(--fg);
   outline: none;
   font-family: inherit;
 }
 
 .stash-card-info {
-  display: flex;
-  gap: var(--space-2);
-  font-size: var(--text-xs);
-  color: var(--color-text-dim);
-  margin-top: var(--space-1);
+  display: inline-flex;
+  gap: 6px;
   font-family: var(--font-mono);
+  font-feature-settings: "tnum";
+  font-size: 10.5px;
+  color: var(--fg-faint);
 }
 
 .stash-card-remove {
   position: absolute;
-  top: 2px;
-  right: 2px;
-  background: rgba(0, 0, 0, 0.5);
-  color: #fff;
-  border: none;
+  top: -4px;
+  right: -4px;
+  width: 16px;
+  height: 16px;
+  background: var(--bg-active);
+  color: var(--fg);
+  border: 1px solid var(--border-strong);
   border-radius: 50%;
-  width: 18px;
-  height: 18px;
-  font-size: var(--text-xs);
-  line-height: 18px;
+  font-size: 10px;
+  line-height: 14px;
   text-align: center;
   cursor: pointer;
   opacity: 0;
   transition: opacity var(--duration-fast);
   padding: 0;
 }
-
 .stash-card:hover .stash-card-remove {
   opacity: 1;
 }
-
 .stash-card-remove:hover {
-  background: #dc2626;
+  background: var(--severity-high);
+  color: var(--accent-fg);
 }
 
-.stash-card[draggable="true"] {
-  cursor: grab;
-}
-
-.stash-card[draggable="true"]:active {
-  cursor: grabbing;
-}
-
-/* Stashed artifacts */
-
-#stashedArtifactsArea {
-  background: var(--color-panel-bg);
-  padding: var(--space-3) var(--space-5) var(--space-4);
-}
-
-#stashedArtifactsHeader {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: var(--space-2);
-}
-
-#stashedArtifactsHeader h3 {
-  font-size: var(--text-sm);
-  font-weight: 600;
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-}
-
-#stashedArtifactsHeader h3 span {
-  font-weight: 400;
-  color: var(--color-text-dim);
-  font-size: var(--text-sm);
-}
-
-#stashedArtifactsList {
-  display: flex;
-  flex-direction: row;
-  gap: var(--space-2);
-  overflow-x: auto;
-  padding: var(--space-1) 0;
-}
+.stash-card[draggable="true"] { cursor: grab; }
+.stash-card[draggable="true"]:active { cursor: grabbing; }
 
 /* Stash drop zone styling */
 
 #stashedReelsList.drag-over,
 #stashedArtifactsList.drag-over {
-  outline: 2px dashed var(--color-accent);
-  outline-offset: -2px;
+  outline: 1px dashed var(--accent);
+  outline-offset: -1px;
   background-color: var(--color-selected);
-  border-radius: var(--radius);
+  border-radius: 4px;
 }
 
 .stash-drop-reveal #stashedReelsList:empty,
 .stash-drop-reveal #stashedArtifactsList:empty {
-  min-height: 50px;
-  border: 2px dashed var(--color-border);
-  border-radius: var(--radius);
+  min-height: 28px;
+  border: 1px dashed var(--border-strong);
+  border-radius: 4px;
 }
 
 /* Area controls */

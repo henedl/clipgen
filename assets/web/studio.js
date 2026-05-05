@@ -382,69 +382,92 @@
       return n;
     }
 
-    // VIEWS
+    // VIEWS — vertical-list rows with counts.
     var viewsBody = sidebar.querySelector('[data-target="views"]');
     if (viewsBody) {
       viewsBody.innerHTML = "";
       SIDEBAR_VIEWS.forEach(function (view) {
         var count = view.id === "all" ? d.rows.length : rangeCount(view.sevMin, view.sevMax);
-        var chip = ClipgenPrimitives.createFilterChip({
+        viewsBody.appendChild(createSidebarRow({
           label: view.label,
-          active: state.sidebarView === view.id,
           count: count,
-          hue: 220,
+          active: state.sidebarView === view.id,
           onClick: function () {
             applySidebarView(view.id);
             renderSidebar();
             renderGrid();
           },
-        });
-        viewsBody.appendChild(chip);
+        }));
       });
     }
 
-    // CATEGORIES
+    // CATEGORIES — vertical-list rows with counts and category-hue dots.
     var catsBody = sidebar.querySelector('[data-target="categories"]');
     if (catsBody) {
       catsBody.innerHTML = "";
       var cats = Object.keys(catCounts).sort();
       cats.forEach(function (cat) {
-        var chip = ClipgenPrimitives.createFilterChip({
+        catsBody.appendChild(createSidebarRow({
           label: cat,
-          active: !!state.sidebarCategories[cat],
           count: catCounts[cat],
+          active: !!state.sidebarCategories[cat],
+          dotColor: "oklch(0.7 0.16 " + categoryHue(cat) + ")",
           onClick: function () {
             state.sidebarCategories[cat] = !state.sidebarCategories[cat];
             applySidebarCategories();
             renderSidebar();
             renderGrid();
           },
-        });
-        catsBody.appendChild(chip);
+        }));
       });
       if (cats.length === 0) {
-        var empty = el("span", "studio-sidebar-empty", "(no categories)");
+        var empty = el("span", "studio-sidebar-row-label", "(no categories)");
+        empty.style.padding = "6px 16px";
+        empty.style.color = "var(--fg-faint)";
         catsBody.appendChild(empty);
       }
     }
 
-    // PARTICIPANTS
+    // PARTICIPANTS — compact 6-col grid of mono pills.
     var partsBody = sidebar.querySelector('[data-target="participants"]');
     if (partsBody) {
       partsBody.innerHTML = "";
       participants.forEach(function (pid) {
-        var pill = ClipgenPrimitives.createParticipantPill({
-          id: pid,
-          active: !!state.sidebarParticipants[pid],
-          onClick: function () {
-            state.sidebarParticipants[pid] = !state.sidebarParticipants[pid];
-            renderSidebar();
-            renderGrid();
-          },
+        var pill = el("button", "studio-sidebar-pill cg-mono", pid);
+        pill.type = "button";
+        if (state.sidebarParticipants[pid]) pill.classList.add("is-active");
+        pill.addEventListener("click", function () {
+          state.sidebarParticipants[pid] = !state.sidebarParticipants[pid];
+          renderSidebar();
+          renderGrid();
         });
         partsBody.appendChild(pill);
       });
     }
+  }
+
+  function createSidebarRow(opts) {
+    var row = el("button", "studio-sidebar-row");
+    row.type = "button";
+    if (opts.active) row.classList.add("is-active");
+    if (opts.dotColor) {
+      var dot = el("span", "studio-sidebar-row-dot");
+      dot.style.background = opts.dotColor;
+      row.appendChild(dot);
+    }
+    var label = el("span", "studio-sidebar-row-label");
+    label.textContent = opts.label || "";
+    label.title = opts.label || "";
+    row.appendChild(label);
+    if (opts.count != null) {
+      var count = el("span", "studio-sidebar-row-count cg-mono");
+      count.textContent = String(opts.count);
+      row.appendChild(count);
+    }
+    if (typeof opts.onClick === "function") {
+      row.addEventListener("click", opts.onClick);
+    }
+    return row;
   }
 
   function bindSidebarToggle() {
@@ -2193,55 +2216,61 @@
     list.innerHTML = "";
 
     for (var i = 0; i < n; i++) {
-      var stash = state.stashes[i];
-      var card = el("div", "stash-card");
-      card.setAttribute("data-stash-id", stash.id);
-      card.setAttribute("draggable", "true");
-      (function (stashRef) {
-        card.addEventListener("dragstart", function (ev) {
-          ev.dataTransfer.setData("application/json", JSON.stringify({
-            stashId: stashRef.id,
-            items: stashRef.items,
-            source: "reel-stash",
-          }));
-          ev.dataTransfer.effectAllowed = "copy";
-        });
-      })(stash);
-
-      var nameEl = el("span", "stash-card-name", truncate(stash.name, 20));
-      nameEl.title = stash.name;
-      (function (stashRef, nameNode) {
-        nameNode.addEventListener("click", function (ev) {
-          ev.stopPropagation();
-          startStashRename(stashRef, nameNode, "api/stashes");
-        });
-      })(stash, nameEl);
-      card.appendChild(nameEl);
-
-      var info = el("div", "stash-card-info");
-      info.appendChild(el("span", "", stash.count + " clips"));
-      info.appendChild(el("span", "", formatDuration(stash.totalDuration)));
-      card.appendChild(info);
-
-      var removeBtn = el("button", "stash-card-remove", "\u00D7");
-      removeBtn.title = "Delete stash";
-      (function (stashId) {
-        removeBtn.addEventListener("click", function (ev) {
-          ev.stopPropagation();
-          deleteStash(stashId, "api/stashes", state.stashes, renderStashedReels);
-        });
-      })(stash.id);
-      card.appendChild(removeBtn);
-
-      (function (stashRef) {
-        card.addEventListener("click", function () {
-          recallStash(stashRef);
-        });
-      })(stash);
-
-      list.appendChild(card);
+      list.appendChild(buildStashCard(state.stashes[i], "api/stashes", state.stashes, renderStashedReels, "reel-stash", recallStash));
     }
     computeGridMaxHeight();
+  }
+
+  function makeStashFolderIcon(stashId) {
+    var icon = el("span", "stash-card-icon");
+    var hue = categoryHue(stashId || "uncategorized");
+    icon.style.background = "oklch(0.32 0.06 " + hue + ")";
+    icon.style.boxShadow =
+      "2px -2px 0 -1px oklch(0.26 0.05 " + hue + "), " +
+      "4px -4px 0 -2px oklch(0.22 0.04 " + hue + ")";
+    return icon;
+  }
+
+  function buildStashCard(stash, apiPath, listRef, rerender, dragSource, onRecall) {
+    var card = el("div", "stash-card");
+    card.setAttribute("data-stash-id", stash.id);
+    card.setAttribute("draggable", "true");
+    card.addEventListener("dragstart", function (ev) {
+      ev.dataTransfer.setData("application/json", JSON.stringify({
+        stashId: stash.id,
+        items: stash.items,
+        source: dragSource,
+      }));
+      ev.dataTransfer.effectAllowed = "copy";
+    });
+
+    card.appendChild(makeStashFolderIcon(stash.id));
+
+    var nameEl = el("span", "stash-card-name", truncate(stash.name, 18));
+    nameEl.title = stash.name;
+    nameEl.addEventListener("click", function (ev) {
+      ev.stopPropagation();
+      startStashRename(stash, nameEl, apiPath);
+    });
+    card.appendChild(nameEl);
+
+    var info = el("span", "stash-card-info");
+    info.appendChild(el("span", "", String(stash.count)));
+    info.appendChild(el("span", "", formatDuration(stash.totalDuration)));
+    card.appendChild(info);
+
+    var removeBtn = el("button", "stash-card-remove", "\u00D7");
+    removeBtn.title = "Delete stash";
+    removeBtn.addEventListener("click", function (ev) {
+      ev.stopPropagation();
+      deleteStash(stash.id, apiPath, listRef, rerender);
+    });
+    card.appendChild(removeBtn);
+
+    card.addEventListener("click", function () {
+      if (typeof onRecall === "function") onRecall(stash);
+    });
+    return card;
   }
 
   function computeReelDuration(items) {
@@ -2368,53 +2397,7 @@
     list.innerHTML = "";
 
     for (var i = 0; i < n; i++) {
-      var stash = state.artifactStashes[i];
-      var card = el("div", "stash-card");
-      card.setAttribute("data-stash-id", stash.id);
-      card.setAttribute("draggable", "true");
-      (function (stashRef) {
-        card.addEventListener("dragstart", function (ev) {
-          ev.dataTransfer.setData("application/json", JSON.stringify({
-            stashId: stashRef.id,
-            items: stashRef.items,
-            source: "artifact-stash",
-          }));
-          ev.dataTransfer.effectAllowed = "copy";
-        });
-      })(stash);
-
-      var nameEl = el("span", "stash-card-name", truncate(stash.name, 20));
-      nameEl.title = stash.name;
-      (function (stashRef, nameNode) {
-        nameNode.addEventListener("click", function (ev) {
-          ev.stopPropagation();
-          startStashRename(stashRef, nameNode, "api/artifact-stashes");
-        });
-      })(stash, nameEl);
-      card.appendChild(nameEl);
-
-      var info = el("div", "stash-card-info");
-      info.appendChild(el("span", "", stash.count + " clips"));
-      info.appendChild(el("span", "", formatDuration(stash.totalDuration)));
-      card.appendChild(info);
-
-      var removeBtn = el("button", "stash-card-remove", "\u00D7");
-      removeBtn.title = "Delete stash";
-      (function (stashId) {
-        removeBtn.addEventListener("click", function (ev) {
-          ev.stopPropagation();
-          deleteStash(stashId, "api/artifact-stashes", state.artifactStashes, renderStashedArtifacts);
-        });
-      })(stash.id);
-      card.appendChild(removeBtn);
-
-      (function (stashRef) {
-        card.addEventListener("click", function () {
-          recallArtifactStash(stashRef);
-        });
-      })(stash);
-
-      list.appendChild(card);
+      list.appendChild(buildStashCard(state.artifactStashes[i], "api/artifact-stashes", state.artifactStashes, renderStashedArtifacts, "artifact-stash", recallArtifactStash));
     }
     computeGridMaxHeight();
   }

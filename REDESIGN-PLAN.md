@@ -38,7 +38,7 @@ The prototype is a **design reference**, not production code. Production stack s
 | 3 | Convergence + Metadata + bottom-strip polish | Apply primitives + new visualisations (`SwimLane`, `KpiCard`, `CoverageMatrix`) inside Studio's Convergence and Metadata sub-tabs; unify bottom-strip cards with the new primitives; final dead-CSS sweep | Pending |
 | 4 | Screenspace | Safe layout: viewer + scrub timeline + detector panel + results panel; refresh detector iconography with design lead | Pending |
 | 5 | Transcripts | Safe layout: editable summary + sticky PiP video + annotation popover; cross-ref with sheet rows / screenspace events | Pending |
-| 6 | Polish | Animation finalization with design lead; viewer/gallery surfaces audit; light-theme parity check across all surfaces | Pending |
+| 6 | Polish | Animation finalization with design lead; viewer/gallery surfaces audit; light-theme parity check across all surfaces; **unify card-size tokens across `.clip-card` / `.transcript-card` / `.queue-card` (intake, artifact, reel, stash thumbnails) so the bottom strip and intake cards share one width scale** | Pending |
 
 ## Implementation rules (carry-overs from `redesign/AGENTS.md`)
 
