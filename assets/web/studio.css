@@ -1380,13 +1380,16 @@ col.col-participant-col {
 #reelList {
   display: flex;
   flex-direction: row;
-  flex: 1 1 auto;
+  flex: 1 1 0;
   min-height: 0;
   overflow-x: auto;
   overflow-y: hidden;
   gap: 8px;
   padding: 14px;
   border: 0;
+  /* Default flex `align-items: stretch` was stretching reel cards vertically
+   * to fill the column — keep them at their natural ~110px height. */
+  align-items: flex-start;
 }
 
 #reelDuration {
