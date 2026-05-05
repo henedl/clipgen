@@ -104,12 +104,17 @@
 
     var header = el("div", "settings-header");
     var title = el("h3", null, "Settings");
+    var versionEl = el("span", "settings-version cg-mono");
+    versionEl.id = "settingsVersion";
     var closeBtn = el("button", "btn btn-small");
     closeBtn.type = "button";
     closeBtn.textContent = "Close";
     closeBtn.addEventListener("click", _close);
+    var rightGroup = el("div", "settings-header-right");
+    rightGroup.appendChild(versionEl);
+    rightGroup.appendChild(closeBtn);
     header.appendChild(title);
-    header.appendChild(closeBtn);
+    header.appendChild(rightGroup);
     panel.appendChild(header);
 
     var tabs = el("div", "settings-tabs");
@@ -144,6 +149,9 @@
 
   function _open() {
     _buildDom();
+    var v = _opts && _opts.version;
+    var vEl = document.getElementById("settingsVersion");
+    if (vEl) vEl.textContent = v ? "v" + v : "";
     _root.classList.remove("hidden");
   }
 

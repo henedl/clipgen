@@ -45,7 +45,10 @@ html {
 }
 
 body {
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  letter-spacing: -0.005em;
   background-color: var(--color-bg);
   color: var(--color-text);
   line-height: 1.5;
@@ -315,9 +318,10 @@ body {
   color: var(--fg-faint);
 }
 
-/* Vertical-list layout for VIEWS / CATEGORIES — each option a full-width row. */
+/* Vertical-list layout for VIEWS / CATEGORIES / SEVERITY — each option a full-width row. */
 .studio-sidebar-section[data-section="views"] .studio-sidebar-body,
-.studio-sidebar-section[data-section="categories"] .studio-sidebar-body {
+.studio-sidebar-section[data-section="categories"] .studio-sidebar-body,
+.studio-sidebar-section[data-section="severity"] .studio-sidebar-body {
   display: flex;
   flex-direction: column;
   min-width: 0;
@@ -355,6 +359,14 @@ body {
   background: currentColor;
   flex-shrink: 0;
 }
+.studio-sidebar-row-dot.sev-critical      { background: var(--sev-critical); }
+.studio-sidebar-row-dot.sev-high          { background: var(--sev-high); }
+.studio-sidebar-row-dot.sev-medium        { background: var(--sev-medium); }
+.studio-sidebar-row-dot.sev-low           { background: var(--sev-low); }
+.studio-sidebar-row-dot.sev-na            { background: var(--sev-na); }
+.studio-sidebar-row-dot.sev-positive      { background: var(--sev-positive); }
+.studio-sidebar-row-dot.sev-very-positive { background: var(--sev-very-positive); }
+.studio-sidebar-row-dot.sev-unknown       { background: var(--sev-unknown); }
 .studio-sidebar-row-label {
   flex: 1 1 auto;
   min-width: 0;
@@ -599,7 +611,7 @@ body[data-active-tab]:not([data-active-tab="sheet"]) #studioSidebar {
 /* Panel divider (resizable handle between sheet preview and bottom panel) */
 
 #panelDivider {
-  height: 12px;
+  height: 16px;
   background: var(--color-panel-bg);
   border-top: 1px solid var(--hairline);
   cursor: row-resize;
