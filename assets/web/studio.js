@@ -4454,8 +4454,6 @@
       { icon: "film", label: "Open Timeline", action: onBuildTimelineViewer },
       { icon: "photo", label: "Open Gallery", action: openGalleryDialog },
       { icon: "arrow-path", label: "Refresh sheet", action: function () { clickIfExists("refreshSheet"); } },
-      { divider: true },
-      { icon: "adjustments-horizontal", label: "Filter rows", action: function () { clickIfExists("filterToggle"); } },
     ]);
   }
 
