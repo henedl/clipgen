@@ -1181,90 +1181,60 @@
   }
 
   // ---- Panel divider (resizable split between sheet preview and bottom panel) ----
+  //
+  // Layout model: #sheetPreview is `flex: 1 1 auto` and #bottomPanel has an
+  // explicit pixel `height` set from state.bottomH. The drag updates that
+  // pixel height directly; the upper pane absorbs the remainder via flex.
+  // The legacy max-height-per-tab-panel mechanism is kept as a no-op stub so
+  // callers (renderGrid, syncPreviewTab, resize handler) don't break, but it
+  // no longer drives layout.
 
-  // Tab panels whose height tracks the divider. Keep in sync with the markup in studio.html;
-  // every preview tab that shares the upper pane must appear here so the drag/collapse/resize
-  // code paths apply the same maxHeight to each.
-  var UPPER_PANE_PANELS = [
-    "#sheetGrid",
-    "#intakePanel",
-    "#trIntakePanel",
-    "#convergencePanel",
-    "#metadataPanel",
-  ];
+  function applyUpperPaneMaxHeight(_value) { /* no-op — flex handles it */ }
+  function computeGridMaxHeight(_bottomHeightOverride) { /* no-op — flex handles it */ }
 
-  function applyUpperPaneMaxHeight(value) {
-    for (var i = 0; i < UPPER_PANE_PANELS.length; i++) {
-      var p = qs(UPPER_PANE_PANELS[i]);
-      if (p) p.style.maxHeight = value;
+  // The bottom strip is now driven by an explicit pixel height on
+  // `#bottomPanel` (the upper pane is flex: 1 1 auto and absorbs the remainder).
+  // The drag updates state.bottomH between BOTTOM_STRIP_MIN and BOTTOM_STRIP_MAX.
+  var BOTTOM_STRIP_MIN = 60;
+  var BOTTOM_STRIP_MAX = 560;
+  var BOTTOM_STRIP_DEFAULT = 280;
+  var BOTTOM_STORAGE_KEY = "clipgen-studio-bottom-h";
+
+  function applyBottomHeight() {
+    var bottom = qs("#bottomPanel");
+    if (!bottom) return;
+    if (state.bottomCollapsed) {
+      bottom.style.height = "";
+    } else {
+      bottom.style.height = state.bottomH + "px";
     }
   }
 
-  function computeGridMaxHeight(bottomHeightOverride) {
-    var header = qs("#studioSubheader");
-    var preview = qs("#sheetPreview");
-    var divider = qs("#panelDivider");
-    var bottom = qs("#bottomPanel");
-    var grid = qs("#sheetGrid");
-    if (!header || !preview || !divider || !bottom || !grid) return;
-
-    var previewHeader = null; /* moved to #studioSubheader (outside #sheetPreview) */
-    var filterBar = qs("#filterBar");
-    var previewStyle = getComputedStyle(preview);
-    var previewPadTop = parseFloat(previewStyle.paddingTop) || 0;
-    var previewPadBot = parseFloat(previewStyle.paddingBottom) || 0;
-    var phHeight = previewHeader ? previewHeader.offsetHeight : 0;
-    var phStyle = previewHeader ? getComputedStyle(previewHeader) : null;
-    var phMargin = phStyle
-      ? (parseFloat(phStyle.marginTop) || 0) + (parseFloat(phStyle.marginBottom) || 0)
-      : 0;
-    var fbHeight = filterBar && !filterBar.classList.contains("hidden") ? filterBar.offsetHeight : 0;
-    var fbStyle = filterBar && !filterBar.classList.contains("hidden") ? getComputedStyle(filterBar) : null;
-    var fbMargin = fbStyle
-      ? (parseFloat(fbStyle.marginTop) || 0) + (parseFloat(fbStyle.marginBottom) || 0)
-      : 0;
-
-    var headerRect = header.getBoundingClientRect();
-    var sheetChrome = previewPadTop + phHeight + phMargin + fbHeight + fbMargin + previewPadBot;
-    var bottomH = bottomHeightOverride !== undefined ? bottomHeightOverride : bottom.offsetHeight;
-    var available = window.innerHeight - headerRect.top - headerRect.height
-      - sheetChrome - divider.offsetHeight - bottomH;
-
-    var MIN_GRID = 100;
-    var maxAllowed = Math.max(0, available - MIN_GRID);
-    state.dividerOffset = Math.min(state.dividerOffset, maxAllowed);
-
-    var maxH = Math.max(MIN_GRID, available - state.dividerOffset) + "px";
-    applyUpperPaneMaxHeight(maxH);
-  }
-
-  // Per redesign: bottom strip absolute height bounds (the strip is the visible
-  // area below the divider). dividerOffset roughly equals that visible height,
-  // so we clamp dividerOffset to [BOTTOM_STRIP_MIN, BOTTOM_STRIP_MAX] minus the
-  // minimum upper-pane reservation.
-  var BOTTOM_STRIP_MIN = 60;
-  var BOTTOM_STRIP_MAX = 560;
-  var BOTTOM_STORAGE_KEY = "clipgen-studio-bottom-h";
-
   function loadStoredBottomHeight() {
+    state.bottomH = BOTTOM_STRIP_DEFAULT;
     try {
       var raw = window.localStorage.getItem(BOTTOM_STORAGE_KEY);
-      if (!raw) return;
-      var parsed = JSON.parse(raw);
-      if (parsed && typeof parsed.dividerOffset === "number") {
-        state.dividerOffset = Math.max(0, Math.min(BOTTOM_STRIP_MAX, parsed.dividerOffset));
-      }
-      if (parsed && parsed.collapsed) {
-        state.bottomCollapsed = true;
-        document.body.classList.add("bottom-collapsed");
+      if (raw) {
+        var parsed = JSON.parse(raw);
+        if (parsed && typeof parsed.bottomH === "number") {
+          state.bottomH = Math.max(BOTTOM_STRIP_MIN, Math.min(BOTTOM_STRIP_MAX, parsed.bottomH));
+        } else if (parsed && typeof parsed.dividerOffset === "number") {
+          // Legacy persisted value from the dividerOffset era — reinterpret as bottomH.
+          state.bottomH = Math.max(BOTTOM_STRIP_MIN, Math.min(BOTTOM_STRIP_MAX, parsed.dividerOffset || BOTTOM_STRIP_DEFAULT));
+        }
+        if (parsed && parsed.collapsed) {
+          state.bottomCollapsed = true;
+          document.body.classList.add("bottom-collapsed");
+        }
       }
     } catch (_) {}
+    applyBottomHeight();
   }
 
   function persistBottomHeight() {
     try {
       window.localStorage.setItem(BOTTOM_STORAGE_KEY, JSON.stringify({
-        dividerOffset: state.dividerOffset,
+        bottomH: state.bottomH,
         collapsed: !!state.bottomCollapsed,
       }));
     } catch (_) {}
@@ -1275,48 +1245,27 @@
     if (!handle) return;
     var dragging = false;
     var startY = 0;
-    var startOffset = 0;
-    var dragAvailable = 0; // stable available-space snapshot for the drag
-    var dragMaxOff = 0;    // stable upper bound for dividerOffset
+    var startBottomH = 0;
+    var dragMaxBottom = BOTTOM_STRIP_MAX;
 
     function onDown(e) {
       if (state.bottomCollapsed) return;
       e.preventDefault();
       dragging = true;
       startY = e.clientY || (e.touches && e.touches[0].clientY) || 0;
-      startOffset = state.dividerOffset;
+      startBottomH = state.bottomH;
 
-      // Snapshot layout values once so they stay stable for the whole drag.
-      // Re-reading bottom.offsetHeight each frame causes oscillation when
-      // the upper panel shrinks and the bottom panel's visible area grows.
+      // Reserve at least MIN_UPPER for the sheet pane.
       var header = qs("#studioSubheader");
-      var preview = qs("#sheetPreview");
       var divider = qs("#panelDivider");
-      var bottom = qs("#bottomPanel");
-      if (header && preview && divider && bottom) {
-        var previewHeader = null; /* moved to #studioSubheader (outside #sheetPreview) */
-        var filterBar = qs("#filterBar");
-        var previewStyle = getComputedStyle(preview);
-        var previewPadTop = parseFloat(previewStyle.paddingTop) || 0;
-        var previewPadBot = parseFloat(previewStyle.paddingBottom) || 0;
-        var phHeight = previewHeader ? previewHeader.offsetHeight : 0;
-        var phStyle = previewHeader ? getComputedStyle(previewHeader) : null;
-        var phMargin = phStyle
-          ? (parseFloat(phStyle.marginTop) || 0) + (parseFloat(phStyle.marginBottom) || 0)
-          : 0;
-        var fbHeight = filterBar && !filterBar.classList.contains("hidden") ? filterBar.offsetHeight : 0;
-        var fbStyle = filterBar && !filterBar.classList.contains("hidden") ? getComputedStyle(filterBar) : null;
-        var fbMargin = fbStyle
-          ? (parseFloat(fbStyle.marginTop) || 0) + (parseFloat(fbStyle.marginBottom) || 0)
-          : 0;
+      if (header && divider) {
         var headerRect = header.getBoundingClientRect();
-        var sheetChrome = previewPadTop + phHeight + phMargin + fbHeight + fbMargin + previewPadBot;
-        dragAvailable = window.innerHeight - headerRect.top - headerRect.height
-          - sheetChrome - divider.offsetHeight - bottom.offsetHeight;
+        var available = window.innerHeight - headerRect.top - headerRect.height - divider.offsetHeight;
+        var MIN_UPPER = 120;
+        dragMaxBottom = Math.max(BOTTOM_STRIP_MIN, Math.min(BOTTOM_STRIP_MAX, available - MIN_UPPER));
+      } else {
+        dragMaxBottom = BOTTOM_STRIP_MAX;
       }
-
-      var MIN_GRID = 100;
-      dragMaxOff = Math.max(0, Math.min(BOTTOM_STRIP_MAX, dragAvailable - MIN_GRID));
 
       handle.classList.add("active");
       document.body.style.cursor = "row-resize";
@@ -1335,15 +1284,11 @@
       rafPending = true;
       var clientY = e.clientY || (e.touches && e.touches[0].clientY) || 0;
       requestAnimationFrame(function () {
+        // Drag up (clientY decreases) → bottom grows. Drag down → bottom shrinks.
         var delta = startY - clientY;
-        var lowerBound = Math.min(BOTTOM_STRIP_MIN, dragMaxOff);
-        state.dividerOffset = Math.max(lowerBound, Math.min(dragMaxOff, startOffset + delta));
-
-        // Apply maxHeight directly using the stable snapshot
-        var MIN_GRID = 100;
-        var maxH = Math.max(MIN_GRID, dragAvailable - state.dividerOffset) + "px";
-        applyUpperPaneMaxHeight(maxH);
-
+        var nextH = startBottomH + delta;
+        state.bottomH = Math.max(BOTTOM_STRIP_MIN, Math.min(dragMaxBottom, nextH));
+        applyBottomHeight();
         rafPending = false;
       });
     }
@@ -1354,7 +1299,6 @@
       handle.classList.remove("active");
       document.body.style.cursor = "";
       document.body.style.userSelect = "";
-      computeGridMaxHeight(); // finalize with fresh layout values
       persistBottomHeight();
     }
 
@@ -1371,59 +1315,40 @@
     var bottom = qs("#bottomPanel");
     if (!bottom || bottom._transitioning) return;
     bottom._transitioning = true;
-    var divider = qs("#panelDivider");
 
     if (state.bottomCollapsed) {
       // --- Restore ---
       state.bottomCollapsed = false;
-      state.dividerOffset = 0;
-
-      // Measure target bottom height (temporarily lift the inline constraint)
-      bottom.style.transition = "none";
-      bottom.style.maxHeight = "none";
-      var targetH = bottom.offsetHeight;
-
-      // Transition divider margin from 20px → 0 alongside the bottom panel grow
-      if (divider) divider.style.marginBottom = "0";
-
       document.body.classList.add("bottom-animating");
-
-      // Keep bottom-collapsed during animation so flex layout smoothly adjusts
+      // Animate maxHeight from 0 to the persisted bottomH; afterwards drop the
+      // inline maxHeight so the explicit `height` style takes over.
       bottom.style.maxHeight = "0px";
-      bottom.offsetHeight; // reflow — margin transition starts, bottom at 0
-      bottom.style.transition = "";
-      bottom.style.maxHeight = targetH + "px";
+      bottom.offsetHeight; // reflow at 0
+      document.body.classList.remove("bottom-collapsed");
+      bottom.style.maxHeight = state.bottomH + "px";
+      bottom.style.height = state.bottomH + "px";
 
       onCollapseTransitionEnd(bottom, function () {
-        document.body.classList.remove("bottom-collapsed");
         document.body.classList.remove("bottom-animating");
-        if (divider) divider.style.marginBottom = "";
         bottom.style.maxHeight = "";
         bottom._transitioning = false;
-        computeGridMaxHeight();
         persistBottomHeight();
       });
     } else {
       // --- Collapse ---
       state.bottomCollapsed = true;
-      state.dividerOffsetBeforeCollapse = state.dividerOffset;
-      state.dividerOffset = 0;
-      persistBottomHeight();
-
-      // Clear grid maxHeight — collapsed CSS flex rules fill the space instead
-      applyUpperPaneMaxHeight("");
-
       document.body.classList.add("bottom-animating");
       var currentH = bottom.offsetHeight;
       bottom.style.maxHeight = currentH + "px";
       document.body.classList.add("bottom-collapsed");
       bottom.offsetHeight; // reflow
       bottom.style.maxHeight = "0px";
+      bottom.style.height = "";
 
       onCollapseTransitionEnd(bottom, function () {
         bottom._transitioning = false;
         document.body.classList.remove("bottom-animating");
-        computeGridMaxHeight(0);
+        persistBottomHeight();
       });
     }
   }
@@ -1743,7 +1668,15 @@
 
     function showFloat(td) {
       if (!state.cellExpandHover) return;
-      if (td.scrollWidth <= td.clientWidth) return;
+      // The chip has its own overflow:hidden + max-width:100%, so it never
+      // visually exceeds the cell. Use the chip's scroll-vs-client width to
+      // detect "is the value clipped" — checking the td would always say
+      // false now that chip.offsetWidth is clamped to td.clientWidth.
+      var chip = td.querySelector(".ts-chip");
+      var overflows = chip
+        ? chip.scrollWidth > chip.clientWidth + 1
+        : td.scrollWidth > td.clientWidth + 1;
+      if (!overflows) return;
       floatCell = td;
       var rect = td.getBoundingClientRect();
       cellFloat.textContent = td.textContent;
