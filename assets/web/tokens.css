@@ -607,7 +607,7 @@ body:not(.cg-grid-bg-on) {
   align-items: center;
   height: 100%;
   flex: 1 1 auto;
-  margin-left: 8px;
+  margin-left: 50px;
 }
 .subheader-actions {
   display: flex;

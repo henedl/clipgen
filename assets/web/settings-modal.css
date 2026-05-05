@@ -44,6 +44,17 @@
   font-weight: 600;
 }
 
+.settings-header-right {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.settings-version {
+  color: var(--color-text-dim);
+  font-size: var(--text-xs);
+}
+
 /* ---- Tab strip ---- */
 
 .settings-tabs {

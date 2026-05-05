@@ -45,8 +45,7 @@
     cellExpandHover: true,
     filters: {
       categories: [],
-      sevMin: "",
-      sevMax: "",
+      severities: [],
       fnMin: null,
       fnMax: null,
     },
@@ -255,8 +254,7 @@
     var f = state.filters;
     return (
       f.categories.length > 0 ||
-      f.sevMin !== "" ||
-      f.sevMax !== "" ||
+      f.severities.length > 0 ||
       f.fnMin !== null ||
       f.fnMax !== null
     );
@@ -266,8 +264,6 @@
     var f = state.filters;
     if (!hasActiveFilters()) return rows;
 
-    var sevMinRank = f.sevMin ? severityRank(f.sevMin) : null;
-    var sevMaxRank = f.sevMax ? severityRank(f.sevMax) : null;
     var fnActive = state.activeFunction && ROW_FUNCTIONS[state.activeFunction];
     var participants = state.sheetData ? state.sheetData.participants : [];
 
@@ -275,15 +271,8 @@
       if (f.categories.length > 0) {
         if (!row.category || f.categories.indexOf(row.category) < 0) return false;
       }
-      if (sevMinRank !== null || sevMaxRank !== null) {
-        // sevMin = least-severe boundary, sevMax = most-severe boundary.
-        // Severity rank is more-negative = more-severe (Critical=-4, Medium=-2),
-        // so "at least as severe as sevMin" means r <= sevMinRank, and
-        // "at most as severe as sevMax" means r >= sevMaxRank.
-        var r = severityRank(row.severity);
-        if (r === null) return false;
-        if (sevMinRank !== null && r > sevMinRank) return false;
-        if (sevMaxRank !== null && r < sevMaxRank) return false;
+      if (f.severities.length > 0) {
+        if (!row.severity || f.severities.indexOf(row.severity) < 0) return false;
       }
       if (f.fnMin !== null || f.fnMax !== null) {
         if (!fnActive) return false;
@@ -297,8 +286,7 @@
 
   function clearAllFilters() {
     state.filters.categories = [];
-    state.filters.sevMin = "";
-    state.filters.sevMax = "";
+    state.filters.severities = [];
     state.filters.fnMin = null;
     state.filters.fnMax = null;
   }
@@ -306,13 +294,12 @@
   // ---- Sheet sidebar ----
 
   var SIDEBAR_VIEW_KEY = "clipgen-studio-sidebar-open";
-  // VIEWS section: each entry maps a view id to a severity range that overrides
-  // state.filters.sevMin/sevMax. "all" clears the override; "highlights" pulls
-  // the top three severity tiers; the rest match a single label.
+  // VIEWS section: each entry overrides state.filters.severities. "all"
+  // clears the selection; the rest pin a literal allowlist of severities.
   var SIDEBAR_VIEWS = [
     { id: "all",        label: "All" },
-    { id: "highlights", label: "Highlights", sevMin: "Medium",   sevMax: "Critical" },
-    { id: "positive",   label: "Positive",   sevMin: "Positive", sevMax: "Very Positive" },
+    { id: "highlights", label: "Highlights", severities: ["Critical", "High", "Medium"] },
+    { id: "positive",   label: "Positive",   severities: ["Positive", "Very Positive"] },
   ];
 
   function readPersistedSidebarOpen() {
@@ -331,8 +318,7 @@
     for (var i = 0; i < SIDEBAR_VIEWS.length; i++) {
       if (SIDEBAR_VIEWS[i].id === viewId) { view = SIDEBAR_VIEWS[i]; break; }
     }
-    state.filters.sevMin = view && view.sevMin ? view.sevMin : "";
-    state.filters.sevMax = view && view.sevMax ? view.sevMax : "";
+    state.filters.severities = (view && view.severities) ? view.severities.slice() : [];
   }
 
   function applySidebarCategories() {
@@ -373,39 +359,37 @@
         if (c && c.valid) partCounts[participants[j]] += 1;
       }
     }
-    function rangeCount(sevMin, sevMax) {
-      if (!sevMin && !sevMax) return d.rows.length;
-      var minR = sevMin ? severityRank(sevMin) : null;
-      var maxR = sevMax ? severityRank(sevMax) : null;
+    function countRowsBySeverities(severities) {
+      if (!severities || severities.length === 0) return d.rows.length;
       var n = 0;
       for (var k = 0; k < d.rows.length; k++) {
-        var rk = severityRank(d.rows[k].severity);
-        if (rk === null) continue;
-        // Same semantics as getFilteredRows — sevMin is the least-severe
-        // boundary, sevMax is the most-severe boundary; rank is more-negative
-        // = more-severe.
-        if (minR !== null && rk > minR) continue;
-        if (maxR !== null && rk < maxR) continue;
-        n++;
+        var sev = (d.rows[k].severity || "").trim();
+        if (sev && severities.indexOf(sev) >= 0) n++;
       }
       return n;
     }
 
-    // VIEWS — vertical-list rows with counts.
+    function severitiesEqual(a, b) {
+      if (a.length !== b.length) return false;
+      for (var i = 0; i < a.length; i++) {
+        if (b.indexOf(a[i]) < 0) return false;
+      }
+      return true;
+    }
+
+    // VIEWS — vertical-list rows with counts. Active is derived from the
+    // current state.filters.severities so picking severity pills below
+    // re-highlights the matching view.
     var viewsBody = sidebar.querySelector('[data-target="views"]');
     if (viewsBody) {
       viewsBody.innerHTML = "";
-      // Active is derived from current sevMin/sevMax (not a sticky `sidebarView`)
-      // so the Views row stays in sync with the explicit Severity dropdowns
-      // below — picking an explicit range that matches a preset re-highlights it.
       SIDEBAR_VIEWS.forEach(function (view) {
-        var count = view.id === "all" ? d.rows.length : rangeCount(view.sevMin, view.sevMax);
-        var viewMin = view.sevMin || "";
-        var viewMax = view.sevMax || "";
+        var viewSevs = view.severities || [];
+        var count = view.id === "all" ? d.rows.length : countRowsBySeverities(viewSevs);
         viewsBody.appendChild(createSidebarRow({
           label: view.label,
           count: count,
-          active: state.filters.sevMin === viewMin && state.filters.sevMax === viewMax,
+          active: severitiesEqual(viewSevs, state.filters.severities),
           onClick: function () {
             applySidebarView(view.id);
             renderSidebar();
@@ -442,15 +426,45 @@
       }
     }
 
-    // SEVERITY — explicit min/max dropdowns. Views (above) are quick presets;
-    // this section is the explicit override.
+    // SEVERITY — multi-select pills. "Any severity" clears the selection;
+    // each pill below toggles its severity in/out of state.filters.severities.
     var sevBody = sidebar.querySelector('[data-target="severity"]');
     if (sevBody) {
       sevBody.innerHTML = "";
-      if (hasSeverityData(d.rows)) {
-        sevBody.appendChild(buildSidebarSeverityRange());
-      } else {
+      if (!hasSeverityData(d.rows)) {
         sevBody.appendChild(makeSidebarEmpty("(no severity data)"));
+      } else {
+        sevBody.appendChild(createSidebarRow({
+          label: "Any severity",
+          count: d.rows.length,
+          active: state.filters.severities.length === 0,
+          onClick: function () {
+            state.filters.severities = [];
+            renderSidebar();
+            renderGrid();
+          },
+        }));
+        for (var si = 0; si < CLIPGEN_CONFIG.severity.length; si++) {
+          var sevLabel = CLIPGEN_CONFIG.severity[si].label;
+          var sevCount = sevCounts[sevLabel] || 0;
+          if (sevCount === 0) continue;
+          (function (label) {
+            sevBody.appendChild(createSidebarRow({
+              label: label,
+              count: sevCount,
+              active: state.filters.severities.indexOf(label) >= 0,
+              dotClass: severityClass(label),
+              onClick: function () {
+                var arr = state.filters.severities.slice();
+                var idx = arr.indexOf(label);
+                if (idx >= 0) arr.splice(idx, 1); else arr.push(label);
+                state.filters.severities = arr;
+                renderSidebar();
+                renderGrid();
+              },
+            }));
+          })(sevLabel);
+        }
       }
     }
 
@@ -478,41 +492,6 @@
         partsBody.appendChild(pill);
       });
     }
-  }
-
-  function makeSidebarSeveritySelect(id, value) {
-    var sel = document.createElement("select");
-    sel.id = id;
-    var anyOpt = document.createElement("option");
-    anyOpt.value = "";
-    anyOpt.textContent = "Any";
-    sel.appendChild(anyOpt);
-    for (var i = 0; i < CLIPGEN_CONFIG.severity.length; i++) {
-      var opt = document.createElement("option");
-      opt.value = CLIPGEN_CONFIG.severity[i].label;
-      opt.textContent = CLIPGEN_CONFIG.severity[i].label;
-      sel.appendChild(opt);
-    }
-    sel.value = value || "";
-    return sel;
-  }
-
-  function buildSidebarSeverityRange() {
-    var row = el("div", "studio-sidebar-range");
-    var minSel = makeSidebarSeveritySelect("sidebarSevMin", state.filters.sevMin);
-    var maxSel = makeSidebarSeveritySelect("sidebarSevMax", state.filters.sevMax);
-    function onChange() {
-      state.filters.sevMin = minSel.value;
-      state.filters.sevMax = maxSel.value;
-      applyGridFilters();
-      renderSidebar();
-    }
-    minSel.addEventListener("change", onChange);
-    maxSel.addEventListener("change", onChange);
-    row.appendChild(minSel);
-    row.appendChild(el("span", "studio-sidebar-range-sep", "to"));
-    row.appendChild(maxSel);
-    return row;
   }
 
   function buildSidebarFunctionRange() {
@@ -558,9 +537,10 @@
     var row = el("button", "studio-sidebar-row");
     row.type = "button";
     if (opts.active) row.classList.add("is-active");
-    if (opts.dotColor) {
+    if (opts.dotColor || opts.dotClass) {
       var dot = el("span", "studio-sidebar-row-dot");
-      dot.style.background = opts.dotColor;
+      if (opts.dotClass) dot.classList.add(opts.dotClass);
+      if (opts.dotColor) dot.style.background = opts.dotColor;
       row.appendChild(dot);
     }
     var label = el("span", "studio-sidebar-row-label");
@@ -872,8 +852,7 @@
   function renderHeader() {
     var d = state.sheetData;
     qs("#studyName").textContent = d.study || "Unknown study";
-    qs("#versionInfo").textContent =
-      "v" + (d.version || "") + " \u00B7 " + d.participants.length + " participants";
+    qs("#versionInfo").textContent = d.participants.length + " participants";
   }
 
   // ---- Grid rendering ----
@@ -1074,7 +1053,7 @@
   // The drag updates state.bottomH between BOTTOM_STRIP_MIN and BOTTOM_STRIP_MAX.
   var BOTTOM_STRIP_MIN = 60;
   var BOTTOM_STRIP_MAX = 560;
-  var BOTTOM_STRIP_DEFAULT = 280;
+  var BOTTOM_STRIP_DEFAULT = 380;
   var BOTTOM_STORAGE_KEY = "clipgen-studio-bottom-h";
 
   function applyBottomHeight() {
@@ -2345,6 +2324,7 @@
     qs("#settingsBtn").addEventListener("click", function () {
       openSettingsModal({
         initialTab: "General",
+        version: state.sheetData ? state.sheetData.version : "",
         onSave: function (_applied, full) {
           state.settingsData = full;
           syncInlineControls();
