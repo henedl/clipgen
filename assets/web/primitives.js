@@ -47,11 +47,14 @@
     btn.type = "button";
     btn.className = "filter-chip";
     var hue = resolveHue(opts.label, opts.hue);
+    // `opts.color` (CSS color string) overrides the oklch(hue) path so
+    // detector chips can pin to the canonical `--color-task-*` tokens.
+    var dotColor = opts.color || fmtHue(hue);
 
     if (opts.dot !== false) {
       var dot = document.createElement("span");
       dot.className = "filter-chip-dot";
-      dot.style.color = fmtHue(hue);
+      dot.style.color = dotColor;
       btn.appendChild(dot);
     }
 
@@ -69,7 +72,10 @@
 
     if (opts.active) {
       btn.classList.add("is-active");
-      btn.style.setProperty("--cg-chip-fg", fmtHue(hue));
+      // Active state still uses oklch for the bg/border tints since they need
+      // explicit alpha; the dot pulls from `dotColor` so the canonical token
+      // shows on detector chips when `opts.color` is supplied.
+      btn.style.setProperty("--cg-chip-fg", dotColor);
       btn.style.setProperty("--cg-chip-bg", fmtHue(hue, 0.7, 0.16, 0.12));
       btn.style.setProperty("--cg-chip-border", fmtHue(hue, 0.7, 0.16, 0.45));
     }
@@ -152,7 +158,11 @@
         var hue = resolveHue(e.label, e.hue);
         var alpha = Math.min(1, 0.35 + 0.6 * ((e.count || 1) / max));
         bar.style.left = "calc(" + (e.t * 100) + "% - 3px)";
-        bar.style.background = fmtHue(hue, 0.7, 0.16, alpha);
+        // `e.color` (CSS color string) overrides the oklch(hue) path so
+        // detector bars can pin to the canonical `--color-task-*` tokens.
+        bar.style.background = e.color
+          ? "color-mix(in oklch, " + e.color + " " + Math.round(alpha * 100) + "%, transparent)"
+          : fmtHue(hue, 0.7, 0.16, alpha);
         bar.dataset.idx = idx;
         if (typeof opts.onBarMouseEnter === "function") {
           bar.addEventListener("mouseenter", function () { opts.onBarMouseEnter(idx); });
@@ -261,7 +271,12 @@
     card.setAttribute("draggable", "true");
 
     var hue = resolveHue(opts.label, opts.hue);
-    card.style.setProperty("--cg-card-hue", fmtHue(hue));
+    // `opts.color` (CSS color string) overrides the oklch(hue) path so the
+    // hue dot + label colour can pin to the canonical `--color-task-*`
+    // tokens. The thumb backdrop still uses the numeric hue (the fallback
+    // gradient blends across multiple hue stops, which we don't try to
+    // reconstruct from a single token).
+    card.style.setProperty("--cg-card-hue", opts.color || fmtHue(hue));
 
     var thumb = document.createElement("div");
     thumb.className = kind === "transcript" ? "transcript-card-thumb" : "clip-card-thumb";

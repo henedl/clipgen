@@ -41,7 +41,7 @@
  *
  * LAYOUT:     --layout-max-width | --layout-padding-x
  * SIDEBAR:    --sidebar-width-default | --sidebar-width-wide
- * CARD WIDTH: --card-width-queue | --card-width-stash | --card-width-preview
+ * CARD WIDTH: --card-width-preview (clip-card/transcript-card sizing)
  * PANEL:      --bottom-panel-height
  * ICON SIZE:  --icon-size-xs (12px) | --icon-size-sm (14px) | --icon-size-md (16px) | --icon-size-lg (20px) | --icon-size-xl (24px)
  * BREAKPOINT: --bp-tablet (768px) — documentation/JS-read only, see note below
@@ -170,6 +170,13 @@
   --color-task-scene:      #2dd4bf;
   --color-task-inactivity: #94a3b8;
 
+  /* Stream colors — for metadata cross-stream visualisations
+   * (sheet=yellow, screenspace=blue, transcript=green). Constant across
+   * themes so the three streams stay distinguishable on either background. */
+  --stream-sheet:        #eab308;
+  --stream-screenspace:  #3498db;
+  --stream-transcript:   #10a34a;
+
   /* Transcript intake category colors */
   --cat-pain-point: var(--sev-high);
   --cat-delight: var(--sev-positive);
@@ -211,9 +218,7 @@
   --sidebar-width-default: 340px;
   --sidebar-width-wide: 420px;
 
-  /* Card widths */
-  --card-width-queue: 140px;
-  --card-width-stash: 160px;
+  /* Card widths (clip-card / transcript-card sizing tokens) */
   --card-width-preview: 200px;
 
   /* Bottom panel height (consumed by screenspace.css + screenspace.js) */
@@ -549,9 +554,6 @@ body:not(.cg-grid-bg-on) {
   display: flex;
   align-items: center;
   height: 44px;
-  /* See note on `.topnav` — the body's flex column squeezes children under
-   * viewport pressure unless we pin them with flex-shrink: 0. */
-  flex: 0 0 44px;
   padding: 0 16px;
   border-bottom: 1px solid var(--border);
   background: color-mix(in oklab, var(--bg) 72%, transparent);
@@ -560,8 +562,10 @@ body:not(.cg-grid-bg-on) {
   font-size: 12.5px;
   color: var(--fg-muted);
   gap: 16px;
-  position: sticky;
+  position: fixed;
   top: 48px;
+  left: 0;
+  right: 0;
   z-index: calc(var(--z-dropdown) - 1);
 }
 @supports not (backdrop-filter: blur(1px)) {

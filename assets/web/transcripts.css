@@ -313,7 +313,7 @@ body {
 }
 
 .search-highlight {
-  background: rgba(234, 179, 8, 0.3);
+  background: color-mix(in oklch, var(--stream-sheet) 30%, transparent);
   border-radius: 2px;
   padding: 0 1px;
 }
@@ -358,7 +358,14 @@ body {
   flex-direction: column;
   flex: 1;
   min-height: 0;
-  overflow: hidden;
+  /* Floating-nav scroll-under: TopNav (48) + subheader (44) + pill bar (56)
+   * are all `position: fixed`. #trMain itself is the scroll container so
+   * scrolled video / summary / transcript content slides *under* the chrome
+   * strip; the 148px top inset keeps the first child below it on load.
+   * The PiP-active branch in `setPipActive` adds the videoSection's natural
+   * height on top of this so layout doesn't jump when the player detaches. */
+  padding-top: 148px;
+  overflow-y: auto;
 }
 
 /* Video player */
@@ -805,8 +812,10 @@ body {
 /* Transcript segments */
 
 #transcriptSection {
+  /* Scroll lives on #trMain so transcript content slides under the chrome
+   * strip. flex: 1 keeps the empty-state placeholder filling the remaining
+   * viewport space when the segment list is empty. */
   flex: 1;
-  overflow-y: auto;
   min-height: 0;
 }
 
@@ -1128,7 +1137,6 @@ body {
    the pill (~30 px) plus its status-dot row (~11 px below) without clipping. */
 
 #trPillBar {
-  flex-shrink: 0;
   display: flex;
   align-items: center;
   height: 56px;
@@ -1137,8 +1145,12 @@ body {
   background: color-mix(in oklab, var(--bg) 72%, transparent);
   -webkit-backdrop-filter: blur(14px) saturate(1.4);
   backdrop-filter: blur(14px) saturate(1.4);
-  position: sticky;
-  top: 92px; /* topnav 48 + subheader 44 */
+  /* Floating-nav scroll-under: pinned to viewport, completing the
+   * 148px chrome strip below the topnav (48) + subheader (44). */
+  position: fixed;
+  top: 92px;
+  left: 0;
+  right: 0;
   z-index: calc(var(--z-dropdown) - 1);
 }
 
