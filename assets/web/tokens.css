@@ -168,7 +168,7 @@
   --color-task-template:   #fb7185;
   --color-task-flow:       #818cf8;
   --color-task-scene:      #2dd4bf;
-  --color-task-inactivity: #a8a29e;
+  --color-task-inactivity: #94a3b8;
 
   /* Transcript intake category colors */
   --cat-pain-point: var(--sev-high);
@@ -297,7 +297,7 @@ html[data-theme="light"],
   --color-task-template:   #f43f5e;
   --color-task-flow:       #6366f1;
   --color-task-scene:      #14b8a6;
-  --color-task-inactivity: #78716c;
+  --color-task-inactivity: #64748b;
 
   --cat-quote:    #2563eb;
   --cat-insight:  #f97316;
@@ -490,7 +490,10 @@ body:not(.cg-grid-bg-on) {
   border: 0;
 }
 
-/* Shared dark-pill hover tooltip. Pair with createTooltip/attachHoverTooltip in utils.js. */
+/* Shared dark-pill hover tooltip. Pair with createTooltip/attachHoverTooltip in utils.js.
+   Tooltips need to clear sticky chrome (subheaders sit at calc(--z-dropdown - 1) = 99
+   and pill-dot anchors live inside that chrome) plus any modal that's open while a
+   tooltip fires — so we float them at --z-toast (3000), well above modals (1000). */
 .cg-tooltip {
   position: fixed;
   padding: var(--space-1) var(--space-3);
@@ -501,7 +504,7 @@ body:not(.cg-grid-bg-on) {
   white-space: nowrap;
   border-radius: var(--radius-sm);
   pointer-events: none;
-  z-index: var(--z-float);
+  z-index: var(--z-toast);
   opacity: 0;
   transition: opacity var(--duration-fast);
 }

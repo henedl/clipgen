@@ -209,6 +209,20 @@
     return TASK_COLORS[type] || "#888";
   }
 
+  // Confidence bar mirrors the prototype's ConfBar: 4 px tall, hue-tinted fill,
+  // opacity ramps from 0.4 (low) to 1.0 (full) so high-confidence rows feel
+  // saturated while low ones recede.
+  function buildConfBar(value, type) {
+    var v = Math.max(0, Math.min(1, Number(value) || 0));
+    var bar = el("div", "result-bar");
+    var fill = el("div", "result-bar-fill");
+    fill.style.width = Math.round(v * 100) + "%";
+    fill.style.background = taskTypeColor(type);
+    fill.style.opacity = (0.4 + v * 0.6).toFixed(2);
+    bar.appendChild(fill);
+    return bar;
+  }
+
   function frameUrl(pid, ts) {
     return "api/video/frame/" + encodeURIComponent(pid) + "/" + Number(ts).toFixed(6);
   }
@@ -6156,21 +6170,18 @@
       } else if (task.type === "change") {
         row.dataset.timestamp = r.timestamp;
         row.appendChild(el("span", "result-timestamp", formatTimestamp(r.timestamp)));
-        var bar = el("div", "result-bar");
-        var fill = el("div", "result-bar-fill");
-        fill.style.width = Math.round(Math.min(r.magnitude, 1) * 100) + "%";
-        fill.style.background = taskTypeColor("change");
-        bar.appendChild(fill);
-        row.appendChild(bar);
+        row.appendChild(buildConfBar(Math.min(r.magnitude, 1), task.type));
         row.appendChild(el("span", "result-score", (r.magnitude * 100).toFixed(1) + "%"));
       } else if (task.type === "similarity") {
         row.dataset.timestamp = r.timestamp;
         row.appendChild(el("span", "result-timestamp", formatTimestamp(r.timestamp)));
+        row.appendChild(buildConfBar(r.score, task.type));
         row.appendChild(el("span", "result-score", (r.score * 100).toFixed(1) + "%"));
       } else if (task.type === "text") {
         row.dataset.timestamp = r.timestamp;
         row.appendChild(el("span", "result-timestamp", formatTimestamp(r.timestamp)));
         row.appendChild(el("span", "result-detail", r.text_found || ""));
+        row.appendChild(buildConfBar(r.confidence, task.type));
         row.appendChild(el("span", "result-score", (r.confidence * 100).toFixed(0) + "%"));
       } else if (task.type === "numbers") {
         row.dataset.timestamp = r.timestamp;
@@ -6179,22 +6190,19 @@
       } else if (task.type === "template") {
         row.dataset.timestamp = r.timestamp;
         row.appendChild(el("span", "result-timestamp", formatTimestamp(r.timestamp)));
+        row.appendChild(buildConfBar(r.best_score, task.type));
         row.appendChild(el("span", "result-score", (r.best_score * 100).toFixed(1) + "%"));
         row.appendChild(el("span", "result-detail", r.match_count + " match" + (r.match_count !== 1 ? "es" : "")));
       } else if (task.type === "flow") {
         row.dataset.timestamp = r.timestamp;
         row.appendChild(el("span", "result-timestamp", formatTimestamp(r.timestamp)));
-        var flowBar = el("div", "result-bar");
-        var flowFill = el("div", "result-bar-fill");
-        flowFill.style.width = Math.round(Math.min(r.magnitude / 20, 1) * 100) + "%";
-        flowFill.style.background = taskTypeColor("flow");
-        flowBar.appendChild(flowFill);
-        row.appendChild(flowBar);
+        row.appendChild(buildConfBar(Math.min(r.magnitude / 20, 1), task.type));
         row.appendChild(el("span", "result-score", r.magnitude.toFixed(2)));
       } else if (task.type === "scene") {
         row.dataset.timestamp = r.timestamp;
         row.appendChild(el("span", "result-timestamp", formatTimestamp(r.timestamp)));
         row.appendChild(el("span", "result-detail", r.scene_name));
+        row.appendChild(buildConfBar(r.score, task.type));
         row.appendChild(el("span", "result-score", (r.score * 100).toFixed(1) + "%"));
       } else if (task.type === "multitool") {
         row.dataset.timestamp = r.timestamp;

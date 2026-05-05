@@ -25,18 +25,22 @@
   <header id="trHeader">
     <div id="trSubheader">
       <div class="subheader-left">
+        <div id="headerSearch">
+          <input id="searchInput" type="text" placeholder="Search across all transcripts..." autocomplete="off">
+          <span id="searchCount" class="search-count"></span>
+          <div id="searchResults" class="hidden"></div>
+        </div>
+      </div>
+      <div class="subheader-actions">
         <span id="trStatusIndicator" class="status-indicator" tabindex="0" role="status" aria-label="Transcription status"></span>
         <span id="trStatusSr" class="sr-only" aria-live="polite"></span>
         <button id="correctionsBtn" type="button" class="btn btn-small">Corrections</button>
       </div>
     </div>
-    <div id="participantPills" class="pill-row" role="tablist" aria-label="Participants">
-      <span class="pill-row-empty">No participants</span>
-    </div>
-    <div id="headerSearch">
-      <input id="searchInput" type="text" placeholder="Search across all transcripts..." autocomplete="off">
-      <span id="searchCount" class="search-count"></span>
-      <div id="searchResults" class="hidden"></div>
+    <div id="trPillBar">
+      <div id="participantPills" class="pill-row" role="tablist" aria-label="Participants">
+        <span class="pill-row-empty">No participants</span>
+      </div>
     </div>
   </header>
 

@@ -1014,9 +1014,18 @@
       var activeClass = i === state.activeSegmentIndex ? " active" : "";
       var correctedClass = seg.corrected ? " segment-corrected" : "";
       var markObj = seg.marks && seg.marks.length > 0 ? seg.marks[0] : null;
+      var markCat = markObj ? (MARK_CATEGORIES[markObj.category] || MARK_CATEGORIES.bookmark) : null;
+      var markColor = markCat ? markCat.color : null;
       var markClass = markObj ? "segment-mark marked" : "segment-mark";
-      var markStyle = markObj ? ' style="background:' + (MARK_CATEGORIES[markObj.category] || MARK_CATEGORIES.bookmark).color + '"' : "";
+      var markStyle = markColor ? ' style="background:' + markColor + '"' : "";
       var markLabel = markObj && markObj.label ? ' title="' + escapeHtml(markObj.label) + '"' : "";
+      var annoBadgeHtml = "";
+      if (markObj && markObj.label && markColor) {
+        var bgMix = "color-mix(in oklch, " + markColor + " 18%, transparent)";
+        var borderMix = "color-mix(in oklch, " + markColor + " 50%, transparent)";
+        var badgeStyle = "--anno-badge-fg:" + markColor + ";--anno-badge-bg:" + bgMix + ";--anno-badge-border:" + borderMix;
+        annoBadgeHtml = '<span class="segment-anno-badge" style="' + badgeStyle + '">' + escapeHtml(markObj.label) + '</span>';
+      }
 
       html += '<div class="segment-row' + activeClass + correctedClass + '" data-index="' + i + '" data-start="' + seg.start + '">';
       html += '<span class="' + markClass + '" data-segment-id="' + escapeHtml(seg.id) + '"' + markStyle + markLabel + '></span>';
@@ -1053,7 +1062,7 @@
           wordHtml += '<span class="segment-word" data-original="' + escapeHtml(tokens[w]) + '">' + escapeHtml(tokens[w]) + '</span>';
         }
       }
-      html += '<span class="segment-text" data-id="' + escapeHtml(seg.id) + '">' + wordHtml + '</span>';
+      html += '<span class="segment-text" data-id="' + escapeHtml(seg.id) + '">' + annoBadgeHtml + wordHtml + '</span>';
       html += '<span class="segment-copy" title="Copy text"><span class="segment-copy-icon"></span></span>';
       html += '</div>';
     }
