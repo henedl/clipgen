@@ -18,8 +18,6 @@
   // CLIPGEN_CONFIG.severity and severityRank are read directly from utils.js
   // (CLIPGEN_CONFIG.severity / severityRank) and need no per-module alias.
 
-  var MD_HISTOGRAM_HEIGHT = 140;
-
   var mdState = {
     active: false,
     initialized: false,
@@ -578,83 +576,121 @@
 
     panel.appendChild(renderHeaderBar(cache));
     renderFreshnessBanner(panel);
-    panel.appendChild(renderSummaryStrip(cache));
+    panel.appendChild(renderKpiStrip(cache));
+    panel.appendChild(renderActivityBlock(cache));
     panel.appendChild(renderSection("coverage", "Data Coverage Matrix",
       cache.participants.length + " participants", renderCoverageBody, cache, false, null));
-    panel.appendChild(renderSection("event-types", "Per Event Type \u2014 Screenspace",
+
+    // Detailed sections collapsed behind a "Show details" expander
+    var expander = renderDetailsExpander(cache);
+    panel.appendChild(expander);
+  }
+
+  function renderDetailsExpander(cache) {
+    var DETAILS_KEY = "clipgen-studio-md-details";
+    var open = false;
+    try { open = window.localStorage.getItem(DETAILS_KEY) === "1"; } catch (_) {}
+
+    var wrap = el("div", "md-details-expander");
+    wrap.id = "mdDetailsExpander";
+
+    var head = el("button", "md-details-head");
+    head.type = "button";
+    var chev = el("span", "md-details-chev");
+    head.appendChild(chev);
+    var title = el("span", "md-details-title");
+    title.textContent = "Show details";
+    head.appendChild(title);
+    var count = el("span", "md-details-count cg-mono");
+    count.textContent = "(7 sections)";
+    head.appendChild(count);
+    wrap.appendChild(head);
+
+    var body = el("div", "md-details-body");
+    body.appendChild(renderSection("event-types", "Per Event Type \u2014 Screenspace",
       cache.eventTypeStats.length + " types", renderEventTypeBody, cache, !cache.hasScreenspace,
       "No screenspace events available."));
-    panel.appendChild(renderSection("tr-categories", "Per Category \u2014 Transcript",
+    body.appendChild(renderSection("tr-categories", "Per Category \u2014 Transcript",
       cache.transcriptCategoryStats.length + " categories", renderTranscriptCategoryBody, cache, !cache.hasTranscript,
       "No transcript marks available."));
-    panel.appendChild(renderSection("observations", "Per Observation \u2014 Spreadsheet",
+    body.appendChild(renderSection("observations", "Per Observation \u2014 Spreadsheet",
       cache.observationStats.length + " observations", renderObservationBody, cache, !cache.hasSheet,
       "No spreadsheet data available."));
-    panel.appendChild(renderSection("severity", "Severity Distribution",
+    body.appendChild(renderSection("severity", "Severity Distribution",
       null, renderSeverityBody, cache, !cache.hasSheet,
       "No spreadsheet data available."));
-    panel.appendChild(renderSection("cat-breakdown", "Category Breakdown \u2014 Spreadsheet",
+    body.appendChild(renderSection("cat-breakdown", "Category Breakdown \u2014 Spreadsheet",
       null, renderCategoryBreakdownBody, cache, !cache.hasSheet,
       "No spreadsheet data available."));
     var streamCount = (cache.hasScreenspace ? 1 : 0) + (cache.hasSheet ? 1 : 0) + (cache.hasTranscript ? 1 : 0);
-    panel.appendChild(renderSection("collisions", "Cross-Stream Collisions",
+    body.appendChild(renderSection("collisions", "Cross-Stream Collisions",
       null, renderCollisionBody, cache, streamCount < 2,
       "Cross-stream collisions require data from at least two streams."));
-    panel.appendChild(renderSection("sessions", "Session-Level Summary",
+    body.appendChild(renderSection("sessions", "Session-Level Summary",
       cache.sessionSummary.length + " participants", renderSessionSummaryBody, cache, false, null));
+    wrap.appendChild(body);
 
-    // Render histogram canvas after DOM is in place
-    setTimeout(renderHistogram, 0);
+    function applyOpen(state) {
+      wrap.classList.toggle("is-open", state);
+      title.textContent = state ? "Hide details" : "Show details";
+    }
+    applyOpen(open);
+
+    head.addEventListener("click", function () {
+      open = !open;
+      applyOpen(open);
+      try { window.localStorage.setItem(DETAILS_KEY, open ? "1" : "0"); } catch (_) {}
+    });
+
+    return wrap;
   }
 
   // --- Header bar ---
 
   function renderHeaderBar(cache) {
+    var P = window.ClipgenPrimitives || {};
     var bar = el("div", "md-header-bar");
 
     var pills = el("div", "md-participant-pills");
     var allP = cache.allParticipants;
     for (var i = 0; i < allP.length; i++) {
-      var pill = el("button", "md-pill", allP[i]);
-      pill.dataset.participant = allP[i];
-      if (mdState.filterParticipants.indexOf(allP[i]) >= 0) {
-        pill.classList.add("active");
-      }
-      pill.addEventListener("click", function () {
-        var p = this.dataset.participant;
-        var idx = mdState.filterParticipants.indexOf(p);
-        if (idx >= 0) {
-          mdState.filterParticipants.splice(idx, 1);
-        } else {
-          mdState.filterParticipants.push(p);
-        }
-        refresh();
-      });
-      pills.appendChild(pill);
+      (function (pid) {
+        var active = mdState.filterParticipants.indexOf(pid) >= 0;
+        var pill = P.createParticipantPill({
+          id: pid,
+          active: active,
+          onClick: function () {
+            var idx = mdState.filterParticipants.indexOf(pid);
+            if (idx >= 0) mdState.filterParticipants.splice(idx, 1);
+            else mdState.filterParticipants.push(pid);
+            refresh();
+          },
+        });
+        pill.dataset.participant = pid;
+        pills.appendChild(pill);
+      })(allP[i]);
     }
     bar.appendChild(pills);
 
     var actions = el("div", "md-header-actions");
 
-    var refreshBtn = el("button", "btn btn-small btn-icon md-refresh-btn");
-    refreshBtn.innerHTML = '<span class="md-icon md-icon-refresh"></span> Refresh';
-    refreshBtn.title = "Re-fetch data and recompute statistics";
-    refreshBtn.addEventListener("click", function () {
-      mdState._snapshot = null;
-      refresh();
+    var refreshBtn = P.createBtn({
+      label: "Refresh", icon: "arrow-path", size: "sm",
+      onClick: function () { mdState._snapshot = null; refresh(); },
     });
+    refreshBtn.title = "Re-fetch data and recompute statistics";
     actions.appendChild(refreshBtn);
 
-    var exportBtn = el("button", "btn btn-small btn-icon md-export-btn");
-    exportBtn.innerHTML = '<span class="md-icon md-icon-export"></span> JSON';
-    exportBtn.title = "Download metadata as JSON";
-    exportBtn.addEventListener("click", exportJSON);
-    actions.appendChild(exportBtn);
+    var jsonBtn = P.createBtn({
+      label: "JSON", icon: "arrow-down-tray", size: "sm", onClick: exportJSON,
+    });
+    jsonBtn.title = "Download metadata as JSON";
+    actions.appendChild(jsonBtn);
 
-    var csvBtn = el("button", "btn btn-small btn-icon md-export-btn");
-    csvBtn.innerHTML = '<span class="md-icon md-icon-export"></span> CSV';
+    var csvBtn = P.createBtn({
+      label: "CSV", icon: "arrow-down-tray", size: "sm", onClick: exportCSV,
+    });
     csvBtn.title = "Download metadata as CSV (4 files)";
-    csvBtn.addEventListener("click", exportCSV);
     actions.appendChild(csvBtn);
 
     bar.appendChild(actions);
@@ -702,22 +738,127 @@
     panel.appendChild(staleBanner);
   }
 
-  // --- Summary charts strip ---
+  // --- KPI strip ---
+  //
+  // Five KPIs: Participants, Sheet observations, Screenspace events,
+  // Transcript moments, Project duration. Each fed a SparkBars
+  // sized by the corresponding participant counts in cache.coverage.
 
-  function renderSummaryStrip(_cache) {
-    var strip = el("div", "md-summary-strip");
+  function _coverageSeries(cache, key) {
+    var out = [];
+    for (var i = 0; i < cache.allParticipants.length; i++) {
+      var pid = cache.allParticipants[i];
+      var cov = cache.coverage[pid];
+      out.push(cov ? (cov[key] || 0) : 0);
+    }
+    return out;
+  }
 
-    // Histogram canvas
-    var histContainer = el("div", "md-histogram-container");
-    var histCanvas = document.createElement("canvas");
-    histCanvas.id = "mdHistogramCanvas";
-    histContainer.appendChild(histCanvas);
-    var histTooltip = el("div", "md-histogram-tooltip hidden");
-    histTooltip.id = "mdHistogramTooltip";
-    histContainer.appendChild(histTooltip);
-    strip.appendChild(histContainer);
+  function _formatHmsCompact(sec) {
+    sec = Math.max(0, Math.floor(sec));
+    var h = Math.floor(sec / 3600);
+    var m = Math.floor((sec - h * 3600) / 60);
+    var s = sec - h * 3600 - m * 60;
+    var pad = function (n) { return n < 10 ? "0" + n : "" + n; };
+    if (h > 0) return h + ":" + pad(m);
+    return m + ":" + pad(s);
+  }
+
+  function renderKpiStrip(cache) {
+    var P = window.ClipgenPrimitives || {};
+    var strip = el("div", "md-kpi-strip");
+
+    var sheetSeries = _coverageSeries(cache, "sheet");
+    var ssSeries = _coverageSeries(cache, "screenspace");
+    var trSeries = _coverageSeries(cache, "transcript");
+    var totalSheet = sheetSeries.reduce(function (a, b) { return a + b; }, 0);
+    var totalSS = ssSeries.reduce(function (a, b) { return a + b; }, 0);
+    var totalTR = trSeries.reduce(function (a, b) { return a + b; }, 0);
+    var participantCount = cache.allParticipants.length;
+    var maxTime = (cache.histogramData && cache.histogramData.maxTime) || 0;
+
+    var sevSummary = "";
+    if (cache.severityDist) {
+      var critHigh = (cache.severityDist.critical || 0) + (cache.severityDist.high || 0);
+      if (critHigh) sevSummary = critHigh + " high+critical";
+    }
+
+    strip.appendChild(P.createKpiCard({
+      label: "Participants", value: participantCount,
+      sub: cache.hasSheet ? "across all rows" : "all streams",
+      accent: "oklch(0.65 0.16 220)",
+      spark: P.createSparkBars({
+        data: sheetSeries.map(function () { return 1; }), hue: 220,
+      }),
+    }));
+    strip.appendChild(P.createKpiCard({
+      label: "Sheet observations", value: totalSheet,
+      sub: cache.eventTypeStats.length
+        ? cache.eventTypeStats.length + " event types"
+        : (sevSummary || "—"),
+      accent: "oklch(0.65 0.16 280)",
+      spark: P.createSparkBars({ data: sheetSeries, hue: 280 }),
+    }));
+    strip.appendChild(P.createKpiCard({
+      label: "Screenspace events", value: totalSS,
+      sub: cache.hasScreenspace
+        ? cache.eventTypeStats.length + " types"
+        : "no data",
+      accent: "oklch(0.65 0.16 220)",
+      spark: P.createSparkBars({ data: ssSeries, hue: 220 }),
+    }));
+    strip.appendChild(P.createKpiCard({
+      label: "Transcript moments", value: totalTR,
+      sub: cache.hasTranscript
+        ? cache.transcriptCategoryStats.length + " categories"
+        : "no data",
+      accent: "oklch(0.65 0.16 145)",
+      spark: P.createSparkBars({ data: trSeries, hue: 145 }),
+    }));
+    strip.appendChild(P.createKpiCard({
+      label: "Project duration",
+      value: _formatHmsCompact(maxTime),
+      sub: maxTime ? "hours · all videos" : "—",
+      accent: "oklch(0.65 0.16 45)",
+    }));
 
     return strip;
+  }
+
+  function renderActivityBlock(cache) {
+    var P = window.ClipgenPrimitives || {};
+    var block = el("div", "md-activity-block");
+
+    var head = el("div", "md-activity-head");
+    var title = el("div", "md-activity-title");
+    title.textContent = "Activity over project timeline";
+    head.appendChild(title);
+    var range = el("span", "md-activity-range cg-mono");
+    var maxTime = (cache.histogramData && cache.histogramData.maxTime) || 0;
+    range.textContent = "0:00 → " + (maxTime > 0 ? formatTime(maxTime) : "—");
+    head.appendChild(range);
+    block.appendChild(head);
+
+    var data = (cache.histogramData && cache.histogramData.bins) || [];
+    var bars = data.map(function (b) {
+      return (b.sheet || 0) + (b.screenspace || 0) + (b.transcript || 0);
+    });
+    var spark = P.createSparkBars({ data: bars, hue: 45, height: 80 });
+    spark.classList.add("md-activity-bars");
+    block.appendChild(spark);
+
+    if (maxTime > 0) {
+      var ticks = el("div", "md-activity-ticks cg-mono");
+      var n = 7;
+      for (var i = 0; i < n; i++) {
+        var t = maxTime * (i / (n - 1));
+        var s = el("span", "");
+        s.textContent = formatTime(t);
+        ticks.appendChild(s);
+      }
+      block.appendChild(ticks);
+    }
+    return block;
   }
 
   // --- Section wrapper ---
@@ -757,62 +898,28 @@
   // --- Section 1: Coverage Matrix ---
 
   function renderCoverageBody(body, cache) {
-    var table = el("table", "md-table md-coverage-table");
-    var thead = el("thead");
-    var hrow = el("tr");
-    hrow.appendChild(el("th", "", "Participant"));
-    hrow.appendChild(el("th", "", "Sheet"));
-    hrow.appendChild(el("th", "", "Screenspace"));
-    hrow.appendChild(el("th", "", "Transcript"));
-    thead.appendChild(hrow);
-    table.appendChild(thead);
-
-    var tbody = el("tbody");
+    var P = window.ClipgenPrimitives || {};
     var participants = cache.participants;
-    var maxSheet = 0, maxSS = 0, maxTR = 0;
+    var rows = [];
     for (var i = 0; i < participants.length; i++) {
-      var c = cache.coverage[participants[i]];
-      if (c.sheet > maxSheet) maxSheet = c.sheet;
-      if (c.screenspace > maxSS) maxSS = c.screenspace;
-      if (c.transcript > maxTR) maxTR = c.transcript;
+      var pid = participants[i];
+      var cov = cache.coverage[pid] || { sheet: 0, screenspace: 0, transcript: 0 };
+      rows.push({
+        p: pid,
+        sheet: cov.sheet || 0,
+        screenspace: cov.screenspace || 0,
+        transcript: cov.transcript || 0,
+      });
     }
-
-    var hm = getCSSVar("--color-heatmap", "168, 130, 214");
-
-    for (var j = 0; j < participants.length; j++) {
-      var pid = participants[j];
-      var cov = cache.coverage[pid];
-      var row = el("tr");
-      row.classList.add("md-coverage-row");
-      row.dataset.participant = pid;
-
-      var nameCell = el("td", "md-coverage-participant", pid);
-      row.appendChild(nameCell);
-
-      row.appendChild(makeCoverageCell(cov.sheet, maxSheet, hm));
-      row.appendChild(makeCoverageCell(cov.screenspace, maxSS, hm));
-      row.appendChild(makeCoverageCell(cov.transcript, maxTR, hm));
-
-      nameCell.addEventListener("click", (function (p) {
-        return function () { drillDownParticipant(p); };
-      })(pid));
-
-      tbody.appendChild(row);
-    }
-    table.appendChild(tbody);
+    var table = P.createCoverageMatrix({ rows: rows });
+    table.classList.add("md-coverage-table-host");
+    // Click participant cell → drill down
+    table.addEventListener("click", function (ev) {
+      var td = ev.target.closest && ev.target.closest("td.cg-cov-td-left");
+      if (!td) return;
+      drillDownParticipant(td.textContent);
+    });
     body.appendChild(table);
-  }
-
-  function makeCoverageCell(value, max, hm) {
-    var td = el("td", "md-coverage-cell");
-    td.textContent = value;
-    if (value === 0) {
-      td.classList.add("md-coverage-zero");
-    } else if (max > 0) {
-      var t = value / max;
-      td.style.backgroundColor = "rgba(" + hm + ", " + (t * 0.45).toFixed(3) + ")";
-    }
-    return td;
   }
 
   // --- Section 2: Per Event Type ---
@@ -1328,142 +1435,6 @@
     }
   }
 
-  // --- Section 9: Temporal Density Histogram ---
-
-  var _histogramHitRects = [];
-
-  function renderHistogram() {
-    var canvas = qs("#mdHistogramCanvas");
-    if (!canvas || !mdState.cache) return;
-    var data = mdState.cache.histogramData;
-
-    var container = canvas.parentElement;
-    var rect = container.getBoundingClientRect();
-    if (rect.width < 10) return;
-
-    var dpr = window.devicePixelRatio || 1;
-    var w = Math.floor(rect.width);
-    var h = MD_HISTOGRAM_HEIGHT;
-    canvas.width = w * dpr;
-    canvas.height = h * dpr;
-    canvas.style.width = w + "px";
-    canvas.style.height = h + "px";
-
-    var ctx = canvas.getContext("2d");
-    ctx.scale(dpr, dpr);
-
-    // Theme colors
-    var cs = getComputedStyle(document.documentElement);
-    var bgColor = cs.getPropertyValue("--color-surface-alt").trim() || "#f1ece4";
-    var borderColor = cs.getPropertyValue("--color-border").trim() || "#e0ddd7";
-    var textDim = cs.getPropertyValue("--color-text-dim").trim() || "#6b7280";
-    var fontMono = cs.getPropertyValue("--font-mono").trim() || "monospace";
-
-    ctx.clearRect(0, 0, w, h);
-    ctx.fillStyle = bgColor;
-    ctx.fillRect(0, 0, w, h);
-
-    if (!data || !data.bins.length) {
-      ctx.fillStyle = textDim;
-      ctx.font = "12px " + fontMono;
-      ctx.textAlign = "center";
-      ctx.fillText("No events to plot", w / 2, h / 2);
-      _histogramHitRects = [];
-      return;
-    }
-
-    var STREAM_COLORS = {
-      sheet: "rgba(234, 179, 8, 0.7)",
-      screenspace: "rgba(52, 152, 219, 0.7)",
-      transcript: "rgba(16, 163, 74, 0.7)",
-    };
-
-    var padLeft = 4;
-    var padRight = 4;
-    var padTop = 8;
-    var padBottom = 20;
-    var chartW = w - padLeft - padRight;
-    var chartH = h - padTop - padBottom;
-    var barW = chartW / data.bins.length;
-    var maxC = data.maxCount || 1;
-
-    _histogramHitRects = [];
-
-    // Draw stacked bars
-    for (var i = 0; i < data.bins.length; i++) {
-      var bin = data.bins[i];
-      var x = padLeft + i * barW;
-      var stackOrder = ["sheet", "screenspace", "transcript"];
-      var yOffset = 0;
-      for (var s = 0; s < stackOrder.length; s++) {
-        var count = bin[stackOrder[s]];
-        if (count <= 0) continue;
-        var barH = (count / maxC) * chartH;
-        ctx.fillStyle = STREAM_COLORS[stackOrder[s]];
-        ctx.fillRect(x + 0.5, padTop + chartH - yOffset - barH, barW - 1, barH);
-        yOffset += barH;
-      }
-      _histogramHitRects.push({
-        x: x, w: barW,
-        bin: bin,
-        startSec: i * data.binWidth,
-        endSec: (i + 1) * data.binWidth,
-      });
-    }
-
-    // Bottom border
-    ctx.strokeStyle = borderColor;
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    ctx.moveTo(padLeft, padTop + chartH + 0.5);
-    ctx.lineTo(padLeft + chartW, padTop + chartH + 0.5);
-    ctx.stroke();
-
-    // Time labels
-    ctx.fillStyle = textDim;
-    ctx.font = "9px " + fontMono;
-    ctx.textAlign = "center";
-    var labelCount = Math.min(6, data.bins.length);
-    var labelStep = Math.max(1, Math.floor(data.bins.length / labelCount));
-    for (var lb = 0; lb < data.bins.length; lb += labelStep) {
-      var lx = padLeft + lb * barW + barW / 2;
-      ctx.fillText(formatTime(lb * data.binWidth), lx, h - 4);
-    }
-    // Last label
-    ctx.fillText(formatTime(data.maxTime), padLeft + chartW - 10, h - 4);
-  }
-
-  function initHistogramHover() {
-    var canvas = qs("#mdHistogramCanvas");
-    var tooltip = qs("#mdHistogramTooltip");
-    if (!canvas || !tooltip) return;
-
-    canvas.addEventListener("mousemove", function (e) {
-      var rect = canvas.getBoundingClientRect();
-      var mx = e.clientX - rect.left;
-      var hit = null;
-      for (var i = 0; i < _histogramHitRects.length; i++) {
-        var hr = _histogramHitRects[i];
-        if (mx >= hr.x && mx < hr.x + hr.w) { hit = hr; break; }
-      }
-      if (hit) {
-        var total = hit.bin.sheet + hit.bin.screenspace + hit.bin.transcript;
-        tooltip.innerHTML =
-          "<strong>" + formatTime(hit.startSec) + " \u2013 " + formatTime(hit.endSec) + "</strong><br>" +
-          "Sheet: " + hit.bin.sheet + " &middot; SS: " + hit.bin.screenspace + " &middot; TR: " + hit.bin.transcript +
-          " &middot; Total: " + total;
-        tooltip.style.left = (e.clientX - rect.left) + "px";
-        tooltip.classList.remove("hidden");
-      } else {
-        tooltip.classList.add("hidden");
-      }
-    });
-
-    canvas.addEventListener("mouseleave", function () {
-      tooltip.classList.add("hidden");
-    });
-  }
-
   // --- Drill-down helpers ---
 
   function drillDownEventType(eventType) {
@@ -1649,7 +1620,6 @@
     mdState.cache = computeAllStats(mdState.filterParticipants);
     renderAll(mdState.cache);
     takeSnapshot();
-    setTimeout(initHistogramHover, 0);
   }
 
   function recomputeCollisions() {
@@ -1713,7 +1683,8 @@
 
   function resize() {
     if (!mdState.active) return;
-    renderHistogram();
+    // Re-render so SparkBars & coverage matrix re-flow at the new width.
+    if (mdState.cache) renderAll(mdState.cache);
   }
 
   // --- Visibility change ---

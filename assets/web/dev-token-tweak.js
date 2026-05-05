@@ -556,10 +556,20 @@
       state.collapsed = nowCollapsed;
       saveCollapsed(nowCollapsed);
     });
+    var dismissBtn = document.createElement("button");
+    dismissBtn.type = "button";
+    dismissBtn.className = "cg-tt-btn";
+    dismissBtn.textContent = "✕";
+    dismissBtn.title = "Dismiss panel for this session (returns on refresh)";
+    dismissBtn.addEventListener("click", function () {
+      if (panel.parentNode) panel.parentNode.removeChild(panel);
+      state.panel = null;
+    });
     header.appendChild(title);
     header.appendChild(copyBtn);
     header.appendChild(resetAllBtn);
     header.appendChild(collapseBtn);
+    header.appendChild(dismissBtn);
     panel.appendChild(header);
 
     var body = document.createElement("div");

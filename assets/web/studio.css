@@ -204,7 +204,7 @@ body {
 #trIntakePanel,
 #convergencePanel,
 #metadataPanel {
-  padding: var(--space-3) var(--space-4);
+  padding: var(--space-3) var(--space-0);
 }
 
 /* Sub-tab panels are flex children of #sheetMain. Without explicit
@@ -877,14 +877,16 @@ body.bottom-animating #stashedArtifactsArea {
   color: var(--color-text);
 }
 
-.col-observation {
+/* `#sheetGrid` scoping bumps specificity above `#sheetGrid tbody td` /
+ * `#sheetGrid thead th` so the left alignment wins for both header and cell. */
+#sheetGrid .col-observation {
   text-align: left;
   color: var(--fg);
   text-overflow: ellipsis;
   max-width: 280px;
 }
 
-.col-category {
+#sheetGrid .col-category {
   text-align: left;
   color: var(--fg-muted);
   text-overflow: ellipsis;
@@ -892,7 +894,7 @@ body.bottom-animating #stashedArtifactsArea {
 
 /* Severity rendered as a pill (locked variant per redesign). The .col-severity
  * td is just a layout container; the pill lives inside as a span chain. */
-.col-severity {
+#sheetGrid .col-severity {
   text-align: left;
 }
 
@@ -1317,8 +1319,9 @@ col.col-participant-col {
 
 .queue-card-ref {
   font-family: var(--font-mono);
-  font-weight: 600;
+  font-weight: 400;
   font-size: var(--text-xs);
+  color: var(--fg-muted);
 }
 
 .queue-card-remove {
@@ -2371,12 +2374,17 @@ html[data-theme="dark"] .log-panel {
 
 /* ---- Screenspace Intake ---- */
 
-#intakeControls {
+/* Match the Convergence top-row layout: padded toolbar with hairline divider
+ * so intake panels read consistently with the rest of Studio. */
+#intakeControls,
+#trIntakeControls {
   display: flex;
   align-items: center;
-  gap: var(--space-2);
-  margin-bottom: var(--space-2);
+  gap: 14px;
+  padding: 10px var(--space-3) 8px;
+  border-bottom: 1px solid var(--hairline);
   flex-wrap: wrap;
+  margin-bottom: 0;
 }
 
 .intake-cluster-label {
@@ -2412,7 +2420,6 @@ html[data-theme="dark"] .log-panel {
   border-radius: calc(var(--radius) - 2px);
   cursor: crosshair;
   display: block;
-  margin-bottom: var(--space-2);
 }
 
 .intake-cards-grid {
@@ -2420,7 +2427,7 @@ html[data-theme="dark"] .log-panel {
   flex-wrap: wrap;
   gap: var(--space-2);
   overflow-y: auto;
-  padding: var(--space-1);
+  padding: var(--space-2) var(--space-3) var(--space-3);
   flex: 1;
   min-height: 0;
   align-content: flex-start;
@@ -2443,7 +2450,7 @@ html[data-theme="dark"] .log-panel {
 
 /* Intake density timeline host (created by primitives at render time) */
 .intake-density-host {
-  margin: var(--space-2) 0 var(--space-3);
+  padding: var(--space-2) var(--space-3) 0;
 }
 
 .intake-card-det-dot {
@@ -2456,13 +2463,16 @@ html[data-theme="dark"] .log-panel {
   z-index: 1;
 }
 
-/* Intake filters */
+/* Intake filters — matches `.convergence-filters` so the second toolbar row
+ * sits flush with the top-row controls. */
 .intake-filters {
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  margin-bottom: var(--space-2);
+  padding: 8px var(--space-3);
+  border-bottom: 1px solid var(--hairline);
   flex-wrap: wrap;
+  margin-bottom: 0;
 }
 
 .intake-filter-search {

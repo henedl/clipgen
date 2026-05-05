@@ -8,7 +8,8 @@
  *
  * Surface (window.ClipgenPrimitives):
  *   createFilterChip, createParticipantPill, createDensityTimeline,
- *   createSparkBars, createClipCard, createTranscriptCard, createBtn
+ *   createSparkBars, createClipCard, createTranscriptCard, createBtn,
+ *   createSwimLane, createKpiCard, createCoverageMatrix
  */
 
 (function (global) {
@@ -272,7 +273,8 @@
     dot.className = "clip-card-dot";
     thumb.appendChild(dot);
 
-    if (opts.participant) thumb.appendChild(makePill(opts.participant, "tl"));
+    // Participant moved into the caption (see createClipCard /
+    // createTranscriptCard). Only the duration badge remains on the thumb.
     if (opts.duration) thumb.appendChild(makePill(opts.duration, "br"));
 
     setDataset(card, opts.dataset);
@@ -298,11 +300,22 @@
     var caption = document.createElement("div");
     caption.className = "clip-card-caption";
 
-    if (opts.label) {
-      var labelEl = document.createElement("span");
-      labelEl.className = "clip-card-label";
-      labelEl.textContent = opts.label;
-      caption.appendChild(labelEl);
+    if (opts.participant || opts.label) {
+      var topRow = document.createElement("div");
+      topRow.className = "clip-card-meta-row";
+      if (opts.participant) {
+        var pid = document.createElement("span");
+        pid.className = "clip-card-participant cg-mono";
+        pid.textContent = opts.participant;
+        topRow.appendChild(pid);
+      }
+      if (opts.label) {
+        var labelEl = document.createElement("span");
+        labelEl.className = "clip-card-label";
+        labelEl.textContent = opts.label;
+        topRow.appendChild(labelEl);
+      }
+      caption.appendChild(topRow);
     }
     if (opts.caption) {
       var textEl = document.createElement("span");
@@ -320,11 +333,22 @@
     var caption = document.createElement("div");
     caption.className = "transcript-card-caption";
 
-    if (opts.timeRange) {
-      var range = document.createElement("span");
-      range.className = "transcript-card-range cg-mono";
-      range.textContent = opts.timeRange;
-      caption.appendChild(range);
+    if (opts.participant || opts.timeRange) {
+      var rangeRow = document.createElement("div");
+      rangeRow.className = "transcript-card-range-row";
+      if (opts.participant) {
+        var pid = document.createElement("span");
+        pid.className = "transcript-card-participant cg-mono";
+        pid.textContent = opts.participant;
+        rangeRow.appendChild(pid);
+      }
+      if (opts.timeRange) {
+        var range = document.createElement("span");
+        range.className = "transcript-card-range cg-mono";
+        range.textContent = opts.timeRange;
+        rangeRow.appendChild(range);
+      }
+      caption.appendChild(rangeRow);
     }
     if (opts.text) {
       var text = document.createElement("span");
@@ -334,6 +358,423 @@
     }
     built.card.appendChild(caption);
     return built.card;
+  }
+
+  // ---- SwimLane ----
+  //
+  // participants: array of participant IDs (strings) shown as lane labels.
+  // events: [{ p, t, tEnd?, source?, label, intensity? }, ...] — `p` matches a
+  //   participant id; `t` and `tEnd` are normalized 0..1 times; if `tEnd` is
+  //   omitted, the marker renders at minimum width. `source` selects a sub-lane
+  //   when `sources` length > 1; `label` resolves to a hue via categoryHue().
+  // sources: ordered list of source ids (default ['sheet']). Each participant
+  //   gets one sub-row per source.
+  // clusters: [{ t0, t1, hue, n }, ...] — cluster bands that span the whole timeline.
+  // durationSec: numeric duration; tick labels are interpolated to mm:ss / h:mm:ss.
+
+  function fmtSwimTick(sec) {
+    var s = Math.max(0, Math.floor(sec));
+    var h = Math.floor(s / 3600);
+    var m = Math.floor((s - h * 3600) / 60);
+    var rs = s - h * 3600 - m * 60;
+    var pad = function (n) { return n < 10 ? "0" + n : "" + n; };
+    if (h > 0) return h + ":" + pad(m) + ":" + pad(rs);
+    return pad(m) + ":" + pad(rs);
+  }
+
+  function createSwimLane(opts) {
+    opts = opts || {};
+    var AXIS_H = 22;
+    var TICK_COUNT = opts.tickCount || 11;
+    var MIN_MARKER_PX = 6;
+
+    var wrap = document.createElement("div");
+    wrap.className = "cg-swim-lane";
+
+    var axis = document.createElement("div");
+    axis.className = "cg-swim-axis";
+    wrap.appendChild(axis);
+
+    var lanes = document.createElement("div");
+    lanes.className = "cg-swim-lanes";
+    wrap.appendChild(lanes);
+
+    var labels = document.createElement("div");
+    labels.className = "cg-swim-labels cg-mono";
+    wrap.appendChild(labels);
+
+    var state = {
+      participants: opts.participants || [],
+      sources: opts.sources && opts.sources.length ? opts.sources : ["sheet"],
+      events: opts.events || [],
+      clusters: opts.clusters || [],
+      durationSec: opts.durationSec || 0,
+      height: opts.height || 320,
+      subRowH: opts.subRowH || null,
+      eventEls: [],
+      clusterEls: [],
+    };
+
+    function effectiveSubRowH() {
+      if (state.subRowH) return state.subRowH;
+      var totalRows = state.participants.length * state.sources.length;
+      return totalRows > 0 ? (state.height - AXIS_H) / totalRows : 0;
+    }
+
+    function effectiveHeight() {
+      if (state.subRowH) {
+        return AXIS_H + state.participants.length * state.sources.length * state.subRowH;
+      }
+      return state.height;
+    }
+
+    function applyHeight() {
+      var h = effectiveHeight();
+      wrap.style.setProperty("--cg-swim-h", h + "px");
+      wrap.style.setProperty("--cg-swim-row-h", effectiveSubRowH() + "px");
+      lanes.style.height = (h - AXIS_H) + "px";
+    }
+
+    function renderAxisTicks() {
+      var existing = axis.querySelectorAll(".cg-swim-axis-tick");
+      for (var i = 0; i < existing.length; i++) existing[i].remove();
+      for (var k = 0; k < TICK_COUNT; k++) {
+        var ts = state.durationSec * (k / (TICK_COUNT - 1));
+        var tick = document.createElement("span");
+        tick.className = "cg-swim-axis-tick cg-mono";
+        tick.style.left = (k / (TICK_COUNT - 1) * 100) + "%";
+        if (k === 0) tick.style.transform = "translateX(0)";
+        else if (k === TICK_COUNT - 1) tick.style.transform = "translateX(-100%)";
+        else tick.style.transform = "translateX(-50%)";
+        tick.textContent = fmtSwimTick(ts);
+        axis.appendChild(tick);
+      }
+    }
+
+    function renderClusterBands() {
+      var existing = wrap.querySelectorAll(".cg-swim-cluster-band, .cg-swim-cluster-connector");
+      for (var i = 0; i < existing.length; i++) existing[i].remove();
+      state.clusterEls = [];
+      state.clusters.forEach(function (cl, idx) {
+        var hue = cl.hue != null ? cl.hue : 220;
+        var leftPct = cl.t0 * 100;
+        var widthPct = (cl.t1 - cl.t0) * 100;
+
+        var axisBand = document.createElement("div");
+        axisBand.className = "cg-swim-cluster-band cg-swim-cluster-axis";
+        axisBand.style.left = leftPct + "%";
+        axisBand.style.width = widthPct + "%";
+        axisBand.style.setProperty("--cg-cluster-hue", hue);
+        axisBand.dataset.clusterIdx = idx;
+        axis.appendChild(axisBand);
+
+        var laneBand = document.createElement("div");
+        laneBand.className = "cg-swim-cluster-band cg-swim-cluster-lanes";
+        laneBand.style.left = leftPct + "%";
+        laneBand.style.width = widthPct + "%";
+        laneBand.style.setProperty("--cg-cluster-hue", hue);
+        laneBand.dataset.clusterIdx = idx;
+        lanes.appendChild(laneBand);
+
+        var connector = document.createElement("div");
+        connector.className = "cg-swim-cluster-connector";
+        connector.style.left = (((cl.t0 + cl.t1) / 2) * 100) + "%";
+        connector.style.setProperty("--cg-cluster-hue", hue);
+        lanes.appendChild(connector);
+
+        if (typeof opts.onClusterClick === "function") {
+          axisBand.addEventListener("click", function (ev) { opts.onClusterClick(idx, cl, ev); });
+          laneBand.addEventListener("click", function (ev) { opts.onClusterClick(idx, cl, ev); });
+        }
+        state.clusterEls.push({ axis: axisBand, lane: laneBand, connector: connector });
+      });
+    }
+
+    function renderLaneSeparators() {
+      var existing = lanes.querySelectorAll(".cg-swim-row");
+      for (var i = 0; i < existing.length; i++) existing[i].remove();
+      var subH = effectiveSubRowH();
+      var pCount = state.participants.length;
+      var sCount = state.sources.length;
+      for (var pi = 0; pi < pCount; pi++) {
+        for (var si = 0; si < sCount; si++) {
+          var row = document.createElement("div");
+          row.className = "cg-swim-row";
+          row.style.top = ((pi * sCount + si) * subH) + "px";
+          row.style.height = subH + "px";
+          row.dataset.participantIdx = pi;
+          row.dataset.sourceIdx = si;
+          if (si === sCount - 1) row.classList.add("is-participant-end");
+          if (pi === pCount - 1 && si === sCount - 1) row.classList.add("is-last");
+          lanes.appendChild(row);
+        }
+      }
+    }
+
+    function renderEvents() {
+      var existing = lanes.querySelectorAll(".cg-swim-event");
+      for (var i = 0; i < existing.length; i++) existing[i].remove();
+      state.eventEls = [];
+      var subH = effectiveSubRowH();
+      var sCount = state.sources.length;
+      var defaultSource = state.sources[0];
+      state.events.forEach(function (e, idx) {
+        var pIdx = state.participants.indexOf(e.p);
+        if (pIdx < 0) return;
+        var sIdx = state.sources.indexOf(e.source || defaultSource);
+        if (sIdx < 0) sIdx = 0;
+        var hue = resolveHue(e.label, e.hue);
+        var laneIdx = pIdx * sCount + sIdx;
+        var rowTop = laneIdx * subH;
+        var markerH = Math.max(6, Math.min(subH - 2, 12));
+        var top = rowTop + (subH - markerH) / 2;
+        var leftPct = Math.max(0, Math.min(1, e.t)) * 100;
+        var widthPct = 0;
+        if (typeof e.tEnd === "number" && e.tEnd > e.t) {
+          widthPct = Math.min(1, e.tEnd - e.t) * 100;
+        }
+        var marker = document.createElement("div");
+        marker.className = "cg-swim-event";
+        marker.style.left = leftPct + "%";
+        marker.style.top = top + "px";
+        marker.style.height = markerH + "px";
+        if (widthPct > 0) {
+          marker.style.width = widthPct + "%";
+          marker.style.minWidth = MIN_MARKER_PX + "px";
+          marker.style.transform = "none";
+          marker.classList.add("has-duration");
+        } else {
+          marker.style.width = "10px";
+          marker.style.transform = "translateX(-50%)";
+        }
+        marker.style.background = "oklch(0.78 0.14 " + hue + ")";
+        marker.style.boxShadow = "0 0 0 1px oklch(0.18 0.04 " + hue + " / 0.55)";
+        marker.dataset.idx = idx;
+        if (typeof opts.onEventHover === "function") {
+          marker.addEventListener("mouseenter", function () { opts.onEventHover(idx, e, true); });
+          marker.addEventListener("mouseleave", function () { opts.onEventHover(idx, e, false); });
+        }
+        if (typeof opts.onEventClick === "function") {
+          marker.addEventListener("click", function (ev) { opts.onEventClick(idx, e, ev); });
+        }
+        lanes.appendChild(marker);
+        state.eventEls.push(marker);
+      });
+    }
+
+    function renderLabels() {
+      labels.textContent = "";
+      var subH = effectiveSubRowH();
+      var participantH = subH * state.sources.length;
+      state.participants.forEach(function (p) {
+        var label = document.createElement("div");
+        label.className = "cg-swim-label";
+        label.style.height = participantH + "px";
+        label.textContent = p;
+        labels.appendChild(label);
+      });
+    }
+
+    function renderAll() {
+      applyHeight();
+      renderAxisTicks();
+      renderClusterBands();
+      renderLaneSeparators();
+      renderEvents();
+      renderLabels();
+    }
+
+    wrap.update = function (events, clusters, durationSec, participants, height) {
+      if (events) state.events = events;
+      if (clusters) state.clusters = clusters;
+      if (durationSec != null) state.durationSec = durationSec;
+      if (participants) state.participants = participants;
+      if (height != null) state.height = height;
+      renderAll();
+    };
+
+    wrap.setHovered = function (idx) {
+      state.eventEls.forEach(function (el, i) {
+        if (idx == null || idx === -1) {
+          el.classList.remove("is-hover", "is-dim");
+        } else if (i === idx) {
+          el.classList.add("is-hover");
+          el.classList.remove("is-dim");
+        } else {
+          el.classList.add("is-dim");
+          el.classList.remove("is-hover");
+        }
+      });
+    };
+
+    wrap.setSelectedCluster = function (idx) {
+      state.clusterEls.forEach(function (cl, i) {
+        var on = i === idx;
+        cl.axis.classList.toggle("is-selected", on);
+        cl.lane.classList.toggle("is-selected", on);
+        cl.connector.classList.toggle("is-selected", on);
+      });
+    };
+
+    wrap.setHoveredCluster = function (idx) {
+      state.clusterEls.forEach(function (cl, i) {
+        var on = i === idx;
+        cl.axis.classList.toggle("is-hovered", on);
+        cl.lane.classList.toggle("is-hovered", on);
+        cl.connector.classList.toggle("is-hovered", on);
+      });
+    };
+
+    renderAll();
+    return wrap;
+  }
+
+  // ---- KpiCard ----
+
+  function createKpiCard(opts) {
+    opts = opts || {};
+    var card = document.createElement("div");
+    card.className = "cg-kpi";
+
+    var rail = document.createElement("div");
+    rail.className = "cg-kpi-rail";
+    rail.style.background = opts.accent || "var(--accent)";
+    card.appendChild(rail);
+
+    var labelEl = document.createElement("div");
+    labelEl.className = "cg-kpi-label";
+    labelEl.textContent = opts.label || "";
+    card.appendChild(labelEl);
+
+    var valueRow = document.createElement("div");
+    valueRow.className = "cg-kpi-value-row";
+    var valueEl = document.createElement("span");
+    valueEl.className = "cg-kpi-value cg-mono";
+    valueEl.textContent = opts.value != null ? String(opts.value) : "";
+    valueRow.appendChild(valueEl);
+    if (opts.sub) {
+      var subEl = document.createElement("span");
+      subEl.className = "cg-kpi-sub cg-mono";
+      subEl.textContent = opts.sub;
+      valueRow.appendChild(subEl);
+    }
+    card.appendChild(valueRow);
+
+    if (opts.spark) {
+      var sparkWrap = document.createElement("div");
+      sparkWrap.className = "cg-kpi-spark";
+      sparkWrap.appendChild(opts.spark);
+      card.appendChild(sparkWrap);
+    }
+    setDataset(card, opts.dataset);
+    return card;
+  }
+
+  // ---- CoverageMatrix ----
+  //
+  // rows: [{ p, sheet, screenspace, transcript }]; counts ≥ 0.
+  // Hues: sheet=280, screenspace=220, transcript=145 (from the prototype).
+
+  function _covCellBg(n, hue, max) {
+    if (!n) return "transparent";
+    var intensity = Math.min(1, n / max);
+    return "oklch(0.32 " + (0.02 + intensity * 0.10).toFixed(3) + " " + hue + " / " + (0.25 + intensity * 0.55).toFixed(3) + ")";
+  }
+  function _covCellFg(n, hue, max) {
+    if (!n) return "var(--fg-dim)";
+    var intensity = Math.min(1, n / max);
+    return "oklch(" + (0.78 - intensity * 0.05).toFixed(3) + " 0.14 " + hue + ")";
+  }
+
+  function createCoverageMatrix(opts) {
+    opts = opts || {};
+    var table = document.createElement("table");
+    table.className = "cg-cov-table";
+
+    var thead = document.createElement("thead");
+    var headRow = document.createElement("tr");
+    [
+      { label: "Participant", align: "left" },
+      { label: "Sheet", align: "center" },
+      { label: "Screenspace", align: "center" },
+      { label: "Transcript", align: "center" },
+      { label: "Distribution", align: "center" },
+    ].forEach(function (cell) {
+      var th = document.createElement("th");
+      th.className = "cg-cov-th cg-cov-th-" + cell.align;
+      th.textContent = cell.label;
+      headRow.appendChild(th);
+    });
+    thead.appendChild(headRow);
+    table.appendChild(thead);
+
+    var tbody = document.createElement("tbody");
+    table.appendChild(tbody);
+
+    function renderRows(rows, maxCount) {
+      tbody.textContent = "";
+      var max = maxCount || 1;
+      rows.forEach(function (r) {
+        var v1 = r.sheet || 0, v2 = r.screenspace || 0, v3 = r.transcript || 0;
+        if (!maxCount) {
+          if (v1 > max) max = v1;
+          if (v2 > max) max = v2;
+          if (v3 > max) max = v3;
+        }
+      });
+      rows.forEach(function (r) {
+        var tr = document.createElement("tr");
+        var pTd = document.createElement("td");
+        pTd.className = "cg-cov-td cg-cov-td-left cg-mono";
+        pTd.textContent = r.p;
+        tr.appendChild(pTd);
+
+        [
+          { v: r.sheet || 0, hue: 280 },
+          { v: r.screenspace || 0, hue: 220 },
+          { v: r.transcript || 0, hue: 145 },
+        ].forEach(function (cell) {
+          var td = document.createElement("td");
+          td.className = "cg-cov-td cg-cov-td-center cg-mono";
+          td.style.background = _covCellBg(cell.v, cell.hue, max);
+          td.style.color = _covCellFg(cell.v, cell.hue, max);
+          td.textContent = String(cell.v);
+          tr.appendChild(td);
+        });
+
+        var distTd = document.createElement("td");
+        distTd.className = "cg-cov-td cg-cov-td-dist";
+        var total = (r.sheet || 0) + (r.screenspace || 0) + (r.transcript || 0);
+        if (total === 0) {
+          var dash = document.createElement("span");
+          dash.className = "cg-cov-empty";
+          dash.textContent = "—";
+          distTd.appendChild(dash);
+        } else {
+          var bar = document.createElement("div");
+          bar.className = "cg-cov-bar";
+          [
+            { flex: r.sheet || 0, hue: 280 },
+            { flex: r.screenspace || 0, hue: 220 },
+            { flex: r.transcript || 0, hue: 145 },
+          ].forEach(function (seg) {
+            if (!seg.flex) return;
+            var s = document.createElement("div");
+            s.className = "cg-cov-bar-seg";
+            s.style.flex = String(seg.flex);
+            s.style.background = "oklch(0.65 0.16 " + seg.hue + ")";
+            bar.appendChild(s);
+          });
+          distTd.appendChild(bar);
+        }
+        tr.appendChild(distTd);
+        tbody.appendChild(tr);
+      });
+    }
+
+    renderRows(opts.rows || [], opts.maxCount);
+    table.update = function (rows, maxCount) { renderRows(rows || [], maxCount); };
+    return table;
   }
 
   // ---- Btn ----
@@ -377,5 +818,8 @@
     createClipCard: createClipCard,
     createTranscriptCard: createTranscriptCard,
     createBtn: createBtn,
+    createSwimLane: createSwimLane,
+    createKpiCard: createKpiCard,
+    createCoverageMatrix: createCoverageMatrix,
   };
 })(window);

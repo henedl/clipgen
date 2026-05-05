@@ -6,17 +6,31 @@
  *   [logo · clipgen]    [Studio | Screenspace | Transcripts]    [Quick actions ▾ | Log | Theme | v0.10.x]
  */
 
+/* Floating glass nav. The translucent background + backdrop-filter let any
+ * content scrolled into the viewport beneath show through the bar. Falls
+ * back to a solid `--bg` color in browsers without backdrop-filter support
+ * (Firefox without the feature flag). */
 .topnav {
   display: flex;
   align-items: center;
   height: 48px;
+  /* Without `flex-shrink: 0` Chromium will compress the bar below 48 px when
+   * the body's flex children (sub-header + main + drag-resizable bottom
+   * panel) collectively exceed the viewport height. */
+  flex: 0 0 48px;
   padding: 0 16px;
   border-bottom: 1px solid var(--border);
-  background: var(--bg);
+  background: color-mix(in oklab, var(--bg) 72%, transparent);
+  -webkit-backdrop-filter: blur(14px) saturate(1.4);
+  backdrop-filter: blur(14px) saturate(1.4);
   font-family: var(--font-sans);
   color: var(--fg);
-  position: relative;
+  position: sticky;
+  top: 0;
   z-index: var(--z-dropdown);
+}
+@supports not (backdrop-filter: blur(1px)) {
+  .topnav { background: var(--bg); }
 }
 
 .topnav-left,

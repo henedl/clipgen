@@ -535,7 +535,10 @@ body:not(.cg-grid-bg-on) {
 /* ---- Sub-header — shared chrome between TopNav and page content ----
  * Studio and Transcripts and Screenspace each have a subheader for page-level
  * meta + tools. The container is shared for spacing/typography; specific
- * children (sub-tabs, action buttons) live in page CSS. */
+ * children (sub-tabs, action buttons) live in page CSS.
+ *
+ * Sticks below the floating TopNav (48px) with the same glass background so
+ * the two read as one floating chrome strip. */
 .subheader,
 #studioSubheader,
 #ssSubheader,
@@ -543,12 +546,26 @@ body:not(.cg-grid-bg-on) {
   display: flex;
   align-items: center;
   height: 44px;
+  /* See note on `.topnav` — the body's flex column squeezes children under
+   * viewport pressure unless we pin them with flex-shrink: 0. */
+  flex: 0 0 44px;
   padding: 0 16px;
   border-bottom: 1px solid var(--border);
-  background: var(--bg);
+  background: color-mix(in oklab, var(--bg) 72%, transparent);
+  -webkit-backdrop-filter: blur(14px) saturate(1.4);
+  backdrop-filter: blur(14px) saturate(1.4);
   font-size: 12.5px;
   color: var(--fg-muted);
   gap: 16px;
+  position: sticky;
+  top: 48px;
+  z-index: calc(var(--z-dropdown) - 1);
+}
+@supports not (backdrop-filter: blur(1px)) {
+  .subheader,
+  #studioSubheader,
+  #ssSubheader,
+  #trSubheader { background: var(--bg); }
 }
 
 .subheader-left {
