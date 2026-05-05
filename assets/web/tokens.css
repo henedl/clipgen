@@ -109,6 +109,19 @@
   --cell-data-fg:     #7dd3e0;
   --cell-data-bright: #2bc8c8;
 
+  /* Severity-tinted cell data — chip bg uses transparent so the cell-hover
+   * background shows through; float bg is opaque (mixed with --bg) so
+   * floating popovers don't reveal whatever they overlay. fg is shared. */
+  --cell-data-high-bg:           color-mix(in srgb, var(--severity-high) 18%, transparent);
+  --cell-data-high-bg-solid:     color-mix(in srgb, var(--severity-high) 18%, var(--bg));
+  --cell-data-high-fg:           var(--severity-high);
+  --cell-data-medium-bg:         color-mix(in srgb, var(--severity-medium) 18%, transparent);
+  --cell-data-medium-bg-solid:   color-mix(in srgb, var(--severity-medium) 18%, var(--bg));
+  --cell-data-medium-fg:         var(--severity-medium);
+  --cell-data-positive-bg:       color-mix(in srgb, var(--severity-positive) 18%, transparent);
+  --cell-data-positive-bg-solid: color-mix(in srgb, var(--severity-positive) 18%, var(--bg));
+  --cell-data-positive-fg:       var(--severity-positive);
+
   /* Severity (prototype palette) */
   --severity-positive: #4ade80;
   --severity-medium:   #fbbf24;
@@ -274,6 +287,13 @@ html[data-theme="light"],
   --cell-data:        #b3e3ec;
   --cell-data-fg:     #0a4956;
   --cell-data-bright: #0a8a96;
+
+  /* Severity-tinted cell data — light theme uses a darker green for the
+   * positive bucket since #4ade80 (the dark-theme positive token) washes
+   * out on a light background. Red and amber tokens stay constant. */
+  --cell-data-positive-bg:       color-mix(in srgb, #16a34a 18%, transparent);
+  --cell-data-positive-bg-solid: color-mix(in srgb, #16a34a 18%, var(--bg));
+  --cell-data-positive-fg:       #16a34a;
 
   /* Pop shadow — adjusted for light bg */
   --shadow-pop: 0 12px 36px rgba(15, 23, 42, 0.18), 0 2px 8px rgba(15, 23, 42, 0.10);

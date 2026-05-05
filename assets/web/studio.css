@@ -12,7 +12,7 @@
 :root {
   --color-cell-text: #dbeafe;
   --color-cell-valid: #93c5fd;
-  --color-cell-selected: #c4b5fd;
+  --color-cell-selected: #cbd5e1;
   --color-heatmap: 168, 130, 214;
   --color-cell-hover: var(--color-accent-hover);
 }
@@ -22,7 +22,7 @@ html {
 }
 
 /* Mask-image icons (color follows currentColor on the parent).
- * Sizing is set by the surrounding rule (.filter-clear .cg-icon, etc.). */
+ * Sizing is set by the surrounding rule (.cg-btn-icon, etc.). */
 .cg-icon {
   display: inline-block;
   background-color: currentColor;
@@ -523,185 +523,43 @@ body[data-active-tab]:not([data-active-tab="sheet"]) #studioSidebar {
   flex-direction: column;
 }
 
-#filterToggle svg {
-  transition: color var(--duration-fast);
-}
-
-/* Filter bar */
-
-#filterBar {
+/* Sidebar Severity / Function range controls (folded in from the removed
+ * filter bar) — match the studio-sidebar-row visual weight. */
+.studio-sidebar-range {
   display: flex;
   align-items: center;
-  gap: var(--space-3);
-  padding: var(--space-2) 0;
-  margin-bottom: var(--space-2);
-  flex-wrap: wrap;
+  gap: 6px;
+  padding: 4px 16px;
 }
 
-.filter-group {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  font-size: var(--text-sm);
-}
-
-.filter-group-label {
-  color: var(--color-text-dim);
-  font-weight: 500;
-  white-space: nowrap;
-  user-select: none;
-}
-
-.filter-range-sep {
-  color: var(--color-text-dim);
-  font-size: var(--text-xs);
-}
-
-.filter-select {
-  appearance: none;
-  -webkit-appearance: none;
-  background: var(--color-surface);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-sm);
-  padding: var(--space-1) var(--space-2);
-  font-size: var(--text-xs);
-  color: var(--color-text);
-  cursor: pointer;
+.studio-sidebar-range select,
+.studio-sidebar-range input[type="number"] {
+  flex: 1 1 0;
   min-width: 0;
-  max-width: 9rem;
-}
-
-.filter-select:hover {
-  border-color: var(--color-accent);
-}
-
-.filter-select:focus {
-  outline: none;
-  border-color: var(--color-accent);
-}
-
-.filter-select:disabled {
-  opacity: 0.4;
-  cursor: default;
-}
-
-.filter-number {
-  background: var(--color-surface);
-  border: 1px solid var(--color-border);
+  font-size: 11px;
+  padding: 3px 6px;
+  background: var(--bg-input);
+  color: var(--fg);
+  border: 1px solid var(--border);
   border-radius: var(--radius-sm);
-  padding: var(--space-1) var(--space-1);
-  font-size: var(--text-xs);
-  color: var(--color-text);
-  width: 3.5rem;
   font-family: var(--font-mono);
 }
 
-.filter-number:hover {
-  border-color: var(--color-accent);
-}
-
-.filter-number:focus {
+.studio-sidebar-range select:focus,
+.studio-sidebar-range input[type="number"]:focus {
   outline: none;
-  border-color: var(--color-accent);
+  border-color: var(--accent);
 }
 
-.filter-number:disabled {
+.studio-sidebar-range select:disabled,
+.studio-sidebar-range input[type="number"]:disabled {
   opacity: 0.4;
   cursor: default;
 }
 
-/* Category dropdown */
-
-.filter-cat-wrap {
-  position: relative;
-}
-
-.filter-cat-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-1);
-  background: var(--color-surface);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-sm);
-  padding: var(--space-1) var(--space-2);
-  font-size: var(--text-xs);
-  color: var(--color-text);
-  cursor: pointer;
-  white-space: nowrap;
-}
-
-.filter-cat-btn:hover {
-  border-color: var(--color-accent);
-}
-
-.filter-cat-btn .chevron {
-  font-size: var(--text-xs);
-  color: var(--color-text-dim);
-  transition: transform var(--duration-fast);
-}
-
-.filter-cat-btn.open .chevron {
-  transform: rotate(180deg);
-}
-
-.filter-cat-panel {
-  position: absolute;
-  top: calc(100% + 4px);
-  left: 0;
-  z-index: var(--z-dropdown);
-  background: var(--color-surface);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
-  box-shadow: var(--shadow-md);
-  padding: var(--space-1) 0;
-  min-width: 10rem;
-  max-height: 14rem;
-  overflow-y: auto;
-}
-
-.filter-cat-panel label {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  padding: var(--space-1) var(--space-2);
-  cursor: pointer;
-  font-size: var(--text-xs);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.filter-cat-panel label:hover {
-  background: var(--color-cell-hover);
-}
-
-.filter-cat-panel input[type="checkbox"] {
-  margin: 0;
-  flex-shrink: 0;
-}
-
-.filter-clear {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  background: none;
-  border: none;
-  color: var(--color-text-dim);
-  cursor: pointer;
-  padding: 0 2px;
-  line-height: 1;
-  flex-shrink: 0;
-  border-radius: var(--radius-sm);
-  transition: color var(--duration-fast);
-}
-
-.filter-clear:hover {
-  color: var(--color-text);
-}
-
-.filter-clear .cg-icon {
-  width: var(--icon-size-xs);
-  height: var(--icon-size-xs);
+.studio-sidebar-range-sep {
+  color: var(--fg-faint);
+  font-size: 11px;
 }
 
 #sheetLoading {
@@ -974,6 +832,17 @@ html[data-theme="light"] .sev-pill.sev-unknown,
   background: rgba(0, 0, 0, 0.06);
 }
 
+/* Positive pill in light mode — match the cell-data-positive override
+ * (#16a34a) since the dark-theme positive token (#4ade80) washes out on a
+ * light background. */
+html[data-theme="light"] .sev-pill.sev-positive,
+html[data-theme="light"] .sev-pill.sev-very-positive,
+.theme-light .sev-pill.sev-positive,
+.theme-light .sev-pill.sev-very-positive {
+  color: #16a34a;
+  background: color-mix(in srgb, #16a34a 18%, transparent);
+}
+
 /* Clickable header cells */
 
 .col-row-num-header,
@@ -1058,6 +927,15 @@ col.col-participant-col {
   vertical-align: middle;
 }
 
+/* Severity-tinted timestamp chips. N/A, Unknown, and undefined fall through
+ * to the default cyan rule above. .ts-cell.has-text wins (rule below). */
+.ts-cell[data-severity="critical"] .ts-chip,
+.ts-cell[data-severity="high"]     .ts-chip { background: var(--cell-data-high-bg);     color: var(--cell-data-high-fg); }
+.ts-cell[data-severity="medium"]   .ts-chip,
+.ts-cell[data-severity="low"]      .ts-chip { background: var(--cell-data-medium-bg);   color: var(--cell-data-medium-fg); }
+.ts-cell[data-severity="positive"]      .ts-chip,
+.ts-cell[data-severity="very-positive"] .ts-chip { background: var(--cell-data-positive-bg); color: var(--cell-data-positive-fg); }
+
 /* "Has text but invalid timestamp" — show muted, dashed-border outline */
 .ts-cell.has-text .ts-chip {
   background: transparent;
@@ -1065,18 +943,17 @@ col.col-participant-col {
   border: 1px dashed var(--border-strong);
 }
 
-/* Floating expanded cell overlay — visually matches the inline .ts-chip
- * (same cell-data background + cell-data-fg text, same mono+tnum font) so the
- * hover-expand feels like the cell growing rather than a tooltip popping in. */
+/* Floating expanded cell overlay — a 1:1 clone of the inline .ts-chip (same
+ * padding, radius, mono+tnum font, cell-data colors) anchored to the chip's
+ * own bounding rect, so it reads as the chip widening rather than a tooltip. */
 
 .ts-cell-float {
   position: fixed;
   z-index: var(--z-float);
   box-sizing: border-box;
-  display: flex;
+  display: inline-flex;
   align-items: center;
-  justify-content: center;
-  gap: 4px;
+  justify-content: flex-start;
   font-family: var(--font-mono);
   font-feature-settings: "tnum";
   font-size: 11px;
@@ -1084,17 +961,27 @@ col.col-participant-col {
   padding: 2px 6px;
   background: var(--cell-data);
   color: var(--cell-data-fg);
-  border: 1px solid var(--border-strong);
-  border-radius: 3px;
-  text-align: center;
+  border-radius: 2px;
   white-space: nowrap;
   pointer-events: none;
   opacity: 0;
   transition: opacity 60ms ease;
 }
 
+/* Severity-tinted float — mirrors the .ts-cell[data-severity] rules above so
+ * the float reads as the same chip widening, not a tooltip. Bg uses the
+ * `-solid` token variants (opaque) so the float doesn't reveal cells/text
+ * underneath. */
+.ts-cell-float[data-severity="critical"],
+.ts-cell-float[data-severity="high"]          { background: var(--cell-data-high-bg-solid);     color: var(--cell-data-high-fg); }
+.ts-cell-float[data-severity="medium"],
+.ts-cell-float[data-severity="low"]           { background: var(--cell-data-medium-bg-solid);   color: var(--cell-data-medium-fg); }
+.ts-cell-float[data-severity="positive"],
+.ts-cell-float[data-severity="very-positive"] { background: var(--cell-data-positive-bg-solid); color: var(--cell-data-positive-fg); }
+
 /* Float over a cell with text-but-invalid timestamp — match the dashed-border
- * empty-chip look from the row below. */
+ * empty-chip look from the row below. Bg is opaque (var(--bg)) so the float
+ * doesn't reveal cells/text underneath. */
 .ts-cell-float.has-text {
   background: var(--bg);
   color: var(--fg-muted);
@@ -1226,8 +1113,6 @@ col.col-participant-col {
 }
 
 .bs-add-to-reel {
-  align-self: center;
-  margin: var(--space-2) auto;
   flex: 0 0 auto;
 }
 
@@ -1280,8 +1165,24 @@ col.col-participant-col {
   align-items: start;
   border: 0;
 }
-#artifactsList .drop-target-empty {
-  grid-column: 1 / -1;
+/* Empty-state ghost card — dashed silhouette of a real .queue-card so the
+ * placeholder reads as "the first card will land here". Width matches the
+ * grid track (160px); min-height = 90px (16:9 thumb) + ~50px meta strip. */
+.queue-card-ghost {
+  width: 160px;
+  min-height: 140px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-3);
+  border: 1px dashed var(--border-strong);
+  border-radius: calc(var(--radius) - 2px);
+  background: transparent;
+  color: var(--fg-muted);
+  font-size: var(--text-xs);
+  text-align: center;
+  line-height: 1.4;
+  box-sizing: border-box;
 }
 
 /* Shared card base (artifact + reel) */
@@ -1457,7 +1358,13 @@ html[data-theme="dark"] .queue-card-error .queue-card-thumb {
   display: flex;
   align-items: center;
   gap: 10px;
+  /* Fixed height — locks the strip so it can't grow when stashes are added.
+   * Sized for the natural populated state: 8 + 8 (area padding) + 6 + 6 (list
+   * padding) + 32 (card content) + 2 (card border) = 62. align-items: center
+   * centers the children when content is shorter (empty hint state). */
   padding: 8px 14px;
+  height: 44px;
+  box-sizing: border-box;
   border-top: 1px solid var(--hairline);
   background: var(--color-panel-bg);
   flex-shrink: 0;
@@ -1466,6 +1373,22 @@ html[data-theme="dark"] .queue-card-error .queue-card-thumb {
 #stashedReelsHeader,
 #stashedArtifactsHeader {
   flex: 0 0 auto;
+  padding-bottom: 6px;
+}
+
+/* Add to Reel pinned to the far-right edge of the artifact stash strip. The
+ * stash list (flex 1 1 auto) sits between the header and the button and
+ * absorbs the remaining width so chips left-align next to the header. */
+#stashedArtifactsArea #addToReelBtn {
+  margin-left: auto;
+  flex: 0 0 auto;
+}
+
+.stash-empty-hint {
+  flex: 0 0 auto;
+  padding: 4px 8px 2px;
+  font-size: 11px;
+  color: var(--fg-faint);
 }
 
 #stashedReelsHeader h3,
@@ -1495,7 +1418,13 @@ html[data-theme="dark"] .queue-card-error .queue-card-thumb {
 #stashedArtifactsList {
   flex: 1 1 auto;
   display: flex;
+  align-items: center;
   gap: 6px;
+  /* Vertical padding gives the .stash-card-remove (X, positioned at
+   * top: -4px relative to the card) clearance from the list's overflow
+   * clipping edge — overflow-x: auto forces overflow-y to auto too per spec,
+   * so without this the X is cut off at the list's top border. */
+  padding: 6px 0;
   overflow-x: auto;
   min-width: 0;
 }
@@ -2149,7 +2078,7 @@ html[data-theme="dark"] .queue-card-error .queue-card-thumb {
   :root:not([data-theme="light"]) {
     --color-cell-text: #1e3a5f;
     --color-cell-valid: #1d4ed8;
-    --color-cell-selected: #6d28d9;
+    --color-cell-selected: #334155;
     --color-cell-hover: var(--color-accent-hover);
     --color-heatmap: 192, 160, 235;
   }
@@ -2159,7 +2088,7 @@ html[data-theme="dark"] .queue-card-error .queue-card-thumb {
 html[data-theme="dark"] {
   --color-cell-text: #1e3a5f;
   --color-cell-valid: #1d4ed8;
-  --color-cell-selected: #6d28d9;
+  --color-cell-selected: #334155;
   --color-heatmap: 192, 160, 235;
   --color-cell-hover: var(--color-accent-hover);
 }
@@ -2186,14 +2115,6 @@ html[data-theme="dark"] {
     background: #451a1a;
   }
   :root:not([data-theme="light"]) .stash-card-name-input {
-    background: var(--color-surface-alt);
-  }
-  :root:not([data-theme="light"]) .filter-cat-panel {
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
-  }
-  :root:not([data-theme="light"]) .filter-select,
-  :root:not([data-theme="light"]) .filter-number,
-  :root:not([data-theme="light"]) .filter-cat-btn {
     background: var(--color-surface-alt);
   }
   :root:not([data-theme="light"]) .settings-panel {
@@ -2226,16 +2147,6 @@ html[data-theme="dark"] .queue-card-fail {
 }
 
 html[data-theme="dark"] .stash-card-name-input {
-  background: var(--color-surface-alt);
-}
-
-html[data-theme="dark"] .filter-cat-panel {
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
-}
-
-html[data-theme="dark"] .filter-select,
-html[data-theme="dark"] .filter-number,
-html[data-theme="dark"] .filter-cat-btn {
   background: var(--color-surface-alt);
 }
 

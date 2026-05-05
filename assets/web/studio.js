@@ -22,7 +22,7 @@
   var QUEUE_STORAGE_KEY = "clipgen-studio-queues";
 
   // Build a mask-image icon span as an HTML string. Sizing comes from a
-  // parent rule (e.g. .filter-clear .cg-icon) or from extraClass. See
+  // parent rule (e.g. .cg-btn-icon) or from extraClass. See
   // .cg-icon family in studio.css.
   function iconHTML(name, extraClass) {
     return '<span class="cg-icon cg-icon--' + name + (extraClass ? " " + extraClass : "") + '"></span>';
@@ -43,7 +43,6 @@
     dividerOffsetBeforeCollapse: 0,
     activeFunction: "",
     cellExpandHover: true,
-    filtersVisible: false,
     filters: {
       categories: [],
       sevMin: "",
@@ -76,7 +75,6 @@
     convergenceDataVersion: 0,
     convergenceStale: false,
     sidebarOpen: true,
-    sidebarView: "all",
     sidebarCategories: {},
     sidebarParticipants: {},
   };
@@ -278,10 +276,14 @@
         if (!row.category || f.categories.indexOf(row.category) < 0) return false;
       }
       if (sevMinRank !== null || sevMaxRank !== null) {
+        // sevMin = least-severe boundary, sevMax = most-severe boundary.
+        // Severity rank is more-negative = more-severe (Critical=-4, Medium=-2),
+        // so "at least as severe as sevMin" means r <= sevMinRank, and
+        // "at most as severe as sevMax" means r >= sevMaxRank.
         var r = severityRank(row.severity);
         if (r === null) return false;
-        if (sevMinRank !== null && r < sevMinRank) return false;
-        if (sevMaxRank !== null && r > sevMaxRank) return false;
+        if (sevMinRank !== null && r > sevMinRank) return false;
+        if (sevMaxRank !== null && r < sevMaxRank) return false;
       }
       if (f.fnMin !== null || f.fnMax !== null) {
         if (!fnActive) return false;
@@ -311,8 +313,6 @@
     { id: "all",        label: "All" },
     { id: "highlights", label: "Highlights", sevMin: "Medium",   sevMax: "Critical" },
     { id: "positive",   label: "Positive",   sevMin: "Positive", sevMax: "Very Positive" },
-    { id: "medium",     label: "Medium",     sevMin: "Medium",   sevMax: "Medium" },
-    { id: "high",       label: "High",       sevMin: "High",     sevMax: "Critical" },
   ];
 
   function readPersistedSidebarOpen() {
@@ -327,7 +327,6 @@
   }
 
   function applySidebarView(viewId) {
-    state.sidebarView = viewId;
     var view = null;
     for (var i = 0; i < SIDEBAR_VIEWS.length; i++) {
       if (SIDEBAR_VIEWS[i].id === viewId) { view = SIDEBAR_VIEWS[i]; break; }
@@ -382,8 +381,11 @@
       for (var k = 0; k < d.rows.length; k++) {
         var rk = severityRank(d.rows[k].severity);
         if (rk === null) continue;
-        if (minR !== null && rk < minR) continue;
-        if (maxR !== null && rk > maxR) continue;
+        // Same semantics as getFilteredRows — sevMin is the least-severe
+        // boundary, sevMax is the most-severe boundary; rank is more-negative
+        // = more-severe.
+        if (minR !== null && rk > minR) continue;
+        if (maxR !== null && rk < maxR) continue;
         n++;
       }
       return n;
@@ -393,12 +395,17 @@
     var viewsBody = sidebar.querySelector('[data-target="views"]');
     if (viewsBody) {
       viewsBody.innerHTML = "";
+      // Active is derived from current sevMin/sevMax (not a sticky `sidebarView`)
+      // so the Views row stays in sync with the explicit Severity dropdowns
+      // below — picking an explicit range that matches a preset re-highlights it.
       SIDEBAR_VIEWS.forEach(function (view) {
         var count = view.id === "all" ? d.rows.length : rangeCount(view.sevMin, view.sevMax);
+        var viewMin = view.sevMin || "";
+        var viewMax = view.sevMax || "";
         viewsBody.appendChild(createSidebarRow({
           label: view.label,
           count: count,
-          active: state.sidebarView === view.id,
+          active: state.filters.sevMin === viewMin && state.filters.sevMax === viewMax,
           onClick: function () {
             applySidebarView(view.id);
             renderSidebar();
@@ -435,6 +442,26 @@
       }
     }
 
+    // SEVERITY — explicit min/max dropdowns. Views (above) are quick presets;
+    // this section is the explicit override.
+    var sevBody = sidebar.querySelector('[data-target="severity"]');
+    if (sevBody) {
+      sevBody.innerHTML = "";
+      if (hasSeverityData(d.rows)) {
+        sevBody.appendChild(buildSidebarSeverityRange());
+      } else {
+        sevBody.appendChild(makeSidebarEmpty("(no severity data)"));
+      }
+    }
+
+    // FUNCTION — min/max numeric inputs gated on the activeFunction picker
+    // in the table header.
+    var fnBody = sidebar.querySelector('[data-target="function"]');
+    if (fnBody) {
+      fnBody.innerHTML = "";
+      fnBody.appendChild(buildSidebarFunctionRange());
+    }
+
     // PARTICIPANTS — compact 6-col grid of mono pills.
     var partsBody = sidebar.querySelector('[data-target="participants"]');
     if (partsBody) {
@@ -451,6 +478,80 @@
         partsBody.appendChild(pill);
       });
     }
+  }
+
+  function makeSidebarSeveritySelect(id, value) {
+    var sel = document.createElement("select");
+    sel.id = id;
+    var anyOpt = document.createElement("option");
+    anyOpt.value = "";
+    anyOpt.textContent = "Any";
+    sel.appendChild(anyOpt);
+    for (var i = 0; i < CLIPGEN_CONFIG.severity.length; i++) {
+      var opt = document.createElement("option");
+      opt.value = CLIPGEN_CONFIG.severity[i].label;
+      opt.textContent = CLIPGEN_CONFIG.severity[i].label;
+      sel.appendChild(opt);
+    }
+    sel.value = value || "";
+    return sel;
+  }
+
+  function buildSidebarSeverityRange() {
+    var row = el("div", "studio-sidebar-range");
+    var minSel = makeSidebarSeveritySelect("sidebarSevMin", state.filters.sevMin);
+    var maxSel = makeSidebarSeveritySelect("sidebarSevMax", state.filters.sevMax);
+    function onChange() {
+      state.filters.sevMin = minSel.value;
+      state.filters.sevMax = maxSel.value;
+      applyGridFilters();
+      renderSidebar();
+    }
+    minSel.addEventListener("change", onChange);
+    maxSel.addEventListener("change", onChange);
+    row.appendChild(minSel);
+    row.appendChild(el("span", "studio-sidebar-range-sep", "to"));
+    row.appendChild(maxSel);
+    return row;
+  }
+
+  function buildSidebarFunctionRange() {
+    var row = el("div", "studio-sidebar-range");
+    var minIn = document.createElement("input");
+    minIn.type = "number";
+    minIn.id = "sidebarFnMin";
+    minIn.placeholder = "Min";
+    minIn.disabled = !state.activeFunction;
+    if (state.filters.fnMin !== null) minIn.value = String(state.filters.fnMin);
+
+    var maxIn = document.createElement("input");
+    maxIn.type = "number";
+    maxIn.id = "sidebarFnMax";
+    maxIn.placeholder = "Max";
+    maxIn.disabled = !state.activeFunction;
+    if (state.filters.fnMax !== null) maxIn.value = String(state.filters.fnMax);
+
+    function onChange() {
+      var mn = minIn.value.trim();
+      var mx = maxIn.value.trim();
+      state.filters.fnMin = mn !== "" ? parseFloat(mn) : null;
+      state.filters.fnMax = mx !== "" ? parseFloat(mx) : null;
+      applyGridFilters();
+      computeGridMaxHeight();
+    }
+    minIn.addEventListener("input", onChange);
+    maxIn.addEventListener("input", onChange);
+    row.appendChild(minIn);
+    row.appendChild(el("span", "studio-sidebar-range-sep", "to"));
+    row.appendChild(maxIn);
+    return row;
+  }
+
+  function makeSidebarEmpty(text) {
+    var span = el("span", "studio-sidebar-row-label", text);
+    span.style.padding = "6px 16px";
+    span.style.color = "var(--fg-faint)";
+    return span;
   }
 
   function createSidebarRow(opts) {
@@ -496,225 +597,9 @@
     document.body.setAttribute("data-active-tab", tab);
   }
 
-  function renderFilterBar() {
-    var bar = qs("#filterBar");
-    if (!bar || !state.sheetData) return;
-    bar.innerHTML = "";
-
-    var d = state.sheetData;
-
-    // --- Category filter ---
-    var uniqueCats = [];
-    for (var i = 0; i < d.rows.length; i++) {
-      var cat = d.rows[i].category;
-      if (cat && uniqueCats.indexOf(cat) < 0) uniqueCats.push(cat);
-    }
-    uniqueCats.sort();
-
-    if (uniqueCats.length > 0) {
-      var catGroup = el("div", "filter-group");
-      catGroup.appendChild(el("span", "filter-group-label", "Category"));
-
-      var catWrap = el("div", "filter-cat-wrap");
-      var catBtn = el("button", "filter-cat-btn");
-      catBtn.type = "button";
-      catBtn.innerHTML = 'All <span class="chevron">\u25BE</span>';
-      var catPanel = el("div", "filter-cat-panel hidden");
-
-      for (var ci = 0; ci < uniqueCats.length; ci++) {
-        var lbl = document.createElement("label");
-        var cb = document.createElement("input");
-        cb.type = "checkbox";
-        cb.value = uniqueCats[ci];
-        cb.setAttribute("data-filter-cat", uniqueCats[ci]);
-        lbl.appendChild(cb);
-        lbl.appendChild(document.createTextNode(uniqueCats[ci]));
-        catPanel.appendChild(lbl);
-      }
-
-      catBtn.addEventListener("click", function (ev) {
-        ev.stopPropagation();
-        catBtn.classList.toggle("open");
-        catPanel.classList.toggle("hidden");
-      });
-
-      catPanel.addEventListener("change", function () {
-        var checked = catPanel.querySelectorAll("input:checked");
-        state.filters.categories = [];
-        for (var j = 0; j < checked.length; j++) {
-          state.filters.categories.push(checked[j].value);
-        }
-        var count = state.filters.categories.length;
-        catBtn.innerHTML =
-          (count === 0 ? "All" : count + " selected") +
-          ' <span class="chevron">\u25BE</span>';
-        applyGridFilters();
-        computeGridMaxHeight();
-      });
-
-      catWrap.appendChild(catBtn);
-      catWrap.appendChild(catPanel);
-      catGroup.appendChild(catWrap);
-
-      var catClear = document.createElement("button");
-      catClear.className = "filter-clear";
-      catClear.type = "button";
-      catClear.title = "Clear category filter";
-      catClear.innerHTML =
-        iconHTML("x-mark");
-      catClear.addEventListener("click", function () {
-        state.filters.categories = [];
-        var cbs = catPanel.querySelectorAll("input[type=checkbox]");
-        for (var j = 0; j < cbs.length; j++) cbs[j].checked = false;
-        catBtn.innerHTML = 'All <span class="chevron">\u25BE</span>';
-        applyGridFilters();
-        computeGridMaxHeight();
-      });
-      catGroup.appendChild(catClear);
-
-      bar.appendChild(catGroup);
-    }
-
-    // --- Severity filter ---
-    var showSeverity = hasSeverityData(d.rows);
-    if (showSeverity) {
-      var sevGroup = el("div", "filter-group");
-      sevGroup.appendChild(el("span", "filter-group-label", "Severity"));
-
-      var sevMin = document.createElement("select");
-      sevMin.className = "filter-select";
-      sevMin.id = "filterSevMin";
-      var sevMinDefault = document.createElement("option");
-      sevMinDefault.value = "";
-      sevMinDefault.textContent = "Any";
-      sevMin.appendChild(sevMinDefault);
-      for (var si = 0; si < CLIPGEN_CONFIG.severity.length; si++) {
-        var opt = document.createElement("option");
-        opt.value = CLIPGEN_CONFIG.severity[si].label;
-        opt.textContent = CLIPGEN_CONFIG.severity[si].label;
-        sevMin.appendChild(opt);
-      }
-
-      var sevMax = document.createElement("select");
-      sevMax.className = "filter-select";
-      sevMax.id = "filterSevMax";
-      var sevMaxDefault = document.createElement("option");
-      sevMaxDefault.value = "";
-      sevMaxDefault.textContent = "Any";
-      sevMax.appendChild(sevMaxDefault);
-      for (var sj = 0; sj < CLIPGEN_CONFIG.severity.length; sj++) {
-        var opt2 = document.createElement("option");
-        opt2.value = CLIPGEN_CONFIG.severity[sj].label;
-        opt2.textContent = CLIPGEN_CONFIG.severity[sj].label;
-        sevMax.appendChild(opt2);
-      }
-
-      function onSevChange() {
-        state.filters.sevMin = sevMin.value;
-        state.filters.sevMax = sevMax.value;
-        applyGridFilters();
-        computeGridMaxHeight();
-      }
-      sevMin.addEventListener("change", onSevChange);
-      sevMax.addEventListener("change", onSevChange);
-
-      sevGroup.appendChild(sevMin);
-      sevGroup.appendChild(el("span", "filter-range-sep", "to"));
-      sevGroup.appendChild(sevMax);
-
-      var sevClear = document.createElement("button");
-      sevClear.className = "filter-clear";
-      sevClear.type = "button";
-      sevClear.title = "Clear severity filter";
-      sevClear.innerHTML =
-        iconHTML("x-mark");
-      sevClear.addEventListener("click", function () {
-        state.filters.sevMin = "";
-        state.filters.sevMax = "";
-        sevMin.value = "";
-        sevMax.value = "";
-        applyGridFilters();
-        computeGridMaxHeight();
-      });
-      sevGroup.appendChild(sevClear);
-
-      bar.appendChild(sevGroup);
-    }
-
-    // --- Function filter ---
-    var fnGroup = el("div", "filter-group");
-    fnGroup.appendChild(el("span", "filter-group-label", "Function"));
-
-    var fnMin = document.createElement("input");
-    fnMin.type = "number";
-    fnMin.className = "filter-number";
-    fnMin.id = "filterFnMin";
-    fnMin.placeholder = "Min";
-    fnMin.disabled = !state.activeFunction;
-
-    var fnMax = document.createElement("input");
-    fnMax.type = "number";
-    fnMax.className = "filter-number";
-    fnMax.id = "filterFnMax";
-    fnMax.placeholder = "Max";
-    fnMax.disabled = !state.activeFunction;
-
-    function onFnChange() {
-      var minVal = fnMin.value.trim();
-      var maxVal = fnMax.value.trim();
-      state.filters.fnMin = minVal !== "" ? parseFloat(minVal) : null;
-      state.filters.fnMax = maxVal !== "" ? parseFloat(maxVal) : null;
-      applyGridFilters();
-      computeGridMaxHeight();
-    }
-    fnMin.addEventListener("input", onFnChange);
-    fnMax.addEventListener("input", onFnChange);
-
-    fnGroup.appendChild(fnMin);
-    fnGroup.appendChild(el("span", "filter-range-sep", "to"));
-    fnGroup.appendChild(fnMax);
-
-    var fnClear = document.createElement("button");
-    fnClear.className = "filter-clear";
-    fnClear.type = "button";
-    fnClear.title = "Clear function filter";
-    fnClear.innerHTML =
-      iconHTML("x-mark");
-    fnClear.addEventListener("click", function () {
-      state.filters.fnMin = null;
-      state.filters.fnMax = null;
-      fnMin.value = "";
-      fnMax.value = "";
-      applyGridFilters();
-      computeGridMaxHeight();
-    });
-    fnGroup.appendChild(fnClear);
-
-    bar.appendChild(fnGroup);
-  }
-
-  function initFilterToggle() {
-    var btn = qs("#filterToggle");
-    if (!btn) return;
-    btn.addEventListener("click", function () {
-      state.filtersVisible = !state.filtersVisible;
-      var bar = qs("#filterBar");
-      if (state.filtersVisible) {
-        bar.classList.remove("hidden");
-      } else {
-        bar.classList.add("hidden");
-        if (hasActiveFilters()) {
-          clearAllFilters();
-          applyGridFilters();
-        }
-      }
-      computeGridMaxHeight();
-    });
-  }
-
   function syncFilterFnDisabled() {
-    var fnMin = qs("#filterFnMin");
-    var fnMax = qs("#filterFnMax");
+    var fnMin = qs("#sidebarFnMin");
+    var fnMax = qs("#sidebarFnMax");
     var enabled = !!state.activeFunction;
     if (fnMin) fnMin.disabled = !enabled;
     if (fnMax) fnMax.disabled = !enabled;
@@ -770,8 +655,6 @@
   function syncPreviewTab() {
     setActiveTabAttr(state.activePreviewTab);
     var grid = qs("#sheetGrid");
-    var filterBar = qs("#filterBar");
-    var filterToggle = qs("#filterToggle");
     var refreshBtn = qs("#refreshSheet");
     var intakePanel = qs("#intakePanel");
     var trIntakePanel = qs("#trIntakePanel");
@@ -784,8 +667,6 @@
     if (trIntakePanel) trIntakePanel.classList.add("hidden");
     if (convergencePanel) convergencePanel.classList.add("hidden");
     if (metadataPanel) metadataPanel.classList.add("hidden");
-    if (filterBar) filterBar.classList.add("hidden");
-    if (filterToggle) filterToggle.classList.add("hidden");
     if (refreshBtn) refreshBtn.classList.add("hidden");
 
     // Intake poll timers are started at DOMContentLoaded and kept running
@@ -798,9 +679,7 @@
     if (state.activePreviewTab === "sheet") {
       grid.classList.remove("hidden");
       activePanel = grid;
-      if (filterToggle) filterToggle.classList.remove("hidden");
       if (refreshBtn) refreshBtn.classList.remove("hidden");
-      if (state.filtersVisible && filterBar) filterBar.classList.remove("hidden");
     } else if (state.activePreviewTab === "intake") {
       intakePanel.classList.remove("hidden");
       activePanel = intakePanel;
@@ -861,7 +740,6 @@
         state.sheetData = data;
         clipgenApplyConfig(data.config);
         renderHeader();
-        renderFilterBar();
         renderSidebar();
         renderGrid();
         // Load per-participant baselines so the grid color-codes durations
@@ -1415,6 +1293,8 @@
       td.setAttribute("data-participant", pid);
       td.setAttribute("data-observation", row.observation || "");
       td.setAttribute("data-category", row.category || "");
+      var sevSlug = severityClass(row.severity);
+      if (sevSlug) td.setAttribute("data-severity", sevSlug.replace(/^sev-/, ""));
 
       if (cellData.hasText) {
         var chip = document.createElement("span");
@@ -1667,23 +1547,20 @@
 
     function showFloat(td) {
       if (!state.cellExpandHover) return;
-      // The chip has its own overflow:hidden + max-width:100%, so it never
-      // visually exceeds the cell. Use the chip's scroll-vs-client width to
-      // detect "is the value clipped" — checking the td would always say
-      // false now that chip.offsetWidth is clamped to td.clientWidth.
+      // Anchor the float to the chip's box (not the td) so the float reads as
+      // the same chip widening rather than a tooltip popping in.
       var chip = td.querySelector(".ts-chip");
-      var overflows = chip
-        ? chip.scrollWidth > chip.clientWidth + 1
-        : td.scrollWidth > td.clientWidth + 1;
-      if (!overflows) return;
+      if (!chip) return;
+      if (chip.scrollWidth <= chip.clientWidth + 1) return;
       floatCell = td;
-      var rect = td.getBoundingClientRect();
-      cellFloat.textContent = td.textContent;
+      var rect = chip.getBoundingClientRect();
+      cellFloat.textContent = chip.textContent;
       cellFloat.classList.toggle("has-text", td.classList.contains("has-text"));
+      cellFloat.setAttribute("data-severity", td.getAttribute("data-severity") || "");
       cellFloat.style.top = rect.top + "px";
       cellFloat.style.left = rect.left + "px";
       cellFloat.style.height = rect.height + "px";
-      cellFloat.style.display = "flex";
+      cellFloat.style.display = "inline-flex";
       cellFloat.offsetWidth; // force reflow
       cellFloat.style.opacity = "1";
     }
@@ -1907,7 +1784,7 @@
 
     if (n === 0) {
       list.appendChild(
-        el("div", "drop-target-empty", "Click or drag cells here to queue for generation")
+        el("div", "queue-card-ghost", "Click or drag cells here to queue for generation")
       );
       return;
     }
@@ -2033,7 +1910,7 @@
 
     if (n === 0) {
       list.appendChild(
-        el("div", "drop-target-empty", "Shift+click or drag cells here to build a reel")
+        el("div", "queue-card-ghost", "Shift+click or drag cells here to build a reel")
       );
       qs("#reelDuration").textContent = "";
       return;
@@ -2146,15 +2023,14 @@
     var list = qs("#stashedReelsList");
     var n = state.stashes.length;
     qs("#stashedReelsCount").textContent = "(" + n + ")";
-
-    if (n === 0) {
-      if (!area.classList.contains("stash-drop-reveal")) area.classList.add("hidden");
-      list.innerHTML = "";
-      return;
-    }
-    area.classList.remove("hidden");
     area.classList.remove("stash-drop-reveal");
     list.innerHTML = "";
+
+    if (n === 0) {
+      list.appendChild(el("div", "stash-empty-hint", "Stash reels to set them aside for later."));
+      computeGridMaxHeight();
+      return;
+    }
 
     for (var i = 0; i < n; i++) {
       list.appendChild(buildStashCard(state.stashes[i], "api/stashes", state.stashes, renderStashedReels, "reel-stash", recallStash));
@@ -2354,15 +2230,14 @@
     var list = qs("#stashedArtifactsList");
     var n = state.artifactStashes.length;
     qs("#stashedArtifactsCount").textContent = "(" + n + ")";
-
-    if (n === 0) {
-      if (!area.classList.contains("stash-drop-reveal")) area.classList.add("hidden");
-      list.innerHTML = "";
-      return;
-    }
-    area.classList.remove("hidden");
     area.classList.remove("stash-drop-reveal");
     list.innerHTML = "";
+
+    if (n === 0) {
+      list.appendChild(el("div", "stash-empty-hint", "Stash artifacts to keep them aside — drag, or use the Stash button."));
+      computeGridMaxHeight();
+      return;
+    }
 
     for (var i = 0; i < n; i++) {
       list.appendChild(buildStashCard(state.artifactStashes[i], "api/artifact-stashes", state.artifactStashes, renderStashedArtifacts, "artifact-stash", recallArtifactStash));
@@ -2403,28 +2278,16 @@
   function revealEmptyStashAreas() {
     var artArea = qs("#stashedArtifactsArea");
     var reelArea = qs("#stashedReelsArea");
-    if (state.artifactStashes.length === 0) {
-      artArea.classList.remove("hidden");
-      artArea.classList.add("stash-drop-reveal");
-    }
-    if (state.stashes.length === 0) {
-      reelArea.classList.remove("hidden");
-      reelArea.classList.add("stash-drop-reveal");
-    }
+    if (state.artifactStashes.length === 0) artArea.classList.add("stash-drop-reveal");
+    if (state.stashes.length === 0) reelArea.classList.add("stash-drop-reveal");
     computeGridMaxHeight();
   }
 
   function hideEmptyStashAreas() {
     var artArea = qs("#stashedArtifactsArea");
     var reelArea = qs("#stashedReelsArea");
-    if (state.artifactStashes.length === 0) {
-      artArea.classList.add("hidden");
-      artArea.classList.remove("stash-drop-reveal");
-    }
-    if (state.stashes.length === 0) {
-      reelArea.classList.add("hidden");
-      reelArea.classList.remove("stash-drop-reveal");
-    }
+    artArea.classList.remove("stash-drop-reveal");
+    reelArea.classList.remove("stash-drop-reveal");
     computeGridMaxHeight();
   }
 
@@ -2464,7 +2327,6 @@
     qs("#cancelGenerateBtn").addEventListener("click", onCancelGenerate);
     qs("#buildReelBtn").addEventListener("click", onBuildReel);
     qs("#cancelReelBtn").addEventListener("click", onCancelReel);
-    qs("#buildViewerBtn").addEventListener("click", onBuildViewer);
     qs("#buildHighlightsBtn").addEventListener("click", onBuildHighlights);
     bindGalleryDialog();
 
@@ -2585,7 +2447,6 @@
     var ids = [
       "#generateBtn", "#buildReelBtn", "#clearArtifactsBtn",
       "#clearReelBtn", "#addToReelBtn", "#buildHighlightsBtn",
-      "#buildViewerBtn",
       "#stashReelBtn", "#stashArtifactsBtn"
     ];
     for (var i = 0; i < ids.length; i++) {
@@ -3102,10 +2963,8 @@
   }
 
   function updateViewerButton() {
-    var n = state.generatedArtifacts.length;
-    qs("#buildViewerBtn").disabled = n === 0;
-    if (n === 0) qs("#buildViewerBtn").setAttribute("data-tooltip", "Generate artifacts first");
     var count = qs("#viewerArtifactCount");
+    var n = state.generatedArtifacts.length;
     count.textContent = n > 0 ? n + " artifact(s) ready" : "";
   }
 
@@ -4451,16 +4310,6 @@
     });
   }
 
-  document.addEventListener("click", function (ev) {
-    var wrap = qs(".filter-cat-wrap");
-    if (wrap && !wrap.contains(ev.target)) {
-      var btn = wrap.querySelector(".filter-cat-btn");
-      var panel = wrap.querySelector(".filter-cat-panel");
-      if (btn) btn.classList.remove("open");
-      if (panel) panel.classList.add("hidden");
-    }
-  });
-
   function initTopNavActions() {
     if (!window.ClipgenTopNav) return;
     function clickIfExists(id) {
@@ -4468,8 +4317,9 @@
       if (el) el.click();
     }
     window.ClipgenTopNav.setQuickActions([
-      { icon: "film", label: "Open Timeline", action: onBuildTimelineViewer },
-      { icon: "photo", label: "Open Gallery", action: openGalleryDialog },
+      { icon: "eye",        label: "Build Viewer",  action: onBuildViewer },
+      { icon: "film",       label: "Open Timeline", action: onBuildTimelineViewer },
+      { icon: "photo",      label: "Open Gallery",  action: openGalleryDialog },
       { icon: "arrow-path", label: "Refresh sheet", action: function () { clickIfExists("refreshSheet"); } },
     ]);
   }
@@ -4495,7 +4345,6 @@
     bindSidebarToggle();
     initThemeToggle();
     initTooltipToggle();
-    initFilterToggle();
     initPreviewTabs();
     initDropTargets();
     initWheelScroll();
