@@ -163,9 +163,12 @@
   <section id="artifactColumn">
   <section id="dropAreas">
     <div id="artifactsArea" class="drop-area">
-      <h3><svg id="artifactsSpinner" class="title-spinner" width="14" height="14" viewBox="0 0 14 14" fill="none"><circle cx="7" cy="7" r="5.5" stroke="currentColor" stroke-width="1.5" opacity="0.25"/><circle cx="7" cy="7" r="5.5" stroke="currentColor" stroke-width="1.5" stroke-dasharray="20 15" stroke-linecap="round"><animateTransform attributeName="transform" type="rotate" from="0 7 7" to="360 7 7" dur="0.7s" repeatCount="indefinite"/></circle></svg>Artifacts <span id="artifactsCount">(0)</span> <span id="viewerArtifactCount"></span></h3>
-      <div class="area-controls">
-        <select id="artifactFormat">
+      <div class="bs-toolbar" id="artifactsToolbar">
+        <span class="bs-label">Artifacts</span>
+        <span id="artifactsCount" class="bs-count cg-mono">(0)</span>
+        <span id="viewerArtifactCount" class="bs-count cg-mono"></span>
+        <svg id="artifactsSpinner" class="title-spinner bs-spinner" width="12" height="12" viewBox="0 0 14 14" fill="none"><circle cx="7" cy="7" r="5.5" stroke="currentColor" stroke-width="1.5" opacity="0.25"/><circle cx="7" cy="7" r="5.5" stroke="currentColor" stroke-width="1.5" stroke-dasharray="20 15" stroke-linecap="round"><animateTransform attributeName="transform" type="rotate" from="0 7 7" to="360 7 7" dur="0.7s" repeatCount="indefinite"/></circle></svg>
+        <select id="artifactFormat" class="bs-select">
           <option value="clip">Clip (.mp4)</option>
           <option value="screen">Screenshot (.png)</option>
           <option value="gif">GIF (.gif)</option>
@@ -174,35 +177,21 @@
           <input id="titlecardEnabled" type="checkbox">
           <span class="titlecard-label-text">Titlecards</span>
           <input id="titlecardDuration" type="number" min="1" step="1" value="2"
-                 class="titlecard-duration-input" title="Duration (seconds)">
+                 class="titlecard-duration-input bs-input" title="Duration (seconds)">
           <span class="titlecard-label-unit">s</span>
         </label>
-        <button id="generateBtn" class="btn btn-primary" disabled data-tooltip="Add cells to the work area first">Generate</button>
-        <button id="cancelGenerateBtn" class="btn btn-small btn-cancel hidden">Cancel</button>
-        <button id="buildViewerBtn" class="btn btn-primary" disabled data-tooltip="Generate artifacts first">Build Viewer</button>
-        <button id="stashArtifactsBtn" class="btn btn-small btn-icon" disabled data-tooltip="Add cells to the work area first">
-          <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
-            <path d="M3 2C2.44772 2 2 2.44772 2 3V4C2 4.55228 2.44772 5 3 5H13C13.5523 5 14 4.55228 14 4V3C14 2.44772 13.5523 2 13 2H3Z"/>
-            <path fill-rule="evenodd" clip-rule="evenodd" d="M3 6H13V12C13 13.1046 12.1046 14 11 14H5C3.89543 14 3 13.1046 3 12V6ZM6 8.75C6 8.33579 6.33579 8 6.75 8H9.25C9.66421 8 10 8.33579 10 8.75C10 9.16421 9.66421 9.5 9.25 9.5H6.75C6.33579 9.5 6 9.16421 6 8.75Z"/>
-          </svg>
-          Stash
-        </button>
-        <button id="clearArtifactsBtn" class="btn btn-small btn-icon">
-          <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
-            <path d="M5.28033 4.21967C4.98744 3.92678 4.51256 3.92678 4.21967 4.21967C3.92678 4.51256 3.92678 4.98744 4.21967 5.28033L6.93934 8L4.21967 10.7197C3.92678 11.0126 3.92678 11.4874 4.21967 11.7803C4.51256 12.0732 4.98744 12.0732 5.28033 11.7803L8 9.06066L10.7197 11.7803C11.0126 12.0732 11.4874 12.0732 11.7803 11.7803C12.0732 11.4874 12.0732 11.0126 11.7803 10.7197L9.06066 8L11.7803 5.28033C12.0732 4.98744 12.0732 4.51256 11.7803 4.21967C11.4874 3.92678 11.0126 3.92678 10.7197 4.21967L8 6.93934L5.28033 4.21967Z"/>
-          </svg>
-          Clear
-        </button>
+        <div class="bs-actions">
+          <button id="generateBtn" class="cg-btn cg-btn-solid cg-btn-sm" disabled data-tooltip="Add cells to the work area first"><span class="cg-btn-icon" data-icon="sparkles"></span><span>Generate</span></button>
+          <button id="cancelGenerateBtn" class="cg-btn cg-btn-bare cg-btn-sm hidden">Cancel</button>
+          <button id="buildViewerBtn" class="cg-btn cg-btn-sm" disabled data-tooltip="Generate artifacts first"><span class="cg-btn-icon" data-icon="eye"></span><span>Build Viewer</span></button>
+          <button id="stashArtifactsBtn" class="cg-btn cg-btn-bare cg-btn-sm" disabled data-tooltip="Add cells to the work area first"><span class="cg-btn-icon" data-icon="archive-box"></span><span>Stash</span></button>
+          <button id="clearArtifactsBtn" class="cg-btn cg-btn-bare cg-btn-sm"><span class="cg-btn-icon" data-icon="x-mark"></span><span>Clear</span></button>
+        </div>
       </div>
       <div id="artifactsList" class="drop-target">
         <div class="drop-target-empty">Click or drag cells here to queue for generation</div>
       </div>
-      <button id="addToReelBtn" class="btn btn-small btn-icon" disabled data-tooltip="Add cells to the work area first">
-        <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
-          <path fill-rule="evenodd" clip-rule="evenodd" d="M8 2a.75.75 0 0 1 .75.75v8.69l3.22-3.22a.75.75 0 1 1 1.06 1.06l-4.5 4.5a.75.75 0 0 1-1.06 0l-4.5-4.5a.75.75 0 0 1 1.06-1.06l3.22 3.22V2.75A.75.75 0 0 1 8 2Z"/>
-        </svg>
-        Add to Reel
-      </button>
+      <button id="addToReelBtn" class="cg-btn cg-btn-bare cg-btn-sm bs-add-to-reel" disabled data-tooltip="Add cells to the work area first"><span class="cg-btn-icon" data-icon="arrow-down-tray"></span><span>Add to Reel</span></button>
     </div>
   </section>
 
@@ -216,45 +205,24 @@
 
   <section id="reelColumn">
   <section id="reelArea">
-    <div id="reelHeader">
-      <h3><svg id="reelSpinner" class="title-spinner" width="14" height="14" viewBox="0 0 14 14" fill="none"><circle cx="7" cy="7" r="5.5" stroke="currentColor" stroke-width="1.5" opacity="0.25"/><circle cx="7" cy="7" r="5.5" stroke="currentColor" stroke-width="1.5" stroke-dasharray="20 15" stroke-linecap="round"><animateTransform attributeName="transform" type="rotate" from="0 7 7" to="360 7 7" dur="0.7s" repeatCount="indefinite"/></circle></svg>Reel <span id="reelCount">(0)</span> <span id="reelDuration"></span></h3>
-      <div class="area-controls">
+    <div class="bs-toolbar" id="reelToolbar">
+      <span class="bs-label">Reel</span>
+      <span id="reelCount" class="bs-count cg-mono">(0)</span>
+      <span id="reelDuration" class="bs-count cg-mono"></span>
+      <svg id="reelSpinner" class="title-spinner bs-spinner" width="12" height="12" viewBox="0 0 14 14" fill="none"><circle cx="7" cy="7" r="5.5" stroke="currentColor" stroke-width="1.5" opacity="0.25"/><circle cx="7" cy="7" r="5.5" stroke="currentColor" stroke-width="1.5" stroke-dasharray="20 15" stroke-linecap="round"><animateTransform attributeName="transform" type="rotate" from="0 7 7" to="360 7 7" dur="0.7s" repeatCount="indefinite"/></circle></svg>
+      <div class="bs-actions">
         <div class="highlights-group">
-          <button id="buildHighlightsBtn" class="btn btn-primary btn-icon"
-                  title="Auto-select the best clips scored by severity, uniqueness, and keyword annotations.">
-            <svg class="sparkles-icon" width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
-              <path fill-rule="evenodd" clip-rule="evenodd" d="M5 4C5.36246 4 5.67306 4.25922 5.7379 4.61584L5.99021 6.00355C6.08335 6.51578 6.48422 6.91665 6.99645 7.00979L8.38416 7.2621C8.74078 7.32694 9 7.63754 9 8C9 8.36246 8.74078 8.67306 8.38416 8.7379L6.99645 8.99021C6.48422 9.08335 6.08335 9.48422 5.99021 9.99645L5.7379 11.3842C5.67306 11.7408 5.36246 12 5 12C4.63754 12 4.32694 11.7408 4.2621 11.3842L4.00979 9.99645C3.91665 9.48422 3.51578 9.08335 3.00355 8.99021L1.61584 8.7379C1.25922 8.67306 1 8.36246 1 8C1 7.63754 1.25922 7.32694 1.61584 7.2621L3.00355 7.00979C3.51578 6.91665 3.91665 6.51578 4.00979 6.00355L4.2621 4.61584C4.32694 4.25922 4.63754 4 5 4Z"/>
-              <path fill-rule="evenodd" clip-rule="evenodd" d="M12 1C12.3349 1 12.6291 1.22198 12.7211 1.54396L12.9159 2.2256C13.0345 2.64086 13.3591 2.96546 13.7744 3.0841L14.456 3.27886C14.778 3.37085 15 3.66514 15 4C15 4.33486 14.778 4.62915 14.456 4.72114L13.7744 4.9159C13.3591 5.03454 13.0345 5.35914 12.9159 5.7744L12.7211 6.45604C12.6291 6.77802 12.3349 7 12 7C11.6651 7 11.3709 6.77802 11.2789 6.45604L11.0841 5.7744C10.9655 5.35914 10.6409 5.03454 10.2256 4.9159L9.54396 4.72114C9.22198 4.62915 9 4.33486 9 4C9 3.66514 9.22198 3.37085 9.54396 3.27886L10.2256 3.0841C10.6409 2.96546 10.9655 2.64086 11.0841 2.2256L11.2789 1.54396C11.3709 1.22198 11.6651 1 12 1Z"/>
-              <path fill-rule="evenodd" clip-rule="evenodd" d="M10 11C10.3442 11 10.6441 11.2342 10.7276 11.5681C10.8143 11.9149 11.0851 12.1857 11.4319 12.2724C11.7658 12.3559 12 12.6558 12 13C12 13.3442 11.7658 13.6441 11.4319 13.7276C11.0851 13.8143 10.8143 14.0851 10.7276 14.4319C10.6441 14.7658 10.3442 15 10 15C9.65585 15 9.35586 14.7658 9.27239 14.4319C9.18569 14.0851 8.9149 13.8143 8.5681 13.7276C8.23422 13.6441 8 13.3442 8 13C8 12.6558 8.23422 12.3559 8.5681 12.2724C8.9149 12.1857 9.18569 11.9149 9.27239 11.5681C9.35586 11.2342 9.65585 11 10 11Z"/>
-            </svg>
-            Find Highlights
-          </button>
+          <button id="buildHighlightsBtn" class="cg-btn cg-btn-solid cg-btn-sm" title="Auto-select the best clips scored by severity, uniqueness, and keyword annotations."><span class="cg-btn-icon" data-icon="sparkles"></span><span>Find Highlights</span></button>
           <div id="highlightsDurationDrawer" class="highlights-drawer">
             <label class="highlights-drawer-label">Duration (s)
-              <input id="highlightsDuration" type="number" min="10" step="10" value="180" class="highlights-drawer-input">
+              <input id="highlightsDuration" type="number" min="10" step="10" value="180" class="highlights-drawer-input bs-input">
             </label>
           </div>
         </div>
-        <button id="buildReelBtn" class="btn btn-primary btn-icon" disabled data-tooltip="Add clips to the reel first">
-          <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
-            <path d="M3 3.73241C3 2.54878 4.30673 1.83146 5.30531 2.46692L12.0114 6.73441C12.9376 7.32384 12.9376 8.67597 12.0114 9.2654L5.30532 13.5329C4.30673 14.1684 3 13.451 3 12.2674V3.73241Z"/>
-          </svg>
-          Build Reel
-        </button>
-        <button id="cancelReelBtn" class="btn btn-small btn-cancel hidden">Cancel</button>
-        <button id="stashReelBtn" class="btn btn-small btn-icon" disabled data-tooltip="Add clips to the reel first">
-          <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
-            <path d="M3 2C2.44772 2 2 2.44772 2 3V4C2 4.55228 2.44772 5 3 5H13C13.5523 5 14 4.55228 14 4V3C14 2.44772 13.5523 2 13 2H3Z"/>
-            <path fill-rule="evenodd" clip-rule="evenodd" d="M3 6H13V12C13 13.1046 12.1046 14 11 14H5C3.89543 14 3 13.1046 3 12V6ZM6 8.75C6 8.33579 6.33579 8 6.75 8H9.25C9.66421 8 10 8.33579 10 8.75C10 9.16421 9.66421 9.5 9.25 9.5H6.75C6.33579 9.5 6 9.16421 6 8.75Z"/>
-          </svg>
-          Stash
-        </button>
-        <button id="clearReelBtn" class="btn btn-small btn-icon">
-          <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
-            <path d="M5.28033 4.21967C4.98744 3.92678 4.51256 3.92678 4.21967 4.21967C3.92678 4.51256 3.92678 4.98744 4.21967 5.28033L6.93934 8L4.21967 10.7197C3.92678 11.0126 3.92678 11.4874 4.21967 11.7803C4.51256 12.0732 4.98744 12.0732 5.28033 11.7803L8 9.06066L10.7197 11.7803C11.0126 12.0732 11.4874 12.0732 11.7803 11.7803C12.0732 11.4874 12.0732 11.0126 11.7803 10.7197L9.06066 8L11.7803 5.28033C12.0732 4.98744 12.0732 4.51256 11.7803 4.21967C11.4874 3.92678 11.0126 3.92678 10.7197 4.21967L8 6.93934L5.28033 4.21967Z"/>
-          </svg>
-          Clear
-        </button>
+        <button id="buildReelBtn" class="cg-btn cg-btn-sm" disabled data-tooltip="Add clips to the reel first"><span class="cg-btn-icon" data-icon="play"></span><span>Build Reel</span></button>
+        <button id="cancelReelBtn" class="cg-btn cg-btn-bare cg-btn-sm hidden">Cancel</button>
+        <button id="stashReelBtn" class="cg-btn cg-btn-bare cg-btn-sm" disabled data-tooltip="Add clips to the reel first"><span class="cg-btn-icon" data-icon="archive-box"></span><span>Stash</span></button>
+        <button id="clearReelBtn" class="cg-btn cg-btn-bare cg-btn-sm"><span class="cg-btn-icon" data-icon="x-mark"></span><span>Clear</span></button>
       </div>
     </div>
     <div id="reelList" class="drop-target">

@@ -1037,20 +1037,23 @@
     // Colgroup for fixed column widths — participant columns share equal width
     var colgroup = document.createElement("colgroup");
     var colRowNum = document.createElement("col");
-    colRowNum.style.width = "3rem";
+    colRowNum.style.width = "2.5rem";
     colgroup.appendChild(colRowNum);
     var colFn = document.createElement("col");
-    colFn.style.width = "3.5rem";
+    colFn.style.width = "2.25rem";
     colgroup.appendChild(colFn);
     var colObs = document.createElement("col");
-    colObs.style.width = "auto";
+    // Explicit width keeps the table size predictable under table-layout: fixed
+    // — `auto` collapses to 0 when other cols already exceed the table width.
+    // The td inside has overflow:hidden + ellipsis to clamp the long observation.
+    colObs.style.width = "18rem";
     colgroup.appendChild(colObs);
     var colCat = document.createElement("col");
-    colCat.style.width = "7rem";
+    colCat.style.width = "7.5rem";
     colgroup.appendChild(colCat);
     if (showSeverity) {
       var colSev = document.createElement("col");
-      colSev.style.width = "5.5rem";
+      colSev.style.width = "6.875rem";
       colgroup.appendChild(colSev);
     }
     for (var c = 0; c < visibleParticipants.length; c++) {
@@ -4484,7 +4487,22 @@
     ]);
   }
 
+  // Apply mask-image to every static [data-icon] element (mirrors what
+  // createBtn does for primitives — needed for the bottom-strip toolbar
+  // buttons that are written as static HTML).
+  function applyDataIconMasks() {
+    var nodes = qsa("[data-icon]");
+    for (var i = 0; i < nodes.length; i++) {
+      var name = nodes[i].dataset.icon;
+      if (!name) continue;
+      var url = 'url("icons/' + name + '.svg")';
+      nodes[i].style.maskImage = url;
+      nodes[i].style.webkitMaskImage = url;
+    }
+  }
+
   document.addEventListener("DOMContentLoaded", function () {
+    applyDataIconMasks();
     readPersistedSidebarOpen();
     setActiveTabAttr(state.activePreviewTab);
     bindSidebarToggle();

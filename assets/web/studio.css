@@ -180,8 +180,9 @@ body {
 /* Sheet preview */
 
 #sheetPreview {
-  flex: 0 1 auto;
+  flex: 1 1 auto;
   min-width: 0;
+  min-height: 0;
   display: flex;
   flex-direction: row;
   background: var(--color-panel-bg);
@@ -694,15 +695,14 @@ body[data-active-tab]:not([data-active-tab="sheet"]) #studioSidebar {
 
 #sheetGrid {
   overflow: auto;
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius);
+  border-top: 1px solid var(--hairline);
   user-select: none;
 }
 
 #sheetGrid table {
   width: 100%;
   border-collapse: collapse;
-  font-size: var(--text-xs);
+  font-size: 12.5px;
   table-layout: fixed;
 }
 
@@ -776,18 +776,35 @@ body.bottom-animating #stashedArtifactsArea {
   position: sticky;
   top: 0;
   z-index: var(--z-float);
-  background: var(--color-surface-alt);
-  border-bottom: 2px solid var(--color-border);
-  padding: var(--space-2) var(--space-3);
-  text-align: left;
-  font-weight: 600;
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+  border-right: 1px solid var(--hairline);
+  padding: 8px 10px;
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  text-align: center;
+  color: var(--fg-faint);
   white-space: nowrap;
+}
+#sheetGrid thead th:last-child {
+  border-right: 0;
 }
 
 #sheetGrid tbody td {
-  padding: var(--space-2) var(--space-3);
-  border-bottom: 1px solid var(--color-border);
-  vertical-align: top;
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--hairline);
+  border-right: 1px solid var(--hairline);
+  font-size: 12px;
+  text-align: center;
+  color: var(--fg-muted);
+  vertical-align: middle;
+  white-space: nowrap;
+  overflow: hidden;
+}
+#sheetGrid tbody td:last-child {
+  border-right: 0;
 }
 
 .col-row-num {
@@ -852,23 +869,22 @@ body.bottom-animating #stashedArtifactsArea {
 }
 
 .col-observation {
-  overflow: hidden;
+  text-align: left;
+  color: var(--fg);
   text-overflow: ellipsis;
-  white-space: nowrap;
+  max-width: 280px;
 }
 
 .col-category {
-  overflow: hidden;
+  text-align: left;
+  color: var(--fg-muted);
   text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--color-text-dim);
-  font-size: var(--text-sm);
 }
 
 /* Severity rendered as a pill (locked variant per redesign). The .col-severity
  * td is just a layout container; the pill lives inside as a span chain. */
 .col-severity {
-  font-size: 12px;
+  text-align: left;
 }
 
 .sev-pill {
@@ -988,8 +1004,9 @@ col.col-participant-col {
 
 .ts-chip {
   display: inline-block;
+  max-width: 100%;
   padding: 2px 6px;
-  border-radius: 3px;
+  border-radius: 2px;
   font-family: var(--font-mono);
   font-feature-settings: "tnum";
   font-size: 11px;
@@ -997,6 +1014,9 @@ col.col-participant-col {
   background: var(--cell-data);
   color: var(--cell-data-fg);
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: middle;
 }
 
 /* "Has text but invalid timestamp" — show muted, dashed-border outline */
@@ -1086,11 +1106,9 @@ col.col-participant-col {
 /* Drop areas */
 
 #dropAreas {
-  background: var(--color-panel-bg);
-  padding: var(--space-3) var(--space-4) var(--space-4);
+  background: var(--bg);
   display: flex;
   flex-direction: column;
-  gap: var(--space-3);
   flex: 1 1 auto;
   min-height: 0;
 }
@@ -1098,48 +1116,86 @@ col.col-participant-col {
 .drop-area {
   display: flex;
   flex-direction: column;
-  gap: var(--space-2);
+  flex: 1 1 auto;
+  min-height: 0;
 }
 
-.drop-area h3,
-#reelArea h3 {
+/* Single-row toolbar at the top of each bottom-strip column.
+ * Anatomy: label · count · ...controls (format/titlecards) · margin-left:auto
+ * push of action buttons (Generate / Build Viewer / Stash / Clear). Mirrors
+ * the prototype's `padding: 0 20px; height: 40; borderBottom: hairline`. */
+.bs-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  height: 40px;
+  padding: 0 20px;
+  border-bottom: 1px solid var(--hairline);
+  flex: 0 0 auto;
+}
+
+.bs-label {
   font-size: 12.5px;
   font-weight: 500;
   letter-spacing: 0.06em;
   text-transform: uppercase;
   color: var(--fg);
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  margin: 0;
 }
 
-.drop-area h3 span,
-#reelArea h3 span {
+.bs-count {
   font-family: var(--font-mono);
   font-feature-settings: "tnum";
-  font-weight: 400;
-  text-transform: none;
-  letter-spacing: 0;
-  color: var(--fg-muted);
   font-size: 11px;
+  color: var(--fg-faint);
+  white-space: nowrap;
+}
+
+.bs-spinner {
+  flex-shrink: 0;
+  color: var(--fg-faint);
+}
+
+.bs-select,
+.bs-input {
+  font-family: inherit;
+  font-size: 12px;
+  height: 24px;
+  padding: 0 6px;
+  background: var(--bg-input);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  box-sizing: border-box;
+}
+.bs-input {
+  font-family: var(--font-mono);
+  font-feature-settings: "tnum";
+  font-size: 11px;
+  height: 22px;
+  text-align: center;
+}
+
+.bs-actions {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.bs-add-to-reel {
+  align-self: center;
+  margin: var(--space-2) auto;
+  flex: 0 0 auto;
 }
 
 .drop-target {
-  min-height: 120px;
-  border: 2px dashed var(--color-border);
-  border-radius: var(--radius);
-  padding: var(--space-2);
   display: flex;
   flex-direction: column;
   gap: var(--space-1);
-  transition: border-color var(--duration-fast), background-color var(--duration-fast);
-  overflow-y: auto;
-  max-height: 250px;
+  transition: background-color var(--duration-fast);
 }
 
 .drop-target.drag-over {
-  border-color: var(--color-accent);
   background-color: var(--color-selected);
 }
 
@@ -1163,11 +1219,13 @@ col.col-participant-col {
 #artifactsList {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
-  gap: var(--space-2);
-  padding: var(--space-2);
-  min-height: 100px;
+  gap: 8px;
+  padding: 14px;
+  flex: 1 1 auto;
+  min-height: 0;
   overflow-y: auto;
   align-content: start;
+  border: 0;
 }
 #artifactsList .drop-target-empty {
   grid-column: 1 / -1;
@@ -1289,30 +1347,23 @@ col.col-participant-col {
 /* Reel timeline */
 
 #reelArea {
-  background: var(--color-panel-bg);
-  padding: var(--space-3) var(--space-4) var(--space-4);
+  background: var(--bg);
   display: flex;
   flex-direction: column;
-  gap: var(--space-3);
   flex: 1 1 auto;
   min-height: 0;
 }
 
-#reelHeader {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: var(--space-2);
-}
-
 #reelList {
+  display: flex;
   flex-direction: row;
+  flex: 1 1 auto;
+  min-height: 0;
   overflow-x: auto;
   overflow-y: hidden;
-  max-height: none;
-  min-height: 100px;
-  gap: var(--space-2);
-  padding: var(--space-2);
+  gap: 8px;
+  padding: 14px;
+  border: 0;
 }
 
 #reelDuration {
@@ -1526,14 +1577,8 @@ html[data-theme="dark"] .queue-card-error .queue-card-thumb {
   align-items: center;
 }
 
-#generateBtn {
-  margin-left: auto;
-}
-
-#addToReelBtn {
-  align-self: flex-end;
-  margin-top: var(--space-2);
-}
+/* Old layout helpers removed: #generateBtn now sits inside .bs-actions
+ * and #addToReelBtn floats centered below the artifact list (.bs-add-to-reel). */
 
 .area-controls select {
   padding: var(--space-2) var(--space-2);
@@ -1568,13 +1613,21 @@ html[data-theme="dark"] .queue-card-error .queue-card-thumb {
 }
 
 .titlecard-duration-input {
-  width: 3rem;
-  padding: var(--space-1) var(--space-2);
-  border: 1px solid var(--color-border);
-  border-radius: calc(var(--radius) - 2px);
-  background: var(--color-surface);
-  color: var(--color-text);
-  font-size: var(--text-xs);
+  width: 36px;
+  height: 22px;
+  padding: 0 6px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-input);
+  color: var(--fg);
+  font-family: var(--font-mono);
+  font-feature-settings: "tnum";
+  font-size: 11px;
+  text-align: center;
+}
+.titlecard-duration-input:focus {
+  outline: none;
+  border-color: var(--accent);
 }
 
 .titlecard-label-unit {
@@ -1712,13 +1765,15 @@ html[data-theme="dark"] .queue-card-error .queue-card-thumb {
 
 .highlights-drawer-input {
   width: 5rem;
-  padding: var(--space-1) var(--space-2);
-  border: 1px solid var(--color-border);
-  border-radius: calc(var(--radius) - 2px);
-  background: var(--color-surface);
-  color: var(--color-text);
-  font-size: var(--text-sm);
+  height: 22px;
+  padding: 0 6px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-input);
+  color: var(--fg);
+  font-size: 11px;
   font-family: var(--font-mono);
+  font-feature-settings: "tnum";
 }
 
 /* Gallery button group (inside header actions) */
@@ -2271,13 +2326,21 @@ html[data-theme="dark"] .log-panel {
 }
 
 .intake-cluster-input {
-  width: 48px;
-  font-size: var(--text-xs);
-  padding: 2px 4px;
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-sm);
-  background: var(--color-surface);
-  color: var(--color-text);
+  width: 44px;
+  height: 22px;
+  font-family: var(--font-mono);
+  font-feature-settings: "tnum";
+  font-size: 11px;
+  padding: 0 6px;
+  text-align: center;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-input);
+  color: var(--fg);
+}
+.intake-cluster-input:focus {
+  outline: none;
+  border-color: var(--accent);
 }
 
 #intakeTimeline,
@@ -2342,12 +2405,20 @@ html[data-theme="dark"] .log-panel {
 
 .intake-filter-search {
   width: 160px;
-  font-size: var(--text-xs);
-  padding: 3px 8px;
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-sm);
-  background: var(--color-surface);
-  color: var(--color-text);
+  height: 24px;
+  font-size: 12px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-input);
+  color: var(--fg);
+}
+.intake-filter-search::placeholder {
+  color: var(--fg-faint);
+}
+.intake-filter-search:focus {
+  outline: none;
+  border-color: var(--accent);
 }
 
 .intake-filter-new-label {
