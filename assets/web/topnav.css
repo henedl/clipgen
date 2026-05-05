@@ -14,10 +14,6 @@
   display: flex;
   align-items: center;
   height: 48px;
-  /* Without `flex-shrink: 0` Chromium will compress the bar below 48 px when
-   * the body's flex children (sub-header + main + drag-resizable bottom
-   * panel) collectively exceed the viewport height. */
-  flex: 0 0 48px;
   padding: 0 16px;
   border-bottom: 1px solid var(--border);
   background: color-mix(in oklab, var(--bg) 72%, transparent);
@@ -25,8 +21,10 @@
   backdrop-filter: blur(14px) saturate(1.4);
   font-family: var(--font-sans);
   color: var(--fg);
-  position: sticky;
+  position: fixed;
   top: 0;
+  left: 0;
+  right: 0;
   z-index: var(--z-dropdown);
 }
 @supports not (backdrop-filter: blur(1px)) {

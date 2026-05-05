@@ -544,15 +544,18 @@
       track.src = "api/vtt/" + pid;
       applyCaptionMode();
 
+      // Restore the saved playback offset for this participant if we have one;
+      // otherwise seek to 0.001s so the first frame renders without waiting
+      // for play/scrub. `preload="metadata"` decodes duration but not pixels,
+      // so without this nudge the viewer shows a blank gray box on load.
       var storedMap = getStoredUIState("transcripts").videoTimeByParticipant;
-      if (storedMap && typeof storedMap[pid] === "number") {
-        var savedTime = storedMap[pid];
-        var restoreTime = function () {
-          video.removeEventListener("loadedmetadata", restoreTime);
-          if (state.selectedParticipant === pid) video.currentTime = savedTime;
-        };
-        video.addEventListener("loadedmetadata", restoreTime);
-      }
+      var savedTime =
+        storedMap && typeof storedMap[pid] === "number" ? storedMap[pid] : 0.001;
+      var restoreTime = function () {
+        video.removeEventListener("loadedmetadata", restoreTime);
+        if (state.selectedParticipant === pid) video.currentTime = savedTime;
+      };
+      video.addEventListener("loadedmetadata", restoreTime);
     } else {
       video.removeAttribute("src");
       video.load();
@@ -838,7 +841,13 @@
     qs("#summaryContent").appendChild(p);
   }
 
-  var _CITATIONS_POLL_TIMEOUT = 90000; // stop polling after 90 seconds
+  // Hard cap on the citations poll. The previous 90 s value was shorter than
+  // some real Ollama runs on long transcripts, so the result would land in
+  // the manifest after we'd given up — and the UI only picked it up on a
+  // full page reload. Five minutes covers realistic completion times; the
+  // server-side `generating: false` signal stops the poll earlier when the
+  // agent finishes (or fails) sooner.
+  var _CITATIONS_POLL_TIMEOUT = 300000;
 
   function _startCitationsPoll(pid) {
     _stopCitationsPoll();
@@ -1121,7 +1130,12 @@
     // Row list changes shape on both append and rebuild paths.
     _cachedSegmentRows = null;
 
-    var nearBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 100;
+    // Pass 6 floating-nav scroll-under: scroll lives on #trMain, not on
+    // #segmentList. Probe the actual scroll container so the
+    // auto-follow-streaming-tail behaviour keeps working.
+    var trMain = qs("#trMain");
+    var scrollHost = trMain || container;
+    var nearBottom = scrollHost.scrollHeight - scrollHost.scrollTop - scrollHost.clientHeight < 100;
 
     var canAppend =
       _partialRender.pid === pid &&
@@ -1165,7 +1179,7 @@
     _partialRender.marksVersion = _streamingMarksVersion;
 
     if (nearBottom) {
-      container.scrollTop = container.scrollHeight;
+      scrollHost.scrollTop = scrollHost.scrollHeight;
     }
 
     // Mirror partial segments into state.segments so the marker timeline can
@@ -1730,15 +1744,19 @@
   // into flow when the user disables PiP. Assigned in initPipScroll.
   var _setPipActive = null;
 
+  // Chrome strip height — TopNav (48) + subheader (44) + pill bar (56). Mirrored
+  // in transcripts.css `#trMain { padding-top: 148px }`; PiP compensation has
+  // to add the videoSection height on top of this so layout doesn't jump.
+  var TR_CHROME_TOP = 148;
+
   function initPipScroll() {
     var section = qs("#videoSection");
-    // The transcript section is the only scrollable region on the page (body
-    // and #trMain are overflow:hidden). PiP triggers when the user scrolls
-    // it down past a real commit; only returning to the very top dismisses
-    // it. Asymmetric thresholds avoid the bounce that happens because flipping
-    // the section to position:fixed lets the transcript expand and shifts the
-    // scrollTop reading the trigger relies on.
-    var scroller = qs("#transcriptSection");
+    // #trMain is the scroll container (pass 6 floating-nav scroll-under) so
+    // scrolled content slides under the chrome strip. PiP triggers when the
+    // user scrolls past a commit; only returning to the very top dismisses
+    // it. Asymmetric thresholds avoid the bounce caused by switching the
+    // video section to position:fixed mid-scroll.
+    var scroller = qs("#trMain");
     if (!section || !scroller) return;
 
     var ENTER_THRESHOLD = 140;
@@ -1747,13 +1765,13 @@
     function setPipActive(active) {
       if (active === state.pipActive) return;
       if (active) {
-        // Reserve the section's natural height on the transcript side so the
-        // transcript content does not jump up when the section detaches from
+        // Reserve the section's natural height on top of the chrome inset so
+        // transcript content does not jump up when the player detaches from
         // flow. We restore the scroll position on the next frame because the
         // browser may rebase scrollTop relative to the new content size when
         // padding is added.
         var h = Math.round(section.getBoundingClientRect().height);
-        if (h > 0) scroller.style.paddingTop = h + "px";
+        if (h > 0) scroller.style.paddingTop = TR_CHROME_TOP + h + "px";
         var keepTop = scroller.scrollTop;
         state.pipActive = true;
         section.classList.add("pip");
@@ -1766,6 +1784,7 @@
         var keepTop2 = scroller.scrollTop;
         state.pipActive = false;
         section.classList.remove("pip");
+        // Empty inline override falls back to the CSS default (148px).
         scroller.style.paddingTop = "";
         requestAnimationFrame(function () {
           scroller.scrollTop = keepTop2;
@@ -1933,16 +1952,22 @@
   }
 
   function scrollToSegment(row) {
-    var section = qs("#transcriptSection");
-    var rowTop = row.offsetTop;
-    var rowBottom = rowTop + row.offsetHeight;
-    var scrollTop = section.scrollTop;
-    var viewHeight = section.clientHeight;
+    // Pass 6 floating-nav scroll-under: #trMain is the scroll container; the
+    // top 148px of its viewport sits *under* the fixed chrome strip, so the
+    // visible top edge is at scroller.top + TR_CHROME_TOP, not at scroller.top.
+    var scroller = qs("#trMain");
+    if (!scroller) return;
+    var rowRect = row.getBoundingClientRect();
+    var scRect = scroller.getBoundingClientRect();
+    var rowTopInScroll = rowRect.top - scRect.top + scroller.scrollTop;
+    var rowBottomInScroll = rowTopInScroll + rowRect.height;
+    var visibleTop = scroller.scrollTop + TR_CHROME_TOP;
+    var visibleBottom = scroller.scrollTop + scroller.clientHeight;
 
-    if (rowTop < scrollTop + 40) {
-      section.scrollTop = rowTop - 40;
-    } else if (rowBottom > scrollTop + viewHeight - 40) {
-      section.scrollTop = rowBottom - viewHeight + 40;
+    if (rowTopInScroll < visibleTop + 40) {
+      scroller.scrollTop = rowTopInScroll - TR_CHROME_TOP - 40;
+    } else if (rowBottomInScroll > visibleBottom - 40) {
+      scroller.scrollTop = rowBottomInScroll - scroller.clientHeight + 40;
     }
   }
 
@@ -3410,6 +3435,12 @@
       } else {
         pollTaskStatus();
         startXrefPolling();
+        // Re-check summary + citations on tab refocus. Background-running
+        // Ollama agents finish without notifying the frontend; if the citations
+        // poll already gave up (or summary completed after we stopped polling)
+        // the manifest result would only surface on a full page reload. This
+        // catches the common "user goes to another tab, comes back" case.
+        if (state.selectedParticipant) loadSummary(state.selectedParticipant);
       }
     });
 

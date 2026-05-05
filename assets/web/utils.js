@@ -600,20 +600,32 @@ var populateSelect = function (selectEl, values, allLabel) {
 };
 
 // ---- Detector colors ----
-// Read from CSS custom properties (tokens.css). Mutable so the same object
-// reference can be re-populated after a theme toggle without breaking callers.
-// Hardcoded fallback supports exported viewers that may lack tokens.css.
+//
+// Single source of truth: `--color-task-{type}` tokens in `tokens.css`.
+// Every place that paints a detector — Screenspace workflow tabs, Screenspace
+// result rows, Studio Screenspace-Intake (filter chips / density bars / card
+// labels), and exported viewers — pulls from those tokens via either CSS
+// (`var(--color-task-X)` directly) or the JS helpers below.
+//
+// `_DETECTOR_FALLBACK` is the offline-export safety net for HTML files that
+// somehow ship without `tokens.css`; values here MUST stay aligned with the
+// dark-theme `--color-task-*` block in `tokens.css`. `CATEGORY_HUES` stays
+// the path for non-detector labels (transcript intake categories, mark
+// categories) — adding a new detector without updating tokens.css is caught
+// by `tests/test_shared_constants.py`.
 
 var DETECTOR_COLORS = {};
 var _DETECTOR_TYPES = [
   "multitool", "color", "change", "similarity", "text",
   "numbers", "timelapse", "template", "flow", "scene", "inactivity",
 ];
+// Values mirrored from the dark-theme `--color-task-*` block in tokens.css.
+// Update this map and tokens.css together when changing a detector palette.
 var _DETECTOR_FALLBACK = {
-  multitool: "#2563eb", color: "#8b5cf6", change: "#f97316",
-  similarity: "#0ea5e9", text: "#10b981", numbers: "#eab308",
-  timelapse: "#ec4899", template: "#f43f5e", flow: "#6366f1",
-  scene: "#14b8a6", inactivity: "#64748b",
+  multitool: "#60a5fa", color: "#a78bfa", change: "#fb923c",
+  similarity: "#22d3ee", text: "#34d399", numbers: "#facc15",
+  timelapse: "#f472b6", template: "#fb7185", flow: "#818cf8",
+  scene: "#2dd4bf", inactivity: "#94a3b8",
 };
 
 function refreshDetectorColors() {
@@ -632,10 +644,33 @@ function refreshDetectorColors() {
 
 refreshDetectorColors();
 
+// Return a CSS color string for a known Screenspace detector label, sourced
+// from the canonical `--color-task-{type}` token in `tokens.css` so chips /
+// dots / bars / labels in Studio's Screenspace Intake match the live
+// Screenspace surface exactly. Returns `null` for unknown labels so callers
+// can fall back to the oklch / `categoryHue` path for non-detector tints
+// (transcript categories, mark categories, ad-hoc labels).
+//
+//   alpha == null | >= 1  →  raw `var(--color-task-X)`
+//   alpha < 1             →  `color-mix(in oklch, var(--color-task-X) <pct>%, transparent)`
+function detectorColor(label, alpha) {
+  if (!label) return null;
+  var key = String(label).toLowerCase().trim();
+  if (_DETECTOR_TYPES.indexOf(key) === -1) return null;
+  var v = "var(--color-task-" + key + ")";
+  if (alpha == null || alpha >= 1) return v;
+  var pct = Math.max(0, Math.min(100, Math.round(alpha * 100)));
+  return "color-mix(in oklch, " + v + " " + pct + "%, transparent)";
+}
+
 // ---- Category hue palette (redesign) ----
-// Stable hue per detector / mark category, rendered at runtime via oklch().
-// Mirrors the table in redesign/README.md. New code should use these for
-// chip rings, dots, and density bars rather than pre-flattened hex tokens.
+// Stable hue per non-detector label (mark categories / transcript intake
+// categories), rendered at runtime via oklch(). Detector colors do NOT live
+// here — see `detectorColor()` above and the `--color-task-*` tokens for the
+// canonical detector palette. The detector entries below remain so legacy
+// callers that pass a detector label keep working, but new code colouring
+// a detector should prefer `detectorColor(label)` over `categoryColor(label)`
+// to stay aligned with Screenspace.
 var CATEGORY_HUES = {
   multitool: 220, color: 280, change: 30, similarity: 200,
   text: 170, numbers: 330, timelapse: 350, template: 18,

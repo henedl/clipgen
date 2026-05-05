@@ -177,8 +177,13 @@ body {
   white-space: pre-wrap;
 }
 
-/* Sheet preview */
-
+/* Sheet preview
+ *
+ * Floating-nav scroll-under: TopNav (48px) + subheader (44px) are
+ * `position: fixed`. #sheetPreview fills body's flex column from viewport y:0
+ * down — chrome overlays its top edge. Each scrollable sub-tab below carries
+ * its own `padding-top: 92px` so visible content starts below the chrome
+ * strip while scrolled content slides *under* the glass. */
 #sheetPreview {
   flex: 1 1 auto;
   min-width: 0;
@@ -199,12 +204,19 @@ body {
 
 /* Intake / convergence / metadata sub-tabs need their own breathing room since
  * #sheetMain is now flush. Sheet sub-tab keeps its table flush to viewport
- * edges (matches prototype). */
+ * edges (matches prototype).
+ *
+ * The 92px top inset comes from the floating-nav scroll-under: TopNav +
+ * subheader are fixed, so each sub-tab needs to push its visible content
+ * below the chrome strip. The intake panels override this with a tighter
+ * `padding: 92px var(--space-1) 0` further down — the convergence + metadata
+ * panels rely on this rule directly. (`--space-0` doesn't exist; use a bare
+ * `0` so the shorthand stays valid.) */
 #intakePanel,
 #trIntakePanel,
 #convergencePanel,
 #metadataPanel {
-  padding: var(--space-3) var(--space-0);
+  padding: 92px 0 var(--space-3);
 }
 
 /* Sub-tab panels are flex children of #sheetMain. Without explicit
@@ -225,7 +237,9 @@ body {
   flex: 0 0 220px;
   display: flex;
   flex-direction: column;
-  padding: var(--space-3) 0;
+  /* Floating-nav scroll-under: 92px top inset clears the fixed chrome strip
+   * (TopNav + subheader). */
+  padding: calc(var(--space-3) + 92px) 0 var(--space-3);
   background: var(--bg);
   border-right: 1px solid var(--hairline);
   overflow: hidden;
@@ -457,6 +471,8 @@ body[data-active-tab]:not([data-active-tab="sheet"]) #studioSidebar {
 }
 
 .intake-tab-badge {
+  font-family: var(--font-mono);
+  font-feature-settings: "tnum";
   font-size: 10px;
   padding: 1px 6px;
   border-radius: var(--radius-full);
@@ -501,7 +517,8 @@ body[data-active-tab]:not([data-active-tab="sheet"]) #studioSidebar {
 #trIntakePanel {
   flex: 1;
   overflow: hidden;
-  padding: 0 var(--space-1);
+  /* Floating-nav scroll-under: 92px top inset clears the fixed chrome strip. */
+  padding: 92px var(--space-1) 0;
   display: flex;
   flex-direction: column;
 }
@@ -704,8 +721,14 @@ body[data-active-tab]:not([data-active-tab="sheet"]) #studioSidebar {
 
 #sheetGrid {
   overflow: auto;
-  border-top: 1px solid var(--hairline);
   user-select: none;
+  /* Floating-nav scroll-under: 92px top inset clears the fixed TopNav (48) +
+   * subheader (44). Sticky thead bumps to top:92 to dock right below chrome.
+   * The legacy `border-top: 1px solid var(--hairline)` was dropped here —
+   * chrome's own `border-bottom` already supplies the separator, and the
+   * extra 1 px shifted the thead's natural position past the sticky target,
+   * creating a visible gap below chrome. */
+  padding-top: 92px;
 }
 
 #sheetGrid table {
@@ -783,6 +806,11 @@ body.bottom-animating #stashedArtifactsArea {
 
 #sheetGrid thead th {
   position: sticky;
+  /* Sticky's `top:N` is measured from the scroll container's content-box top
+   * — i.e. AFTER `padding-top: 92px` on `#sheetGrid` — so `top: 0` lands the
+   * pinned thead at viewport y = 92 (just below the fixed chrome strip).
+   * Setting `top: 92px` here doubled the inset and pushed the thead to
+   * y = 184, leaving the first data row visible above the header. */
   top: 0;
   z-index: var(--z-float);
   background: var(--bg);
@@ -1260,7 +1288,6 @@ col.col-participant-col {
 
 .queue-card {
   flex-shrink: 0;
-  width: var(--card-width-queue);
   border: 1px solid var(--color-border);
   border-radius: calc(var(--radius) - 2px);
   background: var(--color-surface);
@@ -2448,9 +2475,14 @@ html[data-theme="dark"] .log-panel {
   gap: 4px;
 }
 
-/* Intake density timeline host (created by primitives at render time) */
+/* Intake density timeline host (created by primitives at render time).
+ * Box-sizing is border-box on `*`, and `#intakeTimeline { height: 48px }`
+ * locks the host's outer height — so padding-bottom would just eat into the
+ * timeline area instead of pushing the cards down. Use margin-bottom to put
+ * the breathing room outside the box. */
 .intake-density-host {
   padding: var(--space-2) var(--space-3) 0;
+  margin-bottom: var(--space-3);
 }
 
 .intake-card-det-dot {
@@ -2509,7 +2541,7 @@ html[data-theme="dark"] .log-panel {
   left: 4px;
   padding: 3px;
   border-radius: var(--radius-sm);
-  background: rgba(52, 152, 219, 0.85);
+  background: color-mix(in oklch, var(--stream-screenspace) 85%, transparent);
   color: #fff;
   line-height: 0;
   z-index: 1;
@@ -2584,7 +2616,9 @@ html[data-theme="dark"] .log-panel {
   margin-left: -10px;
 }
 
-.queue-card:hover .xref-badge-stack .xref-badge + .xref-badge {
+.queue-card:hover .xref-badge-stack .xref-badge + .xref-badge,
+.clip-card:hover .xref-badge-stack .xref-badge + .xref-badge,
+.transcript-card:hover .xref-badge-stack .xref-badge + .xref-badge {
   margin-left: 3px;
 }
 

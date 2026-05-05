@@ -145,3 +145,54 @@ def test_exported_viewer_payloads_include_config():
         f"Expected at least 2 occurrences of config payload in viewer.py "
         f"(timeline/gallery), found {occurrences}"
     )
+
+
+def _parse_js_string_array(name: str) -> list[str]:
+    """Extract a top-level `var <name> = [ ... ];` of string literals."""
+    match = re.search(
+        r"var\s+" + re.escape(name) + r"\s*=\s*\[(.+?)\];",
+        _js_source(),
+        re.DOTALL,
+    )
+    assert match, f"{name} not found in utils.js"
+    raw = match.group(1)
+    return re.findall(r'"([^"]+)"', raw)
+
+
+def test_detector_palette_stays_aligned():
+    """Detector colours have one canonical home: `--color-task-*` in tokens.css.
+
+    Three places carry detector palette knowledge today:
+      1. `--color-task-{type}` tokens in `assets/web/tokens.css` (canonical)
+      2. `_DETECTOR_TYPES` list in `assets/web/utils.js` (the JS catalogue
+         of detectors that participates in the colour system)
+      3. `_DETECTOR_FALLBACK` map in `assets/web/utils.js` (export-only
+         safety net for HTML files that ship without tokens.css)
+
+    Adding a detector — or renaming one — must touch all three. This test
+    catches the most likely drift: keys diverging between the JS catalogue
+    and the CSS palette. It does not compare hex equality (that would
+    require an oklch-aware parser); the manual rule, captured in the
+    comment block above `_DETECTOR_FALLBACK` in utils.js, is to mirror the
+    dark-theme `--color-task-*` values into `_DETECTOR_FALLBACK`.
+    """
+    detector_types = _parse_js_string_array("_DETECTOR_TYPES")
+    fallback = _parse_js_object_literal("_DETECTOR_FALLBACK")
+
+    assert set(detector_types) == set(fallback.keys()), (
+        f"_DETECTOR_TYPES and _DETECTOR_FALLBACK keys diverged: "
+        f"types={sorted(detector_types)} vs fallback={sorted(fallback)}. "
+        f"Update both lists in utils.js together."
+    )
+
+    tokens_css = (
+        Path(__file__).resolve().parent.parent / "assets" / "web" / "tokens.css"
+    ).read_text("utf-8")
+    css_detector_keys = set(re.findall(r"--color-task-([\w-]+)\s*:", tokens_css))
+    # tokens.css declares dark + light variants of every key, so the regex picks
+    # them up twice — `set()` dedupes naturally.
+    assert set(detector_types) <= css_detector_keys, (
+        f"Detectors missing a `--color-task-*` token in tokens.css: "
+        f"{sorted(set(detector_types) - css_detector_keys)}. "
+        f"Add the token (dark + light blocks) to assets/web/tokens.css."
+    )

@@ -233,11 +233,18 @@
 
   function setCardDragImage(ev, card) {
     var clone = card.cloneNode(true);
+    var computed = window.getComputedStyle(card);
     clone.style.position = "absolute";
     clone.style.top = "-9999px";
     clone.style.left = "-9999px";
     clone.style.width = card.offsetWidth + "px";
     clone.style.zIndex = "-1";
+    // Some Chromium versions render the drag-image bitmap without honoring the
+    // class-driven border-radius / overflow clip, leaving square corners on
+    // an otherwise rounded card. Pin them inline on the clone so the snapshot
+    // captures the rounding.
+    clone.style.borderRadius = computed.borderRadius;
+    clone.style.overflow = "hidden";
     document.body.appendChild(clone);
     var rect = card.getBoundingClientRect();
     ev.dataTransfer.setDragImage(clone, ev.clientX - rect.left, ev.clientY - rect.top);
@@ -781,9 +788,9 @@
     if (filterToggle) filterToggle.classList.add("hidden");
     if (refreshBtn) refreshBtn.classList.add("hidden");
 
-    // Stop both intake poll timers
-    if (state.intakePollTimer) { clearInterval(state.intakePollTimer); state.intakePollTimer = null; }
-    if (state.trIntakePollTimer) { clearInterval(state.trIntakePollTimer); state.trIntakePollTimer = null; }
+    // Intake poll timers are started at DOMContentLoaded and kept running
+    // across all tabs so the sub-tab counter badges stay live; switching away
+    // from an intake tab no longer tears them down.
     if (window.convergenceDeactivate) window.convergenceDeactivate();
     if (window.metadataDeactivate) window.metadataDeactivate();
 
@@ -797,17 +804,9 @@
     } else if (state.activePreviewTab === "intake") {
       intakePanel.classList.remove("hidden");
       activePanel = intakePanel;
-      if (!document.hidden) {
-        pollIntakeEvents();
-        state.intakePollTimer = setInterval(pollIntakeEvents, 10000);
-      }
     } else if (state.activePreviewTab === "transcript-intake") {
       if (trIntakePanel) trIntakePanel.classList.remove("hidden");
       activePanel = trIntakePanel;
-      if (!document.hidden) {
-        pollTranscriptIntakeMarks();
-        state.trIntakePollTimer = setInterval(pollTranscriptIntakeMarks, 10000);
-      }
     } else if (state.activePreviewTab === "convergence") {
       if (convergencePanel) convergencePanel.classList.remove("hidden");
       activePanel = convergencePanel;
@@ -1919,7 +1918,10 @@
       var segTotal = item.segTotal || 1;
       var segIdx = item.segIdx || 0;
 
-      var card = el("div", "queue-card" + (isIntake ? " queue-card-intake" : ""));
+      var card = el(
+        "div",
+        "queue-card clip-card size-md" + (isIntake ? " queue-card-intake" : ""),
+      );
       card.setAttribute("data-participant", item.participant);
       card.setAttribute("data-row", isIntake ? "" : item.row);
       if (isIntake) card.setAttribute("data-source", item.source);
@@ -2046,7 +2048,10 @@
       var segIdx = item.segIdx || 0;
       totalDur += segDuration;
 
-      var card = el("div", "queue-card reel-card" + (isIntake ? " queue-card-intake" : ""));
+      var card = el(
+        "div",
+        "queue-card reel-card clip-card size-md" + (isIntake ? " queue-card-intake" : ""),
+      );
       card.setAttribute("data-reel-idx", i);
       card.setAttribute("data-participant", item.participant);
       card.setAttribute("data-row", isIntake ? "" : item.row);
@@ -3636,6 +3641,9 @@
         active: state.intakeFilterDetector === det,
         count: counts[det],
         hue: categoryHue(det),
+        // Pin detector chips to the canonical `--color-task-*` token so the
+        // dot matches Screenspace's workflow tab + result row exactly.
+        color: detectorColor(det),
         onClick: function () {
           state.intakeFilterDetector = state.intakeFilterDetector === det ? "" : det;
           renderIntake(false);
@@ -3690,6 +3698,10 @@
         t: duration > 0 ? c.start / duration : 0,
         count: c.events ? c.events.length : 1,
         hue: categoryHue(c.detector),
+        // Density bars match Screenspace's `--color-task-*` exactly when the
+        // cluster's detector is one of the known types; falls back to the
+        // hue-based oklch path otherwise.
+        color: detectorColor(c.detector),
       };
     });
     var dt = ClipgenPrimitives.createDensityTimeline({
@@ -3760,6 +3772,10 @@
         duration: formatDuration(segDuration),
         label: c.event_type || c.detector || "intake",
         hue: categoryHue(hueLabel),
+        // Pin the hue dot + label to the canonical `--color-task-*` token
+        // when the event is a known detector — otherwise keep the oklch
+        // fallback so non-detector labels still get a stable colour.
+        color: detectorColor(c.detector),
         size: "lg",
         dataset: { intakeIdx: idx },
         onDragStart: function (ev) {
@@ -3776,7 +3792,7 @@
           setCardDragImage(ev, this);
         },
       });
-      card.classList.add("queue-card", "intake-queue-card");
+      card.classList.add("intake-queue-card");
 
       // Lazy-loaded source-frame thumbnail (existing observer integration).
       var thumb = card.querySelector(".clip-card-thumb");
@@ -3942,12 +3958,12 @@
       });
     }
 
-    // Polling is started by syncPreviewTab() when the intake tab becomes active.
-    // Pause polling when browser tab is not visible; resume when intake tab is active.
+    // Polling runs whenever the page is visible so the intake-tab counter
+    // badge stays live regardless of which sub-tab the user is currently on.
     document.addEventListener("visibilitychange", function () {
       if (document.hidden) {
         if (state.intakePollTimer) { clearInterval(state.intakePollTimer); state.intakePollTimer = null; }
-      } else if (state.activePreviewTab === "intake") {
+      } else {
         pollIntakeEvents();
         if (!state.intakePollTimer) state.intakePollTimer = setInterval(pollIntakeEvents, 10000);
       }
@@ -4143,7 +4159,7 @@
           setCardDragImage(ev, this);
         },
       });
-      card.classList.add("queue-card", "intake-queue-card", "tr-intake-queue-card");
+      card.classList.add("intake-queue-card", "tr-intake-queue-card");
 
       // Lazy-loaded source-frame thumbnail
       var thumb = card.querySelector(".transcript-card-thumb");
@@ -4407,11 +4423,12 @@
       });
     }
 
-    // Visibility change — pause/resume polling
+    // Visibility change — pause/resume polling. Runs whenever the page is
+    // visible so the transcript-intake counter badge stays live across tabs.
     document.addEventListener("visibilitychange", function () {
       if (document.hidden) {
         if (state.trIntakePollTimer) { clearInterval(state.trIntakePollTimer); state.trIntakePollTimer = null; }
-      } else if (state.activePreviewTab === "transcript-intake") {
+      } else {
         pollTranscriptIntakeMarks();
         if (!state.trIntakePollTimer) state.trIntakePollTimer = setInterval(pollTranscriptIntakeMarks, 10000);
       }
@@ -4499,6 +4516,16 @@
     pollTrIntakeStatus();
     state.intakeStatusTimer = setInterval(pollIntakeStatus, 5000);
     state.trIntakeStatusTimer = setInterval(pollTrIntakeStatus, 5000);
+    // Start intake event polls immediately so the sub-tab counter badges
+    // populate on page load and update live regardless of which sub-tab the
+    // user is currently viewing. Visibility-change handlers in
+    // initIntake / initTranscriptIntake pause + resume them with the page.
+    if (!document.hidden) {
+      pollIntakeEvents();
+      state.intakePollTimer = setInterval(pollIntakeEvents, 10000);
+      pollTranscriptIntakeMarks();
+      state.trIntakePollTimer = setInterval(pollTranscriptIntakeMarks, 10000);
+    }
     window.addEventListener("resize", function () {
       computeGridMaxHeight();
       if (window.convergenceResize) window.convergenceResize();
