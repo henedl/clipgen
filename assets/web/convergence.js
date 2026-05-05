@@ -3,8 +3,8 @@
  * Pulls events from multiple participants/streams (Screenspace detector
  * events + Transcripts marks + sheet timestamps) onto a single timeline,
  * then clusters moments where many participants do the same thing within a
- * short window into "convergence zones". Renders a marker timeline and a
- * frame-preview panel.
+ * short window into "convergence zones". Renders a SwimLane visualization
+ * with cluster callouts; clicking a callout opens an inline detail panel below.
  *
  * `cvState._snapshot` records the last (ss, tr, sh) input lengths the view
  * was built against, so we can detect when upstream data changed and the
@@ -13,6 +13,8 @@
 
 (function () {
   "use strict";
+
+  var P = window.ClipgenPrimitives || {};
 
   var cvState = {
     active: false,
@@ -26,23 +28,21 @@
       streams: [],
       eventTypes: [],
       minParticipants: 2,
-      windowSec: 5,
-      clusterSec: 5,
+      windowSec: 10,
+      clusterSec: 10,
       timeRange: null,
     },
     dataVersion: 0,
     duration: 0,
     participants: [],
-    hoveredMarkerIdx: -1,
     sortByDensity: false,
+    swimLaneEl: null,
     _snapshot: null,
   };
 
-  var _summaryHitRects = [];
   var _cvFrameCache = {};
   var _cvFramePreviewEl = null;
   var _cvHoverDebounce = null;
-  var _cvZoneTooltipEl = null;
 
   // --- Utilities ---
 
@@ -54,23 +54,6 @@
     if (source === "screenspace") return DETECTOR_COLORS[eventType] || "#888";
     if (source === "transcript") return (MARK_CATEGORIES[eventType] || {}).color || "#0891b2";
     return XREF_BADGES.sheet.color;
-  }
-
-
-  function parseAccentColor() {
-    var raw = getCSSVar("--color-accent", "");
-    if (raw) {
-      if (raw.charAt(0) === "#") {
-        return {
-          r: parseInt(raw.slice(1, 3), 16),
-          g: parseInt(raw.slice(3, 5), 16),
-          b: parseInt(raw.slice(5, 7), 16),
-        };
-      }
-      var m = raw.match(/(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/);
-      if (m) return { r: +m[1], g: +m[2], b: +m[3] };
-    }
-    return { r: 59, g: 130, b: 246 };
   }
 
   // --- Frame Preview ---
@@ -112,7 +95,6 @@
     } else if (!cached) {
       _cvFrameCache[url] = "loading";
       img.src = "";
-      // TODO: utils.apiGet returns JSON; needs an apiGetBlob helper to migrate.
       fetch(url)
         .then(function (r) {
           if (!r.ok) throw new Error("status " + r.status);
@@ -121,7 +103,6 @@
         .then(function (blob) {
           var objUrl = URL.createObjectURL(blob);
           _cvFrameCache[url] = objUrl;
-          // Only update if still showing this preview
           if (!preview.classList.contains("hidden") && img.parentNode) {
             img.src = objUrl;
           }
@@ -132,7 +113,7 @@
         });
     }
 
-    lbl.textContent = event.participant + " \u00b7 " + formatTime(event.start);
+    lbl.textContent = event.participant + " · " + formatTime(event.start);
     preview.classList.remove("hidden");
     positionTooltipAnchored(preview, markerEl.getBoundingClientRect());
   }
@@ -141,16 +122,6 @@
     clearTimeout(_cvHoverDebounce);
     _cvHoverDebounce = null;
     if (_cvFramePreviewEl) _cvFramePreviewEl.classList.add("hidden");
-  }
-
-  // --- Zone Tooltip ---
-
-  function cvEnsureZoneTooltip() {
-    if (_cvZoneTooltipEl) return _cvZoneTooltipEl;
-    var tip = el("div", "cv-zone-tooltip hidden");
-    document.body.appendChild(tip);
-    _cvZoneTooltipEl = tip;
-    return tip;
   }
 
   // --- Density Sort ---
@@ -278,7 +249,6 @@
 
     cvState.events = events;
 
-    // Snapshot for staleness detection
     cvState._snapshot = {
       ss: state.intakeEvents.length,
       tr: state.trIntakeMarks.length,
@@ -293,27 +263,20 @@
   //      the window [start - W, start + W]. Events meeting `minParticipants`
   //      are "qualifying".
   //   2. Walk qualifying events in time order and merge any two within W of
-  //      each other into a single zone. This collapses contiguous bursts of
-  //      activity into one entry instead of one-zone-per-event.
-  //
-  // The inner loop in pass 1 is O(n²) in the worst case but breaks early on
-  // the sorted array once we pass the right edge of the window.
+  //      each other into a single zone.
 
   function computeConvergenceZones(events, windowSec, minParticipants) {
     if (!events.length) return [];
 
     var sorted = events.slice().sort(function (a, b) { return a.start - b.start; });
 
-    // Pass 1: per-event distinct-participant count within ±windowSec
-    var qualifying = []; // indices into sorted[] that meet threshold
+    var qualifying = [];
     for (var i = 0; i < sorted.length; i++) {
       var center = sorted[i].start;
       var seen = {};
       for (var j = 0; j < sorted.length; j++) {
         if (sorted[j].start > center + windowSec) break;
-        // Skip if event j ends before the window opens.
         if (sorted[j].end < center - windowSec && sorted[j].start < center - windowSec) continue;
-        // Event j overlaps the window [center - W, center + W].
         if (sorted[j].start <= center + windowSec && sorted[j].end >= center - windowSec) {
           seen[sorted[j].participant] = true;
         }
@@ -325,7 +288,6 @@
 
     if (!qualifying.length) return [];
 
-    // Build zones from consecutive qualifying events
     var zones = [];
     var zStart = sorted[qualifying[0]].start;
     var zEnd = sorted[qualifying[0]].end;
@@ -333,7 +295,6 @@
 
     for (var q = 1; q < qualifying.length; q++) {
       var evt = sorted[qualifying[q]];
-      // Merge if overlapping or within window
       if (evt.start <= zEnd + windowSec) {
         zEnd = Math.max(zEnd, evt.end);
         zEvents.push(evt);
@@ -400,50 +361,55 @@
   function recalculate() {
     clearSelection();
     collectAllEvents();
-    populateEventTypePills();
+    populateEventTypeChips();
     applyFilters();
     render();
+    // collectAllEvents just refreshed _snapshot to current lengths, so
+    // checkStaleness will clear the `is-stale` class on the toolbar button.
+    checkStaleness();
   }
 
-  // --- Event Type Pills ---
+  // --- Cluster hue helper ---
 
-  function populateEventTypePills() {
-    var container = qs("#cvEventTypePills");
+  function zoneDominantHue(zone) {
+    // Pick the most common eventType in the zone and resolve its hue.
+    var counts = {};
+    for (var i = 0; i < zone.events.length; i++) {
+      var t = zone.events[i].eventType || "uncategorized";
+      counts[t] = (counts[t] || 0) + 1;
+    }
+    var bestKey = null, bestCount = 0;
+    for (var k in counts) {
+      if (counts[k] > bestCount) { bestCount = counts[k]; bestKey = k; }
+    }
+    return categoryHue(bestKey || "uncategorized");
+  }
+
+  // --- Filter UI: chips, stream toggle, controls ---
+
+  function populateEventTypeChips() {
+    var container = qs("#cvEventTypeChips");
     if (!container) return;
+    container.textContent = "";
 
     var streams = cvState.filters.streams;
-    var typeMap = {}; // source -> Set<eventType>
+    var typeMap = {};
     for (var i = 0; i < cvState.events.length; i++) {
       var e = cvState.events[i];
       if (streams.length > 0 && streams.indexOf(e.source) < 0) continue;
-      if (!typeMap[e.source]) typeMap[e.source] = {};
-      typeMap[e.source][e.eventType] = true;
+      typeMap[e.eventType] = (typeMap[e.eventType] || 0) + 1;
     }
-
-    var frag = document.createDocumentFragment();
-    var sources = ["sheet", "screenspace", "transcript"];
-    for (var si = 0; si < sources.length; si++) {
-      var src = sources[si];
-      var types = typeMap[src];
-      if (!types) continue;
-      var keys = Object.keys(types).sort();
-      for (var ki = 0; ki < keys.length; ki++) {
-        var type = keys[ki];
-        var pill = document.createElement("button");
-        pill.className = "cv-event-type-pill" +
-          (cvState.filters.eventTypes.indexOf(type) >= 0 ? " active" : "");
-        pill.textContent = type;
-        pill.dataset.eventType = type;
-        pill.style.setProperty("--det-color", getEventTypeColor(src, type));
-        pill.addEventListener("click", (function (t) {
-          return function () { toggleEventType(t); };
-        })(type));
-        frag.appendChild(pill);
-      }
-    }
-
-    container.innerHTML = "";
-    container.appendChild(frag);
+    var keys = Object.keys(typeMap).sort();
+    keys.forEach(function (type) {
+      var chip = P.createFilterChip({
+        label: type,
+        active: cvState.filters.eventTypes.indexOf(type) >= 0,
+        count: typeMap[type],
+        onClick: function () { toggleEventType(type); },
+      });
+      chip.dataset.eventType = type;
+      container.appendChild(chip);
+    });
   }
 
   function toggleEventType(type) {
@@ -453,21 +419,15 @@
     } else {
       cvState.filters.eventTypes.push(type);
     }
-    // Update pill active states
-    var pills = qsa(".cv-event-type-pill");
-    for (var i = 0; i < pills.length; i++) {
-      pills[i].classList.toggle("active", cvState.filters.eventTypes.indexOf(pills[i].dataset.eventType) >= 0);
-    }
+    populateEventTypeChips();
     onFilterChange();
   }
 
-  // --- Filter Controls ---
-
   var STREAM_DEFS = [
-    { key: "all", label: "All streams", color: "var(--color-accent)" },
-    { key: "sheet", label: "Sheet", color: XREF_BADGES.sheet.color },
-    { key: "screenspace", label: "Screenspace", color: XREF_BADGES.screenspace.color },
-    { key: "transcript", label: "Transcript", color: XREF_BADGES.transcript.color },
+    { key: "all", label: "All streams" },
+    { key: "sheet", label: "Sheet" },
+    { key: "screenspace", label: "Screenspace" },
+    { key: "transcript", label: "Transcript" },
   ];
 
   function buildFilterControls() {
@@ -475,79 +435,94 @@
     var filters = qs("#convergenceFilters");
     if (!controls || !filters) return;
 
-    // --- Controls bar: min participants + window ---
-    var minLabel = el("label", "intake-cluster-label");
-    minLabel.textContent = "Min participants ";
-    var minInput = document.createElement("input");
-    minInput.type = "number";
-    minInput.min = "2";
-    minInput.value = String(cvState.filters.minParticipants);
-    minInput.className = "intake-cluster-input";
-    minInput.autocomplete = "off";
-    minInput.addEventListener("input", debouncedFilterChange);
-    minLabel.appendChild(minInput);
+    controls.textContent = "";
+    filters.textContent = "";
 
-    var winLabel = el("label", "intake-cluster-label");
-    winLabel.textContent = "Window ";
-    var winInput = document.createElement("input");
-    winInput.type = "number";
-    winInput.min = "1";
-    winInput.max = "60";
-    winInput.value = String(cvState.filters.windowSec);
-    winInput.className = "intake-cluster-input";
-    winInput.autocomplete = "off";
-    winInput.addEventListener("input", debouncedFilterChange);
-    var winSuffix = document.createTextNode("\u00B1s");
-    winLabel.appendChild(winInput);
-    winLabel.appendChild(winSuffix);
+    // Controls: Min participants / Window±s / Cluster s + sort dropdown
+    function addNumberControl(text, suffix, value, onChange) {
+      var label = el("label", "cv-control-label");
+      var labelText = document.createTextNode(text);
+      label.appendChild(labelText);
+      var input = document.createElement("input");
+      input.type = "number";
+      input.className = "cv-control-input cg-mono";
+      input.value = String(value);
+      input.autocomplete = "off";
+      input.addEventListener("input", onChange);
+      label.appendChild(input);
+      if (suffix) {
+        var s = el("span", "cv-control-suffix cg-mono");
+        s.textContent = suffix;
+        label.appendChild(s);
+      }
+      return { label: label, input: input };
+    }
 
-    var clusterLabel = el("label", "intake-cluster-label");
-    clusterLabel.textContent = "Cluster ";
-    var clusterInput = document.createElement("input");
-    clusterInput.type = "number";
-    clusterInput.id = "cvClusterThreshold";
-    clusterInput.min = "1";
-    clusterInput.max = "60";
-    clusterInput.value = String(cvState.filters.clusterSec);
-    clusterInput.className = "intake-cluster-input";
-    clusterInput.autocomplete = "off";
-    clusterInput.addEventListener("input", debouncedRecalculate);
-    var clusterSuffix = document.createTextNode("s");
-    clusterLabel.appendChild(clusterInput);
-    clusterLabel.appendChild(clusterSuffix);
+    var minCtl = addNumberControl("Min participants", null, cvState.filters.minParticipants, debouncedFilterChange);
+    minCtl.input.min = "2";
+    var winCtl = addNumberControl("Window", "±s", cvState.filters.windowSec, debouncedFilterChange);
+    winCtl.input.min = "1";
+    winCtl.input.max = "60";
+    var clusCtl = addNumberControl("Cluster", "s", cvState.filters.clusterSec, debouncedRecalculate);
+    clusCtl.input.id = "cvClusterThreshold";
+    clusCtl.input.min = "1";
+    clusCtl.input.max = "60";
 
-    var sortBtn = document.createElement("button");
-    sortBtn.className = "cv-sort-toggle";
-    sortBtn.id = "cvSortToggle";
-    sortBtn.textContent = "Sort by density";
-    sortBtn.addEventListener("click", function () {
-      cvState.sortByDensity = !cvState.sortByDensity;
-      sortBtn.classList.toggle("active", cvState.sortByDensity);
+    var sortSelect = document.createElement("select");
+    sortSelect.className = "cv-control-select";
+    sortSelect.id = "cvSortSelect";
+    var optDensity = document.createElement("option");
+    optDensity.value = "density";
+    optDensity.textContent = "Sort by density";
+    var optTime = document.createElement("option");
+    optTime.value = "time";
+    optTime.textContent = "Sort by time";
+    sortSelect.appendChild(optTime);
+    sortSelect.appendChild(optDensity);
+    sortSelect.value = cvState.sortByDensity ? "density" : "time";
+    sortSelect.addEventListener("change", function () {
+      cvState.sortByDensity = (sortSelect.value === "density");
       render();
     });
 
-    controls.appendChild(minLabel);
-    controls.appendChild(winLabel);
-    controls.appendChild(clusterLabel);
-    controls.appendChild(sortBtn);
+    var refreshBtn = P.createBtn({
+      label: "Refresh",
+      icon: "arrow-path",
+      size: "sm",
+      onClick: function () {
+        bootstrapIntakeData().then(recalculate);
+      },
+    });
+    refreshBtn.id = "cvRefreshBtn";
+    refreshBtn.classList.add("cv-refresh-btn");
+    refreshBtn.title = "Re-fetch upstream data and recompute convergence";
 
-    // --- Filters bar: stream toggles + event type pills ---
-    for (var i = 0; i < STREAM_DEFS.length; i++) {
-      var def = STREAM_DEFS[i];
+    controls.appendChild(minCtl.label);
+    controls.appendChild(winCtl.label);
+    controls.appendChild(clusCtl.label);
+    controls.appendChild(sortSelect);
+    controls.appendChild(refreshBtn);
+
+    // Filters: stream buttons + divider + chip row
+    var streamRow = el("div", "cv-stream-row");
+    STREAM_DEFS.forEach(function (def) {
       var btn = document.createElement("button");
-      btn.className = "cv-stream-toggle" + (def.key === "all" ? " active" : "");
+      btn.type = "button";
+      btn.className = "cv-stream-btn" + (def.key === "all" ? " is-active" : "");
       btn.textContent = def.label;
       btn.dataset.stream = def.key;
-      btn.style.setProperty("--det-color", def.color);
-      btn.addEventListener("click", (function (key) {
-        return function () { onStreamToggle(key); };
-      })(def.key));
-      filters.appendChild(btn);
-    }
+      btn.addEventListener("click", function () { onStreamToggle(def.key); });
+      streamRow.appendChild(btn);
+    });
 
-    var typePills = document.createElement("div");
-    typePills.id = "cvEventTypePills";
-    filters.appendChild(typePills);
+    var divider = el("div", "cv-stream-divider");
+    streamRow.appendChild(divider);
+
+    var typeChips = el("div", "cv-event-type-row");
+    typeChips.id = "cvEventTypeChips";
+    streamRow.appendChild(typeChips);
+
+    filters.appendChild(streamRow);
   }
 
   function onStreamToggle(stream) {
@@ -562,21 +537,19 @@
       }
     }
 
-    // Update pill active states
-    var pills = qsa(".cv-stream-toggle");
+    var btns = qsa(".cv-stream-btn");
     var isAll = cvState.filters.streams.length === 0;
-    for (var i = 0; i < pills.length; i++) {
-      var key = pills[i].dataset.stream;
+    for (var i = 0; i < btns.length; i++) {
+      var key = btns[i].dataset.stream;
       if (key === "all") {
-        pills[i].classList.toggle("active", isAll);
+        btns[i].classList.toggle("is-active", isAll);
       } else {
-        pills[i].classList.toggle("active", cvState.filters.streams.indexOf(key) >= 0);
+        btns[i].classList.toggle("is-active", cvState.filters.streams.indexOf(key) >= 0);
       }
     }
 
-    // Clear event type filter when streams change
     cvState.filters.eventTypes = [];
-    populateEventTypePills();
+    populateEventTypeChips();
     onFilterChange();
   }
 
@@ -585,8 +558,8 @@
     if (!controls) return;
     var inputs = controls.querySelectorAll("input[type=number]");
     if (inputs[0]) cvState.filters.minParticipants = Math.max(2, parseInt(inputs[0].value, 10) || 2);
-    if (inputs[1]) cvState.filters.windowSec = Math.max(1, parseInt(inputs[1].value, 10) || 5);
-    if (inputs[2]) cvState.filters.clusterSec = Math.max(1, parseInt(inputs[2].value, 10) || 5);
+    if (inputs[1]) cvState.filters.windowSec = Math.max(1, parseInt(inputs[1].value, 10) || 10);
+    if (inputs[2]) cvState.filters.clusterSec = Math.max(1, parseInt(inputs[2].value, 10) || 10);
   }
 
   var debouncedRecalculate = debounce(function () {
@@ -597,13 +570,10 @@
   function onFilterChange() {
     syncFilterInputs();
     applyFilters();
-    // Preserve or clear selection after filter change
     if (cvState.selection) {
       if (cvState.selection.zone) {
-        // Zone-based selection: clear if zone no longer exists
         clearSelection();
       } else {
-        // Drag-based: re-collect events in the same time range
         var sel = cvState.selection;
         var events = [];
         for (var i = 0; i < cvState.filteredEvents.length; i++) {
@@ -622,50 +592,29 @@
 
   var debouncedFilterChange = debounce(onFilterChange, 250);
 
-  // --- Tick Interval (pixel-aware) ---
-
-  function computeConvergenceTickInterval(duration, trackWidthPx) {
-    // Each tick label is centered on its mark. To prevent overlap the
-    // minimum distance between ticks must be at least one full label
-    // width plus comfortable padding.  10px monospace "H:MM:SS" ≈ 50px,
-    // "M:SS" ≈ 30px; add 30px padding so labels breathe.
-    var slotWidth = duration >= 3600 ? 80 : 60;
-    var maxTicks = Math.max(2, Math.floor(trackWidthPx / slotWidth));
-    var candidates = [1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600,
-      7200, 10800, 21600, 43200];
-    for (var i = 0; i < candidates.length; i++) {
-      if (duration / candidates[i] <= maxTicks) return candidates[i];
-    }
-    return 43200;
-  }
-
   // --- Rendering ---
 
   function render() {
     renderTimeline();
-    requestAnimationFrame(function () {
-      renderCanvases();
-      if (cvState.selection) {
-        renderSelectionOverlay();
-        renderDetailPanel();
-      }
-    });
+    if (cvState.selection && cvState.selection.zone) {
+      // Re-render the inline detail panel after the swim-lane rebuild.
+      var idx = cvState.convergenceZones.indexOf(cvState.selection.zone);
+      if (idx >= 0) renderDetailInline(idx);
+    }
   }
 
   function renderTimeline() {
     var container = qs("#convergenceTimeline");
     if (!container) return;
+    container.textContent = "";
+    cvState.swimLaneEl = null;
 
-    container.innerHTML = "";
-
-    // Empty state
     if (cvState.events.length === 0) {
       var empty = el("div", "cv-empty-state");
       empty.textContent = "No events loaded. Load data from multiple participants to see convergence.";
       container.appendChild(empty);
       return;
     }
-
     if (cvState.filteredEvents.length === 0) {
       var emptyFiltered = el("div", "cv-empty-state");
       emptyFiltered.textContent = "No events match the current filters.";
@@ -673,300 +622,131 @@
       return;
     }
 
-    var frag = document.createDocumentFragment();
-
-    // Time axis (flex row: spacer + tick area, matching participant row layout)
-    var axis = el("div", "cv-time-axis");
-    var axisSpacer = el("div", "cv-axis-spacer");
-    axis.appendChild(axisSpacer);
-    var axisTrack = el("div", "cv-axis-track");
-    var trackWidthPx = (container.clientWidth || 500) - 52;
-    var tickInterval = computeConvergenceTickInterval(cvState.duration, trackWidthPx);
-    for (var t = tickInterval; t <= cvState.duration; t += tickInterval) {
-      var tick = el("div", "cv-tick");
-      tick.style.left = (t / cvState.duration * 100) + "%";
-      var tickLabel = el("span", "cv-tick-label");
-      tickLabel.textContent = window._studioFormatDuration(t);
-      tick.appendChild(tickLabel);
-      axisTrack.appendChild(tick);
-    }
-    axis.appendChild(axisTrack);
-    frag.appendChild(axis);
-
-    // Summary lane (flex row: spacer + canvas, matching participant row layout)
-    var summaryWrap = el("div", "cv-summary-lane-wrap");
-    var summarySpacer = el("div", "cv-axis-spacer");
-    summaryWrap.appendChild(summarySpacer);
-    var summaryTrack = el("div", "cv-summary-track");
-    var summaryCanvas = document.createElement("canvas");
-    summaryCanvas.className = "cv-summary-canvas";
-    summaryTrack.appendChild(summaryCanvas);
-    summaryWrap.appendChild(summaryTrack);
-    frag.appendChild(summaryWrap);
-
-    // Staleness banner placeholder
-    var staleBanner = el("div", "cv-stale-banner hidden");
-    staleBanner.id = "cvStaleBanner";
-    var staleText = el("span", "");
-    staleText.textContent = "New data available";
-    var staleBtn = document.createElement("button");
-    staleBtn.className = "cv-stale-refresh";
-    staleBtn.textContent = "Refresh";
-    staleBtn.addEventListener("click", function () { recalculate(); });
-    staleBanner.appendChild(staleText);
-    staleBanner.appendChild(staleBtn);
-    frag.appendChild(staleBanner);
-
-    // No convergence message
-    if (cvState.convergenceZones.length === 0 && cvState.filteredEvents.length > 0) {
+    if (cvState.convergenceZones.length === 0) {
       var noZones = el("div", "cv-no-convergence");
       noZones.textContent = "No convergence detected. Try widening the window or lowering the threshold.";
-      frag.appendChild(noZones);
+      container.appendChild(noZones);
     }
 
-    // Participant rows
-    var rowsContainer = el("div", "cv-participant-rows");
+    var participants = cvState.sortByDensity ? cvComputeDensityOrder() : cvState.participants;
+    var duration = cvState.duration || 1;
+    var SOURCES = ["sheet", "screenspace", "transcript"];
 
-    // Index filtered events by participant and source for fast lookup
-    var eventIndex = {}; // pid -> source -> events[]
-    var filteredIdxById = {}; // event.id -> index in filteredEvents
-    for (var ei = 0; ei < cvState.filteredEvents.length; ei++) {
-      var fe = cvState.filteredEvents[ei];
-      if (!eventIndex[fe.participant]) eventIndex[fe.participant] = {};
-      if (!eventIndex[fe.participant][fe.source]) eventIndex[fe.participant][fe.source] = [];
-      eventIndex[fe.participant][fe.source].push(fe);
-      filteredIdxById[fe.id] = ei;
-    }
-
-    var displayParticipants = cvState.sortByDensity
-      ? cvComputeDensityOrder() : cvState.participants;
-
-    for (var pi = 0; pi < displayParticipants.length; pi++) {
-      var pid = displayParticipants[pi];
-      var row = el("div", "cv-participant-row");
-
-      var label = el("div", "cv-participant-label");
-      label.textContent = pid;
-      row.appendChild(label);
-
-      var tracks = el("div", "cv-tracks-container");
-
-      // Row shading canvas (behind markers)
-      var rowCanvas = document.createElement("canvas");
-      rowCanvas.className = "cv-row-shading";
-      rowCanvas.dataset.participant = pid;
-      tracks.appendChild(rowCanvas);
-
-      // Sub-tracks
-      var sources = ["sheet", "screenspace", "transcript"];
-      for (var si = 0; si < sources.length; si++) {
-        var src = sources[si];
-        var subTrack = el("div", "cv-sub-track");
-        subTrack.dataset.source = src;
-
-        // Add markers for this participant + source
-        var pEvents = (eventIndex[pid] && eventIndex[pid][src]) || [];
-        for (var mi = 0; mi < pEvents.length; mi++) {
-          var mev = pEvents[mi];
-          var marker = el("div", "cv-event-marker");
-          marker.style.left = (mev.start / cvState.duration * 100) + "%";
-          marker.style.width = Math.max((mev.end - mev.start) / cvState.duration * 100, 0.3) + "%";
-          marker.style.background = getEventTypeColor(mev.source, mev.eventType);
-          var tooltipText = mev.eventType + " (" + formatTime(mev.start) + ")";
-          if (mev.clusterCount && mev.clusterCount > 1) {
-            tooltipText += " [" + mev.clusterCount + " events]";
-          }
-          marker.title = tooltipText;
-          if (filteredIdxById[mev.id] !== undefined) marker.dataset.cvIdx = filteredIdxById[mev.id];
-          subTrack.appendChild(marker);
-        }
-
-        tracks.appendChild(subTrack);
-      }
-
-      row.appendChild(tracks);
-      rowsContainer.appendChild(row);
-    }
-
-    frag.appendChild(rowsContainer);
-    container.appendChild(frag);
-
-    // Attach interaction handlers
-    summaryCanvas = container.querySelector(".cv-summary-canvas");
-    if (summaryCanvas) {
-      summaryCanvas.addEventListener("click", handleSummaryClick);
-
-      // Zone tooltip on summary lane hover
-      summaryCanvas.addEventListener("mousemove", function (e) {
-        var rect = summaryCanvas.getBoundingClientRect();
-        var mx = e.clientX - rect.left;
-        var hit = null;
-        for (var i = 0; i < _summaryHitRects.length; i++) {
-          if (mx >= _summaryHitRects[i].x1 && mx <= _summaryHitRects[i].x2) {
-            hit = _summaryHitRects[i]; break;
-          }
-        }
-        var tip = cvEnsureZoneTooltip();
-        if (hit) {
-          var zone = cvState.convergenceZones[hit.zoneIdx];
-          if (zone) {
-            tip.textContent = zone.participantCount + " participant"
-              + (zone.participantCount !== 1 ? "s" : "")
-              + " \u00b7 " + formatTime(zone.start) + "\u2013" + formatTime(zone.end)
-              + " \u00b7 " + zone.events.length + " event"
-              + (zone.events.length !== 1 ? "s" : "");
-            tip.classList.remove("hidden");
-            positionTooltipAnchored(tip, {
-              left: e.clientX - 4, top: rect.top,
-              width: 8, height: rect.height, bottom: rect.bottom,
-            });
-          }
-        } else {
-          tip.classList.add("hidden");
-        }
-      });
-      summaryCanvas.addEventListener("mouseleave", function () {
-        cvEnsureZoneTooltip().classList.add("hidden");
-      });
-    }
-
-    // Marker hover: frame preview + dimming
-    rowsContainer.addEventListener("mouseover", function (e) {
-      var marker = e.target.closest(".cv-event-marker");
-      if (!marker) return;
-      var idx = parseInt(marker.dataset.cvIdx, 10);
-      if (isNaN(idx)) return;
-      clearTimeout(_cvHoverDebounce);
-      _cvHoverDebounce = setTimeout(function () {
-        var ev = cvState.filteredEvents[idx];
-        if (!ev) return;
-        cvShowFramePreview(marker, ev);
-        cvState.hoveredMarkerIdx = idx;
-        var rows = marker.closest(".cv-participant-rows");
-        if (rows) rows.classList.add("cv-markers-dimmed");
-        renderSummaryLane();
-      }, 60);
+    var swimEvents = cvState.filteredEvents.map(function (e) {
+      return {
+        p: e.participant,
+        source: e.source,
+        t: e.start / duration,
+        tEnd: e.end / duration,
+        label: e.eventType,
+        _ref: e,
+      };
     });
-    rowsContainer.addEventListener("mouseout", function (e) {
-      var marker = e.target.closest(".cv-event-marker");
-      if (!marker) return;
-      clearTimeout(_cvHoverDebounce);
-      _cvHoverDebounce = null;
-      cvHideFramePreview();
-      cvState.hoveredMarkerIdx = -1;
-      var rows = marker.closest(".cv-participant-rows");
-      if (rows) rows.classList.remove("cv-markers-dimmed");
-      renderSummaryLane();
+    var swimClusters = cvState.convergenceZones.map(function (z) {
+      return {
+        t0: z.start / duration,
+        t1: z.end / duration,
+        hue: zoneDominantHue(z),
+        n: z.participantCount,
+      };
     });
 
-    rowsContainer.addEventListener("mousedown", onDragMousedown);
-  }
-
-  function renderCanvases() {
-    renderSummaryLane();
-    renderAllRowShading();
-  }
-
-  // --- Summary Lane Canvas ---
-
-  function renderSummaryLane() {
-    var canvas = qs(".cv-summary-canvas");
-    if (!canvas) return;
-    var w = canvas.clientWidth;
-    if (w <= 0) return;
-
-    var dpr = window.devicePixelRatio || 1;
-    canvas.width = w * dpr;
-    canvas.height = 32 * dpr;
-    var ctx = canvas.getContext("2d");
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-
-    var cs = getComputedStyle(document.documentElement);
-    var surfaceAlt = cs.getPropertyValue("--color-surface-alt").trim() || "#f1ece4";
-    ctx.fillStyle = surfaceAlt;
-    ctx.fillRect(0, 0, w, 32);
-
-    _summaryHitRects = [];
-    var zones = cvState.convergenceZones;
-    if (!zones.length) return;
-
-    // Normalize strength for alpha mapping
-    var maxStrength = 0;
-    for (var i = 0; i < zones.length; i++) {
-      if (zones[i].strength > maxStrength) maxStrength = zones[i].strength;
-    }
-    if (maxStrength === 0) maxStrength = 1;
-
-    var accent = parseAccentColor();
-
-    for (var zi = 0; zi < zones.length; zi++) {
-      var zone = zones[zi];
-      var x1 = (zone.start / cvState.duration) * w;
-      var x2 = (zone.end / cvState.duration) * w;
-      var zw = Math.max(x2 - x1, 2);
-      var alpha = 0.15 + (zone.strength / maxStrength) * 0.65;
-
-      ctx.fillStyle = "rgba(" + accent.r + "," + accent.g + "," + accent.b + "," + alpha + ")";
-      ctx.fillRect(x1, 0, zw, 32);
-
-      // Highlight zone containing hovered marker
-      if (cvState.hoveredMarkerIdx !== -1) {
-        var hovEvt = cvState.filteredEvents[cvState.hoveredMarkerIdx];
-        if (hovEvt && hovEvt.start >= zone.start && hovEvt.start <= zone.end) {
-          ctx.strokeStyle = "rgba(" + accent.r + "," + accent.g + "," + accent.b + ",0.9)";
-          ctx.lineWidth = 2;
-          ctx.strokeRect(x1 + 1, 1, zw - 2, 30);
+    var SUB_ROW_H = 14;
+    var swimLane = P.createSwimLane({
+      participants: participants,
+      sources: SOURCES,
+      events: swimEvents,
+      clusters: swimClusters,
+      durationSec: duration,
+      subRowH: SUB_ROW_H,
+      onEventHover: function (idx, ev, hover) {
+        clearTimeout(_cvHoverDebounce);
+        if (!hover) { cvHideFramePreview(); return; }
+        var origEv = ev._ref;
+        if (!origEv) return;
+        _cvHoverDebounce = setTimeout(function () {
+          var marker = swimLane.querySelectorAll(".cg-swim-event")[idx];
+          if (marker) cvShowFramePreview(marker, origEv);
+        }, 60);
+      },
+      onEventClick: function (idx, ev, mouseEv) {
+        var origEv = ev._ref;
+        if (!origEv) return;
+        for (var zi = 0; zi < cvState.convergenceZones.length; zi++) {
+          var z = cvState.convergenceZones[zi];
+          if (origEv.start >= z.start && origEv.start <= z.end &&
+              z.events.indexOf(origEv) >= 0) {
+            setSelection(z.start, z.end, z);
+            renderDetailInline(zi);
+            mouseEv.stopPropagation();
+            return;
+          }
         }
-      }
+      },
+      onClusterClick: function (idx, cl, mouseEv) {
+        var zone = cvState.convergenceZones[idx];
+        if (!zone) return;
+        setSelection(zone.start, zone.end, zone);
+        renderDetailInline(idx);
+        mouseEv.stopPropagation();
+      },
+    });
+    swimLane.classList.add("cv-swimlane");
+    container.appendChild(swimLane);
+    cvState.swimLaneEl = swimLane;
 
-      _summaryHitRects.push({ x1: x1, x2: x1 + zw, y: 0, h: 32, zoneIdx: zi });
+    // Cluster callouts row
+    if (cvState.convergenceZones.length > 0) {
+      var callouts = el("div", "cv-cluster-callouts");
+      callouts.id = "cvClusterCallouts";
+      cvState.convergenceZones.forEach(function (z, idx) {
+        callouts.appendChild(buildCalloutCard(z, idx));
+      });
+      container.appendChild(callouts);
     }
   }
 
-  // --- Per-Participant Row Shading ---
+  function buildCalloutCard(zone, idx) {
+    var hue = zoneDominantHue(zone);
+    var card = el("div", "cv-callout");
+    card.dataset.clusterIdx = idx;
+    card.style.background = "oklch(0.20 0.06 " + hue + " / 0.5)";
+    card.style.borderColor = "oklch(0.5 0.12 " + hue + " / 0.4)";
 
-  function renderAllRowShading() {
-    var canvases = qsa(".cv-row-shading");
-    for (var i = 0; i < canvases.length; i++) {
-      renderRowShading(canvases[i], canvases[i].dataset.participant);
-    }
+    var n = el("span", "cv-callout-n cg-mono");
+    n.textContent = zone.participantCount + " participant" + (zone.participantCount !== 1 ? "s" : "");
+    card.appendChild(n);
+
+    var dur = el("span", "cv-callout-text");
+    dur.textContent = "converged within ~" + Math.round(zone.end - zone.start) + "s";
+    card.appendChild(dur);
+
+    var ts = el("span", "cv-callout-ts cg-mono");
+    ts.textContent = "· " + formatTime(zone.start);
+    card.appendChild(ts);
+
+    card.addEventListener("mouseenter", function () {
+      if (cvState.swimLaneEl) cvState.swimLaneEl.setHoveredCluster(idx);
+    });
+    card.addEventListener("mouseleave", function () {
+      if (cvState.swimLaneEl) cvState.swimLaneEl.setHoveredCluster(-1);
+    });
+    card.addEventListener("click", function () {
+      // Toggle: clicking the active card again clears the inline panel.
+      if (cvState.selection && cvState.selection.zone === zone) {
+        clearSelection();
+        return;
+      }
+      setSelection(zone.start, zone.end, zone);
+      renderDetailInline(idx);
+    });
+    return card;
   }
 
-  function renderRowShading(canvas, participantId) {
-    var w = canvas.clientWidth;
-    var h = canvas.clientHeight;
-    if (w <= 0 || h <= 0) return;
-
-    var dpr = window.devicePixelRatio || 1;
-    canvas.width = w * dpr;
-    canvas.height = h * dpr;
-    var ctx = canvas.getContext("2d");
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-
-    var zones = cvState.convergenceZones;
-    if (!zones.length) return;
-
-    var accent = parseAccentColor();
-
-    for (var zi = 0; zi < zones.length; zi++) {
-      var zone = zones[zi];
-      // Check if this participant contributed
-      if (zone.participants.indexOf(participantId) < 0) continue;
-
-      // Count this participant's events in the zone
-      var pCount = 0;
-      for (var ei = 0; ei < zone.events.length; ei++) {
-        if (zone.events[ei].participant === participantId) pCount++;
-      }
-      var ratio = pCount / Math.max(zone.events.length, 1);
-      var alpha = Math.min(ratio * 0.3, 0.15);
-
-      var x1 = (zone.start / cvState.duration) * w;
-      var x2 = (zone.end / cvState.duration) * w;
-      var zw = Math.max(x2 - x1, 2);
-
-      ctx.fillStyle = "rgba(" + accent.r + "," + accent.g + "," + accent.b + "," + alpha + ")";
-      ctx.fillRect(x1, 0, zw, h);
+  function syncActiveCallout(activeIdx) {
+    var callouts = qsa(".cv-callout");
+    for (var i = 0; i < callouts.length; i++) {
+      callouts[i].classList.toggle("is-active", parseInt(callouts[i].dataset.clusterIdx, 10) === activeIdx);
     }
   }
 
@@ -979,20 +759,18 @@
       (state.trIntakeMarks.length !== cvState._snapshot.tr) ||
       ((state.sheetData ? state.sheetData.rows.length : 0) !== cvState._snapshot.sh);
 
-    var banner = qs("#cvStaleBanner");
-    if (banner) {
-      if (stale) {
-        banner.classList.remove("hidden");
-      } else {
-        banner.classList.add("hidden");
-      }
+    var btn = qs("#cvRefreshBtn");
+    if (btn) {
+      btn.classList.toggle("is-stale", stale);
+      btn.title = stale
+        ? "New upstream data available — click to refresh"
+        : "Re-fetch upstream data and recompute convergence";
     }
   }
 
   // --- Selection ---
 
   function setSelection(start, end, zone) {
-    // Clamp to valid range
     start = Math.max(0, start);
     end = Math.min(cvState.duration, end);
     if (end - start < 0.5) return;
@@ -1005,230 +783,105 @@
     if (events.length === 0) return;
 
     cvState.selection = { start: start, end: end, zone: zone || null, events: events };
-    renderSelectionOverlay();
-    renderDetailPanel();
+    if (cvState.swimLaneEl && zone) {
+      var zi = cvState.convergenceZones.indexOf(zone);
+      if (zi >= 0) cvState.swimLaneEl.setSelectedCluster(zi);
+    }
   }
 
   function clearSelection() {
     cvState.selection = null;
-    var overlays = qsa(".cv-selection-overlay");
-    for (var i = 0; i < overlays.length; i++) overlays[i].remove();
-    var preview = qs(".cv-drag-preview");
-    if (preview) preview.remove();
-    var detail = qs("#convergenceDetail");
-    if (detail) {
-      detail.classList.add("hidden");
-      detail.innerHTML = "";
-    }
+    if (cvState.swimLaneEl) cvState.swimLaneEl.setSelectedCluster(-1);
+    closeDetailInline();
   }
 
-  function renderSelectionOverlay() {
-    // Remove existing overlays
-    var old = qsa(".cv-selection-overlay");
-    for (var i = 0; i < old.length; i++) old[i].remove();
+  // --- Detail Panel (inline) ---
 
+  function ensureDetailHost() {
+    var timeline = qs("#convergenceTimeline");
+    if (!timeline) return null;
+    var host = timeline.querySelector("#convergenceDetail");
+    if (host) {
+      host.className = "cv-detail-inline hidden";
+      return host;
+    }
+    host = document.createElement("div");
+    host.id = "convergenceDetail";
+    host.className = "cv-detail-inline hidden";
+    timeline.appendChild(host);
+    return host;
+  }
+
+  function renderDetailInline(clusterIdx) {
+    if (clusterIdx == null || clusterIdx < 0) return;
+    var zone = cvState.convergenceZones[clusterIdx];
+    if (!zone) return;
+    var host = ensureDetailHost();
+    buildDetailContent(host);
+    host.classList.remove("hidden");
+    syncActiveCallout(clusterIdx);
+  }
+
+  function closeDetailInline() {
+    var host = qs("#convergenceDetail");
+    if (host) {
+      host.classList.add("hidden");
+      host.textContent = "";
+    }
+    syncActiveCallout(-1);
+  }
+
+  function buildDetailContent(host) {
+    host.textContent = "";
     if (!cvState.selection) return;
-    var sel = cvState.selection;
-    var leftPct = (sel.start / cvState.duration * 100) + "%";
-    var widthPct = ((sel.end - sel.start) / cvState.duration * 100) + "%";
-
-    // Summary lane overlay (inside the track, not the spacer)
-    var summaryTrack = qs(".cv-summary-track");
-    if (summaryTrack) {
-      var so = el("div", "cv-selection-overlay");
-      so.style.left = leftPct;
-      so.style.width = widthPct;
-      summaryTrack.appendChild(so);
-    }
-
-    // Per-participant row overlays
-    var tracks = qsa(".cv-tracks-container");
-    for (var t = 0; t < tracks.length; t++) {
-      var ro = el("div", "cv-selection-overlay cv-selection-overlay-row");
-      ro.style.left = leftPct;
-      ro.style.width = widthPct;
-      tracks[t].appendChild(ro);
-    }
-  }
-
-  // --- Summary Lane Click ---
-
-  function handleSummaryClick(e) {
-    var canvas = qs(".cv-summary-canvas");
-    if (!canvas) return;
-    var rect = canvas.getBoundingClientRect();
-    var mouseX = e.clientX - rect.left;
-
-    for (var i = 0; i < _summaryHitRects.length; i++) {
-      var hr = _summaryHitRects[i];
-      if (mouseX >= hr.x1 && mouseX <= hr.x2) {
-        var zone = cvState.convergenceZones[hr.zoneIdx];
-        if (zone) {
-          setSelection(zone.start, zone.end, zone);
-          return;
-        }
-      }
-    }
-    // Clicked empty space on summary lane
-    clearSelection();
-  }
-
-  // --- Drag-to-Select ---
-
-  var _drag = { active: false, startX: 0, startTime: 0, preview: null, moved: false,
-    tracksRect: null };
-
-  function timeFromMouseX(e) {
-    // Use cached rect during drag for consistency, otherwise query live
-    var rect = _drag.tracksRect;
-    if (!rect) {
-      var rowsContainer = qs(".cv-participant-rows");
-      if (!rowsContainer) return 0;
-      var tracksEl = rowsContainer.querySelector(".cv-tracks-container");
-      if (!tracksEl) return 0;
-      rect = tracksEl.getBoundingClientRect();
-    }
-    var frac = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
-    return frac * cvState.duration;
-  }
-
-  function onDragMousedown(e) {
-    if (e.button !== 0) return;
-    if (e.target.closest(".cv-event-marker")) return;
-    if (!e.target.closest(".cv-tracks-container") && !e.target.closest(".cv-sub-track")) return;
-
-    // Cache the tracks rect for consistent coordinate conversion during drag
-    var tracksEl = e.target.closest(".cv-tracks-container") || e.target.closest(".cv-sub-track").parentElement;
-    _drag.tracksRect = tracksEl ? tracksEl.getBoundingClientRect() : null;
-    _drag.startX = e.clientX;
-    _drag.startTime = timeFromMouseX(e);
-    _drag.active = true;
-    _drag.moved = false;
-    _drag.preview = null;
-
-    document.addEventListener("mousemove", onDragMousemove);
-    document.addEventListener("mouseup", onDragMouseup);
-    e.preventDefault();
-  }
-
-  function onDragMousemove(e) {
-    if (!_drag.active) return;
-    if (Math.abs(e.clientX - _drag.startX) < 5) return;
-    _drag.moved = true;
-
-    var curTime = timeFromMouseX(e);
-    var s = Math.min(_drag.startTime, curTime);
-    var en = Math.max(_drag.startTime, curTime);
-
-    if (!_drag.preview) {
-      // Clear any existing selection while dragging
-      clearSelection();
-      _drag.preview = el("div", "cv-drag-preview");
-      var rowsContainer = qs(".cv-participant-rows");
-      if (rowsContainer) rowsContainer.appendChild(_drag.preview);
-    }
-
-    // Position preview using pixels relative to the tracks container,
-    // offset by the label column width within the rows container
-    if (_drag.tracksRect) {
-      rowsContainer = qs(".cv-participant-rows");
-      var rowsRect = rowsContainer ? rowsContainer.getBoundingClientRect() : _drag.tracksRect;
-      var labelOffset = _drag.tracksRect.left - rowsRect.left;
-      var leftPx = labelOffset + (s / cvState.duration) * _drag.tracksRect.width;
-      var widthPx = ((en - s) / cvState.duration) * _drag.tracksRect.width;
-      _drag.preview.style.left = leftPx + "px";
-      _drag.preview.style.width = widthPx + "px";
-    }
-  }
-
-  function onDragMouseup(e) {
-    document.removeEventListener("mousemove", onDragMousemove);
-    document.removeEventListener("mouseup", onDragMouseup);
-
-    if (!_drag.active) return;
-    _drag.active = false;
-
-    if (_drag.preview) _drag.preview.remove();
-    _drag.preview = null;
-
-    if (!_drag.moved) return;
-
-    var curTime = timeFromMouseX(e);
-    var s = Math.min(_drag.startTime, curTime);
-    var en = Math.max(_drag.startTime, curTime);
-
-    _drag.tracksRect = null;
-    if (en - s < 1) return; // minimum 1-second range
-    setSelection(s, en, null);
-  }
-
-  // --- Detail Panel ---
-
-  function renderDetailPanel() {
-    var panel = qs("#convergenceDetail");
-    if (!panel || !cvState.selection) return;
-
-    panel.innerHTML = "";
-    panel.classList.remove("hidden");
 
     var sel = cvState.selection;
-    var frag = document.createDocumentFragment();
 
-    // Header
     var header = el("div", "cv-detail-header");
     var headerText = el("span", "cv-detail-header-text");
     var participantSet = {};
     for (var i = 0; i < sel.events.length; i++) participantSet[sel.events[i].participant] = true;
     var participantCount = Object.keys(participantSet).length;
-    headerText.textContent = formatTime(sel.start) + " \u2013 " + formatTime(sel.end)
-      + " \u00b7 " + participantCount + " participant" + (participantCount !== 1 ? "s" : "")
-      + " \u00b7 " + sel.events.length + " event" + (sel.events.length !== 1 ? "s" : "");
+    headerText.textContent = formatTime(sel.start) + " – " + formatTime(sel.end)
+      + " · " + participantCount + " participant" + (participantCount !== 1 ? "s" : "")
+      + " · " + sel.events.length + " event" + (sel.events.length !== 1 ? "s" : "");
     header.appendChild(headerText);
 
-    var closeBtn = document.createElement("button");
-    closeBtn.className = "cv-detail-close";
-    closeBtn.textContent = "\u00d7";
-    closeBtn.title = "Close";
-    closeBtn.addEventListener("click", clearSelection);
+    var closeBtn = P.createBtn({ icon: "x-mark", size: "sm", variant: "bare", onClick: clearSelection });
+    closeBtn.classList.add("cv-detail-close");
     header.appendChild(closeBtn);
-    frag.appendChild(header);
+    host.appendChild(header);
 
-    // Actions bar
     var actions = el("div", "cv-detail-actions");
-    var addAllArt = document.createElement("button");
-    addAllArt.className = "cv-detail-btn";
-    addAllArt.textContent = "Add All to Artifacts";
-    addAllArt.addEventListener("click", function () { dispatchAllToArtifacts(); });
-    actions.appendChild(addAllArt);
+    actions.appendChild(P.createBtn({
+      label: "Add All to Artifacts", icon: "plus", size: "sm",
+      onClick: dispatchAllToArtifacts,
+    }));
+    actions.appendChild(P.createBtn({
+      label: "Add All to Reel", icon: "plus", size: "sm",
+      onClick: dispatchAllToReel,
+    }));
+    host.appendChild(actions);
 
-    var addAllReel = document.createElement("button");
-    addAllReel.className = "cv-detail-btn";
-    addAllReel.textContent = "Add All to Reel";
-    addAllReel.addEventListener("click", function () { dispatchAllToReel(); });
-    actions.appendChild(addAllReel);
-    frag.appendChild(actions);
-
-    // Group events by participant (maintain participant order)
     var eventsByPid = {};
     for (var j = 0; j < sel.events.length; j++) {
       var ev = sel.events[j];
       if (!eventsByPid[ev.participant]) eventsByPid[ev.participant] = [];
       eventsByPid[ev.participant].push(ev);
     }
-
     var participantsDiv = el("div", "cv-detail-participants");
-    var detailParticipants = cvState.sortByDensity
-      ? cvComputeDensityOrder() : cvState.participants;
+    var detailParticipants = cvState.sortByDensity ? cvComputeDensityOrder() : cvState.participants;
     for (var pi = 0; pi < detailParticipants.length; pi++) {
       var pid = detailParticipants[pi];
       var pEvents = eventsByPid[pid];
       if (!pEvents || !pEvents.length) continue;
-
       var pSection = el("div", "cv-detail-participant");
-      var pidLabel = el("div", "cv-detail-pid");
-      pidLabel.textContent = pid + " (" + pEvents.length + " event" + (pEvents.length !== 1 ? "s" : "") + ")";
-      pSection.appendChild(pidLabel);
-
+      var pillRow = el("div", "cv-detail-pid-row");
+      pillRow.appendChild(P.createParticipantPill({ id: pid, active: true }));
+      var countSpan = el("span", "cv-detail-pid-count cg-mono");
+      countSpan.textContent = pEvents.length + " event" + (pEvents.length !== 1 ? "s" : "");
+      pillRow.appendChild(countSpan);
+      pSection.appendChild(pillRow);
       var eventsDiv = el("div", "cv-detail-events");
       for (var ei = 0; ei < pEvents.length; ei++) {
         eventsDiv.appendChild(buildDetailEventRow(pEvents[ei]));
@@ -1236,20 +889,16 @@
       pSection.appendChild(eventsDiv);
       participantsDiv.appendChild(pSection);
     }
-    frag.appendChild(participantsDiv);
-
-    panel.appendChild(frag);
+    host.appendChild(participantsDiv);
   }
 
   function buildDetailEventRow(event) {
     var row = el("div", "cv-detail-event");
 
-    // Time range
-    var time = el("span", "cv-detail-time");
-    time.textContent = formatTime(event.start) + " \u2013 " + formatTime(event.end);
+    var time = el("span", "cv-detail-time cg-mono");
+    time.textContent = formatTime(event.start) + " – " + formatTime(event.end);
     row.appendChild(time);
 
-    // Source badge
     var badge = el("span", "cv-detail-source-badge");
     var dot = el("span", "cv-detail-source-dot");
     dot.style.background = getEventTypeColor(event.source, event.eventType);
@@ -1257,20 +906,17 @@
     badge.appendChild(document.createTextNode(event.source));
     row.appendChild(badge);
 
-    // Event type
     var typeSpan = el("span", "cv-detail-type");
     typeSpan.textContent = event.eventType;
     row.appendChild(typeSpan);
 
-    // Label (truncated)
     if (event.label) {
       var labelSpan = el("span", "cv-detail-label");
-      labelSpan.textContent = event.label.length > 60 ? event.label.substring(0, 60) + "\u2026" : event.label;
+      labelSpan.textContent = event.label.length > 60 ? event.label.substring(0, 60) + "…" : event.label;
       labelSpan.title = event.label;
       row.appendChild(labelSpan);
     }
 
-    // Cross-reference badges
     if (window._studioFindOverlappingData && window._studioBuildXrefBadges) {
       var xref = window._studioFindOverlappingData(event.participant, event.start, event.end);
       var badges = window._studioBuildXrefBadges(xref, event.source);
@@ -1282,33 +928,19 @@
       }
     }
 
-    // Action buttons
     var btnWrap = el("span", "cv-detail-event-actions");
-
-    var artBtn = document.createElement("button");
-    artBtn.className = "cv-detail-add-art";
-    artBtn.textContent = "Artifact";
-    artBtn.title = "Add to Artifacts";
-    artBtn.addEventListener("click", (function (ev) {
-      return function (e) {
-        e.stopPropagation();
-        dispatchToArtifacts(ev);
-      };
-    })(event));
+    var artBtn = P.createBtn({
+      label: "Artifact", icon: "plus", size: "sm", variant: "bare",
+      onClick: function (e) { e.stopPropagation(); dispatchToArtifacts(event); },
+    });
+    artBtn.classList.add("cv-detail-add-art");
     btnWrap.appendChild(artBtn);
-
-    var reelBtn = document.createElement("button");
-    reelBtn.className = "cv-detail-add-reel";
-    reelBtn.textContent = "Reel";
-    reelBtn.title = "Add to Reel";
-    reelBtn.addEventListener("click", (function (ev) {
-      return function (e) {
-        e.stopPropagation();
-        dispatchToReel(ev);
-      };
-    })(event));
+    var reelBtn = P.createBtn({
+      label: "Reel", icon: "plus", size: "sm", variant: "bare",
+      onClick: function (e) { e.stopPropagation(); dispatchToReel(event); },
+    });
+    reelBtn.classList.add("cv-detail-add-reel");
     btnWrap.appendChild(reelBtn);
-
     row.appendChild(btnWrap);
     return row;
   }
@@ -1339,8 +971,6 @@
         item.mark_ids = [event.rawData.id || event.rawData.segment_id || event.id];
       }
     } else {
-      // Sheet events: use grid item format (no source) so thumbnails route
-      // through api/thumbnail and generation through the sheet path
       var rawRow = event.rawData;
       var cellValue = (rawRow.cells && rawRow.cells[event.participant])
         ? rawRow.cells[event.participant].value : "";
@@ -1389,6 +1019,38 @@
     if (window._studioRenderReelQueue) window._studioRenderReelQueue();
   }
 
+  // --- Bootstrap ---
+  //
+  // Studio loads Screenspace events + Transcript marks lazily — those pollers
+  // only kick in when their respective Intake tabs activate. If the user lands
+  // on Convergence first (or refreshes while it's active), state.intakeEvents
+  // and state.trIntakeMarks are still empty and Convergence would only see
+  // sheet data. Fetch both endpoints once on first activation so all three
+  // streams are populated before the swim lane renders.
+  function bootstrapIntakeData() {
+    var s = getState();
+    var jobs = [];
+    jobs.push(
+      apiGet("../screenspace/api/events?excluded=false")
+        .then(function (data) {
+          if (data && data.ok && Array.isArray(data.events)) {
+            s.intakeEvents = data.events;
+          }
+        })
+        .catch(function () {})
+    );
+    jobs.push(
+      apiGet("../transcripts/api/marks")
+        .then(function (data) {
+          if (data && data.ok && Array.isArray(data.marks)) {
+            s.trIntakeMarks = data.marks.filter(function (m) { return m.valid; });
+          }
+        })
+        .catch(function () {})
+    );
+    return Promise.all(jobs);
+  }
+
   // --- Lifecycle ---
 
   function activate() {
@@ -1399,12 +1061,15 @@
     }
 
     if (cvState.baselines === null) {
-      // First activation: fetch baselines (server returns seconds)
-      apiGet("api/sheet/baseline").then(function (data) {
-        cvState.baselines = (data.ok && data.baselines) ? data.baselines : {};
-        recalculate();
-      }).catch(function () {
-        cvState.baselines = {};
+      // First activation: fetch baselines + bootstrap intake/transcript data
+      // in parallel, then compute. Subsequent activations use the staleness
+      // banner so the user controls when to pull in new upstream data.
+      Promise.all([
+        apiGet("api/sheet/baseline").catch(function () { return { ok: false }; }),
+        bootstrapIntakeData(),
+      ]).then(function (results) {
+        var data = results[0];
+        cvState.baselines = (data && data.ok && data.baselines) ? data.baselines : {};
         recalculate();
       });
     } else {
@@ -1414,6 +1079,7 @@
 
   function deactivate() {
     cvState.active = false;
+    closeDetailInline();
   }
 
   function init() {
@@ -1423,7 +1089,6 @@
       }
     });
 
-    // Keyboard shortcuts
     document.addEventListener("keydown", function (e) {
       if (!cvState.active) return;
 
@@ -1449,6 +1114,7 @@
         if (nextIdx !== currentIdx) {
           var nextZone = zones[nextIdx];
           setSelection(nextZone.start, nextZone.end, nextZone);
+          renderDetailInline(nextIdx);
         }
         e.preventDefault();
       }

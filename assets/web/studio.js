@@ -3548,7 +3548,7 @@
           }
         });
         state.intakeEvents = events;
-        var threshold = parseInt((qs("#intakeClusterThreshold") || {}).value) || 5;
+        var threshold = parseInt((qs("#intakeClusterThreshold") || {}).value) || 10;
         state.intakeClusters = clusterIntakeEvents(events, threshold);
         renderIntake(hasNew);
         checkConvergenceTabVisibility();
@@ -3987,7 +3987,7 @@
         if (!data.ok) return;
         if (data.categories) setMarkCategories(data.categories);
         state.trIntakeMarks = data.marks.filter(function (m) { return m.valid; });
-        var threshold = parseInt((qs("#trIntakeClusterThreshold") || {}).value) || 5;
+        var threshold = parseInt((qs("#trIntakeClusterThreshold") || {}).value) || 10;
         state.trIntakeClusters = clusterTranscriptMarks(state.trIntakeMarks, threshold);
 
         // If "Show all" is enabled, also fetch all segments as unmark items
