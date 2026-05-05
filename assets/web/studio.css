@@ -1493,16 +1493,29 @@ html[data-theme="dark"] .queue-card-error .queue-card-thumb {
   background: var(--bg-hover);
 }
 
+/* Stack of up to three frame thumbnails — top item is fully visible, the
+ * 2nd/3rd are offset 2px right + 2px up so the chip reads as a deck of
+ * folders. JS appends the <img> elements; the hue-tinted background acts
+ * as a fallback when no thumbnail loads. */
 .stash-card-icon {
+  position: relative;
   flex: 0 0 auto;
-  width: 26px;
-  height: 18px;
+  width: 30px;
+  height: 22px;
+  margin-right: 6px;
   border-radius: 2px;
+  overflow: visible;
   background: oklch(0.32 0.06 220);
-  box-shadow:
-    2px -2px 0 -1px oklch(0.26 0.05 220),
-    4px -4px 0 -2px oklch(0.22 0.04 220);
-  margin-right: 4px;
+}
+.stash-card-icon-img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: 2px;
+  border: 1px solid var(--border-strong);
+  background: var(--bg-elevated);
 }
 
 .stash-card-name {
@@ -1802,78 +1815,101 @@ html[data-theme="dark"] .queue-card-error .queue-card-thumb {
   font-feature-settings: "tnum";
 }
 
-/* Gallery button group (inside header actions) */
+/* Gallery configuration dialog — triggered from TopNav Quick Actions. */
 
-.gallery-group {
-  position: relative;
+#galleryOverlay {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-modal);
+  background: rgba(0, 0, 0, 0.4);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+#galleryOverlay.hidden {
+  display: none;
+}
+
+.gallery-card {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: var(--space-5);
+  width: 360px;
+  max-width: 90%;
+  box-shadow: var(--shadow-pop);
   display: flex;
   flex-direction: column;
-  align-items: flex-end;
+  gap: var(--space-3);
+  color: var(--fg);
 }
-
-.gallery-drawer {
-  position: absolute;
-  top: 100%;
-  right: 0;
-  z-index: var(--z-float);
-  max-height: 0;
-  opacity: 0;
-  overflow: hidden;
-  transition: max-height var(--duration-normal) ease, opacity var(--duration-normal) ease, margin-top var(--duration-normal) ease;
-  margin-top: 0;
-  background: var(--color-panel-bg);
-  border: 1px solid transparent;
-  border-radius: calc(var(--radius) - 2px);
-  padding: 0 var(--space-2);
-  pointer-events: none;
+.gallery-card h3 {
+  font-size: var(--text-md);
+  font-weight: 500;
+  margin: 0;
+}
+.gallery-dialog-help {
+  font-size: 12px;
+  color: var(--fg-muted);
+  margin: 0;
+}
+.gallery-dialog-fields {
   display: flex;
+  flex-direction: column;
   gap: var(--space-2);
-  align-items: center;
-  white-space: nowrap;
 }
-
-.gallery-drawer.open {
-  max-height: 3rem;
-  opacity: 1;
-  margin-top: var(--space-2);
-  padding: var(--space-2) var(--space-2);
-  pointer-events: auto;
-  border-color: var(--color-border);
-}
-
-.gallery-drawer-label {
-  font-size: var(--text-xs);
-  color: var(--color-text-dim);
+.gallery-dialog-label {
   display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--fg-faint);
+}
+.gallery-dialog-label.gallery-dialog-bundle {
+  flex-direction: row;
   align-items: center;
-  gap: var(--space-1);
-  white-space: nowrap;
+  gap: 8px;
+  text-transform: none;
+  font-weight: 400;
+  letter-spacing: 0;
+  color: var(--fg);
+  font-size: 12px;
 }
-
-.gallery-drawer-select {
-  padding: var(--space-1) var(--space-2);
-  border: 1px solid var(--color-border);
-  border-radius: calc(var(--radius) - 2px);
-  background: var(--color-surface);
-  color: var(--color-text);
-  font-size: var(--text-xs);
-  max-width: 8rem;
+.gallery-dialog-select,
+.gallery-dialog-input {
+  font-family: inherit;
+  font-size: 12px;
+  height: 28px;
+  padding: 0 8px;
+  background: var(--bg-input);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  box-sizing: border-box;
 }
-
-.gallery-drawer-input {
-  width: 3.5rem;
-  padding: var(--space-1) var(--space-2);
-  border: 1px solid var(--color-border);
-  border-radius: calc(var(--radius) - 2px);
-  background: var(--color-surface);
-  color: var(--color-text);
-  font-size: var(--text-xs);
+.gallery-dialog-input {
   font-family: var(--font-mono);
+  font-feature-settings: "tnum";
+  text-align: center;
 }
-
-.gallery-drawer-checkbox {
+.gallery-dialog-select:focus,
+.gallery-dialog-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.gallery-dialog-checkbox {
   margin: 0;
   cursor: pointer;
+  accent-color: var(--accent);
+}
+.gallery-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+  margin-top: var(--space-2);
 }
 
 /* Title spinner */

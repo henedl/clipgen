@@ -2157,13 +2157,40 @@
     computeGridMaxHeight();
   }
 
-  function makeStashFolderIcon(stashId) {
+  function makeStashFolderIcon(stash) {
     var icon = el("span", "stash-card-icon");
-    var hue = categoryHue(stashId || "uncategorized");
+    var hue = categoryHue((stash && stash.id) || "uncategorized");
+    // Hue-tinted backing remains as a fallback if every thumbnail fails.
     icon.style.background = "oklch(0.32 0.06 " + hue + ")";
-    icon.style.boxShadow =
-      "2px -2px 0 -1px oklch(0.26 0.05 " + hue + "), " +
-      "4px -4px 0 -2px oklch(0.22 0.04 " + hue + ")";
+
+    var items = (stash && stash.items) || [];
+    // Pull the first 3 distinct thumbnails to fake a stacked-folder look.
+    var picks = [];
+    var seen = {};
+    for (var i = 0; i < items.length && picks.length < 3; i++) {
+      var item = items[i];
+      var key = item && item.participant != null && item.start != null
+        ? item.participant + ":" + item.start
+        : null;
+      if (!key || seen[key]) continue;
+      seen[key] = true;
+      picks.push(item);
+    }
+
+    picks.forEach(function (item, idx) {
+      var img = document.createElement("img");
+      img.className = "stash-card-icon-img";
+      img.alt = "";
+      img.draggable = false;
+      img.style.zIndex = String(picks.length - idx);
+      img.style.transform = "translate(" + (idx * 2) + "px, " + (-idx * 2) + "px)";
+      img.src = ssThumbUrl(item.participant, item.start);
+      img.addEventListener("error", function () {
+        if (img.parentNode) img.parentNode.removeChild(img);
+      });
+      icon.appendChild(img);
+    });
+
     return icon;
   }
 
@@ -2180,7 +2207,7 @@
       ev.dataTransfer.effectAllowed = "copy";
     });
 
-    card.appendChild(makeStashFolderIcon(stash.id));
+    card.appendChild(makeStashFolderIcon(stash));
 
     var nameEl = el("span", "stash-card-name", truncate(stash.name, 18));
     nameEl.title = stash.name;
@@ -2433,9 +2460,8 @@
     qs("#buildReelBtn").addEventListener("click", onBuildReel);
     qs("#cancelReelBtn").addEventListener("click", onCancelReel);
     qs("#buildViewerBtn").addEventListener("click", onBuildViewer);
-    qs("#buildTimelineViewerBtn").addEventListener("click", onBuildTimelineViewer);
     qs("#buildHighlightsBtn").addEventListener("click", onBuildHighlights);
-    qs("#galleryBtn").addEventListener("click", onGallery);
+    bindGalleryDialog();
 
     qs("#artifactFormat").addEventListener("change", function () {
       var tcGroup = qs("#titlecardGroup");
@@ -2554,7 +2580,7 @@
     var ids = [
       "#generateBtn", "#buildReelBtn", "#clearArtifactsBtn",
       "#clearReelBtn", "#addToReelBtn", "#buildHighlightsBtn",
-      "#buildViewerBtn", "#buildTimelineViewerBtn", "#galleryBtn",
+      "#buildViewerBtn",
       "#stashReelBtn", "#stashArtifactsBtn"
     ];
     for (var i = 0; i < ids.length; i++) {
@@ -2937,7 +2963,6 @@
   }
 
   var _highlightsBtnOrigHTML = "";
-  var _galleryBtnOrigHTML = "";
 
   function onBuildHighlights() {
     if (state.generating) return;
@@ -3006,23 +3031,22 @@
     }
   }
 
-  function onGallery() {
+  function openGalleryDialog() {
     if (state.generating) return;
+    var overlay = qs("#galleryOverlay");
+    if (!overlay) return;
+    overlay.classList.remove("hidden");
+    var sel = qs("#galleryParticipant");
+    if (sel) sel.focus();
+  }
 
-    var drawer = qs("#galleryDrawer");
-    var btn = qs("#galleryBtn");
-    var isOpen = drawer.classList.contains("open");
+  function closeGalleryDialog() {
+    var overlay = qs("#galleryOverlay");
+    if (overlay) overlay.classList.add("hidden");
+  }
 
-    var checkHTML = iconHTML("check", "cg-icon--confirm");
-
-    if (!isOpen) {
-      _galleryBtnOrigHTML = btn.innerHTML;
-      drawer.classList.add("open");
-      var w = btn.offsetWidth;
-      btn.style.minWidth = w + "px";
-      btn.innerHTML = checkHTML + "Confirm";
-      return;
-    }
+  function submitGalleryDialog() {
+    if (state.generating) return;
 
     var participant = qs("#galleryParticipant").value;
     var format = qs("#galleryFormat").value;
@@ -3030,15 +3054,12 @@
     if (!interval || interval < 1) interval = 10;
     var bundle = qs("#galleryBundle").checked;
 
-    drawer.classList.remove("open");
-    btn.style.minWidth = "";
-    btn.innerHTML = _galleryBtnOrigHTML;
-
     if (!participant) {
       showResult(null, "No participant selected for gallery");
       return;
     }
 
+    closeGalleryDialog();
     state.generating = true;
     showOverlay("Generating gallery viewer for " + participant + "...");
 
@@ -3055,6 +3076,24 @@
         state.generating = false;
         showResult(null, "Request failed: " + err);
       });
+  }
+
+  function bindGalleryDialog() {
+    var overlay = qs("#galleryOverlay");
+    var cancel = qs("#galleryDialogCancel");
+    var confirm = qs("#galleryDialogConfirm");
+    if (overlay) {
+      overlay.addEventListener("click", function (ev) {
+        if (ev.target === overlay) closeGalleryDialog();
+      });
+    }
+    if (cancel) cancel.addEventListener("click", closeGalleryDialog);
+    if (confirm) confirm.addEventListener("click", submitGalleryDialog);
+    document.addEventListener("keydown", function (ev) {
+      if (ev.key === "Escape" && overlay && !overlay.classList.contains("hidden")) {
+        closeGalleryDialog();
+      }
+    });
   }
 
   function updateViewerButton() {
@@ -4412,8 +4451,8 @@
       if (el) el.click();
     }
     window.ClipgenTopNav.setQuickActions([
-      { icon: "film", label: "Open Timeline", action: function () { clickIfExists("buildTimelineViewerBtn"); } },
-      { icon: "photo", label: "Open Gallery", action: function () { clickIfExists("galleryBtn"); } },
+      { icon: "film", label: "Open Timeline", action: onBuildTimelineViewer },
+      { icon: "photo", label: "Open Gallery", action: openGalleryDialog },
       { icon: "arrow-path", label: "Refresh sheet", action: function () { clickIfExists("refreshSheet"); } },
       { divider: true },
       { icon: "adjustments-horizontal", label: "Filter rows", action: function () { clickIfExists("filterToggle"); } },
