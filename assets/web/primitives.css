@@ -146,9 +146,18 @@
   position: absolute;
   top: 4px;
   bottom: 4px;
-  width: 3px;
+  width: 6px;
   border-radius: 1px;
-  pointer-events: none;
+  cursor: pointer;
+  transition: opacity 120ms ease-out, box-shadow 120ms ease-out, transform 120ms ease-out;
+}
+.density-timeline-bar.is-hover {
+  opacity: 1 !important;
+  transform: scaleY(1.06);
+  box-shadow: 0 0 0 1px var(--fg);
+}
+.density-timeline-bar.is-dim {
+  opacity: 0.18 !important;
 }
 
 .density-timeline-marker {

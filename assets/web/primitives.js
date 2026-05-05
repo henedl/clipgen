@@ -144,14 +144,24 @@
       (events || []).forEach(function (e) {
         if (e && typeof e.count === "number" && e.count > max) max = e.count;
       });
-      (events || []).forEach(function (e) {
+      (events || []).forEach(function (e, idx) {
         if (!e || typeof e.t !== "number") return;
         var bar = document.createElement("div");
         bar.className = "density-timeline-bar";
         var hue = resolveHue(e.label, e.hue);
         var alpha = Math.min(1, 0.35 + 0.6 * ((e.count || 1) / max));
-        bar.style.left = "calc(" + (e.t * 100) + "% - 1.5px)";
+        bar.style.left = "calc(" + (e.t * 100) + "% - 3px)";
         bar.style.background = fmtHue(hue, 0.7, 0.16, alpha);
+        bar.dataset.idx = idx;
+        if (typeof opts.onBarMouseEnter === "function") {
+          bar.addEventListener("mouseenter", function () { opts.onBarMouseEnter(idx); });
+        }
+        if (typeof opts.onBarMouseLeave === "function") {
+          bar.addEventListener("mouseleave", function () { opts.onBarMouseLeave(idx); });
+        }
+        if (typeof opts.onBarClick === "function") {
+          bar.addEventListener("click", function (ev) { opts.onBarClick(idx, ev); });
+        }
         track.appendChild(bar);
       });
       if (marker != null) {
@@ -167,6 +177,22 @@
         renderTicks(durationSec != null ? durationSec : opts.durationSec, tickCount != null ? tickCount : opts.tickCount);
       }
       renderBars(events, marker);
+    };
+
+    wrap.setHovered = function (idx) {
+      var bars = track.querySelectorAll(".density-timeline-bar");
+      for (var i = 0; i < bars.length; i++) {
+        var b = bars[i];
+        if (idx == null || idx === -1) {
+          b.classList.remove("is-hover", "is-dim");
+        } else if (parseInt(b.dataset.idx, 10) === idx) {
+          b.classList.add("is-hover");
+          b.classList.remove("is-dim");
+        } else {
+          b.classList.add("is-dim");
+          b.classList.remove("is-hover");
+        }
+      }
     };
 
     renderTicks(opts.durationSec, opts.tickCount);

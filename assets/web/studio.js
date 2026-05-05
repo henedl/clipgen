@@ -3391,6 +3391,11 @@
     return "../screenspace/api/video/frame/" + encodeURIComponent(participant) + "/" + timestamp + "?w=200";
   }
 
+  // Thumb element selector covers the legacy `.queue-card-thumb` (artifact /
+  // reel cards in the bottom strip) and the new primitive cards
+  // (`.clip-card-thumb`, `.transcript-card-thumb`) used by Studio Intake.
+  var SS_THUMB_SELECTOR = ".queue-card-thumb, .clip-card-thumb, .transcript-card-thumb";
+
   function ssProcessQueue() {
     while (_ssThumbActive < _SS_THUMB_MAX && _ssThumbQueue.length) {
       var item = _ssThumbQueue.shift();
@@ -3448,8 +3453,8 @@
         if (!entry.isIntersecting) return;
         obs.unobserve(entry.target);
         var d = entry.target.dataset;
-        var imgEl = entry.target.querySelector(".queue-card-thumb img");
-        var tEl = entry.target.querySelector(".queue-card-thumb");
+        var tEl = entry.target.querySelector(SS_THUMB_SELECTOR);
+        var imgEl = tEl ? tEl.querySelector("img") : null;
         if (imgEl && tEl) ssEnqueueThumb(imgEl, entry.target, tEl, d.ssThumbPid, d.ssThumbTs);
       });
     }, { root: root || null, rootMargin: "200px 0px" });
@@ -3709,10 +3714,13 @@
     });
   }
 
+  var _intakeDensityEl = null;
+
   function buildIntakeDensityTimeline(clusters) {
     var host = qs("#intakeTimeline");
     if (!host) return;
     host.innerHTML = "";
+    _intakeDensityEl = null;
     if (!clusters.length) return;
     var maxEnd = 0;
     for (var i = 0; i < clusters.length; i++) {
@@ -3730,7 +3738,24 @@
       events: events,
       durationSec: duration,
       tickCount: 6,
+      onBarMouseEnter: function (idx) {
+        state.intakeHoveredIdx = idx;
+        highlightIntakeCard(idx);
+        if (_intakeDensityEl) _intakeDensityEl.setHovered(idx);
+      },
+      onBarMouseLeave: function () {
+        state.intakeHoveredIdx = -1;
+        highlightIntakeCard(-1);
+        if (_intakeDensityEl) _intakeDensityEl.setHovered(-1);
+      },
+      onBarClick: function (idx, ev) {
+        var cluster = filteredIntakeClusters()[idx];
+        if (!cluster) return;
+        if (ev && ev.shiftKey) intakeAddToReel(cluster);
+        else intakeAddToArtifacts(cluster);
+      },
     });
+    _intakeDensityEl = dt;
     host.appendChild(dt);
   }
 
@@ -3897,7 +3922,7 @@
       if (cluster) intakeDismissCluster(cluster);
     });
 
-    // Card hover → highlight + transcript tooltip
+    // Card hover → highlight + transcript tooltip + timeline marker
     intakeCards.addEventListener("mouseover", function (e) {
       var card = e.target.closest(".intake-queue-card");
       if (!card) return;
@@ -3905,6 +3930,7 @@
       if (state.intakeHoveredIdx !== idx) {
         state.intakeHoveredIdx = idx;
         highlightIntakeCard(idx);
+        if (_intakeDensityEl) _intakeDensityEl.setHovered(idx);
       }
       var trTooltip = qs("#trIntakeTooltip");
       if (trTooltip && state.trIntakeTooltipsEnabled) {
@@ -3922,6 +3948,7 @@
       if (state.intakeHoveredIdx !== -1) {
         state.intakeHoveredIdx = -1;
         highlightIntakeCard(-1);
+        if (_intakeDensityEl) _intakeDensityEl.setHovered(-1);
       }
       var trTooltip = qs("#trIntakeTooltip");
       if (trTooltip) trTooltip.classList.add("hidden");
@@ -4204,10 +4231,13 @@
     });
   }
 
+  var _trIntakeDensityEl = null;
+
   function buildTrIntakeDensityTimeline(filtered) {
     var host = qs("#trIntakeTimeline");
     if (!host) return;
     host.innerHTML = "";
+    _trIntakeDensityEl = null;
     if (!filtered.length) return;
     var maxEnd = 0;
     for (var i = 0; i < filtered.length; i++) {
@@ -4225,7 +4255,24 @@
       events: events,
       durationSec: duration,
       tickCount: 6,
+      onBarMouseEnter: function (idx) {
+        state.trIntakeHoveredIdx = idx;
+        highlightTrIntakeCard(idx);
+        if (_trIntakeDensityEl) _trIntakeDensityEl.setHovered(idx);
+      },
+      onBarMouseLeave: function () {
+        state.trIntakeHoveredIdx = -1;
+        highlightTrIntakeCard(-1);
+        if (_trIntakeDensityEl) _trIntakeDensityEl.setHovered(-1);
+      },
+      onBarClick: function (idx, ev) {
+        var cluster = filteredTranscriptIntakeClusters()[idx];
+        if (!cluster) return;
+        if (ev && ev.shiftKey) trIntakeAddToReel(cluster);
+        else trIntakeAddToArtifacts(cluster);
+      },
     });
+    _trIntakeDensityEl = dt;
     host.appendChild(dt);
   }
 
@@ -4327,7 +4374,7 @@
         .catch(function () {});
     });
 
-    // Card hover → highlight + tooltip
+    // Card hover → highlight + tooltip + timeline marker
     trIntakeCards.addEventListener("mouseover", function (e) {
       var card = e.target.closest(".tr-intake-queue-card");
       if (!card) return;
@@ -4335,6 +4382,7 @@
       if (state.trIntakeHoveredIdx !== idx) {
         state.trIntakeHoveredIdx = idx;
         highlightTrIntakeCard(idx);
+        if (_trIntakeDensityEl) _trIntakeDensityEl.setHovered(idx);
       }
       if (trTooltip && state.trIntakeTooltipsEnabled) {
         var cluster = filteredTranscriptIntakeClusters()[idx];
@@ -4352,6 +4400,7 @@
       if (state.trIntakeHoveredIdx !== -1) {
         state.trIntakeHoveredIdx = -1;
         highlightTrIntakeCard(-1);
+        if (_trIntakeDensityEl) _trIntakeDensityEl.setHovered(-1);
       }
       if (trTooltip) trTooltip.classList.add("hidden");
     });
