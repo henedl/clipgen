@@ -1233,14 +1233,21 @@ col.col-participant-col {
   display: grid;
   /* Fixed 160px tracks (no 1fr stretch) keep cards compact and gaps tight,
    * even when only a couple of cards are queued. Excess row width becomes
-   * a trailing gutter, matching the prototype's spacing. */
+   * a trailing gutter, matching the prototype's spacing.
+   *
+   * grid-auto-rows: max-content + align-content:start pins rows to their
+   * intrinsic content height and packs them at the top — without these,
+   * Chrome distributes free space across rows when the container shrinks
+   * below its content, which squishes the cards vertically. */
   grid-template-columns: repeat(auto-fill, 160px);
+  grid-auto-rows: max-content;
   gap: 8px;
   padding: 14px;
-  flex: 1 1 auto;
+  flex: 1 1 0;
   min-height: 0;
   overflow-y: auto;
   align-content: start;
+  align-items: start;
   border: 0;
 }
 #artifactsList .drop-target-empty {
