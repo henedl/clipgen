@@ -43,7 +43,6 @@
     dividerOffsetBeforeCollapse: 0,
     activeFunction: "",
     cellExpandHover: true,
-    cellColorCoding: true,
     filtersVisible: false,
     filters: {
       categories: [],
@@ -76,6 +75,10 @@
     convergenceBaselines: {},
     convergenceDataVersion: 0,
     convergenceStale: false,
+    sidebarOpen: true,
+    sidebarView: "all",
+    sidebarCategories: {},
+    sidebarParticipants: {},
   };
 
   function isIntakeSource(source) {
@@ -228,14 +231,6 @@
     return result;
   }
 
-  function intakeComputeTickInterval(visLen) {
-    var candidates = [1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600];
-    for (var i = 0; i < candidates.length; i++) {
-      if (visLen / candidates[i] <= 12) return candidates[i];
-    }
-    return 3600;
-  }
-
   function setCardDragImage(ev, card) {
     var clone = card.cloneNode(true);
     clone.style.position = "absolute";
@@ -297,6 +292,201 @@
     state.filters.sevMax = "";
     state.filters.fnMin = null;
     state.filters.fnMax = null;
+  }
+
+  // ---- Sheet sidebar ----
+
+  var SIDEBAR_VIEW_KEY = "clipgen-studio-sidebar-open";
+  // VIEWS section: each entry maps a view id to a severity range that overrides
+  // state.filters.sevMin/sevMax. "all" clears the override; "highlights" pulls
+  // the top three severity tiers; the rest match a single label.
+  var SIDEBAR_VIEWS = [
+    { id: "all",        label: "All" },
+    { id: "highlights", label: "Highlights", sevMin: "Medium",   sevMax: "Critical" },
+    { id: "positive",   label: "Positive",   sevMin: "Positive", sevMax: "Very Positive" },
+    { id: "medium",     label: "Medium",     sevMin: "Medium",   sevMax: "Medium" },
+    { id: "high",       label: "High",       sevMin: "High",     sevMax: "Critical" },
+  ];
+
+  function readPersistedSidebarOpen() {
+    try {
+      var stored = localStorage.getItem(SIDEBAR_VIEW_KEY);
+      if (stored !== null) state.sidebarOpen = (stored !== "false");
+    } catch (_) {}
+  }
+
+  function persistSidebarOpen() {
+    try { localStorage.setItem(SIDEBAR_VIEW_KEY, state.sidebarOpen ? "true" : "false"); } catch (_) {}
+  }
+
+  function applySidebarView(viewId) {
+    state.sidebarView = viewId;
+    var view = null;
+    for (var i = 0; i < SIDEBAR_VIEWS.length; i++) {
+      if (SIDEBAR_VIEWS[i].id === viewId) { view = SIDEBAR_VIEWS[i]; break; }
+    }
+    state.filters.sevMin = view && view.sevMin ? view.sevMin : "";
+    state.filters.sevMax = view && view.sevMax ? view.sevMax : "";
+  }
+
+  function applySidebarCategories() {
+    state.filters.categories = Object.keys(state.sidebarCategories).filter(function (k) {
+      return !!state.sidebarCategories[k];
+    });
+  }
+
+  function countSidebarSelectedParticipants() {
+    var n = 0;
+    for (var k in state.sidebarParticipants) {
+      if (Object.prototype.hasOwnProperty.call(state.sidebarParticipants, k) && state.sidebarParticipants[k]) n++;
+    }
+    return n;
+  }
+
+  function renderSidebar() {
+    var sidebar = qs("#studioSidebar");
+    if (!sidebar) return;
+    sidebar.setAttribute("data-open", state.sidebarOpen ? "true" : "false");
+
+    if (!state.sheetData) return;
+    var d = state.sheetData;
+
+    // Counts per severity / category / participant
+    var sevCounts = { all: d.rows.length };
+    var catCounts = {};
+    var partCounts = {};
+    var participants = d.participants || [];
+    for (var p = 0; p < participants.length; p++) partCounts[participants[p]] = 0;
+    for (var i = 0; i < d.rows.length; i++) {
+      var row = d.rows[i];
+      var sev = (row.severity || "").trim();
+      sevCounts[sev] = (sevCounts[sev] || 0) + 1;
+      if (row.category) catCounts[row.category] = (catCounts[row.category] || 0) + 1;
+      for (var j = 0; j < participants.length; j++) {
+        var c = row.cells[participants[j]];
+        if (c && c.valid) partCounts[participants[j]] += 1;
+      }
+    }
+    function rangeCount(sevMin, sevMax) {
+      if (!sevMin && !sevMax) return d.rows.length;
+      var minR = sevMin ? severityRank(sevMin) : null;
+      var maxR = sevMax ? severityRank(sevMax) : null;
+      var n = 0;
+      for (var k = 0; k < d.rows.length; k++) {
+        var rk = severityRank(d.rows[k].severity);
+        if (rk === null) continue;
+        if (minR !== null && rk < minR) continue;
+        if (maxR !== null && rk > maxR) continue;
+        n++;
+      }
+      return n;
+    }
+
+    // VIEWS — vertical-list rows with counts.
+    var viewsBody = sidebar.querySelector('[data-target="views"]');
+    if (viewsBody) {
+      viewsBody.innerHTML = "";
+      SIDEBAR_VIEWS.forEach(function (view) {
+        var count = view.id === "all" ? d.rows.length : rangeCount(view.sevMin, view.sevMax);
+        viewsBody.appendChild(createSidebarRow({
+          label: view.label,
+          count: count,
+          active: state.sidebarView === view.id,
+          onClick: function () {
+            applySidebarView(view.id);
+            renderSidebar();
+            renderGrid();
+          },
+        }));
+      });
+    }
+
+    // CATEGORIES — vertical-list rows with counts and category-hue dots.
+    var catsBody = sidebar.querySelector('[data-target="categories"]');
+    if (catsBody) {
+      catsBody.innerHTML = "";
+      var cats = Object.keys(catCounts).sort();
+      cats.forEach(function (cat) {
+        catsBody.appendChild(createSidebarRow({
+          label: cat,
+          count: catCounts[cat],
+          active: !!state.sidebarCategories[cat],
+          dotColor: "oklch(0.7 0.16 " + categoryHue(cat) + ")",
+          onClick: function () {
+            state.sidebarCategories[cat] = !state.sidebarCategories[cat];
+            applySidebarCategories();
+            renderSidebar();
+            renderGrid();
+          },
+        }));
+      });
+      if (cats.length === 0) {
+        var empty = el("span", "studio-sidebar-row-label", "(no categories)");
+        empty.style.padding = "6px 16px";
+        empty.style.color = "var(--fg-faint)";
+        catsBody.appendChild(empty);
+      }
+    }
+
+    // PARTICIPANTS — compact 6-col grid of mono pills.
+    var partsBody = sidebar.querySelector('[data-target="participants"]');
+    if (partsBody) {
+      partsBody.innerHTML = "";
+      participants.forEach(function (pid) {
+        var pill = el("button", "studio-sidebar-pill cg-mono", pid);
+        pill.type = "button";
+        if (state.sidebarParticipants[pid]) pill.classList.add("is-active");
+        pill.addEventListener("click", function () {
+          state.sidebarParticipants[pid] = !state.sidebarParticipants[pid];
+          renderSidebar();
+          renderGrid();
+        });
+        partsBody.appendChild(pill);
+      });
+    }
+  }
+
+  function createSidebarRow(opts) {
+    var row = el("button", "studio-sidebar-row");
+    row.type = "button";
+    if (opts.active) row.classList.add("is-active");
+    if (opts.dotColor) {
+      var dot = el("span", "studio-sidebar-row-dot");
+      dot.style.background = opts.dotColor;
+      row.appendChild(dot);
+    }
+    var label = el("span", "studio-sidebar-row-label");
+    label.textContent = opts.label || "";
+    label.title = opts.label || "";
+    row.appendChild(label);
+    if (opts.count != null) {
+      var count = el("span", "studio-sidebar-row-count cg-mono");
+      count.textContent = String(opts.count);
+      row.appendChild(count);
+    }
+    if (typeof opts.onClick === "function") {
+      row.addEventListener("click", opts.onClick);
+    }
+    return row;
+  }
+
+  function bindSidebarToggle() {
+    var btn = qs("#studioSidebarToggle");
+    if (!btn) return;
+    btn.addEventListener("click", function () {
+      state.sidebarOpen = !state.sidebarOpen;
+      persistSidebarOpen();
+      renderSidebar();
+    });
+  }
+
+  function isParticipantHidden(pid) {
+    if (countSidebarSelectedParticipants() === 0) return false;
+    return !state.sidebarParticipants[pid];
+  }
+
+  function setActiveTabAttr(tab) {
+    document.body.setAttribute("data-active-tab", tab);
   }
 
   function renderFilterBar() {
@@ -571,6 +761,7 @@
   }
 
   function syncPreviewTab() {
+    setActiveTabAttr(state.activePreviewTab);
     var grid = qs("#sheetGrid");
     var filterBar = qs("#filterBar");
     var filterToggle = qs("#filterToggle");
@@ -610,7 +801,6 @@
         pollIntakeEvents();
         state.intakePollTimer = setInterval(pollIntakeEvents, 10000);
       }
-      setTimeout(sizeIntakeCanvas, 0);
     } else if (state.activePreviewTab === "transcript-intake") {
       if (trIntakePanel) trIntakePanel.classList.remove("hidden");
       activePanel = trIntakePanel;
@@ -618,7 +808,6 @@
         pollTranscriptIntakeMarks();
         state.trIntakePollTimer = setInterval(pollTranscriptIntakeMarks, 10000);
       }
-      setTimeout(sizeTrIntakeCanvas, 0);
     } else if (state.activePreviewTab === "convergence") {
       if (convergencePanel) convergencePanel.classList.remove("hidden");
       activePanel = convergencePanel;
@@ -674,6 +863,7 @@
         clipgenApplyConfig(data.config);
         renderHeader();
         renderFilterBar();
+        renderSidebar();
         renderGrid();
         // Load per-participant baselines so the grid color-codes durations
         // and segment metadata in the video-relative frame (matches Python
@@ -701,9 +891,6 @@
         }
         if (data.cellExpandHover !== undefined) {
           state.cellExpandHover = data.cellExpandHover;
-        }
-        if (data.cellColorCoding !== undefined) {
-          state.cellColorCoding = data.cellColorCoding;
         }
         var tcGroup = qs("#titlecardGroup");
         if (tcGroup && qs("#artifactFormat").value === "clip") {
@@ -838,31 +1025,38 @@
 
     var showSeverity = hasSeverityData(d.rows);
     var metaCols = showSeverity ? 5 : 4;
-    var totalCols = metaCols + d.participants.length;
+    var visibleParticipants = d.participants.filter(function (pid) {
+      return !isParticipantHidden(pid);
+    });
+    var totalCols = metaCols + visibleParticipants.length;
     state._gridTotalCols = totalCols;
     state._gridShowSeverity = showSeverity;
+    state._gridVisibleParticipants = visibleParticipants;
     var table = el("table");
 
     // Colgroup for fixed column widths — participant columns share equal width
     var colgroup = document.createElement("colgroup");
     var colRowNum = document.createElement("col");
-    colRowNum.style.width = "3rem";
+    colRowNum.style.width = "2.5rem";
     colgroup.appendChild(colRowNum);
     var colFn = document.createElement("col");
-    colFn.style.width = "3.5rem";
+    colFn.style.width = "2.25rem";
     colgroup.appendChild(colFn);
     var colObs = document.createElement("col");
-    colObs.style.width = "auto";
+    // Explicit width keeps the table size predictable under table-layout: fixed
+    // — `auto` collapses to 0 when other cols already exceed the table width.
+    // The td inside has overflow:hidden + ellipsis to clamp the long observation.
+    colObs.style.width = "18rem";
     colgroup.appendChild(colObs);
     var colCat = document.createElement("col");
-    colCat.style.width = "7rem";
+    colCat.style.width = "7.5rem";
     colgroup.appendChild(colCat);
     if (showSeverity) {
       var colSev = document.createElement("col");
-      colSev.style.width = "5.5rem";
+      colSev.style.width = "6.875rem";
       colgroup.appendChild(colSev);
     }
-    for (var c = 0; c < d.participants.length; c++) {
+    for (var c = 0; c < visibleParticipants.length; c++) {
       var colP = document.createElement("col");
       colP.className = "col-participant-col";
       colgroup.appendChild(colP);
@@ -922,10 +1116,10 @@
       hrow.appendChild(el("th", "col-severity", "Severity"));
     }
 
-    for (var p = 0; p < d.participants.length; p++) {
-      var pTh = el("th", "col-participant", d.participants[p]);
-      pTh.setAttribute("data-participant", d.participants[p]);
-      pTh.title = "Select all " + d.participants[p] + " cells";
+    for (var p = 0; p < visibleParticipants.length; p++) {
+      var pTh = el("th", "col-participant", visibleParticipants[p]);
+      pTh.setAttribute("data-participant", visibleParticipants[p]);
+      pTh.title = "Select all " + visibleParticipants[p] + " cells";
       hrow.appendChild(pTh);
     }
     thead.appendChild(hrow);
@@ -953,15 +1147,16 @@
     if (!tbody) return;
     var totalCols = state._gridTotalCols;
     var showSeverity = state._gridShowSeverity;
+    var visibleParticipants = state._gridVisibleParticipants || d.participants;
 
     var filteredRows = getFilteredRows(d.rows);
     var frag = document.createDocumentFragment();
     var i = 0;
     while (i < filteredRows.length) {
       var row = filteredRows[i];
-      if (isRowEmpty(row, d.participants)) {
+      if (isRowEmpty(row, visibleParticipants)) {
         var emptyStart = i;
-        while (i < filteredRows.length && isRowEmpty(filteredRows[i], d.participants)) {
+        while (i < filteredRows.length && isRowEmpty(filteredRows[i], visibleParticipants)) {
           i++;
         }
         var emptyCount = i - emptyStart;
@@ -975,7 +1170,7 @@
         sepTr.appendChild(sepTd);
         frag.appendChild(sepTr);
       } else {
-        frag.appendChild(renderDataRow(row, d.participants, showSeverity));
+        frag.appendChild(renderDataRow(row, visibleParticipants, showSeverity));
         i++;
       }
     }
@@ -986,90 +1181,60 @@
   }
 
   // ---- Panel divider (resizable split between sheet preview and bottom panel) ----
+  //
+  // Layout model: #sheetPreview is `flex: 1 1 auto` and #bottomPanel has an
+  // explicit pixel `height` set from state.bottomH. The drag updates that
+  // pixel height directly; the upper pane absorbs the remainder via flex.
+  // The legacy max-height-per-tab-panel mechanism is kept as a no-op stub so
+  // callers (renderGrid, syncPreviewTab, resize handler) don't break, but it
+  // no longer drives layout.
 
-  // Tab panels whose height tracks the divider. Keep in sync with the markup in studio.html;
-  // every preview tab that shares the upper pane must appear here so the drag/collapse/resize
-  // code paths apply the same maxHeight to each.
-  var UPPER_PANE_PANELS = [
-    "#sheetGrid",
-    "#intakePanel",
-    "#trIntakePanel",
-    "#convergencePanel",
-    "#metadataPanel",
-  ];
+  function applyUpperPaneMaxHeight(_value) { /* no-op — flex handles it */ }
+  function computeGridMaxHeight(_bottomHeightOverride) { /* no-op — flex handles it */ }
 
-  function applyUpperPaneMaxHeight(value) {
-    for (var i = 0; i < UPPER_PANE_PANELS.length; i++) {
-      var p = qs(UPPER_PANE_PANELS[i]);
-      if (p) p.style.maxHeight = value;
+  // The bottom strip is now driven by an explicit pixel height on
+  // `#bottomPanel` (the upper pane is flex: 1 1 auto and absorbs the remainder).
+  // The drag updates state.bottomH between BOTTOM_STRIP_MIN and BOTTOM_STRIP_MAX.
+  var BOTTOM_STRIP_MIN = 60;
+  var BOTTOM_STRIP_MAX = 560;
+  var BOTTOM_STRIP_DEFAULT = 280;
+  var BOTTOM_STORAGE_KEY = "clipgen-studio-bottom-h";
+
+  function applyBottomHeight() {
+    var bottom = qs("#bottomPanel");
+    if (!bottom) return;
+    if (state.bottomCollapsed) {
+      bottom.style.height = "";
+    } else {
+      bottom.style.height = state.bottomH + "px";
     }
   }
 
-  function computeGridMaxHeight(bottomHeightOverride) {
-    var header = qs("#studioSubheader");
-    var preview = qs("#sheetPreview");
-    var divider = qs("#panelDivider");
-    var bottom = qs("#bottomPanel");
-    var grid = qs("#sheetGrid");
-    if (!header || !preview || !divider || !bottom || !grid) return;
-
-    var previewHeader = null; /* moved to #studioSubheader (outside #sheetPreview) */
-    var filterBar = qs("#filterBar");
-    var previewStyle = getComputedStyle(preview);
-    var previewPadTop = parseFloat(previewStyle.paddingTop) || 0;
-    var previewPadBot = parseFloat(previewStyle.paddingBottom) || 0;
-    var phHeight = previewHeader ? previewHeader.offsetHeight : 0;
-    var phStyle = previewHeader ? getComputedStyle(previewHeader) : null;
-    var phMargin = phStyle
-      ? (parseFloat(phStyle.marginTop) || 0) + (parseFloat(phStyle.marginBottom) || 0)
-      : 0;
-    var fbHeight = filterBar && !filterBar.classList.contains("hidden") ? filterBar.offsetHeight : 0;
-    var fbStyle = filterBar && !filterBar.classList.contains("hidden") ? getComputedStyle(filterBar) : null;
-    var fbMargin = fbStyle
-      ? (parseFloat(fbStyle.marginTop) || 0) + (parseFloat(fbStyle.marginBottom) || 0)
-      : 0;
-
-    var headerRect = header.getBoundingClientRect();
-    var sheetChrome = previewPadTop + phHeight + phMargin + fbHeight + fbMargin + previewPadBot;
-    var bottomH = bottomHeightOverride !== undefined ? bottomHeightOverride : bottom.offsetHeight;
-    var available = window.innerHeight - headerRect.top - headerRect.height
-      - sheetChrome - divider.offsetHeight - bottomH;
-
-    var MIN_GRID = 100;
-    var maxAllowed = Math.max(0, available - MIN_GRID);
-    state.dividerOffset = Math.min(state.dividerOffset, maxAllowed);
-
-    var maxH = Math.max(MIN_GRID, available - state.dividerOffset) + "px";
-    applyUpperPaneMaxHeight(maxH);
-  }
-
-  // Per redesign: bottom strip absolute height bounds (the strip is the visible
-  // area below the divider). dividerOffset roughly equals that visible height,
-  // so we clamp dividerOffset to [BOTTOM_STRIP_MIN, BOTTOM_STRIP_MAX] minus the
-  // minimum upper-pane reservation.
-  var BOTTOM_STRIP_MIN = 60;
-  var BOTTOM_STRIP_MAX = 560;
-  var BOTTOM_STORAGE_KEY = "clipgen-studio-bottom-h";
-
   function loadStoredBottomHeight() {
+    state.bottomH = BOTTOM_STRIP_DEFAULT;
     try {
       var raw = window.localStorage.getItem(BOTTOM_STORAGE_KEY);
-      if (!raw) return;
-      var parsed = JSON.parse(raw);
-      if (parsed && typeof parsed.dividerOffset === "number") {
-        state.dividerOffset = Math.max(0, Math.min(BOTTOM_STRIP_MAX, parsed.dividerOffset));
-      }
-      if (parsed && parsed.collapsed) {
-        state.bottomCollapsed = true;
-        document.body.classList.add("bottom-collapsed");
+      if (raw) {
+        var parsed = JSON.parse(raw);
+        if (parsed && typeof parsed.bottomH === "number") {
+          state.bottomH = Math.max(BOTTOM_STRIP_MIN, Math.min(BOTTOM_STRIP_MAX, parsed.bottomH));
+        } else if (parsed && typeof parsed.dividerOffset === "number") {
+          // Legacy persisted value from the dividerOffset era — reinterpret as bottomH.
+          state.bottomH = Math.max(BOTTOM_STRIP_MIN, Math.min(BOTTOM_STRIP_MAX, parsed.dividerOffset || BOTTOM_STRIP_DEFAULT));
+        }
+        if (parsed && parsed.collapsed) {
+          state.bottomCollapsed = true;
+          document.body.classList.add("bottom-collapsed");
+        }
       }
     } catch (_) {}
+    applyBottomHeight();
   }
 
   function persistBottomHeight() {
     try {
       window.localStorage.setItem(BOTTOM_STORAGE_KEY, JSON.stringify({
-        dividerOffset: state.dividerOffset,
+        bottomH: state.bottomH,
         collapsed: !!state.bottomCollapsed,
       }));
     } catch (_) {}
@@ -1080,48 +1245,27 @@
     if (!handle) return;
     var dragging = false;
     var startY = 0;
-    var startOffset = 0;
-    var dragAvailable = 0; // stable available-space snapshot for the drag
-    var dragMaxOff = 0;    // stable upper bound for dividerOffset
+    var startBottomH = 0;
+    var dragMaxBottom = BOTTOM_STRIP_MAX;
 
     function onDown(e) {
       if (state.bottomCollapsed) return;
       e.preventDefault();
       dragging = true;
       startY = e.clientY || (e.touches && e.touches[0].clientY) || 0;
-      startOffset = state.dividerOffset;
+      startBottomH = state.bottomH;
 
-      // Snapshot layout values once so they stay stable for the whole drag.
-      // Re-reading bottom.offsetHeight each frame causes oscillation when
-      // the upper panel shrinks and the bottom panel's visible area grows.
+      // Reserve at least MIN_UPPER for the sheet pane.
       var header = qs("#studioSubheader");
-      var preview = qs("#sheetPreview");
       var divider = qs("#panelDivider");
-      var bottom = qs("#bottomPanel");
-      if (header && preview && divider && bottom) {
-        var previewHeader = null; /* moved to #studioSubheader (outside #sheetPreview) */
-        var filterBar = qs("#filterBar");
-        var previewStyle = getComputedStyle(preview);
-        var previewPadTop = parseFloat(previewStyle.paddingTop) || 0;
-        var previewPadBot = parseFloat(previewStyle.paddingBottom) || 0;
-        var phHeight = previewHeader ? previewHeader.offsetHeight : 0;
-        var phStyle = previewHeader ? getComputedStyle(previewHeader) : null;
-        var phMargin = phStyle
-          ? (parseFloat(phStyle.marginTop) || 0) + (parseFloat(phStyle.marginBottom) || 0)
-          : 0;
-        var fbHeight = filterBar && !filterBar.classList.contains("hidden") ? filterBar.offsetHeight : 0;
-        var fbStyle = filterBar && !filterBar.classList.contains("hidden") ? getComputedStyle(filterBar) : null;
-        var fbMargin = fbStyle
-          ? (parseFloat(fbStyle.marginTop) || 0) + (parseFloat(fbStyle.marginBottom) || 0)
-          : 0;
+      if (header && divider) {
         var headerRect = header.getBoundingClientRect();
-        var sheetChrome = previewPadTop + phHeight + phMargin + fbHeight + fbMargin + previewPadBot;
-        dragAvailable = window.innerHeight - headerRect.top - headerRect.height
-          - sheetChrome - divider.offsetHeight - bottom.offsetHeight;
+        var available = window.innerHeight - headerRect.top - headerRect.height - divider.offsetHeight;
+        var MIN_UPPER = 120;
+        dragMaxBottom = Math.max(BOTTOM_STRIP_MIN, Math.min(BOTTOM_STRIP_MAX, available - MIN_UPPER));
+      } else {
+        dragMaxBottom = BOTTOM_STRIP_MAX;
       }
-
-      var MIN_GRID = 100;
-      dragMaxOff = Math.max(0, Math.min(BOTTOM_STRIP_MAX, dragAvailable - MIN_GRID));
 
       handle.classList.add("active");
       document.body.style.cursor = "row-resize";
@@ -1140,15 +1284,11 @@
       rafPending = true;
       var clientY = e.clientY || (e.touches && e.touches[0].clientY) || 0;
       requestAnimationFrame(function () {
+        // Drag up (clientY decreases) → bottom grows. Drag down → bottom shrinks.
         var delta = startY - clientY;
-        var lowerBound = Math.min(BOTTOM_STRIP_MIN, dragMaxOff);
-        state.dividerOffset = Math.max(lowerBound, Math.min(dragMaxOff, startOffset + delta));
-
-        // Apply maxHeight directly using the stable snapshot
-        var MIN_GRID = 100;
-        var maxH = Math.max(MIN_GRID, dragAvailable - state.dividerOffset) + "px";
-        applyUpperPaneMaxHeight(maxH);
-
+        var nextH = startBottomH + delta;
+        state.bottomH = Math.max(BOTTOM_STRIP_MIN, Math.min(dragMaxBottom, nextH));
+        applyBottomHeight();
         rafPending = false;
       });
     }
@@ -1159,7 +1299,6 @@
       handle.classList.remove("active");
       document.body.style.cursor = "";
       document.body.style.userSelect = "";
-      computeGridMaxHeight(); // finalize with fresh layout values
       persistBottomHeight();
     }
 
@@ -1176,59 +1315,40 @@
     var bottom = qs("#bottomPanel");
     if (!bottom || bottom._transitioning) return;
     bottom._transitioning = true;
-    var divider = qs("#panelDivider");
 
     if (state.bottomCollapsed) {
       // --- Restore ---
       state.bottomCollapsed = false;
-      state.dividerOffset = 0;
-
-      // Measure target bottom height (temporarily lift the inline constraint)
-      bottom.style.transition = "none";
-      bottom.style.maxHeight = "none";
-      var targetH = bottom.offsetHeight;
-
-      // Transition divider margin from 20px → 0 alongside the bottom panel grow
-      if (divider) divider.style.marginBottom = "0";
-
       document.body.classList.add("bottom-animating");
-
-      // Keep bottom-collapsed during animation so flex layout smoothly adjusts
+      // Animate maxHeight from 0 to the persisted bottomH; afterwards drop the
+      // inline maxHeight so the explicit `height` style takes over.
       bottom.style.maxHeight = "0px";
-      bottom.offsetHeight; // reflow — margin transition starts, bottom at 0
-      bottom.style.transition = "";
-      bottom.style.maxHeight = targetH + "px";
+      bottom.offsetHeight; // reflow at 0
+      document.body.classList.remove("bottom-collapsed");
+      bottom.style.maxHeight = state.bottomH + "px";
+      bottom.style.height = state.bottomH + "px";
 
       onCollapseTransitionEnd(bottom, function () {
-        document.body.classList.remove("bottom-collapsed");
         document.body.classList.remove("bottom-animating");
-        if (divider) divider.style.marginBottom = "";
         bottom.style.maxHeight = "";
         bottom._transitioning = false;
-        computeGridMaxHeight();
         persistBottomHeight();
       });
     } else {
       // --- Collapse ---
       state.bottomCollapsed = true;
-      state.dividerOffsetBeforeCollapse = state.dividerOffset;
-      state.dividerOffset = 0;
-      persistBottomHeight();
-
-      // Clear grid maxHeight — collapsed CSS flex rules fill the space instead
-      applyUpperPaneMaxHeight("");
-
       document.body.classList.add("bottom-animating");
       var currentH = bottom.offsetHeight;
       bottom.style.maxHeight = currentH + "px";
       document.body.classList.add("bottom-collapsed");
       bottom.offsetHeight; // reflow
       bottom.style.maxHeight = "0px";
+      bottom.style.height = "";
 
       onCollapseTransitionEnd(bottom, function () {
         bottom._transitioning = false;
         document.body.classList.remove("bottom-animating");
-        computeGridMaxHeight(0);
+        persistBottomHeight();
       });
     }
   }
@@ -1548,15 +1668,23 @@
 
     function showFloat(td) {
       if (!state.cellExpandHover) return;
-      if (td.scrollWidth <= td.clientWidth) return;
+      // The chip has its own overflow:hidden + max-width:100%, so it never
+      // visually exceeds the cell. Use the chip's scroll-vs-client width to
+      // detect "is the value clipped" — checking the td would always say
+      // false now that chip.offsetWidth is clamped to td.clientWidth.
+      var chip = td.querySelector(".ts-chip");
+      var overflows = chip
+        ? chip.scrollWidth > chip.clientWidth + 1
+        : td.scrollWidth > td.clientWidth + 1;
+      if (!overflows) return;
       floatCell = td;
       var rect = td.getBoundingClientRect();
       cellFloat.textContent = td.textContent;
-      cellFloat.style.backgroundColor = getComputedStyle(td).backgroundColor;
-      cellFloat.style.top = (rect.top + 1) + "px";
+      cellFloat.classList.toggle("has-text", td.classList.contains("has-text"));
+      cellFloat.style.top = rect.top + "px";
       cellFloat.style.left = rect.left + "px";
-      cellFloat.style.height = (rect.height - 1) + "px";
-      cellFloat.style.display = "block";
+      cellFloat.style.height = rect.height + "px";
+      cellFloat.style.display = "flex";
       cellFloat.offsetWidth; // force reflow
       cellFloat.style.opacity = "1";
     }
@@ -2024,55 +2152,88 @@
     list.innerHTML = "";
 
     for (var i = 0; i < n; i++) {
-      var stash = state.stashes[i];
-      var card = el("div", "stash-card");
-      card.setAttribute("data-stash-id", stash.id);
-      card.setAttribute("draggable", "true");
-      (function (stashRef) {
-        card.addEventListener("dragstart", function (ev) {
-          ev.dataTransfer.setData("application/json", JSON.stringify({
-            stashId: stashRef.id,
-            items: stashRef.items,
-            source: "reel-stash",
-          }));
-          ev.dataTransfer.effectAllowed = "copy";
-        });
-      })(stash);
-
-      var nameEl = el("span", "stash-card-name", truncate(stash.name, 20));
-      nameEl.title = stash.name;
-      (function (stashRef, nameNode) {
-        nameNode.addEventListener("click", function (ev) {
-          ev.stopPropagation();
-          startStashRename(stashRef, nameNode, "api/stashes");
-        });
-      })(stash, nameEl);
-      card.appendChild(nameEl);
-
-      var info = el("div", "stash-card-info");
-      info.appendChild(el("span", "", stash.count + " clips"));
-      info.appendChild(el("span", "", formatDuration(stash.totalDuration)));
-      card.appendChild(info);
-
-      var removeBtn = el("button", "stash-card-remove", "\u00D7");
-      removeBtn.title = "Delete stash";
-      (function (stashId) {
-        removeBtn.addEventListener("click", function (ev) {
-          ev.stopPropagation();
-          deleteStash(stashId, "api/stashes", state.stashes, renderStashedReels);
-        });
-      })(stash.id);
-      card.appendChild(removeBtn);
-
-      (function (stashRef) {
-        card.addEventListener("click", function () {
-          recallStash(stashRef);
-        });
-      })(stash);
-
-      list.appendChild(card);
+      list.appendChild(buildStashCard(state.stashes[i], "api/stashes", state.stashes, renderStashedReels, "reel-stash", recallStash));
     }
     computeGridMaxHeight();
+  }
+
+  function makeStashFolderIcon(stash) {
+    var icon = el("span", "stash-card-icon");
+    var hue = categoryHue((stash && stash.id) || "uncategorized");
+    // Hue-tinted backing remains as a fallback if every thumbnail fails.
+    icon.style.background = "oklch(0.32 0.06 " + hue + ")";
+
+    var items = (stash && stash.items) || [];
+    // Pull the first 3 distinct thumbnails to fake a stacked-folder look.
+    var picks = [];
+    var seen = {};
+    for (var i = 0; i < items.length && picks.length < 3; i++) {
+      var item = items[i];
+      var key = item && item.participant != null && item.start != null
+        ? item.participant + ":" + item.start
+        : null;
+      if (!key || seen[key]) continue;
+      seen[key] = true;
+      picks.push(item);
+    }
+
+    picks.forEach(function (item, idx) {
+      var img = document.createElement("img");
+      img.className = "stash-card-icon-img";
+      img.alt = "";
+      img.draggable = false;
+      img.style.zIndex = String(picks.length - idx);
+      img.style.transform = "translate(" + (idx * 2) + "px, " + (-idx * 2) + "px)";
+      img.src = ssThumbUrl(item.participant, item.start);
+      img.addEventListener("error", function () {
+        if (img.parentNode) img.parentNode.removeChild(img);
+      });
+      icon.appendChild(img);
+    });
+
+    return icon;
+  }
+
+  function buildStashCard(stash, apiPath, listRef, rerender, dragSource, onRecall) {
+    var card = el("div", "stash-card");
+    card.setAttribute("data-stash-id", stash.id);
+    card.setAttribute("draggable", "true");
+    card.addEventListener("dragstart", function (ev) {
+      ev.dataTransfer.setData("application/json", JSON.stringify({
+        stashId: stash.id,
+        items: stash.items,
+        source: dragSource,
+      }));
+      ev.dataTransfer.effectAllowed = "copy";
+    });
+
+    card.appendChild(makeStashFolderIcon(stash));
+
+    var nameEl = el("span", "stash-card-name", truncate(stash.name, 18));
+    nameEl.title = stash.name;
+    nameEl.addEventListener("click", function (ev) {
+      ev.stopPropagation();
+      startStashRename(stash, nameEl, apiPath);
+    });
+    card.appendChild(nameEl);
+
+    var info = el("span", "stash-card-info");
+    info.appendChild(el("span", "", String(stash.count)));
+    info.appendChild(el("span", "", formatDuration(stash.totalDuration)));
+    card.appendChild(info);
+
+    var removeBtn = el("button", "stash-card-remove", "\u00D7");
+    removeBtn.title = "Delete stash";
+    removeBtn.addEventListener("click", function (ev) {
+      ev.stopPropagation();
+      deleteStash(stash.id, apiPath, listRef, rerender);
+    });
+    card.appendChild(removeBtn);
+
+    card.addEventListener("click", function () {
+      if (typeof onRecall === "function") onRecall(stash);
+    });
+    return card;
   }
 
   function computeReelDuration(items) {
@@ -2199,53 +2360,7 @@
     list.innerHTML = "";
 
     for (var i = 0; i < n; i++) {
-      var stash = state.artifactStashes[i];
-      var card = el("div", "stash-card");
-      card.setAttribute("data-stash-id", stash.id);
-      card.setAttribute("draggable", "true");
-      (function (stashRef) {
-        card.addEventListener("dragstart", function (ev) {
-          ev.dataTransfer.setData("application/json", JSON.stringify({
-            stashId: stashRef.id,
-            items: stashRef.items,
-            source: "artifact-stash",
-          }));
-          ev.dataTransfer.effectAllowed = "copy";
-        });
-      })(stash);
-
-      var nameEl = el("span", "stash-card-name", truncate(stash.name, 20));
-      nameEl.title = stash.name;
-      (function (stashRef, nameNode) {
-        nameNode.addEventListener("click", function (ev) {
-          ev.stopPropagation();
-          startStashRename(stashRef, nameNode, "api/artifact-stashes");
-        });
-      })(stash, nameEl);
-      card.appendChild(nameEl);
-
-      var info = el("div", "stash-card-info");
-      info.appendChild(el("span", "", stash.count + " clips"));
-      info.appendChild(el("span", "", formatDuration(stash.totalDuration)));
-      card.appendChild(info);
-
-      var removeBtn = el("button", "stash-card-remove", "\u00D7");
-      removeBtn.title = "Delete stash";
-      (function (stashId) {
-        removeBtn.addEventListener("click", function (ev) {
-          ev.stopPropagation();
-          deleteStash(stashId, "api/artifact-stashes", state.artifactStashes, renderStashedArtifacts);
-        });
-      })(stash.id);
-      card.appendChild(removeBtn);
-
-      (function (stashRef) {
-        card.addEventListener("click", function () {
-          recallArtifactStash(stashRef);
-        });
-      })(stash);
-
-      list.appendChild(card);
+      list.appendChild(buildStashCard(state.artifactStashes[i], "api/artifact-stashes", state.artifactStashes, renderStashedArtifacts, "artifact-stash", recallArtifactStash));
     }
     computeGridMaxHeight();
   }
@@ -2345,9 +2460,8 @@
     qs("#buildReelBtn").addEventListener("click", onBuildReel);
     qs("#cancelReelBtn").addEventListener("click", onCancelReel);
     qs("#buildViewerBtn").addEventListener("click", onBuildViewer);
-    qs("#buildTimelineViewerBtn").addEventListener("click", onBuildTimelineViewer);
     qs("#buildHighlightsBtn").addEventListener("click", onBuildHighlights);
-    qs("#galleryBtn").addEventListener("click", onGallery);
+    bindGalleryDialog();
 
     qs("#artifactFormat").addEventListener("change", function () {
       var tcGroup = qs("#titlecardGroup");
@@ -2466,7 +2580,7 @@
     var ids = [
       "#generateBtn", "#buildReelBtn", "#clearArtifactsBtn",
       "#clearReelBtn", "#addToReelBtn", "#buildHighlightsBtn",
-      "#buildViewerBtn", "#buildTimelineViewerBtn", "#galleryBtn",
+      "#buildViewerBtn",
       "#stashReelBtn", "#stashArtifactsBtn"
     ];
     for (var i = 0; i < ids.length; i++) {
@@ -2849,7 +2963,6 @@
   }
 
   var _highlightsBtnOrigHTML = "";
-  var _galleryBtnOrigHTML = "";
 
   function onBuildHighlights() {
     if (state.generating) return;
@@ -2918,23 +3031,22 @@
     }
   }
 
-  function onGallery() {
+  function openGalleryDialog() {
     if (state.generating) return;
+    var overlay = qs("#galleryOverlay");
+    if (!overlay) return;
+    overlay.classList.remove("hidden");
+    var sel = qs("#galleryParticipant");
+    if (sel) sel.focus();
+  }
 
-    var drawer = qs("#galleryDrawer");
-    var btn = qs("#galleryBtn");
-    var isOpen = drawer.classList.contains("open");
+  function closeGalleryDialog() {
+    var overlay = qs("#galleryOverlay");
+    if (overlay) overlay.classList.add("hidden");
+  }
 
-    var checkHTML = iconHTML("check", "cg-icon--confirm");
-
-    if (!isOpen) {
-      _galleryBtnOrigHTML = btn.innerHTML;
-      drawer.classList.add("open");
-      var w = btn.offsetWidth;
-      btn.style.minWidth = w + "px";
-      btn.innerHTML = checkHTML + "Confirm";
-      return;
-    }
+  function submitGalleryDialog() {
+    if (state.generating) return;
 
     var participant = qs("#galleryParticipant").value;
     var format = qs("#galleryFormat").value;
@@ -2942,15 +3054,12 @@
     if (!interval || interval < 1) interval = 10;
     var bundle = qs("#galleryBundle").checked;
 
-    drawer.classList.remove("open");
-    btn.style.minWidth = "";
-    btn.innerHTML = _galleryBtnOrigHTML;
-
     if (!participant) {
       showResult(null, "No participant selected for gallery");
       return;
     }
 
+    closeGalleryDialog();
     state.generating = true;
     showOverlay("Generating gallery viewer for " + participant + "...");
 
@@ -2967,6 +3076,24 @@
         state.generating = false;
         showResult(null, "Request failed: " + err);
       });
+  }
+
+  function bindGalleryDialog() {
+    var overlay = qs("#galleryOverlay");
+    var cancel = qs("#galleryDialogCancel");
+    var confirm = qs("#galleryDialogConfirm");
+    if (overlay) {
+      overlay.addEventListener("click", function (ev) {
+        if (ev.target === overlay) closeGalleryDialog();
+      });
+    }
+    if (cancel) cancel.addEventListener("click", closeGalleryDialog);
+    if (confirm) confirm.addEventListener("click", submitGalleryDialog);
+    document.addEventListener("keydown", function (ev) {
+      if (ev.key === "Escape" && overlay && !overlay.classList.contains("hidden")) {
+        closeGalleryDialog();
+      }
+    });
   }
 
   function updateViewerButton() {
@@ -3132,14 +3259,6 @@
     if (cellExpand) {
       state.cellExpandHover = !!cellExpand.value;
     }
-    var cellColor = _findSetting("STUDIO_SHEET_CELL_COLOR_CODING");
-    if (cellColor) {
-      var newVal = !!cellColor.value;
-      if (newVal !== state.cellColorCoding) {
-        state.cellColorCoding = newVal;
-        if (state.sheetData) renderGrid();
-      }
-    }
   }
 
   function persistTitlecardSettings() {
@@ -3214,6 +3333,10 @@
   // ---- Screenspace Intake ----
 
   var INTAKE_DETECTOR_COLORS = DETECTOR_COLORS;
+  var INTAKE_DETECTORS = [
+    "multitool", "color", "change", "similarity", "text",
+    "numbers", "timelapse", "template", "flow", "scene", "inactivity",
+  ];
 
   // ---- Screenspace thumbnail queue (throttled + cached) ----
 
@@ -3225,6 +3348,11 @@
   function ssThumbUrl(participant, timestamp) {
     return "../screenspace/api/video/frame/" + encodeURIComponent(participant) + "/" + timestamp + "?w=200";
   }
+
+  // Thumb element selector covers the legacy `.queue-card-thumb` (artifact /
+  // reel cards in the bottom strip) and the new primitive cards
+  // (`.clip-card-thumb`, `.transcript-card-thumb`) used by Studio Intake.
+  var SS_THUMB_SELECTOR = ".queue-card-thumb, .clip-card-thumb, .transcript-card-thumb";
 
   function ssProcessQueue() {
     while (_ssThumbActive < _SS_THUMB_MAX && _ssThumbQueue.length) {
@@ -3283,8 +3411,8 @@
         if (!entry.isIntersecting) return;
         obs.unobserve(entry.target);
         var d = entry.target.dataset;
-        var imgEl = entry.target.querySelector(".queue-card-thumb img");
-        var tEl = entry.target.querySelector(".queue-card-thumb");
+        var tEl = entry.target.querySelector(SS_THUMB_SELECTOR);
+        var imgEl = tEl ? tEl.querySelector("img") : null;
         if (imgEl && tEl) ssEnqueueThumb(imgEl, entry.target, tEl, d.ssThumbPid, d.ssThumbTs);
       });
     }, { root: root || null, rootMargin: "200px 0px" });
@@ -3481,124 +3609,43 @@
     return container;
   }
 
-  var _intakeHitRects = [];
-  var _trIntakeHitRects = [];
-
-  function sizeIntakeCanvas() {
-    var canvas = qs("#intakeTimeline");
-    if (!canvas) return;
-    var w = canvas.clientWidth;
-    if (w <= 0) return;
-    var dpr = window.devicePixelRatio || 1;
-    canvas.width = w * dpr;
-    canvas.height = 48 * dpr;
-    var ctx = canvas.getContext("2d");
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    renderIntakeTimeline();
-  }
-
-  function renderIntakeTimeline() {
-    var canvas = qs("#intakeTimeline");
-    if (!canvas) return;
-    var ctx = canvas.getContext("2d");
-    var dpr = window.devicePixelRatio || 1;
-    var w = canvas.width / dpr;
-    var h = canvas.height / dpr;
-    if (w <= 0 || h <= 0) return;
-
-    var cs = getComputedStyle(document.documentElement);
-    var surfaceAlt = cs.getPropertyValue("--color-surface-alt").trim() || "#f1ece4";
-    var borderColor = cs.getPropertyValue("--color-border").trim() || "#e0ddd7";
-    var textDim = cs.getPropertyValue("--color-text-dim").trim() || "#6b7280";
-    var fontMono = cs.getPropertyValue("--font-mono").trim() || "monospace";
-
-    ctx.clearRect(0, 0, w, h);
-    ctx.fillStyle = surfaceAlt;
-    ctx.fillRect(0, 0, w, h);
-
-    var clusters = filteredIntakeClusters();
-    if (!clusters.length) {
-      ctx.fillStyle = textDim;
-      ctx.font = "12px -apple-system, sans-serif";
-      ctx.textAlign = "center";
-      ctx.fillText("No events", w / 2, h / 2 + 4);
-      ctx.textAlign = "start";
-      _intakeHitRects = [];
-      return;
-    }
-
-    var maxEnd = 0;
-    for (var i = 0; i < clusters.length; i++) {
-      if (clusters[i].end > maxEnd) maxEnd = clusters[i].end;
-    }
-    var duration = Math.max(maxEnd * 1.05, 60);
-
-    function timeToX(t) {
-      return (t / duration) * w;
-    }
-
-    // Time ruler ticks
-    var tickInterval = intakeComputeTickInterval(duration);
-    var firstTick = Math.ceil(0 / tickInterval) * tickInterval;
-    ctx.strokeStyle = borderColor;
-    ctx.fillStyle = textDim;
-    ctx.font = "10px " + fontMono;
-    ctx.textAlign = "center";
-    ctx.lineWidth = 1;
-    for (var t = firstTick; t <= duration; t += tickInterval) {
-      var x = timeToX(t);
-      ctx.beginPath();
-      ctx.moveTo(x, 0);
-      ctx.lineTo(x, 8);
-      ctx.stroke();
-      ctx.fillText(formatDuration(t), x, 18);
-    }
-    ctx.textAlign = "start";
-
-    // Cluster markers
-    var markerY = 22;
-    var markerH = h - markerY - 4;
-    _intakeHitRects = [];
-
-    for (var ci = 0; ci < clusters.length; ci++) {
-      var c = clusters[ci];
-      var color = INTAKE_DETECTOR_COLORS[c.detector] || "#888";
-      var highlighted = state.intakeHoveredIdx === ci;
-      var dimmed = state.intakeHoveredIdx !== -1 && !highlighted;
-      var alpha = highlighted ? 0.85 : (dimmed ? 0.15 : 0.5);
-
-      var x1 = timeToX(c.start);
-      var x2 = timeToX(c.end);
-      var mw = Math.max(x2 - x1, 3);
-
-      ctx.fillStyle = hexToRgba(color, alpha);
-      ctx.fillRect(x1, markerY, mw, markerH);
-
-      _intakeHitRects.push({ x1: x1, x2: x1 + mw, y: markerY, h: markerH, clusterIdx: ci });
-    }
-  }
-
-  function intakeHitTest(mx, my) {
-    for (var i = _intakeHitRects.length - 1; i >= 0; i--) {
-      var hr = _intakeHitRects[i];
-      if (mx >= hr.x1 && mx <= hr.x2 && my >= hr.y && my <= hr.y + hr.h) return hr;
-    }
-    return null;
-  }
-
   function highlightIntakeCard(idx) {
     var cards = qsa(".intake-queue-card");
     for (var i = 0; i < cards.length; i++) {
       if (i === idx) {
         cards[i].classList.add("intake-highlight");
-        cards[i].scrollIntoView({ block: "nearest", behavior: "smooth" });
       } else {
         cards[i].classList.remove("intake-highlight");
       }
     }
   }
 
-  function buildParticipantPills() {
+  function buildIntakeDetectorPills() {
+    var container = qs("#intakeDetectorPills");
+    if (!container) return;
+    var counts = {};
+    for (var i = 0; i < state.intakeClusters.length; i++) {
+      var d = state.intakeClusters[i].detector;
+      if (d) counts[d] = (counts[d] || 0) + 1;
+    }
+    container.innerHTML = "";
+    INTAKE_DETECTORS.forEach(function (det) {
+      if (!counts[det]) return;
+      var chip = ClipgenPrimitives.createFilterChip({
+        label: det,
+        active: state.intakeFilterDetector === det,
+        count: counts[det],
+        hue: categoryHue(det),
+        onClick: function () {
+          state.intakeFilterDetector = state.intakeFilterDetector === det ? "" : det;
+          renderIntake(false);
+        },
+      });
+      container.appendChild(chip);
+    });
+  }
+
+  function buildIntakeParticipantPills() {
     var container = qs("#intakeFilterParticipants");
     if (!container) return;
     var seen = {};
@@ -3608,29 +3655,66 @@
       if (p && !seen[p]) { seen[p] = true; participants.push(p); }
     }
     participants.sort();
-    var key = participants.join(",");
-    if (container.dataset.participants === key) {
-      syncParticipantPillStates();
-      return;
-    }
-    container.dataset.participants = key;
     state.intakeFilterParticipants = state.intakeFilterParticipants.filter(function (p) { return seen[p]; });
     container.innerHTML = "";
-    for (var j = 0; j < participants.length; j++) {
-      var btn = el("button", "intake-filter-participant", participants[j]);
-      btn.dataset.participant = participants[j];
-      if (state.intakeFilterParticipants.indexOf(participants[j]) !== -1) btn.classList.add("active");
-      container.appendChild(btn);
-    }
+    participants.forEach(function (p) {
+      var pill = ClipgenPrimitives.createParticipantPill({
+        id: p,
+        active: state.intakeFilterParticipants.indexOf(p) !== -1,
+        onClick: function () {
+          var idx = state.intakeFilterParticipants.indexOf(p);
+          if (idx === -1) state.intakeFilterParticipants.push(p);
+          else state.intakeFilterParticipants.splice(idx, 1);
+          renderIntake(false);
+        },
+      });
+      container.appendChild(pill);
+    });
   }
 
-  function syncParticipantPillStates() {
-    var btns = qsa(".intake-filter-participant");
-    for (var i = 0; i < btns.length; i++) {
-      var p = btns[i].dataset.participant;
-      if (state.intakeFilterParticipants.indexOf(p) !== -1) btns[i].classList.add("active");
-      else btns[i].classList.remove("active");
+  var _intakeDensityEl = null;
+
+  function buildIntakeDensityTimeline(clusters) {
+    var host = qs("#intakeTimeline");
+    if (!host) return;
+    host.innerHTML = "";
+    _intakeDensityEl = null;
+    if (!clusters.length) return;
+    var maxEnd = 0;
+    for (var i = 0; i < clusters.length; i++) {
+      if (clusters[i].end > maxEnd) maxEnd = clusters[i].end;
     }
+    var duration = Math.max(maxEnd * 1.05, 60);
+    var events = clusters.map(function (c) {
+      return {
+        t: duration > 0 ? c.start / duration : 0,
+        count: c.events ? c.events.length : 1,
+        hue: categoryHue(c.detector),
+      };
+    });
+    var dt = ClipgenPrimitives.createDensityTimeline({
+      events: events,
+      durationSec: duration,
+      tickCount: 6,
+      onBarMouseEnter: function (idx) {
+        state.intakeHoveredIdx = idx;
+        highlightIntakeCard(idx);
+        if (_intakeDensityEl) _intakeDensityEl.setHovered(idx);
+      },
+      onBarMouseLeave: function () {
+        state.intakeHoveredIdx = -1;
+        highlightIntakeCard(-1);
+        if (_intakeDensityEl) _intakeDensityEl.setHovered(-1);
+      },
+      onBarClick: function (idx, ev) {
+        var cluster = filteredIntakeClusters()[idx];
+        if (!cluster) return;
+        if (ev && ev.shiftKey) intakeAddToReel(cluster);
+        else intakeAddToArtifacts(cluster);
+      },
+    });
+    _intakeDensityEl = dt;
+    host.appendChild(dt);
   }
 
   function renderIntake(_hasNew) {
@@ -3640,7 +3724,8 @@
     var reelAllBtn = qs("#intakeReelAllBtn");
     var tabBadge = qs("#intakeTabBadge");
 
-    buildParticipantPills();
+    buildIntakeDetectorPills();
+    buildIntakeParticipantPills();
 
     if (!state.intakeClusters.length) {
       if (tabBadge) tabBadge.classList.add("hidden");
@@ -3648,7 +3733,7 @@
       container.appendChild(el("div", "drop-target-empty", "Screenspace events will appear here"));
       addAllBtn.disabled = true;
       reelAllBtn.disabled = true;
-      sizeIntakeCanvas();
+      buildIntakeDensityTimeline([]);
       return;
     }
     if (tabBadge) {
@@ -3659,7 +3744,7 @@
     addAllBtn.disabled = clusters.length === 0;
     reelAllBtn.disabled = clusters.length === 0;
 
-    sizeIntakeCanvas();
+    buildIntakeDensityTimeline(clusters);
 
     container.innerHTML = "";
     if (clusters.length === 0) {
@@ -3668,23 +3753,40 @@
     }
     clusters.forEach(function (c, idx) {
       var segDuration = c.end - c.start;
-      var card = el("div", "queue-card intake-queue-card");
-      card.dataset.intakeIdx = idx;
-      card.setAttribute("draggable", "true");
+      var hueLabel = c.event_type || c.detector || "uncategorized";
 
-      var thumb = el("div", "queue-card-thumb");
+      var card = ClipgenPrimitives.createClipCard({
+        participant: c.participant,
+        duration: formatDuration(segDuration),
+        label: c.event_type || c.detector || "intake",
+        hue: categoryHue(hueLabel),
+        size: "lg",
+        dataset: { intakeIdx: idx },
+        onDragStart: function (ev) {
+          ev.dataTransfer.setData("application/json", JSON.stringify({
+            participant: c.participant,
+            desc: c.event_type,
+            start: c.start,
+            end: c.end,
+            source: "screenspace",
+            event_type: c.event_type,
+            event_ids: c.events.map(function (e) { return e.id; }),
+          }));
+          ev.dataTransfer.effectAllowed = "copyMove";
+          setCardDragImage(ev, this);
+        },
+      });
+      card.classList.add("queue-card", "intake-queue-card");
+
+      // Lazy-loaded source-frame thumbnail (existing observer integration).
+      var thumb = card.querySelector(".clip-card-thumb");
       var img = document.createElement("img");
       img.alt = "";
       img.draggable = false;
-      thumb.appendChild(img);
+      thumb.insertBefore(img, thumb.firstChild);
       ssObserveThumb(card, img, thumb, c.participant, c.start);
-      thumb.appendChild(el("span", "queue-card-duration", formatDuration(segDuration)));
 
-      var detDot = el("span", "intake-card-det-dot");
-      detDot.style.background = "var(--color-task-" + c.detector + ", #888)";
-      thumb.appendChild(detDot);
-
-      // Source + cross-reference badges (SS self-badge leads the stack)
+      // Cross-reference badges layered over the thumb.
       var xref = findOverlappingData(c.participant, c.start, c.end);
       var ssSelf = { icon: XREF_BADGES.screenspace.icon, color: XREF_BADGES.screenspace.color, title: c.event_type || "Screenspace" };
       var badgeStack = buildXrefBadges(xref, "screenspace", ssSelf);
@@ -3692,30 +3794,6 @@
       if (xref.transcriptSnippets.length > 0) {
         card.dataset.transcriptContext = xref.transcriptSnippets.map(function (s) { return s.text; }).join("\n");
       }
-
-      card.appendChild(thumb);
-
-      var meta = el("div", "queue-card-meta");
-      meta.appendChild(el("span", "queue-card-ref",
-        c.participant + " \u00b7 " + (c.event_type || "intake")));
-      card.appendChild(meta);
-
-      // Drag support
-      (function (cluster) {
-        card.addEventListener("dragstart", function (ev) {
-          ev.dataTransfer.setData("application/json", JSON.stringify({
-            participant: cluster.participant,
-            desc: cluster.event_type,
-            start: cluster.start,
-            end: cluster.end,
-            source: "screenspace",
-            event_type: cluster.event_type,
-            event_ids: cluster.events.map(function (e) { return e.id; }),
-          }));
-          ev.dataTransfer.effectAllowed = "copyMove";
-          setCardDragImage(ev, this);
-        });
-      })(c);
 
       container.appendChild(card);
     });
@@ -3779,17 +3857,6 @@
   }
 
   function initIntake() {
-    // Set mask-image on filter pill icons
-    var iconSpans = qsa(".intake-det-icon");
-    for (var k = 0; k < iconSpans.length; k++) {
-      var iconName = iconSpans[k].dataset.icon;
-      if (iconName) {
-        var iconUrl = 'url("../screenspace/icons/' + iconName + '.svg")';
-        iconSpans[k].style.maskImage = iconUrl;
-        iconSpans[k].style.webkitMaskImage = iconUrl;
-      }
-    }
-
     var intakeCards = qs("#intakeCards");
 
     // Click: normal = Artifacts, shift = Reel
@@ -3813,14 +3880,15 @@
       if (cluster) intakeDismissCluster(cluster);
     });
 
-    // Card hover → highlight timeline marker + transcript tooltip
+    // Card hover → highlight + transcript tooltip + timeline marker
     intakeCards.addEventListener("mouseover", function (e) {
       var card = e.target.closest(".intake-queue-card");
       if (!card) return;
       var idx = parseInt(card.dataset.intakeIdx);
       if (state.intakeHoveredIdx !== idx) {
         state.intakeHoveredIdx = idx;
-        renderIntakeTimeline();
+        highlightIntakeCard(idx);
+        if (_intakeDensityEl) _intakeDensityEl.setHovered(idx);
       }
       var trTooltip = qs("#trIntakeTooltip");
       if (trTooltip && state.trIntakeTooltipsEnabled) {
@@ -3837,43 +3905,11 @@
     intakeCards.addEventListener("mouseleave", function () {
       if (state.intakeHoveredIdx !== -1) {
         state.intakeHoveredIdx = -1;
-        renderIntakeTimeline();
+        highlightIntakeCard(-1);
+        if (_intakeDensityEl) _intakeDensityEl.setHovered(-1);
       }
       var trTooltip = qs("#trIntakeTooltip");
       if (trTooltip) trTooltip.classList.add("hidden");
-    });
-
-    // Timeline canvas interactions
-    var intakeCanvas = qs("#intakeTimeline");
-    intakeCanvas.addEventListener("mousemove", function (e) {
-      var rect = intakeCanvas.getBoundingClientRect();
-      var mx = (e.clientX - rect.left);
-      var my = (e.clientY - rect.top);
-      var hit = intakeHitTest(mx, my);
-      var idx = hit ? hit.clusterIdx : -1;
-      if (state.intakeHoveredIdx !== idx) {
-        state.intakeHoveredIdx = idx;
-        renderIntakeTimeline();
-        highlightIntakeCard(idx);
-      }
-    });
-    intakeCanvas.addEventListener("mouseleave", function () {
-      if (state.intakeHoveredIdx !== -1) {
-        state.intakeHoveredIdx = -1;
-        renderIntakeTimeline();
-        highlightIntakeCard(-1);
-      }
-    });
-    intakeCanvas.addEventListener("click", function (e) {
-      var rect = intakeCanvas.getBoundingClientRect();
-      var mx = e.clientX - rect.left;
-      var my = e.clientY - rect.top;
-      var hit = intakeHitTest(mx, my);
-      if (!hit) return;
-      var cluster = filteredIntakeClusters()[hit.clusterIdx];
-      if (!cluster) return;
-      if (e.shiftKey) intakeAddToReel(cluster);
-      else intakeAddToArtifacts(cluster);
     });
 
     qs("#intakeAddAllBtn").addEventListener("click", function () {
@@ -3888,7 +3924,7 @@
       renderIntake(false);
     });
 
-    // Filter controls
+    // Search + "New only" toggle
     var searchEl = qs("#intakeFilterSearch");
     var _intakeSearchTimer = 0;
     if (searchEl) {
@@ -3896,30 +3932,6 @@
         state.intakeFilterText = this.value;
         clearTimeout(_intakeSearchTimer);
         _intakeSearchTimer = setTimeout(function () { renderIntake(false); }, 250);
-      });
-    }
-    var detBtns = qsa(".intake-filter-det");
-    for (var i = 0; i < detBtns.length; i++) {
-      detBtns[i].addEventListener("click", function () {
-        var val = this.dataset.detector || "";
-        state.intakeFilterDetector = state.intakeFilterDetector === val ? "" : val;
-        var all = qsa(".intake-filter-det");
-        for (var j = 0; j < all.length; j++) all[j].classList.remove("active");
-        if (state.intakeFilterDetector) this.classList.add("active");
-        renderIntake(false);
-      });
-    }
-    var partContainer = qs("#intakeFilterParticipants");
-    if (partContainer) {
-      partContainer.addEventListener("click", function (e) {
-        var btn = e.target.closest(".intake-filter-participant");
-        if (!btn) return;
-        var val = btn.dataset.participant;
-        var idx = state.intakeFilterParticipants.indexOf(val);
-        if (idx === -1) state.intakeFilterParticipants.push(val);
-        else state.intakeFilterParticipants.splice(idx, 1);
-        syncParticipantPillStates();
-        renderIntake(false);
       });
     }
     var newToggle = qs("#intakeFilterNew");
@@ -4093,87 +4105,133 @@
     if (addAllBtn) addAllBtn.disabled = filtered.length === 0;
     if (reelAllBtn) reelAllBtn.disabled = filtered.length === 0;
 
+    buildTrIntakeCategoryPills();
     buildTrIntakeParticipantPills();
+    buildTrIntakeDensityTimeline(filtered);
 
     if (filtered.length === 0) {
       container.innerHTML = '<div class="drop-target-empty">Transcript marks will appear here</div>';
-      renderTrIntakeTimeline();
       return;
     }
 
     container.innerHTML = "";
-    for (var i = 0; i < filtered.length; i++) {
-      var c = filtered[i];
-      var card = document.createElement("div");
-      card.className = "queue-card intake-queue-card tr-intake-queue-card";
-      card.draggable = true;
-      card.dataset.trIntakeIdx = i;
-
-      // Thumbnail area with frame, category dot, and duration
-      var thumb = document.createElement("div");
-      thumb.className = "queue-card-thumb";
-
+    filtered.forEach(function (c, i) {
       var segDuration = Math.max(0, c.end - c.start);
+      var labelKey = c.category || "bookmark";
+      var labelText = (TR_INTAKE_CATEGORIES[labelKey] || TR_INTAKE_CATEGORIES.bookmark).label;
+      var rangeStr = formatDuration(c.start) + "\u2013" + formatDuration(c.end);
+      var snippet = c.label || c.text || "";
+
+      var card = ClipgenPrimitives.createTranscriptCard({
+        participant: c.participant,
+        timeRange: rangeStr,
+        duration: formatDuration(segDuration),
+        label: labelText,
+        text: snippet,
+        hue: categoryHue(labelKey),
+        dataset: { trIntakeIdx: i },
+        onDragStart: function (ev) {
+          ev.dataTransfer.setData("application/json", JSON.stringify({
+            participant: c.participant,
+            desc: c.category || "transcript",
+            start: c.start,
+            end: c.end,
+            source: "transcript",
+            mark_ids: c.marks.map(function (m) { return m.id; }),
+          }));
+          ev.dataTransfer.effectAllowed = "copyMove";
+          setCardDragImage(ev, this);
+        },
+      });
+      card.classList.add("queue-card", "intake-queue-card", "tr-intake-queue-card");
+
+      // Lazy-loaded source-frame thumbnail
+      var thumb = card.querySelector(".transcript-card-thumb");
       var img = document.createElement("img");
       img.alt = "";
       img.draggable = false;
-      thumb.appendChild(img);
+      thumb.insertBefore(img, thumb.firstChild);
       ssObserveThumb(card, img, thumb, c.participant, c.start);
 
-      var dot = document.createElement("span");
-      dot.className = "tr-intake-card-category-dot";
-      dot.style.background = "var(" + (TR_INTAKE_CATEGORIES[c.category] || TR_INTAKE_CATEGORIES.bookmark).token + ")";
-      thumb.appendChild(dot);
-
-      var dur = document.createElement("span");
-      dur.className = "queue-card-duration";
-      dur.textContent = formatDuration(segDuration);
-      thumb.appendChild(dur);
-
-      // Source + cross-reference badges (TR self-badge leads the stack)
+      // Cross-reference badges
       var xref = findOverlappingData(c.participant, c.start, c.end);
       var trSelf = { icon: XREF_BADGES.transcript.icon, color: XREF_BADGES.transcript.color, title: c.label || c.category || "Transcript" };
       var badgeStack = buildXrefBadges(xref, "transcript", trSelf);
       if (badgeStack) thumb.appendChild(badgeStack);
 
-      card.appendChild(thumb);
-
-      // Metadata
-      var meta = document.createElement("div");
-      meta.className = "queue-card-meta";
-      var ref = document.createElement("span");
-      ref.className = "queue-card-ref";
-      ref.textContent = c.participant + " \u00b7 " + formatDuration(c.start) + "\u2013" + formatDuration(c.end);
-      meta.appendChild(ref);
-
-      // Text snippet
-      var textSnippet = document.createElement("span");
-      textSnippet.className = "tr-intake-card-text";
-      var txt = c.label || c.text || "";
-      textSnippet.textContent = txt.length > 80 ? txt.substring(0, 80) + "\u2026" : txt;
-      meta.appendChild(textSnippet);
-      card.appendChild(meta);
-
-      // Drag support
-      (function (cluster) {
-        card.addEventListener("dragstart", function (ev) {
-          ev.dataTransfer.setData("application/json", JSON.stringify({
-            participant: cluster.participant,
-            desc: cluster.category || "transcript",
-            start: cluster.start,
-            end: cluster.end,
-            source: "transcript",
-            mark_ids: cluster.marks.map(function (m) { return m.id; }),
-          }));
-          ev.dataTransfer.effectAllowed = "copyMove";
-          setCardDragImage(ev, this);
-        });
-      })(c);
-
       container.appendChild(card);
-    }
+    });
+  }
 
-    renderTrIntakeTimeline();
+  function buildTrIntakeCategoryPills() {
+    var container = qs("#trIntakeCategoryPills");
+    if (!container) return;
+    var cats = Object.keys(TR_INTAKE_CATEGORIES);
+    var counts = {};
+    state.trIntakeClusters.forEach(function (c) {
+      var k = c.category || "bookmark";
+      counts[k] = (counts[k] || 0) + 1;
+    });
+    container.innerHTML = "";
+    cats.forEach(function (key) {
+      var cat = TR_INTAKE_CATEGORIES[key];
+      var chip = ClipgenPrimitives.createFilterChip({
+        label: cat.label,
+        active: state.trIntakeFilterCategory === key,
+        count: counts[key] || 0,
+        hue: categoryHue(key),
+        onClick: function () {
+          state.trIntakeFilterCategory = state.trIntakeFilterCategory === key ? "" : key;
+          renderTranscriptIntake();
+        },
+      });
+      container.appendChild(chip);
+    });
+  }
+
+  var _trIntakeDensityEl = null;
+
+  function buildTrIntakeDensityTimeline(filtered) {
+    var host = qs("#trIntakeTimeline");
+    if (!host) return;
+    host.innerHTML = "";
+    _trIntakeDensityEl = null;
+    if (!filtered.length) return;
+    var maxEnd = 0;
+    for (var i = 0; i < filtered.length; i++) {
+      if (filtered[i].end > maxEnd) maxEnd = filtered[i].end;
+    }
+    var duration = Math.max(maxEnd * 1.05, 60);
+    var events = filtered.map(function (c) {
+      return {
+        t: duration > 0 ? c.start / duration : 0,
+        count: c.marks ? c.marks.length : 1,
+        hue: categoryHue(c.category || "bookmark"),
+      };
+    });
+    var dt = ClipgenPrimitives.createDensityTimeline({
+      events: events,
+      durationSec: duration,
+      tickCount: 6,
+      onBarMouseEnter: function (idx) {
+        state.trIntakeHoveredIdx = idx;
+        highlightTrIntakeCard(idx);
+        if (_trIntakeDensityEl) _trIntakeDensityEl.setHovered(idx);
+      },
+      onBarMouseLeave: function () {
+        state.trIntakeHoveredIdx = -1;
+        highlightTrIntakeCard(-1);
+        if (_trIntakeDensityEl) _trIntakeDensityEl.setHovered(-1);
+      },
+      onBarClick: function (idx, ev) {
+        var cluster = filteredTranscriptIntakeClusters()[idx];
+        if (!cluster) return;
+        if (ev && ev.shiftKey) trIntakeAddToReel(cluster);
+        else trIntakeAddToArtifacts(cluster);
+      },
+    });
+    _trIntakeDensityEl = dt;
+    host.appendChild(dt);
   }
 
   function trIntakeAddToArtifacts(cluster) {
@@ -4208,116 +4266,23 @@
       pids[state.trIntakeClusters[i].participant] = true;
     }
     var sorted = Object.keys(pids).sort();
+    state.trIntakeFilterParticipants = state.trIntakeFilterParticipants.filter(function (p) {
+      return pids[p];
+    });
     container.innerHTML = "";
-    for (var j = 0; j < sorted.length; j++) {
-      var btn = document.createElement("button");
-      btn.className = "intake-filter-participant" + (state.trIntakeFilterParticipants.indexOf(sorted[j]) >= 0 ? " active" : "");
-      btn.textContent = sorted[j];
-      btn.dataset.participant = sorted[j];
-      container.appendChild(btn);
-    }
-  }
-
-  function sizeTrIntakeCanvas() {
-    var canvas = qs("#trIntakeTimeline");
-    if (!canvas) return;
-    var w = canvas.clientWidth;
-    if (w <= 0) return;
-    var dpr = window.devicePixelRatio || 1;
-    canvas.width = w * dpr;
-    canvas.height = 48 * dpr;
-    var ctx = canvas.getContext("2d");
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    renderTrIntakeTimeline();
-  }
-
-  function renderTrIntakeTimeline() {
-    var canvas = qs("#trIntakeTimeline");
-    if (!canvas) return;
-    var ctx = canvas.getContext("2d");
-    var dpr = window.devicePixelRatio || 1;
-    var w = canvas.width / dpr;
-    var h = canvas.height / dpr;
-    if (w <= 0 || h <= 0) return;
-
-    var cs = getComputedStyle(document.documentElement);
-    var surfaceAlt = cs.getPropertyValue("--color-surface-alt").trim() || "#f1ece4";
-    var borderColor = cs.getPropertyValue("--color-border").trim() || "#e0ddd7";
-    var textDim = cs.getPropertyValue("--color-text-dim").trim() || "#888";
-    var fontMono = cs.getPropertyValue("--font-mono").trim() || "monospace";
-
-    ctx.clearRect(0, 0, w, h);
-    ctx.fillStyle = surfaceAlt;
-    ctx.fillRect(0, 0, w, h);
-
-    var filtered = filteredTranscriptIntakeClusters();
-    if (!filtered.length) {
-      ctx.fillStyle = textDim;
-      ctx.font = "12px -apple-system, sans-serif";
-      ctx.textAlign = "center";
-      ctx.fillText("No marks", w / 2, h / 2 + 4);
-      ctx.textAlign = "start";
-      _trIntakeHitRects = [];
-      return;
-    }
-
-    var maxEnd = 0;
-    for (var i = 0; i < filtered.length; i++) {
-      if (filtered[i].end > maxEnd) maxEnd = filtered[i].end;
-    }
-    var duration = Math.max(maxEnd * 1.05, 60);
-
-    function timeToX(t) {
-      return (t / duration) * w;
-    }
-
-    // Time ruler ticks
-    var tickInterval = intakeComputeTickInterval(duration);
-    var firstTick = Math.ceil(0 / tickInterval) * tickInterval;
-    ctx.strokeStyle = borderColor;
-    ctx.fillStyle = textDim;
-    ctx.font = "10px " + fontMono;
-    ctx.textAlign = "center";
-    ctx.lineWidth = 1;
-    for (var t = firstTick; t <= duration; t += tickInterval) {
-      var x = timeToX(t);
-      ctx.beginPath();
-      ctx.moveTo(x, 0);
-      ctx.lineTo(x, 8);
-      ctx.stroke();
-      ctx.fillText(formatDuration(t), x, 18);
-    }
-    ctx.textAlign = "start";
-
-    // Cluster markers
-    var markerY = 22;
-    var markerH = h - markerY - 4;
-    _trIntakeHitRects = [];
-
-    for (var ci = 0; ci < filtered.length; ci++) {
-      var c = filtered[ci];
-      var color = trIntakeCategoryColor(c.category);
-      var highlighted = state.trIntakeHoveredIdx === ci;
-      var dimmed = state.trIntakeHoveredIdx !== -1 && !highlighted;
-      var alpha = highlighted ? 0.85 : (dimmed ? 0.15 : 0.5);
-
-      var x1 = timeToX(c.start);
-      var x2 = timeToX(c.end);
-      var mw = Math.max(x2 - x1, 3);
-
-      ctx.fillStyle = hexToRgba(color, alpha);
-      ctx.fillRect(x1, markerY, mw, markerH);
-
-      _trIntakeHitRects.push({ x1: x1, x2: x1 + mw, y: markerY, h: markerH, clusterIdx: ci });
-    }
-  }
-
-  function trIntakeHitTest(mx, my) {
-    for (var i = _trIntakeHitRects.length - 1; i >= 0; i--) {
-      var hr = _trIntakeHitRects[i];
-      if (mx >= hr.x1 && mx <= hr.x2 && my >= hr.y && my <= hr.y + hr.h) return hr;
-    }
-    return null;
+    sorted.forEach(function (p) {
+      var pill = ClipgenPrimitives.createParticipantPill({
+        id: p,
+        active: state.trIntakeFilterParticipants.indexOf(p) !== -1,
+        onClick: function () {
+          var idx = state.trIntakeFilterParticipants.indexOf(p);
+          if (idx === -1) state.trIntakeFilterParticipants.push(p);
+          else state.trIntakeFilterParticipants.splice(idx, 1);
+          renderTranscriptIntake();
+        },
+      });
+      container.appendChild(pill);
+    });
   }
 
   function highlightTrIntakeCard(idx) {
@@ -4325,7 +4290,6 @@
     for (var i = 0; i < cards.length; i++) {
       if (i === idx) {
         cards[i].classList.add("intake-highlight");
-        cards[i].scrollIntoView({ block: "nearest", behavior: "smooth" });
       } else {
         cards[i].classList.remove("intake-highlight");
       }
@@ -4368,14 +4332,15 @@
         .catch(function () {});
     });
 
-    // Card hover → highlight timeline marker + tooltip
+    // Card hover → highlight + tooltip + timeline marker
     trIntakeCards.addEventListener("mouseover", function (e) {
       var card = e.target.closest(".tr-intake-queue-card");
       if (!card) return;
       var idx = parseInt(card.dataset.trIntakeIdx);
       if (state.trIntakeHoveredIdx !== idx) {
         state.trIntakeHoveredIdx = idx;
-        renderTrIntakeTimeline();
+        highlightTrIntakeCard(idx);
+        if (_trIntakeDensityEl) _trIntakeDensityEl.setHovered(idx);
       }
       if (trTooltip && state.trIntakeTooltipsEnabled) {
         var cluster = filteredTranscriptIntakeClusters()[idx];
@@ -4392,45 +4357,11 @@
     trIntakeCards.addEventListener("mouseleave", function () {
       if (state.trIntakeHoveredIdx !== -1) {
         state.trIntakeHoveredIdx = -1;
-        renderTrIntakeTimeline();
+        highlightTrIntakeCard(-1);
+        if (_trIntakeDensityEl) _trIntakeDensityEl.setHovered(-1);
       }
       if (trTooltip) trTooltip.classList.add("hidden");
     });
-
-    // Timeline canvas interactions
-    var trIntakeCanvas = qs("#trIntakeTimeline");
-    if (trIntakeCanvas) {
-      trIntakeCanvas.addEventListener("mousemove", function (e) {
-        var rect = trIntakeCanvas.getBoundingClientRect();
-        var mx = e.clientX - rect.left;
-        var my = e.clientY - rect.top;
-        var hit = trIntakeHitTest(mx, my);
-        var idx = hit ? hit.clusterIdx : -1;
-        if (state.trIntakeHoveredIdx !== idx) {
-          state.trIntakeHoveredIdx = idx;
-          renderTrIntakeTimeline();
-          highlightTrIntakeCard(idx);
-        }
-      });
-      trIntakeCanvas.addEventListener("mouseleave", function () {
-        if (state.trIntakeHoveredIdx !== -1) {
-          state.trIntakeHoveredIdx = -1;
-          renderTrIntakeTimeline();
-          highlightTrIntakeCard(-1);
-        }
-      });
-      trIntakeCanvas.addEventListener("click", function (e) {
-        var rect = trIntakeCanvas.getBoundingClientRect();
-        var mx = e.clientX - rect.left;
-        var my = e.clientY - rect.top;
-        var hit = trIntakeHitTest(mx, my);
-        if (!hit) return;
-        var cluster = filteredTranscriptIntakeClusters()[hit.clusterIdx];
-        if (!cluster) return;
-        if (e.shiftKey) trIntakeAddToReel(cluster);
-        else trIntakeAddToArtifacts(cluster);
-      });
-    }
 
     // Cluster threshold change
     var thresholdInput = qs("#trIntakeClusterThreshold");
@@ -4446,54 +4377,6 @@
       showAllToggle.addEventListener("change", function () {
         state.trIntakeShowAll = this.checked;
         pollTranscriptIntakeMarks();
-      });
-    }
-
-    // Category pills
-    var catPills = qs("#trIntakeCategoryPills");
-    if (catPills) {
-      var cats = Object.keys(TR_INTAKE_CATEGORIES);
-      for (var i = 0; i < cats.length; i++) {
-        (function (key) {
-          var cat = TR_INTAKE_CATEGORIES[key];
-          var btn = document.createElement("button");
-          btn.className = "intake-filter-det tr-intake-filter-cat";
-          btn.style.setProperty("--det-color", "var(" + cat.token + ")");
-          btn.textContent = cat.label;
-          btn.dataset.category = key;
-          btn.addEventListener("click", function () {
-            if (state.trIntakeFilterCategory === key) {
-              state.trIntakeFilterCategory = "";
-              btn.classList.remove("active");
-            } else {
-              state.trIntakeFilterCategory = key;
-              var all = catPills.querySelectorAll(".tr-intake-filter-cat");
-              for (var j = 0; j < all.length; j++) all[j].classList.remove("active");
-              btn.classList.add("active");
-            }
-            renderTranscriptIntake();
-          });
-          catPills.appendChild(btn);
-        })(cats[i]);
-      }
-    }
-
-    // Participant pills (delegated)
-    var partPills = qs("#trIntakeFilterParticipants");
-    if (partPills) {
-      partPills.addEventListener("click", function (e) {
-        var btn = e.target.closest(".intake-filter-participant");
-        if (!btn) return;
-        var pid = btn.dataset.participant;
-        var idx = state.trIntakeFilterParticipants.indexOf(pid);
-        if (idx >= 0) {
-          state.trIntakeFilterParticipants.splice(idx, 1);
-          btn.classList.remove("active");
-        } else {
-          state.trIntakeFilterParticipants.push(pid);
-          btn.classList.add("active");
-        }
-        renderTranscriptIntake();
       });
     }
 
@@ -4568,15 +4451,31 @@
       if (el) el.click();
     }
     window.ClipgenTopNav.setQuickActions([
-      { icon: "film", label: "Open Timeline", action: function () { clickIfExists("buildTimelineViewerBtn"); } },
-      { icon: "photo", label: "Open Gallery", action: function () { clickIfExists("galleryBtn"); } },
+      { icon: "film", label: "Open Timeline", action: onBuildTimelineViewer },
+      { icon: "photo", label: "Open Gallery", action: openGalleryDialog },
       { icon: "arrow-path", label: "Refresh sheet", action: function () { clickIfExists("refreshSheet"); } },
-      { divider: true },
-      { icon: "adjustments-horizontal", label: "Filter rows", action: function () { clickIfExists("filterToggle"); } },
     ]);
   }
 
+  // Apply mask-image to every static [data-icon] element (mirrors what
+  // createBtn does for primitives — needed for the bottom-strip toolbar
+  // buttons that are written as static HTML).
+  function applyDataIconMasks() {
+    var nodes = qsa("[data-icon]");
+    for (var i = 0; i < nodes.length; i++) {
+      var name = nodes[i].dataset.icon;
+      if (!name) continue;
+      var url = 'url("icons/' + name + '.svg")';
+      nodes[i].style.maskImage = url;
+      nodes[i].style.webkitMaskImage = url;
+    }
+  }
+
   document.addEventListener("DOMContentLoaded", function () {
+    applyDataIconMasks();
+    readPersistedSidebarOpen();
+    setActiveTabAttr(state.activePreviewTab);
+    bindSidebarToggle();
     initThemeToggle();
     initTooltipToggle();
     initFilterToggle();
@@ -4602,8 +4501,6 @@
     state.trIntakeStatusTimer = setInterval(pollTrIntakeStatus, 5000);
     window.addEventListener("resize", function () {
       computeGridMaxHeight();
-      sizeIntakeCanvas();
-      sizeTrIntakeCanvas();
       if (window.convergenceResize) window.convergenceResize();
       if (window.metadataResize) window.metadataResize();
     });

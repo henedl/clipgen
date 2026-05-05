@@ -133,7 +133,6 @@ STASHES_MANIFEST_FILENAME: str = "reel_stashes.json"
 ARTIFACT_STASHES_MANIFEST_FILENAME: str = "artifact_stashes.json"
 STUDIO_SETTINGS_FILENAME: str = "studio_settings.json"
 STUDIO_CELL_EXPAND_HOVER: bool = True
-STUDIO_SHEET_CELL_COLOR_CODING: bool = True
 GOOGLE_API_MAX_RETRIES: int = 3  # Retries for transient Google API errors (5xx)
 
 STUDIO_THUMBNAIL_WIDTH: int = 200
@@ -294,7 +293,6 @@ SETTINGS_DESCRIPTIONS: dict[str, str] = {
     "HIGHLIGHTS_REEL_DURATION_SECONDS": "Maximum duration in seconds for the highlights reel time budget.",
     "MANIFEST_ENABLED": "Write a manifest JSON file alongside generated artifacts for session tracking.",
     "STUDIO_CELL_EXPAND_HOVER": "Expand overflowing timestamp cells on hover in the Sheet Preview.",
-    "STUDIO_SHEET_CELL_COLOR_CODING": "Color-code timestamp cell text by row severity, with intensity reflecting clip duration.",
     "FILMSTRIP_ENABLED": "Show thumbnail images on timeline markers instead of solid colors (in the HTML viewer).",
     "GALLERY_BUNDLE_ENABLED": "Embed gallery images as base64 data URIs in the HTML file, making it fully self-contained.",
     "CLIP_PARALLEL_WORKERS": "Number of concurrent ffmpeg processes for clip generation. 0 = auto, 1 = sequential.",
@@ -318,11 +316,6 @@ STUDIO_SETTINGS: dict[str, dict[str, Any]] = {
         "step": 1,
     },
     "STUDIO_CELL_EXPAND_HOVER": {
-        "tab": "General",
-        "group": "Sheet Preview",
-        "type": "bool",
-    },
-    "STUDIO_SHEET_CELL_COLOR_CODING": {
         "tab": "General",
         "group": "Sheet Preview",
         "type": "bool",

@@ -55,61 +55,8 @@ body {
   overflow: hidden;
 }
 
-/* Header */
-
-#studioHeader {
-  flex-shrink: 0;
-  padding: var(--space-5) var(--layout-padding-x) var(--space-3);
-  max-width: var(--layout-max-width);
-  width: 100%;
-  margin: var(--space-5) auto 0;
-  background: var(--color-panel-bg);
-  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
-  border: 1px solid var(--color-panel-border);
-  border-bottom: none;
-  box-shadow: var(--shadow-xl);
-}
-
-#studioHeaderTop {
-  display: flex;
-  align-items: center;
-  gap: var(--space-4);
-}
-
-#headerActions {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  margin-left: auto;
-}
-
 .hidden {
   display: none !important;
-}
-
-#studioHeader h1 {
-  font-size: var(--text-xl);
-  font-weight: 600;
-  letter-spacing: -0.01em;
-}
-
-.header-light {
-  font-weight: 400;
-  color: var(--color-text-dim);
-}
-
-#headerMeta {
-  display: flex;
-  gap: var(--space-5);
-  margin-top: var(--space-1);
-  font-size: var(--text-sm);
-  color: var(--color-text-dim);
-}
-
-#headerMeta span {
-  display: flex;
-  align-items: center;
-  gap: var(--space-1);
 }
 
 /* Theme toggle (matches viewer.css) */
@@ -233,17 +180,216 @@ body {
 /* Sheet preview */
 
 #sheetPreview {
-  flex: 0 1 auto;
+  flex: 1 1 auto;
   min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: row;
+  background: var(--color-panel-bg);
+}
+
+#sheetMain {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
   display: flex;
   flex-direction: column;
-  max-width: var(--layout-max-width);
-  width: 100%;
-  margin: 0 auto;
-  background: var(--color-panel-bg);
-  border-left: 1px solid var(--color-panel-border);
-  border-right: 1px solid var(--color-panel-border);
-  padding: 0 var(--space-5) var(--space-5);
+  overflow: hidden;
+}
+
+/* Intake / convergence / metadata sub-tabs need their own breathing room since
+ * #sheetMain is now flush. Sheet sub-tab keeps its table flush to viewport
+ * edges (matches prototype). */
+#intakePanel,
+#trIntakePanel,
+#convergencePanel,
+#metadataPanel {
+  padding: var(--space-3) var(--space-4);
+}
+
+/* Sub-tab panels are flex children of #sheetMain. Without explicit
+ * min-width/height: 0 they inherit `min-*: auto` (= content size), and a wide
+ * fixed-layout table or canvas can force the panel out of its flex allocation
+ * — which broke the layout the moment the sheet sidebar expanded. */
+#sheetGrid,
+#intakePanel,
+#trIntakePanel,
+#convergencePanel,
+#metadataPanel {
+  min-width: 0;
+}
+
+/* ---- Sheet sidebar ---- */
+
+#studioSidebar {
+  flex: 0 0 220px;
+  display: flex;
+  flex-direction: column;
+  padding: var(--space-3) 0;
+  background: var(--bg);
+  border-right: 1px solid var(--hairline);
+  overflow: hidden;
+  transition: flex-basis 180ms ease-out;
+}
+#studioSidebar[data-open="false"] {
+  flex-basis: 32px;
+}
+#studioSidebar[data-open="false"] .studio-sidebar-section {
+  display: none;
+}
+
+#studioSidebarToggle {
+  align-self: flex-end;
+  width: 22px;
+  height: 22px;
+  margin: 0 8px 4px;
+  padding: 0;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--fg-muted);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: background-color var(--duration-fast), color var(--duration-fast);
+  flex-shrink: 0;
+}
+#studioSidebarToggle:hover {
+  background: var(--bg-hover);
+  color: var(--fg);
+}
+.studio-sidebar-toggle-icon {
+  display: inline-block;
+  width: 11px;
+  height: 11px;
+  background-color: currentColor;
+  mask-image: url("icons/chevron-double-left.svg");
+  mask-size: contain;
+  mask-repeat: no-repeat;
+  mask-position: center;
+  -webkit-mask-image: url("icons/chevron-double-left.svg");
+  -webkit-mask-size: contain;
+  -webkit-mask-repeat: no-repeat;
+  -webkit-mask-position: center;
+  transition: transform 180ms ease-out;
+}
+#studioSidebar[data-open="false"] .studio-sidebar-toggle-icon {
+  transform: rotate(180deg);
+}
+
+.studio-sidebar-section {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.studio-sidebar-section + .studio-sidebar-section {
+  margin-top: var(--space-4);
+}
+.studio-sidebar-section[data-section="participants"] {
+  margin-top: auto;
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--hairline);
+}
+
+.studio-sidebar-header {
+  padding: 0 16px 6px;
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--fg-faint);
+}
+
+/* Vertical-list layout for VIEWS / CATEGORIES — each option a full-width row. */
+.studio-sidebar-section[data-section="views"] .studio-sidebar-body,
+.studio-sidebar-section[data-section="categories"] .studio-sidebar-body {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.studio-sidebar-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 16px;
+  font-size: 12.5px;
+  font-family: inherit;
+  font-weight: inherit;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  border-left: 2px solid transparent;
+  color: var(--fg-muted);
+  cursor: pointer;
+  user-select: none;
+  transition: background-color 120ms ease-out, color 120ms ease-out, border-color 120ms ease-out;
+}
+.studio-sidebar-row:hover {
+  background: var(--bg-hover);
+  color: var(--fg);
+}
+.studio-sidebar-row.is-active {
+  background: var(--bg-hover);
+  color: var(--fg);
+  border-left-color: var(--accent);
+}
+.studio-sidebar-row-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: var(--radius-full);
+  background: currentColor;
+  flex-shrink: 0;
+}
+.studio-sidebar-row-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.studio-sidebar-row-count {
+  font-family: var(--font-mono);
+  font-feature-settings: "tnum";
+  font-size: 11px;
+  color: var(--fg-faint);
+  flex-shrink: 0;
+}
+
+/* Compact 6-col grid for PARTICIPANTS. */
+.studio-sidebar-section[data-section="participants"] .studio-sidebar-body {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 3px;
+  padding: 0 16px;
+}
+.studio-sidebar-pill {
+  font-family: var(--font-mono);
+  font-feature-settings: "tnum";
+  font-size: 9px;
+  padding: 4px 0;
+  text-align: center;
+  background: var(--bg-input);
+  color: var(--fg-muted);
+  border: 1px solid transparent;
+  border-radius: 2px;
+  cursor: pointer;
+  user-select: none;
+  transition: background-color 120ms ease-out, color 120ms ease-out, border-color 120ms ease-out;
+}
+.studio-sidebar-pill:hover {
+  color: var(--fg);
+  background: var(--bg-hover);
+}
+.studio-sidebar-pill.is-active {
+  background: var(--bg-active);
+  color: var(--fg);
+  border-color: var(--border-strong);
+}
+
+/* When the sheet sub-tab is not active, hide the sidebar entirely. */
+body[data-active-tab]:not([data-active-tab="sheet"]) #studioSidebar {
+  display: none;
 }
 
 #sheetPreview h3 {
@@ -253,9 +399,7 @@ body {
   padding-top: var(--space-2);
 }
 
-/* The .sheet-preview-header / .preview-tabs container moved out of #sheetPreview
- * into #studioSubheader. Sub-tab styling now follows the prototype's underline
- * pattern: 1px line flush with the subheader's bottom border. */
+/* Sub-tab underline-on-active styling (matches the prototype). */
 
 .preview-tab {
   display: inline-flex;
@@ -560,28 +704,23 @@ body {
 
 #sheetGrid {
   overflow: auto;
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius);
+  border-top: 1px solid var(--hairline);
   user-select: none;
 }
 
 #sheetGrid table {
   width: 100%;
   border-collapse: collapse;
-  font-size: var(--text-xs);
+  font-size: 12.5px;
   table-layout: fixed;
 }
 
 /* Panel divider (resizable handle between sheet preview and bottom panel) */
 
 #panelDivider {
-  max-width: var(--layout-max-width);
-  width: 100%;
-  margin: 0 auto;
   height: 12px;
   background: var(--color-panel-bg);
-  border-left: 1px solid var(--color-panel-border);
-  border-right: 1px solid var(--color-panel-border);
+  border-top: 1px solid var(--hairline);
   cursor: row-resize;
   display: flex;
   align-items: center;
@@ -646,18 +785,35 @@ body.bottom-animating #stashedArtifactsArea {
   position: sticky;
   top: 0;
   z-index: var(--z-float);
-  background: var(--color-surface-alt);
-  border-bottom: 2px solid var(--color-border);
-  padding: var(--space-2) var(--space-3);
-  text-align: left;
-  font-weight: 600;
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+  border-right: 1px solid var(--hairline);
+  padding: 8px 10px;
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  text-align: center;
+  color: var(--fg-faint);
   white-space: nowrap;
+}
+#sheetGrid thead th:last-child {
+  border-right: 0;
 }
 
 #sheetGrid tbody td {
-  padding: var(--space-2) var(--space-3);
-  border-bottom: 1px solid var(--color-border);
-  vertical-align: top;
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--hairline);
+  border-right: 1px solid var(--hairline);
+  font-size: 12px;
+  text-align: center;
+  color: var(--fg-muted);
+  vertical-align: middle;
+  white-space: nowrap;
+  overflow: hidden;
+}
+#sheetGrid tbody td:last-child {
+  border-right: 0;
 }
 
 .col-row-num {
@@ -722,23 +878,22 @@ body.bottom-animating #stashedArtifactsArea {
 }
 
 .col-observation {
-  overflow: hidden;
+  text-align: left;
+  color: var(--fg);
   text-overflow: ellipsis;
-  white-space: nowrap;
+  max-width: 280px;
 }
 
 .col-category {
-  overflow: hidden;
+  text-align: left;
+  color: var(--fg-muted);
   text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--color-text-dim);
-  font-size: var(--text-sm);
 }
 
 /* Severity rendered as a pill (locked variant per redesign). The .col-severity
  * td is just a layout container; the pill lives inside as a span chain. */
 .col-severity {
-  font-size: 12px;
+  text-align: left;
 }
 
 .sev-pill {
@@ -837,7 +992,8 @@ col.col-participant-col {
 .ts-cell {
   cursor: pointer;
   text-align: center;
-  padding: 4px;
+  padding: 0 4px;
+  height: 30px;
   transition: background-color var(--duration-fast) ease;
   user-select: none;
   vertical-align: middle;
@@ -857,39 +1013,62 @@ col.col-participant-col {
 
 .ts-chip {
   display: inline-block;
-  padding: 2px 5px;
-  border-radius: 3px;
+  max-width: 100%;
+  padding: 2px 6px;
+  border-radius: 2px;
+  font-family: var(--font-mono);
+  font-feature-settings: "tnum";
   font-size: 11px;
   line-height: 1.4;
   background: var(--cell-data);
   color: var(--cell-data-fg);
   white-space: nowrap;
-  font-feature-settings: "tnum";
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: middle;
 }
 
-/* "Has text but invalid timestamp" — show muted, no chip background */
+/* "Has text but invalid timestamp" — show muted, dashed-border outline */
 .ts-cell.has-text .ts-chip {
   background: transparent;
   color: var(--fg-muted);
-  border: 1px dashed var(--border);
+  border: 1px dashed var(--border-strong);
 }
 
-/* Floating expanded cell overlay */
+/* Floating expanded cell overlay — visually matches the inline .ts-chip
+ * (same cell-data background + cell-data-fg text, same mono+tnum font) so the
+ * hover-expand feels like the cell growing rather than a tooltip popping in. */
 
 .ts-cell-float {
   position: fixed;
   z-index: var(--z-float);
   box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
   font-family: var(--font-mono);
-  font-size: var(--text-xs);
-  padding: var(--space-2) var(--space-3);
+  font-feature-settings: "tnum";
+  font-size: 11px;
+  line-height: 1.4;
+  padding: 2px 6px;
+  background: var(--cell-data);
+  color: var(--cell-data-fg);
+  border: 1px solid var(--border-strong);
+  border-radius: 3px;
   text-align: center;
   white-space: nowrap;
   pointer-events: none;
   opacity: 0;
   transition: opacity 60ms ease;
-  border-bottom: 1px solid var(--color-border);
-  box-shadow: 2px 0 6px rgba(0, 0, 0, 0.15);
+}
+
+/* Float over a cell with text-but-invalid timestamp — match the dashed-border
+ * empty-chip look from the row below. */
+.ts-cell-float.has-text {
+  background: var(--bg);
+  color: var(--fg-muted);
+  border: 1px dashed var(--border-strong);
 }
 
 /* Empty row separator */
@@ -914,57 +1093,122 @@ col.col-participant-col {
   overflow: hidden;
 }
 
+/* Two-column split: ARTIFACTS | REEL — matches the prototype's bottom strip
+ * anatomy (full-bleed, hairline divider between columns). */
+#bottomColumns {
+  display: flex;
+  align-items: stretch;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+}
+
+#artifactColumn,
+#reelColumn {
+  flex: 1 1 50%;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+#artifactColumn {
+  border-right: 1px solid var(--hairline);
+}
+
 /* Drop areas */
 
 #dropAreas {
-  max-width: var(--layout-max-width);
-  margin: 0 auto;
-  background: var(--color-panel-bg);
-  border: 1px solid var(--color-panel-border);
-  border-top: none;
-  border-radius: 0;
-  box-shadow: var(--shadow-xl);
-  padding: var(--space-4) var(--space-5) var(--space-5);
-  display: grid;
-  grid-template-columns: 1fr;
-  gap: var(--space-4);
+  background: var(--bg);
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
 }
 
 .drop-area {
   display: flex;
   flex-direction: column;
-  gap: var(--space-2);
+  flex: 1 1 auto;
+  min-height: 0;
 }
 
-.drop-area h3 {
-  font-size: var(--text-base);
-  font-weight: 600;
+/* Single-row toolbar at the top of each bottom-strip column.
+ * Anatomy: label · count · ...controls (format/titlecards) · margin-left:auto
+ * push of action buttons (Generate / Build Viewer / Stash / Clear). Mirrors
+ * the prototype's `padding: 0 20px; height: 40; borderBottom: hairline`. */
+.bs-toolbar {
   display: flex;
   align-items: center;
-  gap: var(--space-2);
+  gap: 12px;
+  height: 40px;
+  padding: 0 20px;
+  border-bottom: 1px solid var(--hairline);
+  flex: 0 0 auto;
 }
 
-.drop-area h3 span {
-  font-weight: 400;
-  color: var(--color-text-dim);
-  font-size: var(--text-sm);
+.bs-label {
+  font-size: 12.5px;
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--fg);
+}
+
+.bs-count {
+  font-family: var(--font-mono);
+  font-feature-settings: "tnum";
+  font-size: 11px;
+  color: var(--fg-faint);
+  white-space: nowrap;
+}
+
+.bs-spinner {
+  flex-shrink: 0;
+  color: var(--fg-faint);
+}
+
+.bs-select,
+.bs-input {
+  font-family: inherit;
+  font-size: 12px;
+  height: 24px;
+  padding: 0 6px;
+  background: var(--bg-input);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  box-sizing: border-box;
+}
+.bs-input {
+  font-family: var(--font-mono);
+  font-feature-settings: "tnum";
+  font-size: 11px;
+  height: 22px;
+  text-align: center;
+}
+
+.bs-actions {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.bs-add-to-reel {
+  align-self: center;
+  margin: var(--space-2) auto;
+  flex: 0 0 auto;
 }
 
 .drop-target {
-  min-height: 120px;
-  border: 2px dashed var(--color-border);
-  border-radius: var(--radius);
-  padding: var(--space-2);
   display: flex;
   flex-direction: column;
   gap: var(--space-1);
-  transition: border-color var(--duration-fast), background-color var(--duration-fast);
-  overflow-y: auto;
-  max-height: 250px;
+  transition: background-color var(--duration-fast);
 }
 
 .drop-target.drag-over {
-  border-color: var(--color-accent);
   background-color: var(--color-selected);
 }
 
@@ -986,13 +1230,28 @@ col.col-participant-col {
 }
 
 #artifactsList {
-  flex-direction: row;
-  overflow-x: auto;
-  overflow-y: hidden;
-  max-height: none;
-  min-height: 100px;
-  gap: var(--space-2);
-  padding: var(--space-2);
+  display: grid;
+  /* Fixed 160px tracks (no 1fr stretch) keep cards compact and gaps tight,
+   * even when only a couple of cards are queued. Excess row width becomes
+   * a trailing gutter, matching the prototype's spacing.
+   *
+   * grid-auto-rows: max-content + align-content:start pins rows to their
+   * intrinsic content height and packs them at the top — without these,
+   * Chrome distributes free space across rows when the container shrinks
+   * below its content, which squishes the cards vertically. */
+  grid-template-columns: repeat(auto-fill, 160px);
+  grid-auto-rows: max-content;
+  gap: 8px;
+  padding: 14px;
+  flex: 1 1 0;
+  min-height: 0;
+  overflow-y: auto;
+  align-content: start;
+  align-items: start;
+  border: 0;
+}
+#artifactsList .drop-target-empty {
+  grid-column: 1 / -1;
 }
 
 /* Shared card base (artifact + reel) */
@@ -1111,50 +1370,26 @@ col.col-participant-col {
 /* Reel timeline */
 
 #reelArea {
-  max-width: var(--layout-max-width);
-  margin: 0 auto var(--space-5);
-  background: var(--color-panel-bg);
-  border: 1px solid var(--color-panel-border);
-  border-top: none;
-  border-radius: 0 0 var(--radius-lg) var(--radius-lg);
-  box-shadow: var(--shadow-xl);
-  padding: var(--space-4) var(--space-5) var(--space-5);
-}
-
-#reelArea:has(+ #stashedReelsArea:not(.hidden)) {
-  border-radius: 0;
-  margin-bottom: 0;
-}
-
-#reelArea h3 {
-  font-size: var(--text-base);
-  font-weight: 600;
+  background: var(--bg);
   display: flex;
-  align-items: center;
-  gap: var(--space-2);
-}
-
-#reelArea h3 span {
-  font-weight: 400;
-  color: var(--color-text-dim);
-  font-size: var(--text-sm);
-}
-
-#reelHeader {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: var(--space-2);
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
 }
 
 #reelList {
+  display: flex;
   flex-direction: row;
+  flex: 1 1 0;
+  min-height: 0;
   overflow-x: auto;
   overflow-y: hidden;
-  max-height: none;
-  min-height: 100px;
-  gap: var(--space-2);
-  padding: var(--space-2);
+  gap: 8px;
+  padding: 14px;
+  border: 0;
+  /* Default flex `align-items: stretch` was stretching reel cards vertically
+   * to fill the column — keep them at their natural ~110px height. */
+  align-items: flex-start;
 }
 
 #reelDuration {
@@ -1183,197 +1418,187 @@ html[data-theme="dark"] .queue-card-error .queue-card-thumb {
 
 /* Stashed reels */
 
-#stashedReelsArea {
-  max-width: var(--layout-max-width);
-  margin: 0 auto var(--space-5);
+/* Stash row — single horizontal flex row at the bottom of each bottom-strip
+ * column (matches the prototype's ARTIFACTS / REEL Stashes layout). The
+ * existing JS still targets `#stashedReelsArea` / `#stashedArtifactsArea`,
+ * so the IDs stay; the visual is fully reworked. */
+#stashedReelsArea,
+#stashedArtifactsArea {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 14px;
+  border-top: 1px solid var(--hairline);
   background: var(--color-panel-bg);
-  border: 1px solid var(--color-panel-border);
-  border-top: none;
-  border-radius: 0 0 var(--radius-lg) var(--radius-lg);
-  box-shadow: var(--shadow-xl);
-  padding: var(--space-3) var(--space-5) var(--space-4);
+  flex-shrink: 0;
 }
 
-#stashedReelsHeader {
-  display: flex;
+#stashedReelsHeader,
+#stashedArtifactsHeader {
+  flex: 0 0 auto;
+}
+
+#stashedReelsHeader h3,
+#stashedArtifactsHeader h3 {
+  margin: 0;
+  font-size: 10.5px;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--fg-faint);
+  display: inline-flex;
   align-items: center;
-  justify-content: space-between;
-  margin-bottom: var(--space-2);
+  gap: 4px;
 }
-
-#stashedReelsHeader h3 {
-  font-size: var(--text-sm);
-  font-weight: 600;
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-}
-
-#stashedReelsHeader h3 span {
+#stashedReelsHeader h3 span,
+#stashedArtifactsHeader h3 span {
+  font-family: var(--font-mono);
+  font-feature-settings: "tnum";
+  font-size: 10.5px;
   font-weight: 400;
-  color: var(--color-text-dim);
-  font-size: var(--text-sm);
+  letter-spacing: 0;
+  color: var(--fg-faint);
+  text-transform: none;
 }
 
-#stashedReelsList {
+#stashedReelsList,
+#stashedArtifactsList {
+  flex: 1 1 auto;
   display: flex;
-  flex-direction: row;
-  gap: var(--space-2);
+  gap: 6px;
   overflow-x: auto;
-  padding: var(--space-1) 0;
+  min-width: 0;
 }
 
+/* Stash chip — folder-icon + name + count (the "old" 160px panel-card
+ * is gone; the chip is compact and inline). The icon's stacked shadow gives
+ * it a faux-folder depth tied to a category hue. */
 .stash-card {
   flex-shrink: 0;
-  width: var(--card-width-stash);
-  border: 1px solid var(--color-border);
-  border-radius: calc(var(--radius) - 2px);
-  background: var(--color-surface);
-  padding: var(--space-2) var(--space-3);
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 10px 5px 5px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--fg);
   cursor: pointer;
-  position: relative;
-  transition: box-shadow var(--duration-fast), border-color var(--duration-fast);
   user-select: none;
+  position: relative;
+  transition: border-color 120ms ease-out, background-color 120ms ease-out;
+}
+.stash-card:hover {
+  border-color: var(--border-strong);
+  background: var(--bg-hover);
 }
 
-.stash-card:hover {
-  border-color: var(--color-accent);
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+/* Stack of up to three frame thumbnails — top item is fully visible, the
+ * 2nd/3rd are offset 2px right + 2px up so the chip reads as a deck of
+ * folders. JS appends the <img> elements; the hue-tinted background acts
+ * as a fallback when no thumbnail loads. */
+.stash-card-icon {
+  position: relative;
+  flex: 0 0 auto;
+  width: 30px;
+  height: 22px;
+  margin-right: 6px;
+  border-radius: 2px;
+  overflow: visible;
+  background: oklch(0.32 0.06 220);
+}
+.stash-card-icon-img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: 2px;
+  border: 1px solid var(--border-strong);
+  background: var(--bg-elevated);
 }
 
 .stash-card-name {
-  display: block;
-  font-size: var(--text-sm);
-  font-weight: 600;
+  font-size: 12px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  max-width: 140px;
   cursor: text;
   padding: 1px 2px;
   border-radius: var(--radius-sm);
   border: 1px solid transparent;
   transition: border-color var(--duration-fast);
 }
-
 .stash-card-name:hover {
-  border-color: var(--color-border);
+  border-color: var(--border);
 }
 
 .stash-card-name-input {
-  display: block;
-  font-size: var(--text-sm);
-  font-weight: 600;
-  width: 100%;
+  font-size: 12px;
+  width: 140px;
   padding: 1px 2px;
-  border: 1px solid var(--color-accent);
+  border: 1px solid var(--accent);
   border-radius: var(--radius-sm);
-  background: var(--color-surface);
-  color: var(--color-text);
+  background: var(--bg-input);
+  color: var(--fg);
   outline: none;
   font-family: inherit;
 }
 
 .stash-card-info {
-  display: flex;
-  gap: var(--space-2);
-  font-size: var(--text-xs);
-  color: var(--color-text-dim);
-  margin-top: var(--space-1);
+  display: inline-flex;
+  gap: 6px;
   font-family: var(--font-mono);
+  font-feature-settings: "tnum";
+  font-size: 10.5px;
+  color: var(--fg-faint);
 }
 
 .stash-card-remove {
   position: absolute;
-  top: 2px;
-  right: 2px;
-  background: rgba(0, 0, 0, 0.5);
-  color: #fff;
-  border: none;
+  top: -4px;
+  right: -4px;
+  width: 16px;
+  height: 16px;
+  background: var(--bg-active);
+  color: var(--fg);
+  border: 1px solid var(--border-strong);
   border-radius: 50%;
-  width: 18px;
-  height: 18px;
-  font-size: var(--text-xs);
-  line-height: 18px;
+  font-size: 10px;
+  line-height: 14px;
   text-align: center;
   cursor: pointer;
   opacity: 0;
   transition: opacity var(--duration-fast);
   padding: 0;
 }
-
 .stash-card:hover .stash-card-remove {
   opacity: 1;
 }
-
 .stash-card-remove:hover {
-  background: #dc2626;
+  background: var(--severity-high);
+  color: var(--accent-fg);
 }
 
-.stash-card[draggable="true"] {
-  cursor: grab;
-}
-
-.stash-card[draggable="true"]:active {
-  cursor: grabbing;
-}
-
-/* Stashed artifacts */
-
-#stashedArtifactsArea {
-  max-width: var(--layout-max-width);
-  margin: 0 auto;
-  background: var(--color-panel-bg);
-  border: 1px solid var(--color-panel-border);
-  border-top: none;
-  border-radius: 0;
-  box-shadow: var(--shadow-xl);
-  padding: var(--space-3) var(--space-5) var(--space-4);
-}
-
-#stashedArtifactsHeader {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: var(--space-2);
-}
-
-#stashedArtifactsHeader h3 {
-  font-size: var(--text-sm);
-  font-weight: 600;
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-}
-
-#stashedArtifactsHeader h3 span {
-  font-weight: 400;
-  color: var(--color-text-dim);
-  font-size: var(--text-sm);
-}
-
-#stashedArtifactsList {
-  display: flex;
-  flex-direction: row;
-  gap: var(--space-2);
-  overflow-x: auto;
-  padding: var(--space-1) 0;
-}
+.stash-card[draggable="true"] { cursor: grab; }
+.stash-card[draggable="true"]:active { cursor: grabbing; }
 
 /* Stash drop zone styling */
 
 #stashedReelsList.drag-over,
 #stashedArtifactsList.drag-over {
-  outline: 2px dashed var(--color-accent);
-  outline-offset: -2px;
+  outline: 1px dashed var(--accent);
+  outline-offset: -1px;
   background-color: var(--color-selected);
-  border-radius: var(--radius);
+  border-radius: 4px;
 }
 
 .stash-drop-reveal #stashedReelsList:empty,
 .stash-drop-reveal #stashedArtifactsList:empty {
-  min-height: 50px;
-  border: 2px dashed var(--color-border);
-  border-radius: var(--radius);
+  min-height: 28px;
+  border: 1px dashed var(--border-strong);
+  border-radius: 4px;
 }
 
 /* Area controls */
@@ -1391,14 +1616,8 @@ html[data-theme="dark"] .queue-card-error .queue-card-thumb {
   align-items: center;
 }
 
-#generateBtn {
-  margin-left: auto;
-}
-
-#addToReelBtn {
-  align-self: flex-end;
-  margin-top: var(--space-2);
-}
+/* Old layout helpers removed: #generateBtn now sits inside .bs-actions
+ * and #addToReelBtn floats centered below the artifact list (.bs-add-to-reel). */
 
 .area-controls select {
   padding: var(--space-2) var(--space-2);
@@ -1433,13 +1652,21 @@ html[data-theme="dark"] .queue-card-error .queue-card-thumb {
 }
 
 .titlecard-duration-input {
-  width: 3rem;
-  padding: var(--space-1) var(--space-2);
-  border: 1px solid var(--color-border);
-  border-radius: calc(var(--radius) - 2px);
-  background: var(--color-surface);
-  color: var(--color-text);
-  font-size: var(--text-xs);
+  width: 36px;
+  height: 22px;
+  padding: 0 6px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-input);
+  color: var(--fg);
+  font-family: var(--font-mono);
+  font-feature-settings: "tnum";
+  font-size: 11px;
+  text-align: center;
+}
+.titlecard-duration-input:focus {
+  outline: none;
+  border-color: var(--accent);
 }
 
 .titlecard-label-unit {
@@ -1577,87 +1804,112 @@ html[data-theme="dark"] .queue-card-error .queue-card-thumb {
 
 .highlights-drawer-input {
   width: 5rem;
-  padding: var(--space-1) var(--space-2);
-  border: 1px solid var(--color-border);
-  border-radius: calc(var(--radius) - 2px);
-  background: var(--color-surface);
-  color: var(--color-text);
-  font-size: var(--text-sm);
+  height: 22px;
+  padding: 0 6px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-input);
+  color: var(--fg);
+  font-size: 11px;
   font-family: var(--font-mono);
+  font-feature-settings: "tnum";
 }
 
-/* Gallery button group (inside header actions) */
+/* Gallery configuration dialog — triggered from TopNav Quick Actions. */
 
-.gallery-group {
-  position: relative;
+#galleryOverlay {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-modal);
+  background: rgba(0, 0, 0, 0.4);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+#galleryOverlay.hidden {
+  display: none;
+}
+
+.gallery-card {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: var(--space-5);
+  width: 360px;
+  max-width: 90%;
+  box-shadow: var(--shadow-pop);
   display: flex;
   flex-direction: column;
-  align-items: flex-end;
+  gap: var(--space-3);
+  color: var(--fg);
 }
-
-.gallery-drawer {
-  position: absolute;
-  top: 100%;
-  right: 0;
-  z-index: var(--z-float);
-  max-height: 0;
-  opacity: 0;
-  overflow: hidden;
-  transition: max-height var(--duration-normal) ease, opacity var(--duration-normal) ease, margin-top var(--duration-normal) ease;
-  margin-top: 0;
-  background: var(--color-panel-bg);
-  border: 1px solid transparent;
-  border-radius: calc(var(--radius) - 2px);
-  padding: 0 var(--space-2);
-  pointer-events: none;
+.gallery-card h3 {
+  font-size: var(--text-md);
+  font-weight: 500;
+  margin: 0;
+}
+.gallery-dialog-help {
+  font-size: 12px;
+  color: var(--fg-muted);
+  margin: 0;
+}
+.gallery-dialog-fields {
   display: flex;
+  flex-direction: column;
   gap: var(--space-2);
-  align-items: center;
-  white-space: nowrap;
 }
-
-.gallery-drawer.open {
-  max-height: 3rem;
-  opacity: 1;
-  margin-top: var(--space-2);
-  padding: var(--space-2) var(--space-2);
-  pointer-events: auto;
-  border-color: var(--color-border);
-}
-
-.gallery-drawer-label {
-  font-size: var(--text-xs);
-  color: var(--color-text-dim);
+.gallery-dialog-label {
   display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--fg-faint);
+}
+.gallery-dialog-label.gallery-dialog-bundle {
+  flex-direction: row;
   align-items: center;
-  gap: var(--space-1);
-  white-space: nowrap;
+  gap: 8px;
+  text-transform: none;
+  font-weight: 400;
+  letter-spacing: 0;
+  color: var(--fg);
+  font-size: 12px;
 }
-
-.gallery-drawer-select {
-  padding: var(--space-1) var(--space-2);
-  border: 1px solid var(--color-border);
-  border-radius: calc(var(--radius) - 2px);
-  background: var(--color-surface);
-  color: var(--color-text);
-  font-size: var(--text-xs);
-  max-width: 8rem;
+.gallery-dialog-select,
+.gallery-dialog-input {
+  font-family: inherit;
+  font-size: 12px;
+  height: 28px;
+  padding: 0 8px;
+  background: var(--bg-input);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  box-sizing: border-box;
 }
-
-.gallery-drawer-input {
-  width: 3.5rem;
-  padding: var(--space-1) var(--space-2);
-  border: 1px solid var(--color-border);
-  border-radius: calc(var(--radius) - 2px);
-  background: var(--color-surface);
-  color: var(--color-text);
-  font-size: var(--text-xs);
+.gallery-dialog-input {
   font-family: var(--font-mono);
+  font-feature-settings: "tnum";
+  text-align: center;
 }
-
-.gallery-drawer-checkbox {
+.gallery-dialog-select:focus,
+.gallery-dialog-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.gallery-dialog-checkbox {
   margin: 0;
   cursor: pointer;
+  accent-color: var(--accent);
+}
+.gallery-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+  margin-top: var(--space-2);
 }
 
 /* Title spinner */
@@ -2136,13 +2388,21 @@ html[data-theme="dark"] .log-panel {
 }
 
 .intake-cluster-input {
-  width: 48px;
-  font-size: var(--text-xs);
-  padding: 2px 4px;
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-sm);
-  background: var(--color-surface);
-  color: var(--color-text);
+  width: 44px;
+  height: 22px;
+  font-family: var(--font-mono);
+  font-feature-settings: "tnum";
+  font-size: 11px;
+  padding: 0 6px;
+  text-align: center;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-input);
+  color: var(--fg);
+}
+.intake-cluster-input:focus {
+  outline: none;
+  border-color: var(--accent);
 }
 
 #intakeTimeline,
@@ -2166,9 +2426,24 @@ html[data-theme="dark"] .log-panel {
   align-content: flex-start;
 }
 
-.queue-card.intake-highlight {
-  border-color: var(--color-accent);
-  box-shadow: 0 0 0 2px var(--color-accent);
+.queue-card.intake-highlight,
+.clip-card.intake-highlight,
+.transcript-card.intake-highlight {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent);
+}
+
+/* Intake filter rows (new primitive-based chips + pills) */
+.intake-chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+}
+
+/* Intake density timeline host (created by primitives at render time) */
+.intake-density-host {
+  margin: var(--space-2) 0 var(--space-3);
 }
 
 .intake-card-det-dot {
@@ -2192,93 +2467,25 @@ html[data-theme="dark"] .log-panel {
 
 .intake-filter-search {
   width: 160px;
-  font-size: var(--text-xs);
-  padding: 3px 8px;
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-sm);
-  background: var(--color-surface);
-  color: var(--color-text);
+  height: 24px;
+  font-size: 12px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-input);
+  color: var(--fg);
 }
-
-.intake-filter-pills {
-  display: flex;
-  gap: 4px;
+.intake-filter-search::placeholder {
+  color: var(--fg-faint);
 }
-
-.intake-filter-det {
-  display: inline-flex;
-  align-items: center;
-  gap: 2px;
-  font-size: 10px;
-  padding: 1px 6px;
-  border: 1px solid var(--det-color, var(--color-border));
-  border-radius: var(--radius-full);
-  background: transparent;
-  color: var(--det-color, var(--color-text-dim));
-  cursor: pointer;
-  font-weight: 600;
-  text-transform: uppercase;
-  transition: background var(--duration-fast), color var(--duration-fast);
-}
-
-.intake-det-icon {
-  display: inline-block;
-  width: 10px;
-  height: 10px;
-  flex-shrink: 0;
-  background-color: currentColor;
-  mask-size: contain;
-  mask-repeat: no-repeat;
-  mask-position: center;
-  -webkit-mask-size: contain;
-  -webkit-mask-repeat: no-repeat;
-  -webkit-mask-position: center;
-}
-
-.intake-filter-det:hover {
-  background: color-mix(in srgb, var(--det-color) 15%, transparent);
-}
-
-.intake-filter-det.active {
-  background: var(--det-color);
-  color: #fff;
-}
-
-.intake-filter-participant-pills {
-  display: flex;
-  gap: 4px;
-}
-
-.intake-filter-participant {
-  display: inline-flex;
-  align-items: center;
-  font-size: 10px;
-  padding: 1px 6px;
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-full);
-  background: transparent;
-  color: var(--color-text-dim);
-  cursor: pointer;
-  font-weight: 600;
-  text-transform: uppercase;
-  transition: background var(--duration-fast), color var(--duration-fast),
-              border-color var(--duration-fast);
-}
-
-.intake-filter-participant:hover {
-  background: color-mix(in srgb, var(--color-accent) 15%, transparent);
-  border-color: var(--color-accent);
-}
-
-.intake-filter-participant.active {
-  background: var(--color-accent);
-  color: #fff;
-  border-color: var(--color-accent);
+.intake-filter-search:focus {
+  outline: none;
+  border-color: var(--accent);
 }
 
 .intake-filter-new-label {
   font-size: var(--text-xs);
-  color: var(--color-text-dim);
+  color: var(--fg-muted);
   display: flex;
   align-items: center;
   gap: 4px;

@@ -33,11 +33,12 @@ The prototype is a **design reference**, not production code. Production stack s
 
 | # | Session | Scope | Status |
 |---|---|---|---|
-| 1 | Foundation | Tokens (dark default + light alt), unified TopNav across all three surfaces, Studio Sheet "cells" rendering with severity pills, sub-tab bar with slide-fade transitions, bottom artifacts strip drag-resize | **In progress** |
-| 2 | Primitives | Extract shared primitives (`FilterChip`, `ParticipantPill`, `DensityTimeline`, `ClipCard`, `TranscriptCard`, `SparkBars`, `Btn`, `NavMenu`); apply to remaining Studio sub-tabs (Screenspace Intake, Transcript Intake, Convergence, Metadata) | Pending |
-| 3 | Screenspace | Safe layout: viewer + scrub timeline + detector panel + results panel; refresh detector iconography with design lead | Pending |
-| 4 | Transcripts | Safe layout: editable summary + sticky PiP video + annotation popover; cross-ref with sheet rows / screenspace events | Pending |
-| 5 | Polish | Animation finalization with design lead; viewer/gallery surfaces audit; light-theme parity check across all surfaces | Pending |
+| 1 | Foundation | Tokens (dark default + light alt), unified TopNav across all three surfaces, Studio Sheet "cells" rendering with severity pills, sub-tab bar with slide-fade transitions, bottom artifacts strip drag-resize | **Done** |
+| 2 | Studio primitives + sidebar + intake refresh | Extract `FilterChip` / `ParticipantPill` / `DensityTimeline` / `SparkBars` / `ClipCard` / `TranscriptCard` / `Btn` into shared `assets/web/primitives.{js,css}`. Add Sheet sidebar (VIEWS / CATEGORIES / PARTICIPANTS). Tighten sheet-cell padding + restyle hover-expand overlay. Refresh Screenspace Intake + Transcript Intake interiors. Restructure bottom strip into ARTIFACTS / REEL columns. Drop Studio-internal centering for full-bleed layout. | **Done** |
+| 3 | Convergence + Metadata + bottom-strip polish | Apply primitives + new visualisations (`SwimLane`, `KpiCard`, `CoverageMatrix`) inside Studio's Convergence and Metadata sub-tabs; unify bottom-strip cards with the new primitives; final dead-CSS sweep | Pending |
+| 4 | Screenspace | Safe layout: viewer + scrub timeline + detector panel + results panel; refresh detector iconography with design lead | Pending |
+| 5 | Transcripts | Safe layout: editable summary + sticky PiP video + annotation popover; cross-ref with sheet rows / screenspace events | Pending |
+| 6 | Polish | Animation finalization with design lead; viewer/gallery surfaces audit; light-theme parity check across all surfaces; **unify card-size tokens across `.clip-card` / `.transcript-card` / `.queue-card` (intake, artifact, reel, stash thumbnails) so the bottom strip and intake cards share one width scale** | Pending |
 
 ## Implementation rules (carry-overs from `redesign/AGENTS.md`)
 
@@ -89,3 +90,60 @@ The prototype is a **design reference**, not production code. Production stack s
 - `prefers-color-scheme: dark` handling complicated the theme flip more than expected. Cleanest fix was to drop OS-preference detection entirely (matching the prototype's strict dark-default) rather than try to honor it as a fallback. Users who liked auto-light on light-OS machines will need to manually toggle once.
 - Page-specific `#themeToggle` styling (`width: 32px; border: 1px solid; background: surface-alt`) had to be overridden by `.topnav-right #themeToggle` (specificity 0,1,1 beats 0,1,0). The sun/moon glyph CSS lives in studio/screenspace/transcripts CSS — those still apply correctly inside the TopNav cluster because the icon class names match.
 - Quick Actions menu items kept simple this session. Many would-be items (Open Timeline / Gallery) duplicate visible buttons in the Studio sub-header, which is fine for v1 — duplication beats refactoring the gallery drawer's two-state click flow this session.
+
+### Session 2 — primitives, Sheet sidebar, intake refresh, bottom-strip + full-bleed (2026-05-04)
+
+**Branch:** `henedl/redesign-pass-2`
+
+**Shipped:**
+
+- **Primitives** — new `assets/web/primitives.{js,css}` exports `FilterChip`, `ParticipantPill`, `DensityTimeline`, `SparkBars`, `ClipCard`, `TranscriptCard`, `Btn` as DOM-element factory functions on `window.ClipgenPrimitives`. Hue resolution falls back through `categoryHue(label)` from `utils.js`; active state uses inline `oklch()` style for chip fg/bg/border. Loaded by `studio.html` (`primitives.css` between `topnav.css` and `studio.css`; `primitives.js` after `utils.js`, before `topnav.js`). Generic blueprint static-route handles `/screenspace/primitives.{css,js}` and `/transcripts/primitives.{css,js}` 200s for sessions 4+5 with no server.py changes.
+- **Sheet sidebar** — collapsible `<aside id="studioSidebar">` with three sections (VIEWS / CATEGORIES / PARTICIPANTS). VIEWS chips drive `state.filters.sevMin/sevMax` via a small `SIDEBAR_VIEWS` map (All / Highlights / Positive / Medium / High). CATEGORIES toggle into `state.filters.categories`. PARTICIPANTS toggle into `state.sidebarParticipants`, which `renderGrid()` consumes by filtering `d.participants` into a local `visibleParticipants` array used for `<col>`, `<th>`, and `<td>` iteration. Sidebar collapse persists to `localStorage["clipgen-studio-sidebar-open"]`; `body[data-active-tab]` toggles the sidebar visibility per sub-tab.
+- **Sheet-cell conform** — `.ts-cell` padding tightened to `0 4px` with `height: 30px` so chips fit cells without floating gaps. `.ts-chip` font-family promoted to `var(--font-mono)` (was missing). Floating expand-overlay `.ts-cell-float` rewritten to mirror chip visuals (same `--cell-data` bg, `--cell-data-fg`, `cg-mono`/tnum, 11px, radius 3, 1px `--border-strong`); `showFloat()` no longer overrides `backgroundColor` from cell's computed style; toggles a `.has-text` modifier on the float for invalid-timestamp cells.
+- **Full-bleed layout** — removed the centering `max-width: var(--layout-max-width); margin: 0 auto;` on `#sheetPreview`, `#panelDivider`, `#dropAreas`, `#reelArea`, `#stashedReelsArea`, `#stashedArtifactsArea`. Studio surface and bottom strip now run edge-to-edge.
+- **Sheet sub-header layout** — `#sheetPreview` reflowed to flex-row (`#studioSidebar` + `#sheetMain`); `#sheetMain` carries the existing filter-bar + sheet-grid (and intake/convergence/metadata panels) and absorbs the inner padding.
+- **Screenspace Intake refresh** — replaced static detector pill markup with dynamic `createFilterChip` row (driven by an `INTAKE_DETECTORS` constant + per-detector counts), participant pill row with `createParticipantPill`, and the `<canvas id="intakeTimeline">` with a div-based `createDensityTimeline` host. Cards switched to `createClipCard` with `size: 'lg'`. Lazy-loaded thumbnails (`ssObserveThumb`) and cross-ref badges (`buildXrefBadges`) preserved via post-create DOM injection on `.clip-card-thumb`. Drag/click/hover handlers and `.queue-card.intake-queue-card` class kept for downstream selectors.
+- **Transcript Intake refresh** — same anatomy with `createTranscriptCard` (timeRange = `mm:ss–mm:ss`, text from cluster). New `buildTrIntakeCategoryPills()` consumes the `TR_INTAKE_CATEGORIES` map. `buildTrIntakeParticipantPills` rewritten on top of `createParticipantPill`. Tooltip flow (`#trIntakeTooltip`) untouched.
+- **Bottom-strip refresh** — wrapped `#dropAreas` + `#stashedArtifactsArea` in `#artifactColumn`, `#reelArea` + `#stashedReelsArea` in `#reelColumn`, both inside a new flex-row `#bottomColumns` with a `--hairline` divider between columns. ARTIFACTS now renders as a CSS grid (`auto-fill minmax(160px, 1fr)`); REEL stays a horizontal scroll. Section H3 labels restyled to uppercase 12.5px with mono count badges (matches prototype's "ARTIFACTS"/"REEL" labels).
+- **Cleanup** — deleted dead CSS blocks (`#studioHeader`, `#studioHeaderTop`, `#headerMeta`, the `.sheet-preview-header` carry-over comment) and the no-longer-used `.intake-filter-pills` / `.intake-filter-det` / `.intake-det-icon` / `.intake-filter-participant-pills` / `.intake-filter-participant` rules. Removed canvas helpers `sizeIntakeCanvas`, `renderIntakeTimeline`, `intakeHitTest`, `_intakeHitRects`, `sizeTrIntakeCanvas`, `renderTrIntakeTimeline`, `trIntakeHitTest`, `_trIntakeHitRects`, `intakeComputeTickInterval`, and `hexToRgba` (canvas-only). Dropped the no-op `cellColorCoding` setting from `state`, `studio.js` settings sync, `server.py` `/api/sheet` payload, and `config.py` (constant + description + Studio settings registration).
+
+**Verified:**
+
+- `node -c` syntax-checks clean for `studio.js` and `primitives.js` after each edit.
+- Quality gates pending in task 12 (run before commit).
+
+**Deferred to later sessions:**
+
+- Studio Convergence + Metadata sub-tab interiors — explicitly punted to session 3 per user direction. Will introduce `SwimLane`, `KpiCard`, `CoverageMatrix` primitives.
+- Bottom-strip cards still use the legacy `.queue-card` shape for queued/generating/done state. Unification with `.clip-card`/`.transcript-card` deferred (separate state model).
+- Screenspace surface (Safe layout) — session 4.
+- Transcripts surface (Safe + Editable summary + Sticky PiP) — session 5.
+- Detector iconography revision (handoff flagged as "not final") — session 6 polish.
+
+**Surprises / lessons:**
+
+- Generic blueprint route `/<path:filename>` already serves any file in `assets/web/`, so `primitives.{js,css}` is reachable from `/studio/`, `/screenspace/`, and `/transcripts/` without explicit per-blueprint registration. The plan's "mirror topnav routes" line was redundant.
+- `.ts-cell-float` JS was overriding the cell's computed `backgroundColor` inline at every show — that line silently fought every cell-conform CSS attempt in session 1. Removing the inline override was the actual fix; the new chip-styled CSS already had the right paint.
+- The intake render had a long-tail of canvas-coupled state (`_intakeHitRects`, `intakeHitTest`, hover-driven `renderIntakeTimeline()` repaints) that all dissolved with the SVG/div primitive. The same code shape repeated for transcript intake — both became ~120 lines lighter.
+- Removing `state.cellColorCoding` left the function `_findSetting("STUDIO_SHEET_CELL_COLOR_CODING")` dangling in `applySettingsFromAPI`; deleted the lookup in the same pass and dropped the constant from `config.py` so settings UI no longer surfaces a knob with no effect.
+
+**Iteration lessons (from the post-pass review cycle):**
+
+These came out of repeated visual-comparison passes against the prototype after the initial port. Recording them so future sessions don't repeat the loop.
+
+- **`min-width: 0` / `min-height: 0` on every flex/grid container in the chain.** A child's intrinsic content size (`min-*: auto`) blocks the parent from shrinking below it, which silently breaks flex layouts the moment a sibling expands. We hit this 3× in this session:
+  - `#sheetMain` → `#sheetGrid` had a fixed-layout table forcing the parent past its flex allocation when the sidebar opened.
+  - `#bottomColumns` → columns squished cards once the artifact list exceeded one row.
+  - `#sheetPreview` itself with the new `flex: 1 1 auto` needed `min-height: 0` to share viewport with the bottom panel.
+  - **Rule of thumb**: when adding a flex/grid layer, immediately add `min-width: 0; min-height: 0` to every descendant in the same flex chain unless one specifically needs to grow.
+- **Avoid `width: auto` on `<col>` under `table-layout: fixed`.** When other tracks sum past the container width, the auto track collapses to 0 and content visibly bleeds into adjacent cells. Always give every `<col>` an explicit width and let `#sheetGrid { overflow: auto }` handle horizontal scroll.
+- **Overflow signals move down with the chip.** When you clamp inline-block content with `max-width: 100%; overflow: hidden; text-overflow: ellipsis`, the parent `td.scrollWidth` equals `td.clientWidth`. Hover-overflow detection has to read the chip's own `scrollWidth`, not the cell's. Same applies to any "is this clipped?" UI.
+- **Reset flex/grid defaults explicitly.** `align-items: stretch` (flex) and `align-content: stretch` (grid, when there's free space) are invisible stretchers. Reel cards growing to fill the column was `align-items: stretch`; squished artifact card rows were Chrome distributing free space across grid rows. Set `align-items: flex-start` / `start` and `align-content: start` plus `grid-auto-rows: max-content` whenever the layout should be content-sized.
+- **Bottom-panel drag = explicit pixel height + flex:1 upper pane.** The first attempt drove an offset on the upper pane via `max-height`; that fought the `flex: 1 1 auto` upper pane and left the bottom panel un-resizable. Rewriting to set `#bottomPanel { height: ${state.bottomH}px }` directly and letting the upper pane absorb the remainder via flex was simpler and just worked.
+- **Primitive interactivity surface = options + imperative methods.** `createDensityTimeline` returns the element AND exposes `el.update(events, marker)` + `el.setHovered(idx)`. Callers wire bidirectional hover (cards ↔ bars) through `setHovered`, and accept callbacks (`onBarMouseEnter / Leave / Click`) via opts. Either alone is insufficient: callbacks let the bar drive card state, methods let the cards drive bar state.
+- **Static `[data-icon]` markup needs a sweep.** `createBtn` sets `mask-image` inline on the icon span. For static HTML buttons (the bottom-strip toolbar) we added `applyDataIconMasks()` at `DOMContentLoaded` that walks every `[data-icon]` and applies the same mask-image. New static markup that uses `data-icon` should rely on this sweep.
+- **Two-step "open form / confirm" buttons → modal.** The old Gallery button toggled a slide-down drawer and changed its own label to "Confirm" mid-flow — that pattern can't be triggered from a TopNav Quick Actions menu. The replacement is a centered modal (`#galleryOverlay`) with explicit Cancel + Confirm buttons. Same pattern is the right answer if more sub-header buttons get demoted to Quick Actions.
+- **`.queue-card` width still wins over `.clip-card` in the bottom strip** (140 px vs 180 px) because both classes apply at equal specificity and `studio.css` loads after `primitives.css`. Cards in the bottom strip therefore render at the queue-card width even though they include the `.clip-card` class. Logged as a session-6 polish item ("unify card-size tokens").
+- **Don't override CSS-driven background inline.** `showFloat()` was setting `cellFloat.style.backgroundColor = getComputedStyle(td).backgroundColor` every show, which silently overrode every CSS attempt to give the float its own chip styling. Remove inline overrides as soon as the CSS rule has the right paint.
+- **Reference screenshot coverage matters.** The first comparison pass missed Tr-Intake / Convergence / Metadata gaps because the design handoff only included Studio-Sheet / Screenspace / Transcripts main screenshots. The remaining sub-tab states had to be reverse-engineered from `redesign/source/Studio v2.html`. For future handoffs, request a screenshot per locked sub-tab/state up front; otherwise budget time to study the prototype source.
+- **Lazy thumbnail observers must include all card-thumb selectors.** `ssGetObserver` originally hardcoded `.queue-card-thumb`. New `.clip-card-thumb` / `.transcript-card-thumb` cards never had their IntersectionObserver fire and the gradient sat there forever. Centralized into a shared `SS_THUMB_SELECTOR` constant so the next card primitive can be added once.
