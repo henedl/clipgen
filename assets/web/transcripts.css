@@ -31,19 +31,16 @@ body {
   display: none !important;
 }
 
-/* Header */
+/* Header — subheader (status / corrections / search, right-aligned) +
+   participant pills row. The chromed panel treatment was dropped so the
+   subheader's sticky glass background can read against the topnav like the
+   Studio and Screenspace surfaces. */
 
 #trHeader {
   flex-shrink: 0;
-  padding: var(--space-5) var(--layout-padding-x) var(--space-3);
-  max-width: var(--layout-max-width);
   width: 100%;
-  margin: var(--space-5) auto 0;
-  background: var(--color-panel-bg);
-  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
-  border: 1px solid var(--color-panel-border);
-  border-bottom: none;
-  box-shadow: var(--shadow-xl);
+  display: flex;
+  flex-direction: column;
 }
 
 #headerTop {
@@ -224,22 +221,26 @@ body {
 
 #headerSearch {
   position: relative;
-  margin-top: var(--space-3);
   display: flex;
   align-items: center;
   gap: var(--space-2);
+  width: 280px;
+  max-width: 35vw;
 }
 
 #searchInput {
   flex: 1;
-  padding: var(--space-2) var(--space-3);
+  height: 32px;
+  padding: 0 12px;
   border: 1px solid var(--color-border);
-  border-radius: calc(var(--radius) - 2px);
-  background: var(--color-surface);
+  border-radius: 4px;
+  background: var(--bg-elevated);
   color: var(--color-text);
-  font-size: var(--text-sm);
+  font-size: 13px;
+  font-family: inherit;
   outline: none;
   transition: border-color var(--duration-fast);
+  box-sizing: border-box;
 }
 
 #searchInput:focus {
@@ -594,21 +595,24 @@ body {
 
 #summarySection {
   flex-shrink: 0;
-  border-bottom: 1px solid var(--color-border);
+  background: var(--bg-elevated);
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  margin: var(--space-3) var(--space-4);
 }
 
 #summaryHeader {
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  padding: var(--space-2) var(--space-4);
+  padding: var(--space-2) var(--space-3);
   cursor: pointer;
   user-select: none;
 }
 
 .summary-icon {
-  width: var(--icon-size-sm);
-  height: var(--icon-size-sm);
+  width: 13px;
+  height: 13px;
   flex-shrink: 0;
   background: var(--color-text-dim);
   mask-image: url(icons/sparkles.svg);
@@ -620,11 +624,11 @@ body {
 }
 
 .summary-title {
-  font-size: var(--text-xs);
-  font-weight: 600;
+  font-size: 11px;
+  font-weight: 500;
   color: var(--color-text-dim);
   text-transform: uppercase;
-  letter-spacing: 0.05em;
+  letter-spacing: 0.08em;
 }
 
 .summary-toggle-btn {
@@ -662,7 +666,7 @@ body {
 }
 
 #summaryBody {
-  padding: 0 var(--space-4) var(--space-3);
+  padding: 0 var(--space-3) var(--space-3);
 }
 
 #summaryContent {
@@ -780,16 +784,17 @@ body {
 
 .summary-edit-textarea {
   width: 100%;
-  min-height: 120px;
-  font-size: var(--text-sm);
-  line-height: 1.6;
+  min-height: 80px;
+  font-size: 13px;
+  line-height: 1.55;
   color: var(--color-text);
-  background: var(--color-surface);
+  background: var(--bg-input);
   border: 1px solid var(--color-border);
-  border-radius: var(--radius-sm);
+  border-radius: 4px;
   padding: var(--space-2);
   font-family: inherit;
   resize: vertical;
+  box-sizing: border-box;
 }
 
 .summary-edit-textarea:focus {
@@ -824,16 +829,19 @@ body {
   opacity: 0.7;
 }
 
-/* Segment mark gutter */
+/* Segment mark gutter — 14 px circular dot, hollow when unmarked
+   (1.5 px border-strong) and filled with the category color when marked. */
 
 .segment-mark {
   flex: 0 0 14px;
-  width: 12px;
-  height: 12px;
-  border-radius: var(--radius-full);
-  border: 2px solid var(--color-border);
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 1.5px solid var(--border-strong);
+  background: transparent;
   cursor: pointer;
-  margin-top: 5px;
+  margin-top: 4px;
+  padding: 0;
   transition: border-color var(--duration-fast), background var(--duration-fast), box-shadow var(--duration-fast);
 }
 
@@ -850,20 +858,42 @@ body {
   box-shadow: 0 0 0 2px var(--color-accent-highlight);
 }
 
-/* Mark popover */
+/* Inline annotation badge inside segment text — color-mix(in oklch) chip
+   that uses the category color at 18% saturation (bg) and 50% (border).
+   Rendered only when the mark has a non-empty label. */
+
+.segment-anno-badge {
+  display: inline-block;
+  vertical-align: middle;
+  margin-right: 6px;
+  padding: 1px 6px;
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  border-radius: 3px;
+  border: 1px solid var(--anno-badge-border, transparent);
+  background: var(--anno-badge-bg, transparent);
+  color: var(--anno-badge-fg, currentColor);
+}
+
+/* Mark popover — mirrors the redesign's AnnoPopover anatomy
+   (180 px wide, 10 px padding, 18 px circular swatches with white border on
+   active, 26 px label input, bottom-right Remove button). Categories and
+   colors still come from the manifest, not a hard-coded six. */
 
 .mark-popover {
   position: fixed;
-  background: var(--color-panel-bg);
-  border: 1px solid var(--color-panel-border);
-  border-radius: var(--radius-md);
-  box-shadow: var(--shadow-lg);
-  padding: var(--space-3);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  box-shadow: var(--shadow-pop);
+  padding: 10px;
   z-index: var(--z-dropdown);
   display: flex;
   flex-direction: column;
-  gap: var(--space-2);
-  min-width: 200px;
+  gap: 8px;
+  width: 180px;
 }
 
 .mark-popover.hidden {
@@ -872,35 +902,42 @@ body {
 
 .mark-popover-categories {
   display: flex;
-  gap: var(--space-2);
+  flex-wrap: wrap;
+  gap: 6px;
 }
 
 .mark-cat-pill {
-  width: 20px;
-  height: 20px;
-  border-radius: var(--radius-full);
-  border: 2px solid transparent;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.12);
   cursor: pointer;
   transition: transform var(--duration-fast), box-shadow var(--duration-fast);
   padding: 0;
 }
 
 .mark-cat-pill:hover {
-  transform: scale(1.2);
+  transform: scale(1.1);
 }
 
 .mark-cat-pill.active {
-  box-shadow: 0 0 0 2px var(--color-panel-bg), 0 0 0 4px currentColor;
+  border: 2px solid #fff;
+  outline: 1px solid var(--border-strong);
+  outline-offset: 1px;
 }
 
 .mark-popover-label {
-  padding: var(--space-1) var(--space-2);
+  width: 100%;
+  height: 26px;
+  padding: 0 8px;
   border: 1px solid var(--color-border);
-  border-radius: calc(var(--radius) - 2px);
-  background: var(--color-surface);
+  border-radius: 4px;
+  background: var(--bg-input);
   color: var(--color-text);
-  font-size: var(--text-xs);
+  font-family: inherit;
+  font-size: 12px;
   outline: none;
+  box-sizing: border-box;
 }
 
 .mark-popover-label:focus {
@@ -908,8 +945,16 @@ body {
 }
 
 .mark-popover-remove {
-  align-self: flex-start;
+  align-self: flex-end;
+  height: 24px;
+  padding: 0 10px;
+  background: transparent;
   color: var(--color-text-dim);
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  font-size: 11.5px;
+  cursor: pointer;
+  transition: color var(--duration-fast), border-color var(--duration-fast);
 }
 
 .mark-popover-remove:hover {
@@ -1079,12 +1124,37 @@ body {
 
 /* Participant pills */
 
+/* Pill bar — sub-sub-header below the main subheader. Tall enough to fit
+   the pill (~30 px) plus its status-dot row (~11 px below) without clipping. */
+
+#trPillBar {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  height: 56px;
+  padding: 0 16px;
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in oklab, var(--bg) 72%, transparent);
+  -webkit-backdrop-filter: blur(14px) saturate(1.4);
+  backdrop-filter: blur(14px) saturate(1.4);
+  position: sticky;
+  top: 92px; /* topnav 48 + subheader 44 */
+  z-index: calc(var(--z-dropdown) - 1);
+}
+
+@supports not (backdrop-filter: blur(1px)) {
+  #trPillBar { background: var(--bg); }
+}
+
 .pill-row {
   display: flex;
+  flex: 1 1 0;
+  min-width: 0;
   flex-wrap: nowrap;
   gap: var(--space-2);
-  padding: var(--space-2) 0;
+  padding: 0;
   align-items: center;
+  justify-content: center;
   overflow-x: auto;
   overflow-y: hidden;
   scrollbar-width: thin;
@@ -1152,15 +1222,16 @@ body {
   padding: var(--space-1);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-full);
-  background: var(--color-surface);
-  color: var(--color-text);
+  background: var(--bg-elevated);
+  color: var(--color-text-dim);
   cursor: pointer;
   user-select: none;
-  transition: border-color var(--duration-fast), background-color var(--duration-fast), box-shadow var(--duration-fast);
+  transition: border-color var(--duration-fast), background-color var(--duration-fast), box-shadow var(--duration-fast), color var(--duration-fast);
 }
 
 .pill:hover {
   border-color: var(--color-selected);
+  color: var(--color-text);
 }
 
 .pill > *:not(.pill-progress) {
@@ -1179,15 +1250,18 @@ body {
 }
 
 .pill-id {
-  font-size: var(--text-sm);
+  font-family: var(--font-mono);
+  font-feature-settings: "tnum";
+  font-size: 11.5px;
   font-weight: 500;
   letter-spacing: 0.01em;
 }
 
 .pill--active {
-  border-color: var(--color-selected);
-  background: var(--color-surface-alt);
-  box-shadow: 0 0 0 1px var(--color-selected) inset;
+  border-color: var(--border-strong);
+  background: var(--bg-active);
+  color: var(--color-text);
+  box-shadow: 0 0 0 1px var(--border-strong) inset;
 }
 
 .pill--active .pill-id {

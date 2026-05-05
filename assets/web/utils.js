@@ -613,7 +613,7 @@ var _DETECTOR_FALLBACK = {
   multitool: "#2563eb", color: "#8b5cf6", change: "#f97316",
   similarity: "#0ea5e9", text: "#10b981", numbers: "#eab308",
   timelapse: "#ec4899", template: "#f43f5e", flow: "#6366f1",
-  scene: "#14b8a6", inactivity: "#78716c",
+  scene: "#14b8a6", inactivity: "#64748b",
 };
 
 function refreshDetectorColors() {

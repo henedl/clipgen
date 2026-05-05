@@ -693,7 +693,7 @@ body {
 .legend-dot {
   width: 8px;
   height: 8px;
-  border-radius: var(--radius-sm);
+  border-radius: 50%;
   flex-shrink: 0;
 }
 
@@ -731,11 +731,31 @@ body {
   width: 12px;
   height: 12px;
   flex-shrink: 0;
+  color: var(--wf-tab-hue, var(--color-text-dim));
+  opacity: 0.65;
+  transition: opacity var(--duration-fast);
+}
+
+.wf-tab:hover svg,
+.wf-tab.active svg {
+  opacity: 1;
 }
 
 .wf-tab.active {
   font-weight: 600;
 }
+
+.wf-tab[data-type="multitool"] { --wf-tab-hue: var(--color-task-multitool); }
+.wf-tab[data-type="color"]     { --wf-tab-hue: var(--color-task-color); }
+.wf-tab[data-type="change"]    { --wf-tab-hue: var(--color-task-change); }
+.wf-tab[data-type="similarity"]{ --wf-tab-hue: var(--color-task-similarity); }
+.wf-tab[data-type="text"]      { --wf-tab-hue: var(--color-task-text); }
+.wf-tab[data-type="numbers"]   { --wf-tab-hue: var(--color-task-numbers); }
+.wf-tab[data-type="timelapse"] { --wf-tab-hue: var(--color-task-timelapse); }
+.wf-tab[data-type="template"]  { --wf-tab-hue: var(--color-task-template); }
+.wf-tab[data-type="flow"]      { --wf-tab-hue: var(--color-task-flow); }
+.wf-tab[data-type="scene"]     { --wf-tab-hue: var(--color-task-scene); }
+.wf-tab[data-type="inactivity"]{ --wf-tab-hue: var(--color-task-inactivity); }
 
 .wf-tab[data-type="multitool"]:hover,
 .wf-tab[data-type="multitool"].active {
@@ -795,6 +815,12 @@ body {
 .wf-tab[data-type="scene"].active {
   color: var(--color-task-scene);
   border-bottom-color: var(--color-task-scene);
+}
+
+.wf-tab[data-type="inactivity"]:hover,
+.wf-tab[data-type="inactivity"].active {
+  color: var(--color-task-inactivity);
+  border-bottom-color: var(--color-task-inactivity);
 }
 
 #workflowBody {
@@ -1505,6 +1531,7 @@ body {
   font-family: var(--font-mono);
   color: var(--color-text-dim);
   min-width: 2.5rem;
+  text-align: right;
 }
 
 .template-upload-info {
@@ -1758,16 +1785,13 @@ body {
   opacity: 1;
 }
 
-/* Panel divider */
+/* Panel divider — full-bleed, matches Studio's bottom-strip drag handle. */
 
 #panelDivider {
-  max-width: var(--layout-max-width);
   width: 100%;
-  margin: 0 auto;
   height: 12px;
-  background: var(--color-panel-bg);
-  border-left: 1px solid var(--color-panel-border);
-  border-right: 1px solid var(--color-panel-border);
+  background: transparent;
+  border-top: 1px solid var(--hairline);
   cursor: row-resize;
   display: flex;
   align-items: center;
@@ -1796,29 +1820,22 @@ body {
   width: 48px;
 }
 
-/* Bottom panel */
+/* Bottom panel — full-bleed, matches Studio's Artifacts/Reels strip.
+   Two-column grid (workflow | queue/results) splits the full viewport width. */
 
 #bottomPanel {
-  max-width: var(--layout-max-width);
   width: 100%;
-  margin: 0 auto;
-  background: var(--color-panel-bg);
-  border: 1px solid var(--color-panel-border);
-  border-top: none;
-  border-radius: 0 0 var(--radius-lg) var(--radius-lg);
-  box-shadow: var(--shadow-xl);
-  padding: var(--space-3) var(--space-5) var(--space-5);
+  background: var(--bg);
+  padding: var(--space-3) var(--space-5);
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: var(--space-5);
   flex-shrink: 0;
-  margin-bottom: var(--space-5);
   height: var(--bottom-panel-height);
   min-height: 120px;
   overflow: hidden;
   transition:
     height var(--duration-normal) ease,
-    margin-bottom var(--duration-normal) ease,
     padding-top var(--duration-normal) ease,
     padding-bottom var(--duration-normal) ease;
 }
@@ -1826,6 +1843,7 @@ body {
 #bottomPanel > * {
   display: flex;
   flex-direction: column;
+  min-width: 0;
   min-height: 0;
   overflow: hidden;
 }
@@ -1833,8 +1851,6 @@ body {
 /* Bottom panel collapse (double-click divider) */
 
 body.bottom-collapsed #bottomPanel {
-  margin-bottom: 0;
-  border-width: 0;
   min-height: 0;
   padding-top: 0;
   padding-bottom: 0;
@@ -2604,17 +2620,17 @@ body.panel-dragging #bottomPanel {
 }
 
 .result-bar {
-  width: 40px;
+  flex: 1;
+  min-width: 80px;
   height: 4px;
-  background: var(--color-border);
-  border-radius: var(--radius-sm);
+  background: var(--bg-input);
+  border-radius: 2px;
   overflow: hidden;
-  flex-shrink: 0;
 }
 
 .result-bar-fill {
   height: 100%;
-  border-radius: var(--radius-sm);
+  border-radius: 2px;
 }
 
 #resultsActions {
