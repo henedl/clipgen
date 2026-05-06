@@ -248,6 +248,19 @@
 .topnav-qa-item:hover .topnav-icon {
   color: var(--fg);
 }
+.topnav-qa-item.is-disabled,
+.topnav-qa-item:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.topnav-qa-item.is-disabled:hover,
+.topnav-qa-item:disabled:hover {
+  background: transparent;
+}
+.topnav-qa-item.is-disabled:hover .topnav-icon,
+.topnav-qa-item:disabled:hover .topnav-icon {
+  color: var(--fg-muted);
+}
 
 .topnav-qa-divider {
   height: 1px;
