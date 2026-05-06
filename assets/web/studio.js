@@ -2821,7 +2821,10 @@
         if (data.ok && data.clips && data.clips.length > 0) {
           state.reelQueue = [];
           for (var i = 0; i < data.clips.length; i++) {
-            state.reelQueue.push(data.clips[i]);
+            var entries = expandCellToSegments(data.clips[i]);
+            for (var ei = 0; ei < entries.length; ei++) {
+              state.reelQueue.push(entries[ei]);
+            }
           }
           renderReelQueue();
           updateCellClasses();
