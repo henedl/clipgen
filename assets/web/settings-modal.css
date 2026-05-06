@@ -222,7 +222,7 @@
   left: 2px;
   width: 16px;
   height: 16px;
-  background: #fff;
+  background: var(--accent-fg);
   border-radius: 50%;
   transition: transform var(--duration-normal);
 }

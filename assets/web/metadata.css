@@ -164,7 +164,7 @@
   cursor: pointer;
   user-select: none;
   text-align: left;
-  transition: background-color 120ms ease-out, border-color 120ms ease-out;
+  transition: background-color var(--duration-instant) ease-out, border-color var(--duration-instant) ease-out;
 }
 
 .md-details-head:hover {
@@ -186,7 +186,7 @@
   -webkit-mask-repeat: no-repeat;
   -webkit-mask-position: center;
   transform: rotate(-90deg);
-  transition: transform 120ms ease-out;
+  transition: transform var(--duration-instant) ease-out;
   flex-shrink: 0;
 }
 
@@ -439,7 +439,7 @@
   justify-content: center;
   font-size: var(--text-xs);
   font-weight: 600;
-  color: #fff;
+  color: var(--accent-fg);
   min-width: 2px;
   transition: flex-basis var(--duration-fast);
 }

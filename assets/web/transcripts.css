@@ -545,8 +545,8 @@ body {
   font-size: var(--text-xs);
   max-width: 320px;
   line-height: 1.35;
-  z-index: var(--z-tooltip, 9000);
-  box-shadow: var(--shadow-2);
+  z-index: var(--z-toast);
+  box-shadow: var(--shadow-md);
 }
 
 .tr-tooltip.hidden {
@@ -568,11 +568,11 @@ body {
   max-width: calc(100vw - var(--space-4) * 2);
   border: 1px solid var(--color-border);
   border-radius: var(--radius);
-  box-shadow: var(--shadow-3, 0 12px 32px rgba(0, 0, 0, 0.25));
+  box-shadow: var(--shadow-xl);
   overflow: hidden;
-  z-index: var(--z-popover, 8000);
+  z-index: var(--z-overlay);
   cursor: zoom-in;
-  transition: opacity var(--duration-2) ease, transform var(--duration-2) ease;
+  transition: opacity var(--duration-normal) ease, transform var(--duration-normal) ease;
 }
 
 #videoSection.pip #videoPlayer {
@@ -933,7 +933,7 @@ body {
 }
 
 .mark-cat-pill.active {
-  border: 2px solid #fff;
+  border: 2px solid var(--accent-fg);
   outline: 1px solid var(--border-strong);
   outline-offset: 1px;
 }
@@ -1042,7 +1042,7 @@ body {
 .segment-xref-badge {
   padding: 2px;
   border-radius: var(--radius-sm);
-  color: #fff;
+  color: var(--accent-fg);
   line-height: 0;
   display: inline-block;
   pointer-events: auto;
@@ -1480,7 +1480,7 @@ body {
 
 .pill-agent-btn--stop:hover:not(:disabled) {
   background: var(--sev-high);
-  color: #fff;
+  color: var(--accent-fg);
 }
 
 /* Modal */

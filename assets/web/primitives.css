@@ -12,7 +12,7 @@
  *   .transcript-card      same anatomy with timeRange + clamped text (Transcript Intake)
  *   .cg-btn               base button: ghost / solid / bare; sm / md / lg
  *
- * All transitions: 120ms ease-out on bg/border/color only. Hit targets ≥28px.
+ * All transitions: var(--duration-instant) ease-out on bg/border/color only. Hit targets ≥28px.
  */
 
 /* ---- FilterChip ---- */
@@ -35,7 +35,7 @@
   cursor: pointer;
   user-select: none;
   white-space: nowrap;
-  transition: background-color 120ms ease-out, border-color 120ms ease-out, color 120ms ease-out;
+  transition: background-color var(--duration-instant) ease-out, border-color var(--duration-instant) ease-out, color var(--duration-instant) ease-out;
 }
 .filter-chip:hover {
   border-color: var(--border-strong);
@@ -94,7 +94,7 @@
   font-size: 11px;
   cursor: pointer;
   user-select: none;
-  transition: background-color 120ms ease-out, border-color 120ms ease-out, color 120ms ease-out;
+  transition: background-color var(--duration-instant) ease-out, border-color var(--duration-instant) ease-out, color var(--duration-instant) ease-out;
 }
 .participant-pill:hover {
   background: var(--bg-hover);
@@ -149,7 +149,7 @@
   width: 6px;
   border-radius: 1px;
   cursor: pointer;
-  transition: opacity 120ms ease-out, box-shadow 120ms ease-out, transform 120ms ease-out;
+  transition: opacity var(--duration-instant) ease-out, box-shadow var(--duration-instant) ease-out, transform var(--duration-instant) ease-out;
 }
 .density-timeline-bar.is-hover {
   opacity: 1 !important;
@@ -199,7 +199,7 @@
   overflow: hidden;
   cursor: grab;
   user-select: none;
-  transition: border-color 120ms ease-out;
+  transition: border-color var(--duration-instant) ease-out;
 }
 .clip-card:hover,
 .transcript-card:hover {
@@ -266,7 +266,7 @@
   align-items: center;
   padding: 1px 4px;
   background: rgba(0, 0, 0, 0.7);
-  color: #fff;
+  color: var(--accent-fg);
   font-family: var(--font-mono);
   font-feature-settings: "tnum";
   font-size: var(--text-xs, 11px);
@@ -361,7 +361,7 @@
   line-height: 1;
   cursor: pointer;
   user-select: none;
-  transition: background-color 120ms ease-out, border-color 120ms ease-out, color 120ms ease-out;
+  transition: background-color var(--duration-instant) ease-out, border-color var(--duration-instant) ease-out, color var(--duration-instant) ease-out;
 }
 .cg-btn:hover { background: var(--bg-hover); }
 .cg-btn:focus-visible {
@@ -475,7 +475,7 @@
     oklch(0.65 0.18 var(--cg-cluster-hue) / var(--cg-cluster-border-a));
   pointer-events: auto;
   cursor: pointer;
-  transition: background-color 120ms ease-out, border-color 120ms ease-out;
+  transition: background-color var(--duration-instant) ease-out, border-color var(--duration-instant) ease-out;
 }
 .cg-swim-cluster-axis {
   bottom: -2px;
@@ -525,7 +525,7 @@
   background: oklch(0.7 0.18 var(--cg-cluster-hue) / var(--cg-cluster-conn-a));
   transform: translateX(-0.5px);
   pointer-events: none;
-  transition: background-color 120ms ease-out;
+  transition: background-color var(--duration-instant) ease-out;
 }
 .cg-swim-cluster-connector.is-hovered {
   --cg-cluster-conn-a: 0.85;
@@ -541,7 +541,7 @@
   border-radius: 2px;
   opacity: 0.85;
   cursor: pointer;
-  transition: opacity 120ms ease-out, filter 120ms ease-out;
+  transition: opacity var(--duration-instant) ease-out, filter var(--duration-instant) ease-out;
 }
 .cg-swim-event.has-duration {
   opacity: 0.7;

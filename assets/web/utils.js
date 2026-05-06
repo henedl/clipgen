@@ -152,6 +152,25 @@ if (document.readyState === "loading") {
   clipgenInitBrandMark();
 }
 
+// ---- Mask-image icon helpers ----
+//
+// Apply both `mask-image` and `-webkit-mask-image` to a DOM element. `urlValue`
+// is a CSS url(...) string such as 'url("icons/check.svg")' or
+// 'url("/screenspace/icons/eye.svg")'. The element's `mask-size`,
+// `mask-repeat`, and `background-color: currentColor` should come from a CSS
+// class on the element (see .xref-badge-icon, .cg-icon, .ss-task-icon, etc).
+
+var applyMaskIcon = function (el, urlValue) {
+  el.style.maskImage = urlValue;
+  el.style.webkitMaskImage = urlValue;
+};
+
+// Inline-style equivalent for embedding in HTML strings:
+//   "mask-image: url(...); -webkit-mask-image: url(...);"
+var maskIconStyle = function (urlValue) {
+  return "mask-image:" + urlValue + ";-webkit-mask-image:" + urlValue + ";";
+};
+
 // ---- Hover tooltips (dark pill, pairs with .cg-tooltip in tokens.css) ----
 
 var createTooltip = function (opts) {
@@ -197,14 +216,25 @@ var attachHoverTooltip = function (anchor, getText, opts) {
 
 var pad2 = function (n) { return n < 10 ? "0" + n : "" + n; };
 
-var formatTime = function (sec) {
-  if (sec == null || isNaN(sec)) return "--:--";
-  var total = Math.floor(sec);
-  var h = Math.floor(total / 3600);
-  var m = Math.floor((total % 3600) / 60);
-  var s = total % 60;
-  if (h > 0) return h + ":" + pad2(m) + ":" + pad2(s);
-  return m + ":" + pad2(s);
+// `options.decimals` adds fractional-second precision (e.g. { decimals: 1 } → "m:ss.s").
+var formatTime = function (sec, options) {
+  options = options || {};
+  if (sec == null || isNaN(sec) || !isFinite(sec)) return "--:--";
+  if (sec < 0) sec = 0;
+  var decimals = options.decimals || 0;
+  var totalInt = Math.floor(sec);
+  var h = Math.floor(totalInt / 3600);
+  var m = Math.floor((totalInt % 3600) / 60);
+  var s = totalInt % 60;
+  var sStr;
+  if (decimals > 0) {
+    var sValue = s + (sec - totalInt);
+    sStr = (sValue < 10 ? "0" : "") + sValue.toFixed(decimals);
+  } else {
+    sStr = pad2(s);
+  }
+  if (h > 0) return h + ":" + pad2(m) + ":" + sStr;
+  return m + ":" + sStr;
 };
 
 // Like formatTime but rounds rather than floors. Used where the value is a
@@ -556,11 +586,14 @@ function setMarkCategories(next) {
 
 // ---- Cross-reference badge metadata ----
 // Icon names reference files in assets/icons/; rendered via CSS mask-image.
+// Colors use color-mix on the canonical `--stream-*` tokens in tokens.css so
+// any theme change or token tweak propagates automatically (color-mix yields a
+// CSS color string usable both in inline style and JS .style assignment).
 
 var XREF_BADGES = {
-  screenspace: { icon: "squares-2x2", color: "rgba(52, 152, 219, 0.85)" },
-  transcript:  { icon: "chat-bubble-bottom-center-text", color: "rgba(16, 163, 74, 0.85)" },
-  sheet:       { icon: "table-cells", color: "rgba(234, 179, 8, 0.85)" },
+  screenspace: { icon: "squares-2x2", color: "color-mix(in srgb, var(--stream-screenspace) 85%, transparent)" },
+  transcript:  { icon: "chat-bubble-bottom-center-text", color: "color-mix(in srgb, var(--stream-transcript) 85%, transparent)" },
+  sheet:       { icon: "table-cells", color: "color-mix(in srgb, var(--stream-sheet) 85%, transparent)" },
 };
 
 // ---- Filter helpers (artifact grids in viewer) ----

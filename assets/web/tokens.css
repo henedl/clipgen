@@ -16,7 +16,7 @@
  * TEXT:       --text-xs (12px) | --text-sm (13px) | --text-base (14px) | --text-md (16px) | --text-lg (18px) | --text-xl (20px) | --text-2xl (24px)
  * RADIUS:     --radius-sm (4px) | --radius-md (8px) | --radius-lg (14px) | --radius-full (999px)
  * SHADOW:     --shadow-sm | --shadow-md | --shadow-lg | --shadow-xl | --shadow-focus | --shadow-pop
- * DURATION:   --duration-fast (150ms) | --duration-normal (250ms) | --duration-slow (350ms)
+ * DURATION:   --duration-instant (120ms) | --duration-fast (150ms) | --duration-normal (250ms) | --duration-slow (350ms)
  * Z-INDEX:    --z-float (10) | --z-dropdown (100) | --z-modal (1000) | --z-overlay (2000) | --z-toast (3000)
  *
  * SURFACES:   --bg | --bg-elevated | --bg-input | --bg-hover | --bg-active
@@ -212,6 +212,7 @@
   --color-pulse: #a855f7;
 
   /* Transitions */
+  --duration-instant: 120ms;
   --duration-fast: 150ms;
   --duration-normal: 250ms;
   --duration-slow: 350ms;
@@ -542,18 +543,18 @@ body:not(.cg-grid-bg-on) {
  * weight stays page-specific; only the primary variant's color treatment is shared. */
 .btn.btn-primary {
   background: var(--color-accent);
-  color: #fff;
+  color: var(--accent-fg);
   border-color: var(--color-accent);
 }
 .btn.btn-primary:hover {
   background: var(--color-accent-strong-hover);
   border-color: var(--color-accent-strong-hover);
-  color: #fff;
+  color: var(--accent-fg);
 }
 .btn.btn-primary:disabled:hover {
   background: var(--color-accent);
   border-color: var(--color-accent);
-  color: #fff;
+  color: var(--accent-fg);
 }
 
 /* The frontend-switcher dropdown was replaced by the unified TopNav. See

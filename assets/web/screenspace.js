@@ -146,6 +146,8 @@
       regionPalette.push(cs.getPropertyValue("--region-color-" + i).trim() || "#3b82f6");
     }
     _cachedThemeColors = {
+      fg: cs.getPropertyValue("--fg").trim() || "#ffffff",
+      bg: cs.getPropertyValue("--bg").trim() || "#0d0e10",
       surfaceAlt: cs.getPropertyValue("--color-surface-alt").trim() || "#f1ece4",
       border: cs.getPropertyValue("--color-border").trim() || "#e0ddd7",
       textDim: cs.getPropertyValue("--color-text-dim").trim() || "#6b7280",
@@ -161,12 +163,6 @@
   }
 
   // ---- Helpers ----
-
-  function formatTimestamp(secs) {
-    var m = Math.floor(secs / 60);
-    var s = secs % 60;
-    return m + ":" + (s < 10 ? "0" : "") + s.toFixed(1);
-  }
 
   function numberOrDefault(value, fallback) {
     var n = parseFloat(value);
@@ -639,9 +635,7 @@
     btn.className = "scan-toggle-btn";
 
     var icon = el("span", "scan-toggle-icon");
-    var url = 'url("/screenspace/icons/chevron-double-right.svg")';
-    icon.style.maskImage = url;
-    icon.style.webkitMaskImage = url;
+    applyMaskIcon(icon, 'url("/screenspace/icons/chevron-double-right.svg")');
     btn.appendChild(icon);
 
     function updateState() {
@@ -765,7 +759,7 @@
 
   function seekPlayhead(timestamp) {
     state.currentTimestamp = timestamp;
-    qs("#timestampInput").value = formatTimestamp(timestamp);
+    qs("#timestampInput").value = formatTime(timestamp, { decimals: 1 });
     renderPlayhead();
     persistVideoTime(timestamp);
   }
@@ -913,7 +907,7 @@
       if (!state.videoPlaying) return;
       var t = video.currentTime;
       state.currentTimestamp = t;
-      qs("#timestampInput").value = formatTimestamp(t);
+      qs("#timestampInput").value = formatTime(t, { decimals: 1 });
       persistVideoTime(t);
       if (!_playheadRaf) {
         _playheadRaf = requestAnimationFrame(function () {
@@ -2139,8 +2133,8 @@
     }
     clearBtn.classList.remove("hidden");
     var parts = [];
-    if (state.inMarker !== null) parts.push("In: " + formatTimestamp(state.inMarker));
-    if (state.outMarker !== null) parts.push("Out: " + formatTimestamp(state.outMarker));
+    if (state.inMarker !== null) parts.push("In: " + formatTime(state.inMarker, { decimals: 1 }));
+    if (state.outMarker !== null) parts.push("Out: " + formatTime(state.outMarker, { decimals: 1 }));
     info.textContent = parts.join("  ");
   }
 
@@ -2194,9 +2188,11 @@
     }
     ctx.textAlign = "start";
 
-    // In/Out marker shading
+    // In/Out marker shading — scrim "outside" the active range against the
+    // timeline's surfaceAlt background. fg works in both themes (fg is white in
+    // dark → lightens, dark in light → darkens; both differentiate the range).
     if (state.inMarker !== null || state.outMarker !== null) {
-      ctx.fillStyle = "rgba(0,0,0,0.12)";
+      ctx.fillStyle = hexToRgba(tc.fg, 0.12);
       if (state.inMarker !== null) {
         var inX = timeToX(state.inMarker);
         ctx.fillRect(0, 0, Math.max(0, inX), h);
@@ -2388,10 +2384,10 @@
     var r = hit.result;
     var timeStr;
     if (r.start !== undefined && r.end !== undefined) {
-      timeStr = formatTimestamp(r.start) + " \u2013 " + formatTimestamp(r.end);
+      timeStr = formatTime(r.start, { decimals: 1 }) + " \u2013 " + formatTime(r.end, { decimals: 1 });
     } else {
       var ts = r.timestamp !== undefined ? r.timestamp : r.start;
-      timeStr = formatTimestamp(ts);
+      timeStr = formatTime(ts, { decimals: 1 });
     }
     tip.appendChild(el("span", "ss-tooltip-time", timeStr));
 
@@ -2450,15 +2446,15 @@
 
   var TOOL_INFO = {
     multitool: "Multitool chains multiple analysis tools together. Add at least two tool steps — each subsequent tool only checks frames that passed the previous step, finding moments that match ALL criteria simultaneously.",
-    color: "[TODO_INFO] Color tool: finds frames where a region's average color matches your chosen target within the tolerance range. Useful for tracking UI state indicators, health bars, or any element identified by a specific color.",
-    change: "[TODO_INFO] Change tool: detects frames where pixel differences in the region exceed the threshold. Good for spotting sudden visual changes like screen transitions, pop-ups appearing, or loading states completing.",
-    similarity: "[TODO_INFO] Similarity tool: compares each frame against a captured reference using structural similarity (SSIM). Use it to find moments that look like a specific reference frame — e.g. a particular menu, dialog, or game state.",
-    text: "[TODO_INFO] Text tool: performs OCR on the region and fuzzy-matches against your search text. Useful for detecting when specific labels, error messages, or button text appear on screen.",
-    numbers: "[TODO_INFO] Numbers tool: reads numeric values from the region via OCR and compares them against your target using the selected operator. Great for monitoring scores, timers, counters, or any on-screen number.",
-    timelapse: "[TODO_INFO] Timelapse tool: generates a sped-up video or GIF of the region over the selected time range. Unlike other tools, this produces a single artifact rather than detecting individual frames.",
-    template: "[TODO_INFO] Template tool: searches the full video frame for a captured or uploaded reference image using template matching. Works across the entire frame, not just the selected region — ideal for finding icons, buttons, or UI elements wherever they appear.",
-    flow: "[TODO_INFO] Flow tool: detects motion in the region via dense optical flow. Higher magnitude thresholds filter out subtle movements. Useful for detecting player movement, animations starting, or activity in a specific area.",
-    scene: "[TODO_INFO] Scene tool: classifies each frame by comparing it to your captured reference scenes. Useful for building a timeline of when different screens, menus, or game levels are active.",
+    color: "Color tool: finds frames where a region's average color matches your chosen target within the tolerance range. Useful for tracking UI state indicators, health bars, or any element identified by a specific color.",
+    change: "Change tool: detects frames where pixel differences in the region exceed the threshold. Good for spotting sudden visual changes like screen transitions, pop-ups appearing, or loading states completing.",
+    similarity: "Similarity tool: compares each frame against a captured reference using structural similarity (SSIM). Use it to find moments that look like a specific reference frame — e.g. a particular menu, dialog, or game state.",
+    text: "Text tool: performs OCR on the region and fuzzy-matches against your search text. Useful for detecting when specific labels, error messages, or button text appear on screen.",
+    numbers: "Numbers tool: reads numeric values from the region via OCR and compares them against your target using the selected operator. Great for monitoring scores, timers, counters, or any on-screen number.",
+    timelapse: "Timelapse tool: generates a sped-up video or GIF of the region over the selected time range. Unlike other tools, this produces a single artifact rather than detecting individual frames.",
+    template: "Template tool: searches the full video frame for a captured or uploaded reference image using template matching. Works across the entire frame, not just the selected region — ideal for finding icons, buttons, or UI elements wherever they appear.",
+    flow: "Flow tool: detects motion in the region via dense optical flow. Higher magnitude thresholds filter out subtle movements. Useful for detecting player movement, animations starting, or activity in a specific area.",
+    scene: "Scene tool: classifies each frame by comparing it to your captured reference scenes. Useful for building a timeline of when different screens, menus, or game levels are active.",
     inactivity: "Inactivity tool: detects spans of near-duplicate frames in a region using perceptual hashing. Surfaces loading screens, frozen states, or repeated animation loops. Set the minimum duration to filter out brief pauses."
   };
 
@@ -2592,9 +2588,7 @@
     slot.setAttribute("data-tooltip", "Interval (seconds)");
     var iconWrap = el("div", "interval-icon");
     var iconMask = el("span", "interval-icon-mask");
-    var clockUrl = 'url("/screenspace/icons/clock.svg")';
-    iconMask.style.maskImage = clockUrl;
-    iconMask.style.webkitMaskImage = clockUrl;
+    applyMaskIcon(iconMask, 'url("/screenspace/icons/clock.svg")');
     iconWrap.appendChild(iconMask);
     slot.appendChild(iconWrap);
     var ctrl = el("div", "param-control");
@@ -2777,7 +2771,7 @@
         if (ref.threshold === undefined) ref.threshold = 0.75;
         var item = el("div", "scene-ref-item");
         item.appendChild(el("span", "scene-ref-name", ref.name));
-        item.appendChild(el("span", "param-value", formatTimestamp(ref.timestamp)));
+        item.appendChild(el("span", "param-value", formatTime(ref.timestamp, { decimals: 1 })));
         var threshSlider = document.createElement("input");
         threshSlider.type = "range";
         threshSlider.min = "0.50"; threshSlider.max = "1.00"; threshSlider.step = "0.01";
@@ -2819,7 +2813,7 @@
       });
       scNameInp.value = "";
       renderMtScenes();
-      showToast("Scene '" + name + "' at " + formatTimestamp(state.currentTimestamp));
+      showToast("Scene '" + name + "' at " + formatTime(state.currentTimestamp, { decimals: 1 }));
     });
     addScCtrl.appendChild(scCapBtn);
     addScRow.appendChild(addScCtrl);
@@ -2857,11 +2851,11 @@
     var tsLabel = el("span", "param-value", "\u2014");
     tsLabel.id = tsLabelId;
     if (state.multitoolSteps[idx]._refTs !== undefined) {
-      tsLabel.textContent = formatTimestamp(state.multitoolSteps[idx]._refTs);
+      tsLabel.textContent = formatTime(state.multitoolSteps[idx]._refTs, { decimals: 1 });
     }
     capBtn.addEventListener("click", function () {
       state.multitoolSteps[idx]._refTs = state.currentTimestamp;
-      tsLabel.textContent = formatTimestamp(state.currentTimestamp);
+      tsLabel.textContent = formatTime(state.currentTimestamp, { decimals: 1 });
     });
     c.appendChild(capBtn);
     c.appendChild(tsLabel);
@@ -3277,11 +3271,11 @@
     refBtn.addEventListener("click", function () {
       state.referenceTimestamp = state.currentTimestamp;
       renderWorkflowParams();
-      showToast("Reference frame captured at " + formatTimestamp(state.currentTimestamp));
+      showToast("Reference frame captured at " + formatTime(state.currentTimestamp, { decimals: 1 }));
     });
     refControl.appendChild(refBtn);
     if (state.referenceTimestamp !== null) {
-      var refTs = el("span", "param-value", formatTimestamp(state.referenceTimestamp));
+      var refTs = el("span", "param-value", formatTime(state.referenceTimestamp, { decimals: 1 }));
       refControl.appendChild(refTs);
     }
     refRow.appendChild(refLabel);
@@ -3391,7 +3385,7 @@
       state.referenceTimestamp = state.currentTimestamp;
       state.uploadedTemplate = null;
       renderWorkflowParams();
-      showToast("Template captured at " + formatTimestamp(state.currentTimestamp));
+      showToast("Template captured at " + formatTime(state.currentTimestamp, { decimals: 1 }));
     });
     tmplRefCtrl.appendChild(tmplCapBtn);
 
@@ -3452,7 +3446,7 @@
       uploadInfo.appendChild(clearBtn);
       tmplRefCtrl.appendChild(uploadInfo);
     } else if (state.referenceTimestamp !== null) {
-      tmplRefCtrl.appendChild(el("span", "param-value", formatTimestamp(state.referenceTimestamp)));
+      tmplRefCtrl.appendChild(el("span", "param-value", formatTime(state.referenceTimestamp, { decimals: 1 })));
     }
     tmplRefRow.appendChild(tmplRefCtrl);
     container.appendChild(tmplRefRow);
@@ -3479,7 +3473,7 @@
       if (ref.threshold === undefined) ref.threshold = 0.75;
       var item = el("div", "scene-ref-item");
       item.appendChild(el("span", "scene-ref-name", ref.name));
-      item.appendChild(el("span", "param-value", formatTimestamp(ref.timestamp)));
+      item.appendChild(el("span", "param-value", formatTime(ref.timestamp, { decimals: 1 })));
       var threshSlider = document.createElement("input");
       threshSlider.type = "range";
       threshSlider.min = "0.50";
@@ -3517,7 +3511,7 @@
       if (!name) { showToast("Enter a scene name"); return; }
       state.sceneReferences.push({ name: name, timestamp: state.currentTimestamp, threshold: 0.75 });
       renderWorkflowParams();
-      showToast("Scene '" + name + "' at " + formatTimestamp(state.currentTimestamp));
+      showToast("Scene '" + name + "' at " + formatTime(state.currentTimestamp, { decimals: 1 }));
     });
     addScCtrl.appendChild(scCapBtn);
     addScRow.appendChild(addScCtrl);
@@ -5567,9 +5561,7 @@
       badge.title = task.type;
       var iconSpan = el("span", "task-card-type-icon");
       var iconFile = TASK_TYPE_ICON_FILES[task.type] || "squares-2x2";
-      var iconUrl = 'url("/screenspace/icons/' + iconFile + '.svg")';
-      iconSpan.style.maskImage = iconUrl;
-      iconSpan.style.webkitMaskImage = iconUrl;
+      applyMaskIcon(iconSpan, 'url("/screenspace/icons/' + iconFile + '.svg")');
       badge.appendChild(iconSpan);
       card.appendChild(badge);
 
@@ -5577,9 +5569,7 @@
       if ((task.parameters || {}).scan_mode === "fast") {
         var fb = el("span", "task-fast-badge");
         var bi = el("span", "task-fast-badge-icon");
-        var burl = 'url("/screenspace/icons/chevron-double-right.svg")';
-        bi.style.maskImage = burl;
-        bi.style.webkitMaskImage = burl;
+        applyMaskIcon(bi, 'url("/screenspace/icons/chevron-double-right.svg")');
         fb.appendChild(bi);
         fb.appendChild(document.createTextNode("Fast"));
         card.appendChild(fb);
@@ -5969,9 +5959,7 @@
       fastLabel.classList.remove("hidden");
       fastLabel.innerHTML = "";
       var fIcon = el("span", "fast-scan-label-icon");
-      var fUrl = 'url("/screenspace/icons/chevron-double-right.svg")';
-      fIcon.style.maskImage = fUrl;
-      fIcon.style.webkitMaskImage = fUrl;
+      applyMaskIcon(fIcon, 'url("/screenspace/icons/chevron-double-right.svg")');
       fastLabel.appendChild(fIcon);
       fastLabel.appendChild(document.createTextNode("Fast scan results"));
       var rerunBtn = el("button", "ss-btn ss-btn-sm fast-scan-rerun-btn", "Re-Run Normal");
@@ -6160,53 +6148,53 @@
 
       if (task.type === "color") {
         row.dataset.timestamp = r.start;
-        row.appendChild(el("span", "result-timestamp", formatTimestamp(r.start) + " \u2013 " + formatTimestamp(r.end)));
+        row.appendChild(el("span", "result-timestamp", formatTime(r.start, { decimals: 1 }) + " \u2013 " + formatTime(r.end, { decimals: 1 })));
         row.appendChild(el("span", "result-detail", r.duration.toFixed(1) + "s"));
       } else if (task.type === "inactivity") {
         row.dataset.timestamp = r.start;
-        row.appendChild(el("span", "result-timestamp", formatTimestamp(r.start) + " \u2013 " + formatTimestamp(r.end)));
+        row.appendChild(el("span", "result-timestamp", formatTime(r.start, { decimals: 1 }) + " \u2013 " + formatTime(r.end, { decimals: 1 })));
         row.appendChild(el("span", "result-detail", r.duration.toFixed(1) + "s"));
         row.appendChild(el("span", "result-score", "d:" + (r.avg_distance !== undefined ? r.avg_distance : "?")));
       } else if (task.type === "change") {
         row.dataset.timestamp = r.timestamp;
-        row.appendChild(el("span", "result-timestamp", formatTimestamp(r.timestamp)));
+        row.appendChild(el("span", "result-timestamp", formatTime(r.timestamp, { decimals: 1 })));
         row.appendChild(buildConfBar(Math.min(r.magnitude, 1), task.type));
         row.appendChild(el("span", "result-score", (r.magnitude * 100).toFixed(1) + "%"));
       } else if (task.type === "similarity") {
         row.dataset.timestamp = r.timestamp;
-        row.appendChild(el("span", "result-timestamp", formatTimestamp(r.timestamp)));
+        row.appendChild(el("span", "result-timestamp", formatTime(r.timestamp, { decimals: 1 })));
         row.appendChild(buildConfBar(r.score, task.type));
         row.appendChild(el("span", "result-score", (r.score * 100).toFixed(1) + "%"));
       } else if (task.type === "text") {
         row.dataset.timestamp = r.timestamp;
-        row.appendChild(el("span", "result-timestamp", formatTimestamp(r.timestamp)));
+        row.appendChild(el("span", "result-timestamp", formatTime(r.timestamp, { decimals: 1 })));
         row.appendChild(el("span", "result-detail", r.text_found || ""));
         row.appendChild(buildConfBar(r.confidence, task.type));
         row.appendChild(el("span", "result-score", (r.confidence * 100).toFixed(0) + "%"));
       } else if (task.type === "numbers") {
         row.dataset.timestamp = r.timestamp;
-        row.appendChild(el("span", "result-timestamp", formatTimestamp(r.timestamp)));
+        row.appendChild(el("span", "result-timestamp", formatTime(r.timestamp, { decimals: 1 })));
         row.appendChild(el("span", "result-detail", String(r.number_found)));
       } else if (task.type === "template") {
         row.dataset.timestamp = r.timestamp;
-        row.appendChild(el("span", "result-timestamp", formatTimestamp(r.timestamp)));
+        row.appendChild(el("span", "result-timestamp", formatTime(r.timestamp, { decimals: 1 })));
         row.appendChild(buildConfBar(r.best_score, task.type));
         row.appendChild(el("span", "result-score", (r.best_score * 100).toFixed(1) + "%"));
         row.appendChild(el("span", "result-detail", r.match_count + " match" + (r.match_count !== 1 ? "es" : "")));
       } else if (task.type === "flow") {
         row.dataset.timestamp = r.timestamp;
-        row.appendChild(el("span", "result-timestamp", formatTimestamp(r.timestamp)));
+        row.appendChild(el("span", "result-timestamp", formatTime(r.timestamp, { decimals: 1 })));
         row.appendChild(buildConfBar(Math.min(r.magnitude / 20, 1), task.type));
         row.appendChild(el("span", "result-score", r.magnitude.toFixed(2)));
       } else if (task.type === "scene") {
         row.dataset.timestamp = r.timestamp;
-        row.appendChild(el("span", "result-timestamp", formatTimestamp(r.timestamp)));
+        row.appendChild(el("span", "result-timestamp", formatTime(r.timestamp, { decimals: 1 })));
         row.appendChild(el("span", "result-detail", r.scene_name));
         row.appendChild(buildConfBar(r.score, task.type));
         row.appendChild(el("span", "result-score", (r.score * 100).toFixed(1) + "%"));
       } else if (task.type === "multitool") {
         row.dataset.timestamp = r.timestamp;
-        row.appendChild(el("span", "result-timestamp", formatTimestamp(r.timestamp)));
+        row.appendChild(el("span", "result-timestamp", formatTime(r.timestamp, { decimals: 1 })));
         var badges = el("span", "result-detail multitool-badges");
         (r.tool_types || []).forEach(function (t) {
           var badge = el("span", "multitool-type-badge");

@@ -1640,7 +1640,7 @@ body {
 
 .btn-pipette.active {
   background: var(--color-accent);
-  color: #fff;
+  color: var(--accent-fg);
   border-color: var(--color-accent);
 }
 

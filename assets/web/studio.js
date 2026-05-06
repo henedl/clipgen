@@ -38,9 +38,7 @@
     stashes: [],
     artifactStashes: [],
     settingsData: null,
-    dividerOffset: 0,
     bottomCollapsed: false,
-    dividerOffsetBeforeCollapse: 0,
     activeFunction: "",
     cellExpandHover: true,
     filters: {
@@ -516,7 +514,6 @@
       state.filters.fnMin = mn !== "" ? parseFloat(mn) : null;
       state.filters.fnMax = mx !== "" ? parseFloat(mx) : null;
       applyGridFilters();
-      computeGridMaxHeight();
     }
     minIn.addEventListener("input", onChange);
     maxIn.addEventListener("input", onChange);
@@ -683,7 +680,6 @@
         });
       });
     }
-    computeGridMaxHeight();
   }
 
   // ---- Queue persistence (sessionStorage) ----
@@ -732,7 +728,6 @@
             if (Object.keys(state.convergenceBaselines).length > 0) renderGrid();
           })
           .catch(function () { state.convergenceBaselines = {}; });
-        computeGridMaxHeight();
         populateGalleryParticipants(data.participants || []);
         var durInput = qs("#highlightsDuration");
         if (durInput && data.highlightsDuration) {
@@ -1041,16 +1036,7 @@
   // Layout model: #sheetPreview is `flex: 1 1 auto` and #bottomPanel has an
   // explicit pixel `height` set from state.bottomH. The drag updates that
   // pixel height directly; the upper pane absorbs the remainder via flex.
-  // The legacy max-height-per-tab-panel mechanism is kept as a no-op stub so
-  // callers (renderGrid, syncPreviewTab, resize handler) don't break, but it
-  // no longer drives layout.
-
-  function applyUpperPaneMaxHeight(_value) { /* no-op — flex handles it */ }
-  function computeGridMaxHeight(_bottomHeightOverride) { /* no-op — flex handles it */ }
-
-  // The bottom strip is now driven by an explicit pixel height on
-  // `#bottomPanel` (the upper pane is flex: 1 1 auto and absorbs the remainder).
-  // The drag updates state.bottomH between BOTTOM_STRIP_MIN and BOTTOM_STRIP_MAX.
+  // state.bottomH is clamped to [BOTTOM_STRIP_MIN, BOTTOM_STRIP_MAX].
   var BOTTOM_STRIP_MIN = 60;
   var BOTTOM_STRIP_MAX = 560;
   var BOTTOM_STRIP_DEFAULT = 380;
@@ -1074,9 +1060,6 @@
         var parsed = JSON.parse(raw);
         if (parsed && typeof parsed.bottomH === "number") {
           state.bottomH = Math.max(BOTTOM_STRIP_MIN, Math.min(BOTTOM_STRIP_MAX, parsed.bottomH));
-        } else if (parsed && typeof parsed.dividerOffset === "number") {
-          // Legacy persisted value from the dividerOffset era — reinterpret as bottomH.
-          state.bottomH = Math.max(BOTTOM_STRIP_MIN, Math.min(BOTTOM_STRIP_MAX, parsed.dividerOffset || BOTTOM_STRIP_DEFAULT));
         }
         if (parsed && parsed.collapsed) {
           state.bottomCollapsed = true;
@@ -2007,14 +1990,12 @@
 
     if (n === 0) {
       list.appendChild(el("div", "stash-empty-hint", "Stash reels to set them aside for later."));
-      computeGridMaxHeight();
       return;
     }
 
     for (var i = 0; i < n; i++) {
       list.appendChild(buildStashCard(state.stashes[i], "api/stashes", state.stashes, renderStashedReels, "reel-stash", recallStash));
     }
-    computeGridMaxHeight();
   }
 
   function makeStashFolderIcon(stash) {
@@ -2214,14 +2195,12 @@
 
     if (n === 0) {
       list.appendChild(el("div", "stash-empty-hint", "Stash artifacts to keep them aside — drag, or use the Stash button."));
-      computeGridMaxHeight();
       return;
     }
 
     for (var i = 0; i < n; i++) {
       list.appendChild(buildStashCard(state.artifactStashes[i], "api/artifact-stashes", state.artifactStashes, renderStashedArtifacts, "artifact-stash", recallArtifactStash));
     }
-    computeGridMaxHeight();
   }
 
   function stashCurrentArtifacts() {
@@ -2259,7 +2238,6 @@
     var reelArea = qs("#stashedReelsArea");
     if (state.artifactStashes.length === 0) artArea.classList.add("stash-drop-reveal");
     if (state.stashes.length === 0) reelArea.classList.add("stash-drop-reveal");
-    computeGridMaxHeight();
   }
 
   function hideEmptyStashAreas() {
@@ -2267,7 +2245,6 @@
     var reelArea = qs("#stashedReelsArea");
     artArea.classList.remove("stash-drop-reveal");
     reelArea.classList.remove("stash-drop-reveal");
-    computeGridMaxHeight();
   }
 
   // ---- Buttons ----
@@ -3406,9 +3383,7 @@
 
   function xrefBadgeIcon(iconName) {
     var span = el("span", "xref-badge-icon");
-    var url = 'url("' + XREF_ICON_BASE + iconName + '.svg")';
-    span.style.maskImage = url;
-    span.style.webkitMaskImage = url;
+    applyMaskIcon(span, 'url("' + XREF_ICON_BASE + iconName + '.svg")');
     return span;
   }
 
@@ -4312,9 +4287,7 @@
     for (var i = 0; i < nodes.length; i++) {
       var name = nodes[i].dataset.icon;
       if (!name) continue;
-      var url = 'url("icons/' + name + '.svg")';
-      nodes[i].style.maskImage = url;
-      nodes[i].style.webkitMaskImage = url;
+      applyMaskIcon(nodes[i], 'url("icons/' + name + '.svg")');
     }
   }
 
@@ -4356,7 +4329,6 @@
       state.trIntakePollTimer = setInterval(pollTranscriptIntakeMarks, 10000);
     }
     window.addEventListener("resize", function () {
-      computeGridMaxHeight();
       if (window.convergenceResize) window.convergenceResize();
       if (window.metadataResize) window.metadataResize();
     });

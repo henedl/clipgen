@@ -1051,11 +1051,11 @@
               var et = xref.screenspaceEvents[ei].event_type || xref.screenspaceEvents[ei].detector;
               if (!evSeen[et]) { evSeen[et] = true; evTypes.push(et); }
             }
-            html += '<span class="segment-xref-badge" style="background:' + XREF_BADGES.screenspace.color + '" title="' + escapeHtml(evTypes.join(", ")) + '"><span class="xref-badge-icon" style="mask-image:url(icons/' + XREF_BADGES.screenspace.icon + '.svg);-webkit-mask-image:url(icons/' + XREF_BADGES.screenspace.icon + '.svg)"></span></span>';
+            html += '<span class="segment-xref-badge" style="background:' + XREF_BADGES.screenspace.color + '" title="' + escapeHtml(evTypes.join(", ")) + '"><span class="xref-badge-icon" style="' + maskIconStyle("url(icons/" + XREF_BADGES.screenspace.icon + ".svg)") + '"></span></span>';
           }
           if (xref.sheetObservations.length > 0) {
             var obsTitle = xref.sheetObservations[0].observation;
-            html += '<span class="segment-xref-badge" style="background:' + XREF_BADGES.sheet.color + '" title="' + escapeHtml(obsTitle) + '"><span class="xref-badge-icon" style="mask-image:url(icons/' + XREF_BADGES.sheet.icon + '.svg);-webkit-mask-image:url(icons/' + XREF_BADGES.sheet.icon + '.svg)"></span></span>';
+            html += '<span class="segment-xref-badge" style="background:' + XREF_BADGES.sheet.color + '" title="' + escapeHtml(obsTitle) + '"><span class="xref-badge-icon" style="' + maskIconStyle("url(icons/" + XREF_BADGES.sheet.icon + ".svg)") + '"></span></span>';
           }
           html += '</span>';
         }
@@ -1068,7 +1068,7 @@
         if (/^\s+$/.test(tokens[w])) {
           wordHtml += tokens[w];
         } else if (tokens[w]) {
-          wordHtml += '<span class="segment-word" data-original="' + escapeHtml(tokens[w]) + '">' + escapeHtml(tokens[w]) + '</span>';
+          wordHtml += '<span class="segment-word">' + escapeHtml(tokens[w]) + '</span>';
         }
       }
       html += '<span class="segment-text" data-id="' + escapeHtml(seg.id) + '">' + annoBadgeHtml + wordHtml + '</span>';
@@ -1316,14 +1316,6 @@
   var _lastTimelineHit = null;
   var _timelineResizeObs = null;
 
-  function formatTimeShort(secs) {
-    if (!isFinite(secs) || secs < 0) secs = 0;
-    var total = Math.floor(secs);
-    var m = Math.floor(total / 60);
-    var s = total % 60;
-    return m + ":" + (s < 10 ? "0" : "") + s;
-  }
-
   function setIconClass(span, klass) {
     if (!span) return;
     span.className = "player-btn-icon " + klass;
@@ -1381,7 +1373,7 @@
     var label = qs("#videoTime");
     if (!v || !label) return;
     var dur = isFinite(v.duration) ? v.duration : 0;
-    label.textContent = formatTimeShort(v.currentTime || 0) + " / " + formatTimeShort(dur);
+    label.textContent = formatTime(v.currentTime || 0) + " / " + formatTime(dur);
   }
 
   function applyCaptionMode() {
@@ -1466,7 +1458,7 @@
       ctx.moveTo(x, 0);
       ctx.lineTo(x, 6);
       ctx.stroke();
-      ctx.fillText(formatTimeShort(t), x, 16);
+      ctx.fillText(formatTime(t), x, 16);
     }
     ctx.textAlign = "start";
 
@@ -1563,7 +1555,7 @@
     var label = mark && mark.label ? ' — ' + escapeHtml(mark.label) : "";
     tip.innerHTML = '<span class="tr-tooltip-cat" style="color:' + (mark && mark.color || cat.color) + '">'
       + escapeHtml(cat.label) + '</span>'
-      + escapeHtml(formatTimeShort(seg.start)) + label + extra
+      + escapeHtml(formatTime(seg.start)) + label + extra
       + '<br>' + escapeHtml(snippet);
     tip.classList.remove("hidden");
     var tipRect = tip.getBoundingClientRect();
@@ -2750,14 +2742,12 @@
     // Two stacked icons; CSS hides one and shows the other on hover/focus.
     var rest = document.createElement("span");
     rest.className = "pill-trigger-icon pill-trigger-icon--rest";
-    rest.style.maskImage = "url(" + cfg.rest + ")";
-    rest.style.webkitMaskImage = "url(" + cfg.rest + ")";
+    applyMaskIcon(rest, "url(" + cfg.rest + ")");
     btn.appendChild(rest);
 
     var hover = document.createElement("span");
     hover.className = "pill-trigger-icon pill-trigger-icon--hover";
-    hover.style.maskImage = "url(" + cfg.hover + ")";
-    hover.style.webkitMaskImage = "url(" + cfg.hover + ")";
+    applyMaskIcon(hover, "url(" + cfg.hover + ")");
     btn.appendChild(hover);
 
     btn.addEventListener("click", function (e) {
