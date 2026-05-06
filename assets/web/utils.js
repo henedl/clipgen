@@ -11,14 +11,17 @@
 // ---- Feature flags ----
 
 // Animated canvas dot-grid background (grid-bg.js). When false, falls back to
-// the static CSS line-grid defined in tokens.css.
-var CLIPGEN_ANIMATED_BG = true;
+// the static CSS line-grid defined in tokens.css. Disabled: the full-viewport
+// canvas repaints every frame (RAF loop with ambient shimmer + drag-wake
+// pulses), which combined with the floating-nav backdrop-filter strips
+// saturates the compositor and visibly lags drag operations.
+var CLIPGEN_ANIMATED_BG = false;
 
 // Live token-tweak debug widget (dev-token-tweak.js). When false, the widget
 // script bails on load and never mounts. Flip to false during a build, or
 // when not iterating on the redesign. The widget never ships in exports
 // either way — viewer.py strips data-dev-only tags during inlining.
-var CLIPGEN_DEV_TOKEN_TWEAK = true;
+var CLIPGEN_DEV_TOKEN_TWEAK = false;
 
 // ---- Canonical config (mirror of config.py via utils.get_frontend_config)
 //

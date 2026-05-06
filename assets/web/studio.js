@@ -226,24 +226,52 @@
     return result;
   }
 
+  // Cached once — `--radius` lives on :root in tokens.css and isn't expected to
+  // change at runtime. Avoids a getComputedStyle call inside setCardDragImage,
+  // which is on the dragstart hot path.
+  var _cardDragImageRadius = null;
+  function getCardDragImageRadius() {
+    if (_cardDragImageRadius !== null) return _cardDragImageRadius;
+    var raw = getComputedStyle(document.documentElement).getPropertyValue("--radius").trim();
+    _cardDragImageRadius = raw ? "calc(" + raw + " - 2px)" : "4px";
+    return _cardDragImageRadius;
+  }
+
   function setCardDragImage(ev, card) {
     var clone = card.cloneNode(true);
-    var computed = window.getComputedStyle(card);
+    var rect = card.getBoundingClientRect();
     clone.style.position = "absolute";
     clone.style.top = "-9999px";
     clone.style.left = "-9999px";
-    clone.style.width = card.offsetWidth + "px";
+    clone.style.width = rect.width + "px";
     clone.style.zIndex = "-1";
     // Some Chromium versions render the drag-image bitmap without honoring the
     // class-driven border-radius / overflow clip, leaving square corners on
     // an otherwise rounded card. Pin them inline on the clone so the snapshot
     // captures the rounding.
-    clone.style.borderRadius = computed.borderRadius;
+    clone.style.borderRadius = getCardDragImageRadius();
     clone.style.overflow = "hidden";
     document.body.appendChild(clone);
-    var rect = card.getBoundingClientRect();
     ev.dataTransfer.setDragImage(clone, ev.clientX - rect.left, ev.clientY - rect.top);
     setTimeout(function () { document.body.removeChild(clone); }, 0);
+  }
+
+  // Single capture-phase gate: while a drag is in flight, `body.dragging` is
+  // set so CSS can suspend expensive effects (backdrop-filter on the floating
+  // nav, drop-target transitions, hover paint, etc.). Centralized here instead
+  // of patched into every dragstart handler — see studio.css / topnav.css /
+  // tokens.css for the matching rules.
+  function bindDragGate() {
+    function clear() { document.body.classList.remove("dragging"); }
+    document.addEventListener("dragstart", function () {
+      document.body.classList.add("dragging");
+    }, true);
+    document.addEventListener("dragend", clear, true);
+    document.addEventListener("drop", clear, true);
+    window.addEventListener("blur", clear);
+    document.addEventListener("visibilitychange", function () {
+      if (document.hidden) clear();
+    });
   }
 
   // ---- Filtering ----
@@ -1635,7 +1663,9 @@
     target.addEventListener("dragover", function (ev) {
       ev.preventDefault();
       ev.dataTransfer.dropEffect = "copy";
-      target.classList.add("drag-over");
+      // dragover fires ~60Hz; skip the no-op write when the class is already
+      // applied so we don't churn the attribute / invalidate style.
+      if (!target.classList.contains("drag-over")) target.classList.add("drag-over");
     });
     target.addEventListener("dragleave", function (ev) {
       if (!target.contains(ev.relatedTarget)) {
@@ -4349,6 +4379,7 @@
     initPreviewTabs();
     initDropTargets();
     initWheelScroll();
+    bindDragGate();
     bindReelReorder();
     bindButtons();
     loadStoredBottomHeight();

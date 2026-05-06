@@ -31,6 +31,17 @@
   .topnav { background: var(--bg); }
 }
 
+/* During an active drag, swap the glass nav for a solid bar. The 14px blur is
+ * GPU-rasterized but invalidated whenever any pixel beneath the strip
+ * repaints — including drop-target color flips on every dragover — which
+ * starves the compositor and visibly lags the OS-rendered drag image. The
+ * gate is `body.dragging`, set by bindDragGate() in studio.js. */
+body.dragging .topnav {
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+  background: var(--bg);
+}
+
 .topnav-left,
 .topnav-right {
   flex: 1 1 0;

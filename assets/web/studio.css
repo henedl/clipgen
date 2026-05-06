@@ -914,6 +914,13 @@ col.col-participant-col {
   background-color: var(--color-cell-hover);
 }
 
+/* Cheap insurance: most browsers suppress :hover during HTML5 drag, but with
+ * many cells in the grid this guarantees no per-cell repaint cost. */
+body.dragging .ts-cell:hover {
+  background-color: inherit;
+  transition: none;
+}
+
 .ts-cell.selected {
   background-color: var(--color-cell-selected);
 }
@@ -1139,6 +1146,13 @@ col.col-participant-col {
   background-color: var(--color-selected);
 }
 
+/* During drag, skip the color transition. An instant flip is invisible to
+ * the user and avoids per-frame repaint cost beneath the floating nav's
+ * (now-suspended) backdrop-filter. */
+body.dragging .drop-target {
+  transition: none;
+}
+
 .drop-target-empty {
   display: flex;
   align-items: center;
@@ -1209,8 +1223,12 @@ col.col-participant-col {
   position: relative;
   transition: box-shadow var(--duration-fast), border-color var(--duration-fast);
   user-select: none;
-  will-change: transform;
 }
+
+/* No will-change on .queue-card. The original always-on rule promoted every
+ * card to its own composited layer; HTML5 drag never transforms the source
+ * card, so the hint was misapplied. With many cards, the layer count alone
+ * was saturating the compositor during drag. */
 
 .queue-card:active {
   cursor: grabbing;
