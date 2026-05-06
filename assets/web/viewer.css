@@ -772,7 +772,7 @@ body {
 }
 
 .badge-severity {
-  color: #fff;
+  color: var(--accent-fg);
 }
 
 .badge-severity.sev-critical { background: var(--sev-critical); }
@@ -784,14 +784,14 @@ body {
 .badge-severity.sev-very-positive { background: var(--sev-very-positive); }
 .badge-severity.sev-unknown { background: var(--sev-unknown); }
 
-.detail-badge.sev-critical { background: var(--sev-critical); border-color: var(--sev-critical); color: #fff; }
-.detail-badge.sev-high { background: var(--sev-high); border-color: var(--sev-high); color: #fff; }
-.detail-badge.sev-medium { background: var(--sev-medium); border-color: var(--sev-medium); color: #fff; }
+.detail-badge.sev-critical { background: var(--sev-critical); border-color: var(--sev-critical); color: var(--accent-fg); }
+.detail-badge.sev-high { background: var(--sev-high); border-color: var(--sev-high); color: var(--accent-fg); }
+.detail-badge.sev-medium { background: var(--sev-medium); border-color: var(--sev-medium); color: var(--accent-fg); }
 .detail-badge.sev-low { background: var(--sev-low); border-color: var(--sev-low); color: #1f2937; }
-.detail-badge.sev-na { background: var(--sev-na); border-color: var(--sev-na); color: #fff; }
-.detail-badge.sev-positive { background: var(--sev-positive); border-color: var(--sev-positive); color: #fff; }
-.detail-badge.sev-very-positive { background: var(--sev-very-positive); border-color: var(--sev-very-positive); color: #fff; }
-.detail-badge.sev-unknown { background: var(--sev-unknown); border-color: var(--sev-unknown); color: #fff; }
+.detail-badge.sev-na { background: var(--sev-na); border-color: var(--sev-na); color: var(--accent-fg); }
+.detail-badge.sev-positive { background: var(--sev-positive); border-color: var(--sev-positive); color: var(--accent-fg); }
+.detail-badge.sev-very-positive { background: var(--sev-very-positive); border-color: var(--sev-very-positive); color: var(--accent-fg); }
+.detail-badge.sev-unknown { background: var(--sev-unknown); border-color: var(--sev-unknown); color: var(--accent-fg); }
 
 .artifact-desc {
   font-size: var(--text-xs);
@@ -868,9 +868,9 @@ body {
   display: none;
 }
 
-.detail-badge.clip { background: var(--color-clip); color: #fff; }
-.detail-badge.screen { background: var(--color-screen); color: #fff; }
-.detail-badge.gif { background: var(--color-gif); color: #fff; }
+.detail-badge.clip { background: var(--color-clip); color: var(--accent-fg); }
+.detail-badge.screen { background: var(--color-screen); color: var(--accent-fg); }
+.detail-badge.gif { background: var(--color-gif); color: var(--accent-fg); }
 
 #detailHeader h2 {
   font-size: var(--text-lg);

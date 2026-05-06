@@ -808,8 +808,7 @@
     if (opts.icon) {
       var ic = document.createElement("span");
       ic.className = "cg-btn-icon";
-      ic.style.maskImage = 'url("icons/' + opts.icon + '.svg")';
-      ic.style.webkitMaskImage = 'url("icons/' + opts.icon + '.svg")';
+      applyMaskIcon(ic, 'url("icons/' + opts.icon + '.svg")');
       btn.appendChild(ic);
     }
     if (opts.label) {

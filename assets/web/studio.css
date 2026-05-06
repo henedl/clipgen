@@ -341,7 +341,7 @@ body {
   color: var(--fg-muted);
   cursor: pointer;
   user-select: none;
-  transition: background-color 120ms ease-out, color 120ms ease-out, border-color 120ms ease-out;
+  transition: background-color var(--duration-instant) ease-out, color var(--duration-instant) ease-out, border-color var(--duration-instant) ease-out;
 }
 .studio-sidebar-row:hover {
   background: var(--bg-hover);
@@ -401,7 +401,7 @@ body {
   border-radius: 2px;
   cursor: pointer;
   user-select: none;
-  transition: background-color 120ms ease-out, color 120ms ease-out, border-color 120ms ease-out;
+  transition: background-color var(--duration-instant) ease-out, color var(--duration-instant) ease-out, border-color var(--duration-instant) ease-out;
 }
 .studio-sidebar-pill:hover {
   color: var(--fg);
@@ -489,7 +489,7 @@ body[data-active-tab]:not([data-active-tab="sheet"]) #studioSidebar {
   padding: 1px 6px;
   border-radius: var(--radius-full);
   background: var(--color-accent);
-  color: #fff;
+  color: var(--accent-fg);
   font-weight: 600;
   margin-left: var(--space-1);
 }
@@ -1241,7 +1241,7 @@ col.col-participant-col {
   bottom: 3px;
   right: 3px;
   background: rgba(0, 0, 0, 0.7);
-  color: #fff;
+  color: var(--accent-fg);
   font-size: var(--text-xs);
   font-family: var(--font-mono);
   padding: 1px 4px;
@@ -1269,7 +1269,7 @@ col.col-participant-col {
   top: 2px;
   right: 2px;
   background: rgba(0, 0, 0, 0.5);
-  color: #fff;
+  color: var(--accent-fg);
   border: none;
   border-radius: 50%;
   width: 18px;
@@ -1457,7 +1457,7 @@ html[data-theme="dark"] .queue-card-error .queue-card-thumb {
   cursor: pointer;
   user-select: none;
   position: relative;
-  transition: border-color 120ms ease-out, background-color 120ms ease-out;
+  transition: border-color var(--duration-instant) ease-out, background-color var(--duration-instant) ease-out;
 }
 .stash-card:hover {
   border-color: var(--border-strong);
@@ -1958,7 +1958,7 @@ html[data-theme="dark"] .queue-card-error .queue-card-thumb {
 .card-gen-badge .cg-icon {
   width: 12px;
   height: 12px;
-  color: #fff;
+  color: var(--accent-fg);
   display: block;
 }
 
@@ -2465,7 +2465,7 @@ html[data-theme="dark"] .log-panel {
   padding: 3px;
   border-radius: var(--radius-sm);
   background: color-mix(in oklch, var(--stream-screenspace) 85%, transparent);
-  color: #fff;
+  color: var(--accent-fg);
   line-height: 0;
   z-index: 1;
 }
@@ -2530,7 +2530,7 @@ html[data-theme="dark"] .log-panel {
   position: relative;
   padding: 3px;
   border-radius: var(--radius-sm);
-  color: #fff;
+  color: var(--accent-fg);
   line-height: 0;
   transition: margin var(--duration-fast) ease;
 }

@@ -31,7 +31,7 @@
   var isReady = false;
 
   function svgMask(name) {
-    return 'mask-image: url("icons/' + name + '.svg"); -webkit-mask-image: url("icons/' + name + '.svg");';
+    return maskIconStyle('url("icons/' + name + '.svg")');
   }
 
   function build() {

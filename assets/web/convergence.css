@@ -93,7 +93,7 @@
   border: 1px solid var(--border);
   cursor: pointer;
   font-family: inherit;
-  transition: background-color 120ms ease-out, color 120ms ease-out, border-color 120ms ease-out;
+  transition: background-color var(--duration-instant) ease-out, color var(--duration-instant) ease-out, border-color var(--duration-instant) ease-out;
 }
 .cv-stream-btn:hover {
   border-color: var(--border-strong);
@@ -194,7 +194,7 @@
   border: 1px solid;
   font-size: 11.5px;
   cursor: pointer;
-  transition: filter 120ms ease-out;
+  transition: filter var(--duration-instant) ease-out;
 }
 .cv-callout:hover { filter: brightness(1.2) saturate(1.15); }
 .cv-callout.is-active {
