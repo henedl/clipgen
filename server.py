@@ -1539,6 +1539,54 @@ def start_combined_server(
             }
         )
 
+    @combined.route("/api/export/status")
+    def api_export_status() -> Response:
+        """Report which surface manifests are present in the output directory.
+
+        Used by the frontend to gate the Export quick action — if no
+        manifests exist there is nothing for ``write_export_bundle`` to write.
+        """
+        output_dir = Path(utils.get_effective_output_dir())
+        screenspace = (output_dir / config.SCREENSPACE_MANIFEST_FILENAME).is_file()
+        transcripts = (output_dir / config.TRANSCRIPTS_MANIFEST_FILENAME).is_file()
+        return jsonify(
+            {
+                "ok": True,
+                "screenspace": screenspace,
+                "transcripts": transcripts,
+                "any": screenspace or transcripts,
+            }
+        )
+
+    @combined.route("/api/export", methods=["POST"])
+    def api_export() -> FlaskResponse:
+        """Write the same JSON+CSV bundle the ``--export`` CLI flag produces."""
+        import data_export
+
+        output_dir = Path(utils.get_effective_output_dir())
+        try:
+            written = data_export.write_export_bundle(output_dir)
+        except Exception as err:
+            return jsonify({"ok": False, "error": str(err)}), 500
+        if not written:
+            return jsonify(
+                {
+                    "ok": False,
+                    "error": (
+                        "No manifests in output directory. Expected one of "
+                        f"{config.SCREENSPACE_MANIFEST_FILENAME} or "
+                        f"{config.TRANSCRIPTS_MANIFEST_FILENAME}."
+                    ),
+                }
+            ), 404
+        return jsonify(
+            {
+                "ok": True,
+                "written": [p.name for p in written],
+                "output_dir": str(output_dir),
+            }
+        )
+
     # ---- Shared settings (available from any page) ----
 
     # Load persisted settings unconditionally so Transcripts/Screenspace can

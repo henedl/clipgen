@@ -2,9 +2,12 @@
  *
  * Mounts on DOMContentLoaded into a <topnav-mount data-frontend="..."> element.
  * Reads page-specific Quick Actions from window.CLIPGEN_QUICK_ACTIONS, an
- * array of { icon, label, action } | { divider: true } | { header } items.
+ * array of { icon, label, action, disabled?, title? } | { divider: true } |
+ * { header } items. Items with disabled=true render grayed and ignore clicks;
+ * the title field becomes a hover tooltip explaining why.
  * Pages may also call ClipgenTopNav.setQuickActions(items) post-mount to
- * update the menu as state changes.
+ * update the menu as state changes, and ClipgenTopNav.onBeforeOpen(cb) to
+ * refresh state right before the menu opens.
  *
  * Wires existing #themeToggle / #logBtn / #settingsBtn IDs inside the new
  * cluster so page setup code that addEventListener's to those IDs continues
@@ -28,6 +31,7 @@
 
   var els = {};
   var readyCallbacks = [];
+  var beforeOpenCallbacks = [];
   var isReady = false;
 
   function svgMask(name) {
@@ -213,6 +217,9 @@
   }
 
   function openQuickActions() {
+    for (var i = 0; i < beforeOpenCallbacks.length; i++) {
+      try { beforeOpenCallbacks[i](); } catch (_) {}
+    }
     state.quickActionsOpen = true;
     els.qaTrigger.classList.add("is-open");
     els.qaTrigger.setAttribute("aria-expanded", "true");
@@ -255,6 +262,14 @@
     btn.type = "button";
     btn.className = "topnav-qa-item";
     btn.setAttribute("role", "menuitem");
+    if (item.disabled) {
+      btn.disabled = true;
+      btn.classList.add("is-disabled");
+      btn.setAttribute("aria-disabled", "true");
+    }
+    if (item.title) {
+      btn.title = item.title;
+    }
     if (item.icon) {
       var ic = document.createElement("span");
       ic.className = "topnav-icon";
@@ -265,6 +280,7 @@
     label.textContent = item.label || "";
     btn.appendChild(label);
     btn.addEventListener("click", function () {
+      if (item.disabled) return;
       closeQuickActions();
       if (typeof item.action === "function") {
         try { item.action(); } catch (e) { console.error("Quick action error:", e); }
@@ -298,10 +314,16 @@
     }
   }
 
+  function onBeforeOpen(cb) {
+    if (typeof cb !== "function") return;
+    beforeOpenCallbacks.push(cb);
+  }
+
   window.ClipgenTopNav = {
     setQuickActions: setQuickActions,
     refreshVersion: setVersion,
     onReady: onReady,
+    onBeforeOpen: onBeforeOpen,
   };
 
   if (document.readyState === "loading") {
