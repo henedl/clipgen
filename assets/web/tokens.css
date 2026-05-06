@@ -596,6 +596,18 @@ body:not(.cg-grid-bg-on) {
   #trSubheader { background: var(--bg); }
 }
 
+/* See body.dragging .topnav in topnav.css — same rationale: backdrop-filter
+ * over an animating drop-target background is the primary compositor cost
+ * during drag. */
+body.dragging .subheader,
+body.dragging #studioSubheader,
+body.dragging #ssSubheader,
+body.dragging #trSubheader {
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+  background: var(--bg);
+}
+
 .subheader-left {
   display: flex;
   align-items: center;
