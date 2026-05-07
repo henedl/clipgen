@@ -1164,6 +1164,57 @@ body.dragging .drop-target {
   text-align: center;
 }
 
+/* Cell drag ghost — fixed-position cascade preview shown while dragging
+ * timestamp cells from the sheet. The native drag image is replaced by a
+ * transparent 1×1 GIF in studio.js, so this overlay is the only visual.
+ *
+ * The wrapper itself translates to follow the cursor (RAF-coalesced in
+ * studio.js). Cards stack down-right inside; card --i=0 is on top so it
+ * appears at/near the cursor with the rest of the stack peeking out behind. */
+.cell-drag-ghost {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 0;
+  height: 0;
+  pointer-events: none;
+  z-index: var(--z-overlay);
+  will-change: transform;
+}
+
+/* The descendant selector here is load-bearing: .queue-card declares
+ * position: relative later in this stylesheet, and a single-class rule
+ * would lose the cascade and let cards lay out in normal flow (stacked
+ * vertically instead of cleanly overlapping). */
+.cell-drag-ghost .cell-drag-ghost-card {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: calc(1000 - var(--i));
+  --offset-x: calc(var(--i) * 5px);
+  --offset-y: calc(var(--i) * 7px);
+  transform: translate(var(--offset-x), var(--offset-y)) scale(0.9);
+  transform-origin: 0 0;
+  opacity: 0;
+  box-shadow: var(--shadow-lg);
+  transition:
+    opacity var(--duration-instant) cubic-bezier(0.2, 0.8, 0.2, 1),
+    transform var(--duration-instant) cubic-bezier(0.2, 0.8, 0.2, 1);
+  transition-delay: calc(var(--i) * 40ms);
+}
+
+.cell-drag-ghost.in .cell-drag-ghost-card {
+  opacity: 1;
+  transform: translate(var(--offset-x), var(--offset-y)) scale(1);
+}
+
+.cell-drag-ghost.out .cell-drag-ghost-card {
+  opacity: 0;
+  transform: translate(var(--offset-x), var(--offset-y)) scale(0.94);
+  transition-duration: var(--duration-instant);
+  transition-delay: 0ms;
+}
+
 /* Artifact cards */
 
 #artifactsArea {

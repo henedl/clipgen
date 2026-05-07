@@ -256,6 +256,18 @@
     setTimeout(function () { document.body.removeChild(clone); }, 0);
   }
 
+  // Transparent 1×1 image used to suppress the browser's default drag preview
+  // when we want a custom DOM-based ghost (see bindDragFromGrid). Cached so
+  // the same Image instance is reused across drags.
+  var _TRANSPARENT_DRAG_IMAGE = null;
+  function getTransparentDragImage() {
+    if (_TRANSPARENT_DRAG_IMAGE) return _TRANSPARENT_DRAG_IMAGE;
+    var img = new Image(1, 1);
+    img.src = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
+    _TRANSPARENT_DRAG_IMAGE = img;
+    return img;
+  }
+
   // Single capture-phase gate: while a drag is in flight, `body.dragging` is
   // set so CSS can suspend expensive effects (backdrop-filter on the floating
   // nav, drop-target transitions, hover paint, etc.). Centralized here instead
@@ -1583,15 +1595,164 @@
 
   // ---- Drag from grid ----
 
+  // Defensive click-vs-drag threshold layered on top of the browser's own
+  // dragstart heuristic. The native ghost is suppressed at dragstart and we
+  // wait until the cursor has moved this many pixels before mounting our
+  // cascade preview, so a small click-with-jitter never flashes a ghost.
+  var _CELL_DRAG_THRESHOLD_PX = 6;
+  var _CELL_GHOST_OFFSET_X = 14;
+  var _CELL_GHOST_OFFSET_Y = 10;
+
+  // Build a fixed-position overlay holding one queue-style card per parsed
+  // segment, matching the look of cards in the Artifact/Reel queues. Cards
+  // stack down-right via the --i custom property (see studio.css). The
+  // .queue-card-thumb's surface-alt background acts as a skeleton state
+  // until the eagerly-loaded thumbnail resolves.
+  function buildCellDragGhost(info, segments) {
+    var ghost = el("div", "cell-drag-ghost");
+    var n = segments.length;
+    for (var i = 0; i < n; i++) {
+      var seg = segments[i];
+      var card = el("div", "queue-card clip-card size-md cell-drag-ghost-card");
+      card.style.setProperty("--i", i);
+
+      var thumb = el("div", "queue-card-thumb");
+      var img = document.createElement("img");
+      img.alt = "";
+      img.draggable = false;
+      img.src = "api/thumbnail/" + encodeURIComponent(info.participant) + "/" + seg.start;
+      thumb.appendChild(img);
+      // Mirror the queue-card error fallback (red X, queue-card-error class)
+      // so a missing video / invalid thumbnail looks the same here as it does
+      // once dropped into the Artifact or Reel queue.
+      (function (cardEl, thumbEl) {
+        img.addEventListener("error", function () {
+          this.remove();
+          thumbEl.appendChild(el("span", "", "✕"));
+          cardEl.classList.add("queue-card-error");
+        });
+      })(card, thumb);
+      thumb.appendChild(el("span", "queue-card-duration", formatDuration(seg.end - seg.start)));
+      card.appendChild(thumb);
+
+      var meta = el("div", "queue-card-meta");
+      var refText = info.participant + "." + info.row;
+      if (n > 1) refText += " (" + (i + 1) + "/" + n + ")";
+      meta.appendChild(el("span", "queue-card-ref", refText));
+      card.appendChild(meta);
+
+      ghost.appendChild(card);
+    }
+    document.body.appendChild(ghost);
+    return ghost;
+  }
+
   function bindDragFromGrid() {
     var grid = qs("#sheetGrid");
+    var pointerOrigin = null;   // last pointerdown position on a .ts-cell
+    var pendingDrag = null;     // {info, originX, originY} until ghost mounts
+    var ghost = null;           // active overlay element
+    var rafPending = 0;
+    var cursorX = 0;
+    var cursorY = 0;
+
+    grid.addEventListener("pointerdown", function (ev) {
+      var td = ev.target.closest(".ts-cell");
+      if (!td || td.classList.contains("empty")) {
+        pointerOrigin = null;
+        return;
+      }
+      pointerOrigin = { x: ev.clientX, y: ev.clientY };
+    });
+
+    function clearPointerOrigin() { pointerOrigin = null; }
+    document.addEventListener("pointerup", clearPointerOrigin, true);
+    document.addEventListener("pointercancel", clearPointerOrigin, true);
 
     grid.addEventListener("dragstart", function (ev) {
       var td = ev.target.closest(".ts-cell");
       if (!td || td.classList.contains("empty")) return;
+
       var info = getCellInfo(td);
       ev.dataTransfer.setData("application/json", JSON.stringify(info));
       ev.dataTransfer.effectAllowed = "copy";
+
+      // Suppress the browser's snapshot — we render a custom cascade overlay.
+      try { ev.dataTransfer.setDragImage(getTransparentDragImage(), 0, 0); } catch (_) {}
+
+      pendingDrag = {
+        info: info,
+        originX: pointerOrigin ? pointerOrigin.x : ev.clientX,
+        originY: pointerOrigin ? pointerOrigin.y : ev.clientY,
+      };
+      cursorX = ev.clientX;
+      cursorY = ev.clientY;
+    });
+
+    function positionGhost() {
+      if (!ghost) return;
+      ghost.style.transform = "translate("
+        + (cursorX + _CELL_GHOST_OFFSET_X) + "px, "
+        + (cursorY + _CELL_GHOST_OFFSET_Y) + "px)";
+    }
+
+    function ensureGhostBuilt() {
+      if (ghost || !pendingDrag) return;
+      var dx = cursorX - pendingDrag.originX;
+      var dy = cursorY - pendingDrag.originY;
+      if (Math.hypot(dx, dy) < _CELL_DRAG_THRESHOLD_PX) return;
+      var info = pendingDrag.info;
+      var segments = expandCellToSegments(info);
+      ghost = buildCellDragGhost(info, segments);
+      pendingDrag = null;
+      positionGhost();
+      // Flip on the .in class one frame later so the entrance transition runs.
+      requestAnimationFrame(function () {
+        if (ghost) ghost.classList.add("in");
+      });
+    }
+
+    function onDragOver(ev) {
+      if (!pendingDrag && !ghost) return;
+      cursorX = ev.clientX;
+      cursorY = ev.clientY;
+      ensureGhostBuilt();
+      if (!ghost || rafPending) return;
+      rafPending = requestAnimationFrame(function () {
+        rafPending = 0;
+        positionGhost();
+      });
+    }
+
+    function cleanup() {
+      pendingDrag = null;
+      if (rafPending) {
+        cancelAnimationFrame(rafPending);
+        rafPending = 0;
+      }
+      if (ghost) {
+        var node = ghost;
+        ghost = null;
+        node.classList.remove("in");
+        node.classList.add("out");
+        setTimeout(function () {
+          if (node.parentNode) node.parentNode.removeChild(node);
+        }, 140);
+      }
+      pointerOrigin = null;
+    }
+
+    document.addEventListener("dragover", onDragOver, true);
+    document.addEventListener("dragend", cleanup, true);
+    document.addEventListener("drop", cleanup, true);
+    // mouseup fires immediately on release regardless of drop target. dragend
+    // is delayed up to ~1s by the browser's snap-back animation when a drop
+    // is rejected (e.g. dropped on the sheet, not on a queue), so without
+    // this the ghost lingers visibly. cleanup() is idempotent.
+    document.addEventListener("mouseup", cleanup, true);
+    window.addEventListener("blur", cleanup);
+    document.addEventListener("visibilitychange", function () {
+      if (document.hidden) cleanup();
     });
   }
 
