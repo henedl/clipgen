@@ -245,7 +245,20 @@ body {
   padding: calc(var(--space-3) + 92px) 0 var(--space-3);
   background: var(--bg);
   border-right: 1px solid var(--hairline);
-  overflow: hidden;
+  overflow-x: hidden;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+#studioSidebar::-webkit-scrollbar {
+  width: 6px;
+}
+#studioSidebar::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 3px;
+}
+#studioSidebar::-webkit-scrollbar-track {
+  background: transparent;
 }
 /* Transition is gated on `tx-ready`, applied by studio.js after the first
  * paint. Otherwise the attribute flip from the persisted-collapsed state
@@ -328,10 +341,11 @@ body {
   color: var(--fg-faint);
 }
 
-/* Vertical-list layout for VIEWS / CATEGORIES / SEVERITY — each option a full-width row. */
+/* Vertical-list layout for VIEWS / CATEGORIES / SEVERITY / KEYWORDS — each option a full-width row. */
 .studio-sidebar-section[data-section="views"] .studio-sidebar-body,
 .studio-sidebar-section[data-section="categories"] .studio-sidebar-body,
-.studio-sidebar-section[data-section="severity"] .studio-sidebar-body {
+.studio-sidebar-section[data-section="severity"] .studio-sidebar-body,
+.studio-sidebar-section[data-section="keywords"] .studio-sidebar-body {
   display: flex;
   flex-direction: column;
   min-width: 0;
@@ -937,6 +951,17 @@ body.dragging .ts-cell:hover {
 
 .ts-cell.empty {
   cursor: default;
+}
+
+/* Keyword filter emphasis — applied during renderGrid when state.filters.keywords
+ * is non-empty. Matching cells get an accent outline; non-matching cells in the
+ * surviving rows recede to keep the matched cells visually dominant. */
+.ts-cell.cell-keyword-match {
+  box-shadow: inset 0 0 0 2px var(--color-accent);
+}
+
+.ts-cell.cell-keyword-dim {
+  opacity: 0.45;
 }
 
 .ts-chip {

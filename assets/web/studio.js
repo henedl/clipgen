@@ -44,6 +44,7 @@
     filters: {
       categories: [],
       severities: [],
+      keywords: [],
       fnMin: null,
       fnMax: null,
     },
@@ -73,6 +74,7 @@
     convergenceStale: false,
     sidebarOpen: true,
     sidebarCategories: {},
+    sidebarKeywords: {},
     sidebarParticipants: {},
   };
 
@@ -293,6 +295,7 @@
     return (
       f.categories.length > 0 ||
       f.severities.length > 0 ||
+      f.keywords.length > 0 ||
       f.fnMin !== null ||
       f.fnMax !== null
     );
@@ -312,6 +315,14 @@
       if (f.severities.length > 0) {
         if (!row.severity || f.severities.indexOf(row.severity) < 0) return false;
       }
+      if (f.keywords.length > 0) {
+        var rowKw = row.keywords || [];
+        var kwMatch = false;
+        for (var ki = 0; ki < f.keywords.length; ki++) {
+          if (rowKw.indexOf(f.keywords[ki]) >= 0) { kwMatch = true; break; }
+        }
+        if (!kwMatch) return false;
+      }
       if (f.fnMin !== null || f.fnMax !== null) {
         if (!fnActive) return false;
         var val = fnActive(row, participants);
@@ -325,6 +336,7 @@
   function clearAllFilters() {
     state.filters.categories = [];
     state.filters.severities = [];
+    state.filters.keywords = [];
     state.filters.fnMin = null;
     state.filters.fnMax = null;
   }
@@ -383,6 +395,17 @@
     });
   }
 
+  function applySidebarKeywords() {
+    state.filters.keywords = Object.keys(state.sidebarKeywords).filter(function (k) {
+      return !!state.sidebarKeywords[k];
+    });
+  }
+
+  function keywordLabel(annotationId) {
+    if (!annotationId) return "";
+    return annotationId.charAt(0).toUpperCase() + annotationId.slice(1);
+  }
+
   function countSidebarSelectedParticipants() {
     var n = 0;
     for (var k in state.sidebarParticipants) {
@@ -399,9 +422,10 @@
     if (!state.sheetData) return;
     var d = state.sheetData;
 
-    // Counts per severity / category / participant
+    // Counts per severity / category / participant / keyword
     var sevCounts = { all: d.rows.length };
     var catCounts = {};
+    var kwCounts = {};
     var partCounts = {};
     var participants = d.participants || [];
     for (var p = 0; p < participants.length; p++) partCounts[participants[p]] = 0;
@@ -410,6 +434,12 @@
       var sev = (row.severity || "").trim();
       sevCounts[sev] = (sevCounts[sev] || 0) + 1;
       if (row.category) catCounts[row.category] = (catCounts[row.category] || 0) + 1;
+      if (row.keywords) {
+        for (var rk = 0; rk < row.keywords.length; rk++) {
+          var kid = row.keywords[rk];
+          kwCounts[kid] = (kwCounts[kid] || 0) + 1;
+        }
+      }
       for (var j = 0; j < participants.length; j++) {
         var c = row.cells[participants[j]];
         if (c && c.valid) partCounts[participants[j]] += 1;
@@ -521,6 +551,38 @@
             }));
           })(sevLabel);
         }
+      }
+    }
+
+    // KEYWORDS — multi-select pills for cell-level annotation tokens
+    // (e.g. "!key" → "Key"). Filter is row-level (any cell in the row carries
+    // the annotation) but cell-level emphasis is applied during grid render.
+    var kwBody = sidebar.querySelector('[data-target="keywords"]');
+    if (kwBody) {
+      kwBody.innerHTML = "";
+      var annotations = (CLIPGEN_CONFIG && CLIPGEN_CONFIG.annotations) || [];
+      var anyKw = false;
+      for (var ak = 0; ak < annotations.length; ak++) {
+        if (kwCounts[annotations[ak].id]) { anyKw = true; break; }
+      }
+      if (annotations.length === 0 || !anyKw) {
+        kwBody.appendChild(makeSidebarEmpty("(no keywords)"));
+      } else {
+        annotations.forEach(function (ann) {
+          var count = kwCounts[ann.id] || 0;
+          if (count === 0) return;
+          kwBody.appendChild(createSidebarRow({
+            label: keywordLabel(ann.id),
+            count: count,
+            active: !!state.sidebarKeywords[ann.id],
+            onClick: function () {
+              state.sidebarKeywords[ann.id] = !state.sidebarKeywords[ann.id];
+              applySidebarKeywords();
+              renderSidebar();
+              renderGrid();
+            },
+          }));
+        });
       }
     }
 
@@ -1305,6 +1367,7 @@
       tr.appendChild(sevTd);
     }
 
+    var activeKeywords = state.filters.keywords;
     for (var j = 0; j < participants.length; j++) {
       var pid = participants[j];
       var cellData = row.cells[pid] || {};
@@ -1329,6 +1392,15 @@
         td.setAttribute("draggable", "true");
       } else {
         td.classList.add("empty");
+      }
+
+      if (activeKeywords.length > 0) {
+        var cellKw = cellData.keywords || [];
+        var matched = false;
+        for (var ck = 0; ck < activeKeywords.length; ck++) {
+          if (cellKw.indexOf(activeKeywords[ck]) >= 0) { matched = true; break; }
+        }
+        td.classList.add(matched ? "cell-keyword-match" : "cell-keyword-dim");
       }
 
       tr.appendChild(td);

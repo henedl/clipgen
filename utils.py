@@ -729,10 +729,15 @@ def get_frontend_config() -> dict[str, Any]:
                 "cssClass": severity_css_class(label),
             }
         )
+    annotations = [
+        {"id": ann_id, "token": token}
+        for token, ann_id in sorted(get_known_annotation_map().items())
+    ]
     return {
         "defaultDuration": config.DEFAULT_DURATION_SECONDS,
         "severity": severity,
         "annotationKeyphrases": sorted(get_known_annotation_map().keys()),
+        "annotations": annotations,
         "ignoredTimestampTokens": sorted(get_ignored_timestamp_tokens()),
     }
 
