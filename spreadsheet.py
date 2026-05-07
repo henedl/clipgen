@@ -822,7 +822,7 @@ def generate_list(
         line_numbers: List of line numbers for 'line' mode
         range_start: Start line for 'range' mode
         range_end: End line for 'range' mode
-        skip_prompts: If True, skip confirmation prompts (CLI -y flag, for batch/keyword)
+        skip_prompts: If True, skip confirmation prompts (CLI --no-input flag, for batch/keyword)
         cell_specs: List of (participant_id, row_number) tuples for 'cell' mode
         participant_id: Participant ID(s) for 'participant' mode (comma/plus-separated string)
         reel_input: Reel selector string for 'reel' mode

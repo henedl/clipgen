@@ -23,7 +23,7 @@ def _agent_args(**overrides):
         "highlights": None,
         "screen": False,
         "gif": False,
-        "yes": False,
+        "no_input": False,
         "verbose": False,
         "spreadsheet": None,
         "viewer": False,
@@ -177,7 +177,7 @@ def test_summarize_specific_ids_only(monkeypatch):
     assert "summary" not in final.get("P01", {})
 
 
-def test_summarize_skips_existing_without_yes(monkeypatch, capsys):
+def test_summarize_skips_existing_without_no_input(monkeypatch, capsys):
     saved = []
 
     def fake_save(source_transcripts, corrections, marks=None):
@@ -193,7 +193,7 @@ def test_summarize_skips_existing_without_yes(monkeypatch, capsys):
 
     monkeypatch.setattr(thinking_agents, "summarize_transcript", lambda segs: "NEW")
 
-    args = _agent_args(summarize=["P01"], yes=False)
+    args = _agent_args(summarize=["P01"], no_input=False)
     cli._run_summarize(args)
 
     out = capsys.readouterr().out
@@ -202,7 +202,7 @@ def test_summarize_skips_existing_without_yes(monkeypatch, capsys):
     assert manifest["source_transcripts"]["P01"]["summary"] == "old"
 
 
-def test_summarize_overwrites_with_yes(monkeypatch):
+def test_summarize_overwrites_with_no_input(monkeypatch):
     saved = []
 
     def fake_save(source_transcripts, corrections, marks=None):
@@ -218,7 +218,7 @@ def test_summarize_overwrites_with_yes(monkeypatch):
 
     monkeypatch.setattr(thinking_agents, "summarize_transcript", lambda segs: "NEW")
 
-    args = _agent_args(summarize=["P01"], yes=True)
+    args = _agent_args(summarize=["P01"], no_input=True)
     cli._run_summarize(args)
 
     assert saved[-1]["P01"]["summary"] == "NEW"

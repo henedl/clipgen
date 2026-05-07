@@ -27,12 +27,12 @@ uv run clipgen.py
 clipgen can also be launched noninteractively, meaning you can script it as part of your workflows. For example:
 
 ```shell
-uv run clipgen.py -R -H                # Highlight reel of the most severe issues
-uv run clipgen.py -b -y                # Batch: all clips in study
-uv run clipgen.py -l 5+7+12 -y         # Lines: rows 5, 7, 12
-uv run clipgen.py -r 5-12 -y           # Range: rows 5–12
-uv run clipgen.py -C "Onboarding" -y   # Category
-uv run clipgen.py --gif -b -y          # GIFs instead of clips
+uv run clipgen.py -R -H                       # Highlight reel of the most severe issues
+uv run clipgen.py -b --no-input               # Batch: all clips in study
+uv run clipgen.py -l 5+7+12 --no-input        # Lines: rows 5, 7, 12
+uv run clipgen.py -r 5-12 --no-input          # Range: rows 5–12
+uv run clipgen.py -C "Onboarding" --no-input  # Category
+uv run clipgen.py --gif -b --no-input         # GIFs instead of clips
 ```
 
 Run `uv run clipgen.py --help` for the full flag reference.

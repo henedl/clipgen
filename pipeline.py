@@ -101,7 +101,7 @@ def _check_source_video(
     # Sort by similarity descending, then file size descending as tiebreaker
     candidates.sort(key=lambda c: (c[0], c[1]), reverse=True)
 
-    if candidates and candidates[0][0] >= 0.7:
+    if candidates and candidates[0][0] >= 0.7 and not utils.NO_INPUT_MODE:
         best_ratio, best_size, best_path = candidates[0]
         size_gb = best_size / 1_000_000_000
         # Pause progress bar so the prompt is visible and input is rendered

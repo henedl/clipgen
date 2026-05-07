@@ -148,6 +148,15 @@ def select_excel_file() -> ExcelSheetAdapter | None:
         utils.standard_print(f"Opening Excel file: {Path(paths[0]).name}")
         return open_excel_workbook(paths[0])
     # Multiple files: list and prompt
+    if utils.NO_INPUT_MODE:
+        utils.error_print(
+            "Multiple .xlsx files in current directory; cannot pick one in non-interactive mode.",
+            [
+                f"Found: {', '.join(Path(p).name for p in paths)}",
+                "Pass -s ./path/to/file.xlsx explicitly.",
+            ],
+        )
+        return None
     utils.info_print("Excel files in current directory:")
     for i, p in enumerate(paths, 1):
         utils.info_print(f"  {i}. {Path(p).name}")
@@ -197,6 +206,14 @@ def prompt_for_excel_fallback() -> ExcelSheetAdapter | None:
     credentials troubleshooting, or an empty input to cancel. Returns the
     opened ExcelSheetAdapter, or None if the user cancelled.
     """
+    if utils.NO_INPUT_MODE:
+        utils.error_print(
+            "Google authentication failed and the Excel fallback prompt is interactive.",
+            [
+                "Pass -s ./path/to/file.xlsx to use a local Excel file in non-interactive mode."
+            ],
+        )
+        return None
     utils.info_print(
         "No Google credentials available — you can work with a local Excel file instead."
     )

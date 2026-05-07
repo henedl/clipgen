@@ -348,11 +348,16 @@ def run_ffmpeg(
     if config.DEBUGGING:
         ic(duration, duration_seconds)
     if duration > config.MAX_CLIP_DURATION_SECONDS:
-        yn = utils.read_user_input(
-            f"The generated video will be {duration}s ({duration // 60}m {duration % 60}s), over 10 minutes long. Generate anyway? [y/n]\n>> "
-        )
-        if yn != "y":
-            return False
+        if utils.NO_INPUT_MODE:
+            utils.warning_print(
+                f"Generating long clip ({duration}s, > {config.MAX_CLIP_DURATION_SECONDS}s) in non-interactive mode."
+            )
+        else:
+            yn = utils.read_user_input(
+                f"The generated video will be {duration}s ({duration // 60}m {duration % 60}s), over 10 minutes long. Generate anyway? [y/n]\n>> "
+            )
+            if yn != "y":
+                return False
 
     utils.verbose_print(f"Cutting {input_file} from {start_pos} to {end_pos}.")
     if config.DEBUGGING:

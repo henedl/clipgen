@@ -281,6 +281,15 @@ def _handle_spreadsheet_command(
 
 def select_spreadsheet(gspread_client: Any, doc_list: list[str]) -> Any:
     """Interactive spreadsheet selection. Returns the selected worksheet."""
+    if utils.NO_INPUT_MODE:
+        utils.error_print(
+            "Spreadsheet selection requires -s in non-interactive mode.",
+            [
+                "Pass -s <name|url|index|./file.xlsx>",
+                "Or omit --no-input to select interactively.",
+            ],
+        )
+        sys.exit(2)
     consecutive_open_failures = 0
     utils.print_mode_heading("Spreadsheet selection", "mode.spreadsheet")
 
@@ -1109,6 +1118,15 @@ def _dispatch_interactive_mode(
 
 def run_interactive_mode(worksheet: Any) -> None:
     """Execute interactive mode - main processing loop."""
+    if utils.NO_INPUT_MODE:
+        utils.error_print(
+            "No CLI mode flag provided; cannot enter interactive mode under --no-input.",
+            [
+                "Pass one of: -b, -l, -r, -c, -p, -k, -S, -M, -R, -T, -H, --highlights",
+                "Or a UI flag: --studio, --screenspace, --transcripts",
+            ],
+        )
+        sys.exit(2)
     viewer.INTERACTIVE_ARTIFACTS.clear()
     viewer.INTERACTIVE_REELS.clear()
 
