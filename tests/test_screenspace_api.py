@@ -744,6 +744,59 @@ def test_create_multitool_step_region_ref_resolves_stash_duplicate(client, monke
     }
 
 
+def test_create_task_full_frame_region_ref(client, monkeypatch):
+    """A region_ref with source 'full_frame' should denormalize to the full video frame."""
+    _enable_video_task_setup(monkeypatch, "P01")
+
+    resp = client.post(
+        "/screenspace/api/tasks",
+        json={
+            "type": "color",
+            "participant": "P01",
+            "region": "full_frame",
+            "region_ref": {"source": "full_frame"},
+        },
+    )
+
+    assert resp.status_code == 200
+    task = resp.get_json()["task"]
+    assert task["region"] == "full_frame"
+    assert task["region_coords"] == {"x": 0, "y": 0, "w": 1920, "h": 1080}
+
+
+def test_create_multitool_step_full_frame_region_ref(client, monkeypatch):
+    """A multitool step can target the full frame via source 'full_frame'."""
+    _create_region(client, "other", x=10, y=10, w=100, h=50)
+    _enable_video_task_setup(monkeypatch, "P01")
+
+    resp = client.post(
+        "/screenspace/api/tasks",
+        json={
+            "type": "multitool",
+            "participant": "P01",
+            "region": "",
+            "parameters": {
+                "steps": [
+                    {
+                        "type": "color",
+                        "region": "full_frame",
+                        "region_ref": {"source": "full_frame"},
+                    },
+                    {"type": "change", "region": "other"},
+                ]
+            },
+        },
+    )
+
+    assert resp.status_code == 200
+    worker = screenspace_server._worker
+    assert worker is not None
+    task = worker.get_all_tasks()[0]
+    steps = task["parameters"]["steps"]
+    assert steps[0]["region"] == "full_frame"
+    assert steps[0]["region_coords"] == {"x": 0, "y": 0, "w": 1920, "h": 1080}
+
+
 def test_get_task_not_found(client):
     resp = client.get("/screenspace/api/tasks/ss_nonexist")
     assert resp.status_code == 404
