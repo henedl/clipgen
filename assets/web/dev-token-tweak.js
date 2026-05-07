@@ -50,7 +50,6 @@
     "--color-accent-strong-hover": 1,
     "--color-border": 1,
     "--color-selected": 1,
-    "--color-grid": 1,
     "--color-panel-bg": 1,
     "--color-panel-border": 1,
     "--color-panel-shadow": 1,

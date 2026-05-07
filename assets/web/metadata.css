@@ -507,7 +507,7 @@
 .md-cat-bar-container {
   flex: 1;
   height: 14px;
-  background: var(--color-grid);
+  background: var(--hairline);
   border-radius: 2px;
   overflow: hidden;
 }

@@ -1461,7 +1461,7 @@
       allTabs[i].classList.remove("active");
       if (allTabs[i].dataset.tab === tabName) allTabs[i].classList.add("active");
     }
-    if (window._studioSyncPreviewTab) window._studioSyncPreviewTab();
+    if (window._studioSyncPreviewTab) window._studioSyncPreviewTab(true);
   }
 
   // --- JSON Export ---
