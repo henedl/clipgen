@@ -216,14 +216,6 @@ def _generate_viewer_html(
         except OSError:
             pass
 
-    # Prepend animated grid background so standalone viewers have it
-    grid_bg_path = assets_dir / "grid-bg.js"
-    if grid_bg_path.is_file():
-        try:
-            js_text = grid_bg_path.read_text(encoding="utf-8") + "\n" + js_text
-        except OSError:
-            pass
-
     # Inline CSS
     css_link_tag = f'<link rel="stylesheet" href="{css_name}">'
     inline_css_block = f"<style>\n{css_text}\n</style>"
@@ -235,10 +227,6 @@ def _generate_viewer_html(
     # Remove utils.js script tag (content already prepended to main JS)
     utils_js_tag = '<script src="utils.js" defer></script>\n  '
     template_html = template_html.replace(utils_js_tag, "")
-
-    # Remove grid-bg.js script tag (content already prepended to main JS)
-    grid_bg_tag = '<script src="grid-bg.js" defer></script>\n  '
-    template_html = template_html.replace(grid_bg_tag, "")
 
     # Strip dev-only tags (e.g. dev-token-tweak.js) so they never ship in exports.
     template_html = re.sub(

@@ -30,7 +30,7 @@
  * Legacy aliases (keep working, do not introduce new references):
  *             --color-bg | --color-surface | --color-surface-alt | --color-text | --color-text-dim
  *             --color-accent | --color-border | --color-selected | --color-accent-hover | --color-accent-highlight | --color-accent-strong-hover
- *             --color-panel-bg | --color-panel-border | --color-panel-shadow | --color-grid
+ *             --color-panel-bg | --color-panel-border | --color-panel-shadow
  *             --sev-critical | --sev-high | --sev-medium | --sev-low | --sev-na
  *             --sev-positive | --sev-very-positive | --sev-unknown
  * CONTENT:    --color-clip | --color-screen | --color-gif
@@ -82,7 +82,7 @@
   /* ---- Prototype tokens (dark default) ---- */
 
   /* Surfaces */
-  --bg:               #0d0e10;
+  --bg:               #0a0a0b;
   --bg-elevated:      #141518;
   --bg-input:         #1a1c1f;
   --bg-hover:         #1e2024;
@@ -146,7 +146,6 @@
   --color-panel-bg:            rgba(20, 21, 24, 0.97);
   --color-panel-border:        var(--border);
   --color-panel-shadow:        rgba(0, 0, 0, 0.6);
-  --color-grid:                rgba(255, 255, 255, 0.04);
 
   /* Shadows (depend on theme colors above) */
   --shadow-sm:    0 1px 3px var(--color-panel-shadow);
@@ -262,7 +261,7 @@
 html[data-theme="light"],
 .theme-light {
   /* Surfaces */
-  --bg:               #f5f4f0;
+  --bg:               #fafafa;
   --bg-elevated:      #ffffff;
   --bg-input:         #ffffff;
   --bg-hover:         #ecebe6;
@@ -306,7 +305,6 @@ html[data-theme="light"],
   --color-panel-bg:         rgba(255, 255, 255, 0.97);
   --color-panel-border:     rgba(148, 163, 184, 0.22);
   --color-panel-shadow:     rgba(15, 23, 42, 0.12);
-  --color-grid:             rgba(0, 0, 0, 0.03);
 
   /* Content / task / category / region — saturated variants for light bg */
   --color-clip:   #3659b3;
@@ -359,23 +357,19 @@ html[data-theme="light"] .cg-logo {
   font-variant-numeric: tabular-nums;
 }
 
-/* Animated dot-grid background canvas (paired with grid-bg.js) */
-#cg-grid-bg {
-  position: fixed;
-  inset: 0;
-  width: 100vw;
-  height: 100vh;
-  pointer-events: none;
-  z-index: -1;
+/* Cross-document page transitions. When two same-origin pages both ship
+ * `@view-transition`, the browser cross-fades the old document's snapshot
+ * with the new one on link navigation. Activates the entire `root` snapshot,
+ * which is exactly the dissolve we want between Studio / Screenspace /
+ * Transcripts. Firefox ignores the rule and falls back to instant nav. */
+@view-transition {
+  navigation: auto;
 }
 
-/* Static CSS line-grid fallback. Applied when grid-bg.js has not mounted the
- * animated canvas (flag off, script failed to load, or before JS runs). */
-body:not(.cg-grid-bg-on) {
-  background-image:
-    linear-gradient(to right, var(--color-grid) 1px, transparent 1px),
-    linear-gradient(to bottom, var(--color-grid) 1px, transparent 1px);
-  background-size: 40px 40px;
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation-duration: var(--duration-normal);
+  animation-timing-function: ease-in-out;
 }
 
 /* Skeleton loading placeholder */
@@ -613,6 +607,11 @@ body.dragging #trSubheader {
   align-items: center;
   gap: 8px;
   flex: 0 0 auto;
+  /* Reserve width for content that fills in after the page-load API call
+   * (e.g. Studio's #studyName + #versionInfo, Transcripts' search box).
+   * Without this, the tabs row slides right when content arrives, which
+   * reads as a reflow during the cross-document view-transition cross-fade. */
+  min-width: 220px;
 }
 .subheader-tabs {
   display: flex;
