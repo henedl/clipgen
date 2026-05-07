@@ -82,7 +82,7 @@ Examples:
   python clipgen.py -b -s "Study Name"     Batch mode with specific spreadsheet
   python clipgen.py -s excel               Use the only .xlsx in cwd (fails if 0 or many)
   python clipgen.py -s ./notes.xlsx        Batch with local Excel workbook
-  python clipgen.py -l 5 -y                Line mode, skip confirmation prompts
+  python clipgen.py -l 5 --no-input        Line mode, non-interactive (no prompts)
   python clipgen.py -b -v                  Batch mode with verbose output
   python clipgen.py -R "11, 13-16, P01, \\"Observations\\""  Reel mode - one combined video
   python clipgen.py -T P01                 Chronologic mode - chronological reel for participant P01
@@ -239,7 +239,7 @@ Note: Non-interactive mode (using -b, -l, -r, -C, -c, -p, -k, -S, -M, -R, or -T)
         metavar="ID",
         default=None,
         help="Run the summary thinking agent over already-transcribed participants. "
-        "No IDs = all transcribed. Existing summaries are kept unless -y is passed.",
+        "No IDs = all transcribed. Existing summaries are kept unless --no-input is passed.",
     )
     transcription.add_argument(
         "--citations",
@@ -247,7 +247,7 @@ Note: Non-interactive mode (using -b, -l, -r, -C, -c, -p, -k, -S, -M, -R, or -T)
         metavar="ID",
         default=None,
         help="Run the citation thinking agent over participants that already have a summary. "
-        "No IDs = all eligible. Existing citations are kept unless -y is passed.",
+        "No IDs = all eligible. Existing citations are kept unless --no-input is passed.",
     )
 
     ai_opts = parser.add_argument_group("AI models")
@@ -616,10 +616,10 @@ Note: Non-interactive mode (using -b, -l, -r, -C, -c, -p, -k, -S, -M, -R, or -T)
 
     run_opts = parser.add_argument_group("run options")
     run_opts.add_argument(
-        "-y",
-        "--yes",
+        "--no-input",
+        dest="no_input",
         action="store_true",
-        help="Skip confirmation prompts (auto-confirm)",
+        help="Non-interactive mode: skip confirmation prompts and fail fast on prompts that would block on stdin (for programmatic use)",
     )
     run_opts.add_argument(
         "-v",
@@ -897,7 +897,7 @@ def _generate_cli_clips(
     cli_mode_args: CliModeArgs,
 ) -> list[ClipRecord]:
     """Resolve CLI arguments into a list of clip records."""
-    skip_prompts = args.yes
+    skip_prompts = args.no_input
     mixed_selectors = getattr(args, "mixed", None)
     output_format = "screen" if args.screen else "gif" if args.gif else "clip"
 
@@ -2382,8 +2382,10 @@ def _run_summarize(args: argparse.Namespace) -> None:
             utils.warning_print(f"{pid}: no transcript entry; skipping.")
             skipped += 1
             continue
-        if entry.get("summary") and not args.yes:
-            utils.info_print(f"{pid}: summary already present; skip (-y to overwrite).")
+        if entry.get("summary") and not args.no_input:
+            utils.info_print(
+                f"{pid}: summary already present; skip (--no-input to overwrite)."
+            )
             skipped += 1
             continue
         utils.info_print(f"Summarizing {pid}...")
@@ -2428,9 +2430,9 @@ def _run_citations(args: argparse.Namespace) -> None:
             utils.warning_print(f"{pid}: no summary yet; run --summarize first.")
             skipped += 1
             continue
-        if entry.get("citations") and not args.yes:
+        if entry.get("citations") and not args.no_input:
             utils.info_print(
-                f"{pid}: citations already present; skip (-y to overwrite)."
+                f"{pid}: citations already present; skip (--no-input to overwrite)."
             )
             skipped += 1
             continue
@@ -3116,6 +3118,7 @@ def main() -> None:
     setup_encoding()
 
     args = parse_arguments()
+    utils.NO_INPUT_MODE = bool(getattr(args, "no_input", False))
     if config.DEBUGGING:
         ic(args)
 

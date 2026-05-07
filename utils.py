@@ -15,6 +15,13 @@ from icecream import ic
 import config
 
 
+# ---- Non-interactive mode flag ----
+# Set to True from cli.py when --no-input is passed. Targeted guards in
+# clipgen.py / excel_io.py / pipeline.py / video.py / utils.suggest_close_match
+# read this flag to fail fast (or skip) instead of blocking on stdin.
+NO_INPUT_MODE: bool = False
+
+
 # ---- Shared type definitions ----
 
 
@@ -1351,6 +1358,8 @@ def suggest_close_match(
         return None
     original = lower_to_original[matches[0]]
     display = original.strip()
+    if NO_INPUT_MODE:
+        return None
     yn = read_user_input(f"{prompt_prefix} '{display}'? [y/n]\n>> ")
     if yn.strip().lower() == "y":
         return original

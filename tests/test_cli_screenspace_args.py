@@ -24,7 +24,7 @@ def _ss_args(**overrides):
         "highlights": None,
         "screen": False,
         "gif": False,
-        "yes": False,
+        "no_input": False,
         "verbose": False,
         "spreadsheet": None,
         "viewer": False,

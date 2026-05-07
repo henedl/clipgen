@@ -33,7 +33,7 @@
 
 ## Other useful flags
 
-- `-y` — skip confirmation prompts (good for agent automation)
+- `--no-input` — non-interactive mode: skip confirmation prompts and fail fast on prompts that would block on stdin (good for agent automation)
 - `--manifest` — write `clipgen_manifest.json` alongside artifacts
 - `--viewer` — generate `clips_viewer.html` timeline viewer
 - `--transcribe` — generate transcript files alongside artifacts
@@ -49,7 +49,7 @@ Source videos must be named `{study}_{participant}.mp4` — e.g. `mystudy_P01.mp
 |-----------------|---------|
 | "clips for P01 and P03" | `uv run clipgen.py -p P01+P03 -s "Study" -i . -o ./clips` |
 | "screenshots of rows 3 through 7" | `uv run clipgen.py --screen -r 3-7 -s "Study" -i . -o ./clips` |
-| "everything, no prompts" | `uv run clipgen.py -b -y -s "Study" -i . -o ./clips` |
+| "everything, no prompts" | `uv run clipgen.py -b --no-input -s "Study" -i . -o ./clips` |
 | "highlight reel, 2 minutes" | `uv run clipgen.py -H 120 -s "Study" -i . -o ./clips` |
 | "annotated clips only" | `uv run clipgen.py -k -s "Study" -i . -o ./clips` |
 | "critical and high severity" | `uv run clipgen.py -S Critical,High -s "Study" -i . -o ./clips` |

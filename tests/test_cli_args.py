@@ -23,7 +23,7 @@ def _base_args(**overrides):
         "highlights": None,
         "screen": False,
         "gif": False,
-        "yes": False,
+        "no_input": False,
         "verbose": False,
         "spreadsheet": None,
         "viewer": False,
@@ -166,7 +166,7 @@ def test_run_cli_mode_rejects_reel_with_gif():
     "args_overrides,parsed_kwargs,mode,gen_kwargs,process_attr,process_kwargs",
     [
         (
-            {"batch": True, "yes": True},
+            {"batch": True, "no_input": True},
             {},
             "batch",
             {"skip_prompts": True},
@@ -174,7 +174,7 @@ def test_run_cli_mode_rejects_reel_with_gif():
             {"output_format": "clip", "include_severity": False},
         ),
         (
-            {"lines": "5", "screen": True, "yes": True},
+            {"lines": "5", "screen": True, "no_input": True},
             {"line_numbers": [5]},
             "line",
             {"line_numbers": [5], "skip_prompts": True},
@@ -182,7 +182,7 @@ def test_run_cli_mode_rejects_reel_with_gif():
             {"output_format": "screen", "include_severity": False},
         ),
         (
-            {"category": "Observations,Onboarding", "yes": True},
+            {"category": "Observations,Onboarding", "no_input": True},
             {},
             "category",
             {"skip_prompts": True, "categories": ["Observations", "Onboarding"]},
@@ -190,7 +190,7 @@ def test_run_cli_mode_rejects_reel_with_gif():
             {"output_format": "clip", "include_severity": False},
         ),
         (
-            {"reel": "11, P01.5", "yes": True},
+            {"reel": "11, P01.5", "no_input": True},
             {},
             "reel",
             {"reel_input": "11, P01.5", "skip_prompts": True},
