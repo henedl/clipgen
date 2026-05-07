@@ -784,6 +784,7 @@
     qs("#participantSelect").value = pid;
     qs("#videoInfo").textContent = "";
     qs("#frameEmpty").classList.remove("hidden");
+    setInfoParticipant(pid);
 
     apiGet("api/video/info/" + encodeURIComponent(pid))
       .then(function (data) {
@@ -795,12 +796,156 @@
         if (data.info.width && data.info.height) parts.push(data.info.width + "x" + data.info.height);
         if (data.info.fps) parts.push(Math.round(data.info.fps) + "fps");
         qs("#videoInfo").textContent = parts.join(" \u00b7 ");
+        renderInfoVideo(data.info);
         renderTimeline();
         // Preload video source for instant playback
         qs("#videoPlayer").src = videoStreamUrl(pid);
         loadFrame(initialTimestamp !== undefined ? initialTimestamp : 0);
       })
       .catch(function () { showToast("Failed to load video info"); });
+
+    apiGet("api/participants/" + encodeURIComponent(pid) + "/notes")
+      .then(function (data) {
+        if (participantRequestVersion !== _participantRequestVersion || pid !== state.selectedParticipant) return;
+        if (!data.ok) return;
+        renderInfoNotes(data.notes || "");
+      })
+      .catch(function () {});
+
+    apiGet("api/participants/" + encodeURIComponent(pid) + "/issues")
+      .then(function (data) {
+        if (participantRequestVersion !== _participantRequestVersion || pid !== state.selectedParticipant) return;
+        if (!data.ok) return;
+        renderInfoIssues(data.issues || []);
+      })
+      .catch(function () {});
+  }
+
+  // ---- Info panel ----
+
+  function setInfoParticipant(pid) {
+    var el = qs("#ssInfoParticipant");
+    if (el) el.textContent = pid || "\u2014";
+    qs("#ssInfoDuration").textContent = "\u2014";
+    qs("#ssInfoFrames").textContent = "\u2014";
+    qs("#ssInfoResolution").textContent = "\u2014";
+    qs("#ssInfoCodec").textContent = "\u2014";
+    qs("#ssInfoNotes").value = "";
+    qs("#ssInfoIssuesBlock").classList.add("hidden");
+    qs("#ssInfoIssues").innerHTML = "";
+  }
+
+  function renderInfoVideo(info) {
+    qs("#ssInfoDuration").textContent = info.duration ? formatDuration(info.duration) : "\u2014";
+    qs("#ssInfoFrames").textContent = info.nb_frames
+      ? info.nb_frames.toLocaleString() + " frames"
+      : "";
+    qs("#ssInfoResolution").textContent = info.width && info.height
+      ? info.width + "\u00d7" + info.height
+      : "\u2014";
+    qs("#ssInfoCodec").textContent = info.video_codec || "";
+  }
+
+  function renderInfoNotes(notes) {
+    var ta = qs("#ssInfoNotes");
+    if (!ta) return;
+    if (document.activeElement !== ta) ta.value = notes;
+  }
+
+  function renderInfoIssues(issues) {
+    var block = qs("#ssInfoIssuesBlock");
+    var list = qs("#ssInfoIssues");
+    if (!block || !list) return;
+    list.innerHTML = "";
+    if (!issues || !issues.length) {
+      block.classList.add("hidden");
+      return;
+    }
+    block.classList.remove("hidden");
+    var frag = document.createDocumentFragment();
+    issues.forEach(function (issue) {
+      var li = document.createElement("li");
+      li.className = "ss-info-issue";
+      var dot = document.createElement("span");
+      dot.className = "ss-info-issue-dot " + (severityClass(issue.severity) || "");
+      var text = document.createElement("span");
+      text.className = "ss-info-issue-text";
+      text.textContent = issue.observation || "(no observation)";
+      li.appendChild(dot);
+      li.appendChild(text);
+      frag.appendChild(li);
+    });
+    list.appendChild(frag);
+  }
+
+  function initInfoNotes() {
+    var ta = qs("#ssInfoNotes");
+    if (!ta) return;
+    var saveTimer = null;
+    ta.addEventListener("input", function () {
+      var pid = state.selectedParticipant;
+      if (!pid) return;
+      var value = ta.value;
+      if (saveTimer) clearTimeout(saveTimer);
+      saveTimer = setTimeout(function () {
+        if (pid !== state.selectedParticipant) return;
+        apiPut("api/participants/" + encodeURIComponent(pid) + "/notes", { notes: value })
+          .catch(function () { showToast("Failed to save notes"); });
+      }, 500);
+    });
+  }
+
+  function applyInfoPanelCollapsed(collapsed) {
+    qs("#ssInfoPanel").classList.toggle("hidden", collapsed);
+    qs("#ssInfoExpandBtn").classList.toggle("hidden", !collapsed);
+  }
+
+  function initInfoPanelCollapse() {
+    var stored = getStoredUIState("screenspace");
+    applyInfoPanelCollapsed(!!stored.infoPanelCollapsed);
+    qs("#ssInfoCollapseBtn").addEventListener("click", function () {
+      applyInfoPanelCollapsed(true);
+      setStoredUIStateField("screenspace", "infoPanelCollapsed", true);
+    });
+    qs("#ssInfoExpandBtn").addEventListener("click", function () {
+      applyInfoPanelCollapsed(false);
+      setStoredUIStateField("screenspace", "infoPanelCollapsed", false);
+    });
+  }
+
+  function applyInfoSectionCollapsed(section, collapsed) {
+    if (!section) return;
+    section.setAttribute("data-collapsed", collapsed ? "true" : "false");
+    var header = section.querySelector(".ss-info-section-header");
+    if (header) header.setAttribute("aria-expanded", collapsed ? "false" : "true");
+  }
+
+  function initInfoSections() {
+    var stored = getStoredUIState("screenspace");
+    var sections = (stored.infoSectionsCollapsed && typeof stored.infoSectionsCollapsed === "object")
+      ? stored.infoSectionsCollapsed
+      : {};
+    var headers = document.querySelectorAll(".ss-info-section-header");
+    for (var i = 0; i < headers.length; i++) {
+      var header = headers[i];
+      var section = header.closest(".ss-info-section");
+      var name = section ? section.getAttribute("data-section") : null;
+      if (!name) continue;
+      applyInfoSectionCollapsed(section, !!sections[name]);
+      header.addEventListener("click", function () {
+        var sec = this.closest(".ss-info-section");
+        if (!sec) return;
+        var n = sec.getAttribute("data-section");
+        var st = getStoredUIState("screenspace");
+        var s = (st.infoSectionsCollapsed && typeof st.infoSectionsCollapsed === "object")
+          ? st.infoSectionsCollapsed
+          : {};
+        var newCollapsed = !s[n];
+        s[n] = newCollapsed;
+        setStoredUIStateField("screenspace", "infoSectionsCollapsed", s);
+        applyInfoSectionCollapsed(sec, newCollapsed);
+      });
+    }
   }
 
   // ---- Frame viewer ----
@@ -6619,6 +6764,9 @@
     initResultsPanel();
     initPanelDivider();
     initPreviewResize();
+    initInfoNotes();
+    initInfoPanelCollapse();
+    initInfoSections();
     initKeyboard();
     initFrontendSwitcher();
     initTopNavActions();

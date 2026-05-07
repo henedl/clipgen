@@ -9,6 +9,9 @@ _init_screenspace_state()).
 API endpoints (all under /screenspace/):
   GET  /media/<filename>                    – serve artifact media files
   GET  /api/participants                    – list discovered participant videos
+  GET  /api/participants/<pid>/notes        – get persisted free-form notes for a participant
+  PUT  /api/participants/<pid>/notes        – persist free-form notes (max 64 KB)
+  GET  /api/participants/<pid>/issues       – top severity-ranked Sheet rows for a participant
   GET  /api/video/frame/<participant>/<ts>  – extract a JPEG frame at timestamp
   GET|POST /api/preview/<participant>/<ts>   – PNG of the active tool's preprocessed view (?layer=<id> for single-layer overlay)
   GET  /api/preview/layers                   – JSON catalog of overlay-eligible layers per tool
@@ -171,10 +174,114 @@ utils.register_static_routes(
 # ---- Participants ----
 
 
+_NOTES_MAX_BYTES = 64 * 1024
+
+
+def _participant_exists(pid: str) -> bool:
+    return any(p["id"] == pid for p in _participants)
+
+
 @screenspace_bp.route("/api/participants")
 def api_participants() -> FlaskResponse:
     """List participants with source video availability."""
     return jsonify({"ok": True, "participants": _participants})
+
+
+@screenspace_bp.route("/api/participants/<pid>/notes")
+def api_participant_notes_get(pid: str) -> FlaskResponse:
+    """Return persisted free-form notes for a participant."""
+    if not _participant_exists(pid):
+        return jsonify({"ok": False, "error": f"Unknown participant {pid}"}), 404
+    entry = _manifest.get("per_participant", {}).get(pid, {})
+    return jsonify({"ok": True, "notes": entry.get("notes", "")})
+
+
+@screenspace_bp.route("/api/participants/<pid>/notes", methods=["PUT"])
+def api_participant_notes_set(pid: str) -> FlaskResponse:
+    """Persist free-form notes for a participant."""
+    if not _participant_exists(pid):
+        return jsonify({"ok": False, "error": f"Unknown participant {pid}"}), 404
+    data = request.get_json(silent=True) or {}
+    notes = data.get("notes", "")
+    if not isinstance(notes, str):
+        return jsonify({"ok": False, "error": "notes must be a string"}), 400
+    if len(notes.encode("utf-8")) > _NOTES_MAX_BYTES:
+        return jsonify({"ok": False, "error": "notes too large"}), 413
+
+    with _manifest_lock:
+        per_participant = _manifest.setdefault("per_participant", {})
+        entry = per_participant.setdefault(pid, {})
+        entry["notes"] = notes
+        _do_persist(drain_events=False)
+    return jsonify({"ok": True})
+
+
+@screenspace_bp.route("/api/participants/<pid>/issues")
+def api_participant_issues(pid: str) -> FlaskResponse:
+    """Return up to five Sheet rows tagged to a participant, ranked by severity.
+
+    Returns an empty list when Screenspace runs without a Sheet (no Studio).
+    Mirrors the row construction in ``server.api_sheet`` so the participant
+    column lookup, baseline/filename row skipping, and severity normalization
+    match Studio's view.
+    """
+    if not _participant_exists(pid):
+        return jsonify({"ok": False, "error": f"Unknown participant {pid}"}), 404
+
+    import server  # lazy: avoid module-level snapshot of _sheet_context
+
+    ctx = getattr(server, "_sheet_context", None)
+    if ctx is None:
+        return jsonify({"ok": True, "issues": []})
+
+    import spreadsheet
+
+    participants = spreadsheet.get_participant_list(
+        ctx.header_row, ctx.id_cell, ctx.num_participants
+    )
+    if pid not in participants:
+        return jsonify({"ok": True, "issues": []})
+    p_idx = participants.index(pid)
+    col_idx = ctx.id_cell.col + p_idx
+
+    obs_col = ctx.observation_cell.col - 1
+    sev_col = ctx.severity_cell.col - 1 if ctx.severity_cell else None
+
+    candidates: list[dict[str, Any]] = []
+    for row_idx in range(ctx.first_data_row_idx, len(ctx.sheet_data)):
+        if ctx.baseline_row_idx is not None and row_idx == ctx.baseline_row_idx:
+            continue
+        if ctx.filename_row_idx is not None and row_idx == ctx.filename_row_idx:
+            continue
+        row_data = ctx.sheet_data[row_idx]
+        if col_idx >= len(row_data) or not row_data[col_idx].strip():
+            continue
+        observation = row_data[obs_col] if obs_col < len(row_data) else ""
+        severity = ""
+        if (
+            sev_col is not None
+            and sev_col < len(row_data)
+            and row_data[sev_col].strip()
+        ):
+            severity = utils.normalize_severity(row_data[sev_col])
+        candidates.append(
+            {
+                "rowNum": row_idx + 1,
+                "observation": observation,
+                "severity": severity,
+                "_row_idx": row_idx,
+            }
+        )
+
+    # Sort ascending on severity score so the most-negative (Critical = -4)
+    # comes first; positives (Positive = 1, Very Positive = 2) and unranked
+    # rows fall to the end. Tie-break by row order for stability.
+    candidates.sort(
+        key=lambda c: (utils.severity_sort_key(c["severity"]), c["_row_idx"])
+    )
+    chosen = candidates[:5]
+    issues = [{k: v for k, v in c.items() if not k.startswith("_")} for c in chosen]
+    return jsonify({"ok": True, "issues": issues})
 
 
 # ---- Video frame extraction ----
@@ -494,6 +601,8 @@ def api_video_info(participant: str) -> FlaskResponse:
         "fps": vid_fps,
         "width": width if width > 0 else None,
         "height": height if height > 0 else None,
+        "nb_frames": props.get("nb_frames", 0) or 0,
+        "video_codec": props.get("video_codec") or "",
     }
     _video_metadata_cache[participant] = info
 
@@ -1628,6 +1737,7 @@ def _backfill_missing_events(manifest: dict[str, Any]) -> None:
             manifest.get("tasks", []),
             events,
             stashes=manifest.get("stashes", []),
+            per_participant=manifest.get("per_participant", {}),
         )
 
 
@@ -1695,6 +1805,7 @@ def _do_persist(*, drain_events: bool = True) -> None:
         tasks,
         _manifest.get("events", []),
         stashes=_manifest.get("stashes", []),
+        per_participant=_manifest.get("per_participant", {}),
     )
 
 

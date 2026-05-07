@@ -34,6 +34,55 @@
   </div>
 
   <main id="ssMain">
+    <div class="ss-content-row">
+      <aside id="ssInfoPanel">
+        <div class="ss-info-content">
+          <div class="ss-info-header-row">
+            <div class="ss-info-block ss-info-block--participant">
+              <div class="ss-info-label">Participant</div>
+              <div id="ssInfoParticipant" class="ss-info-value ss-info-value--lg">&mdash;</div>
+            </div>
+            <button id="ssInfoCollapseBtn" class="ss-info-collapse-btn" type="button" title="Hide panel" aria-label="Hide panel">
+              <span class="ss-info-collapse-icon"></span>
+            </button>
+          </div>
+          <section class="ss-info-section" data-section="details">
+            <button class="ss-info-section-header" type="button" aria-expanded="true">
+              <span class="ss-info-section-chevron"></span>
+              <span>Details</span>
+            </button>
+            <div class="ss-info-section-body">
+              <div class="ss-info-block">
+                <div class="ss-info-label">Duration</div>
+                <div id="ssInfoDuration" class="ss-info-value">&mdash;</div>
+                <div id="ssInfoFrames" class="ss-info-sub">&mdash;</div>
+              </div>
+              <div class="ss-info-block">
+                <div class="ss-info-label">Video</div>
+                <div id="ssInfoResolution" class="ss-info-value">&mdash;</div>
+                <div id="ssInfoCodec" class="ss-info-sub">&mdash;</div>
+              </div>
+            </div>
+          </section>
+          <div class="ss-info-block">
+            <div class="ss-info-label">Notes</div>
+            <textarea id="ssInfoNotes" class="ss-info-notes" rows="4" spellcheck="false" autocomplete="off" placeholder="Notes for this participant&hellip;"></textarea>
+          </div>
+          <section id="ssInfoIssuesBlock" class="ss-info-section hidden" data-section="issues">
+            <button class="ss-info-section-header" type="button" aria-expanded="true">
+              <span class="ss-info-section-chevron"></span>
+              <span>Top issues</span>
+            </button>
+            <div class="ss-info-section-body">
+              <ul id="ssInfoIssues" class="ss-info-issues"></ul>
+            </div>
+          </section>
+        </div>
+      </aside>
+      <button id="ssInfoExpandBtn" class="ss-info-expand-btn hidden" type="button" title="Show panel" aria-label="Show panel">
+        <span class="ss-info-expand-icon"></span>
+      </button>
+      <div class="ss-content-main">
     <section id="viewerSection">
       <div id="frameContainer">
         <video id="videoPlayer" preload="metadata" playsinline></video>
@@ -86,6 +135,8 @@
         <div id="timelineLegend"></div>
       </div>
     </section>
+      </div>
+    </div>
 
   </main>
 
