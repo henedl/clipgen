@@ -15,7 +15,13 @@ def client(tmp_path, monkeypatch):
     app.register_blueprint(screenspace_server.screenspace_bp, url_prefix="/screenspace")
 
     monkeypatch.setattr(config, "OUTPUT_DIR", str(tmp_path))
-    screenspace_server._manifest = {"regions": {}, "tasks": [], "events": []}
+    screenspace_server._manifest = {
+        "regions": {},
+        "tasks": [],
+        "events": [],
+        "stashes": [],
+        "per_participant": {},
+    }
     screenspace_server._participants = [
         {"id": "P01", "video_path": "/tmp/test_P01.mp4", "has_video": False},
         {"id": "P02", "video_path": "/tmp/test_P02.mp4", "has_video": False},
@@ -26,7 +32,7 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setattr(
         screenspace,
         "save_screenspace_manifest",
-        lambda r, t, e=None, stashes=None: tmp_path / "m.json",
+        lambda r, t, e=None, stashes=None, per_participant=None: tmp_path / "m.json",
     )
 
     with app.test_client() as c:
@@ -43,6 +49,60 @@ def test_list_participants(client):
     assert data["ok"] is True
     assert len(data["participants"]) == 2
     assert data["participants"][0]["id"] == "P01"
+
+
+def test_participant_notes_default_empty(client):
+    resp = client.get("/screenspace/api/participants/P01/notes")
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["ok"] is True
+    assert data["notes"] == ""
+
+
+def test_participant_notes_round_trip(client):
+    put_resp = client.put(
+        "/screenspace/api/participants/P01/notes", json={"notes": "watch HUD glitch"}
+    )
+    assert put_resp.status_code == 200
+    assert put_resp.get_json()["ok"] is True
+
+    get_resp = client.get("/screenspace/api/participants/P01/notes")
+    assert get_resp.get_json()["notes"] == "watch HUD glitch"
+
+
+def test_participant_notes_unknown_participant(client):
+    resp = client.get("/screenspace/api/participants/PNOPE/notes")
+    assert resp.status_code == 404
+
+
+def test_participant_notes_too_large(client):
+    huge = "x" * (64 * 1024 + 1)
+    resp = client.put("/screenspace/api/participants/P01/notes", json={"notes": huge})
+    assert resp.status_code == 413
+
+
+def test_participant_notes_isolated_per_participant(client):
+    client.put("/screenspace/api/participants/P01/notes", json={"notes": "p1 note"})
+    client.put("/screenspace/api/participants/P02/notes", json={"notes": "p2 note"})
+    assert (
+        client.get("/screenspace/api/participants/P01/notes").get_json()["notes"]
+        == "p1 note"
+    )
+    assert (
+        client.get("/screenspace/api/participants/P02/notes").get_json()["notes"]
+        == "p2 note"
+    )
+
+
+def test_participant_issues_no_sheet(client, monkeypatch):
+    import server
+
+    monkeypatch.setattr(server, "_sheet_context", None, raising=False)
+    resp = client.get("/screenspace/api/participants/P01/issues")
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["ok"] is True
+    assert data["issues"] == []
 
 
 # ---- Regions ----
@@ -682,6 +742,59 @@ def test_create_multitool_step_region_ref_resolves_stash_duplicate(client, monke
         "w": 480,
         "h": 270,
     }
+
+
+def test_create_task_full_frame_region_ref(client, monkeypatch):
+    """A region_ref with source 'full_frame' should denormalize to the full video frame."""
+    _enable_video_task_setup(monkeypatch, "P01")
+
+    resp = client.post(
+        "/screenspace/api/tasks",
+        json={
+            "type": "color",
+            "participant": "P01",
+            "region": "full_frame",
+            "region_ref": {"source": "full_frame"},
+        },
+    )
+
+    assert resp.status_code == 200
+    task = resp.get_json()["task"]
+    assert task["region"] == "full_frame"
+    assert task["region_coords"] == {"x": 0, "y": 0, "w": 1920, "h": 1080}
+
+
+def test_create_multitool_step_full_frame_region_ref(client, monkeypatch):
+    """A multitool step can target the full frame via source 'full_frame'."""
+    _create_region(client, "other", x=10, y=10, w=100, h=50)
+    _enable_video_task_setup(monkeypatch, "P01")
+
+    resp = client.post(
+        "/screenspace/api/tasks",
+        json={
+            "type": "multitool",
+            "participant": "P01",
+            "region": "",
+            "parameters": {
+                "steps": [
+                    {
+                        "type": "color",
+                        "region": "full_frame",
+                        "region_ref": {"source": "full_frame"},
+                    },
+                    {"type": "change", "region": "other"},
+                ]
+            },
+        },
+    )
+
+    assert resp.status_code == 200
+    worker = screenspace_server._worker
+    assert worker is not None
+    task = worker.get_all_tasks()[0]
+    steps = task["parameters"]["steps"]
+    assert steps[0]["region"] == "full_frame"
+    assert steps[0]["region_coords"] == {"x": 0, "y": 0, "w": 1920, "h": 1080}
 
 
 def test_get_task_not_found(client):

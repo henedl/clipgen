@@ -3054,7 +3054,13 @@ class ScreenspaceWorker:
 
 
 def _empty_screenspace_manifest() -> dict[str, Any]:
-    return {"regions": {}, "tasks": [], "events": [], "stashes": []}
+    return {
+        "regions": {},
+        "tasks": [],
+        "events": [],
+        "stashes": [],
+        "per_participant": {},
+    }
 
 
 def load_screenspace_manifest() -> dict[str, Any]:
@@ -3069,6 +3075,7 @@ def save_screenspace_manifest(
     tasks: list[dict[str, Any]],
     events: list[dict[str, Any]] | None = None,
     stashes: list[dict[str, Any]] | None = None,
+    per_participant: dict[str, dict[str, Any]] | None = None,
 ) -> Path | None:
     """Write the screenspace manifest to disk.
 
@@ -3108,6 +3115,7 @@ def save_screenspace_manifest(
             "tasks": clean_tasks,
             "events": events or [],
             "stashes": stashes or [],
+            "per_participant": per_participant or {},
         },
         warn_label="screenspace manifest",
     )

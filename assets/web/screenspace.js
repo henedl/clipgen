@@ -321,6 +321,8 @@
     for (i = 0; i < btns.length; i++) btns[i].classList.remove("open");
   }
 
+  var FULL_FRAME_REGION_NAME = "full_frame";
+
   function activeRegionRef(name) {
     return { source: "active", name: name };
   }
@@ -334,9 +336,21 @@
     };
   }
 
+  function fullFrameRegionRef() {
+    return { source: "full_frame", name: FULL_FRAME_REGION_NAME };
+  }
+
+  function isFullFrameRef(ref) {
+    return !!ref && ref.source === "full_frame";
+  }
+
   function normalizeRegionRef(ref) {
     if (!ref) return null;
-    if (typeof ref === "string") return activeRegionRef(ref);
+    if (typeof ref === "string") {
+      if (ref === FULL_FRAME_REGION_NAME) return fullFrameRegionRef();
+      return activeRegionRef(ref);
+    }
+    if (ref.source === "full_frame") return fullFrameRegionRef();
     if (ref.source === "stash") {
       var stashName = ref.stash_name;
       if (!stashName) {
@@ -360,18 +374,21 @@
   function regionRefKey(ref) {
     var r = normalizeRegionRef(ref);
     if (!r) return "";
+    if (r.source === "full_frame") return "full_frame";
     return r.source === "stash" ? "stash:" + r.stash_id + ":" + r.name : "active:" + r.name;
   }
 
   function regionRefLabel(ref) {
     var r = normalizeRegionRef(ref);
     if (!r) return "";
+    if (r.source === "full_frame") return "Full frame";
     return r.source === "stash" ? r.name + " · " + (r.stash_name || "stash") : r.name;
   }
 
   function regionRefPayload(ref) {
     var r = normalizeRegionRef(ref);
     if (!r) return null;
+    if (r.source === "full_frame") return { source: "full_frame" };
     if (r.source === "stash") {
       return { source: "stash", stash_id: r.stash_id, name: r.name };
     }
@@ -393,8 +410,9 @@
   }
 
   function allAvailableRegionRefs() {
-    var refs = Object.keys(state.regions).map(function (name) {
-      return activeRegionRef(name);
+    var refs = [fullFrameRegionRef()];
+    Object.keys(state.regions).forEach(function (name) {
+      refs.push(activeRegionRef(name));
     });
     state.stashes.forEach(function (stash) {
       Object.keys(stash.regions).forEach(function (name) {
@@ -402,6 +420,12 @@
       });
     });
     return refs;
+  }
+
+  function buildFullFrameIcon() {
+    var icon = el("span", "run-picker-fullframe-icon");
+    applyMaskIcon(icon, 'url("/screenspace/icons/arrows-pointing-out.svg")');
+    return icon;
   }
 
   function availableRegionRefByKey(key) {
@@ -429,13 +453,34 @@
     if (state.runRegions.length === 0 && state.activeRegion && names.indexOf(state.activeRegion) >= 0) {
       state.runRegions = [activeRegionRef(state.activeRegion)];
     }
-    if (allRefs.length === 0) return;
 
     var btn = el("button", "run-picker-btn");
     btn.type = "button";
     updateRegionPickerBtnText(btn);
 
     var panel = el("div", "run-picker-panel hidden");
+
+    // Full-frame entry — always available, sits above the active/stash regions.
+    var fullFrameRef = fullFrameRegionRef();
+    var fullFrameLbl = document.createElement("label");
+    fullFrameLbl.className = "run-picker-fullframe";
+    var fullFrameCb = document.createElement("input");
+    fullFrameCb.type = "checkbox";
+    fullFrameCb.value = regionRefKey(fullFrameRef);
+    fullFrameCb.checked = hasRunRegion(fullFrameRef);
+    fullFrameCb.addEventListener("change", function () {
+      if (fullFrameCb.checked) {
+        addRunRegion(fullFrameRef);
+      } else {
+        removeRunRegion(fullFrameRef);
+      }
+      updateRegionPickerBtnText(btn);
+      updateRunButton();
+    });
+    fullFrameLbl.appendChild(fullFrameCb);
+    fullFrameLbl.appendChild(buildFullFrameIcon());
+    fullFrameLbl.appendChild(el("span", "run-picker-label-text", "Full frame"));
+    panel.appendChild(fullFrameLbl);
 
     if (names.length > 0) {
       var toggleAll = el("span", "run-picker-toggle-all");
@@ -553,6 +598,9 @@
       : n === 1 ? regionRefLabel(state.runRegions[0])
       : n + " regions";
     btn.innerHTML = "";
+    if (n === 1 && isFullFrameRef(state.runRegions[0])) {
+      btn.appendChild(buildFullFrameIcon());
+    }
     btn.appendChild(el("span", "run-picker-btn-text", text));
     var chevron = el("span", "chevron");
     chevron.appendChild(svgChevronDownIcon());
@@ -736,6 +784,7 @@
     qs("#participantSelect").value = pid;
     qs("#videoInfo").textContent = "";
     qs("#frameEmpty").classList.remove("hidden");
+    setInfoParticipant(pid);
 
     apiGet("api/video/info/" + encodeURIComponent(pid))
       .then(function (data) {
@@ -747,12 +796,156 @@
         if (data.info.width && data.info.height) parts.push(data.info.width + "x" + data.info.height);
         if (data.info.fps) parts.push(Math.round(data.info.fps) + "fps");
         qs("#videoInfo").textContent = parts.join(" \u00b7 ");
+        renderInfoVideo(data.info);
         renderTimeline();
         // Preload video source for instant playback
         qs("#videoPlayer").src = videoStreamUrl(pid);
         loadFrame(initialTimestamp !== undefined ? initialTimestamp : 0);
       })
       .catch(function () { showToast("Failed to load video info"); });
+
+    apiGet("api/participants/" + encodeURIComponent(pid) + "/notes")
+      .then(function (data) {
+        if (participantRequestVersion !== _participantRequestVersion || pid !== state.selectedParticipant) return;
+        if (!data.ok) return;
+        renderInfoNotes(data.notes || "");
+      })
+      .catch(function () {});
+
+    apiGet("api/participants/" + encodeURIComponent(pid) + "/issues")
+      .then(function (data) {
+        if (participantRequestVersion !== _participantRequestVersion || pid !== state.selectedParticipant) return;
+        if (!data.ok) return;
+        renderInfoIssues(data.issues || []);
+      })
+      .catch(function () {});
+  }
+
+  // ---- Info panel ----
+
+  function setInfoParticipant(pid) {
+    var el = qs("#ssInfoParticipant");
+    if (el) el.textContent = pid || "\u2014";
+    qs("#ssInfoDuration").textContent = "\u2014";
+    qs("#ssInfoFrames").textContent = "\u2014";
+    qs("#ssInfoResolution").textContent = "\u2014";
+    qs("#ssInfoCodec").textContent = "\u2014";
+    qs("#ssInfoNotes").value = "";
+    qs("#ssInfoIssuesBlock").classList.add("hidden");
+    qs("#ssInfoIssues").innerHTML = "";
+  }
+
+  function renderInfoVideo(info) {
+    qs("#ssInfoDuration").textContent = info.duration ? formatDuration(info.duration) : "\u2014";
+    qs("#ssInfoFrames").textContent = info.nb_frames
+      ? info.nb_frames.toLocaleString() + " frames"
+      : "";
+    qs("#ssInfoResolution").textContent = info.width && info.height
+      ? info.width + "\u00d7" + info.height
+      : "\u2014";
+    qs("#ssInfoCodec").textContent = info.video_codec || "";
+  }
+
+  function renderInfoNotes(notes) {
+    var ta = qs("#ssInfoNotes");
+    if (!ta) return;
+    if (document.activeElement !== ta) ta.value = notes;
+  }
+
+  function renderInfoIssues(issues) {
+    var block = qs("#ssInfoIssuesBlock");
+    var list = qs("#ssInfoIssues");
+    if (!block || !list) return;
+    list.innerHTML = "";
+    if (!issues || !issues.length) {
+      block.classList.add("hidden");
+      return;
+    }
+    block.classList.remove("hidden");
+    var frag = document.createDocumentFragment();
+    issues.forEach(function (issue) {
+      var li = document.createElement("li");
+      li.className = "ss-info-issue";
+      var dot = document.createElement("span");
+      dot.className = "ss-info-issue-dot " + (severityClass(issue.severity) || "");
+      var text = document.createElement("span");
+      text.className = "ss-info-issue-text";
+      text.textContent = issue.observation || "(no observation)";
+      li.appendChild(dot);
+      li.appendChild(text);
+      frag.appendChild(li);
+    });
+    list.appendChild(frag);
+  }
+
+  function initInfoNotes() {
+    var ta = qs("#ssInfoNotes");
+    if (!ta) return;
+    var saveTimer = null;
+    ta.addEventListener("input", function () {
+      var pid = state.selectedParticipant;
+      if (!pid) return;
+      var value = ta.value;
+      if (saveTimer) clearTimeout(saveTimer);
+      saveTimer = setTimeout(function () {
+        if (pid !== state.selectedParticipant) return;
+        apiPut("api/participants/" + encodeURIComponent(pid) + "/notes", { notes: value })
+          .catch(function () { showToast("Failed to save notes"); });
+      }, 500);
+    });
+  }
+
+  function applyInfoPanelCollapsed(collapsed) {
+    qs("#ssInfoPanel").classList.toggle("hidden", collapsed);
+    qs("#ssInfoExpandBtn").classList.toggle("hidden", !collapsed);
+  }
+
+  function initInfoPanelCollapse() {
+    var stored = getStoredUIState("screenspace");
+    applyInfoPanelCollapsed(!!stored.infoPanelCollapsed);
+    qs("#ssInfoCollapseBtn").addEventListener("click", function () {
+      applyInfoPanelCollapsed(true);
+      setStoredUIStateField("screenspace", "infoPanelCollapsed", true);
+    });
+    qs("#ssInfoExpandBtn").addEventListener("click", function () {
+      applyInfoPanelCollapsed(false);
+      setStoredUIStateField("screenspace", "infoPanelCollapsed", false);
+    });
+  }
+
+  function applyInfoSectionCollapsed(section, collapsed) {
+    if (!section) return;
+    section.setAttribute("data-collapsed", collapsed ? "true" : "false");
+    var header = section.querySelector(".ss-info-section-header");
+    if (header) header.setAttribute("aria-expanded", collapsed ? "false" : "true");
+  }
+
+  function initInfoSections() {
+    var stored = getStoredUIState("screenspace");
+    var sections = (stored.infoSectionsCollapsed && typeof stored.infoSectionsCollapsed === "object")
+      ? stored.infoSectionsCollapsed
+      : {};
+    var headers = document.querySelectorAll(".ss-info-section-header");
+    for (var i = 0; i < headers.length; i++) {
+      var header = headers[i];
+      var section = header.closest(".ss-info-section");
+      var name = section ? section.getAttribute("data-section") : null;
+      if (!name) continue;
+      applyInfoSectionCollapsed(section, !!sections[name]);
+      header.addEventListener("click", function () {
+        var sec = this.closest(".ss-info-section");
+        if (!sec) return;
+        var n = sec.getAttribute("data-section");
+        var st = getStoredUIState("screenspace");
+        var s = (st.infoSectionsCollapsed && typeof st.infoSectionsCollapsed === "object")
+          ? st.infoSectionsCollapsed
+          : {};
+        var newCollapsed = !s[n];
+        s[n] = newCollapsed;
+        setStoredUIStateField("screenspace", "infoSectionsCollapsed", s);
+        applyInfoSectionCollapsed(sec, newCollapsed);
+      });
+    }
   }
 
   // ---- Frame viewer ----
@@ -1917,6 +2110,9 @@
           if (oPx && oPx.w && oPx.h) {
             ctx.drawImage(state.overlayImage, oPx.x, oPx.y, oPx.w, oPx.h);
           }
+        } else {
+          // No region active — overlay covers the whole frame.
+          ctx.drawImage(state.overlayImage, 0, 0, canvas.width, canvas.height);
         }
       }
       ctx.globalAlpha = 1.0;
@@ -3783,11 +3979,13 @@
     }
   }
 
+  var _FULL_FRAME_REGION_STRING = "0.000000,0.000000,1.000000,1.000000";
+
   function _normalizedRegionString() {
     if (state.pendingRegion) {
       var p = state.pendingRegion;
       var c = qs("#overlayCanvas");
-      if (!c.width || !c.height) return null;
+      if (!c.width || !c.height) return _FULL_FRAME_REGION_STRING;
       return [p.x / c.width, p.y / c.height, p.w / c.width, p.h / c.height]
         .map(function (v) { return Number(v).toFixed(6); })
         .join(",");
@@ -3800,12 +3998,16 @@
           .join(",");
       }
       var canvas = qs("#overlayCanvas");
-      if (!canvas.width || !canvas.height) return null;
+      if (!canvas.width || !canvas.height) return _FULL_FRAME_REGION_STRING;
       return [r.x / canvas.width, r.y / canvas.height, r.w / canvas.width, r.h / canvas.height]
         .map(function (v) { return Number(v).toFixed(6); })
         .join(",");
     }
-    return null;
+    return _FULL_FRAME_REGION_STRING;
+  }
+
+  function _hasActiveOrPendingRegion() {
+    return !!(state.pendingRegion || (state.activeRegion && state.regions[state.activeRegion]));
   }
 
   function _collectPreviewParams(tool) {
@@ -3839,12 +4041,13 @@
 
     var tool = state.activeWorkflow;
     var regionStr = _normalizedRegionString();
+    var hasRegion = _hasActiveOrPendingRegion();
 
     if (tool === "template") {
       if (state.uploadedTemplate && state.uploadedTemplate.data) {
         // POST with template_image_data — region optional
       } else if (state.referenceTimestamp != null) {
-        if (!regionStr) {
+        if (!hasRegion) {
           meta.textContent = "Select or draw a region to preview the captured template.";
           img.removeAttribute("src");
           return;
@@ -3854,10 +4057,6 @@
         img.removeAttribute("src");
         return;
       }
-    } else if (!regionStr) {
-      meta.textContent = "Select or draw a region to preview.";
-      img.removeAttribute("src");
-      return;
     }
 
     var params = _collectPreviewParams(tool);
@@ -3903,7 +4102,11 @@
       var u = URL.createObjectURL(blob);
       img._modelViewObjectUrl = u;
       img.src = u;
-      meta.textContent = MODEL_VIEW_META[tool] || "";
+      var metaText = MODEL_VIEW_META[tool] || "";
+      if (!hasRegion) {
+        metaText = (metaText ? metaText + " " : "") + "(Full frame — no region selected.)";
+      }
+      meta.textContent = metaText;
     }
 
     function _refetchOverlayLayer() {
@@ -6561,6 +6764,9 @@
     initResultsPanel();
     initPanelDivider();
     initPreviewResize();
+    initInfoNotes();
+    initInfoPanelCollapse();
+    initInfoSections();
     initKeyboard();
     initFrontendSwitcher();
     initTopNavActions();

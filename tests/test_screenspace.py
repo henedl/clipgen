@@ -396,7 +396,13 @@ class TestMergeTimestampSpans:
 class TestManifest:
     def test_empty_manifest_structure(self):
         m = screenspace._empty_screenspace_manifest()
-        assert m == {"regions": {}, "tasks": [], "events": [], "stashes": []}
+        assert m == {
+            "regions": {},
+            "tasks": [],
+            "events": [],
+            "stashes": [],
+            "per_participant": {},
+        }
 
     def test_roundtrip(self, tmp_path, monkeypatch):
         monkeypatch.setattr(config, "OUTPUT_DIR", str(tmp_path))
@@ -431,14 +437,26 @@ class TestManifest:
     def test_load_missing_file(self, tmp_path, monkeypatch):
         monkeypatch.setattr(config, "OUTPUT_DIR", str(tmp_path))
         result = screenspace.load_screenspace_manifest()
-        assert result == {"regions": {}, "tasks": [], "events": [], "stashes": []}
+        assert result == {
+            "regions": {},
+            "tasks": [],
+            "events": [],
+            "stashes": [],
+            "per_participant": {},
+        }
 
     def test_load_malformed_json(self, tmp_path, monkeypatch):
         monkeypatch.setattr(config, "OUTPUT_DIR", str(tmp_path))
         manifest_path = tmp_path / config.SCREENSPACE_MANIFEST_FILENAME
         manifest_path.write_text("not json")
         result = screenspace.load_screenspace_manifest()
-        assert result == {"regions": {}, "tasks": [], "events": [], "stashes": []}
+        assert result == {
+            "regions": {},
+            "tasks": [],
+            "events": [],
+            "stashes": [],
+            "per_participant": {},
+        }
 
 
 # ---------------------------------------------------------------------------
