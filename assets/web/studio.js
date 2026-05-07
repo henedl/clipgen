@@ -357,7 +357,25 @@
       var stored = localStorage.getItem(SIDEBAR_VIEW_KEY);
       if (stored !== null) state.sidebarOpen = (stored !== "false");
     } catch (_) {}
+    // Apply to DOM here so the very first paint already shows the persisted
+    // state. Otherwise the HTML default `data-open="true"` paints first and
+    // the later renderSidebar() flip animates the open→collapsed transition,
+    // which reads as a Sheet-tab slide when navigating in from elsewhere.
+    // The transition is gated on `.tx-ready`, added after first paint below.
+    var sidebar = document.getElementById("studioSidebar");
+    if (!sidebar) return;
+    sidebar.setAttribute("data-open", state.sidebarOpen ? "true" : "false");
+    requestAnimationFrame(function () {
+      requestAnimationFrame(function () {
+        sidebar.classList.add("tx-ready");
+      });
+    });
   }
+
+  // Run synchronously at script load (studio.js is non-defer at end of body,
+  // so the sidebar element already exists). DOMContentLoaded would be too
+  // late — first paint can happen before it fires.
+  readPersistedSidebarOpen();
 
   function persistSidebarOpen() {
     try { localStorage.setItem(SIDEBAR_VIEW_KEY, state.sidebarOpen ? "true" : "false"); } catch (_) {}
@@ -703,7 +721,7 @@
         var allTabs = qsa(".preview-tab");
         for (var j = 0; j < allTabs.length; j++) allTabs[j].classList.remove("active");
         this.classList.add("active");
-        syncPreviewTab();
+        syncPreviewTab(true);
       });
     }
     restoreStoredPreviewTab();
@@ -728,10 +746,10 @@
     state.activePreviewTab = stored;
     for (var k = 0; k < tabs.length; k++) tabs[k].classList.remove("active");
     match.classList.add("active");
-    syncPreviewTab();
+    syncPreviewTab(false);
   }
 
-  function syncPreviewTab() {
+  function syncPreviewTab(animate) {
     setActiveTabAttr(state.activePreviewTab);
     var grid = qs("#sheetGrid");
     var refreshBtn = qs("#refreshSheet");
@@ -774,7 +792,7 @@
       activePanel = metadataPanel;
       if (window.metadataActivate) window.metadataActivate();
     }
-    if (activePanel) {
+    if (activePanel && animate) {
       activePanel.classList.add("tab-slide-enter");
       requestAnimationFrame(function () {
         requestAnimationFrame(function () {
@@ -4604,7 +4622,6 @@
 
   document.addEventListener("DOMContentLoaded", function () {
     applyDataIconMasks();
-    readPersistedSidebarOpen();
     setActiveTabAttr(state.activePreviewTab);
     bindSidebarToggle();
     initThemeToggle();

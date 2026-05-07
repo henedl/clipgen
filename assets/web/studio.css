@@ -249,7 +249,6 @@ body {
   overflow-y: auto;
   scrollbar-width: thin;
   scrollbar-color: var(--border) transparent;
-  transition: flex-basis 180ms ease-out;
 }
 #studioSidebar::-webkit-scrollbar {
   width: 6px;
@@ -260,6 +259,17 @@ body {
 }
 #studioSidebar::-webkit-scrollbar-track {
   background: transparent;
+}
+/* Transition is gated on `tx-ready`, applied by studio.js after the first
+ * paint. Otherwise the attribute flip from the persisted-collapsed state
+ * (set synchronously at script load) animates from the HTML default 220px
+ * down to 32px on the first frame, which reads as a Sheet-tab slide when
+ * navigating in from another frontend. */
+#studioSidebar.tx-ready {
+  transition: flex-basis 180ms ease-out;
+}
+#studioSidebar.tx-ready .studio-sidebar-toggle-icon {
+  transition: transform 180ms ease-out;
 }
 #studioSidebar[data-open="false"] {
   flex-basis: 32px;
@@ -302,7 +312,7 @@ body {
   -webkit-mask-size: contain;
   -webkit-mask-repeat: no-repeat;
   -webkit-mask-position: center;
-  transition: transform 180ms ease-out;
+  /* Transition added by `#studioSidebar.tx-ready` rule above. */
 }
 #studioSidebar[data-open="false"] .studio-sidebar-toggle-icon {
   transform: rotate(180deg);
