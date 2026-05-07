@@ -547,6 +547,17 @@ def _combined_region_lookup() -> dict[str, Any]:
     return regions
 
 
+_FULL_FRAME_REGION_NAME = "full_frame"
+_FULL_FRAME_REGION: dict[str, Any] = {
+    "x": 0.0,
+    "y": 0.0,
+    "w": 1.0,
+    "h": 1.0,
+    "source_width": 0,
+    "source_height": 0,
+}
+
+
 def _resolve_region_request(
     region_name: str,
     region_ref: Any,
@@ -557,6 +568,8 @@ def _resolve_region_request(
         active_regions = {}
 
     if region_ref is None:
+        if region_name == _FULL_FRAME_REGION_NAME:
+            return _FULL_FRAME_REGION_NAME, dict(_FULL_FRAME_REGION)
         if region_name in active_regions:
             return region_name, cast(dict[str, Any], active_regions[region_name])
         for stash in _manifest.get("stashes", []):
@@ -569,6 +582,10 @@ def _resolve_region_request(
         return jsonify({"ok": False, "error": "region_ref must be an object"}), 400
 
     source = str(region_ref.get("source", "")).strip()
+
+    if source == "full_frame":
+        return _FULL_FRAME_REGION_NAME, dict(_FULL_FRAME_REGION)
+
     name = str(region_ref.get("name", "")).strip()
     if not name:
         return jsonify({"ok": False, "error": "region_ref.name is required"}), 400
@@ -603,7 +620,10 @@ def _resolve_region_request(
 
     return (
         jsonify(
-            {"ok": False, "error": "region_ref.source must be 'active' or 'stash'"}
+            {
+                "ok": False,
+                "error": "region_ref.source must be 'active', 'stash', or 'full_frame'",
+            }
         ),
         400,
     )
