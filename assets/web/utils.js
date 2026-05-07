@@ -45,6 +45,9 @@ var CLIPGEN_CONFIG = {
     { label: "Very Positive", rank:  2, cssClass: "sev-very-positive" },
   ],
   annotationKeyphrases: ["!key"],
+  annotations: [
+    { id: "key", token: "!key" },
+  ],
   ignoredTimestampTokens: ["x"],
 };
 
@@ -58,6 +61,9 @@ var clipgenApplyConfig = function (payload) {
   }
   if (Array.isArray(payload.annotationKeyphrases)) {
     CLIPGEN_CONFIG.annotationKeyphrases = payload.annotationKeyphrases;
+  }
+  if (Array.isArray(payload.annotations)) {
+    CLIPGEN_CONFIG.annotations = payload.annotations;
   }
   if (Array.isArray(payload.ignoredTimestampTokens)) {
     CLIPGEN_CONFIG.ignoredTimestampTokens = payload.ignoredTimestampTokens;

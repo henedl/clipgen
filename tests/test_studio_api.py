@@ -892,6 +892,56 @@ def test_api_sheet_returns_titlecard_defaults(client, monkeypatch):
     assert data["titlecardDuration"] == config.TITLECARD_DURATION_SECONDS
 
 
+def test_api_sheet_exposes_keyword_annotations(client, monkeypatch):
+    """api/sheet must include cell.keywords / row.keywords from !key annotations
+    and config.annotations from utils.get_frontend_config()."""
+    import types
+
+    # Two data rows: row 2 has a !key annotation in P01, row 3 has none.
+    sheet_data = [
+        ["ID", "P01", "P02", "Observation", "Category"],
+        ["1", "0:10-0:20 !key", "0:30", "obs A", "catA"],
+        ["2", "0:40", "", "obs B", "catB"],
+    ]
+    ctx = types.SimpleNamespace(
+        header_row=sheet_data[0],
+        id_cell=types.SimpleNamespace(row=1, col=1),
+        num_participants=2,
+        study_name="study",
+        observation_cell=types.SimpleNamespace(col=4),
+        category_cell=types.SimpleNamespace(col=5),
+        severity_cell=None,
+        baseline_row_idx=None,
+        filename_row_idx=None,
+        first_data_row_idx=1,
+        sheet_data=sheet_data,
+    )
+    monkeypatch.setattr(server, "_sheet_context", ctx)
+
+    resp = client.get("/studio/api/sheet")
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["ok"] is True
+
+    # Annotations are surfaced through frontend config so the sidebar can label pills.
+    annotations = data["config"]["annotations"]
+    assert annotations, "config.annotations must be non-empty"
+    assert {"id": "key", "token": "!key"} in annotations
+
+    rows = data["rows"]
+    assert len(rows) == 2
+
+    # Row 0 (data row with !key in P01)
+    assert rows[0]["keywords"] == ["key"]
+    assert rows[0]["cells"]["P01"]["keywords"] == ["key"]
+    assert rows[0]["cells"]["P02"]["keywords"] == []
+
+    # Row 1 (no annotation)
+    assert rows[1]["keywords"] == []
+    assert rows[1]["cells"]["P01"]["keywords"] == []
+    assert rows[1]["cells"]["P02"]["keywords"] == []
+
+
 def test_api_generate_titlecard_override(client, monkeypatch):
     """titlecards_enabled and titlecard_duration temporarily override config during generate."""
     import types

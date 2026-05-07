@@ -79,6 +79,7 @@ def test_clipgen_config_defaults_match_python():
 
     assert js_config["defaultDuration"] == py_config["defaultDuration"]
     assert js_config["annotationKeyphrases"] == py_config["annotationKeyphrases"]
+    assert js_config["annotations"] == py_config["annotations"]
     assert js_config["ignoredTimestampTokens"] == py_config["ignoredTimestampTokens"]
 
     assert len(js_config["severity"]) == len(py_config["severity"])
@@ -95,6 +96,7 @@ def test_get_frontend_config_shape():
         "defaultDuration",
         "severity",
         "annotationKeyphrases",
+        "annotations",
         "ignoredTimestampTokens",
     }
     assert isinstance(cfg["defaultDuration"], int)
@@ -106,6 +108,13 @@ def test_get_frontend_config_shape():
     assert sorted(cfg["annotationKeyphrases"]) == sorted(
         utils.get_known_annotation_map().keys()
     )
+    assert isinstance(cfg["annotations"], list)
+    annotation_map = utils.get_known_annotation_map()
+    assert {(a["token"], a["id"]) for a in cfg["annotations"]} == set(
+        annotation_map.items()
+    )
+    for entry in cfg["annotations"]:
+        assert set(entry.keys()) == {"id", "token"}
     assert sorted(cfg["ignoredTimestampTokens"]) == sorted(
         utils.get_ignored_timestamp_tokens()
     )

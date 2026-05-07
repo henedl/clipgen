@@ -225,16 +225,25 @@ def api_sheet() -> FlaskResponse:
                 severity = utils.normalize_severity(row_data[sev_col])
 
         cells: dict[str, dict[str, Any]] = {}
+        row_keywords: set[str] = set()
         for p_idx, pid in enumerate(participants):
             col_idx = ctx.id_cell.col + p_idx
             value = row_data[col_idx] if col_idx < len(row_data) else ""
             has_text = bool(value.strip())
             valid = False
+            cell_keywords: list[str] = []
             if has_text:
-                cleaned, _, _ = utils.parse_cell_annotations(value)
+                cleaned, _, cell_annotations = utils.parse_cell_annotations(value)
                 parsed = utils.parse_timestamps(cleaned)
                 valid = bool(parsed)
-            cells[pid] = {"value": value.strip(), "valid": valid, "hasText": has_text}
+                cell_keywords = sorted(cell_annotations)
+                row_keywords.update(cell_annotations)
+            cells[pid] = {
+                "value": value.strip(),
+                "valid": valid,
+                "hasText": has_text,
+                "keywords": cell_keywords,
+            }
 
         rows.append(
             {
@@ -242,6 +251,7 @@ def api_sheet() -> FlaskResponse:
                 "observation": observation,
                 "category": category,
                 "severity": severity,
+                "keywords": sorted(row_keywords),
                 "cells": cells,
             }
         )
