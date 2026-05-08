@@ -49,7 +49,7 @@ var clipgenApplyConfig = function (payload) {
   if (typeof payload.defaultDuration === "number") {
     CLIPGEN_CONFIG.defaultDuration = payload.defaultDuration;
   }
-  if (Array.isArray(payload.severity) && payload.severity.length) {
+  if (Array.isArray(payload.severity)) {
     CLIPGEN_CONFIG.severity = payload.severity;
   }
   if (Array.isArray(payload.annotationKeyphrases)) {

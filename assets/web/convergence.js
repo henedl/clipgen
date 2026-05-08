@@ -102,6 +102,10 @@
         })
         .then(function (blob) {
           var objUrl = URL.createObjectURL(blob);
+          var prev = _cvFrameCache[url];
+          if (prev && prev !== "error" && prev !== "loading") {
+            try { URL.revokeObjectURL(prev); } catch (_) {}
+          }
           _cvFrameCache[url] = objUrl;
           if (!preview.classList.contains("hidden") && img.parentNode) {
             img.src = objUrl;

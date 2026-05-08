@@ -1321,8 +1321,10 @@
       if (e.button !== 0) return;
       if (state.videoPlaying) pauseVideo();
       if (state.pipetteActive) {
-        var pos = canvasCoords(qs("#frameCanvas"), e);
-        var frameCtx = qs("#frameCanvas").getContext("2d");
+        var frameCanvas = qs("#frameCanvas");
+        if (!frameCanvas) { deactivatePipette(); return; }
+        var pos = canvasCoords(frameCanvas, e);
+        var frameCtx = frameCanvas.getContext("2d");
         var pixel = frameCtx.getImageData(pos.x, pos.y, 1, 1).data;
         var hsv = rgbToHsv(pixel[0], pixel[1], pixel[2]);
         if (state._mtPipetteStep !== undefined && state._mtPipetteStep >= 0) {
@@ -1347,6 +1349,10 @@
       _cachedOverlayRect = overlay.getBoundingClientRect();
       pos = canvasCoords(overlay, e, _cachedOverlayRect);
       var displayW = _cachedOverlayRect.width || overlay.width;
+      // Bail if the overlay has no usable size (e.g. hidden / display:none
+      // container). Without this, `s` becomes NaN and propagates into hit
+      // testing and any region coords stored downstream.
+      if (!displayW || !overlay.width) return;
       var s = overlay.width / displayW;
       var ctx = overlay.getContext("2d");
       var tHit = templateOverlayBounds();
@@ -6813,7 +6819,12 @@
           // TODO: fire-and-forget blob preload; needs apiGetBlob helper to migrate.
           fetch(url)
             .then(function (r) { return r.blob(); })
-            .then(function (blob) { _preloadedFrames[p.id] = URL.createObjectURL(blob); })
+            .then(function (blob) {
+              if (_preloadedFrames[p.id]) {
+                try { URL.revokeObjectURL(_preloadedFrames[p.id]); } catch (_) {}
+              }
+              _preloadedFrames[p.id] = URL.createObjectURL(blob);
+            })
             .catch(function () {});
         });
         if (state.participants.length > 0) {
