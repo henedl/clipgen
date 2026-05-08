@@ -165,6 +165,14 @@ def build_overlay_layer(
     if tool == "scene" and layer == "edges":
         gray = cv2.cvtColor(pixels, cv2.COLOR_BGR2GRAY)
         edges = cv2.Canny(gray, 100, 200)
+        # Dilate proportionally so 1-px Canny lines remain visible after the
+        # browser scales this region-native overlay down to the display rect.
+        # Capped so high-res regions don't get chunky lines that obscure
+        # underlying frame content.
+        thickness = max(1, min(2, min(gray.shape[:2]) // 300))
+        if thickness > 1:
+            kernel = np.ones((thickness, thickness), np.uint8)
+            edges = cv2.dilate(edges, kernel, iterations=1)
         return _gray_to_bgr(edges)
 
     if tool == "flow" and layer == "flow_vectors":
@@ -211,6 +219,61 @@ def _overlay_change(
     return None
 
 
+def _draw_flow_arrows(
+    vis: "np.ndarray",
+    flow: "np.ndarray",
+    grid_size: int,
+    min_mag: float,
+    coord_scale: float = 1.0,
+) -> None:
+    """Draw an 8x8-ish grid of flow arrows on ``vis`` in-place.
+
+    Arrow length and line thickness scale with the grid cell size on ``vis``
+    so arrows stay visible whether ``vis`` is a 256-px preview or a 1080-px
+    overlay that the browser will subsequently scale down to display.
+
+    ``coord_scale`` multiplies the flow grid coordinates so arrows can be
+    drawn on a higher-resolution ``vis`` than the resolution at which
+    ``flow`` was computed (used by the overlay to keep the gray background
+    crisp while matching the actual CV pipeline's flow detection).
+    """
+    fh, fw = flow.shape[:2]
+    step_y = max(1, fh // grid_size)
+    step_x = max(1, fw // grid_size)
+    vis_step_x = step_x * coord_scale
+    vis_step_y = step_y * coord_scale
+    vis_cell = min(vis_step_x, vis_step_y)
+    max_arrow_len = vis_cell * 0.7
+    thickness = max(1, min(2, int(round(vis_cell / 32))))
+
+    samples: list[tuple[float, float, float, float, float]] = []
+    max_mag = 0.0
+    for gy in range(0, fh, step_y):
+        for gx in range(0, fw, step_x):
+            cy = gy + step_y // 2
+            cx = gx + step_x // 2
+            if cy >= fh or cx >= fw:
+                continue
+            fx, fy = float(flow[cy, cx, 0]), float(flow[cy, cx, 1])
+            m = float(np.sqrt(fx * fx + fy * fy))
+            if m < min_mag:
+                continue
+            samples.append((cx * coord_scale, cy * coord_scale, fx, fy, m))
+            if m > max_mag:
+                max_mag = m
+
+    if not samples or max_mag <= 0:
+        return
+    arrow_scale = max_arrow_len / max_mag
+    for vx, vy, fx, fy, _m in samples:
+        sx, sy = int(round(vx)), int(round(vy))
+        ex = int(round(vx + fx * arrow_scale))
+        ey = int(round(vy + fy * arrow_scale))
+        cv2.arrowedLine(
+            vis, (sx, sy), (ex, ey), (40, 220, 40), thickness, tipLength=0.3
+        )
+
+
 def _overlay_flow(
     pixels: "np.ndarray",
     prev_frame: "np.ndarray | None",
@@ -225,11 +288,31 @@ def _overlay_flow(
     curr_gray = cv2.cvtColor(pixels, cv2.COLOR_BGR2GRAY)
     prev_gray = cv2.cvtColor(prev_pixels, cv2.COLOR_BGR2GRAY)
 
-    # Compute flow at native region resolution for crisp overlay.
-    flow_out = np.zeros((*prev_gray.shape[:2], 2), dtype=np.float32)
+    # Compute flow at the same downscaled resolution as
+    # screenspace.compute_optical_flow so the overlay shows the same vectors
+    # the CV pipeline actually scored. Background gray stays at native
+    # resolution so the user sees a crisp image; arrow coordinates are
+    # scaled up via _draw_flow_arrows' coord_scale.
+    h, w = prev_gray.shape[:2]
+    max_dim = 256
+    if h > max_dim or w > max_dim:
+        scale = max_dim / max(h, w)
+        small_w, small_h = int(w * scale), int(h * scale)
+        prev_small = cv2.resize(
+            prev_gray, (small_w, small_h), interpolation=cv2.INTER_AREA
+        )
+        curr_small = cv2.resize(
+            curr_gray, (small_w, small_h), interpolation=cv2.INTER_AREA
+        )
+        coord_scale = w / float(small_w)
+    else:
+        prev_small, curr_small = prev_gray, curr_gray
+        coord_scale = 1.0
+
+    flow_out = np.zeros((*prev_small.shape[:2], 2), dtype=np.float32)
     flow = cv2.calcOpticalFlowFarneback(
-        prev_gray,
-        curr_gray,
+        prev_small,
+        curr_small,
         flow_out,
         config.SCREENSPACE_FLOW_PYR_SCALE,
         3,
@@ -240,24 +323,13 @@ def _overlay_flow(
         0,
     )
     vis = cv2.cvtColor(curr_gray, cv2.COLOR_GRAY2BGR)
-    grid_size = config.SCREENSPACE_FLOW_GRID_SIZE
-    gh, gw = flow.shape[:2]
-    step_y = max(1, gh // grid_size)
-    step_x = max(1, gw // grid_size)
-    min_mag = config.SCREENSPACE_FLOW_GRID_MIN_MAG
-    for gy in range(0, gh, step_y):
-        for gx in range(0, gw, step_x):
-            cy = gy + step_y // 2
-            cx = gx + step_x // 2
-            if cy >= gh or cx >= gw:
-                continue
-            fx, fy = float(flow[cy, cx, 0]), float(flow[cy, cx, 1])
-            m = float(np.sqrt(fx * fx + fy * fy))
-            if m < min_mag:
-                continue
-            scale = 4.0
-            end = (int(cx + fx * scale), int(cy + fy * scale))
-            cv2.arrowedLine(vis, (cx, cy), end, (40, 220, 40), 1, tipLength=0.3)
+    _draw_flow_arrows(
+        vis,
+        flow,
+        config.SCREENSPACE_FLOW_GRID_SIZE,
+        config.SCREENSPACE_FLOW_GRID_MIN_MAG,
+        coord_scale=coord_scale,
+    )
     return vis
 
 
@@ -637,26 +709,13 @@ def _preview_flow(
     )
     mag, _ = cv2.cartToPolar(flow[..., 0], flow[..., 1], angleInDegrees=True)
 
-    # Draw flow arrows on the current-frame panel
     vis = cv2.cvtColor(curr_r, cv2.COLOR_GRAY2BGR)
-    grid_size = config.SCREENSPACE_FLOW_GRID_SIZE
-    gh, gw = mag.shape[:2]
-    step_y = max(1, gh // grid_size)
-    step_x = max(1, gw // grid_size)
-    min_mag = config.SCREENSPACE_FLOW_GRID_MIN_MAG
-    for gy in range(0, gh, step_y):
-        for gx in range(0, gw, step_x):
-            cy = gy + step_y // 2
-            cx = gx + step_x // 2
-            if cy >= gh or cx >= gw:
-                continue
-            fx, fy = float(flow[cy, cx, 0]), float(flow[cy, cx, 1])
-            m = float(np.sqrt(fx * fx + fy * fy))
-            if m < min_mag:
-                continue
-            scale = 4.0
-            end = (int(cx + fx * scale), int(cy + fy * scale))
-            cv2.arrowedLine(vis, (cx, cy), end, (40, 220, 40), 1, tipLength=0.3)
+    _draw_flow_arrows(
+        vis,
+        flow,
+        config.SCREENSPACE_FLOW_GRID_SIZE,
+        config.SCREENSPACE_FLOW_GRID_MIN_MAG,
+    )
 
     mean_mag = float(np.mean(mag))
     thresh = float(
@@ -694,11 +753,21 @@ def _preview_scene(
     else:
         pixels_small = pixels
 
-    gray = cv2.cvtColor(pixels_small, cv2.COLOR_BGR2GRAY)
+    # Canny at native region resolution to match
+    # screenspace.compute_scene_fingerprint and the full-frame overlay; then
+    # downscale the binary edge map for display so the small panel reflects
+    # the same edges that drive scene scoring.
+    gray = cv2.cvtColor(pixels, cv2.COLOR_BGR2GRAY)
     edges = cv2.Canny(gray, 100, 200)
     edge_density = (
         float(np.count_nonzero(edges)) / float(edges.size) if edges.size else 0.0
     )
+    if edges.shape[:2] != pixels_small.shape[:2]:
+        edges = cv2.resize(
+            edges,
+            (pixels_small.shape[1], pixels_small.shape[0]),
+            interpolation=cv2.INTER_AREA,
+        )
 
     # 8-bin hue histogram strip
     hsv = cv2.cvtColor(pixels_small, cv2.COLOR_BGR2HSV)
