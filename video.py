@@ -165,19 +165,21 @@ def run_ffmpeg_process(
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
             )
-            while proc.poll() is None:
+            # Drain pipes via communicate() in a polling loop. Reading them
+            # only after proc.poll() returns can deadlock once ffmpeg fills
+            # the OS pipe buffer (~64 KB). Per Python docs, retrying after
+            # TimeoutExpired does not lose output.
+            while True:
                 if cancel_flag():
                     utils.terminate_subprocess(proc)
                     return None
                 try:
-                    proc.wait(timeout=0.5)
+                    out, err = proc.communicate(timeout=0.5)
                 except subprocess.TimeoutExpired:
                     continue
-            stdout = proc.stdout.read() if proc.stdout else ""
-            stderr = proc.stderr.read() if proc.stderr else ""
-            return subprocess.CompletedProcess(
-                ffmpeg_command, proc.returncode, stdout, stderr
-            )
+                return subprocess.CompletedProcess(
+                    ffmpeg_command, proc.returncode, out, err
+                )
         return subprocess.run(ffmpeg_command, encoding="utf-8", capture_output=True)
     except FileNotFoundError:
         utils.error_print(

@@ -1545,24 +1545,24 @@ def api_export_events() -> FlaskResponse:
 @screenspace_bp.route("/api/events/<event_id>/exclude", methods=["PUT"])
 def api_event_exclude(event_id: str) -> FlaskResponse:
     """Set an event as excluded."""
-    for e in _manifest.get("events", []):
-        if e["id"] == event_id:
-            with _manifest_lock:
+    with _manifest_lock:
+        for e in _manifest.get("events", []):
+            if e["id"] == event_id:
                 e["excluded"] = True
                 _do_persist(drain_events=False)
-            return jsonify({"ok": True})
+                return jsonify({"ok": True})
     return jsonify({"ok": False, "error": "Event not found"}), 404
 
 
 @screenspace_bp.route("/api/events/<event_id>/include", methods=["PUT"])
 def api_event_include(event_id: str) -> FlaskResponse:
     """Set an event as included."""
-    for e in _manifest.get("events", []):
-        if e["id"] == event_id:
-            with _manifest_lock:
+    with _manifest_lock:
+        for e in _manifest.get("events", []):
+            if e["id"] == event_id:
                 e["excluded"] = False
                 _do_persist(drain_events=False)
-            return jsonify({"ok": True})
+                return jsonify({"ok": True})
     return jsonify({"ok": False, "error": "Event not found"}), 404
 
 

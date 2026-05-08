@@ -44,6 +44,11 @@ class Agent(TypedDict):
                           this agent. None of the attributes currently
                           differ per-agent, but keeping them separate means
                           future agents can have their own toggle.
+      model_config_key:   Name of the ``config`` attribute (str) holding the
+                          Ollama model name this agent runs against. Read by
+                          the orchestrator for cancel-after-stop unload
+                          scheduling so future agents that use a different
+                          model unload the right one.
       manifest_field:     Where the result lands in
                           ``source_transcripts[participant][manifest_field]``.
       depends_on:         Other agent keys whose ``manifest_field`` must be
@@ -61,6 +66,7 @@ class Agent(TypedDict):
 
     key: str
     enabled_config_key: str
+    model_config_key: str
     manifest_field: str
     depends_on: list[str]
     thread_name_prefix: str
@@ -329,6 +335,7 @@ AGENTS: list[Agent] = [
     Agent(
         key="summary",
         enabled_config_key="OLLAMA_SUMMARY_ENABLED",
+        model_config_key="OLLAMA_SUMMARY_MODEL",
         manifest_field="summary",
         depends_on=[],
         thread_name_prefix="summary",
@@ -337,6 +344,7 @@ AGENTS: list[Agent] = [
     Agent(
         key="citations",
         enabled_config_key="OLLAMA_SUMMARY_ENABLED",
+        model_config_key="OLLAMA_SUMMARY_MODEL",
         manifest_field="citations",
         depends_on=["summary"],
         thread_name_prefix="citations",
