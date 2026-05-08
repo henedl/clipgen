@@ -59,6 +59,25 @@ body {
 .ss-task-icon--scene       { mask-image: url(icons/squares-2x2.svg);         -webkit-mask-image: url(icons/squares-2x2.svg); }
 .ss-task-icon--inactivity  { mask-image: url(icons/pause-circle.svg);        -webkit-mask-image: url(icons/pause-circle.svg); }
 
+/* Generic mask-image icon (color follows currentColor on parent).
+ * Used for buttons, toggles, and chrome where the icon URL is set in JS via
+ * applyMaskIcon. Default size 14px; --sm = 12px, --xs = 10px. */
+.ss-icon {
+  display: inline-block;
+  width: var(--icon-size-sm);
+  height: var(--icon-size-sm);
+  background-color: currentColor;
+  mask-size: contain;
+  mask-repeat: no-repeat;
+  mask-position: center;
+  -webkit-mask-size: contain;
+  -webkit-mask-repeat: no-repeat;
+  -webkit-mask-position: center;
+  flex-shrink: 0;
+}
+.ss-icon--sm { width: var(--icon-size-xs); height: var(--icon-size-xs); }
+.ss-icon--xs { width: 10px; height: 10px; }
+
 /* Header */
 
 #ssHeader {
@@ -1617,11 +1636,6 @@ body {
   gap: var(--space-1);
 }
 
-.multitool-step-type svg {
-  width: 12px;
-  height: 12px;
-}
-
 .multitool-step-remove {
   margin-left: auto;
   background: none;
@@ -2637,11 +2651,6 @@ body.panel-dragging #bottomPanel {
   height: 14px;
   color: #eab308;
   opacity: 0.7;
-}
-
-.task-card-pause-icon svg {
-  width: 10px;
-  height: 10px;
 }
 
 /* Edit button */

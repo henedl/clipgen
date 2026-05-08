@@ -38,6 +38,15 @@
     return span;
   }
 
+  // Generic mask-image icon span. `name` is the basename of a file in
+  // assets/icons/ (no extension); `sizeClass` is an optional .ss-icon
+  // modifier (e.g. "ss-icon--sm"). See .ss-icon family in screenspace.css.
+  function iconSpan(name, sizeClass) {
+    var span = el("span", "ss-icon" + (sizeClass ? " " + sizeClass : ""));
+    applyMaskIcon(span, 'url("/screenspace/icons/' + name + '.svg")');
+    return span;
+  }
+
   var TIMELINE_CANVAS_HEIGHT = 64;
 
   var _paletteDocListeners = null;
@@ -310,7 +319,7 @@
     btn.innerHTML = "";
     btn.appendChild(el("span", "run-picker-btn-text", text));
     var chevron = el("span", "chevron");
-    chevron.appendChild(svgChevronDownIcon());
+    chevron.appendChild(iconSpan("chevron-down", "ss-icon--xs"));
     btn.appendChild(chevron);
   }
 
@@ -603,7 +612,7 @@
     }
     btn.appendChild(el("span", "run-picker-btn-text", text));
     var chevron = el("span", "chevron");
-    chevron.appendChild(svgChevronDownIcon());
+    chevron.appendChild(iconSpan("chevron-down", "ss-icon--xs"));
     btn.appendChild(chevron);
   }
 
@@ -1030,8 +1039,8 @@
   }
 
   function initFrameControls() {
-    qs("#framePrev").appendChild(svgChevronLeftIcon());
-    qs("#frameNext").appendChild(svgChevronRightIcon());
+    qs("#framePrev").appendChild(iconSpan("chevron-left", "ss-icon--sm"));
+    qs("#frameNext").appendChild(iconSpan("chevron-right", "ss-icon--sm"));
     var input = qs("#timestampInput");
 
     input.addEventListener("change", function () {
@@ -1066,8 +1075,8 @@
     var playBtn = qs("#videoPlayBtn");
     var muteBtn = qs("#videoMuteBtn");
 
-    playBtn.appendChild(svgPlayIcon());
-    muteBtn.appendChild(svgSpeakerIcon());
+    playBtn.appendChild(iconSpan("play"));
+    muteBtn.appendChild(iconSpan("speaker-wave"));
 
     playBtn.addEventListener("click", function () {
       if (state.videoPlaying) {
@@ -1178,11 +1187,11 @@
     var muteBtn = qs("#videoMuteBtn");
 
     playBtn.innerHTML = "";
-    playBtn.appendChild(state.videoPlaying ? svgPauseIcon() : svgPlayIcon());
+    playBtn.appendChild(state.videoPlaying ? iconSpan("pause") : iconSpan("play"));
     playBtn.title = state.videoPlaying ? "Pause (Space)" : "Play/Pause (Space)";
 
     muteBtn.innerHTML = "";
-    muteBtn.appendChild(state.videoMuted ? svgSpeakerMuteIcon() : svgSpeakerIcon());
+    muteBtn.appendChild(state.videoMuted ? iconSpan("speaker-x-mark") : iconSpan("speaker-wave"));
     muteBtn.classList.toggle("active", !state.videoMuted);
 
     var speedBtn = qs("#videoSpeedBtn");
@@ -1586,7 +1595,7 @@
 
     // Toggle region labels
     var toggleLabelsBtn = qs("#toggleLabelsBtn");
-    toggleLabelsBtn.appendChild(svgTagIcon());
+    toggleLabelsBtn.appendChild(iconSpan("tag"));
     toggleLabelsBtn.addEventListener("click", function () {
       state.showRegionLabels = !state.showRegionLabels;
       updateRegionButtons();
@@ -1595,7 +1604,7 @@
 
     // Toggle region visibility
     var toggleRegionsBtn = qs("#toggleRegionsBtn");
-    toggleRegionsBtn.appendChild(svgEyeIcon());
+    toggleRegionsBtn.appendChild(iconSpan("eye"));
     toggleRegionsBtn.addEventListener("click", function () {
       state.showRegionOverlays = !state.showRegionOverlays;
       updateRegionButtons();
@@ -1604,7 +1613,7 @@
 
     // Stash all regions
     var stashBtn = qs("#stashRegionsBtn");
-    stashBtn.appendChild(svgArchiveIcon());
+    stashBtn.appendChild(iconSpan("archive-box-arrow-down"));
     stashBtn.addEventListener("click", stashRegions);
 
     // Region name modal
@@ -1684,7 +1693,7 @@
     toggleRegionsBtn.classList.toggle("active", state.showRegionOverlays);
 
     toggleRegionsBtn.innerHTML = "";
-    toggleRegionsBtn.appendChild(state.showRegionOverlays ? svgEyeIcon() : svgEyeSlashIcon());
+    toggleRegionsBtn.appendChild(state.showRegionOverlays ? iconSpan("eye") : iconSpan("eye-slash"));
   }
 
   function renderRegionChips() {
@@ -1844,13 +1853,13 @@
 
       var restoreBtn = el("button", "stash-card-action-btn");
       restoreBtn.title = "Restore regions";
-      restoreBtn.appendChild(svgRestoreIcon());
+      restoreBtn.appendChild(iconSpan("arrow-up-tray"));
       restoreBtn.addEventListener("click", function () { restoreStash(stash.id); });
       actions.appendChild(restoreBtn);
 
       var dismissBtn = el("button", "stash-card-action-btn");
       dismissBtn.title = "Dismiss stash";
-      dismissBtn.appendChild(svgDismissIcon());
+      dismissBtn.appendChild(iconSpan("x-mark"));
       dismissBtn.addEventListener("click", function () { dismissStash(stash.id); });
       actions.appendChild(dismissBtn);
 
@@ -2128,8 +2137,8 @@
   // ---- Timeline ----
 
   function initTimeline() {
-    qs("#zoomInBtn").appendChild(svgPlusIcon());
-    qs("#zoomOutBtn").appendChild(svgMinusIcon());
+    qs("#zoomInBtn").appendChild(iconSpan("plus", "ss-icon--sm"));
+    qs("#zoomOutBtn").appendChild(iconSpan("minus", "ss-icon--sm"));
 
     var storedTimeline = getStoredUIState("screenspace");
     if (storedTimeline.amplitudeGraphEnabled === true) {
@@ -2672,7 +2681,7 @@
     var header = el("div", "tool-info-header");
     header.appendChild(el("strong", null, type.charAt(0).toUpperCase() + type.slice(1)));
     var closeBtn = el("button", "tool-info-close hidden");
-    closeBtn.appendChild(svgDismissIcon());
+    closeBtn.appendChild(iconSpan("x-mark"));
     closeBtn.addEventListener("click", function () {
       hideToolInfoTooltip(true);
     });
@@ -3198,7 +3207,7 @@
 
       // Drag handle
       var dragHandle = el("span", "multitool-step-drag-handle");
-      dragHandle.appendChild(svgDragHandle());
+      dragHandle.appendChild(iconSpan("bars-2"));
       dragHandle.addEventListener("mousedown", function () { card.setAttribute("draggable", "true"); });
       dragHandle.addEventListener("mouseup", function () { card.removeAttribute("draggable"); });
       header.appendChild(dragHandle);
@@ -3212,7 +3221,7 @@
       header.appendChild(typeSpan);
       var removeBtn = el("button", "multitool-step-remove");
       removeBtn.title = "Remove step";
-      removeBtn.appendChild(svgDismissIcon());
+      removeBtn.appendChild(iconSpan("x-mark"));
       (function (capturedIdx) {
         removeBtn.addEventListener("click", function (e) {
           e.stopPropagation();
@@ -4767,128 +4776,6 @@
   }
 
   // ---- Task queue ----
-  // TODO: These inline SVG builders predate the project rule against SVG paths
-  // in JS (AGENTS.md "Icons" / "SVG icons" sections). Migrate to the CSS
-  // mask-image pattern — see XREF_BADGES in utils.js and .xref-badge-icon in
-  // tokens.css for the canonical example.
-
-  function svgEditIcon() {
-    var svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-    svg.setAttribute("width", "14");
-    svg.setAttribute("height", "14");
-    svg.setAttribute("viewBox", "0 0 16 16");
-    svg.setAttribute("fill", "currentColor");
-    // pencil-square.svg from assets/icons
-    var p1 = document.createElementNS("http://www.w3.org/2000/svg", "path");
-    p1.setAttribute("d", "M13.4875 2.51256C12.804 1.82915 11.696 1.82915 11.0126 2.51256L6.75098 6.77417C6.49563 7.02951 6.29308 7.33265 6.15488 7.66628L5.30712 9.71282C5.19103 9.99307 5.25519 10.3157 5.46968 10.5302C5.68417 10.7447 6.00676 10.8088 6.28702 10.6928L8.33382 9.84501C8.66748 9.70681 8.97066 9.50423 9.22604 9.24886L13.4875 4.98744C14.1709 4.30402 14.1709 3.19598 13.4875 2.51256Z");
-    svg.appendChild(p1);
-    var p2 = document.createElementNS("http://www.w3.org/2000/svg", "path");
-    p2.setAttribute("d", "M4.75 3.5C4.05964 3.5 3.5 4.05964 3.5 4.75V11.25C3.5 11.9404 4.05964 12.5 4.75 12.5H11.25C11.9404 12.5 12.5 11.9404 12.5 11.25V9C12.5 8.58579 12.8358 8.25 13.25 8.25C13.6642 8.25 14 8.58579 14 9V11.25C14 12.7688 12.7688 14 11.25 14H4.75C3.23122 14 2 12.7688 2 11.25V4.75C2 3.23122 3.23122 2 4.75 2H7C7.41421 2 7.75 2.33579 7.75 2.75C7.75 3.16421 7.41421 3.5 7 3.5H4.75Z");
-    svg.appendChild(p2);
-    return svg;
-  }
-
-  function svgEyeIcon() {
-    var svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-    svg.setAttribute("width", "14");
-    svg.setAttribute("height", "14");
-    svg.setAttribute("viewBox", "0 0 16 16");
-    svg.setAttribute("fill", "currentColor");
-    // eye.svg from assets/icons
-    var p1 = document.createElementNS("http://www.w3.org/2000/svg", "path");
-    p1.setAttribute("d", "M8 9.5C8.82843 9.5 9.5 8.82843 9.5 8C9.5 7.17157 8.82843 6.5 8 6.5C7.17157 6.5 6.5 7.17157 6.5 8C6.5 8.82843 7.17157 9.5 8 9.5Z");
-    svg.appendChild(p1);
-    var p2 = document.createElementNS("http://www.w3.org/2000/svg", "path");
-    p2.setAttribute("fill-rule", "evenodd");
-    p2.setAttribute("clip-rule", "evenodd");
-    p2.setAttribute("d", "M1.3794 8.28049C1.31616 8.09687 1.31625 7.89727 1.37965 7.71371C2.32719 4.97038 4.93238 3 7.99777 3C11.0653 3 13.672 4.97316 14.6179 7.71951C14.6811 7.90313 14.681 8.10274 14.6176 8.2863C13.6701 11.0296 11.0649 13 7.99952 13C4.93197 13 2.32527 11.0268 1.3794 8.28049ZM11 8C11 9.65685 9.65685 11 8 11C6.34315 11 5 9.65685 5 8C5 6.34315 6.34315 5 8 5C9.65685 5 11 6.34315 11 8Z");
-    svg.appendChild(p2);
-    return svg;
-  }
-
-  function svgEyeSlashIcon() {
-    var svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-    svg.setAttribute("width", "14");
-    svg.setAttribute("height", "14");
-    svg.setAttribute("viewBox", "0 0 16 16");
-    svg.setAttribute("fill", "currentColor");
-    // eye-slash.svg from assets/icons
-    var p1 = document.createElementNS("http://www.w3.org/2000/svg", "path");
-    p1.setAttribute("fill-rule", "evenodd");
-    p1.setAttribute("clip-rule", "evenodd");
-    p1.setAttribute("d", "M3.28033 2.21967C2.98744 1.92678 2.51256 1.92678 2.21967 2.21967C1.92678 2.51256 1.92678 2.98744 2.21967 3.28033L12.7197 13.7803C13.0126 14.0732 13.4874 14.0732 13.7803 13.7803C14.0732 13.4874 14.0732 13.0126 13.7803 12.7197L12.4577 11.397C13.438 10.5863 14.1937 9.51366 14.6176 8.2863C14.681 8.10274 14.6811 7.90313 14.6179 7.71951C13.672 4.97316 11.0653 3 7.99777 3C6.85414 3 5.77457 3.27425 4.82123 3.76057L3.28033 2.21967ZM6.47602 5.41536L7.61147 6.55081C7.73539 6.51767 7.86563 6.5 8 6.5C8.82843 6.5 9.5 7.17157 9.5 8C9.5 8.13437 9.48233 8.26461 9.44919 8.38853L10.5846 9.52398C10.8486 9.07734 11 8.55636 11 8C11 6.34315 9.65685 5 8 5C7.44364 5 6.92266 5.15145 6.47602 5.41536Z");
-    svg.appendChild(p1);
-    var p2 = document.createElementNS("http://www.w3.org/2000/svg", "path");
-    p2.setAttribute("d", "M7.81206 10.9942L9.62754 12.8097C9.10513 12.9341 8.56002 13 7.99952 13C4.93197 13 2.32527 11.0268 1.3794 8.28049C1.31616 8.09687 1.31625 7.89727 1.37965 7.71371C1.63675 6.96935 2.01588 6.28191 2.49314 5.67529L5.00579 8.18794C5.09895 9.69509 6.30491 10.901 7.81206 10.9942Z");
-    svg.appendChild(p2);
-    return svg;
-  }
-
-  function svgTagIcon() {
-    var svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-    svg.setAttribute("width", "14");
-    svg.setAttribute("height", "14");
-    svg.setAttribute("viewBox", "0 0 16 16");
-    svg.setAttribute("fill", "currentColor");
-    // tag.svg from assets/icons
-    var path = document.createElementNS("http://www.w3.org/2000/svg", "path");
-    path.setAttribute("fill-rule", "evenodd");
-    path.setAttribute("clip-rule", "evenodd");
-    path.setAttribute("d", "M4.5 2C3.11929 2 2 3.11929 2 4.5V7.37868C2 8.04172 2.26339 8.67761 2.73223 9.14645L7.23223 13.6464C8.20854 14.6228 9.79145 14.6228 10.7678 13.6464L13.6464 10.7678C14.6228 9.79146 14.6228 8.20855 13.6464 7.23223L9.14645 2.73223C8.67761 2.26339 8.04172 2 7.37868 2H4.5ZM5 6C5.55228 6 6 5.55228 6 5C6 4.44772 5.55228 4 5 4C4.44772 4 4 4.44772 4 5C4 5.55228 4.44772 6 5 6Z");
-    svg.appendChild(path);
-    return svg;
-  }
-
-  function svgDragHandle() {
-    var svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-    svg.setAttribute("width", "10");
-    svg.setAttribute("height", "14");
-    svg.setAttribute("viewBox", "0 0 16 16");
-    svg.setAttribute("fill", "currentColor");
-    // bars-2.svg from assets/icons
-    var path = document.createElementNS("http://www.w3.org/2000/svg", "path");
-    path.setAttribute("fill-rule", "evenodd");
-    path.setAttribute("clip-rule", "evenodd");
-    path.setAttribute("d", "M2 4.75C2 4.33579 2.33579 4 2.75 4H13.25C13.6642 4 14 4.33579 14 4.75C14 5.16421 13.6642 5.5 13.25 5.5H2.75C2.33579 5.5 2 5.16421 2 4.75ZM2 11.25C2 10.8358 2.33579 10.5 2.75 10.5H13.25C13.6642 10.5 14 10.8358 14 11.25C14 11.6642 13.6642 12 13.25 12H2.75C2.33579 12 2 11.6642 2 11.25Z");
-    svg.appendChild(path);
-    return svg;
-  }
-
-  function svgDismissIcon() {
-    var svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-    svg.setAttribute("width", "14");
-    svg.setAttribute("height", "14");
-    svg.setAttribute("viewBox", "0 0 16 16");
-    svg.setAttribute("fill", "currentColor");
-    // x-mark.svg from assets/icons
-    var path = document.createElementNS("http://www.w3.org/2000/svg", "path");
-    path.setAttribute("d", "M5.28033 4.21967C4.98744 3.92678 4.51256 3.92678 4.21967 4.21967C3.92678 4.51256 3.92678 4.98744 4.21967 5.28033L6.93934 8L4.21967 10.7197C3.92678 11.0126 3.92678 11.4874 4.21967 11.7803C4.51256 12.0732 4.98744 12.0732 5.28033 11.7803L8 9.06066L10.7197 11.7803C11.0126 12.0732 11.4874 12.0732 11.7803 11.7803C12.0732 11.4874 12.0732 11.0126 11.7803 10.7197L9.06066 8L11.7803 5.28033C12.0732 4.98744 12.0732 4.51256 11.7803 4.21967C11.4874 3.92678 11.0126 3.92678 10.7197 4.21967L8 6.93934L5.28033 4.21967Z");
-    svg.appendChild(path);
-    return svg;
-  }
-
-  function svgPauseIcon() {
-    var svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-    svg.setAttribute("width", "14");
-    svg.setAttribute("height", "14");
-    svg.setAttribute("viewBox", "0 0 16 16");
-    svg.setAttribute("fill", "currentColor");
-    var p1 = document.createElementNS("http://www.w3.org/2000/svg", "rect");
-    p1.setAttribute("x", "3.5");
-    p1.setAttribute("y", "2");
-    p1.setAttribute("width", "3");
-    p1.setAttribute("height", "12");
-    p1.setAttribute("rx", "1");
-    svg.appendChild(p1);
-    var p2 = document.createElementNS("http://www.w3.org/2000/svg", "rect");
-    p2.setAttribute("x", "9.5");
-    p2.setAttribute("y", "2");
-    p2.setAttribute("width", "3");
-    p2.setAttribute("height", "12");
-    p2.setAttribute("rx", "1");
-    svg.appendChild(p2);
-    return svg;
-  }
 
   var TASK_TYPE_ICON_FILES = {
     multitool: "link",
@@ -4903,166 +4790,6 @@
     scene: "squares-2x2",
     inactivity: "pause-circle",
   };
-
-  function svgPlayIcon() {
-    var svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-    svg.setAttribute("width", "14");
-    svg.setAttribute("height", "14");
-    svg.setAttribute("viewBox", "0 0 16 16");
-    svg.setAttribute("fill", "currentColor");
-    var path = document.createElementNS("http://www.w3.org/2000/svg", "path");
-    path.setAttribute("d", "M3 3.732a1 1 0 0 1 1.514-.857l8.07 4.268a1 1 0 0 1 0 1.714l-8.07 4.268A1 1 0 0 1 3 12.268V3.732Z");
-    svg.appendChild(path);
-    return svg;
-  }
-
-  function svgCheckIcon() {
-    var svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-    svg.setAttribute("width", "14");
-    svg.setAttribute("height", "14");
-    svg.setAttribute("viewBox", "0 0 16 16");
-    svg.setAttribute("fill", "currentColor");
-    // check.svg from assets/icons
-    var path = document.createElementNS("http://www.w3.org/2000/svg", "path");
-    path.setAttribute("fill-rule", "evenodd");
-    path.setAttribute("clip-rule", "evenodd");
-    path.setAttribute("d", "M12.416 3.37592C12.7607 3.60568 12.8538 4.07134 12.624 4.41598L7.62404 11.916C7.4994 12.1029 7.2975 12.2242 7.0739 12.2463C6.8503 12.2684 6.62855 12.1892 6.46967 12.0303L3.46967 9.03029C3.17678 8.73739 3.17678 8.26252 3.46967 7.96963C3.76256 7.67673 4.23744 7.67673 4.53033 7.96963L6.88343 10.3227L11.376 3.58393C11.6057 3.23929 12.0714 3.14616 12.416 3.37592Z");
-    svg.appendChild(path);
-    return svg;
-  }
-
-  function svgArchiveIcon() {
-    var svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-    svg.setAttribute("width", "14");
-    svg.setAttribute("height", "14");
-    svg.setAttribute("viewBox", "0 0 16 16");
-    svg.setAttribute("fill", "currentColor");
-    // archive-box-arrow-down.svg from assets/icons
-    var p1 = document.createElementNS("http://www.w3.org/2000/svg", "path");
-    p1.setAttribute("d", "M2 3C2 2.44772 2.44772 2 3 2H13C13.5523 2 14 2.44772 14 3V4C14 4.55228 13.5523 5 13 5H3C2.44772 5 2 4.55228 2 4V3Z");
-    svg.appendChild(p1);
-    var p2 = document.createElementNS("http://www.w3.org/2000/svg", "path");
-    p2.setAttribute("fill-rule", "evenodd");
-    p2.setAttribute("clip-rule", "evenodd");
-    p2.setAttribute("d", "M13 6H3V12C3 13.1046 3.89543 14 5 14H11C12.1046 14 13 13.1046 13 12V6ZM8.75 7.75C8.75 7.33579 8.41421 7 8 7C7.58579 7 7.25 7.33579 7.25 7.75V10.4393L6.03033 9.21967C5.73744 8.92678 5.26256 8.92678 4.96967 9.21967C4.67678 9.51256 4.67678 9.98744 4.96967 10.2803L7.46967 12.7803C7.76256 13.0732 8.23744 13.0732 8.53033 12.7803L11.0303 10.2803C11.3232 9.98744 11.3232 9.51256 11.0303 9.21967C10.7374 8.92678 10.2626 8.92678 9.96967 9.21967L8.75 10.4393V7.75Z");
-    svg.appendChild(p2);
-    return svg;
-  }
-
-  function svgRestoreIcon() {
-    var svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-    svg.setAttribute("width", "14");
-    svg.setAttribute("height", "14");
-    svg.setAttribute("viewBox", "0 0 16 16");
-    svg.setAttribute("fill", "currentColor");
-    // arrow-up-tray.svg from assets/icons
-    var p1 = document.createElementNS("http://www.w3.org/2000/svg", "path");
-    p1.setAttribute("d", "M7.25 10.25C7.25 10.6642 7.58579 11 8 11C8.41421 11 8.75 10.6642 8.75 10.25L8.75 4.56066L10.9697 6.78033C11.2626 7.07322 11.7374 7.07322 12.0303 6.78033C12.3232 6.48744 12.3232 6.01256 12.0303 5.71967L8.53033 2.21967C8.23744 1.92678 7.76256 1.92678 7.46967 2.21967L3.96967 5.71967C3.67678 6.01256 3.67678 6.48744 3.96967 6.78033C4.26256 7.07322 4.73744 7.07322 5.03033 6.78033L7.25 4.56066L7.25 10.25Z");
-    svg.appendChild(p1);
-    var p2 = document.createElementNS("http://www.w3.org/2000/svg", "path");
-    p2.setAttribute("d", "M3.5 9.75C3.5 9.33579 3.16421 9 2.75 9C2.33579 9 2 9.33579 2 9.75V11.25C2 12.7688 3.23122 14 4.75 14H11.25C12.7688 14 14 12.7688 14 11.25V9.75C14 9.33579 13.6642 9 13.25 9C12.8358 9 12.5 9.33579 12.5 9.75V11.25C12.5 11.9404 11.9404 12.5 11.25 12.5H4.75C4.05964 12.5 3.5 11.9404 3.5 11.25V9.75Z");
-    svg.appendChild(p2);
-    return svg;
-  }
-
-  function svgPlusIcon() {
-    var svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-    svg.setAttribute("width", "12");
-    svg.setAttribute("height", "12");
-    svg.setAttribute("viewBox", "0 0 16 16");
-    svg.setAttribute("fill", "currentColor");
-    var path = document.createElementNS("http://www.w3.org/2000/svg", "path");
-    path.setAttribute("d", "M8.75 3.75C8.75 3.33579 8.41421 3 8 3C7.58579 3 7.25 3.33579 7.25 3.75V7.25H3.75C3.33579 7.25 3 7.58579 3 8C3 8.41421 3.33579 8.75 3.75 8.75L7.25 8.75V12.25C7.25 12.6642 7.58579 13 8 13C8.41421 13 8.75 12.6642 8.75 12.25V8.75L12.25 8.75C12.6642 8.75 13 8.41421 13 8C13 7.58579 12.6642 7.25 12.25 7.25H8.75V3.75Z");
-    svg.appendChild(path);
-    return svg;
-  }
-
-  function svgMinusIcon() {
-    var svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-    svg.setAttribute("width", "12");
-    svg.setAttribute("height", "12");
-    svg.setAttribute("viewBox", "0 0 16 16");
-    svg.setAttribute("fill", "currentColor");
-    var path = document.createElementNS("http://www.w3.org/2000/svg", "path");
-    path.setAttribute("d", "M3.75 7.25C3.33579 7.25 3 7.58579 3 8C3 8.41421 3.33579 8.75 3.75 8.75L12.25 8.75C12.6642 8.75 13 8.41421 13 8C13 7.58579 12.6642 7.25 12.25 7.25H3.75Z");
-    svg.appendChild(path);
-    return svg;
-  }
-
-  function svgChevronLeftIcon() {
-    var svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-    svg.setAttribute("width", "12");
-    svg.setAttribute("height", "12");
-    svg.setAttribute("viewBox", "0 0 16 16");
-    svg.setAttribute("fill", "currentColor");
-    var path = document.createElementNS("http://www.w3.org/2000/svg", "path");
-    path.setAttribute("fill-rule", "evenodd");
-    path.setAttribute("clip-rule", "evenodd");
-    path.setAttribute("d", "M9.78033 4.21967C10.0732 4.51256 10.0732 4.98744 9.78033 5.28033L7.06066 8L9.78033 10.7197C10.0732 11.0126 10.0732 11.4874 9.78033 11.7803C9.48744 12.0732 9.01256 12.0732 8.71967 11.7803L5.46967 8.53033C5.17678 8.23744 5.17678 7.76256 5.46967 7.46967L8.71967 4.21967C9.01256 3.92678 9.48744 3.92678 9.78033 4.21967Z");
-    svg.appendChild(path);
-    return svg;
-  }
-
-  function svgChevronRightIcon() {
-    var svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-    svg.setAttribute("width", "12");
-    svg.setAttribute("height", "12");
-    svg.setAttribute("viewBox", "0 0 16 16");
-    svg.setAttribute("fill", "currentColor");
-    var path = document.createElementNS("http://www.w3.org/2000/svg", "path");
-    path.setAttribute("fill-rule", "evenodd");
-    path.setAttribute("clip-rule", "evenodd");
-    path.setAttribute("d", "M6.21967 4.21967C6.51256 3.92678 6.98744 3.92678 7.28033 4.21967L10.5303 7.46967C10.8232 7.76256 10.8232 8.23744 10.5303 8.53033L7.28033 11.7803C6.98744 12.0732 6.51256 12.0732 6.21967 11.7803C5.92678 11.4874 5.92678 11.0126 6.21967 10.7197L8.93934 8L6.21967 5.28033C5.92678 4.98744 5.92678 4.51256 6.21967 4.21967Z");
-    svg.appendChild(path);
-    return svg;
-  }
-
-  function svgChevronDownIcon() {
-    var svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-    svg.setAttribute("width", "10");
-    svg.setAttribute("height", "10");
-    svg.setAttribute("viewBox", "0 0 16 16");
-    svg.setAttribute("fill", "currentColor");
-    var path = document.createElementNS("http://www.w3.org/2000/svg", "path");
-    path.setAttribute("fill-rule", "evenodd");
-    path.setAttribute("clip-rule", "evenodd");
-    path.setAttribute("d", "M4.21967 6.21967C4.51256 5.92678 4.98744 5.92678 5.28033 6.21967L8 8.93934L10.7197 6.21967C11.0126 5.92678 11.4874 5.92678 11.7803 6.21967C12.0732 6.51256 12.0732 6.98744 11.7803 7.28033L8.53033 10.5303C8.23744 10.8232 7.76256 10.8232 7.46967 10.5303L4.21967 7.28033C3.92678 6.98744 3.92678 6.51256 4.21967 6.21967Z");
-    svg.appendChild(path);
-    return svg;
-  }
-
-  function svgSpeakerIcon() {
-    var svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-    svg.setAttribute("width", "14");
-    svg.setAttribute("height", "14");
-    svg.setAttribute("viewBox", "0 0 16 16");
-    svg.setAttribute("fill", "currentColor");
-    var p1 = document.createElementNS("http://www.w3.org/2000/svg", "path");
-    p1.setAttribute("d", "M7.55724 2.06583C7.82667 2.18682 8 2.45467 8 2.75001V13.25C8 13.5454 7.82667 13.8132 7.55724 13.9342C7.28782 14.0552 6.97247 14.0068 6.75173 13.8106L3.58984 11H2C1.44772 11 1 10.5523 1 10V6C1 5.44772 1.44772 5 2 5H3.58986L6.75173 2.18946C6.97247 1.99324 7.28782 1.94484 7.55724 2.06583Z");
-    svg.appendChild(p1);
-    var p2 = document.createElementNS("http://www.w3.org/2000/svg", "path");
-    p2.setAttribute("d", "M12.9497 3.05024C12.6569 2.75734 12.182 2.75734 11.8891 3.05024C11.5962 3.34313 11.5962 3.818 11.8891 4.1109C14.037 6.25878 14.037 9.74119 11.8891 11.8891C11.5962 12.182 11.5962 12.6568 11.8891 12.9497C12.182 13.2426 12.6569 13.2426 12.9497 12.9497C15.6834 10.2161 15.6834 5.78391 12.9497 3.05024Z");
-    svg.appendChild(p2);
-    var p3 = document.createElementNS("http://www.w3.org/2000/svg", "path");
-    p3.setAttribute("d", "M10.8284 5.17156C10.5355 4.87866 10.0607 4.87866 9.76777 5.17156C9.47487 5.46445 9.47487 5.93932 9.76777 6.23222C10.7441 7.20853 10.7441 8.79144 9.76777 9.76775C9.47487 10.0606 9.47487 10.5355 9.76777 10.8284C10.0607 11.1213 10.5355 11.1213 10.8284 10.8284C12.3905 9.26631 12.3905 6.73365 10.8284 5.17156Z");
-    svg.appendChild(p3);
-    return svg;
-  }
-
-  function svgSpeakerMuteIcon() {
-    var svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-    svg.setAttribute("width", "14");
-    svg.setAttribute("height", "14");
-    svg.setAttribute("viewBox", "0 0 16 16");
-    svg.setAttribute("fill", "currentColor");
-    var p1 = document.createElementNS("http://www.w3.org/2000/svg", "path");
-    p1.setAttribute("d", "M7.55724 2.06583C7.82667 2.18682 8 2.45467 8 2.75001V13.25C8 13.5454 7.82667 13.8132 7.55724 13.9342C7.28782 14.0552 6.97247 14.0068 6.75173 13.8106L3.58984 11H2C1.44772 11 1 10.5523 1 10V6C1 5.44772 1.44772 5 2 5H3.58987L6.75173 2.18946C6.97247 1.99324 7.28782 1.94484 7.55724 2.06583Z");
-    svg.appendChild(p1);
-    var p2 = document.createElementNS("http://www.w3.org/2000/svg", "path");
-    p2.setAttribute("d", "M11.2803 5.71967C10.9874 5.42678 10.5126 5.42678 10.2197 5.71967C9.92678 6.01256 9.92678 6.48744 10.2197 6.78033L11.4393 8L10.2197 9.21967C9.92678 9.51256 9.92678 9.98744 10.2197 10.2803C10.5126 10.5732 10.9874 10.5732 11.2803 10.2803L12.5 9.06066L13.7197 10.2803C14.0126 10.5732 14.4874 10.5732 14.7803 10.2803C15.0732 9.98744 15.0732 9.51256 14.7803 9.21967L13.5607 8L14.7803 6.78033C15.0732 6.48744 15.0732 6.01256 14.7803 5.71967C14.4874 5.42678 14.0126 5.42678 13.7197 5.71967L12.5 6.93934L11.2803 5.71967Z");
-    svg.appendChild(p2);
-    return svg;
-  }
 
   function sortTasks() {
     // completed/failed at top (oldest first), then running, then queued (by priority), cancelled last
@@ -5674,10 +5401,10 @@
     if (!btn) return;
     btn.innerHTML = "";
     if (state.queuePaused) {
-      btn.appendChild(svgPlayIcon());
+      btn.appendChild(iconSpan("play"));
       btn.title = "Resume queue";
     } else {
-      btn.appendChild(svgPauseIcon());
+      btn.appendChild(iconSpan("pause"));
       btn.title = "Pause queue";
     }
   }
@@ -5703,11 +5430,11 @@
     var doneBtn = qs("#taskFilterDoneBtn");
     var failedBtn = qs("#taskFilterFailedBtn");
     if (doneBtn) {
-      doneBtn.appendChild(svgCheckIcon());
+      doneBtn.appendChild(iconSpan("check"));
       doneBtn.addEventListener("click", function () { toggleTaskFilter("completed"); });
     }
     if (failedBtn) {
-      failedBtn.appendChild(svgDismissIcon());
+      failedBtn.appendChild(iconSpan("x-mark"));
       failedBtn.addEventListener("click", function () { toggleTaskFilter("failed"); });
     }
   }
@@ -5752,7 +5479,7 @@
       var isDraggable = task.status === "queued" || task.status === "completed" || task.status === "failed";
       if (isDraggable) {
         var handle = el("span", "task-card-drag-handle");
-        handle.appendChild(svgDragHandle());
+        handle.appendChild(iconSpan("bars-2"));
         handle.addEventListener("mousedown", function () { card.setAttribute("draggable", "true"); });
         handle.addEventListener("mouseup", function () { card.removeAttribute("draggable"); });
         card.appendChild(handle);
@@ -5760,7 +5487,7 @@
         card.appendChild(el("span", "task-card-spinner"));
       } else if (task.status === "paused") {
         var pauseIcon = el("span", "task-card-pause-icon");
-        pauseIcon.appendChild(svgPauseIcon());
+        pauseIcon.appendChild(iconSpan("pause", "ss-icon--xs"));
         card.appendChild(pauseIcon);
       }
 
@@ -5768,10 +5495,10 @@
       var badge = el("span", "task-card-type");
       badge.style.color = taskTypeColor(task.type);
       badge.title = task.type;
-      var iconSpan = el("span", "task-card-type-icon");
+      var typeIconEl = el("span", "task-card-type-icon");
       var iconFile = TASK_TYPE_ICON_FILES[task.type] || "squares-2x2";
-      applyMaskIcon(iconSpan, 'url("/screenspace/icons/' + iconFile + '.svg")');
-      badge.appendChild(iconSpan);
+      applyMaskIcon(typeIconEl, 'url("/screenspace/icons/' + iconFile + '.svg")');
+      badge.appendChild(typeIconEl);
       card.appendChild(badge);
 
       // Fast scan badge
@@ -5829,13 +5556,13 @@
       // Edit button
       var editBtn = el("button", "task-card-edit");
       editBtn.title = "Edit";
-      editBtn.appendChild(svgEditIcon());
+      editBtn.appendChild(iconSpan("pencil-square"));
       card.appendChild(editBtn);
 
       // Dismiss button
       var dismissBtn = el("button", "task-card-dismiss");
       dismissBtn.title = "Dismiss";
-      dismissBtn.appendChild(svgDismissIcon());
+      dismissBtn.appendChild(iconSpan("x-mark"));
       card.appendChild(dismissBtn);
 
       frag.appendChild(card);
@@ -6422,9 +6149,7 @@
         btn.dataset.eventId = matchedEvent.id;
         btn.dataset.excluded = isExcluded ? "true" : "false";
         btn.title = isExcluded ? "Include event" : "Exclude event";
-        var icon = isExcluded ? svgDismissIcon() : svgCheckIcon();
-        icon.setAttribute("width", "12");
-        icon.setAttribute("height", "12");
+        var icon = isExcluded ? iconSpan("x-mark", "ss-icon--sm") : iconSpan("check", "ss-icon--sm");
         btn.appendChild(icon);
         row.appendChild(btn);
       }
