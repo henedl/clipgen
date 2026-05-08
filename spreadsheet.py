@@ -136,9 +136,6 @@ def validate_spreadsheet_headers(
     return (id_cell, observation_cell, category_cell)
 
 
-_BASELINE_ROW_CACHE: dict[int, int | None] = {}
-
-
 def _detect_baseline_row(sheet_data: list[list[str]]) -> int | None:
     """Detect the sheet-wide baseline row marked by a 'Baseline time' label.
 
@@ -146,23 +143,13 @@ def _detect_baseline_row(sheet_data: list[list[str]]) -> int | None:
     (case-insensitive). That row is treated as the baseline row: each non-empty
     cell in that row provides the baseline timestamp for its column.
     """
-    cache_key = id(sheet_data)
-    if cache_key in _BASELINE_ROW_CACHE:
-        return _BASELINE_ROW_CACHE[cache_key]
-
-    baseline_row_idx: int | None = None
     for row_idx, row in enumerate(sheet_data):
         for value in row:
             if not value:
                 continue
             if str(value).strip().lower().startswith("baseline time"):
-                baseline_row_idx = row_idx
-                break
-        if baseline_row_idx is not None:
-            break
-
-    _BASELINE_ROW_CACHE[cache_key] = baseline_row_idx
-    return baseline_row_idx
+                return row_idx
+    return None
 
 
 def get_num_participants(header_row: list[str], id_cell: Any, col_count: int) -> int:
@@ -542,7 +529,7 @@ def find_participant_column(
         Column index (0-based) if found, None otherwise
     """
     normalized_target = utils.normalize_participant_id(participant_id).lower()
-    for col_idx in range(id_cell.col - 1, len(header_row)):
+    for col_idx in range(id_cell.col, len(header_row)):
         header_value = utils.normalize_participant_id(header_row[col_idx]).strip()
         if header_value.lower() == normalized_target:
             return col_idx

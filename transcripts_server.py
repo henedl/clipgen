@@ -127,6 +127,14 @@ def _is_generating(participant: str, agent_key: str) -> bool:
     return participant in _agent_in_flight.get(agent_key, set())
 
 
+def _agent_model(agent_key: str) -> str | None:
+    """Look up the Ollama model name configured for *agent_key*."""
+    agent = thinking_agents.get_agent(agent_key)
+    if agent is None:
+        return None
+    return getattr(config, agent["model_config_key"], None)
+
+
 def _step_state_transcription(entry: dict[str, Any]) -> str:
     # Only the persisted result is known here; live running/queued/failed for
     # Whisper is merged in on the frontend from /api/transcribe/status.
@@ -360,12 +368,13 @@ def api_summary(participant: str) -> FlaskResponse:
     """Return AI-generated summary, generation status, or 404."""
     with _manifest_lock:
         entry = _manifest.get("source_transcripts", {}).get(participant)
-    if not entry or not entry.get("summary"):
-        if _is_generating(participant, "summary"):
-            return jsonify({"ok": False, "generating": True})
-        return jsonify({"ok": False}), 404
-    resp: dict[str, Any] = {"ok": True, "summary": entry["summary"]}
-    citations = entry.get("citations")
+        if not entry or not entry.get("summary"):
+            if _is_generating(participant, "summary"):
+                return jsonify({"ok": False, "generating": True})
+            return jsonify({"ok": False}), 404
+        summary = entry["summary"]
+        citations = entry.get("citations")
+    resp: dict[str, Any] = {"ok": True, "summary": summary}
     if citations:
         resp["citations"] = citations
     resp["citations_generating"] = _is_generating(participant, "citations")
@@ -383,9 +392,8 @@ def api_summary_regenerate(participant: str) -> FlaskResponse:
         return jsonify({"ok": True, "generating": True})
     with _manifest_lock:
         entry = _manifest.get("source_transcripts", {}).get(participant)
-    if not entry or not entry.get("segments"):
-        return jsonify({"ok": False, "error": "No transcript found"}), 404
-    with _manifest_lock:
+        if not entry or not entry.get("segments"):
+            return jsonify({"ok": False, "error": "No transcript found"}), 404
         entry["summary"] = ""
         entry.pop("citations", None)
     _persist_manifest()
@@ -408,7 +416,9 @@ def api_summary_stop(participant: str) -> FlaskResponse:
     if event is not None:
         event.set()
     _agent_in_flight["summary"].discard(participant)
-    _schedule_model_unload(config.OLLAMA_SUMMARY_MODEL)
+    model = _agent_model("summary")
+    if model:
+        _schedule_model_unload(model)
     return jsonify({"ok": True, "running": False})
 
 
@@ -436,9 +446,9 @@ def api_citations(participant: str) -> FlaskResponse:
     """Return citation refs for a participant's summary, or generation status."""
     with _manifest_lock:
         entry = _manifest.get("source_transcripts", {}).get(participant)
-    if not entry:
-        return jsonify({"ok": False}), 404
-    citations = entry.get("citations") if entry else None
+        if not entry:
+            return jsonify({"ok": False}), 404
+        citations = entry.get("citations")
     if citations:
         return jsonify({"ok": True, "citations": citations})
     if _is_generating(participant, "citations"):
@@ -456,9 +466,10 @@ def api_citations_regenerate(participant: str) -> FlaskResponse:
         return jsonify({"ok": True, "generating": True})
     with _manifest_lock:
         entry = _manifest.get("source_transcripts", {}).get(participant)
-    if not entry or not entry.get("summary") or not entry.get("segments"):
-        return jsonify({"ok": False, "error": "No summary or transcript found"}), 404
-    with _manifest_lock:
+        if not entry or not entry.get("summary") or not entry.get("segments"):
+            return jsonify(
+                {"ok": False, "error": "No summary or transcript found"}
+            ), 404
         entry.pop("citations", None)
     _persist_manifest()
     _run_agent("citations", participant, force=True)
@@ -480,7 +491,9 @@ def api_citations_stop(participant: str) -> FlaskResponse:
     if event is not None:
         event.set()
     _agent_in_flight["citations"].discard(participant)
-    _schedule_model_unload(config.OLLAMA_SUMMARY_MODEL)
+    model = _agent_model("citations")
+    if model:
+        _schedule_model_unload(model)
     return jsonify({"ok": True, "running": False})
 
 
@@ -1104,7 +1117,9 @@ def _run_agent(agent_key: str, participant: str, force: bool = False) -> None:
     cancel_event = threading.Event()
     # If a Stop just scheduled an unload for this model, cancel it — the
     # next request would only force a reload.
-    _cancel_pending_unload(config.OLLAMA_SUMMARY_MODEL)
+    model = _agent_model(agent_key)
+    if model:
+        _cancel_pending_unload(model)
 
     def _run() -> None:
         try:
@@ -1120,11 +1135,19 @@ def _run_agent(agent_key: str, participant: str, force: bool = False) -> None:
             # Stop click, drop the result and skip the chain advance.
             if cancel_event.is_set():
                 return
+            committed = False
             if result is not None:
                 with _manifest_lock:
+                    # Re-check the cancel event inside the lock so a Stop that
+                    # arrives between the snapshot read above and this commit
+                    # cannot race past us and leave a stale result behind.
+                    if cancel_event.is_set():
+                        return
                     entry = _manifest.get("source_transcripts", {}).get(participant)
                     if entry is not None:
                         entry[agent["manifest_field"]] = result
+                        committed = True
+            if committed:
                 _persist_manifest()
                 # Chain into the next eligible agent (e.g. summary → citations).
                 # Propagate *force* so a manual run cascades through disabled
