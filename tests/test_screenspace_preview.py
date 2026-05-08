@@ -222,3 +222,92 @@ def test_overlay_layer_scope_helper() -> None:
     )
     assert screenspace_preview.overlay_layer_scope("timelapse", "anything") is None
     assert screenspace_preview.overlay_layer_scope("change", "not_a_layer") is None
+
+
+# ---- Drawing-primitive scaling ----
+#
+# Region-scope overlay layers are returned at native region resolution and
+# the browser scales them down to fit the display rect. So drawing primitives
+# (Flow arrows, Canny edges) must scale with the source region's pixel size,
+# otherwise they shrink to invisible widths on full-frame views of large
+# videos. These tests assert that primitives grow in absolute pixel count
+# when the region grows — a proxy for "arrows / edges actually got bigger".
+
+
+def _green_arrow_pixel_count(img: np.ndarray) -> int:
+    """Count BGR (40, 220, 40) arrow pixels."""
+    b, g, r = cv2.split(img)
+    return int(((g > 150) & (r < 100) & (b < 100)).sum())
+
+
+def test_overlay_flow_arrow_scales_with_region() -> None:
+    """Larger flow regions produce visibly larger arrows.
+
+    With the previous hardcoded ``scale=4.0`` and ``thickness=1``, both region
+    sizes drew identically-sized arrows; with proportional scaling the larger
+    region's arrows are both longer (per grid cell) and thicker.
+    """
+    rng = np.random.default_rng(42)
+    frame_h, frame_w = 900, 700
+    base = rng.integers(0, 256, (frame_h, frame_w, 3), dtype=np.uint8)
+    prev_full = base
+    # Horizontal shift produces a strong, uniform optical-flow signal.
+    curr_full = np.roll(base, shift=3, axis=1)
+
+    small_region = {"x": 50, "y": 50, "w": 150, "h": 200}
+    large_region = {"x": 50, "y": 50, "w": 600, "h": 800}
+
+    small = screenspace_preview.build_overlay_layer(
+        curr_full, prev_full, small_region, "flow", "flow_vectors", {}
+    )
+    large = screenspace_preview.build_overlay_layer(
+        curr_full, prev_full, large_region, "flow", "flow_vectors", {}
+    )
+    assert small is not None and large is not None
+    assert small.shape[:2] == (small_region["h"], small_region["w"])
+    assert large.shape[:2] == (large_region["h"], large_region["w"])
+
+    small_green = _green_arrow_pixel_count(small)
+    large_green = _green_arrow_pixel_count(large)
+    assert small_green > 0, "small region produced no arrows"
+    assert large_green > small_green * 4, (
+        f"larger region arrows should occupy substantially more pixels "
+        f"(small={small_green}, large={large_green})"
+    )
+
+
+def test_overlay_scene_edges_thicken_with_region() -> None:
+    """Larger scene/edges regions produce visibly thicker Canny edges.
+
+    Canny output is 1-px regardless of source size; without proportional
+    dilation, edges become hairlines when the browser scales a large region
+    down to display size.
+    """
+    frame_h, frame_w = 900, 700
+    frame = np.zeros((frame_h, frame_w, 3), dtype=np.uint8)
+    # Horizontal stripe pattern — uniform edge density per unit area.
+    for y in range(0, frame_h, 30):
+        frame[y : y + 15, :] = 255
+
+    small_region = {"x": 50, "y": 50, "w": 150, "h": 200}
+    large_region = {"x": 50, "y": 50, "w": 600, "h": 800}
+
+    small = screenspace_preview.build_overlay_layer(
+        frame, None, small_region, "scene", "edges", {}
+    )
+    large = screenspace_preview.build_overlay_layer(
+        frame, None, large_region, "scene", "edges", {}
+    )
+    assert small is not None and large is not None
+
+    def edge_density(img: np.ndarray) -> float:
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        return float((gray > 0).sum()) / (gray.shape[0] * gray.shape[1])
+
+    small_density = edge_density(small)
+    large_density = edge_density(large)
+    assert small_density > 0
+    assert large_density > small_density * 1.5, (
+        f"larger region edges should be substantially denser due to dilation "
+        f"(small={small_density:.3f}, large={large_density:.3f})"
+    )
