@@ -155,6 +155,9 @@
         canvas.toBlob(function (blob) {
           if (!blob) { mediaEl.classList.remove("thumb-pending"); finish(); return; }
           var url = URL.createObjectURL(blob);
+          if (_thumbCache[artifact.id]) {
+            try { URL.revokeObjectURL(_thumbCache[artifact.id]); } catch (_) {}
+          }
           _thumbCache[artifact.id] = url;
           var img = document.createElement("img");
           img.src = url;
@@ -472,6 +475,9 @@
           canvas.toBlob(function (blob) {
             if (!blob) { markerEl.classList.remove("filmstrip-loading"); finish(); return; }
             var url = URL.createObjectURL(blob);
+            if (_thumbCache[artifact.id]) {
+              try { URL.revokeObjectURL(_thumbCache[artifact.id]); } catch (_) {}
+            }
             _thumbCache[artifact.id] = url;
             if (_filmstripEnabled && markerEl.classList.contains("filmstrip-loading")) {
               markerEl.style.backgroundImage = "url(" + url + ")";
@@ -1562,9 +1568,7 @@
     overlay.className = "video-play-overlay";
     overlay.type = "button";
     overlay.setAttribute("aria-label", "Play video");
-    overlay.innerHTML = '<svg width="56" height="56" viewBox="0 0 16 16" fill="currentColor" xmlns="http://www.w3.org/2000/svg">' +
-      '<path d="M3 3.73241C3 2.54878 4.30673 1.83146 5.30531 2.46692L12.0114 6.73441C12.9376 7.32384 12.9376 8.67597 12.0114 9.2654L5.30532 13.5329C4.30673 14.1684 3 13.451 3 12.2674V3.73241Z"/>' +
-      '</svg>';
+    overlay.appendChild(el("span", "video-play-overlay-icon"));
 
     var timeBadge = el("span", "video-time-badge", "--:--");
 
@@ -1873,7 +1877,7 @@
       expandBtn.setAttribute("aria-label", "Expand tracks");
       expandBtn.setAttribute("aria-expanded", "false");
       expandBtn.title = "Expand tracks";
-      expandBtn.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg>';
+      expandBtn.appendChild(el("span", "track-expand-icon"));
       expandBtn.addEventListener("click", (function (t) {
         return function () { toggleTrackExpand(t); };
       })(track));

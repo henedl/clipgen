@@ -1551,12 +1551,24 @@
     var cat = (mark && MARK_CATEGORIES[mark.category]) || MARK_CATEGORIES.bookmark || { label: "Mark", color: "#888" };
     var snippet = (seg.text || "").trim().slice(0, 80);
     if ((seg.text || "").length > 80) snippet += "…";
-    var extra = (seg.marks && seg.marks.length > 1) ? ' <span style="opacity:.7">+' + (seg.marks.length - 1) + ' more</span>' : "";
-    var label = mark && mark.label ? ' — ' + escapeHtml(mark.label) : "";
-    tip.innerHTML = '<span class="tr-tooltip-cat" style="color:' + (mark && mark.color || cat.color) + '">'
-      + escapeHtml(cat.label) + '</span>'
-      + escapeHtml(formatTime(seg.start)) + label + extra
-      + '<br>' + escapeHtml(snippet);
+    var extraCount = (seg.marks && seg.marks.length > 1) ? (seg.marks.length - 1) : 0;
+    var label = mark && mark.label ? " — " + mark.label : "";
+    tip.textContent = "";
+    var catSpan = el("span", "tr-tooltip-cat", cat.label);
+    // Set color via property API rather than string-interpolating into a
+    // style attribute — mark.color comes from a stash/manifest file and a
+    // crafted value (e.g. `red" onmouseover=...`) would otherwise break out.
+    catSpan.style.color = (mark && mark.color) || cat.color || "";
+    tip.appendChild(catSpan);
+    tip.appendChild(document.createTextNode(formatTime(seg.start) + label));
+    if (extraCount > 0) {
+      tip.appendChild(document.createTextNode(" "));
+      var extraSpan = el("span", "", "+" + extraCount + " more");
+      extraSpan.style.opacity = ".7";
+      tip.appendChild(extraSpan);
+    }
+    tip.appendChild(document.createElement("br"));
+    tip.appendChild(document.createTextNode(snippet));
     tip.classList.remove("hidden");
     var tipRect = tip.getBoundingClientRect();
     var x = clientX + 12;

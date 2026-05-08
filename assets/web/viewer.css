@@ -350,18 +350,26 @@ body {
   outline-offset: 2px;
 }
 
-.track-expand-btn svg {
+/* The exported timeline viewer is a single self-contained .html file with
+   no `icons/` route, so we embed icon path data as inline data URLs
+   (matches the .brand-mark pattern in tokens.css). The path data here
+   mirrors assets/icons/chevron-down.svg. */
+.track-expand-icon {
+  --track-expand-icon-svg: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><path fill-rule='evenodd' clip-rule='evenodd' d='M4.21967 6.21967C4.51256 5.92678 4.98744 5.92678 5.28033 6.21967L8 8.93934L10.7197 6.21967C11.0126 5.92678 11.4874 5.92678 11.7803 6.21967C12.0732 6.51256 12.0732 6.98744 11.7803 7.28033L8.53033 10.5303C8.23744 10.8232 7.76256 10.8232 7.46967 10.5303L4.21967 7.28033C3.92678 6.98744 3.92678 6.51256 4.21967 6.21967Z'/></svg>");
+  display: block;
   width: 16px;
   height: 16px;
-  stroke: currentColor;
-  fill: none;
-  stroke-width: 2;
-  stroke-linecap: round;
-  stroke-linejoin: round;
+  background-color: currentColor;
+  mask-image: var(--track-expand-icon-svg);
+  -webkit-mask-image: var(--track-expand-icon-svg);
+  mask-size: contain;
+  -webkit-mask-size: contain;
+  mask-repeat: no-repeat;
+  -webkit-mask-repeat: no-repeat;
   transition: transform var(--duration-normal) ease;
 }
 
-.track-expand-btn.expanded svg {
+.track-expand-btn.expanded .track-expand-icon {
   transform: rotate(180deg);
 }
 
@@ -981,11 +989,21 @@ body {
   background: rgba(0, 0, 0, 0.12);
 }
 
-.video-play-overlay svg {
+/* Inline data URL — the exported timeline viewer has no icons/ route.
+   Path data mirrors assets/icons/play.svg. */
+.video-play-overlay-icon {
+  --video-play-icon-svg: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><path d='M3 3.73241C3 2.54878 4.30673 1.83146 5.30531 2.46692L12.0114 6.73441C12.9376 7.32384 12.9376 8.67597 12.0114 9.2654L5.30532 13.5329C4.30673 14.1684 3 13.451 3 12.2674V3.73241Z'/></svg>");
+  display: block;
   width: 56px;
   height: 56px;
-  color: white;
+  background-color: white;
   filter: drop-shadow(0 2px 8px rgba(0, 0, 0, 0.4));
+  mask-image: var(--video-play-icon-svg);
+  -webkit-mask-image: var(--video-play-icon-svg);
+  mask-size: contain;
+  -webkit-mask-size: contain;
+  mask-repeat: no-repeat;
+  -webkit-mask-repeat: no-repeat;
 }
 
 .video-play-overlay.hidden {
@@ -1049,7 +1067,7 @@ body {
     transition: opacity var(--duration-fast), box-shadow var(--duration-normal);
   }
 
-  .track-expand-btn svg {
+  .track-expand-icon {
     transition: none;
   }
 

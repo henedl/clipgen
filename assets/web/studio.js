@@ -3473,6 +3473,10 @@
           })
           .then(function (blob) {
             var objUrl = URL.createObjectURL(blob);
+            var prev = _ssThumbCache[entry.url];
+            if (prev && prev !== "error" && prev !== "loading") {
+              try { URL.revokeObjectURL(prev); } catch (_) {}
+            }
             _ssThumbCache[entry.url] = objUrl;
             if (entry.img.parentNode) entry.img.src = objUrl;
           })
