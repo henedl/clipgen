@@ -43,6 +43,9 @@
   var _cvFrameCache = {};
   var _cvFramePreviewEl = null;
   var _cvHoverDebounce = null;
+  // Bumped on every preview show so a slow fetch can't paint over a newer
+  // hover (would otherwise display participant A's frame under B's label).
+  var _cvPreviewSeq = 0;
 
   // --- Utilities ---
 
@@ -85,6 +88,7 @@
     var img = preview.querySelector("img");
     var lbl = preview.querySelector(".cv-frame-preview-label");
     var url = cvFrameUrl(event.source, event.participant, event.start);
+    var seq = ++_cvPreviewSeq;
 
     var cached = _cvFrameCache[url];
     if (cached && cached !== "error" && cached !== "loading") {
@@ -107,13 +111,13 @@
             try { URL.revokeObjectURL(prev); } catch (_) {}
           }
           _cvFrameCache[url] = objUrl;
-          if (!preview.classList.contains("hidden") && img.parentNode) {
+          if (seq === _cvPreviewSeq && !preview.classList.contains("hidden") && img.parentNode) {
             img.src = objUrl;
           }
         })
         .catch(function () {
           _cvFrameCache[url] = "error";
-          cvHideFramePreview();
+          if (seq === _cvPreviewSeq) cvHideFramePreview();
         });
     }
 

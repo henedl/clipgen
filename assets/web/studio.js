@@ -1462,7 +1462,8 @@
   }
 
   function updateSingleCellClass(participant, row) {
-    var td = qs('.ts-cell[data-participant="' + participant + '"][data-row="' + row + '"]');
+    var td = qs('.ts-cell[data-participant="' + CSS.escape(participant) +
+                '"][data-row="' + CSS.escape(row) + '"]');
     if (!td) return;
     var inArt = findInQueue(state.artifactQueue, participant, row) >= 0;
     var inReel = findInQueue(state.reelQueue, participant, row) >= 0;
@@ -2707,20 +2708,27 @@
     var list = qs("#artifactsList");
     var items = state.artifactQueue.slice();
 
-    // Separate spreadsheet and intake items
-    var sheetItems = [];
-    var intakeItems = [];
-    for (var ci = 0; ci < items.length; ci++) {
-      if (isIntakeSource(items[ci].source)) {
-        intakeItems.push(items[ci]);
-      } else {
-        sheetItems.push(items[ci]);
-      }
-    }
-
+    // Capture the queue cards before any async work so per-item result
+    // markers don't drift onto the wrong card if the queue re-renders mid
+    // request. allCards is in DOM order, which matches state.artifactQueue.
     var allCards = list.querySelectorAll(".queue-card");
     for (var i = 0; i < allCards.length; i++) {
       setCardQueued(allCards[i]);
+    }
+
+    // Separate spreadsheet and intake items, keeping each split's card
+    // element parallel to its item array so the resolve handler can match
+    // by index against the captured card list (immune to later re-renders).
+    var sheetItems = [];
+    var intakeItems = [];
+    var intakeCardEls = [];
+    for (var ci = 0; ci < items.length; ci++) {
+      if (isIntakeSource(items[ci].source)) {
+        intakeItems.push(items[ci]);
+        intakeCardEls.push(allCards[ci]);
+      } else {
+        sheetItems.push(items[ci]);
+      }
     }
 
     var totalSuccess = 0;
@@ -2781,7 +2789,8 @@
         var participant = data.cell.substring(0, dot);
         var row = data.cell.substring(dot + 1);
         var cards = list.querySelectorAll(
-          '[data-participant="' + participant + '"][data-row="' + row + '"]'
+          '[data-participant="' + CSS.escape(participant) +
+          '"][data-row="' + CSS.escape(row) + '"]'
         );
         if (data.ok) {
           for (var ci = 0; ci < cards.length; ci++) setCardResult(cards[ci], true);
@@ -2858,10 +2867,10 @@
 
       apiPost("api/generate-intake", { items: intakePayload, format: format })
         .then(function (data) {
-          var intakeCards = list.querySelectorAll('[data-source="screenspace"], [data-source="transcript"]');
           if (data.ok && data.results) {
             for (var ri = 0; ri < data.results.length; ri++) {
               var res = data.results[ri];
+              var card = intakeCardEls[ri];
               if (res.ok) {
                 totalSuccess++;
                 if (res.artifact) {
@@ -2869,18 +2878,19 @@
                   state.generatedArtifacts.push(res.artifact);
                   updateViewerButton();
                 }
-                if (intakeCards[ri]) setCardResult(intakeCards[ri], true);
+                if (card) setCardResult(card, true);
               } else {
                 totalFail++;
-                if (intakeCards[ri]) setCardResult(intakeCards[ri], false);
+                if (card) setCardResult(card, false);
               }
             }
           }
           finishBranch();
         })
         .catch(function () {
-          var intakeCards = list.querySelectorAll('[data-source="screenspace"], [data-source="transcript"]');
-          for (var j = 0; j < intakeCards.length; j++) setCardResult(intakeCards[j], false);
+          for (var j = 0; j < intakeCardEls.length; j++) {
+            if (intakeCardEls[j]) setCardResult(intakeCardEls[j], false);
+          }
           totalFail += intakeItems.length;
           finishBranch();
         });
