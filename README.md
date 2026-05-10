@@ -95,7 +95,15 @@ pip install pyinstaller
 pyinstaller --clean --noconfirm build/clipgen.spec
 ```
 
-Output: `dist/clipgen` (macOS) or `dist/clipgen.exe` (Windows).
+Output: `dist/clipgen` and `dist/clipgen.app` (macOS), or `dist/clipgen.exe` (Windows). Double-clicking `clipgen.app` opens Terminal at the interactive CLI prompt; the raw binary inside is at `clipgen.app/Contents/MacOS/clipgen-bin`.
+
+The macOS build is **unsigned** (no paid Apple Developer account). When downloaded from GitHub, macOS quarantines the app and Gatekeeper blocks the first launch. To clear the quarantine attribute, run:
+
+```shell
+xattr -dr com.apple.quarantine clipgen.app
+```
+
+Alternatively, right-click the `.app` in Finder and choose **Open** once to bypass Gatekeeper for that build.
 
 ## AI disclosure
 
