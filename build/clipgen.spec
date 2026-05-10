@@ -69,3 +69,38 @@ exe = EXE(
     entitlements_file=None,
     icon=("clipgen.icns" if sys.platform == "darwin" else "clipgen.ico"),
 )
+
+if sys.platform == "darwin":
+    import stat
+    from pathlib import Path
+
+    _version = (Path(SPECPATH) / "VERSION").read_text().strip()
+    app = BUNDLE(
+        exe,
+        name="clipgen.app",
+        icon="clipgen.icns",
+        bundle_identifier="se.signalresearch.clipgen",
+        version=_version,
+        info_plist={
+            "CFBundleShortVersionString": _version,
+            "CFBundleVersion": _version,
+            "NSHighResolutionCapable": True,
+            "LSMinimumSystemVersion": "11.0",
+        },
+    )
+
+    # PyInstaller writes the CLI binary to Contents/MacOS/clipgen. clipgen is a
+    # console app, so double-clicking the .app would silently launch the binary
+    # with no visible terminal. Move the real binary aside and put a tiny
+    # shell launcher in its place that opens Terminal pointing at it.
+    _macos_dir = Path(DISTPATH) / "clipgen.app" / "Contents" / "MacOS"
+    _real_bin = _macos_dir / "clipgen-bin"
+    _launcher = _macos_dir / "clipgen"
+    if _launcher.exists() and not _real_bin.exists():
+        _launcher.rename(_real_bin)
+        _launcher.write_text(
+            '#!/bin/bash\n'
+            'DIR="$(cd "$(dirname "$0")" && pwd)"\n'
+            'open -a Terminal "$DIR/clipgen-bin"\n'
+        )
+        _launcher.chmod(_launcher.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)

@@ -18,7 +18,7 @@ jobs:
         include:
           - os: macos-latest
             artifact_name: clipgen-macos
-            dist_path: dist/clipgen
+            dist_path: dist/clipgen.app
           - os: windows-latest
             artifact_name: clipgen-windows
             dist_path: dist/clipgen.exe
@@ -71,4 +71,12 @@ jobs:
         with:
           name: ${{ matrix.artifact_name }}-${{ steps.suffix.outputs.suffix }}
           path: ${{ matrix.dist_path }}
+          if-no-files-found: error
+
+      - name: Upload macOS raw binary
+        if: matrix.os == 'macos-latest'
+        uses: actions/upload-artifact@v6
+        with:
+          name: clipgen-macos-bin-${{ steps.suffix.outputs.suffix }}
+          path: dist/clipgen
           if-no-files-found: error
