@@ -1497,6 +1497,12 @@
 
   function csvEscape(val) {
     var s = String(val == null ? "" : val);
+    // Defang spreadsheet formula triggers — Excel/Numbers/Sheets evaluate any
+    // cell beginning with =/+/-/@/tab/CR. User-authored fields (observation,
+    // category, severity) flow into these CSVs, so the leading sigil is the
+    // attacker's only entrypoint. Prefixing with a single quote neutralises
+    // the formula while displaying intuitively.
+    if (/^[=+\-@\t\r]/.test(s)) s = "'" + s;
     if (s.indexOf(",") >= 0 || s.indexOf('"') >= 0 || s.indexOf("\n") >= 0) {
       return '"' + s.replace(/"/g, '""') + '"';
     }

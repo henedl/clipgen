@@ -65,6 +65,11 @@
   var _hadActiveTranscriptionLastPoll = false;
   var MODEL_FAIL_GRACE_MS = 10000;
 
+  // Bumped on every participant switch so per-participant fetches that resolve
+  // late (`loadTranscript`, `loadSummary`, summary/citations polls) can detect
+  // they're stale and bail before clobbering the active participant's UI.
+  var _participantReqVer = 0;
+
   // ---- Helpers (showToast: 2500ms hide; shared default in utils.js is 3000ms) ----
 
   var _utilsShowToast = window.showToast;
@@ -508,6 +513,7 @@
 
 
   function selectParticipant(pid) {
+    _participantReqVer++;
     state.selectedParticipant = pid;
     setStoredUIStateField("transcripts", "selectedParticipant", pid);
     renderPills();
@@ -603,7 +609,9 @@
   // ---- Transcript loading ----
 
   function loadTranscript(pid) {
+    var ver = _participantReqVer;
     return apiGet("api/transcript/" + pid).then(function (data) {
+      if (ver !== _participantReqVer) return;
       if (!data.ok) {
         state.segments = [];
         renderSegments();
@@ -633,8 +641,10 @@
 
   function loadSummary(pid) {
     var section = qs("#summarySection");
+    var ver = _participantReqVer;
 
     apiGet("api/summary/" + pid).then(function (data) {
+      if (ver !== _participantReqVer) return;
       if (data.ok && data.summary) {
         _stopSummaryPoll();
         renderSummary(data.summary);
@@ -658,6 +668,7 @@
         section.classList.add("hidden");
       }
     }).catch(function () {
+      if (ver !== _participantReqVer) return;
       // Ollama unavailable or no summary — stay hidden
       section.classList.add("hidden");
     });
@@ -665,12 +676,14 @@
 
   function _startSummaryPoll(pid) {
     _stopSummaryPoll();
+    var ver = _participantReqVer;
     _summaryPollTimer = setInterval(function () {
-      if (state.selectedParticipant !== pid) {
+      if (ver !== _participantReqVer || state.selectedParticipant !== pid) {
         _stopSummaryPoll();
         return;
       }
       apiGet("api/summary/" + pid).then(function (data) {
+        if (ver !== _participantReqVer) return;
         if (data.ok && data.summary) {
           _stopSummaryPoll();
           renderSummary(data.summary);
@@ -691,6 +704,7 @@
           qs("#summarySection").classList.add("hidden");
         }
       }).catch(function () {
+        if (ver !== _participantReqVer) return;
         _stopSummaryPoll();
         qs("#summarySection").classList.add("hidden");
       });
@@ -852,8 +866,11 @@
   function _startCitationsPoll(pid) {
     _stopCitationsPoll();
     var started = Date.now();
+    var ver = _participantReqVer;
     _citationsPollTimer = setInterval(function () {
-      if (state.selectedParticipant !== pid || Date.now() - started > _CITATIONS_POLL_TIMEOUT) {
+      if (ver !== _participantReqVer ||
+          state.selectedParticipant !== pid ||
+          Date.now() - started > _CITATIONS_POLL_TIMEOUT) {
         _stopCitationsPoll();
         state.citationsGenerating = false;
         var status = qs("#summaryContent .citations-status");
@@ -861,6 +878,7 @@
         return;
       }
       apiGet("api/citations/" + pid).then(function (data) {
+        if (ver !== _participantReqVer) return;
         if (data.ok && data.citations) {
           _stopCitationsPoll();
           state.summaryCitations = data.citations;
@@ -873,6 +891,7 @@
           if (status) status.remove();
         }
       }).catch(function () {
+        if (ver !== _participantReqVer) return;
         _stopCitationsPoll();
         state.citationsGenerating = false;
         var status = qs("#summaryContent .citations-status");
@@ -2272,8 +2291,13 @@
     popover.style.left = (rect.left + window.scrollX - 4) + "px";
     popover.classList.remove("hidden");
 
-    // Close on outside click (deferred so this click doesn't trigger it)
-    setTimeout(function () {
+    // Close on outside click (deferred so this click doesn't trigger it).
+    // Track the timeout so a fast hideMarkPopover (e.g. Esc within the same
+    // tick) cancels the pending attach instead of leaving a permanently
+    // attached listener after the deferred .addEventListener fires.
+    if (_popoverAttachTimer) clearTimeout(_popoverAttachTimer);
+    _popoverAttachTimer = setTimeout(function () {
+      _popoverAttachTimer = null;
       document.addEventListener("click", _popoverOutsideClick);
     }, 0);
   }
@@ -2285,9 +2309,15 @@
     }
   }
 
+  var _popoverAttachTimer = null;
+
   function hideMarkPopover() {
     var popover = qs("#markPopover");
     if (popover) popover.classList.add("hidden");
+    if (_popoverAttachTimer) {
+      clearTimeout(_popoverAttachTimer);
+      _popoverAttachTimer = null;
+    }
     document.removeEventListener("click", _popoverOutsideClick);
   }
 
@@ -3477,11 +3507,16 @@
     initTranscriptSettings();
     initTopNavActions();
 
-    // Pause polling when tab is hidden; resume when visible
+    // Pause every poller when tab is hidden; resume what was active on focus.
+    // Without this, summary/citations/model-hint pollers (1.5–3 s cadence)
+    // keep hammering the backend from background tabs.
     document.addEventListener("visibilitychange", function () {
       if (document.hidden) {
         stopPolling();
         stopXrefPolling();
+        stopModelHintPoll();
+        _stopSummaryPoll();
+        _stopCitationsPoll();
       } else {
         pollTaskStatus();
         startXrefPolling();
@@ -3490,6 +3525,9 @@
         // poll already gave up (or summary completed after we stopped polling)
         // the manifest result would only surface on a full page reload. This
         // catches the common "user goes to another tab, comes back" case.
+        // loadSummary re-arms the summary/citations polls if generation is
+        // still in flight, and the transcribe-status poll re-arms the
+        // model-hint poll on the next active task transition.
         if (state.selectedParticipant) loadSummary(state.selectedParticipant);
       }
     });

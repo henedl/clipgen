@@ -1320,6 +1320,11 @@
       _cachedOverlayRect = null;
       if (r.w > 5 && r.h > 5) {
         state.pendingRegion = r;
+      } else if (r.w > 0 || r.h > 0) {
+        // Drop the draw silently for click-without-drag (zero size), but
+        // surface a hint when the user actually dragged a too-small box —
+        // otherwise the picker just snaps closed with no feedback.
+        showToast("Region too small — drag a larger area");
       }
       flushOverlayRender();
       updateRegionButtons();
@@ -5462,11 +5467,13 @@
     count.textContent = "(" + filtered.length + ")";
     updateTaskFilterButtons();
     if (state.tasks.length === 0) {
-      container.innerHTML = '<div class="panel-empty">No tasks yet. Configure a workflow and click Run.</div>';
+      container.innerHTML = "";
+      container.appendChild(el("div", "panel-empty", "No tasks yet. Configure a workflow and click Run."));
       return;
     }
     if (filtered.length === 0) {
-      container.innerHTML = '<div class="panel-empty">No ' + state.taskFilter + ' tasks.</div>';
+      container.innerHTML = "";
+      container.appendChild(el("div", "panel-empty", "No " + state.taskFilter + " tasks."));
       return;
     }
     var frag = document.createDocumentFragment();
@@ -6573,7 +6580,7 @@
             setRightPaneTab(stored.rightPaneTab);
           }
           if (stored.activeWorkflow) {
-            var wfTab = qs('.wf-tab[data-type="' + stored.activeWorkflow + '"]');
+            var wfTab = qs('.wf-tab[data-type="' + CSS.escape(stored.activeWorkflow) + '"]');
             if (wfTab) wfTab.click();
           }
         }
