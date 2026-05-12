@@ -40,6 +40,31 @@ def test_convert_clock_pairs_to_relative_uses_baseline_and_skips_invalid():
     assert converted == [("0:02:12", "0:02:45"), ("0:01:00", "0:01:30")]
 
 
+def test_convert_clock_pairs_to_relative_handles_post_midnight_wraparound():
+    # Baseline at 22:00, segment at 01:30 the next morning → +3:30:00 from start.
+    pairs = [("01:30:00", "01:32:00")]
+    baseline = "22:00"
+    converted = utils.convert_clock_pairs_to_relative(pairs, baseline)
+    assert converted == [("3:30:00", "3:32:00")]
+
+
+def test_convert_clock_pairs_to_relative_handles_midnight_crossing_span():
+    # Baseline 23:30, span 23:55-00:05 should yield 0:25:00-0:35:00.
+    pairs = [("23:55:00", "00:05:00")]
+    baseline = "23:30"
+    converted = utils.convert_clock_pairs_to_relative(pairs, baseline)
+    assert converted == [("0:25:00", "0:35:00")]
+
+
+def test_convert_clock_pairs_to_relative_rejects_unreasonable_pre_baseline():
+    # Baseline 08:00, segment at 07:00 is more likely a typo than a 23-hour
+    # overnight recording; should be skipped, not wrapped.
+    pairs = [("07:00:00", "07:05:00")]
+    baseline = "08:00"
+    converted = utils.convert_clock_pairs_to_relative(pairs, baseline)
+    assert converted == []
+
+
 def test_cluster_spans_empty_returns_empty():
     assert utils.cluster_spans([], gap_seconds=5.0) == []
 
