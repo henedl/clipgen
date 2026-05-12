@@ -1724,6 +1724,9 @@
         renderTimeline();
       });
       _timelineResizeObs.observe(qs("#timelineCanvasWrapper"));
+      window.addEventListener("pagehide", function () {
+        if (_timelineResizeObs) { _timelineResizeObs.disconnect(); _timelineResizeObs = null; }
+      });
     } else {
       window.addEventListener("resize", function () {
         sizeTimelineCanvas();
