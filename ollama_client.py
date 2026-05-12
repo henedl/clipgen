@@ -240,26 +240,27 @@ def _do_generate(
         data=data,
         headers={"Content-Type": "application/json"},
     )
-    resp = urllib.request.urlopen(req, timeout=_GENERATE_TIMEOUT)
     parts: list[str] = []
     done_event = threading.Event()
     watcher: threading.Thread | None = None
     deadline = time.monotonic() + _GENERATE_DEADLINE
     deadline_exceeded = False
-    if cancel_event is not None:
-
-        def _watch() -> None:
-            while not done_event.is_set():
-                if cancel_event.wait(timeout=_CANCEL_WATCHER_POLL):
-                    _shutdown_response_socket(resp)
-                    return
-
-        watcher = threading.Thread(
-            target=_watch, daemon=True, name="ollama-cancel-watcher"
-        )
-        watcher.start()
-
+    resp: Any = None
     try:
+        resp = urllib.request.urlopen(req, timeout=_GENERATE_TIMEOUT)
+        if cancel_event is not None:
+
+            def _watch() -> None:
+                while not done_event.is_set():
+                    if cancel_event.wait(timeout=_CANCEL_WATCHER_POLL):
+                        _shutdown_response_socket(resp)
+                        return
+
+            watcher = threading.Thread(
+                target=_watch, daemon=True, name="ollama-cancel-watcher"
+            )
+            watcher.start()
+
         if cancel_event is not None and cancel_event.is_set():
             return None
         while True:
@@ -295,10 +296,11 @@ def _do_generate(
                 break
     finally:
         done_event.set()
-        try:
-            resp.close()
-        except Exception:
-            pass
+        if resp is not None:
+            try:
+                resp.close()
+            except Exception:
+                pass
         if watcher is not None:
             watcher.join(timeout=0.5)
         if deadline_exceeded:

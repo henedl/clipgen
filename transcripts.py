@@ -146,6 +146,16 @@ def _load_model(model_name: str | None = None) -> Any:
             )
             return None
 
+        # Drop the previous model before loading a new one so we don't
+        # double-hold ~1-2 GB of weights (per CPU/GPU) until the next GC
+        # cycle. gc.collect() prods CUDA/MPS allocator cleanup as well.
+        if _cached_model is not None:
+            import gc
+
+            _cached_model = None
+            _cached_model_name = None
+            gc.collect()
+
         def _do_load() -> Any:
             return WhisperModel(model_name, compute_type=config.TRANSCRIBE_COMPUTE_TYPE)
 

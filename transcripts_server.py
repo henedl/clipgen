@@ -342,19 +342,23 @@ def api_edit_segment(participant: str) -> FlaskResponse:
 def api_vtt(participant: str) -> FlaskResponse:
     """Serve transcript as WebVTT for <track> subtitle support."""
     with _manifest_lock:
-        src = _manifest.get("source_transcripts", {})
-        entry = src.get(participant)
-    if not entry or not entry.get("segments"):
-        return Response("WEBVTT\n", content_type="text/vtt")
+        entry = _manifest.get("source_transcripts", {}).get(participant)
+        if not entry or not entry.get("segments"):
+            return Response("WEBVTT\n", content_type="text/vtt")
+        # Snapshot under the lock so a concurrent edit/transcribe can't mutate
+        # corrections or segments mid-iteration.
+        segments_snapshot = list(entry["segments"])
+        corrections_snapshot = list(_manifest.get("corrections", []))
+        language = entry.get("language", "")
+        source_file = entry.get("source_file", "")
+        model = entry.get("model", "")
 
-    corrections = _manifest.get("corrections", [])
-    corrected = transcripts.apply_corrections(entry["segments"], corrections)
-
+    corrected = transcripts.apply_corrections(segments_snapshot, corrections_snapshot)
     result = transcripts.TranscriptResult(
         segments=corrected,
-        language=entry.get("language", ""),
-        source_file=entry.get("source_file", ""),
-        model=entry.get("model", ""),
+        language=language,
+        source_file=source_file,
+        model=model,
     )
     vtt_text = transcripts._format_vtt(result)
     return Response(vtt_text, content_type="text/vtt")

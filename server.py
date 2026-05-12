@@ -81,6 +81,9 @@ _generate_cancel_event = threading.Event()
 _busy_lock = threading.Lock()
 _generate_in_progress = False
 _reel_in_progress = False
+# Serializes load → mutate → save for the stash manifests so concurrent
+# stash CRUD requests don't drop each other's writes.
+_stash_lock = threading.Lock()
 
 # Snapshot config defaults before any settings file is loaded.
 # Deep-copied so dict-valued defaults are not aliased to live config state.
@@ -371,11 +374,13 @@ def _save_manifest_quiet() -> None:
     bubble up so they aren't lost silently — those are real bugs we want to
     see, not transient I/O issues.
     """
+    # Snapshot the shared lists before serializing so a concurrent intake or
+    # generate-worker extend can't surface as a partially-saved manifest.
+    artifacts = list(_generated_artifacts)
+    reels = list(_generated_reels)
+    if not artifacts and not reels:
+        return
     try:
-        artifacts = _generated_artifacts
-        reels = _generated_reels
-        if not artifacts and not reels:
-            return
         study = ""
         if artifacts:
             study = artifacts[0].get("study", "")
@@ -1106,8 +1111,10 @@ def api_manifest() -> FlaskResponse:
         reels = viewer.load_manifest_reels()
         return jsonify({"ok": True, "artifacts": artifacts, "reels": reels})
 
-    artifacts = _generated_artifacts
-    reels = _generated_reels
+    # Snapshot the shared lists so a worker thread extending mid-export
+    # can't produce a partial/aliased manifest snapshot.
+    artifacts = list(_generated_artifacts)
+    reels = list(_generated_reels)
     if not artifacts and not reels:
         return jsonify(
             {
@@ -1169,53 +1176,58 @@ def _handle_stash_crud(load_fn: Any, save_fn: Any, id_prefix: str) -> FlaskRespo
 
     data = request.get_json(silent=True) or {}
     action = data.get("action", "create")
-    stashes = load_fn()
 
-    if action == "create":
-        items = data.get("items", [])
-        if not items:
-            return jsonify({"ok": False, "error": "No items to stash"}), 400
-        name = data.get("name", "")
-        total_duration = data.get("totalDuration") or sum(
-            item.get("segDuration", 0) for item in items
-        )
-        stash = {
-            "id": f"{id_prefix}_{uuid.uuid4().hex[:8]}",
-            "name": name or f"Stash {len(stashes) + 1}",
-            "items": items,
-            "count": len(items),
-            "totalDuration": total_duration,
-            "createdAt": datetime.now(timezone.utc).isoformat(),
-        }
-        stashes.append(stash)
-        save_fn(stashes)
-        return jsonify({"ok": True, "stash": stash})
+    # Serialize the load → mutate → save cycle so two concurrent stash
+    # POSTs can't both read the same list, both append, and have the
+    # second save overwrite the first.
+    with _stash_lock:
+        stashes = load_fn()
 
-    if action == "update":
-        stash_id = data.get("id")
-        if not stash_id:
-            return jsonify({"ok": False, "error": "No stash ID"}), 400
-        for s in stashes:
-            if s["id"] == stash_id:
-                name = data.get("name")
-                if name is not None:
-                    s["name"] = name
-                save_fn(stashes)
-                return jsonify({"ok": True, "stash": s})
-        return jsonify({"ok": False, "error": "Stash not found"}), 404
+        if action == "create":
+            items = data.get("items", [])
+            if not items:
+                return jsonify({"ok": False, "error": "No items to stash"}), 400
+            name = data.get("name", "")
+            total_duration = data.get("totalDuration") or sum(
+                item.get("segDuration", 0) for item in items
+            )
+            stash = {
+                "id": f"{id_prefix}_{uuid.uuid4().hex[:8]}",
+                "name": name or f"Stash {len(stashes) + 1}",
+                "items": items,
+                "count": len(items),
+                "totalDuration": total_duration,
+                "createdAt": datetime.now(timezone.utc).isoformat(),
+            }
+            stashes.append(stash)
+            save_fn(stashes)
+            return jsonify({"ok": True, "stash": stash})
 
-    if action == "delete":
-        stash_id = data.get("id")
-        if not stash_id:
-            return jsonify({"ok": False, "error": "No stash ID"}), 400
-        for i, s in enumerate(stashes):
-            if s["id"] == stash_id:
-                stashes.pop(i)
-                save_fn(stashes)
-                return jsonify({"ok": True})
-        return jsonify({"ok": False, "error": "Stash not found"}), 404
+        if action == "update":
+            stash_id = data.get("id")
+            if not stash_id:
+                return jsonify({"ok": False, "error": "No stash ID"}), 400
+            for s in stashes:
+                if s["id"] == stash_id:
+                    name = data.get("name")
+                    if name is not None:
+                        s["name"] = name
+                    save_fn(stashes)
+                    return jsonify({"ok": True, "stash": s})
+            return jsonify({"ok": False, "error": "Stash not found"}), 404
 
-    return jsonify({"ok": False, "error": f"Unknown action: {action}"}), 400
+        if action == "delete":
+            stash_id = data.get("id")
+            if not stash_id:
+                return jsonify({"ok": False, "error": "No stash ID"}), 400
+            for i, s in enumerate(stashes):
+                if s["id"] == stash_id:
+                    stashes.pop(i)
+                    save_fn(stashes)
+                    return jsonify({"ok": True})
+            return jsonify({"ok": False, "error": "Stash not found"}), 404
+
+        return jsonify({"ok": False, "error": f"Unknown action: {action}"}), 400
 
 
 @studio_bp.route("/api/stashes", methods=["GET"])

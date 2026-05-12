@@ -2,6 +2,7 @@
 """File and filename operations for clipgen."""
 
 import re
+import unicodedata
 from pathlib import Path
 
 import gspread
@@ -10,6 +11,26 @@ from icecream import ic
 import config
 import utils
 from utils import ClipRecord
+
+
+def _safe_truncate(text: str, max_chars: int) -> str:
+    """Truncate to ``max_chars`` code points, then drop trailing combining marks.
+
+    Plain ``text[:n]`` can split a grapheme cluster (e.g. emoji + skin-tone
+    modifier, or letter + combining accent), leaving an orphan combining
+    character. Drop those at the truncation boundary so the visible glyph
+    survives intact.
+    """
+    if max_chars <= 0:
+        return ""
+    truncated = text[:max_chars]
+    # Trim trailing combining marks / joiners that would render orphaned.
+    while truncated and (
+        unicodedata.category(truncated[-1]) in ("Mn", "Mc", "Me")
+        or truncated[-1] in ("‍", "️")
+    ):
+        truncated = truncated[:-1]
+    return truncated
 
 
 def get_unique_filename(filename: str, file_format: str | None = None) -> str:
@@ -36,12 +57,12 @@ def get_unique_filename(filename: str, file_format: str | None = None) -> str:
         base = name
     # Truncate base if needed (reserve space for extension)
     max_base = config.MAX_FILENAME_LENGTH - len(file_extension)
-    base = base[:max_base]
+    base = _safe_truncate(base, max_base)
     candidate = directory / (base + file_extension)
     counter = 1
     while candidate.is_file():
         suffix = f"-{counter}"
-        truncated_base = base[: max_base - len(suffix)]
+        truncated_base = _safe_truncate(base, max_base - len(suffix))
         candidate = directory / (truncated_base + suffix + file_extension)
         counter += 1
     return str(candidate)

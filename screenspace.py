@@ -721,7 +721,9 @@ def _ffmpeg_pipe_frames(
     ]
 
     frame_size = out_w * out_h * 3
-    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    # stderr → DEVNULL: we only read stdout, so a PIPE'd stderr could fill
+    # its 64 KB OS buffer on a chatty codec error and deadlock ffmpeg.
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
     assert proc.stdout is not None  # guaranteed by stdout=PIPE
     frame_idx = 0
     try:
@@ -1395,7 +1397,9 @@ def generate_timelapse(
     # Use Popen with -progress to get real-time encoding updates
     cmd += ["-progress", "pipe:1"]
     try:
-        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        # stderr → DEVNULL: only stdout (progress lines) is read, so a PIPE'd
+        # stderr could fill its 64 KB OS buffer and deadlock ffmpeg.
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
         assert proc.stdout is not None  # guaranteed by stdout=PIPE
     except (FileNotFoundError, OSError):
         return None

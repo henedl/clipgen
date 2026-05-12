@@ -5,6 +5,7 @@ Provides a sheet adapter that matches the gspread Worksheet interface
 so spreadsheet.py and clipgen can use local Excel files the same way as Google Sheets.
 """
 
+import datetime as _datetime
 from pathlib import Path
 from typing import Any, NamedTuple
 
@@ -12,6 +13,32 @@ import openpyxl
 
 import config
 import utils
+
+
+def _cell_to_str(v: Any) -> str:
+    """Convert an openpyxl cell value to a downstream-safe string.
+
+    Time-like cells (``datetime.time``, ``datetime.datetime``,
+    ``datetime.timedelta``) are formatted as ``HH:MM:SS`` so timestamp
+    parsing downstream behaves the same way it does for Google Sheets,
+    which always returns strings. The default ``str()`` on a
+    ``datetime.datetime`` prefixes the Excel epoch date (``1899-12-30``)
+    and produces unparseable output; this normalizes those away.
+    """
+    if v is None:
+        return ""
+    if isinstance(v, str):
+        return v.strip()
+    if isinstance(v, _datetime.datetime):
+        return v.strftime("%H:%M:%S")
+    if isinstance(v, _datetime.time):
+        return v.strftime("%H:%M:%S")
+    if isinstance(v, _datetime.timedelta):
+        total = int(v.total_seconds())
+        h, rem = divmod(total, 3600)
+        m, s = divmod(rem, 60)
+        return f"{h:02d}:{m:02d}:{s:02d}"
+    return str(v)
 
 
 class _CellLike(NamedTuple):
@@ -44,12 +71,7 @@ class ExcelSheetAdapter:
         rows: list[list[str]] = []
         max_col = 0
         for row in self._ws.iter_rows(values_only=True):
-            str_row = [
-                (str(v).strip() if isinstance(v, str) else str(v))
-                if v is not None
-                else ""
-                for v in row
-            ]
+            str_row = [_cell_to_str(v) for v in row]
             rows.append(str_row)
             max_col = max(max_col, len(str_row))
         # Pad rows to same length

@@ -1211,6 +1211,13 @@ def convert_clock_pairs_to_relative(
         )
         return []
 
+    # Overnight recordings: segments after midnight will be < baseline_seconds.
+    # If the resulting wraparound offset is within a reasonable recording
+    # window (<= 12 hours), treat it as a day rollover; otherwise reject as
+    # a typo / pre-baseline entry.
+    seconds_per_day = 24 * config.SECONDS_PER_HOUR
+    wrap_window = 12 * config.SECONDS_PER_HOUR
+
     result: list[tuple[str, str]] = []
     skipped: list[str] = []
     for start_str, end_str in pairs:
@@ -1221,6 +1228,14 @@ def convert_clock_pairs_to_relative(
             continue
         start_rel = start_s - baseline_seconds
         end_rel = end_s - baseline_seconds
+        if start_rel < 0:
+            wrapped = start_rel + seconds_per_day
+            if 0 <= wrapped <= wrap_window:
+                start_rel = wrapped
+                end_rel = end_rel + seconds_per_day
+        elif end_rel < start_rel:
+            # Span crosses midnight while baseline was pre-midnight.
+            end_rel += seconds_per_day
         if start_rel < 0 or end_rel <= 0 or end_rel <= start_rel:
             skipped.append(f"{start_str}-{end_str}")
             continue
