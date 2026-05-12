@@ -1580,12 +1580,12 @@
 
     var timeBadge = el("span", "video-time-badge", "--:--");
 
-    var proportion = seekProportion != null ? seekProportion : 0;
+    var proportion = seekProportion != null ? Math.max(0, Math.min(1, seekProportion)) : 0;
 
     vid.onloadedmetadata = function () {
       var dur = vid.duration;
       if (!dur || !isFinite(dur)) return;
-      var seekTime = dur * Math.max(0, Math.min(1, proportion));
+      var seekTime = dur * proportion;
       vid.currentTime = seekTime;
       timeBadge.textContent = formatTime(seekTime) + " / " + formatTime(dur);
     };
