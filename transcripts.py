@@ -258,14 +258,18 @@ def save_transcripts_manifest(
 ) -> Path | None:
     """Write the transcripts manifest to disk.
 
-    Assigns segment IDs (``"{participant}:{index}"``) at storage time.
+    Assigns a segment ID (``"{participant}:{index}"``) when a segment doesn't
+    already have one, but never overwrites an existing id — so marks and
+    corrections that reference ``seg["id"]`` keep pointing at the same
+    segment even when later segments are added, edited, or reordered.
     *marks* defaults to ``None`` which preserves whatever marks are already on
     disk (load → merge → save).  Pass an explicit list to overwrite.
     Returns the manifest path on success, or ``None`` on failure.
     """
     for participant_id, entry in source_transcripts.items():
         for idx, seg in enumerate(entry.get("segments", [])):
-            seg["id"] = f"{participant_id}:{idx}"
+            if not seg.get("id"):
+                seg["id"] = f"{participant_id}:{idx}"
 
     # When marks is None, preserve existing marks from disk
     if marks is None:
