@@ -36,10 +36,18 @@ _HEALTH_TIMEOUT = 5  # seconds for connectivity check
 _GENERATE_TIMEOUT = (
     300  # seconds — generous to allow cold model loading + long transcripts
 )
+# Wall-clock deadline for the entire streaming response. urlopen's timeout only
+# applies to connect + first byte, so a slow trickle can stall a worker
+# indefinitely. This bounds total elapsed time end-to-end.
+_GENERATE_DEADLINE = 600  # seconds
 _START_POLL_INTERVAL = 0.5  # seconds between health-check polls after starting server
 _START_TIMEOUT = 10  # seconds to wait for server to become available after starting
 _CANCEL_WATCHER_POLL = 1.0  # seconds; bounds abort latency during long quiet stretches
 _THINK_RE = re.compile(r"<think>[\s\S]*?</think>\s*", re.DOTALL)
+
+# Serializes _start_server() calls so two threads hitting connection-refused at
+# the same time don't both spawn `ollama serve`.
+_start_server_lock = threading.Lock()
 
 
 def is_available() -> bool:
@@ -151,6 +159,10 @@ def _ollama_install_guidance_lines() -> list[str]:
 def _start_server() -> bool:
     """Attempt to start ``ollama serve`` and wait for it to become available.
 
+    Serialized via ``_start_server_lock`` so concurrent connection-refused
+    retries don't both spawn a server process — the first one to acquire the
+    lock spawns it, the rest see the already-running server when they re-poll.
+
     Returns True if the server is responding after startup, False otherwise.
     """
     if shutil.which("ollama") is None:
@@ -160,23 +172,28 @@ def _start_server() -> bool:
         )
         return False
 
-    utils.info_print("Starting Ollama server...")
-    try:
-        subprocess.Popen(
-            ["ollama", "serve"],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
-    except OSError as exc:
-        utils.warning_print(f"Failed to start Ollama: {exc}")
-        return False
-
-    deadline = time.monotonic() + _START_TIMEOUT
-    while time.monotonic() < deadline:
+    with _start_server_lock:
+        # Another thread may have already started the server while we waited.
         if is_available():
-            utils.info_print("Ollama server started.")
             return True
-        time.sleep(_START_POLL_INTERVAL)
+
+        utils.info_print("Starting Ollama server...")
+        try:
+            subprocess.Popen(
+                ["ollama", "serve"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        except OSError as exc:
+            utils.warning_print(f"Failed to start Ollama: {exc}")
+            return False
+
+        deadline = time.monotonic() + _START_TIMEOUT
+        while time.monotonic() < deadline:
+            if is_available():
+                utils.info_print("Ollama server started.")
+                return True
+            time.sleep(_START_POLL_INTERVAL)
 
     utils.warning_print("Ollama server did not start within timeout.")
     return False
@@ -227,6 +244,8 @@ def _do_generate(
     parts: list[str] = []
     done_event = threading.Event()
     watcher: threading.Thread | None = None
+    deadline = time.monotonic() + _GENERATE_DEADLINE
+    deadline_exceeded = False
     if cancel_event is not None:
 
         def _watch() -> None:
@@ -244,17 +263,26 @@ def _do_generate(
         if cancel_event is not None and cancel_event.is_set():
             return None
         while True:
+            if time.monotonic() >= deadline:
+                deadline_exceeded = True
+                _shutdown_response_socket(resp)
+                return None
             try:
                 line = resp.readline()
             except (OSError, ValueError, AttributeError):
-                # Raised when the watcher shuts down the socket mid-read.
-                # http.client may surface this as AttributeError on Python
-                # 3.13+ when the chunked-encoding state machine tries to
-                # advance past a closed fp.
+                # Raised when the watcher shuts down the socket mid-read, or
+                # when we shut it down above on deadline. http.client may
+                # surface this as AttributeError on Python 3.13+ when the
+                # chunked-encoding state machine tries to advance past a
+                # closed fp.
                 return None
             if not line:
                 break
             if cancel_event is not None and cancel_event.is_set():
+                return None
+            if time.monotonic() >= deadline:
+                deadline_exceeded = True
+                _shutdown_response_socket(resp)
                 return None
             try:
                 chunk = json.loads(line.decode("utf-8"))
@@ -273,6 +301,11 @@ def _do_generate(
             pass
         if watcher is not None:
             watcher.join(timeout=0.5)
+        if deadline_exceeded:
+            utils.warning_print(
+                f"Ollama generate exceeded {_GENERATE_DEADLINE}s deadline "
+                f"(model: {body.get('model')}); aborting."
+            )
 
     if cancel_event is not None and cancel_event.is_set():
         return None
