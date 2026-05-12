@@ -514,6 +514,8 @@
 
   function selectParticipant(pid) {
     _participantReqVer++;
+    _stopSummaryPoll();
+    _stopCitationsPoll();
     state.selectedParticipant = pid;
     setStoredUIStateField("transcripts", "selectedParticipant", pid);
     renderPills();
