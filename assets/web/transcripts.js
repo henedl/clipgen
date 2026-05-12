@@ -516,6 +516,7 @@
     _participantReqVer++;
     _stopSummaryPoll();
     _stopCitationsPoll();
+    hideMarkPopover();
     state.selectedParticipant = pid;
     setStoredUIStateField("transcripts", "selectedParticipant", pid);
     renderPills();
@@ -2298,6 +2299,7 @@
     // tick) cancels the pending attach instead of leaving a permanently
     // attached listener after the deferred .addEventListener fires.
     if (_popoverAttachTimer) clearTimeout(_popoverAttachTimer);
+    document.removeEventListener("click", _popoverOutsideClick);
     _popoverAttachTimer = setTimeout(function () {
       _popoverAttachTimer = null;
       document.addEventListener("click", _popoverOutsideClick);
