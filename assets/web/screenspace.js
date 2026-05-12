@@ -1681,8 +1681,11 @@
     chipsEl.addEventListener("scroll", updateRegionChipsOverflow);
   }
 
+  var _regionNameModalPrevFocus = null;
+
   function showRegionNameModal() {
     var r = state.pendingRegion;
+    _regionNameModalPrevFocus = document.activeElement;
     qs("#regionNameInput").value = "";
     qs("#regionDescInput").value = "";
     qs("#regionCoords").textContent = r ? (r.x + ", " + r.y + " \u2014 " + r.w + "\u00d7" + r.h + " px") : "";
@@ -1692,6 +1695,10 @@
 
   function hideRegionNameModal() {
     qs("#regionNameModal").classList.add("hidden");
+    if (_regionNameModalPrevFocus && typeof _regionNameModalPrevFocus.focus === "function") {
+      try { _regionNameModalPrevFocus.focus(); } catch (_) {}
+    }
+    _regionNameModalPrevFocus = null;
   }
 
   function updateRegionButtons() {
