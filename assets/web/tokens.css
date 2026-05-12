@@ -529,8 +529,12 @@ html[data-theme="light"] .cg-logo {
   transition: opacity var(--duration-fast);
 }
 .cg-tooltip.is-visible { opacity: 1; }
-.cg-tooltip--centered { transform: translateX(-50%); }
 .cg-tooltip--multiline { white-space: pre-line; }
+
+/* Re-enable mouse events on disabled tooltip buttons so the singleton
+   data-tooltip handler in utils.js can detect hover. <button disabled>
+   still blocks click regardless of pointer-events. */
+button[data-tooltip]:disabled { pointer-events: auto; cursor: not-allowed; }
 
 /* Primary CTA button — shared across Studio / Screenspace / Transcripts.
  * Page CSS still defines the base .btn (size, padding, border-radius) so visual
