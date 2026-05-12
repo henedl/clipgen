@@ -18,7 +18,6 @@ jobs:
         include:
           - os: macos-latest
             artifact_name: clipgen-macos
-            dist_path: dist/clipgen.app
           - os: windows-latest
             artifact_name: clipgen-windows
             dist_path: dist/clipgen.exe
@@ -56,6 +55,35 @@ jobs:
       - name: Build executable
         run: uv run pyinstaller --clean --noconfirm build/clipgen.spec
 
+      - name: Ad-hoc codesign the .app bundle (macOS)
+        if: matrix.os == 'macos-latest'
+        run: |
+          set -euo pipefail
+          codesign --force --sign - --timestamp=none dist/clipgen.app/Contents/MacOS/clipgen-bin
+          codesign --force --deep --sign - --timestamp=none dist/clipgen.app
+          codesign --verify --deep --strict dist/clipgen.app
+
+      - name: Write INSTALL.txt (macOS)
+        if: matrix.os == 'macos-latest'
+        run: |
+          cat > dist/INSTALL.txt <<'EOF'
+          clipgen for macOS
+
+          1. Drag clipgen.app anywhere (e.g. /Applications).
+          2. The first time you run it, macOS will say "clipgen is damaged or
+             incomplete". This is Gatekeeper blocking an unsigned app downloaded
+             from the internet. Clear the quarantine flag with:
+
+                 xattr -dr com.apple.quarantine /path/to/clipgen.app
+
+             (Adjust the path to wherever you put the app.) After that, double-
+             click clipgen.app and a Terminal window will open with clipgen
+             running. You won't see this message again.
+
+          clipgen is open source and built on GitHub Actions; the binary is not
+          notarized because we don't have an Apple Developer account.
+          EOF
+
       - name: Compute artifact suffix
         id: suffix
         shell: bash
@@ -66,7 +94,18 @@ jobs:
             echo "suffix=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Upload artifact
+      - name: Upload artifact (macOS)
+        if: matrix.os == 'macos-latest'
+        uses: actions/upload-artifact@v6
+        with:
+          name: ${{ matrix.artifact_name }}-${{ steps.suffix.outputs.suffix }}
+          path: |
+            dist/clipgen.app
+            dist/INSTALL.txt
+          if-no-files-found: error
+
+      - name: Upload artifact (Windows)
+        if: matrix.os == 'windows-latest'
         uses: actions/upload-artifact@v6
         with:
           name: ${{ matrix.artifact_name }}-${{ steps.suffix.outputs.suffix }}
