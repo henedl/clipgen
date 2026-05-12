@@ -179,7 +179,6 @@ var createTooltip = function (opts) {
   opts = opts || {};
   var cls = "cg-tooltip";
   if (opts.multiline) cls += " cg-tooltip--multiline";
-  if (opts.align === "center") cls += " cg-tooltip--centered";
   var tip = document.createElement("div");
   tip.className = cls;
   document.body.appendChild(tip);
@@ -187,12 +186,8 @@ var createTooltip = function (opts) {
     el: tip,
     show: function (anchor, text) {
       tip.textContent = text || "";
-      var r = anchor.getBoundingClientRect();
       // Set text before measuring so offsetHeight reflects final size.
-      var x = opts.align === "center" ? r.left + r.width / 2 : r.left;
-      var above = r.top - tip.offsetHeight - 6;
-      tip.style.left = x + "px";
-      tip.style.top = (above < 0 ? r.bottom + 6 : above) + "px";
+      positionTooltipAnchored(tip, anchor.getBoundingClientRect());
       tip.classList.add("is-visible");
     },
     hide: function () {
@@ -213,6 +208,61 @@ var attachHoverTooltip = function (anchor, getText, opts) {
   anchor.addEventListener("blur", t.hide);
   return t;
 };
+
+// Singleton tooltip driven by [data-tooltip] attributes anywhere on the page.
+// Replaces the per-page CSS ::after pseudo-element variants so positioning
+// goes through positionTooltipAnchored and stays inside the viewport. The
+// pointer-events:auto override in tokens.css ensures Chrome/Safari still
+// dispatch mouseover events for disabled <button data-tooltip>.
+var clipgenInitDataTooltips = function () {
+  var tip = null;
+  var current = null;
+  var ensureTip = function () {
+    if (!tip) tip = createTooltip({ multiline: true });
+    return tip;
+  };
+  var shouldSuppress = function (el) {
+    // Studio hides disabled-button tooltips while a generation is running.
+    if (document.body.classList.contains("studio-generating")) {
+      if (el.matches && el.matches(".btn[data-tooltip]:disabled")) return true;
+    }
+    return false;
+  };
+  var showFor = function (el) {
+    if (shouldSuppress(el)) return;
+    var text = el.getAttribute("data-tooltip");
+    if (!text) return;
+    current = el;
+    ensureTip().show(el, text);
+  };
+  var hide = function () {
+    if (!current) return;
+    if (tip) tip.hide();
+    current = null;
+  };
+  document.addEventListener("mouseover", function (e) {
+    var el = e.target.closest && e.target.closest("[data-tooltip]");
+    if (!el || el === current) return;
+    if (current && !current.contains(el)) hide();
+    showFor(el);
+  });
+  document.addEventListener("mouseout", function (e) {
+    if (!current) return;
+    // relatedTarget is what the cursor moved onto. If still inside the
+    // anchor, keep the tooltip — mouseout fires when crossing into children.
+    var to = e.relatedTarget;
+    if (to && current.contains(to)) return;
+    hide();
+  });
+  window.addEventListener("scroll", hide, true);
+  window.addEventListener("resize", hide);
+};
+
+if (document.readyState === "loading") {
+  document.addEventListener("DOMContentLoaded", clipgenInitDataTooltips);
+} else {
+  clipgenInitDataTooltips();
+}
 
 // ---- Formatting ----
 

@@ -1794,39 +1794,6 @@ html[data-theme="dark"] .queue-card-error .queue-card-thumb {
   flex-shrink: 0;
 }
 
-/* Disabled button tooltips */
-
-.btn[data-tooltip] {
-  position: relative;
-}
-
-.btn[data-tooltip]:disabled::after {
-  content: attr(data-tooltip);
-  position: absolute;
-  bottom: calc(100% + 6px);
-  left: 50%;
-  transform: translateX(-50%);
-  padding: var(--space-1) var(--space-3);
-  background: var(--color-text);
-  color: var(--color-bg);
-  font-size: var(--text-xs);
-  font-weight: 400;
-  white-space: nowrap;
-  border-radius: var(--radius-sm);
-  pointer-events: none;
-  opacity: 0;
-  transition: opacity var(--duration-fast);
-  z-index: var(--z-float);
-}
-
-.btn[data-tooltip]:disabled:hover::after {
-  opacity: 1;
-}
-
-.studio-generating .btn[data-tooltip]:disabled::after {
-  display: none;
-}
-
 /* Highlights button group (inside reel header) */
 
 .highlights-group {
