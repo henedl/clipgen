@@ -128,6 +128,7 @@ _worker: "screenspace.ScreenspaceWorker | None" = None
 _output_dir: str = ""
 _participants: list[dict[str, Any]] = []
 _video_metadata_cache: dict[str, dict[str, Any]] = {}
+_video_metadata_cache_lock = threading.Lock()
 # Bounded LRU so long scrub sessions don't grow unbounded; entries are
 # JPEG bytes (tens of KB each), so a few hundred is plenty.
 _FRAME_CACHE_MAX = 256
@@ -588,8 +589,10 @@ def api_preview_layers() -> FlaskResponse:
 @screenspace_bp.route("/api/video/info/<participant>")
 def api_video_info(participant: str) -> FlaskResponse:
     """Return video metadata (duration, resolution, fps)."""
-    if participant in _video_metadata_cache:
-        return jsonify({"ok": True, "info": _video_metadata_cache[participant]})
+    with _video_metadata_cache_lock:
+        cached_info = _video_metadata_cache.get(participant)
+    if cached_info is not None:
+        return jsonify({"ok": True, "info": cached_info})
 
     video_path = _find_participant_video(participant)
     if video_path is None:
@@ -616,7 +619,8 @@ def api_video_info(participant: str) -> FlaskResponse:
         "nb_frames": props.get("nb_frames", 0) or 0,
         "video_codec": props.get("video_codec") or "",
     }
-    _video_metadata_cache[participant] = info
+    with _video_metadata_cache_lock:
+        _video_metadata_cache[participant] = info
 
     return jsonify({"ok": True, "info": info})
 
