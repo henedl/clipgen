@@ -575,6 +575,15 @@ def scan_video_frames(
     - ``max_region_dim``: downscale extracted region to this max dimension
     """
     full_frame = region is None
+    # Reject zero-dimension regions early so ffmpeg's crop filter doesn't
+    # produce empty frames downstream (which would crash cv2.cvtColor /
+    # cv2.GaussianBlur with an opaque shape mismatch).
+    if not full_frame and region is not None:
+        if region.get("w", 0) <= 0 or region.get("h", 0) <= 0:
+            utils.warning_print(
+                f"Skipping scan: region has zero width or height ({region})"
+            )
+            return
     if cv_scale is None:
         cv_scale = config.SCREENSPACE_CV_RESOLUTION_SCALE
 
@@ -1901,7 +1910,13 @@ def check_frame_for_tool(
     For **change** and **flow** tools *prev_frame* is required (the frame
     immediately before the candidate timestamp).  If it is ``None`` the
     check is skipped (returns ``(False, None)``).
+
+    Degenerate regions (width or height ≤ 0, e.g. a 1-px user draw rounded
+    to zero pixels on a small preview) are treated as a non-match here so
+    downstream cv2 ops never see empty arrays.
     """
+    if region.get("w", 0) <= 0 or region.get("h", 0) <= 0:
+        return False, None
     if tool_type == "color":
         pixels = extract_region(frame, region)
         target = parameters.get("target_color", {"h": 0, "s": 0, "v": 0})
