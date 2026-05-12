@@ -1188,6 +1188,23 @@ body.dragging .drop-target {
   transition: none;
 }
 
+/* During drag, fade UI regions outside the bottom panel so the Artifact
+ * and Reel drop areas (and their stash sub-areas) read as the only valid
+ * targets. body.dragging is toggled by bindDragGate() in studio.js. */
+topnav-mount,
+#studioSubheader,
+#studioSidebar,
+#sheetMain {
+  transition: opacity var(--duration-fast) ease-out;
+}
+
+body.dragging topnav-mount,
+body.dragging #studioSubheader,
+body.dragging #studioSidebar,
+body.dragging #sheetMain {
+  opacity: 0.35;
+}
+
 .drop-target-empty {
   display: flex;
   align-items: center;
