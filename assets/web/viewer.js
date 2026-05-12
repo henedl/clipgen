@@ -238,6 +238,7 @@
   function cardScrubMove(mediaEl, ev) {
     if (!_cardScrub) return;
     if (!mediaEl || mediaEl !== _cardScrub.mediaEl) return;
+    if (!mediaEl.isConnected) { cardScrubLeave(); return; }
     var vid = _cardScrub.videoEl;
     if (!vid.duration || !isFinite(vid.duration)) return;
     if (vid.readyState < 1) return;
