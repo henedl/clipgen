@@ -1446,9 +1446,10 @@
     var cssH = canvas.offsetHeight;
     ctx.clearRect(0, 0, cssW, cssH);
 
-    var surfaceAlt = getCSSVar("--color-surface-alt", "#f1ece4");
-    var border = getCSSVar("--color-border", "#e0ddd7");
-    var textDim = getCSSVar("--color-text-dim", "#6b7280");
+    var isDark = (document.documentElement.getAttribute("data-theme") || "").toLowerCase() === "dark";
+    var surfaceAlt = getCSSVar("--color-surface-alt", isDark ? "#1f2937" : "#f1ece4");
+    var border = getCSSVar("--color-border", isDark ? "#374151" : "#e0ddd7");
+    var textDim = getCSSVar("--color-text-dim", isDark ? "#9ca3af" : "#6b7280");
 
     ctx.fillStyle = surfaceAlt;
     ctx.fillRect(0, 0, cssW, cssH);
