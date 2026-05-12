@@ -371,11 +371,13 @@ def _save_manifest_quiet() -> None:
     bubble up so they aren't lost silently — those are real bugs we want to
     see, not transient I/O issues.
     """
+    # Snapshot the shared lists before serializing so a concurrent intake or
+    # generate-worker extend can't surface as a partially-saved manifest.
+    artifacts = list(_generated_artifacts)
+    reels = list(_generated_reels)
+    if not artifacts and not reels:
+        return
     try:
-        artifacts = _generated_artifacts
-        reels = _generated_reels
-        if not artifacts and not reels:
-            return
         study = ""
         if artifacts:
             study = artifacts[0].get("study", "")
@@ -1106,8 +1108,10 @@ def api_manifest() -> FlaskResponse:
         reels = viewer.load_manifest_reels()
         return jsonify({"ok": True, "artifacts": artifacts, "reels": reels})
 
-    artifacts = _generated_artifacts
-    reels = _generated_reels
+    # Snapshot the shared lists so a worker thread extending mid-export
+    # can't produce a partial/aliased manifest snapshot.
+    artifacts = list(_generated_artifacts)
+    reels = list(_generated_reels)
     if not artifacts and not reels:
         return jsonify(
             {
