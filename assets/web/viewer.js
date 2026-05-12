@@ -30,6 +30,13 @@
   var _thumbObserver = null;
   var _thumbCache = {};
 
+  window.addEventListener("pagehide", function () {
+    Object.keys(_thumbCache).forEach(function (id) {
+      try { URL.revokeObjectURL(_thumbCache[id]); } catch (_) {}
+      delete _thumbCache[id];
+    });
+  });
+
   var _filmstripEnabled = false;
   var _filmstripObserver = null;
   var _filmstripThumbQueue = [];
