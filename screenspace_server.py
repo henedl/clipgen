@@ -47,6 +47,7 @@ import math
 import queue as queue_mod
 import threading
 import uuid
+from collections import OrderedDict
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, TypeGuard, cast
@@ -127,7 +128,11 @@ _worker: "screenspace.ScreenspaceWorker | None" = None
 _output_dir: str = ""
 _participants: list[dict[str, Any]] = []
 _video_metadata_cache: dict[str, dict[str, Any]] = {}
-_frame_cache: dict[tuple[str, float, int], bytes] = {}
+# Bounded LRU so long scrub sessions don't grow unbounded; entries are
+# JPEG bytes (tens of KB each), so a few hundred is plenty.
+_FRAME_CACHE_MAX = 256
+_frame_cache: "OrderedDict[tuple[str, float, int], bytes]" = OrderedDict()
+_frame_cache_lock = threading.Lock()
 
 # ---- SSE (Server-Sent Events) client registry ----
 
@@ -318,7 +323,11 @@ def api_video_frame(participant: str, timestamp: str) -> FlaskResponse:
 
     width = request.args.get("w", 0, type=int)
     cache_key = (video_path, round(ts, 3), width)
-    cached = _frame_cache.get(cache_key)
+    with _frame_cache_lock:
+        cached = _frame_cache.get(cache_key)
+        if cached is not None:
+            # Refresh LRU recency.
+            _frame_cache.move_to_end(cache_key)
     if cached is not None:
         return Response(
             cached,
@@ -342,7 +351,10 @@ def api_video_frame(participant: str, timestamp: str) -> FlaskResponse:
     if jpeg_bytes is None:
         return jsonify({"ok": False, "error": "Could not extract frame"}), 400
 
-    _frame_cache[cache_key] = jpeg_bytes
+    with _frame_cache_lock:
+        _frame_cache[cache_key] = jpeg_bytes
+        while len(_frame_cache) > _FRAME_CACHE_MAX:
+            _frame_cache.popitem(last=False)
     return Response(
         jpeg_bytes,
         mimetype="image/jpeg",
