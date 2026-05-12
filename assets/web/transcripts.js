@@ -3109,6 +3109,7 @@
       if (floating && floating.contains(e.target)) return;
       closePillOptions();
     });
+    window.addEventListener("pagehide", closePillOptions);
   }
 
   function initPillWheelScroll() {
