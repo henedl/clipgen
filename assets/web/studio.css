@@ -692,6 +692,13 @@ body.bottom-collapsed #panelDivider .divider-handle {
   background: var(--color-accent);
 }
 
+/* When the page boots with a persisted collapse state, no inline max-height is
+ * set on #bottomPanel — without this rule the panel reverts to its natural
+ * content height (toolbars + ghost text), which reads as "half collapsed". */
+body.bottom-collapsed:not(.bottom-animating) #bottomPanel {
+  max-height: 0;
+}
+
 body.bottom-animating #dropAreas,
 body.bottom-animating #reelArea,
 body.bottom-animating #stashedArtifactsArea {
