@@ -3264,6 +3264,7 @@
   var _confirmCleanup = null;
 
   function showConfirm(title, message, onYes, onNo) {
+    if (_confirmCleanup) _confirmCleanup();
     qs("#confirmTitle").textContent = title;
     qs("#confirmMessage").textContent = message;
     qs("#confirmOverlay").classList.remove("hidden");
