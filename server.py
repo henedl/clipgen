@@ -1543,7 +1543,7 @@ def _init_studio_state(worksheet: Any) -> None:
     _worksheet = worksheet
     _sheet_context = spreadsheet.build_sheet_context(worksheet)
     _generated_artifacts, _generated_reels = viewer._load_manifest_both()
-    _thumbnail_cache = {}
+    _thumbnail_cache = OrderedDict()
 
     if _sheet_context is None:
         utils.error_print("Could not load spreadsheet data for Studio.")
