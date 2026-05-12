@@ -5602,8 +5602,10 @@
 
       frag.appendChild(card);
     });
+    var prevScrollTop = container.scrollTop;
     container.innerHTML = "";
     container.appendChild(frag);
+    container.scrollTop = prevScrollTop;
     updateResultsCrumb();
   }
 
@@ -5910,6 +5912,7 @@
 
   function renderResults() {
     var container = qs("#resultsList");
+    var prevResultsScrollTop = container.scrollTop;
     var countEl = qs("#resultCount") || { textContent: "" };
     var actionsEl = qs("#resultsActions");
     var results = state.selectedTaskResults;
@@ -6199,6 +6202,7 @@
       frag.appendChild(row);
     });
     container.appendChild(frag);
+    container.scrollTop = prevResultsScrollTop;
   }
 
   // ---- Keyboard shortcuts ----
