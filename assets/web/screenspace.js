@@ -147,6 +147,13 @@
   }
   var _lastPollFingerprint = "";
   var _preloadedFrames = {};
+
+  window.addEventListener("pagehide", function () {
+    Object.keys(_preloadedFrames).forEach(function (pid) {
+      try { URL.revokeObjectURL(_preloadedFrames[pid]); } catch (_) {}
+      delete _preloadedFrames[pid];
+    });
+  });
   var _participantRequestVersion = 0;
   var _frameRequestVersion = 0;
   var _resultsRequestVersion = 0;
