@@ -2486,7 +2486,9 @@
       });
     });
 
+    var prevScrollTop = container.scrollTop;
     container.innerHTML = html;
+    container.scrollTop = prevScrollTop;
     container.classList.remove("hidden");
 
     // Attach click handlers
