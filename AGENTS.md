@@ -108,6 +108,7 @@ See [agents/skills/test/SKILL.md](agents/skills/test/SKILL.md) for the command, 
 - Never edit .gitignore automatically, always confirm changes to this file with the user.
 - When working through a plan file, e.g. FEATURE-PLAN.md, always make sure to check off items after they are completed.
 - **No backwards-compatibility layers.** Do not add migration shims, schema-version checks for hard-break detection, legacy-format readers, or "warn and ignore" branches for old persisted state (manifests, stashes, sessionStorage queues, settings files, etc.). The user base is small and the work is ephemeral; just change the shape and let users re-run. Tests covering persisted shapes get updated to the new shape, not gated behind a version flag.
+- **Don't install heavy software to verify UI changes.** No headless Chromium, Playwright, Puppeteer, or similar pulled in unilaterally — and don't add them to the project unprompted. For Studio / Screenspace / Transcripts / Viewer changes, ask the human to test in their browser and report back; if you need in-browser diagnostics, give them a small DevTools console snippet to paste. If you genuinely think a browser test framework is justified, propose it as a discussion item first. Cooperative debugging is preferred over agents going to extremes to solve things without intervention.
 
 ### Learned Workspace Facts
 
