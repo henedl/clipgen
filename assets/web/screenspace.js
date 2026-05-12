@@ -5693,6 +5693,13 @@
     }
   }
 
+  document.addEventListener("dragend", function () {
+    var stepsDiv = document.querySelector(".multitool-steps");
+    if (stepsDiv) clearMultitoolDragIndicators(stepsDiv);
+    var taskListEl = qs("#taskList");
+    if (taskListEl) clearDragIndicators(taskListEl);
+  });
+
   document.addEventListener("visibilitychange", function () {
     if (document.hidden) {
       stopSSE();
