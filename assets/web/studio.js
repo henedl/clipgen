@@ -994,6 +994,8 @@
   function renderGrid() {
     var d = state.sheetData;
     var grid = qs("#sheetGrid");
+    var prevScrollTop = grid.scrollTop;
+    var prevScrollLeft = grid.scrollLeft;
     grid.innerHTML = "";
 
     var showSeverity = hasSeverityData(d.rows);
@@ -1102,6 +1104,8 @@
     tbody.id = "gridTbody";
     table.appendChild(tbody);
     grid.appendChild(table);
+    grid.scrollTop = prevScrollTop;
+    grid.scrollLeft = prevScrollLeft;
 
     applyGridFilters();
 
