@@ -139,6 +139,12 @@
   var _overlayRaf = 0;
   var _playheadRaf = 0;
   var _cachedOverlayRect = null;
+  var _cachedTimelineRect = null;
+
+  function getTimelineRect(canvas) {
+    if (!_cachedTimelineRect) _cachedTimelineRect = canvas.getBoundingClientRect();
+    return _cachedTimelineRect;
+  }
   var _lastPollFingerprint = "";
   var _preloadedFrames = {};
   var _participantRequestVersion = 0;
@@ -2154,8 +2160,13 @@
     sizeTimelineCanvas();
     window.addEventListener("resize", function () {
       _cachedOverlayRect = null;
+      _cachedTimelineRect = null;
       sizeTimelineCanvas();
     });
+    window.addEventListener("scroll", function () {
+      _cachedOverlayRect = null;
+      _cachedTimelineRect = null;
+    }, true);
 
     canvas.addEventListener("click", function (e) {
       if (state.timelineDragging) return;
@@ -2318,6 +2329,7 @@
 
   function sizeTimelineCanvas() {
     var canvas = qs("#timelineCanvas");
+    _cachedTimelineRect = null;
     var rect = canvas.getBoundingClientRect();
     canvas.width = Math.floor(rect.width);
     canvas.height = TIMELINE_CANVAS_HEIGHT;
@@ -2331,7 +2343,7 @@
   function timelineXToTime(event) {
     if (!state.videoInfo) return null;
     var canvas = qs("#timelineCanvas");
-    var rect = canvas.getBoundingClientRect();
+    var rect = getTimelineRect(canvas);
     var frac = (event.clientX - rect.left) / rect.width;
     frac = clamp(frac, 0, 1);
     var dur = state.videoInfo.duration;
@@ -2567,7 +2579,7 @@
 
   function hitTestTimeline(clientX, clientY) {
     var canvas = qs("#timelineCanvas");
-    var rect = canvas.getBoundingClientRect();
+    var rect = getTimelineRect(canvas);
     var mx = clientX - rect.left;
     var my = clientY - rect.top;
     for (var i = _timelineHitRects.length - 1; i >= 0; i--) {
