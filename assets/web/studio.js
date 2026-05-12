@@ -4660,8 +4660,19 @@
     initTranscriptIntake();
     pollIntakeStatus();
     pollTrIntakeStatus();
-    state.intakeStatusTimer = setInterval(pollIntakeStatus, 5000);
-    state.trIntakeStatusTimer = setInterval(pollTrIntakeStatus, 5000);
+    if (!document.hidden) {
+      state.intakeStatusTimer = setInterval(pollIntakeStatus, 5000);
+      state.trIntakeStatusTimer = setInterval(pollTrIntakeStatus, 5000);
+    }
+    document.addEventListener("visibilitychange", function () {
+      if (document.hidden) {
+        if (state.intakeStatusTimer) { clearInterval(state.intakeStatusTimer); state.intakeStatusTimer = null; }
+        if (state.trIntakeStatusTimer) { clearInterval(state.trIntakeStatusTimer); state.trIntakeStatusTimer = null; }
+      } else {
+        if (!state.intakeStatusTimer) { pollIntakeStatus(); state.intakeStatusTimer = setInterval(pollIntakeStatus, 5000); }
+        if (!state.trIntakeStatusTimer) { pollTrIntakeStatus(); state.trIntakeStatusTimer = setInterval(pollTrIntakeStatus, 5000); }
+      }
+    });
     // Start intake event polls immediately so the sub-tab counter badges
     // populate on page load and update live regardless of which sub-tab the
     // user is currently viewing. Visibility-change handlers in
