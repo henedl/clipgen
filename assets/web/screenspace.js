@@ -6197,7 +6197,7 @@
   // ---- Keyboard shortcuts ----
 
   function initKeyboard() {
-    document.addEventListener("keydown", function (e) {
+    function onKeyDown(e) {
       // Don't capture when typing in inputs
       if (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA" || e.target.tagName === "SELECT") return;
 
@@ -6255,15 +6255,22 @@
         }
         hideRegionNameModal();
       }
-    });
+    }
 
-    document.addEventListener("keyup", function (e) {
+    function onKeyUp(e) {
       if (e.key === "b" || e.key === "B") {
         if (state.overlayBlinkActive) {
           state.overlayBlinkActive = false;
           renderOverlay();
         }
       }
+    }
+
+    document.addEventListener("keydown", onKeyDown);
+    document.addEventListener("keyup", onKeyUp);
+    window.addEventListener("pagehide", function () {
+      document.removeEventListener("keydown", onKeyDown);
+      document.removeEventListener("keyup", onKeyUp);
     });
 
     // Defensive: clear blink state on window blur so a held key doesn't get
