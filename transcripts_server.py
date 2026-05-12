@@ -1111,10 +1111,17 @@ def _run_agent(agent_key: str, participant: str, force: bool = False) -> None:
         return
     if not force and not _agent_enabled(agent):
         return
-    if _is_generating(participant, agent_key):
-        return
 
     cancel_event = threading.Event()
+    # Atomically check-and-claim the in-flight slot so two near-simultaneous
+    # chain triggers (e.g. user click + auto-chain from a completed
+    # dependency) can't both spawn a thread for the same participant.
+    with _manifest_lock:
+        if _is_generating(participant, agent_key):
+            return
+        _agent_in_flight[agent_key].add(participant)
+        _agent_cancel_events[agent_key][participant] = cancel_event
+
     # If a Stop just scheduled an unload for this model, cancel it — the
     # next request would only force a reload.
     model = _agent_model(agent_key)
@@ -1158,20 +1165,19 @@ def _run_agent(agent_key: str, participant: str, force: bool = False) -> None:
                 f"{agent_key} generation failed for {participant}: {exc}"
             )
         finally:
-            _agent_in_flight[agent_key].discard(participant)
-            _agent_cancel_events[agent_key].pop(participant, None)
-            _agent_threads[agent_key].discard(t)
+            with _manifest_lock:
+                _agent_in_flight[agent_key].discard(participant)
+                _agent_cancel_events[agent_key].pop(participant, None)
+                _agent_threads[agent_key].discard(t)
 
-    # Register the event before starting the thread so a fast Stop click can
-    # never miss it.
-    _agent_in_flight[agent_key].add(participant)
-    _agent_cancel_events[agent_key][participant] = cancel_event
+    # Slot claim happened above under _manifest_lock; just spawn the thread.
     t = threading.Thread(
         target=_run,
         daemon=True,
         name=f"{agent['thread_name_prefix']}-{participant}",
     )
-    _agent_threads[agent_key].add(t)
+    with _manifest_lock:
+        _agent_threads[agent_key].add(t)
     t.start()
 
 
