@@ -531,17 +531,26 @@ def save_json_manifest(
 ) -> Path | None:
     """Write *data* as JSON to *filename* in the output directory.
 
-    Creates parent dirs.  Returns the path on success, ``None`` on failure.
-    Logs a warning on write failure using *warn_label*.
+    Writes via a sibling .tmp file and ``os.replace()`` so a crash or ENOSPC
+    mid-write leaves the previous manifest intact rather than corrupted.
+    Creates parent dirs. Returns the path on success, ``None`` on failure.
+    Logs a warning on write/serialization failure using *warn_label*.
     """
+    import os as _os
+
     path = Path(get_effective_output_dir()) / filename
+    tmp = path.with_suffix(path.suffix + ".tmp")
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(
-            json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
-        )
+        payload = json.dumps(data, ensure_ascii=False, indent=2)
+        tmp.write_text(payload, encoding="utf-8")
+        _os.replace(tmp, path)
         return path
-    except OSError as exc:
+    except (OSError, TypeError, ValueError) as exc:
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
         if warn_label:
             warning_print(f"Could not write {warn_label}: {exc}")
         return None
@@ -1197,10 +1206,10 @@ def convert_clock_pairs_to_relative(
             f"Ignoring invalid baseline timestamp '{baseline}'{cell_info}.",
             [
                 "Baseline must use clock format like HH:MM:SS or MM:SS.",
-                "Timestamps in this column will be treated as relative.",
+                f"Dropping {len(pairs)} clock-style segment(s) in this column.",
             ],
         )
-        return pairs
+        return []
 
     result: list[tuple[str, str]] = []
     skipped: list[str] = []
@@ -1223,9 +1232,11 @@ def convert_clock_pairs_to_relative(
         )
 
     if skipped:
-        # Only show detailed skipped clock-based segment warnings at verbose verbosity.
-        if getattr(config, "VERBOSITY", config.STANDARD) >= config.VERBOSE:
-            cell_info = f" in cell {cell_ref}" if cell_ref else ""
+        cell_info = f" in cell {cell_ref}" if cell_ref else ""
+        # Standard verbosity: short summary so users notice silent drops.
+        # Verbose: full list and explanation.
+        verbosity = getattr(config, "VERBOSITY", config.STANDARD)
+        if verbosity >= config.VERBOSE:
             details = [f"    '{s}'" for s in skipped]
             details.append(
                 "  These segments were before the baseline, invalid, or zero/negative length."
@@ -1233,6 +1244,12 @@ def convert_clock_pairs_to_relative(
             warning_print(
                 f"Skipped {len(skipped)} clock-based timestamp segment(s){cell_info} when converting to relative:",
                 details,
+            )
+        else:
+            warning_print(
+                f"Skipped {len(skipped)} clock-based timestamp segment(s){cell_info} "
+                "(before baseline, invalid, or zero/negative length). "
+                "Re-run with verbose verbosity for the full list.",
             )
 
     return result
