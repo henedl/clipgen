@@ -2332,7 +2332,7 @@ body.panel-dragging #bottomPanel {
   border-radius: var(--radius-md);
   box-shadow: var(--shadow-lg);
   padding: var(--space-1);
-  z-index: 50;
+  z-index: var(--z-dropdown);
 }
 
 .rp-switcher-panel.hidden {
@@ -2821,7 +2821,7 @@ body.panel-dragging #bottomPanel {
   border-radius: var(--radius-md);
   box-shadow: var(--shadow-lg);
   padding: var(--space-1);
-  z-index: 50;
+  z-index: var(--z-dropdown);
   display: flex;
   flex-direction: column;
   gap: 2px;

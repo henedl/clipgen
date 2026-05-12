@@ -581,7 +581,11 @@ html[data-theme="light"] .cg-logo {
   top: 48px;
   left: 0;
   right: 0;
-  z-index: calc(var(--z-dropdown) - 1);
+  /* Matches .topnav so popovers anchored inside a subheader (e.g. the
+   * Transcripts search dropdown) escape the subheader's stacking context
+   * above sibling chrome like #trPillBar. Subheaders never physically
+   * overlap the topnav, so sharing z:100 is safe. */
+  z-index: var(--z-dropdown);
 }
 @supports not (backdrop-filter: blur(1px)) {
   .subheader,
