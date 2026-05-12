@@ -255,7 +255,9 @@
     clone.style.overflow = "hidden";
     document.body.appendChild(clone);
     ev.dataTransfer.setDragImage(clone, ev.clientX - rect.left, ev.clientY - rect.top);
-    setTimeout(function () { document.body.removeChild(clone); }, 0);
+    requestAnimationFrame(function () {
+      if (clone.parentNode) clone.parentNode.removeChild(clone);
+    });
   }
 
   // Transparent 1×1 image used to suppress the browser's default drag preview
