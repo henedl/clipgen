@@ -537,7 +537,7 @@ def find_participant_column(
 
 
 def _make_clip_record(
-    ctx: SheetContext, row_idx: int, col_idx: int, cell_value: str
+    ctx: SheetContext, row_idx: int, col_idx: int, cell_value: Any
 ) -> ClipRecord:
     """Build one clip record dict for a cell at (row_idx, col_idx).
 
@@ -549,8 +549,12 @@ def _make_clip_record(
     - category: Category label from the same row (category column).
     'times' is added later when timestamps are resolved to [start, end] ranges.
     """
+    # Excel cells may yield numbers, datetimes, or None; gspread always returns
+    # strings. Coerce here so downstream timestamp parsing (which calls .lower())
+    # never sees a non-string.
+    cell_value_str = "" if cell_value is None else str(cell_value)
     # gspread Cell uses 1-based coordinates; convert from 0-based list indices
-    cell = gspread.cell.Cell(row_idx + 1, col_idx + 1, cell_value)
+    cell = gspread.cell.Cell(row_idx + 1, col_idx + 1, cell_value_str)
     # observation_cell.col is 1-based; convert to 0-based for sheet_data
     desc_col = ctx.observation_cell.col - 1
     category_col = ctx.category_cell.col - 1
@@ -558,23 +562,25 @@ def _make_clip_record(
     participant_row = ctx.id_cell.row - 1
     desc = ""
     if 0 <= desc_col < len(ctx.sheet_data[row_idx]):
-        desc = ctx.sheet_data[row_idx][desc_col]
+        desc = str(ctx.sheet_data[row_idx][desc_col] or "")
     participant = ""
     if 0 <= participant_row < len(ctx.sheet_data) and col_idx < len(
         ctx.sheet_data[participant_row]
     ):
         participant = utils.normalize_participant_id(
-            ctx.sheet_data[participant_row][col_idx]
+            str(ctx.sheet_data[participant_row][col_idx] or "")
         )
     timestamp_baseline = ""
     if ctx.baseline_row_idx is not None:
         if 0 <= ctx.baseline_row_idx < len(ctx.sheet_data) and col_idx < len(
             ctx.sheet_data[ctx.baseline_row_idx]
         ):
-            timestamp_baseline = ctx.sheet_data[ctx.baseline_row_idx][col_idx].strip()
+            timestamp_baseline = str(
+                ctx.sheet_data[ctx.baseline_row_idx][col_idx] or ""
+            ).strip()
     category = ""
     if 0 <= category_col < len(ctx.sheet_data[row_idx]):
-        category = ctx.sheet_data[row_idx][category_col]
+        category = str(ctx.sheet_data[row_idx][category_col] or "")
     severity = ""
     if ctx.severity_cell is not None:
         severity_col = ctx.severity_cell.col - 1

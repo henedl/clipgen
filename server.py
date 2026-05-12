@@ -39,6 +39,7 @@ import re
 import sys
 import threading
 import webbrowser
+from collections import OrderedDict
 from contextlib import contextmanager
 from pathlib import Path
 from collections.abc import Iterator
@@ -69,10 +70,17 @@ _worksheet: Any = None
 _sheet_context: spreadsheet.SheetContext | None = None
 _generated_artifacts: list[dict[str, Any]] = []
 _generated_reels: list[dict[str, Any]] = []
-_thumbnail_cache: dict[tuple, bytes] = {}
+# Bounded LRU so long sessions don't grow unbounded; entries are JPEG bytes
+# (tens of KB each), so a few hundred is plenty.
+_THUMBNAIL_CACHE_MAX = 256
+_thumbnail_cache: "OrderedDict[tuple, bytes]" = OrderedDict()
+# A second concurrent /api/generate or /api/reel call would clobber the
+# shared cancel event; reject with 409 instead while one is in flight.
 _reel_cancel_event = threading.Event()
-# Single in-flight job assumed; a second /api/generate clears this.
 _generate_cancel_event = threading.Event()
+_busy_lock = threading.Lock()
+_generate_in_progress = False
+_reel_in_progress = False
 
 # Snapshot config defaults before any settings file is loaded.
 # Deep-copied so dict-valued defaults are not aliased to live config state.
@@ -107,6 +115,44 @@ def _coerce_mark_categories(value: Any) -> dict[str, dict[str, str]] | None:
             return None
         cleaned[key] = {"label": label, "color": color}
     return cleaned
+
+
+def _thumbnail_cache_put(key: tuple, value: bytes) -> None:
+    """Insert into the thumbnail cache with simple LRU eviction."""
+    _thumbnail_cache[key] = value
+    while len(_thumbnail_cache) > _THUMBNAIL_CACHE_MAX:
+        _thumbnail_cache.popitem(last=False)
+
+
+def _try_claim_busy(slot: str) -> bool:
+    """Atomically reserve the single-job slot for *slot* ('generate'|'reel').
+
+    Returns True on success (caller must call ``_release_busy`` when done) or
+    False if another request is already holding the slot.
+    """
+    global _generate_in_progress, _reel_in_progress  # noqa: PLW0603
+    with _busy_lock:
+        if slot == "generate":
+            if _generate_in_progress:
+                return False
+            _generate_in_progress = True
+            return True
+        if slot == "reel":
+            if _reel_in_progress:
+                return False
+            _reel_in_progress = True
+            return True
+    return False
+
+
+def _release_busy(slot: str) -> None:
+    """Release the single-job slot for *slot* ('generate'|'reel')."""
+    global _generate_in_progress, _reel_in_progress  # noqa: PLW0603
+    with _busy_lock:
+        if slot == "generate":
+            _generate_in_progress = False
+        elif slot == "reel":
+            _reel_in_progress = False
 
 
 @contextmanager
@@ -186,7 +232,7 @@ def api_thumbnail(participant: str, start_seconds: str) -> FlaskResponse:
     if jpeg_bytes is None:
         return jsonify({"ok": False, "error": "Thumbnail extraction failed"}), 404
 
-    _thumbnail_cache[cache_key] = jpeg_bytes
+    _thumbnail_cache_put(cache_key, jpeg_bytes)
     return Response(
         jpeg_bytes,
         mimetype="image/jpeg",
@@ -318,7 +364,13 @@ def api_sheet_refresh() -> FlaskResponse:
 
 
 def _save_manifest_quiet() -> None:
-    """Save manifest after generate/reel; swallow errors so the caller still succeeds."""
+    """Save manifest after generate/reel.
+
+    Narrow exception handling: filesystem and serialization errors are logged
+    (the manifest writer already handles atomicity), but other exceptions
+    bubble up so they aren't lost silently — those are real bugs we want to
+    see, not transient I/O issues.
+    """
     try:
         artifacts = _generated_artifacts
         reels = _generated_reels
@@ -337,7 +389,7 @@ def _save_manifest_quiet() -> None:
             is_excel=pipeline.is_excel_worksheet(_worksheet) if _worksheet else False,
             mode="studio",
         )
-    except Exception as e:
+    except (OSError, TypeError, ValueError) as e:
         utils.warning_print(f"Failed to save manifest: {e}")
 
 
@@ -557,10 +609,16 @@ def api_generate() -> FlaskResponse:
     if output_format not in ("clip", "screen", "gif"):
         return jsonify({"ok": False, "error": f"Invalid format: {output_format}"}), 400
 
+    if not _try_claim_busy("generate"):
+        return jsonify(
+            {"ok": False, "error": "A clip generation is already in progress"}
+        ), 409
+
     try:
         cell_input = ", ".join(cell_strings)
         cell_specs = spreadsheet.parse_cell_specifications(cell_input)
         if not cell_specs:
+            _release_busy("generate")
             return jsonify(
                 {"ok": False, "error": "Could not parse cell specifications"}
             ), 400
@@ -573,6 +631,7 @@ def api_generate() -> FlaskResponse:
             skip_prompts=True,
         )
     except Exception as e:
+        _release_busy("generate")
         return jsonify({"ok": False, "error": str(e)}), 500
 
     def stream() -> Any:
@@ -701,8 +760,16 @@ def api_generate() -> FlaskResponse:
                 yield json.dumps({"cancelled": True}) + "\n"
             _save_manifest_quiet()
 
+    def stream_with_busy_release() -> Any:
+        try:
+            yield from stream()
+        finally:
+            _release_busy("generate")
+
     return Response(
-        stream(), mimetype="application/x-ndjson", headers={"X-Accel-Buffering": "no"}
+        stream_with_busy_release(),
+        mimetype="application/x-ndjson",
+        headers={"X-Accel-Buffering": "no"},
     )
 
 
@@ -784,6 +851,11 @@ def api_reel() -> FlaskResponse:
         except (ValueError, TypeError):
             pass
 
+    if not _try_claim_busy("reel"):
+        return jsonify(
+            {"ok": False, "error": "A reel build is already in progress"}
+        ), 409
+
     with _override_config(**overrides):
         try:
             reel_input = ", ".join(cell_strings)
@@ -847,6 +919,8 @@ def api_reel() -> FlaskResponse:
 
         except Exception as e:
             return jsonify({"ok": False, "error": str(e)}), 500
+        finally:
+            _release_busy("reel")
 
 
 @studio_bp.route("/api/viewer", methods=["POST"])
@@ -1347,6 +1421,11 @@ def api_reel_direct() -> FlaskResponse:
     clip_paths: list[str] = []
     temp_clips: list[str] = []
 
+    if not _try_claim_busy("reel"):
+        return jsonify(
+            {"ok": False, "error": "A reel build is already in progress"}
+        ), 409
+
     _reel_cancel_event.clear()
 
     with _override_config(**overrides):
@@ -1373,8 +1452,11 @@ def api_reel_direct() -> FlaskResponse:
                 fd, tmp_path = tempfile.mkstemp(
                     suffix=config.FILEFORMAT, dir=str(output_dir)
                 )
-                os.close(fd)
+                # Track for cleanup BEFORE os.close(fd) or any other call
+                # that could raise; otherwise the tmp file is on disk but
+                # not in temp_clips, so the finally block won't unlink it.
                 temp_clips.append(tmp_path)
+                os.close(fd)
 
                 ok = video.run_ffmpeg(
                     video_path,
@@ -1428,6 +1510,7 @@ def api_reel_direct() -> FlaskResponse:
                     Path(tmp).unlink(missing_ok=True)
                 except OSError:
                     pass
+            _release_busy("reel")
 
 
 @studio_bp.route("/api/reel/cancel", methods=["POST"])
@@ -1460,7 +1543,7 @@ def _init_studio_state(worksheet: Any) -> None:
     _worksheet = worksheet
     _sheet_context = spreadsheet.build_sheet_context(worksheet)
     _generated_artifacts, _generated_reels = viewer._load_manifest_both()
-    _thumbnail_cache = {}
+    _thumbnail_cache = OrderedDict()
 
     if _sheet_context is None:
         utils.error_print("Could not load spreadsheet data for Studio.")

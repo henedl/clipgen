@@ -295,6 +295,10 @@ def _run_clip_pipeline(
     When *parallel* is True and there are at least 2 clips, a ThreadPoolExecutor
     is used to run ``per_clip_fn`` concurrently (same worker count as
     ``_resolve_clip_workers()``).  Results are collected in original order.
+
+    On cancellation, any per-clip slots that did not complete are dropped from
+    the returned list — callers receive only successful results and can iterate
+    them without defensive ``None`` checks.
     """
     if not clips_list:
         utils.warning_print(empty_warning)
@@ -407,6 +411,10 @@ def _run_clip_pipeline(
 
     if missing_videos:
         utils.standard_print(f"* Missing source video files: {len(missing_videos)}")
+    # Drop slots from cancelled futures in the parallel path so callers get a
+    # list of completed results only (the sequential path naturally produces
+    # the same shape via early-break + append).
+    results = [r for r in results if r is not None]
     return (results, missing_videos)
 
 
@@ -973,10 +981,7 @@ def process_reel(
 
     # If cancelled, clean up any partial clip files and bail out
     if cancel_flag and cancel_flag():
-        for item in all_results:
-            if item is None:
-                continue
-            segment_paths, _ = item
+        for segment_paths, _ in all_results:
             for entry in segment_paths:
                 try:
                     Path(entry[0]).unlink(missing_ok=True)
