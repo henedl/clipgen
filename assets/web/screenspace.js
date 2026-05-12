@@ -3118,6 +3118,7 @@
   function clearMultitoolDragIndicators(container) {
     var cards = container.querySelectorAll(".multitool-step.drag-over");
     for (var i = 0; i < cards.length; i++) cards[i].classList.remove("drag-over");
+    container.classList.remove("drag-over-append");
   }
 
   function taskToMultitoolStep(task) {
@@ -3282,6 +3283,8 @@
         var insertIdx = getMultitoolDropIndex(stepsDiv, e.clientY);
         if (insertIdx < cards.length) {
           cards[insertIdx].classList.add("drag-over");
+        } else {
+          stepsDiv.classList.add("drag-over-append");
         }
       }
     });
@@ -5107,12 +5110,17 @@
       clearDragIndicators(taskListEl);
       if (insertIdx < cards.length) {
         cards[insertIdx].classList.add("drag-over");
+      } else {
+        taskListEl.classList.add("drag-over-append");
       }
     });
 
     taskListEl.addEventListener("dragleave", function (e) {
       var card = e.target.closest(".task-card");
       if (card) card.classList.remove("drag-over");
+      if (!taskListEl.contains(e.relatedTarget)) {
+        taskListEl.classList.remove("drag-over-append");
+      }
     });
 
     taskListEl.addEventListener("drop", function (e) {
@@ -5212,6 +5220,7 @@
   function clearDragIndicators(container) {
     var cards = container.querySelectorAll(".task-card.drag-over");
     for (var i = 0; i < cards.length; i++) cards[i].classList.remove("drag-over");
+    container.classList.remove("drag-over-append");
   }
 
   function setInputValue(selector, value) {

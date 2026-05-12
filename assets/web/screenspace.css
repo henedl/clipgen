@@ -2420,6 +2420,10 @@ body.panel-dragging #bottomPanel {
   overflow-y: auto;
 }
 
+#taskList.drag-over-append .task-card:last-of-type {
+  border-bottom: 2px solid var(--color-accent);
+}
+
 .task-card {
   display: flex;
   align-items: center;
