@@ -3103,7 +3103,7 @@
     }
 
     var duration = parseInt(qs("#highlightsDuration").value, 10);
-    if (!duration || duration < 1) duration = 180;
+    if (!Number.isFinite(duration) || duration < 1) duration = 180;
 
     drawer.classList.remove("open");
     btn.style.minWidth = "";
