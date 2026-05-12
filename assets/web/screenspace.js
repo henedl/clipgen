@@ -1070,13 +1070,13 @@
 
     qs("#framePrev").addEventListener("click", function () {
       if (!state.videoInfo) return;
-      var ts = clamp(state.currentTimestamp - FRAME_STEP, 0, state.videoInfo.duration);
+      var ts = clamp(state.currentTimestamp - FRAME_STEP, 0, Math.max(0, state.videoInfo.duration - 0.001));
       loadFrame(ts);
     });
 
     qs("#frameNext").addEventListener("click", function () {
       if (!state.videoInfo) return;
-      var ts = clamp(state.currentTimestamp + FRAME_STEP, 0, state.videoInfo.duration);
+      var ts = clamp(state.currentTimestamp + FRAME_STEP, 0, Math.max(0, state.videoInfo.duration - 0.001));
       loadFrame(ts);
     });
   }
@@ -6214,10 +6214,10 @@
 
       if (e.key === "ArrowLeft") {
         e.preventDefault();
-        if (state.videoInfo) loadFrame(clamp(state.currentTimestamp - FRAME_STEP, 0, state.videoInfo.duration));
+        if (state.videoInfo) loadFrame(clamp(state.currentTimestamp - FRAME_STEP, 0, Math.max(0, state.videoInfo.duration - 0.001)));
       } else if (e.key === "ArrowRight") {
         e.preventDefault();
-        if (state.videoInfo) loadFrame(clamp(state.currentTimestamp + FRAME_STEP, 0, state.videoInfo.duration));
+        if (state.videoInfo) loadFrame(clamp(state.currentTimestamp + FRAME_STEP, 0, Math.max(0, state.videoInfo.duration - 0.001)));
       } else if (e.key === " ") {
         e.preventDefault();
         if (state.videoPlaying) {
