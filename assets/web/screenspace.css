@@ -981,6 +981,7 @@ body {
 
 #amplitudeGraphBtn.active {
   color: var(--color-accent);
+  background: var(--color-accent-highlight);
 }
 
 .marker-info {
@@ -2418,6 +2419,10 @@ body.panel-dragging #bottomPanel {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
+}
+
+#taskList.drag-over-append .task-card:last-of-type {
+  border-bottom: 2px solid var(--color-accent);
 }
 
 .task-card {

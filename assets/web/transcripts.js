@@ -514,6 +514,9 @@
 
   function selectParticipant(pid) {
     _participantReqVer++;
+    _stopSummaryPoll();
+    _stopCitationsPoll();
+    hideMarkPopover();
     state.selectedParticipant = pid;
     setStoredUIStateField("transcripts", "selectedParticipant", pid);
     renderPills();
@@ -1443,9 +1446,10 @@
     var cssH = canvas.offsetHeight;
     ctx.clearRect(0, 0, cssW, cssH);
 
-    var surfaceAlt = getCSSVar("--color-surface-alt", "#f1ece4");
-    var border = getCSSVar("--color-border", "#e0ddd7");
-    var textDim = getCSSVar("--color-text-dim", "#6b7280");
+    var isDark = (document.documentElement.getAttribute("data-theme") || "").toLowerCase() === "dark";
+    var surfaceAlt = getCSSVar("--color-surface-alt", isDark ? "#1f2937" : "#f1ece4");
+    var border = getCSSVar("--color-border", isDark ? "#374151" : "#e0ddd7");
+    var textDim = getCSSVar("--color-text-dim", isDark ? "#9ca3af" : "#6b7280");
 
     ctx.fillStyle = surfaceAlt;
     ctx.fillRect(0, 0, cssW, cssH);
@@ -1720,6 +1724,9 @@
         renderTimeline();
       });
       _timelineResizeObs.observe(qs("#timelineCanvasWrapper"));
+      window.addEventListener("pagehide", function () {
+        if (_timelineResizeObs) { _timelineResizeObs.disconnect(); _timelineResizeObs = null; }
+      });
     } else {
       window.addEventListener("resize", function () {
         sizeTimelineCanvas();
@@ -2296,6 +2303,7 @@
     // tick) cancels the pending attach instead of leaving a permanently
     // attached listener after the deferred .addEventListener fires.
     if (_popoverAttachTimer) clearTimeout(_popoverAttachTimer);
+    document.removeEventListener("click", _popoverOutsideClick);
     _popoverAttachTimer = setTimeout(function () {
       _popoverAttachTimer = null;
       document.addEventListener("click", _popoverOutsideClick);
@@ -2481,7 +2489,9 @@
       });
     });
 
+    var prevScrollTop = container.scrollTop;
     container.innerHTML = html;
+    container.scrollTop = prevScrollTop;
     container.classList.remove("hidden");
 
     // Attach click handlers
@@ -3105,6 +3115,7 @@
       if (floating && floating.contains(e.target)) return;
       closePillOptions();
     });
+    window.addEventListener("pagehide", closePillOptions);
   }
 
   function initPillWheelScroll() {

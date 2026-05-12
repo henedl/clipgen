@@ -139,8 +139,21 @@
   var _overlayRaf = 0;
   var _playheadRaf = 0;
   var _cachedOverlayRect = null;
+  var _cachedTimelineRect = null;
+
+  function getTimelineRect(canvas) {
+    if (!_cachedTimelineRect) _cachedTimelineRect = canvas.getBoundingClientRect();
+    return _cachedTimelineRect;
+  }
   var _lastPollFingerprint = "";
   var _preloadedFrames = {};
+
+  window.addEventListener("pagehide", function () {
+    Object.keys(_preloadedFrames).forEach(function (pid) {
+      try { URL.revokeObjectURL(_preloadedFrames[pid]); } catch (_) {}
+      delete _preloadedFrames[pid];
+    });
+  });
   var _participantRequestVersion = 0;
   var _frameRequestVersion = 0;
   var _resultsRequestVersion = 0;
@@ -1057,13 +1070,13 @@
 
     qs("#framePrev").addEventListener("click", function () {
       if (!state.videoInfo) return;
-      var ts = clamp(state.currentTimestamp - FRAME_STEP, 0, state.videoInfo.duration);
+      var ts = clamp(state.currentTimestamp - FRAME_STEP, 0, Math.max(0, state.videoInfo.duration - 0.001));
       loadFrame(ts);
     });
 
     qs("#frameNext").addEventListener("click", function () {
       if (!state.videoInfo) return;
-      var ts = clamp(state.currentTimestamp + FRAME_STEP, 0, state.videoInfo.duration);
+      var ts = clamp(state.currentTimestamp + FRAME_STEP, 0, Math.max(0, state.videoInfo.duration - 0.001));
       loadFrame(ts);
     });
   }
@@ -1668,8 +1681,11 @@
     chipsEl.addEventListener("scroll", updateRegionChipsOverflow);
   }
 
+  var _regionNameModalPrevFocus = null;
+
   function showRegionNameModal() {
     var r = state.pendingRegion;
+    _regionNameModalPrevFocus = document.activeElement;
     qs("#regionNameInput").value = "";
     qs("#regionDescInput").value = "";
     qs("#regionCoords").textContent = r ? (r.x + ", " + r.y + " \u2014 " + r.w + "\u00d7" + r.h + " px") : "";
@@ -1679,6 +1695,10 @@
 
   function hideRegionNameModal() {
     qs("#regionNameModal").classList.add("hidden");
+    if (_regionNameModalPrevFocus && typeof _regionNameModalPrevFocus.focus === "function") {
+      try { _regionNameModalPrevFocus.focus(); } catch (_) {}
+    }
+    _regionNameModalPrevFocus = null;
   }
 
   function updateRegionButtons() {
@@ -2154,8 +2174,13 @@
     sizeTimelineCanvas();
     window.addEventListener("resize", function () {
       _cachedOverlayRect = null;
+      _cachedTimelineRect = null;
       sizeTimelineCanvas();
     });
+    window.addEventListener("scroll", function () {
+      _cachedOverlayRect = null;
+      _cachedTimelineRect = null;
+    }, true);
 
     canvas.addEventListener("click", function (e) {
       if (state.timelineDragging) return;
@@ -2318,6 +2343,7 @@
 
   function sizeTimelineCanvas() {
     var canvas = qs("#timelineCanvas");
+    _cachedTimelineRect = null;
     var rect = canvas.getBoundingClientRect();
     canvas.width = Math.floor(rect.width);
     canvas.height = TIMELINE_CANVAS_HEIGHT;
@@ -2331,7 +2357,7 @@
   function timelineXToTime(event) {
     if (!state.videoInfo) return null;
     var canvas = qs("#timelineCanvas");
-    var rect = canvas.getBoundingClientRect();
+    var rect = getTimelineRect(canvas);
     var frac = (event.clientX - rect.left) / rect.width;
     frac = clamp(frac, 0, 1);
     var dur = state.videoInfo.duration;
@@ -2567,7 +2593,7 @@
 
   function hitTestTimeline(clientX, clientY) {
     var canvas = qs("#timelineCanvas");
-    var rect = canvas.getBoundingClientRect();
+    var rect = getTimelineRect(canvas);
     var mx = clientX - rect.left;
     var my = clientY - rect.top;
     for (var i = _timelineHitRects.length - 1; i >= 0; i--) {
@@ -3118,6 +3144,7 @@
   function clearMultitoolDragIndicators(container) {
     var cards = container.querySelectorAll(".multitool-step.drag-over");
     for (var i = 0; i < cards.length; i++) cards[i].classList.remove("drag-over");
+    container.classList.remove("drag-over-append");
   }
 
   function taskToMultitoolStep(task) {
@@ -3282,6 +3309,8 @@
         var insertIdx = getMultitoolDropIndex(stepsDiv, e.clientY);
         if (insertIdx < cards.length) {
           cards[insertIdx].classList.add("drag-over");
+        } else {
+          stepsDiv.classList.add("drag-over-append");
         }
       }
     });
@@ -5107,12 +5136,17 @@
       clearDragIndicators(taskListEl);
       if (insertIdx < cards.length) {
         cards[insertIdx].classList.add("drag-over");
+      } else {
+        taskListEl.classList.add("drag-over-append");
       }
     });
 
     taskListEl.addEventListener("dragleave", function (e) {
       var card = e.target.closest(".task-card");
       if (card) card.classList.remove("drag-over");
+      if (!taskListEl.contains(e.relatedTarget)) {
+        taskListEl.classList.remove("drag-over-append");
+      }
     });
 
     taskListEl.addEventListener("drop", function (e) {
@@ -5212,6 +5246,7 @@
   function clearDragIndicators(container) {
     var cards = container.querySelectorAll(".task-card.drag-over");
     for (var i = 0; i < cards.length; i++) cards[i].classList.remove("drag-over");
+    container.classList.remove("drag-over-append");
   }
 
   function setInputValue(selector, value) {
@@ -5574,8 +5609,10 @@
 
       frag.appendChild(card);
     });
+    var prevScrollTop = container.scrollTop;
     container.innerHTML = "";
     container.appendChild(frag);
+    container.scrollTop = prevScrollTop;
     updateResultsCrumb();
   }
 
@@ -5671,6 +5708,13 @@
       state.eventSource = null;
     }
   }
+
+  document.addEventListener("dragend", function () {
+    var stepsDiv = document.querySelector(".multitool-steps");
+    if (stepsDiv) clearMultitoolDragIndicators(stepsDiv);
+    var taskListEl = qs("#taskList");
+    if (taskListEl) clearDragIndicators(taskListEl);
+  });
 
   document.addEventListener("visibilitychange", function () {
     if (document.hidden) {
@@ -5875,6 +5919,7 @@
 
   function renderResults() {
     var container = qs("#resultsList");
+    var prevResultsScrollTop = container.scrollTop;
     var countEl = qs("#resultCount") || { textContent: "" };
     var actionsEl = qs("#resultsActions");
     var results = state.selectedTaskResults;
@@ -6164,21 +6209,22 @@
       frag.appendChild(row);
     });
     container.appendChild(frag);
+    container.scrollTop = prevResultsScrollTop;
   }
 
   // ---- Keyboard shortcuts ----
 
   function initKeyboard() {
-    document.addEventListener("keydown", function (e) {
+    function onKeyDown(e) {
       // Don't capture when typing in inputs
       if (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA" || e.target.tagName === "SELECT") return;
 
       if (e.key === "ArrowLeft") {
         e.preventDefault();
-        if (state.videoInfo) loadFrame(clamp(state.currentTimestamp - FRAME_STEP, 0, state.videoInfo.duration));
+        if (state.videoInfo) loadFrame(clamp(state.currentTimestamp - FRAME_STEP, 0, Math.max(0, state.videoInfo.duration - 0.001)));
       } else if (e.key === "ArrowRight") {
         e.preventDefault();
-        if (state.videoInfo) loadFrame(clamp(state.currentTimestamp + FRAME_STEP, 0, state.videoInfo.duration));
+        if (state.videoInfo) loadFrame(clamp(state.currentTimestamp + FRAME_STEP, 0, Math.max(0, state.videoInfo.duration - 0.001)));
       } else if (e.key === " ") {
         e.preventDefault();
         if (state.videoPlaying) {
@@ -6227,15 +6273,22 @@
         }
         hideRegionNameModal();
       }
-    });
+    }
 
-    document.addEventListener("keyup", function (e) {
+    function onKeyUp(e) {
       if (e.key === "b" || e.key === "B") {
         if (state.overlayBlinkActive) {
           state.overlayBlinkActive = false;
           renderOverlay();
         }
       }
+    }
+
+    document.addEventListener("keydown", onKeyDown);
+    document.addEventListener("keyup", onKeyUp);
+    window.addEventListener("pagehide", function () {
+      document.removeEventListener("keydown", onKeyDown);
+      document.removeEventListener("keyup", onKeyUp);
     });
 
     // Defensive: clear blink state on window blur so a held key doesn't get

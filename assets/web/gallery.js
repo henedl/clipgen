@@ -155,9 +155,9 @@
   }
 
   function navigateLightbox(delta) {
-    var next = state.lightboxIndex + delta;
-    if (next < 0) next = state.artifacts.length - 1;
-    if (next >= state.artifacts.length) next = 0;
+    var len = state.artifacts.length;
+    if (!len) return;
+    var next = ((state.lightboxIndex + delta) % len + len) % len;
     openLightbox(next);
   }
 })();

@@ -30,6 +30,13 @@
   var _thumbObserver = null;
   var _thumbCache = {};
 
+  window.addEventListener("pagehide", function () {
+    Object.keys(_thumbCache).forEach(function (id) {
+      try { URL.revokeObjectURL(_thumbCache[id]); } catch (_) {}
+      delete _thumbCache[id];
+    });
+  });
+
   var _filmstripEnabled = false;
   var _filmstripObserver = null;
   var _filmstripThumbQueue = [];
@@ -231,6 +238,7 @@
   function cardScrubMove(mediaEl, ev) {
     if (!_cardScrub) return;
     if (!mediaEl || mediaEl !== _cardScrub.mediaEl) return;
+    if (!mediaEl.isConnected) { cardScrubLeave(); return; }
     var vid = _cardScrub.videoEl;
     if (!vid.duration || !isFinite(vid.duration)) return;
     if (vid.readyState < 1) return;
@@ -1572,12 +1580,12 @@
 
     var timeBadge = el("span", "video-time-badge", "--:--");
 
-    var proportion = seekProportion != null ? seekProportion : 0;
+    var proportion = seekProportion != null ? Math.max(0, Math.min(1, seekProportion)) : 0;
 
     vid.onloadedmetadata = function () {
       var dur = vid.duration;
       if (!dur || !isFinite(dur)) return;
-      var seekTime = dur * Math.max(0, Math.min(1, proportion));
+      var seekTime = dur * proportion;
       vid.currentTime = seekTime;
       timeBadge.textContent = formatTime(seekTime) + " / " + formatTime(dur);
     };

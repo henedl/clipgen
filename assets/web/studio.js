@@ -255,7 +255,9 @@
     clone.style.overflow = "hidden";
     document.body.appendChild(clone);
     ev.dataTransfer.setDragImage(clone, ev.clientX - rect.left, ev.clientY - rect.top);
-    setTimeout(function () { document.body.removeChild(clone); }, 0);
+    requestAnimationFrame(function () {
+      if (clone.parentNode) clone.parentNode.removeChild(clone);
+    });
   }
 
   // Transparent 1×1 image used to suppress the browser's default drag preview
@@ -992,6 +994,8 @@
   function renderGrid() {
     var d = state.sheetData;
     var grid = qs("#sheetGrid");
+    var prevScrollTop = grid.scrollTop;
+    var prevScrollLeft = grid.scrollLeft;
     grid.innerHTML = "";
 
     var showSeverity = hasSeverityData(d.rows);
@@ -1100,6 +1104,8 @@
     tbody.id = "gridTbody";
     table.appendChild(tbody);
     grid.appendChild(table);
+    grid.scrollTop = prevScrollTop;
+    grid.scrollLeft = prevScrollLeft;
 
     applyGridFilters();
 
@@ -3097,7 +3103,7 @@
     }
 
     var duration = parseInt(qs("#highlightsDuration").value, 10);
-    if (!duration || duration < 1) duration = 180;
+    if (!Number.isFinite(duration) || duration < 1) duration = 180;
 
     drawer.classList.remove("open");
     btn.style.minWidth = "";
@@ -3264,6 +3270,7 @@
   var _confirmCleanup = null;
 
   function showConfirm(title, message, onYes, onNo) {
+    if (_confirmCleanup) _confirmCleanup();
     qs("#confirmTitle").textContent = title;
     qs("#confirmMessage").textContent = message;
     qs("#confirmOverlay").classList.remove("hidden");
@@ -4659,8 +4666,19 @@
     initTranscriptIntake();
     pollIntakeStatus();
     pollTrIntakeStatus();
-    state.intakeStatusTimer = setInterval(pollIntakeStatus, 5000);
-    state.trIntakeStatusTimer = setInterval(pollTrIntakeStatus, 5000);
+    if (!document.hidden) {
+      state.intakeStatusTimer = setInterval(pollIntakeStatus, 5000);
+      state.trIntakeStatusTimer = setInterval(pollTrIntakeStatus, 5000);
+    }
+    document.addEventListener("visibilitychange", function () {
+      if (document.hidden) {
+        if (state.intakeStatusTimer) { clearInterval(state.intakeStatusTimer); state.intakeStatusTimer = null; }
+        if (state.trIntakeStatusTimer) { clearInterval(state.trIntakeStatusTimer); state.trIntakeStatusTimer = null; }
+      } else {
+        if (!state.intakeStatusTimer) { pollIntakeStatus(); state.intakeStatusTimer = setInterval(pollIntakeStatus, 5000); }
+        if (!state.trIntakeStatusTimer) { pollTrIntakeStatus(); state.trIntakeStatusTimer = setInterval(pollTrIntakeStatus, 5000); }
+      }
+    });
     // Start intake event polls immediately so the sub-tab counter badges
     // populate on page load and update live regardless of which sub-tab the
     // user is currently viewing. Visibility-change handlers in
