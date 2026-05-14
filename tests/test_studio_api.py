@@ -22,34 +22,59 @@ def client(monkeypatch):
 
 
 @pytest.mark.parametrize(
-    "method,path,payload,expected_err",
+    "method,path,payload",
     [
-        ("get", "/studio/api/sheet", None, "No sheet loaded"),
-        ("post", "/studio/api/sheet/refresh", None, "No worksheet"),
-        ("get", "/studio/api/sheet/baseline", None, "No sheet loaded"),
-        ("post", "/studio/api/generate", {"cells": ["P01.3"]}, None),
-        ("get", "/studio/api/thumbnail/P01/0", None, "No sheet loaded"),
-        ("post", "/studio/api/gallery", {"participant": "P01"}, "No sheet loaded"),
-        ("post", "/studio/api/timeline-viewer", {}, "No worksheet"),
+        ("post", "/studio/api/sheet/refresh", None),
+        ("post", "/studio/api/generate", {"cells": ["P01.3"]}),
+        ("post", "/studio/api/gallery", {"participant": "P01"}),
+        ("post", "/studio/api/timeline-viewer", {}),
+        ("post", "/studio/api/highlights-preview", {}),
+        ("post", "/studio/api/reel", {"cells": ["P01.3"]}),
     ],
     ids=[
-        "sheet",
         "sheet_refresh",
-        "sheet_baseline",
         "generate",
-        "thumbnail",
         "gallery",
         "timeline_viewer",
+        "highlights_preview",
+        "reel",
     ],
 )
-def test_api_returns_500_when_no_context(client, method, path, payload, expected_err):
+def test_mutating_routes_return_400_when_no_sheet(client, method, path, payload):
+    """Mutating routes report a precondition failure when no sheet is loaded."""
     fn = getattr(client, method)
     resp = fn(path, json=payload) if payload is not None else fn(path)
-    assert resp.status_code == 500
+    assert resp.status_code == 400
     data = resp.get_json()
     assert data["ok"] is False
-    if expected_err:
-        assert expected_err in data["error"]
+    assert "No spreadsheet loaded" in data["error"]
+
+
+def test_api_sheet_returns_empty_placeholder_when_no_sheet(client):
+    """/api/sheet returns ok with sheet_loaded=False when no spreadsheet is loaded."""
+    resp = client.get("/studio/api/sheet")
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["ok"] is True
+    assert data["sheet_loaded"] is False
+    assert data["rows"] == []
+    assert data["participants"] == []
+
+
+def test_api_sheet_baseline_returns_empty_when_no_sheet(client):
+    resp = client.get("/studio/api/sheet/baseline")
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["ok"] is True
+    assert data["sheet_loaded"] is False
+    assert data["baselines"] == {}
+
+
+def test_api_thumbnail_returns_404_when_no_sheet(client):
+    resp = client.get("/studio/api/thumbnail/P01/0")
+    assert resp.status_code == 404
+    data = resp.get_json()
+    assert data["ok"] is False
 
 
 @pytest.mark.parametrize(

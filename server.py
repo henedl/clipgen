@@ -84,6 +84,12 @@ _reel_in_progress = False
 # Serializes load → mutate → save for the stash manifests so concurrent
 # stash CRUD requests don't drop each other's writes.
 _stash_lock = threading.Lock()
+# Cached gspread client for the Start overlay's Google Sheets picker.
+# Populated lazily by /api/spreadsheets/google/auth.
+_gspread_client: Any = None
+_gspread_auth_in_flight: bool = False
+_gspread_auth_lock = threading.Lock()
+_gspread_auth_error: str = ""
 
 # Snapshot config defaults before any settings file is loaded.
 # Deep-copied so dict-valued defaults are not aliased to live config state.
@@ -210,7 +216,7 @@ def _resolve_source_video(participant: str) -> Path | None:
 @studio_bp.route("/api/thumbnail/<participant>/<start_seconds>")
 def api_thumbnail(participant: str, start_seconds: str) -> FlaskResponse:
     if _sheet_context is None:
-        return jsonify({"ok": False, "error": "No sheet loaded"}), 500
+        return jsonify({"ok": False, "error": "No spreadsheet loaded"}), 404
 
     try:
         start_sec = max(0, int(start_seconds))
@@ -246,7 +252,22 @@ def api_thumbnail(participant: str, start_seconds: str) -> FlaskResponse:
 @studio_bp.route("/api/sheet")
 def api_sheet() -> FlaskResponse:
     if _sheet_context is None:
-        return jsonify({"ok": False, "error": "No sheet loaded"}), 500
+        return jsonify(
+            {
+                "ok": True,
+                "sheet_loaded": False,
+                "study": "",
+                "version": utils.get_version(),
+                "highlightsDuration": config.HIGHLIGHTS_REEL_DURATION_SECONDS,
+                "titlecardsEnabled": config.TITLECARDS_ENABLED,
+                "titlecardDuration": config.TITLECARD_DURATION_SECONDS,
+                "cellExpandHover": config.STUDIO_CELL_EXPAND_HOVER,
+                "defaultDuration": config.DEFAULT_DURATION_SECONDS,
+                "config": utils.get_frontend_config(),
+                "participants": [],
+                "rows": [],
+            }
+        )
 
     ctx = _sheet_context
     participants = spreadsheet.get_participant_list(
@@ -308,6 +329,7 @@ def api_sheet() -> FlaskResponse:
     return jsonify(
         {
             "ok": True,
+            "sheet_loaded": True,
             "study": ctx.study_name,
             "version": utils.get_version(),
             "highlightsDuration": config.HIGHLIGHTS_REEL_DURATION_SECONDS,
@@ -332,7 +354,7 @@ def api_sheet_baseline() -> FlaskResponse:
     Empty baselines dict when no baseline row exists.
     """
     if _sheet_context is None:
-        return jsonify({"ok": False, "error": "No sheet loaded"}), 500
+        return jsonify({"ok": True, "sheet_loaded": False, "baselines": {}})
 
     ctx = _sheet_context
     if ctx.baseline_row_idx is None:
@@ -358,7 +380,12 @@ def api_sheet_baseline() -> FlaskResponse:
 def api_sheet_refresh() -> FlaskResponse:
     global _sheet_context
     if _worksheet is None:
-        return jsonify({"ok": False, "error": "No worksheet available"}), 500
+        return jsonify(
+            {
+                "ok": False,
+                "error": "No spreadsheet loaded — pick one from the Start panel.",
+            }
+        ), 400
     new_context = spreadsheet.build_sheet_context(_worksheet)
     if new_context is None:
         return jsonify({"ok": False, "error": "Failed to refresh sheet data"}), 500
@@ -600,7 +627,12 @@ def _find_existing_artifacts(
 @studio_bp.route("/api/generate", methods=["POST"])
 def api_generate() -> FlaskResponse:
     if _worksheet is None:
-        return jsonify({"ok": False, "error": "No worksheet loaded"}), 500
+        return jsonify(
+            {
+                "ok": False,
+                "error": "No spreadsheet loaded — pick one from the Start panel.",
+            }
+        ), 400
 
     data = request.get_json(silent=True) or {}
     cell_strings = data.get("cells", [])
@@ -781,7 +813,12 @@ def api_generate() -> FlaskResponse:
 @studio_bp.route("/api/highlights-preview", methods=["POST"])
 def api_highlights_preview() -> FlaskResponse:
     if _worksheet is None:
-        return jsonify({"ok": False, "error": "No worksheet loaded"}), 500
+        return jsonify(
+            {
+                "ok": False,
+                "error": "No spreadsheet loaded — pick one from the Start panel.",
+            }
+        ), 400
 
     data = request.get_json(silent=True) or {}
     highlights_duration = data.get("highlights_duration")
@@ -827,7 +864,12 @@ def api_highlights_preview() -> FlaskResponse:
 @studio_bp.route("/api/reel", methods=["POST"])
 def api_reel() -> FlaskResponse:
     if _worksheet is None:
-        return jsonify({"ok": False, "error": "No worksheet loaded"}), 500
+        return jsonify(
+            {
+                "ok": False,
+                "error": "No spreadsheet loaded — pick one from the Start panel.",
+            }
+        ), 400
 
     data = request.get_json(silent=True) or {}
     cell_strings = data.get("cells", [])
@@ -962,7 +1004,12 @@ def api_viewer() -> FlaskResponse:
 @studio_bp.route("/api/timeline-viewer", methods=["POST"])
 def api_timeline_viewer() -> FlaskResponse:
     if _worksheet is None:
-        return jsonify({"ok": False, "error": "No worksheet loaded"}), 500
+        return jsonify(
+            {
+                "ok": False,
+                "error": "No spreadsheet loaded — pick one from the Start panel.",
+            }
+        ), 400
 
     try:
         req = request.get_json(silent=True) or {}
@@ -1028,7 +1075,12 @@ def api_timeline_viewer() -> FlaskResponse:
 @studio_bp.route("/api/gallery", methods=["POST"])
 def api_gallery() -> FlaskResponse:
     if _sheet_context is None:
-        return jsonify({"ok": False, "error": "No sheet loaded"}), 500
+        return jsonify(
+            {
+                "ok": False,
+                "error": "No spreadsheet loaded — pick one from the Start panel.",
+            }
+        ), 400
 
     data = request.get_json(silent=True) or {}
     participant = data.get("participant", "")
@@ -1543,7 +1595,12 @@ def api_generate_cancel() -> FlaskResponse:
 
 
 def _init_studio_state(worksheet: Any) -> None:
-    """Initialize module-level state for Studio routes."""
+    """Initialize module-level state for Studio routes.
+
+    *worksheet* may be ``None`` — Studio's blueprint still registers and serves
+    the HTML, but spreadsheet-dependent routes report ``sheet_loaded: false``
+    until a sheet is opened via ``POST /api/spreadsheets/open``.
+    """
     global \
         _worksheet, \
         _sheet_context, \
@@ -1553,13 +1610,15 @@ def _init_studio_state(worksheet: Any) -> None:
 
     _load_studio_settings()
     _worksheet = worksheet
-    _sheet_context = spreadsheet.build_sheet_context(worksheet)
+    if worksheet is not None:
+        _sheet_context = spreadsheet.build_sheet_context(worksheet)
+        if _sheet_context is None:
+            utils.error_print("Could not load spreadsheet data for Studio.")
+            sys.exit(1)
+    else:
+        _sheet_context = None
     _generated_artifacts, _generated_reels = viewer._load_manifest_both()
     _thumbnail_cache = OrderedDict()
-
-    if _sheet_context is None:
-        utils.error_print("Could not load spreadsheet data for Studio.")
-        sys.exit(1)
 
 
 # ---- Entry point ----
@@ -1576,6 +1635,38 @@ def _resolve_participants() -> list[str] | None:
     )
 
 
+def _spreadsheet_label() -> str:
+    """Human-readable identifier for the currently loaded spreadsheet."""
+    if _worksheet is None:
+        return ""
+    parent = getattr(_worksheet, "spreadsheet", None)
+    parent_title = getattr(parent, "title", "") if parent is not None else ""
+    sheet_title = getattr(_worksheet, "title", "")
+    if parent_title and sheet_title:
+        return f"{parent_title} ({sheet_title})"
+    return parent_title or sheet_title or ""
+
+
+def _swap_worksheet(new_worksheet: Any) -> None:
+    """Replace the active worksheet and refresh all three blueprints' state.
+
+    Used by ``/api/spreadsheets/open`` and ``/api/spreadsheets/close`` so the
+    user can pick or clear a spreadsheet from the frontend at runtime.
+    """
+    import screenspace_server
+    import transcripts_server
+
+    _init_studio_state(new_worksheet)
+    screenspace_server._init_screenspace_state(
+        sheet_context=_sheet_context,
+        participant_list=_resolve_participants(),
+    )
+    transcripts_server._init_transcripts_state(
+        sheet_context=_sheet_context,
+        participant_list=_resolve_participants(),
+    )
+
+
 def start_combined_server(
     worksheet: Any = None,
     port: int | None = None,
@@ -1583,34 +1674,30 @@ def start_combined_server(
 ) -> None:
     """Start a combined Studio + Screenspace + Transcripts server on one port.
 
-    When worksheet is provided, Studio is available alongside Screenspace and
-    Transcripts. Screenspace and Transcripts are always registered (they
-    auto-discover videos when no spreadsheet is provided).
+    All three blueprints are always registered. When *worksheet* is ``None``,
+    sheet-dependent Studio routes return ``sheet_loaded: false`` placeholder
+    responses; the frontend's Start overlay lets the user pick a spreadsheet
+    via ``POST /api/spreadsheets/open``.
     """
     import screenspace_server
     import transcripts_server
 
     combined = Flask(__name__, static_folder=None)
 
-    # Register Studio only if a worksheet is available
-    has_studio = worksheet is not None
-    if has_studio:
-        _init_studio_state(worksheet)
-        combined.register_blueprint(studio_bp, url_prefix="/studio")
+    _init_studio_state(worksheet)
+    combined.register_blueprint(studio_bp, url_prefix="/studio")
 
-    # Always register Screenspace (auto-discovers videos from input dir)
     screenspace_server._init_screenspace_state(
-        sheet_context=_sheet_context if has_studio else None,
-        participant_list=_resolve_participants() if has_studio else None,
+        sheet_context=_sheet_context,
+        participant_list=_resolve_participants(),
     )
     combined.register_blueprint(
         screenspace_server.screenspace_bp, url_prefix="/screenspace"
     )
 
-    # Always register Transcripts (auto-discovers videos from input dir)
     transcripts_server._init_transcripts_state(
-        sheet_context=_sheet_context if has_studio else None,
-        participant_list=_resolve_participants() if has_studio else None,
+        sheet_context=_sheet_context,
+        participant_list=_resolve_participants(),
     )
     combined.register_blueprint(
         transcripts_server.transcripts_bp, url_prefix="/transcripts"
@@ -1638,9 +1725,13 @@ def start_combined_server(
     def status() -> Response:
         return jsonify(
             {
-                "studio": has_studio,
+                "studio": True,
                 "screenspace": True,
                 "transcripts": True,
+                "sheet_loaded": _worksheet is not None,
+                "spreadsheet_label": _spreadsheet_label(),
+                "input_dir": str(utils.get_effective_input_dir()),
+                "output_dir": str(utils.get_effective_output_dir()),
             }
         )
 
@@ -1692,12 +1783,226 @@ def start_combined_server(
             }
         )
 
-    # ---- Shared settings (available from any page) ----
+    # ---- Start overlay: directories, spreadsheet picker, persistence ----
 
-    # Load persisted settings unconditionally so Transcripts/Screenspace can
-    # read and write model preferences even when Studio is not active.
-    if not has_studio:
-        _load_studio_settings()
+    @combined.route("/api/dirs", methods=["GET"])
+    def api_dirs_get() -> Response:
+        import start_settings
+
+        s = start_settings.load_start_settings()
+        return jsonify(
+            {
+                "ok": True,
+                "input": str(utils.get_effective_input_dir()),
+                "output": str(utils.get_effective_output_dir()),
+                "recent_inputs": s.get("recent_inputs", []),
+                "recent_outputs": s.get("recent_outputs", []),
+            }
+        )
+
+    @combined.route("/api/dirs", methods=["POST"])
+    def api_dirs_post() -> FlaskResponse:
+        import start_settings
+
+        data = request.get_json(silent=True) or {}
+        new_input = data.get("input")
+        new_output = data.get("output")
+        errors: dict[str, str] = {}
+
+        if new_input is not None:
+            p = Path(str(new_input)).expanduser()
+            if not p.is_dir():
+                errors["input"] = f"Input directory does not exist: {p}"
+            else:
+                config.INPUT_DIR = str(p)
+                start_settings.record_recent_input(str(p))
+
+        if new_output is not None:
+            p = Path(str(new_output)).expanduser()
+            try:
+                p.mkdir(parents=True, exist_ok=True)
+            except OSError as exc:
+                errors["output"] = f"Could not create output directory: {exc}"
+            else:
+                config.OUTPUT_DIR = str(p)
+                start_settings.record_recent_output(str(p))
+
+        if errors:
+            return jsonify({"ok": False, "errors": errors}), 400
+        return api_dirs_get()
+
+    @combined.route("/api/spreadsheets/excel", methods=["GET"])
+    def api_spreadsheets_excel() -> Response:
+        input_dir = Path(utils.get_effective_input_dir())
+        files_list: list[dict[str, str]] = []
+        if input_dir.is_dir():
+            for p in sorted(input_dir.glob("*.xlsx")):
+                if p.name.startswith("~$"):
+                    continue
+                files_list.append({"path": str(p), "name": p.name})
+        return jsonify({"ok": True, "input_dir": str(input_dir), "files": files_list})
+
+    @combined.route("/api/spreadsheets/google", methods=["GET"])
+    def api_spreadsheets_google() -> Response:
+        global _gspread_auth_error
+        if _gspread_client is None:
+            return jsonify(
+                {
+                    "ok": True,
+                    "authenticated": False,
+                    "auth_in_flight": _gspread_auth_in_flight,
+                    "auth_error": _gspread_auth_error,
+                    "sheets": [],
+                }
+            )
+        import google_api
+
+        try:
+            names = google_api.get_all_spreadsheets(_gspread_client)
+        except Exception as exc:
+            return jsonify(
+                {
+                    "ok": True,
+                    "authenticated": True,
+                    "auth_in_flight": False,
+                    "auth_error": str(exc),
+                    "sheets": [],
+                }
+            )
+        return jsonify(
+            {
+                "ok": True,
+                "authenticated": True,
+                "auth_in_flight": False,
+                "auth_error": "",
+                "sheets": [{"name": n, "id": n} for n in names],
+            }
+        )
+
+    @combined.route("/api/spreadsheets/google/auth", methods=["POST"])
+    def api_spreadsheets_google_auth() -> FlaskResponse:
+        global _gspread_auth_in_flight, _gspread_client, _gspread_auth_error
+        with _gspread_auth_lock:
+            if _gspread_auth_in_flight:
+                return jsonify({"ok": True, "started": False, "in_flight": True})
+            if _gspread_client is not None:
+                return jsonify({"ok": True, "started": False, "authenticated": True})
+            _gspread_auth_in_flight = True
+            _gspread_auth_error = ""
+
+        def _run_auth() -> None:
+            global _gspread_auth_in_flight, _gspread_client, _gspread_auth_error
+            try:
+                import cli as _cli
+
+                client = _cli.authenticate_google()
+                if client is None:
+                    _gspread_auth_error = (
+                        "Google authentication failed — check credentials.json."
+                    )
+                else:
+                    _gspread_client = client
+            except Exception as exc:
+                _gspread_auth_error = str(exc)
+            finally:
+                _gspread_auth_in_flight = False
+
+        threading.Thread(target=_run_auth, daemon=True).start()
+        return jsonify({"ok": True, "started": True, "in_flight": True}), 202
+
+    @combined.route("/api/spreadsheets/open", methods=["POST"])
+    def api_spreadsheets_open() -> FlaskResponse:
+        import start_settings
+
+        data = request.get_json(silent=True) or {}
+        type_ = data.get("type", "")
+        id_or_path = (data.get("id_or_path") or "").strip()
+        if type_ not in ("google", "excel") or not id_or_path:
+            return jsonify(
+                {
+                    "ok": False,
+                    "error": "Required: type ('google'|'excel') and id_or_path",
+                }
+            ), 400
+
+        new_ws: Any = None
+        label = ""
+        try:
+            if type_ == "excel":
+                import excel_io
+
+                new_ws = excel_io.open_excel_workbook(id_or_path)
+                label = Path(id_or_path).name
+            else:
+                if _gspread_client is None:
+                    return jsonify(
+                        {
+                            "ok": False,
+                            "error": (
+                                "Not authenticated with Google — "
+                                "click 'Connect Google' first."
+                            ),
+                        }
+                    ), 400
+                import clipgen as _clipgen
+                import google_api
+
+                if id_or_path.startswith("http://") or id_or_path.startswith(
+                    "https://"
+                ):
+                    new_ws = _clipgen.open_spreadsheet_by_url(
+                        _gspread_client, id_or_path
+                    )
+                else:
+                    doc_list = google_api.get_all_spreadsheets(_gspread_client)
+                    new_ws = _clipgen.open_spreadsheet_by_name(
+                        _gspread_client, doc_list, id_or_path
+                    )
+                if new_ws is not None:
+                    parent = getattr(new_ws, "spreadsheet", None)
+                    label = getattr(parent, "title", "") or id_or_path
+        except Exception as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 500
+
+        if new_ws is None:
+            return jsonify({"ok": False, "error": "Could not open spreadsheet"}), 404
+
+        _swap_worksheet(new_ws)
+        if _sheet_context is None:
+            return jsonify(
+                {"ok": False, "error": "Could not parse the spreadsheet"}
+            ), 500
+
+        start_settings.record_recent_spreadsheet(type_, id_or_path, label)
+        return jsonify(
+            {
+                "ok": True,
+                "sheet_loaded": True,
+                "spreadsheet_label": _spreadsheet_label(),
+            }
+        )
+
+    @combined.route("/api/spreadsheets/close", methods=["POST"])
+    def api_spreadsheets_close() -> Response:
+        _swap_worksheet(None)
+        return jsonify({"ok": True, "sheet_loaded": False})
+
+    @combined.route("/api/start-settings", methods=["GET"])
+    def api_start_settings_get() -> Response:
+        import start_settings
+
+        return jsonify({"ok": True, "settings": start_settings.load_start_settings()})
+
+    @combined.route("/api/start-settings", methods=["POST"])
+    def api_start_settings_post() -> FlaskResponse:
+        import start_settings
+
+        data = request.get_json(silent=True) or {}
+        if "persist_enabled" in data:
+            start_settings.set_persist_enabled(bool(data["persist_enabled"]))
+        return jsonify({"ok": True, "settings": start_settings.load_start_settings()})
+
+    # ---- Shared settings (available from any page) ----
 
     @combined.route("/api/settings", methods=["GET"])
     def combined_settings_get() -> FlaskResponse:

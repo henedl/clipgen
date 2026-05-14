@@ -121,6 +121,19 @@
 
     right.appendChild(makeDivider());
 
+    // Start overlay opener — keeps the first-run picker reachable after dismissal.
+    var startBtn = document.createElement("button");
+    startBtn.type = "button";
+    startBtn.id = "startBtn";
+    startBtn.className = "topnav-icon-btn";
+    startBtn.title = "Start panel";
+    startBtn.setAttribute("aria-label", "Start panel");
+    var startIcon = document.createElement("span");
+    startIcon.className = "topnav-icon";
+    startIcon.style.cssText = svgMask("home");
+    startBtn.appendChild(startIcon);
+    right.appendChild(startBtn);
+
     // Log button — keeps existing #logBtn id so studio.js wires to it.
     var logBtn = document.createElement("button");
     logBtn.type = "button";
