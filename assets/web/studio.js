@@ -835,6 +835,17 @@
             "Error: " + (data.error || "Unknown error");
           return;
         }
+        if (data.sheet_loaded === false) {
+          var loading = qs("#sheetLoading");
+          if (loading) {
+            loading.innerHTML = "";
+            loading.textContent =
+              "No spreadsheet loaded — click the Start panel to pick one.";
+          }
+          clipgenApplyConfig(data.config);
+          state.sheetData = data;
+          return;
+        }
         state.sheetData = data;
         clipgenApplyConfig(data.config);
         renderHeader();

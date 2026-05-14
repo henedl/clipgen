@@ -2992,6 +2992,27 @@ def _apply_config_overrides(args: Any, cli_mode: bool) -> CliModeArgs:
     return parse_cli_mode_args(args)
 
 
+def _maybe_apply_persisted_dirs(args: Any) -> None:
+    """Apply last-used input/output dirs from start_settings when CLI didn't set them.
+
+    Only used by the web-frontend dispatch path. Skips silently if persistence
+    is disabled or the saved paths no longer exist.
+    """
+    import start_settings
+
+    settings = start_settings.load_start_settings()
+    if not settings.get("persist_enabled", True):
+        return
+    if getattr(args, "input", None) is None:
+        last_input = settings.get("last_input") or ""
+        if last_input and Path(last_input).is_dir():
+            config.INPUT_DIR = last_input
+    if getattr(args, "output", None) is None:
+        last_output = settings.get("last_output") or ""
+        if last_output and Path(last_output).is_dir():
+            config.OUTPUT_DIR = last_output
+
+
 def _dispatch_standalone_mode(
     args: Any,
     cli_mode: bool,
@@ -3066,18 +3087,22 @@ def _dispatch_standalone_mode(
         _run_citations(args)
         return True
 
-    # Standalone screenspace (no spreadsheet)
-    if getattr(args, "screenspace", False) and not args.spreadsheet:
+    # Standalone web frontend (no spreadsheet) — Studio, Screenspace, or Transcripts.
+    # The Start overlay lets the user pick a spreadsheet from the browser.
+    web_mode = (
+        "studio"
+        if getattr(args, "studio", False)
+        else "screenspace"
+        if getattr(args, "screenspace", False)
+        else "transcripts"
+        if getattr(args, "transcripts", False)
+        else None
+    )
+    if web_mode is not None and not args.spreadsheet:
         import server
 
-        server.start_combined_server(worksheet=None, default_page="screenspace")
-        return True
-
-    # Standalone transcripts (no spreadsheet)
-    if getattr(args, "transcripts", False) and not args.spreadsheet:
-        import server
-
-        server.start_combined_server(worksheet=None, default_page="transcripts")
+        _maybe_apply_persisted_dirs(args)
+        server.start_combined_server(worksheet=None, default_page=web_mode)
         return True
 
     # Standalone gallery

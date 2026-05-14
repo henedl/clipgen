@@ -107,6 +107,111 @@ def test_export_conflicts_with_studio(monkeypatch):
 
 
 @pytest.mark.parametrize(
+    "flag,expected_default_page",
+    [
+        ("studio", "studio"),
+        ("screenspace", "screenspace"),
+        ("transcripts", "transcripts"),
+    ],
+)
+def test_web_mode_without_spreadsheet_dispatches_standalone(
+    monkeypatch, flag, expected_default_page
+):
+    """--studio / --screenspace / --transcripts without -s launches the combined
+    server with worksheet=None and the right default page."""
+    import server
+
+    captured = {}
+
+    def fake_start(*, worksheet=None, port=None, default_page="studio"):
+        captured["worksheet"] = worksheet
+        captured["default_page"] = default_page
+
+    monkeypatch.setattr(server, "start_combined_server", fake_start)
+    # Skip persisted-dir application in this isolated test
+    monkeypatch.setattr(cli, "_maybe_apply_persisted_dirs", lambda _args: None)
+
+    args = _base_args(**{flag: True})
+    result = cli._dispatch_standalone_mode(args, cli_mode=False, gallery_arg=None)
+
+    assert result is True
+    assert captured["worksheet"] is None
+    assert captured["default_page"] == expected_default_page
+
+
+def test_studio_with_spreadsheet_does_not_short_circuit(monkeypatch):
+    """If -s is provided, the standalone short-circuit must not fire."""
+    import server
+
+    monkeypatch.setattr(
+        server,
+        "start_combined_server",
+        lambda **_: pytest.fail("standalone path should not be taken"),
+    )
+    monkeypatch.setattr(cli, "_maybe_apply_persisted_dirs", lambda _args: None)
+
+    args = _base_args(studio=True, spreadsheet="mystudy")
+    result = cli._dispatch_standalone_mode(args, cli_mode=False, gallery_arg=None)
+    assert result is False
+
+
+def test_maybe_apply_persisted_dirs_uses_last_known(monkeypatch, tmp_path):
+    """Persisted dirs are applied when CLI didn't set them and the path still exists."""
+    import config
+    import start_settings
+
+    last_in = tmp_path / "in"
+    last_out = tmp_path / "out"
+    last_in.mkdir()
+    last_out.mkdir()
+
+    monkeypatch.setattr(
+        start_settings,
+        "load_start_settings",
+        lambda: {
+            "persist_enabled": True,
+            "last_input": str(last_in),
+            "last_output": str(last_out),
+        },
+    )
+    monkeypatch.setattr(config, "INPUT_DIR", "")
+    monkeypatch.setattr(config, "OUTPUT_DIR", "")
+
+    args = _base_args(studio=True)
+    args.input = None
+    args.output = None
+    cli._maybe_apply_persisted_dirs(args)
+
+    assert config.INPUT_DIR == str(last_in)
+    assert config.OUTPUT_DIR == str(last_out)
+
+
+def test_maybe_apply_persisted_dirs_skips_when_disabled(monkeypatch):
+    import config
+    import start_settings
+
+    monkeypatch.setattr(
+        start_settings,
+        "load_start_settings",
+        lambda: {
+            "persist_enabled": False,
+            "last_input": "/anything",
+            "last_output": "/anything",
+        },
+    )
+    monkeypatch.setattr(config, "INPUT_DIR", "")
+    monkeypatch.setattr(config, "OUTPUT_DIR", "")
+
+    args = _base_args()
+    args.input = None
+    args.output = None
+    cli._maybe_apply_persisted_dirs(args)
+
+    assert config.INPUT_DIR == ""
+    assert config.OUTPUT_DIR == ""
+
+
+@pytest.mark.parametrize(
     "argv_extra,attr,expected",
     [
         ([], "titlecards", None),

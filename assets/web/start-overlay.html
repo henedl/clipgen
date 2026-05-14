@@ -1,0 +1,103 @@
+<div class="start-overlay hidden" id="startOverlay" role="dialog" aria-modal="true" aria-labelledby="startOverlayTitle">
+  <div class="start-overlay-backdrop" data-role="backdrop"></div>
+  <div class="start-overlay-panel">
+    <header class="start-overlay-header">
+      <div>
+        <h2 id="startOverlayTitle">Get started with clipgen</h2>
+        <p class="start-overlay-subtitle" data-role="status-line">No spreadsheet loaded.</p>
+      </div>
+      <button type="button" class="start-overlay-close" aria-label="Close" data-role="close" hidden>
+        <span class="start-overlay-close-icon" aria-hidden="true"></span>
+      </button>
+    </header>
+
+    <section class="start-overlay-section">
+      <h3>Folders</h3>
+      <div class="start-overlay-field">
+        <label for="startInputDir">Input folder</label>
+        <div class="start-overlay-input-row">
+          <input type="text" id="startInputDir" autocomplete="off" spellcheck="false" placeholder="/path/to/source/videos">
+          <button type="button" class="cg-btn cg-btn-bare cg-btn-sm" data-role="input-recents" aria-label="Recent input folders">Recent</button>
+        </div>
+        <div class="start-overlay-recents hidden" data-role="input-recents-list" role="menu"></div>
+      </div>
+      <div class="start-overlay-field">
+        <label for="startOutputDir">Output folder</label>
+        <div class="start-overlay-input-row">
+          <input type="text" id="startOutputDir" autocomplete="off" spellcheck="false" placeholder="/path/to/output">
+          <button type="button" class="cg-btn cg-btn-bare cg-btn-sm" data-role="output-recents" aria-label="Recent output folders">Recent</button>
+        </div>
+        <div class="start-overlay-recents hidden" data-role="output-recents-list" role="menu"></div>
+      </div>
+    </section>
+
+    <section class="start-overlay-section">
+      <h3>Spreadsheet</h3>
+      <div class="start-overlay-tabs" role="tablist">
+        <button type="button" role="tab" class="start-overlay-tab is-active" data-tab="google" aria-selected="true">Google Sheets</button>
+        <button type="button" role="tab" class="start-overlay-tab" data-tab="excel" aria-selected="false">Excel file</button>
+      </div>
+
+      <div class="start-overlay-tabpanel" data-tabpanel="google">
+        <div class="start-overlay-google-status" data-role="google-status">
+          Checking authentication…
+        </div>
+        <div class="start-overlay-list" data-role="google-list" hidden></div>
+        <div class="start-overlay-paste">
+          <label for="startGooglePaste">Or paste a spreadsheet URL or name</label>
+          <input type="text" id="startGooglePaste" autocomplete="off" spellcheck="false" placeholder="https://docs.google.com/spreadsheets/d/…  or  My Study">
+        </div>
+      </div>
+
+      <div class="start-overlay-tabpanel hidden" data-tabpanel="excel">
+        <div class="start-overlay-list-header" data-role="excel-status">Scanning input folder…</div>
+        <div class="start-overlay-list" data-role="excel-list"></div>
+        <div class="start-overlay-paste">
+          <label for="startExcelPaste">Or paste a full path to an .xlsx file</label>
+          <input type="text" id="startExcelPaste" autocomplete="off" spellcheck="false" placeholder="/path/to/study.xlsx">
+        </div>
+      </div>
+    </section>
+
+    <section class="start-overlay-section start-overlay-guide-section">
+      <button type="button" class="start-overlay-guide-toggle" data-role="guide-toggle" aria-expanded="true">
+        <span>How clipgen works</span>
+        <span class="start-overlay-guide-chevron" aria-hidden="true"></span>
+      </button>
+      <div class="start-overlay-guide" data-role="guide">
+        <ol class="start-overlay-guide-list">
+          <li>
+            <strong>Set your folders.</strong>
+            Input is where your source videos (and any <code>.xlsx</code> spreadsheets) live; output is where clips, screenshots, transcripts, and exports are written.
+          </li>
+          <li>
+            <strong>Pick a spreadsheet.</strong>
+            <ul>
+              <li><em>Google Sheets:</em> place a <code>credentials.json</code> OAuth client file in clipgen's working directory, then click <strong>Connect Google</strong>. <a href="https://github.com/burnash/gspread#authentication-and-permissions" target="_blank" rel="noopener noreferrer">Setup guide</a>.</li>
+              <li><em>Excel:</em> drop an <code>.xlsx</code> file into your input folder, or paste a full path.</li>
+            </ul>
+          </li>
+          <li>
+            <strong>Choose a tool.</strong>
+            <ul>
+              <li><strong>Studio</strong> — generate clips, screenshots, GIFs, and reels from the spreadsheet's timestamps.</li>
+              <li><strong>Screenspace</strong> — frame-by-frame visual analysis of source videos. Works without a spreadsheet.</li>
+              <li><strong>Transcripts</strong> — speech-to-text and AI summaries of source videos. Works without a spreadsheet.</li>
+            </ul>
+          </li>
+        </ol>
+      </div>
+    </section>
+
+    <footer class="start-overlay-footer">
+      <label class="start-overlay-persist">
+        <input type="checkbox" id="startPersistEnabled" checked>
+        <span>Remember my choices across launches</span>
+      </label>
+      <div class="start-overlay-actions">
+        <button type="button" class="cg-btn cg-btn-bare" data-role="dismiss">Continue without a spreadsheet</button>
+        <button type="button" class="cg-btn cg-btn-solid" data-role="confirm">Open</button>
+      </div>
+    </footer>
+  </div>
+</div>
