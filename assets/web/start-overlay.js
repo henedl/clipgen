@@ -13,6 +13,25 @@
 (function () {
   "use strict";
 
+  var DISMISSED_KEY = "clipgen.startOverlayDismissed";
+
+  function sessionDismissed() {
+    try { return sessionStorage.getItem(DISMISSED_KEY) === "1"; } catch (_) { return false; }
+  }
+  function markDismissed() {
+    try { sessionStorage.setItem(DISMISSED_KEY, "1"); } catch (_) { /* ignore */ }
+  }
+
+  function shouldAutoOpen(status) {
+    if (sessionDismissed()) return false;
+    if (status && status.sheet_loaded) return false;
+    var path = (window.location.pathname || "").toLowerCase();
+    var isVideoTool =
+      path.indexOf("/screenspace/") === 0 || path.indexOf("/transcripts/") === 0;
+    if (isVideoTool && status && (status.videos_in_input || 0) > 0) return false;
+    return true;
+  }
+
   var state = {
     mounted: false,
     open: false,
@@ -511,6 +530,7 @@
     if (!root) return;
     state.open = false;
     show(root, false);
+    markDismissed();
     if (state.googlePollTimer) {
       clearTimeout(state.googlePollTimer);
       state.googlePollTimer = null;
@@ -536,7 +556,7 @@
       // After mount, check status once to decide auto-open.
       apiGet("/api/status").then(function (s) {
         state.sheetLoaded = !!s.sheet_loaded;
-        if (!state.sheetLoaded) open();
+        if (shouldAutoOpen(s)) open();
       }).catch(function () { /* offline / dev */ });
     });
 
