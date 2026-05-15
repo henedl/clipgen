@@ -598,13 +598,66 @@ body[data-active-tab]:not([data-active-tab="sheet"]) #studioSidebar {
   font-size: 11px;
 }
 
-#sheetLoading {
-  padding: var(--space-5);
+/* When the Sheet panel is showing only the skeleton/empty state (no table
+ * yet rendered), stretch #sheetGrid to fill #sheetMain so #sheetLoading can
+ * use the full vertical space and the caption can vertically center between
+ * the ghost grid and the bottom of the visible area. */
+#sheetGrid:has(#sheetLoading) {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 0;
 }
 
-.skeleton-row {
-  height: 36px;
-  margin-bottom: var(--space-2);
+#sheetLoading {
+  padding: var(--space-5);
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  flex: 1 1 auto;
+  box-sizing: border-box;
+}
+
+.skeleton-grid {
+  display: grid;
+  grid-template-columns: 56px 2.2fr 1.2fr repeat(6, 1fr);
+  gap: var(--space-2);
+  width: 100%;
+}
+
+.skeleton-cell {
+  height: 26px;
+  border-radius: var(--radius-sm);
+}
+
+.skeleton-cell.is-header {
+  height: 30px;
+  opacity: 0.85;
+}
+
+#sheetLoading.is-empty .skeleton-grid {
+  opacity: 0.45;
+}
+
+#sheetLoading .sheet-empty-caption {
+  align-self: center;
+  max-width: 520px;
+  margin: auto 0;
+  padding: var(--space-5) var(--space-6);
+  color: var(--fg-muted);
+  font-size: var(--text-sm);
+  line-height: 1.55;
+  text-align: center;
+}
+
+.sheet-empty-caption-icon {
+  display: inline-block;
+  width: 1.1em;
+  height: 1.1em;
+  vertical-align: -0.2em;
+  background-color: currentColor;
+  mask: url("icons/home.svg") center / contain no-repeat;
+  -webkit-mask: url("icons/home.svg") center / contain no-repeat;
+  opacity: 0.9;
 }
 
 #viewerArtifactCount {

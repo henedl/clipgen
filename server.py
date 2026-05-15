@@ -1732,6 +1732,7 @@ def start_combined_server(
                 "spreadsheet_label": _spreadsheet_label(),
                 "input_dir": str(utils.get_effective_input_dir()),
                 "output_dir": str(utils.get_effective_output_dir()),
+                "videos_in_input": len(utils.discover_participant_videos()),
             }
         )
 

@@ -825,6 +825,27 @@
     } catch (_) { /* ignore parse errors */ }
   }
 
+  function populateSheetSkeleton() {
+    var grid = qs("#sheetLoading .skeleton-grid");
+    if (!grid) return;
+    var cols = 9;
+    var rows = 4;
+    var frag = document.createDocumentFragment();
+    for (var i = 0; i < cols; i++) {
+      var th = document.createElement("div");
+      th.className = "skeleton skeleton-cell is-header";
+      frag.appendChild(th);
+    }
+    for (var r = 0; r < rows; r++) {
+      for (var c = 0; c < cols; c++) {
+        var cell = document.createElement("div");
+        cell.className = "skeleton skeleton-cell";
+        frag.appendChild(cell);
+      }
+    }
+    grid.appendChild(frag);
+  }
+
   // ---- Data loading ----
 
   function loadSheetData() {
@@ -838,9 +859,18 @@
         if (data.sheet_loaded === false) {
           var loading = qs("#sheetLoading");
           if (loading) {
-            loading.innerHTML = "";
-            loading.textContent =
-              "No spreadsheet loaded — click the Start panel to pick one.";
+            loading.classList.add("is-empty");
+            var caption = document.createElement("div");
+            caption.className = "sheet-empty-caption";
+            var prefix = document.createTextNode("No spreadsheet loaded — click ");
+            var icon = document.createElement("span");
+            icon.className = "sheet-empty-caption-icon";
+            icon.setAttribute("aria-hidden", "true");
+            var suffix = document.createTextNode(" in the top bar to pick one.");
+            caption.appendChild(prefix);
+            caption.appendChild(icon);
+            caption.appendChild(suffix);
+            loading.appendChild(caption);
           }
           clipgenApplyConfig(data.config);
           state.sheetData = data;
@@ -4666,6 +4696,7 @@
     bindButtons();
     loadStoredBottomHeight();
     initPanelDivider();
+    populateSheetSkeleton();
     loadSheetData();
     loadStashes();
     loadArtifactStashes();
