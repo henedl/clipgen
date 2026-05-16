@@ -9,6 +9,7 @@
   <link rel="stylesheet" href="viewer.css">
 </head>
 <body>
+  <!-- Timeline viewer shell; JSON injected before scripts. -->
   <header id="pageHeader">
     <div id="pageHeaderTop">
       <h1><span class="brand-mark" aria-hidden="true"></span>clipgen <span class="header-light">Timeline Viewer</span></h1>
@@ -32,6 +33,8 @@
   </header>
 
   <section id="timelinePane">
+  <!-- Primary timeline + optional screenspace track -->
+
     <div class="timeline-track-wrap">
       <div id="timelineTrack"></div>
       <button class="track-expand-btn" type="button" aria-label="Expand tracks" aria-expanded="false" title="Expand tracks">
@@ -52,6 +55,8 @@
   </section>
 
   <div id="layout">
+  <!-- Sidebar filters + list, artifact detail pane -->
+
     <aside id="sidebar">
       <div id="filters">
         <h3>Filters</h3>
@@ -118,6 +123,7 @@
     </section>
   </div>
 
+  <!-- Tooltip + empty state sit outside #layout -->
   <div id="tooltip" class="hidden"></div>
 
   <div id="emptyState" class="hidden">
@@ -125,6 +131,7 @@
   </div>
 
   <!-- CLIPGEN_DATA_HERE -->
+  <!-- viewer.js expects utils.js first -->
   <script src="utils.js" defer></script>
   <script src="viewer.js" defer></script>
 </body>

@@ -9,6 +9,7 @@
   <link rel="stylesheet" href="viewer.css">
 </head>
 <body>
+  <!-- Participant timelines export; artifact JSON injected before scripts. -->
   <header id="pageHeader">
     <div id="pageHeaderTop">
       <h1><span class="brand-mark" aria-hidden="true"></span>clipgen <span class="header-light">Participant Timelines</span></h1>
@@ -32,6 +33,8 @@
   </header>
 
   <section id="playerPane">
+  <!-- Preview when a timeline cell is selected -->
+
     <div id="playerEmpty">
       <div id="playerPlaceholder">
         <svg viewBox="0 0 48 48" width="48" height="48" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -55,6 +58,8 @@
   </section>
 
   <section id="participantTimelines">
+  <!-- Swimlanes: one row per participant -->
+
     <div id="timelinesHeader">
       <h3>Participant Timelines</h3>
       <div class="timelines-legend-group">

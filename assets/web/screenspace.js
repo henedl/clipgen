@@ -2144,6 +2144,8 @@
   }
 
   // ---- Timeline ----
+  // initTimeline wires pointer events; renderTimeline paints ruler, markers,
+  // optional amplitude band, and hit rects used by hover/click.
 
   function initTimeline() {
     qs("#zoomInBtn").appendChild(iconSpan("plus", "ss-icon--sm"));
@@ -2822,6 +2824,8 @@
     slot.appendChild(ctrl);
   }
 
+  // ---- Multitool step list (drag reorder + drop-to-import from task queue) ----
+
   var MULTITOOL_ALLOWED_TYPES = [
     { value: "color", label: "Color" },
     { value: "change", label: "Change" },
@@ -3380,6 +3384,8 @@
       container.appendChild(el("div", "multitool-hint", "Add at least 2 tool steps to create a multi-factor filter."));
     }
   }
+
+  // ---- Single-tool parameter panels (color, change, template, …) ----
 
   function renderColorParams(container) {
     var pickerGroup = el("div", "color-picker-group");
@@ -5482,6 +5488,8 @@
         .catch(function (err) { showToast("Error: " + err.message); });
     });
   }
+
+  // ---- Task list: filter chips + card DOM (drag reorder uses _taskDragCache) ----
 
   function initTaskFilters() {
     var doneBtn = qs("#taskFilterDoneBtn");

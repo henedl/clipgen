@@ -1,4 +1,7 @@
-/* clipgen Timeline Viewer */
+/*
+ * clipgen Timeline Viewer — page stylesheet (embedded + exported viewer).
+ * Shared tokens: tokens.css. Pairs with viewer.js (timeline, list, filmstrip).
+ */
 
 *,
 *::before,

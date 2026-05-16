@@ -23,10 +23,13 @@
   <link rel="stylesheet" href="start-overlay.css">
 </head>
 <body data-frontend="transcripts">
+  <!-- Shared chrome: TopNav + start overlay -->
   <topnav-mount data-frontend="transcripts"></topnav-mount>
   <start-overlay-mount></start-overlay-mount>
 
   <header id="trHeader">
+  <!-- Search row + participant pills (role=tablist) -->
+
     <div id="trSubheader">
       <div class="subheader-left">
         <div id="headerSearch">
@@ -49,6 +52,8 @@
   </header>
 
   <main id="trMain">
+  <!-- Video + transcript / summary / marks -->
+
     <section id="videoSection">
       <div id="videoFrame">
         <video id="videoPlayer" preload="metadata" playsinline>
@@ -149,6 +154,7 @@
 
   <div id="toast" class="toast hidden"></div>
 
+  <!-- Deps order: utils → chrome → settings → page script -->
   <script src="utils.js"></script>
   <script src="topnav.js"></script>
   <script src="start-overlay.js"></script>

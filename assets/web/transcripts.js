@@ -1355,6 +1355,8 @@
   }
 
   // ---- Custom video player ----
+  // Custom DOM controls on #videoPlayer (no native controls=""). Timeline
+  // canvas + mark hit-testing live after timelineXToTime().
 
   var _markerHitRects = [];
   var _playheadRaf = 0;
@@ -1575,6 +1577,8 @@
     if (frac < 0) frac = 0; else if (frac > 1) frac = 1;
     return frac * dur;
   }
+
+  // ---- Transcript timeline canvas (marks, playhead, hover hit-testing) ----
 
   function hitTestTimeline(clientX, clientY) {
     var canvas = qs("#timelineCanvas");
@@ -2552,6 +2556,8 @@
   }
 
   // ---- Participant pills ----
+  // Per-participant transcribe control; chevron opens a body-mounted popover
+  // (togglePillOptions → buildPillOptions).
 
   // Icon shown on the trigger by default (left), and on hover (right).
   // The trigger click always invokes the appropriate action for the status.
@@ -2840,6 +2846,8 @@
     });
     return btn;
   }
+
+  // ---- Participant pill popover (model/lang + agent dependency rows) ----
 
   function buildPillOptions(p, s) {
     var pane = document.createElement("div");
@@ -3179,6 +3187,8 @@
   }
 
   // ---- Task polling ----
+  // state.pollTimer → pollTaskStatus for Whisper jobs; summary/citations use
+  // separate timers (see file header).
 
   function startPolling() {
     if (state.pollTimer) return;

@@ -46,6 +46,8 @@
   </div>
 
   <section id="sheetPreview">
+  <!-- Sheet + preview tabs (intake, convergence, metadata) -->
+
     <aside id="studioSidebar" data-open="true" aria-label="Sheet filters">
       <button id="studioSidebarToggle" type="button" aria-label="Toggle sidebar"><span class="studio-sidebar-toggle-icon" aria-hidden="true"></span></button>
       <section class="studio-sidebar-section" data-section="views">
@@ -122,8 +124,11 @@
     </div>
   </section>
 
-  <div id="panelDivider"><div class="divider-handle"></div></div>
+  <div id="panelDivider">
+  <!-- Split: sheet area vs bottom artifact/reel strip -->
+<div class="divider-handle"></div></div>
 
+  <!-- Bottom strip: artifact + reel queues, stashes, generation actions -->
   <div id="bottomPanel">
   <div id="bottomColumns">
   <section id="artifactColumn">
@@ -274,6 +279,7 @@
 
   <div id="trIntakeTooltip" class="tr-intake-tooltip hidden"></div>
   <div id="toast" class="toast hidden"></div>
+  <!-- Deps: utils → primitives → chrome → settings → studio + panels -->
   <script src="utils.js"></script>
   <script src="primitives.js"></script>
   <script src="topnav.js"></script>

@@ -1,4 +1,8 @@
-/* clipgen Screenspace */
+/*
+ * clipgen Screenspace — page stylesheet.
+ * Shared tokens: tokens.css. Section markers: grep for "Main content",
+ * "Frame viewer", "Timeline", "Workflow", "Bottom panel", "Right pane".
+ */
 
 *,
 *::before,
