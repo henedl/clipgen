@@ -14,9 +14,16 @@
     "Video & Clips",
     "Screenspace",
     "Transcription",
-    "AI / Ollama",
+    "Summaries",
     "CLI",
   ];
+
+  // Entry/exit animation tuning. Mirrors the Start overlay's vocabulary
+  // (--host-blur / --veil-alpha on the overlay root, .is-in on the panel)
+  // but dialled lighter — Settings is a sheet, not a full-screen launcher.
+  var INTRO_BLUR_PX = 12;
+  var INTRO_VEIL_ALPHA = 0.45;
+  var EXIT_MS = 360;
 
   var _root = null;
   var _tabsEl = null;
@@ -28,6 +35,7 @@
   var _opts = {};
   var _modelsCache = null;
   var _modelsCachePromise = null;
+  var _closeTimer = null;
 
   function _getApiRoot() {
     // Each page is served under a different prefix (/studio/, /transcripts/,
@@ -152,11 +160,38 @@
     var v = _opts && _opts.version;
     var vEl = document.getElementById("settingsVersion");
     if (vEl) vEl.textContent = v ? "v" + v : "";
+
+    if (_closeTimer) {
+      clearTimeout(_closeTimer);
+      _closeTimer = null;
+    }
+
+    var panel = _root.querySelector(".settings-panel");
+    if (panel) panel.classList.remove("is-in");
+    _root.style.setProperty("--host-blur", "0px");
+    _root.style.setProperty("--veil-alpha", "0");
+
     _root.classList.remove("hidden");
+
+    // Next frame: build in the backdrop blur and slide/scale the panel.
+    requestAnimationFrame(function () {
+      _root.style.setProperty("--host-blur", INTRO_BLUR_PX + "px");
+      _root.style.setProperty("--veil-alpha", String(INTRO_VEIL_ALPHA));
+      if (panel) panel.classList.add("is-in");
+    });
   }
 
   function _close() {
-    if (_root) _root.classList.add("hidden");
+    if (!_root || _root.classList.contains("hidden")) return;
+    var panel = _root.querySelector(".settings-panel");
+    if (panel) panel.classList.remove("is-in");
+    _root.style.setProperty("--host-blur", "0px");
+    _root.style.setProperty("--veil-alpha", "0");
+    if (_closeTimer) clearTimeout(_closeTimer);
+    _closeTimer = setTimeout(function () {
+      if (_root) _root.classList.add("hidden");
+      _closeTimer = null;
+    }, EXIT_MS);
   }
 
   function _load() {

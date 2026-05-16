@@ -427,22 +427,22 @@ STUDIO_SETTINGS: dict[str, dict[str, Any]] = {
         "type": "mark_categories",
     },
     "OLLAMA_SUMMARY_ENABLED": {
-        "tab": "AI / Ollama",
+        "tab": "Summaries",
         "group": "AI Summary",
         "type": "bool",
     },
     "OLLAMA_CITATIONS_ENABLED": {
-        "tab": "AI / Ollama",
+        "tab": "Summaries",
         "group": "AI Summary",
         "type": "bool",
     },
     "OLLAMA_SUMMARY_MODEL": {
-        "tab": "AI / Ollama",
+        "tab": "Summaries",
         "group": "AI Summary",
         "type": "model_select",
         "provider": "ollama",
     },
-    "OLLAMA_BASE_URL": {"tab": "AI / Ollama", "group": "AI Summary", "type": "str"},
+    "OLLAMA_BASE_URL": {"tab": "Summaries", "group": "AI Summary", "type": "str"},
     "SCREENSPACE_CV_RESOLUTION_SCALE": {
         "tab": "Screenspace",
         "group": "Analysis Quality",
