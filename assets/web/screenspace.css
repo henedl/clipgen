@@ -433,12 +433,6 @@ body {
   letter-spacing: -0.005em;
 }
 
-.ss-info-sub {
-  font-size: var(--text-xs);
-  font-family: var(--font-mono);
-  color: var(--color-text-dim);
-}
-
 .ss-info-notes {
   resize: vertical;
   min-height: 4.5rem;
