@@ -3092,28 +3092,42 @@
   function onBuildTimelineViewer() {
     if (state.generating) return;
 
-    if (state.intakeClusters && state.intakeClusters.length > 0) {
-      var n = state.intakeClusters.length;
-      showConfirm(
-        "Include Intake Events?",
-        n + " Intake event group" + (n === 1 ? "" : "s") +
-          " detected from Screenspace. Include them as clips in the timeline viewer?",
-        function () { startTimelineViewerBuild(true); },
-        function () { startTimelineViewerBuild(false); }
-      );
-    } else {
+    var ssCount = (state.intakeClusters || []).length;
+    var trCount = (state.trIntakeClusters || []).length;
+    if (ssCount === 0 && trCount === 0) {
       startTimelineViewerBuild(false);
+      return;
     }
+
+    var parts = [];
+    if (ssCount > 0) {
+      parts.push(ssCount + " Screenspace event group" + (ssCount === 1 ? "" : "s"));
+    }
+    if (trCount > 0) {
+      parts.push(trCount + " Transcript mark group" + (trCount === 1 ? "" : "s"));
+    }
+    var msg = parts.join(" and ") + " detected. Include them as clips in the timeline viewer?";
+
+    showConfirm(
+      "Include Intake Events?",
+      msg,
+      function () { startTimelineViewerBuild(true); },
+      function () { startTimelineViewerBuild(false); }
+    );
   }
 
   function startTimelineViewerBuild(includeIntake) {
     state.generating = true;
     var body = {};
 
-    if (includeIntake && state.intakeClusters && state.intakeClusters.length > 0) {
+    var ssClusters = state.intakeClusters || [];
+    var trClusters = state.trIntakeClusters || [];
+    var hasIntake = includeIntake && (ssClusters.length > 0 || trClusters.length > 0);
+
+    if (hasIntake) {
       showOverlay("Building timeline viewer with intake events\u2026");
       body.include_intake = true;
-      body.intake_items = state.intakeClusters.map(function (c) {
+      var items = ssClusters.map(function (c) {
         return {
           participant: c.participant,
           start: c.start,
@@ -3122,6 +3136,20 @@
           event_ids: c.events.map(function (e) { return e.id; }),
         };
       });
+      for (var i = 0; i < trClusters.length; i++) {
+        var c = trClusters[i];
+        items.push({
+          participant: c.participant,
+          start: c.start,
+          end: c.end,
+          event_type: c.category || "transcript",
+          source: "transcript",
+          mark_ids: c.marks.map(function (m) { return m.id; }),
+          text: c.text || "",
+          label: c.label || "",
+        });
+      }
+      body.intake_items = items;
     } else {
       showOverlay("Building timeline viewer\u2026");
     }
