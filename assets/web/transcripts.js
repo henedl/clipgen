@@ -1140,6 +1140,26 @@
       '</div>';
   }
 
+  var _streamIndicatorRaf = null;
+  var _streamIndicatorPending = null;
+
+  function _updateStreamingIndicator(container, progress) {
+    _streamIndicatorPending = { container: container, progress: progress };
+    if (_streamIndicatorRaf) return;
+    _streamIndicatorRaf = requestAnimationFrame(function () {
+      _streamIndicatorRaf = null;
+      var pending = _streamIndicatorPending;
+      _streamIndicatorPending = null;
+      if (!pending || !pending.container || !pending.container.isConnected) return;
+      var ind = pending.container.querySelector(".streaming-indicator");
+      if (ind) ind.parentNode.removeChild(ind);
+      pending.container.insertAdjacentHTML(
+        "beforeend",
+        _streamingIndicatorHtml(pending.progress)
+      );
+    });
+  }
+
   function renderPartialSegments(segments, progress) {
     var container = qs("#segmentList");
     var empty = qs("#transcriptEmpty");
@@ -1164,6 +1184,8 @@
       _partialRender.marksVersion === _streamingMarksVersion &&
       segments.length >= _partialRender.count &&
       container.querySelector(".segment-streaming") !== null;
+    var indicatorOnly =
+      canAppend && segments.length === _partialRender.count;
 
     if (canAppend && segments.length > _partialRender.count) {
       // Append only the new trailing rows, then move/refresh the indicator.
@@ -1180,10 +1202,8 @@
       container.appendChild(frag);
       container.insertAdjacentHTML("beforeend", _streamingIndicatorHtml(progress));
     } else if (canAppend && segments.length === _partialRender.count) {
-      // Same segment count - only refresh the progress indicator.
-      var ind = container.querySelector(".streaming-indicator");
-      if (ind) ind.parentNode.removeChild(ind);
-      container.insertAdjacentHTML("beforeend", _streamingIndicatorHtml(progress));
+      // Same segment count - only refresh the progress indicator (coalesced).
+      _updateStreamingIndicator(container, progress);
     } else {
       // Full rebuild: pid change, restart, or marks cache changed.
       var html = "";
@@ -1220,7 +1240,9 @@
       });
     }
     state.segments = mirrored;
-    renderTimeline();
+    if (!indicatorOnly) {
+      renderTimeline();
+    }
   }
 
   // ---- Segment list event delegation ----

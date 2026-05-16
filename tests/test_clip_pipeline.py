@@ -410,3 +410,47 @@ def test_process_single_clip_segments_unlinks_partial_on_cancel(
     assert generated == 0
     assert paths == []
     assert not out_path.exists()
+
+
+def test_large_input_videos_cached(tmp_path, monkeypatch):
+    """_large_input_videos should glob/stat the input dir once per mtime."""
+    pipeline._fuzzy_input_videos_cache.clear()
+    monkeypatch.setattr(config, "MIN_SOURCE_VIDEO_SIZE_MB", 1)
+    (tmp_path / "study_P01.mp4").write_bytes(b"x" * 2_000_000)
+    first = pipeline._large_input_videos(tmp_path)
+    second = pipeline._large_input_videos(tmp_path)
+    assert first == second
+    assert len(first) == 1
+    assert first[0][1].name == "study_P01.mp4"
+
+
+def test_regenerate_from_manifest_parallel(monkeypatch):
+    """Independent artifacts regenerate concurrently when workers >= 2."""
+    artifacts = [
+        {
+            "id": f"a{i}",
+            "type": "clip",
+            "file": f"clip{i}.mp4",
+            "sourceVideo": "study_P01.mp4",
+            "start": 0,
+            "end": 10,
+            "description": f"clip {i}",
+            "participant": "P01",
+        }
+        for i in range(4)
+    ]
+    monkeypatch.setattr(config, "CLIP_PARALLEL_WORKERS", 4)
+    monkeypatch.setattr(pipeline.utils, "create_progress_bar", lambda: None)
+    monkeypatch.setattr(pipeline.utils, "print_mode_heading", lambda *a, **k: None)
+
+    calls: list[str] = []
+
+    def fake_regenerate(artifact, missing_videos):
+        calls.append(artifact["id"])
+        return True
+
+    monkeypatch.setattr(pipeline, "_regenerate_single_artifact", fake_regenerate)
+
+    count = pipeline.regenerate_from_manifest(artifacts)
+    assert count == 4
+    assert sorted(calls) == ["a0", "a1", "a2", "a3"]

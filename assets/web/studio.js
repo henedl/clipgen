@@ -2726,6 +2726,33 @@
 
   // ---- API calls ----
 
+  function buildGenerateCardIndex(listEl) {
+    var map = {};
+    var cards = listEl.querySelectorAll(".queue-card");
+    for (var i = 0; i < cards.length; i++) {
+      var card = cards[i];
+      var participant = card.getAttribute("data-participant");
+      var row = card.getAttribute("data-row");
+      if (!participant || row == null) continue;
+      var key = participant + "." + row;
+      if (!map[key]) map[key] = [];
+      map[key].push(card);
+    }
+    return map;
+  }
+
+  function updateGenerateProgress(done, total) {
+    var el = qs("#generateProgress");
+    if (!el) return;
+    if (!total || total <= 0) {
+      el.classList.add("hidden");
+      el.textContent = "";
+      return;
+    }
+    el.classList.remove("hidden");
+    el.textContent = done + " / " + total + " cells";
+  }
+
   function onGenerate() {
     if (state.generating || state.artifactQueue.length === 0) return;
     state.generating = true;
@@ -2765,9 +2792,13 @@
     var allArtifacts = [];
     var cancelled = false;
     var pending = (sheetItems.length > 0 ? 1 : 0) + (intakeItems.length > 0 ? 1 : 0);
+    var sheetCellTotal = 0;
+    var sheetCellsDone = 0;
+    var generateCardIndex = null;
 
     function finishBranch() {
       if (--pending > 0) return;
+      updateGenerateProgress(0, 0);
       setTitleSpinner("artifactsSpinner", false);
       state.generating = false;
       setGeneratingLock(false);
@@ -2800,6 +2831,9 @@
         var ck = sheetItems[si].participant + "." + sheetItems[si].row;
         if (!cellsSeen[ck]) { cellsSeen[ck] = true; cells.push(ck); }
       }
+      sheetCellTotal = cells.length;
+      generateCardIndex = buildGenerateCardIndex(list);
+      updateGenerateProgress(0, sheetCellTotal);
 
       function handleLine(line) {
         var data;
@@ -2814,13 +2848,9 @@
           return;
         }
         if (!data.cell) return;
-        var dot = data.cell.lastIndexOf(".");
-        var participant = data.cell.substring(0, dot);
-        var row = data.cell.substring(dot + 1);
-        var cards = list.querySelectorAll(
-          '[data-participant="' + CSS.escape(participant) +
-          '"][data-row="' + CSS.escape(row) + '"]'
-        );
+        sheetCellsDone++;
+        updateGenerateProgress(sheetCellsDone, sheetCellTotal);
+        var cards = generateCardIndex[data.cell] || [];
         if (data.ok) {
           for (var ci = 0; ci < cards.length; ci++) setCardResult(cards[ci], true);
           totalSuccess += (data.generated || 1);

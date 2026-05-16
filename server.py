@@ -1171,8 +1171,7 @@ def api_open_viewer() -> FlaskResponse:
 @studio_bp.route("/api/manifest", methods=["GET", "POST"])
 def api_manifest() -> FlaskResponse:
     if request.method == "GET":
-        artifacts = viewer.load_manifest_artifacts()
-        reels = viewer.load_manifest_reels()
+        artifacts, reels = viewer._load_manifest_both()
         return jsonify({"ok": True, "artifacts": artifacts, "reels": reels})
 
     # Snapshot the shared lists so a worker thread extending mid-export

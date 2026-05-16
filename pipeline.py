@@ -18,6 +18,7 @@ import concurrent.futures
 import difflib
 import hashlib
 import os
+import threading
 from pathlib import Path
 from typing import Any, Callable
 
@@ -55,6 +56,38 @@ def _resolve_clip_workers() -> int:
     return workers
 
 
+# Large .mp4 files in the input dir, keyed by path + mtime_ns (one glob/stat pass per run).
+_fuzzy_input_videos_cache: dict[str, tuple[int | None, list[tuple[int, Path]]]] = {}
+
+
+def _large_input_videos(input_dir: Path) -> list[tuple[int, Path]]:
+    """Return (size_bytes, path) for source-video candidates under *input_dir*."""
+    dir_str = str(input_dir)
+    try:
+        mtime_ns: int | None = (
+            input_dir.stat().st_mtime_ns if input_dir.is_dir() else None
+        )
+    except OSError:
+        mtime_ns = None
+
+    cached = _fuzzy_input_videos_cache.get(dir_str)
+    if cached is not None and cached[0] == mtime_ns:
+        return cached[1]
+
+    size_threshold = config.MIN_SOURCE_VIDEO_SIZE_MB * 1_000_000
+    entries: list[tuple[int, Path]] = []
+    for p in input_dir.glob(f"*{config.FILEFORMAT}"):
+        try:
+            size = p.stat().st_size
+        except OSError:
+            continue
+        if size >= size_threshold:
+            entries.append((size, p))
+
+    _fuzzy_input_videos_cache[dir_str] = (mtime_ns, entries)
+    return entries
+
+
 def _check_source_video(
     clip: ClipRecord,
     missing_videos: set[str],
@@ -83,20 +116,11 @@ def _check_source_video(
     if full_path_str in fuzzy_matches:
         return fuzzy_matches[full_path_str]
 
-    # Scan input directory for large .mp4 files as fuzzy candidates
     input_dir = utils.get_effective_input_dir()
-    size_threshold = config.MIN_SOURCE_VIDEO_SIZE_MB * 1_000_000
-    candidates = []
-    for p in input_dir.glob(f"*{config.FILEFORMAT}"):
-        try:
-            size = p.stat().st_size
-        except OSError:
-            continue
-        if size >= size_threshold:
-            ratio = difflib.SequenceMatcher(
-                None, base_name.lower(), p.name.lower()
-            ).ratio()
-            candidates.append((ratio, size, p))
+    candidates: list[tuple[float, int, Path]] = []
+    for size, p in _large_input_videos(input_dir):
+        ratio = difflib.SequenceMatcher(None, base_name.lower(), p.name.lower()).ratio()
+        candidates.append((ratio, size, p))
 
     # Sort by similarity descending, then file size descending as tiebreaker
     candidates.sort(key=lambda c: (c[0], c[1]), reverse=True)
@@ -1091,24 +1115,62 @@ def regenerate_from_manifest(
 
     utils.print_mode_heading("Regenerating artifacts", "mode.regenerate")
     missing_videos: set[str] = set()
+    missing_lock = threading.Lock()
     generated = 0
+    reel_list = reels or []
+    workers = _resolve_clip_workers()
+    parallel_media = workers >= 2 and len(media) >= 2
+
+    def _regenerate_artifact_threadsafe(artifact: dict[str, Any]) -> bool:
+        local_missing: set[str] = set()
+        ok = _regenerate_single_artifact(artifact, local_missing)
+        if local_missing:
+            with missing_lock:
+                missing_videos.update(local_missing)
+        return ok
 
     progress = utils.create_progress_bar()
     if progress:
         with progress:
             task = progress.add_task("Regenerating", total=total)
-            for artifact in media:
-                desc_preview = (artifact.get("description") or "")[
-                    : config.PROGRESS_DESCRIPTION_LENGTH
-                ]
-                progress.update(
-                    task,
-                    description=f"[{artifact.get('participant', '')}] {desc_preview}...",
-                )
-                if _regenerate_single_artifact(artifact, missing_videos):
-                    generated += 1
-                progress.update(task, advance=1)
-            for reel in reels or []:
+            if parallel_media:
+                results: list[bool] = [False] * len(media)
+                with concurrent.futures.ThreadPoolExecutor(
+                    max_workers=workers,
+                ) as pool:
+                    future_to_idx = {
+                        pool.submit(_regenerate_artifact_threadsafe, art): idx
+                        for idx, art in enumerate(media)
+                    }
+                    for future in concurrent.futures.as_completed(future_to_idx):
+                        idx = future_to_idx[future]
+                        try:
+                            results[idx] = future.result()
+                        except Exception as exc:
+                            art = media[idx]
+                            desc_preview = (art.get("description") or "")[
+                                : config.PROGRESS_DESCRIPTION_LENGTH
+                            ]
+                            utils.error_print(
+                                f"Regenerate failed: [{art.get('participant', '')}] {desc_preview}",
+                                [str(exc)],
+                            )
+                            results[idx] = False
+                        progress.update(task, advance=1)
+                generated += sum(1 for ok in results if ok)
+            else:
+                for artifact in media:
+                    desc_preview = (artifact.get("description") or "")[
+                        : config.PROGRESS_DESCRIPTION_LENGTH
+                    ]
+                    progress.update(
+                        task,
+                        description=f"[{artifact.get('participant', '')}] {desc_preview}...",
+                    )
+                    if _regenerate_single_artifact(artifact, missing_videos):
+                        generated += 1
+                    progress.update(task, advance=1)
+            for reel in reel_list:
                 progress.update(
                     task,
                     description=reel.get("description", "Reel")[
@@ -1118,11 +1180,33 @@ def regenerate_from_manifest(
                 if _regenerate_reel(reel, missing_videos):
                     generated += 1
                 progress.update(task, advance=1)
+    elif parallel_media:
+        results = [False] * len(media)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
+            future_to_idx = {
+                pool.submit(_regenerate_artifact_threadsafe, art): idx
+                for idx, art in enumerate(media)
+            }
+            for future in concurrent.futures.as_completed(future_to_idx):
+                idx = future_to_idx[future]
+                try:
+                    results[idx] = future.result()
+                except Exception as exc:
+                    art = media[idx]
+                    utils.error_print(
+                        f"Regenerate failed: [{art.get('participant', '')}]",
+                        [str(exc)],
+                    )
+                    results[idx] = False
+        generated += sum(1 for ok in results if ok)
+        for reel in reel_list:
+            if _regenerate_reel(reel, missing_videos):
+                generated += 1
     else:
         for artifact in media:
             if _regenerate_single_artifact(artifact, missing_videos):
                 generated += 1
-        for reel in reels or []:
+        for reel in reel_list:
             if _regenerate_reel(reel, missing_videos):
                 generated += 1
 
