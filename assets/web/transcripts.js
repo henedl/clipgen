@@ -474,6 +474,7 @@
       state.participants = data.participants;
       state.transcribePrewarm = data.transcribe_prewarm || "queue_open";
       renderPills();
+      refreshTopNavActions();
 
       if (!needsTranscription()) {
         _transcriptionWarmupPosted = false;
@@ -520,6 +521,7 @@
     state.selectedParticipant = pid;
     setStoredUIStateField("transcripts", "selectedParticipant", pid);
     renderPills();
+    refreshTopNavActions();
 
     // Find participant info
     var p = null;
@@ -3465,12 +3467,82 @@
       .catch(function (err) { showToast("Export failed: " + err.message); });
   }
 
+  function runEmbedSubtitle() {
+    var pid = state.selectedParticipant;
+    if (!pid) return;
+    showToast("Embedding subtitle…");
+    apiPost("api/embed-subtitle/" + pid, {})
+      .then(function (data) {
+        if (data && data.ok) showToast("Wrote " + data.output_filename);
+        else showToast((data && data.error) || "Embed failed");
+      })
+      .catch(function (err) { showToast("Embed failed: " + err.message); });
+  }
+
+  function runEmbedAllSubtitles() {
+    showToast("Embedding subtitles for all transcripts…");
+    apiPost("api/embed-all-subtitles", {})
+      .then(function (data) {
+        if (!data || !data.ok) {
+          showToast((data && data.error) || "Embed failed");
+          return;
+        }
+        var results = data.results || [];
+        var okCount = 0;
+        for (var i = 0; i < results.length; i++) if (results[i].ok) okCount++;
+        showToast("Embedded " + okCount + "/" + results.length + " video(s) to " + data.output_dir);
+      })
+      .catch(function (err) { showToast("Embed failed: " + err.message); });
+  }
+
   var _exportEnabled = false;
+  var _rebuildTopNavActions = function () {};
+
+  function _currentParticipantHasTranscript() {
+    var pid = state.selectedParticipant;
+    if (!pid || !state.participants) return false;
+    for (var i = 0; i < state.participants.length; i++) {
+      if (state.participants[i].id === pid) return !!state.participants[i].has_transcript;
+    }
+    return false;
+  }
+
+  function _anyTranscriptExists() {
+    var ps = state.participants || [];
+    for (var i = 0; i < ps.length; i++) {
+      if (ps[i].has_transcript) return true;
+    }
+    return false;
+  }
+
+  function refreshTopNavActions() {
+    _rebuildTopNavActions();
+  }
 
   function initTopNavActions() {
     if (!window.ClipgenTopNav) return;
     function rebuild() {
+      var hasOne = _currentParticipantHasTranscript();
+      var hasAny = _anyTranscriptExists();
       window.ClipgenTopNav.setQuickActions([
+        {
+          icon: "language",
+          label: "Embed Subtitle in Video",
+          action: runEmbedSubtitle,
+          disabled: !hasOne,
+          title: hasOne
+            ? "Mux this participant's transcript into a copy of their source video"
+            : "Select a participant with a transcript to enable this.",
+        },
+        {
+          icon: "film",
+          label: "Embed all Subtitles",
+          action: runEmbedAllSubtitles,
+          disabled: !hasAny,
+          title: hasAny
+            ? "Mux every participant's transcript into a subtitled copy of their video"
+            : "Transcribe at least one video to enable this.",
+        },
         {
           icon: "arrow-down-tray",
           label: "Export",
@@ -3482,12 +3554,13 @@
         },
       ]);
     }
+    _rebuildTopNavActions = rebuild;
     function refreshExportStatus() {
       fetch("/api/export/status")
         .then(function (r) { return r.json(); })
         .then(function (j) {
           var next = !!(j && j.any);
-          if (next === _exportEnabled) return;
+          if (next === _exportEnabled) { rebuild(); return; }
           _exportEnabled = next;
           rebuild();
         })

@@ -25,7 +25,11 @@
   top: 0;
   left: 0;
   right: 0;
-  z-index: var(--z-dropdown);
+  /* One tier above sticky page chrome (#trSubheader, #studioSubheader,
+   * #ssSubheader at --z-dropdown) so the Quick Actions panel — which lives
+   * inside .topnav's stacking context — paints above the subheader as it
+   * drops past 48px. */
+  z-index: calc(var(--z-dropdown) + 1);
 }
 @supports not (backdrop-filter: blur(1px)) {
   .topnav { background: var(--bg); }

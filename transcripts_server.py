@@ -12,6 +12,8 @@ API endpoints (all under /transcripts/):
   GET  /api/transcript/<participant>              - full transcript segments (corrections applied)
   PUT  /api/transcript/<participant>/segment      - edit a segment's text, creates correction
   GET  /api/vtt/<participant>                     - serve transcript as WebVTT
+  POST /api/embed-subtitle/<participant>          - mux participant transcript into a copy of their video
+  POST /api/embed-all-subtitles                   - mux every participant's transcript into a subtitled copy of their video
   GET  /api/summary/<participant>                - AI-generated transcript summary
   POST /api/summary/<participant>/regenerate    - re-trigger AI summary generation
   POST /api/summary/<participant>/stop          - flag in-flight summary for discard
@@ -34,6 +36,8 @@ API endpoints (all under /transcripts/):
   GET  /api/transcribe/model-status               - whether the Whisper model is loaded or warming
 """
 
+import os
+import tempfile
 import threading
 import uuid
 from datetime import datetime, timezone
@@ -48,6 +52,7 @@ import ollama_client
 import thinking_agents
 import transcripts
 import utils
+import video
 
 FlaskResponse = Response | tuple[Response, int]
 
@@ -343,6 +348,147 @@ def api_vtt(participant: str) -> FlaskResponse:
     )
     vtt_text = transcripts._format_vtt(result)
     return Response(vtt_text, content_type="text/vtt")
+
+
+# ---- Embed subtitles into video ----
+
+
+def _video_path_for_participant(participant: str) -> str | None:
+    """Return the source video path for *participant*, or None if unknown."""
+    for p in _participants:
+        if p["id"] == participant:
+            return p["video_path"]
+    return None
+
+
+def _embed_subtitle_for_participant(
+    participant: str, output_dir: Path
+) -> dict[str, Any]:
+    """Mux *participant*'s transcript into a copy of their source video.
+
+    Returns a dict describing the outcome:
+        {"participant": pid, "ok": True, "output_path": str, "output_filename": str}
+        {"participant": pid, "ok": False, "error": str}
+    Snapshots manifest state under the lock so concurrent edits cannot mutate
+    segments or corrections mid-format.
+    """
+    with _manifest_lock:
+        entry = _manifest.get("source_transcripts", {}).get(participant)
+        if not entry or not entry.get("segments"):
+            return {
+                "participant": participant,
+                "ok": False,
+                "error": "No transcript for participant",
+            }
+        segments_snapshot = list(entry["segments"])
+        corrections_snapshot = list(_manifest.get("corrections", []))
+        language = entry.get("language", "")
+        source_file = entry.get("source_file", "")
+        model = entry.get("model", "")
+
+    video_path = _video_path_for_participant(participant)
+    if not video_path or not Path(video_path).is_file():
+        return {
+            "participant": participant,
+            "ok": False,
+            "error": "Source video not found",
+        }
+
+    corrected = transcripts.apply_corrections(segments_snapshot, corrections_snapshot)
+    result = transcripts.TranscriptResult(
+        segments=corrected,
+        language=language,
+        source_file=source_file,
+        model=model,
+    )
+    srt_text = transcripts._format_srt(result)
+    if not srt_text:
+        return {
+            "participant": participant,
+            "ok": False,
+            "error": "Transcript produced no SRT output",
+        }
+
+    src = Path(video_path)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    desired_name = f"{src.stem}-subtitled{src.suffix}"
+    output_path = files.get_unique_filename(
+        str(output_dir / desired_name), file_format=src.suffix
+    )
+
+    tmp = tempfile.NamedTemporaryFile(
+        mode="w", suffix=".srt", delete=False, encoding="utf-8"
+    )
+    try:
+        tmp.write(srt_text)
+        tmp.close()
+        ok = video.mux_subtitles(
+            str(video_path),
+            tmp.name,
+            output_path,
+            track_language=language or "und",
+        )
+    finally:
+        try:
+            os.unlink(tmp.name)
+        except OSError:
+            pass
+
+    if not ok:
+        return {
+            "participant": participant,
+            "ok": False,
+            "error": "ffmpeg failed to mux subtitles",
+        }
+    return {
+        "participant": participant,
+        "ok": True,
+        "output_path": output_path,
+        "output_filename": Path(output_path).name,
+    }
+
+
+@transcripts_bp.route("/api/embed-subtitle/<participant>", methods=["POST"])
+def api_embed_subtitle(participant: str) -> FlaskResponse:
+    """Mux *participant*'s transcript into a copy of their source video.
+
+    Writes ``<video-stem>-subtitled<ext>`` into the effective output dir
+    (uniquified if a previous run already wrote that name).
+    """
+    output_dir = Path(utils.get_effective_output_dir())
+    outcome = _embed_subtitle_for_participant(participant, output_dir)
+    if not outcome["ok"]:
+        status = 404 if outcome["error"] == "No transcript for participant" else 500
+        return jsonify({"ok": False, "error": outcome["error"]}), status
+    return jsonify(
+        {
+            "ok": True,
+            "output_path": outcome["output_path"],
+            "output_filename": outcome["output_filename"],
+            "output_dir": str(output_dir),
+        }
+    )
+
+
+@transcripts_bp.route("/api/embed-all-subtitles", methods=["POST"])
+def api_embed_all_subtitles() -> FlaskResponse:
+    """Mux every participant with a transcript into a subtitled copy."""
+    output_dir = Path(utils.get_effective_output_dir())
+    with _manifest_lock:
+        src = _manifest.get("source_transcripts", {})
+        targets = [pid for pid, entry in src.items() if entry.get("segments")]
+    if not targets:
+        return jsonify(
+            {"ok": False, "error": "No transcripts available to embed."}
+        ), 404
+    results = [_embed_subtitle_for_participant(pid, output_dir) for pid in targets]
+    return jsonify(
+        {
+            "ok": True,
+            "results": results,
+            "output_dir": str(output_dir),
+        }
+    )
 
 
 # ---- AI Summary ----

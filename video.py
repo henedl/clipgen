@@ -276,6 +276,108 @@ def build_ffmpeg_cut_command(
     return base + [output_file]
 
 
+_SUBTITLE_CODEC_BY_CONTAINER = {
+    ".mp4": "mov_text",
+    ".m4v": "mov_text",
+    ".mov": "mov_text",
+    ".mkv": "srt",
+    ".webm": "webvtt",
+}
+
+
+def mux_subtitles(
+    input_video: str,
+    srt_path: str,
+    output_video: str,
+    *,
+    track_title: str = "Transcript",
+    track_language: str = "und",
+) -> bool:
+    """Stream-copy *input_video* and add *srt_path* as a soft subtitle stream.
+
+    The subtitle codec is chosen from the output container: ``mov_text`` for
+    .mp4/.mov/.m4v, ``srt`` (subrip) for .mkv, ``webvtt`` for .webm.
+    Video and audio streams are stream-copied (no re-encode). Returns True
+    on success, False on any validation or ffmpeg failure.
+    """
+    if not Path(input_video).is_file():
+        utils.error_print(
+            f"Input video file not found: '{input_video}'",
+            [f"Expected location: {Path(input_video).resolve()}"],
+        )
+        return False
+    if not Path(srt_path).is_file():
+        utils.error_print(
+            f"Subtitle file not found: '{srt_path}'",
+            [f"Expected location: {Path(srt_path).resolve()}"],
+        )
+        return False
+
+    suffix = Path(output_video).suffix.lower()
+    codec = _SUBTITLE_CODEC_BY_CONTAINER.get(suffix)
+    if codec is None:
+        utils.error_print(
+            f"Unsupported output container '{suffix}' for subtitle muxing.",
+            [
+                f"Output: '{output_video}'",
+                "Supported: " + ", ".join(sorted(_SUBTITLE_CODEC_BY_CONTAINER)),
+            ],
+        )
+        return False
+
+    ffmpeg_command = [
+        "ffmpeg",
+        "-y",
+        "-loglevel",
+        config.FFMPEG_LOGLEVEL,
+        "-i",
+        input_video,
+        "-i",
+        srt_path,
+        "-map",
+        "0",
+        "-map",
+        "1:0",
+        "-c",
+        "copy",
+        "-c:s",
+        codec,
+        "-metadata:s:s:0",
+        f"language={track_language}",
+        "-metadata:s:s:0",
+        f"title={track_title}",
+        "-disposition:s:0",
+        "default",
+        output_video,
+    ]
+
+    utils.verbose_print(f"Muxing subtitles into {Path(output_video).name} ({codec}).")
+    if config.DEBUGGING:
+        ic(ffmpeg_command)
+        return False
+
+    result = run_ffmpeg_process(
+        ffmpeg_command,
+        input_file=input_video,
+        output_file=output_video,
+        os_error_message="Failed to mux subtitles into video.",
+    )
+    if result is None:
+        return False
+    if result.returncode != 0:
+        details = _add_ffmpeg_stderr(
+            [
+                f"Input video: '{input_video}'",
+                f"Subtitle: '{srt_path}'",
+                f"Output: '{output_video}'",
+            ],
+            result,
+        )
+        utils.error_print("ffmpeg returned a non-zero exit status.", details)
+        return False
+    return verify_output_file(output_video, "Subtitle mux")
+
+
 def run_ffmpeg(
     input_file: str,
     output_file: str,
