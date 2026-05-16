@@ -351,6 +351,9 @@ def api_video_frame(participant: str, timestamp: str) -> FlaskResponse:
             return jsonify({"ok": False, "error": "Could not extract frame"}), 400
         jpeg_bytes = jpeg.tobytes()
 
+    if jpeg_bytes is None:
+        return jsonify({"ok": False, "error": "Could not extract frame"}), 400
+
     with _frame_cache_lock:
         _frame_cache[cache_key] = jpeg_bytes
         while len(_frame_cache) > _FRAME_CACHE_MAX:
