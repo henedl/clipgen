@@ -260,7 +260,12 @@ MARK_CATEGORIES: dict[str, dict[str, str]] = {
 }
 
 # ── Ollama (Local AI) ───────────────────────────────────────────────
-OLLAMA_SUMMARY_ENABLED: bool = True  # auto-generate transcript summaries via Ollama
+OLLAMA_SUMMARY_ENABLED: bool = (
+    True  # auto-generate transcript summaries via Ollama after transcription completes
+)
+OLLAMA_CITATIONS_ENABLED: bool = (
+    True  # auto-generate citation links via Ollama after the summary completes
+)
 OLLAMA_SUMMARY_MODEL: str = "qwen3.5:9b"  # model for transcript summaries and citations
 OLLAMA_BASE_URL: str = "http://localhost:11434"  # Ollama server address
 OLLAMA_UNLOAD_DELAY_SECONDS: float = 15.0  # after Stop, evict the model from memory if no new run starts within this delay
@@ -296,7 +301,8 @@ SETTINGS_DESCRIPTIONS: dict[str, str] = {
     "FILMSTRIP_ENABLED": "Show thumbnail images on timeline markers instead of solid colors (in the HTML viewer).",
     "GALLERY_BUNDLE_ENABLED": "Embed gallery images as base64 data URIs in the HTML file, making it fully self-contained.",
     "CLIP_PARALLEL_WORKERS": "Number of concurrent ffmpeg processes for clip generation. 0 = auto, 1 = sequential.",
-    "OLLAMA_SUMMARY_ENABLED": "Auto-generate AI summaries of transcripts using a local Ollama model.",
+    "OLLAMA_SUMMARY_ENABLED": "Auto-generate an AI summary of each transcript after transcription completes. Disable to keep summaries manual-only (the per-participant Regenerate Summary button still works).",
+    "OLLAMA_CITATIONS_ENABLED": "Auto-generate citation links between summary claims and transcript segments after the summary completes. Disable to keep citations manual-only (the per-participant Regenerate Citations button still works).",
     "OLLAMA_SUMMARY_MODEL": "Ollama model used for transcript summaries and citation linking.",
     "OLLAMA_BASE_URL": "Base URL of the local Ollama server.",
     "SCREENSHOT_FORMAT": "File format for screenshot artifacts. WebP is smaller but requires modern browsers (Safari 16+).",
@@ -421,6 +427,11 @@ STUDIO_SETTINGS: dict[str, dict[str, Any]] = {
         "type": "mark_categories",
     },
     "OLLAMA_SUMMARY_ENABLED": {
+        "tab": "AI / Ollama",
+        "group": "AI Summary",
+        "type": "bool",
+    },
+    "OLLAMA_CITATIONS_ENABLED": {
         "tab": "AI / Ollama",
         "group": "AI Summary",
         "type": "bool",
