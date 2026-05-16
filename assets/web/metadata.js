@@ -1683,6 +1683,11 @@
     }
   }
 
+  function refreshIfActive() {
+    if (!mdState.active) return;
+    refresh();
+  }
+
   function deactivate() {
     mdState.active = false;
   }
@@ -1704,5 +1709,6 @@
   // --- Window exports ---
   window.metadataActivate = activate;
   window.metadataDeactivate = deactivate;
+  window.metadataRefreshIfActive = refreshIfActive;
   window.metadataResize = debounce(resize, 200);
 })();

@@ -800,6 +800,11 @@
     }
   }
 
+  function refreshMetadataIfActive() {
+    if (state.activePreviewTab !== "metadata") return;
+    if (window.metadataRefreshIfActive) window.metadataRefreshIfActive();
+  }
+
   // ---- Queue persistence (sessionStorage) ----
 
   function saveQueues() {
@@ -853,6 +858,7 @@
           }
           clipgenApplyConfig(data.config);
           state.sheetData = data;
+          refreshMetadataIfActive();
           return;
         }
         state.sheetData = data;
@@ -868,8 +874,12 @@
           .then(function (bdata) {
             state.convergenceBaselines = (bdata.ok && bdata.baselines) ? bdata.baselines : {};
             if (Object.keys(state.convergenceBaselines).length > 0) renderGrid();
+            refreshMetadataIfActive();
           })
-          .catch(function () { state.convergenceBaselines = {}; });
+          .catch(function () {
+            state.convergenceBaselines = {};
+            refreshMetadataIfActive();
+          });
         populateGalleryParticipants(data.participants || []);
         var durInput = qs("#highlightsDuration");
         if (durInput && data.highlightsDuration) {
@@ -898,6 +908,7 @@
         }
         loadManifestState();
         checkConvergenceTabVisibility();
+        refreshMetadataIfActive();
       })
       .catch(function (err) {
         qs("#sheetLoading").textContent = "Failed to load sheet: " + err;
@@ -3756,6 +3767,7 @@
         state.intakeClusters = clusterIntakeEvents(events, threshold);
         renderIntake(hasNew);
         checkConvergenceTabVisibility();
+        refreshMetadataIfActive();
       })
       .catch(function (err) {
         console.warn("[Intake] poll failed:", err);
@@ -4251,12 +4263,14 @@
                 state.trIntakeClusters = clusterTranscriptMarks(allItems, threshold);
                 renderTranscriptIntake();
                 checkConvergenceTabVisibility();
+                refreshMetadataIfActive();
               });
             })
             .catch(function () {});
         } else {
           renderTranscriptIntake();
           checkConvergenceTabVisibility();
+          refreshMetadataIfActive();
         }
       })
       .catch(function () {});
