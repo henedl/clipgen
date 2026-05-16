@@ -152,10 +152,10 @@ def _agent_state_clean():
     """
 
     def _reset() -> None:
-        for key in transcripts_server._agent_in_flight:
-            transcripts_server._agent_in_flight[key].clear()
-        for key in transcripts_server._agent_cancel_events:
-            transcripts_server._agent_cancel_events[key].clear()
+        for key in transcripts_server._orchestrator._in_flight:
+            transcripts_server._orchestrator._in_flight[key].clear()
+        for key in transcripts_server._orchestrator._cancel_events:
+            transcripts_server._orchestrator._cancel_events[key].clear()
         with transcripts_server._pending_model_unloads_lock:
             for timer in transcripts_server._pending_model_unloads.values():
                 timer.cancel()
@@ -171,8 +171,8 @@ def test_summary_stop_sets_cancel_event(tr_client, _agent_state_clean):
     the participant from the in-flight set so the UI flips to idle."""
     pid = "P01"
     evt = threading.Event()
-    transcripts_server._agent_in_flight["summary"].add(pid)
-    transcripts_server._agent_cancel_events["summary"][pid] = evt
+    transcripts_server._orchestrator._in_flight["summary"].add(pid)
+    transcripts_server._orchestrator._cancel_events["summary"][pid] = evt
 
     resp = tr_client.post(f"/transcripts/api/summary/{pid}/stop")
     assert resp.status_code == 200
@@ -180,7 +180,7 @@ def test_summary_stop_sets_cancel_event(tr_client, _agent_state_clean):
     assert data["ok"] is True
     assert data["running"] is False
     assert evt.is_set()
-    assert pid not in transcripts_server._agent_in_flight["summary"]
+    assert pid not in transcripts_server._orchestrator._in_flight["summary"]
 
 
 def test_citations_stop_sets_cancel_event(tr_client, _agent_state_clean):
@@ -188,8 +188,8 @@ def test_citations_stop_sets_cancel_event(tr_client, _agent_state_clean):
     remove the participant from the in-flight set."""
     pid = "P01"
     evt = threading.Event()
-    transcripts_server._agent_in_flight["citations"].add(pid)
-    transcripts_server._agent_cancel_events["citations"][pid] = evt
+    transcripts_server._orchestrator._in_flight["citations"].add(pid)
+    transcripts_server._orchestrator._cancel_events["citations"][pid] = evt
 
     resp = tr_client.post(f"/transcripts/api/citations/{pid}/stop")
     assert resp.status_code == 200
@@ -197,7 +197,7 @@ def test_citations_stop_sets_cancel_event(tr_client, _agent_state_clean):
     assert data["ok"] is True
     assert data["running"] is False
     assert evt.is_set()
-    assert pid not in transcripts_server._agent_in_flight["citations"]
+    assert pid not in transcripts_server._orchestrator._in_flight["citations"]
 
 
 def test_summary_stop_when_not_running_is_noop(tr_client, _agent_state_clean):
@@ -207,7 +207,7 @@ def test_summary_stop_when_not_running_is_noop(tr_client, _agent_state_clean):
     data = resp.get_json()
     assert data["ok"] is True
     assert data["running"] is False
-    assert "P01" not in transcripts_server._agent_cancel_events["summary"]
+    assert "P01" not in transcripts_server._orchestrator._cancel_events["summary"]
 
 
 def test_citations_stop_when_not_running_is_noop(tr_client, _agent_state_clean):
@@ -217,7 +217,7 @@ def test_citations_stop_when_not_running_is_noop(tr_client, _agent_state_clean):
     data = resp.get_json()
     assert data["ok"] is True
     assert data["running"] is False
-    assert "P01" not in transcripts_server._agent_cancel_events["citations"]
+    assert "P01" not in transcripts_server._orchestrator._cancel_events["citations"]
 
 
 # ---- Model unload scheduling ----
@@ -231,8 +231,8 @@ def test_summary_stop_schedules_model_unload(
     monkeypatch.setattr(config, "OLLAMA_UNLOAD_DELAY_SECONDS", 30.0)
     pid = "P01"
     evt = threading.Event()
-    transcripts_server._agent_in_flight["summary"].add(pid)
-    transcripts_server._agent_cancel_events["summary"][pid] = evt
+    transcripts_server._orchestrator._in_flight["summary"].add(pid)
+    transcripts_server._orchestrator._cancel_events["summary"][pid] = evt
 
     tr_client.post(f"/transcripts/api/summary/{pid}/stop")
 
@@ -247,8 +247,8 @@ def test_citations_stop_schedules_model_unload(
     monkeypatch.setattr(config, "OLLAMA_UNLOAD_DELAY_SECONDS", 30.0)
     pid = "P01"
     evt = threading.Event()
-    transcripts_server._agent_in_flight["citations"].add(pid)
-    transcripts_server._agent_cancel_events["citations"][pid] = evt
+    transcripts_server._orchestrator._in_flight["citations"].add(pid)
+    transcripts_server._orchestrator._cancel_events["citations"][pid] = evt
 
     tr_client.post(f"/transcripts/api/citations/{pid}/stop")
 

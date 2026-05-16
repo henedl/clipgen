@@ -60,25 +60,11 @@ _participants: list[dict[str, Any]] = []
 _manifest_lock = threading.Lock()
 _transcript_model_warming = False
 _transcript_model_warming_lock = threading.Lock()
-# Tracks in-flight thinking-agent runs, keyed by agent key (e.g. "summary",
-# "citations"). Each value is a set of participant IDs currently being
-# processed by that agent.
-_agent_threads: dict[str, set[threading.Thread]] = {
-    a["key"]: set() for a in thinking_agents.AGENTS
-}
-_agent_in_flight: dict[str, set[str]] = {
-    a["key"]: set() for a in thinking_agents.AGENTS
-}
-# Per-run cancel events. When the orchestrator starts an agent for a
-# participant, it registers a fresh ``threading.Event`` here; the Ollama
-# transport closes its streaming HTTP response on ``event.set()``, which
-# unblocks the read loop and frees the model promptly. The /stop endpoints
-# look up the event and call ``set()``. The discard-on-return check in
-# ``_run_agent`` keeps result-and-chain-advance gated on the same event as a
-# defense-in-depth measure for finish-vs-cancel races.
-_agent_cancel_events: dict[str, dict[str, threading.Event]] = {
-    a["key"]: {} for a in thinking_agents.AGENTS
-}
+# Thinking-agent orchestrator. Owns per-agent in-flight, cancel-event, and
+# thread state. The `AgentOrchestrator` class is defined further down and the
+# instance is bound at module load. Routes call methods on this; nothing else
+# should reach into orchestrator internals.
+_orchestrator: "AgentOrchestrator"
 
 # After a Stop, schedule a delayed Ollama model unload so the model is evicted
 # from memory if no follow-up run starts soon. Keyed by model name → Timer.
@@ -122,11 +108,6 @@ def _cancel_pending_unload(model: str) -> None:
         timer.cancel()
 
 
-def _is_generating(participant: str, agent_key: str) -> bool:
-    """Return True if *agent_key* is currently running for *participant*."""
-    return participant in _agent_in_flight.get(agent_key, set())
-
-
 def _agent_model(agent_key: str) -> str | None:
     """Look up the Ollama model name configured for *agent_key*."""
     agent = thinking_agents.get_agent(agent_key)
@@ -146,7 +127,7 @@ def _step_state_agent(pid: str, entry: dict[str, Any], agent_key: str) -> str:
         (a["manifest_field"] for a in thinking_agents.AGENTS if a["key"] == agent_key),
         agent_key,
     )
-    if _is_generating(pid, agent_key):
+    if _orchestrator.is_generating(pid, agent_key):
         return "running"
     if entry.get(field_name):
         return "done"
@@ -373,7 +354,7 @@ def api_summary(participant: str) -> FlaskResponse:
     with _manifest_lock:
         entry = _manifest.get("source_transcripts", {}).get(participant)
         if not entry or not entry.get("summary"):
-            if _is_generating(participant, "summary"):
+            if _orchestrator.is_generating(participant, "summary"):
                 return jsonify({"ok": False, "generating": True})
             return jsonify({"ok": False}), 404
         summary = entry["summary"]
@@ -381,7 +362,7 @@ def api_summary(participant: str) -> FlaskResponse:
     resp: dict[str, Any] = {"ok": True, "summary": summary}
     if citations:
         resp["citations"] = citations
-    resp["citations_generating"] = _is_generating(participant, "citations")
+    resp["citations_generating"] = _orchestrator.is_generating(participant, "citations")
     return jsonify(resp)
 
 
@@ -392,7 +373,7 @@ def api_summary_regenerate(participant: str) -> FlaskResponse:
     Manual trigger: runs even when config.OLLAMA_SUMMARY_ENABLED is False
     so the frontend's per-participant controls can force a run.
     """
-    if _is_generating(participant, "summary"):
+    if _orchestrator.is_generating(participant, "summary"):
         return jsonify({"ok": True, "generating": True})
     with _manifest_lock:
         entry = _manifest.get("source_transcripts", {}).get(participant)
@@ -401,7 +382,7 @@ def api_summary_regenerate(participant: str) -> FlaskResponse:
         entry["summary"] = ""
         entry.pop("citations", None)
     _persist_manifest()
-    _run_agent_chain(participant, force=True)
+    _orchestrator.run_chain(participant, force=True)
     return jsonify({"ok": True, "generating": True})
 
 
@@ -414,15 +395,10 @@ def api_summary_stop(participant: str) -> FlaskResponse:
     immediately. After a short delay, the model is unloaded from memory if
     no new run has started in the meantime.
     """
-    if not _is_generating(participant, "summary"):
-        return jsonify({"ok": True, "running": False})
-    event = _agent_cancel_events["summary"].get(participant)
-    if event is not None:
-        event.set()
-    _agent_in_flight["summary"].discard(participant)
-    model = _agent_model("summary")
-    if model:
-        _schedule_model_unload(model)
+    if _orchestrator.stop("summary", participant):
+        model = _agent_model("summary")
+        if model:
+            _schedule_model_unload(model)
     return jsonify({"ok": True, "running": False})
 
 
@@ -455,7 +431,7 @@ def api_citations(participant: str) -> FlaskResponse:
         citations = entry.get("citations")
     if citations:
         return jsonify({"ok": True, "citations": citations})
-    if _is_generating(participant, "citations"):
+    if _orchestrator.is_generating(participant, "citations"):
         return jsonify({"ok": False, "generating": True})
     return jsonify({"ok": False}), 404
 
@@ -466,7 +442,7 @@ def api_citations_regenerate(participant: str) -> FlaskResponse:
 
     Manual trigger: runs even when config.OLLAMA_SUMMARY_ENABLED is False.
     """
-    if _is_generating(participant, "citations"):
+    if _orchestrator.is_generating(participant, "citations"):
         return jsonify({"ok": True, "generating": True})
     with _manifest_lock:
         entry = _manifest.get("source_transcripts", {}).get(participant)
@@ -476,7 +452,7 @@ def api_citations_regenerate(participant: str) -> FlaskResponse:
             ), 404
         entry.pop("citations", None)
     _persist_manifest()
-    _run_agent("citations", participant, force=True)
+    _orchestrator.run_agent("citations", participant, force=True)
     return jsonify({"ok": True, "generating": True})
 
 
@@ -489,15 +465,10 @@ def api_citations_stop(participant: str) -> FlaskResponse:
     immediately. After a short delay, the model is unloaded from memory if
     no new run has started in the meantime.
     """
-    if not _is_generating(participant, "citations"):
-        return jsonify({"ok": True, "running": False})
-    event = _agent_cancel_events["citations"].get(participant)
-    if event is not None:
-        event.set()
-    _agent_in_flight["citations"].discard(participant)
-    model = _agent_model("citations")
-    if model:
-        _schedule_model_unload(model)
+    if _orchestrator.stop("citations", participant):
+        model = _agent_model("citations")
+        if model:
+            _schedule_model_unload(model)
     return jsonify({"ok": True, "running": False})
 
 
@@ -1052,7 +1023,7 @@ def _on_task_complete() -> None:
     _persist_manifest()
 
     for pid in newly_completed:
-        _run_agent_chain(pid)
+        _orchestrator.run_chain(pid)
 
 
 def _agent_enabled(agent: thinking_agents.Agent) -> bool:
@@ -1074,127 +1045,182 @@ def _agent_dependencies_met(
     return True
 
 
-def _next_eligible_agent(
-    participant: str, force: bool = False
-) -> thinking_agents.Agent | None:
-    """Find the first agent that should run next for *participant*.
+class AgentOrchestrator:
+    """Owns per-agent in-flight, cancel-event, and thread state.
 
-    An agent is eligible when:
-      - it is enabled (unless *force* is True — manual triggers bypass this),
-      - its result is not already on the entry,
-      - all of its dependencies are satisfied,
-      - it is not already running for this participant.
+    Encapsulates the dicts and orchestration helpers that previously lived as
+    module-level globals. Methods reach into module-level ``_manifest``,
+    ``_persist_manifest``, and ``_cancel_pending_unload`` directly — fine
+    because this class is module-internal and those names resolve at call
+    time.
+
+    The shared ``_manifest_lock`` is passed in at construction so atomicity
+    between manifest reads and in-flight slot claims is preserved verbatim
+    against the pre-refactor behavior.
+
+    Per-run cancel events: when an agent starts for a participant, a fresh
+    ``threading.Event`` is registered; the Ollama transport closes its
+    streaming HTTP response on ``event.set()``, which unblocks the read loop
+    and frees the model promptly. ``stop`` looks up the event and sets it.
+    The ``cancel_event.is_set()`` re-check in ``run_agent`` gates the
+    result-and-chain-advance step as defense-in-depth for finish-vs-cancel
+    races.
     """
-    with _manifest_lock:
-        entry = _manifest.get("source_transcripts", {}).get(participant)
-        if not entry or not entry.get("segments"):
-            return None
-        for agent in thinking_agents.AGENTS:
-            if not force and not _agent_enabled(agent):
-                continue
-            if entry.get(agent["manifest_field"]):
-                continue
-            if _is_generating(participant, agent["key"]):
-                continue
-            if not _agent_dependencies_met(agent, entry):
-                continue
-            return agent
-    return None
 
+    def __init__(self, lock: threading.Lock) -> None:
+        self._lock = lock
+        self._in_flight: dict[str, set[str]] = {
+            a["key"]: set() for a in thinking_agents.AGENTS
+        }
+        self._cancel_events: dict[str, dict[str, threading.Event]] = {
+            a["key"]: {} for a in thinking_agents.AGENTS
+        }
+        self._threads: dict[str, set[threading.Thread]] = {
+            a["key"]: set() for a in thinking_agents.AGENTS
+        }
 
-def _run_agent(agent_key: str, participant: str, force: bool = False) -> None:
-    """Spawn a daemon thread to run a single agent for *participant*.
+    def is_generating(self, participant: str, agent_key: str) -> bool:
+        """Return True if *agent_key* is currently running for *participant*."""
+        return participant in self._in_flight.get(agent_key, set())
 
-    On success, the agent's result is written to the manifest and the chain
-    advances to the next eligible agent. Guards against double-spawning via
-    ``_agent_in_flight``. Pass *force* to bypass the config enabled check
-    (used by manual triggers from the UI).
-    """
-    agent = thinking_agents.get_agent(agent_key)
-    if agent is None:
-        return
-    if not force and not _agent_enabled(agent):
-        return
+    def stop(self, agent_key: str, participant: str) -> bool:
+        """Abort an in-flight run. Returns True iff a run was actually stopped.
 
-    cancel_event = threading.Event()
-    # Atomically check-and-claim the in-flight slot so two near-simultaneous
-    # chain triggers (e.g. user click + auto-chain from a completed
-    # dependency) can't both spawn a thread for the same participant.
-    with _manifest_lock:
-        if _is_generating(participant, agent_key):
+        Releases the in-flight slot immediately so subsequent ``is_generating``
+        polls (e.g. from the UI) flip to idle without waiting for the daemon
+        thread's ``finally`` block to fire.
+        """
+        with self._lock:
+            if participant not in self._in_flight.get(agent_key, set()):
+                return False
+            event = self._cancel_events.get(agent_key, {}).get(participant)
+            self._in_flight[agent_key].discard(participant)
+        if event is not None:
+            event.set()
+        return True
+
+    def next_eligible(
+        self, participant: str, force: bool = False
+    ) -> thinking_agents.Agent | None:
+        """Find the first agent that should run next for *participant*.
+
+        An agent is eligible when:
+          - it is enabled (unless *force* is True — manual triggers bypass this),
+          - its result is not already on the entry,
+          - all of its dependencies are satisfied,
+          - it is not already running for this participant.
+        """
+        with self._lock:
+            entry = _manifest.get("source_transcripts", {}).get(participant)
+            if not entry or not entry.get("segments"):
+                return None
+            for agent in thinking_agents.AGENTS:
+                if not force and not _agent_enabled(agent):
+                    continue
+                if entry.get(agent["manifest_field"]):
+                    continue
+                if participant in self._in_flight.get(agent["key"], set()):
+                    continue
+                if not _agent_dependencies_met(agent, entry):
+                    continue
+                return agent
+        return None
+
+    def run_agent(self, agent_key: str, participant: str, force: bool = False) -> None:
+        """Spawn a daemon thread to run a single agent for *participant*.
+
+        On success, the agent's result is written to the manifest and the chain
+        advances to the next eligible agent. Guards against double-spawning via
+        the in-flight set. Pass *force* to bypass the config enabled check
+        (used by manual triggers from the UI).
+        """
+        agent = thinking_agents.get_agent(agent_key)
+        if agent is None:
             return
-        _agent_in_flight[agent_key].add(participant)
-        _agent_cancel_events[agent_key][participant] = cancel_event
+        if not force and not _agent_enabled(agent):
+            return
 
-    # If a Stop just scheduled an unload for this model, cancel it — the
-    # next request would only force a reload.
-    model = _agent_model(agent_key)
-    if model:
-        _cancel_pending_unload(model)
-
-    def _run() -> None:
-        try:
-            with _manifest_lock:
-                entry = _manifest.get("source_transcripts", {}).get(participant)
-                if not entry or not entry.get("segments"):
-                    return
-                # Snapshot the entry so the agent does not hold the lock
-                # during the (potentially slow) model call.
-                snapshot = dict(entry)
-            result = agent["run"](snapshot, cancel_event)
-            # Defense in depth: if the model finished in the same tick as a
-            # Stop click, drop the result and skip the chain advance.
-            if cancel_event.is_set():
+        cancel_event = threading.Event()
+        # Atomically check-and-claim the in-flight slot so two near-simultaneous
+        # chain triggers (e.g. user click + auto-chain from a completed
+        # dependency) can't both spawn a thread for the same participant.
+        with self._lock:
+            if participant in self._in_flight[agent_key]:
                 return
-            committed = False
-            if result is not None:
-                with _manifest_lock:
-                    # Re-check the cancel event inside the lock so a Stop that
-                    # arrives between the snapshot read above and this commit
-                    # cannot race past us and leave a stale result behind.
-                    if cancel_event.is_set():
-                        return
+            self._in_flight[agent_key].add(participant)
+            self._cancel_events[agent_key][participant] = cancel_event
+
+        # If a Stop just scheduled an unload for this model, cancel it — the
+        # next request would only force a reload.
+        model = _agent_model(agent_key)
+        if model:
+            _cancel_pending_unload(model)
+
+        def _run() -> None:
+            try:
+                with self._lock:
                     entry = _manifest.get("source_transcripts", {}).get(participant)
-                    if entry is not None:
-                        entry[agent["manifest_field"]] = result
-                        committed = True
-            if committed:
-                _persist_manifest()
-                # Chain into the next eligible agent (e.g. summary → citations).
-                # Propagate *force* so a manual run cascades through disabled
-                # downstream agents too.
-                _run_agent_chain(participant, force=force)
-        except Exception as exc:
-            utils.warning_print(
-                f"{agent_key} generation failed for {participant}: {exc}"
-            )
-        finally:
-            with _manifest_lock:
-                _agent_in_flight[agent_key].discard(participant)
-                _agent_cancel_events[agent_key].pop(participant, None)
-                _agent_threads[agent_key].discard(t)
+                    if not entry or not entry.get("segments"):
+                        return
+                    # Snapshot the entry so the agent does not hold the lock
+                    # during the (potentially slow) model call.
+                    snapshot = dict(entry)
+                result = agent["run"](snapshot, cancel_event)
+                # Defense in depth: if the model finished in the same tick as a
+                # Stop click, drop the result and skip the chain advance.
+                if cancel_event.is_set():
+                    return
+                committed = False
+                if result is not None:
+                    with self._lock:
+                        # Re-check the cancel event inside the lock so a Stop
+                        # that arrives between the snapshot read above and this
+                        # commit cannot race past us and leave a stale result
+                        # behind.
+                        if cancel_event.is_set():
+                            return
+                        entry = _manifest.get("source_transcripts", {}).get(participant)
+                        if entry is not None:
+                            entry[agent["manifest_field"]] = result
+                            committed = True
+                if committed:
+                    _persist_manifest()
+                    # Chain into the next eligible agent (e.g. summary →
+                    # citations). Propagate *force* so a manual run cascades
+                    # through disabled downstream agents too.
+                    self.run_chain(participant, force=force)
+            except Exception as exc:
+                utils.warning_print(
+                    f"{agent_key} generation failed for {participant}: {exc}"
+                )
+            finally:
+                with self._lock:
+                    self._in_flight[agent_key].discard(participant)
+                    self._cancel_events[agent_key].pop(participant, None)
+                    self._threads[agent_key].discard(t)
 
-    # Slot claim happened above under _manifest_lock; just spawn the thread.
-    t = threading.Thread(
-        target=_run,
-        daemon=True,
-        name=f"{agent['thread_name_prefix']}-{participant}",
-    )
-    with _manifest_lock:
-        _agent_threads[agent_key].add(t)
-    t.start()
+        t = threading.Thread(
+            target=_run,
+            daemon=True,
+            name=f"{agent['thread_name_prefix']}-{participant}",
+        )
+        with self._lock:
+            self._threads[agent_key].add(t)
+        t.start()
+
+    def run_chain(self, participant: str, force: bool = False) -> None:
+        """Advance the thinking-agent chain for *participant* by one step.
+
+        Starts the first eligible agent (if any). When that agent completes,
+        ``run_agent`` re-enters this method to start the next step. Pass
+        *force* to bypass config enable checks for manual/UI-triggered runs.
+        """
+        agent = self.next_eligible(participant, force=force)
+        if agent is not None:
+            self.run_agent(agent["key"], participant, force=force)
 
 
-def _run_agent_chain(participant: str, force: bool = False) -> None:
-    """Advance the thinking-agent chain for *participant* by one step.
-
-    Starts the first eligible agent (if any). When that agent completes,
-    ``_run_agent`` re-enters this function to start the next step. Pass
-    *force* to bypass config enable checks for manual/UI-triggered runs.
-    """
-    agent = _next_eligible_agent(participant, force=force)
-    if agent is not None:
-        _run_agent(agent["key"], participant, force=force)
+_orchestrator = AgentOrchestrator(_manifest_lock)
 
 
 # ---- State initialization ----
