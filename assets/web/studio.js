@@ -177,11 +177,7 @@
     if (participantId && state.convergenceBaselines) {
       baselineSeconds = state.convergenceBaselines[participantId] || 0;
     }
-    var segments = parseClipSegmentsForCell(raw, baselineSeconds, DEFAULT_DUR);
-    if (segments.length === 0) {
-      segments.push({ startSeconds: 0, duration: DEFAULT_DUR });
-    }
-    return segments;
+    return parseClipSegmentsForCell(raw, baselineSeconds, DEFAULT_DUR);
   }
 
   // Cross-referencing: find overlapping data from other sources for a given
@@ -1415,10 +1411,10 @@
         td.appendChild(chip);
         if (cellData.valid) {
           td.classList.add("valid-ts");
+          td.setAttribute("draggable", "true");
         } else {
           td.classList.add("has-text");
         }
-        td.setAttribute("draggable", "true");
       } else {
         td.classList.add("empty");
       }
@@ -1508,13 +1504,20 @@
     };
   }
 
+  function isSelectableTimestampCell(td) {
+    return !!(td && td.classList.contains("valid-ts"));
+  }
+
   function toggleArtifactCell(info) {
     if (findInQueue(state.artifactQueue, info.participant, info.row) >= 0) {
       removeAllCellEntries(state.artifactQueue, info.participant, info.row);
-    } else {
-      var entries = expandCellToSegments(info);
-      for (var i = 0; i < entries.length; i++) state.artifactQueue.push(entries[i]);
+      renderArtifactQueue();
+      updateSingleCellClass(info.participant, info.row);
+      return;
     }
+    var entries = expandCellToSegments(info);
+    if (entries.length === 0) return;
+    for (var i = 0; i < entries.length; i++) state.artifactQueue.push(entries[i]);
     renderArtifactQueue();
     updateSingleCellClass(info.participant, info.row);
   }
@@ -1522,10 +1525,13 @@
   function toggleReelCell(info) {
     if (findInQueue(state.reelQueue, info.participant, info.row) >= 0) {
       removeAllCellEntries(state.reelQueue, info.participant, info.row);
-    } else {
-      var entries = expandCellToSegments(info);
-      for (var i = 0; i < entries.length; i++) state.reelQueue.push(entries[i]);
+      renderReelQueue();
+      updateSingleCellClass(info.participant, info.row);
+      return;
     }
+    var entries = expandCellToSegments(info);
+    if (entries.length === 0) return;
+    for (var i = 0; i < entries.length; i++) state.reelQueue.push(entries[i]);
     renderReelQueue();
     updateSingleCellClass(info.participant, info.row);
   }
@@ -1539,8 +1545,10 @@
       }
     } else if (findInQueue(targetQueue, info.participant, info.row) < 0) {
       var entries = expandCellToSegments(info);
-      for (var i = 0; i < entries.length; i++) targetQueue.push(entries[i]);
-      added = true;
+      if (entries.length > 0) {
+        for (var i = 0; i < entries.length; i++) targetQueue.push(entries[i]);
+        added = true;
+      }
     }
     if (added) {
       renderFn();
@@ -1548,13 +1556,13 @@
     }
   }
 
-  // Collect all non-empty cell infos matching a filter
+  // Collect selectable timestamp cell infos matching a filter
   function collectCellInfos(filterFn) {
     var infos = [];
     var cells = qsa(".ts-cell");
     for (var i = 0; i < cells.length; i++) {
       var td = cells[i];
-      if (td.classList.contains("empty")) continue;
+      if (!isSelectableTimestampCell(td)) continue;
       var info = getCellInfo(td);
       if (filterFn(info)) infos.push(info);
     }
@@ -1578,6 +1586,7 @@
       for (var k = 0; k < infos.length; k++) {
         if (findInQueue(queue, infos[k].participant, infos[k].row) < 0) {
           var entries = expandCellToSegments(infos[k]);
+          if (entries.length === 0) continue;
           for (var m = 0; m < entries.length; m++) queue.push(entries[m]);
         }
       }
@@ -1642,7 +1651,7 @@
 
       // Single cell select
       var td = ev.target.closest(".ts-cell");
-      if (!td || td.classList.contains("empty")) return;
+      if (!isSelectableTimestampCell(td)) return;
       var info = getCellInfo(td);
 
       if (ev.shiftKey) {
@@ -1654,7 +1663,7 @@
 
     grid.addEventListener("contextmenu", function (ev) {
       var td = ev.target.closest(".ts-cell");
-      if (!td || td.classList.contains("empty")) return;
+      if (!isSelectableTimestampCell(td)) return;
       ev.preventDefault();
       var info = getCellInfo(td);
       toggleReelCell(info);
@@ -1778,7 +1787,7 @@
 
     grid.addEventListener("pointerdown", function (ev) {
       var td = ev.target.closest(".ts-cell");
-      if (!td || td.classList.contains("empty")) {
+      if (!isSelectableTimestampCell(td)) {
         pointerOrigin = null;
         return;
       }
@@ -1791,7 +1800,7 @@
 
     grid.addEventListener("dragstart", function (ev) {
       var td = ev.target.closest(".ts-cell");
-      if (!td || td.classList.contains("empty")) return;
+      if (!isSelectableTimestampCell(td)) return;
 
       var info = getCellInfo(td);
       ev.dataTransfer.setData("application/json", JSON.stringify(info));

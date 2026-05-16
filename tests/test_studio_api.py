@@ -967,6 +967,55 @@ def test_api_sheet_exposes_keyword_annotations(client, monkeypatch):
     assert rows[1]["cells"]["P02"]["keywords"] == []
 
 
+def test_api_sheet_marks_valid_timestamps_only(client, monkeypatch):
+    """api/sheet distinguishes parseable timestamps from other cell text."""
+    import types
+
+    sheet_data = [
+        ["ID", "P01", "P02", "Observation", "Category"],
+        ["1", "1:23-1:45", "N/A", "obs valid", "catA"],
+        ["2", "see notes", "0:30", "obs invalid", "catB"],
+        ["3", "", "x", "obs empty-ish", "catC"],
+    ]
+    ctx = types.SimpleNamespace(
+        header_row=sheet_data[0],
+        id_cell=types.SimpleNamespace(row=1, col=1),
+        num_participants=2,
+        study_name="study",
+        observation_cell=types.SimpleNamespace(col=4),
+        category_cell=types.SimpleNamespace(col=5),
+        severity_cell=None,
+        baseline_row_idx=None,
+        filename_row_idx=None,
+        first_data_row_idx=1,
+        sheet_data=sheet_data,
+    )
+    monkeypatch.setattr(server, "_sheet_context", ctx)
+
+    resp = client.get("/studio/api/sheet")
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["ok"] is True
+
+    row_valid = data["rows"][0]["cells"]
+    assert row_valid["P01"]["valid"] is True
+    assert row_valid["P01"]["hasText"] is True
+    assert row_valid["P02"]["valid"] is False
+    assert row_valid["P02"]["hasText"] is True
+
+    row_invalid = data["rows"][1]["cells"]
+    assert row_invalid["P01"]["valid"] is False
+    assert row_invalid["P01"]["hasText"] is True
+    assert row_invalid["P02"]["valid"] is True
+    assert row_invalid["P02"]["hasText"] is True
+
+    row_empty = data["rows"][2]["cells"]
+    assert row_empty["P01"]["valid"] is False
+    assert row_empty["P01"]["hasText"] is False
+    assert row_empty["P02"]["valid"] is False
+    assert row_empty["P02"]["hasText"] is True
+
+
 def test_api_generate_titlecard_override(client, monkeypatch):
     """titlecards_enabled and titlecard_duration temporarily override config during generate."""
     import types
