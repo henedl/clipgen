@@ -292,6 +292,39 @@ def test_frozen_with_explicit_flag_is_respected(monkeypatch, tmp_path):
     assert captured.get("default_page") == "screenspace"
 
 
+def test_frozen_no_args_threads_into_standalone_branch(monkeypatch, tmp_path):
+    """Frozen-no-argv must dispatch through the no-spreadsheet branch in
+    _dispatch_standalone_mode, not the later --studio + -s branch that goes
+    through worksheet selection."""
+    import excel_io
+
+    captured = _mock_main_side_effects(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        cli,
+        "select_worksheet",
+        lambda *_a, **_kw: pytest.fail(
+            "frozen-no-args path must short-circuit before worksheet selection"
+        ),
+    )
+    monkeypatch.setattr(
+        excel_io,
+        "prompt_for_excel_fallback",
+        lambda *_a, **_kw: pytest.fail(
+            "frozen-no-args path must not reach Excel fallback prompt"
+        ),
+    )
+    monkeypatch.setattr(cli, "_try_silent_google_auth", lambda: None)
+    monkeypatch.setattr("sys.argv", ["clipgen"])
+    monkeypatch.setattr("sys.frozen", True, raising=False)
+
+    with pytest.raises(SystemExit) as exc:
+        cli.main()
+
+    assert exc.value.code == 0
+    assert captured.get("default_page") == "studio"
+    assert captured.get("worksheet") is None
+
+
 def test_parse_cli_mode_args_rejects_reversed_range():
     args = _base_args(range="10-1")
     with pytest.raises(SystemExit) as exc:
