@@ -75,6 +75,11 @@ var el = function (tag, cls, text) {
   return e;
 };
 
+// English-only count + noun phrase (1 → singular, else plural).
+var clipgenPluralUnit = function (n, singular, plural) {
+  return n + " " + (n === 1 ? singular : plural);
+};
+
 // Populate a container with a skeleton table: `cols` header cells plus
 // `rows × cols` body cells. Pairs with the `.skeleton-grid` / `.skeleton-cell`
 // CSS in primitives.css (and the shimmer in tokens.css). Target should

@@ -979,7 +979,6 @@
         );
         renderArtifactQueue();
         updateCellClasses();
-        updateViewerButton();
       })
       .catch(function () {});
   }
@@ -2814,16 +2813,15 @@
       state.generating = false;
       setGeneratingLock(false);
       qs("#cancelGenerateBtn").classList.add("hidden");
-      updateViewerButton();
       var msg;
       var err = null;
       if (cancelled) {
         msg = totalSuccess > 0
-          ? "Cancelled after " + totalSuccess + " artifact(s)"
+          ? "Cancelled after " + clipgenPluralUnit(totalSuccess, "artifact", "artifacts")
           : null;
         err = totalSuccess > 0 ? null : "Generation cancelled";
       } else {
-        msg = "Generated " + totalSuccess + " artifact(s)";
+        msg = "Generated " + clipgenPluralUnit(totalSuccess, "artifact", "artifacts");
         if (totalFail > 0) msg += ", " + totalFail + " failed";
         if (totalSuccess === 0 && totalFail > 0) {
           msg = null;
@@ -2868,7 +2866,6 @@
           if (data.artifacts) {
             allArtifacts = allArtifacts.concat(data.artifacts);
             state.generatedArtifacts = state.generatedArtifacts.concat(data.artifacts);
-            updateViewerButton();
           }
         } else {
           for (ci = 0; ci < cards.length; ci++) setCardResult(cards[ci], false);
@@ -2946,7 +2943,6 @@
                 if (res.artifact) {
                   allArtifacts.push(res.artifact);
                   state.generatedArtifacts.push(res.artifact);
-                  updateViewerButton();
                 }
                 if (card) setCardResult(card, true);
               } else {
@@ -3135,8 +3131,9 @@
         state.generating = false;
         if (data.ok) {
           var msg = "Timeline viewer created: " + (data.file || "");
-          if (data.generated) msg = "Generated " + data.generated + " clip(s). " + msg;
-          updateViewerButton();
+          if (data.generated) {
+            msg = "Generated " + clipgenPluralUnit(data.generated, "clip", "clips") + ". " + msg;
+          }
           showResult(msg, null, data.file);
         } else {
           showResult(null, data.error || "Timeline viewer build failed");
@@ -3192,7 +3189,7 @@
           renderReelQueue();
           updateCellClasses();
           showResult(
-            "Added " + data.clips.length + " clip(s) to reel queue",
+            "Added " + clipgenPluralUnit(data.clips.length, "clip", "clips") + " to reel queue",
             null
           );
         } else {
@@ -3283,12 +3280,6 @@
         closeGalleryDialog();
       }
     });
-  }
-
-  function updateViewerButton() {
-    var count = qs("#viewerArtifactCount");
-    var n = state.generatedArtifacts.length;
-    count.textContent = n > 0 ? n + " artifact(s) ready" : "";
   }
 
   // ---- Status overlay ----
@@ -4712,7 +4703,7 @@
       .then(function (res) {
         if (res.ok && res.j && res.j.ok) {
           var n = (res.j.written || []).length;
-          showToast("Exported " + n + " file(s) to " + res.j.output_dir);
+          showToast("Exported " + clipgenPluralUnit(n, "file", "files") + " to " + res.j.output_dir);
         } else {
           showToast((res.j && res.j.error) || "Export failed");
         }
@@ -4750,7 +4741,6 @@
     loadSheetData();
     loadStashes();
     loadArtifactStashes();
-    updateViewerButton();
     checkNavLinks();
     initFrontendSwitcher();
     initTopNavActions();

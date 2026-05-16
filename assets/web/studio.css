@@ -645,12 +645,6 @@ body[data-active-tab]:not([data-active-tab="sheet"]) #studioSidebar {
   opacity: 0.9;
 }
 
-#viewerArtifactCount {
-  font-weight: 400;
-  font-size: var(--text-sm);
-  color: var(--color-text-dim);
-}
-
 #sheetGrid {
   overflow: auto;
   user-select: none;
@@ -1161,6 +1155,20 @@ body.dragging .ts-cell:hover {
   padding: 0 20px;
   border-bottom: 1px solid var(--hairline);
   flex: 0 0 auto;
+}
+
+/* Collapse format/titlecard controls when the artifacts column is narrow so
+ * Generate / Stash / Clear stay on-screen. */
+#artifactsToolbar {
+  container-type: inline-size;
+  container-name: artifacts-toolbar;
+}
+
+@container artifacts-toolbar (max-width: 720px) {
+  #artifactFormat,
+  #titlecardGroup {
+    display: none;
+  }
 }
 
 .bs-label {

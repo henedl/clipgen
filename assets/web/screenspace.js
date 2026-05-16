@@ -5920,7 +5920,7 @@
         });
         renderResults();
         renderTimeline();
-        showToast("Excluded " + idsToExclude.length + " events");
+        showToast("Excluded " + clipgenPluralUnit(idsToExclude.length, "event", "events"));
       });
     });
   }
@@ -6532,7 +6532,7 @@
       .then(function (res) {
         if (res.ok && res.j && res.j.ok) {
           var n = (res.j.written || []).length;
-          showToast("Exported " + n + " file(s) to " + res.j.output_dir);
+          showToast("Exported " + clipgenPluralUnit(n, "file", "files") + " to " + res.j.output_dir);
         } else {
           showToast((res.j && res.j.error) || "Export failed");
         }
