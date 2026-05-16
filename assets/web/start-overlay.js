@@ -49,6 +49,7 @@
     persistEnabled: true,
     googlePollTimer: null,
     googlePollDeadline: 0,
+    confirmInFlight: false,
     activeTab: "google",    // 'google' | 'excel' | 'none'
     extrasTab: "tools",     // 'tools' | 'updates' | 'about'
     changelogLoaded: false,
@@ -223,7 +224,10 @@
     });
 
     on(document, "click", function (e) {
-      if (!root) return;
+      // Bail when the overlay isn't open — the listener stays bound for the
+      // page's lifetime (mount() is once-per-page; close() just hides),
+      // so guard explicitly to avoid pointless work on every page click.
+      if (!root || !state.open) return;
       closeRecentsIfOutside(e);
       closePickersIfOutside(e);
     });
@@ -946,6 +950,12 @@
   // ---- Open / dismiss flows ----
 
   function confirm() {
+    // Guard against re-entry: the click handler disables the button, but the
+    // Cmd/Ctrl+Enter shortcut bypasses that path. Two simultaneous flights
+    // would race the server-side _swap_worksheet.
+    if (state.confirmInFlight) return;
+    state.confirmInFlight = true;
+
     var inputVal = (els.inputDir.value || "").trim();
     var outputVal = (els.outputDir.value || "").trim();
 
@@ -967,6 +977,11 @@
         })
       : Promise.resolve({ ok: true, body: {} });
 
+    function releaseConfirm() {
+      state.confirmInFlight = false;
+      els.confirmBtn.disabled = false;
+    }
+
     els.confirmBtn.disabled = true;
     dirsPromise.then(function (res) {
       if (!res.ok) {
@@ -976,13 +991,13 @@
         if (!errors.input && !errors.output && typeof showToast === "function") {
           showToast("Folder error");
         }
-        els.confirmBtn.disabled = false;
+        releaseConfirm();
         return;
       }
       var skipSpreadsheet = state.activeTab === "none" || !state.selection;
       if (skipSpreadsheet) {
         recordSession(inputVal, outputVal, null).finally(function () {
-          els.confirmBtn.disabled = false;
+          releaseConfirm();
           close();
         });
         return;
@@ -996,18 +1011,22 @@
           return r.json().then(function (j) { return { ok: r.ok, body: j }; });
         })
         .then(function (res2) {
-          els.confirmBtn.disabled = false;
           if (!res2.ok || !res2.body.ok) {
+            releaseConfirm();
             markSheetError((res2.body && res2.body.error) || "Could not open spreadsheet");
             return;
           }
           // Hard reload so all three frontends re-fetch their data.
+          // Don't release the in-flight flag — the page is about to unmount.
           window.location.reload();
         })
         .catch(function (err) {
-          els.confirmBtn.disabled = false;
+          releaseConfirm();
           markSheetError("Open failed: " + err.message);
         });
+    }).catch(function (err) {
+      releaseConfirm();
+      console.error("Confirm dirs failed", err);
     });
   }
 

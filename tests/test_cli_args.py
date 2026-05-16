@@ -123,13 +123,18 @@ def test_web_mode_without_spreadsheet_dispatches_standalone(
 
     captured = {}
 
-    def fake_start(*, worksheet=None, port=None, default_page="studio"):
+    def fake_start(
+        *, worksheet=None, port=None, default_page="studio", gspread_client=None
+    ):
         captured["worksheet"] = worksheet
         captured["default_page"] = default_page
+        captured["gspread_client"] = gspread_client
 
     monkeypatch.setattr(server, "start_combined_server", fake_start)
     # Skip persisted-dir application in this isolated test
     monkeypatch.setattr(cli, "_maybe_apply_persisted_dirs", lambda _args: None)
+    # Force the silent-auth helper to return None (no cached token to reuse).
+    monkeypatch.setattr(cli, "_try_silent_google_auth", lambda: None)
 
     args = _base_args(**{flag: True})
     result = cli._dispatch_standalone_mode(args, cli_mode=False, gallery_arg=None)
@@ -137,6 +142,7 @@ def test_web_mode_without_spreadsheet_dispatches_standalone(
     assert result is True
     assert captured["worksheet"] is None
     assert captured["default_page"] == expected_default_page
+    assert captured["gspread_client"] is None
 
 
 def test_studio_with_spreadsheet_does_not_short_circuit(monkeypatch):

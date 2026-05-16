@@ -267,7 +267,6 @@ def api_sheet() -> FlaskResponse:
                 "titlecardsEnabled": config.TITLECARDS_ENABLED,
                 "titlecardDuration": config.TITLECARD_DURATION_SECONDS,
                 "cellExpandHover": config.STUDIO_CELL_EXPAND_HOVER,
-                "defaultDuration": config.DEFAULT_DURATION_SECONDS,
                 "config": utils.get_frontend_config(),
                 "participants": [],
                 "rows": [],
@@ -341,7 +340,6 @@ def api_sheet() -> FlaskResponse:
             "titlecardsEnabled": config.TITLECARDS_ENABLED,
             "titlecardDuration": config.TITLECARD_DURATION_SECONDS,
             "cellExpandHover": config.STUDIO_CELL_EXPAND_HOVER,
-            "defaultDuration": config.DEFAULT_DURATION_SECONDS,
             "config": utils.get_frontend_config(),
             "participants": participants,
             "rows": rows,
@@ -1687,21 +1685,51 @@ def _spreadsheet_label() -> str:
 def _swap_worksheet(new_worksheet: Any) -> None:
     """Replace the active worksheet and refresh all three blueprints' state.
 
-    Used by ``/api/spreadsheets/open`` and ``/api/spreadsheets/close`` so the
-    user can pick or clear a spreadsheet from the frontend at runtime.
+    Atomic: if any of the three init steps fails, the prior state is restored
+    so Studio / Screenspace / Transcripts don't end up pointing at different
+    sheets. Used by ``/api/spreadsheets/open`` and ``/api/spreadsheets/close``.
     """
     import screenspace_server
     import transcripts_server
 
-    _init_studio_state(new_worksheet)
-    screenspace_server._init_screenspace_state(
-        sheet_context=_sheet_context,
-        participant_list=_resolve_participants(),
-    )
-    transcripts_server._init_transcripts_state(
-        sheet_context=_sheet_context,
-        participant_list=_resolve_participants(),
-    )
+    global _worksheet, _sheet_context, _generated_artifacts, _generated_reels
+    prev_worksheet = _worksheet
+    prev_sheet_context = _sheet_context
+    prev_artifacts = _generated_artifacts
+    prev_reels = _generated_reels
+    try:
+        _init_studio_state(new_worksheet)
+        screenspace_server._init_screenspace_state(
+            sheet_context=_sheet_context,
+            participant_list=_resolve_participants(),
+        )
+        transcripts_server._init_transcripts_state(
+            sheet_context=_sheet_context,
+            participant_list=_resolve_participants(),
+        )
+    except Exception:
+        _worksheet = prev_worksheet
+        _sheet_context = prev_sheet_context
+        _generated_artifacts = prev_artifacts
+        _generated_reels = prev_reels
+        # Best-effort: re-pin the two sister blueprints to the restored state.
+        # If these themselves throw, swallow — the studio state is already
+        # consistent and the original exception is what we want to surface.
+        try:
+            screenspace_server._init_screenspace_state(
+                sheet_context=_sheet_context,
+                participant_list=_resolve_participants(),
+            )
+        except Exception:
+            pass
+        try:
+            transcripts_server._init_transcripts_state(
+                sheet_context=_sheet_context,
+                participant_list=_resolve_participants(),
+            )
+        except Exception:
+            pass
+        raise
 
 
 def start_combined_server(
@@ -2078,7 +2106,7 @@ def start_combined_server(
         return jsonify({"ok": True, "path": path})
 
     @combined.route("/api/sessions/record", methods=["POST"])
-    def api_sessions_record() -> Response:
+    def api_sessions_record() -> FlaskResponse:
         """Record an "Open workspace" session — used by the no-spreadsheet path.
 
         The Google/Excel paths already record via api_spreadsheets_open after a
@@ -2088,15 +2116,40 @@ def start_combined_server(
         import start_settings
 
         data = request.get_json(silent=True) or {}
-        input_dir = (data.get("input") or "").strip()
-        output_dir = (data.get("output") or "").strip()
+        input_raw = data.get("input")
+        output_raw = data.get("output")
+        if input_raw is not None and not isinstance(input_raw, str):
+            return jsonify({"ok": False, "error": "input must be a string"}), 400
+        if output_raw is not None and not isinstance(output_raw, str):
+            return jsonify({"ok": False, "error": "output must be a string"}), 400
+        input_dir = (input_raw or "").strip()
+        output_dir = (output_raw or "").strip()
+
         spreadsheet_payload = data.get("spreadsheet")
         spreadsheet_dict: dict[str, Any] | None = None
-        if isinstance(spreadsheet_payload, dict):
+        if spreadsheet_payload is not None:
+            if not isinstance(spreadsheet_payload, dict):
+                return jsonify(
+                    {"ok": False, "error": "spreadsheet must be an object or null"}
+                ), 400
+            ss_type = (spreadsheet_payload.get("type") or "").strip()
+            ss_id = (spreadsheet_payload.get("id_or_path") or "").strip()
+            ss_label = (spreadsheet_payload.get("label") or "").strip()
+            if ss_type not in ("google", "excel"):
+                return jsonify(
+                    {
+                        "ok": False,
+                        "error": "spreadsheet.type must be 'google' or 'excel'",
+                    }
+                ), 400
+            if not ss_id:
+                return jsonify(
+                    {"ok": False, "error": "spreadsheet.id_or_path is required"}
+                ), 400
             spreadsheet_dict = {
-                "type": spreadsheet_payload.get("type") or "",
-                "id_or_path": spreadsheet_payload.get("id_or_path") or "",
-                "label": spreadsheet_payload.get("label") or "",
+                "type": ss_type,
+                "id_or_path": ss_id,
+                "label": ss_label or ss_id,
             }
         start_settings.record_project_session(
             input_dir or str(utils.get_effective_input_dir()),

@@ -29,11 +29,13 @@ excludes = [
     "pytest", "_pytest", "py", "pluggy", "iniconfig",
     # Torch submodules clipgen never uses
     "tensorboard", "torch.distributed",
-    # GUI toolkit pulled in transitively — clipgen is CLI-only
-    "tkinter", "_tkinter",
     # Other unused transitive dependencies
     "matplotlib", "IPython", "notebook", "jupyter",
 ]
+# tkinter is intentionally NOT excluded: utils.open_native_folder_picker
+# uses tkinter.filedialog as the non-macOS fallback for the Start overlay's
+# Browse button. Excluding it silently breaks the Browse flow on Windows/Linux
+# frozen builds.
 
 a = Analysis(
     ["../clipgen.py"],
