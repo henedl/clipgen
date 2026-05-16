@@ -7,11 +7,16 @@ toggle persistence off via ``persist_enabled``; when disabled, the recording
 helpers short-circuit but ``persist_enabled`` itself is still written so the
 toggle survives sessions.
 
-File lives at ``~/.config/clipgen/start.json``.
+Settings file location:
+
+- Windows: ``%LOCALAPPDATA%\\clipgen\\start.json`` (fallback:
+  ``~/AppData/Local/clipgen/start.json`` when ``LOCALAPPDATA`` is unset)
+- macOS / Linux: ``~/.config/clipgen/start.json``
 """
 
 import json
 import os
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -22,8 +27,18 @@ import utils
 RECENTS_CAP = 8
 
 
+def _config_dir() -> Path:
+    """Return the per-user clipgen config directory for this platform."""
+    if sys.platform == "win32":
+        local_appdata = os.environ.get("LOCALAPPDATA")
+        if local_appdata:
+            return Path(local_appdata) / "clipgen"
+        return Path.home() / "AppData" / "Local" / "clipgen"
+    return Path.home() / ".config" / "clipgen"
+
+
 def _settings_path() -> Path:
-    return Path.home() / ".config" / "clipgen" / "start.json"
+    return _config_dir() / "start.json"
 
 
 def _defaults() -> dict[str, Any]:
@@ -59,7 +74,7 @@ def load_start_settings() -> dict[str, Any]:
 
 
 def save_start_settings(settings: dict[str, Any]) -> None:
-    """Persist *settings* to ``~/.config/clipgen/start.json`` via atomic replace."""
+    """Persist *settings* to the platform config path via atomic replace."""
     path = _settings_path()
     tmp = path.with_suffix(path.suffix + ".tmp")
     try:
