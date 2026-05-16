@@ -12,6 +12,7 @@ File lives at ``~/.config/clipgen/start.json``.
 
 import json
 import os
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -34,6 +35,10 @@ def _defaults() -> dict[str, Any]:
         "recent_outputs": [],
         "last_spreadsheet": None,
         "recent_spreadsheets": [],
+        # Full session records: (input, output, spreadsheet|None, last_opened).
+        # Powers the Start overlay's "Recently opened" rail and lets a click
+        # restore all three picker values at once.
+        "recent_projects": [],
     }
 
 
@@ -119,6 +124,50 @@ def record_recent_spreadsheet(type_: str, id_or_path: str, label: str) -> None:
         settings.get("recent_spreadsheets", []),
         entry,
         key=lambda x: (x.get("type"), x.get("id_or_path")),
+    )
+    save_start_settings(settings)
+
+
+def _spreadsheet_key(spreadsheet: dict[str, Any] | None) -> tuple[str, str] | None:
+    if not spreadsheet:
+        return None
+    type_ = spreadsheet.get("type") or ""
+    id_or_path = spreadsheet.get("id_or_path") or ""
+    if not type_ or not id_or_path:
+        return None
+    return (type_, id_or_path)
+
+
+def record_project_session(
+    input_dir: str,
+    output_dir: str,
+    spreadsheet: dict[str, Any] | None = None,
+) -> None:
+    """Record an "Open workspace" event as a full project session.
+
+    A project is identified by the triple ``(input, output, spreadsheet_key)``
+    where ``spreadsheet_key`` is ``(type, id_or_path)`` or ``None``. Re-opening
+    the same triple moves the entry to the front rather than duplicating it.
+    """
+    settings = load_start_settings()
+    if not settings.get("persist_enabled", True):
+        return
+    if not input_dir or not output_dir:
+        return
+    entry = {
+        "input": input_dir,
+        "output": output_dir,
+        "spreadsheet": spreadsheet if spreadsheet else None,
+        "last_opened": datetime.now(timezone.utc).isoformat(),
+    }
+    settings["recent_projects"] = _prepend_dedup(
+        settings.get("recent_projects", []),
+        entry,
+        key=lambda x: (
+            x.get("input"),
+            x.get("output"),
+            _spreadsheet_key(x.get("spreadsheet")),
+        ),
     )
     save_start_settings(settings)
 

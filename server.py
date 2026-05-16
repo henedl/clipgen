@@ -68,6 +68,11 @@ FlaskResponse = Response | tuple[Response, int]
 
 _worksheet: Any = None
 _sheet_context: spreadsheet.SheetContext | None = None
+# Metadata for the active spreadsheet — used by /api/status so the Start
+# overlay can pre-select the right tab (Google/Excel) and re-highlight the
+# right item. Only set when the spreadsheet was opened via the runtime
+# picker; CLI-loaded sheets leave this None.
+_active_sheet_meta: dict[str, str] | None = None
 _generated_artifacts: list[dict[str, Any]] = []
 _generated_reels: list[dict[str, Any]] = []
 # Bounded LRU so long sessions don't grow unbounded; entries are JPEG bytes
@@ -1635,6 +1640,38 @@ def _resolve_participants() -> list[str] | None:
     )
 
 
+def _derive_sheet_meta(worksheet: Any) -> dict[str, str] | None:
+    """Return ``{type, id_or_path, label}`` for a CLI-loaded worksheet.
+
+    Used so the Start overlay's spreadsheet picker can show the currently
+    loaded sheet when the overlay is opened on a session that was launched
+    from the CLI (not via the runtime ``/api/spreadsheets/open`` endpoint).
+    """
+    if worksheet is None:
+        return None
+    try:
+        import excel_io
+
+        if isinstance(worksheet, excel_io.ExcelSheetAdapter):
+            path = getattr(worksheet, "_workbook_path", "") or ""
+            if not path:
+                return None
+            return {
+                "type": "excel",
+                "id_or_path": path,
+                "label": Path(path).name,
+            }
+    except Exception:
+        pass
+    # gspread Worksheet (or anything quacking like one): use the parent
+    # spreadsheet title as both the identifier and the label.
+    parent = getattr(worksheet, "spreadsheet", None)
+    title = getattr(parent, "title", "") if parent is not None else ""
+    if not title:
+        return None
+    return {"type": "google", "id_or_path": title, "label": title}
+
+
 def _spreadsheet_label() -> str:
     """Human-readable identifier for the currently loaded spreadsheet."""
     if _worksheet is None:
@@ -1671,6 +1708,7 @@ def start_combined_server(
     worksheet: Any = None,
     port: int | None = None,
     default_page: str = "studio",
+    gspread_client: Any = None,
 ) -> None:
     """Start a combined Studio + Screenspace + Transcripts server on one port.
 
@@ -1678,13 +1716,31 @@ def start_combined_server(
     sheet-dependent Studio routes return ``sheet_loaded: false`` placeholder
     responses; the frontend's Start overlay lets the user pick a spreadsheet
     via ``POST /api/spreadsheets/open``.
+
+    If *gspread_client* is supplied (the CLI's auth already happened upstream),
+    the Google Sheets list endpoint reports authenticated and skips the
+    "Connect Google" CTA in the Start overlay.
     """
     import screenspace_server
+    import start_settings
     import transcripts_server
 
     combined = Flask(__name__, static_folder=None)
 
     _init_studio_state(worksheet)
+    # Seed the meta + recent-projects rail for CLI launches that already
+    # have a worksheet — the runtime /api/spreadsheets/open path handles
+    # both of these itself.
+    global _active_sheet_meta, _gspread_client
+    _active_sheet_meta = _derive_sheet_meta(worksheet)
+    if gspread_client is not None:
+        _gspread_client = gspread_client
+    if _active_sheet_meta is not None:
+        start_settings.record_project_session(
+            str(utils.get_effective_input_dir()),
+            str(utils.get_effective_output_dir()),
+            _active_sheet_meta,
+        )
     combined.register_blueprint(studio_bp, url_prefix="/studio")
 
     screenspace_server._init_screenspace_state(
@@ -1723,6 +1779,7 @@ def start_combined_server(
 
     @combined.route("/api/status")
     def status() -> Response:
+        meta = _active_sheet_meta if _worksheet is not None else None
         return jsonify(
             {
                 "studio": True,
@@ -1730,9 +1787,15 @@ def start_combined_server(
                 "transcripts": True,
                 "sheet_loaded": _worksheet is not None,
                 "spreadsheet_label": _spreadsheet_label(),
+                "spreadsheet_type": (meta or {}).get("type", ""),
+                "spreadsheet_id_or_path": (meta or {}).get("id_or_path", ""),
                 "input_dir": str(utils.get_effective_input_dir()),
                 "output_dir": str(utils.get_effective_output_dir()),
                 "videos_in_input": len(utils.discover_participant_videos()),
+                "version": utils.get_version(),
+                "author": "Henrik Edlund",
+                "license": "MIT",
+                "repo_url": "https://github.com/henedl/clipgen",
             }
         )
 
@@ -1975,6 +2038,17 @@ def start_combined_server(
             ), 500
 
         start_settings.record_recent_spreadsheet(type_, id_or_path, label)
+        start_settings.record_project_session(
+            str(utils.get_effective_input_dir()),
+            str(utils.get_effective_output_dir()),
+            {"type": type_, "id_or_path": id_or_path, "label": label},
+        )
+        global _active_sheet_meta
+        _active_sheet_meta = {
+            "type": type_,
+            "id_or_path": id_or_path,
+            "label": label,
+        }
         return jsonify(
             {
                 "ok": True,
@@ -1985,8 +2059,57 @@ def start_combined_server(
 
     @combined.route("/api/spreadsheets/close", methods=["POST"])
     def api_spreadsheets_close() -> Response:
+        global _active_sheet_meta
         _swap_worksheet(None)
+        _active_sheet_meta = None
         return jsonify({"ok": True, "sheet_loaded": False})
+
+    @combined.route("/api/folder-picker", methods=["POST"])
+    def api_folder_picker() -> Response:
+        """Open the host OS's native folder picker and return the chosen path.
+
+        Called by the Start overlay's Browse buttons. Returns
+        ``{ok: True, path: "/…"}`` on confirm, ``{ok: True, path: None}`` when
+        the user cancels or the platform has no dialog available.
+        """
+        data = request.get_json(silent=True) or {}
+        initial = (data.get("initial") or "").strip()
+        path = utils.open_native_folder_picker(initial)
+        return jsonify({"ok": True, "path": path})
+
+    @combined.route("/api/sessions/record", methods=["POST"])
+    def api_sessions_record() -> Response:
+        """Record an "Open workspace" session — used by the no-spreadsheet path.
+
+        The Google/Excel paths already record via api_spreadsheets_open after a
+        successful sheet open; this endpoint covers the case where the user
+        clicks "Open workspace" on the "No spreadsheet" tab.
+        """
+        import start_settings
+
+        data = request.get_json(silent=True) or {}
+        input_dir = (data.get("input") or "").strip()
+        output_dir = (data.get("output") or "").strip()
+        spreadsheet_payload = data.get("spreadsheet")
+        spreadsheet_dict: dict[str, Any] | None = None
+        if isinstance(spreadsheet_payload, dict):
+            spreadsheet_dict = {
+                "type": spreadsheet_payload.get("type") or "",
+                "id_or_path": spreadsheet_payload.get("id_or_path") or "",
+                "label": spreadsheet_payload.get("label") or "",
+            }
+        start_settings.record_project_session(
+            input_dir or str(utils.get_effective_input_dir()),
+            output_dir or str(utils.get_effective_output_dir()),
+            spreadsheet_dict,
+        )
+        return jsonify({"ok": True})
+
+    @combined.route("/api/changelog")
+    def api_changelog() -> Response:
+        import changelog
+
+        return jsonify({"ok": True, "entries": changelog.load_entries()})
 
     @combined.route("/api/start-settings", methods=["GET"])
     def api_start_settings_get() -> Response:

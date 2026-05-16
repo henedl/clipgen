@@ -21,6 +21,7 @@ datas += collect_data_files("openpyxl")
 datas += collect_data_files("rich")
 datas += [("../assets", "assets")]
 datas += [("VERSION", ".")]
+datas += [("../CHANGELOG.md", ".")]
 
 
 excludes = [

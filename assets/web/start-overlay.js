@@ -1,19 +1,28 @@
-/* Start overlay — first-run / spreadsheet picker / folders / user guide.
+/* Start overlay — Direction B redesign.
  *
- * Loads start-overlay.html into <start-overlay-mount>, wires picker tabs +
- * recents dropdowns, calls the /api endpoints, and reloads the page after a
- * successful sheet open so all three frontends pick up the new context.
+ * Two-column launcher mounted by Studio / Screenspace / Transcripts. Drives:
+ *   • brand-mark + wordmark intro (reuses window.clipgenInitBrandMark; cascade
+ *     plays once per browser session, gated by the existing sessionStorage flag)
+ *   • section cascade-in (220ms base, 80ms stagger)
+ *   • backdrop blur via --host-blur / --veil-alpha on the overlay root
+ *   • folder + spreadsheet picker (Google / Excel / No spreadsheet)
+ *   • Extras tabs: tools / changelog / about
+ *   • persistence via the existing /api/start-settings endpoint
  *
- * Public API exposed on window.ClipgenStartOverlay:
- *   open()     — show the overlay
- *   close()    — hide the overlay
- *   isOpen()   — boolean
+ * Public API on window.ClipgenStartOverlay:
+ *   open()    — show the overlay
+ *   close()   — hide the overlay
+ *   isOpen()  — boolean
  */
 
 (function () {
   "use strict";
 
   var DISMISSED_KEY = "clipgen.startOverlayDismissed";
+  var INTRO_BLUR_PX = 14;
+  var INTRO_VEIL_ALPHA = 0.55;
+  var CASCADE_BASE_MS = 220;
+  var CASCADE_STEP_MS = 80;
 
   function sessionDismissed() {
     try { return sessionStorage.getItem(DISMISSED_KEY) === "1"; } catch (_) { return false; }
@@ -40,7 +49,24 @@
     persistEnabled: true,
     googlePollTimer: null,
     googlePollDeadline: 0,
-    activeTab: "google",
+    activeTab: "google",    // 'google' | 'excel' | 'none'
+    extrasTab: "tools",     // 'tools' | 'updates' | 'about'
+    changelogLoaded: false,
+    aboutLoaded: false,
+    googleSheets: [],
+    excelFiles: [],
+    statusData: null,
+    recentProjects: [],
+    // Baseline = the (input, output, sheet selection, tab) snapshot at the
+    // moment the overlay opened (or when a recent project was clicked).
+    // Drives the .is-loaded / .is-dirty glow on the path-input and
+    // sheet-card chrome.
+    baseline: {
+      input: "",
+      output: "",
+      sheetTab: "google",
+      sheetKey: "",        // type|id_or_path or empty if no sheet
+    },
   };
 
   var root = null;
@@ -62,6 +88,15 @@
     else node.removeAttribute("hidden");
   }
 
+  function applyIcons(scope) {
+    var icons = (scope || root).querySelectorAll(".so-icon[data-icon]");
+    Array.prototype.forEach.call(icons, function (node) {
+      var name = node.getAttribute("data-icon");
+      if (!name) return;
+      applyMaskIcon(node, 'url("icons/' + name + '.svg")');
+    });
+  }
+
   function mount() {
     if (state.mounted) return Promise.resolve();
     var slot = document.querySelector("start-overlay-mount");
@@ -75,7 +110,15 @@
         slot.replaceWith(node);
         root = node;
         cacheEls();
+        applyIcons();
         bind();
+        // The page-level clipgenInitBrandMark ran on DOMContentLoaded before
+        // the overlay was inserted, so re-run it now to hydrate the rail mark.
+        // It will skip the cascade animation if the session flag was already
+        // set by an earlier hydration of a topnav brand-mark on this page.
+        if (typeof window.clipgenInitBrandMark === "function") {
+          window.clipgenInitBrandMark();
+        }
         state.mounted = true;
       })
       .catch(function (err) {
@@ -84,41 +127,70 @@
   }
 
   function cacheEls() {
-    els.statusLine = root.querySelector('[data-role="status-line"]');
+    els.panel = root.querySelector('[data-role="panel"]');
+    els.backdrop = root.querySelector('[data-role="backdrop"]');
     els.closeBtn = root.querySelector('[data-role="close"]');
+    els.wordmark = root.querySelector('[data-role="wordmark"]');
+
+    els.cascades = root.querySelectorAll(".cascade-in");
+
+    els.railRecents = root.querySelector('[data-role="rail-recents"]');
+
+    els.inputField = root.querySelector('[data-role="input-field"]');
+    els.outputField = root.querySelector('[data-role="output-field"]');
     els.inputDir = root.querySelector("#startInputDir");
     els.outputDir = root.querySelector("#startOutputDir");
-    els.inputRecentsBtn = root.querySelector('[data-role="input-recents"]');
-    els.outputRecentsBtn = root.querySelector('[data-role="output-recents"]');
+    els.inputRecentsBtn = root.querySelector('[data-role="input-recents-toggle"]');
+    els.outputRecentsBtn = root.querySelector('[data-role="output-recents-toggle"]');
     els.inputRecentsList = root.querySelector('[data-role="input-recents-list"]');
     els.outputRecentsList = root.querySelector('[data-role="output-recents-list"]');
-    els.tabs = root.querySelectorAll(".start-overlay-tab");
+    els.inputBrowseBtn = root.querySelector('[data-role="input-browse"]');
+    els.outputBrowseBtn = root.querySelector('[data-role="output-browse"]');
+
+    els.tabs = root.querySelectorAll(".sheet-card__tab");
     els.googlePanel = root.querySelector('[data-tabpanel="google"]');
     els.excelPanel = root.querySelector('[data-tabpanel="excel"]');
+    els.nonePanel = root.querySelector('[data-tabpanel="none"]');
     els.googleStatus = root.querySelector('[data-role="google-status"]');
-    els.googleList = root.querySelector('[data-role="google-list"]');
+    els.googlePicker = root.querySelector('[data-role="google-picker"]');
+    els.googlePickerTrigger = root.querySelector('[data-role="google-picker-trigger"]');
+    els.googlePickerLabel = root.querySelector('[data-role="google-picker-label"]');
+    els.googlePickerMenu = root.querySelector('[data-role="google-picker-menu"]');
     els.googlePaste = root.querySelector("#startGooglePaste");
     els.excelStatus = root.querySelector('[data-role="excel-status"]');
-    els.excelList = root.querySelector('[data-role="excel-list"]');
+    els.excelPicker = root.querySelector('[data-role="excel-picker"]');
+    els.excelPickerTrigger = root.querySelector('[data-role="excel-picker-trigger"]');
+    els.excelPickerLabel = root.querySelector('[data-role="excel-picker-label"]');
+    els.excelPickerMenu = root.querySelector('[data-role="excel-picker-menu"]');
     els.excelPaste = root.querySelector("#startExcelPaste");
-    els.guideToggle = root.querySelector('[data-role="guide-toggle"]');
-    els.guide = root.querySelector('[data-role="guide"]');
+
+    els.extrasTabs = root.querySelectorAll(".extras-tabs__tab");
+    els.extrasPanels = {
+      tools: root.querySelector('[data-extras-panel="tools"]'),
+      updates: root.querySelector('[data-extras-panel="updates"]'),
+      about: root.querySelector('[data-extras-panel="about"]'),
+    };
+    els.updatesBadge = root.querySelector('[data-role="updates-badge"]');
+    els.changelogList = root.querySelector('[data-role="changelog-list"]');
+    els.aboutGrid = root.querySelector('[data-role="about-grid"]');
+
     els.persist = root.querySelector("#startPersistEnabled");
     els.confirmBtn = root.querySelector('[data-role="confirm"]');
-    els.dismissBtn = root.querySelector('[data-role="dismiss"]');
-    els.backdrop = root.querySelector('[data-role="backdrop"]');
   }
 
   function bind() {
     on(els.closeBtn, "click", close);
-    on(els.dismissBtn, "click", close);
     on(els.confirmBtn, "click", confirm);
-    on(els.backdrop, "click", function () {
-      if (state.sheetLoaded) close();
-    });
+    on(els.backdrop, "click", close);
 
+    // Sheet-card tab strip
     Array.prototype.forEach.call(els.tabs, function (tab) {
       on(tab, "click", function () { setTab(tab.getAttribute("data-tab")); });
+    });
+
+    // Extras tab strip
+    Array.prototype.forEach.call(els.extrasTabs, function (tab) {
+      on(tab, "click", function () { setExtrasTab(tab.getAttribute("data-extras-tab")); });
     });
 
     on(els.inputRecentsBtn, "click", function (e) {
@@ -129,25 +201,31 @@
       e.stopPropagation();
       toggleRecents("output");
     });
-    on(document, "click", function (e) {
-      if (!root) return;
-      if (els.inputRecentsList && !els.inputRecentsList.classList.contains("hidden")) {
-        if (!els.inputRecentsList.contains(e.target) && e.target !== els.inputRecentsBtn) {
-          els.inputRecentsList.classList.add("hidden");
-        }
-      }
-      if (els.outputRecentsList && !els.outputRecentsList.classList.contains("hidden")) {
-        if (!els.outputRecentsList.contains(e.target) && e.target !== els.outputRecentsBtn) {
-          els.outputRecentsList.classList.add("hidden");
-        }
-      }
+    on(els.inputBrowseBtn, "click", function () { browseFolder("input"); });
+    on(els.outputBrowseBtn, "click", function () { browseFolder("output"); });
+
+    on(els.inputDir, "input", function () {
+      clearFieldError(els.inputField);
+      applyFieldStates();
+    });
+    on(els.outputDir, "input", function () {
+      clearFieldError(els.outputField);
+      applyFieldStates();
     });
 
-    on(els.guideToggle, "click", function () {
-      var open = els.guideToggle.getAttribute("aria-expanded") === "true";
-      els.guideToggle.setAttribute("aria-expanded", open ? "false" : "true");
-      if (open) els.guide.classList.add("hidden");
-      else els.guide.classList.remove("hidden");
+    on(els.googlePickerTrigger, "click", function (e) {
+      e.stopPropagation();
+      togglePicker("google");
+    });
+    on(els.excelPickerTrigger, "click", function (e) {
+      e.stopPropagation();
+      togglePicker("excel");
+    });
+
+    on(document, "click", function (e) {
+      if (!root) return;
+      closeRecentsIfOutside(e);
+      closePickersIfOutside(e);
     });
 
     on(els.persist, "change", function () {
@@ -159,10 +237,8 @@
     on(els.googlePaste, "input", function () {
       var v = (els.googlePaste.value || "").trim();
       if (v) {
-        var label = parseLabelFromGoogleInput(v);
-        setSelection({ type: "google", id_or_path: v, label: label });
+        setSelection({ type: "google", id_or_path: v, label: parseLabelFromGoogleInput(v) });
       } else if (state.selection && state.selection.type === "google") {
-        // Re-render to clear highlighted state if any
         renderGoogleList(state.googleSheets || []);
       }
     });
@@ -170,18 +246,20 @@
     on(els.excelPaste, "input", function () {
       var v = (els.excelPaste.value || "").trim();
       if (v) {
-        setSelection({
-          type: "excel",
-          id_or_path: v,
-          label: v.split("/").pop() || v,
-        });
+        setSelection({ type: "excel", id_or_path: v, label: v.split("/").pop() || v });
       } else if (state.selection && state.selection.type === "excel") {
         renderExcelList(state.excelFiles || []);
       }
     });
 
     on(document, "keydown", function (e) {
-      if (e.key === "Escape" && state.open && state.sheetLoaded) close();
+      if (!state.open) return;
+      if (e.key === "Escape") {
+        close();
+      } else if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+        e.preventDefault();
+        confirm();
+      }
     });
   }
 
@@ -190,14 +268,142 @@
     return s;
   }
 
+  function closeRecentsIfOutside(e) {
+    if (els.inputRecentsList && !els.inputRecentsList.classList.contains("hidden")) {
+      if (!els.inputRecentsList.contains(e.target) && e.target !== els.inputRecentsBtn && !els.inputRecentsBtn.contains(e.target)) {
+        hideRecents("input");
+      }
+    }
+    if (els.outputRecentsList && !els.outputRecentsList.classList.contains("hidden")) {
+      if (!els.outputRecentsList.contains(e.target) && e.target !== els.outputRecentsBtn && !els.outputRecentsBtn.contains(e.target)) {
+        hideRecents("output");
+      }
+    }
+  }
+
   function toggleRecents(kind) {
     var list = kind === "input" ? els.inputRecentsList : els.outputRecentsList;
     if (!list) return;
-    var hidden = list.classList.contains("hidden");
-    if (els.inputRecentsList) els.inputRecentsList.classList.add("hidden");
-    if (els.outputRecentsList) els.outputRecentsList.classList.add("hidden");
-    if (hidden) list.classList.remove("hidden");
+    if (list.classList.contains("hidden")) {
+      // Hide the other before showing this one.
+      hideRecents(kind === "input" ? "output" : "input");
+      showRecents(kind);
+    } else {
+      hideRecents(kind);
+    }
   }
+
+  function showRecents(kind) {
+    var list = kind === "input" ? els.inputRecentsList : els.outputRecentsList;
+    var field = kind === "input" ? els.inputField : els.outputField;
+    if (!list) return;
+    list.classList.remove("hidden");
+    if (field) field.classList.add("has-popover");
+  }
+
+  function hideRecents(kind) {
+    var list = kind === "input" ? els.inputRecentsList : els.outputRecentsList;
+    var field = kind === "input" ? els.inputField : els.outputField;
+    if (!list) return;
+    list.classList.add("hidden");
+    if (field) field.classList.remove("has-popover");
+  }
+
+  // ---- Native folder browse ----
+
+  function browseFolder(kind) {
+    var input = kind === "input" ? els.inputDir : els.outputDir;
+    var btn = kind === "input" ? els.inputBrowseBtn : els.outputBrowseBtn;
+    if (!input) return;
+    if (btn) btn.disabled = true;
+    var payload = { initial: (input.value || "").trim() };
+    apiPost("/api/folder-picker", payload)
+      .then(function (r) {
+        if (r && r.ok && r.path) {
+          input.value = r.path;
+          // Fire an input event so the dirty/loaded glow + clear-error logic
+          // run as if the user typed the path.
+          input.dispatchEvent(new Event("input", { bubbles: true }));
+          input.focus();
+        } else {
+          // No path returned — either the user cancelled or the platform has
+          // no native dialog. Falling back to focusing the field is the same
+          // behaviour as before this endpoint existed.
+          input.focus();
+        }
+      })
+      .catch(function (err) {
+        console.warn("Folder picker failed", err);
+        input.focus();
+      })
+      .finally(function () {
+        if (btn) btn.disabled = false;
+      });
+  }
+
+  // ---- Sheet picker (Google + Excel dropdowns) ----
+
+  function togglePicker(kind) {
+    var menu = kind === "google" ? els.googlePickerMenu : els.excelPickerMenu;
+    if (!menu) return;
+    if (menu.classList.contains("hidden")) {
+      // Close the other picker before opening this one.
+      closePicker(kind === "google" ? "excel" : "google");
+      openPicker(kind);
+    } else {
+      closePicker(kind);
+    }
+  }
+
+  function openPicker(kind) {
+    var menu = kind === "google" ? els.googlePickerMenu : els.excelPickerMenu;
+    var trigger = kind === "google" ? els.googlePickerTrigger : els.excelPickerTrigger;
+    if (!menu || !trigger) return;
+    menu.classList.remove("hidden");
+    trigger.setAttribute("aria-expanded", "true");
+    liftSectionForPicker(trigger, true);
+  }
+
+  function closePicker(kind) {
+    var menu = kind === "google" ? els.googlePickerMenu : els.excelPickerMenu;
+    var trigger = kind === "google" ? els.googlePickerTrigger : els.excelPickerTrigger;
+    if (!menu || !trigger) return;
+    menu.classList.add("hidden");
+    trigger.setAttribute("aria-expanded", "false");
+    liftSectionForPicker(trigger, false);
+  }
+
+  function liftSectionForPicker(trigger, on) {
+    var section = trigger && trigger.closest(".start-section");
+    if (!section) return;
+    section.classList.toggle("has-picker-open", !!on);
+  }
+
+  function closePickersIfOutside(e) {
+    if (els.googlePicker && !els.googlePicker.contains(e.target) &&
+        els.googlePickerMenu && !els.googlePickerMenu.classList.contains("hidden")) {
+      closePicker("google");
+    }
+    if (els.excelPicker && !els.excelPicker.contains(e.target) &&
+        els.excelPickerMenu && !els.excelPickerMenu.classList.contains("hidden")) {
+      closePicker("excel");
+    }
+  }
+
+  function updatePickerLabel(kind, label) {
+    var labelEl = kind === "google" ? els.googlePickerLabel : els.excelPickerLabel;
+    var trigger = kind === "google" ? els.googlePickerTrigger : els.excelPickerTrigger;
+    if (!labelEl || !trigger) return;
+    if (label) {
+      labelEl.textContent = label;
+      trigger.classList.remove("is-placeholder");
+    } else {
+      labelEl.textContent = kind === "google" ? "Select a Google Sheet…" : "Select an Excel file…";
+      trigger.classList.add("is-placeholder");
+    }
+  }
+
+  // ---- Tabs ----
 
   function setTab(name) {
     state.activeTab = name;
@@ -206,44 +412,54 @@
       tab.classList.toggle("is-active", active);
       tab.setAttribute("aria-selected", active ? "true" : "false");
     });
-    show(els.googlePanel, name === "google");
-    show(els.excelPanel, name === "excel");
+    setHidden(els.googlePanel, name !== "google");
+    setHidden(els.excelPanel, name !== "excel");
+    setHidden(els.nonePanel, name !== "none");
+    if (name === "none") {
+      // Clear any sheet selection — user is opting out.
+      state.selection = null;
+    }
+    clearSheetError();
+    applyFieldStates();
+  }
+
+  function setExtrasTab(name) {
+    state.extrasTab = name;
+    Array.prototype.forEach.call(els.extrasTabs, function (tab) {
+      var active = tab.getAttribute("data-extras-tab") === name;
+      tab.classList.toggle("is-active", active);
+      tab.setAttribute("aria-selected", active ? "true" : "false");
+    });
+    setHidden(els.extrasPanels.tools, name !== "tools");
+    setHidden(els.extrasPanels.updates, name !== "updates");
+    setHidden(els.extrasPanels.about, name !== "about");
+    if (name === "updates" && !state.changelogLoaded) {
+      loadChangelog();
+    }
+    if (name === "about" && !state.aboutLoaded) {
+      renderAbout();
+    }
   }
 
   function setSelection(sel) {
     state.selection = sel;
-    updateConfirmButton();
     if (sel && sel.type === "google") {
       highlightGoogleSelection(sel.id_or_path);
+      updatePickerLabel("google", sel.label || sel.id_or_path);
     } else if (sel && sel.type === "excel") {
       highlightExcelSelection(sel.id_or_path);
+      updatePickerLabel("excel", sel.label || sel.id_or_path);
     }
-  }
-
-  function updateConfirmButton() {
-    if (!els.confirmBtn) return;
-    var hasSelection = !!state.selection;
-    els.confirmBtn.textContent = hasSelection ? "Open" : "Save folders";
-  }
-
-  function setStatusLine(loaded, label, inputDir, outputDir) {
-    if (!els.statusLine) return;
-    if (loaded && label) {
-      els.statusLine.textContent = "Current spreadsheet: " + label;
-    } else if (loaded) {
-      els.statusLine.textContent = "Spreadsheet loaded.";
-    } else {
-      els.statusLine.textContent = "No spreadsheet loaded.";
-    }
+    clearSheetError();
+    applyFieldStates();
   }
 
   // ---- Data loading ----
 
   function loadStatus() {
     return apiGet("/api/status").then(function (s) {
+      state.statusData = s;
       state.sheetLoaded = !!s.sheet_loaded;
-      setStatusLine(state.sheetLoaded, s.spreadsheet_label, s.input_dir, s.output_dir);
-      setHidden(els.closeBtn, !state.sheetLoaded);
       return s;
     });
   }
@@ -253,29 +469,130 @@
       if (!d || !d.ok) return;
       els.inputDir.value = d.input || "";
       els.outputDir.value = d.output || "";
-      renderRecents(els.inputRecentsList, d.recent_inputs || [], els.inputDir);
-      renderRecents(els.outputRecentsList, d.recent_outputs || [], els.outputDir);
+      renderFolderRecents(els.inputRecentsList, d.recent_inputs || [], els.inputDir, "input");
+      renderFolderRecents(els.outputRecentsList, d.recent_outputs || [], els.outputDir, "output");
     });
   }
 
-  function renderRecents(container, items, targetInput) {
+  function renderFolderRecents(container, items, targetInput, kind) {
     if (!container) return;
     container.innerHTML = "";
     if (!items.length) {
-      var empty = el("div", "start-overlay-recents-empty", "No recent folders");
+      var empty = el("div", "recent-pop__empty", "No recent folders");
       container.appendChild(empty);
       return;
     }
     items.forEach(function (path) {
-      var btn = el("button", "start-overlay-recents-item", path);
+      var btn = el("button", "recent-pop__item", path);
       btn.type = "button";
       btn.setAttribute("role", "menuitem");
       btn.addEventListener("click", function () {
         targetInput.value = path;
-        container.classList.add("hidden");
+        hideRecents(kind);
       });
       container.appendChild(btn);
     });
+  }
+
+  function renderRailRecents(projects) {
+    if (!els.railRecents) return;
+    els.railRecents.innerHTML = "";
+    if (!projects.length) {
+      els.railRecents.appendChild(el("div", "rail-recent--empty", "No recent projects yet"));
+      return;
+    }
+    var currentKey = currentSessionKey();
+    projects.slice(0, 4).forEach(function (project) {
+      var btn = el("button", "rail-recent");
+      btn.type = "button";
+      var key = projectKey(project);
+      if (currentKey && key === currentKey) {
+        btn.classList.add("is-current");
+        btn.title = "Currently loaded";
+      }
+      btn.appendChild(el("span", "rail-recent__path mono", project.input || ""));
+      var when = formatWhen(project.last_opened);
+      if (when) btn.appendChild(el("span", "rail-recent__when", when));
+      btn.addEventListener("click", function () {
+        restoreProject(project);
+      });
+      els.railRecents.appendChild(btn);
+    });
+  }
+
+  function projectKey(project) {
+    if (!project) return "";
+    var sheet = project.spreadsheet || null;
+    var sheetKey = sheet ? (sheet.type + "|" + sheet.id_or_path) : "";
+    return (project.input || "") + "::" + (project.output || "") + "::" + sheetKey;
+  }
+
+  function currentSessionKey() {
+    var s = state.statusData || {};
+    if (!s.input_dir && !s.output_dir) return "";
+    var sheetKey = s.sheet_loaded && s.spreadsheet_type && s.spreadsheet_id_or_path
+      ? s.spreadsheet_type + "|" + s.spreadsheet_id_or_path
+      : "";
+    return (s.input_dir || "") + "::" + (s.output_dir || "") + "::" + sheetKey;
+  }
+
+  function formatWhen(iso) {
+    if (!iso) return "";
+    var then = new Date(iso);
+    if (isNaN(then.getTime())) return "";
+    var diffMs = Date.now() - then.getTime();
+    if (diffMs < 0) return "";
+    var minutes = Math.floor(diffMs / 60000);
+    if (minutes < 1) return "just now";
+    if (minutes < 60) return minutes + "m ago";
+    var hours = Math.floor(minutes / 60);
+    if (hours < 24) return hours + "h ago";
+    var days = Math.floor(hours / 24);
+    if (days < 7) return days + "d ago";
+    if (days < 30) return Math.floor(days / 7) + "w ago";
+    var months = Math.floor(days / 30);
+    if (months < 12) return months + "mo ago";
+    return Math.floor(days / 365) + "y ago";
+  }
+
+  function restoreProject(project) {
+    if (!project) return;
+    els.inputDir.value = project.input || "";
+    els.outputDir.value = project.output || "";
+    var sheet = project.spreadsheet;
+    if (sheet && sheet.type && sheet.id_or_path) {
+      setTab(sheet.type);
+      setSelection({
+        type: sheet.type,
+        id_or_path: sheet.id_or_path,
+        label: sheet.label || sheet.id_or_path,
+      });
+      if (sheet.type === "google" && els.googlePaste) {
+        els.googlePaste.value = sheet.id_or_path;
+      } else if (sheet.type === "excel" && els.excelPaste) {
+        els.excelPaste.value = sheet.id_or_path;
+      }
+    } else {
+      setTab("none");
+      state.selection = null;
+    }
+    // Restoring a project resets the baseline so the field glow reads as
+    // "loaded" rather than "dirty" until the user edits again.
+    state.baseline = baselineFromInputs();
+    applyFieldStates();
+    clearFieldError(els.inputField);
+    clearFieldError(els.outputField);
+  }
+
+  function baselineFromInputs() {
+    return {
+      input: els.inputDir.value || "",
+      output: els.outputDir.value || "",
+      sheetTab: state.activeTab,
+      sheetKey: state.selection
+        ? state.selection.type + "|" + state.selection.id_or_path
+        : "",
+    };
   }
 
   function loadStartSettings() {
@@ -283,13 +600,95 @@
       if (!r || !r.settings) return;
       state.persistEnabled = r.settings.persist_enabled !== false;
       if (els.persist) els.persist.checked = state.persistEnabled;
+      state.recentProjects = r.settings.recent_projects || [];
+      renderRailRecents(state.recentProjects);
     });
+  }
+
+  // ---- Field state glow (.is-loaded / .is-dirty / .is-error) ----
+
+  function applyFieldStates() {
+    setFieldState(els.inputField, fieldState("input", els.inputDir.value || ""));
+    setFieldState(els.outputField, fieldState("output", els.outputDir.value || ""));
+    setSheetCardState(sheetState());
+  }
+
+  function fieldState(kind, currentValue) {
+    var node = kind === "input" ? els.inputField : els.outputField;
+    if (node && node.classList.contains("has-error")) return "error";
+    var baseline = kind === "input" ? state.baseline.input : state.baseline.output;
+    if (!currentValue) return "";
+    if (currentValue === baseline) return "loaded";
+    return "dirty";
+  }
+
+  function sheetState() {
+    var card = root && root.querySelector(".sheet-card");
+    if (card && card.classList.contains("has-error")) return "error";
+    var currentKey = state.selection
+      ? state.selection.type + "|" + state.selection.id_or_path
+      : "";
+    var sameKey = currentKey === state.baseline.sheetKey;
+    var sameTab = state.activeTab === state.baseline.sheetTab;
+    if (sameKey && sameTab) {
+      // Show "loaded" only when there is something concrete to mark.
+      return currentKey ? "loaded" : "";
+    }
+    return "dirty";
+  }
+
+  function setFieldState(node, stateName) {
+    if (!node) return;
+    var input = node.querySelector(".path-input");
+    if (!input) return;
+    input.classList.remove("is-loaded", "is-dirty", "is-error");
+    if (stateName) input.classList.add("is-" + stateName);
+  }
+
+  function setSheetCardState(stateName) {
+    var card = root && root.querySelector(".sheet-card");
+    if (!card) return;
+    card.classList.remove("is-loaded", "is-dirty", "is-error");
+    if (stateName) card.classList.add("is-" + stateName);
+  }
+
+  function markFieldError(node, message) {
+    if (!node) return;
+    node.classList.add("has-error");
+    var input = node.querySelector(".path-input");
+    if (input) {
+      input.classList.remove("is-loaded", "is-dirty");
+      input.classList.add("is-error");
+    }
+    if (message && typeof showToast === "function") showToast(message);
+  }
+
+  function clearFieldError(node) {
+    if (!node) return;
+    if (!node.classList.contains("has-error")) return;
+    node.classList.remove("has-error");
+    var input = node.querySelector(".path-input");
+    if (input) input.classList.remove("is-error");
+  }
+
+  function markSheetError(message) {
+    var card = root && root.querySelector(".sheet-card");
+    if (!card) return;
+    card.classList.add("has-error", "is-error");
+    card.classList.remove("is-loaded", "is-dirty");
+    if (message && typeof showToast === "function") showToast(message);
+  }
+
+  function clearSheetError() {
+    var card = root && root.querySelector(".sheet-card");
+    if (!card) return;
+    card.classList.remove("has-error", "is-error");
   }
 
   function loadGoogleSheets() {
     if (!els.googleStatus) return Promise.resolve();
     els.googleStatus.textContent = "Checking authentication…";
-    setHidden(els.googleList, true);
+    setHidden(els.googlePicker, true);
     return apiGet("/api/spreadsheets/google").then(function (g) {
       if (!g.authenticated) {
         renderGoogleConnectCTA(g.auth_in_flight, g.auth_error);
@@ -304,40 +703,38 @@
         ? state.googleSheets.length + " spreadsheets available"
         : "No spreadsheets found in your account";
       renderGoogleList(state.googleSheets);
+      setHidden(els.googlePicker, false);
     });
   }
 
   function renderGoogleConnectCTA(inFlight, errorMsg) {
     els.googleStatus.innerHTML = "";
-    setHidden(els.googleList, true);
+    setHidden(els.googlePicker, true);
     if (errorMsg) {
-      var err = el("div", "start-overlay-list-empty", errorMsg);
-      els.googleStatus.appendChild(err);
+      els.googleStatus.appendChild(el("div", "sheet-panel__status-error", errorMsg));
+    }
+    var row = el("div", "sheet-panel__connect-row");
+    if (!inFlight) {
+      var btn = el("button", "sheet-panel__connect", "Connect Google");
+      btn.type = "button";
+      btn.addEventListener("click", connectGoogle);
+      row.appendChild(btn);
     }
     var msg = el(
       "div",
-      "",
+      "sheet-panel__connect-msg",
       inFlight
         ? "Waiting for Google sign-in… (a browser tab should have opened)"
         : "Sign in to list your Google Sheets."
     );
-    msg.style.marginBottom = "8px";
-    els.googleStatus.appendChild(msg);
-
-    if (!inFlight) {
-      var btn = el("button", "cg-btn cg-btn-solid cg-btn-sm", "Connect Google");
-      btn.type = "button";
-      btn.addEventListener("click", connectGoogle);
-      els.googleStatus.appendChild(btn);
-    }
+    row.appendChild(msg);
+    els.googleStatus.appendChild(row);
   }
 
   function connectGoogle() {
     els.googleStatus.textContent = "Starting Google sign-in…";
     apiPost("/api/spreadsheets/google/auth", {})
-      .then(function () {
-        pollGoogleAuth();
-      })
+      .then(function () { pollGoogleAuth(); })
       .catch(function (err) {
         els.googleStatus.textContent = "Could not start sign-in: " + err.message;
       });
@@ -353,6 +750,7 @@
             ? state.googleSheets.length + " spreadsheets available"
             : "No spreadsheets found in your account";
           renderGoogleList(state.googleSheets);
+          setHidden(els.googlePicker, false);
           state.googlePollTimer = null;
           return;
         }
@@ -375,17 +773,26 @@
   }
 
   function renderGoogleList(sheets) {
-    setHidden(els.googleList, sheets.length === 0);
-    els.googleList.innerHTML = "";
+    if (!els.googlePickerMenu) return;
+    els.googlePickerMenu.innerHTML = "";
+    if (!sheets.length) {
+      els.googlePickerMenu.appendChild(
+        el("div", "sheet-picker__empty", "No spreadsheets in your account")
+      );
+      return;
+    }
     sheets.forEach(function (sheet) {
-      var item = el("button", "start-overlay-list-item", sheet.name);
-      item.type = "button";
-      item.setAttribute("data-id", sheet.id);
-      item.addEventListener("click", function () {
-        els.googlePaste.value = "";
+      var option = el("button", "sheet-picker__option");
+      option.type = "button";
+      option.setAttribute("role", "option");
+      option.setAttribute("data-id", sheet.name);
+      option.appendChild(el("span", "sheet-picker__option-main", sheet.name));
+      option.addEventListener("click", function () {
+        if (els.googlePaste) els.googlePaste.value = "";
         setSelection({ type: "google", id_or_path: sheet.name, label: sheet.name });
+        closePicker("google");
       });
-      els.googleList.appendChild(item);
+      els.googlePickerMenu.appendChild(option);
     });
     if (state.selection && state.selection.type === "google") {
       highlightGoogleSelection(state.selection.id_or_path);
@@ -393,8 +800,8 @@
   }
 
   function highlightGoogleSelection(idOrPath) {
-    if (!els.googleList) return;
-    var items = els.googleList.querySelectorAll(".start-overlay-list-item");
+    if (!els.googlePickerMenu) return;
+    var items = els.googlePickerMenu.querySelectorAll(".sheet-picker__option");
     Array.prototype.forEach.call(items, function (item) {
       item.classList.toggle("is-selected", item.getAttribute("data-id") === idOrPath);
     });
@@ -403,7 +810,6 @@
   function loadExcelFiles() {
     if (!els.excelStatus) return Promise.resolve();
     els.excelStatus.textContent = "Scanning input folder…";
-    els.excelList.innerHTML = "";
     return apiGet("/api/spreadsheets/excel").then(function (r) {
       state.excelFiles = r.files || [];
       els.excelStatus.textContent = state.excelFiles.length
@@ -414,26 +820,27 @@
   }
 
   function renderExcelList(files) {
-    els.excelList.innerHTML = "";
+    if (!els.excelPickerMenu) return;
+    els.excelPickerMenu.innerHTML = "";
     if (!files.length) {
-      els.excelList.appendChild(
-        el("div", "start-overlay-list-empty", "Paste a path below to load any .xlsx.")
+      els.excelPickerMenu.appendChild(
+        el("div", "sheet-picker__empty", "No .xlsx files in the input folder")
       );
       return;
     }
     files.forEach(function (f) {
-      var item = el("button", "start-overlay-list-item", "");
-      item.type = "button";
-      item.setAttribute("data-path", f.path);
-      var name = el("span", "", f.name);
-      var sub = el("span", "start-overlay-list-item-sub", f.path);
-      item.appendChild(name);
-      item.appendChild(sub);
-      item.addEventListener("click", function () {
-        els.excelPaste.value = "";
+      var option = el("button", "sheet-picker__option");
+      option.type = "button";
+      option.setAttribute("role", "option");
+      option.setAttribute("data-path", f.path);
+      option.appendChild(el("span", "sheet-picker__option-main", f.name));
+      option.appendChild(el("span", "sheet-picker__option-sub", f.path));
+      option.addEventListener("click", function () {
+        if (els.excelPaste) els.excelPaste.value = "";
         setSelection({ type: "excel", id_or_path: f.path, label: f.name });
+        closePicker("excel");
       });
-      els.excelList.appendChild(item);
+      els.excelPickerMenu.appendChild(option);
     });
     if (state.selection && state.selection.type === "excel") {
       highlightExcelSelection(state.selection.id_or_path);
@@ -441,11 +848,99 @@
   }
 
   function highlightExcelSelection(path) {
-    if (!els.excelList) return;
-    var items = els.excelList.querySelectorAll(".start-overlay-list-item");
+    if (!els.excelPickerMenu) return;
+    var items = els.excelPickerMenu.querySelectorAll(".sheet-picker__option");
     Array.prototype.forEach.call(items, function (item) {
       item.classList.toggle("is-selected", item.getAttribute("data-path") === path);
     });
+  }
+
+  function loadChangelog() {
+    return apiGet("/api/changelog").then(function (r) {
+      state.changelogLoaded = true;
+      var entries = (r && r.entries) || [];
+      renderChangelog(entries);
+      if (entries.length > 0 && els.updatesBadge) {
+        els.updatesBadge.textContent = String(entries.length);
+        setHidden(els.updatesBadge, false);
+      }
+    }).catch(function () {
+      state.changelogLoaded = true;
+      renderChangelog([]);
+    });
+  }
+
+  function renderChangelog(entries) {
+    if (!els.changelogList) return;
+    els.changelogList.innerHTML = "";
+    if (!entries.length) {
+      var empty = el("div", "changelog__empty", "No changelog entries yet.");
+      els.changelogList.appendChild(empty);
+      return;
+    }
+    entries.forEach(function (entry) {
+      var item = el("li", "changelog__entry");
+      var head = el("div", "changelog__head");
+      head.appendChild(el("span", "changelog__version", entry.version));
+      var tag = el("span", "changelog__tag");
+      tag.setAttribute("data-tool", entry.tool || "Core");
+      tag.appendChild(el("span", "changelog__tag-dot"));
+      tag.appendChild(document.createTextNode(entry.tool || "Core"));
+      head.appendChild(tag);
+      head.appendChild(el("span", "changelog__when", entry.date || ""));
+      item.appendChild(head);
+      if (entry.title) item.appendChild(el("div", "changelog__title", entry.title));
+      if (entry.body) item.appendChild(el("div", "changelog__body", entry.body));
+      els.changelogList.appendChild(item);
+    });
+  }
+
+  function renderAbout() {
+    if (!els.aboutGrid) return;
+    state.aboutLoaded = true;
+    var s = state.statusData || {};
+    els.aboutGrid.innerHTML = "";
+
+    aboutRow("Project", function (val) {
+      val.appendChild(el("span", "about__title", "clipgen"));
+      val.appendChild(el("span", "about__sub", "Generate clips, screenshots, and transcripts from playtest videos."));
+    });
+    aboutRow("Version", function (val) {
+      val.classList.add("mono");
+      val.textContent = "v" + (s.version || "0.0.0");
+    });
+    aboutRow("Author", function (val) {
+      val.textContent = s.author || "Henrik Edlund";
+    });
+    aboutRow("Repository", function (val) {
+      var repo = s.repo_url || "https://github.com/henedl/clipgen";
+      var label = repo.replace(/^https?:\/\//, "");
+      var link = document.createElement("a");
+      link.className = "about__link mono";
+      link.href = repo;
+      link.target = "_blank";
+      link.rel = "noopener noreferrer";
+      link.textContent = label;
+      var icon = document.createElement("span");
+      icon.className = "so-icon so-icon--xs";
+      icon.setAttribute("data-icon", "arrow-up-right");
+      applyMaskIcon(icon, 'url("icons/arrow-up-right.svg")');
+      link.appendChild(icon);
+      val.appendChild(link);
+    });
+    aboutRow("License", function (val) {
+      val.appendChild(el("span", "about__pill", s.license || "MIT"));
+      val.appendChild(el("span", "about__sub", "© 2017–2026 " + (s.author || "Henrik Edlund")));
+    });
+  }
+
+  function aboutRow(label, build) {
+    var row = el("div", "about__row");
+    row.appendChild(el("div", "about__label", label));
+    var val = el("div", "about__value");
+    build(val);
+    row.appendChild(val);
+    els.aboutGrid.appendChild(row);
   }
 
   // ---- Open / dismiss flows ----
@@ -453,6 +948,10 @@
   function confirm() {
     var inputVal = (els.inputDir.value || "").trim();
     var outputVal = (els.outputDir.value || "").trim();
+
+    clearFieldError(els.inputField);
+    clearFieldError(els.outputField);
+    clearSheetError();
 
     var dirsPayload = {};
     if (inputVal) dirsPayload.input = inputVal;
@@ -471,22 +970,21 @@
     els.confirmBtn.disabled = true;
     dirsPromise.then(function (res) {
       if (!res.ok) {
-        var msg = "Folder error";
-        if (res.body && res.body.errors) {
-          var parts = [];
-          if (res.body.errors.input) parts.push(res.body.errors.input);
-          if (res.body.errors.output) parts.push(res.body.errors.output);
-          msg = parts.join(" / ") || msg;
+        var errors = (res.body && res.body.errors) || {};
+        if (errors.input) markFieldError(els.inputField, errors.input);
+        if (errors.output) markFieldError(els.outputField, errors.output);
+        if (!errors.input && !errors.output && typeof showToast === "function") {
+          showToast("Folder error");
         }
-        showToast(msg);
         els.confirmBtn.disabled = false;
         return;
       }
-      if (!state.selection) {
-        // Only dirs were changed — just close.
-        showToast("Folders saved.");
-        els.confirmBtn.disabled = false;
-        close();
+      var skipSpreadsheet = state.activeTab === "none" || !state.selection;
+      if (skipSpreadsheet) {
+        recordSession(inputVal, outputVal, null).finally(function () {
+          els.confirmBtn.disabled = false;
+          close();
+        });
         return;
       }
       fetch("/api/spreadsheets/open", {
@@ -497,10 +995,10 @@
         .then(function (r) {
           return r.json().then(function (j) { return { ok: r.ok, body: j }; });
         })
-        .then(function (res) {
+        .then(function (res2) {
           els.confirmBtn.disabled = false;
-          if (!res.ok || !res.body.ok) {
-            showToast((res.body && res.body.error) || "Could not open spreadsheet");
+          if (!res2.ok || !res2.body.ok) {
+            markSheetError((res2.body && res2.body.error) || "Could not open spreadsheet");
             return;
           }
           // Hard reload so all three frontends re-fetch their data.
@@ -508,8 +1006,19 @@
         })
         .catch(function (err) {
           els.confirmBtn.disabled = false;
-          showToast("Open failed: " + err.message);
+          markSheetError("Open failed: " + err.message);
         });
+    });
+  }
+
+  function recordSession(input, output, spreadsheet) {
+    // Fire-and-forget on the no-sheet path. The sheet-open path records on
+    // the server during /api/spreadsheets/open, so this is the only call
+    // site that needs to invoke /api/sessions/record explicitly.
+    var payload = { input: input, output: output };
+    if (spreadsheet) payload.spreadsheet = spreadsheet;
+    return apiPost("/api/sessions/record", payload).catch(function (err) {
+      console.warn("Session record failed", err);
     });
   }
 
@@ -523,18 +1032,61 @@
     if (state.open) return;
     state.open = true;
     show(root, true);
+    runIntro();
     refresh();
   }
 
   function close() {
     if (!root) return;
     state.open = false;
-    show(root, false);
     markDismissed();
     if (state.googlePollTimer) {
       clearTimeout(state.googlePollTimer);
       state.googlePollTimer = null;
     }
+    // Animate the panel and backdrop out, then hide.
+    if (els.panel) els.panel.classList.remove("is-in");
+    root.style.setProperty("--host-blur", "0px");
+    root.style.setProperty("--veil-alpha", "0");
+    setTimeout(function () {
+      if (!state.open) show(root, false);
+    }, 460);
+  }
+
+  function runIntro() {
+    if (!root) return;
+    // Reset cascade-in elements so the animation can replay.
+    Array.prototype.forEach.call(els.cascades, function (node) {
+      node.classList.remove("is-in");
+    });
+    if (els.panel) els.panel.classList.remove("is-in");
+
+    // Backdrop builds in 100ms after mount so the panel is in place first.
+    root.style.setProperty("--host-blur", "0px");
+    root.style.setProperty("--veil-alpha", "0");
+    setTimeout(function () {
+      root.style.setProperty("--host-blur", INTRO_BLUR_PX + "px");
+      root.style.setProperty("--veil-alpha", String(INTRO_VEIL_ALPHA));
+    }, 100);
+
+    // Panel slide-in.
+    requestAnimationFrame(function () {
+      if (els.panel) els.panel.classList.add("is-in");
+    });
+
+    // Replay the wordmark by re-triggering the keyframe.
+    if (els.wordmark) {
+      els.wordmark.style.animation = "none";
+      // Force reflow so the next assignment restarts the animation.
+      void els.wordmark.offsetWidth;
+      els.wordmark.style.animation = "";
+    }
+
+    // Section cascade.
+    Array.prototype.forEach.call(els.cascades, function (node) {
+      var idx = parseInt(node.getAttribute("data-cascade") || "0", 10);
+      setTimeout(function () { node.classList.add("is-in"); }, CASCADE_BASE_MS + idx * CASCADE_STEP_MS);
+    });
   }
 
   function refresh() {
@@ -543,18 +1095,58 @@
       .then(loadStartSettings)
       .then(loadGoogleSheets)
       .then(loadExcelFiles)
-      .then(updateConfirmButton)
+      .then(applyCurrentSessionPrefill)
       .catch(function (err) {
         console.error("Start overlay refresh failed", err);
       });
+  }
+
+  function applyCurrentSessionPrefill() {
+    var s = state.statusData || {};
+    if (s.sheet_loaded && s.spreadsheet_type && s.spreadsheet_id_or_path) {
+      // Seed the picker so the current session shows as "loaded" without the
+      // user needing to re-select. Activate the correct tab + selection.
+      setTab(s.spreadsheet_type);
+      setSelection({
+        type: s.spreadsheet_type,
+        id_or_path: s.spreadsheet_id_or_path,
+        label: s.spreadsheet_label || s.spreadsheet_id_or_path,
+      });
+      if (s.spreadsheet_type === "google" && els.googlePaste) {
+        // Match against the open Google sheet list if possible; otherwise show
+        // the identifier in the paste field so the user can confirm the value.
+        var matches = (state.googleSheets || []).some(function (sheet) {
+          return sheet.name === s.spreadsheet_id_or_path;
+        });
+        if (!matches) els.googlePaste.value = s.spreadsheet_id_or_path;
+      } else if (s.spreadsheet_type === "excel" && els.excelPaste) {
+        var inList = (state.excelFiles || []).some(function (f) {
+          return f.path === s.spreadsheet_id_or_path;
+        });
+        if (!inList) els.excelPaste.value = s.spreadsheet_id_or_path;
+      }
+    } else if (s.sheet_loaded) {
+      // Sheet loaded via CLI without matching meta — leave the picker on its
+      // default tab but show a "current" baseline as no-sheet so the user can
+      // change things without the dirty glow misfiring.
+      state.baseline.sheetTab = state.activeTab;
+      state.baseline.sheetKey = "";
+    } else {
+      // No sheet loaded: the session's current state is "no spreadsheet".
+      setTab("none");
+    }
+    state.baseline = baselineFromInputs();
+    applyFieldStates();
+    // Re-render rail recents now that we know the current session key.
+    renderRailRecents(state.recentProjects);
   }
 
   // ---- Boot ----
 
   function boot() {
     mount().then(function () {
-      // After mount, check status once to decide auto-open.
       apiGet("/api/status").then(function (s) {
+        state.statusData = s;
         state.sheetLoaded = !!s.sheet_loaded;
         if (shouldAutoOpen(s)) open();
       }).catch(function () { /* offline / dev */ });

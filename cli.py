@@ -3264,14 +3264,20 @@ def main() -> None:
             if getattr(args, "studio", False):
                 import server
 
-                server.start_combined_server(worksheet=worksheet, default_page="studio")
+                server.start_combined_server(
+                    worksheet=worksheet,
+                    default_page="studio",
+                    gspread_client=gspread_client,
+                )
                 sys.exit(0)
 
             if getattr(args, "screenspace", False):
                 import server
 
                 server.start_combined_server(
-                    worksheet=worksheet, default_page="screenspace"
+                    worksheet=worksheet,
+                    default_page="screenspace",
+                    gspread_client=gspread_client,
                 )
                 sys.exit(0)
 
@@ -3279,7 +3285,9 @@ def main() -> None:
                 import server
 
                 server.start_combined_server(
-                    worksheet=worksheet, default_page="transcripts"
+                    worksheet=worksheet,
+                    default_page="transcripts",
+                    gspread_client=gspread_client,
                 )
                 sys.exit(0)
 
@@ -3293,7 +3301,7 @@ def main() -> None:
             elif cli_mode:
                 run_cli_mode(worksheet, args, cli_mode_args)
             else:
-                clipgen.run_interactive_mode(worksheet)
+                clipgen.run_interactive_mode(worksheet, gspread_client=gspread_client)
             break
         except utils.TopToSpreadsheet:
             # User requested to go back to spreadsheet selection; restart loop.

@@ -983,7 +983,10 @@ def _run_gallery_mode_interactive() -> None:
 
 
 def _dispatch_interactive_mode(
-    mode: str | None, worksheet: Any, raw_input: str
+    mode: str | None,
+    worksheet: Any,
+    raw_input: str,
+    gspread_client: Any = None,
 ) -> tuple[list[ClipRecord], bool, str | None] | None:
     """Dispatch a resolved mode or raw input. Returns result tuple, or None to re-prompt."""
     # Special modes with their own interactive flows
@@ -1022,22 +1025,38 @@ def _dispatch_interactive_mode(
     if mode == "insights":
         import server
 
-        server.start_combined_server(worksheet=worksheet, default_page="insights")
+        server.start_combined_server(
+            worksheet=worksheet,
+            default_page="insights",
+            gspread_client=gspread_client,
+        )
         return None
     if mode == "studio":
         import server
 
-        server.start_combined_server(worksheet=worksheet, default_page="studio")
+        server.start_combined_server(
+            worksheet=worksheet,
+            default_page="studio",
+            gspread_client=gspread_client,
+        )
         return None
     if mode == "screenspace":
         import server
 
-        server.start_combined_server(worksheet=worksheet, default_page="screenspace")
+        server.start_combined_server(
+            worksheet=worksheet,
+            default_page="screenspace",
+            gspread_client=gspread_client,
+        )
         return None
     if mode == "transcripts":
         import server
 
-        server.start_combined_server(worksheet=worksheet, default_page="transcripts")
+        server.start_combined_server(
+            worksheet=worksheet,
+            default_page="transcripts",
+            gspread_client=gspread_client,
+        )
         return None
     if mode == "export":
         import data_export
@@ -1116,7 +1135,7 @@ def _dispatch_interactive_mode(
     return (clips, False, None)
 
 
-def run_interactive_mode(worksheet: Any) -> None:
+def run_interactive_mode(worksheet: Any, gspread_client: Any = None) -> None:
     """Execute interactive mode - main processing loop."""
     if utils.NO_INPUT_MODE:
         utils.error_print(
@@ -1160,7 +1179,9 @@ def run_interactive_mode(worksheet: Any) -> None:
                 )
                 if suggestion is not None:
                     resolved_mode = MODE_ALIASES[suggestion]
-            result = _dispatch_interactive_mode(resolved_mode, worksheet, input_mode)
+            result = _dispatch_interactive_mode(
+                resolved_mode, worksheet, input_mode, gspread_client=gspread_client
+            )
             if result is None:
                 continue
             clips_list, is_reel, reel_output_file = result
