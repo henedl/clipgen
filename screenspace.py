@@ -35,7 +35,7 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 from collections.abc import Iterator
-from typing import TYPE_CHECKING, Any, Callable
+from typing import TYPE_CHECKING, Any, Callable, ClassVar
 
 import cv2
 import numpy as np
@@ -1921,177 +1921,10 @@ def check_frame_for_tool(
     """
     if region.get("w", 0) <= 0 or region.get("h", 0) <= 0:
         return False, None
-    if tool_type == "color":
-        pixels = extract_region(frame, region)
-        target = parameters.get("target_color", {"h": 0, "s": 0, "v": 0})
-        tol = parameters.get("tolerance", {"h": 10, "s": 50, "v": 50})
-        matched, conf = color_matches(pixels, target, tol)
-        if matched:
-            return True, {"_confidence": conf}
+    tool = TOOLS.get(tool_type)
+    if tool is None:
         return False, None
-
-    elif tool_type == "change":
-        if prev_frame is None:
-            return False, None
-        pixels = extract_region(frame, region)
-        prev_pixels = extract_region(prev_frame, region)
-        threshold = parameters.get(
-            "threshold", config.SCREENSPACE_CHANGE_RATIO_THRESHOLD
-        )
-        noise_threshold = parameters.get(
-            "noise_threshold", config.SCREENSPACE_NOISE_THRESHOLD
-        )
-        k = config.SCREENSPACE_BLUR_KERNEL
-        mk = config.SCREENSPACE_MORPH_KERNEL
-        morph_kernel = np.ones((mk, mk), np.uint8)
-        curr_gray = cv2.cvtColor(
-            cv2.GaussianBlur(pixels, (k, k), 0), cv2.COLOR_BGR2GRAY
-        )
-        prev_gray = cv2.cvtColor(
-            cv2.GaussianBlur(prev_pixels, (k, k), 0), cv2.COLOR_BGR2GRAY
-        )
-        diff = cv2.absdiff(prev_gray, curr_gray)
-        _, mask = cv2.threshold(diff, noise_threshold, 255, cv2.THRESH_BINARY)
-        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, morph_kernel)
-        mag = float(np.count_nonzero(mask)) / float(mask.size) if mask.size else 0.0
-        if mag >= threshold:
-            return True, {"magnitude": round(mag, 4)}
-        return False, None
-
-    elif tool_type == "similarity":
-        ref = parameters.get("reference_frame")
-        if ref is None:
-            return False, None
-        pixels = extract_region(frame, region)
-        threshold = parameters.get("threshold", config.SCREENSPACE_SSIM_THRESHOLD)
-        is_sim, score = regions_are_similar(pixels, ref, threshold)
-        if is_sim:
-            return True, {"score": round(score, 4)}
-        return False, None
-
-    elif tool_type == "text":
-        pixels = extract_region(frame, region)
-        search_string = parameters.get("search_string", "")
-        if not search_string:
-            return False, None
-        fuzzy_threshold = parameters.get(
-            "fuzzy_threshold", config.SCREENSPACE_OCR_FUZZY_THRESHOLD
-        )
-        languages = parameters.get("languages") or ["en"]
-        reader = _get_ocr_reader(languages)
-        ocr_results = reader.readtext(pixels, detail=1)
-        search_lower = search_string.lower()
-        for _, text, conf in ocr_results:
-            ratio = difflib.SequenceMatcher(None, search_lower, text.lower()).ratio()
-            if ratio >= fuzzy_threshold:
-                return True, {"text_found": text, "confidence": round(conf, 4)}
-        return False, None
-
-    elif tool_type == "numbers":
-        pixels = extract_region(frame, region)
-        operator = parameters.get("operator", "gt")
-        target_value = parameters.get("target_value", 0)
-        range_min = parameters.get("range_min")
-        range_max = parameters.get("range_max")
-        languages = parameters.get("languages") or ["en"]
-        reader = _get_ocr_reader(languages)
-        ocr_results = reader.readtext(pixels, detail=1)
-        for _, text, _conf in ocr_results:
-            cleaned = text.replace(",", "")
-            for match in _NUMBERS_RE.findall(cleaned):
-                num = float(match)
-                if _number_matches(num, operator, target_value, range_min, range_max):
-                    return True, {"number_found": num}
-        return False, None
-
-    elif tool_type == "template":
-        template_img = parameters.get("template_image")
-        if template_img is None:
-            return False, None
-        threshold = parameters.get(
-            "threshold", config.SCREENSPACE_TEMPLATE_MATCH_THRESHOLD
-        )
-        template_mask = parameters.get("template_mask")
-        # Cache the per-task-constant grayscale/mask on the parameters dict so
-        # multitool scans amortize the prep across frames.
-        prepared = parameters.get("_prepared_template")
-        if prepared is None:
-            prepared = _prepare_template(template_img, template_mask)
-            parameters["_prepared_template"] = prepared
-        matches = match_template(
-            frame,
-            template_img,
-            threshold=threshold,
-            mask=template_mask,
-            prepared=prepared,
-        )
-        if matches:
-            best = max(m["score"] for m in matches)
-            return True, {
-                "best_score": round(best, 4),
-                "match_count": len(matches),
-            }
-        return False, None
-
-    elif tool_type == "flow":
-        if prev_frame is None:
-            return False, None
-        pixels = extract_region(frame, region)
-        prev_pixels = extract_region(prev_frame, region)
-        curr_gray = cv2.cvtColor(pixels, cv2.COLOR_BGR2GRAY)
-        prev_gray_f = cv2.cvtColor(prev_pixels, cv2.COLOR_BGR2GRAY)
-        magnitude_threshold = parameters.get(
-            "magnitude_threshold", config.SCREENSPACE_FLOW_MAGNITUDE_THRESHOLD
-        )
-        flow_result = compute_optical_flow(prev_gray_f, curr_gray)
-        if flow_result["magnitude"] >= magnitude_threshold:
-            return True, {
-                "magnitude": flow_result["magnitude"],
-                "angle": flow_result["angle"],
-            }
-        return False, None
-
-    elif tool_type == "scene":
-        ref_scenes = parameters.get("reference_scenes")
-        if not ref_scenes:
-            return False, None
-        threshold = parameters.get(
-            "threshold", config.SCREENSPACE_SCENE_SIMILARITY_THRESHOLD
-        )
-        pixels = extract_region(frame, region)
-        fp = compute_scene_fingerprint(pixels)
-        best_name = ""
-        best_score = 0.0
-        for ref in ref_scenes:
-            # Cache fingerprint on the reference dict to avoid recomputing per frame
-            ref_fp = ref.get("_cached_fingerprint")
-            if ref_fp is None:
-                ref_fp = compute_scene_fingerprint(ref["frame"])
-                ref["_cached_fingerprint"] = ref_fp
-            score = compare_scene_fingerprints(fp, ref_fp)
-            if score > best_score:
-                best_score = score
-                best_name = ref["name"]
-        if best_score >= threshold:
-            return True, {"scene_name": best_name, "score": round(best_score, 4)}
-        return False, None
-
-    elif tool_type == "inactivity":
-        if prev_frame is None:
-            return False, None
-        pixels = extract_region(frame, region)
-        prev_pixels = extract_region(prev_frame, region)
-        thresh = parameters.get(
-            "threshold", config.SCREENSPACE_INACTIVITY_PHASH_THRESHOLD
-        )
-        curr_h = compute_phash(pixels)
-        prev_h = compute_phash(prev_pixels)
-        dist = int(curr_h - prev_h)
-        if dist <= thresh:
-            return True, {"distance": dist}
-        return False, None
-
-    return False, None
+    return tool.check_frame(frame, prev_frame, region, parameters)
 
 
 def scan_multitool(
@@ -2453,6 +2286,639 @@ def generate_heatmap_gif(
         loop=0,
     )
     return output_path
+
+
+# ---------------------------------------------------------------------------
+# Analysis tools (strategy registry)
+# ---------------------------------------------------------------------------
+#
+# Each tool is a small class wrapping the corresponding module-level ``scan_*``
+# function (preserved for tests that monkeypatch them). The two registry-level
+# dispatch points are:
+#   - :func:`check_frame_for_tool` (single-frame eval used by multitool)
+#   - :meth:`ScreenspaceWorker._dispatch` (full-video scan, called by the worker)
+# Both look up the tool by name in ``TOOLS`` and delegate to its methods.
+
+
+class AnalysisTool:
+    """Base class for screenspace analysis tools.
+
+    Subclasses set ``name`` and override ``check_frame`` (for multitool
+    chaining) and/or ``scan`` (for the full-video sweep). The dispatch
+    layer reads ``fast_scan_region_dim`` / ``supports_fast_scan`` /
+    ``fast_scan_extra_opts`` to build the shared ``fast_opts`` payload.
+    """
+
+    name: ClassVar[str] = ""
+    # Max region dimension when running in "fast" scan mode (passed to the
+    # generic frame extractor as ``max_region_dim``). 0 means no downscale.
+    fast_scan_region_dim: ClassVar[int] = 0
+    # Whether the tool participates in the fast-scan optimization at all.
+    # Timelapse opts out because it has its own ``sample_interval``.
+    supports_fast_scan: ClassVar[bool] = True
+    # Extra keys merged into ``fast_opts`` (e.g. ``{"template_downscale": True}``).
+    fast_scan_extra_opts: ClassVar[dict[str, Any]] = {}
+
+    def check_frame(
+        self,
+        frame: np.ndarray,
+        prev_frame: np.ndarray | None,
+        region: dict[str, int],
+        params: dict[str, Any],
+    ) -> tuple[bool, dict[str, Any] | None]:
+        """Evaluate a single frame for use in a multitool chain step.
+
+        Default: tool not supported as a multitool step.
+        """
+        return False, None
+
+    def scan(
+        self,
+        video_path: str,
+        region: dict[str, int],
+        params: dict[str, Any],
+        *,
+        task_id: str,
+        scan_mode: str,
+        on_progress: Callable[[float], None],
+        cancel_flag: Callable[[], bool],
+        on_result: Callable[[dict[str, Any]], None] | None,
+        fast_opts: dict[str, Any] | None,
+    ) -> Any:
+        """Run a full-video scan. Subclasses must override."""
+        raise NotImplementedError
+
+
+class ColorTool(AnalysisTool):
+    name = "color"
+    fast_scan_region_dim = 32
+
+    def check_frame(self, frame, prev_frame, region, params):
+        pixels = extract_region(frame, region)
+        target = params.get("target_color", {"h": 0, "s": 0, "v": 0})
+        tol = params.get("tolerance", {"h": 10, "s": 50, "v": 50})
+        matched, conf = color_matches(pixels, target, tol)
+        if matched:
+            return True, {"_confidence": conf}
+        return False, None
+
+    def scan(
+        self,
+        video_path,
+        region,
+        params,
+        *,
+        task_id,
+        scan_mode,
+        on_progress,
+        cancel_flag,
+        on_result,
+        fast_opts,
+    ):
+        return scan_color(
+            video_path,
+            region,
+            target_color=params.get("target_color", {"h": 0, "s": 0, "v": 0}),
+            tolerance=params.get("tolerance", {"h": 10, "s": 50, "v": 50}),
+            interval_seconds=params.get("interval", 0),
+            start_seconds=params.get("start_seconds", 0.0),
+            end_seconds=params.get("end_seconds"),
+            on_progress=on_progress,
+            cancel_flag=cancel_flag,
+            on_result=on_result,
+            fast_opts=fast_opts,
+        )
+
+
+class ChangeTool(AnalysisTool):
+    name = "change"
+    fast_scan_region_dim = 128
+
+    def check_frame(self, frame, prev_frame, region, params):
+        if prev_frame is None:
+            return False, None
+        pixels = extract_region(frame, region)
+        prev_pixels = extract_region(prev_frame, region)
+        threshold = params.get("threshold", config.SCREENSPACE_CHANGE_RATIO_THRESHOLD)
+        noise_threshold = params.get(
+            "noise_threshold", config.SCREENSPACE_NOISE_THRESHOLD
+        )
+        k = config.SCREENSPACE_BLUR_KERNEL
+        mk = config.SCREENSPACE_MORPH_KERNEL
+        morph_kernel = np.ones((mk, mk), np.uint8)
+        curr_gray = cv2.cvtColor(
+            cv2.GaussianBlur(pixels, (k, k), 0), cv2.COLOR_BGR2GRAY
+        )
+        prev_gray = cv2.cvtColor(
+            cv2.GaussianBlur(prev_pixels, (k, k), 0), cv2.COLOR_BGR2GRAY
+        )
+        diff = cv2.absdiff(prev_gray, curr_gray)
+        _, mask = cv2.threshold(diff, noise_threshold, 255, cv2.THRESH_BINARY)
+        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, morph_kernel)
+        mag = float(np.count_nonzero(mask)) / float(mask.size) if mask.size else 0.0
+        if mag >= threshold:
+            return True, {"magnitude": round(mag, 4)}
+        return False, None
+
+    def scan(
+        self,
+        video_path,
+        region,
+        params,
+        *,
+        task_id,
+        scan_mode,
+        on_progress,
+        cancel_flag,
+        on_result,
+        fast_opts,
+    ):
+        return scan_changes(
+            video_path,
+            region,
+            threshold=params.get("threshold", 0),
+            interval_seconds=params.get("interval", 0),
+            noise_threshold=params.get("noise_threshold", 0),
+            start_seconds=params.get("start_seconds", 0.0),
+            end_seconds=params.get("end_seconds"),
+            on_progress=on_progress,
+            cancel_flag=cancel_flag,
+            on_result=on_result,
+            fast_opts=fast_opts,
+        )
+
+
+class SimilarityTool(AnalysisTool):
+    name = "similarity"
+    fast_scan_region_dim = 128
+
+    def check_frame(self, frame, prev_frame, region, params):
+        ref = params.get("reference_frame")
+        if ref is None:
+            return False, None
+        pixels = extract_region(frame, region)
+        threshold = params.get("threshold", config.SCREENSPACE_SSIM_THRESHOLD)
+        is_sim, score = regions_are_similar(pixels, ref, threshold)
+        if is_sim:
+            return True, {"score": round(score, 4)}
+        return False, None
+
+    def scan(
+        self,
+        video_path,
+        region,
+        params,
+        *,
+        task_id,
+        scan_mode,
+        on_progress,
+        cancel_flag,
+        on_result,
+        fast_opts,
+    ):
+        ref_frame = params.get("reference_frame")
+        if ref_frame is None:
+            raise ValueError("Similarity scan requires a reference_frame parameter")
+        return scan_similarity(
+            video_path,
+            region,
+            reference_frame=ref_frame,
+            threshold=params.get("threshold", 0),
+            interval_seconds=params.get("interval", 0),
+            start_seconds=params.get("start_seconds", 0.0),
+            end_seconds=params.get("end_seconds"),
+            on_progress=on_progress,
+            cancel_flag=cancel_flag,
+            on_result=on_result,
+            fast_opts=fast_opts,
+        )
+
+
+class TextTool(AnalysisTool):
+    name = "text"
+
+    def check_frame(self, frame, prev_frame, region, params):
+        pixels = extract_region(frame, region)
+        search_string = params.get("search_string", "")
+        if not search_string:
+            return False, None
+        fuzzy_threshold = params.get(
+            "fuzzy_threshold", config.SCREENSPACE_OCR_FUZZY_THRESHOLD
+        )
+        languages = params.get("languages") or ["en"]
+        reader = _get_ocr_reader(languages)
+        ocr_results = reader.readtext(pixels, detail=1)
+        search_lower = search_string.lower()
+        for _, text, conf in ocr_results:
+            ratio = difflib.SequenceMatcher(None, search_lower, text.lower()).ratio()
+            if ratio >= fuzzy_threshold:
+                return True, {"text_found": text, "confidence": round(conf, 4)}
+        return False, None
+
+    def scan(
+        self,
+        video_path,
+        region,
+        params,
+        *,
+        task_id,
+        scan_mode,
+        on_progress,
+        cancel_flag,
+        on_result,
+        fast_opts,
+    ):
+        return scan_text(
+            video_path,
+            region,
+            search_string=params.get("search_string", ""),
+            interval_seconds=params.get("interval", 2.0),
+            fuzzy_threshold=params.get("fuzzy_threshold", 0),
+            languages=params.get("languages"),
+            start_seconds=params.get("start_seconds", 0.0),
+            end_seconds=params.get("end_seconds"),
+            on_progress=on_progress,
+            cancel_flag=cancel_flag,
+            on_result=on_result,
+            fast_opts=fast_opts,
+        )
+
+
+class NumbersTool(AnalysisTool):
+    name = "numbers"
+
+    def check_frame(self, frame, prev_frame, region, params):
+        pixels = extract_region(frame, region)
+        operator = params.get("operator", "gt")
+        target_value = params.get("target_value", 0)
+        range_min = params.get("range_min")
+        range_max = params.get("range_max")
+        languages = params.get("languages") or ["en"]
+        reader = _get_ocr_reader(languages)
+        ocr_results = reader.readtext(pixels, detail=1)
+        for _, text, _conf in ocr_results:
+            cleaned = text.replace(",", "")
+            for match in _NUMBERS_RE.findall(cleaned):
+                num = float(match)
+                if _number_matches(num, operator, target_value, range_min, range_max):
+                    return True, {"number_found": num}
+        return False, None
+
+    def scan(
+        self,
+        video_path,
+        region,
+        params,
+        *,
+        task_id,
+        scan_mode,
+        on_progress,
+        cancel_flag,
+        on_result,
+        fast_opts,
+    ):
+        return scan_numbers(
+            video_path,
+            region,
+            operator=params.get("operator", "gt"),
+            target_value=params.get("target_value", 0),
+            interval_seconds=params.get("interval", 2.0),
+            range_min=params.get("range_min"),
+            range_max=params.get("range_max"),
+            languages=params.get("languages"),
+            start_seconds=params.get("start_seconds", 0.0),
+            end_seconds=params.get("end_seconds"),
+            on_progress=on_progress,
+            cancel_flag=cancel_flag,
+            on_result=on_result,
+            fast_opts=fast_opts,
+        )
+
+
+class TemplateTool(AnalysisTool):
+    name = "template"
+    fast_scan_extra_opts: ClassVar[dict[str, Any]] = {"template_downscale": True}
+
+    def check_frame(self, frame, prev_frame, region, params):
+        template_img = params.get("template_image")
+        if template_img is None:
+            return False, None
+        threshold = params.get("threshold", config.SCREENSPACE_TEMPLATE_MATCH_THRESHOLD)
+        template_mask = params.get("template_mask")
+        # Cache the per-task-constant grayscale/mask on the parameters dict so
+        # multitool scans amortize the prep across frames.
+        prepared = params.get("_prepared_template")
+        if prepared is None:
+            prepared = _prepare_template(template_img, template_mask)
+            params["_prepared_template"] = prepared
+        matches = match_template(
+            frame,
+            template_img,
+            threshold=threshold,
+            mask=template_mask,
+            prepared=prepared,
+        )
+        if matches:
+            best = max(m["score"] for m in matches)
+            return True, {"best_score": round(best, 4), "match_count": len(matches)}
+        return False, None
+
+    def scan(
+        self,
+        video_path,
+        region,
+        params,
+        *,
+        task_id,
+        scan_mode,
+        on_progress,
+        cancel_flag,
+        on_result,
+        fast_opts,
+    ):
+        template_img = params.get("template_image")
+        if template_img is None:
+            raise ValueError("Template scan requires a template_image parameter")
+        tmpl_mask = params.get("template_mask")
+        # Fast scan: downscale template + mask by 2x before passing to the
+        # scan function (which separately downscales the frame via the
+        # ``template_downscale`` fast_opts flag).
+        if scan_mode == "fast":
+            th, tw = template_img.shape[:2]
+            ntw, nth = tw // 2, th // 2
+            if ntw > 0 and nth > 0:
+                template_img = cv2.resize(
+                    template_img, (ntw, nth), interpolation=cv2.INTER_AREA
+                )
+                if tmpl_mask is not None:
+                    tmpl_mask = cv2.resize(
+                        tmpl_mask, (ntw, nth), interpolation=cv2.INTER_AREA
+                    )
+        return scan_template(
+            video_path,
+            region,
+            template_image=template_img,
+            threshold=params.get("threshold", 0),
+            interval_seconds=params.get("interval", 0),
+            template_mask=tmpl_mask,
+            template_scale=float(params.get("template_scale", 1.0)),
+            start_seconds=params.get("start_seconds", 0.0),
+            end_seconds=params.get("end_seconds"),
+            on_progress=on_progress,
+            cancel_flag=cancel_flag,
+            on_result=on_result,
+            fast_opts=fast_opts,
+        )
+
+
+class FlowTool(AnalysisTool):
+    name = "flow"
+    fast_scan_region_dim = 128
+
+    def check_frame(self, frame, prev_frame, region, params):
+        if prev_frame is None:
+            return False, None
+        pixels = extract_region(frame, region)
+        prev_pixels = extract_region(prev_frame, region)
+        curr_gray = cv2.cvtColor(pixels, cv2.COLOR_BGR2GRAY)
+        prev_gray_f = cv2.cvtColor(prev_pixels, cv2.COLOR_BGR2GRAY)
+        magnitude_threshold = params.get(
+            "magnitude_threshold", config.SCREENSPACE_FLOW_MAGNITUDE_THRESHOLD
+        )
+        flow_result = compute_optical_flow(prev_gray_f, curr_gray)
+        if flow_result["magnitude"] >= magnitude_threshold:
+            return True, {
+                "magnitude": flow_result["magnitude"],
+                "angle": flow_result["angle"],
+            }
+        return False, None
+
+    def scan(
+        self,
+        video_path,
+        region,
+        params,
+        *,
+        task_id,
+        scan_mode,
+        on_progress,
+        cancel_flag,
+        on_result,
+        fast_opts,
+    ):
+        return scan_flow(
+            video_path,
+            region,
+            magnitude_threshold=params.get("magnitude_threshold", 0),
+            interval_seconds=params.get("interval", 0),
+            start_seconds=params.get("start_seconds", 0.0),
+            end_seconds=params.get("end_seconds"),
+            on_progress=on_progress,
+            cancel_flag=cancel_flag,
+            on_result=on_result,
+            fast_opts=fast_opts,
+        )
+
+
+class SceneTool(AnalysisTool):
+    name = "scene"
+    fast_scan_region_dim = 64
+
+    def check_frame(self, frame, prev_frame, region, params):
+        ref_scenes = params.get("reference_scenes")
+        if not ref_scenes:
+            return False, None
+        threshold = params.get(
+            "threshold", config.SCREENSPACE_SCENE_SIMILARITY_THRESHOLD
+        )
+        pixels = extract_region(frame, region)
+        fp = compute_scene_fingerprint(pixels)
+        best_name = ""
+        best_score = 0.0
+        for ref in ref_scenes:
+            # Cache fingerprint on the reference dict to avoid recomputing per frame
+            ref_fp = ref.get("_cached_fingerprint")
+            if ref_fp is None:
+                ref_fp = compute_scene_fingerprint(ref["frame"])
+                ref["_cached_fingerprint"] = ref_fp
+            score = compare_scene_fingerprints(fp, ref_fp)
+            if score > best_score:
+                best_score = score
+                best_name = ref["name"]
+        if best_score >= threshold:
+            return True, {"scene_name": best_name, "score": round(best_score, 4)}
+        return False, None
+
+    def scan(
+        self,
+        video_path,
+        region,
+        params,
+        *,
+        task_id,
+        scan_mode,
+        on_progress,
+        cancel_flag,
+        on_result,
+        fast_opts,
+    ):
+        ref_scenes = params.get("reference_scenes")
+        if not ref_scenes:
+            raise ValueError("Scene scan requires reference_scenes parameter")
+        return scan_scene(
+            video_path,
+            region,
+            reference_scenes=ref_scenes,
+            threshold=params.get("threshold", 0),
+            interval_seconds=params.get("interval", 0),
+            start_seconds=params.get("start_seconds", 0.0),
+            end_seconds=params.get("end_seconds"),
+            on_progress=on_progress,
+            cancel_flag=cancel_flag,
+            on_result=on_result,
+            fast_opts=fast_opts,
+        )
+
+
+class InactivityTool(AnalysisTool):
+    name = "inactivity"
+    fast_scan_region_dim = 64
+
+    def check_frame(self, frame, prev_frame, region, params):
+        if prev_frame is None:
+            return False, None
+        pixels = extract_region(frame, region)
+        prev_pixels = extract_region(prev_frame, region)
+        thresh = params.get("threshold", config.SCREENSPACE_INACTIVITY_PHASH_THRESHOLD)
+        curr_h = compute_phash(pixels)
+        prev_h = compute_phash(prev_pixels)
+        dist = int(curr_h - prev_h)
+        if dist <= thresh:
+            return True, {"distance": dist}
+        return False, None
+
+    def scan(
+        self,
+        video_path,
+        region,
+        params,
+        *,
+        task_id,
+        scan_mode,
+        on_progress,
+        cancel_flag,
+        on_result,
+        fast_opts,
+    ):
+        return scan_inactivity(
+            video_path,
+            region,
+            threshold=params.get("threshold", 0),
+            min_duration=params.get("min_duration", 0.0),
+            interval_seconds=params.get("interval", 0),
+            start_seconds=params.get("start_seconds", 0.0),
+            end_seconds=params.get("end_seconds"),
+            on_progress=on_progress,
+            cancel_flag=cancel_flag,
+            on_result=on_result,
+            fast_opts=fast_opts,
+        )
+
+
+class TimelapseTool(AnalysisTool):
+    name = "timelapse"
+    # Has its own ``sample_interval`` and produces a media file rather than
+    # per-frame events, so the generic fast-scan path does not apply.
+    supports_fast_scan = False
+
+    def scan(
+        self,
+        video_path,
+        region,
+        params,
+        *,
+        task_id,
+        scan_mode,
+        on_progress,
+        cancel_flag,
+        on_result,
+        fast_opts,
+    ):
+        output_path = params.get("output_path", "")
+        if not output_path:
+            ext = "gif" if params.get("output_format") == "gif" else "mp4"
+            output_path = str(
+                Path(utils.get_effective_output_dir()) / f"timelapse_{task_id}.{ext}"
+            )
+        return generate_timelapse(
+            video_path,
+            region,
+            speedup_factor=params.get("speedup_factor", 10.0),
+            output_path=output_path,
+            output_format=params.get("output_format", "mp4"),
+            start_seconds=params.get("start_seconds", 0.0),
+            end_seconds=params.get("end_seconds"),
+            sample_interval=params.get("sample_interval", 0.0),
+            on_progress=on_progress,
+            cancel_flag=cancel_flag,
+        )
+
+
+class MultitoolTool(AnalysisTool):
+    name = "multitool"
+
+    def scan(
+        self,
+        video_path,
+        region,
+        params,
+        *,
+        task_id,
+        scan_mode,
+        on_progress,
+        cancel_flag,
+        on_result,
+        fast_opts,
+    ):
+        steps = params.get("steps", [])
+        if not steps or len(steps) < 2:
+            raise ValueError("Multitool requires at least 2 steps")
+        # Fast scan: multiply the interval used by scan_multitool
+        # (reads from steps[0]["interval"] with fallback to default).
+        if scan_mode == "fast" and steps:
+            mt_interval = steps[0].get("interval", config.SCREENSPACE_DEFAULT_INTERVAL)
+            steps[0]["interval"] = (
+                mt_interval * config.SCREENSPACE_FAST_SCAN_INTERVAL_MULTIPLIER
+            )
+        return scan_multitool(
+            video_path,
+            region,
+            steps=steps,
+            start_seconds=params.get("start_seconds", 0.0),
+            end_seconds=params.get("end_seconds"),
+            on_progress=on_progress,
+            cancel_flag=cancel_flag,
+            on_result=on_result,
+            fast_opts=fast_opts,
+        )
+
+
+TOOLS: dict[str, AnalysisTool] = {
+    t.name: t
+    for t in (
+        ColorTool(),
+        ChangeTool(),
+        SimilarityTool(),
+        TextTool(),
+        NumbersTool(),
+        TemplateTool(),
+        FlowTool(),
+        SceneTool(),
+        InactivityTool(),
+        TimelapseTool(),
+        MultitoolTool(),
+    )
+}
 
 
 class ScreenspaceWorker:
@@ -2837,234 +3303,41 @@ class ScreenspaceWorker:
         cancel_flag: Callable[[], bool],
         on_result: Callable[[dict[str, Any]], None] | None = None,
     ) -> Any:
-        """Route task to the correct workflow function."""
-        video_path = task["video_path"]
-        region = task["region_coords"]
-        params = task.get("parameters", {})
-        task_type = task["type"]
+        """Route task to the correct tool via the ``TOOLS`` registry.
 
-        # Fast scan: apply interval multiplier and build optimization dict
-        # (timelapse has its own sample_interval and does not use fast scan)
+        Builds the shared fast-scan ``fast_opts`` payload here so individual
+        tool classes only need to declare ``fast_scan_region_dim`` /
+        ``supports_fast_scan`` / ``fast_scan_extra_opts`` as class attributes.
+        """
+        task_type = task["type"]
+        tool = TOOLS.get(task_type)
+        if tool is None:
+            raise ValueError(f"Unknown task type: {task_type}")
+
+        params = task.get("parameters", {})
         scan_mode = params.get("scan_mode", "normal")
         fast_opts: dict[str, Any] | None = None
-        if scan_mode == "fast" and task_type != "timelapse":
+        if scan_mode == "fast" and tool.supports_fast_scan:
             multiplier = config.SCREENSPACE_FAST_SCAN_INTERVAL_MULTIPLIER
             if params.get("interval", 0) > 0:
                 params["interval"] = params["interval"] * multiplier
-            _fast_dims = {
-                "color": 32,
-                "change": 128,
-                "similarity": 128,
-                "flow": 128,
-                "scene": 64,
-                "inactivity": 64,
-            }
             fast_opts = {
                 "phash_skip": True,
-                "max_region_dim": _fast_dims.get(task_type, 0),
+                "max_region_dim": tool.fast_scan_region_dim,
+                **tool.fast_scan_extra_opts,
             }
-            if task_type == "template":
-                fast_opts["template_downscale"] = True
 
-        if task_type == "color":
-            return scan_color(
-                video_path,
-                region,
-                target_color=params.get("target_color", {"h": 0, "s": 0, "v": 0}),
-                tolerance=params.get("tolerance", {"h": 10, "s": 50, "v": 50}),
-                interval_seconds=params.get("interval", 0),
-                start_seconds=params.get("start_seconds", 0.0),
-                end_seconds=params.get("end_seconds"),
-                on_progress=on_progress,
-                cancel_flag=cancel_flag,
-                on_result=on_result,
-                fast_opts=fast_opts,
-            )
-        elif task_type == "change":
-            return scan_changes(
-                video_path,
-                region,
-                threshold=params.get("threshold", 0),
-                interval_seconds=params.get("interval", 0),
-                noise_threshold=params.get("noise_threshold", 0),
-                start_seconds=params.get("start_seconds", 0.0),
-                end_seconds=params.get("end_seconds"),
-                on_progress=on_progress,
-                cancel_flag=cancel_flag,
-                on_result=on_result,
-                fast_opts=fast_opts,
-            )
-        elif task_type == "similarity":
-            ref_frame = params.get("reference_frame")
-            if ref_frame is None:
-                raise ValueError("Similarity scan requires a reference_frame parameter")
-            return scan_similarity(
-                video_path,
-                region,
-                reference_frame=ref_frame,
-                threshold=params.get("threshold", 0),
-                interval_seconds=params.get("interval", 0),
-                start_seconds=params.get("start_seconds", 0.0),
-                end_seconds=params.get("end_seconds"),
-                on_progress=on_progress,
-                cancel_flag=cancel_flag,
-                on_result=on_result,
-                fast_opts=fast_opts,
-            )
-        elif task_type == "text":
-            return scan_text(
-                video_path,
-                region,
-                search_string=params.get("search_string", ""),
-                interval_seconds=params.get("interval", 2.0),
-                fuzzy_threshold=params.get("fuzzy_threshold", 0),
-                languages=params.get("languages"),
-                start_seconds=params.get("start_seconds", 0.0),
-                end_seconds=params.get("end_seconds"),
-                on_progress=on_progress,
-                cancel_flag=cancel_flag,
-                on_result=on_result,
-                fast_opts=fast_opts,
-            )
-        elif task_type == "numbers":
-            return scan_numbers(
-                video_path,
-                region,
-                operator=params.get("operator", "gt"),
-                target_value=params.get("target_value", 0),
-                interval_seconds=params.get("interval", 2.0),
-                range_min=params.get("range_min"),
-                range_max=params.get("range_max"),
-                languages=params.get("languages"),
-                start_seconds=params.get("start_seconds", 0.0),
-                end_seconds=params.get("end_seconds"),
-                on_progress=on_progress,
-                cancel_flag=cancel_flag,
-                on_result=on_result,
-                fast_opts=fast_opts,
-            )
-        elif task_type == "timelapse":
-            output_path = params.get("output_path", "")
-            if not output_path:
-                ext = "gif" if params.get("output_format") == "gif" else "mp4"
-                output_path = str(
-                    Path(utils.get_effective_output_dir())
-                    / f"timelapse_{task['id']}.{ext}"
-                )
-            return generate_timelapse(
-                video_path,
-                region,
-                speedup_factor=params.get("speedup_factor", 10.0),
-                output_path=output_path,
-                output_format=params.get("output_format", "mp4"),
-                start_seconds=params.get("start_seconds", 0.0),
-                end_seconds=params.get("end_seconds"),
-                sample_interval=params.get("sample_interval", 0.0),
-                on_progress=on_progress,
-                cancel_flag=cancel_flag,
-            )
-        elif task_type == "template":
-            template_img = params.get("template_image")
-            if template_img is None:
-                raise ValueError("Template scan requires a template_image parameter")
-            tmpl_mask = params.get("template_mask")
-            # Fast scan: downscale template + mask by 2x
-            if scan_mode == "fast" and template_img is not None:
-                th, tw = template_img.shape[:2]
-                ntw, nth = tw // 2, th // 2
-                if ntw > 0 and nth > 0:
-                    template_img = cv2.resize(
-                        template_img, (ntw, nth), interpolation=cv2.INTER_AREA
-                    )
-                    if tmpl_mask is not None:
-                        tmpl_mask = cv2.resize(
-                            tmpl_mask, (ntw, nth), interpolation=cv2.INTER_AREA
-                        )
-            return scan_template(
-                video_path,
-                region,
-                template_image=template_img,
-                threshold=params.get("threshold", 0),
-                interval_seconds=params.get("interval", 0),
-                template_mask=tmpl_mask,
-                template_scale=float(params.get("template_scale", 1.0)),
-                start_seconds=params.get("start_seconds", 0.0),
-                end_seconds=params.get("end_seconds"),
-                on_progress=on_progress,
-                cancel_flag=cancel_flag,
-                on_result=on_result,
-                fast_opts=fast_opts,
-            )
-        elif task_type == "flow":
-            return scan_flow(
-                video_path,
-                region,
-                magnitude_threshold=params.get("magnitude_threshold", 0),
-                interval_seconds=params.get("interval", 0),
-                start_seconds=params.get("start_seconds", 0.0),
-                end_seconds=params.get("end_seconds"),
-                on_progress=on_progress,
-                cancel_flag=cancel_flag,
-                on_result=on_result,
-                fast_opts=fast_opts,
-            )
-        elif task_type == "scene":
-            ref_scenes = params.get("reference_scenes")
-            if not ref_scenes:
-                raise ValueError("Scene scan requires reference_scenes parameter")
-            return scan_scene(
-                video_path,
-                region,
-                reference_scenes=ref_scenes,
-                threshold=params.get("threshold", 0),
-                interval_seconds=params.get("interval", 0),
-                start_seconds=params.get("start_seconds", 0.0),
-                end_seconds=params.get("end_seconds"),
-                on_progress=on_progress,
-                cancel_flag=cancel_flag,
-                on_result=on_result,
-                fast_opts=fast_opts,
-            )
-        elif task_type == "multitool":
-            steps = params.get("steps", [])
-            if not steps or len(steps) < 2:
-                raise ValueError("Multitool requires at least 2 steps")
-            # Fast scan: multiply the interval used by scan_multitool
-            # (reads from steps[0]["interval"] with fallback to default)
-            if scan_mode == "fast" and steps:
-                mt_interval = steps[0].get(
-                    "interval", config.SCREENSPACE_DEFAULT_INTERVAL
-                )
-                steps[0]["interval"] = (
-                    mt_interval * config.SCREENSPACE_FAST_SCAN_INTERVAL_MULTIPLIER
-                )
-            return scan_multitool(
-                video_path,
-                region,
-                steps=steps,
-                start_seconds=params.get("start_seconds", 0.0),
-                end_seconds=params.get("end_seconds"),
-                on_progress=on_progress,
-                cancel_flag=cancel_flag,
-                on_result=on_result,
-                fast_opts=fast_opts,
-            )
-        elif task_type == "inactivity":
-            return scan_inactivity(
-                video_path,
-                region,
-                threshold=params.get("threshold", 0),
-                min_duration=params.get("min_duration", 0.0),
-                interval_seconds=params.get("interval", 0),
-                start_seconds=params.get("start_seconds", 0.0),
-                end_seconds=params.get("end_seconds"),
-                on_progress=on_progress,
-                cancel_flag=cancel_flag,
-                on_result=on_result,
-                fast_opts=fast_opts,
-            )
-        else:
-            raise ValueError(f"Unknown task type: {task_type}")
+        return tool.scan(
+            task["video_path"],
+            task["region_coords"],
+            params,
+            task_id=task["id"],
+            scan_mode=scan_mode,
+            on_progress=on_progress,
+            cancel_flag=cancel_flag,
+            on_result=on_result,
+            fast_opts=fast_opts,
+        )
 
 
 # ---------------------------------------------------------------------------
