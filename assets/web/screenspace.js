@@ -3102,6 +3102,8 @@
   };
 
   var _multitoolDragMidpoints = null;
+  var _multitoolDragOverRaf = null;
+  var _multitoolPendingDragOver = null;
 
   function _cacheMultitoolDragMidpoints(container) {
     var cards = container.querySelectorAll(".multitool-step:not(.dragging)");
@@ -3277,6 +3279,11 @@
         card.classList.remove("dragging");
         card.removeAttribute("draggable");
       }
+      if (_multitoolDragOverRaf != null) {
+        cancelAnimationFrame(_multitoolDragOverRaf);
+        _multitoolDragOverRaf = null;
+      }
+      _multitoolPendingDragOver = null;
       clearMultitoolDragIndicators(stepsDiv);
       _multitoolDragMidpoints = null;
     });
@@ -3284,19 +3291,28 @@
       if (e.dataTransfer.types.indexOf("text/plain") < 0) return;
       e.preventDefault();
       e.dataTransfer.dropEffect = "move";
-      clearMultitoolDragIndicators(stepsDiv);
-      var isTaskDrop = e.dataTransfer.types.indexOf("application/x-task-id") >= 0;
-      if (isTaskDrop) {
-        stepsDiv.classList.add("drag-over-append");
-      } else {
-        var cards = stepsDiv.querySelectorAll(".multitool-step:not(.dragging)");
-        var insertIdx = getMultitoolDropIndex(stepsDiv, e.clientY);
-        if (insertIdx < cards.length) {
-          cards[insertIdx].classList.add("drag-over");
-        } else {
+      _multitoolPendingDragOver = {
+        clientY: e.clientY,
+        isTaskDrop: e.dataTransfer.types.indexOf("application/x-task-id") >= 0,
+      };
+      if (_multitoolDragOverRaf != null) return;
+      _multitoolDragOverRaf = requestAnimationFrame(function () {
+        _multitoolDragOverRaf = null;
+        var pending = _multitoolPendingDragOver;
+        if (!pending) return;
+        clearMultitoolDragIndicators(stepsDiv);
+        if (pending.isTaskDrop) {
           stepsDiv.classList.add("drag-over-append");
+        } else {
+          var cards = stepsDiv.querySelectorAll(".multitool-step:not(.dragging)");
+          var insertIdx = getMultitoolDropIndex(stepsDiv, pending.clientY);
+          if (insertIdx < cards.length) {
+            cards[insertIdx].classList.add("drag-over");
+          } else {
+            stepsDiv.classList.add("drag-over-append");
+          }
         }
-      }
+      });
     });
     stepsDiv.addEventListener("dragleave", function (e) {
       var card = e.target.closest(".multitool-step");
@@ -5085,6 +5101,11 @@
         card.classList.remove("dragging");
         card.removeAttribute("draggable");
       }
+      if (_taskListDragOverRaf != null) {
+        cancelAnimationFrame(_taskListDragOverRaf);
+        _taskListDragOverRaf = null;
+      }
+      _taskListPendingDragOver = null;
       clearDragIndicators(taskListEl);
       _taskDragCache = null;
     });
@@ -5117,12 +5138,22 @@
 
       e.preventDefault();
       e.dataTransfer.dropEffect = "move";
-      clearDragIndicators(taskListEl);
-      if (insertIdx < cards.length) {
-        cards[insertIdx].classList.add("drag-over");
-      } else {
-        taskListEl.classList.add("drag-over-append");
-      }
+
+      _taskListPendingDragOver = { insertIdx: insertIdx };
+      if (_taskListDragOverRaf != null) return;
+      _taskListDragOverRaf = requestAnimationFrame(function () {
+        _taskListDragOverRaf = null;
+        var pending = _taskListPendingDragOver;
+        if (!pending) return;
+        var idx = pending.insertIdx;
+        var cardsNow = taskListEl.querySelectorAll(".task-card:not(.dragging)");
+        clearDragIndicators(taskListEl);
+        if (idx < cardsNow.length) {
+          cardsNow[idx].classList.add("drag-over");
+        } else {
+          taskListEl.classList.add("drag-over-append");
+        }
+      });
     });
 
     taskListEl.addEventListener("dragleave", function (e) {
@@ -5191,6 +5222,8 @@
 
   // Cached at dragstart: { all: number[], statusGrouped: { queued: number[], finished: number[] } }
   var _taskDragCache = null;
+  var _taskListDragOverRaf = null;
+  var _taskListPendingDragOver = null;
 
   function _cacheTaskDragMidpoints(container) {
     var cards = container.querySelectorAll(".task-card:not(.dragging)");
@@ -5694,6 +5727,16 @@
   }
 
   document.addEventListener("dragend", function () {
+    if (_multitoolDragOverRaf != null) {
+      cancelAnimationFrame(_multitoolDragOverRaf);
+      _multitoolDragOverRaf = null;
+    }
+    _multitoolPendingDragOver = null;
+    if (_taskListDragOverRaf != null) {
+      cancelAnimationFrame(_taskListDragOverRaf);
+      _taskListDragOverRaf = null;
+    }
+    _taskListPendingDragOver = null;
     var stepsDiv = document.querySelector(".multitool-steps");
     if (stepsDiv) clearMultitoolDragIndicators(stepsDiv);
     var taskListEl = qs("#taskList");

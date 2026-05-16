@@ -3639,6 +3639,7 @@
     apiGet("../screenspace/api/tasks")
       .then(function (data) {
         if (!data || !data.ok) {
+          state._intakeTabDotOn = false;
           setTabDot("intakeTabDot", false);
           return;
         }
@@ -3649,9 +3650,13 @@
           if (tasks[i].status === "running") { running = true; break; }
           if (tasks[i].status === "queued") hasQueued = true;
         }
-        setTabDot("intakeTabDot", running || (data.worker_alive && hasQueued));
+        var dotOn = running || (data.worker_alive && hasQueued);
+        if (state._intakeTabDotOn === dotOn) return;
+        state._intakeTabDotOn = dotOn;
+        setTabDot("intakeTabDot", dotOn);
       })
       .catch(function () {
+        state._intakeTabDotOn = false;
         setTabDot("intakeTabDot", false);
       });
   }
@@ -3680,6 +3685,8 @@
           }
         }
       }
+      if (state._trIntakeTabDotOn === running) return;
+      state._trIntakeTabDotOn = running;
       setTabDot("trIntakeTabDot", running);
     });
   }
@@ -3689,6 +3696,9 @@
       .then(function (data) {
         if (!data.ok) return;
         var events = data.events || [];
+        var raw = JSON.stringify(events);
+        if (raw === state._intakeEventsPollRaw) return;
+        state._intakeEventsPollRaw = raw;
         var hasNew = false;
         events.forEach(function (ev) {
           if (!state.intakeSeenIds[ev.id]) {
@@ -4143,9 +4153,19 @@
     apiGet("../transcripts/api/marks")
       .then(function (data) {
         if (!data.ok) return;
+        var threshold = parseInt((qs("#trIntakeClusterThreshold") || {}).value) || 10;
+        if (!state.trIntakeShowAll) {
+          var fp =
+            String(threshold) +
+            "\0" +
+            (data.categories ? JSON.stringify(data.categories) : "") +
+            "\0" +
+            JSON.stringify(data.marks || []);
+          if (fp === state._trIntakeMarksPollFp) return;
+          state._trIntakeMarksPollFp = fp;
+        }
         if (data.categories) setMarkCategories(data.categories);
         state.trIntakeMarks = data.marks.filter(function (m) { return m.valid; });
-        var threshold = parseInt((qs("#trIntakeClusterThreshold") || {}).value) || 10;
         state.trIntakeClusters = clusterTranscriptMarks(state.trIntakeMarks, threshold);
 
         // If "Show all" is enabled, also fetch all segments as unmark items
@@ -4534,6 +4554,7 @@
     if (showAllToggle) {
       showAllToggle.addEventListener("change", function () {
         state.trIntakeShowAll = this.checked;
+        state._trIntakeMarksPollFp = null;
         pollTranscriptIntakeMarks();
       });
     }

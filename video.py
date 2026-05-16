@@ -692,29 +692,8 @@ def extract_gif(
     return True
 
 
-def get_file_duration(filepath: str) -> int | None:
-    """Calls ffprobe to get duration of video container.
-
-    Args:
-        filepath: Path to video file
-
-    Returns:
-        The duration in seconds, or None if the file cannot be probed.
-    """
-    resolved = str(Path(filepath).resolve())
-    if resolved in _file_duration_cache:
-        return _file_duration_cache[resolved]
-
-    if not Path(filepath).is_file():
-        utils.error_print(
-            f"Video file not found: '{filepath}'",
-            [
-                f"Expected location: {Path(filepath).resolve()}",
-                "Please ensure the video file exists in the configured input directory or working directory.",
-            ],
-        )
-        return None
-
+def _probe_duration_seconds_ffprobe_format(filepath: str) -> int | None:
+    """Duration-only ffprobe read for fallback paths; emits detailed errors."""
     probe_command = [
         "ffprobe",
         "-v",
@@ -731,9 +710,7 @@ def get_file_duration(filepath: str) -> int | None:
         duration_seconds = float(
             subprocess.check_output(probe_command, encoding="utf-8")
         )
-        result = round(duration_seconds)
-        _file_duration_cache[resolved] = result
-        return result
+        return round(duration_seconds)
     except FileNotFoundError:
         utils.error_print(
             "ffprobe is not installed or not found in system PATH.",
@@ -760,6 +737,52 @@ def get_file_duration(filepath: str) -> int | None:
         return None
 
 
+def get_file_duration(filepath: str) -> int | None:
+    """Calls ffprobe to get duration of video container.
+
+    Reuses ``probe_video_properties`` when possible so one file is not probed
+    twice for duration vs stream metadata.
+
+    Args:
+        filepath: Path to video file
+
+    Returns:
+        The duration in seconds, or None if the file cannot be probed.
+    """
+    resolved = str(Path(filepath).resolve())
+    if resolved in _file_duration_cache:
+        return _file_duration_cache[resolved]
+
+    if not Path(filepath).is_file():
+        utils.error_print(
+            f"Video file not found: '{filepath}'",
+            [
+                f"Expected location: {Path(filepath).resolve()}",
+                "Please ensure the video file exists in the configured input directory or working directory.",
+            ],
+        )
+        return None
+
+    cached_props = _video_properties_cache.get(resolved)
+    if cached_props is not None:
+        dur_f = float(cached_props.get("duration") or 0)
+        if dur_f > 0:
+            rounded = round(dur_f)
+            _file_duration_cache[resolved] = rounded
+            return rounded
+
+    probed = probe_video_properties(filepath)
+    if probed is not None:
+        dur_f = float(probed.get("duration") or 0)
+        if dur_f > 0:
+            return _file_duration_cache.get(resolved)
+
+    dur = _probe_duration_seconds_ffprobe_format(filepath)
+    if dur is not None:
+        _file_duration_cache[resolved] = dur
+    return dur
+
+
 def probe_video_properties(filepath: str) -> dict[str, Any] | None:
     """Probe video file for stream properties (resolution, codecs, timing).
 
@@ -770,8 +793,10 @@ def probe_video_properties(filepath: str) -> dict[str, Any] | None:
         'nb_frames' (int, 0 if unknown),
         or None if probe fails.
     """
+    resolved = str(Path(filepath).resolve())
+
     if config.DEBUGGING:
-        return {
+        result = {
             "width": 1920,
             "height": 1080,
             "video_codec": "h264",
@@ -780,8 +805,10 @@ def probe_video_properties(filepath: str) -> dict[str, Any] | None:
             "duration": 300.0,
             "nb_frames": 9000,
         }
+        _video_properties_cache[resolved] = result
+        _file_duration_cache[resolved] = round(result["duration"])
+        return result
 
-    resolved = str(Path(filepath).resolve())
     if resolved in _video_properties_cache:
         return _video_properties_cache[resolved]
 
@@ -862,6 +889,8 @@ def probe_video_properties(filepath: str) -> dict[str, Any] | None:
         "nb_frames": nb_frames,
     }
     _video_properties_cache[resolved] = result
+    if fmt_duration > 0:
+        _file_duration_cache[resolved] = round(fmt_duration)
     return result
 
 
