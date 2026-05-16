@@ -23,6 +23,7 @@
   <link rel="stylesheet" href="start-overlay.css">
 </head>
 <body data-frontend="screenspace">
+  <!-- Shared chrome: TopNav + start overlay -->
   <topnav-mount data-frontend="screenspace"></topnav-mount>
   <start-overlay-mount></start-overlay-mount>
 
@@ -37,6 +38,8 @@
   </div>
 
   <main id="ssMain">
+  <!-- Main: info panel + frame viewer + timeline -->
+
     <div class="ss-content-row">
       <aside id="ssInfoPanel">
         <div class="ss-info-content">
@@ -125,9 +128,12 @@
 
   </main>
 
-  <div id="panelDivider"><div class="divider-handle"></div></div>
+  <div id="panelDivider">
+  <!-- Split: main column vs workflow + task queue -->
+<div class="divider-handle"></div></div>
 
   <div id="bottomPanel">
+  <!-- Bottom: workflow, run row, task queue + results -->
     <section id="workflowSection">
       <div id="workflowTabs">
         <button class="wf-tab" data-type="multitool">
@@ -288,6 +294,7 @@
   <div id="ssTooltip" class="ss-tooltip hidden"></div>
   <div id="toolInfoTooltip" class="tool-info-tooltip hidden"></div>
 
+  <!-- Deps order: utils → chrome → settings → page script -->
   <script src="utils.js"></script>
   <script src="topnav.js"></script>
   <script src="start-overlay.js"></script>

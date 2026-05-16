@@ -1,4 +1,12 @@
-/* clipgen Gallery Viewer – gallery.js */
+/* clipgen Gallery Viewer — gallery.js
+ *
+ * Same artifact payload contract as the timeline viewer: `window.CLIPGEN_DATA`
+ * is injected by the export pipeline (see viewer.py). No live backend.
+ *
+ * Grid + lightbox: `createGalleryLoopVideo` prefers IntersectionObserver so
+ * only in-viewport clips request decode/play; falls back to autoplay when IO
+ * is unavailable.
+ */
 (function () {
   "use strict";
 

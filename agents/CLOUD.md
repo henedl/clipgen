@@ -32,3 +32,37 @@ All web UIs serve on `http://127.0.0.1:8089`. The Flask server starts automatica
 - The first `uv run clipgen.py` invocation after a CPU-only pip install may re-resolve and download GPU torch packages via `uv.lock`. To avoid this: use `uv run --no-sync` for any command after the initial `uv pip install ".[dev]" --torch-backend cpu`, or use `uvx` (which doesn't trigger a sync) for tools like ruff and ty.
 - Google Sheets integration requires OAuth credentials not available in Cloud Agent VMs. Use local Excel files or mocked tests instead.
 - DBus errors in the Flask server log are harmless — they come from Chrome attempting DBus connections in the headless VM environment.
+
+## Git commits and PR attribution (Cloud Agent)
+
+Cloud Agent workspaces set `core.hooksPath` in `.git/config` to a **Cursor-managed hooks directory** that rewrites commits: it can force **author/committer** to `Cursor Agent <cursoragent@cursor.com>` and append **`Co-authored-by:`** trailers. That shows up as agent attribution on GitHub.
+
+**Policy:** commits from Cloud Agents on this repo should look like normal maintainer commits (no Cursor author, no `Co-authored-by` trailers).
+
+**How:** point git at an **empty hooks directory** so the agent hooks do not run, and set author/committer explicitly. The directory must exist and contain **no** executable hook scripts.
+
+```bash
+mkdir -p /tmp/noagenthooks
+
+export GIT_AUTHOR_NAME="Henrik"
+export GIT_AUTHOR_EMAIL="henedl@users.noreply.github.com"
+export GIT_COMMITTER_NAME="Henrik"
+export GIT_COMMITTER_EMAIL="henedl@users.noreply.github.com"
+
+git -c core.hooksPath=/tmp/noagenthooks commit ...
+```
+
+**Rewrite the last commit** (e.g. before `git push`) if hooks already ran:
+
+```bash
+mkdir -p /tmp/noagenthooks
+MSG=$(git log -1 --format=%B | grep -vi '^co-authored-by:')
+printf '%s\n' "$MSG" > /tmp/gitmsg.txt
+
+GIT_AUTHOR_NAME=Henrik GIT_AUTHOR_EMAIL=henedl@users.noreply.github.com \
+GIT_COMMITTER_NAME=Henrik GIT_COMMITTER_EMAIL=henedl@users.noreply.github.com \
+  git -c core.hooksPath=/tmp/noagenthooks commit --amend --no-gpg-sign \
+  --author="Henrik <henedl@users.noreply.github.com>" -F /tmp/gitmsg.txt
+```
+
+(Adjust **name/email** if the maintainer changes.)

@@ -2735,6 +2735,8 @@
 
   // ---- API calls ----
 
+  // ---- API: artifact generation (streaming api/generate + api/generate-intake) ----
+
   function buildGenerateCardIndex(listEl) {
     var map = {};
     var cards = listEl.querySelectorAll(".queue-card");
@@ -2974,6 +2976,8 @@
     qs("#cancelGenerateBtn").classList.add("hidden");
     apiPost("api/generate/cancel").catch(function () {});
   }
+
+  // ---- API: reel + standalone viewers (timeline / HTML viewer) ----
 
   function onBuildReel() {
     if (state.generating || state.reelQueue.length === 0) return;
@@ -3674,6 +3678,8 @@
     else el.classList.add("hidden");
   }
 
+  // ---- Screenspace intake: poll Screenspace/Transcripts + cluster for Studio ----
+
   function pollIntakeStatus() {
     apiGet("../screenspace/api/tasks")
       .then(function (data) {
@@ -3919,6 +3925,8 @@
     _intakeDensityEl = dt;
     host.appendChild(dt);
   }
+
+  // ---- Screenspace intake: render cards, filters, and density timeline ----
 
   function renderIntake(_hasNew) {
     ssClearPending();
