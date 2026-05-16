@@ -1247,6 +1247,8 @@ class TestCheckFrameForTool:
         assert result is not None
         assert "distance" in result
         assert result["distance"] == 0
+        assert result["_confidence"] == 1.0
+        assert screenspace._extract_confidence("inactivity", result) == 1.0
 
     def test_inactivity_different_frames(self):
         frame_a = np.zeros((100, 100, 3), dtype=np.uint8)
@@ -1290,6 +1292,14 @@ class TestExtractConfidence:
 
     def test_inactivity_short(self):
         assert screenspace._extract_confidence("inactivity", {"duration": 3.0}) == 0.1
+
+    def test_inactivity_per_frame_confidence(self):
+        assert (
+            screenspace._extract_confidence(
+                "inactivity", {"distance": 2, "_confidence": 0.8}
+            )
+            == 0.8
+        )
 
     def test_inactivity_capped(self):
         assert screenspace._extract_confidence("inactivity", {"duration": 60.0}) == 1.0
@@ -1371,6 +1381,21 @@ class TestScanMultitool:
         assert len(results) == 1
         assert results[0]["min_confidence"] == 0.5
 
+    def test_inactivity_step_uses_per_frame_confidence(self, monkeypatch):
+        def check(frame, prev, region, ttype, step):
+            if ttype == "inactivity":
+                return True, {"distance": 0, "_confidence": 0.75}
+            return True, {"_confidence": 0.9}
+
+        self._setup_stubs(monkeypatch, check)
+        results = screenspace.scan_multitool(
+            "/fake.mp4",
+            {"x": 0, "y": 0, "w": 10, "h": 10},
+            steps=[{"type": "color"}, {"type": "inactivity"}],
+        )
+        assert len(results) == 1
+        assert results[0]["min_confidence"] == 0.75
+
 
 # ---------------------------------------------------------------------------
 # Fast Scan mode
@@ -1423,6 +1448,53 @@ class TestFastScanDispatchIntervalMultiplier:
         assert captured["fast_opts"] is not None
         assert captured["fast_opts"]["phash_skip"] is True
         assert captured["fast_opts"]["max_region_dim"] == 32
+
+    def test_fast_scan_interval_not_persisted_on_task(self, monkeypatch):
+        """Pause/resume re-dispatches the same task; interval must not compound."""
+        captured_intervals: list[float] = []
+
+        def fake_scan_color(
+            video_path,
+            region,
+            *,
+            target_color,
+            tolerance,
+            interval_seconds=0,
+            start_seconds=0.0,
+            end_seconds=None,
+            on_progress=None,
+            cancel_flag=None,
+            on_result=None,
+            fast_opts=None,
+        ):
+            captured_intervals.append(interval_seconds)
+            return []
+
+        monkeypatch.setattr(screenspace, "scan_color", fake_scan_color)
+
+        worker = screenspace.ScreenspaceWorker()
+        task = {
+            "id": "ss_resume",
+            "type": "color",
+            "video_path": "/fake.mp4",
+            "region_coords": {"x": 0, "y": 0, "w": 100, "h": 100},
+            "parameters": {
+                "scan_mode": "fast",
+                "interval": 1.0,
+                "target_color": {"h": 0, "s": 0, "v": 0},
+                "tolerance": {"h": 10, "s": 50, "v": 50},
+            },
+        }
+
+        def noop(_progress: float) -> None:
+            return None
+
+        worker._dispatch(task, noop, lambda: False, None)
+        worker._dispatch(task, noop, lambda: False, None)
+
+        expected = 1.0 * config.SCREENSPACE_FAST_SCAN_INTERVAL_MULTIPLIER
+        assert task["parameters"]["interval"] == 1.0
+        assert captured_intervals == [expected, expected]
 
     def test_normal_scan_no_fast_opts(self, monkeypatch):
         captured = {}

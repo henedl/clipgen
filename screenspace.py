@@ -1894,6 +1894,8 @@ def _extract_confidence(tool_type: str, result: dict[str, Any]) -> float:
     elif tool_type == "multitool":
         return result.get("min_confidence", 0.0)
     elif tool_type == "inactivity":
+        if "_confidence" in result:
+            return float(result["_confidence"])
         return min(result.get("duration", 0.0) / 30.0, 1.0)
     return 1.0
 
@@ -2794,7 +2796,11 @@ class InactivityTool(AnalysisTool):
         prev_h = compute_phash(prev_pixels)
         dist = int(curr_h - prev_h)
         if dist <= thresh:
-            return True, {"distance": dist}
+            if thresh > 0:
+                conf = min((thresh - dist) / float(thresh), 1.0)
+            else:
+                conf = 1.0
+            return True, {"distance": dist, "_confidence": conf}
         return False, None
 
     def scan(
@@ -2880,8 +2886,8 @@ class MultitoolTool(AnalysisTool):
         on_result,
         fast_opts,
     ):
-        steps = params.get("steps", [])
-        if not steps or len(steps) < 2:
+        steps = [dict(s) for s in params.get("steps", [])]
+        if len(steps) < 2:
             raise ValueError("Multitool requires at least 2 steps")
         # Fast scan: multiply the interval used by scan_multitool
         # (reads from steps[0]["interval"] with fallback to default).
@@ -3314,7 +3320,9 @@ class ScreenspaceWorker:
         if tool is None:
             raise ValueError(f"Unknown task type: {task_type}")
 
-        params = task.get("parameters", {})
+        # Shallow copy so fast-scan interval scaling is not persisted on the
+        # task dict (pause/resume re-dispatches the same parameters).
+        params = dict(task.get("parameters", {}))
         scan_mode = params.get("scan_mode", "normal")
         fast_opts: dict[str, Any] | None = None
         if scan_mode == "fast" and tool.supports_fast_scan:
