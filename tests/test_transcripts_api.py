@@ -302,3 +302,130 @@ def test_zero_delay_unloads_immediately(_agent_state_clean, monkeypatch):
 
     assert calls == ["test-model"]
     assert "test-model" not in transcripts_server._pending_model_unloads
+
+
+# ---- Embed subtitle endpoints ----
+
+
+def _seed_transcript(pid: str, video_path: str) -> None:
+    """Insert a minimal transcript entry + participant for *pid*."""
+    transcripts_server._manifest["source_transcripts"][pid] = {
+        "segments": [{"id": "s1", "start": 0.0, "end": 1.0, "text": "hi"}],
+        "language": "en",
+        "model": "tiny",
+        "source_file": video_path,
+        "transcribed_at": "2026-01-01T00:00:00Z",
+    }
+
+
+def test_embed_subtitle_happy_path(tr_client, tmp_path, monkeypatch):
+    video_path = tmp_path / "study_P01.mp4"
+    video_path.write_bytes(b"\x00")
+    transcripts_server._participants = [
+        {"id": "P01", "video_path": str(video_path), "has_video": True}
+    ]
+    _seed_transcript("P01", str(video_path))
+    monkeypatch.setattr(
+        transcripts_server.utils, "get_effective_output_dir", lambda: tmp_path
+    )
+
+    captured = {}
+
+    def fake_mux(input_video, srt_path, output_video, **kwargs):
+        captured["args"] = (input_video, srt_path, output_video, kwargs)
+        # Touch the output file so files.get_unique_filename treats a second
+        # run as needing a -1 suffix.
+        from pathlib import Path
+
+        Path(output_video).write_bytes(b"\x00")
+        return True
+
+    monkeypatch.setattr(transcripts_server.video, "mux_subtitles", fake_mux)
+
+    resp = tr_client.post("/transcripts/api/embed-subtitle/P01")
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["ok"] is True
+    assert data["output_filename"] == "study_P01-subtitled.mp4"
+    assert (tmp_path / "study_P01-subtitled.mp4").is_file()
+    # mux helper received correct args
+    assert captured["args"][0] == str(video_path)
+    assert captured["args"][3]["track_language"] == "en"
+
+
+def test_embed_subtitle_404_without_transcript(tr_client, tmp_path, monkeypatch):
+    video_path = tmp_path / "study_P01.mp4"
+    video_path.write_bytes(b"\x00")
+    transcripts_server._participants = [
+        {"id": "P01", "video_path": str(video_path), "has_video": True}
+    ]
+    # No transcript seeded.
+    monkeypatch.setattr(
+        transcripts_server.utils, "get_effective_output_dir", lambda: tmp_path
+    )
+    monkeypatch.setattr(
+        transcripts_server.video,
+        "mux_subtitles",
+        lambda *a, **kw: pytest.fail("mux_subtitles should not be called"),
+    )
+    resp = tr_client.post("/transcripts/api/embed-subtitle/P01")
+    assert resp.status_code == 404
+    assert resp.get_json()["ok"] is False
+
+
+def test_embed_subtitle_500_when_ffmpeg_fails(tr_client, tmp_path, monkeypatch):
+    video_path = tmp_path / "study_P01.mp4"
+    video_path.write_bytes(b"\x00")
+    transcripts_server._participants = [
+        {"id": "P01", "video_path": str(video_path), "has_video": True}
+    ]
+    _seed_transcript("P01", str(video_path))
+    monkeypatch.setattr(
+        transcripts_server.utils, "get_effective_output_dir", lambda: tmp_path
+    )
+    monkeypatch.setattr(
+        transcripts_server.video, "mux_subtitles", lambda *a, **kw: False
+    )
+
+    resp = tr_client.post("/transcripts/api/embed-subtitle/P01")
+    assert resp.status_code == 500
+    body = resp.get_json()
+    assert body["ok"] is False
+
+
+def test_embed_all_subtitles_mixed_participants(tr_client, tmp_path, monkeypatch):
+    v1 = tmp_path / "study_P01.mp4"
+    v2 = tmp_path / "study_P02.mp4"
+    v1.write_bytes(b"\x00")
+    v2.write_bytes(b"\x00")
+    transcripts_server._participants = [
+        {"id": "P01", "video_path": str(v1), "has_video": True},
+        {"id": "P02", "video_path": str(v2), "has_video": True},
+    ]
+    _seed_transcript("P01", str(v1))
+    # P02 has no transcript — should be skipped silently.
+    monkeypatch.setattr(
+        transcripts_server.utils, "get_effective_output_dir", lambda: tmp_path
+    )
+
+    def fake_mux(input_video, srt_path, output_video, **kwargs):
+        from pathlib import Path
+
+        Path(output_video).write_bytes(b"\x00")
+        return True
+
+    monkeypatch.setattr(transcripts_server.video, "mux_subtitles", fake_mux)
+
+    resp = tr_client.post("/transcripts/api/embed-all-subtitles")
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["ok"] is True
+    assert len(data["results"]) == 1
+    assert data["results"][0]["participant"] == "P01"
+    assert data["results"][0]["ok"] is True
+
+
+def test_embed_all_subtitles_404_when_no_transcripts(tr_client, tmp_path):
+    resp = tr_client.post("/transcripts/api/embed-all-subtitles")
+    assert resp.status_code == 404
+    assert resp.get_json()["ok"] is False

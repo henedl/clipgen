@@ -761,3 +761,96 @@ def test_compress_to_size_forwards_cancel_flag_to_both_passes(monkeypatch, tmp_p
     # Target tiny size so compression runs both passes.
     video.compress_to_size(str(big), 0.0001, cancel_flag=sentinel)
     assert captured == [sentinel, sentinel]
+
+
+# -- mux_subtitles tests --
+
+
+def _write_dummy_pair(tmp_path, video_name="in.mp4", srt_name="in.srt"):
+    """Create a stand-in video + SRT file so existence checks pass."""
+    src = tmp_path / video_name
+    src.write_bytes(b"\x00")
+    srt = tmp_path / srt_name
+    srt.write_text("1\n00:00:00,000 --> 00:00:01,000\nhi\n", encoding="utf-8")
+    return src, srt
+
+
+def test_mux_subtitles_mp4_uses_mov_text(monkeypatch, tmp_path):
+    src, srt = _write_dummy_pair(tmp_path)
+    out = tmp_path / "out.mp4"
+
+    captured = {}
+
+    def fake_run(command, **_kwargs):
+        captured["command"] = command
+        return subprocess.CompletedProcess(args=command, returncode=0, stderr="")
+
+    monkeypatch.setattr(video, "run_ffmpeg_process", fake_run)
+    monkeypatch.setattr(video, "verify_output_file", lambda *_a, **_kw: True)
+
+    ok = video.mux_subtitles(str(src), str(srt), str(out))
+    assert ok is True
+    cmd = captured["command"]
+    assert cmd[:2] == ["ffmpeg", "-y"]
+    assert "-c:s" in cmd and cmd[cmd.index("-c:s") + 1] == "mov_text"
+    assert "-c" in cmd and cmd[cmd.index("-c") + 1] == "copy"
+    assert "-map" in cmd
+    assert "0" in cmd and "1:0" in cmd
+    assert cmd[-1] == str(out)
+
+
+def test_mux_subtitles_mkv_uses_srt(monkeypatch, tmp_path):
+    src, srt = _write_dummy_pair(tmp_path, video_name="in.mkv")
+    out = tmp_path / "out.mkv"
+
+    captured = {}
+
+    def fake_run(command, **_kwargs):
+        captured["command"] = command
+        return subprocess.CompletedProcess(args=command, returncode=0, stderr="")
+
+    monkeypatch.setattr(video, "run_ffmpeg_process", fake_run)
+    monkeypatch.setattr(video, "verify_output_file", lambda *_a, **_kw: True)
+
+    ok = video.mux_subtitles(str(src), str(srt), str(out))
+    assert ok is True
+    cmd = captured["command"]
+    assert cmd[cmd.index("-c:s") + 1] == "srt"
+
+
+def test_mux_subtitles_unsupported_container_returns_false(monkeypatch, tmp_path):
+    src, srt = _write_dummy_pair(tmp_path)
+    out = tmp_path / "out.avi"
+
+    invoked = []
+    monkeypatch.setattr(
+        video,
+        "run_ffmpeg_process",
+        lambda *a, **kw: invoked.append(True) or None,
+    )
+
+    ok = video.mux_subtitles(str(src), str(srt), str(out))
+    assert ok is False
+    assert invoked == []
+
+
+def test_mux_subtitles_returns_false_on_ffmpeg_error(monkeypatch, tmp_path):
+    src, srt = _write_dummy_pair(tmp_path)
+    out = tmp_path / "out.mp4"
+
+    def fake_run(command, **_kwargs):
+        return subprocess.CompletedProcess(args=command, returncode=1, stderr="boom")
+
+    monkeypatch.setattr(video, "run_ffmpeg_process", fake_run)
+
+    ok = video.mux_subtitles(str(src), str(srt), str(out))
+    assert ok is False
+
+
+def test_mux_subtitles_missing_input_returns_false(tmp_path):
+    srt = tmp_path / "in.srt"
+    srt.write_text("1\n00:00:00,000 --> 00:00:01,000\nhi\n", encoding="utf-8")
+    ok = video.mux_subtitles(
+        str(tmp_path / "missing.mp4"), str(srt), str(tmp_path / "out.mp4")
+    )
+    assert ok is False

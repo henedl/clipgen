@@ -585,10 +585,11 @@ button[data-tooltip]:disabled { pointer-events: auto; cursor: not-allowed; }
   top: 48px;
   left: 0;
   right: 0;
-  /* Matches .topnav so popovers anchored inside a subheader (e.g. the
+  /* Sits at --z-dropdown so popovers anchored inside a subheader (e.g. the
    * Transcripts search dropdown) escape the subheader's stacking context
-   * above sibling chrome like #trPillBar. Subheaders never physically
-   * overlap the topnav, so sharing z:100 is safe. */
+   * above sibling chrome like #trPillBar (--z-dropdown - 1). The TopNav is
+   * one tier higher so its own dropdowns (Quick Actions) pop above the
+   * subheader as they drop past 48 px. */
   z-index: var(--z-dropdown);
 }
 @supports not (backdrop-filter: blur(1px)) {
