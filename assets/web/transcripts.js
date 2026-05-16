@@ -2369,7 +2369,7 @@
       category: state.lastMarkCategory,
     }).then(function (data) {
       if (data.ok) {
-        showToast("Marked " + data.marks.length + " segment" + (data.marks.length === 1 ? "" : "s"));
+        showToast("Marked " + clipgenPluralUnit(data.marks.length, "segment", "segments"));
         if (state.selectedParticipant) loadTranscript(state.selectedParticipant);
       }
     });
@@ -3180,7 +3180,7 @@
         showToast("Failed to enqueue transcription");
         return;
       }
-      showToast("Enqueued " + data.tasks.length + " transcription(s)");
+      showToast("Enqueued " + clipgenPluralUnit(data.tasks.length, "transcription", "transcriptions"));
       startPolling();
       pollTaskStatus();
     });
@@ -3491,7 +3491,7 @@
       .then(function (res) {
         if (res.ok && res.j && res.j.ok) {
           var n = (res.j.written || []).length;
-          showToast("Exported " + n + " file(s) to " + res.j.output_dir);
+          showToast("Exported " + clipgenPluralUnit(n, "file", "files") + " to " + res.j.output_dir);
         } else {
           showToast((res.j && res.j.error) || "Export failed");
         }
@@ -3522,7 +3522,7 @@
         var results = data.results || [];
         var okCount = 0;
         for (var i = 0; i < results.length; i++) if (results[i].ok) okCount++;
-        showToast("Embedded " + okCount + "/" + results.length + " video(s) to " + data.output_dir);
+        showToast("Embedded " + okCount + "/" + clipgenPluralUnit(results.length, "video", "videos") + " to " + data.output_dir);
       })
       .catch(function (err) { showToast("Embed failed: " + err.message); });
   }
