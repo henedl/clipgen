@@ -50,6 +50,7 @@ def test_save_and_reload_roundtrip(settings_file):
         "recent_spreadsheets": [
             {"type": "excel", "id_or_path": "/x.xlsx", "label": "x"}
         ],
+        "recent_projects": [],
     }
     start_settings.save_start_settings(payload)
     assert settings_file.is_file()
@@ -98,11 +99,37 @@ def test_persist_disabled_short_circuits_recording(settings_file):
     start_settings.record_recent_input("/should-not-record")
     start_settings.record_recent_output("/should-not-record")
     start_settings.record_recent_spreadsheet("excel", "/x.xlsx", "x")
+    start_settings.record_project_session(
+        "/in", "/out", {"type": "excel", "id_or_path": "/x.xlsx", "label": "x"}
+    )
     settings = start_settings.load_start_settings()
     assert settings["persist_enabled"] is False
     assert settings["recent_inputs"] == []
     assert settings["recent_outputs"] == []
     assert settings["recent_spreadsheets"] == []
+    assert settings["recent_projects"] == []
+
+
+def test_record_project_session_dedupes_on_triple(settings_file):
+    sheet = {"type": "excel", "id_or_path": "/x.xlsx", "label": "x"}
+    start_settings.record_project_session("/in", "/out", sheet)
+    start_settings.record_project_session("/in", "/out", None)
+    # Re-recording the same triple moves the entry to the front, not duplicates.
+    start_settings.record_project_session("/in", "/out", sheet)
+    settings = start_settings.load_start_settings()
+    assert len(settings["recent_projects"]) == 2
+    head = settings["recent_projects"][0]
+    assert head["input"] == "/in"
+    assert head["output"] == "/out"
+    assert head["spreadsheet"] == sheet
+    assert head["last_opened"]  # ISO-8601 string
+
+
+def test_record_project_session_ignores_blank_dirs(settings_file):
+    start_settings.record_project_session("", "/out", None)
+    start_settings.record_project_session("/in", "", None)
+    settings = start_settings.load_start_settings()
+    assert settings["recent_projects"] == []
 
 
 def test_persist_disabled_still_writes_the_flag(settings_file):

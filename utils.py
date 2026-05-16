@@ -1607,3 +1607,79 @@ def register_static_routes(
             if not d:
                 return jsonify({"ok": False, "error": media_error}), 500
             return send_from_directory(d, filename)
+
+
+# ---- Native folder picker ------------------------------------------------
+#
+# clipgen is a local tool, so when the Start overlay's Browse button is
+# clicked we can open the host OS's native folder dialog and pipe the path
+# back to the browser. The server-side approach below shells out to platform
+# tooling so we don't need extra GUI dependencies.
+
+
+def open_native_folder_picker(initial_dir: str = "") -> str | None:
+    """Open a native folder picker and return the chosen path.
+
+    Returns the chosen folder's absolute path on confirm, ``None`` when the
+    user cancels or no native dialog is available on this platform.
+    """
+    import subprocess
+
+    if sys.platform == "darwin":
+        prompt = "Select a folder for clipgen"
+        # AppleScript strings break on " and \. Sanitised paths are good
+        # enough — if a path contains either, just skip seeding the dialog's
+        # initial location.
+        safe_initial = ""
+        if initial_dir and '"' not in initial_dir and "\\" not in initial_dir:
+            try:
+                if Path(initial_dir).is_dir():
+                    safe_initial = initial_dir
+            except OSError:
+                pass
+        if safe_initial:
+            script = (
+                f'set chosenFolder to choose folder with prompt "{prompt}" '
+                f'default location POSIX file "{safe_initial}"\n'
+                "return POSIX path of chosenFolder"
+            )
+        else:
+            script = (
+                f'set chosenFolder to choose folder with prompt "{prompt}"\n'
+                "return POSIX path of chosenFolder"
+            )
+        try:
+            result = subprocess.run(
+                ["osascript", "-e", script],
+                capture_output=True,
+                text=True,
+                timeout=300,
+                check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            return None
+        if result.returncode != 0:
+            # User cancelled or AppleScript failed — both are non-errors here.
+            return None
+        path = result.stdout.strip().rstrip("/")
+        return path or None
+
+    # Tkinter fallback for Linux/Windows when available. uv-managed Pythons
+    # often skip Tk, so this is best-effort — callers should accept None.
+    try:
+        import tkinter
+        from tkinter import filedialog
+    except ImportError:
+        return None
+    try:
+        root = tkinter.Tk()
+        root.withdraw()
+        root.attributes("-topmost", True)
+        path = filedialog.askdirectory(
+            initialdir=initial_dir or str(Path.home()),
+            title="Select a folder for clipgen",
+        )
+        root.destroy()
+    except Exception:
+        return None
+    return path or None

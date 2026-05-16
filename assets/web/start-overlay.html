@@ -1,111 +1,362 @@
 <div class="start-overlay hidden" id="startOverlay" role="dialog" aria-modal="true" aria-labelledby="startOverlayTitle">
   <div class="start-overlay-backdrop" data-role="backdrop"></div>
-  <div class="start-overlay-panel">
-    <header class="start-overlay-header">
-      <div>
-        <h2 id="startOverlayTitle">Get started with clipgen</h2>
-        <p class="start-overlay-subtitle" data-role="status-line">No spreadsheet loaded.</p>
-      </div>
-      <button type="button" class="start-overlay-close" aria-label="Close" data-role="close" hidden>
-        <span class="start-overlay-close-icon" aria-hidden="true"></span>
-      </button>
-    </header>
+  <div class="start-panel" data-role="panel">
 
-    <section class="start-overlay-section">
-      <h3>Folders</h3>
-      <div class="start-overlay-field">
-        <label for="startInputDir">Input folder</label>
-        <div class="start-overlay-input-row">
-          <input type="text" id="startInputDir" autocomplete="off" spellcheck="false" placeholder="/path/to/source/videos">
-          <button type="button" class="cg-btn cg-btn-bare cg-btn-sm" data-role="input-recents" aria-label="Recent input folders">Recent</button>
-        </div>
-        <div class="start-overlay-recents hidden" data-role="input-recents-list" role="menu"></div>
-      </div>
-      <div class="start-overlay-field">
-        <label for="startOutputDir">Output folder</label>
-        <div class="start-overlay-input-row">
-          <input type="text" id="startOutputDir" autocomplete="off" spellcheck="false" placeholder="/path/to/output">
-          <button type="button" class="cg-btn cg-btn-bare cg-btn-sm" data-role="output-recents" aria-label="Recent output folders">Recent</button>
-        </div>
-        <div class="start-overlay-recents hidden" data-role="output-recents-list" role="menu"></div>
-      </div>
-    </section>
+    <button type="button" class="panel-close" data-role="close" aria-label="Close">
+      <span class="so-icon so-icon--sm" data-icon="x-mark"></span>
+    </button>
 
-    <section class="start-overlay-section">
-      <h3>Spreadsheet</h3>
-      <div class="start-overlay-tabs" role="tablist">
-        <button type="button" role="tab" class="start-overlay-tab is-active" data-tab="google" aria-selected="true">Google Sheets</button>
-        <button type="button" role="tab" class="start-overlay-tab" data-tab="excel" aria-selected="false">Excel file</button>
+    <aside class="rail">
+      <div class="rail__wash" aria-hidden="true"></div>
+      <div class="rail__grid" aria-hidden="true"></div>
+      <div class="rail__shimmer" aria-hidden="true"></div>
+
+      <div class="rail__brand cascade-in" data-cascade="0">
+        <div class="brand-mark rail__mark" aria-hidden="true"></div>
+        <span class="rail__wordmark" id="startOverlayTitle" data-role="wordmark">clipgen</span>
       </div>
 
-      <div class="start-overlay-tabpanel" data-tabpanel="google">
-        <div class="start-overlay-google-status" data-role="google-status">
-          Checking authentication…
+      <div class="rail__recents cascade-in" data-cascade="1" data-role="rail-recents-section">
+        <div class="eyebrow">Recently opened</div>
+        <div class="rail__recents-list" data-role="rail-recents"></div>
+      </div>
+
+      <div class="rail__footer cascade-in" data-cascade="2">
+        <div class="rail__kbd">
+          <span class="kbd-hint"><kbd>⌘</kbd><kbd>↵</kbd><span>Open</span></span>
+          <span class="kbd-hint"><kbd>esc</kbd><span>Dismiss</span></span>
         </div>
-        <div class="start-overlay-list" data-role="google-list" hidden></div>
-        <div class="start-overlay-paste">
-          <label for="startGooglePaste">Or paste a spreadsheet URL or name</label>
-          <input type="text" id="startGooglePaste" autocomplete="off" spellcheck="false" placeholder="https://docs.google.com/spreadsheets/d/…  or  My Study">
+        <div class="rail__copyright">
+          <span>© 2017–2026 Henrik Edlund</span>
+          <span class="rail__copyright-sep" aria-hidden="true">·</span>
+          <a href="https://github.com/henedl/clipgen" target="_blank" rel="noopener noreferrer">MIT License</a>
         </div>
       </div>
+    </aside>
 
-      <div class="start-overlay-tabpanel hidden" data-tabpanel="excel">
-        <div class="start-overlay-list-header" data-role="excel-status">Scanning input folder…</div>
-        <div class="start-overlay-list" data-role="excel-list"></div>
-        <div class="start-overlay-paste">
-          <label for="startExcelPaste">Or paste a full path to an .xlsx file</label>
-          <input type="text" id="startExcelPaste" autocomplete="off" spellcheck="false" placeholder="/path/to/study.xlsx">
+    <main class="start-main">
+
+      <section class="start-section cascade-in" data-cascade="1">
+        <div class="eyebrow">Folders</div>
+
+        <div class="path-field" data-role="input-field">
+          <label for="startInputDir">
+            <span>Input folder</span>
+            <span class="hint">source videos</span>
+          </label>
+          <div class="path-input">
+            <div class="path-input__field">
+              <span class="path-input__icon so-icon so-icon--sm" data-icon="folder"></span>
+              <input type="text" id="startInputDir" class="path-input__input" autocomplete="off" spellcheck="false" placeholder="/path/to/folder">
+            </div>
+            <button type="button" class="path-input__btn path-input__btn--icon" data-role="input-recents-toggle" aria-label="Recent input folders" title="Recent input folders">
+              <span class="so-icon so-icon--sm" data-icon="clock"></span>
+            </button>
+            <button type="button" class="path-input__btn path-input__btn--browse" data-role="input-browse">Browse…</button>
+          </div>
+          <div class="recent-pop hidden" data-role="input-recents-list" role="menu"></div>
         </div>
-      </div>
-    </section>
 
-    <section class="start-overlay-section start-overlay-guide-section">
-      <button type="button" class="start-overlay-guide-toggle" data-role="guide-toggle" aria-expanded="true">
-        <span>How clipgen works</span>
-        <span class="start-overlay-guide-chevron" aria-hidden="true"></span>
-      </button>
-      <div class="start-overlay-guide" data-role="guide">
-        <ol class="start-overlay-guide-list">
-          <li>
-            <strong>Set your folders.</strong>
-            Input is where your source videos (and any <code>.xlsx</code> spreadsheets) live; output is where clips, screenshots, transcripts, and exports are written.
-          </li>
-          <li>
-            <strong>Pick a spreadsheet.</strong>
-            <ul>
-              <li><em>Google Sheets:</em> place a <code>credentials.json</code> OAuth client file in clipgen's working directory, then click <strong>Connect Google</strong>. <a href="https://github.com/burnash/gspread#authentication-and-permissions" target="_blank" rel="noopener noreferrer">Setup guide</a>.</li>
-              <li><em>Excel:</em> drop an <code>.xlsx</code> file into your input folder, or paste a full path.</li>
-            </ul>
-          </li>
-          <li>
-            <strong>Choose a tool.</strong>
-            <ul>
-              <li><strong>Studio</strong> — generate clips, screenshots, GIFs, and reels from the spreadsheet's timestamps.</li>
-              <li><strong>Screenspace</strong> — frame-by-frame visual analysis of source videos. Works without a spreadsheet.</li>
-              <li><strong>Transcripts</strong> — speech-to-text and AI summaries of source videos. Works without a spreadsheet.</li>
-            </ul>
-          </li>
-        </ol>
-      </div>
-    </section>
+        <div class="path-field" data-role="output-field">
+          <label for="startOutputDir">
+            <span>Output folder</span>
+            <span class="hint">clips, exports, transcripts</span>
+          </label>
+          <div class="path-input">
+            <div class="path-input__field">
+              <span class="path-input__icon so-icon so-icon--sm" data-icon="folder"></span>
+              <input type="text" id="startOutputDir" class="path-input__input" autocomplete="off" spellcheck="false" placeholder="/path/to/folder">
+            </div>
+            <button type="button" class="path-input__btn path-input__btn--icon" data-role="output-recents-toggle" aria-label="Recent output folders" title="Recent output folders">
+              <span class="so-icon so-icon--sm" data-icon="clock"></span>
+            </button>
+            <button type="button" class="path-input__btn path-input__btn--browse" data-role="output-browse">Browse…</button>
+          </div>
+          <div class="recent-pop hidden" data-role="output-recents-list" role="menu"></div>
+        </div>
+      </section>
 
-    <footer class="start-overlay-footer">
-      <label class="start-overlay-persist">
-        <input type="checkbox" id="startPersistEnabled" checked>
-        <span>Remember my choices across launches</span>
-      </label>
-      <div class="start-overlay-actions">
-        <button type="button" class="cg-btn cg-btn-bare" data-role="dismiss">Continue without a spreadsheet</button>
-        <button type="button" class="cg-btn cg-btn-solid" data-role="confirm">Open</button>
-      </div>
-    </footer>
+      <section class="start-section cascade-in" data-cascade="2">
+        <div class="eyebrow">Spreadsheet</div>
+        <div class="sheet-card">
+          <div class="sheet-card__tabs" role="tablist">
+            <button type="button" class="sheet-card__tab is-active" data-tab="google" role="tab" aria-selected="true">
+              <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">
+                <path fill="currentColor" d="M8 6.5v2.4h3.4c-.15.85-.6 1.57-1.27 2.05v1.7h2.05c1.2-1.1 1.9-2.73 1.9-4.65 0-.45-.04-.88-.12-1.3l-5.95-.2zM4.45 8c0-.5.08-.97.23-1.4L2.6 5.05A6 6 0 0 0 8 14a5.7 5.7 0 0 0 3.95-1.45L9.9 10.85c-.55.37-1.25.6-2.04.6-1.55 0-2.86-1.05-3.33-2.45z M2.6 5.05L4.68 6.6c.47-1.4 1.78-2.45 3.32-2.45.85 0 1.62.3 2.22.85l1.8-1.8A5.95 5.95 0 0 0 2.6 5.05z"/>
+              </svg>
+              <span>Google Sheets</span>
+            </button>
+            <button type="button" class="sheet-card__tab" data-tab="excel" role="tab" aria-selected="false">
+              <svg viewBox="0 0 16 16" width="13" height="13" fill="none" aria-hidden="true">
+                <rect x="2" y="2.5" width="12" height="11" rx="1.5" stroke="currentColor" stroke-width="1.2"/>
+                <path d="M2 6.5h12M5.5 2.5v11M9.5 2.5v11" stroke="currentColor" stroke-width="1.2"/>
+              </svg>
+              <span>Excel file</span>
+            </button>
+            <button type="button" class="sheet-card__tab" data-tab="none" role="tab" aria-selected="false">
+              <span>No spreadsheet</span>
+            </button>
+          </div>
 
-    <div class="start-overlay-attribution">
-      <a href="https://github.com/henedl/clipgen" target="_blank" rel="noopener noreferrer">github.com/henedl/clipgen</a>
-      <span class="start-overlay-attribution-sep" aria-hidden="true">·</span>
-      <span>MIT License</span>
-      <span class="start-overlay-attribution-sep" aria-hidden="true">·</span>
-      <span>&copy; 2017&ndash;2026 Henrik Edlund</span>
-    </div>
+          <div class="sheet-card__body">
+            <div data-tabpanel="google" class="sheet-panel">
+              <div class="sheet-panel__status" data-role="google-status">Checking authentication…</div>
+              <div class="sheet-picker" data-role="google-picker" hidden>
+                <button type="button" class="sheet-picker__trigger" data-role="google-picker-trigger" aria-haspopup="listbox" aria-expanded="false">
+                  <span class="sheet-picker__label" data-role="google-picker-label">Select a Google Sheet…</span>
+                  <span class="sheet-picker__caret so-icon so-icon--sm" data-icon="chevron-down" aria-hidden="true"></span>
+                </button>
+                <div class="sheet-picker__menu hidden" data-role="google-picker-menu" role="listbox"></div>
+              </div>
+              <div class="sheet-panel__paste">
+                <label for="startGooglePaste">Or paste a spreadsheet URL or name</label>
+                <div class="path-input path-input--bare">
+                  <div class="path-input__field">
+                    <span class="path-input__icon so-icon so-icon--sm" data-icon="link"></span>
+                    <input type="text" id="startGooglePaste" class="path-input__input" autocomplete="off" spellcheck="false" placeholder="https://docs.google.com/spreadsheets/d/…  or  My Study">
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div data-tabpanel="excel" class="sheet-panel" hidden>
+              <div class="sheet-panel__status" data-role="excel-status">Scanning input folder…</div>
+              <div class="sheet-picker" data-role="excel-picker">
+                <button type="button" class="sheet-picker__trigger" data-role="excel-picker-trigger" aria-haspopup="listbox" aria-expanded="false">
+                  <span class="sheet-picker__label" data-role="excel-picker-label">Select an Excel file…</span>
+                  <span class="sheet-picker__caret so-icon so-icon--sm" data-icon="chevron-down" aria-hidden="true"></span>
+                </button>
+                <div class="sheet-picker__menu hidden" data-role="excel-picker-menu" role="listbox"></div>
+              </div>
+              <div class="sheet-panel__paste">
+                <label for="startExcelPaste">Or paste a full path to an .xlsx file</label>
+                <div class="path-input path-input--bare">
+                  <div class="path-input__field">
+                    <span class="path-input__icon so-icon so-icon--sm" data-icon="document"></span>
+                    <input type="text" id="startExcelPaste" class="path-input__input" autocomplete="off" spellcheck="false" placeholder="/path/to/study.xlsx">
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div data-tabpanel="none" class="sheet-panel sheet-panel--none" hidden>
+              You can still use <strong>Screenspace</strong> and <strong>Transcripts</strong> — both work on the source videos directly, no spreadsheet required.
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="start-section cascade-in" data-cascade="3">
+        <div class="extras-tabs">
+          <div class="extras-tabs__strip" role="tablist">
+            <button type="button" class="extras-tabs__tab is-active" data-extras-tab="tools" role="tab" aria-selected="true">What you can do</button>
+            <button type="button" class="extras-tabs__tab" data-extras-tab="updates" role="tab" aria-selected="false">
+              <span>Recent updates</span>
+              <span class="extras-tabs__badge" data-role="updates-badge" hidden></span>
+            </button>
+            <button type="button" class="extras-tabs__tab" data-extras-tab="about" role="tab" aria-selected="false">About</button>
+          </div>
+
+          <div class="extras-tabs__body">
+            <div data-extras-panel="tools">
+              <div class="tool-tiles">
+
+                <div class="tool-tile" data-tool="studio">
+                  <div class="tool-tile__art">
+                    <svg class="art-studio" viewBox="0 0 240 84" width="100%" height="100%" preserveAspectRatio="xMidYMid slice" aria-hidden="true">
+                      <g>
+                        <g class="art-studio__clip" style="animation-delay: 0ms;">
+                          <rect x="10" y="14" width="32" height="42" rx="3" fill="rgba(255,255,255,.06)" stroke="rgba(255,255,255,.10)"/>
+                          <rect x="14" y="48" width="20" height="2" rx="1" fill="#60a5fa" opacity=".7"/>
+                        </g>
+                        <g class="art-studio__clip" style="animation-delay: 110ms;">
+                          <rect x="48" y="14" width="32" height="42" rx="3" fill="rgba(255,255,255,.06)" stroke="rgba(255,255,255,.10)"/>
+                          <rect x="52" y="48" width="20" height="2" rx="1" fill="#60a5fa" opacity=".7"/>
+                        </g>
+                        <g class="art-studio__clip" style="animation-delay: 220ms;">
+                          <rect x="86" y="14" width="32" height="42" rx="3" fill="rgba(255,255,255,.06)" stroke="rgba(255,255,255,.10)"/>
+                          <rect x="90" y="48" width="20" height="2" rx="1" fill="#60a5fa" opacity=".7"/>
+                        </g>
+                        <g class="art-studio__clip" style="animation-delay: 330ms;">
+                          <rect x="124" y="14" width="32" height="42" rx="3" fill="rgba(255,255,255,.06)" stroke="rgba(255,255,255,.10)"/>
+                          <rect x="128" y="48" width="20" height="2" rx="1" fill="#60a5fa" opacity=".7"/>
+                        </g>
+                        <g class="art-studio__clip" style="animation-delay: 440ms;">
+                          <rect x="162" y="14" width="32" height="42" rx="3" fill="rgba(255,255,255,.06)" stroke="rgba(255,255,255,.10)"/>
+                          <rect x="166" y="48" width="20" height="2" rx="1" fill="#60a5fa" opacity=".7"/>
+                        </g>
+                        <g class="art-studio__clip" style="animation-delay: 550ms;">
+                          <rect x="200" y="14" width="32" height="42" rx="3" fill="rgba(255,255,255,.06)" stroke="rgba(255,255,255,.10)"/>
+                          <rect x="204" y="48" width="20" height="2" rx="1" fill="#60a5fa" opacity=".7"/>
+                        </g>
+                      </g>
+                      <g opacity=".6">
+                        <line x1="6" y1="68" x2="234" y2="68" stroke="rgba(255,255,255,.18)"/>
+                        <line x1="6" y1="64" x2="6" y2="72" stroke="rgba(255,255,255,.22)"/>
+                        <line x1="27" y1="64" x2="27" y2="72" stroke="rgba(255,255,255,.22)"/>
+                        <line x1="48" y1="64" x2="48" y2="72" stroke="rgba(255,255,255,.22)"/>
+                        <line x1="69" y1="64" x2="69" y2="72" stroke="rgba(255,255,255,.22)"/>
+                        <line x1="90" y1="64" x2="90" y2="72" stroke="rgba(255,255,255,.22)"/>
+                        <line x1="111" y1="64" x2="111" y2="72" stroke="rgba(255,255,255,.22)"/>
+                        <line x1="132" y1="64" x2="132" y2="72" stroke="rgba(255,255,255,.22)"/>
+                        <line x1="153" y1="64" x2="153" y2="72" stroke="rgba(255,255,255,.22)"/>
+                        <line x1="174" y1="64" x2="174" y2="72" stroke="rgba(255,255,255,.22)"/>
+                        <line x1="195" y1="64" x2="195" y2="72" stroke="rgba(255,255,255,.22)"/>
+                        <line x1="216" y1="64" x2="216" y2="72" stroke="rgba(255,255,255,.22)"/>
+                        <line x1="237" y1="64" x2="237" y2="72" stroke="rgba(255,255,255,.22)"/>
+                      </g>
+                      <g class="art-studio__playhead">
+                        <line x1="6" y1="58" x2="6" y2="76" stroke="#60a5fa" stroke-width="1.4"/>
+                        <circle cx="6" cy="68" r="3" fill="#60a5fa"/>
+                      </g>
+                    </svg>
+                  </div>
+                  <div class="tool-tile__title">
+                    <span class="tool-tile__dot" style="background: #60a5fa;"></span>
+                    <span>Studio</span>
+                  </div>
+                  <div class="tool-tile__desc">Clips, screenshots, GIFs and reels from timestamps.</div>
+                </div>
+
+                <div class="tool-tile" data-tool="screenspace">
+                  <div class="tool-tile__art">
+                    <svg class="art-screenspace" viewBox="0 0 240 84" width="100%" height="100%" preserveAspectRatio="xMidYMid slice" aria-hidden="true">
+                      <rect x="8" y="8" width="224" height="68" rx="4" fill="rgba(255,255,255,.04)" stroke="rgba(255,255,255,.10)"/>
+                      <path d="M40 60 Q80 30 130 50 T220 38 L220 68 L20 68 Z" fill="rgba(255,255,255,.05)"/>
+                      <rect class="art-screenspace__box art-screenspace__drawn" x="22" y="18" rx="2" fill="none" stroke="#fb923c" stroke-width="1.2"/>
+                      <rect class="art-screenspace__box" x="146" y="20" width="70" height="26" rx="2" fill="none" stroke="#22d3ee" stroke-width="1.2"/>
+                      <rect class="art-screenspace__solid" x="74" y="52" width="92" height="10" rx="2" fill="none" stroke="#a78bfa" stroke-width="1.2" opacity=".55"/>
+                      <g class="art-screenspace__cursor">
+                        <path d="M0 0 L0 10 L2.6 7.4 L4.4 11.6 L6 10.9 L4.2 6.7 L7.4 6.7 Z" fill="#ffffff" stroke="#000" stroke-width="0.4" stroke-linejoin="round"/>
+                      </g>
+                    </svg>
+                  </div>
+                  <div class="tool-tile__title">
+                    <span class="tool-tile__dot" style="background: #22d3ee;"></span>
+                    <span>Screenspace</span>
+                  </div>
+                  <div class="tool-tile__desc">Frame-by-frame visual analysis of videos. Find key events.</div>
+                </div>
+
+                <div class="tool-tile" data-tool="transcripts">
+                  <div class="tool-tile__art">
+                    <svg class="art-transcripts" viewBox="0 0 240 84" width="100%" height="100%" preserveAspectRatio="xMidYMid slice" aria-hidden="true">
+                      <g opacity=".75">
+                        <rect x="4"   y="13" width="2" height="14" rx="1" fill="#34d399" opacity=".55"/>
+                        <rect x="8"   y="11" width="2" height="18" rx="1" fill="#34d399" opacity=".55"/>
+                        <rect x="12"  y="14" width="2" height="12" rx="1" fill="#34d399" opacity=".55"/>
+                        <rect x="16"  y="10" width="2" height="20" rx="1" fill="#34d399" opacity=".55"/>
+                        <rect x="20"  y="13" width="2" height="14" rx="1" fill="#34d399" opacity=".55"/>
+                        <rect x="24"  y="15" width="2" height="10" rx="1" fill="#34d399" opacity=".55"/>
+                        <rect x="28"  y="11" width="2" height="18" rx="1" fill="#34d399" opacity=".55"/>
+                        <rect x="32"  y="13" width="2" height="14" rx="1" fill="#34d399" opacity=".55"/>
+                        <rect x="36"  y="15" width="2" height="10" rx="1" fill="#34d399" opacity=".55"/>
+                        <rect x="40"  y="11" width="2" height="18" rx="1" fill="#34d399" opacity=".55"/>
+                        <rect x="44"  y="13" width="2" height="14" rx="1" fill="#34d399" opacity=".55"/>
+                        <rect x="48"  y="15" width="2" height="10" rx="1" fill="#34d399" opacity=".55"/>
+                        <rect x="52"  y="11" width="2" height="18" rx="1" fill="#34d399" opacity=".55"/>
+                        <rect x="56"  y="13" width="2" height="14" rx="1" fill="#34d399" opacity=".55"/>
+                        <rect x="60"  y="15" width="2" height="10" rx="1" fill="#34d399" opacity=".55"/>
+                        <rect x="64"  y="11" width="2" height="18" rx="1" fill="#34d399" opacity=".55"/>
+                        <rect x="68"  y="13" width="2" height="14" rx="1" fill="#34d399" opacity=".55"/>
+                        <rect x="72"  y="15" width="2" height="10" rx="1" fill="#34d399" opacity=".55"/>
+                        <rect x="76"  y="9"  width="2" height="22" rx="1" fill="#34d399" opacity=".55"/>
+                        <rect x="80"  y="11" width="2" height="18" rx="1" fill="#34d399" opacity=".55"/>
+                        <rect x="84"  y="13" width="2" height="14" rx="1" fill="#34d399" opacity=".55"/>
+                        <rect x="88"  y="15" width="2" height="10" rx="1" fill="#34d399" opacity=".55"/>
+                        <rect x="92"  y="11" width="2" height="18" rx="1" fill="#34d399" opacity=".55"/>
+                        <rect x="96"  y="13" width="2" height="14" rx="1" fill="#34d399" opacity=".55"/>
+                        <rect x="100" y="15" width="2" height="10" rx="1" fill="#34d399" opacity=".55"/>
+                        <rect x="104" y="11" width="2" height="18" rx="1" fill="#34d399" opacity=".55"/>
+                        <rect x="108" y="13" width="2" height="14" rx="1" fill="#34d399" opacity=".55"/>
+                        <rect x="112" y="15" width="2" height="10" rx="1" fill="#34d399" opacity=".55"/>
+                        <rect x="116" y="11" width="2" height="18" rx="1" fill="#34d399" opacity=".55"/>
+                        <rect x="120" y="13" width="2" height="14" rx="1" fill="#34d399" opacity=".55"/>
+                        <rect x="124" y="11" width="2" height="18" rx="1" fill="#34d399" opacity="1"/>
+                        <rect x="128" y="9"  width="2" height="22" rx="1" fill="#34d399" opacity="1"/>
+                        <rect x="132" y="8"  width="2" height="24" rx="1" fill="#34d399" opacity="1"/>
+                        <rect x="136" y="9"  width="2" height="22" rx="1" fill="#34d399" opacity="1"/>
+                        <rect x="140" y="11" width="2" height="18" rx="1" fill="#34d399" opacity="1"/>
+                        <rect x="144" y="13" width="2" height="14" rx="1" fill="#34d399" opacity=".55"/>
+                        <rect x="148" y="15" width="2" height="10" rx="1" fill="#34d399" opacity=".55"/>
+                        <rect x="152" y="11" width="2" height="18" rx="1" fill="#34d399" opacity=".55"/>
+                        <rect x="156" y="13" width="2" height="14" rx="1" fill="#34d399" opacity=".55"/>
+                        <rect x="160" y="15" width="2" height="10" rx="1" fill="#34d399" opacity=".55"/>
+                        <rect x="164" y="11" width="2" height="18" rx="1" fill="#34d399" opacity=".55"/>
+                        <rect x="168" y="13" width="2" height="14" rx="1" fill="#34d399" opacity=".55"/>
+                        <rect x="172" y="15" width="2" height="10" rx="1" fill="#34d399" opacity=".55"/>
+                        <rect x="176" y="11" width="2" height="18" rx="1" fill="#34d399" opacity=".55"/>
+                        <rect x="180" y="13" width="2" height="14" rx="1" fill="#34d399" opacity=".55"/>
+                        <rect x="184" y="15" width="2" height="10" rx="1" fill="#34d399" opacity=".55"/>
+                        <rect x="188" y="11" width="2" height="18" rx="1" fill="#34d399" opacity=".55"/>
+                        <rect x="192" y="13" width="2" height="14" rx="1" fill="#34d399" opacity=".55"/>
+                        <rect x="196" y="15" width="2" height="10" rx="1" fill="#34d399" opacity=".55"/>
+                        <rect x="200" y="11" width="2" height="18" rx="1" fill="#34d399" opacity=".55"/>
+                        <rect x="204" y="13" width="2" height="14" rx="1" fill="#34d399" opacity=".55"/>
+                        <rect x="208" y="15" width="2" height="10" rx="1" fill="#34d399" opacity=".55"/>
+                        <rect x="212" y="11" width="2" height="18" rx="1" fill="#34d399" opacity=".55"/>
+                        <rect x="216" y="13" width="2" height="14" rx="1" fill="#34d399" opacity=".55"/>
+                        <rect x="220" y="15" width="2" height="10" rx="1" fill="#34d399" opacity=".55"/>
+                        <rect x="224" y="11" width="2" height="18" rx="1" fill="#34d399" opacity=".55"/>
+                        <rect x="228" y="13" width="2" height="14" rx="1" fill="#34d399" opacity=".55"/>
+                        <rect x="232" y="15" width="2" height="10" rx="1" fill="#34d399" opacity=".55"/>
+                        <rect x="236" y="11" width="2" height="18" rx="1" fill="#34d399" opacity=".55"/>
+                      </g>
+                      <g>
+                        <rect x="10" y="38" width="22" height="9" rx="3" fill="#34d399" opacity=".22"/>
+                        <rect x="38" y="40" width="190" height="5" rx="2.5" fill="rgba(255,255,255,.10)"/>
+                        <rect class="art-transcripts__line-fill" x="38" y="40" width="190" height="5" rx="2.5" fill="rgba(255,255,255,.28)" style="animation-delay: 0ms;"/>
+                        <rect x="234" y="40" width="20" height="5" rx="2.5" fill="rgba(255,255,255,.10)"/>
+
+                        <rect x="10" y="50" width="22" height="9" rx="3" fill="#34d399" opacity=".22"/>
+                        <rect x="38" y="52" width="160" height="5" rx="2.5" fill="rgba(255,255,255,.10)"/>
+                        <rect class="art-transcripts__line-fill" x="38" y="52" width="160" height="5" rx="2.5" fill="rgba(255,255,255,.28)" style="animation-delay: 120ms;"/>
+                        <rect x="204" y="52" width="20" height="5" rx="2.5" fill="rgba(255,255,255,.10)"/>
+
+                        <rect x="10" y="62" width="22" height="9" rx="3" fill="#34d399" opacity=".35"/>
+                        <rect x="38" y="64" width="190" height="5" rx="2.5" fill="rgba(255,255,255,.10)"/>
+                        <rect class="art-transcripts__line-fill" x="38" y="64" width="190" height="5" rx="2.5" fill="rgba(255,255,255,.28)" style="animation-delay: 240ms;"/>
+                        <rect x="234" y="64" width="20" height="5" rx="2.5" fill="rgba(255,255,255,.10)"/>
+
+                        <rect x="6" y="38" width="2" height="34" fill="#34d399" opacity=".5" rx="1"/>
+                      </g>
+                      <g class="art-transcripts__cursor">
+                        <line x1="0" y1="6" x2="0" y2="34" stroke="#34d399" stroke-width="1.2" opacity=".9"/>
+                      </g>
+                    </svg>
+                  </div>
+                  <div class="tool-tile__title">
+                    <span class="tool-tile__dot" style="background: #34d399;"></span>
+                    <span>Transcripts</span>
+                  </div>
+                  <div class="tool-tile__desc">Speech-to-text and AI summaries of videos. Mark key statements.</div>
+                </div>
+
+              </div>
+            </div>
+
+            <div data-extras-panel="updates" hidden>
+              <ul class="changelog" data-role="changelog-list"></ul>
+            </div>
+
+            <div data-extras-panel="about" hidden>
+              <div class="about" data-role="about-grid"></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <footer class="start-footer cascade-in" data-cascade="4">
+        <label class="persist-check">
+          <input type="checkbox" id="startPersistEnabled" checked>
+          <span>Remember my choices across launches</span>
+        </label>
+        <button type="button" class="so-btn so-btn--primary so-btn--lg" data-role="confirm">
+          <span>Open workspace</span>
+          <span class="so-icon so-icon--sm" data-icon="arrow-right"></span>
+        </button>
+      </footer>
+
+    </main>
   </div>
 </div>
