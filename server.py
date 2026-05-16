@@ -41,6 +41,7 @@ import threading
 import webbrowser
 from collections import OrderedDict
 from contextlib import contextmanager
+from dataclasses import dataclass, field
 from pathlib import Path
 from collections.abc import Iterator
 from typing import Any
@@ -89,12 +90,19 @@ _reel_in_progress = False
 # Serializes load → mutate → save for the stash manifests so concurrent
 # stash CRUD requests don't drop each other's writes.
 _stash_lock = threading.Lock()
-# Cached gspread client for the Start overlay's Google Sheets picker.
-# Populated lazily by /api/spreadsheets/google/auth.
-_gspread_client: Any = None
-_gspread_auth_in_flight: bool = False
-_gspread_auth_lock = threading.Lock()
-_gspread_auth_error: str = ""
+
+
+# Cached gspread client + threaded-auth state for the Start overlay's Google
+# Sheets picker. Populated lazily by /api/spreadsheets/google/auth.
+@dataclass
+class _GoogleAuthState:
+    client: Any = None
+    in_flight: bool = False
+    error: str = ""
+    lock: threading.Lock = field(default_factory=threading.Lock)
+
+
+_google_auth = _GoogleAuthState()
 
 # Snapshot config defaults before any settings file is loaded.
 # Deep-copied so dict-valued defaults are not aliased to live config state.
@@ -267,7 +275,6 @@ def api_sheet() -> FlaskResponse:
                 "titlecardsEnabled": config.TITLECARDS_ENABLED,
                 "titlecardDuration": config.TITLECARD_DURATION_SECONDS,
                 "cellExpandHover": config.STUDIO_CELL_EXPAND_HOVER,
-                "defaultDuration": config.DEFAULT_DURATION_SECONDS,
                 "config": utils.get_frontend_config(),
                 "participants": [],
                 "rows": [],
@@ -1687,39 +1694,63 @@ def _spreadsheet_label() -> str:
 def _swap_worksheet(new_worksheet: Any) -> None:
     """Replace the active worksheet and refresh all three blueprints' state.
 
-    Used by ``/api/spreadsheets/open`` and ``/api/spreadsheets/close`` so the
-    user can pick or clear a spreadsheet from the frontend at runtime.
+    Atomic: if any of the three init steps fails, the prior state is restored
+    so Studio / Screenspace / Transcripts don't end up pointing at different
+    sheets. Used by ``/api/spreadsheets/open`` and ``/api/spreadsheets/close``.
     """
     import screenspace_server
     import transcripts_server
 
-    _init_studio_state(new_worksheet)
-    screenspace_server._init_screenspace_state(
-        sheet_context=_sheet_context,
-        participant_list=_resolve_participants(),
-    )
-    transcripts_server._init_transcripts_state(
-        sheet_context=_sheet_context,
-        participant_list=_resolve_participants(),
-    )
+    global _worksheet, _sheet_context, _generated_artifacts, _generated_reels
+    prev_worksheet = _worksheet
+    prev_sheet_context = _sheet_context
+    prev_artifacts = _generated_artifacts
+    prev_reels = _generated_reels
+    try:
+        _init_studio_state(new_worksheet)
+        screenspace_server._init_screenspace_state(
+            sheet_context=_sheet_context,
+            participant_list=_resolve_participants(),
+        )
+        transcripts_server._init_transcripts_state(
+            sheet_context=_sheet_context,
+            participant_list=_resolve_participants(),
+        )
+    except Exception:
+        _worksheet = prev_worksheet
+        _sheet_context = prev_sheet_context
+        _generated_artifacts = prev_artifacts
+        _generated_reels = prev_reels
+        # Best-effort: re-pin the two sister blueprints to the restored state.
+        # If these themselves throw, swallow — the studio state is already
+        # consistent and the original exception is what we want to surface.
+        try:
+            screenspace_server._init_screenspace_state(
+                sheet_context=_sheet_context,
+                participant_list=_resolve_participants(),
+            )
+        except Exception:
+            pass
+        try:
+            transcripts_server._init_transcripts_state(
+                sheet_context=_sheet_context,
+                participant_list=_resolve_participants(),
+            )
+        except Exception:
+            pass
+        raise
 
 
-def start_combined_server(
+def build_combined_app(
     worksheet: Any = None,
-    port: int | None = None,
     default_page: str = "studio",
     gspread_client: Any = None,
-) -> None:
-    """Start a combined Studio + Screenspace + Transcripts server on one port.
+) -> Flask:
+    """Build the combined Studio + Screenspace + Transcripts Flask app.
 
-    All three blueprints are always registered. When *worksheet* is ``None``,
-    sheet-dependent Studio routes return ``sheet_loaded: false`` placeholder
-    responses; the frontend's Start overlay lets the user pick a spreadsheet
-    via ``POST /api/spreadsheets/open``.
-
-    If *gspread_client* is supplied (the CLI's auth already happened upstream),
-    the Google Sheets list endpoint reports authenticated and skips the
-    "Connect Google" CTA in the Start overlay.
+    Same setup as :func:`start_combined_server` but stops short of
+    ``app.run`` so tests (and any embedding caller) can hold the live
+    ``Flask`` instance and exercise routes via ``app.test_client()``.
     """
     import screenspace_server
     import start_settings
@@ -1731,10 +1762,10 @@ def start_combined_server(
     # Seed the meta + recent-projects rail for CLI launches that already
     # have a worksheet — the runtime /api/spreadsheets/open path handles
     # both of these itself.
-    global _active_sheet_meta, _gspread_client
+    global _active_sheet_meta
     _active_sheet_meta = _derive_sheet_meta(worksheet)
     if gspread_client is not None:
-        _gspread_client = gspread_client
+        _google_auth.client = gspread_client
     if _active_sheet_meta is not None:
         start_settings.record_project_session(
             str(utils.get_effective_input_dir()),
@@ -1908,21 +1939,20 @@ def start_combined_server(
 
     @combined.route("/api/spreadsheets/google", methods=["GET"])
     def api_spreadsheets_google() -> Response:
-        global _gspread_auth_error
-        if _gspread_client is None:
+        if _google_auth.client is None:
             return jsonify(
                 {
                     "ok": True,
                     "authenticated": False,
-                    "auth_in_flight": _gspread_auth_in_flight,
-                    "auth_error": _gspread_auth_error,
+                    "auth_in_flight": _google_auth.in_flight,
+                    "auth_error": _google_auth.error,
                     "sheets": [],
                 }
             )
         import google_api
 
         try:
-            names = google_api.get_all_spreadsheets(_gspread_client)
+            names = google_api.get_all_spreadsheets(_google_auth.client)
         except Exception as exc:
             return jsonify(
                 {
@@ -1945,31 +1975,32 @@ def start_combined_server(
 
     @combined.route("/api/spreadsheets/google/auth", methods=["POST"])
     def api_spreadsheets_google_auth() -> FlaskResponse:
-        global _gspread_auth_in_flight, _gspread_client, _gspread_auth_error
-        with _gspread_auth_lock:
-            if _gspread_auth_in_flight:
+        with _google_auth.lock:
+            if _google_auth.in_flight:
                 return jsonify({"ok": True, "started": False, "in_flight": True})
-            if _gspread_client is not None:
+            if _google_auth.client is not None:
                 return jsonify({"ok": True, "started": False, "authenticated": True})
-            _gspread_auth_in_flight = True
-            _gspread_auth_error = ""
+            _google_auth.in_flight = True
+            _google_auth.error = ""
 
         def _run_auth() -> None:
-            global _gspread_auth_in_flight, _gspread_client, _gspread_auth_error
             try:
                 import cli as _cli
 
                 client = _cli.authenticate_google()
                 if client is None:
-                    _gspread_auth_error = (
+                    _google_auth.error = (
                         "Google authentication failed — check credentials.json."
                     )
                 else:
-                    _gspread_client = client
+                    _google_auth.client = client
             except Exception as exc:
-                _gspread_auth_error = str(exc)
+                # Daemon-thread exceptions otherwise vanish; surface to logs
+                # so a misconfigured credentials.json is debuggable.
+                utils.error_print(f"Google auth thread failed: {exc}")
+                _google_auth.error = str(exc)
             finally:
-                _gspread_auth_in_flight = False
+                _google_auth.in_flight = False
 
         threading.Thread(target=_run_auth, daemon=True).start()
         return jsonify({"ok": True, "started": True, "in_flight": True}), 202
@@ -1998,7 +2029,7 @@ def start_combined_server(
                 new_ws = excel_io.open_excel_workbook(id_or_path)
                 label = Path(id_or_path).name
             else:
-                if _gspread_client is None:
+                if _google_auth.client is None:
                     return jsonify(
                         {
                             "ok": False,
@@ -2015,12 +2046,12 @@ def start_combined_server(
                     "https://"
                 ):
                     new_ws = _clipgen.open_spreadsheet_by_url(
-                        _gspread_client, id_or_path
+                        _google_auth.client, id_or_path
                     )
                 else:
-                    doc_list = google_api.get_all_spreadsheets(_gspread_client)
+                    doc_list = google_api.get_all_spreadsheets(_google_auth.client)
                     new_ws = _clipgen.open_spreadsheet_by_name(
-                        _gspread_client, doc_list, id_or_path
+                        _google_auth.client, doc_list, id_or_path
                     )
                 if new_ws is not None:
                     parent = getattr(new_ws, "spreadsheet", None)
@@ -2078,7 +2109,7 @@ def start_combined_server(
         return jsonify({"ok": True, "path": path})
 
     @combined.route("/api/sessions/record", methods=["POST"])
-    def api_sessions_record() -> Response:
+    def api_sessions_record() -> FlaskResponse:
         """Record an "Open workspace" session — used by the no-spreadsheet path.
 
         The Google/Excel paths already record via api_spreadsheets_open after a
@@ -2088,15 +2119,40 @@ def start_combined_server(
         import start_settings
 
         data = request.get_json(silent=True) or {}
-        input_dir = (data.get("input") or "").strip()
-        output_dir = (data.get("output") or "").strip()
+        input_raw = data.get("input")
+        output_raw = data.get("output")
+        if input_raw is not None and not isinstance(input_raw, str):
+            return jsonify({"ok": False, "error": "input must be a string"}), 400
+        if output_raw is not None and not isinstance(output_raw, str):
+            return jsonify({"ok": False, "error": "output must be a string"}), 400
+        input_dir = (input_raw or "").strip()
+        output_dir = (output_raw or "").strip()
+
         spreadsheet_payload = data.get("spreadsheet")
         spreadsheet_dict: dict[str, Any] | None = None
-        if isinstance(spreadsheet_payload, dict):
+        if spreadsheet_payload is not None:
+            if not isinstance(spreadsheet_payload, dict):
+                return jsonify(
+                    {"ok": False, "error": "spreadsheet must be an object or null"}
+                ), 400
+            ss_type = (spreadsheet_payload.get("type") or "").strip()
+            ss_id = (spreadsheet_payload.get("id_or_path") or "").strip()
+            ss_label = (spreadsheet_payload.get("label") or "").strip()
+            if ss_type not in ("google", "excel"):
+                return jsonify(
+                    {
+                        "ok": False,
+                        "error": "spreadsheet.type must be 'google' or 'excel'",
+                    }
+                ), 400
+            if not ss_id:
+                return jsonify(
+                    {"ok": False, "error": "spreadsheet.id_or_path is required"}
+                ), 400
             spreadsheet_dict = {
-                "type": spreadsheet_payload.get("type") or "",
-                "id_or_path": spreadsheet_payload.get("id_or_path") or "",
-                "label": spreadsheet_payload.get("label") or "",
+                "type": ss_type,
+                "id_or_path": ss_id,
+                "label": ss_label or ss_id,
             }
         start_settings.record_project_session(
             input_dir or str(utils.get_effective_input_dir()),
@@ -2185,6 +2241,31 @@ def start_combined_server(
             }
         )
 
+    return combined
+
+
+def start_combined_server(
+    worksheet: Any = None,
+    port: int | None = None,
+    default_page: str = "studio",
+    gspread_client: Any = None,
+) -> None:
+    """Start a combined Studio + Screenspace + Transcripts server on one port.
+
+    All three blueprints are always registered. When *worksheet* is ``None``,
+    sheet-dependent Studio routes return ``sheet_loaded: false`` placeholder
+    responses; the frontend's Start overlay lets the user pick a spreadsheet
+    via ``POST /api/spreadsheets/open``.
+
+    If *gspread_client* is supplied (the CLI's auth already happened upstream),
+    the Google Sheets list endpoint reports authenticated and skips the
+    "Connect Google" CTA in the Start overlay.
+    """
+    combined = build_combined_app(
+        worksheet=worksheet,
+        default_page=default_page,
+        gspread_client=gspread_client,
+    )
     port = port or config.SERVER_PORT
     url = f"http://127.0.0.1:{port}/{default_page}/"
 

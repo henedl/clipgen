@@ -75,6 +75,25 @@ var el = function (tag, cls, text) {
   return e;
 };
 
+// Populate a container with a skeleton table: `cols` header cells plus
+// `rows × cols` body cells. Pairs with the `.skeleton-grid` / `.skeleton-cell`
+// CSS in primitives.css (and the shimmer in tokens.css). Target should
+// already have class `skeleton-grid`; the helper appends cells via a single
+// DocumentFragment.
+var buildSkeletonGrid = function (target, cols, rows) {
+  if (!target) return;
+  var frag = document.createDocumentFragment();
+  for (var i = 0; i < cols; i++) {
+    frag.appendChild(el("div", "skeleton skeleton-cell is-header"));
+  }
+  for (var r = 0; r < rows; r++) {
+    for (var c = 0; c < cols; c++) {
+      frag.appendChild(el("div", "skeleton skeleton-cell"));
+    }
+  }
+  target.appendChild(frag);
+};
+
 // True when an animated artifact's filename should render via <video> rather
 // than <img>. Used by the gallery and viewer so they agree which extensions
 // are looping video. Keep as the single source of truth.

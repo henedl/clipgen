@@ -1627,20 +1627,20 @@ def open_native_folder_picker(initial_dir: str = "") -> str | None:
 
     if sys.platform == "darwin":
         prompt = "Select a folder for clipgen"
-        # AppleScript strings break on " and \. Sanitised paths are good
-        # enough — if a path contains either, just skip seeding the dialog's
-        # initial location.
         safe_initial = ""
-        if initial_dir and '"' not in initial_dir and "\\" not in initial_dir:
+        if initial_dir:
             try:
                 if Path(initial_dir).is_dir():
                     safe_initial = initial_dir
             except OSError:
                 pass
         if safe_initial:
+            # Escape backslashes first, then double quotes, for safe embedding
+            # in an AppleScript double-quoted string literal.
+            escaped = safe_initial.replace("\\", "\\\\").replace('"', '\\"')
             script = (
                 f'set chosenFolder to choose folder with prompt "{prompt}" '
-                f'default location POSIX file "{safe_initial}"\n'
+                f'default location POSIX file "{escaped}"\n'
                 "return POSIX path of chosenFolder"
             )
         else:

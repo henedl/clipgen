@@ -744,6 +744,31 @@ def get_runtime_working_dir() -> str:
 # ---- Google authentication ----
 
 
+def _try_silent_google_auth() -> Any | None:
+    """Reuse a cached gspread token without ever launching the OAuth flow.
+
+    Returns a gspread client when both ``credentials.json`` and the cached
+    ``authorized_user.json`` exist (and load); otherwise returns ``None``
+    without printing or prompting. Used by the frozen-binary launch path so
+    a previously-authenticated user is not forced through "Connect Google"
+    on every double-click — but a fresh install lands silently on the Start
+    overlay's Connect CTA rather than blocking on an interactive flow.
+    """
+    try:
+        import gspread
+        from gspread.auth import DEFAULT_AUTHORIZED_USER_FILENAME
+    except Exception:
+        return None
+    if not Path("credentials.json").is_file():
+        return None
+    if not Path(DEFAULT_AUTHORIZED_USER_FILENAME).is_file():
+        return None
+    try:
+        return gspread.oauth(credentials_filename="credentials.json")
+    except Exception:
+        return None
+
+
 def authenticate_google() -> Any | None:
     """Authenticate with Google Sheets API.
 
@@ -3102,7 +3127,15 @@ def _dispatch_standalone_mode(
         import server
 
         _maybe_apply_persisted_dirs(args)
-        server.start_combined_server(worksheet=None, default_page=web_mode)
+        # Silent best-effort reuse of the cached Google token (frozen .app
+        # double-clicks land here; without this, every launch forces the user
+        # back through "Connect Google" even when their token is still good).
+        gspread_client = _try_silent_google_auth()
+        server.start_combined_server(
+            worksheet=None,
+            default_page=web_mode,
+            gspread_client=gspread_client,
+        )
         return True
 
     # Standalone gallery

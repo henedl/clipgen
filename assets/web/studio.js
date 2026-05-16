@@ -826,24 +826,7 @@
   }
 
   function populateSheetSkeleton() {
-    var grid = qs("#sheetLoading .skeleton-grid");
-    if (!grid) return;
-    var cols = 9;
-    var rows = 4;
-    var frag = document.createDocumentFragment();
-    for (var i = 0; i < cols; i++) {
-      var th = document.createElement("div");
-      th.className = "skeleton skeleton-cell is-header";
-      frag.appendChild(th);
-    }
-    for (var r = 0; r < rows; r++) {
-      for (var c = 0; c < cols; c++) {
-        var cell = document.createElement("div");
-        cell.className = "skeleton skeleton-cell";
-        frag.appendChild(cell);
-      }
-    }
-    grid.appendChild(frag);
+    buildSkeletonGrid(qs("#sheetLoading .skeleton-grid"), 9, 4);
   }
 
   // ---- Data loading ----

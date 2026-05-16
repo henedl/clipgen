@@ -11,6 +11,7 @@
  *   .clip-card            16/10 thumb + caption (Screenspace Intake source events)
  *   .transcript-card      same anatomy with timeRange + clamped text (Transcript Intake)
  *   .cg-btn               base button: ghost / solid / bare; sm / md / lg
+ *   .skeleton-grid        responsive skeleton row layout (pair with .skeleton cells)
  *
  * All transitions: var(--duration-instant) ease-out on bg/border/color only. Hit targets ≥28px.
  */
@@ -696,4 +697,31 @@
   .cg-swim-cluster-band {
     transition: none;
   }
+}
+
+/* ---- SkeletonGrid ---------------------------------------------------------
+ *
+ * Responsive table-skeleton row layout. Pairs with the `.skeleton` shimmer
+ * class defined in tokens.css. Studio uses this for the "no spreadsheet"
+ * placeholder; Screenspace/Transcripts can reuse it for their own pre-load
+ * states. Cells are rendered by `buildSkeletonGrid(target, cols, rows)` in
+ * utils.js, which appends `<div class="skeleton skeleton-cell [is-header]">`
+ * nodes — keep the JS helper and these classes in sync.
+ */
+
+.skeleton-grid {
+  display: grid;
+  grid-template-columns: 56px 2.2fr 1.2fr repeat(6, 1fr);
+  gap: var(--space-2);
+  width: 100%;
+}
+
+.skeleton-cell {
+  height: 26px;
+  border-radius: var(--radius-sm);
+}
+
+.skeleton-cell.is-header {
+  height: 30px;
+  opacity: 0.85;
 }

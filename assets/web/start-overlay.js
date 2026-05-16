@@ -23,6 +23,12 @@
   var INTRO_VEIL_ALPHA = 0.55;
   var CASCADE_BASE_MS = 220;
   var CASCADE_STEP_MS = 80;
+  // Google-auth poll lifecycle: the server's /api/spreadsheets/google/auth
+  // launches an OAuth flow in a daemon thread; we poll /api/spreadsheets/google
+  // until it reports `authenticated`, an `auth_error`, or we exceed the budget.
+  var GOOGLE_POLL_TIMEOUT_MS = 90 * 1000;
+  var GOOGLE_POLL_INTERVAL_MS = 1500;
+  var GOOGLE_POLL_RETRY_MS = 2500;
 
   function sessionDismissed() {
     try { return sessionStorage.getItem(DISMISSED_KEY) === "1"; } catch (_) { return false; }
@@ -49,6 +55,7 @@
     persistEnabled: true,
     googlePollTimer: null,
     googlePollDeadline: 0,
+    confirmInFlight: false,
     activeTab: "google",    // 'google' | 'excel' | 'none'
     extrasTab: "tools",     // 'tools' | 'updates' | 'about'
     changelogLoaded: false,
@@ -223,7 +230,10 @@
     });
 
     on(document, "click", function (e) {
-      if (!root) return;
+      // Bail when the overlay isn't open — the listener stays bound for the
+      // page's lifetime (mount() is once-per-page; close() just hides),
+      // so guard explicitly to avoid pointless work on every page click.
+      if (!root || !state.open) return;
       closeRecentsIfOutside(e);
       closePickersIfOutside(e);
     });
@@ -740,36 +750,49 @@
       });
   }
 
-  function pollGoogleAuth() {
-    state.googlePollDeadline = Date.now() + 90 * 1000;
-    function tick() {
-      apiGet("/api/spreadsheets/google").then(function (g) {
-        if (g.authenticated && !g.auth_error) {
-          state.googleSheets = g.sheets || [];
-          els.googleStatus.textContent = state.googleSheets.length
-            ? state.googleSheets.length + " spreadsheets available"
-            : "No spreadsheets found in your account";
-          renderGoogleList(state.googleSheets);
-          setHidden(els.googlePicker, false);
-          state.googlePollTimer = null;
-          return;
-        }
-        if (g.auth_error) {
-          renderGoogleConnectCTA(false, g.auth_error);
-          state.googlePollTimer = null;
-          return;
-        }
-        if (Date.now() > state.googlePollDeadline) {
-          renderGoogleConnectCTA(false, "Sign-in timed out — try again.");
-          state.googlePollTimer = null;
-          return;
-        }
-        state.googlePollTimer = setTimeout(tick, 1500);
-      }).catch(function () {
-        state.googlePollTimer = setTimeout(tick, 2500);
-      });
+  function stopGooglePoll() {
+    if (state.googlePollTimer) {
+      clearTimeout(state.googlePollTimer);
+      state.googlePollTimer = null;
     }
-    tick();
+  }
+
+  function onGooglePollSuccess(sheets) {
+    state.googleSheets = sheets || [];
+    els.googleStatus.textContent = state.googleSheets.length
+      ? state.googleSheets.length + " spreadsheets available"
+      : "No spreadsheets found in your account";
+    renderGoogleList(state.googleSheets);
+    setHidden(els.googlePicker, false);
+  }
+
+  function pollGoogleAuth() {
+    stopGooglePoll();
+    state.googlePollDeadline = Date.now() + GOOGLE_POLL_TIMEOUT_MS;
+    pollGoogleAuthOnce();
+  }
+
+  function pollGoogleAuthOnce() {
+    apiGet("/api/spreadsheets/google").then(function (g) {
+      if (g.authenticated && !g.auth_error) {
+        state.googlePollTimer = null;
+        onGooglePollSuccess(g.sheets);
+        return;
+      }
+      if (g.auth_error) {
+        state.googlePollTimer = null;
+        renderGoogleConnectCTA(false, g.auth_error);
+        return;
+      }
+      if (Date.now() > state.googlePollDeadline) {
+        state.googlePollTimer = null;
+        renderGoogleConnectCTA(false, "Sign-in timed out — try again.");
+        return;
+      }
+      state.googlePollTimer = setTimeout(pollGoogleAuthOnce, GOOGLE_POLL_INTERVAL_MS);
+    }).catch(function () {
+      state.googlePollTimer = setTimeout(pollGoogleAuthOnce, GOOGLE_POLL_RETRY_MS);
+    });
   }
 
   function renderGoogleList(sheets) {
@@ -946,6 +969,12 @@
   // ---- Open / dismiss flows ----
 
   function confirm() {
+    // Guard against re-entry: the click handler disables the button, but the
+    // Cmd/Ctrl+Enter shortcut bypasses that path. Two simultaneous flights
+    // would race the server-side _swap_worksheet.
+    if (state.confirmInFlight) return;
+    state.confirmInFlight = true;
+
     var inputVal = (els.inputDir.value || "").trim();
     var outputVal = (els.outputDir.value || "").trim();
 
@@ -967,6 +996,11 @@
         })
       : Promise.resolve({ ok: true, body: {} });
 
+    function releaseConfirm() {
+      state.confirmInFlight = false;
+      els.confirmBtn.disabled = false;
+    }
+
     els.confirmBtn.disabled = true;
     dirsPromise.then(function (res) {
       if (!res.ok) {
@@ -976,13 +1010,13 @@
         if (!errors.input && !errors.output && typeof showToast === "function") {
           showToast("Folder error");
         }
-        els.confirmBtn.disabled = false;
+        releaseConfirm();
         return;
       }
       var skipSpreadsheet = state.activeTab === "none" || !state.selection;
       if (skipSpreadsheet) {
         recordSession(inputVal, outputVal, null).finally(function () {
-          els.confirmBtn.disabled = false;
+          releaseConfirm();
           close();
         });
         return;
@@ -996,18 +1030,22 @@
           return r.json().then(function (j) { return { ok: r.ok, body: j }; });
         })
         .then(function (res2) {
-          els.confirmBtn.disabled = false;
           if (!res2.ok || !res2.body.ok) {
+            releaseConfirm();
             markSheetError((res2.body && res2.body.error) || "Could not open spreadsheet");
             return;
           }
           // Hard reload so all three frontends re-fetch their data.
+          // Don't release the in-flight flag — the page is about to unmount.
           window.location.reload();
         })
         .catch(function (err) {
-          els.confirmBtn.disabled = false;
+          releaseConfirm();
           markSheetError("Open failed: " + err.message);
         });
+    }).catch(function (err) {
+      releaseConfirm();
+      console.error("Confirm dirs failed", err);
     });
   }
 
@@ -1040,10 +1078,7 @@
     if (!root) return;
     state.open = false;
     markDismissed();
-    if (state.googlePollTimer) {
-      clearTimeout(state.googlePollTimer);
-      state.googlePollTimer = null;
-    }
+    stopGooglePoll();
     // Animate the panel and backdrop out, then hide.
     if (els.panel) els.panel.classList.remove("is-in");
     root.style.setProperty("--host-blur", "0px");

@@ -33,10 +33,14 @@ def load_entries(limit: int = 20) -> list[dict[str, Any]]:
     """Return up to *limit* changelog entries in file order (newest first)."""
     path = _changelog_path()
     if not path.is_file():
+        utils.warning_print(
+            f"CHANGELOG.md not found at {path}; Start overlay 'Recent updates' will be empty."
+        )
         return []
     try:
         text = path.read_text(encoding="utf-8")
-    except OSError:
+    except OSError as exc:
+        utils.warning_print(f"Could not read CHANGELOG.md at {path}: {exc}")
         return []
     entries: list[dict[str, Any]] = []
     current: dict[str, Any] | None = None

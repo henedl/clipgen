@@ -21,10 +21,11 @@ dev = ["pytest"]
 [tool.setuptools]
 packages = []
 py-modules = [
-    "cli", "clipgen", "config", "excel_io", "files", "google_api",
-    "insights", "insights_server", "interactive", "ollama_client", "screenspace",
-    "screenspace_server", "server", "spreadsheet", "titlecards",
-    "transcripts", "utils", "video", "viewer",
+    "changelog", "cli", "clipgen", "config", "data_export", "excel_io",
+    "files", "google_api", "interactive", "ollama_client", "pipeline",
+    "screenspace", "screenspace_preview", "screenspace_server", "server",
+    "spreadsheet", "start_settings", "thinking_agents", "titlecards",
+    "transcripts", "transcripts_server", "utils", "video", "viewer",
 ]
 
 [tool.uv]

@@ -18,7 +18,7 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 32px;
+  padding: var(--space-6);
   font-family: var(--font-sans);
   color: var(--fg);
   --host-blur: 0px;
@@ -167,7 +167,7 @@
   height: 720px;
   pointer-events: none;
   background:
-    radial-gradient(circle at 25% 25%, rgba(45, 107, 255, 0.22) 0%, rgba(45, 107, 255, 0.08) 28%, transparent 60%),
+    radial-gradient(circle at 25% 25%, var(--color-accent-highlight) 0%, rgba(45, 107, 255, 0.08) 28%, transparent 60%),
     radial-gradient(circle at 35% 35%, rgba(125, 211, 224, 0.10) 0%, transparent 55%);
   z-index: 0;
 }
@@ -496,7 +496,7 @@
   border-color: var(--accent);
   box-shadow:
     inset 0 1px 0 rgba(0, 0, 0, 0.25),
-    0 0 0 3px rgba(45, 107, 255, 0.18);
+    0 0 0 3px var(--color-selected);
   background: #0d0f13;
 }
 
@@ -806,7 +806,7 @@
   background: #0d0f13;
   box-shadow:
     inset 0 1px 0 rgba(0, 0, 0, 0.25),
-    0 0 0 3px rgba(45, 107, 255, 0.18);
+    0 0 0 3px var(--color-selected);
 }
 
 .start-overlay .sheet-picker__label {
@@ -997,7 +997,7 @@
   height: 17px;
   padding: 0 5px;
   border-radius: 999px;
-  background: rgba(45, 107, 255, 0.18);
+  background: var(--color-selected);
   color: #9ec0ff;
   font-size: 10px;
   font-weight: 600;
