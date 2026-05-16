@@ -2,6 +2,10 @@
 
 Notable changes per release. Headings follow `## <version> — <YYYY-MM-DD> — <tool>` where the tool is one of `Studio`, `Screenspace`, `Transcripts`, or `Core`. The first bolded line is the title; everything after is the body.
 
+## v0.11.1 — 2026-05-16 — Core
+**Double-click launches Studio**
+Opening the bundled .app or .exe with no arguments now boots Studio directly; the Start overlay handles spreadsheet selection in the browser.
+
 ## v0.11.0 — 2026-05-16 — Core
 **Refreshed Start screen**
 New two-column launcher with animated brand intro, a "Recently opened" rail, a unified spreadsheet picker, an in-app changelog, and a native macOS folder picker.
