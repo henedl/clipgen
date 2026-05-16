@@ -23,6 +23,12 @@
   var INTRO_VEIL_ALPHA = 0.55;
   var CASCADE_BASE_MS = 220;
   var CASCADE_STEP_MS = 80;
+  // Google-auth poll lifecycle: the server's /api/spreadsheets/google/auth
+  // launches an OAuth flow in a daemon thread; we poll /api/spreadsheets/google
+  // until it reports `authenticated`, an `auth_error`, or we exceed the budget.
+  var GOOGLE_POLL_TIMEOUT_MS = 90 * 1000;
+  var GOOGLE_POLL_INTERVAL_MS = 1500;
+  var GOOGLE_POLL_RETRY_MS = 2500;
 
   function sessionDismissed() {
     try { return sessionStorage.getItem(DISMISSED_KEY) === "1"; } catch (_) { return false; }
@@ -744,36 +750,49 @@
       });
   }
 
-  function pollGoogleAuth() {
-    state.googlePollDeadline = Date.now() + 90 * 1000;
-    function tick() {
-      apiGet("/api/spreadsheets/google").then(function (g) {
-        if (g.authenticated && !g.auth_error) {
-          state.googleSheets = g.sheets || [];
-          els.googleStatus.textContent = state.googleSheets.length
-            ? state.googleSheets.length + " spreadsheets available"
-            : "No spreadsheets found in your account";
-          renderGoogleList(state.googleSheets);
-          setHidden(els.googlePicker, false);
-          state.googlePollTimer = null;
-          return;
-        }
-        if (g.auth_error) {
-          renderGoogleConnectCTA(false, g.auth_error);
-          state.googlePollTimer = null;
-          return;
-        }
-        if (Date.now() > state.googlePollDeadline) {
-          renderGoogleConnectCTA(false, "Sign-in timed out — try again.");
-          state.googlePollTimer = null;
-          return;
-        }
-        state.googlePollTimer = setTimeout(tick, 1500);
-      }).catch(function () {
-        state.googlePollTimer = setTimeout(tick, 2500);
-      });
+  function stopGooglePoll() {
+    if (state.googlePollTimer) {
+      clearTimeout(state.googlePollTimer);
+      state.googlePollTimer = null;
     }
-    tick();
+  }
+
+  function onGooglePollSuccess(sheets) {
+    state.googleSheets = sheets || [];
+    els.googleStatus.textContent = state.googleSheets.length
+      ? state.googleSheets.length + " spreadsheets available"
+      : "No spreadsheets found in your account";
+    renderGoogleList(state.googleSheets);
+    setHidden(els.googlePicker, false);
+  }
+
+  function pollGoogleAuth() {
+    stopGooglePoll();
+    state.googlePollDeadline = Date.now() + GOOGLE_POLL_TIMEOUT_MS;
+    pollGoogleAuthOnce();
+  }
+
+  function pollGoogleAuthOnce() {
+    apiGet("/api/spreadsheets/google").then(function (g) {
+      if (g.authenticated && !g.auth_error) {
+        state.googlePollTimer = null;
+        onGooglePollSuccess(g.sheets);
+        return;
+      }
+      if (g.auth_error) {
+        state.googlePollTimer = null;
+        renderGoogleConnectCTA(false, g.auth_error);
+        return;
+      }
+      if (Date.now() > state.googlePollDeadline) {
+        state.googlePollTimer = null;
+        renderGoogleConnectCTA(false, "Sign-in timed out — try again.");
+        return;
+      }
+      state.googlePollTimer = setTimeout(pollGoogleAuthOnce, GOOGLE_POLL_INTERVAL_MS);
+    }).catch(function () {
+      state.googlePollTimer = setTimeout(pollGoogleAuthOnce, GOOGLE_POLL_RETRY_MS);
+    });
   }
 
   function renderGoogleList(sheets) {
@@ -1059,10 +1078,7 @@
     if (!root) return;
     state.open = false;
     markDismissed();
-    if (state.googlePollTimer) {
-      clearTimeout(state.googlePollTimer);
-      state.googlePollTimer = null;
-    }
+    stopGooglePoll();
     // Animate the panel and backdrop out, then hide.
     if (els.panel) els.panel.classList.remove("is-in");
     root.style.setProperty("--host-blur", "0px");
