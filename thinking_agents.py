@@ -345,7 +345,7 @@ AGENTS: list[Agent] = [
     ),
     Agent(
         key="citations",
-        enabled_config_key="OLLAMA_SUMMARY_ENABLED",
+        enabled_config_key="OLLAMA_CITATIONS_ENABLED",
         model_config_key="OLLAMA_SUMMARY_MODEL",
         manifest_field="citations",
         depends_on=["summary"],
