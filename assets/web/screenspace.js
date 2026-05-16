@@ -818,7 +818,6 @@
         if (data.info.width && data.info.height) parts.push(data.info.width + "x" + data.info.height);
         if (data.info.fps) parts.push(Math.round(data.info.fps) + "fps");
         qs("#videoInfo").textContent = parts.join(" \u00b7 ");
-        renderInfoVideo(data.info);
         renderTimeline();
         // Preload video source for instant playback
         qs("#videoPlayer").src = videoStreamUrl(pid);
@@ -848,24 +847,9 @@
   function setInfoParticipant(pid) {
     var el = qs("#ssInfoParticipant");
     if (el) el.textContent = pid || "\u2014";
-    qs("#ssInfoDuration").textContent = "\u2014";
-    qs("#ssInfoFrames").textContent = "\u2014";
-    qs("#ssInfoResolution").textContent = "\u2014";
-    qs("#ssInfoCodec").textContent = "\u2014";
     qs("#ssInfoNotes").value = "";
     qs("#ssInfoIssuesBlock").classList.add("hidden");
     qs("#ssInfoIssues").innerHTML = "";
-  }
-
-  function renderInfoVideo(info) {
-    qs("#ssInfoDuration").textContent = info.duration ? formatDuration(info.duration) : "\u2014";
-    qs("#ssInfoFrames").textContent = info.nb_frames
-      ? info.nb_frames.toLocaleString() + " frames"
-      : "";
-    qs("#ssInfoResolution").textContent = info.width && info.height
-      ? info.width + "\u00d7" + info.height
-      : "\u2014";
-    qs("#ssInfoCodec").textContent = info.video_codec || "";
   }
 
   function renderInfoNotes(notes) {
