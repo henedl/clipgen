@@ -831,7 +831,10 @@ def probe_video_properties(filepath: str) -> dict[str, Any] | None:
                     fps = num / den if den > 0 else 0.0
                 except (ValueError, IndexError):
                     pass
-            nb_frames = int(stream.get("nb_frames", 0) or 0)
+            try:
+                nb_frames = int(stream.get("nb_frames") or 0)
+            except (ValueError, TypeError):
+                nb_frames = 0
         elif codec_type == "audio" and audio_codec is None:
             audio_codec = stream.get("codec_name")
 

@@ -238,6 +238,8 @@ def _parse_citation_response(
     result: dict[int, list[dict[str, Any]]] = {}
     for match in _CITATION_LINE_RE.finditer(response):
         claim_num = int(match.group(1))
+        if claim_num < 1:
+            continue
         claim_idx = claim_num - 1
         body = match.group(2).strip()
         if body.upper() == "NONE":
