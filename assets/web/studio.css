@@ -2104,6 +2104,16 @@ html[data-theme="dark"] .queue-card-error .queue-card-thumb {
   pointer-events: none;
 }
 
+.generate-progress {
+  font-size: var(--text-sm);
+  color: var(--color-text-dim);
+  white-space: nowrap;
+}
+
+.generate-progress.hidden {
+  display: none;
+}
+
 /* Status overlay */
 
 #statusOverlay {
