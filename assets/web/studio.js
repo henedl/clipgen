@@ -1128,10 +1128,9 @@
     tbody.id = "gridTbody";
     table.appendChild(tbody);
     grid.appendChild(table);
+    applyGridFilters();
     grid.scrollTop = prevScrollTop;
     grid.scrollLeft = prevScrollLeft;
-
-    applyGridFilters();
 
     if (!_gridEventsBound) {
       bindGridEvents();

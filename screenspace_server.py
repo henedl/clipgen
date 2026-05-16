@@ -346,11 +346,10 @@ def api_video_frame(participant: str, timestamp: str) -> FlaskResponse:
             ), 400
         import cv2
 
-        _, jpeg = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+        success, jpeg = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+        if not success:
+            return jsonify({"ok": False, "error": "Could not extract frame"}), 400
         jpeg_bytes = jpeg.tobytes()
-
-    if jpeg_bytes is None:
-        return jsonify({"ok": False, "error": "Could not extract frame"}), 400
 
     with _frame_cache_lock:
         _frame_cache[cache_key] = jpeg_bytes
@@ -882,12 +881,11 @@ def api_stashes_update(stash_id: str) -> FlaskResponse:
 @screenspace_bp.route("/api/stashes/<stash_id>", methods=["DELETE"])
 def api_stashes_delete(stash_id: str) -> FlaskResponse:
     """Dismiss a region stash."""
-    stashes = _manifest.get("stashes", [])
-    idx = next((i for i, s in enumerate(stashes) if s["id"] == stash_id), None)
-    if idx is None:
-        return jsonify({"ok": False, "error": "Stash not found"}), 404
-
     with _manifest_lock:
+        stashes = _manifest.get("stashes", [])
+        idx = next((i for i, s in enumerate(stashes) if s["id"] == stash_id), None)
+        if idx is None:
+            return jsonify({"ok": False, "error": "Stash not found"}), 404
         stashes.pop(idx)
         _do_persist(drain_events=False)
     return jsonify({"ok": True})
@@ -896,13 +894,11 @@ def api_stashes_delete(stash_id: str) -> FlaskResponse:
 @screenspace_bp.route("/api/stashes/<stash_id>/restore", methods=["POST"])
 def api_stashes_restore(stash_id: str) -> FlaskResponse:
     """Restore a stash: replace active regions with stashed ones (stash is kept)."""
-    stashes = _manifest.get("stashes", [])
-    idx = next((i for i, s in enumerate(stashes) if s["id"] == stash_id), None)
-    if idx is None:
-        return jsonify({"ok": False, "error": "Stash not found"}), 404
-
-    stash = stashes[idx]
     with _manifest_lock:
+        stashes = _manifest.get("stashes", [])
+        stash = next((s for s in stashes if s["id"] == stash_id), None)
+        if stash is None:
+            return jsonify({"ok": False, "error": "Stash not found"}), 404
         _manifest["regions"] = copy.deepcopy(stash["regions"])
         _do_persist(drain_events=False)
     return jsonify({"ok": True, "regions": _manifest["regions"]})
