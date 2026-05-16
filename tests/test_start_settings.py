@@ -1,10 +1,36 @@
-"""Tests for ~/.config/clipgen/start.json persistence helpers."""
+"""Tests for Start overlay persistence helpers (start_settings)."""
 
 import json
 
 import pytest
 
 import start_settings
+
+
+def test_settings_path_windows_localappdata(monkeypatch, tmp_path):
+    monkeypatch.setattr(start_settings.sys, "platform", "win32")
+    local = tmp_path / "Local"
+    monkeypatch.setenv("LOCALAPPDATA", str(local))
+    assert start_settings._settings_path() == local / "clipgen" / "start.json"
+
+
+def test_settings_path_windows_fallback(monkeypatch, tmp_path):
+    monkeypatch.setattr(start_settings.sys, "platform", "win32")
+    monkeypatch.delenv("LOCALAPPDATA", raising=False)
+    monkeypatch.setattr(start_settings.Path, "home", lambda: tmp_path)
+    assert (
+        start_settings._settings_path()
+        == tmp_path / "AppData" / "Local" / "clipgen" / "start.json"
+    )
+
+
+def test_settings_path_unix(monkeypatch, tmp_path):
+    monkeypatch.setattr(start_settings.sys, "platform", "linux")
+    monkeypatch.setattr(start_settings.Path, "home", lambda: tmp_path)
+    assert (
+        start_settings._settings_path()
+        == tmp_path / ".config" / "clipgen" / "start.json"
+    )
 
 
 @pytest.fixture
