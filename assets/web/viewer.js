@@ -26,7 +26,8 @@
   };
 
   var _thumbQueue = [];
-  var _thumbProcessing = false;
+  var _thumbActive = 0;
+  var THUMB_CONCURRENCY = 3;
   var _thumbObserver = null;
   var _thumbCache = {};
 
@@ -182,13 +183,14 @@
   }
 
   function processThumbQueue() {
-    if (_thumbProcessing || !_thumbQueue.length) return;
-    _thumbProcessing = true;
-    var item = _thumbQueue.shift();
-    generateClipThumbnail(item.mediaEl, item.artifact, function () {
-      _thumbProcessing = false;
-      processThumbQueue();
-    });
+    while (_thumbActive < THUMB_CONCURRENCY && _thumbQueue.length) {
+      _thumbActive++;
+      var item = _thumbQueue.shift();
+      generateClipThumbnail(item.mediaEl, item.artifact, function () {
+        _thumbActive--;
+        processThumbQueue();
+      });
+    }
   }
 
   // ---- Sidebar video scrub ----
@@ -285,7 +287,7 @@
   function initClipThumbnails() {
     if (_thumbObserver) { _thumbObserver.disconnect(); _thumbObserver = null; }
     _thumbQueue = [];
-    _thumbProcessing = false;
+    _thumbActive = 0;
 
     var cards = qsa("#artifactList .artifact-card");
     if (!cards.length) return;

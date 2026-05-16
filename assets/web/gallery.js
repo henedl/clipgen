@@ -5,6 +5,38 @@
   var data = window.CLIPGEN_DATA || null;
   if (data) clipgenApplyConfig(data.config);
   var state = { artifacts: [], lightboxIndex: -1 };
+  var _galleryVideoObserver = null;
+  var _galleryVideoObserverBound = false;
+
+  function _ensureGalleryVideoObserver() {
+    if (_galleryVideoObserver || typeof IntersectionObserver === "undefined") return;
+    _galleryVideoObserver = new IntersectionObserver(function (entries) {
+      for (var i = 0; i < entries.length; i++) {
+        var ent = entries[i];
+        var video = ent.target;
+        if (ent.isIntersecting) {
+          video.play().catch(function () {});
+        } else {
+          video.pause();
+        }
+      }
+    }, { rootMargin: "80px" });
+  }
+
+  function createGalleryLoopVideo(src, alt) {
+    var video = createLoopVideo(src, alt);
+    video.autoplay = false;
+    video.removeAttribute("autoplay");
+    video.preload = "metadata";
+    _ensureGalleryVideoObserver();
+    if (_galleryVideoObserver) {
+      _galleryVideoObserver.observe(video);
+    } else {
+      video.autoplay = true;
+    }
+    return video;
+  }
+
   // ---- Init ----
 
   document.addEventListener("DOMContentLoaded", function () {
@@ -73,7 +105,7 @@
       var src = a.data || a.file;
       var altText = a.timestamp_formatted || formatTime(a.timestamp);
       if (isVideoLoop(a.file)) {
-        card.appendChild(createLoopVideo(src, altText));
+        card.appendChild(createGalleryLoopVideo(src, altText));
       } else {
         var img = document.createElement("img");
         img.src = src;
@@ -90,6 +122,17 @@
       frag.appendChild(card);
     }
     grid.appendChild(frag);
+
+    if (!_galleryVideoObserverBound) {
+      _galleryVideoObserverBound = true;
+      document.addEventListener("visibilitychange", function () {
+        if (!_galleryVideoObserver) return;
+        var videos = grid.querySelectorAll("video");
+        for (var vi = 0; vi < videos.length; vi++) {
+          if (document.hidden) videos[vi].pause();
+        }
+      });
+    }
 
     grid.addEventListener("click", function (e) {
       var card = e.target.closest(".gallery-card");
