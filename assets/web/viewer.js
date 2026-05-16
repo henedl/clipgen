@@ -1673,11 +1673,22 @@
     setText("#detailFile", a.file || "\u2013");
     var intakeRow = qs("#detailIntakeRow");
     if (intakeRow) {
-      if (a.source === "screenspace" && a.intake_label) {
+      if ((a.source === "screenspace" || a.source === "transcript") && a.intake_label) {
+        setText("#detailIntakeDt", a.source === "transcript" ? "Transcript mark" : "Screenspace");
         setText("#detailIntakeLabel", a.intake_label);
         intakeRow.classList.remove("hidden");
       } else {
         intakeRow.classList.add("hidden");
+      }
+    }
+    var trRow = qs("#detailTranscriptRow");
+    if (trRow) {
+      var txt = (a.transcriptText || "").trim();
+      if (txt) {
+        setText("#detailTranscript", txt);
+        trRow.classList.remove("hidden");
+      } else {
+        trRow.classList.add("hidden");
       }
     }
   }
@@ -1721,6 +1732,14 @@
     if (a.participant) html += " · " + escHtml(a.participant);
     if ((a.severity || "").trim()) {
       html += "<br>" + escHtml(a.severity);
+    }
+    var transcript = (a.transcriptText || "").trim();
+    if (transcript) {
+      html +=
+        '<div class="tooltip-transcript">' +
+        '<span class="tooltip-transcript-label">Transcript</span>' +
+        escHtml(transcript) +
+        "</div>";
     }
 
     tip.innerHTML = html;

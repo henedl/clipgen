@@ -508,6 +508,20 @@ def _generate_intake_clips(
             default_desc = (
                 "Transcript intake" if source == "transcript" else "Screenspace intake"
             )
+            item_text = str(item.get("text") or "").strip()
+            item_label = str(item.get("label") or "").strip()
+            description = event_type or default_desc
+            if source == "transcript":
+                # Prefer the user's label, then a truncated transcript excerpt,
+                # then the category — so cards aren't all titled "Transcript intake".
+                if item_label:
+                    description = item_label
+                elif item_text:
+                    description = (
+                        item_text if len(item_text) <= 80 else item_text[:77] + "…"
+                    )
+                else:
+                    description = event_type or default_desc
             artifact: dict[str, Any] = {
                 "id": f"intake_{span_hash}_s0",
                 "type": output_format,
@@ -519,7 +533,7 @@ def _generate_intake_clips(
                 "participant": participant,
                 "category": "",
                 "severity": "",
-                "description": event_type or default_desc,
+                "description": description,
                 "cellRow": None,
                 "cellCol": None,
                 "cellA1": "",
@@ -539,7 +553,21 @@ def _generate_intake_clips(
                     src_entry = transcripts_server._manifest.get(
                         "source_transcripts", {}
                     ).get(participant, {})
+                    transcript_text = item_text
+                    if not transcript_text and mark_ids:
+                        # Fallback: look up segment text by id from the manifest.
+                        wanted = set(mark_ids)
+                        parts: list[str] = []
+                        for seg in src_entry.get("segments", []) or []:
+                            if seg.get("id") in wanted:
+                                t = (seg.get("text") or "").strip()
+                                if t:
+                                    parts.append(t)
+                        transcript_text = " ".join(parts)
                 artifact["transcript_version"] = src_entry.get("transcribed_at", "")
+                artifact["transcriptText"] = transcript_text
+                if item_label:
+                    artifact["transcriptLabel"] = item_label
             results.append(artifact)
         else:
             results.append({"_ok": False, "_error": "ffmpeg failed"})
