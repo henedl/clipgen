@@ -3143,6 +3143,12 @@ def main() -> None:
     setup_encoding()
 
     args = parse_arguments()
+
+    # Double-clicked from Finder/Explorer (frozen bundle, no CLI args) → land in
+    # Studio. The Start overlay handles in-browser spreadsheet selection.
+    if getattr(sys, "frozen", False) and not sys.argv[1:]:
+        args.studio = True
+
     utils.NO_INPUT_MODE = bool(getattr(args, "no_input", False))
     if config.DEBUGGING:
         ic(args)

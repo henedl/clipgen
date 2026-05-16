@@ -234,6 +234,58 @@ def test_parse_cli_mode_args_parses_mixed_line_separators():
     assert parsed.line_numbers == [1, 4, 5]
 
 
+def _mock_main_side_effects(monkeypatch, tmp_path):
+    """Silence the I/O-heavy parts of cli.main() so tests can drive dispatch."""
+    import os as _os
+    import server
+    import utils
+    import video
+
+    monkeypatch.setattr(cli, "setup_encoding", lambda: None)
+    monkeypatch.setattr(cli, "get_runtime_working_dir", lambda: str(tmp_path))
+    monkeypatch.setattr(_os, "chdir", lambda _p: None)
+    monkeypatch.setattr(utils, "validate_runtime_directories", lambda: None)
+    monkeypatch.setattr(video, "check_ffmpeg_tools_available", lambda: True)
+    monkeypatch.setattr(video, "check_webp_support", lambda: True)
+    monkeypatch.setattr(cli, "_maybe_apply_persisted_dirs", lambda _args: None)
+
+    captured: dict[str, object] = {}
+
+    def fake_start(*, worksheet=None, port=None, default_page="studio", **_kw):
+        captured["worksheet"] = worksheet
+        captured["default_page"] = default_page
+
+    monkeypatch.setattr(server, "start_combined_server", fake_start)
+    return captured
+
+
+def test_frozen_no_args_launches_studio(monkeypatch, tmp_path):
+    """Double-clicking the .app/.exe (frozen, no argv) should land in Studio."""
+    captured = _mock_main_side_effects(monkeypatch, tmp_path)
+    monkeypatch.setattr("sys.argv", ["clipgen"])
+    monkeypatch.setattr("sys.frozen", True, raising=False)
+
+    with pytest.raises(SystemExit) as exc:
+        cli.main()
+
+    assert exc.value.code == 0
+    assert captured.get("default_page") == "studio"
+    assert captured.get("worksheet") is None
+
+
+def test_frozen_with_explicit_flag_is_respected(monkeypatch, tmp_path):
+    """Frozen binary invoked with an explicit flag must not be overridden."""
+    captured = _mock_main_side_effects(monkeypatch, tmp_path)
+    monkeypatch.setattr("sys.argv", ["clipgen", "--screenspace"])
+    monkeypatch.setattr("sys.frozen", True, raising=False)
+
+    with pytest.raises(SystemExit) as exc:
+        cli.main()
+
+    assert exc.value.code == 0
+    assert captured.get("default_page") == "screenspace"
+
+
 def test_parse_cli_mode_args_rejects_reversed_range():
     args = _base_args(range="10-1")
     with pytest.raises(SystemExit) as exc:
