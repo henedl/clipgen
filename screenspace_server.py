@@ -868,13 +868,12 @@ def api_stashes_update(stash_id: str) -> FlaskResponse:
     if not data:
         return jsonify({"ok": False, "error": "JSON body required"}), 400
 
-    stashes = _manifest.get("stashes", [])
-    stash = next((s for s in stashes if s["id"] == stash_id), None)
-    if stash is None:
-        return jsonify({"ok": False, "error": "Stash not found"}), 404
-
     name = data.get("name", "").strip()
     with _manifest_lock:
+        stashes = _manifest.get("stashes", [])
+        stash = next((s for s in stashes if s["id"] == stash_id), None)
+        if stash is None:
+            return jsonify({"ok": False, "error": "Stash not found"}), 404
         if name:
             stash["name"] = name
         _do_persist(drain_events=False)
