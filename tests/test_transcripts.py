@@ -249,6 +249,74 @@ class TestWriteRead:
 
 
 # ---------------------------------------------------------------------------
+# _build_transcribe_kwargs / transcribe_video Whisper options
+# ---------------------------------------------------------------------------
+
+
+class TestBuildTranscribeKwargs:
+    def test_defaults_include_vad(self, monkeypatch):
+        monkeypatch.setattr(config, "TRANSCRIBE_VAD_FILTER", True)
+        kwargs = transcripts._build_transcribe_kwargs(
+            language="en", initial_prompt="test"
+        )
+        assert kwargs["vad_filter"] is True
+        assert kwargs["language"] == "en"
+        assert kwargs["initial_prompt"] == "test"
+        assert kwargs["no_speech_threshold"] == config.TRANSCRIBE_NO_SPEECH_THRESHOLD
+        assert (
+            kwargs["compression_ratio_threshold"]
+            == config.TRANSCRIBE_COMPRESSION_RATIO_THRESHOLD
+        )
+
+    def test_vad_can_be_disabled(self, monkeypatch):
+        monkeypatch.setattr(config, "TRANSCRIBE_VAD_FILTER", False)
+        kwargs = transcripts._build_transcribe_kwargs(language=None, initial_prompt="")
+        assert kwargs["vad_filter"] is False
+
+    def test_hallucination_threshold_enables_word_timestamps(self, monkeypatch):
+        monkeypatch.setattr(config, "TRANSCRIBE_HALLUCINATION_SILENCE_THRESHOLD", 2.0)
+        kwargs = transcripts._build_transcribe_kwargs(language=None, initial_prompt="")
+        assert kwargs["hallucination_silence_threshold"] == 2.0
+        assert kwargs["word_timestamps"] is True
+
+    def test_hallucination_threshold_zero_omits_word_timestamps(self, monkeypatch):
+        monkeypatch.setattr(config, "TRANSCRIBE_HALLUCINATION_SILENCE_THRESHOLD", 0.0)
+        kwargs = transcripts._build_transcribe_kwargs(language=None, initial_prompt="")
+        assert "hallucination_silence_threshold" not in kwargs
+        assert "word_timestamps" not in kwargs
+
+
+class TestTranscribeVideoWhisperKwargs:
+    def test_transcribe_passes_kwargs_to_model(self, monkeypatch):
+        captured: dict = {}
+
+        class FakeSeg:
+            text = " hello"
+            start = 0.0
+            end = 1.0
+
+        class FakeInfo:
+            language = "en"
+
+        class FakeModel:
+            def transcribe(self, path: str, **kwargs):  # noqa: ARG002
+                captured.update(kwargs)
+                return iter([FakeSeg()]), FakeInfo()
+
+        monkeypatch.setattr(config, "DEBUGGING", False)
+        monkeypatch.setattr(
+            transcripts, "_load_model", lambda model_name=None: FakeModel()
+        )
+        monkeypatch.setattr(config, "TRANSCRIBE_VAD_FILTER", True)
+        monkeypatch.setattr(config, "TRANSCRIBE_HALLUCINATION_SILENCE_THRESHOLD", 0.0)
+
+        result = transcripts.transcribe_video("/fake/video.mp4")
+        assert result is not None
+        assert captured["vad_filter"] is True
+        assert "word_timestamps" not in captured
+
+
+# ---------------------------------------------------------------------------
 # transcribe_video in debug mode
 # ---------------------------------------------------------------------------
 

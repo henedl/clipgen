@@ -1189,9 +1189,18 @@ def test_api_settings_includes_transcription_settings(client):
         "TRANSCRIBE_MODEL",
         "TRANSCRIBE_FORMAT",
         "TRANSCRIBE_PREWARM",
+        "TRANSCRIBE_VAD_FILTER",
+        "TRANSCRIBE_NO_SPEECH_THRESHOLD",
+        "TRANSCRIBE_LOG_PROB_THRESHOLD",
+        "TRANSCRIBE_COMPRESSION_RATIO_THRESHOLD",
+        "TRANSCRIBE_HALLUCINATION_SILENCE_THRESHOLD",
+        "TRANSCRIBE_CONDITION_ON_PREVIOUS_TEXT",
     ):
         assert name in by_name
         assert by_name[name]["tab"] == "Transcription"
+    quality = by_name["TRANSCRIBE_VAD_FILTER"]
+    assert quality["group"] == "Transcription quality"
+    assert quality["type"] == "bool"
 
 
 def test_api_settings_includes_cli_settings(client):
