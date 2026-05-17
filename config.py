@@ -247,6 +247,17 @@ TRANSCRIBE_COMPUTE_TYPE: str = "int8"  # int8 (fastest), float16, float32
 TRANSCRIBE_FORMAT: str = "md"  # md, srt, vtt
 TRANSCRIBE_INITIAL_PROMPT: str = "This is a recorded user experience research session."  # biases Whisper toward UX research terminology
 TRANSCRIBE_BEAM_SIZE: int = 5  # beam search width
+TRANSCRIBE_VAD_FILTER: bool = False  # Silero VAD: transcribe speech spans only
+TRANSCRIBE_NO_SPEECH_THRESHOLD: float = (
+    0.6  # drop segments with high no-speech probability
+)
+TRANSCRIBE_LOG_PROB_THRESHOLD: float = -1.0  # drop low-confidence segments
+TRANSCRIBE_COMPRESSION_RATIO_THRESHOLD: float = 2.4  # drop repetitive / looped text
+# Seconds of surrounding silence for hallucination skip logic; 0 = off (requires word_timestamps when > 0)
+TRANSCRIBE_HALLUCINATION_SILENCE_THRESHOLD: float = 0.0
+TRANSCRIBE_CONDITION_ON_PREVIOUS_TEXT: bool = (
+    True  # False reduces chained hallucinations
+)
 # When to pre-load faster-whisper in the Transcripts web UI: off, queue_open (open Queue panel), page_load (after participants load).
 TRANSCRIBE_PREWARM: str = "queue_open"
 # Mark categories shown in the Transcripts mark popover. Each value is {label, color}.
@@ -294,6 +305,12 @@ SETTINGS_DESCRIPTIONS: dict[str, str] = {
     "TRANSCRIBE_MODEL": "Whisper model size: tiny, base, small, medium, large-v3.",
     "TRANSCRIBE_FORMAT": "Transcript output format: md (Markdown), srt, or vtt.",
     "TRANSCRIBE_PREWARM": "When the Transcripts page pre-loads the Whisper model: off, queue_open (opening a pill's options pane or hovering a pill that needs transcription), or page_load (after listing participants).",
+    "TRANSCRIBE_VAD_FILTER": "Use Silero VAD to transcribe speech spans only, skipping long silence (reduces silence hallucinations).",
+    "TRANSCRIBE_NO_SPEECH_THRESHOLD": "Drop segments when no-speech probability exceeds this value (higher = stricter).",
+    "TRANSCRIBE_LOG_PROB_THRESHOLD": "Drop segments below this average log-probability (higher = stricter).",
+    "TRANSCRIBE_COMPRESSION_RATIO_THRESHOLD": "Drop segments whose gzip compression ratio exceeds this (catches repetitive loops).",
+    "TRANSCRIBE_HALLUCINATION_SILENCE_THRESHOLD": "Seconds of surrounding silence for hallucination skip logic; 0 = off. When > 0, enables word-level timestamps (slower).",
+    "TRANSCRIBE_CONDITION_ON_PREVIOUS_TEXT": "Use prior segment text as context for the next decode; disable to reduce chained hallucinations.",
     "MARK_CATEGORIES": "Categories available when marking transcript segments. Each entry has a label and a color swatch.",
     "HIGHLIGHTS_REEL_DURATION_SECONDS": "Maximum duration in seconds for the highlights reel time budget.",
     "MANIFEST_ENABLED": "Write a manifest JSON file alongside generated artifacts for session tracking.",
@@ -420,6 +437,48 @@ STUDIO_SETTINGS: dict[str, dict[str, Any]] = {
         "group": "Transcription",
         "type": "select",
         "options": ["off", "queue_open", "page_load"],
+    },
+    "TRANSCRIBE_VAD_FILTER": {
+        "tab": "Transcription",
+        "group": "Transcription quality",
+        "type": "bool",
+    },
+    "TRANSCRIBE_NO_SPEECH_THRESHOLD": {
+        "tab": "Transcription",
+        "group": "Transcription quality",
+        "type": "float",
+        "min": 0.0,
+        "max": 1.0,
+        "step": 0.05,
+    },
+    "TRANSCRIBE_LOG_PROB_THRESHOLD": {
+        "tab": "Transcription",
+        "group": "Transcription quality",
+        "type": "float",
+        "min": -2.0,
+        "max": 0.0,
+        "step": 0.1,
+    },
+    "TRANSCRIBE_COMPRESSION_RATIO_THRESHOLD": {
+        "tab": "Transcription",
+        "group": "Transcription quality",
+        "type": "float",
+        "min": 1.0,
+        "max": 10.0,
+        "step": 0.1,
+    },
+    "TRANSCRIBE_HALLUCINATION_SILENCE_THRESHOLD": {
+        "tab": "Transcription",
+        "group": "Transcription quality",
+        "type": "float",
+        "min": 0.0,
+        "max": 10.0,
+        "step": 0.5,
+    },
+    "TRANSCRIBE_CONDITION_ON_PREVIOUS_TEXT": {
+        "tab": "Transcription",
+        "group": "Transcription quality",
+        "type": "bool",
     },
     "MARK_CATEGORIES": {
         "tab": "Transcription",

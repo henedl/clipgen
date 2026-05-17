@@ -32,6 +32,10 @@ Pipeline integration: clipgen.process_clips() calls _transcribe_segments() which
 transcripts manifest for pre-existing source transcripts, then falls back to live Whisper.
 Transcript segments are embedded on clip/reel artifact records as a ``transcript`` field.
 Standalone transcript file output (type "transcript" artifacts) is opt-in via --transcribe.
+
+Anti-hallucination knobs (``config.TRANSCRIBE_*``) are passed through to faster-whisper:
+VAD pre-filter, no-speech / log-probability / compression-ratio thresholds, optional
+hallucination silence skip (requires word timestamps when > 0), and condition-on-previous-text.
 """
 
 import copy
@@ -167,6 +171,29 @@ def _load_model(model_name: str | None = None) -> Any:
         return _cached_model
 
 
+def _build_transcribe_kwargs(
+    *,
+    language: str | None,
+    initial_prompt: str,
+) -> dict[str, Any]:
+    """Return keyword arguments for ``WhisperModel.transcribe`` from config."""
+    kwargs: dict[str, Any] = {
+        "beam_size": config.TRANSCRIBE_BEAM_SIZE,
+        "language": language,
+        "initial_prompt": initial_prompt,
+        "vad_filter": config.TRANSCRIBE_VAD_FILTER,
+        "no_speech_threshold": config.TRANSCRIBE_NO_SPEECH_THRESHOLD,
+        "log_prob_threshold": config.TRANSCRIBE_LOG_PROB_THRESHOLD,
+        "compression_ratio_threshold": config.TRANSCRIBE_COMPRESSION_RATIO_THRESHOLD,
+        "condition_on_previous_text": config.TRANSCRIBE_CONDITION_ON_PREVIOUS_TEXT,
+    }
+    hall_silence = config.TRANSCRIBE_HALLUCINATION_SILENCE_THRESHOLD
+    if hall_silence > 0:
+        kwargs["hallucination_silence_threshold"] = hall_silence
+        kwargs["word_timestamps"] = True
+    return kwargs
+
+
 def transcribe_video(
     video_path: str,
     *,
@@ -212,12 +239,10 @@ def transcribe_video(
     lang = language or config.TRANSCRIBE_LANGUAGE
 
     try:
-        segments_iter, info = model.transcribe(
-            str(video_path),
-            beam_size=config.TRANSCRIBE_BEAM_SIZE,
-            language=lang,
-            initial_prompt=prompt,
+        transcribe_kwargs = _build_transcribe_kwargs(
+            language=lang, initial_prompt=prompt
         )
+        segments_iter, info = model.transcribe(str(video_path), **transcribe_kwargs)
         segments: list[TranscriptSegment] = []
         for seg in segments_iter:
             text = seg.text.strip()

@@ -486,6 +486,34 @@ def test_whisper_model_flag_rejects_invalid(monkeypatch):
         cli.parse_arguments()
 
 
+def test_no_whisper_vad_flag_disables_vad(monkeypatch):
+    import config
+
+    original = config.TRANSCRIBE_VAD_FILTER
+    try:
+        monkeypatch.setattr("sys.argv", ["clipgen.py", "--no-whisper-vad"])
+        args = cli.parse_arguments()
+        cli._apply_config_overrides(args, cli_mode=True)
+        assert config.TRANSCRIBE_VAD_FILTER is False
+    finally:
+        config.TRANSCRIBE_VAD_FILTER = original
+
+
+def test_whisper_hallucination_silence_flag_applies_to_config(monkeypatch):
+    import config
+
+    original = config.TRANSCRIBE_HALLUCINATION_SILENCE_THRESHOLD
+    try:
+        monkeypatch.setattr(
+            "sys.argv", ["clipgen.py", "--whisper-hallucination-silence", "2.5"]
+        )
+        args = cli.parse_arguments()
+        cli._apply_config_overrides(args, cli_mode=True)
+        assert config.TRANSCRIBE_HALLUCINATION_SILENCE_THRESHOLD == 2.5
+    finally:
+        config.TRANSCRIBE_HALLUCINATION_SILENCE_THRESHOLD = original
+
+
 @pytest.mark.parametrize(
     "flag,value,config_attr",
     [

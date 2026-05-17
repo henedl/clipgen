@@ -242,7 +242,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "easyocr", specifier = ">=1.7.0" },
-    { name = "faster-whisper", specifier = ">=1.0.0" },
+    { name = "faster-whisper", specifier = ">=1.2.0" },
     { name = "flask", specifier = ">=3.0.0" },
     { name = "gspread", specifier = ">=3.7.0" },
     { name = "icecream", specifier = ">=2.1.10" },

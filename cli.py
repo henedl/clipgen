@@ -234,6 +234,17 @@ Note: Non-interactive mode (using -b, -l, -r, -C, -c, -p, -k, -S, -M, -R, or -T)
         help="Whisper model for transcription: tiny, base, small, medium, large-v3 (default: base)",
     )
     transcription.add_argument(
+        "--no-whisper-vad",
+        action="store_true",
+        help="Disable Silero VAD pre-filter (transcribe full audio including long silence)",
+    )
+    transcription.add_argument(
+        "--whisper-hallucination-silence",
+        type=float,
+        metavar="SEC",
+        help="Enable hallucination silence skip when SEC > 0 (seconds; slower, uses word timestamps)",
+    )
+    transcription.add_argument(
         "--summarize",
         nargs="*",
         metavar="ID",
@@ -3011,6 +3022,12 @@ def _apply_config_overrides(args: Any, cli_mode: bool) -> CliModeArgs:
         config.TRANSCRIBE_FORMAT = args.transcript_format
     if getattr(args, "whisper_model", None):
         config.TRANSCRIBE_MODEL = args.whisper_model
+    if getattr(args, "no_whisper_vad", False):
+        config.TRANSCRIBE_VAD_FILTER = False
+    if getattr(args, "whisper_hallucination_silence", None) is not None:
+        config.TRANSCRIBE_HALLUCINATION_SILENCE_THRESHOLD = (
+            args.whisper_hallucination_silence
+        )
     if getattr(args, "ollama_model", None):
         config.OLLAMA_SUMMARY_MODEL = args.ollama_model
 
