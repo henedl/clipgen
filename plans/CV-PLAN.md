@@ -30,10 +30,36 @@ Together, these give researchers a skeleton of the video—entry points into lon
 ## Constraints to Preserve
 
 - **CPU/GPU flexibility**: Solo researchers on laptops + studio servers running as service. Detectors must degrade gracefully.
-- **Real-time iteration**: No pre-caching. Researchers adjust parameters and re-process on demand. Keep latency manageable.
+- **On-demand recomputation**: Researchers adjust parameters and re-process when they ask — avoid shipping huge precomputed frame caches or blocking the UI on full-video pre-analysis. **This does not mean “never cache”:** reuse existing decode paths, manifest reads, and detector outputs where clipgen already does (see **Relationship to Screenspace detectors**).
 - **Researcher agency**: Tool helps orient exploration, doesn't impose interpretation.
+
+## Integration map
+
+| Area | Role | Likely touchpoints |
+| --- | --- | --- |
+| **Studio** | Batch study view; spreadsheet-linked timeline and markers | [`server.py`](server.py) routes, [`assets/web/studio.js`](assets/web/studio.js) timeline / Screenspace intake density UI |
+| **Screenspace** | Single-video deep analysis; per-task detectors and timeline | [`screenspace.py`](screenspace.py), [`screenspace_server.py`](screenspace_server.py), [`assets/web/screenspace.js`](assets/web/screenspace.js) (`amplitudeGraphEnabled` band on timeline — reference for Transcripts friction heatmap) |
+| **Viewer** | Exported HTML timeline | [`viewer.py`](viewer.py), viewer timeline assets |
+| **Manifest** | Persisted events remain source of truth for detectors | Screenspace manifest events; navigation curves are **additive** overlays, not replacements |
+
+**Studio-first vs Screenspace-first (open):** Optical flow / keyframes could land in Studio first (orient across many participant videos) or Screenspace first (one long session, parameter iteration). Pick one primary surface per primitive before implementation; the other can follow.
+
+## Relationship to Screenspace detectors
+
+[`screenspace.py`](screenspace.py) already computes motion, template match, scene change, and related signals for task detectors. Navigation primitives should **prefer reusing or deriving from those outputs** (e.g. aggregate existing event timestamps into an activity curve) rather than always spawning a second full-video OpenCV pass. Where no detector covers the need (e.g. session-wide optical-flow magnitude without a task), add a focused pipeline — document cost and whether results are stored on the manifest or computed ephemerally per request.
+
+## Primitive roadmap
+
+| Primitive | Phase | UI surface (initial) | Dependencies | Effort (rough) |
+| --- | --- | --- | --- | --- |
+| Optical flow magnitude over time | Near-term | Studio or Screenspace timeline density band | OpenCV / ffmpeg (existing stack) | Small–medium |
+| Keyframe / scene boundaries | Near-term | Timeline markers (Studio + Screenspace) | Frame diff or perceptual hash; no training | Small |
+| Motion summary maps | Medium | Screenspace timeline or side panel | Aggregated flow or detector events | Medium |
+| Perceptual clustering | Medium | Screenspace gallery or Studio batch | Embeddings or hash buckets; may add dep | Medium–large |
+| Attention-guided scrubbing | Medium | Timeline flags | Saliency or change-detection; GPU optional | Medium |
+| Contrastive deviation | Long | TBD (likely Screenspace task) | Example-driven model; research | Large |
 
 ## Integration Points
 
-- Optical flow and keyframes feed into existing timeline markers in Studio.
-- Screenspace manifest remains ground truth; navigation layer is additive, not prescriptive.
+- Optical flow and keyframes feed into **existing timeline markers** in Studio and/or Screenspace (same marker hit-test and seek behavior as today).
+- Screenspace manifest remains ground truth for detector-produced events; navigation layers read manifest + video metadata, write optional derived series (e.g. `navigation.flow_curve`) only if persistence is justified.
