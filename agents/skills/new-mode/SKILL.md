@@ -25,4 +25,4 @@ Missing mode-detection is the most common integration bug when adding new flags.
    - Test that the flag is accepted, dispatches correctly, and that incompatible flag combinations raise errors
 
 6. **Version bump**
-   - Increment patch in `config.py` (see `agents/skills/bump.md`)
+   - Increment patch in `build/VERSION` (see [agents/skills/bump/SKILL.md](../bump/SKILL.md))

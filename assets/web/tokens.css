@@ -1,5 +1,5 @@
 /*
- * clipgen design tokens
+ * clipgen design tokens — single source of truth for shared design values (see AGENTS.md).
  *
  * Default theme is DARK. Light is opt-in via html[data-theme="light"] (or .theme-light).
  * The redesign collapsed prefers-color-scheme handling — the product is dark-first;

@@ -29,6 +29,6 @@
    - Skip ffmpeg execution (video.py returns stubs)
    - Return stub transcript results without loading a Whisper model
 
-10. **Type errors in ty** — see `agents/skills/check.md` for common ty failure patterns.
+10. **Type errors in ty** — see [agents/skills/check/SKILL.md](../check/SKILL.md) for common ty failure patterns.
 
 11. **Tests unexpectedly passing despite broken behavior** — check whether the test is mocking at too high a level. The project avoids mocking the database/sheets layer; if a test uses a mock that doesn't reflect reality, consider replacing it with a real fixture.
