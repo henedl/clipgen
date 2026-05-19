@@ -531,6 +531,66 @@ def test_extract_gif_rejects_webp_when_unsupported(monkeypatch):
     assert called["run"] is False
 
 
+def _patch_batch_screenshots(monkeypatch, captured: dict, ext: str) -> None:
+    import config as cfg
+
+    monkeypatch.setattr(cfg, "SCREENSHOT_FORMAT", ext)
+    monkeypatch.setattr(video, "check_webp_support", lambda: True)
+
+    def fake_run(cmd, **_kw):
+        captured["cmd"] = cmd
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(video, "run_ffmpeg_process", fake_run)
+    # The artifact-collection loop needs the per-frame files to "exist" so the
+    # function returns successfully; pretend they all do.
+    monkeypatch.setattr(video.os.path, "isfile", lambda _p: True)
+    monkeypatch.setattr(video.shutil, "move", lambda _src, _dst: None)
+    monkeypatch.setattr(
+        video.files, "get_unique_filename", lambda name, file_format: name
+    )
+
+
+def test_batch_extract_screenshots_forces_image2_muxer_for_webp(monkeypatch):
+    """Regression: a single ffmpeg pass with `%04d.webp` could auto-select the
+    webp (animation) muxer and bundle every frame into one animated file. The
+    fix forces `-f image2` and `-c:v libwebp` so each interval produces a
+    separate still WebP."""
+    import config as cfg
+
+    captured: dict = {}
+    _patch_batch_screenshots(monkeypatch, captured, ".webp")
+
+    artifacts = video._batch_extract_screenshots("/in.mp4", [0, 10, 20], 10)
+    assert artifacts is not None
+    cmd = captured["cmd"]
+    assert "-f" in cmd and "image2" in cmd
+    f_idx = cmd.index("-f")
+    assert cmd[f_idx + 1] == "image2"
+    assert "-c:v" in cmd
+    cv_idx = cmd.index("-c:v")
+    assert cmd[cv_idx + 1] == "libwebp"
+    assert "-quality" in cmd
+    assert str(cfg.WEBP_QUALITY) in cmd
+    assert cmd[-1].endswith("frame_%04d.webp")
+
+
+def test_batch_extract_screenshots_png_uses_image2_without_libwebp(monkeypatch):
+    """`-f image2` is the right muxer for any `%d`-pattern still output, so it
+    is added unconditionally. `-c:v libwebp` / `-quality` must stay scoped to
+    .webp output."""
+    captured: dict = {}
+    _patch_batch_screenshots(monkeypatch, captured, ".png")
+
+    artifacts = video._batch_extract_screenshots("/in.mp4", [0, 10, 20], 10)
+    assert artifacts is not None
+    cmd = captured["cmd"]
+    assert "-f" in cmd and "image2" in cmd
+    assert "libwebp" not in cmd
+    assert "-quality" not in cmd
+    assert cmd[-1].endswith("frame_%04d.png")
+
+
 # ---- extract_frame_at_timestamp ----
 
 
