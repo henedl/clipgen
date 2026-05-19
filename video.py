@@ -1654,8 +1654,12 @@ def _batch_extract_screenshots(
             f"fps=1/{interval_seconds}",
             "-q:v",
             config.FFMPEG_SCREENSHOT_QUALITY,
-            os.path.join(tmpdir, f"frame_%04d{ext}"),
+            "-f",
+            "image2",
         ]
+        if ext.lower() == ".webp":
+            ffmpeg_command += ["-c:v", "libwebp", "-quality", str(config.WEBP_QUALITY)]
+        ffmpeg_command.append(os.path.join(tmpdir, f"frame_%04d{ext}"))
         utils.debug_print(
             f"ffmpeg batch screenshot command: {' '.join(ffmpeg_command)}"
         )
