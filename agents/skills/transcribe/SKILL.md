@@ -11,7 +11,7 @@ Omit participant IDs to transcribe all participants. This creates `.md` transcri
 Options:
 - `--whisper-model tiny|base|small|medium|large-v3` (default: `base`)
 - `--transcript-format md|srt|vtt` (default: `md`)
-- `--no-whisper-vad` — disable Silero VAD (default: VAD on via `TRANSCRIBE_VAD_FILTER`)
+- `--no-whisper-vad` — disable Silero VAD when it is enabled (`TRANSCRIBE_VAD_FILTER` is off by default; turn VAD on in Studio or `config.py` when you want speech-only decoding on long silent recordings)
 - `--whisper-hallucination-silence SEC` — enable hallucination silence skip when SEC > 0 (enables word timestamps; slower)
 
 Transcription quality knobs (`TRANSCRIBE_VAD_FILTER`, no-speech / log-probability / compression-ratio thresholds, hallucination silence threshold, condition-on-previous-text) live in `config.py` and are exposed in Studio under **Transcription → Transcription quality**. Set `TRANSCRIBE_HALLUCINATION_SILENCE_THRESHOLD` to `0` to disable silence-based hallucination skip.

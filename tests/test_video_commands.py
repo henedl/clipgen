@@ -370,6 +370,32 @@ def test_calculate_target_bitrate_typical_and_min_floor():
     assert zero_duration == 100
 
 
+def test_get_file_duration_returns_rounded_probe_duration(monkeypatch, tmp_path):
+    """After probe_video_properties, duration must not depend on a prior cache hit."""
+    video_f = tmp_path / "video.mp4"
+    video_f.write_bytes(b"x")
+    resolved = str(video_f.resolve())
+    video._file_duration_cache.pop(resolved, None)
+    video._video_properties_cache.pop(resolved, None)
+
+    monkeypatch.setattr(video.os.path, "isfile", lambda _path: True)
+
+    def fake_probe(_path: str) -> dict:
+        return {
+            "width": 1920,
+            "height": 1080,
+            "video_codec": "h264",
+            "audio_codec": None,
+            "fps": 30.0,
+            "duration": 99.4,
+            "nb_frames": 0,
+        }
+
+    monkeypatch.setattr(video, "probe_video_properties", fake_probe)
+    assert video.get_file_duration(str(video_f)) == 99
+    assert video._file_duration_cache[resolved] == 99
+
+
 def test_get_file_duration_error_paths(monkeypatch):
     # Missing file
     monkeypatch.setattr(video.os.path, "isfile", lambda _path: False)

@@ -877,7 +877,9 @@ def get_file_duration(filepath: str) -> int | None:
     if probed is not None:
         dur_f = float(probed.get("duration") or 0)
         if dur_f > 0:
-            return _file_duration_cache.get(resolved)
+            rounded = round(dur_f)
+            _file_duration_cache[resolved] = rounded
+            return rounded
 
     dur = _probe_duration_seconds_ffprobe_format(filepath)
     if dur is not None:
