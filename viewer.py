@@ -141,13 +141,13 @@ def load_screenspace_events_for_viewer() -> list[dict[str, Any]]:
     manifest = screenspace.load_screenspace_manifest()
     return [
         {
-            "id": e["id"],
-            "type": e["detector"],
-            "eventType": e["event_type"],
-            "participant": e["participant"],
-            "timeIn": e["time_in"],
-            "timeOut": e["time_out"],
-            "confidence": e["confidence"],
+            "id": e.get("id", ""),
+            "type": e.get("detector", ""),
+            "eventType": e.get("event_type", ""),
+            "participant": e.get("participant", ""),
+            "timeIn": e.get("time_in", 0.0),
+            "timeOut": e.get("time_out", 0.0),
+            "confidence": _sanitize_event_metadata(e.get("confidence", 0.0)),
             "region": e.get("region", ""),
             "metadata": _sanitize_event_metadata(e.get("metadata", {})),
         }
