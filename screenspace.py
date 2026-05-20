@@ -542,8 +542,12 @@ def compare_scene_fingerprints(
     dist = float(np.linalg.norm(stats_a - stats_b))
     color_sim = 1.0 - (dist / max_dist) if max_dist > 0 else 1.0
 
-    # Weighted average
+    # Weighted average. cv2.compareHist can return NaN on degenerate
+    # (e.g. all-zero) histograms; clamp would not catch it because
+    # NaN comparisons return False.
     score = 0.6 * hist_sim + 0.2 * edge_sim + 0.2 * color_sim
+    if not math.isfinite(score):
+        return 0.0
     return max(0.0, min(1.0, score))
 
 
@@ -3370,6 +3374,22 @@ def load_screenspace_manifest() -> dict[str, Any]:
     )
 
 
+def _sanitize_manifest_floats(obj: Any) -> Any:
+    """Recursively replace non-finite floats (NaN, ±Inf) with None.
+
+    Defense in depth: detectors operating on numpy/cv2 results can produce
+    NaN on degenerate inputs (zero-variance histograms, etc.). NaN survives
+    a min/max clamp and serializes as invalid ``NaN`` in JSON.
+    """
+    if isinstance(obj, float):
+        return obj if math.isfinite(obj) else None
+    if isinstance(obj, dict):
+        return {k: _sanitize_manifest_floats(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_sanitize_manifest_floats(v) for v in obj]
+    return obj
+
+
 def save_screenspace_manifest(
     regions: dict[str, dict[str, Any]],
     tasks: list[dict[str, Any]],
@@ -3408,15 +3428,18 @@ def save_screenspace_manifest(
                 {k: v for k, v in r.items() if k != "flow_grid"} for r in ct["result"]
             ]
         clean_tasks.append(ct)
-    return utils.save_json_manifest(
-        config.SCREENSPACE_MANIFEST_FILENAME,
+    payload = _sanitize_manifest_floats(
         {
             "regions": regions,
             "tasks": clean_tasks,
             "events": events or [],
             "stashes": stashes or [],
             "per_participant": per_participant or {},
-        },
+        }
+    )
+    return utils.save_json_manifest(
+        config.SCREENSPACE_MANIFEST_FILENAME,
+        payload,
         warn_label="screenspace manifest",
     )
 

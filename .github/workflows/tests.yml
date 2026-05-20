@@ -110,9 +110,7 @@ jobs:
           echo "$CHANGED" | grep -qx "clipgen\.py"            && add tests/test_cli_args.py tests/test_cli_modes.py tests/test_clip_pipeline.py
           echo "$CHANGED" | grep -qx "files\.py"              && add tests/test_files_and_artifacts.py tests/test_spreadsheet_generation.py
           echo "$CHANGED" | grep -qx "spreadsheet\.py"        && add tests/test_files_and_artifacts.py tests/test_selectors.py tests/test_spreadsheet_generation.py
-          echo "$CHANGED" | grep -qx "viewer\.py"             && add tests/test_cli_modes.py tests/test_files_and_artifacts.py tests/test_insights_api.py tests/test_manifest.py tests/test_viewer_data.py tests/test_viewer_inline.py
-          echo "$CHANGED" | grep -qx "insights\.py"           && add tests/test_insights.py tests/test_insights_api.py
-          echo "$CHANGED" | grep -qx "insights_server\.py"    && add tests/test_insights_api.py
+          echo "$CHANGED" | grep -qx "viewer\.py"             && add tests/test_cli_modes.py tests/test_files_and_artifacts.py tests/test_manifest.py tests/test_viewer_data.py tests/test_viewer_inline.py
           echo "$CHANGED" | grep -qx "screenspace\.py"        && add tests/test_screenspace.py tests/test_screenspace_api.py
           echo "$CHANGED" | grep -qx "screenspace_server\.py" && add tests/test_screenspace_api.py
           echo "$CHANGED" | grep -qx "server\.py"             && add tests/test_studio_api.py
@@ -131,7 +129,7 @@ jobs:
           for f in $(echo "$CHANGED" | grep "\.py$" | grep -v "^tests/"); do
             case "$f" in
               cli.py|clipgen.py|config.py|excel_io.py|files.py|google_api.py|\
-              insights.py|insights_server.py|interactive.py|screenspace.py|\
+              interactive.py|screenspace.py|\
               screenspace_server.py|server.py|spreadsheet.py|titlecards.py|\
               transcripts.py|utils.py|video.py|viewer.py) ;;
               *)

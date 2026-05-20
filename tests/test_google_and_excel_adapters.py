@@ -1,4 +1,4 @@
-from typing import cast
+from typing import Any, cast
 
 import gspread
 import google_api
@@ -54,7 +54,7 @@ def test_find_spreadsheet_by_name_prefers_exact_over_guess(monkeypatch):
 def test_get_sheet_values_retries_on_rate_limit(monkeypatch):
     class FakeAPIError(gspread.exceptions.APIError):
         def __init__(self, status_code: int):
-            self.response = type("R", (), {"status_code": status_code})()
+            self.response = cast(Any, type("R", (), {"status_code": status_code})())
 
         def __str__(self) -> str:
             return f"HTTP {self.response.status_code}"
@@ -79,7 +79,7 @@ def test_get_sheet_values_retries_on_rate_limit(monkeypatch):
 def test_get_sheet_values_does_not_retry_client_errors():
     class FakeAPIError(gspread.exceptions.APIError):
         def __init__(self, status_code: int):
-            self.response = type("R", (), {"status_code": status_code})()
+            self.response = cast(Any, type("R", (), {"status_code": status_code})())
 
         def __str__(self) -> str:
             return f"HTTP {self.response.status_code}"

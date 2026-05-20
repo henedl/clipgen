@@ -2972,6 +2972,15 @@ _EXCLUSIVE_MODES: tuple[_ModeSpec, ...] = (
             "transcript_clips",
         ),
     ),
+    _ModeSpec(
+        key="regenerate",
+        truthy=lambda a: bool(getattr(a, "regenerate", False)),
+        error="--regenerate cannot be combined with mode, format, or other standalone flags.",
+        hint="Use --regenerate with -i/-o (directories) and -v (verbose) only.",
+        # Exclude self from selector_attrs to avoid a false self-conflict.
+        selector_attrs=tuple(a for a in _BASE_SELECTOR_ATTRS if a != "regenerate")
+        + ("highlights",),
+    ),
 )
 
 
