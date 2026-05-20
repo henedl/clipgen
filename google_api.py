@@ -3,20 +3,44 @@
 
 import time
 
+from collections.abc import Callable
+from typing import Any, TypeVar
+
 import gspread
 from icecream import ic
 
 import config
 import utils
 
+_T = TypeVar("_T")
+
 
 def _is_transient_api_error(exc: gspread.exceptions.APIError) -> bool:
-    """Return True if the APIError is a transient server-side error worth retrying."""
+    """Return True if the APIError is worth retrying (5xx or rate limit)."""
     try:
         code = exc.response.status_code
     except AttributeError:
         return False
-    return code is not None and code >= 500
+    return code is not None and (code >= 500 or code == 429)
+
+
+def _call_with_api_retry(fn: Callable[[], _T], operation: str) -> _T:
+    """Call *fn*, retrying on transient Google API errors with exponential backoff."""
+    max_retries = config.GOOGLE_API_MAX_RETRIES
+    for attempt in range(max_retries + 1):
+        try:
+            return fn()
+        except gspread.exceptions.APIError as e:
+            if not _is_transient_api_error(e) or attempt == max_retries:
+                raise
+            delay = 2 ** (attempt + 1)
+            utils.warning_print(
+                f"Google API error during {operation} "
+                f"(attempt {attempt + 1}/{max_retries + 1}): {e}. "
+                f"Retrying in {delay}s..."
+            )
+            time.sleep(delay)
+    raise RuntimeError(f"Google API {operation} failed after retries")
 
 
 def get_worksheet(spreadsheet: gspread.Spreadsheet) -> gspread.Worksheet:
@@ -58,7 +82,7 @@ def get_worksheet(spreadsheet: gspread.Spreadsheet) -> gspread.Worksheet:
 def get_all_spreadsheets(connection: gspread.Client) -> list[str]:
     """Returns list of all accessible Google Spreadsheet names.
 
-    Retries on transient Google API errors (5xx) with exponential backoff.
+    Retries on transient Google API errors (429, 5xx) with exponential backoff.
 
     Args:
         connection: Google client connection object
@@ -66,23 +90,19 @@ def get_all_spreadsheets(connection: gspread.Client) -> list[str]:
     Returns:
         List of spreadsheet name strings
     """
-    max_retries = config.GOOGLE_API_MAX_RETRIES
-    for attempt in range(max_retries + 1):
-        try:
-            spreadsheet_files = list(connection.list_spreadsheet_files())
-            for doc in spreadsheet_files:
-                utils.debug_print(str(doc))
-            return [doc["name"] for doc in spreadsheet_files]
-        except gspread.exceptions.APIError as e:
-            if not _is_transient_api_error(e) or attempt == max_retries:
-                raise
-            delay = 2 ** (attempt + 1)
-            utils.warning_print(
-                f"Google API error (attempt {attempt + 1}/{max_retries + 1}): {e}. "
-                f"Retrying in {delay}s..."
-            )
-            time.sleep(delay)
-    return []
+
+    def fetch() -> list[str]:
+        spreadsheet_files = list(connection.list_spreadsheet_files())
+        for doc in spreadsheet_files:
+            utils.debug_print(str(doc))
+        return [doc["name"] for doc in spreadsheet_files]
+
+    return _call_with_api_retry(fetch, "list_spreadsheet_files")
+
+
+def get_sheet_values(sheet: Any) -> list[list[str]]:
+    """Return all worksheet cell values, retrying on transient Google API errors."""
+    return _call_with_api_retry(sheet.get_all_values, "get_all_values")
 
 
 def find_spreadsheet_by_name(search_name: str, doc_list: list[str]) -> int:

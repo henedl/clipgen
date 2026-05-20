@@ -58,12 +58,50 @@ def test_get_num_participants_and_participant_list():
     header_row = sheet_data[cells.id_cell.row - 1]
 
     num = spreadsheet.get_num_participants(
-        header_row, cells.id_cell, col_count=len(header_row)
+        header_row, cells.id_cell, cells.observation_cell
     )
     assert num == 2
 
     participants = spreadsheet.get_participant_list(header_row, cells.id_cell, num)
     assert participants == ["P01", "P02"]
+
+
+def test_get_num_participants_ragged_header_row():
+    cells = _make_cells()
+    header_row = ["ID", "P01"]  # shorter than Observation column index
+
+    num = spreadsheet.get_num_participants(
+        header_row, cells.id_cell, cells.observation_cell
+    )
+    assert num == 1
+
+
+def test_get_num_participants_stops_at_observation_and_ignores_proctor():
+    cells = SimpleNamespace(
+        id_cell=SimpleNamespace(row=2, col=1),
+        observation_cell=SimpleNamespace(row=2, col=4),
+        category_cell=SimpleNamespace(row=2, col=6),
+    )
+    header_row = ["ID", "P01", "P02", "Observation", "Category", "Proctor"]
+
+    num = spreadsheet.get_num_participants(
+        header_row, cells.id_cell, cells.observation_cell
+    )
+    assert num == 2
+
+
+def test_collect_categories_skips_ragged_rows():
+    sheet_data = [
+        ["Study"],
+        ["ID", "P01", "P02", "Observation", "Category"],
+        ["1", "00:10", "", "Obs one", "CatA"],
+        ["2", "00:20"],  # row missing Category column
+        ["3", "00:30", "", "Obs three", "CatB"],
+    ]
+    ctx = _make_context(sheet_data=sheet_data)
+
+    categories = spreadsheet.collect_categories(ctx)
+    assert categories == ["CatA", "CatB"]
 
 
 def test_generate_participant_timestamps_happy_path():

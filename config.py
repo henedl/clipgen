@@ -133,7 +133,7 @@ STASHES_MANIFEST_FILENAME: str = "reel_stashes.json"
 ARTIFACT_STASHES_MANIFEST_FILENAME: str = "artifact_stashes.json"
 STUDIO_SETTINGS_FILENAME: str = "studio_settings.json"
 STUDIO_CELL_EXPAND_HOVER: bool = True
-GOOGLE_API_MAX_RETRIES: int = 3  # Retries for transient Google API errors (5xx)
+GOOGLE_API_MAX_RETRIES: int = 3  # Retries for transient Google API errors (429, 5xx)
 
 STUDIO_THUMBNAIL_WIDTH: int = 200
 

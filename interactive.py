@@ -17,6 +17,7 @@ import webbrowser
 from typing import Any, Callable
 
 import config
+import google_api
 import spreadsheet
 import utils
 from spreadsheet import SheetContext
@@ -433,7 +434,7 @@ def browse_spreadsheet(sheet: Any, *, process_fn=None) -> None:
     """
 
     def _load_browse_data() -> tuple:
-        sheet_data = sheet.get_all_values()
+        sheet_data = google_api.get_sheet_values(sheet)
         if len(sheet_data) <= 1:
             return (None, None)
         header_result = spreadsheet.validate_spreadsheet_headers(sheet_data)
@@ -454,8 +455,9 @@ def browse_spreadsheet(sheet: Any, *, process_fn=None) -> None:
 
     # Get participant info
     header_row = sheet_data[id_cell.row - 1]
-    col_count = max(len(row) for row in sheet_data)
-    num_participants = spreadsheet.get_num_participants(header_row, id_cell, col_count)
+    num_participants = spreadsheet.get_num_participants(
+        header_row, id_cell, observation_cell
+    )
 
     if num_participants == 0:
         utils.warning_print(

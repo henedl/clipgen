@@ -51,6 +51,53 @@ def test_find_spreadsheet_by_name_prefers_exact_over_guess(monkeypatch):
     assert idx_reversed == 0
 
 
+def test_get_sheet_values_retries_on_rate_limit(monkeypatch):
+    class FakeAPIError(gspread.exceptions.APIError):
+        def __init__(self, status_code: int):
+            self.response = type("R", (), {"status_code": status_code})()
+
+        def __str__(self) -> str:
+            return f"HTTP {self.response.status_code}"
+
+    calls = {"n": 0}
+
+    class FakeSheet:
+        def get_all_values(self):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise FakeAPIError(429)
+            return [["Study"], ["ID", "P01"]]
+
+    monkeypatch.setattr(google_api.time, "sleep", lambda _s: None)
+    assert google_api.get_sheet_values(FakeSheet()) == [
+        ["Study"],
+        ["ID", "P01"],
+    ]
+    assert calls["n"] == 2
+
+
+def test_get_sheet_values_does_not_retry_client_errors():
+    class FakeAPIError(gspread.exceptions.APIError):
+        def __init__(self, status_code: int):
+            self.response = type("R", (), {"status_code": status_code})()
+
+        def __str__(self) -> str:
+            return f"HTTP {self.response.status_code}"
+
+    calls = {"n": 0}
+
+    class FakeSheet:
+        def get_all_values(self):
+            calls["n"] += 1
+            raise FakeAPIError(403)
+
+    import pytest
+
+    with pytest.raises(FakeAPIError):
+        google_api.get_sheet_values(FakeSheet())
+    assert calls["n"] == 1
+
+
 def test_excel_sheet_adapter_basic_access(tmp_path, monkeypatch):
     # Build a tiny workbook with one sheet and some data.
     import openpyxl

@@ -40,6 +40,7 @@ import gspread
 from icecream import ic
 
 import config
+import google_api
 import utils
 from utils import ClipRecord, ReelInput
 
@@ -152,28 +153,38 @@ def _detect_baseline_row(sheet_data: list[list[str]]) -> int | None:
     return None
 
 
-def get_num_participants(header_row: list[str], id_cell: Any, col_count: int) -> int:
-    """Count the number of participant columns in the worksheet.
+def _is_participant_header(value: str) -> bool:
+    """Return True if *value* looks like a participant column header (e.g. P01, G02)."""
+    cell = (value or "").strip()
+    if not cell or cell[0] not in config.PARTICIPANT_PREFIXES:
+        return False
+    return len(cell) > 1 and cell[1].isdigit()
 
-    Looks for columns starting with participant prefixes (P or G) and stops
-    when it encounters the NOTES_COLUMN.
+
+def get_num_participants(
+    header_row: list[str], id_cell: Any, observation_cell: Any
+) -> int:
+    """Count participant columns between the ID and Observation headers.
+
+    Scans only the columns after ID up to (but not including) Observation.
+    Requires P/G prefix followed by a digit so labels like ``Proctor`` are ignored.
 
     Args:
         header_row: List of header cell values
         id_cell: The ID header cell object
-        col_count: Total number of columns in the worksheet
+        observation_cell: The Observation header cell object
 
     Returns:
         Number of participant columns found
     """
-    # Scan only columns after the ID column for participant headers
     start_col = (
         id_cell.col
     )  # id_cell.col is 1-based, so this is the 0-based index of the next column
+    end_col = observation_cell.col - 1  # exclusive 0-based index before Observation
     num_participants = sum(
         1
-        for j in range(start_col, col_count)
-        if header_row[j] and header_row[j][0] in config.PARTICIPANT_PREFIXES
+        for j in range(start_col, end_col)
+        if j < len(header_row) and _is_participant_header(header_row[j])
     )
     utils.standard_print(
         f"Found {num_participants} participants in total, spanning columns {id_cell.col + 1} to {num_participants + id_cell.col}."
@@ -187,7 +198,7 @@ def build_sheet_context(sheet: Any) -> SheetContext | None:
     Makes exactly one API call (get_all_values); all header lookups use local data.
     Returns None if validation fails (missing headers, empty sheet, no participants).
     """
-    sheet_data = sheet.get_all_values()
+    sheet_data = google_api.get_sheet_values(sheet)
     utils.debug_print(f"Sheet dumped into memory at {utils.get_current_time()}")
 
     if len(sheet_data) <= 1:
@@ -214,8 +225,7 @@ def build_sheet_context(sheet: Any) -> SheetContext | None:
     study_name = utils.normalize_study_name(study_name)
 
     header_row = sheet_data[id_cell.row - 1]
-    col_count = max(len(row) for row in sheet_data)
-    num_participants = get_num_participants(header_row, id_cell, col_count)
+    num_participants = get_num_participants(header_row, id_cell, observation_cell)
 
     filename_cell = _find_in_data(sheet_data, config.FILENAME_HEADER)
     filename_row_idx: int | None = None
@@ -705,9 +715,10 @@ def collect_categories(ctx: SheetContext) -> list[str]:
     categories = []
     category_col = ctx.category_cell.col - 1
     for i in range(ctx.first_data_row_idx, len(ctx.sheet_data)):
-        category = ctx.sheet_data[i][category_col].strip()
-        if category and category not in categories:
-            categories.append(category)
+        if category_col < len(ctx.sheet_data[i]):
+            category = ctx.sheet_data[i][category_col].strip()
+            if category and category not in categories:
+                categories.append(category)
     return categories
 
 
@@ -995,6 +1006,8 @@ def generate_category_timestamps(
     category_col = ctx.category_cell.col - 1
     for i in range(ctx.first_data_row_idx, len(ctx.sheet_data)):
         if ctx.filename_row_idx is not None and i == ctx.filename_row_idx:
+            continue
+        if category_col >= len(ctx.sheet_data[i]):
             continue
         row_category = ctx.sheet_data[i][category_col].strip()
         if row_category in selected_categories:
