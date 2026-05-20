@@ -39,6 +39,18 @@ def test_find_spreadsheet_by_name_and_guess(monkeypatch):
     assert idx_guess == 0
 
 
+def test_find_spreadsheet_by_name_prefers_exact_over_guess(monkeypatch):
+    monkeypatch.setattr(google_api.config, "DEBUGGING", False, raising=False)
+    docs = ["Playtest Data Set", "Playtest"]
+
+    idx = google_api.find_spreadsheet_by_name("Playtest", docs)
+    assert idx == 1
+
+    docs_reversed = ["Playtest", "Playtest Data Set"]
+    idx_reversed = google_api.find_spreadsheet_by_name("Playtest", docs_reversed)
+    assert idx_reversed == 0
+
+
 def test_excel_sheet_adapter_basic_access(tmp_path, monkeypatch):
     # Build a tiny workbook with one sheet and some data.
     import openpyxl

@@ -108,21 +108,30 @@ def find_spreadsheet_by_name(search_name: str, doc_list: list[str]) -> int:
         doc_name = doc.strip().lower()
         if config.DEBUGGING:
             ic(doc_name, search_name)
-        utils.debug_print(f"Attempting match with '{doc}', formatted as '{doc_name}'")
+        utils.debug_print(
+            f"Attempting exact match with '{doc}', formatted as '{doc_name}'"
+        )
         if doc_name == search_name:
             utils.debug_print(f"Matched sheet '{doc_name}' with input '{search_name}'")
             if config.DEBUGGING:
                 ic(i)
             return i
-        elif doc_name == search_name_guess:
+        utils.debug_print(f"Found no exact match at step {i}")
+
+    for i, doc in enumerate(doc_list):
+        doc_name = doc.strip().lower()
+        utils.debug_print(
+            f"Attempting guess match with '{doc}', formatted as '{doc_name}'"
+        )
+        if doc_name == search_name_guess:
             utils.debug_print(
                 f"Matched sheet '{doc_name}' with guess '{search_name_guess}'"
             )
             if config.DEBUGGING:
                 ic(i)
             return i
-        else:
-            utils.debug_print(f"Found nothing at step {i}")
+        utils.debug_print(f"Found no guess match at step {i}")
+
     if config.DEBUGGING:
         ic(-1)
     return -1
