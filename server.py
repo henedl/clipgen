@@ -754,7 +754,7 @@ def api_generate() -> FlaskResponse:
 
             # Pass 2: generate in parallel and yield as each completes
             if to_generate:
-                workers = min(4, os.cpu_count() or 1)
+                workers = pipeline._resolve_clip_workers()
                 if workers >= 2 and len(to_generate) >= 2:
                     with concurrent.futures.ThreadPoolExecutor(
                         max_workers=workers

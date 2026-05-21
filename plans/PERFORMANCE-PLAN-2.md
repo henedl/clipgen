@@ -16,7 +16,7 @@ Source review: `~/.claude/plans/system-instruction-you-are-working-shimmying-pud
 
 Seven small, independent diffs. None changes a public contract; all are safe to bundle.
 
-### 1.1 Studio uses `_resolve_clip_workers()`
+### ✅ 1.1 Studio uses `_resolve_clip_workers()`
 
 - **File:** `server.py:757`
 - **Today:** `workers = min(4, os.cpu_count() or 1)` (hardcoded).
