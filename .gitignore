@@ -29,15 +29,15 @@ build/*
 dist/
 
 # Working docs
-/*.mp4
-/*.flv
-/*.mov
-/*.mkv
-/*.webm
-/*.webp
-/*.jpg
-/*.xlsx
-output/
+*.mp4
+*.flv
+*.mov
+*.mkv
+*.webm
+*.webp
+*.jpg
+*.xlsx
+output*/
 .cursor/
 .vscode/
 .conductor/
@@ -45,13 +45,14 @@ output/
 node_modules/
 .claude/*
 !.claude/skills
-/*.html
-/*.gif
-/*.png
+*.html
+*.gif
+*.png
 *.csv
-redesign/
 
 # Files we want to keep
 !assets/titlecard.png
 !assets/endcard.png
 !assets/icons/*
+!assets/logos/*
+!assets/web/*
