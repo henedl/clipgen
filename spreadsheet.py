@@ -153,26 +153,18 @@ def _detect_baseline_row(sheet_data: list[list[str]]) -> int | None:
     return None
 
 
-def _is_participant_header(value: str) -> bool:
-    """Return True if *value* looks like a participant column header (e.g. P01, G02)."""
-    cell = (value or "").strip()
-    if not cell or cell[0] not in config.PARTICIPANT_PREFIXES:
-        return False
-    return len(cell) > 1 and cell[1].isdigit()
+def get_num_participants(header_row: list[str], id_cell: Any, col_count: int) -> int:
+    """Count the number of participant columns in the worksheet.
 
-
-def get_num_participants(
-    header_row: list[str], id_cell: Any, observation_cell: Any
-) -> int:
-    """Count participant columns between the ID and Observation headers.
-
-    Scans only the columns after ID up to (but not including) Observation.
-    Requires P/G prefix followed by a digit so labels like ``Proctor`` are ignored.
+    Scans every column after ID and counts those whose header starts with one
+    of ``config.PARTICIPANT_PREFIXES`` (P / G). Layout-agnostic: makes no
+    assumption about where Observation, Category, or other non-participant
+    columns sit relative to ID.
 
     Args:
         header_row: List of header cell values
-        id_cell: The ID header cell object
-        observation_cell: The Observation header cell object
+        id_cell: The ID header cell object (1-based ``col``)
+        col_count: Total number of columns to consider in ``header_row``
 
     Returns:
         Number of participant columns found
@@ -180,11 +172,12 @@ def get_num_participants(
     start_col = (
         id_cell.col
     )  # id_cell.col is 1-based, so this is the 0-based index of the next column
-    end_col = observation_cell.col - 1  # exclusive 0-based index before Observation
     num_participants = sum(
         1
-        for j in range(start_col, end_col)
-        if j < len(header_row) and _is_participant_header(header_row[j])
+        for j in range(start_col, col_count)
+        if j < len(header_row)
+        and header_row[j]
+        and header_row[j][0] in config.PARTICIPANT_PREFIXES
     )
     utils.standard_print(
         f"Found {num_participants} participants in total, spanning columns {id_cell.col + 1} to {num_participants + id_cell.col}."
@@ -225,7 +218,8 @@ def build_sheet_context(sheet: Any) -> SheetContext | None:
     study_name = utils.normalize_study_name(study_name)
 
     header_row = sheet_data[id_cell.row - 1]
-    num_participants = get_num_participants(header_row, id_cell, observation_cell)
+    col_count = max(len(row) for row in sheet_data)
+    num_participants = get_num_participants(header_row, id_cell, col_count)
 
     filename_cell = _find_in_data(sheet_data, config.FILENAME_HEADER)
     filename_row_idx: int | None = None

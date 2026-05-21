@@ -57,9 +57,7 @@ def test_get_num_participants_and_participant_list():
     sheet_data = _basic_sheet_data()
     header_row = sheet_data[cells.id_cell.row - 1]
 
-    num = spreadsheet.get_num_participants(
-        header_row, cells.id_cell, cells.observation_cell
-    )
+    num = spreadsheet.get_num_participants(header_row, cells.id_cell, len(header_row))
     assert num == 2
 
     participants = spreadsheet.get_participant_list(header_row, cells.id_cell, num)
@@ -67,27 +65,69 @@ def test_get_num_participants_and_participant_list():
 
 
 def test_get_num_participants_ragged_header_row():
+    """col_count may exceed header_row length (build_sheet_context derives it
+    from the longest row in the sheet). The scan must not IndexError."""
     cells = _make_cells()
-    header_row = ["ID", "P01"]  # shorter than Observation column index
+    header_row = ["ID", "P01"]
 
-    num = spreadsheet.get_num_participants(
-        header_row, cells.id_cell, cells.observation_cell
-    )
+    num = spreadsheet.get_num_participants(header_row, cells.id_cell, 5)
     assert num == 1
 
 
-def test_get_num_participants_stops_at_observation_and_ignores_proctor():
-    cells = SimpleNamespace(
-        id_cell=SimpleNamespace(row=2, col=1),
-        observation_cell=SimpleNamespace(row=2, col=4),
-        category_cell=SimpleNamespace(row=2, col=6),
-    )
-    header_row = ["ID", "P01", "P02", "Observation", "Category", "Proctor"]
+def test_get_num_participants_with_observation_before_id():
+    """Reference clipgen-test.xlsx layout: 'Observation' header appears in a
+    row above (and to the left of) the ID/participants header row. Because
+    _find_in_data returns the first match anywhere, observation_cell.col can
+    be smaller than id_cell.col. The participant scan must remain layout-
+    agnostic and still find every P*/G* column after ID."""
+    id_cell = SimpleNamespace(row=2, col=6)
+    header_row = ["", "", "", "", "", "ID", "P01", "P02", "P03", "P04"]
 
-    num = spreadsheet.get_num_participants(
-        header_row, cells.id_cell, cells.observation_cell
-    )
-    assert num == 2
+    num = spreadsheet.get_num_participants(header_row, id_cell, len(header_row))
+    assert num == 4
+
+
+def test_get_num_participants_handles_variable_column_layouts():
+    """Different studies arrange columns differently. The count must reflect
+    only the headers actually starting with P/G — never assume a fixed total
+    or that participants are sandwiched between specific columns."""
+    cases = [
+        (["ID", "P01"], 1, 1),
+        (["ID", "P01", "P02", "P03"], 1, 3),
+        (["ID", "Notes", "P01", "Tags", "G01", "G02"], 1, 3),
+        (["Notes", "ID"], 2, 0),
+    ]
+    for header_row, id_col, expected in cases:
+        id_cell = SimpleNamespace(row=1, col=id_col)
+        num = spreadsheet.get_num_participants(header_row, id_cell, len(header_row))
+        assert num == expected, f"Expected {expected} for {header_row!r}, got {num}"
+
+
+def test_build_sheet_context_with_observation_in_earlier_row():
+    """End-to-end guard for the clipgen-test.xlsx layout that regressed
+    in commit a9f66fb: 'Observation' appears in a header section several
+    rows above (and to the left of) the row that holds 'ID' and the
+    participant columns. build_sheet_context must still detect every P*
+    column rather than aborting with 'No participant columns found'."""
+    sheet_data = [
+        ["Study", "", "", "", "", "", "", "", ""],
+        ["intro", "", "", "", "", "ID", "P01", "P02", "P03"],
+        ["names", "", "", "", "", "Metadata", "Alice", "Bob", "Carol"],
+        ["Count", "Reported", "Severity", "Category", "Observation", "Summary"],
+        ["1", "", "", "CatA", "Obs one", "00:10-00:20"],
+    ]
+
+    class _Sheet:
+        def get_all_values(self):
+            return sheet_data
+
+        spreadsheet = SimpleNamespace(title="study")
+
+    ctx = spreadsheet.build_sheet_context(_Sheet())
+    assert ctx is not None
+    assert ctx.num_participants == 3
+    assert ctx.id_cell.col == 6
+    assert ctx.observation_cell.col == 5
 
 
 def test_collect_categories_skips_ragged_rows():
