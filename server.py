@@ -242,6 +242,7 @@ def api_thumbnail(participant: str, start_seconds: str) -> FlaskResponse:
     cache_key = (str(video_path), start_sec)
     cached = _thumbnail_cache.get(cache_key)
     if cached is not None:
+        _thumbnail_cache.move_to_end(cache_key)
         return Response(
             cached,
             mimetype="image/jpeg",

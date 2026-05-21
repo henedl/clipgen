@@ -23,7 +23,7 @@ Seven small, independent diffs. None changes a public contract; all are safe to 
 - **Change:** `workers = pipeline._resolve_clip_workers()`. Move `_resolve_clip_workers` to `utils.py` if `server.py` should not import from `pipeline.py` (check existing import direction first).
 - **Why:** `config.CLIP_PARALLEL_WORKERS` already exists and is honored by CLI; Studio silently ignores it. Aligns the two paths and unlocks tuning.
 
-### 1.2 LRU refresh on Studio thumbnail cache hit
+### ✅ 1.2 LRU refresh on Studio thumbnail cache hit
 
 - **File:** `server.py:243-249`
 - **Today:** `cached = _thumbnail_cache.get(cache_key)` — no `move_to_end()` on hit.
