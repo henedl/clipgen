@@ -30,7 +30,7 @@ Seven small, independent diffs. None changes a public contract; all are safe to 
 - **Change:** After the `get`, before returning, `_thumbnail_cache.move_to_end(cache_key)`.
 - **Why:** Mirrors `screenspace_server.py:328-331`. Without it, hot thumbnails are evicted before cold ones under load, causing repeat ffmpeg extractions that *look* like server slowness.
 
-### 1.3 Targeted cell-class updates after queue mutations
+### ✅ 1.3 Targeted cell-class updates after queue mutations
 
 - **File:** `assets/web/studio.js`
 - **Today:** `updateCellClasses()` (lines 1483-1496) is called from 12+ sites including baselines, sidebar filters, and batch ops. It iterates *every* `.ts-cell` and runs `findInQueue` per cell.
