@@ -18,3 +18,15 @@ Patterns to apply from the start when writing new features, so dedicated optimiz
 
 - **Normalize comparison data once.** If a loop compares against a set of strings (e.g. filename matching), lowercase / normalize the set once before the loop, not inside each iteration. Sorting callbacks (`key=lambda`) are called O(n log n) times — avoid per-call work that can be hoisted.
 - **Use `DocumentFragment` for DOM batching.** When rendering lists of cards/rows, build all elements in a fragment and append once. Never append per-item inside a loop. Viewer and Screenspace already do this; apply the same pattern in any new UI list.
+
+## Tuning knobs
+
+Performance is already adaptive (auto-detected worker counts, lazy thumbnails, mtime caches), but a handful of `config.py` flags exist for users who want to push harder or trade fidelity for speed.
+
+| Knob | Default | When to change it |
+|---|---|---|
+| `CLIP_PARALLEL_WORKERS` | `0` (auto = `min(4, cpu_count)`) | Raise on machines with fast SSDs and many cores when batch clip generation is the bottleneck. Drop to `1` to force sequential ffmpeg if disk contention is the bottleneck instead. Honored by both CLI and Studio. |
+| `SCREENSPACE_PARALLEL_WORKERS` | `2` | Raise to run more concurrent Screenspace analysis tasks. Diminishing returns past CPU core count; OpenCV is already multithreaded inside each task. |
+| `SCREENSPACE_BATCH_EXTRACT` | `True` | Use ffmpeg pipe for frame extraction (faster than cv2 per-frame seek). Falls back to cv2 automatically when ffmpeg is unavailable; flip to `False` only when debugging frame mismatches. |
+| `SCREENSPACE_CV_RESOLUTION_SCALE` | `1.0` | Drop below `1.0` (e.g. `0.5`) to scan large footage faster at the cost of detection fidelity. Raise above `1.0` only when the source is noisy/compressed and detectors miss small artifacts. |
+| `GALLERY_BUNDLE_ENABLED` | `False` | Set to `True` to inline gallery images as base64, producing a single-file HTML viewer. **Do not enable for large galleries** — the HTML balloons to hundreds of MB and browsers choke. |

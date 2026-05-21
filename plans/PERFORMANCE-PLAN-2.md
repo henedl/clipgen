@@ -12,7 +12,7 @@ Source review: `~/.claude/plans/system-instruction-you-are-working-shimmying-pud
 
 ---
 
-## Phase 1 — Quick wins (single PR)
+## ✅ Phase 1 — Quick wins (single PR)
 
 Seven small, independent diffs. None changes a public contract; all are safe to bundle.
 
@@ -66,7 +66,7 @@ Seven small, independent diffs. None changes a public contract; all are safe to 
   Same semantics, no exception-driven control flow on the hot path.
 - **Verified:** TRUE — re-reading confirmed the two-format try/except chain.
 
-### 1.7 Tuning documentation
+### ✅ 1.7 Tuning documentation
 
 - **File:** `AGENTS.md` (or a new section in `agents/PERFORMANCE.md`).
 - **Add:** A short table listing the existing knobs and when to turn them: `CLIP_PARALLEL_WORKERS`, `SCREENSPACE_PARALLEL_WORKERS`, `SCREENSPACE_CV_RESOLUTION_SCALE`, `SCREENSPACE_BATCH_EXTRACT`, `GALLERY_BUNDLE_ENABLED`. Note that `GALLERY_BUNDLE_ENABLED` should not be used on large galleries.
