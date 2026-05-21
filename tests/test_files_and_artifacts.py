@@ -1,6 +1,8 @@
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 import files
 import utils
 import viewer
@@ -158,6 +160,46 @@ def test_build_artifact_records_for_clip_and_finalize_timeline_data(
     assert data["meta"]["sourceSpreadsheet"] == "Sheet"
     assert data["meta"]["sourceFileType"] == "google"
     assert data["timeline"]["duration"] > artifacts[0]["end"]
+
+
+def test_build_artifact_record_raises_when_cell_missing():
+    """Refuse cells without row/col so future callers cannot silently mint
+    colliding ids of the form ``a0c0s{seg_idx}``. Two such records would
+    dedup against each other in ``viewer.save_manifest``."""
+    clip_no_cell: ClipRecord = {
+        "cell": None,
+        "study": "study",
+        "participant": "P01",
+        "category": "CatA",
+        "desc": "Obs",
+        "cell_annotations": [],
+        "times": [("00:10", "00:20")],
+    }
+    with pytest.raises(ValueError, match="cell with row and col"):
+        utils.build_artifact_record(
+            clip_no_cell,
+            "study_P01.mp4",
+            "out_1.mp4",
+            "00:10",
+            "00:20",
+            artifact_type="clip",
+            seg_idx=0,
+        )
+
+    clip_partial_cell: ClipRecord = {
+        **clip_no_cell,
+        "cell": SimpleNamespace(row=3),
+    }
+    with pytest.raises(ValueError, match="cell with row and col"):
+        utils.build_artifact_record(
+            clip_partial_cell,
+            "study_P01.mp4",
+            "out_1.mp4",
+            "00:10",
+            "00:20",
+            artifact_type="clip",
+            seg_idx=0,
+        )
 
 
 def test_baseline_row_detection_and_relative_conversion():

@@ -8,6 +8,7 @@ import pytest
 Flask = pytest.importorskip("flask").Flask
 
 import config  # noqa: E402
+import thinking_agents  # noqa: E402
 import transcripts  # noqa: E402
 import transcripts_server  # noqa: E402
 import viewer  # noqa: E402
@@ -218,6 +219,89 @@ def test_citations_stop_when_not_running_is_noop(tr_client, _agent_state_clean):
     assert data["ok"] is True
     assert data["running"] is False
     assert "P01" not in transcripts_server._orchestrator._cancel_events["citations"]
+
+
+def test_orchestrator_stop_then_restart_isolates_run_state(
+    _agent_state_clean, monkeypatch
+):
+    """Stop-then-Regenerate must not let the old daemon's ``finally`` clobber
+    the successor run's slot.
+
+    Repro: monkeypatch the summary agent's ``run`` to block on a
+    ``threading.Event``. Spawn run_agent, call stop, spawn run_agent again
+    (which claims the slot with a fresh cancel_event), then unblock the first
+    thread. The first daemon's ``finally`` must detect that the slot is no
+    longer its own and skip cleanup, leaving the successor visible and
+    cancellable.
+    """
+    orch = transcripts_server._orchestrator
+    pid = "P01"
+
+    transcripts_server._manifest = {
+        "source_transcripts": {pid: {"segments": [{"id": "s0", "text": "x"}]}},
+        "corrections": [],
+        "marks": [],
+    }
+
+    summary_agent = thinking_agents.get_agent("summary")
+    assert summary_agent is not None
+
+    started_first = threading.Event()
+    release_first = threading.Event()
+
+    def blocking_run_first(snapshot, cancel_event):
+        started_first.set()
+        release_first.wait(timeout=5)
+        return None
+
+    monkeypatch.setitem(summary_agent, "run", blocking_run_first)
+
+    # T0: spawn run #1 — claims the slot, blocks inside the agent's run.
+    threads_before = set(orch._threads["summary"])
+    orch.run_agent("summary", pid, force=True)
+    assert started_first.wait(timeout=2), "run #1 never entered blocking_run_first"
+    new_threads = set(orch._threads["summary"]) - threads_before
+    assert len(new_threads) == 1, "expected exactly one new daemon thread for run #1"
+    thread_first = next(iter(new_threads))
+
+    # T1: stop run #1 — releases _in_flight, fires event_1, leaves event_1
+    # in _cancel_events for the daemon's finally to find.
+    assert orch.stop("summary", pid) is True
+    assert not orch.is_generating(pid, "summary")
+
+    # T2: spawn run #2 — claims the slot, overwrites _cancel_events[..][pid]
+    # with a fresh event_2.
+    started_second = threading.Event()
+    release_second = threading.Event()
+
+    def blocking_run_second(snapshot, cancel_event):
+        started_second.set()
+        release_second.wait(timeout=5)
+        return None
+
+    monkeypatch.setitem(summary_agent, "run", blocking_run_second)
+    orch.run_agent("summary", pid, force=True)
+    assert started_second.wait(timeout=2), "run #2 never entered blocking_run_second"
+    assert orch.is_generating(pid, "summary"), "run #2 did not claim the slot"
+
+    # T3: unblock run #1 — its finally must NOT clobber run #2's slot. Without
+    # the identity gate, the next two assertions would fail (run #2 would
+    # become invisible and uncancellable).
+    release_first.set()
+    # Wait for thread #1 specifically to exit so its finally has definitely
+    # fired (both daemons share the same thread name, so we must join by ref).
+    thread_first.join(timeout=2.0)
+    assert not thread_first.is_alive(), "run #1 daemon thread never exited"
+
+    assert orch.is_generating(pid, "summary"), (
+        "run #2 lost its slot to run #1's stale finally cleanup"
+    )
+    assert orch.stop("summary", pid) is True, (
+        "run #2 became uncancellable after run #1's finally fired"
+    )
+
+    # Let the second daemon drain so it does not outlive the test.
+    release_second.set()
 
 
 # ---- Model unload scheduling ----

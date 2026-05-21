@@ -1341,8 +1341,17 @@ class AgentOrchestrator:
                 )
             finally:
                 with self._lock:
-                    self._in_flight[agent_key].discard(participant)
-                    self._cancel_events[agent_key].pop(participant, None)
+                    # Only clean up if the slot is still ours. A
+                    # Stop-then-Regenerate cycle can claim the slot for a
+                    # successor run between when stop() sets our cancel_event
+                    # and when we reach this finally — in which case
+                    # _cancel_events[...][participant] now holds the
+                    # successor's event, and clobbering would orphan it
+                    # (uncancellable, invisible to is_generating).
+                    slot = self._cancel_events.get(agent_key, {}).get(participant)
+                    if slot is cancel_event:
+                        self._in_flight[agent_key].discard(participant)
+                        self._cancel_events[agent_key].pop(participant, None)
                     self._threads[agent_key].discard(t)
 
         t = threading.Thread(
