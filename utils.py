@@ -860,12 +860,28 @@ def build_artifact_record(
     Single source of truth for the artifact record shape used by clipgen_manifest
     and the timeline viewer. Callers may add or override fields after the call
     (e.g. transcripts append ``transcriptFormat``).
+
+    The artifact id is built from ``cell.row`` / ``cell.col`` and is the manifest
+    dedup key. Callers must therefore provide either a real spreadsheet cell
+    (positive row/col) or a synthetic cell with a unique ``(row, col)`` pair —
+    see ``_make_synthetic_clip_record`` in ``cli.py``, which mints negative
+    rows namespaced per-mode by ``cell_col``. Passing ``cell=None`` or a stub
+    without ``.row``/``.col`` raises ``ValueError`` to prevent silent id
+    collisions (two such records with the same ``seg_idx`` would dedup against
+    each other in ``viewer.save_manifest``).
     """
     cell = clip.get("cell")
     cell_row = getattr(cell, "row", None)
     cell_col = getattr(cell, "col", None)
+    if cell_row is None or cell_col is None:
+        raise ValueError(
+            "build_artifact_record requires a cell with row and col; "
+            "synthetic records must use a unique (row, col) pair — see "
+            "_make_synthetic_clip_record in cli.py for the negative-row "
+            "convention."
+        )
     return {
-        "id": f"a{cell_row or 0}c{cell_col or 0}s{seg_idx}",
+        "id": f"a{cell_row}c{cell_col}s{seg_idx}",
         "type": artifact_type,
         "file": Path(out_path).name,
         "thumbnail": "",
