@@ -138,7 +138,7 @@ Two larger frontend changes. Each is its own session.
   3. **If sheet load / baseline arrival dominates:** Render in chunks via `requestAnimationFrame`, yielding to paint between row batches.
   4. **Only if both still feel slow:** Virtualize rows (windowed render + spacer divs). This is the largest invasive change in the plan — keep it last.
 
-### 4.2 NDJSON streaming for `/api/generate-intake`
+### ✅ 4.2 NDJSON streaming for `/api/generate-intake`
 
 - **Files:** `server.py:1474-1497` (endpoint), `assets/web/studio.js:2946` (client).
 - **Today:** Blocking POST, single `jsonify()` response after the full batch.

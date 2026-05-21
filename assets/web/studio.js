@@ -2963,26 +2963,55 @@
         };
       });
 
-      apiPost("api/generate-intake", { items: intakePayload, format: format })
-        .then(function (data) {
-          if (data.ok && data.results) {
-            for (var ri = 0; ri < data.results.length; ri++) {
-              var res = data.results[ri];
-              var card = intakeCardEls[ri];
-              if (res.ok) {
-                totalSuccess++;
-                if (res.artifact) {
-                  allArtifacts.push(res.artifact);
-                  state.generatedArtifacts.push(res.artifact);
-                }
-                if (card) setCardResult(card, true);
-              } else {
-                totalFail++;
-                if (card) setCardResult(card, false);
-              }
-            }
+      function handleIntakeLine(line) {
+        var data;
+        try { data = JSON.parse(line); } catch (_) { return; }
+        if (!data || typeof data.index !== "number") return;
+        var card = intakeCardEls[data.index];
+        if (data.ok) {
+          totalSuccess++;
+          if (data.artifact) {
+            allArtifacts.push(data.artifact);
+            state.generatedArtifacts.push(data.artifact);
           }
-          finishBranch();
+          if (card) setCardResult(card, true);
+        } else {
+          totalFail++;
+          if (card) setCardResult(card, false);
+        }
+      }
+
+      // Streaming NDJSON response — manual fetch is required to get a reader
+      // and parse line-delimited per-item events as ffmpeg finishes each cut.
+      fetch("api/generate-intake", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ items: intakePayload, format: format }),
+      })
+        .then(function (response) {
+          if (!response.ok) throw new Error("Server error " + response.status);
+          var reader = response.body.getReader();
+          var decoder = new TextDecoder();
+          var buffer = "";
+
+          function read() {
+            return reader.read().then(function (result) {
+              if (result.done) {
+                if (buffer.trim()) handleIntakeLine(buffer.trim());
+                finishBranch();
+                return;
+              }
+              buffer += decoder.decode(result.value, { stream: true });
+              var lines = buffer.split("\n");
+              buffer = lines.pop();
+              for (var li = 0; li < lines.length; li++) {
+                if (lines[li].trim()) handleIntakeLine(lines[li].trim());
+              }
+              return read();
+            });
+          }
+
+          return read();
         })
         .catch(function () {
           for (var j = 0; j < intakeCardEls.length; j++) {
