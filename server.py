@@ -94,6 +94,8 @@ _reel_in_progress = False
 # Serializes load → mutate → save for the stash manifests so concurrent
 # stash CRUD requests don't drop each other's writes.
 _stash_lock = threading.Lock()
+# Serializes mutations to in-memory generated lists and quiet manifest saves.
+_generated_output_lock = threading.Lock()
 
 
 # Cached gspread client + threaded-auth state for the Start overlay's Google
@@ -169,6 +171,49 @@ def _try_claim_busy(slot: str) -> bool:
             _reel_in_progress = True
             return True
     return False
+
+
+def _parse_titlecard_request(
+    data: dict[str, Any],
+) -> tuple[bool | None, int | None]:
+    """Parse optional titlecard fields from a Studio JSON request body."""
+    enabled: bool | None = None
+    if data.get("titlecards_enabled") is not None:
+        enabled = bool(data["titlecards_enabled"])
+    duration: int | None = None
+    raw_duration = data.get("titlecard_duration")
+    if raw_duration is not None:
+        try:
+            val = int(raw_duration)
+            if val > 0:
+                duration = val
+        except (ValueError, TypeError):
+            pass
+    return enabled, duration
+
+
+def _extend_generated_artifacts(artifacts: list[dict[str, Any]]) -> None:
+    if not artifacts:
+        return
+    with _generated_output_lock:
+        _generated_artifacts.extend(artifacts)
+
+
+def _append_generated_artifact(artifact: dict[str, Any]) -> None:
+    with _generated_output_lock:
+        _generated_artifacts.append(artifact)
+
+
+def _extend_generated_reels(reels: list[dict[str, Any]]) -> None:
+    if not reels:
+        return
+    with _generated_output_lock:
+        _generated_reels.extend(reels)
+
+
+def _append_generated_reel(reel: dict[str, Any]) -> None:
+    with _generated_output_lock:
+        _generated_reels.append(reel)
 
 
 def _release_busy(slot: str) -> None:
@@ -493,8 +538,9 @@ def _save_manifest_quiet() -> None:
     """
     # Snapshot the shared lists before serializing so a concurrent intake or
     # generate-worker extend can't surface as a partially-saved manifest.
-    artifacts = list(_generated_artifacts)
-    reels = list(_generated_reels)
+    with _generated_output_lock:
+        artifacts = list(_generated_artifacts)
+        reels = list(_generated_reels)
     if not artifacts and not reels:
         return
     try:
@@ -733,9 +779,11 @@ def _find_existing_artifacts(
     cell_row: int, cell_col: int, artifact_type: str
 ) -> list[dict[str, Any]]:
     """Return cached artifact records for a cell+type whose files still exist on disk."""
+    with _generated_output_lock:
+        artifacts_snapshot = list(_generated_artifacts)
     matches = [
         a
-        for a in _generated_artifacts
+        for a in artifacts_snapshot
         if a.get("cellRow") == cell_row
         and a.get("cellCol") == cell_col
         and a.get("type") == artifact_type
@@ -743,7 +791,13 @@ def _find_existing_artifacts(
     return [a for a in matches if Path(utils.resolve_output_path(a["file"])).is_file()]
 
 
-def _stream_process_reel(clips: list[Any], cancel_flag: Any) -> Iterator[str]:
+def _stream_process_reel(
+    clips: list[Any],
+    cancel_flag: Any,
+    *,
+    titlecards_enabled: bool | None = None,
+    titlecard_duration_seconds: int | None = None,
+) -> Iterator[str]:
     """Run pipeline.process_reel on a worker thread and yield its progress events
     as NDJSON lines, finishing with a final result/error line.
 
@@ -765,7 +819,11 @@ def _stream_process_reel(clips: list[Any], cancel_flag: Any) -> Iterator[str]:
     def worker() -> None:
         try:
             result = pipeline.process_reel(
-                clips, cancel_flag=cancel_flag, progress_cb=on_progress
+                clips,
+                cancel_flag=cancel_flag,
+                progress_cb=on_progress,
+                titlecards_enabled=titlecards_enabled,
+                titlecard_duration_seconds=titlecard_duration_seconds,
             )
             result_holder.append(result)
         except Exception as exc:
@@ -806,7 +864,7 @@ def _stream_process_reel(clips: list[Any], cancel_flag: Any) -> Iterator[str]:
         )
         return
 
-    _generated_reels.extend(reel_records)
+    _extend_generated_reels(reel_records)
     _save_manifest_quiet()
     yield (
         json.dumps({"ok": True, "generated": generated, "reels": reel_records}) + "\n"
@@ -826,8 +884,7 @@ def api_generate() -> FlaskResponse:
     data = request.get_json(silent=True) or {}
     cell_strings = data.get("cells", [])
     output_format = data.get("format", "clip")
-    tc_enabled = data.get("titlecards_enabled")
-    tc_duration = data.get("titlecard_duration")
+    titlecards_enabled, titlecard_duration_seconds = _parse_titlecard_request(data)
 
     if not cell_strings:
         return jsonify({"ok": False, "error": "No cells specified"}), 400
@@ -861,102 +918,60 @@ def api_generate() -> FlaskResponse:
         return jsonify({"ok": False, "error": str(e)}), 500
 
     def stream() -> Any:
-        overrides: dict[str, Any] = {}
-        if tc_enabled is not None:
-            overrides["TITLECARDS_ENABLED"] = bool(tc_enabled)
-        if tc_duration is not None:
-            try:
-                val = int(tc_duration)
-                if val > 0:
-                    overrides["TITLECARD_DURATION_SECONDS"] = val
-            except (ValueError, TypeError):
-                pass
         _generate_cancel_event.clear()
         cancel_flag = _generate_cancel_event.is_set
-        with _override_config(**overrides):
-            clip_cells: set[str] = set()
+        clip_cells: set[str] = set()
 
-            # Pass 1: yield already-existing artifacts, collect clips that need generation
-            to_generate: list[tuple[Any, str]] = []
-            for clip in clips:
-                cell_str = clip["participant"] + "." + str(clip["cell"].row)
-                clip_cells.add(cell_str)
+        # Pass 1: yield already-existing artifacts, collect clips that need generation
+        to_generate: list[tuple[Any, str]] = []
+        for clip in clips:
+            cell_str = clip["participant"] + "." + str(clip["cell"].row)
+            clip_cells.add(cell_str)
 
-                existing = _find_existing_artifacts(
-                    clip["cell"].row, clip["cell"].col, output_format
-                )
-                if existing:
-                    yield (
-                        json.dumps(
-                            {
-                                "cell": cell_str,
-                                "ok": True,
-                                "generated": len(existing),
-                                "artifacts": existing,
-                                "skipped": True,
-                            }
-                        )
-                        + "\n"
-                    )
-                else:
-                    to_generate.append((clip, cell_str))
-
-            # Pass 2: generate in parallel and yield as each completes
-            if to_generate:
-                workers = pipeline._resolve_clip_workers()
-                if workers >= 2 and len(to_generate) >= 2:
-                    with concurrent.futures.ThreadPoolExecutor(
-                        max_workers=workers
-                    ) as pool:
-                        future_to_cell: dict[
-                            concurrent.futures.Future, tuple[Any, str]
-                        ] = {
-                            pool.submit(
-                                pipeline.process_clips,
-                                [clip],
-                                output_format=output_format,
-                                cancel_flag=cancel_flag,
-                            ): (clip, cell_str)
-                            for clip, cell_str in to_generate
+            existing = _find_existing_artifacts(
+                clip["cell"].row, clip["cell"].col, output_format
+            )
+            if existing:
+                yield (
+                    json.dumps(
+                        {
+                            "cell": cell_str,
+                            "ok": True,
+                            "generated": len(existing),
+                            "artifacts": existing,
+                            "skipped": True,
                         }
-                        for future in concurrent.futures.as_completed(future_to_cell):
-                            if cancel_flag():
-                                for f in future_to_cell:
-                                    f.cancel()
-                                break
-                            clip, cell_str = future_to_cell[future]
-                            try:
-                                generated, artifacts = future.result()
-                                _generated_artifacts.extend(artifacts)
-                                yield (
-                                    json.dumps(
-                                        {
-                                            "cell": cell_str,
-                                            "ok": generated > 0,
-                                            "generated": generated,
-                                            "artifacts": artifacts,
-                                        }
-                                    )
-                                    + "\n"
-                                )
-                            except Exception as e:
-                                yield (
-                                    json.dumps(
-                                        {"cell": cell_str, "ok": False, "error": str(e)}
-                                    )
-                                    + "\n"
-                                )
-                else:
-                    for clip, cell_str in to_generate:
+                    )
+                    + "\n"
+                )
+            else:
+                to_generate.append((clip, cell_str))
+
+        # Pass 2: generate in parallel and yield as each completes
+        if to_generate:
+            workers = pipeline._resolve_clip_workers()
+            if workers >= 2 and len(to_generate) >= 2:
+                with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
+                    future_to_cell: dict[concurrent.futures.Future, tuple[Any, str]] = {
+                        pool.submit(
+                            pipeline.process_clips,
+                            [clip],
+                            output_format=output_format,
+                            cancel_flag=cancel_flag,
+                            titlecards_enabled=titlecards_enabled,
+                            titlecard_duration_seconds=titlecard_duration_seconds,
+                        ): (clip, cell_str)
+                        for clip, cell_str in to_generate
+                    }
+                    for future in concurrent.futures.as_completed(future_to_cell):
                         if cancel_flag():
+                            for f in future_to_cell:
+                                f.cancel()
                             break
+                        clip, cell_str = future_to_cell[future]
                         try:
-                            generated, artifacts = pipeline.process_clips(
-                                [clip],
-                                output_format=output_format,
-                                cancel_flag=cancel_flag,
-                            )
-                            _generated_artifacts.extend(artifacts)
+                            generated, artifacts = future.result()
+                            _extend_generated_artifacts(artifacts)
                             yield (
                                 json.dumps(
                                     {
@@ -975,16 +990,45 @@ def api_generate() -> FlaskResponse:
                                 )
                                 + "\n"
                             )
+            else:
+                for clip, cell_str in to_generate:
+                    if cancel_flag():
+                        break
+                    try:
+                        generated, artifacts = pipeline.process_clips(
+                            [clip],
+                            output_format=output_format,
+                            cancel_flag=cancel_flag,
+                            titlecards_enabled=titlecards_enabled,
+                            titlecard_duration_seconds=titlecard_duration_seconds,
+                        )
+                        _extend_generated_artifacts(artifacts)
+                        yield (
+                            json.dumps(
+                                {
+                                    "cell": cell_str,
+                                    "ok": generated > 0,
+                                    "generated": generated,
+                                    "artifacts": artifacts,
+                                }
+                            )
+                            + "\n"
+                        )
+                    except Exception as e:
+                        yield (
+                            json.dumps({"cell": cell_str, "ok": False, "error": str(e)})
+                            + "\n"
+                        )
 
-            for cs in cell_strings:
-                if cs not in clip_cells:
-                    yield (
-                        json.dumps({"cell": cs, "ok": False, "error": "No clip found"})
-                        + "\n"
-                    )
-            if cancel_flag():
-                yield json.dumps({"cancelled": True}) + "\n"
-            _save_manifest_quiet()
+        for cs in cell_strings:
+            if cs not in clip_cells:
+                yield (
+                    json.dumps({"cell": cs, "ok": False, "error": "No clip found"})
+                    + "\n"
+                )
+        if cancel_flag():
+            yield json.dumps({"cancelled": True}) + "\n"
+        _save_manifest_quiet()
 
     def stream_with_busy_release() -> Any:
         try:
@@ -1063,27 +1107,17 @@ def api_reel() -> FlaskResponse:
     data = request.get_json(silent=True) or {}
     cell_strings = data.get("cells", [])
     highlights_duration = data.get("highlights_duration")
-    tc_enabled = data.get("titlecards_enabled")
-    tc_duration = data.get("titlecard_duration")
+    titlecards_enabled, titlecard_duration_seconds = _parse_titlecard_request(data)
 
     if not cell_strings:
         return jsonify({"ok": False, "error": "No cells specified"}), 400
 
-    overrides: dict[str, Any] = {}
+    highlights_overrides: dict[str, Any] = {}
     if highlights_duration is not None:
         try:
             val = int(highlights_duration)
             if val > 0:
-                overrides["HIGHLIGHTS_REEL_DURATION_SECONDS"] = val
-        except (ValueError, TypeError):
-            pass
-    if tc_enabled is not None:
-        overrides["TITLECARDS_ENABLED"] = bool(tc_enabled)
-    if tc_duration is not None:
-        try:
-            val = int(tc_duration)
-            if val > 0:
-                overrides["TITLECARD_DURATION_SECONDS"] = val
+                highlights_overrides["HIGHLIGHTS_REEL_DURATION_SECONDS"] = val
         except (ValueError, TypeError):
             pass
 
@@ -1093,7 +1127,7 @@ def api_reel() -> FlaskResponse:
         ), 409
 
     def stream() -> Any:
-        with _override_config(**overrides):
+        with _override_config(**highlights_overrides):
             try:
                 reel_input = ", ".join(cell_strings)
 
@@ -1129,7 +1163,9 @@ def api_reel() -> FlaskResponse:
                         )
                 if components:
                     expected_id = pipeline.compute_reel_id(components)
-                    for reel in _generated_reels:
+                    with _generated_output_lock:
+                        reels_snapshot = list(_generated_reels)
+                    for reel in reels_snapshot:
                         if (
                             reel.get("id") == expected_id
                             and Path(utils.resolve_output_path(reel["file"])).is_file()
@@ -1149,7 +1185,12 @@ def api_reel() -> FlaskResponse:
 
                 _reel_cancel_event.clear()
                 cancel_flag = _reel_cancel_event.is_set
-                yield from _stream_process_reel(clips, cancel_flag)
+                yield from _stream_process_reel(
+                    clips,
+                    cancel_flag,
+                    titlecards_enabled=titlecards_enabled,
+                    titlecard_duration_seconds=titlecard_duration_seconds,
+                )
             except Exception as e:
                 yield json.dumps({"ok": False, "error": str(e)}) + "\n"
 
@@ -1168,7 +1209,8 @@ def api_reel() -> FlaskResponse:
 
 @studio_bp.route("/api/viewer", methods=["POST"])
 def api_viewer() -> FlaskResponse:
-    artifacts = _generated_artifacts
+    with _generated_output_lock:
+        artifacts = list(_generated_artifacts)
     if not artifacts:
         return jsonify(
             {
@@ -1222,7 +1264,7 @@ def api_timeline_viewer() -> FlaskResponse:
         if not artifacts:
             return jsonify({"ok": False, "error": "No artifacts were generated"}), 400
 
-        _generated_artifacts.extend(artifacts)
+        _extend_generated_artifacts(artifacts)
 
         # Generate intake clips if requested
         intake_artifacts: list[dict[str, Any]] = []
@@ -1233,7 +1275,7 @@ def api_timeline_viewer() -> FlaskResponse:
                     r.pop("_error", None)
                     intake_artifacts.append(r)
             artifacts = artifacts + intake_artifacts
-            _generated_artifacts.extend(intake_artifacts)
+            _extend_generated_artifacts(intake_artifacts)
 
         study = artifacts[0].get("study", "")
         ss_events = viewer.load_screenspace_events_for_viewer()
@@ -1360,8 +1402,9 @@ def api_manifest() -> FlaskResponse:
 
     # Snapshot the shared lists so a worker thread extending mid-export
     # can't produce a partial/aliased manifest snapshot.
-    artifacts = list(_generated_artifacts)
-    reels = list(_generated_reels)
+    with _generated_output_lock:
+        artifacts = list(_generated_artifacts)
+        reels = list(_generated_reels)
     if not artifacts and not reels:
         return jsonify(
             {
@@ -1649,7 +1692,7 @@ def api_generate_intake() -> FlaskResponse:
             ok = result.pop("_ok", False)
             error = result.pop("_error", "")
             if ok:
-                _generated_artifacts.append(result)
+                _append_generated_artifact(result)
                 yield (
                     json.dumps({"index": idx, "ok": True, "artifact": result}) + "\n"
                 )
@@ -1674,19 +1717,6 @@ def api_reel_direct() -> FlaskResponse:
     if not segments:
         return jsonify({"ok": False, "error": "No segments specified"}), 400
 
-    tc_enabled = data.get("titlecards_enabled")
-    tc_duration = data.get("titlecard_duration")
-    overrides: dict[str, Any] = {}
-    if tc_enabled is not None:
-        overrides["TITLECARDS_ENABLED"] = bool(tc_enabled)
-    if tc_duration is not None:
-        try:
-            val = int(tc_duration)
-            if val > 0:
-                overrides["TITLECARD_DURATION_SECONDS"] = val
-        except (ValueError, TypeError):
-            pass
-
     if not _try_claim_busy("reel"):
         return jsonify(
             {"ok": False, "error": "A reel build is already in progress"}
@@ -1698,72 +1728,19 @@ def api_reel_direct() -> FlaskResponse:
         output_dir = Path(utils.get_effective_output_dir())
         clip_paths: list[str] = []
         temp_clips: list[str] = []
-        with _override_config(**overrides):
-            try:
-                total = len(segments)
-                yield json.dumps({"phase": "start", "total_clips": total}) + "\n"
+        try:
+            total = len(segments)
+            yield json.dumps({"phase": "start", "total_clips": total}) + "\n"
 
-                completed = 0
-                for seg in segments:
-                    if _reel_cancel_event.is_set():
-                        break
+            completed = 0
+            for seg in segments:
+                if _reel_cancel_event.is_set():
+                    break
 
-                    participant = seg.get("participant", "")
-                    start = float(seg.get("start", 0))
-                    end = float(seg.get("end", 0))
-                    if end <= start:
-                        completed += 1
-                        yield (
-                            json.dumps(
-                                {
-                                    "phase": "clip_done",
-                                    "clip_index": completed - 1,
-                                    "total_clips": total,
-                                }
-                            )
-                            + "\n"
-                        )
-                        continue
-
-                    source = seg.get("source", "screenspace")
-                    video_path = _resolve_intake_video_path(participant, source)
-
-                    if not video_path:
-                        completed += 1
-                        yield (
-                            json.dumps(
-                                {
-                                    "phase": "clip_done",
-                                    "clip_index": completed - 1,
-                                    "total_clips": total,
-                                }
-                            )
-                            + "\n"
-                        )
-                        continue
-
-                    start_str = utils.seconds_to_timestamp(int(round(start)))
-                    end_str = utils.seconds_to_timestamp(int(round(end)))
-
-                    fd, tmp_path = tempfile.mkstemp(
-                        suffix=config.FILEFORMAT, dir=str(output_dir)
-                    )
-                    # Track for cleanup BEFORE os.close(fd) or any other call
-                    # that could raise; otherwise the tmp file is on disk but
-                    # not in temp_clips, so the finally block won't unlink it.
-                    temp_clips.append(tmp_path)
-                    os.close(fd)
-
-                    ok = video.run_ffmpeg(
-                        video_path,
-                        tmp_path,
-                        start_str,
-                        end_str,
-                        config.REENCODING,
-                        cancel_flag=_reel_cancel_event.is_set,
-                    )
-                    if ok:
-                        clip_paths.append(tmp_path)
+                participant = seg.get("participant", "")
+                start = float(seg.get("start", 0))
+                end = float(seg.get("end", 0))
+                if end <= start:
                     completed += 1
                     yield (
                         json.dumps(
@@ -1775,103 +1752,153 @@ def api_reel_direct() -> FlaskResponse:
                         )
                         + "\n"
                     )
+                    continue
 
-                if _reel_cancel_event.is_set():
+                source = seg.get("source", "screenspace")
+                video_path = _resolve_intake_video_path(participant, source)
+
+                if not video_path:
+                    completed += 1
                     yield (
                         json.dumps(
                             {
-                                "ok": False,
-                                "error": "Reel generation cancelled",
-                                "cancelled": True,
+                                "phase": "clip_done",
+                                "clip_index": completed - 1,
+                                "total_clips": total,
                             }
                         )
                         + "\n"
                     )
-                    return
+                    continue
 
-                if not clip_paths:
-                    yield (
-                        json.dumps(
-                            {"ok": False, "error": "No clips could be generated"}
-                        )
-                        + "\n"
-                    )
-                    return
+                start_str = utils.seconds_to_timestamp(int(round(start)))
+                end_str = utils.seconds_to_timestamp(int(round(end)))
 
-                reel_study = _sheet_context.study_name if _sheet_context else ""
-                reel_base = f"{reel_study} intake reel" if reel_study else "intake_reel"
-                reel_name = files.get_unique_filename(f"{reel_base}{config.FILEFORMAT}")
+                fd, tmp_path = tempfile.mkstemp(
+                    suffix=config.FILEFORMAT, dir=str(output_dir)
+                )
+                # Track for cleanup BEFORE os.close(fd) or any other call
+                # that could raise; otherwise the tmp file is on disk but
+                # not in temp_clips, so the finally block won't unlink it.
+                temp_clips.append(tmp_path)
+                os.close(fd)
 
-                # Throttle concat progress emissions to ~5 Hz.
-                concat_last_emit: list[float] = [0.0]
-                concat_event_queue: queue.Queue[dict[str, Any]] = queue.Queue()
-
-                def on_concat_progress(fraction: float) -> None:
-                    import time as _time
-
-                    now = _time.monotonic()
-                    if (
-                        concat_last_emit[0] != 0.0
-                        and fraction < 0.99
-                        and now - concat_last_emit[0] < 0.2
-                    ):
-                        return
-                    concat_last_emit[0] = now
-                    concat_event_queue.put({"phase": "concat", "progress": fraction})
-
-                concat_sentinel: dict[str, Any] = {"__sentinel__": True}
-                concat_result: list[bool] = []
-
-                def concat_worker() -> None:
-                    try:
-                        result = video.concatenate_clips(
-                            clip_paths,
-                            reel_name,
-                            reencode_on_fail=True,
-                            cancel_flag=_reel_cancel_event.is_set,
-                            on_progress=on_concat_progress,
-                        )
-                        concat_result.append(result)
-                    except Exception as exc:
-                        utils.error_print(f"Concat failed: {exc}")
-                        concat_result.append(False)
-                    finally:
-                        concat_event_queue.put(concat_sentinel)
-
-                threading.Thread(target=concat_worker, daemon=True).start()
-
-                while True:
-                    event = concat_event_queue.get()
-                    if event is concat_sentinel:
-                        break
-                    yield json.dumps(event) + "\n"
-
-                ok = concat_result[0] if concat_result else False
-
+                ok = video.run_ffmpeg(
+                    video_path,
+                    tmp_path,
+                    start_str,
+                    end_str,
+                    config.REENCODING,
+                    cancel_flag=_reel_cancel_event.is_set,
+                )
                 if ok:
-                    reel_record: dict[str, Any] = {
-                        "id": f"reel_intake_{hashlib.md5(reel_name.encode()).hexdigest()[:8]}",
-                        "file": Path(reel_name).name,
-                        "source": "intake",
-                        "description": f"Intake reel ({len(clip_paths)} segments)",
-                    }
-                    _generated_reels.append(reel_record)
-                    _save_manifest_quiet()
-                    yield (
-                        json.dumps({"ok": True, "generated": 1, "reels": [reel_record]})
-                        + "\n"
+                    clip_paths.append(tmp_path)
+                completed += 1
+                yield (
+                    json.dumps(
+                        {
+                            "phase": "clip_done",
+                            "clip_index": completed - 1,
+                            "total_clips": total,
+                        }
                     )
-                else:
-                    yield (
-                        json.dumps({"ok": False, "error": "Reel concatenation failed"})
-                        + "\n"
+                    + "\n"
+                )
+
+            if _reel_cancel_event.is_set():
+                yield (
+                    json.dumps(
+                        {
+                            "ok": False,
+                            "error": "Reel generation cancelled",
+                            "cancelled": True,
+                        }
                     )
-            finally:
-                for tmp in temp_clips:
-                    try:
-                        Path(tmp).unlink(missing_ok=True)
-                    except OSError:
-                        pass
+                    + "\n"
+                )
+                return
+
+            if not clip_paths:
+                yield (
+                    json.dumps({"ok": False, "error": "No clips could be generated"})
+                    + "\n"
+                )
+                return
+
+            reel_study = _sheet_context.study_name if _sheet_context else ""
+            reel_base = f"{reel_study} intake reel" if reel_study else "intake_reel"
+            reel_name = files.get_unique_filename(f"{reel_base}{config.FILEFORMAT}")
+
+            # Throttle concat progress emissions to ~5 Hz.
+            concat_last_emit: list[float] = [0.0]
+            concat_event_queue: queue.Queue[dict[str, Any]] = queue.Queue()
+
+            def on_concat_progress(fraction: float) -> None:
+                import time as _time
+
+                now = _time.monotonic()
+                if (
+                    concat_last_emit[0] != 0.0
+                    and fraction < 0.99
+                    and now - concat_last_emit[0] < 0.2
+                ):
+                    return
+                concat_last_emit[0] = now
+                concat_event_queue.put({"phase": "concat", "progress": fraction})
+
+            concat_sentinel: dict[str, Any] = {"__sentinel__": True}
+            concat_result: list[bool] = []
+
+            def concat_worker() -> None:
+                try:
+                    result = video.concatenate_clips(
+                        clip_paths,
+                        reel_name,
+                        reencode_on_fail=True,
+                        cancel_flag=_reel_cancel_event.is_set,
+                        on_progress=on_concat_progress,
+                    )
+                    concat_result.append(result)
+                except Exception as exc:
+                    utils.error_print(f"Concat failed: {exc}")
+                    concat_result.append(False)
+                finally:
+                    concat_event_queue.put(concat_sentinel)
+
+            threading.Thread(target=concat_worker, daemon=True).start()
+
+            while True:
+                event = concat_event_queue.get()
+                if event is concat_sentinel:
+                    break
+                yield json.dumps(event) + "\n"
+
+            ok = concat_result[0] if concat_result else False
+
+            if ok:
+                reel_record: dict[str, Any] = {
+                    "id": f"reel_intake_{hashlib.md5(reel_name.encode()).hexdigest()[:8]}",
+                    "file": Path(reel_name).name,
+                    "source": "intake",
+                    "description": f"Intake reel ({len(clip_paths)} segments)",
+                }
+                _append_generated_reel(reel_record)
+                _save_manifest_quiet()
+                yield (
+                    json.dumps({"ok": True, "generated": 1, "reels": [reel_record]})
+                    + "\n"
+                )
+            else:
+                yield (
+                    json.dumps({"ok": False, "error": "Reel concatenation failed"})
+                    + "\n"
+                )
+        finally:
+            for tmp in temp_clips:
+                try:
+                    Path(tmp).unlink(missing_ok=True)
+                except OSError:
+                    pass
 
     def stream_with_busy_release() -> Iterator[str]:
         try:

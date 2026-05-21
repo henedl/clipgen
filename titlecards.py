@@ -57,6 +57,7 @@ def _build_card_frame(
     drawtext_filter: str | None = None,
     allow_color_fallback: bool = False,
     cancel_flag: Callable[[], bool] | None = None,
+    card_duration_seconds: int | None = None,
 ) -> str | None:
     """Generate a short title/end card video segment.
 
@@ -65,6 +66,12 @@ def _build_card_frame(
     """
     if not resolution:
         return None
+
+    duration = (
+        config.TITLECARD_DURATION_SECONDS
+        if card_duration_seconds is None
+        else card_duration_seconds
+    )
 
     use_image_background = background_path.is_file()
     if not use_image_background and not allow_color_fallback:
@@ -114,7 +121,7 @@ def _build_card_frame(
             "-loop",
             "1",
             "-t",
-            str(config.TITLECARD_DURATION_SECONDS),
+            str(duration),
             "-i",
             str(background_path),
             "-vf",
@@ -135,7 +142,7 @@ def _build_card_frame(
             "-f",
             "lavfi",
             "-i",
-            f"color=c=black:s={resolution}:d={config.TITLECARD_DURATION_SECONDS}",
+            f"color=c=black:s={resolution}:d={duration}",
             "-vf",
             vf_with_scale,
             "-c:v",
@@ -181,6 +188,7 @@ def build_titlecard_frame(
     resolution: str,
     *,
     cancel_flag: Callable[[], bool] | None = None,
+    card_duration_seconds: int | None = None,
 ) -> str | None:
     """Generate a short titlecard video segment for a clip."""
     return _build_card_frame(
@@ -190,6 +198,7 @@ def build_titlecard_frame(
         drawtext_filter=_build_drawtext_filter(str(clip.get("desc", ""))),
         allow_color_fallback=True,
         cancel_flag=cancel_flag,
+        card_duration_seconds=card_duration_seconds,
     )
 
 
@@ -197,6 +206,7 @@ def build_endcard_frame(
     resolution: str,
     *,
     cancel_flag: Callable[[], bool] | None = None,
+    card_duration_seconds: int | None = None,
 ) -> str | None:
     """Generate a short endcard video segment if assets/endcard.png exists."""
     return _build_card_frame(
@@ -204,6 +214,7 @@ def build_endcard_frame(
         background_path=utils.get_bundled_assets_root() / "assets" / "endcard.png",
         label="endcard",
         cancel_flag=cancel_flag,
+        card_duration_seconds=card_duration_seconds,
     )
 
 
@@ -211,23 +222,32 @@ def get_or_build_endcard(
     resolution: str,
     *,
     cancel_flag: Callable[[], bool] | None = None,
+    card_duration_seconds: int | None = None,
 ) -> str | None:
     """Return a cached endcard path for the given resolution, building if needed."""
+    duration = (
+        config.TITLECARD_DURATION_SECONDS
+        if card_duration_seconds is None
+        else card_duration_seconds
+    )
+    cache_key = f"{resolution}:{duration}"
     with _endcard_lock:
-        cached = _endcard_cache.get(resolution)
+        cached = _endcard_cache.get(cache_key)
         if cached and Path(cached).is_file():
             return cached
-    path = build_endcard_frame(resolution, cancel_flag=cancel_flag)
+    path = build_endcard_frame(
+        resolution, cancel_flag=cancel_flag, card_duration_seconds=duration
+    )
     if path:
         with _endcard_lock:
-            existing = _endcard_cache.get(resolution)
+            existing = _endcard_cache.get(cache_key)
             if existing and Path(existing).is_file():
                 try:
                     Path(path).unlink()
                 except OSError:
                     pass
                 return existing
-            _endcard_cache[resolution] = path
+            _endcard_cache[cache_key] = path
     return path
 
 
@@ -344,6 +364,8 @@ def wrap_clip_with_cards(
     *,
     cancel_flag: Callable[[], bool] | None = None,
     on_progress: Callable[[float], None] | None = None,
+    titlecards_enabled: bool | None = None,
+    titlecard_duration_seconds: int | None = None,
 ) -> bool:
     """Prepend a titlecard and append an endcard to a clip in a single ffmpeg encode.
 
@@ -354,8 +376,19 @@ def wrap_clip_with_cards(
     is supplied and returns True during a card or wrap encode, the in-flight ffmpeg
     is terminated and the original clip file is left untouched.
     """
-    if not config.TITLECARDS_ENABLED:
+    cards_enabled = (
+        config.TITLECARDS_ENABLED
+        if titlecards_enabled is None
+        else bool(titlecards_enabled)
+    )
+    if not cards_enabled:
         return True
+
+    card_duration = (
+        config.TITLECARD_DURATION_SECONDS
+        if titlecard_duration_seconds is None
+        else titlecard_duration_seconds
+    )
 
     if config.DEBUGGING:
         utils.debug_print(
@@ -387,13 +420,20 @@ def wrap_clip_with_cards(
         float(probed["duration"]) if probed and probed.get("duration") else 0.0
     )
     expected_wrap_duration = (
-        clip_duration + 2 * config.TITLECARD_DURATION_SECONDS
-        if clip_duration > 0
-        else None
+        clip_duration + 2 * card_duration if clip_duration > 0 else None
     )
 
-    titlecard_path = build_titlecard_frame(clip, resolution, cancel_flag=cancel_flag)
-    endcard_path = get_or_build_endcard(resolution, cancel_flag=cancel_flag)
+    titlecard_path = build_titlecard_frame(
+        clip,
+        resolution,
+        cancel_flag=cancel_flag,
+        card_duration_seconds=card_duration,
+    )
+    endcard_path = get_or_build_endcard(
+        resolution,
+        cancel_flag=cancel_flag,
+        card_duration_seconds=card_duration,
+    )
 
     if not titlecard_path and not endcard_path:
         # Both cards failed to build; nothing to do, keep clip as-is.
@@ -404,7 +444,7 @@ def wrap_clip_with_cards(
         clip_path=clip_path,
         endcard_path=endcard_path,
         has_clip_audio=has_clip_audio,
-        card_duration=config.TITLECARD_DURATION_SECONDS,
+        card_duration=card_duration,
     )
 
     output_temp_path: str | None = None
