@@ -2107,11 +2107,6 @@ html[data-theme="dark"] .queue-card-error .queue-card-thumb {
   display: none;
 }
 
-.studio-generating .drop-target,
-.studio-generating .ts-cell {
-  pointer-events: none;
-}
-
 .generate-progress {
   font-size: var(--text-sm);
   color: var(--color-text-dim);

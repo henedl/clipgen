@@ -40,6 +40,24 @@ _active_progress = None
 _active_secondary_task = None
 
 
+def _resolve_titlecard_options(
+    titlecards_enabled: bool | None,
+    titlecard_duration_seconds: int | None,
+) -> tuple[bool, int]:
+    """Resolve per-request titlecard settings, falling back to config defaults."""
+    enabled = (
+        config.TITLECARDS_ENABLED
+        if titlecards_enabled is None
+        else bool(titlecards_enabled)
+    )
+    duration = (
+        config.TITLECARD_DURATION_SECONDS
+        if titlecard_duration_seconds is None
+        else int(titlecard_duration_seconds)
+    )
+    return enabled, duration
+
+
 def is_excel_worksheet(worksheet: Any) -> bool:
     """Return True if worksheet is the Excel adapter (local file, no URL)."""
     spread = getattr(worksheet, "spreadsheet", None)
@@ -194,6 +212,8 @@ def _process_single_clip_segments(
     collect_paths: bool = False,
     include_severity: bool = False,
     cancel_flag: Callable[[], bool] | None = None,
+    titlecards_enabled: bool | None = None,
+    titlecard_duration_seconds: int | None = None,
 ) -> tuple[int, list[tuple[str, int]]]:
     """Process one clip's segments: run ffmpeg for each (start, end), optionally collect output paths.
 
@@ -232,10 +252,14 @@ def _process_single_clip_segments(
     )
     template = f"{filename_prefix}[{clip['category']}]{severity_tag} {clip['study']} {clip['participant']} {clip['desc']}{file_extension}"
 
+    cards_enabled, card_duration = _resolve_titlecard_options(
+        titlecards_enabled, titlecard_duration_seconds
+    )
+
     # Probe the source video once so wrap_clip_with_cards doesn't need to re-probe
     # each generated output; stream-copy cuts preserve source resolution.
     source_resolution: str | None = None
-    if output_format == "clip" and config.TITLECARDS_ENABLED:
+    if output_format == "clip" and cards_enabled:
         props = video.probe_video_properties(base_video)
         if props:
             source_resolution = f"{props['width']}x{props['height']}"
@@ -267,12 +291,14 @@ def _process_single_clip_segments(
                 reencode=config.REENCODING,
                 cancel_flag=cancel_flag,
             )
-            if ok and config.TITLECARDS_ENABLED:
+            if ok and cards_enabled:
                 ok = titlecards.wrap_clip_with_cards(
                     clip,
                     out_name,
                     resolution=source_resolution,
                     cancel_flag=cancel_flag,
+                    titlecards_enabled=cards_enabled,
+                    titlecard_duration_seconds=card_duration,
                 )
         elif output_format == "screen":
             ok = video.extract_screenshot(
@@ -592,6 +618,8 @@ def process_clips(
     include_severity: bool = False,
     *,
     cancel_flag: Callable[[], bool] | None = None,
+    titlecards_enabled: bool | None = None,
+    titlecard_duration_seconds: int | None = None,
 ) -> tuple[int, list[dict[str, Any]]]:
     """Process and generate outputs from the clips list.
 
@@ -700,6 +728,8 @@ def process_clips(
                             collect_paths=True,
                             include_severity=include_severity,
                             cancel_flag=cancel_flag,
+                            titlecards_enabled=titlecards_enabled,
+                            titlecard_duration_seconds=titlecard_duration_seconds,
                         ): idx
                         for idx, (clip, base_video) in enumerate(prepared)
                     }
@@ -736,6 +766,8 @@ def process_clips(
                         collect_paths=True,
                         include_severity=include_severity,
                         cancel_flag=cancel_flag,
+                        titlecards_enabled=titlecards_enabled,
+                        titlecard_duration_seconds=titlecard_duration_seconds,
                     ): idx
                     for idx, (clip, base_video) in enumerate(prepared)
                 }
@@ -782,6 +814,8 @@ def process_clips(
                         collect_paths=True,
                         include_severity=include_severity,
                         cancel_flag=cancel_flag,
+                        titlecards_enabled=titlecards_enabled,
+                        titlecard_duration_seconds=titlecard_duration_seconds,
                     )
                     progress.update(cut_task, advance=1)
         else:
@@ -803,6 +837,8 @@ def process_clips(
                     collect_paths=True,
                     include_severity=include_severity,
                     cancel_flag=cancel_flag,
+                    titlecards_enabled=titlecards_enabled,
+                    titlecard_duration_seconds=titlecard_duration_seconds,
                 )
 
     # -- Phase 3: Build artifacts and transcribe (sequential) ------------------
@@ -881,7 +917,10 @@ def process_clips(
         "screen": "screenshot(s)",
         "gif": "GIF(s)",
     }.get(output_format, "file(s)")
-    if config.TITLECARDS_ENABLED:
+    cards_enabled, _card_duration = _resolve_titlecard_options(
+        titlecards_enabled, titlecard_duration_seconds
+    )
+    if cards_enabled:
         titlecards.clear_endcard_cache()
 
     if outputs_skipped > 0:
@@ -904,6 +943,9 @@ def compute_reel_id(components: list[dict[str, Any]]) -> str:
 
 def _build_reel_transcript(
     components: list[dict[str, Any]],
+    *,
+    titlecards_enabled: bool | None = None,
+    titlecard_duration_seconds: int | None = None,
 ) -> list[dict[str, Any]]:
     """Assemble merged transcript for a reel from its components.
 
@@ -917,9 +959,11 @@ def _build_reel_transcript(
     merged_segments: list[dict[str, Any]] = []
     cumulative_offset = 0.0
     seg_counter = 0
-    titlecard_duration = (
-        config.TITLECARD_DURATION_SECONDS if config.TITLECARDS_ENABLED else 0
+    cards_enabled, titlecard_duration = _resolve_titlecard_options(
+        titlecards_enabled, titlecard_duration_seconds
     )
+    if not cards_enabled:
+        titlecard_duration = 0
 
     for comp in components:
         participant = comp.get("participant", "")
@@ -964,6 +1008,8 @@ def process_reel(
     output_file: str | None = None,
     cancel_flag: Callable[[], bool] | None = None,
     progress_cb: Callable[[dict[str, Any]], None] | None = None,
+    titlecards_enabled: bool | None = None,
+    titlecard_duration_seconds: int | None = None,
 ) -> tuple[int, list[dict[str, Any]]]:
     """Process clips for reel mode: generate individual clips, concatenate into one video, clean up.
 
@@ -1139,7 +1185,11 @@ def process_reel(
         "components": components,
     }
 
-    reel_transcript = _build_reel_transcript(components)
+    reel_transcript = _build_reel_transcript(
+        components,
+        titlecards_enabled=titlecards_enabled,
+        titlecard_duration_seconds=titlecard_duration_seconds,
+    )
     if reel_transcript:
         reel_record["transcript"] = reel_transcript
 

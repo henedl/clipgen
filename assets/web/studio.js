@@ -33,7 +33,9 @@
     artifactQueue: [],
     reelQueue: [],
     generatedArtifacts: [],
-    generating: false,
+    artifactGenerating: false,
+    reelGenerating: false,
+    overlayJobRunning: false,
     cellResults: {},
     stashes: [],
     artifactStashes: [],
@@ -1523,7 +1525,86 @@
     return !!(td && td.classList.contains("valid-ts"));
   }
 
+  function isAnyStudioJobRunning() {
+    return state.artifactGenerating || state.reelGenerating || state.overlayJobRunning;
+  }
+
+  function isArtifactQueueLocked() {
+    return state.artifactGenerating;
+  }
+
+  function isReelQueueLocked() {
+    return state.reelGenerating;
+  }
+
+  function updateArtifactActions() {
+    var n = state.artifactQueue.length;
+    var artLocked = isArtifactQueueLocked();
+    var reelLocked = isReelQueueLocked();
+    var genBtn = qs("#generateBtn");
+    if (genBtn) {
+      genBtn.disabled = artLocked || n === 0;
+      if (n === 0 && !artLocked) {
+        genBtn.setAttribute("data-tooltip", "Add cells to the work area first");
+      }
+    }
+    var clearBtn = qs("#clearArtifactsBtn");
+    if (clearBtn) clearBtn.disabled = artLocked;
+    var stashBtn = qs("#stashArtifactsBtn");
+    if (stashBtn) {
+      stashBtn.disabled = artLocked || n === 0;
+      if (n === 0 && !artLocked) {
+        stashBtn.setAttribute("data-tooltip", "Add cells to the work area first");
+      }
+    }
+    var addToReelBtn = qs("#addToReelBtn");
+    if (addToReelBtn) {
+      addToReelBtn.disabled = reelLocked || n === 0;
+      if (n === 0 && !reelLocked) {
+        addToReelBtn.setAttribute("data-tooltip", "Add cells to the work area first");
+      }
+    }
+  }
+
+  function updateReelActions() {
+    var n = state.reelQueue.length;
+    var reelLocked = isReelQueueLocked();
+    var buildBtn = qs("#buildReelBtn");
+    if (buildBtn) {
+      buildBtn.disabled = reelLocked || n === 0;
+      if (n === 0 && !reelLocked) {
+        buildBtn.setAttribute("data-tooltip", "Add clips to the reel first");
+      }
+    }
+    var clearBtn = qs("#clearReelBtn");
+    if (clearBtn) clearBtn.disabled = reelLocked;
+    var stashBtn = qs("#stashReelBtn");
+    if (stashBtn) {
+      stashBtn.disabled = reelLocked || n === 0;
+      if (n === 0 && !reelLocked) {
+        stashBtn.setAttribute("data-tooltip", "Add clips to the reel first");
+      }
+    }
+    var highlightsBtn = qs("#buildHighlightsBtn");
+    if (highlightsBtn) highlightsBtn.disabled = reelLocked;
+  }
+
+  function setArtifactGenerating(active) {
+    state.artifactGenerating = active;
+    setTitleSpinner("artifactsSpinner", active);
+    updateArtifactActions();
+    updateReelActions();
+  }
+
+  function setReelGenerating(active) {
+    state.reelGenerating = active;
+    setTitleSpinner("reelSpinner", active);
+    updateReelActions();
+    updateArtifactActions();
+  }
+
   function toggleArtifactCell(info) {
+    if (isArtifactQueueLocked()) return;
     if (findInQueue(state.artifactQueue, info.participant, info.row) >= 0) {
       removeAllCellEntries(state.artifactQueue, info.participant, info.row);
       renderArtifactQueue();
@@ -1538,6 +1619,7 @@
   }
 
   function toggleReelCell(info) {
+    if (isReelQueueLocked()) return;
     if (findInQueue(state.reelQueue, info.participant, info.row) >= 0) {
       removeAllCellEntries(state.reelQueue, info.participant, info.row);
       renderReelQueue();
@@ -1552,6 +1634,8 @@
   }
 
   function addToQueue(targetQueue, info, renderFn) {
+    if (targetQueue === state.artifactQueue && isArtifactQueueLocked()) return;
+    if (targetQueue === state.reelQueue && isReelQueueLocked()) return;
     var added = false;
     if (info.segIdx !== undefined) {
       if (!hasSegmentInQueue(targetQueue, info.participant, info.row, info.segIdx)) {
@@ -1627,9 +1711,11 @@
       if (batchTh) {
         var allInfos = collectCellInfos(function () { return true; });
         if (allInfos.length > 0) {
-          var targetQueue = ev.shiftKey ? state.reelQueue : state.artifactQueue;
-          var renderFn = ev.shiftKey ? renderReelQueue : renderArtifactQueue;
-          toggleBatchInQueue(targetQueue, allInfos, renderFn);
+          if (ev.shiftKey) {
+            if (!isReelQueueLocked()) toggleBatchInQueue(state.reelQueue, allInfos, renderReelQueue);
+          } else if (!isArtifactQueueLocked()) {
+            toggleBatchInQueue(state.artifactQueue, allInfos, renderArtifactQueue);
+          }
         }
         return;
       }
@@ -1643,9 +1729,11 @@
             return info.participant === pid;
           });
           if (colInfos.length > 0) {
-            var tq = ev.shiftKey ? state.reelQueue : state.artifactQueue;
-            var rf = ev.shiftKey ? renderReelQueue : renderArtifactQueue;
-            toggleBatchInQueue(tq, colInfos, rf);
+            if (ev.shiftKey) {
+              if (!isReelQueueLocked()) toggleBatchInQueue(state.reelQueue, colInfos, renderReelQueue);
+            } else if (!isArtifactQueueLocked()) {
+              toggleBatchInQueue(state.artifactQueue, colInfos, renderArtifactQueue);
+            }
           }
         }
         return;
@@ -1659,9 +1747,11 @@
           return info.row === rowNum;
         });
         if (rowInfos.length > 0) {
-          var tq2 = ev.shiftKey ? state.reelQueue : state.artifactQueue;
-          var rf2 = ev.shiftKey ? renderReelQueue : renderArtifactQueue;
-          toggleBatchInQueue(tq2, rowInfos, rf2);
+          if (ev.shiftKey) {
+            if (!isReelQueueLocked()) toggleBatchInQueue(state.reelQueue, rowInfos, renderReelQueue);
+          } else if (!isArtifactQueueLocked()) {
+            toggleBatchInQueue(state.artifactQueue, rowInfos, renderArtifactQueue);
+          }
         }
         return;
       }
@@ -1914,6 +2004,7 @@
 
   function initDropTargets() {
     setupDropTarget(qs("#artifactsList"), function (info) {
+      if (isArtifactQueueLocked()) return;
       if (info.source === "reel-stash" || info.source === "artifact-stash") {
         for (var i = 0; i < info.items.length; i++)
           addToQueue(state.artifactQueue, info.items[i], renderArtifactQueue);
@@ -1931,6 +2022,7 @@
       addToQueue(state.artifactQueue, info, renderArtifactQueue);
     });
     setupDropTarget(qs("#reelList"), function (info) {
+      if (isReelQueueLocked()) return;
       if (info.source === "reel-stash" || info.source === "artifact-stash") {
         for (var i = 0; i < info.items.length; i++)
           addToQueue(state.reelQueue, info.items[i], renderReelQueue);
@@ -2017,6 +2109,10 @@
     var list = qs("#reelList");
 
     list.addEventListener("dragstart", function (ev) {
+      if (isReelQueueLocked()) {
+        ev.preventDefault();
+        return;
+      }
       var card = ev.target.closest(".reel-card[data-reel-idx]");
       if (!card) return;
       _reelDragIdx = parseInt(card.getAttribute("data-reel-idx"), 10);
@@ -2048,6 +2144,7 @@
     });
 
     list.addEventListener("drop", function (ev) {
+      if (isReelQueueLocked()) return;
       var item = ev.target.closest(".reel-card[data-reel-idx]");
       if (!item || _reelDragIdx === null) return;
       ev.preventDefault();
@@ -2072,12 +2169,6 @@
     var list = qs("#artifactsList");
     var n = state.artifactQueue.length;
     qs("#artifactsCount").textContent = "(" + n + ")";
-    qs("#generateBtn").disabled = n === 0;
-    if (n === 0) qs("#generateBtn").setAttribute("data-tooltip", "Add cells to the work area first");
-    qs("#addToReelBtn").disabled = n === 0;
-    if (n === 0) qs("#addToReelBtn").setAttribute("data-tooltip", "Add cells to the work area first");
-    qs("#stashArtifactsBtn").disabled = n === 0;
-    if (n === 0) qs("#stashArtifactsBtn").setAttribute("data-tooltip", "Add cells to the work area first");
     list.innerHTML = "";
     saveQueues();
 
@@ -2085,9 +2176,11 @@
       list.appendChild(
         el("div", "queue-card-ghost", "Click or drag cells here to queue for generation")
       );
+      updateArtifactActions();
       return;
     }
 
+    var artLocked = isArtifactQueueLocked();
     for (var i = 0; i < n; i++) {
       var item = state.artifactQueue[i];
       var isIntake = isIntakeSource(item.source);
@@ -2102,31 +2195,33 @@
       card.setAttribute("data-row", isIntake ? "" : item.row);
       if (isIntake) card.setAttribute("data-source", item.source);
       card.setAttribute("data-seg-idx", segIdx);
-      card.setAttribute("draggable", "true");
-      (function (itm, isI) {
-        card.addEventListener("dragstart", function (ev) {
-          var data = {
-            participant: itm.participant,
-            desc: itm.desc,
-            start: itm.start,
-            end: itm.end,
-            source: isI ? itm.source : "artifact",
-          };
-          if (!isI) {
-            data.row = itm.row;
-            data.timestamp = itm.timestamp;
-            data.segIdx = itm.segIdx;
-            data.segTotal = itm.segTotal;
-          } else {
-            data.event_type = itm.event_type;
-            data.event_ids = itm.event_ids;
-            data.mark_ids = itm.mark_ids;
-          }
-          ev.dataTransfer.setData("application/json", JSON.stringify(data));
-          ev.dataTransfer.effectAllowed = "copyMove";
-          setCardDragImage(ev, this);
-        });
-      })(item, isIntake);
+      if (!artLocked) card.setAttribute("draggable", "true");
+      (function (itm, isI, locked) {
+        if (!locked) {
+          card.addEventListener("dragstart", function (ev) {
+            var data = {
+              participant: itm.participant,
+              desc: itm.desc,
+              start: itm.start,
+              end: itm.end,
+              source: isI ? itm.source : "artifact",
+            };
+            if (!isI) {
+              data.row = itm.row;
+              data.timestamp = itm.timestamp;
+              data.segIdx = itm.segIdx;
+              data.segTotal = itm.segTotal;
+            } else {
+              data.event_type = itm.event_type;
+              data.event_ids = itm.event_ids;
+              data.mark_ids = itm.mark_ids;
+            }
+            ev.dataTransfer.setData("application/json", JSON.stringify(data));
+            ev.dataTransfer.effectAllowed = "copyMove";
+            setCardDragImage(ev, this);
+          });
+        }
+      })(item, isIntake, artLocked);
 
       var thumb = el("div", "queue-card-thumb");
       var img = document.createElement("img");
@@ -2172,15 +2267,17 @@
       var removeBtn = el("button", "queue-card-remove");
       removeBtn.innerHTML = iconHTML("x-mark");
       removeBtn.title = "Remove";
-      (function (idx) {
-        removeBtn.addEventListener("click", function (ev) {
-          ev.stopPropagation();
-          var removed = state.artifactQueue.splice(idx, 1)[0];
-          if (removed.row) delete state.cellResults[cellKey(removed.participant, removed.row)];
-          renderArtifactQueue();
-          if (removed.row) updateSingleCellClass(removed.participant, removed.row);
-        });
-      })(i);
+      (function (idx, locked) {
+        if (!locked) {
+          removeBtn.addEventListener("click", function (ev) {
+            ev.stopPropagation();
+            var removed = state.artifactQueue.splice(idx, 1)[0];
+            if (removed.row) delete state.cellResults[cellKey(removed.participant, removed.row)];
+            renderArtifactQueue();
+            if (removed.row) updateSingleCellClass(removed.participant, removed.row);
+          });
+        }
+      })(i, artLocked);
       card.appendChild(removeBtn);
 
       if (!isIntake) {
@@ -2193,6 +2290,7 @@
       list.appendChild(card);
     }
     applyCardStates(list);
+    updateArtifactActions();
   }
 
   function renderReelQueue() {
@@ -2200,10 +2298,6 @@
     var list = qs("#reelList");
     var n = state.reelQueue.length;
     qs("#reelCount").textContent = "(" + n + ")";
-    qs("#buildReelBtn").disabled = n === 0;
-    if (n === 0) qs("#buildReelBtn").setAttribute("data-tooltip", "Add clips to the reel first");
-    qs("#stashReelBtn").disabled = n === 0;
-    if (n === 0) qs("#stashReelBtn").setAttribute("data-tooltip", "Add clips to the reel first");
     list.innerHTML = "";
     saveQueues();
 
@@ -2212,9 +2306,11 @@
         el("div", "queue-card-ghost", "Shift+click or drag cells here to build a reel")
       );
       qs("#reelDuration").textContent = "";
+      updateReelActions();
       return;
     }
 
+    var reelLocked = isReelQueueLocked();
     var totalDur = 0;
     for (var i = 0; i < n; i++) {
       var item = state.reelQueue[i];
@@ -2233,7 +2329,7 @@
       card.setAttribute("data-row", isIntake ? "" : item.row);
       if (isIntake) card.setAttribute("data-source", item.source);
       card.setAttribute("data-seg-idx", segIdx);
-      card.setAttribute("draggable", "true");
+      if (!reelLocked) card.setAttribute("draggable", "true");
 
       var thumb = el("div", "queue-card-thumb");
       var img = document.createElement("img");
@@ -2280,15 +2376,17 @@
       var removeBtn = el("button", "queue-card-remove");
       removeBtn.innerHTML = iconHTML("x-mark");
       removeBtn.title = "Remove";
-      (function (idx) {
-        removeBtn.addEventListener("click", function (ev) {
-          ev.stopPropagation();
-          var removed = state.reelQueue.splice(idx, 1)[0];
-          if (removed.row) delete state.cellResults[cellKey(removed.participant, removed.row)];
-          renderReelQueue();
-          if (removed.row) updateSingleCellClass(removed.participant, removed.row);
-        });
-      })(i);
+      (function (idx, locked) {
+        if (!locked) {
+          removeBtn.addEventListener("click", function (ev) {
+            ev.stopPropagation();
+            var removed = state.reelQueue.splice(idx, 1)[0];
+            if (removed.row) delete state.cellResults[cellKey(removed.participant, removed.row)];
+            renderReelQueue();
+            if (removed.row) updateSingleCellClass(removed.participant, removed.row);
+          });
+        }
+      })(i, reelLocked);
       card.appendChild(removeBtn);
 
       if (!isIntake) {
@@ -2302,6 +2400,7 @@
     }
     qs("#reelDuration").textContent = formatDuration(totalDur);
     applyCardStates(list);
+    updateReelActions();
   }
 
   // ---- Stashed reels ----
@@ -2423,7 +2522,7 @@
   }
 
   function stashCurrentReel() {
-    if (state.reelQueue.length === 0) return;
+    if (isReelQueueLocked() || state.reelQueue.length === 0) return;
 
     var items = state.reelQueue.slice();
     var totalDuration = computeReelDuration(items);
@@ -2447,6 +2546,7 @@
   }
 
   function recallStash(stash) {
+    if (isReelQueueLocked()) return;
     state.reelQueue = stash.items.slice();
     renderReelQueue();
     for (var i = 0; i < state.reelQueue.length; i++) {
@@ -2546,7 +2646,7 @@
   }
 
   function stashCurrentArtifacts() {
-    if (state.artifactQueue.length === 0) return;
+    if (isArtifactQueueLocked() || state.artifactQueue.length === 0) return;
 
     var items = state.artifactQueue.slice();
     var totalDuration = computeReelDuration(items);
@@ -2570,6 +2670,7 @@
   }
 
   function recallArtifactStash(stash) {
+    if (isArtifactQueueLocked()) return;
     state.artifactQueue = stash.items.slice();
     renderArtifactQueue();
     for (var i = 0; i < state.artifactQueue.length; i++) {
@@ -2598,6 +2699,7 @@
 
   function bindButtons() {
     qs("#clearArtifactsBtn").addEventListener("click", function () {
+      if (isArtifactQueueLocked()) return;
       var cleared = state.artifactQueue.slice();
       for (var i = 0; i < cleared.length; i++) {
         delete state.cellResults[cellKey(cleared[i].participant, cleared[i].row)];
@@ -2616,6 +2718,7 @@
     });
 
     qs("#clearReelBtn").addEventListener("click", function () {
+      if (isReelQueueLocked()) return;
       var cleared = state.reelQueue.slice();
       for (var i = 0; i < cleared.length; i++) {
         delete state.cellResults[cellKey(cleared[i].participant, cleared[i].row)];
@@ -2752,19 +2855,6 @@
     }
   }
 
-  function setGeneratingLock(locked) {
-    var ids = [
-      "#generateBtn", "#buildReelBtn", "#clearArtifactsBtn",
-      "#clearReelBtn", "#addToReelBtn", "#buildHighlightsBtn",
-      "#stashReelBtn", "#stashArtifactsBtn"
-    ];
-    for (var i = 0; i < ids.length; i++) {
-      var b = qs(ids[i]);
-      if (b) b.disabled = locked;
-    }
-    document.body.classList.toggle("studio-generating", locked);
-  }
-
   // ---- API calls ----
 
   // ---- API: artifact generation (streaming api/generate + api/generate-intake) ----
@@ -2797,10 +2887,8 @@
   }
 
   function onGenerate() {
-    if (state.generating || state.artifactQueue.length === 0) return;
-    state.generating = true;
-    setGeneratingLock(true);
-    setTitleSpinner("artifactsSpinner", true);
+    if (state.artifactGenerating || state.artifactQueue.length === 0) return;
+    setArtifactGenerating(true);
     qs("#cancelGenerateBtn").classList.remove("hidden");
 
     var format = qs("#artifactFormat").value;
@@ -2851,9 +2939,7 @@
       if (--pending > 0) return;
       updateGenerateProgress(0, 0);
       setButtonProgress("generateBtn", null);
-      setTitleSpinner("artifactsSpinner", false);
-      state.generating = false;
-      setGeneratingLock(false);
+      setArtifactGenerating(false);
       qs("#cancelGenerateBtn").classList.add("hidden");
       var msg;
       var err = null;
@@ -3050,10 +3136,8 @@
   // ---- API: reel + standalone viewers (timeline / HTML viewer) ----
 
   function onBuildReel() {
-    if (state.generating || state.reelQueue.length === 0) return;
-    state.generating = true;
-    setGeneratingLock(true);
-    setTitleSpinner("reelSpinner", true);
+    if (state.reelGenerating || state.reelQueue.length === 0) return;
+    setReelGenerating(true);
     qs("#cancelReelBtn").classList.remove("hidden");
 
     // Determine if we have intake items — use direct endpoint for mixed/intake reels
@@ -3121,9 +3205,7 @@
     function finish() {
       if (finished) return;
       finished = true;
-      state.generating = false;
-      setTitleSpinner("reelSpinner", false);
-      setGeneratingLock(false);
+      setReelGenerating(false);
       qs("#cancelReelBtn").classList.add("hidden");
       setButtonProgress("buildReelBtn", null);
 
@@ -3217,14 +3299,14 @@
   }
 
   function onBuildViewer() {
-    if (state.generating || state.generatedArtifacts.length === 0) return;
-    state.generating = true;
+    if (isAnyStudioJobRunning() || state.generatedArtifacts.length === 0) return;
+    state.overlayJobRunning = true;
 
     showOverlay("Building timeline viewer...");
 
     apiPost("api/viewer", {})
       .then(function (data) {
-        state.generating = false;
+        state.overlayJobRunning = false;
         if (data.ok) {
           showResult("Viewer created: " + (data.file || ""), null, data.file);
         } else {
@@ -3232,13 +3314,13 @@
         }
       })
       .catch(function (err) {
-        state.generating = false;
+        state.overlayJobRunning = false;
         showResult(null, "Request failed: " + err);
       });
   }
 
   function onBuildTimelineViewer() {
-    if (state.generating) return;
+    if (isAnyStudioJobRunning()) return;
 
     var ssCount = (state.intakeClusters || []).length;
     var trCount = (state.trIntakeClusters || []).length;
@@ -3265,7 +3347,7 @@
   }
 
   function startTimelineViewerBuild(includeIntake) {
-    state.generating = true;
+    state.overlayJobRunning = true;
     var body = {};
 
     var ssClusters = state.intakeClusters || [];
@@ -3304,7 +3386,7 @@
 
     apiPost("api/timeline-viewer", body)
       .then(function (data) {
-        state.generating = false;
+        state.overlayJobRunning = false;
         if (data.ok) {
           var msg = "Timeline viewer created: " + (data.file || "");
           if (data.generated) {
@@ -3316,7 +3398,7 @@
         }
       })
       .catch(function (err) {
-        state.generating = false;
+        state.overlayJobRunning = false;
         showResult(null, "Request failed: " + err);
       });
   }
@@ -3324,7 +3406,7 @@
   var _highlightsBtnOrigHTML = "";
 
   function onBuildHighlights() {
-    if (state.generating) return;
+    if (isAnyStudioJobRunning()) return;
 
     var drawer = qs("#highlightsDurationDrawer");
     var btn = qs("#buildHighlightsBtn");
@@ -3348,12 +3430,12 @@
     btn.style.minWidth = "";
     btn.innerHTML = _highlightsBtnOrigHTML;
 
-    state.generating = true;
+    setReelGenerating(true);
     showOverlay("Finding best clips (" + duration + "s budget)...");
 
     apiPost("api/highlights-preview", { highlights_duration: duration })
       .then(function (data) {
-        state.generating = false;
+        setReelGenerating(false);
         if (data.ok && data.clips && data.clips.length > 0) {
           var prev = state.reelQueue.slice();
           state.reelQueue = [];
@@ -3387,7 +3469,7 @@
         }
       })
       .catch(function (err) {
-        state.generating = false;
+        setReelGenerating(false);
         showResult(null, "Request failed: " + err);
       });
   }
@@ -3405,7 +3487,7 @@
   }
 
   function openGalleryDialog() {
-    if (state.generating) return;
+    if (isAnyStudioJobRunning()) return;
     var overlay = qs("#galleryOverlay");
     if (!overlay) return;
     overlay.classList.remove("hidden");
@@ -3419,7 +3501,7 @@
   }
 
   function submitGalleryDialog() {
-    if (state.generating) return;
+    if (isAnyStudioJobRunning()) return;
 
     var participant = qs("#galleryParticipant").value;
     var format = qs("#galleryFormat").value;
@@ -3433,12 +3515,12 @@
     }
 
     closeGalleryDialog();
-    state.generating = true;
+    state.overlayJobRunning = true;
     showOverlay("Generating gallery viewer for " + participant + "...");
 
     apiPost("api/gallery", { participant: participant, format: format, interval: interval, bundle: bundle })
       .then(function (data) {
-        state.generating = false;
+        state.overlayJobRunning = false;
         if (data.ok) {
           showResult("Gallery viewer created: " + (data.file || ""), null, data.file);
         } else {
@@ -3446,7 +3528,7 @@
         }
       })
       .catch(function (err) {
-        state.generating = false;
+        state.overlayJobRunning = false;
         showResult(null, "Request failed: " + err);
       });
   }
@@ -4194,6 +4276,7 @@
   }
 
   function intakeAddToArtifacts(cluster) {
+    if (isArtifactQueueLocked()) return;
     state.artifactQueue.push({
       participant: cluster.participant,
       start: cluster.start,
@@ -4214,6 +4297,7 @@
   }
 
   function intakeAddToReel(cluster) {
+    if (isReelQueueLocked()) return;
     state.reelQueue.push({
       participant: cluster.participant,
       start: cluster.start,
@@ -4641,6 +4725,7 @@
   }
 
   function trIntakeAddToArtifacts(cluster) {
+    if (isArtifactQueueLocked()) return;
     state.artifactQueue.push({
       participant: cluster.participant,
       start: cluster.start,
@@ -4653,6 +4738,7 @@
   }
 
   function trIntakeAddToReel(cluster) {
+    if (isReelQueueLocked()) return;
     state.reelQueue.push({
       participant: cluster.participant,
       start: cluster.start,
@@ -4925,6 +5011,8 @@
     bindDragGate();
     bindReelReorder();
     bindButtons();
+    updateArtifactActions();
+    updateReelActions();
     loadStoredBottomHeight();
     initPanelDivider();
     populateSheetSkeleton();

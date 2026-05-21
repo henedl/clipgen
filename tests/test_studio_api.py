@@ -17,9 +17,14 @@ def client(monkeypatch):
     monkeypatch.setattr(server, "_sheet_context", None)
     monkeypatch.setattr(server, "_generated_artifacts", [])
     monkeypatch.setattr(server, "_generated_reels", [])
+    server._release_busy("generate")
+    server._release_busy("reel")
 
     with app.test_client() as c:
         yield c
+
+    server._release_busy("generate")
+    server._release_busy("reel")
 
 
 @pytest.mark.parametrize(
@@ -1093,8 +1098,8 @@ def test_api_sheet_marks_valid_timestamps_only(client, monkeypatch):
     assert row_empty["P02"]["hasText"] is True
 
 
-def test_api_generate_titlecard_override(client, monkeypatch):
-    """titlecards_enabled and titlecard_duration temporarily override config during generate."""
+def test_api_generate_passes_titlecard_options_to_pipeline(client, monkeypatch):
+    """Generate passes per-request titlecard options without mutating config."""
     import types
 
     import config
@@ -1109,9 +1114,16 @@ def test_api_generate_titlecard_override(client, monkeypatch):
     def fake_generate_list(ws, mode, *, ctx=None, cell_specs, skip_prompts):
         return [{"participant": "P01", "cell": cell}]
 
-    def fake_process_clips(clips, *, output_format, cancel_flag=None):
-        captured["enabled"] = config.TITLECARDS_ENABLED
-        captured["duration"] = config.TITLECARD_DURATION_SECONDS
+    def fake_process_clips(
+        clips,
+        *,
+        output_format,
+        cancel_flag=None,
+        titlecards_enabled=None,
+        titlecard_duration_seconds=None,
+    ):
+        captured["enabled"] = titlecards_enabled
+        captured["duration"] = titlecard_duration_seconds
         return (1, [{"id": "a1", "type": "clip"}])
 
     monkeypatch.setattr("spreadsheet.generate_list", fake_generate_list)
@@ -1136,8 +1148,8 @@ def test_api_generate_titlecard_override(client, monkeypatch):
     assert config.TITLECARD_DURATION_SECONDS == original_duration
 
 
-def test_api_generate_titlecard_restored_on_error(client, monkeypatch):
-    """Titlecard config is restored even when process_clips raises."""
+def test_api_generate_titlecard_options_on_pipeline_error(client, monkeypatch):
+    """Config stays unchanged when process_clips raises."""
     import types
 
     import config
@@ -1151,7 +1163,7 @@ def test_api_generate_titlecard_restored_on_error(client, monkeypatch):
     def fake_generate_list(ws, mode, *, ctx=None, cell_specs, skip_prompts):
         return [{"participant": "P01", "cell": cell}]
 
-    def fake_process_clips(clips, *, output_format, cancel_flag=None):
+    def fake_process_clips(clips, *, output_format, cancel_flag=None, **kwargs):
         raise RuntimeError("boom")
 
     monkeypatch.setattr("spreadsheet.generate_list", fake_generate_list)
@@ -1174,8 +1186,10 @@ def test_api_generate_titlecard_restored_on_error(client, monkeypatch):
     assert config.TITLECARD_DURATION_SECONDS == original_duration
 
 
-def test_api_reel_titlecard_override(client, monkeypatch):
-    """titlecards_enabled and titlecard_duration temporarily override config during reel build."""
+def test_api_reel_passes_titlecard_options_to_pipeline(client, monkeypatch):
+    """Reel build forwards per-request titlecard options to the reel stream helper."""
+    import types
+
     import config
 
     monkeypatch.setattr(server, "_worksheet", object())
@@ -1183,12 +1197,37 @@ def test_api_reel_titlecard_override(client, monkeypatch):
     original_duration = config.TITLECARD_DURATION_SECONDS
     captured = {}
 
+    cell = types.SimpleNamespace(row=5, col=2, value="1:00-1:30")
+
     def fake_generate_list(ws, mode, *, ctx=None, reel_input, skip_prompts):
-        captured["enabled"] = config.TITLECARDS_ENABLED
-        captured["duration"] = config.TITLECARD_DURATION_SECONDS
-        return []
+        return [
+            {
+                "participant": "P01",
+                "cell": cell,
+                "times": [("1:00", "1:30")],
+                "study": "study",
+                "category": "cat",
+                "desc": "desc",
+            }
+        ]
+
+    def fake_prepare_clip(clip):
+        return clip
+
+    def fake_stream_process_reel(
+        clips,
+        cancel_flag,
+        *,
+        titlecards_enabled=None,
+        titlecard_duration_seconds=None,
+    ):
+        captured["enabled"] = titlecards_enabled
+        captured["duration"] = titlecard_duration_seconds
+        yield json.dumps({"ok": False, "error": "stub"}) + "\n"
 
     monkeypatch.setattr("spreadsheet.generate_list", fake_generate_list)
+    monkeypatch.setattr("files.prepare_clip", fake_prepare_clip)
+    monkeypatch.setattr(server, "_stream_process_reel", fake_stream_process_reel)
 
     resp = client.post(
         "/studio/api/reel",
@@ -1199,41 +1238,23 @@ def test_api_reel_titlecard_override(client, monkeypatch):
         },
     )
     assert resp.status_code == 200
-    lines = [json.loads(line) for line in resp.data.decode().strip().split("\n")]
-    assert lines[-1]["ok"] is False  # no clips → streamed error line
+    resp.data
     assert captured["enabled"] is True
     assert captured["duration"] == 4
     assert config.TITLECARDS_ENABLED == original_enabled
     assert config.TITLECARD_DURATION_SECONDS == original_duration
 
 
-def test_api_reel_titlecard_restored_on_error(client, monkeypatch):
-    """Titlecard config is restored even when generate_list raises."""
-    import config
-
-    monkeypatch.setattr(server, "_worksheet", object())
-    original_enabled = config.TITLECARDS_ENABLED
-    original_duration = config.TITLECARD_DURATION_SECONDS
-
-    def raise_generate_list(ws, mode, *, ctx=None, reel_input, skip_prompts):
-        raise RuntimeError("boom")
-
-    monkeypatch.setattr("spreadsheet.generate_list", raise_generate_list)
-
-    resp = client.post(
-        "/studio/api/reel",
-        json={
-            "cells": ["P01.5"],
-            "titlecards_enabled": True,
-            "titlecard_duration": 7,
-        },
-    )
-    assert resp.status_code == 200
-    lines = [json.loads(line) for line in resp.data.decode().strip().split("\n")]
-    assert lines[-1]["ok"] is False
-    assert "boom" in lines[-1].get("error", "")
-    assert config.TITLECARDS_ENABLED == original_enabled
-    assert config.TITLECARD_DURATION_SECONDS == original_duration
+def test_generate_and_reel_busy_slots_are_independent():
+    """Artifact generation and reel builds can claim separate busy slots."""
+    server._release_busy("generate")
+    server._release_busy("reel")
+    assert server._try_claim_busy("generate")
+    assert server._try_claim_busy("reel")
+    assert not server._try_claim_busy("generate")
+    assert not server._try_claim_busy("reel")
+    server._release_busy("generate")
+    server._release_busy("reel")
 
 
 # ---- Settings API tests ----
@@ -1631,6 +1652,7 @@ def test_api_reel_streams_progress_events(client, monkeypatch, tmp_path):
             {
                 "participant": "P01",
                 "cell": cell,
+                "times": [("1:00", "1:30")],
                 "desc": "test",
                 "category": "cat",
                 "study": "study",
@@ -1639,6 +1661,7 @@ def test_api_reel_streams_progress_events(client, monkeypatch, tmp_path):
         ]
 
     monkeypatch.setattr("spreadsheet.generate_list", fake_generate_list)
+    monkeypatch.setattr("files.prepare_clip", lambda clip: clip)
 
     reel_record = {
         "id": "r1",
@@ -1648,7 +1671,11 @@ def test_api_reel_streams_progress_events(client, monkeypatch, tmp_path):
     }
 
     def fake_process_reel(
-        clips_list, output_file=None, cancel_flag=None, progress_cb=None
+        clips_list,
+        output_file=None,
+        cancel_flag=None,
+        progress_cb=None,
+        **kwargs,
     ):
         if progress_cb is not None:
             progress_cb({"phase": "start", "total_clips": 2})

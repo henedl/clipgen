@@ -424,6 +424,96 @@ def test_large_input_videos_cached(tmp_path, monkeypatch):
     assert first[0][1].name == "study_P01.mp4"
 
 
+def test_process_clips_forwards_titlecard_options_to_wrap(monkeypatch, make_clip):
+    """Per-request titlecard settings reach wrap_clip_with_cards without config overrides."""
+    raw_clip = make_clip()
+    monkeypatch.setattr(
+        clipgen.files,
+        "prepare_clip",
+        lambda clip: _prepared_clip(clip, [("00:10", "00:20")]),
+    )
+    monkeypatch.setattr(clipgen.Path, "is_file", lambda self: True)
+    monkeypatch.setattr(clipgen.utils, "create_progress_bar", lambda: None)
+    monkeypatch.setattr(config, "CLIP_PARALLEL_WORKERS", 1)
+    monkeypatch.setattr(config, "TITLECARDS_ENABLED", False)
+    monkeypatch.setattr(
+        clipgen.files, "get_unique_filename", lambda *_a, **_k: "out.mp4"
+    )
+    monkeypatch.setattr(clipgen.video, "run_ffmpeg", lambda **_k: True)
+    monkeypatch.setattr(
+        clipgen.video,
+        "probe_video_properties",
+        lambda *_a, **_k: {"width": 1280, "height": 720},
+    )
+
+    captured = {}
+
+    def fake_wrap(_clip, _out_name, **kwargs):
+        captured.update(kwargs)
+        return True
+
+    monkeypatch.setattr(pipeline.titlecards, "wrap_clip_with_cards", fake_wrap)
+
+    pipeline.process_clips(
+        [raw_clip],
+        output_format="clip",
+        titlecards_enabled=True,
+        titlecard_duration_seconds=6,
+    )
+
+    assert captured["titlecards_enabled"] is True
+    assert captured["titlecard_duration_seconds"] == 6
+
+
+def test_build_reel_transcript_uses_request_titlecard_duration(monkeypatch):
+    """Reel transcript offsets honor per-request titlecard duration."""
+    components = [
+        {
+            "participant": "P01",
+            "start": 0.0,
+            "end": 10.0,
+            "cellRow": 1,
+            "cellCol": 2,
+        }
+    ]
+    monkeypatch.setattr(
+        pipeline.transcripts,
+        "load_transcripts_manifest",
+        lambda: {
+            "source_transcripts": {
+                "P01": {
+                    "segments": [{"start": 1.0, "end": 2.0, "text": "hi"}],
+                    "language": "en",
+                    "source_file": "t.json",
+                    "model": "tiny",
+                }
+            },
+            "corrections": [],
+        },
+    )
+    monkeypatch.setattr(
+        pipeline.transcripts,
+        "apply_corrections",
+        lambda segments, _corrections: segments,
+    )
+    monkeypatch.setattr(
+        pipeline.transcripts,
+        "filter_segments",
+        lambda full, start, end, offset_to_zero=True: {
+            "segments": [{"start": 1.0, "end": 2.0, "text": "hi"}]
+        },
+    )
+
+    merged = pipeline._build_reel_transcript(
+        components,
+        titlecards_enabled=True,
+        titlecard_duration_seconds=7,
+    )
+
+    assert merged[0]["start"] == 8.0
+    assert merged[0]["end"] == 9.0
+
+
 def test_regenerate_from_manifest_parallel(monkeypatch):
     """Independent artifacts regenerate concurrently when workers >= 2."""
     artifacts = [
