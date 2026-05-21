@@ -44,7 +44,7 @@ Seven small, independent diffs. None changes a public contract; all are safe to 
 - **Change:** Build `pairs = [(re.compile(re.escape(c["from"]), re.IGNORECASE), c["to"]) for c in corrections ...]` once at function entry; iterate that list inside the segment loop.
 - **Verified:** TRUE — re-reading the source confirms the recompile is in the inner loop.
 
-### 1.5 Cache `get_known_annotation_map()`
+### ✅ 1.5 Cache `get_known_annotation_map()`
 
 - **File:** `utils.py:633-639`
 - **Today:** Function rebuilds the dict from `config.ANNOTATION_KEYPHRASES` on every call. No decorator, even though `@functools.cache` is already used in the same file (line 572).

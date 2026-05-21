@@ -630,6 +630,7 @@ def sanitize_filename(text: str) -> str:
 # ---- Annotation and participant helpers ----
 
 
+@functools.cache
 def get_known_annotation_map() -> dict[str, str]:
     """Return configured annotation tokens mapped to normalized annotation IDs."""
     configured_map = getattr(config, "ANNOTATION_KEYPHRASES", {"!key": "key"})
