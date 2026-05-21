@@ -1,4 +1,5 @@
 import json
+from collections import OrderedDict
 
 import pytest
 
@@ -274,7 +275,7 @@ def test_api_thumbnail_returns_jpeg(client, monkeypatch, tmp_path):
         sheet_data=[],
     )
     monkeypatch.setattr(server, "_sheet_context", ctx)
-    monkeypatch.setattr(server, "_thumbnail_cache", {})
+    monkeypatch.setattr(server, "_thumbnail_cache", OrderedDict())
     monkeypatch.setattr("utils.resolve_input_path", lambda name: dummy_video)
     monkeypatch.setattr(video, "extract_thumbnail_bytes", lambda *a, **kw: fake_jpeg)
 
@@ -303,7 +304,7 @@ def test_api_thumbnail_caches(client, monkeypatch, tmp_path):
         sheet_data=[],
     )
     monkeypatch.setattr(server, "_sheet_context", ctx)
-    monkeypatch.setattr(server, "_thumbnail_cache", {})
+    monkeypatch.setattr(server, "_thumbnail_cache", OrderedDict())
     monkeypatch.setattr("utils.resolve_input_path", lambda name: dummy_video)
 
     def counting_extract(*a, **kw):
