@@ -412,6 +412,31 @@
   flex-shrink: 0;
 }
 
+/* Progress-fill modifier — turns the button itself into a left-to-right
+   progress bar while a long-running task (reel encode, batch generate, etc.)
+   runs. JS toggles the class and updates --progress (e.g. "42%"); the ::before
+   pseudo paints the fill behind the label. Pair with :disabled to also lock
+   the button while progress is showing. */
+.cg-btn-progress {
+  position: relative;
+  overflow: hidden;
+  isolation: isolate;
+}
+.cg-btn-progress::before {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: var(--progress, 0%);
+  background: var(--accent-progress-fill);
+  transition: width var(--duration-instant) linear;
+  pointer-events: none;
+  z-index: 0;
+}
+.cg-btn-progress > * {
+  position: relative;
+  z-index: 1;
+}
+
 /* ---- SwimLane ---- */
 
 .cg-swim-lane {

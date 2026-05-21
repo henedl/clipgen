@@ -300,7 +300,11 @@ def test_api_reel_highlights_duration_override(client, monkeypatch):
         "/studio/api/reel",
         json={"cells": ["highlights", "batch"], "highlights_duration": 120},
     )
-    assert resp.status_code == 400  # no clips → 400
+    # Reel route is now NDJSON-streaming, so empty-clips errors arrive as a
+    # single line in the response body rather than an HTTP 400.
+    assert resp.status_code == 200
+    lines = [json.loads(line) for line in resp.data.decode().strip().split("\n")]
+    assert lines[-1]["ok"] is False
     assert captured["duration"] == 120
     assert config.HIGHLIGHTS_REEL_DURATION_SECONDS == original
 
@@ -321,7 +325,12 @@ def test_api_reel_highlights_duration_restored_on_error(client, monkeypatch):
         "/studio/api/reel",
         json={"cells": ["highlights"], "highlights_duration": 999},
     )
-    assert resp.status_code == 500
+    # Exceptions inside the streaming generator are caught and surfaced as a
+    # single JSON line; status stays at 200 because headers were already sent.
+    assert resp.status_code == 200
+    lines = [json.loads(line) for line in resp.data.decode().strip().split("\n")]
+    assert lines[-1]["ok"] is False
+    assert "boom" in lines[-1].get("error", "")
     assert config.HIGHLIGHTS_REEL_DURATION_SECONDS == original
 
 
@@ -559,10 +568,11 @@ def test_api_reel_skips_existing_reel(client, monkeypatch, tmp_path):
 
     resp = client.post("/studio/api/reel", json={"cells": ["P01.5"]})
     assert resp.status_code == 200
-    data = resp.get_json()
-    assert data["ok"] is True
-    assert data["skipped"] is True
-    assert data["reels"] == [existing_reel]
+    lines = [json.loads(line) for line in resp.data.decode().strip().split("\n")]
+    final = lines[-1]
+    assert final["ok"] is True
+    assert final["skipped"] is True
+    assert final["reels"] == [existing_reel]
     assert process_called == []
 
 
@@ -1188,7 +1198,9 @@ def test_api_reel_titlecard_override(client, monkeypatch):
             "titlecard_duration": 4,
         },
     )
-    assert resp.status_code == 400  # no clips → 400
+    assert resp.status_code == 200
+    lines = [json.loads(line) for line in resp.data.decode().strip().split("\n")]
+    assert lines[-1]["ok"] is False  # no clips → streamed error line
     assert captured["enabled"] is True
     assert captured["duration"] == 4
     assert config.TITLECARDS_ENABLED == original_enabled
@@ -1216,7 +1228,10 @@ def test_api_reel_titlecard_restored_on_error(client, monkeypatch):
             "titlecard_duration": 7,
         },
     )
-    assert resp.status_code == 500
+    assert resp.status_code == 200
+    lines = [json.loads(line) for line in resp.data.decode().strip().split("\n")]
+    assert lines[-1]["ok"] is False
+    assert "boom" in lines[-1].get("error", "")
     assert config.TITLECARDS_ENABLED == original_enabled
     assert config.TITLECARD_DURATION_SECONDS == original_duration
 
@@ -1591,3 +1606,75 @@ def test_api_generate_intake_rejects_empty(client):
     assert resp.status_code == 400
     data = resp.get_json()
     assert data["ok"] is False
+
+
+def test_api_reel_streams_progress_events(client, monkeypatch, tmp_path):
+    """/api/reel emits NDJSON phase events plus a final result line.
+
+    The streaming contract is what the new Studio button-progress UI relies on
+    to fill the Build Reel button as encoding advances. We mock process_reel to
+    fire start/clip_done/concat/done events and assert each one appears in the
+    response, followed by the {"ok": True, ...} payload.
+    """
+    import types
+
+    monkeypatch.setattr(server, "_worksheet", object())
+    monkeypatch.setattr("config.OUTPUT_DIR", str(tmp_path))
+    # Prevent the skip-existing-reel branch from short-circuiting the stream.
+    monkeypatch.setattr(server, "_generated_reels", [])
+    monkeypatch.setattr(server, "_save_manifest_quiet", lambda: None)
+
+    cell = types.SimpleNamespace(row=5, col=2, value="1:00-1:30")
+
+    def fake_generate_list(ws, mode, *, ctx=None, reel_input, skip_prompts):
+        return [
+            {
+                "participant": "P01",
+                "cell": cell,
+                "desc": "test",
+                "category": "cat",
+                "study": "study",
+                "severity": "",
+            }
+        ]
+
+    monkeypatch.setattr("spreadsheet.generate_list", fake_generate_list)
+
+    reel_record = {
+        "id": "r1",
+        "file": "reel.mp4",
+        "study": "study",
+        "components": [],
+    }
+
+    def fake_process_reel(
+        clips_list, output_file=None, cancel_flag=None, progress_cb=None
+    ):
+        if progress_cb is not None:
+            progress_cb({"phase": "start", "total_clips": 2})
+            progress_cb({"phase": "clip_done", "clip_index": 0, "total_clips": 2})
+            progress_cb({"phase": "clip_done", "clip_index": 1, "total_clips": 2})
+            progress_cb({"phase": "concat", "progress": 0.5})
+            progress_cb({"phase": "concat", "progress": 0.99})
+            progress_cb({"phase": "done"})
+        return (1, [reel_record])
+
+    monkeypatch.setattr("pipeline.process_reel", fake_process_reel)
+
+    resp = client.post("/studio/api/reel", json={"cells": ["P01.5"]})
+    assert resp.status_code == 200
+    assert resp.mimetype == "application/x-ndjson"
+
+    lines = [json.loads(line) for line in resp.data.decode().strip().split("\n")]
+    # Expect at minimum a "start", a "clip_done", a "concat", "done", and the
+    # final result line — order matters for monotonic UI updates.
+    phases = [ln.get("phase") for ln in lines if "phase" in ln]
+    assert "start" in phases
+    assert "clip_done" in phases
+    assert "concat" in phases
+    assert phases[-1] == "done"
+
+    final = lines[-1]
+    assert final["ok"] is True
+    assert final["generated"] == 1
+    assert final["reels"] == [reel_record]

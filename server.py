@@ -38,6 +38,7 @@ import hashlib
 import json
 import math
 import os
+import queue
 import re
 import sys
 import threading
@@ -742,6 +743,76 @@ def _find_existing_artifacts(
     return [a for a in matches if Path(utils.resolve_output_path(a["file"])).is_file()]
 
 
+def _stream_process_reel(clips: list[Any], cancel_flag: Any) -> Iterator[str]:
+    """Run pipeline.process_reel on a worker thread and yield its progress events
+    as NDJSON lines, finishing with a final result/error line.
+
+    process_reel must complete (or raise) before the result line is emitted, so
+    the bridge uses a thread + queue: the worker pushes progress events plus a
+    sentinel when it finishes; this generator drains the queue and yields each
+    event verbatim. The final line carries {"ok": True, "generated": N,
+    "reels": [...]} on success, {"ok": False, "error": ...} on failure, or
+    {"ok": False, "cancelled": True, ...} on cancellation.
+    """
+    event_queue: queue.Queue[dict[str, Any]] = queue.Queue()
+    sentinel: dict[str, Any] = {"__sentinel__": True}
+    result_holder: list[tuple[int, list[dict[str, Any]]]] = []
+    error_holder: list[str] = []
+
+    def on_progress(event: dict[str, Any]) -> None:
+        event_queue.put(event)
+
+    def worker() -> None:
+        try:
+            result = pipeline.process_reel(
+                clips, cancel_flag=cancel_flag, progress_cb=on_progress
+            )
+            result_holder.append(result)
+        except Exception as exc:
+            error_holder.append(str(exc))
+        finally:
+            event_queue.put(sentinel)
+
+    threading.Thread(target=worker, daemon=True).start()
+
+    while True:
+        event = event_queue.get()
+        if event is sentinel:
+            break
+        yield json.dumps(event) + "\n"
+
+    if error_holder:
+        yield json.dumps({"ok": False, "error": error_holder[0]}) + "\n"
+        return
+
+    if not result_holder:
+        yield (
+            json.dumps({"ok": False, "error": "Reel processing produced no result"})
+            + "\n"
+        )
+        return
+
+    generated, reel_records = result_holder[0]
+    if cancel_flag and cancel_flag():
+        yield (
+            json.dumps(
+                {
+                    "ok": False,
+                    "cancelled": True,
+                    "error": "Reel generation cancelled",
+                }
+            )
+            + "\n"
+        )
+        return
+
+    _generated_reels.extend(reel_records)
+    _save_manifest_quiet()
+    yield (
+        json.dumps({"ok": True, "generated": generated, "reels": reel_records}) + "\n"
+    )
+
+
 @studio_bp.route("/api/generate", methods=["POST"])
 def api_generate() -> FlaskResponse:
     if _worksheet is None:
@@ -1021,71 +1092,78 @@ def api_reel() -> FlaskResponse:
             {"ok": False, "error": "A reel build is already in progress"}
         ), 409
 
-    with _override_config(**overrides):
-        try:
-            reel_input = ", ".join(cell_strings)
+    def stream() -> Any:
+        with _override_config(**overrides):
+            try:
+                reel_input = ", ".join(cell_strings)
 
-            # generate_list needs HIGHLIGHTS override only during this call
-            clips = spreadsheet.generate_list(
-                _worksheet,
-                "reel",
-                ctx=_sheet_context,
-                reel_input=reel_input,
-                skip_prompts=True,
-            )
+                clips = spreadsheet.generate_list(
+                    _worksheet,
+                    "reel",
+                    ctx=_sheet_context,
+                    reel_input=reel_input,
+                    skip_prompts=True,
+                )
 
-            if not clips:
-                return jsonify(
-                    {"ok": False, "error": "No clips found for the specified cells"}
-                ), 400
-
-            # Check if an identical reel already exists. compute_reel_id only
-            # hashes cellRow/cellCol/start/end, so the components built here
-            # don't need an accurate sourceVideo — they are throwaway.
-            components: list[dict[str, Any]] = []
-            for clip in clips:
-                files.prepare_clip(clip)
-                for start_str, end_str in clip.get("times", []):
-                    components.append(
-                        utils.build_reel_component(clip, "", start_str, end_str)
-                    )
-            if components:
-                expected_id = pipeline.compute_reel_id(components)
-                for reel in _generated_reels:
-                    if (
-                        reel.get("id") == expected_id
-                        and Path(utils.resolve_output_path(reel["file"])).is_file()
-                    ):
-                        return jsonify(
+                if not clips:
+                    yield (
+                        json.dumps(
                             {
-                                "ok": True,
-                                "generated": 1,
-                                "reels": [reel],
-                                "skipped": True,
+                                "ok": False,
+                                "error": "No clips found for the specified cells",
                             }
                         )
+                        + "\n"
+                    )
+                    return
 
-            _reel_cancel_event.clear()
-            cancel_flag = _reel_cancel_event.is_set
-            generated, reel_records = pipeline.process_reel(
-                clips, cancel_flag=cancel_flag
-            )
-            if _reel_cancel_event.is_set():
-                return jsonify(
-                    {
-                        "ok": False,
-                        "error": "Reel generation cancelled",
-                        "cancelled": True,
-                    }
-                )
-            _generated_reels.extend(reel_records)
-            _save_manifest_quiet()
-            return jsonify({"ok": True, "generated": generated, "reels": reel_records})
+                # Check if an identical reel already exists. compute_reel_id only
+                # hashes cellRow/cellCol/start/end, so the components built here
+                # don't need an accurate sourceVideo — they are throwaway.
+                components: list[dict[str, Any]] = []
+                for clip in clips:
+                    files.prepare_clip(clip)
+                    for start_str, end_str in clip.get("times", []):
+                        components.append(
+                            utils.build_reel_component(clip, "", start_str, end_str)
+                        )
+                if components:
+                    expected_id = pipeline.compute_reel_id(components)
+                    for reel in _generated_reels:
+                        if (
+                            reel.get("id") == expected_id
+                            and Path(utils.resolve_output_path(reel["file"])).is_file()
+                        ):
+                            yield (
+                                json.dumps(
+                                    {
+                                        "ok": True,
+                                        "generated": 1,
+                                        "reels": [reel],
+                                        "skipped": True,
+                                    }
+                                )
+                                + "\n"
+                            )
+                            return
 
-        except Exception as e:
-            return jsonify({"ok": False, "error": str(e)}), 500
+                _reel_cancel_event.clear()
+                cancel_flag = _reel_cancel_event.is_set
+                yield from _stream_process_reel(clips, cancel_flag)
+            except Exception as e:
+                yield json.dumps({"ok": False, "error": str(e)}) + "\n"
+
+    def stream_with_busy_release() -> Any:
+        try:
+            yield from stream()
         finally:
             _release_busy("reel")
+
+    return Response(
+        stream_with_busy_release(),
+        mimetype="application/x-ndjson",
+        headers={"X-Accel-Buffering": "no"},
+    )
 
 
 @studio_bp.route("/api/viewer", methods=["POST"])
@@ -1609,10 +1687,6 @@ def api_reel_direct() -> FlaskResponse:
         except (ValueError, TypeError):
             pass
 
-    output_dir = Path(utils.get_effective_output_dir())
-    clip_paths: list[str] = []
-    temp_clips: list[str] = []
-
     if not _try_claim_busy("reel"):
         return jsonify(
             {"ok": False, "error": "A reel build is already in progress"}
@@ -1620,89 +1694,196 @@ def api_reel_direct() -> FlaskResponse:
 
     _reel_cancel_event.clear()
 
-    with _override_config(**overrides):
-        try:
-            for seg in segments:
+    def stream() -> Iterator[str]:
+        output_dir = Path(utils.get_effective_output_dir())
+        clip_paths: list[str] = []
+        temp_clips: list[str] = []
+        with _override_config(**overrides):
+            try:
+                total = len(segments)
+                yield json.dumps({"phase": "start", "total_clips": total}) + "\n"
+
+                completed = 0
+                for seg in segments:
+                    if _reel_cancel_event.is_set():
+                        break
+
+                    participant = seg.get("participant", "")
+                    start = float(seg.get("start", 0))
+                    end = float(seg.get("end", 0))
+                    if end <= start:
+                        completed += 1
+                        yield (
+                            json.dumps(
+                                {
+                                    "phase": "clip_done",
+                                    "clip_index": completed - 1,
+                                    "total_clips": total,
+                                }
+                            )
+                            + "\n"
+                        )
+                        continue
+
+                    source = seg.get("source", "screenspace")
+                    video_path = _resolve_intake_video_path(participant, source)
+
+                    if not video_path:
+                        completed += 1
+                        yield (
+                            json.dumps(
+                                {
+                                    "phase": "clip_done",
+                                    "clip_index": completed - 1,
+                                    "total_clips": total,
+                                }
+                            )
+                            + "\n"
+                        )
+                        continue
+
+                    start_str = utils.seconds_to_timestamp(int(round(start)))
+                    end_str = utils.seconds_to_timestamp(int(round(end)))
+
+                    fd, tmp_path = tempfile.mkstemp(
+                        suffix=config.FILEFORMAT, dir=str(output_dir)
+                    )
+                    # Track for cleanup BEFORE os.close(fd) or any other call
+                    # that could raise; otherwise the tmp file is on disk but
+                    # not in temp_clips, so the finally block won't unlink it.
+                    temp_clips.append(tmp_path)
+                    os.close(fd)
+
+                    ok = video.run_ffmpeg(
+                        video_path,
+                        tmp_path,
+                        start_str,
+                        end_str,
+                        config.REENCODING,
+                        cancel_flag=_reel_cancel_event.is_set,
+                    )
+                    if ok:
+                        clip_paths.append(tmp_path)
+                    completed += 1
+                    yield (
+                        json.dumps(
+                            {
+                                "phase": "clip_done",
+                                "clip_index": completed - 1,
+                                "total_clips": total,
+                            }
+                        )
+                        + "\n"
+                    )
+
                 if _reel_cancel_event.is_set():
-                    break
+                    yield (
+                        json.dumps(
+                            {
+                                "ok": False,
+                                "error": "Reel generation cancelled",
+                                "cancelled": True,
+                            }
+                        )
+                        + "\n"
+                    )
+                    return
 
-                participant = seg.get("participant", "")
-                start = float(seg.get("start", 0))
-                end = float(seg.get("end", 0))
-                if end <= start:
-                    continue
+                if not clip_paths:
+                    yield (
+                        json.dumps(
+                            {"ok": False, "error": "No clips could be generated"}
+                        )
+                        + "\n"
+                    )
+                    return
 
-                source = seg.get("source", "screenspace")
-                video_path = _resolve_intake_video_path(participant, source)
+                reel_study = _sheet_context.study_name if _sheet_context else ""
+                reel_base = f"{reel_study} intake reel" if reel_study else "intake_reel"
+                reel_name = files.get_unique_filename(f"{reel_base}{config.FILEFORMAT}")
 
-                if not video_path:
-                    continue
+                # Throttle concat progress emissions to ~5 Hz.
+                concat_last_emit: list[float] = [0.0]
+                concat_event_queue: queue.Queue[dict[str, Any]] = queue.Queue()
 
-                start_str = utils.seconds_to_timestamp(int(round(start)))
-                end_str = utils.seconds_to_timestamp(int(round(end)))
+                def on_concat_progress(fraction: float) -> None:
+                    import time as _time
 
-                fd, tmp_path = tempfile.mkstemp(
-                    suffix=config.FILEFORMAT, dir=str(output_dir)
-                )
-                # Track for cleanup BEFORE os.close(fd) or any other call
-                # that could raise; otherwise the tmp file is on disk but
-                # not in temp_clips, so the finally block won't unlink it.
-                temp_clips.append(tmp_path)
-                os.close(fd)
+                    now = _time.monotonic()
+                    if (
+                        concat_last_emit[0] != 0.0
+                        and fraction < 0.99
+                        and now - concat_last_emit[0] < 0.2
+                    ):
+                        return
+                    concat_last_emit[0] = now
+                    concat_event_queue.put({"phase": "concat", "progress": fraction})
 
-                ok = video.run_ffmpeg(
-                    video_path,
-                    tmp_path,
-                    start_str,
-                    end_str,
-                    config.REENCODING,
-                    cancel_flag=_reel_cancel_event.is_set,
-                )
+                concat_sentinel: dict[str, Any] = {"__sentinel__": True}
+                concat_result: list[bool] = []
+
+                def concat_worker() -> None:
+                    try:
+                        result = video.concatenate_clips(
+                            clip_paths,
+                            reel_name,
+                            reencode_on_fail=True,
+                            cancel_flag=_reel_cancel_event.is_set,
+                            on_progress=on_concat_progress,
+                        )
+                        concat_result.append(result)
+                    except Exception as exc:
+                        utils.error_print(f"Concat failed: {exc}")
+                        concat_result.append(False)
+                    finally:
+                        concat_event_queue.put(concat_sentinel)
+
+                threading.Thread(target=concat_worker, daemon=True).start()
+
+                while True:
+                    event = concat_event_queue.get()
+                    if event is concat_sentinel:
+                        break
+                    yield json.dumps(event) + "\n"
+
+                ok = concat_result[0] if concat_result else False
+
                 if ok:
-                    clip_paths.append(tmp_path)
-
-            if _reel_cancel_event.is_set():
-                return jsonify(
-                    {
-                        "ok": False,
-                        "error": "Reel generation cancelled",
-                        "cancelled": True,
+                    reel_record: dict[str, Any] = {
+                        "id": f"reel_intake_{hashlib.md5(reel_name.encode()).hexdigest()[:8]}",
+                        "file": Path(reel_name).name,
+                        "source": "intake",
+                        "description": f"Intake reel ({len(clip_paths)} segments)",
                     }
-                )
+                    _generated_reels.append(reel_record)
+                    _save_manifest_quiet()
+                    yield (
+                        json.dumps({"ok": True, "generated": 1, "reels": [reel_record]})
+                        + "\n"
+                    )
+                else:
+                    yield (
+                        json.dumps({"ok": False, "error": "Reel concatenation failed"})
+                        + "\n"
+                    )
+            finally:
+                for tmp in temp_clips:
+                    try:
+                        Path(tmp).unlink(missing_ok=True)
+                    except OSError:
+                        pass
 
-            if not clip_paths:
-                return (
-                    jsonify({"ok": False, "error": "No clips could be generated"}),
-                    400,
-                )
-
-            reel_study = _sheet_context.study_name if _sheet_context else ""
-            reel_base = f"{reel_study} intake reel" if reel_study else "intake_reel"
-            reel_name = files.get_unique_filename(f"{reel_base}{config.FILEFORMAT}")
-            ok = video.concatenate_clips(clip_paths, reel_name, reencode_on_fail=True)
-
-            if ok:
-                reel_record: dict[str, Any] = {
-                    "id": f"reel_intake_{hashlib.md5(reel_name.encode()).hexdigest()[:8]}",
-                    "file": Path(reel_name).name,
-                    "source": "intake",
-                    "description": f"Intake reel ({len(clip_paths)} segments)",
-                }
-                _generated_reels.append(reel_record)
-                _save_manifest_quiet()
-                return jsonify({"ok": True, "generated": 1, "reels": [reel_record]})
-            else:
-                return (
-                    jsonify({"ok": False, "error": "Reel concatenation failed"}),
-                    500,
-                )
+    def stream_with_busy_release() -> Iterator[str]:
+        try:
+            yield from stream()
         finally:
-            for tmp in temp_clips:
-                try:
-                    Path(tmp).unlink(missing_ok=True)
-                except OSError:
-                    pass
             _release_busy("reel")
+
+    return Response(
+        stream_with_busy_release(),
+        mimetype="application/x-ndjson",
+        headers={"X-Accel-Buffering": "no"},
+    )
 
 
 @studio_bp.route("/api/reel/cancel", methods=["POST"])
