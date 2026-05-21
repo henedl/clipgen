@@ -242,6 +242,7 @@ def api_thumbnail(participant: str, start_seconds: str) -> FlaskResponse:
     cache_key = (str(video_path), start_sec)
     cached = _thumbnail_cache.get(cache_key)
     if cached is not None:
+        _thumbnail_cache.move_to_end(cache_key)
         return Response(
             cached,
             mimetype="image/jpeg",
@@ -754,7 +755,7 @@ def api_generate() -> FlaskResponse:
 
             # Pass 2: generate in parallel and yield as each completes
             if to_generate:
-                workers = min(4, os.cpu_count() or 1)
+                workers = pipeline._resolve_clip_workers()
                 if workers >= 2 and len(to_generate) >= 2:
                     with concurrent.futures.ThreadPoolExecutor(
                         max_workers=workers

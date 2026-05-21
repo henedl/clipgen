@@ -630,6 +630,7 @@ def sanitize_filename(text: str) -> str:
 # ---- Annotation and participant helpers ----
 
 
+@functools.cache
 def get_known_annotation_map() -> dict[str, str]:
     """Return configured annotation tokens mapped to normalized annotation IDs."""
     configured_map = getattr(config, "ANNOTATION_KEYPHRASES", {"!key": "key"})
@@ -1051,18 +1052,16 @@ def timestamp_to_seconds(ts_str: str) -> float | None:
     if not ts:
         return None
 
-    formats = ["%M:%S", "%H:%M:%S"]
-    for fmt in formats:
-        try:
-            parsed = datetime.strptime(ts, fmt)
-            return float(
-                parsed.hour * config.SECONDS_PER_HOUR
-                + parsed.minute * config.SECONDS_PER_MINUTE
-                + parsed.second
-            )
-        except ValueError:
-            continue
-    return None
+    fmt = "%H:%M:%S" if ts.count(":") == 2 else "%M:%S"
+    try:
+        parsed = datetime.strptime(ts, fmt)
+    except ValueError:
+        return None
+    return float(
+        parsed.hour * config.SECONDS_PER_HOUR
+        + parsed.minute * config.SECONDS_PER_MINUTE
+        + parsed.second
+    )
 
 
 def parse_timestamps(

@@ -343,7 +343,11 @@ def apply_corrections(
     if not corrections:
         return list(segments)
 
-    pairs = [(c["from"], c["to"]) for c in corrections if c.get("from") and c.get("to")]
+    pairs = [
+        (re.compile(re.escape(c["from"]), re.IGNORECASE), c["to"])
+        for c in corrections
+        if c.get("from") and c.get("to")
+    ]
     if not pairs:
         return list(segments)
 
@@ -352,8 +356,7 @@ def apply_corrections(
     for seg in segments:
         text = seg["text"]
         seg_applied = 0
-        for from_text, to_text in pairs:
-            pattern = re.compile(re.escape(from_text), re.IGNORECASE)
+        for pattern, to_text in pairs:
             new_text, count = pattern.subn(to_text, text)
             if count > 0:
                 text = new_text

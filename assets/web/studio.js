@@ -1481,18 +1481,23 @@
   // ---- Cell selection ----
 
   function updateCellClasses() {
+    var selected = {};
+    for (var i = 0; i < state.artifactQueue.length; i++) {
+      var a = state.artifactQueue[i];
+      if (a.row) selected[cellKey(a.participant, a.row)] = true;
+    }
+    for (var j = 0; j < state.reelQueue.length; j++) {
+      var r = state.reelQueue[j];
+      if (r.row) selected[cellKey(r.participant, r.row)] = true;
+    }
     var cells = qsa(".ts-cell");
-    for (var i = 0; i < cells.length; i++) {
-      var td = cells[i];
-      var p = td.getAttribute("data-participant");
-      var r = parseInt(td.getAttribute("data-row"), 10);
-      var inArt = findInQueue(state.artifactQueue, p, r) >= 0;
-      var inReel = findInQueue(state.reelQueue, p, r) >= 0;
-      if (inArt || inReel) {
-        td.classList.add("selected");
-      } else {
-        td.classList.remove("selected");
-      }
+    for (var k = 0; k < cells.length; k++) {
+      var td = cells[k];
+      var key = cellKey(
+        td.getAttribute("data-participant"),
+        parseInt(td.getAttribute("data-row"), 10),
+      );
+      td.classList.toggle("selected", !!selected[key]);
     }
   }
 
@@ -1602,7 +1607,9 @@
       }
     }
     renderFn();
-    updateCellClasses();
+    for (var n = 0; n < infos.length; n++) {
+      updateSingleCellClass(infos[n].participant, infos[n].row);
+    }
   }
 
   // ---- Grid events ----
@@ -2171,7 +2178,7 @@
           var removed = state.artifactQueue.splice(idx, 1)[0];
           if (removed.row) delete state.cellResults[cellKey(removed.participant, removed.row)];
           renderArtifactQueue();
-          updateCellClasses();
+          if (removed.row) updateSingleCellClass(removed.participant, removed.row);
         });
       })(i);
       card.appendChild(removeBtn);
@@ -2279,7 +2286,7 @@
           var removed = state.reelQueue.splice(idx, 1)[0];
           if (removed.row) delete state.cellResults[cellKey(removed.participant, removed.row)];
           renderReelQueue();
-          updateCellClasses();
+          if (removed.row) updateSingleCellClass(removed.participant, removed.row);
         });
       })(i);
       card.appendChild(removeBtn);
@@ -2431,7 +2438,9 @@
           state.reelQueue = [];
           renderReelQueue();
           renderStashedReels();
-          updateCellClasses();
+          for (var u = 0; u < items.length; u++) {
+            if (items[u].row) updateSingleCellClass(items[u].participant, items[u].row);
+          }
         }
       })
       .catch(function () {});
@@ -2440,7 +2449,10 @@
   function recallStash(stash) {
     state.reelQueue = stash.items.slice();
     renderReelQueue();
-    updateCellClasses();
+    for (var i = 0; i < state.reelQueue.length; i++) {
+      var it = state.reelQueue[i];
+      if (it.row) updateSingleCellClass(it.participant, it.row);
+    }
   }
 
   function deleteStash(stashId, endpoint, stateArray, renderFn) {
@@ -2549,7 +2561,9 @@
           state.artifactQueue = [];
           renderArtifactQueue();
           renderStashedArtifacts();
-          updateCellClasses();
+          for (var u = 0; u < items.length; u++) {
+            if (items[u].row) updateSingleCellClass(items[u].participant, items[u].row);
+          }
         }
       })
       .catch(function () {});
@@ -2558,7 +2572,10 @@
   function recallArtifactStash(stash) {
     state.artifactQueue = stash.items.slice();
     renderArtifactQueue();
-    updateCellClasses();
+    for (var i = 0; i < state.artifactQueue.length; i++) {
+      var it = state.artifactQueue[i];
+      if (it.row) updateSingleCellClass(it.participant, it.row);
+    }
   }
 
   // ---- Stash drag-reveal ----
@@ -2581,30 +2598,33 @@
 
   function bindButtons() {
     qs("#clearArtifactsBtn").addEventListener("click", function () {
-      for (var i = 0; i < state.artifactQueue.length; i++) {
-        var item = state.artifactQueue[i];
-        delete state.cellResults[cellKey(item.participant, item.row)];
+      var cleared = state.artifactQueue.slice();
+      for (var i = 0; i < cleared.length; i++) {
+        delete state.cellResults[cellKey(cleared[i].participant, cleared[i].row)];
       }
       state.artifactQueue = [];
       renderArtifactQueue();
-      updateCellClasses();
+      for (var u = 0; u < cleared.length; u++) {
+        if (cleared[u].row) updateSingleCellClass(cleared[u].participant, cleared[u].row);
+      }
     });
 
     qs("#addToReelBtn").addEventListener("click", function () {
       for (var i = 0; i < state.artifactQueue.length; i++) {
         addToQueue(state.reelQueue, state.artifactQueue[i], renderReelQueue);
       }
-      updateCellClasses();
     });
 
     qs("#clearReelBtn").addEventListener("click", function () {
-      for (var i = 0; i < state.reelQueue.length; i++) {
-        var item = state.reelQueue[i];
-        delete state.cellResults[cellKey(item.participant, item.row)];
+      var cleared = state.reelQueue.slice();
+      for (var i = 0; i < cleared.length; i++) {
+        delete state.cellResults[cellKey(cleared[i].participant, cleared[i].row)];
       }
       state.reelQueue = [];
       renderReelQueue();
-      updateCellClasses();
+      for (var u = 0; u < cleared.length; u++) {
+        if (cleared[u].row) updateSingleCellClass(cleared[u].participant, cleared[u].row);
+      }
     });
 
     qs("#stashReelBtn").addEventListener("click", stashCurrentReel);
@@ -3218,6 +3238,7 @@
       .then(function (data) {
         state.generating = false;
         if (data.ok && data.clips && data.clips.length > 0) {
+          var prev = state.reelQueue.slice();
           state.reelQueue = [];
           for (var i = 0; i < data.clips.length; i++) {
             var entries = expandCellToSegments(data.clips[i]);
@@ -3226,7 +3247,17 @@
             }
           }
           renderReelQueue();
-          updateCellClasses();
+          var touchedKeys = {};
+          for (var p = 0; p < prev.length; p++) {
+            if (prev[p].row) touchedKeys[cellKey(prev[p].participant, prev[p].row)] = prev[p];
+          }
+          for (var q = 0; q < state.reelQueue.length; q++) {
+            var rq = state.reelQueue[q];
+            if (rq.row) touchedKeys[cellKey(rq.participant, rq.row)] = rq;
+          }
+          for (var key in touchedKeys) {
+            updateSingleCellClass(touchedKeys[key].participant, touchedKeys[key].row);
+          }
           showResult(
             "Added " + clipgenPluralUnit(data.clips.length, "clip", "clips") + " to reel queue",
             null

@@ -12,46 +12,46 @@ Source review: `~/.claude/plans/system-instruction-you-are-working-shimmying-pud
 
 ---
 
-## Phase 1 — Quick wins (single PR)
+## ✅ Phase 1 — Quick wins (single PR)
 
 Seven small, independent diffs. None changes a public contract; all are safe to bundle.
 
-### 1.1 Studio uses `_resolve_clip_workers()`
+### ✅ 1.1 Studio uses `_resolve_clip_workers()`
 
 - **File:** `server.py:757`
 - **Today:** `workers = min(4, os.cpu_count() or 1)` (hardcoded).
 - **Change:** `workers = pipeline._resolve_clip_workers()`. Move `_resolve_clip_workers` to `utils.py` if `server.py` should not import from `pipeline.py` (check existing import direction first).
 - **Why:** `config.CLIP_PARALLEL_WORKERS` already exists and is honored by CLI; Studio silently ignores it. Aligns the two paths and unlocks tuning.
 
-### 1.2 LRU refresh on Studio thumbnail cache hit
+### ✅ 1.2 LRU refresh on Studio thumbnail cache hit
 
 - **File:** `server.py:243-249`
 - **Today:** `cached = _thumbnail_cache.get(cache_key)` — no `move_to_end()` on hit.
 - **Change:** After the `get`, before returning, `_thumbnail_cache.move_to_end(cache_key)`.
 - **Why:** Mirrors `screenspace_server.py:328-331`. Without it, hot thumbnails are evicted before cold ones under load, causing repeat ffmpeg extractions that *look* like server slowness.
 
-### 1.3 Targeted cell-class updates after queue mutations
+### ✅ 1.3 Targeted cell-class updates after queue mutations
 
 - **File:** `assets/web/studio.js`
 - **Today:** `updateCellClasses()` (lines 1483-1496) is called from 12+ sites including baselines, sidebar filters, and batch ops. It iterates *every* `.ts-cell` and runs `findInQueue` per cell.
 - **Change:** Audit the 12 call sites. Where the mutation is known to affect a small set of cells (toggle, single add/remove), call `updateSingleCellClass` per affected cell instead. Where a sweep *is* required (e.g. participant column visibility), keep `updateCellClasses` but cache `findInQueue` lookups by `cellKey` for the duration of the call.
 - **Why:** O(rows × participants × queueLen) per sidebar toggle is the largest source of "Studio feels janky" complaints on large sheets.
 
-### 1.4 Pre-compile correction patterns in `apply_corrections`
+### ✅ 1.4 Pre-compile correction patterns in `apply_corrections`
 
 - **File:** `transcripts.py:346-364`
 - **Today:** `re.compile(re.escape(from_text), re.IGNORECASE)` runs **inside** the per-segment loop. With 1000 segments × 20 corrections that is 20k recompiles per transcript.
 - **Change:** Build `pairs = [(re.compile(re.escape(c["from"]), re.IGNORECASE), c["to"]) for c in corrections ...]` once at function entry; iterate that list inside the segment loop.
 - **Verified:** TRUE — re-reading the source confirms the recompile is in the inner loop.
 
-### 1.5 Cache `get_known_annotation_map()`
+### ✅ 1.5 Cache `get_known_annotation_map()`
 
 - **File:** `utils.py:633-639`
 - **Today:** Function rebuilds the dict from `config.ANNOTATION_KEYPHRASES` on every call. No decorator, even though `@functools.cache` is already used in the same file (line 572).
 - **Change:** Add `@functools.cache` above the `def`. The map is keyed by configured tokens; it never changes during a process lifetime.
 - **Verified:** TRUE — `Grep` confirmed no cache decorator on this function.
 
-### 1.6 Faster `timestamp_to_seconds` dispatch
+### ✅ 1.6 Faster `timestamp_to_seconds` dispatch
 
 - **File:** `utils.py:1050-1065`
 - **Today:** Tries `datetime.strptime(ts, "%M:%S")`, catches `ValueError`, then tries `"%H:%M:%S"`. Every HH:MM:SS timestamp pays the exception cost.
@@ -66,7 +66,7 @@ Seven small, independent diffs. None changes a public contract; all are safe to 
   Same semantics, no exception-driven control flow on the hot path.
 - **Verified:** TRUE — re-reading confirmed the two-format try/except chain.
 
-### 1.7 Tuning documentation
+### ✅ 1.7 Tuning documentation
 
 - **File:** `AGENTS.md` (or a new section in `agents/PERFORMANCE.md`).
 - **Add:** A short table listing the existing knobs and when to turn them: `CLIP_PARALLEL_WORKERS`, `SCREENSPACE_PARALLEL_WORKERS`, `SCREENSPACE_CV_RESOLUTION_SCALE`, `SCREENSPACE_BATCH_EXTRACT`, `GALLERY_BUNDLE_ENABLED`. Note that `GALLERY_BUNDLE_ENABLED` should not be used on large galleries.
