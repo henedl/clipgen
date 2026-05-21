@@ -8,6 +8,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 from collections import Counter
 from collections.abc import Callable
 from datetime import datetime
@@ -151,12 +152,34 @@ def run_ffmpeg_process(
     output_file: str,
     os_error_message: str,
     cancel_flag: Callable[[], bool] | None = None,
+    on_progress: Callable[[float], None] | None = None,
+    expected_duration_sec: float | None = None,
 ) -> subprocess.CompletedProcess[str] | None:
     """Run an ffmpeg subprocess and wrap common OS-level failures.
 
     When *cancel_flag* is supplied and returns ``True`` during execution,
     the ffmpeg process is terminated and ``None`` is returned.
+
+    When both *on_progress* and *expected_duration_sec* are supplied, ffmpeg
+    is invoked with ``-progress pipe:1`` and the callback is fed fractional
+    progress (0.0–1.0) as encoding advances. *expected_duration_sec* is the
+    **output** (not input) duration in seconds. See screenspace.py
+    ``generate_timelapse`` for the canonical pattern.
     """
+    if (
+        on_progress is not None
+        and expected_duration_sec is not None
+        and expected_duration_sec > 0
+    ):
+        return _run_ffmpeg_with_progress(
+            ffmpeg_command,
+            input_file=input_file,
+            output_file=output_file,
+            os_error_message=os_error_message,
+            on_progress=on_progress,
+            expected_duration_sec=expected_duration_sec,
+            cancel_flag=cancel_flag,
+        )
     try:
         if cancel_flag is not None:
             proc = subprocess.Popen(
@@ -201,6 +224,105 @@ def run_ffmpeg_process(
             ],
         )
         return None
+
+
+def _run_ffmpeg_with_progress(
+    ffmpeg_command: list[str],
+    *,
+    input_file: str,
+    output_file: str,
+    os_error_message: str,
+    on_progress: Callable[[float], None],
+    expected_duration_sec: float,
+    cancel_flag: Callable[[], bool] | None,
+) -> subprocess.CompletedProcess[str] | None:
+    """Run ffmpeg with ``-progress pipe:1`` and stream fractional progress.
+
+    stdout carries the progress key/value stream; stderr is drained on a
+    background thread so the OS pipe buffer can't deadlock ffmpeg while we
+    block reading stdout. Returns a CompletedProcess whose stderr field
+    holds the collected ffmpeg stderr output (for error reporting on
+    failure), or None on cancellation / OS-level failure.
+    """
+    cmd = list(ffmpeg_command) + ["-progress", "pipe:1"]
+    try:
+        proc = subprocess.Popen(
+            cmd,
+            encoding="utf-8",
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+    except FileNotFoundError:
+        utils.error_print(
+            "ffmpeg is not installed or not found in system PATH.",
+            [
+                "Please install ffmpeg and ensure it's in your PATH.",
+                "Download from: https://www.ffmpeg.org/download.html",
+            ],
+        )
+        return None
+    except OSError as error:
+        utils.error_print(
+            os_error_message,
+            [
+                f"Error: {error}",
+                f"Working directory: '{os.getcwd()}'",
+                f"Input file: '{input_file}'",
+                f"Output file: '{output_file}'",
+            ],
+        )
+        return None
+
+    assert proc.stdout is not None  # guaranteed by stdout=PIPE
+    assert proc.stderr is not None  # guaranteed by stderr=PIPE
+
+    stderr_chunks: list[str] = []
+
+    def _drain_stderr() -> None:
+        # Read until EOF; without this the stderr pipe can fill its 64 KB
+        # OS buffer and deadlock ffmpeg while we're blocked on stdout.
+        assert proc.stderr is not None
+        for chunk in proc.stderr:
+            stderr_chunks.append(chunk)
+
+    stderr_thread = threading.Thread(target=_drain_stderr, daemon=True)
+    stderr_thread.start()
+
+    expected_us = expected_duration_sec * 1_000_000.0
+    on_progress(0.0)
+    cancelled = False
+    try:
+        for line in proc.stdout:
+            text = line.strip()
+            if text.startswith("out_time_us="):
+                try:
+                    us = int(text.split("=", 1)[1])
+                    on_progress(min(us / expected_us, 0.99))
+                except (ValueError, ZeroDivisionError):
+                    pass
+            if cancel_flag is not None and cancel_flag():
+                utils.terminate_subprocess(proc)
+                cancelled = True
+                break
+    finally:
+        try:
+            proc.stdout.close()
+        except OSError:
+            pass
+        proc.wait()
+        stderr_thread.join(timeout=1.0)
+        try:
+            proc.stderr.close()
+        except OSError:
+            pass
+
+    if cancelled:
+        return None
+
+    on_progress(1.0)
+    return subprocess.CompletedProcess(
+        ffmpeg_command, proc.returncode, "", "".join(stderr_chunks)
+    )
 
 
 def _add_ffmpeg_stderr(
@@ -1140,6 +1262,7 @@ def compress_to_size(
     target_size_mb: float,
     *,
     cancel_flag: Callable[[], bool] | None = None,
+    on_progress: Callable[[float], None] | None = None,
 ) -> bool:
     """Recompress video to fit within target filesize using two-pass encoding.
 
@@ -1212,12 +1335,19 @@ def compress_to_size(
         ]
 
         utils.debug_print(f"Pass 1 command: {' '.join(pass1_command)}")
+        # Split the progress bar 50/50 between the two passes so the UI shows a
+        # single monotonic 0→1 fill across both ffmpeg invocations.
+        pass1_progress = (
+            (lambda f: on_progress(f * 0.5)) if on_progress is not None else None
+        )
         pass1_result = run_ffmpeg_process(
             pass1_command,
             input_file=filepath,
             output_file=null_output,
             os_error_message="ffmpeg could not successfully run during compression pass 1.",
             cancel_flag=cancel_flag,
+            on_progress=pass1_progress,
+            expected_duration_sec=float(duration) if duration else None,
         )
         if pass1_result is None:
             return False
@@ -1256,12 +1386,17 @@ def compress_to_size(
         ]
 
         utils.debug_print(f"Pass 2 command: {' '.join(pass2_command)}")
+        pass2_progress = (
+            (lambda f: on_progress(0.5 + f * 0.5)) if on_progress is not None else None
+        )
         pass2_result = run_ffmpeg_process(
             pass2_command,
             input_file=filepath,
             output_file=compressed_temp_path,
             os_error_message="ffmpeg could not successfully run during compression pass 2.",
             cancel_flag=cancel_flag,
+            on_progress=pass2_progress,
+            expected_duration_sec=float(duration) if duration else None,
         )
         if pass2_result is None:
             return False
@@ -1425,6 +1560,7 @@ def concatenate_clips(
     output_file: str,
     reencode_on_fail: bool = True,
     cancel_flag: Callable[[], bool] | None = None,
+    on_progress: Callable[[float], None] | None = None,
 ) -> bool:
     """Concatenate multiple video clips into a single file.
 
@@ -1459,17 +1595,30 @@ def concatenate_clips(
         return False
 
     props_list, res_mismatch, audio_mismatch = _detect_clip_mismatches(clip_paths)
+    total_duration = sum(
+        float(p["duration"]) for p in props_list if p is not None and p.get("duration")
+    )
 
     if res_mismatch or audio_mismatch:
         utils.warning_print(
             "Re-encoding all clips to produce a compatible reel (this may take longer)."
         )
         return _concatenate_filter_complex(
-            clip_paths, props_list, output_file, cancel_flag=cancel_flag
+            clip_paths,
+            props_list,
+            output_file,
+            cancel_flag=cancel_flag,
+            on_progress=on_progress,
+            expected_duration_sec=total_duration,
         )
 
     return _concatenate_demuxer(
-        clip_paths, output_file, reencode_on_fail, cancel_flag=cancel_flag
+        clip_paths,
+        output_file,
+        reencode_on_fail,
+        cancel_flag=cancel_flag,
+        on_progress=on_progress,
+        expected_duration_sec=total_duration,
     )
 
 
@@ -1478,6 +1627,8 @@ def _concatenate_filter_complex(
     props_list: list[dict[str, Any] | None],
     output_file: str,
     cancel_flag: Callable[[], bool] | None = None,
+    on_progress: Callable[[float], None] | None = None,
+    expected_duration_sec: float | None = None,
 ) -> bool:
     """Concatenate clips using filter_complex (handles resolution/audio mismatches)."""
     target_w, target_h = _pick_target_resolution(props_list)
@@ -1502,6 +1653,8 @@ def _concatenate_filter_complex(
             output_file=output_file,
             os_error_message="Filter-complex concatenation failed.",
             cancel_flag=cancel_flag,
+            on_progress=on_progress,
+            expected_duration_sec=expected_duration_sec,
         )
         if result is None or result.returncode != 0:
             error_details = [
@@ -1529,6 +1682,8 @@ def _concatenate_demuxer(
     output_file: str,
     reencode_on_fail: bool,
     cancel_flag: Callable[[], bool] | None = None,
+    on_progress: Callable[[float], None] | None = None,
+    expected_duration_sec: float | None = None,
 ) -> bool:
     """Concatenate clips using concat demuxer (fast path for matching properties)."""
     with tempfile.NamedTemporaryFile(
@@ -1595,6 +1750,8 @@ def _concatenate_demuxer(
                 output_file=output_file,
                 os_error_message="Concatenation failed during re-encoding fallback.",
                 cancel_flag=cancel_flag,
+                on_progress=on_progress,
+                expected_duration_sec=expected_duration_sec,
             )
             if ffmpeg_result is None:
                 return False

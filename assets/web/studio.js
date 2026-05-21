@@ -2691,6 +2691,8 @@
     if (s) s.classList.toggle("active", active);
   }
 
+  var setButtonProgress = ClipgenPrimitives.setButtonProgress;
+
   function createPulserOverlay() {
     var overlay = el("div", "card-gen-overlay");
     overlay.innerHTML =
@@ -2835,11 +2837,20 @@
     var pending = (sheetItems.length > 0 ? 1 : 0) + (intakeItems.length > 0 ? 1 : 0);
     var sheetCellTotal = 0;
     var sheetCellsDone = 0;
+    var intakeDone = 0;
+    var intakeTotal = intakeItems.length;
     var generateCardIndex = null;
+
+    function updateGenerateButtonProgress() {
+      var total = sheetCellTotal + intakeTotal;
+      if (total <= 0) return;
+      setButtonProgress("generateBtn", (sheetCellsDone + intakeDone) / total);
+    }
 
     function finishBranch() {
       if (--pending > 0) return;
       updateGenerateProgress(0, 0);
+      setButtonProgress("generateBtn", null);
       setTitleSpinner("artifactsSpinner", false);
       state.generating = false;
       setGeneratingLock(false);
@@ -2890,6 +2901,7 @@
         if (!data.cell) return;
         sheetCellsDone++;
         updateGenerateProgress(sheetCellsDone, sheetCellTotal);
+        updateGenerateButtonProgress();
         var cards = generateCardIndex[data.cell] || [];
         if (data.ok) {
           for (var ci = 0; ci < cards.length; ci++) setCardResult(cards[ci], true);
@@ -2979,6 +2991,8 @@
           totalFail++;
           if (card) setCardResult(card, false);
         }
+        intakeDone++;
+        updateGenerateButtonProgress();
       }
 
       // Streaming NDJSON response — manual fetch is required to get a reader
@@ -3086,45 +3100,119 @@
       setCardQueued(reelCards[i]);
     }
 
-    apiPost(endpoint, reelBody)
-      .then(function (data) {
-        state.generating = false;
-        setTitleSpinner("reelSpinner", false);
-        setGeneratingLock(false);
-        qs("#cancelReelBtn").classList.add("hidden");
+    // Progress aggregator. Reel work has two phases: per-clip generation
+    // (weighted 0.7 — most of the wall time) followed by concatenation (0.3,
+    // the re-encode pass when resolutions/codecs differ). Weights are an
+    // estimate; the bar stays monotonic because clip progress reaches 1.0
+    // before concat starts.
+    var totalClips = 0;
+    var clipsDone = 0;
+    var concatFraction = 0;
+    var finalPayload = null;
+    var cancelled = false;
+    var finished = false;
 
-        var cancelled = !!data.cancelled;
-        var cards = list.querySelectorAll(".queue-card");
-        for (var j = 0; j < cards.length; j++) {
-          if (cancelled) {
-            clearCardStatus(cards[j]);
-          } else {
-            setCardResult(cards[j], !!data.ok);
-          }
-        }
+    function updateProgress() {
+      var clipFraction = totalClips > 0 ? Math.min(clipsDone / totalClips, 1) : 0;
+      var overall = clipFraction * 0.7 + concatFraction * 0.3;
+      setButtonProgress("buildReelBtn", overall);
+    }
 
-        if (cancelled) {
-          showResult(null, "Reel generation cancelled");
-        } else if (data.ok) {
-          showResult("Reel built successfully", null);
+    function finish() {
+      if (finished) return;
+      finished = true;
+      state.generating = false;
+      setTitleSpinner("reelSpinner", false);
+      setGeneratingLock(false);
+      qs("#cancelReelBtn").classList.add("hidden");
+      setButtonProgress("buildReelBtn", null);
+
+      var data = finalPayload || {};
+      var isCancelled = cancelled || !!data.cancelled;
+
+      var cards = list.querySelectorAll(".queue-card");
+      for (var j = 0; j < cards.length; j++) {
+        if (isCancelled) {
+          clearCardStatus(cards[j]);
         } else {
-          showResult(null, data.error || "Reel build failed");
+          setCardResult(cards[j], !!data.ok);
         }
-        qs("#statusOverlay").classList.remove("hidden");
+      }
+
+      if (isCancelled) {
+        showResult(null, "Reel generation cancelled");
+      } else if (data.ok) {
+        showResult("Reel built successfully", null);
+      } else {
+        showResult(null, data.error || "Reel build failed");
+      }
+      qs("#statusOverlay").classList.remove("hidden");
+    }
+
+    function handleLine(line) {
+      var data;
+      try { data = JSON.parse(line); } catch (e) { return; }
+      if (!data) return;
+      if (data.cancelled) cancelled = true;
+      if (data.phase === "start") {
+        totalClips = data.total_clips || 0;
+        updateProgress();
+      } else if (data.phase === "clip_done") {
+        clipsDone += 1;
+        updateProgress();
+      } else if (data.phase === "concat") {
+        concatFraction = typeof data.progress === "number" ? data.progress : 0;
+        updateProgress();
+      } else if (data.phase === "done") {
+        // Final NDJSON {"ok": ..., "reels": ...} line arrives separately.
+      } else if (data.ok !== undefined || data.error !== undefined) {
+        finalPayload = data;
+      }
+    }
+
+    fetch(endpoint, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(reelBody),
+    })
+      .then(function (response) {
+        if (!response.ok && response.status >= 400 && response.status !== 409) {
+          return response.text().then(function (txt) {
+            try {
+              finalPayload = JSON.parse(txt);
+            } catch (_) {
+              finalPayload = {
+                ok: false,
+                error: txt || ("HTTP " + response.status),
+              };
+            }
+            finish();
+          });
+        }
+        var reader = response.body.getReader();
+        var decoder = new TextDecoder();
+        var buffer = "";
+        function read() {
+          return reader.read().then(function (result) {
+            if (result.done) {
+              if (buffer.trim()) handleLine(buffer.trim());
+              finish();
+              return;
+            }
+            buffer += decoder.decode(result.value, { stream: true });
+            var lines = buffer.split("\n");
+            buffer = lines.pop();
+            for (var li = 0; li < lines.length; li++) {
+              if (lines[li].trim()) handleLine(lines[li].trim());
+            }
+            return read();
+          });
+        }
+        return read();
       })
       .catch(function (err) {
-        state.generating = false;
-        setTitleSpinner("reelSpinner", false);
-        setGeneratingLock(false);
-        qs("#cancelReelBtn").classList.add("hidden");
-
-        var cards = list.querySelectorAll(".queue-card");
-        for (var j = 0; j < cards.length; j++) {
-          setCardResult(cards[j], false);
-        }
-
-        showResult(null, "Request failed: " + err);
-        qs("#statusOverlay").classList.remove("hidden");
+        finalPayload = { ok: false, error: "Request failed: " + err };
+        finish();
       });
   }
 

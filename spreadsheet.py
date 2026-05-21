@@ -1420,7 +1420,11 @@ def generate_reel_timestamps(
         )
     elif selectors.get("severity"):
         sort_clips_by_severity(deduped)
-    else:
-        deduped.sort(key=lambda issue: (issue["cell"].row, issue["cell"].col))
+    # Default: preserve insertion order from the selector generators above.
+    # For the studio reel button, cells arrive in panel/drag order so the
+    # composed reel matches the on-screen card order. Selector-based CLI
+    # inputs (batch/categories/lines/keyword) naturally walk the sheet
+    # row-major, so they keep producing row-major reels without an explicit
+    # sort here.
 
     return deduped

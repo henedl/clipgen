@@ -19,6 +19,7 @@ import difflib
 import hashlib
 import os
 import threading
+import time
 from pathlib import Path
 from typing import Any, Callable
 
@@ -313,6 +314,7 @@ def _run_clip_pipeline(
     secondary_task_label: str | None = None,
     parallel: bool = False,
     cancel_flag: Callable[[], bool] | None = None,
+    on_clip_complete: Callable[[int, int], None] | None = None,
 ) -> tuple[list[Any], set[str]]:
     """Run shared clip-processing pipeline and return per-clip results.
 
@@ -337,6 +339,14 @@ def _run_clip_pipeline(
     total_clips = len(clips_list)
     workers = _resolve_clip_workers() if parallel else 0
     use_parallel = parallel and workers >= 2 and total_clips >= 2
+
+    completed_count = 0
+
+    def _notify_clip_done() -> None:
+        nonlocal completed_count
+        completed_count += 1
+        if on_clip_complete is not None:
+            on_clip_complete(completed_count, total_clips)
 
     if use_parallel:
         results: list[Any] = [None] * total_clips
@@ -370,6 +380,7 @@ def _run_clip_pipeline(
                             )
                             results[idx] = []
                         progress.update(task, advance=1)
+                        _notify_clip_done()
             _active_progress = None
             _active_secondary_task = None
         else:
@@ -396,6 +407,7 @@ def _run_clip_pipeline(
                             [str(exc)],
                         )
                         results[idx] = []
+                    _notify_clip_done()
     else:
         results = []
         progress = utils.create_progress_bar()
@@ -419,6 +431,7 @@ def _run_clip_pipeline(
                     )
                     results.append(wrapped_process(clip))
                     progress.update(task, advance=1)
+                    _notify_clip_done()
             _active_progress = None
             _active_secondary_task = None
         else:
@@ -432,6 +445,7 @@ def _run_clip_pipeline(
                 ):
                     utils.verbose_print(f"Processing clip {index} of {total_clips}...")
                 results.append(wrapped_process(clip))
+                _notify_clip_done()
 
     if missing_videos:
         utils.standard_print(f"* Missing source video files: {len(missing_videos)}")
@@ -949,8 +963,19 @@ def process_reel(
     clips_list: list[ClipRecord],
     output_file: str | None = None,
     cancel_flag: Callable[[], bool] | None = None,
+    progress_cb: Callable[[dict[str, Any]], None] | None = None,
 ) -> tuple[int, list[dict[str, Any]]]:
     """Process clips for reel mode: generate individual clips, concatenate into one video, clean up.
+
+    When *progress_cb* is supplied, fires dict-shaped progress events as work
+    advances:
+
+      ``{"phase": "start", "total_clips": N}``
+      ``{"phase": "clip_done", "clip_index": i, "total_clips": N}``
+      ``{"phase": "concat", "progress": 0.0..1.0}`` (throttled)
+      ``{"phase": "done"}``
+
+    Callers (the Flask reel routes) yield these as NDJSON to the frontend.
 
     Returns:
         Tuple of (1 if reel generated successfully else 0, reel records list).
@@ -962,6 +987,15 @@ def process_reel(
             "No clips to process for reel. No timestamps were found or selected."
         )
         return (0, [])
+
+    def _emit(event: dict[str, Any]) -> None:
+        if progress_cb is not None:
+            try:
+                progress_cb(event)
+            except Exception as exc:
+                utils.debug_print(f"reel progress_cb raised: {exc}")
+
+    _emit({"phase": "start", "total_clips": len(clips_list)})
 
     study_name = ""
     for clip in clips_list:
@@ -993,6 +1027,9 @@ def process_reel(
         ]
         return (segment_paths, clip_components)
 
+    def _on_clip_complete(done: int, total: int) -> None:
+        _emit({"phase": "clip_done", "clip_index": done - 1, "total_clips": total})
+
     all_results, _ = _run_clip_pipeline(
         clips_list,
         empty_warning="No clips to process for reel. No timestamps were found or selected.",
@@ -1001,6 +1038,7 @@ def process_reel(
         per_clip_fn=process_reel_clip,
         parallel=True,
         cancel_flag=cancel_flag,
+        on_clip_complete=_on_clip_complete,
     )
 
     # If cancelled, clean up any partial clip files and bail out
@@ -1038,9 +1076,26 @@ def process_reel(
                 pass
         return (0, [])
 
+    # Throttle concat progress events to ~5 Hz; ffmpeg's default -progress
+    # cadence (1/sec) is already low, but the throttle keeps things bounded
+    # if ffmpeg emits faster on short clips.
+    last_emit_ts: list[float] = [0.0]
+
+    def _on_concat_progress(fraction: float) -> None:
+        now = time.monotonic()
+        # Always emit the first and the final (>=0.99) update; throttle the rest.
+        if last_emit_ts[0] != 0.0 and fraction < 0.99 and now - last_emit_ts[0] < 0.2:
+            return
+        last_emit_ts[0] = now
+        _emit({"phase": "concat", "progress": fraction})
+
     def _concat() -> bool:
         return video.concatenate_clips(
-            clip_paths, output_file, reencode_on_fail=True, cancel_flag=cancel_flag
+            clip_paths,
+            output_file,
+            reencode_on_fail=True,
+            cancel_flag=cancel_flag,
+            on_progress=_on_concat_progress if progress_cb is not None else None,
         )
 
     ok = (
@@ -1088,6 +1143,7 @@ def process_reel(
     if reel_transcript:
         reel_record["transcript"] = reel_transcript
 
+    _emit({"phase": "done"})
     return (1, [reel_record])
 
 

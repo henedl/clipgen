@@ -3,13 +3,18 @@
  * (not an HTML string) so callers can wire event handlers cleanly and
  * appending hundreds of cards in a frame stays cheap.
  *
+ * Mutator helpers (e.g. setButtonProgress) take an existing element or
+ * an element id and update its state in-place; they pair with a CSS
+ * class defined in primitives.css.
+ *
  * Hue resolution falls back to categoryHue(label) from utils.js when
  * the caller omits an explicit `hue`.
  *
  * Surface (window.ClipgenPrimitives):
  *   createFilterChip, createParticipantPill, createDensityTimeline,
  *   createSparkBars, createClipCard, createTranscriptCard, createBtn,
- *   createSwimLane, createKpiCard, createCoverageMatrix
+ *   createSwimLane, createKpiCard, createCoverageMatrix,
+ *   setButtonProgress
  */
 
 (function (global) {
@@ -847,6 +852,23 @@
     return btn;
   }
 
+  // Render a .cg-btn as a left-to-right progress bar. Pairs with the
+  // .cg-btn-progress rule + --progress var in primitives.css. Accepts an
+  // element or an element id; pass a fraction in [0, 1] to set the fill,
+  // or null/-1 to clear it.
+  function setButtonProgress(btn, fraction) {
+    if (typeof btn === "string") btn = document.getElementById(btn);
+    if (!btn) return;
+    if (fraction == null || fraction < 0) {
+      btn.classList.remove("cg-btn-progress");
+      btn.style.removeProperty("--progress");
+      return;
+    }
+    btn.classList.add("cg-btn-progress");
+    var clamped = Math.max(0, Math.min(1, fraction));
+    btn.style.setProperty("--progress", (clamped * 100).toFixed(1) + "%");
+  }
+
   global.ClipgenPrimitives = {
     createFilterChip: createFilterChip,
     createParticipantPill: createParticipantPill,
@@ -858,5 +880,6 @@
     createSwimLane: createSwimLane,
     createKpiCard: createKpiCard,
     createCoverageMatrix: createCoverageMatrix,
+    setButtonProgress: setButtonProgress,
   };
 })(window);

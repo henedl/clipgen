@@ -343,6 +343,7 @@ def wrap_clip_with_cards(
     resolution: str | None = None,
     *,
     cancel_flag: Callable[[], bool] | None = None,
+    on_progress: Callable[[float], None] | None = None,
 ) -> bool:
     """Prepend a titlecard and append an endcard to a clip in a single ffmpeg encode.
 
@@ -382,6 +383,14 @@ def wrap_clip_with_cards(
         return True
 
     has_clip_audio = bool(probed and probed.get("audio_codec"))
+    clip_duration = (
+        float(probed["duration"]) if probed and probed.get("duration") else 0.0
+    )
+    expected_wrap_duration = (
+        clip_duration + 2 * config.TITLECARD_DURATION_SECONDS
+        if clip_duration > 0
+        else None
+    )
 
     titlecard_path = build_titlecard_frame(clip, resolution, cancel_flag=cancel_flag)
     endcard_path = get_or_build_endcard(resolution, cancel_flag=cancel_flag)
@@ -432,6 +441,8 @@ def wrap_clip_with_cards(
             output_file=output_temp_path,
             os_error_message="Filter-based concat failed while wrapping clip with cards.",
             cancel_flag=cancel_flag,
+            on_progress=on_progress,
+            expected_duration_sec=expected_wrap_duration,
         )
         if ffmpeg_result is None or ffmpeg_result.returncode != 0:
             utils.warning_print(

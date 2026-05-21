@@ -98,6 +98,10 @@
   --accent:           #2D6BFF;
   --accent-hover:     #4781ff;
   --accent-fg:        #ffffff;
+  /* Slightly darker accent for in-button progress fill — readable contrast
+     against --accent-fg, distinct enough from --accent that the boundary
+     between filled and unfilled portions is visible on the solid button. */
+  --accent-progress-fill: #1a4fd9;
 
   /* Borders */
   --border:           #23252a;
@@ -277,6 +281,7 @@ html[data-theme="light"],
   --accent:           #2D6BFF;
   --accent-hover:     #1f5be6;
   --accent-fg:        #ffffff;
+  --accent-progress-fill: #1a4fd9;
 
   /* Borders */
   --border:           #e0ddd5;

@@ -158,6 +158,58 @@ def test_make_clip_record_attaches_timestamp_baseline(fake_sheet_meta):
     assert clip.get("timestamp_baseline") == "09:12:00"
 
 
+def test_generate_reel_timestamps_preserves_input_cell_order(
+    monkeypatch, fake_sheet_meta, make_clip
+):
+    """Explicit cell selectors compose in input order, not row-major.
+
+    Studio's reel button sends cells in panel/drag order; the composed reel
+    must match that order so the on-screen card sequence equals the output
+    sequence. Previously the function force-sorted by (row, col), which broke
+    the Studio UX whenever the user rearranged cards or queued cells from
+    non-adjacent rows.
+    """
+    # Three cells: caller sends row 7 first, then row 3, then row 5. The
+    # composed reel should match — not (3, 5, 7).
+    clip_r7 = make_clip(row=7, col=2)
+    clip_r3 = make_clip(row=3, col=2)
+    clip_r5 = make_clip(row=5, col=2)
+
+    monkeypatch.setattr(
+        spreadsheet,
+        "parse_reel_input",
+        lambda _input: {
+            "batch": False,
+            "keyword": False,
+            "chronologic": False,
+            "highlights": False,
+            "severity": False,
+            "lines": [],
+            "ranges": [],
+            "categories": [],
+            "cells": [("P01", 7), ("P01", 3), ("P01", 5)],
+            "participants": [],
+        },
+    )
+    monkeypatch.setattr(
+        spreadsheet,
+        "generate_cell_timestamps",
+        lambda ctx, cells: [clip_r7, clip_r3, clip_r5],
+    )
+
+    ctx = _make_context(
+        sheet_data=[["Study"]],
+        id_cell=fake_sheet_meta.id_cell,
+        observation_cell=fake_sheet_meta.observation_cell,
+        category_cell=fake_sheet_meta.category_cell,
+        num_participants=1,
+        study_name="study",
+    )
+
+    clips = spreadsheet.generate_reel_timestamps(ctx, "P01.7, P01.3, P01.5")
+    assert [c["cell"].row for c in clips] == [7, 3, 5]
+
+
 def test_generate_reel_timestamps_dedupes_cells(
     monkeypatch, fake_sheet_meta, make_clip
 ):
