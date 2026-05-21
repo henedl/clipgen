@@ -234,8 +234,6 @@ def test_orchestrator_stop_then_restart_isolates_run_state(
     longer its own and skip cleanup, leaving the successor visible and
     cancellable.
     """
-    import time
-
     orch = transcripts_server._orchestrator
     pid = "P01"
 
