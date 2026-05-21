@@ -25,6 +25,8 @@ Studio API endpoints (all under /studio/):
   GET/POST /api/artifact-stashes – artifact stash CRUD
   POST /api/generate-intake    – generate artifacts from an intake/screenspace manifest
   GET  /api/sheet/baseline      – per-participant baseline timestamps for convergence
+  GET  /api/convergence/offsets – per-participant convergence display offsets
+  PUT  /api/convergence/offsets – persist per-participant convergence display offsets
   GET  /api/settings           – read current config settings
   PUT  /api/settings           – update config settings
   GET  /api/status             – reports which interfaces are active (studio/screenspace/transcripts)
@@ -34,6 +36,7 @@ import concurrent.futures
 import copy
 import hashlib
 import json
+import math
 import os
 import re
 import sys
@@ -387,6 +390,79 @@ def api_sheet_baseline() -> FlaskResponse:
         baselines[pid] = utils._clock_to_seconds(value) or 0
 
     return jsonify({"ok": True, "baselines": baselines})
+
+
+@studio_bp.route("/api/convergence/offsets")
+def api_convergence_offsets_get() -> FlaskResponse:
+    """Return persisted per-participant convergence display offsets (seconds, signed).
+
+    Independent from /api/sheet/baseline: baselines convert sheet wall-clock
+    to video-time (sheet-only). Offsets shift every source's events for a
+    participant uniformly so misaligned recording start times can be nudged
+    until lanes line up visually in the Convergence Browser.
+
+    Response: {"ok": true, "offsets": {"P01": 12.5, "P03": -7.0}}
+    """
+    data = utils.load_json_manifest(
+        config.CONVERGENCE_OFFSETS_FILENAME, default={"offsets": {}}
+    )
+    raw = data.get("offsets") if isinstance(data, dict) else None
+    offsets: dict[str, float] = {}
+    if isinstance(raw, dict):
+        for pid, value in raw.items():
+            if not isinstance(pid, str):
+                continue
+            try:
+                num = float(value)
+            except (TypeError, ValueError):
+                continue
+            if math.isfinite(num) and num != 0:
+                offsets[pid] = num
+    return jsonify({"ok": True, "offsets": offsets})
+
+
+@studio_bp.route("/api/convergence/offsets", methods=["PUT"])
+def api_convergence_offsets_put() -> FlaskResponse:
+    """Persist per-participant convergence display offsets.
+
+    Body: {"offsets": {"P01": 12.5, ...}}. Zeros and non-finite values are
+    dropped. When the cleaned dict is empty, the manifest file is deleted
+    so a clean output dir has no leftover empty manifest.
+    """
+    data = request.get_json(silent=True) or {}
+    raw = data.get("offsets")
+    if not isinstance(raw, dict):
+        return jsonify({"ok": False, "error": "Invalid offsets payload"}), 400
+
+    cleaned: dict[str, float] = {}
+    for pid, value in raw.items():
+        if not isinstance(pid, str) or not pid:
+            continue
+        try:
+            num = float(value)
+        except (TypeError, ValueError):
+            continue
+        if not math.isfinite(num):
+            continue
+        if num == 0:
+            continue
+        cleaned[pid] = num
+
+    settings_path = (
+        Path(utils.get_effective_output_dir()) / config.CONVERGENCE_OFFSETS_FILENAME
+    )
+    if not cleaned:
+        if settings_path.is_file():
+            try:
+                settings_path.unlink()
+            except OSError:
+                pass
+    else:
+        utils.save_json_manifest(
+            config.CONVERGENCE_OFFSETS_FILENAME, {"offsets": cleaned}
+        )
+
+    return jsonify({"ok": True, "offsets": cleaned})
 
 
 @studio_bp.route("/api/sheet/refresh", methods=["POST"])

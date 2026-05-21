@@ -214,6 +214,74 @@ def test_api_sheet_baseline_partial(client, monkeypatch):
     assert data["baselines"]["P03"] == 33600
 
 
+def test_api_convergence_offsets_get_empty(client, monkeypatch, tmp_path):
+    monkeypatch.setattr("config.OUTPUT_DIR", str(tmp_path))
+    resp = client.get("/studio/api/convergence/offsets")
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["ok"] is True
+    assert data["offsets"] == {}
+
+
+def test_api_convergence_offsets_put_persists(client, monkeypatch, tmp_path):
+    import config
+
+    monkeypatch.setattr("config.OUTPUT_DIR", str(tmp_path))
+    payload = {"offsets": {"P01": 12.5, "P03": -7.0}}
+    resp = client.put("/studio/api/convergence/offsets", json=payload)
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["ok"] is True
+    assert data["offsets"] == {"P01": 12.5, "P03": -7.0}
+
+    saved = json.loads((tmp_path / config.CONVERGENCE_OFFSETS_FILENAME).read_text())
+    assert saved == {"offsets": {"P01": 12.5, "P03": -7.0}}
+
+    resp2 = client.get("/studio/api/convergence/offsets")
+    assert resp2.get_json()["offsets"] == {"P01": 12.5, "P03": -7.0}
+
+
+def test_api_convergence_offsets_put_strips_zeros_and_garbage(
+    client, monkeypatch, tmp_path
+):
+    monkeypatch.setattr("config.OUTPUT_DIR", str(tmp_path))
+    payload = {
+        "offsets": {
+            "P01": 5.0,
+            "P02": 0,
+            "P03": 0.0,
+            "P04": "not a number",
+            "P05": float("inf"),
+            "": 9.0,
+        }
+    }
+    resp = client.put("/studio/api/convergence/offsets", json=payload)
+    assert resp.status_code == 200
+    assert resp.get_json()["offsets"] == {"P01": 5.0}
+
+
+def test_api_convergence_offsets_put_empty_removes_file(client, monkeypatch, tmp_path):
+    import config
+
+    monkeypatch.setattr("config.OUTPUT_DIR", str(tmp_path))
+    # Seed a manifest file via an earlier put.
+    client.put("/studio/api/convergence/offsets", json={"offsets": {"P01": 3.0}})
+    settings_file = tmp_path / config.CONVERGENCE_OFFSETS_FILENAME
+    assert settings_file.is_file()
+
+    resp = client.put("/studio/api/convergence/offsets", json={"offsets": {"P01": 0}})
+    assert resp.status_code == 200
+    assert resp.get_json()["offsets"] == {}
+    assert not settings_file.is_file()
+
+
+def test_api_convergence_offsets_put_rejects_non_dict(client, monkeypatch, tmp_path):
+    monkeypatch.setattr("config.OUTPUT_DIR", str(tmp_path))
+    resp = client.put("/studio/api/convergence/offsets", json={"offsets": "nope"})
+    assert resp.status_code == 400
+    assert resp.get_json()["ok"] is False
+
+
 def test_api_reel_highlights_duration_override(client, monkeypatch):
     """highlights_duration temporarily overrides config and is restored after."""
     import config

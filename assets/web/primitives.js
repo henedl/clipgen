@@ -518,6 +518,7 @@
           row.style.top = ((pi * sCount + si) * subH) + "px";
           row.style.height = subH + "px";
           row.dataset.participantIdx = pi;
+          row.dataset.participant = state.participants[pi];
           row.dataset.sourceIdx = si;
           if (si === sCount - 1) row.classList.add("is-participant-end");
           if (pi === pCount - 1 && si === sCount - 1) row.classList.add("is-last");
@@ -565,6 +566,7 @@
         marker.style.background = "oklch(0.78 0.14 " + hue + ")";
         marker.style.boxShadow = "0 0 0 1px oklch(0.18 0.04 " + hue + " / 0.55)";
         marker.dataset.idx = idx;
+        marker.dataset.participant = e.p;
         if (typeof opts.onEventHover === "function") {
           marker.addEventListener("mouseenter", function () { opts.onEventHover(idx, e, true); });
           marker.addEventListener("mouseleave", function () { opts.onEventHover(idx, e, false); });
@@ -581,10 +583,12 @@
       labels.textContent = "";
       var subH = effectiveSubRowH();
       var participantH = subH * state.sources.length;
-      state.participants.forEach(function (p) {
+      state.participants.forEach(function (p, pi) {
         var label = document.createElement("div");
         label.className = "cg-swim-label";
         label.style.height = participantH + "px";
+        label.dataset.participant = p;
+        label.dataset.participantIdx = pi;
         label.textContent = p;
         labels.appendChild(label);
       });
@@ -638,6 +642,25 @@
         cl.lane.classList.toggle("is-hovered", on);
         cl.connector.classList.toggle("is-hovered", on);
       });
+    };
+
+    wrap.getLabelForParticipant = function (pid) {
+      return labels.querySelector('.cg-swim-label[data-participant="' + pid + '"]');
+    };
+    wrap.getRowsForParticipant = function (pid) {
+      return lanes.querySelectorAll('.cg-swim-row[data-participant="' + pid + '"]');
+    };
+    wrap.getEventsForParticipant = function (pid) {
+      var out = [];
+      for (var i = 0; i < state.events.length; i++) {
+        if (state.events[i].p === pid) out.push(state.eventEls[i]);
+      }
+      return out;
+    };
+    wrap.getLanesPxPerSec = function () {
+      var w = lanes.getBoundingClientRect().width;
+      var d = state.durationSec || 1;
+      return w / d;
     };
 
     renderAll();

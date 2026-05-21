@@ -419,7 +419,7 @@
   user-select: none;
   --cg-swim-h: 320px;
   --cg-swim-row-h: 26px;
-  --cg-swim-label-w: 50px;
+  --cg-swim-label-w: 72px;
 }
 
 .cg-swim-axis {
@@ -561,7 +561,6 @@
   left: 0;
   top: 22px;
   width: var(--cg-swim-label-w);
-  pointer-events: none;
 }
 
 .cg-swim-label {
@@ -572,6 +571,27 @@
   font-size: 10px;
   color: var(--fg-faint);
   white-space: nowrap;
+  pointer-events: none;
+}
+
+/* Lane unlocked state — the participant strip becomes draggable. The
+ * `is-unlocked` class is set externally (Convergence Browser) once a
+ * participant's lock button is toggled. Rows promote to pointer-events:auto
+ * so the swim-lane's delegated mousedown can find the participant ancestor;
+ * markers belonging to the same participant are demoted to pointer-events:
+ * none so they don't intercept the drag (or fire a stray click).  */
+.cg-swim-row.is-unlocked,
+.cg-swim-label.is-unlocked {
+  cursor: grab;
+  background: var(--bg-elevated);
+  pointer-events: auto;
+}
+.cg-swim-row.is-unlocked.is-dragging,
+.cg-swim-label.is-unlocked.is-dragging {
+  cursor: grabbing;
+}
+.cg-swim-event.is-unlocked {
+  pointer-events: none;
 }
 
 /* ---- KpiCard ---- */

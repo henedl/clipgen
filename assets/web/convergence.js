@@ -20,6 +20,13 @@
     active: false,
     initialized: false,
     baselines: null,
+    // Per-participant display offset (seconds, signed) for compensating for
+    // videos that were recorded starting at different wall-clock moments.
+    // Stacks on top of `baselines` (which is a sheet-only clock→video shift).
+    offsets: {},
+    offsetsLoaded: false,
+    editing: null,           // participant id currently in "unlocked" edit mode
+    _dragTx: null,           // scratchpad for the active drag (snapshot of markers + start coords)
     events: [],
     filteredEvents: [],
     convergenceZones: [],
@@ -87,7 +94,9 @@
     var preview = cvEnsureFramePreview();
     var img = preview.querySelector("img");
     var lbl = preview.querySelector(".cv-frame-preview-label");
-    var url = cvFrameUrl(event.source, event.participant, event.start);
+    // Frame preview must hit the source video at its real (raw) time, never the
+    // offset-adjusted convergence-display time.
+    var url = cvFrameUrl(event.source, event.participant, event.rawStart);
     var seq = ++_cvPreviewSeq;
 
     var cached = _cvFrameCache[url];
@@ -121,7 +130,7 @@
         });
     }
 
-    lbl.textContent = event.participant + " · " + formatTime(event.start);
+    lbl.textContent = event.participant + " · " + formatTime(event.rawStart);
     preview.classList.remove("hidden");
     positionTooltipAnchored(preview, markerEl.getBoundingClientRect());
   }
@@ -158,6 +167,21 @@
     var events = [];
     var participantSet = {};
 
+    // `start`/`end` on each event are offset-adjusted (display-time on the
+    // convergence timeline). `rawStart`/`rawEnd` preserve the original video
+    // time so frame previews, queue dispatches, and detail/callout labels
+    // can hit the underlying video correctly. The two offsets stack:
+    //   raw video time (already baseline-corrected for sheet events) + cvState.offsets[pid]
+    function applyOffset(pid, rawStart, rawEnd) {
+      var off = (cvState.offsets && cvState.offsets[pid]) || 0;
+      return {
+        rawStart: Math.max(0, rawStart),
+        rawEnd: Math.max(0, rawEnd),
+        start: Math.max(0, rawStart + off),
+        end: Math.max(0, rawEnd + off),
+      };
+    }
+
     // Sheet events
     if (state.sheetData && state.sheetData.rows) {
       var participants = state.sheetData.participants || [];
@@ -170,12 +194,15 @@
           var baselineOffset = (cvState.baselines && cvState.baselines[pid]) || 0;
           var segs = parseClipSegmentsForCell(cell.value, baselineOffset, CLIPGEN_CONFIG.defaultDuration);
           for (var s = 0; s < segs.length; s++) {
-            var start = segs[s].startSeconds;
-            var end = start + segs[s].duration;
+            var rawStartSh = segs[s].startSeconds;
+            var rawEndSh = rawStartSh + segs[s].duration;
+            var tSh = applyOffset(pid, rawStartSh, rawEndSh);
             events.push({
               participant: pid,
-              start: Math.max(0, start),
-              end: Math.max(0, end),
+              start: tSh.start,
+              end: tSh.end,
+              rawStart: tSh.rawStart,
+              rawEnd: tSh.rawEnd,
               source: "sheet",
               eventType: row.category || "uncategorized",
               label: row.observation || "",
@@ -196,10 +223,13 @@
     for (var i = 0; i < ssClusters.length; i++) {
       var cl = ssClusters[i];
       var clCount = cl.events ? cl.events.length : 1;
+      var tSs = applyOffset(cl.participant, cl.start, cl.end);
       events.push({
         participant: cl.participant,
-        start: cl.start,
-        end: cl.end,
+        start: tSs.start,
+        end: tSs.end,
+        rawStart: tSs.rawStart,
+        rawEnd: tSs.rawEnd,
         source: "screenspace",
         eventType: cl.event_type || cl.detector || "unknown",
         label: (cl.event_type || cl.detector || "") + " detection"
@@ -218,10 +248,13 @@
     for (var j = 0; j < trClusters.length; j++) {
       var tc = trClusters[j];
       var tcCount = tc.marks ? tc.marks.length : 1;
+      var tTr = applyOffset(tc.participant, tc.start, tc.end);
       events.push({
         participant: tc.participant,
-        start: tc.start,
-        end: tc.end,
+        start: tTr.start,
+        end: tTr.end,
+        rawStart: tTr.rawStart,
+        rawEnd: tTr.rawEnd,
         source: "transcript",
         eventType: tc.category || "bookmark",
         label: (tc.label || tc.text || "")
@@ -233,10 +266,16 @@
       participantSet[tc.participant] = true;
     }
 
-    // Duration
+    // Duration: take the max of raw and offset-adjusted ends so a negative
+    // offset on the right-most participant doesn't collapse the timeline.
+    // (Without considering rawEnd, the timeline would shrink in lockstep with
+    // a leftward shift and the marker's normalized position would stay put,
+    // masking the visible movement the user expects to see.)
     var maxEnd = 0;
     for (var k = 0; k < events.length; k++) {
       if (events[k].end > maxEnd) maxEnd = events[k].end;
+      var rawE = (typeof events[k].rawEnd === "number") ? events[k].rawEnd : events[k].end;
+      if (rawE > maxEnd) maxEnd = rawE;
     }
     cvState.duration = Math.max(maxEnd * 1.05, 60);
 
@@ -321,9 +360,15 @@
   function buildZone(start, end, events, windowSec) {
     var pSet = {};
     var starts = [];
+    var rawStarts = [];
+    var rawEnds = [];
     for (var i = 0; i < events.length; i++) {
       pSet[events[i].participant] = true;
       starts.push(events[i].start);
+      var rs = (typeof events[i].rawStart === "number") ? events[i].rawStart : events[i].start;
+      var re = (typeof events[i].rawEnd === "number") ? events[i].rawEnd : events[i].end;
+      rawStarts.push(rs);
+      rawEnds.push(re);
     }
     var participants = Object.keys(pSet);
     var tightness = stddev(starts);
@@ -332,12 +377,21 @@
     return {
       start: start,
       end: end,
+      rawStart: median(rawStarts),
+      rawEnd: median(rawEnds),
       participantCount: participants.length,
       participants: participants,
       events: events,
       tightness: tightness,
       strength: strength,
     };
+  }
+
+  function median(values) {
+    if (!values || !values.length) return 0;
+    var arr = values.slice().sort(function (a, b) { return a - b; });
+    var mid = Math.floor(arr.length / 2);
+    return arr.length % 2 ? arr[mid] : (arr[mid - 1] + arr[mid]) / 2;
   }
 
   // --- Filter Pipeline ---
@@ -505,11 +559,22 @@
     refreshBtn.classList.add("cv-refresh-btn");
     refreshBtn.title = "Re-fetch upstream data and recompute convergence";
 
+    var resetBtn = P.createBtn({
+      label: "Reset offsets",
+      icon: "arrow-uturn-left",
+      size: "sm",
+      onClick: resetAllOffsets,
+    });
+    resetBtn.id = "cvResetOffsetsBtn";
+    resetBtn.classList.add("cv-reset-btn", "hidden");
+    resetBtn.title = "Reset per-participant convergence alignment offsets";
+
     controls.appendChild(minCtl.label);
     controls.appendChild(winCtl.label);
     controls.appendChild(clusCtl.label);
     controls.appendChild(sortSelect);
     controls.appendChild(refreshBtn);
+    controls.appendChild(resetBtn);
 
     // Filters: stream buttons + divider + chip row
     var streamRow = el("div", "cv-stream-row");
@@ -703,6 +768,8 @@
     container.appendChild(swimLane);
     cvState.swimLaneEl = swimLane;
 
+    initOffsetEditing(swimLane, participants);
+
     // Cluster callouts row
     if (cvState.convergenceZones.length > 0) {
       var callouts = el("div", "cv-cluster-callouts");
@@ -711,6 +778,13 @@
         callouts.appendChild(buildCalloutCard(z, idx));
       });
       container.appendChild(callouts);
+    }
+
+    // Reset-offsets toolbar button is hidden until at least one offset is set.
+    var resetBtn = qs("#cvResetOffsetsBtn");
+    if (resetBtn) {
+      var hasOffsets = cvState.offsets && Object.keys(cvState.offsets).length > 0;
+      resetBtn.classList.toggle("hidden", !hasOffsets);
     }
   }
 
@@ -730,7 +804,9 @@
     card.appendChild(dur);
 
     var ts = el("span", "cv-callout-ts cg-mono");
-    ts.textContent = "· " + formatTime(zone.start);
+    // Show raw (median) time so the timestamp is invariant under per-participant
+    // offsets — users adjusting lanes don't see callout times jump around.
+    ts.textContent = "· " + formatTime(typeof zone.rawStart === "number" ? zone.rawStart : zone.start);
     card.appendChild(ts);
 
     card.addEventListener("mouseenter", function () {
@@ -850,7 +926,10 @@
     var participantSet = {};
     for (var i = 0; i < sel.events.length; i++) participantSet[sel.events[i].participant] = true;
     var participantCount = Object.keys(participantSet).length;
-    headerText.textContent = formatTime(sel.start) + " – " + formatTime(sel.end)
+    // Show the underlying raw cluster span so the time matches the callout.
+    var hdrStart = (sel.zone && typeof sel.zone.rawStart === "number") ? sel.zone.rawStart : sel.start;
+    var hdrEnd = (sel.zone && typeof sel.zone.rawEnd === "number") ? sel.zone.rawEnd : sel.end;
+    headerText.textContent = formatTime(hdrStart) + " – " + formatTime(hdrEnd)
       + " · " + participantCount + " participant" + (participantCount !== 1 ? "s" : "")
       + " · " + sel.events.length + " event" + (sel.events.length !== 1 ? "s" : "");
     header.appendChild(headerText);
@@ -904,7 +983,9 @@
     var row = el("div", "cv-detail-event");
 
     var time = el("span", "cv-detail-time cg-mono");
-    time.textContent = formatTime(event.start) + " – " + formatTime(event.end);
+    // Display raw video time — what the user will see if they jump to this
+    // moment in the source video. Offset is purely a convergence display tool.
+    time.textContent = formatTime(event.rawStart) + " – " + formatTime(event.rawEnd);
     row.appendChild(time);
 
     var badge = el("span", "cv-detail-source-badge");
@@ -926,7 +1007,9 @@
     }
 
     if (window._studioFindOverlappingData && window._studioBuildXrefBadges) {
-      var xref = window._studioFindOverlappingData(event.participant, event.start, event.end);
+      // Overlap is computed against raw video time, matching how other
+      // panels (Intake, Metadata) index their artifacts.
+      var xref = window._studioFindOverlappingData(event.participant, event.rawStart, event.rawEnd);
       var badges = window._studioBuildXrefBadges(xref, event.source);
       if (badges) {
         badges.style.position = "relative";
@@ -956,10 +1039,13 @@
   // --- Queue Dispatch ---
 
   function buildQueueItem(event) {
+    // start/end are the seek points into the source video, so they MUST
+    // be the raw (un-offset) times — the convergence offset is purely a
+    // visual alignment in the swim lane and never persists into artifacts.
     var item = {
       participant: event.participant,
-      start: event.start,
-      end: event.end,
+      start: event.rawStart,
+      end: event.rawEnd,
     };
     if (event.source === "screenspace") {
       item.desc = event.eventType;
@@ -1069,19 +1155,338 @@
     }
 
     if (cvState.baselines === null) {
-      // First activation: fetch baselines + bootstrap intake/transcript data
-      // in parallel, then compute. Subsequent activations use the staleness
-      // banner so the user controls when to pull in new upstream data.
+      // First activation: fetch baselines + per-participant convergence offsets +
+      // bootstrap intake/transcript data in parallel, then compute. Subsequent
+      // activations use the staleness banner so the user controls when to pull
+      // in new upstream data.
       Promise.all([
         apiGet("api/sheet/baseline").catch(function () { return { ok: false }; }),
+        apiGet("api/convergence/offsets").catch(function () { return { ok: false }; }),
         bootstrapIntakeData(),
       ]).then(function (results) {
-        var data = results[0];
-        cvState.baselines = (data && data.ok && data.baselines) ? data.baselines : {};
+        var bData = results[0];
+        cvState.baselines = (bData && bData.ok && bData.baselines) ? bData.baselines : {};
+        var oData = results[1];
+        cvState.offsets = (oData && oData.ok && oData.offsets) ? oData.offsets : {};
+        cvState.offsetsLoaded = true;
         recalculate();
       });
     } else {
       checkStaleness();
+    }
+  }
+
+  // --- Offsets persistence ---
+
+  var _cvSaveOffsetsTimer = null;
+  function cvSaveOffsets() {
+    if (!cvState.offsetsLoaded) return;
+    clearTimeout(_cvSaveOffsetsTimer);
+    _cvSaveOffsetsTimer = setTimeout(function () {
+      _cvSaveOffsetsTimer = null;
+      fetch("api/convergence/offsets", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ offsets: cvState.offsets || {} }),
+      }).catch(function () {
+        // Persistence is best-effort; client state remains correct in-session.
+      });
+    }, 500);
+  }
+
+  // --- Per-participant alignment offset editor ---
+
+  function formatOffsetBadge(seconds) {
+    if (!seconds) return "";
+    var sign = seconds > 0 ? "+" : "−";
+    var abs = Math.abs(seconds);
+    var rounded = abs >= 10 ? Math.round(abs) : Math.round(abs * 10) / 10;
+    return sign + rounded + "s";
+  }
+
+  function commitOffset(pid, seconds) {
+    if (!pid) return;
+    var num = typeof seconds === "number" ? seconds : parseFloat(seconds);
+    if (!isFinite(num)) num = 0;
+    var maxAbs = Math.max(cvState.duration || 0, 60);
+    num = Math.max(-maxAbs, Math.min(maxAbs, num));
+    if (Math.abs(num) < 0.05) {
+      if (cvState.offsets[pid] !== undefined) delete cvState.offsets[pid];
+    } else {
+      cvState.offsets[pid] = num;
+    }
+    recalculate();
+    cvSaveOffsets();
+  }
+
+  function resetAllOffsets() {
+    if (!cvState.offsets || Object.keys(cvState.offsets).length === 0) return;
+    if (!window.confirm("Reset offsets for all participants?")) return;
+    cvState.offsets = {};
+    cvState.editing = null;
+    recalculate();
+    cvSaveOffsets();
+  }
+
+  function setEditingParticipant(pid) {
+    // Single-editor mode: switching to a new participant commits + locks any
+    // current editor (no extra step — its offset is already in cvState.offsets).
+    if (cvState.editing === pid) {
+      cvState.editing = null;
+    } else {
+      cvState.editing = pid || null;
+    }
+    applyEditingClasses();
+  }
+
+  function applyEditingClasses() {
+    if (!cvState.swimLaneEl) return;
+    var sw = cvState.swimLaneEl;
+    sw.classList.toggle("is-editing", !!cvState.editing);
+
+    // Clear is-unlocked on every label/row/event, then re-add to the active
+    // participant. Events get the class too so marker pointer-events can be
+    // disabled — otherwise they intercept the drag mousedown / fire a stray
+    // click selection on mouseup.
+    var labels = sw.querySelectorAll(".cg-swim-label");
+    for (var i = 0; i < labels.length; i++) {
+      labels[i].classList.remove("is-unlocked");
+    }
+    var rows = sw.querySelectorAll(".cg-swim-row");
+    for (var j = 0; j < rows.length; j++) {
+      rows[j].classList.remove("is-unlocked");
+    }
+    var allEvents = sw.querySelectorAll(".cg-swim-event");
+    for (var ei = 0; ei < allEvents.length; ei++) {
+      allEvents[ei].classList.remove("is-unlocked");
+    }
+    if (cvState.editing) {
+      var lbl = sw.getLabelForParticipant(cvState.editing);
+      if (lbl) lbl.classList.add("is-unlocked");
+      var rs = sw.getRowsForParticipant(cvState.editing);
+      for (var k = 0; k < rs.length; k++) rs[k].classList.add("is-unlocked");
+      var evs = sw.getEventsForParticipant(cvState.editing);
+      for (var m = 0; m < evs.length; m++) evs[m].classList.add("is-unlocked");
+      // Sync the input value with the current offset; user clicks to focus
+      // (intentional — we don't want a recalculate-driven rerender to steal
+      // focus from wherever the user just clicked).
+      var inp = lbl && lbl.querySelector(".cv-offset-input");
+      if (inp) {
+        inp.value = ((cvState.offsets && cvState.offsets[cvState.editing]) || 0).toFixed(1);
+      }
+    }
+  }
+
+  function buildOffsetLabel(swimLane, pid) {
+    var label = swimLane.getLabelForParticipant(pid);
+    if (!label) return;
+    var off = (cvState.offsets && cvState.offsets[pid]) || 0;
+    label.classList.add("cv-offset-label");
+    label.classList.toggle("is-adjusted", off !== 0);
+    label.textContent = "";
+
+    var lockBtn = document.createElement("button");
+    lockBtn.type = "button";
+    lockBtn.className = "cv-offset-lock-btn";
+    lockBtn.title = "Unlock to drag or type an alignment offset";
+    lockBtn.setAttribute("aria-label", "Toggle alignment for " + pid);
+    lockBtn.addEventListener("mousedown", function (e) { e.stopPropagation(); });
+    lockBtn.addEventListener("click", function (e) {
+      e.stopPropagation();
+      setEditingParticipant(pid);
+    });
+    label.appendChild(lockBtn);
+
+    var pidSpan = el("span", "cv-offset-pid");
+    pidSpan.textContent = pid;
+    label.appendChild(pidSpan);
+
+    var badge = el("span", "cv-offset-badge");
+    badge.textContent = formatOffsetBadge(off);
+    label.appendChild(badge);
+
+    var input = document.createElement("input");
+    input.type = "number";
+    input.className = "cv-offset-input cg-mono";
+    input.step = "0.5";
+    input.autocomplete = "off";
+    input.value = off.toFixed(1);
+    input.addEventListener("mousedown", function (e) { e.stopPropagation(); });
+    input.addEventListener("keydown", function (e) {
+      if (e.key === "Enter") { e.preventDefault(); input.blur(); }
+      else if (e.key === "Escape") { input.value = ((cvState.offsets && cvState.offsets[pid]) || 0).toFixed(1); input.blur(); }
+    });
+    input.addEventListener("change", function () {
+      commitOffset(pid, parseFloat(input.value));
+    });
+    label.appendChild(input);
+  }
+
+  function initOffsetEditing(swimLane, participants) {
+    if (!swimLane) return;
+    for (var i = 0; i < participants.length; i++) {
+      buildOffsetLabel(swimLane, participants[i]);
+    }
+    applyEditingClasses();
+    renderVoidOverlays(swimLane, participants);
+    installDragHandlers(swimLane);
+  }
+
+  // Hatched overlay over the portion of a participant's lanes where their
+  // video had not yet started (positive offset, void on the left) or had
+  // already ended (negative offset, void on the right). Re-rendered on every
+  // recalculate and live-updated during drag.
+  function renderVoidOverlays(swimLane, participants) {
+    var lanes = swimLane.querySelector(".cg-swim-lanes");
+    if (!lanes) return;
+    var existing = lanes.querySelectorAll(".cv-offset-void");
+    for (var i = 0; i < existing.length; i++) existing[i].remove();
+    if (!cvState.duration || cvState.duration <= 0) return;
+    for (var p = 0; p < participants.length; p++) {
+      var pid = participants[p];
+      var off = (cvState.offsets && cvState.offsets[pid]) || 0;
+      if (!off) continue;
+      applyVoidForParticipant(swimLane, pid, off);
+    }
+  }
+
+  function applyVoidForParticipant(swimLane, pid, off) {
+    var lanes = swimLane.querySelector(".cg-swim-lanes");
+    if (!lanes) return;
+    var existing = lanes.querySelector('.cv-offset-void[data-participant="' + pid + '"]');
+    if (Math.abs(off) < 0.05 || !cvState.duration) {
+      if (existing) existing.remove();
+      return;
+    }
+    var rows = swimLane.getRowsForParticipant(pid);
+    if (!rows || !rows.length) {
+      if (existing) existing.remove();
+      return;
+    }
+    var firstTop = parseFloat(rows[0].style.top) || 0;
+    var lastRow = rows[rows.length - 1];
+    var lastTop = parseFloat(lastRow.style.top) || 0;
+    var lastHeight = parseFloat(lastRow.style.height) || 0;
+    var totalHeight = (lastTop + lastHeight) - firstTop;
+
+    var pctOfDuration = Math.abs(off) / cvState.duration * 100;
+    pctOfDuration = Math.max(0, Math.min(100, pctOfDuration));
+
+    var voidEl = existing || document.createElement("div");
+    if (!existing) {
+      voidEl.className = "cv-offset-void";
+      voidEl.dataset.participant = pid;
+      lanes.appendChild(voidEl);
+    }
+    voidEl.style.top = firstTop + "px";
+    voidEl.style.height = totalHeight + "px";
+    if (off > 0) {
+      voidEl.style.left = "0";
+      voidEl.style.right = "auto";
+      voidEl.style.width = pctOfDuration + "%";
+      voidEl.title = pid + " · no data for first " + Math.round(off) + "s";
+    } else {
+      voidEl.style.right = "0";
+      voidEl.style.left = "auto";
+      voidEl.style.width = pctOfDuration + "%";
+      voidEl.title = pid + " · no data for last " + Math.round(-off) + "s";
+    }
+  }
+
+  // Document-level drag tracking. Mousedown listener is rebound to each new
+  // swim-lane (the DOM is rebuilt on every recalculate), but the mousemove/
+  // mouseup listeners are installed once at module init so re-renders don't
+  // accumulate handlers.
+  var _cvDragRafPending = false;
+  var _cvDragLastX = 0;
+  var _cvDragLiveInput = null;
+
+  function installDragHandlers(swimLane) {
+    swimLane.addEventListener("mousedown", function (e) {
+      if (!cvState.editing) return;
+      // Lock button + input mousedowns stopPropagation themselves.
+      var hit = e.target.closest('[data-participant="' + cvState.editing + '"]');
+      if (!hit) return;
+      e.preventDefault();
+      var pid = cvState.editing;
+      var pxPerSec = swimLane.getLanesPxPerSec();
+      if (!pxPerSec || !isFinite(pxPerSec) || pxPerSec <= 0) return;
+      cvState._dragTx = {
+        pid: pid,
+        startX: e.clientX,
+        pxPerSec: pxPerSec,
+        baseOffset: (cvState.offsets && cvState.offsets[pid]) || 0,
+        markers: swimLane.getEventsForParticipant(pid),
+        swimLane: swimLane,
+      };
+      _cvDragLastX = e.clientX;
+      var lbl = swimLane.getLabelForParticipant(pid);
+      if (lbl) lbl.classList.add("is-dragging");
+      var rs = swimLane.getRowsForParticipant(pid);
+      for (var r = 0; r < rs.length; r++) rs[r].classList.add("is-dragging");
+      _cvDragLiveInput = lbl && lbl.querySelector(".cv-offset-input");
+      document.body.style.userSelect = "none";
+    });
+  }
+
+  function _cvOnDocMouseMove(e) {
+    var tx = cvState._dragTx;
+    if (!tx) return;
+    _cvDragLastX = e.clientX;
+    if (_cvDragRafPending) return;
+    _cvDragRafPending = true;
+    requestAnimationFrame(function () {
+      _cvDragRafPending = false;
+      var tx2 = cvState._dragTx;
+      if (!tx2) return;
+      var deltaPx = _cvDragLastX - tx2.startX;
+      var deltaSec = deltaPx / tx2.pxPerSec;
+      for (var i = 0; i < tx2.markers.length; i++) {
+        var m = tx2.markers[i];
+        // Preserve any baseline transform (e.g. translateX(-50%) for zero-width markers)
+        // by stacking the drag translation in front of it.
+        var orig = m.dataset._origTransform;
+        if (orig === undefined) {
+          orig = m.style.transform || "";
+          m.dataset._origTransform = orig;
+        }
+        m.style.transform = "translateX(" + deltaPx + "px) " + orig;
+      }
+      if (_cvDragLiveInput) {
+        _cvDragLiveInput.value = (tx2.baseOffset + deltaSec).toFixed(1);
+      }
+      // Keep the void overlay in sync with the in-flight offset so the
+      // hatched "no-data" region grows/shrinks live as the user drags.
+      if (tx2.swimLane) {
+        applyVoidForParticipant(tx2.swimLane, tx2.pid, tx2.baseOffset + deltaSec);
+      }
+    });
+  }
+
+  function _cvOnDocMouseUp(e) {
+    var tx = cvState._dragTx;
+    if (!tx) return;
+    var deltaPx = (e.clientX || _cvDragLastX) - tx.startX;
+    var deltaSec = deltaPx / tx.pxPerSec;
+    for (var i = 0; i < tx.markers.length; i++) {
+      var m = tx.markers[i];
+      if (m.dataset._origTransform !== undefined) {
+        m.style.transform = m.dataset._origTransform;
+        delete m.dataset._origTransform;
+      }
+    }
+    var sw = tx.swimLane;
+    if (sw) {
+      var lbl = sw.getLabelForParticipant(tx.pid);
+      if (lbl) lbl.classList.remove("is-dragging");
+      var rs = sw.getRowsForParticipant(tx.pid);
+      for (var r = 0; r < rs.length; r++) rs[r].classList.remove("is-dragging");
+    }
+    document.body.style.userSelect = "";
+    cvState._dragTx = null;
+    _cvDragLiveInput = null;
+    if (Math.abs(deltaSec) > 0) {
+      commitOffset(tx.pid, tx.baseOffset + deltaSec);
     }
   }
 
@@ -1097,8 +1502,15 @@
       }
     });
 
+    document.addEventListener("mousemove", _cvOnDocMouseMove);
+    document.addEventListener("mouseup", _cvOnDocMouseUp);
+
     document.addEventListener("keydown", function (e) {
       if (!cvState.active) return;
+
+      // Don't steal arrow keys from a focused offset input.
+      var ae = document.activeElement;
+      if (ae && ae.classList && ae.classList.contains("cv-offset-input")) return;
 
       if (e.key === "Escape" && cvState.selection) {
         clearSelection();

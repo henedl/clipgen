@@ -373,12 +373,156 @@
   text-overflow: ellipsis;
 }
 
+/* ---- Per-participant offset editor (label area) ---- */
+
+/* The whole label re-enables pointer events so the lock button is clickable.
+ * Lane labels keep `pointer-events: none` by default in primitives.css, but
+ * Convergence promotes them once it owns the swim-lane. */
+.cv-offset-label {
+  pointer-events: auto;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-1);
+  padding: 0 var(--space-1) 0 var(--space-2);
+  font-size: 10px;
+}
+
+.cv-offset-lock-btn {
+  width: 12px;
+  height: 12px;
+  flex-shrink: 0;
+  background-color: var(--fg-faint);
+  mask-image: url("icons/lock-closed.svg");
+  -webkit-mask-image: url("icons/lock-closed.svg");
+  mask-size: contain;
+  -webkit-mask-size: contain;
+  mask-repeat: no-repeat;
+  -webkit-mask-repeat: no-repeat;
+  mask-position: center;
+  -webkit-mask-position: center;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+  transition: background-color var(--duration-instant) ease-out;
+}
+.cv-offset-lock-btn:hover {
+  background-color: var(--fg);
+}
+.cv-offset-label.is-unlocked .cv-offset-lock-btn {
+  mask-image: url("icons/lock-open.svg");
+  -webkit-mask-image: url("icons/lock-open.svg");
+  background-color: var(--accent, var(--fg));
+}
+
+.cv-offset-pid {
+  color: var(--fg-faint);
+  flex: 1 1 auto;
+  text-align: right;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+.cv-offset-label.is-adjusted .cv-offset-pid {
+  color: var(--fg);
+  font-weight: 500;
+}
+
+.cv-offset-badge {
+  display: none;
+  font-size: 9.5px;
+  color: var(--accent, var(--fg-muted));
+  font-family: var(--font-mono);
+  font-feature-settings: "tnum";
+  white-space: nowrap;
+}
+.cv-offset-label.is-adjusted .cv-offset-badge {
+  display: inline;
+}
+
+.cv-offset-input {
+  display: none;
+  width: 44px;
+  height: 16px;
+  font-family: var(--font-mono);
+  font-feature-settings: "tnum";
+  font-size: 10px;
+  padding: 0 var(--space-1);
+  background: var(--bg-input);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  outline: none;
+  -moz-appearance: textfield;
+}
+.cv-offset-input::-webkit-outer-spin-button,
+.cv-offset-input::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+.cv-offset-label.is-unlocked .cv-offset-input {
+  display: inline-block;
+}
+.cv-offset-label.is-unlocked .cv-offset-badge {
+  display: none;
+}
+
+/* Convergence-side override so the swim-lane label widens to fit the
+ * lock button + PID + badge/input. */
+.cv-swimlane {
+  --cg-swim-label-w: 84px;
+}
+.cv-swimlane.is-editing {
+  --cg-swim-label-w: 140px;
+}
+
+.cv-reset-btn {
+  margin-left: var(--space-1);
+}
+
+/* "No data" overlay rendered on a participant's lanes when their convergence
+ * offset shifts the start of their video off the visible timeline. Positive
+ * offsets push the void to the left edge (their video hadn't started yet),
+ * negative offsets push it to the right edge (their video had already ended).
+ * Translucent black darkens the lane background; the hatch stripes use a
+ * lighter border-strong line so they stay crisp instead of bleeding into the
+ * background. Stripes are 2px wide on an 8px pitch — wide enough that the
+ * browser doesn't smear them by sub-pixel rendering. */
+.cv-offset-void {
+  position: absolute;
+  pointer-events: none;
+  background-color: rgba(0, 0, 0, 0.55);
+  background-image: repeating-linear-gradient(
+    -45deg,
+    transparent 0,
+    transparent 6px,
+    var(--border-strong) 6px,
+    var(--border-strong) 8px
+  );
+  z-index: 0;
+}
+html[data-theme="light"] .cv-offset-void,
+.theme-light .cv-offset-void {
+  background-color: rgba(0, 0, 0, 0.18);
+  background-image: repeating-linear-gradient(
+    -45deg,
+    transparent 0,
+    transparent 6px,
+    var(--border-strong) 6px,
+    var(--border-strong) 8px
+  );
+}
+
 /* ---- Reduced Motion ---- */
 
 @media (prefers-reduced-motion: reduce) {
   .cv-stream-btn,
   .cv-callout,
   .cv-frame-preview {
+    transition: none;
+  }
+  .cv-offset-lock-btn {
     transition: none;
   }
 }
