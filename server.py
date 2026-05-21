@@ -460,6 +460,109 @@ def _resolve_intake_video_path(participant: str, source: str = "") -> str | None
     return None
 
 
+def _process_intake_item(
+    item: dict[str, Any],
+    output_format: str,
+    study: str,
+) -> dict[str, Any]:
+    """Process a single intake item; returns one dict with _ok/_error keys."""
+    participant = item.get("participant", "")
+    start = float(item.get("start", 0))
+    end = float(item.get("end", 0))
+    event_type = item.get("event_type", "")
+    event_ids = item.get("event_ids", [])
+    source = item.get("source", "screenspace")
+    mark_ids = item.get("mark_ids", [])
+
+    video_path = _resolve_intake_video_path(participant, source)
+
+    if not video_path:
+        return {"_ok": False, "_error": f"No video for {participant}"}
+
+    span_hash = hashlib.md5(f"{participant}_{start}_{end}".encode()).hexdigest()[:8]
+    safe_event_type = utils.sanitize_filename(event_type) if event_type else ""
+    desc_part = f"{safe_event_type} " if safe_event_type else ""
+    out_name = (
+        f"{study} {participant} {desc_part}intake {span_hash}{config.FILEFORMAT}"
+        if study
+        else f"intake_{span_hash}{config.FILEFORMAT}"
+    )
+    out_path = files.get_unique_filename(out_name)
+
+    start_str = utils.seconds_to_timestamp(int(round(start)))
+    end_str = utils.seconds_to_timestamp(int(round(end)))
+
+    success = video.run_ffmpeg(
+        video_path, out_path, start_str, end_str, config.REENCODING
+    )
+
+    if not success:
+        return {"_ok": False, "_error": "ffmpeg failed"}
+
+    default_desc = (
+        "Transcript intake" if source == "transcript" else "Screenspace intake"
+    )
+    item_text = str(item.get("text") or "").strip()
+    item_label = str(item.get("label") or "").strip()
+    description = event_type or default_desc
+    if source == "transcript":
+        # Prefer the user's label, then a truncated transcript excerpt,
+        # then the category — so cards aren't all titled "Transcript intake".
+        if item_label:
+            description = item_label
+        elif item_text:
+            description = item_text if len(item_text) <= 80 else item_text[:77] + "…"
+        else:
+            description = event_type or default_desc
+    artifact: dict[str, Any] = {
+        "id": f"intake_{span_hash}_s0",
+        "type": output_format,
+        "file": Path(out_path).name,
+        "start": start,
+        "end": end,
+        "thumbnail": "",
+        "study": study,
+        "participant": participant,
+        "category": "",
+        "severity": "",
+        "description": description,
+        "cellRow": None,
+        "cellCol": None,
+        "cellA1": "",
+        "annotations": [],
+        "source": source,
+        "event_ids": event_ids,
+        "mark_ids": mark_ids,
+        "intake_label": event_type,
+        "sourceVideo": Path(video_path).name,
+        "_ok": True,
+        "_error": "",
+    }
+    if source == "transcript":
+        import transcripts_server
+
+        with transcripts_server._manifest_lock:
+            src_entry = transcripts_server._manifest.get("source_transcripts", {}).get(
+                participant, {}
+            )
+            transcript_text = item_text
+            if not transcript_text and mark_ids:
+                # Fallback: look up segment text by id from the manifest.
+                wanted = set(mark_ids)
+                parts: list[str] = []
+                for seg in src_entry.get("segments", []) or []:
+                    if seg.get("id") in wanted:
+                        t = (seg.get("text") or "").strip()
+                        if t:
+                            parts.append(t)
+                transcript_text = " ".join(parts)
+        artifact["transcript_version"] = src_entry.get("transcribed_at", "")
+        artifact["transcriptText"] = transcript_text
+        if item_label:
+            artifact["transcriptLabel"] = item_label
+    return artifact
+
+
 def _generate_intake_clips(
     items: list[dict[str, Any]],
     output_format: str = "clip",
@@ -471,109 +574,7 @@ def _generate_intake_clips(
     the video was missing or ffmpeg failed) plus an ``"_error"`` string so
     callers can report per-item results without duplicating the loop.
     """
-    results: list[dict[str, Any]] = []
-
-    for item in items:
-        participant = item.get("participant", "")
-        start = float(item.get("start", 0))
-        end = float(item.get("end", 0))
-        event_type = item.get("event_type", "")
-        event_ids = item.get("event_ids", [])
-        source = item.get("source", "screenspace")
-        mark_ids = item.get("mark_ids", [])
-
-        video_path = _resolve_intake_video_path(participant, source)
-
-        if not video_path:
-            results.append({"_ok": False, "_error": f"No video for {participant}"})
-            continue
-
-        span_hash = hashlib.md5(f"{participant}_{start}_{end}".encode()).hexdigest()[:8]
-        safe_event_type = utils.sanitize_filename(event_type) if event_type else ""
-        desc_part = f"{safe_event_type} " if safe_event_type else ""
-        out_name = (
-            f"{study} {participant} {desc_part}intake {span_hash}{config.FILEFORMAT}"
-            if study
-            else f"intake_{span_hash}{config.FILEFORMAT}"
-        )
-        out_path = files.get_unique_filename(out_name)
-
-        start_str = utils.seconds_to_timestamp(int(round(start)))
-        end_str = utils.seconds_to_timestamp(int(round(end)))
-
-        success = video.run_ffmpeg(
-            video_path, out_path, start_str, end_str, config.REENCODING
-        )
-
-        if success:
-            default_desc = (
-                "Transcript intake" if source == "transcript" else "Screenspace intake"
-            )
-            item_text = str(item.get("text") or "").strip()
-            item_label = str(item.get("label") or "").strip()
-            description = event_type or default_desc
-            if source == "transcript":
-                # Prefer the user's label, then a truncated transcript excerpt,
-                # then the category — so cards aren't all titled "Transcript intake".
-                if item_label:
-                    description = item_label
-                elif item_text:
-                    description = (
-                        item_text if len(item_text) <= 80 else item_text[:77] + "…"
-                    )
-                else:
-                    description = event_type or default_desc
-            artifact: dict[str, Any] = {
-                "id": f"intake_{span_hash}_s0",
-                "type": output_format,
-                "file": Path(out_path).name,
-                "start": start,
-                "end": end,
-                "thumbnail": "",
-                "study": study,
-                "participant": participant,
-                "category": "",
-                "severity": "",
-                "description": description,
-                "cellRow": None,
-                "cellCol": None,
-                "cellA1": "",
-                "annotations": [],
-                "source": source,
-                "event_ids": event_ids,
-                "mark_ids": mark_ids,
-                "intake_label": event_type,
-                "sourceVideo": Path(video_path).name,
-                "_ok": True,
-                "_error": "",
-            }
-            if source == "transcript":
-                import transcripts_server
-
-                with transcripts_server._manifest_lock:
-                    src_entry = transcripts_server._manifest.get(
-                        "source_transcripts", {}
-                    ).get(participant, {})
-                    transcript_text = item_text
-                    if not transcript_text and mark_ids:
-                        # Fallback: look up segment text by id from the manifest.
-                        wanted = set(mark_ids)
-                        parts: list[str] = []
-                        for seg in src_entry.get("segments", []) or []:
-                            if seg.get("id") in wanted:
-                                t = (seg.get("text") or "").strip()
-                                if t:
-                                    parts.append(t)
-                        transcript_text = " ".join(parts)
-                artifact["transcript_version"] = src_entry.get("transcribed_at", "")
-                artifact["transcriptText"] = transcript_text
-                if item_label:
-                    artifact["transcriptLabel"] = item_label
-            results.append(artifact)
-        else:
-            results.append({"_ok": False, "_error": "ffmpeg failed"})
-
-    return results
+    return [_process_intake_item(item, output_format, study) for item in items]
 
 
 def _load_stashes() -> list[dict[str, Any]]:
@@ -1474,7 +1475,12 @@ def api_settings_put() -> FlaskResponse:
 
 @studio_bp.route("/api/generate-intake", methods=["POST"])
 def api_generate_intake() -> FlaskResponse:
-    """Generate clips from intake spans (Screenspace or Transcript)."""
+    """Generate clips from intake spans (Screenspace or Transcript).
+
+    Streams NDJSON: one ``{"index", "ok", "artifact"|"error"}`` line per item
+    so the client can paint each queue card as soon as its ffmpeg call
+    finishes, rather than waiting for the whole batch.
+    """
     data = request.get_json(silent=True) or {}
     items = data.get("items", [])
     if not items:
@@ -1483,19 +1489,25 @@ def api_generate_intake() -> FlaskResponse:
     output_format = data.get("format", "clip")
     study = _sheet_context.study_name if _sheet_context else ""
 
-    raw = _generate_intake_clips(items, output_format=output_format, study=study)
-    results: list[dict[str, Any]] = []
-    for r in raw:
-        ok = r.pop("_ok", False)
-        error = r.pop("_error", "")
-        if ok:
-            _generated_artifacts.append(r)
-            results.append({"ok": True, "artifact": r})
-        else:
-            results.append({"ok": False, "error": error})
+    def stream() -> Iterator[str]:
+        for idx, item in enumerate(items):
+            result = _process_intake_item(item, output_format, study)
+            ok = result.pop("_ok", False)
+            error = result.pop("_error", "")
+            if ok:
+                _generated_artifacts.append(result)
+                yield (
+                    json.dumps({"index": idx, "ok": True, "artifact": result}) + "\n"
+                )
+            else:
+                yield json.dumps({"index": idx, "ok": False, "error": error}) + "\n"
+        _save_manifest_quiet()
 
-    _save_manifest_quiet()
-    return jsonify({"ok": True, "results": results})
+    return Response(
+        stream(),
+        mimetype="application/x-ndjson",
+        headers={"X-Accel-Buffering": "no"},
+    )
 
 
 @studio_bp.route("/api/reel-direct", methods=["POST"])

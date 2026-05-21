@@ -1445,3 +1445,81 @@ def test_api_generate_cancel_endpoint(client):
     assert resp.status_code == 200
     assert data["ok"] is True
     assert server._generate_cancel_event.is_set()
+
+
+def test_api_generate_intake_streams_per_item(client, monkeypatch):
+    """POST /api/generate-intake yields one NDJSON line per item with index/ok."""
+    monkeypatch.setattr(
+        server, "_resolve_intake_video_path", lambda p, s="": "/fake/video.mp4"
+    )
+    monkeypatch.setattr("video.run_ffmpeg", lambda *a, **kw: True)
+    monkeypatch.setattr(server, "_save_manifest_quiet", lambda: None)
+
+    items = [
+        {
+            "participant": "P01",
+            "start": 0.0,
+            "end": 5.0,
+            "event_type": "x",
+            "event_ids": [],
+            "source": "screenspace",
+            "mark_ids": [],
+        },
+        {
+            "participant": "P02",
+            "start": 0.0,
+            "end": 5.0,
+            "event_type": "y",
+            "event_ids": [],
+            "source": "screenspace",
+            "mark_ids": [],
+        },
+    ]
+    resp = client.post(
+        "/studio/api/generate-intake",
+        json={"items": items, "format": "clip"},
+    )
+    assert resp.status_code == 200
+    assert resp.mimetype == "application/x-ndjson"
+    lines = [json.loads(line) for line in resp.data.decode().strip().split("\n")]
+    assert len(lines) == 2
+    assert {ln["index"] for ln in lines} == {0, 1}
+    for ln in lines:
+        assert ln["ok"] is True
+        assert ln["artifact"]["participant"] in {"P01", "P02"}
+
+
+def test_api_generate_intake_streams_failure(client, monkeypatch):
+    """Items with no resolvable video stream an ok=false line with error."""
+    monkeypatch.setattr(server, "_resolve_intake_video_path", lambda p, s="": None)
+    monkeypatch.setattr(server, "_save_manifest_quiet", lambda: None)
+
+    items = [
+        {
+            "participant": "Pxx",
+            "start": 0.0,
+            "end": 5.0,
+            "event_type": "",
+            "event_ids": [],
+            "source": "screenspace",
+            "mark_ids": [],
+        },
+    ]
+    resp = client.post(
+        "/studio/api/generate-intake",
+        json={"items": items, "format": "clip"},
+    )
+    assert resp.status_code == 200
+    lines = [json.loads(line) for line in resp.data.decode().strip().split("\n")]
+    assert len(lines) == 1
+    assert lines[0]["ok"] is False
+    assert lines[0]["index"] == 0
+    assert "No video" in lines[0]["error"]
+
+
+def test_api_generate_intake_rejects_empty(client):
+    """POST /api/generate-intake without items returns a 400."""
+    resp = client.post("/studio/api/generate-intake", json={"items": []})
+    assert resp.status_code == 400
+    data = resp.get_json()
+    assert data["ok"] is False
