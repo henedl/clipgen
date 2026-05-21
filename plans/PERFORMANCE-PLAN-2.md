@@ -37,7 +37,7 @@ Seven small, independent diffs. None changes a public contract; all are safe to 
 - **Change:** Audit the 12 call sites. Where the mutation is known to affect a small set of cells (toggle, single add/remove), call `updateSingleCellClass` per affected cell instead. Where a sweep *is* required (e.g. participant column visibility), keep `updateCellClasses` but cache `findInQueue` lookups by `cellKey` for the duration of the call.
 - **Why:** O(rows × participants × queueLen) per sidebar toggle is the largest source of "Studio feels janky" complaints on large sheets.
 
-### 1.4 Pre-compile correction patterns in `apply_corrections`
+### ✅ 1.4 Pre-compile correction patterns in `apply_corrections`
 
 - **File:** `transcripts.py:346-364`
 - **Today:** `re.compile(re.escape(from_text), re.IGNORECASE)` runs **inside** the per-segment loop. With 1000 segments × 20 corrections that is 20k recompiles per transcript.
