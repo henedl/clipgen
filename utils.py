@@ -1052,18 +1052,16 @@ def timestamp_to_seconds(ts_str: str) -> float | None:
     if not ts:
         return None
 
-    formats = ["%M:%S", "%H:%M:%S"]
-    for fmt in formats:
-        try:
-            parsed = datetime.strptime(ts, fmt)
-            return float(
-                parsed.hour * config.SECONDS_PER_HOUR
-                + parsed.minute * config.SECONDS_PER_MINUTE
-                + parsed.second
-            )
-        except ValueError:
-            continue
-    return None
+    fmt = "%H:%M:%S" if ts.count(":") == 2 else "%M:%S"
+    try:
+        parsed = datetime.strptime(ts, fmt)
+    except ValueError:
+        return None
+    return float(
+        parsed.hour * config.SECONDS_PER_HOUR
+        + parsed.minute * config.SECONDS_PER_MINUTE
+        + parsed.second
+    )
 
 
 def parse_timestamps(

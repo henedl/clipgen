@@ -51,7 +51,7 @@ Seven small, independent diffs. None changes a public contract; all are safe to 
 - **Change:** Add `@functools.cache` above the `def`. The map is keyed by configured tokens; it never changes during a process lifetime.
 - **Verified:** TRUE — `Grep` confirmed no cache decorator on this function.
 
-### 1.6 Faster `timestamp_to_seconds` dispatch
+### ✅ 1.6 Faster `timestamp_to_seconds` dispatch
 
 - **File:** `utils.py:1050-1065`
 - **Today:** Tries `datetime.strptime(ts, "%M:%S")`, catches `ValueError`, then tries `"%H:%M:%S"`. Every HH:MM:SS timestamp pays the exception cost.
