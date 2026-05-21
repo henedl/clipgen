@@ -105,6 +105,7 @@ The version lives in [build/VERSION](build/VERSION). Agents bump the patch numbe
 - Commit early and commit often, so we can roll back changes more easily.
 - If a problem is reoccurring and survives fix attempts, check git logs for clues.
 - When working through a plan file, e.g. FEATURE-PLAN.md, always make sure to check off items after they are completed.
+- Keep AGENTS.md concise with cross-cutting bird's-eye context; per-module detail belongs in inline comments/docstrings, not duplicated in agent docs.
 
 ## Workspace facts
 
@@ -114,6 +115,8 @@ The version lives in [build/VERSION](build/VERSION). Agents bump the patch numbe
 - Be careful about using the `generate_list()`, `sheet.find()`, `sheet.get_all_values()` methods as they are API calls to Google Sheets and are heavily rate-limited. Repeatedly calling the Google API will lead to rate-limiting without warnings, which can appear as bugs (e.g. silently skipping timestamps) and make development difficult.
 - CI uses `uv pip install --torch-backend cpu` to avoid downloading ~2.5GB of CUDA/nvidia packages (tests never use CUDA). This override is CI-only (in `tests.yml`), not in `pyproject.toml`, so end-user installs still get GPU-capable torch. If Linux end users emerge and report CUDA issues, check that the CI-only approach hasn't leaked into project config.
 - Timelapse produces a single output file, not per-frame timeline events. It does not need icon/color entries in Viewer's `SS_DETECTOR_COLORS`/`SS_DETECTOR_ICON_PATHS` maps.
+- When a start time uses `H:MM:SS`, computed end times must preserve the hours component (`seconds_to_timestamp(..., force_hours=True)` or match the start format). Emitting `M:SS` for the end breaks mixed-format pairs and duration parsing.
+- Homebrew's default ffmpeg 8.x may be built without libfreetype, so the `drawtext` filter is missing and titlecard encoding fails unless ffmpeg is rebuilt with drawtext support.
 
 ## Pointers
 
