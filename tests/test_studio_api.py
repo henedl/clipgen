@@ -2627,3 +2627,300 @@ def test_api_generate_explicit_cancel_still_works(client, monkeypatch, tmp_path)
     lines = [json.loads(ln) for ln in text.strip().split("\n") if ln.strip()]
     assert any(ln.get("cancelled") is True for ln in lines)
     assert _poll_until(lambda: server._generate_in_progress is False)
+
+
+# ---- /api/reel-direct titlecards ----
+
+
+def _drain_ndjson(resp):
+    """Drain an NDJSON streaming response into a list of parsed dicts."""
+    text = resp.data.decode()
+    return [json.loads(ln) for ln in text.strip().split("\n") if ln.strip()]
+
+
+def test_api_generate_discards_artifacts_completed_after_cancel(
+    client, monkeypatch, tmp_path
+):
+    """A worker whose ffmpeg wraps up just as the cancel event is set must
+    drop its produced artifact (no manifest append, file unlinked)."""
+    import types
+
+    monkeypatch.setattr(server, "_worksheet", object())
+    monkeypatch.setattr(server, "_generated_artifacts", [])
+    monkeypatch.setattr(server, "_save_manifest_quiet", lambda: None)
+    monkeypatch.setattr(server, "_find_existing_artifacts", lambda *a, **kw: [])
+    monkeypatch.setattr("config.OUTPUT_DIR", str(tmp_path))
+
+    cell = types.SimpleNamespace(row=5, col=2)
+
+    def fake_generate_list(ws, mode, **kwargs):
+        return [{"participant": "P01", "cell": cell, "times": [("0:00", "0:05")]}]
+
+    monkeypatch.setattr("spreadsheet.generate_list", fake_generate_list)
+
+    file_a = tmp_path / "a.mp4"
+    file_a.write_bytes(b"x")
+
+    # Worker returns its artifact and ALSO trips the cancel event mid-call —
+    # simulates a worker whose ffmpeg subprocess finished successfully just
+    # as the cancel signal was set. The drop-after-cancel guard inside
+    # _generate_and_persist should reject the artifact and unlink the file.
+    def fake_process_clips(clips, *, cancel_flag=None, **kwargs):
+        server._generate_cancel_event.set()
+        return (1, [{"id": "a", "type": "clip", "file": "a.mp4"}])
+
+    monkeypatch.setattr("pipeline.process_clips", fake_process_clips)
+    server._generate_cancel_event.clear()
+
+    resp = client.post(
+        "/studio/api/generate",
+        json={"cells": ["P01.5"], "format": "clip"},
+    )
+    resp.data  # drain stream
+    server._generate_cancel_event.clear()
+
+    assert _poll_until(lambda: server._generate_in_progress is False)
+    ids = [a.get("id") for a in server._generated_artifacts]
+    assert "a" not in ids
+    assert not file_a.exists()
+
+
+# ---- /api/generate-intake cancellation ----
+
+
+def test_api_generate_intake_cancel_endpoint_returns_ok(client):
+    """POST /api/generate-intake/cancel sets the cancel event and returns ok."""
+    server._intake_cancel_event.clear()
+    resp = client.post("/studio/api/generate-intake/cancel")
+    assert resp.status_code == 200
+    assert resp.get_json() == {"ok": True}
+    assert server._intake_cancel_event.is_set() is True
+    server._intake_cancel_event.clear()
+
+
+def test_api_generate_intake_passes_cancel_flag_to_run_ffmpeg(
+    client, monkeypatch, tmp_path
+):
+    """_process_intake_item must forward cancel_flag into video.run_ffmpeg
+    so an in-flight ffmpeg encode can be terminated."""
+    monkeypatch.setattr(
+        server, "_resolve_intake_video_path", lambda p, s="": "/fake/video.mp4"
+    )
+    monkeypatch.setattr("config.OUTPUT_DIR", str(tmp_path))
+    monkeypatch.setattr(server, "_generated_artifacts", [])
+    monkeypatch.setattr(server, "_save_manifest_quiet", lambda: None)
+    monkeypatch.setattr(
+        "files.get_unique_filename", lambda name, file_format=None: name
+    )
+
+    captured = {}
+
+    def fake_run_ffmpeg(*args, **kwargs):
+        captured["cancel_flag"] = kwargs.get("cancel_flag")
+        return True
+
+    monkeypatch.setattr("video.run_ffmpeg", fake_run_ffmpeg)
+    server._intake_cancel_event.clear()
+
+    resp = client.post(
+        "/studio/api/generate-intake",
+        json={"items": [{"participant": "P01", "start": 0, "end": 5}]},
+    )
+    resp.data
+    cb = captured.get("cancel_flag")
+    assert callable(cb)
+    # Verify the callable tracks the intake cancel event.
+    assert cb() is False
+    server._intake_cancel_event.set()
+    try:
+        assert cb() is True
+    finally:
+        server._intake_cancel_event.clear()
+
+
+def test_api_generate_intake_short_circuits_after_cancel(client, monkeypatch, tmp_path):
+    """When cancel is signaled before the worker starts, no ffmpeg is
+    invoked and a {cancelled: true} marker is yielded."""
+    monkeypatch.setattr(
+        server, "_resolve_intake_video_path", lambda p, s="": "/fake/video.mp4"
+    )
+    monkeypatch.setattr("config.OUTPUT_DIR", str(tmp_path))
+    monkeypatch.setattr(server, "_generated_artifacts", [])
+    monkeypatch.setattr(server, "_save_manifest_quiet", lambda: None)
+    monkeypatch.setattr(
+        "files.get_unique_filename", lambda name, file_format=None: name
+    )
+
+    ffmpeg_calls = []
+
+    def fake_run_ffmpeg(*args, **kwargs):
+        ffmpeg_calls.append(args)
+        return True
+
+    monkeypatch.setattr("video.run_ffmpeg", fake_run_ffmpeg)
+
+    # Set cancel event inside _process_intake_item to simulate cancel arriving
+    # during the first worker. Use a wrapper that flips the event then calls
+    # through to the real function.
+    real_process = server._process_intake_item
+
+    def wrapped(item, output_format, study, index=0, *, cancel_flag=None):
+        server._intake_cancel_event.set()
+        return real_process(
+            item, output_format, study, index=index, cancel_flag=cancel_flag
+        )
+
+    monkeypatch.setattr(server, "_process_intake_item", wrapped)
+    server._intake_cancel_event.clear()
+
+    try:
+        resp = client.post(
+            "/studio/api/generate-intake",
+            json={
+                "items": [
+                    {"participant": "P01", "start": 0, "end": 5},
+                    {"participant": "P01", "start": 10, "end": 15},
+                    {"participant": "P01", "start": 20, "end": 25},
+                ]
+            },
+        )
+        text = resp.data.decode()
+    finally:
+        server._intake_cancel_event.clear()
+
+    lines = [json.loads(ln) for ln in text.strip().split("\n") if ln.strip()]
+    assert any(ln.get("cancelled") is True for ln in lines), lines
+    # Only the first item should have invoked ffmpeg; remaining items must
+    # short-circuit via the pre-ffmpeg cancel check.
+    assert len(ffmpeg_calls) <= 1
+
+
+def test_api_reel_direct_wraps_segments_when_titlecards_enabled(
+    client, monkeypatch, tmp_path
+):
+    """Each segment must be wrapped via titlecards.wrap_clip_with_cards with the
+    per-request duration before the concat list is assembled."""
+    monkeypatch.setattr(
+        server, "_resolve_intake_video_path", lambda p, s="": "/fake/video.mp4"
+    )
+    monkeypatch.setattr("config.OUTPUT_DIR", str(tmp_path))
+    monkeypatch.setattr(server, "_generated_reels", [])
+    monkeypatch.setattr(server, "_save_manifest_quiet", lambda: None)
+    monkeypatch.setattr("video.run_ffmpeg", lambda *a, **kw: True)
+    monkeypatch.setattr("video.concatenate_clips", lambda *a, **kw: True)
+    monkeypatch.setattr(
+        "files.get_unique_filename", lambda name, file_format=None: name
+    )
+    monkeypatch.setattr(
+        "video.probe_video_properties",
+        lambda path: {"width": 1280, "height": 720, "audio_codec": "aac"},
+    )
+
+    wrap_calls: list[dict] = []
+
+    def fake_wrap(clip, clip_path, *, resolution=None, **kwargs):
+        wrap_calls.append(
+            {
+                "desc": clip.get("desc"),
+                "resolution": resolution,
+                "duration": kwargs.get("titlecard_duration_seconds"),
+                "enabled": kwargs.get("titlecards_enabled"),
+            }
+        )
+        return True
+
+    monkeypatch.setattr("titlecards.wrap_clip_with_cards", fake_wrap)
+    server._reel_cancel_event.clear()
+
+    resp = client.post(
+        "/studio/api/reel-direct",
+        json={
+            "segments": [
+                {
+                    "participant": "P01",
+                    "start": 0,
+                    "end": 5,
+                    "event_type": "first",
+                },
+                {
+                    "participant": "P01",
+                    "start": 10,
+                    "end": 20,
+                    "event_type": "second",
+                },
+            ],
+            "titlecards_enabled": True,
+            "titlecard_duration": 3,
+        },
+    )
+    _drain_ndjson(resp)
+    assert _poll_until(lambda: server._reel_in_progress is False)
+    assert len(wrap_calls) == 2
+    assert wrap_calls[0]["duration"] == 3
+    assert wrap_calls[0]["enabled"] is True
+    assert wrap_calls[0]["resolution"] == "1280x720"
+    assert wrap_calls[0]["desc"] == "first"
+    assert wrap_calls[1]["desc"] == "second"
+
+
+def test_api_reel_direct_skips_wrap_when_titlecards_disabled(
+    client, monkeypatch, tmp_path
+):
+    """No wrap_clip_with_cards calls when titlecards_enabled is False."""
+    monkeypatch.setattr(
+        server, "_resolve_intake_video_path", lambda p, s="": "/fake/video.mp4"
+    )
+    monkeypatch.setattr("config.OUTPUT_DIR", str(tmp_path))
+    monkeypatch.setattr(server, "_generated_reels", [])
+    monkeypatch.setattr(server, "_save_manifest_quiet", lambda: None)
+    monkeypatch.setattr("video.run_ffmpeg", lambda *a, **kw: True)
+    monkeypatch.setattr("video.concatenate_clips", lambda *a, **kw: True)
+    monkeypatch.setattr(
+        "files.get_unique_filename", lambda name, file_format=None: name
+    )
+
+    wrap_calls: list[dict] = []
+    monkeypatch.setattr(
+        "titlecards.wrap_clip_with_cards",
+        lambda *a, **kw: wrap_calls.append(kw) or True,
+    )
+    server._reel_cancel_event.clear()
+
+    resp = client.post(
+        "/studio/api/reel-direct",
+        json={
+            "segments": [{"participant": "P01", "start": 0, "end": 5}],
+            "titlecards_enabled": False,
+        },
+    )
+    _drain_ndjson(resp)
+    assert _poll_until(lambda: server._reel_in_progress is False)
+    assert wrap_calls == []
+
+
+def test_api_reel_direct_clears_endcard_cache(client, monkeypatch, tmp_path):
+    """The worker's finally block must purge the endcard cache so per-request
+    titlecard temp files don't leak between reel builds."""
+    monkeypatch.setattr(
+        server, "_resolve_intake_video_path", lambda p, s="": "/fake/video.mp4"
+    )
+    monkeypatch.setattr("config.OUTPUT_DIR", str(tmp_path))
+    monkeypatch.setattr(server, "_generated_reels", [])
+    monkeypatch.setattr(server, "_save_manifest_quiet", lambda: None)
+    monkeypatch.setattr("video.run_ffmpeg", lambda *a, **kw: True)
+    monkeypatch.setattr("video.concatenate_clips", lambda *a, **kw: True)
+    monkeypatch.setattr(
+        "files.get_unique_filename", lambda name, file_format=None: name
+    )
+
+    clear_calls = []
+    monkeypatch.setattr("titlecards.clear_endcard_cache", lambda: clear_calls.append(1))
+    server._reel_cancel_event.clear()
+
+    resp = client.post(
+        "/studio/api/reel-direct",
+        json={"segments": [{"participant": "P01", "start": 0, "end": 5}]},
+    )
+    _drain_ndjson(resp)
+    assert _poll_until(lambda: server._reel_in_progress is False)
+    assert len(clear_calls) == 1

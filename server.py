@@ -95,6 +95,11 @@ _thumbnail_cache_lock = threading.Lock()
 # shared cancel event; reject with 409 instead while one is in flight.
 _reel_cancel_event = threading.Event()
 _generate_cancel_event = threading.Event()
+# Independent cancel event for /api/generate-intake — sheet and intake
+# branches run concurrently from one Studio Generate click but have
+# separate streams, so the Cancel button posts to both /api/generate/cancel
+# and /api/generate-intake/cancel.
+_intake_cancel_event = threading.Event()
 _busy_lock = threading.Lock()
 _generate_in_progress = False
 _reel_in_progress = False
@@ -704,12 +709,18 @@ def _process_intake_item(
     output_format: str,
     study: str,
     index: int = 0,
+    *,
+    cancel_flag: Any = None,
 ) -> dict[str, Any]:
     """Process a single intake item; returns one dict with _ok/_error keys.
 
     *index* is the item's position in the request batch — folded into the
     artifact id so two intake events covering the same participant span do not
     hash to the same id and get collapsed by manifest dedup.
+
+    *cancel_flag* is an optional callable that returns True when the request
+    has been cancelled. Checked before ffmpeg is launched and forwarded into
+    ``video.run_ffmpeg`` so an in-flight encode can be terminated.
     """
     participant = item.get("participant", "")
     start = float(item.get("start", 0))
@@ -753,8 +764,16 @@ def _process_intake_item(
     start_str = utils.seconds_to_timestamp(int(round(start)))
     end_str = utils.seconds_to_timestamp(int(round(end)))
 
+    if cancel_flag and cancel_flag():
+        return {"_ok": False, "_error": "cancelled", "_cancelled": True}
+
     success = video.run_ffmpeg(
-        video_path, out_path, start_str, end_str, config.REENCODING
+        video_path,
+        out_path,
+        start_str,
+        end_str,
+        config.REENCODING,
+        cancel_flag=cancel_flag,
     )
 
     if not success:
@@ -1163,6 +1182,19 @@ def api_generate() -> FlaskResponse:
                 titlecard_duration_seconds=titlecard_duration_seconds,
                 clear_titlecard_cache=False,
             )
+            # A future that happened to finish concurrently with the cancel
+            # signal still produces (generated, artifacts); per the streaming
+            # contract we must not append those to the manifest after cancel.
+            # Drop the files on disk too so the user does not see orphan media.
+            if cancel_flag():
+                for a in artifacts:
+                    try:
+                        Path(utils.resolve_output_path(a["file"])).unlink(
+                            missing_ok=True
+                        )
+                    except OSError:
+                        pass
+                return 0, []
             if generated > 0:
                 _extend_generated_artifacts(artifacts)
             return generated, artifacts
@@ -1921,15 +1953,32 @@ def api_generate_intake() -> FlaskResponse:
     output_format = data.get("format", "clip")
     study = _sheet_context.study_name if _sheet_context else ""
 
-    def _emit(idx: int, result: dict[str, Any]) -> str:
-        ok = result.pop("_ok", False)
-        error = result.pop("_error", "")
-        if ok:
-            _append_generated_artifact(result)
-            return json.dumps({"index": idx, "ok": True, "artifact": result}) + "\n"
-        return json.dumps({"index": idx, "ok": False, "error": error}) + "\n"
-
     def stream() -> Iterator[str]:
+        _intake_cancel_event.clear()
+        cancel_flag = _intake_cancel_event.is_set
+
+        def _emit(idx: int, result: dict[str, Any]) -> str:
+            ok = result.pop("_ok", False)
+            error = result.pop("_error", "")
+            result.pop("_cancelled", None)
+            # Drop artifacts that finished after cancel was set: don't append
+            # to the manifest and unlink the produced file so cancelled
+            # intake work leaves no orphan media.
+            if ok and cancel_flag():
+                try:
+                    Path(utils.resolve_output_path(result.get("file", ""))).unlink(
+                        missing_ok=True
+                    )
+                except OSError:
+                    pass
+                return (
+                    json.dumps({"index": idx, "ok": False, "error": "cancelled"}) + "\n"
+                )
+            if ok:
+                _append_generated_artifact(result)
+                return json.dumps({"index": idx, "ok": True, "artifact": result}) + "\n"
+            return json.dumps({"index": idx, "ok": False, "error": error}) + "\n"
+
         _mark_intake_active(True)
         try:
             workers = pipeline._resolve_clip_workers()
@@ -1942,6 +1991,7 @@ def api_generate_intake() -> FlaskResponse:
                             output_format,
                             study,
                             index=idx,
+                            cancel_flag=cancel_flag,
                         ): idx
                         for idx, item in enumerate(items)
                     }
@@ -1958,10 +2008,27 @@ def api_generate_intake() -> FlaskResponse:
                             )
                             continue
                         yield _emit(idx, result)
+                        if cancel_flag():
+                            # Drain remaining submitted futures so workers can
+                            # observe cancel_flag and terminate ffmpeg, but
+                            # short-circuit yielding once the event is set.
+                            for f in future_to_idx:
+                                f.cancel()
+                            break
             else:
                 for idx, item in enumerate(items):
-                    result = _process_intake_item(item, output_format, study, index=idx)
+                    if cancel_flag():
+                        break
+                    result = _process_intake_item(
+                        item,
+                        output_format,
+                        study,
+                        index=idx,
+                        cancel_flag=cancel_flag,
+                    )
                     yield _emit(idx, result)
+            if cancel_flag():
+                yield json.dumps({"cancelled": True}) + "\n"
         finally:
             # Persist whatever completed even if the client disconnects or a
             # later item raises mid-stream.
@@ -1993,6 +2060,11 @@ def api_reel_direct() -> FlaskResponse:
     _reel_cancel_event.clear()
     _reset_reel_job_state("reel-direct")
 
+    titlecards_enabled, titlecard_duration_seconds = _parse_titlecard_request(data)
+    cards_enabled, card_duration = pipeline._resolve_titlecard_options(
+        titlecards_enabled, titlecard_duration_seconds
+    )
+
     def stream() -> Iterator[str]:
         # The worker thread does the actual ffmpeg work and owns the busy
         # slot. The generator just drains its event queue so that a client
@@ -2009,6 +2081,9 @@ def api_reel_direct() -> FlaskResponse:
             output_dir = Path(utils.get_effective_output_dir())
             clip_paths: list[str] = []
             temp_clips: list[str] = []
+            # Cache (w x h) per source video so wrap_clip_with_cards doesn't
+            # re-probe per segment. Same source can appear many times.
+            resolution_cache: dict[str, str | None] = {}
             # Throttle concat progress emissions to ~5 Hz, same as before.
             concat_last_emit = [0.0]
 
@@ -2082,6 +2157,25 @@ def api_reel_direct() -> FlaskResponse:
                         config.REENCODING,
                         cancel_flag=_reel_cancel_event.is_set,
                     )
+                    if ok and cards_enabled:
+                        if video_path not in resolution_cache:
+                            probed = video.probe_video_properties(video_path)
+                            resolution_cache[video_path] = (
+                                f"{probed['width']}x{probed['height']}"
+                                if probed
+                                else None
+                            )
+                        wrap_clip: utils.ClipRecord = {
+                            "desc": seg.get("event_type") or seg.get("desc") or "",
+                        }
+                        ok = titlecards.wrap_clip_with_cards(
+                            wrap_clip,
+                            tmp_path,
+                            resolution=resolution_cache[video_path],
+                            cancel_flag=_reel_cancel_event.is_set,
+                            titlecards_enabled=cards_enabled,
+                            titlecard_duration_seconds=card_duration,
+                        )
                     if ok:
                         clip_paths.append(tmp_path)
                     completed += 1
@@ -2138,6 +2232,10 @@ def api_reel_direct() -> FlaskResponse:
             except Exception as exc:
                 emit_event({"ok": False, "error": str(exc)})
             finally:
+                # Endcard temp files are cached per-process across all wrap
+                # calls; purge them here so per-request cards do not leak
+                # between consecutive reel builds.
+                titlecards.clear_endcard_cache()
                 for tmp in temp_clips:
                     try:
                         Path(tmp).unlink(missing_ok=True)
@@ -2211,6 +2309,18 @@ def api_reel_cancel() -> FlaskResponse:
 def api_generate_cancel() -> FlaskResponse:
     """Signal cancellation for the in-progress clip generation."""
     _generate_cancel_event.set()
+    return jsonify({"ok": True})
+
+
+@studio_bp.route("/api/generate-intake/cancel", methods=["POST"])
+def api_generate_intake_cancel() -> FlaskResponse:
+    """Signal cancellation for the in-progress intake generation.
+
+    Sheet and intake branches run in parallel from a single Studio Generate
+    click and have independent streams, so the Cancel button must hit both
+    endpoints to stop the full set of in-flight ffmpeg subprocesses.
+    """
+    _intake_cancel_event.set()
     return jsonify({"ok": True})
 
 
