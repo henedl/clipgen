@@ -3287,6 +3287,27 @@ def main() -> None:
         )
         sys.exit(1)
 
+    if config.GIF_FORMAT.lower() == ".webm" and not video.check_vp9_support():
+        utils.error_print(
+            "WebM output is configured but ffmpeg lacks libvpx-vp9 support.",
+            [
+                "Affected config: GIF_FORMAT",
+                "Install an ffmpeg build with libvpx, or change GIF_FORMAT back to .gif/.webp in config.py.",
+            ],
+        )
+        sys.exit(1)
+
+    if config.TITLECARDS_ENABLED and not video.check_drawtext_support():
+        utils.error_print(
+            "Titlecards are enabled but ffmpeg lacks the drawtext filter.",
+            [
+                "drawtext requires libfreetype (often missing from Homebrew's default ffmpeg 8.x build).",
+                "Install an ffmpeg build with libfreetype to restore titlecards.",
+                "Disabling titlecards for this run.",
+            ],
+        )
+        config.TITLECARDS_ENABLED = False
+
     if _dispatch_standalone_mode(args, cli_mode, gallery_arg):
         sys.exit(0)
 

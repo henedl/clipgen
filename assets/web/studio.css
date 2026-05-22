@@ -2415,6 +2415,16 @@ html[data-theme="dark"] .stash-card-name-input {
   color: #065f46;
 }
 
+.log-type-badge[data-type="reel"] {
+  background: #ede9fe;
+  color: #5b21b6;
+}
+
+.log-type-badge[data-type="viewer"] {
+  background: #cffafe;
+  color: #155e75;
+}
+
 html[data-theme="dark"] .log-type-badge[data-type="clip"] {
   background: #1e3a5f;
   color: #93c5fd;
@@ -2428,6 +2438,16 @@ html[data-theme="dark"] .log-type-badge[data-type="screen"] {
 html[data-theme="dark"] .log-type-badge[data-type="gif"] {
   background: #064e3b;
   color: #6ee7b7;
+}
+
+html[data-theme="dark"] .log-type-badge[data-type="reel"] {
+  background: #3b1d6e;
+  color: #c4b5fd;
+}
+
+html[data-theme="dark"] .log-type-badge[data-type="viewer"] {
+  background: #164e63;
+  color: #a5f3fc;
 }
 
 .log-entry-file {

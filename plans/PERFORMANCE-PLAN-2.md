@@ -81,14 +81,14 @@ Seven small, independent diffs. None changes a public contract; all are safe to 
 
 Three medium-sized improvements that each unlock a parallel path.
 
-### 2.1 Parallelize `_generate_intake_clips`
+### ✅ 2.1 Parallelize `_generate_intake_clips`
 
 - **File:** `server.py:475-505`
 - **Today:** Bare `for item in items:` calling `video.run_ffmpeg()`. No executor.
 - **Change:** Mirror the gallery pattern — collect work, dispatch to `ThreadPoolExecutor(max_workers=pipeline._resolve_clip_workers())`, return ordered results via index. Each task returns the existing `_ok` / `_error` shape.
 - **Constraint:** Output filename collisions — verify each item already gets a unique output path before parallelizing (or serialize the naming step).
 
-### 2.2 Parallel reel regeneration
+### ✅ 2.2 Parallel reel regeneration
 
 - **File:** `pipeline.py:1173-1182` (and the follow-up loops at 1202-1204, 1209-1211).
 - **Today:** `for reel in reel_list: _regenerate_reel(reel)` — sequential despite the surrounding code parallelizing media artifacts.

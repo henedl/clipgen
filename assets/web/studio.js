@@ -8,7 +8,9 @@
  *   sheetData                  — rows/cells from the loaded spreadsheet.
  *   artifactQueue / reelQueue  — pending generation work; persisted to
  *                                sessionStorage under QUEUE_STORAGE_KEY.
- *   generatedArtifacts         — completed outputs surfaced to the UI.
+ *   generatedArtifacts         — completed clip/screen/gif outputs.
+ *   generatedReels             — completed reels (hydrated from manifest + appended on build).
+ *   generatedViewers           — viewers built this session (not persisted).
  *   cellResults                — per-cell success/error status overlaid
  *                                onto the sheet grid (keyed by cellKey()).
  *   intakeEvents / intakeClusters / intakeSeenIds — Screenspace polling
@@ -33,6 +35,9 @@
     artifactQueue: [],
     reelQueue: [],
     generatedArtifacts: [],
+    generatedReels: [],
+    generatedViewers: [],
+    _logSeq: 0,
     artifactGenerating: false,
     reelGenerating: false,
     overlayJobRunning: false,
@@ -107,6 +112,17 @@
 
   function cellKey(participant, rowNum) {
     return participant + "." + rowNum;
+  }
+
+  function stampLog(entry) {
+    entry._seq = state._logSeq++;
+    return entry;
+  }
+
+  function pathBasename(p) {
+    if (!p) return "";
+    var idx = Math.max(p.lastIndexOf("/"), p.lastIndexOf("\\"));
+    return idx >= 0 ? p.slice(idx + 1) : p;
   }
 
   function findInQueue(queue, participant, rowNum) {
@@ -988,24 +1004,39 @@
         }
 
         // Dedupe by id (and fall back to file) so calling loadManifestState
-        // again after a background-completed build doesn't double-list the
-        // same artifact in the gallery.
+        // again after a background-completed build (re-attach from the
+        // job-status poll) doesn't double-list the same artifact or reel.
         var seenArtifact = {};
         for (var ai = 0; ai < state.generatedArtifacts.length; ai++) {
           var prev = state.generatedArtifacts[ai];
           var k = prev.id || prev.file;
           if (k) seenArtifact[k] = true;
         }
-        var fresh = [];
-        for (var bi = 0; bi < artifacts.length; bi++) {
-          var b = artifacts[bi];
-          if (b.type === "transcript" || !b.file) continue;
-          var k2 = b.id || b.file;
-          if (k2 && seenArtifact[k2]) continue;
-          if (k2) seenArtifact[k2] = true;
-          fresh.push(b);
+        var keep = artifacts.filter(function (a) { return a.type !== "transcript" && a.file; });
+        for (var ki = 0; ki < keep.length; ki++) {
+          var entry = keep[ki];
+          var ek = entry.id || entry.file;
+          if (ek && seenArtifact[ek]) continue;
+          if (ek) seenArtifact[ek] = true;
+          state.generatedArtifacts.push(stampLog(entry));
         }
-        state.generatedArtifacts = state.generatedArtifacts.concat(fresh);
+
+        var seenReel = {};
+        for (var rj = 0; rj < state.generatedReels.length; rj++) {
+          var pr = state.generatedReels[rj];
+          var rk = pr.id || pr.file;
+          if (rk) seenReel[rk] = true;
+        }
+        var reels = data.reels || [];
+        for (var ri = 0; ri < reels.length; ri++) {
+          var reel = reels[ri];
+          var rk2 = reel.id || reel.file;
+          if (rk2 && seenReel[rk2]) continue;
+          if (rk2) seenReel[rk2] = true;
+          state.generatedReels.push(stampLog(reel));
+        }
+
+
         renderArtifactQueue();
         updateCellClasses();
       })
@@ -3090,7 +3121,9 @@
           totalSuccess += (data.generated || 1);
           if (data.artifacts) {
             allArtifacts = allArtifacts.concat(data.artifacts);
-            state.generatedArtifacts = state.generatedArtifacts.concat(data.artifacts);
+            for (var gi = 0; gi < data.artifacts.length; gi++) {
+              state.generatedArtifacts.push(stampLog(data.artifacts[gi]));
+            }
           }
         } else {
           for (ci = 0; ci < cards.length; ci++) setCardResult(cards[ci], false);
@@ -3166,7 +3199,7 @@
           totalSuccess++;
           if (data.artifact) {
             allArtifacts.push(data.artifact);
-            state.generatedArtifacts.push(data.artifact);
+            state.generatedArtifacts.push(stampLog(data.artifact));
           }
           if (card) setCardResult(card, true);
         } else {
@@ -3349,6 +3382,11 @@
         updateProgress();
       } else if (data.ok !== undefined || data.error !== undefined) {
         finalPayload = data;
+        if (data.ok && Array.isArray(data.reels)) {
+          for (var ri = 0; ri < data.reels.length; ri++) {
+            state.generatedReels.push(stampLog(data.reels[ri]));
+          }
+        }
       }
     }
 
@@ -3408,6 +3446,12 @@
       .then(function (data) {
         state.overlayJobRunning = false;
         if (data.ok) {
+          state.generatedViewers.push(stampLog({
+            type: "viewer",
+            subtype: "viewer",
+            file: pathBasename(data.file),
+            description: "Timeline viewer",
+          }));
           showResult("Viewer created: " + (data.file || ""), null, data.file);
         } else {
           showResult(null, data.error || "Viewer build failed");
@@ -3488,6 +3532,12 @@
       .then(function (data) {
         state.overlayJobRunning = false;
         if (data.ok) {
+          state.generatedViewers.push(stampLog({
+            type: "viewer",
+            subtype: "timeline-viewer",
+            file: pathBasename(data.file),
+            description: "Timeline viewer (full sheet)",
+          }));
           var msg = "Timeline viewer created: " + (data.file || "");
           if (data.generated) {
             msg = "Generated " + clipgenPluralUnit(data.generated, "clip", "clips") + ". " + msg;
@@ -3622,6 +3672,13 @@
       .then(function (data) {
         state.overlayJobRunning = false;
         if (data.ok) {
+          state.generatedViewers.push(stampLog({
+            type: "viewer",
+            subtype: "gallery",
+            file: pathBasename(data.file),
+            participant: participant,
+            description: "Gallery viewer (" + format + ", " + interval + "s)",
+          }));
           showResult("Gallery viewer created: " + (data.file || ""), null, data.file);
         } else {
           showResult(null, data.error || "Gallery build failed");
@@ -3738,22 +3795,37 @@
   function renderLog() {
     var container = qs("#logContent");
     var countEl = qs("#logCount");
-    var items = state.generatedArtifacts;
+
+    var items = [];
+    for (var ai = 0; ai < state.generatedArtifacts.length; ai++) items.push(state.generatedArtifacts[ai]);
+    for (var ri = 0; ri < state.generatedReels.length; ri++) items.push(state.generatedReels[ri]);
+    for (var vi = 0; vi < state.generatedViewers.length; vi++) items.push(state.generatedViewers[vi]);
 
     if (items.length === 0) {
       container.innerHTML = "";
-      container.appendChild(el("div", "log-empty", "No artifacts generated yet."));
+      container.appendChild(el("div", "log-empty", "No artifacts, reels, or viewers generated yet."));
       countEl.textContent = "";
       return;
     }
 
+    items.sort(function (a, b) { return (a._seq || 0) - (b._seq || 0); });
+
     container.innerHTML = "";
-    for (var i = items.length - 1; i >= 0; i--) {
-      var a = items[i];
+    var frag = document.createDocumentFragment();
+    for (var k = items.length - 1; k >= 0; k--) {
+      var a = items[k];
       var row = el("div", "log-entry");
 
-      var badge = el("span", "log-type-badge", a.type || "clip");
-      badge.setAttribute("data-type", a.type || "clip");
+      // Reels persisted to the manifest have no "type" field \u2014 detect them by
+      // their components array or "id":"reel:..." shape. Viewers are tagged
+      // by the push sites in this file.
+      var badgeType;
+      if (a.type === "viewer") badgeType = "viewer";
+      else if (a.components || (a.id || "").indexOf("reel:") === 0) badgeType = "reel";
+      else badgeType = a.type || "clip";
+
+      var badge = el("span", "log-type-badge", badgeType);
+      badge.setAttribute("data-type", badgeType);
       row.appendChild(badge);
 
       row.appendChild(el("span", "log-entry-file", a.file || ""));
@@ -3768,11 +3840,12 @@
         row.appendChild(el("span", "log-entry-meta", meta.join(" \u00B7 ")));
       }
 
-      container.appendChild(row);
+      frag.appendChild(row);
     }
+    container.appendChild(frag);
 
     var n = items.length;
-    countEl.textContent = n + " artifact" + (n !== 1 ? "s" : "");
+    countEl.textContent = n + " item" + (n !== 1 ? "s" : "");
   }
 
   // ---- Settings (shared modal lives in settings-modal.js) ----

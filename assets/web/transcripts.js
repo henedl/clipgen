@@ -1738,6 +1738,9 @@
       });
     });
 
+    // Keep the paused frame visible across tab switches. See utils.js.
+    clipgenInstallPausedFrameOverlay(video);
+
     updatePlayerButtons();
   }
 

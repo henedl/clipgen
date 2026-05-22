@@ -1261,10 +1261,19 @@ def regenerate_from_manifest(
     reel_list = reels or []
     workers = _resolve_clip_workers()
     parallel_media = workers >= 2 and len(media) >= 2
+    parallel_reels = workers >= 2 and len(reel_list) >= 2
 
     def _regenerate_artifact_threadsafe(artifact: dict[str, Any]) -> bool:
         local_missing: set[str] = set()
         ok = _regenerate_single_artifact(artifact, local_missing)
+        if local_missing:
+            with missing_lock:
+                missing_videos.update(local_missing)
+        return ok
+
+    def _regenerate_reel_threadsafe(reel: dict[str, Any]) -> bool:
+        local_missing: set[str] = set()
+        ok = _regenerate_reel(reel, local_missing)
         if local_missing:
             with missing_lock:
                 missing_videos.update(local_missing)
@@ -1311,16 +1320,39 @@ def regenerate_from_manifest(
                     if _regenerate_single_artifact(artifact, missing_videos):
                         generated += 1
                     progress.update(task, advance=1)
-            for reel in reel_list:
-                progress.update(
-                    task,
-                    description=reel.get("description", "Reel")[
-                        : config.PROGRESS_DESCRIPTION_LENGTH
-                    ],
-                )
-                if _regenerate_reel(reel, missing_videos):
-                    generated += 1
-                progress.update(task, advance=1)
+            if parallel_reels:
+                reel_results: list[bool] = [False] * len(reel_list)
+                with concurrent.futures.ThreadPoolExecutor(
+                    max_workers=workers,
+                ) as pool:
+                    reel_future_to_idx = {
+                        pool.submit(_regenerate_reel_threadsafe, reel): idx
+                        for idx, reel in enumerate(reel_list)
+                    }
+                    for future in concurrent.futures.as_completed(reel_future_to_idx):
+                        idx = reel_future_to_idx[future]
+                        try:
+                            reel_results[idx] = future.result()
+                        except Exception as exc:
+                            reel = reel_list[idx]
+                            utils.error_print(
+                                f"Reel regen failed: {reel.get('description', 'reel')[: config.PROGRESS_DESCRIPTION_LENGTH]}",
+                                [str(exc)],
+                            )
+                            reel_results[idx] = False
+                        progress.update(task, advance=1)
+                generated += sum(1 for ok in reel_results if ok)
+            else:
+                for reel in reel_list:
+                    progress.update(
+                        task,
+                        description=reel.get("description", "Reel")[
+                            : config.PROGRESS_DESCRIPTION_LENGTH
+                        ],
+                    )
+                    if _regenerate_reel(reel, missing_videos):
+                        generated += 1
+                    progress.update(task, advance=1)
     elif parallel_media:
         results = [False] * len(media)
         with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
@@ -1340,16 +1372,56 @@ def regenerate_from_manifest(
                     )
                     results[idx] = False
         generated += sum(1 for ok in results if ok)
-        for reel in reel_list:
-            if _regenerate_reel(reel, missing_videos):
-                generated += 1
+        if parallel_reels:
+            reel_results = [False] * len(reel_list)
+            with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
+                reel_future_to_idx = {
+                    pool.submit(_regenerate_reel_threadsafe, reel): idx
+                    for idx, reel in enumerate(reel_list)
+                }
+                for future in concurrent.futures.as_completed(reel_future_to_idx):
+                    idx = reel_future_to_idx[future]
+                    try:
+                        reel_results[idx] = future.result()
+                    except Exception as exc:
+                        reel = reel_list[idx]
+                        utils.error_print(
+                            f"Reel regen failed: {reel.get('description', 'reel')[: config.PROGRESS_DESCRIPTION_LENGTH]}",
+                            [str(exc)],
+                        )
+                        reel_results[idx] = False
+            generated += sum(1 for ok in reel_results if ok)
+        else:
+            for reel in reel_list:
+                if _regenerate_reel(reel, missing_videos):
+                    generated += 1
     else:
         for artifact in media:
             if _regenerate_single_artifact(artifact, missing_videos):
                 generated += 1
-        for reel in reel_list:
-            if _regenerate_reel(reel, missing_videos):
-                generated += 1
+        if parallel_reels:
+            reel_results = [False] * len(reel_list)
+            with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
+                reel_future_to_idx = {
+                    pool.submit(_regenerate_reel_threadsafe, reel): idx
+                    for idx, reel in enumerate(reel_list)
+                }
+                for future in concurrent.futures.as_completed(reel_future_to_idx):
+                    idx = reel_future_to_idx[future]
+                    try:
+                        reel_results[idx] = future.result()
+                    except Exception as exc:
+                        reel = reel_list[idx]
+                        utils.error_print(
+                            f"Reel regen failed: {reel.get('description', 'reel')[: config.PROGRESS_DESCRIPTION_LENGTH]}",
+                            [str(exc)],
+                        )
+                        reel_results[idx] = False
+            generated += sum(1 for ok in reel_results if ok)
+        else:
+            for reel in reel_list:
+                if _regenerate_reel(reel, missing_videos):
+                    generated += 1
 
     if missing_videos:
         utils.standard_print(f"* Missing source video files: {len(missing_videos)}")
