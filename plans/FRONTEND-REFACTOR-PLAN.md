@@ -203,8 +203,8 @@ Use this when executing waves; check items in PR descriptions.
 
 - [x] A1 `export-actions.js` + TopNav wiring on all three surfaces
 - [x] A2 Shared toast CSS + consistent hide behavior
-- [ ] A3 `createPoller` in `utils.js`; adopt in hot paths
-- [ ] A4 `getCanvasThemeColors` in `utils.js`; Screenspace + Transcripts canvases
+- [x] A3 `createPoller` in `utils.js`; adopt in hot paths
+- [x] A4 `getCanvasThemeColors` in `utils.js`; Screenspace + Transcripts canvases
 
 ### Wave 2
 

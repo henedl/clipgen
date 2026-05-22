@@ -1472,18 +1472,15 @@
     var cssH = canvas.offsetHeight;
     ctx.clearRect(0, 0, cssW, cssH);
 
-    var isDark = (document.documentElement.getAttribute("data-theme") || "").toLowerCase() === "dark";
-    var surfaceAlt = getCSSVar("--color-surface-alt", isDark ? "#1f2937" : "#f1ece4");
-    var border = getCSSVar("--color-border", isDark ? "#374151" : "#e0ddd7");
-    var textDim = getCSSVar("--color-text-dim", isDark ? "#9ca3af" : "#6b7280");
+    var theme = getCanvasThemeColors();
 
-    ctx.fillStyle = surfaceAlt;
+    ctx.fillStyle = theme.surfaceAlt;
     ctx.fillRect(0, 0, cssW, cssH);
 
     var dur = v && isFinite(v.duration) ? v.duration : 0;
     if (dur <= 0) {
       _markerHitRects = [];
-      ctx.fillStyle = textDim;
+      ctx.fillStyle = theme.textDim;
       ctx.font = "11px -apple-system, sans-serif";
       ctx.textAlign = "center";
       ctx.fillText(state.selectedParticipant ? "Loading…" : "No video", cssW / 2, cssH / 2 + 4);
@@ -1496,9 +1493,9 @@
 
     var tickInterval = computeTickInterval(dur);
     var firstTick = Math.ceil(0 / tickInterval) * tickInterval;
-    ctx.strokeStyle = border;
-    ctx.fillStyle = textDim;
-    ctx.font = "10px " + getCSSVar("--font-mono", "monospace");
+    ctx.strokeStyle = theme.border;
+    ctx.fillStyle = theme.textDim;
+    ctx.font = "10px " + theme.fontMono;
     ctx.textAlign = "center";
     ctx.lineWidth = 1;
     for (var t = firstTick; t <= dur; t += tickInterval) {
@@ -1550,8 +1547,7 @@
     var dur = isFinite(v.duration) ? v.duration : 0;
     if (dur <= 0) return;
     var px = (v.currentTime / dur) * cssW;
-    var accent = getCSSVar("--color-accent", "#1d4f72");
-    ctx.strokeStyle = accent;
+    ctx.strokeStyle = getCanvasThemeColors().accent;
     ctx.lineWidth = 2;
     ctx.beginPath();
     ctx.moveTo(px, 0);

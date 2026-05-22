@@ -159,29 +159,37 @@
   var _resultsRequestVersion = 0;
   var _heatmapOverlayRequestVersion = 0;
 
-  var _cachedThemeColors = null;
+  // Region palette is screenspace-specific (REGION_COLOR_COUNT entries from
+  // --region-color-1..N); the common canvas colors come from the shared
+  // getCanvasThemeColors() cache in utils.js, which auto-invalidates on
+  // theme toggle.
+  var _cachedRegionPalette = null;
 
   function refreshThemeColors() {
-    var cs = getComputedStyle(document.documentElement);
-    var regionPalette = [];
-    for (var i = 1; i <= REGION_COLOR_COUNT; i++) {
-      regionPalette.push(cs.getPropertyValue("--region-color-" + i).trim() || "#3b82f6");
-    }
-    _cachedThemeColors = {
-      fg: cs.getPropertyValue("--fg").trim() || "#ffffff",
-      bg: cs.getPropertyValue("--bg").trim() || "#0d0e10",
-      surfaceAlt: cs.getPropertyValue("--color-surface-alt").trim() || "#f1ece4",
-      border: cs.getPropertyValue("--color-border").trim() || "#e0ddd7",
-      textDim: cs.getPropertyValue("--color-text-dim").trim() || "#6b7280",
-      accent: cs.getPropertyValue("--color-accent").trim() || "#1d4f72",
-      fontMono: cs.getPropertyValue("--font-mono").trim() || "monospace",
-      regionPalette: regionPalette,
-    };
+    invalidateCanvasThemeColors();
+    _cachedRegionPalette = null;
   }
 
   function getThemeColors() {
-    if (!_cachedThemeColors) refreshThemeColors();
-    return _cachedThemeColors;
+    var base = getCanvasThemeColors();
+    if (!_cachedRegionPalette) {
+      var cs = getComputedStyle(document.documentElement);
+      var palette = [];
+      for (var i = 1; i <= REGION_COLOR_COUNT; i++) {
+        palette.push(cs.getPropertyValue("--region-color-" + i).trim() || "#3b82f6");
+      }
+      _cachedRegionPalette = palette;
+    }
+    return {
+      fg: base.fg,
+      bg: base.bg,
+      surfaceAlt: base.surfaceAlt,
+      border: base.border,
+      textDim: base.textDim,
+      accent: base.accent,
+      fontMono: base.fontMono,
+      regionPalette: _cachedRegionPalette,
+    };
   }
 
   // ---- Helpers ----

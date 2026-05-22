@@ -58,7 +58,6 @@
     intakeEvents: [],
     intakeClusters: [],
     intakeSeenIds: {},
-    intakePollTimer: null,
     intakeFilterText: "",
     intakeFilterDetector: "",
     intakeFilterNew: false,
@@ -67,9 +66,6 @@
     activePreviewTab: "sheet",
     trIntakeMarks: [],
     trIntakeClusters: [],
-    trIntakePollTimer: null,
-    intakeStatusTimer: null,
-    trIntakeStatusTimer: null,
     trIntakeFilterCategory: "",
     trIntakeFilterParticipants: [],
     trIntakeFilterText: "",
@@ -4650,16 +4646,6 @@
       });
     }
 
-    // Polling runs whenever the page is visible so the intake-tab counter
-    // badge stays live regardless of which sub-tab the user is currently on.
-    document.addEventListener("visibilitychange", function () {
-      if (document.hidden) {
-        if (state.intakePollTimer) { clearInterval(state.intakePollTimer); state.intakePollTimer = null; }
-      } else {
-        pollIntakeEvents();
-        if (!state.intakePollTimer) state.intakePollTimer = setInterval(pollIntakeEvents, 10000);
-      }
-    });
   }
 
   // ---- Transcript Intake ----
@@ -5130,16 +5116,6 @@
       });
     }
 
-    // Visibility change — pause/resume polling. Runs whenever the page is
-    // visible so the transcript-intake counter badge stays live across tabs.
-    document.addEventListener("visibilitychange", function () {
-      if (document.hidden) {
-        if (state.trIntakePollTimer) { clearInterval(state.trIntakePollTimer); state.trIntakePollTimer = null; }
-      } else {
-        pollTranscriptIntakeMarks();
-        if (!state.trIntakePollTimer) state.trIntakePollTimer = setInterval(pollTranscriptIntakeMarks, 10000);
-      }
-    });
   }
 
   function initTooltipToggle() {
@@ -5217,38 +5193,23 @@
     initTopNavActions();
     initIntake();
     initTranscriptIntake();
-    pollIntakeStatus();
-    pollTrIntakeStatus();
+    // Live counter polls — intake-status / tr-intake-status (5s) keep the
+    // start-overlay's status pill fresh; intake-events / tr-intake-marks
+    // (10s) keep the sub-tab counter badges live regardless of which
+    // sub-tab is currently visible. createPoller handles visibility-pause.
+    createPoller(pollIntakeStatus, 5000).start();
+    createPoller(pollTrIntakeStatus, 5000).start();
+    createPoller(pollIntakeEvents, 10000).start();
+    createPoller(pollTranscriptIntakeMarks, 10000).start();
     // One-shot job-status fetch on page load picks up any reel/generate
     // build that's still running in the background after the user navigated
     // away to a sibling frontend and back. The poll's own success handler
     // starts the recurring timer if a job is still in flight.
     pollJobStatus();
-    if (!document.hidden) {
-      state.intakeStatusTimer = setInterval(pollIntakeStatus, 5000);
-      state.trIntakeStatusTimer = setInterval(pollTrIntakeStatus, 5000);
-    }
     document.addEventListener("visibilitychange", function () {
-      if (document.hidden) {
-        if (state.intakeStatusTimer) { clearInterval(state.intakeStatusTimer); state.intakeStatusTimer = null; }
-        if (state.trIntakeStatusTimer) { clearInterval(state.trIntakeStatusTimer); state.trIntakeStatusTimer = null; }
-        stopJobStatusPoll();
-      } else {
-        if (!state.intakeStatusTimer) { pollIntakeStatus(); state.intakeStatusTimer = setInterval(pollIntakeStatus, 5000); }
-        if (!state.trIntakeStatusTimer) { pollTrIntakeStatus(); state.trIntakeStatusTimer = setInterval(pollTrIntakeStatus, 5000); }
-        pollJobStatus();
-      }
+      if (document.hidden) stopJobStatusPoll();
+      else pollJobStatus();
     });
-    // Start intake event polls immediately so the sub-tab counter badges
-    // populate on page load and update live regardless of which sub-tab the
-    // user is currently viewing. Visibility-change handlers in
-    // initIntake / initTranscriptIntake pause + resume them with the page.
-    if (!document.hidden) {
-      pollIntakeEvents();
-      state.intakePollTimer = setInterval(pollIntakeEvents, 10000);
-      pollTranscriptIntakeMarks();
-      state.trIntakePollTimer = setInterval(pollTranscriptIntakeMarks, 10000);
-    }
     window.addEventListener("resize", function () {
       if (window.convergenceResize) window.convergenceResize();
       if (window.metadataResize) window.metadataResize();

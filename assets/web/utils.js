@@ -524,6 +524,36 @@ var getCSSVar = function (name, fallback) {
   }
 };
 
+// Cached snapshot of the theme tokens that canvas renderers (Screenspace
+// timeline, Transcripts ruler, Studio heatmap) read on every frame. The cache
+// is invalidated automatically when initThemeToggle()'s click handler fires;
+// callers can also invalidate manually via invalidateCanvasThemeColors().
+var _canvasThemeColorsCache = null;
+
+var getCanvasThemeColors = function () {
+  if (_canvasThemeColorsCache) return _canvasThemeColorsCache;
+  var cs = getComputedStyle(document.documentElement);
+  function v(name, fallback) {
+    var x = cs.getPropertyValue(name).trim();
+    return x || fallback;
+  }
+  _canvasThemeColorsCache = {
+    fg:         v("--fg",                "#ffffff"),
+    bg:         v("--bg",                "#0d0e10"),
+    surfaceAlt: v("--color-surface-alt", "#f1ece4"),
+    border:     v("--color-border",      "#e0ddd7"),
+    textDim:    v("--color-text-dim",    "#6b7280"),
+    accent:     v("--color-accent",      "#1d4f72"),
+    heatmap:    v("--color-heatmap",     "#3b82f6"),
+    fontMono:   v("--font-mono",         "monospace"),
+  };
+  return _canvasThemeColorsCache;
+};
+
+var invalidateCanvasThemeColors = function () {
+  _canvasThemeColorsCache = null;
+};
+
 var SHOW_TOAST_DEFAULT_MS = 3000;
 
 var showToast = function (msg, opts) {
@@ -624,6 +654,67 @@ var apiDelete = function (path) {
 // ---- Polling ----
 
 var POLL_INTERVAL = 3000;
+
+// Generic poller. Encapsulates the recurring `setInterval` + `visibilitychange`
+// + `document.hidden` dance used by Studio intake counters, Screenspace task
+// status, and similar live-refresh loops.
+//
+//   var poller = createPoller(fn, ms, opts);
+//   poller.start();   // arm; pauses automatically when tab hidden
+//   poller.stop();    // disarm; safe to call multiple times
+//
+// Options:
+//   pauseWhenHidden (default true)  — pause when document.hidden, resume on
+//                                     visibilitychange and run fn() once to
+//                                     catch up.
+//   runImmediately  (default true)  — run fn() once on start (and again on
+//                                     resume) before the next interval tick.
+//
+// fn exceptions are swallowed so a transient error does not kill the loop.
+var createPoller = function (fn, intervalMs, opts) {
+  opts = opts || {};
+  var pauseWhenHidden = opts.pauseWhenHidden !== false;
+  var runImmediately = opts.runImmediately !== false;
+  var timer = null;
+  var visListener = null;
+  var wantRunning = false;
+
+  function safeFn() {
+    try { fn(); } catch (_) {}
+  }
+  function arm() {
+    if (timer != null) return;
+    if (pauseWhenHidden && document.hidden) return;
+    if (runImmediately) safeFn();
+    timer = setInterval(safeFn, intervalMs);
+  }
+  function disarm() {
+    if (timer != null) { clearInterval(timer); timer = null; }
+  }
+  function onVisibility() {
+    if (!wantRunning) return;
+    if (document.hidden) disarm(); else arm();
+  }
+  return {
+    start: function () {
+      if (wantRunning) return;
+      wantRunning = true;
+      arm();
+      if (pauseWhenHidden && !visListener) {
+        visListener = onVisibility;
+        document.addEventListener("visibilitychange", visListener);
+      }
+    },
+    stop: function () {
+      wantRunning = false;
+      disarm();
+      if (visListener) {
+        document.removeEventListener("visibilitychange", visListener);
+        visListener = null;
+      }
+    },
+  };
+};
 
 // ---- Mark categories ----
 // Hardcoded fallback that mirrors config.MARK_CATEGORIES defaults; the live
@@ -850,6 +941,7 @@ var initThemeToggle = function (onToggle) {
   if (!btn) return;
   btn.addEventListener("click", function () {
     toggleThemePreference();
+    invalidateCanvasThemeColors();
     if (onToggle) onToggle();
   });
 };
