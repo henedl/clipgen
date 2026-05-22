@@ -1783,7 +1783,10 @@
     if (targetQueue === state.artifactQueue && isArtifactQueueLocked()) return;
     if (targetQueue === state.reelQueue && isReelQueueLocked()) return;
     var added = false;
-    if (info.segIdx !== undefined) {
+    if (isIntakeSource(info.source)) {
+      targetQueue.push(info);
+      added = true;
+    } else if (info.segIdx !== undefined) {
       if (!hasSegmentInQueue(targetQueue, info.participant, info.row, info.segIdx)) {
         targetQueue.push(info);
         added = true;
@@ -1797,7 +1800,7 @@
     }
     if (added) {
       renderFn();
-      updateSingleCellClass(info.participant, info.row);
+      if (info.row) updateSingleCellClass(info.participant, info.row);
     }
   }
 
@@ -2156,9 +2159,8 @@
           addToQueue(state.artifactQueue, info.items[i], renderArtifactQueue);
         return;
       }
-      if (info.source === "screenspace" || info.source === "transcript") {
-        state.artifactQueue.push(info);
-        renderArtifactQueue();
+      if (isIntakeSource(info.source)) {
+        addToQueue(state.artifactQueue, info, renderArtifactQueue);
         return;
       }
       if (info.source === "reel") {
@@ -2174,9 +2176,8 @@
           addToQueue(state.reelQueue, info.items[i], renderReelQueue);
         return;
       }
-      if (info.source === "screenspace" || info.source === "transcript") {
-        state.reelQueue.push(info);
-        renderReelQueue();
+      if (isIntakeSource(info.source)) {
+        addToQueue(state.reelQueue, info, renderReelQueue);
         return;
       }
       if (info.source === "artifact") {
