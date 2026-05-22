@@ -18,6 +18,9 @@ tests/__pycache__/
 tests/.pytest_cache/
 .pytest_cache/
 .ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
 
 # PyInstaller artifacts
 build/*
