@@ -104,6 +104,21 @@ _intake_active = 0
 _stash_lock = threading.Lock()
 # Serializes mutations to in-memory generated lists and quiet manifest saves.
 _generated_output_lock = threading.Lock()
+# Latest progress snapshots for in-flight jobs, exposed by /api/job-status so
+# the Studio UI can re-attach (show progress + Cancel) after the user
+# navigates away to /screenspace/ or /transcripts/ mid-build and comes back.
+_job_state_lock = threading.Lock()
+_reel_job_state: dict[str, Any] = {
+    "total_clips": 0,
+    "clips_done": 0,
+    "concat_progress": 0.0,
+    "phase": None,
+    "endpoint": None,  # "reel" or "reel-direct"
+}
+_generate_job_state: dict[str, Any] = {
+    "total": 0,
+    "done": 0,
+}
 
 
 # Cached gspread client + threaded-auth state for the Start overlay's Google
@@ -233,6 +248,56 @@ def _release_busy(slot: str) -> None:
             _generate_in_progress = False
         elif slot == "reel":
             _reel_in_progress = False
+
+
+def _reset_reel_job_state(endpoint: str) -> None:
+    """Clear the reel progress snapshot at the start of a new build."""
+    with _job_state_lock:
+        _reel_job_state["total_clips"] = 0
+        _reel_job_state["clips_done"] = 0
+        _reel_job_state["concat_progress"] = 0.0
+        _reel_job_state["phase"] = "starting"
+        _reel_job_state["endpoint"] = endpoint
+
+
+def _record_reel_event(event: dict[str, Any]) -> None:
+    """Mirror a reel progress event into the snapshot so /api/job-status can
+    report it. Called from the worker thread alongside event_queue.put."""
+    phase = event.get("phase")
+    with _job_state_lock:
+        if phase:
+            _reel_job_state["phase"] = phase
+        if phase == "start":
+            total = event.get("total_clips")
+            if isinstance(total, int) and total >= 0:
+                _reel_job_state["total_clips"] = total
+                _reel_job_state["clips_done"] = 0
+                _reel_job_state["concat_progress"] = 0.0
+        elif phase == "clip_done":
+            idx = event.get("clip_index")
+            if isinstance(idx, int):
+                _reel_job_state["clips_done"] = max(
+                    _reel_job_state["clips_done"], idx + 1
+                )
+        elif phase == "concat":
+            prog = event.get("progress")
+            if isinstance(prog, (int, float)):
+                _reel_job_state["concat_progress"] = float(prog)
+        elif phase == "done":
+            _reel_job_state["concat_progress"] = 1.0
+
+
+def _reset_generate_job_state(total: int) -> None:
+    """Initialize the generate progress snapshot when /api/generate starts."""
+    with _job_state_lock:
+        _generate_job_state["total"] = max(0, int(total))
+        _generate_job_state["done"] = 0
+
+
+def _increment_generate_done(n: int = 1) -> None:
+    """Advance the generate-job 'done' counter by n (one per yielded line)."""
+    with _job_state_lock:
+        _generate_job_state["done"] += n
 
 
 def _mark_intake_active(active: bool) -> None:
@@ -854,74 +919,58 @@ def _stream_process_reel(
     """Run pipeline.process_reel on a worker thread and yield its progress events
     as NDJSON lines, finishing with a final result/error line.
 
-    process_reel must complete (or raise) before the result line is emitted, so
-    the bridge uses a thread + queue: the worker pushes progress events plus a
-    sentinel when it finishes; this generator drains the queue and yields each
-    event verbatim. The final line carries {"ok": True, "generated": N,
-    "reels": [...]} on success, {"ok": False, "error": ...} on failure, or
-    {"ok": False, "cancelled": True, ...} on cancellation.
+    The worker thread also owns result persistence and busy-slot release, so
+    that a client disconnect (e.g. browser navigation) does not abort the
+    encode or orphan the reel from the manifest. The generator can die at any
+    point; the worker keeps running until ffmpeg completes, then persists and
+    frees the slot in its finally.
     """
     event_queue: queue.Queue[dict[str, Any]] = queue.Queue()
     sentinel: dict[str, Any] = {"__sentinel__": True}
-    result_holder: list[tuple[int, list[dict[str, Any]]]] = []
-    error_holder: list[str] = []
 
-    def on_progress(event: dict[str, Any]) -> None:
+    def emit_event(event: dict[str, Any]) -> None:
+        _record_reel_event(event)
         event_queue.put(event)
 
     def worker() -> None:
         try:
-            result = pipeline.process_reel(
+            generated, reel_records = pipeline.process_reel(
                 clips,
                 cancel_flag=cancel_flag,
-                progress_cb=on_progress,
+                progress_cb=emit_event,
                 titlecards_enabled=titlecards_enabled,
                 titlecard_duration_seconds=titlecard_duration_seconds,
             )
-            result_holder.append(result)
+            if cancel_flag and cancel_flag():
+                event_queue.put(
+                    {
+                        "ok": False,
+                        "cancelled": True,
+                        "error": "Reel generation cancelled",
+                    }
+                )
+                return
+            _extend_generated_reels(reel_records)
+            _save_manifest_quiet()
+            event_queue.put({"ok": True, "generated": generated, "reels": reel_records})
         except Exception as exc:
-            error_holder.append(str(exc))
+            event_queue.put({"ok": False, "error": str(exc)})
         finally:
             event_queue.put(sentinel)
+            _release_busy("reel")
 
-    threading.Thread(target=worker, daemon=True).start()
+    try:
+        threading.Thread(target=worker, daemon=True).start()
+    except BaseException:
+        # Worker never ran, so its finally won't release the slot.
+        _release_busy("reel")
+        raise
 
     while True:
         event = event_queue.get()
         if event is sentinel:
-            break
+            return
         yield json.dumps(event) + "\n"
-
-    if error_holder:
-        yield json.dumps({"ok": False, "error": error_holder[0]}) + "\n"
-        return
-
-    if not result_holder:
-        yield (
-            json.dumps({"ok": False, "error": "Reel processing produced no result"})
-            + "\n"
-        )
-        return
-
-    generated, reel_records = result_holder[0]
-    if cancel_flag and cancel_flag():
-        yield (
-            json.dumps(
-                {
-                    "ok": False,
-                    "cancelled": True,
-                    "error": "Reel generation cancelled",
-                }
-            )
-            + "\n"
-        )
-        return
-
-    _extend_generated_reels(reel_records)
-    _save_manifest_quiet()
-    yield (
-        json.dumps({"ok": True, "generated": generated, "reels": reel_records}) + "\n"
-    )
 
 
 @studio_bp.route("/api/generate", methods=["POST"])
@@ -972,6 +1021,7 @@ def api_generate() -> FlaskResponse:
 
     def stream() -> Any:
         _generate_cancel_event.clear()
+        _reset_generate_job_state(len(cell_strings))
         cancel_flag = _generate_cancel_event.is_set
         clip_cells: set[str] = set()
         req_cards, req_dur = pipeline._resolve_titlecard_options(
@@ -1001,6 +1051,7 @@ def api_generate() -> FlaskResponse:
                 (fresh if matches else stale).append(a)
 
             if fresh:
+                _increment_generate_done()
                 yield (
                     json.dumps(
                         {
@@ -1033,21 +1084,31 @@ def api_generate() -> FlaskResponse:
                             pass
                 to_generate.append((clip, cell_str))
 
-        # Pass 2: generate in parallel and yield as each completes
+        # Pass 2: generate in parallel and yield as each completes. The
+        # per-clip worker self-persists via _extend_generated_artifacts so
+        # that results landing while the client is disconnecting (shutdown
+        # waits for in-flight futures) still reach the manifest.
+        def _generate_and_persist(
+            clip: Any,
+        ) -> tuple[int, list[dict[str, Any]]]:
+            generated, artifacts = pipeline.process_clips(
+                [clip],
+                output_format=output_format,
+                cancel_flag=cancel_flag,
+                titlecards_enabled=titlecards_enabled,
+                titlecard_duration_seconds=titlecard_duration_seconds,
+                clear_titlecard_cache=False,
+            )
+            if generated > 0:
+                _extend_generated_artifacts(artifacts)
+            return generated, artifacts
+
         if to_generate:
             workers = pipeline._resolve_clip_workers()
             if workers >= 2 and len(to_generate) >= 2:
                 with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
                     future_to_cell: dict[concurrent.futures.Future, tuple[Any, str]] = {
-                        pool.submit(
-                            pipeline.process_clips,
-                            [clip],
-                            output_format=output_format,
-                            cancel_flag=cancel_flag,
-                            titlecards_enabled=titlecards_enabled,
-                            titlecard_duration_seconds=titlecard_duration_seconds,
-                            clear_titlecard_cache=False,
-                        ): (clip, cell_str)
+                        pool.submit(_generate_and_persist, clip): (clip, cell_str)
                         for clip, cell_str in to_generate
                     }
                     for future in concurrent.futures.as_completed(future_to_cell):
@@ -1056,9 +1117,9 @@ def api_generate() -> FlaskResponse:
                                 f.cancel()
                             break
                         clip, cell_str = future_to_cell[future]
+                        _increment_generate_done()
                         try:
                             generated, artifacts = future.result()
-                            _extend_generated_artifacts(artifacts)
                             yield (
                                 json.dumps(
                                     {
@@ -1081,16 +1142,9 @@ def api_generate() -> FlaskResponse:
                 for clip, cell_str in to_generate:
                     if cancel_flag():
                         break
+                    _increment_generate_done()
                     try:
-                        generated, artifacts = pipeline.process_clips(
-                            [clip],
-                            output_format=output_format,
-                            cancel_flag=cancel_flag,
-                            titlecards_enabled=titlecards_enabled,
-                            titlecard_duration_seconds=titlecard_duration_seconds,
-                            clear_titlecard_cache=False,
-                        )
-                        _extend_generated_artifacts(artifacts)
+                        generated, artifacts = _generate_and_persist(clip)
                         yield (
                             json.dumps(
                                 {
@@ -1110,6 +1164,7 @@ def api_generate() -> FlaskResponse:
 
         for cs in cell_strings:
             if cs not in clip_cells:
+                _increment_generate_done()
                 yield (
                     json.dumps({"cell": cs, "ok": False, "error": "No clip found"})
                     + "\n"
@@ -1221,8 +1276,12 @@ def api_reel() -> FlaskResponse:
         ), 409
 
     def stream() -> Any:
-        with _override_config(**highlights_overrides):
-            try:
+        # _stream_process_reel's worker takes ownership of the busy slot once
+        # we hand control to it; until then we release on every exit path so
+        # the slot doesn't leak when the route returns without starting work.
+        worker_started = False
+        try:
+            with _override_config(**highlights_overrides):
                 reel_input = ", ".join(cell_strings)
 
                 clips = spreadsheet.generate_list(
@@ -1278,29 +1337,23 @@ def api_reel() -> FlaskResponse:
                             return
 
                 _reel_cancel_event.clear()
+                _reset_reel_job_state("reel")
                 cancel_flag = _reel_cancel_event.is_set
+                worker_started = True
                 yield from _stream_process_reel(
                     clips,
                     cancel_flag,
                     titlecards_enabled=titlecards_enabled,
                     titlecard_duration_seconds=titlecard_duration_seconds,
                 )
-            except Exception as e:
-                yield json.dumps({"ok": False, "error": str(e)}) + "\n"
-
-    def stream_with_busy_release() -> Any:
-        try:
-            yield from stream()
-        except GeneratorExit:
-            # Client disconnected mid-stream — signal the background encoder to
-            # stop so the freed reel slot isn't held by an orphaned ffmpeg run.
-            _reel_cancel_event.set()
-            raise
+        except Exception as e:
+            yield json.dumps({"ok": False, "error": str(e)}) + "\n"
         finally:
-            _release_busy("reel")
+            if not worker_started:
+                _release_busy("reel")
 
     return Response(
-        stream_with_busy_release(),
+        stream(),
         mimetype="application/x-ndjson",
         headers={"X-Accel-Buffering": "no"},
     )
@@ -1831,115 +1884,26 @@ def api_reel_direct() -> FlaskResponse:
         ), 409
 
     _reel_cancel_event.clear()
+    _reset_reel_job_state("reel-direct")
 
     def stream() -> Iterator[str]:
-        output_dir = Path(utils.get_effective_output_dir())
-        clip_paths: list[str] = []
-        temp_clips: list[str] = []
-        try:
-            total = len(segments)
-            yield json.dumps({"phase": "start", "total_clips": total}) + "\n"
+        # The worker thread does the actual ffmpeg work and owns the busy
+        # slot. The generator just drains its event queue so that a client
+        # disconnect (e.g. browser navigation to a sibling frontend) does not
+        # abort the encode or orphan the reel from the manifest.
+        event_queue: queue.Queue[dict[str, Any]] = queue.Queue()
+        sentinel: dict[str, Any] = {"__sentinel__": True}
 
-            completed = 0
-            for seg in segments:
-                if _reel_cancel_event.is_set():
-                    break
+        def emit_event(event: dict[str, Any]) -> None:
+            _record_reel_event(event)
+            event_queue.put(event)
 
-                participant = seg.get("participant", "")
-                start = float(seg.get("start", 0))
-                end = float(seg.get("end", 0))
-                if end <= start:
-                    completed += 1
-                    yield (
-                        json.dumps(
-                            {
-                                "phase": "clip_done",
-                                "clip_index": completed - 1,
-                                "total_clips": total,
-                            }
-                        )
-                        + "\n"
-                    )
-                    continue
-
-                source = seg.get("source", "screenspace")
-                video_path = _resolve_intake_video_path(participant, source)
-
-                if not video_path:
-                    completed += 1
-                    yield (
-                        json.dumps(
-                            {
-                                "phase": "clip_done",
-                                "clip_index": completed - 1,
-                                "total_clips": total,
-                            }
-                        )
-                        + "\n"
-                    )
-                    continue
-
-                start_str = utils.seconds_to_timestamp(int(round(start)))
-                end_str = utils.seconds_to_timestamp(int(round(end)))
-
-                fd, tmp_path = tempfile.mkstemp(
-                    suffix=config.FILEFORMAT, dir=str(output_dir)
-                )
-                # Track for cleanup BEFORE os.close(fd) or any other call
-                # that could raise; otherwise the tmp file is on disk but
-                # not in temp_clips, so the finally block won't unlink it.
-                temp_clips.append(tmp_path)
-                os.close(fd)
-
-                ok = video.run_ffmpeg(
-                    video_path,
-                    tmp_path,
-                    start_str,
-                    end_str,
-                    config.REENCODING,
-                    cancel_flag=_reel_cancel_event.is_set,
-                )
-                if ok:
-                    clip_paths.append(tmp_path)
-                completed += 1
-                yield (
-                    json.dumps(
-                        {
-                            "phase": "clip_done",
-                            "clip_index": completed - 1,
-                            "total_clips": total,
-                        }
-                    )
-                    + "\n"
-                )
-
-            if _reel_cancel_event.is_set():
-                yield (
-                    json.dumps(
-                        {
-                            "ok": False,
-                            "error": "Reel generation cancelled",
-                            "cancelled": True,
-                        }
-                    )
-                    + "\n"
-                )
-                return
-
-            if not clip_paths:
-                yield (
-                    json.dumps({"ok": False, "error": "No clips could be generated"})
-                    + "\n"
-                )
-                return
-
-            reel_study = _sheet_context.study_name if _sheet_context else ""
-            reel_base = f"{reel_study} intake reel" if reel_study else "intake_reel"
-            reel_name = files.get_unique_filename(f"{reel_base}{config.FILEFORMAT}")
-
-            # Throttle concat progress emissions to ~5 Hz.
-            concat_last_emit: list[float] = [0.0]
-            concat_event_queue: queue.Queue[dict[str, Any]] = queue.Queue()
+        def worker() -> None:
+            output_dir = Path(utils.get_effective_output_dir())
+            clip_paths: list[str] = []
+            temp_clips: list[str] = []
+            # Throttle concat progress emissions to ~5 Hz, same as before.
+            concat_last_emit = [0.0]
 
             def on_concat_progress(fraction: float) -> None:
                 import time as _time
@@ -1952,78 +1916,180 @@ def api_reel_direct() -> FlaskResponse:
                 ):
                     return
                 concat_last_emit[0] = now
-                concat_event_queue.put({"phase": "concat", "progress": fraction})
+                emit_event({"phase": "concat", "progress": fraction})
 
-            concat_sentinel: dict[str, Any] = {"__sentinel__": True}
-            concat_result: list[bool] = []
+            try:
+                total = len(segments)
+                emit_event({"phase": "start", "total_clips": total})
 
-            def concat_worker() -> None:
+                completed = 0
+                for seg in segments:
+                    if _reel_cancel_event.is_set():
+                        break
+
+                    participant = seg.get("participant", "")
+                    start = float(seg.get("start", 0))
+                    end = float(seg.get("end", 0))
+                    if end <= start:
+                        completed += 1
+                        emit_event(
+                            {
+                                "phase": "clip_done",
+                                "clip_index": completed - 1,
+                                "total_clips": total,
+                            }
+                        )
+                        continue
+
+                    source = seg.get("source", "screenspace")
+                    video_path = _resolve_intake_video_path(participant, source)
+
+                    if not video_path:
+                        completed += 1
+                        emit_event(
+                            {
+                                "phase": "clip_done",
+                                "clip_index": completed - 1,
+                                "total_clips": total,
+                            }
+                        )
+                        continue
+
+                    start_str = utils.seconds_to_timestamp(int(round(start)))
+                    end_str = utils.seconds_to_timestamp(int(round(end)))
+
+                    fd, tmp_path = tempfile.mkstemp(
+                        suffix=config.FILEFORMAT, dir=str(output_dir)
+                    )
+                    # Track for cleanup BEFORE os.close(fd) or any other call
+                    # that could raise; otherwise the tmp file is on disk but
+                    # not in temp_clips, so the finally block won't unlink it.
+                    temp_clips.append(tmp_path)
+                    os.close(fd)
+
+                    ok = video.run_ffmpeg(
+                        video_path,
+                        tmp_path,
+                        start_str,
+                        end_str,
+                        config.REENCODING,
+                        cancel_flag=_reel_cancel_event.is_set,
+                    )
+                    if ok:
+                        clip_paths.append(tmp_path)
+                    completed += 1
+                    emit_event(
+                        {
+                            "phase": "clip_done",
+                            "clip_index": completed - 1,
+                            "total_clips": total,
+                        }
+                    )
+
+                if _reel_cancel_event.is_set():
+                    emit_event(
+                        {
+                            "ok": False,
+                            "error": "Reel generation cancelled",
+                            "cancelled": True,
+                        }
+                    )
+                    return
+
+                if not clip_paths:
+                    emit_event({"ok": False, "error": "No clips could be generated"})
+                    return
+
+                reel_study = _sheet_context.study_name if _sheet_context else ""
+                reel_base = f"{reel_study} intake reel" if reel_study else "intake_reel"
+                reel_name = files.get_unique_filename(f"{reel_base}{config.FILEFORMAT}")
+
                 try:
-                    result = video.concatenate_clips(
+                    concat_ok = video.concatenate_clips(
                         clip_paths,
                         reel_name,
                         reencode_on_fail=True,
                         cancel_flag=_reel_cancel_event.is_set,
                         on_progress=on_concat_progress,
                     )
-                    concat_result.append(result)
                 except Exception as exc:
                     utils.error_print(f"Concat failed: {exc}")
-                    concat_result.append(False)
-                finally:
-                    concat_event_queue.put(concat_sentinel)
+                    concat_ok = False
 
-            threading.Thread(target=concat_worker, daemon=True).start()
+                if concat_ok:
+                    reel_record: dict[str, Any] = {
+                        "id": f"reel_intake_{hashlib.md5(reel_name.encode()).hexdigest()[:8]}",
+                        "file": Path(reel_name).name,
+                        "source": "intake",
+                        "description": f"Intake reel ({len(clip_paths)} segments)",
+                    }
+                    _append_generated_reel(reel_record)
+                    _save_manifest_quiet()
+                    emit_event({"ok": True, "generated": 1, "reels": [reel_record]})
+                else:
+                    emit_event({"ok": False, "error": "Reel concatenation failed"})
+            except Exception as exc:
+                emit_event({"ok": False, "error": str(exc)})
+            finally:
+                for tmp in temp_clips:
+                    try:
+                        Path(tmp).unlink(missing_ok=True)
+                    except OSError:
+                        pass
+                event_queue.put(sentinel)
+                _release_busy("reel")
 
-            while True:
-                event = concat_event_queue.get()
-                if event is concat_sentinel:
-                    break
-                yield json.dumps(event) + "\n"
-
-            ok = concat_result[0] if concat_result else False
-
-            if ok:
-                reel_record: dict[str, Any] = {
-                    "id": f"reel_intake_{hashlib.md5(reel_name.encode()).hexdigest()[:8]}",
-                    "file": Path(reel_name).name,
-                    "source": "intake",
-                    "description": f"Intake reel ({len(clip_paths)} segments)",
-                }
-                _append_generated_reel(reel_record)
-                yield (
-                    json.dumps({"ok": True, "generated": 1, "reels": [reel_record]})
-                    + "\n"
-                )
-            else:
-                yield (
-                    json.dumps({"ok": False, "error": "Reel concatenation failed"})
-                    + "\n"
-                )
-        finally:
-            # Persist the appended reel even on a mid-stream client disconnect.
-            _save_manifest_quiet()
-            for tmp in temp_clips:
-                try:
-                    Path(tmp).unlink(missing_ok=True)
-                except OSError:
-                    pass
-
-    def stream_with_busy_release() -> Iterator[str]:
         try:
-            yield from stream()
-        except GeneratorExit:
-            # Client disconnected mid-stream — signal the background encoder to
-            # stop so the freed reel slot isn't held by an orphaned ffmpeg run.
-            _reel_cancel_event.set()
-            raise
-        finally:
+            threading.Thread(target=worker, daemon=True).start()
+        except BaseException:
+            # Worker never ran, so its finally won't release the slot.
             _release_busy("reel")
+            raise
+
+        while True:
+            event = event_queue.get()
+            if event is sentinel:
+                return
+            yield json.dumps(event) + "\n"
 
     return Response(
-        stream_with_busy_release(),
+        stream(),
         mimetype="application/x-ndjson",
         headers={"X-Accel-Buffering": "no"},
+    )
+
+
+@studio_bp.route("/api/job-status", methods=["GET"])
+def api_job_status() -> FlaskResponse:
+    """Snapshot of in-flight generate/reel jobs so Studio can re-attach.
+
+    A user who navigates from /studio/ to /screenspace/ mid-build aborts the
+    original streaming fetch but the worker keeps running (see
+    _stream_process_reel + /api/reel-direct's worker). On return, Studio polls
+    this endpoint to restore the progress bar and Cancel button. Cancel still
+    works because /api/reel/cancel and /api/generate/cancel just set their
+    shared cancel events, which the workers continue to honor.
+    """
+    with _busy_lock:
+        reel_busy = _reel_in_progress
+        generate_busy = _generate_in_progress
+    with _job_state_lock:
+        reel_snapshot = dict(_reel_job_state)
+        generate_snapshot = dict(_generate_job_state)
+    return jsonify(
+        {
+            "ok": True,
+            "reel": {
+                "in_progress": reel_busy,
+                "cancelling": reel_busy and _reel_cancel_event.is_set(),
+                **reel_snapshot,
+            },
+            "generate": {
+                "in_progress": generate_busy,
+                "cancelling": generate_busy and _generate_cancel_event.is_set(),
+                **generate_snapshot,
+            },
+        }
     )
 
 

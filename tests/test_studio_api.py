@@ -1929,57 +1929,78 @@ def test_thumbnail_cache_put_is_threadsafe(monkeypatch):
     assert len(server._thumbnail_cache) <= server._THUMBNAIL_CACHE_MAX
 
 
-def test_api_reel_cancels_worker_on_client_disconnect(client, monkeypatch, tmp_path):
-    """Closing the /api/reel stream early must cancel the background encoder.
+def _poll_until(predicate, *, timeout=5.0, interval=0.02):
+    """Spin until predicate() returns truthy or timeout elapses."""
+    import time
 
-    Regression: the streaming reel refactor released the "reel" busy slot in
-    the response generator's finally, but a client disconnect (browser tab
-    closed mid-build) left the worker thread still encoding. The freed slot
-    then let a second reel build start concurrently. The GeneratorExit handler
-    must set _reel_cancel_event so the worker observes the cancellation.
-    """
-    import threading
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if predicate():
+            return True
+        time.sleep(interval)
+    return False
+
+
+def _fake_reel_clip():
+    """Single-clip payload that satisfies /api/reel's setup phase."""
     import types
 
+    cell = types.SimpleNamespace(row=5, col=2, value="1:00-1:30")
+    return {
+        "participant": "P01",
+        "cell": cell,
+        "times": [("1:00", "1:30")],
+        "desc": "test",
+        "category": "cat",
+        "study": "study",
+        "severity": "",
+    }
+
+
+def _setup_api_reel(monkeypatch, tmp_path, *, clips=None):
+    """Shared mocks for /api/reel tests."""
     monkeypatch.setattr(server, "_worksheet", object())
     monkeypatch.setattr("config.OUTPUT_DIR", str(tmp_path))
     monkeypatch.setattr(server, "_generated_reels", [])
     monkeypatch.setattr(server, "_save_manifest_quiet", lambda: None)
 
-    cell = types.SimpleNamespace(row=5, col=2, value="1:00-1:30")
-
-    def fake_generate_list(ws, mode, *, ctx=None, reel_input, skip_prompts):
-        return [
-            {
-                "participant": "P01",
-                "cell": cell,
-                "times": [("1:00", "1:30")],
-                "desc": "test",
-                "category": "cat",
-                "study": "study",
-                "severity": "",
-            }
-        ]
-
-    monkeypatch.setattr("spreadsheet.generate_list", fake_generate_list)
+    payload = [_fake_reel_clip()] if clips is None else clips
+    monkeypatch.setattr(
+        "spreadsheet.generate_list",
+        lambda ws, mode, *, ctx=None, reel_input, skip_prompts: payload,
+    )
     monkeypatch.setattr("files.prepare_clip", lambda clip: clip)
+    server._reel_cancel_event.clear()
 
+
+def test_api_reel_continues_worker_after_client_disconnect(
+    client, monkeypatch, tmp_path
+):
+    """A client disconnect (browser navigation to a sibling frontend) must NOT
+    abort the background encoder. The worker keeps running, persists the reel
+    record to the manifest, and releases the busy slot when it completes.
+
+    Reverses PR #353's behavior: GeneratorExit no longer sets the cancel event;
+    only explicit cancels do.
+    """
+    import threading
+
+    _setup_api_reel(monkeypatch, tmp_path)
+
+    reel_record = {"id": "r1", "file": "reel.mp4", "study": "study", "components": []}
     worker_blocked = threading.Event()
-    allow_worker_finish = threading.Event()
+    allow_finish = threading.Event()
 
-    def fake_process_reel(
-        clips_list, output_file=None, cancel_flag=None, progress_cb=None, **kwargs
-    ):
-        # Emit one event so the stream generator suspends at a yield, then
-        # block to keep the "encode" in flight while the client disconnects.
+    def fake_process_reel(clips_list, **kwargs):
+        progress_cb = kwargs.get("progress_cb")
         if progress_cb is not None:
             progress_cb({"phase": "start", "total_clips": 1})
         worker_blocked.set()
-        allow_worker_finish.wait(timeout=5)
-        return (0, [])
+        # Block briefly so the test can disconnect mid-encode.
+        allow_finish.wait(timeout=5)
+        return (1, [reel_record])
 
     monkeypatch.setattr("pipeline.process_reel", fake_process_reel)
-    server._reel_cancel_event.clear()
 
     resp = client.post("/studio/api/reel", json={"cells": ["P01.5"]})
     try:
@@ -1987,27 +2008,615 @@ def test_api_reel_cancels_worker_on_client_disconnect(client, monkeypatch, tmp_p
         first = json.loads(next(stream).decode().strip())
         assert first["phase"] == "start"
         assert worker_blocked.wait(timeout=5)
-        # Simulate the browser tab closing mid-build.
-        resp.close()
-        assert server._reel_cancel_event.is_set()
-        assert server._reel_in_progress is False
+
+        resp.close()  # simulate browser tab navigating away
+        # No auto-cancel on disconnect anymore.
+        assert server._reel_cancel_event.is_set() is False
+        # Slot still held: worker is running.
+        assert server._reel_in_progress is True
     finally:
-        allow_worker_finish.set()
+        allow_finish.set()
+
+    # Once the worker finishes, manifest is updated and slot is released.
+    assert _poll_until(lambda: server._reel_in_progress is False)
+    assert reel_record in server._generated_reels
 
 
-def test_api_reel_direct_cancels_on_client_disconnect(client, monkeypatch, tmp_path):
-    """Closing the /api/reel-direct stream early releases the slot and cancels."""
+def test_api_reel_busy_slot_held_during_worker_after_disconnect(
+    client, monkeypatch, tmp_path
+):
+    """While the background worker is running, a second /api/reel POST must
+    receive 409 even after the original client has disconnected. The slot only
+    frees once the worker actually completes."""
+    import threading
+
+    _setup_api_reel(monkeypatch, tmp_path)
+
+    worker_blocked = threading.Event()
+    allow_finish = threading.Event()
+
+    def fake_process_reel(clips_list, **kwargs):
+        progress_cb = kwargs.get("progress_cb")
+        if progress_cb is not None:
+            progress_cb({"phase": "start", "total_clips": 1})
+        worker_blocked.set()
+        allow_finish.wait(timeout=5)
+        return (1, [{"id": "r1", "file": "r.mp4"}])
+
+    monkeypatch.setattr("pipeline.process_reel", fake_process_reel)
+
+    resp = client.post("/studio/api/reel", json={"cells": ["P01.5"]})
+    try:
+        stream = resp.iter_encoded()
+        next(stream)
+        assert worker_blocked.wait(timeout=5)
+        resp.close()
+
+        # Worker still running → second request rejected.
+        second = client.post("/studio/api/reel", json={"cells": ["P01.5"]})
+        assert second.status_code == 409
+    finally:
+        allow_finish.set()
+
+    # After worker exits, the slot frees and a fresh request can proceed.
+    assert _poll_until(lambda: server._reel_in_progress is False)
+    third = client.post("/studio/api/reel", json={"cells": ["P01.5"]})
+    assert third.status_code == 200
+
+
+def test_api_reel_explicit_cancel_still_works(client, monkeypatch, tmp_path):
+    """The Cancel button (POST /api/reel/cancel) must continue to abort an
+    in-flight build. This is the only path that should kill ffmpeg."""
+    import threading
+
+    _setup_api_reel(monkeypatch, tmp_path)
+
+    started = threading.Event()
+
+    def fake_process_reel(clips_list, **kwargs):
+        progress_cb = kwargs.get("progress_cb")
+        cancel_flag = kwargs.get("cancel_flag")
+        if progress_cb is not None:
+            progress_cb({"phase": "start", "total_clips": 1})
+        started.set()
+        # Honor cancel_flag instead of running ffmpeg.
+        for _ in range(500):
+            if cancel_flag and cancel_flag():
+                return (0, [])
+            threading.Event().wait(0.01)
+        return (1, [{"id": "r1", "file": "r.mp4"}])
+
+    monkeypatch.setattr("pipeline.process_reel", fake_process_reel)
+
+    resp = client.post("/studio/api/reel", json={"cells": ["P01.5"]})
+    stream = resp.iter_encoded()
+    next(stream)
+    assert started.wait(timeout=5)
+
+    cancel_resp = client.post("/studio/api/reel/cancel")
+    assert cancel_resp.status_code == 200
+    assert server._reel_cancel_event.is_set()
+
+    # The worker observes the cancel and emits a cancelled-error event.
+    final = json.loads(resp.data.decode().strip().split("\n")[-1])
+    assert final.get("cancelled") is True
+    assert _poll_until(lambda: server._reel_in_progress is False)
+
+
+def test_api_reel_releases_slot_on_no_clips_early_return(client, monkeypatch, tmp_path):
+    """When generate_list returns no clips, the route reports the error and
+    releases the slot itself — no worker takes over."""
+    _setup_api_reel(monkeypatch, tmp_path, clips=[])
+
+    resp = client.post("/studio/api/reel", json={"cells": ["P01.5"]})
+    assert resp.status_code == 200
+    lines = [json.loads(line) for line in resp.data.decode().strip().split("\n")]
+    assert lines[-1]["ok"] is False
+    assert "No clips" in lines[-1]["error"]
+    assert server._reel_in_progress is False
+
+
+def test_api_reel_releases_slot_on_cached_match(client, monkeypatch, tmp_path):
+    """A cached-reel hit short-circuits before the worker runs. The route must
+    release the slot on this early-return path."""
+    _setup_api_reel(monkeypatch, tmp_path)
+
+    # Pre-populate a matching reel record and create the file on disk.
+    (tmp_path / "cached.mp4").write_bytes(b"video")
+    cached = {
+        "id": "cached-id",
+        "file": "cached.mp4",
+        "study": "study",
+        "components": [],
+    }
+    monkeypatch.setattr(server, "_generated_reels", [cached])
+    monkeypatch.setattr("pipeline.compute_reel_id", lambda components: "cached-id")
+    monkeypatch.setattr(
+        "utils.build_reel_component", lambda clip, src, s, e: {"start": s, "end": e}
+    )
+
+    resp = client.post("/studio/api/reel", json={"cells": ["P01.5"]})
+    assert resp.status_code == 200
+    lines = [json.loads(line) for line in resp.data.decode().strip().split("\n")]
+    assert lines[-1]["ok"] is True
+    assert lines[-1]["skipped"] is True
+    assert server._reel_in_progress is False
+
+
+def test_api_reel_releases_slot_on_pipeline_exception(client, monkeypatch, tmp_path):
+    """If pipeline.process_reel raises, the worker's finally still releases the
+    busy slot — the route does not need to know the worker failed."""
+    _setup_api_reel(monkeypatch, tmp_path)
+
+    def raises(*a, **kw):
+        raise RuntimeError("ffmpeg exploded")
+
+    monkeypatch.setattr("pipeline.process_reel", raises)
+
+    resp = client.post("/studio/api/reel", json={"cells": ["P01.5"]})
+    assert resp.status_code == 200
+    lines = [json.loads(line) for line in resp.data.decode().strip().split("\n")]
+    assert any(
+        ln.get("ok") is False and "ffmpeg exploded" in ln.get("error", "")
+        for ln in lines
+    )
+    assert _poll_until(lambda: server._reel_in_progress is False)
+
+
+def test_api_reel_direct_continues_worker_after_client_disconnect(
+    client, monkeypatch, tmp_path
+):
+    """Same disconnect-survives-work contract for /api/reel-direct: the
+    intake-reel worker continues, persists, and releases the slot."""
+    import threading
+
+    monkeypatch.setattr(
+        server, "_resolve_intake_video_path", lambda p, s="": "/fake/video.mp4"
+    )
     monkeypatch.setattr("config.OUTPUT_DIR", str(tmp_path))
+    monkeypatch.setattr(server, "_generated_reels", [])
+    monkeypatch.setattr(server, "_save_manifest_quiet", lambda: None)
+    monkeypatch.setattr("video.run_ffmpeg", lambda *a, **kw: True)
+    monkeypatch.setattr(
+        "files.get_unique_filename", lambda name, file_format=None: name
+    )
+
+    concat_blocked = threading.Event()
+    allow_finish = threading.Event()
+
+    def fake_concat(clip_paths, reel_name, **kwargs):
+        concat_blocked.set()
+        allow_finish.wait(timeout=5)
+        return True
+
+    monkeypatch.setattr("video.concatenate_clips", fake_concat)
     server._reel_cancel_event.clear()
 
     resp = client.post(
         "/studio/api/reel-direct",
-        json={"segments": [{"participant": "P01", "start": 0, "end": 10}]},
+        json={"segments": [{"participant": "P01", "start": 0, "end": 5}]},
+    )
+    try:
+        stream = resp.iter_encoded()
+        first = json.loads(next(stream).decode().strip())
+        assert first["phase"] == "start"
+        assert concat_blocked.wait(timeout=5)
+        resp.close()
+        assert server._reel_cancel_event.is_set() is False
+        assert server._reel_in_progress is True
+    finally:
+        allow_finish.set()
+
+    assert _poll_until(lambda: server._reel_in_progress is False)
+    assert len(server._generated_reels) == 1
+    assert server._generated_reels[0]["source"] == "intake"
+
+
+def test_api_reel_direct_cleans_temp_clips_after_disconnect(
+    client, monkeypatch, tmp_path
+):
+    """The worker's finally must unlink per-segment temp files even when the
+    client has disconnected before the worker completed."""
+    import threading
+    from pathlib import Path
+
+    monkeypatch.setattr(
+        server, "_resolve_intake_video_path", lambda p, s="": "/fake/video.mp4"
+    )
+    monkeypatch.setattr("config.OUTPUT_DIR", str(tmp_path))
+    monkeypatch.setattr(server, "_generated_reels", [])
+    monkeypatch.setattr(server, "_save_manifest_quiet", lambda: None)
+    monkeypatch.setattr(
+        "files.get_unique_filename", lambda name, file_format=None: name
+    )
+
+    # Track every tempfile that run_ffmpeg "produces".
+    created_temps: list[str] = []
+
+    def fake_run_ffmpeg(src, dst, *a, **kw):
+        Path(dst).write_bytes(b"clip")
+        created_temps.append(dst)
+        return True
+
+    monkeypatch.setattr("video.run_ffmpeg", fake_run_ffmpeg)
+
+    concat_started = threading.Event()
+    allow_finish = threading.Event()
+
+    def fake_concat(clip_paths, reel_name, **kwargs):
+        concat_started.set()
+        allow_finish.wait(timeout=5)
+        return True
+
+    monkeypatch.setattr("video.concatenate_clips", fake_concat)
+    server._reel_cancel_event.clear()
+
+    resp = client.post(
+        "/studio/api/reel-direct",
+        json={
+            "segments": [
+                {"participant": "P01", "start": 0, "end": 5},
+                {"participant": "P01", "start": 5, "end": 10},
+            ]
+        },
+    )
+    try:
+        stream = resp.iter_encoded()
+        next(stream)
+        assert concat_started.wait(timeout=5)
+        resp.close()
+    finally:
+        allow_finish.set()
+
+    assert _poll_until(lambda: server._reel_in_progress is False)
+    assert created_temps  # sanity: ffmpeg ran
+    for tmp in created_temps:
+        assert not Path(tmp).exists(), f"temp clip {tmp} was not cleaned up"
+
+
+def test_api_reel_direct_explicit_cancel_still_works(client, monkeypatch, tmp_path):
+    """POST /api/reel/cancel during a reel-direct build must abort the
+    per-segment loop and yield a cancelled-error event."""
+    import threading
+
+    monkeypatch.setattr(
+        server, "_resolve_intake_video_path", lambda p, s="": "/fake/video.mp4"
+    )
+    monkeypatch.setattr("config.OUTPUT_DIR", str(tmp_path))
+    monkeypatch.setattr(server, "_generated_reels", [])
+    monkeypatch.setattr(server, "_save_manifest_quiet", lambda: None)
+    monkeypatch.setattr(
+        "files.get_unique_filename", lambda name, file_format=None: name
+    )
+
+    started = threading.Event()
+
+    def slow_ffmpeg(src, dst, *a, **kw):
+        started.set()
+        for _ in range(500):
+            if kw.get("cancel_flag") and kw["cancel_flag"]():
+                return False
+            threading.Event().wait(0.01)
+        return True
+
+    monkeypatch.setattr("video.run_ffmpeg", slow_ffmpeg)
+    monkeypatch.setattr("video.concatenate_clips", lambda *a, **kw: True)
+    server._reel_cancel_event.clear()
+
+    resp = client.post(
+        "/studio/api/reel-direct",
+        json={"segments": [{"participant": "P01", "start": 0, "end": 5}]},
     )
     stream = resp.iter_encoded()
-    first = json.loads(next(stream).decode().strip())
-    assert first["phase"] == "start"
-    # Simulate the browser tab closing before the reel finishes.
+    next(stream)
+    assert started.wait(timeout=5)
+
+    cancel_resp = client.post("/studio/api/reel/cancel")
+    assert cancel_resp.status_code == 200
+
+    final = json.loads(resp.data.decode().strip().split("\n")[-1])
+    assert final.get("cancelled") is True
+    assert _poll_until(lambda: server._reel_in_progress is False)
+
+
+def test_api_generate_persists_artifacts_after_disconnect(
+    client, monkeypatch, tmp_path
+):
+    """After a client disconnect mid-/api/generate, every clip whose worker
+    completed (including ones still in the pool when the for-loop died) lands
+    in the manifest. Validates that _extend_generated_artifacts moved into the
+    per-clip worker."""
+    import threading
+    import types
+
+    monkeypatch.setattr(server, "_worksheet", object())
+    monkeypatch.setattr("config.OUTPUT_DIR", str(tmp_path))
+    monkeypatch.setattr(server, "_generated_artifacts", [])
+    monkeypatch.setattr(server, "_save_manifest_quiet", lambda: None)
+    monkeypatch.setattr("titlecards.clear_endcard_cache", lambda: None)
+    # Force the parallel path: pool size > 1, more cells than pool workers so
+    # some clips queue up behind in-flight ones.
+    monkeypatch.setattr("pipeline._resolve_clip_workers", lambda: 2)
+
+    cells = [types.SimpleNamespace(row=r, col=2, value="1:00") for r in (5, 6, 7, 8)]
+    monkeypatch.setattr(
+        "spreadsheet.parse_cell_specifications",
+        lambda text: [("P01", r) for r in (5, 6, 7, 8)],
+    )
+    monkeypatch.setattr(
+        "spreadsheet.generate_list",
+        lambda ws, mode, *, ctx=None, cell_specs, skip_prompts: [
+            {"participant": "P01", "cell": c} for c in cells
+        ],
+    )
+
+    started_count = [0]
+    started_lock = threading.Lock()
+    proceed = threading.Event()
+
+    def fake_process_clips(clip_list, **kwargs):
+        with started_lock:
+            started_count[0] += 1
+        # Block briefly so the client has time to disconnect while futures are
+        # mid-flight. The thread-pool's shutdown(wait=True) will keep us alive.
+        proceed.wait(timeout=5)
+        clip = clip_list[0]
+        artifact = {
+            "id": f"a{clip['cell'].row}",
+            "type": "clip",
+            "file": f"clip{clip['cell'].row}.mp4",
+            "cellRow": clip["cell"].row,
+            "cellCol": clip["cell"].col,
+        }
+        return (1, [artifact])
+
+    monkeypatch.setattr("pipeline.process_clips", fake_process_clips)
+
+    resp = client.post(
+        "/studio/api/generate",
+        json={
+            "cells": ["P01.5", "P01.6", "P01.7", "P01.8"],
+            "format": "clip",
+        },
+    )
+    # Werkzeug's test client iterates the streaming body in the background,
+    # so the worker pool has already started by the time post() returns.
+    # Wait for at least two workers to be in flight, then disconnect.
+    assert _poll_until(lambda: started_count[0] >= 2)
     resp.close()
-    assert server._reel_cancel_event.is_set()
-    assert server._reel_in_progress is False
+    # Release the workers; shutdown(wait=True) lets them all finish + persist.
+    proceed.set()
+
+    assert _poll_until(lambda: server._generate_in_progress is False)
+    persisted_rows = {a["cellRow"] for a in server._generated_artifacts}
+    assert persisted_rows == {5, 6, 7, 8}
+
+
+def test_api_job_status_idle(client):
+    """/api/job-status reports neither slot in progress when nothing is running."""
+    resp = client.get("/studio/api/job-status")
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["ok"] is True
+    assert data["reel"]["in_progress"] is False
+    assert data["generate"]["in_progress"] is False
+    # Snapshot fields are always present so the client can render without
+    # null-checks.
+    assert "phase" in data["reel"]
+    assert "clips_done" in data["reel"]
+    assert "total_clips" in data["reel"]
+    assert "concat_progress" in data["reel"]
+    assert "done" in data["generate"]
+    assert "total" in data["generate"]
+
+
+def test_api_job_status_reflects_reel_progress(client, monkeypatch, tmp_path):
+    """While a reel worker is running, /api/job-status surfaces phase + counts
+    so Studio can rebuild the progress bar after navigating back."""
+    import threading
+
+    _setup_api_reel(monkeypatch, tmp_path)
+
+    proceed = threading.Event()
+    started = threading.Event()
+
+    def fake_process_reel(clips_list, **kwargs):
+        progress_cb = kwargs.get("progress_cb")
+        if progress_cb is not None:
+            progress_cb({"phase": "start", "total_clips": 3})
+            progress_cb({"phase": "clip_done", "clip_index": 0, "total_clips": 3})
+            progress_cb({"phase": "clip_done", "clip_index": 1, "total_clips": 3})
+            progress_cb({"phase": "concat", "progress": 0.4})
+        started.set()
+        proceed.wait(timeout=5)
+        return (1, [{"id": "r1", "file": "r.mp4"}])
+
+    monkeypatch.setattr("pipeline.process_reel", fake_process_reel)
+
+    resp = client.post("/studio/api/reel", json={"cells": ["P01.5"]})
+    try:
+        assert started.wait(timeout=5)
+
+        status = client.get("/studio/api/job-status").get_json()
+        reel = status["reel"]
+        assert reel["in_progress"] is True
+        assert reel["endpoint"] == "reel"
+        assert reel["total_clips"] == 3
+        assert reel["clips_done"] == 2
+        assert reel["concat_progress"] == 0.4
+        assert reel["phase"] == "concat"
+        assert reel["cancelling"] is False
+    finally:
+        proceed.set()
+        resp.close()
+
+    assert _poll_until(lambda: server._reel_in_progress is False)
+    final = client.get("/studio/api/job-status").get_json()
+    assert final["reel"]["in_progress"] is False
+
+
+def test_api_job_status_reflects_generate_progress(client, monkeypatch, tmp_path):
+    """The generate side of /api/job-status reports done/total so Studio's
+    Generate button can be re-filled after navigation. Uses the parallel
+    path so the test can observe mid-flight state without driving the
+    streaming response (the busy pool worker thread keeps the job alive)."""
+    import threading
+    import types
+
+    monkeypatch.setattr(server, "_worksheet", object())
+    monkeypatch.setattr("config.OUTPUT_DIR", str(tmp_path))
+    monkeypatch.setattr(server, "_generated_artifacts", [])
+    monkeypatch.setattr(server, "_save_manifest_quiet", lambda: None)
+    monkeypatch.setattr("titlecards.clear_endcard_cache", lambda: None)
+    monkeypatch.setattr("pipeline._resolve_clip_workers", lambda: 2)
+
+    cells = [types.SimpleNamespace(row=r, col=2, value="1:00") for r in (5, 6, 7)]
+    monkeypatch.setattr(
+        "spreadsheet.parse_cell_specifications",
+        lambda text: [("P01", r) for r in (5, 6, 7)],
+    )
+    monkeypatch.setattr(
+        "spreadsheet.generate_list",
+        lambda ws, mode, *, ctx=None, cell_specs, skip_prompts: [
+            {"participant": "P01", "cell": c} for c in cells
+        ],
+    )
+
+    started_lock = threading.Lock()
+    started_count = [0]
+    proceed = threading.Event()
+
+    def fake_process_clips(clip_list, **kwargs):
+        with started_lock:
+            started_count[0] += 1
+        row = clip_list[0]["cell"].row
+        if row != 5:
+            # Row 5 finishes immediately; rows 6 and 7 block so the test can
+            # observe the state when one clip is done and others are mid-flight.
+            proceed.wait(timeout=5)
+        return (
+            1,
+            [
+                {
+                    "id": f"a{row}",
+                    "type": "clip",
+                    "file": f"c{row}.mp4",
+                    "cellRow": row,
+                    "cellCol": 2,
+                }
+            ],
+        )
+
+    monkeypatch.setattr("pipeline.process_clips", fake_process_clips)
+    server._generate_cancel_event.clear()
+
+    resp = client.post(
+        "/studio/api/generate",
+        json={"cells": ["P01.5", "P01.6", "P01.7"], "format": "clip"},
+    )
+    try:
+        # Wait for the snapshot to record at least one completed clip.
+        assert _poll_until(lambda: server._generate_job_state["done"] >= 1)
+
+        status = client.get("/studio/api/job-status").get_json()
+        gen = status["generate"]
+        assert gen["in_progress"] is True
+        assert gen["total"] == 3
+        assert gen["done"] >= 1  # at least row 5 fully processed
+        assert gen["cancelling"] is False
+    finally:
+        proceed.set()
+        resp.close()
+
+    assert _poll_until(lambda: server._generate_in_progress is False)
+
+
+def test_api_job_status_cancelling_flag(client, monkeypatch, tmp_path):
+    """When cancel has been signaled but the worker hasn't yet exited, the
+    status reflects in_progress=True + cancelling=True so the UI can show
+    'Cancelling…' instead of allowing another Cancel click."""
+    import threading
+
+    _setup_api_reel(monkeypatch, tmp_path)
+
+    started = threading.Event()
+    proceed = threading.Event()
+
+    def slow_proc(clips_list, **kwargs):
+        progress_cb = kwargs.get("progress_cb")
+        if progress_cb is not None:
+            progress_cb({"phase": "start", "total_clips": 1})
+        started.set()
+        proceed.wait(timeout=5)
+        return (0, [])
+
+    monkeypatch.setattr("pipeline.process_reel", slow_proc)
+
+    resp = client.post("/studio/api/reel", json={"cells": ["P01.5"]})
+    try:
+        assert started.wait(timeout=5)
+        client.post("/studio/api/reel/cancel")
+
+        status = client.get("/studio/api/job-status").get_json()
+        assert status["reel"]["in_progress"] is True
+        assert status["reel"]["cancelling"] is True
+    finally:
+        proceed.set()
+        resp.close()
+
+    assert _poll_until(lambda: server._reel_in_progress is False)
+
+
+def test_api_generate_explicit_cancel_still_works(client, monkeypatch, tmp_path):
+    """POST /api/generate/cancel during a generate must terminate the run and
+    surface a cancelled event in the stream."""
+    import threading
+    import types
+
+    monkeypatch.setattr(server, "_worksheet", object())
+    monkeypatch.setattr("config.OUTPUT_DIR", str(tmp_path))
+    monkeypatch.setattr(server, "_generated_artifacts", [])
+    monkeypatch.setattr(server, "_save_manifest_quiet", lambda: None)
+    monkeypatch.setattr("titlecards.clear_endcard_cache", lambda: None)
+    monkeypatch.setattr("pipeline._resolve_clip_workers", lambda: 1)  # sequential
+
+    cells = [types.SimpleNamespace(row=r, col=2, value="1:00") for r in (5, 6)]
+    monkeypatch.setattr(
+        "spreadsheet.parse_cell_specifications", lambda text: [("P01", 5), ("P01", 6)]
+    )
+    monkeypatch.setattr(
+        "spreadsheet.generate_list",
+        lambda ws, mode, *, ctx=None, cell_specs, skip_prompts: [
+            {"participant": "P01", "cell": c} for c in cells
+        ],
+    )
+
+    started = threading.Event()
+
+    def slow_clip(clip_list, **kwargs):
+        started.set()
+        cancel_flag = kwargs.get("cancel_flag")
+        for _ in range(500):
+            if cancel_flag and cancel_flag():
+                return (0, [])
+            threading.Event().wait(0.01)
+        return (1, [{"id": "a", "type": "clip", "file": "x.mp4"}])
+
+    monkeypatch.setattr("pipeline.process_clips", slow_clip)
+    server._generate_cancel_event.clear()
+
+    resp = client.post(
+        "/studio/api/generate", json={"cells": ["P01.5", "P01.6"], "format": "clip"}
+    )
+    # The streaming body is iterated by Werkzeug in the background, so the
+    # first clip's process_clips call is already running.
+    assert started.wait(timeout=5)
+
+    cancel_resp = client.post("/studio/api/generate/cancel")
+    assert cancel_resp.status_code == 200
+
+    # The stream must eventually emit a cancelled marker and close.
+    text = resp.data.decode()
+    lines = [json.loads(ln) for ln in text.strip().split("\n") if ln.strip()]
+    assert any(ln.get("cancelled") is True for ln in lines)
+    assert _poll_until(lambda: server._generate_in_progress is False)

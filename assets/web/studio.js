@@ -987,13 +987,109 @@
           for (var ei = 0; ei < entries.length; ei++) state.artifactQueue.push(entries[ei]);
         }
 
-        state.generatedArtifacts = state.generatedArtifacts.concat(
-          artifacts.filter(function (a) { return a.type !== "transcript" && a.file; })
-        );
+        // Dedupe by id (and fall back to file) so calling loadManifestState
+        // again after a background-completed build doesn't double-list the
+        // same artifact in the gallery.
+        var seenArtifact = {};
+        for (var ai = 0; ai < state.generatedArtifacts.length; ai++) {
+          var prev = state.generatedArtifacts[ai];
+          var k = prev.id || prev.file;
+          if (k) seenArtifact[k] = true;
+        }
+        var fresh = [];
+        for (var bi = 0; bi < artifacts.length; bi++) {
+          var b = artifacts[bi];
+          if (b.type === "transcript" || !b.file) continue;
+          var k2 = b.id || b.file;
+          if (k2 && seenArtifact[k2]) continue;
+          if (k2) seenArtifact[k2] = true;
+          fresh.push(b);
+        }
+        state.generatedArtifacts = state.generatedArtifacts.concat(fresh);
         renderArtifactQueue();
         updateCellClasses();
       })
       .catch(function () {});
+  }
+
+  // Poll /api/job-status so Studio re-attaches to a background build that
+  // started before the user navigated away (to /screenspace/ etc.). Without
+  // this the streaming fetch is gone after navigation, the progress bar is
+  // dark, and the Cancel button is hidden — leaving the user no way to stop
+  // a long-running build short of killing the server.
+  function applyJobStatus(status) {
+    if (!status) return;
+    var reel = status.reel || {};
+    var gen = status.generate || {};
+
+    // ---- Reel side ----
+    if (reel.in_progress) {
+      if (!state.reelGenerating) setReelGenerating(true);
+      qs("#cancelReelBtn").classList.remove("hidden");
+      var totalClips = reel.total_clips || 0;
+      var clipsDone = reel.clips_done || 0;
+      var concatFraction = typeof reel.concat_progress === "number" ? reel.concat_progress : 0;
+      var clipFraction = totalClips > 0 ? Math.min(clipsDone / totalClips, 1) : 0;
+      // Same 0.7/0.3 weighting as the live stream handler in onBuildReel().
+      setButtonProgress("buildReelBtn", clipFraction * 0.7 + concatFraction * 0.3);
+    } else if (state._jobStatusReelWasInProgress) {
+      // Transition busy → idle while we were polling: a build finished in
+      // the background. Clear UI and reload the manifest so any new reel
+      // shows up in the gallery without a full page refresh.
+      setReelGenerating(false);
+      qs("#cancelReelBtn").classList.add("hidden");
+      setButtonProgress("buildReelBtn", null);
+      loadManifestState();
+    }
+    state._jobStatusReelWasInProgress = !!reel.in_progress;
+
+    // ---- Generate side ----
+    if (gen.in_progress) {
+      if (!state.artifactGenerating) setArtifactGenerating(true);
+      qs("#cancelGenerateBtn").classList.remove("hidden");
+      var total = gen.total || 0;
+      var done = gen.done || 0;
+      if (total > 0) {
+        setButtonProgress("generateBtn", Math.min(done / total, 1));
+      }
+    } else if (state._jobStatusGenerateWasInProgress) {
+      setArtifactGenerating(false);
+      qs("#cancelGenerateBtn").classList.add("hidden");
+      setButtonProgress("generateBtn", null);
+      loadManifestState();
+    }
+    state._jobStatusGenerateWasInProgress = !!gen.in_progress;
+  }
+
+  function pollJobStatus() {
+    return apiGet("api/job-status")
+      .then(function (data) {
+        if (!data || !data.ok) return;
+        applyJobStatus(data);
+        // Keep polling while either job is in flight. Stop otherwise so the
+        // page doesn't hammer the server when nothing is happening.
+        var stillBusy =
+          (data.reel && data.reel.in_progress) ||
+          (data.generate && data.generate.in_progress);
+        if (stillBusy) {
+          startJobStatusPoll();
+        } else {
+          stopJobStatusPoll();
+        }
+      })
+      .catch(function () { /* transient errors — keep timer running */ });
+  }
+
+  function startJobStatusPoll() {
+    if (state.jobStatusTimer) return;
+    state.jobStatusTimer = setInterval(pollJobStatus, 1000);
+  }
+
+  function stopJobStatusPoll() {
+    if (state.jobStatusTimer) {
+      clearInterval(state.jobStatusTimer);
+      state.jobStatusTimer = null;
+    }
   }
 
   // ---- Header rendering ----
@@ -5030,6 +5126,11 @@
     initTranscriptIntake();
     pollIntakeStatus();
     pollTrIntakeStatus();
+    // One-shot job-status fetch on page load picks up any reel/generate
+    // build that's still running in the background after the user navigated
+    // away to a sibling frontend and back. The poll's own success handler
+    // starts the recurring timer if a job is still in flight.
+    pollJobStatus();
     if (!document.hidden) {
       state.intakeStatusTimer = setInterval(pollIntakeStatus, 5000);
       state.trIntakeStatusTimer = setInterval(pollTrIntakeStatus, 5000);
@@ -5038,9 +5139,11 @@
       if (document.hidden) {
         if (state.intakeStatusTimer) { clearInterval(state.intakeStatusTimer); state.intakeStatusTimer = null; }
         if (state.trIntakeStatusTimer) { clearInterval(state.trIntakeStatusTimer); state.trIntakeStatusTimer = null; }
+        stopJobStatusPoll();
       } else {
         if (!state.intakeStatusTimer) { pollIntakeStatus(); state.intakeStatusTimer = setInterval(pollIntakeStatus, 5000); }
         if (!state.trIntakeStatusTimer) { pollTrIntakeStatus(); state.trIntakeStatusTimer = setInterval(pollTrIntakeStatus, 5000); }
+        pollJobStatus();
       }
     });
     // Start intake event polls immediately so the sub-tab counter badges
