@@ -312,7 +312,7 @@ Tests:
 - [x] Add atomic output reservation to `files.py`.
 - [x] Update ffmpeg call sites that use reserved paths to clean up unused placeholders on early failure.
 - [x] Add a manifest write lock to `viewer.save_manifest()`.
-- [ ] Run:
+- [x] Run:
 
 ```bash
 uv run --extra dev pytest -c tests/pytest.ini tests/test_manifest.py tests/test_clip_pipeline.py
@@ -322,11 +322,11 @@ uv run --extra dev pytest -c tests/pytest.ini tests/test_manifest.py tests/test_
 
 - [x] Fix titlecard cache lifecycle for parallel Studio generation.
 - [x] Forward reel cancellation/titlecard kwargs into `_process_single_clip_segments()`.
-- [ ] Apply titlecard settings to `/studio/api/reel-direct`.
-- [ ] Pass generate cancellation into running ffmpeg workers and clean up cancelled outputs.
-- [ ] Add intake cancellation support and a busy-slot decision.
+- [x] Apply titlecard settings to `/studio/api/reel-direct`.
+- [x] Pass generate cancellation into running ffmpeg workers and clean up cancelled outputs.
+- [x] Add intake cancellation support and a busy-slot decision.
 - [x] Persist streamed successes in generator `finally` blocks.
-- [ ] Run:
+- [x] Run:
 
 ```bash
 uv run --extra dev pytest -c tests/pytest.ini tests/test_studio_api.py tests/test_clip_pipeline.py tests/test_studio_frontend_source.py
@@ -334,11 +334,11 @@ uv run --extra dev pytest -c tests/pytest.ini tests/test_studio_api.py tests/tes
 
 ### Task 3: Studio Frontend Stream Handling
 
-- [ ] Add or inline a shared NDJSON reader helper with `response.body` checks.
-- [ ] Fix sheet branch failure accounting and zero-result messaging.
-- [ ] Fix queued/result badge selectors.
-- [ ] Normalize 409/error handling for reel streams.
-- [ ] Run:
+- [x] Add or inline a shared NDJSON reader helper with `response.body` checks.
+- [x] Fix sheet branch failure accounting and zero-result messaging.
+- [x] Fix queued/result badge selectors.
+- [x] Normalize 409/error handling for reel streams.
+- [x] Run:
 
 ```bash
 uv run --extra dev pytest -c tests/pytest.ini tests/test_studio_frontend_source.py
@@ -350,7 +350,7 @@ uv run --extra dev pytest -c tests/pytest.ini tests/test_studio_frontend_source.
 - [x] Snapshot Screenspace manifest reads under `_manifest_lock`.
 - [x] Coalesce Screenspace SSE queue overflow into a later full state update.
 - [x] Improve transcript cancellation checks.
-- [ ] Run:
+- [x] Run:
 
 ```bash
 uv run --extra dev pytest -c tests/pytest.ini tests/test_screenspace_api.py tests/test_transcripts_api.py tests/test_transcripts.py
@@ -358,8 +358,8 @@ uv run --extra dev pytest -c tests/pytest.ini tests/test_screenspace_api.py test
 
 ### Task 5: Full Verification
 
-- [ ] Run focused tests from Tasks 1-4.
-- [ ] Run full checks:
+- [x] Run focused tests from Tasks 1-4.
+- [x] Run full checks:
 
 ```bash
 uv run --extra dev pytest -c tests/pytest.ini

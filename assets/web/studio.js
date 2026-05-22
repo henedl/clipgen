@@ -2923,6 +2923,36 @@
 
   var setButtonProgress = ClipgenPrimitives.setButtonProgress;
 
+  // Shared NDJSON streaming reader used by generate/intake/reel fetches.
+  // Returns a Promise that resolves when the stream is fully drained. Guards
+  // against responses without a streamable body (e.g. older browsers, or
+  // unexpected non-streaming responses that the caller should have caught
+  // with response.ok before reaching here).
+  function readNDJSONStream(response, onLine) {
+    if (!response.body || typeof response.body.getReader !== "function") {
+      return Promise.reject(new Error("Streaming response not supported"));
+    }
+    var reader = response.body.getReader();
+    var decoder = new TextDecoder();
+    var buffer = "";
+    function pump() {
+      return reader.read().then(function (result) {
+        if (result.done) {
+          if (buffer.trim()) onLine(buffer.trim());
+          return;
+        }
+        buffer += decoder.decode(result.value, { stream: true });
+        var lines = buffer.split("\n");
+        buffer = lines.pop();
+        for (var i = 0; i < lines.length; i++) {
+          if (lines[i].trim()) onLine(lines[i].trim());
+        }
+        return pump();
+      });
+    }
+    return pump();
+  }
+
   function createPulserOverlay() {
     var overlay = el("div", "card-gen-overlay");
     overlay.innerHTML =
@@ -2953,7 +2983,7 @@
     card.classList.remove("queue-card-queued", "queue-card-success", "queue-card-fail");
     var overlay = card.querySelector(".card-gen-overlay");
     if (overlay) overlay.remove();
-    var badge = card.querySelector(".card-result-badge");
+    var badge = card.querySelector(".card-gen-badge");
     if (badge) badge.remove();
   }
 
@@ -3018,6 +3048,13 @@
     setArtifactGenerating(true);
     qs("#cancelGenerateBtn").classList.remove("hidden");
 
+    // Per-branch AbortControllers let onCancelGenerate stop the network
+    // fetches immediately; the server-side cancel endpoints also trip the
+    // cancel events so in-flight ffmpeg subprocesses get terminated.
+    var sheetAbort = new AbortController();
+    var intakeAbort = new AbortController();
+    state.activeGenerateAborts = [sheetAbort, intakeAbort];
+
     var format = qs("#artifactFormat").value;
     var list = qs("#artifactsList");
     var items = state.artifactQueue.slice();
@@ -3034,6 +3071,7 @@
     // element parallel to its item array so the resolve handler can match
     // by index against the captured card list (immune to later re-renders).
     var sheetItems = [];
+    var sheetCardEls = [];
     var intakeItems = [];
     var intakeCardEls = [];
     for (var ci = 0; ci < items.length; ci++) {
@@ -3042,6 +3080,7 @@
         intakeCardEls.push(allCards[ci]);
       } else {
         sheetItems.push(items[ci]);
+        sheetCardEls.push(allCards[ci]);
       }
     }
 
@@ -3075,6 +3114,11 @@
           ? "Cancelled after " + clipgenPluralUnit(totalSuccess, "artifact", "artifacts")
           : null;
         err = totalSuccess > 0 ? null : "Generation cancelled";
+      } else if (totalSuccess === 0 && totalFail === 0) {
+        // Stream ended without any per-item results — treat as an error
+        // rather than silently reporting "Generated 0 artifacts".
+        msg = null;
+        err = "No artifacts were generated";
       } else {
         msg = "Generated " + clipgenPluralUnit(totalSuccess, "artifact", "artifacts");
         if (totalFail > 0) msg += ", " + totalFail + " failed";
@@ -3105,7 +3149,7 @@
         if (!data) return;
         if (data.cancelled) {
           cancelled = true;
-          var queuedCards = list.querySelectorAll(".queue-card.queued");
+          var queuedCards = list.querySelectorAll(".queue-card-queued");
           for (var qi = 0; qi < queuedCards.length; qi++) {
             clearCardStatus(queuedCards[qi]);
           }
@@ -3145,33 +3189,19 @@
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(genBody),
+        signal: sheetAbort.signal,
       })
         .then(function (response) {
           if (!response.ok) throw new Error("Server error " + response.status);
-          var reader = response.body.getReader();
-          var decoder = new TextDecoder();
-          var buffer = "";
-
-          function read() {
-            return reader.read().then(function (result) {
-              if (result.done) {
-                if (buffer.trim()) handleLine(buffer.trim());
-                finishBranch();
-                return;
-              }
-              buffer += decoder.decode(result.value, { stream: true });
-              var lines = buffer.split("\n");
-              buffer = lines.pop();
-              for (var li = 0; li < lines.length; li++) {
-                if (lines[li].trim()) handleLine(lines[li].trim());
-              }
-              return read();
-            });
-          }
-
-          return read();
+          return readNDJSONStream(response, handleLine).then(finishBranch);
         })
         .catch(function () {
+          // Mark every captured sheet card as failed so they don't stay
+          // visually queued; finishBranch reports the failure tally.
+          for (var j = 0; j < sheetCardEls.length; j++) {
+            if (sheetCardEls[j]) setCardResult(sheetCardEls[j], false);
+          }
+          totalFail += sheetItems.length;
           finishBranch();
         });
     }
@@ -3193,7 +3223,21 @@
       function handleIntakeLine(line) {
         var data;
         try { data = JSON.parse(line); } catch (_) { return; }
-        if (!data || typeof data.index !== "number") return;
+        if (!data) return;
+        if (data.cancelled) {
+          cancelled = true;
+          // Clear queued state from any intake card that hasn't received a
+          // per-item result yet, so the cards don't stay visually queued
+          // after the server short-circuits on cancel.
+          for (var qi = 0; qi < intakeCardEls.length; qi++) {
+            var qcard = intakeCardEls[qi];
+            if (qcard && qcard.classList.contains("queue-card-queued")) {
+              clearCardStatus(qcard);
+            }
+          }
+          return;
+        }
+        if (typeof data.index !== "number") return;
         var card = intakeCardEls[data.index];
         if (data.ok) {
           totalSuccess++;
@@ -3216,31 +3260,11 @@
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ items: intakePayload, format: format }),
+        signal: intakeAbort.signal,
       })
         .then(function (response) {
           if (!response.ok) throw new Error("Server error " + response.status);
-          var reader = response.body.getReader();
-          var decoder = new TextDecoder();
-          var buffer = "";
-
-          function read() {
-            return reader.read().then(function (result) {
-              if (result.done) {
-                if (buffer.trim()) handleIntakeLine(buffer.trim());
-                finishBranch();
-                return;
-              }
-              buffer += decoder.decode(result.value, { stream: true });
-              var lines = buffer.split("\n");
-              buffer = lines.pop();
-              for (var li = 0; li < lines.length; li++) {
-                if (lines[li].trim()) handleIntakeLine(lines[li].trim());
-              }
-              return read();
-            });
-          }
-
-          return read();
+          return readNDJSONStream(response, handleIntakeLine).then(finishBranch);
         })
         .catch(function () {
           for (var j = 0; j < intakeCardEls.length; j++) {
@@ -3259,7 +3283,13 @@
 
   function onCancelGenerate() {
     qs("#cancelGenerateBtn").classList.add("hidden");
+    var aborts = state.activeGenerateAborts || [];
+    for (var i = 0; i < aborts.length; i++) {
+      try { aborts[i].abort(); } catch (_) {}
+    }
+    state.activeGenerateAborts = [];
     apiPost("api/generate/cancel").catch(function () {});
+    apiPost("api/generate-intake/cancel").catch(function () {});
   }
 
   // ---- API: reel + standalone viewers (timeline / HTML viewer) ----
@@ -3396,7 +3426,9 @@
       body: JSON.stringify(reelBody),
     })
       .then(function (response) {
-        if (!response.ok && response.status >= 400 && response.status !== 409) {
+        // Any 4xx/5xx (including 409 "reel already in progress") is a JSON
+        // error body, not an NDJSON stream — parse it as text/JSON.
+        if (!response.ok && response.status >= 400) {
           return response.text().then(function (txt) {
             try {
               finalPayload = JSON.parse(txt);
@@ -3409,26 +3441,7 @@
             finish();
           });
         }
-        var reader = response.body.getReader();
-        var decoder = new TextDecoder();
-        var buffer = "";
-        function read() {
-          return reader.read().then(function (result) {
-            if (result.done) {
-              if (buffer.trim()) handleLine(buffer.trim());
-              finish();
-              return;
-            }
-            buffer += decoder.decode(result.value, { stream: true });
-            var lines = buffer.split("\n");
-            buffer = lines.pop();
-            for (var li = 0; li < lines.length; li++) {
-              if (lines[li].trim()) handleLine(lines[li].trim());
-            }
-            return read();
-          });
-        }
-        return read();
+        return readNDJSONStream(response, handleLine).then(finish);
       })
       .catch(function (err) {
         finalPayload = { ok: false, error: "Request failed: " + err };
