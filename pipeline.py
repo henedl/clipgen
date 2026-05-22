@@ -610,6 +610,8 @@ def _transcribe_segments(
             artifact["id"] += "_transcript"
             artifact["transcriptFormat"] = config.TRANSCRIBE_FORMAT
             all_artifacts.append(artifact)
+        else:
+            files.release_reservation(t_path)
 
 
 def process_clips(
@@ -1404,6 +1406,8 @@ def _regenerate_reel(reel: dict[str, Any], missing_videos: set[str]) -> bool:
             reencode=config.REENCODING,
         ):
             temp_paths.append(out_name)
+        else:
+            files.release_reservation(out_name)
 
     if not temp_paths:
         return False

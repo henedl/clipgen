@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """File and filename operations for clipgen."""
 
+import os
 import re
 import unicodedata
 from pathlib import Path
@@ -34,17 +35,24 @@ def _safe_truncate(text: str, max_chars: int) -> str:
 
 
 def get_unique_filename(filename: str, file_format: str | None = None) -> str:
-    """Generate a unique filename by appending an incremented number.
+    """Atomically reserve a unique output path.
+
+    Creates an empty placeholder file at the returned path so that parallel
+    clip / reel / gallery workers each receive a distinct path even when their
+    filename templates collide. The placeholder is overwritten by the ffmpeg
+    process (or file writer) that fills the artifact. Callers that abort before
+    writing real content should remove the placeholder with
+    ``release_reservation()``.
 
     If a file with the given name already exists, appends '-1', '-2', etc.
-    until a unique filename is found. Also truncates if filename exceeds max length.
+    until a free name is found. Also truncates if filename exceeds max length.
 
     Args:
         filename: Original filename
         file_format: File extension to preserve (defaults to config.FILEFORMAT)
 
     Returns:
-        Unique filename path as a string that doesn't exist in the filesystem.
+        Unique filename path as a string, reserved on disk as an empty file.
     """
     file_extension = file_format or config.FILEFORMAT
     resolved = Path(utils.resolve_output_path(filename))
@@ -58,14 +66,47 @@ def get_unique_filename(filename: str, file_format: str | None = None) -> str:
     # Truncate base if needed (reserve space for extension)
     max_base = config.MAX_FILENAME_LENGTH - len(file_extension)
     base = _safe_truncate(base, max_base)
-    candidate = directory / (base + file_extension)
-    counter = 1
-    while candidate.is_file():
+
+    def _candidate(counter: int) -> Path:
+        if counter == 0:
+            return directory / (base + file_extension)
         suffix = f"-{counter}"
         truncated_base = _safe_truncate(base, max_base - len(suffix))
-        candidate = directory / (truncated_base + suffix + file_extension)
-        counter += 1
-    return str(candidate)
+        return directory / (truncated_base + suffix + file_extension)
+
+    counter = 0
+    while True:
+        candidate = _candidate(counter)
+        try:
+            fd = os.open(candidate, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+        except FileExistsError:
+            counter += 1
+            continue
+        except OSError:
+            # Reservation not possible (missing/unwritable directory, name too
+            # long, etc.). Fall back to non-atomic uniqueness so callers still
+            # receive a usable path.
+            while candidate.is_file():
+                counter += 1
+                candidate = _candidate(counter)
+            return str(candidate)
+        else:
+            os.close(fd)
+            return str(candidate)
+
+
+def release_reservation(path: str | os.PathLike[str] | None) -> None:
+    """Remove an unused placeholder reserved by ``get_unique_filename()``.
+
+    Safe to call when *path* is missing or ``None``; used by callers that abort
+    before writing real content so empty placeholders are not left on disk.
+    """
+    if not path:
+        return
+    try:
+        Path(path).unlink(missing_ok=True)
+    except OSError:
+        pass
 
 
 def get_source_video_filename(

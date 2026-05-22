@@ -1,3 +1,4 @@
+import concurrent.futures
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -55,6 +56,39 @@ def test_get_unique_filename_truncates_long_names(monkeypatch, tmp_path):
     assert result2.endswith(".mp4")
     assert "-1" in Path(result2).name
     assert result2 != result1
+
+
+def test_get_unique_filename_reserves_distinct_paths_under_threads(
+    monkeypatch, tmp_path
+):
+    """Concurrent callers requesting the same template each receive a distinct
+    path, atomically reserved on disk — no two workers can pick the same name."""
+    monkeypatch.setattr(files.config, "OUTPUT_DIR", str(tmp_path), raising=False)
+
+    def reserve():
+        return files.get_unique_filename("clip.mp4")
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
+        results = [f.result() for f in [pool.submit(reserve) for _ in range(40)]]
+
+    assert len(set(results)) == len(results)  # every path is unique
+    for path in results:
+        assert Path(path).is_file()  # each path reserved as a placeholder
+
+
+def test_release_reservation_removes_unused_placeholder(monkeypatch, tmp_path):
+    """An unused reservation is removed; release is a no-op on missing/None."""
+    monkeypatch.setattr(files.config, "OUTPUT_DIR", str(tmp_path), raising=False)
+
+    path = files.get_unique_filename("clip.mp4")
+    assert Path(path).is_file()
+
+    files.release_reservation(path)
+    assert not Path(path).exists()
+
+    # Safe to call again, and on None.
+    files.release_reservation(path)
+    files.release_reservation(None)
 
 
 def test_discover_clips_excludes_source_videos(tmp_path, monkeypatch):

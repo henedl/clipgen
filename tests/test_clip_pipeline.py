@@ -514,6 +514,29 @@ def test_build_reel_transcript_uses_request_titlecard_duration(monkeypatch):
     assert merged[0]["end"] == 9.0
 
 
+def test_regenerate_reel_releases_reservation_on_ffmpeg_failure(monkeypatch, tmp_path):
+    """A reel part whose ffmpeg encode fails must not leave a 0-byte placeholder
+    behind from get_unique_filename's atomic reservation."""
+    input_dir = tmp_path / "in"
+    output_dir = tmp_path / "out"
+    input_dir.mkdir()
+    output_dir.mkdir()
+    (input_dir / "study_P01.mp4").write_bytes(b"\x00")
+    monkeypatch.setattr(config, "INPUT_DIR", str(input_dir), raising=False)
+    monkeypatch.setattr(config, "OUTPUT_DIR", str(output_dir), raising=False)
+    monkeypatch.setattr(pipeline.video, "run_ffmpeg", lambda **_k: False)
+
+    reel = {
+        "file": "reel.mp4",
+        "components": [{"sourceVideo": "study_P01.mp4", "start": 0, "end": 10}],
+    }
+    ok = pipeline._regenerate_reel(reel, set())
+
+    assert ok is False
+    # The reserved placeholder for the failed part was cleaned up.
+    assert list(output_dir.iterdir()) == []
+
+
 def test_regenerate_from_manifest_parallel(monkeypatch):
     """Independent artifacts regenerate concurrently when workers >= 2."""
     artifacts = [
