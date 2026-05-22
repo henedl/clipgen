@@ -177,8 +177,12 @@
       return {
         rawStart: Math.max(0, rawStart),
         rawEnd: Math.max(0, rawEnd),
-        start: Math.max(0, rawStart + off),
-        end: Math.max(0, rawEnd + off),
+        // Do NOT clamp start/end to 0: a large negative offset legitimately
+        // places events off the left edge (negative %) and the swim lane clips
+        // them via overflow:hidden. Clamping to 0 would pin all such events at
+        // t=0 and create phantom convergence zones there.
+        start: rawStart + off,
+        end: rawEnd + off,
       };
     }
 
@@ -679,6 +683,9 @@
   function renderTimeline() {
     var container = qs("#convergenceTimeline");
     if (!container) return;
+    // Commit any in-flight drag before destroying the DOM; a debounce-triggered
+    // recalculate can fire mid-drag and the accumulated delta must not be lost.
+    _cvAbortDrag();
     container.textContent = "";
     cvState.swimLaneEl = null;
 
@@ -1393,6 +1400,28 @@
     }
   }
 
+  // Commit the in-flight drag delta without triggering another recalculate.
+  // Called by renderTimeline() before destroying the DOM so a debounce-driven
+  // recalculate during a drag doesn't silently lose the accumulated movement.
+  function _cvAbortDrag() {
+    var tx = cvState._dragTx;
+    if (!tx) return;
+    cvState._dragTx = null;
+    _cvDragLiveInput = null;
+    document.body.style.userSelect = "";
+    var deltaSec = (_cvDragLastX - tx.startX) / tx.pxPerSec;
+    if (Math.abs(deltaSec) >= 0.05) {
+      var maxAbs = Math.max(cvState.duration || 0, 60);
+      var num = Math.max(-maxAbs, Math.min(maxAbs, tx.baseOffset + deltaSec));
+      if (Math.abs(num) < 0.05) {
+        delete cvState.offsets[tx.pid];
+      } else {
+        cvState.offsets[tx.pid] = num;
+      }
+      cvSaveOffsets();
+    }
+  }
+
   // Document-level drag tracking. Mousedown listener is rebound to each new
   // swim-lane (the DOM is rebuilt on every recalculate), but the mousemove/
   // mouseup listeners are installed once at module init so re-renders don't
@@ -1466,7 +1495,9 @@
   function _cvOnDocMouseUp(e) {
     var tx = cvState._dragTx;
     if (!tx) return;
-    var deltaPx = (e.clientX || _cvDragLastX) - tx.startX;
+    // e.clientX is always numeric (0 at viewport left edge), so never use ||
+    // which would fall back to _cvDragLastX when the mouse releases at x=0.
+    var deltaPx = e.clientX - tx.startX;
     var deltaSec = deltaPx / tx.pxPerSec;
     for (var i = 0; i < tx.markers.length; i++) {
       var m = tx.markers[i];
