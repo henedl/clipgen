@@ -95,7 +95,7 @@ Three medium-sized improvements that each unlock a parallel path.
 - **Change:** Wrap the reel loop in a `ThreadPoolExecutor` using the same worker count. Reels are independent encode jobs.
 - **Constraint:** Confirm `_regenerate_reel` is reentrant (no shared mutable state, no progress-bar contention). The existing media-artifact executor at 1138 is a working precedent.
 
-### 2.3 mtime cache for `load_screenspace_events_for_viewer`
+### ✅ 2.3 mtime cache for `load_screenspace_events_for_viewer`
 
 - **Files:** `viewer.py:137-156`, `screenspace.py:load_screenspace_manifest`, `utils.py:515-526`.
 - **Today:** Every call re-reads and re-parses the full `screenspace_manifest.json`.
@@ -163,14 +163,14 @@ Items surfaced by the deep audit that look real but were not exhaustively re-rea
 - **Verify first:** Re-read the call sites and confirm they are all on hot mutation paths (not e.g. user-explicit "save" actions). Confirm that delaying a write by 2–3 seconds is acceptable across power-loss / kill scenarios.
 - **Change:** Introduce a `_manifest_dirty` flag and a `threading.Timer` (or a worker-thread tick) that flushes after a short debounce. Force a flush on shutdown and on explicit user save actions.
 
-### 5.2 Hoist morphology kernel allocations in Screenspace
+### ✅ 5.2 Hoist morphology kernel allocations in Screenspace
 
 - **File:** `screenspace.py` (~lines 197, 996 per the audit — verify).
 - **Today:** `np.ones((mk, mk), np.uint8)` allocated inside per-frame loops in `extract_inactivity()` and `scan_changes()`.
 - **Verify first:** Confirm kernel size (`mk`) is a config constant, not derived from per-frame data. If it is config-static, the kernel is safe to share.
 - **Change:** Hoist to a module-level lazy-initialized `_MORPH_KERNEL` keyed by size if multiple sizes are used; otherwise a single module constant.
 
-### 5.3 Re-read assets from disk on every viewer export
+### ✅ 5.3 Re-read assets from disk on every viewer export
 
 - **File:** `viewer.py` (HTML / CSS / JS template reads in `finalize_*` / export helpers around 176-217 per audit — verify exact functions).
 - **Today:** Each export call re-reads the bundled CSS and JS template files from disk via `Path.read_text()`.
@@ -184,14 +184,14 @@ Items surfaced by the deep audit that look real but were not exhaustively re-rea
 - **Verify first:** Confirm the current transport (`urllib.request` vs `requests`). If `urllib`, decide whether to introduce `requests` as a dependency or switch to `urllib3.PoolManager`.
 - **Change:** Module-level `_session` (or `PoolManager`) reused by all `generate()` / `list_models()` / `is_available()` calls. Set a sane connect/read timeout.
 
-### 5.5 mtime cache for `/api/participants` artifact lookup
+### ✅ 5.5 mtime cache for `/api/participants` artifact lookup
 
 - **File:** `transcripts_server.py:~199` (verify the exact function name and that `viewer.load_manifest_artifacts()` is indeed called per request).
 - **Today:** Each poll of `/api/participants` re-reads and re-parses the artifact manifest, then does a per-participant linear scan over all artifacts.
 - **Verify first:** Confirm the frontend's poll interval and whether the endpoint returns enough state that a per-participant ETag would be useful.
 - **Change:** mtime-cache the artifact list mirroring `viewer._load_manifest_both`. If the linear scan is also hot, index by participant at cache-build time.
 
-### 5.6 Binary-search citation parsing
+### ✅ 5.6 Binary-search citation parsing
 
 - **File:** `thinking_agents.py:~224` (`_find_closest_segment`).
 - **Today:** O(claims × segments) linear scans during citation parsing.

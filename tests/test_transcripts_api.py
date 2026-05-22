@@ -56,6 +56,49 @@ def test_prewarm_invalid_config_normalized_in_participants(tr_client, monkeypatc
     assert resp.get_json()["transcribe_prewarm"] == "queue_open"
 
 
+def test_participants_stale_artifact_detection(tr_client, monkeypatch):
+    transcripts_server._participants = [
+        {"id": "P01", "video_path": "study_P01.mp4", "has_video": True},
+        {"id": "P02", "video_path": "study_P02.mp4", "has_video": True},
+    ]
+    transcripts_server._manifest = {
+        "source_transcripts": {
+            "P01": {
+                "segments": [{"start": 0.0, "end": 1.0, "text": "hi"}],
+                "transcribed_at": "2026-05-22T12:00:00Z",
+            },
+            "P02": {
+                "segments": [{"start": 0.0, "end": 1.0, "text": "yo"}],
+                "transcribed_at": "2026-05-22T12:00:00Z",
+            },
+        },
+        "corrections": [],
+        "marks": [],
+    }
+    artifacts = [
+        # P01's artifact was transcribed before the current source transcript.
+        {
+            "participant": "P01",
+            "transcript": "clip_P01.srt",
+            "transcript_version": "2026-05-22T09:00:00Z",
+        },
+        # P02's artifact is current.
+        {
+            "participant": "P02",
+            "transcript": "clip_P02.srt",
+            "transcript_version": "2026-05-22T12:00:00Z",
+        },
+    ]
+    monkeypatch.setattr(viewer, "load_manifest_artifacts", lambda: artifacts)
+
+    resp = tr_client.get("/transcripts/api/participants")
+    assert resp.status_code == 200
+    by_id = {p["id"]: p for p in resp.get_json()["participants"]}
+    # The per-participant index must not let P01's stale artifact bleed into P02.
+    assert by_id["P01"]["has_stale_artifacts"] is True
+    assert by_id["P02"]["has_stale_artifacts"] is False
+
+
 def test_warmup_skipped_when_prewarm_off(tr_client, monkeypatch):
     monkeypatch.setattr(config, "TRANSCRIBE_PREWARM", "off")
     resp = tr_client.post("/transcripts/api/transcribe/warmup", json={})

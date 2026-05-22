@@ -2281,3 +2281,15 @@ class TestScanInactivity:
         assert captured["threshold"] == 8
         assert captured["min_duration"] == 5.0
         assert captured["interval_seconds"] == 2.0
+
+
+class TestMorphKernel:
+    def test_shape_and_dtype(self):
+        kernel = screenspace._morph_kernel(3)
+        assert kernel.shape == (3, 3)
+        assert kernel.dtype == np.uint8
+        assert np.all(kernel == 1)
+
+    def test_same_size_returns_cached_array(self):
+        # cv2 morphology treats the kernel read-only, so callers share one array.
+        assert screenspace._morph_kernel(5) is screenspace._morph_kernel(5)
