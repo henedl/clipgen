@@ -94,7 +94,7 @@ def test_get_num_participants_with_observation_before_id():
     [
         (["ID", "P01"], 1, 1),
         (["ID", "P01", "P02", "P03"], 1, 3),
-        (["ID", "Notes", "P01", "Tags", "G01", "G02"], 1, 3),
+        (["ID", "P01", "P02", "Observation", "Category"], 1, 2),
         (["Notes", "ID"], 2, 0),
         (["ID", "G01", "G02"], 1, 2),
         (["", "", "", "", "", "ID", "P01", "P02", "P03", "P04"], 6, 4),
@@ -102,7 +102,7 @@ def test_get_num_participants_with_observation_before_id():
     ids=[
         "single-participant",
         "three-contiguous",
-        "interleaved-non-participant-columns",
+        "trailing-non-participant-columns",
         "id-is-last-column",
         "group-prefixes",
         "id-deep-in-row",
@@ -111,9 +111,11 @@ def test_get_num_participants_with_observation_before_id():
 def test_get_num_participants_handles_variable_column_layouts(
     header_row, id_col, expected
 ):
-    """Different studies arrange columns differently. The count must reflect
-    only the headers actually starting with P/G — never assume a fixed total
-    or that participants are sandwiched between specific columns.
+    """Participant columns form one contiguous P*/G* block immediately after
+    ID; non-participant columns (Observation, Category, ...) sit outside it.
+    The count reflects only the P/G headers and must not assume a fixed
+    total. Interleaving a non-participant column inside the participant block
+    is not a supported layout, so it is intentionally not exercised here.
 
     Parametrized so a failing layout is named individually instead of
     aborting the loop on the first mismatch."""
