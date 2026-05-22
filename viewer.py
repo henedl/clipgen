@@ -361,6 +361,10 @@ def generate_gallery_viewer(
 # normal happy path — _reset_manifest_cache() exists only for tests that reuse
 # the same output directory across mutations without touching mtime.
 _MANIFEST_CACHE_LOCK = threading.Lock()
+# Serializes the full load-merge-write cycle in save_manifest() so concurrent
+# Studio completions cannot last-writer-wins a partial merge. Always acquired
+# before _MANIFEST_CACHE_LOCK, never the reverse, so the two cannot deadlock.
+_MANIFEST_WRITE_LOCK = threading.Lock()
 _manifest_cache: dict[str, Any] = {
     "path": None,
     "mtime_ns": None,
@@ -449,33 +453,38 @@ def save_manifest(
     Deduplicates by ``id``; newer entries win.
     Returns the manifest path on success, or None on failure.
     """
-    existing, existing_reels = _load_manifest_both()
-    merged = {a["id"]: a for a in existing}
-    for a in new_artifacts:
-        merged[a["id"]] = a
-    all_artifacts = list(merged.values())
+    # Hold the write lock across the whole load-merge-write cycle: a concurrent
+    # writer must see this writer's persisted result before computing its merge,
+    # otherwise both read the same old manifest and the second write drops the
+    # first writer's records.
+    with _MANIFEST_WRITE_LOCK:
+        existing, existing_reels = _load_manifest_both()
+        merged = {a["id"]: a for a in existing}
+        for a in new_artifacts:
+            merged[a["id"]] = a
+        all_artifacts = list(merged.values())
 
-    reel_merged = {r["id"]: r for r in existing_reels}
-    for r in new_reels or []:
-        reel_merged[r["id"]] = r
-    all_reels = list(reel_merged.values())
+        reel_merged = {r["id"]: r for r in existing_reels}
+        for r in new_reels or []:
+            reel_merged[r["id"]] = r
+        all_reels = list(reel_merged.values())
 
-    data = finalize_timeline_data(
-        all_artifacts,
-        reels=all_reels or None,
-        study=study,
-        participant=participant,
-        worksheet_title=worksheet_title,
-        is_excel=is_excel,
-        mode=mode,
-        output_format=output_format,
-    )
+        data = finalize_timeline_data(
+            all_artifacts,
+            reels=all_reels or None,
+            study=study,
+            participant=participant,
+            worksheet_title=worksheet_title,
+            is_excel=is_excel,
+            mode=mode,
+            output_format=output_format,
+        )
 
-    result = utils.save_json_manifest(
-        config.MANIFEST_FILENAME, data, warn_label="manifest"
-    )
-    # Invalidate the cache so the next load picks up what we just wrote,
-    # even if the filesystem's mtime resolution elides the change.
-    if result is not None:
-        _reset_manifest_cache()
+        result = utils.save_json_manifest(
+            config.MANIFEST_FILENAME, data, warn_label="manifest"
+        )
+        # Invalidate the cache so the next load picks up what we just wrote,
+        # even if the filesystem's mtime resolution elides the change.
+        if result is not None:
+            _reset_manifest_cache()
     return result
