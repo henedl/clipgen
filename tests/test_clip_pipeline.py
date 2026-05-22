@@ -3,6 +3,7 @@ from unittest.mock import Mock
 import clipgen
 import config
 import pipeline
+import viewer
 
 
 def _prepared_clip(raw_clip, times):
@@ -670,3 +671,72 @@ def test_process_reel_dedups_missing_video_across_parallel_clips(
 
     assert result == 0
     assert len(errors) == 1
+
+
+def test_build_artifact_records_for_clip_stamps_titlecard_state(make_clip):
+    """Clip artifacts record their titlecard state; screen/gif artifacts do not."""
+    clip = _prepared_clip(make_clip(), [("00:10", "00:20")])
+    segment_details = [("out.mp4", 0)]
+
+    clip_recs = viewer.build_artifact_records_for_clip(
+        clip,
+        "study_P01.mp4",
+        segment_details,
+        "clip",
+        titlecards=True,
+        titlecard_duration=5,
+    )
+    assert clip_recs[0]["titlecards"] is True
+    assert clip_recs[0]["titlecardDuration"] == 5
+
+    screen_recs = viewer.build_artifact_records_for_clip(
+        clip,
+        "study_P01.mp4",
+        segment_details,
+        "screen",
+        titlecards=True,
+        titlecard_duration=5,
+    )
+    assert "titlecards" not in screen_recs[0]
+    assert "titlecardDuration" not in screen_recs[0]
+
+
+def test_regenerate_single_artifact_applies_titlecards_from_manifest(monkeypatch):
+    """A clip artifact recorded with titlecards is re-wrapped on regeneration;
+    one without titlecards is not."""
+    monkeypatch.setattr(pipeline.utils, "resolve_input_path", lambda p: p)
+    monkeypatch.setattr(pipeline.utils, "resolve_output_path", lambda p: p)
+    monkeypatch.setattr(pipeline.Path, "is_file", lambda self: True)
+    monkeypatch.setattr(pipeline.video, "run_ffmpeg", lambda **_k: True)
+
+    wrap_calls: list[tuple] = []
+
+    def fake_wrap(clip, out_path, **kwargs):
+        wrap_calls.append((clip, out_path, kwargs))
+        return True
+
+    monkeypatch.setattr(pipeline.titlecards, "wrap_clip_with_cards", fake_wrap)
+
+    with_cards = {
+        "type": "clip",
+        "file": "clip.mp4",
+        "sourceVideo": "study_P01.mp4",
+        "start": 0,
+        "end": 10,
+        "description": "an observation",
+        "titlecards": True,
+        "titlecardDuration": 4,
+    }
+    assert pipeline._regenerate_single_artifact(with_cards, set()) is True
+    assert len(wrap_calls) == 1
+    clip_arg, _out_arg, kwargs = wrap_calls[0]
+    assert clip_arg["desc"] == "an observation"
+    assert kwargs["titlecards_enabled"] is True
+    assert kwargs["titlecard_duration_seconds"] == 4
+
+    # Without the titlecards flag, no wrap happens.
+    wrap_calls.clear()
+    without_cards = dict(with_cards)
+    without_cards["titlecards"] = False
+    assert pipeline._regenerate_single_artifact(without_cards, set()) is True
+    assert wrap_calls == []

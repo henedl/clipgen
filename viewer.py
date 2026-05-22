@@ -47,6 +47,9 @@ def build_artifact_records_for_clip(
     base_video: str,
     segment_details: list[tuple[str, int]],
     output_format: str,
+    *,
+    titlecards: bool = False,
+    titlecard_duration: int = 0,
 ) -> list[dict[str, Any]]:
     """Build artifact metadata records from a processed clip's successful outputs.
 
@@ -56,6 +59,10 @@ def build_artifact_records_for_clip(
         segment_details: List of (output_path, time_index) pairs.
             ``time_index`` is the index into ``clip['times']`` for this segment.
         output_format: 'clip', 'screen', or 'gif'
+        titlecards: Whether titlecards were applied (recorded on clip artifacts
+            only; lets the Studio skip logic and manifest regeneration detect a
+            mismatch with the requested titlecard setting).
+        titlecard_duration: Titlecard duration in seconds (clip artifacts only).
 
     Returns:
         List of artifact dicts ready for JSON serialization
@@ -64,7 +71,7 @@ def build_artifact_records_for_clip(
         output_format if output_format in ("clip", "screen", "gif") else "clip"
     )
     times = clip.get("times", [])
-    return [
+    records = [
         utils.build_artifact_record(
             clip,
             base_video,
@@ -76,6 +83,11 @@ def build_artifact_records_for_clip(
         )
         for seg_idx, (out_path, time_idx) in enumerate(segment_details)
     ]
+    if artifact_type == "clip":
+        for record in records:
+            record["titlecards"] = titlecards
+            record["titlecardDuration"] = titlecard_duration
+    return records
 
 
 def finalize_timeline_data(

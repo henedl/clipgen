@@ -974,6 +974,9 @@ def api_generate() -> FlaskResponse:
         _generate_cancel_event.clear()
         cancel_flag = _generate_cancel_event.is_set
         clip_cells: set[str] = set()
+        req_cards, req_dur = pipeline._resolve_titlecard_options(
+            titlecards_enabled, titlecard_duration_seconds
+        )
 
         # Pass 1: yield already-existing artifacts, collect clips that need generation
         to_generate: list[tuple[Any, str]] = []
@@ -984,20 +987,50 @@ def api_generate() -> FlaskResponse:
             existing = _find_existing_artifacts(
                 clip["cell"].row, clip["cell"].col, output_format
             )
-            if existing:
+            # A cached clip is only reusable when its recorded titlecard state
+            # matches the request; mismatched ones are discarded and regenerated
+            # so toggling Titlecards on/off (or changing the duration) takes
+            # effect on the next Generate.
+            fresh: list[dict[str, Any]] = []
+            stale: list[dict[str, Any]] = []
+            for a in existing:
+                matches = output_format != "clip" or (
+                    bool(a.get("titlecards", False)) == req_cards
+                    and (not req_cards or a.get("titlecardDuration") == req_dur)
+                )
+                (fresh if matches else stale).append(a)
+
+            if fresh:
                 yield (
                     json.dumps(
                         {
                             "cell": cell_str,
                             "ok": True,
-                            "generated": len(existing),
-                            "artifacts": existing,
+                            "generated": len(fresh),
+                            "artifacts": fresh,
                             "skipped": True,
                         }
                     )
                     + "\n"
                 )
             else:
+                # Drop stale records + files so regeneration reuses the same
+                # filename/id and the new record cleanly replaces the old one.
+                if stale:
+                    stale_ids = {a.get("id") for a in stale}
+                    with _generated_output_lock:
+                        _generated_artifacts[:] = [
+                            a
+                            for a in _generated_artifacts
+                            if a.get("id") not in stale_ids
+                        ]
+                    for a in stale:
+                        try:
+                            Path(utils.resolve_output_path(a["file"])).unlink(
+                                missing_ok=True
+                            )
+                        except OSError:
+                            pass
                 to_generate.append((clip, cell_str))
 
         # Pass 2: generate in parallel and yield as each completes
