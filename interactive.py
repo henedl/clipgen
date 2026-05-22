@@ -493,7 +493,7 @@ def browse_spreadsheet(sheet: Any, *, process_fn=None) -> None:
         category_col = category_cell.col - 1
         desc_col = observation_cell.col - 1
 
-        rows_data = []
+        rows_data: list[utils.BrowseRow] = []
         for i in range(num_rows):
             row_idx = start_row + i
             if row_idx > last_data_row:
