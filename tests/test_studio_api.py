@@ -525,6 +525,116 @@ def test_api_generate_regenerates_when_file_missing(client, monkeypatch, tmp_pat
     assert lines[0]["artifacts"] == [new_artifact]
 
 
+def test_api_generate_regenerates_when_titlecards_toggled(
+    client, monkeypatch, tmp_path
+):
+    """Toggling titlecards on regenerates a cached no-titlecard clip and discards
+    the stale record + file."""
+    import types
+
+    monkeypatch.setattr(server, "_worksheet", object())
+    monkeypatch.setattr("config.OUTPUT_DIR", str(tmp_path))
+
+    # Existing clip generated WITHOUT titlecards; file present on disk.
+    (tmp_path / "clip.mp4").write_bytes(b"video")
+    existing = [
+        {
+            "id": "a5c2s0",
+            "type": "clip",
+            "file": "clip.mp4",
+            "cellRow": 5,
+            "cellCol": 2,
+            "titlecards": False,
+            "titlecardDuration": 0,
+        }
+    ]
+    monkeypatch.setattr(server, "_generated_artifacts", list(existing))
+
+    cell = types.SimpleNamespace(row=5, col=2, value="1:00")
+    monkeypatch.setattr(
+        "spreadsheet.generate_list",
+        lambda ws, mode, *, ctx=None, cell_specs, skip_prompts: [
+            {"participant": "P01", "cell": cell}
+        ],
+    )
+    monkeypatch.setattr("spreadsheet.parse_cell_specifications", lambda t: [("P01", 5)])
+
+    process_called = []
+    new_artifact = {
+        "id": "a5c2s0",
+        "type": "clip",
+        "file": "clip.mp4",
+        "cellRow": 5,
+        "cellCol": 2,
+        "titlecards": True,
+        "titlecardDuration": 2,
+    }
+    monkeypatch.setattr(
+        "pipeline.process_clips",
+        lambda *a, **kw: process_called.append(kw) or (1, [new_artifact]),
+    )
+
+    resp = client.post(
+        "/studio/api/generate",
+        json={"cells": ["P01.5"], "format": "clip", "titlecards_enabled": True},
+    )
+    lines = [json.loads(line) for line in resp.data.decode().strip().split("\n")]
+    assert process_called and process_called[0]["titlecards_enabled"] is True
+    assert "skipped" not in lines[0]
+    assert lines[0]["artifacts"] == [new_artifact]
+    # The stale no-titlecard file was discarded.
+    assert not (tmp_path / "clip.mp4").exists()
+
+
+def test_api_generate_skips_when_titlecards_match(client, monkeypatch, tmp_path):
+    """A cached clip whose titlecard state matches the request is reused."""
+    import types
+
+    monkeypatch.setattr(server, "_worksheet", object())
+    monkeypatch.setattr("config.OUTPUT_DIR", str(tmp_path))
+    monkeypatch.setattr("config.TITLECARD_DURATION_SECONDS", 2)
+
+    (tmp_path / "clip.mp4").write_bytes(b"video")
+    existing = [
+        {
+            "id": "a5c2s0",
+            "type": "clip",
+            "file": "clip.mp4",
+            "cellRow": 5,
+            "cellCol": 2,
+            "titlecards": True,
+            "titlecardDuration": 2,
+        }
+    ]
+    monkeypatch.setattr(server, "_generated_artifacts", list(existing))
+
+    cell = types.SimpleNamespace(row=5, col=2, value="1:00")
+    monkeypatch.setattr(
+        "spreadsheet.generate_list",
+        lambda ws, mode, *, ctx=None, cell_specs, skip_prompts: [
+            {"participant": "P01", "cell": cell}
+        ],
+    )
+    monkeypatch.setattr("spreadsheet.parse_cell_specifications", lambda t: [("P01", 5)])
+
+    process_called = []
+    monkeypatch.setattr(
+        "pipeline.process_clips",
+        lambda *a, **kw: process_called.append(1) or (1, []),
+    )
+
+    resp = client.post(
+        "/studio/api/generate",
+        json={"cells": ["P01.5"], "format": "clip", "titlecards_enabled": True},
+    )
+    lines = [json.loads(line) for line in resp.data.decode().strip().split("\n")]
+    assert lines[0]["skipped"] is True
+    assert lines[0]["artifacts"] == existing
+    assert process_called == []
+    # The matching cached file is left intact.
+    assert (tmp_path / "clip.mp4").exists()
+
+
 def test_api_reel_skips_existing_reel(client, monkeypatch, tmp_path):
     """An identical reel is returned without re-running process_reel."""
     import types

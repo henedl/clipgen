@@ -871,6 +871,10 @@ def process_clips(
     # Load transcripts manifest once for embedding + transcription
     transcripts_manifest = transcripts.load_transcripts_manifest()
 
+    cards_enabled, card_duration = _resolve_titlecard_options(
+        titlecards_enabled, titlecard_duration_seconds
+    )
+
     for idx, (clip, base_video) in enumerate(prepared):
         generated_count, segment_details = results[idx]
         outputs_generated += generated_count
@@ -878,7 +882,12 @@ def process_clips(
             outputs_skipped += len(clip["times"]) - generated_count
         if segment_details:
             clip_artifacts = viewer.build_artifact_records_for_clip(
-                clip, base_video, segment_details, output_format
+                clip,
+                base_video,
+                segment_details,
+                output_format,
+                titlecards=cards_enabled,
+                titlecard_duration=card_duration,
             )
             _embed_transcript_on_artifacts(
                 clip,
@@ -1373,13 +1382,26 @@ def _regenerate_single_artifact(
     artifact_type = artifact.get("type", "clip")
 
     if artifact_type == "clip":
-        return video.run_ffmpeg(
+        ok = video.run_ffmpeg(
             input_file=source_path,
             output_file=output_path,
             start_pos=start_ts,
             end_pos=end_ts,
             reencode=config.REENCODING,
         )
+        # Reapply titlecards if the manifest entry was generated with them.
+        if ok and artifact.get("titlecards"):
+            clip: ClipRecord = {"desc": artifact.get("description", "")}
+            ok = titlecards.wrap_clip_with_cards(
+                clip,
+                output_path,
+                titlecards_enabled=True,
+                titlecard_duration_seconds=(
+                    artifact.get("titlecardDuration")
+                    or config.TITLECARD_DURATION_SECONDS
+                ),
+            )
+        return ok
     elif artifact_type == "screen":
         return video.extract_screenshot(
             input_file=source_path,
