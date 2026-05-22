@@ -196,6 +196,10 @@ Tests:
 
 ### P2: Reel Prep Shares Mutable Fuzzy-Match State Across Threads
 
+> **Status:** Done — `_check_source_video()`'s missing-video branch now runs
+> under `_fuzzy_match_lock` (lock alternative), serializing the shared
+> `missing_videos` / `fuzzy_matches` access and the fuzzy-match prompt.
+
 `process_reel()` uses `_run_clip_pipeline(parallel=True)`, and each worker calls `_prepare_and_check_clip()` with shared `missing_videos` and `fuzzy_matches`. Those structures are mutated without synchronization.
 
 Fix:
@@ -224,6 +228,9 @@ Tests:
 
 ### P2: Intake Artifact IDs Collide on Identical Spans
 
+> **Status:** Done — the artifact id hash folds in `source`, `event_ids`,
+> `mark_ids`, and the batch index threaded into `_process_intake_item()`.
+
 `_process_intake_item()` hashes only `{participant}_{start}_{end}` for filename/id. Two intake events covering the same span produce identical artifact ids; manifest dedupe silently replaces one.
 
 Fix:
@@ -236,6 +243,11 @@ Tests:
 - Add an intake stream test with two same-span items and distinct event ids; assert artifact ids differ.
 
 ### P2: Sheet Switch Can Rebind Generated Lists During Active Work
+
+> **Status:** Done — `/api/spreadsheets/open` and `/close` return 409 while any
+> clip, reel, or intake generation is in flight (`_generation_busy()`), and
+> `_init_studio_state()` rebinds the generated lists under
+> `_generated_output_lock`.
 
 `_init_studio_state()` and sheet-open state swaps replace `_generated_artifacts` / `_generated_reels` while generation streams may append under `_generated_output_lock`.
 
@@ -297,8 +309,8 @@ Tests:
 
 ### Task 1: Safe File and Manifest Foundations
 
-- [ ] Add atomic output reservation to `files.py`.
-- [ ] Update ffmpeg call sites that use reserved paths to clean up unused placeholders on early failure.
+- [x] Add atomic output reservation to `files.py`.
+- [x] Update ffmpeg call sites that use reserved paths to clean up unused placeholders on early failure.
 - [x] Add a manifest write lock to `viewer.save_manifest()`.
 - [ ] Run:
 
@@ -308,12 +320,12 @@ uv run --extra dev pytest -c tests/pytest.ini tests/test_manifest.py tests/test_
 
 ### Task 2: Studio Generate and Reel Correctness
 
-- [ ] Fix titlecard cache lifecycle for parallel Studio generation.
-- [ ] Forward reel cancellation/titlecard kwargs into `_process_single_clip_segments()`.
+- [x] Fix titlecard cache lifecycle for parallel Studio generation.
+- [x] Forward reel cancellation/titlecard kwargs into `_process_single_clip_segments()`.
 - [ ] Apply titlecard settings to `/studio/api/reel-direct`.
 - [ ] Pass generate cancellation into running ffmpeg workers and clean up cancelled outputs.
 - [ ] Add intake cancellation support and a busy-slot decision.
-- [ ] Persist streamed successes in generator `finally` blocks.
+- [x] Persist streamed successes in generator `finally` blocks.
 - [ ] Run:
 
 ```bash
@@ -334,10 +346,10 @@ uv run --extra dev pytest -c tests/pytest.ini tests/test_studio_frontend_source.
 
 ### Task 4: Shared Backend Hardening
 
-- [ ] Lock Studio thumbnail cache operations.
-- [ ] Snapshot Screenspace manifest reads under `_manifest_lock`.
-- [ ] Coalesce Screenspace SSE queue overflow into a later full state update.
-- [ ] Improve transcript cancellation checks.
+- [x] Lock Studio thumbnail cache operations.
+- [x] Snapshot Screenspace manifest reads under `_manifest_lock`.
+- [x] Coalesce Screenspace SSE queue overflow into a later full state update.
+- [x] Improve transcript cancellation checks.
 - [ ] Run:
 
 ```bash
