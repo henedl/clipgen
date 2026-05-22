@@ -279,6 +279,9 @@ def api_participant_issues(pid: str) -> FlaskResponse:
         row_data = ctx.sheet_data[row_idx]
         if col_idx >= len(row_data) or not row_data[col_idx].strip():
             continue
+        raw_cell = row_data[col_idx].strip()
+        ts_pairs = utils.parse_timestamps(raw_cell)
+        ts_seconds = utils.timestamp_to_seconds(ts_pairs[0][0]) if ts_pairs else None
         observation = row_data[obs_col] if obs_col < len(row_data) else ""
         severity = ""
         if (
@@ -292,6 +295,7 @@ def api_participant_issues(pid: str) -> FlaskResponse:
                 "rowNum": row_idx + 1,
                 "observation": observation,
                 "severity": severity,
+                "timestamp": ts_seconds,
                 "_row_idx": row_idx,
             }
         )

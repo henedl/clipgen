@@ -887,6 +887,16 @@
       text.textContent = issue.observation || "(no observation)";
       li.appendChild(dot);
       li.appendChild(text);
+      if (issue.timestamp != null) {
+        var ts = document.createElement("span");
+        ts.className = "ss-info-issue-ts";
+        ts.textContent = formatTime(issue.timestamp);
+        li.appendChild(ts);
+        li.classList.add("ss-info-issue--clickable");
+        li.addEventListener("click", (function (t) {
+          return function () { loadFrame(t); };
+        })(issue.timestamp));
+      }
       frag.appendChild(li);
     });
     list.appendChild(frag);
