@@ -1817,3 +1817,87 @@ def test_thumbnail_cache_put_is_threadsafe(monkeypatch):
         list(pool.map(put, range(2000)))
 
     assert len(server._thumbnail_cache) <= server._THUMBNAIL_CACHE_MAX
+
+
+def test_api_reel_cancels_worker_on_client_disconnect(client, monkeypatch, tmp_path):
+    """Closing the /api/reel stream early must cancel the background encoder.
+
+    Regression: the streaming reel refactor released the "reel" busy slot in
+    the response generator's finally, but a client disconnect (browser tab
+    closed mid-build) left the worker thread still encoding. The freed slot
+    then let a second reel build start concurrently. The GeneratorExit handler
+    must set _reel_cancel_event so the worker observes the cancellation.
+    """
+    import threading
+    import types
+
+    monkeypatch.setattr(server, "_worksheet", object())
+    monkeypatch.setattr("config.OUTPUT_DIR", str(tmp_path))
+    monkeypatch.setattr(server, "_generated_reels", [])
+    monkeypatch.setattr(server, "_save_manifest_quiet", lambda: None)
+
+    cell = types.SimpleNamespace(row=5, col=2, value="1:00-1:30")
+
+    def fake_generate_list(ws, mode, *, ctx=None, reel_input, skip_prompts):
+        return [
+            {
+                "participant": "P01",
+                "cell": cell,
+                "times": [("1:00", "1:30")],
+                "desc": "test",
+                "category": "cat",
+                "study": "study",
+                "severity": "",
+            }
+        ]
+
+    monkeypatch.setattr("spreadsheet.generate_list", fake_generate_list)
+    monkeypatch.setattr("files.prepare_clip", lambda clip: clip)
+
+    worker_blocked = threading.Event()
+    allow_worker_finish = threading.Event()
+
+    def fake_process_reel(
+        clips_list, output_file=None, cancel_flag=None, progress_cb=None, **kwargs
+    ):
+        # Emit one event so the stream generator suspends at a yield, then
+        # block to keep the "encode" in flight while the client disconnects.
+        if progress_cb is not None:
+            progress_cb({"phase": "start", "total_clips": 1})
+        worker_blocked.set()
+        allow_worker_finish.wait(timeout=5)
+        return (0, [])
+
+    monkeypatch.setattr("pipeline.process_reel", fake_process_reel)
+    server._reel_cancel_event.clear()
+
+    resp = client.post("/studio/api/reel", json={"cells": ["P01.5"]})
+    try:
+        stream = resp.iter_encoded()
+        first = json.loads(next(stream).decode().strip())
+        assert first["phase"] == "start"
+        assert worker_blocked.wait(timeout=5)
+        # Simulate the browser tab closing mid-build.
+        resp.close()
+        assert server._reel_cancel_event.is_set()
+        assert server._reel_in_progress is False
+    finally:
+        allow_worker_finish.set()
+
+
+def test_api_reel_direct_cancels_on_client_disconnect(client, monkeypatch, tmp_path):
+    """Closing the /api/reel-direct stream early releases the slot and cancels."""
+    monkeypatch.setattr("config.OUTPUT_DIR", str(tmp_path))
+    server._reel_cancel_event.clear()
+
+    resp = client.post(
+        "/studio/api/reel-direct",
+        json={"segments": [{"participant": "P01", "start": 0, "end": 10}]},
+    )
+    stream = resp.iter_encoded()
+    first = json.loads(next(stream).decode().strip())
+    assert first["phase"] == "start"
+    # Simulate the browser tab closing before the reel finishes.
+    resp.close()
+    assert server._reel_cancel_event.is_set()
+    assert server._reel_in_progress is False

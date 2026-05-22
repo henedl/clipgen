@@ -40,6 +40,7 @@ import os
 import tempfile
 import threading
 import uuid
+from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -197,6 +198,9 @@ def api_participants() -> FlaskResponse:
 
     # Check for stale artifacts (transcript outdated relative to source)
     artifacts = viewer.load_manifest_artifacts()
+    artifacts_by_participant: defaultdict[str, list[dict[str, Any]]] = defaultdict(list)
+    for art in artifacts:
+        artifacts_by_participant[art.get("participant", "")].append(art)
     for info in result:
         if not info.get("has_transcript"):
             info["has_stale_artifacts"] = False
@@ -207,9 +211,7 @@ def api_participants() -> FlaskResponse:
             info["has_stale_artifacts"] = False
             continue
         has_stale = False
-        for art in artifacts:
-            if art.get("participant") != pid:
-                continue
+        for art in artifacts_by_participant.get(pid, []):
             if not art.get("transcript"):
                 continue
             art_tv = art.get("transcript_version", "")

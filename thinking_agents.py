@@ -21,6 +21,7 @@ Adding a new agent is a matter of writing a ``run`` callable, defining an
 
 from __future__ import annotations
 
+import bisect
 import re
 import threading
 from typing import Any, Callable, TypedDict
@@ -213,20 +214,33 @@ def _timestamp_to_seconds(ts: str) -> float | None:
 
 
 def _find_closest_segment(
-    target_seconds: float, seg_starts: list[float], tolerance: float = 5.0
+    target_seconds: float,
+    sorted_starts: list[float],
+    sorted_indices: list[int],
+    tolerance: float = 5.0,
 ) -> int | None:
-    """Find the segment index whose start time is closest to *target_seconds*.
+    """Find the original segment index whose start time is closest to *target_seconds*.
 
-    Returns None if the closest segment is more than *tolerance* seconds away.
+    *sorted_starts* must be ascending; *sorted_indices* maps each sorted position
+    back to the segment's original index. The closest element in a sorted array
+    is always a neighbour of the bisect insertion point, so only two candidates
+    are checked. Returns None if the closest segment is more than *tolerance*
+    seconds away.
     """
-    best_idx: int | None = None
+    if not sorted_starts:
+        return None
+    pos = bisect.bisect_left(sorted_starts, target_seconds)
+    best_pos: int | None = None
     best_dist = tolerance + 1
-    for i, start in enumerate(seg_starts):
-        dist = abs(start - target_seconds)
-        if dist < best_dist:
-            best_dist = dist
-            best_idx = i
-    return best_idx
+    for candidate in (pos - 1, pos):
+        if 0 <= candidate < len(sorted_starts):
+            dist = abs(sorted_starts[candidate] - target_seconds)
+            if dist < best_dist:
+                best_dist = dist
+                best_pos = candidate
+    if best_pos is None:
+        return None
+    return sorted_indices[best_pos]
 
 
 def _parse_citation_response(
@@ -234,7 +248,11 @@ def _parse_citation_response(
     segments: list[dict[str, Any]],
 ) -> dict[int, list[dict[str, Any]]]:
     """Parse model output into ``{claim_index: [ref_dicts]}``."""
-    seg_starts = [seg.get("start", 0.0) for seg in segments]
+    sorted_pairs = sorted(
+        (seg.get("start", 0.0), idx) for idx, seg in enumerate(segments)
+    )
+    sorted_starts = [start for start, _ in sorted_pairs]
+    sorted_indices = [idx for _, idx in sorted_pairs]
     result: dict[int, list[dict[str, Any]]] = {}
     for match in _CITATION_LINE_RE.finditer(response):
         claim_num = int(match.group(1))
@@ -249,7 +267,7 @@ def _parse_citation_response(
             ts_seconds = _timestamp_to_seconds(ts_match.group(1))
             if ts_seconds is None:
                 continue
-            best_idx = _find_closest_segment(ts_seconds, seg_starts)
+            best_idx = _find_closest_segment(ts_seconds, sorted_starts, sorted_indices)
             if best_idx is not None:
                 seg = segments[best_idx]
                 refs.append(

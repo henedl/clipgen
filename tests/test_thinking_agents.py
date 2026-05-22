@@ -236,6 +236,23 @@ class TestParseCitationResponse:
         result = thinking_agents._parse_citation_response(response, segments)
         assert result == {}
 
+    def test_handles_unsorted_segments(self):
+        # Segments supplied out of start order; the binary search must still
+        # resolve to the correct *original* segment index.
+        segments = self._make_segments([120, 45, 62])
+        result = thinking_agents._parse_citation_response("1: 0:45", segments)
+        assert 0 in result
+        assert result[0][0]["segment_index"] == 1  # original index of start=45
+        assert result[0][0]["start"] == 45
+
+    def test_picks_closest_neighbour(self):
+        segments = self._make_segments([10, 20])
+        # 0:12 is nearer the 10s segment; 0:18 is nearer the 20s segment.
+        near_low = thinking_agents._parse_citation_response("1: 0:12", segments)
+        near_high = thinking_agents._parse_citation_response("1: 0:18", segments)
+        assert near_low[0][0]["segment_index"] == 0
+        assert near_high[0][0]["segment_index"] == 1
+
 
 class TestFindCitations:
     def test_returns_none_for_empty_summary(self):

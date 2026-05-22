@@ -1258,6 +1258,11 @@ def api_reel() -> FlaskResponse:
     def stream_with_busy_release() -> Any:
         try:
             yield from stream()
+        except GeneratorExit:
+            # Client disconnected mid-stream — signal the background encoder to
+            # stop so the freed reel slot isn't held by an orphaned ffmpeg run.
+            _reel_cancel_event.set()
+            raise
         finally:
             _release_busy("reel")
 
@@ -1974,6 +1979,11 @@ def api_reel_direct() -> FlaskResponse:
     def stream_with_busy_release() -> Iterator[str]:
         try:
             yield from stream()
+        except GeneratorExit:
+            # Client disconnected mid-stream — signal the background encoder to
+            # stop so the freed reel slot isn't held by an orphaned ffmpeg run.
+            _reel_cancel_event.set()
+            raise
         finally:
             _release_busy("reel")
 

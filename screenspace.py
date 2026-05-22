@@ -22,7 +22,7 @@ are stored for denormalization to target video resolution.
 
 import copy
 import difflib
-
+import functools
 import math
 import queue
 import re
@@ -54,6 +54,16 @@ import video
 
 _ocr_readers: dict[tuple, Any] = {}
 _ocr_lock = threading.Lock()
+
+
+@functools.cache
+def _morph_kernel(size: int) -> np.ndarray:
+    """Return a shared square uint8 kernel for cv2 morphology ops.
+
+    cv2.morphologyEx treats the kernel as read-only, so callers share one cached
+    array instead of reallocating np.ones() per call/frame.
+    """
+    return np.ones((size, size), np.uint8)
 
 
 ScanCallback = Callable[[float, np.ndarray], bool | None]
@@ -193,8 +203,7 @@ def compute_frame_diff(
     b_gray = cv2.cvtColor(b_blur, cv2.COLOR_BGR2GRAY)
     diff = cv2.absdiff(a_gray, b_gray)
     _, mask = cv2.threshold(diff, noise_threshold, 255, cv2.THRESH_BINARY)
-    mk = config.SCREENSPACE_MORPH_KERNEL
-    kernel = np.ones((mk, mk), np.uint8)
+    kernel = _morph_kernel(config.SCREENSPACE_MORPH_KERNEL)
     mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
     if mask.size == 0:
         return 0.0
@@ -996,8 +1005,7 @@ def scan_changes(
     results: list[dict[str, Any]] = []
     prev_gray: list[np.ndarray | None] = [None]
     k = config.SCREENSPACE_BLUR_KERNEL
-    mk = config.SCREENSPACE_MORPH_KERNEL
-    morph_kernel = np.ones((mk, mk), np.uint8)
+    morph_kernel = _morph_kernel(config.SCREENSPACE_MORPH_KERNEL)
 
     def _cb(ts: float, pixels: np.ndarray) -> bool | None:
         if cancel_flag and cancel_flag():
@@ -2410,8 +2418,7 @@ class ChangeTool(AnalysisTool):
             "noise_threshold", config.SCREENSPACE_NOISE_THRESHOLD
         )
         k = config.SCREENSPACE_BLUR_KERNEL
-        mk = config.SCREENSPACE_MORPH_KERNEL
-        morph_kernel = np.ones((mk, mk), np.uint8)
+        morph_kernel = _morph_kernel(config.SCREENSPACE_MORPH_KERNEL)
         curr_gray = cv2.cvtColor(
             cv2.GaussianBlur(pixels, (k, k), 0), cv2.COLOR_BGR2GRAY
         )

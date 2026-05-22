@@ -3246,7 +3246,11 @@
         concatFraction = typeof data.progress === "number" ? data.progress : 0;
         updateProgress();
       } else if (data.phase === "done") {
-        // Final NDJSON {"ok": ..., "reels": ...} line arrives separately.
+        // Fill the concat segment to 100% — the stream-copy concat path emits
+        // no progress events, so without this the bar would be cleared by
+        // finish() while still showing ~70%. Final {"ok": ...} line follows.
+        concatFraction = 1;
+        updateProgress();
       } else if (data.ok !== undefined || data.error !== undefined) {
         finalPayload = data;
       }
