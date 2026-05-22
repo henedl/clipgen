@@ -202,6 +202,7 @@ def transcribe_video(
     initial_prompt: str | None = None,
     context_keywords: list[str] | None = None,
     on_segment: Callable[[float, "TranscriptSegment"], None] | None = None,
+    cancel_flag: Callable[[], bool] | None = None,
 ) -> TranscriptResult | None:
     """Transcribe a video file and return timestamped segments.
 
@@ -215,6 +216,11 @@ def transcribe_video(
         on_segment: Optional callback invoked after each segment with the
             segment's end time (seconds) and the TranscriptSegment.
             Useful for progress tracking and streaming partial results.
+        cancel_flag: Optional callable checked at each safe boundary —
+            before/after the (slow) model load and between segments. When it
+            returns True, transcription aborts with ``_TranscriptionCancelled``
+            instead of waiting for the next ``on_segment`` callback. faster-
+            whisper exposes no hard abort, so cancellation is cooperative.
 
     Returns:
         TranscriptResult with segments, or None on failure.
@@ -228,9 +234,17 @@ def transcribe_video(
             model=resolved_model,
         )
 
+    def _is_cancelled() -> bool:
+        return cancel_flag is not None and cancel_flag()
+
+    if _is_cancelled():
+        raise _TranscriptionCancelled
+
     model = _load_model(resolved_model)
     if model is None:
         return None
+    if _is_cancelled():
+        raise _TranscriptionCancelled
 
     prompt = initial_prompt or config.TRANSCRIBE_INITIAL_PROMPT
     if context_keywords:
@@ -243,8 +257,12 @@ def transcribe_video(
             language=lang, initial_prompt=prompt
         )
         segments_iter, info = model.transcribe(str(video_path), **transcribe_kwargs)
+        if _is_cancelled():
+            raise _TranscriptionCancelled
         segments: list[TranscriptSegment] = []
         for seg in segments_iter:
+            if _is_cancelled():
+                raise _TranscriptionCancelled
             text = seg.text.strip()
             if not text:
                 continue
@@ -851,6 +869,7 @@ class TranscriptWorker:
                 language=task.get("language"),
                 context_keywords=context_kw,
                 on_segment=_on_seg,
+                cancel_flag=lambda: bool(task.get("_cancelled")),
             )
             if result is None:
                 with self._lock:
