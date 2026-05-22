@@ -11,6 +11,7 @@ pyrightconfig.json
 # Python byte code
 *.py[cod]
 __pycache__/
+*.egg-info/
 
 # Test artifacts
 tests/__pycache__/
