@@ -95,8 +95,35 @@ def check_ffmpeg_tools_available() -> bool:
     return False
 
 
+def _probe_ffmpeg_listing(listing_arg: str, target_tokens: set[str]) -> bool:
+    """Run `ffmpeg -hide_banner <listing_arg>` and report whether any line's
+    second whitespace-separated token is in *target_tokens*.
+
+    Used to detect optional ffmpeg features (encoders, filters). Only the
+    listing arg matters — `-encoders`, `-filters`, etc. each emit a tabular
+    listing whose second column is the encoder/filter name.
+    """
+    try:
+        result = subprocess.run(
+            ["ffmpeg", "-hide_banner", listing_arg],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    for line in (result.stdout or "").splitlines():
+        tokens = line.strip().split()
+        if len(tokens) >= 2 and tokens[1] in target_tokens:
+            return True
+    return False
+
+
 _webp_support_cache: bool | None = None
 _webp_missing_warned: bool = False
+_drawtext_support_cache: bool | None = None
+_vp9_support_cache: bool | None = None
+_vp9_missing_warned: bool = False
 
 
 def check_webp_support() -> bool:
@@ -108,25 +135,35 @@ def check_webp_support() -> bool:
     a line starting with `libwebp` or `libwebp_anim`. Result is cached.
     """
     global _webp_support_cache
-    if _webp_support_cache is not None:
-        return _webp_support_cache
-    try:
-        result = subprocess.run(
-            ["ffmpeg", "-hide_banner", "-encoders"],
-            capture_output=True,
-            text=True,
-            timeout=10,
+    if _webp_support_cache is None:
+        _webp_support_cache = _probe_ffmpeg_listing(
+            "-encoders", {"libwebp", "libwebp_anim"}
         )
-        stdout = result.stdout or ""
-        _webp_support_cache = False
-        for line in stdout.splitlines():
-            tokens = line.strip().split()
-            if len(tokens) >= 2 and tokens[1] in ("libwebp", "libwebp_anim"):
-                _webp_support_cache = True
-                break
-    except (OSError, subprocess.SubprocessError):
-        _webp_support_cache = False
     return _webp_support_cache
+
+
+def check_drawtext_support() -> bool:
+    """Return True when ffmpeg has the `drawtext` filter available.
+
+    `drawtext` requires libfreetype, which is omitted from Homebrew's default
+    ffmpeg 8.x build. Without it, titlecard encoding fails. Result is cached.
+    """
+    global _drawtext_support_cache
+    if _drawtext_support_cache is None:
+        _drawtext_support_cache = _probe_ffmpeg_listing("-filters", {"drawtext"})
+    return _drawtext_support_cache
+
+
+def check_vp9_support() -> bool:
+    """Return True when ffmpeg has a libvpx-vp9 encoder available.
+
+    Needed when GIF_FORMAT is ".webm". Same caveat as libwebp — only the
+    `-encoders` listing is authoritative. Result is cached.
+    """
+    global _vp9_support_cache
+    if _vp9_support_cache is None:
+        _vp9_support_cache = _probe_ffmpeg_listing("-encoders", {"libvpx-vp9"})
+    return _vp9_support_cache
 
 
 def _warn_webp_unavailable_once(output_file: str) -> None:
@@ -141,6 +178,22 @@ def _warn_webp_unavailable_once(output_file: str) -> None:
             f"Tried to write: '{output_file}'",
             "Install an ffmpeg build with libwebp, or change SCREENSHOT_FORMAT/GIF_FORMAT back to .png/.jpg/.gif.",
             "Skipping all WebP outputs for this run.",
+        ],
+    )
+
+
+def _warn_vp9_unavailable_once(output_file: str) -> None:
+    """Print a single clear error per session when WebM/VP9 is requested but unsupported."""
+    global _vp9_missing_warned
+    if _vp9_missing_warned:
+        return
+    _vp9_missing_warned = True
+    utils.error_print(
+        "WebM output requested but ffmpeg has no libvpx-vp9 encoder.",
+        [
+            f"Tried to write: '{output_file}'",
+            "Install an ffmpeg build with libvpx, or change GIF_FORMAT back to .gif/.webp.",
+            "Skipping all WebM outputs for this run.",
         ],
     )
 
@@ -807,6 +860,9 @@ def extract_gif(
         ic(input_file, output_file, timestamp, duration_seconds)
     if output_file.lower().endswith(".webp") and not check_webp_support():
         _warn_webp_unavailable_once(output_file)
+        return False
+    if output_file.lower().endswith(".webm") and not check_vp9_support():
+        _warn_vp9_unavailable_once(output_file)
         return False
     if not Path(input_file).is_file():
         utils.error_print(
