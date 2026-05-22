@@ -747,10 +747,28 @@ def _generate_intake_clips(
     the video was missing or ffmpeg failed) plus an ``"_error"`` string so
     callers can report per-item results without duplicating the loop.
     """
-    return [
-        _process_intake_item(item, output_format, study, index=idx)
-        for idx, item in enumerate(items)
-    ]
+    workers = pipeline._resolve_clip_workers()
+    if workers < 2 or len(items) < 2:
+        return [
+            _process_intake_item(item, output_format, study, index=idx)
+            for idx, item in enumerate(items)
+        ]
+
+    results: list[dict[str, Any]] = [{} for _ in items]
+    with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
+        future_to_idx = {
+            pool.submit(
+                _process_intake_item, item, output_format, study, index=idx
+            ): idx
+            for idx, item in enumerate(items)
+        }
+        for future in concurrent.futures.as_completed(future_to_idx):
+            idx = future_to_idx[future]
+            try:
+                results[idx] = future.result()
+            except Exception as exc:
+                results[idx] = {"_ok": False, "_error": str(exc)}
+    return results
 
 
 def _load_stashes() -> list[dict[str, Any]]:
@@ -1804,23 +1822,47 @@ def api_generate_intake() -> FlaskResponse:
     output_format = data.get("format", "clip")
     study = _sheet_context.study_name if _sheet_context else ""
 
+    def _emit(idx: int, result: dict[str, Any]) -> str:
+        ok = result.pop("_ok", False)
+        error = result.pop("_error", "")
+        if ok:
+            _append_generated_artifact(result)
+            return json.dumps({"index": idx, "ok": True, "artifact": result}) + "\n"
+        return json.dumps({"index": idx, "ok": False, "error": error}) + "\n"
+
     def stream() -> Iterator[str]:
         _mark_intake_active(True)
         try:
-            for idx, item in enumerate(items):
-                result = _process_intake_item(item, output_format, study, index=idx)
-                ok = result.pop("_ok", False)
-                error = result.pop("_error", "")
-                if ok:
-                    _append_generated_artifact(result)
-                    yield (
-                        json.dumps({"index": idx, "ok": True, "artifact": result})
-                        + "\n"
-                    )
-                else:
-                    yield (
-                        json.dumps({"index": idx, "ok": False, "error": error}) + "\n"
-                    )
+            workers = pipeline._resolve_clip_workers()
+            if workers >= 2 and len(items) >= 2:
+                with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
+                    future_to_idx = {
+                        pool.submit(
+                            _process_intake_item,
+                            item,
+                            output_format,
+                            study,
+                            index=idx,
+                        ): idx
+                        for idx, item in enumerate(items)
+                    }
+                    for future in concurrent.futures.as_completed(future_to_idx):
+                        idx = future_to_idx[future]
+                        try:
+                            result = future.result()
+                        except Exception as exc:
+                            yield (
+                                json.dumps(
+                                    {"index": idx, "ok": False, "error": str(exc)}
+                                )
+                                + "\n"
+                            )
+                            continue
+                        yield _emit(idx, result)
+            else:
+                for idx, item in enumerate(items):
+                    result = _process_intake_item(item, output_format, study, index=idx)
+                    yield _emit(idx, result)
         finally:
             # Persist whatever completed even if the client disconnects or a
             # later item raises mid-stream.

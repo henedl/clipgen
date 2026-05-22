@@ -81,7 +81,7 @@ Seven small, independent diffs. None changes a public contract; all are safe to 
 
 Three medium-sized improvements that each unlock a parallel path.
 
-### 2.1 Parallelize `_generate_intake_clips`
+### ✅ 2.1 Parallelize `_generate_intake_clips`
 
 - **File:** `server.py:475-505`
 - **Today:** Bare `for item in items:` calling `video.run_ffmpeg()`. No executor.
