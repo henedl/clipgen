@@ -3488,20 +3488,6 @@
 
   // ---- Boot ----
 
-  function runExport() {
-    fetch("/api/export", { method: "POST" })
-      .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
-      .then(function (res) {
-        if (res.ok && res.j && res.j.ok) {
-          var n = (res.j.written || []).length;
-          showToast("Exported " + clipgenPluralUnit(n, "file", "files") + " to " + res.j.output_dir);
-        } else {
-          showToast((res.j && res.j.error) || "Export failed");
-        }
-      })
-      .catch(function (err) { showToast("Export failed: " + err.message); });
-  }
-
   function runEmbedSubtitle() {
     var pid = state.selectedParticipant;
     if (!pid) return;
@@ -3530,7 +3516,6 @@
       .catch(function (err) { showToast("Embed failed: " + err.message); });
   }
 
-  var _exportEnabled = false;
   var _rebuildTopNavActions = function () {};
 
   function _currentParticipantHasTranscript() {
@@ -3578,32 +3563,18 @@
             ? "Mux every participant's transcript into a subtitled copy of their video"
             : "Transcribe at least one video to enable this.",
         },
-        {
-          icon: "arrow-down-tray",
-          label: "Export",
-          action: runExport,
-          disabled: !_exportEnabled,
-          title: _exportEnabled
-            ? "Write JSON+CSV exports of Screenspace and Transcripts manifests"
-            : "Run a Screenspace task or transcribe a video first to enable Export.",
-        },
+        window.ClipgenExportActions.exportQuickAction(),
       ]);
     }
     _rebuildTopNavActions = rebuild;
-    function refreshExportStatus() {
-      fetch("/api/export/status")
-        .then(function (r) { return r.json(); })
-        .then(function (j) {
-          var next = !!(j && j.any);
-          if (next === _exportEnabled) { rebuild(); return; }
-          _exportEnabled = next;
-          rebuild();
-        })
-        .catch(function () {});
-    }
     rebuild();
-    refreshExportStatus();
-    window.ClipgenTopNav.onBeforeOpen(refreshExportStatus);
+    window.ClipgenExportActions.refreshExportStatus(rebuild);
+    // Always rebuild on menu open so Embed-Subtitle items pick up
+    // participant-selection changes; also refresh export-enabled state.
+    window.ClipgenTopNav.onBeforeOpen(function () {
+      rebuild();
+      window.ClipgenExportActions.refreshExportStatus(rebuild);
+    });
   }
 
   document.addEventListener("DOMContentLoaded", function () {

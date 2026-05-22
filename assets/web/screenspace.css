@@ -3012,28 +3012,6 @@ body.panel-dragging #bottomPanel {
   margin-top: var(--space-1);
 }
 
-/* Toast */
-
-.toast {
-  position: fixed;
-  bottom: var(--space-5);
-  left: 50%;
-  transform: translateX(-50%);
-  background: var(--color-text);
-  color: var(--color-bg);
-  padding: var(--space-2) var(--space-4);
-  border-radius: var(--radius);
-  font-size: var(--text-sm);
-  z-index: var(--z-dropdown);
-  pointer-events: none;
-  opacity: 0;
-  transition: opacity var(--duration-normal);
-}
-
-.toast:not(.hidden) {
-  opacity: 1;
-}
-
 /* Screenspace timeline tooltip */
 
 .ss-tooltip {
