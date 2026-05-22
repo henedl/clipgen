@@ -143,13 +143,27 @@ _manifest_lock = threading.Lock()
 
 
 def _notify_sse_clients(event_type: str = "update") -> None:
-    """Push a notification to all connected SSE clients."""
+    """Push a notification to all connected SSE clients.
+
+    A slow client's bounded queue can fill up. Rather than silently dropping
+    the change — which would leave that client stale until some unrelated
+    notification happened to fit — coalesce on overflow: discard one stale
+    entry and leave a single ``update`` marker, so the client still emits
+    fresh task state once it catches up.
+    """
     with _sse_clients_lock:
         for q in _sse_clients:
             try:
                 q.put_nowait(event_type)
             except queue_mod.Full:
-                pass
+                try:
+                    q.get_nowait()
+                except queue_mod.Empty:
+                    pass
+                try:
+                    q.put_nowait("update")
+                except queue_mod.Full:
+                    pass
 
 
 def _sse_task_payload() -> str:
@@ -198,8 +212,10 @@ def api_participant_notes_get(pid: str) -> FlaskResponse:
     """Return persisted free-form notes for a participant."""
     if not _participant_exists(pid):
         return jsonify({"ok": False, "error": f"Unknown participant {pid}"}), 404
-    entry = _manifest.get("per_participant", {}).get(pid, {})
-    return jsonify({"ok": True, "notes": entry.get("notes", "")})
+    with _manifest_lock:
+        entry = _manifest.get("per_participant", {}).get(pid, {})
+        notes = entry.get("notes", "")
+    return jsonify({"ok": True, "notes": notes})
 
 
 @screenspace_bp.route("/api/participants/<pid>/notes", methods=["PUT"])
@@ -768,7 +784,9 @@ def _is_flask_error_response(value: Any) -> TypeGuard[FlaskResponse]:
 @screenspace_bp.route("/api/regions")
 def api_regions_list() -> FlaskResponse:
     """List all saved region definitions."""
-    return jsonify({"ok": True, "regions": _manifest.get("regions", {})})
+    with _manifest_lock:
+        regions = copy.deepcopy(_manifest.get("regions", {}))
+    return jsonify({"ok": True, "regions": regions})
 
 
 @screenspace_bp.route("/api/regions", methods=["POST"])
@@ -821,11 +839,10 @@ def api_regions_create() -> FlaskResponse:
 @screenspace_bp.route("/api/regions/<name>", methods=["DELETE"])
 def api_regions_delete(name: str) -> FlaskResponse:
     """Delete a region definition."""
-    regions = _manifest.get("regions", {})
-    if name not in regions:
-        return jsonify({"ok": False, "error": f"Region '{name}' not found"}), 404
-
     with _manifest_lock:
+        regions = _manifest.get("regions", {})
+        if name not in regions:
+            return jsonify({"ok": False, "error": f"Region '{name}' not found"}), 404
         del regions[name]
         _do_persist(drain_events=False)
 
@@ -838,7 +855,9 @@ def api_regions_delete(name: str) -> FlaskResponse:
 @screenspace_bp.route("/api/stashes")
 def api_stashes_list() -> FlaskResponse:
     """List all region stashes."""
-    return jsonify({"ok": True, "stashes": _manifest.get("stashes", [])})
+    with _manifest_lock:
+        stashes = copy.deepcopy(_manifest.get("stashes", []))
+    return jsonify({"ok": True, "stashes": stashes})
 
 
 @screenspace_bp.route("/api/stashes", methods=["POST"])
@@ -1493,7 +1512,8 @@ def api_tasks_results(task_id: str) -> FlaskResponse:
 @screenspace_bp.route("/api/events")
 def api_events_list() -> FlaskResponse:
     """List events with optional filtering."""
-    events = _manifest.get("events", [])
+    with _manifest_lock:
+        events = copy.deepcopy(_manifest.get("events", []))
     excluded_filter = request.args.get("excluded")
     if excluded_filter == "false":
         events = [e for e in events if not e.get("excluded")]
@@ -1532,8 +1552,10 @@ def api_export_events() -> FlaskResponse:
     else:
         include_excluded = True
 
+    with _manifest_lock:
+        manifest_snapshot = copy.deepcopy(_manifest)
     records = data_export.build_screenspace_events(
-        _manifest,
+        manifest_snapshot,
         include_excluded=include_excluded,
         participants=[participant] if participant else None,
         detectors=[detector] if detector else None,

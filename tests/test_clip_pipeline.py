@@ -514,6 +514,29 @@ def test_build_reel_transcript_uses_request_titlecard_duration(monkeypatch):
     assert merged[0]["end"] == 9.0
 
 
+def test_regenerate_reel_releases_reservation_on_ffmpeg_failure(monkeypatch, tmp_path):
+    """A reel part whose ffmpeg encode fails must not leave a 0-byte placeholder
+    behind from get_unique_filename's atomic reservation."""
+    input_dir = tmp_path / "in"
+    output_dir = tmp_path / "out"
+    input_dir.mkdir()
+    output_dir.mkdir()
+    (input_dir / "study_P01.mp4").write_bytes(b"\x00")
+    monkeypatch.setattr(config, "INPUT_DIR", str(input_dir), raising=False)
+    monkeypatch.setattr(config, "OUTPUT_DIR", str(output_dir), raising=False)
+    monkeypatch.setattr(pipeline.video, "run_ffmpeg", lambda **_k: False)
+
+    reel = {
+        "file": "reel.mp4",
+        "components": [{"sourceVideo": "study_P01.mp4", "start": 0, "end": 10}],
+    }
+    ok = pipeline._regenerate_reel(reel, set())
+
+    assert ok is False
+    # The reserved placeholder for the failed part was cleaned up.
+    assert list(output_dir.iterdir()) == []
+
+
 def test_regenerate_from_manifest_parallel(monkeypatch):
     """Independent artifacts regenerate concurrently when workers >= 2."""
     artifacts = [
@@ -544,3 +567,106 @@ def test_regenerate_from_manifest_parallel(monkeypatch):
     count = pipeline.regenerate_from_manifest(artifacts)
     assert count == 4
     assert sorted(calls) == ["a0", "a1", "a2", "a3"]
+
+
+def test_process_clips_skips_titlecard_cache_clear_when_disabled(
+    monkeypatch, make_clip
+):
+    """clear_titlecard_cache=False keeps a per-cell worker from purging the
+    shared endcard cache mid-flight; the default True clears it once."""
+    raw_clip = make_clip()
+    monkeypatch.setattr(
+        clipgen.files,
+        "prepare_clip",
+        lambda clip: _prepared_clip(clip, [("00:10", "00:20")]),
+    )
+    monkeypatch.setattr(clipgen.Path, "is_file", lambda self: True)
+    monkeypatch.setattr(clipgen.utils, "create_progress_bar", lambda: None)
+    monkeypatch.setattr(config, "CLIP_PARALLEL_WORKERS", 1)
+    monkeypatch.setattr(config, "TITLECARDS_ENABLED", True)
+    monkeypatch.setattr(
+        clipgen.files, "get_unique_filename", lambda *_a, **_k: "out.mp4"
+    )
+    monkeypatch.setattr(clipgen.video, "run_ffmpeg", lambda **_k: True)
+    monkeypatch.setattr(
+        clipgen.video,
+        "probe_video_properties",
+        lambda *_a, **_k: {"width": 1280, "height": 720},
+    )
+    monkeypatch.setattr(
+        pipeline.titlecards, "wrap_clip_with_cards", lambda *_a, **_k: True
+    )
+
+    clear_mock = Mock()
+    monkeypatch.setattr(pipeline.titlecards, "clear_endcard_cache", clear_mock)
+
+    clipgen.process_clips([raw_clip], output_format="clip", clear_titlecard_cache=False)
+    clear_mock.assert_not_called()
+
+    clipgen.process_clips([raw_clip], output_format="clip")
+    clear_mock.assert_called_once()
+
+
+def test_process_reel_forwards_cancel_and_titlecard_options_to_segments(
+    monkeypatch, make_clip
+):
+    """process_reel must pass its cancel_flag and per-request titlecard options
+    into _process_single_clip_segments for each reel part."""
+    raw_clip = make_clip()
+    monkeypatch.setattr(
+        clipgen.files,
+        "prepare_clip",
+        lambda clip: _prepared_clip(clip, [("00:10", "00:20")]),
+    )
+    monkeypatch.setattr(clipgen.Path, "is_file", lambda self: True)
+    monkeypatch.setattr(clipgen.utils, "create_progress_bar", lambda: None)
+
+    captured = {}
+
+    def fake_segments(*_args, **kwargs):
+        captured.update(kwargs)
+        return (1, [("_reel_part_1.mp4", 0)])
+
+    monkeypatch.setattr(pipeline, "_process_single_clip_segments", fake_segments)
+    monkeypatch.setattr(clipgen.video, "concatenate_clips", lambda *_a, **_k: True)
+    monkeypatch.setattr(pipeline, "_build_reel_transcript", lambda *_a, **_k: [])
+
+    sentinel = lambda: False  # noqa: E731
+    clipgen.process_reel(
+        [raw_clip],
+        output_file="reel.mp4",
+        cancel_flag=sentinel,
+        titlecards_enabled=True,
+        titlecard_duration_seconds=5,
+    )
+
+    assert captured["cancel_flag"] is sentinel
+    assert captured["titlecards_enabled"] is True
+    assert captured["titlecard_duration_seconds"] == 5
+
+
+def test_process_reel_dedups_missing_video_across_parallel_clips(
+    monkeypatch, make_clip
+):
+    """Parallel reel clips that all reference the same missing source video
+    produce exactly one missing-video error, not one per worker thread."""
+    clips = [make_clip(row=i, col=2) for i in range(3, 7)]
+    monkeypatch.setattr(
+        clipgen.files,
+        "prepare_clip",
+        lambda clip: _prepared_clip(clip, [("00:10", "00:20")]),
+    )
+    monkeypatch.setattr(clipgen.utils, "create_progress_bar", lambda: None)
+    monkeypatch.setattr(config, "CLIP_PARALLEL_WORKERS", 4)
+    monkeypatch.setattr(clipgen.Path, "is_file", lambda self: False)
+    monkeypatch.setattr(pipeline, "_large_input_videos", lambda _d: [])
+
+    errors: list[tuple] = []
+    monkeypatch.setattr(
+        pipeline.utils, "error_print", lambda *a, **_k: errors.append(a)
+    )
+
+    result, _ = clipgen.process_reel(clips, output_file="reel.mp4")
+
+    assert result == 0
+    assert len(errors) == 1

@@ -1371,3 +1371,71 @@ def test_export_events_unsupported_format(client):
     assert resp.status_code == 400
     data = resp.get_json()
     assert data["ok"] is False
+
+
+def test_notify_sse_clients_coalesces_on_full_queue():
+    """A saturated client queue keeps a fresh 'update' marker instead of
+    silently dropping the change, so a slow SSE client still converges to
+    current task state once it catches up."""
+    import queue as queue_mod
+
+    q: queue_mod.Queue = queue_mod.Queue(maxsize=4)
+    for _ in range(4):
+        q.put_nowait("stale")
+
+    saved = list(screenspace_server._sse_clients)
+    screenspace_server._sse_clients[:] = [q]
+    try:
+        screenspace_server._notify_sse_clients("task_created")
+    finally:
+        screenspace_server._sse_clients[:] = saved
+
+    drained = []
+    while not q.empty():
+        drained.append(q.get_nowait())
+    assert len(drained) == 4
+    assert "update" in drained
+
+
+def test_events_list_stable_under_concurrent_writes(client):
+    """GET /api/events keeps returning 200 while events are bulk-toggled — the
+    handler snapshots the manifest under _manifest_lock instead of letting
+    jsonify iterate event dicts another request is mutating."""
+    import concurrent.futures
+    import threading
+
+    # Fresh app so each thread can hold its own test client; module state
+    # (_manifest etc.) set up by the fixture is shared across all of them.
+    app = Flask(__name__)
+    app.register_blueprint(screenspace_server.screenspace_bp, url_prefix="/screenspace")
+
+    ids = [f"ev_{i}" for i in range(40)]
+    screenspace_server._manifest["events"] = [_sample_event(i) for i in ids]
+
+    stop = threading.Event()
+    errors: list[object] = []
+
+    def reader() -> None:
+        c = app.test_client()
+        while not stop.is_set():
+            try:
+                resp = c.get("/screenspace/api/events")
+                if resp.status_code != 200:
+                    errors.append(resp.status_code)
+            except Exception as exc:  # pragma: no cover - failure path
+                errors.append(exc)
+
+    def writer() -> None:
+        c = app.test_client()
+        c.put("/screenspace/api/events/bulk-exclude", json={"ids": ids})
+        c.put("/screenspace/api/events/bulk-include", json={"ids": ids})
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=6) as pool:
+        readers = [pool.submit(reader) for _ in range(3)]
+        for _ in range(200):
+            pool.submit(writer).result()
+        stop.set()
+        for r in readers:
+            r.result()
+
+    assert errors == []

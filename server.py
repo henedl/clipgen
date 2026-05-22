@@ -63,6 +63,7 @@ import config
 import files
 import spreadsheet
 import pipeline
+import titlecards
 import utils
 import video
 import viewer
@@ -84,6 +85,9 @@ _generated_reels: list[dict[str, Any]] = []
 # (tens of KB each), so a few hundred is plenty.
 _THUMBNAIL_CACHE_MAX = 256
 _thumbnail_cache: "OrderedDict[tuple, bytes]" = OrderedDict()
+# Guards every thumbnail cache access (get / move_to_end / insert / evict);
+# api_thumbnail is served concurrently by Flask's threaded dev server.
+_thumbnail_cache_lock = threading.Lock()
 # A second concurrent /api/generate or /api/reel call would clobber the
 # shared cancel event; reject with 409 instead while one is in flight.
 _reel_cancel_event = threading.Event()
@@ -91,6 +95,10 @@ _generate_cancel_event = threading.Event()
 _busy_lock = threading.Lock()
 _generate_in_progress = False
 _reel_in_progress = False
+# Count of in-flight /api/generate-intake streams. Intake has no single-job
+# slot (it must run alongside /api/generate for mixed queues), but a sheet
+# swap still needs to know whether any intake work is active.
+_intake_active = 0
 # Serializes load → mutate → save for the stash manifests so concurrent
 # stash CRUD requests don't drop each other's writes.
 _stash_lock = threading.Lock()
@@ -147,9 +155,10 @@ def _coerce_mark_categories(value: Any) -> dict[str, dict[str, str]] | None:
 
 def _thumbnail_cache_put(key: tuple, value: bytes) -> None:
     """Insert into the thumbnail cache with simple LRU eviction."""
-    _thumbnail_cache[key] = value
-    while len(_thumbnail_cache) > _THUMBNAIL_CACHE_MAX:
-        _thumbnail_cache.popitem(last=False)
+    with _thumbnail_cache_lock:
+        _thumbnail_cache[key] = value
+        while len(_thumbnail_cache) > _THUMBNAIL_CACHE_MAX:
+            _thumbnail_cache.popitem(last=False)
 
 
 def _try_claim_busy(slot: str) -> bool:
@@ -226,6 +235,23 @@ def _release_busy(slot: str) -> None:
             _reel_in_progress = False
 
 
+def _mark_intake_active(active: bool) -> None:
+    """Increment/decrement the in-flight intake-stream counter."""
+    global _intake_active  # noqa: PLW0603
+    with _busy_lock:
+        _intake_active += 1 if active else -1
+
+
+def _generation_busy() -> bool:
+    """Return True while any clip, reel, or intake generation is in flight.
+
+    Consulted before a sheet swap so generated lists are not rebound under
+    an active stream.
+    """
+    with _busy_lock:
+        return _generate_in_progress or _reel_in_progress or _intake_active > 0
+
+
 @contextmanager
 def _override_config(**overrides: Any) -> Iterator[None]:
     """Temporarily override config attributes, restoring originals on exit."""
@@ -289,9 +315,11 @@ def api_thumbnail(participant: str, start_seconds: str) -> FlaskResponse:
         return jsonify({"ok": False, "error": "Source video not found"}), 404
 
     cache_key = (str(video_path), start_sec)
-    cached = _thumbnail_cache.get(cache_key)
+    with _thumbnail_cache_lock:
+        cached = _thumbnail_cache.get(cache_key)
+        if cached is not None:
+            _thumbnail_cache.move_to_end(cache_key)
     if cached is not None:
-        _thumbnail_cache.move_to_end(cache_key)
         return Response(
             cached,
             mimetype="image/jpeg",
@@ -587,8 +615,14 @@ def _process_intake_item(
     item: dict[str, Any],
     output_format: str,
     study: str,
+    index: int = 0,
 ) -> dict[str, Any]:
-    """Process a single intake item; returns one dict with _ok/_error keys."""
+    """Process a single intake item; returns one dict with _ok/_error keys.
+
+    *index* is the item's position in the request batch — folded into the
+    artifact id so two intake events covering the same participant span do not
+    hash to the same id and get collapsed by manifest dedup.
+    """
     participant = item.get("participant", "")
     start = float(item.get("start", 0))
     end = float(item.get("end", 0))
@@ -603,6 +637,22 @@ def _process_intake_item(
         return {"_ok": False, "_error": f"No video for {participant}"}
 
     span_hash = hashlib.md5(f"{participant}_{start}_{end}".encode()).hexdigest()[:8]
+    # Two intake events can cover the same participant span (e.g. distinct
+    # Screenspace events at the same timestamp). Fold source metadata and the
+    # batch index into the artifact id so manifest dedup does not silently
+    # collapse them onto one record.
+    id_basis = "|".join(
+        [
+            participant,
+            str(start),
+            str(end),
+            source,
+            ",".join(str(e) for e in event_ids),
+            ",".join(str(m) for m in mark_ids),
+            str(index),
+        ]
+    )
+    id_hash = hashlib.md5(id_basis.encode()).hexdigest()[:8]
     safe_event_type = utils.sanitize_filename(event_type) if event_type else ""
     desc_part = f"{safe_event_type} " if safe_event_type else ""
     out_name = (
@@ -638,7 +688,7 @@ def _process_intake_item(
         else:
             description = event_type or default_desc
     artifact: dict[str, Any] = {
-        "id": f"intake_{span_hash}_s0",
+        "id": f"intake_{id_hash}_s0",
         "type": output_format,
         "file": Path(out_path).name,
         "start": start,
@@ -697,7 +747,10 @@ def _generate_intake_clips(
     the video was missing or ffmpeg failed) plus an ``"_error"`` string so
     callers can report per-item results without duplicating the loop.
     """
-    return [_process_intake_item(item, output_format, study) for item in items]
+    return [
+        _process_intake_item(item, output_format, study, index=idx)
+        for idx, item in enumerate(items)
+    ]
 
 
 def _load_stashes() -> list[dict[str, Any]]:
@@ -960,6 +1013,7 @@ def api_generate() -> FlaskResponse:
                             cancel_flag=cancel_flag,
                             titlecards_enabled=titlecards_enabled,
                             titlecard_duration_seconds=titlecard_duration_seconds,
+                            clear_titlecard_cache=False,
                         ): (clip, cell_str)
                         for clip, cell_str in to_generate
                     }
@@ -1001,6 +1055,7 @@ def api_generate() -> FlaskResponse:
                             cancel_flag=cancel_flag,
                             titlecards_enabled=titlecards_enabled,
                             titlecard_duration_seconds=titlecard_duration_seconds,
+                            clear_titlecard_cache=False,
                         )
                         _extend_generated_artifacts(artifacts)
                         yield (
@@ -1028,12 +1083,18 @@ def api_generate() -> FlaskResponse:
                 )
         if cancel_flag():
             yield json.dumps({"cancelled": True}) + "\n"
-        _save_manifest_quiet()
 
     def stream_with_busy_release() -> Any:
         try:
             yield from stream()
         finally:
+            # Persist + purge the per-request endcard cache even when the
+            # client disconnects mid-stream, so generated artifacts are not
+            # left on disk without manifest records and endcard temp files
+            # do not leak. Per-cell process_clips() calls run with
+            # clear_titlecard_cache=False, so the cache is purged once here.
+            titlecards.clear_endcard_cache()
+            _save_manifest_quiet()
             _release_busy("generate")
 
     return Response(
@@ -1692,18 +1753,27 @@ def api_generate_intake() -> FlaskResponse:
     study = _sheet_context.study_name if _sheet_context else ""
 
     def stream() -> Iterator[str]:
-        for idx, item in enumerate(items):
-            result = _process_intake_item(item, output_format, study)
-            ok = result.pop("_ok", False)
-            error = result.pop("_error", "")
-            if ok:
-                _append_generated_artifact(result)
-                yield (
-                    json.dumps({"index": idx, "ok": True, "artifact": result}) + "\n"
-                )
-            else:
-                yield json.dumps({"index": idx, "ok": False, "error": error}) + "\n"
-        _save_manifest_quiet()
+        _mark_intake_active(True)
+        try:
+            for idx, item in enumerate(items):
+                result = _process_intake_item(item, output_format, study, index=idx)
+                ok = result.pop("_ok", False)
+                error = result.pop("_error", "")
+                if ok:
+                    _append_generated_artifact(result)
+                    yield (
+                        json.dumps({"index": idx, "ok": True, "artifact": result})
+                        + "\n"
+                    )
+                else:
+                    yield (
+                        json.dumps({"index": idx, "ok": False, "error": error}) + "\n"
+                    )
+        finally:
+            # Persist whatever completed even if the client disconnects or a
+            # later item raises mid-stream.
+            _save_manifest_quiet()
+            _mark_intake_active(False)
 
     return Response(
         stream(),
@@ -1888,7 +1958,6 @@ def api_reel_direct() -> FlaskResponse:
                     "description": f"Intake reel ({len(clip_paths)} segments)",
                 }
                 _append_generated_reel(reel_record)
-                _save_manifest_quiet()
                 yield (
                     json.dumps({"ok": True, "generated": 1, "reels": [reel_record]})
                     + "\n"
@@ -1899,6 +1968,8 @@ def api_reel_direct() -> FlaskResponse:
                     + "\n"
                 )
         finally:
+            # Persist the appended reel even on a mid-stream client disconnect.
+            _save_manifest_quiet()
             for tmp in temp_clips:
                 try:
                     Path(tmp).unlink(missing_ok=True)
@@ -1963,11 +2034,12 @@ def _init_studio_state(worksheet: Any) -> None:
             sys.exit(1)
     else:
         _sheet_context = None
-    # Rebind under the lock so a concurrent generate-worker extend can't land
-    # in the list being swapped out (e.g. spreadsheet switch mid-generation).
+    # Rebind the shared generated lists under their lock so a streaming
+    # generate/intake append can't run against a half-swapped reference.
     with _generated_output_lock:
         _generated_artifacts, _generated_reels = viewer._load_manifest_both()
-    _thumbnail_cache = OrderedDict()
+    with _thumbnail_cache_lock:
+        _thumbnail_cache = OrderedDict()
 
 
 # ---- Entry point ----
@@ -2056,8 +2128,9 @@ def _swap_worksheet(new_worksheet: Any) -> None:
     except Exception:
         _worksheet = prev_worksheet
         _sheet_context = prev_sheet_context
-        _generated_artifacts = prev_artifacts
-        _generated_reels = prev_reels
+        with _generated_output_lock:
+            _generated_artifacts = prev_artifacts
+            _generated_reels = prev_reels
         # Best-effort: re-pin the two sister blueprints to the restored state.
         # If these themselves throw, swallow — the studio state is already
         # consistent and the original exception is what we want to surface.
@@ -2357,6 +2430,17 @@ def build_combined_app(
                 }
             ), 400
 
+        if _generation_busy():
+            return jsonify(
+                {
+                    "ok": False,
+                    "error": (
+                        "Generation is in progress — wait for it to finish "
+                        "before switching spreadsheets."
+                    ),
+                }
+            ), 409
+
         new_ws: Any = None
         label = ""
         try:
@@ -2426,8 +2510,15 @@ def build_combined_app(
         )
 
     @combined.route("/api/spreadsheets/close", methods=["POST"])
-    def api_spreadsheets_close() -> Response:
+    def api_spreadsheets_close() -> FlaskResponse:
         global _active_sheet_meta
+        if _generation_busy():
+            return jsonify(
+                {
+                    "ok": False,
+                    "error": "Generation is in progress — wait for it to finish.",
+                }
+            ), 409
         _swap_worksheet(None)
         _active_sheet_meta = None
         return jsonify({"ok": True, "sheet_loaded": False})

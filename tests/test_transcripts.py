@@ -632,6 +632,76 @@ class TestTranscriptWorker:
         worker = transcripts.TranscriptWorker()
         assert worker.cancel("nonexistent") is False
 
+    def test_execute_task_cancelled_before_model_load(self, monkeypatch):
+        """A task cancelled before model load aborts without loading a model."""
+        from unittest.mock import Mock
+
+        import video as video_mod
+
+        monkeypatch.setattr(config, "DEBUGGING", False)
+        monkeypatch.setattr(video_mod, "probe_video_properties", lambda *_a, **_k: None)
+        monkeypatch.setattr(
+            transcripts, "load_transcripts_manifest", lambda: {"corrections": []}
+        )
+        load_model = Mock()
+        monkeypatch.setattr(transcripts, "_load_model", load_model)
+
+        worker = transcripts.TranscriptWorker()
+        task = transcripts.create_transcript_task("P01", "/v.mp4")
+        task["status"] = "running"
+        task["_cancelled"] = True
+
+        worker._execute_task(task)
+
+        assert task["status"] == "cancelled"
+        assert task["partial_segments"] == []
+        load_model.assert_not_called()
+
+    def test_execute_task_cancelled_between_segments(self, monkeypatch):
+        """Cancelling mid-transcription stops between segments and clears the
+        partial-segment buffer."""
+        from types import SimpleNamespace
+
+        import video as video_mod
+
+        monkeypatch.setattr(config, "DEBUGGING", False)
+        monkeypatch.setattr(
+            video_mod,
+            "probe_video_properties",
+            lambda *_a, **_k: {"duration": 100.0},
+        )
+        monkeypatch.setattr(
+            transcripts, "load_transcripts_manifest", lambda: {"corrections": []}
+        )
+
+        worker = transcripts.TranscriptWorker()
+        task = transcripts.create_transcript_task("P01", "/v.mp4")
+        task["status"] = "running"
+
+        class FakeSeg:
+            def __init__(self, t):
+                self.start = float(t)
+                self.end = float(t + 1)
+                self.text = f"seg {t}"
+
+        def fake_segments():
+            for i in range(5):
+                if i == 1:
+                    # Trip cancellation once the first segment is consumed.
+                    task["_cancelled"] = True
+                yield FakeSeg(i)
+
+        class FakeModel:
+            def transcribe(self, path, **kwargs):  # noqa: ARG002
+                return fake_segments(), SimpleNamespace(language="en")
+
+        monkeypatch.setattr(transcripts, "_load_model", lambda *_a, **_k: FakeModel())
+
+        worker._execute_task(task)
+
+        assert task["status"] == "cancelled"
+        assert task["partial_segments"] == []
+
     def test_remove_task(self):
         worker = transcripts.TranscriptWorker()
         task = transcripts.create_transcript_task("P01", "/v.mp4")

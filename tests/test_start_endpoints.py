@@ -397,3 +397,39 @@ def test_google_auth_records_thread_error(client, monkeypatch):
     assert server._google_auth.client is None
     assert "creds missing" in server._google_auth.error
     assert server._google_auth.in_flight is False
+
+
+# ---------- sheet-switch guard during active generation ---------------------
+
+
+def test_spreadsheets_open_rejected_during_generation(client, monkeypatch):
+    """Switching spreadsheets is rejected with 409 while a clip generation is
+    in progress, so the generated lists are not rebound under an active stream."""
+    monkeypatch.setattr(server, "_generate_in_progress", True)
+    resp = client.post(
+        "/api/spreadsheets/open",
+        json={"type": "excel", "id_or_path": "/tmp/whatever.xlsx"},
+    )
+    assert resp.status_code == 409
+    data = resp.get_json()
+    assert data["ok"] is False
+    assert "in progress" in data["error"]
+
+
+def test_spreadsheets_open_rejected_during_intake(client, monkeypatch):
+    """An in-flight intake stream also blocks a spreadsheet switch."""
+    monkeypatch.setattr(server, "_intake_active", 1)
+    resp = client.post(
+        "/api/spreadsheets/open",
+        json={"type": "excel", "id_or_path": "/tmp/whatever.xlsx"},
+    )
+    assert resp.status_code == 409
+    assert resp.get_json()["ok"] is False
+
+
+def test_spreadsheets_close_rejected_during_reel(client, monkeypatch):
+    """Closing the spreadsheet is rejected with 409 while a reel build runs."""
+    monkeypatch.setattr(server, "_reel_in_progress", True)
+    resp = client.post("/api/spreadsheets/close")
+    assert resp.status_code == 409
+    assert resp.get_json()["ok"] is False

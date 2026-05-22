@@ -1121,9 +1121,11 @@ def test_api_generate_passes_titlecard_options_to_pipeline(client, monkeypatch):
         cancel_flag=None,
         titlecards_enabled=None,
         titlecard_duration_seconds=None,
+        clear_titlecard_cache=True,
     ):
         captured["enabled"] = titlecards_enabled
         captured["duration"] = titlecard_duration_seconds
+        captured["clear_titlecard_cache"] = clear_titlecard_cache
         return (1, [{"id": "a1", "type": "clip"}])
 
     monkeypatch.setattr("spreadsheet.generate_list", fake_generate_list)
@@ -1144,6 +1146,9 @@ def test_api_generate_passes_titlecard_options_to_pipeline(client, monkeypatch):
     resp.data  # consume streamed response so generator finally-block runs
     assert captured["enabled"] is True
     assert captured["duration"] == 5
+    # Per-cell workers must not purge the shared endcard cache; api_generate
+    # clears it once after the stream finishes.
+    assert captured["clear_titlecard_cache"] is False
     assert config.TITLECARDS_ENABLED == original_enabled
     assert config.TITLECARD_DURATION_SECONDS == original_duration
 
@@ -1705,6 +1710,113 @@ def test_api_reel_streams_progress_events(client, monkeypatch, tmp_path):
     assert final["ok"] is True
     assert final["generated"] == 1
     assert final["reels"] == [reel_record]
+
+
+def test_api_generate_intake_distinct_ids_for_same_span(client, monkeypatch):
+    """Two intake items over the same participant span receive distinct artifact
+    ids, so manifest dedup does not silently collapse them onto one record."""
+    monkeypatch.setattr(
+        server, "_resolve_intake_video_path", lambda p, s="": "/fake/video.mp4"
+    )
+    monkeypatch.setattr("video.run_ffmpeg", lambda *a, **kw: True)
+    monkeypatch.setattr(server, "_save_manifest_quiet", lambda: None)
+    monkeypatch.setattr(
+        server.files, "get_unique_filename", lambda name, file_format=None: name
+    )
+
+    same_span = {
+        "participant": "P01",
+        "start": 1.0,
+        "end": 5.0,
+        "event_type": "",
+        "source": "screenspace",
+        "mark_ids": [],
+    }
+    items = [
+        {**same_span, "event_ids": ["e1"]},
+        {**same_span, "event_ids": ["e2"]},
+    ]
+    resp = client.post(
+        "/studio/api/generate-intake", json={"items": items, "format": "clip"}
+    )
+    assert resp.status_code == 200
+    lines = [json.loads(line) for line in resp.data.decode().strip().split("\n")]
+    ids = [ln["artifact"]["id"] for ln in lines]
+    assert len(ids) == 2
+    assert len(set(ids)) == 2
+
+
+def test_api_generate_intake_persists_when_later_item_raises(client, monkeypatch):
+    """A later intake item raising still persists the earlier successes via the
+    generator's finally block."""
+    saved: list[bool] = []
+    monkeypatch.setattr(server, "_save_manifest_quiet", lambda: saved.append(True))
+
+    def flaky(item, output_format, study, index=0):
+        if index == 1:
+            raise RuntimeError("boom")
+        return {
+            "_ok": True,
+            "_error": "",
+            "id": f"art{index}",
+            "participant": item["participant"],
+        }
+
+    monkeypatch.setattr(server, "_process_intake_item", flaky)
+
+    items = [
+        {"participant": "P01", "start": 0, "end": 5},
+        {"participant": "P02", "start": 0, "end": 5},
+    ]
+    resp = client.post(
+        "/studio/api/generate-intake", json={"items": items, "format": "clip"}
+    )
+    try:
+        resp.data  # the generator raises mid-stream; the finally still runs
+    except RuntimeError:
+        pass
+    assert saved == [True]
+
+
+def test_api_generate_intake_persists_on_early_client_close(client, monkeypatch):
+    """Closing the response after one line still persists via the finally."""
+    saved: list[bool] = []
+    monkeypatch.setattr(server, "_save_manifest_quiet", lambda: saved.append(True))
+    monkeypatch.setattr(
+        server, "_resolve_intake_video_path", lambda p, s="": "/fake/video.mp4"
+    )
+    monkeypatch.setattr("video.run_ffmpeg", lambda *a, **kw: True)
+    monkeypatch.setattr(
+        server.files, "get_unique_filename", lambda name, file_format=None: name
+    )
+
+    items = [
+        {"participant": f"P0{i}", "start": 0, "end": 5, "source": "screenspace"}
+        for i in range(1, 5)
+    ]
+    resp = client.post(
+        "/studio/api/generate-intake", json={"items": items, "format": "clip"}
+    )
+    encoded = resp.iter_encoded()
+    next(encoded)  # consume only the first NDJSON line
+    resp.close()  # disconnect mid-stream
+    assert saved == [True]
+
+
+def test_thumbnail_cache_put_is_threadsafe(monkeypatch):
+    """Concurrent _thumbnail_cache_put calls keep the LRU bounded without
+    corrupting the OrderedDict mid-eviction."""
+    import concurrent.futures
+
+    monkeypatch.setattr(server, "_thumbnail_cache", OrderedDict())
+
+    def put(i: int) -> None:
+        server._thumbnail_cache_put((f"v{i}", i), b"jpeg")
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=16) as pool:
+        list(pool.map(put, range(2000)))
+
+    assert len(server._thumbnail_cache) <= server._THUMBNAIL_CACHE_MAX
 
 
 def test_api_reel_cancels_worker_on_client_disconnect(client, monkeypatch, tmp_path):

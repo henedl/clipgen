@@ -78,6 +78,12 @@ def _resolve_clip_workers() -> int:
 # Large .mp4 files in the input dir, keyed by path + mtime_ns (one glob/stat pass per run).
 _fuzzy_input_videos_cache: dict[str, tuple[int | None, list[tuple[int, Path]]]] = {}
 
+# Serializes the missing-video branch of _check_source_video. Reel preparation
+# runs per-clip in worker threads (_run_clip_pipeline parallel=True), so the
+# shared missing_videos / fuzzy_matches structures and any fuzzy-match prompt
+# must not be touched concurrently.
+_fuzzy_match_lock = threading.Lock()
+
 
 def _large_input_videos(input_dir: Path) -> list[tuple[int, Path]]:
     """Return (size_bytes, path) for source-video candidates under *input_dir*."""
@@ -131,51 +137,59 @@ def _check_source_video(
 
     full_path_str = str(full_path)
 
-    # Check fuzzy match cache (value may be None = user rejected or no candidate)
-    if full_path_str in fuzzy_matches:
-        return fuzzy_matches[full_path_str]
+    # The missing-video branch reads and mutates the caller's shared
+    # fuzzy_matches / missing_videos and may prompt the user; serialize it so
+    # parallel reel workers neither race nor interleave prompts.
+    with _fuzzy_match_lock:
+        # Check fuzzy match cache (value may be None = user rejected or no candidate)
+        if full_path_str in fuzzy_matches:
+            return fuzzy_matches[full_path_str]
 
-    input_dir = utils.get_effective_input_dir()
-    candidates: list[tuple[float, int, Path]] = []
-    for size, p in _large_input_videos(input_dir):
-        ratio = difflib.SequenceMatcher(None, base_name.lower(), p.name.lower()).ratio()
-        candidates.append((ratio, size, p))
+        input_dir = utils.get_effective_input_dir()
+        candidates: list[tuple[float, int, Path]] = []
+        for size, p in _large_input_videos(input_dir):
+            ratio = difflib.SequenceMatcher(
+                None, base_name.lower(), p.name.lower()
+            ).ratio()
+            candidates.append((ratio, size, p))
 
-    # Sort by similarity descending, then file size descending as tiebreaker
-    candidates.sort(key=lambda c: (c[0], c[1]), reverse=True)
+        # Sort by similarity descending, then file size descending as tiebreaker
+        candidates.sort(key=lambda c: (c[0], c[1]), reverse=True)
 
-    if candidates and candidates[0][0] >= 0.7 and not utils.NO_INPUT_MODE:
-        best_ratio, best_size, best_path = candidates[0]
-        size_gb = best_size / 1_000_000_000
-        # Pause progress bar so the prompt is visible and input is rendered
-        global _active_progress
-        paused = False
-        if _active_progress is not None:
-            _active_progress.stop()
-            paused = True
-        utils.info_print(f"Source video '{base_name}' not found.")
-        utils.info_print(f"Closest match found: '{best_path.name}' ({size_gb:.1f} GB)")
-        answer = utils.read_user_input("Use this file instead? [y/n]\n>> ")
-        if paused:
-            _active_progress.start()
-        if answer.strip().lower() == "y":
-            resolved = str(best_path)
-            fuzzy_matches[full_path_str] = resolved
-            return resolved
+        if candidates and candidates[0][0] >= 0.7 and not utils.NO_INPUT_MODE:
+            best_ratio, best_size, best_path = candidates[0]
+            size_gb = best_size / 1_000_000_000
+            # Pause progress bar so the prompt is visible and input is rendered
+            global _active_progress
+            paused = False
+            if _active_progress is not None:
+                _active_progress.stop()
+                paused = True
+            utils.info_print(f"Source video '{base_name}' not found.")
+            utils.info_print(
+                f"Closest match found: '{best_path.name}' ({size_gb:.1f} GB)"
+            )
+            answer = utils.read_user_input("Use this file instead? [y/n]\n>> ")
+            if paused:
+                _active_progress.start()
+            if answer.strip().lower() == "y":
+                resolved = str(best_path)
+                fuzzy_matches[full_path_str] = resolved
+                return resolved
 
-    # No match or user rejected — cache and report error
-    fuzzy_matches[full_path_str] = None
-    if full_path_str not in missing_videos:
-        missing_videos.add(full_path_str)
-        utils.error_print(
-            f"Source video file not found: '{base_name}'",
-            [
-                f"Expected location: {full_path_str}",
-                f"Expected format: {{study}}_{{participant}}{config.FILEFORMAT}",
-                skip_detail,
-            ],
-        )
-    return None
+        # No match or user rejected — cache and report error
+        fuzzy_matches[full_path_str] = None
+        if full_path_str not in missing_videos:
+            missing_videos.add(full_path_str)
+            utils.error_print(
+                f"Source video file not found: '{base_name}'",
+                [
+                    f"Expected location: {full_path_str}",
+                    f"Expected format: {{study}}_{{participant}}{config.FILEFORMAT}",
+                    skip_detail,
+                ],
+            )
+        return None
 
 
 def _prepare_and_check_clip(
@@ -610,6 +624,8 @@ def _transcribe_segments(
             artifact["id"] += "_transcript"
             artifact["transcriptFormat"] = config.TRANSCRIBE_FORMAT
             all_artifacts.append(artifact)
+        else:
+            files.release_reservation(t_path)
 
 
 def process_clips(
@@ -620,6 +636,7 @@ def process_clips(
     cancel_flag: Callable[[], bool] | None = None,
     titlecards_enabled: bool | None = None,
     titlecard_duration_seconds: int | None = None,
+    clear_titlecard_cache: bool = True,
 ) -> tuple[int, list[dict[str, Any]]]:
     """Process and generate outputs from the clips list.
 
@@ -632,6 +649,12 @@ def process_clips(
     the next safe boundary. Already-completed segments are kept (each clip is a
     standalone deliverable); in-flight ffmpeg encodes are terminated and their
     partial outputs unlinked.
+
+    *clear_titlecard_cache* controls whether the shared endcard cache is purged
+    when this call finishes. Callers that fan out concurrent ``process_clips``
+    invocations (e.g. Studio per-cell generation) must pass ``False`` so one
+    worker does not delete endcard temp files still in use by another, then
+    clear the cache once themselves after all workers complete.
 
     Returns:
         Tuple of (count of files generated, list of artifact records).
@@ -920,7 +943,7 @@ def process_clips(
     cards_enabled, _card_duration = _resolve_titlecard_options(
         titlecards_enabled, titlecard_duration_seconds
     )
-    if cards_enabled:
+    if cards_enabled and clear_titlecard_cache:
         titlecards.clear_endcard_cache()
 
     if outputs_skipped > 0:
@@ -1065,6 +1088,9 @@ def process_reel(
             missing_videos,
             filename_prefix="_reel_part_",
             collect_paths=True,
+            cancel_flag=cancel_flag,
+            titlecards_enabled=titlecards_enabled,
+            titlecard_duration_seconds=titlecard_duration_seconds,
         )
         times = clip.get("times", [])
         clip_components = [
@@ -1404,6 +1430,8 @@ def _regenerate_reel(reel: dict[str, Any], missing_videos: set[str]) -> bool:
             reencode=config.REENCODING,
         ):
             temp_paths.append(out_name)
+        else:
+            files.release_reservation(out_name)
 
     if not temp_paths:
         return False
