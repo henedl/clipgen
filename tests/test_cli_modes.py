@@ -5,6 +5,7 @@ import pytest
 
 import cli
 import clipgen
+import config
 import viewer as viewer_mod
 
 
@@ -73,15 +74,58 @@ def test_run_cli_mode_chronologic_reel_and_viewer(monkeypatch):
     clips = [{"study": "study", "participant": "P01"}]
     monkeypatch.setattr(cli, "_generate_cli_clips", lambda _ws, _a, _p: clips)
 
-    process_reel = Mock(return_value=(1, [{"study": "study", "participant": "P01"}]))
+    reel_records = [
+        {
+            "id": "reel_abc",
+            "file": "study_reel.mp4",
+            "study": "study",
+            "components": [],
+        }
+    ]
+    process_reel = Mock(return_value=(1, reel_records))
     monkeypatch.setattr(clipgen, "process_reel", process_reel)
 
+    viewer_calls = []
     viewer_path = "clips_viewer.html"
-    monkeypatch.setattr(
-        viewer_mod, "generate_timeline_viewer", lambda _data: viewer_path
-    )
+
+    def capture_viewer(data):
+        viewer_calls.append(data)
+        return viewer_path
+
+    monkeypatch.setattr(viewer_mod, "generate_timeline_viewer", capture_viewer)
     monkeypatch.setattr(cli.utils, "info_print", lambda _msg: None)
 
     cli.run_cli_mode(worksheet, args, parsed)
 
     process_reel.assert_called_once()
+    assert len(viewer_calls) == 1
+    assert viewer_calls[0]["artifacts"] == []
+    assert viewer_calls[0]["reels"] == reel_records
+
+
+def test_standalone_viewer_from_reel_only_manifest(monkeypatch, tmp_path):
+    import viewer
+
+    monkeypatch.setattr(config, "OUTPUT_DIR", str(tmp_path))
+    reel = {
+        "id": "reel_only",
+        "file": "only_reel.mp4",
+        "study": "study",
+        "components": [],
+    }
+    viewer.save_manifest([], new_reels=[reel], study="study", mode="reel")
+
+    viewer_calls = []
+    monkeypatch.setattr(
+        viewer_mod,
+        "generate_timeline_viewer",
+        lambda data: viewer_calls.append(data) or "viewer.html",
+    )
+    monkeypatch.setattr(cli.utils, "info_print", lambda _msg: None)
+
+    args = _args(viewer=True)
+    assert cli._dispatch_standalone_mode(args, cli_mode=False, gallery_arg=None) is True
+    assert len(viewer_calls) == 1
+    assert viewer_calls[0]["artifacts"] == []
+    assert len(viewer_calls[0]["reels"]) == 1
+    assert viewer_calls[0]["reels"][0]["id"] == "reel_only"

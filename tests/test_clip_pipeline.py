@@ -515,6 +515,53 @@ def test_build_reel_transcript_uses_request_titlecard_duration(monkeypatch):
     assert merged[0]["end"] == 9.0
 
 
+def test_process_single_clip_segments_releases_reservation_on_ffmpeg_failure(
+    monkeypatch, make_clip, tmp_path
+):
+    """Failed segment encodes must not leave get_unique_filename placeholders."""
+    input_dir = tmp_path / "in"
+    output_dir = tmp_path / "out"
+    input_dir.mkdir()
+    output_dir.mkdir()
+    (input_dir / "study_P01.mp4").write_bytes(b"\x00")
+    monkeypatch.setattr(config, "INPUT_DIR", str(input_dir), raising=False)
+    monkeypatch.setattr(config, "OUTPUT_DIR", str(output_dir), raising=False)
+    monkeypatch.setattr(pipeline.video, "run_ffmpeg", lambda **_k: False)
+
+    raw_clip = pipeline.files.prepare_clip(make_clip())
+    generated, paths = pipeline._process_single_clip_segments(
+        raw_clip, str(input_dir / "study_P01.mp4"), set(), output_format="clip"
+    )
+
+    assert generated == 0
+    assert paths == []
+    assert list(output_dir.iterdir()) == []
+
+
+def test_process_reel_releases_reservation_on_concat_failure(
+    monkeypatch, make_clip, tmp_path
+):
+    """Concat failure must release the reserved final reel path placeholder."""
+    output_dir = tmp_path / "out"
+    output_dir.mkdir()
+    part_path = output_dir / "part.mp4"
+    part_path.write_bytes(b"clip")
+    monkeypatch.setattr(config, "OUTPUT_DIR", str(output_dir), raising=False)
+    monkeypatch.setattr(
+        pipeline,
+        "_run_clip_pipeline",
+        lambda clips_list, **kwargs: ([([(str(part_path), 0)], [])], set()),
+    )
+    monkeypatch.setattr(pipeline.video, "concatenate_clips", lambda *a, **k: False)
+    monkeypatch.setattr(pipeline.utils, "use_progress", lambda: False)
+
+    clips = [make_clip()]
+    result, records = clipgen.process_reel(clips)
+    assert result == 0
+    assert records == []
+    assert list(output_dir.iterdir()) == []
+
+
 def test_regenerate_reel_releases_reservation_on_ffmpeg_failure(monkeypatch, tmp_path):
     """A reel part whose ffmpeg encode fails must not leave a 0-byte placeholder
     behind from get_unique_filename's atomic reservation."""

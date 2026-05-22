@@ -642,6 +642,70 @@ def test_api_generate_skips_when_titlecards_match(client, monkeypatch, tmp_path)
     assert (tmp_path / "clip.mp4").exists()
 
 
+def test_api_reel_regenerates_when_titlecards_toggled(client, monkeypatch, tmp_path):
+    """Toggling titlecards on must not reuse a cached reel built without them."""
+    import types
+
+    import pipeline
+
+    monkeypatch.setattr(server, "_worksheet", object())
+    monkeypatch.setattr("config.OUTPUT_DIR", str(tmp_path))
+
+    (tmp_path / "study_reel.mp4").write_bytes(b"old-reel")
+    cell = types.SimpleNamespace(row=5, col=2, value="1:00-1:30")
+    components = [{"cellRow": 5, "cellCol": 2, "start": 60.0, "end": 90.0}]
+    expected_id = pipeline.compute_reel_id(components)
+
+    existing_reel = {
+        "id": expected_id,
+        "file": "study_reel.mp4",
+        "study": "study",
+        "components": components,
+        "titlecards": False,
+        "titlecardDuration": 0,
+    }
+    monkeypatch.setattr(server, "_generated_reels", [existing_reel])
+
+    def fake_generate_list(ws, mode, *, ctx=None, reel_input, skip_prompts):
+        return [
+            {
+                "participant": "P01",
+                "cell": cell,
+                "desc": "test",
+                "category": "cat",
+                "study": "study",
+                "severity": "",
+                "times": [("1:00", "1:30")],
+            }
+        ]
+
+    monkeypatch.setattr("spreadsheet.generate_list", fake_generate_list)
+    monkeypatch.setattr("files.prepare_clip", lambda clip: clip)
+
+    process_called = []
+
+    def fake_stream(clips, cancel_flag, **kwargs):
+        process_called.append(kwargs)
+        yield (
+            json.dumps({"ok": True, "generated": 1, "reels": [{"id": expected_id}]})
+            + "\n"
+        )
+
+    monkeypatch.setattr(server, "_stream_process_reel", fake_stream)
+    monkeypatch.setattr(server, "_save_manifest_quiet", lambda: None)
+
+    resp = client.post(
+        "/studio/api/reel",
+        json={"cells": ["P01.5"], "titlecards_enabled": True, "titlecard_duration": 2},
+    )
+    assert resp.status_code == 200
+    lines = [json.loads(line) for line in resp.data.decode().strip().split("\n")]
+    assert lines[-1]["ok"] is True
+    assert process_called
+    assert process_called[0]["titlecards_enabled"] is True
+    assert not (tmp_path / "study_reel.mp4").exists()
+
+
 def test_api_reel_skips_existing_reel(client, monkeypatch, tmp_path):
     """An identical reel is returned without re-running process_reel."""
     import types
@@ -665,6 +729,8 @@ def test_api_reel_skips_existing_reel(client, monkeypatch, tmp_path):
         "file": "study_reel.mp4",
         "study": "study",
         "components": components,
+        "titlecards": False,
+        "titlecardDuration": 0,
     }
     monkeypatch.setattr(server, "_generated_reels", [existing_reel])
 
@@ -688,7 +754,10 @@ def test_api_reel_skips_existing_reel(client, monkeypatch, tmp_path):
         lambda *a, **kw: process_called.append(1) or (1, []),
     )
 
-    resp = client.post("/studio/api/reel", json={"cells": ["P01.5"]})
+    resp = client.post(
+        "/studio/api/reel",
+        json={"cells": ["P01.5"], "titlecards_enabled": False},
+    )
     assert resp.status_code == 200
     lines = [json.loads(line) for line in resp.data.decode().strip().split("\n")]
     final = lines[-1]
@@ -2407,6 +2476,9 @@ def test_api_job_status_idle(client):
     assert data["ok"] is True
     assert data["reel"]["in_progress"] is False
     assert data["generate"]["in_progress"] is False
+    assert data["intake"]["in_progress"] is False
+    assert "done" in data["intake"]
+    assert "total" in data["intake"]
     # Snapshot fields are always present so the client can render without
     # null-checks.
     assert "phase" in data["reel"]
@@ -2686,6 +2758,63 @@ def test_api_generate_discards_artifacts_completed_after_cancel(
 
 
 # ---- /api/generate-intake cancellation ----
+
+
+def test_api_job_status_reflects_intake_progress(client, monkeypatch, tmp_path):
+    """While /api/generate-intake is running, job-status reports intake progress."""
+    import threading
+
+    monkeypatch.setattr(server, "_save_manifest_quiet", lambda: None)
+    proceed = threading.Event()
+    started = threading.Event()
+
+    def slow_item(item, output_format, study, index=0, *, cancel_flag=None):
+        started.set()
+        proceed.wait(timeout=5)  # hold worker until status is polled
+        return {
+            "id": f"intake_{index}",
+            "type": "clip",
+            "file": f"clip_{index}.mp4",
+            "study": study,
+            "participant": item["participant"],
+            "_ok": True,
+            "_error": "",
+        }
+
+    monkeypatch.setattr(server, "_process_intake_item", slow_item)
+    monkeypatch.setattr(server, "_resolve_intake_video_path", lambda p, s="": "vid.mp4")
+    monkeypatch.setattr("pipeline._resolve_clip_workers", lambda: 1)
+
+    items = [{"participant": "P01", "start": 0, "end": 5, "source": "screenspace"}]
+    stream_error = []
+
+    def run_intake():
+        try:
+            with client.post(
+                "/studio/api/generate-intake",
+                json={"items": items, "format": "clip"},
+                buffered=False,
+            ) as resp:
+                list(resp.iter_encoded())
+        except Exception as exc:
+            stream_error.append(exc)
+
+    worker = threading.Thread(target=run_intake)
+    worker.start()
+    try:
+        assert started.wait(timeout=5)
+        status = client.get("/studio/api/job-status").get_json()
+        assert status["intake"]["in_progress"] is True
+        assert status["intake"]["total"] == 1
+        assert status["intake"]["done"] == 0
+        proceed.set()
+    finally:
+        worker.join(timeout=10)
+    assert not stream_error
+
+    assert _poll_until(lambda: server._intake_active == 0)
+    final = client.get("/studio/api/job-status").get_json()
+    assert final["intake"]["in_progress"] is False
 
 
 def test_api_generate_intake_cancel_endpoint_returns_ok(client):

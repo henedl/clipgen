@@ -2605,21 +2605,24 @@ def run_cli_mode(worksheet: Any, args: Any, cli_mode_args: CliModeArgs) -> None:
     is_excel = clipgen._is_excel_worksheet(worksheet)
     effective_mode = output_format if output_format != "clip" else "batch"
 
-    if (
-        getattr(args, "viewer", False) or getattr(args, "manifest", False)
-    ) and artifacts:
-        study = artifacts[0].get("study", "")
-        participant = artifacts[0].get("participant", "")
+    wants_viewer_or_manifest = getattr(args, "viewer", False) or getattr(
+        args, "manifest", False
+    )
+    if wants_viewer_or_manifest and (artifacts or reel_records):
+        primary = artifacts[0] if artifacts else reel_records[0]
+        study = primary.get("study", "")
+        participant = primary.get("participant", "")
 
         if getattr(args, "viewer", False):
             ss_events = viewer.load_screenspace_events_for_viewer()
             data = viewer.finalize_timeline_data(
                 artifacts,
+                reels=reel_records or None,
                 study=study,
                 participant=participant,
                 worksheet_title=ws_title,
                 is_excel=is_excel,
-                mode=effective_mode,
+                mode="reel" if is_reel and not artifacts else effective_mode,
                 output_format=output_format,
                 screenspace_events=ss_events or None,
             )
@@ -2635,24 +2638,11 @@ def run_cli_mode(worksheet: Any, args: Any, cli_mode_args: CliModeArgs) -> None:
                 participant=participant,
                 worksheet_title=ws_title,
                 is_excel=is_excel,
-                mode=effective_mode,
+                mode="reel" if is_reel and not artifacts else effective_mode,
                 output_format=output_format,
             )
             if manifest_path:
                 utils.info_print(f"Manifest updated: {manifest_path}")
-
-    elif getattr(args, "manifest", False) and reel_records:
-        study = reel_records[0].get("study", "")
-        manifest_path = viewer.save_manifest(
-            [],
-            new_reels=reel_records,
-            study=study,
-            worksheet_title=ws_title,
-            is_excel=is_excel,
-            mode="reel",
-        )
-        if manifest_path:
-            utils.info_print(f"Manifest updated: {manifest_path}")
 
 
 # ---- Main entry point ----
@@ -3075,8 +3065,8 @@ def _dispatch_standalone_mode(
     """
     # Standalone viewer: regenerate viewer from saved manifest
     if getattr(args, "viewer", False) and not cli_mode:
-        existing_artifacts = viewer.load_manifest_artifacts()
-        if not existing_artifacts:
+        existing_artifacts, existing_reels = viewer._load_manifest_both()
+        if not existing_artifacts and not existing_reels:
             utils.error_print(
                 "No manifest found or manifest is empty.",
                 [
@@ -3084,11 +3074,13 @@ def _dispatch_standalone_mode(
                 ],
             )
             sys.exit(1)
-        study = existing_artifacts[0].get("study", "")
-        participant = existing_artifacts[0].get("participant", "")
+        primary = existing_artifacts[0] if existing_artifacts else existing_reels[0]
+        study = primary.get("study", "")
+        participant = primary.get("participant", "")
         ss_events = viewer.load_screenspace_events_for_viewer()
         data = viewer.finalize_timeline_data(
             existing_artifacts,
+            reels=existing_reels or None,
             study=study,
             participant=participant,
             mode="manifest",

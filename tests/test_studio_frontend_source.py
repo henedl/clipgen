@@ -102,6 +102,27 @@ def test_sheet_branch_catch_marks_failures():
     assert "totalFail += sheetItems.length;" in src
 
 
+def test_generate_abort_treated_as_cancel_not_failure():
+    """Aborting the generate fetch (Cancel button) must set cancelled and must
+    not mark every card failed or increment totalFail in the catch path."""
+    src = _studio_js()
+    assert "state.generateCancelledByUser = true" in src
+    assert "function isGenerateFetchAborted(err)" in src
+    assert 'err.name === "AbortError"' in src
+    start = src.index("function onGenerate()")
+    end = src.index("function onCancelReel()", start)
+    body = src[start:end]
+    assert "if (isGenerateFetchAborted(err))" in body
+    assert "cancelled = true" in body
+    # Abort path clears queued cards; real failures still use setCardResult(..., false).
+    abort_blocks = body.split("if (isGenerateFetchAborted(err))")
+    assert len(abort_blocks) >= 3
+    for block in abort_blocks[1:]:
+        abort_section = block.split("finishBranch();")[0]
+        assert "setCardResult" not in abort_section
+        assert "totalFail +=" not in abort_section
+
+
 def test_finish_branch_handles_zero_zero_case():
     """Stream that ends with no successes and no failures (not cancelled)
     should surface an error, not silently report '0 artifacts'."""
@@ -126,6 +147,27 @@ def test_cancel_cleanup_uses_queue_card_queued_selector():
     src = _studio_js()
     assert ".queue-card.queued" not in src
     assert 'querySelectorAll(".queue-card-queued")' in src
+
+
+def test_load_manifest_state_hydrates_reels_without_artifacts():
+    """Reel-only manifests must still populate generatedReels and renderLog."""
+    src = _studio_js()
+    start = src.index("function loadManifestState()")
+    end = src.index("function applyJobStatus(", start)
+    body = src[start:end]
+    assert "var reels = data.reels || [];" in body
+    assert "artifacts.length === 0 && reels.length === 0" in body
+    assert "state.generatedReels.push(stampLog(reel))" in body
+    assert "renderLog();" in body
+    assert "if (artifacts.length === 0) return;" not in body
+
+
+def test_job_status_poll_includes_intake():
+    """Re-attach polling must keep running while intake generation is active."""
+    src = _studio_js()
+    assert "var intake = status.intake || {};" in src
+    assert "data.intake && data.intake.in_progress" in src
+    assert "state._jobStatusIntakeWasInProgress" in src
 
 
 def test_reel_409_treated_as_json_error():
