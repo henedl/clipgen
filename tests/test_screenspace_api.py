@@ -833,7 +833,8 @@ def test_dismiss_queued_task(client):
     assert resp.get_json()["ok"] is True
     # Task removed from worker
     assert worker.get_task(task["id"]) is None
-    # Task removed from manifest
+    # Task removed from manifest (flush the debounced persist first)
+    screenspace_server._flush_pending_persist()
     assert all(t["id"] != task["id"] for t in screenspace_server._manifest["tasks"])
 
 
@@ -851,6 +852,7 @@ def test_dismiss_completed_task(client):
     resp = client.delete(f"/screenspace/api/tasks/{task['id']}?dismiss=true")
     assert resp.status_code == 200
     assert worker.get_task(task["id"]) is None
+    screenspace_server._flush_pending_persist()
     assert all(t["id"] != task["id"] for t in screenspace_server._manifest["tasks"])
 
 
@@ -1300,6 +1302,13 @@ def _install_persist_spy(monkeypatch):
         calls.append({"drain_events": drain_events})
 
     monkeypatch.setattr(screenspace_server, "_do_persist", spy)
+    # Debounced task-queue routes go through _schedule_persist → Timer → _do_persist.
+    # Collapse the debounce here so assertions don't race the timer.
+    monkeypatch.setattr(
+        screenspace_server,
+        "_schedule_persist",
+        lambda: spy(drain_events=False),
+    )
     return calls
 
 

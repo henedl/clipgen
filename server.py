@@ -80,6 +80,9 @@ _sheet_context: spreadsheet.SheetContext | None = None
 # picker; CLI-loaded sheets leave this None.
 _active_sheet_meta: dict[str, str] | None = None
 _generated_artifacts: list[dict[str, Any]] = []
+# Index by (cellRow, cellCol, type) for O(1) lookup in /api/generate Phase 1.
+# Mutated under _generated_output_lock together with _generated_artifacts.
+_generated_artifacts_index: dict[tuple[int, int, str], list[dict[str, Any]]] = {}
 _generated_reels: list[dict[str, Any]] = []
 # Bounded LRU so long sessions don't grow unbounded; entries are JPEG bytes
 # (tens of KB each), so a few hundred is plenty.
@@ -216,16 +219,36 @@ def _parse_titlecard_request(
     return enabled, duration
 
 
+def _index_artifact(a: dict[str, Any]) -> None:
+    """Insert *a* into _generated_artifacts_index. Caller must hold the lock."""
+    row = a.get("cellRow")
+    col = a.get("cellCol")
+    type_ = a.get("type")
+    if row is None or col is None or type_ is None:
+        return
+    _generated_artifacts_index.setdefault((row, col, type_), []).append(a)
+
+
+def _rebuild_artifact_index() -> None:
+    """Clear and repopulate the index from _generated_artifacts. Caller holds lock."""
+    _generated_artifacts_index.clear()
+    for a in _generated_artifacts:
+        _index_artifact(a)
+
+
 def _extend_generated_artifacts(artifacts: list[dict[str, Any]]) -> None:
     if not artifacts:
         return
     with _generated_output_lock:
         _generated_artifacts.extend(artifacts)
+        for a in artifacts:
+            _index_artifact(a)
 
 
 def _append_generated_artifact(artifact: dict[str, Any]) -> None:
     with _generated_output_lock:
         _generated_artifacts.append(artifact)
+        _index_artifact(artifact)
 
 
 def _extend_generated_reels(reels: list[dict[str, Any]]) -> None:
@@ -912,19 +935,37 @@ def _save_studio_settings(overrides: dict[str, Any]) -> Path | None:
 
 
 def _find_existing_artifacts(
-    cell_row: int, cell_col: int, artifact_type: str
+    cell_row: int,
+    cell_col: int,
+    artifact_type: str,
+    existence_cache: dict[str, bool] | None = None,
 ) -> list[dict[str, Any]]:
-    """Return cached artifact records for a cell+type whose files still exist on disk."""
+    """Return cached artifact records for a cell+type whose files still exist on disk.
+
+    *existence_cache* memoizes path → is_file() within a single caller scope
+    (e.g. one /api/generate Phase 1 pass), so the same artifact path doesn't
+    hit the disk twice. Pass None for one-shot callers.
+    """
     with _generated_output_lock:
-        artifacts_snapshot = list(_generated_artifacts)
-    matches = [
-        a
-        for a in artifacts_snapshot
-        if a.get("cellRow") == cell_row
-        and a.get("cellCol") == cell_col
-        and a.get("type") == artifact_type
-    ]
-    return [a for a in matches if Path(utils.resolve_output_path(a["file"])).is_file()]
+        matches = list(
+            _generated_artifacts_index.get((cell_row, cell_col, artifact_type), [])
+        )
+    if not matches:
+        return []
+    results: list[dict[str, Any]] = []
+    for a in matches:
+        resolved = str(utils.resolve_output_path(a["file"]))
+        if existence_cache is not None:
+            cached = existence_cache.get(resolved)
+            if cached is None:
+                cached = Path(resolved).is_file()
+                existence_cache[resolved] = cached
+            exists = cached
+        else:
+            exists = Path(resolved).is_file()
+        if exists:
+            results.append(a)
+    return results
 
 
 def _stream_process_reel(
@@ -1048,12 +1089,16 @@ def api_generate() -> FlaskResponse:
 
         # Pass 1: yield already-existing artifacts, collect clips that need generation
         to_generate: list[tuple[Any, str]] = []
+        existence_cache: dict[str, bool] = {}
         for clip in clips:
             cell_str = clip["participant"] + "." + str(clip["cell"].row)
             clip_cells.add(cell_str)
 
             existing = _find_existing_artifacts(
-                clip["cell"].row, clip["cell"].col, output_format
+                clip["cell"].row,
+                clip["cell"].col,
+                output_format,
+                existence_cache=existence_cache,
             )
             # A cached clip is only reusable when its recorded titlecard state
             # matches the request; mismatched ones are discarded and regenerated
@@ -1093,11 +1138,12 @@ def api_generate() -> FlaskResponse:
                             for a in _generated_artifacts
                             if a.get("id") not in stale_ids
                         ]
+                        _rebuild_artifact_index()
                     for a in stale:
+                        resolved = str(utils.resolve_output_path(a["file"]))
+                        existence_cache[resolved] = False
                         try:
-                            Path(utils.resolve_output_path(a["file"])).unlink(
-                                missing_ok=True
-                            )
+                            Path(resolved).unlink(missing_ok=True)
                         except OSError:
                             pass
                 to_generate.append((clip, cell_str))
@@ -2198,6 +2244,7 @@ def _init_studio_state(worksheet: Any) -> None:
     # generate/intake append can't run against a half-swapped reference.
     with _generated_output_lock:
         _generated_artifacts, _generated_reels = viewer._load_manifest_both()
+        _rebuild_artifact_index()
     with _thumbnail_cache_lock:
         _thumbnail_cache = OrderedDict()
 
@@ -2291,6 +2338,7 @@ def _swap_worksheet(new_worksheet: Any) -> None:
         with _generated_output_lock:
             _generated_artifacts = prev_artifacts
             _generated_reels = prev_reels
+            _rebuild_artifact_index()
         # Best-effort: re-pin the two sister blueprints to the restored state.
         # If these themselves throw, swallow — the studio state is already
         # consistent and the original exception is what we want to surface.

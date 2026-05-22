@@ -7,6 +7,13 @@ Flask = pytest.importorskip("flask").Flask
 import server  # noqa: E402
 
 
+def _set_artifacts(monkeypatch, artifacts):
+    """Patch _generated_artifacts and rebuild the lookup index in lockstep."""
+    monkeypatch.setattr(server, "_generated_artifacts", list(artifacts))
+    monkeypatch.setattr(server, "_generated_artifacts_index", {})
+    server._rebuild_artifact_index()
+
+
 @pytest.fixture
 def client(monkeypatch):
     app = Flask(__name__)
@@ -15,7 +22,7 @@ def client(monkeypatch):
     # Default: no worksheet/context loaded (error state)
     monkeypatch.setattr(server, "_worksheet", None)
     monkeypatch.setattr(server, "_sheet_context", None)
-    monkeypatch.setattr(server, "_generated_artifacts", [])
+    _set_artifacts(monkeypatch, [])
     monkeypatch.setattr(server, "_generated_reels", [])
     server._release_busy("generate")
     server._release_busy("reel")
@@ -431,7 +438,7 @@ def test_api_manifest_get_empty(client, monkeypatch):
 
 
 def test_api_manifest_post_still_works(client, monkeypatch):
-    monkeypatch.setattr(server, "_generated_artifacts", [])
+    _set_artifacts(monkeypatch, [])
     monkeypatch.setattr(server, "_generated_reels", [])
     resp = client.post("/studio/api/manifest")
     assert resp.status_code == 400
@@ -453,7 +460,7 @@ def test_api_generate_skips_existing_artifacts(client, monkeypatch, tmp_path):
     existing = [
         {"id": "a5c2s0", "type": "clip", "file": "clip.mp4", "cellRow": 5, "cellCol": 2}
     ]
-    monkeypatch.setattr(server, "_generated_artifacts", list(existing))
+    _set_artifacts(monkeypatch, list(existing))
 
     cell = types.SimpleNamespace(row=5, col=2, value="1:00")
 
@@ -494,7 +501,7 @@ def test_api_generate_regenerates_when_file_missing(client, monkeypatch, tmp_pat
     stale = [
         {"id": "a5c2s0", "type": "clip", "file": "gone.mp4", "cellRow": 5, "cellCol": 2}
     ]
-    monkeypatch.setattr(server, "_generated_artifacts", list(stale))
+    _set_artifacts(monkeypatch, list(stale))
 
     cell = types.SimpleNamespace(row=5, col=2, value="1:00")
 
@@ -548,7 +555,7 @@ def test_api_generate_regenerates_when_titlecards_toggled(
             "titlecardDuration": 0,
         }
     ]
-    monkeypatch.setattr(server, "_generated_artifacts", list(existing))
+    _set_artifacts(monkeypatch, list(existing))
 
     cell = types.SimpleNamespace(row=5, col=2, value="1:00")
     monkeypatch.setattr(
@@ -606,7 +613,7 @@ def test_api_generate_skips_when_titlecards_match(client, monkeypatch, tmp_path)
             "titlecardDuration": 2,
         }
     ]
-    monkeypatch.setattr(server, "_generated_artifacts", list(existing))
+    _set_artifacts(monkeypatch, list(existing))
 
     cell = types.SimpleNamespace(row=5, col=2, value="1:00")
     monkeypatch.setattr(
@@ -1241,7 +1248,7 @@ def test_api_generate_passes_titlecard_options_to_pipeline(client, monkeypatch):
     monkeypatch.setattr("spreadsheet.generate_list", fake_generate_list)
     monkeypatch.setattr("spreadsheet.parse_cell_specifications", lambda t: [("P01", 5)])
     monkeypatch.setattr("pipeline.process_clips", fake_process_clips)
-    monkeypatch.setattr(server, "_generated_artifacts", [])
+    _set_artifacts(monkeypatch, [])
 
     resp = client.post(
         "/studio/api/generate",
@@ -1284,7 +1291,7 @@ def test_api_generate_titlecard_options_on_pipeline_error(client, monkeypatch):
     monkeypatch.setattr("spreadsheet.generate_list", fake_generate_list)
     monkeypatch.setattr("spreadsheet.parse_cell_specifications", lambda t: [("P01", 5)])
     monkeypatch.setattr("pipeline.process_clips", fake_process_clips)
-    monkeypatch.setattr(server, "_generated_artifacts", [])
+    _set_artifacts(monkeypatch, [])
 
     resp = client.post(
         "/studio/api/generate",
@@ -2331,7 +2338,7 @@ def test_api_generate_persists_artifacts_after_disconnect(
 
     monkeypatch.setattr(server, "_worksheet", object())
     monkeypatch.setattr("config.OUTPUT_DIR", str(tmp_path))
-    monkeypatch.setattr(server, "_generated_artifacts", [])
+    _set_artifacts(monkeypatch, [])
     monkeypatch.setattr(server, "_save_manifest_quiet", lambda: None)
     monkeypatch.setattr("titlecards.clear_endcard_cache", lambda: None)
     # Force the parallel path: pool size > 1, more cells than pool workers so
@@ -2465,7 +2472,7 @@ def test_api_job_status_reflects_generate_progress(client, monkeypatch, tmp_path
 
     monkeypatch.setattr(server, "_worksheet", object())
     monkeypatch.setattr("config.OUTPUT_DIR", str(tmp_path))
-    monkeypatch.setattr(server, "_generated_artifacts", [])
+    _set_artifacts(monkeypatch, [])
     monkeypatch.setattr(server, "_save_manifest_quiet", lambda: None)
     monkeypatch.setattr("titlecards.clear_endcard_cache", lambda: None)
     monkeypatch.setattr("pipeline._resolve_clip_workers", lambda: 2)
@@ -2575,7 +2582,7 @@ def test_api_generate_explicit_cancel_still_works(client, monkeypatch, tmp_path)
 
     monkeypatch.setattr(server, "_worksheet", object())
     monkeypatch.setattr("config.OUTPUT_DIR", str(tmp_path))
-    monkeypatch.setattr(server, "_generated_artifacts", [])
+    _set_artifacts(monkeypatch, [])
     monkeypatch.setattr(server, "_save_manifest_quiet", lambda: None)
     monkeypatch.setattr("titlecards.clear_endcard_cache", lambda: None)
     monkeypatch.setattr("pipeline._resolve_clip_workers", lambda: 1)  # sequential

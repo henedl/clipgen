@@ -109,7 +109,7 @@ Three medium-sized improvements that each unlock a parallel path.
 
 ---
 
-## Phase 3 — `_find_existing_artifacts` skip-pass
+## ✅ Phase 3 — `_find_existing_artifacts` skip-pass
 
 - **File:** `server.py:653-664`.
 - **Today:** Linear scan over `_generated_artifacts` + per-candidate `Path(...).is_file()`. Called once per cell during Phase 1 of `/api/generate`.
@@ -156,7 +156,7 @@ Two larger frontend changes. Each is its own session.
 
 Items surfaced by the deep audit that look real but were not exhaustively re-read by the reviewer. Each starts with a short verification step before the diff. None is a single-line fix; each is its own small PR.
 
-### 5.1 Debounce Screenspace manifest writes
+### ✅ 5.1 Debounce Screenspace manifest writes
 
 - **File:** `screenspace_server.py` (calls to `_persist_manifest(drain_events=False)` around 1419, 1433, 1437, 1452, 1463, 1474 — verify exact lines before editing).
 - **Today:** Every task enqueue / cancel / reorder / pause / resume calls `_persist_manifest()`, which serializes and disk-writes the full JSON.
