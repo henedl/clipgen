@@ -1400,9 +1400,10 @@
     }
   }
 
-  // Commit the in-flight drag delta without triggering another recalculate.
-  // Called by renderTimeline() before destroying the DOM so a debounce-driven
-  // recalculate during a drag doesn't silently lose the accumulated movement.
+  // Commit the in-flight drag delta when renderTimeline() is about to destroy
+  // the DOM (e.g. a debounce-driven recalculate landed mid-drag). The current
+  // renderTimeline pass already extracted events with the pre-drag offset, so
+  // schedule a deferred recalculate to re-render with the committed value.
   function _cvAbortDrag() {
     var tx = cvState._dragTx;
     if (!tx) return;
@@ -1419,6 +1420,9 @@
         cvState.offsets[tx.pid] = num;
       }
       cvSaveOffsets();
+      // Cannot recalculate() synchronously — this runs inside renderTimeline(),
+      // itself inside recalculate(). Defer so the committed offset renders.
+      setTimeout(recalculate, 0);
     }
   }
 
@@ -1516,7 +1520,9 @@
     document.body.style.userSelect = "";
     cvState._dragTx = null;
     _cvDragLiveInput = null;
-    if (Math.abs(deltaSec) > 0) {
+    // Match _cvAbortDrag's threshold — ignore sub-0.05s jiggles so an
+    // accidental click-drag doesn't trigger a full recalculate.
+    if (Math.abs(deltaSec) >= 0.05) {
       commitOffset(tx.pid, tx.baseOffset + deltaSec);
     }
   }
