@@ -40,6 +40,7 @@ API endpoints (all under /screenspace/):
   PUT  /api/events/bulk-include            – bulk include events by task/time range
 """
 
+import atexit
 import binascii
 import copy
 import json
@@ -1435,7 +1436,7 @@ def api_tasks_create() -> FlaskResponse:
         )
 
     _worker.enqueue(task)
-    _persist_manifest(drain_events=False)
+    _schedule_persist()
     _notify_sse_clients("task_created")
 
     return jsonify({"ok": True, "task": _clean_task(task)})
@@ -1449,11 +1450,11 @@ def api_tasks_cancel(task_id: str) -> FlaskResponse:
     if request.args.get("dismiss") == "true":
         if not _worker.remove_task(task_id):
             return jsonify({"ok": False, "error": "Task not found"}), 404
-        _persist_manifest(drain_events=False)
+        _schedule_persist()
         _notify_sse_clients("task_dismissed")
         return jsonify({"ok": True})
     if _worker.cancel(task_id):
-        _persist_manifest(drain_events=False)
+        _schedule_persist()
         _notify_sse_clients("task_cancelled")
         return jsonify({"ok": True})
     return jsonify({"ok": False, "error": "Task not found or already finished"}), 400
@@ -1468,7 +1469,7 @@ def api_tasks_reorder() -> FlaskResponse:
     if not data or "task_ids" not in data:
         return jsonify({"ok": False, "error": "task_ids list required"}), 400
     _worker.reorder(data["task_ids"])
-    _persist_manifest(drain_events=False)
+    _schedule_persist()
     _notify_sse_clients("reorder")
     return jsonify({"ok": True})
 
@@ -1479,7 +1480,7 @@ def api_tasks_pause() -> FlaskResponse:
     if not _worker:
         return jsonify({"ok": False, "error": "Worker not initialized"}), 500
     _worker.pause()
-    _persist_manifest(drain_events=False)
+    _schedule_persist()
     _notify_sse_clients("pause")
     return jsonify({"ok": True, "paused": True})
 
@@ -1490,7 +1491,7 @@ def api_tasks_resume() -> FlaskResponse:
     if not _worker:
         return jsonify({"ok": False, "error": "Worker not initialized"}), 500
     _worker.resume()
-    _persist_manifest(drain_events=False)
+    _schedule_persist()
     _notify_sse_clients("resume")
     return jsonify({"ok": True, "paused": False})
 
@@ -1845,7 +1846,69 @@ def _do_persist(*, drain_events: bool = True) -> None:
     )
 
 
+# Manifest-write debounce: rapid UI mutations (enqueue / cancel / reorder /
+# pause / resume) coalesce into one disk write after a short quiet period.
+# atexit fires the pending flush on normal exit / SIGINT / SIGTERM, but not
+# on SIGKILL or hard power-loss — accepted because screenspace manifest is
+# recreatable analysis state.
+_PERSIST_DEBOUNCE_SECONDS = 2.0
+_persist_timer: threading.Timer | None = None
+_persist_timer_lock = threading.Lock()
+_persist_dirty = False
+
+
+def _cancel_pending_persist_timer() -> bool:
+    """Cancel the debounce timer and clear the dirty flag. Returns prior dirty state."""
+    global _persist_timer, _persist_dirty
+    with _persist_timer_lock:
+        timer = _persist_timer
+        _persist_timer = None
+        was_dirty = _persist_dirty
+        _persist_dirty = False
+    if timer is not None:
+        timer.cancel()
+    return was_dirty
+
+
+def _on_persist_timer() -> None:
+    global _persist_timer, _persist_dirty
+    with _persist_timer_lock:
+        _persist_timer = None
+        if not _persist_dirty:
+            return
+        _persist_dirty = False
+    with _manifest_lock:
+        _do_persist(drain_events=False)
+
+
+def _schedule_persist() -> None:
+    """Mark the manifest dirty and (re)arm the debounce timer."""
+    global _persist_timer, _persist_dirty
+    with _persist_timer_lock:
+        _persist_dirty = True
+        if _persist_timer is not None:
+            _persist_timer.cancel()
+        _persist_timer = threading.Timer(_PERSIST_DEBOUNCE_SECONDS, _on_persist_timer)
+        _persist_timer.daemon = True
+        _persist_timer.start()
+
+
+def _flush_pending_persist() -> None:
+    """Cancel any pending debounced write and persist immediately if dirty."""
+    if _cancel_pending_persist_timer():
+        with _manifest_lock:
+            _do_persist(drain_events=False)
+
+
+atexit.register(_flush_pending_persist)
+
+
 def _persist_manifest(*, drain_events: bool = True) -> None:
-    """Persist the current manifest state through a single synchronized path."""
+    """Persist the current manifest state through a single synchronized path.
+
+    Synchronous callers (task completion, atexit flush) supersede any pending
+    debounced write — cancel the timer here so we don't double-flush.
+    """
+    _cancel_pending_persist_timer()
     with _manifest_lock:
         _do_persist(drain_events=drain_events)
