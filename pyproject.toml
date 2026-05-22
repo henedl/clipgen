@@ -30,3 +30,12 @@ py-modules = [
 
 [tool.uv]
 required-version = ">=0.11.0"
+
+[tool.coverage.run]
+source = ["."]
+omit = ["tests/*"]
+
+[tool.coverage.report]
+# CI coverage ratchet. Raise this as coverage improves; never lower it to make
+# a PR pass. Measured on product modules only (tests/* omitted above).
+fail_under = 60
