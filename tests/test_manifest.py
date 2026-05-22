@@ -1,4 +1,6 @@
 import json
+import threading
+import time
 
 import config
 import viewer
@@ -199,3 +201,71 @@ def test_cli_manifest_flag_defaults_false(monkeypatch):
     monkeypatch.setattr("sys.argv", ["clipgen.py"])
     args = cli.parse_arguments()
     assert args.manifest is False
+
+
+def _make_reel(reel_id):
+    return {
+        "id": reel_id,
+        "file": f"{reel_id}.mp4",
+        "study": "study",
+        "description": "Reel: 1 segment",
+        "components": [
+            {
+                "cellRow": 3,
+                "cellCol": 2,
+                "participant": "P01",
+                "sourceVideo": "study_P01.mp4",
+                "start": 10.0,
+                "end": 20.0,
+                "category": "cat",
+                "description": "desc",
+                "severity": "",
+            }
+        ],
+    }
+
+
+def test_save_manifest_concurrent_writes_keep_every_id(tmp_path, monkeypatch):
+    """Concurrent save_manifest() calls must not last-writer-wins a partial merge.
+
+    Each thread saves a distinct artifact and reel. The real finalize step is
+    wrapped with a small sleep to widen the load->write window: without the
+    write lock every thread would load the same empty manifest during that
+    window and only one record of each kind would survive.
+    """
+    monkeypatch.setattr(config, "OUTPUT_DIR", str(tmp_path))
+
+    real_finalize = viewer.finalize_timeline_data
+
+    def slow_finalize(*args, **kwargs):
+        time.sleep(0.05)
+        return real_finalize(*args, **kwargs)
+
+    monkeypatch.setattr(viewer, "finalize_timeline_data", slow_finalize)
+
+    n = 8
+    barrier = threading.Barrier(n)
+    errors = []
+
+    def worker(i):
+        try:
+            barrier.wait(timeout=5)
+            viewer.save_manifest(
+                [_make_artifact(f"a{i}")], new_reels=[_make_reel(f"reel{i}")]
+            )
+        except Exception as exc:
+            errors.append(exc)
+
+    threads = [threading.Thread(target=worker, args=(i,)) for i in range(n)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=10)
+
+    assert not errors, f"worker threads raised: {errors}"
+    assert not any(t.is_alive() for t in threads)
+
+    artifact_ids = {a["id"] for a in viewer.load_manifest_artifacts()}
+    reel_ids = {r["id"] for r in viewer.load_manifest_reels()}
+    assert artifact_ids == {f"a{i}" for i in range(n)}
+    assert reel_ids == {f"reel{i}" for i in range(n)}

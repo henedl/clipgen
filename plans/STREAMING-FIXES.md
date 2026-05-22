@@ -56,6 +56,10 @@ Tests:
 
 ### P0: Manifest Save Race
 
+> **Status:** Done — branch `claude/streaming-fixes-plan-6ConI`. Added
+> `_MANIFEST_WRITE_LOCK` in `viewer.py` wrapping the full load-merge-write
+> cycle of `save_manifest()`; regression test in `tests/test_manifest.py`.
+
 `server._save_manifest_quiet()` snapshots `_generated_artifacts` / `_generated_reels` under `_generated_output_lock`, then releases it before `viewer.save_manifest()` performs load-merge-save. Concurrent Studio artifact/reel/intake completions can each read the same old manifest and last-writer-wins a partial merge.
 
 Fix:
@@ -295,7 +299,7 @@ Tests:
 
 - [ ] Add atomic output reservation to `files.py`.
 - [ ] Update ffmpeg call sites that use reserved paths to clean up unused placeholders on early failure.
-- [ ] Add a manifest write lock to `viewer.save_manifest()`.
+- [x] Add a manifest write lock to `viewer.save_manifest()`.
 - [ ] Run:
 
 ```bash
