@@ -1698,22 +1698,41 @@ def _apply_settings_payload(data: dict[str, Any]) -> tuple[dict[str, Any], str |
     if not isinstance(settings_data, dict):
         return {}, "Invalid settings payload"
 
-    for webp_name in ("SCREENSHOT_FORMAT", "GIF_FORMAT"):
-        if webp_name not in settings_data:
+    for format_name in ("SCREENSHOT_FORMAT", "GIF_FORMAT"):
+        if format_name not in settings_data:
             continue
-        new_value = str(settings_data[webp_name]).lower()
-        current_value = str(getattr(config, webp_name, "")).lower()
-        # Only validate when the user is *changing* the value to .webp; an
-        # unchanged .webp value already on disk shouldn't block edits to other
-        # fields.
-        if (
-            new_value == ".webp"
-            and current_value != ".webp"
-            and not video.check_webp_support()
-        ):
+        new_value = str(settings_data[format_name]).lower()
+        current_value = str(getattr(config, format_name, "")).lower()
+        # Only validate when the user is *changing* the value; an unchanged
+        # value already on disk shouldn't block edits to other fields.
+        if new_value == current_value:
+            continue
+        if new_value == ".webp" and not video.check_webp_support():
             return {}, (
                 f"WebP not available: ffmpeg has no libwebp encoder. "
-                f"Install an ffmpeg build with libwebp to set {webp_name} to .webp."
+                f"Install an ffmpeg build with libwebp to set {format_name} to .webp."
+            )
+        if new_value == ".webm" and not video.check_vp9_support():
+            return {}, (
+                f"WebM not available: ffmpeg has no libvpx-vp9 encoder. "
+                f"Install an ffmpeg build with libvpx to set {format_name} to .webm."
+            )
+
+    if "TITLECARDS_ENABLED" in settings_data:
+        raw_value = settings_data["TITLECARDS_ENABLED"]
+        new_enabled = (
+            raw_value
+            if isinstance(raw_value, bool)
+            else str(raw_value).lower() in ("true", "1", "yes", "on")
+        )
+        if (
+            new_enabled
+            and not getattr(config, "TITLECARDS_ENABLED", False)
+            and not video.check_drawtext_support()
+        ):
+            return {}, (
+                "Titlecards not available: ffmpeg lacks the drawtext filter "
+                "(requires libfreetype). Install an ffmpeg build with libfreetype to enable titlecards."
             )
 
     applied = {}

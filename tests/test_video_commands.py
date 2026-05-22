@@ -479,6 +479,92 @@ def test_check_webp_support_ignores_codecs_listing(monkeypatch):
     assert video.check_webp_support() is False
 
 
+_FFMPEG_FILTERS_WITH_DRAWTEXT = (
+    "Filters:\n"
+    "  T.. = Timeline support\n"
+    " ... drawbox           V->V       Draw a colored box.\n"
+    " T.. drawtext          V->V       Draw text on top of video.\n"
+)
+
+_FFMPEG_FILTERS_NO_DRAWTEXT = (
+    "Filters:\n"
+    "  T.. = Timeline support\n"
+    " ... drawbox           V->V       Draw a colored box.\n"
+)
+
+_FFMPEG_ENCODERS_WITH_VP9 = (
+    "Encoders:\n"
+    " V..... = Video\n"
+    " ------\n"
+    " V..... libvpx-vp9      libvpx VP9 (codec vp9)\n"
+)
+
+_FFMPEG_ENCODERS_NO_VP9 = (
+    "Encoders:\n V..... = Video\n ------\n V..... libx264         H.264 (codec h264)\n"
+)
+
+
+def test_check_drawtext_support_detects_filter(monkeypatch):
+    monkeypatch.setattr(video, "_drawtext_support_cache", None)
+    monkeypatch.setattr(
+        video.subprocess,
+        "run",
+        lambda *_a, **_kw: subprocess.CompletedProcess(
+            [], 0, stdout=_FFMPEG_FILTERS_WITH_DRAWTEXT, stderr=""
+        ),
+    )
+    assert video.check_drawtext_support() is True
+
+    monkeypatch.setattr(video, "_drawtext_support_cache", None)
+    monkeypatch.setattr(
+        video.subprocess,
+        "run",
+        lambda *_a, **_kw: subprocess.CompletedProcess(
+            [], 0, stdout=_FFMPEG_FILTERS_NO_DRAWTEXT, stderr=""
+        ),
+    )
+    assert video.check_drawtext_support() is False
+
+
+def test_check_vp9_support_detects_encoder(monkeypatch):
+    monkeypatch.setattr(video, "_vp9_support_cache", None)
+    monkeypatch.setattr(
+        video.subprocess,
+        "run",
+        lambda *_a, **_kw: subprocess.CompletedProcess(
+            [], 0, stdout=_FFMPEG_ENCODERS_WITH_VP9, stderr=""
+        ),
+    )
+    assert video.check_vp9_support() is True
+
+    monkeypatch.setattr(video, "_vp9_support_cache", None)
+    monkeypatch.setattr(
+        video.subprocess,
+        "run",
+        lambda *_a, **_kw: subprocess.CompletedProcess(
+            [], 0, stdout=_FFMPEG_ENCODERS_NO_VP9, stderr=""
+        ),
+    )
+    assert video.check_vp9_support() is False
+
+
+def test_extract_gif_rejects_webm_when_vp9_unsupported(monkeypatch):
+    monkeypatch.setattr(video, "check_vp9_support", lambda: False)
+    monkeypatch.setattr(video, "_vp9_missing_warned", False)
+
+    called = {"run": False}
+
+    def fake_run(*_a, **_kw):
+        called["run"] = True
+        return subprocess.CompletedProcess([], 0, stdout="", stderr="")
+
+    monkeypatch.setattr(video, "run_ffmpeg_process", fake_run)
+
+    ok = video.extract_gif("/in.mp4", "/out.webm", "0:10", 3)
+    assert ok is False
+    assert called["run"] is False
+
+
 def test_extract_gif_includes_webp_quality_for_webp_output(monkeypatch):
     import config as cfg
 
@@ -520,6 +606,7 @@ def test_extract_gif_uses_vp9_for_webm_output(monkeypatch):
     monkeypatch.setattr(
         video.Path, "stat", lambda self: type("S", (), {"st_size": 1})()
     )
+    monkeypatch.setattr(video, "check_vp9_support", lambda: True)
 
     captured: dict = {}
 
