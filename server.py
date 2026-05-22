@@ -58,6 +58,7 @@ from flask import (
     redirect,
     request,
 )
+from werkzeug.serving import WSGIRequestHandler
 
 import config
 import files
@@ -3042,6 +3043,39 @@ def build_combined_app(
     return combined
 
 
+# Successful (GET + 2xx) hits on these exact paths are suppressed from the
+# Werkzeug access log because Studio polls them every 5–10s and the noise
+# drowns out real activity. 4xx/5xx still surface, so a silently-failing
+# poll endpoint won't be hidden. With VERBOSITY >= VERBOSE everything logs.
+_QUIET_POLL_PATHS: frozenset[str] = frozenset(
+    {
+        "/screenspace/api/tasks",
+        "/screenspace/api/events",
+        "/transcripts/api/marks",
+        "/transcripts/api/transcribe/status",
+        "/transcripts/api/transcribe/model-status",
+        "/transcripts/api/participants",
+        "/studio/api/job-status",
+    }
+)
+
+
+class QuietWSGIRequestHandler(WSGIRequestHandler):
+    def log_request(self, code: int | str = "-", size: int | str = "-") -> None:
+        if config.VERBOSITY < config.VERBOSE:
+            try:
+                status = int(code)
+            except (TypeError, ValueError):
+                status = 0
+            if (
+                self.command == "GET"
+                and 200 <= status < 300
+                and self.path.split("?", 1)[0] in _QUIET_POLL_PATHS
+            ):
+                return
+        super().log_request(code, size)
+
+
 def start_combined_server(
     worksheet: Any = None,
     port: int | None = None,
@@ -3070,4 +3104,10 @@ def start_combined_server(
     utils.info_print(f"clipgen server running at http://127.0.0.1:{port}")
     webbrowser.open(url)
 
-    combined.run(host="127.0.0.1", port=port, debug=False, threaded=True)
+    combined.run(
+        host="127.0.0.1",
+        port=port,
+        debug=False,
+        threaded=True,
+        request_handler=QuietWSGIRequestHandler,
+    )
