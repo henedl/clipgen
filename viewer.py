@@ -23,6 +23,7 @@ Artifact manifest (save_manifest / load_manifest_*):
 """
 
 import base64
+import functools
 import json
 import math
 import re
@@ -134,12 +135,52 @@ def _sanitize_event_metadata(obj: Any) -> Any:
     return obj
 
 
+# Module-level mtime cache for the screenspace-events-for-viewer transform.
+# Viewer exports call load_screenspace_events_for_viewer() repeatedly; re-reading
+# and re-parsing screenspace_manifest.json each time is pure overhead. Keyed on
+# the manifest's (path, mtime_ns), so it invalidates automatically when the file
+# is rewritten. Bounded at one entry — this is a single-process export path.
+_SS_EVENTS_CACHE_LOCK = threading.Lock()
+_ss_events_cache: dict[str, Any] = {
+    "path": None,
+    "mtime_ns": None,
+    "events": [],
+}
+
+
+def _reset_screenspace_events_cache() -> None:
+    """Drop the in-memory screenspace-events cache. Intended for test fixtures."""
+    with _SS_EVENTS_CACHE_LOCK:
+        _ss_events_cache["path"] = None
+        _ss_events_cache["mtime_ns"] = None
+        _ss_events_cache["events"] = []
+
+
 def load_screenspace_events_for_viewer() -> list[dict[str, Any]]:
-    """Load non-excluded events from screenspace manifest for viewer export."""
+    """Load non-excluded events from screenspace manifest for viewer export.
+
+    Memoizes the transformed event list keyed on the manifest's path + mtime_ns
+    so repeated viewer exports share a single read/parse until the file changes.
+    """
     import screenspace
 
+    path = Path(utils.get_effective_output_dir()) / config.SCREENSPACE_MANIFEST_FILENAME
+    path_str = str(path)
+    try:
+        mtime_ns: int | None = path.stat().st_mtime_ns if path.is_file() else None
+    except OSError:
+        mtime_ns = None
+
+    with _SS_EVENTS_CACHE_LOCK:
+        if (
+            mtime_ns is not None
+            and _ss_events_cache["path"] == path_str
+            and _ss_events_cache["mtime_ns"] == mtime_ns
+        ):
+            return list(_ss_events_cache["events"])
+
     manifest = screenspace.load_screenspace_manifest()
-    return [
+    events = [
         {
             "id": e.get("id", ""),
             "type": e.get("detector", ""),
@@ -155,8 +196,25 @@ def load_screenspace_events_for_viewer() -> list[dict[str, Any]]:
         if not e.get("excluded")
     ]
 
+    with _SS_EVENTS_CACHE_LOCK:
+        _ss_events_cache["path"] = path_str
+        _ss_events_cache["mtime_ns"] = mtime_ns
+        _ss_events_cache["events"] = events
+
+    return list(events)
+
 
 _CLIPGEN_DATA_PLACEHOLDER = "<!-- CLIPGEN_DATA_HERE -->"
+
+
+@functools.cache
+def _read_bundled_asset(path_str: str) -> str:
+    """Read a bundled asset file as text, cached for the process lifetime.
+
+    Bundled CSS/JS/HTML templates never change at runtime, so repeated viewer
+    exports share a single read instead of re-hitting disk each time.
+    """
+    return Path(path_str).read_text(encoding="utf-8")
 
 
 def _generate_viewer_html(
@@ -188,14 +246,14 @@ def _generate_viewer_html(
             return None
 
     try:
-        template_html = template_path.read_text(encoding="utf-8")
+        template_html = _read_bundled_asset(str(template_path))
     except OSError as e:
         utils.warning_print(f"Could not read {viewer_label.lower()} template: {e}")
         return None
 
     try:
-        css_text = css_path.read_text(encoding="utf-8")
-        js_text = js_path.read_text(encoding="utf-8")
+        css_text = _read_bundled_asset(str(css_path))
+        js_text = _read_bundled_asset(str(js_path))
     except OSError as e:
         utils.warning_print(f"Could not read {viewer_label.lower()} assets: {e}")
         return None
@@ -204,7 +262,7 @@ def _generate_viewer_html(
     tokens_path = assets_dir / "tokens.css"
     if tokens_path.is_file():
         try:
-            css_text = tokens_path.read_text(encoding="utf-8") + "\n" + css_text
+            css_text = _read_bundled_asset(str(tokens_path)) + "\n" + css_text
         except OSError:
             pass
 
@@ -212,7 +270,7 @@ def _generate_viewer_html(
     utils_js_path = assets_dir / "utils.js"
     if utils_js_path.is_file():
         try:
-            js_text = utils_js_path.read_text(encoding="utf-8") + "\n" + js_text
+            js_text = _read_bundled_asset(str(utils_js_path)) + "\n" + js_text
         except OSError:
             pass
 

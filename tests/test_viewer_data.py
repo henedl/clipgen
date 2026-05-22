@@ -192,3 +192,92 @@ def test_generate_gallery_viewer_inlines_css_and_js(tmp_path, monkeypatch):
     assert "<style>" in html
     assert "<script defer>" in html
     assert "window.CLIPGEN_DATA" in html
+
+
+# ---- bundled asset cache ----
+
+
+def test_read_bundled_asset_caches_first_read(tmp_path):
+    asset = tmp_path / "asset.txt"
+    asset.write_text("original", encoding="utf-8")
+    first = viewer._read_bundled_asset(str(asset))
+    # Bundled assets never change at runtime; a later mutation must not be seen.
+    asset.write_text("changed", encoding="utf-8")
+    second = viewer._read_bundled_asset(str(asset))
+    assert first == "original"
+    assert second == "original"
+
+
+# ---- screenspace events for viewer ----
+
+
+def test_load_screenspace_events_for_viewer_caches_by_mtime(tmp_path, monkeypatch):
+    import os
+
+    import config
+    import screenspace
+
+    monkeypatch.setattr(config, "OUTPUT_DIR", str(tmp_path))
+    viewer._reset_screenspace_events_cache()
+
+    screenspace.save_screenspace_manifest(
+        {},
+        [],
+        [
+            {
+                "id": "ev_keep",
+                "detector": "change",
+                "participant": "P01",
+                "time_in": 1.0,
+                "time_out": 2.0,
+                "excluded": False,
+            },
+            {
+                "id": "ev_drop",
+                "detector": "color",
+                "participant": "P02",
+                "time_in": 3.0,
+                "time_out": 4.0,
+                "excluded": True,
+            },
+        ],
+    )
+
+    load_calls = []
+    real_load = screenspace.load_screenspace_manifest
+
+    def counting_load():
+        load_calls.append(1)
+        return real_load()
+
+    monkeypatch.setattr(screenspace, "load_screenspace_manifest", counting_load)
+
+    first = viewer.load_screenspace_events_for_viewer()
+    second = viewer.load_screenspace_events_for_viewer()
+    # Excluded events are filtered out; the second call is served from cache.
+    assert [e["id"] for e in first] == ["ev_keep"]
+    assert [e["id"] for e in second] == ["ev_keep"]
+    assert len(load_calls) == 1
+
+    # Rewriting the manifest bumps its mtime and invalidates the cache.
+    screenspace.save_screenspace_manifest(
+        {},
+        [],
+        [
+            {
+                "id": "ev_new",
+                "detector": "scene",
+                "participant": "P03",
+                "time_in": 5.0,
+                "time_out": 6.0,
+                "excluded": False,
+            }
+        ],
+    )
+    manifest_path = tmp_path / config.SCREENSPACE_MANIFEST_FILENAME
+    st = manifest_path.stat()
+    os.utime(manifest_path, ns=(st.st_atime_ns, st.st_mtime_ns + 1_000_000_000))
+
+    third = viewer.load_screenspace_events_for_viewer()
+    assert [e["id"] for e in third] == ["ev_new"]
+    assert len(load_calls) == 2
