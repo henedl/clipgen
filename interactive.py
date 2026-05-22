@@ -455,9 +455,8 @@ def browse_spreadsheet(sheet: Any, *, process_fn=None) -> None:
 
     # Get participant info
     header_row = sheet_data[id_cell.row - 1]
-    num_participants = spreadsheet.get_num_participants(
-        header_row, id_cell, observation_cell
-    )
+    col_count = max(len(row) for row in sheet_data)
+    num_participants = spreadsheet.get_num_participants(header_row, id_cell, col_count)
 
     if num_participants == 0:
         utils.warning_print(

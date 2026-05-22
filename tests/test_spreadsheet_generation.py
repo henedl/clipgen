@@ -1,5 +1,7 @@
 from types import SimpleNamespace
 
+import pytest
+
 import spreadsheet
 from spreadsheet import SheetContext
 import files
@@ -87,20 +89,74 @@ def test_get_num_participants_with_observation_before_id():
     assert num == 4
 
 
-def test_get_num_participants_handles_variable_column_layouts():
-    """Different studies arrange columns differently. The count must reflect
-    only the headers actually starting with P/G — never assume a fixed total
-    or that participants are sandwiched between specific columns."""
-    cases = [
+@pytest.mark.parametrize(
+    "header_row, id_col, expected",
+    [
         (["ID", "P01"], 1, 1),
         (["ID", "P01", "P02", "P03"], 1, 3),
-        (["ID", "Notes", "P01", "Tags", "G01", "G02"], 1, 3),
+        (["ID", "P01", "P02", "Observation", "Category"], 1, 2),
         (["Notes", "ID"], 2, 0),
-    ]
-    for header_row, id_col, expected in cases:
-        id_cell = SimpleNamespace(row=1, col=id_col)
-        num = spreadsheet.get_num_participants(header_row, id_cell, len(header_row))
-        assert num == expected, f"Expected {expected} for {header_row!r}, got {num}"
+        (["ID", "G01", "G02"], 1, 2),
+        (["", "", "", "", "", "ID", "P01", "P02", "P03", "P04"], 6, 4),
+    ],
+    ids=[
+        "single-participant",
+        "three-contiguous",
+        "trailing-non-participant-columns",
+        "id-is-last-column",
+        "group-prefixes",
+        "id-deep-in-row",
+    ],
+)
+def test_get_num_participants_handles_variable_column_layouts(
+    header_row, id_col, expected
+):
+    """Participant columns form one contiguous P*/G* block immediately after
+    ID; non-participant columns (Observation, Category, ...) sit outside it.
+    The count reflects only the P/G headers and must not assume a fixed
+    total. Interleaving a non-participant column inside the participant block
+    is not a supported layout, so it is intentionally not exercised here.
+
+    Parametrized so a failing layout is named individually instead of
+    aborting the loop on the first mismatch."""
+    id_cell = SimpleNamespace(row=1, col=id_col)
+    num = spreadsheet.get_num_participants(header_row, id_cell, len(header_row))
+    assert num == expected
+
+
+@pytest.mark.parametrize(
+    "label_row, label_value",
+    [
+        (0, "Baseline time"),
+        (1, "Baseline time"),
+        (3, "Baseline time"),
+        (1, "BASELINE TIME"),
+        (1, "Baseline time (clock)"),
+        (1, "  baseline time  "),
+    ],
+    ids=[
+        "row-0",
+        "row-1",
+        "row-3",
+        "uppercase",
+        "trailing-descriptive-text",
+        "surrounding-whitespace",
+    ],
+)
+def test_detect_baseline_row_finds_label_at_any_placement(label_row, label_value):
+    """The baseline row is located by a full-sheet scan, so its position is
+    not fixed relative to the header. Detection must be placement-agnostic,
+    case-insensitive, and tolerant of trailing label text."""
+    sheet_data = [["", "", ""] for _ in range(5)]
+    sheet_data[label_row][0] = label_value
+    assert spreadsheet._detect_baseline_row(sheet_data) == label_row
+
+
+def test_detect_baseline_row_absent_or_partial_label():
+    # No baseline row present at all.
+    assert spreadsheet._detect_baseline_row([["ID", "P01"], ["1", "00:10"]]) is None
+    # "Baseline" without "time" must not be mistaken for a baseline row.
+    assert spreadsheet._detect_baseline_row([["Baseline", "P01"]]) is None
 
 
 def test_build_sheet_context_with_observation_in_earlier_row():

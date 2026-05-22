@@ -59,106 +59,19 @@ jobs:
           enable-cache: true
 
       - name: Install dependencies (CPU-only torch)
+        # pytest-cov is installed CI-only, the same pattern as --torch-backend
+        # cpu (see AGENTS.md): kept out of pyproject.toml and uv.lock so
+        # end-user installs and local `uv run` stay unaffected.
         run: |
           uv venv
-          uv pip install ".[dev]" --torch-backend cpu
+          uv pip install ".[dev]" pytest-cov --torch-backend cpu
 
-      - name: Determine changed files
-        id: changes
-        if: github.event_name == 'pull_request'
-        run: |
-          git fetch --no-tags --depth=1 origin ${{ github.event.pull_request.base.sha }}
-          CHANGED=$(git diff --name-only ${{ github.event.pull_request.base.sha }}..HEAD)
-          echo "$CHANGED"
-          EOF_DELIM=$(dd if=/dev/urandom bs=15 count=1 status=none | base64)
-          echo "files<<${EOF_DELIM}" >> "$GITHUB_OUTPUT"
-          echo "$CHANGED" >> "$GITHUB_OUTPUT"
-          echo "${EOF_DELIM}" >> "$GITHUB_OUTPUT"
-
-      - name: Select test scope
-        id: scope
-        run: |
-          # On push to master or when no change info is available, run all tests
-          if [[ "${{ github.event_name }}" != "pull_request" ]]; then
-            echo "tests=" >> "$GITHUB_OUTPUT"
-            echo "Running full test suite (push to master)"
-            exit 0
-          fi
-
-          CHANGED="${{ steps.changes.outputs.files }}"
-          if [[ -z "$CHANGED" ]]; then
-            echo "tests=" >> "$GITHUB_OUTPUT"
-            echo "Running full test suite (no changed files detected)"
-            exit 0
-          fi
-
-          # Broad-impact files: any change triggers the full suite
-          BROAD="utils.py config.py tests/conftest.py tests/pytest.ini pyproject.toml uv.lock .github/workflows/tests.yml"
-          for broad in $BROAD; do
-            if echo "$CHANGED" | grep -Fqx "$broad"; then
-              echo "tests=" >> "$GITHUB_OUTPUT"
-              echo "Broad-impact file changed ($broad) — running full suite"
-              exit 0
-            fi
-          done
-
-          # Map source files to test files
-          TEST_FILES=""
-          add() { for t in "$@"; do TEST_FILES="$TEST_FILES $t"; done; }
-
-          echo "$CHANGED" | grep -qx "cli\.py"                && add tests/test_cli_args.py tests/test_cli_modes.py
-          echo "$CHANGED" | grep -qx "clipgen\.py"            && add tests/test_cli_args.py tests/test_cli_modes.py tests/test_clip_pipeline.py
-          echo "$CHANGED" | grep -qx "files\.py"              && add tests/test_files_and_artifacts.py tests/test_spreadsheet_generation.py
-          echo "$CHANGED" | grep -qx "spreadsheet\.py"        && add tests/test_files_and_artifacts.py tests/test_selectors.py tests/test_spreadsheet_generation.py
-          echo "$CHANGED" | grep -qx "viewer\.py"             && add tests/test_cli_modes.py tests/test_files_and_artifacts.py tests/test_manifest.py tests/test_viewer_data.py tests/test_viewer_inline.py
-          echo "$CHANGED" | grep -qx "screenspace\.py"        && add tests/test_screenspace.py tests/test_screenspace_api.py
-          echo "$CHANGED" | grep -qx "screenspace_server\.py" && add tests/test_screenspace_api.py
-          echo "$CHANGED" | grep -qx "server\.py"             && add tests/test_studio_api.py
-          echo "$CHANGED" | grep -qx "video\.py"              && add tests/test_video_commands.py tests/test_titlecards.py
-          echo "$CHANGED" | grep -qx "titlecards\.py"         && add tests/test_titlecards.py
-          echo "$CHANGED" | grep -qx "transcripts\.py"        && add tests/test_transcripts.py
-          echo "$CHANGED" | grep -qx "google_api\.py"         && add tests/test_google_and_excel_adapters.py
-          echo "$CHANGED" | grep -qx "excel_io\.py"           && add tests/test_google_and_excel_adapters.py
-
-          # If a test file itself changed, include it directly
-          for f in $(echo "$CHANGED" | grep "^tests/test_.*\.py$"); do
-            add "$f"
-          done
-
-          # Unknown source .py files trigger the full suite
-          for f in $(echo "$CHANGED" | grep "\.py$" | grep -v "^tests/"); do
-            case "$f" in
-              cli.py|clipgen.py|config.py|excel_io.py|files.py|google_api.py|\
-              interactive.py|screenspace.py|\
-              screenspace_server.py|server.py|spreadsheet.py|titlecards.py|\
-              transcripts.py|utils.py|video.py|viewer.py) ;;
-              *)
-                echo "Unknown source file: $f — running full suite"
-                echo "tests=" >> "$GITHUB_OUTPUT"
-                exit 0
-                ;;
-            esac
-          done
-
-          # Deduplicate and output
-          TEST_FILES=$(echo "$TEST_FILES" | tr ' ' '\n' | sort -u | tr '\n' ' ' | xargs)
-
-          if [[ -z "$TEST_FILES" ]]; then
-            echo "No matching test files — running full suite as safety fallback"
-            echo "tests=" >> "$GITHUB_OUTPUT"
-          else
-            echo "Selected tests: $TEST_FILES"
-            echo "tests=$TEST_FILES" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Run smoke tests
-        run: |
-          if [[ -n "${{ steps.scope.outputs.tests }}" ]]; then
-            echo "Running scoped tests: ${{ steps.scope.outputs.tests }}"
-            uv run --no-sync pytest -c tests/pytest.ini ${{ steps.scope.outputs.tests }}
-          else
-            uv run --no-sync pytest -c tests/pytest.ini
-          fi
+      - name: Run tests with coverage gate
+        # Always run the full suite. It finishes in well under a minute, and a
+        # scoped subset risks false-green PRs when a change breaks an untested
+        # sibling test file. The coverage floor lives in pyproject.toml
+        # ([tool.coverage.report] fail_under) and fails the run if breached.
+        run: uv run --no-sync pytest -c tests/pytest.ini --cov=. --cov-report=term
 
   lint:
     needs: [gate]
