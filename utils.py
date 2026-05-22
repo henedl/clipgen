@@ -966,7 +966,7 @@ def add_duration(start_time: str) -> str | None:
     )
 
 
-def _parse_single_timestamp_token(token: str) -> tuple[str, str | None] | None:
+def _parse_single_timestamp_token(token: str) -> tuple[str, str] | None:
     """Parse one token into a (start_time, end_time) pair, or None if invalid/skip.
 
     Handles: dash range (start-end), single timestamp with colon (add default
