@@ -968,7 +968,8 @@
       .then(function (data) {
         if (!data.ok || !state.sheetData) return;
         var artifacts = data.artifacts || [];
-        if (artifacts.length === 0) return;
+        var reels = data.reels || [];
+        if (artifacts.length === 0 && reels.length === 0) return;
 
         var seen = {};
         for (var i = 0; i < artifacts.length; i++) {
@@ -1027,7 +1028,6 @@
           var rk = pr.id || pr.file;
           if (rk) seenReel[rk] = true;
         }
-        var reels = data.reels || [];
         for (var ri = 0; ri < reels.length; ri++) {
           var reel = reels[ri];
           var rk2 = reel.id || reel.file;
@@ -1036,9 +1036,9 @@
           state.generatedReels.push(stampLog(reel));
         }
 
-
         renderArtifactQueue();
         updateCellClasses();
+        renderLog();
       })
       .catch(function () {});
   }
@@ -1090,6 +1090,24 @@
       loadManifestState();
     }
     state._jobStatusGenerateWasInProgress = !!gen.in_progress;
+
+    // ---- Intake generate (api/generate-intake) ----
+    var intake = status.intake || {};
+    if (intake.in_progress) {
+      if (!state.artifactGenerating) setArtifactGenerating(true);
+      qs("#cancelGenerateBtn").classList.remove("hidden");
+      var intakeTotal = intake.total || 0;
+      var intakeDone = intake.done || 0;
+      if (intakeTotal > 0) {
+        setButtonProgress("generateBtn", Math.min(intakeDone / intakeTotal, 1));
+      }
+    } else if (state._jobStatusIntakeWasInProgress) {
+      setArtifactGenerating(false);
+      qs("#cancelGenerateBtn").classList.add("hidden");
+      setButtonProgress("generateBtn", null);
+      loadManifestState();
+    }
+    state._jobStatusIntakeWasInProgress = !!intake.in_progress;
   }
 
   function pollJobStatus() {
@@ -1101,7 +1119,8 @@
         // page doesn't hammer the server when nothing is happening.
         var stillBusy =
           (data.reel && data.reel.in_progress) ||
-          (data.generate && data.generate.in_progress);
+          (data.generate && data.generate.in_progress) ||
+          (data.intake && data.intake.in_progress);
         if (stillBusy) {
           startJobStatusPoll();
         } else {
@@ -3043,8 +3062,14 @@
     el.textContent = done + " / " + total + " cells";
   }
 
+  function isGenerateFetchAborted(err) {
+    if (state.generateCancelledByUser) return true;
+    return !!(err && err.name === "AbortError");
+  }
+
   function onGenerate() {
     if (state.artifactGenerating || state.artifactQueue.length === 0) return;
+    state.generateCancelledByUser = false;
     setArtifactGenerating(true);
     qs("#cancelGenerateBtn").classList.remove("hidden");
 
@@ -3195,7 +3220,16 @@
           if (!response.ok) throw new Error("Server error " + response.status);
           return readNDJSONStream(response, handleLine).then(finishBranch);
         })
-        .catch(function () {
+        .catch(function (err) {
+          if (isGenerateFetchAborted(err)) {
+            cancelled = true;
+            for (var sq = 0; sq < sheetCardEls.length; sq++) {
+              var sc = sheetCardEls[sq];
+              if (sc && sc.classList.contains("queue-card-queued")) clearCardStatus(sc);
+            }
+            finishBranch();
+            return;
+          }
           // Mark every captured sheet card as failed so they don't stay
           // visually queued; finishBranch reports the failure tally.
           for (var j = 0; j < sheetCardEls.length; j++) {
@@ -3266,7 +3300,16 @@
           if (!response.ok) throw new Error("Server error " + response.status);
           return readNDJSONStream(response, handleIntakeLine).then(finishBranch);
         })
-        .catch(function () {
+        .catch(function (err) {
+          if (isGenerateFetchAborted(err)) {
+            cancelled = true;
+            for (var iq = 0; iq < intakeCardEls.length; iq++) {
+              var ic = intakeCardEls[iq];
+              if (ic && ic.classList.contains("queue-card-queued")) clearCardStatus(ic);
+            }
+            finishBranch();
+            return;
+          }
           for (var j = 0; j < intakeCardEls.length; j++) {
             if (intakeCardEls[j]) setCardResult(intakeCardEls[j], false);
           }
@@ -3282,6 +3325,7 @@
   }
 
   function onCancelGenerate() {
+    state.generateCancelledByUser = true;
     qs("#cancelGenerateBtn").classList.add("hidden");
     var aborts = state.activeGenerateAborts || [];
     for (var i = 0; i < aborts.length; i++) {

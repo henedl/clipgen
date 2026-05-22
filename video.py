@@ -1971,6 +1971,8 @@ def _parallel_extract_gifs(
                             "duration": gif_dur,
                         }
                     )
+                else:
+                    files.release_reservation(output_path)
                 utils.standard_print(f"  Captured {completed}/{total} at {ts_str}")
     except (OSError, RuntimeError) as exc:
         utils.debug_print(f"Parallel GIF extraction failed: {exc}")
@@ -2072,6 +2074,8 @@ def generate_interval_captures(
                     "duration": gif_dur,
                 }
             )
+        else:
+            files.release_reservation(output_path)
         utils.standard_print(f"  Captured {i + 1}/{total} at {ts_str}")
 
     utils.info_print(

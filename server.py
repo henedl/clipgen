@@ -127,6 +127,10 @@ _generate_job_state: dict[str, Any] = {
     "total": 0,
     "done": 0,
 }
+_intake_job_state: dict[str, Any] = {
+    "total": 0,
+    "done": 0,
+}
 
 
 # Cached gspread client + threaded-auth state for the Start overlay's Google
@@ -326,6 +330,19 @@ def _increment_generate_done(n: int = 1) -> None:
     """Advance the generate-job 'done' counter by n (one per yielded line)."""
     with _job_state_lock:
         _generate_job_state["done"] += n
+
+
+def _reset_intake_job_state(total: int) -> None:
+    """Initialize the intake progress snapshot when /api/generate-intake starts."""
+    with _job_state_lock:
+        _intake_job_state["total"] = max(0, int(total))
+        _intake_job_state["done"] = 0
+
+
+def _increment_intake_done(n: int = 1) -> None:
+    """Advance the intake-job 'done' counter by n (one per yielded line)."""
+    with _job_state_lock:
+        _intake_job_state["done"] += n
 
 
 def _mark_intake_active(active: bool) -> None:
@@ -735,6 +752,8 @@ def _process_intake_item(
     if not video_path:
         return {"_ok": False, "_error": f"No video for {participant}"}
 
+    out_path: str | None = None
+
     span_hash = hashlib.md5(f"{participant}_{start}_{end}".encode()).hexdigest()[:8]
     # Two intake events can cover the same participant span (e.g. distinct
     # Screenspace events at the same timestamp). Fold source metadata and the
@@ -765,6 +784,7 @@ def _process_intake_item(
     end_str = utils.seconds_to_timestamp(int(round(end)))
 
     if cancel_flag and cancel_flag():
+        files.release_reservation(out_path)
         return {"_ok": False, "_error": "cancelled", "_cancelled": True}
 
     success = video.run_ffmpeg(
@@ -777,6 +797,7 @@ def _process_intake_item(
     )
 
     if not success:
+        files.release_reservation(out_path)
         return {"_ok": False, "_error": "ffmpeg failed"}
 
     default_desc = (
@@ -1410,15 +1431,23 @@ def api_reel() -> FlaskResponse:
                         components.append(
                             utils.build_reel_component(clip, "", start_str, end_str)
                         )
+                req_cards, req_dur = pipeline._resolve_titlecard_options(
+                    titlecards_enabled, titlecard_duration_seconds
+                )
                 if components:
                     expected_id = pipeline.compute_reel_id(components)
                     with _generated_output_lock:
                         reels_snapshot = list(_generated_reels)
                     for reel in reels_snapshot:
-                        if (
-                            reel.get("id") == expected_id
-                            and Path(utils.resolve_output_path(reel["file"])).is_file()
-                        ):
+                        if reel.get("id") != expected_id:
+                            continue
+                        reel_path = Path(utils.resolve_output_path(reel["file"]))
+                        if not reel_path.is_file():
+                            continue
+                        matches = bool(reel.get("titlecards", False)) == req_cards and (
+                            not req_cards or reel.get("titlecardDuration") == req_dur
+                        )
+                        if matches:
                             yield (
                                 json.dumps(
                                     {
@@ -1431,6 +1460,16 @@ def api_reel() -> FlaskResponse:
                                 + "\n"
                             )
                             return
+                        # Stale reel (e.g. titlecards toggled): drop record + file.
+                        with _generated_output_lock:
+                            stale_id = reel.get("id")
+                            _generated_reels[:] = [
+                                r for r in _generated_reels if r.get("id") != stale_id
+                            ]
+                        try:
+                            reel_path.unlink(missing_ok=True)
+                        except OSError:
+                            pass
 
                 _reel_cancel_event.clear()
                 _reset_reel_job_state("reel")
@@ -1980,6 +2019,7 @@ def api_generate_intake() -> FlaskResponse:
             return json.dumps({"index": idx, "ok": False, "error": error}) + "\n"
 
         _mark_intake_active(True)
+        _reset_intake_job_state(len(items))
         try:
             workers = pipeline._resolve_clip_workers()
             if workers >= 2 and len(items) >= 2:
@@ -2007,6 +2047,7 @@ def api_generate_intake() -> FlaskResponse:
                                 + "\n"
                             )
                             continue
+                        _increment_intake_done()
                         yield _emit(idx, result)
                         if cancel_flag():
                             # Drain remaining submitted futures so workers can
@@ -2026,6 +2067,7 @@ def api_generate_intake() -> FlaskResponse:
                         index=idx,
                         cancel_flag=cancel_flag,
                     )
+                    _increment_intake_done()
                     yield _emit(idx, result)
             if cancel_flag():
                 yield json.dumps({"cancelled": True}) + "\n"
@@ -2223,11 +2265,14 @@ def api_reel_direct() -> FlaskResponse:
                         "file": Path(reel_name).name,
                         "source": "intake",
                         "description": f"Intake reel ({len(clip_paths)} segments)",
+                        "titlecards": cards_enabled,
+                        "titlecardDuration": card_duration if cards_enabled else 0,
                     }
                     _append_generated_reel(reel_record)
                     _save_manifest_quiet()
                     emit_event({"ok": True, "generated": 1, "reels": [reel_record]})
                 else:
+                    files.release_reservation(reel_name)
                     emit_event({"ok": False, "error": "Reel concatenation failed"})
             except Exception as exc:
                 emit_event({"ok": False, "error": str(exc)})
@@ -2278,9 +2323,11 @@ def api_job_status() -> FlaskResponse:
     with _busy_lock:
         reel_busy = _reel_in_progress
         generate_busy = _generate_in_progress
+        intake_busy = _intake_active > 0
     with _job_state_lock:
         reel_snapshot = dict(_reel_job_state)
         generate_snapshot = dict(_generate_job_state)
+        intake_snapshot = dict(_intake_job_state)
     return jsonify(
         {
             "ok": True,
@@ -2293,6 +2340,11 @@ def api_job_status() -> FlaskResponse:
                 "in_progress": generate_busy,
                 "cancelling": generate_busy and _generate_cancel_event.is_set(),
                 **generate_snapshot,
+            },
+            "intake": {
+                "in_progress": intake_busy,
+                "cancelling": intake_busy and _intake_cancel_event.is_set(),
+                **intake_snapshot,
             },
         }
     )
