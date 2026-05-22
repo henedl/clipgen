@@ -1197,6 +1197,11 @@ def api_reel() -> FlaskResponse:
     def stream_with_busy_release() -> Any:
         try:
             yield from stream()
+        except GeneratorExit:
+            # Client disconnected mid-stream — signal the background encoder to
+            # stop so the freed reel slot isn't held by an orphaned ffmpeg run.
+            _reel_cancel_event.set()
+            raise
         finally:
             _release_busy("reel")
 
@@ -1903,6 +1908,11 @@ def api_reel_direct() -> FlaskResponse:
     def stream_with_busy_release() -> Iterator[str]:
         try:
             yield from stream()
+        except GeneratorExit:
+            # Client disconnected mid-stream — signal the background encoder to
+            # stop so the freed reel slot isn't held by an orphaned ffmpeg run.
+            _reel_cancel_event.set()
+            raise
         finally:
             _release_busy("reel")
 
@@ -1953,7 +1963,10 @@ def _init_studio_state(worksheet: Any) -> None:
             sys.exit(1)
     else:
         _sheet_context = None
-    _generated_artifacts, _generated_reels = viewer._load_manifest_both()
+    # Rebind under the lock so a concurrent generate-worker extend can't land
+    # in the list being swapped out (e.g. spreadsheet switch mid-generation).
+    with _generated_output_lock:
+        _generated_artifacts, _generated_reels = viewer._load_manifest_both()
     _thumbnail_cache = OrderedDict()
 
 
