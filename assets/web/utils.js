@@ -1062,3 +1062,87 @@ var drawAmplitudeBands = function (ctx, opts) {
     ctx.stroke();
   }
 };
+
+// ---- Video helpers ----
+
+// Bridge the "paused <video> goes blank when the tab is hidden" gap.
+//
+// Chrome / Safari (and Edge, same engine as Chrome) will release the
+// decoded frame buffer — and sometimes the entire compositor texture — of
+// paused <video> elements while the tab is hidden, to free GPU memory. On
+// return, the element shows nothing until the next play or seek manages to
+// re-establish the surface. A plain `currentTime` nudge is unreliable
+// because the seek can land before the compositor has re-attached, and
+// because `readyState` may have dropped below HAVE_CURRENT_DATA while
+// hidden.
+//
+// Workaround: snapshot the current frame onto a canvas overlay just before
+// the browser has a chance to discard it (i.e. on visibilitychange→hidden
+// while paused), then keep the overlay visible until the live video proves
+// it has a fresh frame again (via the `seeked` / `play` / `loadedmetadata`
+// events). Same architectural trick Screenspace uses for its paused state,
+// except the pixels come from the live video instead of a server PNG.
+//
+// Install once per <video>. The helper attaches its own listeners (visibility,
+// play, seeked, emptied, loadedmetadata) and is idempotent — repeated calls
+// no-op.
+//
+// Requirements: the video's parent must be a positioned container (the
+// overlay is absolutely positioned inside it). `#videoFrame` in transcripts
+// already is `position: relative`.
+var clipgenInstallPausedFrameOverlay = function (video) {
+  if (!video || video._clipgenPausedOverlay) return;
+  var parent = video.parentNode;
+  if (!parent) return;
+
+  var canvas = document.createElement("canvas");
+  canvas.className = "video-paused-overlay";
+  // Inline styles so the helper works without page-specific CSS.
+  canvas.style.position = "absolute";
+  canvas.style.inset = "0";
+  canvas.style.width = "100%";
+  canvas.style.height = "100%";
+  canvas.style.objectFit = "contain";
+  canvas.style.pointerEvents = "none";
+  canvas.style.display = "none";
+  parent.appendChild(canvas);
+  video._clipgenPausedOverlay = canvas;
+
+  var hide = function () { canvas.style.display = "none"; };
+
+  var snapshot = function () {
+    if (!video.src || !video.paused) return;
+    var w = video.videoWidth, h = video.videoHeight;
+    // videoWidth/Height are only non-zero once the first frame has decoded;
+    // skip if we have nothing to paint.
+    if (!w || !h) return;
+    canvas.width = w;
+    canvas.height = h;
+    try {
+      canvas.getContext("2d").drawImage(video, 0, 0, w, h);
+      canvas.style.display = "";
+    } catch (_) {
+      // Cross-origin or other draw failure — leave overlay hidden, the page
+      // is no worse off than it was before this helper existed.
+    }
+  };
+
+  // The live video reasserts itself: drop the snapshot.
+  video.addEventListener("play", hide);
+  video.addEventListener("seeked", hide);
+  video.addEventListener("emptied", hide);
+  video.addEventListener("loadedmetadata", hide);
+
+  document.addEventListener("visibilitychange", function () {
+    if (document.hidden) {
+      snapshot();
+    } else if (video.paused && video.src) {
+      // Nudge currentTime to coax the video into producing a fresh frame;
+      // the `seeked` listener above will then hide the snapshot. We use a
+      // ~1 ms back-step (well under one frame at any reasonable framerate)
+      // because same-value assignment is sometimes optimized away.
+      var t = video.currentTime;
+      video.currentTime = t > 0.001 ? t - 0.001 : 0.001;
+    }
+  });
+};
