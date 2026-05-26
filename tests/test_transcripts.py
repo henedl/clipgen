@@ -315,6 +315,35 @@ class TestTranscribeVideoWhisperKwargs:
         assert captured["vad_filter"] is True
         assert "word_timestamps" not in captured
 
+    def test_no_audio_stream_returns_none_without_loading_model(
+        self, monkeypatch, capsys
+    ):
+        monkeypatch.setattr(config, "DEBUGGING", False)
+
+        def _fake_probe(_path):
+            return {
+                "width": 1920,
+                "height": 1080,
+                "video_codec": "h264",
+                "audio_codec": None,
+                "fps": 60.0,
+                "duration": 10.0,
+                "nb_frames": 600,
+            }
+
+        import video as video_mod
+
+        monkeypatch.setattr(video_mod, "probe_video_properties", _fake_probe)
+
+        def _fail_load(model_name=None):  # noqa: ARG001
+            raise AssertionError("_load_model must not be called when audio is absent")
+
+        monkeypatch.setattr(transcripts, "_load_model", _fail_load)
+
+        result = transcripts.transcribe_video("/fake/no_audio.mp4")
+        assert result is None
+        assert "No audio stream" in capsys.readouterr().out
+
 
 # ---------------------------------------------------------------------------
 # transcribe_video in debug mode
@@ -668,7 +697,7 @@ class TestTranscriptWorker:
         monkeypatch.setattr(
             video_mod,
             "probe_video_properties",
-            lambda *_a, **_k: {"duration": 100.0},
+            lambda *_a, **_k: {"duration": 100.0, "audio_codec": "aac"},
         )
         monkeypatch.setattr(
             transcripts, "load_transcripts_manifest", lambda: {"corrections": []}
@@ -701,6 +730,36 @@ class TestTranscriptWorker:
 
         assert task["status"] == "cancelled"
         assert task["partial_segments"] == []
+
+    def test_execute_task_fails_fast_when_video_has_no_audio(self, monkeypatch):
+        """A video with no audio stream fails immediately with a friendly error
+        and never loads the Whisper model."""
+        from unittest.mock import Mock
+
+        import video as video_mod
+
+        monkeypatch.setattr(config, "DEBUGGING", False)
+        monkeypatch.setattr(
+            video_mod,
+            "probe_video_properties",
+            lambda *_a, **_k: {"duration": 100.0, "audio_codec": None},
+        )
+        monkeypatch.setattr(
+            transcripts, "load_transcripts_manifest", lambda: {"corrections": []}
+        )
+        load_model = Mock()
+        monkeypatch.setattr(transcripts, "_load_model", load_model)
+
+        worker = transcripts.TranscriptWorker()
+        task = transcripts.create_transcript_task("P01", "/v.mp4")
+        task["status"] = "running"
+
+        worker._execute_task(task)
+
+        assert task["status"] == "failed"
+        assert "No audio stream" in task["error"]
+        assert task["partial_segments"] == []
+        load_model.assert_not_called()
 
     def test_remove_task(self):
         worker = transcripts.TranscriptWorker()

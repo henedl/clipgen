@@ -240,6 +240,17 @@ def transcribe_video(
     if _is_cancelled():
         raise _TranscriptionCancelled
 
+    # Short-circuit when the file has no audio stream — faster-whisper raises
+    # an opaque "tuple index out of range" from its decoder in that case.
+    import video as video_mod
+
+    props = video_mod.probe_video_properties(video_path)
+    if props is not None and not props.get("audio_codec"):
+        utils.warning_print(
+            f"No audio stream in {Path(video_path).name} — skipping transcription."
+        )
+        return None
+
     model = _load_model(resolved_model)
     if model is None:
         return None
@@ -281,7 +292,12 @@ def transcribe_video(
     except _TranscriptionCancelled:
         raise
     except Exception as exc:
-        utils.warning_print(f"Transcription failed for {Path(video_path).name}: {exc}")
+        import traceback
+
+        utils.warning_print(
+            f"Transcription failed for {Path(video_path).name}: {exc}",
+            details=traceback.format_exc().rstrip().splitlines(),
+        )
         return None
 
 
@@ -846,6 +862,16 @@ class TranscriptWorker:
         props = video_mod.probe_video_properties(video_path)
         if props:
             duration = props.get("duration", 0.0)
+
+        if props is not None and not props.get("audio_codec"):
+            with self._lock:
+                task["status"] = TASK_STATUS_FAILED
+                task["error"] = (
+                    "No audio stream — this video has no audio track to transcribe."
+                )
+                task["partial_segments"] = []
+                task["completed_at"] = datetime.now(timezone.utc).isoformat()
+            return
 
         # Load corrections for context keywords
         manifest = load_transcripts_manifest()
