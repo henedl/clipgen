@@ -6270,7 +6270,8 @@
   function initKeyboard() {
     function onKeyDown(e) {
       // Don't capture when typing in inputs
-      if (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA" || e.target.tagName === "SELECT") return;
+      var t = e.target;
+      if (t && t.matches && t.matches("input, textarea, select, [contenteditable=true]")) return;
 
       if (e.key === "ArrowLeft") {
         e.preventDefault();
