@@ -1219,7 +1219,7 @@ body {
 }
 
 #workflowIntervalSlot .param-control input[type="number"] {
-  width: 3rem;
+  width: 4.5rem;
   height: 28px;
   border-radius: 0 calc(var(--radius) - 2px) calc(var(--radius) - 2px) 0;
   text-align: center;
