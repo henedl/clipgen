@@ -2897,9 +2897,18 @@
 
     var renderer = MULTITOOL_PARAM_RENDERERS[stepType];
     if (renderer) renderer(body, idx, sfx);
+    // _initial is consumed at first render; drop it so adding/removing other steps later
+    // doesn't overwrite the user's in-progress edits with the original saved values.
+    delete state.multitoolSteps[idx]._initial;
   }
 
   function _mtRenderColor(body, idx, sfx) {
+    var init = state.multitoolSteps[idx]._initial || {};
+    var initColor = init.target_color || {};
+    var initH = numberOrDefault(initColor.h, 0);
+    var initS = numberOrDefault(initColor.s, 0);
+    var initV = numberOrDefault(initColor.v, 0);
+    var initTol = init.tolerance ? Math.round(init.tolerance.h * 100 / 90) : 30;
     var row1 = el("div", "param-row");
     row1.appendChild(el("span", "param-label", "Hex color"));
     var ctrl1 = el("div", "param-control");
@@ -2907,6 +2916,8 @@
     hexIn.type = "text"; hexIn.id = "paramColorHex" + sfx; hexIn.autocomplete = "off";
     hexIn.className = "color-hex-input"; hexIn.placeholder = "#000000"; hexIn.maxLength = 7;
     hexIn.style.width = "5.5rem";
+    var initRgb = hsvToRgb(initH, initS, initV);
+    hexIn.value = rgbToHex(initRgb.r, initRgb.g, initRgb.b);
     ctrl1.appendChild(hexIn);
     var pipBtn = el("button", "btn btn-small btn-pipette");
     pipBtn.title = "Pick color from frame";
@@ -2917,9 +2928,9 @@
       activatePipette();
     });
     ctrl1.appendChild(pipBtn);
-    var hH = document.createElement("input"); hH.type = "hidden"; hH.id = "paramColorH" + sfx; hH.value = "0";
-    var hS = document.createElement("input"); hS.type = "hidden"; hS.id = "paramColorS" + sfx; hS.value = "0";
-    var hV = document.createElement("input"); hV.type = "hidden"; hV.id = "paramColorV" + sfx; hV.value = "0";
+    var hH = document.createElement("input"); hH.type = "hidden"; hH.id = "paramColorH" + sfx; hH.value = String(initH);
+    var hS = document.createElement("input"); hS.type = "hidden"; hS.id = "paramColorS" + sfx; hS.value = String(initS);
+    var hV = document.createElement("input"); hV.type = "hidden"; hV.id = "paramColorV" + sfx; hV.value = String(initV);
     ctrl1.appendChild(hH); ctrl1.appendChild(hS); ctrl1.appendChild(hV);
     row1.appendChild(ctrl1);
     body.appendChild(row1);
@@ -2943,26 +2954,30 @@
         hV.value = Math.round(v * 255);
       }
     });
-    _mtAddNumberRow(body, "Tolerance", "paramColorTol" + sfx, 0, 100, 30, 1);
+    _mtAddNumberRow(body, "Tolerance", "paramColorTol" + sfx, 0, 100, initTol, 1);
   }
 
   function _mtRenderChange(body, idx, sfx) {
-    _mtAddNumberRow(body, "Threshold", "paramChangeThresh" + sfx, 0.01, 0.50, 0.03, 0.01);
-    _mtAddNumberRow(body, "Noise", "paramChangeNoise" + sfx, 0, 100, 30, 1);
+    var init = state.multitoolSteps[idx]._initial || {};
+    _mtAddNumberRow(body, "Threshold", "paramChangeThresh" + sfx, 0.01, 0.50, numberOrDefault(init.threshold, 0.03), 0.01);
+    _mtAddNumberRow(body, "Noise", "paramChangeNoise" + sfx, 0, 100, intOrDefault(init.noise_threshold, 30), 1);
   }
 
   function _mtRenderSimilarity(body, idx, sfx) {
+    var init = state.multitoolSteps[idx]._initial || {};
     _mtAddCaptureRefRow(body, idx, "Reference", "paramSimRef" + sfx);
-    _mtAddNumberRow(body, "Threshold", "paramSimThresh" + sfx, 0.50, 1.00, 0.90, 0.01);
+    _mtAddNumberRow(body, "Threshold", "paramSimThresh" + sfx, 0.50, 1.00, numberOrDefault(init.threshold, 0.90), 0.01);
   }
 
   function _mtRenderText(body, idx, sfx) {
+    var init = state.multitoolSteps[idx]._initial || {};
     var r1 = el("div", "param-row");
     r1.appendChild(el("span", "param-label", "Search"));
     var c1 = el("div", "param-control");
     var searchIn = document.createElement("input");
     searchIn.type = "text"; searchIn.id = "paramTextSearch" + sfx; searchIn.autocomplete = "off";
     searchIn.placeholder = "Search text...";
+    searchIn.value = init.search_string || "";
     searchIn.style.flex = "1"; searchIn.style.fontSize = "var(--text-xs)";
     searchIn.style.padding = "var(--space-1)";
     searchIn.style.border = "1px solid var(--color-border)";
@@ -2972,10 +2987,11 @@
     c1.appendChild(searchIn);
     r1.appendChild(c1);
     body.appendChild(r1);
-    _mtAddNumberRow(body, "Fuzzy", "paramTextFuzzy" + sfx, 0.50, 1.00, 0.80, 0.01);
+    _mtAddNumberRow(body, "Fuzzy", "paramTextFuzzy" + sfx, 0.50, 1.00, numberOrDefault(init.fuzzy_threshold, 0.80), 0.01);
   }
 
   function _mtRenderNumbers(body, idx, sfx) {
+    var init = state.multitoolSteps[idx]._initial || {};
     var r1 = el("div", "param-row");
     r1.appendChild(el("span", "param-label", "Operator"));
     var c1 = el("div", "param-control");
@@ -2986,6 +3002,7 @@
       var opt = document.createElement("option"); opt.value = pair[0]; opt.textContent = pair[1];
       sel.appendChild(opt);
     });
+    sel.value = init.operator || "gt";
     c1.appendChild(sel);
     r1.appendChild(c1);
     body.appendChild(r1);
@@ -2995,18 +3012,21 @@
     var targetIn = document.createElement("input");
     targetIn.type = "number"; targetIn.id = "paramNumTarget" + sfx; targetIn.style.width = "4rem";
     targetIn.style.fontSize = "var(--text-xs)";
+    targetIn.value = numberOrDefault(init.target_value, 0);
     c2.appendChild(targetIn);
     r2.appendChild(c2);
     body.appendChild(r2);
   }
 
   function _mtRenderTemplate(body, idx, sfx) {
+    var init = state.multitoolSteps[idx]._initial || {};
     _mtAddCaptureRefRow(body, idx, "Template", "paramTemplateRef" + sfx);
-    _mtAddNumberRow(body, "Threshold", "paramTemplateThresh" + sfx, 0.50, 1.00, 0.70, 0.01);
+    _mtAddNumberRow(body, "Threshold", "paramTemplateThresh" + sfx, 0.50, 1.00, numberOrDefault(init.threshold, 0.70), 0.01);
   }
 
   function _mtRenderFlow(body, idx, sfx) {
-    _mtAddNumberRow(body, "Magnitude", "paramFlowMag" + sfx, 0.5, 20, 2.0, 0.5);
+    var init = state.multitoolSteps[idx]._initial || {};
+    _mtAddNumberRow(body, "Magnitude", "paramFlowMag" + sfx, 0.5, 20, numberOrDefault(init.magnitude_threshold, 2.0), 0.5);
   }
 
   function _mtRenderScene(body, idx, sfx) {
@@ -3069,10 +3089,11 @@
   }
 
   function _mtRenderInactivity(body, idx, sfx) {
+    var init = state.multitoolSteps[idx]._initial || {};
     var r1 = el("div", "param-row");
     r1.appendChild(el("span", "param-label", "Sensitivity"));
     var c1 = el("div", "param-control");
-    var inactSlider = rangeInput("paramInactThresh" + sfx, 0, 30, 10, 1);
+    var inactSlider = rangeInput("paramInactThresh" + sfx, 0, 30, intOrDefault(init.threshold, 10), 1);
     c1.appendChild(inactSlider);
     var inactVal = el("span", "param-value");
     inactVal.textContent = inactSlider.value;
@@ -3167,45 +3188,8 @@
     if (params.scene_references) step._scenes = params.scene_references.map(function (ref) {
       return { name: ref.name, timestamp: ref.timestamp, threshold: numberOrDefault(ref.threshold, 0.75) };
     });
-    step._importedParams = params;
+    step._initial = params;
     return step;
-  }
-
-  function restoreImportedStepValues() {
-    state.multitoolSteps.forEach(function (step, i) {
-      if (!step._importedParams) return;
-      var s = step._importedParams;
-      var sfx = "_mt" + i;
-      if (step.type === "color" && s.target_color) {
-        var h = numberOrDefault(s.target_color.h, 0);
-        var sat = numberOrDefault(s.target_color.s, 0);
-        var val = numberOrDefault(s.target_color.v, 0);
-        setInputValue("#paramColorH" + sfx, h);
-        setInputValue("#paramColorS" + sfx, sat);
-        setInputValue("#paramColorV" + sfx, val);
-        var stol = s.tolerance ? Math.round(s.tolerance.h * 100 / 90) : 30;
-        setInputValue("#paramColorTol" + sfx, stol);
-        var rgb = hsvToRgb(h, sat, val);
-        setInputValue("#paramColorHex" + sfx, rgbToHex(rgb.r, rgb.g, rgb.b));
-      } else if (step.type === "change") {
-        setInputValue("#paramChangeThresh" + sfx, numberOrDefault(s.threshold, 0.03));
-        setInputValue("#paramChangeNoise" + sfx, intOrDefault(s.noise_threshold, 30));
-      } else if (step.type === "similarity") {
-        setInputValue("#paramSimThresh" + sfx, numberOrDefault(s.threshold, 0.90));
-      } else if (step.type === "text") {
-        setInputValue("#paramTextSearch" + sfx, s.search_string || "");
-        setInputValue("#paramTextFuzzy" + sfx, numberOrDefault(s.fuzzy_threshold, 0.80));
-      } else if (step.type === "numbers") {
-        setInputValue("#paramNumOperator" + sfx, s.operator || "gt");
-        setInputValue("#paramNumTarget" + sfx, numberOrDefault(s.target_value, 0));
-      } else if (step.type === "template") {
-        setInputValue("#paramTemplateThresh" + sfx, numberOrDefault(s.threshold, 0.70));
-      } else if (step.type === "flow") {
-        setInputValue("#paramFlowMag" + sfx, numberOrDefault(s.magnitude_threshold, 2.0));
-      }
-      delete step._importedParams;
-    });
-    syncValueDisplays();
   }
 
   function renderMultitoolParams(container) {
@@ -3360,7 +3344,6 @@
         }
         state.multitoolSteps.push(step);
         renderWorkflowParams();
-        restoreImportedStepValues();
         showToast("Imported " + task.type + " task as step");
         return;
       }
@@ -5351,7 +5334,17 @@
       }
     }
 
-    // For multitool, rebuild steps state before rendering
+    // For scene, restore references into state before rendering so the list shows them.
+    if (task.type === "scene") {
+      var sceneParams = task.parameters || {};
+      state.sceneReferences = (sceneParams.scene_references || []).map(function (ref) {
+        return { name: ref.name, timestamp: ref.timestamp, threshold: numberOrDefault(ref.threshold, 0.75) };
+      });
+    }
+
+    // For multitool, rebuild steps state before rendering. `_initial` carries the saved
+    // per-step config so the _mtRender* functions can set input values at element creation
+    // time (rather than via a post-render setInputValue pass).
     if (task.type === "multitool") {
       var mtParams = task.parameters || {};
       state.multitoolSteps = (mtParams.steps || []).map(function (s) {
@@ -5363,6 +5356,7 @@
         if (s.scene_references) step._scenes = s.scene_references.map(function (ref) {
           return { name: ref.name, timestamp: ref.timestamp, threshold: numberOrDefault(ref.threshold, 0.75) };
         });
+        step._initial = s;
         return step;
       });
     }
@@ -5373,55 +5367,16 @@
     params = task.parameters || {};
     if (task.type === "multitool") {
       setInputValue("#paramMultitoolInterval", numberOrDefault(params.interval, 1.0));
-      if (params.event_label) setInputValue("#paramEventLabel", params.event_label);
-      if (params.detect_first) {
-        var dfEl = qs("#paramDetectFirst");
-        if (dfEl) dfEl.checked = true;
-      }
-      // Restore per-step values
-      (params.steps || []).forEach(function (s, i) {
-        var sfx = "_mt" + i;
-        if (s.region_ref) {
-          setInputValue("#paramStepRegion" + sfx, regionRefKey(s.region_ref));
-        } else if (s.region) {
-          setInputValue("#paramStepRegion" + sfx, regionRefKey(activeRegionRef(s.region)));
-        }
-        if (s.type === "color" && s.target_color) {
-          var h = numberOrDefault(s.target_color.h, 0);
-          var sat = numberOrDefault(s.target_color.s, 0);
-          var val = numberOrDefault(s.target_color.v, 0);
-          setInputValue("#paramColorH" + sfx, h);
-          setInputValue("#paramColorS" + sfx, sat);
-          setInputValue("#paramColorV" + sfx, val);
-          var stol = s.tolerance ? Math.round(s.tolerance.h * 100 / 90) : 30;
-          setInputValue("#paramColorTol" + sfx, stol);
-          var rgb = hsvToRgb(h, sat, val);
-          setInputValue("#paramColorHex" + sfx, rgbToHex(rgb.r, rgb.g, rgb.b));
-        } else if (s.type === "change") {
-          setInputValue("#paramChangeThresh" + sfx, numberOrDefault(s.threshold, 0.03));
-          setInputValue("#paramChangeNoise" + sfx, intOrDefault(s.noise_threshold, 30));
-        } else if (s.type === "similarity") {
-          setInputValue("#paramSimThresh" + sfx, numberOrDefault(s.threshold, 0.90));
-        } else if (s.type === "text") {
-          setInputValue("#paramTextSearch" + sfx, s.search_string || "");
-          setInputValue("#paramTextFuzzy" + sfx, numberOrDefault(s.fuzzy_threshold, 0.80));
-        } else if (s.type === "numbers") {
-          setInputValue("#paramNumOperator" + sfx, s.operator || "gt");
-          setInputValue("#paramNumTarget" + sfx, numberOrDefault(s.target_value, 0));
-        } else if (s.type === "template") {
-          setInputValue("#paramTemplateThresh" + sfx, numberOrDefault(s.threshold, 0.70));
-        } else if (s.type === "flow") {
-          setInputValue("#paramFlowMag" + sfx, numberOrDefault(s.magnitude_threshold, 2.0));
-        }
-      });
     } else if (task.type === "color") {
-      setInputValue("#paramColorH", params.target_color ? params.target_color.h : 90);
-      setInputValue("#paramColorS", params.target_color ? params.target_color.s : 200);
-      setInputValue("#paramColorV", params.target_color ? params.target_color.v : 200);
+      var tc = params.target_color || {};
+      var ch = numberOrDefault(tc.h, 90);
+      var cs = numberOrDefault(tc.s, 200);
+      var cv = numberOrDefault(tc.v, 200);
       var savedTol = params.tolerance ? Math.round(params.tolerance.h * 100 / 90) : 30;
       setInputValue("#paramColorTol", savedTol);
       setInputValue("#paramColorInterval", numberOrDefault(params.interval, 1.0));
-      updateColorPreview();
+      // setTargetColor writes hidden h/s/v + hex input + preview + palette + brightness strip.
+      setTargetColor(ch, cs, cv);
     } else if (task.type === "change") {
       setInputValue("#paramChangeThresh", numberOrDefault(params.threshold, 0.03));
       setInputValue("#paramChangeNoise", intOrDefault(params.noise_threshold, 30));
@@ -5436,25 +5391,53 @@
       if (params.languages && params.languages[0]) {
         setInputValue("#paramTextLang", params.languages[0]);
       }
+    } else if (task.type === "numbers") {
+      setInputValue("#paramNumOperator", params.operator || "gt");
+      // Fire change so range/target row visibility tracks the restored operator
+      // (listener attached in renderNumbersParams).
+      var opSel = qs("#paramNumOperator");
+      if (opSel) opSel.dispatchEvent(new Event("change"));
+      if (params.operator === "range") {
+        setInputValue("#paramNumMin", numberOrDefault(params.range_min, 0));
+        setInputValue("#paramNumMax", numberOrDefault(params.range_max, 100));
+      } else {
+        setInputValue("#paramNumTarget", numberOrDefault(params.target_value, 100));
+      }
+      setInputValue("#paramNumInterval", numberOrDefault(params.interval, 2.0));
     } else if (task.type === "timelapse") {
       setInputValue("#paramTlSpeed", numberOrDefault(params.speedup_factor, 10));
       setInputValue("#paramTlFormat", params.output_format || "mp4");
+      if (params.sample_interval !== undefined) {
+        setInputValue("#paramTlSampleInterval", params.sample_interval);
+      }
     } else if (task.type === "template") {
       if (params.reference_timestamp !== undefined) {
         state.referenceTimestamp = params.reference_timestamp;
       }
       setInputValue("#paramTemplateThresh", numberOrDefault(params.threshold, 0.70));
       setInputValue("#paramTemplateInterval", numberOrDefault(params.interval, 1.0));
+      if (params.template_scale) {
+        setInputValue("#paramTemplateScale", Math.round(params.template_scale * 100));
+      }
     } else if (task.type === "flow") {
       setInputValue("#paramFlowMag", numberOrDefault(params.magnitude_threshold, 2.0));
       setInputValue("#paramFlowInterval", numberOrDefault(params.interval, 1.0));
     } else if (task.type === "scene") {
-      if (params.scene_references) {
-        state.sceneReferences = params.scene_references.map(function (ref) {
-          return { name: ref.name, timestamp: ref.timestamp, threshold: numberOrDefault(ref.threshold, 0.75) };
-        });
-      }
       setInputValue("#paramSceneInterval", numberOrDefault(params.interval, 1.0));
+    } else if (task.type === "inactivity") {
+      setInputValue("#paramInactThresh", intOrDefault(params.threshold, 10));
+      setInputValue("#paramInactMinDur", numberOrDefault(params.min_duration, 2.0));
+      setInputValue("#paramInactInterval", numberOrDefault(params.interval, 1.0));
+    }
+
+    // event_label and detect_first apply to every non-timelapse task type
+    // (see gatherWorkflowParams for the symmetric save path).
+    if (task.type !== "timelapse") {
+      if (params.event_label) setInputValue("#paramEventLabel", params.event_label);
+      if (params.detect_first) {
+        var dfEl = qs("#paramDetectFirst");
+        if (dfEl) dfEl.checked = true;
+      }
     }
 
     syncValueDisplays();
