@@ -1222,6 +1222,11 @@ body {
   animation: pill-dot-pulse 1.4s ease-in-out infinite;
 }
 
+.pill-dot--queued {
+  background: var(--color-text-dim);
+  border-color: var(--color-text-dim);
+}
+
 @keyframes pill-dot-pulse {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.3; }

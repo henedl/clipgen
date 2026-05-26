@@ -2588,7 +2588,8 @@
   state.pillOptionsOpen = null; // pid of the pill whose options pane is open
 
   function _dotStateTranscription(p, task) {
-    if (task && (task.status === "running" || task.status === "queued")) return "running";
+    if (task && task.status === "queued") return "queued";
+    if (task && task.status === "running") return "running";
     if (task && task.status === "failed") return "failed";
     if (p.has_transcript) return "done";
     return "idle";
@@ -2724,6 +2725,7 @@
   function _dotStateLabel(st) {
     if (st === "done") return "done";
     if (st === "running") return "in progress\u2026";
+    if (st === "queued") return "queued";
     if (st === "failed") return "failed";
     return "not started";
   }
