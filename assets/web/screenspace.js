@@ -3299,6 +3299,15 @@
       stepsDiv.appendChild(card);
     });
 
+    if (state.multitoolSteps.length === 0) {
+      // Visible drop target so a Task card has somewhere to land when the
+      // step list is empty (an empty flex container is 0px tall and never
+      // receives dragover events).
+      var emptyDz = el("div", "multitool-empty-dropzone",
+        "Drag a Task here, or use + Add Step below");
+      stepsDiv.appendChild(emptyDz);
+    }
+
     // Drag-and-drop reordering
     stepsDiv.addEventListener("dragstart", function (e) {
       var card = e.target.closest(".multitool-step");
@@ -3410,7 +3419,7 @@
     addRow.appendChild(addBtn);
     container.appendChild(addRow);
 
-    if (state.multitoolSteps.length < 2) {
+    if (state.multitoolSteps.length === 1) {
       container.appendChild(el("div", "multitool-hint", "Add at least 2 tool steps to create a multi-factor filter."));
     }
   }
