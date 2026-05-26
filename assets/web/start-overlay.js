@@ -520,7 +520,12 @@
         btn.classList.add("is-current");
         btn.title = "Currently loaded";
       }
-      btn.appendChild(el("span", "rail-recent__path mono", project.input || ""));
+      var paths = el("span", "rail-recent__paths");
+      paths.appendChild(el("span", "rail-recent__path mono", project.input || ""));
+      if (project.output && project.output !== project.input) {
+        paths.appendChild(el("span", "rail-recent__path rail-recent__path--secondary mono", project.output));
+      }
+      btn.appendChild(paths);
       var when = formatWhen(project.last_opened);
       if (when) btn.appendChild(el("span", "rail-recent__when", when));
       btn.addEventListener("click", function () {
