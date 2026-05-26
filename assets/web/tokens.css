@@ -116,21 +116,29 @@
   /* Severity-tinted cell data — chip bg uses transparent so the cell-hover
    * background shows through; float bg is opaque (mixed with --bg) so
    * floating popovers don't reveal whatever they overlay. fg is shared. */
-  --cell-data-high-bg:           color-mix(in srgb, var(--severity-high) 18%, transparent);
-  --cell-data-high-bg-solid:     color-mix(in srgb, var(--severity-high) 18%, var(--bg));
-  --cell-data-high-fg:           var(--severity-high);
-  --cell-data-medium-bg:         color-mix(in srgb, var(--severity-medium) 18%, transparent);
-  --cell-data-medium-bg-solid:   color-mix(in srgb, var(--severity-medium) 18%, var(--bg));
-  --cell-data-medium-fg:         var(--severity-medium);
-  --cell-data-positive-bg:       color-mix(in srgb, var(--severity-positive) 18%, transparent);
-  --cell-data-positive-bg-solid: color-mix(in srgb, var(--severity-positive) 18%, var(--bg));
-  --cell-data-positive-fg:       var(--severity-positive);
+  --cell-data-critical-bg:            color-mix(in srgb, var(--severity-critical) 18%, transparent);
+  --cell-data-critical-bg-solid:      color-mix(in srgb, var(--severity-critical) 18%, var(--bg));
+  --cell-data-critical-fg:            var(--severity-critical);
+  --cell-data-high-bg:                color-mix(in srgb, var(--severity-high) 18%, transparent);
+  --cell-data-high-bg-solid:          color-mix(in srgb, var(--severity-high) 18%, var(--bg));
+  --cell-data-high-fg:                var(--severity-high);
+  --cell-data-medium-bg:              color-mix(in srgb, var(--severity-medium) 18%, transparent);
+  --cell-data-medium-bg-solid:        color-mix(in srgb, var(--severity-medium) 18%, var(--bg));
+  --cell-data-medium-fg:              var(--severity-medium);
+  --cell-data-positive-bg:            color-mix(in srgb, var(--severity-positive) 18%, transparent);
+  --cell-data-positive-bg-solid:      color-mix(in srgb, var(--severity-positive) 18%, var(--bg));
+  --cell-data-positive-fg:            var(--severity-positive);
+  --cell-data-very-positive-bg:       color-mix(in srgb, var(--severity-very-positive) 18%, transparent);
+  --cell-data-very-positive-bg-solid: color-mix(in srgb, var(--severity-very-positive) 18%, var(--bg));
+  --cell-data-very-positive-fg:       var(--severity-very-positive);
 
   /* Severity (prototype palette) */
-  --severity-positive: #4ade80;
-  --severity-medium:   #fbbf24;
-  --severity-high:     #f87171;
-  --severity-na:       rgba(255, 255, 255, 0.35);
+  --severity-positive:      #4ade80;
+  --severity-very-positive: #22c55e;
+  --severity-medium:        #fbbf24;
+  --severity-high:          #f87171;
+  --severity-critical:      #ef4444;
+  --severity-na:            rgba(255, 255, 255, 0.35);
 
   /* Pop shadow — used by popovers, dropdowns, the annotation editor */
   --shadow-pop: 0 12px 36px rgba(0, 0, 0, 0.45), 0 2px 8px rgba(0, 0, 0, 0.3);
@@ -159,13 +167,13 @@
   --shadow-focus: 0 0 0 2px var(--accent);
 
   /* Severity legacy aliases (--sev-* → --severity-*) */
-  --sev-critical:      var(--severity-high);
+  --sev-critical:      var(--severity-critical);
   --sev-high:          var(--severity-high);
   --sev-medium:        var(--severity-medium);
   --sev-low:           var(--severity-medium);
   --sev-na:            var(--severity-na);
   --sev-positive:      var(--severity-positive);
-  --sev-very-positive: var(--severity-positive);
+  --sev-very-positive: var(--severity-very-positive);
   --sev-unknown:       var(--fg-faint);
 
   /* Content-type colors (kept distinct from severity for export viewers etc.) */

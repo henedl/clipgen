@@ -1158,13 +1158,13 @@ html[data-theme="dark"] {
   --color-panel-shadow: rgba(0, 0, 0, 0.7);
   --color-selected-ring: #0b1120;
   --color-tooltip-shadow: rgba(0, 0, 0, 0.7);
-  --sev-critical: #f87171;
+  --sev-critical: #ef4444;
   --sev-high: #fb7185;
   --sev-medium: #fdba74;
   --sev-low: #fde047;
   --sev-na: #67e8f9;
   --sev-positive: #86efac;
-  --sev-very-positive: #4ade80;
+  --sev-very-positive: #22c55e;
   --sev-unknown: #94a3b8;
 }
 

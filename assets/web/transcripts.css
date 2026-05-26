@@ -1287,10 +1287,6 @@ body {
   box-shadow: 0 0 0 1px var(--border-strong) inset;
 }
 
-.pill--active .pill-id {
-  font-weight: 600;
-}
-
 .pill--failed {
   border-color: color-mix(in srgb, var(--sev-critical) 45%, var(--color-border));
 }
