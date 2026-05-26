@@ -3221,6 +3221,53 @@
     return step;
   }
 
+  // Walk the current step list, read each step's per-input DOM values, and
+  // store them on step._initial in the same shape the _mtRender* helpers
+  // expect. Call before any list mutation (add / remove / reorder / import)
+  // so the upcoming renderWorkflowParams() restores values instead of
+  // collapsing them back to per-input defaults. Region, _refTs and _scenes
+  // already live on the step object, so they don't need snapshotting.
+  function snapshotMultitoolStepValues() {
+    state.multitoolSteps.forEach(function (step, idx) {
+      var sfx = "_mt" + idx;
+      var init = step._initial || {};
+      if (step.type === "color") {
+        var prevColor = init.target_color || {};
+        init.target_color = {
+          h: numberOrDefault((qs("#paramColorH" + sfx) || {}).value, prevColor.h || 0),
+          s: numberOrDefault((qs("#paramColorS" + sfx) || {}).value, prevColor.s || 0),
+          v: numberOrDefault((qs("#paramColorV" + sfx) || {}).value, prevColor.v || 0),
+        };
+        var tol = numberOrDefault((qs("#paramColorTol" + sfx) || {}).value, 30);
+        init.tolerance = {
+          h: Math.round(tol * 90 / 100),
+          s: Math.round(tol * 128 / 100),
+          v: Math.round(tol * 128 / 100),
+        };
+      } else if (step.type === "change") {
+        init.threshold = numberOrDefault((qs("#paramChangeThresh" + sfx) || {}).value, init.threshold);
+        init.noise_threshold = intOrDefault((qs("#paramChangeNoise" + sfx) || {}).value, init.noise_threshold);
+      } else if (step.type === "similarity") {
+        init.threshold = numberOrDefault((qs("#paramSimThresh" + sfx) || {}).value, init.threshold);
+      } else if (step.type === "text") {
+        var searchEl = qs("#paramTextSearch" + sfx);
+        if (searchEl) init.search_string = searchEl.value;
+        init.fuzzy_threshold = numberOrDefault((qs("#paramTextFuzzy" + sfx) || {}).value, init.fuzzy_threshold);
+      } else if (step.type === "numbers") {
+        var opEl = qs("#paramNumOperator" + sfx);
+        if (opEl) init.operator = opEl.value;
+        init.target_value = numberOrDefault((qs("#paramNumTarget" + sfx) || {}).value, init.target_value);
+      } else if (step.type === "template") {
+        init.threshold = numberOrDefault((qs("#paramTemplateThresh" + sfx) || {}).value, init.threshold);
+      } else if (step.type === "flow") {
+        init.magnitude_threshold = numberOrDefault((qs("#paramFlowMag" + sfx) || {}).value, init.magnitude_threshold);
+      } else if (step.type === "inactivity") {
+        init.threshold = intOrDefault((qs("#paramInactThresh" + sfx) || {}).value, init.threshold);
+      }
+      step._initial = init;
+    });
+  }
+
   function renderMultitoolParams(container) {
     var stepsDiv = el("div", "multitool-steps");
     state.multitoolSteps.forEach(function (step, idx) {
@@ -3278,6 +3325,7 @@
       (function (capturedIdx) {
         removeBtn.addEventListener("click", function (e) {
           e.stopPropagation();
+          snapshotMultitoolStepValues();
           state.multitoolSteps.splice(capturedIdx, 1);
           renderWorkflowParams();
           updateRunButton();
@@ -3380,6 +3428,7 @@
           showToast(task.type + " cannot be added as a multitool step");
           return;
         }
+        snapshotMultitoolStepValues();
         state.multitoolSteps.push(step);
         renderWorkflowParams();
         showToast("Imported " + task.type + " task as step");
@@ -3391,6 +3440,7 @@
       if (isNaN(fromIdx)) return;
       var toIdx = getMultitoolDropIndex(stepsDiv, e.clientY);
       if (fromIdx === toIdx) return;
+      snapshotMultitoolStepValues();
       var moved = state.multitoolSteps.splice(fromIdx, 1)[0];
       if (toIdx > fromIdx) toIdx--;
       state.multitoolSteps.splice(toIdx, 0, moved);
@@ -3412,6 +3462,7 @@
     var addBtn = el("button", "btn btn-small", "+ Add Step");
     addBtn.addEventListener("click", function () {
       var chosen = sel.value;
+      snapshotMultitoolStepValues();
       state.multitoolSteps.push({ type: chosen, collapsed: false, logic: "AND" });
       renderWorkflowParams();
       updateRunButton();
