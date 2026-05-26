@@ -3435,14 +3435,16 @@
         return;
       }
 
-      // Step reorder
+      // Step reorder. _cacheMultitoolDragMidpoints excludes the dragging
+      // card, so getMultitoolDropIndex already returns an index aligned with
+      // the array AFTER the dragging step is spliced out — no further
+      // adjustment needed.
       var fromIdx = parseInt(e.dataTransfer.getData("text/plain"), 10);
       if (isNaN(fromIdx)) return;
       var toIdx = getMultitoolDropIndex(stepsDiv, e.clientY);
       if (fromIdx === toIdx) return;
       snapshotMultitoolStepValues();
       var moved = state.multitoolSteps.splice(fromIdx, 1)[0];
-      if (toIdx > fromIdx) toIdx--;
       state.multitoolSteps.splice(toIdx, 0, moved);
       renderWorkflowParams();
     });
