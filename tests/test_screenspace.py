@@ -1587,16 +1587,21 @@ class TestFastScanDispatchIntervalMultiplier:
 
 
 class TestFfmpegPipeFrames:
-    def test_yields_frames_from_raw_bytes(self, monkeypatch):
-        """Generator yields correct (ts, frame) tuples from raw BGR pipe."""
+    def test_yields_frames_with_pts_from_stderr(self, monkeypatch):
+        """Generator pairs each raw BGR frame with the pts_time read from stderr."""
         w, h = 4, 2
-        # Two solid-color frames
         frame1 = np.full((h, w, 3), 100, dtype=np.uint8)
         frame2 = np.full((h, w, 3), 200, dtype=np.uint8)
         raw = frame1.tobytes() + frame2.tobytes()
+        # Two showinfo lines with PTS 0 and 1 (relative to the seek point of 5.0).
+        stderr_lines = (
+            b"[Parsed_showinfo_1 @ 0x0] n: 0 pts: 0 pts_time:0 ...\n"
+            b"[Parsed_showinfo_1 @ 0x0] n: 1 pts: 1 pts_time:1 ...\n"
+        )
 
         fake_proc = mock.MagicMock()
         fake_proc.stdout = io.BytesIO(raw)
+        fake_proc.stderr = io.BytesIO(stderr_lines)
         fake_proc.terminate = mock.MagicMock()
         fake_proc.wait = mock.MagicMock()
 
@@ -1614,6 +1619,7 @@ class TestFfmpegPipeFrames:
             )
         )
         assert len(frames) == 2
+        # Yielded ts = start_seconds + pts_time (relative).
         assert frames[0][0] == 5.0
         assert frames[1][0] == 6.0
         assert frames[0][1].shape == (h, w, 3)
@@ -1629,14 +1635,18 @@ class TestFfmpegPipeFrames:
         )
         assert frames == []
 
-    def test_uses_two_stage_seek_for_far_start(self, monkeypatch):
-        """Analysis pipe should two-stage seek so synthetic ts == decoded PTS."""
+    def test_uses_single_preinput_seek_with_select_filter(self, monkeypatch):
+        """Analysis pipe uses a single pre-input -ss plus the select filter +
+        fps_mode vfr. The previous two-stage seek silently dropped its post-input
+        -ss when paired with -vf in modern ffmpeg, and the fps filter chose a
+        different source frame than the preview's accurate seek did."""
         captured: dict = {}
 
         def fake_popen(cmd, *a, **kw):
             captured["cmd"] = list(cmd)
             proc = mock.MagicMock()
             proc.stdout = io.BytesIO(b"")
+            proc.stderr = io.BytesIO(b"")
             proc.terminate = mock.MagicMock()
             proc.wait = mock.MagicMock()
             return proc
@@ -1656,8 +1666,15 @@ class TestFfmpegPipeFrames:
         )
         cmd = captured["cmd"]
         i_idx = cmd.index("-i")
-        assert "-ss" in cmd[:i_idx], "expected fast pre-input seek"
-        assert "-ss" in cmd[i_idx + 2 :], "expected accurate post-input seek"
+        # One pre-input -ss, nothing after -i.
+        assert cmd[:i_idx].count("-ss") == 1
+        assert "-ss" not in cmd[i_idx + 2 :]
+        vf = cmd[cmd.index("-vf") + 1]
+        assert "select=" in vf
+        assert "showinfo" in vf
+        # vfr is what stops ffmpeg from duplicating the kept frame to fill the
+        # source frame rate.
+        assert "-fps_mode" in cmd and cmd[cmd.index("-fps_mode") + 1] == "vfr"
 
 
 class TestScanViaFfmpegPipe:
@@ -1680,9 +1697,13 @@ class TestScanViaFfmpegPipe:
         w, h = 4, 2
         frame_data = np.full((h, w, 3), 42, dtype=np.uint8)
         raw = frame_data.tobytes()
+        # showinfo emits one line per yielded frame; pts_time is relative to
+        # the seek point (here 0).
+        stderr_lines = b"[Parsed_showinfo_1 @ 0x0] n: 0 pts: 0 pts_time:0 ...\n"
 
         fake_proc = mock.MagicMock()
         fake_proc.stdout = io.BytesIO(raw)
+        fake_proc.stderr = io.BytesIO(stderr_lines)
         fake_proc.terminate = mock.MagicMock()
         fake_proc.wait = mock.MagicMock()
 
@@ -1739,9 +1760,14 @@ class TestScanViaFfmpegPipe:
         w, h = 4, 2
         frame = np.full((h, w, 3), 1, dtype=np.uint8)
         raw = frame.tobytes() * 5  # 5 frames
+        stderr_lines = b"".join(
+            b"[Parsed_showinfo_1 @ 0x0] n: %d pts_time:%d ...\n" % (i, i)
+            for i in range(5)
+        )
 
         fake_proc = mock.MagicMock()
         fake_proc.stdout = io.BytesIO(raw)
+        fake_proc.stderr = io.BytesIO(stderr_lines)
         fake_proc.terminate = mock.MagicMock()
         fake_proc.wait = mock.MagicMock()
 
@@ -1764,6 +1790,101 @@ class TestScanViaFfmpegPipe:
         )
         assert result is True
         assert call_count[0] == 2
+
+
+class TestAnalysisPreviewAlignment:
+    """End-to-end: each ts yielded by `_ffmpeg_pipe_frames` must point at the
+    exact same source frame that `video.extract_frame_at_timestamp(ts)` returns,
+    so clicking a result in Screenspace shows the analysed frame instead of a
+    drifted neighbour.
+
+    Requires a real ffmpeg binary on PATH; skipped otherwise.
+    """
+
+    @staticmethod
+    def _have_ffmpeg() -> bool:
+        import shutil as _shutil
+
+        return (
+            _shutil.which("ffmpeg") is not None and _shutil.which("ffprobe") is not None
+        )
+
+    @staticmethod
+    def _synthesize(path: str, vf_extra: str = "") -> None:
+        import subprocess as _sp
+
+        vf = "testsrc=duration=12:size=320x240:rate=30"
+        if vf_extra:
+            vf += f",{vf_extra}"
+        _sp.run(
+            [
+                "ffmpeg",
+                "-y",
+                "-f",
+                "lavfi",
+                "-i",
+                vf,
+                "-fps_mode",
+                "vfr",
+                "-c:v",
+                "libx264",
+                "-g",
+                "30",
+                "-pix_fmt",
+                "yuv420p",
+                path,
+            ],
+            check=True,
+            stdout=_sp.DEVNULL,
+            stderr=_sp.DEVNULL,
+        )
+
+    @staticmethod
+    def _assert_aligned(video_path: str) -> None:
+        import hashlib
+
+        import video as video_mod
+
+        frames = list(
+            screenspace._ffmpeg_pipe_frames(
+                video_path,
+                interval_seconds=1.0,
+                start_seconds=0.0,
+                end_seconds=10.0,
+                frame_width=320,
+                frame_height=240,
+            )
+        )
+        assert frames, "expected at least one analysed frame"
+        for ts, analysis_frame in frames:
+            preview = video_mod.extract_frame_at_timestamp(video_path, ts)
+            assert preview is not None, f"preview extraction failed at ts={ts}"
+            h_a = hashlib.md5(analysis_frame.tobytes()).hexdigest()
+            h_p = hashlib.md5(preview.tobytes()).hexdigest()
+            assert h_a == h_p, (
+                f"analysed frame and preview differ at ts={ts:.4f} "
+                f"(analysis={h_a[:8]} preview={h_p[:8]})"
+            )
+
+    def test_cfr_source_alignment(self, tmp_path):
+        if not self._have_ffmpeg():
+            pytest.skip("ffmpeg/ffprobe required for end-to-end alignment test")
+        video_path = str(tmp_path / "cfr.mp4")
+        self._synthesize(video_path)
+        self._assert_aligned(video_path)
+
+    def test_vfr_source_alignment(self, tmp_path):
+        if not self._have_ffmpeg():
+            pytest.skip("ffmpeg/ffprobe required for end-to-end alignment test")
+        video_path = str(tmp_path / "vfr.mp4")
+        # Drop ~2/7 of frames at non-uniform positions so the kept frames don't
+        # land on integer second boundaries — the case where the old fps filter
+        # picked a different source frame than the preview's accurate seek.
+        self._synthesize(
+            video_path,
+            vf_extra="select='not(eq(mod(n,7),3))*not(eq(mod(n,11),5))'",
+        )
+        self._assert_aligned(video_path)
 
 
 class TestScanVideoFramesFfmpegIntegration:

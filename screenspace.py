@@ -682,8 +682,19 @@ def _ffmpeg_pipe_frames(
     if not shutil.which("ffmpeg"):
         return
 
-    # Determine output dimensions
-    filters = [f"fps=1/{interval_seconds}"]
+    # Determine output dimensions.
+    #
+    # `select` instead of `fps`: at interval N, fps=1/N picks the *last*
+    # source frame whose PTS rounds to each output slot — for 30 fps source
+    # that's ~0.5 s past the slot — and assigns it the slot's PTS in the
+    # output. The preview path seeks to that slot PTS and lands on a
+    # different source frame, hence the long-running click-vs-preview drift.
+    # `select` passes the chosen frame through with its original PTS, which
+    # showinfo (below) reports verbatim. Paired with `-fps_mode vfr` below to
+    # stop ffmpeg from duplicating frames to fill the source rate.
+    filters = [
+        f"select='isnan(prev_selected_t)+gte(t-prev_selected_t,{interval_seconds})'"
+    ]
 
     if region:
         filters.append(f"crop={region['w']}:{region['h']}:{region['x']}:{region['y']}")
@@ -714,31 +725,61 @@ def _ffmpeg_pipe_frames(
         out_h += out_h % 2
         filters.append(f"scale={out_w}:{out_h}")
 
-    # Two-stage seek so each yielded frame's synthetic ts (computed below as
-    # start_seconds + frame_idx * interval_seconds) lines up with the actual
-    # decoded PTS instead of the nearest preceding key-frame.
-    pre_seek, post_seek = video.accurate_seek_args(max(0.0, start_seconds))
-    cmd: list[str] = ["ffmpeg", *pre_seek, "-i", video_path, *post_seek]
+    # showinfo last so its `pts_time:` lines correspond 1-to-1 with the
+    # rawvideo frames pushed to stdout. The drain thread below parses these
+    # and queues them so each yielded frame is tagged with its actual source
+    # PTS instead of a synthetic frame_idx*interval.
+    filters.append("showinfo")
+
+    cmd: list[str] = ["ffmpeg"]
+    if start_seconds > 0:
+        cmd += ["-ss", str(start_seconds)]
+    cmd += ["-i", video_path]
     if end_seconds > start_seconds:
         cmd += ["-t", str(end_seconds - start_seconds)]
     cmd += [
         "-vf",
         ",".join(filters),
+        # `select` keeps source PTS, so without `vfr` ffmpeg pads the output
+        # back up to the source frame rate by duplicating each kept frame
+        # (~30 dupes per kept frame at 30 fps). vfr emits only the actual
+        # kept frames, one-to-one with the showinfo log lines.
+        "-fps_mode",
+        "vfr",
         "-pix_fmt",
         "bgr24",
         "-f",
         "rawvideo",
+        # showinfo emits at the `info` level; with `error` its lines never
+        # reach stderr and we'd have no PTS data to read.
         "-loglevel",
-        "error",
+        "info",
         "pipe:1",
     ]
 
     frame_size = out_w * out_h * 3
-    # stderr → DEVNULL: we only read stdout, so a PIPE'd stderr could fill
-    # its 64 KB OS buffer on a chatty codec error and deadlock ffmpeg.
-    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    pts_re = re.compile(rb"pts_time:(\S+)")
+    pts_q: queue.Queue[float] = queue.Queue(maxsize=256)
+
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     assert proc.stdout is not None  # guaranteed by stdout=PIPE
-    frame_idx = 0
+    assert proc.stderr is not None  # guaranteed by stderr=PIPE
+
+    # Daemon thread drains stderr so the OS buffer never blocks ffmpeg, and
+    # forwards every `pts_time:` line to the read loop as a float (seconds
+    # since the seek point).
+    def _drain_stderr() -> None:
+        assert proc.stderr is not None
+        for line in proc.stderr:
+            m = pts_re.search(line)
+            if m:
+                try:
+                    pts_q.put(float(m.group(1)))
+                except ValueError:
+                    pass
+
+    threading.Thread(target=_drain_stderr, daemon=True).start()
+
     try:
         while True:
             raw = proc.stdout.read(frame_size)
@@ -747,11 +788,16 @@ def _ffmpeg_pipe_frames(
             # Read-only view on the ffmpeg pipe bytes; callers treat frames as
             # read-only and must .copy() if they retain past the next yield.
             frame = np.frombuffer(raw, dtype=np.uint8).reshape((out_h, out_w, 3))
-            ts = start_seconds + frame_idx * interval_seconds
-            if end_seconds > 0 and ts > end_seconds:
+            try:
+                relative_pts = pts_q.get(timeout=5.0)
+            except queue.Empty:
+                # Stderr stalled or showinfo missing — bail out rather than
+                # yield a frame with a misaligned synthetic timestamp.
                 break
-            yield (ts, frame)
-            frame_idx += 1
+            actual_ts = start_seconds + relative_pts
+            if end_seconds > 0 and actual_ts > end_seconds:
+                break
+            yield (actual_ts, frame)
     finally:
         if proc.stdout:
             proc.stdout.close()
