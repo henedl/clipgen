@@ -3830,6 +3830,11 @@
       dfCb.type = "checkbox";
       dfCb.id = "paramDetectFirst";
       addParamRow(container, "Detect first", dfCb);
+      // Every multitool mutation funnels through renderWorkflowParams; refresh
+      // the Run button here so task-import / reorder paths (which don't call
+      // updateRunButton explicitly) still enable the button once the list is
+      // long enough.
+      updateRunButton();
       return;
     }
 
