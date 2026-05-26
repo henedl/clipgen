@@ -235,6 +235,34 @@
     return TASK_COLORS[type] || "#888";
   }
 
+  // Compact one-liner describing a multitool step's criteria, used in result rows.
+  // Mirrors the keys gathered by gatherMultitoolStepParams so the displayed values
+  // match what the user configured at task-create time.
+  function formatMultitoolStepParams(step) {
+    if (!step) return "";
+    var t = step.type;
+    if (t === "color") {
+      var tc = step.target_color || {};
+      return "H" + (tc.h || 0) + "° S" + (tc.s || 0) + " V" + (tc.v || 0);
+    }
+    if (t === "change") return ">" + ((step.threshold || 0) * 100).toFixed(0) + "%";
+    if (t === "similarity") return "≥" + ((step.threshold || 0) * 100).toFixed(0) + "%";
+    if (t === "text") return "“" + (step.search_string || "") + "”";
+    if (t === "numbers") {
+      var opSym = { gt: ">", lt: "<", eq: "=", gte: "≥", lte: "≤" }[step.operator] || step.operator || "";
+      return (opSym + " " + step.target_value).trim();
+    }
+    if (t === "template") return "≥" + ((step.threshold || 0) * 100).toFixed(0) + "%";
+    if (t === "flow") return ">" + (step.magnitude_threshold || 0).toFixed(1);
+    if (t === "scene") {
+      var refs = step.scene_references || [];
+      if (refs.length === 1) return refs[0].name || "1 ref";
+      return refs.length + " refs";
+    }
+    if (t === "inactivity") return "≥" + (step.threshold || 0) + "s";
+    return "";
+  }
+
   // Confidence bar mirrors the prototype's ConfBar: 4 px tall, hue-tinted fill,
   // opacity ramps from 0.4 (low) to 1.0 (full) so high-confidence rows feel
   // saturated while low ones recede.
@@ -6237,12 +6265,22 @@
         row.dataset.timestamp = r.timestamp;
         row.appendChild(el("span", "result-timestamp", formatTime(r.timestamp, { decimals: 1 })));
         var badges = el("span", "result-detail multitool-badges");
-        (r.tool_types || []).forEach(function (t) {
+        var stepDefs = (task.parameters && task.parameters.steps) || [];
+        var types = r.tool_types || stepDefs.map(function (s) { return s.type; });
+        types.forEach(function (t, i) {
+          var step = stepDefs[i] || { type: t };
+          if (i > 0) {
+            var logic = (step.logic || "AND").toUpperCase();
+            var sep = el("span", "multitool-step-logic" + (logic === "NOT" ? " logic-not" : ""), logic);
+            badges.appendChild(sep);
+          }
           var badge = el("span", "multitool-type-badge");
           badge.style.color = taskTypeColor(t);
-          badge.title = t;
+          var paramStr = formatMultitoolStepParams(step);
+          badge.title = t + (paramStr ? ": " + paramStr : "");
           var icon = buildTypeIcon(t);
           if (icon) badge.appendChild(icon);
+          if (paramStr) badge.appendChild(el("span", "multitool-step-params", paramStr));
           badges.appendChild(badge);
         });
         row.appendChild(badges);
