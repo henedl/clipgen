@@ -129,6 +129,7 @@
     overlayBlinkActive: false,
     overlayImage: null,
     overlayImageObjectUrl: null,
+    overlayImageTimestamp: null,
     overlayLayerSpec: {},
     rightPaneTab: "queue",
     resultsSwitcherOpen: false,
@@ -3917,7 +3918,10 @@
       toggle.addEventListener("change", function () {
         state.overlayEnabled = !!toggle.checked;
         try { sessionStorage.setItem("ss_overlayEnabled", state.overlayEnabled ? "1" : "0"); } catch (_) { /* ignore */ }
-        if (state.overlayEnabled && !state.overlayImage) refreshModelView();
+        var curTs = Number(state.currentTimestamp || 0).toFixed(3);
+        if (state.overlayEnabled && (!state.overlayImage || state.overlayImageTimestamp !== curTs)) {
+          refreshModelView();
+        }
         renderOverlay();
       });
     }
@@ -3933,6 +3937,7 @@
           state.overlayImageObjectUrl = null;
         }
         state.overlayImage = null;
+        state.overlayImageTimestamp = null;
         refreshModelView();
         renderOverlay();
       });
@@ -4191,6 +4196,7 @@
           state.overlayImageObjectUrl = null;
         }
         state.overlayImage = null;
+        state.overlayImageTimestamp = null;
         return;
       }
       var layerQs = qsParts.concat(["layer=" + encodeURIComponent(resolved.id)]);
@@ -4209,6 +4215,7 @@
           if (gen !== _modelViewGen) return;
           state.overlayImage = oi;
           state.overlayImageScope = resolved.scope;
+          state.overlayImageTimestamp = ts;
           renderOverlay();
         };
         oi.src = ou;
@@ -6292,7 +6299,10 @@
         if (!_overlayEligibleForActiveTool()) return;
         e.preventDefault();
         state.overlayBlinkActive = true;
-        if (!state.overlayImage) refreshModelView();
+        var curTs = Number(state.currentTimestamp || 0).toFixed(3);
+        if (!state.overlayImage || state.overlayImageTimestamp !== curTs) {
+          refreshModelView();
+        }
         renderOverlay();
       } else if (e.key === "Escape") {
         if (state.pipetteActive) {
