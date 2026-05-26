@@ -514,7 +514,7 @@ body[data-active-tab]:not([data-active-tab="sheet"]) #studioSidebar {
   border-radius: var(--radius-full);
   background: var(--color-accent);
   color: var(--accent-fg);
-  font-weight: 600;
+  font-weight: 500;
   margin-left: var(--space-1);
 }
 
@@ -879,7 +879,10 @@ body.bottom-animating #stashedArtifactsArea {
   flex-shrink: 0;
 }
 
-.sev-pill.sev-critical,
+.sev-pill.sev-critical {
+  color: var(--severity-critical);
+  background: color-mix(in srgb, var(--severity-critical) 18%, transparent);
+}
 .sev-pill.sev-high {
   color: var(--severity-high);
   background: color-mix(in srgb, var(--severity-high) 18%, transparent);
@@ -894,10 +897,13 @@ body.bottom-animating #stashedArtifactsArea {
   color: var(--fg-muted);
   background: rgba(255, 255, 255, 0.06);
 }
-.sev-pill.sev-positive,
-.sev-pill.sev-very-positive {
+.sev-pill.sev-positive {
   color: var(--severity-positive);
   background: color-mix(in srgb, var(--severity-positive) 18%, transparent);
+}
+.sev-pill.sev-very-positive {
+  color: var(--severity-very-positive);
+  background: color-mix(in srgb, var(--severity-very-positive) 18%, transparent);
 }
 
 html[data-theme="light"] .sev-pill.sev-na,
@@ -909,13 +915,17 @@ html[data-theme="light"] .sev-pill.sev-unknown,
 
 /* Positive pill in light mode — match the cell-data-positive override
  * (#16a34a) since the dark-theme positive token (#4ade80) washes out on a
- * light background. */
+ * light background. Very-positive uses a slightly darker green so it stays
+ * distinct from positive (mirrors the dark-theme differentiation). */
 html[data-theme="light"] .sev-pill.sev-positive,
-html[data-theme="light"] .sev-pill.sev-very-positive,
-.theme-light .sev-pill.sev-positive,
-.theme-light .sev-pill.sev-very-positive {
+.theme-light .sev-pill.sev-positive {
   color: #16a34a;
   background: color-mix(in srgb, #16a34a 18%, transparent);
+}
+html[data-theme="light"] .sev-pill.sev-very-positive,
+.theme-light .sev-pill.sev-very-positive {
+  color: #15803d;
+  background: color-mix(in srgb, #15803d 18%, transparent);
 }
 
 /* Clickable header cells */
@@ -1022,12 +1032,12 @@ body.dragging .ts-cell:hover {
 
 /* Severity-tinted timestamp chips. N/A, Unknown, and undefined fall through
  * to the default cyan rule above. .ts-cell.has-text wins (rule below). */
-.ts-cell[data-severity="critical"] .ts-chip,
-.ts-cell[data-severity="high"]     .ts-chip { background: var(--cell-data-high-bg);     color: var(--cell-data-high-fg); }
-.ts-cell[data-severity="medium"]   .ts-chip,
-.ts-cell[data-severity="low"]      .ts-chip { background: var(--cell-data-medium-bg);   color: var(--cell-data-medium-fg); }
-.ts-cell[data-severity="positive"]      .ts-chip,
-.ts-cell[data-severity="very-positive"] .ts-chip { background: var(--cell-data-positive-bg); color: var(--cell-data-positive-fg); }
+.ts-cell[data-severity="critical"]      .ts-chip { background: var(--cell-data-critical-bg);      color: var(--cell-data-critical-fg); }
+.ts-cell[data-severity="high"]          .ts-chip { background: var(--cell-data-high-bg);          color: var(--cell-data-high-fg); }
+.ts-cell[data-severity="medium"]        .ts-chip,
+.ts-cell[data-severity="low"]           .ts-chip { background: var(--cell-data-medium-bg);        color: var(--cell-data-medium-fg); }
+.ts-cell[data-severity="positive"]      .ts-chip { background: var(--cell-data-positive-bg);      color: var(--cell-data-positive-fg); }
+.ts-cell[data-severity="very-positive"] .ts-chip { background: var(--cell-data-very-positive-bg); color: var(--cell-data-very-positive-fg); }
 
 /* "Has text but invalid timestamp" — show muted, dashed-border outline */
 .ts-cell.has-text .ts-chip {
