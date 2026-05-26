@@ -1617,11 +1617,32 @@ body {
   display: flex;
   flex-direction: column;
   gap: var(--space-1);
+  /* Vertical padding gives the user a comfortable hit-area for dropping
+     above the first card or below the last, including for task-card imports. */
+  padding: var(--space-2) 0;
 }
 
 .multitool-steps.drag-over-append {
-  border-bottom: 2px solid var(--color-accent);
-  padding-bottom: var(--space-1);
+  box-shadow: inset 0 -3px 0 0 var(--color-accent);
+}
+
+.multitool-empty-dropzone {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 5rem;
+  padding: var(--space-3);
+  border: 1px dashed var(--color-border);
+  border-radius: var(--radius-md);
+  color: var(--color-text-dim);
+  font-size: var(--text-xs);
+  text-align: center;
+}
+
+.multitool-steps.drag-over-append .multitool-empty-dropzone {
+  border-style: solid;
+  border-color: var(--color-accent);
+  color: var(--color-accent);
 }
 
 .multitool-step {
@@ -1699,7 +1720,9 @@ body {
 }
 
 .multitool-step.drag-over {
-  border-top: 2px solid var(--color-accent);
+  /* box-shadow renders the insertion bar in the gap above the card without
+     shifting layout — easier to see than a 2px border-top. */
+  box-shadow: 0 -3px 0 0 var(--color-accent);
 }
 
 .multitool-step-body {
