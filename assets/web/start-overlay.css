@@ -301,12 +301,20 @@
   border-radius: 8px;
   cursor: pointer;
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
   gap: 12px;
   font-family: inherit;
   transition: background 120ms, border-color 120ms;
   position: relative;
+}
+
+.start-overlay .rail-recent__paths {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
 }
 
 .start-overlay .rail-recent:hover {
@@ -341,13 +349,18 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   min-width: 0;
-  flex: 1;
+}
+
+.start-overlay .rail-recent__path--secondary {
+  font-size: 11px;
+  color: var(--fg-faint);
 }
 
 .start-overlay .rail-recent__when {
   font-size: 11px;
   color: var(--fg-faint);
   flex-shrink: 0;
+  align-self: flex-start;
 }
 
 .start-overlay .rail-recent--empty {
