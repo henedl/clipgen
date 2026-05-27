@@ -56,6 +56,21 @@ def test_prewarm_invalid_config_normalized_in_participants(tr_client, monkeypatc
     assert resp.get_json()["transcribe_prewarm"] == "queue_open"
 
 
+def test_participants_includes_video_version(tr_client, tmp_path):
+    """video_version (mtime_ns) drives the frontend's media/<file>?v=… cache-bust."""
+    video_file = tmp_path / "study_P09.mp4"
+    video_file.write_bytes(b"\x00data")
+    transcripts_server._participants = [
+        {"id": "P09", "video_path": str(video_file), "has_video": True},
+        {"id": "P10", "video_path": str(tmp_path / "missing.mp4"), "has_video": False},
+    ]
+    resp = tr_client.get("/transcripts/api/participants")
+    assert resp.status_code == 200
+    by_id = {p["id"]: p for p in resp.get_json()["participants"]}
+    assert by_id["P09"]["video_version"] == video_file.stat().st_mtime_ns
+    assert by_id["P10"]["video_version"] is None
+
+
 def test_participants_stale_artifact_detection(tr_client, monkeypatch):
     transcripts_server._participants = [
         {"id": "P01", "video_path": "study_P01.mp4", "has_video": True},

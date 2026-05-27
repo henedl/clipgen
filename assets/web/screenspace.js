@@ -149,6 +149,11 @@
   }
   var _lastPollFingerprint = "";
   var _preloadedFrames = {};
+  // Per-participant source-video mtime_ns, sourced from /api/participants and
+  // /api/video/info. Used as a ?v= cache-bust suffix on frame and stream URLs
+  // so a re-encoded or replaced source file invalidates HTTP, backend, and
+  // blob caches together. Empty string means "no version known yet".
+  var _videoVersions = {};
 
   window.addEventListener("pagehide", function () {
     Object.keys(_preloadedFrames).forEach(function (pid) {
@@ -280,11 +285,15 @@
   }
 
   function frameUrl(pid, ts) {
-    return "api/video/frame/" + encodeURIComponent(pid) + "/" + Number(ts).toFixed(6);
+    var base = "api/video/frame/" + encodeURIComponent(pid) + "/" + Number(ts).toFixed(6);
+    var v = _videoVersions[pid];
+    return v ? base + "?v=" + encodeURIComponent(v) : base;
   }
 
   function videoStreamUrl(pid) {
-    return "api/video/stream/" + encodeURIComponent(pid);
+    var base = "api/video/stream/" + encodeURIComponent(pid);
+    var v = _videoVersions[pid];
+    return v ? base + "?v=" + encodeURIComponent(v) : base;
   }
 
   // ---- Participants ----
@@ -851,6 +860,16 @@
         if (participantRequestVersion !== _participantRequestVersion || pid !== state.selectedParticipant) return;
         if (!data.ok) return;
         state.videoInfo = data.info;
+        // If the server reports a different mtime than we last saw, the
+        // source file was replaced \u2014 drop the stale frame-0 blob so the
+        // next loadFrame(0) hits the API and the new ?v= URL.
+        var newVersion = data.info.version != null ? String(data.info.version) : "";
+        var prevVersion = _videoVersions[pid] || "";
+        _videoVersions[pid] = newVersion;
+        if (newVersion !== prevVersion && _preloadedFrames[pid]) {
+          try { URL.revokeObjectURL(_preloadedFrames[pid]); } catch (_) {}
+          delete _preloadedFrames[pid];
+        }
         var parts = [];
         if (data.info.duration) parts.push(formatDuration(data.info.duration));
         if (data.info.width && data.info.height) parts.push(data.info.width + "x" + data.info.height);
@@ -6769,6 +6788,11 @@
       .then(function (data) {
         if (!data.ok) return;
         state.participants = (data.participants || []).filter(function (p) { return p.has_video; });
+        // Seed _videoVersions before any frameUrl/videoStreamUrl call so the
+        // preload loop below already includes the ?v= cache-bust suffix.
+        state.participants.forEach(function (p) {
+          if (p.version != null) _videoVersions[p.id] = String(p.version);
+        });
         renderParticipantSelect();
         // Preload frame 0 for all participants (instant first-frame display)
         state.participants.forEach(function (p) {
