@@ -186,6 +186,9 @@ SCREENSPACE_CV_RESOLUTION_SCALE: float = (
     1.0  # multiplier applied to extracted region frames before CV analysis
     # (1.0 = no change; >1 sharper but slower and more memory; <1 faster but coarser)
 )
+SCREENSPACE_RESTORE_MARKERS_ON_EDIT: bool = (
+    True  # restore In/Out timeline markers when editing a task
+)
 
 # ── Highlights Reel ──────────────────────────────────────────────────
 HIGHLIGHTS_REEL_DURATION_SECONDS: int = 180  # 3-minute budget for highlights reel
@@ -327,6 +330,7 @@ SETTINGS_DESCRIPTIONS: dict[str, str] = {
     "GIF_FORMAT": "File format for animated artifacts. WebM (VP9) is the smallest and most-compatible modern option; animated WebP is also small but requires Safari 16+; GIF works everywhere but is large.",
     "WEBP_QUALITY": "WebP encoding quality (0-100). Higher values mean better quality and larger files.",
     "SCREENSPACE_CV_RESOLUTION_SCALE": "Scale extracted region frames before CV analysis. Higher (e.g. 2.0) gives the models more signal on noisy/compressed video at the cost of speed and memory; lower speeds up scans on large footage. 1.0 = unchanged.",
+    "SCREENSPACE_RESTORE_MARKERS_ON_EDIT": "When editing a task, restore the In/Out timeline markers to the range it was originally run with. Disable to keep your current markers in place when iterating across different parts of the timeline.",
 }
 
 # Studio-exposed settings with UI metadata (tab, group, type, constraints).
@@ -510,6 +514,11 @@ STUDIO_SETTINGS: dict[str, dict[str, Any]] = {
         "min": 0.25,
         "max": 4.0,
         "step": 0.25,
+    },
+    "SCREENSPACE_RESTORE_MARKERS_ON_EDIT": {
+        "tab": "Screenspace",
+        "group": "Task Editing",
+        "type": "bool",
     },
     "RICH_COLORS": {"tab": "CLI", "group": "Terminal Output", "type": "bool"},
     "RICH_PANELS": {"tab": "CLI", "group": "Terminal Output", "type": "bool"},
