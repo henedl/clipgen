@@ -84,6 +84,7 @@
     timelineOffset: 0,
     inMarker: null,
     outMarker: null,
+    restoreMarkersOnEdit: true,
     activeWorkflow: "color",
     referenceTimestamp: null,
     sceneReferences: [],
@@ -5542,6 +5543,17 @@
       }
     }
 
+    if (state.restoreMarkersOnEdit) {
+      var hasIn = params.start_seconds !== undefined && params.start_seconds !== null;
+      var hasOut = params.end_seconds !== undefined && params.end_seconds !== null;
+      if (hasIn || hasOut) {
+        state.inMarker = hasIn ? params.start_seconds : null;
+        state.outMarker = hasOut ? params.end_seconds : null;
+        updateMarkerInfo();
+        renderTimeline();
+      }
+    }
+
     syncValueDisplays();
     updateRunButton();
     showToast("Restored " + task.type + " task parameters");
@@ -6657,6 +6669,38 @@
     });
   }
 
+  // ---- Settings (server-side STUDIO_SETTINGS) ----
+  //
+  // Backed by /api/settings. We mirror the SCREENSPACE_RESTORE_MARKERS_ON_EDIT
+  // flag onto state.restoreMarkersOnEdit so restoreTaskToWorkflow can read it
+  // without a network call. The settings modal's onSave/onReset hooks call
+  // applyScreenspaceSettingsSnapshot to keep state in sync after user edits.
+
+  function applyScreenspaceSettingsSnapshot(applied, settings) {
+    var v;
+    if (applied && Object.prototype.hasOwnProperty.call(applied, "SCREENSPACE_RESTORE_MARKERS_ON_EDIT")) {
+      v = applied.SCREENSPACE_RESTORE_MARKERS_ON_EDIT;
+    } else if (settings) {
+      for (var i = 0; i < settings.length; i++) {
+        if (settings[i].name === "SCREENSPACE_RESTORE_MARKERS_ON_EDIT") {
+          v = settings[i].value;
+          break;
+        }
+      }
+    }
+    if (v !== undefined) state.restoreMarkersOnEdit = !!v;
+  }
+
+  function fetchScreenspaceSettings() {
+    fetch("/api/settings")
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        if (!data || !data.ok || !data.settings) return;
+        applyScreenspaceSettingsSnapshot(null, data.settings);
+      })
+      .catch(function () { /* keep config-default state.restoreMarkersOnEdit */ });
+  }
+
   document.addEventListener("DOMContentLoaded", function () {
     initThemeToggle(function () { refreshThemeColors(); renderTimeline(); });
     initFrameControls();
@@ -6682,11 +6726,20 @@
     initTopNavActions();
 
     // Settings
+    fetchScreenspaceSettings();
     var settingsBtn = qs("#settingsBtn");
     if (settingsBtn) {
       settingsBtn.addEventListener("click", function () {
         if (typeof window.openSettingsModal === "function") {
-          window.openSettingsModal({ initialTab: "Screenspace" });
+          window.openSettingsModal({
+            initialTab: "Screenspace",
+            onSave: function (applied, settings) {
+              applyScreenspaceSettingsSnapshot(applied, settings);
+            },
+            onReset: function (scope, settings) {
+              applyScreenspaceSettingsSnapshot(null, settings);
+            },
+          });
         }
       });
     }
