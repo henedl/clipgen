@@ -130,6 +130,7 @@
     overlayImage: null,
     overlayImageObjectUrl: null,
     overlayImageTimestamp: null,
+    overlayImageTool: null,
     overlayLayerSpec: {},
     rightPaneTab: "queue",
     resultsSwitcherOpen: false,
@@ -3997,7 +3998,7 @@
         state.overlayEnabled = !!toggle.checked;
         try { sessionStorage.setItem("ss_overlayEnabled", state.overlayEnabled ? "1" : "0"); } catch (_) { /* ignore */ }
         var curTs = Number(state.currentTimestamp || 0).toFixed(3);
-        if (state.overlayEnabled && (!state.overlayImage || state.overlayImageTimestamp !== curTs)) {
+        if (state.overlayEnabled && (!state.overlayImage || state.overlayImageTimestamp !== curTs || state.overlayImageTool !== state.activeWorkflow)) {
           refreshModelView();
         }
         renderOverlay();
@@ -4016,6 +4017,7 @@
         }
         state.overlayImage = null;
         state.overlayImageTimestamp = null;
+        state.overlayImageTool = null;
         refreshModelView();
         renderOverlay();
       });
@@ -4275,6 +4277,7 @@
         }
         state.overlayImage = null;
         state.overlayImageTimestamp = null;
+        state.overlayImageTool = null;
         return;
       }
       var layerQs = qsParts.concat(["layer=" + encodeURIComponent(resolved.id)]);
@@ -4294,6 +4297,7 @@
           state.overlayImage = oi;
           state.overlayImageScope = resolved.scope;
           state.overlayImageTimestamp = ts;
+          state.overlayImageTool = tool;
           renderOverlay();
         };
         oi.src = ou;
@@ -6388,7 +6392,7 @@
         e.preventDefault();
         state.overlayBlinkActive = true;
         var curTs = Number(state.currentTimestamp || 0).toFixed(3);
-        if (!state.overlayImage || state.overlayImageTimestamp !== curTs) {
+        if (!state.overlayImage || state.overlayImageTimestamp !== curTs || state.overlayImageTool !== state.activeWorkflow) {
           refreshModelView();
         }
         renderOverlay();
