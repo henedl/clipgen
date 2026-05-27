@@ -176,6 +176,12 @@ def api_participants() -> FlaskResponse:
             pid = p["id"]
             entry = src.get(pid, {})
             has_transcript = bool(entry.get("segments"))
+            video_version: int | None = None
+            if p["has_video"]:
+                try:
+                    video_version = Path(p["video_path"]).stat().st_mtime_ns
+                except OSError:
+                    video_version = None
             info: dict[str, Any] = {
                 "id": pid,
                 "video_path": p["video_path"],
@@ -183,6 +189,7 @@ def api_participants() -> FlaskResponse:
                 "has_transcript": has_transcript,
                 "segment_count": len(entry.get("segments", [])),
                 "video_filename": Path(p["video_path"]).name,
+                "video_version": video_version,
                 "agents": {
                     "transcription": _step_state_transcription(entry),
                     "summary": _step_state_agent(pid, entry, "summary"),

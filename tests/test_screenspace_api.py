@@ -947,6 +947,129 @@ def test_video_info_participant_without_video(client):
     assert resp.status_code == 404
 
 
+def test_participants_payload_includes_version(client, tmp_path, monkeypatch):
+    """/api/participants enriches has_video entries with the file's mtime_ns."""
+    video_file = tmp_path / "study_P03.mp4"
+    video_file.write_bytes(b"\x00fake")
+    monkeypatch.setattr(
+        screenspace_server,
+        "_participants",
+        [
+            {"id": "P01", "video_path": "/tmp/none.mp4", "has_video": False},
+            {"id": "P03", "video_path": str(video_file), "has_video": True},
+        ],
+    )
+
+    resp = client.get("/screenspace/api/participants")
+    assert resp.status_code == 200
+    by_id = {p["id"]: p for p in resp.get_json()["participants"]}
+    assert by_id["P01"].get("version") is None
+    assert by_id["P03"]["version"] == video_file.stat().st_mtime_ns
+
+
+def test_video_frame_cache_invalidates_on_mtime_change(client, tmp_path, monkeypatch):
+    """Re-encoding the source file gives a fresh frame; same URL+v hits the cache."""
+    import video as video_mod
+
+    video_file = tmp_path / "study_P04.mp4"
+    video_file.write_bytes(b"\x00original")
+    monkeypatch.setattr(
+        screenspace_server,
+        "_participants",
+        [{"id": "P04", "video_path": str(video_file), "has_video": True}],
+    )
+    monkeypatch.setattr(
+        screenspace_server, "_frame_cache", type(screenspace_server._frame_cache)()
+    )
+
+    calls = []
+
+    def _fake_extract(path, ts):
+        calls.append((path, ts, video_file.stat().st_mtime_ns))
+        # Return a 1x1 BGR ndarray-like; cv2.imencode needs a real ndarray.
+        import numpy as np
+
+        return np.zeros((1, 1, 3), dtype=np.uint8)
+
+    monkeypatch.setattr(video_mod, "extract_frame_at_timestamp", _fake_extract)
+
+    first = client.get("/screenspace/api/video/frame/P04/0.0")
+    assert first.status_code == 200
+    first_bytes = first.data
+    assert len(calls) == 1
+
+    # Same URL — should hit the cache, no new extraction.
+    again = client.get("/screenspace/api/video/frame/P04/0.0")
+    assert again.status_code == 200
+    assert again.data == first_bytes
+    assert len(calls) == 1
+
+    # Bump mtime forward by 1 second to simulate a re-encode. The cache key
+    # includes mtime_ns, so this is a fresh entry and we re-extract.
+    new_mtime = video_file.stat().st_mtime_ns + 10**9
+    import os
+
+    os.utime(video_file, ns=(new_mtime, new_mtime))
+    third = client.get("/screenspace/api/video/frame/P04/0.0")
+    assert third.status_code == 200
+    assert len(calls) == 2
+
+
+def test_video_info_reprobes_on_mtime_change(client, tmp_path, monkeypatch):
+    """info response carries current mtime as version and re-probes on change."""
+    import video as video_mod
+
+    video_file = tmp_path / "study_P05.mp4"
+    video_file.write_bytes(b"\x00v1")
+    monkeypatch.setattr(
+        screenspace_server,
+        "_participants",
+        [{"id": "P05", "video_path": str(video_file), "has_video": True}],
+    )
+    monkeypatch.setattr(screenspace_server, "_video_metadata_cache", {})
+
+    probe_calls = []
+
+    def _fake_probe(path):
+        probe_calls.append(path)
+        # Simulate that duration grew after the user re-encoded.
+        duration = 30.0 if len(probe_calls) == 1 else 45.0
+        return {
+            "width": 1920,
+            "height": 1080,
+            "video_codec": "h264",
+            "audio_codec": "aac",
+            "fps": 30.0,
+            "duration": duration,
+            "nb_frames": int(duration * 30),
+        }
+
+    monkeypatch.setattr(video_mod, "probe_video_properties", _fake_probe)
+
+    first = client.get("/screenspace/api/video/info/P05").get_json()
+    assert first["ok"] is True
+    first_version = first["info"]["version"]
+    assert first_version == video_file.stat().st_mtime_ns
+    assert first["info"]["duration"] == 30
+    assert len(probe_calls) == 1
+
+    # Cache hit (same mtime).
+    cached = client.get("/screenspace/api/video/info/P05").get_json()
+    assert cached["info"]["version"] == first_version
+    assert len(probe_calls) == 1
+
+    # Mtime change forces a re-probe and a new version in the response.
+    new_mtime = first_version + 10**9
+    import os
+
+    os.utime(video_file, ns=(new_mtime, new_mtime))
+    fresh = client.get("/screenspace/api/video/info/P05").get_json()
+    assert fresh["info"]["version"] == new_mtime
+    assert fresh["info"]["version"] != first_version
+    assert fresh["info"]["duration"] == 45
+    assert len(probe_calls) == 2
+
+
 # ---- Static serving ----
 
 

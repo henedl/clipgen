@@ -70,8 +70,10 @@ def test_concatenate_clips_reencode_fallback(monkeypatch):
 # -- probe_video_properties tests --
 
 
-def test_probe_video_properties_parses_output(monkeypatch):
+def test_probe_video_properties_parses_output(monkeypatch, tmp_path):
     video._video_properties_cache.clear()
+    clip = tmp_path / "clip.mp4"
+    clip.write_bytes(b"x")
     fake_json = json.dumps(
         {
             "streams": [
@@ -85,10 +87,9 @@ def test_probe_video_properties_parses_output(monkeypatch):
             ]
         }
     )
-    monkeypatch.setattr(video.Path, "is_file", lambda self: True)
     monkeypatch.setattr(video.subprocess, "check_output", lambda _cmd, **_kw: fake_json)
 
-    result = video.probe_video_properties("clip.mp4")
+    result = video.probe_video_properties(str(clip))
     assert result == {
         "width": 1920,
         "height": 1080,
@@ -100,8 +101,10 @@ def test_probe_video_properties_parses_output(monkeypatch):
     }
 
 
-def test_probe_video_properties_no_audio(monkeypatch):
+def test_probe_video_properties_no_audio(monkeypatch, tmp_path):
     video._video_properties_cache.clear()
+    clip = tmp_path / "clip.mp4"
+    clip.write_bytes(b"x")
     fake_json = json.dumps(
         {
             "streams": [
@@ -114,31 +117,76 @@ def test_probe_video_properties_no_audio(monkeypatch):
             ]
         }
     )
-    monkeypatch.setattr(video.Path, "is_file", lambda self: True)
     monkeypatch.setattr(video.subprocess, "check_output", lambda _cmd, **_kw: fake_json)
 
-    result = video.probe_video_properties("clip.mp4")
+    result = video.probe_video_properties(str(clip))
     assert result is not None
     assert result["audio_codec"] is None
     assert result["video_codec"] == "hevc"
     assert result["width"] == 1280
 
 
-def test_probe_video_properties_failure(monkeypatch):
+def test_probe_video_properties_failure(monkeypatch, tmp_path):
     video._video_properties_cache.clear()
-    monkeypatch.setattr(video.Path, "is_file", lambda self: True)
+    clip = tmp_path / "clip.mp4"
+    clip.write_bytes(b"x")
 
     def raise_cpe(_cmd, **_kw):
         raise subprocess.CalledProcessError(returncode=1, cmd="ffprobe")
 
     monkeypatch.setattr(video.subprocess, "check_output", raise_cpe)
-    assert video.probe_video_properties("clip.mp4") is None
+    assert video.probe_video_properties(str(clip)) is None
 
 
-def test_probe_video_properties_file_not_found(monkeypatch):
+def test_probe_video_properties_file_not_found():
     video._video_properties_cache.clear()
-    monkeypatch.setattr(video.Path, "is_file", lambda self: False)
-    assert video.probe_video_properties("missing.mp4") is None
+    assert video.probe_video_properties("/nonexistent/missing.mp4") is None
+
+
+def test_probe_video_properties_reprobes_after_mtime_change(monkeypatch, tmp_path):
+    """A re-encoded file (new mtime_ns) invalidates the cached props."""
+    import os
+
+    video._video_properties_cache.clear()
+    clip = tmp_path / "clip.mp4"
+    clip.write_bytes(b"original")
+
+    fake_streams = {
+        "streams": [
+            {
+                "codec_type": "video",
+                "codec_name": "h264",
+                "width": 1920,
+                "height": 1080,
+                "r_frame_rate": "30/1",
+            },
+        ],
+        "format": {},
+    }
+    call_count = {"n": 0}
+
+    def fake_check_output(_cmd, **_kw):
+        call_count["n"] += 1
+        # Second probe sees a different width to prove we re-probed.
+        if call_count["n"] >= 2:
+            fake_streams["streams"][0]["width"] = 1280
+        return json.dumps(fake_streams)
+
+    monkeypatch.setattr(video.subprocess, "check_output", fake_check_output)
+
+    first = video.probe_video_properties(str(clip))
+    assert first is not None and first["width"] == 1920
+    cached = video.probe_video_properties(str(clip))
+    assert cached is first  # same dict object — cache hit
+    assert call_count["n"] == 1
+
+    # Bump mtime forward to simulate a re-encode in place.
+    bumped = clip.stat().st_mtime_ns + 10**9
+    os.utime(clip, ns=(bumped, bumped))
+
+    fresh = video.probe_video_properties(str(clip))
+    assert fresh is not None and fresh["width"] == 1280
+    assert call_count["n"] == 2
 
 
 # -- concatenate mismatch detection tests --
@@ -374,11 +422,8 @@ def test_get_file_duration_returns_rounded_probe_duration(monkeypatch, tmp_path)
     """After probe_video_properties, duration must not depend on a prior cache hit."""
     video_f = tmp_path / "video.mp4"
     video_f.write_bytes(b"x")
-    resolved = str(video_f.resolve())
-    video._file_duration_cache.pop(resolved, None)
-    video._video_properties_cache.pop(resolved, None)
-
-    monkeypatch.setattr(video.os.path, "isfile", lambda _path: True)
+    video._file_duration_cache.clear()
+    video._video_properties_cache.clear()
 
     def fake_probe(_path: str) -> dict:
         return {
@@ -393,7 +438,8 @@ def test_get_file_duration_returns_rounded_probe_duration(monkeypatch, tmp_path)
 
     monkeypatch.setattr(video, "probe_video_properties", fake_probe)
     assert video.get_file_duration(str(video_f)) == 99
-    assert video._file_duration_cache[resolved] == 99
+    key = (str(video_f.resolve()), video_f.stat().st_mtime_ns)
+    assert video._file_duration_cache[key] == 99
 
 
 def test_get_file_duration_error_paths(monkeypatch):

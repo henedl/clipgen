@@ -128,12 +128,15 @@ _manifest: dict[str, Any] = {}
 _worker: "screenspace.ScreenspaceWorker | None" = None
 _output_dir: str = ""
 _participants: list[dict[str, Any]] = []
-_video_metadata_cache: dict[str, dict[str, Any]] = {}
+# Values are (mtime_ns, info) so a stale file is re-probed automatically.
+_video_metadata_cache: dict[str, tuple[int, dict[str, Any]]] = {}
 _video_metadata_cache_lock = threading.Lock()
 # Bounded LRU so long scrub sessions don't grow unbounded; entries are
-# JPEG bytes (tens of KB each), so a few hundred is plenty.
+# JPEG bytes (tens of KB each), so a few hundred is plenty. Cache key
+# includes ``mtime_ns`` so a re-encoded source file is treated as a
+# distinct entry rather than served from stale bytes.
 _FRAME_CACHE_MAX = 256
-_frame_cache: "OrderedDict[tuple[str, float, int], bytes]" = OrderedDict()
+_frame_cache: "OrderedDict[tuple[str, int, float, int], bytes]" = OrderedDict()
 _frame_cache_lock = threading.Lock()
 
 # ---- SSE (Server-Sent Events) client registry ----
@@ -204,8 +207,19 @@ def _participant_exists(pid: str) -> bool:
 
 @screenspace_bp.route("/api/participants")
 def api_participants() -> FlaskResponse:
-    """List participants with source video availability."""
-    return jsonify({"ok": True, "participants": _participants})
+    """List participants with source video availability.
+
+    Each entry includes a ``version`` field (``st_mtime_ns`` of the source
+    file) so the frontend can cache-bust the preloaded frame-0 URL from the
+    first paint instead of waiting on a follow-up ``/api/video/info`` call.
+    """
+    payload: list[dict[str, Any]] = []
+    for p in _participants:
+        entry = dict(p)
+        if p.get("has_video"):
+            entry["version"] = _participant_video_version(p["id"])
+        payload.append(entry)
+    return jsonify({"ok": True, "participants": payload})
 
 
 @screenspace_bp.route("/api/participants/<pid>/notes")
@@ -324,27 +338,55 @@ def _find_participant_video(participant_id: str) -> str | None:
     return None
 
 
+def _find_participant_video_with_mtime(participant_id: str) -> tuple[str, int] | None:
+    """Resolve participant video path and stat its ``mtime_ns`` together.
+
+    Returns ``(path, mtime_ns)`` or ``None`` if the participant has no video or
+    the file no longer exists. Acts as the cache-version source for all video
+    routes: when the user replaces the source file, ``mtime_ns`` changes and
+    every cache keyed on it is naturally invalidated.
+    """
+    path = _find_participant_video(participant_id)
+    if path is None:
+        return None
+    try:
+        return path, Path(path).stat().st_mtime_ns
+    except OSError:
+        return None
+
+
+def _participant_video_version(participant_id: str) -> int | None:
+    """Return ``mtime_ns`` for a participant's source video, or ``None``."""
+    result = _find_participant_video_with_mtime(participant_id)
+    return result[1] if result is not None else None
+
+
 @screenspace_bp.route("/api/video/frame/<participant>/<timestamp>")
 def api_video_frame(participant: str, timestamp: str) -> FlaskResponse:
     """Extract and return a single JPEG frame at the given timestamp.
 
     Optional query parameter ``w`` requests a scaled-down thumbnail
     (e.g. ``?w=200`` for a 200 px-wide JPEG).  Without ``w`` the frame
-    is returned at full resolution.  Results are cached in-memory.
+    is returned at full resolution.  Results are cached in-memory and the
+    cache key includes the source file's ``mtime_ns`` so a re-encoded video
+    yields fresh bytes. Frontend pairs the URL with ``?v=<mtime>`` so the
+    browser HTTP cache invalidates on the same boundary, enabling the long
+    ``immutable`` ``Cache-Control`` below.
     """
     try:
         ts = float(timestamp)
     except (ValueError, TypeError):
         return jsonify({"ok": False, "error": "Invalid timestamp"}), 400
 
-    video_path = _find_participant_video(participant)
-    if video_path is None:
+    resolved = _find_participant_video_with_mtime(participant)
+    if resolved is None:
         return jsonify(
             {"ok": False, "error": f"No video for participant {participant}"}
         ), 404
+    video_path, mtime_ns = resolved
 
     width = request.args.get("w", 0, type=int)
-    cache_key = (video_path, round(ts, 3), width)
+    cache_key = (video_path, mtime_ns, round(ts, 3), width)
     with _frame_cache_lock:
         cached = _frame_cache.get(cache_key)
         if cached is not None:
@@ -354,7 +396,7 @@ def api_video_frame(participant: str, timestamp: str) -> FlaskResponse:
         return Response(
             cached,
             mimetype="image/jpeg",
-            headers={"Cache-Control": "public, max-age=86400"},
+            headers={"Cache-Control": "public, max-age=86400, immutable"},
         )
 
     if width > 0:
@@ -382,7 +424,7 @@ def api_video_frame(participant: str, timestamp: str) -> FlaskResponse:
     return Response(
         jpeg_bytes,
         mimetype="image/jpeg",
-        headers={"Cache-Control": "public, max-age=86400"},
+        headers={"Cache-Control": "public, max-age=86400, immutable"},
     )
 
 
@@ -611,17 +653,23 @@ def api_preview_layers() -> FlaskResponse:
 
 @screenspace_bp.route("/api/video/info/<participant>")
 def api_video_info(participant: str) -> FlaskResponse:
-    """Return video metadata (duration, resolution, fps)."""
-    with _video_metadata_cache_lock:
-        cached_info = _video_metadata_cache.get(participant)
-    if cached_info is not None:
-        return jsonify({"ok": True, "info": cached_info})
+    """Return video metadata (duration, resolution, fps).
 
-    video_path = _find_participant_video(participant)
-    if video_path is None:
+    Includes a ``version`` field carrying the source file's ``st_mtime_ns``.
+    The frontend appends ``?v=<version>`` to frame and stream URLs so HTTP,
+    backend, and blob caches all invalidate together when the file changes.
+    """
+    resolved = _find_participant_video_with_mtime(participant)
+    if resolved is None:
         return jsonify(
             {"ok": False, "error": f"No video for participant {participant}"}
         ), 404
+    video_path, mtime_ns = resolved
+
+    with _video_metadata_cache_lock:
+        cached = _video_metadata_cache.get(participant)
+    if cached is not None and cached[0] == mtime_ns:
+        return jsonify({"ok": True, "info": cached[1]})
 
     props = video.probe_video_properties(video_path)
     if props is None:
@@ -641,23 +689,34 @@ def api_video_info(participant: str) -> FlaskResponse:
         "height": height if height > 0 else None,
         "nb_frames": props.get("nb_frames", 0) or 0,
         "video_codec": props.get("video_codec") or "",
+        "version": mtime_ns,
     }
     with _video_metadata_cache_lock:
-        _video_metadata_cache[participant] = info
+        _video_metadata_cache[participant] = (mtime_ns, info)
 
     return jsonify({"ok": True, "info": info})
 
 
 @screenspace_bp.route("/api/video/stream/<participant>")
 def api_video_stream(participant: str) -> FlaskResponse:
-    """Stream the source video file for a participant (range-request aware)."""
+    """Stream the source video file for a participant (range-request aware).
+
+    ``conditional=True`` lets Flask set ``Last-Modified``/``ETag`` from the
+    file stat and answer ``If-Modified-Since`` with a cheap 304. We add
+    ``Cache-Control: no-cache`` so the browser always revalidates, which
+    pairs with the frontend's ``?v=<mtime>`` cache-bust to guarantee a fresh
+    stream after a source-file replacement even when range requests are in
+    flight.
+    """
     video_path = _find_participant_video(participant)
     if video_path is None:
         return (
             jsonify({"ok": False, "error": f"No video for participant {participant}"}),
             404,
         )
-    return send_file(video_path, mimetype="video/mp4", conditional=True)
+    response = send_file(video_path, mimetype="video/mp4", conditional=True)
+    response.headers["Cache-Control"] = "no-cache"
+    return response
 
 
 # ---- Region coordinate normalization ----
