@@ -12,6 +12,7 @@ import screenspace_server  # noqa: E402
 @pytest.fixture
 def client(tmp_path, monkeypatch):
     app = Flask(__name__)
+    app.json.sort_keys = False  # mirror start_combined_server: preserve manifest order
     app.register_blueprint(screenspace_server.screenspace_bp, url_prefix="/screenspace")
 
     monkeypatch.setattr(config, "OUTPUT_DIR", str(tmp_path))
@@ -256,6 +257,153 @@ def test_denormalize_cross_resolution():
     }
     px = denormalize_region(region, 1280, 720)
     assert px == {"x": 640, "y": 360, "w": 128, "h": 72}
+
+
+# ---- Region reorder ----
+
+
+def test_reorder_regions(client):
+    _create_region(client, "a")
+    _create_region(client, "b")
+    _create_region(client, "c")
+    resp = client.put(
+        "/screenspace/api/regions/reorder", json={"names": ["c", "a", "b"]}
+    )
+    assert resp.status_code == 200
+    assert resp.get_json()["ok"] is True
+    keys = list(client.get("/screenspace/api/regions").get_json()["regions"].keys())
+    assert keys == ["c", "a", "b"]
+
+
+def test_reorder_regions_rejects_mismatched_names(client):
+    _create_region(client, "a")
+    _create_region(client, "b")
+    # Unknown name and a subset both rejected — the active set must match exactly.
+    assert (
+        client.put(
+            "/screenspace/api/regions/reorder", json={"names": ["a", "x"]}
+        ).status_code
+        == 400
+    )
+    assert (
+        client.put(
+            "/screenspace/api/regions/reorder", json={"names": ["a"]}
+        ).status_code
+        == 400
+    )
+    keys = list(client.get("/screenspace/api/regions").get_json()["regions"].keys())
+    assert keys == ["a", "b"]
+
+
+def test_reorder_regions_requires_names_list(client):
+    _create_region(client, "a")
+    assert client.put("/screenspace/api/regions/reorder", json={}).status_code == 400
+    assert (
+        client.put("/screenspace/api/regions/reorder", json={"names": "a"}).status_code
+        == 400
+    )
+
+
+def test_reorder_regions_uses_persist_manifest_helper(client, monkeypatch):
+    _create_region(client, "a")
+    _create_region(client, "b")
+    calls = _install_persist_spy(monkeypatch)
+    resp = client.put("/screenspace/api/regions/reorder", json={"names": ["b", "a"]})
+    assert resp.status_code == 200
+    assert calls == [{"drain_events": False}]
+
+
+# ---- Stash: copy a region in ----
+
+
+def test_add_region_to_stash_copies_and_keeps_active(client):
+    _create_region(client, "a")
+    stash = client.post("/screenspace/api/stashes").get_json()[
+        "stash"
+    ]  # stashes "a", clears active
+    _create_region(client, "b")
+    resp = client.post(
+        "/screenspace/api/stashes/" + stash["id"] + "/regions", json={"name": "b"}
+    )
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["ok"] is True
+    # Copy, not move: "b" stays in the active set.
+    active = client.get("/screenspace/api/regions").get_json()["regions"]
+    assert "b" in active
+    # And "b" now lives in the stash too (response + manifest).
+    assert "b" in data["stash"]["regions"]
+    assert "b" in screenspace_server._manifest["stashes"][0]["regions"]
+
+
+def test_add_region_to_stash_name_collision_overwrites(client):
+    screenspace_server._manifest["stashes"] = [
+        {
+            "id": "stash_x",
+            "name": "S",
+            "regions": {
+                "a": {
+                    "x": 0.1,
+                    "y": 0.1,
+                    "w": 0.1,
+                    "h": 0.1,
+                    "source_width": 1920,
+                    "source_height": 1080,
+                }
+            },
+        }
+    ]
+    _create_region(client, "a", x=960, y=540, w=192, h=108)  # different coords
+    active_a = client.get("/screenspace/api/regions").get_json()["regions"]["a"]
+    resp = client.post("/screenspace/api/stashes/stash_x/regions", json={"name": "a"})
+    assert resp.status_code == 200
+    # Active definition overwrites the stale stash entry (last-write-wins).
+    assert resp.get_json()["stash"]["regions"]["a"] == active_a
+    assert "a" in client.get("/screenspace/api/regions").get_json()["regions"]
+
+
+def test_add_region_to_stash_missing_region(client):
+    screenspace_server._manifest["stashes"] = [
+        {"id": "stash_x", "name": "S", "regions": {}}
+    ]
+    resp = client.post(
+        "/screenspace/api/stashes/stash_x/regions", json={"name": "nope"}
+    )
+    assert resp.status_code == 404
+
+
+def test_add_region_to_stash_missing_stash(client):
+    _create_region(client, "a")
+    resp = client.post("/screenspace/api/stashes/bogus/regions", json={"name": "a"})
+    assert resp.status_code == 404
+
+
+def test_add_region_to_stash_requires_name(client):
+    screenspace_server._manifest["stashes"] = [
+        {"id": "stash_x", "name": "S", "regions": {}}
+    ]
+    assert (
+        client.post("/screenspace/api/stashes/stash_x/regions", json={}).status_code
+        == 400
+    )
+    assert (
+        client.post(
+            "/screenspace/api/stashes/stash_x/regions", json={"name": "  "}
+        ).status_code
+        == 400
+    )
+
+
+def test_add_region_to_stash_uses_persist_manifest_helper(client, monkeypatch):
+    _create_region(client, "a")
+    stash = client.post("/screenspace/api/stashes").get_json()["stash"]
+    _create_region(client, "b")
+    calls = _install_persist_spy(monkeypatch)
+    resp = client.post(
+        "/screenspace/api/stashes/" + stash["id"] + "/regions", json={"name": "b"}
+    )
+    assert resp.status_code == 200
+    assert calls == [{"drain_events": False}]
 
 
 # ---- Tasks ----
