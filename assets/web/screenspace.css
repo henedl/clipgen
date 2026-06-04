@@ -733,6 +733,27 @@ body {
   background: rgba(0, 0, 0, 0.04);
 }
 
+/* Region chip drag-and-drop (reorder within the list + copy into a stash) */
+.region-chip[draggable="true"] {
+  cursor: grab;
+}
+
+.region-chip.dragging {
+  opacity: 0.4;
+  cursor: grabbing;
+}
+
+/* Horizontal insertion bar on the LEFT edge of the chip the drop lands before.
+   box-shadow doesn't shift layout (mirrors .multitool-step.drag-over). */
+.region-chip.drag-over {
+  box-shadow: -3px 0 0 0 var(--color-accent);
+}
+
+/* Append-to-end: bar on the right of the last chip. */
+#regionChips.drag-over-append .region-chip:last-of-type {
+  box-shadow: 3px 0 0 0 var(--color-accent);
+}
+
 .region-chip-dot {
   width: 8px;
   height: 8px;
@@ -809,6 +830,12 @@ body {
 
 .stash-card:hover {
   border-color: var(--color-accent);
+}
+
+/* Drop target while dragging a region chip onto the card. */
+.stash-card.drag-over {
+  border-color: var(--color-accent);
+  box-shadow: var(--shadow-focus);
 }
 
 .stash-card-name {

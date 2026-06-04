@@ -1786,6 +1786,9 @@
       var color = regionColorForIndex(i);
       var chip = el("div", "region-chip" + (name === state.activeRegion ? " active" : ""));
       chip.style.color = color;
+      chip.setAttribute("draggable", "true");
+      chip.dataset.regionName = name;
+      chip.dataset.regionIdx = String(i);
       var dot = el("span", "region-chip-dot");
       dot.style.background = color;
       chip.appendChild(dot);
@@ -1859,6 +1862,26 @@
     });
   }
 
+  function copyRegionToStash(name, stashId) {
+    if (!(name in state.regions)) return;
+    apiPost("api/stashes/" + stashId + "/regions", { name: name })
+      .then(function (data) {
+        if (!data.ok) return;
+        for (var i = 0; i < state.stashes.length; i++) {
+          if (state.stashes[i].id === stashId) {
+            state.stashes[i] = data.stash;
+            break;
+          }
+        }
+        renderStashCards(); // updated count + dots
+        renderRunRegionPicker(); // stash folder now lists the new region
+        showToast("Added “" + name + "” to " + data.stash.name);
+      })
+      .catch(function () {
+        showToast("Failed to add region to stash");
+      });
+  }
+
   function renameStash(stashId, newName) {
     apiPut("api/stashes/" + stashId, { name: newName }).then(function (data) {
       if (!data.ok) return;
@@ -1886,6 +1909,7 @@
 
     state.stashes.forEach(function (stash) {
       var card = el("div", "stash-card");
+      card.dataset.stashId = stash.id;
       var regionNames = Object.keys(stash.regions);
 
       // Editable name
@@ -1956,9 +1980,158 @@
     });
 
     if (!existing) {
+      bindStashDrop(area);
       var viewerSection = qs("#viewerSection");
       viewerSection.parentNode.insertBefore(area, viewerSection.nextSibling);
     }
+  }
+
+  // Delegated drop handlers so a dragged region chip can be copied into a stash.
+  // Bound once on the persistent #stashArea node (its innerHTML is rebuilt each
+  // render, but the element itself is reused).
+  var _stashDragOverCard = null;
+
+  function bindStashDrop(area) {
+    area.addEventListener("dragover", function (e) {
+      if (e.dataTransfer.types.indexOf("application/x-region-name") < 0) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = "copy";
+      var card = e.target.closest(".stash-card");
+      if (_stashDragOverCard && _stashDragOverCard !== card) {
+        _stashDragOverCard.classList.remove("drag-over");
+      }
+      if (card) {
+        card.classList.add("drag-over");
+        _stashDragOverCard = card;
+      }
+    });
+    area.addEventListener("dragleave", function (e) {
+      var card = e.target.closest(".stash-card");
+      if (card && !card.contains(e.relatedTarget)) card.classList.remove("drag-over");
+    });
+    area.addEventListener("drop", function (e) {
+      if (e.dataTransfer.types.indexOf("application/x-region-name") < 0) return;
+      var card = e.target.closest(".stash-card");
+      if (!card) return;
+      e.preventDefault();
+      card.classList.remove("drag-over");
+      _stashDragOverCard = null;
+      copyRegionToStash(e.dataTransfer.getData("application/x-region-name"), card.dataset.stashId);
+    });
+  }
+
+  // ---- Region chip drag (reorder within #regionChips + copy into stashes) ----
+  // Horizontal mirror of the multitool/task vertical drag helpers: midpoints use
+  // left+width/2 and compare clientX. Excluding the .dragging chip from the cache
+  // keeps the drop index aligned with the post-splice array (no off-by-one).
+  var _regionDragMidpoints = null;
+  var _regionDragOverRaf = null;
+  var _regionPendingDragOverX = null;
+
+  function _cacheRegionDragMidpoints(container) {
+    var chips = container.querySelectorAll(".region-chip:not(.dragging)");
+    var mids = new Array(chips.length);
+    for (var i = 0; i < chips.length; i++) {
+      var r = chips[i].getBoundingClientRect();
+      mids[i] = r.left + r.width / 2;
+    }
+    _regionDragMidpoints = mids;
+  }
+
+  function getRegionDropIndex(container, clientX) {
+    var mids = _regionDragMidpoints;
+    if (!mids) {
+      _cacheRegionDragMidpoints(container);
+      mids = _regionDragMidpoints;
+    }
+    for (var i = 0; i < mids.length; i++) {
+      if (clientX < mids[i]) return i;
+    }
+    return mids.length;
+  }
+
+  function clearRegionDragIndicators(container) {
+    var chips = container.querySelectorAll(".region-chip.drag-over");
+    for (var i = 0; i < chips.length; i++) chips[i].classList.remove("drag-over");
+    container.classList.remove("drag-over-append");
+  }
+
+  function initRegionDrag() {
+    var chips = qs("#regionChips");
+
+    chips.addEventListener("dragstart", function (e) {
+      var chip = e.target.closest(".region-chip");
+      if (!chip) {
+        e.preventDefault();
+        return;
+      }
+      chip.classList.add("dragging");
+      e.dataTransfer.setData("text/plain", chip.dataset.regionIdx);
+      e.dataTransfer.setData("application/x-region-name", chip.dataset.regionName);
+      e.dataTransfer.effectAllowed = "copyMove";
+      _cacheRegionDragMidpoints(chips);
+    });
+
+    chips.addEventListener("dragend", function (e) {
+      var chip = e.target.closest(".region-chip");
+      if (chip) chip.classList.remove("dragging");
+      if (_regionDragOverRaf != null) {
+        cancelAnimationFrame(_regionDragOverRaf);
+        _regionDragOverRaf = null;
+      }
+      _regionPendingDragOverX = null;
+      clearRegionDragIndicators(chips);
+      _regionDragMidpoints = null;
+    });
+
+    chips.addEventListener("dragover", function (e) {
+      if (e.dataTransfer.types.indexOf("application/x-region-name") < 0) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = "move";
+      _regionPendingDragOverX = e.clientX;
+      if (_regionDragOverRaf != null) return; // RAF-debounce ~60Hz dragover
+      _regionDragOverRaf = requestAnimationFrame(function () {
+        _regionDragOverRaf = null;
+        if (_regionPendingDragOverX == null) return;
+        clearRegionDragIndicators(chips);
+        var visible = chips.querySelectorAll(".region-chip:not(.dragging)");
+        var idx = getRegionDropIndex(chips, _regionPendingDragOverX);
+        if (idx < visible.length) visible[idx].classList.add("drag-over");
+        else chips.classList.add("drag-over-append");
+      });
+    });
+
+    chips.addEventListener("dragleave", function (e) {
+      var chip = e.target.closest(".region-chip");
+      if (chip) chip.classList.remove("drag-over");
+      if (!chips.contains(e.relatedTarget)) chips.classList.remove("drag-over-append");
+    });
+
+    chips.addEventListener("drop", function (e) {
+      if (e.dataTransfer.types.indexOf("application/x-region-name") < 0) return;
+      e.preventDefault();
+      clearRegionDragIndicators(chips);
+      var fromIdx = parseInt(e.dataTransfer.getData("text/plain"), 10);
+      if (isNaN(fromIdx)) return;
+      var toIdx = getRegionDropIndex(chips, e.clientX);
+      if (fromIdx === toIdx) return;
+      var names = Object.keys(state.regions);
+      var moved = names.splice(fromIdx, 1)[0];
+      names.splice(toIdx, 0, moved);
+      // Rebuild state.regions in the new order.
+      var reordered = {};
+      names.forEach(function (n) {
+        reordered[n] = state.regions[n];
+      });
+      state.regions = reordered;
+      // Region colors are position-based (regionColorForIndex), so reordering
+      // recolors regions — intentional. Repaint chips and overlay together.
+      renderRegionChips();
+      renderOverlay();
+      apiPut("api/regions/reorder", { names: names }).catch(function () {
+        showToast("Failed to save region order");
+      });
+    });
   }
 
   function templateOverlayBounds() {
@@ -6729,6 +6902,7 @@
     initFrameControls();
     initVideoPlayback();
     initRegionDrawing();
+    initRegionDrag();
     initTimeline();
     initWorkflowTabs();
     initModelView();

@@ -19,11 +19,13 @@ API endpoints (all under /screenspace/):
   GET  /api/video/stream/<participant>     – stream source video (mp4, range-aware)
   GET  /api/regions                         – list regions
   POST /api/regions                         – create or update a region
+  PUT  /api/regions/reorder                – reorder active regions by name
   DELETE /api/regions/<name>               – delete a region
   GET/POST /api/stashes                    – stash CRUD (save/restore named region sets)
   PUT  /api/stashes/<id>                   – update stash
   DELETE /api/stashes/<id>                 – delete stash
   POST /api/stashes/<id>/restore           – restore a stash
+  POST /api/stashes/<id>/regions           – copy one active region into a stash
   GET  /api/tasks                          – list task queue
   GET  /api/tasks/<task_id>               – get single task
   POST /api/tasks                          – create and enqueue a new task
@@ -913,6 +915,29 @@ def api_regions_delete(name: str) -> FlaskResponse:
     return jsonify({"ok": True})
 
 
+@screenspace_bp.route("/api/regions/reorder", methods=["PUT"])
+def api_regions_reorder() -> FlaskResponse:
+    """Reorder active regions to match the given name order."""
+    data = request.get_json(silent=True)
+    if not data or not isinstance(data.get("names"), list):
+        return jsonify({"ok": False, "error": "names list required"}), 400
+
+    with _manifest_lock:
+        regions = _manifest.get("regions", {})
+        names = data["names"]
+        if set(names) != set(regions.keys()):
+            return (
+                jsonify(
+                    {"ok": False, "error": "names must match current regions exactly"}
+                ),
+                400,
+            )
+        _manifest["regions"] = {name: regions[name] for name in names}
+        _do_persist(drain_events=False)
+
+    return jsonify({"ok": True})
+
+
 # ---- Stashes CRUD ----
 
 
@@ -987,6 +1012,35 @@ def api_stashes_restore(stash_id: str) -> FlaskResponse:
         _manifest["regions"] = copy.deepcopy(stash["regions"])
         _do_persist(drain_events=False)
     return jsonify({"ok": True, "regions": _manifest["regions"]})
+
+
+@screenspace_bp.route("/api/stashes/<stash_id>/regions", methods=["POST"])
+def api_stashes_add_region(stash_id: str) -> FlaskResponse:
+    """Copy one active region into an existing stash (active set unchanged).
+
+    If the stash already holds a region with that name, the active definition
+    overwrites it (last-write-wins, matching api_regions_create's upsert).
+    """
+    data = request.get_json(silent=True)
+    if not data:
+        return jsonify({"ok": False, "error": "JSON body required"}), 400
+    name = data.get("name", "").strip()
+    if not name:
+        return jsonify({"ok": False, "error": "Region name is required"}), 400
+
+    with _manifest_lock:
+        regions = _manifest.get("regions", {})
+        if name not in regions:
+            return jsonify({"ok": False, "error": f"Region '{name}' not found"}), 404
+        stash = next(
+            (s for s in _manifest.get("stashes", []) if s["id"] == stash_id), None
+        )
+        if stash is None:
+            return jsonify({"ok": False, "error": "Stash not found"}), 404
+        stash.setdefault("regions", {})[name] = copy.deepcopy(regions[name])
+        _do_persist(drain_events=False)
+
+    return jsonify({"ok": True, "stash": stash})
 
 
 # ---- Tasks CRUD ----
@@ -1403,6 +1457,8 @@ def api_tasks_create() -> FlaskResponse:
     if isinstance(validated, Response) or (
         isinstance(validated, tuple) and len(validated) == 2
     ):
+        # cast() needed for older ty (<=0.0.33) which doesn't narrow `len == 2`;
+        # newer ty flags this as redundant but only as a non-failing warning.
         return cast(FlaskResponse, validated)
     assert isinstance(validated, tuple) and len(validated) == 6  # success tuple
     (

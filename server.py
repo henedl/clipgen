@@ -58,6 +58,7 @@ from flask import (
     redirect,
     request,
 )
+from flask.json.provider import DefaultJSONProvider
 from werkzeug.serving import WSGIRequestHandler
 
 import config
@@ -2538,6 +2539,11 @@ def build_combined_app(
     import transcripts_server
 
     combined = Flask(__name__, static_folder=None)
+    # Preserve insertion order in JSON responses. Flask defaults to sorting object
+    # keys alphabetically, which would clobber manifest-ordered data such as the
+    # region list (drag-to-reorder relies on GET /api/regions echoing manifest order).
+    assert isinstance(combined.json, DefaultJSONProvider)  # Flask's stock provider
+    combined.json.sort_keys = False
 
     _init_studio_state(worksheet)
     # Seed the meta + recent-projects rail for CLI launches that already
