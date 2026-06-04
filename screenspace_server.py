@@ -1457,6 +1457,8 @@ def api_tasks_create() -> FlaskResponse:
     if isinstance(validated, Response) or (
         isinstance(validated, tuple) and len(validated) == 2
     ):
+        # cast() needed for older ty (<=0.0.33) which doesn't narrow `len == 2`;
+        # newer ty flags this as redundant but only as a non-failing warning.
         return cast(FlaskResponse, validated)
     assert isinstance(validated, tuple) and len(validated) == 6  # success tuple
     (
