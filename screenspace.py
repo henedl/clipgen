@@ -85,6 +85,34 @@ def _get_ocr_reader(languages: list[str]) -> Any:
         return _ocr_readers[key]
 
 
+def _preprocess_for_ocr(pixels: np.ndarray, *, min_height: int = 0) -> np.ndarray:
+    """Enhance a region crop for OCR: upscale small crops and boost local contrast.
+
+    Compressed game HUDs frequently render text below EasyOCR's comfortable size
+    and at low contrast. Crops shorter than ``min_height`` are upscaled with cubic
+    interpolation (preserving aspect ratio), then CLAHE (contrast-limited adaptive
+    histogram equalization) separates faint glyphs from the background. Opt-in per
+    task because the resize + equalization costs a few ms/frame and can introduce
+    ringing on already-clean text.
+
+    Returns a 3-channel BGR array (EasyOCR accepts grayscale, but stacking keeps
+    the downstream call identical to the raw crop).
+    """
+    if min_height <= 0:
+        min_height = config.SCREENSPACE_OCR_MIN_HEIGHT
+    h, w = pixels.shape[:2]
+    if h == 0 or w == 0:
+        return pixels
+    if h < min_height:
+        scale = min_height / float(h)
+        new_w = max(1, int(round(w * scale)))
+        pixels = cv2.resize(pixels, (new_w, min_height), interpolation=cv2.INTER_CUBIC)
+    gray = cv2.cvtColor(pixels, cv2.COLOR_BGR2GRAY) if pixels.ndim == 3 else pixels
+    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+    enhanced = clahe.apply(gray)
+    return cv2.cvtColor(enhanced, cv2.COLOR_GRAY2BGR)
+
+
 # ---------------------------------------------------------------------------
 # Analysis primitives
 # ---------------------------------------------------------------------------
@@ -1206,6 +1234,8 @@ def scan_text(
     interval_seconds: float = 2.0,
     *,
     fuzzy_threshold: float = 0.0,
+    ocr_confidence_threshold: float = 0.0,
+    ocr_preprocess: bool = False,
     languages: list[str] | None = None,
     start_seconds: float = 0.0,
     end_seconds: float | None = None,
@@ -1223,6 +1253,8 @@ def scan_text(
 
     if fuzzy_threshold <= 0:
         fuzzy_threshold = config.SCREENSPACE_OCR_FUZZY_THRESHOLD
+    if ocr_confidence_threshold <= 0:
+        ocr_confidence_threshold = config.SCREENSPACE_OCR_MIN_CONFIDENCE
     if languages is None:
         languages = ["en"]
 
@@ -1251,8 +1283,11 @@ def scan_text(
                     on_progress((ts - start_seconds) / total_range)
                 return None
         prev_gray[0] = gray
-        ocr_results = reader.readtext(pixels, detail=1)
+        ocr_input = _preprocess_for_ocr(pixels) if ocr_preprocess else pixels
+        ocr_results = reader.readtext(ocr_input, detail=1)
         for _, text, conf in ocr_results:
+            if conf < ocr_confidence_threshold:
+                continue
             ratio = difflib.SequenceMatcher(None, search_lower, text.lower()).ratio()
             if ratio >= fuzzy_threshold:
                 rd = {
@@ -1325,6 +1360,8 @@ def scan_numbers(
     *,
     range_min: float | None = None,
     range_max: float | None = None,
+    ocr_confidence_threshold: float = 0.0,
+    ocr_preprocess: bool = False,
     languages: list[str] | None = None,
     start_seconds: float = 0.0,
     end_seconds: float | None = None,
@@ -1345,6 +1382,8 @@ def scan_numbers(
 
     utils.require_optional("easyocr", "numbers scan")
 
+    if ocr_confidence_threshold <= 0:
+        ocr_confidence_threshold = config.SCREENSPACE_OCR_MIN_CONFIDENCE
     if languages is None:
         languages = ["en"]
 
@@ -1372,13 +1411,20 @@ def scan_numbers(
                     on_progress((ts - start_seconds) / total_range)
                 return None
         prev_gray[0] = gray
-        ocr_results = reader.readtext(pixels, detail=1)
-        for _, text, _conf in ocr_results:
+        ocr_input = _preprocess_for_ocr(pixels) if ocr_preprocess else pixels
+        ocr_results = reader.readtext(ocr_input, detail=1)
+        for _, text, conf in ocr_results:
+            if conf < ocr_confidence_threshold:
+                continue
             cleaned = text.replace(",", "")
             for match in _NUMBERS_RE.findall(cleaned):
                 num = float(match)
                 if _number_matches(num, operator, target_value, range_min, range_max):
-                    rd = {"timestamp": ts, "number_found": num}
+                    rd = {
+                        "timestamp": ts,
+                        "number_found": num,
+                        "confidence": round(conf, 4),
+                    }
                     results.append(rd)
                     if on_result:
                         on_result(rd)
@@ -1942,7 +1988,7 @@ def _extract_confidence(tool_type: str, result: dict[str, Any]) -> float:
     elif tool_type == "text":
         return result.get("confidence", 0.0)
     elif tool_type == "numbers":
-        return 1.0
+        return result.get("confidence", 1.0)
     elif tool_type == "template":
         return result.get("best_score", 0.0)
     elif tool_type == "flow":
@@ -2564,11 +2610,21 @@ class TextTool(AnalysisTool):
         fuzzy_threshold = params.get(
             "fuzzy_threshold", config.SCREENSPACE_OCR_FUZZY_THRESHOLD
         )
+        # 0/absent → config default, matching scan_text's `<= 0` convention so
+        # standalone and multitool paths gate identically.
+        ocr_min_conf = (
+            params.get("ocr_confidence_threshold")
+            or config.SCREENSPACE_OCR_MIN_CONFIDENCE
+        )
         languages = params.get("languages") or ["en"]
         reader = _get_ocr_reader(languages)
+        if params.get("ocr_preprocess", False):
+            pixels = _preprocess_for_ocr(pixels)
         ocr_results = reader.readtext(pixels, detail=1)
         search_lower = search_string.lower()
         for _, text, conf in ocr_results:
+            if conf < ocr_min_conf:
+                continue
             ratio = difflib.SequenceMatcher(None, search_lower, text.lower()).ratio()
             if ratio >= fuzzy_threshold:
                 return True, {"text_found": text, "confidence": round(conf, 4)}
@@ -2593,6 +2649,8 @@ class TextTool(AnalysisTool):
             search_string=params.get("search_string", ""),
             interval_seconds=params.get("interval", 2.0),
             fuzzy_threshold=params.get("fuzzy_threshold", 0),
+            ocr_confidence_threshold=params.get("ocr_confidence_threshold", 0),
+            ocr_preprocess=params.get("ocr_preprocess", False),
             languages=params.get("languages"),
             start_seconds=params.get("start_seconds", 0.0),
             end_seconds=params.get("end_seconds"),
@@ -2612,15 +2670,25 @@ class NumbersTool(AnalysisTool):
         target_value = params.get("target_value", 0)
         range_min = params.get("range_min")
         range_max = params.get("range_max")
+        # 0/absent → config default, matching scan_numbers's `<= 0` convention so
+        # standalone and multitool paths gate identically.
+        ocr_min_conf = (
+            params.get("ocr_confidence_threshold")
+            or config.SCREENSPACE_OCR_MIN_CONFIDENCE
+        )
         languages = params.get("languages") or ["en"]
         reader = _get_ocr_reader(languages)
+        if params.get("ocr_preprocess", False):
+            pixels = _preprocess_for_ocr(pixels)
         ocr_results = reader.readtext(pixels, detail=1)
-        for _, text, _conf in ocr_results:
+        for _, text, conf in ocr_results:
+            if conf < ocr_min_conf:
+                continue
             cleaned = text.replace(",", "")
             for match in _NUMBERS_RE.findall(cleaned):
                 num = float(match)
                 if _number_matches(num, operator, target_value, range_min, range_max):
-                    return True, {"number_found": num}
+                    return True, {"number_found": num, "confidence": round(conf, 4)}
         return False, None
 
     def scan(
@@ -2644,6 +2712,8 @@ class NumbersTool(AnalysisTool):
             interval_seconds=params.get("interval", 2.0),
             range_min=params.get("range_min"),
             range_max=params.get("range_max"),
+            ocr_confidence_threshold=params.get("ocr_confidence_threshold", 0),
+            ocr_preprocess=params.get("ocr_preprocess", False),
             languages=params.get("languages"),
             start_seconds=params.get("start_seconds", 0.0),
             end_seconds=params.get("end_seconds"),

@@ -714,6 +714,9 @@
       "Search":           "Exact or partial text to find on screen",
       "Fuzzy Thr.":       "Minimum fuzzy-match score (1.0 = exact match)",
       "Fuzzy":            "Minimum fuzzy-match score (1.0 = exact match)",
+      "Min OCR conf.":    "Drop OCR readings below this confidence before fuzzy matching (raise to suppress noisy misreads)",
+      "Min OCR":          "Drop OCR readings below this confidence before fuzzy matching (raise to suppress noisy misreads)",
+      "Enhance ROI":      "Upscale small/low-contrast crops and apply CLAHE before OCR (slower; helps tiny HUD text)",
       "Language":         "OCR language for text recognition",
     },
     numbers: {
@@ -721,6 +724,9 @@
       "Target value":     "Number to compare the detected value against",
       "Target":           "Number to compare the detected value against",
       "Range":            "Min and max bounds for the in-range check",
+      "Min OCR conf.":    "Drop OCR readings below this confidence before parsing numbers (raise to suppress noisy misreads)",
+      "Min OCR":          "Drop OCR readings below this confidence before parsing numbers (raise to suppress noisy misreads)",
+      "Enhance ROI":      "Upscale small/low-contrast crops and apply CLAHE before OCR (slower; helps tiny HUD numbers)",
     },
     timelapse: {
       "Speed":            "Playback speed multiplier for the output",
@@ -3211,6 +3217,8 @@
     r1.appendChild(c1);
     body.appendChild(r1);
     _mtAddNumberRow(body, "Fuzzy", "paramTextFuzzy" + sfx, 0.50, 1.00, numberOrDefault(init.fuzzy_threshold, 0.80), 0.01);
+    _mtAddNumberRow(body, "Min OCR", "paramTextOcrConf" + sfx, 0.00, 1.00, numberOrDefault(init.ocr_confidence_threshold, CLIPGEN_CONFIG.screenspaceOcrMinConfidence), 0.01);
+    _mtAddCheckboxRow(body, "Enhance ROI", "paramTextOcrPreprocess" + sfx, init.ocr_preprocess);
   }
 
   function _mtRenderNumbers(body, idx, sfx) {
@@ -3239,6 +3247,8 @@
     c2.appendChild(targetIn);
     r2.appendChild(c2);
     body.appendChild(r2);
+    _mtAddNumberRow(body, "Min OCR", "paramNumOcrConf" + sfx, 0.00, 1.00, numberOrDefault(init.ocr_confidence_threshold, CLIPGEN_CONFIG.screenspaceOcrMinConfidence), 0.01);
+    _mtAddCheckboxRow(body, "Enhance ROI", "paramNumOcrPreprocess" + sfx, init.ocr_preprocess);
   }
 
   function _mtRenderTemplate(body, idx, sfx) {
@@ -3332,6 +3342,18 @@
     r.appendChild(el("span", "param-label", label));
     var c = el("div", "param-control");
     c.appendChild(numberInput(id, min, max, def, step));
+    r.appendChild(c);
+    body.appendChild(r);
+  }
+  function _mtAddCheckboxRow(body, label, id, checked) {
+    var r = el("div", "param-row");
+    r.appendChild(el("span", "param-label", label));
+    var c = el("div", "param-control");
+    var cb = document.createElement("input");
+    cb.type = "checkbox";
+    cb.id = id;
+    cb.checked = !!checked;
+    c.appendChild(cb);
     r.appendChild(c);
     body.appendChild(r);
   }
@@ -3447,10 +3469,14 @@
         var searchEl = qs("#paramTextSearch" + sfx);
         if (searchEl) init.search_string = searchEl.value;
         init.fuzzy_threshold = numberOrDefault((qs("#paramTextFuzzy" + sfx) || {}).value, init.fuzzy_threshold);
+        init.ocr_confidence_threshold = numberOrDefault((qs("#paramTextOcrConf" + sfx) || {}).value, init.ocr_confidence_threshold);
+        init.ocr_preprocess = !!((qs("#paramTextOcrPreprocess" + sfx) || {}).checked);
       } else if (step.type === "numbers") {
         var opEl = qs("#paramNumOperator" + sfx);
         if (opEl) init.operator = opEl.value;
         init.target_value = numberOrDefault((qs("#paramNumTarget" + sfx) || {}).value, init.target_value);
+        init.ocr_confidence_threshold = numberOrDefault((qs("#paramNumOcrConf" + sfx) || {}).value, init.ocr_confidence_threshold);
+        init.ocr_preprocess = !!((qs("#paramNumOcrPreprocess" + sfx) || {}).checked);
       } else if (step.type === "template") {
         init.threshold = numberOrDefault((qs("#paramTemplateThresh" + sfx) || {}).value, init.threshold);
       } else if (step.type === "flow") {
@@ -3825,6 +3851,7 @@
   function renderTextParams(container) {
     addParamRow(container, "Search text", textInput("paramTextSearch", "Enter text to find..."));
     addParamRow(container, "Fuzzy Thr.", rangeInput("paramTextFuzzy", 0.50, 1.00, 0.80, 0.01), "paramTextFuzzyVal");
+    addParamRow(container, "Min OCR conf.", rangeInput("paramTextOcrConf", 0.00, 1.00, numberOrDefault(CLIPGEN_CONFIG.screenspaceOcrMinConfidence, 0.6), 0.01), "paramTextOcrConfVal");
     renderIntervalSlot("paramTextInterval", 0.5, 60, 2.0, 0.5);
     var langRow = el("div", "param-row");
     langRow.appendChild(el("span", "param-label", "Language"));
@@ -3840,6 +3867,10 @@
     langControl.appendChild(langSel);
     langRow.appendChild(langControl);
     container.appendChild(langRow);
+    var ppCb = document.createElement("input");
+    ppCb.type = "checkbox";
+    ppCb.id = "paramTextOcrPreprocess";
+    addParamRow(container, "Enhance ROI", ppCb);
   }
 
   function renderNumbersParams(container) {
@@ -3885,6 +3916,11 @@
     rangeCtrl.appendChild(numberInput("paramNumMax", -999999, 999999, 100, 1));
     numRangeRow.appendChild(rangeCtrl);
     container.appendChild(numRangeRow);
+    addParamRow(container, "Min OCR conf.", rangeInput("paramNumOcrConf", 0.00, 1.00, numberOrDefault(CLIPGEN_CONFIG.screenspaceOcrMinConfidence, 0.6), 0.01), "paramNumOcrConfVal");
+    var ppCb = document.createElement("input");
+    ppCb.type = "checkbox";
+    ppCb.id = "paramNumOcrPreprocess";
+    addParamRow(container, "Enhance ROI", ppCb);
     renderIntervalSlot("paramNumInterval", 0.5, 60, 2.0, 0.5);
   }
 
@@ -5042,6 +5078,8 @@
         return null;
       }
       params.fuzzy_threshold = numberOrDefault((qs("#paramTextFuzzy") || {}).value, 0.80);
+      params.ocr_confidence_threshold = numberOrDefault((qs("#paramTextOcrConf") || {}).value, CLIPGEN_CONFIG.screenspaceOcrMinConfidence);
+      params.ocr_preprocess = !!((qs("#paramTextOcrPreprocess") || {}).checked);
       params.interval = numberOrDefault((qs("#paramTextInterval") || {}).value, 2.0);
       var lang = (qs("#paramTextLang") || {}).value || "en";
       params.languages = [lang];
@@ -5066,6 +5104,8 @@
           return null;
         }
       }
+      params.ocr_confidence_threshold = numberOrDefault((qs("#paramNumOcrConf") || {}).value, CLIPGEN_CONFIG.screenspaceOcrMinConfidence);
+      params.ocr_preprocess = !!((qs("#paramNumOcrPreprocess") || {}).checked);
       params.interval = numberOrDefault((qs("#paramNumInterval") || {}).value, 2.0);
     } else if (type === "timelapse") {
       params.speedup_factor = numberOrDefault((qs("#paramTlSpeed") || {}).value, 10);
@@ -5686,6 +5726,9 @@
     } else if (task.type === "text") {
       setInputValue("#paramTextSearch", params.search_string || "");
       setInputValue("#paramTextFuzzy", numberOrDefault(params.fuzzy_threshold, 0.80));
+      setInputValue("#paramTextOcrConf", numberOrDefault(params.ocr_confidence_threshold, CLIPGEN_CONFIG.screenspaceOcrMinConfidence));
+      var textPpEl = qs("#paramTextOcrPreprocess");
+      if (textPpEl) textPpEl.checked = !!params.ocr_preprocess;
       setInputValue("#paramTextInterval", numberOrDefault(params.interval, 2.0));
       if (params.languages && params.languages[0]) {
         setInputValue("#paramTextLang", params.languages[0]);
@@ -5702,6 +5745,9 @@
       } else {
         setInputValue("#paramNumTarget", numberOrDefault(params.target_value, 100));
       }
+      setInputValue("#paramNumOcrConf", numberOrDefault(params.ocr_confidence_threshold, CLIPGEN_CONFIG.screenspaceOcrMinConfidence));
+      var numPpEl = qs("#paramNumOcrPreprocess");
+      if (numPpEl) numPpEl.checked = !!params.ocr_preprocess;
       setInputValue("#paramNumInterval", numberOrDefault(params.interval, 2.0));
     } else if (task.type === "timelapse") {
       setInputValue("#paramTlSpeed", numberOrDefault(params.speedup_factor, 10));

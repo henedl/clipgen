@@ -42,6 +42,7 @@ var CLIPGEN_CONFIG = {
     { id: "key", token: "!key" },
   ],
   ignoredTimestampTokens: ["x"],
+  screenspaceOcrMinConfidence: 0.6,
 };
 
 var clipgenApplyConfig = function (payload) {
@@ -60,6 +61,9 @@ var clipgenApplyConfig = function (payload) {
   }
   if (Array.isArray(payload.ignoredTimestampTokens)) {
     CLIPGEN_CONFIG.ignoredTimestampTokens = payload.ignoredTimestampTokens;
+  }
+  if (typeof payload.screenspaceOcrMinConfidence === "number") {
+    CLIPGEN_CONFIG.screenspaceOcrMinConfidence = payload.screenspaceOcrMinConfidence;
   }
 };
 

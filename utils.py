@@ -756,6 +756,7 @@ def get_frontend_config() -> dict[str, Any]:
         "annotationKeyphrases": sorted(get_known_annotation_map().keys()),
         "annotations": annotations,
         "ignoredTimestampTokens": sorted(get_ignored_timestamp_tokens()),
+        "screenspaceOcrMinConfidence": config.SCREENSPACE_OCR_MIN_CONFIDENCE,
     }
 
 

@@ -979,6 +979,128 @@ class TestScreenspaceWorker:
         assert t.get("parameters", {}).get("start_seconds") == 50.0
 
 
+class TestOcrPreprocess:
+    def test_small_roi_upscaled(self):
+        """Crops shorter than the min height are upscaled, preserving aspect."""
+        small = np.full((20, 120, 3), 128, dtype=np.uint8)
+        out = screenspace._preprocess_for_ocr(small)
+        assert out.shape[0] >= 60
+        # Aspect ratio preserved (6:1 → width scales with height).
+        assert out.shape[1] >= 360
+
+    def test_large_roi_size_unchanged(self):
+        """Crops already tall enough are not resized."""
+        large = np.full((200, 500, 3), 128, dtype=np.uint8)
+        out = screenspace._preprocess_for_ocr(large)
+        assert out.shape[0] == 200
+        assert out.shape[1] == 500
+
+    def test_clahe_increases_contrast(self):
+        """CLAHE stretches a low-contrast crop, raising pixel variance."""
+        base = np.random.RandomState(0).randint(100, 116, (60, 120)).astype(np.uint8)
+        lowc = np.stack([base, base, base], axis=-1)  # equal channels → true gray
+        out = screenspace._preprocess_for_ocr(lowc)
+        in_var = float(np.var(lowc[:, :, 0]))
+        out_var = float(np.var(out[:, :, 0]))
+        assert out_var > in_var
+
+    def test_returns_three_channels(self):
+        small = np.full((20, 120, 3), 128, dtype=np.uint8)
+        out = screenspace._preprocess_for_ocr(small)
+        assert out.ndim == 3 and out.shape[2] == 3
+
+    def test_empty_region_returned_unchanged(self):
+        empty = np.zeros((0, 10, 3), dtype=np.uint8)
+        out = screenspace._preprocess_for_ocr(empty)
+        assert out.shape[0] == 0
+
+    def test_scan_text_preprocess_enlarges_ocr_input(self, monkeypatch):
+        """ocr_preprocess=True feeds an upscaled crop to the OCR reader."""
+        frame = np.full((20, 120, 3), 128, dtype=np.uint8)
+        seen: dict[str, int] = {}
+
+        class _FakeReader:
+            def readtext(self, pixels, **_kwargs):
+                seen["h"] = pixels.shape[0]
+                return []
+
+        monkeypatch.setattr(screenspace, "_get_ocr_reader", lambda _l: _FakeReader())
+        monkeypatch.setattr(screenspace, "_probe_video_meta", lambda p: (30.0, 1.0))
+        monkeypatch.setattr(
+            screenspace, "scan_video_frames", lambda v, r, i, cb, **k: cb(0.0, frame)
+        )
+
+        screenspace.scan_text(
+            "/fake.mp4",
+            {"x": 0, "y": 0, "w": 120, "h": 20},
+            search_string="x",
+            ocr_preprocess=True,
+        )
+        assert seen["h"] >= 60
+
+    def test_scan_text_no_preprocess_keeps_native_size(self, monkeypatch):
+        """Default (ocr_preprocess=False) passes the raw crop to the reader."""
+        frame = np.full((20, 120, 3), 128, dtype=np.uint8)
+        seen: dict[str, int] = {}
+
+        class _FakeReader:
+            def readtext(self, pixels, **_kwargs):
+                seen["h"] = pixels.shape[0]
+                return []
+
+        monkeypatch.setattr(screenspace, "_get_ocr_reader", lambda _l: _FakeReader())
+        monkeypatch.setattr(screenspace, "_probe_video_meta", lambda p: (30.0, 1.0))
+        monkeypatch.setattr(
+            screenspace, "scan_video_frames", lambda v, r, i, cb, **k: cb(0.0, frame)
+        )
+
+        screenspace.scan_text(
+            "/fake.mp4",
+            {"x": 0, "y": 0, "w": 120, "h": 20},
+            search_string="x",
+            ocr_preprocess=False,
+        )
+        assert seen["h"] == 20
+
+
+class TestScanText:
+    def test_low_confidence_rejected(self, monkeypatch):
+        """OCR readings below ocr_confidence_threshold should not match."""
+        frame = np.full((20, 60, 3), 128, dtype=np.uint8)
+
+        class _FakeReader:
+            def readtext(self, _pixels, **_kwargs):
+                return [([(0, 0), (10, 0), (10, 10), (0, 10)], "hello", 0.2)]
+
+        monkeypatch.setattr(
+            screenspace, "_get_ocr_reader", lambda _langs: _FakeReader()
+        )
+        monkeypatch.setattr(screenspace, "_probe_video_meta", lambda p: (30.0, 1.0))
+
+        def fake_scan(video_path, region, interval, callback, **kwargs):
+            callback(0.0, frame)
+
+        monkeypatch.setattr(screenspace, "scan_video_frames", fake_scan)
+
+        rejected = screenspace.scan_text(
+            "/fake.mp4",
+            {"x": 0, "y": 0, "w": 60, "h": 20},
+            search_string="hello",
+            ocr_confidence_threshold=0.5,
+        )
+        assert rejected == []
+
+        accepted = screenspace.scan_text(
+            "/fake.mp4",
+            {"x": 0, "y": 0, "w": 60, "h": 20},
+            search_string="hello",
+            ocr_confidence_threshold=0.1,
+        )
+        assert len(accepted) == 1
+        assert accepted[0]["text_found"] == "hello"
+        assert accepted[0]["confidence"] == 0.2
+
+
 class TestScanNumbers:
     def test_unknown_operator_raises(self):
         with pytest.raises(ValueError, match="Unknown.*operator"):
@@ -1029,6 +1151,45 @@ class TestScanNumbers:
         )
         with pytest.raises(ValueError, match="Unknown task type"):
             worker._dispatch(task, lambda p: None, lambda: False)
+
+    def test_low_confidence_rejected(self, monkeypatch):
+        """OCR readings below ocr_confidence_threshold should not match."""
+        frame = np.full((20, 60, 3), 128, dtype=np.uint8)
+
+        class _FakeReader:
+            def readtext(self, _pixels, **_kwargs):
+                # Number "5" detected at confidence 0.2 — well below 0.5 cutoff.
+                return [([(0, 0), (10, 0), (10, 10), (0, 10)], "5", 0.2)]
+
+        monkeypatch.setattr(
+            screenspace, "_get_ocr_reader", lambda _langs: _FakeReader()
+        )
+        monkeypatch.setattr(screenspace, "_probe_video_meta", lambda p: (30.0, 1.0))
+
+        def fake_scan(video_path, region, interval, callback, **kwargs):
+            callback(0.0, frame)
+
+        monkeypatch.setattr(screenspace, "scan_video_frames", fake_scan)
+
+        rejected = screenspace.scan_numbers(
+            "/fake.mp4",
+            {"x": 0, "y": 0, "w": 60, "h": 20},
+            operator="gte",
+            target_value=5,
+            ocr_confidence_threshold=0.5,
+        )
+        assert rejected == []
+
+        accepted = screenspace.scan_numbers(
+            "/fake.mp4",
+            {"x": 0, "y": 0, "w": 60, "h": 20},
+            operator="gte",
+            target_value=5,
+            ocr_confidence_threshold=0.1,
+        )
+        assert len(accepted) == 1
+        assert accepted[0]["number_found"] == 5.0
+        assert accepted[0]["confidence"] == 0.2
 
 
 # ---------------------------------------------------------------------------
@@ -1284,6 +1445,9 @@ class TestExtractConfidence:
 
     def test_numbers(self):
         assert screenspace._extract_confidence("numbers", {}) == 1.0
+
+    def test_numbers_uses_ocr_conf(self):
+        assert screenspace._extract_confidence("numbers", {"confidence": 0.42}) == 0.42
 
     def test_multitool(self):
         assert (
