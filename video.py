@@ -29,8 +29,25 @@ INVALID_END_TIMESTAMP = None
 # the caller asked for, instead of the nearest preceding key-frame.
 FFMPEG_PRESEEK_SECONDS = 2.0
 
-_file_duration_cache: dict[str, int] = {}
-_video_properties_cache: dict[str, dict[str, Any]] = {}
+# Caches are keyed on (resolved_path, mtime_ns) so a re-encoded or replaced
+# source file naturally yields a fresh entry instead of stale data. Mirrors
+# the pattern in viewer.py and pipeline.py.
+_file_duration_cache: dict[tuple[str, int], int] = {}
+_video_properties_cache: dict[tuple[str, int], dict[str, Any]] = {}
+
+
+def _resolved_path_and_mtime(filepath: str) -> tuple[str, int] | None:
+    """Return ``(resolved_path_str, mtime_ns)`` or ``None`` if the file is missing.
+
+    Used as a cache-version source: callers key per-file caches on the tuple
+    so the cache invalidates automatically when the file changes on disk.
+    """
+    path = Path(filepath)
+    try:
+        st = path.stat()
+    except OSError:
+        return None
+    return str(path.resolve()), st.st_mtime_ns
 
 
 def accurate_seek_args(timestamp_seconds: float) -> tuple[list[str], list[str]]:
@@ -1029,11 +1046,8 @@ def get_file_duration(filepath: str) -> int | None:
     Returns:
         The duration in seconds, or None if the file cannot be probed.
     """
-    resolved = str(Path(filepath).resolve())
-    if resolved in _file_duration_cache:
-        return _file_duration_cache[resolved]
-
-    if not Path(filepath).is_file():
+    key = _resolved_path_and_mtime(filepath)
+    if key is None:
         utils.error_print(
             f"Video file not found: '{filepath}'",
             [
@@ -1042,13 +1056,16 @@ def get_file_duration(filepath: str) -> int | None:
             ],
         )
         return None
+    cached_dur = _file_duration_cache.get(key)
+    if cached_dur is not None:
+        return cached_dur
 
-    cached_props = _video_properties_cache.get(resolved)
+    cached_props = _video_properties_cache.get(key)
     if cached_props is not None:
         dur_f = float(cached_props.get("duration") or 0)
         if dur_f > 0:
             rounded = round(dur_f)
-            _file_duration_cache[resolved] = rounded
+            _file_duration_cache[key] = rounded
             return rounded
 
     probed = probe_video_properties(filepath)
@@ -1056,12 +1073,12 @@ def get_file_duration(filepath: str) -> int | None:
         dur_f = float(probed.get("duration") or 0)
         if dur_f > 0:
             rounded = round(dur_f)
-            _file_duration_cache[resolved] = rounded
+            _file_duration_cache[key] = rounded
             return rounded
 
     dur = _probe_duration_seconds_ffprobe_format(filepath)
     if dur is not None:
-        _file_duration_cache[resolved] = dur
+        _file_duration_cache[key] = dur
     return dur
 
 
@@ -1075,8 +1092,6 @@ def probe_video_properties(filepath: str) -> dict[str, Any] | None:
         'nb_frames' (int, 0 if unknown),
         or None if probe fails.
     """
-    resolved = str(Path(filepath).resolve())
-
     if config.DEBUGGING:
         result = {
             "width": 1920,
@@ -1087,15 +1102,18 @@ def probe_video_properties(filepath: str) -> dict[str, Any] | None:
             "duration": 300.0,
             "nb_frames": 9000,
         }
-        _video_properties_cache[resolved] = result
-        _file_duration_cache[resolved] = round(result["duration"])
+        # In DEBUGGING mode the file may not exist on disk; fall back to a
+        # synthetic key so callers still get a cached result.
+        key = _resolved_path_and_mtime(filepath) or (str(Path(filepath).resolve()), 0)
+        _video_properties_cache[key] = result
+        _file_duration_cache[key] = round(result["duration"])
         return result
 
-    if resolved in _video_properties_cache:
-        return _video_properties_cache[resolved]
-
-    if not Path(filepath).is_file():
+    key = _resolved_path_and_mtime(filepath)
+    if key is None:
         return None
+    if key in _video_properties_cache:
+        return _video_properties_cache[key]
 
     probe_command = [
         "ffprobe",
@@ -1170,9 +1188,9 @@ def probe_video_properties(filepath: str) -> dict[str, Any] | None:
         "duration": fmt_duration,
         "nb_frames": nb_frames,
     }
-    _video_properties_cache[resolved] = result
+    _video_properties_cache[key] = result
     if fmt_duration > 0:
-        _file_duration_cache[resolved] = round(fmt_duration)
+        _file_duration_cache[key] = round(fmt_duration)
     return result
 
 

@@ -542,9 +542,13 @@
       _pendingSeekListener = null;
     }
 
-    // Set video source
+    // Set video source. ?v=<mtime_ns> mirrors the screenspace cache-bust so
+    // a re-encoded or replaced source file invalidates the browser HTTP cache
+    // instead of relying on send_from_directory's Last-Modified revalidation.
     if (p.has_video) {
-      video.src = "media/" + p.video_filename;
+      var mediaUrl = "media/" + p.video_filename;
+      if (p.video_version != null) mediaUrl += "?v=" + encodeURIComponent(p.video_version);
+      video.src = mediaUrl;
       video.classList.remove("hidden");
       videoEmpty.classList.add("hidden");
 

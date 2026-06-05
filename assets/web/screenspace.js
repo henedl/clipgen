@@ -84,6 +84,7 @@
     timelineOffset: 0,
     inMarker: null,
     outMarker: null,
+    restoreMarkersOnEdit: true,
     activeWorkflow: "color",
     referenceTimestamp: null,
     sceneReferences: [],
@@ -130,6 +131,7 @@
     overlayImage: null,
     overlayImageObjectUrl: null,
     overlayImageTimestamp: null,
+    overlayImageTool: null,
     overlayLayerSpec: {},
     rightPaneTab: "queue",
     resultsSwitcherOpen: false,
@@ -148,6 +150,11 @@
   }
   var _lastPollFingerprint = "";
   var _preloadedFrames = {};
+  // Per-participant source-video mtime_ns, sourced from /api/participants and
+  // /api/video/info. Used as a ?v= cache-bust suffix on frame and stream URLs
+  // so a re-encoded or replaced source file invalidates HTTP, backend, and
+  // blob caches together. Empty string means "no version known yet".
+  var _videoVersions = {};
 
   window.addEventListener("pagehide", function () {
     Object.keys(_preloadedFrames).forEach(function (pid) {
@@ -279,11 +286,15 @@
   }
 
   function frameUrl(pid, ts) {
-    return "api/video/frame/" + encodeURIComponent(pid) + "/" + Number(ts).toFixed(6);
+    var base = "api/video/frame/" + encodeURIComponent(pid) + "/" + Number(ts).toFixed(6);
+    var v = _videoVersions[pid];
+    return v ? base + "?v=" + encodeURIComponent(v) : base;
   }
 
   function videoStreamUrl(pid) {
-    return "api/video/stream/" + encodeURIComponent(pid);
+    var base = "api/video/stream/" + encodeURIComponent(pid);
+    var v = _videoVersions[pid];
+    return v ? base + "?v=" + encodeURIComponent(v) : base;
   }
 
   // ---- Participants ----
@@ -856,6 +867,16 @@
         if (participantRequestVersion !== _participantRequestVersion || pid !== state.selectedParticipant) return;
         if (!data.ok) return;
         state.videoInfo = data.info;
+        // If the server reports a different mtime than we last saw, the
+        // source file was replaced \u2014 drop the stale frame-0 blob so the
+        // next loadFrame(0) hits the API and the new ?v= URL.
+        var newVersion = data.info.version != null ? String(data.info.version) : "";
+        var prevVersion = _videoVersions[pid] || "";
+        _videoVersions[pid] = newVersion;
+        if (newVersion !== prevVersion && _preloadedFrames[pid]) {
+          try { URL.revokeObjectURL(_preloadedFrames[pid]); } catch (_) {}
+          delete _preloadedFrames[pid];
+        }
         var parts = [];
         if (data.info.duration) parts.push(formatDuration(data.info.duration));
         if (data.info.width && data.info.height) parts.push(data.info.width + "x" + data.info.height);
@@ -1771,6 +1792,9 @@
       var color = regionColorForIndex(i);
       var chip = el("div", "region-chip" + (name === state.activeRegion ? " active" : ""));
       chip.style.color = color;
+      chip.setAttribute("draggable", "true");
+      chip.dataset.regionName = name;
+      chip.dataset.regionIdx = String(i);
       var dot = el("span", "region-chip-dot");
       dot.style.background = color;
       chip.appendChild(dot);
@@ -1844,6 +1868,26 @@
     });
   }
 
+  function copyRegionToStash(name, stashId) {
+    if (!(name in state.regions)) return;
+    apiPost("api/stashes/" + stashId + "/regions", { name: name })
+      .then(function (data) {
+        if (!data.ok) return;
+        for (var i = 0; i < state.stashes.length; i++) {
+          if (state.stashes[i].id === stashId) {
+            state.stashes[i] = data.stash;
+            break;
+          }
+        }
+        renderStashCards(); // updated count + dots
+        renderRunRegionPicker(); // stash folder now lists the new region
+        showToast("Added “" + name + "” to " + data.stash.name);
+      })
+      .catch(function () {
+        showToast("Failed to add region to stash");
+      });
+  }
+
   function renameStash(stashId, newName) {
     apiPut("api/stashes/" + stashId, { name: newName }).then(function (data) {
       if (!data.ok) return;
@@ -1871,6 +1915,7 @@
 
     state.stashes.forEach(function (stash) {
       var card = el("div", "stash-card");
+      card.dataset.stashId = stash.id;
       var regionNames = Object.keys(stash.regions);
 
       // Editable name
@@ -1941,9 +1986,158 @@
     });
 
     if (!existing) {
+      bindStashDrop(area);
       var viewerSection = qs("#viewerSection");
       viewerSection.parentNode.insertBefore(area, viewerSection.nextSibling);
     }
+  }
+
+  // Delegated drop handlers so a dragged region chip can be copied into a stash.
+  // Bound once on the persistent #stashArea node (its innerHTML is rebuilt each
+  // render, but the element itself is reused).
+  var _stashDragOverCard = null;
+
+  function bindStashDrop(area) {
+    area.addEventListener("dragover", function (e) {
+      if (e.dataTransfer.types.indexOf("application/x-region-name") < 0) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = "copy";
+      var card = e.target.closest(".stash-card");
+      if (_stashDragOverCard && _stashDragOverCard !== card) {
+        _stashDragOverCard.classList.remove("drag-over");
+      }
+      if (card) {
+        card.classList.add("drag-over");
+        _stashDragOverCard = card;
+      }
+    });
+    area.addEventListener("dragleave", function (e) {
+      var card = e.target.closest(".stash-card");
+      if (card && !card.contains(e.relatedTarget)) card.classList.remove("drag-over");
+    });
+    area.addEventListener("drop", function (e) {
+      if (e.dataTransfer.types.indexOf("application/x-region-name") < 0) return;
+      var card = e.target.closest(".stash-card");
+      if (!card) return;
+      e.preventDefault();
+      card.classList.remove("drag-over");
+      _stashDragOverCard = null;
+      copyRegionToStash(e.dataTransfer.getData("application/x-region-name"), card.dataset.stashId);
+    });
+  }
+
+  // ---- Region chip drag (reorder within #regionChips + copy into stashes) ----
+  // Horizontal mirror of the multitool/task vertical drag helpers: midpoints use
+  // left+width/2 and compare clientX. Excluding the .dragging chip from the cache
+  // keeps the drop index aligned with the post-splice array (no off-by-one).
+  var _regionDragMidpoints = null;
+  var _regionDragOverRaf = null;
+  var _regionPendingDragOverX = null;
+
+  function _cacheRegionDragMidpoints(container) {
+    var chips = container.querySelectorAll(".region-chip:not(.dragging)");
+    var mids = new Array(chips.length);
+    for (var i = 0; i < chips.length; i++) {
+      var r = chips[i].getBoundingClientRect();
+      mids[i] = r.left + r.width / 2;
+    }
+    _regionDragMidpoints = mids;
+  }
+
+  function getRegionDropIndex(container, clientX) {
+    var mids = _regionDragMidpoints;
+    if (!mids) {
+      _cacheRegionDragMidpoints(container);
+      mids = _regionDragMidpoints;
+    }
+    for (var i = 0; i < mids.length; i++) {
+      if (clientX < mids[i]) return i;
+    }
+    return mids.length;
+  }
+
+  function clearRegionDragIndicators(container) {
+    var chips = container.querySelectorAll(".region-chip.drag-over");
+    for (var i = 0; i < chips.length; i++) chips[i].classList.remove("drag-over");
+    container.classList.remove("drag-over-append");
+  }
+
+  function initRegionDrag() {
+    var chips = qs("#regionChips");
+
+    chips.addEventListener("dragstart", function (e) {
+      var chip = e.target.closest(".region-chip");
+      if (!chip) {
+        e.preventDefault();
+        return;
+      }
+      chip.classList.add("dragging");
+      e.dataTransfer.setData("text/plain", chip.dataset.regionIdx);
+      e.dataTransfer.setData("application/x-region-name", chip.dataset.regionName);
+      e.dataTransfer.effectAllowed = "copyMove";
+      _cacheRegionDragMidpoints(chips);
+    });
+
+    chips.addEventListener("dragend", function (e) {
+      var chip = e.target.closest(".region-chip");
+      if (chip) chip.classList.remove("dragging");
+      if (_regionDragOverRaf != null) {
+        cancelAnimationFrame(_regionDragOverRaf);
+        _regionDragOverRaf = null;
+      }
+      _regionPendingDragOverX = null;
+      clearRegionDragIndicators(chips);
+      _regionDragMidpoints = null;
+    });
+
+    chips.addEventListener("dragover", function (e) {
+      if (e.dataTransfer.types.indexOf("application/x-region-name") < 0) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = "move";
+      _regionPendingDragOverX = e.clientX;
+      if (_regionDragOverRaf != null) return; // RAF-debounce ~60Hz dragover
+      _regionDragOverRaf = requestAnimationFrame(function () {
+        _regionDragOverRaf = null;
+        if (_regionPendingDragOverX == null) return;
+        clearRegionDragIndicators(chips);
+        var visible = chips.querySelectorAll(".region-chip:not(.dragging)");
+        var idx = getRegionDropIndex(chips, _regionPendingDragOverX);
+        if (idx < visible.length) visible[idx].classList.add("drag-over");
+        else chips.classList.add("drag-over-append");
+      });
+    });
+
+    chips.addEventListener("dragleave", function (e) {
+      var chip = e.target.closest(".region-chip");
+      if (chip) chip.classList.remove("drag-over");
+      if (!chips.contains(e.relatedTarget)) chips.classList.remove("drag-over-append");
+    });
+
+    chips.addEventListener("drop", function (e) {
+      if (e.dataTransfer.types.indexOf("application/x-region-name") < 0) return;
+      e.preventDefault();
+      clearRegionDragIndicators(chips);
+      var fromIdx = parseInt(e.dataTransfer.getData("text/plain"), 10);
+      if (isNaN(fromIdx)) return;
+      var toIdx = getRegionDropIndex(chips, e.clientX);
+      if (fromIdx === toIdx) return;
+      var names = Object.keys(state.regions);
+      var moved = names.splice(fromIdx, 1)[0];
+      names.splice(toIdx, 0, moved);
+      // Rebuild state.regions in the new order.
+      var reordered = {};
+      names.forEach(function (n) {
+        reordered[n] = state.regions[n];
+      });
+      state.regions = reordered;
+      // Region colors are position-based (regionColorForIndex), so reordering
+      // recolors regions — intentional. Repaint chips and overlay together.
+      renderRegionChips();
+      renderOverlay();
+      apiPut("api/regions/reorder", { names: names }).catch(function () {
+        showToast("Failed to save region order");
+      });
+    });
   }
 
   function templateOverlayBounds() {
@@ -4033,7 +4227,7 @@
         state.overlayEnabled = !!toggle.checked;
         try { sessionStorage.setItem("ss_overlayEnabled", state.overlayEnabled ? "1" : "0"); } catch (_) { /* ignore */ }
         var curTs = Number(state.currentTimestamp || 0).toFixed(3);
-        if (state.overlayEnabled && (!state.overlayImage || state.overlayImageTimestamp !== curTs)) {
+        if (state.overlayEnabled && (!state.overlayImage || state.overlayImageTimestamp !== curTs || state.overlayImageTool !== state.activeWorkflow)) {
           refreshModelView();
         }
         renderOverlay();
@@ -4052,6 +4246,7 @@
         }
         state.overlayImage = null;
         state.overlayImageTimestamp = null;
+        state.overlayImageTool = null;
         refreshModelView();
         renderOverlay();
       });
@@ -4311,6 +4506,7 @@
         }
         state.overlayImage = null;
         state.overlayImageTimestamp = null;
+        state.overlayImageTool = null;
         return;
       }
       var layerQs = qsParts.concat(["layer=" + encodeURIComponent(resolved.id)]);
@@ -4330,6 +4526,7 @@
           state.overlayImage = oi;
           state.overlayImageScope = resolved.scope;
           state.overlayImageTimestamp = ts;
+          state.overlayImageTool = tool;
           renderOverlay();
         };
         oi.src = ou;
@@ -5588,6 +5785,17 @@
       }
     }
 
+    if (state.restoreMarkersOnEdit) {
+      var hasIn = params.start_seconds !== undefined && params.start_seconds !== null;
+      var hasOut = params.end_seconds !== undefined && params.end_seconds !== null;
+      if (hasIn || hasOut) {
+        state.inMarker = hasIn ? params.start_seconds : null;
+        state.outMarker = hasOut ? params.end_seconds : null;
+        updateMarkerInfo();
+        renderTimeline();
+      }
+    }
+
     syncValueDisplays();
     updateRunButton();
     showToast("Restored " + task.type + " task parameters");
@@ -6434,7 +6642,7 @@
         e.preventDefault();
         state.overlayBlinkActive = true;
         var curTs = Number(state.currentTimestamp || 0).toFixed(3);
-        if (!state.overlayImage || state.overlayImageTimestamp !== curTs) {
+        if (!state.overlayImage || state.overlayImageTimestamp !== curTs || state.overlayImageTool !== state.activeWorkflow) {
           refreshModelView();
         }
         renderOverlay();
@@ -6703,11 +6911,44 @@
     });
   }
 
+  // ---- Settings (server-side STUDIO_SETTINGS) ----
+  //
+  // Backed by /api/settings. We mirror the SCREENSPACE_RESTORE_MARKERS_ON_EDIT
+  // flag onto state.restoreMarkersOnEdit so restoreTaskToWorkflow can read it
+  // without a network call. The settings modal's onSave/onReset hooks call
+  // applyScreenspaceSettingsSnapshot to keep state in sync after user edits.
+
+  function applyScreenspaceSettingsSnapshot(applied, settings) {
+    var v;
+    if (applied && Object.prototype.hasOwnProperty.call(applied, "SCREENSPACE_RESTORE_MARKERS_ON_EDIT")) {
+      v = applied.SCREENSPACE_RESTORE_MARKERS_ON_EDIT;
+    } else if (settings) {
+      for (var i = 0; i < settings.length; i++) {
+        if (settings[i].name === "SCREENSPACE_RESTORE_MARKERS_ON_EDIT") {
+          v = settings[i].value;
+          break;
+        }
+      }
+    }
+    if (v !== undefined) state.restoreMarkersOnEdit = !!v;
+  }
+
+  function fetchScreenspaceSettings() {
+    fetch("/api/settings")
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        if (!data || !data.ok || !data.settings) return;
+        applyScreenspaceSettingsSnapshot(null, data.settings);
+      })
+      .catch(function () { /* keep config-default state.restoreMarkersOnEdit */ });
+  }
+
   document.addEventListener("DOMContentLoaded", function () {
     initThemeToggle(function () { refreshThemeColors(); renderTimeline(); });
     initFrameControls();
     initVideoPlayback();
     initRegionDrawing();
+    initRegionDrag();
     initTimeline();
     initWorkflowTabs();
     initModelView();
@@ -6728,11 +6969,20 @@
     initTopNavActions();
 
     // Settings
+    fetchScreenspaceSettings();
     var settingsBtn = qs("#settingsBtn");
     if (settingsBtn) {
       settingsBtn.addEventListener("click", function () {
         if (typeof window.openSettingsModal === "function") {
-          window.openSettingsModal({ initialTab: "Screenspace" });
+          window.openSettingsModal({
+            initialTab: "Screenspace",
+            onSave: function (applied, settings) {
+              applyScreenspaceSettingsSnapshot(applied, settings);
+            },
+            onReset: function (scope, settings) {
+              applyScreenspaceSettingsSnapshot(null, settings);
+            },
+          });
         }
       });
     }
@@ -6762,6 +7012,11 @@
       .then(function (data) {
         if (!data.ok) return;
         state.participants = (data.participants || []).filter(function (p) { return p.has_video; });
+        // Seed _videoVersions before any frameUrl/videoStreamUrl call so the
+        // preload loop below already includes the ?v= cache-bust suffix.
+        state.participants.forEach(function (p) {
+          if (p.version != null) _videoVersions[p.id] = String(p.version);
+        });
         renderParticipantSelect();
         // Preload frame 0 for all participants (instant first-frame display)
         state.participants.forEach(function (p) {

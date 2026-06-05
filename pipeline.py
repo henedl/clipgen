@@ -170,7 +170,7 @@ def _check_source_video(
                 f"Closest match found: '{best_path.name}' ({size_gb:.1f} GB)"
             )
             answer = utils.read_user_input("Use this file instead? [y/n]\n>> ")
-            if paused:
+            if paused and _active_progress is not None:
                 _active_progress.start()
             if answer.strip().lower() == "y":
                 resolved = str(best_path)
