@@ -81,6 +81,10 @@ def test_clipgen_config_defaults_match_python():
     assert js_config["annotationKeyphrases"] == py_config["annotationKeyphrases"]
     assert js_config["annotations"] == py_config["annotations"]
     assert js_config["ignoredTimestampTokens"] == py_config["ignoredTimestampTokens"]
+    assert (
+        js_config["screenspaceOcrMinConfidence"]
+        == py_config["screenspaceOcrMinConfidence"]
+    )
 
     assert len(js_config["severity"]) == len(py_config["severity"])
     for js_sev, py_sev in zip(js_config["severity"], py_config["severity"]):
@@ -98,6 +102,7 @@ def test_get_frontend_config_shape():
         "annotationKeyphrases",
         "annotations",
         "ignoredTimestampTokens",
+        "screenspaceOcrMinConfidence",
     }
     assert isinstance(cfg["defaultDuration"], int)
     assert cfg["defaultDuration"] == config.DEFAULT_DURATION_SECONDS
@@ -118,6 +123,8 @@ def test_get_frontend_config_shape():
     assert sorted(cfg["ignoredTimestampTokens"]) == sorted(
         utils.get_ignored_timestamp_tokens()
     )
+    assert isinstance(cfg["screenspaceOcrMinConfidence"], float)
+    assert cfg["screenspaceOcrMinConfidence"] == config.SCREENSPACE_OCR_MIN_CONFIDENCE
 
 
 def test_severity_css_class_mapping():

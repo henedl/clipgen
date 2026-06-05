@@ -154,6 +154,9 @@ SCREENSPACE_MORPH_KERNEL: int = 3  # image preprocessing tuning for change detec
 SCREENSPACE_OCR_FUZZY_THRESHOLD: float = (
     0.8  # min fuzzy match score for Text/Numbers tool matches
 )
+SCREENSPACE_OCR_MIN_CONFIDENCE: float = (
+    0.6  # min EasyOCR per-detection confidence for Text/Numbers; gates noisy OCR
+)
 SCREENSPACE_PHASH_THRESHOLD: int = 15
 SCREENSPACE_SEQUENTIAL_READ_MAX_INTERVAL: float = 3.0
 SCREENSPACE_INTAKE_CLUSTER_SECONDS: int = 5
@@ -327,6 +330,7 @@ SETTINGS_DESCRIPTIONS: dict[str, str] = {
     "GIF_FORMAT": "File format for animated artifacts. WebM (VP9) is the smallest and most-compatible modern option; animated WebP is also small but requires Safari 16+; GIF works everywhere but is large.",
     "WEBP_QUALITY": "WebP encoding quality (0-100). Higher values mean better quality and larger files.",
     "SCREENSPACE_CV_RESOLUTION_SCALE": "Scale extracted region frames before CV analysis. Higher (e.g. 2.0) gives the models more signal on noisy/compressed video at the cost of speed and memory; lower speeds up scans on large footage. 1.0 = unchanged.",
+    "SCREENSPACE_OCR_MIN_CONFIDENCE": "Default minimum EasyOCR per-detection confidence for Text/Numbers tasks. Raise to suppress noisy OCR misreads; lower if real hits are being dropped. Per-task slider overrides this default.",
 }
 
 # Studio-exposed settings with UI metadata (tab, group, type, constraints).
