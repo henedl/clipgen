@@ -157,6 +157,9 @@ SCREENSPACE_OCR_FUZZY_THRESHOLD: float = (
 SCREENSPACE_OCR_MIN_CONFIDENCE: float = (
     0.6  # min EasyOCR per-detection confidence for Text/Numbers; gates noisy OCR
 )
+SCREENSPACE_OCR_MIN_HEIGHT: int = (
+    60  # target px height for upscaling small ROIs in opt-in OCR preprocessing
+)
 SCREENSPACE_PHASH_THRESHOLD: int = 15
 SCREENSPACE_SEQUENTIAL_READ_MAX_INTERVAL: float = 3.0
 SCREENSPACE_INTAKE_CLUSTER_SECONDS: int = 5
