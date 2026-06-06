@@ -23,6 +23,11 @@
 
   var QUEUE_STORAGE_KEY = "clipgen-studio-queues";
 
+  // Pure intake clustering lives in intake-cluster.js (loaded first) so the
+  // Convergence/Metadata sub-tabs can share it without reaching into Studio.
+  var clusterIntakeEvents = window.ClipgenIntakeCluster.clusterIntakeEvents;
+  var clusterTranscriptMarks = window.ClipgenIntakeCluster.clusterTranscriptMarks;
+
   // Build a mask-image icon span as an HTML string. Sizing comes from a
   // parent rule (e.g. .cg-btn-icon) or from extraClass. See
   // .cg-icon family in studio.css.
@@ -4110,54 +4115,6 @@
     _ssThumbQueue = [];
   }
 
-  function clusterIntakeEvents(events, thresholdSec) {
-    if (!events.length) return [];
-    var sorted = events.slice().sort(function (a, b) {
-      if (a.participant !== b.participant) return a.participant < b.participant ? -1 : 1;
-      if (a.event_type !== b.event_type) return a.event_type < b.event_type ? -1 : 1;
-      return a.time_in - b.time_in;
-    });
-    var clusters = [];
-    var cur = null;
-    for (var i = 0; i < sorted.length; i++) {
-      var ev = sorted[i];
-      if (
-        !cur ||
-        ev.participant !== cur.participant ||
-        ev.event_type !== cur.event_type ||
-        ev.time_in - cur.end > thresholdSec
-      ) {
-        if (cur) clusters.push(cur);
-        cur = {
-          participant: ev.participant,
-          source_video: ev.source_video,
-          start: ev.time_in,
-          end: ev.time_out,
-          event_type: ev.event_type,
-          detector: ev.detector,
-          region: ev.region,
-          events: [ev],
-          confidence_avg: ev.confidence,
-        };
-      } else {
-        cur.end = Math.max(cur.end, ev.time_out);
-        cur.events.push(ev);
-        var sum = 0;
-        for (var j = 0; j < cur.events.length; j++) sum += cur.events[j].confidence;
-        cur.confidence_avg = sum / cur.events.length;
-      }
-    }
-    if (cur) clusters.push(cur);
-    for (var k = 0; k < clusters.length; k++) {
-      var c = clusters[k];
-      if (c.start === c.end) {
-        c.start = Math.max(0, c.start - 5);
-        c.end = c.end + 5;
-      }
-    }
-    return clusters;
-  }
-
   function setTabDot(elId, on) {
     var el = document.getElementById(elId);
     if (!el) return;
@@ -4744,38 +4701,6 @@
       .catch(function () {});
   }
 
-  function clusterTranscriptMarks(marks, thresholdSec) {
-    if (!marks.length) return [];
-    var sorted = marks.slice().sort(function (a, b) {
-      if (a.participant !== b.participant) return a.participant < b.participant ? -1 : 1;
-      return a.start - b.start;
-    });
-    var clusters = [];
-    var cur = null;
-    for (var i = 0; i < sorted.length; i++) {
-      var m = sorted[i];
-      if (!cur || m.participant !== cur.participant || m.start - cur.end > thresholdSec) {
-        if (cur) clusters.push(cur);
-        cur = {
-          participant: m.participant,
-          start: m.start,
-          end: m.end,
-          marks: [m],
-          category: m.category || "bookmark",
-          label: m.label || "",
-          text: m.text || "",
-        };
-      } else {
-        cur.end = Math.max(cur.end, m.end);
-        cur.marks.push(m);
-        if (m.text) cur.text += " " + m.text;
-        if (m.label && !cur.label) cur.label = m.label;
-      }
-    }
-    if (cur) clusters.push(cur);
-    return clusters;
-  }
-
   function filteredTranscriptIntakeClusters() {
     var clusters = state.trIntakeClusters;
     var cat = state.trIntakeFilterCategory;
@@ -5232,8 +5157,6 @@
   window._studioBuildXrefBadges = buildXrefBadges;
   window._studioRenderArtifactQueue = renderArtifactQueue;
   window._studioRenderReelQueue = renderReelQueue;
-  window._studioClusterIntakeEvents = clusterIntakeEvents;
-  window._studioClusterTranscriptMarks = clusterTranscriptMarks;
   window._studioROW_FUNCTIONS = ROW_FUNCTIONS;
   window._studioSyncPreviewTab = syncPreviewTab;
 })();
