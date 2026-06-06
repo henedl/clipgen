@@ -208,10 +208,10 @@ Use this when executing waves; check items in PR descriptions.
 
 ### Wave 2
 
-- [ ] A5 CSS include audit (Transcripts/Screenspace)
-- [ ] A6 Card-scrubber: integrate or remove
-- [ ] B1 `video-controls.js`
-- [ ] B2 `intake-cluster.js`
+- [x] A5 CSS include audit (Transcripts/Screenspace) — toast moved to `topnav.css`; `primitives.css` dropped from both
+- [ ] A6 Card-scrubber: integrate or remove — deferred, left parked (unused; re-hook when filmstrip thumbnails return)
+- [x] B1 `video-controls.js` — shared `nextSpeed`/`applyPlaybackRate`
+- [x] B2 `intake-cluster.js` — `window.ClipgenIntakeCluster`; drops `window._studioCluster*`
 
 ### Wave 3
 
