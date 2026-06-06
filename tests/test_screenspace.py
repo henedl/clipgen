@@ -1100,6 +1100,44 @@ class TestScanText:
         assert accepted[0]["text_found"] == "hello"
         assert accepted[0]["confidence"] == 0.2
 
+    def test_normalize_o_for_zero(self, monkeypatch):
+        """ocr_normalize collapses l→1 so "l00" matches a search for "100"."""
+        frame = np.full((20, 60, 3), 128, dtype=np.uint8)
+
+        class _FakeReader:
+            def readtext(self, _pixels, **_kwargs):
+                # Misread: the glyphs of "100" came back as "l00".
+                return [([(0, 0), (10, 0), (10, 10), (0, 10)], "l00", 0.9)]
+
+        monkeypatch.setattr(
+            screenspace, "_get_ocr_reader", lambda _langs: _FakeReader()
+        )
+        monkeypatch.setattr(screenspace, "_probe_video_meta", lambda p: (30.0, 1.0))
+
+        def fake_scan(video_path, region, interval, callback, **kwargs):
+            callback(0.0, frame)
+
+        monkeypatch.setattr(screenspace, "scan_video_frames", fake_scan)
+
+        region = {"x": 0, "y": 0, "w": 60, "h": 20}
+
+        # Default (ocr_normalize=False): "l00" vs "100" stays below threshold.
+        rejected = screenspace.scan_text(
+            "/fake.mp4", region, search_string="100", fuzzy_threshold=0.9
+        )
+        assert rejected == []
+
+        # ocr_normalize=True: l→1 makes it an exact match.
+        accepted = screenspace.scan_text(
+            "/fake.mp4",
+            region,
+            search_string="100",
+            fuzzy_threshold=0.9,
+            ocr_normalize=True,
+        )
+        assert len(accepted) == 1
+        assert accepted[0]["text_found"] == "l00"
+
 
 class TestScanNumbers:
     def test_unknown_operator_raises(self):

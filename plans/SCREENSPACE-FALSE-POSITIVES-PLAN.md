@@ -12,8 +12,8 @@ This is a multi-phase effort ordered by impact-per-LOC. Each phase is independen
 | --- | --- | --- |
 | 1 | Gate OCR text/numbers by detection confidence | **Done** (`37f00a4`) |
 | 2 | Opt-in OCR ROI preprocessing (upscale + CLAHE) | **Done** (`df35431`) |
-| 3a | Numbers tool: EasyOCR digit allowlist | **Done** |
-| 3b | Text tool: opt-in character normalization | Planned |
+| 3a | Numbers tool: EasyOCR digit allowlist | **Done** (`42a1929`) |
+| 3b | Text tool: opt-in character normalization | **Done** |
 | 5 | Extract hardcoded static-frame-skip threshold | Planned |
 | 4 | Temporal coherence (`require_consecutive`) | Planned |
 | 6 | Confidence histogram in results UI | Planned |
