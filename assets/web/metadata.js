@@ -1662,8 +1662,8 @@
     if (!state) {
       state = window._studioState;
       parseClipTimestamps = window._studioParseClipTimestamps;
-      clusterIntakeEvents = window._studioClusterIntakeEvents;
-      clusterTranscriptMarks = window._studioClusterTranscriptMarks;
+      clusterIntakeEvents = window.ClipgenIntakeCluster.clusterIntakeEvents;
+      clusterTranscriptMarks = window.ClipgenIntakeCluster.clusterTranscriptMarks;
       ROW_FUNCTIONS = window._studioROW_FUNCTIONS;
     }
     if (mdState._snapshot) {

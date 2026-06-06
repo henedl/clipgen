@@ -221,9 +221,7 @@
 
     // Screenspace events (clustered)
     var clusterSec = cvState.filters.clusterSec;
-    var ssClusters = window._studioClusterIntakeEvents
-      ? window._studioClusterIntakeEvents(state.intakeEvents, clusterSec)
-      : [];
+    var ssClusters = window.ClipgenIntakeCluster.clusterIntakeEvents(state.intakeEvents, clusterSec);
     for (var i = 0; i < ssClusters.length; i++) {
       var cl = ssClusters[i];
       var clCount = cl.events ? cl.events.length : 1;
@@ -246,9 +244,7 @@
     }
 
     // Transcript marks (clustered)
-    var trClusters = window._studioClusterTranscriptMarks
-      ? window._studioClusterTranscriptMarks(state.trIntakeMarks, clusterSec)
-      : [];
+    var trClusters = window.ClipgenIntakeCluster.clusterTranscriptMarks(state.trIntakeMarks, clusterSec);
     for (var j = 0; j < trClusters.length; j++) {
       var tc = trClusters[j];
       var tcCount = tc.marks ? tc.marks.length : 1;
