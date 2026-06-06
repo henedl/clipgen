@@ -1409,15 +1409,7 @@
   }
 
   function applyPlaybackRate() {
-    var v = qs("#videoPlayer");
-    if (!v) return;
-    v.defaultPlaybackRate = state.videoPlaybackRate;
-    v.playbackRate = state.videoPlaybackRate;
-    // Audio pitch will rise at high speeds, but the time-stretch filter is CPU
-    // heavy and causes judder at >=2x.
-    v.preservesPitch = false;
-    v.mozPreservesPitch = false;
-    v.webkitPreservesPitch = false;
+    window.ClipgenVideoControls.applyPlaybackRate(qs("#videoPlayer"), state.videoPlaybackRate);
   }
 
   function updateTimeLabel() {
@@ -1669,8 +1661,7 @@
       updatePlayerButtons();
     });
     qs("#videoSpeedBtn").addEventListener("click", function () {
-      var idx = VIDEO_SPEEDS.indexOf(state.videoPlaybackRate);
-      state.videoPlaybackRate = VIDEO_SPEEDS[(idx + 1) % VIDEO_SPEEDS.length];
+      state.videoPlaybackRate = window.ClipgenVideoControls.nextSpeed(VIDEO_SPEEDS, state.videoPlaybackRate);
       applyPlaybackRate();
       updatePlayerButtons();
     });

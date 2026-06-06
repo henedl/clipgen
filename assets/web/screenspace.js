@@ -1164,8 +1164,7 @@
     });
 
     qs("#videoSpeedBtn").addEventListener("click", function () {
-      var idx = VIDEO_SPEEDS.indexOf(state.videoPlaybackRate);
-      state.videoPlaybackRate = VIDEO_SPEEDS[(idx + 1) % VIDEO_SPEEDS.length];
+      state.videoPlaybackRate = window.ClipgenVideoControls.nextSpeed(VIDEO_SPEEDS, state.videoPlaybackRate);
       applyPlaybackRate();
       updateVideoButtons();
     });
@@ -1243,14 +1242,7 @@
   }
 
   function applyPlaybackRate() {
-    var v = qs("#videoPlayer");
-    v.defaultPlaybackRate = state.videoPlaybackRate;
-    v.playbackRate = state.videoPlaybackRate;
-    // Disable pitch preservation: the time-stretch filter is CPU-heavy and
-    // causes visible judder at >=3x. Audio pitch will rise at high speeds.
-    v.preservesPitch = false;
-    v.mozPreservesPitch = false;
-    v.webkitPreservesPitch = false;
+    window.ClipgenVideoControls.applyPlaybackRate(qs("#videoPlayer"), state.videoPlaybackRate);
   }
 
   function updateVideoButtons() {
