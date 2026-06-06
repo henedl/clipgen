@@ -96,12 +96,7 @@
   }
 
   function applyIcons(scope) {
-    var icons = (scope || root).querySelectorAll(".so-icon[data-icon]");
-    Array.prototype.forEach.call(icons, function (node) {
-      var name = node.getAttribute("data-icon");
-      if (!name) return;
-      applyMaskIcon(node, 'url("icons/' + name + '.svg")');
-    });
+    applyIconMasksIn(scope || root, { selector: ".so-icon[data-icon]" });
   }
 
   function mount() {
@@ -952,7 +947,7 @@
       var icon = document.createElement("span");
       icon.className = "so-icon so-icon--xs";
       icon.setAttribute("data-icon", "arrow-up-right");
-      applyMaskIcon(icon, 'url("icons/arrow-up-right.svg")');
+      applyIconMask(icon, "arrow-up-right");
       link.appendChild(icon);
       val.appendChild(link);
     });

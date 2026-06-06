@@ -836,7 +836,7 @@
     if (opts.icon) {
       var ic = document.createElement("span");
       ic.className = "cg-btn-icon";
-      applyMaskIcon(ic, 'url("icons/' + opts.icon + '.svg")');
+      applyIconMask(ic, opts.icon);
       btn.appendChild(ic);
     }
     if (opts.label) {
