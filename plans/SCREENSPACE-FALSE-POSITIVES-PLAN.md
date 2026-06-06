@@ -12,8 +12,8 @@ This is a multi-phase effort ordered by impact-per-LOC. Each phase is independen
 | --- | --- | --- |
 | 1 | Gate OCR text/numbers by detection confidence | **Done** (`37f00a4`) |
 | 2 | Opt-in OCR ROI preprocessing (upscale + CLAHE) | **Done** (`df35431`) |
-| 3a | Numbers tool: EasyOCR digit allowlist | Planned |
-| 3b | Text tool: opt-in character normalization | Planned |
+| 3a | Numbers tool: EasyOCR digit allowlist | **Done** (`42a1929`) |
+| 3b | Text tool: opt-in character normalization | **Done** (`2ef5e81`) |
 | 5 | Extract hardcoded static-frame-skip threshold | Planned |
 | 4 | Temporal coherence (`require_consecutive`) | Planned |
 | 6 | Confidence histogram in results UI | Planned |
@@ -43,6 +43,7 @@ Numbers mode is digits-only by definition, so constraining EasyOCR's character s
 - **Tests**: `TestScanNumbers::test_allowlist_passed` — stub reader records kwargs; assert `allowlist` is forwarded when `languages == ["en"]` and omitted otherwise.
 - **Risk**: an allowlist tighter than the parsing regex could occasionally drop a character that helped EasyOCR localize a digit (e.g. `%` in "30%"). Worth a quick real-footage check before widening the set.
 - **Effort**: S.
+- **Known limitation (observed on real footage, post-ship)**: misreads where a `,` or `.` glyph is recognized as `1` still slip through — the allowlist cannot prevent this because `1` is itself an allowed digit, so it inflates the parsed value. An allowlist only restricts the *output* character set; it can't undo a separator→digit confusion. **Follow-up idea**: an opt-in per-task "integers only" toggle that drops `.,-` from the allowlist (digits-only `0123456789`) for whole-number HUD targets (scores, counts), killing this class of misread where decimals aren't expected. Deferred — it's a new per-task param (frontend + backend), not a tweak to the existing always-on path.
 
 ## Phase 3b — Text tool: opt-in character normalization
 
@@ -54,6 +55,7 @@ For the text tool, let users opt into collapsing common OCR confusions before th
 - **Tests**: `TestScanText::test_normalize_o_for_zero` — stub yields `"l00"`, search `"100"`; matches only when `ocr_normalize=True`.
 - **Risk**: over-fires on words containing O/I/l when the search contains digits. Default off; user's tradeoff.
 - **Effort**: S.
+- **Follow-up idea — reverse-direction normalization (digit→letter)**: the shipped table folds everything toward the *digit* form (`O→0`, `l→1`, `S→5`, `b→8`), which is correct when the search target is numeric. The opposite case — an *alphabetic* search target that OCR misreads as digits (want `O`, got `0`; want `S`, got `5`) — needs the inverse fold (`0→o`, `1→l`, `5→s`, `8→b`) so the canonical form is letters. Add either a second table + a direction toggle (`letters` / `digits`), or auto-pick the direction from whether the search string is mostly letters vs digits. Keep it opt-in like the current toggle. Deferred — net-new param/UI, not a tweak to the existing one-way path.
 
 ## Phase 5 — Extract the static-frame-skip threshold
 

@@ -717,6 +717,8 @@
       "Min OCR conf.":    "Drop OCR readings below this confidence before fuzzy matching (raise to suppress noisy misreads)",
       "Min OCR":          "Drop OCR readings below this confidence before fuzzy matching (raise to suppress noisy misreads)",
       "Enhance ROI":      "Upscale small/low-contrast crops and apply CLAHE before OCR (slower; helps tiny HUD text)",
+      "Normalize chars":  "Collapse O→0, l→1, S→5 before matching (helps fonts with weak letter/digit distinction)",
+      "Normalize":        "Collapse O→0, l→1, S→5 before matching (helps fonts with weak letter/digit distinction)",
       "Language":         "OCR language for text recognition",
     },
     numbers: {
@@ -3211,6 +3213,7 @@
     _mtAddNumberRow(body, "Fuzzy", "paramTextFuzzy" + sfx, 0.50, 1.00, numberOrDefault(init.fuzzy_threshold, 0.80), 0.01);
     _mtAddNumberRow(body, "Min OCR", "paramTextOcrConf" + sfx, 0.00, 1.00, numberOrDefault(init.ocr_confidence_threshold, CLIPGEN_CONFIG.screenspaceOcrMinConfidence), 0.01);
     _mtAddCheckboxRow(body, "Enhance ROI", "paramTextOcrPreprocess" + sfx, init.ocr_preprocess);
+    _mtAddCheckboxRow(body, "Normalize", "paramTextOcrNormalize" + sfx, init.ocr_normalize);
   }
 
   function _mtRenderNumbers(body, idx, sfx) {
@@ -3463,6 +3466,7 @@
         init.fuzzy_threshold = numberOrDefault((qs("#paramTextFuzzy" + sfx) || {}).value, init.fuzzy_threshold);
         init.ocr_confidence_threshold = numberOrDefault((qs("#paramTextOcrConf" + sfx) || {}).value, init.ocr_confidence_threshold);
         init.ocr_preprocess = !!((qs("#paramTextOcrPreprocess" + sfx) || {}).checked);
+        init.ocr_normalize = !!((qs("#paramTextOcrNormalize" + sfx) || {}).checked);
       } else if (step.type === "numbers") {
         var opEl = qs("#paramNumOperator" + sfx);
         if (opEl) init.operator = opEl.value;
@@ -3843,7 +3847,7 @@
   function renderTextParams(container) {
     addParamRow(container, "Search text", textInput("paramTextSearch", "Enter text to find..."));
     addParamRow(container, "Fuzzy Thr.", rangeInput("paramTextFuzzy", 0.50, 1.00, 0.80, 0.01), "paramTextFuzzyVal");
-    addParamRow(container, "Min OCR conf.", rangeInput("paramTextOcrConf", 0.00, 1.00, numberOrDefault(CLIPGEN_CONFIG.screenspaceOcrMinConfidence, 0.6), 0.01), "paramTextOcrConfVal");
+    addParamRow(container, "Min OCR conf.", rangeInput("paramTextOcrConf", 0.00, 1.00, numberOrDefault(CLIPGEN_CONFIG.screenspaceOcrMinConfidence, 0.7), 0.01), "paramTextOcrConfVal");
     renderIntervalSlot("paramTextInterval", 0.5, 60, 2.0, 0.5);
     var langRow = el("div", "param-row");
     langRow.appendChild(el("span", "param-label", "Language"));
@@ -3863,6 +3867,10 @@
     ppCb.type = "checkbox";
     ppCb.id = "paramTextOcrPreprocess";
     addParamRow(container, "Enhance ROI", ppCb);
+    var normCb = document.createElement("input");
+    normCb.type = "checkbox";
+    normCb.id = "paramTextOcrNormalize";
+    addParamRow(container, "Normalize chars", normCb);
   }
 
   function renderNumbersParams(container) {
@@ -3908,7 +3916,7 @@
     rangeCtrl.appendChild(numberInput("paramNumMax", -999999, 999999, 100, 1));
     numRangeRow.appendChild(rangeCtrl);
     container.appendChild(numRangeRow);
-    addParamRow(container, "Min OCR conf.", rangeInput("paramNumOcrConf", 0.00, 1.00, numberOrDefault(CLIPGEN_CONFIG.screenspaceOcrMinConfidence, 0.6), 0.01), "paramNumOcrConfVal");
+    addParamRow(container, "Min OCR conf.", rangeInput("paramNumOcrConf", 0.00, 1.00, numberOrDefault(CLIPGEN_CONFIG.screenspaceOcrMinConfidence, 0.7), 0.01), "paramNumOcrConfVal");
     var ppCb = document.createElement("input");
     ppCb.type = "checkbox";
     ppCb.id = "paramNumOcrPreprocess";
@@ -4979,6 +4987,9 @@
         return null;
       }
       p.fuzzy_threshold = numberOrDefault((qs("#paramTextFuzzy" + sfx) || {}).value, 0.80);
+      p.ocr_confidence_threshold = numberOrDefault((qs("#paramTextOcrConf" + sfx) || {}).value, CLIPGEN_CONFIG.screenspaceOcrMinConfidence);
+      p.ocr_preprocess = !!((qs("#paramTextOcrPreprocess" + sfx) || {}).checked);
+      p.ocr_normalize = !!((qs("#paramTextOcrNormalize" + sfx) || {}).checked);
     } else if (stepType === "numbers") {
       p.operator = (qs("#paramNumOperator" + sfx) || {}).value || "gt";
       p.target_value = parseFloat((qs("#paramNumTarget" + sfx) || {}).value);
@@ -4986,6 +4997,8 @@
         showToast("Step " + (idx + 1) + ": enter a valid target number");
         return null;
       }
+      p.ocr_confidence_threshold = numberOrDefault((qs("#paramNumOcrConf" + sfx) || {}).value, CLIPGEN_CONFIG.screenspaceOcrMinConfidence);
+      p.ocr_preprocess = !!((qs("#paramNumOcrPreprocess" + sfx) || {}).checked);
     } else if (stepType === "template") {
       step = state.multitoolSteps[idx];
       if (!step || step._refTs === undefined) {
@@ -5072,6 +5085,7 @@
       params.fuzzy_threshold = numberOrDefault((qs("#paramTextFuzzy") || {}).value, 0.80);
       params.ocr_confidence_threshold = numberOrDefault((qs("#paramTextOcrConf") || {}).value, CLIPGEN_CONFIG.screenspaceOcrMinConfidence);
       params.ocr_preprocess = !!((qs("#paramTextOcrPreprocess") || {}).checked);
+      params.ocr_normalize = !!((qs("#paramTextOcrNormalize") || {}).checked);
       params.interval = numberOrDefault((qs("#paramTextInterval") || {}).value, 2.0);
       var lang = (qs("#paramTextLang") || {}).value || "en";
       params.languages = [lang];
@@ -5721,6 +5735,8 @@
       setInputValue("#paramTextOcrConf", numberOrDefault(params.ocr_confidence_threshold, CLIPGEN_CONFIG.screenspaceOcrMinConfidence));
       var textPpEl = qs("#paramTextOcrPreprocess");
       if (textPpEl) textPpEl.checked = !!params.ocr_preprocess;
+      var textNormEl = qs("#paramTextOcrNormalize");
+      if (textNormEl) textNormEl.checked = !!params.ocr_normalize;
       setInputValue("#paramTextInterval", numberOrDefault(params.interval, 2.0));
       if (params.languages && params.languages[0]) {
         setInputValue("#paramTextLang", params.languages[0]);

@@ -113,6 +113,19 @@ def _preprocess_for_ocr(pixels: np.ndarray, *, min_height: int = 0) -> np.ndarra
     return cv2.cvtColor(enhanced, cv2.COLOR_GRAY2BGR)
 
 
+# Opt-in OCR confusion-collapsing for the text tool. Folds glyphs EasyOCR most
+# often swaps on compressed footage into a canonical form before the fuzzy
+# compare, so e.g. a search for "100" can match an OCR reading of "l00".
+_OCR_NORMALIZATION_TABLE = str.maketrans(
+    {"o": "0", "l": "1", "i": "1", "|": "1", "s": "5", "b": "8"}
+)
+
+
+def _normalize_ocr_text(s: str) -> str:
+    """Lowercase, then fold glyphs EasyOCR most often swaps on compressed footage."""
+    return s.lower().translate(_OCR_NORMALIZATION_TABLE)
+
+
 # ---------------------------------------------------------------------------
 # Analysis primitives
 # ---------------------------------------------------------------------------
@@ -1236,6 +1249,7 @@ def scan_text(
     fuzzy_threshold: float = 0.0,
     ocr_confidence_threshold: float = 0.0,
     ocr_preprocess: bool = False,
+    ocr_normalize: bool = False,
     languages: list[str] | None = None,
     start_seconds: float = 0.0,
     end_seconds: float | None = None,
@@ -1269,7 +1283,9 @@ def scan_text(
     total_range = end_seconds - start_seconds
 
     results: list[dict[str, Any]] = []
-    search_lower = search_string.lower()
+    search_cmp = (
+        _normalize_ocr_text(search_string) if ocr_normalize else search_string.lower()
+    )
     prev_gray: list[np.ndarray | None] = [None]
 
     def _cb(ts: float, pixels: np.ndarray) -> bool | None:
@@ -1288,7 +1304,8 @@ def scan_text(
         for _, text, conf in ocr_results:
             if conf < ocr_confidence_threshold:
                 continue
-            ratio = difflib.SequenceMatcher(None, search_lower, text.lower()).ratio()
+            ocr_cmp = _normalize_ocr_text(text) if ocr_normalize else text.lower()
+            ratio = difflib.SequenceMatcher(None, search_cmp, ocr_cmp).ratio()
             if ratio >= fuzzy_threshold:
                 rd = {
                     "timestamp": ts,
@@ -1322,6 +1339,13 @@ def scan_text(
 
 _NUMBERS_RE = re.compile(r"-?\d+(?:\.\d+)?")
 _VALID_OPERATORS = ("eq", "gt", "lt", "gte", "lte", "range")
+
+# EasyOCR character allowlist for the numbers tool. Numbers mode is digits-only,
+# so constraining recognition kills glyph confusions (O↔0, S↔5, l↔1) at the
+# source. Only passed for the default English reader — some language combos
+# reject ``allowlist``. Mirrors what the downstream parser accepts (``-``, ``.``,
+# ``,`` thousands separators, digits).
+_OCR_NUMBER_ALLOWLIST = "0123456789.,-"
 
 
 def _number_matches(
@@ -1399,6 +1423,10 @@ def scan_numbers(
 
     results: list[dict[str, Any]] = []
     prev_gray: list[np.ndarray | None] = [None]
+    # Hoisted out of the per-frame callback: constrain English OCR to digits.
+    ocr_kwargs: dict[str, Any] = {"detail": 1}
+    if languages == ["en"]:
+        ocr_kwargs["allowlist"] = _OCR_NUMBER_ALLOWLIST
 
     def _cb(ts: float, pixels: np.ndarray) -> bool | None:
         if cancel_flag and cancel_flag():
@@ -1412,7 +1440,7 @@ def scan_numbers(
                 return None
         prev_gray[0] = gray
         ocr_input = _preprocess_for_ocr(pixels) if ocr_preprocess else pixels
-        ocr_results = reader.readtext(ocr_input, detail=1)
+        ocr_results = reader.readtext(ocr_input, **ocr_kwargs)
         for _, text, conf in ocr_results:
             if conf < ocr_confidence_threshold:
                 continue
@@ -2621,11 +2649,17 @@ class TextTool(AnalysisTool):
         if params.get("ocr_preprocess", False):
             pixels = _preprocess_for_ocr(pixels)
         ocr_results = reader.readtext(pixels, detail=1)
-        search_lower = search_string.lower()
+        ocr_normalize = params.get("ocr_normalize", False)
+        search_cmp = (
+            _normalize_ocr_text(search_string)
+            if ocr_normalize
+            else search_string.lower()
+        )
         for _, text, conf in ocr_results:
             if conf < ocr_min_conf:
                 continue
-            ratio = difflib.SequenceMatcher(None, search_lower, text.lower()).ratio()
+            ocr_cmp = _normalize_ocr_text(text) if ocr_normalize else text.lower()
+            ratio = difflib.SequenceMatcher(None, search_cmp, ocr_cmp).ratio()
             if ratio >= fuzzy_threshold:
                 return True, {"text_found": text, "confidence": round(conf, 4)}
         return False, None
@@ -2651,6 +2685,7 @@ class TextTool(AnalysisTool):
             fuzzy_threshold=params.get("fuzzy_threshold", 0),
             ocr_confidence_threshold=params.get("ocr_confidence_threshold", 0),
             ocr_preprocess=params.get("ocr_preprocess", False),
+            ocr_normalize=params.get("ocr_normalize", False),
             languages=params.get("languages"),
             start_seconds=params.get("start_seconds", 0.0),
             end_seconds=params.get("end_seconds"),
@@ -2680,7 +2715,10 @@ class NumbersTool(AnalysisTool):
         reader = _get_ocr_reader(languages)
         if params.get("ocr_preprocess", False):
             pixels = _preprocess_for_ocr(pixels)
-        ocr_results = reader.readtext(pixels, detail=1)
+        ocr_kwargs: dict[str, Any] = {"detail": 1}
+        if languages == ["en"]:
+            ocr_kwargs["allowlist"] = _OCR_NUMBER_ALLOWLIST
+        ocr_results = reader.readtext(pixels, **ocr_kwargs)
         for _, text, conf in ocr_results:
             if conf < ocr_min_conf:
                 continue

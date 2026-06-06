@@ -155,7 +155,7 @@ SCREENSPACE_OCR_FUZZY_THRESHOLD: float = (
     0.8  # min fuzzy match score for Text/Numbers tool matches
 )
 SCREENSPACE_OCR_MIN_CONFIDENCE: float = (
-    0.6  # min EasyOCR per-detection confidence for Text/Numbers; gates noisy OCR
+    0.7  # min EasyOCR per-detection confidence for Text/Numbers; gates noisy OCR
 )
 SCREENSPACE_OCR_MIN_HEIGHT: int = (
     60  # target px height for upscaling small ROIs in opt-in OCR preprocessing

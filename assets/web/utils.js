@@ -42,7 +42,7 @@ var CLIPGEN_CONFIG = {
     { id: "key", token: "!key" },
   ],
   ignoredTimestampTokens: ["x"],
-  screenspaceOcrMinConfidence: 0.6,
+  screenspaceOcrMinConfidence: 0.7,
 };
 
 var clipgenApplyConfig = function (payload) {
