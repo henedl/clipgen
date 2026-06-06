@@ -55,6 +55,7 @@ For the text tool, let users opt into collapsing common OCR confusions before th
 - **Tests**: `TestScanText::test_normalize_o_for_zero` — stub yields `"l00"`, search `"100"`; matches only when `ocr_normalize=True`.
 - **Risk**: over-fires on words containing O/I/l when the search contains digits. Default off; user's tradeoff.
 - **Effort**: S.
+- **Follow-up idea — reverse-direction normalization (digit→letter)**: the shipped table folds everything toward the *digit* form (`O→0`, `l→1`, `S→5`, `b→8`), which is correct when the search target is numeric. The opposite case — an *alphabetic* search target that OCR misreads as digits (want `O`, got `0`; want `S`, got `5`) — needs the inverse fold (`0→o`, `1→l`, `5→s`, `8→b`) so the canonical form is letters. Add either a second table + a direction toggle (`letters` / `digits`), or auto-pick the direction from whether the search string is mostly letters vs digits. Keep it opt-in like the current toggle. Deferred — net-new param/UI, not a tweak to the existing one-way path.
 
 ## Phase 5 — Extract the static-frame-skip threshold
 
