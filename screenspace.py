@@ -1323,6 +1323,13 @@ def scan_text(
 _NUMBERS_RE = re.compile(r"-?\d+(?:\.\d+)?")
 _VALID_OPERATORS = ("eq", "gt", "lt", "gte", "lte", "range")
 
+# EasyOCR character allowlist for the numbers tool. Numbers mode is digits-only,
+# so constraining recognition kills glyph confusions (O↔0, S↔5, l↔1) at the
+# source. Only passed for the default English reader — some language combos
+# reject ``allowlist``. Mirrors what the downstream parser accepts (``-``, ``.``,
+# ``,`` thousands separators, digits).
+_OCR_NUMBER_ALLOWLIST = "0123456789.,-"
+
 
 def _number_matches(
     value: float,
@@ -1399,6 +1406,10 @@ def scan_numbers(
 
     results: list[dict[str, Any]] = []
     prev_gray: list[np.ndarray | None] = [None]
+    # Hoisted out of the per-frame callback: constrain English OCR to digits.
+    ocr_kwargs: dict[str, Any] = {"detail": 1}
+    if languages == ["en"]:
+        ocr_kwargs["allowlist"] = _OCR_NUMBER_ALLOWLIST
 
     def _cb(ts: float, pixels: np.ndarray) -> bool | None:
         if cancel_flag and cancel_flag():
@@ -1412,7 +1423,7 @@ def scan_numbers(
                 return None
         prev_gray[0] = gray
         ocr_input = _preprocess_for_ocr(pixels) if ocr_preprocess else pixels
-        ocr_results = reader.readtext(ocr_input, detail=1)
+        ocr_results = reader.readtext(ocr_input, **ocr_kwargs)
         for _, text, conf in ocr_results:
             if conf < ocr_confidence_threshold:
                 continue
@@ -2680,7 +2691,10 @@ class NumbersTool(AnalysisTool):
         reader = _get_ocr_reader(languages)
         if params.get("ocr_preprocess", False):
             pixels = _preprocess_for_ocr(pixels)
-        ocr_results = reader.readtext(pixels, detail=1)
+        ocr_kwargs: dict[str, Any] = {"detail": 1}
+        if languages == ["en"]:
+            ocr_kwargs["allowlist"] = _OCR_NUMBER_ALLOWLIST
+        ocr_results = reader.readtext(pixels, **ocr_kwargs)
         for _, text, conf in ocr_results:
             if conf < ocr_min_conf:
                 continue

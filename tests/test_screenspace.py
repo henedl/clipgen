@@ -1191,6 +1191,43 @@ class TestScanNumbers:
         assert accepted[0]["number_found"] == 5.0
         assert accepted[0]["confidence"] == 0.2
 
+    def test_allowlist_passed(self, monkeypatch):
+        """Digit allowlist is forwarded to EasyOCR for English, omitted otherwise."""
+        frame = np.full((20, 60, 3), 128, dtype=np.uint8)
+        seen: dict[str, object] = {}
+
+        class _FakeReader:
+            def readtext(self, _pixels, **kwargs):
+                seen.clear()
+                seen.update(kwargs)
+                return []
+
+        monkeypatch.setattr(
+            screenspace, "_get_ocr_reader", lambda _langs: _FakeReader()
+        )
+        monkeypatch.setattr(screenspace, "_probe_video_meta", lambda p: (30.0, 1.0))
+
+        def fake_scan(video_path, region, interval, callback, **kwargs):
+            callback(0.0, frame)
+
+        monkeypatch.setattr(screenspace, "scan_video_frames", fake_scan)
+
+        region = {"x": 0, "y": 0, "w": 60, "h": 20}
+
+        # Default languages → ["en"]: allowlist forwarded.
+        screenspace.scan_numbers("/fake.mp4", region, operator="gt", target_value=0)
+        assert seen.get("allowlist") == "0123456789.,-"
+
+        # Non-English combo: allowlist omitted (some combos reject it).
+        screenspace.scan_numbers(
+            "/fake.mp4",
+            region,
+            operator="gt",
+            target_value=0,
+            languages=["en", "ch_sim"],
+        )
+        assert "allowlist" not in seen
+
 
 # ---------------------------------------------------------------------------
 # Flow grid and heatmap visualization

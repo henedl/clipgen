@@ -12,7 +12,7 @@ This is a multi-phase effort ordered by impact-per-LOC. Each phase is independen
 | --- | --- | --- |
 | 1 | Gate OCR text/numbers by detection confidence | **Done** (`37f00a4`) |
 | 2 | Opt-in OCR ROI preprocessing (upscale + CLAHE) | **Done** (`df35431`) |
-| 3a | Numbers tool: EasyOCR digit allowlist | Planned |
+| 3a | Numbers tool: EasyOCR digit allowlist | **Done** |
 | 3b | Text tool: opt-in character normalization | Planned |
 | 5 | Extract hardcoded static-frame-skip threshold | Planned |
 | 4 | Temporal coherence (`require_consecutive`) | Planned |
@@ -43,6 +43,7 @@ Numbers mode is digits-only by definition, so constraining EasyOCR's character s
 - **Tests**: `TestScanNumbers::test_allowlist_passed` — stub reader records kwargs; assert `allowlist` is forwarded when `languages == ["en"]` and omitted otherwise.
 - **Risk**: an allowlist tighter than the parsing regex could occasionally drop a character that helped EasyOCR localize a digit (e.g. `%` in "30%"). Worth a quick real-footage check before widening the set.
 - **Effort**: S.
+- **Known limitation (observed on real footage, post-ship)**: misreads where a `,` or `.` glyph is recognized as `1` still slip through — the allowlist cannot prevent this because `1` is itself an allowed digit, so it inflates the parsed value. An allowlist only restricts the *output* character set; it can't undo a separator→digit confusion. **Follow-up idea**: an opt-in per-task "integers only" toggle that drops `.,-` from the allowlist (digits-only `0123456789`) for whole-number HUD targets (scores, counts), killing this class of misread where decimals aren't expected. Deferred — it's a new per-task param (frontend + backend), not a tweak to the existing always-on path.
 
 ## Phase 3b — Text tool: opt-in character normalization
 
