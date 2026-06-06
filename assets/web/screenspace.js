@@ -3855,7 +3855,7 @@
   function renderTextParams(container) {
     addParamRow(container, "Search text", textInput("paramTextSearch", "Enter text to find..."));
     addParamRow(container, "Fuzzy Thr.", rangeInput("paramTextFuzzy", 0.50, 1.00, 0.80, 0.01), "paramTextFuzzyVal");
-    addParamRow(container, "Min OCR conf.", rangeInput("paramTextOcrConf", 0.00, 1.00, numberOrDefault(CLIPGEN_CONFIG.screenspaceOcrMinConfidence, 0.6), 0.01), "paramTextOcrConfVal");
+    addParamRow(container, "Min OCR conf.", rangeInput("paramTextOcrConf", 0.00, 1.00, numberOrDefault(CLIPGEN_CONFIG.screenspaceOcrMinConfidence, 0.7), 0.01), "paramTextOcrConfVal");
     renderIntervalSlot("paramTextInterval", 0.5, 60, 2.0, 0.5);
     var langRow = el("div", "param-row");
     langRow.appendChild(el("span", "param-label", "Language"));
@@ -3924,7 +3924,7 @@
     rangeCtrl.appendChild(numberInput("paramNumMax", -999999, 999999, 100, 1));
     numRangeRow.appendChild(rangeCtrl);
     container.appendChild(numRangeRow);
-    addParamRow(container, "Min OCR conf.", rangeInput("paramNumOcrConf", 0.00, 1.00, numberOrDefault(CLIPGEN_CONFIG.screenspaceOcrMinConfidence, 0.6), 0.01), "paramNumOcrConfVal");
+    addParamRow(container, "Min OCR conf.", rangeInput("paramNumOcrConf", 0.00, 1.00, numberOrDefault(CLIPGEN_CONFIG.screenspaceOcrMinConfidence, 0.7), 0.01), "paramNumOcrConfVal");
     var ppCb = document.createElement("input");
     ppCb.type = "checkbox";
     ppCb.id = "paramNumOcrPreprocess";
