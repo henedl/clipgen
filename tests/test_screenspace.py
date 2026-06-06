@@ -1209,6 +1209,14 @@ class TestScanNumbers:
 
         monkeypatch.setattr(screenspace, "scan_video_frames", fake_scan)
 
+        default_rejected = screenspace.scan_numbers(
+            "/fake.mp4",
+            {"x": 0, "y": 0, "w": 60, "h": 20},
+            operator="gte",
+            target_value=5,
+        )
+        assert default_rejected == []
+
         rejected = screenspace.scan_numbers(
             "/fake.mp4",
             {"x": 0, "y": 0, "w": 60, "h": 20},
@@ -1228,6 +1236,27 @@ class TestScanNumbers:
         assert len(accepted) == 1
         assert accepted[0]["number_found"] == 5.0
         assert accepted[0]["confidence"] == 0.2
+
+        accepted_zero = screenspace.scan_numbers(
+            "/fake.mp4",
+            {"x": 0, "y": 0, "w": 60, "h": 20},
+            operator="gte",
+            target_value=5,
+            ocr_confidence_threshold=0.0,
+        )
+        assert len(accepted_zero) == 1
+
+    @pytest.mark.parametrize("threshold", [-0.1, 1.1])
+    def test_invalid_ocr_confidence_threshold_raises(self, monkeypatch, threshold):
+        monkeypatch.setattr(screenspace, "_probe_video_meta", lambda p: (30.0, 1.0))
+        with pytest.raises(ValueError, match="ocr_confidence_threshold"):
+            screenspace.scan_numbers(
+                "/fake.mp4",
+                {"x": 0, "y": 0, "w": 60, "h": 20},
+                operator="gte",
+                target_value=5,
+                ocr_confidence_threshold=threshold,
+            )
 
     def test_allowlist_passed(self, monkeypatch):
         """Digit allowlist is forwarded to EasyOCR for English, omitted otherwise."""
@@ -1454,6 +1483,44 @@ class TestCheckFrameForTool:
         assert passed is True
         assert result is not None
         assert "score" in result
+
+    def test_numbers_check_frame_honors_zero_ocr_threshold(self, monkeypatch):
+        frame = np.full((20, 60, 3), 128, dtype=np.uint8)
+        region = {"x": 0, "y": 0, "w": 60, "h": 20}
+
+        class _FakeReader:
+            def readtext(self, _pixels, **_kwargs):
+                return [([(0, 0), (10, 0), (10, 10), (0, 10)], "5", 0.2)]
+
+        monkeypatch.setattr(
+            screenspace, "_get_ocr_reader", lambda _langs: _FakeReader()
+        )
+
+        passed, result = screenspace.check_frame_for_tool(
+            frame,
+            None,
+            region,
+            "numbers",
+            {"operator": "gte", "target_value": 5},
+        )
+        assert passed is False
+        assert result is None
+
+        passed, result = screenspace.check_frame_for_tool(
+            frame,
+            None,
+            region,
+            "numbers",
+            {
+                "operator": "gte",
+                "target_value": 5,
+                "ocr_confidence_threshold": 0.0,
+            },
+        )
+        assert passed is True
+        assert result is not None
+        assert result["number_found"] == 5.0
+        assert result["confidence"] == 0.2
 
     def test_flow_needs_prev_frame(self):
         frame = np.zeros((100, 100, 3), dtype=np.uint8)

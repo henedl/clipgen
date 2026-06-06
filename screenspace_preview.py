@@ -160,6 +160,8 @@ def build_overlay_layer(
         return _gray_to_bgr(gray)
 
     if tool in ("text", "numbers") and layer == "gray":
+        if params.get("ocr_preprocess"):
+            pixels = screenspace._preprocess_for_ocr(pixels)
         return _gray_to_bgr(cv2.cvtColor(pixels, cv2.COLOR_BGR2GRAY))
 
     if tool == "scene" and layer == "edges":
@@ -623,8 +625,12 @@ def _preview_text_numbers(
     pixels = _clip_region_pixels(frame, region)
     if pixels is None:
         return _placeholder("Select a region to preview")
+    label = "OCR input (gray)"
+    if params.get("ocr_preprocess"):
+        pixels = screenspace._preprocess_for_ocr(pixels)
+        label = "OCR input (enhanced)"
     gray = cv2.cvtColor(pixels, cv2.COLOR_BGR2GRAY)
-    return _label_panel(_fit_width(gray, 300), "OCR input (gray)")
+    return _label_panel(_fit_width(gray, 300), label)
 
 
 def _preview_timelapse(
