@@ -446,6 +446,7 @@ def api_preview(participant: str, timestamp: str) -> FlaskResponse:
       noise=<int>          change tool's noise_threshold override
       h,s,v=<int>          color tool's target HSV override
       magnitude=<float>    flow tool's magnitude threshold override
+      ocr_preprocess=<bool> text/numbers ROI enhancement override
       layer=<id>           if set, return that single overlay layer at native
                            region/frame resolution instead of the labeled
                            composite. See ``screenspace_preview.OVERLAY_LAYERS``
@@ -531,6 +532,10 @@ def api_preview(participant: str, timestamp: str) -> FlaskResponse:
                 params["magnitude_threshold"] = float(raw)
             except ValueError:
                 pass
+    elif tool in ("text", "numbers"):
+        raw = (request.args.get("ocr_preprocess") or "").strip().lower()
+        if raw in ("1", "true", "yes", "on"):
+            params["ocr_preprocess"] = True
     elif tool == "similarity":
         ref_ts_raw = request.args.get("ref")
         if ref_ts_raw is not None and region_coords is not None:
@@ -925,7 +930,10 @@ def api_regions_reorder() -> FlaskResponse:
     with _manifest_lock:
         regions = _manifest.get("regions", {})
         names = data["names"]
-        if set(names) != set(regions.keys()):
+        if not all(isinstance(name, str) for name in names):
+            return jsonify({"ok": False, "error": "names must be strings"}), 400
+        region_names = list(regions.keys())
+        if len(names) != len(region_names) or set(names) != set(region_names):
             return (
                 jsonify(
                     {"ok": False, "error": "names must match current regions exactly"}
@@ -1251,6 +1259,8 @@ def _coerce_task_params(
             parameters["scene_references"] = _validate_scene_references(
                 parameters.get("scene_references")
             )
+        elif task_type in ("text", "numbers"):
+            _coerce_ocr_controls(parameters)
         elif task_type == "multitool":
             for i, step in enumerate(parameters.get("steps", [])):
                 step_context = f"Step {i}: "
@@ -1275,6 +1285,8 @@ def _coerce_task_params(
                     )
                 if step.get("type") == "template":
                     _coerce_template_controls(step)
+                if step.get("type") in ("text", "numbers"):
+                    _coerce_ocr_controls(step, context=step_context)
         if task_type == "template":
             _coerce_template_controls(parameters)
     except ValueError as exc:
@@ -1796,6 +1808,21 @@ def _coerce_template_controls(params: dict[str, Any], *, context: str = "") -> N
         lo = config.SCREENSPACE_TEMPLATE_SCALE_MIN
         hi = config.SCREENSPACE_TEMPLATE_SCALE_MAX
         params["template_scale"] = max(lo, min(hi, scale))
+
+
+def _coerce_ocr_controls(params: dict[str, Any], *, context: str = "") -> None:
+    """Validate optional OCR controls shared by Text and Numbers tools."""
+    if "ocr_confidence_threshold" not in params:
+        return
+    threshold = _coerce_float(
+        params.get("ocr_confidence_threshold"),
+        "ocr_confidence_threshold",
+        required=True,
+        context=context,
+    )
+    if threshold is None or threshold < 0 or threshold > 1:
+        raise ValueError(f"{context}ocr_confidence_threshold must be between 0 and 1")
+    params["ocr_confidence_threshold"] = threshold
 
 
 def _validate_scene_references(

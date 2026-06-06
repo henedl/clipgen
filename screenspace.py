@@ -126,6 +126,21 @@ def _normalize_ocr_text(s: str) -> str:
     return s.lower().translate(_OCR_NORMALIZATION_TABLE)
 
 
+def _effective_ocr_confidence_threshold(value: Any = None) -> float:
+    """Return OCR confidence cutoff, using config default only when omitted."""
+    if value is None:
+        return config.SCREENSPACE_OCR_MIN_CONFIDENCE
+    try:
+        threshold = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("ocr_confidence_threshold must be a number") from exc
+    if not math.isfinite(threshold):
+        raise ValueError("ocr_confidence_threshold must be a finite number")
+    if threshold < 0 or threshold > 1:
+        raise ValueError("ocr_confidence_threshold must be between 0 and 1")
+    return threshold
+
+
 # ---------------------------------------------------------------------------
 # Analysis primitives
 # ---------------------------------------------------------------------------
@@ -1247,7 +1262,7 @@ def scan_text(
     interval_seconds: float = 2.0,
     *,
     fuzzy_threshold: float = 0.0,
-    ocr_confidence_threshold: float = 0.0,
+    ocr_confidence_threshold: float | None = None,
     ocr_preprocess: bool = False,
     ocr_normalize: bool = False,
     languages: list[str] | None = None,
@@ -1263,12 +1278,12 @@ def scan_text(
     EasyOCR is lazy-imported. Raises ``ImportError`` with install
     instructions if missing.
     """
-    utils.require_optional("easyocr", "text scan")
-
     if fuzzy_threshold <= 0:
         fuzzy_threshold = config.SCREENSPACE_OCR_FUZZY_THRESHOLD
-    if ocr_confidence_threshold <= 0:
-        ocr_confidence_threshold = config.SCREENSPACE_OCR_MIN_CONFIDENCE
+    ocr_confidence_threshold = _effective_ocr_confidence_threshold(
+        ocr_confidence_threshold
+    )
+    utils.require_optional("easyocr", "text scan")
     if languages is None:
         languages = ["en"]
 
@@ -1384,7 +1399,7 @@ def scan_numbers(
     *,
     range_min: float | None = None,
     range_max: float | None = None,
-    ocr_confidence_threshold: float = 0.0,
+    ocr_confidence_threshold: float | None = None,
     ocr_preprocess: bool = False,
     languages: list[str] | None = None,
     start_seconds: float = 0.0,
@@ -1404,10 +1419,10 @@ def scan_numbers(
             f"Unknown operator '{operator}'. Must be one of: {', '.join(_VALID_OPERATORS)}"
         )
 
+    ocr_confidence_threshold = _effective_ocr_confidence_threshold(
+        ocr_confidence_threshold
+    )
     utils.require_optional("easyocr", "numbers scan")
-
-    if ocr_confidence_threshold <= 0:
-        ocr_confidence_threshold = config.SCREENSPACE_OCR_MIN_CONFIDENCE
     if languages is None:
         languages = ["en"]
 
@@ -2638,11 +2653,8 @@ class TextTool(AnalysisTool):
         fuzzy_threshold = params.get(
             "fuzzy_threshold", config.SCREENSPACE_OCR_FUZZY_THRESHOLD
         )
-        # 0/absent → config default, matching scan_text's `<= 0` convention so
-        # standalone and multitool paths gate identically.
-        ocr_min_conf = (
+        ocr_min_conf = _effective_ocr_confidence_threshold(
             params.get("ocr_confidence_threshold")
-            or config.SCREENSPACE_OCR_MIN_CONFIDENCE
         )
         languages = params.get("languages") or ["en"]
         reader = _get_ocr_reader(languages)
@@ -2683,7 +2695,7 @@ class TextTool(AnalysisTool):
             search_string=params.get("search_string", ""),
             interval_seconds=params.get("interval", 2.0),
             fuzzy_threshold=params.get("fuzzy_threshold", 0),
-            ocr_confidence_threshold=params.get("ocr_confidence_threshold", 0),
+            ocr_confidence_threshold=params.get("ocr_confidence_threshold"),
             ocr_preprocess=params.get("ocr_preprocess", False),
             ocr_normalize=params.get("ocr_normalize", False),
             languages=params.get("languages"),
@@ -2705,11 +2717,8 @@ class NumbersTool(AnalysisTool):
         target_value = params.get("target_value", 0)
         range_min = params.get("range_min")
         range_max = params.get("range_max")
-        # 0/absent → config default, matching scan_numbers's `<= 0` convention so
-        # standalone and multitool paths gate identically.
-        ocr_min_conf = (
+        ocr_min_conf = _effective_ocr_confidence_threshold(
             params.get("ocr_confidence_threshold")
-            or config.SCREENSPACE_OCR_MIN_CONFIDENCE
         )
         languages = params.get("languages") or ["en"]
         reader = _get_ocr_reader(languages)
@@ -2750,7 +2759,7 @@ class NumbersTool(AnalysisTool):
             interval_seconds=params.get("interval", 2.0),
             range_min=params.get("range_min"),
             range_max=params.get("range_max"),
-            ocr_confidence_threshold=params.get("ocr_confidence_threshold", 0),
+            ocr_confidence_threshold=params.get("ocr_confidence_threshold"),
             ocr_preprocess=params.get("ocr_preprocess", False),
             languages=params.get("languages"),
             start_seconds=params.get("start_seconds", 0.0),

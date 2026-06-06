@@ -295,6 +295,17 @@ def test_reorder_regions_rejects_mismatched_names(client):
     assert keys == ["a", "b"]
 
 
+def test_reorder_regions_rejects_duplicate_names(client):
+    _create_region(client, "a")
+    _create_region(client, "b")
+    resp = client.put(
+        "/screenspace/api/regions/reorder", json={"names": ["a", "a"]}
+    )
+    assert resp.status_code == 400
+    keys = list(client.get("/screenspace/api/regions").get_json()["regions"].keys())
+    assert keys == ["a", "b"]
+
+
 def test_reorder_regions_requires_names_list(client):
     _create_region(client, "a")
     assert client.put("/screenspace/api/regions/reorder", json={}).status_code == 400
@@ -469,6 +480,48 @@ def test_create_task_numbers_type_accepted(client):
     assert "video" in data["error"].lower()
 
 
+@pytest.mark.parametrize("value", [None, -0.1, 1.1, "not-a-number"])
+def test_create_ocr_task_rejects_invalid_confidence_threshold(
+    client, monkeypatch, value
+):
+    _create_region(client, "r")
+    _enable_video_task_setup(monkeypatch, "P01")
+    resp = client.post(
+        "/screenspace/api/tasks",
+        json={
+            "type": "text",
+            "participant": "P01",
+            "region": "r",
+            "parameters": {
+                "search_string": "score",
+                "ocr_confidence_threshold": value,
+            },
+        },
+    )
+    assert resp.status_code == 400
+    assert "ocr_confidence_threshold" in resp.get_json()["error"]
+
+
+def test_create_ocr_task_accepts_zero_confidence_threshold(client, monkeypatch):
+    _create_region(client, "r")
+    _enable_video_task_setup(monkeypatch, "P01")
+    resp = client.post(
+        "/screenspace/api/tasks",
+        json={
+            "type": "text",
+            "participant": "P01",
+            "region": "r",
+            "parameters": {
+                "search_string": "score",
+                "ocr_confidence_threshold": 0,
+            },
+        },
+    )
+    assert resp.status_code == 200
+    params = resp.get_json()["task"]["parameters"]
+    assert params["ocr_confidence_threshold"] == 0.0
+
+
 @pytest.mark.parametrize("task_type", ["template", "flow", "scene"])
 def test_create_task_new_types_accepted(client, task_type):
     """New phase-4 types pass type validation (fail at video, not type)."""
@@ -589,6 +642,37 @@ def test_api_preview_template_post_invalid_image(client, monkeypatch) -> None:
         json={"template_image_data": "qqqq"},
     )
     assert resp.status_code == 400
+
+
+def test_api_preview_text_preprocess_changes_ocr_input(client, monkeypatch) -> None:
+    import cv2
+    import numpy as np
+    import video
+
+    _enable_video_task_setup(monkeypatch, "P01")
+    frame = np.zeros((80, 120, 3), dtype=np.uint8)
+    monkeypatch.setattr(
+        video, "extract_frame_at_timestamp", lambda _path, _ts: frame.copy()
+    )
+    monkeypatch.setattr(
+        screenspace,
+        "_preprocess_for_ocr",
+        lambda _pixels: np.full((40, 40, 3), 255, dtype=np.uint8),
+    )
+
+    region = "0.0,0.0,0.5,0.5"
+    raw = client.get(f"/screenspace/api/preview/P01/0.0?tool=text&region={region}")
+    enhanced = client.get(
+        f"/screenspace/api/preview/P01/0.0?tool=text&region={region}&ocr_preprocess=1"
+    )
+    assert raw.status_code == 200
+    assert enhanced.status_code == 200
+    raw_img = cv2.imdecode(np.frombuffer(raw.data, np.uint8), cv2.IMREAD_COLOR)
+    enhanced_img = cv2.imdecode(
+        np.frombuffer(enhanced.data, np.uint8), cv2.IMREAD_COLOR
+    )
+    assert raw_img is not None and enhanced_img is not None
+    assert float(enhanced_img.mean()) > float(raw_img.mean())
 
 
 def test_api_preview_layers_catalog(client) -> None:

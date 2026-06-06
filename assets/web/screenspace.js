@@ -1793,7 +1793,13 @@
       dot.style.background = color;
       chip.appendChild(dot);
       chip.appendChild(document.createTextNode(name));
-      chip.addEventListener("click", function () {
+      chip.addEventListener("click", function (e) {
+        if (_regionSuppressNextClick) {
+          _regionSuppressNextClick = false;
+          e.preventDefault();
+          e.stopPropagation();
+          return;
+        }
         if (state.activeRegion === name) {
           state.activeRegion = null;
         } else {
@@ -1991,9 +1997,19 @@
   // render, but the element itself is reused).
   var _stashDragOverCard = null;
 
+  function clearStashDragIndicators() {
+    if (_stashDragOverCard) {
+      _stashDragOverCard.classList.remove("drag-over");
+      _stashDragOverCard = null;
+    }
+    qsa(".stash-card.drag-over").forEach(function (card) {
+      card.classList.remove("drag-over");
+    });
+  }
+
   function bindStashDrop(area) {
     area.addEventListener("dragover", function (e) {
-      if (e.dataTransfer.types.indexOf("application/x-region-name") < 0) return;
+      if (!hasRegionDragPayload(e)) return;
       e.preventDefault();
       e.dataTransfer.dropEffect = "copy";
       var card = e.target.closest(".stash-card");
@@ -2007,16 +2023,20 @@
     });
     area.addEventListener("dragleave", function (e) {
       var card = e.target.closest(".stash-card");
-      if (card && !card.contains(e.relatedTarget)) card.classList.remove("drag-over");
+      if (card && !card.contains(e.relatedTarget)) {
+        card.classList.remove("drag-over");
+        if (_stashDragOverCard === card) _stashDragOverCard = null;
+      }
     });
     area.addEventListener("drop", function (e) {
-      if (e.dataTransfer.types.indexOf("application/x-region-name") < 0) return;
+      if (!hasRegionDragPayload(e)) return;
       var card = e.target.closest(".stash-card");
       if (!card) return;
       e.preventDefault();
-      card.classList.remove("drag-over");
-      _stashDragOverCard = null;
-      copyRegionToStash(e.dataTransfer.getData("application/x-region-name"), card.dataset.stashId);
+      clearStashDragIndicators();
+      _regionDragDropped = true;
+      var regionName = getDraggedRegionName(e);
+      if (regionName) copyRegionToStash(regionName, card.dataset.stashId);
     });
   }
 
@@ -2024,9 +2044,60 @@
   // Horizontal mirror of the multitool/task vertical drag helpers: midpoints use
   // left+width/2 and compare clientX. Excluding the .dragging chip from the cache
   // keeps the drop index aligned with the post-splice array (no off-by-one).
+  var REGION_DRAG_MIME = "application/x-region-name";
   var _regionDragMidpoints = null;
   var _regionDragOverRaf = null;
   var _regionPendingDragOverX = null;
+  var _regionDragActive = false;
+  var _regionDragMoved = false;
+  var _regionDragDropped = false;
+  var _regionSuppressNextClick = false;
+
+  function dataTransferHasType(dt, type) {
+    if (!dt || !dt.types) return false;
+    if (typeof dt.types.indexOf === "function") return dt.types.indexOf(type) >= 0;
+    if (typeof dt.types.contains === "function") return dt.types.contains(type);
+    for (var i = 0; i < dt.types.length; i++) {
+      if (dt.types[i] === type) return true;
+    }
+    return false;
+  }
+
+  function hasRegionDragPayload(e) {
+    // Firefox/Safari may hide custom MIME types during dragover. Since these
+    // drags start inside this document, the local flag is the reliable signal.
+    return _regionDragActive || dataTransferHasType(e.dataTransfer, REGION_DRAG_MIME);
+  }
+
+  function setRegionDragData(dt, idx, name) {
+    if (!dt) return;
+    dt.setData("text/plain", String(idx));
+    try {
+      dt.setData(REGION_DRAG_MIME, name);
+    } catch (_) {
+      // Some engines reject custom types; text/plain + local state covers us.
+    }
+  }
+
+  function getDraggedRegionName(e) {
+    var name = "";
+    try {
+      name = e.dataTransfer.getData(REGION_DRAG_MIME);
+    } catch (_) {
+      name = "";
+    }
+    if (name && Object.prototype.hasOwnProperty.call(state.regions, name)) return name;
+    var fromIdx = parseInt(e.dataTransfer.getData("text/plain"), 10);
+    if (isNaN(fromIdx)) return "";
+    return Object.keys(state.regions)[fromIdx] || "";
+  }
+
+  function getDraggedRegionIndex(e) {
+    var fromIdx = parseInt(e.dataTransfer.getData("text/plain"), 10);
+    if (!isNaN(fromIdx)) return fromIdx;
+    var name = getDraggedRegionName(e);
+    return name ? Object.keys(state.regions).indexOf(name) : -1;
+  }
 
   function _cacheRegionDragMidpoints(container) {
     var chips = container.querySelectorAll(".region-chip:not(.dragging)");
@@ -2065,9 +2136,11 @@
         e.preventDefault();
         return;
       }
+      _regionDragActive = true;
+      _regionDragMoved = false;
+      _regionDragDropped = false;
       chip.classList.add("dragging");
-      e.dataTransfer.setData("text/plain", chip.dataset.regionIdx);
-      e.dataTransfer.setData("application/x-region-name", chip.dataset.regionName);
+      setRegionDragData(e.dataTransfer, chip.dataset.regionIdx, chip.dataset.regionName);
       e.dataTransfer.effectAllowed = "copyMove";
       _cacheRegionDragMidpoints(chips);
     });
@@ -2081,13 +2154,22 @@
       }
       _regionPendingDragOverX = null;
       clearRegionDragIndicators(chips);
+      clearStashDragIndicators();
       _regionDragMidpoints = null;
+      if (_regionDragMoved || _regionDragDropped) {
+        _regionSuppressNextClick = true;
+        setTimeout(function () { _regionSuppressNextClick = false; }, 250);
+      }
+      _regionDragActive = false;
+      _regionDragMoved = false;
+      _regionDragDropped = false;
     });
 
     chips.addEventListener("dragover", function (e) {
-      if (e.dataTransfer.types.indexOf("application/x-region-name") < 0) return;
+      if (!hasRegionDragPayload(e)) return;
       e.preventDefault();
       e.dataTransfer.dropEffect = "move";
+      _regionDragMoved = true;
       _regionPendingDragOverX = e.clientX;
       if (_regionDragOverRaf != null) return; // RAF-debounce ~60Hz dragover
       _regionDragOverRaf = requestAnimationFrame(function () {
@@ -2108,15 +2190,18 @@
     });
 
     chips.addEventListener("drop", function (e) {
-      if (e.dataTransfer.types.indexOf("application/x-region-name") < 0) return;
+      if (!hasRegionDragPayload(e)) return;
       e.preventDefault();
+      _regionDragDropped = true;
       clearRegionDragIndicators(chips);
-      var fromIdx = parseInt(e.dataTransfer.getData("text/plain"), 10);
-      if (isNaN(fromIdx)) return;
+      var fromIdx = getDraggedRegionIndex(e);
+      if (fromIdx < 0) return;
       var toIdx = getRegionDropIndex(chips, e.clientX);
       if (fromIdx === toIdx) return;
       var names = Object.keys(state.regions);
+      var previousRegions = state.regions;
       var moved = names.splice(fromIdx, 1)[0];
+      if (!moved) return;
       names.splice(toIdx, 0, moved);
       // Rebuild state.regions in the new order.
       var reordered = {};
@@ -2128,9 +2213,21 @@
       // recolors regions — intentional. Repaint chips and overlay together.
       renderRegionChips();
       renderOverlay();
-      apiPut("api/regions/reorder", { names: names }).catch(function () {
+      apiPut("api/regions/reorder", { names: names }).then(function (data) {
+        if (!data || !data.ok) throw new Error((data && data.error) || "reorder failed");
+      }).catch(function () {
+        state.regions = previousRegions;
+        renderRegionChips();
+        renderOverlay();
         showToast("Failed to save region order");
       });
+    });
+
+    document.addEventListener("dragend", function () {
+      clearStashDragIndicators();
+    });
+    document.addEventListener("drop", function () {
+      clearStashDragIndicators();
     });
   }
 
@@ -4410,6 +4507,12 @@
     } else if (tool === "flow") {
       var m = qs("#paramFlowMag");
       if (m) out.magnitude = m.value;
+    } else if (tool === "text") {
+      var tp = qs("#paramTextOcrPreprocess");
+      if (tp && tp.checked) out.ocr_preprocess = "1";
+    } else if (tool === "numbers") {
+      var np = qs("#paramNumOcrPreprocess");
+      if (np && np.checked) out.ocr_preprocess = "1";
     }
     return out;
   }
