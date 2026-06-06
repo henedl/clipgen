@@ -298,9 +298,7 @@ def test_reorder_regions_rejects_mismatched_names(client):
 def test_reorder_regions_rejects_duplicate_names(client):
     _create_region(client, "a")
     _create_region(client, "b")
-    resp = client.put(
-        "/screenspace/api/regions/reorder", json={"names": ["a", "a"]}
-    )
+    resp = client.put("/screenspace/api/regions/reorder", json={"names": ["a", "a"]})
     assert resp.status_code == 400
     keys = list(client.get("/screenspace/api/regions").get_json()["regions"].keys())
     assert keys == ["a", "b"]
