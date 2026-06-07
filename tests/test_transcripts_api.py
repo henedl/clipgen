@@ -571,3 +571,190 @@ def test_embed_all_subtitles_404_when_no_transcripts(tr_client, tmp_path):
     resp = tr_client.post("/transcripts/api/embed-all-subtitles")
     assert resp.status_code == 404
     assert resp.get_json()["ok"] is False
+
+
+# ---- Friction endpoints ----
+
+
+def _seed_friction_entry(pid="P01", **extra):
+    """Insert a transcript entry with a summary for *pid* into the manifest."""
+    entry = {
+        "segments": [{"id": f"{pid}:0", "start": 0.0, "end": 1.0, "text": "um where"}],
+        "summary": "A session summary.",
+    }
+    entry.update(extra)
+    transcripts_server._manifest["source_transcripts"][pid] = entry
+    return entry
+
+
+def test_friction_get_404_when_absent_and_idle(tr_client, _agent_state_clean):
+    _seed_friction_entry()
+    resp = tr_client.get("/transcripts/api/friction/P01")
+    assert resp.status_code == 404
+    assert resp.get_json()["ok"] is False
+
+
+def test_friction_get_returns_cached(tr_client, _agent_state_clean):
+    fr = {"segments": [], "moments": [], "stats": {}, "stale": False, "model": "m"}
+    _seed_friction_entry(friction=fr)
+    resp = tr_client.get("/transcripts/api/friction/P01")
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["ok"] is True
+    assert data["friction"]["model"] == "m"
+    assert data["friction"]["stale"] is False
+
+
+def test_friction_get_generating_when_in_flight(tr_client, _agent_state_clean):
+    _seed_friction_entry()
+    transcripts_server._orchestrator._in_flight["friction"].add("P01")
+    resp = tr_client.get("/transcripts/api/friction/P01")
+    assert resp.status_code == 200
+    assert resp.get_json()["generating"] is True
+
+
+def test_friction_regenerate_404_without_summary(tr_client, _agent_state_clean):
+    transcripts_server._manifest["source_transcripts"]["P01"] = {
+        "segments": [{"id": "P01:0", "start": 0.0, "end": 1.0, "text": "x"}],
+    }
+    resp = tr_client.post("/transcripts/api/friction/P01/regenerate")
+    assert resp.status_code == 404
+
+
+def test_friction_regenerate_triggers(tr_client, _agent_state_clean, monkeypatch):
+    monkeypatch.setattr(transcripts_server, "_persist_manifest", lambda: None)
+    _seed_friction_entry(friction={"stale": False, "moments": []})
+
+    done = threading.Event()
+
+    def stub_run(snapshot, cancel_event):
+        done.set()
+        return None
+
+    fr_agent = thinking_agents.get_agent("friction")
+    assert fr_agent is not None
+    monkeypatch.setitem(fr_agent, "run", stub_run)
+
+    resp = tr_client.post("/transcripts/api/friction/P01/regenerate")
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["ok"] is True
+    assert data["generating"] is True
+    # friction was cleared before the re-trigger so the agent recomputes.
+    assert "friction" not in transcripts_server._manifest["source_transcripts"]["P01"]
+    done.wait(timeout=2)
+
+
+def test_friction_regenerate_returns_generating_when_in_flight(
+    tr_client, _agent_state_clean
+):
+    _seed_friction_entry(friction={"stale": False})
+    transcripts_server._orchestrator._in_flight["friction"].add("P01")
+    resp = tr_client.post("/transcripts/api/friction/P01/regenerate")
+    assert resp.status_code == 200
+    assert resp.get_json()["generating"] is True
+    # In-flight short-circuit must not clear the existing friction.
+    assert "friction" in transcripts_server._manifest["source_transcripts"]["P01"]
+
+
+def test_friction_stop_sets_cancel_event(tr_client, _agent_state_clean):
+    pid = "P01"
+    evt = threading.Event()
+    transcripts_server._orchestrator._in_flight["friction"].add(pid)
+    transcripts_server._orchestrator._cancel_events["friction"][pid] = evt
+    resp = tr_client.post(f"/transcripts/api/friction/{pid}/stop")
+    assert resp.status_code == 200
+    assert resp.get_json()["running"] is False
+    assert evt.is_set()
+    assert pid not in transcripts_server._orchestrator._in_flight["friction"]
+
+
+def test_friction_stop_schedules_model_unload(
+    tr_client, _agent_state_clean, monkeypatch
+):
+    monkeypatch.setattr(config, "OLLAMA_UNLOAD_DELAY_SECONDS", 30.0)
+    pid = "P01"
+    evt = threading.Event()
+    transcripts_server._orchestrator._in_flight["friction"].add(pid)
+    transcripts_server._orchestrator._cancel_events["friction"][pid] = evt
+    tr_client.post(f"/transcripts/api/friction/{pid}/stop")
+    # Friction inherits the summary model (OLLAMA_FRICTION_MODEL is blank by
+    # default), so the unload targets the resolved model.
+    assert thinking_agents.friction_model() in transcripts_server._pending_model_unloads
+
+
+def test_friction_not_eligible_when_disabled(
+    tr_client, _agent_state_clean, monkeypatch
+):
+    monkeypatch.setattr(config, "OLLAMA_FRICTION_ENABLED", False)
+    # summary + citations present so those passes are skipped; friction is the
+    # only remaining candidate.
+    _seed_friction_entry(citations=[{"sentence": "s", "refs": []}])
+    assert transcripts_server._orchestrator.next_eligible("P01") is None
+
+
+def test_friction_eligible_when_enabled(tr_client, _agent_state_clean, monkeypatch):
+    monkeypatch.setattr(config, "OLLAMA_FRICTION_ENABLED", True)
+    _seed_friction_entry(citations=[{"sentence": "s", "refs": []}])
+    agent = transcripts_server._orchestrator.next_eligible("P01")
+    assert agent is not None and agent["key"] == "friction"
+
+
+def test_friction_eligible_without_citations(
+    tr_client, _agent_state_clean, monkeypatch
+):
+    """Friction depends only on summary — it runs even when citations is off."""
+    monkeypatch.setattr(config, "OLLAMA_FRICTION_ENABLED", True)
+    monkeypatch.setattr(config, "OLLAMA_CITATIONS_ENABLED", False)
+    _seed_friction_entry()  # summary present, no citations
+    agent = transcripts_server._orchestrator.next_eligible("P01")
+    assert agent is not None and agent["key"] == "friction"
+
+
+def test_friction_force_eligible_regardless_of_flag(
+    tr_client, _agent_state_clean, monkeypatch
+):
+    monkeypatch.setattr(config, "OLLAMA_FRICTION_ENABLED", False)
+    monkeypatch.setattr(config, "OLLAMA_SUMMARY_ENABLED", False)
+    monkeypatch.setattr(config, "OLLAMA_CITATIONS_ENABLED", False)
+    _seed_friction_entry(citations=[{"sentence": "s", "refs": []}])
+    agent = transcripts_server._orchestrator.next_eligible("P01", force=True)
+    assert agent is not None and agent["key"] == "friction"
+
+
+def test_segment_edit_marks_friction_stale(tr_client, _agent_state_clean, monkeypatch):
+    monkeypatch.setattr(transcripts_server, "_persist_manifest", lambda: None)
+    _seed_friction_entry(friction={"stale": False, "moments": []})
+    resp = tr_client.put(
+        "/transcripts/api/transcript/P01/segment",
+        json={"segment_id": "P01:0", "text": "completely new text"},
+    )
+    assert resp.status_code == 200
+    entry = transcripts_server._manifest["source_transcripts"]["P01"]
+    assert entry["friction"]["stale"] is True
+
+
+def test_summary_put_marks_friction_stale(tr_client, _agent_state_clean, monkeypatch):
+    monkeypatch.setattr(transcripts_server, "_persist_manifest", lambda: None)
+    _seed_friction_entry(
+        citations=[{"sentence": "s", "refs": []}],
+        friction={"stale": False},
+    )
+    resp = tr_client.put(
+        "/transcripts/api/summary/P01", json={"summary": "an edited summary"}
+    )
+    assert resp.status_code == 200
+    entry = transcripts_server._manifest["source_transcripts"]["P01"]
+    assert entry["friction"]["stale"] is True
+    assert "citations" not in entry  # citations invalidated alongside friction
+
+
+def test_participants_includes_friction_step_state(tr_client):
+    transcripts_server._manifest["source_transcripts"]["P01"] = {
+        "segments": [{"id": "P01:0", "start": 0.0, "end": 1.0, "text": "x"}],
+        "summary": "A summary.",
+    }
+    resp = tr_client.get("/transcripts/api/participants")
+    assert resp.status_code == 200
+    by_id = {p["id"]: p for p in resp.get_json()["participants"]}
+    assert by_id["P01"]["agents"]["friction"] == "idle"

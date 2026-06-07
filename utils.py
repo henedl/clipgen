@@ -750,6 +750,10 @@ def get_frontend_config() -> dict[str, Any]:
         {"id": ann_id, "token": token}
         for token, ann_id in sorted(get_known_annotation_map().items())
     ]
+    friction_categories = [
+        {"key": key, "label": label}
+        for key, label in config.FRICTION_CATEGORIES.items()
+    ]
     return {
         "defaultDuration": config.DEFAULT_DURATION_SECONDS,
         "severity": severity,
@@ -757,6 +761,9 @@ def get_frontend_config() -> dict[str, Any]:
         "annotations": annotations,
         "ignoredTimestampTokens": sorted(get_ignored_timestamp_tokens()),
         "screenspaceOcrMinConfidence": config.SCREENSPACE_OCR_MIN_CONFIDENCE,
+        "frictionCategories": friction_categories,
+        "frictionColorToken": "--color-friction",
+        "frictionMomentLimit": config.FRICTION_MOMENT_LIMIT,
     }
 
 

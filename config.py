@@ -272,6 +272,8 @@ TRANSCRIBE_CONDITION_ON_PREVIOUS_TEXT: bool = (
 # When to pre-load faster-whisper in the Transcripts web UI: off, queue_open (open Queue panel), page_load (after participants load).
 TRANSCRIBE_PREWARM: str = "queue_open"
 # Mark categories shown in the Transcripts mark popover. Each value is {label, color}.
+# "friction" is a single bucket for all friction-detection marks; the specific
+# friction type lives in each mark's label (e.g. "Friction · frustration").
 MARK_CATEGORIES: dict[str, dict[str, str]] = {
     "pain_point": {"label": "Pain Point", "color": "#dc2626"},
     "delight": {"label": "Delight", "color": "#16a34a"},
@@ -279,6 +281,7 @@ MARK_CATEGORIES: dict[str, dict[str, str]] = {
     "insight": {"label": "Insight", "color": "#f97316"},
     "task": {"label": "Task Issue", "color": "#8b5cf6"},
     "bookmark": {"label": "Bookmark", "color": "#0891b2"},
+    "friction": {"label": "Friction", "color": "#ea580c"},
 }
 
 # ── Ollama (Local AI) ───────────────────────────────────────────────
@@ -288,9 +291,33 @@ OLLAMA_SUMMARY_ENABLED: bool = (
 OLLAMA_CITATIONS_ENABLED: bool = (
     True  # auto-generate citation links via Ollama after the summary completes
 )
-OLLAMA_SUMMARY_MODEL: str = "qwen3.5:9b"  # model for transcript summaries and citations
+OLLAMA_FRICTION_ENABLED: bool = (
+    False  # auto-detect friction moments via Ollama after the summary completes
+)
+OLLAMA_SUMMARY_MODEL: str = (
+    "qwen3.5:9b"  # model for transcript summaries, citations, and friction
+)
+OLLAMA_FRICTION_MODEL: str = (
+    ""  # friction agent model; blank → use OLLAMA_SUMMARY_MODEL, set to override
+)
 OLLAMA_BASE_URL: str = "http://localhost:11434"  # Ollama server address
 OLLAMA_UNLOAD_DELAY_SECONDS: float = 15.0  # after Stop, evict the model from memory if no new run starts within this delay
+
+# ── Friction detection ───────────────────────────────────────────────
+# Ordered category keys → display labels. Single source of truth, mirrored to
+# the frontend via utils.get_frontend_config(). The programmatic scorer in
+# friction.py keys its patterns/weights by the same keys (enforced by tests).
+FRICTION_CATEGORIES: dict[str, str] = {
+    "hesitation": "Hesitation",
+    "confusion": "Confusion",
+    "frustration": "Frustration",
+    "surprise": "Surprise",
+    "self_correction": "Self-correction",
+    "help_seeking": "Help-seeking",
+}
+FRICTION_CANDIDATE_LIMIT: int = 15  # top-N scored segments fed to the LLM stage
+FRICTION_MOMENT_LIMIT: int = 5  # number of moments the LLM returns
+FRICTION_HEATMAP_WINDOW: int = 5  # rolling-mean window for the timeline heatmap
 
 # ── Rich Output ──────────────────────────────────────────────────────
 RICH_COLORS: bool = True  # Enable/disable colored output (set False for piped output)
@@ -331,7 +358,8 @@ SETTINGS_DESCRIPTIONS: dict[str, str] = {
     "CLIP_PARALLEL_WORKERS": "Number of concurrent ffmpeg processes for clip generation. 0 = auto, 1 = sequential.",
     "OLLAMA_SUMMARY_ENABLED": "Auto-generate an AI summary of each transcript after transcription completes. Disable to keep summaries manual-only (the per-participant Regenerate Summary button still works).",
     "OLLAMA_CITATIONS_ENABLED": "Auto-generate citation links between summary claims and transcript segments after the summary completes. Disable to keep citations manual-only (the per-participant Regenerate Citations button still works).",
-    "OLLAMA_SUMMARY_MODEL": "Ollama model used for transcript summaries and citation linking.",
+    "OLLAMA_FRICTION_ENABLED": "Auto-detect friction moments after the summary completes. Disable to keep friction manual-only (the per-participant Run/Re-run friction button still works). Uses the AI summary model.",
+    "OLLAMA_SUMMARY_MODEL": "Ollama model used for transcript summaries, citation linking, and friction detection.",
     "OLLAMA_BASE_URL": "Base URL of the local Ollama server.",
     "SCREENSHOT_FORMAT": "File format for screenshot artifacts. WebP is smaller but requires modern browsers (Safari 16+).",
     "GIF_FORMAT": "File format for animated artifacts. WebM (VP9) is the smallest and most-compatible modern option; animated WebP is also small but requires Safari 16+; GIF works everywhere but is large.",
@@ -505,6 +533,11 @@ STUDIO_SETTINGS: dict[str, dict[str, Any]] = {
         "type": "bool",
     },
     "OLLAMA_CITATIONS_ENABLED": {
+        "tab": "Summaries",
+        "group": "AI Summary",
+        "type": "bool",
+    },
+    "OLLAMA_FRICTION_ENABLED": {
         "tab": "Summaries",
         "group": "AI Summary",
         "type": "bool",

@@ -233,6 +233,68 @@ def test_build_transcript_segments(transcripts_manifest):
     assert by_id["P02:0"]["duration"] == pytest.approx(4.5, abs=1e-6)
 
 
+# ---- Friction builders --------------------------------------------------
+
+
+def _with_friction(manifest):
+    manifest["source_transcripts"]["P01"]["friction"] = {
+        "computed_at": "2026-04-01T13:00:00+00:00",
+        "model": "qwen3.5:9b",
+        "stale": False,
+        "moments": [
+            {
+                "segment_ids": ["P01:1"],
+                "category": "confusion",
+                "rationale": "Unsure what the button does",
+                "score": 0.7,
+            }
+        ],
+        "segments": [
+            {
+                "id": "P01:0",
+                "score": 0.0,
+                "categories": [],
+                "markers": [],
+                "counts": {},
+            },
+            {
+                "id": "P01:1",
+                "score": 0.5,
+                "categories": ["confusion"],
+                "markers": ["what's this"],
+                "counts": {"confusion": 1},
+            },
+        ],
+    }
+    return manifest
+
+
+def test_build_friction_moments(transcripts_manifest):
+    rows = data_export.build_friction_moments(_with_friction(transcripts_manifest))
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["participant"] == "P01"
+    assert row["segment_ids"] == ["P01:1"]
+    assert row["category"] == "confusion"
+    assert row["score"] == 0.7
+    assert row["model"] == "qwen3.5:9b"
+    assert row["computed_at"] == "2026-04-01T13:00:00+00:00"
+
+
+def test_build_friction_segments_skips_zero_score(transcripts_manifest):
+    rows = data_export.build_friction_segments(_with_friction(transcripts_manifest))
+    # Only the non-zero-score segment is exported.
+    assert len(rows) == 1
+    assert rows[0]["segment_id"] == "P01:1"
+    assert rows[0]["score"] == 0.5
+    assert rows[0]["categories"] == ["confusion"]
+
+
+def test_build_friction_moments_empty_without_friction(transcripts_manifest):
+    assert data_export.build_friction_moments(transcripts_manifest) == []
+    assert data_export.build_friction_segments(transcripts_manifest) == []
+
+
 # ---- CSV serialization --------------------------------------------------
 
 

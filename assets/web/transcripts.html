@@ -79,6 +79,9 @@
         <button id="videoCollapseBtn" class="player-btn" title="Hide video" aria-label="Hide video" aria-expanded="true">
           <span class="player-btn-icon player-icon-collapse"></span>
         </button>
+        <button id="frictionHeatmapBtn" class="player-btn" title="Toggle friction heatmap" aria-label="Toggle friction heatmap" aria-pressed="false" disabled>
+          <span class="player-btn-icon friction-heatmap-icon"></span>
+        </button>
         <span id="videoTime" class="player-time">0:00 / 0:00</span>
       </div>
       <div id="timelineRow">
@@ -90,9 +93,17 @@
     </section>
 
     <section id="summarySection" class="hidden">
-      <div id="summaryHeader">
-        <span class="summary-icon"></span>
-        <span class="summary-title">Summary</span>
+      <div class="panel-tabbar" role="tablist" aria-label="Analysis">
+        <button id="tabBtnSummary" type="button" class="panel-tab active" role="tab" aria-selected="true" data-tab="summary">
+          <span class="panel-tab-icon summary-icon"></span><span class="panel-tab-label">Summary</span>
+        </button>
+        <button id="tabBtnFriction" type="button" class="panel-tab" role="tab" aria-selected="false" data-tab="friction">
+          <span class="panel-tab-icon friction-icon"></span><span class="panel-tab-label">Friction</span>
+          <span id="frictionStaleDot" class="panel-tab-dot hidden" title="Stale — re-run friction"></span>
+        </button>
+      </div>
+
+      <div id="summaryTab" class="panel-pane" role="tabpanel" aria-labelledby="tabBtnSummary">
         <div id="summaryActions" class="summary-actions hidden">
           <button id="summaryRegenerate" type="button" class="summary-action-btn" title="Regenerate summary" aria-label="Regenerate summary">
             <span class="summary-action-icon summary-action-regenerate"></span>
@@ -107,12 +118,40 @@
             <span class="summary-action-icon summary-action-edit"></span>
           </button>
         </div>
-        <button id="summaryToggle" type="button" class="summary-toggle-btn" aria-label="Toggle summary" aria-expanded="true">
-          <span class="summary-chevron"></span>
-        </button>
+        <div id="summaryBody">
+          <div id="summaryContent"></div>
+        </div>
+        <div id="summaryEmpty" class="panel-empty hidden">
+          <p class="panel-empty-text">No summary yet.</p>
+          <button id="summaryRunCta" type="button" class="btn btn-small">Run summary</button>
+        </div>
       </div>
-      <div id="summaryBody">
-        <div id="summaryContent"></div>
+
+      <div id="frictionTab" class="panel-pane hidden" role="tabpanel" aria-labelledby="tabBtnFriction">
+        <div id="frictionHeader" class="friction-header">
+          <span id="frictionStatus" class="friction-status"></span>
+          <div class="friction-header-actions">
+            <button id="frictionRerun" type="button" class="btn btn-small">Run friction analysis</button>
+            <button id="frictionCancel" type="button" class="btn btn-small hidden">Cancel</button>
+          </div>
+        </div>
+        <div id="frictionEmpty" class="panel-empty hidden">
+          <p class="panel-empty-text">No friction analysis yet.</p>
+          <p class="panel-empty-hint" id="frictionEmptyHint"></p>
+        </div>
+        <div id="frictionGenerating" class="friction-generating hidden">Analyzing friction&hellip;</div>
+        <div id="frictionContent" class="friction-content hidden">
+          <div id="frictionStats" class="friction-stats"></div>
+          <div class="friction-filter">
+            <div class="friction-filter-row">
+              <label class="friction-threshold-label" for="frictionThreshold">Min score <span id="frictionThresholdVal">0.50</span></label>
+              <input id="frictionThreshold" type="range" min="0" max="1" step="0.05" value="0.5">
+            </div>
+            <div id="frictionCategoryToggles" class="friction-cat-toggles"></div>
+            <button id="frictionMarkAll" type="button" class="btn btn-small">Mark all matching</button>
+          </div>
+          <div id="frictionMoments" class="friction-moments"></div>
+        </div>
       </div>
     </section>
 

@@ -43,11 +43,17 @@
     xrefEligible: false,
     xrefIndex: { eventsByParticipant: {}, sheetByParticipant: {} },
     tooltipsEnabled: true,
-    summaryCollapsed: false,
     summaryEditing: false,
     summaryText: "",
     summaryCitations: null,
     citationsGenerating: false,
+    activeTab: "summary",
+    frictionData: null,
+    frictionBySegId: {},
+    frictionGenerating: false,
+    frictionHeatmapEnabled: false,
+    frictionThreshold: 0.5,
+    frictionCategoryFilter: null,
     transcribePrewarm: "queue_open",
     modelStatus: null,
     modelFailSince: 0,
@@ -517,6 +523,7 @@
     _participantReqVer++;
     _stopSummaryPoll();
     _stopCitationsPoll();
+    _stopFrictionPoll();
     hideMarkPopover();
     state.selectedParticipant = pid;
     setStoredUIStateField("transcripts", "selectedParticipant", pid);
@@ -590,18 +597,21 @@
     // Load transcript
     if (p.has_transcript) {
       state.streamingParticipant = null;
+      _setAnalysisPanelVisible(true);
+      _restoreActiveTab(pid);
       loadTranscript(pid);
       loadSummary(pid);
+      loadFriction(pid);
     } else if (taskForPid && taskForPid.status === "running" && taskForPid.partial_segments && taskForPid.partial_segments.length > 0) {
       renderPartialSegments(taskForPid.partial_segments, taskForPid.progress);
       state.streamingParticipant = pid;
-      clearSummary();
+      clearAnalysisPanel();
     } else {
       state.segments = [];
       state.streamingParticipant = null;
       renderSegments();
       renderTimeline();
-      clearSummary();
+      clearAnalysisPanel();
     }
   }
 
@@ -610,7 +620,7 @@
     qs("#videoEmpty").classList.remove("hidden");
     qs("#segmentList").innerHTML = "";
     qs("#transcriptEmpty").classList.remove("hidden");
-    clearSummary();
+    clearAnalysisPanel();
     _markerHitRects = [];
     renderTimeline();
   }
@@ -649,7 +659,6 @@
   var _summaryPollTimer = null;
 
   function loadSummary(pid) {
-    var section = qs("#summarySection");
     var ver = _participantReqVer;
 
     apiGet("api/summary/" + pid).then(function (data) {
@@ -674,12 +683,12 @@
         _startSummaryPoll(pid);
         _refreshAgentStateNow();
       } else {
-        section.classList.add("hidden");
+        renderSummaryEmpty();
       }
     }).catch(function () {
       if (ver !== _participantReqVer) return;
-      // Ollama unavailable or no summary — stay hidden
-      section.classList.add("hidden");
+      // Ollama unavailable or no summary — show the empty-state CTA.
+      renderSummaryEmpty();
     });
   }
 
@@ -710,12 +719,12 @@
         } else if (!data.generating) {
           // Generation finished without result — stop polling
           _stopSummaryPoll();
-          qs("#summarySection").classList.add("hidden");
+          renderSummaryEmpty();
         }
       }).catch(function () {
         if (ver !== _participantReqVer) return;
         _stopSummaryPoll();
-        qs("#summarySection").classList.add("hidden");
+        renderSummaryEmpty();
       });
     }, 3000);
   }
@@ -728,21 +737,31 @@
   }
 
   function renderSummaryGenerating() {
-    var section = qs("#summarySection");
     var content = qs("#summaryContent");
     content.innerHTML = '<p class="summary-generating">Generating summary\u2026</p>';
-    section.classList.remove("hidden");
-    section.classList.toggle("collapsed", state.summaryCollapsed);
-    qs("#summaryToggle").setAttribute("aria-expanded", state.summaryCollapsed ? "false" : "true");
+    qs("#summaryEmpty").classList.add("hidden");
+    qs("#summaryBody").classList.remove("hidden");
     qs("#summaryActions").classList.add("hidden");
     state.summaryEditing = false;
     state.summaryText = "";
   }
 
+  function renderSummaryEmpty() {
+    _stopSummaryPoll();
+    _stopCitationsPoll();
+    qs("#summaryContent").innerHTML = "";
+    qs("#summaryBody").classList.add("hidden");
+    qs("#summaryActions").classList.add("hidden");
+    qs("#summaryEmpty").classList.remove("hidden");
+    state.summaryEditing = false;
+    state.summaryText = "";
+    state.summaryCitations = null;
+    state.citationsGenerating = false;
+  }
+
   function renderSummary(text) {
     state.summaryText = text;
     state.summaryEditing = false;
-    var section = qs("#summarySection");
     var content = qs("#summaryContent");
     var lines = text.split("\n");
     var paragraphSentences = [];
@@ -789,9 +808,8 @@
     }
 
     content.innerHTML = html;
-    section.classList.remove("hidden");
-    section.classList.toggle("collapsed", state.summaryCollapsed);
-    qs("#summaryToggle").setAttribute("aria-expanded", state.summaryCollapsed ? "false" : "true");
+    qs("#summaryEmpty").classList.add("hidden");
+    qs("#summaryBody").classList.remove("hidden");
     qs("#summaryActions").classList.remove("hidden");
     _setSummaryEditMode(false);
 
@@ -804,13 +822,57 @@
   function clearSummary() {
     _stopSummaryPoll();
     _stopCitationsPoll();
-    qs("#summarySection").classList.add("hidden");
     qs("#summaryContent").innerHTML = "";
     qs("#summaryActions").classList.add("hidden");
+    qs("#summaryBody").classList.add("hidden");
+    qs("#summaryEmpty").classList.add("hidden");
     state.summaryEditing = false;
     state.summaryText = "";
     state.summaryCitations = null;
     state.citationsGenerating = false;
+  }
+
+  // ---- Analysis panel (tabbed shell: Summary + Friction) ----
+
+  function _setAnalysisPanelVisible(show) {
+    qs("#summarySection").classList.toggle("hidden", !show);
+  }
+
+  function clearAnalysisPanel() {
+    _setAnalysisPanelVisible(false);
+    clearSummary();
+    clearFriction();
+  }
+
+  function selectTab(name) {
+    state.activeTab = name;
+    var pid = state.selectedParticipant;
+    if (pid) setStoredUIStateField("transcripts", "tabByParticipant", _withKey(getStoredUIState("transcripts").tabByParticipant, pid, name));
+    var isSummary = name === "summary";
+    qs("#tabBtnSummary").classList.toggle("active", isSummary);
+    qs("#tabBtnSummary").setAttribute("aria-selected", isSummary ? "true" : "false");
+    qs("#tabBtnFriction").classList.toggle("active", !isSummary);
+    qs("#tabBtnFriction").setAttribute("aria-selected", !isSummary ? "true" : "false");
+    qs("#summaryTab").classList.toggle("hidden", !isSummary);
+    qs("#frictionTab").classList.toggle("hidden", isSummary);
+  }
+
+  function _withKey(obj, key, value) {
+    var next = obj && typeof obj === "object" ? obj : {};
+    next[key] = value;
+    return next;
+  }
+
+  function _restoreActiveTab(pid) {
+    var map = getStoredUIState("transcripts").tabByParticipant;
+    var saved = map && map[pid] === "friction" ? "friction" : "summary";
+    selectTab(saved);
+  }
+
+  function initPanelTabs() {
+    qs("#tabBtnSummary").addEventListener("click", function () { selectTab("summary"); });
+    qs("#tabBtnFriction").addEventListener("click", function () { selectTab("friction"); });
+    qs("#summaryRunCta").addEventListener("click", function () { _startSummaryRun(); });
   }
 
   // ---- Citation rendering (Pass 2) ----
@@ -916,12 +978,23 @@
     }
   }
 
-  function initSummaryToggle() {
-    qs("#summaryHeader").addEventListener("click", function () {
-      var section = qs("#summarySection");
-      state.summaryCollapsed = !state.summaryCollapsed;
-      section.classList.toggle("collapsed", state.summaryCollapsed);
-      qs("#summaryToggle").setAttribute("aria-expanded", state.summaryCollapsed ? "false" : "true");
+  function _startSummaryRun() {
+    var pid = state.selectedParticipant;
+    if (!pid) return;
+    var previousText = state.summaryText;
+    state.summaryCitations = null;
+    state.citationsGenerating = false;
+    _stopCitationsPoll();
+    renderSummaryGenerating();
+    apiPost("api/summary/" + pid + "/regenerate", {}).then(function (data) {
+      if (data.ok && data.generating) {
+        _startSummaryPoll(pid);
+        _refreshAgentStateNow();
+      }
+    }).catch(function () {
+      showToast("Failed to regenerate summary");
+      if (previousText) renderSummary(previousText);
+      else renderSummaryEmpty();
     });
   }
 
@@ -944,23 +1017,7 @@
   function initSummaryActions() {
     qs("#summaryRegenerate").addEventListener("click", function (e) {
       e.stopPropagation();
-      var pid = state.selectedParticipant;
-      if (!pid) return;
-      var previousText = state.summaryText;
-      state.summaryCitations = null;
-      state.citationsGenerating = false;
-      _stopCitationsPoll();
-      renderSummaryGenerating();
-      apiPost("api/summary/" + pid + "/regenerate", {}).then(function (data) {
-        if (data.ok && data.generating) {
-          _startSummaryPoll(pid);
-        }
-      }).catch(function () {
-        showToast("Failed to regenerate summary");
-        if (previousText) {
-          renderSummary(previousText);
-        }
-      });
+      _startSummaryRun();
     });
 
     qs("#citationsRegenerate").addEventListener("click", function (e) {
@@ -1028,6 +1085,585 @@
     });
   }
 
+  // ---- Friction detection (Pass 3) ----
+  //
+  // Programmatic scores + LLM moments land together in the manifest's
+  // `friction` field. The tab renders stats, a score/category filter, and the
+  // top moments; the timeline heatmap + segment tints read the per-segment
+  // scores. Generation mirrors summary/citations (poll until done; manual
+  // run/cancel bypass the global flag).
+
+  var _frictionPollTimer = null;
+
+  function _currentParticipant() {
+    var pid = state.selectedParticipant;
+    for (var i = 0; i < state.participants.length; i++) {
+      if (state.participants[i].id === pid) return state.participants[i];
+    }
+    return null;
+  }
+
+  function _frictionDepMet() {
+    var p = _currentParticipant();
+    if (!p) return false;
+    if (p.has_summary) return true;
+    return !!(p.agents && p.agents.summary === "done");
+  }
+
+  function _frictionCatLabel(key) {
+    var cats = CLIPGEN_CONFIG.frictionCategories || [];
+    for (var i = 0; i < cats.length; i++) {
+      if (cats[i].key === key) return cats[i].label;
+    }
+    return key || "—";
+  }
+
+  function _friendlyTimeAgo(iso) {
+    if (!iso) return "just now";
+    var then = Date.parse(iso);
+    if (isNaN(then)) return "recently";
+    var secs = Math.max(0, Math.round((Date.now() - then) / 1000));
+    if (secs < 60) return "just now";
+    var mins = Math.round(secs / 60);
+    if (mins < 60) return mins + (mins === 1 ? " minute ago" : " minutes ago");
+    var hrs = Math.round(mins / 60);
+    if (hrs < 24) return hrs + (hrs === 1 ? " hour ago" : " hours ago");
+    var days = Math.round(hrs / 24);
+    return days + (days === 1 ? " day ago" : " days ago");
+  }
+
+  function loadFriction(pid) {
+    var ver = _participantReqVer;
+    state.frictionData = null;
+    state.frictionBySegId = {};
+    state.frictionGenerating = false;
+    apiGet("api/friction/" + pid).then(function (data) {
+      if (ver !== _participantReqVer) return;
+      if (data.ok && data.friction) {
+        _setFrictionData(data.friction);
+      } else if (data.generating) {
+        state.frictionGenerating = true;
+        renderFrictionGenerating();
+        _startFrictionPoll(pid);
+        _refreshAgentStateNow();
+      } else {
+        renderFrictionEmpty();
+      }
+      _refreshHeatmapAffordances();
+    }).catch(function () {
+      if (ver !== _participantReqVer) return;
+      renderFrictionEmpty();
+      _refreshHeatmapAffordances();
+    });
+  }
+
+  function _setFrictionData(friction) {
+    state.frictionData = friction;
+    state.frictionGenerating = false;
+    var byId = {};
+    var segs = (friction && friction.segments) || [];
+    for (var i = 0; i < segs.length; i++) {
+      if (segs[i] && segs[i].id) byId[segs[i].id] = segs[i];
+    }
+    state.frictionBySegId = byId;
+    renderFriction();
+    updateFrictionStaleDot();
+    _refreshHeatmapAffordances();
+    if (state.frictionHeatmapEnabled) {
+      renderSegments();
+      renderTimeline();
+    }
+  }
+
+  function clearFriction() {
+    _stopFrictionPoll();
+    state.frictionData = null;
+    state.frictionBySegId = {};
+    state.frictionGenerating = false;
+    qs("#frictionContent").classList.add("hidden");
+    qs("#frictionGenerating").classList.add("hidden");
+    qs("#frictionEmpty").classList.add("hidden");
+    updateFrictionStaleDot();
+    _refreshHeatmapAffordances();
+  }
+
+  function _renderFrictionHeader() {
+    var statusEl = qs("#frictionStatus");
+    var rerun = qs("#frictionRerun");
+    var cancel = qs("#frictionCancel");
+    if (state.frictionGenerating) {
+      statusEl.textContent = "Analyzing friction…";
+      statusEl.classList.remove("friction-status--stale");
+      rerun.classList.add("hidden");
+      cancel.classList.remove("hidden");
+      return;
+    }
+    cancel.classList.add("hidden");
+    rerun.classList.remove("hidden");
+    rerun.textContent = state.frictionData ? "Re-run friction" : "Run friction analysis";
+    var depMet = _frictionDepMet();
+    if (depMet) {
+      rerun.removeAttribute("disabled");
+      rerun.title = "";
+    } else {
+      rerun.setAttribute("disabled", "disabled");
+      rerun.title = "Requires a summary first";
+    }
+    if (state.frictionData) {
+      var fd = state.frictionData;
+      var llmFailed = fd.llm_ok === false;
+      if (llmFailed) {
+        statusEl.textContent =
+          "Moment detection failed — model unavailable" +
+          (fd.model ? " (tried " + fd.model + ")" : "") +
+          ". Showing programmatic scores; re-run with an installed model.";
+      } else if (fd.stale) {
+        statusEl.textContent = "Stale — segments edited since last run" +
+          (fd.model ? " · " + fd.model : "");
+      } else {
+        statusEl.textContent = "Computed " + _friendlyTimeAgo(fd.computed_at) +
+          (fd.model ? " · " + fd.model : "");
+      }
+      statusEl.classList.toggle("friction-status--stale", !!fd.stale && !llmFailed);
+      statusEl.classList.toggle("friction-status--error", llmFailed);
+    } else {
+      statusEl.textContent = depMet ? "" : "Requires a summary first.";
+      statusEl.classList.remove("friction-status--stale");
+      statusEl.classList.remove("friction-status--error");
+    }
+  }
+
+  function renderFriction() {
+    _renderFrictionHeader();
+    if (state.frictionGenerating) {
+      renderFrictionGenerating();
+      return;
+    }
+    if (state.frictionData) {
+      qs("#frictionEmpty").classList.add("hidden");
+      qs("#frictionGenerating").classList.add("hidden");
+      qs("#frictionContent").classList.remove("hidden");
+      renderFrictionStats();
+      renderFrictionFilterControls();
+      renderFrictionMoments();
+    } else {
+      renderFrictionEmpty();
+    }
+  }
+
+  function renderFrictionEmpty() {
+    state.frictionGenerating = false;
+    qs("#frictionContent").classList.add("hidden");
+    qs("#frictionGenerating").classList.add("hidden");
+    qs("#frictionEmpty").classList.remove("hidden");
+    qs("#frictionEmptyHint").textContent = _frictionDepMet()
+      ? "Run the analysis to surface moments of likely friction."
+      : "Requires a summary first — run Summary, then friction.";
+    _renderFrictionHeader();
+    updateFrictionStaleDot();
+  }
+
+  function renderFrictionGenerating() {
+    qs("#frictionContent").classList.add("hidden");
+    qs("#frictionEmpty").classList.add("hidden");
+    qs("#frictionGenerating").classList.remove("hidden");
+    _renderFrictionHeader();
+  }
+
+  function updateFrictionStaleDot() {
+    var dot = qs("#frictionStaleDot");
+    if (!dot) return;
+    dot.classList.toggle("hidden", !(state.frictionData && state.frictionData.stale));
+  }
+
+  function _startFrictionPoll(pid) {
+    _stopFrictionPoll();
+    var started = Date.now();
+    var ver = _participantReqVer;
+    _frictionPollTimer = setInterval(function () {
+      if (ver !== _participantReqVer ||
+          state.selectedParticipant !== pid ||
+          Date.now() - started > _CITATIONS_POLL_TIMEOUT) {
+        _stopFrictionPoll();
+        state.frictionGenerating = false;
+        renderFriction();
+        return;
+      }
+      apiGet("api/friction/" + pid).then(function (data) {
+        if (ver !== _participantReqVer) return;
+        if (data.ok && data.friction) {
+          _stopFrictionPoll();
+          _setFrictionData(data.friction);
+        } else if (!data.generating) {
+          _stopFrictionPoll();
+          state.frictionGenerating = false;
+          renderFrictionEmpty();
+        }
+      }).catch(function () {
+        if (ver !== _participantReqVer) return;
+        _stopFrictionPoll();
+        state.frictionGenerating = false;
+        renderFrictionEmpty();
+      });
+    }, 3000);
+  }
+
+  function _stopFrictionPoll() {
+    if (_frictionPollTimer) {
+      clearInterval(_frictionPollTimer);
+      _frictionPollTimer = null;
+    }
+  }
+
+  function _startFrictionRun() {
+    var pid = state.selectedParticipant;
+    if (!pid || !_frictionDepMet()) return;
+    state.frictionGenerating = true;
+    renderFrictionGenerating();
+    apiPost("api/friction/" + pid + "/regenerate", {}).then(function (data) {
+      if (data.ok && data.generating) {
+        _startFrictionPoll(pid);
+        _refreshAgentStateNow();
+      } else {
+        state.frictionGenerating = false;
+        renderFriction();
+      }
+    }).catch(function () {
+      showToast("Failed to start friction analysis");
+      state.frictionGenerating = false;
+      renderFriction();
+    });
+  }
+
+  function _stopFrictionRun() {
+    var pid = state.selectedParticipant;
+    if (!pid) return;
+    _stopFrictionPoll();
+    state.frictionGenerating = false;
+    apiPost("api/friction/" + pid + "/stop", {}).then(function () {
+      _refreshAgentStateNow();
+      loadFriction(pid);
+    }).catch(function () {});
+    renderFriction();
+  }
+
+  function renderFrictionStats() {
+    var el2 = qs("#frictionStats");
+    el2.innerHTML = "";
+    var fd = state.frictionData;
+    if (!fd || !fd.stats) return;
+    var byCat = fd.stats.by_category || {};
+    var cats = CLIPGEN_CONFIG.frictionCategories || [];
+    var chips = document.createElement("div");
+    chips.className = "friction-stat-chips";
+    cats.forEach(function (c) {
+      var chip = document.createElement("span");
+      chip.className = "friction-chip";
+      var lab = el("span", "friction-chip-label", c.label);
+      var cnt = el("span", "friction-chip-count", String(byCat[c.key] || 0));
+      chip.appendChild(lab);
+      chip.appendChild(cnt);
+      chips.appendChild(chip);
+    });
+    el2.appendChild(chips);
+    var line = document.createElement("div");
+    line.className = "friction-stat-line";
+    var mpm = fd.stats.markers_per_minute != null ? fd.stats.markers_per_minute : 0;
+    var total = fd.stats.total_markers != null ? fd.stats.total_markers : 0;
+    line.textContent = mpm + " markers/min · " + total + " total";
+    el2.appendChild(line);
+  }
+
+  function _ensureFrictionFilter() {
+    if (state.frictionCategoryFilter) return;
+    var f = {};
+    var cats = CLIPGEN_CONFIG.frictionCategories || [];
+    for (var i = 0; i < cats.length; i++) f[cats[i].key] = true;
+    state.frictionCategoryFilter = f;
+  }
+
+  function renderFrictionFilterControls() {
+    _ensureFrictionFilter();
+    var wrap = qs("#frictionCategoryToggles");
+    wrap.innerHTML = "";
+    var cats = CLIPGEN_CONFIG.frictionCategories || [];
+    cats.forEach(function (c) {
+      var lab = document.createElement("label");
+      lab.className = "friction-cat-toggle";
+      var cb = document.createElement("input");
+      cb.type = "checkbox";
+      cb.checked = state.frictionCategoryFilter[c.key] !== false;
+      cb.addEventListener("change", function () {
+        state.frictionCategoryFilter[c.key] = cb.checked;
+        renderFrictionMoments();
+      });
+      lab.appendChild(cb);
+      lab.appendChild(document.createTextNode(" " + c.label));
+      wrap.appendChild(lab);
+    });
+    var slider = qs("#frictionThreshold");
+    slider.value = String(state.frictionThreshold);
+    qs("#frictionThresholdVal").textContent = state.frictionThreshold.toFixed(2);
+  }
+
+  function _frictionMomentMatches(m) {
+    if ((m.score || 0) < state.frictionThreshold) return false;
+    var f = state.frictionCategoryFilter;
+    if (f && m.category && f[m.category] === false) return false;
+    return true;
+  }
+
+  function _segmentIndexById(id) {
+    for (var i = 0; i < state.segments.length; i++) {
+      if (state.segments[i].id === id) return i;
+    }
+    return -1;
+  }
+
+  function _seekToSegmentIndex(idx) {
+    var seg = state.segments[idx];
+    if (!seg) return;
+    seekVideo(seg.start);
+    if (!_cachedSegmentRows) {
+      _cachedSegmentRows = qs("#segmentList").querySelectorAll(".segment-row");
+    }
+    var row = _cachedSegmentRows[idx];
+    if (row) scrollToSegment(row);
+  }
+
+  // Resolved segment indices a moment cites, in order, valid only.
+  function _momentSegmentIndices(m) {
+    var idxs = [];
+    var ids = m.segment_ids || [];
+    for (var i = 0; i < ids.length; i++) {
+      var idx = _segmentIndexById(ids[i]);
+      if (idx >= 0) idxs.push(idx);
+    }
+    return idxs;
+  }
+
+  function _buildMomentRow(m) {
+    var idxs = _momentSegmentIndices(m);
+    // An unsourced moment can't be quoted or seeked to — skip it entirely.
+    if (idxs.length === 0) return null;
+    var firstIdx = idxs[0];
+
+    var row = document.createElement("div");
+    row.className = "friction-moment friction-moment--seekable";
+
+    var head = document.createElement("div");
+    head.className = "friction-moment-head";
+    head.appendChild(el("span", "friction-cat-badge", _frictionCatLabel(m.category)));
+    head.appendChild(el("span", "friction-moment-score", (m.score != null ? m.score : 0).toFixed(2)));
+    head.appendChild(el("span", "friction-moment-time", formatTime(state.segments[firstIdx].start)));
+    row.appendChild(head);
+
+    // Quote the transcript line(s) the moment was detected on.
+    var quote = idxs
+      .map(function (i) { return (state.segments[i].text || "").trim(); })
+      .filter(Boolean)
+      .join(" ");
+    if (quote) row.appendChild(el("blockquote", "friction-moment-quote", quote));
+
+    if (m.rationale) row.appendChild(el("div", "friction-moment-rationale", m.rationale));
+
+    row.addEventListener("click", function () { _seekToSegmentIndex(firstIdx); });
+    return row;
+  }
+
+  function renderFrictionMoments() {
+    _ensureFrictionFilter();
+    var el2 = qs("#frictionMoments");
+    el2.innerHTML = "";
+    var fd = state.frictionData;
+    if (!fd) return;
+    var moments = (fd.moments || []).filter(_frictionMomentMatches).filter(function (m) {
+      return _momentSegmentIndices(m).length > 0;
+    });
+    if (moments.length === 0) {
+      var msg;
+      if (fd.llm_ok === false) {
+        msg = "Moment detection failed — re-run with an installed Ollama model.";
+      } else if (fd.moments && fd.moments.length) {
+        msg = "No moments match the current filter.";
+      } else {
+        msg = "No moments detected.";
+      }
+      el2.appendChild(el("p", "friction-moments-empty", msg));
+      return;
+    }
+    var frag = document.createDocumentFragment();
+    moments.forEach(function (m) {
+      var rowEl = _buildMomentRow(m);
+      if (rowEl) frag.appendChild(rowEl);
+    });
+    el2.appendChild(frag);
+  }
+
+  function _primaryCategory(frow) {
+    var counts = frow.counts || {};
+    var cats = frow.categories || [];
+    var best = cats[0] || null;
+    var bestN = best ? (counts[best] || 0) : 0;
+    for (var i = 1; i < cats.length; i++) {
+      var n = counts[cats[i]] || 0;
+      if (n > bestN) { best = cats[i]; bestN = n; }
+    }
+    return best;
+  }
+
+  function _frictionMarkAll() {
+    var fd = state.frictionData;
+    if (!fd || !fd.segments) return;
+    _ensureFrictionFilter();
+    var groups = {};
+    fd.segments.forEach(function (frow) {
+      if ((frow.score || 0) < state.frictionThreshold) return;
+      var cats = frow.categories || [];
+      var matched = [];
+      for (var i = 0; i < cats.length; i++) {
+        if (state.frictionCategoryFilter[cats[i]] !== false) matched.push(cats[i]);
+      }
+      if (matched.length === 0) return;
+      var primary = _primaryCategory(frow);
+      if (!primary || state.frictionCategoryFilter[primary] === false) primary = matched[0];
+      if (!groups[primary]) groups[primary] = [];
+      groups[primary].push(frow.id);
+    });
+    var keys = Object.keys(groups);
+    if (keys.length === 0) {
+      showToast("No segments match the filter");
+      return;
+    }
+    var pending = keys.length;
+    var total = 0;
+    keys.forEach(function (cat) {
+      var ids = groups[cat];
+      total += ids.length;
+      apiPost("api/marks", {
+        segment_ids: ids,
+        category: "friction",
+        label: "Friction · " + cat,
+      }).then(done).catch(done);
+    });
+    function done() {
+      pending--;
+      if (pending <= 0) {
+        showToast("Marked " + clipgenPluralUnit(total, "segment", "segments"));
+        if (state.selectedParticipant) loadTranscript(state.selectedParticipant);
+      }
+    }
+  }
+
+  function _refreshHeatmapAffordances() {
+    var btn = qs("#frictionHeatmapBtn");
+    if (!btn) return;
+    var has = !!(state.frictionData && state.frictionData.segments && state.frictionData.segments.length);
+    btn.disabled = !has;
+  }
+
+  function initFriction() {
+    qs("#frictionRerun").addEventListener("click", function () { _startFrictionRun(); });
+    qs("#frictionCancel").addEventListener("click", function () { _stopFrictionRun(); });
+    qs("#frictionMarkAll").addEventListener("click", function () { _frictionMarkAll(); });
+    var slider = qs("#frictionThreshold");
+    slider.addEventListener("input", function () {
+      state.frictionThreshold = parseFloat(slider.value);
+      qs("#frictionThresholdVal").textContent = state.frictionThreshold.toFixed(2);
+      renderFrictionMoments();
+    });
+  }
+
+  function initFrictionHeatmapToggle() {
+    var btn = qs("#frictionHeatmapBtn");
+    if (!btn) return;
+    var stored = getStoredUIState("transcripts");
+    state.frictionHeatmapEnabled = !!(stored && stored.frictionHeatmapEnabled);
+    btn.classList.toggle("active", state.frictionHeatmapEnabled);
+    btn.setAttribute("aria-pressed", state.frictionHeatmapEnabled ? "true" : "false");
+    btn.addEventListener("click", function () {
+      state.frictionHeatmapEnabled = !state.frictionHeatmapEnabled;
+      btn.classList.toggle("active", state.frictionHeatmapEnabled);
+      btn.setAttribute("aria-pressed", state.frictionHeatmapEnabled ? "true" : "false");
+      setStoredUIStateField("transcripts", "frictionHeatmapEnabled", state.frictionHeatmapEnabled);
+      renderSegments();
+      renderTimeline();
+    });
+  }
+
+  // Friction tooltip on hot segments (reuses the shared #trTooltip element).
+
+  function _showFrictionTooltip(frow, clientX, clientY) {
+    var tip = qs("#trTooltip");
+    if (!tip) return;
+    tip.textContent = "";
+    var cats = frow.categories || [];
+    if (cats.length) {
+      var badges = document.createElement("div");
+      badges.className = "tr-tooltip-friction-cats";
+      cats.forEach(function (c) {
+        badges.appendChild(el("span", "friction-cat-badge friction-cat-badge--sm", _frictionCatLabel(c)));
+      });
+      tip.appendChild(badges);
+    }
+    var markers = frow.markers || [];
+    if (markers.length) {
+      var shown = markers.slice(0, 5).join(", ");
+      if (markers.length > 5) shown += " +" + (markers.length - 5) + " more";
+      tip.appendChild(document.createTextNode(shown));
+      tip.appendChild(document.createElement("br"));
+    }
+    tip.appendChild(el("span", "tr-tooltip-friction-score", "Score " + (frow.score || 0).toFixed(2)));
+    tip.classList.remove("hidden");
+    var tipRect = tip.getBoundingClientRect();
+    var x = clientX + 12;
+    var y = clientY - tipRect.height - 12;
+    if (x + tipRect.width > window.innerWidth - 8) x = window.innerWidth - tipRect.width - 8;
+    if (y < 8) y = clientY + 16;
+    tip.style.left = x + "px";
+    tip.style.top = y + "px";
+  }
+
+  function _hideFrictionTooltip() {
+    var tip = qs("#trTooltip");
+    if (tip && !_lastTimelineHit) tip.classList.add("hidden");
+  }
+
+  // Draw the smoothed friction density band across the timeline ruler.
+  // Per-pixel averaging of overlapping segment scores (mirrors the Screenspace
+  // amplitude graph's binning) gives a continuous band without a separate
+  // smoothing constant; alpha scales with score.
+  function _drawFrictionBand(ctx, timeToX, bandY, bandH, cssW) {
+    if (!state.frictionHeatmapEnabled) return;
+    if (!state.segments.length) return;
+    var fcolor = getCSSVar("--color-friction", "#ea580c");
+    if (fcolor.charAt(0) !== "#") fcolor = "#ea580c";
+    var numBins = Math.max(1, Math.floor(cssW));
+    var sums = new Array(numBins);
+    var counts = new Array(numBins);
+    for (var b = 0; b < numBins; b++) { sums[b] = 0; counts[b] = 0; }
+    var any = false;
+    for (var i = 0; i < state.segments.length; i++) {
+      var seg = state.segments[i];
+      var frow = state.frictionBySegId[seg.id];
+      var sc = frow ? (frow.score || 0) : 0;
+      if (sc <= 0) continue;
+      any = true;
+      var x0 = Math.max(0, Math.floor(timeToX(seg.start)));
+      var x1 = Math.min(numBins - 1, Math.floor(timeToX(seg.end || seg.start)));
+      if (x1 < x0) x1 = x0;
+      for (var x = x0; x <= x1; x++) { sums[x] += sc; counts[x] += 1; }
+    }
+    if (!any) return;
+    for (var px = 0; px < numBins; px++) {
+      if (!counts[px]) continue;
+      var v = sums[px] / counts[px];
+      if (v <= 0) continue;
+      ctx.fillStyle = hexToRgba(fcolor, Math.min(0.85, 0.15 + v * 0.7));
+      ctx.fillRect(px, bandY, 1, bandH);
+    }
+  }
+
   // ---- Segment rendering ----
 
   var _cachedSegmentRows = null;
@@ -1064,7 +1700,17 @@
         annoBadgeHtml = '<span class="segment-anno-badge" style="' + badgeStyle + '">' + escapeHtml(markObj.label) + '</span>';
       }
 
-      html += '<div class="segment-row' + activeClass + correctedClass + '" data-index="' + i + '" data-start="' + seg.start + '">';
+      var frictionClass = "";
+      var frictionStyle = "";
+      if (state.frictionHeatmapEnabled) {
+        var frow = state.frictionBySegId[seg.id];
+        var fScore = frow ? (frow.score || 0) : 0;
+        if (fScore > 0) {
+          frictionClass = " segment-friction";
+          frictionStyle = ' style="--seg-friction-alpha:' + fScore + '"';
+        }
+      }
+      html += '<div class="segment-row' + activeClass + correctedClass + frictionClass + '" data-index="' + i + '" data-start="' + seg.start + '"' + frictionStyle + '>';
       html += '<span class="' + markClass + '" data-segment-id="' + escapeHtml(seg.id) + '"' + markStyle + markLabel + '></span>';
       html += '<span class="segment-timestamp">' + formatTime(seg.start);
       // Cross-reference badges in gutter (inside timestamp, positioned at right edge)
@@ -1321,6 +1967,19 @@
       e.stopPropagation();
       startSegmentEditing(textEl);
     });
+
+    // Friction tooltip on hot segments (only while the heatmap is on).
+    container.addEventListener("mousemove", function (e) {
+      if (!state.frictionHeatmapEnabled) { _hideFrictionTooltip(); return; }
+      var row = e.target.closest(".segment-row");
+      if (!row) { _hideFrictionTooltip(); return; }
+      var idx = parseInt(row.getAttribute("data-index"), 10);
+      var seg = state.segments[idx];
+      var frow = seg ? state.frictionBySegId[seg.id] : null;
+      if (!frow || !(frow.score > 0)) { _hideFrictionTooltip(); return; }
+      _showFrictionTooltip(frow, e.clientX, e.clientY);
+    });
+    container.addEventListener("mouseleave", function () { _hideFrictionTooltip(); });
   }
 
   // Cache marks made during streaming so they survive DOM rebuilds.
@@ -1507,6 +2166,9 @@
     var markerY = 22;
     var markerH = cssH - markerY - 4;
     _markerHitRects = [];
+
+    // Friction heatmap band (behind marks).
+    _drawFrictionBand(ctx, timeToX, markerY, markerH, cssW);
 
     for (var i = 0; i < state.segments.length; i++) {
       var seg = state.segments[i];
@@ -2611,6 +3273,7 @@
       transcription: _dotStateTranscription(p, task),
       summary: (p.agents && p.agents.summary) || "idle",
       citations: (p.agents && p.agents.citations) || "idle",
+      friction: (p.agents && p.agents.friction) || "idle",
     };
     return { status: status, progress: progress, taskId: taskId, agents: agents };
   }
@@ -2639,7 +3302,7 @@
       for (var k = 0; k < state.participants.length; k++) {
         var p0 = state.participants[k];
         var s0 = pillState(p0, taskByPid);
-        var agentsAttr = s0.agents.transcription + "," + s0.agents.summary + "," + s0.agents.citations;
+        var agentsAttr = s0.agents.transcription + "," + s0.agents.summary + "," + s0.agents.citations + "," + s0.agents.friction;
         if (existing[k].getAttribute("data-pid") !== p0.id ||
             existing[k].getAttribute("data-status") !== s0.status ||
             existing[k].getAttribute("data-active") !== (state.selectedParticipant === p0.id ? "1" : "0") ||
@@ -2705,7 +3368,7 @@
     wrap.setAttribute("data-pid", p.id);
     wrap.setAttribute("data-status", s.status);
     wrap.setAttribute("data-active", isActive ? "1" : "0");
-    wrap.setAttribute("data-agents", s.agents.transcription + "," + s.agents.summary + "," + s.agents.citations);
+    wrap.setAttribute("data-agents", s.agents.transcription + "," + s.agents.summary + "," + s.agents.citations + "," + s.agents.friction);
     wrap.appendChild(buildPill(p, s, isActive));
     wrap.appendChild(buildPillDots(p, s));
     if (state.pillOptionsOpen === p.id) {
@@ -2727,8 +3390,8 @@
 
   function buildPillDots(p, s) {
     var ag = s.agents;
-    var labels = ["Transcription", "Summary", "Citations"];
-    var keys = ["transcription", "summary", "citations"];
+    var labels = ["Transcription", "Summary", "Citations", "Friction"];
+    var keys = ["transcription", "summary", "citations", "friction"];
     var anyActive = false;
     for (var i = 0; i < keys.length; i++) {
       if (ag[keys[i]] !== "idle") { anyActive = true; break; }
@@ -2984,6 +3647,34 @@
       },
     }));
 
+    // 4. Friction — depends on summary only (independent of citations).
+    section.appendChild(buildAgentRow({
+      pid: p.id,
+      label: "Friction",
+      agent: "friction",
+      depLabel: "summary",
+      depMet: s.agents.summary === "done",
+      agentState: s.agents.friction,
+      hasResult: !!(p.agents && p.agents.friction === "done"),
+      cascadeWarning: false,
+      onStart: function () {
+        apiPost("api/friction/" + p.id + "/regenerate", {}).then(function () {
+          _refreshAgentStateNow();
+          if (state.selectedParticipant === p.id) loadFriction(p.id);
+        }).catch(function () {
+          showToast("Failed to start friction");
+        });
+      },
+      onStop: function () {
+        apiPost("api/friction/" + p.id + "/stop", {}).then(function () {
+          _refreshAgentStateNow();
+          if (state.selectedParticipant === p.id) loadFriction(p.id);
+        }).catch(function () {
+          showToast("Failed to stop friction");
+        });
+      },
+    }));
+
     return section;
   }
 
@@ -3203,7 +3894,7 @@
   function _anyAgentActive() {
     for (var i = 0; i < state.participants.length; i++) {
       var ag = state.participants[i].agents;
-      if (ag && (ag.summary === "running" || ag.citations === "running")) return true;
+      if (ag && (ag.summary === "running" || ag.citations === "running" || ag.friction === "running")) return true;
     }
     return false;
   }
@@ -3273,6 +3964,13 @@
             state.streamingParticipant = null;
             loadTranscript(state.selectedParticipant);
             loadSummary(state.selectedParticipant);
+            loadFriction(state.selectedParticipant);
+          } else if (_anyAgentActive() && state.selectedParticipant &&
+              !state.frictionData && _frictionDepMet()) {
+            // Summary/citations/friction may be auto-chaining server-side after
+            // an earlier completion; refresh friction so an auto-run result
+            // surfaces without a manual poll.
+            loadFriction(state.selectedParticipant);
           }
           updateStatusIndicator();
           // Agents typically kick in right after whisper completes; keep the
@@ -3585,8 +4283,10 @@
     initTimelineCanvas();
     initPipScroll();
     initPlayerKeyboard();
-    initSummaryToggle();
+    initPanelTabs();
     initSummaryActions();
+    initFriction();
+    initFrictionHeatmapToggle();
     initTranscriptSettings();
     initTopNavActions();
 
@@ -3600,6 +4300,7 @@
         stopModelHintPoll();
         _stopSummaryPoll();
         _stopCitationsPoll();
+        _stopFrictionPoll();
       } else {
         pollTaskStatus();
         startXrefPolling();
@@ -3610,8 +4311,12 @@
         // catches the common "user goes to another tab, comes back" case.
         // loadSummary re-arms the summary/citations polls if generation is
         // still in flight, and the transcribe-status poll re-arms the
-        // model-hint poll on the next active task transition.
-        if (state.selectedParticipant) loadSummary(state.selectedParticipant);
+        // model-hint poll on the next active task transition. loadFriction does
+        // the same for the friction pass.
+        if (state.selectedParticipant) {
+          loadSummary(state.selectedParticipant);
+          loadFriction(state.selectedParticipant);
+        }
       }
     });
 

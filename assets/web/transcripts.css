@@ -604,7 +604,7 @@ body {
   display: none;
 }
 
-/* ── AI Summary ─────────────────────────────────────────────── */
+/* ── Analysis panel (tabbed: Summary + Friction) ─────────────── */
 
 #summarySection {
   flex-shrink: 0;
@@ -614,20 +614,56 @@ body {
   margin: var(--space-3) var(--space-4);
 }
 
-#summaryHeader {
+.panel-tabbar {
+  display: flex;
+  align-items: stretch;
+  gap: var(--space-1);
+  border-bottom: 1px solid var(--color-border);
+  padding: 0 var(--space-2);
+}
+
+.panel-tab {
   display: flex;
   align-items: center;
-  gap: var(--space-2);
-  padding: var(--space-2) var(--space-3);
+  gap: var(--space-1);
+  padding: var(--space-2) var(--space-2);
+  border: none;
+  background: transparent;
   cursor: pointer;
-  user-select: none;
+  color: var(--color-text-dim);
+  font-size: 11px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+}
+
+.panel-tab:hover {
+  color: var(--color-text);
+}
+
+.panel-tab.active {
+  color: var(--color-text);
+  border-bottom-color: var(--color-accent);
+}
+
+.panel-tab-icon {
+  width: 13px;
+  height: 13px;
+  flex-shrink: 0;
+  background: currentColor;
+  mask-size: contain;
+  -webkit-mask-size: contain;
+  mask-repeat: no-repeat;
+  -webkit-mask-repeat: no-repeat;
 }
 
 .summary-icon {
   width: 13px;
   height: 13px;
   flex-shrink: 0;
-  background: var(--color-text-dim);
+  background: currentColor;
   mask-image: url(icons/sparkles.svg);
   -webkit-mask-image: url(icons/sparkles.svg);
   mask-size: contain;
@@ -636,50 +672,44 @@ body {
   -webkit-mask-repeat: no-repeat;
 }
 
-.summary-title {
-  font-size: 11px;
-  font-weight: 500;
-  color: var(--color-text-dim);
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
+.friction-icon {
+  mask-image: url(icons/fire.svg);
+  -webkit-mask-image: url(icons/fire.svg);
 }
 
-.summary-toggle-btn {
-  margin-left: auto;
-  width: 24px;
-  height: 24px;
-  border: none;
-  background: transparent;
-  cursor: pointer;
+.panel-tab-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--color-friction);
+  flex-shrink: 0;
+}
+
+.panel-pane {
+  position: relative;
+  padding: var(--space-3);
+}
+
+.panel-empty {
   display: flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: var(--radius-sm);
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-2);
+  color: var(--color-text-dim);
+  font-size: var(--text-sm);
 }
 
-.summary-chevron {
-  width: var(--icon-size-sm);
-  height: var(--icon-size-sm);
-  background: var(--color-text-dim);
-  mask-image: url(icons/chevron-down.svg);
-  -webkit-mask-image: url(icons/chevron-down.svg);
-  mask-size: contain;
-  -webkit-mask-size: contain;
-  mask-repeat: no-repeat;
-  -webkit-mask-repeat: no-repeat;
-  transition: transform var(--duration-fast);
+.panel-empty-text {
+  margin: 0;
 }
 
-#summarySection.collapsed .summary-chevron {
-  transform: rotate(-90deg);
-}
-
-#summarySection.collapsed #summaryBody {
-  display: none;
+.panel-empty-hint {
+  margin: 0;
+  font-size: var(--text-xs);
 }
 
 #summaryBody {
-  padding: 0 var(--space-3) var(--space-3);
+  padding: 0;
 }
 
 #summaryContent {
@@ -713,12 +743,9 @@ body {
 .summary-actions {
   display: flex;
   align-items: center;
+  justify-content: flex-end;
   gap: var(--space-1);
-  margin-left: auto;
-}
-
-.summary-actions + .summary-toggle-btn {
-  margin-left: 0;
+  margin-bottom: var(--space-2);
 }
 
 .summary-action-btn {
@@ -813,6 +840,236 @@ body {
 .summary-edit-textarea:focus {
   outline: none;
   border-color: var(--color-accent);
+}
+
+/* ── Friction tab ───────────────────────────────────────────── */
+
+.friction-heatmap-icon {
+  -webkit-mask-image: url(icons/fire.svg);
+  mask-image: url(icons/fire.svg);
+}
+
+#frictionHeatmapBtn.active {
+  color: var(--color-friction);
+}
+
+.friction-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
+}
+
+.friction-status {
+  font-size: var(--text-xs);
+  color: var(--color-text-dim);
+}
+
+.friction-status--stale {
+  color: var(--color-friction);
+}
+
+.friction-status--error {
+  color: var(--sev-high);
+}
+
+.friction-generating {
+  color: var(--color-text-dim);
+  font-style: italic;
+  font-size: var(--text-sm);
+}
+
+.friction-header-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  flex-shrink: 0;
+}
+
+.friction-stats {
+  margin-bottom: var(--space-3);
+}
+
+.friction-stat-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  margin-bottom: var(--space-2);
+}
+
+.friction-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 2px var(--space-2);
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  font-size: var(--text-xs);
+  color: var(--color-text-dim);
+}
+
+.friction-chip-count {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+.friction-stat-line {
+  font-size: var(--text-xs);
+  color: var(--color-text-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+.friction-filter {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-2) 0;
+  border-top: 1px solid var(--color-border);
+  border-bottom: 1px solid var(--color-border);
+  margin-bottom: var(--space-3);
+}
+
+.friction-filter-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.friction-threshold-label {
+  font-size: var(--text-xs);
+  color: var(--color-text-dim);
+  white-space: nowrap;
+}
+
+.friction-threshold-label span {
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text);
+}
+
+#frictionThreshold {
+  flex: 1;
+  accent-color: var(--color-friction);
+}
+
+.friction-cat-toggles {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-3);
+}
+
+.friction-cat-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: var(--text-xs);
+  color: var(--color-text);
+  cursor: pointer;
+}
+
+.friction-cat-toggle input {
+  accent-color: var(--color-friction);
+}
+
+.friction-moments {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.friction-moment {
+  padding: var(--space-2);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  border-left: 3px solid var(--color-friction);
+}
+
+.friction-moment--seekable {
+  cursor: pointer;
+  transition: background var(--duration-fast);
+}
+
+.friction-moment--seekable:hover {
+  background: var(--color-surface-alt);
+}
+
+.friction-moment-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-bottom: 4px;
+}
+
+.friction-cat-badge {
+  display: inline-block;
+  padding: 1px var(--space-2);
+  border-radius: 999px;
+  font-size: var(--text-xs);
+  font-weight: 600;
+  text-transform: capitalize;
+  color: var(--color-friction);
+  background: color-mix(in srgb, var(--color-friction) 16%, transparent);
+}
+
+.friction-cat-badge--sm {
+  font-size: 10px;
+  font-weight: 500;
+}
+
+.friction-moment-score {
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-dim);
+}
+
+.friction-moment-time {
+  margin-left: auto;
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-dim);
+}
+
+.friction-moment-quote {
+  margin: 4px 0 0;
+  padding-left: var(--space-2);
+  border-left: 2px solid var(--color-friction);
+  color: var(--color-text);
+  font-style: italic;
+  font-size: var(--text-sm);
+  line-height: 1.45;
+}
+
+.friction-moment-rationale {
+  margin-top: 4px;
+  font-size: var(--text-xs);
+  line-height: 1.5;
+  color: var(--color-text-dim);
+}
+
+.friction-moments-empty {
+  font-size: var(--text-sm);
+  color: var(--color-text-dim);
+  font-style: italic;
+  margin: 0;
+}
+
+/* Inline tint on hot segments while the heatmap is on. Lower specificity than
+ * .segment-row.active / :hover so selection/hover still win. */
+.segment-friction {
+  background: color-mix(in srgb, var(--color-friction) calc(var(--seg-friction-alpha, 0) * 40%), transparent);
+}
+
+.tr-tooltip-friction-cats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-bottom: 4px;
+}
+
+.tr-tooltip-friction-score {
+  color: var(--color-text-dim);
+  font-variant-numeric: tabular-nums;
 }
 
 /* Transcript segments */
