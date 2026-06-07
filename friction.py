@@ -164,7 +164,7 @@ def select_candidates(
     """Return the top-*n* scored rows (score > 0) for the LLM stage.
 
     Sorted by score descending, breaking ties by total match count so denser
-    segments win. Rows with no markers are excluded.
+    segments win. Rows that scored zero (no category matches) are excluded.
     """
     candidates = [row for row in scored if row.get("score", 0) > 0]
     candidates.sort(

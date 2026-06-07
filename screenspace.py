@@ -146,10 +146,11 @@ class _ConsecutiveBuffer:
     """Emit one event only after N consecutive matching sampled frames.
 
     ``push()`` records a matching frame; once ``size`` matches accumulate it
-    returns a single event -- the middle frame's payload, re-stamped with the
-    median timestamp of the run -- and resets. ``reset()`` (called on any
-    non-match) discards a partial run. ``size == 1`` emits on every push, so the
-    default reproduces pre-temporal-coherence behavior exactly.
+    returns a single event -- re-stamped with the median timestamp of the run and
+    carrying the payload of the frame nearest that median -- and resets.
+    ``reset()`` (called on any non-match) discards a partial run. ``size == 1``
+    emits on every push, so the default reproduces pre-temporal-coherence
+    behavior exactly.
     """
 
     def __init__(self, size: int) -> None:
@@ -161,11 +162,34 @@ class _ConsecutiveBuffer:
         self._events.append(event)
         self._timestamps.append(ts)
         if len(self._events) >= self.size:
-            emitted = dict(self._events[len(self._events) // 2])
-            emitted["timestamp"] = statistics.median(self._timestamps)
+            median_ts = statistics.median(self._timestamps)
+            # Pair the median timestamp with the payload of the frame closest to
+            # it. For odd-length runs this is the exact middle frame; for even
+            # lengths (the median is interpolated between two frames) it picks
+            # the nearer real frame instead of an arbitrary upper-middle one.
+            nearest = min(
+                range(len(self._timestamps)),
+                key=lambda i: abs(self._timestamps[i] - median_ts),
+            )
+            emitted = dict(self._events[nearest])
+            emitted["timestamp"] = median_ts
             self.reset()
             return emitted
         return None
+
+    def carry(self, ts: float) -> dict[str, Any] | None:
+        """Extend an active run when a frame is skipped as static.
+
+        A static frame is near-identical to the last processed frame, so a match
+        that was on screen is still there -- the run should continue, not break.
+        Re-pushes the most recent matched event under *ts* (returning an emit if
+        that completes the run). No-op when no run is active (nothing to carry),
+        which keeps ``size == 1`` -- where ``push`` emits and resets every frame
+        -- on its legacy path.
+        """
+        if not self._events:
+            return None
+        return self.push(ts, self._events[-1])
 
     def reset(self) -> None:
         self._events = []
@@ -1352,6 +1376,13 @@ def scan_text(
         if prev_gray[0] is not None:
             diff = float(np.mean(cv2.absdiff(prev_gray[0], gray)))
             if diff < config.SCREENSPACE_STATIC_FRAME_SKIP_THRESHOLD:
+                # Static frame: content (and any active match) is unchanged, so
+                # continue a require_consecutive run rather than break it.
+                emitted = buf.carry(ts)
+                if emitted is not None:
+                    results.append(emitted)
+                    if on_result:
+                        on_result(emitted)
                 if on_progress and total_range > 0:
                     on_progress((ts - start_seconds) / total_range)
                 return None
@@ -1500,6 +1531,13 @@ def scan_numbers(
         if prev_gray[0] is not None:
             diff = float(np.mean(cv2.absdiff(prev_gray[0], gray)))
             if diff < config.SCREENSPACE_STATIC_FRAME_SKIP_THRESHOLD:
+                # Static frame: content (and any active match) is unchanged, so
+                # continue a require_consecutive run rather than break it.
+                emitted = buf.carry(ts)
+                if emitted is not None:
+                    results.append(emitted)
+                    if on_result:
+                        on_result(emitted)
                 if on_progress and total_range > 0:
                     on_progress((ts - start_seconds) / total_range)
                 return None

@@ -558,6 +558,7 @@ def api_summary_regenerate(participant: str) -> FlaskResponse:
             return jsonify({"ok": False, "error": "No transcript found"}), 404
         entry["summary"] = ""
         entry.pop("citations", None)
+        _mark_friction_stale(entry)  # the new summary feeds the friction prompt
     _persist_manifest()
     _orchestrator.run_chain(participant, force=True)
     return jsonify({"ok": True, "generating": True})
@@ -1423,9 +1424,13 @@ class AgentOrchestrator:
                 if committed:
                     _persist_manifest()
                     # Chain into the next eligible agent (e.g. summary →
-                    # citations). Propagate *force* so a manual run cascades
-                    # through disabled downstream agents too.
-                    self.run_chain(participant, force=force)
+                    # citations). The auto-advance is always force=False: a manual
+                    # trigger forces only the one agent the user asked for (it ran
+                    # above with its own *force*); downstream agents should still
+                    # respect their enabled config. Otherwise a single-agent
+                    # regenerate (e.g. Citations) would cross-trigger a disabled
+                    # sibling (e.g. Friction), since they share depends_on=["summary"].
+                    self.run_chain(participant, force=False)
             except Exception as exc:
                 utils.warning_print(
                     f"{agent_key} generation failed for {participant}: {exc}"
