@@ -161,6 +161,7 @@ SCREENSPACE_OCR_MIN_HEIGHT: int = (
     60  # target px height for upscaling small ROIs in opt-in OCR preprocessing
 )
 SCREENSPACE_PHASH_THRESHOLD: int = 15
+SCREENSPACE_STATIC_FRAME_SKIP_THRESHOLD: float = 2.0  # mean-abs-diff cutoff for skipping near-identical frames (Similarity/Text/Numbers/Scene scans)
 SCREENSPACE_SEQUENTIAL_READ_MAX_INTERVAL: float = 3.0
 SCREENSPACE_INTAKE_CLUSTER_SECONDS: int = 5
 SCREENSPACE_TEMPLATE_MATCH_THRESHOLD: float = 0.70
@@ -364,6 +365,7 @@ SETTINGS_DESCRIPTIONS: dict[str, str] = {
     "GIF_FORMAT": "File format for animated artifacts. WebM (VP9) is the smallest and most-compatible modern option; animated WebP is also small but requires Safari 16+; GIF works everywhere but is large.",
     "WEBP_QUALITY": "WebP encoding quality (0-100). Higher values mean better quality and larger files.",
     "SCREENSPACE_CV_RESOLUTION_SCALE": "Scale extracted region frames before CV analysis. Higher (e.g. 2.0) gives the models more signal on noisy/compressed video at the cost of speed and memory; lower speeds up scans on large footage. 1.0 = unchanged.",
+    "SCREENSPACE_STATIC_FRAME_SKIP_THRESHOLD": "Skip frames whose average pixel difference from the previous sampled frame is below this value (Similarity/Text/Numbers/Scene scans). Lower = process more frames (catch subtle changes); higher = skip more aggressively on noisy footage. Default 2.0.",
     "SCREENSPACE_OCR_MIN_CONFIDENCE": "Default minimum EasyOCR per-detection confidence for Text/Numbers tasks. Raise to suppress noisy OCR misreads; lower if real hits are being dropped. Per-task slider overrides this default.",
     "SCREENSPACE_RESTORE_MARKERS_ON_EDIT": "When editing a task, restore the In/Out timeline markers to the range it was originally run with. Disable to keep your current markers in place when iterating across different parts of the timeline.",
 }
@@ -554,6 +556,14 @@ STUDIO_SETTINGS: dict[str, dict[str, Any]] = {
         "min": 0.25,
         "max": 4.0,
         "step": 0.25,
+    },
+    "SCREENSPACE_STATIC_FRAME_SKIP_THRESHOLD": {
+        "tab": "Screenspace",
+        "group": "Analysis Quality",
+        "type": "float",
+        "min": 0.5,
+        "max": 10.0,
+        "step": 0.5,
     },
     "SCREENSPACE_RESTORE_MARKERS_ON_EDIT": {
         "tab": "Screenspace",

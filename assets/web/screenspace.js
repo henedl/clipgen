@@ -705,6 +705,7 @@
       "Threshold":        "Minimum pixel-change ratio to trigger a detection",
       "Noise Thr.":       "Ignore changes below this pixel intensity",
       "Noise":            "Ignore changes below this pixel intensity",
+      "Consecutive":      "Require this many consecutive sampled frames to match before an event fires (suppresses single-frame flicker; reports the run's median time)",
     },
     similarity: {
       "Reference":        "Capture a frame to compare against",
@@ -721,6 +722,7 @@
       "Normalize chars":  "Collapse O→0, l→1, S→5 before matching (helps fonts with weak letter/digit distinction)",
       "Normalize":        "Collapse O→0, l→1, S→5 before matching (helps fonts with weak letter/digit distinction)",
       "Language":         "OCR language for text recognition",
+      "Consecutive":      "Require this many consecutive sampled frames to match before an event fires (suppresses single-frame flicker; reports the run's median time)",
     },
     numbers: {
       "Operator":         "Comparison operator for the detected number",
@@ -730,6 +732,7 @@
       "Min OCR conf.":    "Drop OCR readings below this confidence before parsing numbers (raise to suppress noisy misreads)",
       "Min OCR":          "Drop OCR readings below this confidence before parsing numbers (raise to suppress noisy misreads)",
       "Enhance ROI":      "Upscale small/low-contrast crops and apply CLAHE before OCR (slower; helps tiny HUD numbers)",
+      "Consecutive":      "Require this many consecutive sampled frames to match before an event fires (suppresses single-frame flicker; reports the run's median time)",
     },
     timelapse: {
       "Speed":            "Playback speed multiplier for the output",
@@ -742,6 +745,7 @@
     },
     flow: {
       "Magnitude":        "Minimum optical-flow magnitude to count as motion",
+      "Consecutive":      "Require this many consecutive sampled frames to match before an event fires (suppresses single-frame flicker; reports the run's median time)",
     },
     scene: {
       "Add Scene":        "Name and capture a reference frame for a scene",
@@ -1664,6 +1668,25 @@
         .catch(function () { showToast("Failed to delete region"); });
     });
 
+    qs("#deleteAllRegionsBtn").addEventListener("click", function () {
+      if (Object.keys(state.regions).length === 0) return;
+      if (!window.confirm("Delete all regions? Stashed regions are not affected.")) return;
+      apiDelete("api/regions")
+        .then(function (data) {
+          if (data.ok) {
+            state.regions = {};
+            state.activeRegion = null;
+            state.pendingRegion = null;
+            renderRegionChips();
+            renderOverlay();
+            updateRegionButtons();
+            updateRunButton();
+            showToast("All regions deleted");
+          }
+        })
+        .catch(function () { showToast("Failed to delete regions"); });
+    });
+
     // Toggle region labels
     var toggleLabelsBtn = qs("#toggleLabelsBtn");
     toggleLabelsBtn.appendChild(iconSpan("tag"));
@@ -1761,6 +1784,7 @@
     qs("#saveRegionBtn").classList.toggle("hidden", !hasPending);
     qs("#clearSelectionBtn").classList.toggle("hidden", !hasPending && !hasActive);
     qs("#deleteRegionBtn").classList.toggle("hidden", !hasActive);
+    qs("#deleteAllRegionsBtn").classList.toggle("hidden", !hasRegions);
 
     var toggleLabelsBtn = qs("#toggleLabelsBtn");
     var toggleRegionsBtn = qs("#toggleRegionsBtn");
@@ -3969,6 +3993,7 @@
     normCb.type = "checkbox";
     normCb.id = "paramTextOcrNormalize";
     addParamRow(container, "Normalize chars", normCb);
+    addParamRow(container, "Consecutive", numberInput("paramTextConsecutive", 1, 10, 1, 1));
   }
 
   function renderNumbersParams(container) {
@@ -4020,6 +4045,7 @@
     ppCb.id = "paramNumOcrPreprocess";
     addParamRow(container, "Enhance ROI", ppCb);
     renderIntervalSlot("paramNumInterval", 0.5, 60, 2.0, 0.5);
+    addParamRow(container, "Consecutive", numberInput("paramNumConsecutive", 1, 10, 1, 1));
   }
 
   function renderTimelapseParams(container) {
@@ -4224,6 +4250,7 @@
       addParamRow(container, "Threshold", rangeInput("paramChangeThresh", 0.01, 0.50, 0.03, 0.01), "paramChangeThreshVal");
       addParamRow(container, "Noise Thr.", rangeInput("paramChangeNoise", 0, 100, 30, 1), "paramChangeNoiseVal");
       renderIntervalSlot("paramChangeInterval", 0.5, 60, 1.0, 0.5);
+      addParamRow(container, "Consecutive", numberInput("paramChangeConsecutive", 1, 10, 1, 1));
     }
     else if (type === "similarity") renderSimilarityParams(container);
     else if (type === "text") renderTextParams(container);
@@ -4233,6 +4260,7 @@
     else if (type === "flow") {
       addParamRow(container, "Magnitude", rangeInput("paramFlowMag", 0.5, 20.0, 2.0, 0.5), "paramFlowMagVal");
       renderIntervalSlot("paramFlowInterval", 0.5, 60, 1.0, 0.5);
+      addParamRow(container, "Consecutive", numberInput("paramFlowConsecutive", 1, 10, 1, 1));
     }
     else if (type === "scene") renderSceneParams(container);
     else if (type === "inactivity") {
@@ -5172,6 +5200,8 @@
       params.threshold = numberOrDefault((qs("#paramChangeThresh") || {}).value, 0.03);
       params.noise_threshold = intOrDefault((qs("#paramChangeNoise") || {}).value, 30);
       params.interval = numberOrDefault((qs("#paramChangeInterval") || {}).value, 1.0);
+      var rcChange = intOrDefault((qs("#paramChangeConsecutive") || {}).value, 1);
+      if (rcChange > 1) params.require_consecutive = rcChange;
     } else if (type === "similarity") {
       if (state.referenceTimestamp === null) {
         showToast("Capture a reference frame first");
@@ -5193,6 +5223,8 @@
       params.interval = numberOrDefault((qs("#paramTextInterval") || {}).value, 2.0);
       var lang = (qs("#paramTextLang") || {}).value || "en";
       params.languages = [lang];
+      var rcText = intOrDefault((qs("#paramTextConsecutive") || {}).value, 1);
+      if (rcText > 1) params.require_consecutive = rcText;
     } else if (type === "numbers") {
       var op = (qs("#paramNumOperator") || {}).value || "gt";
       params.operator = op;
@@ -5217,6 +5249,8 @@
       params.ocr_confidence_threshold = numberOrDefault((qs("#paramNumOcrConf") || {}).value, CLIPGEN_CONFIG.screenspaceOcrMinConfidence);
       params.ocr_preprocess = !!((qs("#paramNumOcrPreprocess") || {}).checked);
       params.interval = numberOrDefault((qs("#paramNumInterval") || {}).value, 2.0);
+      var rcNum = intOrDefault((qs("#paramNumConsecutive") || {}).value, 1);
+      if (rcNum > 1) params.require_consecutive = rcNum;
     } else if (type === "timelapse") {
       params.speedup_factor = numberOrDefault((qs("#paramTlSpeed") || {}).value, 10);
       var si = parseFloat((qs("#paramTlSampleInterval") || {}).value);
@@ -5240,6 +5274,8 @@
     } else if (type === "flow") {
       params.magnitude_threshold = numberOrDefault((qs("#paramFlowMag") || {}).value, 2.0);
       params.interval = numberOrDefault((qs("#paramFlowInterval") || {}).value, 1.0);
+      var rcFlow = intOrDefault((qs("#paramFlowConsecutive") || {}).value, 1);
+      if (rcFlow > 1) params.require_consecutive = rcFlow;
     } else if (type === "scene") {
       if (state.sceneReferences.length === 0) {
         showToast("Add at least one scene reference");
@@ -5830,6 +5866,7 @@
       setInputValue("#paramChangeThresh", numberOrDefault(params.threshold, 0.03));
       setInputValue("#paramChangeNoise", intOrDefault(params.noise_threshold, 30));
       setInputValue("#paramChangeInterval", numberOrDefault(params.interval, 1.0));
+      setInputValue("#paramChangeConsecutive", intOrDefault(params.require_consecutive, 1));
     } else if (task.type === "similarity") {
       setInputValue("#paramSimThresh", numberOrDefault(params.threshold, 0.90));
       setInputValue("#paramSimInterval", numberOrDefault(params.interval, 1.0));
@@ -5845,6 +5882,7 @@
       if (params.languages && params.languages[0]) {
         setInputValue("#paramTextLang", params.languages[0]);
       }
+      setInputValue("#paramTextConsecutive", intOrDefault(params.require_consecutive, 1));
     } else if (task.type === "numbers") {
       setInputValue("#paramNumOperator", params.operator || "gt");
       // Fire change so range/target row visibility tracks the restored operator
@@ -5861,6 +5899,7 @@
       var numPpEl = qs("#paramNumOcrPreprocess");
       if (numPpEl) numPpEl.checked = !!params.ocr_preprocess;
       setInputValue("#paramNumInterval", numberOrDefault(params.interval, 2.0));
+      setInputValue("#paramNumConsecutive", intOrDefault(params.require_consecutive, 1));
     } else if (task.type === "timelapse") {
       setInputValue("#paramTlSpeed", numberOrDefault(params.speedup_factor, 10));
       setInputValue("#paramTlFormat", params.output_format || "mp4");
@@ -5879,6 +5918,7 @@
     } else if (task.type === "flow") {
       setInputValue("#paramFlowMag", numberOrDefault(params.magnitude_threshold, 2.0));
       setInputValue("#paramFlowInterval", numberOrDefault(params.interval, 1.0));
+      setInputValue("#paramFlowConsecutive", intOrDefault(params.require_consecutive, 1));
     } else if (task.type === "scene") {
       setInputValue("#paramSceneInterval", numberOrDefault(params.interval, 1.0));
     } else if (task.type === "inactivity") {

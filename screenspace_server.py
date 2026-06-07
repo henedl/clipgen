@@ -920,6 +920,16 @@ def api_regions_delete(name: str) -> FlaskResponse:
     return jsonify({"ok": True})
 
 
+@screenspace_bp.route("/api/regions", methods=["DELETE"])
+def api_regions_delete_all() -> FlaskResponse:
+    """Delete every active region. Stashes are left untouched."""
+    with _manifest_lock:
+        _manifest["regions"] = {}
+        _do_persist(drain_events=False)
+
+    return jsonify({"ok": True})
+
+
 @screenspace_bp.route("/api/regions/reorder", methods=["PUT"])
 def api_regions_reorder() -> FlaskResponse:
     """Reorder active regions to match the given name order."""
@@ -1287,6 +1297,8 @@ def _coerce_task_params(
                     _coerce_template_controls(step)
                 if step.get("type") in ("text", "numbers"):
                     _coerce_ocr_controls(step, context=step_context)
+        if task_type in ("text", "numbers", "change", "flow"):
+            _coerce_consecutive(parameters)
         if task_type == "template":
             _coerce_template_controls(parameters)
     except ValueError as exc:
@@ -1823,6 +1835,27 @@ def _coerce_ocr_controls(params: dict[str, Any], *, context: str = "") -> None:
     if threshold is None or threshold < 0 or threshold > 1:
         raise ValueError(f"{context}ocr_confidence_threshold must be between 0 and 1")
     params["ocr_confidence_threshold"] = threshold
+
+
+def _coerce_consecutive(params: dict[str, Any], *, context: str = "") -> None:
+    """Validate the optional require_consecutive control (Text/Numbers/Change/Flow).
+
+    Clamps to [1, 10]; drops the key when it resolves to 1 (the default) so the
+    manifest stays clean.
+    """
+    raw = params.get("require_consecutive")
+    if raw is None:
+        params.pop("require_consecutive", None)
+        return
+    try:
+        count = int(raw)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{context}require_consecutive must be an integer") from exc
+    count = max(1, min(10, count))
+    if count == 1:
+        params.pop("require_consecutive", None)
+    else:
+        params["require_consecutive"] = count
 
 
 def _validate_scene_references(
