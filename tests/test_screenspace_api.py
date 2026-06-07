@@ -205,6 +205,31 @@ def test_delete_nonexistent_region(client):
     assert resp.status_code == 404
 
 
+def test_delete_all_regions(client):
+    _create_region(client, "a")
+    _create_region(client, "b")
+    resp = client.delete("/screenspace/api/regions")
+    assert resp.status_code == 200
+    assert resp.get_json()["ok"] is True
+    assert client.get("/screenspace/api/regions").get_json()["regions"] == {}
+
+
+def test_delete_all_regions_keeps_stashes(client):
+    # Stash one set, then add fresh active regions before deleting all.
+    _create_region(client, "a")
+    _create_region(client, "b")
+    client.post("/screenspace/api/stashes")
+    _create_region(client, "c")
+
+    resp = client.delete("/screenspace/api/regions")
+    assert resp.status_code == 200
+    assert client.get("/screenspace/api/regions").get_json()["regions"] == {}
+
+    stashes = client.get("/screenspace/api/stashes").get_json()["stashes"]
+    assert len(stashes) == 1
+    assert set(stashes[0]["regions"].keys()) == {"a", "b"}
+
+
 def test_create_region_normalizes_coords(client):
     resp = client.post(
         "/screenspace/api/regions",

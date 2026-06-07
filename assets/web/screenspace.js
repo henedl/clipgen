@@ -1668,6 +1668,25 @@
         .catch(function () { showToast("Failed to delete region"); });
     });
 
+    qs("#deleteAllRegionsBtn").addEventListener("click", function () {
+      if (Object.keys(state.regions).length === 0) return;
+      if (!window.confirm("Delete all regions? Stashed regions are not affected.")) return;
+      apiDelete("api/regions")
+        .then(function (data) {
+          if (data.ok) {
+            state.regions = {};
+            state.activeRegion = null;
+            state.pendingRegion = null;
+            renderRegionChips();
+            renderOverlay();
+            updateRegionButtons();
+            updateRunButton();
+            showToast("All regions deleted");
+          }
+        })
+        .catch(function () { showToast("Failed to delete regions"); });
+    });
+
     // Toggle region labels
     var toggleLabelsBtn = qs("#toggleLabelsBtn");
     toggleLabelsBtn.appendChild(iconSpan("tag"));
@@ -1765,6 +1784,7 @@
     qs("#saveRegionBtn").classList.toggle("hidden", !hasPending);
     qs("#clearSelectionBtn").classList.toggle("hidden", !hasPending && !hasActive);
     qs("#deleteRegionBtn").classList.toggle("hidden", !hasActive);
+    qs("#deleteAllRegionsBtn").classList.toggle("hidden", !hasRegions);
 
     var toggleLabelsBtn = qs("#toggleLabelsBtn");
     var toggleRegionsBtn = qs("#toggleRegionsBtn");

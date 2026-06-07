@@ -920,6 +920,16 @@ def api_regions_delete(name: str) -> FlaskResponse:
     return jsonify({"ok": True})
 
 
+@screenspace_bp.route("/api/regions", methods=["DELETE"])
+def api_regions_delete_all() -> FlaskResponse:
+    """Delete every active region. Stashes are left untouched."""
+    with _manifest_lock:
+        _manifest["regions"] = {}
+        _do_persist(drain_events=False)
+
+    return jsonify({"ok": True})
+
+
 @screenspace_bp.route("/api/regions/reorder", methods=["PUT"])
 def api_regions_reorder() -> FlaskResponse:
     """Reorder active regions to match the given name order."""
