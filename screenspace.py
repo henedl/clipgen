@@ -27,6 +27,7 @@ import math
 import queue
 import re
 import shutil
+import statistics
 import subprocess
 import threading
 import time
@@ -139,6 +140,36 @@ def _effective_ocr_confidence_threshold(value: Any = None) -> float:
     if threshold < 0 or threshold > 1:
         raise ValueError("ocr_confidence_threshold must be between 0 and 1")
     return threshold
+
+
+class _ConsecutiveBuffer:
+    """Emit one event only after N consecutive matching sampled frames.
+
+    ``push()`` records a matching frame; once ``size`` matches accumulate it
+    returns a single event -- the middle frame's payload, re-stamped with the
+    median timestamp of the run -- and resets. ``reset()`` (called on any
+    non-match) discards a partial run. ``size == 1`` emits on every push, so the
+    default reproduces pre-temporal-coherence behavior exactly.
+    """
+
+    def __init__(self, size: int) -> None:
+        self.size = max(1, int(size))
+        self._events: list[dict[str, Any]] = []
+        self._timestamps: list[float] = []
+
+    def push(self, ts: float, event: dict[str, Any]) -> dict[str, Any] | None:
+        self._events.append(event)
+        self._timestamps.append(ts)
+        if len(self._events) >= self.size:
+            emitted = dict(self._events[len(self._events) // 2])
+            emitted["timestamp"] = statistics.median(self._timestamps)
+            self.reset()
+            return emitted
+        return None
+
+    def reset(self) -> None:
+        self._events = []
+        self._timestamps = []
 
 
 # ---------------------------------------------------------------------------
@@ -1078,6 +1109,7 @@ def scan_changes(
     interval_seconds: float = 0.0,
     *,
     noise_threshold: int = 0,
+    require_consecutive: int = 1,
     start_seconds: float = 0.0,
     end_seconds: float | None = None,
     on_progress: Callable[[float], None] | None = None,
@@ -1108,6 +1140,7 @@ def scan_changes(
     prev_gray: list[np.ndarray | None] = [None]
     k = config.SCREENSPACE_BLUR_KERNEL
     morph_kernel = _morph_kernel(config.SCREENSPACE_MORPH_KERNEL)
+    buf = _ConsecutiveBuffer(require_consecutive)
 
     def _cb(ts: float, pixels: np.ndarray) -> bool | None:
         if cancel_flag and cancel_flag():
@@ -1122,9 +1155,13 @@ def scan_changes(
             mag = float(np.count_nonzero(mask)) / float(mask.size) if mask.size else 0.0
             if mag >= threshold:
                 rd = {"timestamp": ts, "magnitude": round(mag, 4)}
-                results.append(rd)
-                if on_result:
-                    on_result(rd)
+                emitted = buf.push(ts, rd)
+                if emitted is not None:
+                    results.append(emitted)
+                    if on_result:
+                        on_result(emitted)
+            else:
+                buf.reset()
         prev_gray[0] = curr_gray
         if on_progress and total_range > 0:
             on_progress((ts - start_seconds) / total_range)
@@ -1210,7 +1247,10 @@ def scan_similarity(
         # Static-frame skip
         gray = cv2.cvtColor(pixels, cv2.COLOR_BGR2GRAY)
         if prev_skip_gray[0] is not None:
-            if float(np.mean(cv2.absdiff(prev_skip_gray[0], gray))) < 2.0:
+            if (
+                float(np.mean(cv2.absdiff(prev_skip_gray[0], gray)))
+                < config.SCREENSPACE_STATIC_FRAME_SKIP_THRESHOLD
+            ):
                 if on_progress and total_range > 0:
                     on_progress((ts - start_seconds) / total_range)
                 return None
@@ -1265,6 +1305,7 @@ def scan_text(
     ocr_confidence_threshold: float | None = None,
     ocr_preprocess: bool = False,
     ocr_normalize: bool = False,
+    require_consecutive: int = 1,
     languages: list[str] | None = None,
     start_seconds: float = 0.0,
     end_seconds: float | None = None,
@@ -1302,6 +1343,7 @@ def scan_text(
         _normalize_ocr_text(search_string) if ocr_normalize else search_string.lower()
     )
     prev_gray: list[np.ndarray | None] = [None]
+    buf = _ConsecutiveBuffer(require_consecutive)
 
     def _cb(ts: float, pixels: np.ndarray) -> bool | None:
         if cancel_flag and cancel_flag():
@@ -1309,28 +1351,34 @@ def scan_text(
         gray = cv2.cvtColor(pixels, cv2.COLOR_BGR2GRAY)
         if prev_gray[0] is not None:
             diff = float(np.mean(cv2.absdiff(prev_gray[0], gray)))
-            if diff < 2.0:
+            if diff < config.SCREENSPACE_STATIC_FRAME_SKIP_THRESHOLD:
                 if on_progress and total_range > 0:
                     on_progress((ts - start_seconds) / total_range)
                 return None
         prev_gray[0] = gray
         ocr_input = _preprocess_for_ocr(pixels) if ocr_preprocess else pixels
         ocr_results = reader.readtext(ocr_input, detail=1)
+        matched_rd: dict[str, Any] | None = None
         for _, text, conf in ocr_results:
             if conf < ocr_confidence_threshold:
                 continue
             ocr_cmp = _normalize_ocr_text(text) if ocr_normalize else text.lower()
             ratio = difflib.SequenceMatcher(None, search_cmp, ocr_cmp).ratio()
             if ratio >= fuzzy_threshold:
-                rd = {
+                matched_rd = {
                     "timestamp": ts,
                     "text_found": text,
                     "confidence": round(conf, 4),
                 }
-                results.append(rd)
-                if on_result:
-                    on_result(rd)
                 break
+        if matched_rd is not None:
+            emitted = buf.push(ts, matched_rd)
+            if emitted is not None:
+                results.append(emitted)
+                if on_result:
+                    on_result(emitted)
+        else:
+            buf.reset()
         if on_progress and total_range > 0:
             on_progress((ts - start_seconds) / total_range)
         return None
@@ -1401,6 +1449,7 @@ def scan_numbers(
     range_max: float | None = None,
     ocr_confidence_threshold: float | None = None,
     ocr_preprocess: bool = False,
+    require_consecutive: int = 1,
     languages: list[str] | None = None,
     start_seconds: float = 0.0,
     end_seconds: float | None = None,
@@ -1442,6 +1491,7 @@ def scan_numbers(
     ocr_kwargs: dict[str, Any] = {"detail": 1}
     if languages == ["en"]:
         ocr_kwargs["allowlist"] = _OCR_NUMBER_ALLOWLIST
+    buf = _ConsecutiveBuffer(require_consecutive)
 
     def _cb(ts: float, pixels: np.ndarray) -> bool | None:
         if cancel_flag and cancel_flag():
@@ -1449,13 +1499,14 @@ def scan_numbers(
         gray = cv2.cvtColor(pixels, cv2.COLOR_BGR2GRAY)
         if prev_gray[0] is not None:
             diff = float(np.mean(cv2.absdiff(prev_gray[0], gray)))
-            if diff < 2.0:
+            if diff < config.SCREENSPACE_STATIC_FRAME_SKIP_THRESHOLD:
                 if on_progress and total_range > 0:
                     on_progress((ts - start_seconds) / total_range)
                 return None
         prev_gray[0] = gray
         ocr_input = _preprocess_for_ocr(pixels) if ocr_preprocess else pixels
         ocr_results = reader.readtext(ocr_input, **ocr_kwargs)
+        matched_rd: dict[str, Any] | None = None
         for _, text, conf in ocr_results:
             if conf < ocr_confidence_threshold:
                 continue
@@ -1463,15 +1514,22 @@ def scan_numbers(
             for match in _NUMBERS_RE.findall(cleaned):
                 num = float(match)
                 if _number_matches(num, operator, target_value, range_min, range_max):
-                    rd = {
+                    matched_rd = {
                         "timestamp": ts,
                         "number_found": num,
                         "confidence": round(conf, 4),
                     }
-                    results.append(rd)
-                    if on_result:
-                        on_result(rd)
-                    return None
+                    break
+            if matched_rd is not None:
+                break
+        if matched_rd is not None:
+            emitted = buf.push(ts, matched_rd)
+            if emitted is not None:
+                results.append(emitted)
+                if on_result:
+                    on_result(emitted)
+        else:
+            buf.reset()
         if on_progress and total_range > 0:
             on_progress((ts - start_seconds) / total_range)
         return None
@@ -1732,6 +1790,7 @@ def scan_flow(
     magnitude_threshold: float = 0.0,
     interval_seconds: float = 0.0,
     *,
+    require_consecutive: int = 1,
     start_seconds: float = 0.0,
     end_seconds: float | None = None,
     on_progress: Callable[[float], None] | None = None,
@@ -1759,6 +1818,7 @@ def scan_flow(
 
     results: list[dict[str, Any]] = []
     prev_gray: list[np.ndarray | None] = [None]
+    buf = _ConsecutiveBuffer(require_consecutive)
 
     def _cb(ts: float, pixels: np.ndarray) -> bool | None:
         if cancel_flag and cancel_flag():
@@ -1775,16 +1835,20 @@ def scan_flow(
                     "angle": flow_result["angle"],
                     "flow_grid": flow_result.get("flow_grid", []),
                 }
-                results.append(rd)
-                if on_result:
-                    # Keep incremental updates lightweight (no grid)
-                    on_result(
-                        {
-                            "timestamp": ts,
-                            "magnitude": flow_result["magnitude"],
-                            "angle": flow_result["angle"],
-                        }
-                    )
+                emitted = buf.push(ts, rd)
+                if emitted is not None:
+                    results.append(emitted)
+                    if on_result:
+                        # Keep incremental updates lightweight (no grid)
+                        on_result(
+                            {
+                                "timestamp": emitted["timestamp"],
+                                "magnitude": emitted["magnitude"],
+                                "angle": emitted["angle"],
+                            }
+                        )
+            else:
+                buf.reset()
         prev_gray[0] = curr_gray
         if on_progress and total_range > 0:
             on_progress((ts - start_seconds) / total_range)
@@ -1864,7 +1928,10 @@ def scan_scene(
         # Static-frame skip (same pattern as similarity scan)
         curr_gray = cv2.cvtColor(pixels, cv2.COLOR_BGR2GRAY).astype(np.float32)
         if prev_skip_gray[0] is not None:
-            if abs(float(np.mean(curr_gray)) - float(np.mean(prev_skip_gray[0]))) < 2.0:
+            if (
+                abs(float(np.mean(curr_gray)) - float(np.mean(prev_skip_gray[0])))
+                < config.SCREENSPACE_STATIC_FRAME_SKIP_THRESHOLD
+            ):
                 if on_progress and total_range > 0:
                     on_progress((ts - start_seconds) / total_range)
                 return None
@@ -2587,6 +2654,7 @@ class ChangeTool(AnalysisTool):
             threshold=params.get("threshold", 0),
             interval_seconds=params.get("interval", 0),
             noise_threshold=params.get("noise_threshold", 0),
+            require_consecutive=params.get("require_consecutive", 1),
             start_seconds=params.get("start_seconds", 0.0),
             end_seconds=params.get("end_seconds"),
             on_progress=on_progress,
@@ -2698,6 +2766,7 @@ class TextTool(AnalysisTool):
             ocr_confidence_threshold=params.get("ocr_confidence_threshold"),
             ocr_preprocess=params.get("ocr_preprocess", False),
             ocr_normalize=params.get("ocr_normalize", False),
+            require_consecutive=params.get("require_consecutive", 1),
             languages=params.get("languages"),
             start_seconds=params.get("start_seconds", 0.0),
             end_seconds=params.get("end_seconds"),
@@ -2761,6 +2830,7 @@ class NumbersTool(AnalysisTool):
             range_max=params.get("range_max"),
             ocr_confidence_threshold=params.get("ocr_confidence_threshold"),
             ocr_preprocess=params.get("ocr_preprocess", False),
+            require_consecutive=params.get("require_consecutive", 1),
             languages=params.get("languages"),
             start_seconds=params.get("start_seconds", 0.0),
             end_seconds=params.get("end_seconds"),
@@ -2887,6 +2957,7 @@ class FlowTool(AnalysisTool):
             region,
             magnitude_threshold=params.get("magnitude_threshold", 0),
             interval_seconds=params.get("interval", 0),
+            require_consecutive=params.get("require_consecutive", 1),
             start_seconds=params.get("start_seconds", 0.0),
             end_seconds=params.get("end_seconds"),
             on_progress=on_progress,

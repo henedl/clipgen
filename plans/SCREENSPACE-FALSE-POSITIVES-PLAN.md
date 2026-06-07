@@ -14,8 +14,8 @@ This is a multi-phase effort ordered by impact-per-LOC. Each phase is independen
 | 2 | Opt-in OCR ROI preprocessing (upscale + CLAHE) | **Done** (`df35431`) |
 | 3a | Numbers tool: EasyOCR digit allowlist | **Done** (`42a1929`) |
 | 3b | Text tool: opt-in character normalization | **Done** (`2ef5e81`) |
-| 5 | Extract hardcoded static-frame-skip threshold | Planned |
-| 4 | Temporal coherence (`require_consecutive`) | Planned |
+| 5 | Extract hardcoded static-frame-skip threshold | **Done** |
+| 4 | Temporal coherence (`require_consecutive`) | **Done** |
 | 6 | Confidence histogram in results UI | Planned |
 
 Recommended ship order for the remainder: **3a → 3b → 5 → 4 → 6** (trivial/low-risk first; temporal coherence and the histogram last).
