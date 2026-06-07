@@ -46,6 +46,18 @@ uv run clipgen.py --citations [P01 P03 ...] -i INPUT_DIR -o OUTPUT_DIR
 
 To use a specific Ollama model: `--ollama-model MODEL`
 
+Friction detection (depends on `summary`; surfaces moments of likely interest):
+- A deterministic scorer (`friction.py`) flags hesitation / confusion / frustration /
+  surprise / self-correction / help-seeking per segment; a local LLM then refines the
+  top candidates into ~5 "moments".
+- Off by default. Enable auto-run after summaries with `OLLAMA_FRICTION_ENABLED = True`
+  in `config.py` (model: `OLLAMA_FRICTION_MODEL`, defaults to `OLLAMA_SUMMARY_MODEL`).
+- Drive it from the **Transcripts UI**: the **Friction tab** in the analysis panel (stats,
+  score/category filter, top moments, "Mark all matching") and the **friction heatmap**
+  toggle on the timeline; run/re-run/stop also live in the participant pill dropdown.
+- Results persist to `transcripts_manifest.json` under each participant's `friction` field
+  and flow into `--export` (`clipgen_export_friction_moments.*` / `_friction_segments.*`).
+
 ## Step 5: Cut clips from transcript segments or marks
 
 Turn transcript segments into video clips, no UI required:
@@ -107,5 +119,5 @@ uv run clipgen.py --transcript-clips --transcript-clips-mark insight -i IN -o OU
 
 - `config.DEBUGGING = True` returns stub transcripts without loading the Whisper model — useful for development
 - Thinking agent results are stored in `transcripts_manifest.json` under each participant's entry
-- Agents run in dependency order: `citations` depends on `summary` being populated first
+- Agents run in dependency order: both `citations` and `friction` depend on `summary` being populated first (friction runs after summary even when citations is disabled)
 - Ollama must be running (`ollama serve`) or clipgen will attempt to auto-start it

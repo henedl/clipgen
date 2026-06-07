@@ -43,6 +43,16 @@ var CLIPGEN_CONFIG = {
   ],
   ignoredTimestampTokens: ["x"],
   screenspaceOcrMinConfidence: 0.7,
+  frictionCategories: [
+    { key: "hesitation",      label: "Hesitation" },
+    { key: "confusion",       label: "Confusion" },
+    { key: "frustration",     label: "Frustration" },
+    { key: "surprise",        label: "Surprise" },
+    { key: "self_correction", label: "Self-correction" },
+    { key: "help_seeking",    label: "Help-seeking" },
+  ],
+  frictionColorToken: "--color-friction",
+  frictionMomentLimit: 5,
 };
 
 var clipgenApplyConfig = function (payload) {
@@ -64,6 +74,15 @@ var clipgenApplyConfig = function (payload) {
   }
   if (typeof payload.screenspaceOcrMinConfidence === "number") {
     CLIPGEN_CONFIG.screenspaceOcrMinConfidence = payload.screenspaceOcrMinConfidence;
+  }
+  if (Array.isArray(payload.frictionCategories)) {
+    CLIPGEN_CONFIG.frictionCategories = payload.frictionCategories;
+  }
+  if (typeof payload.frictionColorToken === "string") {
+    CLIPGEN_CONFIG.frictionColorToken = payload.frictionColorToken;
+  }
+  if (typeof payload.frictionMomentLimit === "number") {
+    CLIPGEN_CONFIG.frictionMomentLimit = payload.frictionMomentLimit;
   }
 };
 

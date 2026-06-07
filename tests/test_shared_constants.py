@@ -92,6 +92,10 @@ def test_clipgen_config_defaults_match_python():
         assert js_sev["rank"] == py_sev["rank"]
         assert js_sev["cssClass"] == py_sev["cssClass"]
 
+    assert js_config["frictionColorToken"] == py_config["frictionColorToken"]
+    assert js_config["frictionMomentLimit"] == py_config["frictionMomentLimit"]
+    assert js_config["frictionCategories"] == py_config["frictionCategories"]
+
 
 def test_get_frontend_config_shape():
     """Contract: every consumer of get_frontend_config relies on these keys."""
@@ -103,6 +107,9 @@ def test_get_frontend_config_shape():
         "annotations",
         "ignoredTimestampTokens",
         "screenspaceOcrMinConfidence",
+        "frictionCategories",
+        "frictionColorToken",
+        "frictionMomentLimit",
     }
     assert isinstance(cfg["defaultDuration"], int)
     assert cfg["defaultDuration"] == config.DEFAULT_DURATION_SECONDS
@@ -125,6 +132,13 @@ def test_get_frontend_config_shape():
     )
     assert isinstance(cfg["screenspaceOcrMinConfidence"], float)
     assert cfg["screenspaceOcrMinConfidence"] == config.SCREENSPACE_OCR_MIN_CONFIDENCE
+    assert cfg["frictionColorToken"] == "--color-friction"
+    assert cfg["frictionMomentLimit"] == config.FRICTION_MOMENT_LIMIT
+    assert [c["key"] for c in cfg["frictionCategories"]] == list(
+        config.FRICTION_CATEGORIES.keys()
+    )
+    for entry in cfg["frictionCategories"]:
+        assert set(entry.keys()) == {"key", "label"}
 
 
 def test_severity_css_class_mapping():

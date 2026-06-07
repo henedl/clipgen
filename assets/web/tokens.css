@@ -34,6 +34,7 @@
  *             --sev-critical | --sev-high | --sev-medium | --sev-low | --sev-na
  *             --sev-positive | --sev-very-positive | --sev-unknown
  * CONTENT:    --color-clip | --color-screen | --color-gif
+ * FRICTION:   --color-friction — Transcripts friction heatmap / tints / mark
  * TASK:       --color-task-multitool | --color-task-color | --color-task-change | --color-task-similarity
  *             --color-task-text | --color-task-numbers | --color-task-timelapse | --color-task-template
  *             --color-task-flow | --color-task-scene
@@ -181,6 +182,10 @@
   --color-screen: #22d3ee;
   --color-gif:    #fb923c;
 
+  /* Friction detection (Transcripts) — warm orange, distinct from severity.
+   * Drives the timeline heatmap band, segment tints, and the friction mark. */
+  --color-friction: #ea580c;
+
   /* Screenspace task colors */
   --color-task-multitool:  #60a5fa;
   --color-task-color:      #a78bfa;
@@ -323,6 +328,8 @@ html[data-theme="light"],
   --color-clip:   #3659b3;
   --color-screen: #0ea5e9;
   --color-gif:    #f97316;
+
+  --color-friction: #c2410c;
 
   --color-task-multitool:  #2563eb;
   --color-task-color:      #8b5cf6;
