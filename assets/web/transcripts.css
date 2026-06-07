@@ -673,8 +673,8 @@ body {
 }
 
 .friction-icon {
-  mask-image: url(icons/bolt.svg);
-  -webkit-mask-image: url(icons/bolt.svg);
+  mask-image: url(icons/fire.svg);
+  -webkit-mask-image: url(icons/fire.svg);
 }
 
 .panel-tab-dot {
@@ -1030,10 +1030,21 @@ body {
   color: var(--color-text-dim);
 }
 
-.friction-moment-rationale {
-  font-size: var(--text-sm);
-  line-height: 1.5;
+.friction-moment-quote {
+  margin: 4px 0 0;
+  padding-left: var(--space-2);
+  border-left: 2px solid var(--color-friction);
   color: var(--color-text);
+  font-style: italic;
+  font-size: var(--text-sm);
+  line-height: 1.45;
+}
+
+.friction-moment-rationale {
+  margin-top: 4px;
+  font-size: var(--text-xs);
+  line-height: 1.5;
+  color: var(--color-text-dim);
 }
 
 .friction-moments-empty {

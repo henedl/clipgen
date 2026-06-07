@@ -544,9 +544,20 @@ def find_friction_moments(
             f"Friction moment detection failed (no response from model {model})"
         )
         return None
-    moments = _parse_friction_response(response)
+
+    # Keep only moments that cite at least one real segment, trimming any
+    # hallucinated IDs. An unsourced moment can't be seeked to or quoted, so it
+    # must never reach the manifest.
+    valid_ids = {seg.get("id") for seg in segments if seg.get("id")}
+    moments: list[dict[str, Any]] = []
+    for moment in _parse_friction_response(response):
+        kept = [sid for sid in moment["segment_ids"] if sid in valid_ids]
+        if not kept:
+            continue
+        moment["segment_ids"] = kept
+        moments.append(moment)
     if not moments:
-        utils.warning_print("Friction analysis returned no parseable moments")
+        utils.warning_print("Friction analysis returned no sourced moments")
     return moments[: config.FRICTION_MOMENT_LIMIT]
 
 

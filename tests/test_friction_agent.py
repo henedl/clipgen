@@ -175,6 +175,23 @@ class TestFindFrictionMoments:
     def test_no_candidates_returns_empty_not_none(self):
         assert thinking_agents.find_friction_moments("summary", [], []) == []
 
+    @patch("thinking_agents.ollama_client.generate")
+    def test_drops_unsourced_moments_and_trims_ids(self, mock_gen):
+        # A moment citing only unknown segment IDs is dropped; one citing a mix
+        # keeps the real IDs and drops hallucinated ones.
+        mock_gen.return_value = (
+            '[{"segment_ids": ["P01:99"], "category": "confusion", "score": 0.5},'
+            ' {"segment_ids": ["P01:1", "ghost"], "category": "frustration", "score": 0.7}]'
+        )
+        segments = [{"id": "P01:1", "start": 5, "text": "um where is it"}]
+        result = thinking_agents.find_friction_moments(
+            "summary", segments, [{"id": "P01:1"}]
+        )
+        assert result is not None
+        assert len(result) == 1
+        assert result[0]["category"] == "frustration"
+        assert result[0]["segment_ids"] == ["P01:1"]
+
     def test_friction_model_defaults_to_summary_model(self, monkeypatch):
         monkeypatch.setattr(config, "OLLAMA_FRICTION_MODEL", "")
         monkeypatch.setattr(config, "OLLAMA_SUMMARY_MODEL", "llama3.2")

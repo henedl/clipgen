@@ -1431,29 +1431,43 @@
     if (row) scrollToSegment(row);
   }
 
+  // Resolved segment indices a moment cites, in order, valid only.
+  function _momentSegmentIndices(m) {
+    var idxs = [];
+    var ids = m.segment_ids || [];
+    for (var i = 0; i < ids.length; i++) {
+      var idx = _segmentIndexById(ids[i]);
+      if (idx >= 0) idxs.push(idx);
+    }
+    return idxs;
+  }
+
   function _buildMomentRow(m) {
+    var idxs = _momentSegmentIndices(m);
+    // An unsourced moment can't be quoted or seeked to — skip it entirely.
+    if (idxs.length === 0) return null;
+    var firstIdx = idxs[0];
+
     var row = document.createElement("div");
-    row.className = "friction-moment";
-    var firstId = (m.segment_ids && m.segment_ids[0]) || null;
-    var idx = firstId != null ? _segmentIndexById(firstId) : -1;
+    row.className = "friction-moment friction-moment--seekable";
 
     var head = document.createElement("div");
     head.className = "friction-moment-head";
-    var badge = el("span", "friction-cat-badge", _frictionCatLabel(m.category));
-    head.appendChild(badge);
-    var score = el("span", "friction-moment-score", (m.score != null ? m.score : 0).toFixed(2));
-    head.appendChild(score);
-    if (idx >= 0 && state.segments[idx]) {
-      head.appendChild(el("span", "friction-moment-time", formatTime(state.segments[idx].start)));
-    }
+    head.appendChild(el("span", "friction-cat-badge", _frictionCatLabel(m.category)));
+    head.appendChild(el("span", "friction-moment-score", (m.score != null ? m.score : 0).toFixed(2)));
+    head.appendChild(el("span", "friction-moment-time", formatTime(state.segments[firstIdx].start)));
     row.appendChild(head);
 
-    row.appendChild(el("div", "friction-moment-rationale", m.rationale || ""));
+    // Quote the transcript line(s) the moment was detected on.
+    var quote = idxs
+      .map(function (i) { return (state.segments[i].text || "").trim(); })
+      .filter(Boolean)
+      .join(" ");
+    if (quote) row.appendChild(el("blockquote", "friction-moment-quote", quote));
 
-    if (idx >= 0) {
-      row.classList.add("friction-moment--seekable");
-      row.addEventListener("click", function () { _seekToSegmentIndex(idx); });
-    }
+    if (m.rationale) row.appendChild(el("div", "friction-moment-rationale", m.rationale));
+
+    row.addEventListener("click", function () { _seekToSegmentIndex(firstIdx); });
     return row;
   }
 
@@ -1463,7 +1477,9 @@
     el2.innerHTML = "";
     var fd = state.frictionData;
     if (!fd) return;
-    var moments = (fd.moments || []).filter(_frictionMomentMatches);
+    var moments = (fd.moments || []).filter(_frictionMomentMatches).filter(function (m) {
+      return _momentSegmentIndices(m).length > 0;
+    });
     if (moments.length === 0) {
       var msg;
       if (fd.llm_ok === false) {
@@ -1477,7 +1493,10 @@
       return;
     }
     var frag = document.createDocumentFragment();
-    moments.forEach(function (m) { frag.appendChild(_buildMomentRow(m)); });
+    moments.forEach(function (m) {
+      var rowEl = _buildMomentRow(m);
+      if (rowEl) frag.appendChild(rowEl);
+    });
     el2.appendChild(frag);
   }
 
