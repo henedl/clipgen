@@ -3,6 +3,7 @@
 import io
 import threading
 import time
+from pathlib import Path
 from unittest import mock
 
 import numpy as np
@@ -1137,6 +1138,84 @@ class TestScanText:
         )
         assert len(accepted) == 1
         assert accepted[0]["text_found"] == "l00"
+
+    def test_require_consecutive(self, monkeypatch):
+        """require_consecutive=N coalesces N consecutive matches into one median event."""
+        # Distinct fills so the static-frame-skip never fires between frames.
+        frames = [np.full((20, 60, 3), v, dtype=np.uint8) for v in (40, 90, 140)]
+
+        class _FakeReader:
+            def readtext(self, _pixels, **_kwargs):
+                return [([(0, 0), (10, 0), (10, 10), (0, 10)], "hello", 0.9)]
+
+        monkeypatch.setattr(
+            screenspace, "_get_ocr_reader", lambda _langs: _FakeReader()
+        )
+        monkeypatch.setattr(screenspace, "_probe_video_meta", lambda p: (30.0, 1.0))
+
+        def fake_scan(video_path, region, interval, callback, **kwargs):
+            for i, frame in enumerate(frames):
+                callback(float(i), frame)
+
+        monkeypatch.setattr(screenspace, "scan_video_frames", fake_scan)
+
+        region = {"x": 0, "y": 0, "w": 60, "h": 20}
+
+        # Default (require_consecutive=1): one event per matching frame.
+        default = screenspace.scan_text(
+            "/fake.mp4", region, search_string="hello", fuzzy_threshold=0.8
+        )
+        assert len(default) == 3
+
+        # require_consecutive=3: a single event stamped with the median timestamp.
+        coalesced = screenspace.scan_text(
+            "/fake.mp4",
+            region,
+            search_string="hello",
+            fuzzy_threshold=0.8,
+            require_consecutive=3,
+        )
+        assert len(coalesced) == 1
+        assert coalesced[0]["timestamp"] == 1.0  # median([0.0, 1.0, 2.0])
+
+
+class TestConsecutiveBuffer:
+    def test_n1_emits_immediately(self):
+        buf = screenspace._ConsecutiveBuffer(1)
+        out = buf.push(5.0, {"timestamp": 5.0, "magnitude": 0.4})
+        assert out is not None
+        assert out["timestamp"] == 5.0
+        assert out["magnitude"] == 0.4
+
+    def test_emits_after_n_with_median_ts(self):
+        buf = screenspace._ConsecutiveBuffer(3)
+        assert buf.push(10.0, {"timestamp": 10.0, "v": "a"}) is None
+        assert buf.push(12.0, {"timestamp": 12.0, "v": "b"}) is None
+        out = buf.push(20.0, {"timestamp": 20.0, "v": "c"})
+        assert out is not None
+        assert out["timestamp"] == 12.0  # median([10, 12, 20])
+        assert out["v"] == "b"  # middle frame's payload
+
+    def test_miss_clears(self):
+        buf = screenspace._ConsecutiveBuffer(3)
+        assert buf.push(0.0, {"timestamp": 0.0}) is None
+        assert buf.push(1.0, {"timestamp": 1.0}) is None
+        buf.reset()
+        # Only two matches accumulate after the reset, so nothing emits.
+        assert buf.push(2.0, {"timestamp": 2.0}) is None
+        assert buf.push(3.0, {"timestamp": 3.0}) is None
+
+    def test_size_floor_of_one(self):
+        # 0 / negative sizes clamp to 1 (passthrough behavior).
+        buf = screenspace._ConsecutiveBuffer(0)
+        assert buf.push(7.0, {"timestamp": 7.0}) is not None
+
+
+def test_static_skip_uses_config():
+    """The static-frame-skip sites reference the config constant, not a 2.0 literal."""
+    src = Path(screenspace.__file__).read_text(encoding="utf-8")
+    assert src.count("config.SCREENSPACE_STATIC_FRAME_SKIP_THRESHOLD") >= 4
+    assert "< 2.0" not in src
 
 
 class TestScanNumbers:
