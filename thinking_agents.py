@@ -22,11 +22,14 @@ Adding a new agent is a matter of writing a ``run`` callable, defining an
 from __future__ import annotations
 
 import bisect
+import json
 import re
 import threading
+from datetime import datetime, timezone
 from typing import Any, Callable, TypedDict
 
 import config
+import friction
 import ollama_client
 import utils
 
@@ -346,6 +349,243 @@ def _run_citations(
 
 
 # ---------------------------------------------------------------------------
+# Friction agent (Pass 3)
+# ---------------------------------------------------------------------------
+
+_FRICTION_SYSTEM = (
+    "You analyze UX research session transcripts for moments of friction — "
+    "points where the participant struggled, hesitated, got confused, or showed "
+    "frustration. You respond with a JSON array only."
+)
+
+_FRICTION_PROMPT = """\
+Session summary:
+{summary}
+
+Candidate segments (pre-filtered by automated heuristics; each line is \
+"[segment_id] (timestamp) text"):
+{segments}
+
+Friction categories: hesitation, confusion, frustration, surprise, \
+self_correction, help_seeking.
+
+Return EXACTLY {limit} moments where the participant most clearly shows friction.
+Each moment may span 1-3 contiguous segment IDs taken from the candidate list above.
+
+Output a JSON array only — no prose, no markdown fences, no <think> blocks:
+[
+  {{"segment_ids": ["P01:7", "P01:8"], "category": "frustration",
+    "rationale": "Participant repeatedly tried to find the save button", "score": 0.85}}
+]"""
+
+_MAX_FRICTION_SUMMARY_CHARS = 2000  # cap summary context fed to the friction prompt
+
+
+def _extract_json_array(text: str) -> list[Any]:
+    """Best-effort extraction of the first JSON array from a model response.
+
+    Qwen sometimes wraps JSON in prose, ``<think>`` blocks, or markdown fences
+    despite "JSON only" instructions. Strips think-blocks, tries a fenced block,
+    then scans for the first ``[`` that ``raw_decode`` can parse into a list.
+    Returns ``[]`` if nothing parses.
+    """
+    if not text:
+        return []
+    cleaned = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
+
+    fence = re.search(r"```(?:json)?\s*(\[.*?\])\s*```", cleaned, re.DOTALL)
+    if fence:
+        try:
+            data = json.loads(fence.group(1))
+            if isinstance(data, list):
+                return data
+        except json.JSONDecodeError:
+            pass
+
+    decoder = json.JSONDecoder()
+    start = cleaned.find("[")
+    while start != -1:
+        try:
+            data, _ = decoder.raw_decode(cleaned[start:])
+            if isinstance(data, list):
+                return data
+        except json.JSONDecodeError:
+            pass
+        start = cleaned.find("[", start + 1)
+    return []
+
+
+def _format_friction_candidates(
+    segments: list[dict[str, Any]], candidates: list[dict[str, Any]]
+) -> str:
+    """Render candidates plus ±1 context segment as ``[id] (M:SS) text`` lines.
+
+    Context segments are merged into a single ordered, de-duplicated block so
+    adjacent candidates don't repeat lines.
+    """
+    id_to_idx = {seg.get("id"): i for i, seg in enumerate(segments)}
+    include: set[int] = set()
+    for cand in candidates:
+        idx = id_to_idx.get(cand.get("id"))
+        if idx is None:
+            continue
+        for j in (idx - 1, idx, idx + 1):
+            if 0 <= j < len(segments):
+                include.add(j)
+
+    lines: list[str] = []
+    for j in sorted(include):
+        seg = segments[j]
+        text = (seg.get("text") or "").strip()
+        if not text:
+            continue
+        ts = utils.seconds_to_timestamp(int(seg.get("start", 0)))
+        sid = seg.get("id") or str(j)
+        lines.append(f"[{sid}] ({ts}) {text}")
+    return "\n".join(lines)
+
+
+def _parse_friction_response(response: str) -> list[dict[str, Any]]:
+    """Parse the model's JSON array into normalized moment dicts.
+
+    Defensive: tolerates wrapping prose and extra fields, coerces a single
+    ``segment_ids`` string into a list, normalizes the category key, and clamps
+    score to [0, 1]. Drops entries without usable segment IDs.
+    """
+    moments: list[dict[str, Any]] = []
+    for item in _extract_json_array(response):
+        if not isinstance(item, dict):
+            continue
+        seg_ids = item.get("segment_ids")
+        if isinstance(seg_ids, str):
+            seg_ids = [seg_ids]
+        if not isinstance(seg_ids, list):
+            continue
+        seg_ids = [str(s) for s in seg_ids if s]
+        if not seg_ids:
+            continue
+        category = (
+            str(item.get("category", ""))
+            .strip()
+            .lower()
+            .replace("-", "_")
+            .replace(" ", "_")
+        )
+        try:
+            score = float(item.get("score", 0.0))
+        except (TypeError, ValueError):
+            score = 0.0
+        moments.append(
+            {
+                "segment_ids": seg_ids,
+                "category": category,
+                "rationale": str(item.get("rationale", "")).strip(),
+                "score": round(max(0.0, min(1.0, score)), 4),
+            }
+        )
+    return moments
+
+
+def find_friction_moments(
+    summary: str,
+    segments: list[dict[str, Any]],
+    candidates: list[dict[str, Any]],
+    *,
+    model: str | None = None,
+    cancel_event: threading.Event | None = None,
+) -> list[dict[str, Any]]:
+    """Refine programmatic candidates into a short list of friction moments.
+
+    Sends the session summary plus candidate segments (with context) to Ollama
+    and parses the JSON response. Returns an empty list on no candidates, model
+    failure, or a response that yields no valid moments (the programmatic scores
+    still stand on their own). If *cancel_event* fires during the call, the
+    request aborts and ``[]`` is returned.
+    """
+    if not candidates:
+        return []
+    if model is None:
+        model = config.OLLAMA_FRICTION_MODEL
+
+    block = _format_friction_candidates(segments, candidates)
+    if not block:
+        return []
+
+    prompt = _FRICTION_PROMPT.format(
+        summary=_truncate_middle(summary, _MAX_FRICTION_SUMMARY_CHARS),
+        segments=block,
+        limit=config.FRICTION_MOMENT_LIMIT,
+    )
+    utils.verbose_print(
+        f"Detecting friction over {len(candidates)} candidate segments "
+        f"with model {model}"
+    )
+    response = ollama_client.generate(
+        prompt,
+        model=model,
+        system=_FRICTION_SYSTEM,
+        think=False,
+        cancel_event=cancel_event,
+    )
+    if not response:
+        return []
+    moments = _parse_friction_response(response)
+    if not moments:
+        utils.warning_print("Friction analysis returned no parseable moments")
+    return moments[: config.FRICTION_MOMENT_LIMIT]
+
+
+def _segments_duration(segments: list[dict[str, Any]]) -> float:
+    """Return the transcript duration (largest segment end time), or 0.0."""
+    end = 0.0
+    for seg in segments:
+        try:
+            end = max(end, float(seg.get("end", 0.0)))
+        except (TypeError, ValueError):
+            continue
+    return end
+
+
+def _run_friction(
+    entry: dict[str, Any], cancel_event: threading.Event | None
+) -> dict[str, Any] | None:
+    """Assemble the complete friction result: programmatic scores + LLM moments.
+
+    Returns the full dict stored under ``source_transcripts[pid].friction`` (the
+    orchestrator assigns it wholesale — no partial writes), or ``None`` when
+    there is no transcript/summary or the run was cancelled.
+    """
+    segments = entry.get("segments") or []
+    summary = entry.get("summary") or ""
+    if not segments or not summary:
+        return None
+
+    model = config.OLLAMA_FRICTION_MODEL
+    scored = friction.score_segments(segments)
+    stats = friction.compute_stats(scored, _segments_duration(segments))
+    candidates = friction.select_candidates(scored, config.FRICTION_CANDIDATE_LIMIT)
+
+    if cancel_event is not None and cancel_event.is_set():
+        return None
+
+    moments = find_friction_moments(
+        summary, segments, candidates, model=model, cancel_event=cancel_event
+    )
+
+    if cancel_event is not None and cancel_event.is_set():
+        return None
+
+    return {
+        "segments": scored,
+        "moments": moments,
+        "stats": stats,
+        "computed_at": datetime.now(timezone.utc).isoformat(),
+        "model": model,
+        "stale": False,
+    }
+
+
+# ---------------------------------------------------------------------------
 # Registry
 # ---------------------------------------------------------------------------
 
@@ -369,6 +609,15 @@ AGENTS: list[Agent] = [
         depends_on=["summary"],
         thread_name_prefix="citations",
         run=_run_citations,
+    ),
+    Agent(
+        key="friction",
+        enabled_config_key="OLLAMA_FRICTION_ENABLED",
+        model_config_key="OLLAMA_FRICTION_MODEL",
+        manifest_field="friction",
+        depends_on=["summary"],
+        thread_name_prefix="friction",
+        run=_run_friction,
     ),
 ]
 

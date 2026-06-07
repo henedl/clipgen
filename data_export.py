@@ -63,6 +63,24 @@ _TRANSCRIPT_SEGMENT_BASE_COLS = (
     "mark_labels",
 )
 
+_FRICTION_MOMENT_COLS = (
+    "participant",
+    "segment_ids",
+    "category",
+    "rationale",
+    "score",
+    "model",
+    "computed_at",
+)
+
+_FRICTION_SEGMENT_COLS = (
+    "participant",
+    "segment_id",
+    "score",
+    "categories",
+    "markers",
+)
+
 
 # ---- Helpers ------------------------------------------------------------
 
@@ -224,6 +242,68 @@ def build_transcript_segments(manifest: dict[str, Any]) -> list[dict[str, Any]]:
     return records
 
 
+def build_friction_moments(manifest: dict[str, Any]) -> list[dict[str, Any]]:
+    """One row per LLM-detected friction moment, across all participants."""
+    source = manifest.get("source_transcripts", {}) or {}
+    records: list[dict[str, Any]] = []
+    for participant_id, entry in source.items():
+        if not isinstance(entry, dict):
+            continue
+        friction_data = entry.get("friction")
+        if not isinstance(friction_data, dict):
+            continue
+        computed_at = friction_data.get("computed_at", "")
+        model = friction_data.get("model", "")
+        for moment in friction_data.get("moments", []) or []:
+            if not isinstance(moment, dict):
+                continue
+            records.append(
+                {
+                    "participant": participant_id,
+                    "segment_ids": [str(s) for s in (moment.get("segment_ids") or [])],
+                    "category": moment.get("category", ""),
+                    "rationale": moment.get("rationale", ""),
+                    "score": _scalar_safe(moment.get("score", 0.0)),
+                    "model": model,
+                    "computed_at": computed_at,
+                }
+            )
+    return records
+
+
+def build_friction_segments(manifest: dict[str, Any]) -> list[dict[str, Any]]:
+    """One row per scored segment with friction (score > 0), for reproducibility.
+
+    Zero-score segments are omitted to keep the export lean; a consumer can
+    reconstruct positional order and treat missing segments as 0 via the
+    ``participant:index`` segment IDs.
+    """
+    source = manifest.get("source_transcripts", {}) or {}
+    records: list[dict[str, Any]] = []
+    for participant_id, entry in source.items():
+        if not isinstance(entry, dict):
+            continue
+        friction_data = entry.get("friction")
+        if not isinstance(friction_data, dict):
+            continue
+        for seg in friction_data.get("segments", []) or []:
+            if not isinstance(seg, dict):
+                continue
+            score = seg.get("score", 0.0)
+            if not score:
+                continue
+            records.append(
+                {
+                    "participant": participant_id,
+                    "segment_id": seg.get("id", ""),
+                    "score": _scalar_safe(score),
+                    "categories": list(seg.get("categories") or []),
+                    "markers": list(seg.get("markers") or []),
+                }
+            )
+    return records
+
+
 # ---- Serialization ------------------------------------------------------
 
 
@@ -277,6 +357,18 @@ _SURFACES: tuple[tuple[str, _SurfaceBuilder, str, tuple[str, ...]], ...] = (
         build_transcript_segments,
         config.TRANSCRIPTS_MANIFEST_FILENAME,
         _TRANSCRIPT_SEGMENT_BASE_COLS,
+    ),
+    (
+        "friction_moments",
+        build_friction_moments,
+        config.TRANSCRIPTS_MANIFEST_FILENAME,
+        _FRICTION_MOMENT_COLS,
+    ),
+    (
+        "friction_segments",
+        build_friction_segments,
+        config.TRANSCRIPTS_MANIFEST_FILENAME,
+        _FRICTION_SEGMENT_COLS,
     ),
 )
 
@@ -384,6 +476,8 @@ def run_cli_export() -> int:
 __all__ = [
     "build_screenspace_events",
     "build_transcript_segments",
+    "build_friction_moments",
+    "build_friction_segments",
     "to_csv",
     "to_json",
     "write_export_bundle",

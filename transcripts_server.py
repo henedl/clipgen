@@ -140,6 +140,19 @@ def _step_state_agent(pid: str, entry: dict[str, Any], agent_key: str) -> str:
     return "idle"
 
 
+def _mark_friction_stale(entry: dict[str, Any]) -> None:
+    """Flag a participant's friction analysis stale after a transcript/summary edit.
+
+    Friction's programmatic scores and LLM prompt both depend on segment text and
+    the session summary, so any edit invalidates them. We flag rather than
+    recompute — the user re-runs friction explicitly (no auto-rerun). Callers must
+    hold ``_manifest_lock``.
+    """
+    fr = entry.get("friction")
+    if isinstance(fr, dict):
+        fr["stale"] = True
+
+
 def _transcribe_prewarm_setting() -> str:
     """Return a validated TRANSCRIBE_PREWARM value for API clients."""
     v = getattr(config, "TRANSCRIBE_PREWARM", "queue_open")
@@ -194,6 +207,7 @@ def api_participants() -> FlaskResponse:
                     "transcription": _step_state_transcription(entry),
                     "summary": _step_state_agent(pid, entry, "summary"),
                     "citations": _step_state_agent(pid, entry, "citations"),
+                    "friction": _step_state_agent(pid, entry, "friction"),
                 },
             }
             if has_transcript:
@@ -325,6 +339,7 @@ def api_edit_segment(participant: str) -> FlaskResponse:
             "created": datetime.now(timezone.utc).isoformat(),
         }
         _manifest.setdefault("corrections", []).append(correction)
+        _mark_friction_stale(entry)  # edited segment text invalidates friction scores
 
     _persist_manifest()
     return jsonify({"ok": True, "correction": correction})
@@ -569,6 +584,7 @@ def api_summary_save(participant: str) -> FlaskResponse:
             return jsonify({"ok": False, "error": "Participant not found"}), 404
         entry["summary"] = data["summary"].strip()
         entry.pop("citations", None)  # invalidate citations on edit
+        _mark_friction_stale(entry)  # summary text feeds the friction prompt
     _persist_manifest()
     return jsonify({"ok": True})
 
@@ -622,6 +638,65 @@ def api_citations_stop(participant: str) -> FlaskResponse:
     """
     if _orchestrator.stop("citations", participant):
         model = _agent_model("citations")
+        if model:
+            _schedule_model_unload(model)
+    return jsonify({"ok": True, "running": False})
+
+
+# ---- Friction ----
+
+
+@transcripts_bp.route("/api/friction/<participant>")
+def api_friction(participant: str) -> FlaskResponse:
+    """Return friction analysis for a participant, or generation status.
+
+    The returned object carries its own ``stale`` flag (set after segment/summary
+    edits) so the UI can prompt for a re-run without a separate request.
+    """
+    with _manifest_lock:
+        entry = _manifest.get("source_transcripts", {}).get(participant)
+        if not entry:
+            return jsonify({"ok": False}), 404
+        friction_data = entry.get("friction")
+    if friction_data:
+        return jsonify({"ok": True, "friction": friction_data})
+    if _orchestrator.is_generating(participant, "friction"):
+        return jsonify({"ok": False, "generating": True})
+    return jsonify({"ok": False}), 404
+
+
+@transcripts_bp.route("/api/friction/<participant>/regenerate", methods=["POST"])
+def api_friction_regenerate(participant: str) -> FlaskResponse:
+    """Clear friction and re-trigger analysis (Pass 3).
+
+    Manual trigger: runs even when config.OLLAMA_FRICTION_ENABLED is False so the
+    frontend's per-participant controls can force a run. Requires a summary.
+    """
+    if _orchestrator.is_generating(participant, "friction"):
+        return jsonify({"ok": True, "generating": True})
+    with _manifest_lock:
+        entry = _manifest.get("source_transcripts", {}).get(participant)
+        if not entry or not entry.get("summary") or not entry.get("segments"):
+            return jsonify(
+                {"ok": False, "error": "No summary or transcript found"}
+            ), 404
+        entry.pop("friction", None)
+    _persist_manifest()
+    _orchestrator.run_agent("friction", participant, force=True)
+    return jsonify({"ok": True, "generating": True})
+
+
+@transcripts_bp.route("/api/friction/<participant>/stop", methods=["POST"])
+def api_friction_stop(participant: str) -> FlaskResponse:
+    """Abort an in-flight friction run.
+
+    Sets the cancel event so the streaming Ollama call closes its response
+    promptly, freeing the model for another run. The UI flips to idle
+    immediately. After a short delay, the model is unloaded from memory if no new
+    run has started in the meantime.
+    """
+    if _orchestrator.stop("friction", participant):
+        model = _agent_model("friction")
         if model:
             _schedule_model_unload(model)
     return jsonify({"ok": True, "running": False})

@@ -271,6 +271,8 @@ TRANSCRIBE_CONDITION_ON_PREVIOUS_TEXT: bool = (
 # When to pre-load faster-whisper in the Transcripts web UI: off, queue_open (open Queue panel), page_load (after participants load).
 TRANSCRIBE_PREWARM: str = "queue_open"
 # Mark categories shown in the Transcripts mark popover. Each value is {label, color}.
+# "friction" is a single bucket for all friction-detection marks; the specific
+# friction type lives in each mark's label (e.g. "Friction · frustration").
 MARK_CATEGORIES: dict[str, dict[str, str]] = {
     "pain_point": {"label": "Pain Point", "color": "#dc2626"},
     "delight": {"label": "Delight", "color": "#16a34a"},
@@ -278,6 +280,7 @@ MARK_CATEGORIES: dict[str, dict[str, str]] = {
     "insight": {"label": "Insight", "color": "#f97316"},
     "task": {"label": "Task Issue", "color": "#8b5cf6"},
     "bookmark": {"label": "Bookmark", "color": "#0891b2"},
+    "friction": {"label": "Friction", "color": "#ea580c"},
 }
 
 # ── Ollama (Local AI) ───────────────────────────────────────────────
@@ -287,9 +290,31 @@ OLLAMA_SUMMARY_ENABLED: bool = (
 OLLAMA_CITATIONS_ENABLED: bool = (
     True  # auto-generate citation links via Ollama after the summary completes
 )
+OLLAMA_FRICTION_ENABLED: bool = (
+    False  # auto-detect friction moments via Ollama after the summary completes
+)
 OLLAMA_SUMMARY_MODEL: str = "qwen3.5:9b"  # model for transcript summaries and citations
+OLLAMA_FRICTION_MODEL: str = (
+    OLLAMA_SUMMARY_MODEL  # friction agent model; override for a smaller/faster model
+)
 OLLAMA_BASE_URL: str = "http://localhost:11434"  # Ollama server address
 OLLAMA_UNLOAD_DELAY_SECONDS: float = 15.0  # after Stop, evict the model from memory if no new run starts within this delay
+
+# ── Friction detection ───────────────────────────────────────────────
+# Ordered category keys → display labels. Single source of truth, mirrored to
+# the frontend via utils.get_frontend_config(). The programmatic scorer in
+# friction.py keys its patterns/weights by the same keys (enforced by tests).
+FRICTION_CATEGORIES: dict[str, str] = {
+    "hesitation": "Hesitation",
+    "confusion": "Confusion",
+    "frustration": "Frustration",
+    "surprise": "Surprise",
+    "self_correction": "Self-correction",
+    "help_seeking": "Help-seeking",
+}
+FRICTION_CANDIDATE_LIMIT: int = 15  # top-N scored segments fed to the LLM stage
+FRICTION_MOMENT_LIMIT: int = 5  # number of moments the LLM returns
+FRICTION_HEATMAP_WINDOW: int = 5  # rolling-mean window for the timeline heatmap
 
 # ── Rich Output ──────────────────────────────────────────────────────
 RICH_COLORS: bool = True  # Enable/disable colored output (set False for piped output)

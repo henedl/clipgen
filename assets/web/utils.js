@@ -778,6 +778,7 @@ var MARK_CATEGORIES = {
   insight:    { label: "Insight",    color: "#f97316" },
   task:       { label: "Task Issue", color: "#8b5cf6" },
   bookmark:   { label: "Bookmark",   color: "#0891b2" },
+  friction:   { label: "Friction",   color: "#ea580c" },
 };
 
 function setMarkCategories(next) {
