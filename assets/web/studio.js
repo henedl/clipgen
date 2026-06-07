@@ -4210,9 +4210,7 @@
   var XREF_ICON_BASE = "../screenspace/icons/";
 
   function xrefBadgeIcon(iconName) {
-    var span = el("span", "xref-badge-icon");
-    applyMaskIcon(span, 'url("' + XREF_ICON_BASE + iconName + '.svg")');
-    return span;
+    return iconMaskSpan(iconName, { className: "xref-badge-icon", basePath: XREF_ICON_BASE });
   }
 
   // selfBadge: optional { icon, color, title } to prepend as the "self" source badge
@@ -5082,20 +5080,11 @@
     });
   }
 
-  // Apply mask-image to every static [data-icon] element (mirrors what
-  // createBtn does for primitives — needed for the bottom-strip toolbar
-  // buttons that are written as static HTML).
-  function applyDataIconMasks() {
-    var nodes = qsa("[data-icon]");
-    for (var i = 0; i < nodes.length; i++) {
-      var name = nodes[i].dataset.icon;
-      if (!name) continue;
-      applyMaskIcon(nodes[i], 'url("icons/' + name + '.svg")');
-    }
-  }
-
   document.addEventListener("DOMContentLoaded", function () {
-    applyDataIconMasks();
+    // Apply mask-image to every static [data-icon] element (mirrors what
+    // createBtn does for primitives — needed for the bottom-strip toolbar
+    // buttons that are written as static HTML).
+    applyIconMasksIn(document);
     setActiveTabAttr(state.activePreviewTab);
     bindSidebarToggle();
     initThemeToggle();

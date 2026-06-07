@@ -34,10 +34,6 @@
   var beforeOpenCallbacks = [];
   var isReady = false;
 
-  function svgMask(name) {
-    return maskIconStyle('url("icons/' + name + '.svg")');
-  }
-
   function build() {
     var mount = document.querySelector("topnav-mount");
     if (!mount) return;
@@ -130,7 +126,7 @@
     startBtn.setAttribute("aria-label", "Start panel");
     var startIcon = document.createElement("span");
     startIcon.className = "topnav-icon";
-    startIcon.style.cssText = svgMask("home");
+    startIcon.style.cssText = iconMaskStyle("home");
     startBtn.appendChild(startIcon);
     right.appendChild(startBtn);
 
@@ -143,7 +139,7 @@
     logBtn.setAttribute("aria-label", "Artifact Log");
     var logIcon = document.createElement("span");
     logIcon.className = "topnav-icon";
-    logIcon.style.cssText = svgMask("list-bullet");
+    logIcon.style.cssText = iconMaskStyle("list-bullet");
     logBtn.appendChild(logIcon);
     right.appendChild(logBtn);
 
@@ -156,7 +152,7 @@
     settingsBtn.setAttribute("aria-label", "Settings");
     var settingsIcon = document.createElement("span");
     settingsIcon.className = "topnav-icon";
-    settingsIcon.style.cssText = svgMask("cog-6-tooth");
+    settingsIcon.style.cssText = iconMaskStyle("cog-6-tooth");
     settingsBtn.appendChild(settingsIcon);
     right.appendChild(settingsBtn);
 
@@ -173,7 +169,7 @@
       tooltipBtn.setAttribute("aria-pressed", "true");
       var tooltipIcon = document.createElement("span");
       tooltipIcon.className = "topnav-icon";
-      tooltipIcon.style.cssText = svgMask("chat-bubble-left-ellipsis");
+      tooltipIcon.style.cssText = iconMaskStyle("chat-bubble-left-ellipsis");
       tooltipBtn.appendChild(tooltipIcon);
       right.appendChild(tooltipBtn);
     }
@@ -286,7 +282,7 @@
     if (item.icon) {
       var ic = document.createElement("span");
       ic.className = "topnav-icon";
-      ic.style.cssText = svgMask(item.icon);
+      ic.style.cssText = iconMaskStyle(item.icon);
       btn.appendChild(ic);
     }
     var label = document.createElement("span");

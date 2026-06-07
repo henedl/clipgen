@@ -42,9 +42,10 @@
   // assets/icons/ (no extension); `sizeClass` is an optional .ss-icon
   // modifier (e.g. "ss-icon--sm"). See .ss-icon family in screenspace.css.
   function iconSpan(name, sizeClass) {
-    var span = el("span", "ss-icon" + (sizeClass ? " " + sizeClass : ""));
-    applyMaskIcon(span, 'url("/screenspace/icons/' + name + '.svg")');
-    return span;
+    return iconMaskSpan(name, {
+      className: "ss-icon" + (sizeClass ? " " + sizeClass : ""),
+      basePath: "/screenspace/icons/",
+    });
   }
 
   var TIMELINE_CANVAS_HEIGHT = 64;
@@ -494,7 +495,7 @@
 
   function buildFullFrameIcon() {
     var icon = el("span", "run-picker-fullframe-icon");
-    applyMaskIcon(icon, 'url("/screenspace/icons/arrows-pointing-out.svg")');
+    applyIconMask(icon, "arrows-pointing-out", "/screenspace/icons/");
     return icon;
   }
 
@@ -761,7 +762,7 @@
     btn.className = "scan-toggle-btn";
 
     var icon = el("span", "scan-toggle-icon");
-    applyMaskIcon(icon, 'url("/screenspace/icons/chevron-double-right.svg")');
+    applyIconMask(icon, "chevron-double-right", "/screenspace/icons/");
     btn.appendChild(icon);
 
     function updateState() {
@@ -3154,7 +3155,7 @@
     slot.setAttribute("data-tooltip", "Interval (seconds)");
     var iconWrap = el("div", "interval-icon");
     var iconMask = el("span", "interval-icon-mask");
-    applyMaskIcon(iconMask, 'url("/screenspace/icons/clock.svg")');
+    applyIconMask(iconMask, "clock", "/screenspace/icons/");
     iconWrap.appendChild(iconMask);
     slot.appendChild(iconWrap);
     var ctrl = el("div", "param-control");
@@ -6032,7 +6033,7 @@
       badge.title = task.type;
       var typeIconEl = el("span", "task-card-type-icon");
       var iconFile = TASK_TYPE_ICON_FILES[task.type] || "squares-2x2";
-      applyMaskIcon(typeIconEl, 'url("/screenspace/icons/' + iconFile + '.svg")');
+      applyIconMask(typeIconEl, iconFile, "/screenspace/icons/");
       badge.appendChild(typeIconEl);
       card.appendChild(badge);
 
@@ -6040,7 +6041,7 @@
       if ((task.parameters || {}).scan_mode === "fast") {
         var fb = el("span", "task-fast-badge");
         var bi = el("span", "task-fast-badge-icon");
-        applyMaskIcon(bi, 'url("/screenspace/icons/chevron-double-right.svg")');
+        applyIconMask(bi, "chevron-double-right", "/screenspace/icons/");
         fb.appendChild(bi);
         fb.appendChild(document.createTextNode("Fast"));
         card.appendChild(fb);
@@ -6450,7 +6451,7 @@
       fastLabel.classList.remove("hidden");
       fastLabel.innerHTML = "";
       var fIcon = el("span", "fast-scan-label-icon");
-      applyMaskIcon(fIcon, 'url("/screenspace/icons/chevron-double-right.svg")');
+      applyIconMask(fIcon, "chevron-double-right", "/screenspace/icons/");
       fastLabel.appendChild(fIcon);
       fastLabel.appendChild(document.createTextNode("Fast scan results"));
       var rerunBtn = el("button", "ss-btn ss-btn-sm fast-scan-rerun-btn", "Re-Run Normal");

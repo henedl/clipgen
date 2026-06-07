@@ -201,6 +201,50 @@ var maskIconStyle = function (urlValue) {
   return "mask-image:" + urlValue + ";-webkit-mask-image:" + urlValue + ";";
 };
 
+// ---- Unified icon-mask helper family ----
+//
+// All build on applyMaskIcon / maskIconStyle above. `name` is the basename of a
+// file in an icons/ directory (no extension); `basePath` defaults to "icons/"
+// (the common relative case). Pages with a different icon route pass their own
+// (e.g. "/screenspace/icons/", "../screenspace/icons/").
+
+// Full CSS url(...) string for an icon basename.
+var iconMaskUrl = function (name, basePath) {
+  return 'url("' + (basePath || "icons/") + name + '.svg")';
+};
+
+// Inline-style string for embedding in HTML strings.
+var iconMaskStyle = function (name, basePath) {
+  return maskIconStyle(iconMaskUrl(name, basePath));
+};
+
+// Apply mask-image to an existing element from an icon basename.
+var applyIconMask = function (el, name, basePath) {
+  applyMaskIcon(el, iconMaskUrl(name, basePath));
+};
+
+// Build a <span> with the mask applied. opts = { className, basePath }.
+var iconMaskSpan = function (name, opts) {
+  opts = opts || {};
+  var span = el("span", opts.className || "");
+  applyMaskIcon(span, iconMaskUrl(name, opts.basePath));
+  return span;
+};
+
+// Apply mask-image to every matching element within `scope`.
+// opts = { selector, basePath }; selector defaults to "[data-icon]" and the
+// icon name is read from each node's data-icon attribute.
+var applyIconMasksIn = function (scope, opts) {
+  opts = opts || {};
+  var root = scope || document;
+  var nodes = root.querySelectorAll(opts.selector || "[data-icon]");
+  for (var i = 0; i < nodes.length; i++) {
+    var name = nodes[i].getAttribute("data-icon");
+    if (!name) continue;
+    applyIconMask(nodes[i], name, opts.basePath);
+  }
+};
+
 // ---- Hover tooltips (dark pill, pairs with .cg-tooltip in tokens.css) ----
 
 var createTooltip = function (opts) {

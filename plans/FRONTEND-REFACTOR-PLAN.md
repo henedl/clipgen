@@ -215,9 +215,9 @@ Use this when executing waves; check items in PR descriptions.
 
 ### Wave 3
 
-- [ ] B3 Unified icon helper
-- [ ] C4 SVG → mask (viewer, Screenspace toolbar)
-- [ ] C5 Token sweep on files touched in same PRs
+- [x] B3 Unified icon helper — `iconMaskUrl`/`iconMaskStyle`/`applyIconMask`/`iconMaskSpan`/`applyIconMasksIn` in `utils.js`; `svgMask`, `iconSpan`, `xrefBadgeIcon`, `applyDataIconMasks`, `applyIcons`, and inline calls collapse onto them
+- [~] C4 SVG → mask — **Screenspace toolbar done** (11 `.wf-tab` + info + Run now reuse the `.ss-task-icon` family); **viewer deferred** (exported viewer's inline SVG / data-URI are intentional offline fallbacks — no `/icons/` route in exports)
+- [~] C5 Token sweep — opportunistic on touched file only: `.wf-tab` icon size `12px` → `var(--icon-size-xs)` in `screenspace.css`
 
 ### Wave 4
 

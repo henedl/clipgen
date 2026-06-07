@@ -1079,11 +1079,11 @@
               var et = xref.screenspaceEvents[ei].event_type || xref.screenspaceEvents[ei].detector;
               if (!evSeen[et]) { evSeen[et] = true; evTypes.push(et); }
             }
-            html += '<span class="segment-xref-badge" style="background:' + XREF_BADGES.screenspace.color + '" title="' + escapeHtml(evTypes.join(", ")) + '"><span class="xref-badge-icon" style="' + maskIconStyle("url(icons/" + XREF_BADGES.screenspace.icon + ".svg)") + '"></span></span>';
+            html += '<span class="segment-xref-badge" style="background:' + XREF_BADGES.screenspace.color + '" title="' + escapeHtml(evTypes.join(", ")) + '"><span class="xref-badge-icon" style="' + iconMaskStyle(XREF_BADGES.screenspace.icon) + '"></span></span>';
           }
           if (xref.sheetObservations.length > 0) {
             var obsTitle = xref.sheetObservations[0].observation;
-            html += '<span class="segment-xref-badge" style="background:' + XREF_BADGES.sheet.color + '" title="' + escapeHtml(obsTitle) + '"><span class="xref-badge-icon" style="' + maskIconStyle("url(icons/" + XREF_BADGES.sheet.icon + ".svg)") + '"></span></span>';
+            html += '<span class="segment-xref-badge" style="background:' + XREF_BADGES.sheet.color + '" title="' + escapeHtml(obsTitle) + '"><span class="xref-badge-icon" style="' + iconMaskStyle(XREF_BADGES.sheet.icon) + '"></span></span>';
           }
           html += '</span>';
         }
