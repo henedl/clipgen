@@ -149,16 +149,38 @@ class TestFindFrictionMoments:
         result = thinking_agents.find_friction_moments(
             "summary", segments, [{"id": "P01:1"}]
         )
+        assert result is not None
         assert len(result) == 2
 
     @patch("thinking_agents.ollama_client.generate")
-    def test_returns_empty_when_generate_fails(self, mock_gen):
+    def test_returns_none_when_generate_fails(self, mock_gen):
+        # None (model failure) is distinct from [] (ran, no moments) so the
+        # caller can surface the failure instead of pretending it computed.
         mock_gen.return_value = None
         segments = [{"id": "P01:1", "start": 5, "text": "um where is it"}]
         result = thinking_agents.find_friction_moments(
             "summary", segments, [{"id": "P01:1"}]
         )
+        assert result is None
+
+    @patch("thinking_agents.ollama_client.generate")
+    def test_returns_empty_list_when_model_runs_but_finds_nothing(self, mock_gen):
+        mock_gen.return_value = "[]"
+        segments = [{"id": "P01:1", "start": 5, "text": "um where is it"}]
+        result = thinking_agents.find_friction_moments(
+            "summary", segments, [{"id": "P01:1"}]
+        )
         assert result == []
+
+    def test_no_candidates_returns_empty_not_none(self):
+        assert thinking_agents.find_friction_moments("summary", [], []) == []
+
+    def test_friction_model_defaults_to_summary_model(self, monkeypatch):
+        monkeypatch.setattr(config, "OLLAMA_FRICTION_MODEL", "")
+        monkeypatch.setattr(config, "OLLAMA_SUMMARY_MODEL", "llama3.2")
+        assert thinking_agents.friction_model() == "llama3.2"
+        monkeypatch.setattr(config, "OLLAMA_FRICTION_MODEL", "tiny:1b")
+        assert thinking_agents.friction_model() == "tiny:1b"
 
     @patch("thinking_agents.ollama_client.generate")
     def test_passes_cancel_event_and_model(self, mock_gen):
@@ -216,14 +238,44 @@ class TestRunFriction:
         )
         result = thinking_agents._run_friction(self._entry(), None)
         assert result is not None
-        assert {"segments", "moments", "stats", "computed_at", "model", "stale"} <= set(
-            result
-        )
+        assert {
+            "segments",
+            "moments",
+            "stats",
+            "computed_at",
+            "model",
+            "llm_ok",
+            "stale",
+        } <= set(result)
         assert result["stale"] is False
-        assert result["model"] == config.OLLAMA_FRICTION_MODEL
+        assert result["llm_ok"] is True
+        assert result["model"] == thinking_agents.friction_model()
         assert len(result["segments"]) == 3
         assert result["moments"][0]["category"] == "frustration"
         assert "by_category" in result["stats"]
+
+    @patch("thinking_agents.ollama_client.generate")
+    def test_llm_failure_persists_scores_with_llm_ok_false(self, mock_gen):
+        # Model unavailable (e.g. wrong model → HTTP 404) returns None from
+        # generate; the friction dict must still carry programmatic scores/stats
+        # but flag llm_ok=False so the UI shows the failure honestly.
+        mock_gen.return_value = None
+        result = thinking_agents._run_friction(self._entry(), None)
+        assert result is not None
+        assert result["llm_ok"] is False
+        assert result["moments"] == []
+        assert len(result["segments"]) == 3
+        assert "by_category" in result["stats"]
+
+    @patch("thinking_agents.ollama_client.generate")
+    def test_run_friction_uses_resolved_model(self, mock_gen, monkeypatch):
+        monkeypatch.setattr(config, "OLLAMA_FRICTION_MODEL", "")
+        monkeypatch.setattr(config, "OLLAMA_SUMMARY_MODEL", "llama3.2")
+        mock_gen.return_value = "[]"
+        result = thinking_agents._run_friction(self._entry(), None)
+        assert result is not None
+        assert result["model"] == "llama3.2"
+        assert mock_gen.call_args[1]["model"] == "llama3.2"
 
     @patch("thinking_agents.ollama_client.generate")
     def test_registry_run_callable_dispatches(self, mock_gen):

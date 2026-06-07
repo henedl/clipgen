@@ -50,8 +50,10 @@ Friction detection (depends on `summary`; surfaces moments of likely interest):
 - A deterministic scorer (`friction.py`) flags hesitation / confusion / frustration /
   surprise / self-correction / help-seeking per segment; a local LLM then refines the
   top candidates into ~5 "moments".
-- Off by default. Enable auto-run after summaries with `OLLAMA_FRICTION_ENABLED = True`
-  in `config.py` (model: `OLLAMA_FRICTION_MODEL`, defaults to `OLLAMA_SUMMARY_MODEL`).
+- Off by default. Enable auto-run after summaries with `OLLAMA_FRICTION_ENABLED` (also
+  in the Studio settings **Summaries → AI Summary** tab). Friction uses the same Ollama
+  model as summaries/citations (`OLLAMA_SUMMARY_MODEL`); set `OLLAMA_FRICTION_MODEL` only
+  to pin friction to a different model (blank = follow the summary model).
 - Drive it from the **Transcripts UI**: the **Friction tab** in the analysis panel (stats,
   score/category filter, top moments, "Mark all matching") and the **friction heatmap**
   toggle on the timeline; run/re-run/stop also live in the participant pill dropdown.

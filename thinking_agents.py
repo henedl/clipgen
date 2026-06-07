@@ -486,6 +486,16 @@ def _parse_friction_response(response: str) -> list[dict[str, Any]]:
     return moments
 
 
+def friction_model() -> str:
+    """Resolve the Ollama model the friction agent should use.
+
+    Blank ``OLLAMA_FRICTION_MODEL`` means "follow the summary model", so a single
+    AI-model setting drives all three thinking agents. Set the override to pin
+    friction to a different (e.g. smaller/faster) model.
+    """
+    return config.OLLAMA_FRICTION_MODEL or config.OLLAMA_SUMMARY_MODEL
+
+
 def find_friction_moments(
     summary: str,
     segments: list[dict[str, Any]],
@@ -493,19 +503,21 @@ def find_friction_moments(
     *,
     model: str | None = None,
     cancel_event: threading.Event | None = None,
-) -> list[dict[str, Any]]:
+) -> list[dict[str, Any]] | None:
     """Refine programmatic candidates into a short list of friction moments.
 
     Sends the session summary plus candidate segments (with context) to Ollama
-    and parses the JSON response. Returns an empty list on no candidates, model
-    failure, or a response that yields no valid moments (the programmatic scores
-    still stand on their own). If *cancel_event* fires during the call, the
-    request aborts and ``[]`` is returned.
+    and parses the JSON response. Returns:
+      - a list of moments (possibly empty) when the model responded — empty means
+        it ran but found nothing,
+      - ``[]`` when there are no candidates to send,
+      - ``None`` when the model call itself failed (unavailable / wrong model /
+        cancelled), so the caller can distinguish "no moments" from "didn't run".
     """
     if not candidates:
         return []
     if model is None:
-        model = config.OLLAMA_FRICTION_MODEL
+        model = friction_model()
 
     block = _format_friction_candidates(segments, candidates)
     if not block:
@@ -528,7 +540,10 @@ def find_friction_moments(
         cancel_event=cancel_event,
     )
     if not response:
-        return []
+        utils.warning_print(
+            f"Friction moment detection failed (no response from model {model})"
+        )
+        return None
     moments = _parse_friction_response(response)
     if not moments:
         utils.warning_print("Friction analysis returned no parseable moments")
@@ -560,7 +575,7 @@ def _run_friction(
     if not segments or not summary:
         return None
 
-    model = config.OLLAMA_FRICTION_MODEL
+    model = friction_model()
     scored = friction.score_segments(segments)
     stats = friction.compute_stats(scored, _segments_duration(segments))
     candidates = friction.select_candidates(scored, config.FRICTION_CANDIDATE_LIMIT)
@@ -575,12 +590,18 @@ def _run_friction(
     if cancel_event is not None and cancel_event.is_set():
         return None
 
+    # moments is None only when the LLM call itself failed; persist the
+    # programmatic scores anyway (heatmap/stats/marks still work) but record that
+    # moment detection did not succeed so the UI can say so instead of pretending.
+    llm_ok = moments is not None
+
     return {
         "segments": scored,
-        "moments": moments,
+        "moments": moments or [],
         "stats": stats,
         "computed_at": datetime.now(timezone.utc).isoformat(),
         "model": model,
+        "llm_ok": llm_ok,
         "stale": False,
     }
 

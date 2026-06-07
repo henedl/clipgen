@@ -870,6 +870,10 @@ body {
   color: var(--color-friction);
 }
 
+.friction-status--error {
+  color: var(--sev-high);
+}
+
 .friction-header-actions {
   display: flex;
   align-items: center;

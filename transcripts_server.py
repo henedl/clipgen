@@ -115,11 +115,18 @@ def _cancel_pending_unload(model: str) -> None:
 
 
 def _agent_model(agent_key: str) -> str | None:
-    """Look up the Ollama model name configured for *agent_key*."""
+    """Look up the Ollama model name configured for *agent_key*.
+
+    A blank model knob means "inherit the summary model" (friction's default), so
+    unload scheduling targets the model the agent actually loaded.
+    """
     agent = thinking_agents.get_agent(agent_key)
     if agent is None:
         return None
-    return getattr(config, agent["model_config_key"], None)
+    model = getattr(config, agent["model_config_key"], None)
+    if not model:
+        model = getattr(config, "OLLAMA_SUMMARY_MODEL", None)
+    return model
 
 
 def _step_state_transcription(entry: dict[str, Any]) -> str:

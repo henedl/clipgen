@@ -1211,15 +1211,25 @@
     }
     if (state.frictionData) {
       var fd = state.frictionData;
-      var parts = [];
-      if (fd.stale) parts.push("Stale — segments edited since last run");
-      else parts.push("Computed " + _friendlyTimeAgo(fd.computed_at));
-      if (fd.model) parts.push(fd.model);
-      statusEl.textContent = parts.join(" · ");
-      statusEl.classList.toggle("friction-status--stale", !!fd.stale);
+      var llmFailed = fd.llm_ok === false;
+      if (llmFailed) {
+        statusEl.textContent =
+          "Moment detection failed — model unavailable" +
+          (fd.model ? " (tried " + fd.model + ")" : "") +
+          ". Showing programmatic scores; re-run with an installed model.";
+      } else if (fd.stale) {
+        statusEl.textContent = "Stale — segments edited since last run" +
+          (fd.model ? " · " + fd.model : "");
+      } else {
+        statusEl.textContent = "Computed " + _friendlyTimeAgo(fd.computed_at) +
+          (fd.model ? " · " + fd.model : "");
+      }
+      statusEl.classList.toggle("friction-status--stale", !!fd.stale && !llmFailed);
+      statusEl.classList.toggle("friction-status--error", llmFailed);
     } else {
       statusEl.textContent = depMet ? "" : "Requires a summary first.";
       statusEl.classList.remove("friction-status--stale");
+      statusEl.classList.remove("friction-status--error");
     }
   }
 
@@ -1455,9 +1465,15 @@
     if (!fd) return;
     var moments = (fd.moments || []).filter(_frictionMomentMatches);
     if (moments.length === 0) {
-      var none = el("p", "friction-moments-empty",
-        (fd.moments && fd.moments.length) ? "No moments match the current filter." : "No moments detected.");
-      el2.appendChild(none);
+      var msg;
+      if (fd.llm_ok === false) {
+        msg = "Moment detection failed — re-run with an installed Ollama model.";
+      } else if (fd.moments && fd.moments.length) {
+        msg = "No moments match the current filter.";
+      } else {
+        msg = "No moments detected.";
+      }
+      el2.appendChild(el("p", "friction-moments-empty", msg));
       return;
     }
     var frag = document.createDocumentFragment();

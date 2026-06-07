@@ -678,7 +678,9 @@ def test_friction_stop_schedules_model_unload(
     transcripts_server._orchestrator._in_flight["friction"].add(pid)
     transcripts_server._orchestrator._cancel_events["friction"][pid] = evt
     tr_client.post(f"/transcripts/api/friction/{pid}/stop")
-    assert config.OLLAMA_FRICTION_MODEL in transcripts_server._pending_model_unloads
+    # Friction inherits the summary model (OLLAMA_FRICTION_MODEL is blank by
+    # default), so the unload targets the resolved model.
+    assert thinking_agents.friction_model() in transcripts_server._pending_model_unloads
 
 
 def test_friction_not_eligible_when_disabled(

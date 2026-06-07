@@ -63,7 +63,8 @@ def test_friction_pipeline_end_to_end(mock_generate):
     categories = {m["category"] for m in result["moments"]}
     assert "frustration" in categories
     assert result["stale"] is False
-    assert result["model"] == config.OLLAMA_FRICTION_MODEL
+    assert result["llm_ok"] is True
+    assert result["model"] == thinking_agents.friction_model()
 
 
 @patch("thinking_agents.ollama_client.generate")
