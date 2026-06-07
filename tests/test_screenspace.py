@@ -1178,6 +1178,46 @@ class TestScanText:
         assert len(coalesced) == 1
         assert coalesced[0]["timestamp"] == 1.0  # median([0.0, 1.0, 2.0])
 
+    def test_require_consecutive_survives_static_frames(self, monkeypatch):
+        """Static (skipped) frames carry an active run forward instead of starving it.
+
+        The first frame matches and is OCR'd; the next two are identical to it,
+        so the static-frame-skip drops them before OCR. Carry-over keeps the
+        require_consecutive=3 run alive, so one event still emits (the old
+        behavior would have stalled at one push and emitted nothing)."""
+        base = np.full((20, 60, 3), 40, dtype=np.uint8)
+        frames = [base, base.copy(), base.copy()]  # identical → static-skip fires
+
+        reads = {"n": 0}
+
+        class _FakeReader:
+            def readtext(self_inner, _pixels, **_kwargs):
+                reads["n"] += 1
+                return [([(0, 0), (10, 0), (10, 10), (0, 10)], "hello", 0.9)]
+
+        monkeypatch.setattr(
+            screenspace, "_get_ocr_reader", lambda _langs: _FakeReader()
+        )
+        monkeypatch.setattr(screenspace, "_probe_video_meta", lambda p: (30.0, 1.0))
+
+        def fake_scan(video_path, region, interval, callback, **kwargs):
+            for i, frame in enumerate(frames):
+                callback(float(i), frame)
+
+        monkeypatch.setattr(screenspace, "scan_video_frames", fake_scan)
+
+        region = {"x": 0, "y": 0, "w": 60, "h": 20}
+        out = screenspace.scan_text(
+            "/fake.mp4",
+            region,
+            search_string="hello",
+            fuzzy_threshold=0.8,
+            require_consecutive=3,
+        )
+        assert reads["n"] == 1  # frames 2 & 3 were skipped as static (no OCR)
+        assert len(out) == 1
+        assert out[0]["timestamp"] == 1.0  # median([0, 1, 2]) across carried frames
+
 
 class TestConsecutiveBuffer:
     def test_n1_emits_immediately(self):
@@ -1209,6 +1249,39 @@ class TestConsecutiveBuffer:
         # 0 / negative sizes clamp to 1 (passthrough behavior).
         buf = screenspace._ConsecutiveBuffer(0)
         assert buf.push(7.0, {"timestamp": 7.0}) is not None
+
+    def test_carry_continues_active_run(self):
+        # A static (skipped) frame carries the last match forward so the run
+        # still reaches the threshold on stable content.
+        buf = screenspace._ConsecutiveBuffer(3)
+        assert buf.push(0.0, {"timestamp": 0.0, "text_found": "Save"}) is None
+        assert buf.carry(1.0) is None  # static frame #1
+        out = buf.carry(2.0)  # static frame #2 completes the run
+        assert out is not None
+        assert out["text_found"] == "Save"
+        assert out["timestamp"] == 1.0  # median([0, 1, 2])
+
+    def test_carry_noop_when_no_active_run(self):
+        # Nothing to carry before any match has been pushed.
+        buf = screenspace._ConsecutiveBuffer(3)
+        assert buf.carry(5.0) is None
+
+    def test_carry_noop_for_size_one(self):
+        # size==1 emits and resets on every push, so no run is ever active to
+        # carry — keeps the legacy passthrough path unchanged.
+        buf = screenspace._ConsecutiveBuffer(1)
+        assert buf.push(1.0, {"timestamp": 1.0}) is not None
+        assert buf.carry(2.0) is None
+
+    def test_even_size_pairs_median_with_nearest_frame(self):
+        # Even runs interpolate the median between two frames; the payload comes
+        # from the nearer real frame, not an arbitrary upper-middle one.
+        buf = screenspace._ConsecutiveBuffer(2)
+        assert buf.push(0.0, {"timestamp": 0.0, "v": "a"}) is None
+        out = buf.push(4.0, {"timestamp": 4.0, "v": "b"})
+        assert out is not None
+        assert out["timestamp"] == 2.0  # median([0, 4])
+        assert out["v"] in ("a", "b")  # nearest real frame to the median
 
 
 def test_static_skip_uses_config():

@@ -1560,6 +1560,12 @@
     if (!btn) return;
     var has = !!(state.frictionData && state.frictionData.segments && state.frictionData.segments.length);
     btn.disabled = !has;
+    // Only show the pressed/active styling when the toggle is both enabled and
+    // actionable — otherwise a stored-enabled toggle renders active-but-greyed
+    // on load before friction data arrives.
+    var showActive = has && state.frictionHeatmapEnabled;
+    btn.classList.toggle("active", showActive);
+    btn.setAttribute("aria-pressed", showActive ? "true" : "false");
   }
 
   function initFriction() {
@@ -1579,19 +1585,24 @@
     if (!btn) return;
     var stored = getStoredUIState("transcripts");
     state.frictionHeatmapEnabled = !!(stored && stored.frictionHeatmapEnabled);
-    btn.classList.toggle("active", state.frictionHeatmapEnabled);
-    btn.setAttribute("aria-pressed", state.frictionHeatmapEnabled ? "true" : "false");
+    // Defer the active/aria-pressed visual to _refreshHeatmapAffordances so it
+    // only lights up once friction data is actually present.
+    _refreshHeatmapAffordances();
     btn.addEventListener("click", function () {
       state.frictionHeatmapEnabled = !state.frictionHeatmapEnabled;
-      btn.classList.toggle("active", state.frictionHeatmapEnabled);
-      btn.setAttribute("aria-pressed", state.frictionHeatmapEnabled ? "true" : "false");
       setStoredUIStateField("transcripts", "frictionHeatmapEnabled", state.frictionHeatmapEnabled);
+      _refreshHeatmapAffordances();
       renderSegments();
       renderTimeline();
     });
   }
 
   // Friction tooltip on hot segments (reuses the shared #trTooltip element).
+  // _frictionTooltipShown lets hideTimelineTooltip yield while a friction
+  // tooltip owns #trTooltip (mirror of _hideFrictionTooltip's _lastTimelineHit
+  // guard); _segTooltipRaf coalesces the segment-list mousemove like the canvas.
+  var _frictionTooltipShown = false;
+  var _segTooltipRaf = 0;
 
   function _showFrictionTooltip(frow, clientX, clientY) {
     var tip = qs("#trTooltip");
@@ -1622,9 +1633,11 @@
     if (y < 8) y = clientY + 16;
     tip.style.left = x + "px";
     tip.style.top = y + "px";
+    _frictionTooltipShown = true;
   }
 
   function _hideFrictionTooltip() {
+    _frictionTooltipShown = false;
     var tip = qs("#trTooltip");
     if (tip && !_lastTimelineHit) tip.classList.add("hidden");
   }
@@ -1969,15 +1982,22 @@
     });
 
     // Friction tooltip on hot segments (only while the heatmap is on).
+    // RAF-coalesced like the timeline canvas so getBoundingClientRect isn't
+    // called on every mousemove event.
     container.addEventListener("mousemove", function (e) {
-      if (!state.frictionHeatmapEnabled) { _hideFrictionTooltip(); return; }
-      var row = e.target.closest(".segment-row");
-      if (!row) { _hideFrictionTooltip(); return; }
-      var idx = parseInt(row.getAttribute("data-index"), 10);
-      var seg = state.segments[idx];
-      var frow = seg ? state.frictionBySegId[seg.id] : null;
-      if (!frow || !(frow.score > 0)) { _hideFrictionTooltip(); return; }
-      _showFrictionTooltip(frow, e.clientX, e.clientY);
+      if (_segTooltipRaf) return;
+      var cx = e.clientX, cy = e.clientY, tgt = e.target;
+      _segTooltipRaf = requestAnimationFrame(function () {
+        _segTooltipRaf = 0;
+        if (!state.frictionHeatmapEnabled) { _hideFrictionTooltip(); return; }
+        var row = tgt.closest && tgt.closest(".segment-row");
+        if (!row) { _hideFrictionTooltip(); return; }
+        var idx = parseInt(row.getAttribute("data-index"), 10);
+        var seg = state.segments[idx];
+        var frow = seg ? state.frictionBySegId[seg.id] : null;
+        if (!frow || !(frow.score > 0)) { _hideFrictionTooltip(); return; }
+        _showFrictionTooltip(frow, cx, cy);
+      });
     });
     container.addEventListener("mouseleave", function () { _hideFrictionTooltip(); });
   }
@@ -2285,6 +2305,9 @@
   }
 
   function hideTimelineTooltip() {
+    // Yield if a friction (hot-segment) tooltip currently owns the shared
+    // element, so a canvas mouseleave doesn't clobber it mid-display.
+    if (_frictionTooltipShown) return;
     var tip = qs("#trTooltip");
     if (tip) tip.classList.add("hidden");
   }

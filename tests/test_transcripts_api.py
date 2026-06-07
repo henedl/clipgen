@@ -587,6 +587,18 @@ def _seed_friction_entry(pid="P01", **extra):
     return entry
 
 
+def _join_orchestrator_threads(orch, timeout=2.0):
+    """Wait for all daemon agent threads (and any cascade they spawn) to finish.
+
+    Two passes because a worker can spawn a cascade thread while we are mid-join;
+    the second pass catches it.
+    """
+    for _ in range(2):
+        for key in list(orch._threads):
+            for t in list(orch._threads[key]):
+                t.join(timeout)
+
+
 def test_friction_get_404_when_absent_and_idle(tr_client, _agent_state_clean):
     _seed_friction_entry()
     resp = tr_client.get("/transcripts/api/friction/P01")
@@ -758,3 +770,63 @@ def test_participants_includes_friction_step_state(tr_client):
     assert resp.status_code == 200
     by_id = {p["id"]: p for p in resp.get_json()["participants"]}
     assert by_id["P01"]["agents"]["friction"] == "idle"
+
+
+def test_citations_regenerate_does_not_run_disabled_friction(
+    tr_client, _agent_state_clean, monkeypatch
+):
+    """Regression (H1): a manual single-agent regenerate must not cascade into a
+    disabled sibling. The post-success chain advance is force=False, so with
+    friction off, regenerating citations recomputes only citations."""
+    monkeypatch.setattr(config, "OLLAMA_FRICTION_ENABLED", False)
+    monkeypatch.setattr(transcripts_server, "_persist_manifest", lambda: None)
+    # summary + citations present, friction absent — friction is the only empty field.
+    _seed_friction_entry(citations=[{"sentence": "s", "refs": []}])
+
+    friction_ran = threading.Event()
+
+    def cit_stub(snapshot, cancel_event):
+        return [{"sentence": "s2", "refs": []}]  # non-None → commits → cascade fires
+
+    def fr_stub(snapshot, cancel_event):
+        friction_ran.set()
+        return None
+
+    cit_agent = thinking_agents.get_agent("citations")
+    fr_agent = thinking_agents.get_agent("friction")
+    assert cit_agent is not None and fr_agent is not None
+    monkeypatch.setitem(cit_agent, "run", cit_stub)
+    monkeypatch.setitem(fr_agent, "run", fr_stub)
+
+    resp = tr_client.post("/transcripts/api/citations/P01/regenerate")
+    assert resp.status_code == 200
+
+    _join_orchestrator_threads(transcripts_server._orchestrator)
+    assert not friction_ran.is_set(), (
+        "regenerating citations must not trigger the disabled friction agent"
+    )
+    assert "friction" not in transcripts_server._manifest["source_transcripts"]["P01"]
+
+
+def test_summary_regenerate_marks_friction_stale(
+    tr_client, _agent_state_clean, monkeypatch
+):
+    """Regression (M1): regenerating the summary invalidates friction (the new
+    summary feeds the friction prompt), mirroring the summary-edit path."""
+    monkeypatch.setattr(transcripts_server, "_persist_manifest", lambda: None)
+    # Don't spawn real agent threads — we only assert the endpoint's synchronous
+    # manifest mutation.
+    monkeypatch.setattr(
+        transcripts_server._orchestrator, "run_chain", lambda *a, **k: None
+    )
+    _seed_friction_entry(
+        citations=[{"sentence": "s", "refs": []}],
+        friction={"stale": False, "moments": []},
+    )
+
+    resp = tr_client.post("/transcripts/api/summary/P01/regenerate")
+    assert resp.status_code == 200
+    entry = transcripts_server._manifest["source_transcripts"]["P01"]
+    assert entry["friction"]["stale"] is True
+    assert entry["summary"] == ""
+    assert "citations" not in entry  # citations invalidated alongside friction
