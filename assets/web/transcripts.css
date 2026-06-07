@@ -874,6 +874,12 @@ body {
   color: var(--sev-high);
 }
 
+.friction-generating {
+  color: var(--color-text-dim);
+  font-style: italic;
+  font-size: var(--text-sm);
+}
+
 .friction-header-actions {
   display: flex;
   align-items: center;
