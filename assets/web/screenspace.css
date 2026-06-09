@@ -3016,6 +3016,52 @@ body.panel-dragging #bottomPanel {
   gap: var(--space-1);
 }
 
+/* Confidence-distribution histogram — pinned strip above #resultsList. */
+.conf-hist {
+  padding: var(--space-1) var(--space-2);
+  border-bottom: 1px solid var(--color-border);
+  flex: 0 0 auto;
+}
+
+.conf-hist.hidden {
+  display: none;
+}
+
+.conf-hist-track {
+  position: relative; /* anchor for the marker */
+  display: flex;
+  align-items: flex-end; /* bars grow up from the bottom */
+  gap: 1px;
+  height: var(--space-6); /* 2rem ≈ 32px */
+  background: var(--bg-input);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+
+.conf-hist-bar {
+  flex: 1 1 0;
+  height: 100%;
+  display: flex;
+  align-items: flex-end;
+  cursor: default;
+}
+
+.conf-hist-bar-fill {
+  width: 100%;
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+  transition: opacity var(--duration-instant) ease-out;
+}
+
+.conf-hist-marker {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  margin-left: -1px; /* center the line on the cutoff position */
+  background: var(--color-accent);
+  pointer-events: none;
+}
+
 /* Timelapse result player */
 
 .timelapse-result {

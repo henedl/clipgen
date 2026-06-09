@@ -86,6 +86,7 @@
     inMarker: null,
     outMarker: null,
     restoreMarkersOnEdit: true,
+    showConfidenceHistogram: false,
     activeWorkflow: "color",
     referenceTimestamp: null,
     sceneReferences: [],
@@ -284,6 +285,58 @@
     fill.style.opacity = (0.4 + v * 0.6).toFixed(2);
     bar.appendChild(fill);
     return bar;
+  }
+
+  // Confidence-distribution histogram for the Results panel. Buckets every
+  // event's confidence (0–1, uniform across tools) into 10 fixed bins and draws
+  // bottom-aligned bars scaled to the tallest bin, tinted with the tool color
+  // and using the same opacity ramp as buildConfBar. An absolutely-positioned
+  // marker shows the current certainty cutoff. Rebuilt wholesale on each
+  // renderResults() call, so it tracks the slider and stays color-consistent
+  // with the result rows at render time.
+  function renderConfidenceHistogram(events, taskType) {
+    var host = qs("#confHistogram");
+    if (!host) return;
+    host.innerHTML = "";
+
+    var BINS = 10;
+    var counts = [];
+    var i;
+    for (i = 0; i < BINS; i++) counts[i] = 0;
+    for (i = 0; i < events.length; i++) {
+      var c = Number(events[i].confidence);
+      if (isNaN(c)) c = 0;
+      else if (c < 0) c = 0;
+      else if (c > 1) c = 1;
+      counts[Math.min(BINS - 1, Math.floor(c * BINS))]++; // conf 1.0 -> bin 9
+    }
+    var maxCount = 0;
+    for (i = 0; i < BINS; i++) if (counts[i] > maxCount) maxCount = counts[i];
+
+    var track = el("div", "conf-hist-track");
+    var color = taskTypeColor(taskType);
+    for (i = 0; i < BINS; i++) {
+      var n = counts[i];
+      var pct = maxCount > 0 ? (n / maxCount) * 100 : 0;
+      if (n > 0 && pct < 6) pct = 6; // floor so a 1-event bin stays visible
+      var bar = el("div", "conf-hist-bar");
+      var fill = el("div", "conf-hist-bar-fill");
+      fill.style.height = pct.toFixed(1) + "%";
+      fill.style.background = color;
+      fill.style.opacity = (0.4 + (i / (BINS - 1)) * 0.6).toFixed(2); // mirrors buildConfBar
+      bar.appendChild(fill);
+      (function (lo, hi, count) {
+        attachHoverTooltip(bar, function () {
+          return Math.round(lo * 100) + "–" + Math.round(hi * 100) + "%: " +
+            clipgenPluralUnit(count, "event", "events");
+        }, { align: "center" });
+      })(i / BINS, (i + 1) / BINS, n);
+      track.appendChild(bar);
+    }
+    var marker = el("div", "conf-hist-marker");
+    marker.style.left = (state.certaintyCutoff * 100) + "%";
+    track.appendChild(marker);
+    host.appendChild(track);
   }
 
   function frameUrl(pid, ts) {
@@ -6482,6 +6535,8 @@
       countEl.textContent = "";
       actionsEl.classList.add("hidden");
       fastLabel.classList.add("hidden");
+      var emptyHist = qs("#confHistogram");
+      if (emptyHist) emptyHist.classList.add("hidden");
       return;
     }
 
@@ -6530,6 +6585,14 @@
     var exclBtn = qs("#excludeNonVisibleBtn");
     if (certWrap) certWrap.classList.toggle("hidden", !hasConf);
     if (exclBtn) exclBtn.classList.toggle("hidden", !hasConf);
+
+    // Confidence histogram — shown exactly when the cutoff slider is (same
+    // hasConf gate), and only when there are events to bucket.
+    var histHost = qs("#confHistogram");
+    var histEvents = state.taskEvents[state.selectedTaskId] || [];
+    var showHist = state.showConfidenceHistogram && !!hasConf && histEvents.length > 0;
+    if (histHost) histHost.classList.toggle("hidden", !showHist);
+    if (showHist) renderConfidenceHistogram(histEvents, task.type);
 
     // Timelapse: single file result
     if (task.type === "timelapse" && typeof results === "string") {
@@ -7065,24 +7128,29 @@
 
   // ---- Settings (server-side STUDIO_SETTINGS) ----
   //
-  // Backed by /api/settings. We mirror the SCREENSPACE_RESTORE_MARKERS_ON_EDIT
-  // flag onto state.restoreMarkersOnEdit so restoreTaskToWorkflow can read it
-  // without a network call. The settings modal's onSave/onReset hooks call
-  // applyScreenspaceSettingsSnapshot to keep state in sync after user edits.
+  // Backed by /api/settings. We mirror the Screenspace-relevant flags onto
+  // state (state.restoreMarkersOnEdit for restoreTaskToWorkflow,
+  // state.showConfidenceHistogram for the Results-panel histogram) so the hot
+  // paths can read them without a network call. The settings modal's
+  // onSave/onReset hooks call applyScreenspaceSettingsSnapshot to keep state in
+  // sync after user edits.
 
   function applyScreenspaceSettingsSnapshot(applied, settings) {
-    var v;
-    if (applied && Object.prototype.hasOwnProperty.call(applied, "SCREENSPACE_RESTORE_MARKERS_ON_EDIT")) {
-      v = applied.SCREENSPACE_RESTORE_MARKERS_ON_EDIT;
-    } else if (settings) {
-      for (var i = 0; i < settings.length; i++) {
-        if (settings[i].name === "SCREENSPACE_RESTORE_MARKERS_ON_EDIT") {
-          v = settings[i].value;
-          break;
+    function pick(name) {
+      if (applied && Object.prototype.hasOwnProperty.call(applied, name)) {
+        return applied[name];
+      }
+      if (settings) {
+        for (var i = 0; i < settings.length; i++) {
+          if (settings[i].name === name) return settings[i].value;
         }
       }
+      return undefined;
     }
-    if (v !== undefined) state.restoreMarkersOnEdit = !!v;
+    var markers = pick("SCREENSPACE_RESTORE_MARKERS_ON_EDIT");
+    if (markers !== undefined) state.restoreMarkersOnEdit = !!markers;
+    var hist = pick("SCREENSPACE_SHOW_CONFIDENCE_HISTOGRAM");
+    if (hist !== undefined) state.showConfidenceHistogram = !!hist;
   }
 
   function fetchScreenspaceSettings() {
@@ -7130,9 +7198,11 @@
             initialTab: "Screenspace",
             onSave: function (applied, settings) {
               applyScreenspaceSettingsSnapshot(applied, settings);
+              renderResults(); // reflect a histogram-toggle change immediately
             },
             onReset: function (scope, settings) {
               applyScreenspaceSettingsSnapshot(null, settings);
+              renderResults();
             },
           });
         }
