@@ -1101,8 +1101,8 @@ class TestScanText:
         assert accepted[0]["text_found"] == "hello"
         assert accepted[0]["confidence"] == 0.2
 
-    def test_normalize_o_for_zero(self, monkeypatch):
-        """ocr_normalize collapses l→1 so "l00" matches a search for "100"."""
+    def test_normalize_letters_to_digits(self, monkeypatch):
+        """ocr_normalize="digits" folds l→1 so "l00" matches a search for "100"."""
         frame = np.full((20, 60, 3), 128, dtype=np.uint8)
 
         class _FakeReader:
@@ -1122,22 +1122,108 @@ class TestScanText:
 
         region = {"x": 0, "y": 0, "w": 60, "h": 20}
 
-        # Default (ocr_normalize=False): "l00" vs "100" stays below threshold.
+        # Default (ocr_normalize="off"): "l00" vs "100" stays below threshold.
         rejected = screenspace.scan_text(
             "/fake.mp4", region, search_string="100", fuzzy_threshold=0.9
         )
         assert rejected == []
 
-        # ocr_normalize=True: l→1 makes it an exact match.
+        # ocr_normalize="digits": l→1 makes it an exact match.
         accepted = screenspace.scan_text(
             "/fake.mp4",
             region,
             search_string="100",
             fuzzy_threshold=0.9,
-            ocr_normalize=True,
+            ocr_normalize="digits",
         )
         assert len(accepted) == 1
         assert accepted[0]["text_found"] == "l00"
+
+    def test_normalize_digits_to_letters(self, monkeypatch):
+        """ocr_normalize="letters" folds 5→s so "5top" matches a search for "stop"."""
+        frame = np.full((20, 60, 3), 128, dtype=np.uint8)
+
+        class _FakeReader:
+            def readtext(self, _pixels, **_kwargs):
+                # Misread: the glyphs of "stop" came back as "5top".
+                return [([(0, 0), (10, 0), (10, 10), (0, 10)], "5top", 0.9)]
+
+        monkeypatch.setattr(
+            screenspace, "_get_ocr_reader", lambda _langs: _FakeReader()
+        )
+        monkeypatch.setattr(screenspace, "_probe_video_meta", lambda p: (30.0, 1.0))
+
+        def fake_scan(video_path, region, interval, callback, **kwargs):
+            callback(0.0, frame)
+
+        monkeypatch.setattr(screenspace, "scan_video_frames", fake_scan)
+
+        region = {"x": 0, "y": 0, "w": 60, "h": 20}
+
+        # Default ("off"): "5top" vs "stop" stays below threshold.
+        assert (
+            screenspace.scan_text(
+                "/fake.mp4", region, search_string="stop", fuzzy_threshold=0.9
+            )
+            == []
+        )
+
+        # ocr_normalize="letters": 5→s makes it an exact match.
+        accepted = screenspace.scan_text(
+            "/fake.mp4",
+            region,
+            search_string="stop",
+            fuzzy_threshold=0.9,
+            ocr_normalize="letters",
+        )
+        assert len(accepted) == 1
+        assert accepted[0]["text_found"] == "5top"
+
+    def test_normalize_direction_is_distinct(self, monkeypatch):
+        """The two fold directions differ: i→1 is digits-only (no 1→i inverse)."""
+        frame = np.full((20, 60, 3), 128, dtype=np.uint8)
+
+        class _FakeReader:
+            def readtext(self, _pixels, **_kwargs):
+                # Want "in"; OCR rendered the i as a 1.
+                return [([(0, 0), (10, 0), (10, 10), (0, 10)], "1n", 0.9)]
+
+        monkeypatch.setattr(
+            screenspace, "_get_ocr_reader", lambda _langs: _FakeReader()
+        )
+        monkeypatch.setattr(screenspace, "_probe_video_meta", lambda p: (30.0, 1.0))
+
+        def fake_scan(video_path, region, interval, callback, **kwargs):
+            callback(0.0, frame)
+
+        monkeypatch.setattr(screenspace, "scan_video_frames", fake_scan)
+
+        region = {"x": 0, "y": 0, "w": 60, "h": 20}
+
+        # "digits" folds search i→1, matching OCR "1n"; "letters" folds OCR 1→l
+        # ("ln") which stays below threshold against "in".
+        assert (
+            len(
+                screenspace.scan_text(
+                    "/fake.mp4",
+                    region,
+                    search_string="in",
+                    fuzzy_threshold=0.9,
+                    ocr_normalize="digits",
+                )
+            )
+            == 1
+        )
+        assert (
+            screenspace.scan_text(
+                "/fake.mp4",
+                region,
+                search_string="in",
+                fuzzy_threshold=0.9,
+                ocr_normalize="letters",
+            )
+            == []
+        )
 
     def test_require_consecutive(self, monkeypatch):
         """require_consecutive=N coalesces N consecutive matches into one median event."""
@@ -1443,6 +1529,52 @@ class TestScanNumbers:
             region,
             operator="gt",
             target_value=0,
+            languages=["en", "ch_sim"],
+        )
+        assert "allowlist" not in seen
+
+    def test_integers_only_narrows_allowlist(self, monkeypatch):
+        """integers_only drops .,- from the English allowlist; off keeps them."""
+        frame = np.full((20, 60, 3), 128, dtype=np.uint8)
+        seen: dict[str, object] = {}
+
+        class _FakeReader:
+            def readtext(self, _pixels, **kwargs):
+                seen.clear()
+                seen.update(kwargs)
+                return []
+
+        monkeypatch.setattr(
+            screenspace, "_get_ocr_reader", lambda _langs: _FakeReader()
+        )
+        monkeypatch.setattr(screenspace, "_probe_video_meta", lambda p: (30.0, 1.0))
+
+        def fake_scan(video_path, region, interval, callback, **kwargs):
+            callback(0.0, frame)
+
+        monkeypatch.setattr(screenspace, "scan_video_frames", fake_scan)
+
+        region = {"x": 0, "y": 0, "w": 60, "h": 20}
+
+        # integers_only=True (default English): digits-only allowlist.
+        screenspace.scan_numbers(
+            "/fake.mp4", region, operator="gt", target_value=0, integers_only=True
+        )
+        assert seen.get("allowlist") == "0123456789"
+
+        # integers_only=False: separators/sign retained.
+        screenspace.scan_numbers(
+            "/fake.mp4", region, operator="gt", target_value=0, integers_only=False
+        )
+        assert seen.get("allowlist") == "0123456789.,-"
+
+        # Non-English combo: allowlist omitted regardless of integers_only.
+        screenspace.scan_numbers(
+            "/fake.mp4",
+            region,
+            operator="gt",
+            target_value=0,
+            integers_only=True,
             languages=["en", "ch_sim"],
         )
         assert "allowlist" not in seen

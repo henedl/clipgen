@@ -1833,6 +1833,48 @@ body {
           mask-image: url("/screenspace/icons/no-symbol.svg");
 }
 
+/* Segmented icon button-set (e.g. the 3-state OCR-normalize direction control).
+   Mirrors .multitool-operator-btn; the masked icon child follows currentColor. */
+.ss-segctl {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.ss-segctl-btn {
+  width: 1.5rem;
+  height: 1.5rem;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--color-border);
+  background: var(--color-bg);
+  color: var(--color-text-dim);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  padding: 0;
+  transition: color var(--duration-fast),
+              border-color var(--duration-fast),
+              background var(--duration-fast);
+}
+
+.ss-segctl-btn:hover {
+  color: var(--color-text);
+  border-color: var(--color-accent);
+  background: var(--color-surface-hover);
+}
+
+.ss-segctl-btn.active {
+  color: var(--color-accent);
+  border-color: var(--color-accent);
+  background: var(--color-surface-hover);
+}
+
+.ss-segctl--sm .ss-segctl-btn {
+  width: 1.25rem;
+  height: 1.25rem;
+}
+
 .multitool-add-row {
   display: flex;
   align-items: center;

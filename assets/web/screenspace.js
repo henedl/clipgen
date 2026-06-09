@@ -48,6 +48,68 @@
     });
   }
 
+  // Three-state OCR-normalize direction control: a segmented icon button-set
+  // backed by a hidden input holding the mode string ("letters" | "off" |
+  // "digits"). It folds easily-confused glyphs toward whichever canonical form
+  // you pick before the fuzzy compare — see _normalize_ocr_text in
+  // screenspace.py. Off sits in the middle: digit→letter | off | letter→digit.
+  var NORMALIZE_MODES = [
+    { mode: "letters", icon: "language", desc: "Fold digits→letters before matching (0→o, 1→l, 5→s) — for word targets OCR may read as digits" },
+    { mode: "off", icon: "no-symbol", desc: "No character folding" },
+    { mode: "digits", icon: "hashtag", desc: "Fold letters→digits before matching (O→0, l→1, S→5) — for number targets OCR may read as letters" },
+  ];
+
+  function _normalizeMode(mode) {
+    return mode === "letters" || mode === "digits" ? mode : "off";
+  }
+
+  function buildNormalizeControl(id, mode, small) {
+    var wrap = el("div", "ss-segctl" + (small ? " ss-segctl--sm" : ""));
+    var hidden = document.createElement("input");
+    hidden.type = "hidden";
+    hidden.id = id;
+    hidden.value = _normalizeMode(mode);
+    wrap.appendChild(hidden);
+    NORMALIZE_MODES.forEach(function (spec) {
+      var btn = el("button", "ss-segctl-btn");
+      btn.type = "button";
+      // Description shown via the custom param tooltip (see initParamTooltips),
+      // matching how param labels surface their help text.
+      btn.setAttribute("data-desc", spec.desc);
+      btn.setAttribute("data-mode", spec.mode);
+      btn.appendChild(iconSpan(spec.icon, "ss-icon--xs"));
+      if (spec.mode === hidden.value) btn.classList.add("active");
+      btn.addEventListener("click", function (e) {
+        e.preventDefault();
+        hidden.value = spec.mode;
+        var sibs = wrap.querySelectorAll(".ss-segctl-btn");
+        for (var i = 0; i < sibs.length; i++) {
+          sibs[i].classList.toggle("active", sibs[i] === btn);
+        }
+        // Bubbles to the .param-control wrapper so addParamRow's input handler
+        // (live model preview) fires, mirroring a checkbox change.
+        hidden.dispatchEvent(new Event("input", { bubbles: true }));
+      });
+      wrap.appendChild(btn);
+    });
+    return wrap;
+  }
+
+  // Reflect a mode string back onto an existing segmented control (used when
+  // rehydrating a saved task into the editor).
+  function applyNormalizeMode(id, mode) {
+    var hidden = qs("#" + id);
+    if (!hidden) return;
+    var m = _normalizeMode(mode);
+    hidden.value = m;
+    var wrap = hidden.parentNode;
+    if (!wrap) return;
+    var btns = wrap.querySelectorAll(".ss-segctl-btn");
+    for (var i = 0; i < btns.length; i++) {
+      btns[i].classList.toggle("active", btns[i].getAttribute("data-mode") === m);
+    }
+  }
+
   var TIMELINE_CANVAS_HEIGHT = 64;
 
   var _paletteDocListeners = null;
@@ -772,8 +834,7 @@
       "Min OCR conf.":    "Drop OCR readings below this confidence before fuzzy matching (raise to suppress noisy misreads)",
       "Min OCR":          "Drop OCR readings below this confidence before fuzzy matching (raise to suppress noisy misreads)",
       "Enhance ROI":      "Upscale small/low-contrast crops and apply CLAHE before OCR (slower; helps tiny HUD text)",
-      "Normalize chars":  "Collapse O→0, l→1, S→5 before matching (helps fonts with weak letter/digit distinction)",
-      "Normalize":        "Collapse O→0, l→1, S→5 before matching (helps fonts with weak letter/digit distinction)",
+      "Normalize":        "Fold easily-confused glyphs before matching: digit→letter, off, or letter→digit. Pick the side matching what your search target is (letters vs digits).",
       "Language":         "OCR language for text recognition",
       "Consecutive":      "Require this many consecutive sampled frames to match before an event fires (suppresses single-frame flicker; reports the run's median time)",
     },
@@ -785,6 +846,8 @@
       "Min OCR conf.":    "Drop OCR readings below this confidence before parsing numbers (raise to suppress noisy misreads)",
       "Min OCR":          "Drop OCR readings below this confidence before parsing numbers (raise to suppress noisy misreads)",
       "Enhance ROI":      "Upscale small/low-contrast crops and apply CLAHE before OCR (slower; helps tiny HUD numbers)",
+      "Integers only":    "Restrict OCR to digits only (drop . , -) so a separator glyph can't survive as a digit and inflate the value. For whole-number HUD targets. English only.",
+      "Integers":         "Restrict OCR to digits only (drop . , -) so a separator glyph can't survive as a digit and inflate the value. For whole-number HUD targets. English only.",
       "Consecutive":      "Require this many consecutive sampled frames to match before an event fires (suppresses single-frame flicker; reports the run's median time)",
     },
     timelapse: {
@@ -871,6 +934,14 @@
     }
 
     container.addEventListener("mouseenter", function (e) {
+      // Segmented-control buttons (e.g. the Normalize direction set) carry their
+      // own description on data-desc; reuse the same dark-pill tooltip.
+      var seg = e.target.closest && e.target.closest(".ss-segctl-btn");
+      if (seg) {
+        var segDesc = seg.getAttribute("data-desc");
+        if (segDesc) tooltip.show(seg, segDesc);
+        return;
+      }
       var label = e.target.closest(".param-label");
       if (!label) return;
       var text = label.textContent.trim();
@@ -880,7 +951,10 @@
     }, true);
 
     container.addEventListener("mouseleave", function (e) {
-      if (e.target.closest && e.target.closest(".param-label")) {
+      if (
+        e.target.closest &&
+        (e.target.closest(".param-label") || e.target.closest(".ss-segctl-btn"))
+      ) {
         tooltip.hide();
       }
     }, true);
@@ -3388,7 +3462,12 @@
     _mtAddNumberRow(body, "Fuzzy", "paramTextFuzzy" + sfx, 0.50, 1.00, numberOrDefault(init.fuzzy_threshold, 0.80), 0.01);
     _mtAddNumberRow(body, "Min OCR", "paramTextOcrConf" + sfx, 0.00, 1.00, numberOrDefault(init.ocr_confidence_threshold, CLIPGEN_CONFIG.screenspaceOcrMinConfidence), 0.01);
     _mtAddCheckboxRow(body, "Enhance ROI", "paramTextOcrPreprocess" + sfx, init.ocr_preprocess);
-    _mtAddCheckboxRow(body, "Normalize", "paramTextOcrNormalize" + sfx, init.ocr_normalize);
+    var nr = el("div", "param-row");
+    nr.appendChild(el("span", "param-label", "Normalize"));
+    var nc = el("div", "param-control");
+    nc.appendChild(buildNormalizeControl("paramTextOcrNormalize" + sfx, init.ocr_normalize, true));
+    nr.appendChild(nc);
+    body.appendChild(nr);
   }
 
   function _mtRenderNumbers(body, idx, sfx) {
@@ -3419,6 +3498,7 @@
     body.appendChild(r2);
     _mtAddNumberRow(body, "Min OCR", "paramNumOcrConf" + sfx, 0.00, 1.00, numberOrDefault(init.ocr_confidence_threshold, CLIPGEN_CONFIG.screenspaceOcrMinConfidence), 0.01);
     _mtAddCheckboxRow(body, "Enhance ROI", "paramNumOcrPreprocess" + sfx, init.ocr_preprocess);
+    _mtAddCheckboxRow(body, "Integers", "paramNumIntegersOnly" + sfx, init.integers_only);
   }
 
   function _mtRenderTemplate(body, idx, sfx) {
@@ -3641,13 +3721,14 @@
         init.fuzzy_threshold = numberOrDefault((qs("#paramTextFuzzy" + sfx) || {}).value, init.fuzzy_threshold);
         init.ocr_confidence_threshold = numberOrDefault((qs("#paramTextOcrConf" + sfx) || {}).value, init.ocr_confidence_threshold);
         init.ocr_preprocess = !!((qs("#paramTextOcrPreprocess" + sfx) || {}).checked);
-        init.ocr_normalize = !!((qs("#paramTextOcrNormalize" + sfx) || {}).checked);
+        init.ocr_normalize = (qs("#paramTextOcrNormalize" + sfx) || {}).value || "off";
       } else if (step.type === "numbers") {
         var opEl = qs("#paramNumOperator" + sfx);
         if (opEl) init.operator = opEl.value;
         init.target_value = numberOrDefault((qs("#paramNumTarget" + sfx) || {}).value, init.target_value);
         init.ocr_confidence_threshold = numberOrDefault((qs("#paramNumOcrConf" + sfx) || {}).value, init.ocr_confidence_threshold);
         init.ocr_preprocess = !!((qs("#paramNumOcrPreprocess" + sfx) || {}).checked);
+        init.integers_only = !!((qs("#paramNumIntegersOnly" + sfx) || {}).checked);
       } else if (step.type === "template") {
         init.threshold = numberOrDefault((qs("#paramTemplateThresh" + sfx) || {}).value, init.threshold);
       } else if (step.type === "flow") {
@@ -4042,10 +4123,7 @@
     ppCb.type = "checkbox";
     ppCb.id = "paramTextOcrPreprocess";
     addParamRow(container, "Enhance ROI", ppCb);
-    var normCb = document.createElement("input");
-    normCb.type = "checkbox";
-    normCb.id = "paramTextOcrNormalize";
-    addParamRow(container, "Normalize chars", normCb);
+    addParamRow(container, "Normalize", buildNormalizeControl("paramTextOcrNormalize", "off"));
     addParamRow(container, "Consecutive", numberInput("paramTextConsecutive", 1, 10, 1, 1));
   }
 
@@ -4097,6 +4175,10 @@
     ppCb.type = "checkbox";
     ppCb.id = "paramNumOcrPreprocess";
     addParamRow(container, "Enhance ROI", ppCb);
+    var ioCb = document.createElement("input");
+    ioCb.type = "checkbox";
+    ioCb.id = "paramNumIntegersOnly";
+    addParamRow(container, "Integers only", ioCb);
     renderIntervalSlot("paramNumInterval", 0.5, 60, 2.0, 0.5);
     addParamRow(container, "Consecutive", numberInput("paramNumConsecutive", 1, 10, 1, 1));
   }
@@ -5174,7 +5256,7 @@
       p.fuzzy_threshold = numberOrDefault((qs("#paramTextFuzzy" + sfx) || {}).value, 0.80);
       p.ocr_confidence_threshold = numberOrDefault((qs("#paramTextOcrConf" + sfx) || {}).value, CLIPGEN_CONFIG.screenspaceOcrMinConfidence);
       p.ocr_preprocess = !!((qs("#paramTextOcrPreprocess" + sfx) || {}).checked);
-      p.ocr_normalize = !!((qs("#paramTextOcrNormalize" + sfx) || {}).checked);
+      p.ocr_normalize = (qs("#paramTextOcrNormalize" + sfx) || {}).value || "off";
     } else if (stepType === "numbers") {
       p.operator = (qs("#paramNumOperator" + sfx) || {}).value || "gt";
       p.target_value = parseFloat((qs("#paramNumTarget" + sfx) || {}).value);
@@ -5184,6 +5266,7 @@
       }
       p.ocr_confidence_threshold = numberOrDefault((qs("#paramNumOcrConf" + sfx) || {}).value, CLIPGEN_CONFIG.screenspaceOcrMinConfidence);
       p.ocr_preprocess = !!((qs("#paramNumOcrPreprocess" + sfx) || {}).checked);
+      p.integers_only = !!((qs("#paramNumIntegersOnly" + sfx) || {}).checked);
     } else if (stepType === "template") {
       step = state.multitoolSteps[idx];
       if (!step || step._refTs === undefined) {
@@ -5272,7 +5355,7 @@
       params.fuzzy_threshold = numberOrDefault((qs("#paramTextFuzzy") || {}).value, 0.80);
       params.ocr_confidence_threshold = numberOrDefault((qs("#paramTextOcrConf") || {}).value, CLIPGEN_CONFIG.screenspaceOcrMinConfidence);
       params.ocr_preprocess = !!((qs("#paramTextOcrPreprocess") || {}).checked);
-      params.ocr_normalize = !!((qs("#paramTextOcrNormalize") || {}).checked);
+      params.ocr_normalize = (qs("#paramTextOcrNormalize") || {}).value || "off";
       params.interval = numberOrDefault((qs("#paramTextInterval") || {}).value, 2.0);
       var lang = (qs("#paramTextLang") || {}).value || "en";
       params.languages = [lang];
@@ -5301,6 +5384,7 @@
       }
       params.ocr_confidence_threshold = numberOrDefault((qs("#paramNumOcrConf") || {}).value, CLIPGEN_CONFIG.screenspaceOcrMinConfidence);
       params.ocr_preprocess = !!((qs("#paramNumOcrPreprocess") || {}).checked);
+      params.integers_only = !!((qs("#paramNumIntegersOnly") || {}).checked);
       params.interval = numberOrDefault((qs("#paramNumInterval") || {}).value, 2.0);
       var rcNum = intOrDefault((qs("#paramNumConsecutive") || {}).value, 1);
       if (rcNum > 1) params.require_consecutive = rcNum;
@@ -5929,8 +6013,7 @@
       setInputValue("#paramTextOcrConf", numberOrDefault(params.ocr_confidence_threshold, CLIPGEN_CONFIG.screenspaceOcrMinConfidence));
       var textPpEl = qs("#paramTextOcrPreprocess");
       if (textPpEl) textPpEl.checked = !!params.ocr_preprocess;
-      var textNormEl = qs("#paramTextOcrNormalize");
-      if (textNormEl) textNormEl.checked = !!params.ocr_normalize;
+      applyNormalizeMode("paramTextOcrNormalize", params.ocr_normalize || "off");
       setInputValue("#paramTextInterval", numberOrDefault(params.interval, 2.0));
       if (params.languages && params.languages[0]) {
         setInputValue("#paramTextLang", params.languages[0]);
@@ -5951,6 +6034,8 @@
       setInputValue("#paramNumOcrConf", numberOrDefault(params.ocr_confidence_threshold, CLIPGEN_CONFIG.screenspaceOcrMinConfidence));
       var numPpEl = qs("#paramNumOcrPreprocess");
       if (numPpEl) numPpEl.checked = !!params.ocr_preprocess;
+      var numIoEl = qs("#paramNumIntegersOnly");
+      if (numIoEl) numIoEl.checked = !!params.integers_only;
       setInputValue("#paramNumInterval", numberOrDefault(params.interval, 2.0));
       setInputValue("#paramNumConsecutive", intOrDefault(params.require_consecutive, 1));
     } else if (task.type === "timelapse") {
