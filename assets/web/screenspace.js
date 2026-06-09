@@ -3125,6 +3125,7 @@
       if (r.confidence !== undefined) details.appendChild(el("span", "", "Confidence: " + (r.confidence * 100).toFixed(0) + "%"));
     } else if (hit.task.type === "numbers" && r.number_found !== undefined) {
       details.appendChild(el("span", "", "Found: " + r.number_found));
+      if (r.confidence !== undefined) details.appendChild(el("span", "", "Confidence: " + (r.confidence * 100).toFixed(0) + "%"));
     } else if (hit.task.type === "template" && r.best_score !== undefined) {
       details.appendChild(el("span", "", "Score: " + (r.best_score * 100).toFixed(1) + "%"));
       if (r.match_count !== undefined) details.appendChild(el("span", "", "Matches: " + r.match_count));
@@ -6665,7 +6666,7 @@
     }
 
     // Show/hide certainty controls based on whether the tool has confidence scores
-    var hasConf = task && { change: 1, similarity: 1, text: 1, template: 1, scene: 1, flow: 1, multitool: 1, inactivity: 1 }[task.type];
+    var hasConf = task && { change: 1, similarity: 1, text: 1, numbers: 1, template: 1, scene: 1, flow: 1, multitool: 1, inactivity: 1 }[task.type];
     var certWrap = qs("#certaintyCutoffWrap");
     var exclBtn = qs("#excludeNonVisibleBtn");
     if (certWrap) certWrap.classList.toggle("hidden", !hasConf);
@@ -6812,6 +6813,7 @@
         if (task.type === "change") confValue = r.magnitude;
         else if (task.type === "similarity") confValue = r.score;
         else if (task.type === "text") confValue = r.confidence;
+        else if (task.type === "numbers") confValue = r.confidence;
         else if (task.type === "template") confValue = r.best_score;
         else if (task.type === "flow") confValue = Math.min(r.magnitude / 10, 1);
         else if (task.type === "scene") confValue = r.score;
@@ -6855,6 +6857,10 @@
         row.dataset.timestamp = r.timestamp;
         row.appendChild(el("span", "result-timestamp", formatTime(r.timestamp, { decimals: 1 })));
         row.appendChild(el("span", "result-detail", String(r.number_found)));
+        if (r.confidence !== undefined) {
+          row.appendChild(buildConfBar(r.confidence, task.type));
+          row.appendChild(el("span", "result-score", (r.confidence * 100).toFixed(0) + "%"));
+        }
       } else if (task.type === "template") {
         row.dataset.timestamp = r.timestamp;
         row.appendChild(el("span", "result-timestamp", formatTime(r.timestamp, { decimals: 1 })));

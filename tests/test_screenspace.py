@@ -559,10 +559,10 @@ class TestGenerateEventsFromResults:
 
     def test_numbers_events(self):
         worker, task = self._make_worker_and_task("numbers")
-        raw = [{"timestamp": 15.0, "number_found": 42}]
+        raw = [{"timestamp": 15.0, "number_found": 42, "confidence": 0.42}]
         events = worker._generate_events_from_results(task, raw)
         assert len(events) == 1
-        assert events[0]["confidence"] == 1.0
+        assert events[0]["confidence"] == 0.42
         assert events[0]["metadata"]["value"] == 42
 
     def test_color_events(self):
