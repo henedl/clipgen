@@ -115,16 +115,28 @@ def _preprocess_for_ocr(pixels: np.ndarray, *, min_height: int = 0) -> np.ndarra
 
 
 # Opt-in OCR confusion-collapsing for the text tool. Folds glyphs EasyOCR most
-# often swaps on compressed footage into a canonical form before the fuzzy
-# compare, so e.g. a search for "100" can match an OCR reading of "l00".
-_OCR_NORMALIZATION_TABLE = str.maketrans(
+# often swaps on compressed footage toward a canonical form before the fuzzy
+# compare. Two directions: fold toward digits (so a search for "100" matches an
+# OCR reading of "l00") or toward letters (so a search for "stop" matches "5top").
+_OCR_FOLD_TO_DIGITS = str.maketrans(
     {"o": "0", "l": "1", "i": "1", "|": "1", "s": "5", "b": "8"}
 )
+_OCR_FOLD_TO_LETTERS = str.maketrans({"0": "o", "1": "l", "5": "s", "8": "b"})
 
 
-def _normalize_ocr_text(s: str) -> str:
-    """Lowercase, then fold glyphs EasyOCR most often swaps on compressed footage."""
-    return s.lower().translate(_OCR_NORMALIZATION_TABLE)
+def _normalize_ocr_text(s: str, mode: str) -> str:
+    """Lowercase, then fold easily-confused glyphs toward ``mode``'s canonical form.
+
+    ``mode`` is ``"digits"`` (fold letters→digits), ``"letters"`` (fold
+    digits→letters), or ``"off"`` (lowercase only — also the fallback for any
+    unrecognized value).
+    """
+    s = s.lower()
+    if mode == "digits":
+        return s.translate(_OCR_FOLD_TO_DIGITS)
+    if mode == "letters":
+        return s.translate(_OCR_FOLD_TO_LETTERS)
+    return s
 
 
 def _effective_ocr_confidence_threshold(value: Any = None) -> float:
@@ -1328,7 +1340,7 @@ def scan_text(
     fuzzy_threshold: float = 0.0,
     ocr_confidence_threshold: float | None = None,
     ocr_preprocess: bool = False,
-    ocr_normalize: bool = False,
+    ocr_normalize: str = "off",
     require_consecutive: int = 1,
     languages: list[str] | None = None,
     start_seconds: float = 0.0,
@@ -1363,9 +1375,7 @@ def scan_text(
     total_range = end_seconds - start_seconds
 
     results: list[dict[str, Any]] = []
-    search_cmp = (
-        _normalize_ocr_text(search_string) if ocr_normalize else search_string.lower()
-    )
+    search_cmp = _normalize_ocr_text(search_string, ocr_normalize)
     prev_gray: list[np.ndarray | None] = [None]
     buf = _ConsecutiveBuffer(require_consecutive)
 
@@ -1393,7 +1403,7 @@ def scan_text(
         for _, text, conf in ocr_results:
             if conf < ocr_confidence_threshold:
                 continue
-            ocr_cmp = _normalize_ocr_text(text) if ocr_normalize else text.lower()
+            ocr_cmp = _normalize_ocr_text(text, ocr_normalize)
             ratio = difflib.SequenceMatcher(None, search_cmp, ocr_cmp).ratio()
             if ratio >= fuzzy_threshold:
                 matched_rd = {
@@ -1440,6 +1450,10 @@ _VALID_OPERATORS = ("eq", "gt", "lt", "gte", "lte", "range")
 # reject ``allowlist``. Mirrors what the downstream parser accepts (``-``, ``.``,
 # ``,`` thousands separators, digits).
 _OCR_NUMBER_ALLOWLIST = "0123456789.,-"
+# integers_only narrows the allowlist further: dropping ``.,-`` stops a separator
+# or sign glyph from surviving OCR as a digit and inflating the parsed value.
+# Use for whole-number HUD targets (scores, counts) where decimals never appear.
+_OCR_DIGITS_ONLY_ALLOWLIST = "0123456789"
 
 
 def _number_matches(
@@ -1480,6 +1494,7 @@ def scan_numbers(
     range_max: float | None = None,
     ocr_confidence_threshold: float | None = None,
     ocr_preprocess: bool = False,
+    integers_only: bool = False,
     require_consecutive: int = 1,
     languages: list[str] | None = None,
     start_seconds: float = 0.0,
@@ -1521,7 +1536,9 @@ def scan_numbers(
     # Hoisted out of the per-frame callback: constrain English OCR to digits.
     ocr_kwargs: dict[str, Any] = {"detail": 1}
     if languages == ["en"]:
-        ocr_kwargs["allowlist"] = _OCR_NUMBER_ALLOWLIST
+        ocr_kwargs["allowlist"] = (
+            _OCR_DIGITS_ONLY_ALLOWLIST if integers_only else _OCR_NUMBER_ALLOWLIST
+        )
     buf = _ConsecutiveBuffer(require_consecutive)
 
     def _cb(ts: float, pixels: np.ndarray) -> bool | None:
@@ -2767,16 +2784,14 @@ class TextTool(AnalysisTool):
         if params.get("ocr_preprocess", False):
             pixels = _preprocess_for_ocr(pixels)
         ocr_results = reader.readtext(pixels, detail=1)
-        ocr_normalize = params.get("ocr_normalize", False)
-        search_cmp = (
-            _normalize_ocr_text(search_string)
-            if ocr_normalize
-            else search_string.lower()
-        )
+        ocr_normalize = params.get("ocr_normalize") or "off"
+        if ocr_normalize not in ("digits", "letters"):
+            ocr_normalize = "off"
+        search_cmp = _normalize_ocr_text(search_string, ocr_normalize)
         for _, text, conf in ocr_results:
             if conf < ocr_min_conf:
                 continue
-            ocr_cmp = _normalize_ocr_text(text) if ocr_normalize else text.lower()
+            ocr_cmp = _normalize_ocr_text(text, ocr_normalize)
             ratio = difflib.SequenceMatcher(None, search_cmp, ocr_cmp).ratio()
             if ratio >= fuzzy_threshold:
                 return True, {"text_found": text, "confidence": round(conf, 4)}
@@ -2803,7 +2818,7 @@ class TextTool(AnalysisTool):
             fuzzy_threshold=params.get("fuzzy_threshold", 0),
             ocr_confidence_threshold=params.get("ocr_confidence_threshold"),
             ocr_preprocess=params.get("ocr_preprocess", False),
-            ocr_normalize=params.get("ocr_normalize", False),
+            ocr_normalize=params.get("ocr_normalize") or "off",
             require_consecutive=params.get("require_consecutive", 1),
             languages=params.get("languages"),
             start_seconds=params.get("start_seconds", 0.0),
@@ -2833,7 +2848,11 @@ class NumbersTool(AnalysisTool):
             pixels = _preprocess_for_ocr(pixels)
         ocr_kwargs: dict[str, Any] = {"detail": 1}
         if languages == ["en"]:
-            ocr_kwargs["allowlist"] = _OCR_NUMBER_ALLOWLIST
+            ocr_kwargs["allowlist"] = (
+                _OCR_DIGITS_ONLY_ALLOWLIST
+                if params.get("integers_only", False)
+                else _OCR_NUMBER_ALLOWLIST
+            )
         ocr_results = reader.readtext(pixels, **ocr_kwargs)
         for _, text, conf in ocr_results:
             if conf < ocr_min_conf:
@@ -2868,6 +2887,7 @@ class NumbersTool(AnalysisTool):
             range_max=params.get("range_max"),
             ocr_confidence_threshold=params.get("ocr_confidence_threshold"),
             ocr_preprocess=params.get("ocr_preprocess", False),
+            integers_only=params.get("integers_only", False),
             require_consecutive=params.get("require_consecutive", 1),
             languages=params.get("languages"),
             start_seconds=params.get("start_seconds", 0.0),
