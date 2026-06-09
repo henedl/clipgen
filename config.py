@@ -196,6 +196,7 @@ SCREENSPACE_CV_RESOLUTION_SCALE: float = (
 SCREENSPACE_RESTORE_MARKERS_ON_EDIT: bool = (
     True  # restore In/Out timeline markers when editing a task
 )
+SCREENSPACE_SHOW_CONFIDENCE_HISTOGRAM: bool = False  # show the per-detection confidence-distribution histogram in the Results panel
 
 # ── Highlights Reel ──────────────────────────────────────────────────
 HIGHLIGHTS_REEL_DURATION_SECONDS: int = 180  # 3-minute budget for highlights reel
@@ -368,6 +369,7 @@ SETTINGS_DESCRIPTIONS: dict[str, str] = {
     "SCREENSPACE_STATIC_FRAME_SKIP_THRESHOLD": "Skip frames whose average pixel difference from the previous sampled frame is below this value (Similarity/Text/Numbers/Scene scans). Lower = process more frames (catch subtle changes); higher = skip more aggressively on noisy footage. Default 2.0.",
     "SCREENSPACE_OCR_MIN_CONFIDENCE": "Default minimum EasyOCR per-detection confidence for Text/Numbers tasks. Raise to suppress noisy OCR misreads; lower if real hits are being dropped. Per-task slider overrides this default.",
     "SCREENSPACE_RESTORE_MARKERS_ON_EDIT": "When editing a task, restore the In/Out timeline markers to the range it was originally run with. Disable to keep your current markers in place when iterating across different parts of the timeline.",
+    "SCREENSPACE_SHOW_CONFIDENCE_HISTOGRAM": "Show a confidence-distribution histogram above the Results list (for tools that have confidence scores). Lets you see where detections cluster before moving the certainty cutoff. Off by default.",
 }
 
 # Studio-exposed settings with UI metadata (tab, group, type, constraints).
@@ -568,6 +570,11 @@ STUDIO_SETTINGS: dict[str, dict[str, Any]] = {
     "SCREENSPACE_RESTORE_MARKERS_ON_EDIT": {
         "tab": "Screenspace",
         "group": "Task Editing",
+        "type": "bool",
+    },
+    "SCREENSPACE_SHOW_CONFIDENCE_HISTOGRAM": {
+        "tab": "Screenspace",
+        "group": "Results Display",
         "type": "bool",
     },
     "RICH_COLORS": {"tab": "CLI", "group": "Terminal Output", "type": "bool"},

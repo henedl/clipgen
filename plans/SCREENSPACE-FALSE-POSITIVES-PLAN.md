@@ -16,7 +16,7 @@ This is a multi-phase effort ordered by impact-per-LOC. Each phase is independen
 | 3b | Text tool: opt-in character normalization | **Done** (`2ef5e81`) |
 | 5 | Extract hardcoded static-frame-skip threshold | **Done** |
 | 4 | Temporal coherence (`require_consecutive`) | **Done** |
-| 6 | Confidence histogram in results UI | Planned |
+| 6 | Confidence histogram in results UI | **Done** |
 
 Recommended ship order for the remainder: **3a → 3b → 5 → 4 → 6** (trivial/low-risk first; temporal coherence and the histogram last).
 
@@ -83,8 +83,9 @@ Single-frame matches at multi-second sampling are inherently flaky on compressed
 Give users a sightline on the confidence distribution before they move the existing certainty-cutoff slider.
 
 - **Frontend**: `<div id="confHistogram">` next to `#certaintyCutoff` in `screenspace.html`; `.conf-hist*` rules in `screenspace.css` using design tokens. `renderConfidenceHistogram(events, taskType)` buckets `event.confidence` into 10 bins, renders bars (fill via `--color-task-{type}`), overlays a marker line at the current cutoff and updates it on the slider's input handler. Hook into `renderResults`. Hide for tools with degenerate confidence (e.g. timelapse).
-- **Backend/manifest**: none (events already carry `confidence`, including numbers as of Phase 1).
-- **Tests**: none required (pure frontend); manual verification — bars match per-bucket counts, marker tracks the slider.
+- **As shipped**: pinned strip above `#resultsList` (the 34px tab-header toolbar was too cramped for inline placement); shown for the same 8 `hasConf` tools as the cutoff slider. **Gated behind a default-off Studio setting** `SCREENSPACE_SHOW_CONFIDENCE_HISTOGRAM` (`config.py` constant + `STUDIO_SETTINGS`/`SETTINGS_DESCRIPTIONS`, Screenspace tab → "Results Display"), mirrored to `state.showConfidenceHistogram` via `applyScreenspaceSettingsSnapshot`; the settings modal's onSave/onReset re-render results so the toggle is live.
+- **Backend/manifest**: none (events already carry `confidence`, including numbers as of Phase 1). The gating flag is a runtime Studio setting (via `/api/settings`), not a mirrored `get_frontend_config()` constant.
+- **Tests**: none required (pure frontend); manual verification — bars match per-bucket counts, marker tracks the slider, strip hidden unless the setting is on.
 - **Risk**: pure UX polish; ship only if Phases 1–5 leave a real gap.
 - **Effort**: M (mostly CSS/render).
 
