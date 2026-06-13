@@ -204,8 +204,8 @@ if (document.readyState === "loading") {
 // ---- Mask-image icon helpers ----
 //
 // Apply both `mask-image` and `-webkit-mask-image` to a DOM element. `urlValue`
-// is a CSS url(...) string such as 'url("icons/check.svg")' or
-// 'url("/screenspace/icons/eye.svg")'. The element's `mask-size`,
+// is a CSS url(...) string such as "url('icons/check.svg')" or
+// "url('/screenspace/icons/eye.svg')". The element's `mask-size`,
 // `mask-repeat`, and `background-color: currentColor` should come from a CSS
 // class on the element (see .xref-badge-icon, .cg-icon, .ss-task-icon, etc).
 
@@ -227,9 +227,11 @@ var maskIconStyle = function (urlValue) {
 // (the common relative case). Pages with a different icon route pass their own
 // (e.g. "/screenspace/icons/", "../screenspace/icons/").
 
-// Full CSS url(...) string for an icon basename.
+// Full CSS url(...) string for an icon basename. Single-quoted so the result is
+// safe to embed inside a double-quoted HTML style attribute (e.g.
+// `style="..."`); a double-quoted url() would terminate the attribute early.
 var iconMaskUrl = function (name, basePath) {
-  return 'url("' + (basePath || "icons/") + name + '.svg")';
+  return "url('" + (basePath || "icons/") + name + ".svg')";
 };
 
 // Inline-style string for embedding in HTML strings.
