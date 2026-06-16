@@ -533,8 +533,10 @@ def _participant_video_duration(participant_id: str) -> float | None:
     video_path, mtime_ns = resolved
     with _video_metadata_cache_lock:
         cached = _video_metadata_cache.get(participant_id)
+    # Use the unrounded duration: the cached ``duration`` is rounded for display
+    # and would mis-flag pins within ~0.5s of the true end.
     if cached is not None and cached[0] == mtime_ns:
-        return cached[1].get("duration") or None
+        return cached[1].get("duration_seconds") or None
     props = video.probe_video_properties(video_path)
     if props is None:
         return None
@@ -869,6 +871,9 @@ def api_video_info(participant: str) -> FlaskResponse:
     info: dict[str, Any] = {
         "participant": participant,
         "duration": duration,
+        # Unrounded duration retained for precise comparisons (e.g. pin
+        # staleness); the rounded ``duration`` above stays the display value.
+        "duration_seconds": duration_seconds,
         "fps": vid_fps,
         "width": width if width > 0 else None,
         "height": height if height > 0 else None,

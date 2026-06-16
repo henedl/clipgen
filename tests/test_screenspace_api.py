@@ -242,6 +242,41 @@ def test_pins_isolated_per_participant(client):
     assert len(client.get("/screenspace/api/pins/P02").get_json()["pins"]) == 1
 
 
+def test_participant_video_duration_reads_exact_from_cache(tmp_path, monkeypatch):
+    vid = tmp_path / "P01.mp4"
+    vid.write_bytes(b"x")
+    mtime_ns = vid.stat().st_mtime_ns
+    monkeypatch.setattr(
+        screenspace_server,
+        "_participants",
+        [{"id": "P01", "video_path": str(vid), "has_video": True}],
+    )
+    # Warm cache: rounded display duration is 10, exact is 10.4.
+    monkeypatch.setattr(
+        screenspace_server,
+        "_video_metadata_cache",
+        {"P01": (mtime_ns, {"duration": 10, "duration_seconds": 10.4})},
+    )
+    assert screenspace_server._participant_video_duration("P01") == 10.4
+
+
+def test_pins_stale_flag_uses_exact_duration(client, monkeypatch):
+    # Exact duration 10.4: a rounded duration (10) would wrongly flag the 10.2
+    # pin as stale. Staleness must use the unrounded value.
+    monkeypatch.setattr(
+        screenspace_server, "_participant_video_duration", lambda pid: 10.4
+    )
+    for ts in (10.0, 10.2, 10.5):
+        client.post(
+            "/screenspace/api/pins/P01", json={"timestamp": ts, "polarity": "positive"}
+        )
+    pins = client.get("/screenspace/api/pins/P01").get_json()["pins"]
+    by_ts = {p["timestamp"]: p["stale"] for p in pins}
+    assert by_ts[10.0] is False
+    assert by_ts[10.2] is False
+    assert by_ts[10.5] is True
+
+
 # ---- Regions ----
 
 
