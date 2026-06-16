@@ -220,6 +220,19 @@
             <img id="modelViewImage" alt="Preprocessed preview" />
           </div>
         </div>
+        <div id="calibrationPanel" class="cal-panel collapsed hidden">
+          <button id="calibrationToggle" class="cal-toggle" type="button" aria-expanded="false">
+            <span class="cal-icon"></span>
+            <span class="cal-label">Calibration</span>
+            <span class="cal-hint">score against pinned frames</span>
+          </button>
+          <div id="calibrationBody" class="cal-body hidden">
+            <div id="calibrationSummary" class="cal-summary" aria-live="polite"></div>
+            <div id="calibrationStrips" class="cal-strips"></div>
+            <div id="calibrationNote" class="cal-note hidden"></div>
+            <div id="calibrationStatus" class="cal-status hidden"></div>
+          </div>
+        </div>
       </div>
     </section>
     <div id="rightPane">
