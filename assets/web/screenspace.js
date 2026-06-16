@@ -203,6 +203,9 @@
     pins: [],
     maxPins: null,
     hoveredPinId: null,
+    calibrationOpen: false,
+    calibrationResult: null,
+    calibrationOcrWarmed: false,
   };
 
   var _timelineHitRects = [];
@@ -984,6 +987,13 @@
     state.heatmapOverlay = null;
     state.pins = [];
     state.hoveredPinId = null;
+    // Drop the prior participant's calibration scores and invalidate any
+    // in-flight /api/calibrate response so it can't repaint the strip; the pin
+    // load below re-evaluates once the new participant's pins arrive.
+    state.calibrationResult = null;
+    _calibrationGen += 1;
+    updateCalibrationVisibility();
+    renderCalibration();
     renderPinTray();
     // Reset video playback
     var videoEl = qs("#videoPlayer");
@@ -1055,6 +1065,8 @@
         renderPinTray();
         updatePinButtons();
         renderTimeline();
+        updateCalibrationVisibility();
+        refreshCalibration();
       })
       .catch(function () {});
   }
@@ -1102,6 +1114,8 @@
         renderPinTray();
         updatePinButtons();
         renderTimeline();
+        updateCalibrationVisibility();
+        refreshCalibration();
       })
       .catch(function () { showToast("Failed to pin frame"); });
   }
@@ -1114,6 +1128,8 @@
         renderPinTray();
         updatePinButtons();
         renderTimeline();
+        updateCalibrationVisibility();
+        refreshCalibration();
       })
       .catch(function () { showToast("Failed to remove pin"); });
   }
@@ -1128,6 +1144,7 @@
         pin.polarity = data.pin.polarity;
         renderPinTray();
         renderTimeline();
+        refreshCalibration();
       })
       .catch(function () { showToast("Failed to update pin"); });
   }
@@ -1641,6 +1658,7 @@
           if (region.description) saved.description = region.description;
           state.regions[name] = saved;
           renderOverlay();
+          refreshCalibration({ debounce: true });
         }
       })
       .catch(function () { showToast("Failed to update region"); });
@@ -1710,6 +1728,9 @@
           var mtHex = qs("#paramColorHex" + mtSfx);
           if (mtHex) mtHex.value = rgbToHex(pixel[0], pixel[1], pixel[2]);
           state._mtPipetteStep = -1;
+          // Hidden inputs set programmatically — no DOM event fires, so nudge
+          // calibration directly (mirrors setTargetColor on the single-tool path).
+          refreshCalibration({ debounce: true });
         } else {
           setTargetColor(hsv.h, hsv.s, hsv.v);
         }
@@ -2137,6 +2158,7 @@
     renderRunRegionPicker();
     updateRegionChipsOverflow();
     refreshModelView({ debounce: true });
+    refreshCalibration({ debounce: true });
   }
 
   function updateRegionChipsOverflow() {
@@ -3746,6 +3768,7 @@
           return function () {
             state.multitoolSteps[idx]._scenes.splice(ri, 1);
             renderMtScenes();
+            refreshCalibration({ debounce: true });
           };
         })(refIdx));
         item.appendChild(rmBtn);
@@ -3768,6 +3791,7 @@
       });
       scNameInp.value = "";
       renderMtScenes();
+      refreshCalibration({ debounce: true });
       showToast("Scene '" + name + "' at " + formatTime(state.currentTimestamp, { decimals: 1 }));
     });
     addScCtrl.appendChild(scCapBtn);
@@ -3824,6 +3848,7 @@
     capBtn.addEventListener("click", function () {
       state.multitoolSteps[idx]._refTs = state.currentTimestamp;
       tsLabel.textContent = formatTime(state.currentTimestamp, { decimals: 1 });
+      refreshCalibration({ debounce: true });
     });
     c.appendChild(capBtn);
     c.appendChild(tsLabel);
@@ -3970,6 +3995,7 @@
             opBtn.title = next === "NOT"
               ? "NOT — frame rejected if this matches (click to switch to AND)"
               : "AND — frame must also match (click to switch to NOT)";
+            refreshCalibration({ debounce: true });
           });
         })(idx);
         rail.appendChild(opBtn);
@@ -4581,6 +4607,11 @@
       // updateRunButton explicitly) still enable the button once the list is
       // long enough.
       updateRunButton();
+      updateCalibrationVisibility();
+      // Drop the prior tool's scores so the strip doesn't render a stale axis;
+      // multitool returns early, so mirror the bottom-of-function cleanup here.
+      state.calibrationResult = null;
+      refreshCalibration();
       return;
     }
 
@@ -4624,6 +4655,11 @@
     updateRunButton();
     _updateOverlayUi();
     refreshModelView();
+    updateCalibrationVisibility();
+    // Drop the prior tool's scores so the strip doesn't briefly render the old
+    // axis before the new evaluation returns.
+    state.calibrationResult = null;
+    refreshCalibration();
   }
 
   function addParamRow(container, label, control, valueDisplayId) {
@@ -5059,6 +5095,436 @@
     tmp.src = url;
   }
 
+  // ---- Calibration strip ----
+  //
+  // Scores the participant's pins against the active tool + parameters and
+  // plots each as a dot on a normalized 0–1 "matchiness" axis (green = positive
+  // pin, red = negative). The threshold control is drawn as a vertical line so
+  // the researcher can place the cutoff in the gap between the two populations.
+  // Evaluation is per-frame only — temporal params (consecutive / detect-first)
+  // are not validated; the coverage note says so. Unlike the model view, which
+  // previews the current playhead, calibration scores the PINNED timestamps, so
+  // it never re-runs on seek.
+
+  var _calibrationGen = 0;
+  var _calibrationTimer = 0;
+
+  // Per-tool axis metadata. Axis range is read from the tool's threshold slider
+  // (min/max) where one exists in matching units. color and scene have no single
+  // clean cutoff, so they draw no line and rely on per-pin pass/fail plus the gap
+  // between populations. inactivity's Sensitivity slider is already in phash-
+  // distance units, so its line is drawn on an inverted axis (low distance = more
+  // inactive = right). Per-pin scalars come from the backend `score`; this map
+  // only positions them.
+  var CAL_AXIS = {
+    change: { sliderId: "paramChangeThresh", invert: false, drawLine: true },
+    similarity: { sliderId: "paramSimThresh", invert: false, drawLine: true },
+    text: { sliderId: "paramTextFuzzy", invert: false, drawLine: true },
+    template: { sliderId: "paramTemplateThresh", invert: false, drawLine: true },
+    flow: { sliderId: "paramFlowMag", invert: false, drawLine: true },
+    numbers: { sliderId: "paramNumOcrConf", invert: false, drawLine: true },
+    inactivity: { sliderId: "paramInactThresh", invert: true, drawLine: true },
+    color: {
+      sliderId: null, rangeMin: 0, rangeMax: 1, invert: false, drawLine: false,
+      rowNote: "Tolerance ≠ confidence — read the gap between green and red dots.",
+    },
+    scene: {
+      sliderId: null, rangeMin: 0, rangeMax: 1, invert: false, drawLine: false,
+      rowNote: "Per-scene thresholds — dot colour is pass/fail; hover for the matched scene.",
+    },
+  };
+
+  function _calIsCalibratable(tool) {
+    return tool === "multitool" || !!CAL_AXIS[tool];
+  }
+
+  function _calTitle(type) {
+    return type ? type.charAt(0).toUpperCase() + type.slice(1) : "";
+  }
+
+  // Axis range from the live slider DOM (the control the user is moving) or the
+  // descriptor fallback when there is no matching-units slider (color / scene).
+  function _calAxisRange(axis, sliderId) {
+    var slider = sliderId ? qs("#" + sliderId) : null;
+    if (slider) {
+      var mn = parseFloat(slider.min);
+      var mx = parseFloat(slider.max);
+      if (isFinite(mn) && isFinite(mx) && mx > mn) {
+        return { min: mn, max: mx, value: parseFloat(slider.value) };
+      }
+    }
+    return {
+      min: axis && axis.rangeMin != null ? axis.rangeMin : 0,
+      max: axis && axis.rangeMax != null ? axis.rangeMax : 1,
+      value: null,
+    };
+  }
+
+  function _calPos(value, range, invert) {
+    if (!(range.max > range.min)) return 0;
+    var t = (value - range.min) / (range.max - range.min);
+    if (t < 0) t = 0; else if (t > 1) t = 1;
+    if (invert) t = 1 - t;
+    return t * 100;
+  }
+
+  // A pin's pass/fail contradicts its polarity when a positive doesn't fire or a
+  // negative does.
+  function _calContradicts(polarity, passed) {
+    if (passed == null) return false;
+    return polarity === "positive" ? !passed : !!passed;
+  }
+
+  // Reduce one pin to pass / fail / null (indeterminate or not-evaluable).
+  function _calPinPass(tool, e) {
+    if (tool === "multitool") {
+      if (!e || e.status === "not_evaluable" || !e.steps) return null;
+      return e.passed == null ? null : !!e.passed;
+    }
+    if (!e || e.status !== "ok") return null;
+    return !!e.passed;
+  }
+
+  function _calDotTooltip(tool, sc, timestamp) {
+    var lines = [formatTime(timestamp, { decimals: 1 })];
+    if (!sc || sc.status === "not_evaluable" || sc.score == null) {
+      lines.push("not evaluable");
+      return lines.join("\n");
+    }
+    var d = sc.detail || {};
+    var s = Number(sc.score);
+    if (tool === "text") {
+      lines.push("fuzzy " + s.toFixed(2));
+      if (d.text_found) lines.push("“" + d.text_found + "”");
+    } else if (tool === "numbers") {
+      lines.push("OCR conf " + s.toFixed(2));
+      if (d.number_found != null) lines.push("read " + d.number_found);
+    } else if (tool === "scene") {
+      lines.push("similarity " + s.toFixed(2));
+      if (d.scene_name) lines.push(d.scene_name);
+    } else if (tool === "inactivity") {
+      lines.push("distance " + Math.round(s));
+    } else if (tool === "flow") {
+      lines.push("magnitude " + s.toFixed(2));
+    } else {
+      lines.push("score " + s.toFixed(3));
+    }
+    lines.push(sc.passed ? "✓ matches" : "✗ no match");
+    return lines.join("\n");
+  }
+
+  // Build one track (axis + dots + optional threshold line). `rows` is
+  // [{polarity, timestamp, sc, stale}] where `sc` is the score object for this
+  // track (the pin entry for a single tool, or entry.steps[k] for multitool).
+  function _calBuildTrack(rows, tool, axis, sliderId, label) {
+    var track = el("div", "cal-track");
+    if (label) track.appendChild(label);
+    var range = _calAxisRange(axis, sliderId);
+    var ax = el("div", "cal-axis");
+    if (axis.drawLine && range.value != null) {
+      var line = el("div", "cal-threshold");
+      line.style.left = _calPos(range.value, range, axis.invert) + "%";
+      line.setAttribute("data-cal-slider", sliderId || "");
+      line.setAttribute("data-cal-invert", axis.invert ? "1" : "0");
+      ax.appendChild(line);
+    }
+    var stack = {}; // rounded position bucket -> count, for collision fan-out
+    rows.forEach(function (r) {
+      var sc = r.sc;
+      var dot = el("button", "cal-dot cal-dot--" + (r.polarity === "negative" ? "negative" : "positive"));
+      dot.type = "button";
+      var evaluable = sc && sc.status === "ok" && sc.score != null && isFinite(sc.score);
+      var pos = evaluable ? _calPos(sc.score, range, axis.invert) : 0;
+      dot.style.left = pos + "%";
+      if (!evaluable) dot.classList.add("cal-dot--hollow");
+      if (r.stale) dot.classList.add("cal-dot--hollow", "cal-dot--stale");
+      if (evaluable && _calContradicts(r.polarity, sc.passed)) dot.classList.add("cal-dot--fail");
+      // Fan dots that land on the same spot upward so each stays hoverable;
+      // cap the stack so a tight cluster (e.g. several pins at SSIM 1.0) doesn't
+      // overflow the axis into the row above.
+      var key = Math.round(pos / 3);
+      var n = stack[key] || 0;
+      stack[key] = n + 1;
+      if (n > 0) dot.style.bottom = "calc(var(--space-2) * " + Math.min(n, 4) + ")";
+      var tip = _calDotTooltip(tool, sc, r.timestamp);
+      dot.setAttribute("data-tooltip", tip);
+      dot.setAttribute("aria-label", tip.replace(/\n/g, ", "));
+      (function (ts) {
+        dot.addEventListener("click", function () { loadFrame(ts); });
+      })(r.timestamp);
+      ax.appendChild(dot);
+    });
+    track.appendChild(ax);
+    return { track: track, note: (!axis.drawLine && axis.rowNote) ? axis.rowNote : null };
+  }
+
+  function _calSummary(result) {
+    var tool = result.tool;
+    var posTotal = 0, posPass = 0, negTotal = 0, negPass = 0, na = 0;
+    result.pins.forEach(function (e) {
+      var p = _calPinPass(tool, e);
+      if (p == null) { na++; return; }
+      if (e.polarity === "negative") { negTotal++; if (!p) negPass++; }
+      else { posTotal++; if (p) posPass++; }
+    });
+    var text = posPass + "/" + posTotal + " positives pass · "
+      + negPass + "/" + negTotal + " negatives pass";
+    if (na) text += " · " + na + " not evaluable";
+    var pass = posTotal > 0 && posPass === posTotal && negPass === negTotal;
+    return { text: text, pass: pass };
+  }
+
+  function _calCoverageNote() {
+    var consecutiveIds = ["paramChangeConsecutive", "paramTextConsecutive", "paramNumConsecutive", "paramFlowConsecutive"];
+    var hasConsecutive = consecutiveIds.some(function (id) {
+      var c = qs("#" + id);
+      return c && parseInt(c.value, 10) > 1;
+    });
+    var df = qs("#paramDetectFirst");
+    if (hasConsecutive || (df && df.checked)) {
+      return "Consecutive / detect-first settings are not validated by calibration.";
+    }
+    return null;
+  }
+
+  function _calSetNote(notes) {
+    var noteEl = qs("#calibrationNote");
+    if (!noteEl) return;
+    if (!notes.length) { noteEl.textContent = ""; noteEl.classList.add("hidden"); return; }
+    noteEl.textContent = notes.join("  •  ");
+    noteEl.classList.remove("hidden");
+  }
+
+  function renderCalibration() {
+    var result = state.calibrationResult;
+    var summaryEl = qs("#calibrationSummary");
+    var stripsEl = qs("#calibrationStrips");
+    if (!stripsEl) return;
+    stripsEl.innerHTML = "";
+    if (!result || !result.pins || !result.pins.length) {
+      if (summaryEl) summaryEl.textContent = "";
+      _calSetNote([]);
+      return;
+    }
+    var tool = result.tool;
+    var notes = [];
+    var staleById = {};
+    (state.pins || []).forEach(function (p) { staleById[p.id] = !!p.stale; });
+
+    var sum = _calSummary(result);
+    if (summaryEl) {
+      summaryEl.innerHTML = "";
+      summaryEl.appendChild(el("span", "cal-chip" + (sum.pass ? " cal-chip--pass" : ""), sum.text));
+    }
+
+    var frag = document.createDocumentFragment();
+    if (tool === "multitool") {
+      var stepCount = 0;
+      result.pins.forEach(function (e) {
+        if (e.steps && e.steps.length > stepCount) stepCount = e.steps.length;
+      });
+      for (var k = 0; k < stepCount; k++) {
+        (function (k) {
+          var stepType = null, logic = null;
+          var rows = result.pins.map(function (e) {
+            var sc = e.steps && e.steps[k] ? e.steps[k] : null;
+            if (sc) { stepType = sc.type; if (k > 0) logic = sc.logic; }
+            return { polarity: e.polarity, timestamp: e.timestamp, sc: sc, stale: staleById[e.pin_id] };
+          });
+          if (!stepType) {
+            var def = state.multitoolSteps[k];
+            stepType = def ? def.type : "change";
+            if (k > 0 && def) logic = (def.logic || "AND").toUpperCase();
+          }
+          var axis = CAL_AXIS[stepType] || { sliderId: null, rangeMin: 0, rangeMax: 1, invert: false, drawLine: false };
+          var sliderId = axis.sliderId ? axis.sliderId + "_mt" + k : null;
+          var label = el("div", "cal-track-label");
+          label.appendChild(el("span", null, (k + 1) + ". " + _calTitle(stepType)));
+          if (k > 0 && logic) {
+            label.appendChild(el("span", "cal-track-logic" + (logic === "NOT" ? " is-not" : ""), logic));
+          }
+          var built = _calBuildTrack(rows, stepType, axis, sliderId, label);
+          frag.appendChild(built.track);
+          if (built.note) notes.push((k + 1) + ". " + built.note);
+        })(k);
+      }
+    } else {
+      var axis2 = CAL_AXIS[tool];
+      if (axis2) {
+        var rows2 = result.pins.map(function (e) {
+          return { polarity: e.polarity, timestamp: e.timestamp, sc: e, stale: staleById[e.pin_id] };
+        });
+        var built2 = _calBuildTrack(rows2, tool, axis2, axis2.sliderId || null, null);
+        frag.appendChild(built2.track);
+        if (built2.note) notes.push(built2.note);
+      }
+    }
+    stripsEl.appendChild(frag);
+    var cov = _calCoverageNote();
+    if (cov) notes.push(cov);
+    _calSetNote(notes);
+  }
+
+  // Glide the threshold line(s) with the slider without refetching scores.
+  function updateCalibrationThresholdLine() {
+    if (!state.calibrationOpen) return;
+    var lines = document.querySelectorAll("#calibrationStrips .cal-threshold[data-cal-slider]");
+    Array.prototype.forEach.call(lines, function (line) {
+      var sid = line.getAttribute("data-cal-slider");
+      if (!sid) return;
+      var slider = qs("#" + sid);
+      if (!slider) return;
+      var mn = parseFloat(slider.min), mx = parseFloat(slider.max), val = parseFloat(slider.value);
+      if (!(mx > mn) || !isFinite(val)) return;
+      var invert = line.getAttribute("data-cal-invert") === "1";
+      line.style.left = _calPos(val, { min: mn, max: mx }, invert) + "%";
+    });
+  }
+
+  function _calStatus(msg, kind) {
+    var statusEl = qs("#calibrationStatus");
+    if (!statusEl) return;
+    statusEl.classList.remove("cal-status--loading", "cal-status--error");
+    if (!msg) { statusEl.textContent = ""; statusEl.classList.add("hidden"); return; }
+    statusEl.textContent = msg;
+    if (kind === "loading") statusEl.classList.add("cal-status--loading");
+    else if (kind === "error") statusEl.classList.add("cal-status--error");
+    statusEl.classList.remove("hidden");
+  }
+
+  // Build the calibrate request body, reusing the Run path's param + region
+  // construction. Returns {skip: reason} when the tool isn't ready (shown
+  // inline instead of toasting on every keystroke).
+  function _calBuildBody() {
+    var tool = state.activeWorkflow;
+    if (!_calIsCalibratable(tool)) return { skip: "Calibration is not available for this tool." };
+    var params = gatherWorkflowParams(tool, { silent: true });
+    if (params === null) return { skip: "Add the missing parameters above to calibrate." };
+    var body = { participant: state.selectedParticipant, tool: tool, parameters: params };
+    if (tool === "multitool") {
+      body.region = (params.steps && params.steps[0]) ? (params.steps[0].region || "") : "";
+    } else {
+      var ref = state.activeRegion ? activeRegionRef(state.activeRegion)
+        : (state.runRegions.length ? state.runRegions[0] : null);
+      var norm = normalizeRegionRef(ref);
+      if (!norm && !(tool === "template" && state.uploadedTemplate)) {
+        return { skip: "Select a region to calibrate." };
+      }
+      body.region = norm ? norm.name : "";
+      if (norm) body.region_ref = regionRefPayload(norm);
+    }
+    return { body: body };
+  }
+
+  function _doRefreshCalibration() {
+    var gen = ++_calibrationGen;
+    var pid = state.selectedParticipant;
+    if (!pid || !state.pins || !state.pins.length) {
+      state.calibrationResult = null;
+      renderCalibration();
+      _calStatus("");
+      return;
+    }
+    var built = _calBuildBody();
+    if (built.skip) {
+      state.calibrationResult = null;
+      renderCalibration();
+      _calStatus(built.skip);
+      return;
+    }
+    var tool = built.body.tool;
+    var needsOcr = tool === "text" || tool === "numbers"
+      || (tool === "multitool" && (built.body.parameters.steps || []).some(function (s) {
+        return s.type === "text" || s.type === "numbers";
+      }));
+    // Cold-start OCR is the only slow case worth flagging; otherwise show a
+    // brief "Evaluating…" only on the first load so debounced re-evals (which
+    // keep the prior dots visible) don't flicker the status line.
+    if (needsOcr && !state.calibrationOcrWarmed) {
+      _calStatus("Loading OCR model… (first run only)", "loading");
+    } else if (!state.calibrationResult) {
+      _calStatus("Evaluating…", "loading");
+    }
+    apiPost("api/calibrate", built.body)
+      .then(function (data) {
+        // Reject stale responses: a superseded refresh (gen) or a response for
+        // a participant we've since switched away from must not overwrite the
+        // strip.
+        if (gen !== _calibrationGen || pid !== state.selectedParticipant) return;
+        if (!data || !data.ok) {
+          state.calibrationResult = null;
+          renderCalibration();
+          _calStatus("Calibration unavailable.", "error");
+          return;
+        }
+        if (needsOcr) state.calibrationOcrWarmed = true;
+        state.calibrationResult = data;
+        renderCalibration();
+        _calStatus("");
+      })
+      .catch(function () {
+        if (gen !== _calibrationGen || pid !== state.selectedParticipant) return;
+        // Clear the now-stale dots so an error can't be read as current scores.
+        state.calibrationResult = null;
+        renderCalibration();
+        _calStatus("Calibration unavailable.", "error");
+      });
+  }
+
+  function refreshCalibration(opts) {
+    if (!state.calibrationOpen) return;
+    if (_calibrationTimer) { clearTimeout(_calibrationTimer); _calibrationTimer = 0; }
+    if (opts && opts.debounce) {
+      _calibrationTimer = setTimeout(_doRefreshCalibration, 150);
+    } else {
+      _doRefreshCalibration();
+    }
+  }
+
+  // Hide the whole panel when the participant has no pins (distinct from the
+  // collapsed open/close state).
+  function updateCalibrationVisibility() {
+    var panel = qs("#calibrationPanel");
+    if (!panel) return;
+    panel.classList.toggle("hidden", !(state.pins && state.pins.length));
+  }
+
+  function toggleCalibration() {
+    state.calibrationOpen = !state.calibrationOpen;
+    var panel = qs("#calibrationPanel");
+    var body = qs("#calibrationBody");
+    var btn = qs("#calibrationToggle");
+    if (state.calibrationOpen) {
+      panel.classList.remove("collapsed");
+      body.classList.remove("hidden");
+      btn.setAttribute("aria-expanded", "true");
+      refreshCalibration();
+    } else {
+      panel.classList.add("collapsed");
+      body.classList.add("hidden");
+      btn.setAttribute("aria-expanded", "false");
+    }
+  }
+
+  function initCalibration() {
+    var btn = qs("#calibrationToggle");
+    if (btn) btn.addEventListener("click", toggleCalibration);
+    // Delegated listeners on the stable param containers: any control change
+    // glides the threshold line (sync) and re-evaluates scores (debounced).
+    // This catches every param input — sliders, text, selects, checkboxes —
+    // including ones (search string, operator) that the model view ignores.
+    ["workflowParams", "workflowIntervalSlot"].forEach(function (id) {
+      var container = qs("#" + id);
+      if (!container) return;
+      var handler = function () {
+        updateCalibrationThresholdLine();
+        refreshCalibration({ debounce: true });
+      };
+      container.addEventListener("input", handler);
+      container.addEventListener("change", handler);
+    });
+  }
+
   function rangeInput(id, min, max, value, step) {
     var inp = document.createElement("input");
     inp.type = "range";
@@ -5152,6 +5618,12 @@
     updateColorPreview();
     renderColorPalette();
     renderBrightnessStrip();
+    // The H/S/V hidden inputs are set programmatically (no DOM input event), so
+    // the #workflowParams delegated listener never fires — nudge calibration
+    // directly. The color target drives the score, so palette / pipette / "From
+    // Region" must re-evaluate. refreshCalibration self-guards on panel state.
+    updateCalibrationThresholdLine();
+    refreshCalibration({ debounce: true });
   }
 
   function sizeCanvasToDisplay(canvas) {
@@ -5425,7 +5897,12 @@
     });
   }
 
-  function gatherMultitoolStepParams(stepType, idx) {
+  function gatherMultitoolStepParams(stepType, idx, opts) {
+    // opts.silent suppresses missing-input toasts so the calibration strip can
+    // probe params on every keystroke without spamming the user (the Run path
+    // leaves it off and keeps the toasts).
+    var silent = !!(opts && opts.silent);
+    function toast(msg) { if (!silent) showToast(msg); }
     var sfx = "_mt" + idx;
     var p = {};
     if (stepType === "color") {
@@ -5446,7 +5923,7 @@
     } else if (stepType === "similarity") {
       var step = state.multitoolSteps[idx];
       if (!step || step._refTs === undefined) {
-        showToast("Step " + (idx + 1) + ": capture a reference frame first");
+        toast("Step " + (idx + 1) + ": capture a reference frame first");
         return null;
       }
       p.reference_timestamp = step._refTs;
@@ -5454,7 +5931,7 @@
     } else if (stepType === "text") {
       p.search_string = (qs("#paramTextSearch" + sfx) || {}).value || "";
       if (!p.search_string.trim()) {
-        showToast("Step " + (idx + 1) + ": enter a search string");
+        toast("Step " + (idx + 1) + ": enter a search string");
         return null;
       }
       p.fuzzy_threshold = numberOrDefault((qs("#paramTextFuzzy" + sfx) || {}).value, 0.80);
@@ -5465,7 +5942,7 @@
       p.operator = (qs("#paramNumOperator" + sfx) || {}).value || "gt";
       p.target_value = parseFloat((qs("#paramNumTarget" + sfx) || {}).value);
       if (isNaN(p.target_value)) {
-        showToast("Step " + (idx + 1) + ": enter a valid target number");
+        toast("Step " + (idx + 1) + ": enter a valid target number");
         return null;
       }
       p.ocr_confidence_threshold = numberOrDefault((qs("#paramNumOcrConf" + sfx) || {}).value, CLIPGEN_CONFIG.screenspaceOcrMinConfidence);
@@ -5474,7 +5951,7 @@
     } else if (stepType === "template") {
       step = state.multitoolSteps[idx];
       if (!step || step._refTs === undefined) {
-        showToast("Step " + (idx + 1) + ": capture a template frame first");
+        toast("Step " + (idx + 1) + ": capture a template frame first");
         return null;
       }
       p.reference_timestamp = step._refTs;
@@ -5484,7 +5961,7 @@
     } else if (stepType === "scene") {
       step = state.multitoolSteps[idx];
       if (!step || !step._scenes || step._scenes.length === 0) {
-        showToast("Step " + (idx + 1) + ": add at least one scene reference");
+        toast("Step " + (idx + 1) + ": add at least one scene reference");
         return null;
       }
       p.scene_references = step._scenes.map(function (ref) {
@@ -5500,16 +5977,20 @@
     return p;
   }
 
-  function gatherWorkflowParams(type) {
+  function gatherWorkflowParams(type, opts) {
+    // opts.silent suppresses missing-input toasts (used by the calibration
+    // strip, which probes params continuously); the Run path omits it.
+    var silent = !!(opts && opts.silent);
+    function toast(msg) { if (!silent) showToast(msg); }
     var params = {};
     if (type === "multitool") {
       if (state.multitoolSteps.length < 2) {
-        showToast("Add at least 2 steps");
+        toast("Add at least 2 steps");
         return null;
       }
       params.steps = [];
       for (var i = 0; i < state.multitoolSteps.length; i++) {
-        var stepP = gatherMultitoolStepParams(state.multitoolSteps[i].type, i);
+        var stepP = gatherMultitoolStepParams(state.multitoolSteps[i].type, i, opts);
         if (stepP === null) return null;
         stepP.type = state.multitoolSteps[i].type;
         if (i > 0) {
@@ -5544,7 +6025,7 @@
       if (rcChange > 1) params.require_consecutive = rcChange;
     } else if (type === "similarity") {
       if (state.referenceTimestamp === null) {
-        showToast("Capture a reference frame first");
+        toast("Capture a reference frame first");
         return null;
       }
       params.reference_timestamp = state.referenceTimestamp;
@@ -5553,7 +6034,7 @@
     } else if (type === "text") {
       params.search_string = (qs("#paramTextSearch") || {}).value || "";
       if (!params.search_string.trim()) {
-        showToast("Enter a search string");
+        toast("Enter a search string");
         return null;
       }
       params.fuzzy_threshold = numberOrDefault((qs("#paramTextFuzzy") || {}).value, 0.80);
@@ -5572,17 +6053,17 @@
         params.range_min = parseFloat((qs("#paramNumMin") || {}).value);
         params.range_max = parseFloat((qs("#paramNumMax") || {}).value);
         if (isNaN(params.range_min) || isNaN(params.range_max)) {
-          showToast("Enter valid min and max values");
+          toast("Enter valid min and max values");
           return null;
         }
         if (params.range_min > params.range_max) {
-          showToast("Min must be less than or equal to max");
+          toast("Min must be less than or equal to max");
           return null;
         }
       } else {
         params.target_value = parseFloat((qs("#paramNumTarget") || {}).value);
         if (isNaN(params.target_value)) {
-          showToast("Enter a valid target number");
+          toast("Enter a valid target number");
           return null;
         }
       }
@@ -5603,7 +6084,7 @@
       } else if (state.referenceTimestamp !== null) {
         params.reference_timestamp = state.referenceTimestamp;
       } else {
-        showToast("Capture a template region or upload a PNG");
+        toast("Capture a template region or upload a PNG");
         return null;
       }
       params.threshold = numberOrDefault((qs("#paramTemplateThresh") || {}).value, 0.70);
@@ -5619,7 +6100,7 @@
       if (rcFlow > 1) params.require_consecutive = rcFlow;
     } else if (type === "scene") {
       if (state.sceneReferences.length === 0) {
-        showToast("Add at least one scene reference");
+        toast("Add at least one scene reference");
         return null;
       }
       params.scene_references = state.sceneReferences.map(function (ref) {
@@ -7466,6 +7947,7 @@
     initTimeline();
     initWorkflowTabs();
     initModelView();
+    initCalibration();
     initParamTooltips();
     initRunButton();
     initTaskQueue();

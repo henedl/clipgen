@@ -69,13 +69,13 @@ The calibration scalar must be monotonic in "matchiness" and independent of the 
 
 ## Phase 3: Calibration strip UI
 
-- [ ] New collapsible "Calibration" panel in the workflow body, beside Model view; visible whenever ≥ 1 pin exists for the selected participant
-- [ ] Score strip: normalized 0–1 horizontal axis (scalar and threshold normalized via the tool's slider min/max); one dot per pin (green = positive, red = negative, hollow = `not_evaluable`); threshold cutoff drawn as a vertical line that tracks the slider live
-- [ ] Dot hover: tooltip with timestamp, score, and tool `detail` (e.g. OCR text found); click seeks the viewer
-- [ ] Pass/fail summary chip: "5/5 positives pass · 0/4 negatives pass" — turns green only when all positives pass *and* all negatives fail
-- [ ] Debounced re-evaluation on any parameter input (reuse the model-view debounce pattern, 150 ms)
-- [ ] Multitool: one strip row per step; summary chip reflects chain logic including NOT steps
-- [ ] Coverage note when temporal params are set: "Consecutive/interval settings are not validated by calibration"
+- [x] New collapsible "Calibration" panel in the workflow body, beside Model view; visible whenever ≥ 1 pin exists for the selected participant
+- [x] Score strip: normalized 0–1 horizontal axis (scalar and threshold normalized via the tool's slider min/max); one dot per pin (green = positive, red = negative, hollow = `not_evaluable`); threshold cutoff drawn as a vertical line that tracks the slider live
+- [x] Dot hover: tooltip with timestamp, score, and tool `detail` (e.g. OCR text found); click seeks the viewer
+- [x] Pass/fail summary chip: "5/5 positives pass · 0/4 negatives pass" — turns green only when all positives pass *and* all negatives fail
+- [x] Debounced re-evaluation on any parameter input (reuse the model-view debounce pattern, 150 ms)
+- [x] Multitool: one strip row per step; summary chip reflects chain logic including NOT steps
+- [x] Coverage note when temporal params are set: "Consecutive/interval settings are not validated by calibration"
 
 ## Phase 4: Workflow integration
 
