@@ -2253,9 +2253,7 @@ def score_frame_for_tool(
     # zero-size region — the case when an uploaded template scans the whole
     # frame with no region_ref — is valid for it. Every other tool crops the
     # region, where an empty crop would break downstream cv2 ops.
-    if tool_type != "template" and (
-        region.get("w", 0) <= 0 or region.get("h", 0) <= 0
-    ):
+    if tool_type != "template" and (region.get("w", 0) <= 0 or region.get("h", 0) <= 0):
         return {"status": "not_evaluable"}
     tool = TOOLS.get(tool_type)
     if tool is None or not tool.score_key:
