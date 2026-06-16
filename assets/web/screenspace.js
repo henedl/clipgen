@@ -206,6 +206,7 @@
     calibrationOpen: false,
     calibrationResult: null,
     calibrationOcrWarmed: false,
+    calibrationGreen: false,
   };
 
   var _timelineHitRects = [];
@@ -4610,8 +4611,11 @@
       updateCalibrationVisibility();
       // Drop the prior tool's scores so the strip doesn't render a stale axis;
       // multitool returns early, so mirror the bottom-of-function cleanup here.
+      // renderCalibration() also resets calibrationGreen and the Run tooltip
+      // synchronously, before the async re-eval arrives.
       state.calibrationResult = null;
-      refreshCalibration();
+      renderCalibration();
+      if (!_suppressCalibrationRefresh) refreshCalibration();
       return;
     }
 
@@ -4657,9 +4661,12 @@
     refreshModelView();
     updateCalibrationVisibility();
     // Drop the prior tool's scores so the strip doesn't briefly render the old
-    // axis before the new evaluation returns.
+    // axis before the new evaluation returns. renderCalibration() also resets
+    // calibrationGreen and the Run tooltip synchronously, before the async
+    // re-eval arrives.
     state.calibrationResult = null;
-    refreshCalibration();
+    renderCalibration();
+    if (!_suppressCalibrationRefresh) refreshCalibration();
   }
 
   function addParamRow(container, label, control, valueDisplayId) {
@@ -5108,6 +5115,12 @@
 
   var _calibrationGen = 0;
   var _calibrationTimer = 0;
+  // Set while restoreTaskToWorkflow() rebuilds the param panel: the
+  // renderWorkflowParams() call there fires before the saved values are
+  // written, so its calibration re-eval would POST default params only to be
+  // immediately superseded. Suppress it; restore runs its own refresh at the
+  // end with the real values.
+  var _suppressCalibrationRefresh = false;
 
   // Per-tool axis metadata. Axis range is read from the tool's threshold slider
   // (min/max) where one exists in matching units. color and scene have no single
@@ -5304,6 +5317,8 @@
     if (!result || !result.pins || !result.pins.length) {
       if (summaryEl) summaryEl.textContent = "";
       _calSetNote([]);
+      state.calibrationGreen = false;
+      updateRunButton();
       return;
     }
     var tool = result.tool;
@@ -5312,6 +5327,7 @@
     (state.pins || []).forEach(function (p) { staleById[p.id] = !!p.stale; });
 
     var sum = _calSummary(result);
+    state.calibrationGreen = sum.pass;
     if (summaryEl) {
       summaryEl.innerHTML = "";
       summaryEl.appendChild(el("span", "cal-chip" + (sum.pass ? " cal-chip--pass" : ""), sum.text));
@@ -5363,6 +5379,7 @@
     var cov = _calCoverageNote();
     if (cov) notes.push(cov);
     _calSetNote(notes);
+    updateRunButton();
   }
 
   // Glide the threshold line(s) with the slider without refetching scores.
@@ -5472,7 +5489,10 @@
   }
 
   function refreshCalibration(opts) {
-    if (!state.calibrationOpen) return;
+    // Not gated on the panel being open: the Run "Calibrated" hint must reflect
+    // pin agreement whenever pins exist, even while the strip is collapsed.
+    // _doRefreshCalibration() no-ops cheaply (no POST) when there are no pins,
+    // so there's nothing to skip when the participant has none.
     if (_calibrationTimer) { clearTimeout(_calibrationTimer); _calibrationTimer = 0; }
     if (opts && opts.debounce) {
       _calibrationTimer = setTimeout(_doRefreshCalibration, 150);
@@ -5812,6 +5832,14 @@
       } else {
         btn.removeAttribute("data-tooltip");
       }
+    }
+    // Surface calibration agreement as a subtle hover hint on an enabled Run
+    // button (no blocking when red — researcher agency preserved). Shown
+    // whenever pins are satisfied, independent of the strip's collapsed state;
+    // calibrationGreen is only ever true after a green evaluation, which
+    // implies pins exist.
+    if (!btn.disabled && state.calibrationGreen) {
+      btn.setAttribute("data-tooltip", "Calibrated — pins satisfied");
     }
   }
 
@@ -6668,8 +6696,12 @@
       });
     }
 
-    // Rebuild param controls then set values
+    // Rebuild param controls then set values. Suppress the calibration re-eval
+    // this triggers — it would run on the just-reset default params; the
+    // refreshCalibration() at the end of restore evaluates the real values.
+    _suppressCalibrationRefresh = true;
     renderWorkflowParams();
+    _suppressCalibrationRefresh = false;
 
     params = task.parameters || {};
     if (task.type === "multitool") {
@@ -6773,6 +6805,10 @@
 
     syncValueDisplays();
     updateRunButton();
+    // Re-evaluate pins against the restored params so the strip (and the Run
+    // "Calibrated" hint) immediately reflect whether the saved task still
+    // satisfies them (no-op only when the participant has no pins).
+    refreshCalibration();
     showToast("Restored " + task.type + " task parameters");
   }
 

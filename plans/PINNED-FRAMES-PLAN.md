@@ -79,9 +79,9 @@ The calibration scalar must be monotonic in "matchiness" and independent of the 
 
 ## Phase 4: Workflow integration
 
-- [ ] "Run" button affordance: when calibration is green, subtle indicator on Run ("calibrated"); when red, no blocking — researcher agency preserved
-- [ ] Restore-task-to-workflow (`restoreTaskToWorkflow`) re-triggers calibration so edited tasks immediately show whether saved params still satisfy pins
-- [ ] Export: pins included in the events JSON/CSV export as a separate section (provenance for "why this threshold")
+- [x] "Run" button affordance: when calibration is green, subtle indicator on Run ("calibrated"); when red, no blocking — researcher agency preserved
+- [x] Restore-task-to-workflow (`restoreTaskToWorkflow`) re-triggers calibration so edited tasks immediately show whether saved params still satisfy pins
+- [x] Export: pins included in the events JSON/CSV export as a separate section (provenance for "why this threshold")
 
 ## Open questions (not blockers)
 
