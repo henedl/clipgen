@@ -429,7 +429,9 @@ def test_ss_task_color_dispatches_and_persists(monkeypatch):
 
     saved_tasks: list[dict] = []
 
-    def fake_save(regions, tasks, events, stashes=None, per_participant=None):
+    def fake_save(
+        regions, tasks, events, stashes=None, per_participant=None, pins=None
+    ):
         saved_tasks.extend(tasks)
         return None
 

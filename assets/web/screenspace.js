@@ -200,6 +200,9 @@
     rightPaneTab: "queue",
     resultsSwitcherOpen: false,
     amplitudeGraphEnabled: false,
+    pins: [],
+    maxPins: null,
+    hoveredPinId: null,
   };
 
   var _timelineHitRects = [];
@@ -979,6 +982,9 @@
     state.sceneReferences = [];
     state.resultOverlay = null;
     state.heatmapOverlay = null;
+    state.pins = [];
+    state.hoveredPinId = null;
+    renderPinTray();
     // Reset video playback
     var videoEl = qs("#videoPlayer");
     if (state.videoPlaying) videoEl.pause();
@@ -1017,6 +1023,7 @@
         if (data.info.fps) parts.push(Math.round(data.info.fps) + "fps");
         qs("#videoInfo").textContent = parts.join(" \u00b7 ");
         renderTimeline();
+        updatePinButtons();
         // Preload video source for instant playback
         qs("#videoPlayer").src = videoStreamUrl(pid);
         loadFrame(initialTimestamp !== undefined ? initialTimestamp : 0);
@@ -1038,6 +1045,159 @@
         renderInfoIssues(data.issues || []);
       })
       .catch(function () {});
+
+    apiGet("api/pins/" + encodeURIComponent(pid))
+      .then(function (data) {
+        if (participantRequestVersion !== _participantRequestVersion || pid !== state.selectedParticipant) return;
+        if (!data.ok) return;
+        state.pins = data.pins || [];
+        state.maxPins = data.max_pins != null ? data.max_pins : null;
+        renderPinTray();
+        updatePinButtons();
+        renderTimeline();
+      })
+      .catch(function () {});
+  }
+
+  // ---- Calibration pins ----
+  //
+  // A pin marks "this frame matters" with a polarity (positive = the
+  // condition is true here; negative = it must not fire here). Pins are
+  // tool-agnostic and drive detector calibration (later phase). The tray below
+  // the viewer shows on-demand thumbnails; the timeline shows polarity ticks.
+
+  var PIN_THUMB_WIDTH = 140;
+
+  function pinThumbUrl(pid, ts) {
+    var u = frameUrl(pid, ts);
+    return u + (u.indexOf("?") === -1 ? "?" : "&") + "w=" + PIN_THUMB_WIDTH;
+  }
+
+  function updatePinButtons() {
+    var posBtn = qs("#pinPositiveBtn");
+    var negBtn = qs("#pinNegativeBtn");
+    if (!posBtn || !negBtn) return;
+    var hasVideo = !!(state.selectedParticipant && state.videoInfo);
+    var atCap = state.maxPins != null && state.pins.length >= state.maxPins;
+    var disabled = !hasVideo || atCap;
+    posBtn.disabled = disabled;
+    negBtn.disabled = disabled;
+    var capNote = atCap ? " — limit reached (" + state.maxPins + ")" : "";
+    posBtn.title = "Pin this frame as a positive (condition is true here)" + capNote;
+    negBtn.title = "Pin this frame as a negative (condition must not fire here)" + capNote;
+  }
+
+  function pinCurrentFrame(polarity) {
+    var pid = state.selectedParticipant;
+    if (!pid || !state.videoInfo) return;
+    if (state.maxPins != null && state.pins.length >= state.maxPins) {
+      showToast("Pin limit reached (" + state.maxPins + ")");
+      return;
+    }
+    var ts = state.currentTimestamp;
+    apiPost("api/pins/" + encodeURIComponent(pid), { timestamp: ts, polarity: polarity })
+      .then(function (data) {
+        if (!data.ok || pid !== state.selectedParticipant) return;
+        state.pins.push(data.pin);
+        renderPinTray();
+        updatePinButtons();
+        renderTimeline();
+      })
+      .catch(function () { showToast("Failed to pin frame"); });
+  }
+
+  function removePin(pinId) {
+    apiDelete("api/pins/" + encodeURIComponent(pinId))
+      .then(function (data) {
+        if (!data.ok) return;
+        state.pins = state.pins.filter(function (p) { return p.id !== pinId; });
+        renderPinTray();
+        updatePinButtons();
+        renderTimeline();
+      })
+      .catch(function () { showToast("Failed to remove pin"); });
+  }
+
+  function togglePinPolarity(pinId) {
+    var pin = state.pins.filter(function (p) { return p.id === pinId; })[0];
+    if (!pin) return;
+    var next = pin.polarity === "positive" ? "negative" : "positive";
+    apiPut("api/pins/" + encodeURIComponent(pinId), { polarity: next })
+      .then(function (data) {
+        if (!data.ok || !data.pin) return;
+        pin.polarity = data.pin.polarity;
+        renderPinTray();
+        renderTimeline();
+      })
+      .catch(function () { showToast("Failed to update pin"); });
+  }
+
+  function renderPinTray() {
+    var tray = qs("#pinTray");
+    var list = qs("#pinTrayItems");
+    if (!tray || !list) return;
+    var pins = state.pins || [];
+    tray.classList.toggle("hidden", pins.length === 0);
+    list.innerHTML = "";
+    if (!pins.length) return;
+    var pid = state.selectedParticipant;
+    var sorted = pins.slice().sort(function (a, b) { return a.timestamp - b.timestamp; });
+    var frag = document.createDocumentFragment();
+    sorted.forEach(function (pin) {
+      var item = el("div", "pin-tray-item pin-tray-item--" + pin.polarity);
+      if (pin.stale) item.classList.add("pin-tray-item--stale");
+      item.setAttribute("data-pin-id", pin.id);
+
+      var img = document.createElement("img");
+      img.className = "pin-tray-thumb";
+      img.alt = "";
+      img.loading = "lazy";
+      if (pid) img.src = pinThumbUrl(pid, pin.timestamp);
+      item.appendChild(img);
+
+      var meta = el("div", "pin-tray-meta");
+      var dot = el("span", "pin-tray-polarity");
+      dot.title = "Toggle polarity (" + pin.polarity + ")";
+      dot.addEventListener("click", function (e) {
+        e.stopPropagation();
+        togglePinPolarity(pin.id);
+      });
+      meta.appendChild(dot);
+      var time = el("span", "pin-tray-time");
+      time.textContent = formatTime(pin.timestamp, { decimals: 1 });
+      meta.appendChild(time);
+      if (pin.stale) {
+        var staleTag = el("span", "pin-tray-stale-tag");
+        staleTag.textContent = "stale";
+        staleTag.title = "Timestamp is beyond the current video duration";
+        meta.appendChild(staleTag);
+      }
+      item.appendChild(meta);
+
+      var remove = el("button", "pin-tray-remove");
+      remove.type = "button";
+      remove.title = "Remove pin";
+      remove.appendChild(iconSpan("x-mark", "ss-icon--xs"));
+      remove.addEventListener("click", function (e) {
+        e.stopPropagation();
+        removePin(pin.id);
+      });
+      item.appendChild(remove);
+
+      item.addEventListener("click", function () { loadFrame(pin.timestamp); });
+      item.addEventListener("mouseenter", function () {
+        state.hoveredPinId = pin.id;
+        renderTimeline();
+      });
+      item.addEventListener("mouseleave", function () {
+        if (state.hoveredPinId === pin.id) {
+          state.hoveredPinId = null;
+          renderTimeline();
+        }
+      });
+      frag.appendChild(item);
+    });
+    list.appendChild(frag);
   }
 
   // ---- Info panel ----
@@ -1836,6 +1996,15 @@
     var stashBtn = qs("#stashRegionsBtn");
     stashBtn.appendChild(iconSpan("archive-box-arrow-down"));
     stashBtn.addEventListener("click", stashRegions);
+
+    // Pin current frame as a positive / negative calibration anchor
+    var pinPosBtn = qs("#pinPositiveBtn");
+    pinPosBtn.appendChild(iconSpan("check-circle"));
+    pinPosBtn.addEventListener("click", function () { pinCurrentFrame("positive"); });
+    var pinNegBtn = qs("#pinNegativeBtn");
+    pinNegBtn.appendChild(iconSpan("x-circle"));
+    pinNegBtn.addEventListener("click", function () { pinCurrentFrame("negative"); });
+    updatePinButtons();
 
     // Region name modal
     qs("#regionNameCancel").addEventListener("click", hideRegionNameModal);
@@ -3034,6 +3203,40 @@
         });
       }
     });
+
+    // Calibration pin ticks: small downward triangles just above the result
+    // band, colored by polarity (green = positive, red = negative). The hovered
+    // pin (cross-highlight from the tray) gets a fuller glyph.
+    if (state.pins && state.pins.length) {
+      var bodyStyle = getComputedStyle(document.body);
+      var pinColors = {
+        positive: bodyStyle.getPropertyValue("--color-pin-positive").trim() || "#4ade80",
+        negative: bodyStyle.getPropertyValue("--color-pin-negative").trim() || "#ef4444",
+      };
+      var PIN_GLYPH_H = 7;
+      var pinTop = Math.max(resultY - PIN_GLYPH_H - 1, 0);
+      state.pins.forEach(function (pin) {
+        var px = timeToX(pin.timestamp);
+        if (px < 0 || px > w) return;
+        var color = pinColors[pin.polarity] || "#888";
+        var hovered = state.hoveredPinId === pin.id;
+        ctx.fillStyle = hovered ? color : hexToRgba(color, 0.85);
+        ctx.beginPath();
+        ctx.moveTo(px - 4, pinTop);
+        ctx.lineTo(px + 4, pinTop);
+        ctx.lineTo(px, pinTop + PIN_GLYPH_H);
+        ctx.closePath();
+        ctx.fill();
+        if (hovered) {
+          ctx.strokeStyle = color;
+          ctx.lineWidth = 1;
+          ctx.beginPath();
+          ctx.moveTo(px, pinTop + PIN_GLYPH_H);
+          ctx.lineTo(px, resultY + resultH);
+          ctx.stroke();
+        }
+      });
+    }
 
     renderTimelineLegend();
     renderPlayhead();

@@ -12,6 +12,10 @@ API endpoints (all under /screenspace/):
   GET  /api/participants/<pid>/notes        – get persisted free-form notes for a participant
   PUT  /api/participants/<pid>/notes        – persist free-form notes (max 64 KB)
   GET  /api/participants/<pid>/issues       – top severity-ranked Sheet rows for a participant
+  GET  /api/pins/<participant>              – list calibration pins (with stale flag)
+  POST /api/pins/<participant>              – pin a frame as a positive/negative anchor
+  PUT  /api/pins/<pin_id>                   – update a pin (polarity toggle / label edit)
+  DELETE /api/pins/<pin_id>                 – remove a pin by id
   GET  /api/video/frame/<participant>/<ts>  – extract a JPEG frame at timestamp
   GET|POST /api/preview/<participant>/<ts>   – PNG of the active tool's preprocessed view (?layer=<id> for single-layer overlay)
   GET  /api/preview/layers                   – JSON catalog of overlay-eligible layers per tool
@@ -327,6 +331,159 @@ def api_participant_issues(pid: str) -> FlaskResponse:
     return jsonify({"ok": True, "issues": issues})
 
 
+# ---- Calibration pins ----
+#
+# A pin is a tool-agnostic, region-agnostic marker that "this frame matters",
+# carrying only a timestamp and a polarity (``positive`` = the condition is
+# true here / ``negative`` = it must not fire here). Pins are stored per
+# participant under the manifest ``pins`` key and drive synchronous detector
+# calibration (Phase 2). Frames themselves are never stored — they are fetched
+# on demand through the frame API, so a re-encoded source invalidates naturally
+# via ``mtime_ns`` versioning.
+
+_PIN_POLARITIES = ("positive", "negative")
+_PIN_LABEL_MAX_CHARS = 120
+
+
+def _annotate_pin_staleness(
+    participant_id: str, pins: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """Return copies of ``pins`` with a ``stale`` flag for out-of-range timestamps.
+
+    A pin is stale when its timestamp lies beyond the current source video's
+    duration (e.g. the footage was replaced with a shorter cut). Duration that
+    cannot be determined leaves every pin non-stale.
+    """
+    duration = _participant_video_duration(participant_id)
+    out: list[dict[str, Any]] = []
+    for pin in pins:
+        entry = dict(pin)
+        entry["stale"] = duration is not None and pin.get("timestamp", 0.0) > duration
+        out.append(entry)
+    return out
+
+
+def _find_pin(pin_id: str) -> tuple[str, list[dict[str, Any]], int] | None:
+    """Locate a pin by id across all participants.
+
+    Returns ``(participant_id, pin_list, index)`` or ``None``. Caller holds
+    ``_manifest_lock``.
+    """
+    for participant_id, pins in _manifest.get("pins", {}).items():
+        for idx, pin in enumerate(pins):
+            if pin.get("id") == pin_id:
+                return participant_id, pins, idx
+    return None
+
+
+@screenspace_bp.route("/api/pins/<participant>")
+def api_pins_list(participant: str) -> FlaskResponse:
+    """List calibration pins for a participant (annotated with a stale flag)."""
+    if not _participant_exists(participant):
+        return jsonify(
+            {"ok": False, "error": f"Unknown participant {participant}"}
+        ), 404
+    with _manifest_lock:
+        pins = copy.deepcopy(_manifest.get("pins", {}).get(participant, []))
+    return jsonify(
+        {
+            "ok": True,
+            "pins": _annotate_pin_staleness(participant, pins),
+            "max_pins": config.SCREENSPACE_MAX_PINS,
+        }
+    )
+
+
+@screenspace_bp.route("/api/pins/<participant>", methods=["POST"])
+def api_pins_create(participant: str) -> FlaskResponse:
+    """Pin the given frame as a positive or negative calibration anchor."""
+    if not _participant_exists(participant):
+        return jsonify(
+            {"ok": False, "error": f"Unknown participant {participant}"}
+        ), 404
+    data = request.get_json(silent=True) or {}
+
+    raw_ts = data.get("timestamp")
+    if not isinstance(raw_ts, (int, float, str)):
+        return jsonify({"ok": False, "error": "timestamp must be a number"}), 400
+    try:
+        timestamp = float(raw_ts)
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "error": "timestamp must be a number"}), 400
+    if not math.isfinite(timestamp) or timestamp < 0:
+        return jsonify({"ok": False, "error": "timestamp must be >= 0"}), 400
+
+    polarity = data.get("polarity")
+    if polarity not in _PIN_POLARITIES:
+        return jsonify(
+            {"ok": False, "error": "polarity must be 'positive' or 'negative'"}
+        ), 400
+
+    label = data.get("label", "")
+    if not isinstance(label, str):
+        return jsonify({"ok": False, "error": "label must be a string"}), 400
+    label = label.strip()[:_PIN_LABEL_MAX_CHARS]
+
+    pin = {
+        "id": "pin_" + uuid.uuid4().hex[:8],
+        "timestamp": round(timestamp, 3),
+        "polarity": polarity,
+        "label": label,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    with _manifest_lock:
+        pins = _manifest.setdefault("pins", {}).setdefault(participant, [])
+        if len(pins) >= config.SCREENSPACE_MAX_PINS:
+            return jsonify(
+                {
+                    "ok": False,
+                    "error": f"Pin limit reached (max {config.SCREENSPACE_MAX_PINS})",
+                }
+            ), 409
+        pins.append(pin)
+        _do_persist(drain_events=False)
+    return jsonify({"ok": True, "pin": pin})
+
+
+@screenspace_bp.route("/api/pins/<pin_id>", methods=["PUT"])
+def api_pins_update(pin_id: str) -> FlaskResponse:
+    """Update a pin's polarity and/or label (located by id across participants)."""
+    data = request.get_json(silent=True) or {}
+    with _manifest_lock:
+        found = _find_pin(pin_id)
+        if found is None:
+            return jsonify({"ok": False, "error": "Pin not found"}), 404
+        _participant_id, pins, idx = found
+        pin = pins[idx]
+        if "polarity" in data:
+            if data["polarity"] not in _PIN_POLARITIES:
+                return jsonify(
+                    {"ok": False, "error": "polarity must be 'positive' or 'negative'"}
+                ), 400
+            pin["polarity"] = data["polarity"]
+        if "label" in data:
+            if not isinstance(data["label"], str):
+                return jsonify({"ok": False, "error": "label must be a string"}), 400
+            pin["label"] = data["label"].strip()[:_PIN_LABEL_MAX_CHARS]
+        _do_persist(drain_events=False)
+    return jsonify({"ok": True, "pin": pin})
+
+
+@screenspace_bp.route("/api/pins/<pin_id>", methods=["DELETE"])
+def api_pins_delete(pin_id: str) -> FlaskResponse:
+    """Remove a pin by id (located across all participants)."""
+    with _manifest_lock:
+        found = _find_pin(pin_id)
+        if found is None:
+            return jsonify({"ok": False, "error": "Pin not found"}), 404
+        participant_id, pins, idx = found
+        pins.pop(idx)
+        if not pins:
+            _manifest.get("pins", {}).pop(participant_id, None)
+        _do_persist(drain_events=False)
+    return jsonify({"ok": True})
+
+
 # ---- Video frame extraction ----
 
 
@@ -361,6 +518,27 @@ def _participant_video_version(participant_id: str) -> int | None:
     """Return ``mtime_ns`` for a participant's source video, or ``None``."""
     result = _find_participant_video_with_mtime(participant_id)
     return result[1] if result is not None else None
+
+
+def _participant_video_duration(participant_id: str) -> float | None:
+    """Return the source video duration in seconds, or ``None`` if undeterminable.
+
+    Reuses the ``api_video_info`` metadata cache when warm (the frontend probes
+    it on participant load); otherwise probes once. Used to flag pins whose
+    timestamp falls beyond a replaced/shortened video's duration.
+    """
+    resolved = _find_participant_video_with_mtime(participant_id)
+    if resolved is None:
+        return None
+    video_path, mtime_ns = resolved
+    with _video_metadata_cache_lock:
+        cached = _video_metadata_cache.get(participant_id)
+    if cached is not None and cached[0] == mtime_ns:
+        return cached[1].get("duration") or None
+    props = video.probe_video_properties(video_path)
+    if props is None:
+        return None
+    return props.get("duration", 0.0) or None
 
 
 @screenspace_bp.route("/api/video/frame/<participant>/<timestamp>")
@@ -1954,6 +2132,7 @@ def _backfill_missing_events(manifest: dict[str, Any]) -> None:
             events,
             stashes=manifest.get("stashes", []),
             per_participant=manifest.get("per_participant", {}),
+            pins=manifest.get("pins", {}),
         )
 
 
@@ -2022,6 +2201,7 @@ def _do_persist(*, drain_events: bool = True) -> None:
         _manifest.get("events", []),
         stashes=_manifest.get("stashes", []),
         per_participant=_manifest.get("per_participant", {}),
+        pins=_manifest.get("pins", {}),
     )
 
 

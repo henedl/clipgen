@@ -92,7 +92,14 @@
           <button id="videoPlayBtn" class="region-toggle-btn" title="Play/Pause (Space)"></button>
           <button id="videoMuteBtn" class="region-toggle-btn" title="Toggle mute"></button>
           <button id="videoSpeedBtn" class="region-toggle-btn video-speed-btn" title="Playback speed">1x</button>
+          <span class="region-actions-sep"></span>
+          <button id="pinPositiveBtn" class="region-toggle-btn region-pin-btn" title="Pin this frame as a positive (condition is true here)"></button>
+          <button id="pinNegativeBtn" class="region-toggle-btn region-pin-btn" title="Pin this frame as a negative (condition must not fire here)"></button>
         </div>
+      </div>
+      <div id="pinTray" class="pin-tray hidden">
+        <span class="pin-tray-label">Pins</span>
+        <div id="pinTrayItems" class="pin-tray-items"></div>
       </div>
     </section>
 
