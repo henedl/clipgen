@@ -58,14 +58,14 @@ The calibration scalar must be monotonic in "matchiness" and independent of the 
 
 ## Phase 2: Backend evaluation
 
-- [ ] Refactor each calibratable tool's `check_frame` (`ColorTool`…`InactivityTool`) to populate the scalar in the detail dict on **both** branches (today it's `(False, None)` on a miss); keep the boolean return so `scan_*`/`scan_multitool` callers are unaffected. Re-verify `_extract_confidence` and `on_result` callers still read the same keys
-- [ ] `AnalysisTool.score_frame(frame, prev_frame, region, params) -> {score: float, passed: bool, detail: dict}` on the base class, reading the scalar `check_frame` now always returns; `passed` = the boolean at current params. Filter `math.isfinite` on `score` (numpy/OpenCV floats) before returning
-- [ ] Multitool calibration evaluates **every** step unconditionally (a separate path from `scan_multitool`, which short-circuits the AND chain) so every step row gets a score; return per-step scores plus an overall chain `passed`
-- [ ] `POST /screenspace/api/calibrate` — body: `{participant, tool, parameters, region_ref, pin_ids?}`; returns per-pin `{pin_id, score, passed, detail}`; evaluates synchronously
-- [ ] Frame fetches go through the existing frame-extraction path; add a small per-participant LRU of decoded pin frames keyed on `(timestamp, video_version)` so slider drags don't re-decode
-- [ ] OCR tools: cache raw `reader.readtext` output per `(pin, region, preprocess-flags, video_version)` — fuzzy/conf threshold changes then re-score from cached readings without re-running EasyOCR
-- [ ] Binary-parameter tools (similarity reference, template image, scene refs) resolve references exactly as task creation does
-- [ ] Degenerate inputs (zero-size region, missing reference) return a structured `not_evaluable` status per pin, not a 500
+- [x] Refactor each calibratable tool's `check_frame` (`ColorTool`…`InactivityTool`) to populate the scalar in the detail dict on **both** branches (today it's `(False, None)` on a miss); keep the boolean return so `scan_*`/`scan_multitool` callers are unaffected. Re-verify `_extract_confidence` and `on_result` callers still read the same keys
+- [x] `AnalysisTool.score_frame(frame, prev_frame, region, params) -> {score: float, passed: bool, detail: dict}` on the base class, reading the scalar `check_frame` now always returns; `passed` = the boolean at current params. Filter `math.isfinite` on `score` (numpy/OpenCV floats) before returning. (Per-tool scalar selected by a `score_key` ClassVar; `_score_result` wraps `(passed, detail)` and returns `{"status": "not_evaluable"}` instead of a score when unscorable. Dispatch via module-level `score_frame_for_tool`, mirroring `check_frame_for_tool`.)
+- [x] Multitool calibration evaluates **every** step unconditionally (`score_multitool_frame`, a separate path from `scan_multitool`, which short-circuits the AND chain) so every step row gets a score; returns per-step scores plus an overall chain `passed` (`None` when no step definitively fails but one is not-evaluable)
+- [x] `POST /screenspace/api/calibrate` — body: `{participant, tool, parameters, region_ref, pin_ids?}`; returns per-pin `{pin_id, timestamp, polarity, status, score?, passed?, detail?}`; evaluates synchronously (reshapes the body and reuses `_validate_task_request`/`_coerce_task_params`/`_extract_task_media`/`_prepare_multitool_steps`)
+- [x] Frame fetches go through the existing frame-extraction path; add a small per-participant LRU of decoded pin frames keyed on `(video, mtime_ns, timestamp)` so slider drags don't re-decode (`_pin_frame_cache` / `_decoded_pin_frame`)
+- [x] OCR tools: cache raw `reader.readtext` output per `(video, mtime_ns, timestamp, region, tool, langs, preprocess, integers_only)` — fuzzy/conf threshold changes then re-score from cached readings without re-running EasyOCR (`_pin_ocr_cache` + `screenspace.run_calibration_ocr`, scoring split into pure `_score_text_readings`/`_score_numbers_readings`; readings flow into scorers via an `ocr_reader` callable, not param injection)
+- [x] Binary-parameter tools (similarity reference, template image, scene refs) resolve references exactly as task creation does
+- [x] Degenerate inputs (zero-size region, missing reference) return a structured `not_evaluable` status per pin, not a 500
 
 ## Phase 3: Calibration strip UI
 

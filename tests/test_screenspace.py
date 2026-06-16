@@ -1,6 +1,7 @@
 """Tests for Screenspace analysis primitives, manifest I/O, and worker."""
 
 import io
+import math
 import threading
 import time
 from pathlib import Path
@@ -1753,7 +1754,9 @@ class TestCheckFrameForTool:
             frame, None, region, "color", params
         )
         assert passed is False
-        assert result is None
+        # The scalar is now exposed on the fail branch too (calibration reads it).
+        assert result is not None
+        assert "_confidence" in result
 
     def test_change_needs_prev_frame(self):
         frame = np.zeros((100, 100, 3), dtype=np.uint8)
@@ -1810,7 +1813,9 @@ class TestCheckFrameForTool:
             {"operator": "gte", "target_value": 5},
         )
         assert passed is False
-        assert result is None
+        # Best OCR confidence is exposed even when no reading clears the floor.
+        assert result is not None
+        assert "confidence" in result
 
         passed, result = screenspace.check_frame_for_tool(
             frame,
@@ -1869,7 +1874,9 @@ class TestCheckFrameForTool:
             frame_b, frame_a, region, "inactivity", {"threshold": 2}
         )
         assert passed is False
-        assert result is None
+        # phash distance is exposed on the fail branch (the calibration scalar).
+        assert result is not None
+        assert "distance" in result
 
     def test_unknown_type(self):
         frame = np.zeros((100, 100, 3), dtype=np.uint8)
@@ -2007,6 +2014,255 @@ class TestScanMultitool:
         )
         assert len(results) == 1
         assert results[0]["min_confidence"] == 0.75
+
+    def test_failing_and_step_excludes_frame_with_nonnull_detail(self, monkeypatch):
+        # Regression: after Phase 2, check_frame returns a detail dict on the
+        # fail branch too. The AND chain must still exclude the frame — it
+        # short-circuits on `not passed`, never on `rd is None`.
+        def check(frame, prev, region, ttype, step):
+            if ttype == "color":
+                return True, {"_confidence": 0.9}
+            return False, {"magnitude": 0.01}  # miss, but detail is non-None now
+
+        self._setup_stubs(monkeypatch, check)
+        results = screenspace.scan_multitool(
+            "/fake.mp4",
+            {"x": 0, "y": 0, "w": 10, "h": 10},
+            steps=[{"type": "color"}, {"type": "change"}],
+        )
+        assert results == []
+
+
+# ---------------------------------------------------------------------------
+# Pin calibration scoring (Phase 2)
+# ---------------------------------------------------------------------------
+
+
+class TestScoreFrameForTool:
+    region = {"x": 0, "y": 0, "w": 100, "h": 100}
+
+    def test_color_miss_still_scored(self):
+        frame = np.full((100, 100, 3), [255, 0, 0], dtype=np.uint8)  # blue
+        params = {
+            "target_color": {"h": 0, "s": 255, "v": 255},  # red target -> miss
+            "tolerance": {"h": 5, "s": 10, "v": 10},
+        }
+        res = screenspace.score_frame_for_tool(
+            "color", frame, None, self.region, params
+        )
+        assert res["status"] == "ok"
+        assert res["passed"] is False
+        assert math.isfinite(res["score"])
+
+    def test_similarity_miss_still_scored(self):
+        frame = np.zeros((100, 100, 3), dtype=np.uint8)
+        ref = np.full((100, 100, 3), 255, dtype=np.uint8)
+        params = {"reference_frame": ref, "threshold": 0.99}
+        res = screenspace.score_frame_for_tool(
+            "similarity", frame, None, self.region, params
+        )
+        assert res["status"] == "ok"
+        assert res["passed"] is False
+        assert "score" in res["detail"]
+
+    def test_change_below_threshold_scored(self):
+        a = np.zeros((100, 100, 3), dtype=np.uint8)
+        b = np.zeros((100, 100, 3), dtype=np.uint8)  # identical -> magnitude 0
+        res = screenspace.score_frame_for_tool(
+            "change", b, a, self.region, {"threshold": 0.5}
+        )
+        assert res["status"] == "ok"
+        assert res["passed"] is False
+        assert res["score"] == 0.0
+
+    def test_change_missing_companion_not_evaluable(self):
+        frame = np.zeros((100, 100, 3), dtype=np.uint8)
+        res = screenspace.score_frame_for_tool(
+            "change", frame, None, self.region, {"threshold": 0.5}
+        )
+        assert res["status"] == "not_evaluable"
+
+    def test_flow_below_threshold_scored(self):
+        a = np.zeros((100, 100, 3), dtype=np.uint8)
+        b = np.zeros((100, 100, 3), dtype=np.uint8)
+        res = screenspace.score_frame_for_tool(
+            "flow", b, a, self.region, {"magnitude_threshold": 1.0}
+        )
+        assert res["status"] == "ok"
+        assert res["passed"] is False
+        assert "magnitude" in res["detail"]
+
+    def test_inactivity_miss_scored(self):
+        a = np.zeros((100, 100, 3), dtype=np.uint8)
+        rng = np.random.RandomState(7)
+        b = rng.randint(0, 256, (100, 100, 3), dtype=np.uint8)
+        res = screenspace.score_frame_for_tool(
+            "inactivity", b, a, self.region, {"threshold": 2}
+        )
+        assert res["status"] == "ok"
+        assert res["passed"] is False
+        assert res["score"] >= 0  # raw phash distance
+
+    def test_template_miss_scored(self):
+        tmpl = np.zeros((20, 40, 3), dtype=np.uint8)
+        tmpl[:, 20:] = 255  # half/half -> non-degenerate template
+        rng = np.random.RandomState(3)
+        frame = rng.randint(0, 256, (100, 100, 3), dtype=np.uint8)
+        params = {"template_image": tmpl, "threshold": 0.99}
+        res = screenspace.score_frame_for_tool(
+            "template", frame, None, self.region, params
+        )
+        assert res["status"] == "ok"
+        assert res["passed"] is False
+        assert "best_score" in res["detail"]
+
+    def test_scene_miss_scored(self):
+        ref = np.full((100, 100, 3), [255, 0, 0], dtype=np.uint8)
+        frame = np.full((100, 100, 3), [0, 255, 0], dtype=np.uint8)
+        params = {
+            "reference_scenes": [{"name": "menu", "frame": ref}],
+            "threshold": 0.99,
+        }
+        res = screenspace.score_frame_for_tool(
+            "scene", frame, None, self.region, params
+        )
+        assert res["status"] == "ok"
+        assert "score" in res["detail"]
+
+    def test_degenerate_region_not_evaluable(self):
+        frame = np.zeros((100, 100, 3), dtype=np.uint8)
+        res = screenspace.score_frame_for_tool(
+            "color", frame, None, {"x": 0, "y": 0, "w": 0, "h": 0}, {}
+        )
+        assert res["status"] == "not_evaluable"
+
+    def test_template_zero_region_scored_full_frame(self):
+        # Uploaded template with no region_ref scans the full frame, so a
+        # zero-size region must NOT be rejected as degenerate (template ignores
+        # the region entirely).
+        tmpl = np.zeros((20, 40, 3), dtype=np.uint8)
+        tmpl[:, 20:] = 255  # non-degenerate template
+        rng = np.random.RandomState(5)
+        frame = rng.randint(0, 256, (100, 100, 3), dtype=np.uint8)
+        res = screenspace.score_frame_for_tool(
+            "template",
+            frame,
+            None,
+            {"x": 0, "y": 0, "w": 0, "h": 0},
+            {"template_image": tmpl, "threshold": 0.99},
+        )
+        assert res["status"] == "ok"
+        assert "best_score" in res["detail"]
+
+    def test_timelapse_not_calibratable(self):
+        frame = np.zeros((100, 100, 3), dtype=np.uint8)
+        res = screenspace.score_frame_for_tool(
+            "timelapse", frame, None, self.region, {}
+        )
+        assert res["status"] == "not_evaluable"
+
+
+class TestScoreOcrReadings:
+    def test_text_best_ratio_among_clearing_readings(self):
+        readings = [
+            (None, "hello", 0.9),
+            (None, "xxxxx", 0.95),
+            (None, "hello", 0.2),  # below the conf floor -> ignored
+        ]
+        params = {
+            "search_string": "hello",
+            "fuzzy_threshold": 0.8,
+            "ocr_confidence_threshold": 0.5,
+        }
+        passed, detail = screenspace._score_text_readings(readings, params)
+        assert passed is True
+        assert detail["fuzzy_ratio"] == 1.0
+        assert detail["text_found"] == "hello"
+
+    def test_text_no_clearing_reading_scores_zero(self):
+        readings = [(None, "hello", 0.2)]
+        params = {
+            "search_string": "hello",
+            "fuzzy_threshold": 0.8,
+            "ocr_confidence_threshold": 0.5,
+        }
+        passed, detail = screenspace._score_text_readings(readings, params)
+        assert passed is False
+        assert detail["fuzzy_ratio"] == 0.0
+        assert detail["text_found"] == ""
+
+    def test_numbers_best_conf_is_scalar_operator_is_polarity(self):
+        readings = [(None, "5", 0.9), (None, "99", 0.6)]
+        params = {
+            "operator": "gte",
+            "target_value": 50,
+            "ocr_confidence_threshold": 0.5,
+        }
+        passed, detail = screenspace._score_numbers_readings(readings, params)
+        # Scalar = best OCR conf among ALL readings; operator is the polarity.
+        assert detail["confidence"] == 0.9
+        assert passed is True
+        assert detail["number_found"] == 99.0
+
+    def test_numbers_no_operator_match(self):
+        readings = [(None, "5", 0.9)]
+        params = {
+            "operator": "gte",
+            "target_value": 50,
+            "ocr_confidence_threshold": 0.5,
+        }
+        passed, detail = screenspace._score_numbers_readings(readings, params)
+        assert passed is False
+        assert detail["confidence"] == 0.9
+        assert "number_found" not in detail
+
+
+class TestScoreMultitoolFrame:
+    region = {"x": 0, "y": 0, "w": 100, "h": 100}
+
+    def test_scores_every_step_even_when_one_fails(self):
+        red = np.full((100, 100, 3), [0, 0, 255], dtype=np.uint8)
+        steps = [
+            {
+                "type": "color",
+                "region_coords": self.region,
+                "target_color": {"h": 60, "s": 255, "v": 255},  # green -> fails on red
+                "tolerance": {"h": 5, "s": 10, "v": 10},
+            },
+            {
+                "type": "color",
+                "logic": "AND",
+                "region_coords": self.region,
+                "target_color": screenspace.average_color_hsv(red),  # matches red
+                "tolerance": {"h": 10, "s": 50, "v": 50},
+            },
+        ]
+        res = screenspace.score_multitool_frame(red, None, steps)
+        assert len(res["steps"]) == 2
+        assert all(s["status"] == "ok" for s in res["steps"])
+        assert res["steps"][0]["passed"] is False
+        assert res["steps"][1]["passed"] is True
+        assert res["passed"] is False  # AND chain: one step failed
+
+    def test_not_evaluable_step_makes_chain_none(self):
+        red = np.full((100, 100, 3), [0, 0, 255], dtype=np.uint8)
+        steps = [
+            {
+                "type": "color",
+                "region_coords": self.region,
+                "target_color": screenspace.average_color_hsv(red),
+                "tolerance": {"h": 10, "s": 50, "v": 50},
+            },
+            {
+                "type": "change",
+                "logic": "AND",
+                "region_coords": self.region,
+                "threshold": 0.5,
+            },  # no companion frame -> not_evaluable
+        ]
+        res = screenspace.score_multitool_frame(red, None, steps)
+        assert res["steps"][1]["status"] == "not_evaluable"
+        assert res["passed"] is None
 
 
 # ---------------------------------------------------------------------------
