@@ -19,8 +19,8 @@ The core UI is not "iterate until green." Every per-frame tool already reduces t
 
 - **Pins are first-class manifest objects.** New `pins` key in `screenspace_manifest.json`, per participant. A pin is a timestamp plus a polarity label — *not* a stored image. Frames are fetched on demand through the existing frame API, so re-encoded source videos invalidate naturally via the existing `?v=` mtime versioning.
 - **Pins are tool-agnostic.** A pin marks "this frame matters," not "this frame matters for the color tool." The same pin set calibrates any tool the researcher switches to. Polarity (`positive` / `negative`) is the only semantic attached.
-- **Evaluation reuses the multitool single-frame path.** [`screenspace.py`](screenspace.py) `check_frame_for_tool` / `AnalysisTool.check_frame` already evaluates one frame against one tool's parameters. Calibration is a loop over pins calling into this machinery — no new detector code.
-- **Score, not pass/fail, is the primary output.** `check_frame` returns a boolean at the current threshold; the calibration strip needs the underlying scalar *independent of threshold* so dots stay stable while the slider moves. Each tool gains a `score_frame` method (see Phase 2). Default implementation: call `check_frame` with the threshold parameter floored and extract the raw metric.
+- **Evaluation reuses the single-frame path.** [`screenspace.py`](screenspace.py) `check_frame_for_tool` / `AnalysisTool.check_frame` already evaluates one frame against one tool's parameters. Calibration is a loop over pins calling into this machinery. The only detector-level change is exposing the per-tool scalar on both branches so a threshold-independent score is available (see the Score decision below); no *new* metrics are computed.
+- **Score, not pass/fail, is the primary output.** `check_frame` returns a boolean at the current threshold; the calibration strip needs the underlying scalar *independent of threshold* so dots stay stable while the slider moves. Today each tool's `check_frame` returns `(False, None)` on a miss — the scalar lives in the detail dict *only on pass* — so the scalar cannot be read by simply calling `check_frame`. **This is real detector work, not a free loop:** each tool's `check_frame` is refactored to populate the scalar in the detail dict on **both** the pass and fail branches, and a new `score_frame` method reads it (see Phase 2). The boolean return is preserved, so existing `scan_*` / `scan_multitool` callers are unaffected.
 - **Per-frame criteria only.** Temporal parameters (`require_consecutive`, interval, detect-first) cannot be validated on single frames and are explicitly out of calibration scope. The UI greys them out in the strip's coverage note. This is acceptable — per-frame criteria are where the rerun pain lives.
 - **Synchronous, debounced evaluation.** Calibration requests do not go through the task queue. A dedicated endpoint evaluates ≤ N pins synchronously (mirroring the model-view preview endpoint's request pattern), with the frontend debouncing on parameter input exactly as `refreshModelView({debounce: true})` does today.
 
@@ -28,13 +28,15 @@ The core UI is not "iterate until green." Every per-frame tool already reduces t
 
 The calibration scalar must be monotonic in "matchiness" and independent of the threshold being tuned. Tolerance-relative confidences (color) are recomputed against the *current* tolerance, so those dots legitimately move when tolerance changes — that is correct behavior, since the question is "does this frame pass at these settings."
 
+**Every tool renders on a normalized 0–1 "matchiness" axis** (not the raw threshold-control range). For unit-matched tools the scalar and the threshold share units and are both normalized via the frontend slider's min/max. For tools whose scalar is not in threshold units, the axis still applies but the cutoff is tool-specific (see the table notes): **color** draws the cutoff where the tool's boolean `matched` flips (the strip's real value there is population *separation*, use case #2); **numbers** plots the best OCR confidence of any reading and treats the `operator`/`target_value` comparison as the polarity *expectation* (recorded in `passed`, not as the axis); **scene** uses the winning reference's per-scene threshold.
+
 | Tool | Calibration scalar | Threshold control it maps to |
 |---|---|---|
 | color | normalized HSV distance → confidence (existing `color_matches` conf) | Tolerance |
 | change | change ratio (`magnitude`) vs companion frame | Threshold |
 | similarity | raw SSIM score vs reference | Threshold |
 | text | best fuzzy ratio among OCR readings ≥ min conf | Fuzzy Thr. |
-| numbers | binary (number satisfying condition found) + best OCR conf | Min OCR conf. |
+| numbers | best OCR conf among readings (operator/target_value → polarity *expectation*, recorded in `passed`) | Min OCR conf. |
 | template | best match score | Threshold |
 | flow | flow magnitude vs companion frame | Magnitude |
 | scene | best fingerprint similarity (with winning scene name) | per-scene threshold |
@@ -42,21 +44,23 @@ The calibration scalar must be monotonic in "matchiness" and independent of the 
 | multitool | per-step scalars; strip renders one row per step | per-step thresholds |
 | timelapse | n/a — excluded from calibration | — |
 
-**Companion frames.** change / flow / inactivity compare against a prior frame. A pin stores only its own timestamp; the companion is fetched at `ts − interval` at evaluation time. Consequence: changing the interval changes these tools' scores. The strip surfaces this with the interval value in the row label rather than hiding it.
+**Companion frames.** change / flow / inactivity compare against a prior frame. A pin stores only its own timestamp; the companion is fetched at `ts − interval` (the workflow's current interval param) at evaluation time. Consequence: changing the interval changes these tools' scores. The strip surfaces this with the interval value in the row label rather than hiding it. Pins where `ts < interval` have no companion frame and return `not_evaluable` (hollow dot).
 
 ## Phase 1: Pin storage and management
 
-- [ ] Manifest: `pins` key — `{participant: [{id, timestamp, polarity, label?, created_at}]}`; `id` format `pin_<8hex>`
-- [ ] API: `GET/POST /screenspace/api/pins/<participant>`, `DELETE /screenspace/api/pins/<pin_id>`, `PUT /screenspace/api/pins/<pin_id>` (polarity toggle, label edit)
-- [ ] Viewer UI: pin button pair (✓ / ✗) in the region bar pins the current frame as positive/negative
-- [ ] Pin tray: thumbnail strip (existing frame API at small size) below the viewer; click seeks, hover highlights the timeline tick, × removes
-- [ ] Timeline: pin ticks rendered above the result band (distinct glyph; green/red by polarity)
-- [ ] Soft cap (config `SCREENSPACE_MAX_PINS`, default 12) — calibration must stay interactive
-- [ ] Manifest round-trip: pins survive server restart; pins referencing timestamps beyond a replaced video's duration are flagged stale in the tray
+- [x] Manifest: `pins` key — `{participant: [{id, timestamp, polarity, label?, created_at}]}`; `id` format `pin_<8hex>`
+- [x] API: `GET/POST /screenspace/api/pins/<participant>`, `DELETE /screenspace/api/pins/<pin_id>`, `PUT /screenspace/api/pins/<pin_id>` (polarity toggle, label edit)
+- [x] Viewer UI: pin button pair (✓ / ✗) in the region bar pins the current frame as positive/negative
+- [x] Pin tray: thumbnail strip (existing frame API at small size) below the viewer; click seeks, hover highlights the timeline tick, × removes
+- [x] Timeline: pin ticks rendered above the result band (distinct glyph; green/red by polarity)
+- [x] Soft cap (config `SCREENSPACE_MAX_PINS`, default 12) — calibration must stay interactive
+- [x] Manifest round-trip: pins survive server restart; pins referencing timestamps beyond a replaced video's duration are flagged stale in the tray
 
 ## Phase 2: Backend evaluation
 
-- [ ] `AnalysisTool.score_frame(frame, prev_frame, region, params) -> {score: float, passed: bool, detail: dict}` with per-tool overrides per the table above; default derives from `check_frame`
+- [ ] Refactor each calibratable tool's `check_frame` (`ColorTool`…`InactivityTool`) to populate the scalar in the detail dict on **both** branches (today it's `(False, None)` on a miss); keep the boolean return so `scan_*`/`scan_multitool` callers are unaffected. Re-verify `_extract_confidence` and `on_result` callers still read the same keys
+- [ ] `AnalysisTool.score_frame(frame, prev_frame, region, params) -> {score: float, passed: bool, detail: dict}` on the base class, reading the scalar `check_frame` now always returns; `passed` = the boolean at current params. Filter `math.isfinite` on `score` (numpy/OpenCV floats) before returning
+- [ ] Multitool calibration evaluates **every** step unconditionally (a separate path from `scan_multitool`, which short-circuits the AND chain) so every step row gets a score; return per-step scores plus an overall chain `passed`
 - [ ] `POST /screenspace/api/calibrate` — body: `{participant, tool, parameters, region_ref, pin_ids?}`; returns per-pin `{pin_id, score, passed, detail}`; evaluates synchronously
 - [ ] Frame fetches go through the existing frame-extraction path; add a small per-participant LRU of decoded pin frames keyed on `(timestamp, video_version)` so slider drags don't re-decode
 - [ ] OCR tools: cache raw `reader.readtext` output per `(pin, region, preprocess-flags, video_version)` — fuzzy/conf threshold changes then re-score from cached readings without re-running EasyOCR
@@ -66,7 +70,7 @@ The calibration scalar must be monotonic in "matchiness" and independent of the 
 ## Phase 3: Calibration strip UI
 
 - [ ] New collapsible "Calibration" panel in the workflow body, beside Model view; visible whenever ≥ 1 pin exists for the selected participant
-- [ ] Score strip: horizontal axis aligned with the tool's threshold control range; one dot per pin (green = positive, red = negative, hollow = `not_evaluable`); threshold cutoff drawn as a vertical line that tracks the slider live
+- [ ] Score strip: normalized 0–1 horizontal axis (scalar and threshold normalized via the tool's slider min/max); one dot per pin (green = positive, red = negative, hollow = `not_evaluable`); threshold cutoff drawn as a vertical line that tracks the slider live
 - [ ] Dot hover: tooltip with timestamp, score, and tool `detail` (e.g. OCR text found); click seeks the viewer
 - [ ] Pass/fail summary chip: "5/5 positives pass · 0/4 negatives pass" — turns green only when all positives pass *and* all negatives fail
 - [ ] Debounced re-evaluation on any parameter input (reuse the model-view debounce pattern, 150 ms)

@@ -3663,6 +3663,7 @@ def _empty_screenspace_manifest() -> dict[str, Any]:
         "events": [],
         "stashes": [],
         "per_participant": {},
+        "pins": {},
     }
 
 
@@ -3695,6 +3696,7 @@ def save_screenspace_manifest(
     events: list[dict[str, Any]] | None = None,
     stashes: list[dict[str, Any]] | None = None,
     per_participant: dict[str, dict[str, Any]] | None = None,
+    pins: dict[str, list[dict[str, Any]]] | None = None,
 ) -> Path | None:
     """Write the screenspace manifest to disk.
 
@@ -3734,6 +3736,7 @@ def save_screenspace_manifest(
             "events": events or [],
             "stashes": stashes or [],
             "per_participant": per_participant or {},
+            "pins": pins or {},
         }
     )
     return utils.save_json_manifest(

@@ -403,6 +403,7 @@ class TestManifest:
             "events": [],
             "stashes": [],
             "per_participant": {},
+            "pins": {},
         }
 
     def test_roundtrip(self, tmp_path, monkeypatch):
@@ -444,6 +445,7 @@ class TestManifest:
             "events": [],
             "stashes": [],
             "per_participant": {},
+            "pins": {},
         }
 
     def test_load_malformed_json(self, tmp_path, monkeypatch):
@@ -457,7 +459,27 @@ class TestManifest:
             "events": [],
             "stashes": [],
             "per_participant": {},
+            "pins": {},
         }
+
+    def test_pins_roundtrip(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(config, "OUTPUT_DIR", str(tmp_path))
+        pins = {
+            "P01": [
+                {
+                    "id": "pin_abcd1234",
+                    "timestamp": 12.5,
+                    "polarity": "positive",
+                    "label": "health red",
+                    "created_at": "2026-01-01T00:00:00+00:00",
+                }
+            ]
+        }
+        path = screenspace.save_screenspace_manifest({}, [], pins=pins)
+        assert path is not None
+        loaded = screenspace.load_screenspace_manifest()
+        assert loaded["pins"]["P01"][0]["polarity"] == "positive"
+        assert loaded["pins"]["P01"][0]["timestamp"] == 12.5
 
 
 # ---------------------------------------------------------------------------

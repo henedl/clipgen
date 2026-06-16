@@ -22,6 +22,7 @@ def client(tmp_path, monkeypatch):
         "events": [],
         "stashes": [],
         "per_participant": {},
+        "pins": {},
     }
     screenspace_server._participants = [
         {"id": "P01", "video_path": "/tmp/test_P01.mp4", "has_video": False},
@@ -33,7 +34,9 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setattr(
         screenspace,
         "save_screenspace_manifest",
-        lambda r, t, e=None, stashes=None, per_participant=None: tmp_path / "m.json",
+        lambda r, t, e=None, stashes=None, per_participant=None, pins=None: (
+            tmp_path / "m.json"
+        ),
     )
 
     with app.test_client() as c:
@@ -104,6 +107,174 @@ def test_participant_issues_no_sheet(client, monkeypatch):
     data = resp.get_json()
     assert data["ok"] is True
     assert data["issues"] == []
+
+
+# ---- Calibration pins ----
+
+
+def test_pins_list_default_empty(client):
+    resp = client.get("/screenspace/api/pins/P01")
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["ok"] is True
+    assert data["pins"] == []
+    assert data["max_pins"] == config.SCREENSPACE_MAX_PINS
+
+
+def test_pins_list_unknown_participant(client):
+    resp = client.get("/screenspace/api/pins/PNOPE")
+    assert resp.status_code == 404
+
+
+def test_pins_create_and_list(client):
+    resp = client.post(
+        "/screenspace/api/pins/P01",
+        json={"timestamp": 12.5, "polarity": "positive", "label": "health red"},
+    )
+    assert resp.status_code == 200
+    pin = resp.get_json()["pin"]
+    assert pin["id"].startswith("pin_")
+    assert pin["polarity"] == "positive"
+    assert pin["timestamp"] == 12.5
+
+    listed = client.get("/screenspace/api/pins/P01").get_json()["pins"]
+    assert len(listed) == 1
+    assert listed[0]["label"] == "health red"
+    # No source video in the fixture, so staleness is undeterminable -> False.
+    assert listed[0]["stale"] is False
+
+
+def test_pins_create_rejects_bad_polarity(client):
+    resp = client.post(
+        "/screenspace/api/pins/P01", json={"timestamp": 1.0, "polarity": "maybe"}
+    )
+    assert resp.status_code == 400
+
+
+def test_pins_create_rejects_bad_timestamp(client):
+    assert (
+        client.post(
+            "/screenspace/api/pins/P01",
+            json={"timestamp": "abc", "polarity": "positive"},
+        ).status_code
+        == 400
+    )
+    assert (
+        client.post(
+            "/screenspace/api/pins/P01", json={"timestamp": -1, "polarity": "positive"}
+        ).status_code
+        == 400
+    )
+
+
+def test_pins_create_unknown_participant(client):
+    resp = client.post(
+        "/screenspace/api/pins/PNOPE", json={"timestamp": 1.0, "polarity": "positive"}
+    )
+    assert resp.status_code == 404
+
+
+def test_pins_soft_cap_enforced(client, monkeypatch):
+    monkeypatch.setattr(config, "SCREENSPACE_MAX_PINS", 2)
+    for i in range(2):
+        assert (
+            client.post(
+                "/screenspace/api/pins/P01",
+                json={"timestamp": float(i), "polarity": "positive"},
+            ).status_code
+            == 200
+        )
+    over = client.post(
+        "/screenspace/api/pins/P01", json={"timestamp": 9.0, "polarity": "positive"}
+    )
+    assert over.status_code == 409
+
+
+def test_pins_update_polarity_and_label(client):
+    pin = client.post(
+        "/screenspace/api/pins/P01", json={"timestamp": 3.0, "polarity": "positive"}
+    ).get_json()["pin"]
+    resp = client.put(
+        f"/screenspace/api/pins/{pin['id']}",
+        json={"polarity": "negative", "label": "no fire"},
+    )
+    assert resp.status_code == 200
+    updated = resp.get_json()["pin"]
+    assert updated["polarity"] == "negative"
+    assert updated["label"] == "no fire"
+
+
+def test_pins_update_rejects_bad_polarity(client):
+    pin = client.post(
+        "/screenspace/api/pins/P01", json={"timestamp": 3.0, "polarity": "positive"}
+    ).get_json()["pin"]
+    resp = client.put(f"/screenspace/api/pins/{pin['id']}", json={"polarity": "nope"})
+    assert resp.status_code == 400
+
+
+def test_pins_update_unknown_id(client):
+    resp = client.put(
+        "/screenspace/api/pins/pin_deadbeef", json={"polarity": "negative"}
+    )
+    assert resp.status_code == 404
+
+
+def test_pins_delete(client):
+    pin = client.post(
+        "/screenspace/api/pins/P01", json={"timestamp": 3.0, "polarity": "positive"}
+    ).get_json()["pin"]
+    assert client.delete(f"/screenspace/api/pins/{pin['id']}").status_code == 200
+    assert client.get("/screenspace/api/pins/P01").get_json()["pins"] == []
+
+
+def test_pins_delete_unknown_id(client):
+    assert client.delete("/screenspace/api/pins/pin_deadbeef").status_code == 404
+
+
+def test_pins_isolated_per_participant(client):
+    client.post(
+        "/screenspace/api/pins/P01", json={"timestamp": 1.0, "polarity": "positive"}
+    )
+    client.post(
+        "/screenspace/api/pins/P02", json={"timestamp": 2.0, "polarity": "negative"}
+    )
+    assert len(client.get("/screenspace/api/pins/P01").get_json()["pins"]) == 1
+    assert len(client.get("/screenspace/api/pins/P02").get_json()["pins"]) == 1
+
+
+def test_participant_video_duration_reads_exact_from_cache(tmp_path, monkeypatch):
+    vid = tmp_path / "P01.mp4"
+    vid.write_bytes(b"x")
+    mtime_ns = vid.stat().st_mtime_ns
+    monkeypatch.setattr(
+        screenspace_server,
+        "_participants",
+        [{"id": "P01", "video_path": str(vid), "has_video": True}],
+    )
+    # Warm cache: rounded display duration is 10, exact is 10.4.
+    monkeypatch.setattr(
+        screenspace_server,
+        "_video_metadata_cache",
+        {"P01": (mtime_ns, {"duration": 10, "duration_seconds": 10.4})},
+    )
+    assert screenspace_server._participant_video_duration("P01") == 10.4
+
+
+def test_pins_stale_flag_uses_exact_duration(client, monkeypatch):
+    # Exact duration 10.4: a rounded duration (10) would wrongly flag the 10.2
+    # pin as stale. Staleness must use the unrounded value.
+    monkeypatch.setattr(
+        screenspace_server, "_participant_video_duration", lambda pid: 10.4
+    )
+    for ts in (10.0, 10.2, 10.5):
+        client.post(
+            "/screenspace/api/pins/P01", json={"timestamp": ts, "polarity": "positive"}
+        )
+    pins = client.get("/screenspace/api/pins/P01").get_json()["pins"]
+    by_ts = {p["timestamp"]: p["stale"] for p in pins}
+    assert by_ts[10.0] is False
+    assert by_ts[10.2] is False
+    assert by_ts[10.5] is True
 
 
 # ---- Regions ----
