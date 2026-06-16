@@ -404,3 +404,94 @@ def test_bundle_csv_has_data_rows(tmp_path, screenspace_manifest):
     fieldnames = reader.fieldnames
     assert fieldnames is not None
     assert "magnitude" in fieldnames
+
+
+# ---- Pins export --------------------------------------------------------
+
+
+def _ss_manifest_with_pins() -> dict:
+    """Minimal screenspace manifest carrying calibration pins for two people."""
+    return {
+        "regions": {},
+        "tasks": [],
+        "events": [],
+        "stashes": [],
+        "pins": {
+            "P01": [
+                {
+                    "id": "pin_aaaaaaaa",
+                    "timestamp": 12.5,
+                    "polarity": "positive",
+                    "label": "health bar red",
+                    "created_at": "2026-06-16T00:00:00+00:00",
+                },
+                {
+                    "id": "pin_bbbbbbbb",
+                    "timestamp": 30.0,
+                    "polarity": "negative",
+                    "label": "",
+                    "created_at": "2026-06-16T00:01:00+00:00",
+                },
+            ],
+            "P02": [
+                {
+                    "id": "pin_cccccccc",
+                    "timestamp": 5.25,
+                    "polarity": "positive",
+                    "label": "menu open",
+                    "created_at": "2026-06-16T00:02:00+00:00",
+                },
+            ],
+        },
+    }
+
+
+def test_screenspace_pins_builder():
+    rows = data_export.build_screenspace_pins(_ss_manifest_with_pins())
+    assert len(rows) == 3
+    by_id = {r["id"]: r for r in rows}
+    assert by_id["pin_aaaaaaaa"]["participant"] == "P01"
+    assert by_id["pin_aaaaaaaa"]["polarity"] == "positive"
+    assert by_id["pin_aaaaaaaa"]["timestamp"] == 12.5
+    assert by_id["pin_bbbbbbbb"]["polarity"] == "negative"
+    assert by_id["pin_cccccccc"]["participant"] == "P02"
+
+
+def test_screenspace_pins_builder_no_pins(screenspace_manifest):
+    # The shared fixture has no "pins" key — builder must return an empty list,
+    # not raise, so the bundle writer simply skips the surface.
+    assert data_export.build_screenspace_pins(screenspace_manifest) == []
+
+
+def test_bundle_writer_includes_pins(tmp_path):
+    _write_manifest(
+        tmp_path, config.SCREENSPACE_MANIFEST_FILENAME, _ss_manifest_with_pins()
+    )
+    written = data_export.write_export_bundle(tmp_path)
+    names = {p.name for p in written}
+    assert "clipgen_export_screenspace_pins.json" in names
+    assert "clipgen_export_screenspace_pins.csv" in names
+
+    csv_path = tmp_path / "clipgen_export_screenspace_pins.csv"
+    reader = csv.DictReader(io.StringIO(csv_path.read_text(encoding="utf-8")))
+    rows = list(reader)
+    assert len(rows) == 3
+    assert reader.fieldnames is not None
+    # Preferred column order leads the header.
+    assert reader.fieldnames[:6] == list(data_export.SCREENSPACE_PIN_COLUMNS)
+
+
+def test_bundle_writer_events_and_pins_coexist(tmp_path, screenspace_manifest):
+    # Events and pins are independent surfaces off the same manifest: a manifest
+    # carrying both must emit four files (events + pins, each JSON & CSV).
+    manifest = dict(screenspace_manifest)
+    manifest["pins"] = _ss_manifest_with_pins()["pins"]
+    _write_manifest(tmp_path, config.SCREENSPACE_MANIFEST_FILENAME, manifest)
+    written = data_export.write_export_bundle(tmp_path)
+    names = {p.name for p in written}
+    assert names == {
+        "clipgen_export_screenspace_events.json",
+        "clipgen_export_screenspace_events.csv",
+        "clipgen_export_screenspace_pins.json",
+        "clipgen_export_screenspace_pins.csv",
+    }

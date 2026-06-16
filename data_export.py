@@ -48,6 +48,15 @@ SCREENSPACE_EVENT_COLUMNS: tuple[str, ...] = (
     "task_id",
 )
 
+SCREENSPACE_PIN_COLUMNS: tuple[str, ...] = (
+    "participant",
+    "id",
+    "timestamp",
+    "polarity",
+    "label",
+    "created_at",
+)
+
 _TRANSCRIPT_SEGMENT_BASE_COLS = (
     "participant",
     "segment_id",
@@ -187,6 +196,34 @@ def build_screenspace_events(
                     continue
                 record[k] = _scalar_safe(v)
         records.append(record)
+    return records
+
+
+def build_screenspace_pins(manifest: dict[str, Any]) -> list[dict[str, Any]]:
+    """One row per calibration pin — provenance for tuned thresholds.
+
+    Flattens ``manifest["pins"]`` (``{participant: [pin, ...]}``) into a flat
+    table so a consumer can see which frames a researcher calibrated a detector
+    against (and with what polarity) when reviewing the chosen parameters.
+    """
+    pins_by_participant = manifest.get("pins", {}) or {}
+    records: list[dict[str, Any]] = []
+    for participant_id, pins in pins_by_participant.items():
+        if not isinstance(pins, list):
+            continue
+        for pin in pins:
+            if not isinstance(pin, dict):
+                continue
+            records.append(
+                {
+                    "participant": participant_id,
+                    "id": pin.get("id", ""),
+                    "timestamp": _scalar_safe(pin.get("timestamp", 0.0)),
+                    "polarity": pin.get("polarity", ""),
+                    "label": pin.get("label", ""),
+                    "created_at": pin.get("created_at", ""),
+                }
+            )
     return records
 
 
@@ -353,6 +390,12 @@ _SURFACES: tuple[tuple[str, _SurfaceBuilder, str, tuple[str, ...]], ...] = (
         SCREENSPACE_EVENT_COLUMNS,
     ),
     (
+        "screenspace_pins",
+        build_screenspace_pins,
+        config.SCREENSPACE_MANIFEST_FILENAME,
+        SCREENSPACE_PIN_COLUMNS,
+    ),
+    (
         "transcripts",
         build_transcript_segments,
         config.TRANSCRIPTS_MANIFEST_FILENAME,
@@ -475,6 +518,7 @@ def run_cli_export() -> int:
 
 __all__ = [
     "build_screenspace_events",
+    "build_screenspace_pins",
     "build_transcript_segments",
     "build_friction_moments",
     "build_friction_segments",
@@ -483,4 +527,5 @@ __all__ = [
     "write_export_bundle",
     "run_cli_export",
     "SCREENSPACE_EVENT_COLUMNS",
+    "SCREENSPACE_PIN_COLUMNS",
 ]
