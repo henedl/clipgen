@@ -412,6 +412,34 @@ def _prepare_template(
     return (tmpl_gray, gray_mask, degenerate)
 
 
+def _template_correlation_map(
+    frame: np.ndarray, prepared: _PreparedTemplate
+) -> np.ndarray | None:
+    """Compute the finite TM_CCOEFF_NORMED correlation map for a prepared template.
+
+    Returns ``None`` when matching is undefined — a degenerate (constant)
+    template, or one larger than the frame. inf/nan cells (near-zero variance
+    patches) are neutralized to ``-1.0`` so callers can safely threshold the map
+    or read its peak (the threshold-independent scalar used by calibration).
+    """
+    tmpl_gray, gray_mask, degenerate = prepared
+    if degenerate:
+        # A constant (zero-variance) template produces undefined TM_CCOEFF_NORMED
+        # results — every position may score ~1.0.  Bail out.
+        return None
+    k = config.SCREENSPACE_BLUR_KERNEL
+    frame_gray = cv2.cvtColor(cv2.GaussianBlur(frame, (k, k), 0), cv2.COLOR_BGR2GRAY)
+    th, tw = tmpl_gray.shape[:2]
+    if th > frame_gray.shape[0] or tw > frame_gray.shape[1]:
+        return None
+    result = cv2.matchTemplate(
+        frame_gray, tmpl_gray, cv2.TM_CCOEFF_NORMED, mask=gray_mask
+    )
+    if not np.all(np.isfinite(result)):
+        result = np.where(np.isfinite(result), result, -1.0)
+    return result
+
+
 def _match_template_prepared(
     frame: np.ndarray,
     prepared: _PreparedTemplate,
@@ -419,28 +447,11 @@ def _match_template_prepared(
     nms_overlap: float,
 ) -> list[dict[str, Any]]:
     """Match a frame against an already-prepared template payload."""
-    tmpl_gray, gray_mask, degenerate = prepared
-    if degenerate:
-        # A constant (zero-variance) template produces undefined TM_CCOEFF_NORMED
-        # results — every position may score ~1.0.  Bail out early.
+    result = _template_correlation_map(frame, prepared)
+    if result is None:
         return []
-
-    k = config.SCREENSPACE_BLUR_KERNEL
-    frame_gray = cv2.cvtColor(cv2.GaussianBlur(frame, (k, k), 0), cv2.COLOR_BGR2GRAY)
-
+    tmpl_gray, _gray_mask, _degenerate = prepared
     th, tw = tmpl_gray.shape[:2]
-    if th > frame_gray.shape[0] or tw > frame_gray.shape[1]:
-        return []
-
-    result = cv2.matchTemplate(
-        frame_gray, tmpl_gray, cv2.TM_CCOEFF_NORMED, mask=gray_mask
-    )
-    # Normalized correlation can produce inf/nan when a frame patch (or the
-    # masked template region) has near-zero variance — neutralize those
-    # before thresholding so they don't explode into thousands of false
-    # positives.
-    if not np.all(np.isfinite(result)):
-        result = np.where(np.isfinite(result), result, -1.0)
     locs = np.where(result >= threshold)
     if len(locs[0]) == 0:
         return []
@@ -2198,6 +2209,67 @@ def check_frame_for_tool(
     return tool.check_frame(frame, prev_frame, region, parameters)
 
 
+def _score_result(
+    score_key: str, passed: bool, detail: dict[str, Any] | None
+) -> dict[str, Any]:
+    """Wrap a ``check_frame``-style ``(passed, detail)`` into a calibration score.
+
+    Reads the threshold-independent scalar at ``detail[score_key]``. Returns a
+    ``not_evaluable`` status when the frame could not be scored (missing detail,
+    empty/missing score key, or a non-finite scalar from numpy/OpenCV).
+    """
+    if detail is None or not score_key:
+        return {"status": "not_evaluable"}
+    raw = detail.get(score_key)
+    if raw is None:
+        return {"status": "not_evaluable"}
+    score = float(raw)
+    if not math.isfinite(score):
+        return {"status": "not_evaluable"}
+    return {"status": "ok", "score": score, "passed": bool(passed), "detail": detail}
+
+
+def score_frame_for_tool(
+    tool_type: str,
+    frame: np.ndarray,
+    prev_frame: np.ndarray | None,
+    region: dict[str, int],
+    params: dict[str, Any],
+    *,
+    ocr_reader: "Callable[[str, dict[str, int], dict[str, Any]], list[Any]] | None" = None,
+) -> dict[str, Any]:
+    """Score a single frame against one tool's parameters for pin calibration.
+
+    Mirrors :func:`check_frame_for_tool` but returns the threshold-independent
+    scalar (``{status, score, passed, detail}``) instead of a boolean. Degenerate
+    regions and unknown / non-scorable tools (timelapse, multitool) return
+    ``not_evaluable``.
+
+    ``ocr_reader`` (text/numbers only) supplies cached EasyOCR readings keyed per
+    pin so fuzzy/confidence changes re-score without re-running OCR; when absent
+    the tool runs OCR live through its ``check_frame``.
+    """
+    # Template matches against the full frame and ignores ``region``, so a
+    # zero-size region — the case when an uploaded template scans the whole
+    # frame with no region_ref — is valid for it. Every other tool crops the
+    # region, where an empty crop would break downstream cv2 ops.
+    if tool_type != "template" and (region.get("w", 0) <= 0 or region.get("h", 0) <= 0):
+        return {"status": "not_evaluable"}
+    tool = TOOLS.get(tool_type)
+    if tool is None or not tool.score_key:
+        return {"status": "not_evaluable"}
+    if ocr_reader is not None and tool_type in ("text", "numbers"):
+        if tool_type == "text" and not params.get("search_string", ""):
+            return {"status": "not_evaluable"}
+        readings = ocr_reader(tool_type, region, params)
+        if tool_type == "text":
+            passed, detail = _score_text_readings(readings, params)
+        else:
+            passed, detail = _score_numbers_readings(readings, params)
+        return _score_result(tool.score_key, passed, detail)
+    return tool.score_frame(frame, prev_frame, region, params)
+
+
 def scan_multitool(
     video_path: str,
     region: dict[str, int],
@@ -2314,6 +2386,56 @@ def scan_multitool(
     if on_progress:
         on_progress(1.0)
     return results
+
+
+def score_multitool_frame(
+    frame: np.ndarray,
+    prev_frame: np.ndarray | None,
+    steps: list[dict[str, Any]],
+    *,
+    ocr_reader: "Callable[[str, dict[str, int], dict[str, Any]], list[Any]] | None" = None,
+) -> dict[str, Any]:
+    """Score every multitool step against one frame for pin calibration.
+
+    Unlike :func:`scan_multitool` (which short-circuits the AND chain), this
+    evaluates *all* steps unconditionally so every step row gets a score. Each
+    step uses its own ``region_coords`` (populated by the server before calling)
+    and the step dict as parameters.
+
+    Returns ``{"steps": [...], "passed": bool | None}``. The chain passes when
+    all AND steps pass and all NOT steps fail; it is ``False`` when any step
+    definitively fails; ``None`` (not evaluable) when no step definitively fails
+    but at least one could not be scored.
+    """
+    step_results: list[dict[str, Any]] = []
+    definitive_fail = False
+    any_not_evaluable = False
+    for i, step in enumerate(steps):
+        region = step.get("region_coords", {})
+        res = score_frame_for_tool(
+            step["type"], frame, prev_frame, region, step, ocr_reader=ocr_reader
+        )
+        logic = (step.get("logic") or "AND").upper() if i > 0 else "AND"
+        entry = dict(res)
+        entry["type"] = step["type"]
+        entry["logic"] = logic
+        step_results.append(entry)
+        if res.get("status") != "ok":
+            any_not_evaluable = True
+            continue
+        step_passed = bool(res.get("passed"))
+        if logic == "NOT":
+            if step_passed:
+                definitive_fail = True
+        elif not step_passed:
+            definitive_fail = True
+    if definitive_fail:
+        chain_passed: bool | None = False
+    elif any_not_evaluable:
+        chain_passed = None
+    else:
+        chain_passed = True
+    return {"steps": step_results, "passed": chain_passed}
 
 
 def _merge_timestamp_spans(
@@ -2571,6 +2693,137 @@ def generate_heatmap_gif(
 # Both look up the tool by name in ``TOOLS`` and delegate to its methods.
 
 
+def _numbers_ocr_allowlist(languages: list[str], integers_only: bool) -> str | None:
+    """EasyOCR allowlist for the numbers tool (English only; ``None`` otherwise)."""
+    if languages == ["en"]:
+        return _OCR_DIGITS_ONLY_ALLOWLIST if integers_only else _OCR_NUMBER_ALLOWLIST
+    return None
+
+
+def _ocr_region_readings(
+    region_pixels: np.ndarray,
+    *,
+    languages: list[str] | None = None,
+    allowlist: str | None = None,
+    preprocess: bool = False,
+) -> list[Any]:
+    """Run EasyOCR over a region crop and return raw ``(bbox, text, conf)`` tuples.
+
+    Pure transport over the cached reader — no fuzzy/threshold logic — so the
+    same readings can be re-scored under different fuzzy/confidence settings
+    (the basis of the calibration OCR cache).
+    """
+    langs = languages or ["en"]
+    reader = _get_ocr_reader(langs)
+    pixels = _preprocess_for_ocr(region_pixels) if preprocess else region_pixels
+    kwargs: dict[str, Any] = {"detail": 1}
+    if allowlist is not None:
+        kwargs["allowlist"] = allowlist
+    return reader.readtext(pixels, **kwargs)
+
+
+def _score_text_readings(
+    readings: list[Any], params: dict[str, Any]
+) -> tuple[bool, dict[str, Any]]:
+    """Score text OCR readings: best fuzzy ratio among readings clearing min conf.
+
+    ``fuzzy_ratio`` is the calibration scalar; ``text_found``/``confidence`` carry
+    the best-matching reading for the strip tooltip. ``passed`` is the fuzzy
+    match at the current threshold.
+    """
+    search_string = params.get("search_string", "")
+    fuzzy_threshold = params.get(
+        "fuzzy_threshold", config.SCREENSPACE_OCR_FUZZY_THRESHOLD
+    )
+    ocr_min_conf = _effective_ocr_confidence_threshold(
+        params.get("ocr_confidence_threshold")
+    )
+    ocr_normalize = params.get("ocr_normalize") or "off"
+    if ocr_normalize not in ("digits", "letters"):
+        ocr_normalize = "off"
+    search_cmp = _normalize_ocr_text(search_string, ocr_normalize)
+    best_ratio = 0.0
+    best_text = ""
+    best_conf = 0.0
+    for _, text, conf in readings:
+        if conf < ocr_min_conf:
+            continue
+        ocr_cmp = _normalize_ocr_text(text, ocr_normalize)
+        ratio = difflib.SequenceMatcher(None, search_cmp, ocr_cmp).ratio()
+        if ratio > best_ratio:
+            best_ratio = ratio
+            best_text = text
+            best_conf = conf
+    return best_ratio >= fuzzy_threshold, {
+        "fuzzy_ratio": round(best_ratio, 4),
+        "text_found": best_text,
+        "confidence": round(best_conf, 4),
+    }
+
+
+def _score_numbers_readings(
+    readings: list[Any], params: dict[str, Any]
+) -> tuple[bool, dict[str, Any]]:
+    """Score numbers OCR readings: best OCR conf of any reading is the scalar.
+
+    ``passed`` records the *polarity expectation* — whether a reading clearing
+    min conf also satisfied the operator / target_value / range comparison.
+    """
+    operator = params.get("operator", "gt")
+    target_value = params.get("target_value", 0)
+    range_min = params.get("range_min")
+    range_max = params.get("range_max")
+    ocr_min_conf = _effective_ocr_confidence_threshold(
+        params.get("ocr_confidence_threshold")
+    )
+    best_conf = 0.0
+    matched_number: float | None = None
+    matched_conf = 0.0
+    for _, text, conf in readings:
+        if conf > best_conf:
+            best_conf = conf
+        if conf < ocr_min_conf:
+            continue
+        cleaned = text.replace(",", "")
+        for match in _NUMBERS_RE.findall(cleaned):
+            num = float(match)
+            if _number_matches(num, operator, target_value, range_min, range_max):
+                if matched_number is None or conf > matched_conf:
+                    matched_number = num
+                    matched_conf = conf
+    detail: dict[str, Any] = {"confidence": round(best_conf, 4)}
+    if matched_number is not None:
+        detail["number_found"] = matched_number
+    return matched_number is not None, detail
+
+
+def run_calibration_ocr(
+    frame: np.ndarray,
+    region: dict[str, int],
+    tool_type: str,
+    params: dict[str, Any],
+) -> list[Any]:
+    """Run EasyOCR for one calibration frame/region (text or numbers tool).
+
+    Public entry point for the server's per-pin OCR cache: returns the raw
+    ``(bbox, text, conf)`` readings so they can be memoized and re-scored under
+    changed fuzzy/confidence settings without re-running OCR.
+    """
+    languages = params.get("languages") or ["en"]
+    allowlist = (
+        _numbers_ocr_allowlist(languages, params.get("integers_only", False))
+        if tool_type == "numbers"
+        else None
+    )
+    pixels = extract_region(frame, region)
+    return _ocr_region_readings(
+        pixels,
+        languages=languages,
+        allowlist=allowlist,
+        preprocess=params.get("ocr_preprocess", False),
+    )
+
+
 class AnalysisTool:
     """Base class for screenspace analysis tools.
 
@@ -2589,6 +2842,9 @@ class AnalysisTool:
     supports_fast_scan: ClassVar[bool] = True
     # Extra keys merged into ``fast_opts`` (e.g. ``{"template_downscale": True}``).
     fast_scan_extra_opts: ClassVar[dict[str, Any]] = {}
+    # Detail-dict key holding the threshold-independent calibration scalar that
+    # ``check_frame`` populates on both branches. Empty ⇒ tool not calibratable.
+    score_key: ClassVar[str] = ""
 
     def check_frame(
         self,
@@ -2602,6 +2858,22 @@ class AnalysisTool:
         Default: tool not supported as a multitool step.
         """
         return False, None
+
+    def score_frame(
+        self,
+        frame: np.ndarray,
+        prev_frame: np.ndarray | None,
+        region: dict[str, int],
+        params: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Return the threshold-independent calibration score for one frame.
+
+        Reads the scalar ``check_frame`` now populates on both branches (keyed by
+        ``score_key``). Returns ``{"status": "not_evaluable"}`` when the frame
+        cannot be scored (missing companion/reference, degenerate input, etc.).
+        """
+        passed, detail = self.check_frame(frame, prev_frame, region, params)
+        return _score_result(self.score_key, passed, detail)
 
     def scan(
         self,
@@ -2623,15 +2895,14 @@ class AnalysisTool:
 class ColorTool(AnalysisTool):
     name = "color"
     fast_scan_region_dim = 32
+    score_key = "_confidence"
 
     def check_frame(self, frame, prev_frame, region, params):
         pixels = extract_region(frame, region)
         target = params.get("target_color", {"h": 0, "s": 0, "v": 0})
         tol = params.get("tolerance", {"h": 10, "s": 50, "v": 50})
         matched, conf = color_matches(pixels, target, tol)
-        if matched:
-            return True, {"_confidence": conf}
-        return False, None
+        return matched, {"_confidence": conf}
 
     def scan(
         self,
@@ -2664,6 +2935,7 @@ class ColorTool(AnalysisTool):
 class ChangeTool(AnalysisTool):
     name = "change"
     fast_scan_region_dim = 128
+    score_key = "magnitude"
 
     def check_frame(self, frame, prev_frame, region, params):
         if prev_frame is None:
@@ -2686,9 +2958,7 @@ class ChangeTool(AnalysisTool):
         _, mask = cv2.threshold(diff, noise_threshold, 255, cv2.THRESH_BINARY)
         mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, morph_kernel)
         mag = float(np.count_nonzero(mask)) / float(mask.size) if mask.size else 0.0
-        if mag >= threshold:
-            return True, {"magnitude": round(mag, 4)}
-        return False, None
+        return mag >= threshold, {"magnitude": round(mag, 4)}
 
     def scan(
         self,
@@ -2722,6 +2992,7 @@ class ChangeTool(AnalysisTool):
 class SimilarityTool(AnalysisTool):
     name = "similarity"
     fast_scan_region_dim = 128
+    score_key = "score"
 
     def check_frame(self, frame, prev_frame, region, params):
         ref = params.get("reference_frame")
@@ -2730,9 +3001,7 @@ class SimilarityTool(AnalysisTool):
         pixels = extract_region(frame, region)
         threshold = params.get("threshold", config.SCREENSPACE_SSIM_THRESHOLD)
         is_sim, score = regions_are_similar(pixels, ref, threshold)
-        if is_sim:
-            return True, {"score": round(score, 4)}
-        return False, None
+        return is_sim, {"score": round(score, 4)}
 
     def scan(
         self,
@@ -2767,35 +3036,21 @@ class SimilarityTool(AnalysisTool):
 
 class TextTool(AnalysisTool):
     name = "text"
+    # Calibration scalar is fuzzy match quality. Deliberately distinct from
+    # ``_extract_confidence``'s "confidence" key (OCR reading confidence) — two
+    # different axes; do not unify them.
+    score_key = "fuzzy_ratio"
 
     def check_frame(self, frame, prev_frame, region, params):
-        pixels = extract_region(frame, region)
-        search_string = params.get("search_string", "")
-        if not search_string:
+        if not params.get("search_string", ""):
             return False, None
-        fuzzy_threshold = params.get(
-            "fuzzy_threshold", config.SCREENSPACE_OCR_FUZZY_THRESHOLD
+        pixels = extract_region(frame, region)
+        readings = _ocr_region_readings(
+            pixels,
+            languages=params.get("languages") or ["en"],
+            preprocess=params.get("ocr_preprocess", False),
         )
-        ocr_min_conf = _effective_ocr_confidence_threshold(
-            params.get("ocr_confidence_threshold")
-        )
-        languages = params.get("languages") or ["en"]
-        reader = _get_ocr_reader(languages)
-        if params.get("ocr_preprocess", False):
-            pixels = _preprocess_for_ocr(pixels)
-        ocr_results = reader.readtext(pixels, detail=1)
-        ocr_normalize = params.get("ocr_normalize") or "off"
-        if ocr_normalize not in ("digits", "letters"):
-            ocr_normalize = "off"
-        search_cmp = _normalize_ocr_text(search_string, ocr_normalize)
-        for _, text, conf in ocr_results:
-            if conf < ocr_min_conf:
-                continue
-            ocr_cmp = _normalize_ocr_text(text, ocr_normalize)
-            ratio = difflib.SequenceMatcher(None, search_cmp, ocr_cmp).ratio()
-            if ratio >= fuzzy_threshold:
-                return True, {"text_found": text, "confidence": round(conf, 4)}
-        return False, None
+        return _score_text_readings(readings, params)
 
     def scan(
         self,
@@ -2832,37 +3087,20 @@ class TextTool(AnalysisTool):
 
 class NumbersTool(AnalysisTool):
     name = "numbers"
+    score_key = "confidence"
 
     def check_frame(self, frame, prev_frame, region, params):
-        pixels = extract_region(frame, region)
-        operator = params.get("operator", "gt")
-        target_value = params.get("target_value", 0)
-        range_min = params.get("range_min")
-        range_max = params.get("range_max")
-        ocr_min_conf = _effective_ocr_confidence_threshold(
-            params.get("ocr_confidence_threshold")
-        )
         languages = params.get("languages") or ["en"]
-        reader = _get_ocr_reader(languages)
-        if params.get("ocr_preprocess", False):
-            pixels = _preprocess_for_ocr(pixels)
-        ocr_kwargs: dict[str, Any] = {"detail": 1}
-        if languages == ["en"]:
-            ocr_kwargs["allowlist"] = (
-                _OCR_DIGITS_ONLY_ALLOWLIST
-                if params.get("integers_only", False)
-                else _OCR_NUMBER_ALLOWLIST
-            )
-        ocr_results = reader.readtext(pixels, **ocr_kwargs)
-        for _, text, conf in ocr_results:
-            if conf < ocr_min_conf:
-                continue
-            cleaned = text.replace(",", "")
-            for match in _NUMBERS_RE.findall(cleaned):
-                num = float(match)
-                if _number_matches(num, operator, target_value, range_min, range_max):
-                    return True, {"number_found": num, "confidence": round(conf, 4)}
-        return False, None
+        pixels = extract_region(frame, region)
+        readings = _ocr_region_readings(
+            pixels,
+            languages=languages,
+            allowlist=_numbers_ocr_allowlist(
+                languages, params.get("integers_only", False)
+            ),
+            preprocess=params.get("ocr_preprocess", False),
+        )
+        return _score_numbers_readings(readings, params)
 
     def scan(
         self,
@@ -2902,6 +3140,7 @@ class NumbersTool(AnalysisTool):
 class TemplateTool(AnalysisTool):
     name = "template"
     fast_scan_extra_opts: ClassVar[dict[str, Any]] = {"template_downscale": True}
+    score_key = "best_score"
 
     def check_frame(self, frame, prev_frame, region, params):
         template_img = params.get("template_image")
@@ -2915,6 +3154,14 @@ class TemplateTool(AnalysisTool):
         if prepared is None:
             prepared = _prepare_template(template_img, template_mask)
             params["_prepared_template"] = prepared
+        # Peak correlation is the threshold-independent scalar; available even on
+        # a miss (unlike match_template, which only returns above-threshold hits).
+        corr = _template_correlation_map(frame, prepared)
+        if corr is None:
+            return False, None
+        peak = float(corr.max())
+        if peak < threshold:
+            return False, {"best_score": round(peak, 4), "match_count": 0}
         matches = match_template(
             frame,
             template_img,
@@ -2922,10 +3169,7 @@ class TemplateTool(AnalysisTool):
             mask=template_mask,
             prepared=prepared,
         )
-        if matches:
-            best = max(m["score"] for m in matches)
-            return True, {"best_score": round(best, 4), "match_count": len(matches)}
-        return False, None
+        return True, {"best_score": round(peak, 4), "match_count": len(matches)}
 
     def scan(
         self,
@@ -2978,6 +3222,7 @@ class TemplateTool(AnalysisTool):
 class FlowTool(AnalysisTool):
     name = "flow"
     fast_scan_region_dim = 128
+    score_key = "magnitude"
 
     def check_frame(self, frame, prev_frame, region, params):
         if prev_frame is None:
@@ -2990,12 +3235,10 @@ class FlowTool(AnalysisTool):
             "magnitude_threshold", config.SCREENSPACE_FLOW_MAGNITUDE_THRESHOLD
         )
         flow_result = compute_optical_flow(prev_gray_f, curr_gray)
-        if flow_result["magnitude"] >= magnitude_threshold:
-            return True, {
-                "magnitude": flow_result["magnitude"],
-                "angle": flow_result["angle"],
-            }
-        return False, None
+        return flow_result["magnitude"] >= magnitude_threshold, {
+            "magnitude": flow_result["magnitude"],
+            "angle": flow_result["angle"],
+        }
 
     def scan(
         self,
@@ -3028,6 +3271,7 @@ class FlowTool(AnalysisTool):
 class SceneTool(AnalysisTool):
     name = "scene"
     fast_scan_region_dim = 64
+    score_key = "score"
 
     def check_frame(self, frame, prev_frame, region, params):
         ref_scenes = params.get("reference_scenes")
@@ -3050,9 +3294,10 @@ class SceneTool(AnalysisTool):
             if score > best_score:
                 best_score = score
                 best_name = ref["name"]
-        if best_score >= threshold:
-            return True, {"scene_name": best_name, "score": round(best_score, 4)}
-        return False, None
+        return best_score >= threshold, {
+            "scene_name": best_name,
+            "score": round(best_score, 4),
+        }
 
     def scan(
         self,
@@ -3088,6 +3333,9 @@ class SceneTool(AnalysisTool):
 class InactivityTool(AnalysisTool):
     name = "inactivity"
     fast_scan_region_dim = 64
+    # Calibration scalar is the raw phash distance (Sensitivity-slider units);
+    # the strip inverts the axis for display (lower distance = more inactive).
+    score_key = "distance"
 
     def check_frame(self, frame, prev_frame, region, params):
         if prev_frame is None:
@@ -3098,13 +3346,11 @@ class InactivityTool(AnalysisTool):
         curr_h = compute_phash(pixels)
         prev_h = compute_phash(prev_pixels)
         dist = int(curr_h - prev_h)
-        if dist <= thresh:
-            if thresh > 0:
-                conf = min((thresh - dist) / float(thresh), 1.0)
-            else:
-                conf = 1.0
-            return True, {"distance": dist, "_confidence": conf}
-        return False, None
+        if thresh > 0:
+            conf = max(0.0, min((thresh - dist) / float(thresh), 1.0))
+        else:
+            conf = 1.0 if dist <= thresh else 0.0
+        return dist <= thresh, {"distance": dist, "_confidence": conf}
 
     def scan(
         self,

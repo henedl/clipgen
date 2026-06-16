@@ -57,7 +57,7 @@ import uuid
 from collections import OrderedDict
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, TypeGuard, cast
+from typing import Any, Callable, TypeGuard, cast
 
 from flask import Blueprint, Response, jsonify, request, send_file
 
@@ -144,6 +144,19 @@ _video_metadata_cache_lock = threading.Lock()
 _FRAME_CACHE_MAX = 256
 _frame_cache: "OrderedDict[tuple[str, int, float, int], bytes]" = OrderedDict()
 _frame_cache_lock = threading.Lock()
+
+# Calibration caches (Phase 2). Pins are scored synchronously and re-scored on
+# every parameter nudge, so decoded frames and raw OCR readings are memoized to
+# keep slider drags interactive. Both keys include ``mtime_ns`` so a re-encoded
+# source video invalidates naturally. Decoded frames (not JPEG bytes) are held
+# here — distinct from ``_frame_cache`` above — covering pins plus their
+# companion frames for change/flow/inactivity.
+_PIN_FRAME_CACHE_MAX = max(8, 2 * config.SCREENSPACE_MAX_PINS)
+_pin_frame_cache: "OrderedDict[tuple[str, int, float], Any]" = OrderedDict()
+_pin_frame_cache_lock = threading.Lock()
+_PIN_OCR_CACHE_MAX = 64
+_pin_ocr_cache: "OrderedDict[tuple[Any, ...], list[Any]]" = OrderedDict()
+_pin_ocr_cache_lock = threading.Lock()
 
 # ---- SSE (Server-Sent Events) client registry ----
 
@@ -482,6 +495,245 @@ def api_pins_delete(pin_id: str) -> FlaskResponse:
             _manifest.get("pins", {}).pop(participant_id, None)
         _do_persist(drain_events=False)
     return jsonify({"ok": True})
+
+
+# ---- Pin calibration (synchronous, off the task queue) ----
+
+
+def _decoded_pin_frame(video_path: str, mtime_ns: int, ts: float) -> "Any | None":
+    """Return a decoded BGR frame at ``ts``, memoized per (video, mtime, ts).
+
+    Backs calibration so repeated parameter nudges don't re-decode the same pin
+    (or companion) frames. Returns ``None`` when extraction fails.
+    """
+    key = (video_path, mtime_ns, round(ts, 3))
+    with _pin_frame_cache_lock:
+        cached = _pin_frame_cache.get(key)
+        if cached is not None:
+            _pin_frame_cache.move_to_end(key)
+            return cached
+    frame = video.extract_frame_at_timestamp(video_path, ts)
+    if frame is None:
+        return None
+    with _pin_frame_cache_lock:
+        _pin_frame_cache[key] = frame
+        while len(_pin_frame_cache) > _PIN_FRAME_CACHE_MAX:
+            _pin_frame_cache.popitem(last=False)
+    return frame
+
+
+def _make_pin_ocr_reader(
+    video_path: str, mtime_ns: int, ts: float, frame: "Any"
+) -> "Callable[[str, dict[str, int], dict[str, Any]], list[Any]]":
+    """Build the cached OCR reader passed to the score functions for one pin.
+
+    Memoizes raw EasyOCR readings per (video, mtime, ts, region, tool, langs,
+    preprocess, integers_only) so changing only the fuzzy/confidence threshold
+    re-scores from cached readings without re-running OCR.
+    """
+
+    def _reader(
+        tool_type: str, region_coords: dict[str, int], params: dict[str, Any]
+    ) -> list[Any]:
+        langs = tuple(params.get("languages") or ["en"])
+        key = (
+            video_path,
+            mtime_ns,
+            round(ts, 3),
+            (
+                region_coords.get("x"),
+                region_coords.get("y"),
+                region_coords.get("w"),
+                region_coords.get("h"),
+            ),
+            tool_type,
+            langs,
+            bool(params.get("ocr_preprocess", False)),
+            bool(params.get("integers_only", False)),
+        )
+        with _pin_ocr_cache_lock:
+            cached = _pin_ocr_cache.get(key)
+            if cached is not None:
+                _pin_ocr_cache.move_to_end(key)
+                return cached
+        readings = screenspace.run_calibration_ocr(
+            frame, region_coords, tool_type, params
+        )
+        with _pin_ocr_cache_lock:
+            _pin_ocr_cache[key] = readings
+            while len(_pin_ocr_cache) > _PIN_OCR_CACHE_MAX:
+                _pin_ocr_cache.popitem(last=False)
+        return readings
+
+    return _reader
+
+
+def _calibration_interval(task_type: str, parameters: dict[str, Any]) -> float:
+    """Companion-frame interval for change/flow/inactivity (and multitool step 0)."""
+    if task_type == "multitool":
+        steps = parameters.get("steps", [])
+        raw = steps[0].get("interval") if steps else None
+    else:
+        raw = parameters.get("interval")
+    try:
+        val = float(raw) if raw is not None else 0.0
+    except (TypeError, ValueError):
+        val = 0.0
+    return val if val > 0 else float(config.SCREENSPACE_DEFAULT_INTERVAL)
+
+
+def _calibratable_tool(tool: str) -> bool:
+    """A tool is calibratable when it exposes a per-frame scalar (or is multitool)."""
+    if tool == "timelapse" or tool not in _VALID_TASK_TYPES:
+        return False
+    if tool == "multitool":
+        return True
+    return bool(screenspace.TOOLS[tool].score_key)
+
+
+@screenspace_bp.route("/api/calibrate", methods=["POST"])
+def api_calibrate() -> FlaskResponse:
+    """Score a participant's pins against a tool + parameters, synchronously.
+
+    Body: ``{participant, tool, parameters, region_ref?, region?, pin_ids?}``.
+    Returns one ``{pin_id, timestamp, polarity, status, score?, passed?, detail?}``
+    per pin (multitool entries also carry ``steps`` and a chain ``passed``). This
+    is per-frame only — temporal params (consecutive/interval) are not validated.
+    """
+    data = request.get_json(silent=True)
+    if not data:
+        return jsonify({"ok": False, "error": "JSON body required"}), 400
+
+    tool = (data.get("tool") or "").strip()
+    if not _calibratable_tool(tool):
+        return jsonify(
+            {"ok": False, "error": f"Tool '{tool}' is not calibratable"}
+        ), 400
+
+    # Reuse task-creation validation by reshaping the body into a task request.
+    validated = _validate_task_request(
+        {
+            "type": tool,
+            "participant": data.get("participant", ""),
+            "region": data.get("region", ""),
+            "region_ref": data.get("region_ref"),
+            "parameters": data.get("parameters"),
+        }
+    )
+    if _is_flask_error_response(validated):
+        return validated
+    assert isinstance(validated, tuple) and len(validated) == 6  # success tuple
+    (
+        task_type,
+        participant,
+        region_name,
+        parameters,
+        all_known_regions,
+        requested_region,
+    ) = cast(
+        tuple[str, str, str, dict[str, Any], dict[str, Any], dict[str, Any] | None],
+        validated,
+    )
+
+    resolved = _find_participant_video_with_mtime(participant)
+    if resolved is None:
+        return jsonify(
+            {"ok": False, "error": f"No video for participant {participant}"}
+        ), 404
+    video_path, mtime_ns = resolved
+
+    props = video.probe_video_properties(video_path)
+
+    def _resolve_region_coords(
+        name: str, region_data: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
+        rd = region_data if region_data is not None else all_known_regions[name]
+        if props and props.get("width") and props.get("height"):
+            return screenspace.denormalize_region(rd, props["width"], props["height"])
+        return {k: rd[k] for k in ("x", "y", "w", "h") if k in rd}
+
+    if requested_region is not None:
+        region_coords = _resolve_region_coords(region_name, requested_region)
+    else:
+        region_coords = {"x": 0, "y": 0, "w": 0, "h": 0}
+
+    coerced = _coerce_task_params(task_type, parameters)
+    if isinstance(coerced, tuple):
+        return coerced
+    parameters = cast(dict[str, Any], coerced)
+
+    extracted = _extract_task_media(task_type, parameters, video_path, region_coords)
+    if isinstance(extracted, tuple):
+        return extracted
+    parameters = cast(dict[str, Any], extracted)
+
+    if task_type == "multitool":
+        prepared = _prepare_multitool_steps(
+            parameters,
+            all_known_regions,
+            video_path,
+            region_coords,
+            _resolve_region_coords,
+        )
+        if isinstance(prepared, tuple):
+            return prepared
+        parameters = cast(dict[str, Any], prepared)
+
+    with _manifest_lock:
+        all_pins = copy.deepcopy(_manifest.get("pins", {}).get(participant, []))
+    pin_ids = data.get("pin_ids")
+    if isinstance(pin_ids, list):
+        wanted = set(pin_ids)
+        all_pins = [p for p in all_pins if p.get("id") in wanted]
+    all_pins = all_pins[: config.SCREENSPACE_MAX_PINS]
+
+    interval = _calibration_interval(task_type, parameters)
+    steps = parameters.get("steps", [])
+    needs_prev = task_type in ("change", "flow", "inactivity") or (
+        task_type == "multitool"
+        and any(s.get("type") in ("change", "flow", "inactivity") for s in steps)
+    )
+
+    results: list[dict[str, Any]] = []
+    for pin in all_pins:
+        ts = float(pin.get("timestamp", 0.0))
+        entry: dict[str, Any] = {
+            "pin_id": pin.get("id"),
+            "timestamp": ts,
+            "polarity": pin.get("polarity"),
+        }
+        try:
+            frame = _decoded_pin_frame(video_path, mtime_ns, ts)
+            if frame is None:
+                entry["status"] = "not_evaluable"
+                results.append(entry)
+                continue
+            # Companion frame for temporal tools; ts < interval ⇒ no companion
+            # (the score path then reports not_evaluable for that step/tool).
+            prev_frame = None
+            if needs_prev and ts >= interval:
+                prev_frame = _decoded_pin_frame(video_path, mtime_ns, ts - interval)
+            ocr_reader = _make_pin_ocr_reader(video_path, mtime_ns, ts, frame)
+            if task_type == "multitool":
+                score = screenspace.score_multitool_frame(
+                    frame, prev_frame, steps, ocr_reader=ocr_reader
+                )
+            else:
+                score = screenspace.score_frame_for_tool(
+                    task_type,
+                    frame,
+                    prev_frame,
+                    region_coords,
+                    parameters,
+                    ocr_reader=ocr_reader,
+                )
+            entry.update(score)
+        except Exception as exc:  # noqa: BLE001 - one bad pin must not 500 the batch
+            utils.warning_print(f"Calibration failed for pin {pin.get('id')}: {exc}")
+            entry["status"] = "not_evaluable"
+        results.append(entry)
+
+    return jsonify(_sanitize_floats({"ok": True, "tool": tool, "pins": results}))
 
 
 # ---- Video frame extraction ----

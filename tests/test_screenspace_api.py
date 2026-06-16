@@ -30,6 +30,9 @@ def client(tmp_path, monkeypatch):
     ]
     screenspace_server._output_dir = str(tmp_path)
     screenspace_server._worker = screenspace.ScreenspaceWorker()
+    # Module-level calibration caches persist across tests — reset them.
+    screenspace_server._pin_frame_cache.clear()
+    screenspace_server._pin_ocr_cache.clear()
 
     monkeypatch.setattr(
         screenspace,
@@ -41,6 +44,22 @@ def client(tmp_path, monkeypatch):
 
     with app.test_client() as c:
         yield c
+
+
+@pytest.fixture
+def calib_client(client, monkeypatch):
+    """``client`` plus mocked video resolution/probe so calibration can run."""
+    import video
+
+    monkeypatch.setattr(
+        screenspace_server,
+        "_find_participant_video_with_mtime",
+        lambda pid: (f"/tmp/test_{pid}.mp4", 4242) if pid in ("P01", "P02") else None,
+    )
+    monkeypatch.setattr(
+        video, "probe_video_properties", lambda p: {"width": 100, "height": 100}
+    )
+    return client
 
 
 # ---- Participants ----
@@ -1997,3 +2016,245 @@ def test_events_list_stable_under_concurrent_writes(client):
             r.result()
 
     assert errors == []
+
+
+# ---- Calibration endpoint ----
+
+
+def _make_pin(client, ts, polarity, participant="P01"):
+    return client.post(
+        f"/screenspace/api/pins/{participant}",
+        json={"timestamp": ts, "polarity": polarity},
+    ).get_json()["pin"]
+
+
+def test_calibrate_color_scores_pins(calib_client, monkeypatch):
+    import numpy as np
+    import video
+
+    red = np.full((100, 100, 3), [0, 0, 255], dtype=np.uint8)  # BGR red
+    blue = np.full((100, 100, 3), [255, 0, 0], dtype=np.uint8)  # BGR blue
+    monkeypatch.setattr(
+        video, "extract_frame_at_timestamp", lambda p, ts: red if ts < 1.5 else blue
+    )
+    _make_pin(calib_client, 1.0, "positive")  # red frame
+    _make_pin(calib_client, 2.0, "negative")  # blue frame
+
+    target = screenspace.average_color_hsv(red)
+    resp = calib_client.post(
+        "/screenspace/api/calibrate",
+        json={
+            "participant": "P01",
+            "tool": "color",
+            "region_ref": {"source": "full_frame"},
+            "parameters": {
+                "target_color": {"h": target["h"], "s": target["s"], "v": target["v"]},
+                "tolerance": {"h": 10, "s": 50, "v": 50},
+            },
+        },
+    )
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["ok"] is True
+    assert data["tool"] == "color"
+    by_polarity = {p["polarity"]: p for p in data["pins"]}
+    assert by_polarity["positive"]["status"] == "ok"
+    assert by_polarity["positive"]["passed"] is True
+    assert by_polarity["negative"]["passed"] is False
+    assert by_polarity["positive"]["score"] >= by_polarity["negative"]["score"]
+
+
+def test_calibrate_unknown_participant(calib_client):
+    resp = calib_client.post(
+        "/screenspace/api/calibrate",
+        json={
+            "participant": "PNOPE",
+            "tool": "color",
+            "region_ref": {"source": "full_frame"},
+            "parameters": {},
+        },
+    )
+    assert resp.status_code == 404
+
+
+def test_calibrate_rejects_timelapse(calib_client):
+    resp = calib_client.post(
+        "/screenspace/api/calibrate",
+        json={"participant": "P01", "tool": "timelapse"},
+    )
+    assert resp.status_code == 400
+
+
+def test_calibrate_rejects_unknown_tool(calib_client):
+    resp = calib_client.post(
+        "/screenspace/api/calibrate",
+        json={"participant": "P01", "tool": "bogus"},
+    )
+    assert resp.status_code == 400
+
+
+def test_calibrate_no_pins(calib_client):
+    resp = calib_client.post(
+        "/screenspace/api/calibrate",
+        json={
+            "participant": "P01",
+            "tool": "color",
+            "region_ref": {"source": "full_frame"},
+            "parameters": {},
+        },
+    )
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["ok"] is True
+    assert data["pins"] == []
+
+
+def test_calibrate_change_first_pin_not_evaluable(calib_client, monkeypatch):
+    import numpy as np
+    import video
+
+    frame = np.zeros((100, 100, 3), dtype=np.uint8)
+    monkeypatch.setattr(video, "extract_frame_at_timestamp", lambda p, ts: frame)
+    _make_pin(calib_client, 1.0, "positive")  # ts < interval -> no companion
+
+    resp = calib_client.post(
+        "/screenspace/api/calibrate",
+        json={
+            "participant": "P01",
+            "tool": "change",
+            "region_ref": {"source": "full_frame"},
+            "parameters": {"threshold": 0.1, "interval": 2.0},
+        },
+    )
+    assert resp.status_code == 200
+    pins = resp.get_json()["pins"]
+    assert pins[0]["status"] == "not_evaluable"
+
+
+def test_calibrate_degenerate_region_not_evaluable(calib_client, monkeypatch):
+    import numpy as np
+    import video
+
+    frame = np.zeros((100, 100, 3), dtype=np.uint8)
+    monkeypatch.setattr(video, "extract_frame_at_timestamp", lambda p, ts: frame)
+    screenspace_server._manifest["regions"]["zero"] = {
+        "x": 0.0,
+        "y": 0.0,
+        "w": 0.0,
+        "h": 0.0,
+        "source_width": 100,
+        "source_height": 100,
+    }
+    _make_pin(calib_client, 1.0, "positive")
+
+    resp = calib_client.post(
+        "/screenspace/api/calibrate",
+        json={
+            "participant": "P01",
+            "tool": "color",
+            "region_ref": {"source": "active", "name": "zero"},
+            "parameters": {},
+        },
+    )
+    assert resp.status_code == 200  # degenerate input must not 500
+    pins = resp.get_json()["pins"]
+    assert pins[0]["status"] == "not_evaluable"
+
+
+def test_calibrate_multitool_per_step_scores(calib_client, monkeypatch):
+    import numpy as np
+    import video
+
+    red = np.full((100, 100, 3), [0, 0, 255], dtype=np.uint8)
+    monkeypatch.setattr(video, "extract_frame_at_timestamp", lambda p, ts: red)
+    _make_pin(calib_client, 1.0, "positive")
+
+    target = screenspace.average_color_hsv(red)
+    resp = calib_client.post(
+        "/screenspace/api/calibrate",
+        json={
+            "participant": "P01",
+            "tool": "multitool",
+            "parameters": {
+                "steps": [
+                    {
+                        "type": "color",
+                        "region_ref": {"source": "full_frame"},
+                        "target_color": {
+                            "h": target["h"],
+                            "s": target["s"],
+                            "v": target["v"],
+                        },
+                        "tolerance": {"h": 10, "s": 50, "v": 50},
+                    },
+                    {
+                        "type": "color",
+                        "logic": "AND",
+                        "region_ref": {"source": "full_frame"},
+                        "target_color": {"h": 60, "s": 255, "v": 255},  # green -> miss
+                        "tolerance": {"h": 5, "s": 10, "v": 10},
+                    },
+                ]
+            },
+        },
+    )
+    assert resp.status_code == 200
+    pins = resp.get_json()["pins"]
+    assert len(pins) == 1
+    entry = pins[0]
+    assert len(entry["steps"]) == 2
+    assert entry["steps"][0]["passed"] is True
+    assert entry["steps"][1]["passed"] is False
+    assert entry["passed"] is False  # AND chain: one step missed
+
+
+def test_calibrate_respects_pin_ids_filter(calib_client, monkeypatch):
+    import numpy as np
+    import video
+
+    frame = np.full((100, 100, 3), [0, 0, 255], dtype=np.uint8)
+    monkeypatch.setattr(video, "extract_frame_at_timestamp", lambda p, ts: frame)
+    keep = _make_pin(calib_client, 1.0, "positive")
+    _make_pin(calib_client, 2.0, "negative")
+
+    resp = calib_client.post(
+        "/screenspace/api/calibrate",
+        json={
+            "participant": "P01",
+            "tool": "color",
+            "region_ref": {"source": "full_frame"},
+            "parameters": {},
+            "pin_ids": [keep["id"]],
+        },
+    )
+    assert resp.status_code == 200
+    pins = resp.get_json()["pins"]
+    assert len(pins) == 1
+    assert pins[0]["pin_id"] == keep["id"]
+
+
+def test_calibrate_caps_at_max_pins(calib_client, monkeypatch):
+    import numpy as np
+    import video
+
+    frame = np.full((100, 100, 3), [0, 0, 255], dtype=np.uint8)
+    monkeypatch.setattr(video, "extract_frame_at_timestamp", lambda p, ts: frame)
+    monkeypatch.setattr(config, "SCREENSPACE_MAX_PINS", 2)
+    # Inject 3 pins directly (bypassing the create-time cap) to exercise the
+    # calibrate slice cap.
+    screenspace_server._manifest["pins"]["P01"] = [
+        {"id": f"pin_{i}", "timestamp": float(i), "polarity": "positive"}
+        for i in range(3)
+    ]
+
+    resp = calib_client.post(
+        "/screenspace/api/calibrate",
+        json={
+            "participant": "P01",
+            "tool": "color",
+            "region_ref": {"source": "full_frame"},
+            "parameters": {},
+        },
+    )
+    assert resp.status_code == 200
+    assert len(resp.get_json()["pins"]) == 2
