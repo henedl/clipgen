@@ -872,7 +872,7 @@ body[data-frontend="screenspace"] {
 .pin-tray-item--negative { --pin-color: var(--color-pin-negative); }
 
 .pin-tray-item:hover,
-.pin-tray-item.highlighted {
+.pin-tray-item:focus-within {
   box-shadow: var(--shadow-focus);
 }
 
@@ -926,11 +926,12 @@ body[data-frontend="screenspace"] {
   background: color-mix(in srgb, var(--color-bg) 70%, transparent);
   color: var(--color-text-dim);
   cursor: pointer;
-  opacity: 0;
+  opacity: 0.72;
   transition: opacity var(--duration-fast), color var(--duration-fast);
 }
 
-.pin-tray-item:hover .pin-tray-remove {
+.pin-tray-item:hover .pin-tray-remove,
+.pin-tray-remove:focus-visible {
   opacity: 1;
 }
 
@@ -1336,7 +1337,7 @@ body[data-frontend="screenspace"] {
   padding: var(--space-3) 0;
   flex: 1;
   min-height: 0;
-  overflow: hidden;
+  overflow-y: auto;
 }
 
 #workflowActionRow {
@@ -1828,6 +1829,10 @@ body[data-frontend="screenspace"] {
   -webkit-mask-repeat: no-repeat;
   -webkit-mask-position: center;
   flex-shrink: 0;
+}
+
+.cal-panel.collapsed .cal-icon {
+  opacity: 0.6;
 }
 
 .cal-label {

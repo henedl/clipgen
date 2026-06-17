@@ -260,6 +260,7 @@ def test_load_screenspace_events_for_viewer_caches_by_mtime(tmp_path, monkeypatc
     assert len(load_calls) == 1
 
     # Rewriting the manifest bumps its mtime and invalidates the cache.
+    # Pass pins explicitly so save does not read the manifest (this test counts loads).
     screenspace.save_screenspace_manifest(
         {},
         [],
@@ -273,6 +274,7 @@ def test_load_screenspace_events_for_viewer_caches_by_mtime(tmp_path, monkeypatc
                 "excluded": False,
             }
         ],
+        pins={},
     )
     manifest_path = tmp_path / config.SCREENSPACE_MANIFEST_FILENAME
     st = manifest_path.stat()

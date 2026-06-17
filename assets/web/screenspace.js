@@ -1110,7 +1110,11 @@
     var ts = state.currentTimestamp;
     apiPost("api/pins/" + encodeURIComponent(pid), { timestamp: ts, polarity: polarity })
       .then(function (data) {
-        if (!data.ok || pid !== state.selectedParticipant) return;
+        if (!data.ok) {
+          showToast(data.error || "Failed to pin frame");
+          return;
+        }
+        if (pid !== state.selectedParticipant) return;
         state.pins.push(data.pin);
         renderPinTray();
         updatePinButtons();
@@ -1124,7 +1128,10 @@
   function removePin(pinId) {
     apiDelete("api/pins/" + encodeURIComponent(pinId))
       .then(function (data) {
-        if (!data.ok) return;
+        if (!data.ok) {
+          showToast(data.error || "Failed to remove pin");
+          return;
+        }
         state.pins = state.pins.filter(function (p) { return p.id !== pinId; });
         renderPinTray();
         updatePinButtons();
@@ -1141,7 +1148,10 @@
     var next = pin.polarity === "positive" ? "negative" : "positive";
     apiPut("api/pins/" + encodeURIComponent(pinId), { polarity: next })
       .then(function (data) {
-        if (!data.ok || !data.pin) return;
+        if (!data.ok || !data.pin) {
+          showToast(data.error || "Failed to update pin");
+          return;
+        }
         pin.polarity = data.pin.polarity;
         renderPinTray();
         renderTimeline();
@@ -5343,7 +5353,8 @@
     var text = posPass + "/" + posTotal + " positives pass · "
       + negPass + "/" + negTotal + " negatives pass";
     if (na) text += " · " + na + " not evaluable";
-    var pass = posTotal > 0 && posPass === posTotal && negPass === negTotal;
+    var evaluableTotal = posTotal + negTotal;
+    var pass = evaluableTotal > 0 && na === 0 && posPass === posTotal && negPass === negTotal;
     return { text: text, pass: pass };
   }
 
@@ -5511,7 +5522,7 @@
           if (k > 0 && logic) {
             label.appendChild(el("span", "cal-track-logic" + (logic === "NOT" ? " is-not" : ""), logic));
           }
-          var built = _calBuildTrack(rows, stepType, axis, sliderId, label);
+          var built = _calBuildTrack(rows, stepType, axis, sliderId, label, !!sliderId);
           frag.appendChild(built.track);
           if (built.note) notes.push((k + 1) + ". " + built.note);
         })(k);

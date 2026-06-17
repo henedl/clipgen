@@ -1687,7 +1687,7 @@ def _run_ss_task(args: argparse.Namespace) -> None:
             events,
             stashes=manifest.get("stashes", []),
             per_participant=manifest.get("per_participant", {}),
-            pins=manifest.get("pins", {}),
+            pins=manifest.get("pins") or {},
         )
         worker.stop()
 

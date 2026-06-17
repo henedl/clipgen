@@ -2764,10 +2764,12 @@ def _score_text_readings(
 def _score_numbers_readings(
     readings: list[Any], params: dict[str, Any]
 ) -> tuple[bool, dict[str, Any]]:
-    """Score numbers OCR readings: best OCR conf of any reading is the scalar.
+    """Score numbers OCR readings by the best condition-matching OCR confidence.
 
-    ``passed`` records the *polarity expectation* — whether a reading clearing
-    min conf also satisfied the operator / target_value / range comparison.
+    ``confidence`` is the calibration scalar for the OCR-confidence slider: it
+    reflects the best reading that satisfies operator / target_value / range,
+    not an unrelated high-confidence number. ``passed`` then applies the current
+    confidence threshold to that matching reading.
     """
     operator = params.get("operator", "gt")
     target_value = params.get("target_value", 0)
@@ -2776,14 +2778,9 @@ def _score_numbers_readings(
     ocr_min_conf = _effective_ocr_confidence_threshold(
         params.get("ocr_confidence_threshold")
     )
-    best_conf = 0.0
     matched_number: float | None = None
     matched_conf = 0.0
     for _, text, conf in readings:
-        if conf > best_conf:
-            best_conf = conf
-        if conf < ocr_min_conf:
-            continue
         cleaned = text.replace(",", "")
         for match in _NUMBERS_RE.findall(cleaned):
             num = float(match)
@@ -2791,10 +2788,10 @@ def _score_numbers_readings(
                 if matched_number is None or conf > matched_conf:
                     matched_number = num
                     matched_conf = conf
-    detail: dict[str, Any] = {"confidence": round(best_conf, 4)}
+    detail: dict[str, Any] = {"confidence": round(matched_conf, 4)}
     if matched_number is not None:
         detail["number_found"] = matched_number
-    return matched_number is not None, detail
+    return matched_number is not None and matched_conf >= ocr_min_conf, detail
 
 
 def run_calibration_ocr(
@@ -3975,6 +3972,13 @@ def save_screenspace_manifest(
                 {k: v for k, v in r.items() if k != "flow_grid"} for r in ct["result"]
             ]
         clean_tasks.append(ct)
+    if pins is None:
+        existing = load_screenspace_manifest()
+        existing_pins = existing.get("pins")
+        pins_payload = existing_pins if isinstance(existing_pins, dict) else {}
+    else:
+        pins_payload = pins
+
     payload = _sanitize_manifest_floats(
         {
             "regions": regions,
@@ -3982,7 +3986,7 @@ def save_screenspace_manifest(
             "events": events or [],
             "stashes": stashes or [],
             "per_participant": per_participant or {},
-            "pins": pins or {},
+            "pins": pins_payload,
         }
     )
     return utils.save_json_manifest(

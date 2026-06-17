@@ -207,6 +207,8 @@ def build_screenspace_pins(manifest: dict[str, Any]) -> list[dict[str, Any]]:
     against (and with what polarity) when reviewing the chosen parameters.
     """
     pins_by_participant = manifest.get("pins", {}) or {}
+    if not isinstance(pins_by_participant, dict):
+        return []
     records: list[dict[str, Any]] = []
     for participant_id, pins in pins_by_participant.items():
         if not isinstance(pins, list):

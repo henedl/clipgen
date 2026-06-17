@@ -56,6 +56,7 @@ import threading
 import uuid
 from collections import OrderedDict
 from datetime import datetime, timezone
+from numbers import Integral, Real
 from pathlib import Path
 from typing import Any, Callable, TypeGuard, cast
 
@@ -358,6 +359,29 @@ _PIN_POLARITIES = ("positive", "negative")
 _PIN_LABEL_MAX_CHARS = 120
 
 
+def _pin_manifest() -> dict[str, list[dict[str, Any]]]:
+    """Return the manifest's pin map, replacing malformed roots with empty state."""
+    pins = _manifest.get("pins")
+    if isinstance(pins, dict):
+        return pins
+    _manifest["pins"] = {}
+    return _manifest["pins"]
+
+
+def _participant_pin_list(
+    participant_id: str, *, create: bool = False
+) -> list[dict[str, Any]]:
+    """Return a participant's pin list; malformed entries behave like no pins."""
+    pins_by_participant = _pin_manifest()
+    pins = pins_by_participant.get(participant_id)
+    if isinstance(pins, list):
+        return pins
+    if create:
+        pins_by_participant[participant_id] = []
+        return pins_by_participant[participant_id]
+    return []
+
+
 def _annotate_pin_staleness(
     participant_id: str, pins: list[dict[str, Any]]
 ) -> list[dict[str, Any]]:
@@ -370,6 +394,8 @@ def _annotate_pin_staleness(
     duration = _participant_video_duration(participant_id)
     out: list[dict[str, Any]] = []
     for pin in pins:
+        if not isinstance(pin, dict):
+            continue
         entry = dict(pin)
         entry["stale"] = duration is not None and pin.get("timestamp", 0.0) > duration
         out.append(entry)
@@ -382,9 +408,11 @@ def _find_pin(pin_id: str) -> tuple[str, list[dict[str, Any]], int] | None:
     Returns ``(participant_id, pin_list, index)`` or ``None``. Caller holds
     ``_manifest_lock``.
     """
-    for participant_id, pins in _manifest.get("pins", {}).items():
+    for participant_id, pins in _pin_manifest().items():
+        if not isinstance(pins, list):
+            continue
         for idx, pin in enumerate(pins):
-            if pin.get("id") == pin_id:
+            if isinstance(pin, dict) and pin.get("id") == pin_id:
                 return participant_id, pins, idx
     return None
 
@@ -397,7 +425,7 @@ def api_pins_list(participant: str) -> FlaskResponse:
             {"ok": False, "error": f"Unknown participant {participant}"}
         ), 404
     with _manifest_lock:
-        pins = copy.deepcopy(_manifest.get("pins", {}).get(participant, []))
+        pins = copy.deepcopy(_participant_pin_list(participant))
     return jsonify(
         {
             "ok": True,
@@ -445,7 +473,7 @@ def api_pins_create(participant: str) -> FlaskResponse:
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
     with _manifest_lock:
-        pins = _manifest.setdefault("pins", {}).setdefault(participant, [])
+        pins = _participant_pin_list(participant, create=True)
         if len(pins) >= config.SCREENSPACE_MAX_PINS:
             return jsonify(
                 {
@@ -492,7 +520,7 @@ def api_pins_delete(pin_id: str) -> FlaskResponse:
         participant_id, pins, idx = found
         pins.pop(idx)
         if not pins:
-            _manifest.get("pins", {}).pop(participant_id, None)
+            _pin_manifest().pop(participant_id, None)
         _do_persist(drain_events=False)
     return jsonify({"ok": True})
 
@@ -622,7 +650,8 @@ def api_calibrate() -> FlaskResponse:
     )
     if _is_flask_error_response(validated):
         return validated
-    assert isinstance(validated, tuple) and len(validated) == 6  # success tuple
+    if not (isinstance(validated, tuple) and len(validated) == 6):
+        return jsonify({"ok": False, "error": "Invalid calibration request"}), 400
     (
         task_type,
         participant,
@@ -679,9 +708,13 @@ def api_calibrate() -> FlaskResponse:
             return prepared
         parameters = cast(dict[str, Any], prepared)
 
-    with _manifest_lock:
-        all_pins = copy.deepcopy(_manifest.get("pins", {}).get(participant, []))
     pin_ids = data.get("pin_ids")
+    if pin_ids is not None and not isinstance(pin_ids, list):
+        return jsonify({"ok": False, "error": "pin_ids must be a list"}), 400
+
+    with _manifest_lock:
+        all_pins = copy.deepcopy(_participant_pin_list(participant))
+    all_pins = [p for p in all_pins if isinstance(p, dict)]
     if isinstance(pin_ids, list):
         wanted = set(pin_ids)
         all_pins = [p for p in all_pins if p.get("id") in wanted]
@@ -2328,8 +2361,18 @@ def _validate_scene_references(
 
 def _sanitize_floats(obj: Any) -> Any:
     """Replace non-finite floats (inf, nan) with None for JSON safety."""
-    if isinstance(obj, float) and not math.isfinite(obj):
-        return None
+    if isinstance(obj, bool):
+        return obj
+    if isinstance(obj, Integral):
+        return int(obj)
+    if isinstance(obj, Real):
+        value = float(obj)
+        return value if math.isfinite(value) else None
+    if hasattr(obj, "item") and callable(obj.item):
+        try:
+            return _sanitize_floats(obj.item())
+        except (TypeError, ValueError):
+            pass
     if isinstance(obj, dict):
         return {k: _sanitize_floats(v) for k, v in obj.items()}
     if isinstance(obj, list):
@@ -2389,7 +2432,7 @@ def _backfill_missing_events(manifest: dict[str, Any]) -> None:
             events,
             stashes=manifest.get("stashes", []),
             per_participant=manifest.get("per_participant", {}),
-            pins=manifest.get("pins", {}),
+            pins=manifest.get("pins") or {},
         )
 
 
@@ -2458,7 +2501,7 @@ def _do_persist(*, drain_events: bool = True) -> None:
         _manifest.get("events", []),
         stashes=_manifest.get("stashes", []),
         per_participant=_manifest.get("per_participant", {}),
-        pins=_manifest.get("pins", {}),
+        pins=_pin_manifest(),
     )
 
 

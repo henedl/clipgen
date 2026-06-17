@@ -482,6 +482,44 @@ class TestManifest:
         assert loaded["pins"]["P01"][0]["polarity"] == "positive"
         assert loaded["pins"]["P01"][0]["timestamp"] == 12.5
 
+    def test_omitting_pins_preserves_existing_pins(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(config, "OUTPUT_DIR", str(tmp_path))
+        pins = {
+            "P01": [
+                {
+                    "id": "pin_keep",
+                    "timestamp": 12.5,
+                    "polarity": "positive",
+                    "label": "",
+                    "created_at": "2026-01-01T00:00:00+00:00",
+                }
+            ]
+        }
+        screenspace.save_screenspace_manifest({}, [], pins=pins)
+        screenspace.save_screenspace_manifest({"new": {"x": 0}}, [])
+        loaded = screenspace.load_screenspace_manifest()
+        assert loaded["pins"] == pins
+
+    def test_explicit_empty_pins_clears_existing_pins(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(config, "OUTPUT_DIR", str(tmp_path))
+        screenspace.save_screenspace_manifest(
+            {},
+            [],
+            pins={
+                "P01": [
+                    {
+                        "id": "pin_clear",
+                        "timestamp": 1.0,
+                        "polarity": "positive",
+                        "label": "",
+                        "created_at": "2026-01-01T00:00:00+00:00",
+                    }
+                ]
+            },
+        )
+        screenspace.save_screenspace_manifest({}, [], pins={})
+        assert screenspace.load_screenspace_manifest()["pins"] == {}
+
 
 # ---------------------------------------------------------------------------
 # Events
@@ -2191,7 +2229,7 @@ class TestScoreOcrReadings:
         assert detail["fuzzy_ratio"] == 0.0
         assert detail["text_found"] == ""
 
-    def test_numbers_best_conf_is_scalar_operator_is_polarity(self):
+    def test_numbers_matching_conf_is_scalar_operator_is_polarity(self):
         readings = [(None, "5", 0.9), (None, "99", 0.6)]
         params = {
             "operator": "gte",
@@ -2199,8 +2237,8 @@ class TestScoreOcrReadings:
             "ocr_confidence_threshold": 0.5,
         }
         passed, detail = screenspace._score_numbers_readings(readings, params)
-        # Scalar = best OCR conf among ALL readings; operator is the polarity.
-        assert detail["confidence"] == 0.9
+        # Scalar = best OCR confidence among readings satisfying the operator.
+        assert detail["confidence"] == 0.6
         assert passed is True
         assert detail["number_found"] == 99.0
 
@@ -2213,8 +2251,20 @@ class TestScoreOcrReadings:
         }
         passed, detail = screenspace._score_numbers_readings(readings, params)
         assert passed is False
-        assert detail["confidence"] == 0.9
+        assert detail["confidence"] == 0.0
         assert "number_found" not in detail
+
+    def test_numbers_low_confidence_operator_match_still_scores(self):
+        readings = [(None, "99", 0.4)]
+        params = {
+            "operator": "gte",
+            "target_value": 50,
+            "ocr_confidence_threshold": 0.5,
+        }
+        passed, detail = screenspace._score_numbers_readings(readings, params)
+        assert passed is False
+        assert detail["confidence"] == 0.4
+        assert detail["number_found"] == 99.0
 
 
 class TestScoreMultitoolFrame:
@@ -2263,6 +2313,48 @@ class TestScoreMultitoolFrame:
         res = screenspace.score_multitool_frame(red, None, steps)
         assert res["steps"][1]["status"] == "not_evaluable"
         assert res["passed"] is None
+
+    def test_not_step_passes_chain_when_condition_misses(self):
+        red = np.full((100, 100, 3), [0, 0, 255], dtype=np.uint8)
+        steps = [
+            {
+                "type": "color",
+                "region_coords": self.region,
+                "target_color": screenspace.average_color_hsv(red),
+                "tolerance": {"h": 10, "s": 50, "v": 50},
+            },
+            {
+                "type": "color",
+                "logic": "NOT",
+                "region_coords": self.region,
+                "target_color": {"h": 60, "s": 255, "v": 255},
+                "tolerance": {"h": 5, "s": 10, "v": 10},
+            },
+        ]
+        res = screenspace.score_multitool_frame(red, None, steps)
+        assert res["steps"][1]["passed"] is False
+        assert res["passed"] is True
+
+    def test_not_step_fails_chain_when_condition_matches(self):
+        red = np.full((100, 100, 3), [0, 0, 255], dtype=np.uint8)
+        steps = [
+            {
+                "type": "color",
+                "region_coords": self.region,
+                "target_color": screenspace.average_color_hsv(red),
+                "tolerance": {"h": 10, "s": 50, "v": 50},
+            },
+            {
+                "type": "color",
+                "logic": "NOT",
+                "region_coords": self.region,
+                "target_color": screenspace.average_color_hsv(red),
+                "tolerance": {"h": 10, "s": 50, "v": 50},
+            },
+        ]
+        res = screenspace.score_multitool_frame(red, None, steps)
+        assert res["steps"][1]["passed"] is True
+        assert res["passed"] is False
 
 
 # ---------------------------------------------------------------------------
