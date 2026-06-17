@@ -140,6 +140,20 @@ def test_pins_list_default_empty(client):
     assert data["max_pins"] == config.SCREENSPACE_MAX_PINS
 
 
+def test_pins_list_tolerates_null_manifest_root(client):
+    screenspace_server._manifest["pins"] = None
+    resp = client.get("/screenspace/api/pins/P01")
+    assert resp.status_code == 200
+    assert resp.get_json()["pins"] == []
+
+
+def test_pins_list_tolerates_malformed_participant_value(client):
+    screenspace_server._manifest["pins"] = {"P01": {"id": "pin_bad"}}
+    resp = client.get("/screenspace/api/pins/P01")
+    assert resp.status_code == 200
+    assert resp.get_json()["pins"] == []
+
+
 def test_pins_list_unknown_participant(client):
     resp = client.get("/screenspace/api/pins/PNOPE")
     assert resp.status_code == 404
@@ -161,6 +175,27 @@ def test_pins_create_and_list(client):
     assert listed[0]["label"] == "health red"
     # No source video in the fixture, so staleness is undeterminable -> False.
     assert listed[0]["stale"] is False
+
+
+def test_pins_create_replaces_null_manifest_root(client):
+    screenspace_server._manifest["pins"] = None
+    resp = client.post(
+        "/screenspace/api/pins/P01",
+        json={"timestamp": 1.0, "polarity": "positive"},
+    )
+    assert resp.status_code == 200
+    assert isinstance(screenspace_server._manifest["pins"], dict)
+    assert len(screenspace_server._manifest["pins"]["P01"]) == 1
+
+
+def test_pins_create_truncates_label(client):
+    label = "x" * 200
+    resp = client.post(
+        "/screenspace/api/pins/P01",
+        json={"timestamp": 1.0, "polarity": "positive", "label": label},
+    )
+    assert resp.status_code == 200
+    assert len(resp.get_json()["pin"]["label"]) == 120
 
 
 def test_pins_create_rejects_bad_polarity(client):
@@ -244,6 +279,7 @@ def test_pins_delete(client):
     ).get_json()["pin"]
     assert client.delete(f"/screenspace/api/pins/{pin['id']}").status_code == 200
     assert client.get("/screenspace/api/pins/P01").get_json()["pins"] == []
+    assert "P01" not in screenspace_server._manifest["pins"]
 
 
 def test_pins_delete_unknown_id(client):
@@ -2109,6 +2145,36 @@ def test_calibrate_no_pins(calib_client):
     assert data["pins"] == []
 
 
+def test_calibrate_tolerates_null_pins(calib_client):
+    screenspace_server._manifest["pins"] = None
+    resp = calib_client.post(
+        "/screenspace/api/calibrate",
+        json={
+            "participant": "P01",
+            "tool": "color",
+            "region_ref": {"source": "full_frame"},
+            "parameters": {},
+        },
+    )
+    assert resp.status_code == 200
+    assert resp.get_json()["pins"] == []
+
+
+def test_calibrate_rejects_non_list_pin_ids(calib_client):
+    resp = calib_client.post(
+        "/screenspace/api/calibrate",
+        json={
+            "participant": "P01",
+            "tool": "color",
+            "region_ref": {"source": "full_frame"},
+            "parameters": {},
+            "pin_ids": "pin_123",
+        },
+    )
+    assert resp.status_code == 400
+    assert "pin_ids" in resp.get_json()["error"]
+
+
 def test_calibrate_change_first_pin_not_evaluable(calib_client, monkeypatch):
     import numpy as np
     import video
@@ -2231,6 +2297,73 @@ def test_calibrate_respects_pin_ids_filter(calib_client, monkeypatch):
     pins = resp.get_json()["pins"]
     assert len(pins) == 1
     assert pins[0]["pin_id"] == keep["id"]
+
+
+def test_calibrate_frame_cache_reuses_decoded_pin_frame(calib_client, monkeypatch):
+    import numpy as np
+    import video
+
+    frame = np.full((100, 100, 3), [0, 0, 255], dtype=np.uint8)
+    calls = []
+
+    def fake_extract(path, ts):
+        calls.append(ts)
+        return frame
+
+    monkeypatch.setattr(video, "extract_frame_at_timestamp", fake_extract)
+    _make_pin(calib_client, 1.0, "positive")
+    body = {
+        "participant": "P01",
+        "tool": "color",
+        "region_ref": {"source": "full_frame"},
+        "parameters": {},
+    }
+    assert calib_client.post("/screenspace/api/calibrate", json=body).status_code == 200
+    assert calib_client.post("/screenspace/api/calibrate", json=body).status_code == 200
+    assert calls == [1.0]
+
+
+def test_calibrate_text_ocr_cache_rescores_threshold(calib_client, monkeypatch):
+    import numpy as np
+    import video
+
+    frame = np.zeros((100, 100, 3), dtype=np.uint8)
+    monkeypatch.setattr(video, "extract_frame_at_timestamp", lambda p, ts: frame)
+    calls = []
+
+    def fake_ocr(frame_arg, region, tool_type, params):
+        calls.append((tool_type, params.get("fuzzy_threshold")))
+        return [(None, "hellx", 0.9)]
+
+    monkeypatch.setattr(screenspace, "run_calibration_ocr", fake_ocr)
+    _make_pin(calib_client, 1.0, "positive")
+    body = {
+        "participant": "P01",
+        "tool": "text",
+        "region_ref": {"source": "full_frame"},
+        "parameters": {
+            "search_string": "hello",
+            "fuzzy_threshold": 0.7,
+            "ocr_confidence_threshold": 0.5,
+        },
+    }
+    first = calib_client.post("/screenspace/api/calibrate", json=body)
+    assert first.status_code == 200
+    assert first.get_json()["pins"][0]["passed"] is True
+    body["parameters"]["fuzzy_threshold"] = 0.9
+    second = calib_client.post("/screenspace/api/calibrate", json=body)
+    assert second.status_code == 200
+    assert second.get_json()["pins"][0]["passed"] is False
+    assert calls == [("text", 0.7)]
+
+
+def test_sanitize_floats_handles_numpy_scalars():
+    import numpy as np
+
+    out = screenspace_server._sanitize_floats(
+        {"ok": np.bool_(True), "score": np.float32("nan"), "detail": {"n": np.int64(3)}}
+    )
+    assert out == {"ok": True, "score": None, "detail": {"n": 3}}
 
 
 def test_calibrate_caps_at_max_pins(calib_client, monkeypatch):

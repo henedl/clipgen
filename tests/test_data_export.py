@@ -463,6 +463,32 @@ def test_screenspace_pins_builder_no_pins(screenspace_manifest):
     assert data_export.build_screenspace_pins(screenspace_manifest) == []
 
 
+@pytest.mark.parametrize(
+    "pins_value",
+    [
+        None,
+        [],
+        {"P01": {"id": "pin_bad"}},
+        {"P01": [None, "bad", {"id": "pin_ok", "timestamp": 1.0}]},
+    ],
+)
+def test_screenspace_pins_builder_handles_malformed_shapes(pins_value):
+    rows = data_export.build_screenspace_pins({"pins": pins_value})
+    if isinstance(pins_value, dict) and isinstance(pins_value.get("P01"), list):
+        assert rows == [
+            {
+                "participant": "P01",
+                "id": "pin_ok",
+                "timestamp": 1.0,
+                "polarity": "",
+                "label": "",
+                "created_at": "",
+            }
+        ]
+    else:
+        assert rows == []
+
+
 def test_bundle_writer_includes_pins(tmp_path):
     _write_manifest(
         tmp_path, config.SCREENSPACE_MANIFEST_FILENAME, _ss_manifest_with_pins()
