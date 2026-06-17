@@ -1941,6 +1941,37 @@ body[data-frontend="screenspace"] {
   pointer-events: none;
 }
 
+/* Suggested-cutoff marker: dashed, behind the dots, distinct from the solid
+   accent threshold line. Sits at the midpoint of a clean positive/negative gap.
+   Non-interactive — the value/gap live on the .cal-suggest-apply badge's
+   tooltip (markers can't fire the singleton hover handler). */
+.cal-suggestion {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  border-left: 1px dashed var(--color-pin-positive);
+  opacity: 0.7;
+  pointer-events: none;
+}
+
+/* "Apply" pill: jumps the threshold slider to the suggested cutoff. Mirrors
+   .cal-chip--pass for visual kinship (2px vertical padding matches the chip;
+   no smaller spacing token exists). */
+.cal-suggest-apply {
+  flex-shrink: 0;
+  padding: 2px var(--space-2);
+  font-size: var(--text-xs);
+  color: var(--color-pin-positive);
+  background: transparent;
+  border: 1px solid var(--color-pin-positive);
+  border-radius: var(--radius-full);
+  cursor: pointer;
+}
+
+.cal-suggest-apply:hover {
+  background: color-mix(in srgb, var(--color-pin-positive) 12%, transparent);
+}
+
 .cal-dot {
   position: absolute;
   bottom: 0;
