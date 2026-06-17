@@ -5129,14 +5129,19 @@
   // distance units, so its line is drawn on an inverted axis (low distance = more
   // inactive = right). Per-pin scalars come from the backend `score`; this map
   // only positions them.
+  // `compare` is the *pass comparison* ("ge" → passes when score ≥ threshold,
+  // "le" → passes when score ≤ threshold), used by _calSuggest to bisect the gap
+  // between populations. It's distinct from `invert` (which only flips the axis
+  // *display*); they coincide today but mean different things. color/scene omit
+  // it (no single cutoff to suggest).
   var CAL_AXIS = {
-    change: { sliderId: "paramChangeThresh", invert: false, drawLine: true },
-    similarity: { sliderId: "paramSimThresh", invert: false, drawLine: true },
-    text: { sliderId: "paramTextFuzzy", invert: false, drawLine: true },
-    template: { sliderId: "paramTemplateThresh", invert: false, drawLine: true },
-    flow: { sliderId: "paramFlowMag", invert: false, drawLine: true },
-    numbers: { sliderId: "paramNumOcrConf", invert: false, drawLine: true },
-    inactivity: { sliderId: "paramInactThresh", invert: true, drawLine: true },
+    change: { sliderId: "paramChangeThresh", invert: false, drawLine: true, compare: "ge" },
+    similarity: { sliderId: "paramSimThresh", invert: false, drawLine: true, compare: "ge" },
+    text: { sliderId: "paramTextFuzzy", invert: false, drawLine: true, compare: "ge" },
+    template: { sliderId: "paramTemplateThresh", invert: false, drawLine: true, compare: "ge" },
+    flow: { sliderId: "paramFlowMag", invert: false, drawLine: true, compare: "ge" },
+    numbers: { sliderId: "paramNumOcrConf", invert: false, drawLine: true, compare: "ge" },
+    inactivity: { sliderId: "paramInactThresh", invert: true, drawLine: true, compare: "le" },
     color: {
       sliderId: null, rangeMin: 0, rangeMax: 1, invert: false, drawLine: false,
       rowNote: "Tolerance ≠ confidence — read the gap between green and red dots.",
@@ -5229,7 +5234,9 @@
   // Build one track (axis + dots + optional threshold line). `rows` is
   // [{polarity, timestamp, sc, stale}] where `sc` is the score object for this
   // track (the pin entry for a single tool, or entry.steps[k] for multitool).
-  function _calBuildTrack(rows, tool, axis, sliderId, label) {
+  // `suggest` enables the dashed midpoint marker + "Apply" badge (single tools
+  // with a threshold slider only; multitool steps pass it falsy).
+  function _calBuildTrack(rows, tool, axis, sliderId, label, suggest) {
     var track = el("div", "cal-track");
     if (label) track.appendChild(label);
     var range = _calAxisRange(axis, sliderId);
@@ -5240,6 +5247,52 @@
       line.setAttribute("data-cal-slider", sliderId || "");
       line.setAttribute("data-cal-invert", axis.invert ? "1" : "0");
       ax.appendChild(line);
+    }
+    // Suggested cutoff (step-aligned): midway through the gap when both
+    // polarities are pinned, otherwise hugging the edge of the pinned cluster
+    // (positives-only is a primary workflow). Drawn behind the dots (appended
+    // before them) and re-derived on every render, so it stays put while the
+    // threshold slider is dragged (these tools' scores are threshold-independent).
+    var suggestion = (suggest && axis.drawLine && sliderId) ? _calSuggest(rows, axis.compare) : null;
+    var applyBadge = null;
+    var narrowGap = false;
+    if (suggestion && suggestion.separated) {
+      var slider = qs("#" + sliderId);
+      var step = slider ? parseFloat(slider.step) : 0;
+      if (!isFinite(step)) step = 0;
+      // Step-aligned cutoff that actually satisfies the pins (a raw target can
+      // snap onto a boundary and still let a pin through).
+      var applyVal = _calApplyValue(suggestion.lo, suggestion.hi, axis.compare, step, range.min, range.max);
+      if (applyVal == null) {
+        narrowGap = true; // valid interval exists but no step-aligned value lands in it
+      } else {
+        // Marker sits where Apply lands, so the threshold line meets it exactly.
+        var marker = el("div", "cal-suggestion");
+        marker.style.left = _calPos(applyVal, range, axis.invert) + "%";
+        ax.appendChild(marker);
+        applyBadge = el("button", "cal-suggest-apply", "Apply " + _calFmtVal(applyVal, step));
+        applyBadge.type = "button";
+        var applyTip;
+        if (suggestion.mode === "gap") {
+          applyTip = "Set the threshold midway between your positives and negatives (gap " + _calFmtVal(suggestion.margin, step) + ").";
+        } else if (suggestion.mode === "positives") {
+          applyTip = "Set the threshold at the edge of your positives — pin a negative to widen the margin.";
+        } else {
+          applyTip = "Set the threshold just past your negatives — pin a positive to widen the margin.";
+        }
+        applyBadge.setAttribute("data-tooltip", applyTip);
+        (function (sid, val, sl) {
+          applyBadge.addEventListener("click", function () {
+            setInputValue("#" + sid, val);
+            if (sl) {
+              // Bubbles to #workflowParams → glides the line + re-evaluates scores.
+              sl.dispatchEvent(new Event("input", { bubbles: true }));
+              sl.dispatchEvent(new Event("change", { bubbles: true }));
+            }
+            syncValueDisplays();
+          });
+        })(sliderId, applyVal, slider);
+      }
     }
     var stack = {}; // rounded position bucket -> count, for collision fan-out
     rows.forEach(function (r) {
@@ -5268,7 +5321,14 @@
       ax.appendChild(dot);
     });
     track.appendChild(ax);
-    return { track: track, note: (!axis.drawLine && axis.rowNote) ? axis.rowNote : null };
+    if (applyBadge) track.appendChild(applyBadge);
+    var note = (!axis.drawLine && axis.rowNote) ? axis.rowNote : null;
+    if (suggestion && !suggestion.separated) {
+      note = "Positive and negative scores overlap — no clean threshold (check the region or tool).";
+    } else if (narrowGap) {
+      note = "No step-aligned threshold separates these pins (gap narrower than the slider step, or outside its range).";
+    }
+    return { track: track, note: note };
   }
 
   function _calSummary(result) {
@@ -5285,6 +5345,98 @@
     if (na) text += " · " + na + " not evaluable";
     var pass = posTotal > 0 && posPass === posTotal && negPass === negTotal;
     return { text: text, pass: pass };
+  }
+
+  // Suggest a cutoff that satisfies whatever pins exist — pinning only expected
+  // positives is a primary workflow, so this does NOT require negatives. It
+  // returns the *valid threshold interval* as bounds [lo, hi] (either may be null
+  // = unbounded), which the populations constrain:
+  //   ge (pass when score >= T): positives need T <= min(pos) (hi, inclusive);
+  //      negatives need T > max(neg) (lo, exclusive).
+  //   le (pass when score <= T): positives need T >= max(pos) (lo, inclusive);
+  //      negatives need T < min(neg) (hi, exclusive).
+  // `mode` records what the caller is working with so it can word the Apply hint.
+  // With both polarities the interval can be empty → {separated:false} (the
+  // use-case-#2 "overlap / wrong region or tool" signal). `compare` is the pass
+  // comparison, independent of axis rendering.
+  function _calSuggest(rows, compare) {
+    if (!compare) return null;
+    var pos = [], neg = [];
+    rows.forEach(function (r) {
+      var sc = r.sc;
+      if (!sc || sc.status !== "ok" || sc.score == null || !isFinite(sc.score)) return;
+      if (r.polarity === "negative") neg.push(Number(sc.score));
+      else pos.push(Number(sc.score));
+    });
+    if (!pos.length && !neg.length) return null; // no scored pins to satisfy
+    var lo = null, hi = null;
+    if (compare === "le") {
+      if (pos.length) lo = Math.max.apply(null, pos);
+      if (neg.length) hi = Math.min.apply(null, neg);
+    } else {
+      if (neg.length) lo = Math.max.apply(null, neg);
+      if (pos.length) hi = Math.min.apply(null, pos);
+    }
+    var bothPolarities = pos.length > 0 && neg.length > 0;
+    if (bothPolarities && !(hi > lo)) return { separated: false };
+    var mode = bothPolarities ? "gap" : (pos.length ? "positives" : "negatives");
+    return {
+      separated: true,
+      mode: mode,
+      lo: lo,
+      hi: hi,
+      margin: (lo != null && hi != null) ? hi - lo : null,
+    };
+  }
+
+  // Decimals follow the slider step so suggested values read cleanly (0.83 for
+  // 0.01-step tools, 13 for inactivity's integer step).
+  function _calFmtVal(v, step) {
+    var decimals = step >= 1 ? 0 : (step >= 0.1 ? 1 : 2);
+    return v.toFixed(decimals);
+  }
+
+  // Pick a step-aligned threshold inside the valid interval [lo, hi] (either
+  // bound may be null = unbounded). The interval is asymmetric by direction —
+  // ge needs lo < T <= hi, le needs lo <= T < hi — so the plain midpoint can
+  // round onto a boundary and still let a pin through; we verify alignment.
+  // Target: the midpoint when both bounds are finite (a true gap); the finite
+  // bound itself when only one polarity is pinned, so the cutoff hugs that
+  // cluster's edge (loosest threshold that still satisfies every pin). Returns
+  // null when no aligned value fits — gap narrower than the step, or the whole
+  // interval sits outside the slider range — so the caller shows a note instead
+  // of an unsafe "Apply".
+  function _calApplyValue(lo, hi, compare, step, rmin, rmax) {
+    function valid(t) {
+      if (t < rmin || t > rmax) return false;
+      if (compare === "le") {
+        return (lo == null || t >= lo) && (hi == null || t < hi);
+      }
+      return (lo == null || t > lo) && (hi == null || t <= hi);
+    }
+    var target;
+    if (lo != null && hi != null) target = (lo + hi) / 2;
+    else if (hi != null) target = hi;
+    else if (lo != null) target = lo;
+    else return null; // unbounded both sides ⇒ no pins (guarded upstream)
+    if (!(step > 0)) {
+      // Continuous slider: clamp the target into range and verify.
+      var c = Math.min(Math.max(target, rmin), rmax);
+      return valid(c) ? c : null;
+    }
+    // Range inputs align to min + k*step; scan the steps spanning the interval
+    // (bounded by the slider range when a side is open) and keep the valid one
+    // nearest the target.
+    var best = null, bestDist = Infinity;
+    var kLo = Math.floor((Math.max(lo != null ? lo : rmin, rmin) - rmin) / step) - 1;
+    var kHi = Math.ceil((Math.min(hi != null ? hi : rmax, rmax) - rmin) / step) + 1;
+    for (var k = kLo; k <= kHi; k++) {
+      var t = parseFloat((rmin + k * step).toFixed(6));
+      if (!valid(t)) continue;
+      var dist = Math.abs(t - target);
+      if (dist < bestDist) { bestDist = dist; best = t; }
+    }
+    return best;
   }
 
   function _calCoverageNote() {
@@ -5370,7 +5522,7 @@
         var rows2 = result.pins.map(function (e) {
           return { polarity: e.polarity, timestamp: e.timestamp, sc: e, stale: staleById[e.pin_id] };
         });
-        var built2 = _calBuildTrack(rows2, tool, axis2, axis2.sliderId || null, null);
+        var built2 = _calBuildTrack(rows2, tool, axis2, axis2.sliderId || null, null, true);
         frag.appendChild(built2.track);
         if (built2.note) notes.push(built2.note);
       }
