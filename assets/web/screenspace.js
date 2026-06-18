@@ -671,6 +671,8 @@
       }
       updateRegionPickerBtnText(btn);
       updateRunButton();
+      refreshModelView({ debounce: true });
+      refreshCalibration({ debounce: true });
     });
     fullFrameLbl.appendChild(fullFrameCb);
     fullFrameLbl.appendChild(buildFullFrameIcon());
@@ -693,6 +695,8 @@
         toggleAll.textContent = allSelected ? "Select all" : "Deselect all";
         updateRegionPickerBtnText(btn);
         updateRunButton();
+        refreshModelView({ debounce: true });
+        refreshCalibration({ debounce: true });
       });
       panel.appendChild(toggleAll);
 
@@ -716,6 +720,8 @@
           }) ? "Deselect all" : "Select all";
           updateRegionPickerBtnText(btn);
           updateRunButton();
+          refreshModelView({ debounce: true });
+          refreshCalibration({ debounce: true });
         });
         lbl.appendChild(cb);
         var dot = el("span", "region-chip-dot");
@@ -763,6 +769,8 @@
           }
           updateRegionPickerBtnText(btn);
           updateRunButton();
+          refreshModelView({ debounce: true });
+          refreshCalibration({ debounce: true });
         });
         lbl.appendChild(cb);
         var dot = el("span", "region-chip-dot");
@@ -4961,6 +4969,66 @@
 
   var _FULL_FRAME_REGION_STRING = "0.000000,0.000000,1.000000,1.000000";
 
+  // Serialize a region data object ({x,y,w,h}, normalized when source_width is
+  // set, otherwise canvas pixels) into the comma-joined fraction string the
+  // preview/calibration endpoints expect.
+  function _regionDataToString(r) {
+    if (r.source_width) {
+      return [r.x, r.y, r.w, r.h]
+        .map(function (v) { return Number(v).toFixed(6); })
+        .join(",");
+    }
+    var canvas = qs("#overlayCanvas");
+    if (!canvas.width || !canvas.height) return _FULL_FRAME_REGION_STRING;
+    return [r.x / canvas.width, r.y / canvas.height, r.w / canvas.width, r.h / canvas.height]
+      .map(function (v) { return Number(v).toFixed(6); })
+      .join(",");
+  }
+
+  // Resolve any region ref (active / stash / full-frame) to its coordinate
+  // string, or null when the referenced region data can't be found.
+  function _regionStringForRef(ref) {
+    var r = normalizeRegionRef(ref);
+    if (!r) return null;
+    if (r.source === "full_frame") return _FULL_FRAME_REGION_STRING;
+    var data = null;
+    if (r.source === "stash") {
+      for (var i = 0; i < state.stashes.length; i++) {
+        if (state.stashes[i].id === r.stash_id) {
+          data = state.stashes[i].regions[r.name];
+          break;
+        }
+      }
+    } else {
+      data = state.regions[r.name];
+    }
+    if (!data) return null;
+    return _regionDataToString(data);
+  }
+
+  // The region the preview/calibration should target: the last region toggled
+  // on in the run-region picker (the dropdown), falling back to the highlighted
+  // chip. Multitool/boundary hide the picker (see renderWorkflowParams), so
+  // their stale runRegions are ignored and they keep using the active region.
+  // The template tool needs a real captured region — full frame can't be a
+  // template — so full frame is skipped there in favor of the last named/stash
+  // region selected (otherwise full frame toggled on last would block the
+  // template preview/calibration even with a named region still selected).
+  function _previewRegionRef() {
+    var skipFullFrame = state.activeWorkflow === "template";
+    if (state.activeWorkflow !== "multitool" && state.activeWorkflow !== "boundary") {
+      for (var i = state.runRegions.length - 1; i >= 0; i--) {
+        var ref = normalizeRegionRef(state.runRegions[i]);
+        if (!ref || (skipFullFrame && ref.source === "full_frame")) continue;
+        return ref;
+      }
+    }
+    if (state.activeRegion && state.regions[state.activeRegion]) {
+      return activeRegionRef(state.activeRegion);
+    }
+    return null;
+  }
+
   function _normalizedRegionString() {
     if (state.pendingRegion) {
       var p = state.pendingRegion;
@@ -4970,24 +5038,14 @@
         .map(function (v) { return Number(v).toFixed(6); })
         .join(",");
     }
-    if (state.activeRegion && state.regions[state.activeRegion]) {
-      var r = state.regions[state.activeRegion];
-      if (r.source_width) {
-        return [r.x, r.y, r.w, r.h]
-          .map(function (v) { return Number(v).toFixed(6); })
-          .join(",");
-      }
-      var canvas = qs("#overlayCanvas");
-      if (!canvas.width || !canvas.height) return _FULL_FRAME_REGION_STRING;
-      return [r.x / canvas.width, r.y / canvas.height, r.w / canvas.width, r.h / canvas.height]
-        .map(function (v) { return Number(v).toFixed(6); })
-        .join(",");
-    }
-    return _FULL_FRAME_REGION_STRING;
+    var regionStr = _regionStringForRef(_previewRegionRef());
+    return regionStr || _FULL_FRAME_REGION_STRING;
   }
 
   function _hasActiveOrPendingRegion() {
-    return !!(state.pendingRegion || (state.activeRegion && state.regions[state.activeRegion]));
+    if (state.pendingRegion) return true;
+    var ref = _previewRegionRef();
+    return !!(ref && ref.source !== "full_frame");
   }
 
   function _collectPreviewParams(tool) {
@@ -5693,9 +5751,7 @@
     if (tool === "multitool") {
       body.region = (params.steps && params.steps[0]) ? (params.steps[0].region || "") : "";
     } else {
-      var ref = state.activeRegion ? activeRegionRef(state.activeRegion)
-        : (state.runRegions.length ? state.runRegions[0] : null);
-      var norm = normalizeRegionRef(ref);
+      var norm = _previewRegionRef();
       if (!norm && !(tool === "template" && state.uploadedTemplate)) {
         return { skip: "Select a region to calibrate." };
       }
