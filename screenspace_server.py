@@ -12,6 +12,7 @@ API endpoints (all under /screenspace/):
   GET  /api/participants/<pid>/notes        – get persisted free-form notes for a participant
   PUT  /api/participants/<pid>/notes        – persist free-form notes (max 64 KB)
   GET  /api/participants/<pid>/issues       – top severity-ranked Sheet rows for a participant
+  GET  /api/participants/<pid>/marks        – resolved transcript marks tagged to a participant
   GET  /api/pins/<participant>              – list calibration pins (with stale flag)
   POST /api/pins/<participant>              – pin a frame as a positive/negative anchor
   PUT  /api/pins/<pin_id>                   – update a pin (polarity toggle / label edit)
@@ -345,6 +346,23 @@ def api_participant_issues(pid: str) -> FlaskResponse:
     chosen = candidates[:5]
     issues = [{k: v for k, v in c.items() if not k.startswith("_")} for c in chosen]
     return jsonify({"ok": True, "issues": issues})
+
+
+@screenspace_bp.route("/api/participants/<pid>/marks")
+def api_participant_marks(pid: str) -> FlaskResponse:
+    """Return transcript marks tagged to a participant, sorted by start time.
+
+    Reuses the in-memory transcripts manifest (loaded for every page by
+    build_combined_app via _init_transcripts_state) — no extra disk read.
+    Returns an empty list when the participant has no resolvable marks.
+    """
+    if not _participant_exists(pid):
+        return jsonify({"ok": False, "error": f"Unknown participant {pid}"}), 404
+
+    import transcripts_server  # lazy: mirrors the `import server` pattern above
+
+    marks = transcripts_server.marks_for_participant(pid)
+    return jsonify({"ok": True, "marks": marks, "categories": config.MARK_CATEGORIES})
 
 
 # ---- Calibration pins ----

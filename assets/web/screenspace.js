@@ -1074,6 +1074,15 @@
       })
       .catch(function () {});
 
+    apiGet("api/participants/" + encodeURIComponent(pid) + "/marks")
+      .then(function (data) {
+        if (participantRequestVersion !== _participantRequestVersion || pid !== state.selectedParticipant) return;
+        if (!data.ok) return;
+        if (data.categories) setMarkCategories(data.categories);
+        renderInfoMarks(data.marks || []);
+      })
+      .catch(function () {});
+
     apiGet("api/pins/" + encodeURIComponent(pid))
       .then(function (data) {
         if (participantRequestVersion !== _participantRequestVersion || pid !== state.selectedParticipant) return;
@@ -1295,6 +1304,8 @@
     qs("#ssInfoNotes").value = "";
     qs("#ssInfoIssuesBlock").classList.add("hidden");
     qs("#ssInfoIssues").innerHTML = "";
+    qs("#ssInfoMarksBlock").classList.add("hidden");
+    qs("#ssInfoMarks").innerHTML = "";
   }
 
   function renderInfoNotes(notes) {
@@ -1333,6 +1344,46 @@
         li.addEventListener("click", (function (t) {
           return function () { loadFrame(t); };
         })(issue.timestamp));
+      }
+      frag.appendChild(li);
+    });
+    list.appendChild(frag);
+  }
+
+  function renderInfoMarks(marks) {
+    var block = qs("#ssInfoMarksBlock");
+    var list = qs("#ssInfoMarks");
+    if (!block || !list) return;
+    list.innerHTML = "";
+    if (!marks || !marks.length) {
+      block.classList.add("hidden");
+      return;
+    }
+    block.classList.remove("hidden");
+    var frag = document.createDocumentFragment();
+    marks.forEach(function (mark) {
+      var li = document.createElement("li");
+      li.className = "ss-info-issue";
+      var cat = MARK_CATEGORIES[mark.category] || MARK_CATEGORIES.bookmark;
+      var dot = document.createElement("span");
+      dot.className = "ss-info-issue-dot";
+      if (cat) dot.style.backgroundColor = cat.color;
+      var text = document.createElement("span");
+      text.className = "ss-info-issue-text";
+      var label = (mark.label && mark.label.trim()) || mark.text || "(mark)";
+      if (label.length > 120) label = label.slice(0, 117) + "…";
+      text.textContent = label;
+      li.appendChild(dot);
+      li.appendChild(text);
+      if (mark.start != null) {
+        var ts = document.createElement("span");
+        ts.className = "ss-info-issue-ts";
+        ts.textContent = formatTime(mark.start);
+        li.appendChild(ts);
+        li.classList.add("ss-info-issue--clickable");
+        li.addEventListener("click", (function (t) {
+          return function () { loadFrame(t); };
+        })(mark.start));
       }
       frag.appendChild(li);
     });

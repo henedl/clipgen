@@ -878,6 +878,24 @@ def _build_partial_lookup() -> dict[str, list]:
     return lookup
 
 
+def marks_for_participant(pid: str) -> list[dict[str, Any]]:
+    """Resolved, valid marks for one participant, sorted by start time.
+
+    Reuses the in-memory manifest (no disk read) so the Screenspace blueprint
+    can surface transcript marks without re-loading state. Mirrors the
+    resolution in ``api_marks_list``; filters to marks whose resolved
+    participant equals *pid* and drops any that no longer resolve.
+    """
+    # Build partial lookup outside _manifest_lock (get_all_tasks acquires worker lock)
+    partial_lookup = _build_partial_lookup()
+    with _manifest_lock:
+        raw_marks = list(_manifest.get("marks", []))
+        resolved = [_resolve_mark(m, partial_lookup) for m in raw_marks]
+    out = [m for m in resolved if m.get("valid") and m.get("participant") == pid]
+    out.sort(key=lambda m: m.get("start", 0))
+    return out
+
+
 @transcripts_bp.route("/api/marks")
 def api_marks_list() -> FlaskResponse:
     """List all marks, enriched with resolved segment data."""
