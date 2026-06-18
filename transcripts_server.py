@@ -1217,22 +1217,29 @@ def _persist_manifest() -> None:
         _do_persist()
 
 
+def _merge_completed_results_locked() -> None:
+    """Merge completed task results into the in-memory manifest.
+
+    Caller must hold _manifest_lock. Merges (not replaces) so that extra keys
+    like "summary" added by other threads are preserved. Kept separate from the
+    disk write so callers can register the thinking-agent chain off the freshly
+    merged segments *before* the (slower) persist.
+    """
+    if not _worker:
+        return
+    for task in _worker.get_all_tasks():
+        if task["status"] == transcripts.TASK_STATUS_COMPLETED and task.get("result"):
+            pid = task["participant"]
+            src = _manifest.setdefault("source_transcripts", {})
+            existing = src.get(pid, {})
+            existing.update(task["result"])
+            src[pid] = existing
+    _manifest["tasks"] = _worker.get_all_tasks()
+
+
 def _do_persist() -> None:
     """Persist manifest to disk - caller must hold _manifest_lock."""
-    # Collect completed task results into source_transcripts (merge, not replace,
-    # so that extra keys like "summary" added by other threads are preserved)
-    if _worker:
-        for task in _worker.get_all_tasks():
-            if task["status"] == transcripts.TASK_STATUS_COMPLETED and task.get(
-                "result"
-            ):
-                pid = task["participant"]
-                src = _manifest.setdefault("source_transcripts", {})
-                existing = src.get(pid, {})
-                existing.update(task["result"])
-                src[pid] = existing
-        _manifest["tasks"] = _worker.get_all_tasks()
-
+    _merge_completed_results_locked()
     transcripts.save_transcripts_manifest(
         _manifest.get("source_transcripts", {}),
         _manifest.get("corrections", []),
@@ -1244,24 +1251,33 @@ def _do_persist() -> None:
 
 
 def _on_task_complete() -> None:
-    """Persist manifest, then trigger the thinking-agent chain for newly
-    completed participants (those without a summary yet)."""
+    """Merge completed results into memory, start the thinking-agent chain for
+    newly completed participants, then persist to disk.
+
+    Ordering matters: run_chain registers the summary agent in _in_flight (which
+    drives the UI's "generating" state) *before* the slow disk write, shrinking
+    the window where a task reads as completed but no agent reads as running.
+    """
     newly_completed: list[str] = []
-    if _worker:
-        for task in _worker.get_all_tasks():
-            if task["status"] == transcripts.TASK_STATUS_COMPLETED and task.get(
-                "result"
-            ):
-                pid = task["participant"]
-                with _manifest_lock:
-                    existing = _manifest.get("source_transcripts", {}).get(pid, {})
-                    if not existing.get("summary"):
+    with _manifest_lock:
+        # Merge first so next_eligible() sees the freshly completed segments.
+        _merge_completed_results_locked()
+        src = _manifest.get("source_transcripts", {})
+        if _worker:
+            for task in _worker.get_all_tasks():
+                if task["status"] == transcripts.TASK_STATUS_COMPLETED and task.get(
+                    "result"
+                ):
+                    pid = task["participant"]
+                    if not src.get(pid, {}).get("summary"):
                         newly_completed.append(pid)
 
-    _persist_manifest()
-
-    for pid in newly_completed:
+    # run_chain -> next_eligible/run_agent re-acquire _manifest_lock, so this
+    # must run OUTSIDE the block above (the lock is non-reentrant).
+    for pid in dict.fromkeys(newly_completed):
         _orchestrator.run_chain(pid)
+
+    _persist_manifest()
 
 
 def _agent_enabled(agent: thinking_agents.Agent) -> bool:

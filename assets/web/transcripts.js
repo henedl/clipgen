@@ -1686,6 +1686,9 @@
     var empty = qs("#transcriptEmpty");
     state.editingTextEl = null;
     _cachedSegmentRows = null;
+    // We're rendering the finalized transcript — drop any queued streaming
+    // indicator so a paused-tab RAF can't re-insert it over the real segments.
+    _cancelStreamingIndicator();
 
     if (state.segments.length === 0) {
       container.innerHTML = "";
@@ -1807,6 +1810,19 @@
 
   var _streamIndicatorRaf = null;
   var _streamIndicatorPending = null;
+
+  // Cancel a queued streaming-indicator insert. requestAnimationFrame callbacks
+  // are paused while the tab is backgrounded, so a RAF scheduled during the last
+  // streaming poll can outlive the transcript being finalized and re-insert a
+  // stale "Transcribing… X%" row when the user returns. Call this whenever the
+  // finalized transcript replaces the streaming view.
+  function _cancelStreamingIndicator() {
+    if (_streamIndicatorRaf) {
+      cancelAnimationFrame(_streamIndicatorRaf);
+      _streamIndicatorRaf = null;
+    }
+    _streamIndicatorPending = null;
+  }
 
   function _updateStreamingIndicator(container, progress) {
     _streamIndicatorPending = { container: container, progress: progress };
@@ -3913,6 +3929,11 @@
   }
 
   var _refreshedCompletedPids = {};
+  // After a whisper task flips to "completed", keep the main poll loop alive
+  // for a few cycles so the summary "Generating…" state surfaces even if the
+  // next /api/participants or /api/summary response races the in-flight slot.
+  var _postCompletionGrace = 0;
+  var POST_COMPLETION_GRACE_CYCLES = 4; // ~12s at POLL_INTERVAL=3000ms
 
   function _anyAgentActive() {
     for (var i = 0; i < state.participants.length; i++) {
@@ -3920,6 +3941,20 @@
       if (ag && (ag.summary === "running" || ag.citations === "running" || ag.friction === "running")) return true;
     }
     return false;
+  }
+
+  // During the post-completion grace window an agent may register as running a
+  // cycle or two after the whisper task completes. Re-load the selected
+  // participant's summary so renderSummaryGenerating()/_startSummaryPoll fire
+  // once the backend reports it generating; also refresh friction when its dep
+  // is met. Guarded so it won't stomp an already-armed/rendered panel.
+  function _rearmSelectedAgentPanels() {
+    var pid = state.selectedParticipant;
+    if (!pid) return;
+    var p = _currentParticipant();
+    var summaryRunning = !!(p && p.agents && p.agents.summary === "running");
+    if (summaryRunning && !_summaryPollTimer && !state.summaryText) loadSummary(pid);
+    if (!state.frictionData && !state.frictionGenerating && _frictionDepMet()) loadFriction(pid);
   }
 
   // Called from pill agent onStart/onStop after the API POST resolves.
@@ -3974,8 +4009,14 @@
       // Thinking-agents (summary → citations) are spawned on whisper completion
       // and on server startup, so we always refresh after anything completes
       // or if any agent is currently running on any pill.
-      var needsRefresh = newlyCompleted.length > 0 || _anyAgentActive();
+      // Refresh during the grace window too, so participants are re-fetched each
+      // cycle until the summary agent registers as running (or grace expires).
+      var needsRefresh =
+        newlyCompleted.length > 0 || _anyAgentActive() || _postCompletionGrace > 0;
       if (newlyCompleted.length > 0) {
+        // Re-arm on every fresh completion so a multi-participant queue keeps
+        // extending the grace window.
+        _postCompletionGrace = POST_COMPLETION_GRACE_CYCLES;
         _streamingMarks = {};
         _streamingMarksLoaded = false;
         _bumpStreamingMarksVersion();
@@ -3988,17 +4029,18 @@
             loadTranscript(state.selectedParticipant);
             loadSummary(state.selectedParticipant);
             loadFriction(state.selectedParticipant);
-          } else if (_anyAgentActive() && state.selectedParticipant &&
-              !state.frictionData && _frictionDepMet()) {
+          } else if (state.selectedParticipant) {
             // Summary/citations/friction may be auto-chaining server-side after
-            // an earlier completion; refresh friction so an auto-run result
-            // surfaces without a manual poll.
-            loadFriction(state.selectedParticipant);
+            // an earlier completion, or registering during the grace window;
+            // re-arm the selected participant's panels so the running state
+            // surfaces without a manual reload.
+            _rearmSelectedAgentPanels();
           }
           updateStatusIndicator();
           // Agents typically kick in right after whisper completes; keep the
-          // poll alive so dot transitions (running → done → next) are seen.
-          if (_anyAgentActive()) startPolling();
+          // poll alive across the grace window so dot transitions (running →
+          // done → next) are seen even before the agent registers as running.
+          if (_anyAgentActive() || _postCompletionGrace > 0) startPolling();
           else if (!hasActive) {
             stopPolling();
             _refreshedCompletedPids = {};
@@ -4006,7 +4048,7 @@
         });
       }
 
-      if (hasActive || _anyAgentActive()) {
+      if (hasActive || _anyAgentActive() || _postCompletionGrace > 0) {
         startPolling();
       } else if (!needsRefresh) {
         stopPolling();
@@ -4017,6 +4059,10 @@
         refreshTranscriptionModelHintOnce();
       }
       _hadActiveTranscriptionLastPoll = hasActive;
+
+      // Count down the grace window at the end so the current cycle still
+      // counts as "in grace" for the decisions above.
+      if (_postCompletionGrace > 0) _postCompletionGrace--;
 
       renderPills();
     });
