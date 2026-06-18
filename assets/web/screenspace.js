@@ -4667,7 +4667,9 @@
       renderIntervalSlot("paramInactInterval", 0.5, 60, 1.0, 0.5);
     }
     else if (type === "boundary") {
-      addParamRow(container, "Sensitivity", rangeInput("paramBoundaryThresh", 0, 30, 14, 1), "paramBoundaryThreshVal");
+      // Range is the full phash Hamming span (8x8 hash → 0..64); higher values
+      // fire only on near-total frame changes, which cuts noise on busy footage.
+      addParamRow(container, "Sensitivity", rangeInput("paramBoundaryThresh", 0, 64, 14, 1), "paramBoundaryThreshVal");
       addParamRow(container, "Min gap (s)", numberInput("paramBoundaryMinGap", 0.5, 60, 3.0, 0.5));
       renderIntervalSlot("paramBoundaryInterval", 0.5, 60, 1.0, 0.5);
     }
