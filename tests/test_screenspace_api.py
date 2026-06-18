@@ -286,6 +286,27 @@ def test_pins_delete_unknown_id(client):
     assert client.delete("/screenspace/api/pins/pin_deadbeef").status_code == 404
 
 
+def test_pins_delete_all(client):
+    client.post(
+        "/screenspace/api/pins/P01", json={"timestamp": 1.0, "polarity": "positive"}
+    )
+    client.post(
+        "/screenspace/api/pins/P01", json={"timestamp": 2.0, "polarity": "negative"}
+    )
+    client.post(
+        "/screenspace/api/pins/P02", json={"timestamp": 3.0, "polarity": "positive"}
+    )
+    assert client.delete("/screenspace/api/pins/P01/all").status_code == 200
+    assert client.get("/screenspace/api/pins/P01").get_json()["pins"] == []
+    assert "P01" not in screenspace_server._manifest["pins"]
+    # Other participants are untouched.
+    assert len(client.get("/screenspace/api/pins/P02").get_json()["pins"]) == 1
+
+
+def test_pins_delete_all_unknown_participant(client):
+    assert client.delete("/screenspace/api/pins/PNOPE/all").status_code == 404
+
+
 def test_pins_isolated_per_participant(client):
     client.post(
         "/screenspace/api/pins/P01", json={"timestamp": 1.0, "polarity": "positive"}
