@@ -128,6 +128,74 @@ def test_participant_issues_no_sheet(client, monkeypatch):
     assert data["issues"] == []
 
 
+# ---- Transcript marks ----
+
+
+def test_participant_marks_empty(client, monkeypatch):
+    import transcripts_server
+
+    monkeypatch.setattr(transcripts_server, "_worker", None)
+    monkeypatch.setattr(
+        transcripts_server, "_manifest", {"marks": [], "source_transcripts": {}}
+    )
+    resp = client.get("/screenspace/api/participants/P01/marks")
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["ok"] is True
+    assert data["marks"] == []
+    assert "pain_point" in data["categories"]
+
+
+def test_participant_marks_resolved_and_filtered(client, monkeypatch):
+    import transcripts_server
+
+    monkeypatch.setattr(transcripts_server, "_worker", None)
+    monkeypatch.setattr(
+        transcripts_server,
+        "_manifest",
+        {
+            "marks": [
+                {
+                    "id": "m1",
+                    "segment_id": "P01:0",
+                    "category": "pain_point",
+                    "label": "Lag spike",
+                },
+                {
+                    "id": "m2",
+                    "segment_id": "P02:0",
+                    "category": "quote",
+                    "label": "Other participant",
+                },
+                {
+                    "id": "m3",
+                    "segment_id": "P01:9",
+                    "category": "delight",
+                    "label": "Out of range",
+                },
+            ],
+            "source_transcripts": {
+                "P01": {"segments": [{"start": 5.0, "end": 7.0, "text": "hello"}]},
+                "P02": {"segments": [{"start": 1.0, "end": 2.0, "text": "x"}]},
+            },
+            "corrections": [],
+        },
+    )
+    resp = client.get("/screenspace/api/participants/P01/marks")
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["ok"] is True
+    # P02 filtered out (wrong participant); m3 dropped (out-of-range, unresolved).
+    assert [m["id"] for m in data["marks"]] == ["m1"]
+    assert data["marks"][0]["start"] == 5.0
+    assert data["marks"][0]["text"] == "hello"
+
+
+def test_participant_marks_unknown_participant(client):
+    resp = client.get("/screenspace/api/participants/PNOPE/marks")
+    assert resp.status_code == 404
+
+
 # ---- Calibration pins ----
 
 
