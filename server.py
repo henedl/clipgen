@@ -48,7 +48,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from collections.abc import Iterator
-from typing import Any
+from typing import Any, cast
 
 from flask import (
     Blueprint,
@@ -578,61 +578,70 @@ def api_sheet_baseline() -> FlaskResponse:
     return jsonify({"ok": True, "baselines": baselines})
 
 
-@studio_bp.route("/api/convergence/offsets")
-def api_convergence_offsets_get() -> FlaskResponse:
-    """Return persisted per-participant convergence display offsets (seconds, signed).
+def _clean_convergence_offsets(raw: object) -> dict[str, dict[str, float]]:
+    """Normalize nested per-lane convergence offsets to {pid: {source: float}}.
 
-    Independent from /api/sheet/baseline: baselines convert sheet wall-clock
-    to video-time (sheet-only). Offsets shift every source's events for a
-    participant uniformly so misaligned recording start times can be nudged
-    until lanes line up visually in the Convergence Browser.
-
-    Response: {"ok": true, "offsets": {"P01": 12.5, "P03": -7.0}}
+    Drops: non-string/empty participant ids, non-dict participant values,
+    unknown source keys (outside config.CONVERGENCE_SOURCES), non-numeric /
+    non-finite / zero lane values, and participants left with no lanes.
     """
-    data = utils.load_json_manifest(
-        config.CONVERGENCE_OFFSETS_FILENAME, default={"offsets": {}}
-    )
-    raw = data.get("offsets") if isinstance(data, dict) else None
-    offsets: dict[str, float] = {}
-    if isinstance(raw, dict):
-        for pid, value in raw.items():
-            if not isinstance(pid, str):
+    cleaned: dict[str, dict[str, float]] = {}
+    if not isinstance(raw, dict):
+        return cleaned
+    raw_map = cast(dict[str, Any], raw)
+    for pid, lanes in raw_map.items():
+        if not isinstance(pid, str) or not pid or not isinstance(lanes, dict):
+            continue
+        lane_map = cast(dict[str, Any], lanes)
+        clean_lanes: dict[str, float] = {}
+        for source, value in lane_map.items():
+            if source not in config.CONVERGENCE_SOURCES:
                 continue
             try:
                 num = float(value)
             except (TypeError, ValueError):
                 continue
             if math.isfinite(num) and num != 0:
-                offsets[pid] = num
-    return jsonify({"ok": True, "offsets": offsets})
+                clean_lanes[source] = num
+        if clean_lanes:
+            cleaned[pid] = clean_lanes
+    return cleaned
+
+
+@studio_bp.route("/api/convergence/offsets")
+def api_convergence_offsets_get() -> FlaskResponse:
+    """Return persisted per-lane convergence display offsets (seconds, signed).
+
+    Independent from /api/sheet/baseline: baselines convert sheet wall-clock
+    to video-time (sheet-only). Offsets shift a participant's events per data
+    source so misaligned recording start times — or a single drifting source
+    such as spreadsheet timestamps — can be nudged until lanes line up visually
+    in the Convergence Browser.
+
+    Response: {"ok": true, "offsets": {"P01": {"sheet": 12.5, "screenspace": 12.5}}}
+    """
+    data = utils.load_json_manifest(
+        config.CONVERGENCE_OFFSETS_FILENAME, default={"offsets": {}}
+    )
+    raw = data.get("offsets") if isinstance(data, dict) else None
+    return jsonify({"ok": True, "offsets": _clean_convergence_offsets(raw)})
 
 
 @studio_bp.route("/api/convergence/offsets", methods=["PUT"])
 def api_convergence_offsets_put() -> FlaskResponse:
-    """Persist per-participant convergence display offsets.
+    """Persist per-lane convergence display offsets.
 
-    Body: {"offsets": {"P01": 12.5, ...}}. Zeros and non-finite values are
-    dropped. When the cleaned dict is empty, the manifest file is deleted
-    so a clean output dir has no leftover empty manifest.
+    Body: {"offsets": {"P01": {"sheet": 12.5, ...}, ...}}. Unknown sources,
+    zeros, and non-finite values are dropped per lane; participants left with
+    no lanes are dropped. When the cleaned dict is empty, the manifest file is
+    deleted so a clean output dir has no leftover empty manifest.
     """
     data = request.get_json(silent=True) or {}
     raw = data.get("offsets")
     if not isinstance(raw, dict):
         return jsonify({"ok": False, "error": "Invalid offsets payload"}), 400
 
-    cleaned: dict[str, float] = {}
-    for pid, value in raw.items():
-        if not isinstance(pid, str) or not pid:
-            continue
-        try:
-            num = float(value)
-        except (TypeError, ValueError):
-            continue
-        if not math.isfinite(num):
-            continue
-        if num == 0:
-            continue
-        cleaned[pid] = num
+    cleaned = _clean_convergence_offsets(raw)
 
     settings_path = (
         Path(utils.get_effective_output_dir()) / config.CONVERGENCE_OFFSETS_FILENAME

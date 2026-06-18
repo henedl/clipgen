@@ -20,10 +20,18 @@
     active: false,
     initialized: false,
     baselines: null,
-    // Per-participant display offset (seconds, signed) for compensating for
-    // videos that were recorded starting at different wall-clock moments.
-    // Stacks on top of `baselines` (which is a sheet-only clock→video shift).
+    // Per-lane display offset (seconds, signed) for compensating for videos
+    // recorded starting at different wall-clock moments, or a single data
+    // source (e.g. spreadsheet timestamps) drifting from the others. Nested:
+    //   { "P01": { sheet: 12.5, screenspace: 12.5, transcript: 0 } }
+    // A source key is omitted when 0; a participant with no offsets has no
+    // entry. Stacks on top of `baselines` (a sheet-only clock→video shift).
     offsets: {},
+    // Transient per-participant "uncoupled" edit flag ({pid: true}). When set,
+    // each of the participant's source lanes is edited independently; when
+    // absent (coupled, the default) edits move all three lanes together. UI
+    // state only — never loaded or saved, cleared on reset.
+    uncoupled: {},
     offsetsLoaded: false,
     editing: null,           // participant id currently in "unlocked" edit mode
     _dragTx: null,           // scratchpad for the active drag (snapshot of markers + start coords)
@@ -58,6 +66,12 @@
 
   function getState() {
     return window._studioState;
+  }
+
+  // Per-lane offset lookup. Returns 0 when the participant or source is unset.
+  function offsetFor(pid, source) {
+    var o = cvState.offsets && cvState.offsets[pid];
+    return (o && o[source]) || 0;
   }
 
   function getEventTypeColor(source, eventType) {
@@ -171,9 +185,9 @@
     // convergence timeline). `rawStart`/`rawEnd` preserve the original video
     // time so frame previews, queue dispatches, and detail/callout labels
     // can hit the underlying video correctly. The two offsets stack:
-    //   raw video time (already baseline-corrected for sheet events) + cvState.offsets[pid]
-    function applyOffset(pid, rawStart, rawEnd) {
-      var off = (cvState.offsets && cvState.offsets[pid]) || 0;
+    //   raw video time (already baseline-corrected for sheet events) + offsetFor(pid, source)
+    function applyOffset(pid, source, rawStart, rawEnd) {
+      var off = offsetFor(pid, source);
       return {
         rawStart: Math.max(0, rawStart),
         rawEnd: Math.max(0, rawEnd),
@@ -200,7 +214,7 @@
           for (var s = 0; s < segs.length; s++) {
             var rawStartSh = segs[s].startSeconds;
             var rawEndSh = rawStartSh + segs[s].duration;
-            var tSh = applyOffset(pid, rawStartSh, rawEndSh);
+            var tSh = applyOffset(pid, "sheet", rawStartSh, rawEndSh);
             events.push({
               participant: pid,
               start: tSh.start,
@@ -225,7 +239,7 @@
     for (var i = 0; i < ssClusters.length; i++) {
       var cl = ssClusters[i];
       var clCount = cl.events ? cl.events.length : 1;
-      var tSs = applyOffset(cl.participant, cl.start, cl.end);
+      var tSs = applyOffset(cl.participant, "screenspace", cl.start, cl.end);
       events.push({
         participant: cl.participant,
         start: tSs.start,
@@ -248,7 +262,7 @@
     for (var j = 0; j < trClusters.length; j++) {
       var tc = trClusters[j];
       var tcCount = tc.marks ? tc.marks.length : 1;
-      var tTr = applyOffset(tc.participant, tc.start, tc.end);
+      var tTr = applyOffset(tc.participant, "transcript", tc.start, tc.end);
       events.push({
         participant: tc.participant,
         start: tTr.start,
@@ -706,7 +720,7 @@
 
     var participants = cvState.sortByDensity ? cvComputeDensityOrder() : cvState.participants;
     var duration = cvState.duration || 1;
-    var SOURCES = ["sheet", "screenspace", "transcript"];
+    var SOURCES = CLIPGEN_CONFIG.convergenceSources;
 
     var swimEvents = cvState.filteredEvents.map(function (e) {
       return {
@@ -1171,6 +1185,7 @@
         cvState.baselines = (bData && bData.ok && bData.baselines) ? bData.baselines : {};
         var oData = results[1];
         cvState.offsets = (oData && oData.ok && oData.offsets) ? oData.offsets : {};
+        cvState.uncoupled = {};
         cvState.offsetsLoaded = true;
         recalculate();
       });
@@ -1207,17 +1222,36 @@
     return sign + rounded + "s";
   }
 
-  function commitOffset(pid, seconds) {
-    if (!pid) return;
+  // Parse + clamp an offset to ±max(duration, 60) seconds. Returns 0 for
+  // non-numeric input. Shared by typed input, drag commit, and abort-on-rerender.
+  function clampOffset(seconds) {
     var num = typeof seconds === "number" ? seconds : parseFloat(seconds);
     if (!isFinite(num)) num = 0;
     var maxAbs = Math.max(cvState.duration || 0, 60);
-    num = Math.max(-maxAbs, Math.min(maxAbs, num));
-    if (Math.abs(num) < 0.05) {
-      if (cvState.offsets[pid] !== undefined) delete cvState.offsets[pid];
-    } else {
-      cvState.offsets[pid] = num;
+    return Math.max(-maxAbs, Math.min(maxAbs, num));
+  }
+
+  // Drop a participant's offsets entry once it has no remaining lanes, so
+  // Object.keys(cvState.offsets).length stays an accurate "any offsets set?"
+  // signal (drives reset-button visibility).
+  function pruneParticipant(pid) {
+    var o = cvState.offsets[pid];
+    if (o && Object.keys(o).length === 0) delete cvState.offsets[pid];
+  }
+
+  // Write an offset for one source (uncoupled) or every source (coupled, when
+  // `source` is null). Sub-0.05s values clear the affected lane(s).
+  function commitOffset(pid, source, seconds) {
+    if (!pid) return;
+    var num = clampOffset(seconds);
+    var sources = source ? [source] : CLIPGEN_CONFIG.convergenceSources;
+    if (!cvState.offsets[pid]) cvState.offsets[pid] = {};
+    for (var i = 0; i < sources.length; i++) {
+      var s = sources[i];
+      if (Math.abs(num) < 0.05) delete cvState.offsets[pid][s];
+      else cvState.offsets[pid][s] = num;
     }
+    pruneParticipant(pid);
     recalculate();
     cvSaveOffsets();
   }
@@ -1226,6 +1260,7 @@
     if (!cvState.offsets || Object.keys(cvState.offsets).length === 0) return;
     if (!window.confirm("Reset offsets for all participants?")) return;
     cvState.offsets = {};
+    cvState.uncoupled = {};
     cvState.editing = null;
     recalculate();
     cvSaveOffsets();
@@ -1240,6 +1275,80 @@
       cvState.editing = pid || null;
     }
     applyEditingClasses();
+  }
+
+  // True when any of a participant's source lanes carries a non-zero offset.
+  // commitOffset prunes zeroed lanes/participants, so an existing entry already
+  // implies at least one adjusted lane, but check explicitly to stay robust.
+  function participantHasOffset(pid) {
+    var o = cvState.offsets && cvState.offsets[pid];
+    return !!(o && Object.keys(o).length);
+  }
+
+  // Badge text shown on a locked, adjusted label. Coupled (all lanes equal) →
+  // the shared value (e.g. "+12s"); diverged lanes → "split" so the user can
+  // tell, even after a reload (when the transient uncoupled flag is cleared),
+  // that the lanes are independently offset.
+  function offsetBadgeText(pid) {
+    if (!participantHasOffset(pid)) return "";
+    var sources = CLIPGEN_CONFIG.convergenceSources;
+    var first = offsetFor(pid, sources[0]);
+    for (var i = 1; i < sources.length; i++) {
+      if (offsetFor(pid, sources[i]) !== first) return "split";
+    }
+    return formatOffsetBadge(first);
+  }
+
+  // Per-lane summary used as the badge's tooltip so diverged lanes are legible
+  // without unlocking: "sheet +3s · screenspace 0s · transcript −2s".
+  function offsetSummaryTitle(pid) {
+    var sources = CLIPGEN_CONFIG.convergenceSources;
+    var parts = [];
+    for (var i = 0; i < sources.length; i++) {
+      var v = offsetFor(pid, sources[i]);
+      parts.push(sources[i] + " " + (formatOffsetBadge(v) || "0s"));
+    }
+    return parts.join(" · ");
+  }
+
+  // Build a number input. `source === null` is the coupled input (writes every
+  // lane); a source string makes a per-lane input. Escape reverts to the stored
+  // value; change commits.
+  function makeOffsetInput(pid, source) {
+    var input = document.createElement("input");
+    input.type = "number";
+    input.className = (source ? "cv-offset-lane-input" : "cv-offset-input") + " cg-mono";
+    input.step = "0.5";
+    input.autocomplete = "off";
+    input.value = offsetFor(pid, source || CLIPGEN_CONFIG.convergenceSources[0]).toFixed(1);
+    if (source) {
+      input.dataset.source = source;
+      input.title = source + " offset (s)";
+    }
+    input.addEventListener("mousedown", function (e) { e.stopPropagation(); });
+    input.addEventListener("keydown", function (e) {
+      if (e.key === "Enter") { e.preventDefault(); input.blur(); }
+      else if (e.key === "Escape") {
+        input.value = offsetFor(pid, source || CLIPGEN_CONFIG.convergenceSources[0]).toFixed(1);
+        input.blur();
+      }
+    });
+    input.addEventListener("change", function () {
+      commitOffset(pid, source, parseFloat(input.value));
+    });
+    return input;
+  }
+
+  // Sync an unlocked label's input value(s) to the current stored offsets
+  // without stealing focus (used after recalculate-driven rerenders).
+  function syncLabelInputs(lbl, pid) {
+    if (!lbl) return;
+    var inp = lbl.querySelector(".cv-offset-input");
+    if (inp) inp.value = offsetFor(pid, CLIPGEN_CONFIG.convergenceSources[0]).toFixed(1);
+    var laneInputs = lbl.querySelectorAll(".cv-offset-lane-input");
+    for (var li = 0; li < laneInputs.length; li++) {
+      laneInputs[li].value = offsetFor(pid, laneInputs[li].dataset.source).toFixed(1);
+    }
   }
 
   function applyEditingClasses() {
@@ -1270,22 +1379,33 @@
       for (var k = 0; k < rs.length; k++) rs[k].classList.add("is-unlocked");
       var evs = sw.getEventsForParticipant(cvState.editing);
       for (var m = 0; m < evs.length; m++) evs[m].classList.add("is-unlocked");
-      // Sync the input value with the current offset; user clicks to focus
+      // Sync the input value(s) with the current offset; user clicks to focus
       // (intentional — we don't want a recalculate-driven rerender to steal
       // focus from wherever the user just clicked).
-      var inp = lbl && lbl.querySelector(".cv-offset-input");
-      if (inp) {
-        inp.value = ((cvState.offsets && cvState.offsets[cvState.editing]) || 0).toFixed(1);
-      }
+      syncLabelInputs(lbl, cvState.editing);
+    }
+  }
+
+  function setUncoupled(pid, on) {
+    if (on) cvState.uncoupled[pid] = true;
+    else delete cvState.uncoupled[pid];
+    // Rebuild just this label (coupled vs uncoupled layouts differ) and re-apply
+    // the unlock/sync classes. No recalculate/save: toggling the input mode does
+    // not change the underlying offsets. Markers reflow automatically since the
+    // label width is CSS-driven and marker positions are percentage-based.
+    if (cvState.swimLaneEl) {
+      buildOffsetLabel(cvState.swimLaneEl, pid);
+      applyEditingClasses();
     }
   }
 
   function buildOffsetLabel(swimLane, pid) {
     var label = swimLane.getLabelForParticipant(pid);
     if (!label) return;
-    var off = (cvState.offsets && cvState.offsets[pid]) || 0;
+    var uncoupled = !!cvState.uncoupled[pid];
     label.classList.add("cv-offset-label");
-    label.classList.toggle("is-adjusted", off !== 0);
+    label.classList.toggle("is-adjusted", participantHasOffset(pid));
+    label.classList.toggle("is-uncoupled", uncoupled);
     label.textContent = "";
 
     var lockBtn = document.createElement("button");
@@ -1300,29 +1420,42 @@
     });
     label.appendChild(lockBtn);
 
+    // Uncouple toggle: split a participant's lanes so each data source can be
+    // offset independently (e.g. spreadsheet timestamps drifting from screen).
+    var coupleBtn = document.createElement("button");
+    coupleBtn.type = "button";
+    coupleBtn.className = "cv-offset-couple-btn";
+    coupleBtn.title = uncoupled
+      ? "Re-couple lanes (offset all sources together)"
+      : "Uncouple lanes (offset each source separately)";
+    coupleBtn.setAttribute("aria-label", "Toggle per-lane offsets for " + pid);
+    coupleBtn.addEventListener("mousedown", function (e) { e.stopPropagation(); });
+    coupleBtn.addEventListener("click", function (e) {
+      e.stopPropagation();
+      setUncoupled(pid, !cvState.uncoupled[pid]);
+    });
+    label.appendChild(coupleBtn);
+
     var pidSpan = el("span", "cv-offset-pid");
     pidSpan.textContent = pid;
     label.appendChild(pidSpan);
 
     var badge = el("span", "cv-offset-badge");
-    badge.textContent = formatOffsetBadge(off);
+    badge.textContent = offsetBadgeText(pid);
+    if (participantHasOffset(pid)) badge.title = offsetSummaryTitle(pid);
     label.appendChild(badge);
 
-    var input = document.createElement("input");
-    input.type = "number";
-    input.className = "cv-offset-input cg-mono";
-    input.step = "0.5";
-    input.autocomplete = "off";
-    input.value = off.toFixed(1);
-    input.addEventListener("mousedown", function (e) { e.stopPropagation(); });
-    input.addEventListener("keydown", function (e) {
-      if (e.key === "Enter") { e.preventDefault(); input.blur(); }
-      else if (e.key === "Escape") { input.value = ((cvState.offsets && cvState.offsets[pid]) || 0).toFixed(1); input.blur(); }
-    });
-    input.addEventListener("change", function () {
-      commitOffset(pid, parseFloat(input.value));
-    });
-    label.appendChild(input);
+    // Coupled: one input drives all three lanes. Uncoupled: a stacked column of
+    // three tiny inputs, one per source, each aligned to its sub-row. Both are
+    // built; CSS shows the right one based on .is-uncoupled.is-unlocked.
+    label.appendChild(makeOffsetInput(pid, null));
+
+    var laneWrap = el("div", "cv-offset-lane-inputs");
+    var sources = CLIPGEN_CONFIG.convergenceSources;
+    for (var i = 0; i < sources.length; i++) {
+      laneWrap.appendChild(makeOffsetInput(pid, sources[i]));
+    }
+    label.appendChild(laneWrap);
   }
 
   function initOffsetEditing(swimLane, participants) {
@@ -1335,9 +1468,10 @@
     installDragHandlers(swimLane);
   }
 
-  // Hatched overlay over the portion of a participant's lanes where their
-  // video had not yet started (positive offset, void on the left) or had
-  // already ended (negative offset, void on the right). Re-rendered on every
+  // Hatched overlay over the portion of one source lane where that source's
+  // data had not yet started (positive offset, void on the left) or had already
+  // ended (negative offset, void on the right). Per-lane so an uncoupled source
+  // shows its own void over just its 14px sub-row. Re-rendered on every
   // recalculate and live-updated during drag.
   function renderVoidOverlays(swimLane, participants) {
     var lanes = swimLane.querySelector(".cg-swim-lanes");
@@ -1345,32 +1479,32 @@
     var existing = lanes.querySelectorAll(".cv-offset-void");
     for (var i = 0; i < existing.length; i++) existing[i].remove();
     if (!cvState.duration || cvState.duration <= 0) return;
+    var sources = CLIPGEN_CONFIG.convergenceSources;
     for (var p = 0; p < participants.length; p++) {
       var pid = participants[p];
-      var off = (cvState.offsets && cvState.offsets[pid]) || 0;
-      if (!off) continue;
-      applyVoidForParticipant(swimLane, pid, off);
+      for (var s = 0; s < sources.length; s++) {
+        var off = offsetFor(pid, sources[s]);
+        if (off) applyVoidForSource(swimLane, pid, s, off);
+      }
     }
   }
 
-  function applyVoidForParticipant(swimLane, pid, off) {
+  function _voidKeySelector(pid, sourceIdx) {
+    return '.cv-offset-void[data-participant="' + pid + '"][data-source-idx="' + sourceIdx + '"]';
+  }
+
+  function applyVoidForSource(swimLane, pid, sourceIdx, off) {
     var lanes = swimLane.querySelector(".cg-swim-lanes");
     if (!lanes) return;
-    var existing = lanes.querySelector('.cv-offset-void[data-participant="' + pid + '"]');
-    if (Math.abs(off) < 0.05 || !cvState.duration) {
-      if (existing) existing.remove();
-      return;
-    }
+    var existing = lanes.querySelector(_voidKeySelector(pid, sourceIdx));
     var rows = swimLane.getRowsForParticipant(pid);
-    if (!rows || !rows.length) {
+    var row = rows && rows[sourceIdx];
+    if (Math.abs(off) < 0.05 || !cvState.duration || !row) {
       if (existing) existing.remove();
       return;
     }
-    var firstTop = parseFloat(rows[0].style.top) || 0;
-    var lastRow = rows[rows.length - 1];
-    var lastTop = parseFloat(lastRow.style.top) || 0;
-    var lastHeight = parseFloat(lastRow.style.height) || 0;
-    var totalHeight = (lastTop + lastHeight) - firstTop;
+    var top = parseFloat(row.style.top) || 0;
+    var height = parseFloat(row.style.height) || 0;
 
     var pctOfDuration = Math.abs(off) / cvState.duration * 100;
     pctOfDuration = Math.max(0, Math.min(100, pctOfDuration));
@@ -1379,20 +1513,22 @@
     if (!existing) {
       voidEl.className = "cv-offset-void";
       voidEl.dataset.participant = pid;
+      voidEl.dataset.sourceIdx = sourceIdx;
       lanes.appendChild(voidEl);
     }
-    voidEl.style.top = firstTop + "px";
-    voidEl.style.height = totalHeight + "px";
+    var source = CLIPGEN_CONFIG.convergenceSources[sourceIdx];
+    voidEl.style.top = top + "px";
+    voidEl.style.height = height + "px";
     if (off > 0) {
       voidEl.style.left = "0";
       voidEl.style.right = "auto";
       voidEl.style.width = pctOfDuration + "%";
-      voidEl.title = pid + " · no data for first " + Math.round(off) + "s";
+      voidEl.title = pid + " · " + source + " · no data for first " + Math.round(off) + "s";
     } else {
       voidEl.style.right = "0";
       voidEl.style.left = "auto";
       voidEl.style.width = pctOfDuration + "%";
-      voidEl.title = pid + " · no data for last " + Math.round(-off) + "s";
+      voidEl.title = pid + " · " + source + " · no data for last " + Math.round(-off) + "s";
     }
   }
 
@@ -1408,13 +1544,15 @@
     document.body.style.userSelect = "";
     var deltaSec = (_cvDragLastX - tx.startX) / tx.pxPerSec;
     if (Math.abs(deltaSec) >= 0.05) {
-      var maxAbs = Math.max(cvState.duration || 0, 60);
-      var num = Math.max(-maxAbs, Math.min(maxAbs, tx.baseOffset + deltaSec));
-      if (Math.abs(num) < 0.05) {
-        delete cvState.offsets[tx.pid];
-      } else {
-        cvState.offsets[tx.pid] = num;
+      var num = clampOffset(tx.baseOffset + deltaSec);
+      var sources = tx.source ? [tx.source] : CLIPGEN_CONFIG.convergenceSources;
+      if (!cvState.offsets[tx.pid]) cvState.offsets[tx.pid] = {};
+      for (var i = 0; i < sources.length; i++) {
+        var s = sources[i];
+        if (Math.abs(num) < 0.05) delete cvState.offsets[tx.pid][s];
+        else cvState.offsets[tx.pid][s] = num;
       }
+      pruneParticipant(tx.pid);
       cvSaveOffsets();
       // Cannot recalculate() synchronously — this runs inside renderTimeline(),
       // itself inside recalculate(). Defer so the committed offset renders.
@@ -1434,26 +1572,45 @@
     swimLane.addEventListener("mousedown", function (e) {
       if (!cvState.editing) return;
       // Lock button + input mousedowns stopPropagation themselves.
-      var hit = e.target.closest('[data-participant="' + cvState.editing + '"]');
+      var pid = cvState.editing;
+      var hit = e.target.closest('[data-participant="' + pid + '"]');
       if (!hit) return;
       e.preventDefault();
-      var pid = cvState.editing;
       var pxPerSec = swimLane.getLanesPxPerSec();
       if (!pxPerSec || !isFinite(pxPerSec) || pxPerSec <= 0) return;
+
+      // In uncoupled mode, a drag that starts on a specific source row scopes
+      // to that lane; otherwise (coupled, or grabbing the label gutter) move all
+      // three lanes together. Only the editing participant's rows are
+      // pointer-active, so e.target resolves to one of its three source rows.
+      var rowHit = e.target.closest(".cg-swim-row[data-source-idx]");
+      var sIdx = (cvState.uncoupled[pid] && rowHit)
+        ? parseInt(rowHit.dataset.sourceIdx, 10) : -1;
+      var source = sIdx >= 0 ? CLIPGEN_CONFIG.convergenceSources[sIdx] : null;
+
+      var lbl = swimLane.getLabelForParticipant(pid);
+      var liveInput = source
+        ? (lbl && lbl.querySelector('.cv-offset-lane-input[data-source="' + source + '"]'))
+        : (lbl && lbl.querySelector(".cv-offset-input"));
       cvState._dragTx = {
         pid: pid,
+        source: source,
+        sourceIdx: sIdx,
         startX: e.clientX,
         pxPerSec: pxPerSec,
-        baseOffset: (cvState.offsets && cvState.offsets[pid]) || 0,
-        markers: swimLane.getEventsForParticipant(pid),
+        baseOffset: offsetFor(pid, source || CLIPGEN_CONFIG.convergenceSources[0]),
+        markers: source
+          ? swimLane.getEventsForParticipantSource(pid, sIdx)
+          : swimLane.getEventsForParticipant(pid),
+        liveInput: liveInput,
         swimLane: swimLane,
       };
       _cvDragLastX = e.clientX;
-      var lbl = swimLane.getLabelForParticipant(pid);
       if (lbl) lbl.classList.add("is-dragging");
-      var rs = swimLane.getRowsForParticipant(pid);
-      for (var r = 0; r < rs.length; r++) rs[r].classList.add("is-dragging");
-      _cvDragLiveInput = lbl && lbl.querySelector(".cv-offset-input");
+      // Highlight the grabbed lane (uncoupled) or all lanes (coupled).
+      var rs = source ? [rowHit] : swimLane.getRowsForParticipant(pid);
+      for (var r = 0; r < rs.length; r++) { if (rs[r]) rs[r].classList.add("is-dragging"); }
+      _cvDragLiveInput = liveInput;
       document.body.style.userSelect = "none";
     });
   }
@@ -1484,10 +1641,19 @@
       if (_cvDragLiveInput) {
         _cvDragLiveInput.value = (tx2.baseOffset + deltaSec).toFixed(1);
       }
-      // Keep the void overlay in sync with the in-flight offset so the
-      // hatched "no-data" region grows/shrinks live as the user drags.
+      // Keep the void overlay(s) in sync with the in-flight offset so the
+      // hatched "no-data" region grows/shrinks live as the user drags. Coupled
+      // drag updates all three lanes; uncoupled updates only the grabbed one.
       if (tx2.swimLane) {
-        applyVoidForParticipant(tx2.swimLane, tx2.pid, tx2.baseOffset + deltaSec);
+        var liveOff = tx2.baseOffset + deltaSec;
+        if (tx2.source) {
+          applyVoidForSource(tx2.swimLane, tx2.pid, tx2.sourceIdx, liveOff);
+        } else {
+          var sources = CLIPGEN_CONFIG.convergenceSources;
+          for (var v = 0; v < sources.length; v++) {
+            applyVoidForSource(tx2.swimLane, tx2.pid, v, liveOff);
+          }
+        }
       }
     });
   }
@@ -1519,7 +1685,7 @@
     // Match _cvAbortDrag's threshold — ignore sub-0.05s jiggles so an
     // accidental click-drag doesn't trigger a full recalculate.
     if (Math.abs(deltaSec) >= 0.05) {
-      commitOffset(tx.pid, tx.baseOffset + deltaSec);
+      commitOffset(tx.pid, tx.source, tx.baseOffset + deltaSec);
     }
   }
 
@@ -1541,9 +1707,11 @@
     document.addEventListener("keydown", function (e) {
       if (!cvState.active) return;
 
-      // Don't steal arrow keys from a focused offset input.
+      // Don't steal arrow keys from a focused offset input (coupled or per-lane).
       var ae = document.activeElement;
-      if (ae && ae.classList && ae.classList.contains("cv-offset-input")) return;
+      if (ae && ae.classList &&
+          (ae.classList.contains("cv-offset-input") ||
+           ae.classList.contains("cv-offset-lane-input"))) return;
 
       if (e.key === "Escape" && cvState.selection) {
         clearSelection();

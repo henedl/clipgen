@@ -133,6 +133,10 @@ STASHES_MANIFEST_FILENAME: str = "reel_stashes.json"
 ARTIFACT_STASHES_MANIFEST_FILENAME: str = "artifact_stashes.json"
 STUDIO_SETTINGS_FILENAME: str = "studio_settings.json"
 CONVERGENCE_OFFSETS_FILENAME: str = "convergence_offsets.json"
+# Data-source lanes shown (in order) per participant in the Convergence Browser.
+# Mirrored to the frontend via utils.get_frontend_config() so the swim-lane
+# layout and per-lane offset keys stay in sync; do not hardcode this list in JS.
+CONVERGENCE_SOURCES: tuple[str, ...] = ("sheet", "screenspace", "transcript")
 STUDIO_CELL_EXPAND_HOVER: bool = True
 GOOGLE_API_MAX_RETRIES: int = 3  # Retries for transient Google API errors (429, 5xx)
 

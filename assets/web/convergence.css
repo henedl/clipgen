@@ -415,6 +415,39 @@
   background-color: var(--accent, var(--fg));
 }
 
+/* Uncouple toggle: link icon (coupled) ⇄ link-slash icon (uncoupled). Only
+ * shown while a participant is unlocked — irrelevant clutter when locked. */
+.cv-offset-couple-btn {
+  display: none;
+  width: 12px;
+  height: 12px;
+  flex-shrink: 0;
+  background-color: var(--fg-faint);
+  mask-image: url("icons/link.svg");
+  -webkit-mask-image: url("icons/link.svg");
+  mask-size: contain;
+  -webkit-mask-size: contain;
+  mask-repeat: no-repeat;
+  -webkit-mask-repeat: no-repeat;
+  mask-position: center;
+  -webkit-mask-position: center;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+  transition: background-color var(--duration-instant) ease-out;
+}
+.cv-offset-label.is-unlocked .cv-offset-couple-btn {
+  display: inline-block;
+}
+.cv-offset-couple-btn:hover {
+  background-color: var(--fg);
+}
+.cv-offset-label.is-uncoupled .cv-offset-couple-btn {
+  mask-image: url("icons/link-slash.svg");
+  -webkit-mask-image: url("icons/link-slash.svg");
+  background-color: var(--accent, var(--fg));
+}
+
 .cv-offset-pid {
   color: var(--fg-faint);
   flex: 1 1 auto;
@@ -457,7 +490,9 @@
   -moz-appearance: textfield;
 }
 .cv-offset-input::-webkit-outer-spin-button,
-.cv-offset-input::-webkit-inner-spin-button {
+.cv-offset-input::-webkit-inner-spin-button,
+.cv-offset-lane-input::-webkit-outer-spin-button,
+.cv-offset-lane-input::-webkit-inner-spin-button {
   -webkit-appearance: none;
   margin: 0;
 }
@@ -468,13 +503,48 @@
   display: none;
 }
 
+/* Per-lane inputs: a stacked column (one per source) shown only when a
+ * participant is unlocked AND uncoupled, replacing the single coupled input.
+ * Three must fit the participant block (3 sub-rows × 14px = 42px), so each is
+ * deliberately tiny (13px, border-box). */
+.cv-offset-lane-inputs {
+  display: none;
+  flex-direction: column;
+  gap: 0;
+}
+.cv-offset-label.is-unlocked.is-uncoupled .cv-offset-lane-inputs {
+  display: flex;
+}
+.cv-offset-label.is-unlocked.is-uncoupled .cv-offset-input {
+  display: none;
+}
+.cv-offset-lane-input {
+  width: 44px;
+  height: 13px;
+  font-family: var(--font-mono);
+  font-feature-settings: "tnum";
+  font-size: 9px;
+  line-height: 1;
+  padding: 0 var(--space-1);
+  background: var(--bg-input);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  outline: none;
+  -moz-appearance: textfield;
+}
+.cv-offset-lane-input:focus {
+  border-color: var(--accent, var(--border-strong));
+}
+
 /* Convergence-side override so the swim-lane label widens to fit the
  * lock button + PID + badge/input. */
 .cv-swimlane {
   --cg-swim-label-w: 84px;
 }
 .cv-swimlane.is-editing {
-  --cg-swim-label-w: 140px;
+  /* Wider while editing to fit lock + uncouple toggle + pid + offset input. */
+  --cg-swim-label-w: 152px;
 }
 
 .cv-reset-btn {
@@ -522,7 +592,8 @@ html[data-theme="light"] .cv-offset-void,
   .cv-frame-preview {
     transition: none;
   }
-  .cv-offset-lock-btn {
+  .cv-offset-lock-btn,
+  .cv-offset-couple-btn {
     transition: none;
   }
 }
