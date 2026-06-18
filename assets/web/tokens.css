@@ -37,7 +37,7 @@
  * FRICTION:   --color-friction — Transcripts friction heatmap / tints / mark
  * TASK:       --color-task-multitool | --color-task-color | --color-task-change | --color-task-similarity
  *             --color-task-text | --color-task-numbers | --color-task-timelapse | --color-task-template
- *             --color-task-flow | --color-task-scene
+ *             --color-task-flow | --color-task-scene | --color-task-inactivity | --color-task-boundary
  * REGIONS:    --region-color-1..8 — palette cycled by Screenspace region index
  *
  * LAYOUT:     --layout-max-width | --layout-padding-x
@@ -198,6 +198,7 @@
   --color-task-flow:       #818cf8;
   --color-task-scene:      #2dd4bf;
   --color-task-inactivity: #94a3b8;
+  --color-task-boundary:   #e879f9;
 
   /* Stream colors — for metadata cross-stream visualisations
    * (sheet=yellow, screenspace=blue, transcript=green). Constant across
@@ -342,6 +343,7 @@ html[data-theme="light"],
   --color-task-flow:       #6366f1;
   --color-task-scene:      #14b8a6;
   --color-task-inactivity: #64748b;
+  --color-task-boundary:   #c026d3;
 
   --cat-quote:    #2563eb;
   --cat-insight:  #f97316;

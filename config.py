@@ -189,6 +189,21 @@ SCREENSPACE_INACTIVITY_PHASH_THRESHOLD: int = (
 SCREENSPACE_INACTIVITY_MIN_DURATION: float = (
     2.0  # min seconds to report an inactivity span
 )
+SCREENSPACE_BOUNDARY_PHASH_THRESHOLD: int = (
+    14  # min Hamming distance to call a scene boundary (above inactivity/static-skip)
+)
+SCREENSPACE_BOUNDARY_MIN_GAP_SECONDS: float = (
+    3.0  # debounce: suppress further boundaries this long after one fires
+)
+SCREENSPACE_BOUNDARY_INTERVAL: float = (
+    1.0  # default frame sampling interval for boundaries
+)
+SCREENSPACE_BOUNDARY_HASH_DIM: int = (
+    64  # downscale max-dim for cheap full-frame hashing (pushed to the ffmpeg pipe)
+)
+SCREENSPACE_BOUNDARY_CONFIDENCE_EPSILON: float = (
+    0.05  # confidence floor for a boundary that just crosses threshold
+)
 SCREENSPACE_CV_RESOLUTION_SCALE: float = (
     1.0  # multiplier applied to extracted region frames before CV analysis
     # (1.0 = no change; >1 sharper but slower and more memory; <1 faster but coarser)

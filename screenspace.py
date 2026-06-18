@@ -2148,6 +2148,104 @@ def scan_inactivity(
     return results
 
 
+def scan_boundaries(
+    video_path: str,
+    region: dict[str, int] | None = None,
+    threshold: int = 0,
+    min_gap: float = 0.0,
+    interval_seconds: float = 0.0,
+    *,
+    start_seconds: float = 0.0,
+    end_seconds: float | None = None,
+    on_progress: Callable[[float], None] | None = None,
+    cancel_flag: Callable[[], bool] | None = None,
+    on_result: Callable[[dict[str, Any]], None] | None = None,
+    fast_opts: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    """Scan the full frame for scene boundaries (large frame-to-frame jumps).
+
+    The inverse of :func:`scan_inactivity`: where inactivity looks for phash
+    *plateaus*, boundaries look for *spikes*.  A boundary fires when the
+    perceptual-hash Hamming distance to the previous sampled frame is at least
+    *threshold*, debounced so that no two boundaries land within *min_gap*
+    seconds (the first spike of a sustained high-distance run is the boundary,
+    which keeps camera-heavy action sequences from becoming boundary storms).
+
+    Region is ignored (full-frame only); the parameter exists for signature
+    parity with the other scanners.  Returns a list of
+    ``{timestamp, distance, _confidence}`` dicts.
+    """
+    if threshold <= 0:
+        threshold = config.SCREENSPACE_BOUNDARY_PHASH_THRESHOLD
+    if min_gap <= 0:
+        min_gap = config.SCREENSPACE_BOUNDARY_MIN_GAP_SECONDS
+    if interval_seconds <= 0:
+        interval_seconds = config.SCREENSPACE_BOUNDARY_INTERVAL
+
+    vid_fps, vid_duration = _probe_video_meta(video_path)
+    if vid_fps <= 0:
+        return []
+
+    if end_seconds is None or end_seconds > vid_duration:
+        end_seconds = vid_duration
+    total_range = end_seconds - start_seconds
+
+    # Downscale frames at the ffmpeg pipe for cheap hashing. We pass only
+    # ``max_region_dim`` (no ``phash_skip``) so the pipe downsizes without
+    # dropping frames — this scanner runs its own phash on every sample.
+    boundary_opts = dict(fast_opts or {})
+    boundary_opts.setdefault("max_region_dim", config.SCREENSPACE_BOUNDARY_HASH_DIM)
+    boundary_opts.pop("phash_skip", None)
+
+    results: list[dict[str, Any]] = []
+    prev_hash: list["imagehash.ImageHash | None"] = [None]
+    last_boundary_ts: list[float | None] = [None]
+    eps = config.SCREENSPACE_BOUNDARY_CONFIDENCE_EPSILON
+
+    def _cb(ts: float, pixels: np.ndarray) -> bool | None:
+        if cancel_flag and cancel_flag():
+            return False
+
+        curr_hash = compute_phash(pixels)
+        if prev_hash[0] is not None:
+            dist = int(curr_hash - prev_hash[0])
+            within_gap = (
+                last_boundary_ts[0] is not None and ts - last_boundary_ts[0] < min_gap
+            )
+            if dist >= threshold and not within_gap:
+                conf = 1.0 if threshold <= 0 else (dist - threshold) / float(threshold)
+                conf = max(eps, min(conf, 1.0))
+                rd = {
+                    "timestamp": round(ts, 2),
+                    "distance": dist,
+                    "_confidence": round(conf, 4),
+                }
+                results.append(rd)
+                if on_result:
+                    on_result(rd)
+                last_boundary_ts[0] = ts
+        prev_hash[0] = curr_hash
+
+        if on_progress and total_range > 0:
+            on_progress((ts - start_seconds) / total_range)
+        return None
+
+    scan_video_full_frames(
+        video_path,
+        interval_seconds,
+        _cb,
+        start_seconds=start_seconds,
+        end_seconds=end_seconds,
+        fps=vid_fps,
+        duration=vid_duration,
+        fast_opts=boundary_opts,
+    )
+
+    if on_progress:
+        on_progress(1.0)
+    return results
+
+
 # ---------------------------------------------------------------------------
 # Multitool: per-frame evaluation and multi-factor scan
 # ---------------------------------------------------------------------------
@@ -2177,6 +2275,14 @@ def _extract_confidence(tool_type: str, result: dict[str, Any]) -> float:
         if "_confidence" in result:
             return float(result["_confidence"])
         return min(result.get("duration", 0.0) / 30.0, 1.0)
+    elif tool_type == "boundary":
+        if "_confidence" in result:
+            return float(result["_confidence"])
+        thr = config.SCREENSPACE_BOUNDARY_PHASH_THRESHOLD
+        dist = result.get("distance", 0.0)
+        if thr <= 0:
+            return 1.0
+        return max(0.0, min((dist - thr) / float(thr), 1.0))
     return 1.0
 
 
@@ -3377,6 +3483,57 @@ class InactivityTool(AnalysisTool):
         )
 
 
+class BoundaryTool(AnalysisTool):
+    name = "boundary"
+    # The scanner is already coarse and runs its own phash on every sample;
+    # the generic fast-scan phash-skip would fight that logic, so opt out.
+    supports_fast_scan = False
+    # Calibration scalar is the raw phash distance (Sensitivity-slider units),
+    # mirroring inactivity. No calibration UI is wired in v1, but check_frame
+    # below keeps the tool forward-compatible with the pinned-frame strip.
+    score_key = "distance"
+
+    def check_frame(self, frame, prev_frame, region, params):
+        if prev_frame is None:
+            return False, None
+        thresh = params.get("threshold", config.SCREENSPACE_BOUNDARY_PHASH_THRESHOLD)
+        curr_h = compute_phash(frame)
+        prev_h = compute_phash(prev_frame)
+        dist = int(curr_h - prev_h)
+        if thresh > 0:
+            conf = max(0.0, min((dist - thresh) / float(thresh), 1.0))
+        else:
+            conf = 1.0 if dist >= thresh else 0.0
+        return dist >= thresh, {"distance": dist, "_confidence": conf}
+
+    def scan(
+        self,
+        video_path,
+        region,
+        params,
+        *,
+        task_id,
+        scan_mode,
+        on_progress,
+        cancel_flag,
+        on_result,
+        fast_opts,
+    ):
+        return scan_boundaries(
+            video_path,
+            region,
+            threshold=params.get("threshold", 0),
+            min_gap=params.get("min_gap", 0.0),
+            interval_seconds=params.get("interval", 0),
+            start_seconds=params.get("start_seconds", 0.0),
+            end_seconds=params.get("end_seconds"),
+            on_progress=on_progress,
+            cancel_flag=cancel_flag,
+            on_result=on_result,
+            fast_opts=fast_opts,
+        )
+
+
 class TimelapseTool(AnalysisTool):
     name = "timelapse"
     # Has its own ``sample_interval`` and produces a media file rather than
@@ -3467,6 +3624,7 @@ TOOLS: dict[str, AnalysisTool] = {
         FlowTool(),
         SceneTool(),
         InactivityTool(),
+        BoundaryTool(),
         TimelapseTool(),
         MultitoolTool(),
     )
@@ -4031,9 +4189,15 @@ def generate_events_from_results(
         elif task_type == "inactivity":
             metadata["duration"] = r.get("duration", 0.0)
             metadata["avg_distance"] = r.get("avg_distance", 0.0)
+        elif task_type == "boundary":
+            metadata["distance"] = r.get("distance", 0.0)
         ev = create_event(task, ts, confidence, metadata)
         if task_type == "inactivity" and "end" in r:
             ev["time_out"] = round(r["end"], 2)
+        if task_type == "boundary":
+            # Boundaries are for orientation, not clip candidacy. The
+            # navigational flag lets Studio intake hide them by default.
+            ev["navigational"] = True
         events.append(ev)
     return events
 

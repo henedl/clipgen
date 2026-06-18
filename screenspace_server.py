@@ -82,6 +82,7 @@ _VALID_TASK_TYPES = (
     "flow",
     "scene",
     "inactivity",
+    "boundary",
 )
 _VALID_STEP_TYPES = (
     "color",
@@ -1640,12 +1641,13 @@ def _validate_task_request(
         "template_image_data"
     )
 
-    # Multitool uses per-step regions; others need a global region (unless template upload)
+    # Multitool uses per-step regions; boundary is full-frame only; others need a
+    # global region (unless template upload).
     has_region_request = bool(region_name) or region_ref is not None
     if (
         not has_region_request
         and not has_uploaded_template
-        and task_type != "multitool"
+        and task_type not in ("multitool", "boundary")
     ):
         return jsonify({"ok": False, "error": "region is required"}), 400
 

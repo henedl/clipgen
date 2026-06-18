@@ -27,6 +27,7 @@
   var SS_TASK_ICON_TYPES = {
     multitool: 1, color: 1, change: 1, similarity: 1, text: 1,
     numbers: 1, template: 1, flow: 1, scene: 1, inactivity: 1,
+    boundary: 1,
   };
 
   // Build a span that renders the task icon via mask-image (see .ss-task-icon
@@ -876,6 +877,10 @@
     inactivity: {
       "Sensitivity":      "Pixel-change level below which the frame is idle",
       "Min duration (s)": "Seconds of stillness required to trigger",
+    },
+    boundary: {
+      "Sensitivity":      "Minimum frame-to-frame change to call a scene boundary (higher = only the biggest jumps)",
+      "Min gap (s)":      "Suppress further boundaries for this long after one fires (avoids storms during fast action)",
     },
   };
 
@@ -3208,7 +3213,10 @@
         // No timeline markers for timelapse
       } else {
         // Point markers (change, similarity, text, numbers, template, flow, scene, running color)
-        ctx.lineWidth = 1.5;
+        // Boundaries are orientation scaffolding, not findings — draw them as
+        // thinner, lighter ticks so they read as a session skeleton.
+        var isBoundary = task.type === "boundary";
+        ctx.lineWidth = isBoundary ? 1.0 : 1.5;
         var results = task.result || [];
         results.forEach(function (r) {
           var ts = r.timestamp !== undefined ? r.timestamp : r.start;
@@ -3223,7 +3231,7 @@
             ctx.strokeStyle = hexToRgba(color, 0.15);
             ctx.setLineDash([]);
           } else {
-            ctx.strokeStyle = color;
+            ctx.strokeStyle = isBoundary ? hexToRgba(color, 0.55) : color;
             ctx.setLineDash([]);
           }
           var x = timeToX(ts);
@@ -3410,7 +3418,8 @@
     template: "Template tool: searches the full video frame for a captured or uploaded reference image using template matching. Works across the entire frame, not just the selected region — ideal for finding icons, buttons, or UI elements wherever they appear.",
     flow: "Flow tool: detects motion in the region via dense optical flow. Higher magnitude thresholds filter out subtle movements. Useful for detecting player movement, animations starting, or activity in a specific area.",
     scene: "Scene tool: classifies each frame by comparing it to your captured reference scenes. Useful for building a timeline of when different screens, menus, or game levels are active.",
-    inactivity: "Inactivity tool: detects spans of near-duplicate frames in a region using perceptual hashing. Surfaces loading screens, frozen states, or repeated animation loops. Set the minimum duration to filter out brief pauses."
+    inactivity: "Inactivity tool: detects spans of near-duplicate frames in a region using perceptual hashing. Surfaces loading screens, frozen states, or repeated animation loops. Set the minimum duration to filter out brief pauses.",
+    boundary: "Boundary tool: scans the whole frame for scene changes — moments where the picture shifts substantially from the previous sample (menu → gameplay, level transitions, loading screens ending). No region or reference needed; raise Sensitivity for only the biggest jumps, and use Min gap to avoid clustered boundaries during fast action. Boundaries are orientation markers, not clip candidates."
   };
 
   var _toolInfoPinned = false;
@@ -4603,7 +4612,12 @@
     var type = state.activeWorkflow;
 
     var regionPickerWrap = qs("#runRegionPicker");
-    if (regionPickerWrap) regionPickerWrap.style.display = type === "multitool" ? "none" : "";
+    // Multitool uses per-step regions; boundary is full-frame only — both hide
+    // the global region picker.
+    if (regionPickerWrap) {
+      regionPickerWrap.style.display =
+        type === "multitool" || type === "boundary" ? "none" : "";
+    }
 
     if (type === "multitool") {
       renderMultitoolParams(container);
@@ -4652,6 +4666,11 @@
       addParamRow(container, "Min duration (s)", numberInput("paramInactMinDur", 0.5, 60, 2.0, 0.5));
       renderIntervalSlot("paramInactInterval", 0.5, 60, 1.0, 0.5);
     }
+    else if (type === "boundary") {
+      addParamRow(container, "Sensitivity", rangeInput("paramBoundaryThresh", 0, 30, 14, 1), "paramBoundaryThreshVal");
+      addParamRow(container, "Min gap (s)", numberInput("paramBoundaryMinGap", 0.5, 60, 3.0, 0.5));
+      renderIntervalSlot("paramBoundaryInterval", 0.5, 60, 1.0, 0.5);
+    }
 
     if (type !== "timelapse") {
       addParamRow(container, "Event label", textInput("paramEventLabel", "e.g. low_health"));
@@ -4662,7 +4681,12 @@
     }
 
     var scanPicker = qs("#runScanModePicker");
-    if (scanPicker) scanPicker.style.display = type === "timelapse" ? "none" : "";
+    // Timelapse produces media (no scan modes); boundary runs its own coarse
+    // phash pass and opts out of fast scan, so hide the toggle for both.
+    if (scanPicker) {
+      scanPicker.style.display =
+        type === "timelapse" || type === "boundary" ? "none" : "";
+    }
     var scanBtn = scanPicker && scanPicker.querySelector(".scan-toggle-btn");
     if (scanBtn && scanBtn._updateScanState) scanBtn._updateScanState();
 
@@ -4721,6 +4745,7 @@
     flow: "Prev + current gray frames with dense optical-flow vectors.",
     scene: "Region (≤128 px), Canny edges, and 8-bin hue histogram.",
     inactivity: "Region and pHash bit grid (white = 1, black = 0).",
+    boundary: "Full-frame pHash; distance to the previous sample drives boundaries.",
     multitool: "Preview of the first tool step.",
   };
 
@@ -5980,11 +6005,13 @@
       }
     } else {
       var isTemplate = state.activeWorkflow === "template";
+      var isFullFrameTool = state.activeWorkflow === "boundary";
       var hasUploadedTemplate = !!state.uploadedTemplate;
       // Template scans full frames regardless of region selection; the region
       // (or uploaded image) only supplies the template patch.
       var templateMissingPatch = isTemplate && !hasRegion && !hasUploadedTemplate;
-      var nonTemplateMissingRegion = !isTemplate && !hasRegion;
+      // Boundary is full-frame only — it needs no region at all.
+      var nonTemplateMissingRegion = !isTemplate && !isFullFrameTool && !hasRegion;
       btn.disabled = nonTemplateMissingRegion || templateMissingPatch || !hasParticipants;
       if (templateMissingPatch) {
         btn.setAttribute("data-tooltip", "Upload a template image or pick a region first");
@@ -6011,13 +6038,18 @@
   function initRunButton() {
     qs("#runBtn").addEventListener("click", function () {
       var type = state.activeWorkflow;
-      var regions = state.runRegions.length > 0
-        ? state.runRegions
-        : (state.activeRegion ? [activeRegionRef(state.activeRegion)] : []);
+      // Boundary is full-frame only: always scan the whole frame, ignoring any
+      // selected region.
+      var isFullFrameTool = type === "boundary";
+      var regions = isFullFrameTool
+        ? [fullFrameRegionRef()]
+        : (state.runRegions.length > 0
+            ? state.runRegions
+            : (state.activeRegion ? [activeRegionRef(state.activeRegion)] : []));
       // Multitool uses per-step regions; skip global region requirement
       var isMultitool = type === "multitool";
       // Template with uploaded image can run without a region (full-frame scan)
-      if (!isMultitool && regions.length === 0 && !(type === "template" && state.uploadedTemplate)) return;
+      if (!isMultitool && !isFullFrameTool && regions.length === 0 && !(type === "template" && state.uploadedTemplate)) return;
       if (regions.length === 0) regions = [""];
       var participants = state.runParticipants.length > 0
         ? state.runParticipants
@@ -6302,6 +6334,10 @@
       params.threshold = intOrDefault((qs("#paramInactThresh") || {}).value, 10);
       params.min_duration = numberOrDefault((qs("#paramInactMinDur") || {}).value, 2.0);
       params.interval = numberOrDefault((qs("#paramInactInterval") || {}).value, 1.0);
+    } else if (type === "boundary") {
+      params.threshold = intOrDefault((qs("#paramBoundaryThresh") || {}).value, 14);
+      params.min_gap = numberOrDefault((qs("#paramBoundaryMinGap") || {}).value, 3.0);
+      params.interval = numberOrDefault((qs("#paramBoundaryInterval") || {}).value, 1.0);
     }
     var labelEl = qs("#paramEventLabel");
     if (labelEl && labelEl.value.trim()) {
@@ -6328,6 +6364,7 @@
     flow: "arrows-right-left",
     scene: "squares-2x2",
     inactivity: "pause-circle",
+    boundary: "flag",
   };
 
   function sortTasks() {
@@ -6356,6 +6393,7 @@
     flow: "Flow",
     scene: "Scene",
     inactivity: "Inactivity",
+    boundary: "Boundary",
   };
 
   function selectableTasks() {
@@ -7702,6 +7740,7 @@
         else if (task.type === "scene") confValue = r.score;
         else if (task.type === "multitool") confValue = r.min_confidence;
         else if (task.type === "inactivity") confValue = Math.min((r.duration || 0) / 30, 1);
+        else if (task.type === "boundary") confValue = r._confidence;
         if (confValue !== null && confValue < state.certaintyCutoff) return;
       }
 
@@ -7761,6 +7800,11 @@
         row.appendChild(el("span", "result-detail", r.scene_name));
         row.appendChild(buildConfBar(r.score, task.type));
         row.appendChild(el("span", "result-score", (r.score * 100).toFixed(1) + "%"));
+      } else if (task.type === "boundary") {
+        row.dataset.timestamp = r.timestamp;
+        row.appendChild(el("span", "result-timestamp", formatTime(r.timestamp, { decimals: 1 })));
+        row.appendChild(buildConfBar(r._confidence !== undefined ? r._confidence : 0, task.type));
+        row.appendChild(el("span", "result-score", "d:" + (r.distance !== undefined ? r.distance : "?")));
       } else if (task.type === "multitool") {
         row.dataset.timestamp = r.timestamp;
         row.appendChild(el("span", "result-timestamp", formatTime(r.timestamp, { decimals: 1 })));

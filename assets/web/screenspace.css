@@ -62,6 +62,7 @@ body {
 .ss-task-icon--flow        { mask-image: url(icons/arrows-right-left.svg);   -webkit-mask-image: url(icons/arrows-right-left.svg); }
 .ss-task-icon--scene       { mask-image: url(icons/squares-2x2.svg);         -webkit-mask-image: url(icons/squares-2x2.svg); }
 .ss-task-icon--inactivity  { mask-image: url(icons/pause-circle.svg);        -webkit-mask-image: url(icons/pause-circle.svg); }
+.ss-task-icon--boundary    { mask-image: url(icons/flag.svg);                -webkit-mask-image: url(icons/flag.svg); }
 /* timelapse/info/play have no task-queue entry but reuse this family for the workflow toolbar. */
 .ss-task-icon--timelapse   { mask-image: url(icons/forward.svg);             -webkit-mask-image: url(icons/forward.svg); }
 .ss-task-icon--info        { mask-image: url(icons/information-circle.svg);  -webkit-mask-image: url(icons/information-circle.svg); }

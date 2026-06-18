@@ -789,6 +789,34 @@ def test_create_task_new_types_accepted(client, task_type):
     assert "video" in data["error"].lower()
 
 
+def test_create_boundary_task_full_frame_accepted(client):
+    """Boundary is region-less: a full_frame region_ref passes type + region
+    validation (and only then fails the video check for the video-less P01)."""
+    resp = client.post(
+        "/screenspace/api/tasks",
+        json={
+            "type": "boundary",
+            "participant": "P01",
+            "region_ref": {"source": "full_frame"},
+            "parameters": {"threshold": 14, "min_gap": 3.0},
+        },
+    )
+    data = resp.get_json()
+    assert resp.status_code == 400
+    assert "video" in data["error"].lower()
+
+
+def test_create_boundary_task_no_region_accepted(client):
+    """Boundary needs no region at all — omitting it must not 400 on 'region'."""
+    resp = client.post(
+        "/screenspace/api/tasks",
+        json={"type": "boundary", "participant": "P01"},
+    )
+    data = resp.get_json()
+    assert resp.status_code == 400
+    assert "video" in data["error"].lower()
+
+
 def test_create_template_task_no_region_with_upload(client):
     """Template task with uploaded image skips region validation."""
     import base64
