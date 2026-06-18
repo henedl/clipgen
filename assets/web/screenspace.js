@@ -7663,32 +7663,64 @@
     attachHoverTooltip(exclBtn, "Exclude results below the certainty threshold", { align: "center" });
 
     qs("#excludeNonVisibleBtn").addEventListener("click", function () {
-      var events = state.taskEvents[state.selectedTaskId] || [];
-      var task = state.selectedTaskId ? findTask(state.selectedTaskId) : null;
-      if (!task || !events.length || state.certaintyCutoff <= 0) {
+      if (state.certaintyCutoff <= 0) {
         showToast("Set a certainty threshold first");
         return;
       }
-      var idsToExclude = [];
-      events.forEach(function (ev) {
-        if (!ev.excluded && ev.confidence < state.certaintyCutoff) {
-          idsToExclude.push(ev.id);
-        }
-      });
-      if (idsToExclude.length === 0) {
-        showToast("No events below threshold");
-        return;
-      }
-      apiPut("api/events/bulk-exclude", { ids: idsToExclude }).then(function () {
-        idsToExclude.forEach(function (id) {
-          for (var i = 0; i < events.length; i++) {
-            if (events[i].id === id) { events[i].excluded = true; break; }
+      var task = state.selectedTaskId ? findTask(state.selectedTaskId) : null;
+      if (!task) return; // button is hidden without a selected task
+
+      function applyExclusion(events) {
+        var idsToExclude = [];
+        events.forEach(function (ev) {
+          if (!ev.excluded && ev.confidence < state.certaintyCutoff) {
+            idsToExclude.push(ev.id);
           }
         });
-        renderResults();
-        renderTimeline();
-        showToast("Excluded " + clipgenPluralUnit(idsToExclude.length, "event", "events"));
-      });
+        if (idsToExclude.length === 0) {
+          showToast("No events below threshold");
+          return;
+        }
+        apiPut("api/events/bulk-exclude", { ids: idsToExclude }).then(function () {
+          idsToExclude.forEach(function (id) {
+            for (var i = 0; i < events.length; i++) {
+              if (events[i].id === id) { events[i].excluded = true; break; }
+            }
+          });
+          renderResults();
+          renderTimeline();
+          showToast("Excluded " + clipgenPluralUnit(idsToExclude.length, "event", "events"));
+        });
+      }
+
+      // renderResults() draws from state.selectedTaskResults, which is populated
+      // eagerly (live while running, and on completion). The events list, however,
+      // is only fetched into state.taskEvents by loadAndShowResults — so when the
+      // results panel is showing a streamed/just-completed task, the slider filters
+      // the visible rows yet taskEvents is still empty. Fetch on demand so the cut
+      // works without first navigating away from and back to the results page.
+      var loaded = state.taskEvents[state.selectedTaskId];
+      if (loaded && loaded.length) {
+        applyExclusion(loaded);
+        return;
+      }
+      // Capture the task id at request time and bail if the user has switched away
+      // before the fetch resolves — otherwise the callback would write this task's
+      // events into (and bulk-exclude against) whatever task is selected later.
+      var fetchTaskId = state.selectedTaskId;
+      apiGet("api/events?task_id=" + fetchTaskId).then(function (evData) {
+        if (state.selectedTaskId !== fetchTaskId) return;
+        var evts = (evData && evData.events) || [];
+        state.taskEvents[fetchTaskId] = evts;
+        renderResults(); // surface freshly-loaded events (histogram, excluded toggle, rows)
+        if (!evts.length) {
+          showToast(task.status === "running"
+            ? "No events to exclude yet — analysis still running"
+            : "No events to exclude");
+          return;
+        }
+        applyExclusion(evts);
+      }).catch(function () { showToast("Failed to load events"); });
     });
   }
 
