@@ -817,6 +817,27 @@ def test_create_boundary_task_no_region_accepted(client):
     assert "video" in data["error"].lower()
 
 
+def test_create_boundary_task_overrides_named_region(client, monkeypatch):
+    """Boundary always scans the full frame: a caller-supplied named region is
+    forced to full_frame so events/metadata are never mislabeled with a region
+    the scan never used."""
+    _create_region(client, "hud")
+    _enable_video_task_setup(monkeypatch, "P01")
+    resp = client.post(
+        "/screenspace/api/tasks",
+        json={
+            "type": "boundary",
+            "participant": "P01",
+            "region_ref": {"source": "active", "name": "hud"},
+            "parameters": {"threshold": 14},
+        },
+    )
+    assert resp.status_code == 200
+    task = resp.get_json()["task"]
+    assert task["region"] == "full_frame"
+    assert task["region_ref"] == {"source": "full_frame"}
+
+
 def test_create_template_task_no_region_with_upload(client):
     """Template task with uploaded image skips region validation."""
     import base64
@@ -2155,6 +2176,17 @@ def test_calibrate_rejects_unknown_tool(calib_client):
         json={"participant": "P01", "tool": "bogus"},
     )
     assert resp.status_code == 400
+
+
+def test_calibrate_rejects_boundary(calib_client):
+    # Boundary exposes no score_key, so it is not calibratable in v1. The
+    # endpoint must reject it rather than score every pin not_evaluable.
+    resp = calib_client.post(
+        "/screenspace/api/calibrate",
+        json={"participant": "P01", "tool": "boundary"},
+    )
+    assert resp.status_code == 400
+    assert "calibratable" in resp.get_json()["error"].lower()
 
 
 def test_calibrate_no_pins(calib_client):

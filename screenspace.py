@@ -3488,23 +3488,11 @@ class BoundaryTool(AnalysisTool):
     # The scanner is already coarse and runs its own phash on every sample;
     # the generic fast-scan phash-skip would fight that logic, so opt out.
     supports_fast_scan = False
-    # Calibration scalar is the raw phash distance (Sensitivity-slider units),
-    # mirroring inactivity. No calibration UI is wired in v1, but check_frame
-    # below keeps the tool forward-compatible with the pinned-frame strip.
-    score_key = "distance"
-
-    def check_frame(self, frame, prev_frame, region, params):
-        if prev_frame is None:
-            return False, None
-        thresh = params.get("threshold", config.SCREENSPACE_BOUNDARY_PHASH_THRESHOLD)
-        curr_h = compute_phash(frame)
-        prev_h = compute_phash(prev_frame)
-        dist = int(curr_h - prev_h)
-        if thresh > 0:
-            conf = max(0.0, min((dist - thresh) / float(thresh), 1.0))
-        else:
-            conf = 1.0 if dist >= thresh else 0.0
-        return dist >= thresh, {"distance": dist, "_confidence": conf}
+    # Scan-only in v1: not a multitool step and not calibratable (no score_key),
+    # so the pinned-frame strip and /api/calibrate correctly skip it. Wiring
+    # calibration later means adding score_key + a per-frame check_frame here,
+    # plus a `needs_prev` entry and full-frame handling in the calibrate endpoint
+    # (boundary needs the previous sampled frame and always scans the full frame).
 
     def scan(
         self,

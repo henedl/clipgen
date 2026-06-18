@@ -1929,17 +1929,9 @@ class TestCheckFrameForTool:
         assert result is not None
         assert "distance" in result
 
-    def test_boundary_needs_prev_frame(self):
-        frame = np.zeros((100, 100, 3), dtype=np.uint8)
-        region = {"x": 0, "y": 0, "w": 100, "h": 100}
-        passed, result = screenspace.check_frame_for_tool(
-            frame, None, region, "boundary", {"threshold": 14}
-        )
-        assert passed is False
-        assert result is None
-
-    def test_boundary_different_frames(self):
-        # Boundary is the mirror of inactivity: a large phash distance passes.
+    def test_boundary_not_a_multitool_step(self):
+        # Boundary is scan-only: it defines no check_frame, so the generic
+        # dispatch falls back to the base "not a multitool step" result.
         frame_a = np.zeros((100, 100, 3), dtype=np.uint8)
         rng = np.random.RandomState(42)
         frame_b = rng.randint(0, 256, (100, 100, 3), dtype=np.uint8)
@@ -1947,10 +1939,8 @@ class TestCheckFrameForTool:
         passed, result = screenspace.check_frame_for_tool(
             frame_b, frame_a, region, "boundary", {"threshold": 2}
         )
-        assert passed is True
-        assert result is not None
-        assert "distance" in result
-        assert result["distance"] >= 2
+        assert passed is False
+        assert result is None
 
     def test_unknown_type(self):
         frame = np.zeros((100, 100, 3), dtype=np.uint8)

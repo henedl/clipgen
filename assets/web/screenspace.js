@@ -6981,6 +6981,10 @@
       setInputValue("#paramInactThresh", intOrDefault(params.threshold, 10));
       setInputValue("#paramInactMinDur", numberOrDefault(params.min_duration, 2.0));
       setInputValue("#paramInactInterval", numberOrDefault(params.interval, 1.0));
+    } else if (task.type === "boundary") {
+      setInputValue("#paramBoundaryThresh", intOrDefault(params.threshold, 14));
+      setInputValue("#paramBoundaryMinGap", numberOrDefault(params.min_gap, 3.0));
+      setInputValue("#paramBoundaryInterval", numberOrDefault(params.interval, 1.0));
     }
 
     // event_label and detect_first apply to every non-timelapse task type
@@ -7587,7 +7591,7 @@
     }
 
     // Show/hide certainty controls based on whether the tool has confidence scores
-    var hasConf = task && { change: 1, similarity: 1, text: 1, numbers: 1, template: 1, scene: 1, flow: 1, multitool: 1, inactivity: 1 }[task.type];
+    var hasConf = task && { change: 1, similarity: 1, text: 1, numbers: 1, template: 1, scene: 1, flow: 1, multitool: 1, inactivity: 1, boundary: 1 }[task.type];
     var certWrap = qs("#certaintyCutoffWrap");
     var exclBtn = qs("#excludeNonVisibleBtn");
     if (certWrap) certWrap.classList.toggle("hidden", !hasConf);

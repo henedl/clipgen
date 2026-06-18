@@ -945,7 +945,7 @@ function detectorColor(label, alpha) {
 var CATEGORY_HUES = {
   multitool: 220, color: 280, change: 30, similarity: 200,
   text: 170, numbers: 330, timelapse: 350, template: 18,
-  flow: 145, scene: 155, inactivity: 210,
+  flow: 145, scene: 155, inactivity: 210, boundary: 300,
   "pain point": 350, "pain-point": 350,
   delight: 140, quote: 40, insight: 220,
   "task issue": 30, task: 30, bookmark: 280,

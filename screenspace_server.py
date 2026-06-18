@@ -1641,13 +1641,14 @@ def _validate_task_request(
         "template_image_data"
     )
 
-    # Multitool uses per-step regions; boundary is full-frame only; others need a
-    # global region (unless template upload).
+    # Multitool uses per-step regions; others need a global region (unless
+    # template upload). Boundary always arrives with a forced full_frame
+    # region_ref (set in api_tasks_create), so it satisfies this check.
     has_region_request = bool(region_name) or region_ref is not None
     if (
         not has_region_request
         and not has_uploaded_template
-        and task_type not in ("multitool", "boundary")
+        and task_type != "multitool"
     ):
         return jsonify({"ok": False, "error": "region is required"}), 400
 
@@ -1946,6 +1947,15 @@ def api_tasks_create() -> FlaskResponse:
     data = request.get_json(silent=True)
     if not data:
         return jsonify({"ok": False, "error": "JSON body required"}), 400
+
+    # Boundary is full-frame only by contract: ignore any caller-supplied region
+    # so events and manifest metadata are never labeled with a region the scan
+    # didn't use (scan_boundaries always hashes the whole frame). Forcing it here
+    # — before validation and before task["region_ref"] is recorded — keeps the
+    # stored region_name/coords and region_ref consistently full-frame.
+    if (data.get("type") or "").strip() == "boundary":
+        data["region"] = ""
+        data["region_ref"] = {"source": "full_frame"}
 
     validated = _validate_task_request(data)
     if isinstance(validated, Response) or (
