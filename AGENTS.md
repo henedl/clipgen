@@ -31,6 +31,7 @@ Always use `uv run` instead of `python`. Use `uv add` to add dependencies.
 @agents/ARCHITECTURE.md — module roles and subsystem launch notes.
 @agents/PERFORMANCE.md — I/O, parallelism, and hot-loop patterns.
 @agents/CODE-REVIEW.md — recurring frontend, backend, ty, and integration checks.
+@agents/CONTRIBUTING.md — PR/commit conventions and the pre-merge checklist.
 @agents/skills/README.md — development and CLI skill procedures.
 
 ## Key data structures
