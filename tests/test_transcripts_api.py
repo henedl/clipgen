@@ -830,3 +830,70 @@ def test_summary_regenerate_marks_friction_stale(
     assert entry["friction"]["stale"] is True
     assert entry["summary"] == ""
     assert "citations" not in entry  # citations invalidated alongside friction
+
+
+def test_on_task_complete_registers_summary_before_disk_write(
+    tr_client, _agent_state_clean, monkeypatch
+):
+    """Regression: when whisper finishes, the summary agent must read as
+    in-flight (the UI's "generating" state) *before* the manifest disk write
+    runs — not only after it. Otherwise the frontend can observe the task as
+    completed with no agent running and stop polling until a manual reload.
+    """
+    monkeypatch.setattr(config, "OLLAMA_SUMMARY_ENABLED", True)
+
+    pid = "P01"
+    completed_task = {
+        "id": "tr_x",
+        "participant": pid,
+        "status": transcripts.TASK_STATUS_COMPLETED,
+        "result": {
+            "segments": [{"id": f"{pid}:0", "start": 0.0, "end": 1.0, "text": "hi"}],
+            "language": "en",
+            "model": "m",
+            "source_file": "study_P01.mp4",
+            "transcribed_at": "2026-06-18T00:00:00Z",
+        },
+    }
+
+    class _FakeWorker:
+        def get_all_tasks(self):
+            return [dict(completed_task)]
+
+    monkeypatch.setattr(transcripts_server, "_worker", _FakeWorker())
+
+    # When the (mocked) disk write runs, the summary agent must already be
+    # registered as in-flight. This assertion fires while persist runs.
+    persisted = {"flag": False}
+
+    def _spy_save(*args, **kwargs):
+        assert transcripts_server._orchestrator.is_generating(pid, "summary"), (
+            "summary must be in-flight before the manifest disk write"
+        )
+        persisted["flag"] = True
+        return None  # avoid touching disk
+
+    monkeypatch.setattr(transcripts, "save_transcripts_manifest", _spy_save)
+
+    # Block the summary agent so its in-flight slot stays claimed while we assert.
+    started = threading.Event()
+    release = threading.Event()
+
+    def _blocking_summary(snapshot, cancel_event):
+        started.set()
+        release.wait(2.0)
+        return None  # don't commit/chain; the finally{} block releases the slot
+
+    summary_agent = thinking_agents.get_agent("summary")
+    assert summary_agent is not None
+    monkeypatch.setitem(summary_agent, "run", _blocking_summary)
+
+    try:
+        transcripts_server._on_task_complete()
+
+        assert started.wait(2.0), "summary agent thread did not start"
+        assert transcripts_server._orchestrator.is_generating(pid, "summary")
+        assert persisted["flag"], "manifest persist did not run"
+    finally:
+        release.set()
+        _join_orchestrator_threads(transcripts_server._orchestrator)
