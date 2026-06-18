@@ -35,22 +35,34 @@ The detector itself is ~90% built. The inactivity tool's perceptual-hash machine
 
 Parameters exposed in the workflow panel: interval, sensitivity (threshold), min gap. Nothing else — the tool's entire value proposition is that it needs no setup.
 
-## Phase 1: Detector
+## Status (updated 2026-06-18)
 
-- [ ] `scan_boundaries()` in [`screenspace.py`](screenspace.py): ffmpeg-pipe full-frame iteration, phash distance, threshold + min-gap debounce, incremental `on_result`, progress, cancel
-- [ ] `BoundaryTool(AnalysisTool)` registered in `TOOLS`; `supports_fast_scan = False` (the tool is already coarse; fast scan's phash-skip would fight the detector's own phash logic)
-- [ ] Config: `SCREENSPACE_BOUNDARY_PHASH_THRESHOLD`, `SCREENSPACE_BOUNDARY_MIN_GAP_SECONDS`, `SCREENSPACE_BOUNDARY_INTERVAL`
-- [ ] Event generation: `_extract_confidence` and `generate_events_from_results` branches for `"boundary"`; events carry `navigational: true`
-- [ ] Tests: synthetic video with hard cuts → boundaries at cuts only; gradual fade → behavior documented (expected: fires once when cumulative drift crosses threshold, or not at all — assert and document whichever, don't leave it undefined); min-gap suppression; cancel mid-scan
+- **Phase 1 (Detector)** — ✅ Done. Commits `92669eb` (feat), `9e02a7f` (post-review hardening).
+- **Phase 2 (Screenspace UI)** — ✅ Done. Commits `92669eb`, `12d8129` (slider widened to 0–64), `57216a6` (tab color).
+- **Phase 3 (Studio + Viewer)** — ⬜ Not started. Deferred until boundary detection is validated on real footage (per the agreed Phase 1+2 → validate → Phase 3 sequencing). `navigational: true` is already emitted on events, so the data is ready; only consumption is pending.
+- **Phase 4 (Scene-aware period segmentation)** — ⬜ Proposed (new; see below). Motivated by real-footage feedback that pure phash spikes are noisy even at high sensitivity.
 
-## Phase 2: Screenspace UI
+Post-landing fix outside the original scope: dismissing a *running* boundary task didn't cancel its worker thread (pinned CPU + SSE/icon spam) — fixed in `a7b289e` (`remove_task` keeps a running task alive until its cancel lands).
 
-- [ ] "Boundary" workflow tab (icon + `--color-task-boundary` token); region picker hidden, params: interval / sensitivity / min gap / event label
-- [ ] Timeline rendering: boundary results as thin full-height ticks in the result band, visually lighter than detector markers (they are scaffolding, not findings)
-- [ ] Results list rows: timestamp + distance bar (reuse `buildConfBar`)
-- [ ] Tool info text for the info tooltip
+## Phase 1: Detector — ✅ Done
 
-## Phase 3: Studio and Viewer integration
+- [x] `scan_boundaries()` in [`screenspace.py`](screenspace.py): ffmpeg-pipe full-frame iteration, phash distance, threshold + min-gap debounce, incremental `on_result`, progress, cancel
+- [x] `BoundaryTool(AnalysisTool)` registered in `TOOLS`; `supports_fast_scan = False` (the tool is already coarse; fast scan's phash-skip would fight the detector's own phash logic)
+- [x] Config: `SCREENSPACE_BOUNDARY_PHASH_THRESHOLD`, `SCREENSPACE_BOUNDARY_MIN_GAP_SECONDS`, `SCREENSPACE_BOUNDARY_INTERVAL` — plus `SCREENSPACE_BOUNDARY_HASH_DIM` (pipe-level downscale) and `SCREENSPACE_BOUNDARY_CONFIDENCE_EPSILON`
+- [x] Event generation: `_extract_confidence` and `generate_events_from_results` branches for `"boundary"`; events carry `navigational: true`
+- [x] Tests: hard cuts → boundaries at cuts only; gradual drift below threshold → **no boundary** (documented: the detector compares consecutive samples, not cumulative drift); min-gap suppression; cancel mid-scan
+- [x] Server: `"boundary"` added to `_VALID_TASK_TYPES`; the tool is genuinely region-less — `api_tasks_create` forces a `full_frame` region so events are never mislabeled
+- [x] Decision: boundary is **not calibratable in v1** (no `score_key`); `/api/calibrate` rejects it. Calibration is future work (see Open questions).
+
+## Phase 2: Screenspace UI — ✅ Done
+
+- [x] "Boundary" workflow tab (flag icon + `--color-task-boundary` fuchsia token, dark+light); region picker **and** fast-scan toggle hidden (full-frame, coarse); params: sensitivity / min gap / interval / event label. Sensitivity slider spans **0–64** (full 8×8 phash Hamming range) after real-footage feedback that 30 was too noisy.
+- [x] Timeline rendering: boundary results as thin (1px) full-height ticks, lighter (≈0.55 alpha) than detector markers — scaffolding, not findings
+- [x] Results list rows: timestamp + distance bar (reuses `buildConfBar`) + `d:<distance>`; certainty-cutoff filter and task-edit param restore wired for boundary
+- [x] Tool info text for the info tooltip; shared detector maps updated (`utils.js` `_DETECTOR_TYPES`/`_DETECTOR_FALLBACK`, `CATEGORY_HUES`, `TOOL_INFO`, `TOOL_LABELS`, icon-name map)
+- [ ] Open follow-up: bake the validated sensitivity default into `SCREENSPACE_BOUNDARY_PHASH_THRESHOLD` + the slider's starting value once the researcher confirms the sweet spot (still 14)
+
+## Phase 3: Studio and Viewer integration — ⬜ Not started (deferred until detection is validated)
 
 - [ ] Event model: `navigational` field (absent = false) flows through manifest save/load and the events API
 - [ ] Studio intake: navigational events excluded from clustering and "Add all" by default; "Show navigational" toggle in the intake header includes them (a researcher *can* clip around a boundary deliberately)
@@ -58,9 +70,24 @@ Parameters exposed in the workflow panel: interval, sensitivity (threshold), min
 - [ ] Studio timeline + Timeline Viewer: boundary ticks on the Screenspace track with distinct rendering; legend entry; tooltip shows distance
 - [ ] Viewer data contract: events pass through `screenspaceEvents` unchanged; `navigational` included so the viewer can style ticks differently
 
+## Phase 4: Scene-aware period segmentation — ⬜ Proposed
+
+**Motivation.** Real-footage testing showed the v1 phash-spike detector is noisy even with the sensitivity slider pushed high: it compares *consecutive samples*, so any large per-sample jump fires — camera pans, fast action, transient overlays — fragmenting what a researcher reads as one continuous "period." The goal of this phase is to make boundaries delineate **coherent periods** (menu, gameplay, loading) rather than every visual jolt, by borrowing the Scene tool's content-fingerprint sampling.
+
+**Approach (reuse, don't reinvent).** The Scene tool already fingerprints frames robustly: `compute_scene_fingerprint()` / `compare_scene_fingerprints()` in [`screenspace.py`](screenspace.py) (color histogram, `SCREENSPACE_SCENE_HISTOGRAM_BINS`, compared against `SCREENSPACE_SCENE_SIMILARITY_THRESHOLD`). A histogram fingerprint is far less twitchy than phash under motion/HUD churn. Combine that with a trailing-window model so a boundary marks a *sustained* shift, not a one-frame spike — [`friction.py`](friction.py)'s `smooth_scores()` rolling window is the pattern to mirror.
+
+- [ ] **Period model in `scan_boundaries()`.** Track a "current period" reference fingerprint (the first stable frame after the last boundary). Each sample's fingerprint distance is measured against that reference, not the immediately preceding frame. A boundary fires only when the distance crosses the threshold **and holds** across a short confirmation window (debounce by content stability, not just `min_gap` seconds). The new boundary seeds the next period's reference.
+- [ ] **Metric selection.** Add a `metric` param: `"phash"` (current v1), `"scene"` (histogram fingerprint), or `"hybrid"` (fire only when both agree — phash catches hard cuts, fingerprint suppresses motion noise). Keep the tool parameter-light: default to the smoothed scene/hybrid path so "one click" still works; the sensitivity slider maps to the fingerprint distance threshold.
+- [ ] **Config:** `SCREENSPACE_BOUNDARY_METRIC` (default), `SCREENSPACE_BOUNDARY_SCENE_THRESHOLD`, `SCREENSPACE_BOUNDARY_CONFIRM_WINDOW` (samples a change must persist before it's a boundary). Mirror any frontend-facing value through `utils.get_frontend_config()` per the no-duplicated-constants rule.
+- [ ] **Optional period spans.** Emit each period as `{start, end}` (the span between consecutive boundaries) in event metadata, so Studio/Viewer can later render segments — not just ticks. This is the natural bridge to the "Segment labeling" future-work item below (classify each period's reference frame against scene references).
+- [ ] **UI:** if `metric` is exposed, a small selector in the Boundary param panel (default hidden / "Auto"); otherwise no UI change. Reuse the existing sensitivity slider.
+- [ ] **Tests:** synthetic footage with high intra-period motion but a stable scene fingerprint → **no** spurious boundaries (the regression the slider can't fully fix); a genuine scene change → exactly one boundary; confirm-window suppresses a single-sample blip; `metric="phash"` preserves current v1 behavior.
+
+> Sequencing: land and validate Phase 1+2 first (a researcher may find the phash slider sufficient). Phase 4 is the answer if retuning the slider keeps failing on busy footage — it directly subsumes the "Threshold portability" and "Letterboxed / overlaid footage" open questions below.
+
 ## Open questions (not blockers)
 
-- **Threshold portability.** A phash threshold tuned on one game's footage may over/under-fire on another's. v1 ships a default plus the sensitivity slider; if real use shows constant retuning, the pinned-frame calibration strip applies here too (pin a known boundary pair as positive, a known continuous pair as negative).
+- **Threshold portability.** A phash threshold tuned on one game's footage may over/under-fire on another's. v1 ships a default plus the sensitivity slider (now 0–64). Early real-footage feedback already showed retuning isn't enough on busy footage → **Phase 4** (scene-aware segmentation) is the primary mitigation. Boundary is deliberately **not** calibratable in v1 (no `score_key`); if a calibration strip is wanted later it'd need `score_key` + a per-frame `check_frame` + a `needs_prev` entry + full-frame handling in `/api/calibrate` (see the `BoundaryTool` comment).
 - **Interval vs localization.** At 1 s sampling, a boundary timestamp is accurate to ±1 s. Likely fine for orientation. If precision matters later, a refine pass (binary search between the two frames straddling the spike) is cheap and local — noted as future work, not v1.
 - **Letterboxed / overlaid footage.** Persistent HUD overlays dampen full-frame phash distance. If this proves problematic, hash a center crop instead of the full frame (one config constant).
 
@@ -68,4 +95,4 @@ Parameters exposed in the workflow panel: interval, sensitivity (threshold), min
 
 - **Session activity curve.** The continuous companion to boundaries (CV-PLAN.md): change-ratio magnitude over time as a derived series rendered in the existing amplitude band. Separate plan; boundaries should land and be judged first.
 - **Boundary-guided coarse-to-fine scanning.** Boundaries partition a session into visually stable segments; subsequent detector tasks could skip segments whose boundary frames score zero, generalizing PERFORMANCE-PLAN's coarse-to-fine idea across tools.
-- **Segment labeling.** Boundaries plus the scene tool compose naturally: classify the first frame after each boundary against scene references to label segments ("menu", "gameplay"). Interpretation-adjacent — keep researcher-initiated.
+- **Segment labeling.** Boundaries plus the scene tool compose naturally: classify the first frame after each boundary against scene references to label segments ("menu", "gameplay"). Builds directly on Phase 4's period spans. Interpretation-adjacent — keep researcher-initiated.

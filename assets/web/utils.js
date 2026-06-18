@@ -888,6 +888,7 @@ var DETECTOR_COLORS = {};
 var _DETECTOR_TYPES = [
   "multitool", "color", "change", "similarity", "text",
   "numbers", "timelapse", "template", "flow", "scene", "inactivity",
+  "boundary",
 ];
 // Values mirrored from the dark-theme `--color-task-*` block in tokens.css.
 // Update this map and tokens.css together when changing a detector palette.
@@ -895,7 +896,7 @@ var _DETECTOR_FALLBACK = {
   multitool: "#60a5fa", color: "#a78bfa", change: "#fb923c",
   similarity: "#22d3ee", text: "#34d399", numbers: "#facc15",
   timelapse: "#f472b6", template: "#fb7185", flow: "#818cf8",
-  scene: "#2dd4bf", inactivity: "#94a3b8",
+  scene: "#2dd4bf", inactivity: "#94a3b8", boundary: "#e879f9",
 };
 
 function refreshDetectorColors() {
@@ -944,7 +945,7 @@ function detectorColor(label, alpha) {
 var CATEGORY_HUES = {
   multitool: 220, color: 280, change: 30, similarity: 200,
   text: 170, numbers: 330, timelapse: 350, template: 18,
-  flow: 145, scene: 155, inactivity: 210,
+  flow: 145, scene: 155, inactivity: 210, boundary: 300,
   "pain point": 350, "pain-point": 350,
   delight: 140, quote: 40, insight: 220,
   "task issue": 30, task: 30, bookmark: 280,

@@ -677,6 +677,19 @@ class TestGenerateEventsFromResults:
         # confidence = min(10.0/30.0, 1.0) ≈ 0.3333
         assert abs(events[0]["confidence"] - 0.3333) < 0.01
 
+    def test_boundary_events(self):
+        worker, task = self._make_worker_and_task("boundary")
+        raw = [{"timestamp": 12.0, "distance": 22, "_confidence": 0.5714}]
+        events = worker._generate_events_from_results(task, raw)
+        assert len(events) == 1
+        assert events[0]["time_in"] == 12.0
+        assert events[0]["time_out"] == 12.0
+        assert events[0]["metadata"]["distance"] == 22
+        # Boundaries are orientation markers; Studio intake hides them by default.
+        assert events[0]["navigational"] is True
+        # confidence is carried through from the per-frame _confidence scalar.
+        assert abs(events[0]["confidence"] - 0.5714) < 0.001
+
 
 class TestManifestWithEvents:
     def test_roundtrip_with_events(self, tmp_path, monkeypatch):
@@ -986,7 +999,7 @@ class TestScreenspaceWorker:
         worker = screenspace.ScreenspaceWorker()
         assert worker.remove_task("ss_nonexist") is False
 
-    def test_remove_running_task_sets_cancelled(self):
+    def test_remove_running_task_cancels_and_hides(self):
         worker = screenspace.ScreenspaceWorker()
         task = screenspace.create_task(
             "color", "P01", "s.mp4", "/v.mp4", "r", {"x": 0, "y": 0, "w": 1, "h": 1}
@@ -996,7 +1009,13 @@ class TestScreenspaceWorker:
         with worker._lock:
             worker._tasks[task["id"]]["status"] = screenspace.TASK_STATUS_RUNNING
         assert worker.remove_task(task["id"]) is True
-        assert worker.get_task(task["id"]) is None
+        # The task must stay in _tasks (the scan's cancel_flag looks it up by id)
+        # but be flagged for cancellation + removal, and hidden from the UI.
+        with worker._lock:
+            kept = worker._tasks[task["id"]]
+            assert kept["_cancelled"] is True
+            assert kept["_remove_on_finish"] is True
+        assert worker.get_all_tasks() == []
 
     def test_pause_resume_flags(self):
         worker = screenspace.ScreenspaceWorker()
@@ -1916,6 +1935,19 @@ class TestCheckFrameForTool:
         assert result is not None
         assert "distance" in result
 
+    def test_boundary_not_a_multitool_step(self):
+        # Boundary is scan-only: it defines no check_frame, so the generic
+        # dispatch falls back to the base "not a multitool step" result.
+        frame_a = np.zeros((100, 100, 3), dtype=np.uint8)
+        rng = np.random.RandomState(42)
+        frame_b = rng.randint(0, 256, (100, 100, 3), dtype=np.uint8)
+        region = {"x": 0, "y": 0, "w": 100, "h": 100}
+        passed, result = screenspace.check_frame_for_tool(
+            frame_b, frame_a, region, "boundary", {"threshold": 2}
+        )
+        assert passed is False
+        assert result is None
+
     def test_unknown_type(self):
         frame = np.zeros((100, 100, 3), dtype=np.uint8)
         region = {"x": 0, "y": 0, "w": 100, "h": 100}
@@ -1961,8 +1993,118 @@ class TestExtractConfidence:
     def test_inactivity_capped(self):
         assert screenspace._extract_confidence("inactivity", {"duration": 60.0}) == 1.0
 
+    def test_boundary_per_frame_confidence(self):
+        assert (
+            screenspace._extract_confidence(
+                "boundary", {"distance": 20, "_confidence": 0.43}
+            )
+            == 0.43
+        )
+
+    def test_boundary_from_distance(self):
+        # Fallback when _confidence is absent: (distance - threshold) / threshold,
+        # clamped to [0, 1] against the default threshold (14).
+        assert screenspace._extract_confidence("boundary", {"distance": 28}) == 1.0
+        assert screenspace._extract_confidence("boundary", {"distance": 21}) == 0.5
+        assert screenspace._extract_confidence("boundary", {"distance": 10}) == 0.0
+
     def test_unknown_type(self):
         assert screenspace._extract_confidence("bogus", {}) == 1.0
+
+
+class _FakeHash:
+    """Stand-in for imagehash.ImageHash whose subtraction is a plain |Δ|.
+
+    Lets the boundary scan tests drive exact phash distances by encoding the
+    "scene id" in a frame's pixel value, isolating the threshold + debounce
+    logic from real perceptual-hash behaviour.
+    """
+
+    def __init__(self, val: int):
+        self.val = val
+
+    def __sub__(self, other: "_FakeHash") -> int:
+        return abs(self.val - other.val)
+
+
+class TestScanBoundaries:
+    @staticmethod
+    def _setup(monkeypatch, frames):
+        # frames: list of (timestamp, tag). Same tag → distance 0; different
+        # tags → distance == |Δtag|. Each frame is filled with its tag value.
+        monkeypatch.setattr(screenspace, "_probe_video_meta", lambda _p: (30.0, 100.0))
+        monkeypatch.setattr(
+            screenspace, "compute_phash", lambda f: _FakeHash(int(f.reshape(-1)[0]))
+        )
+
+        def fake_scan(video_path, interval_seconds, callback, **kwargs):
+            for ts, tag in frames:
+                frame = np.full((8, 8, 3), tag, dtype=np.uint8)
+                if callback(ts, frame) is False:
+                    break
+
+        monkeypatch.setattr(screenspace, "scan_video_full_frames", fake_scan)
+
+    def test_hard_cuts_fire_at_cut_frames_only(self, monkeypatch):
+        frames = [
+            (0.0, 0),
+            (1.0, 0),
+            (2.0, 0),
+            (3.0, 40),
+            (4.0, 40),
+            (5.0, 40),
+            (6.0, 0),
+            (7.0, 0),
+        ]
+        self._setup(monkeypatch, frames)
+        results = screenspace.scan_boundaries(
+            "/fake.mp4", threshold=14, min_gap=3.0, interval_seconds=1.0
+        )
+        assert [r["timestamp"] for r in results] == [3.0, 6.0]
+        assert all(r["distance"] == 40 for r in results)
+        assert all(0.0 < r["_confidence"] <= 1.0 for r in results)
+
+    def test_min_gap_suppresses_storms(self, monkeypatch):
+        # Every other frame is a big jump; only the first spike per min_gap
+        # window survives (the run's first frame is the boundary).
+        frames = [(float(i), 0 if i % 2 == 0 else 50) for i in range(8)]
+        self._setup(monkeypatch, frames)
+        results = screenspace.scan_boundaries(
+            "/fake.mp4", threshold=14, min_gap=3.0, interval_seconds=1.0
+        )
+        assert [r["timestamp"] for r in results] == [1.0, 4.0, 7.0]
+
+    def test_gradual_drift_below_threshold_never_fires(self, monkeypatch):
+        # Documented behaviour: scan_boundaries compares CONSECUTIVE samples, not
+        # cumulative drift. A slow fade where each step stays under threshold
+        # produces no boundary at all, even though the first and last frames
+        # differ wildly (0 → 45). A boundary needs a per-sample jump.
+        frames = [(float(i), i * 5) for i in range(10)]  # +5 per step, threshold 14
+        self._setup(monkeypatch, frames)
+        results = screenspace.scan_boundaries(
+            "/fake.mp4", threshold=14, min_gap=3.0, interval_seconds=1.0
+        )
+        assert results == []
+
+    def test_cancel_stops_scan_early(self, monkeypatch):
+        # 20 alternating frames would otherwise yield many boundaries; a cancel
+        # flag that trips after a couple frames must short-circuit the sweep.
+        frames = [(float(i), 0 if i % 2 == 0 else 50) for i in range(20)]
+        self._setup(monkeypatch, frames)
+        calls = {"n": 0}
+
+        def cancel():
+            calls["n"] += 1
+            return calls["n"] > 2
+
+        results = screenspace.scan_boundaries(
+            "/fake.mp4",
+            threshold=14,
+            min_gap=0.5,
+            interval_seconds=1.0,
+            cancel_flag=cancel,
+        )
+        assert len(results) <= 1
 
 
 class TestScanMultitool:
@@ -3039,6 +3181,56 @@ class TestWorkerParallel:
 
         gate.set()
         worker.stop()
+
+    def test_dismiss_running_task_propagates_cancel(self, monkeypatch):
+        """Dismissing a running task must actually stop its scan.
+
+        Regression: remove_task used to pop the task from _tasks immediately, but
+        the scan's cancel_flag looks the task up by id — so the cancel never
+        landed, the worker ran to completion, and it kept streaming progress
+        (pinned CPU + a flood of SSE pushes / icon re-fetches).
+        """
+        saw_cancel = threading.Event()
+
+        def cancellable_dispatch(self, task, on_progress, cancel_flag, on_result=None):
+            for _ in range(200):  # spin up to ~10s waiting for the dismiss
+                if cancel_flag():
+                    saw_cancel.set()
+                    return []
+                time.sleep(0.05)
+            return []
+
+        monkeypatch.setattr(
+            screenspace.ScreenspaceWorker, "_dispatch", cancellable_dispatch
+        )
+
+        worker = screenspace.ScreenspaceWorker()
+        worker.start()
+        try:
+            task = screenspace.create_task(
+                "color", "P01", "s.mp4", "/v.mp4", "r", {"x": 0, "y": 0, "w": 1, "h": 1}
+            )
+            worker.enqueue(task)
+            # Wait for it to start running.
+            for _ in range(50):
+                t = worker.get_task(task["id"])
+                if t and t["status"] == screenspace.TASK_STATUS_RUNNING:
+                    break
+                time.sleep(0.05)
+
+            assert worker.remove_task(task["id"]) is True
+            # Gone from the UI immediately...
+            assert worker.get_all_tasks() == []
+            # ...the running scan's cancel_flag fires (the core regression)...
+            assert saw_cancel.wait(timeout=5)
+            # ...and the task is fully evicted once the scan unwinds.
+            for _ in range(50):
+                if worker.get_task(task["id"]) is None:
+                    break
+                time.sleep(0.05)
+            assert worker.get_task(task["id"]) is None
+        finally:
+            worker.stop()
 
 
 class TestOcrReaderLock:
