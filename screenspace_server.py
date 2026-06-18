@@ -16,6 +16,7 @@ API endpoints (all under /screenspace/):
   POST /api/pins/<participant>              – pin a frame as a positive/negative anchor
   PUT  /api/pins/<pin_id>                   – update a pin (polarity toggle / label edit)
   DELETE /api/pins/<pin_id>                 – remove a pin by id
+  DELETE /api/pins/<participant>/all        – remove every pin for a participant
   GET  /api/video/frame/<participant>/<ts>  – extract a JPEG frame at timestamp
   GET|POST /api/preview/<participant>/<ts>   – PNG of the active tool's preprocessed view (?layer=<id> for single-layer overlay)
   GET  /api/preview/layers                   – JSON catalog of overlay-eligible layers per tool
@@ -521,6 +522,23 @@ def api_pins_delete(pin_id: str) -> FlaskResponse:
         pins.pop(idx)
         if not pins:
             _pin_manifest().pop(participant_id, None)
+        _do_persist(drain_events=False)
+    return jsonify({"ok": True})
+
+
+@screenspace_bp.route("/api/pins/<participant>/all", methods=["DELETE"])
+def api_pins_delete_all(participant: str) -> FlaskResponse:
+    """Remove every calibration pin for a participant.
+
+    A distinct two-segment path so it does not collide with the single-segment
+    ``DELETE /api/pins/<pin_id>`` route above (both use the DELETE method).
+    """
+    if not _participant_exists(participant):
+        return jsonify(
+            {"ok": False, "error": f"Unknown participant {participant}"}
+        ), 404
+    with _manifest_lock:
+        _pin_manifest().pop(participant, None)
         _do_persist(drain_events=False)
     return jsonify({"ok": True})
 

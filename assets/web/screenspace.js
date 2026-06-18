@@ -203,6 +203,7 @@
     pins: [],
     maxPins: null,
     hoveredPinId: null,
+    pinTrayHidden: false,
     calibrationOpen: false,
     calibrationResult: null,
     calibrationOcrWarmed: false,
@@ -988,6 +989,9 @@
     state.heatmapOverlay = null;
     state.pins = [];
     state.hoveredPinId = null;
+    // Tray visibility is per-participant: don't carry one participant's hidden
+    // tray over to another that has pins (mirrors the reset when pinning).
+    state.pinTrayHidden = false;
     // Drop the prior participant's calibration scores and invalidate any
     // in-flight /api/calibrate response so it can't repaint the strip; the pin
     // load below re-evaluates once the new participant's pins arrive.
@@ -1116,6 +1120,8 @@
         }
         if (pid !== state.selectedParticipant) return;
         state.pins.push(data.pin);
+        // Re-reveal the tray so a new pin is always visible, even if hidden.
+        state.pinTrayHidden = false;
         renderPinTray();
         updatePinButtons();
         renderTimeline();
@@ -1142,6 +1148,34 @@
       .catch(function () { showToast("Failed to remove pin"); });
   }
 
+  function togglePinTrayVisibility() {
+    state.pinTrayHidden = !state.pinTrayHidden;
+    renderPinTray();
+  }
+
+  function clearAllPins() {
+    var pid = state.selectedParticipant;
+    if (!pid || !state.pins.length) return;
+    if (!window.confirm("Clear all " + state.pins.length + " pinned frame(s)? This cannot be undone.")) return;
+    apiDelete("api/pins/" + encodeURIComponent(pid) + "/all")
+      .then(function (data) {
+        if (!data.ok) {
+          showToast(data.error || "Failed to clear pins");
+          return;
+        }
+        if (pid !== state.selectedParticipant) return;
+        state.pins = [];
+        state.hoveredPinId = null;
+        renderPinTray();
+        updatePinButtons();
+        renderTimeline();
+        updateCalibrationVisibility();
+        refreshCalibration();
+        showToast("All pins cleared");
+      })
+      .catch(function () { showToast("Failed to clear pins"); });
+  }
+
   function togglePinPolarity(pinId) {
     var pin = state.pins.filter(function (p) { return p.id === pinId; })[0];
     if (!pin) return;
@@ -1165,9 +1199,21 @@
     var list = qs("#pinTrayItems");
     if (!tray || !list) return;
     var pins = state.pins || [];
-    tray.classList.toggle("hidden", pins.length === 0);
+    var hasPins = pins.length > 0;
+    // The toggle + clear controls only matter once there are pins.
+    var tBtn = qs("#togglePinTrayBtn");
+    if (tBtn) {
+      tBtn.classList.toggle("hidden", !hasPins);
+      tBtn.innerHTML = "";
+      tBtn.appendChild(iconSpan(state.pinTrayHidden ? "eye-slash" : "eye"));
+      tBtn.title = state.pinTrayHidden ? "Show pinned frames" : "Hide pinned frames";
+      tBtn.classList.toggle("active", state.pinTrayHidden);
+    }
+    var clearBtn = qs("#clearPinsBtn");
+    if (clearBtn) clearBtn.classList.toggle("hidden", !hasPins);
+    tray.classList.toggle("hidden", !hasPins || state.pinTrayHidden);
     list.innerHTML = "";
-    if (!pins.length) return;
+    if (!hasPins) return;
     var pid = state.selectedParticipant;
     var sorted = pins.slice().sort(function (a, b) { return a.timestamp - b.timestamp; });
     var frag = document.createDocumentFragment();
@@ -2036,6 +2082,8 @@
     var pinNegBtn = qs("#pinNegativeBtn");
     pinNegBtn.appendChild(iconSpan("x-circle"));
     pinNegBtn.addEventListener("click", function () { pinCurrentFrame("negative"); });
+    qs("#togglePinTrayBtn").addEventListener("click", togglePinTrayVisibility);
+    qs("#clearPinsBtn").addEventListener("click", clearAllPins);
     updatePinButtons();
 
     // Region name modal
@@ -5241,6 +5289,39 @@
     return lines.join("\n");
   }
 
+  // "Nice" value ticks (1/2/5 × 10ⁿ) across [min, max], aiming for ~5 intervals.
+  // Returns { ticks, step }; empty when the range is degenerate.
+  function _calGridTicks(min, max) {
+    if (!(max > min)) return { ticks: [], step: 0 };
+    var rough = (max - min) / 5;
+    var mag = Math.pow(10, Math.floor(Math.log(rough) / Math.LN10));
+    var norm = rough / mag;
+    var mult = norm < 1.5 ? 1 : (norm < 3 ? 2 : (norm < 7 ? 5 : 10));
+    var step = mult * mag;
+    var ticks = [];
+    var start = Math.ceil(min / step) * step;
+    for (var v = start; v <= max + step * 1e-6; v += step) {
+      ticks.push(Math.round(v / step) * step);
+    }
+    return { ticks: ticks, step: step };
+  }
+
+  // Faint value grid behind a track's dots: a hairline + value label per tick,
+  // positioned with the same value→percent mapping (and invert) as the dots, so
+  // absolute spacing is legible (not just relative).
+  function _calBuildGrid(ax, range, invert) {
+    var info = _calGridTicks(range.min, range.max);
+    info.ticks.forEach(function (v) {
+      var pos = _calPos(v, range, invert);
+      var line = el("div", "cal-grid-line");
+      line.style.left = pos + "%";
+      ax.appendChild(line);
+      var label = el("span", "cal-grid-label", _calFmtVal(v, info.step));
+      label.style.left = pos + "%";
+      ax.appendChild(label);
+    });
+  }
+
   // Build one track (axis + dots + optional threshold line). `rows` is
   // [{polarity, timestamp, sc, stale}] where `sc` is the score object for this
   // track (the pin entry for a single tool, or entry.steps[k] for multitool).
@@ -5251,6 +5332,7 @@
     if (label) track.appendChild(label);
     var range = _calAxisRange(axis, sliderId);
     var ax = el("div", "cal-axis");
+    _calBuildGrid(ax, range, axis.invert);
     if (axis.drawLine && range.value != null) {
       var line = el("div", "cal-threshold");
       line.style.left = _calPos(range.value, range, axis.invert) + "%";
