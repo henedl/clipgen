@@ -764,6 +764,7 @@ def get_frontend_config() -> dict[str, Any]:
         "frictionCategories": friction_categories,
         "frictionColorToken": "--color-friction",
         "frictionMomentLimit": config.FRICTION_MOMENT_LIMIT,
+        "convergenceSources": list(config.CONVERGENCE_SOURCES),
     }
 
 

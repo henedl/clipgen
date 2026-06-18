@@ -95,6 +95,7 @@ def test_clipgen_config_defaults_match_python():
     assert js_config["frictionColorToken"] == py_config["frictionColorToken"]
     assert js_config["frictionMomentLimit"] == py_config["frictionMomentLimit"]
     assert js_config["frictionCategories"] == py_config["frictionCategories"]
+    assert js_config["convergenceSources"] == py_config["convergenceSources"]
 
 
 def test_get_frontend_config_shape():
@@ -110,6 +111,7 @@ def test_get_frontend_config_shape():
         "frictionCategories",
         "frictionColorToken",
         "frictionMomentLimit",
+        "convergenceSources",
     }
     assert isinstance(cfg["defaultDuration"], int)
     assert cfg["defaultDuration"] == config.DEFAULT_DURATION_SECONDS
@@ -139,6 +141,7 @@ def test_get_frontend_config_shape():
     )
     for entry in cfg["frictionCategories"]:
         assert set(entry.keys()) == {"key", "label"}
+    assert cfg["convergenceSources"] == list(config.CONVERGENCE_SOURCES)
 
 
 def test_severity_css_class_mapping():

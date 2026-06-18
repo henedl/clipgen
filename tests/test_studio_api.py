@@ -239,18 +239,25 @@ def test_api_convergence_offsets_put_persists(client, monkeypatch, tmp_path):
     import config
 
     monkeypatch.setattr("config.OUTPUT_DIR", str(tmp_path))
-    payload = {"offsets": {"P01": 12.5, "P03": -7.0}}
+    # Nested per-lane shape: the transcript: 0 lane is dropped on cleaning.
+    payload = {
+        "offsets": {
+            "P01": {"sheet": 12.5, "screenspace": 12.5, "transcript": 0},
+            "P03": {"sheet": -7.0},
+        }
+    }
+    expected = {"P01": {"sheet": 12.5, "screenspace": 12.5}, "P03": {"sheet": -7.0}}
     resp = client.put("/studio/api/convergence/offsets", json=payload)
     assert resp.status_code == 200
     data = resp.get_json()
     assert data["ok"] is True
-    assert data["offsets"] == {"P01": 12.5, "P03": -7.0}
+    assert data["offsets"] == expected
 
     saved = json.loads((tmp_path / config.CONVERGENCE_OFFSETS_FILENAME).read_text())
-    assert saved == {"offsets": {"P01": 12.5, "P03": -7.0}}
+    assert saved == {"offsets": expected}
 
     resp2 = client.get("/studio/api/convergence/offsets")
-    assert resp2.get_json()["offsets"] == {"P01": 12.5, "P03": -7.0}
+    assert resp2.get_json()["offsets"] == expected
 
 
 def test_api_convergence_offsets_put_strips_zeros_and_garbage(
@@ -259,17 +266,34 @@ def test_api_convergence_offsets_put_strips_zeros_and_garbage(
     monkeypatch.setattr("config.OUTPUT_DIR", str(tmp_path))
     payload = {
         "offsets": {
-            "P01": 5.0,
-            "P02": 0,
-            "P03": 0.0,
-            "P04": "not a number",
-            "P05": float("inf"),
-            "": 9.0,
+            # Surviving participant: only the non-zero, known-source lane stays.
+            "P01": {"sheet": 5.0, "screenspace": 0, "transcript": "nope"},
+            # All lanes zero/garbage -> participant dropped entirely.
+            "P02": {"sheet": 0, "screenspace": float("inf")},
+            # Unknown source key dropped -> participant has no lanes -> dropped.
+            "P03": {"audio": 5.0},
+            # Non-dict participant value -> dropped (not a 400).
+            "P04": 5,
+            # Empty participant id -> dropped.
+            "": {"sheet": 9.0},
         }
     }
     resp = client.put("/studio/api/convergence/offsets", json=payload)
     assert resp.status_code == 200
-    assert resp.get_json()["offsets"] == {"P01": 5.0}
+    assert resp.get_json()["offsets"] == {"P01": {"sheet": 5.0}}
+
+
+def test_api_convergence_offsets_round_trip_per_lane(client, monkeypatch, tmp_path):
+    """A participant with one non-zero and one zero lane round-trips to just the
+    non-zero lane through PUT then GET, keeping the get/put cleaners in sync."""
+    monkeypatch.setattr("config.OUTPUT_DIR", str(tmp_path))
+    payload = {"offsets": {"P02": {"sheet": 0, "transcript": -3.5}}}
+    put = client.put("/studio/api/convergence/offsets", json=payload)
+    assert put.status_code == 200
+    assert put.get_json()["offsets"] == {"P02": {"transcript": -3.5}}
+
+    get = client.get("/studio/api/convergence/offsets")
+    assert get.get_json()["offsets"] == {"P02": {"transcript": -3.5}}
 
 
 def test_api_convergence_offsets_put_empty_removes_file(client, monkeypatch, tmp_path):
@@ -277,11 +301,17 @@ def test_api_convergence_offsets_put_empty_removes_file(client, monkeypatch, tmp
 
     monkeypatch.setattr("config.OUTPUT_DIR", str(tmp_path))
     # Seed a manifest file via an earlier put.
-    client.put("/studio/api/convergence/offsets", json={"offsets": {"P01": 3.0}})
+    client.put(
+        "/studio/api/convergence/offsets",
+        json={"offsets": {"P01": {"sheet": 3.0}}},
+    )
     settings_file = tmp_path / config.CONVERGENCE_OFFSETS_FILENAME
     assert settings_file.is_file()
 
-    resp = client.put("/studio/api/convergence/offsets", json={"offsets": {"P01": 0}})
+    resp = client.put(
+        "/studio/api/convergence/offsets",
+        json={"offsets": {"P01": {"sheet": 0}}},
+    )
     assert resp.status_code == 200
     assert resp.get_json()["offsets"] == {}
     assert not settings_file.is_file()

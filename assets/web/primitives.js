@@ -572,6 +572,7 @@
         marker.style.boxShadow = "0 0 0 1px oklch(0.18 0.04 " + hue + " / 0.55)";
         marker.dataset.idx = idx;
         marker.dataset.participant = e.p;
+        marker.dataset.sourceIdx = sIdx;
         if (typeof opts.onEventHover === "function") {
           marker.addEventListener("mouseenter", function () { opts.onEventHover(idx, e, true); });
           marker.addEventListener("mouseleave", function () { opts.onEventHover(idx, e, false); });
@@ -659,6 +660,16 @@
       var out = [];
       for (var i = 0; i < state.events.length; i++) {
         if (state.events[i].p === pid) out.push(state.eventEls[i]);
+      }
+      return out;
+    };
+    wrap.getEventsForParticipantSource = function (pid, sourceIdx) {
+      var out = [];
+      for (var i = 0; i < state.events.length; i++) {
+        if (state.events[i].p === pid &&
+            state.sources.indexOf(state.events[i].source) === sourceIdx) {
+          out.push(state.eventEls[i]);
+        }
       }
       return out;
     };

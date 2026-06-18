@@ -53,6 +53,7 @@ var CLIPGEN_CONFIG = {
   ],
   frictionColorToken: "--color-friction",
   frictionMomentLimit: 5,
+  convergenceSources: ["sheet", "screenspace", "transcript"],
 };
 
 var clipgenApplyConfig = function (payload) {
@@ -83,6 +84,9 @@ var clipgenApplyConfig = function (payload) {
   }
   if (typeof payload.frictionMomentLimit === "number") {
     CLIPGEN_CONFIG.frictionMomentLimit = payload.frictionMomentLimit;
+  }
+  if (Array.isArray(payload.convergenceSources)) {
+    CLIPGEN_CONFIG.convergenceSources = payload.convergenceSources;
   }
 };
 
