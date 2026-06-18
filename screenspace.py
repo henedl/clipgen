@@ -3687,9 +3687,18 @@ class ScreenspaceWorker:
             return copy.deepcopy(task)
 
     def get_all_tasks(self) -> list[dict[str, Any]]:
-        """Return all tasks (thread-safe copies)."""
+        """Return all tasks (thread-safe copies).
+
+        Tasks flagged ``_remove_on_finish`` (dismissed while running) are hidden:
+        they are gone as far as the UI and manifest are concerned, even though
+        they linger in ``_tasks`` until their worker thread notices the cancel.
+        """
         with self._lock:
-            return [copy.deepcopy(t) for t in self._tasks.values()]
+            return [
+                copy.deepcopy(t)
+                for t in self._tasks.values()
+                if not t.get("_remove_on_finish")
+            ]
 
     def reorder(self, task_ids: list[str]) -> bool:
         """Reorder queued tasks by the given ID sequence.
@@ -3770,7 +3779,16 @@ class ScreenspaceWorker:
             if task is None:
                 return False
             if task["status"] == TASK_STATUS_RUNNING:
+                # The running scan's cancel_flag looks the task up by id, so the
+                # task must stay in ``_tasks`` for the cancel to land — popping it
+                # here would strand the worker thread, which would run the scan to
+                # completion and keep streaming progress (CPU + SSE spam). Flag it
+                # cancelled + remove-on-finish; ``get_all_tasks`` hides it from the
+                # UI/manifest immediately and ``_execute_task`` pops it once the
+                # scan unwinds.
                 task["_cancelled"] = True
+                task["_remove_on_finish"] = True
+                return True
             self._tasks.pop(task_id, None)
             return True
 
@@ -3993,6 +4011,13 @@ class ScreenspaceWorker:
                     t["status"] = TASK_STATUS_FAILED
                     t["error"] = str(exc)
                     t["completed_at"] = datetime.now(timezone.utc).isoformat()
+        finally:
+            # A task dismissed while running was kept in _tasks so its cancel
+            # could land; now that the scan has unwound, drop it for good.
+            with self._lock:
+                t = self._tasks.get(task_id)
+                if t is not None and t.get("_remove_on_finish"):
+                    self._tasks.pop(task_id, None)
 
     def _dispatch(
         self,

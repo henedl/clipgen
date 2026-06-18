@@ -999,7 +999,7 @@ class TestScreenspaceWorker:
         worker = screenspace.ScreenspaceWorker()
         assert worker.remove_task("ss_nonexist") is False
 
-    def test_remove_running_task_sets_cancelled(self):
+    def test_remove_running_task_cancels_and_hides(self):
         worker = screenspace.ScreenspaceWorker()
         task = screenspace.create_task(
             "color", "P01", "s.mp4", "/v.mp4", "r", {"x": 0, "y": 0, "w": 1, "h": 1}
@@ -1009,7 +1009,13 @@ class TestScreenspaceWorker:
         with worker._lock:
             worker._tasks[task["id"]]["status"] = screenspace.TASK_STATUS_RUNNING
         assert worker.remove_task(task["id"]) is True
-        assert worker.get_task(task["id"]) is None
+        # The task must stay in _tasks (the scan's cancel_flag looks it up by id)
+        # but be flagged for cancellation + removal, and hidden from the UI.
+        with worker._lock:
+            kept = worker._tasks[task["id"]]
+            assert kept["_cancelled"] is True
+            assert kept["_remove_on_finish"] is True
+        assert worker.get_all_tasks() == []
 
     def test_pause_resume_flags(self):
         worker = screenspace.ScreenspaceWorker()
@@ -3175,6 +3181,56 @@ class TestWorkerParallel:
 
         gate.set()
         worker.stop()
+
+    def test_dismiss_running_task_propagates_cancel(self, monkeypatch):
+        """Dismissing a running task must actually stop its scan.
+
+        Regression: remove_task used to pop the task from _tasks immediately, but
+        the scan's cancel_flag looks the task up by id — so the cancel never
+        landed, the worker ran to completion, and it kept streaming progress
+        (pinned CPU + a flood of SSE pushes / icon re-fetches).
+        """
+        saw_cancel = threading.Event()
+
+        def cancellable_dispatch(self, task, on_progress, cancel_flag, on_result=None):
+            for _ in range(200):  # spin up to ~10s waiting for the dismiss
+                if cancel_flag():
+                    saw_cancel.set()
+                    return []
+                time.sleep(0.05)
+            return []
+
+        monkeypatch.setattr(
+            screenspace.ScreenspaceWorker, "_dispatch", cancellable_dispatch
+        )
+
+        worker = screenspace.ScreenspaceWorker()
+        worker.start()
+        try:
+            task = screenspace.create_task(
+                "color", "P01", "s.mp4", "/v.mp4", "r", {"x": 0, "y": 0, "w": 1, "h": 1}
+            )
+            worker.enqueue(task)
+            # Wait for it to start running.
+            for _ in range(50):
+                t = worker.get_task(task["id"])
+                if t and t["status"] == screenspace.TASK_STATUS_RUNNING:
+                    break
+                time.sleep(0.05)
+
+            assert worker.remove_task(task["id"]) is True
+            # Gone from the UI immediately...
+            assert worker.get_all_tasks() == []
+            # ...the running scan's cancel_flag fires (the core regression)...
+            assert saw_cancel.wait(timeout=5)
+            # ...and the task is fully evicted once the scan unwinds.
+            for _ in range(50):
+                if worker.get_task(task["id"]) is None:
+                    break
+                time.sleep(0.05)
+            assert worker.get_task(task["id"]) is None
+        finally:
+            worker.stop()
 
 
 class TestOcrReaderLock:

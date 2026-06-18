@@ -7224,7 +7224,10 @@
     var oldTask = oldSelected ? findTask(oldSelected) : null;
     var wasRunning = oldTask && (oldTask.status === "queued" || oldTask.status === "running");
     state.tasks = data.tasks;
-    if (data.paused !== undefined) {
+    // Only rebuild the pause/play icon when the queue state actually flips —
+    // handleTaskData runs on every SSE push (≈2/s while a task streams
+    // progress), and re-creating the icon span each time re-fetches its svg.
+    if (data.paused !== undefined && data.paused !== state.queuePaused) {
       state.queuePaused = data.paused;
       updatePauseButton();
     }
