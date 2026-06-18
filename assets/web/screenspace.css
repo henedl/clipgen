@@ -1264,6 +1264,7 @@ body[data-frontend="screenspace"] {
 .wf-tab[data-type="flow"]      { --wf-tab-hue: var(--color-task-flow); }
 .wf-tab[data-type="scene"]     { --wf-tab-hue: var(--color-task-scene); }
 .wf-tab[data-type="inactivity"]{ --wf-tab-hue: var(--color-task-inactivity); }
+.wf-tab[data-type="boundary"]  { --wf-tab-hue: var(--color-task-boundary); }
 
 .wf-tab[data-type="multitool"]:hover,
 .wf-tab[data-type="multitool"].active {
@@ -1329,6 +1330,12 @@ body[data-frontend="screenspace"] {
 .wf-tab[data-type="inactivity"].active {
   color: var(--color-task-inactivity);
   border-bottom-color: var(--color-task-inactivity);
+}
+
+.wf-tab[data-type="boundary"]:hover,
+.wf-tab[data-type="boundary"].active {
+  color: var(--color-task-boundary);
+  border-bottom-color: var(--color-task-boundary);
 }
 
 #workflowBody {
