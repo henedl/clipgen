@@ -2178,6 +2178,51 @@ html[data-theme="dark"] .queue-card-error .queue-card-thumb {
   margin-top: var(--space-2);
 }
 
+/* Build status — non-blocking corner card for viewer builds (Timeline /
+ * Gallery). Unlike #statusOverlay it has no backdrop and never covers the
+ * page, so the user can keep scrolling/inspecting while a build runs. */
+#buildStatus {
+  position: fixed;
+  right: var(--space-4);
+  bottom: var(--space-4);
+  z-index: var(--z-toast);
+}
+
+#buildStatus.hidden {
+  display: none;
+}
+
+.build-status-card {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  background: var(--color-surface);
+  color: var(--color-text);
+  border-radius: var(--radius-md);
+  box-shadow: 0 var(--space-2) var(--space-5) rgba(0, 0, 0, 0.2);
+}
+
+.build-status-spinner {
+  width: var(--space-5);
+  height: var(--space-5);
+}
+
+.build-status-msg {
+  font-size: var(--text-sm);
+  max-width: 22rem;
+  word-break: break-word;
+}
+
+.build-status-msg.error-text {
+  color: #dc2626;
+}
+
+.build-status-actions {
+  display: flex;
+  gap: var(--space-2);
+}
+
 /* Confirm overlay */
 
 #confirmOverlay {

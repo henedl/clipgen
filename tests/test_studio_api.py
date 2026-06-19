@@ -927,6 +927,263 @@ def test_api_timeline_viewer_with_intake(client, monkeypatch):
     assert captured_artifacts[1]["source"] == "screenspace"
 
 
+def test_api_timeline_viewer_cancel_endpoint(client):
+    """POST /api/timeline-viewer/cancel sets the cancel event and returns ok."""
+    server._timeline_viewer_cancel_event.clear()
+    resp = client.post("/studio/api/timeline-viewer/cancel")
+    data = resp.get_json()
+    assert resp.status_code == 200
+    assert data["ok"] is True
+    assert server._timeline_viewer_cancel_event.is_set()
+    server._timeline_viewer_cancel_event.clear()
+
+
+def test_api_gallery_cancel_endpoint(client):
+    """POST /api/gallery/cancel sets the cancel event and returns ok."""
+    server._gallery_cancel_event.clear()
+    resp = client.post("/studio/api/gallery/cancel")
+    data = resp.get_json()
+    assert resp.status_code == 200
+    assert data["ok"] is True
+    assert server._gallery_cancel_event.is_set()
+    server._gallery_cancel_event.clear()
+
+
+def test_api_timeline_viewer_passes_cancel_flag(client, monkeypatch):
+    """process_clips must receive a callable cancel_flag so the build is
+    interruptible mid-encode."""
+    import pipeline
+    import spreadsheet
+    import viewer
+
+    fake_ws = type("FakeWS", (), {"title": "Sheet1"})()
+    monkeypatch.setattr(server, "_worksheet", fake_ws)
+
+    captured = {}
+
+    def fake_process_clips(clips, **kw):
+        captured["cancel_flag"] = kw.get("cancel_flag")
+        return (1, [{"id": "a1", "type": "clip", "study": "s", "participant": "P01"}])
+
+    monkeypatch.setattr(spreadsheet, "generate_list", lambda *a, **kw: [{"desc": "x"}])
+    monkeypatch.setattr(pipeline, "process_clips", fake_process_clips)
+    monkeypatch.setattr(pipeline, "is_excel_worksheet", lambda ws: False)
+    monkeypatch.setattr(viewer, "load_screenspace_events_for_viewer", lambda: [])
+    monkeypatch.setattr(viewer, "finalize_timeline_data", lambda *a, **kw: {"meta": {}})
+    monkeypatch.setattr(
+        viewer, "generate_timeline_viewer", lambda *a, **kw: "/out/viewer.html"
+    )
+    monkeypatch.setattr(server, "_save_manifest_quiet", lambda: None)
+
+    server._timeline_viewer_cancel_event.clear()
+    resp = client.post("/studio/api/timeline-viewer", json={})
+    assert resp.status_code == 200
+    assert resp.get_json()["ok"] is True
+    assert callable(captured["cancel_flag"])
+
+
+def test_api_timeline_viewer_short_circuits_after_cancel(client, monkeypatch):
+    """When cancel is signaled during process_clips, the handler returns
+    {cancelled: true} and never writes the viewer HTML."""
+    import pipeline
+    import spreadsheet
+    import viewer
+
+    fake_ws = type("FakeWS", (), {"title": "Sheet1"})()
+    monkeypatch.setattr(server, "_worksheet", fake_ws)
+
+    def fake_process_clips(clips, **kw):
+        server._timeline_viewer_cancel_event.set()
+        return (1, [{"id": "a1", "type": "clip", "study": "s", "participant": "P01"}])
+
+    generated_calls = []
+
+    monkeypatch.setattr(spreadsheet, "generate_list", lambda *a, **kw: [{"desc": "x"}])
+    monkeypatch.setattr(pipeline, "process_clips", fake_process_clips)
+    monkeypatch.setattr(pipeline, "is_excel_worksheet", lambda ws: False)
+    monkeypatch.setattr(
+        viewer,
+        "generate_timeline_viewer",
+        lambda *a, **kw: generated_calls.append(True) or "/out/viewer.html",
+    )
+
+    server._timeline_viewer_cancel_event.clear()
+    try:
+        resp = client.post("/studio/api/timeline-viewer", json={})
+    finally:
+        server._timeline_viewer_cancel_event.clear()
+
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data == {"ok": False, "cancelled": True}
+    assert generated_calls == []
+
+
+def test_api_gallery_short_circuits_after_cancel(client, monkeypatch, tmp_path):
+    """When cancel is signaled during capture extraction, the handler returns
+    {cancelled: true} and never writes the gallery HTML."""
+    import video
+    import viewer
+
+    vid = tmp_path / "video.mp4"
+    vid.write_bytes(b"x")
+    monkeypatch.setattr(server, "_sheet_context", object())
+    monkeypatch.setattr(server, "_resolve_source_video", lambda p: vid)
+
+    def fake_captures(*a, **kw):
+        server._gallery_cancel_event.set()
+        return [{"file": "f.png", "timestamp": 0.0, "type": "screen"}]
+
+    generated_calls = []
+
+    monkeypatch.setattr(video, "generate_interval_captures", fake_captures)
+    monkeypatch.setattr(
+        viewer,
+        "generate_gallery_viewer",
+        lambda *a, **kw: generated_calls.append(True) or "/out/gallery.html",
+    )
+
+    server._gallery_cancel_event.clear()
+    try:
+        resp = client.post(
+            "/studio/api/gallery",
+            json={"participant": "P01", "format": "screen", "interval": 10},
+        )
+    finally:
+        server._gallery_cancel_event.clear()
+
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data == {"ok": False, "cancelled": True}
+    assert generated_calls == []
+
+
+def test_api_timeline_viewer_discards_sheet_clips_on_cancel_during_intake(
+    client, monkeypatch
+):
+    """A cancel during intake discards the already-generated sheet clips (they
+    never enter _generated_artifacts) and writes no viewer HTML."""
+    import pipeline
+    import spreadsheet
+    import viewer
+
+    fake_ws = type("FakeWS", (), {"title": "Sheet1"})()
+    monkeypatch.setattr(server, "_worksheet", fake_ws)
+    monkeypatch.setattr(server, "_generated_artifacts", [])
+
+    sheet_artifacts = [{"id": "a1", "type": "clip", "study": "s", "participant": "P01"}]
+    monkeypatch.setattr(spreadsheet, "generate_list", lambda *a, **kw: [{"desc": "x"}])
+    monkeypatch.setattr(
+        pipeline, "process_clips", lambda *a, **kw: (1, sheet_artifacts)
+    )
+    monkeypatch.setattr(pipeline, "is_excel_worksheet", lambda ws: False)
+
+    def fake_intake(items, **kw):
+        # Cancel arrives while the intake clips are being generated.
+        server._timeline_viewer_cancel_event.set()
+        return []
+
+    generated_calls = []
+    monkeypatch.setattr(server, "_generate_intake_clips", fake_intake)
+    monkeypatch.setattr(
+        viewer,
+        "generate_timeline_viewer",
+        lambda *a, **kw: generated_calls.append(True) or "/out/viewer.html",
+    )
+
+    server._timeline_viewer_cancel_event.clear()
+    try:
+        resp = client.post(
+            "/studio/api/timeline-viewer",
+            json={
+                "include_intake": True,
+                "intake_items": [{"participant": "P02", "start": 1, "end": 2}],
+            },
+        )
+    finally:
+        server._timeline_viewer_cancel_event.clear()
+
+    assert resp.status_code == 200
+    assert resp.get_json() == {"ok": False, "cancelled": True}
+    assert generated_calls == []
+    assert server._generated_artifacts == []
+
+
+def test_api_gallery_short_circuits_when_cancelled_before_finalize(
+    client, monkeypatch, tmp_path
+):
+    """A cancel after capture extraction (during the finalize window) still
+    prevents the gallery HTML from being written."""
+    import video
+    import viewer
+
+    vid = tmp_path / "video.mp4"
+    vid.write_bytes(b"x")
+    monkeypatch.setattr(server, "_sheet_context", object())
+    monkeypatch.setattr(server, "_resolve_source_video", lambda p: vid)
+    monkeypatch.setattr(
+        video,
+        "generate_interval_captures",
+        lambda *a, **kw: [{"file": "f.png", "timestamp": 0.0, "type": "screen"}],
+    )
+    monkeypatch.setattr(video, "get_file_duration", lambda *a, **kw: 30)
+
+    def fake_finalize(*a, **kw):
+        # Cancel arrives after extraction, while finalizing.
+        server._gallery_cancel_event.set()
+        return {"meta": {}}
+
+    generated_calls = []
+    monkeypatch.setattr(viewer, "finalize_gallery_data", fake_finalize)
+    monkeypatch.setattr(
+        viewer,
+        "generate_gallery_viewer",
+        lambda *a, **kw: generated_calls.append(True) or "/out/gallery.html",
+    )
+
+    server._gallery_cancel_event.clear()
+    try:
+        resp = client.post(
+            "/studio/api/gallery",
+            json={"participant": "P01", "format": "screen", "interval": 10},
+        )
+    finally:
+        server._gallery_cancel_event.clear()
+
+    assert resp.status_code == 200
+    assert resp.get_json() == {"ok": False, "cancelled": True}
+    assert generated_calls == []
+
+
+def test_api_timeline_viewer_returns_409_when_busy(client, monkeypatch):
+    """A second timeline-viewer build is rejected while one holds the slot, so
+    the two builds can't clobber the shared cancel event."""
+    fake_ws = type("FakeWS", (), {"title": "Sheet1"})()
+    monkeypatch.setattr(server, "_worksheet", fake_ws)
+    assert server._try_claim_busy("timeline_viewer")
+    try:
+        resp = client.post("/studio/api/timeline-viewer", json={})
+    finally:
+        server._release_busy("timeline_viewer")
+    assert resp.status_code == 409
+    assert resp.get_json()["ok"] is False
+
+
+def test_api_gallery_returns_409_when_busy(client, monkeypatch):
+    """A second gallery build is rejected while one holds the slot."""
+    monkeypatch.setattr(server, "_sheet_context", object())
+    assert server._try_claim_busy("gallery")
+    try:
+        resp = client.post(
+            "/studio/api/gallery",
+            json={"participant": "P01", "format": "screen", "interval": 10},
+        )
+    finally:
+        server._release_busy("gallery")
+    assert resp.status_code == 409
+    assert resp.get_json()["ok"] is False
+
+
 # ---- Stash API tests ----
 
 
