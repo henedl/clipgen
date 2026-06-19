@@ -1,5 +1,6 @@
 """Tests for Screenspace analysis primitives, manifest I/O, and worker."""
 
+import copy
 import io
 import math
 import threading
@@ -2212,6 +2213,251 @@ class TestScanMultitool:
         )
         assert results == []
 
+    # ---- Offset (two-phase) path -----------------------------------------
+
+    @staticmethod
+    def _setup_multiframe_stubs(monkeypatch, frames_ts, check_fn):
+        """Stub the decode to emit one frame per ts in *frames_ts*.
+
+        ``check_fn(ts, ttype, step)`` returns ``(passed, detail)`` and may vary
+        its answer by the current timestamp — the stubbed ``check_frame_for_tool``
+        injects the live ts that ``scan_video_full_frames`` is replaying.
+        """
+        monkeypatch.setattr(
+            screenspace, "_probe_video_meta", lambda _p: (30.0, max(frames_ts) + 1.0)
+        )
+        state = {"ts": 0.0}
+
+        def fake_scan(
+            video_path,
+            interval_seconds,
+            callback,
+            *,
+            start_seconds=0.0,
+            end_seconds=None,
+            fps=0.0,
+            duration=0.0,
+            fast_opts=None,
+        ):
+            frame = np.zeros((10, 10, 3), dtype=np.uint8)
+            for ts in frames_ts:
+                state["ts"] = ts
+                if callback(ts, frame) is False:
+                    break
+
+        def check(frame, prev, region, ttype, step):
+            return check_fn(state["ts"], ttype, step)
+
+        monkeypatch.setattr(screenspace, "scan_video_full_frames", fake_scan)
+        monkeypatch.setattr(screenspace, "check_frame_for_tool", check)
+
+    def test_offset_and_hit(self, monkeypatch):
+        # color @2; change @4 within the [+0,+3] window from the anchor.
+        def check(ts, ttype, step):
+            if ttype == "color":
+                return (ts == 2.0), {"_confidence": 0.9}
+            return (ts == 4.0), {"magnitude": 0.5}
+
+        self._setup_multiframe_stubs(monkeypatch, [0, 1, 2, 3, 4, 5], check)
+        results = screenspace.scan_multitool(
+            "/fake.mp4",
+            {"x": 0, "y": 0, "w": 10, "h": 10},
+            steps=[
+                {"type": "color"},
+                {"type": "change", "offset": {"min": 0, "max": 3}},
+            ],
+        )
+        assert len(results) == 1
+        assert results[0]["timestamp"] == 2.0  # anchored on the trigger frame
+        assert results[0]["min_confidence"] == 0.5
+
+    def test_offset_and_miss_outside_window(self, monkeypatch):
+        # change only matches at t=6, outside the [2, 5] window from anchor @2.
+        def check(ts, ttype, step):
+            if ttype == "color":
+                return (ts == 2.0), {"_confidence": 0.9}
+            return (ts == 6.0), {"magnitude": 0.5}
+
+        self._setup_multiframe_stubs(monkeypatch, [0, 1, 2, 3, 4, 5, 6], check)
+        results = screenspace.scan_multitool(
+            "/fake.mp4",
+            {"x": 0, "y": 0, "w": 10, "h": 10},
+            steps=[
+                {"type": "color"},
+                {"type": "change", "offset": {"min": 0, "max": 3}},
+            ],
+        )
+        assert results == []
+
+    def test_offset_not_passes_when_absent_in_window(self, monkeypatch):
+        # NOT change never matches inside [2, 5] → the chain passes.
+        def check(ts, ttype, step):
+            if ttype == "color":
+                return (ts == 2.0), {"_confidence": 0.8}
+            return (ts == 6.0), {"magnitude": 0.5}  # only outside the window
+
+        self._setup_multiframe_stubs(monkeypatch, [0, 1, 2, 3, 4, 5, 6], check)
+        results = screenspace.scan_multitool(
+            "/fake.mp4",
+            {"x": 0, "y": 0, "w": 10, "h": 10},
+            steps=[
+                {"type": "color"},
+                {"type": "change", "logic": "NOT", "offset": {"min": 0, "max": 3}},
+            ],
+        )
+        assert len(results) == 1
+        assert results[0]["timestamp"] == 2.0
+        assert results[0]["steps"][1] == {"negated": True, "type": "change"}
+        assert results[0]["min_confidence"] == 0.8
+
+    def test_offset_not_rejects_when_present_in_window(self, monkeypatch):
+        # NOT change matches at t=4 inside [2, 5] → the chain fails.
+        def check(ts, ttype, step):
+            if ttype == "color":
+                return (ts == 2.0), {"_confidence": 0.8}
+            return (ts == 4.0), {"magnitude": 0.5}
+
+        self._setup_multiframe_stubs(monkeypatch, [0, 1, 2, 3, 4, 5], check)
+        results = screenspace.scan_multitool(
+            "/fake.mp4",
+            {"x": 0, "y": 0, "w": 10, "h": 10},
+            steps=[
+                {"type": "color"},
+                {"type": "change", "logic": "NOT", "offset": {"min": 0, "max": 3}},
+            ],
+        )
+        assert results == []
+
+    def test_cumulative_three_step_chain(self, monkeypatch):
+        # color @1; change @2 (window [1,3] from anchor, ref→2); flow @4
+        # (window [2,4] from step 1's match). Measured from the anchor (t=1)
+        # step 2's window would be [1,3] and miss @4 — so a hit proves the
+        # window is cumulative (relative to the previous step).
+        def check(ts, ttype, step):
+            if ttype == "color":
+                return (ts == 1.0), {"_confidence": 0.9}
+            if ttype == "change":
+                return (ts == 2.0), {"magnitude": 0.6}
+            return (ts == 4.0), {"magnitude": 0.5}  # flow
+
+        self._setup_multiframe_stubs(monkeypatch, [1, 2, 3, 4], check)
+        results = screenspace.scan_multitool(
+            "/fake.mp4",
+            {"x": 0, "y": 0, "w": 10, "h": 10},
+            steps=[
+                {"type": "color"},
+                {"type": "change", "offset": {"min": 0, "max": 2}},
+                {"type": "flow", "offset": {"min": 0, "max": 2}},
+            ],
+        )
+        assert len(results) == 1
+        assert results[0]["timestamp"] == 1.0
+
+    def test_offset_negative_window(self, monkeypatch):
+        # change @4 lies *before* the anchor @5, inside the [-2, 0] window.
+        def check(ts, ttype, step):
+            if ttype == "color":
+                return (ts == 5.0), {"_confidence": 0.9}
+            return (ts == 4.0), {"magnitude": 0.5}
+
+        self._setup_multiframe_stubs(monkeypatch, [3, 4, 5], check)
+        results = screenspace.scan_multitool(
+            "/fake.mp4",
+            {"x": 0, "y": 0, "w": 10, "h": 10},
+            steps=[
+                {"type": "color"},
+                {"type": "change", "offset": {"min": -2, "max": 0}},
+            ],
+        )
+        assert len(results) == 1
+        assert results[0]["timestamp"] == 5.0
+
+    def test_offset_path_coalesces_adjacent_anchors(self, monkeypatch):
+        # color matches at consecutive frames 2,3,4 (confidence peaks @3);
+        # change matches everywhere. The three resolving anchors collapse into
+        # one event represented by the highest-confidence anchor.
+        def check(ts, ttype, step):
+            if ttype == "color":
+                conf = {2.0: 0.5, 3.0: 0.9, 4.0: 0.5}.get(ts, 0.0)
+                return (ts in (2.0, 3.0, 4.0)), {"_confidence": conf}
+            return True, {"magnitude": 1.0}
+
+        self._setup_multiframe_stubs(monkeypatch, [2, 3, 4], check)
+        results = screenspace.scan_multitool(
+            "/fake.mp4",
+            {"x": 0, "y": 0, "w": 10, "h": 10},
+            steps=[
+                {"type": "color", "interval": 1.0},
+                {"type": "change", "offset": {"min": 0, "max": 3}},
+            ],
+        )
+        assert len(results) == 1
+        # Representative = highest-confidence anchor (@3): min(color 0.9, change 1.0).
+        assert results[0]["timestamp"] == 3.0
+        assert results[0]["min_confidence"] == 0.9
+
+    def test_offset_path_anchor_is_step0_timestamp(self, monkeypatch):
+        # The hit lands on the step-0 frame, not the later matched frame.
+        def check(ts, ttype, step):
+            if ttype == "color":
+                return (ts == 1.0), {"_confidence": 0.9}
+            return (ts == 5.0), {"magnitude": 0.5}
+
+        self._setup_multiframe_stubs(monkeypatch, [1, 2, 3, 4, 5], check)
+        results = screenspace.scan_multitool(
+            "/fake.mp4",
+            {"x": 0, "y": 0, "w": 10, "h": 10},
+            steps=[
+                {"type": "color"},
+                {"type": "change", "offset": {"min": 0, "max": 5}},
+            ],
+        )
+        assert len(results) == 1
+        assert results[0]["timestamp"] == 1.0
+
+    def test_offset_path_detect_first_stops_after_first(self, monkeypatch):
+        # Three well-separated anchors all resolve; a cancel_flag that trips
+        # once the first result is emitted (mirrors detect_first's on_result
+        # hook) must stop after the first event.
+        def check(ts, ttype, step):
+            if ttype == "color":
+                return (ts in (1.0, 5.0, 9.0)), {"_confidence": 0.9}
+            return True, {"magnitude": 0.5}
+
+        self._setup_multiframe_stubs(monkeypatch, [1, 5, 9], check)
+        emitted: list = []
+        results = screenspace.scan_multitool(
+            "/fake.mp4",
+            {"x": 0, "y": 0, "w": 10, "h": 10},
+            steps=[
+                {"type": "color", "interval": 1.0},
+                {"type": "change", "offset": {"min": 0, "max": 3}},
+            ],
+            on_result=emitted.append,
+            cancel_flag=lambda: len(emitted) >= 1,
+        )
+        assert len(results) == 1
+        assert len(emitted) == 1
+
+    def test_no_offset_path_streams_per_frame(self, monkeypatch):
+        # No step has an offset → the original short-circuit path runs and
+        # emits per matching frame (streaming preserved).
+        def check(ts, ttype, step):
+            if ttype == "color":
+                return (ts in (1.0, 2.0)), {"_confidence": 0.7}
+            return (ts in (1.0, 2.0, 3.0)), {"magnitude": 0.5}
+
+        self._setup_multiframe_stubs(monkeypatch, [1, 2, 3], check)
+        emitted: list = []
+        results = screenspace.scan_multitool(
+            "/fake.mp4",
+            {"x": 0, "y": 0, "w": 10, "h": 10},
+            steps=[{"type": "color"}, {"type": "change"}],
+            on_result=emitted.append,
+        )
+        assert [r["timestamp"] for r in results] == [1.0, 2.0]
+        assert emitted == results  # streamed, one call per result
+
 
 # ---------------------------------------------------------------------------
 # Pin calibration scoring (Phase 2)
@@ -2497,6 +2743,34 @@ class TestScoreMultitoolFrame:
         res = screenspace.score_multitool_frame(red, None, steps)
         assert res["steps"][1]["passed"] is True
         assert res["passed"] is False
+
+    def test_offset_is_ignored_in_calibration(self):
+        # Calibration is single-frame: a step's offset window is not evaluated
+        # here, so the score is identical with or without it (documented limit).
+        red = np.full((100, 100, 3), [0, 0, 255], dtype=np.uint8)
+        base = [
+            {
+                "type": "color",
+                "region_coords": self.region,
+                "target_color": screenspace.average_color_hsv(red),
+                "tolerance": {"h": 10, "s": 50, "v": 50},
+            },
+            {
+                "type": "color",
+                "logic": "AND",
+                "region_coords": self.region,
+                "target_color": screenspace.average_color_hsv(red),
+                "tolerance": {"h": 10, "s": 50, "v": 50},
+            },
+        ]
+        without = screenspace.score_multitool_frame(red, None, base)
+        with_offset = copy.deepcopy(base)
+        with_offset[1]["offset"] = {"min": 2.0, "max": 5.0}
+        scored = screenspace.score_multitool_frame(red, None, with_offset)
+        assert scored["passed"] == without["passed"]
+        assert [s["passed"] for s in scored["steps"]] == [
+            s["passed"] for s in without["steps"]
+        ]
 
 
 # ---------------------------------------------------------------------------
