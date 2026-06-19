@@ -1741,7 +1741,14 @@ def _validate_task_request(
         for i, step in enumerate(mt_steps_early):
             step_region = (step.get("region") or "").strip()
             step_region_ref = step.get("region_ref")
+            # A template step with an uploaded image scans the full frame and
+            # needs no region (mirrors the top-level has_uploaded_template path).
+            step_uploaded_template = step.get("type") == "template" and step.get(
+                "template_image_data"
+            )
             if not step_region and step_region_ref is None:
+                if step_uploaded_template:
+                    continue
                 return jsonify(
                     {"ok": False, "error": f"Step {i}: region is required"}
                 ), 400

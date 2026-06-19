@@ -1913,6 +1913,55 @@ class TestCheckFrameForTool:
         assert result is not None
         assert "score" in result
 
+    def test_template_check_frame_applies_scale(self):
+        """The multitool per-frame matcher honors template_scale: a 40px
+        template misses a 20px in-frame icon at scale 1.0 but hits at 0.5."""
+        frame = _make_icon_frame(400, 200, [(100, 50, 20)])
+        template = _make_icon(40)
+        region = {"x": 0, "y": 0, "w": 400, "h": 200}
+
+        passed_full, _ = screenspace.check_frame_for_tool(
+            frame,
+            None,
+            region,
+            "template",
+            {"template_image": template.copy(), "threshold": 0.70},
+        )
+        assert passed_full is False
+
+        passed_scaled, detail = screenspace.check_frame_for_tool(
+            frame,
+            None,
+            region,
+            "template",
+            {
+                "template_image": template.copy(),
+                "threshold": 0.70,
+                "template_scale": 0.5,
+            },
+        )
+        assert passed_scaled is True
+        assert detail is not None
+        assert detail["match_count"] >= 1
+
+    def test_template_zero_region_matches_full_frame(self):
+        # A multitool uploaded-template step with no region gets zero-size
+        # region_coords; check_frame_for_tool must NOT reject it as degenerate
+        # (template ignores the region and scans the whole frame). Without the
+        # exemption the AND chain could never pass for an upload-only step.
+        frame = _make_icon_frame(400, 200, [(100, 50, 40)])
+        template = _make_icon(40)
+        passed, detail = screenspace.check_frame_for_tool(
+            frame,
+            None,
+            {"x": 0, "y": 0, "w": 0, "h": 0},
+            "template",
+            {"template_image": template.copy(), "threshold": 0.70},
+        )
+        assert passed is True
+        assert detail is not None
+        assert detail["match_count"] >= 1
+
     def test_numbers_check_frame_honors_zero_ocr_threshold(self, monkeypatch):
         frame = np.full((20, 60, 3), 128, dtype=np.uint8)
         region = {"x": 0, "y": 0, "w": 60, "h": 20}

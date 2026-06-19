@@ -2027,6 +2027,39 @@ def test_create_multitool_task_offset_coerced_and_clamped(client, monkeypatch):
     assert task["parameters"]["steps"][1]["offset"] == {"min": -bound, "max": 2.0}
 
 
+def test_create_multitool_template_step_upload_no_region(client):
+    """A multitool template step with an uploaded image needs no region."""
+    import base64
+
+    _create_region(client, "statusbar", x=0, y=0, w=100, h=20)
+    # Minimal 1x1 red PNG
+    png_b64 = base64.b64encode(
+        b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01"
+        b"\x00\x00\x00\x01\x08\x02\x00\x00\x00\x90wS\xde\x00"
+        b"\x00\x00\x0cIDATx\x9cc\xf8\x0f\x00\x00\x01\x01\x00"
+        b"\x05\x18\xd8N\x00\x00\x00\x00IEND\xaeB`\x82"
+    ).decode()
+    resp = client.post(
+        "/screenspace/api/tasks",
+        json={
+            "type": "multitool",
+            "participant": "P01",
+            "parameters": {
+                "steps": [
+                    {"type": "template", "template_image_data": png_b64},
+                    {"type": "change", "region": "statusbar"},
+                ]
+            },
+        },
+    )
+    data = resp.get_json()
+    # The upload-only template step must not trip "region is required"; the
+    # request fails later at the video-existence check instead.
+    assert resp.status_code == 400
+    assert "region" not in data["error"].lower()
+    assert "video" in data["error"].lower()
+
+
 def test_fast_scan_mode_passes_validation(client):
     """scan_mode in parameters should not cause a validation error.
 
