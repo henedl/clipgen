@@ -236,6 +236,20 @@
     </div>
   </div>
 
+  <div id="buildStatus" class="hidden">
+    <div class="build-status-card">
+      <div id="buildStatusSpinner" class="spinner build-status-spinner"></div>
+      <span id="buildStatusMessage" class="build-status-msg"></span>
+      <div class="build-status-actions">
+        <button id="buildStatusCancel" class="cg-btn cg-btn-bare cg-btn-sm">
+          <span class="cg-btn-icon" data-icon="x-mark"></span><span>Cancel</span>
+        </button>
+        <button id="buildStatusOpen" class="cg-btn cg-btn-solid cg-btn-sm hidden">Open</button>
+        <button id="buildStatusDismiss" class="cg-btn cg-btn-bare cg-btn-sm hidden">Dismiss</button>
+      </div>
+    </div>
+  </div>
+
   <div id="confirmOverlay" class="hidden">
     <div class="confirm-card">
       <h3 id="confirmTitle"></h3>

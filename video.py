@@ -1864,6 +1864,8 @@ def _batch_extract_screenshots(
     input_file: str,
     timestamps: list[int],
     interval_seconds: int,
+    *,
+    cancel_flag: Callable[[], bool] | None = None,
 ) -> list[dict[str, Any]] | None:
     """Extract all gallery screenshots in a single ffmpeg pass.
 
@@ -1902,6 +1904,7 @@ def _batch_extract_screenshots(
             input_file=input_file,
             output_file=os.path.join(tmpdir, f"frame_*{ext}"),
             os_error_message="ffmpeg could not run for batch screenshot extraction.",
+            cancel_flag=cancel_flag,
         )
         if ffmpeg_result is None or ffmpeg_result.returncode != 0:
             return None
@@ -1939,6 +1942,8 @@ def _parallel_extract_gifs(
     interval_seconds: int,
     gif_duration_seconds: int,
     duration: int,
+    *,
+    cancel_flag: Callable[[], bool] | None = None,
 ) -> list[dict[str, Any]] | None:
     """Extract gallery GIFs using parallel ffmpeg processes.
 
@@ -1968,7 +1973,10 @@ def _parallel_extract_gifs(
             max_workers=config.GALLERY_PARALLEL_WORKERS,
         ) as pool:
             future_to_task = {
-                pool.submit(extract_gif, t[0], t[1], t[2], t[3]): t for t in tasks
+                pool.submit(
+                    extract_gif, t[0], t[1], t[2], t[3], cancel_flag=cancel_flag
+                ): t
+                for t in tasks
             }
             for future in concurrent.futures.as_completed(future_to_task):
                 task = future_to_task[future]
@@ -2006,6 +2014,7 @@ def generate_interval_captures(
     interval_seconds: int = 10,
     output_format: str = "screen",
     gif_duration_seconds: int = 3,
+    cancel_flag: Callable[[], bool] | None = None,
 ) -> list[dict[str, Any]]:
     """Generate screenshots or GIFs at regular intervals throughout a video.
 
@@ -2014,6 +2023,9 @@ def generate_interval_captures(
         interval_seconds: Seconds between each capture
         output_format: 'screen' for PNG screenshots or 'gif' for animated GIFs
         gif_duration_seconds: Duration of each GIF in seconds (ignored for screenshots)
+        cancel_flag: Optional callable; when it returns True the build stops and
+            the in-flight ffmpeg encode is terminated (used by Studio's gallery
+            Cancel button).
 
     Returns:
         List of artifact metadata dicts with file, timestamp, type, etc.
@@ -2046,7 +2058,7 @@ def generate_interval_captures(
 
     if output_format == "screen" and not config.DEBUGGING and total > 1:
         batch_artifacts = _batch_extract_screenshots(
-            input_file, timestamps, interval_seconds
+            input_file, timestamps, interval_seconds, cancel_flag=cancel_flag
         )
         if batch_artifacts:
             utils.standard_print(
@@ -2059,7 +2071,12 @@ def generate_interval_captures(
 
     if output_format != "screen" and not config.DEBUGGING and total > 1:
         parallel_artifacts = _parallel_extract_gifs(
-            input_file, timestamps, interval_seconds, gif_duration_seconds, duration
+            input_file,
+            timestamps,
+            interval_seconds,
+            gif_duration_seconds,
+            duration,
+            cancel_flag=cancel_flag,
         )
         if parallel_artifacts is not None:
             utils.info_print(
@@ -2068,19 +2085,25 @@ def generate_interval_captures(
             return parallel_artifacts
 
     for i, ts in enumerate(timestamps):
+        if cancel_flag and cancel_flag():
+            break
         ts_str = utils.seconds_to_timestamp(ts)
         ts_safe = ts_str.replace(":", "_")
         filename = f"gallery_{ts_safe}{ext}"
         output_path = files.get_unique_filename(filename, file_format=ext)
 
         if output_format == "screen":
-            ok = extract_screenshot(input_file, output_path, ts_str)
+            ok = extract_screenshot(
+                input_file, output_path, ts_str, cancel_flag=cancel_flag
+            )
             gif_dur = None
         else:
             gif_dur = min(gif_duration_seconds, duration - ts)
             if gif_dur <= 0:
                 break
-            ok = extract_gif(input_file, output_path, ts_str, gif_dur)
+            ok = extract_gif(
+                input_file, output_path, ts_str, gif_dur, cancel_flag=cancel_flag
+            )
 
         if ok:
             artifacts.append(

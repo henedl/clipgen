@@ -102,9 +102,21 @@ _generate_cancel_event = threading.Event()
 # separate streams, so the Cancel button posts to both /api/generate/cancel
 # and /api/generate-intake/cancel.
 _intake_cancel_event = threading.Event()
+# Cancel events for the two long-running viewer builds. /api/timeline-viewer
+# re-cuts every clip (process_clips) plus optional intake clips; /api/gallery
+# extracts frames/GIFs (generate_interval_captures). Both run synchronously in
+# the request thread, but Flask is threaded so the matching /cancel endpoint
+# can set the event mid-build and the cancel_flag checks short-circuit it.
+_timeline_viewer_cancel_event = threading.Event()
+_gallery_cancel_event = threading.Event()
 _busy_lock = threading.Lock()
 _generate_in_progress = False
 _reel_in_progress = False
+# Single-job slots for the two long-running viewer builds. Each shares one
+# module-level cancel event, so a second concurrent build (e.g. a second Studio
+# tab) must be rejected rather than allowed to clear/clobber the other's signal.
+_timeline_viewer_in_progress = False
+_gallery_in_progress = False
 # Count of in-flight /api/generate-intake streams. Intake has no single-job
 # slot (it must run alongside /api/generate for mixed queues), but a sheet
 # swap still needs to know whether any intake work is active.
@@ -191,12 +203,13 @@ def _thumbnail_cache_put(key: tuple, value: bytes) -> None:
 
 
 def _try_claim_busy(slot: str) -> bool:
-    """Atomically reserve the single-job slot for *slot* ('generate'|'reel').
+    """Atomically reserve the single-job slot for *slot*.
 
+    Valid slots: ``'generate'``, ``'reel'``, ``'timeline_viewer'``, ``'gallery'``.
     Returns True on success (caller must call ``_release_busy`` when done) or
     False if another request is already holding the slot.
     """
-    global _generate_in_progress, _reel_in_progress  # noqa: PLW0603
+    global _generate_in_progress, _reel_in_progress, _timeline_viewer_in_progress, _gallery_in_progress  # noqa: PLW0603
     with _busy_lock:
         if slot == "generate":
             if _generate_in_progress:
@@ -207,6 +220,16 @@ def _try_claim_busy(slot: str) -> bool:
             if _reel_in_progress:
                 return False
             _reel_in_progress = True
+            return True
+        if slot == "timeline_viewer":
+            if _timeline_viewer_in_progress:
+                return False
+            _timeline_viewer_in_progress = True
+            return True
+        if slot == "gallery":
+            if _gallery_in_progress:
+                return False
+            _gallery_in_progress = True
             return True
     return False
 
@@ -275,13 +298,20 @@ def _append_generated_reel(reel: dict[str, Any]) -> None:
 
 
 def _release_busy(slot: str) -> None:
-    """Release the single-job slot for *slot* ('generate'|'reel')."""
-    global _generate_in_progress, _reel_in_progress  # noqa: PLW0603
+    """Release the single-job slot for *slot*.
+
+    Valid slots: ``'generate'``, ``'reel'``, ``'timeline_viewer'``, ``'gallery'``.
+    """
+    global _generate_in_progress, _reel_in_progress, _timeline_viewer_in_progress, _gallery_in_progress  # noqa: PLW0603
     with _busy_lock:
         if slot == "generate":
             _generate_in_progress = False
         elif slot == "reel":
             _reel_in_progress = False
+        elif slot == "timeline_viewer":
+            _timeline_viewer_in_progress = False
+        elif slot == "gallery":
+            _gallery_in_progress = False
 
 
 def _reset_reel_job_state(endpoint: str) -> None:
@@ -879,17 +909,24 @@ def _generate_intake_clips(
     items: list[dict[str, Any]],
     output_format: str = "clip",
     study: str = "",
+    *,
+    cancel_flag: Any = None,
 ) -> list[dict[str, Any]]:
     """Generate clips from intake items (Screenspace or Transcript).
 
     Each returned dict has an extra ``"_ok"`` key (True on success, False if
     the video was missing or ffmpeg failed) plus an ``"_error"`` string so
     callers can report per-item results without duplicating the loop.
+
+    *cancel_flag* is forwarded to each ``_process_intake_item`` so a cancelled
+    timeline-viewer build stops spawning ffmpeg for the remaining items.
     """
     workers = pipeline._resolve_clip_workers()
     if workers < 2 or len(items) < 2:
         return [
-            _process_intake_item(item, output_format, study, index=idx)
+            _process_intake_item(
+                item, output_format, study, index=idx, cancel_flag=cancel_flag
+            )
             for idx, item in enumerate(items)
         ]
 
@@ -897,7 +934,12 @@ def _generate_intake_clips(
     with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
         future_to_idx = {
             pool.submit(
-                _process_intake_item, item, output_format, study, index=idx
+                _process_intake_item,
+                item,
+                output_format,
+                study,
+                index=idx,
+                cancel_flag=cancel_flag,
             ): idx
             for idx, item in enumerate(items)
         }
@@ -1547,7 +1589,13 @@ def api_timeline_viewer() -> FlaskResponse:
             }
         ), 400
 
+    if not _try_claim_busy("timeline_viewer"):
+        return jsonify(
+            {"ok": False, "error": "A timeline viewer build is already in progress."}
+        ), 409
+
     try:
+        _timeline_viewer_cancel_event.clear()
         req = request.get_json(silent=True) or {}
         include_intake = req.get("include_intake", False)
         intake_items = req.get("intake_items", [])
@@ -1558,22 +1606,37 @@ def api_timeline_viewer() -> FlaskResponse:
         if not clips_list:
             return jsonify({"ok": False, "error": "No clips found in sheet"}), 400
 
-        generated, artifacts = pipeline.process_clips(clips_list, output_format="clip")
+        generated, artifacts = pipeline.process_clips(
+            clips_list,
+            output_format="clip",
+            cancel_flag=_timeline_viewer_cancel_event.is_set,
+        )
+        if _timeline_viewer_cancel_event.is_set():
+            return jsonify({"ok": False, "cancelled": True})
         if not artifacts:
             return jsonify({"ok": False, "error": "No artifacts were generated"}), 400
 
-        _extend_generated_artifacts(artifacts)
-
-        # Generate intake clips if requested
+        # Generate intake clips if requested. Accumulate (but don't publish)
+        # alongside the sheet clips so a cancel anywhere below discards them all.
         intake_artifacts: list[dict[str, Any]] = []
         if include_intake and intake_items:
-            raw = _generate_intake_clips(intake_items)
+            raw = _generate_intake_clips(
+                intake_items, cancel_flag=_timeline_viewer_cancel_event.is_set
+            )
             for r in raw:
                 if r.pop("_ok", False):
                     r.pop("_error", None)
                     intake_artifacts.append(r)
             artifacts = artifacts + intake_artifacts
-            _extend_generated_artifacts(intake_artifacts)
+
+        # Single cancel gate before any publish/disk write. Nothing has entered
+        # _generated_artifacts yet, so a cancel here discards every clip
+        # (discard-on-cancel, like generate) and the viewer HTML is never
+        # written — closing the post-ffmpeg window too.
+        if _timeline_viewer_cancel_event.is_set():
+            return jsonify({"ok": False, "cancelled": True})
+
+        _extend_generated_artifacts(artifacts)
 
         study = artifacts[0].get("study", "")
         ss_events = viewer.load_screenspace_events_for_viewer()
@@ -1606,6 +1669,8 @@ def api_timeline_viewer() -> FlaskResponse:
 
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
+    finally:
+        _release_busy("timeline_viewer")
 
 
 @studio_bp.route("/api/gallery", methods=["POST"])
@@ -1630,26 +1695,35 @@ def api_gallery() -> FlaskResponse:
     if output_format not in ("screen", "gif"):
         return jsonify({"ok": False, "error": f"Invalid format: {output_format}"}), 400
 
-    try:
-        interval = int(interval)
-        if interval < 1:
-            interval = config.GALLERY_INTERVAL_SECONDS
-    except (ValueError, TypeError):
-        interval = config.GALLERY_INTERVAL_SECONDS
-
-    video_path = _resolve_source_video(participant)
-    if video_path is None or not video_path.is_file():
+    if not _try_claim_busy("gallery"):
         return jsonify(
-            {"ok": False, "error": f"Source video not found for {participant}"}
-        ), 404
+            {"ok": False, "error": "A gallery build is already in progress."}
+        ), 409
 
     try:
+        try:
+            interval = int(interval)
+            if interval < 1:
+                interval = config.GALLERY_INTERVAL_SECONDS
+        except (ValueError, TypeError):
+            interval = config.GALLERY_INTERVAL_SECONDS
+
+        video_path = _resolve_source_video(participant)
+        if video_path is None or not video_path.is_file():
+            return jsonify(
+                {"ok": False, "error": f"Source video not found for {participant}"}
+            ), 404
+
+        _gallery_cancel_event.clear()
         artifacts = video.generate_interval_captures(
             str(video_path),
             interval_seconds=interval,
             output_format=output_format,
             gif_duration_seconds=config.GALLERY_GIF_DURATION_SECONDS,
+            cancel_flag=_gallery_cancel_event.is_set,
         )
+        if _gallery_cancel_event.is_set():
+            return jsonify({"ok": False, "cancelled": True})
         if not artifacts:
             return jsonify({"ok": False, "error": "No captures generated"}), 500
 
@@ -1662,6 +1736,11 @@ def api_gallery() -> FlaskResponse:
             interval=interval,
             bundle=bundle,
         )
+        # Final cancel gate before writing the gallery HTML, closing the window
+        # where capture extraction finished but the user clicks Cancel during
+        # the duration probe / finalize.
+        if _gallery_cancel_event.is_set():
+            return jsonify({"ok": False, "cancelled": True})
         gallery_path = viewer.generate_gallery_viewer(gallery_data)
         if gallery_path:
             return jsonify({"ok": True, "file": str(gallery_path)})
@@ -1669,6 +1748,8 @@ def api_gallery() -> FlaskResponse:
 
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
+    finally:
+        _release_busy("gallery")
 
 
 @studio_bp.route("/api/open-viewer", methods=["POST"])
@@ -2384,6 +2465,20 @@ def api_generate_intake_cancel() -> FlaskResponse:
     endpoints to stop the full set of in-flight ffmpeg subprocesses.
     """
     _intake_cancel_event.set()
+    return jsonify({"ok": True})
+
+
+@studio_bp.route("/api/timeline-viewer/cancel", methods=["POST"])
+def api_timeline_viewer_cancel() -> FlaskResponse:
+    """Signal cancellation for the in-progress timeline-viewer build."""
+    _timeline_viewer_cancel_event.set()
+    return jsonify({"ok": True})
+
+
+@studio_bp.route("/api/gallery/cancel", methods=["POST"])
+def api_gallery_cancel() -> FlaskResponse:
+    """Signal cancellation for the in-progress gallery build."""
+    _gallery_cancel_event.set()
     return jsonify({"ok": True})
 
 

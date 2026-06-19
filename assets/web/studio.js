@@ -46,6 +46,8 @@
     artifactGenerating: false,
     reelGenerating: false,
     overlayJobRunning: false,
+    timelineViewerCancelledByUser: false,
+    galleryCancelledByUser: false,
     cellResults: {},
     stashes: [],
     artifactStashes: [],
@@ -2930,6 +2932,14 @@
       hideOverlay();
     });
 
+    qs("#buildStatusDismiss").addEventListener("click", hideBuildStatus);
+    qs("#buildStatusOpen").addEventListener("click", function () {
+      if (_buildStatusFile) {
+        apiPost("api/open-viewer", { file: _buildStatusFile }).catch(function () {});
+      }
+      hideBuildStatus();
+    });
+
     qs("#confirmOverlay").addEventListener("click", function (e) {
       if (e.target === qs("#confirmOverlay")) hideConfirm();
     });
@@ -3499,7 +3509,7 @@
     if (isAnyStudioJobRunning() || state.generatedArtifacts.length === 0) return;
     state.overlayJobRunning = true;
 
-    showOverlay("Building timeline viewer...");
+    showBuildStatus("Building timeline viewer…", null);
 
     apiPost("api/viewer", {})
       .then(function (data) {
@@ -3511,14 +3521,14 @@
             file: pathBasename(data.file),
             description: "Timeline viewer",
           }));
-          showResult("Viewer created: " + (data.file || ""), null, data.file);
+          showBuildResult("Viewer created: " + (data.file || ""), null, data.file);
         } else {
-          showResult(null, data.error || "Viewer build failed");
+          showBuildResult(null, data.error || "Viewer build failed");
         }
       })
       .catch(function (err) {
         state.overlayJobRunning = false;
-        showResult(null, "Request failed: " + err);
+        showBuildResult(null, "Request failed: " + err);
       });
   }
 
@@ -3551,6 +3561,7 @@
 
   function startTimelineViewerBuild(includeIntake) {
     state.overlayJobRunning = true;
+    state.timelineViewerCancelledByUser = false;
     var body = {};
 
     var ssClusters = state.intakeClusters || [];
@@ -3558,7 +3569,10 @@
     var hasIntake = includeIntake && (ssClusters.length > 0 || trClusters.length > 0);
 
     if (hasIntake) {
-      showOverlay("Building timeline viewer with intake events\u2026");
+      showBuildStatus(
+        "Building timeline viewer with intake events\u2026",
+        onCancelTimelineViewer
+      );
       body.include_intake = true;
       var items = ssClusters.map(function (c) {
         return {
@@ -3584,12 +3598,18 @@
       }
       body.intake_items = items;
     } else {
-      showOverlay("Building timeline viewer\u2026");
+      showBuildStatus("Building timeline viewer\u2026", onCancelTimelineViewer);
     }
 
     apiPost("api/timeline-viewer", body)
       .then(function (data) {
         state.overlayJobRunning = false;
+        if (data.cancelled || state.timelineViewerCancelledByUser) {
+          state.timelineViewerCancelledByUser = false;
+          hideBuildStatus();
+          showToast("Build cancelled");
+          return;
+        }
         if (data.ok) {
           state.generatedViewers.push(stampLog({
             type: "viewer",
@@ -3601,15 +3621,26 @@
           if (data.generated) {
             msg = "Generated " + clipgenPluralUnit(data.generated, "clip", "clips") + ". " + msg;
           }
-          showResult(msg, null, data.file);
+          showBuildResult(msg, null, data.file);
         } else {
-          showResult(null, data.error || "Timeline viewer build failed");
+          showBuildResult(null, data.error || "Timeline viewer build failed");
         }
       })
       .catch(function (err) {
         state.overlayJobRunning = false;
-        showResult(null, "Request failed: " + err);
+        if (state.timelineViewerCancelledByUser) {
+          state.timelineViewerCancelledByUser = false;
+          hideBuildStatus();
+          showToast("Build cancelled");
+          return;
+        }
+        showBuildResult(null, "Request failed: " + err);
       });
+  }
+
+  function onCancelTimelineViewer() {
+    state.timelineViewerCancelledByUser = true;
+    apiPost("api/timeline-viewer/cancel").catch(function () {});
   }
 
   var _highlightsBtnOrigHTML = "";
@@ -3719,17 +3750,27 @@
     var bundle = qs("#galleryBundle").checked;
 
     if (!participant) {
-      showResult(null, "No participant selected for gallery");
+      showToast("No participant selected for gallery");
       return;
     }
 
     closeGalleryDialog();
     state.overlayJobRunning = true;
-    showOverlay("Generating gallery viewer for " + participant + "...");
+    state.galleryCancelledByUser = false;
+    showBuildStatus(
+      "Generating gallery viewer for " + participant + "…",
+      onCancelGallery
+    );
 
     apiPost("api/gallery", { participant: participant, format: format, interval: interval, bundle: bundle })
       .then(function (data) {
         state.overlayJobRunning = false;
+        if (data.cancelled || state.galleryCancelledByUser) {
+          state.galleryCancelledByUser = false;
+          hideBuildStatus();
+          showToast("Build cancelled");
+          return;
+        }
         if (data.ok) {
           state.generatedViewers.push(stampLog({
             type: "viewer",
@@ -3738,15 +3779,26 @@
             participant: participant,
             description: "Gallery viewer (" + format + ", " + interval + "s)",
           }));
-          showResult("Gallery viewer created: " + (data.file || ""), null, data.file);
+          showBuildResult("Gallery viewer created: " + (data.file || ""), null, data.file);
         } else {
-          showResult(null, data.error || "Gallery build failed");
+          showBuildResult(null, data.error || "Gallery build failed");
         }
       })
       .catch(function (err) {
         state.overlayJobRunning = false;
-        showResult(null, "Request failed: " + err);
+        if (state.galleryCancelledByUser) {
+          state.galleryCancelledByUser = false;
+          hideBuildStatus();
+          showToast("Build cancelled");
+          return;
+        }
+        showBuildResult(null, "Request failed: " + err);
       });
+  }
+
+  function onCancelGallery() {
+    state.galleryCancelledByUser = true;
+    apiPost("api/gallery/cancel").catch(function () {});
   }
 
   function bindGalleryDialog() {
@@ -3805,6 +3857,69 @@
 
   function hideOverlay() {
     qs("#statusOverlay").classList.add("hidden");
+  }
+
+  // ---- Build status (non-blocking corner card for viewer builds) ----
+  //
+  // Unlike #statusOverlay, this never blocks the page. showBuildStatus drives
+  // the in-progress state (spinner + optional Cancel); showBuildResult flips
+  // the same card to the success/error state (Open + Dismiss). The cleanup ref
+  // mirrors _confirmCleanup so repeated builds don't stack Cancel listeners.
+
+  var _buildStatusFile = "";
+  var _buildStatusCancelCleanup = null;
+
+  function showBuildStatus(message, onCancel) {
+    if (_buildStatusCancelCleanup) _buildStatusCancelCleanup();
+    qs("#buildStatusSpinner").style.display = "";
+    qs("#buildStatusMessage").textContent = message;
+    qs("#buildStatusMessage").className = "build-status-msg";
+    qs("#buildStatusOpen").classList.add("hidden");
+    qs("#buildStatusDismiss").classList.add("hidden");
+    var cancelBtn = qs("#buildStatusCancel");
+    var cancelLabel = cancelBtn.querySelector("span:last-child");
+    if (onCancel) {
+      cancelBtn.classList.remove("hidden");
+      cancelBtn.disabled = false;
+      cancelLabel.textContent = "Cancel";
+      var handler = function () {
+        cancelBtn.disabled = true;
+        cancelLabel.textContent = "Cancelling…";
+        onCancel();
+      };
+      cancelBtn.addEventListener("click", handler);
+      _buildStatusCancelCleanup = function () {
+        cancelBtn.removeEventListener("click", handler);
+        _buildStatusCancelCleanup = null;
+      };
+    } else {
+      cancelBtn.classList.add("hidden");
+      _buildStatusCancelCleanup = null;
+    }
+    qs("#buildStatus").classList.remove("hidden");
+  }
+
+  function showBuildResult(successMsg, errorMsg, filePath) {
+    if (_buildStatusCancelCleanup) _buildStatusCancelCleanup();
+    qs("#buildStatusSpinner").style.display = "none";
+    qs("#buildStatusCancel").classList.add("hidden");
+    if (errorMsg) {
+      qs("#buildStatusMessage").textContent = errorMsg;
+      qs("#buildStatusMessage").className = "build-status-msg error-text";
+      qs("#buildStatusOpen").classList.add("hidden");
+    } else {
+      qs("#buildStatusMessage").textContent = successMsg || "";
+      qs("#buildStatusMessage").className = "build-status-msg";
+      _buildStatusFile = filePath || "";
+      qs("#buildStatusOpen").classList.toggle("hidden", !filePath);
+    }
+    qs("#buildStatusDismiss").classList.remove("hidden");
+    qs("#buildStatus").classList.remove("hidden");
+  }
+
+  function hideBuildStatus() {
+    if (_buildStatusCancelCleanup) _buildStatusCancelCleanup();
+    qs("#buildStatus").classList.add("hidden");
   }
 
   // ---- Confirm overlay ----
