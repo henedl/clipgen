@@ -379,6 +379,41 @@ def compute_phash(region_pixels: np.ndarray) -> "imagehash.ImageHash":
 _PreparedTemplate = tuple[np.ndarray, "np.ndarray | None", bool]
 
 
+def _scale_template(
+    template: np.ndarray,
+    mask: np.ndarray | None,
+    template_scale: float,
+) -> tuple[np.ndarray, np.ndarray | None]:
+    """Resize a template (and its mask) for matching.
+
+    Combines the user-supplied *template_scale* with the global CV resolution
+    scale so the template matches at the same relative size on the (possibly
+    upscaled) extracted frames. The opt-in template_scale slider lets users
+    compensate when their uploaded PNG is captured at a different pixel scale
+    than its in-video rendering (e.g. a 50x50 icon appearing as 24x24 on
+    screen). Returns the pair unchanged when the effective scale is ~1.0.
+    """
+    cv_scale = (
+        config.SCREENSPACE_CV_RESOLUTION_SCALE
+        if config.SCREENSPACE_CV_RESOLUTION_SCALE > 0
+        else 1.0
+    )
+    effective = template_scale * cv_scale
+    if not (effective > 0 and abs(effective - 1.0) > 1e-6):
+        return template, mask
+    th, tw = template.shape[:2]
+    nw = max(8, int(round(tw * effective)))
+    nh = max(8, int(round(th * effective)))
+    interp = cv2.INTER_AREA if effective < 1.0 else cv2.INTER_CUBIC
+    scaled_template = cv2.resize(template, (nw, nh), interpolation=interp)
+    scaled_mask = (
+        cv2.resize(mask, (nw, nh), interpolation=cv2.INTER_NEAREST)
+        if mask is not None
+        else None
+    )
+    return scaled_template, scaled_mask
+
+
 def _prepare_template(
     template: np.ndarray, mask: np.ndarray | None
 ) -> _PreparedTemplate:
@@ -1744,30 +1779,9 @@ def scan_template(
 
     _tmpl_downscale = bool(fast_opts and fast_opts.get("template_downscale"))
 
-    # Combine the user-supplied template_scale with the global CV resolution
-    # scale so the template matches at the same relative size on the
-    # (possibly upscaled) extracted frames. The opt-in template_scale slider
-    # lets users compensate when their uploaded PNG is captured at a
-    # different pixel scale than its in-video rendering (e.g. a 50x50 icon
-    # appearing as 24x24 on screen).
-    _cv_scale_template = (
-        config.SCREENSPACE_CV_RESOLUTION_SCALE
-        if config.SCREENSPACE_CV_RESOLUTION_SCALE > 0
-        else 1.0
+    scaled_template, scaled_mask = _scale_template(
+        template_image, template_mask, template_scale
     )
-    effective_template_scale = template_scale * _cv_scale_template
-    scaled_template = template_image
-    scaled_mask = template_mask
-    if effective_template_scale > 0 and abs(effective_template_scale - 1.0) > 1e-6:
-        th, tw = template_image.shape[:2]
-        nw = max(8, int(round(tw * effective_template_scale)))
-        nh = max(8, int(round(th * effective_template_scale)))
-        interp = cv2.INTER_AREA if effective_template_scale < 1.0 else cv2.INTER_CUBIC
-        scaled_template = cv2.resize(template_image, (nw, nh), interpolation=interp)
-        if template_mask is not None:
-            scaled_mask = cv2.resize(
-                template_mask, (nw, nh), interpolation=cv2.INTER_NEAREST
-            )
 
     # Hoist the constant template prep (blur + grayscale + variance check)
     # out of the per-frame callback. A degenerate template yields [] every
@@ -2305,9 +2319,12 @@ def check_frame_for_tool(
 
     Degenerate regions (width or height ≤ 0, e.g. a 1-px user draw rounded
     to zero pixels on a small preview) are treated as a non-match here so
-    downstream cv2 ops never see empty arrays.
+    downstream cv2 ops never see empty arrays.  Template is exempt: it matches
+    against the full frame and ignores ``region``, so an uploaded template step
+    with no region (zero-size region_coords) is valid — mirrors
+    :func:`score_frame_for_tool`.
     """
-    if region.get("w", 0) <= 0 or region.get("h", 0) <= 0:
+    if tool_type != "template" and (region.get("w", 0) <= 0 or region.get("h", 0) <= 0):
         return False, None
     tool = TOOLS.get(tool_type)
     if tool is None:
@@ -3250,13 +3267,24 @@ class TemplateTool(AnalysisTool):
         if template_img is None:
             return False, None
         threshold = params.get("threshold", config.SCREENSPACE_TEMPLATE_MATCH_THRESHOLD)
-        template_mask = params.get("template_mask")
-        # Cache the per-task-constant grayscale/mask on the parameters dict so
-        # multitool scans amortize the prep across frames.
-        prepared = params.get("_prepared_template")
-        if prepared is None:
-            prepared = _prepare_template(template_img, template_mask)
-            params["_prepared_template"] = prepared
+        # Cache the per-task-constant scaled template/mask + grayscale prep on the
+        # parameters dict so multitool scans amortize it across frames. The
+        # template_scale slider resizes the (often uploaded) template to its
+        # in-video pixel size before matching, mirroring scan_template.
+        cached = params.get("_prepared_template")
+        if cached is None:
+            scaled_img, scaled_mask = _scale_template(
+                template_img,
+                params.get("template_mask"),
+                float(params.get("template_scale", 1.0)),
+            )
+            cached = (
+                scaled_img,
+                scaled_mask,
+                _prepare_template(scaled_img, scaled_mask),
+            )
+            params["_prepared_template"] = cached
+        scaled_img, scaled_mask, prepared = cached
         # Peak correlation is the threshold-independent scalar; available even on
         # a miss (unlike match_template, which only returns above-threshold hits).
         corr = _template_correlation_map(frame, prepared)
@@ -3267,9 +3295,9 @@ class TemplateTool(AnalysisTool):
             return False, {"best_score": round(peak, 4), "match_count": 0}
         matches = match_template(
             frame,
-            template_img,
+            scaled_img,
             threshold=threshold,
-            mask=template_mask,
+            mask=scaled_mask,
             prepared=prepared,
         )
         return True, {"best_score": round(peak, 4), "match_count": len(matches)}
