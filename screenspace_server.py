@@ -1711,6 +1711,26 @@ def _validate_task_request(
                 return jsonify(
                     {"ok": False, "error": f"Step {i}: logic must be 'AND' or 'NOT'"}
                 ), 400
+            offset = step_v.get("offset")
+            if offset is not None:
+                if i == 0:
+                    return jsonify(
+                        {
+                            "ok": False,
+                            "error": "Step 0: offset is not allowed on the first step",
+                        }
+                    ), 400
+                if (
+                    not isinstance(offset, dict)
+                    or offset.get("min") is None
+                    or offset.get("max") is None
+                ):
+                    return jsonify(
+                        {
+                            "ok": False,
+                            "error": f"Step {i}: offset requires numeric min and max",
+                        }
+                    ), 400
 
     all_known_regions = _combined_region_lookup()
     requested_region: dict[str, Any] | None = None
@@ -1811,6 +1831,7 @@ def _coerce_task_params(
                     _coerce_template_controls(step)
                 if step.get("type") in ("text", "numbers"):
                     _coerce_ocr_controls(step, context=step_context)
+                _coerce_offset(step, context=step_context)
         if task_type in ("text", "numbers", "change", "flow"):
             _coerce_consecutive(parameters)
         if task_type == "template":
@@ -2328,6 +2349,32 @@ def _coerce_float(
     if not math.isfinite(number):
         raise ValueError(f"{context}{field_name} must be a finite number")
     return number
+
+
+def _coerce_offset(step: dict[str, Any], *, context: str = "") -> None:
+    """Validate a multitool step's offset window in place.
+
+    A step's ``offset`` (idx > 0 only) declares a time window ``{min, max}`` in
+    seconds, relative to the previous step's matched frame. Both bounds must be
+    finite, ``min <= max``, and within ``±SCREENSPACE_MULTITOOL_MAX_OFFSET_SECONDS``
+    (clamped). Absence of ``offset`` means same-frame matching (unchanged behavior).
+    """
+    offset = step.get("offset")
+    if offset is None:
+        return
+    off_min = _coerce_float(
+        offset.get("min"), "offset min", required=True, context=context
+    )
+    off_max = _coerce_float(
+        offset.get("max"), "offset max", required=True, context=context
+    )
+    assert off_min is not None and off_max is not None  # required=True guarantees this
+    if off_min > off_max:
+        raise ValueError(f"{context}offset min must be <= max")
+    bound = config.SCREENSPACE_MULTITOOL_MAX_OFFSET_SECONDS
+    off_min = max(-bound, min(bound, off_min))
+    off_max = max(-bound, min(bound, off_max))
+    step["offset"] = {"min": off_min, "max": off_max}
 
 
 def _coerce_template_controls(params: dict[str, Any], *, context: str = "") -> None:

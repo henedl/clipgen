@@ -4205,6 +4205,81 @@
         rail.appendChild(opBtn);
         rail.appendChild(el("div", "multitool-operator-line"));
         opRow.appendChild(rail);
+
+        // Offset window: a pill that reveals min/max second inputs. The window
+        // is measured relative to the previous step's matched frame (see
+        // scan_multitool's offset path). Presence of `step.offset` = enabled.
+        var maxOffset = (CLIPGEN_CONFIG && CLIPGEN_CONFIG.screenspaceMultitoolMaxOffset) || 30;
+        var offWrap = el("div", "multitool-offset");
+        var offBtn = el("button", "multitool-offset-btn");
+        offBtn.type = "button";
+        var offActive = !!step.offset;
+        offBtn.classList.toggle("is-active", offActive);
+        offBtn.appendChild(el("span", "multitool-offset-icon"));
+        offWrap.appendChild(offBtn);
+
+        var offFields = el("div", "multitool-offset-fields" + (offActive ? "" : " hidden"));
+        var minCtrl = el("div", "param-control");
+        var offMin = numberInput("paramMtOffsetMin" + idx, -maxOffset, maxOffset,
+          step.offset ? step.offset.min : 0, 0.1);
+        minCtrl.appendChild(offMin);
+        var offSep = el("span", "multitool-offset-sep");
+        var maxCtrl = el("div", "param-control");
+        var offMax = numberInput("paramMtOffsetMax" + idx, -maxOffset, maxOffset,
+          step.offset ? step.offset.max : 5, 0.1);
+        maxCtrl.appendChild(offMax);
+        offFields.appendChild(minCtrl);
+        offFields.appendChild(offSep);
+        offFields.appendChild(maxCtrl);
+        offFields.appendChild(el("span", "param-value", "s"));
+        offWrap.appendChild(offFields);
+
+        function setOffsetTitle(active) {
+          offBtn.title = active
+            ? "Offset window on — match within a time window of the previous step's frame (not evaluated in calibration; click to disable)"
+            : "Offset — match within a time window relative to the previous step";
+        }
+        setOffsetTitle(offActive);
+
+        (function (capturedIdx) {
+          function syncOffsetFields() {
+            var s = state.multitoolSteps[capturedIdx];
+            if (!s.offset) return;
+            var mn = numberOrDefault(offMin.value, 0);
+            var mx = numberOrDefault(offMax.value, 5);
+            s.offset.min = mn;
+            s.offset.max = mx;
+            var invalid = mn > mx;
+            offMin.classList.toggle("is-invalid", invalid);
+            offMax.classList.toggle("is-invalid", invalid);
+            refreshCalibration({ debounce: true });
+          }
+          offBtn.addEventListener("click", function (e) {
+            e.stopPropagation();
+            var s = state.multitoolSteps[capturedIdx];
+            if (s.offset) {
+              delete s.offset;
+              offBtn.classList.remove("is-active");
+              offFields.classList.add("hidden");
+              offMin.classList.remove("is-invalid");
+              offMax.classList.remove("is-invalid");
+              setOffsetTitle(false);
+            } else {
+              s.offset = {
+                min: numberOrDefault(offMin.value, 0),
+                max: numberOrDefault(offMax.value, 5),
+              };
+              offBtn.classList.add("is-active");
+              offFields.classList.remove("hidden");
+              setOffsetTitle(true);
+            }
+            refreshCalibration({ debounce: true });
+          });
+          offMin.addEventListener("input", syncOffsetFields);
+          offMax.addEventListener("input", syncOffsetFields);
+        })(idx);
+
+        opRow.appendChild(offWrap);
         stepsDiv.appendChild(opRow);
       }
       var card = el("div", "multitool-step");
@@ -6497,6 +6572,14 @@
         stepP.type = state.multitoolSteps[i].type;
         if (i > 0) {
           stepP.logic = (state.multitoolSteps[i].logic || "AND").toUpperCase();
+          var off = state.multitoolSteps[i].offset;
+          if (off && isFinite(off.min) && isFinite(off.max)) {
+            if (Number(off.min) > Number(off.max)) {
+              toast("Step " + (i + 1) + ": offset min must be ≤ max");
+              return null;
+            }
+            stepP.offset = { min: Number(off.min), max: Number(off.max) };
+          }
         }
         params.steps.push(stepP);
       }
@@ -7165,6 +7248,9 @@
       state.multitoolSteps = (mtParams.steps || []).map(function (s) {
         var step = { type: s.type, collapsed: true };
         step.logic = (s.logic || "AND").toUpperCase();
+        if (s.offset && typeof s.offset.min === "number" && typeof s.offset.max === "number") {
+          step.offset = { min: s.offset.min, max: s.offset.max };
+        }
         if (s.region) step.region = s.region;
         if (s.region_ref) step.region_ref = s.region_ref;
         if (s.reference_timestamp !== undefined) step._refTs = s.reference_timestamp;

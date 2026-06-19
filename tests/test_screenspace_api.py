@@ -1885,6 +1885,28 @@ def test_events_bulk_exclude_empty_ids(client):
             },
             "not found",
         ),
+        (
+            {
+                "steps": [
+                    {
+                        "type": "color",
+                        "region": "healthbar",
+                        "offset": {"min": 0, "max": 5},
+                    },
+                    {"type": "change", "region": "healthbar"},
+                ]
+            },
+            "not allowed on the first step",
+        ),
+        (
+            {
+                "steps": [
+                    {"type": "color", "region": "healthbar"},
+                    {"type": "change", "region": "healthbar", "offset": {"min": 0}},
+                ]
+            },
+            "offset requires numeric min and max",
+        ),
     ],
     ids=[
         "too_few_steps",
@@ -1893,6 +1915,8 @@ def test_events_bulk_exclude_empty_ids(client):
         "no_steps",
         "missing_step_region",
         "unknown_step_region",
+        "offset_on_first_step",
+        "offset_missing_max",
     ],
 )
 def test_create_multitool_task_400_for_invalid_payload(
@@ -1935,6 +1959,72 @@ def test_create_multitool_task_no_global_region_ok(client):
     assert resp.status_code == 400
     data = resp.get_json()
     assert "No video" in data["error"]
+
+
+@pytest.mark.parametrize(
+    "offset,expected_err",
+    [
+        ({"min": 5, "max": 1}, "offset min must be <= max"),
+        ({"min": "abc", "max": 5}, "offset min must be a number"),
+        ({"min": 0, "max": float("inf")}, "offset max must be a finite number"),
+    ],
+    ids=["min_gt_max", "non_numeric_min", "non_finite_max"],
+)
+def test_create_multitool_task_400_for_invalid_offset(
+    client, monkeypatch, offset, expected_err
+):
+    _create_region(client, "healthbar")
+    _create_region(client, "statusbar", x=0, y=0, w=100, h=20)
+    _enable_video_task_setup(monkeypatch, "P01")
+    resp = client.post(
+        "/screenspace/api/tasks",
+        json={
+            "type": "multitool",
+            "participant": "P01",
+            "region": "healthbar",
+            "parameters": {
+                "steps": [
+                    {"type": "color", "region": "healthbar"},
+                    {"type": "change", "region": "statusbar", "offset": offset},
+                ]
+            },
+        },
+    )
+    assert resp.status_code == 400
+    assert expected_err in resp.get_json()["error"]
+
+
+def test_create_multitool_task_offset_coerced_and_clamped(client, monkeypatch):
+    """A valid offset is coerced to floats and clamped to the configured bound."""
+    import config
+
+    _create_region(client, "healthbar")
+    _create_region(client, "statusbar", x=0, y=0, w=100, h=20)
+    _enable_video_task_setup(monkeypatch, "P01")
+    bound = config.SCREENSPACE_MULTITOOL_MAX_OFFSET_SECONDS
+    resp = client.post(
+        "/screenspace/api/tasks",
+        json={
+            "type": "multitool",
+            "participant": "P01",
+            "region": "healthbar",
+            "parameters": {
+                "steps": [
+                    {"type": "color", "region": "healthbar"},
+                    {
+                        "type": "change",
+                        "region": "statusbar",
+                        "offset": {"min": -(bound + 100), "max": 2},
+                    },
+                ]
+            },
+        },
+    )
+    assert resp.status_code == 200
+    worker = screenspace_server._worker
+    assert worker is not None
+    task = worker.get_all_tasks()[0]
+    assert task["parameters"]["steps"][1]["offset"] == {"min": -bound, "max": 2.0}
 
 
 def test_create_multitool_template_step_upload_no_region(client):

@@ -85,6 +85,10 @@ def test_clipgen_config_defaults_match_python():
         js_config["screenspaceOcrMinConfidence"]
         == py_config["screenspaceOcrMinConfidence"]
     )
+    assert (
+        js_config["screenspaceMultitoolMaxOffset"]
+        == py_config["screenspaceMultitoolMaxOffset"]
+    )
 
     assert len(js_config["severity"]) == len(py_config["severity"])
     for js_sev, py_sev in zip(js_config["severity"], py_config["severity"]):
@@ -108,6 +112,7 @@ def test_get_frontend_config_shape():
         "annotations",
         "ignoredTimestampTokens",
         "screenspaceOcrMinConfidence",
+        "screenspaceMultitoolMaxOffset",
         "frictionCategories",
         "frictionColorToken",
         "frictionMomentLimit",
@@ -134,6 +139,11 @@ def test_get_frontend_config_shape():
     )
     assert isinstance(cfg["screenspaceOcrMinConfidence"], float)
     assert cfg["screenspaceOcrMinConfidence"] == config.SCREENSPACE_OCR_MIN_CONFIDENCE
+    assert isinstance(cfg["screenspaceMultitoolMaxOffset"], float)
+    assert (
+        cfg["screenspaceMultitoolMaxOffset"]
+        == config.SCREENSPACE_MULTITOOL_MAX_OFFSET_SECONDS
+    )
     assert cfg["frictionColorToken"] == "--color-friction"
     assert cfg["frictionMomentLimit"] == config.FRICTION_MOMENT_LIMIT
     assert [c["key"] for c in cfg["frictionCategories"]] == list(
