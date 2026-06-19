@@ -217,6 +217,7 @@ SCREENSPACE_RESTORE_MARKERS_ON_EDIT: bool = (
 )
 SCREENSPACE_SHOW_CONFIDENCE_HISTOGRAM: bool = False  # show the per-detection confidence-distribution histogram in the Results panel
 SCREENSPACE_MAX_PINS: int = 12  # soft cap on calibration pins per participant — keeps synchronous calibration interactive
+SCREENSPACE_MULTITOOL_MAX_OFFSET_SECONDS: float = 30.0  # bound (±) for a multitool step's offset window relative to the previous step's matched frame
 
 # ── Highlights Reel ──────────────────────────────────────────────────
 HIGHLIGHTS_REEL_DURATION_SECONDS: int = 180  # 3-minute budget for highlights reel

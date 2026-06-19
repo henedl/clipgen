@@ -43,6 +43,7 @@ var CLIPGEN_CONFIG = {
   ],
   ignoredTimestampTokens: ["x"],
   screenspaceOcrMinConfidence: 0.7,
+  screenspaceMultitoolMaxOffset: 30,
   frictionCategories: [
     { key: "hesitation",      label: "Hesitation" },
     { key: "confusion",       label: "Confusion" },
@@ -75,6 +76,9 @@ var clipgenApplyConfig = function (payload) {
   }
   if (typeof payload.screenspaceOcrMinConfidence === "number") {
     CLIPGEN_CONFIG.screenspaceOcrMinConfidence = payload.screenspaceOcrMinConfidence;
+  }
+  if (typeof payload.screenspaceMultitoolMaxOffset === "number") {
+    CLIPGEN_CONFIG.screenspaceMultitoolMaxOffset = payload.screenspaceMultitoolMaxOffset;
   }
   if (Array.isArray(payload.frictionCategories)) {
     CLIPGEN_CONFIG.frictionCategories = payload.frictionCategories;

@@ -761,6 +761,7 @@ def get_frontend_config() -> dict[str, Any]:
         "annotations": annotations,
         "ignoredTimestampTokens": sorted(get_ignored_timestamp_tokens()),
         "screenspaceOcrMinConfidence": config.SCREENSPACE_OCR_MIN_CONFIDENCE,
+        "screenspaceMultitoolMaxOffset": config.SCREENSPACE_MULTITOOL_MAX_OFFSET_SECONDS,
         "frictionCategories": friction_categories,
         "frictionColorToken": "--color-friction",
         "frictionMomentLimit": config.FRICTION_MOMENT_LIMIT,
