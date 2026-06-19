@@ -6486,6 +6486,10 @@
           stepP.logic = (state.multitoolSteps[i].logic || "AND").toUpperCase();
           var off = state.multitoolSteps[i].offset;
           if (off && isFinite(off.min) && isFinite(off.max)) {
+            if (Number(off.min) > Number(off.max)) {
+              toast("Step " + (i + 1) + ": offset min must be ≤ max");
+              return null;
+            }
             stepP.offset = { min: Number(off.min), max: Number(off.max) };
           }
         }

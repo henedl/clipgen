@@ -2377,6 +2377,16 @@ def score_frame_for_tool(
     return tool.score_frame(frame, prev_frame, region, params)
 
 
+def _multitool_has_offset(steps: list[dict[str, Any]]) -> bool:
+    """True when any chained step (idx > 0) declares an ``offset`` window.
+
+    Offset chains run the two-phase scan path and cannot resume incrementally
+    (the join needs every frame from the original start), so the worker uses
+    this to decide whether a paused task must restart from scratch.
+    """
+    return any(isinstance(s.get("offset"), dict) for s in steps[1:])
+
+
 def scan_multitool(
     video_path: str,
     region: dict[str, int],
@@ -2444,9 +2454,7 @@ def scan_multitool(
     def _cancel() -> bool:
         return bool(cancel_flag and cancel_flag())
 
-    has_offset = any(isinstance(s.get("offset"), dict) for s in steps[1:])
-
-    if has_offset:
+    if _multitool_has_offset(steps):
         # ---- Offset path: two-phase collect-then-join --------------------
         # Phase 1: one decode pass, evaluate EVERY step on EVERY frame (no
         # short-circuit), recording pass/fail + detail per sampled timestamp.
@@ -2487,6 +2495,9 @@ def scan_multitool(
         # A user cancel/pause stops the decode early; skip the join+emit and
         # let the worker settle the cancelled/paused status. ``detect_first``
         # does NOT trip _cancel here — it only fires on the first on_result.
+        # The join needs every frame from ``scan_start``, so this path cannot
+        # resume incrementally; ``ScreenspaceWorker.resume`` restarts offset
+        # tasks from scratch (it does not advance ``start_seconds`` for them).
         if _cancel():
             return []
 
@@ -3968,6 +3979,29 @@ class ScreenspaceWorker:
         for task in to_resume:
             progress = task.get("progress", 0.0)
             params = task.get("parameters", {})
+
+            # Offset multitool chains run the two-phase scan: phase 2 joins
+            # across every frame from the original start, so they cannot resume
+            # mid-stream (advancing start_seconds would drop the pre-pause
+            # frames the join depends on). Restart these from scratch instead —
+            # ``start_seconds`` is left untouched and no partial results carry
+            # over, so the re-run reproduces the full result set.
+            if task.get("type") == "multitool" and _multitool_has_offset(
+                params.get("steps", [])
+            ):
+                with self._lock:
+                    task.pop("_partial_results", None)
+                    task.pop("_progress_offset", None)
+                    task.pop("_progress_scale", None)
+                    task.pop("_paused_flag", None)
+                    task["result"] = []
+                    task["progress"] = 0.0
+                    task["status"] = TASK_STATUS_QUEUED
+                self._queue.put(
+                    (task.get("priority", 100), task["created_at"], task["id"])
+                )
+                continue
+
             start = params.get("start_seconds", 0.0)
             end = params.get("end_seconds")
             if end is None:

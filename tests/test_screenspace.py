@@ -1060,6 +1060,68 @@ class TestScreenspaceWorker:
         assert t["status"] == "queued"
         assert t.get("parameters", {}).get("start_seconds") == 50.0
 
+    def test_resume_restarts_offset_multitool_from_scratch(self):
+        # Offset chains need every frame from the original start to join, so a
+        # paused offset task must restart wholesale — start_seconds is NOT
+        # advanced and no partial results carry over.
+        worker = screenspace.ScreenspaceWorker()
+        task = screenspace.create_task(
+            "multitool",
+            "P01",
+            "s.mp4",
+            "/v.mp4",
+            "r",
+            {"x": 0, "y": 0, "w": 1, "h": 1},
+            parameters={
+                "start_seconds": 10.0,
+                "end_seconds": 100.0,
+                "steps": [
+                    {"type": "color"},
+                    {"type": "change", "offset": {"min": 0.0, "max": 3.0}},
+                ],
+            },
+        )
+        worker.enqueue(task)
+        with worker._lock:
+            worker._tasks[task["id"]]["status"] = screenspace.TASK_STATUS_PAUSED
+            worker._tasks[task["id"]]["progress"] = 0.5
+            worker._tasks[task["id"]]["result"] = [{"timestamp": 5.0}]
+        worker.resume()
+        t = worker.get_task(task["id"])
+        assert t is not None
+        assert t["status"] == "queued"
+        assert t["parameters"]["start_seconds"] == 10.0  # unchanged
+        assert t["result"] == []
+        assert t["progress"] == 0.0
+        assert "_partial_results" not in t
+
+    def test_resume_advances_non_offset_multitool(self):
+        # A multitool with no offsets resumes incrementally like any other task.
+        worker = screenspace.ScreenspaceWorker()
+        task = screenspace.create_task(
+            "multitool",
+            "P01",
+            "s.mp4",
+            "/v.mp4",
+            "r",
+            {"x": 0, "y": 0, "w": 1, "h": 1},
+            parameters={
+                "start_seconds": 10.0,
+                "end_seconds": 100.0,
+                "steps": [{"type": "color"}, {"type": "change"}],
+            },
+        )
+        worker.enqueue(task)
+        with worker._lock:
+            worker._tasks[task["id"]]["status"] = screenspace.TASK_STATUS_PAUSED
+            worker._tasks[task["id"]]["progress"] = 0.5
+            worker._tasks[task["id"]]["result"] = [{"timestamp": 5.0}]
+        worker.resume()
+        t = worker.get_task(task["id"])
+        assert t is not None
+        assert t["parameters"]["start_seconds"] == 55.0  # 10 + 0.5*(100-10)
+        assert t.get("_partial_results") == [{"timestamp": 5.0}]
+
 
 class TestOcrPreprocess:
     def test_small_roi_upscaled(self):
