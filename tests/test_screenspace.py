@@ -2415,6 +2415,53 @@ class TestScanMultitool:
         assert len(results) == 1
         assert results[0]["timestamp"] == 1.0
 
+    def test_offset_then_exact_frame_step(self, monkeypatch):
+        # Mixed chain: step1 has an offset (advances ref to its match @2),
+        # step2 has NO offset so it matches the same frame as step1's match.
+        # flow matches only @2 (not the anchor @1) — a hit proves the
+        # exact-frame step uses the *advanced* ref, not the anchor.
+        def check(ts, ttype, step):
+            if ttype == "color":
+                return (ts == 1.0), {"_confidence": 0.9}
+            if ttype == "change":
+                return (ts == 2.0), {"magnitude": 0.6}
+            return (ts == 2.0), {"magnitude": 0.5}  # flow, exact-frame on ref
+
+        self._setup_multiframe_stubs(monkeypatch, [1, 2, 3], check)
+        results = screenspace.scan_multitool(
+            "/fake.mp4",
+            {"x": 0, "y": 0, "w": 10, "h": 10},
+            steps=[
+                {"type": "color"},
+                {"type": "change", "offset": {"min": 0, "max": 2}},
+                {"type": "flow"},  # no offset → same frame as step 1's match
+            ],
+        )
+        assert len(results) == 1
+        assert results[0]["timestamp"] == 1.0
+
+    def test_offset_then_exact_frame_miss(self, monkeypatch):
+        # Same mixed chain, but flow matches @3 (not on step1's matched frame
+        # @2), so the exact-frame step misses and the chain fails.
+        def check(ts, ttype, step):
+            if ttype == "color":
+                return (ts == 1.0), {"_confidence": 0.9}
+            if ttype == "change":
+                return (ts == 2.0), {"magnitude": 0.6}
+            return (ts == 3.0), {"magnitude": 0.5}  # flow off the ref frame
+
+        self._setup_multiframe_stubs(monkeypatch, [1, 2, 3], check)
+        results = screenspace.scan_multitool(
+            "/fake.mp4",
+            {"x": 0, "y": 0, "w": 10, "h": 10},
+            steps=[
+                {"type": "color"},
+                {"type": "change", "offset": {"min": 0, "max": 2}},
+                {"type": "flow"},
+            ],
+        )
+        assert results == []
+
     def test_offset_negative_window(self, monkeypatch):
         # change @4 lies *before* the anchor @5, inside the [-2, 0] window.
         def check(ts, ttype, step):

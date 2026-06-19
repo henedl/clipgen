@@ -2598,6 +2598,9 @@ def _join_multitool_offsets(
     * **Cumulative** — each step ``i`` is evaluated relative to ``ref_ts``, the
       *previous* step's matched frame. An AND match advances ``ref_ts`` to its
       earliest in-window frame; NOT and same-frame steps leave it unchanged.
+      The advance is greedy (earliest match wins) with no backtracking — for a
+      3+ step chain a later in-window match that would have let a downstream
+      step resolve is not reconsidered.
     * **Offset window** — ``[ref_ts + min, ref_ts + max]`` (either bound may be
       negative). Absent offset ⇒ the exact ``ref_ts`` frame (legacy behavior).
     * **NOT** — passes iff the condition matches in *no* frame of the window.
