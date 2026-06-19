@@ -830,24 +830,24 @@
       "Region":           "Which screen region this step analyzes",
     },
     color: {
-      "Tolerance":        "How far from the target color still counts as a match",
+      "Tolerance":        "How far from the target color still counts — widen to catch more shades, tighten to be stricter",
       "Hex color":        "Target color in hex notation",
     },
     change: {
-      "Threshold":        "Minimum pixel-change ratio to trigger a detection",
+      "Threshold":        "How much of the region must change to trigger — raise it to ignore minor flicker",
       "Noise Thr.":       "Ignore changes below this pixel intensity",
       "Noise":            "Ignore changes below this pixel intensity",
       "Consecutive":      "Require this many consecutive sampled frames to match before an event fires (suppresses single-frame flicker; reports the run's median time)",
     },
     similarity: {
-      "Reference":        "Capture a frame to compare against",
-      "Threshold":        "Minimum similarity score to count as a match",
+      "Reference":        "Capture the frame you want later frames to match against",
+      "Threshold":        "How close a frame must look to the reference — lower it to allow looser matches",
     },
     text: {
       "Search text":      "Exact or partial text to find on screen",
       "Search":           "Exact or partial text to find on screen",
-      "Fuzzy Thr.":       "Minimum fuzzy-match score (1.0 = exact match)",
-      "Fuzzy":            "Minimum fuzzy-match score (1.0 = exact match)",
+      "Fuzzy Thr.":       "How closely the text must match (1.0 = exact) — lower it to tolerate more misreads",
+      "Fuzzy":            "How closely the text must match (1.0 = exact) — lower it to tolerate more misreads",
       "Min OCR conf.":    "Drop OCR readings below this confidence before fuzzy matching (raise to suppress noisy misreads)",
       "Min OCR":          "Drop OCR readings below this confidence before fuzzy matching (raise to suppress noisy misreads)",
       "Enhance ROI":      "Upscale small/low-contrast crops and apply CLAHE before OCR (slower; helps tiny HUD text)",
@@ -873,19 +873,19 @@
       "Format":           "Output file format: video or animated GIF",
     },
     template: {
-      "Template":         "Capture or upload a reference image to match",
-      "Threshold":        "Minimum match score to trigger a detection",
+      "Template":         "Capture or upload the picture to search for anywhere on screen",
+      "Threshold":        "How closely the picture must match — lower it to allow looser matches",
     },
     flow: {
-      "Magnitude":        "Minimum optical-flow magnitude to count as motion",
+      "Magnitude":        "Minimum movement strength to count — raise it to ignore small or slow motion",
       "Consecutive":      "Require this many consecutive sampled frames to match before an event fires (suppresses single-frame flicker; reports the run's median time)",
     },
     scene: {
-      "Add Scene":        "Name and capture a reference frame for a scene",
+      "Add Scene":        "Capture and name each screen you want to recognize",
     },
     inactivity: {
-      "Sensitivity":      "Pixel-change level below which the frame is idle",
-      "Min duration (s)": "Seconds of stillness required to trigger",
+      "Sensitivity":      "How little movement still counts as idle — raise it to treat more frames as still",
+      "Min duration (s)": "Seconds of stillness required before a stall is reported",
     },
     boundary: {
       "Sensitivity":      "Minimum frame-to-frame change to call a scene boundary (higher = only the biggest jumps)",
@@ -3515,18 +3515,18 @@
   // ---- Tool info tooltip ----
 
   var TOOL_INFO = {
-    multitool: "Multitool chains multiple analysis tools together. Add at least two tool steps — each subsequent tool only checks frames that passed the previous step, finding moments that match ALL criteria simultaneously.",
-    color: "Color tool: finds frames where a region's average color matches your chosen target within the tolerance range. Useful for tracking UI state indicators, health bars, or any element identified by a specific color.",
-    change: "Change tool: detects frames where pixel differences in the region exceed the threshold. Good for spotting sudden visual changes like screen transitions, pop-ups appearing, or loading states completing.",
-    similarity: "Similarity tool: compares each frame against a captured reference using structural similarity (SSIM). Use it to find moments that look like a specific reference frame — e.g. a particular menu, dialog, or game state.",
-    text: "Text tool: performs OCR on the region and fuzzy-matches against your search text. Useful for detecting when specific labels, error messages, or button text appear on screen.",
-    numbers: "Numbers tool: reads numeric values from the region via OCR and compares them against your target using the selected operator. Great for monitoring scores, timers, counters, or any on-screen number.",
-    timelapse: "Timelapse tool: generates a sped-up video or GIF of the region over the selected time range. Unlike other tools, this produces a single artifact rather than detecting individual frames.",
-    template: "Template tool: searches the full video frame for a captured or uploaded reference image using template matching. Works across the entire frame, not just the selected region — ideal for finding icons, buttons, or UI elements wherever they appear.",
-    flow: "Flow tool: detects motion in the region via dense optical flow. Higher magnitude thresholds filter out subtle movements. Useful for detecting player movement, animations starting, or activity in a specific area.",
-    scene: "Scene tool: classifies each frame by comparing it to your captured reference scenes. Useful for building a timeline of when different screens, menus, or game levels are active.",
-    inactivity: "Inactivity tool: detects spans of near-duplicate frames in a region using perceptual hashing. Surfaces loading screens, frozen states, or repeated animation loops. Set the minimum duration to filter out brief pauses.",
-    boundary: "Boundary tool: scans the whole frame for scene changes — moments where the picture shifts substantially from the previous sample (menu → gameplay, level transitions, loading screens ending). No region or reference needed; raise Sensitivity for only the biggest jumps, and use Min gap to avoid clustered boundaries during fast action. Boundaries are orientation markers, not clip candidates."
+    multitool: "Combines several tools so a frame only matches when it passes every step — e.g. a red health bar AND the word 'DEAD'. Add at least two steps; a step can also be set to exclude (match only when it does NOT apply). Get each tool working on its own first, then chain them here to pin down precise moments.",
+    color: "Finds frames where the average color of your region matches a color you pick. Draw a small region over a solid-colored element and sample its color; widen Tolerance to catch more shades, tighten it to be stricter. Good for color-coded elements like a health bar or status light. To find a specific icon or picture instead, use Template.",
+    change: "Flags frames where the picture inside your region differs from a moment earlier — sudden changes like a screen transition, a pop-up appearing, or a loading screen finishing. Raise the Threshold if it fires on every small flicker. Unlike Flow (which measures movement) it reacts to any difference; unlike Boundary it watches only the region you draw, not the whole screen.",
+    similarity: "Capture one reference frame, then this finds every later frame that looks almost identical — a strict, pixel-for-pixel match that's sensitive to lighting and layout shifts. Lower the Threshold to allow looser matches. Use it to catch when one exact state returns (a specific dialog or menu). For 'which screen are we on' across several screens that vary, use Scene instead.",
+    text: "Reads on-screen text in your region (OCR) and flags frames matching your search words, allowing for small misreads. Draw a tight region around the text; raise the OCR confidence if you get false hits. Good for catching specific labels, error messages, or button text. To compare on-screen numbers (e.g. score over 1000), use Numbers.",
+    numbers: "Reads a number from your region (OCR) and flags frames where it meets a rule you set — equals, greater than, less than, or within a range. Draw a tight region around just the number, then pick the operator and target value. Great for scores, timers, lives, or any changing count. For words rather than numbers, use Text.",
+    timelapse: "Produces one sped-up video or GIF of your region over the time range you choose — a fast way to skim a long session. Unlike every other tool it doesn't mark individual moments on the timeline; it outputs a single clip. Set the speed, and optionally sample every N seconds for a shorter file.",
+    template: "Capture or upload a small reference image, then this looks for that exact picture anywhere on screen — not just inside a region. Ideal for finding an icon, button, or logo wherever it appears. Lower the Threshold to allow looser matches. Unlike Color (which matches an average shade) it matches the picture itself; unlike Similarity it searches the whole frame, not one region.",
+    flow: "Detects movement inside your region — a character running, an animation playing, activity in one corner. Raise the strength threshold to ignore small or slow motion. Unlike Change (which fires on any pixel difference, including flicker) Flow responds only to real movement, so it stays steadier on noisy footage.",
+    scene: "Capture and label several reference screens, then this tags each frame with whichever one it most resembles — building a timeline of which screen is showing (title, map, level, pause menu…). It tolerates lighting and minor changes better than Similarity, and handles many screens at once where Similarity matches just one. Lower the Threshold if frames go untagged.",
+    inactivity: "Finds stretches where your region barely changes for a while — loading screens, frozen states, or a player standing idle. It's the opposite of Change: it fires when nothing happens, not when something does. Set the minimum duration so brief pauses are ignored and only real stalls are reported.",
+    boundary: "Scans the whole screen for cuts — points where the picture shifts substantially from a moment earlier (menu → gameplay, a level loading, a loading screen ending). Nothing to set up: raise Sensitivity for only the biggest jumps, and use Min gap to avoid a cluster of markers during fast action. These are orientation markers to help you navigate, not clip candidates. Unlike Scene, it doesn't label the screens — it only marks where they change."
   };
 
   var _toolInfoPinned = false;
