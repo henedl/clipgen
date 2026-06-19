@@ -3856,8 +3856,83 @@
 
   function _mtRenderTemplate(body, idx, sfx) {
     var init = state.multitoolSteps[idx]._initial || {};
-    _mtAddCaptureRefRow(body, idx, "Template", "paramTemplateRef" + sfx);
+    var step = state.multitoolSteps[idx];
+
+    // Capture-or-upload row, mirroring the single-tool template workflow but
+    // scoped per step (state on the step object, not the global uploadedTemplate).
+    var row = el("div", "param-row");
+    row.appendChild(el("span", "param-label", "Template"));
+    var ctrl = el("div", "param-control");
+
+    var info = el("span", "param-value template-upload-info");
+    function renderInfo() {
+      info.innerHTML = "";
+      if (step._upload) {
+        var thumb = document.createElement("img");
+        thumb.src = "data:image/png;base64," + step._upload.data;
+        thumb.alt = "Uploaded template";
+        thumb.title = step._upload.name;
+        info.appendChild(thumb);
+        var clearBtn = el("button", "btn btn-small", "×");
+        clearBtn.addEventListener("click", function () {
+          step._upload = null;
+          renderInfo();
+          refreshCalibration({ debounce: true });
+        });
+        info.appendChild(clearBtn);
+      } else if (step._refTs !== undefined) {
+        info.appendChild(el("span", null, formatTime(step._refTs, { decimals: 1 })));
+      } else {
+        info.appendChild(el("span", null, "—"));
+      }
+    }
+
+    var capBtn = el("button", "btn btn-small ss-template-icon-btn ss-template-icon-btn--capture");
+    capBtn.setAttribute("type", "button");
+    capBtn.title = "Capture Frame";
+    capBtn.setAttribute("aria-label", "Capture Frame");
+    capBtn.appendChild(el("span", "ss-template-icon-btn__glyph"));
+    capBtn.addEventListener("click", function () {
+      step._refTs = state.currentTimestamp;
+      step._upload = null;
+      renderInfo();
+      refreshCalibration({ debounce: true });
+    });
+    ctrl.appendChild(capBtn);
+
+    var fileInput = document.createElement("input");
+    fileInput.type = "file";
+    fileInput.accept = "image/png";
+    fileInput.style.display = "none";
+    fileInput.addEventListener("change", function () {
+      var file = fileInput.files[0];
+      if (!file) return;
+      var reader = new FileReader();
+      reader.onload = function (e) {
+        step._upload = { name: file.name, data: e.target.result.split(",")[1] };
+        step._refTs = undefined;
+        renderInfo();
+        refreshCalibration({ debounce: true });
+        showToast("Template loaded");
+      };
+      reader.readAsDataURL(file);
+    });
+    var uploadBtn = el("button", "btn btn-small ss-template-icon-btn ss-template-icon-btn--upload");
+    uploadBtn.setAttribute("type", "button");
+    uploadBtn.title = "Upload PNG";
+    uploadBtn.setAttribute("aria-label", "Upload PNG");
+    uploadBtn.appendChild(el("span", "ss-template-icon-btn__glyph"));
+    uploadBtn.addEventListener("click", function () { fileInput.click(); });
+    ctrl.appendChild(uploadBtn);
+    ctrl.appendChild(fileInput);
+
+    renderInfo();
+    ctrl.appendChild(info);
+    row.appendChild(ctrl);
+    body.appendChild(row);
+
     _mtAddNumberRow(body, "Threshold", "paramTemplateThresh" + sfx, 0.50, 1.00, numberOrDefault(init.threshold, 0.70), 0.01);
+    _mtAddNumberRow(body, "Scale %", "paramTemplateScale" + sfx, 25, 200, init.template_scale != null ? Math.round(init.template_scale * 100) : 100, 5);
   }
 
   function _mtRenderFlow(body, idx, sfx) {
@@ -4087,6 +4162,8 @@
         init.integers_only = !!((qs("#paramNumIntegersOnly" + sfx) || {}).checked);
       } else if (step.type === "template") {
         init.threshold = numberOrDefault((qs("#paramTemplateThresh" + sfx) || {}).value, init.threshold);
+        var tScalePct = numberOrDefault((qs("#paramTemplateScale" + sfx) || {}).value, 100);
+        init.template_scale = tScalePct / 100;
       } else if (step.type === "flow") {
         init.magnitude_threshold = numberOrDefault((qs("#paramFlowMag" + sfx) || {}).value, init.magnitude_threshold);
       } else if (step.type === "inactivity") {
@@ -6182,7 +6259,11 @@
     // Multitool uses per-step regions instead of a global region
     var isMultitool = state.activeWorkflow === "multitool";
     var multitoolReady = isMultitool && state.multitoolSteps.length >= 2;
-    var multitoolHasRegions = multitoolReady && state.multitoolSteps.every(function (s) { return !!s.region; });
+    // A template step with an uploaded image scans the full frame, so it
+    // satisfies the per-step region requirement without a region.
+    var multitoolHasRegions = multitoolReady && state.multitoolSteps.every(function (s) {
+      return !!s.region || (s.type === "template" && s._upload);
+    });
     if (isMultitool) {
       btn.disabled = !hasParticipants || !multitoolReady || !multitoolHasRegions;
       if (!hasParticipants) {
@@ -6364,12 +6445,19 @@
       p.integers_only = !!((qs("#paramNumIntegersOnly" + sfx) || {}).checked);
     } else if (stepType === "template") {
       step = state.multitoolSteps[idx];
-      if (!step || step._refTs === undefined) {
-        toast("Step " + (idx + 1) + ": capture a template frame first");
+      if (step && step._upload) {
+        p.template_image_data = step._upload.data;
+      } else if (step && step._refTs !== undefined) {
+        p.reference_timestamp = step._refTs;
+      } else {
+        toast("Step " + (idx + 1) + ": capture a template frame or upload a PNG");
         return null;
       }
-      p.reference_timestamp = step._refTs;
       p.threshold = numberOrDefault((qs("#paramTemplateThresh" + sfx) || {}).value, 0.70);
+      var tScalePct = parseFloat((qs("#paramTemplateScale" + sfx) || {}).value);
+      if (!isNaN(tScalePct) && tScalePct > 0 && tScalePct !== 100) {
+        p.template_scale = tScalePct / 100;
+      }
     } else if (stepType === "flow") {
       p.magnitude_threshold = numberOrDefault((qs("#paramFlowMag" + sfx) || {}).value, 2.0);
     } else if (stepType === "scene") {
