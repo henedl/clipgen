@@ -109,6 +109,11 @@ def release_reservation(path: str | os.PathLike[str] | None) -> None:
         pass
 
 
+def _apply_default_extension(name: str) -> str:
+    """Return *name* unchanged if it has an extension, else append FILEFORMAT."""
+    return name if Path(name).suffix else name + config.FILEFORMAT
+
+
 def get_source_video_filename(
     study: str, participant: str, override: str | None = None
 ) -> str:
@@ -125,13 +130,110 @@ def get_source_video_filename(
     if override is not None:
         override = override.strip()
     if override:
-        # If override includes an extension, respect it as-is.
-        suffix = Path(override).suffix
-        if suffix:
-            return override
-        # No extension present: append configured default file format.
-        return override + config.FILEFORMAT
+        # If override includes an extension, respect it as-is; else append default.
+        return _apply_default_extension(override)
     return f"{study}_{participant}{config.FILEFORMAT}"
+
+
+def get_source_video_filenames(
+    study: str, participant: str, override: str | None = None
+) -> list[str]:
+    """Resolve the ordered list of expected source video filenames for a clip.
+
+    Supports multiple source videos per participant that form one continuous
+    concatenated timeline (e.g. a recording that broke off, or a diary study).
+
+    - With an *override* (the spreadsheet ``Filename`` row): split on ``+`` so a
+      cell like ``"morning.mp4 + afternoon.mp4"`` yields two files in order. Each
+      part follows the same extension rule as :func:`get_source_video_filename`.
+      Empty parts are dropped. Order is authoritative (concatenation order).
+    - Without an override: returns the single plain name
+      ``{study}_{participant}.mp4``. On-disk numbered-suffix auto-detection
+      (``study_P01-1.mp4`` ...) is resolved later by the pipeline against the
+      input directory via :func:`discover_numbered_source_videos`.
+
+    Always returns at least one entry.
+    """
+    if override is not None:
+        override = override.strip()
+    if override:
+        parts = [p.strip() for p in override.split("+")]
+        names = [_apply_default_extension(p) for p in parts if p]
+        if names:
+            return names
+    return [f"{study}_{participant}{config.FILEFORMAT}"]
+
+
+def resolve_source_video_paths(
+    study: str, participant: str, override: str | None, input_dir: Path
+) -> list[Path]:
+    """Resolve a participant's ordered source-video paths without fuzzy matching.
+
+    Resolution order (same policy as the pipeline's interactive resolver, minus
+    the fuzzy-match prompt — for non-interactive callers like the studio server
+    and the ``--transcribe`` CLI):
+
+    - *override* present (the spreadsheet ``Filename`` row) → its plus-separated
+      parts, resolved in order.
+    - else the plain ``{study}_{participant}.mp4`` when it exists on disk.
+    - else on-disk numbered parts (``study_P01-1.mp4`` ...) when any exist.
+    - else the (missing) plain path, so callers can report it via ``is_file()``.
+
+    Always returns at least one path.
+    """
+    names = get_source_video_filenames(study, participant, override)
+
+    def _against_input_dir(name: str) -> Path:
+        path = Path(name)
+        return path if path.is_absolute() else input_dir / path
+
+    if override:
+        return [_against_input_dir(n) for n in names]
+    plain = _against_input_dir(names[0])
+    if plain.is_file():
+        return [plain]
+    numbered = discover_numbered_source_videos(input_dir, study, participant)
+    if numbered:
+        return numbered
+    return [plain]
+
+
+def discover_numbered_source_videos(
+    input_dir: Path, study: str, participant: str
+) -> list[Path]:
+    """Return numbered source-video parts for a participant, ordered by part number.
+
+    Globs *input_dir* for ``{study}_{participant}-N{FILEFORMAT}`` files and sorts
+    them by the integer N (so ``-2`` precedes ``-10``). Used only when no
+    spreadsheet override is set and the plain ``{study}_{participant}{FILEFORMAT}``
+    file is absent. Returns [] when no numbered parts exist.
+
+    The parts must form a gapless ``1..N`` sequence: concatenating non-contiguous
+    parts back-to-back would map global timestamps into the wrong sub-video. When
+    a gap is found, a warning is emitted and [] is returned (treated as no valid
+    multi-part sequence) rather than building a silently-wrong timeline.
+    """
+    prefix = f"{study}_{participant}"
+    matches: list[tuple[int, Path]] = []
+    for p in input_dir.glob(f"{prefix}-*{config.FILEFORMAT}"):
+        m = re.search(
+            config.NUMBERED_SOURCE_VIDEO_SUFFIX_PATTERN, p.name, re.IGNORECASE
+        )
+        if m:
+            matches.append((int(m.group(1)), p))
+    matches.sort(key=lambda item: item[0])
+    indices = [n for n, _ in matches]
+    if indices and not utils.numbered_parts_are_contiguous(indices):
+        utils.warning_print(
+            f"Numbered source videos for '{prefix}' are non-contiguous "
+            f"(found parts {indices}); expected 1..N with no gaps.",
+            [
+                "Ignoring the numbered sequence; rename the parts to a gapless "
+                "1..N sequence to enable concatenation.",
+            ],
+        )
+        return []
+    return [p for _, p in matches]
 
 
 def prepare_clip(clip: ClipRecord) -> ClipRecord:

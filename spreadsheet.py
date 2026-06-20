@@ -5,7 +5,7 @@ Expected spreadsheet layout (see README.md for a reference example):
 - Row 0 (A1): Study name; optional — falls back to spreadsheet title when empty.
 - Header row: Must contain required columns ID, Observation, Category (exact names from config).
   Optional columns: Severity (numeric -4..+2 or labels like Critical/High; enables severity mode)
-  and Filename (overrides auto-generated output filenames).
+  and Filename (overrides the source video filename per participant column).
 - Participant columns: Immediately follow the ID column; headers start with P or G (e.g. P01, G02).
   Each column holds timestamp strings; non-empty cells become clip candidates.
 - Observation column: Human-readable description per row; included in clip metadata and filenames.
@@ -19,6 +19,14 @@ Optional baseline time row:
   by subtracting the per-column baseline via utils.convert_clock_pairs_to_relative().
 - Participant columns without a baseline cell use relative timestamps as-is.
 - If the marker row is absent entirely, all columns are treated as relative.
+
+Optional Filename row (source video override):
+- A "Filename" header marks a row whose per-participant cells override the source video
+  filename for that column; the value is stored verbatim as clip['source_filename'] and is
+  never parsed as timestamps (so a '+' here is safe, unlike '+' inside a timestamp cell).
+- A cell may list several files plus-separated, order matters — "morning.mp4 + afternoon.mp4" —
+  to treat a participant's session as one continuous timeline spanning multiple source videos.
+  Without an override, the pipeline auto-detects numbered parts on disk (study_P01-1.mp4, ...).
 
 Coordinate system:
 - gspread uses 1-based row/col (e.g. Cell(row=1, col=1) is A1).
@@ -538,6 +546,33 @@ def find_participant_column(
         if header_value.lower() == normalized_target:
             return col_idx
     return None
+
+
+def participant_filename_overrides(ctx: SheetContext) -> dict[str, str | None]:
+    """Map each participant id to its ``Filename`` row override (or None).
+
+    The Filename row (``ctx.filename_row_idx``) holds a per-column source-video
+    override; a cell may list several files plus-separated for a multi-video
+    participant (``morning.mp4 + afternoon.mp4``). Returns ``{}`` when there is no
+    Filename row. Used by the studio/transcripts/screenspace servers to resolve a
+    participant's source video(s) via ``files.resolve_source_video_paths``.
+    """
+    overrides: dict[str, str | None] = {}
+    if ctx.filename_row_idx is None:
+        return overrides
+    participants = get_participant_list(
+        ctx.header_row, ctx.id_cell, ctx.num_participants
+    )
+    row_data = (
+        ctx.sheet_data[ctx.filename_row_idx]
+        if ctx.filename_row_idx < len(ctx.sheet_data)
+        else []
+    )
+    for p_idx, pid in enumerate(participants):
+        col_idx = ctx.id_cell.col + p_idx
+        value = row_data[col_idx].strip() if col_idx < len(row_data) else ""
+        overrides[pid] = value or None
+    return overrides
 
 
 def _make_clip_record(

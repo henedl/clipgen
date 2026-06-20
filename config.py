@@ -270,7 +270,14 @@ COMPRESSION_SIZE_FACTOR: float = 0.95  # Target 95% of max to leave headroom
 MIN_VIDEO_BITRATE_KBPS: int = 100
 
 # ── Source Video ──────────────────────────────────────────────────────
-SOURCE_VIDEO_PATTERN: str = r"_[PG]\d+\.mp4$"
+# Matches source-video filenames so discover_clips() can exclude them from the
+# generated-clip list. The optional ``-N`` group matches numbered parts of a
+# multi-video participant (e.g. study_P01-1.mp4, study_P01-2.mp4).
+SOURCE_VIDEO_PATTERN: str = r"_[PG]\d+(-\d+)?\.mp4$"
+# Trailing numbered suffix used to auto-detect a participant's source-video parts
+# on disk (one continuous timeline): study_P01-1.mp4, study_P01-2.mp4. The
+# capture group is the integer order; parts are sorted numerically, not lexically.
+NUMBERED_SOURCE_VIDEO_SUFFIX_PATTERN: str = r"-(\d+)\.mp4$"
 
 # ── Transcription ────────────────────────────────────────────────────
 TRANSCRIBE_ENABLED: bool = False  # use --transcribe CLI flag to enable per run

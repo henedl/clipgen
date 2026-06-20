@@ -395,7 +395,7 @@ def test_api_thumbnail_returns_jpeg(client, monkeypatch, tmp_path):
     )
     monkeypatch.setattr(server, "_sheet_context", ctx)
     monkeypatch.setattr(server, "_thumbnail_cache", OrderedDict())
-    monkeypatch.setattr("utils.resolve_input_path", lambda name: dummy_video)
+    monkeypatch.setattr("config.INPUT_DIR", str(tmp_path))
     monkeypatch.setattr(video, "extract_thumbnail_bytes", lambda *a, **kw: fake_jpeg)
 
     resp = client.get("/studio/api/thumbnail/P01/10")
@@ -424,7 +424,7 @@ def test_api_thumbnail_caches(client, monkeypatch, tmp_path):
     )
     monkeypatch.setattr(server, "_sheet_context", ctx)
     monkeypatch.setattr(server, "_thumbnail_cache", OrderedDict())
-    monkeypatch.setattr("utils.resolve_input_path", lambda name: dummy_video)
+    monkeypatch.setattr("config.INPUT_DIR", str(tmp_path))
 
     def counting_extract(*a, **kw):
         call_count[0] += 1
@@ -935,7 +935,7 @@ def test_api_reel_applies_time_overrides(client, monkeypatch, tmp_path):
 
 def test_api_gallery_404_when_video_not_found(client, monkeypatch):
     monkeypatch.setattr(server, "_sheet_context", object())
-    monkeypatch.setattr(server, "_resolve_source_video", lambda p: None)
+    monkeypatch.setattr(server, "_resolve_participant_sources", lambda p: [])
     resp = client.post(
         "/studio/api/gallery",
         json={"participant": "P01", "format": "screen", "interval": 10},
@@ -1164,7 +1164,7 @@ def test_api_gallery_short_circuits_after_cancel(client, monkeypatch, tmp_path):
     vid = tmp_path / "video.mp4"
     vid.write_bytes(b"x")
     monkeypatch.setattr(server, "_sheet_context", object())
-    monkeypatch.setattr(server, "_resolve_source_video", lambda p: vid)
+    monkeypatch.setattr(server, "_resolve_participant_sources", lambda p: [vid])
 
     def fake_captures(*a, **kw):
         server._gallery_cancel_event.set()
@@ -1256,7 +1256,7 @@ def test_api_gallery_short_circuits_when_cancelled_before_finalize(
     vid = tmp_path / "video.mp4"
     vid.write_bytes(b"x")
     monkeypatch.setattr(server, "_sheet_context", object())
-    monkeypatch.setattr(server, "_resolve_source_video", lambda p: vid)
+    monkeypatch.setattr(server, "_resolve_participant_sources", lambda p: [vid])
     monkeypatch.setattr(
         video,
         "generate_interval_captures",
@@ -1289,6 +1289,60 @@ def test_api_gallery_short_circuits_when_cancelled_before_finalize(
     assert resp.status_code == 200
     assert resp.get_json() == {"ok": False, "cancelled": True}
     assert generated_calls == []
+
+
+def test_api_gallery_multi_video_captures_all_parts_with_global_times(
+    client, monkeypatch, tmp_path
+):
+    """A multi-video participant's gallery spans every part with global times."""
+    import video
+    import viewer
+
+    a = tmp_path / "a.mp4"
+    b = tmp_path / "b.mp4"
+    a.write_bytes(b"x")
+    b.write_bytes(b"x")
+    monkeypatch.setattr(server, "_sheet_context", object())
+    monkeypatch.setattr(server, "_resolve_participant_sources", lambda p: [a, b])
+    monkeypatch.setattr(
+        video,
+        "timeline_or_none",
+        lambda paths: [(str(a), 80, 0), (str(b), 120, 80)],
+    )
+
+    calls = []
+
+    def fake_captures(path, **kw):
+        calls.append(path)
+        return [{"file": "f.png", "timestamp": 0.0, "type": "screen"}]
+
+    monkeypatch.setattr(video, "generate_interval_captures", fake_captures)
+
+    captured = {}
+
+    def fake_finalize(artifacts, **kw):
+        captured["artifacts"] = artifacts
+        captured["duration"] = kw.get("video_duration")
+        return {"meta": {}}
+
+    monkeypatch.setattr(viewer, "finalize_gallery_data", fake_finalize)
+    monkeypatch.setattr(
+        viewer, "generate_gallery_viewer", lambda *a, **kw: "/out/gallery.html"
+    )
+
+    server._gallery_cancel_event.clear()
+    resp = client.post(
+        "/studio/api/gallery",
+        json={"participant": "P01", "format": "screen", "interval": 10},
+    )
+
+    assert resp.status_code == 200
+    assert resp.get_json()["ok"] is True
+    assert calls == [str(a), str(b)]  # captured each part
+    # Part 2's captures are shifted by its cumulative start (80s).
+    timestamps = sorted(art["timestamp"] for art in captured["artifacts"])
+    assert timestamps == [0.0, 80.0]
+    assert captured["duration"] == 200  # total timeline duration
 
 
 def test_api_timeline_viewer_returns_409_when_busy(client, monkeypatch):
@@ -2168,7 +2222,7 @@ def test_api_generate_cancel_endpoint(client):
 def test_api_generate_intake_streams_per_item(client, monkeypatch):
     """POST /api/generate-intake yields one NDJSON line per item with index/ok."""
     monkeypatch.setattr(
-        server, "_resolve_intake_video_path", lambda p, s="": "/fake/video.mp4"
+        server, "_resolve_intake_video_paths", lambda p, s="": ["/fake/video.mp4"]
     )
     monkeypatch.setattr("video.run_ffmpeg", lambda *a, **kw: True)
     monkeypatch.setattr(server, "_save_manifest_quiet", lambda: None)
@@ -2209,7 +2263,7 @@ def test_api_generate_intake_streams_per_item(client, monkeypatch):
 
 def test_api_generate_intake_streams_failure(client, monkeypatch):
     """Items with no resolvable video stream an ok=false line with error."""
-    monkeypatch.setattr(server, "_resolve_intake_video_path", lambda p, s="": None)
+    monkeypatch.setattr(server, "_resolve_intake_video_paths", lambda p, s="": [])
     monkeypatch.setattr(server, "_save_manifest_quiet", lambda: None)
 
     items = [
@@ -2325,7 +2379,7 @@ def test_api_generate_intake_distinct_ids_for_same_span(client, monkeypatch):
     """Two intake items over the same participant span receive distinct artifact
     ids, so manifest dedup does not silently collapse them onto one record."""
     monkeypatch.setattr(
-        server, "_resolve_intake_video_path", lambda p, s="": "/fake/video.mp4"
+        server, "_resolve_intake_video_paths", lambda p, s="": ["/fake/video.mp4"]
     )
     monkeypatch.setattr("video.run_ffmpeg", lambda *a, **kw: True)
     monkeypatch.setattr(server, "_save_manifest_quiet", lambda: None)
@@ -2392,7 +2446,7 @@ def test_api_generate_intake_persists_on_early_client_close(client, monkeypatch)
     saved: list[bool] = []
     monkeypatch.setattr(server, "_save_manifest_quiet", lambda: saved.append(True))
     monkeypatch.setattr(
-        server, "_resolve_intake_video_path", lambda p, s="": "/fake/video.mp4"
+        server, "_resolve_intake_video_paths", lambda p, s="": ["/fake/video.mp4"]
     )
     monkeypatch.setattr("video.run_ffmpeg", lambda *a, **kw: True)
     monkeypatch.setattr(
@@ -2670,7 +2724,7 @@ def test_api_reel_direct_continues_worker_after_client_disconnect(
     import threading
 
     monkeypatch.setattr(
-        server, "_resolve_intake_video_path", lambda p, s="": "/fake/video.mp4"
+        server, "_resolve_intake_video_paths", lambda p, s="": ["/fake/video.mp4"]
     )
     monkeypatch.setattr("config.OUTPUT_DIR", str(tmp_path))
     monkeypatch.setattr(server, "_generated_reels", [])
@@ -2720,7 +2774,7 @@ def test_api_reel_direct_cleans_temp_clips_after_disconnect(
     from pathlib import Path
 
     monkeypatch.setattr(
-        server, "_resolve_intake_video_path", lambda p, s="": "/fake/video.mp4"
+        server, "_resolve_intake_video_paths", lambda p, s="": ["/fake/video.mp4"]
     )
     monkeypatch.setattr("config.OUTPUT_DIR", str(tmp_path))
     monkeypatch.setattr(server, "_generated_reels", [])
@@ -2779,7 +2833,7 @@ def test_api_reel_direct_explicit_cancel_still_works(client, monkeypatch, tmp_pa
     import threading
 
     monkeypatch.setattr(
-        server, "_resolve_intake_video_path", lambda p, s="": "/fake/video.mp4"
+        server, "_resolve_intake_video_paths", lambda p, s="": ["/fake/video.mp4"]
     )
     monkeypatch.setattr("config.OUTPUT_DIR", str(tmp_path))
     monkeypatch.setattr(server, "_generated_reels", [])
@@ -3211,7 +3265,9 @@ def test_api_job_status_reflects_intake_progress(client, monkeypatch, tmp_path):
         }
 
     monkeypatch.setattr(server, "_process_intake_item", slow_item)
-    monkeypatch.setattr(server, "_resolve_intake_video_path", lambda p, s="": "vid.mp4")
+    monkeypatch.setattr(
+        server, "_resolve_intake_video_paths", lambda p, s="": ["vid.mp4"]
+    )
     monkeypatch.setattr("pipeline._resolve_clip_workers", lambda: 1)
 
     items = [{"participant": "P01", "start": 0, "end": 5, "source": "screenspace"}]
@@ -3262,7 +3318,7 @@ def test_api_generate_intake_passes_cancel_flag_to_run_ffmpeg(
     """_process_intake_item must forward cancel_flag into video.run_ffmpeg
     so an in-flight ffmpeg encode can be terminated."""
     monkeypatch.setattr(
-        server, "_resolve_intake_video_path", lambda p, s="": "/fake/video.mp4"
+        server, "_resolve_intake_video_paths", lambda p, s="": ["/fake/video.mp4"]
     )
     monkeypatch.setattr("config.OUTPUT_DIR", str(tmp_path))
     monkeypatch.setattr(server, "_generated_artifacts", [])
@@ -3300,7 +3356,7 @@ def test_api_generate_intake_short_circuits_after_cancel(client, monkeypatch, tm
     """When cancel is signaled before the worker starts, no ffmpeg is
     invoked and a {cancelled: true} marker is yielded."""
     monkeypatch.setattr(
-        server, "_resolve_intake_video_path", lambda p, s="": "/fake/video.mp4"
+        server, "_resolve_intake_video_paths", lambda p, s="": ["/fake/video.mp4"]
     )
     monkeypatch.setattr("config.OUTPUT_DIR", str(tmp_path))
     monkeypatch.setattr(server, "_generated_artifacts", [])
@@ -3359,7 +3415,7 @@ def test_api_reel_direct_wraps_segments_when_titlecards_enabled(
     """Each segment must be wrapped via titlecards.wrap_clip_with_cards with the
     per-request duration before the concat list is assembled."""
     monkeypatch.setattr(
-        server, "_resolve_intake_video_path", lambda p, s="": "/fake/video.mp4"
+        server, "_resolve_intake_video_paths", lambda p, s="": ["/fake/video.mp4"]
     )
     monkeypatch.setattr("config.OUTPUT_DIR", str(tmp_path))
     monkeypatch.setattr(server, "_generated_reels", [])
@@ -3426,7 +3482,7 @@ def test_api_reel_direct_skips_wrap_when_titlecards_disabled(
 ):
     """No wrap_clip_with_cards calls when titlecards_enabled is False."""
     monkeypatch.setattr(
-        server, "_resolve_intake_video_path", lambda p, s="": "/fake/video.mp4"
+        server, "_resolve_intake_video_paths", lambda p, s="": ["/fake/video.mp4"]
     )
     monkeypatch.setattr("config.OUTPUT_DIR", str(tmp_path))
     monkeypatch.setattr(server, "_generated_reels", [])
@@ -3460,7 +3516,7 @@ def test_api_reel_direct_clears_endcard_cache(client, monkeypatch, tmp_path):
     """The worker's finally block must purge the endcard cache so per-request
     titlecard temp files don't leak between reel builds."""
     monkeypatch.setattr(
-        server, "_resolve_intake_video_path", lambda p, s="": "/fake/video.mp4"
+        server, "_resolve_intake_video_paths", lambda p, s="": ["/fake/video.mp4"]
     )
     monkeypatch.setattr("config.OUTPUT_DIR", str(tmp_path))
     monkeypatch.setattr(server, "_generated_reels", [])

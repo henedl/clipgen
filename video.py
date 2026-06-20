@@ -1082,6 +1082,42 @@ def get_file_duration(filepath: str) -> int | None:
     return dur
 
 
+def build_source_timeline(paths: list[str]) -> list[tuple[str, int, int]] | None:
+    """Build a concatenated-timeline view of multiple source videos.
+
+    Given an ordered list of source-video paths that form one continuous
+    recording (a participant whose session spans several files), probe each
+    duration and return ``[(path, duration, cumulative_start), ...]`` where
+    ``cumulative_start`` is the sum of all preceding durations (the first entry
+    starts at 0). A global timestamp is mapped into a sub-video by walking these
+    ranges (see ``utils.map_global_to_segment``).
+
+    Returns ``None`` if any file's duration cannot be probed — the caller should
+    skip the clip rather than guess offsets. Only called for 2+ paths; the
+    single-video path never probes durations.
+    """
+    timeline: list[tuple[str, int, int]] = []
+    cumulative = 0
+    for path in paths:
+        duration = get_file_duration(path)
+        if duration is None:
+            return None
+        timeline.append((path, duration, cumulative))
+        cumulative += duration
+    return timeline
+
+
+def timeline_or_none(paths: list[str]) -> list[tuple[str, int, int]] | None:
+    """Build a source timeline for 2+ paths, else None (single-video fast path).
+
+    The single guard that preserves the no-extra-ffprobe contract: callers pass a
+    participant's ordered paths and only multi-video participants get a probed
+    timeline; a single-video participant returns None and keeps the original
+    single-file code path.
+    """
+    return build_source_timeline(paths) if len(paths) >= 2 else None
+
+
 def probe_video_properties(filepath: str) -> dict[str, Any] | None:
     """Probe video file for stream properties (resolution, codecs, timing).
 

@@ -18,6 +18,8 @@ clipgen is written in Python and interacts with a local video files through [ffm
 
 Place your video files in the same directory as the program and name them following this syntax: `{study}_{participant}.mp4` (e.g. `mystudy_P01.mp4`).
 
+If a participant's session spans **several video files** (a recording that broke off, or a diary study), name them with a numbered suffix — `mystudy_P01-1.mp4`, `mystudy_P01-2.mp4`, ... — and clipgen treats them as one continuous recording: a timestamp is mapped into the right file by cumulative duration (if file 1 is 1m20s long, a timestamp at `2:04` becomes `0:44` into file 2). The plain `mystudy_P01.mp4` takes precedence when it exists; numbered parts are used only when it is absent.
+
 Then run the program interactively by launching the binary or:
 
 ```shell
@@ -55,6 +57,8 @@ Timestamps must be separated by characters ```+ , ;```
 Ranges must be separated by character ```-```
 
 An optional `Baseline time` row supports clock/absolute timestamps: add a baseline timestamp per participant column (e.g. `09:12:00`), and clipgen automatically converts those timestamps to relative offsets before cutting clips. Columns without a baseline value use relative timestamps.
+
+An optional `Filename` row overrides the source video filename per participant column. To declare **multiple source videos** for a participant (one continuous timeline), list them plus-separated in this row — order matters: `morning.mp4 + afternoon.mp4`. This takes precedence over the on-disk `-N` auto-detection. A clip whose range straddles the boundary between two files is cut from both and stitched into a single clip.
 
 ## Features
 

@@ -101,6 +101,17 @@ def test_discover_clips_excludes_source_videos(tmp_path, monkeypatch):
     assert sorted(clips) == ["study_P01-clip-1.mp4", "study_P01-clip-2.mp4"]
 
 
+def test_discover_clips_excludes_numbered_source_videos(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "study_P01.mp4").write_text("video")  # plain source
+    (tmp_path / "study_P01-1.mp4").write_text("part1")  # numbered source part
+    (tmp_path / "study_P01-2.mp4").write_text("part2")  # numbered source part
+    (tmp_path / "[cat] study P01 desc.mp4").write_text("clip")  # generated clip
+
+    clips = files.discover_clips()
+    assert clips == ["[cat] study P01 desc.mp4"]
+
+
 def test_prepare_clip_pre_parsed_fast_path_keeps_times_and_sanitizes_desc():
     # Synthetic clips (e.g. --ss-clips) arrive with times already parsed and a
     # SimpleNamespace cell. prepare_clip should skip the cell-based parse,

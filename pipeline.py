@@ -113,33 +113,26 @@ def _large_input_videos(input_dir: Path) -> list[tuple[int, Path]]:
     return entries
 
 
-def _check_source_video(
-    clip: ClipRecord,
+def _resolve_one_source(
+    base_name: str,
     missing_videos: set[str],
     skip_detail: str,
     fuzzy_matches: dict[str, str | None],
 ) -> str | None:
-    """Return the expected source video path if it exists; log a detailed error once per missing file.
+    """Resolve one expected source-video filename to an on-disk path, or None.
 
-    The expected filename is derived from clip['study'] and clip['participant'] by default,
-    but can be overridden per-participant via an optional source_filename field.
-    When no exact match is found, scans the input directory for large .mp4 files and
-    offers the closest fuzzy match for user confirmation.
-    Paths already seen in missing_videos are not reported again.
+    Exact match in the input directory wins. Otherwise scans for large .mp4 files
+    and offers the closest fuzzy match for user confirmation. Paths already seen
+    in *missing_videos* are not reported again. The missing/fuzzy branch is
+    serialized by ``_fuzzy_match_lock`` so parallel reel workers neither race nor
+    interleave prompts.
     """
-    override = clip.get("source_filename")
-    base_name = files.get_source_video_filename(
-        clip["study"], clip["participant"], override
-    )
     full_path = utils.resolve_input_path(base_name)
     if full_path.is_file():
         return str(full_path)
 
     full_path_str = str(full_path)
 
-    # The missing-video branch reads and mutates the caller's shared
-    # fuzzy_matches / missing_videos and may prompt the user; serialize it so
-    # parallel reel workers neither race nor interleave prompts.
     with _fuzzy_match_lock:
         # Check fuzzy match cache (value may be None = user rejected or no candidate)
         if full_path_str in fuzzy_matches:
@@ -192,6 +185,78 @@ def _check_source_video(
         return None
 
 
+def _check_source_video(
+    clip: ClipRecord,
+    missing_videos: set[str],
+    skip_detail: str,
+    fuzzy_matches: dict[str, str | None],
+) -> str | None:
+    """Resolve a clip's source video(s) and return the first source path, or None.
+
+    A participant's session may span several source videos that form one
+    continuous timeline (a recording that broke off, or a diary study). They are
+    declared either by the spreadsheet ``Filename`` row (plus-separated, e.g.
+    ``"morning.mp4 + afternoon.mp4"``) or auto-detected on disk by numbered
+    suffix (``study_P01-1.mp4``, ``study_P01-2.mp4``).
+
+    Resolution order:
+    - Override present → resolve each plus-separated part; any missing → skip clip.
+    - No override → the plain ``{study}_{participant}.mp4`` wins when present
+      (single video). Only when it is absent do we auto-detect numbered parts;
+      if none exist, fall back to the fuzzy-match prompt on the plain name.
+
+    When 2+ videos resolve, the duration timeline is built and stored on
+    ``clip['source_timeline']`` so the cut/artifact stages can map global
+    timestamps into the right sub-video. The single-video path never probes
+    durations and leaves ``source_timeline`` unset.
+    """
+    override = clip.get("source_filename")
+    names = files.get_source_video_filenames(
+        clip["study"], clip["participant"], override
+    )
+
+    resolved: list[str] = []
+    if override:
+        for name in names:
+            one = _resolve_one_source(name, missing_videos, skip_detail, fuzzy_matches)
+            if one is None:
+                return None
+            resolved.append(one)
+    else:
+        plain = names[0]
+        plain_path = utils.resolve_input_path(plain)
+        if plain_path.is_file():
+            resolved = [str(plain_path)]
+        else:
+            numbered = files.discover_numbered_source_videos(
+                utils.get_effective_input_dir(), clip["study"], clip["participant"]
+            )
+            if numbered:
+                resolved = [str(p) for p in numbered]
+            else:
+                one = _resolve_one_source(
+                    plain, missing_videos, skip_detail, fuzzy_matches
+                )
+                if one is None:
+                    return None
+                resolved = [one]
+
+    if len(resolved) >= 2:
+        timeline = video.build_source_timeline(resolved)
+        if timeline is None:
+            utils.error_print(
+                "Could not read durations for all source videos; clip will be skipped.",
+                [
+                    f"Participant '{clip['participant']}' in study '{clip['study']}'",
+                    "Source files: " + ", ".join(Path(p).name for p in resolved),
+                ],
+            )
+            return None
+        clip["source_timeline"] = timeline
+
+    return resolved[0]
+
+
 def _prepare_and_check_clip(
     clip: ClipRecord,
     missing_videos: set[str],
@@ -214,6 +279,160 @@ def _prepare_and_check_clip(
         fuzzy_matches,
     )
     return (clip, base_video)
+
+
+def _local_timestamp(seconds: float) -> str:
+    """Format local *seconds* as ``H:MM:SS`` for ffmpeg.
+
+    Always emits the hours component so a clip's start/end can't end up in mixed
+    formats (``video.get_duration`` parses both ends with one format). These
+    strings feed ffmpeg, not the spreadsheet, so the explicit hours are harmless.
+    """
+    return utils.seconds_to_timestamp(int(round(seconds)), force_hours=True)
+
+
+def _point_source(
+    timeline: list[tuple[str, int, int]], start_time: str
+) -> tuple[str, str, int] | None:
+    """Map a single global timestamp to ``(source_path, local_start_ts, remaining)``.
+
+    For screenshot/GIF cuts, which key off the start time only. ``remaining`` is
+    how many seconds of the owning sub-video follow the start (used to clamp GIF
+    length so it never reads past the sub-video). Returns None if out of range.
+    """
+    global_start = utils.timestamp_to_seconds(start_time) or 0.0
+    mapped = utils.map_global_to_segment(timeline, global_start)
+    if mapped is None:
+        return None
+    index, local_start = mapped
+    seg_duration = timeline[index][1]
+    remaining = max(1, seg_duration - int(round(local_start)))
+    return (timeline[index][0], _local_timestamp(local_start), remaining)
+
+
+def _stitch_clip_pieces(
+    timeline: list[tuple[str, int, int]],
+    pieces: list[tuple[int, float, float]],
+    out_name: str,
+    file_extension: str,
+    cancel_flag: Callable[[], bool] | None,
+) -> bool:
+    """Cut each boundary-spanning piece to a temp file and concatenate into *out_name*.
+
+    Used when a clip range straddles the boundary between two source videos: each
+    piece is cut from its sub-video at local offsets, then stitched into one clip
+    (mirrors the reel temp-file + concat pattern). Returns False (cleaning up) if
+    any piece fails.
+    """
+    temp_paths: list[str] = []
+    for n, (index, local_start, local_end) in enumerate(pieces):
+        tmp = files.get_unique_filename(
+            f"_multipart_{n + 1}{file_extension}", file_format=file_extension
+        )
+        if video.run_ffmpeg(
+            input_file=timeline[index][0],
+            output_file=tmp,
+            start_pos=_local_timestamp(local_start),
+            end_pos=_local_timestamp(local_end),
+            reencode=config.REENCODING,
+            cancel_flag=cancel_flag,
+        ):
+            temp_paths.append(tmp)
+        else:
+            files.release_reservation(tmp)
+            for p in temp_paths:
+                Path(p).unlink(missing_ok=True)
+            return False
+    ok = video.concatenate_clips(
+        temp_paths, out_name, reencode_on_fail=True, cancel_flag=cancel_flag
+    )
+    for p in temp_paths:
+        try:
+            Path(p).unlink(missing_ok=True)
+        except OSError:
+            pass
+    return ok
+
+
+def cut_global_range(
+    timeline: list[tuple[str, int, int]] | None,
+    base_video: str,
+    start_seconds: float,
+    end_seconds: float,
+    out_path: str,
+    *,
+    reencode: bool,
+    cancel_flag: Callable[[], bool] | None = None,
+) -> dict[str, Any] | None:
+    """Cut a GLOBAL ``[start, end]`` span into *out_path*, mapping into sub-videos.
+
+    For single-video participants (*timeline* is None) this is a plain cut from
+    *base_video* at the global times. For multi-video participants the global span
+    is mapped onto the timeline: a within-segment span is cut from the owning
+    sub-video at local offsets; a boundary-spanning span is stitched from each
+    piece (via :func:`_stitch_clip_pieces`).
+
+    Returns the source-reference fields for the artifact —
+    ``{sourceVideo (basename), localStart, localEnd}`` plus ``parts`` for a
+    stitched span — or ``None`` on failure (caller releases the reservation).
+    Used by the Studio intake (single clip + intake reel); mirrors the artifact
+    contract the main clip pipeline writes.
+    """
+    if timeline is None:
+        ok = video.run_ffmpeg(
+            base_video,
+            out_path,
+            utils.seconds_to_timestamp(int(round(start_seconds))),
+            utils.seconds_to_timestamp(int(round(end_seconds))),
+            reencode,
+            cancel_flag=cancel_flag,
+        )
+        if not ok:
+            return None
+        return {
+            "sourceVideo": Path(base_video).name,
+            "localStart": start_seconds,
+            "localEnd": end_seconds,
+        }
+
+    pieces = utils.map_global_range_to_segments(timeline, start_seconds, end_seconds)
+    if not pieces:
+        return None
+    if len(pieces) == 1:
+        seg_index, local_start, local_end = pieces[0]
+        ok = video.run_ffmpeg(
+            timeline[seg_index][0],
+            out_path,
+            _local_timestamp(local_start),
+            _local_timestamp(local_end),
+            reencode,
+            cancel_flag=cancel_flag,
+        )
+        if not ok:
+            return None
+        return {
+            "sourceVideo": Path(timeline[seg_index][0]).name,
+            "localStart": local_start,
+            "localEnd": local_end,
+        }
+
+    extension = Path(out_path).suffix or config.FILEFORMAT
+    if not _stitch_clip_pieces(timeline, pieces, out_path, extension, cancel_flag):
+        return None
+    parts = [
+        {
+            "sourceVideo": Path(timeline[index][0]).name,
+            "localStart": local_start,
+            "localEnd": local_end,
+        }
+        for index, local_start, local_end in pieces
+    ]
+    return {
+        "sourceVideo": parts[0]["sourceVideo"],
+        "localStart": parts[0]["localStart"],
+        "localEnd": parts[0]["localEnd"],
+        "parts": parts,
+    }
 
 
 def _process_single_clip_segments(
@@ -270,6 +489,11 @@ def _process_single_clip_segments(
         titlecards_enabled, titlecard_duration_seconds
     )
 
+    # Multi-video participants carry a duration timeline; global timestamps are
+    # mapped into the owning sub-video at cut time. Absent = single-video fast
+    # path (unchanged behavior, no probing).
+    timeline = clip.get("source_timeline")
+
     # Probe the source video once so wrap_clip_with_cards doesn't need to re-probe
     # each generated output; stream-copy cuts preserve source resolution.
     source_resolution: str | None = None
@@ -297,14 +521,41 @@ def _process_single_clip_segments(
             )
             return (generated, output_paths)
         if output_format == "clip":
-            ok = video.run_ffmpeg(
-                input_file=base_video,
-                output_file=out_name,
-                start_pos=start_time,
-                end_pos=end_time,
-                reencode=config.REENCODING,
-                cancel_flag=cancel_flag,
-            )
+            if timeline:
+                global_start = utils.timestamp_to_seconds(start_time) or 0.0
+                global_end = utils.timestamp_to_seconds(end_time) or 0.0
+                pieces = utils.map_global_range_to_segments(
+                    timeline, global_start, global_end
+                )
+                if not pieces:
+                    ok = False
+                elif len(pieces) == 1:
+                    seg_index, local_start, local_end = pieces[0]
+                    ok = video.run_ffmpeg(
+                        input_file=timeline[seg_index][0],
+                        output_file=out_name,
+                        start_pos=_local_timestamp(local_start),
+                        end_pos=_local_timestamp(local_end),
+                        reencode=config.REENCODING,
+                        cancel_flag=cancel_flag,
+                    )
+                else:
+                    ok = _stitch_clip_pieces(
+                        timeline,
+                        pieces,
+                        out_name,
+                        file_extension,
+                        cancel_flag,
+                    )
+            else:
+                ok = video.run_ffmpeg(
+                    input_file=base_video,
+                    output_file=out_name,
+                    start_pos=start_time,
+                    end_pos=end_time,
+                    reencode=config.REENCODING,
+                    cancel_flag=cancel_flag,
+                )
             if ok and cards_enabled:
                 ok = titlecards.wrap_clip_with_cards(
                     clip,
@@ -314,21 +565,36 @@ def _process_single_clip_segments(
                     titlecards_enabled=cards_enabled,
                     titlecard_duration_seconds=card_duration,
                 )
-        elif output_format == "screen":
-            ok = video.extract_screenshot(
-                input_file=base_video,
-                output_file=out_name,
-                timestamp=start_time,
-                cancel_flag=cancel_flag,
-            )
-        else:  # output_format == 'gif'
-            ok = video.extract_gif(
-                input_file=base_video,
-                output_file=out_name,
-                timestamp=start_time,
-                duration_seconds=config.DEFAULT_GIF_DURATION_SECONDS,
-                cancel_flag=cancel_flag,
-            )
+        else:  # output_format == 'screen' or 'gif' — keys off the start time only
+            src_path: str | None = base_video
+            cut_ts = start_time
+            remaining: int | None = None
+            if timeline:
+                point = _point_source(timeline, start_time)
+                if point is None:
+                    src_path = None
+                else:
+                    src_path, cut_ts, remaining = point
+            if src_path is None:
+                ok = False
+            elif output_format == "screen":
+                ok = video.extract_screenshot(
+                    input_file=src_path,
+                    output_file=out_name,
+                    timestamp=cut_ts,
+                    cancel_flag=cancel_flag,
+                )
+            else:  # output_format == 'gif'
+                gif_duration = config.DEFAULT_GIF_DURATION_SECONDS
+                if remaining is not None:
+                    gif_duration = min(gif_duration, remaining)
+                ok = video.extract_gif(
+                    input_file=src_path,
+                    output_file=out_name,
+                    timestamp=cut_ts,
+                    duration_seconds=gif_duration,
+                    cancel_flag=cancel_flag,
+                )
         if ok:
             generated += 1
             if collect_paths:
@@ -592,12 +858,19 @@ def _transcribe_segments(
                 model=entry.get("model", ""),
             )
         else:
-            resolved = str(utils.resolve_input_path(base_video))
             context_keywords = transcripts.get_corrections_keywords(corrections) or None
-            result = transcripts.transcribe_video(
-                resolved, context_keywords=context_keywords
-            )
-            transcript_cache[base_video] = result
+            timeline = clip.get("source_timeline")
+            if timeline:
+                # Multi-video participant: transcribe all parts as one global
+                # timeline so segment times match the clip artifacts.
+                transcript_cache[base_video] = transcripts.transcribe_timeline(
+                    timeline, context_keywords=context_keywords
+                )
+            else:
+                resolved = str(utils.resolve_input_path(base_video))
+                transcript_cache[base_video] = transcripts.transcribe_video(
+                    resolved, context_keywords=context_keywords
+                )
     full_transcript = transcript_cache[base_video]
     if not full_transcript:
         return
@@ -1440,10 +1713,67 @@ def regenerate_from_manifest(
     return generated
 
 
+def _reapply_titlecards(artifact: dict[str, Any], output_path: str) -> bool:
+    """Reapply titlecards to a regenerated clip when the manifest entry used them."""
+    clip: ClipRecord = {"desc": artifact.get("description", "")}
+    return titlecards.wrap_clip_with_cards(
+        clip,
+        output_path,
+        titlecards_enabled=True,
+        titlecard_duration_seconds=(
+            artifact.get("titlecardDuration") or config.TITLECARD_DURATION_SECONDS
+        ),
+    )
+
+
 def _regenerate_single_artifact(
     artifact: dict[str, Any], missing_videos: set[str]
 ) -> bool:
-    """Regenerate one artifact from its manifest entry. Returns True on success."""
+    """Regenerate one artifact from its manifest entry. Returns True on success.
+
+    Cuts from the artifact's mapped ``sourceVideo`` using ``localStart``/
+    ``localEnd`` (the offsets local to that sub-video; equal to the global
+    ``start``/``end`` for single-video participants). A boundary-spanning clip
+    carries a ``parts`` list — each part is re-cut from its sub-video and
+    stitched back together.
+    """
+    output_path = str(utils.resolve_output_path(artifact.get("file", "")))
+    artifact_type = artifact.get("type", "clip")
+
+    parts = artifact.get("parts")
+    if artifact_type == "clip" and parts:
+        temp_paths: list[str] = []
+        for n, part in enumerate(parts):
+            part_source = part.get("sourceVideo", "")
+            part_path = str(utils.resolve_input_path(part_source))
+            if not Path(part_path).is_file():
+                if part_path not in missing_videos:
+                    missing_videos.add(part_path)
+                    utils.warning_print(f"Source video not found: '{part_source}'")
+                for p in temp_paths:
+                    Path(p).unlink(missing_ok=True)
+                return False
+            tmp = files.get_unique_filename(f"_multipart_{n + 1}{config.FILEFORMAT}")
+            if video.run_ffmpeg(
+                input_file=part_path,
+                output_file=tmp,
+                start_pos=utils.seconds_to_timestamp(int(part.get("localStart", 0))),
+                end_pos=utils.seconds_to_timestamp(int(part.get("localEnd", 0))),
+                reencode=config.REENCODING,
+            ):
+                temp_paths.append(tmp)
+            else:
+                files.release_reservation(tmp)
+                for p in temp_paths:
+                    Path(p).unlink(missing_ok=True)
+                return False
+        ok = video.concatenate_clips(temp_paths, output_path, reencode_on_fail=True)
+        for p in temp_paths:
+            Path(p).unlink(missing_ok=True)
+        if ok and artifact.get("titlecards"):
+            ok = _reapply_titlecards(artifact, output_path)
+        return ok
+
     source_name = artifact.get("sourceVideo", "")
     if not source_name:
         utils.warning_print(
@@ -1458,12 +1788,10 @@ def _regenerate_single_artifact(
             utils.warning_print(f"Source video not found: '{source_name}'")
         return False
 
-    output_path = str(utils.resolve_output_path(artifact.get("file", "")))
-    start_sec = artifact.get("start", 0)
-    end_sec = artifact.get("end", 0)
-    start_ts = utils.seconds_to_timestamp(int(start_sec))
-    end_ts = utils.seconds_to_timestamp(int(end_sec))
-    artifact_type = artifact.get("type", "clip")
+    local_start = artifact.get("localStart", artifact.get("start", 0))
+    local_end = artifact.get("localEnd", artifact.get("end", 0))
+    start_ts = utils.seconds_to_timestamp(int(local_start))
+    end_ts = utils.seconds_to_timestamp(int(local_end))
 
     if artifact_type == "clip":
         ok = video.run_ffmpeg(
@@ -1475,16 +1803,7 @@ def _regenerate_single_artifact(
         )
         # Reapply titlecards if the manifest entry was generated with them.
         if ok and artifact.get("titlecards"):
-            clip: ClipRecord = {"desc": artifact.get("description", "")}
-            ok = titlecards.wrap_clip_with_cards(
-                clip,
-                output_path,
-                titlecards_enabled=True,
-                titlecard_duration_seconds=(
-                    artifact.get("titlecardDuration")
-                    or config.TITLECARD_DURATION_SECONDS
-                ),
-            )
+            ok = _reapply_titlecards(artifact, output_path)
         return ok
     elif artifact_type == "screen":
         return video.extract_screenshot(
@@ -1493,7 +1812,9 @@ def _regenerate_single_artifact(
             timestamp=start_ts,
         )
     elif artifact_type == "gif":
-        duration = max(int(end_sec - start_sec), config.DEFAULT_GIF_DURATION_SECONDS)
+        duration = max(
+            int(local_end - local_start), config.DEFAULT_GIF_DURATION_SECONDS
+        )
         return video.extract_gif(
             input_file=source_path,
             output_file=output_path,
@@ -1515,29 +1836,37 @@ def _regenerate_reel(reel: dict[str, Any], missing_videos: set[str]) -> bool:
 
     temp_paths: list[str] = []
     for comp in components:
-        source = comp.get("sourceVideo", "")
-        source_path = str(utils.resolve_input_path(source))
-        if not Path(source_path).is_file():
-            if source_path not in missing_videos:
-                missing_videos.add(source_path)
-                utils.warning_print(f"Source video not found: '{source}'")
-            continue
+        # A boundary-spanning component carries a ``parts`` list; each part is a
+        # separate cut. Since a reel is a concatenation, the parts simply become
+        # consecutive entries in the temp list. Single-segment components cut
+        # directly from their mapped sub-video using local offsets.
+        segments = comp.get("parts") or [comp]
+        for segment in segments:
+            source = segment.get("sourceVideo", "")
+            source_path = str(utils.resolve_input_path(source))
+            if not Path(source_path).is_file():
+                if source_path not in missing_videos:
+                    missing_videos.add(source_path)
+                    utils.warning_print(f"Source video not found: '{source}'")
+                continue
 
-        start_ts = utils.seconds_to_timestamp(int(comp["start"]))
-        end_ts = utils.seconds_to_timestamp(int(comp["end"]))
-        out_name = files.get_unique_filename(
-            f"_reel_part_{len(temp_paths) + 1}{config.FILEFORMAT}"
-        )
-        if video.run_ffmpeg(
-            input_file=source_path,
-            output_file=out_name,
-            start_pos=start_ts,
-            end_pos=end_ts,
-            reencode=config.REENCODING,
-        ):
-            temp_paths.append(out_name)
-        else:
-            files.release_reservation(out_name)
+            local_start = segment.get("localStart", segment.get("start", 0))
+            local_end = segment.get("localEnd", segment.get("end", 0))
+            start_ts = utils.seconds_to_timestamp(int(local_start))
+            end_ts = utils.seconds_to_timestamp(int(local_end))
+            out_name = files.get_unique_filename(
+                f"_reel_part_{len(temp_paths) + 1}{config.FILEFORMAT}"
+            )
+            if video.run_ffmpeg(
+                input_file=source_path,
+                output_file=out_name,
+                start_pos=start_ts,
+                end_pos=end_ts,
+                reencode=config.REENCODING,
+            ):
+                temp_paths.append(out_name)
+            else:
+                files.release_reservation(out_name)
 
     if not temp_paths:
         return False

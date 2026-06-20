@@ -409,7 +409,7 @@ def test_ss_task_no_video_errors(monkeypatch, capsys):
     import screenspace
 
     monkeypatch.setattr(screenspace, "load_screenspace_manifest", lambda: fake_manifest)
-    monkeypatch.setattr(cli, "_ss_resolve_video_for_participant", lambda pid: None)
+    monkeypatch.setattr(cli, "_ss_resolve_videos_for_participant", lambda pid: [])
 
     args = _ss_args(
         ss_task=["color", "P01", "btn"],
@@ -445,7 +445,7 @@ def test_ss_task_color_missing_target_color_errors(monkeypatch, capsys):
 
     monkeypatch.setattr(screenspace, "load_screenspace_manifest", lambda: fake_manifest)
     monkeypatch.setattr(
-        cli, "_ss_resolve_video_for_participant", lambda pid: "/tmp/fake.mp4"
+        cli, "_ss_resolve_videos_for_participant", lambda pid: ["/tmp/fake.mp4"]
     )
     monkeypatch.setattr(
         video_mod,
@@ -487,7 +487,7 @@ def test_ss_task_color_dispatches_and_persists(monkeypatch):
 
     monkeypatch.setattr(screenspace, "load_screenspace_manifest", lambda: fake_manifest)
     monkeypatch.setattr(
-        cli, "_ss_resolve_video_for_participant", lambda pid: "/tmp/fake.mp4"
+        cli, "_ss_resolve_videos_for_participant", lambda pid: ["/tmp/fake.mp4"]
     )
     monkeypatch.setattr(
         video_mod,
@@ -598,7 +598,7 @@ def _install_ss_stubs(monkeypatch, fake_manifest):
 
     monkeypatch.setattr(screenspace, "load_screenspace_manifest", lambda: fake_manifest)
     monkeypatch.setattr(
-        cli, "_ss_resolve_video_for_participant", lambda pid: "/tmp/fake.mp4"
+        cli, "_ss_resolve_videos_for_participant", lambda pid: ["/tmp/fake.mp4"]
     )
     monkeypatch.setattr(
         video_mod, "probe_video_properties", lambda p: {"width": 100, "height": 100}

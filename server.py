@@ -426,16 +426,22 @@ utils.register_static_routes(studio_bp, "studio.html", icons=True)
 # ---- Helpers ----
 
 
-def _resolve_source_video(participant: str) -> Path | None:
-    """Return the resolved path to a participant's source video, or None."""
+def _resolve_participant_sources(participant: str) -> list[Path]:
+    """Return a participant's ordered source-video paths (one continuous timeline).
+
+    Mirrors the pipeline's resolution (override ``+`` list, else plain file, else
+    on-disk numbered parts) but without fuzzy-match prompts (the studio runs
+    non-interactively). Returns [] for an unknown participant; otherwise returns
+    at least one path (which may not exist on disk — callers check ``is_file``).
+    """
     if _sheet_context is None:
-        return None
+        return []
     ctx = _sheet_context
     participants = spreadsheet.get_participant_list(
         ctx.header_row, ctx.id_cell, ctx.num_participants
     )
     if participant not in participants:
-        return None
+        return []
     p_idx = participants.index(participant)
     col_idx = ctx.id_cell.col + p_idx
 
@@ -445,8 +451,15 @@ def _resolve_source_video(participant: str) -> Path | None:
         if col_idx < len(row_data) and row_data[col_idx].strip():
             override = row_data[col_idx].strip()
 
-    filename = files.get_source_video_filename(ctx.study_name, participant, override)
-    return utils.resolve_input_path(filename)
+    return files.resolve_source_video_paths(
+        ctx.study_name, participant, override, utils.get_effective_input_dir()
+    )
+
+
+def _resolve_source_video(participant: str) -> Path | None:
+    """Return the first source-video path for a participant, or None."""
+    sources = _resolve_participant_sources(participant)
+    return sources[0] if sources else None
 
 
 # ---- API endpoints ----
@@ -461,11 +474,26 @@ def api_thumbnail(participant: str, start_seconds: str) -> FlaskResponse:
         start_sec = max(0, int(start_seconds))
     except (ValueError, TypeError):
         return jsonify({"ok": False, "error": "Invalid timestamp"}), 400
-    video_path = _resolve_source_video(participant)
-    if video_path is None or not video_path.is_file():
+    sources = _resolve_participant_sources(participant)
+    if not sources or not sources[0].is_file():
         return jsonify({"ok": False, "error": "Source video not found"}), 404
 
-    cache_key = (str(video_path), start_sec)
+    # Multi-video participant: map the global second into the owning sub-video so
+    # the hover thumbnail comes from the right file at the right local offset.
+    cut_sec = start_sec
+    video_path = sources[0]
+    if len(sources) >= 2:
+        timeline = video.build_source_timeline([str(p) for p in sources])
+        if timeline is None:
+            return jsonify({"ok": False, "error": "Source video not found"}), 404
+        mapped = utils.map_global_to_segment(timeline, start_sec)
+        if mapped is None:
+            return jsonify({"ok": False, "error": "Timestamp beyond recording"}), 404
+        seg_index, local_sec = mapped
+        video_path = Path(timeline[seg_index][0])
+        cut_sec = int(local_sec)
+
+    cache_key = (str(video_path), cut_sec)
     with _thumbnail_cache_lock:
         cached = _thumbnail_cache.get(cache_key)
         if cached is not None:
@@ -478,7 +506,7 @@ def api_thumbnail(participant: str, start_seconds: str) -> FlaskResponse:
         )
 
     jpeg_bytes = video.extract_thumbnail_bytes(
-        str(video_path), start_sec, width=config.STUDIO_THUMBNAIL_WIDTH
+        str(video_path), cut_sec, width=config.STUDIO_THUMBNAIL_WIDTH
     )
     if jpeg_bytes is None:
         return jsonify({"ok": False, "error": "Thumbnail extraction failed"}), 404
@@ -749,12 +777,13 @@ def _save_manifest_quiet() -> None:
         utils.warning_print(f"Failed to save manifest: {e}")
 
 
-def _resolve_intake_video_path(participant: str, source: str = "") -> str | None:
-    """Resolve a video path for an intake participant.
+def _resolve_intake_video_paths(participant: str, source: str = "") -> list[str]:
+    """Resolve the ordered source-video path(s) for an intake participant.
 
     Tries the source-specific participant list first, then falls back to the
     other.  Both lists are populated from the same source videos so the
-    fallback is a safety net.
+    fallback is a safety net. Returns [] when the participant has no video.
+    A multi-video participant returns all parts (one continuous timeline).
     """
     import screenspace_server
     import transcripts_server
@@ -767,8 +796,8 @@ def _resolve_intake_video_path(participant: str, source: str = "") -> str | None
     for plist in lists:
         for p in plist:
             if p["id"] == participant and p.get("has_video"):
-                return p["video_path"]
-    return None
+                return list(p["video_paths"])
+    return []
 
 
 def _process_intake_item(
@@ -797,10 +826,11 @@ def _process_intake_item(
     source = item.get("source", "screenspace")
     mark_ids = item.get("mark_ids", [])
 
-    video_path = _resolve_intake_video_path(participant, source)
+    video_paths = _resolve_intake_video_paths(participant, source)
 
-    if not video_path:
+    if not video_paths:
         return {"_ok": False, "_error": f"No video for {participant}"}
+    timeline = video.timeline_or_none(video_paths)
 
     out_path: str | None = None
 
@@ -830,23 +860,23 @@ def _process_intake_item(
     )
     out_path = files.get_unique_filename(out_name)
 
-    start_str = utils.seconds_to_timestamp(int(round(start)))
-    end_str = utils.seconds_to_timestamp(int(round(end)))
-
     if cancel_flag and cancel_flag():
         files.release_reservation(out_path)
         return {"_ok": False, "_error": "cancelled", "_cancelled": True}
 
-    success = video.run_ffmpeg(
-        video_path,
+    # Map the global span into the participant's source video(s) (stitching across
+    # a recording boundary for multi-video participants); single-video is a plain cut.
+    source_fields = pipeline.cut_global_range(
+        timeline,
+        video_paths[0],
+        start,
+        end,
         out_path,
-        start_str,
-        end_str,
-        config.REENCODING,
+        reencode=config.REENCODING,
         cancel_flag=cancel_flag,
     )
 
-    if not success:
+    if source_fields is None:
         files.release_reservation(out_path)
         return {"_ok": False, "_error": "ffmpeg failed"}
 
@@ -885,10 +915,12 @@ def _process_intake_item(
         "event_ids": event_ids,
         "mark_ids": mark_ids,
         "intake_label": event_type,
-        "sourceVideo": Path(video_path).name,
         "_ok": True,
         "_error": "",
     }
+    # sourceVideo + localStart/localEnd (+ parts for a stitched span) drive
+    # regeneration; for single-video they equal the global start/end.
+    artifact.update(source_fields)
     if source == "transcript":
         import transcripts_server
 
@@ -1773,29 +1805,56 @@ def api_gallery() -> FlaskResponse:
         except (ValueError, TypeError):
             interval = config.GALLERY_INTERVAL_SECONDS
 
-        video_path = _resolve_source_video(participant)
-        if video_path is None or not video_path.is_file():
+        sources = _resolve_participant_sources(participant)
+        if not sources or not sources[0].is_file():
             return jsonify(
                 {"ok": False, "error": f"Source video not found for {participant}"}
             ), 404
 
         _gallery_cancel_event.clear()
-        artifacts = video.generate_interval_captures(
-            str(video_path),
-            interval_seconds=interval,
-            output_format=output_format,
-            gif_duration_seconds=config.GALLERY_GIF_DURATION_SECONDS,
-            cancel_flag=_gallery_cancel_event.is_set,
-        )
+        # Multi-video participants form one continuous timeline: capture each part
+        # and shift its timestamps by the part's cumulative start so the gallery
+        # spans the whole recording with global times. Single-video is unchanged.
+        timeline = video.timeline_or_none([str(p) for p in sources])
+        if timeline is None:
+            artifacts = video.generate_interval_captures(
+                str(sources[0]),
+                interval_seconds=interval,
+                output_format=output_format,
+                gif_duration_seconds=config.GALLERY_GIF_DURATION_SECONDS,
+                cancel_flag=_gallery_cancel_event.is_set,
+            )
+            duration = video.get_file_duration(str(sources[0])) or 0
+            source_name = sources[0].name
+        else:
+            artifacts = []
+            for part_path, _dur, cumulative in timeline:
+                if _gallery_cancel_event.is_set():
+                    break
+                part_artifacts = video.generate_interval_captures(
+                    part_path,
+                    interval_seconds=interval,
+                    output_format=output_format,
+                    gif_duration_seconds=config.GALLERY_GIF_DURATION_SECONDS,
+                    cancel_flag=_gallery_cancel_event.is_set,
+                )
+                for a in part_artifacts:
+                    a["timestamp"] = a["timestamp"] + cumulative
+                    a["timestamp_formatted"] = utils.seconds_to_timestamp(
+                        int(a["timestamp"])
+                    )
+                    artifacts.append(a)
+            duration = timeline[-1][1] + timeline[-1][2]
+            source_name = " + ".join(Path(p).name for p, _d, _c in timeline)
+
         if _gallery_cancel_event.is_set():
             return jsonify({"ok": False, "cancelled": True})
         if not artifacts:
             return jsonify({"ok": False, "error": "No captures generated"}), 500
 
-        duration = video.get_file_duration(str(video_path)) or 0
         gallery_data = viewer.finalize_gallery_data(
             artifacts,
-            source_video=video_path.name,
+            source_video=source_name,
             video_duration=duration,
             output_format=output_format,
             interval=interval,
@@ -2323,9 +2382,9 @@ def api_reel_direct() -> FlaskResponse:
                         continue
 
                     source = seg.get("source", "screenspace")
-                    video_path = _resolve_intake_video_path(participant, source)
+                    video_paths = _resolve_intake_video_paths(participant, source)
 
-                    if not video_path:
+                    if not video_paths:
                         completed += 1
                         emit_event(
                             {
@@ -2335,9 +2394,7 @@ def api_reel_direct() -> FlaskResponse:
                             }
                         )
                         continue
-
-                    start_str = utils.seconds_to_timestamp(int(round(start)))
-                    end_str = utils.seconds_to_timestamp(int(round(end)))
+                    timeline = video.timeline_or_none(video_paths)
 
                     fd, tmp_path = tempfile.mkstemp(
                         suffix=config.FILEFORMAT, dir=str(output_dir)
@@ -2348,18 +2405,25 @@ def api_reel_direct() -> FlaskResponse:
                     temp_clips.append(tmp_path)
                     os.close(fd)
 
-                    ok = video.run_ffmpeg(
-                        video_path,
-                        tmp_path,
-                        start_str,
-                        end_str,
-                        config.REENCODING,
-                        cancel_flag=_reel_cancel_event.is_set,
+                    # Map the global span into the participant's source video(s)
+                    # (stitching across a recording boundary); single-video is a plain cut.
+                    ok = (
+                        pipeline.cut_global_range(
+                            timeline,
+                            video_paths[0],
+                            start,
+                            end,
+                            tmp_path,
+                            reencode=config.REENCODING,
+                            cancel_flag=_reel_cancel_event.is_set,
+                        )
+                        is not None
                     )
                     if ok and cards_enabled:
-                        if video_path not in resolution_cache:
-                            probed = video.probe_video_properties(video_path)
-                            resolution_cache[video_path] = (
+                        res_key = video_paths[0]
+                        if res_key not in resolution_cache:
+                            probed = video.probe_video_properties(res_key)
+                            resolution_cache[res_key] = (
                                 f"{probed['width']}x{probed['height']}"
                                 if probed
                                 else None
@@ -2370,7 +2434,7 @@ def api_reel_direct() -> FlaskResponse:
                         ok = titlecards.wrap_clip_with_cards(
                             wrap_clip,
                             tmp_path,
-                            resolution=resolution_cache[video_path],
+                            resolution=resolution_cache[res_key],
                             cancel_flag=_reel_cancel_event.is_set,
                             titlecards_enabled=cards_enabled,
                             titlecard_duration_seconds=card_duration,

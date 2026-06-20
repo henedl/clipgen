@@ -49,6 +49,7 @@ from flask import Blueprint, Response, jsonify, request
 
 import config
 import files
+import spreadsheet
 import ollama_client
 import thinking_agents
 import transcripts
@@ -196,19 +197,27 @@ def api_participants() -> FlaskResponse:
             pid = p["id"]
             entry = src.get(pid, {})
             has_transcript = bool(entry.get("segments"))
+            video_paths = p["video_paths"]
+            first_path = video_paths[0]
+            # Combine every part's mtime so the frontend cache-bust (?v=) on any
+            # part URL invalidates when a non-first part is replaced too.
             video_version: int | None = None
             if p["has_video"]:
                 try:
-                    video_version = Path(p["video_path"]).stat().st_mtime_ns
+                    video_version = sum(
+                        Path(vp).stat().st_mtime_ns for vp in video_paths
+                    )
                 except OSError:
                     video_version = None
             info: dict[str, Any] = {
                 "id": pid,
-                "video_path": p["video_path"],
+                "video_path": first_path,
+                "video_paths": video_paths,
                 "has_video": p["has_video"],
                 "has_transcript": has_transcript,
                 "segment_count": len(entry.get("segments", [])),
-                "video_filename": Path(p["video_path"]).name,
+                "video_filename": Path(first_path).name,
+                "video_filenames": [Path(vp).name for vp in video_paths],
                 "video_version": video_version,
                 "agents": {
                     "transcription": _step_state_transcription(entry),
@@ -217,6 +226,20 @@ def api_participants() -> FlaskResponse:
                     "friction": _step_state_agent(pid, entry, "friction"),
                 },
             }
+            # Multi-video: expose the timeline so the frontend can switch the
+            # <video> source per part and seek the local offset. Omitted for a
+            # single video (no probe) → the frontend keeps its one-file path.
+            if p["has_video"] and len(video_paths) >= 2:
+                timeline = video.timeline_or_none(video_paths)
+                if timeline is not None:
+                    info["timeline"] = [
+                        {
+                            "filename": Path(path).name,
+                            "duration": dur,
+                            "cumulativeStart": cum,
+                        }
+                        for path, dur, cum in timeline
+                    ]
             if has_transcript:
                 info["language"] = entry.get("language", "")
                 info["model"] = entry.get("model", "")
@@ -384,12 +407,12 @@ def api_vtt(participant: str) -> FlaskResponse:
 # ---- Embed subtitles into video ----
 
 
-def _video_path_for_participant(participant: str) -> str | None:
-    """Return the source video path for *participant*, or None if unknown."""
+def _video_paths_for_participant(participant: str) -> list[str]:
+    """Return the ordered source video path(s) for *participant*, or [] if unknown."""
     for p in _participants:
         if p["id"] == participant:
-            return p["video_path"]
-    return None
+            return list(p["video_paths"])
+    return []
 
 
 def _embed_subtitle_for_participant(
@@ -417,13 +440,22 @@ def _embed_subtitle_for_participant(
         source_file = entry.get("source_file", "")
         model = entry.get("model", "")
 
-    video_path = _video_path_for_participant(participant)
-    if not video_path or not Path(video_path).is_file():
+    video_paths = _video_paths_for_participant(participant)
+    if not video_paths or not Path(video_paths[0]).is_file():
         return {
             "participant": participant,
             "ok": False,
             "error": "Source video not found",
         }
+    if len(video_paths) > 1:
+        # The global transcript spans several source files; muxing it back into a
+        # single file would require concatenating the parts first. Not supported.
+        return {
+            "participant": participant,
+            "ok": False,
+            "error": "Subtitle embedding isn't supported for multi-video participants.",
+        }
+    video_path = video_paths[0]
 
     corrected = transcripts.apply_corrections(segments_snapshot, corrections_snapshot)
     result = transcripts.TranscriptResult(
@@ -1163,7 +1195,7 @@ def api_transcribe() -> FlaskResponse:
             language_override = o.get("language") or None
             task = transcripts.create_transcript_task(
                 pid,
-                p["video_path"],
+                p["video_paths"],
                 model=model_override,
                 language=language_override,
             )
@@ -1527,18 +1559,22 @@ def _init_transcripts_state(
 
     _participants = []
     study_name = ""
+    overrides: dict[str, str | None] = {}
     if sheet_context is not None:
         study_name = getattr(sheet_context, "study_name", "")
+        overrides = spreadsheet.participant_filename_overrides(sheet_context)
 
     if participant_list:
+        input_dir = utils.get_effective_input_dir()
         for pid in participant_list:
-            filename = files.get_source_video_filename(study_name, pid)
-            video_path = utils.resolve_input_path(filename)
+            paths = files.resolve_source_video_paths(
+                study_name, pid, overrides.get(pid), input_dir
+            )
             _participants.append(
                 {
                     "id": pid,
-                    "video_path": str(video_path),
-                    "has_video": video_path.is_file(),
+                    "video_paths": [str(p) for p in paths],
+                    "has_video": paths[0].is_file(),
                 }
             )
     else:

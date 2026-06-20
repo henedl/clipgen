@@ -553,32 +553,59 @@
     // a re-encoded or replaced source file invalidates the browser HTTP cache
     // instead of relying on send_from_directory's Last-Modified revalidation.
     if (p.has_video) {
-      var mediaUrl = "media/" + p.video_filename;
-      if (p.video_version != null) mediaUrl += "?v=" + encodeURIComponent(p.video_version);
-      video.src = mediaUrl;
+      // Multi-video participants carry a per-part timeline; play part-by-part
+      // with client-side source switching (see the timeline helpers).
+      state.videoTimeline = p.timeline && p.timeline.length > 1 ? p.timeline : null;
+      state.videoVersion = p.video_version != null ? p.video_version : null;
+      state.videoActivePart = 0;
+      state.videoOffset = 0;
       video.classList.remove("hidden");
       videoEmpty.classList.add("hidden");
 
       // Set VTT track. Browsers reset textTracks[0].mode when the track src
       // changes, so re-apply the user's preference now and again on the
-      // track's load event in initVideoPlayer.
+      // track's load event in initVideoPlayer. The native overlay track carries
+      // GLOBAL cue times, which only align with a single continuous file — for
+      // multi-video participants it is disabled (the in-app transcript list still
+      // highlights the active segment via global time).
       var track = qs("#subtitleTrack");
-      track.src = "api/vtt/" + pid;
+      if (state.videoTimeline) {
+        track.removeAttribute("src");
+      } else {
+        track.src = "api/vtt/" + pid;
+      }
       applyCaptionMode();
 
-      // Restore the saved playback offset for this participant if we have one;
-      // otherwise seek to 0.001s so the first frame renders without waiting
-      // for play/scrub. `preload="metadata"` decodes duration but not pixels,
-      // so without this nudge the viewer shows a blank gray box on load.
+      // Restore the saved playback offset (GLOBAL) for this participant if we
+      // have one; otherwise seek to 0.001s so the first frame renders without
+      // waiting for play/scrub. `preload="metadata"` decodes duration but not
+      // pixels, so without this nudge the viewer shows a blank gray box on load.
       var storedMap = getStoredUIState("transcripts").videoTimeByParticipant;
       var savedTime =
         storedMap && typeof storedMap[pid] === "number" ? storedMap[pid] : 0.001;
+      if (state.videoTimeline) {
+        var pi = _partForGlobal(state.videoTimeline, savedTime);
+        state.videoActivePart = pi;
+        state.videoOffset = state.videoTimeline[pi].cumulativeStart;
+        var localStart = savedTime - state.videoOffset;
+        video.src = _partMediaUrl(pi);
+      } else {
+        var mediaUrl = "media/" + p.video_filename;
+        if (p.video_version != null) {
+          mediaUrl += "?v=" + encodeURIComponent(p.video_version);
+        }
+        video.src = mediaUrl;
+      }
       var restoreTime = function () {
         video.removeEventListener("loadedmetadata", restoreTime);
-        if (state.selectedParticipant === pid) video.currentTime = savedTime;
+        if (state.selectedParticipant !== pid) return;
+        video.currentTime = state.videoTimeline ? localStart : savedTime;
       };
       video.addEventListener("loadedmetadata", restoreTime);
     } else {
+      state.videoTimeline = null;
+      state.videoOffset = 0;
+      state.videoActivePart = 0;
       video.removeAttribute("src");
       video.load();
       video.classList.add("hidden");
@@ -2223,12 +2250,59 @@
     window.ClipgenVideoControls.applyPlaybackRate(qs("#videoPlayer"), state.videoPlaybackRate);
   }
 
+  // ---- Multi-video timeline (client-side source switching) ----
+  // For a participant whose recording spans several files, p.timeline carries
+  // [{filename, duration, cumulativeStart}]. The <video> plays one part at a
+  // time; these helpers present a single GLOBAL timeline to the controls so the
+  // playhead, labels, and segment sync all use global time. Single-video
+  // participants have state.videoTimeline === null and take the original path.
+  function _timelineTotal(tl) {
+    if (!tl || !tl.length) return 0;
+    var last = tl[tl.length - 1];
+    return last.cumulativeStart + last.duration;
+  }
+  function _partForGlobal(tl, g) {
+    for (var i = 0; i < tl.length; i++) {
+      if (g >= tl[i].cumulativeStart && g < tl[i].cumulativeStart + tl[i].duration) {
+        return i;
+      }
+    }
+    return tl.length - 1;
+  }
+  function _partMediaUrl(i) {
+    var url = "media/" + state.videoTimeline[i].filename;
+    if (state.videoVersion != null) url += "?v=" + encodeURIComponent(state.videoVersion);
+    return url;
+  }
+  function videoDisplayDuration() {
+    var v = qs("#videoPlayer");
+    if (state.videoTimeline) return _timelineTotal(state.videoTimeline);
+    return v && isFinite(v.duration) ? v.duration : 0;
+  }
+  function videoGlobalTime() {
+    var v = qs("#videoPlayer");
+    if (!v) return 0;
+    return (v.currentTime || 0) + (state.videoTimeline ? state.videoOffset : 0);
+  }
+  function _switchToPart(i, localTime, autoplay) {
+    var v = qs("#videoPlayer");
+    state.videoActivePart = i;
+    state.videoOffset = state.videoTimeline[i].cumulativeStart;
+    v.src = _partMediaUrl(i);
+    var onMeta = function () {
+      v.removeEventListener("loadedmetadata", onMeta);
+      v.currentTime = localTime;
+      if (autoplay) v.play();
+    };
+    v.addEventListener("loadedmetadata", onMeta);
+  }
+
   function updateTimeLabel() {
     var v = qs("#videoPlayer");
     var label = qs("#videoTime");
     if (!v || !label) return;
-    var dur = isFinite(v.duration) ? v.duration : 0;
-    label.textContent = formatTime(v.currentTime || 0) + " / " + formatTime(dur);
+    var dur = videoDisplayDuration();
+    label.textContent = formatTime(videoGlobalTime()) + " / " + formatTime(dur);
   }
 
   function applyCaptionMode() {
@@ -2284,7 +2358,7 @@
     ctx.fillStyle = theme.surfaceAlt;
     ctx.fillRect(0, 0, cssW, cssH);
 
-    var dur = v && isFinite(v.duration) ? v.duration : 0;
+    var dur = videoDisplayDuration();
     if (dur <= 0) {
       _markerHitRects = [];
       ctx.fillStyle = theme.textDim;
@@ -2354,9 +2428,9 @@
     var cssH = canvas.offsetHeight;
     var ctx = canvas.getContext("2d");
     ctx.clearRect(0, 0, cssW, cssH);
-    var dur = isFinite(v.duration) ? v.duration : 0;
+    var dur = videoDisplayDuration();
     if (dur <= 0) return;
-    var px = (v.currentTime / dur) * cssW;
+    var px = (videoGlobalTime() / dur) * cssW;
     ctx.strokeStyle = getCanvasThemeColors().accent;
     ctx.lineWidth = 2;
     ctx.beginPath();
@@ -2376,7 +2450,7 @@
     var canvas = qs("#timelineCanvas");
     var v = qs("#videoPlayer");
     if (!canvas || !v) return null;
-    var dur = isFinite(v.duration) ? v.duration : 0;
+    var dur = videoDisplayDuration();
     if (dur <= 0) return null;
     var rect = canvas.getBoundingClientRect();
     var frac = (event.clientX - rect.left) / rect.width;
@@ -2538,6 +2612,15 @@
       renderTimeline();
     });
     video.addEventListener("timeupdate", function () {
+      // Multi-video: hand off to the next part as playback nears the boundary so
+      // continuous playback spans the whole recording.
+      if (state.videoTimeline) {
+        var tl = state.videoTimeline;
+        var i = state.videoActivePart;
+        if (i < tl.length - 1 && video.currentTime >= tl[i].duration - 0.05) {
+          _switchToPart(i + 1, 0.001, !video.paused);
+        }
+      }
       updateTimeLabel();
       if (_playheadRaf) return;
       _playheadRaf = requestAnimationFrame(function () {
@@ -2718,6 +2801,25 @@
   var _pendingSeekListener = null;
 
   function seekVideo(time) {
+    // *time* is GLOBAL. For a multi-video participant, switch the <video> source
+    // to the part that owns it and seek the local offset; single-video falls
+    // straight through to the original local seek.
+    if (state.videoTimeline) {
+      var tl = state.videoTimeline;
+      var g = time < 0 ? 0 : Math.min(time, _timelineTotal(tl));
+      var i = _partForGlobal(tl, g);
+      var local = g - tl[i].cumulativeStart;
+      if (i !== state.videoActivePart) {
+        _switchToPart(i, local, true);
+      } else {
+        _seekLocal(local);
+      }
+      return;
+    }
+    _seekLocal(time);
+  }
+
+  function _seekLocal(time) {
     var video = qs("#videoPlayer");
     if (!video || !video.src) return;
 
@@ -2760,7 +2862,7 @@
 
   function initVideoSync() {
     var video = qs("#videoPlayer");
-    var save = function () { persistVideoTime(video.currentTime); };
+    var save = function () { persistVideoTime(videoGlobalTime()); };
     video.addEventListener("timeupdate", function () {
       save();
       if (_syncRaf) return;
@@ -2785,7 +2887,7 @@
   function highlightActiveSegment() {
     var video = qs("#videoPlayer");
     if (!video || !video.src) return;
-    var t = video.currentTime;
+    var t = videoGlobalTime();
 
     // Binary search for active segment (sorted, non-overlapping)
     var lo = 0, hi = state.segments.length - 1, newIndex = -1;

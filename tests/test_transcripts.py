@@ -596,11 +596,11 @@ class TestDiscoverParticipantVideos:
 
 class TestCreateTranscriptTask:
     def test_task_shape(self):
-        task = transcripts.create_transcript_task("P01", "/path/to/video.mp4")
+        task = transcripts.create_transcript_task("P01", ["/path/to/video.mp4"])
         assert task["id"].startswith("tr_")
         assert len(task["id"]) == 11  # "tr_" + 8 hex chars
         assert task["participant"] == "P01"
-        assert task["video_path"] == "/path/to/video.mp4"
+        assert task["video_paths"] == ["/path/to/video.mp4"]
         assert task["status"] == "queued"
         assert task["progress"] == 0.0
         assert task["result"] is None
@@ -609,8 +609,8 @@ class TestCreateTranscriptTask:
         assert task["completed_at"] is None
 
     def test_unique_ids(self):
-        t1 = transcripts.create_transcript_task("P01", "/path/v.mp4")
-        t2 = transcripts.create_transcript_task("P01", "/path/v.mp4")
+        t1 = transcripts.create_transcript_task("P01", ["/path/v.mp4"])
+        t2 = transcripts.create_transcript_task("P01", ["/path/v.mp4"])
         assert t1["id"] != t2["id"]
 
 
@@ -638,7 +638,7 @@ class TestTranscriptWorker:
 
     def test_cancel_queued_task(self):
         worker = transcripts.TranscriptWorker()
-        task = transcripts.create_transcript_task("P01", "/v.mp4")
+        task = transcripts.create_transcript_task("P01", ["/v.mp4"])
         worker.enqueue(task)
         assert worker.cancel(task["id"]) is True
         t = worker.get_task(task["id"])
@@ -647,7 +647,7 @@ class TestTranscriptWorker:
 
     def test_cancel_running_task(self):
         worker = transcripts.TranscriptWorker()
-        task = transcripts.create_transcript_task("P01", "/v.mp4")
+        task = transcripts.create_transcript_task("P01", ["/v.mp4"])
         worker.enqueue(task)
         # Simulate the worker picking up the task
         with worker._lock:
@@ -676,7 +676,7 @@ class TestTranscriptWorker:
         monkeypatch.setattr(transcripts, "_load_model", load_model)
 
         worker = transcripts.TranscriptWorker()
-        task = transcripts.create_transcript_task("P01", "/v.mp4")
+        task = transcripts.create_transcript_task("P01", ["/v.mp4"])
         task["status"] = "running"
         task["_cancelled"] = True
 
@@ -704,7 +704,7 @@ class TestTranscriptWorker:
         )
 
         worker = transcripts.TranscriptWorker()
-        task = transcripts.create_transcript_task("P01", "/v.mp4")
+        task = transcripts.create_transcript_task("P01", ["/v.mp4"])
         task["status"] = "running"
 
         class FakeSeg:
@@ -751,7 +751,7 @@ class TestTranscriptWorker:
         monkeypatch.setattr(transcripts, "_load_model", load_model)
 
         worker = transcripts.TranscriptWorker()
-        task = transcripts.create_transcript_task("P01", "/v.mp4")
+        task = transcripts.create_transcript_task("P01", ["/v.mp4"])
         task["status"] = "running"
 
         worker._execute_task(task)
@@ -763,14 +763,14 @@ class TestTranscriptWorker:
 
     def test_remove_task(self):
         worker = transcripts.TranscriptWorker()
-        task = transcripts.create_transcript_task("P01", "/v.mp4")
+        task = transcripts.create_transcript_task("P01", ["/v.mp4"])
         worker.enqueue(task)
         assert worker.remove_task(task["id"]) is True
         assert worker.get_task(task["id"]) is None
 
     def test_remove_running_task_sets_cancelled(self):
         worker = transcripts.TranscriptWorker()
-        task = transcripts.create_transcript_task("P01", "/v.mp4")
+        task = transcripts.create_transcript_task("P01", ["/v.mp4"])
         worker.enqueue(task)
         with worker._lock:
             worker._tasks[task["id"]]["status"] = "running"
