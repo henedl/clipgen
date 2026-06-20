@@ -2533,6 +2533,16 @@ body[data-frontend="screenspace"] {
   text-align: right;
 }
 
+/* Color presence "Min area %" readout: words + pixel estimate, so it needs to
+   wrap and sit left-aligned rather than as a right-aligned numeric value. */
+.param-value--minarea {
+  font-family: inherit;
+  min-width: 0;
+  text-align: left;
+  white-space: normal;
+  line-height: 1.2;
+}
+
 .template-upload-info {
   display: flex;
   align-items: center;
