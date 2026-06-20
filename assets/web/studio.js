@@ -2001,7 +2001,7 @@
     var n = segments.length;
     for (var i = 0; i < n; i++) {
       var seg = segments[i];
-      var card = el("div", "queue-card clip-card size-md cell-drag-ghost-card");
+      var card = el("div", "queue-card cell-drag-ghost-card");
       card.style.setProperty("--i", i);
 
       var thumb = el("div", "queue-card-thumb");
@@ -2339,7 +2339,7 @@
 
       var card = el(
         "div",
-        "queue-card clip-card size-md" + (isIntake ? " queue-card-intake" : ""),
+        "queue-card" + (isIntake ? " queue-card-intake" : ""),
       );
       card.setAttribute("data-participant", item.participant);
       card.setAttribute("data-row", isIntake ? "" : item.row);
@@ -2472,7 +2472,7 @@
 
       var card = el(
         "div",
-        "queue-card reel-card clip-card size-md" + (isIntake ? " queue-card-intake" : ""),
+        "queue-card reel-card" + (isIntake ? " queue-card-intake" : ""),
       );
       card.setAttribute("data-reel-idx", i);
       card.setAttribute("data-participant", item.participant);
@@ -4144,10 +4144,9 @@
     return "../screenspace/api/video/frame/" + encodeURIComponent(participant) + "/" + timestamp + "?w=200";
   }
 
-  // Thumb element selector covers the legacy `.queue-card-thumb` (artifact /
-  // reel cards in the bottom strip) and the new primitive cards
-  // (`.clip-card-thumb`, `.transcript-card-thumb`) used by Studio Intake.
-  var SS_THUMB_SELECTOR = ".queue-card-thumb, .clip-card-thumb, .transcript-card-thumb";
+  // All cards (artifact / reel bottom-strip and Studio Intake) share the
+  // `.queue-card-thumb` element for lazy source-frame loading.
+  var SS_THUMB_SELECTOR = ".queue-card-thumb";
 
   function ssProcessQueue() {
     while (_ssThumbActive < _SS_THUMB_MAX && _ssThumbQueue.length) {
@@ -4521,49 +4520,53 @@
       return;
     }
     clusters.forEach(function (c, idx) {
-      var segDuration = c.end - c.start;
-      var hueLabel = c.event_type || c.detector || "uncategorized";
+      var typeText = c.event_type || c.detector || "intake";
+      // Carry over the intake font colour: pin to the canonical `--color-task-*`
+      // token for known detectors, else fall back to the category oklch colour.
+      var color = detectorColor(c.detector) || categoryColor(c.event_type || c.detector || "uncategorized");
 
-      var card = ClipgenPrimitives.createClipCard({
-        participant: c.participant,
-        duration: formatDuration(segDuration),
-        label: c.event_type || c.detector || "intake",
-        hue: categoryHue(hueLabel),
-        // Pin the hue dot + label to the canonical `--color-task-*` token
-        // when the event is a known detector — otherwise keep the oklch
-        // fallback so non-detector labels still get a stable colour.
-        color: detectorColor(c.detector),
-        size: "lg",
-        dataset: { intakeIdx: idx },
-        onDragStart: function (ev) {
-          ev.dataTransfer.setData("application/json", JSON.stringify({
-            participant: c.participant,
-            desc: c.event_type,
-            start: c.start,
-            end: c.end,
-            source: "screenspace",
-            event_type: c.event_type,
-            event_ids: c.events.map(function (e) { return e.id; }),
-          }));
-          ev.dataTransfer.effectAllowed = "copyMove";
-          setCardDragImage(ev, this);
-        },
+      var card = el("div", "queue-card intake-queue-card");
+      card.style.setProperty("--cg-card-hue", color);
+      card.dataset.intakeIdx = idx;
+      card.setAttribute("draggable", "true");
+      card.addEventListener("dragstart", function (ev) {
+        ev.dataTransfer.setData("application/json", JSON.stringify({
+          participant: c.participant,
+          desc: c.event_type,
+          start: c.start,
+          end: c.end,
+          source: "screenspace",
+          event_type: c.event_type,
+          event_ids: c.events.map(function (e) { return e.id; }),
+        }));
+        ev.dataTransfer.effectAllowed = "copyMove";
+        setCardDragImage(ev, this);
       });
-      card.classList.add("intake-queue-card");
 
       // Lazy-loaded source-frame thumbnail (existing observer integration).
-      var thumb = card.querySelector(".clip-card-thumb");
+      var thumb = el("div", "queue-card-thumb");
       var img = document.createElement("img");
       img.alt = "";
       img.draggable = false;
-      thumb.insertBefore(img, thumb.firstChild);
+      thumb.appendChild(img);
       ssObserveThumb(card, img, thumb, c.participant, c.start);
+      thumb.appendChild(el("span", "queue-card-duration", formatDuration(c.end - c.start)));
 
       // Cross-reference badges layered over the thumb.
       var xref = findOverlappingData(c.participant, c.start, c.end);
       var ssSelf = { icon: XREF_BADGES.screenspace.icon, color: XREF_BADGES.screenspace.color, title: c.event_type || "Screenspace" };
       var badgeStack = buildXrefBadges(xref, "screenspace", ssSelf);
       if (badgeStack) thumb.appendChild(badgeStack);
+      card.appendChild(thumb);
+
+      var meta = el("div", "queue-card-meta");
+      var row = el("div", "queue-card-meta-row");
+      row.appendChild(el("span", "queue-card-participant", c.participant));
+      row.appendChild(el("span", "queue-card-type", typeText));
+      meta.appendChild(row);
+      meta.appendChild(el("span", "queue-card-time", formatDuration(c.start) + "–" + formatDuration(c.end)));
+      card.appendChild(meta);
+
       if (xref.transcriptSnippets.length > 0) {
         card.dataset.transcriptContext = xref.transcriptSnippets.map(function (s) { return s.text; }).join("\n");
       }
@@ -4864,45 +4867,54 @@
       var segDuration = Math.max(0, c.end - c.start);
       var labelKey = c.category || "bookmark";
       var labelText = (TR_INTAKE_CATEGORIES[labelKey] || TR_INTAKE_CATEGORIES.bookmark).label;
-      var rangeStr = formatDuration(c.start) + "\u2013" + formatDuration(c.end);
       var snippet = c.label || c.text || "";
+      var color = categoryColor(labelKey);
 
-      var card = ClipgenPrimitives.createTranscriptCard({
-        participant: c.participant,
-        timeRange: rangeStr,
-        duration: formatDuration(segDuration),
-        label: labelText,
-        text: snippet,
-        hue: categoryHue(labelKey),
-        dataset: { trIntakeIdx: i },
-        onDragStart: function (ev) {
-          ev.dataTransfer.setData("application/json", JSON.stringify({
-            participant: c.participant,
-            desc: c.category || "transcript",
-            start: c.start,
-            end: c.end,
-            source: "transcript",
-            mark_ids: c.marks.map(function (m) { return m.id; }),
-          }));
-          ev.dataTransfer.effectAllowed = "copyMove";
-          setCardDragImage(ev, this);
-        },
+      var card = el("div", "queue-card intake-queue-card tr-intake-queue-card");
+      card.style.setProperty("--cg-card-hue", color);
+      card.dataset.trIntakeIdx = i;
+      card.setAttribute("draggable", "true");
+      card.addEventListener("dragstart", function (ev) {
+        ev.dataTransfer.setData("application/json", JSON.stringify({
+          participant: c.participant,
+          desc: c.category || "transcript",
+          start: c.start,
+          end: c.end,
+          source: "transcript",
+          mark_ids: c.marks.map(function (m) { return m.id; }),
+        }));
+        ev.dataTransfer.effectAllowed = "copyMove";
+        setCardDragImage(ev, this);
       });
-      card.classList.add("intake-queue-card", "tr-intake-queue-card");
 
       // Lazy-loaded source-frame thumbnail
-      var thumb = card.querySelector(".transcript-card-thumb");
+      var thumb = el("div", "queue-card-thumb");
       var img = document.createElement("img");
       img.alt = "";
       img.draggable = false;
-      thumb.insertBefore(img, thumb.firstChild);
+      thumb.appendChild(img);
       ssObserveThumb(card, img, thumb, c.participant, c.start);
+      thumb.appendChild(el("span", "queue-card-duration", formatDuration(segDuration)));
 
       // Cross-reference badges
       var xref = findOverlappingData(c.participant, c.start, c.end);
       var trSelf = { icon: XREF_BADGES.transcript.icon, color: XREF_BADGES.transcript.color, title: c.label || c.category || "Transcript" };
       var badgeStack = buildXrefBadges(xref, "transcript", trSelf);
       if (badgeStack) thumb.appendChild(badgeStack);
+      card.appendChild(thumb);
+
+      var meta = el("div", "queue-card-meta");
+      var row = el("div", "queue-card-meta-row");
+      row.appendChild(el("span", "queue-card-participant", c.participant));
+      row.appendChild(el("span", "queue-card-type", labelText));
+      meta.appendChild(row);
+      meta.appendChild(el("span", "queue-card-time", formatDuration(c.start) + "–" + formatDuration(c.end)));
+      if (snippet) {
+        var textEl = el("span", "queue-card-text", snippet);
+        textEl.title = snippet;
+        meta.appendChild(textEl);
+      }
+      card.appendChild(meta);
 
       container.appendChild(card);
     });
