@@ -12,9 +12,8 @@
  *
  * Surface (window.ClipgenPrimitives):
  *   createFilterChip, createParticipantPill, createDensityTimeline,
- *   createSparkBars, createClipCard, createTranscriptCard, createBtn,
- *   createSwimLane, createKpiCard, createCoverageMatrix,
- *   setButtonProgress
+ *   createSparkBars, createBtn, createSwimLane, createKpiCard,
+ *   createCoverageMatrix, setButtonProgress
  */
 
 (function (global) {
@@ -236,148 +235,6 @@
       wrap.appendChild(bar);
     });
     return wrap;
-  }
-
-  // ---- Card primitives ----
-
-  function applyThumbHue(thumb, hue) {
-    thumb.style.setProperty(
-      "--cg-card-thumb-bg",
-      "radial-gradient(circle at 30% 40%, " + fmtHue(hue, 0.4, 0.12) + ", " + fmtHue(hue, 0.18, 0.05) + ")"
-    );
-  }
-
-  function setThumbImage(thumb, src) {
-    if (!src) return null;
-    var img = document.createElement("img");
-    img.src = src;
-    img.alt = "";
-    img.draggable = false;
-    img.addEventListener("error", function () {
-      // Drop the broken <img> so the gradient bg shows through cleanly.
-      if (img.parentNode) img.parentNode.removeChild(img);
-    });
-    thumb.appendChild(img);
-    return img;
-  }
-
-  function makePill(text, side) {
-    var pill = document.createElement("span");
-    pill.className = "clip-card-pill-" + side;
-    pill.textContent = text;
-    return pill;
-  }
-
-  function buildCardBase(opts, kind) {
-    opts = opts || {};
-    var card = document.createElement("div");
-    card.className = kind === "transcript" ? "transcript-card" : "clip-card";
-    if (kind === "clip" && opts.size) card.classList.add("size-" + opts.size);
-    card.setAttribute("draggable", "true");
-
-    var hue = resolveHue(opts.label, opts.hue);
-    // `opts.color` (CSS color string) overrides the oklch(hue) path so the
-    // hue dot + label colour can pin to the canonical `--color-task-*`
-    // tokens. The thumb backdrop still uses the numeric hue (the fallback
-    // gradient blends across multiple hue stops, which we don't try to
-    // reconstruct from a single token).
-    card.style.setProperty("--cg-card-hue", opts.color || fmtHue(hue));
-
-    var thumb = document.createElement("div");
-    thumb.className = kind === "transcript" ? "transcript-card-thumb" : "clip-card-thumb";
-    applyThumbHue(thumb, hue);
-    card.appendChild(thumb);
-    if (opts.thumbSrc) setThumbImage(thumb, opts.thumbSrc);
-
-    var dot = document.createElement("span");
-    dot.className = "clip-card-dot";
-    thumb.appendChild(dot);
-
-    // Participant moved into the caption (see createClipCard /
-    // createTranscriptCard). Only the duration badge remains on the thumb.
-    if (opts.duration) thumb.appendChild(makePill(opts.duration, "br"));
-
-    setDataset(card, opts.dataset);
-
-    if (typeof opts.onDragStart === "function") {
-      card.addEventListener("dragstart", opts.onDragStart);
-    }
-    if (typeof opts.onClick === "function") {
-      card.addEventListener("click", opts.onClick);
-    }
-    if (typeof opts.onMouseEnter === "function") {
-      card.addEventListener("mouseenter", opts.onMouseEnter);
-    }
-    if (typeof opts.onMouseLeave === "function") {
-      card.addEventListener("mouseleave", opts.onMouseLeave);
-    }
-
-    return { card: card, thumb: thumb };
-  }
-
-  function createClipCard(opts) {
-    var built = buildCardBase(opts, "clip");
-    var caption = document.createElement("div");
-    caption.className = "clip-card-caption";
-
-    if (opts.participant || opts.label) {
-      var topRow = document.createElement("div");
-      topRow.className = "clip-card-meta-row";
-      if (opts.participant) {
-        var pid = document.createElement("span");
-        pid.className = "clip-card-participant cg-mono";
-        pid.textContent = opts.participant;
-        topRow.appendChild(pid);
-      }
-      if (opts.label) {
-        var labelEl = document.createElement("span");
-        labelEl.className = "clip-card-label";
-        labelEl.textContent = opts.label;
-        topRow.appendChild(labelEl);
-      }
-      caption.appendChild(topRow);
-    }
-    if (opts.caption) {
-      var textEl = document.createElement("span");
-      textEl.className = "clip-card-text";
-      textEl.textContent = opts.caption;
-      textEl.title = opts.caption;
-      caption.appendChild(textEl);
-    }
-    built.card.appendChild(caption);
-    return built.card;
-  }
-
-  function createTranscriptCard(opts) {
-    var built = buildCardBase(opts, "transcript");
-    var caption = document.createElement("div");
-    caption.className = "transcript-card-caption";
-
-    if (opts.participant || opts.timeRange) {
-      var rangeRow = document.createElement("div");
-      rangeRow.className = "transcript-card-range-row";
-      if (opts.participant) {
-        var pid = document.createElement("span");
-        pid.className = "transcript-card-participant cg-mono";
-        pid.textContent = opts.participant;
-        rangeRow.appendChild(pid);
-      }
-      if (opts.timeRange) {
-        var range = document.createElement("span");
-        range.className = "transcript-card-range cg-mono";
-        range.textContent = opts.timeRange;
-        rangeRow.appendChild(range);
-      }
-      caption.appendChild(rangeRow);
-    }
-    if (opts.text) {
-      var text = document.createElement("span");
-      text.className = "transcript-card-text";
-      text.textContent = opts.text;
-      caption.appendChild(text);
-    }
-    built.card.appendChild(caption);
-    return built.card;
   }
 
   // ---- SwimLane ----
@@ -885,8 +742,6 @@
     createParticipantPill: createParticipantPill,
     createDensityTimeline: createDensityTimeline,
     createSparkBars: createSparkBars,
-    createClipCard: createClipCard,
-    createTranscriptCard: createTranscriptCard,
     createBtn: createBtn,
     createSwimLane: createSwimLane,
     createKpiCard: createKpiCard,

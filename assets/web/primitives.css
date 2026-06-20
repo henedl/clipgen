@@ -8,8 +8,6 @@
  *   .participant-pill     monospace participant toggle
  *   .density-timeline     SVG bars with tick labels + optional marker
  *   .spark-bars           flex bar chart, hue-driven
- *   .clip-card            16/10 thumb + caption (Screenspace Intake source events)
- *   .transcript-card      same anatomy with timeRange + clamped text (Transcript Intake)
  *   .cg-btn               base button: ghost / solid / bare; sm / md / lg
  *   .skeleton-grid        responsive skeleton row layout (pair with .skeleton cells)
  *
@@ -184,163 +182,6 @@
   flex: 1 1 0;
   min-height: 2px;
   border-radius: 1px;
-}
-
-/* ---- ClipCard / TranscriptCard ---- */
-
-.clip-card,
-.transcript-card {
-  position: relative;
-  display: flex;
-  flex-direction: column;
-  width: 180px;
-  background: var(--bg-elevated);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  overflow: hidden;
-  cursor: grab;
-  user-select: none;
-  transition: border-color var(--duration-instant) ease-out;
-}
-.clip-card:hover,
-.transcript-card:hover {
-  border-color: var(--border-strong);
-}
-.clip-card:active,
-.transcript-card:active {
-  cursor: grabbing;
-}
-.clip-card.size-sm { width: 120px; }
-.clip-card.size-md { width: 150px; }
-.clip-card.size-lg { width: 180px; }
-.transcript-card { width: 200px; }
-
-.clip-card-thumb,
-.transcript-card-thumb {
-  position: relative;
-  aspect-ratio: 16 / 10;
-  background: var(--cg-card-thumb-bg, radial-gradient(circle at 30% 40%, oklch(0.4 0.12 220), oklch(0.18 0.05 220)));
-  overflow: hidden;
-}
-.clip-card-thumb::after,
-.transcript-card-thumb::after {
-  /* Subtle 1px noise overlay so the gradient does not look pure. */
-  content: "";
-  position: absolute;
-  inset: 0;
-  background-image: repeating-linear-gradient(0deg, rgba(255, 255, 255, 0.015) 0 1px, transparent 1px 2px),
-                    repeating-linear-gradient(90deg, rgba(0, 0, 0, 0.02) 0 1px, transparent 1px 2px);
-  pointer-events: none;
-}
-.clip-card-thumb img,
-.transcript-card-thumb img {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-  display: block;
-}
-
-.clip-card-dot {
-  position: absolute;
-  top: 6px;
-  left: 6px;
-  width: 6px;
-  height: 6px;
-  border-radius: var(--radius-full);
-  background: var(--cg-card-hue, oklch(0.7 0.16 220));
-  box-shadow: 0 0 0 3px rgba(0, 0, 0, 0.45);
-  z-index: 2;
-  pointer-events: none;
-}
-
-/* Duration badge on the thumb. Sized to match `.queue-card-duration` so
- * intake cards and bottom-strip cards read at the same scale. Participant
- * is rendered in the caption now (see .clip-card-participant), not as a
- * thumbnail badge. */
-.clip-card-pill-br {
-  position: absolute;
-  bottom: 3px;
-  right: 3px;
-  display: inline-flex;
-  align-items: center;
-  padding: 1px 4px;
-  background: rgba(0, 0, 0, 0.7);
-  color: var(--accent-fg);
-  font-family: var(--font-mono);
-  font-feature-settings: "tnum";
-  font-size: var(--text-xs, 11px);
-  line-height: 1.3;
-  border-radius: var(--radius-sm, 3px);
-  z-index: 2;
-  pointer-events: none;
-}
-
-.clip-card-caption,
-.transcript-card-caption {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  padding: 6px 8px;
-  font-size: 11px;
-  color: var(--fg);
-}
-.transcript-card-caption {
-  padding: 7px 9px;
-  gap: 3px;
-}
-.clip-card-meta-row,
-.transcript-card-range-row {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  min-width: 0;
-}
-.clip-card-participant,
-.transcript-card-participant {
-  font-feature-settings: "tnum";
-  font-size: 10px;
-  color: var(--fg-faint);
-  white-space: nowrap;
-  flex-shrink: 0;
-}
-.clip-card-label {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  font-family: var(--font-sans);
-  font-size: 10px;
-  font-weight: 500;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  color: var(--cg-card-hue, var(--fg-muted));
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  min-width: 0;
-}
-.clip-card-text {
-  font-size: 11px;
-  color: var(--fg-muted);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.transcript-card-range {
-  font-family: var(--font-mono);
-  font-feature-settings: "tnum";
-  font-size: 10px;
-  color: var(--fg-faint);
-}
-.transcript-card-text {
-  font-size: 12px;
-  line-height: 1.35;
-  color: var(--fg);
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
 }
 
 /* ---- Btn ---- */
@@ -735,8 +576,6 @@
 @media (prefers-reduced-motion: reduce) {
   .filter-chip,
   .participant-pill,
-  .clip-card,
-  .transcript-card,
   .cg-btn,
   .cg-swim-event,
   .cg-swim-cluster-band {

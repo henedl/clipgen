@@ -42,7 +42,6 @@
  *
  * LAYOUT:     --layout-max-width | --layout-padding-x
  * SIDEBAR:    --sidebar-width-default | --sidebar-width-wide
- * CARD WIDTH: --card-width-preview (clip-card/transcript-card sizing)
  * PANEL:      --bottom-panel-height
  * ICON SIZE:  --icon-size-xs (12px) | --icon-size-sm (14px) | --icon-size-md (16px) | --icon-size-lg (20px) | --icon-size-xl (24px)
  * BREAKPOINT: --bp-tablet (768px) — documentation/JS-read only, see note below
@@ -248,9 +247,6 @@
   /* Sidebar widths */
   --sidebar-width-default: 340px;
   --sidebar-width-wide: 420px;
-
-  /* Card widths (clip-card / transcript-card sizing tokens) */
-  --card-width-preview: 200px;
 
   /* Bottom panel height (consumed by screenspace.css + screenspace.js) */
   --bottom-panel-height: 400px;
