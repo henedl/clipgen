@@ -54,6 +54,8 @@
     settingsData: null,
     bottomCollapsed: false,
     activeFunction: "",
+    sortColumn: "", // "" | "row" | "category" | "severity" | "function"
+    sortDir: "asc", // "asc" | "desc"
     cellExpandHover: true,
     filters: {
       categories: [],
@@ -420,6 +422,102 @@
       }
       return true;
     });
+  }
+
+  // ---- Sheet preview sorting ----
+  //
+  // One column at a time, cycling Ascending -> Descending -> Off (source order).
+  // Empty/unrecognized values always sink to the bottom regardless of direction;
+  // ties fall back to source row order so sorting is stable.
+  function compareByColumn(a, b, column, participants, asc) {
+    if (column === "row") {
+      var dr = a.rowNum - b.rowNum;
+      return asc ? dr : -dr;
+    }
+    if (column === "category") {
+      var ac = (a.category || "").trim();
+      var bc = (b.category || "").trim();
+      if (!ac && !bc) return 0;
+      if (!ac) return 1;
+      if (!bc) return -1;
+      var dc = ac.localeCompare(bc, undefined, { sensitivity: "base" });
+      return asc ? dc : -dc;
+    }
+    if (column === "severity") {
+      var ar = severityRank(a.severity);
+      var br = severityRank(b.severity);
+      if (ar === null && br === null) return 0;
+      if (ar === null) return 1;
+      if (br === null) return -1;
+      var ds = ar - br; // rank -4 (Critical) .. 2 (Very Positive): asc = most severe first
+      return asc ? ds : -ds;
+    }
+    if (column === "function") {
+      var fn = state.activeFunction && ROW_FUNCTIONS[state.activeFunction];
+      if (!fn) return 0;
+      var df = fn(a, participants) - fn(b, participants);
+      return asc ? df : -df;
+    }
+    return 0;
+  }
+
+  function sortRows(rows) {
+    if (!state.sortColumn) return rows;
+    var participants = state.sheetData ? state.sheetData.participants : [];
+    var asc = state.sortDir !== "desc";
+    var col = state.sortColumn;
+    return rows.slice().sort(function (a, b) {
+      var c = compareByColumn(a, b, col, participants, asc);
+      return c !== 0 ? c : a.rowNum - b.rowNum;
+    });
+  }
+
+  function cycleSort(column) {
+    if (state.sortColumn !== column) {
+      state.sortColumn = column;
+      state.sortDir = "asc";
+    } else if (state.sortDir === "asc") {
+      state.sortDir = "desc";
+    } else {
+      state.sortColumn = "";
+      state.sortDir = "asc";
+    }
+    renderGrid();
+  }
+
+  // Small cycling sort button for a sortable column header. Recreated on every
+  // renderGrid, so the click listener is attached fresh each time (matching the
+  // fnSelect/fnClear pattern).
+  function buildSortButton(column) {
+    var active = state.sortColumn === column;
+    var iconName = !active
+      ? "chevron-up-down"
+      : state.sortDir === "asc"
+        ? "bars-arrow-up"
+        : "bars-arrow-down";
+    var btn = el("button", "sort-btn" + (active ? " sort-btn-active" : ""));
+    btn.type = "button";
+    btn.title = active
+      ? state.sortDir === "asc"
+        ? "Sorted ascending — click for descending"
+        : "Sorted descending — click to clear"
+      : "Sort by this column";
+    btn.innerHTML = '<span class="cg-icon cg-icon--' + iconName + '"></span>';
+    btn.addEventListener("click", function (ev) {
+      ev.stopPropagation(); // don't trigger the header's batch-select handler
+      cycleSort(column);
+    });
+    return btn;
+  }
+
+  // <th> with a centered label + sort button. Used for #, Category, Severity.
+  function sortableHeaderTh(thClass, label, column) {
+    var th = el("th", thClass);
+    var inner = el("div", "col-header-inner");
+    inner.appendChild(el("span", "col-header-label", label));
+    inner.appendChild(buildSortButton(column));
+    th.appendChild(inner);
+    return th;
   }
 
   function clearAllFilters() {
@@ -1283,10 +1381,10 @@
     // Colgroup for fixed column widths — participant columns share equal width
     var colgroup = document.createElement("colgroup");
     var colRowNum = document.createElement("col");
-    colRowNum.style.width = "2.5rem";
+    colRowNum.style.width = "3.5rem"; // wide enough for "#" label + sort button
     colgroup.appendChild(colRowNum);
     var colFn = document.createElement("col");
-    colFn.style.width = "2.25rem";
+    colFn.style.width = "3.25rem"; // fits the fn select + clear + optional sort button
     colgroup.appendChild(colFn);
     var colObs = document.createElement("col");
     // Explicit width keeps the table size predictable under table-layout: fixed
@@ -1312,7 +1410,7 @@
     var thead = el("thead");
     var hrow = el("tr");
 
-    var batchTh = el("th", "col-row-num col-row-num-header", "#");
+    var batchTh = sortableHeaderTh("col-row-num col-row-num-header", "#", "row");
     batchTh.title = "Select all cells";
     hrow.appendChild(batchTh);
 
@@ -1341,25 +1439,30 @@
     fnSelect.addEventListener("change", function () {
       state.activeFunction = this.value;
       fnClear.style.display = this.value ? "" : "none";
+      if (!this.value && state.sortColumn === "function") state.sortColumn = "";
       syncFilterFnDisabled();
-      updateFunctionColumn();
+      // Full re-render so the function-column sort button appears/disappears.
+      renderGrid();
     });
     fnClear.addEventListener("click", function () {
       state.activeFunction = "";
       fnSelect.value = "";
       this.style.display = "none";
+      if (state.sortColumn === "function") state.sortColumn = "";
       syncFilterFnDisabled();
-      updateFunctionColumn();
+      renderGrid();
     });
     fnWrap.appendChild(fnSelect);
     fnWrap.appendChild(fnClear);
+    // Sort button only makes sense once a function populates the column.
+    if (state.activeFunction) fnWrap.appendChild(buildSortButton("function"));
     fnTh.appendChild(fnWrap);
     hrow.appendChild(fnTh);
 
     hrow.appendChild(el("th", "col-observation", "Observation"));
-    hrow.appendChild(el("th", "col-category", "Category"));
+    hrow.appendChild(sortableHeaderTh("col-category", "Category", "category"));
     if (showSeverity) {
-      hrow.appendChild(el("th", "col-severity", "Severity"));
+      hrow.appendChild(sortableHeaderTh("col-severity", "Severity", "severity"));
     }
 
     for (var p = 0; p < visibleParticipants.length; p++) {
@@ -1396,12 +1499,18 @@
     var showSeverity = state._gridShowSeverity;
     var visibleParticipants = state._gridVisibleParticipants || d.participants;
 
-    var filteredRows = getFilteredRows(d.rows);
+    var filteredRows = sortRows(getFilteredRows(d.rows));
     var frag = document.createDocumentFragment();
     var i = 0;
     while (i < filteredRows.length) {
       var row = filteredRows[i];
       if (isRowEmpty(row, visibleParticipants)) {
+        // While sorted the spreadsheet's empty-row grouping is meaningless, so
+        // drop empty rows entirely instead of emitting "N empty rows" spacers.
+        if (state.sortColumn) {
+          i++;
+          continue;
+        }
         var emptyStart = i;
         while (i < filteredRows.length && isRowEmpty(filteredRows[i], visibleParticipants)) {
           i++;
