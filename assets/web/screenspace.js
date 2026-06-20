@@ -111,6 +111,69 @@
     }
   }
 
+  // Two-state Color match-mode control: "average" (region's mean color) vs
+  // "presence" (target color appears anywhere in the region, per-pixel). Backed
+  // by a hidden input holding the mode string. See ColorTool in screenspace.py.
+  var COLOR_MODES = [
+    { mode: "average", icon: "swatch", desc: "Match the region's average colour" },
+    { mode: "presence", icon: "magnifying-glass-circle", desc: "Match when the target colour appears anywhere in the region (per-pixel)" },
+  ];
+
+  function _colorMode(mode) {
+    return mode === "presence" ? "presence" : "average";
+  }
+
+  // Reflect a color mode back onto an existing segmented control + presence-only
+  // min-area row (used when rehydrating a saved single-tool color task).
+  function applyColorMode(id, mode) {
+    var hidden = qs("#" + id);
+    if (!hidden) return;
+    var m = _colorMode(mode);
+    hidden.value = m;
+    var wrap = hidden.parentNode;
+    if (wrap) {
+      var btns = wrap.querySelectorAll(".ss-segctl-btn");
+      for (var i = 0; i < btns.length; i++) {
+        btns[i].classList.toggle("active", btns[i].getAttribute("data-mode") === m);
+      }
+    }
+    var row = qs("#paramColorMinAreaRow");
+    if (row) row.classList.toggle("hidden", m !== "presence");
+  }
+
+  // `onChange(mode)` fires after the active button flips, before the bubbling
+  // input event — callers use it to show/hide the presence-only min-area row.
+  function buildColorModeControl(id, mode, small, onChange) {
+    var wrap = el("div", "ss-segctl" + (small ? " ss-segctl--sm" : ""));
+    var hidden = document.createElement("input");
+    hidden.type = "hidden";
+    hidden.id = id;
+    hidden.value = _colorMode(mode);
+    wrap.appendChild(hidden);
+    COLOR_MODES.forEach(function (spec) {
+      var btn = el("button", "ss-segctl-btn");
+      btn.type = "button";
+      btn.setAttribute("data-desc", spec.desc);
+      btn.setAttribute("data-mode", spec.mode);
+      btn.appendChild(iconSpan(spec.icon, "ss-icon--xs"));
+      if (spec.mode === hidden.value) btn.classList.add("active");
+      btn.addEventListener("click", function (e) {
+        e.preventDefault();
+        hidden.value = spec.mode;
+        var sibs = wrap.querySelectorAll(".ss-segctl-btn");
+        for (var i = 0; i < sibs.length; i++) {
+          sibs[i].classList.toggle("active", sibs[i] === btn);
+        }
+        if (onChange) onChange(spec.mode);
+        // Bubbles to the .param-control wrapper so addParamRow's input handler
+        // (live model preview) fires, mirroring a checkbox change.
+        hidden.dispatchEvent(new Event("input", { bubbles: true }));
+      });
+      wrap.appendChild(btn);
+    });
+    return wrap;
+  }
+
   var TIMELINE_CANVAS_HEIGHT = 64;
 
   var _paletteDocListeners = null;
@@ -328,7 +391,8 @@
     var t = step.type;
     if (t === "color") {
       var tc = step.target_color || {};
-      return "H" + (tc.h || 0) + "° S" + (tc.s || 0) + " V" + (tc.v || 0);
+      var swatch = "H" + (tc.h || 0) + "° S" + (tc.s || 0) + " V" + (tc.v || 0);
+      return step.color_mode === "presence" ? swatch + " · presence" : swatch;
     }
     if (t === "change") return ">" + ((step.threshold || 0) * 100).toFixed(0) + "%";
     if (t === "similarity") return "≥" + ((step.threshold || 0) * 100).toFixed(0) + "%";
@@ -836,6 +900,8 @@
     color: {
       "Tolerance":        "How far from the target color still counts — widen to catch more shades, tighten to be stricter",
       "Hex color":        "Target color in hex notation",
+      "Mode":             "Average matches the region's mean colour; Presence fires when the target colour appears anywhere in the region (per-pixel)",
+      "Min area %":       "Presence mode only: the minimum share of region pixels that must match before an event fires. 0% = any presence detected (no minimum size); raise it to ignore stray noise pixels. The readout shows the approximate pixel count for the current region.",
     },
     change: {
       "Threshold":        "How much of the region must change to trigger — raise it to ignore minor flicker",
@@ -2284,6 +2350,7 @@
     });
     renderRunRegionPicker();
     updateRegionChipsOverflow();
+    _updateMinAreaReadout(""); // region change → refresh color presence pixel estimate
     refreshModelView({ debounce: true });
     refreshCalibration({ debounce: true });
   }
@@ -3718,6 +3785,8 @@
         var ref = availableRegionRefByKey(regionSel.value);
         state.multitoolSteps[capturedIdx].region = ref ? ref.name : "";
         state.multitoolSteps[capturedIdx].region_ref = ref ? regionRefPayload(ref) : null;
+        // Region drives the color presence min-area pixel estimate.
+        _updateMinAreaReadout("_mt" + capturedIdx);
       });
     })(idx);
     regionCtrl.appendChild(regionSel);
@@ -3784,6 +3853,39 @@
       }
     });
     _mtAddNumberRow(body, "Tolerance", "paramColorTol" + sfx, 0, 100, initTol, 1);
+
+    // Match mode (average vs presence) + presence-only min-area row, mirroring
+    // the single-tool color panel.
+    var initMode = _colorMode(init.color_mode);
+    // A restored presence step with no min_coverage means "any presence" (0%);
+    // a fresh/average step defaults to 1% for when the user switches to presence.
+    var initMinArea = initMode === "presence"
+      ? (init.min_coverage != null ? init.min_coverage * 100 : 0)
+      : 1;
+    var modeRow = el("div", "param-row");
+    modeRow.appendChild(el("span", "param-label", "Mode"));
+    var modeCtrl = el("div", "param-control");
+    var minAreaRow = el("div", "param-row" + (initMode === "presence" ? "" : " hidden"));
+    modeCtrl.appendChild(
+      buildColorModeControl("paramColorMode" + sfx, initMode, true, function (mode) {
+        minAreaRow.classList.toggle("hidden", mode !== "presence");
+      })
+    );
+    modeRow.appendChild(modeCtrl);
+    body.appendChild(modeRow);
+    minAreaRow.appendChild(el("span", "param-label", "Min area %"));
+    var minAreaCtrl = el("div", "param-control");
+    var minAreaInput = numberInput("paramColorMinArea" + sfx, 0, 100, initMinArea, 1);
+    minAreaCtrl.appendChild(minAreaInput);
+    var minAreaVal = el("span", "param-value param-value--minarea");
+    minAreaVal.id = "paramColorMinAreaVal" + sfx;
+    minAreaCtrl.appendChild(minAreaVal);
+    minAreaRow.appendChild(minAreaCtrl);
+    body.appendChild(minAreaRow);
+    minAreaInput.addEventListener("input", function () {
+      _updateMinAreaReadout(sfx);
+    });
+    _updateMinAreaReadout(sfx);
   }
 
   function _mtRenderChange(body, idx, sfx) {
@@ -4145,6 +4247,14 @@
           s: Math.round(tol * 128 / 100),
           v: Math.round(tol * 128 / 100),
         };
+        var snapMode = (qs("#paramColorMode" + sfx) || {}).value;
+        if (snapMode === "presence") {
+          init.color_mode = "presence";
+          init.min_coverage = numberOrDefault((qs("#paramColorMinArea" + sfx) || {}).value, 1) / 100;
+        } else {
+          init.color_mode = "average";
+          delete init.min_coverage;
+        }
       } else if (step.type === "change") {
         init.threshold = numberOrDefault((qs("#paramChangeThresh" + sfx) || {}).value, init.threshold);
         init.noise_threshold = intOrDefault((qs("#paramChangeNoise" + sfx) || {}).value, init.noise_threshold);
@@ -4582,6 +4692,37 @@
     tolSlider.addEventListener("input", function () {
       renderColorPalette();
     });
+
+    // Match mode (average vs presence) + the presence-only "Min area" row.
+    var minAreaRow;
+    var modeRow = el("div", "param-row");
+    modeRow.appendChild(el("span", "param-label", "Mode"));
+    var modeControl = el("div", "param-control");
+    modeControl.appendChild(
+      buildColorModeControl("paramColorMode", "average", false, function (mode) {
+        if (minAreaRow) minAreaRow.classList.toggle("hidden", mode !== "presence");
+      })
+    );
+    modeRow.appendChild(modeControl);
+    container.appendChild(modeRow);
+    minAreaRow = addParamRow(
+      container, "Min area %", rangeInput("paramColorMinArea", 0, 100, 1, 1), "paramColorMinAreaVal"
+    );
+    minAreaRow.id = "paramColorMinAreaRow";
+    minAreaRow.classList.add("hidden");
+    // Widen the readout so it can show "X% · ~N px" / "Any presence …" beside
+    // the slider; addParamRow's generic listener runs first and writes the raw
+    // value, ours runs after and replaces it with the region-aware readout.
+    var minAreaVal = qs("#paramColorMinAreaVal");
+    if (minAreaVal) minAreaVal.classList.add("param-value--minarea");
+    var minAreaSlider = qs("#paramColorMinArea");
+    if (minAreaSlider) {
+      minAreaSlider.addEventListener("input", function () {
+        _updateMinAreaReadout("");
+      });
+    }
+    _updateMinAreaReadout("");
+
     renderIntervalSlot("paramColorInterval", 0.5, 60, 1.0, 0.5);
 
     renderColorPalette();
@@ -4992,6 +5133,7 @@
     }
     row.appendChild(ctrl);
     container.appendChild(row);
+    return row;
   }
 
   // ---- Model view (preprocessed preview) ----
@@ -5255,6 +5397,72 @@
     return !!(ref && ref.source !== "full_frame");
   }
 
+  // Resolve a region ref to its stored {x,y,w,h} object (fractions of the
+  // frame). Returns null for full-frame / unresolved refs.
+  function _regionObjectForRef(ref) {
+    var r = normalizeRegionRef(ref);
+    if (!r || r.source === "full_frame") return null;
+    if (r.source === "stash") {
+      for (var i = 0; i < state.stashes.length; i++) {
+        if (state.stashes[i].id === r.stash_id) {
+          return state.stashes[i].regions[r.name] || null;
+        }
+      }
+      return null;
+    }
+    return state.regions[r.name] || null;
+  }
+
+  // Approximate pixel area (source resolution) of the region a color tool /
+  // multitool color step will analyze. `sfx` is "" for the single-tool panel or
+  // "_mt{idx}" for a multitool step. Returns null when the video size is unknown
+  // (caller then shows just the percentage). Full-frame / no region → frame area.
+  function _colorRegionPixelArea(sfx) {
+    var info = state.videoInfo;
+    if (!info || !info.width || !info.height) return null;
+    var frameArea = info.width * info.height;
+    var ref;
+    if (sfx && sfx.indexOf("_mt") === 0) {
+      var idx = parseInt(sfx.slice(3), 10);
+      var step = state.multitoolSteps[idx];
+      ref = step ? (step.region_ref || (step.region ? activeRegionRef(step.region) : null)) : null;
+    } else if (state.pendingRegion) {
+      var c = qs("#overlayCanvas");
+      if (!c || !c.width || !c.height) return frameArea;
+      var pw = (state.pendingRegion.w / c.width) * info.width;
+      var ph = (state.pendingRegion.h / c.height) * info.height;
+      return Math.max(1, Math.round(pw * ph));
+    } else {
+      ref = _previewRegionRef();
+    }
+    var r = _regionObjectForRef(ref);
+    if (!r) return frameArea; // full frame or unresolved
+    return Math.max(1, Math.round((r.w * info.width) * (r.h * info.height)));
+  }
+
+  // Readout shown beside the "Min area %" slider: percentage plus the
+  // approximate matching-pixel count for the current region, or an explicit
+  // "any presence" note at 0% (no minimum size).
+  function _formatMinAreaReadout(pct, area) {
+    if (!(pct > 0)) return "Any presence — no minimum size";
+    var txt = pct + "%";
+    if (area && area > 0) {
+      var px = Math.max(1, Math.round((pct / 100) * area));
+      txt += " · ~" + px.toLocaleString() + " px";
+    }
+    return txt;
+  }
+
+  function _updateMinAreaReadout(sfx) {
+    sfx = sfx || "";
+    var slider = qs("#paramColorMinArea" + sfx);
+    var out = qs("#paramColorMinAreaVal" + sfx);
+    if (!slider || !out) return;
+    out.textContent = _formatMinAreaReadout(
+      numberOrDefault(slider.value, 0), _colorRegionPixelArea(sfx)
+    );
+  }
+
   function _collectPreviewParams(tool) {
     var out = {};
     if (tool === "color") {
@@ -5502,6 +5710,24 @@
     },
   };
 
+  // The color axis is mode-dependent. In presence mode the score IS the matching
+  // pixel coverage and the Min-area slider IS the cutoff, so it becomes a normal
+  // draw-line + suggest axis. `scoreScale` (100) maps coverage (0–1) onto the
+  // slider's percent units (0–100) so dots, line and Apply all share one scale.
+  // `sfx` is "" (single tool) or "_mt{k}"; the base sliderId gets the suffix
+  // appended by the caller, like every other tool. Average mode keeps the static
+  // no-line descriptor.
+  function _calColorAxis(sfx) {
+    var modeEl = qs("#paramColorMode" + (sfx || ""));
+    if (modeEl && modeEl.value === "presence") {
+      return {
+        sliderId: "paramColorMinArea", invert: false, drawLine: true,
+        compare: "ge", scoreScale: 100,
+      };
+    }
+    return CAL_AXIS.color;
+  }
+
   function _calIsCalibratable(tool) {
     return tool === "multitool" || !!CAL_AXIS[tool];
   }
@@ -5553,7 +5779,7 @@
     return !!e.passed;
   }
 
-  function _calDotTooltip(tool, sc, timestamp) {
+  function _calDotTooltip(tool, sc, timestamp, scoreScale) {
     var lines = [formatTime(timestamp, { decimals: 1 })];
     if (!sc || sc.status === "not_evaluable" || sc.score == null) {
       lines.push("not evaluable");
@@ -5561,7 +5787,9 @@
     }
     var d = sc.detail || {};
     var s = Number(sc.score);
-    if (tool === "text") {
+    if (tool === "color" && scoreScale && scoreScale !== 1) {
+      lines.push("coverage " + (s * scoreScale).toFixed(1) + "%");
+    } else if (tool === "text") {
       lines.push("fuzzy " + s.toFixed(2));
       if (d.text_found) lines.push("“" + d.text_found + "”");
     } else if (tool === "numbers") {
@@ -5622,6 +5850,9 @@
   function _calBuildTrack(rows, tool, axis, sliderId, label, suggest) {
     var track = el("div", "cal-track");
     if (label) track.appendChild(label);
+    // Factor mapping the backend score into the axis/slider units (1 for tools
+    // whose score already matches the slider; 100 for color presence coverage).
+    var scoreScale = axis.scoreScale || 1;
     var range = _calAxisRange(axis, sliderId);
     var ax = el("div", "cal-axis");
     _calBuildGrid(ax, range, axis.invert);
@@ -5637,7 +5868,7 @@
     // (positives-only is a primary workflow). Drawn behind the dots (appended
     // before them) and re-derived on every render, so it stays put while the
     // threshold slider is dragged (these tools' scores are threshold-independent).
-    var suggestion = (suggest && axis.drawLine && sliderId) ? _calSuggest(rows, axis.compare) : null;
+    var suggestion = (suggest && axis.drawLine && sliderId) ? _calSuggest(rows, axis.compare, scoreScale) : null;
     var applyBadge = null;
     var narrowGap = false;
     if (suggestion && suggestion.separated) {
@@ -5684,7 +5915,7 @@
       var dot = el("button", "cal-dot cal-dot--" + (r.polarity === "negative" ? "negative" : "positive"));
       dot.type = "button";
       var evaluable = sc && sc.status === "ok" && sc.score != null && isFinite(sc.score);
-      var pos = evaluable ? _calPos(sc.score, range, axis.invert) : 0;
+      var pos = evaluable ? _calPos(sc.score * scoreScale, range, axis.invert) : 0;
       dot.style.left = pos + "%";
       if (!evaluable) dot.classList.add("cal-dot--hollow");
       if (r.stale) dot.classList.add("cal-dot--hollow", "cal-dot--stale");
@@ -5696,7 +5927,7 @@
       var n = stack[key] || 0;
       stack[key] = n + 1;
       if (n > 0) dot.style.bottom = "calc(var(--space-2) * " + Math.min(n, 4) + ")";
-      var tip = _calDotTooltip(tool, sc, r.timestamp);
+      var tip = _calDotTooltip(tool, sc, r.timestamp, scoreScale);
       dot.setAttribute("data-tooltip", tip);
       dot.setAttribute("aria-label", tip.replace(/\n/g, ", "));
       (function (ts) {
@@ -5744,14 +5975,15 @@
   // With both polarities the interval can be empty → {separated:false} (the
   // use-case-#2 "overlap / wrong region or tool" signal). `compare` is the pass
   // comparison, independent of axis rendering.
-  function _calSuggest(rows, compare) {
+  function _calSuggest(rows, compare, scoreScale) {
     if (!compare) return null;
+    var scale = scoreScale || 1;
     var pos = [], neg = [];
     rows.forEach(function (r) {
       var sc = r.sc;
       if (!sc || sc.status !== "ok" || sc.score == null || !isFinite(sc.score)) return;
-      if (r.polarity === "negative") neg.push(Number(sc.score));
-      else pos.push(Number(sc.score));
+      if (r.polarity === "negative") neg.push(Number(sc.score) * scale);
+      else pos.push(Number(sc.score) * scale);
     });
     if (!pos.length && !neg.length) return null; // no scored pins to satisfy
     var lo = null, hi = null;
@@ -5889,7 +6121,9 @@
             stepType = def ? def.type : "change";
             if (k > 0 && def) logic = (def.logic || "AND").toUpperCase();
           }
-          var axis = CAL_AXIS[stepType] || { sliderId: null, rangeMin: 0, rangeMax: 1, invert: false, drawLine: false };
+          var axis = stepType === "color"
+            ? _calColorAxis("_mt" + k)
+            : (CAL_AXIS[stepType] || { sliderId: null, rangeMin: 0, rangeMax: 1, invert: false, drawLine: false });
           var sliderId = axis.sliderId ? axis.sliderId + "_mt" + k : null;
           var label = el("div", "cal-track-label");
           label.appendChild(el("span", null, (k + 1) + ". " + _calTitle(stepType)));
@@ -5902,7 +6136,7 @@
         })(k);
       }
     } else {
-      var axis2 = CAL_AXIS[tool];
+      var axis2 = tool === "color" ? _calColorAxis("") : CAL_AXIS[tool];
       if (axis2) {
         var rows2 = result.pins.map(function (e) {
           return { polarity: e.polarity, timestamp: e.timestamp, sc: e, stale: staleById[e.pin_id] };
@@ -6491,6 +6725,10 @@
         s: Math.round(tol * 128 / 100),
         v: Math.round(tol * 128 / 100),
       };
+      if (((qs("#paramColorMode" + sfx) || {}).value) === "presence") {
+        p.color_mode = "presence";
+        p.min_coverage = numberOrDefault((qs("#paramColorMinArea" + sfx) || {}).value, 1) / 100;
+      }
     } else if (stepType === "change") {
       p.threshold = numberOrDefault((qs("#paramChangeThresh" + sfx) || {}).value, 0.03);
       p.noise_threshold = intOrDefault((qs("#paramChangeNoise" + sfx) || {}).value, 30);
@@ -6605,6 +6843,10 @@
         s: Math.round(tol * 128 / 100),
         v: Math.round(tol * 128 / 100),
       };
+      if (((qs("#paramColorMode") || {}).value) === "presence") {
+        params.color_mode = "presence";
+        params.min_coverage = numberOrDefault((qs("#paramColorMinArea") || {}).value, 1) / 100;
+      }
       params.interval = numberOrDefault((qs("#paramColorInterval") || {}).value, 1.0);
     } else if (type === "change") {
       params.threshold = numberOrDefault((qs("#paramChangeThresh") || {}).value, 0.03);
@@ -7184,7 +7426,11 @@
     var inputs = qsa(".param-control input[type='range']");
     for (var i = 0; i < inputs.length; i++) {
       var valSpan = inputs[i].parentNode.querySelector(".param-value");
-      if (valSpan) valSpan.textContent = inputs[i].value;
+      // The "Min area %" readout is region-aware (worded, not the raw value), so
+      // skip it here — _updateMinAreaReadout owns it.
+      if (valSpan && !valSpan.classList.contains("param-value--minarea")) {
+        valSpan.textContent = inputs[i].value;
+      }
     }
   }
 
@@ -7284,6 +7530,14 @@
       var savedTol = params.tolerance ? Math.round(params.tolerance.h * 100 / 90) : 30;
       setInputValue("#paramColorTol", savedTol);
       setInputValue("#paramColorInterval", numberOrDefault(params.interval, 1.0));
+      var savedColorMode = _colorMode(params.color_mode);
+      applyColorMode("paramColorMode", savedColorMode);
+      // In presence mode an absent min_coverage means "any presence" (the server
+      // drops it when 0), so restore the slider to 0 — not the 1% fresh default.
+      if (savedColorMode === "presence") {
+        setInputValue("#paramColorMinArea", params.min_coverage != null ? params.min_coverage * 100 : 0);
+      }
+      _updateMinAreaReadout("");
       // setTargetColor writes hidden h/s/v + hex input + preview + palette + brightness strip.
       setTargetColor(ch, cs, cv);
     } else if (task.type === "change") {

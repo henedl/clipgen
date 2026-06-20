@@ -166,6 +166,55 @@ class TestColorMatches:
         assert matched
 
 
+def _gray_with_red_patch(patch=10):
+    """100x100 gray region with a ``patch``x``patch`` dark-red corner block.
+
+    The region average is gray (so ``color_matches`` misses the red), but the
+    red is present per-pixel for ``color_present`` to find.
+    """
+    region = np.full((100, 100, 3), 128, dtype=np.uint8)  # neutral gray
+    region[0:patch, 0:patch] = [0, 0, 139]  # BGR dark red
+    return region
+
+
+class TestColorPresent:
+    target = {"h": 0.0, "s": 255.0, "v": 139.0}  # dark red in OpenCV HSV
+    tol = {"h": 10.0, "s": 60.0, "v": 60.0}
+
+    def test_small_patch_detected(self):
+        # 1% red patch: averaged away by color_matches, but present per-pixel.
+        region = _gray_with_red_patch(10)
+        avg_matched, _ = screenspace.color_matches(region, self.target, self.tol)
+        assert not avg_matched
+        matched, coverage = screenspace.color_present(region, self.target, self.tol)
+        assert matched
+        assert coverage == pytest.approx(0.01, abs=1e-3)
+
+    def test_min_coverage_gate(self):
+        region = _gray_with_red_patch(10)  # ~1% coverage
+        matched_hi, cov = screenspace.color_present(
+            region, self.target, self.tol, min_coverage=0.05
+        )
+        assert not matched_hi
+        assert cov < 0.05
+        matched_lo, _ = screenspace.color_present(
+            region, self.target, self.tol, min_coverage=0.005
+        )
+        assert matched_lo
+
+    def test_absent_color_misses(self):
+        region = np.full((100, 100, 3), 128, dtype=np.uint8)  # all gray, no red
+        matched, coverage = screenspace.color_present(region, self.target, self.tol)
+        assert not matched
+        assert coverage == 0.0
+
+    def test_empty_region(self):
+        region = np.zeros((0, 0, 3), dtype=np.uint8)
+        matched, coverage = screenspace.color_present(region, self.target, self.tol)
+        assert not matched
+        assert coverage == 0.0
+
+
 class TestComputeFrameDiff:
     def test_identical_frames(self):
         frame = np.random.randint(0, 255, (50, 50, 3), dtype=np.uint8)
@@ -1956,6 +2005,43 @@ class TestCheckFrameForTool:
         assert result is not None
         assert "_confidence" in result
 
+    def test_color_presence_mode(self):
+        # Mostly-gray frame with a small dark-red patch: average mode misses it,
+        # presence mode detects it.
+        frame = _gray_with_red_patch(10)
+        region = {"x": 0, "y": 0, "w": 100, "h": 100}
+        target = {"h": 0, "s": 255, "v": 139}
+        tol = {"h": 10, "s": 60, "v": 60}
+        avg_passed, _ = screenspace.check_frame_for_tool(
+            frame, None, region, "color", {"target_color": target, "tolerance": tol}
+        )
+        assert avg_passed is False
+        passed, result = screenspace.check_frame_for_tool(
+            frame,
+            None,
+            region,
+            "color",
+            {"target_color": target, "tolerance": tol, "color_mode": "presence"},
+        )
+        assert passed is True
+        assert result is not None
+        assert "_confidence" in result
+
+    def test_color_presence_min_coverage(self):
+        # The same 1% patch fails a 5% min-area gate.
+        frame = _gray_with_red_patch(10)
+        region = {"x": 0, "y": 0, "w": 100, "h": 100}
+        params = {
+            "target_color": {"h": 0, "s": 255, "v": 139},
+            "tolerance": {"h": 10, "s": 60, "v": 60},
+            "color_mode": "presence",
+            "min_coverage": 0.05,
+        }
+        passed, _ = screenspace.check_frame_for_tool(
+            frame, None, region, "color", params
+        )
+        assert passed is False
+
     def test_change_needs_prev_frame(self):
         frame = np.zeros((100, 100, 3), dtype=np.uint8)
         region = {"x": 0, "y": 0, "w": 100, "h": 100}
@@ -2918,6 +3004,37 @@ class TestScoreMultitoolFrame:
         assert res["steps"][1]["passed"] is True
         assert res["passed"] is False  # AND chain: one step failed
 
+    def test_color_presence_step_passes_on_small_patch(self):
+        # A gray frame with a 1% dark-red patch: a presence-mode color step
+        # fires where an average-mode step on the same target would not.
+        frame = _gray_with_red_patch(10)
+        target = {"h": 0, "s": 255, "v": 139}
+        tol = {"h": 10, "s": 60, "v": 60}
+        avg_step = [
+            {
+                "type": "color",
+                "region_coords": self.region,
+                "target_color": target,
+                "tolerance": tol,
+            },
+        ]
+        assert (
+            screenspace.score_multitool_frame(frame, None, avg_step)["passed"] is False
+        )
+        presence_step = [
+            {
+                "type": "color",
+                "region_coords": self.region,
+                "target_color": target,
+                "tolerance": tol,
+                "color_mode": "presence",
+            },
+        ]
+        assert (
+            screenspace.score_multitool_frame(frame, None, presence_step)["passed"]
+            is True
+        )
+
     def test_not_evaluable_step_makes_chain_none(self):
         red = np.full((100, 100, 3), [0, 0, 255], dtype=np.uint8)
         steps = [
@@ -3029,6 +3146,8 @@ class TestFastScanDispatchIntervalMultiplier:
             interval_seconds=0,
             start_seconds=0.0,
             end_seconds=None,
+            color_mode="average",
+            min_coverage=0.0,
             on_progress=None,
             cancel_flag=None,
             on_result=None,
@@ -3074,6 +3193,8 @@ class TestFastScanDispatchIntervalMultiplier:
             interval_seconds=0,
             start_seconds=0.0,
             end_seconds=None,
+            color_mode="average",
+            min_coverage=0.0,
             on_progress=None,
             cancel_flag=None,
             on_result=None,
@@ -3120,6 +3241,8 @@ class TestFastScanDispatchIntervalMultiplier:
             interval_seconds=0,
             start_seconds=0.0,
             end_seconds=None,
+            color_mode="average",
+            min_coverage=0.0,
             on_progress=None,
             cancel_flag=None,
             on_result=None,
@@ -3147,6 +3270,55 @@ class TestFastScanDispatchIntervalMultiplier:
 
         assert captured["interval"] == 1.0
         assert captured["fast_opts"] is None
+
+    def test_presence_color_drops_fast_opts(self, monkeypatch):
+        """Presence mode must scan full-res: ColorTool.scan nulls fast_opts so
+        the max_region_dim INTER_AREA downscale can't erase small patches."""
+        captured = {}
+
+        def fake_scan_color(
+            video_path,
+            region,
+            *,
+            target_color,
+            tolerance,
+            interval_seconds=0,
+            start_seconds=0.0,
+            end_seconds=None,
+            color_mode="average",
+            min_coverage=0.0,
+            on_progress=None,
+            cancel_flag=None,
+            on_result=None,
+            fast_opts=None,
+        ):
+            captured["color_mode"] = color_mode
+            captured["min_coverage"] = min_coverage
+            captured["fast_opts"] = fast_opts
+            return []
+
+        monkeypatch.setattr(screenspace, "scan_color", fake_scan_color)
+
+        worker = screenspace.ScreenspaceWorker()
+        task = {
+            "id": "ss_presence",
+            "type": "color",
+            "video_path": "/fake.mp4",
+            "region_coords": {"x": 0, "y": 0, "w": 100, "h": 100},
+            "parameters": {
+                "scan_mode": "fast",
+                "interval": 1.0,
+                "target_color": {"h": 0, "s": 255, "v": 139},
+                "tolerance": {"h": 10, "s": 60, "v": 60},
+                "color_mode": "presence",
+                "min_coverage": 0.02,
+            },
+        }
+        worker._dispatch(task, lambda p: None, lambda: False, None)
+
+        assert captured["color_mode"] == "presence"
+        assert captured["min_coverage"] == 0.02
+        assert captured["fast_opts"] is None  # downscale skipped for presence
 
     def test_template_dispatch_gets_downscale_flag(self, monkeypatch):
         captured = {}

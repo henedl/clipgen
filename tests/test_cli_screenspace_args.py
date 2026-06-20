@@ -56,6 +56,8 @@ def _ss_args(**overrides):
         "ss_list_tasks": None,
         "ss_target_color": None,
         "ss_tolerance": None,
+        "ss_color_mode": "average",
+        "ss_min_area": None,
         "ss_threshold": None,
         "ss_reference_timestamp": None,
         "ss_scene_ref": None,
@@ -120,6 +122,52 @@ def test_parse_ss_task_color_minimal(monkeypatch):
     assert args.ss_target_color == "#FF0000"
     assert args.ss_tolerance == "20,30,30"
     assert args.ss_threshold == 0.85
+    assert args.ss_color_mode == "average"  # default
+
+
+def test_parse_ss_task_color_presence(monkeypatch):
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "clipgen.py",
+            "--ss-task",
+            "color",
+            "P01",
+            "button",
+            "--ss-target-color",
+            "#8B0000",
+            "--ss-tolerance",
+            "20,80,80",
+            "--ss-color-mode",
+            "presence",
+            "--ss-min-area",
+            "1",
+        ],
+    )
+    args = cli.parse_arguments()
+    assert args.ss_color_mode == "presence"
+    assert args.ss_min_area == 1.0
+
+
+def test_ss_build_params_color_presence():
+    region = {"x": 0, "y": 0, "w": 100, "h": 100}
+    args = _ss_args(
+        ss_target_color="#8B0000",
+        ss_tolerance="20,80,80",
+        ss_color_mode="presence",
+        ss_min_area=1.0,
+    )
+    params = cli._ss_build_params(args, "color", region, "")
+    assert params["color_mode"] == "presence"
+    assert params["min_coverage"] == pytest.approx(0.01)
+
+
+def test_ss_build_params_color_average_omits_mode():
+    region = {"x": 0, "y": 0, "w": 100, "h": 100}
+    args = _ss_args(ss_target_color="#FF0000", ss_tolerance="20,30,30")
+    params = cli._ss_build_params(args, "color", region, "")
+    assert "color_mode" not in params
+    assert "min_coverage" not in params
 
 
 def test_parse_ss_list_tasks_with_status(monkeypatch):
