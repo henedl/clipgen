@@ -1851,7 +1851,7 @@ def _ss_rehydrate_task_media(
     parameters: dict[str, Any],
     video_path: str,
     region_coords: dict[str, int],
-    known_regions: dict[str, dict[str, Any]],
+    manifest: dict[str, Any],
     dims: tuple[int, int] | None,
 ) -> None:
     """Re-extract reference frames/templates/scenes into a saved task's parameters.
@@ -1900,10 +1900,18 @@ def _ss_rehydrate_task_media(
         for i, step in enumerate(steps):
             stype = step.get("type", "")
             step_region_name = (step.get("region") or "").strip()
-            if step_region_name and step_region_name in known_regions and dims:
-                step_coords = screenspace.denormalize_region(
-                    known_regions[step_region_name], dims[0], dims[1]
+            step_region_ref = step.get("region_ref")
+            if step_region_name or step_region_ref is not None:
+                resolved_name, resolved_region = screenspace.resolve_region_request(
+                    step_region_name, step_region_ref, manifest
                 )
+                step["region"] = resolved_name
+                if dims is not None:
+                    step_coords = screenspace.denormalize_region(
+                        resolved_region, dims[0], dims[1]
+                    )
+                else:
+                    step_coords = region_coords
             else:
                 step_coords = region_coords
             step["region_coords"] = step_coords
@@ -1965,21 +1973,31 @@ def _run_ss_rerun_task(args: argparse.Namespace) -> None:
         sys.exit(1)
 
     props = video.probe_video_properties(video_path)
-    known_regions = _ss_load_known_regions(manifest)
     dims: tuple[int, int] | None = None
     if props and props.get("width") and props.get("height"):
         dims = (int(props["width"]), int(props["height"]))
 
-    rd = known_regions.get(region_name)
-    if rd is not None and dims is not None:
-        region_coords = screenspace.denormalize_region(rd, dims[0], dims[1])
-    elif isinstance(saved.get("region_coords"), dict):
+    # Prefer region_ref-aware resolution (honors source/stash_id, never flattens
+    # stashes), then fall back to the saved top-level region_coords (un-stripped on
+    # save) for older tasks, per-step multitools, or when dims are unavailable.
+    region_coords: dict[str, int] | None = None
+    try:
+        _, resolved_region = screenspace.resolve_region_request(
+            region_name, saved.get("region_ref"), manifest
+        )
+        if dims is not None:
+            region_coords = screenspace.denormalize_region(
+                resolved_region, dims[0], dims[1]
+            )
+    except ValueError:
+        pass  # fall through to saved coords below
+    if region_coords is None and isinstance(saved.get("region_coords"), dict):
         region_coords = {
             k: int(saved["region_coords"][k])
             for k in ("x", "y", "w", "h")
             if k in saved["region_coords"]
         }
-    else:
+    if region_coords is None:
         utils.error_print(
             f"Region {region_name!r} for task {task_id!r} could not be resolved.",
             [
@@ -1990,7 +2008,7 @@ def _run_ss_rerun_task(args: argparse.Namespace) -> None:
 
     try:
         _ss_rehydrate_task_media(
-            task_type, parameters, video_path, region_coords, known_regions, dims
+            task_type, parameters, video_path, region_coords, manifest, dims
         )
     except ValueError as exc:
         utils.error_print(f"Cannot re-run task {task_id!r}: {exc}")

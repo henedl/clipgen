@@ -778,3 +778,169 @@ def test_ss_run_task_uploaded_template_step_errors(monkeypatch, capsys):
         cli._run_ss_rerun_task(_ss_args(ss_run_task="ss_mt02"))
     assert exc.value.code == 1
     assert "cannot be re-run" in capsys.readouterr().out.lower()
+
+
+def test_ss_run_task_multitool_full_frame_step(monkeypatch):
+    """A full_frame step resolves to the whole frame, not the parent task's region."""
+    fake_manifest = {
+        "regions": {"btn": {"x": 0.0, "y": 0.0, "w": 0.5, "h": 0.5}},
+        "stashes": [],
+        "tasks": [
+            {
+                "id": "ss_ff01",
+                "type": "multitool",
+                "participant": "P01",
+                "region": "btn",
+                "region_coords": {"x": 0, "y": 0, "w": 50, "h": 50},
+                "parameters": {
+                    "steps": [
+                        {
+                            "type": "color",
+                            "region": "full_frame",
+                            "region_ref": {"source": "full_frame"},
+                            "target_color": {"h": 0, "s": 255, "v": 255},
+                            "tolerance": {"h": 10, "s": 40, "v": 40},
+                        }
+                    ]
+                },
+                "status": "completed",
+            }
+        ],
+        "events": [],
+    }
+    saved_tasks = _install_ss_stubs(monkeypatch, fake_manifest)
+
+    cli._run_ss_rerun_task(_ss_args(ss_run_task="ss_ff01"))
+
+    assert saved_tasks
+    step = saved_tasks[0]["parameters"]["steps"][0]
+    # Probe stub reports 100x100, so full frame is {0,0,100,100}, not parent's {0,0,50,50}.
+    assert step["region_coords"] == {"x": 0, "y": 0, "w": 100, "h": 100}
+    assert step["region"] == "full_frame"
+
+
+def test_ss_run_task_multitool_stash_step_disambiguates(monkeypatch):
+    """A stash-backed step honors stash_id instead of a last-write-wins name merge."""
+    fake_manifest = {
+        "regions": {"btn": {"x": 0.0, "y": 0.0, "w": 0.5, "h": 0.5}},
+        "stashes": [
+            {
+                "id": "stash_a",
+                "regions": {"hud": {"x": 0.1, "y": 0.1, "w": 0.1, "h": 0.1}},
+            },
+            {
+                "id": "stash_b",
+                "regions": {"hud": {"x": 0.2, "y": 0.2, "w": 0.2, "h": 0.2}},
+            },
+        ],
+        "tasks": [
+            {
+                "id": "ss_stash01",
+                "type": "multitool",
+                "participant": "P01",
+                "region": "btn",
+                "region_coords": {"x": 0, "y": 0, "w": 50, "h": 50},
+                "parameters": {
+                    "steps": [
+                        {
+                            "type": "color",
+                            "region": "hud",
+                            # Points at stash_a (the non-last stash); a last-write-wins
+                            # merge would wrongly pick stash_b's "hud".
+                            "region_ref": {
+                                "source": "stash",
+                                "stash_id": "stash_a",
+                                "name": "hud",
+                            },
+                            "target_color": {"h": 0, "s": 255, "v": 255},
+                            "tolerance": {"h": 10, "s": 40, "v": 40},
+                        }
+                    ]
+                },
+                "status": "completed",
+            }
+        ],
+        "events": [],
+    }
+    saved_tasks = _install_ss_stubs(monkeypatch, fake_manifest)
+
+    cli._run_ss_rerun_task(_ss_args(ss_run_task="ss_stash01"))
+
+    assert saved_tasks
+    step = saved_tasks[0]["parameters"]["steps"][0]
+    # stash_a's hud {0.1,0.1,0.1,0.1} at 100x100 -> {10,10,10,10}, not stash_b's {20,...}.
+    assert step["region_coords"] == {"x": 10, "y": 10, "w": 10, "h": 10}
+
+
+def test_ss_run_task_multitool_step_missing_region_errors(monkeypatch, capsys):
+    """A step whose region is gone fails loudly instead of silently using parent coords."""
+    fake_manifest = {
+        "regions": {"btn": {"x": 0.0, "y": 0.0, "w": 0.5, "h": 0.5}},
+        "stashes": [],
+        "tasks": [
+            {
+                "id": "ss_gone01",
+                "type": "multitool",
+                "participant": "P01",
+                "region": "btn",
+                "region_coords": {"x": 0, "y": 0, "w": 50, "h": 50},
+                "parameters": {
+                    "steps": [
+                        {
+                            "type": "color",
+                            "region": "ghost",
+                            "target_color": {"h": 0, "s": 255, "v": 255},
+                            "tolerance": {"h": 10, "s": 40, "v": 40},
+                        }
+                    ]
+                },
+                "status": "completed",
+            }
+        ],
+        "events": [],
+    }
+    _install_ss_stubs(monkeypatch, fake_manifest)
+    with pytest.raises(SystemExit) as exc:
+        cli._run_ss_rerun_task(_ss_args(ss_run_task="ss_gone01"))
+    assert exc.value.code == 1
+    assert "not found" in capsys.readouterr().out.lower()
+
+
+def test_ss_run_task_parent_stash_disambiguates(monkeypatch):
+    """The parent task honors a saved region_ref instead of a last-write-wins merge."""
+    fake_manifest = {
+        "regions": {},
+        "stashes": [
+            {
+                "id": "stash_a",
+                "regions": {"hud": {"x": 0.1, "y": 0.1, "w": 0.1, "h": 0.1}},
+            },
+            {
+                "id": "stash_b",
+                "regions": {"hud": {"x": 0.2, "y": 0.2, "w": 0.2, "h": 0.2}},
+            },
+        ],
+        "tasks": [
+            {
+                "id": "ss_parent01",
+                "type": "color",
+                "participant": "P01",
+                "region": "hud",
+                "region_ref": {"source": "stash", "stash_id": "stash_a", "name": "hud"},
+                "region_coords": {"x": 20, "y": 20, "w": 20, "h": 20},
+                "parameters": {
+                    "target_color": {"h": 0, "s": 255, "v": 255},
+                    "tolerance": {"h": 10, "s": 40, "v": 40},
+                },
+                "status": "completed",
+            }
+        ],
+        "events": [],
+    }
+    saved_tasks = _install_ss_stubs(monkeypatch, fake_manifest)
+
+    cli._run_ss_rerun_task(_ss_args(ss_run_task="ss_parent01"))
+
+    assert saved_tasks
+    # stash_a's hud -> {10,10,10,10}, not stash_b's {20,...} nor the stale saved coords.
+    assert saved_tasks[0]["region_coords"] == {"x": 10, "y": 10, "w": 10, "h": 10}

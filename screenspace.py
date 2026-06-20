@@ -253,6 +253,81 @@ def denormalize_region(
     }
 
 
+FULL_FRAME_REGION_NAME = "full_frame"
+FULL_FRAME_REGION: dict[str, Any] = {
+    "x": 0.0,
+    "y": 0.0,
+    "w": 1.0,
+    "h": 1.0,
+    "source_width": 0,
+    "source_height": 0,
+}
+
+
+def resolve_region_request(
+    region_name: str,
+    region_ref: Any,
+    manifest: dict[str, Any],
+) -> tuple[str, dict[str, Any]]:
+    """Resolve a (region_name, region_ref) request to (resolved_name, normalized_region).
+
+    Mirrors the active/stash/full_frame precedence the Screenspace server and CLI both
+    rely on: a ``region_ref`` (``{source: "active"|"stash"|"full_frame", name?, stash_id?}``)
+    pins the lookup to a specific source, while a bare ``region_name`` falls back to
+    active-regions-first then stashes. Pure — reads only the passed ``manifest`` and never
+    flattens stashes, so duplicate region names across stashes stay distinguishable.
+
+    Returns the resolved name and the normalized (0–1) region dict. Raises ``ValueError``
+    with a human-readable message on any failure (caller maps it to a 400 or a CLI error).
+    """
+    active_regions = manifest.get("regions", {})
+    if not isinstance(active_regions, dict):
+        active_regions = {}
+
+    if region_ref is None:
+        if region_name == FULL_FRAME_REGION_NAME:
+            return FULL_FRAME_REGION_NAME, dict(FULL_FRAME_REGION)
+        if region_name in active_regions:
+            return region_name, active_regions[region_name]
+        for stash in manifest.get("stashes", []):
+            stash_regions = stash.get("regions", {})
+            if isinstance(stash_regions, dict) and region_name in stash_regions:
+                return region_name, stash_regions[region_name]
+        raise ValueError(f"Region '{region_name}' not found")
+
+    if not isinstance(region_ref, dict):
+        raise ValueError("region_ref must be an object")
+
+    source = str(region_ref.get("source", "")).strip()
+
+    if source == "full_frame":
+        return FULL_FRAME_REGION_NAME, dict(FULL_FRAME_REGION)
+
+    name = str(region_ref.get("name", "")).strip()
+    if not name:
+        raise ValueError("region_ref.name is required")
+
+    if source == "active":
+        if name not in active_regions:
+            raise ValueError(f"Region '{name}' not found")
+        return name, active_regions[name]
+
+    if source == "stash":
+        stash_id = str(region_ref.get("stash_id", "")).strip()
+        if not stash_id:
+            raise ValueError("region_ref.stash_id is required")
+        for stash in manifest.get("stashes", []):
+            if stash.get("id") != stash_id:
+                continue
+            stash_regions = stash.get("regions", {})
+            if not isinstance(stash_regions, dict) or name not in stash_regions:
+                raise ValueError(f"Region '{name}' not found in stash '{stash_id}'")
+            return name, stash_regions[name]
+        raise ValueError(f"Stash '{stash_id}' not found")
+
+    raise ValueError("region_ref.source must be 'active', 'stash', or 'full_frame'")
+
+
 def average_color_hsv(region_pixels: np.ndarray) -> dict[str, float]:
     """Compute mean HSV color of a region.
 
