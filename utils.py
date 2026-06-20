@@ -841,14 +841,16 @@ def _resolve_segment_source_fields(
 ) -> dict[str, Any]:
     """Resolve the source-video fields for one persisted segment record.
 
-    Single-video (no ``source_timeline``): ``sourceVideo`` is *base_video* and
-    the local times equal the global times. Multi-video: the global ``[start,
-    end]`` is mapped onto ``clip['source_timeline']`` into the owning sub-video
-    plus local offsets. When *allow_split* is True (video clips) and the range
-    straddles a recording boundary, a ``parts`` list describes each piece so it
-    can be re-cut and stitched; ``sourceVideo``/``localStart``/``localEnd`` carry
-    the first piece. When *allow_split* is False (screenshots/GIFs/transcripts) a
-    single frame's position maps by start only — never split.
+    ``sourceVideo`` is always a **basename** (matching ``pipeline.cut_global_range``);
+    regeneration resolves it against the input dir via ``resolve_input_path``.
+    Single-video (no ``source_timeline``): ``sourceVideo`` is *base_video*'s
+    basename and the local times equal the global times. Multi-video: the global
+    ``[start, end]`` is mapped onto ``clip['source_timeline']`` into the owning
+    sub-video plus local offsets. When *allow_split* is True (video clips) and the
+    range straddles a recording boundary, a ``parts`` list describes each piece so
+    it can be re-cut and stitched; ``sourceVideo``/``localStart``/``localEnd``
+    carry the first piece. When *allow_split* is False (screenshots/GIFs/
+    transcripts) a single frame's position maps by start only — never split.
 
     ``start``/``end`` (global seconds) stay on the record for the timeline
     viewer; these fields drive regeneration, which re-cuts from ``sourceVideo``.
@@ -858,7 +860,7 @@ def _resolve_segment_source_fields(
     timeline = clip.get("source_timeline")
     if not timeline or len(timeline) < 2:
         return {
-            "sourceVideo": base_video,
+            "sourceVideo": Path(base_video).name,
             "localStart": global_start,
             "localEnd": global_end,
         }
@@ -868,7 +870,7 @@ def _resolve_segment_source_fields(
         if pieces:
             parts = [
                 {
-                    "sourceVideo": timeline[index][0],
+                    "sourceVideo": Path(timeline[index][0]).name,
                     "localStart": local_start,
                     "localEnd": local_end,
                 }
@@ -884,7 +886,7 @@ def _resolve_segment_source_fields(
                 fields["parts"] = parts
             return fields
         return {
-            "sourceVideo": base_video,
+            "sourceVideo": Path(base_video).name,
             "localStart": global_start,
             "localEnd": global_end,
         }
@@ -892,7 +894,7 @@ def _resolve_segment_source_fields(
     mapped = map_global_to_segment(timeline, global_start)
     if mapped is None:
         return {
-            "sourceVideo": base_video,
+            "sourceVideo": Path(base_video).name,
             "localStart": global_start,
             "localEnd": global_end,
         }
@@ -900,7 +902,7 @@ def _resolve_segment_source_fields(
     seg_duration = timeline[index][1]
     local_end = min(float(seg_duration), local_start + (global_end - global_start))
     return {
-        "sourceVideo": timeline[index][0],
+        "sourceVideo": Path(timeline[index][0]).name,
         "localStart": local_start,
         "localEnd": local_end,
     }

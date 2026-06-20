@@ -1252,17 +1252,31 @@
     }
     state._jobStatusReelWasInProgress = !!reel.in_progress;
 
-    // ---- Generate side ----
-    if (gen.in_progress) {
+    // ---- Generate side: sheet (/api/generate) and intake (/api/generate-intake)
+    // run concurrently from one Generate click and share the same button,
+    // progress readout, and elapsed clock. Combine their counts into a single
+    // state machine so the two streams don't clobber each other's progress or
+    // fire the idle reset while the other is still running.
+    var intake = status.intake || {};
+    var genActive = !!gen.in_progress || !!intake.in_progress;
+    if (genActive) {
       if (!state.artifactGenerating) setArtifactGenerating(true);
       qs("#cancelGenerateBtn").classList.remove("hidden");
-      var total = gen.total || 0;
-      var done = gen.done || 0;
-      if (total > 0) {
-        setButtonProgress("generateBtn", Math.min(done / total, 1));
+      var combinedTotal = (gen.total || 0) + (intake.total || 0);
+      var combinedDone = (gen.done || 0) + (intake.done || 0);
+      if (combinedTotal > 0) {
+        setButtonProgress("generateBtn", Math.min(combinedDone / combinedTotal, 1));
       }
-      _generateEtaTracker.start(gen.started_at ? gen.started_at * 1000 : undefined);
-      updateGenerateProgress(done, total);
+      // Seed elapsed from the earliest of the two start times; idempotent
+      // start() leaves a live build's own clock untouched.
+      var genStartedAt =
+        gen.started_at && intake.started_at
+          ? Math.min(gen.started_at, intake.started_at)
+          : gen.started_at || intake.started_at;
+      _generateEtaTracker.start(genStartedAt ? genStartedAt * 1000 : undefined);
+      // The "N / M cells" readout counts sheet cells only (intake spans aren't
+      // cells); an intake-only run has no sheet count and shows elapsed alone.
+      updateGenerateProgress(gen.done || 0, gen.total || 0);
       _ensureStudioEtaTicker();
     } else if (state._jobStatusGenerateWasInProgress) {
       setArtifactGenerating(false);
@@ -1272,33 +1286,7 @@
       updateGenerateProgress(0, 0);
       loadManifestState();
     }
-    state._jobStatusGenerateWasInProgress = !!gen.in_progress;
-
-    // ---- Intake generate (api/generate-intake) ----
-    var intake = status.intake || {};
-    if (intake.in_progress) {
-      if (!state.artifactGenerating) setArtifactGenerating(true);
-      qs("#cancelGenerateBtn").classList.remove("hidden");
-      var intakeTotal = intake.total || 0;
-      var intakeDone = intake.done || 0;
-      if (intakeTotal > 0) {
-        setButtonProgress("generateBtn", Math.min(intakeDone / intakeTotal, 1));
-      }
-      // Seed from the server's start time (idempotent — re-seeds only if the
-      // generate branch already reset the shared tracker). Intake jobs have no
-      // cell counter, so _paintGenerateProgress shows the elapsed clock alone.
-      _generateEtaTracker.start(intake.started_at ? intake.started_at * 1000 : undefined);
-      _ensureStudioEtaTicker();
-      _paintGenerateProgress();
-    } else if (state._jobStatusIntakeWasInProgress) {
-      setArtifactGenerating(false);
-      qs("#cancelGenerateBtn").classList.add("hidden");
-      setButtonProgress("generateBtn", null);
-      _generateEtaTracker.reset();
-      _paintGenerateProgress();
-      loadManifestState();
-    }
-    state._jobStatusIntakeWasInProgress = !!intake.in_progress;
+    state._jobStatusGenerateWasInProgress = genActive;
   }
 
   function pollJobStatus() {
@@ -2523,6 +2511,11 @@
           segTotal: reelItem.segTotal,
           source: "reel",
         };
+        // Preserve intake identity for reel items that originated from an
+        // intake cluster, so a drop back into the queue keeps its linkage.
+        if (reelItem.event_type) data.event_type = reelItem.event_type;
+        if (reelItem.event_ids) data.event_ids = reelItem.event_ids;
+        if (reelItem.mark_ids) data.mark_ids = reelItem.mark_ids;
         ev.dataTransfer.setData("application/json", JSON.stringify(data));
       }
     });
@@ -5025,7 +5018,9 @@
   }
 
   function highlightIntakeCard(idx) {
-    var cards = qsa(".intake-queue-card");
+    // Scope to the Screenspace intake panel: transcript cards also carry
+    // .intake-queue-card, so an unscoped query would index across both panels.
+    var cards = qsa("#intakeCards .intake-queue-card");
     for (var i = 0; i < cards.length; i++) {
       if (i === idx) {
         cards[i].classList.add("intake-highlight");

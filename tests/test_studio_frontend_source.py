@@ -163,11 +163,13 @@ def test_load_manifest_state_hydrates_reels_without_artifacts():
 
 
 def test_job_status_poll_includes_intake():
-    """Re-attach polling must keep running while intake generation is active."""
+    """Re-attach polling must keep running while intake generation is active, and
+    sheet + intake (one Generate action) share a single combined progress state
+    rather than two branches that clobber each other's button/elapsed/idle."""
     src = _studio_js()
     assert "var intake = status.intake || {};" in src
     assert "data.intake && data.intake.in_progress" in src
-    assert "state._jobStatusIntakeWasInProgress" in src
+    assert "var genActive = !!gen.in_progress || !!intake.in_progress;" in src
 
 
 def test_reel_409_treated_as_json_error():

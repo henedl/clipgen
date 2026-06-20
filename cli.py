@@ -1292,14 +1292,6 @@ _SS_VALID_TASK_TYPES = (
 )
 
 
-def _ss_load_known_regions(manifest: dict[str, Any]) -> dict[str, dict[str, Any]]:
-    """Combine active manifest regions with all stash regions (last-write-wins)."""
-    known: dict[str, dict[str, Any]] = dict(manifest.get("regions", {}))
-    for stash in manifest.get("stashes", []):
-        known.update(stash.get("regions", {}))
-    return known
-
-
 def _ss_resolve_videos_for_participant(participant_id: str) -> list[str]:
     """Resolve a participant's ordered source video path(s) via filename discovery.
 
@@ -1726,9 +1718,28 @@ def _run_ss_task(args: argparse.Namespace) -> None:
         sys.exit(1)
 
     manifest = screenspace.load_screenspace_manifest()
-    known_regions = _ss_load_known_regions(manifest)
-    if region_name not in known_regions:
-        available = sorted(known_regions.keys())
+
+    # Resolve the named region with active-first / per-stash precedence (never
+    # flattens stashes with last-write-wins) — the same resolver --ss-run-task uses,
+    # so a name that exists in both an active region and a stash resolves to the
+    # active one instead of being silently shadowed by a stashed copy.
+    try:
+        _, resolved_region = screenspace.resolve_region_request(
+            region_name, None, manifest
+        )
+    except ValueError:
+        # Resolution uses precedence; the error hint may still list every known
+        # name (active + stashed) to help the user pick a valid one.
+        available = sorted(
+            {
+                *manifest.get("regions", {}),
+                *(
+                    name
+                    for stash in manifest.get("stashes", [])
+                    for name in stash.get("regions", {})
+                ),
+            }
+        )
         hint = (
             f"Available regions: {', '.join(available)}"
             if available
@@ -1747,13 +1758,16 @@ def _run_ss_task(args: argparse.Namespace) -> None:
 
     # Parts share resolution; reference frames map global→sub-video via frame_at.
     props = video.probe_video_properties(video_paths[0])
-    rd = known_regions[region_name]
     if props and props.get("width") and props.get("height"):
         region_coords = screenspace.denormalize_region(
-            rd, props["width"], props["height"]
+            resolved_region, int(props["width"]), int(props["height"])
         )
     else:
-        region_coords = {k: int(rd[k]) for k in ("x", "y", "w", "h") if k in rd}
+        region_coords = {
+            k: int(resolved_region[k])
+            for k in ("x", "y", "w", "h")
+            if k in resolved_region
+        }
 
     try:
         parameters = _ss_build_params(
