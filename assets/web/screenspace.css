@@ -3201,6 +3201,13 @@ body.panel-dragging #bottomPanel {
   color: var(--color-text-dim);
 }
 
+.task-card-eta {
+  font-size: var(--text-xs);
+  color: var(--fg-faint);
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
 /* Drag-and-drop */
 .task-card.dragging {
   opacity: 0.4;

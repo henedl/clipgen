@@ -191,6 +191,7 @@
         </div>
         <button id="buildReelBtn" class="cg-btn cg-btn-solid cg-btn-sm" disabled data-tooltip="Add clips to the reel first"><span class="cg-btn-icon" data-icon="play"></span><span>Build Reel</span></button>
         <button id="cancelReelBtn" class="cg-btn cg-btn-bare cg-btn-sm hidden">Cancel</button>
+        <span id="reelEtaText" class="job-eta cg-mono hidden" aria-live="polite"></span>
         <button id="stashReelBtn" class="cg-btn cg-btn-bare cg-btn-sm" disabled data-tooltip="Add clips to the reel first"><span class="cg-btn-icon" data-icon="archive-box"></span><span>Stash</span></button>
         <button id="clearReelBtn" class="cg-btn cg-btn-bare cg-btn-sm"><span class="cg-btn-icon" data-icon="x-mark"></span><span>Clear</span></button>
       </div>
@@ -240,6 +241,7 @@
     <div class="build-status-card">
       <div id="buildStatusSpinner" class="spinner build-status-spinner"></div>
       <span id="buildStatusMessage" class="build-status-msg"></span>
+      <span id="buildElapsed" class="build-elapsed cg-mono"></span>
       <div class="build-status-actions">
         <button id="buildStatusCancel" class="cg-btn cg-btn-bare cg-btn-sm">
           <span class="cg-btn-icon" data-icon="x-mark"></span><span>Cancel</span>

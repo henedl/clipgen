@@ -2235,6 +2235,13 @@ html[data-theme="dark"] .queue-card-error .queue-card-thumb {
   display: none;
 }
 
+/* Live elapsed clock shown beside the Build Reel button while a reel builds. */
+.job-eta {
+  font-size: var(--text-sm);
+  color: var(--fg-faint);
+  white-space: nowrap;
+}
+
 /* Status overlay */
 
 #statusOverlay {
@@ -2324,6 +2331,16 @@ html[data-theme="dark"] .queue-card-error .queue-card-thumb {
 
 .build-status-msg.error-text {
   color: #dc2626;
+}
+
+/* Live elapsed clock in the non-blocking build-status card. */
+.build-elapsed {
+  font-size: var(--text-sm);
+  color: var(--fg-faint);
+  white-space: nowrap;
+}
+.build-elapsed:empty {
+  display: none;
 }
 
 .build-status-actions {

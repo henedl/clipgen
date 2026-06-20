@@ -1136,6 +1136,11 @@
       var clipFraction = totalClips > 0 ? Math.min(clipsDone / totalClips, 1) : 0;
       // Same 0.7/0.3 weighting as the live stream handler in onBuildReel().
       setButtonProgress("buildReelBtn", clipFraction * 0.7 + concatFraction * 0.3);
+      // Seed from the server's start time so a reattach shows accurate elapsed;
+      // idempotent start() leaves a live build's own clock untouched.
+      _reelEtaTracker.start(reel.started_at ? reel.started_at * 1000 : undefined);
+      _ensureStudioEtaTicker();
+      _paintReelElapsed();
     } else if (state._jobStatusReelWasInProgress) {
       // Transition busy → idle while we were polling: a build finished in
       // the background. Clear UI and reload the manifest so any new reel
@@ -1143,6 +1148,8 @@
       setReelGenerating(false);
       qs("#cancelReelBtn").classList.add("hidden");
       setButtonProgress("buildReelBtn", null);
+      _reelEtaTracker.reset();
+      _paintReelElapsed();
       loadManifestState();
     }
     state._jobStatusReelWasInProgress = !!reel.in_progress;
@@ -1156,10 +1163,15 @@
       if (total > 0) {
         setButtonProgress("generateBtn", Math.min(done / total, 1));
       }
+      _generateEtaTracker.start(gen.started_at ? gen.started_at * 1000 : undefined);
+      updateGenerateProgress(done, total);
+      _ensureStudioEtaTicker();
     } else if (state._jobStatusGenerateWasInProgress) {
       setArtifactGenerating(false);
       qs("#cancelGenerateBtn").classList.add("hidden");
       setButtonProgress("generateBtn", null);
+      _generateEtaTracker.reset();
+      updateGenerateProgress(0, 0);
       loadManifestState();
     }
     state._jobStatusGenerateWasInProgress = !!gen.in_progress;
@@ -1174,10 +1186,18 @@
       if (intakeTotal > 0) {
         setButtonProgress("generateBtn", Math.min(intakeDone / intakeTotal, 1));
       }
+      // Seed from the server's start time (idempotent — re-seeds only if the
+      // generate branch already reset the shared tracker). Intake jobs have no
+      // cell counter, so _paintGenerateProgress shows the elapsed clock alone.
+      _generateEtaTracker.start(intake.started_at ? intake.started_at * 1000 : undefined);
+      _ensureStudioEtaTicker();
+      _paintGenerateProgress();
     } else if (state._jobStatusIntakeWasInProgress) {
       setArtifactGenerating(false);
       qs("#cancelGenerateBtn").classList.add("hidden");
       setButtonProgress("generateBtn", null);
+      _generateEtaTracker.reset();
+      _paintGenerateProgress();
       loadManifestState();
     }
     state._jobStatusIntakeWasInProgress = !!intake.in_progress;
@@ -3495,16 +3515,86 @@
     return map;
   }
 
-  function updateGenerateProgress(done, total) {
-    var el = qs("#generateProgress");
+  // ---- Elapsed-time tracking for long Studio jobs ----
+  // Reels (parallel/bursty clip generation), artifact generation, and viewer
+  // builds (no progress signal) all show elapsed only — no ETA. A single 1s ticker
+  // keeps the clocks live; trackers use idempotent start() so a job-status reattach
+  // never resets a live job's elapsed.
+  var _reelEtaTracker = createEtaTracker();
+  var _generateEtaTracker = createEtaTracker();
+  var _buildEtaTracker = createEtaTracker();
+  var _studioEtaTicker = null;
+  var _genLastDone = 0;
+  var _genLastTotal = 0;
+
+  function _paintReelElapsed() {
+    var el = qs("#reelEtaText");
     if (!el) return;
-    if (!total || total <= 0) {
+    if (!state.reelGenerating) {
       el.classList.add("hidden");
       el.textContent = "";
       return;
     }
     el.classList.remove("hidden");
-    el.textContent = done + " / " + total + " cells";
+    el.textContent = formatDuration(_reelEtaTracker.update().elapsedSec);
+  }
+
+  function _paintBuildElapsed() {
+    var el = qs("#buildElapsed");
+    if (!el) return;
+    if (!state.overlayJobRunning) {
+      el.textContent = "";
+      return;
+    }
+    el.textContent = formatDuration(_buildEtaTracker.update().elapsedSec);
+  }
+
+  function _paintGenerateProgress() {
+    var el = qs("#generateProgress");
+    if (!el) return;
+    var hasCount = _genLastTotal > 0;
+    // Intake-only jobs never populate the cell counter, so fall back to an
+    // elapsed-only readout while generating. Hide entirely once idle.
+    if (!state.artifactGenerating && !hasCount) {
+      el.classList.add("hidden");
+      el.textContent = "";
+      return;
+    }
+    el.classList.remove("hidden");
+    var parts = [];
+    if (hasCount) parts.push(_genLastDone + " / " + _genLastTotal + " cells");
+    if (state.artifactGenerating) {
+      parts.push(formatDuration(_generateEtaTracker.update().elapsedSec));
+    }
+    el.textContent = parts.join(" · ");
+  }
+
+  function _tickStudioEta() {
+    if (!isAnyStudioJobRunning()) {
+      _stopStudioEtaTicker();
+      return;
+    }
+    _paintReelElapsed();
+    _paintGenerateProgress();
+    _paintBuildElapsed();
+  }
+
+  function _ensureStudioEtaTicker() {
+    if (_studioEtaTicker) return;
+    _studioEtaTicker = setInterval(_tickStudioEta, 1000);
+  }
+
+  function _stopStudioEtaTicker() {
+    if (_studioEtaTicker) {
+      clearInterval(_studioEtaTicker);
+      _studioEtaTicker = null;
+    }
+  }
+
+  function updateGenerateProgress(done, total) {
+    _genLastDone = done;
+    _genLastTotal = total;
+    _paintGenerateProgress();
   }
 
   function isGenerateFetchAborted(err) {
@@ -3517,6 +3607,9 @@
     state.generateCancelledByUser = false;
     setArtifactGenerating(true);
     qs("#cancelGenerateBtn").classList.remove("hidden");
+    _generateEtaTracker.reset();
+    _generateEtaTracker.start();
+    _ensureStudioEtaTicker();
 
     // Per-branch AbortControllers let onCancelGenerate stop the network
     // fetches immediately; the server-side cancel endpoints also trip the
@@ -3573,9 +3666,12 @@
 
     function finishBranch() {
       if (--pending > 0) return;
-      updateGenerateProgress(0, 0);
       setButtonProgress("generateBtn", null);
       setArtifactGenerating(false);
+      _generateEtaTracker.reset();
+      // Hide after artifactGenerating is false so the elapsed-only fallback in
+      // _paintGenerateProgress doesn't keep the readout visible.
+      updateGenerateProgress(0, 0);
       qs("#cancelGenerateBtn").classList.add("hidden");
       var msg;
       var err = null;
@@ -3789,6 +3885,10 @@
     if (state.reelGenerating || state.reelQueue.length === 0) return;
     setReelGenerating(true);
     qs("#cancelReelBtn").classList.remove("hidden");
+    _reelEtaTracker.reset();
+    _reelEtaTracker.start();
+    _ensureStudioEtaTicker();
+    _paintReelElapsed();
 
     // Determine if we have intake items — use direct endpoint for mixed/intake reels
     var hasIntake = false;
@@ -3860,6 +3960,8 @@
       setReelGenerating(false);
       qs("#cancelReelBtn").classList.add("hidden");
       setButtonProgress("buildReelBtn", null);
+      _reelEtaTracker.reset();
+      _paintReelElapsed();
 
       var data = finalPayload || {};
       var isCancelled = cancelled || !!data.cancelled;
@@ -4311,6 +4413,10 @@
     qs("#buildStatusSpinner").style.display = "";
     qs("#buildStatusMessage").textContent = message;
     qs("#buildStatusMessage").className = "build-status-msg";
+    // Elapsed clock — idempotent start so a multi-message build keeps one clock.
+    _buildEtaTracker.start();
+    _ensureStudioEtaTicker();
+    _paintBuildElapsed();
     qs("#buildStatusOpen").classList.add("hidden");
     qs("#buildStatusDismiss").classList.add("hidden");
     var cancelBtn = qs("#buildStatusCancel");
@@ -4338,6 +4444,8 @@
 
   function showBuildResult(successMsg, errorMsg, filePath) {
     if (_buildStatusCancelCleanup) _buildStatusCancelCleanup();
+    _buildEtaTracker.reset();
+    qs("#buildElapsed").textContent = "";
     qs("#buildStatusSpinner").style.display = "none";
     qs("#buildStatusCancel").classList.add("hidden");
     if (errorMsg) {
@@ -4356,6 +4464,8 @@
 
   function hideBuildStatus() {
     if (_buildStatusCancelCleanup) _buildStatusCancelCleanup();
+    _buildEtaTracker.reset();
+    qs("#buildElapsed").textContent = "";
     qs("#buildStatus").classList.add("hidden");
   }
 
@@ -5699,8 +5809,13 @@
     // starts the recurring timer if a job is still in flight.
     pollJobStatus();
     document.addEventListener("visibilitychange", function () {
-      if (document.hidden) stopJobStatusPoll();
-      else pollJobStatus();
+      if (document.hidden) {
+        stopJobStatusPoll();
+        _stopStudioEtaTicker();
+      } else {
+        pollJobStatus();
+        if (isAnyStudioJobRunning()) _ensureStudioEtaTicker();
+      }
     });
     window.addEventListener("resize", function () {
       if (window.convergenceResize) window.convergenceResize();

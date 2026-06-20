@@ -222,6 +222,10 @@
     return _cachedTimelineRect;
   }
   var _lastPollFingerprint = "";
+  // Per-task elapsed/ETA trackers, keyed by task id. Screenspace progress is a
+  // linear fraction of scanned duration, so the ETA extrapolation is meaningful.
+  var _etaTrackers = {};
+  var _etaTicker = null;
   var _preloadedFrames = {};
   // Per-participant source-video mtime_ns, sourced from /api/participants and
   // /api/video/info. Used as a ?v= cache-bust suffix on frame and stream URLs
@@ -7533,6 +7537,12 @@
         fill.style.width = Math.round((task.progress || 0) * 100) + "%";
         prog.appendChild(fill);
         info.appendChild(prog);
+
+        // Live elapsed / ETA line, refreshed every second by the eta ticker.
+        var etaEl = el("span", "task-card-eta");
+        etaEl.dataset.taskEta = task.id;
+        etaEl.textContent = taskEtaLabel(task);
+        info.appendChild(etaEl);
       }
       card.appendChild(info);
 
@@ -7579,6 +7589,65 @@
     updateResultsCrumb();
   }
 
+  // ---- Elapsed / ETA ticker ----
+
+  function taskIsActive(task) {
+    return task.status === "running" || task.status === "paused";
+  }
+
+  // Ensure a tracker exists for an active task and return its "0:42 · ~1:20 left"
+  // label. Seeded from created_at so a page reload still shows elapsed (created_at
+  // includes any queue wait, so elapsed may slightly overstate). Paused tasks show
+  // elapsed only — the bar isn't advancing, so an ETA would be misleading.
+  function taskEtaLabel(task) {
+    var t = _etaTrackers[task.id];
+    if (!t) {
+      t = createEtaTracker();
+      var seed = task.created_at ? Date.parse(task.created_at) : NaN;
+      t.start(isNaN(seed) ? undefined : seed);
+      _etaTrackers[task.id] = t;
+    }
+    var prog = task.status === "paused" ? 0 : task.progress;
+    var e = t.update(prog);
+    var label = formatDuration(e.elapsedSec);
+    var eta = formatEtaLabel(e.remainingSec);
+    if (eta) label += " · " + eta;
+    return label;
+  }
+
+  function tickEtas() {
+    // Prune trackers for tasks that are gone or no longer active.
+    var activeIds = {};
+    state.tasks.forEach(function (t) {
+      if (taskIsActive(t)) activeIds[t.id] = true;
+    });
+    Object.keys(_etaTrackers).forEach(function (id) {
+      if (!activeIds[id]) delete _etaTrackers[id];
+    });
+    // Refresh the visible eta spans in place (no list re-render).
+    var spans = document.querySelectorAll("#taskList [data-task-eta]");
+    for (var i = 0; i < spans.length; i++) {
+      var task = findTask(spans[i].dataset.taskEta);
+      if (task && taskIsActive(task)) spans[i].textContent = taskEtaLabel(task);
+    }
+  }
+
+  function ensureEtaTicker() {
+    var hasActive = state.tasks.some(taskIsActive);
+    if (hasActive && !document.hidden) {
+      if (!_etaTicker) _etaTicker = setInterval(tickEtas, 1000);
+    } else {
+      stopEtaTicker();
+    }
+  }
+
+  function stopEtaTicker() {
+    if (_etaTicker) {
+      clearInterval(_etaTicker);
+      _etaTicker = null;
+    }
+  }
+
   // ---- SSE (Server-Sent Events) with polling fallback ----
 
   function handleTaskData(data) {
@@ -7618,6 +7687,7 @@
         loadAndShowResults(oldSelected);
       }
     }
+    ensureEtaTicker();
   }
 
   function startSSE() {
@@ -7696,12 +7766,14 @@
     if (document.hidden) {
       stopSSE();
       stopPolling();
+      stopEtaTicker();
       return;
     }
     var hasActive = state.tasks.some(function (t) {
       return t.status === "queued" || t.status === "running" || t.status === "paused";
     });
     if (hasActive) startSSE();
+    ensureEtaTicker();
   });
 
   // ---- Results ----
