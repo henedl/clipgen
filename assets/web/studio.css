@@ -2604,6 +2604,16 @@ html[data-theme="dark"] .log-panel {
   align-content: flex-start;
 }
 
+/* Persistent "added to a queue" state — single-copy parity with queued
+ * spreadsheet cells (.ts-cell.selected). Declared before .intake-highlight so the
+ * transient hover ring wins on the shared box-shadow; the accent tint persists
+ * underneath to keep the added state visible while hovering. */
+.intake-queue-card.in-queue {
+  border-color: var(--color-accent);
+  box-shadow: inset 0 0 0 2px var(--color-accent);
+  background: var(--color-accent-hover);
+}
+
 .queue-card.intake-highlight,
 .clip-card.intake-highlight,
 .transcript-card.intake-highlight {
