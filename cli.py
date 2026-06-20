@@ -1381,6 +1381,10 @@ def _ss_parse_scene_ref(raw: str) -> dict[str, Any]:
         raise ValueError(
             f"Scene reference TIMESTAMP/THRESHOLD must be numeric (got {raw!r})"
         ) from exc
+    if "threshold" in ref and not (0.0 <= ref["threshold"] <= 1.0):
+        raise ValueError(
+            f"Scene reference THRESHOLD must be between 0 and 1 (got {raw!r})"
+        )
     return ref
 
 

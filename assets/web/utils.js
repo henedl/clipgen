@@ -467,6 +467,43 @@ var formatEtaLabel = function (remainingSec) {
   return "~" + formatDuration(bucketed) + " left";
 };
 
+// Drive *tickFn* on a fixed interval (default 1s) while a job is active, with
+// optional pause-when-hidden. ensure() starts the timer (idempotent); each tick
+// first checks the guards and self-stops when isActive() returns false (or, with
+// gateHidden, when the tab is hidden), so pages don't re-implement the
+// setInterval/clearInterval lifecycle. Returns a plain object (not a class, per
+// project convention).
+var createIntervalTicker = function (tickFn, opts) {
+  opts = opts || {};
+  var intervalMs = opts.intervalMs != null ? opts.intervalMs : 1000;
+  var gateHidden = !!opts.gateHidden;
+  var isActive = opts.isActive || null;
+  var handle = null;
+  function stop() {
+    if (handle) {
+      clearInterval(handle);
+      handle = null;
+    }
+  }
+  function run() {
+    if (gateHidden && typeof document !== "undefined" && document.hidden) {
+      stop();
+      return;
+    }
+    if (isActive && !isActive()) {
+      stop();
+      return;
+    }
+    tickFn();
+  }
+  return {
+    ensure: function () {
+      if (!handle) handle = setInterval(run, intervalMs);
+    },
+    stop: stop,
+  };
+};
+
 var artifactDurationSec = function (a) {
   var s = Number(a.start);
   var e = Number(a.end);

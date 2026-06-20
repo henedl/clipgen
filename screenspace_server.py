@@ -1194,10 +1194,11 @@ def api_preview(participant: str, timestamp: str) -> FlaskResponse:
     elif tool == "similarity":
         ref_ts_raw = request.args.get("ref")
         if ref_ts_raw is not None and region_coords is not None:
+            ref_ts: float | None = None
             try:
                 ref_ts = float(ref_ts_raw)
             except ValueError:
-                ref_ts = None  # type: ignore[assignment]
+                pass
             if ref_ts is not None:
                 ref_frame = _frame_at(ref_ts)
                 if ref_frame is not None:
@@ -1230,10 +1231,11 @@ def api_preview(participant: str, timestamp: str) -> FlaskResponse:
         else:
             ref_ts_raw = request.args.get("ref")
             if ref_ts_raw is not None and region_coords is not None:
+                ref_ts_tpl: float | None = None
                 try:
                     ref_ts_tpl = float(ref_ts_raw)
                 except ValueError:
-                    ref_ts_tpl = None  # type: ignore[assignment]
+                    pass
                 if ref_ts_tpl is not None:
                     ref_frame_tpl = _frame_at(ref_ts_tpl)
                     if ref_frame_tpl is not None:
