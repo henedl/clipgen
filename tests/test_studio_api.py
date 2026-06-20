@@ -1085,6 +1085,77 @@ def test_api_gallery_cancel_endpoint(client):
     server._gallery_cancel_event.clear()
 
 
+def test_api_timeline_viewer_cancel_discards_clips(client, monkeypatch, tmp_path):
+    """A cancel mid-build unlinks clips already written to disk, leaving no orphan
+    media (the manifest is never published in that case)."""
+    import pipeline
+    import spreadsheet
+    import utils
+
+    monkeypatch.setattr(server, "_worksheet", type("FakeWS", (), {"title": "S"})())
+
+    clip_file = tmp_path / "clip_a1.mp4"
+    clip_file.write_text("video-bytes")
+    artifacts = [
+        {
+            "id": "a1",
+            "type": "clip",
+            "study": "s",
+            "participant": "P01",
+            "file": "clip_a1.mp4",
+            "start": 0,
+            "end": 5,
+        }
+    ]
+
+    monkeypatch.setattr(spreadsheet, "generate_list", lambda *a, **kw: [{"desc": "x"}])
+    monkeypatch.setattr(utils, "resolve_output_path", lambda name: tmp_path / name)
+
+    def fake_process(clips, **kwargs):
+        # User clicks Cancel while ffmpeg is still writing clips.
+        server._timeline_viewer_cancel_event.set()
+        return (1, artifacts)
+
+    monkeypatch.setattr(pipeline, "process_clips", fake_process)
+
+    resp = client.post("/studio/api/timeline-viewer", json={})
+    assert resp.status_code == 200
+    assert resp.get_json()["cancelled"] is True
+    assert not clip_file.exists()
+    server._timeline_viewer_cancel_event.clear()
+
+
+def test_api_gallery_cancel_discards_captures(client, monkeypatch, tmp_path):
+    """A cancel mid-build unlinks gallery captures already written to disk."""
+    import utils
+    import video
+
+    monkeypatch.setattr(server, "_sheet_context", object())
+    (tmp_path / "v.mp4").write_text("v")
+    cap_file = tmp_path / "gallery_0_05.png"
+    cap_file.write_text("img")
+    artifacts = [{"file": "gallery_0_05.png", "timestamp": 5.0, "type": "screen"}]
+
+    monkeypatch.setattr(
+        server, "_resolve_participant_sources", lambda pid: [tmp_path / "v.mp4"]
+    )
+    monkeypatch.setattr(utils, "resolve_output_path", lambda name: tmp_path / name)
+    monkeypatch.setattr(video, "timeline_or_none", lambda paths: None)
+    monkeypatch.setattr(video, "get_file_duration", lambda p: 10)
+
+    def fake_captures(path, **kwargs):
+        server._gallery_cancel_event.set()
+        return artifacts
+
+    monkeypatch.setattr(video, "generate_interval_captures", fake_captures)
+
+    resp = client.post("/studio/api/gallery", json={"participant": "P01"})
+    assert resp.status_code == 200
+    assert resp.get_json()["cancelled"] is True
+    assert not cap_file.exists()
+    server._gallery_cancel_event.clear()
+
+
 def test_api_timeline_viewer_passes_cancel_flag(client, monkeypatch):
     """process_clips must receive a callable cancel_flag so the build is
     interruptible mid-encode."""

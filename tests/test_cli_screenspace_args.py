@@ -694,6 +694,37 @@ def test_ss_task_scene_dispatches_and_persists(monkeypatch):
     assert params["threshold"] == 0.9
 
 
+def test_ss_task_region_resolves_active_over_stash(monkeypatch):
+    """A region name present in both active regions and a stash resolves to the
+    active one — regression for the flattened (last-write-wins) lookup that let a
+    stashed region with the same name silently shadow the active geometry."""
+    import screenspace
+
+    active_btn = {"x": 0.1, "y": 0.1, "w": 0.2, "h": 0.2}
+    stash_btn = {"x": 0.5, "y": 0.5, "w": 0.4, "h": 0.4}
+    fake_manifest = {
+        "regions": {"btn": dict(active_btn)},
+        "stashes": [{"id": "s1", "regions": {"btn": dict(stash_btn)}}],
+        "tasks": [],
+        "events": [],
+    }
+    saved_tasks = _install_ss_stubs(monkeypatch, fake_manifest)
+
+    args = _ss_args(
+        ss_task=["color", "P01", "btn"],
+        ss_target_color="#FF0000",
+        ss_tolerance="20,30,30",
+        ss_threshold=0.85,
+    )
+    cli._run_ss_task(args)
+
+    assert saved_tasks
+    # Active geometry wins; the stash copy must not shadow it.
+    assert saved_tasks[0]["region_coords"] == screenspace.denormalize_region(
+        active_btn, 100, 100
+    )
+
+
 def test_ss_task_scene_missing_refs_errors(monkeypatch, capsys):
     fake_manifest = {
         "regions": {"btn": {"x": 0.0, "y": 0.0, "w": 0.5, "h": 0.5}},

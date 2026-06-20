@@ -1676,6 +1676,20 @@ def api_viewer() -> FlaskResponse:
         return jsonify({"ok": False, "error": str(e)}), 500
 
 
+def _discard_artifact_files(artifacts: list[dict[str, Any]]) -> None:
+    """Unlink the on-disk media for *artifacts* so a cancelled viewer/gallery
+    build leaves no orphan clips or captures: the manifest is never published in
+    that case, but ffmpeg may have already written files before the cancel."""
+    for art in artifacts:
+        name = art.get("file", "")
+        if not name:
+            continue
+        try:
+            Path(utils.resolve_output_path(name)).unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
 @studio_bp.route("/api/timeline-viewer", methods=["POST"])
 def api_timeline_viewer() -> FlaskResponse:
     if _worksheet is None:
@@ -1709,6 +1723,7 @@ def api_timeline_viewer() -> FlaskResponse:
             cancel_flag=_timeline_viewer_cancel_event.is_set,
         )
         if _timeline_viewer_cancel_event.is_set():
+            _discard_artifact_files(artifacts)
             return jsonify({"ok": False, "cancelled": True})
         if not artifacts:
             return jsonify({"ok": False, "error": "No artifacts were generated"}), 400
@@ -1726,11 +1741,11 @@ def api_timeline_viewer() -> FlaskResponse:
                     intake_artifacts.append(r)
             artifacts = artifacts + intake_artifacts
 
-        # Single cancel gate before any publish/disk write. Nothing has entered
-        # _generated_artifacts yet, so a cancel here discards every clip
-        # (discard-on-cancel, like generate) and the viewer HTML is never
-        # written — closing the post-ffmpeg window too.
+        # Cancel gate before any publish. Nothing has entered _generated_artifacts
+        # yet, so discard every clip already written to disk (discard-on-cancel,
+        # like generate) and skip writing the viewer HTML entirely.
         if _timeline_viewer_cancel_event.is_set():
+            _discard_artifact_files(artifacts)
             return jsonify({"ok": False, "cancelled": True})
 
         _extend_generated_artifacts(artifacts)
@@ -1848,6 +1863,7 @@ def api_gallery() -> FlaskResponse:
             source_name = " + ".join(Path(p).name for p, _d, _c in timeline)
 
         if _gallery_cancel_event.is_set():
+            _discard_artifact_files(artifacts)
             return jsonify({"ok": False, "cancelled": True})
         if not artifacts:
             return jsonify({"ok": False, "error": "No captures generated"}), 500
@@ -1864,6 +1880,7 @@ def api_gallery() -> FlaskResponse:
         # where capture extraction finished but the user clicks Cancel during
         # the duration probe / finalize.
         if _gallery_cancel_event.is_set():
+            _discard_artifact_files(artifacts)
             return jsonify({"ok": False, "cancelled": True})
         gallery_path = viewer.generate_gallery_viewer(gallery_data)
         if gallery_path:

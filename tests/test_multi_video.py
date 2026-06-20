@@ -388,6 +388,48 @@ def test_artifact_record_screenshot_never_splits(make_clip):
     assert record["localStart"] == 60.0
 
 
+def test_artifact_record_full_path_base_video_normalized_to_basename(make_clip):
+    # Producers may hold a full path in base_video; the persisted sourceVideo must
+    # be a basename (matching pipeline.cut_global_range) so sheet and intake
+    # manifests share one shape. Regression for the path-shape alignment fix.
+    clip = cast(ClipRecord, dict(make_clip()))
+    clip["cell_annotations"] = []
+    record = utils.build_artifact_record(
+        clip,
+        "/srv/input/study_P01.mp4",
+        "out.mp4",
+        "0:10",
+        "0:20",
+        artifact_type="clip",
+        seg_idx=0,
+    )
+    assert record["sourceVideo"] == "study_P01.mp4"
+
+
+def test_artifact_record_full_path_timeline_normalized_to_basenames(make_clip):
+    # Multi-video: full-path source_timeline entries must persist as basenames at
+    # both the top level and inside the boundary-spanning parts list.
+    clip = cast(ClipRecord, dict(make_clip()))
+    clip["cell_annotations"] = []
+    clip["times"] = [("1:00", "1:30")]
+    clip["severity"] = ""
+    clip["source_timeline"] = [
+        ("/srv/input/video1.mp4", 80, 0),
+        ("/srv/input/video2.mp4", 120, 80),
+    ]
+    record = utils.build_artifact_record(
+        clip,
+        "/srv/input/video1.mp4",
+        "out.mp4",
+        "1:00",
+        "1:30",
+        artifact_type="clip",
+        seg_idx=0,
+    )
+    assert record["sourceVideo"] == "video1.mp4"
+    assert [p["sourceVideo"] for p in record["parts"]] == ["video1.mp4", "video2.mp4"]
+
+
 # ---- Regenerate from manifest ----
 
 
