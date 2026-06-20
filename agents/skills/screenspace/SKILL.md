@@ -29,6 +29,8 @@ uv run clipgen.py --ss-task TYPE PARTICIPANT REGION [options] -i INPUT_DIR -o OU
 | `template` | Match a template image within region |
 | `flow` | Optical flow / movement direction |
 | `inactivity` | Detect periods of no change |
+| `scene` | Classify frames by similarity to one or more reference scenes |
+| `multitool` | Chain several tools (temporal AND/NOT with offset windows) — re-run only, see below |
 
 ### Tool-specific parameters
 
@@ -38,6 +40,27 @@ uv run clipgen.py --ss-task TYPE PARTICIPANT REGION [options] -i INPUT_DIR -o OU
 - **numbers**: `--ss-ranges "0-100,200-300"` (expected value ranges)
 - **template**: requires a saved reference frame (set via UI first)
 - **timelapse**: `--ss-interval SECONDS`
+- **scene**: `--ss-scene-ref NAME:TIMESTAMP[:THRESHOLD]` (repeatable; TIMESTAMP in seconds, NAME has no `:`). Each reference frame is cropped from the region at TIMESTAMP. Optional per-scene THRESHOLD overrides `--ss-threshold`.
+
+```
+uv run clipgen.py --ss-task scene P01 myregion \
+    --ss-scene-ref menu:12.5 --ss-scene-ref game:30:0.8 -i INPUT -o OUTPUT
+```
+
+### Re-run a saved task (multitool, scene, any type)
+
+Multitool chains and complex scene setups are easiest to build in the `--screenspace`
+UI. Once saved to the manifest, re-run any task headlessly by id — reference frames are
+re-extracted from the source video:
+
+```
+uv run clipgen.py --ss-list-tasks -i INPUT -o OUTPUT     # find the task id
+uv run clipgen.py --ss-run-task ss_abcd1234 -i INPUT -o OUTPUT
+```
+
+Re-run creates a fresh task run (new id; the original is preserved). The one case that
+can't be re-run is a step built from an **uploaded** template image (no timestamp was
+saved to re-extract from) — the CLI reports this and exits.
 
 ### List operations
 

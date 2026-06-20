@@ -50,6 +50,7 @@ def _ss_args(**overrides):
         "summarize": None,
         "citations": None,
         "ss_task": None,
+        "ss_run_task": None,
         "ss_list_regions": False,
         "ss_list_stashes": False,
         "ss_list_tasks": None,
@@ -57,6 +58,7 @@ def _ss_args(**overrides):
         "ss_tolerance": None,
         "ss_threshold": None,
         "ss_reference_timestamp": None,
+        "ss_scene_ref": None,
         "ss_text": None,
         "ss_fuzzy_threshold": None,
         "ss_operator": None,
@@ -140,6 +142,41 @@ def test_ss_list_modes_are_mutually_exclusive(monkeypatch):
         cli.parse_arguments()
 
 
+def test_parse_ss_run_task(monkeypatch):
+    monkeypatch.setattr("sys.argv", ["clipgen.py", "--ss-run-task", "ss_abc123"])
+    args = cli.parse_arguments()
+    assert args.ss_run_task == "ss_abc123"
+
+
+def test_parse_ss_scene_ref_repeatable(monkeypatch):
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "clipgen.py",
+            "--ss-task",
+            "scene",
+            "P01",
+            "btn",
+            "--ss-scene-ref",
+            "menu:12.5",
+            "--ss-scene-ref",
+            "game:30:0.8",
+        ],
+    )
+    args = cli.parse_arguments()
+    assert args.ss_task == ["scene", "P01", "btn"]
+    assert args.ss_scene_ref == ["menu:12.5", "game:30:0.8"]
+
+
+def test_ss_run_task_and_ss_task_mutually_exclusive(monkeypatch):
+    monkeypatch.setattr(
+        "sys.argv",
+        ["clipgen.py", "--ss-run-task", "ss_abc", "--ss-task", "color", "P01", "btn"],
+    )
+    with pytest.raises(SystemExit):
+        cli.parse_arguments()
+
+
 # ---- Conflict validation ----
 
 
@@ -159,6 +196,17 @@ def test_summarize_conflicts_with_pre_transcribe():
     args = _ss_args(summarize=[], pre_transcribe=["P01"])
     with pytest.raises(SystemExit):
         cli._validate_mode_conflicts(args)
+
+
+def test_ss_run_task_conflicts_with_studio():
+    args = _ss_args(ss_run_task="ss_abc", studio=True)
+    with pytest.raises(SystemExit):
+        cli._validate_mode_conflicts(args)
+
+
+def test_ss_run_task_marks_cli_mode():
+    modes = cli._validate_mode_conflicts(_ss_args(ss_run_task="ss_abc"))
+    assert modes["ss_run_task"] is True
 
 
 def test_validate_returns_dict_shape():
@@ -193,6 +241,26 @@ def test_ss_parse_tolerance_valid():
 def test_ss_parse_tolerance_wrong_count_raises():
     with pytest.raises(ValueError):
         cli._ss_parse_tolerance("20,30")
+
+
+def test_ss_parse_scene_ref_name_timestamp():
+    ref = cli._ss_parse_scene_ref("menu:12.5")
+    assert ref == {"name": "menu", "timestamp": 12.5}
+
+
+def test_ss_parse_scene_ref_with_threshold():
+    ref = cli._ss_parse_scene_ref("game:30:0.8")
+    assert ref == {"name": "game", "timestamp": 30.0, "threshold": 0.8}
+
+
+def test_ss_parse_scene_ref_missing_timestamp_raises():
+    with pytest.raises(ValueError):
+        cli._ss_parse_scene_ref("menu")
+
+
+def test_ss_parse_scene_ref_nonnumeric_timestamp_raises():
+    with pytest.raises(ValueError):
+        cli._ss_parse_scene_ref("menu:soon")
 
 
 # ---- Listing helpers ----
@@ -484,3 +552,229 @@ def test_ss_task_color_dispatches_and_persists(monkeypatch):
     assert persisted["participant"] == "P01"
     assert persisted["region"] == "btn"
     assert persisted["status"] == "completed"
+
+
+# ---- scene flag path + manifest re-run (--ss-run-task) ----
+
+
+class _FakeWorker:
+    """Stub ScreenspaceWorker that completes the enqueued task immediately."""
+
+    def __init__(self):
+        self.task_id: str = ""
+        self.task_dict: dict = {}
+
+    def restore_tasks(self, tasks):
+        pass
+
+    def start(self):
+        pass
+
+    def stop(self):
+        pass
+
+    def enqueue(self, task):
+        self.task_id = task["id"]
+        task["status"] = "completed"
+        task["progress"] = 1.0
+        task["result"] = [{"timestamp": 1.0}]
+        self.task_dict = task
+        return task["id"]
+
+    def get_task(self, tid):
+        return dict(self.task_dict) if tid == self.task_id else None
+
+    def get_all_tasks(self):
+        return [dict(self.task_dict)] if self.task_dict else []
+
+    def drain_new_events(self):
+        return []
+
+
+def _install_ss_stubs(monkeypatch, fake_manifest):
+    """Wire up the common Screenspace stubs (manifest, video, media, worker, save)."""
+    import screenspace
+    import video as video_mod
+
+    monkeypatch.setattr(screenspace, "load_screenspace_manifest", lambda: fake_manifest)
+    monkeypatch.setattr(
+        cli, "_ss_resolve_video_for_participant", lambda pid: "/tmp/fake.mp4"
+    )
+    monkeypatch.setattr(
+        video_mod, "probe_video_properties", lambda p: {"width": 100, "height": 100}
+    )
+    monkeypatch.setattr(video_mod, "extract_frame_at_timestamp", lambda p, ts: [[0]])
+    monkeypatch.setattr(screenspace, "extract_region", lambda frame, coords: [[1]])
+    monkeypatch.setattr(screenspace, "ScreenspaceWorker", _FakeWorker)
+
+    saved_tasks: list[dict] = []
+
+    def fake_save(
+        regions, tasks, events, stashes=None, per_participant=None, pins=None
+    ):
+        saved_tasks.extend(tasks)
+        return None
+
+    monkeypatch.setattr(screenspace, "save_screenspace_manifest", fake_save)
+    return saved_tasks
+
+
+def test_ss_task_scene_dispatches_and_persists(monkeypatch):
+    """Scene flag path: --ss-scene-ref entries become reference_scenes + scene_references."""
+    fake_manifest = {
+        "regions": {"btn": {"x": 0.0, "y": 0.0, "w": 0.5, "h": 0.5}},
+        "stashes": [],
+        "tasks": [],
+        "events": [],
+    }
+    saved_tasks = _install_ss_stubs(monkeypatch, fake_manifest)
+
+    args = _ss_args(
+        ss_task=["scene", "P01", "btn"],
+        ss_scene_ref=["menu:12.5", "game:30:0.8"],
+        ss_threshold=0.9,
+    )
+    cli._run_ss_task(args)
+
+    assert saved_tasks
+    persisted = saved_tasks[0]
+    assert persisted["type"] == "scene"
+    params = persisted["parameters"]
+    assert len(params["scene_references"]) == 2
+    assert len(params["reference_scenes"]) == 2
+    assert params["scene_references"][1]["threshold"] == 0.8
+    assert params["threshold"] == 0.9
+
+
+def test_ss_task_scene_missing_refs_errors(monkeypatch, capsys):
+    fake_manifest = {
+        "regions": {"btn": {"x": 0.0, "y": 0.0, "w": 0.5, "h": 0.5}},
+        "stashes": [],
+        "tasks": [],
+        "events": [],
+    }
+    _install_ss_stubs(monkeypatch, fake_manifest)
+    args = _ss_args(ss_task=["scene", "P01", "btn"])  # no --ss-scene-ref
+    with pytest.raises(SystemExit) as exc:
+        cli._run_ss_task(args)
+    assert exc.value.code == 1
+    assert "scene-ref" in capsys.readouterr().out.lower()
+
+
+def test_ss_run_task_unknown_id_errors(monkeypatch, capsys):
+    fake_manifest = {"regions": {}, "stashes": [], "tasks": [], "events": []}
+    import screenspace
+
+    monkeypatch.setattr(screenspace, "load_screenspace_manifest", lambda: fake_manifest)
+    with pytest.raises(SystemExit) as exc:
+        cli._run_ss_rerun_task(_ss_args(ss_run_task="ss_nope"))
+    assert exc.value.code == 1
+    assert "ss_nope" in capsys.readouterr().out
+
+
+def test_ss_run_task_scene_rerun(monkeypatch):
+    """Re-run a saved scene task: frames re-extracted from saved scene_references."""
+    fake_manifest = {
+        "regions": {"btn": {"x": 0.0, "y": 0.0, "w": 0.5, "h": 0.5}},
+        "stashes": [],
+        "tasks": [
+            {
+                "id": "ss_scene01",
+                "type": "scene",
+                "participant": "P01",
+                "region": "btn",
+                "region_coords": {"x": 0, "y": 0, "w": 50, "h": 50},
+                "parameters": {
+                    "scene_references": [{"name": "menu", "timestamp": 12.5}],
+                    "threshold": 0.9,
+                },
+                "status": "completed",
+            }
+        ],
+        "events": [],
+    }
+    saved_tasks = _install_ss_stubs(monkeypatch, fake_manifest)
+
+    cli._run_ss_rerun_task(_ss_args(ss_run_task="ss_scene01"))
+
+    assert saved_tasks
+    persisted = saved_tasks[0]
+    assert persisted["type"] == "scene"
+    assert persisted["id"] != "ss_scene01"  # fresh run, original preserved
+    assert len(persisted["parameters"]["reference_scenes"]) == 1
+
+
+def test_ss_run_task_multitool_rerun(monkeypatch):
+    """Re-run a saved multitool task: per-step regions resolved, scene step re-extracted."""
+    fake_manifest = {
+        "regions": {"btn": {"x": 0.0, "y": 0.0, "w": 0.5, "h": 0.5}},
+        "stashes": [],
+        "tasks": [
+            {
+                "id": "ss_mt01",
+                "type": "multitool",
+                "participant": "P01",
+                "region": "btn",
+                "region_coords": {"x": 0, "y": 0, "w": 50, "h": 50},
+                "parameters": {
+                    "steps": [
+                        {
+                            "type": "color",
+                            "region": "btn",
+                            "target_color": {"h": 0, "s": 255, "v": 255},
+                            "tolerance": {"h": 10, "s": 40, "v": 40},
+                        },
+                        {
+                            "type": "scene",
+                            "region": "btn",
+                            "offset": {"min": 0, "max": 3},
+                            "scene_references": [{"name": "menu", "timestamp": 5.0}],
+                        },
+                    ]
+                },
+                "status": "completed",
+            }
+        ],
+        "events": [],
+    }
+    saved_tasks = _install_ss_stubs(monkeypatch, fake_manifest)
+
+    cli._run_ss_rerun_task(_ss_args(ss_run_task="ss_mt01"))
+
+    assert saved_tasks
+    persisted = saved_tasks[0]
+    assert persisted["type"] == "multitool"
+    steps = persisted["parameters"]["steps"]
+    assert len(steps) == 2
+    assert "region_coords" in steps[0]  # resolved during rehydration
+    assert len(steps[1]["reference_scenes"]) == 1
+
+
+def test_ss_run_task_uploaded_template_step_errors(monkeypatch, capsys):
+    """A multitool template step with no reference_timestamp cannot be re-run."""
+    fake_manifest = {
+        "regions": {"btn": {"x": 0.0, "y": 0.0, "w": 0.5, "h": 0.5}},
+        "stashes": [],
+        "tasks": [
+            {
+                "id": "ss_mt02",
+                "type": "multitool",
+                "participant": "P01",
+                "region": "btn",
+                "region_coords": {"x": 0, "y": 0, "w": 50, "h": 50},
+                "parameters": {
+                    "steps": [
+                        {"type": "change", "region": "btn", "threshold": 0.2},
+                        {"type": "template", "region": "btn", "threshold": 0.8},
+                    ]
+                },
+                "status": "completed",
+            }
+        ],
+        "events": [],
+    }
+    _install_ss_stubs(monkeypatch, fake_manifest)
+    with pytest.raises(SystemExit) as exc:
+        cli._run_ss_rerun_task(_ss_args(ss_run_task="ss_mt02"))
+    assert exc.value.code == 1
+    assert "cannot be re-run" in capsys.readouterr().out.lower()
