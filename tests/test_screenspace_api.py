@@ -25,8 +25,8 @@ def client(tmp_path, monkeypatch):
         "pins": {},
     }
     screenspace_server._participants = [
-        {"id": "P01", "video_path": "/tmp/test_P01.mp4", "has_video": False},
-        {"id": "P02", "video_path": "/tmp/test_P02.mp4", "has_video": False},
+        {"id": "P01", "video_paths": ["/tmp/test_P01.mp4"], "has_video": False},
+        {"id": "P02", "video_paths": ["/tmp/test_P02.mp4"], "has_video": False},
     ]
     screenspace_server._output_dir = str(tmp_path)
     screenspace_server._worker = screenspace.ScreenspaceWorker()
@@ -55,6 +55,13 @@ def calib_client(client, monkeypatch):
         screenspace_server,
         "_find_participant_video_with_mtime",
         lambda pid: (f"/tmp/test_{pid}.mp4", 4242) if pid in ("P01", "P02") else None,
+    )
+    # Pin calibration maps each pin's global timestamp into the owning sub-video;
+    # for these single-video test participants it's an identity map to the path.
+    monkeypatch.setattr(
+        screenspace_server,
+        "_map_participant_time",
+        lambda pid, ts: (f"/tmp/test_{pid}.mp4", ts) if pid in ("P01", "P02") else None,
     )
     monkeypatch.setattr(
         video, "probe_video_properties", lambda p: {"width": 100, "height": 100}
@@ -393,7 +400,7 @@ def test_participant_video_duration_reads_exact_from_cache(tmp_path, monkeypatch
     monkeypatch.setattr(
         screenspace_server,
         "_participants",
-        [{"id": "P01", "video_path": str(vid), "has_video": True}],
+        [{"id": "P01", "video_paths": [str(vid)], "has_video": True}],
     )
     # Warm cache: rounded display duration is 10, exact is 10.4.
     monkeypatch.setattr(
@@ -1430,7 +1437,7 @@ def test_cancel_task_persists_manifest(client, monkeypatch):
     worker = screenspace_server._worker
     assert worker is not None
     task = screenspace.create_task(
-        "color", "P01", "s.mp4", "/v.mp4", "r", {"x": 0, "y": 0, "w": 1, "h": 1}
+        "color", "P01", "s.mp4", ["/v.mp4"], "r", {"x": 0, "y": 0, "w": 1, "h": 1}
     )
     worker.enqueue(task)
     calls = _install_persist_spy(monkeypatch)
@@ -1443,7 +1450,7 @@ def test_dismiss_queued_task(client):
     worker = screenspace_server._worker
     assert worker is not None
     task = screenspace.create_task(
-        "color", "P01", "s.mp4", "/v.mp4", "r", {"x": 0, "y": 0, "w": 1, "h": 1}
+        "color", "P01", "s.mp4", ["/v.mp4"], "r", {"x": 0, "y": 0, "w": 1, "h": 1}
     )
     worker.enqueue(task)
     screenspace_server._manifest["tasks"].append(task)
@@ -1461,7 +1468,7 @@ def test_dismiss_completed_task(client):
     worker = screenspace_server._worker
     assert worker is not None
     task = screenspace.create_task(
-        "color", "P01", "s.mp4", "/v.mp4", "r", {"x": 0, "y": 0, "w": 1, "h": 1}
+        "color", "P01", "s.mp4", ["/v.mp4"], "r", {"x": 0, "y": 0, "w": 1, "h": 1}
     )
     worker.enqueue(task)
     # Simulate completed status
@@ -1494,7 +1501,7 @@ def test_reorder_valid(client):
     worker = screenspace_server._worker
     assert worker is not None
     task = screenspace.create_task(
-        "color", "P01", "s.mp4", "/v.mp4", "r", {"x": 0, "y": 0, "w": 1, "h": 1}
+        "color", "P01", "s.mp4", ["/v.mp4"], "r", {"x": 0, "y": 0, "w": 1, "h": 1}
     )
     worker.enqueue(task)
     resp = client.put(
@@ -1508,7 +1515,7 @@ def test_reorder_persists_manifest(client, monkeypatch):
     worker = screenspace_server._worker
     assert worker is not None
     task = screenspace.create_task(
-        "color", "P01", "s.mp4", "/v.mp4", "r", {"x": 0, "y": 0, "w": 1, "h": 1}
+        "color", "P01", "s.mp4", ["/v.mp4"], "r", {"x": 0, "y": 0, "w": 1, "h": 1}
     )
     worker.enqueue(task)
     calls = _install_persist_spy(monkeypatch)
@@ -1534,7 +1541,7 @@ def test_resume_persists_manifest(client, monkeypatch):
         "color",
         "P01",
         "s.mp4",
-        "/v.mp4",
+        ["/v.mp4"],
         "r",
         {"x": 0, "y": 0, "w": 1, "h": 1},
         parameters={"start_seconds": 0.0, "end_seconds": 10.0},
@@ -1574,8 +1581,8 @@ def test_participants_payload_includes_version(client, tmp_path, monkeypatch):
         screenspace_server,
         "_participants",
         [
-            {"id": "P01", "video_path": "/tmp/none.mp4", "has_video": False},
-            {"id": "P03", "video_path": str(video_file), "has_video": True},
+            {"id": "P01", "video_paths": ["/tmp/none.mp4"], "has_video": False},
+            {"id": "P03", "video_paths": [str(video_file)], "has_video": True},
         ],
     )
 
@@ -1595,7 +1602,7 @@ def test_video_frame_cache_invalidates_on_mtime_change(client, tmp_path, monkeyp
     monkeypatch.setattr(
         screenspace_server,
         "_participants",
-        [{"id": "P04", "video_path": str(video_file), "has_video": True}],
+        [{"id": "P04", "video_paths": [str(video_file)], "has_video": True}],
     )
     monkeypatch.setattr(
         screenspace_server, "_frame_cache", type(screenspace_server._frame_cache)()
@@ -1643,7 +1650,7 @@ def test_video_info_reprobes_on_mtime_change(client, tmp_path, monkeypatch):
     monkeypatch.setattr(
         screenspace_server,
         "_participants",
-        [{"id": "P05", "video_path": str(video_file), "has_video": True}],
+        [{"id": "P05", "video_paths": [str(video_file)], "has_video": True}],
     )
     monkeypatch.setattr(screenspace_server, "_video_metadata_cache", {})
 

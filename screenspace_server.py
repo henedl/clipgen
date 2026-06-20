@@ -67,6 +67,7 @@ from flask import Blueprint, Response, jsonify, request, send_file
 import config
 import files
 import screenspace
+import spreadsheet
 import utils
 import video
 
@@ -138,6 +139,14 @@ _manifest: dict[str, Any] = {}
 _worker: "screenspace.ScreenspaceWorker | None" = None
 _output_dir: str = ""
 _participants: list[dict[str, Any]] = []
+# Per-participant source timeline for multi-video participants (one continuous
+# recording across several files). Keyed by participant id; value is
+# (parts_mtimes, timeline) so a re-encoded part invalidates the cached offsets.
+# Single-video participants are never cached here (mapping is a no-op).
+_participant_timeline_cache: dict[
+    str, tuple[tuple[int, ...], list[tuple[str, int, int]] | None]
+] = {}
+_participant_timeline_lock = threading.Lock()
 # Values are (mtime_ns, info) so a stale file is re-probed automatically.
 _video_metadata_cache: dict[str, tuple[int, dict[str, Any]]] = {}
 _video_metadata_cache_lock = threading.Lock()
@@ -241,6 +250,19 @@ def api_participants() -> FlaskResponse:
         entry = dict(p)
         if p.get("has_video"):
             entry["version"] = _participant_video_version(p["id"])
+            # Multi-video: expose the timeline so the frontend can switch the
+            # <video> source per part and seek the local offset. Omitted for a
+            # single video (no probe) → frontend keeps its one-file path.
+            timeline = _participant_timeline(p["id"])
+            if timeline is not None:
+                entry["timeline"] = [
+                    {
+                        "filename": Path(path).name,
+                        "duration": dur,
+                        "cumulativeStart": cum,
+                    }
+                    for path, dur, cum in timeline
+                ]
         payload.append(entry)
     return jsonify({"ok": True, "participants": payload})
 
@@ -728,7 +750,8 @@ def api_calibrate() -> FlaskResponse:
         return coerced
     parameters = cast(dict[str, Any], coerced)
 
-    extracted = _extract_task_media(task_type, parameters, video_path, region_coords)
+    frame_at = _participant_frame_extractor(participant)
+    extracted = _extract_task_media(task_type, parameters, frame_at, region_coords)
     if isinstance(extracted, tuple):
         return extracted
     parameters = cast(dict[str, Any], extracted)
@@ -737,7 +760,7 @@ def api_calibrate() -> FlaskResponse:
         prepared = _prepare_multitool_steps(
             parameters,
             all_known_regions,
-            video_path,
+            frame_at,
             region_coords,
             _resolve_region_coords,
         )
@@ -773,7 +796,15 @@ def api_calibrate() -> FlaskResponse:
             "polarity": pin.get("polarity"),
         }
         try:
-            frame = _decoded_pin_frame(video_path, mtime_ns, ts)
+            # Map the pin's global timestamp into the owning sub-video.
+            mapped = _map_participant_time(participant, ts)
+            if mapped is None:
+                entry["status"] = "not_evaluable"
+                results.append(entry)
+                continue
+            sub_path, local_ts = mapped
+            sub_mtime = _mtime_or_zero(sub_path)
+            frame = _decoded_pin_frame(sub_path, sub_mtime, local_ts)
             if frame is None:
                 entry["status"] = "not_evaluable"
                 results.append(entry)
@@ -782,8 +813,12 @@ def api_calibrate() -> FlaskResponse:
             # (the score path then reports not_evaluable for that step/tool).
             prev_frame = None
             if needs_prev and ts >= interval:
-                prev_frame = _decoded_pin_frame(video_path, mtime_ns, ts - interval)
-            ocr_reader = _make_pin_ocr_reader(video_path, mtime_ns, ts, frame)
+                mapped_prev = _map_participant_time(participant, ts - interval)
+                if mapped_prev is not None:
+                    prev_frame = _decoded_pin_frame(
+                        mapped_prev[0], _mtime_or_zero(mapped_prev[0]), mapped_prev[1]
+                    )
+            ocr_reader = _make_pin_ocr_reader(sub_path, sub_mtime, local_ts, frame)
             if task_type == "multitool":
                 score = screenspace.score_multitool_frame(
                     frame, prev_frame, steps, ocr_reader=ocr_reader
@@ -809,23 +844,117 @@ def api_calibrate() -> FlaskResponse:
 # ---- Video frame extraction ----
 
 
-def _find_participant_video(participant_id: str) -> str | None:
-    """Resolve the video path for a participant."""
+def _participant_video_paths(participant_id: str) -> list[str]:
+    """Return a participant's ordered source video path(s), or [] if none.
+
+    A multi-video participant (recording split across files) returns all parts
+    in timeline order; a normal participant returns a single-element list.
+    """
     for p in _participants:
         if p["id"] == participant_id:
-            if p["has_video"]:
-                return p["video_path"]
+            return list(p["video_paths"]) if p.get("has_video") else []
+    return []
+
+
+def _part_mtimes(paths: list[str]) -> tuple[int, ...] | None:
+    """Return each part's ``mtime_ns`` as a tuple, or None if any is missing."""
+    out: list[int] = []
+    for path in paths:
+        try:
+            out.append(Path(path).stat().st_mtime_ns)
+        except OSError:
             return None
-    return None
+    return tuple(out)
+
+
+def _participant_timeline(participant_id: str) -> list[tuple[str, int, int]] | None:
+    """Cached source timeline for a 2+ part participant; None for single video.
+
+    Keyed on every part's ``mtime_ns`` so replacing any part recomputes the
+    cumulative offsets. Single-video participants return None (mapping is a
+    no-op — no duration probe).
+    """
+    paths = _participant_video_paths(participant_id)
+    if len(paths) < 2:
+        return None
+    mtimes = _part_mtimes(paths)
+    if mtimes is None:
+        return None
+    with _participant_timeline_lock:
+        cached = _participant_timeline_cache.get(participant_id)
+        if cached is not None and cached[0] == mtimes:
+            return cached[1]
+    timeline = video.build_source_timeline(paths)
+    with _participant_timeline_lock:
+        _participant_timeline_cache[participant_id] = (mtimes, timeline)
+    return timeline
+
+
+def _mtime_or_zero(path: str) -> int:
+    """Return a path's ``mtime_ns`` for cache keys, or 0 if it can't be stat'd."""
+    try:
+        return Path(path).stat().st_mtime_ns
+    except OSError:
+        return 0
+
+
+def _map_participant_time(
+    participant_id: str, global_ts: float
+) -> tuple[str, float] | None:
+    """Map a global timestamp to ``(sub_video_path, local_ts)``.
+
+    Single-video participants map to ``(path, global_ts)`` unchanged (no probe,
+    no stat). Multi-video participants resolve which sub-video owns *global_ts*
+    and the local offset within it. Returns None when the participant has no
+    video or (multi-video) the timestamp is out of range. Callers needing the
+    file's mtime for a cache key obtain it via :func:`_mtime_or_zero`.
+    """
+    paths = _participant_video_paths(participant_id)
+    if not paths:
+        return None
+    if len(paths) < 2:
+        return (paths[0], global_ts)
+    timeline = _participant_timeline(participant_id)
+    if timeline is None:
+        return None
+    mapped = utils.map_global_to_segment(timeline, global_ts)
+    if mapped is None:
+        return None
+    index, local_ts = mapped
+    return (timeline[index][0], local_ts)
+
+
+def _participant_frame_extractor(
+    participant_id: str,
+) -> Callable[[float], "Any | None"]:
+    """Return a ``frame_at(global_ts)`` closure mapping into the right sub-video.
+
+    Used by task-media helpers that extract reference frames at global reference
+    timestamps; single-video participants extract at the same time unchanged.
+    """
+
+    def _extract(global_ts: float) -> "Any | None":
+        mapped = _map_participant_time(participant_id, global_ts)
+        if mapped is None:
+            return None
+        return video.extract_frame_at_timestamp(mapped[0], mapped[1])
+
+    return _extract
+
+
+def _find_participant_video(participant_id: str) -> str | None:
+    """Resolve the first source-video path for a participant (or None)."""
+    paths = _participant_video_paths(participant_id)
+    return paths[0] if paths else None
 
 
 def _find_participant_video_with_mtime(participant_id: str) -> tuple[str, int] | None:
-    """Resolve participant video path and stat its ``mtime_ns`` together.
+    """Resolve a participant's first source video path and its ``mtime_ns``.
 
     Returns ``(path, mtime_ns)`` or ``None`` if the participant has no video or
-    the file no longer exists. Acts as the cache-version source for all video
-    routes: when the user replaces the source file, ``mtime_ns`` changes and
-    every cache keyed on it is naturally invalidated.
+    the file no longer exists. For frame extraction at a specific timestamp use
+    ``_map_participant_time`` instead (it maps multi-video global times into the
+    owning sub-video).
     """
     path = _find_participant_video(participant_id)
     if path is None:
@@ -837,9 +966,18 @@ def _find_participant_video_with_mtime(participant_id: str) -> tuple[str, int] |
 
 
 def _participant_video_version(participant_id: str) -> int | None:
-    """Return ``mtime_ns`` for a participant's source video, or ``None``."""
-    result = _find_participant_video_with_mtime(participant_id)
-    return result[1] if result is not None else None
+    """Return a cache-bust version for a participant's source video(s), or None.
+
+    For multi-video participants this combines every part's ``mtime_ns`` so the
+    frontend's frame cache invalidates when any part is replaced.
+    """
+    paths = _participant_video_paths(participant_id)
+    if not paths:
+        return None
+    mtimes = _part_mtimes(paths)
+    if mtimes is None:
+        return None
+    return sum(mtimes)
 
 
 def _participant_video_duration(participant_id: str) -> float | None:
@@ -849,6 +987,10 @@ def _participant_video_duration(participant_id: str) -> float | None:
     it on participant load); otherwise probes once. Used to flag pins whose
     timestamp falls beyond a replaced/shortened video's duration.
     """
+    # Multi-video participants: total timeline duration (pins use global times).
+    timeline = _participant_timeline(participant_id)
+    if timeline is not None:
+        return float(timeline[-1][1] + timeline[-1][2])
     resolved = _find_participant_video_with_mtime(participant_id)
     if resolved is None:
         return None
@@ -882,15 +1024,18 @@ def api_video_frame(participant: str, timestamp: str) -> FlaskResponse:
     except (ValueError, TypeError):
         return jsonify({"ok": False, "error": "Invalid timestamp"}), 400
 
-    resolved = _find_participant_video_with_mtime(participant)
-    if resolved is None:
+    # Map the global timestamp into the owning sub-video (multi-video) so the
+    # frontend can keep requesting frames by global time; single-video unchanged.
+    mapped = _map_participant_time(participant, ts)
+    if mapped is None:
         return jsonify(
             {"ok": False, "error": f"No video for participant {participant}"}
         ), 404
-    video_path, mtime_ns = resolved
+    video_path, local_ts = mapped
+    mtime_ns = _mtime_or_zero(video_path)
 
     width = request.args.get("w", 0, type=int)
-    cache_key = (video_path, mtime_ns, round(ts, 3), width)
+    cache_key = (video_path, mtime_ns, round(local_ts, 3), width)
     with _frame_cache_lock:
         cached = _frame_cache.get(cache_key)
         if cached is not None:
@@ -904,9 +1049,9 @@ def api_video_frame(participant: str, timestamp: str) -> FlaskResponse:
         )
 
     if width > 0:
-        jpeg_bytes = video.extract_thumbnail_bytes(video_path, ts, width=width)
+        jpeg_bytes = video.extract_thumbnail_bytes(video_path, local_ts, width=width)
     else:
-        frame = video.extract_frame_at_timestamp(video_path, ts)
+        frame = video.extract_frame_at_timestamp(video_path, local_ts)
         if frame is None:
             return jsonify(
                 {"ok": False, "error": "Could not read frame at timestamp"}
@@ -971,11 +1116,19 @@ def api_preview(participant: str, timestamp: str) -> FlaskResponse:
             {"ok": False, "error": f"No video for participant {participant}"}
         ), 404
 
+    def _frame_at(global_ts: float) -> "Any | None":
+        # Map a global timestamp into the owning sub-video (multi-video) before
+        # extracting; single-video maps to the same path at the same time.
+        mapped = _map_participant_time(participant, global_ts)
+        if mapped is None:
+            return None
+        return video.extract_frame_at_timestamp(mapped[0], mapped[1])
+
     tool = (request.args.get("tool") or "").strip() or "color"
     if tool not in _VALID_TASK_TYPES:
         return jsonify({"ok": False, "error": f"Unknown tool: {tool}"}), 400
 
-    frame = video.extract_frame_at_timestamp(video_path, ts)
+    frame = _frame_at(ts)
     if frame is None:
         return jsonify({"ok": False, "error": "Could not read frame"}), 400
     frame_h, frame_w = frame.shape[:2]
@@ -1008,7 +1161,7 @@ def api_preview(participant: str, timestamp: str) -> FlaskResponse:
         else:
             prev_ts = max(0.0, ts - 1.0)
         if prev_ts < ts:
-            prev_frame = video.extract_frame_at_timestamp(video_path, prev_ts)
+            prev_frame = _frame_at(prev_ts)
 
     # Build params dict for the preview (subset of task parameters)
     params: dict[str, Any] = {}
@@ -1046,7 +1199,7 @@ def api_preview(participant: str, timestamp: str) -> FlaskResponse:
             except ValueError:
                 ref_ts = None  # type: ignore[assignment]
             if ref_ts is not None:
-                ref_frame = video.extract_frame_at_timestamp(video_path, ref_ts)
+                ref_frame = _frame_at(ref_ts)
                 if ref_frame is not None:
                     import screenspace as _ss
 
@@ -1082,9 +1235,7 @@ def api_preview(participant: str, timestamp: str) -> FlaskResponse:
                 except ValueError:
                     ref_ts_tpl = None  # type: ignore[assignment]
                 if ref_ts_tpl is not None:
-                    ref_frame_tpl = video.extract_frame_at_timestamp(
-                        video_path, ref_ts_tpl
-                    )
+                    ref_frame_tpl = _frame_at(ref_ts_tpl)
                     if ref_frame_tpl is not None:
                         params["template_image"] = _ss_tpl.extract_region(
                             ref_frame_tpl, region_coords
@@ -1168,6 +1319,29 @@ def api_video_info(participant: str) -> FlaskResponse:
     The frontend appends ``?v=<version>`` to frame and stream URLs so HTTP,
     backend, and blob caches all invalidate together when the file changes.
     """
+    # Multi-video participant: report the total timeline duration + the per-part
+    # breakdown so the frontend can switch the <video> source per part.
+    timeline = _participant_timeline(participant)
+    if timeline is not None:
+        props = video.probe_video_properties(timeline[0][0]) or {}
+        total = timeline[-1][1] + timeline[-1][2]
+        info = {
+            "participant": participant,
+            "duration": total,
+            "duration_seconds": float(total),
+            "fps": props.get("fps", 0.0) or 30.0,
+            "width": props.get("width") or None,
+            "height": props.get("height") or None,
+            "nb_frames": 0,
+            "video_codec": props.get("video_codec") or "",
+            "version": _participant_video_version(participant),
+            "parts": [
+                {"filename": Path(p).name, "duration": d, "cumulativeStart": c}
+                for p, d, c in timeline
+            ],
+        }
+        return jsonify({"ok": True, "info": info})
+
     resolved = _find_participant_video_with_mtime(participant)
     if resolved is None:
         return jsonify(
@@ -1220,12 +1394,19 @@ def api_video_stream(participant: str) -> FlaskResponse:
     stream after a source-file replacement even when range requests are in
     flight.
     """
-    video_path = _find_participant_video(participant)
-    if video_path is None:
+    paths = _participant_video_paths(participant)
+    if not paths:
         return (
             jsonify({"ok": False, "error": f"No video for participant {participant}"}),
             404,
         )
+    # Multi-video participants: ?part=N selects the sub-video; the frontend swaps
+    # the <video> source per part as it scrubs the global timeline. Defaults to
+    # part 0 (and is the only file for single-video participants).
+    part = request.args.get("part", type=int)
+    video_path = (
+        paths[part] if part is not None and 0 <= part < len(paths) else paths[0]
+    )
     response = send_file(video_path, mimetype="video/mp4", conditional=True)
     response.headers["Cache-Control"] = "no-cache"
     return response
@@ -1782,16 +1963,18 @@ def _coerce_task_params(
 def _extract_task_media(
     task_type: str,
     parameters: dict[str, Any],
-    video_path: str,
+    frame_at: Callable[[float], "Any | None"],
     region_coords: dict[str, Any],
 ) -> dict[str, Any] | FlaskResponse:
     """Extract reference frames / template images for non-multitool tasks.
 
-    Returns the updated parameters on success, or a Flask error response on failure.
+    *frame_at* maps a GLOBAL reference timestamp into the owning sub-video and
+    returns the frame (single-video participants extract unchanged). Returns the
+    updated parameters on success, or a Flask error response on failure.
     """
     if task_type == "similarity":
         ref_ts = cast(float, parameters["reference_timestamp"])
-        frame = video.extract_frame_at_timestamp(video_path, float(ref_ts))
+        frame = frame_at(float(ref_ts))
         if frame is None:
             return jsonify(
                 {"ok": False, "error": "Could not read reference frame"}
@@ -1813,7 +1996,7 @@ def _extract_task_media(
                 parameters["template_mask"] = mask
         else:
             ref_ts = cast(float, parameters["reference_timestamp"])
-            frame = video.extract_frame_at_timestamp(video_path, float(ref_ts))
+            frame = frame_at(float(ref_ts))
             if frame is None:
                 return jsonify(
                     {"ok": False, "error": "Could not read template frame"}
@@ -1826,9 +2009,7 @@ def _extract_task_media(
         scene_refs = cast(list[dict[str, Any]], parameters["scene_references"])
         reference_scenes = []
         for ref in scene_refs:
-            frame = video.extract_frame_at_timestamp(
-                video_path, float(ref["timestamp"])
-            )
+            frame = frame_at(float(ref["timestamp"]))
             if frame is None:
                 return jsonify(
                     {
@@ -1849,12 +2030,13 @@ def _extract_task_media(
 def _prepare_multitool_steps(
     parameters: dict[str, Any],
     all_known_regions: dict[str, Any],
-    video_path: str,
+    frame_at: Callable[[float], "Any | None"],
     region_coords: dict[str, Any],
     resolve_region_fn: Any,
 ) -> dict[str, Any] | FlaskResponse:
     """Resolve per-step regions and extract media for multitool tasks.
 
+    *frame_at* maps a GLOBAL reference timestamp into the owning sub-video.
     Returns the updated parameters on success, or a Flask error response on failure.
     """
     steps = parameters.get("steps", [])
@@ -1878,7 +2060,7 @@ def _prepare_multitool_steps(
 
         if stype == "similarity":
             ref_ts = cast(float, step["reference_timestamp"])
-            frame = video.extract_frame_at_timestamp(video_path, float(ref_ts))
+            frame = frame_at(float(ref_ts))
             if frame is None:
                 return jsonify(
                     {
@@ -1905,7 +2087,7 @@ def _prepare_multitool_steps(
                     step["template_mask"] = mask
             else:
                 ref_ts = cast(float, step["reference_timestamp"])
-                frame = video.extract_frame_at_timestamp(video_path, float(ref_ts))
+                frame = frame_at(float(ref_ts))
                 if frame is None:
                     return jsonify(
                         {
@@ -1919,9 +2101,7 @@ def _prepare_multitool_steps(
             scene_refs = cast(list[dict[str, Any]], step["scene_references"])
             ref_scenes_list = []
             for ref in scene_refs:
-                frame = video.extract_frame_at_timestamp(
-                    video_path, float(ref["timestamp"])
-                )
+                frame = frame_at(float(ref["timestamp"]))
                 if frame is None:
                     return jsonify(
                         {
@@ -1978,18 +2158,18 @@ def api_tasks_create() -> FlaskResponse:
         validated,
     )
 
-    video_path = _find_participant_video(participant)
-    if video_path is None:
+    video_paths = _participant_video_paths(participant)
+    if not video_paths:
         return jsonify(
             {"ok": False, "error": f"No video for participant {participant}"}
         ), 400
+    video_path = video_paths[0]
 
-    source_video = ""
-    for p in _participants:
-        if p["id"] == participant:
-            source_video = Path(p["video_path"]).name
-            break
+    # Default per-task source label; the per-part scan tags each event with the
+    # specific sub-video it came from for multi-video participants.
+    source_video = Path(video_paths[0]).name
 
+    # Region coords come from the first part's resolution (parts share it).
     props = video.probe_video_properties(video_path)
 
     def _resolve_region_coords(
@@ -2020,7 +2200,8 @@ def api_tasks_create() -> FlaskResponse:
         return coerced  # Flask error response
     parameters = cast(dict[str, Any], coerced)
 
-    extracted = _extract_task_media(task_type, parameters, video_path, region_coords)
+    frame_at = _participant_frame_extractor(participant)
+    extracted = _extract_task_media(task_type, parameters, frame_at, region_coords)
     if isinstance(extracted, tuple):
         return extracted  # Flask error response
     parameters = cast(dict[str, Any], extracted)
@@ -2029,7 +2210,7 @@ def api_tasks_create() -> FlaskResponse:
         prepared = _prepare_multitool_steps(
             parameters,
             all_known_regions,
-            video_path,
+            frame_at,
             region_coords,
             _resolve_region_coords,
         )
@@ -2046,7 +2227,7 @@ def api_tasks_create() -> FlaskResponse:
         task_type=task_type,
         participant=participant,
         source_video=source_video,
-        video_path=video_path,
+        video_paths=video_paths,
         region_name=region_name,
         region_coords=region_coords,
         parameters=parameters,
@@ -2525,22 +2706,27 @@ def _init_screenspace_state(
 
     _participants = []
     study_name = ""
+    overrides: dict[str, str | None] = {}
     if sheet_context is not None:
         study_name = getattr(sheet_context, "study_name", "")
+        overrides = spreadsheet.participant_filename_overrides(sheet_context)
 
     if participant_list:
+        input_dir = utils.get_effective_input_dir()
         for pid in participant_list:
-            filename = files.get_source_video_filename(study_name, pid)
-            video_path = utils.resolve_input_path(filename)
+            paths = files.resolve_source_video_paths(
+                study_name, pid, overrides.get(pid), input_dir
+            )
             _participants.append(
                 {
                     "id": pid,
-                    "video_path": str(video_path),
-                    "has_video": video_path.is_file(),
+                    "video_paths": [str(p) for p in paths],
+                    "has_video": paths[0].is_file(),
                 }
             )
     else:
         _discover_participant_videos(study_name)
+    _participant_timeline_cache.clear()
 
     _worker = screenspace.ScreenspaceWorker()
     _worker.on_task_complete = _persist_manifest

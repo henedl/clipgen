@@ -46,6 +46,10 @@ class ClipRecord(TypedDict, total=False):
     cell_annotations: list[str]
     segment_annotations: dict[str, list[int]]
     selected_segment_indexes: list[int]
+    # Set by the pipeline only when a participant resolves to 2+ source videos
+    # (one continuous timeline). Each entry is (path, duration, cumulative_start).
+    # Absent for the single-video fast path. See video.build_source_timeline.
+    source_timeline: list[tuple[str, int, int]]
 
 
 class ReelInput(TypedDict):
@@ -827,8 +831,88 @@ def safe_cell_a1(row: int | None, col: int | None) -> str:
         return ""
 
 
+def _resolve_segment_source_fields(
+    clip: "ClipRecord",
+    base_video: str,
+    start_str: str,
+    end_str: str,
+    *,
+    allow_split: bool,
+) -> dict[str, Any]:
+    """Resolve the source-video fields for one persisted segment record.
+
+    Single-video (no ``source_timeline``): ``sourceVideo`` is *base_video* and
+    the local times equal the global times. Multi-video: the global ``[start,
+    end]`` is mapped onto ``clip['source_timeline']`` into the owning sub-video
+    plus local offsets. When *allow_split* is True (video clips) and the range
+    straddles a recording boundary, a ``parts`` list describes each piece so it
+    can be re-cut and stitched; ``sourceVideo``/``localStart``/``localEnd`` carry
+    the first piece. When *allow_split* is False (screenshots/GIFs/transcripts) a
+    single frame's position maps by start only — never split.
+
+    ``start``/``end`` (global seconds) stay on the record for the timeline
+    viewer; these fields drive regeneration, which re-cuts from ``sourceVideo``.
+    """
+    global_start = timestamp_to_seconds(start_str) or 0.0
+    global_end = timestamp_to_seconds(end_str) or 0.0
+    timeline = clip.get("source_timeline")
+    if not timeline or len(timeline) < 2:
+        return {
+            "sourceVideo": base_video,
+            "localStart": global_start,
+            "localEnd": global_end,
+        }
+
+    if allow_split:
+        pieces = map_global_range_to_segments(timeline, global_start, global_end)
+        if pieces:
+            parts = [
+                {
+                    "sourceVideo": timeline[index][0],
+                    "localStart": local_start,
+                    "localEnd": local_end,
+                }
+                for index, local_start, local_end in pieces
+            ]
+            first = parts[0]
+            fields: dict[str, Any] = {
+                "sourceVideo": first["sourceVideo"],
+                "localStart": first["localStart"],
+                "localEnd": first["localEnd"],
+            }
+            if len(parts) > 1:
+                fields["parts"] = parts
+            return fields
+        return {
+            "sourceVideo": base_video,
+            "localStart": global_start,
+            "localEnd": global_end,
+        }
+
+    mapped = map_global_to_segment(timeline, global_start)
+    if mapped is None:
+        return {
+            "sourceVideo": base_video,
+            "localStart": global_start,
+            "localEnd": global_end,
+        }
+    index, local_start = mapped
+    seg_duration = timeline[index][1]
+    local_end = min(float(seg_duration), local_start + (global_end - global_start))
+    return {
+        "sourceVideo": timeline[index][0],
+        "localStart": local_start,
+        "localEnd": local_end,
+    }
+
+
 def _clip_metadata_fields(
-    clip: "ClipRecord", base_video: str, start_str: str, end_str: str
+    clip: "ClipRecord",
+    base_video: str,
+    start_str: str,
+    end_str: str,
+    *,
+    allow_split: bool = False,
 ) -> dict[str, Any]:
     """Extract the shared per-segment metadata that every persisted record needs.
 
@@ -836,11 +920,16 @@ def _clip_metadata_fields(
     ``build_reel_component`` (reel-component records). The two shapes only differ
     by file-specific fields (id/file/type/thumbnail), so the body of every
     persisted record flows from one place.
+
+    ``start``/``end`` are GLOBAL seconds (the timeline viewer positions artifacts
+    by them). ``sourceVideo``/``localStart``/``localEnd`` (and ``parts`` for a
+    boundary-spanning clip) describe where the segment was actually cut from and
+    drive regeneration — see :func:`_resolve_segment_source_fields`.
     """
     cell = clip.get("cell")
     cell_row = getattr(cell, "row", None)
     cell_col = getattr(cell, "col", None)
-    return {
+    fields: dict[str, Any] = {
         "start": timestamp_to_seconds(start_str),
         "end": timestamp_to_seconds(end_str),
         "study": clip.get("study", ""),
@@ -852,8 +941,13 @@ def _clip_metadata_fields(
         "cellCol": cell_col,
         "cellA1": safe_cell_a1(cell_row, cell_col),
         "annotations": list(clip.get("cell_annotations", [])),
-        "sourceVideo": base_video,
     }
+    fields.update(
+        _resolve_segment_source_fields(
+            clip, base_video, start_str, end_str, allow_split=allow_split
+        )
+    )
+    return fields
 
 
 def build_artifact_record(
@@ -896,7 +990,11 @@ def build_artifact_record(
         "type": artifact_type,
         "file": Path(out_path).name,
         "thumbnail": "",
-        **_clip_metadata_fields(clip, base_video, start_str, end_str),
+        # Only video clips may be stitched across a recording boundary; a single
+        # screenshot/GIF frame maps by its start position and is never split.
+        **_clip_metadata_fields(
+            clip, base_video, start_str, end_str, allow_split=(artifact_type == "clip")
+        ),
     }
 
 
@@ -913,7 +1011,7 @@ def build_reel_component(
     file/id/type fields (the rendered output is the reel itself, not the
     component). Stored in the ``components`` list of a reel manifest entry.
     """
-    return _clip_metadata_fields(clip, base_video, start_str, end_str)
+    return _clip_metadata_fields(clip, base_video, start_str, end_str, allow_split=True)
 
 
 # ---- Timestamp parsing pipeline ----
@@ -1212,6 +1310,74 @@ def seconds_to_timestamp(total_seconds: int, *, force_hours: bool = False) -> st
     if hours > 0 or force_hours:
         return f"{hours:d}:{minutes:02d}:{seconds:02d}"
     return f"{minutes:d}:{seconds:02d}"
+
+
+# ---- Multi-video timeline mapping ----
+#
+# When a participant's session spans several source videos (see
+# video.build_source_timeline), spreadsheet timestamps are GLOBAL — relative to
+# the concatenated recording. These pure helpers map a global second into the
+# owning sub-video and the local offset within it. The ``timeline`` argument is
+# the list of ``(path, duration, cumulative_start)`` tuples returned by
+# build_source_timeline.
+
+
+def _timeline_total_seconds(timeline: list[tuple[str, int, int]]) -> int:
+    """Total duration of the concatenated timeline (last cumulative_start + duration)."""
+    if not timeline:
+        return 0
+    _path, duration, cumulative = timeline[-1]
+    return cumulative + duration
+
+
+def map_global_to_segment(
+    timeline: list[tuple[str, int, int]], global_seconds: float
+) -> tuple[int, float] | None:
+    """Map a global second to ``(segment_index, local_seconds)``.
+
+    Returns the segment whose range ``[cumulative_start, cumulative_start +
+    duration)`` contains *global_seconds*, with the offset within that segment.
+    Returns ``None`` if *global_seconds* is negative or at/beyond the total
+    timeline duration. Example: timeline video1=80s, video2=120s →
+    ``map_global_to_segment(t, 124)`` is ``(1, 44.0)``.
+    """
+    if global_seconds < 0:
+        return None
+    if global_seconds >= _timeline_total_seconds(timeline):
+        return None
+    for index, (_path, duration, cumulative) in enumerate(timeline):
+        if cumulative <= global_seconds < cumulative + duration:
+            return (index, global_seconds - cumulative)
+    return None
+
+
+def map_global_range_to_segments(
+    timeline: list[tuple[str, int, int]],
+    start_seconds: float,
+    end_seconds: float,
+) -> list[tuple[int, float, float]] | None:
+    """Map a global ``[start, end)`` range to per-segment ``(index, local_start, local_end)`` pieces.
+
+    A range that lies within one sub-video yields a single piece; a range that
+    straddles a recording boundary yields one piece per spanned sub-video, each
+    clamped to that sub-video's ``[0, duration]``. An ``end`` past the timeline
+    is clamped to the total duration. Returns ``None`` if ``end <= start`` or the
+    start is out of range. Boundary spans are detected by ``len(result) > 1``.
+    """
+    if end_seconds <= start_seconds:
+        return None
+    total = _timeline_total_seconds(timeline)
+    if start_seconds < 0 or start_seconds >= total:
+        return None
+    end_seconds = min(end_seconds, float(total))
+    pieces: list[tuple[int, float, float]] = []
+    for index, (_path, duration, cumulative) in enumerate(timeline):
+        seg_end = cumulative + duration
+        overlap_start = max(start_seconds, float(cumulative))
+        overlap_end = min(end_seconds, float(seg_end))
+        if overlap_end > overlap_start:
+            pieces.append((index, overlap_start - cumulative, overlap_end - cumulative))
+    return pieces or None
 
 
 def convert_clock_pairs_to_relative(
@@ -1538,34 +1704,90 @@ def get_current_time() -> str:
 # ---- Participant video discovery ----
 
 
-def discover_participant_videos(study_name: str = "") -> list[dict[str, Any]]:
-    """Scan input directory for source video files and return participant info dicts.
+def numbered_parts_are_contiguous(indices: list[int]) -> bool:
+    """True if *indices* are exactly ``1..N`` with no gaps (after sorting).
 
-    Extracts participant IDs from filenames matching ``{study}_{participant}{FILEFORMAT}``.
-    Only files whose participant segment starts with a recognised prefix
-    (``config.PARTICIPANT_PREFIXES``) are included.
+    Guards the multi-video timeline: numbered source parts must be a gapless
+    sequence starting at 1, otherwise concatenating them back-to-back would map
+    global timestamps into the wrong sub-video.
+    """
+    return sorted(indices) == list(range(1, len(indices) + 1))
+
+
+def participant_id_from_source_name(name: str) -> str | None:
+    """Extract the participant id from a source-video filename, or None.
+
+    Handles both the plain ``{study}_{participant}{FILEFORMAT}`` form and a
+    numbered part ``{study}_{participant}-N{FILEFORMAT}`` — the ``-N`` suffix is
+    stripped first so a part groups under its base participant id. Returns None
+    when the trailing segment is not a recognised id (config.PARTICIPANT_PREFIXES).
+    """
+    stem = Path(name).stem
+    head, sep, tail = stem.rpartition("-")
+    if sep and head and tail.isdigit():
+        stem = head  # strip the numbered-part suffix
+    parts = stem.rsplit("_", 1)
+    if len(parts) != 2:
+        return None
+    pid = parts[1]
+    return pid if pid and pid[0] in config.PARTICIPANT_PREFIXES else None
+
+
+def discover_participant_videos(study_name: str = "") -> list[dict[str, Any]]:
+    """Scan the input directory and return one entry per participant.
+
+    A participant's session may span several files (a recording that broke off,
+    or a diary study); this groups the plain ``{study}_{pid}{FILEFORMAT}`` and/or
+    the numbered parts ``{study}_{pid}-N{FILEFORMAT}`` into one entry with ordered
+    ``video_paths``. The plain file wins when both it and numbered parts exist; a
+    non-contiguous numbered set is skipped with a warning (see
+    :func:`numbered_parts_are_contiguous`). Only ids starting with a recognised
+    prefix (``config.PARTICIPANT_PREFIXES``) are included.
 
     Returns:
-        List of ``{"id": str, "video_path": str, "has_video": True}`` dicts,
-        sorted by filename.
+        List of ``{"id": str, "video_paths": list[str], "has_video": bool}``
+        dicts, sorted by participant id.
     """
     input_dir = Path(get_effective_input_dir())
     if not input_dir.is_dir():
         return []
-    participants: list[dict[str, Any]] = []
+    plain: dict[str, Path] = {}
+    numbered: dict[str, list[tuple[int, Path]]] = {}
     for path in sorted(input_dir.glob(f"*{config.FILEFORMAT}")):
-        name = path.stem
-        parts = name.rsplit("_", 1)
-        if len(parts) == 2:
-            pid = parts[1]
-            if pid and pid[0] in config.PARTICIPANT_PREFIXES:
-                participants.append(
-                    {
-                        "id": pid,
-                        "video_path": str(path),
-                        "has_video": True,
-                    }
+        pid = participant_id_from_source_name(path.name)
+        if pid is None:
+            continue
+        head, sep, tail = path.stem.rpartition("-")
+        if sep and head and tail.isdigit():
+            numbered.setdefault(pid, []).append((int(tail), path))
+        else:
+            plain[pid] = path
+
+    participants: list[dict[str, Any]] = []
+    for pid in sorted(set(plain) | set(numbered)):
+        if pid in plain:
+            paths = [plain[pid]]
+        else:
+            parts = sorted(numbered[pid], key=lambda item: item[0])
+            indices = [n for n, _ in parts]
+            if not numbered_parts_are_contiguous(indices):
+                warning_print(
+                    f"Numbered source videos for participant '{pid}' are "
+                    f"non-contiguous (found parts {indices}); expected 1..N.",
+                    [
+                        "Skipping this participant; rename the parts to a gapless "
+                        "1..N sequence to enable concatenation.",
+                    ],
                 )
+                continue
+            paths = [p for _, p in parts]
+        participants.append(
+            {
+                "id": pid,
+                "video_paths": [str(p) for p in paths],
+                "has_video": paths[0].is_file(),
+            }
+        )
     return participants
 
 

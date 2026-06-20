@@ -915,7 +915,7 @@ class TestDrainNewEvents:
             task_type="change",
             participant="P01",
             source_video="study_P01.mp4",
-            video_path="/path/study_P01.mp4",
+            video_paths=["/path/study_P01.mp4"],
             region_name="hud",
             region_coords={"x": 0, "y": 0, "w": 100, "h": 50},
         )
@@ -942,7 +942,7 @@ class TestCreateTask:
             task_type="color",
             participant="P01",
             source_video="study_P01.mp4",
-            video_path="/path/study_P01.mp4",
+            video_paths=["/path/study_P01.mp4"],
             region_name="healthbar",
             region_coords={"x": 0, "y": 0, "w": 100, "h": 50},
         )
@@ -959,7 +959,7 @@ class TestScreenspaceWorker:
             "color",
             "P01",
             "s_P01.mp4",
-            "/v.mp4",
+            ["/v.mp4"],
             "hb",
             {"x": 0, "y": 0, "w": 10, "h": 10},
         )
@@ -972,10 +972,10 @@ class TestScreenspaceWorker:
     def test_get_all_tasks(self):
         worker = screenspace.ScreenspaceWorker()
         t1 = screenspace.create_task(
-            "color", "P01", "s.mp4", "/v.mp4", "r", {"x": 0, "y": 0, "w": 1, "h": 1}
+            "color", "P01", "s.mp4", ["/v.mp4"], "r", {"x": 0, "y": 0, "w": 1, "h": 1}
         )
         t2 = screenspace.create_task(
-            "change", "P02", "s.mp4", "/v.mp4", "r", {"x": 0, "y": 0, "w": 1, "h": 1}
+            "change", "P02", "s.mp4", ["/v.mp4"], "r", {"x": 0, "y": 0, "w": 1, "h": 1}
         )
         worker.enqueue(t1)
         worker.enqueue(t2)
@@ -987,7 +987,7 @@ class TestScreenspaceWorker:
     def test_cancel_queued_task(self):
         worker = screenspace.ScreenspaceWorker()
         task = screenspace.create_task(
-            "color", "P01", "s.mp4", "/v.mp4", "r", {"x": 0, "y": 0, "w": 1, "h": 1}
+            "color", "P01", "s.mp4", ["/v.mp4"], "r", {"x": 0, "y": 0, "w": 1, "h": 1}
         )
         worker.enqueue(task)
         assert worker.cancel(task["id"]) is True
@@ -1007,7 +1007,7 @@ class TestScreenspaceWorker:
                 "color",
                 "P01",
                 "nope.mp4",
-                "/nonexistent/nope.mp4",
+                ["/nonexistent/nope.mp4"],
                 "r",
                 {"x": 0, "y": 0, "w": 10, "h": 10},
                 parameters={
@@ -1044,7 +1044,7 @@ class TestScreenspaceWorker:
                 "color",
                 "P01",
                 "s.mp4",
-                "/nonexistent/v.mp4",
+                ["/nonexistent/v.mp4"],
                 "r",
                 {"x": 0, "y": 0, "w": 10, "h": 10},
                 parameters={
@@ -1064,7 +1064,7 @@ class TestScreenspaceWorker:
                 "color",
                 "P02",
                 "s.mp4",
-                "/nonexistent/v.mp4",
+                ["/nonexistent/v.mp4"],
                 "r",
                 {"x": 0, "y": 0, "w": 10, "h": 10},
                 parameters={
@@ -1098,10 +1098,10 @@ class TestScreenspaceWorker:
     def test_reorder(self):
         worker = screenspace.ScreenspaceWorker()
         t1 = screenspace.create_task(
-            "color", "P01", "s.mp4", "/v.mp4", "r", {"x": 0, "y": 0, "w": 1, "h": 1}
+            "color", "P01", "s.mp4", ["/v.mp4"], "r", {"x": 0, "y": 0, "w": 1, "h": 1}
         )
         t2 = screenspace.create_task(
-            "change", "P01", "s.mp4", "/v.mp4", "r", {"x": 0, "y": 0, "w": 1, "h": 1}
+            "change", "P01", "s.mp4", ["/v.mp4"], "r", {"x": 0, "y": 0, "w": 1, "h": 1}
         )
         worker.enqueue(t1)
         worker.enqueue(t2)
@@ -1117,7 +1117,7 @@ class TestScreenspaceWorker:
     def test_remove_queued_task(self):
         worker = screenspace.ScreenspaceWorker()
         task = screenspace.create_task(
-            "color", "P01", "s.mp4", "/v.mp4", "r", {"x": 0, "y": 0, "w": 1, "h": 1}
+            "color", "P01", "s.mp4", ["/v.mp4"], "r", {"x": 0, "y": 0, "w": 1, "h": 1}
         )
         worker.enqueue(task)
         assert worker.remove_task(task["id"]) is True
@@ -1130,7 +1130,7 @@ class TestScreenspaceWorker:
     def test_remove_running_task_cancels_and_hides(self):
         worker = screenspace.ScreenspaceWorker()
         task = screenspace.create_task(
-            "color", "P01", "s.mp4", "/v.mp4", "r", {"x": 0, "y": 0, "w": 1, "h": 1}
+            "color", "P01", "s.mp4", ["/v.mp4"], "r", {"x": 0, "y": 0, "w": 1, "h": 1}
         )
         worker.enqueue(task)
         # Simulate running status
@@ -1156,7 +1156,7 @@ class TestScreenspaceWorker:
     def test_pause_sets_paused_flag_on_running_task(self):
         worker = screenspace.ScreenspaceWorker()
         task = screenspace.create_task(
-            "color", "P01", "s.mp4", "/v.mp4", "r", {"x": 0, "y": 0, "w": 1, "h": 1}
+            "color", "P01", "s.mp4", ["/v.mp4"], "r", {"x": 0, "y": 0, "w": 1, "h": 1}
         )
         worker.enqueue(task)
         with worker._lock:
@@ -1171,7 +1171,7 @@ class TestScreenspaceWorker:
             "color",
             "P01",
             "s.mp4",
-            "/v.mp4",
+            ["/v.mp4"],
             "r",
             {"x": 0, "y": 0, "w": 1, "h": 1},
             parameters={"start_seconds": 0.0, "end_seconds": 100.0},
@@ -1196,7 +1196,7 @@ class TestScreenspaceWorker:
             "multitool",
             "P01",
             "s.mp4",
-            "/v.mp4",
+            ["/v.mp4"],
             "r",
             {"x": 0, "y": 0, "w": 1, "h": 1},
             parameters={
@@ -1229,7 +1229,7 @@ class TestScreenspaceWorker:
             "multitool",
             "P01",
             "s.mp4",
-            "/v.mp4",
+            ["/v.mp4"],
             "r",
             {"x": 0, "y": 0, "w": 1, "h": 1},
             parameters={
@@ -1676,7 +1676,7 @@ class TestScanNumbers:
             "numbers",
             "P01",
             "s_P01.mp4",
-            "/nonexistent.mp4",
+            ["/nonexistent.mp4"],
             "r",
             {"x": 0, "y": 0, "w": 10, "h": 10},
             parameters={"operator": "gt", "target_value": 50},
@@ -1691,7 +1691,7 @@ class TestScanNumbers:
             "bogus",
             "P01",
             "s.mp4",
-            "/v.mp4",
+            ["/v.mp4"],
             "r",
             {"x": 0, "y": 0, "w": 1, "h": 1},
         )
@@ -3163,7 +3163,7 @@ class TestFastScanDispatchIntervalMultiplier:
         task = {
             "id": "ss_test1",
             "type": "color",
-            "video_path": "/fake.mp4",
+            "video_paths": ["/fake.mp4"],
             "region_coords": {"x": 0, "y": 0, "w": 100, "h": 100},
             "parameters": {
                 "scan_mode": "fast",
@@ -3209,7 +3209,7 @@ class TestFastScanDispatchIntervalMultiplier:
         task = {
             "id": "ss_resume",
             "type": "color",
-            "video_path": "/fake.mp4",
+            "video_paths": ["/fake.mp4"],
             "region_coords": {"x": 0, "y": 0, "w": 100, "h": 100},
             "parameters": {
                 "scan_mode": "fast",
@@ -3258,7 +3258,7 @@ class TestFastScanDispatchIntervalMultiplier:
         task = {
             "id": "ss_test2",
             "type": "color",
-            "video_path": "/fake.mp4",
+            "video_paths": ["/fake.mp4"],
             "region_coords": {"x": 0, "y": 0, "w": 100, "h": 100},
             "parameters": {
                 "interval": 1.0,
@@ -3303,7 +3303,7 @@ class TestFastScanDispatchIntervalMultiplier:
         task = {
             "id": "ss_presence",
             "type": "color",
-            "video_path": "/fake.mp4",
+            "video_paths": ["/fake.mp4"],
             "region_coords": {"x": 0, "y": 0, "w": 100, "h": 100},
             "parameters": {
                 "scan_mode": "fast",
@@ -3350,7 +3350,7 @@ class TestFastScanDispatchIntervalMultiplier:
         task = {
             "id": "ss_test3",
             "type": "template",
-            "video_path": "/fake.mp4",
+            "video_paths": ["/fake.mp4"],
             "region_coords": {"x": 0, "y": 0, "w": 100, "h": 100},
             "parameters": {
                 "scan_mode": "fast",
@@ -3739,7 +3739,7 @@ class TestWorkerParallel:
             "color",
             "P01",
             "s.mp4",
-            "/v.mp4",
+            ["/v.mp4"],
             "r1",
             {"x": 0, "y": 0, "w": 1, "h": 1},
         )
@@ -3747,7 +3747,7 @@ class TestWorkerParallel:
             "color",
             "P02",
             "s.mp4",
-            "/v2.mp4",
+            ["/v2.mp4"],
             "r2",
             {"x": 0, "y": 0, "w": 1, "h": 1},
         )
@@ -3796,7 +3796,7 @@ class TestWorkerParallel:
                 "color",
                 f"P0{i}",
                 "s.mp4",
-                f"/v{i}.mp4",
+                [f"/v{i}.mp4"],
                 f"r{i}",
                 {"x": 0, "y": 0, "w": 1, "h": 1},
             )
@@ -3832,7 +3832,7 @@ class TestWorkerParallel:
             "color",
             "P01",
             "s.mp4",
-            "/v.mp4",
+            ["/v.mp4"],
             "r1",
             {"x": 0, "y": 0, "w": 1, "h": 1},
         )
@@ -3840,7 +3840,7 @@ class TestWorkerParallel:
             "color",
             "P02",
             "s.mp4",
-            "/v2.mp4",
+            ["/v2.mp4"],
             "r2",
             {"x": 0, "y": 0, "w": 1, "h": 1},
         )
@@ -3890,7 +3890,12 @@ class TestWorkerParallel:
         worker.start()
         try:
             task = screenspace.create_task(
-                "color", "P01", "s.mp4", "/v.mp4", "r", {"x": 0, "y": 0, "w": 1, "h": 1}
+                "color",
+                "P01",
+                "s.mp4",
+                ["/v.mp4"],
+                "r",
+                {"x": 0, "y": 0, "w": 1, "h": 1},
             )
             worker.enqueue(task)
             # Wait for it to start running.
@@ -4071,7 +4076,7 @@ class TestTimelapseDispatchPassesMarkers:
             "timelapse",
             "P01",
             "s_P01.mp4",
-            "/fake.mp4",
+            ["/fake.mp4"],
             "region1",
             {"x": 0, "y": 0, "w": 100, "h": 100},
             parameters={
@@ -4222,7 +4227,7 @@ class TestScanInactivity:
             "inactivity",
             "P01",
             "s_P01.mp4",
-            "/fake.mp4",
+            ["/fake.mp4"],
             "region1",
             {"x": 0, "y": 0, "w": 100, "h": 100},
             parameters={

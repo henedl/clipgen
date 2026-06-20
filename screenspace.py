@@ -2969,18 +2969,24 @@ def create_task(
     task_type: str,
     participant: str,
     source_video: str,
-    video_path: str,
+    video_paths: list[str],
     region_name: str,
     region_coords: dict[str, int],
     parameters: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Build a new task dict with all fields initialized."""
+    """Build a new task dict with all fields initialized.
+
+    *video_paths* is the participant's ordered source video(s): one entry for a
+    normal participant, several for a multi-video participant whose session spans
+    files (analyzed as one continuous timeline; the worker maps the task's global
+    time range into the owning sub-video per part).
+    """
     return {
         "id": f"ss_{uuid.uuid4().hex[:8]}",
         "type": task_type,
         "participant": participant,
         "source_video": source_video,
-        "video_path": video_path,
+        "video_paths": video_paths,
         "region": region_name,
         "region_coords": region_coords,
         "parameters": parameters or {},
@@ -4041,7 +4047,13 @@ class ScreenspaceWorker:
         with self._lock:
             for t in tasks:
                 if t.get("id"):
-                    self._tasks[t["id"]] = copy.deepcopy(t)
+                    restored = copy.deepcopy(t)
+                    # Tasks now carry ``video_paths`` (multi-video timeline); a
+                    # task persisted before that change has only ``video_path``.
+                    # Normalize on load so resume()/_dispatch never KeyError on it.
+                    if not restored.get("video_paths") and restored.get("video_path"):
+                        restored["video_paths"] = [restored["video_path"]]
+                    self._tasks[t["id"]] = restored
 
     def stop(self) -> None:
         """Signal the worker thread to stop."""
@@ -4176,7 +4188,13 @@ class ScreenspaceWorker:
             start = params.get("start_seconds", 0.0)
             end = params.get("end_seconds")
             if end is None:
-                _, end = _probe_video_meta(task["video_path"])
+                # Resume math is on the GLOBAL timeline; multi-video end is the
+                # total across all parts.
+                timeline = video.timeline_or_none(task["video_paths"])
+                if timeline is not None:
+                    end = timeline[-1][1] + timeline[-1][2]
+                else:
+                    _, end = _probe_video_meta(task["video_paths"][0])
             resume_at = start + progress * (end - start)
 
             with self._lock:
@@ -4232,7 +4250,7 @@ class ScreenspaceWorker:
             heatmap_path = str(
                 Path(utils.get_effective_output_dir()) / f"heatmap_{task_id}.png"
             )
-            props = video.probe_video_properties(task["video_path"])
+            props = video.probe_video_properties(task["video_paths"][0])
             fw = props.get("width", 1920) if props else 1920
             fh = props.get("height", 1080) if props else 1080
             hp = generate_template_heatmap(results, fw, fh, heatmap_path)
@@ -4469,17 +4487,84 @@ class ScreenspaceWorker:
                 **tool.fast_scan_extra_opts,
             }
 
-        return tool.scan(
-            task["video_path"],
-            task["region_coords"],
-            params,
-            task_id=task["id"],
-            scan_mode=scan_mode,
-            on_progress=on_progress,
-            cancel_flag=cancel_flag,
-            on_result=on_result,
-            fast_opts=fast_opts,
-        )
+        video_paths = task["video_paths"]
+        timeline = video.timeline_or_none(video_paths)
+        if timeline is None:
+            return tool.scan(
+                video_paths[0],
+                task["region_coords"],
+                params,
+                task_id=task["id"],
+                scan_mode=scan_mode,
+                on_progress=on_progress,
+                cancel_flag=cancel_flag,
+                on_result=on_result,
+                fast_opts=fast_opts,
+            )
+
+        # Multi-video: map the task's GLOBAL [start, end] range onto the timeline
+        # and scan each spanned sub-video at its local offsets. Emitted result
+        # times are shifted back to the global timeline and tagged with the
+        # sub-video they came from so events line up with clips/transcripts.
+        total = timeline[-1][1] + timeline[-1][2]
+        global_start = params.get("start_seconds", 0.0) or 0.0
+        global_end = params.get("end_seconds")
+        if global_end is None:
+            global_end = total
+        pieces = utils.map_global_range_to_segments(timeline, global_start, global_end)
+        if not pieces:
+            return []
+        piece_durations = [le - ls for _index, ls, le in pieces]
+        span = sum(piece_durations) or 1.0
+        accumulated = 0.0
+        all_results: list[dict[str, Any]] = []
+        for (index, local_start, local_end), piece_dur in zip(pieces, piece_durations):
+            if cancel_flag():
+                break
+            cumulative = timeline[index][2]
+            source_name = Path(timeline[index][0]).name
+            frac_start = accumulated / span
+            frac_end = (accumulated + piece_dur) / span
+
+            def piece_progress(
+                p: float, _a: float = frac_start, _b: float = frac_end
+            ) -> None:
+                on_progress(_a + p * (_b - _a))
+
+            def piece_on_result(
+                rd: dict[str, Any],
+                _cum: int = cumulative,
+                _src: str = source_name,
+            ) -> None:
+                if on_result is not None:
+                    shifted = dict(rd)
+                    _offset_result_times(shifted, _cum)
+                    shifted["_source_video"] = _src
+                    on_result(shifted)
+
+            piece_params = {
+                **params,
+                "start_seconds": local_start,
+                "end_seconds": local_end,
+            }
+            piece_results = tool.scan(
+                timeline[index][0],
+                task["region_coords"],
+                piece_params,
+                task_id=task["id"],
+                scan_mode=scan_mode,
+                on_progress=piece_progress,
+                cancel_flag=cancel_flag,
+                on_result=piece_on_result,
+                fast_opts=fast_opts,
+            )
+            for rd in piece_results or []:
+                _offset_result_times(rd, cumulative)
+                rd["_source_video"] = source_name
+                all_results.append(rd)
+            accumulated += piece_dur
+        on_progress(1.0)
+        return all_results
 
 
 # ---------------------------------------------------------------------------
@@ -4584,6 +4669,21 @@ def save_screenspace_manifest(
     )
 
 
+def _offset_result_times(result: dict[str, Any], offset: int) -> None:
+    """Shift a scan result's time fields by *offset* seconds (in place).
+
+    Maps a sub-video's local result times back onto the participant's global
+    timeline for multi-video scans. Covers point events (``timestamp``) and span
+    events (``start``/``end``, e.g. inactivity). A no-op when offset is 0.
+    """
+    if not offset:
+        return
+    for key in ("timestamp", "start", "end"):
+        value = result.get(key)
+        if isinstance(value, (int, float)):
+            result[key] = value + offset
+
+
 def generate_events_from_results(
     task: dict[str, Any], raw_results: list[dict[str, Any]]
 ) -> list[dict[str, Any]]:
@@ -4622,6 +4722,10 @@ def generate_events_from_results(
         elif task_type == "boundary":
             metadata["distance"] = r.get("distance", 0.0)
         ev = create_event(task, ts, confidence, metadata)
+        # Multi-video scans tag each result with the sub-video it came from.
+        source_override = r.get("_source_video")
+        if source_override:
+            ev["source_video"] = source_override
         if task_type == "inactivity" and "end" in r:
             ev["time_out"] = round(r["end"], 2)
         if task_type == "boundary":

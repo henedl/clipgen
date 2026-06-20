@@ -1221,17 +1221,36 @@ def _run_pre_transcribe(worksheet: Any, args: Any) -> None:
         ):
             override = ctx.sheet_data[ctx.filename_row_idx][col_idx].strip() or None
 
-        video_filename = files.get_source_video_filename(ctx.study_name, pid, override)
-        video_path = utils.resolve_input_path(video_filename)
-        if not video_path.is_file():
-            utils.error_print(f"Source video not found for {pid}: {video_path}")
+        source_paths = files.resolve_source_video_paths(
+            ctx.study_name, pid, override, utils.get_effective_input_dir()
+        )
+        missing = [p for p in source_paths if not p.is_file()]
+        if missing:
+            utils.error_print(
+                f"Source video not found for {pid}: "
+                + ", ".join(str(p) for p in missing)
+            )
             continue
 
-        utils.info_print(f"Transcribing {pid}: {video_path.name}...")
-        result = transcripts.transcribe_video(
-            str(video_path),
-            context_keywords=context_keywords,
-        )
+        names = ", ".join(p.name for p in source_paths)
+        utils.info_print(f"Transcribing {pid}: {names}...")
+        if len(source_paths) == 1:
+            # Single-video fast path: transcribe directly, no duration probe.
+            result = transcripts.transcribe_video(
+                str(source_paths[0]), context_keywords=context_keywords
+            )
+        else:
+            # Multi-video: parts form one continuous timeline; transcribe each
+            # and shift its times by the part's cumulative start so the stored
+            # transcript shares the clip artifacts' global timeline.
+            timeline = video.build_source_timeline([str(p) for p in source_paths])
+            result = (
+                None
+                if timeline is None
+                else transcripts.transcribe_timeline(
+                    timeline, context_keywords=context_keywords
+                )
+            )
         if result is None:
             utils.error_print(f"Transcription failed for {pid}.")
             continue
@@ -1281,16 +1300,38 @@ def _ss_load_known_regions(manifest: dict[str, Any]) -> dict[str, dict[str, Any]
     return known
 
 
-def _ss_resolve_video_for_participant(participant_id: str) -> str | None:
-    """Resolve the source video path for a participant via filename discovery.
+def _ss_resolve_videos_for_participant(participant_id: str) -> list[str]:
+    """Resolve a participant's ordered source video path(s) via filename discovery.
 
-    Mirrors how screenspace_server falls back when no spreadsheet is loaded.
+    Mirrors how screenspace_server falls back when no spreadsheet is loaded. A
+    multi-video participant (numbered parts) returns all parts in timeline order;
+    a normal participant returns a single-element list. Returns [] when unknown.
     """
     discovered = utils.discover_participant_videos("")
     for entry in discovered:
         if entry["id"] == participant_id and entry.get("has_video"):
-            return entry["video_path"]
-    return None
+            return list(entry["video_paths"])
+    return []
+
+
+def _ss_frame_extractor(video_paths: list[str]) -> Callable[[float], "Any | None"]:
+    """Return a ``frame_at(global_ts)`` closure mapping into the right sub-video.
+
+    For reference-frame extraction (similarity/template/scene) over a participant
+    whose recording spans several files: a global reference timestamp resolves to
+    the owning sub-video. Single-video participants extract unchanged (no probe).
+    """
+    timeline = video.timeline_or_none(video_paths)
+
+    def _extract(global_ts: float) -> "Any | None":
+        if timeline is None:
+            return video.extract_frame_at_timestamp(video_paths[0], global_ts)
+        mapped = utils.map_global_to_segment(timeline, global_ts)
+        if mapped is None:
+            return None
+        return video.extract_frame_at_timestamp(timeline[mapped[0]][0], mapped[1])
+
+    return _extract
 
 
 def _ss_hex_to_hsv(hex_str: str) -> dict[str, int]:
@@ -1355,14 +1396,15 @@ def _ss_build_params(
     args: argparse.Namespace,
     task_type: str,
     region_coords: dict[str, int],
-    video_path: str,
+    frame_at: Callable[[float], "Any | None"],
 ) -> dict[str, Any]:
     """Build a `parameters` dict for create_task() from per-tool CLI flags.
 
     Validates that the required flags for ``task_type`` are present. For
-    ``similarity`` and ``template`` extracts the reference frame from the
-    video at ``--ss-reference-timestamp`` (mirrors the server-side path in
-    screenspace_server._extract_task_media).
+    ``similarity`` and ``template`` extracts the reference frame at
+    ``--ss-reference-timestamp`` via *frame_at* (which maps a global timestamp
+    into the owning sub-video for multi-video participants; mirrors the
+    server-side path in screenspace_server._extract_task_media).
     """
     import screenspace
 
@@ -1403,9 +1445,7 @@ def _ss_build_params(
             raise ValueError("similarity task requires --ss-threshold FLOAT")
         params["reference_timestamp"] = args.ss_reference_timestamp
         params["threshold"] = args.ss_threshold
-        frame = video.extract_frame_at_timestamp(
-            video_path, float(args.ss_reference_timestamp)
-        )
+        frame = frame_at(float(args.ss_reference_timestamp))
         if frame is None:
             raise ValueError(
                 f"Could not extract reference frame at {args.ss_reference_timestamp}s"
@@ -1452,9 +1492,7 @@ def _ss_build_params(
             raise ValueError("template task requires --ss-threshold FLOAT")
         params["reference_timestamp"] = args.ss_reference_timestamp
         params["threshold"] = args.ss_threshold
-        frame = video.extract_frame_at_timestamp(
-            video_path, float(args.ss_reference_timestamp)
-        )
+        frame = frame_at(float(args.ss_reference_timestamp))
         if frame is None:
             raise ValueError(
                 f"Could not extract template frame at {args.ss_reference_timestamp}s"
@@ -1470,9 +1508,7 @@ def _ss_build_params(
         parsed = [_ss_parse_scene_ref(r) for r in raw_refs]
         reference_scenes = []
         for ref in parsed:
-            frame = video.extract_frame_at_timestamp(
-                video_path, float(ref["timestamp"])
-            )
+            frame = frame_at(float(ref["timestamp"]))
             if frame is None:
                 raise ValueError(
                     f"Could not extract scene frame for {ref['name']!r} "
@@ -1701,15 +1737,16 @@ def _run_ss_task(args: argparse.Namespace) -> None:
         utils.error_print(f"Region {region_name!r} not found.", [hint])
         sys.exit(1)
 
-    video_path = _ss_resolve_video_for_participant(participant)
-    if video_path is None:
+    video_paths = _ss_resolve_videos_for_participant(participant)
+    if not video_paths:
         utils.error_print(
             f"No video found for participant {participant!r}.",
             ["Place the source video in the input directory before running --ss-task."],
         )
         sys.exit(1)
 
-    props = video.probe_video_properties(video_path)
+    # Parts share resolution; reference frames map global→sub-video via frame_at.
+    props = video.probe_video_properties(video_paths[0])
     rd = known_regions[region_name]
     if props and props.get("width") and props.get("height"):
         region_coords = screenspace.denormalize_region(
@@ -1719,17 +1756,19 @@ def _run_ss_task(args: argparse.Namespace) -> None:
         region_coords = {k: int(rd[k]) for k in ("x", "y", "w", "h") if k in rd}
 
     try:
-        parameters = _ss_build_params(args, task_type, region_coords, video_path)
+        parameters = _ss_build_params(
+            args, task_type, region_coords, _ss_frame_extractor(video_paths)
+        )
     except ValueError as exc:
         utils.error_print(str(exc))
         sys.exit(1)
 
-    source_video = Path(video_path).name
+    source_video = Path(video_paths[0]).name
     task = screenspace.create_task(
         task_type=task_type,
         participant=participant,
         source_video=source_video,
-        video_path=video_path,
+        video_paths=video_paths,
         region_name=region_name,
         region_coords=region_coords,
         parameters=parameters,
@@ -1839,21 +1878,22 @@ def _ss_run_and_persist_task(task: dict[str, Any], manifest: dict[str, Any]) -> 
 
 def _ss_extract_scene_frames(
     scene_refs: list[dict[str, Any]],
-    video_path: str,
+    frame_at: Callable[[float], "Any | None"],
     region_coords: dict[str, int],
     *,
     context: str = "",
 ) -> list[dict[str, Any]]:
     """Build reference_scenes (with cropped frames) from saved scene_references.
 
-    Mirrors the scene path of screenspace_server._extract_task_media. Raises
-    ValueError when a frame cannot be read.
+    Mirrors the scene path of screenspace_server._extract_task_media. *frame_at*
+    maps a global timestamp into the owning sub-video for multi-video
+    participants. Raises ValueError when a frame cannot be read.
     """
     import screenspace
 
     reference_scenes: list[dict[str, Any]] = []
     for ref in scene_refs:
-        frame = video.extract_frame_at_timestamp(video_path, float(ref["timestamp"]))
+        frame = frame_at(float(ref["timestamp"]))
         if frame is None:
             raise ValueError(
                 f"{context}could not read frame for scene {ref.get('name')!r} "
@@ -1872,7 +1912,7 @@ def _ss_extract_scene_frames(
 def _ss_rehydrate_task_media(
     task_type: str,
     parameters: dict[str, Any],
-    video_path: str,
+    frame_at: Callable[[float], "Any | None"],
     region_coords: dict[str, int],
     manifest: dict[str, Any],
     dims: tuple[int, int] | None,
@@ -1880,15 +1920,16 @@ def _ss_rehydrate_task_media(
     """Re-extract reference frames/templates/scenes into a saved task's parameters.
 
     Mirrors screenspace_server._extract_task_media and _prepare_multitool_steps so a
-    manifest task (whose binary frame data was stripped on save) can be re-run. Mutates
-    ``parameters`` in place; raises ValueError when a reference cannot be recovered
-    (e.g. a multitool step built from an uploaded template image, which has no
-    timestamp to re-extract from).
+    manifest task (whose binary frame data was stripped on save) can be re-run.
+    *frame_at* maps a global reference timestamp into the owning sub-video for
+    multi-video participants. Mutates ``parameters`` in place; raises ValueError
+    when a reference cannot be recovered (e.g. a multitool step built from an
+    uploaded template image, which has no timestamp to re-extract from).
     """
     import screenspace
 
     def _extract_frame(ref_ts: float, coords: dict[str, int], label: str) -> Any:
-        frame = video.extract_frame_at_timestamp(video_path, float(ref_ts))
+        frame = frame_at(float(ref_ts))
         if frame is None:
             raise ValueError(f"{label}: could not read reference frame")
         return screenspace.extract_region(frame, coords)
@@ -1915,7 +1956,7 @@ def _ss_rehydrate_task_media(
         if not scene_refs:
             raise ValueError("scene task has no scene_references to re-extract")
         parameters["reference_scenes"] = _ss_extract_scene_frames(
-            scene_refs, video_path, region_coords
+            scene_refs, frame_at, region_coords
         )
 
     elif task_type == "multitool":
@@ -1959,7 +2000,7 @@ def _ss_rehydrate_task_media(
                 if not step_refs:
                     raise ValueError(f"Step {i}: no scene_references to re-extract")
                 step["reference_scenes"] = _ss_extract_scene_frames(
-                    step_refs, video_path, step_coords, context=f"Step {i}: "
+                    step_refs, frame_at, step_coords, context=f"Step {i}: "
                 )
 
 
@@ -1987,15 +2028,15 @@ def _run_ss_rerun_task(args: argparse.Namespace) -> None:
     region_name = saved.get("region", "")
     parameters = copy.deepcopy(saved.get("parameters", {}))
 
-    video_path = _ss_resolve_video_for_participant(participant)
-    if video_path is None:
+    video_paths = _ss_resolve_videos_for_participant(participant)
+    if not video_paths:
         utils.error_print(
             f"No video found for participant {participant!r}.",
             ["Place the source video in the input directory before re-running."],
         )
         sys.exit(1)
 
-    props = video.probe_video_properties(video_path)
+    props = video.probe_video_properties(video_paths[0])
     dims: tuple[int, int] | None = None
     if props and props.get("width") and props.get("height"):
         dims = (int(props["width"]), int(props["height"]))
@@ -2031,7 +2072,12 @@ def _run_ss_rerun_task(args: argparse.Namespace) -> None:
 
     try:
         _ss_rehydrate_task_media(
-            task_type, parameters, video_path, region_coords, manifest, dims
+            task_type,
+            parameters,
+            _ss_frame_extractor(video_paths),
+            region_coords,
+            manifest,
+            dims,
         )
     except ValueError as exc:
         utils.error_print(f"Cannot re-run task {task_id!r}: {exc}")
@@ -2040,8 +2086,8 @@ def _run_ss_rerun_task(args: argparse.Namespace) -> None:
     task = screenspace.create_task(
         task_type=task_type,
         participant=participant,
-        source_video=Path(video_path).name,
-        video_path=video_path,
+        source_video=Path(video_paths[0]).name,
+        video_paths=video_paths,
         region_name=region_name,
         region_coords=region_coords,
         parameters=parameters,

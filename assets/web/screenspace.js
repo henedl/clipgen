@@ -490,6 +490,28 @@
     return v ? base + "?v=" + encodeURIComponent(v) : base;
   }
 
+  // ---- Multi-video timeline helpers ----
+  // For a participant whose recording spans several files, api/video/info
+  // returns ``parts`` ([{filename, duration, cumulativeStart}]) and a total
+  // ``duration``. Frame display already works at global time (the backend maps
+  // it); only the <video> play element switches source per part below.
+  function _ssParts() {
+    var info = state.videoInfo;
+    return info && info.parts && info.parts.length > 1 ? info.parts : null;
+  }
+  function _ssPartForGlobal(parts, g) {
+    for (var i = 0; i < parts.length; i++) {
+      if (g >= parts[i].cumulativeStart && g < parts[i].cumulativeStart + parts[i].duration) {
+        return i;
+      }
+    }
+    return parts.length - 1;
+  }
+  function _ssStreamUrlForPart(pid, i) {
+    var url = videoStreamUrl(pid);
+    return url + (url.indexOf("?") >= 0 ? "&" : "?") + "part=" + i;
+  }
+
   // ---- Participants ----
 
   function renderParticipantSelect() {
@@ -1064,6 +1086,8 @@
     setStoredUIStateField("screenspace", "selectedParticipant", pid);
     state.currentTimestamp = 0;
     state.videoInfo = null;
+    state.videoActivePart = 0;
+    state.videoOffset = 0;
     state.frameImage = null;
     state.frameLoading = false;
     state.referenceTimestamp = null;
@@ -1679,7 +1703,27 @@
 
     video.addEventListener("timeupdate", function () {
       if (!state.videoPlaying) return;
-      var t = video.currentTime;
+      var parts = _ssParts();
+      var t;
+      if (parts) {
+        var i = state.videoActivePart || 0;
+        // Hand off to the next part near the boundary for continuous playback.
+        if (i < parts.length - 1 && video.currentTime >= parts[i].duration - 0.05) {
+          state.videoActivePart = i + 1;
+          state.videoOffset = parts[i + 1].cumulativeStart;
+          video.src = _ssStreamUrlForPart(state.selectedParticipant, i + 1);
+          var onMeta = function () {
+            video.removeEventListener("loadedmetadata", onMeta);
+            video.currentTime = 0.001;
+            video.play();
+          };
+          video.addEventListener("loadedmetadata", onMeta);
+          return;
+        }
+        t = video.currentTime + (state.videoOffset || 0);
+      } else {
+        t = video.currentTime;
+      }
       state.currentTimestamp = t;
       qs("#timestampInput").value = formatTime(t, { decimals: 1 });
       persistVideoTime(t);
@@ -1705,12 +1749,26 @@
     var video = qs("#videoPlayer");
     if (!state.selectedParticipant || !state.videoInfo) return;
 
-    var expectedSrc = videoStreamUrl(state.selectedParticipant);
-    if (!video.src || video.src.indexOf(expectedSrc) === -1) {
-      video.src = expectedSrc;
+    var parts = _ssParts();
+    if (parts) {
+      // Multi-video: play the part that owns the global playhead, seeking local.
+      var i = _ssPartForGlobal(parts, state.currentTimestamp);
+      state.videoActivePart = i;
+      state.videoOffset = parts[i].cumulativeStart;
+      var wantSrc = _ssStreamUrlForPart(state.selectedParticipant, i);
+      if (!video.src || video.src.indexOf("part=" + i) === -1) {
+        video.src = wantSrc;
+      }
+      video.currentTime = state.currentTimestamp - state.videoOffset;
+    } else {
+      state.videoActivePart = 0;
+      state.videoOffset = 0;
+      var expectedSrc = videoStreamUrl(state.selectedParticipant);
+      if (!video.src || video.src.indexOf(expectedSrc) === -1) {
+        video.src = expectedSrc;
+      }
+      video.currentTime = state.currentTimestamp;
     }
-
-    video.currentTime = state.currentTimestamp;
     video.muted = state.videoMuted;
 
     video.classList.add("active");
@@ -1733,7 +1791,9 @@
     video.pause();
     state.videoPlaying = false;
 
-    var ts = video.currentTime || state.currentTimestamp;
+    var ts = _ssParts()
+      ? video.currentTime + (state.videoOffset || 0)
+      : video.currentTime || state.currentTimestamp;
     state.currentTimestamp = ts;
 
     video.classList.remove("active");

@@ -301,6 +301,79 @@ def transcribe_video(
         return None
 
 
+def transcribe_timeline(
+    timeline: list[tuple[str, int, int]],
+    *,
+    model_name: str | None = None,
+    language: str | None = None,
+    context_keywords: list[str] | None = None,
+    on_segment: Callable[[float, "TranscriptSegment"], None] | None = None,
+    cancel_flag: Callable[[], bool] | None = None,
+) -> TranscriptResult | None:
+    """Transcribe an ordered set of source-video parts as one continuous timeline.
+
+    For a participant whose session spans several files (see
+    ``video.build_source_timeline``): each part is transcribed independently,
+    then its segment times are shifted by the part's cumulative start so the
+    merged result lands on the participant's global timeline (matching clip
+    artifact times). Returns ``None`` if any part fails. A single-element
+    timeline is just a normal transcription at offset 0.
+
+    ``on_segment``/``cancel_flag`` are forwarded to each part's transcription so
+    live progress streaming and cancellation work for multi-part jobs; the
+    reported end time and segment times are shifted to the global timeline.
+    """
+    merged: list[TranscriptSegment] = []
+    out_language = ""
+    out_model = ""
+    for path, _duration, cumulative in timeline:
+        part_on_segment: Callable[[float, "TranscriptSegment"], None] | None = None
+        if on_segment is not None:
+            inner = on_segment
+
+            def part_on_segment(  # noqa: E731 - small per-part shifter
+                end_time: float,
+                segment: "TranscriptSegment",
+                _cum: int = cumulative,
+                _cb: Callable[[float, "TranscriptSegment"], None] = inner,
+            ) -> None:
+                _cb(
+                    end_time + _cum,
+                    {
+                        "start": segment["start"] + _cum,
+                        "end": segment["end"] + _cum,
+                        "text": segment["text"],
+                    },
+                )
+
+        result = transcribe_video(
+            path,
+            model_name=model_name,
+            language=language,
+            context_keywords=context_keywords,
+            on_segment=part_on_segment,
+            cancel_flag=cancel_flag,
+        )
+        if result is None:
+            return None
+        for seg in result["segments"]:
+            merged.append(
+                {
+                    "start": seg["start"] + cumulative,
+                    "end": seg["end"] + cumulative,
+                    "text": seg["text"],
+                }
+            )
+        out_language = out_language or result["language"]
+        out_model = out_model or result["model"]
+    return {
+        "segments": merged,
+        "language": out_language,
+        "source_file": " + ".join(path for path, _d, _c in timeline),
+        "model": out_model,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Transcripts manifest (source-video transcripts + corrections dictionary)
 # ---------------------------------------------------------------------------
@@ -713,21 +786,23 @@ class _TranscriptionCancelled(Exception):
 
 def create_transcript_task(
     participant: str,
-    video_path: str,
+    video_paths: list[str],
     *,
     model: str | None = None,
     language: str | None = None,
 ) -> dict[str, Any]:
     """Create a new transcription task dict ready to enqueue.
 
-    *model* and *language* are optional per-participant overrides; when None,
-    the worker falls back to ``config.TRANSCRIBE_MODEL`` and whisper
-    auto-detect respectively.
+    *video_paths* is the participant's ordered source video(s) — one entry for a
+    normal participant, several for a multi-video participant whose session spans
+    files (transcribed as one continuous timeline). *model* and *language* are
+    optional per-participant overrides; when None, the worker falls back to
+    ``config.TRANSCRIBE_MODEL`` and whisper auto-detect respectively.
     """
     return {
         "id": f"tr_{uuid.uuid4().hex[:8]}",
         "participant": participant,
-        "video_path": video_path,
+        "video_paths": video_paths,
         "model": model,
         "language": language,
         "status": TASK_STATUS_QUEUED,
@@ -855,14 +930,15 @@ class TranscriptWorker:
         """Run a single transcription task."""
         import video as video_mod
 
-        video_path = task["video_path"]
+        video_paths = task["video_paths"]
+        # Multi-video participants form one continuous timeline; transcribe each
+        # part and merge with global-shifted times. Single video → fast path,
+        # no extra duration probe beyond the audio guard below.
+        timeline = video_mod.timeline_or_none(video_paths)
 
-        # Probe video duration for progress estimation
-        duration = 0.0
-        props = video_mod.probe_video_properties(video_path)
-        if props:
-            duration = props.get("duration", 0.0)
-
+        # Probe the first part for the audio guard; derive the progress
+        # denominator from the whole timeline for multi-video.
+        props = video_mod.probe_video_properties(video_paths[0])
         if props is not None and not props.get("audio_codec"):
             with self._lock:
                 task["status"] = TASK_STATUS_FAILED
@@ -872,6 +948,11 @@ class TranscriptWorker:
                 task["partial_segments"] = []
                 task["completed_at"] = datetime.now(timezone.utc).isoformat()
             return
+
+        if timeline is not None:
+            duration = float(timeline[-1][1] + timeline[-1][2])
+        else:
+            duration = float(props.get("duration", 0.0)) if props else 0.0
 
         # Load corrections for context keywords
         manifest = load_transcripts_manifest()
@@ -889,14 +970,24 @@ class TranscriptWorker:
                 task["partial_segments"].append(segment)
 
         try:
-            result = transcribe_video(
-                video_path,
-                model_name=task.get("model"),
-                language=task.get("language"),
-                context_keywords=context_kw,
-                on_segment=_on_seg,
-                cancel_flag=lambda: bool(task.get("_cancelled")),
-            )
+            if timeline is not None:
+                result = transcribe_timeline(
+                    timeline,
+                    model_name=task.get("model"),
+                    language=task.get("language"),
+                    context_keywords=context_kw,
+                    on_segment=_on_seg,
+                    cancel_flag=lambda: bool(task.get("_cancelled")),
+                )
+            else:
+                result = transcribe_video(
+                    video_paths[0],
+                    model_name=task.get("model"),
+                    language=task.get("language"),
+                    context_keywords=context_kw,
+                    on_segment=_on_seg,
+                    cancel_flag=lambda: bool(task.get("_cancelled")),
+                )
             if result is None:
                 with self._lock:
                     task["status"] = TASK_STATUS_FAILED

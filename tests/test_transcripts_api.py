@@ -27,7 +27,7 @@ def tr_client(tmp_path, monkeypatch):
     transcripts_server._participants = [
         {
             "id": "P01",
-            "video_path": str(tmp_path / "study_P01.mp4"),
+            "video_paths": [str(tmp_path / "study_P01.mp4")],
             "has_video": False,
         }
     ]
@@ -61,8 +61,12 @@ def test_participants_includes_video_version(tr_client, tmp_path):
     video_file = tmp_path / "study_P09.mp4"
     video_file.write_bytes(b"\x00data")
     transcripts_server._participants = [
-        {"id": "P09", "video_path": str(video_file), "has_video": True},
-        {"id": "P10", "video_path": str(tmp_path / "missing.mp4"), "has_video": False},
+        {"id": "P09", "video_paths": [str(video_file)], "has_video": True},
+        {
+            "id": "P10",
+            "video_paths": [str(tmp_path / "missing.mp4")],
+            "has_video": False,
+        },
     ]
     resp = tr_client.get("/transcripts/api/participants")
     assert resp.status_code == 200
@@ -71,10 +75,24 @@ def test_participants_includes_video_version(tr_client, tmp_path):
     assert by_id["P10"]["video_version"] is None
 
 
+def test_participants_video_version_combines_all_parts(tr_client, tmp_path):
+    """Cache-bust ?v= must change when ANY part (not just the first) is replaced."""
+    a = tmp_path / "study_P11-1.mp4"
+    b = tmp_path / "study_P11-2.mp4"
+    a.write_bytes(b"\x00a")
+    b.write_bytes(b"\x00b")
+    transcripts_server._participants = [
+        {"id": "P11", "video_paths": [str(a), str(b)], "has_video": True},
+    ]
+    resp = tr_client.get("/transcripts/api/participants")
+    p = resp.get_json()["participants"][0]
+    assert p["video_version"] == a.stat().st_mtime_ns + b.stat().st_mtime_ns
+
+
 def test_participants_stale_artifact_detection(tr_client, monkeypatch):
     transcripts_server._participants = [
-        {"id": "P01", "video_path": "study_P01.mp4", "has_video": True},
-        {"id": "P02", "video_path": "study_P02.mp4", "has_video": True},
+        {"id": "P01", "video_paths": ["study_P01.mp4"], "has_video": True},
+        {"id": "P02", "video_paths": ["study_P02.mp4"], "has_video": True},
     ]
     transcripts_server._manifest = {
         "source_transcripts": {
@@ -155,7 +173,7 @@ def test_transcribe_applies_per_participant_overrides(tr_client, monkeypatch):
             captured.append(task)
 
     transcripts_server._participants = [
-        {"id": "P01", "video_path": "/tmp/P01.mp4", "has_video": True}
+        {"id": "P01", "video_paths": ["/tmp/P01.mp4"], "has_video": True}
     ]
     transcripts_server._worker = cast("transcripts.TranscriptWorker", _StubWorker())
 
@@ -185,7 +203,7 @@ def test_transcribe_without_overrides_defaults_to_none(tr_client):
             captured.append(task)
 
     transcripts_server._participants = [
-        {"id": "P01", "video_path": "/tmp/P01.mp4", "has_video": True}
+        {"id": "P01", "video_paths": ["/tmp/P01.mp4"], "has_video": True}
     ]
     transcripts_server._worker = cast("transcripts.TranscriptWorker", _StubWorker())
 
@@ -464,7 +482,7 @@ def test_embed_subtitle_happy_path(tr_client, tmp_path, monkeypatch):
     video_path = tmp_path / "study_P01.mp4"
     video_path.write_bytes(b"\x00")
     transcripts_server._participants = [
-        {"id": "P01", "video_path": str(video_path), "has_video": True}
+        {"id": "P01", "video_paths": [str(video_path)], "has_video": True}
     ]
     _seed_transcript("P01", str(video_path))
     monkeypatch.setattr(
@@ -499,7 +517,7 @@ def test_embed_subtitle_404_without_transcript(tr_client, tmp_path, monkeypatch)
     video_path = tmp_path / "study_P01.mp4"
     video_path.write_bytes(b"\x00")
     transcripts_server._participants = [
-        {"id": "P01", "video_path": str(video_path), "has_video": True}
+        {"id": "P01", "video_paths": [str(video_path)], "has_video": True}
     ]
     # No transcript seeded.
     monkeypatch.setattr(
@@ -519,7 +537,7 @@ def test_embed_subtitle_500_when_ffmpeg_fails(tr_client, tmp_path, monkeypatch):
     video_path = tmp_path / "study_P01.mp4"
     video_path.write_bytes(b"\x00")
     transcripts_server._participants = [
-        {"id": "P01", "video_path": str(video_path), "has_video": True}
+        {"id": "P01", "video_paths": [str(video_path)], "has_video": True}
     ]
     _seed_transcript("P01", str(video_path))
     monkeypatch.setattr(
@@ -541,8 +559,8 @@ def test_embed_all_subtitles_mixed_participants(tr_client, tmp_path, monkeypatch
     v1.write_bytes(b"\x00")
     v2.write_bytes(b"\x00")
     transcripts_server._participants = [
-        {"id": "P01", "video_path": str(v1), "has_video": True},
-        {"id": "P02", "video_path": str(v2), "has_video": True},
+        {"id": "P01", "video_paths": [str(v1)], "has_video": True},
+        {"id": "P02", "video_paths": [str(v2)], "has_video": True},
     ]
     _seed_transcript("P01", str(v1))
     # P02 has no transcript — should be skipped silently.
