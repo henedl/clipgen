@@ -1641,9 +1641,11 @@ class TestConsecutiveBuffer:
 
 
 def test_static_skip_uses_config():
-    """The static-frame-skip sites reference the config constant, not a 2.0 literal."""
+    """The static-frame-skip sites reference the config constant, not a 2.0
+    literal. scan_text/scan_numbers share the _is_static_skip helper; similarity
+    and scene apply the threshold inline."""
     src = Path(screenspace.__file__).read_text(encoding="utf-8")
-    assert src.count("config.SCREENSPACE_STATIC_FRAME_SKIP_THRESHOLD") >= 4
+    assert src.count("config.SCREENSPACE_STATIC_FRAME_SKIP_THRESHOLD") >= 3
     assert "< 2.0" not in src
 
 

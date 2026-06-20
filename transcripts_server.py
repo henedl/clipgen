@@ -1564,21 +1564,25 @@ def _init_transcripts_state(
         study_name = getattr(sheet_context, "study_name", "")
         overrides = spreadsheet.participant_filename_overrides(sheet_context)
 
-    if participant_list:
-        input_dir = utils.get_effective_input_dir()
-        for pid in participant_list:
-            paths = files.resolve_source_video_paths(
-                study_name, pid, overrides.get(pid), input_dir
-            )
-            _participants.append(
-                {
-                    "id": pid,
-                    "video_paths": [str(p) for p in paths],
-                    "has_video": paths[0].is_file(),
-                }
-            )
-    else:
-        _participants = utils.discover_participant_videos(study_name)
+    # Resolve every participant's source video(s) through one override-aware path
+    # so the discovery fallback honors spreadsheet Filename overrides too. Without
+    # an explicit participant_list, discover the ids from disk (overrides is empty
+    # when there is no sheet_context, so that case stays a plain scan).
+    pids = participant_list or [
+        entry["id"] for entry in utils.discover_participant_videos(study_name)
+    ]
+    input_dir = utils.get_effective_input_dir()
+    for pid in pids:
+        paths = files.resolve_source_video_paths(
+            study_name, pid, overrides.get(pid), input_dir
+        )
+        _participants.append(
+            {
+                "id": pid,
+                "video_paths": [str(p) for p in paths],
+                "has_video": paths[0].is_file(),
+            }
+        )
 
     _worker = transcripts.TranscriptWorker()
     _worker.on_task_complete = _on_task_complete

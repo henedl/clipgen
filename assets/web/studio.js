@@ -531,12 +531,27 @@
   // ---- Sheet sidebar ----
 
   var SIDEBAR_VIEW_KEY = "clipgen-studio-sidebar-open";
-  // VIEWS section: each entry overrides state.filters.severities. "all"
-  // clears the selection; the rest pin a literal allowlist of severities.
+  // VIEWS section: each entry overrides state.filters.severities. "all" clears
+  // the selection; "highlights"/"positive" derive their allowlists from
+  // CLIPGEN_CONFIG.severity by rank (negatives <= -2; positives >= 1) so a
+  // relabeled severity in config can't silently desync these views.
+  var _severityLabelsWhere = function (predicate) {
+    return CLIPGEN_CONFIG.severity
+      .filter(function (s) { return predicate(s.rank); })
+      .map(function (s) { return s.label; });
+  };
   var SIDEBAR_VIEWS = [
-    { id: "all",        label: "All" },
-    { id: "highlights", label: "Highlights", severities: ["Critical", "High", "Medium"] },
-    { id: "positive",   label: "Positive",   severities: ["Positive", "Very Positive"] },
+    { id: "all", label: "All" },
+    {
+      id: "highlights",
+      label: "Highlights",
+      severities: _severityLabelsWhere(function (r) { return r <= -2; }),
+    },
+    {
+      id: "positive",
+      label: "Positive",
+      severities: _severityLabelsWhere(function (r) { return r >= 1; }),
+    },
   ];
 
   function readPersistedSidebarOpen() {
@@ -805,6 +820,7 @@
     minIn.type = "number";
     minIn.id = "sidebarFnMin";
     minIn.placeholder = "Min";
+    minIn.autocomplete = "off";
     minIn.disabled = !state.activeFunction;
     if (state.filters.fnMin !== null) minIn.value = String(state.filters.fnMin);
 
@@ -812,6 +828,7 @@
     maxIn.type = "number";
     maxIn.id = "sidebarFnMax";
     maxIn.placeholder = "Max";
+    maxIn.autocomplete = "off";
     maxIn.disabled = !state.activeFunction;
     if (state.filters.fnMax !== null) maxIn.value = String(state.filters.fnMax);
 
@@ -1237,7 +1254,7 @@
       // Seed from the server's start time so a reattach shows accurate elapsed;
       // idempotent start() leaves a live build's own clock untouched.
       _reelEtaTracker.start(reel.started_at ? reel.started_at * 1000 : undefined);
-      _ensureStudioEtaTicker();
+      _studioEtaTicker.ensure();
       _paintReelElapsed();
     } else if (state._jobStatusReelWasInProgress) {
       // Transition busy → idle while we were polling: a build finished in
@@ -1277,7 +1294,7 @@
       // The "N / M cells" readout counts sheet cells only (intake spans aren't
       // cells); an intake-only run has no sheet count and shows elapsed alone.
       updateGenerateProgress(gen.done || 0, gen.total || 0);
-      _ensureStudioEtaTicker();
+      _studioEtaTicker.ensure();
     } else if (state._jobStatusGenerateWasInProgress) {
       setArtifactGenerating(false);
       qs("#cancelGenerateBtn").classList.add("hidden");
@@ -3625,7 +3642,9 @@
   var _reelEtaTracker = createEtaTracker();
   var _generateEtaTracker = createEtaTracker();
   var _buildEtaTracker = createEtaTracker();
-  var _studioEtaTicker = null;
+  var _studioEtaTicker = createIntervalTicker(_tickStudioEta, {
+    isActive: isAnyStudioJobRunning,
+  });
   var _genLastDone = 0;
   var _genLastTotal = 0;
 
@@ -3672,25 +3691,11 @@
   }
 
   function _tickStudioEta() {
-    if (!isAnyStudioJobRunning()) {
-      _stopStudioEtaTicker();
-      return;
-    }
+    // The ticker's isActive guard (isAnyStudioJobRunning) self-stops it, so this
+    // only runs while a job is live.
     _paintReelElapsed();
     _paintGenerateProgress();
     _paintBuildElapsed();
-  }
-
-  function _ensureStudioEtaTicker() {
-    if (_studioEtaTicker) return;
-    _studioEtaTicker = setInterval(_tickStudioEta, 1000);
-  }
-
-  function _stopStudioEtaTicker() {
-    if (_studioEtaTicker) {
-      clearInterval(_studioEtaTicker);
-      _studioEtaTicker = null;
-    }
   }
 
   function updateGenerateProgress(done, total) {
@@ -3711,7 +3716,7 @@
     qs("#cancelGenerateBtn").classList.remove("hidden");
     _generateEtaTracker.reset();
     _generateEtaTracker.start();
-    _ensureStudioEtaTicker();
+    _studioEtaTicker.ensure();
 
     // Per-branch AbortControllers let onCancelGenerate stop the network
     // fetches immediately; the server-side cancel endpoints also trip the
@@ -3989,7 +3994,7 @@
     qs("#cancelReelBtn").classList.remove("hidden");
     _reelEtaTracker.reset();
     _reelEtaTracker.start();
-    _ensureStudioEtaTicker();
+    _studioEtaTicker.ensure();
     _paintReelElapsed();
 
     // Determine if we have intake items — use direct endpoint for mixed/intake reels
@@ -4517,7 +4522,7 @@
     qs("#buildStatusMessage").className = "build-status-msg";
     // Elapsed clock — idempotent start so a multi-message build keeps one clock.
     _buildEtaTracker.start();
-    _ensureStudioEtaTicker();
+    _studioEtaTicker.ensure();
     _paintBuildElapsed();
     qs("#buildStatusOpen").classList.add("hidden");
     qs("#buildStatusDismiss").classList.add("hidden");
@@ -5915,10 +5920,10 @@
     document.addEventListener("visibilitychange", function () {
       if (document.hidden) {
         stopJobStatusPoll();
-        _stopStudioEtaTicker();
+        _studioEtaTicker.stop();
       } else {
         pollJobStatus();
-        if (isAnyStudioJobRunning()) _ensureStudioEtaTicker();
+        if (isAnyStudioJobRunning()) _studioEtaTicker.ensure();
       }
     });
     window.addEventListener("resize", function () {

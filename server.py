@@ -493,7 +493,12 @@ def api_thumbnail(participant: str, start_seconds: str) -> FlaskResponse:
         video_path = Path(timeline[seg_index][0])
         cut_sec = int(local_sec)
 
-    cache_key = (str(video_path), cut_sec)
+    try:
+        mtime = video_path.stat().st_mtime
+    except OSError:
+        mtime = 0.0
+    # Include mtime so replacing a source file on disk invalidates stale thumbnails.
+    cache_key = (str(video_path), cut_sec, mtime)
     with _thumbnail_cache_lock:
         cached = _thumbnail_cache.get(cache_key)
         if cached is not None:

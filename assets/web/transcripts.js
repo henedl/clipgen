@@ -775,7 +775,7 @@
     state.summaryText = "";
     _summaryEtaTracker.start();
     _updateAgentElapsed("summaryElapsed", _summaryEtaTracker);
-    _ensureTxEtaTicker();
+    _txEtaTicker.ensure();
   }
 
   function renderSummaryEmpty() {
@@ -964,7 +964,7 @@
     qs("#summaryContent").appendChild(p);
     _citationsEtaTracker.start();
     _updateAgentElapsed("citationsElapsed", _citationsEtaTracker);
-    _ensureTxEtaTicker();
+    _txEtaTicker.ensure();
   }
 
   // Hard cap on the citations poll. The previous 90 s value was shorter than
@@ -1244,7 +1244,7 @@
       cancel.classList.remove("hidden");
       _frictionEtaTracker.start();
       _updateAgentElapsed("frictionElapsed", _frictionEtaTracker);
-      _ensureTxEtaTicker();
+      _txEtaTicker.ensure();
       return;
     }
     _frictionEtaTracker.reset();
@@ -1859,7 +1859,9 @@
   var _summaryEtaTracker = createEtaTracker();
   var _citationsEtaTracker = createEtaTracker();
   var _frictionEtaTracker = createEtaTracker();
-  var _txEtaTicker = null;
+  var _txEtaTicker = createIntervalTicker(_tickTxEta, {
+    isActive: _anyTxEtaActive,
+  });
 
   // " \u00b7 0:42 \u00b7 ~1:20 left" suffix for a participant's running transcription, or
   // "" when not running. Each entry is keyed by the task's created_at so a re-run
@@ -1906,10 +1908,8 @@
   }
 
   function _tickTxEta() {
-    if (!_anyTxEtaActive()) {
-      _stopTxEtaTicker();
-      return;
-    }
+    // The ticker's isActive guard (_anyTxEtaActive) self-stops it; this body
+    // only runs while transcription or a thinking agent is active.
     // Drop trackers for participants with no running transcription so memory
     // stays bounded and a later re-run starts fresh.
     var runningPids = {};
@@ -1930,18 +1930,6 @@
     _updateAgentElapsed("summaryElapsed", _summaryEtaTracker);
     _updateAgentElapsed("citationsElapsed", _citationsEtaTracker);
     _updateAgentElapsed("frictionElapsed", _frictionEtaTracker);
-  }
-
-  function _ensureTxEtaTicker() {
-    if (_txEtaTicker) return;
-    _txEtaTicker = setInterval(_tickTxEta, 1000);
-  }
-
-  function _stopTxEtaTicker() {
-    if (_txEtaTicker) {
-      clearInterval(_txEtaTicker);
-      _txEtaTicker = null;
-    }
   }
 
   function _streamingIndicatorHtml(progress) {
@@ -4190,7 +4178,7 @@
     apiGet("api/transcribe/status").then(function (data) {
       if (!data.ok) return;
       state.tasks = data.tasks;
-      if (_anyTxEtaActive()) _ensureTxEtaTicker();
+      if (_anyTxEtaActive()) _txEtaTicker.ensure();
 
       // Re-render the status circle immediately so completed tasks reflect
       // before the async loadParticipants()/loadTranscript() chain resolves.
@@ -4589,11 +4577,11 @@
         _stopSummaryPoll();
         _stopCitationsPoll();
         _stopFrictionPoll();
-        _stopTxEtaTicker();
+        _txEtaTicker.stop();
       } else {
         pollTaskStatus();
         startXrefPolling();
-        if (_anyTxEtaActive()) _ensureTxEtaTicker();
+        if (_anyTxEtaActive()) _txEtaTicker.ensure();
         // Re-check summary + citations on tab refocus. Background-running
         // Ollama agents finish without notifying the frontend; if the citations
         // poll already gave up (or summary completed after we stopped polling)

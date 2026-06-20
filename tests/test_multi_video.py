@@ -522,6 +522,67 @@ def test_transcribe_timeline_none_on_failure(monkeypatch):
     assert transcripts.transcribe_timeline([("a.mp4", 10, 0)]) is None
 
 
+def test_transcribe_segments_multi_video_uses_global_timeline(
+    make_clip, monkeypatch, tmp_path
+):
+    """The CLI pipeline path transcribes a multi-video clip via the global
+    timeline (not per-file) and writes a transcript clipped to the segment window
+    on the global timeline, with the artifact stamped with global clip times."""
+    monkeypatch.setattr(config, "OUTPUT_DIR", str(tmp_path), raising=False)
+    clip = cast(ClipRecord, dict(make_clip()))
+    clip["cell_annotations"] = []
+    clip["participant"] = "P01"
+    clip["times"] = [("1:00", "1:30")]  # global 60-90s, straddles the 80s boundary
+    clip["severity"] = ""
+    clip["source_timeline"] = [("video1.mp4", 80, 0), ("video2.mp4", 120, 80)]
+
+    # Full transcript already on the participant's GLOBAL timeline.
+    full = {
+        "segments": [
+            {"start": 70.0, "end": 75.0, "text": "before boundary"},
+            {"start": 85.0, "end": 88.0, "text": "after boundary"},
+        ],
+        "language": "en",
+        "source_file": "video1.mp4 + video2.mp4",
+        "model": "base",
+    }
+    monkeypatch.setattr(transcripts, "transcribe_timeline", lambda timeline, **kw: full)
+    monkeypatch.setattr(
+        transcripts, "transcribe_video", lambda *a, **k: pytest.fail("used single path")
+    )
+    monkeypatch.setattr(
+        transcripts,
+        "load_transcripts_manifest",
+        lambda: {"source_transcripts": {}, "corrections": []},
+    )
+
+    written = {}
+
+    def fake_write(clipped, path):
+        written["segments"] = clipped["segments"]
+        return True
+
+    monkeypatch.setattr(transcripts, "write_transcript", fake_write)
+    monkeypatch.setattr(
+        files, "get_unique_filename", lambda name, **k: str(tmp_path / name)
+    )
+
+    artifacts: list[dict] = []
+    pipeline._transcribe_segments(
+        clip, "video1.mp4", [("clip_out.mp4", 0)], artifacts, {}, None
+    )
+
+    assert len(artifacts) == 1
+    art = artifacts[0]
+    assert art["type"] == "transcript"
+    assert art["start"] == 60.0 and art["end"] == 90.0  # global clip window
+    # Both global segments fall in [60, 90]; offset_to_zero rebases to clip start.
+    assert written["segments"] == [
+        {"start": 10.0, "end": 15.0, "text": "before boundary"},
+        {"start": 25.0, "end": 28.0, "text": "after boundary"},
+    ]
+
+
 # ---- Studio hover thumbnail maps into the right sub-video ----
 
 

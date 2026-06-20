@@ -311,6 +311,13 @@ def test_ss_parse_scene_ref_nonnumeric_timestamp_raises():
         cli._ss_parse_scene_ref("menu:soon")
 
 
+def test_ss_parse_scene_ref_threshold_out_of_range_raises():
+    with pytest.raises(ValueError, match="between 0 and 1"):
+        cli._ss_parse_scene_ref("menu:12.5:1.5")
+    with pytest.raises(ValueError, match="between 0 and 1"):
+        cli._ss_parse_scene_ref("menu:12.5:-0.1")
+
+
 # ---- Listing helpers ----
 
 

@@ -209,6 +209,43 @@ class _ConsecutiveBuffer:
         self._timestamps = []
 
 
+def _is_static_skip(
+    ts: float,
+    pixels: np.ndarray,
+    prev_gray: list[np.ndarray | None],
+    buf: _ConsecutiveBuffer,
+    results: list[dict[str, Any]],
+    on_result: Callable[[dict[str, Any]], None] | None,
+    on_progress: Callable[[float], None] | None,
+    start_seconds: float,
+    total_range: float,
+) -> bool:
+    """Decide whether *pixels* is a near-duplicate of the previous frame.
+
+    Returns True when the mean grayscale diff from the last processed frame is
+    below ``SCREENSPACE_STATIC_FRAME_SKIP_THRESHOLD`` -- the caller should then
+    ``return None`` from its per-frame callback. The content (and any active
+    match) is unchanged, so carry the consecutive-match run via ``buf.carry``
+    (emitting through *results*/*on_result*) and report progress rather than
+    breaking the run. Otherwise records *pixels* as the new baseline and returns
+    False so the caller runs its real analysis. Shared by scan_text/scan_numbers.
+    """
+    gray = cv2.cvtColor(pixels, cv2.COLOR_BGR2GRAY)
+    if prev_gray[0] is not None:
+        diff = float(np.mean(cv2.absdiff(prev_gray[0], gray)))
+        if diff < config.SCREENSPACE_STATIC_FRAME_SKIP_THRESHOLD:
+            emitted = buf.carry(ts)
+            if emitted is not None:
+                results.append(emitted)
+                if on_result:
+                    on_result(emitted)
+            if on_progress and total_range > 0:
+                on_progress((ts - start_seconds) / total_range)
+            return True
+    prev_gray[0] = gray
+    return False
+
+
 # ---------------------------------------------------------------------------
 # Analysis primitives
 # ---------------------------------------------------------------------------
@@ -1557,21 +1594,18 @@ def scan_text(
     def _cb(ts: float, pixels: np.ndarray) -> bool | None:
         if cancel_flag and cancel_flag():
             return False
-        gray = cv2.cvtColor(pixels, cv2.COLOR_BGR2GRAY)
-        if prev_gray[0] is not None:
-            diff = float(np.mean(cv2.absdiff(prev_gray[0], gray)))
-            if diff < config.SCREENSPACE_STATIC_FRAME_SKIP_THRESHOLD:
-                # Static frame: content (and any active match) is unchanged, so
-                # continue a require_consecutive run rather than break it.
-                emitted = buf.carry(ts)
-                if emitted is not None:
-                    results.append(emitted)
-                    if on_result:
-                        on_result(emitted)
-                if on_progress and total_range > 0:
-                    on_progress((ts - start_seconds) / total_range)
-                return None
-        prev_gray[0] = gray
+        if _is_static_skip(
+            ts,
+            pixels,
+            prev_gray,
+            buf,
+            results,
+            on_result,
+            on_progress,
+            start_seconds,
+            total_range,
+        ):
+            return None
         ocr_input = _preprocess_for_ocr(pixels) if ocr_preprocess else pixels
         ocr_results = reader.readtext(ocr_input, detail=1)
         matched_rd: dict[str, Any] | None = None
@@ -1719,21 +1753,18 @@ def scan_numbers(
     def _cb(ts: float, pixels: np.ndarray) -> bool | None:
         if cancel_flag and cancel_flag():
             return False
-        gray = cv2.cvtColor(pixels, cv2.COLOR_BGR2GRAY)
-        if prev_gray[0] is not None:
-            diff = float(np.mean(cv2.absdiff(prev_gray[0], gray)))
-            if diff < config.SCREENSPACE_STATIC_FRAME_SKIP_THRESHOLD:
-                # Static frame: content (and any active match) is unchanged, so
-                # continue a require_consecutive run rather than break it.
-                emitted = buf.carry(ts)
-                if emitted is not None:
-                    results.append(emitted)
-                    if on_result:
-                        on_result(emitted)
-                if on_progress and total_range > 0:
-                    on_progress((ts - start_seconds) / total_range)
-                return None
-        prev_gray[0] = gray
+        if _is_static_skip(
+            ts,
+            pixels,
+            prev_gray,
+            buf,
+            results,
+            on_result,
+            on_progress,
+            start_seconds,
+            total_range,
+        ):
+            return None
         ocr_input = _preprocess_for_ocr(pixels) if ocr_preprocess else pixels
         ocr_results = reader.readtext(ocr_input, **ocr_kwargs)
         matched_rd: dict[str, Any] | None = None

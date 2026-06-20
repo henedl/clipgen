@@ -288,7 +288,12 @@
   // Per-task elapsed/ETA trackers, keyed by task id. Screenspace progress is a
   // linear fraction of scanned duration, so the ETA extrapolation is meaningful.
   var _etaTrackers = {};
-  var _etaTicker = null;
+  var _etaTicker = createIntervalTicker(tickEtas, {
+    gateHidden: true,
+    isActive: function () {
+      return state.tasks.some(taskIsActive);
+    },
+  });
   var _preloadedFrames = {};
   // Per-participant source-video mtime_ns, sourced from /api/participants and
   // /api/video/info. Used as a ?v= cache-bust suffix on frame and stream URLs
@@ -7947,19 +7952,9 @@
   }
 
   function ensureEtaTicker() {
-    var hasActive = state.tasks.some(taskIsActive);
-    if (hasActive && !document.hidden) {
-      if (!_etaTicker) _etaTicker = setInterval(tickEtas, 1000);
-    } else {
-      stopEtaTicker();
-    }
-  }
-
-  function stopEtaTicker() {
-    if (_etaTicker) {
-      clearInterval(_etaTicker);
-      _etaTicker = null;
-    }
+    // Start only while a task is active and the tab is visible; otherwise stop.
+    if (state.tasks.some(taskIsActive) && !document.hidden) _etaTicker.ensure();
+    else _etaTicker.stop();
   }
 
   // ---- SSE (Server-Sent Events) with polling fallback ----
@@ -8080,7 +8075,7 @@
     if (document.hidden) {
       stopSSE();
       stopPolling();
-      stopEtaTicker();
+      _etaTicker.stop();
       return;
     }
     var hasActive = state.tasks.some(function (t) {
