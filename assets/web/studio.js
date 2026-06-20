@@ -239,6 +239,7 @@
         row: info.row,
         desc: info.desc,
         timestamp: info.timestamp,
+        severity: info.severity || "",
         segIdx: i,
         start: segments[i].startSeconds,
         end: segments[i].startSeconds + segments[i].duration,
@@ -1756,6 +1757,7 @@
       row: parseInt(td.getAttribute("data-row"), 10),
       desc: td.getAttribute("data-observation") || "",
       timestamp: td.textContent || "",
+      severity: td.getAttribute("data-severity") || "",
     };
   }
 
@@ -2138,6 +2140,7 @@
       var seg = segments[i];
       var card = el("div", "queue-card cell-drag-ghost-card");
       card.style.setProperty("--i", i);
+      if (info.severity) card.setAttribute("data-severity", info.severity);
 
       // Eager (non-lazy) load: the ghost is an off-DOM drag image that must
       // resolve immediately, so it can't defer behind loading="lazy".
@@ -2152,7 +2155,10 @@
       var meta = el("div", "queue-card-meta");
       var refText = info.participant + "." + info.row;
       if (n > 1) refText += " (" + (i + 1) + "/" + n + ")";
-      meta.appendChild(el("span", "queue-card-ref", refText));
+      var metaRow = el("div", "queue-card-meta-row");
+      metaRow.appendChild(el("span", "queue-card-ref", refText));
+      meta.appendChild(metaRow);
+      meta.appendChild(el("span", "queue-card-time", formatDuration(seg.start) + "–" + formatDuration(seg.end)));
       card.appendChild(meta);
 
       ghost.appendChild(card);
@@ -2401,6 +2407,7 @@
           row: reelItem.row,
           desc: reelItem.desc,
           timestamp: reelItem.timestamp,
+          severity: reelItem.severity,
           segIdx: reelItem.segIdx,
           start: reelItem.start,
           end: reelItem.end,
@@ -2820,6 +2827,7 @@
       card.setAttribute("data-participant", item.participant);
       card.setAttribute("data-row", isIntake ? "" : item.row);
       if (isIntake) card.setAttribute("data-source", item.source);
+      if (!isIntake && item.severity) card.setAttribute("data-severity", item.severity);
       card.setAttribute("data-seg-idx", segIdx);
       if (!artLocked) card.setAttribute("draggable", "true");
       (function (itm, isI, locked) {
@@ -2835,6 +2843,7 @@
             if (!isI) {
               data.row = itm.row;
               data.timestamp = itm.timestamp;
+              data.severity = itm.severity;
               data.segIdx = itm.segIdx;
               data.segTotal = itm.segTotal;
             } else {
@@ -2867,7 +2876,10 @@
         refText = item.participant + "." + item.row;
         if (segTotal > 1) refText += " (" + (segIdx + 1) + "/" + segTotal + ")";
       }
-      meta.appendChild(el("span", "queue-card-ref", refText));
+      var metaRow = el("div", "queue-card-meta-row");
+      metaRow.appendChild(el("span", "queue-card-ref", refText));
+      meta.appendChild(metaRow);
+      meta.appendChild(el("span", "queue-card-time", formatDuration(item.start) + "\u2013" + formatDuration(item.end)));
       card.appendChild(meta);
 
       var removeBtn = el("button", "queue-card-remove");
@@ -2935,6 +2947,7 @@
       card.setAttribute("data-participant", item.participant);
       card.setAttribute("data-row", isIntake ? "" : item.row);
       if (isIntake) card.setAttribute("data-source", item.source);
+      if (!isIntake && item.severity) card.setAttribute("data-severity", item.severity);
       card.setAttribute("data-seg-idx", segIdx);
       if (!reelLocked) card.setAttribute("draggable", "true");
 
@@ -2949,7 +2962,6 @@
       if (isIntake) thumb.appendChild(buildSourceBadge(item.source));
 
       var meta = el("div", "queue-card-meta");
-      meta.appendChild(el("span", "reel-card-order", String(i + 1)));
       var refText;
       if (isIntake) {
         refText = item.participant + " \u00b7 " + (item.event_type || item.desc || "intake");
@@ -2957,7 +2969,11 @@
         refText = item.participant + "." + item.row;
         if (segTotal > 1) refText += " (" + (segIdx + 1) + "/" + segTotal + ")";
       }
-      meta.appendChild(el("span", "queue-card-ref", refText));
+      var metaRow = el("div", "queue-card-meta-row");
+      metaRow.appendChild(el("span", "reel-card-order", String(i + 1)));
+      metaRow.appendChild(el("span", "queue-card-ref", refText));
+      meta.appendChild(metaRow);
+      meta.appendChild(el("span", "queue-card-time", formatDuration(item.start) + "\u2013" + formatDuration(item.end)));
       card.appendChild(meta);
 
       var removeBtn = el("button", "queue-card-remove");

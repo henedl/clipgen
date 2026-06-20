@@ -1542,8 +1542,9 @@ body.dragging #sheetMain {
 
 .queue-card-meta {
   display: flex;
-  align-items: center;
-  gap: var(--space-1);
+  flex-direction: column;
+  align-items: stretch;
+  gap: 2px;
   padding: var(--space-1) var(--space-2);
   font-size: var(--text-xs);
 }
@@ -2819,15 +2820,9 @@ html[data-theme="dark"] .log-panel {
   display: block;
 }
 
-/* Intake-area cards reuse the .queue-card shell but keep a richer, color-tinted
- * caption (participant + type [+ transcript snippet]). Scoped to
- * .intake-queue-card so intake-*sourced* artifact/reel cards (.queue-card-intake)
- * keep their single-line ref meta. */
-.intake-queue-card .queue-card-meta {
-  flex-direction: column;
-  align-items: stretch;
-  gap: 2px;
-}
+/* All queue cards stack a caption row over the source start–stop time line
+ * (.queue-card-meta is column by default); intake-area cards add the
+ * participant + type [+ transcript snippet] richness on top. */
 .queue-card-meta-row {
   display: flex;
   align-items: center;
@@ -2858,6 +2853,34 @@ html[data-theme="dark"] .log-panel {
   color: var(--fg-faint);
   white-space: nowrap;
 }
+
+/* Spreadsheet-sourced queue cards tint their caption (ref + time) by the row's
+ * severity, mirroring the .sev-pill mapping. There is no --severity-low token,
+ * so low folds into medium; na/unknown get no rule and stay default-muted. */
+.queue-card[data-severity="critical"]      .queue-card-ref,
+.queue-card[data-severity="critical"]      .queue-card-time { color: var(--severity-critical); }
+.queue-card[data-severity="high"]          .queue-card-ref,
+.queue-card[data-severity="high"]          .queue-card-time { color: var(--severity-high); }
+.queue-card[data-severity="medium"]        .queue-card-ref,
+.queue-card[data-severity="medium"]        .queue-card-time,
+.queue-card[data-severity="low"]           .queue-card-ref,
+.queue-card[data-severity="low"]           .queue-card-time { color: var(--severity-medium); }
+.queue-card[data-severity="positive"]      .queue-card-ref,
+.queue-card[data-severity="positive"]      .queue-card-time { color: var(--severity-positive); }
+.queue-card[data-severity="very-positive"] .queue-card-ref,
+.queue-card[data-severity="very-positive"] .queue-card-time { color: var(--severity-very-positive); }
+
+/* Light theme — darker greens for the positive buckets (mirrors .sev-pill);
+ * the dark-theme green tokens wash out on the light #ffffff card surface. */
+html[data-theme="light"] .queue-card[data-severity="positive"] .queue-card-ref,
+html[data-theme="light"] .queue-card[data-severity="positive"] .queue-card-time,
+.theme-light .queue-card[data-severity="positive"] .queue-card-ref,
+.theme-light .queue-card[data-severity="positive"] .queue-card-time { color: #16a34a; }
+html[data-theme="light"] .queue-card[data-severity="very-positive"] .queue-card-ref,
+html[data-theme="light"] .queue-card[data-severity="very-positive"] .queue-card-time,
+.theme-light .queue-card[data-severity="very-positive"] .queue-card-ref,
+.theme-light .queue-card[data-severity="very-positive"] .queue-card-time { color: #15803d; }
+
 .queue-card-text {
   font-size: var(--text-xs);
   color: var(--fg-muted);
