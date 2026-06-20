@@ -331,7 +331,7 @@
     } else if (task && task.status === "running") {
       cls = "status-indicator--working";
       var pct = Math.round((task.progress || 0) * 100);
-      taskLine = pid + ": transcribing\u2026 " + pct + "%";
+      taskLine = pid + ": transcribing\u2026 " + pct + "%" + _txEtaSuffix(pid, task);
     } else if (task && task.status === "queued") {
       cls = "status-indicator--working";
       taskLine = pid + ": queued";
@@ -738,17 +738,23 @@
 
   function renderSummaryGenerating() {
     var content = qs("#summaryContent");
-    content.innerHTML = '<p class="summary-generating">Generating summary\u2026</p>';
+    content.innerHTML =
+      '<p class="summary-generating">Generating summary\u2026' +
+      '<span class="agent-elapsed" id="summaryElapsed"></span></p>';
     qs("#summaryEmpty").classList.add("hidden");
     qs("#summaryBody").classList.remove("hidden");
     qs("#summaryActions").classList.add("hidden");
     state.summaryEditing = false;
     state.summaryText = "";
+    _summaryEtaTracker.start();
+    _updateAgentElapsed("summaryElapsed", _summaryEtaTracker);
+    _ensureTxEtaTicker();
   }
 
   function renderSummaryEmpty() {
     _stopSummaryPoll();
     _stopCitationsPoll();
+    _summaryEtaTracker.reset();
     qs("#summaryContent").innerHTML = "";
     qs("#summaryBody").classList.add("hidden");
     qs("#summaryActions").classList.add("hidden");
@@ -760,6 +766,7 @@
   }
 
   function renderSummary(text) {
+    _summaryEtaTracker.reset();
     state.summaryText = text;
     state.summaryEditing = false;
     var content = qs("#summaryContent");
@@ -923,7 +930,14 @@
     var p = document.createElement("p");
     p.className = "citations-status";
     p.textContent = "Finding sources\u2026";
+    var sp = document.createElement("span");
+    sp.className = "agent-elapsed";
+    sp.id = "citationsElapsed";
+    p.appendChild(sp);
     qs("#summaryContent").appendChild(p);
+    _citationsEtaTracker.start();
+    _updateAgentElapsed("citationsElapsed", _citationsEtaTracker);
+    _ensureTxEtaTicker();
   }
 
   // Hard cap on the citations poll. The previous 90 s value was shorter than
@@ -972,6 +986,7 @@
   }
 
   function _stopCitationsPoll() {
+    _citationsEtaTracker.reset();
     if (_citationsPollTimer) {
       clearInterval(_citationsPollTimer);
       _citationsPollTimer = null;
@@ -1193,11 +1208,19 @@
     var cancel = qs("#frictionCancel");
     if (state.frictionGenerating) {
       statusEl.textContent = "Analyzing friction…";
+      var sp = document.createElement("span");
+      sp.className = "agent-elapsed";
+      sp.id = "frictionElapsed";
+      statusEl.appendChild(sp);
       statusEl.classList.remove("friction-status--stale");
       rerun.classList.add("hidden");
       cancel.classList.remove("hidden");
+      _frictionEtaTracker.start();
+      _updateAgentElapsed("frictionElapsed", _frictionEtaTracker);
+      _ensureTxEtaTicker();
       return;
     }
+    _frictionEtaTracker.reset();
     cancel.classList.add("hidden");
     rerun.classList.remove("hidden");
     rerun.textContent = state.frictionData ? "Re-run friction" : "Run friction analysis";
@@ -1801,10 +1824,103 @@
     return html;
   }
 
+  // ---- Elapsed / ETA tracking ----
+  // Transcription progress is a linear fraction of media duration, so its ETA
+  // extrapolation is meaningful (per-participant trackers). The thinking agents
+  // expose no progress fraction, so they show elapsed only (single trackers).
+  var _txEtaTrackers = {};
+  var _summaryEtaTracker = createEtaTracker();
+  var _citationsEtaTracker = createEtaTracker();
+  var _frictionEtaTracker = createEtaTracker();
+  var _txEtaTicker = null;
+
+  // " \u00b7 0:42 \u00b7 ~1:20 left" suffix for a participant's running transcription, or
+  // "" when not running. Each entry is keyed by the task's created_at so a re-run
+  // of the same participant seeds a fresh tracker from the new task rather than
+  // continuing the prior run's elapsed (created_at includes any queue wait, so
+  // elapsed may slightly overstate). Stale entries are pruned in _tickTxEta.
+  function _txEtaSuffix(pid, task) {
+    if (!pid || !task || task.status !== "running") return "";
+    var entry = _txEtaTrackers[pid];
+    if (!entry || entry.createdAt !== task.created_at) {
+      var t = createEtaTracker();
+      var seed = task.created_at ? Date.parse(task.created_at) : NaN;
+      t.start(isNaN(seed) ? undefined : seed);
+      entry = { tracker: t, createdAt: task.created_at };
+      _txEtaTrackers[pid] = entry;
+    }
+    var e = entry.tracker.update(task.progress);
+    var s = " \u00b7 " + formatDuration(e.elapsedSec);
+    var eta = formatEtaLabel(e.remainingSec);
+    if (eta) s += " \u00b7 " + eta;
+    return s;
+  }
+
+  function _streamingTextStr(progress) {
+    var pid = state.streamingParticipant || state.selectedParticipant;
+    var task = _taskForSelectedParticipant();
+    return "Transcribing\u2026 " + Math.round(progress * 100) + "%" + _txEtaSuffix(pid, task);
+  }
+
+  // Paint a thinking-agent's elapsed clock (elapsed only \u2014 no progress signal).
+  function _updateAgentElapsed(spanId, tracker) {
+    var sp = document.getElementById(spanId);
+    if (!sp) return;
+    var e = tracker.update();
+    sp.textContent = formatDuration(e.elapsedSec);
+  }
+
+  function _anyTxEtaActive() {
+    if (_anyAgentActive()) return true;
+    for (var i = 0; i < state.tasks.length; i++) {
+      if (state.tasks[i].status === "running") return true;
+    }
+    return false;
+  }
+
+  function _tickTxEta() {
+    if (!_anyTxEtaActive()) {
+      _stopTxEtaTicker();
+      return;
+    }
+    // Drop trackers for participants with no running transcription so memory
+    // stays bounded and a later re-run starts fresh.
+    var runningPids = {};
+    for (var r = 0; r < state.tasks.length; r++) {
+      if (state.tasks[r].status === "running") runningPids[state.tasks[r].participant] = true;
+    }
+    Object.keys(_txEtaTrackers).forEach(function (p) {
+      if (!runningPids[p]) delete _txEtaTrackers[p];
+    });
+    // Transcription: status-indicator tooltip + the streaming "Transcribing\u2026" line.
+    updateStatusIndicator();
+    var txt = document.querySelector("#segmentList .streaming-text");
+    if (txt) {
+      var task = _taskForSelectedParticipant();
+      if (task && task.status === "running") txt.textContent = _streamingTextStr(task.progress || 0);
+    }
+    // Thinking agents: elapsed-only clocks (spans present only while generating).
+    _updateAgentElapsed("summaryElapsed", _summaryEtaTracker);
+    _updateAgentElapsed("citationsElapsed", _citationsEtaTracker);
+    _updateAgentElapsed("frictionElapsed", _frictionEtaTracker);
+  }
+
+  function _ensureTxEtaTicker() {
+    if (_txEtaTicker) return;
+    _txEtaTicker = setInterval(_tickTxEta, 1000);
+  }
+
+  function _stopTxEtaTicker() {
+    if (_txEtaTicker) {
+      clearInterval(_txEtaTicker);
+      _txEtaTicker = null;
+    }
+  }
+
   function _streamingIndicatorHtml(progress) {
     return '<div class="streaming-indicator">' +
       '<span class="streaming-dot"></span>' +
-      'Transcribing\u2026 ' + Math.round(progress * 100) + '%' +
+      '<span class="streaming-text">' + _streamingTextStr(progress) + '</span>' +
       '</div>';
   }
 
@@ -3972,6 +4088,7 @@
     apiGet("api/transcribe/status").then(function (data) {
       if (!data.ok) return;
       state.tasks = data.tasks;
+      if (_anyTxEtaActive()) _ensureTxEtaTicker();
 
       // Re-render the status circle immediately so completed tasks reflect
       // before the async loadParticipants()/loadTranscript() chain resolves.
@@ -4370,9 +4487,11 @@
         _stopSummaryPoll();
         _stopCitationsPoll();
         _stopFrictionPoll();
+        _stopTxEtaTicker();
       } else {
         pollTaskStatus();
         startXrefPolling();
+        if (_anyTxEtaActive()) _ensureTxEtaTicker();
         // Re-check summary + citations on tab refocus. Background-running
         // Ollama agents finish without notifying the frontend; if the citations
         // poll already gave up (or summary completed after we stopped polling)

@@ -1278,6 +1278,18 @@ body {
   50% { opacity: 1; }
 }
 
+/* Live elapsed/ETA text keeps a stable width as the digits change. */
+.streaming-text {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Elapsed clock appended to a thinking agent's "Generating…" status line. */
+.agent-elapsed {
+  margin-left: var(--space-1);
+  color: var(--fg-faint);
+  font-variant-numeric: tabular-nums;
+}
+
 .segment-timestamp {
   flex: 0 0 5rem;
   font-family: var(--font-mono);

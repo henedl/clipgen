@@ -2910,6 +2910,10 @@ def test_api_job_status_idle(client):
     assert "concat_progress" in data["reel"]
     assert "done" in data["generate"]
     assert "total" in data["generate"]
+    # started_at lets a reattaching client show accurate elapsed time.
+    assert "started_at" in data["reel"]
+    assert "started_at" in data["generate"]
+    assert "started_at" in data["intake"]
 
 
 def test_api_job_status_reflects_reel_progress(client, monkeypatch, tmp_path):
@@ -2948,6 +2952,8 @@ def test_api_job_status_reflects_reel_progress(client, monkeypatch, tmp_path):
         assert reel["concat_progress"] == 0.4
         assert reel["phase"] == "concat"
         assert reel["cancelling"] is False
+        # Stamped when the build began so a reattach can show elapsed time.
+        assert isinstance(reel["started_at"], (int, float))
     finally:
         proceed.set()
         resp.close()

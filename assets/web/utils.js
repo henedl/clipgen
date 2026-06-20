@@ -403,6 +403,70 @@ var formatDuration = function (sec) {
   return m + ":" + pad2(s);
 };
 
+// ---- Elapsed-time / ETA estimation for long-running operations ----
+
+// Linearly extrapolate remaining seconds from elapsed time and a 0..1 progress
+// fraction. Returns null when no honest estimate is possible (progress not inside
+// the open interval (0, 1), or no time elapsed yet) — callers render elapsed only.
+var estimateRemainingSec = function (elapsedSec, progress) {
+  if (progress == null || !isFinite(progress) || progress <= 0 || progress >= 1) return null;
+  if (!isFinite(elapsedSec) || elapsedSec <= 0) return null;
+  return (elapsedSec * (1 - progress)) / progress;
+};
+
+// Track elapsed time and a smoothed remaining-time estimate for one long-running
+// operation. Frontend-only; fed a 0..1 progress fraction on each update. For
+// indeterminate operations (no progress signal) callers omit progress and read
+// elapsedSec only — remainingSec stays null. Returns a plain object (not a class,
+// per project convention) closing over the start timestamp and an EMA of the raw
+// estimate to damp jitter.
+var createEtaTracker = function (opts) {
+  opts = opts || {};
+  var emaAlpha = opts.emaAlpha != null ? opts.emaAlpha : 0.3;
+  var minProgress = opts.minProgress != null ? opts.minProgress : 0.05;
+  var minElapsed = opts.minElapsed != null ? opts.minElapsed : 3;
+  var startMs = null;
+  var ema = null;
+  return {
+    // Idempotent: repeated calls keep the original start so elapsed never resets.
+    // Pass an explicit epoch (ms) to seed from a known start (e.g. reattach).
+    start: function (nowMs) {
+      if (startMs == null) startMs = nowMs != null ? nowMs : Date.now();
+    },
+    // Returns { elapsedSec, remainingSec } — remainingSec is null until the
+    // progress/elapsed gates open, then an EMA-smoothed, rounded estimate.
+    update: function (progress) {
+      if (startMs == null) startMs = Date.now();
+      var elapsedSec = (Date.now() - startMs) / 1000;
+      var raw = estimateRemainingSec(elapsedSec, progress);
+      var remainingSec = null;
+      if (raw != null && progress >= minProgress && elapsedSec >= minElapsed) {
+        // First real estimate seeds the EMA directly; later ones blend to damp jitter.
+        ema = ema == null ? raw : emaAlpha * raw + (1 - emaAlpha) * ema;
+        remainingSec = Math.round(ema);
+      }
+      return { elapsedSec: elapsedSec, remainingSec: remainingSec };
+    },
+    reset: function () {
+      startMs = null;
+      ema = null;
+    },
+  };
+};
+
+// Friendly "~1:20 left" label for a remaining-seconds estimate. Buckets the value
+// before formatting so the text doesn't twitch every tick. Returns "" when no
+// estimate is available.
+var formatEtaLabel = function (remainingSec) {
+  if (remainingSec == null || !isFinite(remainingSec) || remainingSec < 0) return "";
+  var bucketed;
+  if (remainingSec < 60) bucketed = Math.round(remainingSec / 5) * 5;
+  else if (remainingSec < 300) bucketed = Math.round(remainingSec / 10) * 10;
+  else bucketed = Math.round(remainingSec / 30) * 30;
+  if (bucketed <= 0) bucketed = 5;
+  return "~" + formatDuration(bucketed) + " left";
+};
+
 var artifactDurationSec = function (a) {
   var s = Number(a.start);
   var e = Number(a.end);
