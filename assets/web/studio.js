@@ -136,6 +136,75 @@
     return -1;
   }
 
+  // Intake (Screenspace event / Transcript mark) identity. A cluster's span
+  // (start/end) drifts during normal use — the 10s poll merges newly-detected
+  // events into an existing cluster, and the user can change the cluster
+  // threshold — so span can't anchor a queued item's identity. Match on the
+  // underlying event/mark ids instead: those are globally unique and stable, and
+  // an overlap test (share ≥1 id) survives boundary drift. When ids are missing
+  // on either side, fall back to exact span equality.
+  function intakeIds(item) {
+    if (!item) return [];
+    var raw =
+      item.source === "screenspace"
+        ? item.event_ids
+        : item.source === "transcript"
+          ? item.mark_ids
+          : null;
+    return raw ? raw.filter(Boolean) : [];
+  }
+
+  function intakeItemsOverlap(a, b) {
+    if (!a || !b) return false;
+    if (a.source !== b.source || a.participant !== b.participant) return false;
+    if (!isIntakeSource(a.source)) return false;
+    var aIds = intakeIds(a);
+    var bIds = intakeIds(b);
+    if (aIds.length && bIds.length) {
+      for (var i = 0; i < aIds.length; i++) {
+        for (var j = 0; j < bIds.length; j++) {
+          if (aIds[i] === bIds[j]) return true;
+        }
+      }
+      return false;
+    }
+    return a.start === b.start && a.end === b.end;
+  }
+
+  function findIntakeInQueue(queue, item) {
+    if (!item || !isIntakeSource(item.source)) return -1;
+    for (var i = 0; i < queue.length; i++) {
+      if (intakeItemsOverlap(queue[i], item)) return i;
+    }
+    return -1;
+  }
+
+  // Remove every queue entry the item overlaps — a drifted cluster can subsume
+  // two entries that were separate when added (mirrors removeAllCellEntries).
+  function removeIntakeFromQueue(queue, item) {
+    for (var i = queue.length - 1; i >= 0; i--) {
+      if (intakeItemsOverlap(queue[i], item)) queue.splice(i, 1);
+    }
+  }
+
+  // Idempotent add (used by "Add all" and drag-drop) vs. toggle (used by single
+  // card click) — same split as addToQueue vs. toggleArtifactCell for cells.
+  function intakeAddItem(queue, item, renderFn) {
+    var locked = queue === state.artifactQueue ? isArtifactQueueLocked() : isReelQueueLocked();
+    if (locked) return;
+    if (findIntakeInQueue(queue, item) >= 0) return;
+    queue.push(item);
+    renderFn();
+  }
+
+  function intakeToggleItem(queue, item, renderFn) {
+    var locked = queue === state.artifactQueue ? isArtifactQueueLocked() : isReelQueueLocked();
+    if (locked) return;
+    if (findIntakeInQueue(queue, item) >= 0) removeIntakeFromQueue(queue, item);
+    else queue.push(item);
+    renderFn();
+  }
+
   function hasSegmentInQueue(queue, participant, rowNum, segIdx) {
     var key = cellKey(participant, rowNum);
     for (var i = 0; i < queue.length; i++) {
@@ -1787,8 +1856,10 @@
     if (targetQueue === state.reelQueue && isReelQueueLocked()) return;
     var added = false;
     if (isIntakeSource(info.source)) {
-      targetQueue.push(info);
-      added = true;
+      if (findIntakeInQueue(targetQueue, info) < 0) {
+        targetQueue.push(info);
+        added = true;
+      }
     } else if (info.segIdx !== undefined) {
       if (!hasSegmentInQueue(targetQueue, info.participant, info.row, info.segIdx)) {
         targetQueue.push(info);
@@ -2321,6 +2392,7 @@
     qs("#artifactsCount").textContent = "(" + n + ")";
     list.innerHTML = "";
     saveQueues();
+    refreshIntakeCardStates();
 
     if (n === 0) {
       list.appendChild(
@@ -2450,6 +2522,7 @@
     qs("#reelCount").textContent = "(" + n + ")";
     list.innerHTML = "";
     saveQueues();
+    refreshIntakeCardStates();
 
     if (n === 0) {
       list.appendChild(
@@ -4475,8 +4548,8 @@
       onBarClick: function (idx, ev) {
         var cluster = filteredIntakeClusters()[idx];
         if (!cluster) return;
-        if (ev && ev.shiftKey) intakeAddToReel(cluster);
-        else intakeAddToArtifacts(cluster);
+        if (ev && ev.shiftKey) intakeToggleReel(cluster);
+        else intakeToggleArtifacts(cluster);
       },
     });
     _intakeDensityEl = dt;
@@ -4530,15 +4603,7 @@
       card.dataset.intakeIdx = idx;
       card.setAttribute("draggable", "true");
       card.addEventListener("dragstart", function (ev) {
-        ev.dataTransfer.setData("application/json", JSON.stringify({
-          participant: c.participant,
-          desc: c.event_type,
-          start: c.start,
-          end: c.end,
-          source: "screenspace",
-          event_type: c.event_type,
-          event_ids: c.events.map(function (e) { return e.id; }),
-        }));
+        ev.dataTransfer.setData("application/json", JSON.stringify(screenspaceClusterToItem(c)));
         ev.dataTransfer.effectAllowed = "copyMove";
         setCardDragImage(ev, this);
       });
@@ -4573,11 +4638,11 @@
 
       container.appendChild(card);
     });
+    refreshIntakeCardStates();
   }
 
-  function intakeAddToArtifacts(cluster) {
-    if (isArtifactQueueLocked()) return;
-    state.artifactQueue.push({
+  function screenspaceClusterToItem(cluster) {
+    return {
       participant: cluster.participant,
       start: cluster.start,
       end: cluster.end,
@@ -4585,8 +4650,15 @@
       source: "screenspace",
       event_type: cluster.event_type,
       event_ids: cluster.events.map(function (e) { return e.id; }),
-    });
-    renderArtifactQueue();
+    };
+  }
+
+  function intakeAddToArtifacts(cluster) {
+    intakeAddItem(state.artifactQueue, screenspaceClusterToItem(cluster), renderArtifactQueue);
+  }
+
+  function intakeToggleArtifacts(cluster) {
+    intakeToggleItem(state.artifactQueue, screenspaceClusterToItem(cluster), renderArtifactQueue);
   }
 
   function intakeDismissCluster(cluster) {
@@ -4597,17 +4669,40 @@
   }
 
   function intakeAddToReel(cluster) {
-    if (isReelQueueLocked()) return;
-    state.reelQueue.push({
-      participant: cluster.participant,
-      start: cluster.start,
-      end: cluster.end,
-      desc: cluster.event_type,
-      source: "screenspace",
-      event_type: cluster.event_type,
-      event_ids: cluster.events.map(function (e) { return e.id; }),
+    intakeAddItem(state.reelQueue, screenspaceClusterToItem(cluster), renderReelQueue);
+  }
+
+  function intakeToggleReel(cluster) {
+    intakeToggleItem(state.reelQueue, screenspaceClusterToItem(cluster), renderReelQueue);
+  }
+
+  // Mark intake cards whose cluster is in either queue, mirroring how
+  // updateCellClasses highlights queued spreadsheet cells. Driven by the render
+  // queue functions (so every mutation re-syncs) and the intake render functions
+  // (so the highlight survives the poll that rebuilds cards).
+  function refreshIntakeCardStates() {
+    var ssClusters = filteredIntakeClusters();
+    qsa("#intakeCards .intake-queue-card").forEach(function (card) {
+      var c = ssClusters[parseInt(card.dataset.intakeIdx, 10)];
+      if (!c) return;
+      var item = screenspaceClusterToItem(c);
+      card.classList.toggle(
+        "in-queue",
+        findIntakeInQueue(state.artifactQueue, item) >= 0 ||
+          findIntakeInQueue(state.reelQueue, item) >= 0,
+      );
     });
-    renderReelQueue();
+    var trClusters = filteredTranscriptIntakeClusters();
+    qsa("#trIntakeCards .tr-intake-queue-card").forEach(function (card) {
+      var c = trClusters[parseInt(card.dataset.trIntakeIdx, 10)];
+      if (!c) return;
+      var item = transcriptClusterToItem(c);
+      card.classList.toggle(
+        "in-queue",
+        findIntakeInQueue(state.artifactQueue, item) >= 0 ||
+          findIntakeInQueue(state.reelQueue, item) >= 0,
+      );
+    });
   }
 
   function filteredIntakeClusters() {
@@ -4644,8 +4739,8 @@
       var idx = parseInt(card.dataset.intakeIdx);
       var cluster = filteredIntakeClusters()[idx];
       if (!cluster) return;
-      if (e.shiftKey) intakeAddToReel(cluster);
-      else intakeAddToArtifacts(cluster);
+      if (e.shiftKey) intakeToggleReel(cluster);
+      else intakeToggleArtifacts(cluster);
     });
 
     // Right-click to dismiss
@@ -4875,14 +4970,7 @@
       card.dataset.trIntakeIdx = i;
       card.setAttribute("draggable", "true");
       card.addEventListener("dragstart", function (ev) {
-        ev.dataTransfer.setData("application/json", JSON.stringify({
-          participant: c.participant,
-          desc: c.category || "transcript",
-          start: c.start,
-          end: c.end,
-          source: "transcript",
-          mark_ids: c.marks.map(function (m) { return m.id; }),
-        }));
+        ev.dataTransfer.setData("application/json", JSON.stringify(transcriptClusterToItem(c)));
         ev.dataTransfer.effectAllowed = "copyMove";
         setCardDragImage(ev, this);
       });
@@ -4918,6 +5006,7 @@
 
       container.appendChild(card);
     });
+    refreshIntakeCardStates();
   }
 
   function buildTrIntakeCategoryPills() {
@@ -4983,38 +5072,39 @@
       onBarClick: function (idx, ev) {
         var cluster = filteredTranscriptIntakeClusters()[idx];
         if (!cluster) return;
-        if (ev && ev.shiftKey) trIntakeAddToReel(cluster);
-        else trIntakeAddToArtifacts(cluster);
+        if (ev && ev.shiftKey) trIntakeToggleReel(cluster);
+        else trIntakeToggleArtifacts(cluster);
       },
     });
     _trIntakeDensityEl = dt;
     host.appendChild(dt);
   }
 
-  function trIntakeAddToArtifacts(cluster) {
-    if (isArtifactQueueLocked()) return;
-    state.artifactQueue.push({
+  function transcriptClusterToItem(cluster) {
+    return {
       participant: cluster.participant,
       start: cluster.start,
       end: cluster.end,
       desc: cluster.category || "transcript",
       source: "transcript",
       mark_ids: cluster.marks.map(function (m) { return m.id; }),
-    });
-    renderArtifactQueue();
+    };
+  }
+
+  function trIntakeAddToArtifacts(cluster) {
+    intakeAddItem(state.artifactQueue, transcriptClusterToItem(cluster), renderArtifactQueue);
+  }
+
+  function trIntakeToggleArtifacts(cluster) {
+    intakeToggleItem(state.artifactQueue, transcriptClusterToItem(cluster), renderArtifactQueue);
   }
 
   function trIntakeAddToReel(cluster) {
-    if (isReelQueueLocked()) return;
-    state.reelQueue.push({
-      participant: cluster.participant,
-      start: cluster.start,
-      end: cluster.end,
-      desc: cluster.category || "transcript",
-      source: "transcript",
-      mark_ids: cluster.marks.map(function (m) { return m.id; }),
-    });
-    renderReelQueue();
+    intakeAddItem(state.reelQueue, transcriptClusterToItem(cluster), renderReelQueue);
+  }
+
+  function trIntakeToggleReel(cluster) {
+    intakeToggleItem(state.reelQueue, transcriptClusterToItem(cluster), renderReelQueue);
   }
 
   function buildTrIntakeParticipantPills() {
@@ -5067,8 +5157,8 @@
       var idx = parseInt(card.dataset.trIntakeIdx);
       var cluster = filteredTranscriptIntakeClusters()[idx];
       if (!cluster) return;
-      if (e.shiftKey) trIntakeAddToReel(cluster);
-      else trIntakeAddToArtifacts(cluster);
+      if (e.shiftKey) trIntakeToggleReel(cluster);
+      else trIntakeToggleArtifacts(cluster);
     });
 
     // Right-click: dismiss — remove marks
