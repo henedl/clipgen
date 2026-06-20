@@ -42,6 +42,7 @@ import queue
 import re
 import sys
 import threading
+import time
 import webbrowser
 from collections import OrderedDict
 from contextlib import contextmanager
@@ -130,20 +131,25 @@ _generated_output_lock = threading.Lock()
 # the Studio UI can re-attach (show progress + Cancel) after the user
 # navigates away to /screenspace/ or /transcripts/ mid-build and comes back.
 _job_state_lock = threading.Lock()
+# `started_at` is a wall-clock epoch (seconds) stamped when a build begins, so a
+# Studio reattach can show accurate elapsed time after a page reload.
 _reel_job_state: dict[str, Any] = {
     "total_clips": 0,
     "clips_done": 0,
     "concat_progress": 0.0,
     "phase": None,
     "endpoint": None,  # "reel" or "reel-direct"
+    "started_at": None,
 }
 _generate_job_state: dict[str, Any] = {
     "total": 0,
     "done": 0,
+    "started_at": None,
 }
 _intake_job_state: dict[str, Any] = {
     "total": 0,
     "done": 0,
+    "started_at": None,
 }
 
 
@@ -322,6 +328,7 @@ def _reset_reel_job_state(endpoint: str) -> None:
         _reel_job_state["concat_progress"] = 0.0
         _reel_job_state["phase"] = "starting"
         _reel_job_state["endpoint"] = endpoint
+        _reel_job_state["started_at"] = time.time()
 
 
 def _record_reel_event(event: dict[str, Any]) -> None:
@@ -356,6 +363,7 @@ def _reset_generate_job_state(total: int) -> None:
     with _job_state_lock:
         _generate_job_state["total"] = max(0, int(total))
         _generate_job_state["done"] = 0
+        _generate_job_state["started_at"] = time.time()
 
 
 def _increment_generate_done(n: int = 1) -> None:
@@ -369,6 +377,7 @@ def _reset_intake_job_state(total: int) -> None:
     with _job_state_lock:
         _intake_job_state["total"] = max(0, int(total))
         _intake_job_state["done"] = 0
+        _intake_job_state["started_at"] = time.time()
 
 
 def _increment_intake_done(n: int = 1) -> None:
