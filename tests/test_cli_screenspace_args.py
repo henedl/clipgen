@@ -157,7 +157,7 @@ def test_ss_build_params_color_presence():
         ss_color_mode="presence",
         ss_min_area=1.0,
     )
-    params = cli._ss_build_params(args, "color", region, "")
+    params = cli._ss_build_params(args, "color", region, lambda _ts: None)
     assert params["color_mode"] == "presence"
     assert params["min_coverage"] == pytest.approx(0.01)
 
@@ -165,7 +165,7 @@ def test_ss_build_params_color_presence():
 def test_ss_build_params_color_average_omits_mode():
     region = {"x": 0, "y": 0, "w": 100, "h": 100}
     args = _ss_args(ss_target_color="#FF0000", ss_tolerance="20,30,30")
-    params = cli._ss_build_params(args, "color", region, "")
+    params = cli._ss_build_params(args, "color", region, lambda _ts: None)
     assert "color_mode" not in params
     assert "min_coverage" not in params
 

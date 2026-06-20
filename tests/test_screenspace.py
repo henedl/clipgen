@@ -3303,7 +3303,7 @@ class TestFastScanDispatchIntervalMultiplier:
         task = {
             "id": "ss_presence",
             "type": "color",
-            "video_path": "/fake.mp4",
+            "video_paths": ["/fake.mp4"],
             "region_coords": {"x": 0, "y": 0, "w": 100, "h": 100},
             "parameters": {
                 "scan_mode": "fast",
