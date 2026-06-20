@@ -419,6 +419,25 @@ Note: Non-interactive mode (using -b, -l, -r, -C, -c, -p, -k, -S, -M, -R, or -T)
         help="HSV tolerance triple as comma-separated ints (color tool).",
     )
     screenspace_cli.add_argument(
+        "--ss-color-mode",
+        type=str,
+        choices=("average", "presence"),
+        default="average",
+        help=(
+            "Color tool match mode: 'average' (region average) or 'presence' "
+            "(target color appears anywhere in the region). Default: average."
+        ),
+    )
+    screenspace_cli.add_argument(
+        "--ss-min-area",
+        type=float,
+        metavar="PERCENT",
+        help=(
+            "Minimum matching-pixel area as a percent (0-100) for "
+            "--ss-color-mode presence. Default fires on any matching pixel."
+        ),
+    )
+    screenspace_cli.add_argument(
         "--ss-threshold",
         type=float,
         metavar="FLOAT",
@@ -1407,6 +1426,10 @@ def _ss_build_params(
             raise ValueError("color task requires --ss-tolerance H,S,V")
         params["target_color"] = _ss_hex_to_hsv(args.ss_target_color)
         params["tolerance"] = _ss_parse_tolerance(args.ss_tolerance)
+        if args.ss_color_mode == "presence":
+            params["color_mode"] = "presence"
+            if args.ss_min_area is not None:
+                params["min_coverage"] = args.ss_min_area / 100.0
 
     elif task_type == "change":
         if args.ss_threshold is None:

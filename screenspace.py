@@ -381,6 +381,49 @@ def color_matches(
     return matched, conf
 
 
+def color_present(
+    region_pixels: np.ndarray,
+    target_color: dict[str, float],
+    tolerance: dict[str, float],
+    min_coverage: float = 0.0,
+) -> tuple[bool, float]:
+    """Check whether the target color appears *anywhere* in the region.
+
+    Unlike :func:`color_matches` (which averages the whole region), this builds
+    a per-pixel HSV match mask and fires when the fraction of matching pixels
+    reaches ``min_coverage``. A small element of the target color in an
+    otherwise neutral region is detected here but averaged away by
+    :func:`color_matches`. Hue wraparound (red at the 0/180 boundary) is handled
+    the same way as :func:`color_matches`.
+
+    The region is scanned at full resolution (no ``INTER_AREA`` downscale) so
+    small patches survive; callers running in fast-scan mode must avoid the
+    ``max_region_dim`` downscale for this path.
+
+    Returns:
+        Tuple of (matches, coverage) where ``coverage`` is the 0.0–1.0 fraction
+        of pixels matching the target. With ``min_coverage <= 0`` a single
+        matching pixel fires; otherwise ``coverage >= min_coverage`` is required.
+    """
+    if region_pixels.size == 0:
+        return False, 0.0
+    hsv = cv2.cvtColor(region_pixels, cv2.COLOR_BGR2HSV)
+    h = hsv[..., 0].astype(np.float32)
+    s = hsv[..., 1].astype(np.float32)
+    v = hsv[..., 2].astype(np.float32)
+    hue_diff = np.abs(h - float(target_color["h"]))
+    hue_dist = np.minimum(hue_diff, 180.0 - hue_diff)
+    mask = (
+        (hue_dist <= tolerance["h"])
+        & (np.abs(s - float(target_color["s"])) <= tolerance["s"])
+        & (np.abs(v - float(target_color["v"])) <= tolerance["v"])
+    )
+    count = int(np.count_nonzero(mask))
+    coverage = count / mask.size if mask.size else 0.0
+    matched = count > 0 if min_coverage <= 0 else coverage >= min_coverage
+    return matched, float(coverage)
+
+
 def compute_frame_diff(
     region_a: np.ndarray,
     region_b: np.ndarray,
@@ -1208,12 +1251,19 @@ def scan_color(
     *,
     start_seconds: float = 0.0,
     end_seconds: float | None = None,
+    color_mode: str = "average",
+    min_coverage: float = 0.0,
     on_progress: Callable[[float], None] | None = None,
     cancel_flag: Callable[[], bool] | None = None,
     on_result: Callable[[dict[str, Any]], None] | None = None,
     fast_opts: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
-    """Scan video for frames where region color matches target.
+    """Scan video for frames where the region matches a target color.
+
+    With ``color_mode="average"`` (default) a frame matches when the region's
+    *average* color is within tolerance. With ``color_mode="presence"`` a frame
+    matches when the target color appears anywhere in the region (per-pixel),
+    covering at least ``min_coverage`` of it.
 
     Returns list of ``{start, end, duration}`` spans (consecutive matches
     merged).
@@ -1234,7 +1284,10 @@ def scan_color(
     def _cb(ts: float, pixels: np.ndarray) -> bool | None:
         if cancel_flag and cancel_flag():
             return False
-        matched, conf = color_matches(pixels, target_color, tolerance)
+        if color_mode == "presence":
+            matched, conf = color_present(pixels, target_color, tolerance, min_coverage)
+        else:
+            matched, conf = color_matches(pixels, target_color, tolerance)
         if matched:
             matches.append(ts)
             if on_result:
@@ -3328,7 +3381,12 @@ class ColorTool(AnalysisTool):
         pixels = extract_region(frame, region)
         target = params.get("target_color", {"h": 0, "s": 0, "v": 0})
         tol = params.get("tolerance", {"h": 10, "s": 50, "v": 50})
-        matched, conf = color_matches(pixels, target, tol)
+        if params.get("color_mode") == "presence":
+            matched, conf = color_present(
+                pixels, target, tol, params.get("min_coverage", 0.0)
+            )
+        else:
+            matched, conf = color_matches(pixels, target, tol)
         return matched, {"_confidence": conf}
 
     def scan(
@@ -3344,6 +3402,11 @@ class ColorTool(AnalysisTool):
         on_result,
         fast_opts,
     ):
+        color_mode = params.get("color_mode", "average")
+        # Presence scans must stay full-resolution: the fast-scan max_region_dim
+        # downscale uses INTER_AREA averaging, which erases small color patches.
+        if color_mode == "presence":
+            fast_opts = None
         return scan_color(
             video_path,
             region,
@@ -3352,6 +3415,8 @@ class ColorTool(AnalysisTool):
             interval_seconds=params.get("interval", 0),
             start_seconds=params.get("start_seconds", 0.0),
             end_seconds=params.get("end_seconds"),
+            color_mode=color_mode,
+            min_coverage=params.get("min_coverage", 0.0),
             on_progress=on_progress,
             cancel_flag=cancel_flag,
             on_result=on_result,

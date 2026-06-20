@@ -2368,6 +2368,63 @@ def test_calibrate_color_scores_pins(calib_client, monkeypatch):
     assert by_polarity["positive"]["score"] >= by_polarity["negative"]["score"]
 
 
+def test_calibrate_color_presence_scores_pins(calib_client, monkeypatch):
+    import numpy as np
+    import video
+
+    # Positive: gray frame with a small dark-red patch (presence fires).
+    # Negative: plain gray (no red present).
+    gray = np.full((100, 100, 3), 128, dtype=np.uint8)
+    spotted = gray.copy()
+    spotted[0:20, 0:20] = [0, 0, 139]  # BGR dark red, ~4% of the frame
+    monkeypatch.setattr(
+        video, "extract_frame_at_timestamp", lambda p, ts: spotted if ts < 1.5 else gray
+    )
+    _make_pin(calib_client, 1.0, "positive")  # spotted frame
+    _make_pin(calib_client, 2.0, "negative")  # plain gray
+
+    resp = calib_client.post(
+        "/screenspace/api/calibrate",
+        json={
+            "participant": "P01",
+            "tool": "color",
+            "region_ref": {"source": "full_frame"},
+            "parameters": {
+                "target_color": {"h": 0, "s": 255, "v": 139},
+                "tolerance": {"h": 10, "s": 60, "v": 60},
+                "color_mode": "presence",
+                "min_coverage": 0.01,
+            },
+        },
+    )
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["ok"] is True
+    by_polarity = {p["polarity"]: p for p in data["pins"]}
+    assert by_polarity["positive"]["passed"] is True
+    assert by_polarity["negative"]["passed"] is False
+    assert by_polarity["positive"]["score"] >= by_polarity["negative"]["score"]
+
+
+def test_coerce_color_controls_normalizes():
+    # presence + valid coverage is kept; average and out-of-set modes are dropped.
+    presence = {"color_mode": "presence", "min_coverage": 0.02}
+    screenspace_server._coerce_color_controls(presence)
+    assert presence == {"color_mode": "presence", "min_coverage": 0.02}
+
+    average = {"color_mode": "average", "min_coverage": 0.5}
+    screenspace_server._coerce_color_controls(average)
+    assert "color_mode" not in average and "min_coverage" not in average
+
+    bogus = {"color_mode": "weird"}
+    screenspace_server._coerce_color_controls(bogus)
+    assert bogus == {}
+
+    bad_coverage = {"color_mode": "presence", "min_coverage": 5}
+    with pytest.raises(ValueError):
+        screenspace_server._coerce_color_controls(bad_coverage)
+
+
 def test_calibrate_unknown_participant(calib_client):
     resp = calib_client.post(
         "/screenspace/api/calibrate",

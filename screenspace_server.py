@@ -1919,6 +1919,8 @@ def _coerce_task_params(
             )
         elif task_type in ("text", "numbers"):
             _coerce_ocr_controls(parameters)
+        elif task_type == "color":
+            _coerce_color_controls(parameters)
         elif task_type == "multitool":
             for i, step in enumerate(parameters.get("steps", [])):
                 step_context = f"Step {i}: "
@@ -1945,6 +1947,8 @@ def _coerce_task_params(
                     _coerce_template_controls(step)
                 if step.get("type") in ("text", "numbers"):
                     _coerce_ocr_controls(step, context=step_context)
+                if step.get("type") == "color":
+                    _coerce_color_controls(step, context=step_context)
                 _coerce_offset(step, context=step_context)
         if task_type in ("text", "numbers", "change", "flow"):
             _coerce_consecutive(parameters)
@@ -2540,6 +2544,37 @@ def _coerce_consecutive(params: dict[str, Any], *, context: str = "") -> None:
         params.pop("require_consecutive", None)
     else:
         params["require_consecutive"] = count
+
+
+def _coerce_color_controls(params: dict[str, Any], *, context: str = "") -> None:
+    """Validate the optional Color mode controls.
+
+    ``color_mode`` is clamped to {"average", "presence"} (default "average",
+    dropped to keep the manifest clean). ``min_coverage`` (presence-only minimum
+    matching-pixel fraction) is clamped to [0, 1]; dropped when not in presence
+    mode or when it resolves to 0 (the default).
+    """
+    mode = params.get("color_mode")
+    if mode not in ("average", "presence"):
+        params.pop("color_mode", None)
+        params.pop("min_coverage", None)
+        return
+    if mode == "average":
+        params.pop("color_mode", None)
+        params.pop("min_coverage", None)
+        return
+    params["color_mode"] = "presence"
+    raw = params.get("min_coverage")
+    if raw is None:
+        params.pop("min_coverage", None)
+        return
+    coverage = _coerce_float(raw, "min_coverage", required=True, context=context)
+    if coverage is None or coverage < 0 or coverage > 1:
+        raise ValueError(f"{context}min_coverage must be between 0 and 1")
+    if coverage == 0:
+        params.pop("min_coverage", None)
+    else:
+        params["min_coverage"] = coverage
 
 
 def _validate_scene_references(
