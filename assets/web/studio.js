@@ -2062,6 +2062,50 @@
   var _CELL_GHOST_OFFSET_X = 14;
   var _CELL_GHOST_OFFSET_Y = 10;
 
+  // Build the shared .queue-card-thumb (img + duration overlay) and append it
+  // to `card`. Returns the thumb element so callers can layer call-site badges
+  // on top. opts: { participant, start, duration, observe, nativeLazy,
+  //                 editItem, renderFn }
+  //   observe    true  -> lazy IntersectionObserver via ssObserveThumb
+  //              false -> eager img.src with the standard error fallback
+  //   nativeLazy eager-only; set img.loading="lazy" (default true; pass false
+  //              for the drag ghost, an off-DOM image that must load now)
+  //   editItem   when set, the duration overlay becomes a trim trigger for that
+  //              queue item (Artifact/Reel cards); renderFn re-renders its queue
+  //              after edits. Omit for read-only thumbs (drag ghost, intakes).
+  function buildQueueCardThumb(card, opts) {
+    var thumb = el("div", "queue-card-thumb");
+    var img = document.createElement("img");
+    img.alt = "";
+    img.draggable = false;
+    thumb.appendChild(img);
+    if (opts.observe) {
+      ssObserveThumb(card, img, thumb, opts.participant, opts.start);
+    } else {
+      img.src = "api/thumbnail/" + encodeURIComponent(opts.participant) + "/" + opts.start;
+      if (opts.nativeLazy !== false) img.loading = "lazy";
+      img.addEventListener("error", function () {
+        this.remove();
+        thumb.appendChild(el("span", "", "✕"));
+        card.classList.add("queue-card-error");
+      });
+    }
+    if (opts.editItem) {
+      appendDurationBadge(thumb, opts.editItem, opts.renderFn);
+    } else {
+      thumb.appendChild(el("span", "queue-card-duration", formatDuration(opts.duration)));
+    }
+    card.appendChild(thumb);
+    return thumb;
+  }
+
+  // Source-origin badge (Screenspace vs. Transcript) layered over an intake thumb.
+  function buildSourceBadge(source) {
+    var badge = el("span", "queue-card-source-badge");
+    badge.innerHTML = iconHTML(source === "transcript" ? "bars-3" : "squares-2x2");
+    return badge;
+  }
+
   // Build a fixed-position overlay holding one queue-style card per parsed
   // segment, matching the look of cards in the Artifact/Reel queues. Cards
   // stack down-right via the --i custom property (see studio.css). The
@@ -2075,24 +2119,15 @@
       var card = el("div", "queue-card cell-drag-ghost-card");
       card.style.setProperty("--i", i);
 
-      var thumb = el("div", "queue-card-thumb");
-      var img = document.createElement("img");
-      img.alt = "";
-      img.draggable = false;
-      img.src = "api/thumbnail/" + encodeURIComponent(info.participant) + "/" + seg.start;
-      thumb.appendChild(img);
-      // Mirror the queue-card error fallback (red X, queue-card-error class)
-      // so a missing video / invalid thumbnail looks the same here as it does
-      // once dropped into the Artifact or Reel queue.
-      (function (cardEl, thumbEl) {
-        img.addEventListener("error", function () {
-          this.remove();
-          thumbEl.appendChild(el("span", "", "✕"));
-          cardEl.classList.add("queue-card-error");
-        });
-      })(card, thumb);
-      thumb.appendChild(el("span", "queue-card-duration", formatDuration(seg.end - seg.start)));
-      card.appendChild(thumb);
+      // Eager (non-lazy) load: the ghost is an off-DOM drag image that must
+      // resolve immediately, so it can't defer behind loading="lazy".
+      buildQueueCardThumb(card, {
+        participant: info.participant,
+        start: seg.start,
+        duration: seg.end - seg.start,
+        observe: false,
+        nativeLazy: false,
+      });
 
       var meta = el("div", "queue-card-meta");
       var refText = info.participant + "." + info.row;
@@ -2794,35 +2829,15 @@
         }
       })(item, isIntake, artLocked);
 
-      var thumb = el("div", "queue-card-thumb");
-      var img = document.createElement("img");
-      img.alt = "";
-      img.draggable = false;
-      thumb.appendChild(img);
-      if (isIntake) {
-        ssObserveThumb(card, img, thumb, item.participant, item.start);
-      } else {
-        img.src = "api/thumbnail/" + encodeURIComponent(item.participant) + "/" + item.start;
-        img.loading = "lazy";
-        (function (cardEl, thumbEl) {
-          img.addEventListener("error", function () {
-            this.remove();
-            thumbEl.appendChild(el("span", "", "\u2715"));
-            cardEl.classList.add("queue-card-error");
-          });
-        })(card, thumb);
-      }
-      appendDurationBadge(thumb, item, renderArtifactQueue);
-      if (isIntake) {
-        var ssBadge = el("span", "queue-card-source-badge");
-        if (item.source === "transcript") {
-          ssBadge.innerHTML = iconHTML("bars-3");
-        } else {
-          ssBadge.innerHTML = iconHTML("squares-2x2");
-        }
-        thumb.appendChild(ssBadge);
-      }
-      card.appendChild(thumb);
+      var thumb = buildQueueCardThumb(card, {
+        participant: item.participant,
+        start: item.start,
+        duration: item.end - item.start,
+        observe: isIntake,
+        editItem: item,
+        renderFn: renderArtifactQueue,
+      });
+      if (isIntake) thumb.appendChild(buildSourceBadge(item.source));
 
       var meta = el("div", "queue-card-meta");
       var refText;
@@ -2903,35 +2918,15 @@
       card.setAttribute("data-seg-idx", segIdx);
       if (!reelLocked) card.setAttribute("draggable", "true");
 
-      var thumb = el("div", "queue-card-thumb");
-      var img = document.createElement("img");
-      img.alt = "";
-      img.draggable = false;
-      thumb.appendChild(img);
-      if (isIntake) {
-        ssObserveThumb(card, img, thumb, item.participant, item.start);
-      } else {
-        img.src = "api/thumbnail/" + encodeURIComponent(item.participant) + "/" + item.start;
-        img.loading = "lazy";
-        (function (cardEl, thumbEl) {
-          img.addEventListener("error", function () {
-            this.remove();
-            thumbEl.appendChild(el("span", "", "\u2715"));
-            cardEl.classList.add("queue-card-error");
-          });
-        })(card, thumb);
-      }
-      appendDurationBadge(thumb, item, renderReelQueue);
-      if (isIntake) {
-        var ssBadge = el("span", "queue-card-source-badge");
-        if (item.source === "transcript") {
-          ssBadge.innerHTML = iconHTML("bars-3");
-        } else {
-          ssBadge.innerHTML = iconHTML("squares-2x2");
-        }
-        thumb.appendChild(ssBadge);
-      }
-      card.appendChild(thumb);
+      var thumb = buildQueueCardThumb(card, {
+        participant: item.participant,
+        start: item.start,
+        duration: segDuration,
+        observe: isIntake,
+        editItem: item,
+        renderFn: renderReelQueue,
+      });
+      if (isIntake) thumb.appendChild(buildSourceBadge(item.source));
 
       var meta = el("div", "queue-card-meta");
       meta.appendChild(el("span", "reel-card-order", String(i + 1)));
@@ -4962,20 +4957,18 @@
       });
 
       // Lazy-loaded source-frame thumbnail (existing observer integration).
-      var thumb = el("div", "queue-card-thumb");
-      var img = document.createElement("img");
-      img.alt = "";
-      img.draggable = false;
-      thumb.appendChild(img);
-      ssObserveThumb(card, img, thumb, c.participant, c.start);
-      thumb.appendChild(el("span", "queue-card-duration", formatDuration(c.end - c.start)));
+      var thumb = buildQueueCardThumb(card, {
+        participant: c.participant,
+        start: c.start,
+        duration: c.end - c.start,
+        observe: true,
+      });
 
       // Cross-reference badges layered over the thumb.
       var xref = findOverlappingData(c.participant, c.start, c.end);
       var ssSelf = { icon: XREF_BADGES.screenspace.icon, color: XREF_BADGES.screenspace.color, title: c.event_type || "Screenspace" };
       var badgeStack = buildXrefBadges(xref, "screenspace", ssSelf);
       if (badgeStack) thumb.appendChild(badgeStack);
-      card.appendChild(thumb);
 
       var meta = el("div", "queue-card-meta");
       var row = el("div", "queue-card-meta-row");
@@ -5329,20 +5322,18 @@
       });
 
       // Lazy-loaded source-frame thumbnail
-      var thumb = el("div", "queue-card-thumb");
-      var img = document.createElement("img");
-      img.alt = "";
-      img.draggable = false;
-      thumb.appendChild(img);
-      ssObserveThumb(card, img, thumb, c.participant, c.start);
-      thumb.appendChild(el("span", "queue-card-duration", formatDuration(segDuration)));
+      var thumb = buildQueueCardThumb(card, {
+        participant: c.participant,
+        start: c.start,
+        duration: segDuration,
+        observe: true,
+      });
 
       // Cross-reference badges
       var xref = findOverlappingData(c.participant, c.start, c.end);
       var trSelf = { icon: XREF_BADGES.transcript.icon, color: XREF_BADGES.transcript.color, title: c.label || c.category || "Transcript" };
       var badgeStack = buildXrefBadges(xref, "transcript", trSelf);
       if (badgeStack) thumb.appendChild(badgeStack);
-      card.appendChild(thumb);
 
       var meta = el("div", "queue-card-meta");
       var row = el("div", "queue-card-meta-row");
