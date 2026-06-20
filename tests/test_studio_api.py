@@ -797,6 +797,142 @@ def test_api_reel_skips_existing_reel(client, monkeypatch, tmp_path):
     assert process_called == []
 
 
+def test_apply_time_overrides_single_and_multi_segment():
+    """Overrides replace a cell's whole time list; un-overridden clips untouched."""
+    import types
+
+    clips = [
+        {"participant": "P01", "cell": types.SimpleNamespace(row=5)},
+        {"participant": "P02", "cell": types.SimpleNamespace(row=3)},
+        {"participant": "P09", "cell": types.SimpleNamespace(row=1)},
+    ]
+    server._apply_time_overrides(
+        clips,
+        {"P01.5": [[10, 70]], "P02.3": [[5, 15], [100, 160]]},
+    )
+    assert clips[0]["times"] == [("0:10", "1:10")]
+    assert clips[1]["times"] == [("0:05", "0:15"), ("1:40", "2:40")]
+    assert "times" not in clips[2]
+
+
+def test_apply_time_overrides_forces_hours_across_hour_boundary():
+    """When either endpoint crosses an hour, both render H:MM:SS (no mixed pair)."""
+    import types
+
+    clips = [{"participant": "P01", "cell": types.SimpleNamespace(row=7)}]
+    server._apply_time_overrides(clips, {"P01.7": [[3590, 3660]]})
+    assert clips[0]["times"] == [("0:59:50", "1:01:00")]
+
+
+def test_apply_time_overrides_skips_invalid_and_empty():
+    """Zero/negative-length pairs are dropped; empty overrides are a no-op."""
+    import types
+
+    clips = [{"participant": "P01", "cell": types.SimpleNamespace(row=2)}]
+    server._apply_time_overrides(clips, {"P01.2": [[50, 50]]})
+    assert "times" not in clips[0]
+    server._apply_time_overrides(clips, {})
+    assert "times" not in clips[0]
+
+
+def test_api_generate_applies_time_overrides_and_forces_regen(
+    client, monkeypatch, tmp_path
+):
+    """An override replaces the clip times AND forces regeneration even when a
+    matching cached artifact exists (cache is keyed only by cell/format)."""
+    import types
+
+    monkeypatch.setattr(server, "_worksheet", object())
+    monkeypatch.setattr("config.OUTPUT_DIR", str(tmp_path))
+
+    # A cached clip that would normally be reused (titlecards match the request).
+    (tmp_path / "clip.mp4").write_bytes(b"video")
+    existing = [
+        {
+            "id": "a5c2s0",
+            "type": "clip",
+            "file": "clip.mp4",
+            "cellRow": 5,
+            "cellCol": 2,
+            "titlecards": False,
+            "titlecardDuration": 0,
+        }
+    ]
+    _set_artifacts(monkeypatch, list(existing))
+
+    cell = types.SimpleNamespace(row=5, col=2, value="1:00")
+    monkeypatch.setattr(
+        "spreadsheet.generate_list",
+        lambda ws, mode, *, ctx=None, cell_specs, skip_prompts: [
+            {"participant": "P01", "cell": cell}
+        ],
+    )
+    monkeypatch.setattr("spreadsheet.parse_cell_specifications", lambda t: [("P01", 5)])
+
+    captured = {}
+
+    def fake_process(clips, **kw):
+        captured["times"] = clips[0].get("times")
+        return (1, [{"id": "a5c2s0", "type": "clip", "file": "clip.mp4"}])
+
+    monkeypatch.setattr("pipeline.process_clips", fake_process)
+
+    resp = client.post(
+        "/studio/api/generate",
+        json={
+            "cells": ["P01.5"],
+            "format": "clip",
+            "overrides": {"P01.5": [[10, 70]]},
+        },
+    )
+    assert resp.status_code == 200
+    lines = [json.loads(line) for line in resp.data.decode().strip().split("\n")]
+    assert "skipped" not in lines[0]
+    assert captured["times"] == [("0:10", "1:10")]
+
+
+def test_api_reel_applies_time_overrides(client, monkeypatch, tmp_path):
+    """The pure-spreadsheet reel path honours edited in/out points."""
+    import types
+
+    monkeypatch.setattr(server, "_worksheet", object())
+    monkeypatch.setattr("config.OUTPUT_DIR", str(tmp_path))
+    monkeypatch.setattr(server, "_generated_reels", [])
+    monkeypatch.setattr(server, "_save_manifest_quiet", lambda: None)
+
+    cell = types.SimpleNamespace(row=5, col=2, value="1:00-1:30")
+    monkeypatch.setattr(
+        "spreadsheet.generate_list",
+        lambda ws, mode, *, ctx=None, reel_input, skip_prompts: [
+            {
+                "participant": "P01",
+                "cell": cell,
+                "desc": "t",
+                "category": "c",
+                "study": "study",
+                "severity": "",
+            }
+        ],
+    )
+    # Pass-through prepare_clip: the override already set clip["times"].
+    monkeypatch.setattr("files.prepare_clip", lambda clip: clip)
+
+    captured = {}
+
+    def fake_stream(clips, cancel_flag, **kwargs):
+        captured["times"] = clips[0].get("times")
+        yield json.dumps({"ok": True, "generated": 1, "reels": [{"id": "x"}]}) + "\n"
+
+    monkeypatch.setattr(server, "_stream_process_reel", fake_stream)
+
+    resp = client.post(
+        "/studio/api/reel",
+        json={"cells": ["P01.5"], "overrides": {"P01.5": [[10, 70]]}},
+    )
+    assert resp.status_code == 200
+    assert captured["times"] == [("0:10", "1:10")]
+
+
 def test_api_gallery_404_when_video_not_found(client, monkeypatch):
     monkeypatch.setattr(server, "_sheet_context", object())
     monkeypatch.setattr(server, "_resolve_source_video", lambda p: None)

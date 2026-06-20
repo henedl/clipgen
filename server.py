@@ -1125,6 +1125,50 @@ def _stream_process_reel(
         yield json.dumps(event) + "\n"
 
 
+def _apply_time_overrides(clips: list[Any], overrides: dict[str, Any]) -> None:
+    """Replace a clip's parsed timestamps with frontend-edited in/out points.
+
+    ``overrides`` maps a ``"participant.row"`` cell key to the complete,
+    segment-ordered list of ``[start_seconds, end_seconds]`` pairs currently
+    shown for that cell in the Studio queue (the user dragged/typed new in/out
+    points on the duration badge). Setting ``clip["times"]`` here makes
+    ``files.prepare_clip()`` take its pre-parsed fast path and skip the cell
+    re-parse, so the edited durations win over the spreadsheet values.
+    """
+    if not overrides:
+        return
+    for clip in clips:
+        key = clip["participant"] + "." + str(clip["cell"].row)
+        seg_times = overrides.get(key)
+        if not seg_times:
+            continue
+        new_times: list[tuple[str, str]] = []
+        for pair in seg_times:
+            try:
+                start_sec = float(pair[0])
+                end_sec = float(pair[1])
+            except (TypeError, ValueError, IndexError):
+                continue
+            if end_sec <= start_sec:
+                continue
+            # Force hours on both ends when either crosses the hour mark, so we
+            # never emit a mixed M:SS / H:MM:SS pair (which breaks downstream
+            # duration parsing — see AGENTS.md timestamp gotcha).
+            needs_hours = start_sec >= 3600 or end_sec >= 3600
+            new_times.append(
+                (
+                    utils.seconds_to_timestamp(
+                        int(round(start_sec)), force_hours=needs_hours
+                    ),
+                    utils.seconds_to_timestamp(
+                        int(round(end_sec)), force_hours=needs_hours
+                    ),
+                )
+            )
+        if new_times:
+            clip["times"] = new_times
+
+
 @studio_bp.route("/api/generate", methods=["POST"])
 def api_generate() -> FlaskResponse:
     if _worksheet is None:
@@ -1138,6 +1182,7 @@ def api_generate() -> FlaskResponse:
     data = request.get_json(silent=True) or {}
     cell_strings = data.get("cells", [])
     output_format = data.get("format", "clip")
+    overrides: dict[str, Any] = data.get("overrides") or {}
     titlecards_enabled, titlecard_duration_seconds = _parse_titlecard_request(data)
 
     if not cell_strings:
@@ -1167,6 +1212,7 @@ def api_generate() -> FlaskResponse:
             cell_specs=cell_specs,
             skip_prompts=True,
         )
+        _apply_time_overrides(clips, overrides)
     except Exception as e:
         _release_busy("generate")
         return jsonify({"ok": False, "error": str(e)}), 500
@@ -1197,12 +1243,20 @@ def api_generate() -> FlaskResponse:
             # matches the request; mismatched ones are discarded and regenerated
             # so toggling Titlecards on/off (or changing the duration) takes
             # effect on the next Generate.
+            # An overridden cell carries edited in/out points, but existing
+            # artifacts are keyed only by cell row/col/format — they'd be reused
+            # at the old duration. Treat them all as stale so the clip always
+            # regenerates with the new times.
+            cell_overridden = cell_str in overrides
             fresh: list[dict[str, Any]] = []
             stale: list[dict[str, Any]] = []
             for a in existing:
-                matches = output_format != "clip" or (
-                    bool(a.get("titlecards", False)) == req_cards
-                    and (not req_cards or a.get("titlecardDuration") == req_dur)
+                matches = not cell_overridden and (
+                    output_format != "clip"
+                    or (
+                        bool(a.get("titlecards", False)) == req_cards
+                        and (not req_cards or a.get("titlecardDuration") == req_dur)
+                    )
                 )
                 (fresh if matches else stale).append(a)
 
@@ -1426,6 +1480,7 @@ def api_reel() -> FlaskResponse:
     data = request.get_json(silent=True) or {}
     cell_strings = data.get("cells", [])
     highlights_duration = data.get("highlights_duration")
+    reel_overrides: dict[str, Any] = data.get("overrides") or {}
     titlecards_enabled, titlecard_duration_seconds = _parse_titlecard_request(data)
 
     if not cell_strings:
@@ -1461,6 +1516,7 @@ def api_reel() -> FlaskResponse:
                     reel_input=reel_input,
                     skip_prompts=True,
                 )
+                _apply_time_overrides(clips, reel_overrides)
 
                 if not clips:
                     yield (
