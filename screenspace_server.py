@@ -1266,86 +1266,19 @@ def _combined_region_lookup() -> dict[str, Any]:
     return regions
 
 
-_FULL_FRAME_REGION_NAME = "full_frame"
-_FULL_FRAME_REGION: dict[str, Any] = {
-    "x": 0.0,
-    "y": 0.0,
-    "w": 1.0,
-    "h": 1.0,
-    "source_width": 0,
-    "source_height": 0,
-}
-
-
 def _resolve_region_request(
     region_name: str,
     region_ref: Any,
 ) -> tuple[str, dict[str, Any]] | FlaskResponse:
-    """Resolve a task region request without flattening active/stashed duplicates."""
-    active_regions = _manifest.get("regions", {})
-    if not isinstance(active_regions, dict):
-        active_regions = {}
+    """Resolve a task region request without flattening active/stashed duplicates.
 
-    if region_ref is None:
-        if region_name == _FULL_FRAME_REGION_NAME:
-            return _FULL_FRAME_REGION_NAME, dict(_FULL_FRAME_REGION)
-        if region_name in active_regions:
-            return region_name, cast(dict[str, Any], active_regions[region_name])
-        for stash in _manifest.get("stashes", []):
-            stash_regions = stash.get("regions", {})
-            if isinstance(stash_regions, dict) and region_name in stash_regions:
-                return region_name, cast(dict[str, Any], stash_regions[region_name])
-        return jsonify({"ok": False, "error": f"Region '{region_name}' not found"}), 400
-
-    if not isinstance(region_ref, dict):
-        return jsonify({"ok": False, "error": "region_ref must be an object"}), 400
-
-    source = str(region_ref.get("source", "")).strip()
-
-    if source == "full_frame":
-        return _FULL_FRAME_REGION_NAME, dict(_FULL_FRAME_REGION)
-
-    name = str(region_ref.get("name", "")).strip()
-    if not name:
-        return jsonify({"ok": False, "error": "region_ref.name is required"}), 400
-
-    if source == "active":
-        if name not in active_regions:
-            return jsonify({"ok": False, "error": f"Region '{name}' not found"}), 400
-        return name, cast(dict[str, Any], active_regions[name])
-
-    if source == "stash":
-        stash_id = str(region_ref.get("stash_id", "")).strip()
-        if not stash_id:
-            return jsonify(
-                {"ok": False, "error": "region_ref.stash_id is required"}
-            ), 400
-        for stash in _manifest.get("stashes", []):
-            if stash.get("id") != stash_id:
-                continue
-            stash_regions = stash.get("regions", {})
-            if not isinstance(stash_regions, dict) or name not in stash_regions:
-                return (
-                    jsonify(
-                        {
-                            "ok": False,
-                            "error": f"Region '{name}' not found in stash '{stash_id}'",
-                        }
-                    ),
-                    400,
-                )
-            return name, cast(dict[str, Any], stash_regions[name])
-        return jsonify({"ok": False, "error": f"Stash '{stash_id}' not found"}), 400
-
-    return (
-        jsonify(
-            {
-                "ok": False,
-                "error": "region_ref.source must be 'active', 'stash', or 'full_frame'",
-            }
-        ),
-        400,
-    )
+    Thin Flask wrapper over the shared, pure ``screenspace.resolve_region_request`` so the
+    server and the CLI re-run path can never drift on region semantics.
+    """
+    try:
+        return screenspace.resolve_region_request(region_name, region_ref, _manifest)
+    except ValueError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
 
 
 def _is_flask_error_response(value: Any) -> TypeGuard[FlaskResponse]:

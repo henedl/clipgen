@@ -44,6 +44,84 @@ class TestExtractRegion:
         assert np.all(cropped == 42)
 
 
+class TestResolveRegionRequest:
+    MANIFEST = {
+        "regions": {"hud": {"x": 0.0, "y": 0.0, "w": 0.5, "h": 0.5}},
+        "stashes": [
+            {
+                "id": "stash_a",
+                "regions": {"hud": {"x": 0.1, "y": 0.1, "w": 0.1, "h": 0.1}},
+            },
+            {
+                "id": "stash_b",
+                "regions": {"hud": {"x": 0.2, "y": 0.2, "w": 0.2, "h": 0.2}},
+            },
+        ],
+    }
+
+    def test_bare_name_prefers_active_over_stash(self):
+        name, region = screenspace.resolve_region_request("hud", None, self.MANIFEST)
+        assert name == "hud"
+        assert region["w"] == 0.5  # active "hud", not a stashed one
+
+    def test_bare_name_falls_back_to_stash(self):
+        manifest = {"regions": {}, "stashes": self.MANIFEST["stashes"]}
+        name, region = screenspace.resolve_region_request("hud", None, manifest)
+        assert name == "hud"
+        # No active match: first stash wins (no flattening, but order is preserved).
+        assert region["w"] == 0.1
+
+    def test_full_frame_by_bare_name(self):
+        name, region = screenspace.resolve_region_request(
+            "full_frame", None, self.MANIFEST
+        )
+        assert name == screenspace.FULL_FRAME_REGION_NAME
+        assert region == screenspace.FULL_FRAME_REGION
+
+    def test_full_frame_by_ref(self):
+        name, region = screenspace.resolve_region_request(
+            "", {"source": "full_frame"}, self.MANIFEST
+        )
+        assert name == screenspace.FULL_FRAME_REGION_NAME
+        assert region["w"] == 1.0
+
+    def test_active_ref(self):
+        name, region = screenspace.resolve_region_request(
+            "", {"source": "active", "name": "hud"}, self.MANIFEST
+        )
+        assert region["w"] == 0.5
+
+    def test_stash_ref_honors_stash_id(self):
+        _, region = screenspace.resolve_region_request(
+            "", {"source": "stash", "stash_id": "stash_a", "name": "hud"}, self.MANIFEST
+        )
+        assert region["w"] == 0.1  # stash_a, not last-write-wins stash_b
+
+    def test_unknown_name_raises(self):
+        with pytest.raises(ValueError, match="Region 'ghost' not found"):
+            screenspace.resolve_region_request("ghost", None, self.MANIFEST)
+
+    def test_stash_ref_missing_stash_id_raises(self):
+        with pytest.raises(ValueError, match="region_ref.stash_id is required"):
+            screenspace.resolve_region_request(
+                "", {"source": "stash", "name": "hud"}, self.MANIFEST
+            )
+
+    def test_unknown_stash_raises(self):
+        with pytest.raises(ValueError, match="Stash 'nope' not found"):
+            screenspace.resolve_region_request(
+                "",
+                {"source": "stash", "stash_id": "nope", "name": "hud"},
+                self.MANIFEST,
+            )
+
+    def test_invalid_source_raises(self):
+        with pytest.raises(ValueError, match="region_ref.source must be"):
+            screenspace.resolve_region_request(
+                "", {"source": "bogus", "name": "hud"}, self.MANIFEST
+            )
+
+
 class TestAverageColorHsv:
     def test_returns_correct_keys(self):
         region = np.full((10, 10, 3), 128, dtype=np.uint8)
