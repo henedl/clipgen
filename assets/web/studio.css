@@ -1434,6 +1434,112 @@ body.dragging #sheetMain {
   line-height: 1.3;
 }
 
+/* The duration badge doubles as a trigger: clicking it opens the trim
+   pop-over (see .trim-popover) for adjusting the clip's in/out points. */
+.queue-card-duration--editable {
+  cursor: pointer;
+  transition: background-color var(--duration-fast) ease, box-shadow var(--duration-fast) ease;
+}
+.queue-card-duration--editable:hover {
+  background: rgba(0, 0, 0, 0.85);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+
+/* ---- Trim pop-over (clip in/out editor) ----
+   Body-appended floating element, positioned in JS. Mirrors the duration
+   badge's dark, monospace look. */
+.trim-popover {
+  position: fixed;
+  z-index: var(--z-modal);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 9.5rem;
+  padding: var(--space-2);
+  background: rgba(0, 0, 0, 0.84);
+  -webkit-backdrop-filter: blur(6px);
+  backdrop-filter: blur(6px);
+  color: var(--accent-fg);
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: var(--text-xs);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-pop);
+  user-select: none;
+}
+.trim-row {
+  display: flex;
+  align-items: center;
+  line-height: 1.3;
+}
+.trim-row + .trim-row {
+  padding-top: var(--space-1);
+  border-top: 1px solid rgba(255, 255, 255, 0.12);
+}
+.trim-row-duration,
+.trim-row-inout,
+.trim-row-buttons {
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+.trim-row-label {
+  color: rgba(255, 255, 255, 0.55);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.trim-duration-value,
+.trim-time {
+  cursor: ew-resize;
+  padding: 0 var(--space-1);
+  border-radius: var(--radius-sm);
+  transition: background-color var(--duration-fast) ease;
+}
+.trim-duration-value:hover,
+.trim-time:hover {
+  background: rgba(255, 255, 255, 0.14);
+}
+.trim-duration-value {
+  font-size: var(--text-sm);
+  font-weight: 600;
+}
+.trim-inout-sep {
+  color: rgba(255, 255, 255, 0.45);
+}
+.trim-time-input {
+  width: 3.75rem;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--fg);
+  background: var(--bg-input);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-sm);
+  padding: 0 var(--space-1);
+  outline: none;
+}
+.trim-btn-group {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+.trim-btn-group-label {
+  color: rgba(255, 255, 255, 0.5);
+}
+.trim-add-btn {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--accent-fg);
+  background: rgba(255, 255, 255, 0.12);
+  border: none;
+  border-radius: var(--radius-sm);
+  padding: var(--space-1) var(--space-2);
+  cursor: pointer;
+  line-height: 1;
+  transition: background-color var(--duration-fast) ease;
+}
+.trim-add-btn:hover {
+  background: var(--accent);
+}
+
 .queue-card-meta {
   display: flex;
   align-items: center;
