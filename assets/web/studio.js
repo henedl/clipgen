@@ -1589,74 +1589,36 @@
     } catch (_) {}
   }
 
-  function initPanelDivider() {
-    var handle = qs("#panelDivider");
-    if (!handle) return;
-    var dragging = false;
-    var startY = 0;
-    var startBottomH = 0;
-    var dragMaxBottom = BOTTOM_STRIP_MAX;
-
-    function onDown(e) {
-      if (state.bottomCollapsed) return;
-      e.preventDefault();
-      dragging = true;
-      startY = e.clientY || (e.touches && e.touches[0].clientY) || 0;
-      startBottomH = state.bottomH;
-
-      // Reserve at least MIN_UPPER for the sheet pane.
-      var header = qs("#studioSubheader");
-      var divider = qs("#panelDivider");
-      if (header && divider) {
-        var headerRect = header.getBoundingClientRect();
-        var available = window.innerHeight - headerRect.top - headerRect.height - divider.offsetHeight;
-        var MIN_UPPER = 120;
-        dragMaxBottom = Math.max(BOTTOM_STRIP_MIN, Math.min(BOTTOM_STRIP_MAX, available - MIN_UPPER));
-      } else {
-        dragMaxBottom = BOTTOM_STRIP_MAX;
-      }
-
-      handle.classList.add("active");
-      document.body.style.cursor = "row-resize";
-      document.body.style.userSelect = "none";
-    }
-
-    handle.addEventListener("mousedown", onDown);
-    handle.addEventListener("touchstart", onDown, { passive: false });
-
-    var rafPending = false;
-    document.addEventListener("mousemove", onMove);
-    document.addEventListener("touchmove", onMove, { passive: false });
-
-    function onMove(e) {
-      if (!dragging || rafPending) return;
-      rafPending = true;
-      var clientY = e.clientY || (e.touches && e.touches[0].clientY) || 0;
-      requestAnimationFrame(function () {
-        // Drag up (clientY decreases) → bottom grows. Drag down → bottom shrinks.
-        var delta = startY - clientY;
-        var nextH = startBottomH + delta;
-        state.bottomH = Math.max(BOTTOM_STRIP_MIN, Math.min(dragMaxBottom, nextH));
+  function initBottomPanelDivider() {
+    initPanelDivider({
+      isCollapsed: function () {
+        return state.bottomCollapsed;
+      },
+      getHeight: function () {
+        return state.bottomH;
+      },
+      setHeight: function (h) {
+        state.bottomH = h;
         applyBottomHeight();
-        rafPending = false;
-      });
-    }
-
-    function onUp() {
-      if (!dragging) return;
-      dragging = false;
-      handle.classList.remove("active");
-      document.body.style.cursor = "";
-      document.body.style.userSelect = "";
-      persistBottomHeight();
-    }
-
-    document.addEventListener("mouseup", onUp);
-    document.addEventListener("touchend", onUp);
-
-    handle.addEventListener("dblclick", function (e) {
-      e.preventDefault();
-      toggleBottomPanel();
+      },
+      getBounds: function () {
+        // Reserve at least MIN_UPPER for the sheet pane.
+        var header = qs("#studioSubheader");
+        var divider = qs("#panelDivider");
+        if (header && divider) {
+          var headerRect = header.getBoundingClientRect();
+          var available =
+            window.innerHeight - headerRect.top - headerRect.height - divider.offsetHeight;
+          var MIN_UPPER = 120;
+          return {
+            min: BOTTOM_STRIP_MIN,
+            max: Math.max(BOTTOM_STRIP_MIN, Math.min(BOTTOM_STRIP_MAX, available - MIN_UPPER)),
+          };
+        }
+        return { min: BOTTOM_STRIP_MIN, max: BOTTOM_STRIP_MAX };
+      },
+      onToggle: toggleBottomPanel,
+      persist: persistBottomHeight,
     });
   }
 
@@ -5835,7 +5797,7 @@
     updateArtifactActions();
     updateReelActions();
     loadStoredBottomHeight();
-    initPanelDivider();
+    initBottomPanelDivider();
     populateSheetSkeleton();
     loadSheetData();
     loadStashes();
