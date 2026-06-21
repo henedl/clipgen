@@ -5042,6 +5042,110 @@
     host.appendChild(dt);
   }
 
+  // Shared intake card rendering. Screenspace and Transcript intake build the
+  // same card skeleton (thumb + xref badges + participant/type/time meta); the
+  // per-type bits are supplied via SS_INTAKE / TR_INTAKE config objects.
+  var SS_INTAKE = {
+    cardsSel: "#intakeCards",
+    cardClass: "",
+    idxAttr: "intakeIdx",
+    selfSource: "screenspace",
+    setTranscriptContext: true,
+    snippet: null,
+    clusterToItem: screenspaceClusterToItem,
+    cardHue: function (c) {
+      return detectorColor(c.detector) || categoryColor(c.event_type || c.detector || "uncategorized");
+    },
+    typeText: function (c) {
+      return c.event_type || c.detector || "intake";
+    },
+    selfBadge: function (c) {
+      return {
+        icon: XREF_BADGES.screenspace.icon,
+        color: XREF_BADGES.screenspace.color,
+        title: c.event_type || "Screenspace",
+      };
+    },
+  };
+  var TR_INTAKE = {
+    cardsSel: "#trIntakeCards",
+    cardClass: "tr-intake-queue-card",
+    idxAttr: "trIntakeIdx",
+    selfSource: "transcript",
+    setTranscriptContext: false,
+    snippet: function (c) {
+      return c.label || c.text || "";
+    },
+    clusterToItem: transcriptClusterToItem,
+    cardHue: function (c) {
+      return categoryColor(c.category || "bookmark");
+    },
+    typeText: function (c) {
+      return (TR_INTAKE_CATEGORIES[c.category || "bookmark"] || TR_INTAKE_CATEGORIES.bookmark).label;
+    },
+    selfBadge: function (c) {
+      return {
+        icon: XREF_BADGES.transcript.icon,
+        color: XREF_BADGES.transcript.color,
+        title: c.label || c.category || "Transcript",
+      };
+    },
+  };
+
+  function renderIntakeCards(cfg, items) {
+    var container = qs(cfg.cardsSel);
+    container.innerHTML = "";
+    items.forEach(function (c, idx) {
+      var card = el("div", "queue-card intake-queue-card" + (cfg.cardClass ? " " + cfg.cardClass : ""));
+      card.style.setProperty("--cg-card-hue", cfg.cardHue(c));
+      card.dataset[cfg.idxAttr] = idx;
+      card.setAttribute("draggable", "true");
+      card.addEventListener("dragstart", function (ev) {
+        ev.dataTransfer.setData("application/json", JSON.stringify(cfg.clusterToItem(c)));
+        ev.dataTransfer.effectAllowed = "copyMove";
+        setCardDragImage(ev, this);
+      });
+
+      var thumb = buildQueueCardThumb(card, {
+        participant: c.participant,
+        start: c.start,
+        duration: Math.max(0, c.end - c.start),
+        observe: true,
+      });
+
+      var xref = findOverlappingData(c.participant, c.start, c.end);
+      var badgeStack = buildXrefBadges(xref, cfg.selfSource, cfg.selfBadge(c));
+      if (badgeStack) thumb.appendChild(badgeStack);
+
+      var meta = el("div", "queue-card-meta");
+      var row = el("div", "queue-card-meta-row");
+      row.appendChild(el("span", "queue-card-participant", c.participant));
+      row.appendChild(el("span", "queue-card-type", cfg.typeText(c)));
+      meta.appendChild(row);
+      meta.appendChild(el("span", "queue-card-time", formatDuration(c.start) + "–" + formatDuration(c.end)));
+      if (cfg.snippet) {
+        var snippet = cfg.snippet(c);
+        if (snippet) {
+          var textEl = el("span", "queue-card-text", snippet);
+          textEl.title = snippet;
+          meta.appendChild(textEl);
+        }
+      }
+      card.appendChild(meta);
+
+      if (cfg.setTranscriptContext && xref.transcriptSnippets.length > 0) {
+        card.dataset.transcriptContext = xref.transcriptSnippets
+          .map(function (s) {
+            return s.text;
+          })
+          .join("\n");
+      }
+
+      container.appendChild(card);
+    });
+    refreshIntakeCardStates();
+  }
+
   // ---- Screenspace intake: render cards, filters, and density timeline ----
 
   function renderIntake(_hasNew) {
@@ -5073,56 +5177,12 @@
 
     buildIntakeDensityTimeline(clusters);
 
-    container.innerHTML = "";
     if (clusters.length === 0) {
+      container.innerHTML = "";
       container.appendChild(el("div", "drop-target-empty", "No events match the current filters"));
       return;
     }
-    clusters.forEach(function (c, idx) {
-      var typeText = c.event_type || c.detector || "intake";
-      // Carry over the intake font colour: pin to the canonical `--color-task-*`
-      // token for known detectors, else fall back to the category oklch colour.
-      var color = detectorColor(c.detector) || categoryColor(c.event_type || c.detector || "uncategorized");
-
-      var card = el("div", "queue-card intake-queue-card");
-      card.style.setProperty("--cg-card-hue", color);
-      card.dataset.intakeIdx = idx;
-      card.setAttribute("draggable", "true");
-      card.addEventListener("dragstart", function (ev) {
-        ev.dataTransfer.setData("application/json", JSON.stringify(screenspaceClusterToItem(c)));
-        ev.dataTransfer.effectAllowed = "copyMove";
-        setCardDragImage(ev, this);
-      });
-
-      // Lazy-loaded source-frame thumbnail (existing observer integration).
-      var thumb = buildQueueCardThumb(card, {
-        participant: c.participant,
-        start: c.start,
-        duration: c.end - c.start,
-        observe: true,
-      });
-
-      // Cross-reference badges layered over the thumb.
-      var xref = findOverlappingData(c.participant, c.start, c.end);
-      var ssSelf = { icon: XREF_BADGES.screenspace.icon, color: XREF_BADGES.screenspace.color, title: c.event_type || "Screenspace" };
-      var badgeStack = buildXrefBadges(xref, "screenspace", ssSelf);
-      if (badgeStack) thumb.appendChild(badgeStack);
-
-      var meta = el("div", "queue-card-meta");
-      var row = el("div", "queue-card-meta-row");
-      row.appendChild(el("span", "queue-card-participant", c.participant));
-      row.appendChild(el("span", "queue-card-type", typeText));
-      meta.appendChild(row);
-      meta.appendChild(el("span", "queue-card-time", formatDuration(c.start) + "–" + formatDuration(c.end)));
-      card.appendChild(meta);
-
-      if (xref.transcriptSnippets.length > 0) {
-        card.dataset.transcriptContext = xref.transcriptSnippets.map(function (s) { return s.text; }).join("\n");
-      }
-
-      container.appendChild(card);
-    });
-    refreshIntakeCardStates();
+    renderIntakeCards(SS_INTAKE, clusters);
   }
 
   function screenspaceClusterToItem(cluster) {
@@ -5441,54 +5501,7 @@
       return;
     }
 
-    container.innerHTML = "";
-    filtered.forEach(function (c, i) {
-      var segDuration = Math.max(0, c.end - c.start);
-      var labelKey = c.category || "bookmark";
-      var labelText = (TR_INTAKE_CATEGORIES[labelKey] || TR_INTAKE_CATEGORIES.bookmark).label;
-      var snippet = c.label || c.text || "";
-      var color = categoryColor(labelKey);
-
-      var card = el("div", "queue-card intake-queue-card tr-intake-queue-card");
-      card.style.setProperty("--cg-card-hue", color);
-      card.dataset.trIntakeIdx = i;
-      card.setAttribute("draggable", "true");
-      card.addEventListener("dragstart", function (ev) {
-        ev.dataTransfer.setData("application/json", JSON.stringify(transcriptClusterToItem(c)));
-        ev.dataTransfer.effectAllowed = "copyMove";
-        setCardDragImage(ev, this);
-      });
-
-      // Lazy-loaded source-frame thumbnail
-      var thumb = buildQueueCardThumb(card, {
-        participant: c.participant,
-        start: c.start,
-        duration: segDuration,
-        observe: true,
-      });
-
-      // Cross-reference badges
-      var xref = findOverlappingData(c.participant, c.start, c.end);
-      var trSelf = { icon: XREF_BADGES.transcript.icon, color: XREF_BADGES.transcript.color, title: c.label || c.category || "Transcript" };
-      var badgeStack = buildXrefBadges(xref, "transcript", trSelf);
-      if (badgeStack) thumb.appendChild(badgeStack);
-
-      var meta = el("div", "queue-card-meta");
-      var row = el("div", "queue-card-meta-row");
-      row.appendChild(el("span", "queue-card-participant", c.participant));
-      row.appendChild(el("span", "queue-card-type", labelText));
-      meta.appendChild(row);
-      meta.appendChild(el("span", "queue-card-time", formatDuration(c.start) + "–" + formatDuration(c.end)));
-      if (snippet) {
-        var textEl = el("span", "queue-card-text", snippet);
-        textEl.title = snippet;
-        meta.appendChild(textEl);
-      }
-      card.appendChild(meta);
-
-      container.appendChild(card);
-    });
-    refreshIntakeCardStates();
+    renderIntakeCards(TR_INTAKE, filtered);
   }
 
   function buildTrIntakeCategoryPills() {
