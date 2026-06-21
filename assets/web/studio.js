@@ -4966,79 +4966,89 @@
     });
   }
 
-  function buildIntakeParticipantPills() {
-    var container = qs("#intakeFilterParticipants");
+  // Shared participant-pill builder for both intake panels. The cluster source,
+  // selected-participant list, container, and re-render are all per-type (cfg).
+  function buildIntakeParticipantPills(cfg) {
+    var container = qs(cfg.participantsSel);
     if (!container) return;
     var seen = {};
     var participants = [];
-    for (var i = 0; i < state.intakeClusters.length; i++) {
-      var p = state.intakeClusters[i].participant;
+    var clusters = state[cfg.clustersKey];
+    for (var i = 0; i < clusters.length; i++) {
+      var p = clusters[i].participant;
       if (p && !seen[p]) { seen[p] = true; participants.push(p); }
     }
     participants.sort();
-    state.intakeFilterParticipants = state.intakeFilterParticipants.filter(function (p) { return seen[p]; });
+    state[cfg.filterParticipantsKey] = state[cfg.filterParticipantsKey].filter(function (p) { return seen[p]; });
     container.innerHTML = "";
     participants.forEach(function (p) {
       var pill = ClipgenPrimitives.createParticipantPill({
         id: p,
-        active: state.intakeFilterParticipants.indexOf(p) !== -1,
+        active: state[cfg.filterParticipantsKey].indexOf(p) !== -1,
         onClick: function () {
-          var idx = state.intakeFilterParticipants.indexOf(p);
-          if (idx === -1) state.intakeFilterParticipants.push(p);
-          else state.intakeFilterParticipants.splice(idx, 1);
-          renderIntake(false);
+          var idx = state[cfg.filterParticipantsKey].indexOf(p);
+          if (idx === -1) state[cfg.filterParticipantsKey].push(p);
+          else state[cfg.filterParticipantsKey].splice(idx, 1);
+          cfg.rerender();
         },
       });
       container.appendChild(pill);
     });
   }
 
+  // Density-timeline component refs for both intake panels. Declared together
+  // (before the SS_INTAKE/TR_INTAKE configs) so the get/set hooks close over a
+  // stable binding; the shared builder/handlers always read the live value at
+  // call-time so a rebuild can never leave a stale node behind .setHovered().
   var _intakeDensityEl = null;
+  var _trIntakeDensityEl = null;
 
-  function buildIntakeDensityTimeline(clusters) {
-    var host = qs("#intakeTimeline");
+  // Shared density timeline for both intake panels. Per-type bits (timeline
+  // host, bar count/color, hover state, highlight, toggle, density-el get/set)
+  // come from the SS_INTAKE / TR_INTAKE config.
+  function buildIntakeDensityTimeline(cfg, filtered) {
+    var host = qs(cfg.timelineSel);
     if (!host) return;
     host.innerHTML = "";
-    _intakeDensityEl = null;
-    if (!clusters.length) return;
+    cfg.setDensityEl(null);
+    if (!filtered.length) return;
     var maxEnd = 0;
-    for (var i = 0; i < clusters.length; i++) {
-      if (clusters[i].end > maxEnd) maxEnd = clusters[i].end;
+    for (var i = 0; i < filtered.length; i++) {
+      if (filtered[i].end > maxEnd) maxEnd = filtered[i].end;
     }
     var duration = Math.max(maxEnd * 1.05, 60);
-    var events = clusters.map(function (c) {
-      return {
-        t: duration > 0 ? c.start / duration : 0,
-        count: c.events ? c.events.length : 1,
-        hue: categoryHue(c.detector),
-        // Density bars match Screenspace's `--color-task-*` exactly when the
-        // cluster's detector is one of the known types; falls back to the
-        // hue-based oklch path otherwise.
-        color: detectorColor(c.detector),
-      };
+    var events = filtered.map(function (c) {
+      var event = { t: duration > 0 ? c.start / duration : 0, count: cfg.barCount(c) };
+      var color = cfg.barColor(c);
+      for (var key in color) {
+        if (Object.prototype.hasOwnProperty.call(color, key)) event[key] = color[key];
+      }
+      return event;
     });
     var dt = ClipgenPrimitives.createDensityTimeline({
       events: events,
       durationSec: duration,
       tickCount: 6,
       onBarMouseEnter: function (idx) {
-        state.intakeHoveredIdx = idx;
-        highlightIntakeCard(idx);
-        if (_intakeDensityEl) _intakeDensityEl.setHovered(idx);
+        state[cfg.hoveredIdxKey] = idx;
+        cfg.highlightCard(idx);
+        var densityEl = cfg.getDensityEl();
+        if (densityEl) densityEl.setHovered(idx);
       },
       onBarMouseLeave: function () {
-        state.intakeHoveredIdx = -1;
-        highlightIntakeCard(-1);
-        if (_intakeDensityEl) _intakeDensityEl.setHovered(-1);
+        state[cfg.hoveredIdxKey] = -1;
+        cfg.highlightCard(-1);
+        var densityEl = cfg.getDensityEl();
+        if (densityEl) densityEl.setHovered(-1);
       },
       onBarClick: function (idx, ev) {
-        var cluster = filteredIntakeClusters()[idx];
+        var cluster = cfg.filtered()[idx];
         if (!cluster) return;
-        if (ev && ev.shiftKey) intakeToggleReel(cluster);
-        else intakeToggleArtifacts(cluster);
+        if (ev && ev.shiftKey) cfg.toggleReel(cluster);
+        else cfg.toggleArtifacts(cluster);
       },
     });
-    _intakeDensityEl = dt;
+    cfg.setDensityEl(dt);
     host.appendChild(dt);
   }
 
@@ -5047,6 +5057,7 @@
   // per-type bits are supplied via SS_INTAKE / TR_INTAKE config objects.
   var SS_INTAKE = {
     cardsSel: "#intakeCards",
+    cardSel: ".intake-queue-card",
     cardClass: "",
     idxAttr: "intakeIdx",
     selfSource: "screenspace",
@@ -5066,9 +5077,54 @@
         title: c.event_type || "Screenspace",
       };
     },
+    // --- participant pills + density timeline ---
+    participantsSel: "#intakeFilterParticipants",
+    timelineSel: "#intakeTimeline",
+    clustersKey: "intakeClusters",
+    filterParticipantsKey: "intakeFilterParticipants",
+    hoveredIdxKey: "intakeHoveredIdx",
+    filterTextKey: "intakeFilterText",
+    filtered: filteredIntakeClusters,
+    highlightCard: highlightIntakeCard,
+    rerender: function () { renderIntake(false); },
+    getDensityEl: function () { return _intakeDensityEl; },
+    setDensityEl: function (dt) { _intakeDensityEl = dt; },
+    barCount: function (c) { return c.events ? c.events.length : 1; },
+    barColor: function (c) {
+      // Density bars match Screenspace's `--color-task-*` exactly when the
+      // cluster's detector is a known type; falls back to the hue-based oklch
+      // path otherwise.
+      return { hue: categoryHue(c.detector), color: detectorColor(c.detector) };
+    },
+    // --- init / delegated listeners ---
+    addAllBtnSel: "#intakeAddAllBtn",
+    reelAllBtnSel: "#intakeReelAllBtn",
+    thresholdSel: "#intakeClusterThreshold",
+    searchSel: "#intakeFilterSearch",
+    toggleArtifacts: intakeToggleArtifacts,
+    toggleReel: intakeToggleReel,
+    addToArtifacts: intakeAddToArtifacts,
+    addToReel: intakeAddToReel,
+    onDismiss: intakeDismissCluster,
+    onThresholdChange: function (threshold) {
+      state.intakeClusters = clusterIntakeEvents(state.intakeEvents, threshold);
+      renderIntake(false);
+    },
+    onCardHover: function (card) {
+      return card.dataset.transcriptContext || "";
+    },
+    extraControl: function (cfg) {
+      var newToggle = qs("#intakeFilterNew");
+      if (!newToggle) return;
+      newToggle.addEventListener("change", function () {
+        state.intakeFilterNew = this.checked;
+        cfg.rerender();
+      });
+    },
   };
   var TR_INTAKE = {
     cardsSel: "#trIntakeCards",
+    cardSel: ".tr-intake-queue-card",
     cardClass: "tr-intake-queue-card",
     idxAttr: "trIntakeIdx",
     selfSource: "transcript",
@@ -5089,6 +5145,49 @@
         color: XREF_BADGES.transcript.color,
         title: c.label || c.category || "Transcript",
       };
+    },
+    // --- participant pills + density timeline ---
+    participantsSel: "#trIntakeFilterParticipants",
+    timelineSel: "#trIntakeTimeline",
+    clustersKey: "trIntakeClusters",
+    filterParticipantsKey: "trIntakeFilterParticipants",
+    hoveredIdxKey: "trIntakeHoveredIdx",
+    filterTextKey: "trIntakeFilterText",
+    filtered: filteredTranscriptIntakeClusters,
+    highlightCard: highlightTrIntakeCard,
+    rerender: renderTranscriptIntake,
+    getDensityEl: function () { return _trIntakeDensityEl; },
+    setDensityEl: function (dt) { _trIntakeDensityEl = dt; },
+    barCount: function (c) { return c.marks ? c.marks.length : 1; },
+    barColor: function (c) {
+      return { hue: categoryHue(c.category || "bookmark") };
+    },
+    // --- init / delegated listeners ---
+    addAllBtnSel: "#trIntakeAddAllBtn",
+    reelAllBtnSel: "#trIntakeReelAllBtn",
+    thresholdSel: "#trIntakeClusterThreshold",
+    searchSel: "#trIntakeFilterSearch",
+    toggleArtifacts: trIntakeToggleArtifacts,
+    toggleReel: trIntakeToggleReel,
+    addToArtifacts: trIntakeAddToArtifacts,
+    addToReel: trIntakeAddToReel,
+    onDismiss: trIntakeDismissCluster,
+    onThresholdChange: function () {
+      // TR re-polls (the poll re-reads the threshold input itself); ignores arg.
+      pollTranscriptIntakeMarks();
+    },
+    onCardHover: function (card, idx) {
+      var cluster = filteredTranscriptIntakeClusters()[idx];
+      return cluster ? (cluster.text || cluster.label || "") : "";
+    },
+    extraControl: function (_cfg) {
+      var showAllToggle = qs("#trIntakeShowAll");
+      if (!showAllToggle) return;
+      showAllToggle.addEventListener("change", function () {
+        state.trIntakeShowAll = this.checked;
+        state._trIntakeMarksPollFp = null;
+        pollTranscriptIntakeMarks();
+      });
     },
   };
 
@@ -5156,7 +5255,7 @@
     var tabBadge = qs("#intakeTabBadge");
 
     buildIntakeDetectorPills();
-    buildIntakeParticipantPills();
+    buildIntakeParticipantPills(SS_INTAKE);
 
     if (!state.intakeClusters.length) {
       if (tabBadge) tabBadge.classList.add("hidden");
@@ -5164,7 +5263,7 @@
       container.appendChild(el("div", "drop-target-empty", "Screenspace events will appear here"));
       addAllBtn.disabled = true;
       reelAllBtn.disabled = true;
-      buildIntakeDensityTimeline([]);
+      buildIntakeDensityTimeline(SS_INTAKE, []);
       return;
     }
     if (tabBadge) {
@@ -5175,7 +5274,7 @@
     addAllBtn.disabled = clusters.length === 0;
     reelAllBtn.disabled = clusters.length === 0;
 
-    buildIntakeDensityTimeline(clusters);
+    buildIntakeDensityTimeline(SS_INTAKE, clusters);
 
     if (clusters.length === 0) {
       container.innerHTML = "";
@@ -5273,92 +5372,102 @@
     });
   }
 
-  function initIntake() {
-    var intakeCards = qs("#intakeCards");
+  // Shared init for both intake panels. Attaches the delegated card listeners
+  // (click/contextmenu/mouseover/mouseleave) ONCE on the cards container, plus
+  // the Add-All/Reel-All buttons, threshold, search, and the per-type extra
+  // control. Must be called exactly once per panel at startup — never from a
+  // render path (CODE-REVIEW.md listener-cleanup rule). Per-type behavior is
+  // supplied via cfg; the shared `#trIntakeTooltip` host and the
+  // `trIntakeTooltipsEnabled` gate are owned here so both panels behave alike.
+  function initIntakePanel(cfg) {
+    var cards = qs(cfg.cardsSel);
+    if (!cards) return;
 
     // Click: normal = Artifacts, shift = Reel
-    intakeCards.addEventListener("click", function (e) {
-      var card = e.target.closest(".intake-queue-card");
+    cards.addEventListener("click", function (e) {
+      var card = e.target.closest(cfg.cardSel);
       if (!card) return;
-      var idx = parseInt(card.dataset.intakeIdx);
-      var cluster = filteredIntakeClusters()[idx];
+      var cluster = cfg.filtered()[parseInt(card.dataset[cfg.idxAttr])];
       if (!cluster) return;
-      if (e.shiftKey) intakeToggleReel(cluster);
-      else intakeToggleArtifacts(cluster);
+      if (e.shiftKey) cfg.toggleReel(cluster);
+      else cfg.toggleArtifacts(cluster);
     });
 
     // Right-click to dismiss
-    intakeCards.addEventListener("contextmenu", function (e) {
-      var card = e.target.closest(".intake-queue-card");
+    cards.addEventListener("contextmenu", function (e) {
+      var card = e.target.closest(cfg.cardSel);
       if (!card) return;
       e.preventDefault();
-      var idx = parseInt(card.dataset.intakeIdx);
-      var cluster = filteredIntakeClusters()[idx];
-      if (cluster) intakeDismissCluster(cluster);
+      var cluster = cfg.filtered()[parseInt(card.dataset[cfg.idxAttr])];
+      if (cluster) cfg.onDismiss(cluster);
     });
 
-    // Card hover → highlight + transcript tooltip + timeline marker
-    intakeCards.addEventListener("mouseover", function (e) {
-      var card = e.target.closest(".intake-queue-card");
+    // Card hover → highlight + tooltip + timeline marker
+    cards.addEventListener("mouseover", function (e) {
+      var card = e.target.closest(cfg.cardSel);
       if (!card) return;
-      var idx = parseInt(card.dataset.intakeIdx);
-      if (state.intakeHoveredIdx !== idx) {
-        state.intakeHoveredIdx = idx;
-        highlightIntakeCard(idx);
-        if (_intakeDensityEl) _intakeDensityEl.setHovered(idx);
+      var idx = parseInt(card.dataset[cfg.idxAttr]);
+      if (state[cfg.hoveredIdxKey] !== idx) {
+        state[cfg.hoveredIdxKey] = idx;
+        cfg.highlightCard(idx);
+        var densityEl = cfg.getDensityEl();
+        if (densityEl) densityEl.setHovered(idx);
       }
-      var trTooltip = qs("#trIntakeTooltip");
-      if (trTooltip && state.trIntakeTooltipsEnabled) {
-        var tooltipText = card.dataset.transcriptContext || "";
+      var tooltip = qs("#trIntakeTooltip");
+      if (tooltip && state.trIntakeTooltipsEnabled) {
+        var tooltipText = cfg.onCardHover(card, idx) || "";
         if (tooltipText) {
-          trTooltip.textContent = tooltipText;
-          trTooltip.classList.remove("hidden");
-          positionTooltipAnchored(trTooltip, card.getBoundingClientRect());
+          tooltip.textContent = tooltipText;
+          tooltip.classList.remove("hidden");
+          positionTooltipAnchored(tooltip, card.getBoundingClientRect());
         } else {
-          trTooltip.classList.add("hidden");
+          tooltip.classList.add("hidden");
         }
       }
     });
-    intakeCards.addEventListener("mouseleave", function () {
-      if (state.intakeHoveredIdx !== -1) {
-        state.intakeHoveredIdx = -1;
-        highlightIntakeCard(-1);
-        if (_intakeDensityEl) _intakeDensityEl.setHovered(-1);
+    cards.addEventListener("mouseleave", function () {
+      if (state[cfg.hoveredIdxKey] !== -1) {
+        state[cfg.hoveredIdxKey] = -1;
+        cfg.highlightCard(-1);
+        var densityEl = cfg.getDensityEl();
+        if (densityEl) densityEl.setHovered(-1);
       }
-      var trTooltip = qs("#trIntakeTooltip");
-      if (trTooltip) trTooltip.classList.add("hidden");
+      var tooltip = qs("#trIntakeTooltip");
+      if (tooltip) tooltip.classList.add("hidden");
     });
 
-    qs("#intakeAddAllBtn").addEventListener("click", function () {
-      filteredIntakeClusters().forEach(function (c) { intakeAddToArtifacts(c); });
-    });
-    qs("#intakeReelAllBtn").addEventListener("click", function () {
-      filteredIntakeClusters().forEach(function (c) { intakeAddToReel(c); });
-    });
-    qs("#intakeClusterThreshold").addEventListener("change", function () {
-      var threshold = parseInt(this.value) || 5;
-      state.intakeClusters = clusterIntakeEvents(state.intakeEvents, threshold);
-      renderIntake(false);
-    });
+    var addAllBtn = qs(cfg.addAllBtnSel);
+    if (addAllBtn) {
+      addAllBtn.addEventListener("click", function () {
+        cfg.filtered().forEach(function (c) { cfg.addToArtifacts(c); });
+      });
+    }
+    var reelAllBtn = qs(cfg.reelAllBtnSel);
+    if (reelAllBtn) {
+      reelAllBtn.addEventListener("click", function () {
+        cfg.filtered().forEach(function (c) { cfg.addToReel(c); });
+      });
+    }
+    var thresholdInput = qs(cfg.thresholdSel);
+    if (thresholdInput) {
+      thresholdInput.addEventListener("change", function () {
+        cfg.onThresholdChange(parseInt(this.value) || 5);
+      });
+    }
 
-    // Search + "New only" toggle
-    var searchEl = qs("#intakeFilterSearch");
-    var _intakeSearchTimer = 0;
+    // Text search filter (debounced)
+    var searchEl = qs(cfg.searchSel);
+    var _searchTimer = 0;
     if (searchEl) {
       searchEl.addEventListener("input", function () {
-        state.intakeFilterText = this.value;
-        clearTimeout(_intakeSearchTimer);
-        _intakeSearchTimer = setTimeout(function () { renderIntake(false); }, 250);
-      });
-    }
-    var newToggle = qs("#intakeFilterNew");
-    if (newToggle) {
-      newToggle.addEventListener("change", function () {
-        state.intakeFilterNew = this.checked;
-        renderIntake(false);
+        state[cfg.filterTextKey] = this.value;
+        clearTimeout(_searchTimer);
+        _searchTimer = setTimeout(function () { cfg.rerender(); }, 250);
       });
     }
 
+    // Per-type extra control (SS "New only" / TR "Show all")
+    cfg.extraControl(cfg);
   }
 
   // ---- Transcript Intake ----
@@ -5493,8 +5602,8 @@
     if (reelAllBtn) reelAllBtn.disabled = filtered.length === 0;
 
     buildTrIntakeCategoryPills();
-    buildTrIntakeParticipantPills();
-    buildTrIntakeDensityTimeline(filtered);
+    buildIntakeParticipantPills(TR_INTAKE);
+    buildIntakeDensityTimeline(TR_INTAKE, filtered);
 
     if (filtered.length === 0) {
       container.innerHTML = '<div class="drop-target-empty">Transcript marks will appear here</div>';
@@ -5530,51 +5639,6 @@
     });
   }
 
-  var _trIntakeDensityEl = null;
-
-  function buildTrIntakeDensityTimeline(filtered) {
-    var host = qs("#trIntakeTimeline");
-    if (!host) return;
-    host.innerHTML = "";
-    _trIntakeDensityEl = null;
-    if (!filtered.length) return;
-    var maxEnd = 0;
-    for (var i = 0; i < filtered.length; i++) {
-      if (filtered[i].end > maxEnd) maxEnd = filtered[i].end;
-    }
-    var duration = Math.max(maxEnd * 1.05, 60);
-    var events = filtered.map(function (c) {
-      return {
-        t: duration > 0 ? c.start / duration : 0,
-        count: c.marks ? c.marks.length : 1,
-        hue: categoryHue(c.category || "bookmark"),
-      };
-    });
-    var dt = ClipgenPrimitives.createDensityTimeline({
-      events: events,
-      durationSec: duration,
-      tickCount: 6,
-      onBarMouseEnter: function (idx) {
-        state.trIntakeHoveredIdx = idx;
-        highlightTrIntakeCard(idx);
-        if (_trIntakeDensityEl) _trIntakeDensityEl.setHovered(idx);
-      },
-      onBarMouseLeave: function () {
-        state.trIntakeHoveredIdx = -1;
-        highlightTrIntakeCard(-1);
-        if (_trIntakeDensityEl) _trIntakeDensityEl.setHovered(-1);
-      },
-      onBarClick: function (idx, ev) {
-        var cluster = filteredTranscriptIntakeClusters()[idx];
-        if (!cluster) return;
-        if (ev && ev.shiftKey) trIntakeToggleReel(cluster);
-        else trIntakeToggleArtifacts(cluster);
-      },
-    });
-    _trIntakeDensityEl = dt;
-    host.appendChild(dt);
-  }
-
   function transcriptClusterToItem(cluster) {
     return {
       participant: cluster.participant,
@@ -5602,31 +5666,17 @@
     intakeToggleItem(state.reelQueue, transcriptClusterToItem(cluster), renderReelQueue);
   }
 
-  function buildTrIntakeParticipantPills() {
-    var container = qs("#trIntakeFilterParticipants");
-    if (!container) return;
-    var pids = {};
-    for (var i = 0; i < state.trIntakeClusters.length; i++) {
-      pids[state.trIntakeClusters[i].participant] = true;
-    }
-    var sorted = Object.keys(pids).sort();
-    state.trIntakeFilterParticipants = state.trIntakeFilterParticipants.filter(function (p) {
-      return pids[p];
-    });
-    container.innerHTML = "";
-    sorted.forEach(function (p) {
-      var pill = ClipgenPrimitives.createParticipantPill({
-        id: p,
-        active: state.trIntakeFilterParticipants.indexOf(p) !== -1,
-        onClick: function () {
-          var idx = state.trIntakeFilterParticipants.indexOf(p);
-          if (idx === -1) state.trIntakeFilterParticipants.push(p);
-          else state.trIntakeFilterParticipants.splice(idx, 1);
-          renderTranscriptIntake();
-        },
-      });
-      container.appendChild(pill);
-    });
+  function trIntakeDismissCluster(cluster) {
+    var ids = cluster.marks.map(function (m) { return m.id; }).filter(Boolean);
+    if (!ids.length) return;
+    // DELETE with a JSON body — apiDelete takes no body, so this custom fetch stays.
+    fetch("../transcripts/api/marks/" + ids[0], {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ids: ids }),
+    })
+      .then(function () { pollTranscriptIntakeMarks(); })
+      .catch(function () {});
   }
 
   function highlightTrIntakeCard(idx) {
@@ -5638,120 +5688,6 @@
         cards[i].classList.remove("intake-highlight");
       }
     }
-  }
-
-  function initTranscriptIntake() {
-    var trIntakeCards = qs("#trIntakeCards");
-    if (!trIntakeCards) return;
-    var trTooltip = qs("#trIntakeTooltip");
-
-    // Click: normal = Artifacts, shift = Reel
-    trIntakeCards.addEventListener("click", function (e) {
-      var card = e.target.closest(".tr-intake-queue-card");
-      if (!card) return;
-      var idx = parseInt(card.dataset.trIntakeIdx);
-      var cluster = filteredTranscriptIntakeClusters()[idx];
-      if (!cluster) return;
-      if (e.shiftKey) trIntakeToggleReel(cluster);
-      else trIntakeToggleArtifacts(cluster);
-    });
-
-    // Right-click: dismiss — remove marks
-    trIntakeCards.addEventListener("contextmenu", function (e) {
-      var card = e.target.closest(".tr-intake-queue-card");
-      if (!card) return;
-      e.preventDefault();
-      var idx = parseInt(card.dataset.trIntakeIdx);
-      var cluster = filteredTranscriptIntakeClusters()[idx];
-      if (!cluster) return;
-      var ids = cluster.marks.map(function (m) { return m.id; }).filter(Boolean);
-      if (!ids.length) return;
-      // TODO: DELETE with a JSON body — apiDelete takes no body, so this custom fetch stays.
-      fetch("../transcripts/api/marks/" + ids[0], {
-        method: "DELETE",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ids: ids }),
-      })
-        .then(function () { pollTranscriptIntakeMarks(); })
-        .catch(function () {});
-    });
-
-    // Card hover → highlight + tooltip + timeline marker
-    trIntakeCards.addEventListener("mouseover", function (e) {
-      var card = e.target.closest(".tr-intake-queue-card");
-      if (!card) return;
-      var idx = parseInt(card.dataset.trIntakeIdx);
-      if (state.trIntakeHoveredIdx !== idx) {
-        state.trIntakeHoveredIdx = idx;
-        highlightTrIntakeCard(idx);
-        if (_trIntakeDensityEl) _trIntakeDensityEl.setHovered(idx);
-      }
-      if (trTooltip && state.trIntakeTooltipsEnabled) {
-        var cluster = filteredTranscriptIntakeClusters()[idx];
-        var fullText = cluster ? (cluster.text || cluster.label || "") : "";
-        if (fullText) {
-          trTooltip.textContent = fullText;
-          trTooltip.classList.remove("hidden");
-          positionTooltipAnchored(trTooltip, card.getBoundingClientRect());
-        } else {
-          trTooltip.classList.add("hidden");
-        }
-      }
-    });
-    trIntakeCards.addEventListener("mouseleave", function () {
-      if (state.trIntakeHoveredIdx !== -1) {
-        state.trIntakeHoveredIdx = -1;
-        highlightTrIntakeCard(-1);
-        if (_trIntakeDensityEl) _trIntakeDensityEl.setHovered(-1);
-      }
-      if (trTooltip) trTooltip.classList.add("hidden");
-    });
-
-    // Cluster threshold change
-    var thresholdInput = qs("#trIntakeClusterThreshold");
-    if (thresholdInput) {
-      thresholdInput.addEventListener("change", function () {
-        pollTranscriptIntakeMarks();
-      });
-    }
-
-    // "Show all" toggle
-    var showAllToggle = qs("#trIntakeShowAll");
-    if (showAllToggle) {
-      showAllToggle.addEventListener("change", function () {
-        state.trIntakeShowAll = this.checked;
-        state._trIntakeMarksPollFp = null;
-        pollTranscriptIntakeMarks();
-      });
-    }
-
-    // Text search filter
-    var trSearchEl = qs("#trIntakeFilterSearch");
-    var _trIntakeSearchTimer = 0;
-    if (trSearchEl) {
-      trSearchEl.addEventListener("input", function () {
-        state.trIntakeFilterText = this.value;
-        clearTimeout(_trIntakeSearchTimer);
-        _trIntakeSearchTimer = setTimeout(function () { renderTranscriptIntake(); }, 250);
-      });
-    }
-
-    // Add All buttons
-    var addAllBtn = qs("#trIntakeAddAllBtn");
-    if (addAllBtn) {
-      addAllBtn.addEventListener("click", function () {
-        var filtered = filteredTranscriptIntakeClusters();
-        for (var i = 0; i < filtered.length; i++) trIntakeAddToArtifacts(filtered[i]);
-      });
-    }
-    var reelAllBtn = qs("#trIntakeReelAllBtn");
-    if (reelAllBtn) {
-      reelAllBtn.addEventListener("click", function () {
-        var filtered = filteredTranscriptIntakeClusters();
-        for (var i = 0; i < filtered.length; i++) trIntakeAddToReel(filtered[i]);
-      });
-    }
-
   }
 
   function initTooltipToggle() {
@@ -5818,8 +5754,8 @@
     checkNavLinks();
     initFrontendSwitcher();
     initTopNavActions();
-    initIntake();
-    initTranscriptIntake();
+    initIntakePanel(SS_INTAKE);
+    initIntakePanel(TR_INTAKE);
     // Live counter polls — intake-status / tr-intake-status (5s) keep the
     // start-overlay's status pill fresh; intake-events / tr-intake-marks
     // (10s) keep the sub-tab counter badges live regardless of which
