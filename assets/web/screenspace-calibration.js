@@ -682,4 +682,7 @@
   SS.calRender = renderCalibration;
   SS.calVisibility = updateCalibrationVisibility;
   SS.calInit = initCalibration;
+  // selectParticipant (hub) bumps the generation counter to invalidate any
+  // in-flight calibration response when the participant changes.
+  SS.calBumpGen = function () { _calibrationGen += 1; };
 })();

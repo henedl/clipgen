@@ -870,4 +870,13 @@
   // ---- Published back to the hub (screenspace.js calls these) ----
   SS.renderMultitoolParams = renderMultitoolParams;
   SS.clearMultitoolDragIndicators = clearMultitoolDragIndicators;
+  // The global dragend handler lives in the hub (it also clears task-list drag);
+  // expose the multitool-drag half so the hub doesn't touch our internal state.
+  SS.cancelMultitoolDrag = function () {
+    if (_multitoolDragOverRaf != null) {
+      cancelAnimationFrame(_multitoolDragOverRaf);
+      _multitoolDragOverRaf = null;
+    }
+    _multitoolPendingDragOver = null;
+  };
 })();

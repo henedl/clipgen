@@ -1097,7 +1097,7 @@
     // in-flight /api/calibrate response so it can't repaint the strip; the pin
     // load below re-evaluates once the new participant's pins arrive.
     state.calibrationResult = null;
-    _calibrationGen += 1;
+    if (SS.calBumpGen) SS.calBumpGen();
     updateCalibrationVisibility();
     renderCalibration();
     renderPinTray();
@@ -6346,11 +6346,7 @@
   }
 
   document.addEventListener("dragend", function () {
-    if (_multitoolDragOverRaf != null) {
-      cancelAnimationFrame(_multitoolDragOverRaf);
-      _multitoolDragOverRaf = null;
-    }
-    _multitoolPendingDragOver = null;
+    if (SS.cancelMultitoolDrag) SS.cancelMultitoolDrag();
     if (_taskListDragOverRaf != null) {
       cancelAnimationFrame(_taskListDragOverRaf);
       _taskListDragOverRaf = null;
