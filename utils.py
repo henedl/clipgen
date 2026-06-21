@@ -1382,6 +1382,23 @@ def map_global_to_segment(
     return None
 
 
+def resolve_timeline_segment(
+    timeline: list[tuple[str, int, int]], global_seconds: float
+) -> tuple[str, float] | None:
+    """Map *global_seconds* to ``(sub_video_path, local_seconds)`` within a built
+    source *timeline*, or ``None`` if it falls at/beyond the recording.
+
+    Companion to :func:`map_global_to_segment` that also resolves the owning
+    sub-video's path — the shared step behind multi-video thumbnail and frame
+    lookups. Callers that already hold a (cached) timeline pass it straight in.
+    """
+    mapped = map_global_to_segment(timeline, global_seconds)
+    if mapped is None:
+        return None
+    index, local_seconds = mapped
+    return (timeline[index][0], local_seconds)
+
+
 def map_global_range_to_segments(
     timeline: list[tuple[str, int, int]],
     start_seconds: float,

@@ -486,12 +486,11 @@ def api_thumbnail(participant: str, start_seconds: str) -> FlaskResponse:
         timeline = video.build_source_timeline([str(p) for p in sources])
         if timeline is None:
             return jsonify({"ok": False, "error": "Source video not found"}), 404
-        mapped = utils.map_global_to_segment(timeline, start_sec)
+        mapped = utils.resolve_timeline_segment(timeline, start_sec)
         if mapped is None:
             return jsonify({"ok": False, "error": "Timestamp beyond recording"}), 404
-        seg_index, local_sec = mapped
-        video_path = Path(timeline[seg_index][0])
-        cut_sec = int(local_sec)
+        video_path = Path(mapped[0])
+        cut_sec = int(mapped[1])
 
     try:
         mtime = video_path.stat().st_mtime

@@ -916,11 +916,7 @@ def _map_participant_time(
     timeline = _participant_timeline(participant_id)
     if timeline is None:
         return None
-    mapped = utils.map_global_to_segment(timeline, global_ts)
-    if mapped is None:
-        return None
-    index, local_ts = mapped
-    return (timeline[index][0], local_ts)
+    return utils.resolve_timeline_segment(timeline, global_ts)
 
 
 def _participant_frame_extractor(
