@@ -5,6 +5,7 @@ from unittest import mock
 
 
 import screenspace
+import screenspace_tools
 
 
 class TestBuildTimelapseCommand:
@@ -144,7 +145,7 @@ class TestTimelapseDispatchPassesMarkers:
             captured.update(kw)
             return output_path
 
-        monkeypatch.setattr(screenspace, "generate_timelapse", fake_generate)
+        monkeypatch.setattr(screenspace_tools, "generate_timelapse", fake_generate)
 
         worker = screenspace.ScreenspaceWorker()
         task = screenspace.create_task(

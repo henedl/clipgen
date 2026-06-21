@@ -7,6 +7,9 @@ import numpy as np
 import pytest
 
 import screenspace
+import screenspace_multitool
+import screenspace_ocr
+import screenspace_scans
 from _ss_helpers import _gray_with_red_patch, _make_icon, _make_icon_frame
 
 
@@ -172,7 +175,7 @@ class TestCheckFrameForTool:
                 return [([(0, 0), (10, 0), (10, 10), (0, 10)], "5", 0.2)]
 
         monkeypatch.setattr(
-            screenspace, "_get_ocr_reader", lambda _langs: _FakeReader()
+            screenspace_ocr, "_get_ocr_reader", lambda _langs: _FakeReader()
         )
 
         passed, result = screenspace.check_frame_for_tool(
@@ -291,9 +294,13 @@ class TestScanBoundaries:
     def _setup(monkeypatch, frames):
         # frames: list of (timestamp, tag). Same tag → distance 0; different
         # tags → distance == |Δtag|. Each frame is filled with its tag value.
-        monkeypatch.setattr(screenspace, "_probe_video_meta", lambda _p: (30.0, 100.0))
         monkeypatch.setattr(
-            screenspace, "compute_phash", lambda f: _FakeHash(int(f.reshape(-1)[0]))
+            screenspace_scans, "_probe_video_meta", lambda _p: (30.0, 100.0)
+        )
+        monkeypatch.setattr(
+            screenspace_scans,
+            "compute_phash",
+            lambda f: _FakeHash(int(f.reshape(-1)[0])),
         )
 
         def fake_scan(video_path, interval_seconds, callback, **kwargs):
@@ -302,7 +309,7 @@ class TestScanBoundaries:
                 if callback(ts, frame) is False:
                     break
 
-        monkeypatch.setattr(screenspace, "scan_video_full_frames", fake_scan)
+        monkeypatch.setattr(screenspace_scans, "scan_video_full_frames", fake_scan)
 
     def test_hard_cuts_fire_at_cut_frames_only(self, monkeypatch):
         frames = [
@@ -377,7 +384,9 @@ class TestScanMultitool:
 
     @staticmethod
     def _setup_stubs(monkeypatch, check_fn):
-        monkeypatch.setattr(screenspace, "_probe_video_meta", lambda _p: (30.0, 10.0))
+        monkeypatch.setattr(
+            screenspace_multitool, "_probe_video_meta", lambda _p: (30.0, 10.0)
+        )
 
         def fake_scan(
             video_path,
@@ -393,8 +402,8 @@ class TestScanMultitool:
             frame = np.zeros((10, 10, 3), dtype=np.uint8)
             callback(1.0, frame)
 
-        monkeypatch.setattr(screenspace, "scan_video_full_frames", fake_scan)
-        monkeypatch.setattr(screenspace, "check_frame_for_tool", check_fn)
+        monkeypatch.setattr(screenspace_multitool, "scan_video_full_frames", fake_scan)
+        monkeypatch.setattr(screenspace_multitool, "check_frame_for_tool", check_fn)
 
     def test_not_operator_rejects_when_negated_match(self, monkeypatch):
         def check(frame, prev, region, ttype, step):
@@ -482,7 +491,9 @@ class TestScanMultitool:
         injects the live ts that ``scan_video_full_frames`` is replaying.
         """
         monkeypatch.setattr(
-            screenspace, "_probe_video_meta", lambda _p: (30.0, max(frames_ts) + 1.0)
+            screenspace_multitool,
+            "_probe_video_meta",
+            lambda _p: (30.0, max(frames_ts) + 1.0),
         )
         state = {"ts": 0.0}
 
@@ -506,8 +517,8 @@ class TestScanMultitool:
         def check(frame, prev, region, ttype, step):
             return check_fn(state["ts"], ttype, step)
 
-        monkeypatch.setattr(screenspace, "scan_video_full_frames", fake_scan)
-        monkeypatch.setattr(screenspace, "check_frame_for_tool", check)
+        monkeypatch.setattr(screenspace_multitool, "scan_video_full_frames", fake_scan)
+        monkeypatch.setattr(screenspace_multitool, "check_frame_for_tool", check)
 
     def test_offset_and_hit(self, monkeypatch):
         # color @2; change @4 within the [+0,+3] window from the anchor.

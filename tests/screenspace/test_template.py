@@ -3,6 +3,7 @@
 import numpy as np
 
 import screenspace
+import screenspace_scans
 from _ss_helpers import _make_icon, _make_icon_frame
 
 
@@ -71,8 +72,10 @@ class TestScanTemplateControls:
         def fake_scan(video_path, interval, callback, **kwargs):
             callback(0.0, frame)
 
-        monkeypatch.setattr(screenspace, "scan_video_full_frames", fake_scan)
-        monkeypatch.setattr(screenspace, "_probe_video_meta", lambda p: (30.0, 1.0))
+        monkeypatch.setattr(screenspace_scans, "scan_video_full_frames", fake_scan)
+        monkeypatch.setattr(
+            screenspace_scans, "_probe_video_meta", lambda p: (30.0, 1.0)
+        )
 
     def test_scale_fixes_size_mismatch(self, monkeypatch):
         """A 40px template should miss a 20px in-frame icon at scale 1.0
