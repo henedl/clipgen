@@ -1418,3 +1418,70 @@ var clipgenInstallPausedFrameOverlay = function (video) {
     }
   });
 };
+
+
+// ---- Bottom-panel drag-to-resize divider ----
+
+// Shared drag + dblclick wiring for the #panelDivider handle, used by Studio
+// and Screenspace. The pages differ only in how they read/apply panel height,
+// compute bounds, and persist — supplied as callbacks in `cfg`:
+//   isCollapsed() -> bool   getHeight() -> px   setHeight(px)
+//   getBounds() -> { min, max }   onToggle()   [onDragStart] [onDragEnd] [persist]
+function initPanelDivider(cfg) {
+  var handle = document.querySelector("#panelDivider");
+  if (!handle) return;
+  var dragging = false;
+  var startY = 0;
+  var startHeight = 0;
+  var minH = 0;
+  var maxH = 0;
+  var rafPending = false;
+
+  function onDown(e) {
+    if (cfg.isCollapsed()) return;
+    e.preventDefault();
+    dragging = true;
+    startY = e.clientY || (e.touches && e.touches[0].clientY) || 0;
+    startHeight = cfg.getHeight();
+    var bounds = cfg.getBounds();
+    minH = bounds.min;
+    maxH = bounds.max;
+    handle.classList.add("active");
+    if (cfg.onDragStart) cfg.onDragStart();
+    document.body.style.cursor = "row-resize";
+    document.body.style.userSelect = "none";
+  }
+
+  function onMove(e) {
+    if (!dragging || rafPending) return;
+    rafPending = true;
+    var clientY = e.clientY || (e.touches && e.touches[0].clientY) || 0;
+    requestAnimationFrame(function () {
+      var delta = startY - clientY;
+      cfg.setHeight(Math.max(minH, Math.min(maxH, startHeight + delta)));
+      rafPending = false;
+    });
+  }
+
+  function onUp() {
+    if (!dragging) return;
+    dragging = false;
+    handle.classList.remove("active");
+    if (cfg.onDragEnd) cfg.onDragEnd();
+    document.body.style.cursor = "";
+    document.body.style.userSelect = "";
+    if (cfg.persist) cfg.persist();
+  }
+
+  handle.addEventListener("mousedown", onDown);
+  handle.addEventListener("touchstart", onDown, { passive: false });
+  document.addEventListener("mousemove", onMove);
+  document.addEventListener("touchmove", onMove, { passive: false });
+  document.addEventListener("mouseup", onUp);
+  document.addEventListener("touchend", onUp);
+
+  handle.addEventListener("dblclick", function (e) {
+    e.preventDefault();
+    cfg.onToggle();
+  });
+}
