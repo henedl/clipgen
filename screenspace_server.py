@@ -58,7 +58,6 @@ import threading
 import uuid
 from collections import OrderedDict
 from datetime import datetime, timezone
-from numbers import Integral, Real
 from pathlib import Path
 from typing import Any, Callable, TypeGuard, cast
 
@@ -838,7 +837,7 @@ def api_calibrate() -> FlaskResponse:
             entry["status"] = "not_evaluable"
         results.append(entry)
 
-    return jsonify(_sanitize_floats({"ok": True, "tool": tool, "pins": results}))
+    return jsonify(utils.sanitize_floats({"ok": True, "tool": tool, "pins": results}))
 
 
 # ---- Video frame extraction ----
@@ -2311,7 +2310,7 @@ def api_tasks_results(task_id: str) -> FlaskResponse:
     task = _worker.get_task(task_id)
     if task is None:
         return jsonify({"ok": False, "error": "Task not found"}), 404
-    return jsonify({"ok": True, "results": _sanitize_floats(task.get("result"))})
+    return jsonify({"ok": True, "results": utils.sanitize_floats(task.get("result"))})
 
 
 # ---- Events CRUD ----
@@ -2333,7 +2332,7 @@ def api_events_list() -> FlaskResponse:
     task_id = request.args.get("task_id")
     if task_id:
         events = [e for e in events if e.get("task_id") == task_id]
-    return jsonify({"ok": True, "events": _sanitize_floats(events)})
+    return jsonify({"ok": True, "events": utils.sanitize_floats(events)})
 
 
 @screenspace_bp.route("/api/export/events")
@@ -2382,7 +2381,7 @@ def api_export_events() -> FlaskResponse:
         )
         return response
     if fmt == "json":
-        return jsonify({"ok": True, "events": _sanitize_floats(records)})
+        return jsonify({"ok": True, "events": utils.sanitize_floats(records)})
     return jsonify({"ok": False, "error": f"Unsupported format: {fmt}"}), 400
 
 
@@ -2612,27 +2611,6 @@ def _validate_scene_references(
     return validated_refs
 
 
-def _sanitize_floats(obj: Any) -> Any:
-    """Replace non-finite floats (inf, nan) with None for JSON safety."""
-    if isinstance(obj, bool):
-        return obj
-    if isinstance(obj, Integral):
-        return int(obj)
-    if isinstance(obj, Real):
-        value = float(obj)
-        return value if math.isfinite(value) else None
-    if hasattr(obj, "item") and callable(obj.item):
-        try:
-            return _sanitize_floats(obj.item())
-        except (TypeError, ValueError):
-            pass
-    if isinstance(obj, dict):
-        return {k: _sanitize_floats(v) for k, v in obj.items()}
-    if isinstance(obj, list):
-        return [_sanitize_floats(v) for v in obj]
-    return obj
-
-
 def _clean_task(task: dict[str, Any]) -> dict[str, Any]:
     """Remove internal fields from a task dict for API responses."""
     cleaned = {k: v for k, v in task.items() if not k.startswith("_")}
@@ -2647,7 +2625,7 @@ def _clean_task(task: dict[str, Any]) -> dict[str, Any]:
                 {k: v for k, v in s.items() if k not in _step_strip_keys}
                 for s in cleaned["parameters"]["steps"]
             ]
-    return _sanitize_floats(cleaned)
+    return utils.sanitize_floats(cleaned)
 
 
 # ---- State initialization ----

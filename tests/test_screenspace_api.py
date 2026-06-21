@@ -2696,7 +2696,9 @@ def test_calibrate_text_ocr_cache_rescores_threshold(calib_client, monkeypatch):
 def test_sanitize_floats_handles_numpy_scalars():
     import numpy as np
 
-    out = screenspace_server._sanitize_floats(
+    import utils
+
+    out = utils.sanitize_floats(
         {"ok": np.bool_(True), "score": np.float32("nan"), "detail": {"n": np.int64(3)}}
     )
     assert out == {"ok": True, "score": None, "detail": {"n": 3}}

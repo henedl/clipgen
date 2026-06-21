@@ -4,9 +4,11 @@
 import difflib
 import functools
 import json
+import math
 import subprocess
 import sys
 from datetime import datetime
+from numbers import Integral, Real
 from pathlib import Path
 from typing import Any, Callable, TypedDict, TypeVar
 
@@ -599,6 +601,33 @@ def terminate_subprocess(proc: subprocess.Popen, timeout: int = 5) -> None:
     except subprocess.TimeoutExpired:
         proc.kill()
         proc.wait()
+
+
+def sanitize_floats(obj: Any) -> Any:
+    """Recursively replace non-finite floats (NaN, ±Inf) with ``None`` and
+    normalise numpy/Integral scalars to plain Python numbers, for JSON safety.
+
+    Use before any ``jsonify`` response or manifest write that may carry numpy
+    or cv2-derived values: NaN survives min/max clamps and serialises as invalid
+    ``NaN`` in JSON, and raw numpy scalars are not JSON-serialisable.
+    """
+    if isinstance(obj, bool):
+        return obj
+    if isinstance(obj, Integral):
+        return int(obj)
+    if isinstance(obj, Real):
+        value = float(obj)
+        return value if math.isfinite(value) else None
+    if hasattr(obj, "item") and callable(obj.item):
+        try:
+            return sanitize_floats(obj.item())
+        except (TypeError, ValueError):
+            pass
+    if isinstance(obj, dict):
+        return {k: sanitize_floats(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [sanitize_floats(v) for v in obj]
+    return obj
 
 
 # ---- Filename and study name helpers ----

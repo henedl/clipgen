@@ -22,7 +22,6 @@ from __future__ import annotations
 import csv
 import io
 import json
-import math
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
@@ -94,13 +93,6 @@ _FRICTION_SEGMENT_COLS = (
 # ---- Helpers ------------------------------------------------------------
 
 
-def _scalar_safe(value: Any) -> Any:
-    """Replace non-finite floats with None; pass everything else through."""
-    if isinstance(value, float) and not math.isfinite(value):
-        return None
-    return value
-
-
 def _flatten_value_for_csv(value: Any) -> Any:
     """Coerce list/dict values into CSV-safe strings.
 
@@ -109,13 +101,13 @@ def _flatten_value_for_csv(value: Any) -> Any:
     through.
     """
     if value is None or isinstance(value, (str, int, float, bool)):
-        return _scalar_safe(value)
+        return utils.sanitize_floats(value)
     if isinstance(value, list):
         if all(
             isinstance(item, (str, int, float, bool)) or item is None for item in value
         ):
             return ";".join(
-                "" if (safe := _scalar_safe(item)) is None else str(safe)
+                "" if (safe := utils.sanitize_floats(item)) is None else str(safe)
                 for item in value
             )
         return json.dumps(value, ensure_ascii=False)
@@ -182,10 +174,10 @@ def build_screenspace_events(
             "detector": ev.get("detector", ""),
             "event_type": ev.get("event_type", ""),
             "region": ev.get("region", ""),
-            "time_in": _scalar_safe(time_in),
-            "time_out": _scalar_safe(time_out),
-            "duration": _scalar_safe(round(duration, 4)),
-            "confidence": _scalar_safe(ev.get("confidence", 0.0)),
+            "time_in": utils.sanitize_floats(time_in),
+            "time_out": utils.sanitize_floats(time_out),
+            "duration": utils.sanitize_floats(round(duration, 4)),
+            "confidence": utils.sanitize_floats(ev.get("confidence", 0.0)),
             "excluded": bool(ev.get("excluded", False)),
             "task_id": ev.get("task_id", ""),
         }
@@ -194,7 +186,7 @@ def build_screenspace_events(
             for k, v in metadata.items():
                 if k in record:
                     continue
-                record[k] = _scalar_safe(v)
+                record[k] = utils.sanitize_floats(v)
         records.append(record)
     return records
 
@@ -220,7 +212,7 @@ def build_screenspace_pins(manifest: dict[str, Any]) -> list[dict[str, Any]]:
                 {
                     "participant": participant_id,
                     "id": pin.get("id", ""),
-                    "timestamp": _scalar_safe(pin.get("timestamp", 0.0)),
+                    "timestamp": utils.sanitize_floats(pin.get("timestamp", 0.0)),
                     "polarity": pin.get("polarity", ""),
                     "label": pin.get("label", ""),
                     "created_at": pin.get("created_at", ""),
@@ -266,9 +258,9 @@ def build_transcript_segments(manifest: dict[str, Any]) -> list[dict[str, Any]]:
                 {
                     "participant": participant_id,
                     "segment_id": seg_id,
-                    "start": _scalar_safe(start),
-                    "end": _scalar_safe(end),
-                    "duration": _scalar_safe(round(end - start, 4)),
+                    "start": utils.sanitize_floats(start),
+                    "end": utils.sanitize_floats(end),
+                    "duration": utils.sanitize_floats(round(end - start, 4)),
                     "text": seg.get("text", ""),
                     "language": language,
                     "model": model,
@@ -302,7 +294,7 @@ def build_friction_moments(manifest: dict[str, Any]) -> list[dict[str, Any]]:
                     "segment_ids": [str(s) for s in (moment.get("segment_ids") or [])],
                     "category": moment.get("category", ""),
                     "rationale": moment.get("rationale", ""),
-                    "score": _scalar_safe(moment.get("score", 0.0)),
+                    "score": utils.sanitize_floats(moment.get("score", 0.0)),
                     "model": model,
                     "computed_at": computed_at,
                 }
@@ -335,7 +327,7 @@ def build_friction_segments(manifest: dict[str, Any]) -> list[dict[str, Any]]:
                 {
                     "participant": participant_id,
                     "segment_id": seg.get("id", ""),
-                    "score": _scalar_safe(score),
+                    "score": utils.sanitize_floats(score),
                     "categories": list(seg.get("categories") or []),
                     "markers": list(seg.get("markers") or []),
                 }
