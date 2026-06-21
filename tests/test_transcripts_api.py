@@ -233,6 +233,8 @@ def _agent_state_clean():
             transcripts_server._orchestrator._in_flight[key].clear()
         for key in transcripts_server._orchestrator._cancel_events:
             transcripts_server._orchestrator._cancel_events[key].clear()
+        for key in transcripts_server._orchestrator._started_at:
+            transcripts_server._orchestrator._started_at[key].clear()
         with transcripts_server._pending_model_unloads_lock:
             for timer in transcripts_server._pending_model_unloads.values():
                 timer.cancel()
@@ -641,6 +643,60 @@ def test_friction_get_generating_when_in_flight(tr_client, _agent_state_clean):
     resp = tr_client.get("/transcripts/api/friction/P01")
     assert resp.status_code == 200
     assert resp.get_json()["generating"] is True
+
+
+def _claim_slot(agent_key: str, pid: str, started_at: float) -> None:
+    """Mark *agent_key* in flight for *pid* with a known start time, mirroring
+    what run_agent stamps when it claims the slot."""
+    transcripts_server._orchestrator._in_flight[agent_key].add(pid)
+    transcripts_server._orchestrator._started_at[agent_key][pid] = started_at
+
+
+def test_summary_get_generating_includes_started_at(tr_client, _agent_state_clean):
+    """A generating summary must surface its server start time so the frontend
+    elapsed clock survives page navigation instead of resetting to zero."""
+    transcripts_server._manifest["source_transcripts"]["P01"] = {
+        "segments": [{"id": "P01:0", "start": 0.0, "end": 1.0, "text": "x"}],
+    }
+    _claim_slot("summary", "P01", 1000.0)
+    resp = tr_client.get("/transcripts/api/summary/P01")
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["generating"] is True
+    assert data["started_at"] == 1000.0
+
+
+def test_citations_get_generating_includes_started_at(tr_client, _agent_state_clean):
+    _seed_friction_entry()  # summary present, no citations yet
+    _claim_slot("citations", "P01", 2000.0)
+    resp = tr_client.get("/transcripts/api/citations/P01")
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["generating"] is True
+    assert data["started_at"] == 2000.0
+
+
+def test_summary_get_includes_citations_started_at(tr_client, _agent_state_clean):
+    """On a fresh load with the summary done but citations still running, the
+    citations start rides on the summary response (the only call the UI makes)."""
+    _seed_friction_entry()  # summary present, no citations yet
+    _claim_slot("citations", "P01", 3000.0)
+    resp = tr_client.get("/transcripts/api/summary/P01")
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["ok"] is True
+    assert data["citations_generating"] is True
+    assert data["citations_started_at"] == 3000.0
+
+
+def test_friction_get_generating_includes_started_at(tr_client, _agent_state_clean):
+    _seed_friction_entry()
+    _claim_slot("friction", "P01", 4000.0)
+    resp = tr_client.get("/transcripts/api/friction/P01")
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["generating"] is True
+    assert data["started_at"] == 4000.0
 
 
 def test_friction_regenerate_404_without_summary(tr_client, _agent_state_clean):

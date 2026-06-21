@@ -564,7 +564,13 @@ def api_summary(participant: str) -> FlaskResponse:
         entry = _manifest.get("source_transcripts", {}).get(participant)
         if not entry or not entry.get("summary"):
             if _orchestrator.is_generating(participant, "summary"):
-                return jsonify({"ok": False, "generating": True})
+                return jsonify(
+                    {
+                        "ok": False,
+                        "generating": True,
+                        "started_at": _orchestrator.started_at(participant, "summary"),
+                    }
+                )
             return jsonify({"ok": False}), 404
         summary = entry["summary"]
         citations = entry.get("citations")
@@ -572,6 +578,10 @@ def api_summary(participant: str) -> FlaskResponse:
     if citations:
         resp["citations"] = citations
     resp["citations_generating"] = _orchestrator.is_generating(participant, "citations")
+    if resp["citations_generating"]:
+        resp["citations_started_at"] = _orchestrator.started_at(
+            participant, "citations"
+        )
     return jsonify(resp)
 
 
@@ -643,7 +653,13 @@ def api_citations(participant: str) -> FlaskResponse:
     if citations:
         return jsonify({"ok": True, "citations": citations})
     if _orchestrator.is_generating(participant, "citations"):
-        return jsonify({"ok": False, "generating": True})
+        return jsonify(
+            {
+                "ok": False,
+                "generating": True,
+                "started_at": _orchestrator.started_at(participant, "citations"),
+            }
+        )
     return jsonify({"ok": False}), 404
 
 
@@ -701,7 +717,13 @@ def api_friction(participant: str) -> FlaskResponse:
     if friction_data:
         return jsonify({"ok": True, "friction": friction_data})
     if _orchestrator.is_generating(participant, "friction"):
-        return jsonify({"ok": False, "generating": True})
+        return jsonify(
+            {
+                "ok": False,
+                "generating": True,
+                "started_at": _orchestrator.started_at(participant, "friction"),
+            }
+        )
     return jsonify({"ok": False}), 404
 
 
@@ -1379,6 +1401,14 @@ class AgentOrchestrator:
         self._cancel_events: dict[str, dict[str, threading.Event]] = {
             a["key"]: {} for a in thinking_agents.AGENTS
         }
+        # Wall-clock epoch (seconds) stamped when each run claims its in-flight
+        # slot, so a UI reattach after page navigation can show accurate elapsed
+        # time instead of restarting from zero. Maintained in lockstep with
+        # _in_flight / _cancel_events (claimed, released, and ownership-guarded
+        # at the same points).
+        self._started_at: dict[str, dict[str, float]] = {
+            a["key"]: {} for a in thinking_agents.AGENTS
+        }
         self._threads: dict[str, set[threading.Thread]] = {
             a["key"]: set() for a in thinking_agents.AGENTS
         }
@@ -1386,6 +1416,14 @@ class AgentOrchestrator:
     def is_generating(self, participant: str, agent_key: str) -> bool:
         """Return True if *agent_key* is currently running for *participant*."""
         return participant in self._in_flight.get(agent_key, set())
+
+    def started_at(self, participant: str, agent_key: str) -> float | None:
+        """Epoch seconds when *agent_key* started running for *participant*.
+
+        ``None`` when no run is in flight. Lets the frontend seed its elapsed
+        clock from the true start so navigating away and back doesn't reset it.
+        """
+        return self._started_at.get(agent_key, {}).get(participant)
 
     def stop(self, agent_key: str, participant: str) -> bool:
         """Abort an in-flight run. Returns True iff a run was actually stopped.
@@ -1399,6 +1437,7 @@ class AgentOrchestrator:
                 return False
             event = self._cancel_events.get(agent_key, {}).get(participant)
             self._in_flight[agent_key].discard(participant)
+            self._started_at.get(agent_key, {}).pop(participant, None)
         if event is not None:
             event.set()
         return True
@@ -1453,6 +1492,9 @@ class AgentOrchestrator:
                 return
             self._in_flight[agent_key].add(participant)
             self._cancel_events[agent_key][participant] = cancel_event
+            self._started_at[agent_key][participant] = datetime.now(
+                timezone.utc
+            ).timestamp()
 
         # If a Stop just scheduled an unload for this model, cancel it — the
         # next request would only force a reload.
@@ -1514,6 +1556,7 @@ class AgentOrchestrator:
                     if slot is cancel_event:
                         self._in_flight[agent_key].discard(participant)
                         self._cancel_events[agent_key].pop(participant, None)
+                        self._started_at[agent_key].pop(participant, None)
                     self._threads[agent_key].discard(t)
 
         t = threading.Thread(

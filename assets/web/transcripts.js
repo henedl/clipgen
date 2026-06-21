@@ -51,6 +51,9 @@
     frictionData: null,
     frictionBySegId: {},
     frictionGenerating: false,
+    // Server-recorded friction run start (epoch ms) so the elapsed clock
+    // survives page navigation; null while idle or for a just-clicked run.
+    frictionStartedAt: null,
     frictionHeatmapEnabled: false,
     frictionThreshold: 0.5,
     frictionCategoryFilter: null,
@@ -701,12 +704,14 @@
         } else if (data.citations_generating) {
           state.summaryCitations = null;
           state.citationsGenerating = true;
-          renderCitationsStatus();
+          renderCitationsStatus(
+            data.citations_started_at ? data.citations_started_at * 1000 : undefined
+          );
           _startCitationsPoll(pid);
           _refreshAgentStateNow();
         }
       } else if (data.generating) {
-        renderSummaryGenerating();
+        renderSummaryGenerating(data.started_at ? data.started_at * 1000 : undefined);
         _startSummaryPoll(pid);
         _refreshAgentStateNow();
       } else {
@@ -740,7 +745,9 @@
           } else if (data.citations_generating) {
             state.summaryCitations = null;
             state.citationsGenerating = true;
-            renderCitationsStatus();
+            renderCitationsStatus(
+              data.citations_started_at ? data.citations_started_at * 1000 : undefined
+            );
             _startCitationsPoll(pid);
           }
         } else if (!data.generating) {
@@ -763,7 +770,10 @@
     }
   }
 
-  function renderSummaryGenerating() {
+  // startedAtMs (optional): server-recorded run start in epoch ms. Seeds the
+  // elapsed clock so navigating away and back resumes from the true elapsed
+  // time instead of zero; omit it for a just-clicked manual run (starts now).
+  function renderSummaryGenerating(startedAtMs) {
     var content = qs("#summaryContent");
     content.innerHTML =
       '<p class="summary-generating">Generating summary\u2026' +
@@ -778,7 +788,7 @@
     });
     state.summaryEditing = false;
     state.summaryText = "";
-    _summaryEtaTracker.start();
+    _summaryEtaTracker.start(startedAtMs || undefined);
     _updateAgentElapsed("summaryElapsed", _summaryEtaTracker);
     _txEtaTicker.ensure();
   }
@@ -954,7 +964,9 @@
     }
   }
 
-  function renderCitationsStatus() {
+  // startedAtMs (optional): server-recorded run start in epoch ms \u2014 seeds the
+  // elapsed clock so it survives navigation; omit for a just-clicked manual run.
+  function renderCitationsStatus(startedAtMs) {
     // Remove any existing status
     var existing = qs("#summaryContent .citations-status");
     if (existing) existing.remove();
@@ -976,7 +988,12 @@
     });
     p.appendChild(cancel);
     qs("#summaryContent").appendChild(p);
-    _citationsEtaTracker.start();
+    // Reset before seeding so a re-run adopts the new (server) start instead of
+    // the idempotent tracker clinging to a prior run's start. Teardown
+    // (_stopCitationsPoll) is timer-only — mirroring summary/friction — so the
+    // _startCitationsPoll() that follows this call can't wipe this seed.
+    _citationsEtaTracker.reset();
+    _citationsEtaTracker.start(startedAtMs || undefined);
     _updateAgentElapsed("citationsElapsed", _citationsEtaTracker);
     _txEtaTicker.ensure();
   }
@@ -1026,8 +1043,10 @@
     }, 3000);
   }
 
+  // Timer teardown only — does NOT reset _citationsEtaTracker (renderCitationsStatus
+  // resets-then-seeds), mirroring _stopSummaryPoll / _stopFrictionPoll. Resetting
+  // here would wipe the seed when _startCitationsPoll restarts the poll timer.
   function _stopCitationsPoll() {
-    _citationsEtaTracker.reset();
     if (_citationsPollTimer) {
       clearInterval(_citationsPollTimer);
       _citationsPollTimer = null;
@@ -1234,6 +1253,7 @@
         _setFrictionData(data.friction);
       } else if (data.generating) {
         state.frictionGenerating = true;
+        state.frictionStartedAt = data.started_at ? data.started_at * 1000 : null;
         renderFrictionGenerating();
         _startFrictionPoll(pid);
         _refreshAgentStateNow();
@@ -1291,7 +1311,7 @@
       statusEl.classList.remove("friction-status--stale");
       rerun.classList.add("hidden");
       cancel.classList.remove("hidden");
-      _frictionEtaTracker.start();
+      _frictionEtaTracker.start(state.frictionStartedAt || undefined);
       _updateAgentElapsed("frictionElapsed", _frictionEtaTracker);
       _txEtaTicker.ensure();
       return;
@@ -1418,6 +1438,7 @@
     var pid = state.selectedParticipant;
     if (!pid || !_frictionDepMet()) return;
     state.frictionGenerating = true;
+    state.frictionStartedAt = null;
     renderFrictionGenerating();
     apiPost("api/friction/" + pid + "/regenerate", {}).then(function (data) {
       if (data.ok && data.generating) {
