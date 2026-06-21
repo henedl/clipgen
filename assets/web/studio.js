@@ -2915,214 +2915,158 @@
 
   // ---- Queue rendering ----
 
-  function renderArtifactQueue() {
+  var ARTIFACT_QUEUE = {
+    listSel: "#artifactsList",
+    countSel: "#artifactsCount",
+    queueKey: "artifactQueue",
+    isLocked: isArtifactQueueLocked,
+    emptyGhost: "Click or drag cells here to queue for generation",
+    updateActions: updateArtifactActions,
+    isReel: false,
+    attachDragstart: true,
+    durationSel: null,
+  };
+  var REEL_QUEUE = {
+    listSel: "#reelList",
+    countSel: "#reelCount",
+    queueKey: "reelQueue",
+    isLocked: isReelQueueLocked,
+    emptyGhost: "Shift+click or drag cells here to build a reel",
+    updateActions: updateReelActions,
+    isReel: true,
+    attachDragstart: false,
+    durationSel: "#reelDuration",
+  };
+
+  function buildQueueCard(item, idx, cfg, ctx) {
+    var isIntake = isIntakeSource(item.source);
+    var segTotal = item.segTotal || 1;
+    var segIdx = item.segIdx || 0;
+
+    var card = el(
+      "div",
+      "queue-card" + (cfg.isReel ? " reel-card" : "") + (isIntake ? " queue-card-intake" : ""),
+    );
+    if (cfg.isReel) card.setAttribute("data-reel-idx", idx);
+    card.setAttribute("data-participant", item.participant);
+    card.setAttribute("data-row", isIntake ? "" : item.row);
+    if (isIntake) card.setAttribute("data-source", item.source);
+    if (!isIntake && item.severity) card.setAttribute("data-severity", item.severity);
+    card.setAttribute("data-seg-idx", segIdx);
+    if (!ctx.locked) card.setAttribute("draggable", "true");
+
+    if (cfg.attachDragstart && !ctx.locked) {
+      card.addEventListener("dragstart", function (ev) {
+        var data = {
+          participant: item.participant,
+          desc: item.desc,
+          start: item.start,
+          end: item.end,
+          source: isIntake ? item.source : "artifact",
+        };
+        if (!isIntake) {
+          data.row = item.row;
+          data.timestamp = item.timestamp;
+          data.severity = item.severity;
+          data.segIdx = item.segIdx;
+          data.segTotal = item.segTotal;
+        } else {
+          data.event_type = item.event_type;
+          data.event_ids = item.event_ids;
+          data.mark_ids = item.mark_ids;
+        }
+        ev.dataTransfer.setData("application/json", JSON.stringify(data));
+        ev.dataTransfer.effectAllowed = "copyMove";
+        setCardDragImage(ev, this);
+      });
+    }
+
+    var thumb = buildQueueCardThumb(card, {
+      participant: item.participant,
+      start: item.start,
+      duration: item.end - item.start,
+      observe: isIntake,
+      editItem: item,
+      renderFn: ctx.render,
+    });
+    if (isIntake) thumb.appendChild(buildSourceBadge(item.source));
+
+    var meta = el("div", "queue-card-meta");
+    var refText;
+    if (isIntake) {
+      refText = item.participant + " \u00b7 " + (item.event_type || item.desc || "intake");
+    } else {
+      refText = item.participant + "." + item.row;
+      if (segTotal > 1) refText += " (" + (segIdx + 1) + "/" + segTotal + ")";
+    }
+    var metaRow = el("div", "queue-card-meta-row");
+    if (cfg.isReel) metaRow.appendChild(el("span", "reel-card-order", String(idx + 1)));
+    metaRow.appendChild(el("span", "queue-card-ref", refText));
+    meta.appendChild(metaRow);
+    meta.appendChild(el("span", "queue-card-time", formatDuration(item.start) + "\u2013" + formatDuration(item.end)));
+    card.appendChild(meta);
+
+    var removeBtn = el("button", "queue-card-remove");
+    removeBtn.innerHTML = iconHTML("x-mark");
+    removeBtn.title = "Remove";
+    if (!ctx.locked) {
+      removeBtn.addEventListener("click", function (ev) {
+        ev.stopPropagation();
+        var removed = state[cfg.queueKey].splice(idx, 1)[0];
+        if (removed.row) delete state.cellResults[cellKey(removed.participant, removed.row)];
+        ctx.render();
+        if (removed.row) updateSingleCellClass(removed.participant, removed.row);
+      });
+    }
+    card.appendChild(removeBtn);
+
+    if (!isIntake) {
+      card.addEventListener("mouseenter", function () {
+        highlightGridHeaders(item.participant, item.row);
+      });
+      card.addEventListener("mouseleave", clearGridHighlights);
+    }
+
+    return card;
+  }
+
+  function renderQueue(cfg) {
     clearGridHighlights();
-    var list = qs("#artifactsList");
-    var n = state.artifactQueue.length;
-    qs("#artifactsCount").textContent = "(" + n + ")";
+    var list = qs(cfg.listSel);
+    var q = state[cfg.queueKey];
+    var n = q.length;
+    qs(cfg.countSel).textContent = "(" + n + ")";
     list.innerHTML = "";
     saveQueues();
     refreshIntakeCardStates();
 
     if (n === 0) {
-      list.appendChild(
-        el("div", "queue-card-ghost", "Click or drag cells here to queue for generation")
-      );
-      updateArtifactActions();
+      list.appendChild(el("div", "queue-card-ghost", cfg.emptyGhost));
+      if (cfg.durationSel) qs(cfg.durationSel).textContent = "";
+      cfg.updateActions();
       return;
     }
 
-    var artLocked = isArtifactQueueLocked();
+    var locked = cfg.isLocked();
+    var render = function () {
+      renderQueue(cfg);
+    };
+    var totalDur = 0;
     for (var i = 0; i < n; i++) {
-      var item = state.artifactQueue[i];
-      var isIntake = isIntakeSource(item.source);
-      var segTotal = item.segTotal || 1;
-      var segIdx = item.segIdx || 0;
-
-      var card = el(
-        "div",
-        "queue-card" + (isIntake ? " queue-card-intake" : ""),
-      );
-      card.setAttribute("data-participant", item.participant);
-      card.setAttribute("data-row", isIntake ? "" : item.row);
-      if (isIntake) card.setAttribute("data-source", item.source);
-      if (!isIntake && item.severity) card.setAttribute("data-severity", item.severity);
-      card.setAttribute("data-seg-idx", segIdx);
-      if (!artLocked) card.setAttribute("draggable", "true");
-      (function (itm, isI, locked) {
-        if (!locked) {
-          card.addEventListener("dragstart", function (ev) {
-            var data = {
-              participant: itm.participant,
-              desc: itm.desc,
-              start: itm.start,
-              end: itm.end,
-              source: isI ? itm.source : "artifact",
-            };
-            if (!isI) {
-              data.row = itm.row;
-              data.timestamp = itm.timestamp;
-              data.severity = itm.severity;
-              data.segIdx = itm.segIdx;
-              data.segTotal = itm.segTotal;
-            } else {
-              data.event_type = itm.event_type;
-              data.event_ids = itm.event_ids;
-              data.mark_ids = itm.mark_ids;
-            }
-            ev.dataTransfer.setData("application/json", JSON.stringify(data));
-            ev.dataTransfer.effectAllowed = "copyMove";
-            setCardDragImage(ev, this);
-          });
-        }
-      })(item, isIntake, artLocked);
-
-      var thumb = buildQueueCardThumb(card, {
-        participant: item.participant,
-        start: item.start,
-        duration: item.end - item.start,
-        observe: isIntake,
-        editItem: item,
-        renderFn: renderArtifactQueue,
-      });
-      if (isIntake) thumb.appendChild(buildSourceBadge(item.source));
-
-      var meta = el("div", "queue-card-meta");
-      var refText;
-      if (isIntake) {
-        refText = item.participant + " \u00b7 " + (item.event_type || item.desc || "intake");
-      } else {
-        refText = item.participant + "." + item.row;
-        if (segTotal > 1) refText += " (" + (segIdx + 1) + "/" + segTotal + ")";
-      }
-      var metaRow = el("div", "queue-card-meta-row");
-      metaRow.appendChild(el("span", "queue-card-ref", refText));
-      meta.appendChild(metaRow);
-      meta.appendChild(el("span", "queue-card-time", formatDuration(item.start) + "\u2013" + formatDuration(item.end)));
-      card.appendChild(meta);
-
-      var removeBtn = el("button", "queue-card-remove");
-      removeBtn.innerHTML = iconHTML("x-mark");
-      removeBtn.title = "Remove";
-      (function (idx, locked) {
-        if (!locked) {
-          removeBtn.addEventListener("click", function (ev) {
-            ev.stopPropagation();
-            var removed = state.artifactQueue.splice(idx, 1)[0];
-            if (removed.row) delete state.cellResults[cellKey(removed.participant, removed.row)];
-            renderArtifactQueue();
-            if (removed.row) updateSingleCellClass(removed.participant, removed.row);
-          });
-        }
-      })(i, artLocked);
-      card.appendChild(removeBtn);
-
-      if (!isIntake) {
-        (function (p, r) {
-          card.addEventListener("mouseenter", function () { highlightGridHeaders(p, r); });
-          card.addEventListener("mouseleave", clearGridHighlights);
-        })(item.participant, item.row);
-      }
-
-      list.appendChild(card);
+      totalDur += q[i].end - q[i].start;
+      list.appendChild(buildQueueCard(q[i], i, cfg, { locked: locked, render: render }));
     }
+    if (cfg.durationSel) qs(cfg.durationSel).textContent = formatDuration(totalDur);
     applyCardStates(list);
-    updateArtifactActions();
+    cfg.updateActions();
+  }
+
+  function renderArtifactQueue() {
+    renderQueue(ARTIFACT_QUEUE);
   }
 
   function renderReelQueue() {
-    clearGridHighlights();
-    var list = qs("#reelList");
-    var n = state.reelQueue.length;
-    qs("#reelCount").textContent = "(" + n + ")";
-    list.innerHTML = "";
-    saveQueues();
-    refreshIntakeCardStates();
-
-    if (n === 0) {
-      list.appendChild(
-        el("div", "queue-card-ghost", "Shift+click or drag cells here to build a reel")
-      );
-      qs("#reelDuration").textContent = "";
-      updateReelActions();
-      return;
-    }
-
-    var reelLocked = isReelQueueLocked();
-    var totalDur = 0;
-    for (var i = 0; i < n; i++) {
-      var item = state.reelQueue[i];
-      var isIntake = isIntakeSource(item.source);
-      var segDuration = item.end - item.start;
-      var segTotal = item.segTotal || 1;
-      var segIdx = item.segIdx || 0;
-      totalDur += segDuration;
-
-      var card = el(
-        "div",
-        "queue-card reel-card" + (isIntake ? " queue-card-intake" : ""),
-      );
-      card.setAttribute("data-reel-idx", i);
-      card.setAttribute("data-participant", item.participant);
-      card.setAttribute("data-row", isIntake ? "" : item.row);
-      if (isIntake) card.setAttribute("data-source", item.source);
-      if (!isIntake && item.severity) card.setAttribute("data-severity", item.severity);
-      card.setAttribute("data-seg-idx", segIdx);
-      if (!reelLocked) card.setAttribute("draggable", "true");
-
-      var thumb = buildQueueCardThumb(card, {
-        participant: item.participant,
-        start: item.start,
-        duration: segDuration,
-        observe: isIntake,
-        editItem: item,
-        renderFn: renderReelQueue,
-      });
-      if (isIntake) thumb.appendChild(buildSourceBadge(item.source));
-
-      var meta = el("div", "queue-card-meta");
-      var refText;
-      if (isIntake) {
-        refText = item.participant + " \u00b7 " + (item.event_type || item.desc || "intake");
-      } else {
-        refText = item.participant + "." + item.row;
-        if (segTotal > 1) refText += " (" + (segIdx + 1) + "/" + segTotal + ")";
-      }
-      var metaRow = el("div", "queue-card-meta-row");
-      metaRow.appendChild(el("span", "reel-card-order", String(i + 1)));
-      metaRow.appendChild(el("span", "queue-card-ref", refText));
-      meta.appendChild(metaRow);
-      meta.appendChild(el("span", "queue-card-time", formatDuration(item.start) + "\u2013" + formatDuration(item.end)));
-      card.appendChild(meta);
-
-      var removeBtn = el("button", "queue-card-remove");
-      removeBtn.innerHTML = iconHTML("x-mark");
-      removeBtn.title = "Remove";
-      (function (idx, locked) {
-        if (!locked) {
-          removeBtn.addEventListener("click", function (ev) {
-            ev.stopPropagation();
-            var removed = state.reelQueue.splice(idx, 1)[0];
-            if (removed.row) delete state.cellResults[cellKey(removed.participant, removed.row)];
-            renderReelQueue();
-            if (removed.row) updateSingleCellClass(removed.participant, removed.row);
-          });
-        }
-      })(i, reelLocked);
-      card.appendChild(removeBtn);
-
-      if (!isIntake) {
-        (function (p, r) {
-          card.addEventListener("mouseenter", function () { highlightGridHeaders(p, r); });
-          card.addEventListener("mouseleave", clearGridHighlights);
-        })(item.participant, item.row);
-      }
-
-      list.appendChild(card);
-    }
-    qs("#reelDuration").textContent = formatDuration(totalDur);
-    applyCardStates(list);
-    updateReelActions();
+    renderQueue(REEL_QUEUE);
   }
 
   // ---- Stashed reels ----
