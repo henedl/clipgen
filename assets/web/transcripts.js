@@ -767,10 +767,15 @@
     var content = qs("#summaryContent");
     content.innerHTML =
       '<p class="summary-generating">Generating summary\u2026' +
-      '<span class="agent-elapsed" id="summaryElapsed"></span></p>';
+      '<span class="agent-elapsed" id="summaryElapsed"></span>' +
+      '<button type="button" class="agent-cancel-btn" id="summaryCancel">Cancel</button></p>';
     qs("#summaryEmpty").classList.add("hidden");
     qs("#summaryBody").classList.remove("hidden");
     qs("#summaryActions").classList.add("hidden");
+    qs("#summaryCancel").addEventListener("click", function (e) {
+      e.stopPropagation();
+      _stopSummaryRun();
+    });
     state.summaryEditing = false;
     state.summaryText = "";
     _summaryEtaTracker.start();
@@ -961,6 +966,15 @@
     sp.className = "agent-elapsed";
     sp.id = "citationsElapsed";
     p.appendChild(sp);
+    var cancel = document.createElement("button");
+    cancel.type = "button";
+    cancel.className = "agent-cancel-btn";
+    cancel.textContent = "Cancel";
+    cancel.addEventListener("click", function (e) {
+      e.stopPropagation();
+      _stopCitationsRun();
+    });
+    p.appendChild(cancel);
     qs("#summaryContent").appendChild(p);
     _citationsEtaTracker.start();
     _updateAgentElapsed("citationsElapsed", _citationsEtaTracker);
@@ -1020,6 +1034,20 @@
     }
   }
 
+  function _stopCitationsRun() {
+    var pid = state.selectedParticipant;
+    if (!pid) return;
+    // Citations run after the summary exists, so keep the summary visible and
+    // only remove the "Finding sources…" status line.
+    _stopCitationsPoll();
+    state.citationsGenerating = false;
+    var status = qs("#summaryContent .citations-status");
+    if (status) status.remove();
+    apiPost("api/citations/" + pid + "/stop", {}).then(function () {
+      _refreshAgentStateNow();
+    }).catch(function () {});
+  }
+
   function _startSummaryRun() {
     var pid = state.selectedParticipant;
     if (!pid) return;
@@ -1038,6 +1066,27 @@
       if (previousText) renderSummary(previousText);
       else renderSummaryEmpty();
     });
+  }
+
+  function _stopSummaryRun() {
+    var pid = state.selectedParticipant;
+    if (!pid) return;
+    _stopSummaryPoll();
+    _stopCitationsPoll();
+    state.citationsGenerating = false;
+    // Regenerate runs summary → citations as a chain, so summary may have
+    // already finished and citations started by the time Cancel is clicked
+    // (3s poll gap). Stop both — each call is a no-op if that pass isn't
+    // running. Re-sync only after both stops are acknowledged, otherwise the
+    // follow-up GET can still see citations in-flight and restart its poll.
+    Promise.all([
+      apiPost("api/summary/" + pid + "/stop", {}),
+      apiPost("api/citations/" + pid + "/stop", {}),
+    ]).then(function () {
+      _refreshAgentStateNow();
+      loadSummary(pid); // re-sync with backend (mirrors friction's loadFriction)
+    }).catch(function () {});
+    renderSummaryEmpty();
   }
 
   function _setSummaryEditMode(editing) {

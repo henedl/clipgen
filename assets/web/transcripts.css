@@ -740,6 +740,22 @@ body {
   font-style: italic;
 }
 
+.agent-cancel-btn {
+  margin-left: var(--space-2);
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--color-text-dim);
+  font: inherit;
+  font-style: normal;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.agent-cancel-btn:hover {
+  color: var(--color-text);
+}
+
 .summary-actions {
   display: flex;
   align-items: center;
