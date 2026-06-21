@@ -8996,4 +8996,30 @@
       .catch(function () {});
   });
 
+  // ---- Satellite interface (window.ClipgenScreenspace) ----
+  // Published for the screenspace-*.js satellite files (multitool params,
+  // color, calibration) that load after this script. They read the hub's
+  // shared state + helpers through this object and attach their own published
+  // functions back onto it — mirrors studio.js / window._studioState. Assigned
+  // synchronously here (during the hub script's load) so the object is fully
+  // populated before any satellite IIFE runs; the DOMContentLoaded init above
+  // and all user-event handlers fire later still, by which point satellites
+  // have registered their functions.
+  var SS = (window.ClipgenScreenspace = window.ClipgenScreenspace || {});
+  SS.state = state;
+  // Calibration entry points: real impls today; once the calibration satellite
+  // lands these become thin hub delegators forwarding to SS.calRefresh/etc.
+  SS.refreshCalibration = refreshCalibration;
+  SS.updateCalibrationThresholdLine = updateCalibrationThresholdLine;
+  // Hub helpers the satellites call outward.
+  SS.gatherWorkflowParams = gatherWorkflowParams;
+  SS.loadFrame = loadFrame;
+  SS._previewRegionRef = _previewRegionRef;
+  SS.taskTypeColor = taskTypeColor;
+  SS.regionRefPayload = regionRefPayload;
+  SS.normalizeRegionRef = normalizeRegionRef;
+  SS.activeRegionRef = activeRegionRef;
+  SS.availableRegionRefByKey = availableRegionRefByKey;
+  SS.allAvailableRegionRefs = allAvailableRegionRefs;
+
 })();
