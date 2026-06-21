@@ -691,6 +691,15 @@
   function loadSummary(pid) {
     var ver = _participantReqVer;
 
+    // The analysis panel must be visible whenever we surface agent state for the
+    // selected, transcribed participant. renderSummaryGenerating/renderSummary
+    // (and the friction equivalents) don't toggle #summarySection themselves, so
+    // a summary that registers *after* the transcript finalized would otherwise
+    // paint its "Generating…" box into a hidden panel — visible only on reload.
+    if (pid === state.selectedParticipant && _currentParticipantHasTranscript()) {
+      _setAnalysisPanelVisible(true);
+    }
+
     apiGet("api/summary/" + pid).then(function (data) {
       if (ver !== _participantReqVer) return;
       if (data.ok && data.summary) {
@@ -1244,6 +1253,11 @@
 
   function loadFriction(pid) {
     var ver = _participantReqVer;
+    // Reveal the analysis panel for the selected, transcribed participant (see
+    // loadSummary) so a friction run that registers after finalize is visible.
+    if (pid === state.selectedParticipant && _currentParticipantHasTranscript()) {
+      _setAnalysisPanelVisible(true);
+    }
     state.frictionData = null;
     state.frictionBySegId = {};
     state.frictionGenerating = false;
@@ -4204,7 +4218,12 @@
     }
   }
 
-  var _refreshedCompletedPids = {};
+  // Keyed by task id (NOT participant) so each task's completion is handled
+  // exactly once. A participant can have several completed tasks over a session
+  // (re-transcription creates a new task while old completed tasks linger in the
+  // worker and are restored from the manifest), so a participant key would let a
+  // stale completed task suppress the new run's completion transition.
+  var _refreshedCompletedTaskIds = {};
   // After a whisper task flips to "completed", keep the main poll loop alive
   // for a few cycles so the summary "Generating…" state surfaces even if the
   // next /api/participants or /api/summary response races the in-flight slot.
@@ -4244,11 +4263,61 @@
     });
   }
 
+  // Reconcile a participant that is still showing the streaming view against the
+  // backend: if its whisper task has finished (no running/queued task remains
+  // and a completed one exists) and its transcript is ready, swap the streaming
+  // "Transcribing… X%" footer for the finalized transcript and reveal the
+  // analysis panel — mirroring selectParticipant's has_transcript path. Called
+  // every poll, so it self-heals: state.streamingParticipant is only cleared
+  // once the finalized transcript has actually rendered, so a transient API
+  // failure just retries on the next poll instead of freezing the footer.
+  function _finalizeStreamingIfComplete(pid) {
+    var running = false;
+    var completed = false;
+    for (var i = 0; i < state.tasks.length; i++) {
+      var t = state.tasks[i];
+      if (t.participant !== pid) continue;
+      if (t.status === "running" || t.status === "queued") running = true;
+      else if (t.status === "completed") completed = true;
+    }
+    // Still transcribing → leave the streaming view up; a later poll re-enters.
+    if (running) return;
+    // No running task and nothing completed (failed/cancelled/dismissed) → drop
+    // the streaming flag so the normal empty/failed rendering can take over and
+    // the poll loop can wind down (matches the prior behaviour here).
+    if (!completed) {
+      state.streamingParticipant = null;
+      return;
+    }
+    var ver = _participantReqVer;
+    apiGet("api/transcript/" + pid).then(function (data) {
+      if (ver !== _participantReqVer || state.selectedParticipant !== pid) return;
+      // Transcript not merged yet (rare race) → keep streamingParticipant set so
+      // the next poll retries rather than leaving a frozen footer.
+      if (!(data.ok && data.segments && data.segments.length > 0)) return;
+      state.streamingParticipant = null;
+      state.segments = data.segments;
+      state.activeSegmentIndex = -1;
+      renderSegments();
+      renderTimeline();
+      _setAnalysisPanelVisible(true);
+      _restoreActiveTab(pid);
+      loadSummary(pid);
+      loadFriction(pid);
+    });
+  }
+
   function pollTaskStatus() {
     apiGet("api/transcribe/status").then(function (data) {
       if (!data.ok) return;
       state.tasks = data.tasks;
       if (_anyTxEtaActive()) _txEtaTicker.ensure();
+
+      // Snapshot before _finalizeStreamingIfComplete can clear streamingParticipant
+      // in its async /api/transcript callback; the newlyCompleted refresh must not
+      // double-fire loadTranscript/loadSummary/loadFriction for that transition.
+      var wasStreamingSelected =
+        state.streamingParticipant === state.selectedParticipant;
 
       // Re-render the status circle immediately so completed tasks reflect
       // before the async loadParticipants()/loadTranscript() chain resolves.
@@ -4269,16 +4338,22 @@
         state.streamingParticipant = state.selectedParticipant;
         _loadStreamingMarks(state.selectedParticipant);
       } else if (state.streamingParticipant) {
-        state.streamingParticipant = null;
+        // The selected participant's streaming view is up but it has no running
+        // task. Finalize in place once its transcript is ready. This is
+        // state-driven and retried every poll (not a one-shot tied to the
+        // newlyCompleted de-dup), so a transient /api/participants or
+        // /api/transcript failure can't leave the "Transcribing… X%" footer
+        // frozen forever. It owns clearing state.streamingParticipant.
+        _finalizeStreamingIfComplete(state.streamingParticipant);
       }
 
       var hasActive = false;
       var newlyCompleted = [];
       data.tasks.forEach(function (t) {
         if (t.status === "queued" || t.status === "running") hasActive = true;
-        if (t.status === "completed" && !_refreshedCompletedPids[t.participant]) {
+        if (t.status === "completed" && !_refreshedCompletedTaskIds[t.id]) {
           newlyCompleted.push(t.participant);
-          _refreshedCompletedPids[t.participant] = true;
+          _refreshedCompletedTaskIds[t.id] = true;
         }
       });
 
@@ -4301,8 +4376,17 @@
       if (needsRefresh) {
         loadParticipants().then(function () {
           if (newlyCompleted.length > 0 && state.selectedParticipant &&
-              newlyCompleted.indexOf(state.selectedParticipant) >= 0) {
-            state.streamingParticipant = null;
+              newlyCompleted.indexOf(state.selectedParticipant) >= 0 &&
+              !wasStreamingSelected) {
+            // The selected participant finished but was NOT mid-stream in this
+            // view (e.g. it was queued/idle when it completed), so reveal the
+            // analysis panel and load the finalized transcript here, mirroring
+            // selectParticipant's has_transcript path. The streaming→done case
+            // is owned by _finalizeStreamingIfComplete (state-driven + retried),
+            // so skip when wasStreamingSelected to avoid double-firing after it
+            // clears streamingParticipant and loads summary/friction first.
+            _setAnalysisPanelVisible(true);
+            _restoreActiveTab(state.selectedParticipant);
             loadTranscript(state.selectedParticipant);
             loadSummary(state.selectedParticipant);
             loadFriction(state.selectedParticipant);
@@ -4317,19 +4401,21 @@
           // Agents typically kick in right after whisper completes; keep the
           // poll alive across the grace window so dot transitions (running →
           // done → next) are seen even before the agent registers as running.
-          if (_anyAgentActive() || _postCompletionGrace > 0) startPolling();
+          // Also stay alive while a streaming view still needs finalizing, so
+          // _finalizeStreamingIfComplete keeps retrying until it renders.
+          if (_anyAgentActive() || _postCompletionGrace > 0 || state.streamingParticipant) startPolling();
           else if (!hasActive) {
             stopPolling();
-            _refreshedCompletedPids = {};
+            _refreshedCompletedTaskIds = {};
           }
         });
       }
 
-      if (hasActive || _anyAgentActive() || _postCompletionGrace > 0) {
+      if (hasActive || _anyAgentActive() || _postCompletionGrace > 0 || state.streamingParticipant) {
         startPolling();
       } else if (!needsRefresh) {
         stopPolling();
-        _refreshedCompletedPids = {};
+        _refreshedCompletedTaskIds = {};
       }
 
       if (!hasActive && _hadActiveTranscriptionLastPoll) {
@@ -4666,6 +4752,20 @@
           loadFriction(state.selectedParticipant);
         }
       }
+    });
+
+    // Window focus is a separate signal from tab visibility: switching to
+    // another window/app (Cmd-Tab) leaves the tab "visible" (document.hidden
+    // stays false, so the visibilitychange handler above never fires) yet
+    // browsers — Safari most aggressively — still pause/throttle setInterval for
+    // the unfocused window. That freezes the streaming "Transcribing… X%"
+    // progress until the next throttled tick or a manual reload. Re-poll
+    // immediately on focus so the transcription progress resyncs without a
+    // reload (the per-agent summary/friction pollers self-resume on focus).
+    window.addEventListener("focus", function () {
+      if (document.hidden) return;
+      pollTaskStatus();
+      if (_anyTxEtaActive()) _txEtaTicker.ensure();
     });
 
     // Load initial data
