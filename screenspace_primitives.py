@@ -1,0 +1,805 @@
+# -*- coding: utf-8 -*-
+"""Screenspace image-analysis primitives (pure cv2/numpy/PIL).
+
+Region cropping/denormalization/resolution, HSV color math, frame-diff, SSIM,
+perceptual hashing, template matching, optical flow, and scene fingerprinting,
+plus the small scan-support helpers (morphology kernel cache, consecutive-match
+buffer, static-frame skip). No file or ffmpeg I/O lives here.
+"""
+
+import functools
+import math
+import statistics
+from typing import TYPE_CHECKING, Any, Callable
+
+import cv2
+import numpy as np
+
+if TYPE_CHECKING:
+    import imagehash
+
+import config
+
+
+@functools.cache
+def _morph_kernel(size: int) -> np.ndarray:
+    """Return a shared square uint8 kernel for cv2 morphology ops.
+
+    cv2.morphologyEx treats the kernel as read-only, so callers share one cached
+    array instead of reallocating np.ones() per call/frame.
+    """
+    return np.ones((size, size), np.uint8)
+
+
+ScanCallback = Callable[[float, np.ndarray], bool | None]
+"""Per-frame callback signature for scan_video_frames and friends.
+
+Receives ``(timestamp_seconds, region_pixels)`` and may return ``False`` to stop
+iteration early. Used by all eight scan tools (color, change, similarity, text,
+numbers, flow, scene, inactivity)."""
+
+
+class _ConsecutiveBuffer:
+    """Emit one event only after N consecutive matching sampled frames.
+
+    ``push()`` records a matching frame; once ``size`` matches accumulate it
+    returns a single event -- re-stamped with the median timestamp of the run and
+    carrying the payload of the frame nearest that median -- and resets.
+    ``reset()`` (called on any non-match) discards a partial run. ``size == 1``
+    emits on every push, so the default reproduces pre-temporal-coherence
+    behavior exactly.
+    """
+
+    def __init__(self, size: int) -> None:
+        self.size = max(1, int(size))
+        self._events: list[dict[str, Any]] = []
+        self._timestamps: list[float] = []
+
+    def push(self, ts: float, event: dict[str, Any]) -> dict[str, Any] | None:
+        self._events.append(event)
+        self._timestamps.append(ts)
+        if len(self._events) >= self.size:
+            median_ts = statistics.median(self._timestamps)
+            # Pair the median timestamp with the payload of the frame closest to
+            # it. For odd-length runs this is the exact middle frame; for even
+            # lengths (the median is interpolated between two frames) it picks
+            # the nearer real frame instead of an arbitrary upper-middle one.
+            nearest = min(
+                range(len(self._timestamps)),
+                key=lambda i: abs(self._timestamps[i] - median_ts),
+            )
+            emitted = dict(self._events[nearest])
+            emitted["timestamp"] = median_ts
+            self.reset()
+            return emitted
+        return None
+
+    def carry(self, ts: float) -> dict[str, Any] | None:
+        """Extend an active run when a frame is skipped as static.
+
+        A static frame is near-identical to the last processed frame, so a match
+        that was on screen is still there -- the run should continue, not break.
+        Re-pushes the most recent matched event under *ts* (returning an emit if
+        that completes the run). No-op when no run is active (nothing to carry),
+        which keeps ``size == 1`` -- where ``push`` emits and resets every frame
+        -- on its legacy path.
+        """
+        if not self._events:
+            return None
+        return self.push(ts, self._events[-1])
+
+    def reset(self) -> None:
+        self._events = []
+        self._timestamps = []
+
+
+def _is_static_skip(
+    ts: float,
+    pixels: np.ndarray,
+    prev_gray: list[np.ndarray | None],
+    buf: _ConsecutiveBuffer,
+    results: list[dict[str, Any]],
+    on_result: Callable[[dict[str, Any]], None] | None,
+    on_progress: Callable[[float], None] | None,
+    start_seconds: float,
+    total_range: float,
+) -> bool:
+    """Decide whether *pixels* is a near-duplicate of the previous frame.
+
+    Returns True when the mean grayscale diff from the last processed frame is
+    below ``SCREENSPACE_STATIC_FRAME_SKIP_THRESHOLD`` -- the caller should then
+    ``return None`` from its per-frame callback. The content (and any active
+    match) is unchanged, so carry the consecutive-match run via ``buf.carry``
+    (emitting through *results*/*on_result*) and report progress rather than
+    breaking the run. Otherwise records *pixels* as the new baseline and returns
+    False so the caller runs its real analysis. Shared by scan_text/scan_numbers.
+    """
+    gray = cv2.cvtColor(pixels, cv2.COLOR_BGR2GRAY)
+    if prev_gray[0] is not None:
+        diff = float(np.mean(cv2.absdiff(prev_gray[0], gray)))
+        if diff < config.SCREENSPACE_STATIC_FRAME_SKIP_THRESHOLD:
+            emitted = buf.carry(ts)
+            if emitted is not None:
+                results.append(emitted)
+                if on_result:
+                    on_result(emitted)
+            if on_progress and total_range > 0:
+                on_progress((ts - start_seconds) / total_range)
+            return True
+    prev_gray[0] = gray
+    return False
+
+
+# ---------------------------------------------------------------------------
+# Analysis primitives
+# ---------------------------------------------------------------------------
+
+
+def extract_region(frame: np.ndarray, region: dict[str, int]) -> np.ndarray:
+    """Crop a rectangular region from a frame.
+
+    Args:
+        frame: BGR image as numpy array (H, W, 3).
+        region: Dict with keys ``x``, ``y``, ``w``, ``h`` in pixels.
+
+    Returns:
+        Cropped region as numpy array.
+    """
+    h_frame, w_frame = frame.shape[:2]
+    x = max(0, region["x"])
+    y = max(0, region["y"])
+    x2 = min(w_frame, x + region["w"])
+    y2 = min(h_frame, y + region["h"])
+    return frame[y:y2, x:x2]
+
+
+def denormalize_region(
+    region: dict[str, Any], target_w: int, target_h: int
+) -> dict[str, int]:
+    """Convert a normalized region (0–1 floats) to pixel coordinates.
+
+    Args:
+        region: Dict with normalized ``x``, ``y``, ``w``, ``h`` keys.
+        target_w: Target frame width in pixels.
+        target_h: Target frame height in pixels.
+
+    Returns:
+        Dict with integer pixel ``x``, ``y``, ``w``, ``h`` keys.
+    """
+    return {
+        "x": int(round(region["x"] * target_w)),
+        "y": int(round(region["y"] * target_h)),
+        "w": int(round(region["w"] * target_w)),
+        "h": int(round(region["h"] * target_h)),
+    }
+
+
+FULL_FRAME_REGION_NAME = "full_frame"
+FULL_FRAME_REGION: dict[str, Any] = {
+    "x": 0.0,
+    "y": 0.0,
+    "w": 1.0,
+    "h": 1.0,
+    "source_width": 0,
+    "source_height": 0,
+}
+
+
+def resolve_region_request(
+    region_name: str,
+    region_ref: Any,
+    manifest: dict[str, Any],
+) -> tuple[str, dict[str, Any]]:
+    """Resolve a (region_name, region_ref) request to (resolved_name, normalized_region).
+
+    Mirrors the active/stash/full_frame precedence the Screenspace server and CLI both
+    rely on: a ``region_ref`` (``{source: "active"|"stash"|"full_frame", name?, stash_id?}``)
+    pins the lookup to a specific source, while a bare ``region_name`` falls back to
+    active-regions-first then stashes. Pure — reads only the passed ``manifest`` and never
+    flattens stashes, so duplicate region names across stashes stay distinguishable.
+
+    Returns the resolved name and the normalized (0–1) region dict. Raises ``ValueError``
+    with a human-readable message on any failure (caller maps it to a 400 or a CLI error).
+    """
+    active_regions = manifest.get("regions", {})
+    if not isinstance(active_regions, dict):
+        active_regions = {}
+
+    if region_ref is None:
+        if region_name == FULL_FRAME_REGION_NAME:
+            return FULL_FRAME_REGION_NAME, dict(FULL_FRAME_REGION)
+        if region_name in active_regions:
+            return region_name, active_regions[region_name]
+        for stash in manifest.get("stashes", []):
+            stash_regions = stash.get("regions", {})
+            if isinstance(stash_regions, dict) and region_name in stash_regions:
+                return region_name, stash_regions[region_name]
+        raise ValueError(f"Region '{region_name}' not found")
+
+    if not isinstance(region_ref, dict):
+        raise ValueError("region_ref must be an object")
+
+    source = str(region_ref.get("source", "")).strip()
+
+    if source == "full_frame":
+        return FULL_FRAME_REGION_NAME, dict(FULL_FRAME_REGION)
+
+    name = str(region_ref.get("name", "")).strip()
+    if not name:
+        raise ValueError("region_ref.name is required")
+
+    if source == "active":
+        if name not in active_regions:
+            raise ValueError(f"Region '{name}' not found")
+        return name, active_regions[name]
+
+    if source == "stash":
+        stash_id = str(region_ref.get("stash_id", "")).strip()
+        if not stash_id:
+            raise ValueError("region_ref.stash_id is required")
+        for stash in manifest.get("stashes", []):
+            if stash.get("id") != stash_id:
+                continue
+            stash_regions = stash.get("regions", {})
+            if not isinstance(stash_regions, dict) or name not in stash_regions:
+                raise ValueError(f"Region '{name}' not found in stash '{stash_id}'")
+            return name, stash_regions[name]
+        raise ValueError(f"Stash '{stash_id}' not found")
+
+    raise ValueError("region_ref.source must be 'active', 'stash', or 'full_frame'")
+
+
+def average_color_hsv(region_pixels: np.ndarray) -> dict[str, float]:
+    """Compute mean HSV color of a region.
+
+    Args:
+        region_pixels: BGR image region as numpy array.
+
+    Returns:
+        Dict with keys ``h`` (0-180), ``s`` (0-255), ``v`` (0-255).
+    """
+    h, w = region_pixels.shape[:2]
+    if h > 64 or w > 64:
+        region_pixels = cv2.resize(
+            region_pixels, (min(w, 64), min(h, 64)), interpolation=cv2.INTER_AREA
+        )
+    hsv = cv2.cvtColor(region_pixels, cv2.COLOR_BGR2HSV)
+    mean = np.mean(hsv, axis=(0, 1))
+    return {"h": float(mean[0]), "s": float(mean[1]), "v": float(mean[2])}
+
+
+def color_matches(
+    region_pixels: np.ndarray,
+    target_color: dict[str, float],
+    tolerance: dict[str, float],
+) -> tuple[bool, float]:
+    """Check if region's average HSV color is within tolerance of target.
+
+    Handles hue wraparound (red at 0/180 boundary).
+
+    Returns:
+        Tuple of (matches, confidence) where confidence is 0.0–1.0.
+    """
+    avg = average_color_hsv(region_pixels)
+    hue_diff = abs(avg["h"] - target_color["h"])
+    hue_dist = min(hue_diff, 180.0 - hue_diff)
+    s_dist = abs(avg["s"] - target_color["s"])
+    v_dist = abs(avg["v"] - target_color["v"])
+    matched = (
+        hue_dist <= tolerance["h"]
+        and s_dist <= tolerance["s"]
+        and v_dist <= tolerance["v"]
+    )
+    conf = max(
+        0.0,
+        1.0
+        - max(
+            hue_dist / max(tolerance["h"], 1e-6),
+            s_dist / max(tolerance["s"], 1e-6),
+            v_dist / max(tolerance["v"], 1e-6),
+        ),
+    )
+    return matched, conf
+
+
+def color_present(
+    region_pixels: np.ndarray,
+    target_color: dict[str, float],
+    tolerance: dict[str, float],
+    min_coverage: float = 0.0,
+) -> tuple[bool, float]:
+    """Check whether the target color appears *anywhere* in the region.
+
+    Unlike :func:`color_matches` (which averages the whole region), this builds
+    a per-pixel HSV match mask and fires when the fraction of matching pixels
+    reaches ``min_coverage``. A small element of the target color in an
+    otherwise neutral region is detected here but averaged away by
+    :func:`color_matches`. Hue wraparound (red at the 0/180 boundary) is handled
+    the same way as :func:`color_matches`.
+
+    The region is scanned at full resolution (no ``INTER_AREA`` downscale) so
+    small patches survive; callers running in fast-scan mode must avoid the
+    ``max_region_dim`` downscale for this path.
+
+    Returns:
+        Tuple of (matches, coverage) where ``coverage`` is the 0.0–1.0 fraction
+        of pixels matching the target. With ``min_coverage <= 0`` a single
+        matching pixel fires; otherwise ``coverage >= min_coverage`` is required.
+    """
+    if region_pixels.size == 0:
+        return False, 0.0
+    hsv = cv2.cvtColor(region_pixels, cv2.COLOR_BGR2HSV)
+    h = hsv[..., 0].astype(np.float32)
+    s = hsv[..., 1].astype(np.float32)
+    v = hsv[..., 2].astype(np.float32)
+    hue_diff = np.abs(h - float(target_color["h"]))
+    hue_dist = np.minimum(hue_diff, 180.0 - hue_diff)
+    mask = (
+        (hue_dist <= tolerance["h"])
+        & (np.abs(s - float(target_color["s"])) <= tolerance["s"])
+        & (np.abs(v - float(target_color["v"])) <= tolerance["v"])
+    )
+    count = int(np.count_nonzero(mask))
+    coverage = count / mask.size if mask.size else 0.0
+    matched = count > 0 if min_coverage <= 0 else coverage >= min_coverage
+    return matched, float(coverage)
+
+
+def compute_frame_diff(
+    region_a: np.ndarray,
+    region_b: np.ndarray,
+    noise_threshold: int = 0,
+) -> float:
+    """Compute pixel difference ratio between two same-sized regions.
+
+    Applies Gaussian blur, thresholds noise, and morphological opening.
+
+    Returns:
+        Change ratio 0.0-1.0 (fraction of pixels that changed).
+    """
+    if noise_threshold <= 0:
+        noise_threshold = config.SCREENSPACE_NOISE_THRESHOLD
+    k = config.SCREENSPACE_BLUR_KERNEL
+    a_blur = cv2.GaussianBlur(region_a, (k, k), 0)
+    b_blur = cv2.GaussianBlur(region_b, (k, k), 0)
+    a_gray = cv2.cvtColor(a_blur, cv2.COLOR_BGR2GRAY)
+    b_gray = cv2.cvtColor(b_blur, cv2.COLOR_BGR2GRAY)
+    diff = cv2.absdiff(a_gray, b_gray)
+    _, mask = cv2.threshold(diff, noise_threshold, 255, cv2.THRESH_BINARY)
+    kernel = _morph_kernel(config.SCREENSPACE_MORPH_KERNEL)
+    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
+    if mask.size == 0:
+        return 0.0
+    return float(np.count_nonzero(mask)) / float(mask.size)
+
+
+def regions_are_similar(
+    region_a: np.ndarray,
+    region_b: np.ndarray,
+    threshold: float = 0.0,
+) -> tuple[bool, float]:
+    """SSIM-based similarity check with blur preprocessing.
+
+    Returns:
+        Tuple of (is_similar, ssim_score).
+    """
+    if threshold <= 0.0:
+        threshold = config.SCREENSPACE_SSIM_THRESHOLD
+    max_dim = 256
+    h, w = region_a.shape[:2]
+    if h > max_dim or w > max_dim:
+        scale = max_dim / max(h, w)
+        new_w, new_h = int(w * scale), int(h * scale)
+        region_a = cv2.resize(region_a, (new_w, new_h), interpolation=cv2.INTER_AREA)
+        region_b = cv2.resize(region_b, (new_w, new_h), interpolation=cv2.INTER_AREA)
+    k = config.SCREENSPACE_BLUR_KERNEL
+    a_blur = cv2.GaussianBlur(region_a, (k, k), 0)
+    b_blur = cv2.GaussianBlur(region_b, (k, k), 0)
+    a_gray = cv2.cvtColor(a_blur, cv2.COLOR_BGR2GRAY)
+    b_gray = cv2.cvtColor(b_blur, cv2.COLOR_BGR2GRAY)
+    from skimage.metrics import structural_similarity as ssim
+
+    score = float(ssim(a_gray, b_gray))
+    return score >= threshold, score
+
+
+def compute_phash(region_pixels: np.ndarray) -> "imagehash.ImageHash":
+    """Compute perceptual hash of a region for fast similarity scanning."""
+    import imagehash
+    from PIL import Image
+
+    rgb = cv2.cvtColor(region_pixels, cv2.COLOR_BGR2RGB)
+    pil_img = Image.fromarray(rgb)
+    return imagehash.phash(pil_img)
+
+
+# Prepared template payload shared across frames in a scan: grayscale blurred
+# template, grayscale blurred mask (or None), and a "degenerate" flag set when
+# the template has near-zero variance (TM_CCOEFF_NORMED is undefined there).
+_PreparedTemplate = tuple[np.ndarray, "np.ndarray | None", bool]
+
+
+def _scale_template(
+    template: np.ndarray,
+    mask: np.ndarray | None,
+    template_scale: float,
+) -> tuple[np.ndarray, np.ndarray | None]:
+    """Resize a template (and its mask) for matching.
+
+    Combines the user-supplied *template_scale* with the global CV resolution
+    scale so the template matches at the same relative size on the (possibly
+    upscaled) extracted frames. The opt-in template_scale slider lets users
+    compensate when their uploaded PNG is captured at a different pixel scale
+    than its in-video rendering (e.g. a 50x50 icon appearing as 24x24 on
+    screen). Returns the pair unchanged when the effective scale is ~1.0.
+    """
+    cv_scale = (
+        config.SCREENSPACE_CV_RESOLUTION_SCALE
+        if config.SCREENSPACE_CV_RESOLUTION_SCALE > 0
+        else 1.0
+    )
+    effective = template_scale * cv_scale
+    if not (effective > 0 and abs(effective - 1.0) > 1e-6):
+        return template, mask
+    th, tw = template.shape[:2]
+    nw = max(8, int(round(tw * effective)))
+    nh = max(8, int(round(th * effective)))
+    interp = cv2.INTER_AREA if effective < 1.0 else cv2.INTER_CUBIC
+    scaled_template = cv2.resize(template, (nw, nh), interpolation=interp)
+    scaled_mask = (
+        cv2.resize(mask, (nw, nh), interpolation=cv2.INTER_NEAREST)
+        if mask is not None
+        else None
+    )
+    return scaled_template, scaled_mask
+
+
+def _prepare_template(
+    template: np.ndarray, mask: np.ndarray | None
+) -> _PreparedTemplate:
+    """Compute the per-scan-constant grayscale template and mask once.
+
+    Hoisted out of :func:`match_template` so callers that run the same
+    template against many frames (scan_template, evaluate_region) can pay
+    the blur+cvtColor cost a single time instead of per-frame.
+    """
+    k = config.SCREENSPACE_BLUR_KERNEL
+    tmpl_gray = cv2.cvtColor(cv2.GaussianBlur(template, (k, k), 0), cv2.COLOR_BGR2GRAY)
+    # Binarize the alpha mask (>= 128 -> 255, else 0) instead of blurring it.
+    # Soft-blurred masks let semi-transparent edge pixels contribute partially
+    # to cv2.matchTemplate, which inflates TM_CCOEFF_NORMED scores for
+    # mostly-transparent PNG icons and produces false positives.
+    if mask is not None:
+        _, gray_mask = cv2.threshold(mask, 127, 255, cv2.THRESH_BINARY)
+    else:
+        gray_mask = None
+    # Degenerate if the pixels that will actually contribute to matching have
+    # no variance. TM_CCOEFF_NORMED normalizes by the masked template std —
+    # when that is ~0 (e.g. a mostly-transparent PNG with a flat opaque patch,
+    # especially after scaling down) the denominator underflows and every
+    # position gets a near-1.0 score.
+    if gray_mask is not None:
+        masked = tmpl_gray[gray_mask > 0]
+        contributing_std = float(masked.std()) if masked.size else 0.0
+    else:
+        contributing_std = float(np.std(tmpl_gray))
+    degenerate = contributing_std < 1.0
+    return (tmpl_gray, gray_mask, degenerate)
+
+
+def _template_correlation_map(
+    frame: np.ndarray, prepared: _PreparedTemplate
+) -> np.ndarray | None:
+    """Compute the finite TM_CCOEFF_NORMED correlation map for a prepared template.
+
+    Returns ``None`` when matching is undefined — a degenerate (constant)
+    template, or one larger than the frame. inf/nan cells (near-zero variance
+    patches) are neutralized to ``-1.0`` so callers can safely threshold the map
+    or read its peak (the threshold-independent scalar used by calibration).
+    """
+    tmpl_gray, gray_mask, degenerate = prepared
+    if degenerate:
+        # A constant (zero-variance) template produces undefined TM_CCOEFF_NORMED
+        # results — every position may score ~1.0.  Bail out.
+        return None
+    k = config.SCREENSPACE_BLUR_KERNEL
+    frame_gray = cv2.cvtColor(cv2.GaussianBlur(frame, (k, k), 0), cv2.COLOR_BGR2GRAY)
+    th, tw = tmpl_gray.shape[:2]
+    if th > frame_gray.shape[0] or tw > frame_gray.shape[1]:
+        return None
+    result = cv2.matchTemplate(
+        frame_gray, tmpl_gray, cv2.TM_CCOEFF_NORMED, mask=gray_mask
+    )
+    if not np.all(np.isfinite(result)):
+        result = np.where(np.isfinite(result), result, -1.0)
+    return result
+
+
+def _match_template_prepared(
+    frame: np.ndarray,
+    prepared: _PreparedTemplate,
+    threshold: float,
+    nms_overlap: float,
+) -> list[dict[str, Any]]:
+    """Match a frame against an already-prepared template payload."""
+    result = _template_correlation_map(frame, prepared)
+    if result is None:
+        return []
+    tmpl_gray, _gray_mask, _degenerate = prepared
+    th, tw = tmpl_gray.shape[:2]
+    locs = np.where(result >= threshold)
+    if len(locs[0]) == 0:
+        return []
+
+    # Guard against pathological matchTemplate outputs (e.g. low-variance
+    # masked templates at certain scales) that can produce tens of thousands
+    # of above-threshold candidates. The O(n^2) NMS below would otherwise
+    # freeze the worker. Cap to the top _MAX_CANDIDATES by raw score.
+    _MAX_CANDIDATES = 5000
+    scores = result[locs]
+    if len(locs[0]) > _MAX_CANDIDATES:
+        top_idx = np.argpartition(scores, -_MAX_CANDIDATES)[-_MAX_CANDIDATES:]
+        ys, xs = locs[0][top_idx], locs[1][top_idx]
+        scores = scores[top_idx]
+    else:
+        ys, xs = locs[0], locs[1]
+
+    detections: list[dict[str, Any]] = []
+    for pt_y, pt_x, raw in zip(ys, xs, scores):
+        score = float(raw)
+        if not math.isfinite(score):
+            continue
+        detections.append(
+            {"x": int(pt_x), "y": int(pt_y), "w": tw, "h": th, "score": score}
+        )
+    detections.sort(key=lambda d: d["score"], reverse=True)
+
+    # Non-maximum suppression
+    kept: list[dict[str, Any]] = []
+    for det in detections:
+        overlaps = False
+        for k_det in kept:
+            # Compute IoU
+            xa = max(det["x"], k_det["x"])
+            ya = max(det["y"], k_det["y"])
+            xb = min(det["x"] + det["w"], k_det["x"] + k_det["w"])
+            yb = min(det["y"] + det["h"], k_det["y"] + k_det["h"])
+            inter = max(0, xb - xa) * max(0, yb - ya)
+            area_a = det["w"] * det["h"]
+            area_b = k_det["w"] * k_det["h"]
+            union = area_a + area_b - inter
+            if union > 0 and inter / union > nms_overlap:
+                overlaps = True
+                break
+        if not overlaps:
+            kept.append(det)
+    return kept
+
+
+def match_template(
+    frame: np.ndarray,
+    template: np.ndarray,
+    threshold: float = 0.0,
+    nms_overlap: float = 0.0,
+    mask: np.ndarray | None = None,
+    *,
+    prepared: _PreparedTemplate | None = None,
+) -> list[dict[str, Any]]:
+    """Find all locations where template appears in frame.
+
+    Uses ``cv2.matchTemplate`` with ``TM_CCOEFF_NORMED``.  Non-maximum
+    suppression removes overlapping detections.  An optional *mask*
+    (same size as *template*, single-channel) restricts matching to
+    non-transparent regions — useful for uploaded PNGs with alpha.
+
+    When calling repeatedly with the same *template* / *mask* (e.g. one
+    scan over many frames), build a *prepared* tuple once with
+    :func:`_prepare_template` and pass it in to skip the per-call blur
+    and grayscale conversion of the template.
+
+    Returns:
+        List of ``{x, y, w, h, score}`` dicts for each match above *threshold*.
+    """
+    if threshold <= 0.0:
+        threshold = config.SCREENSPACE_TEMPLATE_MATCH_THRESHOLD
+    if nms_overlap <= 0.0:
+        nms_overlap = config.SCREENSPACE_TEMPLATE_NMS_OVERLAP
+
+    if prepared is None:
+        prepared = _prepare_template(template, mask)
+    return _match_template_prepared(frame, prepared, threshold, nms_overlap)
+
+
+def compute_optical_flow(
+    prev_gray: np.ndarray,
+    curr_gray: np.ndarray,
+    pyr_scale: float = 0.0,
+    return_grid: bool = False,
+) -> dict[str, Any]:
+    """Compute dense optical flow between two grayscale frames.
+
+    Returns:
+        Dict with ``magnitude`` (mean flow vector length),
+        ``angle`` (dominant direction in degrees, 0-360), and optionally
+        ``flow_grid`` (sparse grid of motion vectors for visualization).
+    """
+    if pyr_scale <= 0.0:
+        pyr_scale = config.SCREENSPACE_FLOW_PYR_SCALE
+
+    # Resize to max 256px for speed
+    max_dim = 256
+    h, w = prev_gray.shape[:2]
+    if h > max_dim or w > max_dim:
+        scale = max_dim / max(h, w)
+        new_w, new_h = int(w * scale), int(h * scale)
+        prev_gray = cv2.resize(prev_gray, (new_w, new_h), interpolation=cv2.INTER_AREA)
+        curr_gray = cv2.resize(curr_gray, (new_w, new_h), interpolation=cv2.INTER_AREA)
+
+    flow_out = np.zeros((*prev_gray.shape[:2], 2), dtype=np.float32)
+    flow = cv2.calcOpticalFlowFarneback(
+        prev_gray, curr_gray, flow_out, pyr_scale, 3, 15, 3, 5, 1.2, 0
+    )
+    mag, ang = cv2.cartToPolar(flow[..., 0], flow[..., 1], angleInDegrees=True)
+    mean_mag = float(np.mean(mag))
+
+    # Dominant angle: weighted mean by magnitude
+    if mean_mag > 0:
+        # Use circular mean to avoid wraparound issues
+        rad = np.deg2rad(ang)
+        sin_sum = float(np.sum(mag * np.sin(rad)))
+        cos_sum = float(np.sum(mag * np.cos(rad)))
+        dominant_angle = float(np.rad2deg(np.arctan2(sin_sum, cos_sum))) % 360.0
+    else:
+        dominant_angle = 0.0
+
+    result: dict[str, Any] = {
+        "magnitude": round(mean_mag, 4),
+        "angle": round(dominant_angle, 1),
+    }
+
+    if return_grid:
+        grid_size = config.SCREENSPACE_FLOW_GRID_SIZE
+        min_mag = config.SCREENSPACE_FLOW_GRID_MIN_MAG
+        gh, gw = mag.shape[:2]
+        step_y = max(1, gh // grid_size)
+        step_x = max(1, gw // grid_size)
+        grid: list[dict[str, float]] = []
+        for gy in range(0, gh, step_y):
+            for gx in range(0, gw, step_x):
+                cell_mag = float(np.mean(mag[gy : gy + step_y, gx : gx + step_x]))
+                if cell_mag < min_mag:
+                    continue
+                cell_ang = float(np.mean(ang[gy : gy + step_y, gx : gx + step_x]))
+                grid.append(
+                    {
+                        "x": round((gx + step_x / 2) / gw, 3),
+                        "y": round((gy + step_y / 2) / gh, 3),
+                        "mag": round(cell_mag, 2),
+                        "ang": round(cell_ang, 1),
+                    }
+                )
+        result["flow_grid"] = grid
+
+    return result
+
+
+def compute_scene_fingerprint(region_pixels: np.ndarray) -> dict[str, Any]:
+    """Compute a feature-based fingerprint for scene classification.
+
+    Combines HSV histogram, edge density, and color statistics into a
+    fingerprint suitable for comparison via :func:`compare_scene_fingerprints`.
+    """
+    # Resize to standardize
+    max_dim = 128
+    h, w = region_pixels.shape[:2]
+    if h > max_dim or w > max_dim:
+        scale = max_dim / max(h, w)
+        region_pixels = cv2.resize(
+            region_pixels,
+            (int(w * scale), int(h * scale)),
+            interpolation=cv2.INTER_AREA,
+        )
+
+    bins = config.SCREENSPACE_SCENE_HISTOGRAM_BINS
+    hsv = cv2.cvtColor(region_pixels, cv2.COLOR_BGR2HSV)
+    # 3D histogram flattened
+    hist = cv2.calcHist(
+        [hsv],
+        [0, 1, 2],
+        None,
+        [bins, bins, bins],
+        [0, 180, 0, 256, 0, 256],
+    )
+    cv2.normalize(hist, hist)
+
+    # Edge density
+    gray = cv2.cvtColor(region_pixels, cv2.COLOR_BGR2GRAY)
+    edges = cv2.Canny(gray, 100, 200)
+    edge_density = (
+        float(np.count_nonzero(edges)) / float(edges.size) if edges.size > 0 else 0.0
+    )
+
+    # Color stats per channel
+    color_stats: list[float] = []
+    for ch in range(3):
+        channel = region_pixels[:, :, ch].astype(np.float64)
+        color_stats.extend([float(np.mean(channel)), float(np.std(channel))])
+
+    return {
+        "histogram": hist,
+        "edge_density": edge_density,
+        "color_stats": color_stats,
+    }
+
+
+def compare_scene_fingerprints(
+    fp_a: dict[str, Any],
+    fp_b: dict[str, Any],
+) -> float:
+    """Compare two scene fingerprints.
+
+    Returns similarity score 0.0–1.0.
+    """
+    # Histogram correlation: range [-1, 1] → [0, 1]
+    # Flatten 3D histograms to 1D — cv2.compareHist returns incorrect
+    # results for multidimensional arrays.
+    hist_corr = cv2.compareHist(
+        fp_a["histogram"].flatten().astype(np.float32),
+        fp_b["histogram"].flatten().astype(np.float32),
+        cv2.HISTCMP_CORREL,
+    )
+    hist_sim = (hist_corr + 1.0) / 2.0
+
+    # Edge density similarity
+    edge_sim = 1.0 - abs(fp_a["edge_density"] - fp_b["edge_density"])
+
+    # Color stats similarity (normalized Euclidean distance)
+    stats_a = np.array(fp_a["color_stats"], dtype=np.float64)
+    stats_b = np.array(fp_b["color_stats"], dtype=np.float64)
+    max_dist = np.sqrt(len(stats_a)) * 255.0  # theoretical max
+    dist = float(np.linalg.norm(stats_a - stats_b))
+    color_sim = 1.0 - (dist / max_dist) if max_dist > 0 else 1.0
+
+    # Weighted average. cv2.compareHist can return NaN on degenerate
+    # (e.g. all-zero) histograms; clamp would not catch it because
+    # NaN comparisons return False.
+    score = 0.6 * hist_sim + 0.2 * edge_sim + 0.2 * color_sim
+    if not math.isfinite(score):
+        return 0.0
+    return max(0.0, min(1.0, score))
+
+
+def _merge_timestamp_spans(
+    timestamps: list[float], interval: float
+) -> list[dict[str, Any]]:
+    """Merge consecutive matched timestamps into spans."""
+    if not timestamps:
+        return []
+    timestamps.sort()
+    spans: list[dict[str, Any]] = []
+    start = timestamps[0]
+    end = timestamps[0]
+    gap = interval * 1.5
+
+    for ts in timestamps[1:]:
+        if ts - end <= gap:
+            end = ts
+        else:
+            spans.append(
+                {
+                    "start": round(start, 2),
+                    "end": round(end, 2),
+                    "duration": round(end - start, 2),
+                }
+            )
+            start = ts
+            end = ts
+
+    spans.append(
+        {
+            "start": round(start, 2),
+            "end": round(end, 2),
+            "duration": round(end - start, 2),
+        }
+    )
+    return spans

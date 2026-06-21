@@ -328,8 +328,9 @@
   <div id="ssTooltip" class="ss-tooltip hidden"></div>
   <div id="toolInfoTooltip" class="tool-info-tooltip hidden"></div>
 
-  <!-- Deps order: utils → chrome → settings → page script -->
+  <!-- Deps order: utils → screenspace leaf helpers → chrome → settings → page script -->
   <script src="utils.js"></script>
+  <script src="screenspace-utils.js"></script>
   <script src="export-actions.js"></script>
   <script src="topnav.js"></script>
   <script src="start-overlay.js"></script>
@@ -337,5 +338,8 @@
   <script src="settings-modal.js"></script>
   <script src="video-controls.js"></script>
   <script src="screenspace.js"></script>
+  <script src="screenspace-multitool-params.js"></script>
+  <script src="screenspace-calibration.js"></script>
+  <script src="screenspace-color.js"></script>
 </body>
 </html>

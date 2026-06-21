@@ -8,6 +8,7 @@ import pytest
 
 import config
 import screenspace
+import screenspace_tools
 
 
 class TestFastScanDispatchIntervalMultiplier:
@@ -36,7 +37,7 @@ class TestFastScanDispatchIntervalMultiplier:
             captured["fast_opts"] = fast_opts
             return []
 
-        monkeypatch.setattr(screenspace, "scan_color", fake_scan_color)
+        monkeypatch.setattr(screenspace_tools, "scan_color", fake_scan_color)
 
         worker = screenspace.ScreenspaceWorker()
         task = {
@@ -82,7 +83,7 @@ class TestFastScanDispatchIntervalMultiplier:
             captured_intervals.append(interval_seconds)
             return []
 
-        monkeypatch.setattr(screenspace, "scan_color", fake_scan_color)
+        monkeypatch.setattr(screenspace_tools, "scan_color", fake_scan_color)
 
         worker = screenspace.ScreenspaceWorker()
         task = {
@@ -131,7 +132,7 @@ class TestFastScanDispatchIntervalMultiplier:
             captured["fast_opts"] = fast_opts
             return []
 
-        monkeypatch.setattr(screenspace, "scan_color", fake_scan_color)
+        monkeypatch.setattr(screenspace_tools, "scan_color", fake_scan_color)
 
         worker = screenspace.ScreenspaceWorker()
         task = {
@@ -176,7 +177,7 @@ class TestFastScanDispatchIntervalMultiplier:
             captured["fast_opts"] = fast_opts
             return []
 
-        monkeypatch.setattr(screenspace, "scan_color", fake_scan_color)
+        monkeypatch.setattr(screenspace_tools, "scan_color", fake_scan_color)
 
         worker = screenspace.ScreenspaceWorker()
         task = {
@@ -222,7 +223,7 @@ class TestFastScanDispatchIntervalMultiplier:
             captured["template_shape"] = template_image.shape
             return []
 
-        monkeypatch.setattr(screenspace, "scan_template", fake_scan_template)
+        monkeypatch.setattr(screenspace_tools, "scan_template", fake_scan_template)
 
         worker = screenspace.ScreenspaceWorker()
         tmpl = np.zeros((100, 200, 3), dtype=np.uint8)
