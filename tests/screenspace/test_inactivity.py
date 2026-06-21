@@ -3,6 +3,8 @@
 import numpy as np
 
 import screenspace
+import screenspace_scans
+import screenspace_tools
 
 
 class TestScanInactivity:
@@ -21,8 +23,10 @@ class TestScanInactivity:
                     break
                 call_idx[0] += 1
 
-        monkeypatch.setattr(screenspace, "scan_video_frames", fake_scan)
-        monkeypatch.setattr(screenspace, "_probe_video_meta", lambda p: (30.0, 5.0))
+        monkeypatch.setattr(screenspace_scans, "scan_video_frames", fake_scan)
+        monkeypatch.setattr(
+            screenspace_scans, "_probe_video_meta", lambda p: (30.0, 5.0)
+        )
 
         results = screenspace.scan_inactivity(
             "/fake.mp4",
@@ -52,8 +56,10 @@ class TestScanInactivity:
                 if result is False:
                     break
 
-        monkeypatch.setattr(screenspace, "scan_video_frames", fake_scan)
-        monkeypatch.setattr(screenspace, "_probe_video_meta", lambda p: (30.0, 4.0))
+        monkeypatch.setattr(screenspace_scans, "scan_video_frames", fake_scan)
+        monkeypatch.setattr(
+            screenspace_scans, "_probe_video_meta", lambda p: (30.0, 4.0)
+        )
 
         results = screenspace.scan_inactivity(
             "/fake.mp4",
@@ -81,8 +87,10 @@ class TestScanInactivity:
                 if result is False:
                     break
 
-        monkeypatch.setattr(screenspace, "scan_video_frames", fake_scan)
-        monkeypatch.setattr(screenspace, "_probe_video_meta", lambda p: (30.0, 3.0))
+        monkeypatch.setattr(screenspace_scans, "scan_video_frames", fake_scan)
+        monkeypatch.setattr(
+            screenspace_scans, "_probe_video_meta", lambda p: (30.0, 3.0)
+        )
 
         results = screenspace.scan_inactivity(
             "/fake.mp4",
@@ -105,8 +113,10 @@ class TestScanInactivity:
                 if result is False:
                     break
 
-        monkeypatch.setattr(screenspace, "scan_video_frames", fake_scan)
-        monkeypatch.setattr(screenspace, "_probe_video_meta", lambda p: (30.0, 5.0))
+        monkeypatch.setattr(screenspace_scans, "scan_video_frames", fake_scan)
+        monkeypatch.setattr(
+            screenspace_scans, "_probe_video_meta", lambda p: (30.0, 5.0)
+        )
 
         screenspace.scan_inactivity(
             "/fake.mp4",
@@ -127,7 +137,7 @@ class TestScanInactivity:
             captured.update(kwargs)
             return []
 
-        monkeypatch.setattr(screenspace, "scan_inactivity", fake_scan_inactivity)
+        monkeypatch.setattr(screenspace_tools, "scan_inactivity", fake_scan_inactivity)
 
         worker = screenspace.ScreenspaceWorker()
         task = screenspace.create_task(

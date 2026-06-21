@@ -6,6 +6,8 @@ import numpy as np
 import pytest
 
 import screenspace
+import screenspace_primitives
+import screenspace_scans
 
 
 class TestOcrPreprocess:
@@ -53,10 +55,16 @@ class TestOcrPreprocess:
                 seen["h"] = pixels.shape[0]
                 return []
 
-        monkeypatch.setattr(screenspace, "_get_ocr_reader", lambda _l: _FakeReader())
-        monkeypatch.setattr(screenspace, "_probe_video_meta", lambda p: (30.0, 1.0))
         monkeypatch.setattr(
-            screenspace, "scan_video_frames", lambda v, r, i, cb, **k: cb(0.0, frame)
+            screenspace_scans, "_get_ocr_reader", lambda _l: _FakeReader()
+        )
+        monkeypatch.setattr(
+            screenspace_scans, "_probe_video_meta", lambda p: (30.0, 1.0)
+        )
+        monkeypatch.setattr(
+            screenspace_scans,
+            "scan_video_frames",
+            lambda v, r, i, cb, **k: cb(0.0, frame),
         )
 
         screenspace.scan_text(
@@ -77,10 +85,16 @@ class TestOcrPreprocess:
                 seen["h"] = pixels.shape[0]
                 return []
 
-        monkeypatch.setattr(screenspace, "_get_ocr_reader", lambda _l: _FakeReader())
-        monkeypatch.setattr(screenspace, "_probe_video_meta", lambda p: (30.0, 1.0))
         monkeypatch.setattr(
-            screenspace, "scan_video_frames", lambda v, r, i, cb, **k: cb(0.0, frame)
+            screenspace_scans, "_get_ocr_reader", lambda _l: _FakeReader()
+        )
+        monkeypatch.setattr(
+            screenspace_scans, "_probe_video_meta", lambda p: (30.0, 1.0)
+        )
+        monkeypatch.setattr(
+            screenspace_scans,
+            "scan_video_frames",
+            lambda v, r, i, cb, **k: cb(0.0, frame),
         )
 
         screenspace.scan_text(
@@ -102,14 +116,16 @@ class TestScanText:
                 return [([(0, 0), (10, 0), (10, 10), (0, 10)], "hello", 0.2)]
 
         monkeypatch.setattr(
-            screenspace, "_get_ocr_reader", lambda _langs: _FakeReader()
+            screenspace_scans, "_get_ocr_reader", lambda _langs: _FakeReader()
         )
-        monkeypatch.setattr(screenspace, "_probe_video_meta", lambda p: (30.0, 1.0))
+        monkeypatch.setattr(
+            screenspace_scans, "_probe_video_meta", lambda p: (30.0, 1.0)
+        )
 
         def fake_scan(video_path, region, interval, callback, **kwargs):
             callback(0.0, frame)
 
-        monkeypatch.setattr(screenspace, "scan_video_frames", fake_scan)
+        monkeypatch.setattr(screenspace_scans, "scan_video_frames", fake_scan)
 
         rejected = screenspace.scan_text(
             "/fake.mp4",
@@ -139,14 +155,16 @@ class TestScanText:
                 return [([(0, 0), (10, 0), (10, 10), (0, 10)], "l00", 0.9)]
 
         monkeypatch.setattr(
-            screenspace, "_get_ocr_reader", lambda _langs: _FakeReader()
+            screenspace_scans, "_get_ocr_reader", lambda _langs: _FakeReader()
         )
-        monkeypatch.setattr(screenspace, "_probe_video_meta", lambda p: (30.0, 1.0))
+        monkeypatch.setattr(
+            screenspace_scans, "_probe_video_meta", lambda p: (30.0, 1.0)
+        )
 
         def fake_scan(video_path, region, interval, callback, **kwargs):
             callback(0.0, frame)
 
-        monkeypatch.setattr(screenspace, "scan_video_frames", fake_scan)
+        monkeypatch.setattr(screenspace_scans, "scan_video_frames", fake_scan)
 
         region = {"x": 0, "y": 0, "w": 60, "h": 20}
 
@@ -177,14 +195,16 @@ class TestScanText:
                 return [([(0, 0), (10, 0), (10, 10), (0, 10)], "5top", 0.9)]
 
         monkeypatch.setattr(
-            screenspace, "_get_ocr_reader", lambda _langs: _FakeReader()
+            screenspace_scans, "_get_ocr_reader", lambda _langs: _FakeReader()
         )
-        monkeypatch.setattr(screenspace, "_probe_video_meta", lambda p: (30.0, 1.0))
+        monkeypatch.setattr(
+            screenspace_scans, "_probe_video_meta", lambda p: (30.0, 1.0)
+        )
 
         def fake_scan(video_path, region, interval, callback, **kwargs):
             callback(0.0, frame)
 
-        monkeypatch.setattr(screenspace, "scan_video_frames", fake_scan)
+        monkeypatch.setattr(screenspace_scans, "scan_video_frames", fake_scan)
 
         region = {"x": 0, "y": 0, "w": 60, "h": 20}
 
@@ -217,14 +237,16 @@ class TestScanText:
                 return [([(0, 0), (10, 0), (10, 10), (0, 10)], "1n", 0.9)]
 
         monkeypatch.setattr(
-            screenspace, "_get_ocr_reader", lambda _langs: _FakeReader()
+            screenspace_scans, "_get_ocr_reader", lambda _langs: _FakeReader()
         )
-        monkeypatch.setattr(screenspace, "_probe_video_meta", lambda p: (30.0, 1.0))
+        monkeypatch.setattr(
+            screenspace_scans, "_probe_video_meta", lambda p: (30.0, 1.0)
+        )
 
         def fake_scan(video_path, region, interval, callback, **kwargs):
             callback(0.0, frame)
 
-        monkeypatch.setattr(screenspace, "scan_video_frames", fake_scan)
+        monkeypatch.setattr(screenspace_scans, "scan_video_frames", fake_scan)
 
         region = {"x": 0, "y": 0, "w": 60, "h": 20}
 
@@ -263,15 +285,17 @@ class TestScanText:
                 return [([(0, 0), (10, 0), (10, 10), (0, 10)], "hello", 0.9)]
 
         monkeypatch.setattr(
-            screenspace, "_get_ocr_reader", lambda _langs: _FakeReader()
+            screenspace_scans, "_get_ocr_reader", lambda _langs: _FakeReader()
         )
-        monkeypatch.setattr(screenspace, "_probe_video_meta", lambda p: (30.0, 1.0))
+        monkeypatch.setattr(
+            screenspace_scans, "_probe_video_meta", lambda p: (30.0, 1.0)
+        )
 
         def fake_scan(video_path, region, interval, callback, **kwargs):
             for i, frame in enumerate(frames):
                 callback(float(i), frame)
 
-        monkeypatch.setattr(screenspace, "scan_video_frames", fake_scan)
+        monkeypatch.setattr(screenspace_scans, "scan_video_frames", fake_scan)
 
         region = {"x": 0, "y": 0, "w": 60, "h": 20}
 
@@ -310,15 +334,17 @@ class TestScanText:
                 return [([(0, 0), (10, 0), (10, 10), (0, 10)], "hello", 0.9)]
 
         monkeypatch.setattr(
-            screenspace, "_get_ocr_reader", lambda _langs: _FakeReader()
+            screenspace_scans, "_get_ocr_reader", lambda _langs: _FakeReader()
         )
-        monkeypatch.setattr(screenspace, "_probe_video_meta", lambda p: (30.0, 1.0))
+        monkeypatch.setattr(
+            screenspace_scans, "_probe_video_meta", lambda p: (30.0, 1.0)
+        )
 
         def fake_scan(video_path, region, interval, callback, **kwargs):
             for i, frame in enumerate(frames):
                 callback(float(i), frame)
 
-        monkeypatch.setattr(screenspace, "scan_video_frames", fake_scan)
+        monkeypatch.setattr(screenspace_scans, "scan_video_frames", fake_scan)
 
         region = {"x": 0, "y": 0, "w": 60, "h": 20}
         out = screenspace.scan_text(
@@ -400,9 +426,11 @@ class TestConsecutiveBuffer:
 
 def test_static_skip_uses_config():
     """The static-frame-skip sites reference the config constant, not a 2.0
-    literal. scan_text/scan_numbers share the _is_static_skip helper; similarity
-    and scene apply the threshold inline."""
-    src = Path(screenspace.__file__).read_text(encoding="utf-8")
+    literal. scan_text/scan_numbers share the _is_static_skip helper (in
+    screenspace_primitives); similarity and scene apply the threshold inline (in
+    screenspace_scans)."""
+    src = Path(screenspace_primitives.__file__).read_text(encoding="utf-8")
+    src += Path(screenspace_scans.__file__).read_text(encoding="utf-8")
     assert src.count("config.SCREENSPACE_STATIC_FRAME_SKIP_THRESHOLD") >= 3
     assert "< 2.0" not in src
 
@@ -468,14 +496,16 @@ class TestScanNumbers:
                 return [([(0, 0), (10, 0), (10, 10), (0, 10)], "5", 0.2)]
 
         monkeypatch.setattr(
-            screenspace, "_get_ocr_reader", lambda _langs: _FakeReader()
+            screenspace_scans, "_get_ocr_reader", lambda _langs: _FakeReader()
         )
-        monkeypatch.setattr(screenspace, "_probe_video_meta", lambda p: (30.0, 1.0))
+        monkeypatch.setattr(
+            screenspace_scans, "_probe_video_meta", lambda p: (30.0, 1.0)
+        )
 
         def fake_scan(video_path, region, interval, callback, **kwargs):
             callback(0.0, frame)
 
-        monkeypatch.setattr(screenspace, "scan_video_frames", fake_scan)
+        monkeypatch.setattr(screenspace_scans, "scan_video_frames", fake_scan)
 
         default_rejected = screenspace.scan_numbers(
             "/fake.mp4",
@@ -516,7 +546,9 @@ class TestScanNumbers:
 
     @pytest.mark.parametrize("threshold", [-0.1, 1.1])
     def test_invalid_ocr_confidence_threshold_raises(self, monkeypatch, threshold):
-        monkeypatch.setattr(screenspace, "_probe_video_meta", lambda p: (30.0, 1.0))
+        monkeypatch.setattr(
+            screenspace_scans, "_probe_video_meta", lambda p: (30.0, 1.0)
+        )
         with pytest.raises(ValueError, match="ocr_confidence_threshold"):
             screenspace.scan_numbers(
                 "/fake.mp4",
@@ -538,14 +570,16 @@ class TestScanNumbers:
                 return []
 
         monkeypatch.setattr(
-            screenspace, "_get_ocr_reader", lambda _langs: _FakeReader()
+            screenspace_scans, "_get_ocr_reader", lambda _langs: _FakeReader()
         )
-        monkeypatch.setattr(screenspace, "_probe_video_meta", lambda p: (30.0, 1.0))
+        monkeypatch.setattr(
+            screenspace_scans, "_probe_video_meta", lambda p: (30.0, 1.0)
+        )
 
         def fake_scan(video_path, region, interval, callback, **kwargs):
             callback(0.0, frame)
 
-        monkeypatch.setattr(screenspace, "scan_video_frames", fake_scan)
+        monkeypatch.setattr(screenspace_scans, "scan_video_frames", fake_scan)
 
         region = {"x": 0, "y": 0, "w": 60, "h": 20}
 
@@ -575,14 +609,16 @@ class TestScanNumbers:
                 return []
 
         monkeypatch.setattr(
-            screenspace, "_get_ocr_reader", lambda _langs: _FakeReader()
+            screenspace_scans, "_get_ocr_reader", lambda _langs: _FakeReader()
         )
-        monkeypatch.setattr(screenspace, "_probe_video_meta", lambda p: (30.0, 1.0))
+        monkeypatch.setattr(
+            screenspace_scans, "_probe_video_meta", lambda p: (30.0, 1.0)
+        )
 
         def fake_scan(video_path, region, interval, callback, **kwargs):
             callback(0.0, frame)
 
-        monkeypatch.setattr(screenspace, "scan_video_frames", fake_scan)
+        monkeypatch.setattr(screenspace_scans, "scan_video_frames", fake_scan)
 
         region = {"x": 0, "y": 0, "w": 60, "h": 20}
 

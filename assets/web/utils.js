@@ -615,6 +615,18 @@ var clamp = function (val, min, max) {
   return Math.max(min, Math.min(max, val));
 };
 
+// parseFloat with a fallback for NaN/empty/garbage input.
+var numberOrDefault = function (value, fallback) {
+  var n = parseFloat(value);
+  return isNaN(n) ? fallback : n;
+};
+
+// parseInt (base 10) with a fallback for NaN/empty/garbage input.
+var intOrDefault = function (value, fallback) {
+  var n = parseInt(value, 10);
+  return isNaN(n) ? fallback : n;
+};
+
 // Median of a numeric array. Returns 0 for empty input.
 var median = function (arr) {
   if (!arr.length) return 0;

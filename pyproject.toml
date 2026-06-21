@@ -22,8 +22,11 @@ dev = ["pytest"]
 packages = []
 py-modules = [
     "changelog", "cli", "clipgen", "config", "data_export", "excel_io",
-    "files", "google_api", "interactive", "ollama_client", "pipeline",
-    "screenspace", "screenspace_preview", "screenspace_server", "server",
+    "files", "friction", "google_api", "interactive", "ollama_client", "pipeline",
+    "screenspace", "screenspace_frames", "screenspace_heatmap",
+    "screenspace_manifest", "screenspace_multitool", "screenspace_ocr",
+    "screenspace_preview", "screenspace_primitives", "screenspace_scans",
+    "screenspace_server", "screenspace_tools", "screenspace_worker", "server",
     "spreadsheet", "start_settings", "thinking_agents", "titlecards",
     "transcripts", "transcripts_server", "utils", "video", "viewer",
 ]
