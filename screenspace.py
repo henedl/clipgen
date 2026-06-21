@@ -4621,22 +4621,6 @@ def load_screenspace_manifest() -> dict[str, Any]:
     )
 
 
-def _sanitize_manifest_floats(obj: Any) -> Any:
-    """Recursively replace non-finite floats (NaN, ±Inf) with None.
-
-    Defense in depth: detectors operating on numpy/cv2 results can produce
-    NaN on degenerate inputs (zero-variance histograms, etc.). NaN survives
-    a min/max clamp and serializes as invalid ``NaN`` in JSON.
-    """
-    if isinstance(obj, float):
-        return obj if math.isfinite(obj) else None
-    if isinstance(obj, dict):
-        return {k: _sanitize_manifest_floats(v) for k, v in obj.items()}
-    if isinstance(obj, list):
-        return [_sanitize_manifest_floats(v) for v in obj]
-    return obj
-
-
 def save_screenspace_manifest(
     regions: dict[str, dict[str, Any]],
     tasks: list[dict[str, Any]],
@@ -4683,7 +4667,7 @@ def save_screenspace_manifest(
     else:
         pins_payload = pins
 
-    payload = _sanitize_manifest_floats(
+    payload = utils.sanitize_floats(
         {
             "regions": regions,
             "tasks": clean_tasks,

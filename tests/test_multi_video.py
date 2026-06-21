@@ -36,6 +36,18 @@ def test_map_global_to_segment_out_of_range():
     assert utils.map_global_to_segment(TIMELINE, 250) is None
 
 
+def test_resolve_timeline_segment_returns_path_and_offset():
+    # 124s global -> video2 at 44s in; boundary belongs to the next segment.
+    assert utils.resolve_timeline_segment(TIMELINE, 124) == ("video2.mp4", 44.0)
+    assert utils.resolve_timeline_segment(TIMELINE, 80) == ("video2.mp4", 0.0)
+    assert utils.resolve_timeline_segment(TIMELINE, 79) == ("video1.mp4", 79.0)
+
+
+def test_resolve_timeline_segment_out_of_range():
+    assert utils.resolve_timeline_segment(TIMELINE, -1) is None
+    assert utils.resolve_timeline_segment(TIMELINE, 200) is None  # at/after total
+
+
 def test_map_global_range_within_one_segment():
     pieces = utils.map_global_range_to_segments(TIMELINE, 124, 130)
     assert pieces == [(1, 44.0, 50.0)]
