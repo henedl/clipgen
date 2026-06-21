@@ -3127,6 +3127,31 @@
 
   // ---- Stashed reels ----
 
+  var REEL_STASH = {
+    stateKey: "stashes",
+    apiPath: "api/stashes",
+    countSel: "#stashedReelsCount",
+    areaSel: "#stashedReelsArea",
+    listSel: "#stashedReelsList",
+    dragSource: "reel-stash",
+    emptyHint: "Stash reels to set them aside for later.",
+    queueKey: "reelQueue",
+    isLocked: isReelQueueLocked,
+    renderQueue: renderReelQueue,
+  };
+  var ARTIFACT_STASH = {
+    stateKey: "artifactStashes",
+    apiPath: "api/artifact-stashes",
+    countSel: "#stashedArtifactsCount",
+    areaSel: "#stashedArtifactsArea",
+    listSel: "#stashedArtifactsList",
+    dragSource: "artifact-stash",
+    emptyHint: "Stash artifacts to keep them aside — drag, or use the Stash button.",
+    queueKey: "artifactQueue",
+    isLocked: isArtifactQueueLocked,
+    renderQueue: renderArtifactQueue,
+  };
+
   function loadStashes() {
     apiGet("api/stashes")
       .then(function (data) {
@@ -3138,22 +3163,29 @@
       .catch(function () {});
   }
 
-  function renderStashedReels() {
-    var area = qs("#stashedReelsArea");
-    var list = qs("#stashedReelsList");
-    var n = state.stashes.length;
-    qs("#stashedReelsCount").textContent = "(" + n + ")";
+  function renderStashes(cfg) {
+    var area = qs(cfg.areaSel);
+    var list = qs(cfg.listSel);
+    var arr = state[cfg.stateKey];
+    var n = arr.length;
+    qs(cfg.countSel).textContent = "(" + n + ")";
     area.classList.remove("stash-drop-reveal");
     list.innerHTML = "";
 
     if (n === 0) {
-      list.appendChild(el("div", "stash-empty-hint", "Stash reels to set them aside for later."));
+      list.appendChild(el("div", "stash-empty-hint", cfg.emptyHint));
       return;
     }
 
+    var rerender = function () { renderStashes(cfg); };
+    var onRecall = function (s) { recallStashItem(cfg, s); };
     for (var i = 0; i < n; i++) {
-      list.appendChild(buildStashCard(state.stashes[i], "api/stashes", state.stashes, renderStashedReels, "reel-stash", recallStash));
+      list.appendChild(buildStashCard(arr[i], cfg.apiPath, arr, rerender, cfg.dragSource, onRecall));
     }
+  }
+
+  function renderStashedReels() {
+    renderStashes(REEL_STASH);
   }
 
   function makeStashFolderIcon(stash) {
@@ -3243,38 +3275,43 @@
     return total;
   }
 
-  function stashCurrentReel() {
-    if (isReelQueueLocked() || state.reelQueue.length === 0) return;
+  function stashCurrent(cfg) {
+    if (cfg.isLocked() || state[cfg.queueKey].length === 0) return;
 
-    var items = state.reelQueue.slice();
-    var totalDuration = computeReelDuration(items);
-    apiPost("api/stashes", { action: "create", items: items, name: "", totalDuration: totalDuration })
-      .then(function (data) {
-        if (data.ok) {
-          state.stashes.push(data.stash);
-          for (var i = 0; i < state.reelQueue.length; i++) {
-            var item = state.reelQueue[i];
-            delete state.cellResults[cellKey(item.participant, item.row)];
-          }
-          state.reelQueue = [];
-          renderReelQueue();
-          renderStashedReels();
-          for (var u = 0; u < items.length; u++) {
-            if (items[u].row) updateSingleCellClass(items[u].participant, items[u].row);
-          }
-        }
-      })
-      .catch(function () {});
+    var items = state[cfg.queueKey].slice();
+    createStashViaAPI(cfg.apiPath, items, function (stash) {
+      state[cfg.stateKey].push(stash);
+      var q = state[cfg.queueKey];
+      for (var i = 0; i < q.length; i++) {
+        var item = q[i];
+        delete state.cellResults[cellKey(item.participant, item.row)];
+      }
+      state[cfg.queueKey] = [];
+      cfg.renderQueue();
+      renderStashes(cfg);
+      for (var u = 0; u < items.length; u++) {
+        if (items[u].row) updateSingleCellClass(items[u].participant, items[u].row);
+      }
+    });
+  }
+
+  function stashCurrentReel() {
+    stashCurrent(REEL_STASH);
+  }
+
+  function recallStashItem(cfg, stash) {
+    if (cfg.isLocked()) return;
+    state[cfg.queueKey] = stash.items.slice();
+    cfg.renderQueue();
+    var q = state[cfg.queueKey];
+    for (var i = 0; i < q.length; i++) {
+      var it = q[i];
+      if (it.row) updateSingleCellClass(it.participant, it.row);
+    }
   }
 
   function recallStash(stash) {
-    if (isReelQueueLocked()) return;
-    state.reelQueue = stash.items.slice();
-    renderReelQueue();
-    for (var i = 0; i < state.reelQueue.length; i++) {
-      var it = state.reelQueue[i];
-      if (it.row) updateSingleCellClass(it.participant, it.row);
-    }
+    recallStashItem(REEL_STASH, stash);
   }
 
   function deleteStash(stashId, endpoint, stateArray, renderFn) {
@@ -3350,55 +3387,15 @@
   }
 
   function renderStashedArtifacts() {
-    var area = qs("#stashedArtifactsArea");
-    var list = qs("#stashedArtifactsList");
-    var n = state.artifactStashes.length;
-    qs("#stashedArtifactsCount").textContent = "(" + n + ")";
-    area.classList.remove("stash-drop-reveal");
-    list.innerHTML = "";
-
-    if (n === 0) {
-      list.appendChild(el("div", "stash-empty-hint", "Stash artifacts to keep them aside — drag, or use the Stash button."));
-      return;
-    }
-
-    for (var i = 0; i < n; i++) {
-      list.appendChild(buildStashCard(state.artifactStashes[i], "api/artifact-stashes", state.artifactStashes, renderStashedArtifacts, "artifact-stash", recallArtifactStash));
-    }
+    renderStashes(ARTIFACT_STASH);
   }
 
   function stashCurrentArtifacts() {
-    if (isArtifactQueueLocked() || state.artifactQueue.length === 0) return;
-
-    var items = state.artifactQueue.slice();
-    var totalDuration = computeReelDuration(items);
-    apiPost("api/artifact-stashes", { action: "create", items: items, name: "", totalDuration: totalDuration })
-      .then(function (data) {
-        if (data.ok) {
-          state.artifactStashes.push(data.stash);
-          for (var i = 0; i < state.artifactQueue.length; i++) {
-            var item = state.artifactQueue[i];
-            delete state.cellResults[cellKey(item.participant, item.row)];
-          }
-          state.artifactQueue = [];
-          renderArtifactQueue();
-          renderStashedArtifacts();
-          for (var u = 0; u < items.length; u++) {
-            if (items[u].row) updateSingleCellClass(items[u].participant, items[u].row);
-          }
-        }
-      })
-      .catch(function () {});
+    stashCurrent(ARTIFACT_STASH);
   }
 
   function recallArtifactStash(stash) {
-    if (isArtifactQueueLocked()) return;
-    state.artifactQueue = stash.items.slice();
-    renderArtifactQueue();
-    for (var i = 0; i < state.artifactQueue.length; i++) {
-      var it = state.artifactQueue[i];
-      if (it.row) updateSingleCellClass(it.participant, it.row);
-    }
+    recallStashItem(ARTIFACT_STASH, stash);
   }
 
   // ---- Stash drag-reveal ----
