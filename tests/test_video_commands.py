@@ -1073,3 +1073,24 @@ def test_mux_subtitles_missing_input_returns_false(tmp_path):
         str(tmp_path / "missing.mp4"), str(srt), str(tmp_path / "out.mp4")
     )
     assert ok is False
+
+
+def test_batch_extract_screenshots_seeks_only_for_offset_grid(monkeypatch):
+    """An offset (interval-aligned) grid seeks the input; a zero grid does not."""
+    captured = {}
+
+    def fake_run(command, **_kwargs):
+        captured["cmd"] = command
+        return None  # short-circuit fallback; we only inspect the built command
+
+    monkeypatch.setattr(video.config, "SCREENSHOT_FORMAT", ".png")
+    monkeypatch.setattr(video, "run_ffmpeg_process", fake_run)
+
+    # Multi-video part aligned to the global grid -> first capture at 5s.
+    video._batch_extract_screenshots("in.mp4", [5, 15], 10)
+    assert "-ss" in captured["cmd"]
+    assert captured["cmd"][captured["cmd"].index("-ss") + 1] == "5"
+
+    # Zero-aligned grid -> no input seek (unchanged behavior).
+    video._batch_extract_screenshots("in.mp4", [0, 10], 10)
+    assert "-ss" not in captured["cmd"]
