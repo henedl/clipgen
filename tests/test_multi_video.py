@@ -263,6 +263,46 @@ def test_multi_video_clip_maps_into_second_video(monkeypatch, make_clip):
     assert kwargs["end_pos"] == "0:00:50"
 
 
+def test_multi_video_titlecard_wraps_at_clip_resolution(monkeypatch, make_clip):
+    """A clip cut from a later part must not be wrapped at the first part's resolution.
+
+    The pipeline passes no resolution to wrap_clip_with_cards, which probes the
+    generated clip itself — so a video2 cut whose resolution differs from video1
+    still gets titlecards instead of a silently-skipped concat mismatch.
+    """
+    clip = _multi_clip(make_clip, [("2:04", "2:10")])  # global 124-130 -> video2 @44s
+
+    monkeypatch.setattr(pipeline.config, "TITLECARDS_ENABLED", True)
+    monkeypatch.setattr(pipeline.config, "REENCODING", False)
+    monkeypatch.setattr(pipeline.config, "DEBUGGING", False)
+    monkeypatch.setattr(pipeline.video, "run_ffmpeg", lambda **_k: True)
+    monkeypatch.setattr(
+        pipeline.files, "get_unique_filename", lambda *a, **k: "out.mp4"
+    )
+
+    # The pipeline must not probe a source video to force a resolution onto wrap.
+    def fail_probe(_path):
+        raise AssertionError("pipeline should not probe a source video for wrap")
+
+    monkeypatch.setattr(pipeline.video, "probe_video_properties", fail_probe)
+
+    wrap_calls = []
+
+    def fake_wrap(_clip, out_name, resolution=None, **_kwargs):
+        wrap_calls.append((out_name, resolution))
+        return True
+
+    monkeypatch.setattr(pipeline.titlecards, "wrap_clip_with_cards", fake_wrap)
+
+    generated, _ = pipeline._process_single_clip_segments(
+        clip, "video1.mp4", set(), output_format="clip", collect_paths=True
+    )
+
+    assert generated == 1
+    # Wrap receives no forced resolution -> it self-probes the actual clip.
+    assert wrap_calls == [("out.mp4", None)]
+
+
 def test_multi_video_clip_stitches_across_boundary(monkeypatch, make_clip):
     clip = _multi_clip(make_clip, [("1:00", "1:30")])  # global 60-90 spans boundary
     run_ffmpeg = Mock(return_value=True)

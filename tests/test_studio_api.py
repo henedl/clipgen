@@ -127,6 +127,28 @@ def test_api_titlecard_upload_list_and_serve(client, tmp_path, monkeypatch):
     assert served.data == b"\x89PNG fake"
 
 
+def test_api_titlecard_upload_makes_filename_url_safe(client, tmp_path, monkeypatch):
+    """A filename with URL-reserved chars is sanitized so its served URL works."""
+    monkeypatch.setattr(server.config, "OUTPUT_DIR", str(tmp_path))
+    resp = client.post(
+        "/studio/api/titlecards/upload",
+        data={"file": (io.BytesIO(b"\x89PNG fake"), "my #1.png")},
+        content_type="multipart/form-data",
+    )
+    assert resp.status_code == 200
+    item = resp.get_json()["item"]
+    name = item["id"]
+    # No URL-reserved character survives into the stored name, id, or URL.
+    for bad in ("#", " ", "%", "&"):
+        assert bad not in name
+        assert bad not in item["url"]
+    assert item["url"] == "/api/titlecards/image/" + name
+
+    served = client.get("/studio/api/titlecards/image/" + name)
+    assert served.status_code == 200
+    assert served.data == b"\x89PNG fake"
+
+
 def test_api_titlecard_delete_resets_selection(client, tmp_path, monkeypatch):
     monkeypatch.setattr(server.config, "OUTPUT_DIR", str(tmp_path))
     images = tmp_path / server.config.TITLECARD_IMAGES_DIRNAME
@@ -233,8 +255,8 @@ def test_settings_partial_put_preserves_other_settings(client, tmp_path, monkeyp
     assert saved.get("TITLECARD_DURATION_SECONDS") == 5
 
 
-def test_settings_rejects_card_image_path_traversal(client, tmp_path, monkeypatch):
-    """A crafted card image name that escapes the upload dir is rejected."""
+def test_settings_put_rejects_card_image_traversal(client, tmp_path, monkeypatch):
+    """A card image setting that escapes the upload pool is rejected, not stored."""
     monkeypatch.setattr(server.config, "OUTPUT_DIR", str(tmp_path))
     monkeypatch.setattr(server.config, "TITLECARD_IMAGE", "")
     resp = client.put(
@@ -243,7 +265,7 @@ def test_settings_rejects_card_image_path_traversal(client, tmp_path, monkeypatc
     )
     assert resp.status_code == 400
     assert resp.get_json()["ok"] is False
-    assert server.config.TITLECARD_IMAGE == ""  # unchanged
+    assert server.config.TITLECARD_IMAGE == ""
 
 
 def test_settings_rejects_non_hex_card_color(client, tmp_path, monkeypatch):
@@ -259,28 +281,51 @@ def test_settings_rejects_non_hex_card_color(client, tmp_path, monkeypatch):
     assert server.config.TITLECARD_COLOR == "#000000"  # unchanged
 
 
-def test_settings_accepts_valid_card_image(client, tmp_path, monkeypatch):
-    """A bare uploaded filename with an allowed extension is accepted."""
+def test_settings_put_endcard_accepts_none_title_rejects_none(
+    client, tmp_path, monkeypatch
+):
+    """`__none__` is valid only for endcards; titlecards always render."""
+    monkeypatch.setattr(server.config, "OUTPUT_DIR", str(tmp_path))
+    monkeypatch.setattr(server.config, "ENDCARD_IMAGE", "")
+    monkeypatch.setattr(server.config, "TITLECARD_IMAGE", "")
+
+    ok = client.put(
+        "/studio/api/settings",
+        json={"settings": {"ENDCARD_IMAGE": server.config.CARD_IMAGE_NONE}},
+    )
+    assert ok.status_code == 200
+    assert server.config.ENDCARD_IMAGE == server.config.CARD_IMAGE_NONE
+
+    bad = client.put(
+        "/studio/api/settings",
+        json={"settings": {"TITLECARD_IMAGE": server.config.CARD_IMAGE_NONE}},
+    )
+    assert bad.status_code == 400
+    assert server.config.TITLECARD_IMAGE == ""
+
+
+def test_settings_put_card_image_validates_against_pool(client, tmp_path, monkeypatch):
+    """An existing uploaded basename is accepted; a missing one is rejected."""
     monkeypatch.setattr(server.config, "OUTPUT_DIR", str(tmp_path))
     monkeypatch.setattr(server.config, "TITLECARD_IMAGE", "")
-    resp = client.put(
+    images = tmp_path / server.config.TITLECARD_IMAGES_DIRNAME
+    images.mkdir()
+    (images / "card.png").write_bytes(b"x")
+
+    ok = client.put(
         "/studio/api/settings",
         json={"settings": {"TITLECARD_IMAGE": "card.png"}},
     )
-    assert resp.status_code == 200
-    assert resp.get_json()["ok"] is True
+    assert ok.status_code == 200
     assert server.config.TITLECARD_IMAGE == "card.png"
 
-
-def test_load_studio_settings_drops_tampered_card_image(client, tmp_path, monkeypatch):
-    """A tampered settings file with a traversal card image is ignored on load."""
-    monkeypatch.setattr(server.config, "OUTPUT_DIR", str(tmp_path))
-    monkeypatch.setattr(server.config, "TITLECARD_IMAGE", "")
-    (tmp_path / server.config.STUDIO_SETTINGS_FILENAME).write_text(
-        json.dumps({"TITLECARD_IMAGE": "../../evil.png"})
+    missing = client.put(
+        "/studio/api/settings",
+        json={"settings": {"TITLECARD_IMAGE": "ghost.png"}},
     )
-    server._load_studio_settings()
-    assert server.config.TITLECARD_IMAGE == ""  # kept default, not the tampered value
+    assert missing.status_code == 400
+    # A rejected value must not overwrite the prior good selection.
+    assert server.config.TITLECARD_IMAGE == "card.png"
 
 
 def test_api_sheet_baseline_returns_empty_when_no_sheet(client):
@@ -1625,6 +1670,69 @@ def test_api_gallery_multi_video_captures_all_parts_with_global_times(
     assert captured["duration"] == 200  # total timeline duration
 
 
+def test_api_gallery_multi_video_intervals_globally_aligned(
+    client, monkeypatch, tmp_path
+):
+    """A part boundary keeps the global capture grid evenly spaced.
+
+    A first part whose duration isn't a multiple of the interval must not push
+    the next part's grid off the global cadence (the pre-fix behavior restarted
+    each part's timestamps at 0 then shifted by the cumulative start).
+    """
+    import video
+    import viewer
+
+    a = tmp_path / "a.mp4"
+    b = tmp_path / "b.mp4"
+    a.write_bytes(b"x")
+    b.write_bytes(b"x")
+    monkeypatch.setattr(server, "_sheet_context", object())
+    monkeypatch.setattr(server, "_resolve_participant_sources", lambda p: [a, b])
+    # Part 1 is 95s (not a multiple of the 10s interval); part 2 starts at 95.
+    monkeypatch.setattr(
+        video,
+        "timeline_or_none",
+        lambda paths: [(str(a), 95, 0), (str(b), 120, 95)],
+    )
+
+    requested: dict[str, list[int]] = {}
+
+    def fake_captures(path, *, timestamps=None, **kw):
+        requested[path] = list(timestamps or [])
+        return [
+            {"file": f"{path}-{ts}.png", "timestamp": float(ts), "type": "screen"}
+            for ts in (timestamps or [])
+        ]
+
+    monkeypatch.setattr(video, "generate_interval_captures", fake_captures)
+
+    captured = {}
+
+    def fake_finalize(artifacts, **kw):
+        captured["artifacts"] = artifacts
+        return {"meta": {}}
+
+    monkeypatch.setattr(viewer, "finalize_gallery_data", fake_finalize)
+    monkeypatch.setattr(
+        viewer, "generate_gallery_viewer", lambda *a, **kw: "/out/gallery.html"
+    )
+
+    server._gallery_cancel_event.clear()
+    resp = client.post(
+        "/studio/api/gallery",
+        json={"participant": "P01", "format": "screen", "interval": 10},
+    )
+
+    assert resp.status_code == 200
+    # Each part is asked for an interval-aligned local grid.
+    assert requested[str(a)] == list(range(0, 95, 10))  # 0,10,...,90
+    assert requested[str(b)] == list(range(5, 120, 10))  # 5,15,...,115
+    # Global timestamps are evenly spaced by the interval across the boundary.
+    globals_ = sorted(art["timestamp"] for art in captured["artifacts"])
+    diffs = {round(hi - lo, 6) for lo, hi in zip(globals_, globals_[1:])}
+    assert diffs == {10.0}
+
+
 def test_api_timeline_viewer_returns_409_when_busy(client, monkeypatch):
     """A second timeline-viewer build is rejected while one holds the slot, so
     the two builds can't clobber the shared cancel event."""
@@ -2455,6 +2563,34 @@ def test_load_studio_settings_missing_file(monkeypatch, tmp_path):
     monkeypatch.setattr("config.OUTPUT_DIR", str(tmp_path))
     applied = server._load_studio_settings()
     assert applied == {}
+
+
+def test_load_studio_settings_skips_invalid_card_image(monkeypatch, tmp_path):
+    """A persisted card image that PUT would reject is not applied on load."""
+    monkeypatch.setattr("config.OUTPUT_DIR", str(tmp_path))
+    monkeypatch.setattr(server.config, "TITLECARD_IMAGE", "")
+    monkeypatch.setattr(server.config, "ENDCARD_IMAGE", "")
+
+    images = tmp_path / server.config.TITLECARD_IMAGES_DIRNAME
+    images.mkdir()
+    (images / "good.png").write_bytes(b"x")
+
+    settings_file = tmp_path / server.config.STUDIO_SETTINGS_FILENAME
+    settings_file.write_text(
+        json.dumps(
+            {
+                "TITLECARD_IMAGE": "../escape.png",  # traversal → rejected
+                "ENDCARD_IMAGE": "good.png",  # real upload → applied
+            }
+        )
+    )
+
+    applied = server._load_studio_settings()
+    # The bad value is skipped (config stays at default); the good one applies.
+    assert "TITLECARD_IMAGE" not in applied
+    assert server.config.TITLECARD_IMAGE == ""
+    assert applied["ENDCARD_IMAGE"] == "good.png"
+    assert server.config.ENDCARD_IMAGE == "good.png"
 
 
 def test_save_studio_settings_non_defaults_only(monkeypatch, tmp_path):
@@ -3705,10 +3841,6 @@ def test_api_reel_direct_wraps_segments_when_titlecards_enabled(
     monkeypatch.setattr(
         "files.get_unique_filename", lambda name, file_format=None: name
     )
-    monkeypatch.setattr(
-        "video.probe_video_properties",
-        lambda path: {"width": 1280, "height": 720, "audio_codec": "aac"},
-    )
 
     wrap_calls: list[dict] = []
 
@@ -3752,7 +3884,9 @@ def test_api_reel_direct_wraps_segments_when_titlecards_enabled(
     assert len(wrap_calls) == 2
     assert wrap_calls[0]["duration"] == 3
     assert wrap_calls[0]["enabled"] is True
-    assert wrap_calls[0]["resolution"] == "1280x720"
+    # No forced resolution: wrap_clip_with_cards probes the cut clip itself, so a
+    # span cut from a later source part is wrapped at that part's resolution.
+    assert wrap_calls[0]["resolution"] is None
     assert wrap_calls[0]["desc"] == "first"
     assert wrap_calls[1]["desc"] == "second"
 

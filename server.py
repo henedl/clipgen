@@ -178,25 +178,6 @@ _HEX_COLOR_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
 _MARK_KEY_RE = re.compile(r"^[a-z0-9_]+$")
 
 
-def _validate_card_image(value: str) -> str | None:
-    """Return a safe card-image setting value, or None to reject it.
-
-    Card image settings become path components under the titlecard_images
-    upload dir (see titlecards.resolve_card_background), so only accept the
-    known sentinels (default/empty, solid color, no-endcard) or a bare uploaded
-    filename with an allowed image extension — never a value that could traverse
-    out of the upload pool (e.g. ``../secret.png``). ``_ALLOWED_CARD_EXTS`` is
-    the same allowlist the upload route enforces.
-    """
-    if value in ("", config.CARD_IMAGE_COLOR, config.CARD_IMAGE_NONE):
-        return value
-    if Path(value).name != value:  # rejects separators, traversal, absolute paths
-        return None
-    if Path(value).suffix.lower() not in _ALLOWED_CARD_EXTS:
-        return None
-    return value
-
-
 def _coerce_mark_categories(value: Any) -> dict[str, dict[str, str]] | None:
     """Validate and normalize a mark_categories payload.
 
@@ -1060,16 +1041,19 @@ def _load_studio_settings() -> dict[str, Any]:
             applied[name] = cleaned
             continue
         if meta.get("type") == "card_picker":
-            validated = _validate_card_image(str(value))
-            if validated is None:
-                continue  # ignore a tampered/invalid value, keep the default
-            setattr(config, name, validated)
-            applied[name] = validated
+            # Validate persisted selections too, so a stale studio_settings.json
+            # (traversal, a deleted upload, or __none__ on a titlecard) doesn't
+            # apply a value the PUT path would reject; leave config at its default.
+            cleaned = _coerce_card_image(value, str(meta.get("kind", "title")))
+            if cleaned is None:
+                continue
+            setattr(config, name, cleaned)
+            applied[name] = cleaned
             continue
         if name in ("TITLECARD_COLOR", "ENDCARD_COLOR"):
             color = str(value)
             if not _HEX_COLOR_RE.match(color):
-                continue
+                continue  # ignore a tampered/invalid value, keep the default
             setattr(config, name, color)
             applied[name] = color
             continue
@@ -1904,14 +1888,21 @@ def api_gallery() -> FlaskResponse:
             source_name = sources[0].name
         else:
             artifacts = []
-            for part_path, _dur, cumulative in timeline:
+            for part_path, dur, cumulative in timeline:
                 if _gallery_cancel_event.is_set():
                     break
+                # Align each part's local grid to the global interval so spacing
+                # stays even across part boundaries; a part whose duration isn't
+                # a multiple of the interval would otherwise shift the next
+                # part's grid off the global cadence.
+                first = (interval - cumulative % interval) % interval
+                local_ts = list(range(first, dur, interval))
                 part_artifacts = video.generate_interval_captures(
                     part_path,
                     interval_seconds=interval,
                     output_format=output_format,
                     gif_duration_seconds=config.GALLERY_GIF_DURATION_SECONDS,
+                    timestamps=local_ts,
                     cancel_flag=_gallery_cancel_event.is_set,
                 )
                 for a in part_artifacts:
@@ -2233,11 +2224,11 @@ def _apply_settings_payload(data: dict[str, Any]) -> tuple[dict[str, Any], str |
             applied[name] = cleaned
             continue
         if meta.get("type") == "card_picker":
-            validated = _validate_card_image(str(value))
-            if validated is None:
-                return {}, f"Invalid {name}: not an uploaded card image or preset"
-            setattr(config, name, validated)
-            applied[name] = validated
+            cleaned = _coerce_card_image(value, str(meta.get("kind", "title")))
+            if cleaned is None:
+                return {}, f"Invalid {name} payload"
+            setattr(config, name, cleaned)
+            applied[name] = cleaned
             continue
         if name in ("TITLECARD_COLOR", "ENDCARD_COLOR"):
             color = str(value)
@@ -2292,6 +2283,12 @@ def api_settings_put() -> FlaskResponse:
 # ── Titlecard / endcard background picker ────────────────────────────────
 _ALLOWED_CARD_EXTS: set[str] = {".png", ".jpg", ".jpeg", ".webp"}
 _MAX_CARD_UPLOAD_BYTES: int = 10 * 1024 * 1024  # 10 MB
+# URL-reserved / unsafe ASCII characters that sanitize_filename leaves intact.
+# Card images are served at /api/titlecards/image/<name>, so a stem containing
+# e.g. '#' would have its tail dropped by the browser as a URL fragment. These
+# are replaced with '_' at upload time; unicode is preserved (only these ASCII
+# characters are touched, matching sanitize_filename's unicode policy).
+_URL_UNSAFE_CARD_CHARS: str = "#%&+=;@$,!*()[]{}^~` "
 
 
 def _titlecard_images_dir() -> Path:
@@ -2310,6 +2307,32 @@ def _list_uploaded_titlecards() -> list[str]:
         if p.is_file() and p.suffix.lower() in _ALLOWED_CARD_EXTS
     ]
     return sorted(names, key=str.lower)
+
+
+def _coerce_card_image(value: Any, kind: str) -> str | None:
+    """Validate a card-picker selection against the upload pool.
+
+    Returns the cleaned selection id, or None when the value is invalid. Accepts
+    the sentinel ids (empty = bundled default, CARD_IMAGE_COLOR = solid color,
+    and — for endcards only — CARD_IMAGE_NONE) or the basename of an existing
+    uploaded image. Rejects path separators / traversal so a setting can never
+    point outside the titlecard_images pool (see titlecards.resolve_card_background).
+    """
+    if not isinstance(value, str):
+        return None
+    if value in ("", config.CARD_IMAGE_COLOR):
+        return value
+    if kind == "end" and value == config.CARD_IMAGE_NONE:
+        return value
+    # Otherwise it must be a real uploaded file inside the pool: a bare basename
+    # with an allowed extension that exists on disk.
+    if Path(value).name != value:
+        return None
+    if Path(value).suffix.lower() not in _ALLOWED_CARD_EXTS:
+        return None
+    if not (_titlecard_images_dir() / value).is_file():
+        return None
+    return value
 
 
 def _card_picker_payload(kind: str) -> dict[str, Any]:
@@ -2412,8 +2435,12 @@ def api_titlecard_upload() -> FlaskResponse:
     if size > _MAX_CARD_UPLOAD_BYTES:
         return jsonify({"ok": False, "error": "File too large (max 10 MB)."}), 400
 
-    # sanitize_filename strips the dot from extensions, so clean the stem only.
-    stem = utils.sanitize_filename(Path(filename).stem).strip() or "titlecard"
+    # sanitize_filename strips the dot from extensions, so clean the stem only,
+    # then replace URL-reserved chars so the served image URL isn't truncated.
+    stem = utils.sanitize_filename(Path(filename).stem).strip()
+    for ch in _URL_UNSAFE_CARD_CHARS:
+        stem = stem.replace(ch, "_")
+    stem = stem.strip("_") or "titlecard"
     images_dir = _titlecard_images_dir()
     images_dir.mkdir(parents=True, exist_ok=True)
     candidate = f"{stem}{ext}"
@@ -2613,9 +2640,6 @@ def api_reel_direct() -> FlaskResponse:
             output_dir = Path(utils.get_effective_output_dir())
             clip_paths: list[str] = []
             temp_clips: list[str] = []
-            # Cache (w x h) per source video so wrap_clip_with_cards doesn't
-            # re-probe per segment. Same source can appear many times.
-            resolution_cache: dict[str, str | None] = {}
             # Throttle concat progress emissions to ~5 Hz, same as before.
             concat_last_emit = [0.0]
 
@@ -2694,21 +2718,16 @@ def api_reel_direct() -> FlaskResponse:
                         is not None
                     )
                     if ok and cards_enabled:
-                        res_key = video_paths[0]
-                        if res_key not in resolution_cache:
-                            probed = video.probe_video_properties(res_key)
-                            resolution_cache[res_key] = (
-                                f"{probed['width']}x{probed['height']}"
-                                if probed
-                                else None
-                            )
+                        # Wrap at the cut clip's own resolution (probed inside
+                        # wrap_clip_with_cards). A global span may be cut from a
+                        # later source part whose resolution differs from the
+                        # first; trusting the clip avoids a concat mismatch.
                         wrap_clip: utils.ClipRecord = {
                             "desc": seg.get("event_type") or seg.get("desc") or "",
                         }
                         ok = titlecards.wrap_clip_with_cards(
                             wrap_clip,
                             tmp_path,
-                            resolution=resolution_cache[res_key],
                             cancel_flag=_reel_cancel_event.is_set,
                             titlecards_enabled=cards_enabled,
                             titlecard_duration_seconds=card_duration,

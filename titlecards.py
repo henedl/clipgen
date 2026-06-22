@@ -246,6 +246,13 @@ def resolve_card_background(kind: str) -> tuple[Path | None, bool, bool, str]:
     if not value:
         return (default_path, default_allow_color, False, "black")
 
+    # Only a bare filename inside the upload pool is a valid selection. Reject
+    # path separators / traversal so a stray config value can't resolve outside
+    # TITLECARD_IMAGES_DIRNAME. The Studio settings route validates this already;
+    # this guards the CLI / persisted-settings path too.
+    if Path(value).name != value:
+        return (default_path, default_allow_color, False, "black")
+
     upload_path = (
         utils.get_effective_output_dir() / config.TITLECARD_IMAGES_DIRNAME / value
     )
