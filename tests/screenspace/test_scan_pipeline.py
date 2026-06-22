@@ -591,6 +591,16 @@ class TestScanVideoFramesFfmpegIntegration:
         assert "ffmpeg" in warnings[0].lower()
 
 
+class TestFacadeReExports:
+    """The screenspace facade must keep exposing former god-file seams."""
+
+    def test_probe_video_meta_reexported(self):
+        import screenspace_frames
+
+        assert hasattr(screenspace, "_probe_video_meta")
+        assert screenspace._probe_video_meta is screenspace_frames._probe_video_meta
+
+
 # ---------------------------------------------------------------------------
 # 2F: Parallel worker
 # ---------------------------------------------------------------------------
