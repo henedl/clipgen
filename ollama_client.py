@@ -11,10 +11,12 @@ This module is intentionally small — higher-level reasoning lives in
 ``generate()`` here.
 
 Key functions:
-  is_available()  - check Ollama server connectivity
-  list_models()   - enumerate installed models with metadata
-  generate()      - send a prompt and get a text response
-  unload_model()  - ask Ollama to evict a model from memory immediately
+  is_available()      - check Ollama server connectivity
+  list_models()       - enumerate installed models with metadata
+  is_model_installed()- check whether a specific model is installed locally
+  generate()          - send a prompt and get a text response
+  pull_model()        - download (install) a model, streaming progress
+  unload_model()      - ask Ollama to evict a model from memory immediately
 """
 
 import json
@@ -27,7 +29,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
-from typing import Any
+from typing import Any, Callable
 
 import config
 import utils
@@ -42,6 +44,9 @@ _GENERATE_TIMEOUT = (
 _GENERATE_DEADLINE = 600  # seconds
 _START_POLL_INTERVAL = 0.5  # seconds between health-check polls after starting server
 _START_TIMEOUT = 10  # seconds to wait for server to become available after starting
+# Per-read timeout for a model pull. Layers stream steadily once a download
+# starts; this bounds a stalled connection without aborting a healthy pull.
+_PULL_TIMEOUT = 300  # seconds
 _CANCEL_WATCHER_POLL = 1.0  # seconds; bounds abort latency during long quiet stretches
 _THINK_RE = re.compile(r"<think>[\s\S]*?</think>\s*", re.DOTALL)
 
@@ -90,6 +95,35 @@ def list_models() -> list[dict[str, Any]] | None:
             return models
     except (urllib.error.URLError, OSError, ValueError, json.JSONDecodeError):
         return None
+
+
+def is_model_installed(
+    model: str, installed: list[dict[str, Any]] | None = None
+) -> bool:
+    """Return True if *model* is among the locally installed Ollama models.
+
+    Matches the requested name against installed tags: exact match,
+    ``model:latest`` (Ollama's implicit tag), or any tag sharing the same base
+    when *model* carries no explicit ``:tag``. Returns False when the server is
+    unreachable or the model is absent. Pass *installed* (the result of
+    ``list_models()``) to avoid a redundant ``/api/tags`` round-trip when the
+    caller already holds the list.
+    """
+    if not model:
+        return False
+    if installed is None:
+        installed = list_models()
+    if not installed:
+        return False
+    names = {m["name"] for m in installed}
+    if model in names:
+        return True
+    if ":" not in model:
+        if f"{model}:latest" in names:
+            return True
+        prefix = f"{model}:"
+        return any(name.startswith(prefix) for name in names)
+    return False
 
 
 def unload_model(model: str) -> bool:
@@ -393,3 +427,79 @@ def generate(
             return None
         utils.warning_print(f"Ollama generate failed (response): {exc}")
         return None
+
+
+def _do_pull(model: str, on_progress: Callable[[dict[str, Any]], None] | None) -> bool:
+    """Stream POST /api/pull for *model*, returning True on a ``success`` line.
+
+    Reads the NDJSON progress stream line-by-line, forwarding each status dict
+    to *on_progress*. An ``error`` field anywhere in the stream aborts with
+    False.
+    """
+    data = json.dumps({"model": model, "stream": True}).encode("utf-8")
+    req = urllib.request.Request(
+        f"{config.OLLAMA_BASE_URL}/api/pull",
+        data=data,
+        headers={"Content-Type": "application/json"},
+    )
+    succeeded = False
+    resp: Any = None
+    try:
+        resp = urllib.request.urlopen(req, timeout=_PULL_TIMEOUT)
+        while True:
+            line = resp.readline()
+            if not line:
+                break
+            try:
+                chunk = json.loads(line.decode("utf-8"))
+            except (json.JSONDecodeError, UnicodeDecodeError):
+                continue  # skip malformed lines, keep reading
+            if not isinstance(chunk, dict):
+                continue
+            err = chunk.get("error")
+            if err:
+                utils.warning_print(f"Ollama pull failed: {err}")
+                return False
+            if on_progress is not None:
+                on_progress(chunk)
+            if chunk.get("status") == "success":
+                succeeded = True
+    finally:
+        if resp is not None:
+            try:
+                resp.close()
+            except Exception:
+                pass
+    return succeeded
+
+
+def pull_model(
+    model: str,
+    on_progress: Callable[[dict[str, Any]], None] | None = None,
+) -> bool:
+    """Download (install) an Ollama model via streaming POST /api/pull.
+
+    Reports progress through *on_progress*, called once per NDJSON status line
+    (keys include ``status``, ``total``, ``completed``). On connection refused,
+    auto-starts ``ollama serve`` and retries once. Returns True only when the
+    stream ends with a ``success`` status; False on any failure.
+    """
+    if not model:
+        return False
+    try:
+        return _do_pull(model, on_progress)
+    except urllib.error.HTTPError as exc:
+        utils.warning_print(f"Ollama pull failed (HTTP {exc.code}): {exc.reason}")
+        return False
+    except (urllib.error.URLError, OSError) as exc:
+        if not _is_connection_refused(exc):
+            utils.warning_print(f"Ollama pull failed (connection): {exc}")
+            return False
+        # Connection refused — try to start the server and retry once.
+        if not _start_server():
+            return False
+        try:
+            return _do_pull(model, on_progress)
+        except (urllib.error.URLError, urllib.error.HTTPError, OSError) as retry_exc:
+            utils.warning_print(f"Ollama pull failed after retry: {retry_exc}")
+            return False

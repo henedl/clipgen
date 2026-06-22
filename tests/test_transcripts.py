@@ -792,3 +792,47 @@ class TestTranscriptWorker:
         assert worker.is_alive is True
         worker.stop()
         assert worker.is_alive is False
+
+
+# ---------------------------------------------------------------------------
+# Whisper model cache detection (gates silent downloads)
+# ---------------------------------------------------------------------------
+
+
+class TestIsWhisperModelCached:
+    def test_debugging_short_circuits_true(self, monkeypatch):
+        monkeypatch.setattr(config, "DEBUGGING", True)
+        assert transcripts.is_whisper_model_cached("large-v3") is True
+
+    def test_true_when_download_model_resolves(self, monkeypatch):
+        monkeypatch.setattr(config, "DEBUGGING", False)
+        import faster_whisper.utils as fwu
+
+        monkeypatch.setattr(fwu, "download_model", lambda *a, **k: "/cache/path")
+        assert transcripts.is_whisper_model_cached("base") is True
+
+    def test_false_when_download_model_raises(self, monkeypatch):
+        monkeypatch.setattr(config, "DEBUGGING", False)
+        import faster_whisper.utils as fwu
+
+        def _boom(*a, **k):
+            raise FileNotFoundError("not in cache")
+
+        monkeypatch.setattr(fwu, "download_model", _boom)
+        assert transcripts.is_whisper_model_cached("large-v3") is False
+
+    def test_passes_local_files_only_and_name(self, monkeypatch):
+        monkeypatch.setattr(config, "DEBUGGING", False)
+        import faster_whisper.utils as fwu
+
+        seen: dict = {}
+
+        def _capture(name, **kwargs):
+            seen["name"] = name
+            seen["local_files_only"] = kwargs.get("local_files_only")
+            return "/cache/path"
+
+        monkeypatch.setattr(fwu, "download_model", _capture)
+        transcripts.is_whisper_model_cached("medium")
+        assert seen["name"] == "medium"
+        assert seen["local_files_only"] is True

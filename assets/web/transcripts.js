@@ -70,6 +70,17 @@
   };
 
   var _transcriptionWarmupPosted = false;
+  // Prewarm never downloads silently: when the model isn't cached we confirm
+  // the download with the user. _prewarmDownloadPrompting guards against
+  // double-prompting; _prewarmDeclinedModel records the specific model the user
+  // declined so we stop re-asking for it — but switching to a different model
+  // (or changing TRANSCRIBE_MODEL in settings) still gets its own prompt. The
+  // model still loads on demand, with confirmation, at transcribe time.
+  var _prewarmDownloadPrompting = false;
+  var _prewarmDeclinedModel = null;
+  // Last-known TRANSCRIBE_MODEL, so a settings change can reset the prewarm
+  // guards for the new model. Seeded once from the model-status hint.
+  var _lastTranscribeModel = null;
   var _modelHintPollTimer = null;
   var _hadActiveTranscriptionLastPoll = false;
   var MODEL_FAIL_GRACE_MS = 10000;
@@ -265,6 +276,9 @@
   function applyTranscriptionModelHint(data) {
     if (!data || !data.ok) return;
     state.modelStatus = data;
+    // Seed the change-detector once; thereafter only settings saves update it,
+    // so a poll landing mid-save can't mask a model change.
+    if (data.model && _lastTranscribeModel === null) _lastTranscribeModel = data.model;
     // Track how long we've been in an apparent "failed to load" state, so
     // the indicator doesn't flash red on cold load before the first response.
     var looksFailed = !data.loaded && !data.warming && data.prewarm !== "off";
@@ -404,6 +418,17 @@
     }
   }
 
+  // Forget which Whisper downloads the user has agreed to and refresh the
+  // models cache. Call when a download attempt has concluded (transcription
+  // finished, or a warmup load loaded/failed) so the next gate re-reads real
+  // cache state — re-prompting for a model whose download failed, staying
+  // quiet for one that succeeded. Never call mid-download (it would re-prompt).
+  function _forgetWhisperDownloadAgreements() {
+    _whisperDownloadConfirmed = {};
+    _trModelsCache = null;
+    _trModelsCachePromise = null;
+  }
+
   function startModelHintPoll() {
     stopModelHintPoll();
     var ticks = 0;
@@ -419,10 +444,14 @@
           applyTranscriptionModelHint(data);
           if (data.loaded) {
             stopModelHintPoll();
+            _forgetWhisperDownloadAgreements();
             return;
           }
           if (!data.warming) {
+            // Warmup ended without loading (failed/idle) — let the next attempt
+            // re-confirm rather than silently re-downloading.
             stopModelHintPoll();
+            _forgetWhisperDownloadAgreements();
           }
         })
         .catch(function () {});
@@ -458,6 +487,10 @@
           return;
         }
         if (data.skipped) {
+          if (data.reason === "model_not_cached") {
+            _confirmPrewarmDownload(data);
+            return;
+          }
           _transcriptionWarmupPosted = false;
           refreshTranscriptionModelHintOnce();
           return;
@@ -475,6 +508,57 @@
       .catch(function () {
         _transcriptionWarmupPosted = false;
       });
+  }
+
+  // Prewarm wanted to load a model that isn't downloaded yet. We never
+  // download silently — confirm with the user first (once per session). On
+  // confirm, re-post warmup with force=true so the backend proceeds; on
+  // decline, leave the warmup flag set so we stop re-posting/re-prompting
+  // (the model still loads, with confirmation, at transcribe time).
+  function _confirmPrewarmDownload(data) {
+    if (_prewarmDownloadPrompting) return;
+    if (_prewarmDeclinedModel === data.model) {
+      _transcriptionWarmupPosted = true;
+      refreshTranscriptionModelHintOnce();
+      return;
+    }
+    _prewarmDownloadPrompting = true;
+    confirmModelInstall({
+      kind: "whisper",
+      prewarm: true,
+      model: data.model,
+      sizeMb: data.size_mb,
+    }).then(function (ok) {
+      _prewarmDownloadPrompting = false;
+      if (!ok) {
+        _prewarmDeclinedModel = data.model;
+        _transcriptionWarmupPosted = true;
+        refreshTranscriptionModelHintOnce();
+        return;
+      }
+      // Agreed once — don't re-prompt at transcribe time before the download
+      // completes (the models cache still reports it as not cached).
+      if (data.model) _whisperDownloadConfirmed[data.model] = true;
+      apiPost("api/transcribe/warmup", { force: true })
+        .then(function (d) {
+          if (!d.ok) {
+            _transcriptionWarmupPosted = false;
+            return;
+          }
+          if (d.started || d.already_warming) {
+            startModelHintPoll();
+            return;
+          }
+          if (d.already_loaded) {
+            refreshTranscriptionModelHintOnce();
+            return;
+          }
+          _transcriptionWarmupPosted = false;
+        })
+        .catch(function () {
+          _transcriptionWarmupPosted = false;
+        });
+    });
   }
 
   function loadParticipants() {
@@ -1079,20 +1163,23 @@
   function _startSummaryRun() {
     var pid = state.selectedParticipant;
     if (!pid) return;
-    var previousText = state.summaryText;
-    state.summaryCitations = null;
-    state.citationsGenerating = false;
-    _stopCitationsPoll();
-    renderSummaryGenerating();
-    apiPost("api/summary/" + pid + "/regenerate", {}).then(function (data) {
-      if (data.ok && data.generating) {
-        _startSummaryPoll(pid);
-        _refreshAgentStateNow();
-      }
-    }).catch(function () {
-      showToast("Failed to regenerate summary");
-      if (previousText) renderSummary(previousText);
-      else renderSummaryEmpty();
+    ensureAgentModelInstalled("summary").then(function (ok) {
+      if (!ok) return;
+      var previousText = state.summaryText;
+      state.summaryCitations = null;
+      state.citationsGenerating = false;
+      _stopCitationsPoll();
+      renderSummaryGenerating();
+      apiPost("api/summary/" + pid + "/regenerate", {}).then(function (data) {
+        if (data.ok && data.generating) {
+          _startSummaryPoll(pid);
+          _refreshAgentStateNow();
+        }
+      }).catch(function () {
+        showToast("Failed to regenerate summary");
+        if (previousText) renderSummary(previousText);
+        else renderSummaryEmpty();
+      });
     });
   }
 
@@ -1143,19 +1230,22 @@
       e.stopPropagation();
       var pid = state.selectedParticipant;
       if (!pid) return;
-      state.summaryCitations = null;
-      state.citationsGenerating = true;
-      renderCitations(); // clear existing links
-      renderCitationsStatus();
-      apiPost("api/citations/" + pid + "/regenerate", {}).then(function (data) {
-        if (data.ok && data.generating) {
-          _startCitationsPoll(pid);
-        }
-      }).catch(function () {
-        showToast("Failed to regenerate citations");
-        state.citationsGenerating = false;
-        var status = qs("#summaryContent .citations-status");
-        if (status) status.remove();
+      ensureAgentModelInstalled("citations").then(function (ok) {
+        if (!ok) return;
+        state.summaryCitations = null;
+        state.citationsGenerating = true;
+        renderCitations(); // clear existing links
+        renderCitationsStatus();
+        apiPost("api/citations/" + pid + "/regenerate", {}).then(function (data) {
+          if (data.ok && data.generating) {
+            _startCitationsPoll(pid);
+          }
+        }).catch(function () {
+          showToast("Failed to regenerate citations");
+          state.citationsGenerating = false;
+          var status = qs("#summaryContent .citations-status");
+          if (status) status.remove();
+        });
       });
     });
 
@@ -1451,21 +1541,24 @@
   function _startFrictionRun() {
     var pid = state.selectedParticipant;
     if (!pid || !_frictionDepMet()) return;
-    state.frictionGenerating = true;
-    state.frictionStartedAt = null;
-    renderFrictionGenerating();
-    apiPost("api/friction/" + pid + "/regenerate", {}).then(function (data) {
-      if (data.ok && data.generating) {
-        _startFrictionPoll(pid);
-        _refreshAgentStateNow();
-      } else {
+    ensureAgentModelInstalled("friction").then(function (ok) {
+      if (!ok) return;
+      state.frictionGenerating = true;
+      state.frictionStartedAt = null;
+      renderFrictionGenerating();
+      apiPost("api/friction/" + pid + "/regenerate", {}).then(function (data) {
+        if (data.ok && data.generating) {
+          _startFrictionPoll(pid);
+          _refreshAgentStateNow();
+        } else {
+          state.frictionGenerating = false;
+          renderFriction();
+        }
+      }).catch(function () {
+        showToast("Failed to start friction analysis");
         state.frictionGenerating = false;
         renderFriction();
-      }
-    }).catch(function () {
-      showToast("Failed to start friction analysis");
-      state.frictionGenerating = false;
-      renderFriction();
+      });
     });
   }
 
@@ -3861,7 +3954,8 @@
       var opts = '<option value="">Default</option>';
       models.forEach(function (m) {
         if (m.selected) defaultName = m.name;
-        opts += '<option value="' + escapeHtml(m.name) + '">' + escapeHtml(m.name) + '</option>';
+        var label = m.name + (m.cached === false ? " — not downloaded" : "");
+        opts += '<option value="' + escapeHtml(m.name) + '">' + escapeHtml(label) + '</option>';
       });
       modelSelect.innerHTML = opts;
       modelSelect.options[0].textContent = "Default (" + (defaultName || "base") + ")";
@@ -3935,10 +4029,13 @@
       hasResult: !!(p.agents && p.agents.summary === "done"),
       cascadeWarning: !!(p.agents && p.agents.citations === "done"),
       onStart: function () {
-        apiPost("api/summary/" + p.id + "/regenerate", {}).then(function () {
-          _refreshAgentStateNow();
-        }).catch(function () {
-          showToast("Failed to start summary");
+        ensureAgentModelInstalled("summary").then(function (ok) {
+          if (!ok) return;
+          apiPost("api/summary/" + p.id + "/regenerate", {}).then(function () {
+            _refreshAgentStateNow();
+          }).catch(function () {
+            showToast("Failed to start summary");
+          });
         });
       },
       onStop: function () {
@@ -3961,10 +4058,13 @@
       hasResult: !!(p.agents && p.agents.citations === "done"),
       cascadeWarning: false,
       onStart: function () {
-        apiPost("api/citations/" + p.id + "/regenerate", {}).then(function () {
-          _refreshAgentStateNow();
-        }).catch(function () {
-          showToast("Failed to start citations");
+        ensureAgentModelInstalled("citations").then(function (ok) {
+          if (!ok) return;
+          apiPost("api/citations/" + p.id + "/regenerate", {}).then(function () {
+            _refreshAgentStateNow();
+          }).catch(function () {
+            showToast("Failed to start citations");
+          });
         });
       },
       onStop: function () {
@@ -3987,11 +4087,14 @@
       hasResult: !!(p.agents && p.agents.friction === "done"),
       cascadeWarning: false,
       onStart: function () {
-        apiPost("api/friction/" + p.id + "/regenerate", {}).then(function () {
-          _refreshAgentStateNow();
-          if (state.selectedParticipant === p.id) loadFriction(p.id);
-        }).catch(function () {
-          showToast("Failed to start friction");
+        ensureAgentModelInstalled("friction").then(function (ok) {
+          if (!ok) return;
+          apiPost("api/friction/" + p.id + "/regenerate", {}).then(function () {
+            _refreshAgentStateNow();
+            if (state.selectedParticipant === p.id) loadFriction(p.id);
+          }).catch(function () {
+            showToast("Failed to start friction");
+          });
         });
       },
       onStop: function () {
@@ -4189,16 +4292,19 @@
   }
 
   function transcribeParticipants(pids, force, overrides) {
-    var body = { participants: pids, force: force };
-    if (overrides && Object.keys(overrides).length > 0) body.overrides = overrides;
-    apiPost("api/transcribe", body).then(function (data) {
-      if (!data.ok) {
-        showToast("Failed to enqueue transcription");
-        return;
-      }
-      showToast("Enqueued " + clipgenPluralUnit(data.tasks.length, "transcription", "transcriptions"));
-      startPolling();
-      pollTaskStatus();
+    ensureWhisperModelsForPids(pids, overrides).then(function (ok) {
+      if (!ok) return;
+      var body = { participants: pids, force: force };
+      if (overrides && Object.keys(overrides).length > 0) body.overrides = overrides;
+      apiPost("api/transcribe", body).then(function (data) {
+        if (!data.ok) {
+          showToast("Failed to enqueue transcription");
+          return;
+        }
+        showToast("Enqueued " + clipgenPluralUnit(data.tasks.length, "transcription", "transcriptions"));
+        startPolling();
+        pollTaskStatus();
+      });
     });
   }
 
@@ -4420,6 +4526,9 @@
 
       if (!hasActive && _hadActiveTranscriptionLastPoll) {
         refreshTranscriptionModelHintOnce();
+        // Transcription just finished — re-validate downloads against real
+        // cache state (downloaded → no prompt, failed → prompt again).
+        _forgetWhisperDownloadAgreements();
       }
       _hadActiveTranscriptionLastPoll = hasActive;
 
@@ -4545,6 +4654,14 @@
   // cached fetcher here. The shared modal maintains its own cache.
   var _trModelsCache = null;
   var _trModelsCachePromise = null;
+  // Whisper models the user has already agreed to download this session. The
+  // models response is cached and a just-confirmed model won't read back as
+  // cached until its background download finishes, so without this we'd
+  // re-prompt on every transcription. Keyed by model name.
+  var _whisperDownloadConfirmed = {};
+  // Serializes confirmModelInstall() calls: there is one shared modal element,
+  // so overlapping callers (e.g. prewarm + an agent run) must take turns.
+  var _modelInstallChain = Promise.resolve();
 
   function _trFetchModels() {
     if (_trModelsCache) return Promise.resolve(_trModelsCache);
@@ -4552,11 +4669,234 @@
     _trModelsCachePromise = fetch("/api/models")
       .then(function (r) { return r.json(); })
       .then(function (data) {
-        if (data && data.ok) _trModelsCache = data;
+        // Don't pin a result where Ollama wasn't reachable — otherwise the
+        // agent gate and pickers stay blind to installed models for the whole
+        // session. Reset so the next call re-fetches once the server is up.
+        if (data && data.ok && !(data.ollama && data.ollama.available === false)) {
+          _trModelsCache = data;
+        } else {
+          _trModelsCachePromise = null;
+        }
         return data;
       })
-      .catch(function () { return null; });
+      .catch(function () { _trModelsCachePromise = null; return null; });
     return _trModelsCachePromise;
+  }
+
+  // ---- Local-model install confirmation ----
+  // Both whisper transcription models and Ollama agent models are "local
+  // models" that get installed on demand. We never download one silently:
+  // confirmModelInstall() gates every install behind an explicit dialog.
+
+  function _trFormatModelSize(mb) {
+    if (!mb || mb <= 0) return "";
+    if (mb >= 1024) return (mb / 1024).toFixed(1) + " GB";
+    return Math.round(mb) + " MB";
+  }
+
+  // Stream an Ollama pull, reporting progress dicts via onProgress. Resolves
+  // true on success, false on failure/cancellation. isCancelled() is polled
+  // each tick so a dismissed dialog stops the poll (the server-side pull keeps
+  // running and resumes from cached layers). The poll also self-terminates
+  // after a run of unanswered status checks so it can never leak forever.
+  function installOllamaModel(model, onProgress, isCancelled) {
+    return apiPost("api/models/ollama/pull", { model: model }).then(function (data) {
+      if (!data || !data.ok) return false;
+      return new Promise(function (resolve) {
+        var misses = 0;
+        var poll = setInterval(function () {
+          if (isCancelled && isCancelled()) {
+            clearInterval(poll);
+            resolve(false);
+            return;
+          }
+          apiGet("api/models/ollama/pull-status?model=" + encodeURIComponent(model))
+            .then(function (st) {
+              if (!st || !st.ok || !st.found) {
+                if (++misses >= 20) { clearInterval(poll); resolve(false); }
+                return;
+              }
+              misses = 0;
+              if (onProgress) onProgress(st);
+              if (st.done) {
+                clearInterval(poll);
+                resolve(!!st.succeeded);
+              }
+            })
+            .catch(function () {
+              if (++misses >= 20) { clearInterval(poll); resolve(false); }
+            });
+        }, 1000);
+      });
+    }).catch(function () { return false; });
+  }
+
+  // Show the confirm/install dialog. Resolves true when the model is available
+  // to use (whisper: user agreed to the download; ollama: pull succeeded),
+  // false when the user cancels or the install fails. Calls are serialized
+  // (see _modelInstallChain) so concurrent callers never share the one modal.
+  function confirmModelInstall(opts) {
+    var run = function () { return _confirmModelInstallNow(opts); };
+    var result = _modelInstallChain.then(run, run);
+    // Advance the chain when this dialog settles, swallowing its outcome so a
+    // cancelled/failed dialog doesn't break the queue for the next caller.
+    _modelInstallChain = result.then(function () {}, function () {});
+    return result;
+  }
+
+  function _confirmModelInstallNow(opts) {
+    return new Promise(function (resolve) {
+      var cancelled = false;
+      var modal = qs("#modelInstallModal");
+      var titleEl = qs("#modelInstallTitle");
+      var msgEl = qs("#modelInstallMessage");
+      var progress = qs("#modelInstallProgress");
+      var barFill = qs("#modelInstallBarFill");
+      var progressText = qs("#modelInstallProgressText");
+      var cancelBtn = qs("#modelInstallCancel");
+      var confirmBtn = qs("#modelInstallConfirm");
+
+      progress.classList.add("hidden");
+      barFill.style.width = "0%";
+      progressText.textContent = "";
+      cancelBtn.disabled = false;
+      cancelBtn.textContent = "Cancel";
+      confirmBtn.disabled = false;
+      confirmBtn.classList.remove("hidden");
+
+      if (opts.kind === "whisper") {
+        titleEl.textContent = "Download transcription model?";
+        var size = opts.sizeMb ? " (~" + _trFormatModelSize(opts.sizeMb) + ")" : "";
+        if (opts.prewarm) {
+          msgEl.textContent = 'The "' + opts.model + '" transcription model' + size +
+            " isn't downloaded yet. Download it now so transcription is ready to start? It will be stored locally.";
+        } else {
+          msgEl.textContent = 'The "' + opts.model + '" transcription model' + size +
+            " isn't downloaded yet. It will be downloaded and stored locally before transcription begins.";
+        }
+        confirmBtn.textContent = "Download";
+      } else {
+        titleEl.textContent = "Install AI model?";
+        msgEl.textContent = 'The Ollama model "' + opts.model + '" used by the ' +
+          (opts.agentKey || "analysis") +
+          " agent isn't installed. Install it now? This downloads the model locally and may take several minutes.";
+        confirmBtn.textContent = "Install";
+      }
+
+      function cleanup() {
+        cancelBtn.removeEventListener("click", onCancel);
+        confirmBtn.removeEventListener("click", onConfirm);
+        modal.removeEventListener("click", onBackdrop);
+        document.removeEventListener("keydown", onKey);
+      }
+      function close(result) {
+        cancelled = true; // stop any in-flight pull poll and its late callbacks
+        cleanup();
+        modal.classList.add("hidden");
+        resolve(result);
+      }
+      function onCancel() { close(false); }
+      function onBackdrop(e) { if (e.target === modal) close(false); }
+      function onKey(e) { if (e.key === "Escape") close(false); }
+      function onConfirm() {
+        if (opts.kind === "whisper") { close(true); return; }
+        // Ollama: kick off the pull and show progress in place. Cancel stays
+        // enabled so the user can dismiss while it runs.
+        confirmBtn.classList.add("hidden");
+        progress.classList.remove("hidden");
+        progressText.textContent = "Starting…";
+        installOllamaModel(opts.model, function (st) {
+          if (st.total > 0) {
+            var pct = Math.max(0, Math.min(100, Math.round((st.completed / st.total) * 100)));
+            barFill.style.width = pct + "%";
+            progressText.textContent = (st.status || "Downloading") + " — " + pct + "%";
+          } else {
+            progressText.textContent = st.status || "Working…";
+          }
+        }, function () { return cancelled; }).then(function (ok) {
+          if (cancelled) return; // dialog dismissed mid-pull — no toast, no re-close
+          if (ok) {
+            _trModelsCache = null;
+            _trModelsCachePromise = null;
+            showToast("Model installed");
+            close(true);
+          } else {
+            // Leave the dialog open so the user can read the failure and
+            // dismiss it; Cancel now resolves false.
+            progressText.textContent = "Installation failed. Check that Ollama is running.";
+            cancelBtn.textContent = "Close";
+          }
+        });
+      }
+
+      cancelBtn.addEventListener("click", onCancel);
+      confirmBtn.addEventListener("click", onConfirm);
+      modal.addEventListener("click", onBackdrop);
+      document.addEventListener("keydown", onKey);
+      modal.classList.remove("hidden");
+    });
+  }
+
+  // Gate an agent run on its Ollama model being installed. Resolves true to
+  // proceed, false to abort. We only block when Ollama is reachable AND the
+  // model is positively missing — otherwise the existing "model unavailable"
+  // error path handles it.
+  function ensureAgentModelInstalled(agentKey) {
+    return _trFetchModels().then(function (data) {
+      var oll = data && data.ollama;
+      if (!oll || !oll.available) return true;
+      var agents = oll.agents || [];
+      var info = null;
+      for (var i = 0; i < agents.length; i++) {
+        if (agents[i].key === agentKey) { info = agents[i]; break; }
+      }
+      if (!info || info.installed || !info.model) return true;
+      return confirmModelInstall({ kind: "ollama", agentKey: agentKey, model: info.model });
+    }).catch(function () { return true; });
+  }
+
+  // Gate transcription on every resolved whisper model being downloaded.
+  // Resolves true to proceed, false if the user cancels any required download.
+  function ensureWhisperModelsForPids(pids, overrides) {
+    return _trFetchModels().then(function (data) {
+      var models = (data && data.whisper && data.whisper.models) || [];
+      if (!models.length) return true;
+      var byName = {};
+      var defaultName = "";
+      models.forEach(function (m) {
+        byName[m.name] = m;
+        if (m.selected) defaultName = m.name;
+      });
+      var needed = {};
+      (pids || []).forEach(function (pid) {
+        var ov = (overrides && overrides[pid]) || {};
+        var name = ov.model || defaultName;
+        var m = name && byName[name];
+        if (m && m.cached === false && !_whisperDownloadConfirmed[name]) needed[name] = m;
+      });
+      var names = Object.keys(needed);
+      if (!names.length) return true;
+      // Confirm each distinct non-cached model in turn; any cancel aborts.
+      return names.reduce(function (chain, name) {
+        return chain.then(function (okSoFar) {
+          if (!okSoFar) return false;
+          return confirmModelInstall({
+            kind: "whisper",
+            model: name,
+            sizeMb: needed[name].size_mb,
+          }).then(function (ok) {
+            // Remember the agreement so we don't re-prompt before the
+            // background download has finished (the cached flag lags).
+            if (ok) {
+              _whisperDownloadConfirmed[name] = true;
+              _trModelsCache = null;
+              _trModelsCachePromise = null;
+            }
+            return ok;
+          });
+        });
+      }, Promise.resolve(true));
+    }).catch(function () { return true; });
   }
 
   function _applySettingsSnapshot(applied, settings) {
@@ -4589,6 +4929,29 @@
     }
   }
 
+  // A changed transcription model invalidates the prewarm guards: the new
+  // model may be uncached and must get its own download confirmation, so we
+  // clear the "already posted/declined" state and let prewarm re-offer it.
+  // Clearing the declined model also means re-selecting a previously-declined
+  // model gets a fresh prompt (the user explicitly chose it again).
+  function _onTranscribeModelMaybeChanged(newModel) {
+    if (newModel === undefined || newModel === null) return;
+    if (newModel !== _lastTranscribeModel) {
+      _transcriptionWarmupPosted = false;
+      _prewarmDownloadPrompting = false;
+      _prewarmDeclinedModel = null;
+    }
+    _lastTranscribeModel = newModel;
+  }
+
+  function _settingValueFromRecords(settings, name) {
+    if (!settings) return undefined;
+    for (var i = 0; i < settings.length; i++) {
+      if (settings[i].name === name) return settings[i].value;
+    }
+    return undefined;
+  }
+
   function initTranscriptSettings() {
     var btn = qs("#settingsBtn");
     if (!btn) return;
@@ -4598,11 +4961,19 @@
         onSave: function (applied, settings) {
           _trModelsCache = null;
           _trModelsCachePromise = null;
+          _onTranscribeModelMaybeChanged(
+            (applied && applied.TRANSCRIBE_MODEL) !== undefined
+              ? applied.TRANSCRIBE_MODEL
+              : _settingValueFromRecords(settings, "TRANSCRIBE_MODEL")
+          );
           _applySettingsSnapshot(applied, settings);
         },
         onReset: function (scope, settings) {
           _trModelsCache = null;
           _trModelsCachePromise = null;
+          _onTranscribeModelMaybeChanged(
+            _settingValueFromRecords(settings, "TRANSCRIBE_MODEL")
+          );
           _applySettingsSnapshot(null, settings);
         },
       });

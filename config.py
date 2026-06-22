@@ -429,6 +429,7 @@ SETTINGS_DESCRIPTIONS: dict[str, str] = {
     "OLLAMA_CITATIONS_ENABLED": "Auto-generate citation links between summary claims and transcript segments after the summary completes. Disable to keep citations manual-only (the per-participant Regenerate Citations button still works).",
     "OLLAMA_FRICTION_ENABLED": "Auto-detect friction moments after the summary completes. Disable to keep friction manual-only (the per-participant Run/Re-run friction button still works). Uses the AI summary model.",
     "OLLAMA_SUMMARY_MODEL": "Ollama model used for transcript summaries, citation linking, and friction detection.",
+    "OLLAMA_FRICTION_MODEL": "Ollama model for friction-moment detection. Leave as 'Same as summary model' to reuse the summary model, or pick a different installed model.",
     "OLLAMA_BASE_URL": "Base URL of the local Ollama server.",
     "SCREENSHOT_FORMAT": "File format for screenshot artifacts. WebP is smaller but requires modern browsers (Safari 16+).",
     "GIF_FORMAT": "File format for animated artifacts. WebM (VP9) is the smallest and most-compatible modern option; animated WebP is also small but requires Safari 16+; GIF works everywhere but is large.",
@@ -644,6 +645,14 @@ STUDIO_SETTINGS: dict[str, dict[str, Any]] = {
         "group": "AI Summary",
         "type": "model_select",
         "provider": "ollama",
+    },
+    "OLLAMA_FRICTION_MODEL": {
+        "tab": "Summaries",
+        "group": "AI Summary",
+        "type": "model_select",
+        "provider": "ollama",
+        # Blank value inherits OLLAMA_SUMMARY_MODEL; surfaced as this option.
+        "emptyLabel": "Same as summary model",
     },
     "OLLAMA_BASE_URL": {"tab": "Summaries", "group": "AI Summary", "type": "str"},
     "SCREENSPACE_CV_RESOLUTION_SCALE": {

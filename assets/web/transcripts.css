@@ -1811,6 +1811,52 @@ body {
   font-weight: 600;
 }
 
+.model-install-modal {
+  max-width: 460px;
+}
+
+.model-install-message {
+  font-size: var(--text-sm);
+  line-height: 1.5;
+  color: var(--color-text-dim);
+  margin-bottom: var(--space-4);
+}
+
+.model-install-progress {
+  margin-bottom: var(--space-4);
+}
+
+.model-install-progress.hidden {
+  display: none;
+}
+
+.model-install-bar {
+  height: 8px;
+  border-radius: var(--radius-full);
+  background: var(--color-border);
+  overflow: hidden;
+}
+
+.model-install-bar-fill {
+  height: 100%;
+  width: 0;
+  background: var(--color-accent);
+  border-radius: var(--radius-full);
+  transition: width var(--duration-normal) ease;
+}
+
+.model-install-progress-text {
+  margin-top: var(--space-2);
+  font-size: var(--text-xs);
+  color: var(--color-text-dim);
+}
+
+.model-install-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+}
+
 .correction-form {
   display: flex;
   align-items: center;

@@ -660,3 +660,15 @@ def get_agent(key: str) -> Agent | None:
         if agent["key"] == key:
             return agent
     return None
+
+
+def resolve_model(agent: Agent) -> str:
+    """Return the Ollama model name *agent* runs against.
+
+    Reads the config attribute named by ``model_config_key``; a blank value
+    means "inherit the summary model" (friction's default).
+    """
+    model = getattr(config, agent["model_config_key"], None)
+    if not model:
+        model = config.OLLAMA_SUMMARY_MODEL
+    return model

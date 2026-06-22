@@ -470,3 +470,84 @@ class TestAutoStartServer:
         assert "not installed" in mock_warn.call_args[0][0].lower()
         details = mock_warn.call_args[1]["details"]
         assert any("ollama --version" in line for line in details)
+
+
+class TestIsModelInstalled:
+    @patch("ollama_client.list_models")
+    def test_exact_match(self, mock_list):
+        mock_list.return_value = [{"name": "qwen3.5:9b"}, {"name": "llama3:latest"}]
+        assert ollama_client.is_model_installed("qwen3.5:9b") is True
+
+    @patch("ollama_client.list_models")
+    def test_implicit_latest_tag(self, mock_list):
+        mock_list.return_value = [{"name": "llama3:latest"}]
+        assert ollama_client.is_model_installed("llama3") is True
+
+    @patch("ollama_client.list_models")
+    def test_matches_other_tag_when_untagged(self, mock_list):
+        mock_list.return_value = [{"name": "qwen3.5:9b"}]
+        assert ollama_client.is_model_installed("qwen3.5") is True
+
+    @patch("ollama_client.list_models")
+    def test_missing_model(self, mock_list):
+        mock_list.return_value = [{"name": "llama3:latest"}]
+        assert ollama_client.is_model_installed("qwen3.5:9b") is False
+
+    @patch("ollama_client.list_models")
+    def test_tagged_request_does_not_prefix_match(self, mock_list):
+        # An explicit tag must match exactly — no base-prefix fallback.
+        mock_list.return_value = [{"name": "qwen3.5:9b"}]
+        assert ollama_client.is_model_installed("qwen3.5:32b") is False
+
+    @patch("ollama_client.list_models")
+    def test_server_unreachable(self, mock_list):
+        mock_list.return_value = None
+        assert ollama_client.is_model_installed("qwen3.5:9b") is False
+
+    def test_empty_model_name(self):
+        assert ollama_client.is_model_installed("") is False
+
+    @patch("ollama_client.list_models")
+    def test_reuses_supplied_installed_list(self, mock_list):
+        # When the caller passes the installed list, no /api/tags call is made.
+        installed = [{"name": "qwen3.5:9b"}]
+        assert ollama_client.is_model_installed("qwen3.5:9b", installed) is True
+        mock_list.assert_not_called()
+
+
+class TestPullModel:
+    @patch("ollama_client.urllib.request.urlopen")
+    def test_returns_true_on_success_status(self, mock_urlopen):
+        lines = _ndjson_lines(
+            {"status": "pulling manifest"},
+            {"status": "downloading", "total": 100, "completed": 50},
+            {"status": "success"},
+        )
+        mock_urlopen.return_value = _make_streaming_resp(lines)
+        assert ollama_client.pull_model("qwen3.5:9b") is True
+
+    @patch("ollama_client.urllib.request.urlopen")
+    def test_reports_progress(self, mock_urlopen):
+        lines = _ndjson_lines(
+            {"status": "downloading", "total": 100, "completed": 25},
+            {"status": "success"},
+        )
+        mock_urlopen.return_value = _make_streaming_resp(lines)
+        seen: list[dict] = []
+        ollama_client.pull_model("m", on_progress=seen.append)
+        assert any(c.get("completed") == 25 for c in seen)
+
+    @patch("ollama_client.urllib.request.urlopen")
+    def test_returns_false_on_error_line(self, mock_urlopen):
+        lines = _ndjson_lines({"error": "model 'nope' not found"})
+        mock_urlopen.return_value = _make_streaming_resp(lines)
+        assert ollama_client.pull_model("nope") is False
+
+    @patch("ollama_client.urllib.request.urlopen")
+    def test_returns_false_without_success(self, mock_urlopen):
+        lines = _ndjson_lines({"status": "pulling manifest"})
+        mock_urlopen.return_value = _make_streaming_resp(lines)
+        assert ollama_client.pull_model("m") is False
+
+    def test_empty_model_name(self):
+        assert ollama_client.pull_model("") is False
