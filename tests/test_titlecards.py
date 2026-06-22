@@ -401,13 +401,41 @@ def test_get_or_build_endcard_cache_keyed_by_selection(monkeypatch):
     titlecards.clear_endcard_cache()
 
 
-def test_resolve_titlecard_images(monkeypatch):
+def test_resolve_titlecard_images(monkeypatch, tmp_path):
     import pipeline
 
+    # Uploads must exist on disk to be recorded by their filename.
+    monkeypatch.setattr(pipeline.config, "OUTPUT_DIR", str(tmp_path))
+    images = tmp_path / pipeline.config.TITLECARD_IMAGES_DIRNAME
+    images.mkdir()
+    (images / "a.png").write_bytes(b"x")
+    (images / "b.png").write_bytes(b"x")
     monkeypatch.setattr(pipeline.config, "TITLECARD_IMAGE", "a.png")
     monkeypatch.setattr(pipeline.config, "ENDCARD_IMAGE", "b.png")
     assert pipeline._resolve_titlecard_images(True) == ("a.png", "b.png")
     assert pipeline._resolve_titlecard_images(False) == ("", "")
+
+
+def test_resolve_titlecard_images_missing_upload_collapses_to_default(
+    monkeypatch, tmp_path
+):
+    """A selected upload missing on disk records the default identity (""), so a
+    clip rendered with the silent fallback regenerates once the file appears —
+    rather than cache-matching on a filename it was never rendered with."""
+    import pipeline
+
+    monkeypatch.setattr(pipeline.config, "OUTPUT_DIR", str(tmp_path))
+    monkeypatch.setattr(pipeline.config, "TITLECARD_IMAGE", "ghost.png")
+    monkeypatch.setattr(pipeline.config, "ENDCARD_IMAGE", "")
+    title, _end = pipeline._resolve_titlecard_images(True)
+    assert title == ""  # not "ghost.png"
+
+    # Once the file appears, the identity changes -> cache miss -> regenerate.
+    images = tmp_path / pipeline.config.TITLECARD_IMAGES_DIRNAME
+    images.mkdir()
+    (images / "ghost.png").write_bytes(b"x")
+    title2, _ = pipeline._resolve_titlecard_images(True)
+    assert title2 == "ghost.png"
 
 
 def test_get_or_build_endcard_cache_keyed_by_color(monkeypatch):

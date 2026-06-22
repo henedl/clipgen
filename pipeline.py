@@ -58,24 +58,45 @@ def _resolve_titlecard_options(
     return enabled, duration
 
 
+def _card_image_identity(kind: str) -> str:
+    """Cache identity for one card kind, matching what will actually be rendered.
+
+    Derived from titlecards.resolve_card_background() — the same resolution the
+    encoder uses — so the recorded identity never drifts from the rendered card:
+      - solid color: the color is baked in (e.g. "__color__#ff0000") so changing
+        it invalidates cached clips;
+      - "none" endcard: the no-card sentinel;
+      - a resolved upload: its filename;
+      - the bundled default — including the silent fallback when a selected upload
+        is missing on disk: the empty-string default. Collapsing the missing-upload
+        case to "" (rather than recording the absent filename) means a clip rendered
+        with the fallback regenerates once the file later appears, instead of cache-
+        matching on a filename it was never actually rendered with.
+    """
+    background_path, _allow_color, skip, fill_color = (
+        titlecards.resolve_card_background(kind)
+    )
+    if skip:
+        return config.CARD_IMAGE_NONE
+    if background_path is None:
+        return config.CARD_IMAGE_COLOR + fill_color
+    images_dir = utils.get_effective_output_dir() / config.TITLECARD_IMAGES_DIRNAME
+    if background_path.parent == images_dir:
+        return background_path.name
+    return ""
+
+
 def _resolve_titlecard_images(cards_enabled: bool) -> tuple[str, str]:
     """Return the selected (titlecard, endcard) image identities when enabled.
 
     Image selection is config-global (no per-request override). Returns empty
     strings when cards are disabled so artifact records and the Studio cache-skip
-    comparison agree on a single canonical value. When a card is set to a solid
-    color, the fill color is baked into the identity (e.g. "__color__#ff0000")
-    so changing the color invalidates cached clips just like changing the image.
+    comparison agree on a single canonical value. Each identity reflects the
+    background that will actually be rendered (see _card_image_identity).
     """
     if not cards_enabled:
         return "", ""
-    title = config.TITLECARD_IMAGE
-    end = config.ENDCARD_IMAGE
-    if title == config.CARD_IMAGE_COLOR:
-        title = title + config.TITLECARD_COLOR
-    if end == config.CARD_IMAGE_COLOR:
-        end = end + config.ENDCARD_COLOR
-    return title, end
+    return _card_image_identity("title"), _card_image_identity("end")
 
 
 def is_excel_worksheet(worksheet: Any) -> bool:
