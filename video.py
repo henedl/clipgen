@@ -1914,11 +1914,17 @@ def _batch_extract_screenshots(
         return None
     tmpdir = tempfile.mkdtemp(prefix="clipgen_gallery_")
     try:
+        # The fps filter samples from t=0, so for an offset grid (a multi-video
+        # part aligned to the global interval) seek the input first; frame index
+        # i then still maps to timestamps[i] because the grid is evenly spaced.
+        start_offset = timestamps[0] if timestamps else 0
+        seek_args = ["-ss", str(start_offset)] if start_offset > 0 else []
         ffmpeg_command = [
             "ffmpeg",
             "-y",
             "-loglevel",
             config.FFMPEG_LOGLEVEL,
+            *seek_args,
             "-i",
             input_file,
             "-vf",
@@ -2050,6 +2056,7 @@ def generate_interval_captures(
     interval_seconds: int = 10,
     output_format: str = "screen",
     gif_duration_seconds: int = 3,
+    timestamps: list[int] | None = None,
     cancel_flag: Callable[[], bool] | None = None,
 ) -> list[dict[str, Any]]:
     """Generate screenshots or GIFs at regular intervals throughout a video.
@@ -2059,6 +2066,11 @@ def generate_interval_captures(
         interval_seconds: Seconds between each capture
         output_format: 'screen' for PNG screenshots or 'gif' for animated GIFs
         gif_duration_seconds: Duration of each GIF in seconds (ignored for screenshots)
+        timestamps: Explicit (local) capture times in seconds. When omitted,
+            defaults to ``range(0, duration, interval_seconds)``. Multi-video
+            galleries pass a grid aligned to the global interval so spacing stays
+            even across part boundaries; values must still be evenly spaced by
+            ``interval_seconds`` (the batch screenshot path relies on it).
         cancel_flag: Optional callable; when it returns True the build stops and
             the in-flight ffmpeg encode is terminated (used by Studio's gallery
             Cancel button).
@@ -2083,7 +2095,8 @@ def generate_interval_captures(
         return []
 
     ext = config.SCREENSHOT_FORMAT if output_format == "screen" else config.GIF_FORMAT
-    timestamps = list(range(0, duration, interval_seconds))
+    if timestamps is None:
+        timestamps = list(range(0, duration, interval_seconds))
     total = len(timestamps)
     artifacts: list[dict[str, Any]] = []
 
