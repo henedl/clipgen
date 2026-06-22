@@ -434,6 +434,80 @@ def test_get_or_build_endcard_cache_keyed_by_color(monkeypatch):
     titlecards.clear_endcard_cache()
 
 
+def test_card_encode_uses_fast_preset(monkeypatch, make_clip):
+    """Card generation encodes with the configured fast preset + CRF."""
+    clip = make_clip(desc="Fast")
+    monkeypatch.setattr(config, "TITLECARD_IMAGE", "")
+    monkeypatch.setattr(config, "TITLECARD_ENCODE_PRESET", "veryfast")
+    monkeypatch.setattr(config, "TITLECARD_ENCODE_CRF", 20)
+    monkeypatch.setattr(titlecards.Path, "is_file", lambda self: True)
+
+    commands = []
+    monkeypatch.setattr(
+        video,
+        "run_ffmpeg_process",
+        lambda cmd, **_k: (
+            commands.append(cmd)
+            or subprocess.CompletedProcess(args=cmd, returncode=0, stderr="")
+        ),
+    )
+    monkeypatch.setattr(video, "verify_output_file", lambda *_a, **_k: True)
+
+    path = titlecards.build_titlecard_frame(clip, "1280x720")
+    assert path is not None
+    joined = " ".join(commands[0])
+    assert "-preset veryfast" in joined
+    assert "-crf 20" in joined
+
+
+def test_wrap_reencode_uses_fast_preset(monkeypatch, make_clip):
+    """The clip-body wrap re-encode honors the fast preset + CRF."""
+    clip = make_clip()
+    monkeypatch.setattr(titlecards.config, "TITLECARDS_ENABLED", True)
+    monkeypatch.setattr(titlecards.config, "TITLECARD_ENCODE_PRESET", "veryfast")
+    monkeypatch.setattr(titlecards.config, "TITLECARD_ENCODE_CRF", 20)
+    monkeypatch.setattr(titlecards.Path, "is_file", lambda self: True)
+    monkeypatch.setattr(
+        video,
+        "probe_video_properties",
+        lambda _p: {
+            "width": 1280,
+            "height": 720,
+            "video_codec": "h264",
+            "audio_codec": "aac",
+            "fps": 30.0,
+            "duration": 12.0,
+            "nb_frames": 360,
+        },
+    )
+    monkeypatch.setattr(
+        titlecards, "build_titlecard_frame", lambda *_a, **_k: "titlecard.mp4"
+    )
+    monkeypatch.setattr(
+        titlecards, "get_or_build_endcard", lambda *_a, **_k: "endcard.mp4"
+    )
+    monkeypatch.setattr(video, "verify_output_file", lambda *_a, **_k: True)
+
+    commands = []
+    monkeypatch.setattr(
+        video,
+        "run_ffmpeg_process",
+        lambda cmd, **_k: (
+            commands.append(cmd)
+            or subprocess.CompletedProcess(args=cmd, returncode=0, stderr="")
+        ),
+    )
+    monkeypatch.setattr(titlecards.os, "replace", lambda src, dst: None)
+
+    ok = titlecards.wrap_clip_with_cards(clip, "clip.mp4")
+    assert ok is True
+    joined = " ".join(commands[0])
+    assert "-preset veryfast" in joined
+    assert "-crf 20" in joined
+    # Still a single encode that preserves audio.
+    assert "-c:a aac" in joined
+
+
 def test_pipeline_skips_per_output_probe(monkeypatch, make_clip):
     """Regression: pipeline should probe the source video, not each generated output."""
     import pipeline

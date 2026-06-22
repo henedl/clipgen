@@ -32,6 +32,25 @@ _endcard_cache: dict[str, str] = {}
 _endcard_lock = threading.Lock()
 
 
+def _x264_video_args() -> list[str]:
+    """Shared libx264 output args for card generation and the card wrap.
+
+    A fast preset + explicit CRF: the wrap re-encodes the whole clip body, so the
+    preset is the main lever on titlecard generation time. Tuned via
+    config.TITLECARD_ENCODE_PRESET / TITLECARD_ENCODE_CRF.
+    """
+    return [
+        "-c:v",
+        "libx264",
+        "-preset",
+        config.TITLECARD_ENCODE_PRESET,
+        "-crf",
+        str(config.TITLECARD_ENCODE_CRF),
+        "-pix_fmt",
+        "yuv420p",
+    ]
+
+
 def _build_drawtext_filter(text: str) -> str:
     safe_text = (text or "").strip()
     # The description has already been sanitized for filenames, but escape colons and backslashes just in case.
@@ -138,10 +157,7 @@ def _build_card_frame(
             str(background_path),
             "-vf",
             vf_with_scale,
-            "-c:v",
-            "libx264",
-            "-pix_fmt",
-            "yuv420p",
+            *_x264_video_args(),
             card_path,
         ]
         input_label = str(background_path)
@@ -157,10 +173,7 @@ def _build_card_frame(
             f"color=c={_ffmpeg_color(fill_color)}:s={resolution}:d={duration}",
             "-vf",
             vf_with_scale,
-            "-c:v",
-            "libx264",
-            "-pix_fmt",
-            "yuv420p",
+            *_x264_video_args(),
             card_path,
         ]
         input_label = "lavfi:color"
@@ -536,10 +549,7 @@ def wrap_clip_with_cards(
             "-filter_complex",
             filter_complex,
             *map_args,
-            "-c:v",
-            "libx264",
-            "-pix_fmt",
-            "yuv420p",
+            *_x264_video_args(),
         ]
         if has_clip_audio:
             ffmpeg_command.extend(["-c:a", "aac"])

@@ -289,6 +289,13 @@ MAX_MMSS_LENGTH: int = 5  # Max length of an MM:SS timestamp string
 # ── FFmpeg ────────────────────────────────────────────────────────────
 FFMPEG_LOGLEVEL: str = "16"  # ffmpeg -loglevel value (16 = error)
 FFMPEG_SCREENSHOT_QUALITY: str = "2"  # -q:v value for screenshots (1=best, 31=worst)
+# x264 settings for title/endcard generation and the card-wrap re-encode. The
+# wrap re-encodes the whole clip body, so the preset dominates titlecard time;
+# "veryfast" is several times quicker than libx264's "medium" default at
+# negligible quality cost for short research clips. Raise quality with a lower
+# CRF, or trade quality for speed with "superfast"/"ultrafast".
+TITLECARD_ENCODE_PRESET: str = "veryfast"
+TITLECARD_ENCODE_CRF: int = 20
 SCREENSHOT_FORMAT: str = ".png"  # ".png" | ".jpg" | ".webp"
 GIF_FORMAT: str = ".gif"  # ".gif" | ".webp" | ".webm" (WebM uses VP9 silent-loop video)
 WEBP_QUALITY: int = 80  # 0-100, used by libwebp when output is .webp
