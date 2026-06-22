@@ -231,22 +231,27 @@ class TestHeatmapDisableSetting:
             for i in range(n)
         ]
 
+    def _run_generate(self, worker, task):
+        return worker._generate_heatmap(
+            task["type"],
+            task["id"],
+            task["video_paths"],
+            task["region_coords"],
+            self._change_results(),
+        )
+
     def test_skipped_when_disabled(self, monkeypatch):
         monkeypatch.setattr(config, "SCREENSPACE_GENERATE_CHANGE_HEATMAP", False)
         worker = screenspace.ScreenspaceWorker()
-        task = self._change_task()
-        worker._generate_heatmap(task, self._change_results())
-        assert "heatmap" not in task
-        assert "heatmap_gif" not in task
-        assert "heatmap_rolling_gif" not in task
+        attachments = self._run_generate(worker, self._change_task())
+        assert attachments == {}
 
     def test_generated_when_enabled(self, tmp_path, monkeypatch):
         monkeypatch.setattr(config, "OUTPUT_DIR", str(tmp_path))
         monkeypatch.setattr(config, "SCREENSPACE_GENERATE_CHANGE_HEATMAP", True)
         worker = screenspace.ScreenspaceWorker()
-        task = self._change_task()
-        worker._generate_heatmap(task, self._change_results())
-        assert "heatmap" in task
+        attachments = self._run_generate(worker, self._change_task())
+        assert "heatmap" in attachments
 
     def test_settings_present_and_default_true(self):
         for name in (
