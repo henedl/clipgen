@@ -2608,7 +2608,11 @@ def _validate_scene_references(
 
 
 def _clean_task(task: dict[str, Any]) -> dict[str, Any]:
-    """Remove internal fields from a task dict for API responses."""
+    """Remove internal fields from a task dict for API responses.
+
+    Server-only ``change_grid`` per-frame data is already omitted upstream by
+    ``ScreenspaceWorker.get_task``/``get_all_tasks`` (see ``_copy_task_for_read``).
+    """
     cleaned = {k: v for k, v in task.items() if not k.startswith("_")}
     if "parameters" in cleaned:
         cleaned["parameters"] = {

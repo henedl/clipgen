@@ -179,6 +179,15 @@ SCREENSPACE_SCENE_SIMILARITY_THRESHOLD: float = 0.75
 SCREENSPACE_SCENE_HISTOGRAM_BINS: int = 64
 SCREENSPACE_FLOW_GRID_SIZE: int = 8
 SCREENSPACE_FLOW_GRID_MIN_MAG: float = 0.5
+SCREENSPACE_HEATMAP_ROLLING_WINDOW: int = (
+    6  # GIF buckets (of 24) inside the rolling-window heatmap's sliding window
+)
+SCREENSPACE_CHANGE_HEATMAP_GRID: int = (
+    16  # cells per axis for the Change heatmap's downsampled per-frame change grid
+)
+SCREENSPACE_CHANGE_HEATMAP_MIN_FRAC: float = (
+    0.1  # min fraction of changed pixels for a change-grid cell to be recorded
+)
 SCREENSPACE_FAST_SCAN_INTERVAL_MULTIPLIER: float = 3.0
 SCREENSPACE_FAST_SCAN_PHASH_THRESHOLD: int = 12  # tighter than general 15
 SCREENSPACE_BATCH_EXTRACT: bool = (
@@ -216,6 +225,15 @@ SCREENSPACE_RESTORE_MARKERS_ON_EDIT: bool = (
     True  # restore In/Out timeline markers when editing a task
 )
 SCREENSPACE_SHOW_CONFIDENCE_HISTOGRAM: bool = False  # show the per-detection confidence-distribution histogram in the Results panel
+SCREENSPACE_GENERATE_TEMPLATE_HEATMAP: bool = (
+    True  # generate detection heatmaps for Template tasks
+)
+SCREENSPACE_GENERATE_FLOW_HEATMAP: bool = (
+    True  # generate motion heatmaps for Flow tasks
+)
+SCREENSPACE_GENERATE_CHANGE_HEATMAP: bool = (
+    True  # generate change heatmaps for Change tasks
+)
 SCREENSPACE_MAX_PINS: int = 12  # soft cap on calibration pins per participant — keeps synchronous calibration interactive
 SCREENSPACE_MULTITOOL_MAX_OFFSET_SECONDS: float = 30.0  # bound (±) for a multitool step's offset window relative to the previous step's matched frame
 
@@ -398,6 +416,9 @@ SETTINGS_DESCRIPTIONS: dict[str, str] = {
     "SCREENSPACE_OCR_MIN_CONFIDENCE": "Default minimum EasyOCR per-detection confidence for Text/Numbers tasks. Raise to suppress noisy OCR misreads; lower if real hits are being dropped. Per-task slider overrides this default.",
     "SCREENSPACE_RESTORE_MARKERS_ON_EDIT": "When editing a task, restore the In/Out timeline markers to the range it was originally run with. Disable to keep your current markers in place when iterating across different parts of the timeline.",
     "SCREENSPACE_SHOW_CONFIDENCE_HISTOGRAM": "Show a confidence-distribution histogram above the Results list (for tools that have confidence scores). Lets you see where detections cluster before moving the certainty cutoff. Off by default.",
+    "SCREENSPACE_GENERATE_TEMPLATE_HEATMAP": "Generate detection heatmaps (static image plus accumulation and rolling-window animations) for Template tasks. Disable to skip heatmap generation when you don't need it — useful on long videos where it adds processing time.",
+    "SCREENSPACE_GENERATE_FLOW_HEATMAP": "Generate motion heatmaps (static image plus accumulation animation) for Flow tasks. Disable to skip heatmap generation when you don't need it.",
+    "SCREENSPACE_GENERATE_CHANGE_HEATMAP": "Generate change heatmaps (static image plus accumulation and rolling-window animations) for Change tasks. Disable to skip heatmap generation when you don't need it — useful on long videos where it adds processing time.",
 }
 
 # Studio-exposed settings with UI metadata (tab, group, type, constraints).
@@ -603,6 +624,21 @@ STUDIO_SETTINGS: dict[str, dict[str, Any]] = {
     "SCREENSPACE_SHOW_CONFIDENCE_HISTOGRAM": {
         "tab": "Screenspace",
         "group": "Results Display",
+        "type": "bool",
+    },
+    "SCREENSPACE_GENERATE_TEMPLATE_HEATMAP": {
+        "tab": "Screenspace",
+        "group": "Heatmaps",
+        "type": "bool",
+    },
+    "SCREENSPACE_GENERATE_FLOW_HEATMAP": {
+        "tab": "Screenspace",
+        "group": "Heatmaps",
+        "type": "bool",
+    },
+    "SCREENSPACE_GENERATE_CHANGE_HEATMAP": {
+        "tab": "Screenspace",
+        "group": "Heatmaps",
         "type": "bool",
     },
     "RICH_COLORS": {"tab": "CLI", "group": "Terminal Output", "type": "bool"},

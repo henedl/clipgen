@@ -163,6 +163,11 @@ def scan_changes(
     k = config.SCREENSPACE_BLUR_KERNEL
     morph_kernel = _morph_kernel(config.SCREENSPACE_MORPH_KERNEL)
     buf = _ConsecutiveBuffer(require_consecutive)
+    # change_grid feeds only the Change heatmap; skip the per-frame downsample
+    # entirely when heatmaps are disabled (the data would just be discarded).
+    build_grid = config.SCREENSPACE_GENERATE_CHANGE_HEATMAP
+    grid = config.SCREENSPACE_CHANGE_HEATMAP_GRID
+    min_frac = config.SCREENSPACE_CHANGE_HEATMAP_MIN_FRAC
 
     def _cb(ts: float, pixels: np.ndarray) -> bool | None:
         if cancel_flag and cancel_flag():
@@ -176,7 +181,27 @@ def scan_changes(
             mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, morph_kernel)
             mag = float(np.count_nonzero(mask)) / float(mask.size) if mask.size else 0.0
             if mag >= threshold:
-                rd = {"timestamp": ts, "magnitude": round(mag, 4)}
+                rd: dict[str, Any] = {"timestamp": ts, "magnitude": round(mag, 4)}
+                if build_grid:
+                    # Downsample the change mask to a small, thresholded grid
+                    # (mirrors flow_grid) recording the fraction of pixels changed
+                    # per cell, so the Change heatmap can show where pixels move
+                    # without bloating the per-frame results.
+                    cells = (
+                        cv2.resize(
+                            mask, (grid, grid), interpolation=cv2.INTER_AREA
+                        ).astype(np.float32)
+                        / 255.0
+                    )
+                    ys, xs = np.nonzero(cells >= min_frac)
+                    rd["change_grid"] = [
+                        {
+                            "x": round((int(x) + 0.5) / grid, 3),
+                            "y": round((int(y) + 0.5) / grid, 3),
+                            "mag": round(float(cells[y, x]), 3),
+                        }
+                        for y, x in zip(ys, xs)
+                    ]
                 emitted = buf.push(ts, rd)
                 if emitted is not None:
                     results.append(emitted)

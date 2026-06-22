@@ -1,19 +1,30 @@
 # -*- coding: utf-8 -*-
 """Screenspace heatmap generation (pure cv2/PIL leaf).
 
-Template- and flow-match heatmap PNGs plus an animated-GIF accumulation view.
+Template-, flow-, and change-match heatmap PNGs plus animated-GIF views: a
+cumulative accumulation and a rolling-window (recent-only, fading) variant.
 No sibling-module dependencies.
 """
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import cv2
 import numpy as np
+
+if TYPE_CHECKING:
+    from PIL import Image
 
 
 # ---------------------------------------------------------------------------
 # Heatmap generation
 # ---------------------------------------------------------------------------
+
+
+def _colorize_accumulator(accumulator: np.ndarray, max_val: float) -> np.ndarray:
+    """Normalize by *max_val*, blur, and apply the JET colormap → BGR uint8."""
+    normalized = (accumulator / max_val * 255).astype(np.uint8)
+    normalized = cv2.GaussianBlur(normalized, (15, 15), 0)
+    return cv2.applyColorMap(normalized, cv2.COLORMAP_JET)
 
 
 def generate_template_heatmap(
@@ -38,9 +49,7 @@ def generate_template_heatmap(
     if accumulator.max() == 0:
         return None
 
-    normalized = (accumulator / accumulator.max() * 255).astype(np.uint8)
-    normalized = cv2.GaussianBlur(normalized, (15, 15), 0)
-    heatmap = cv2.applyColorMap(normalized, cv2.COLORMAP_JET)
+    heatmap = _colorize_accumulator(accumulator, accumulator.max())
     cv2.imwrite(output_path, heatmap)
     return output_path
 
@@ -68,9 +77,34 @@ def generate_flow_heatmap(
     if accumulator.max() == 0:
         return None
 
-    normalized = (accumulator / accumulator.max() * 255).astype(np.uint8)
-    normalized = cv2.GaussianBlur(normalized, (15, 15), 0)
-    heatmap = cv2.applyColorMap(normalized, cv2.COLORMAP_JET)
+    heatmap = _colorize_accumulator(accumulator, accumulator.max())
+    heatmap = cv2.resize(
+        heatmap, (region_width, region_height), interpolation=cv2.INTER_LINEAR
+    )
+    cv2.imwrite(output_path, heatmap)
+    return output_path
+
+
+def generate_change_heatmap(
+    results: list[dict[str, Any]],
+    region_width: int,
+    region_height: int,
+    output_path: str,
+) -> str | None:
+    """Generate a heatmap PNG from accumulated per-frame change-mask grids.
+
+    Uses ``change_grid`` data (downsampled change masks) from each result to
+    paint where pixels changed most often across all detected change frames.
+    """
+    acc_size = 256
+    accumulator = np.zeros((acc_size, acc_size), dtype=np.float32)
+    for r in results:
+        _accumulate_heatmap_result(accumulator, r, "change")
+
+    if accumulator.max() == 0:
+        return None
+
+    heatmap = _colorize_accumulator(accumulator, accumulator.max())
     heatmap = cv2.resize(
         heatmap, (region_width, region_height), interpolation=cv2.INTER_LINEAR
     )
@@ -91,12 +125,34 @@ def _accumulate_heatmap_result(
             y2 = min(y + h, acc_h)
             x2 = min(x + w, acc_w)
             accumulator[y:y2, x:x2] += m.get("score", 1.0)
-    elif heatmap_type == "flow":
-        for cell in result.get("flow_grid", []):
+    elif heatmap_type in ("flow", "change"):
+        grid_key = "flow_grid" if heatmap_type == "flow" else "change_grid"
+        for cell in result.get(grid_key, []):
             cx = int(cell["x"] * (acc_w - 1))
             cy = int(cell["y"] * (acc_h - 1))
             radius = max(1, acc_w // 16)
             cv2.circle(accumulator, (cx, cy), radius, float(cell["mag"]), -1)
+
+
+def _heatmap_frame_image(
+    accumulator: np.ndarray,
+    global_max: float,
+    heatmap_type: str,
+    width: int,
+    height: int,
+) -> "Image.Image":
+    """Colorize a heatmap accumulator into a PIL frame for animated GIFs.
+
+    Region-scoped heatmaps (flow, change) accumulate at a fixed resolution and
+    are resized to the requested frame size; template accumulates frame-native.
+    """
+    from PIL import Image
+
+    colored = _colorize_accumulator(accumulator, global_max)
+    if heatmap_type in ("flow", "change"):
+        colored = cv2.resize(colored, (width, height), interpolation=cv2.INTER_LINEAR)
+    rgb = cv2.cvtColor(colored, cv2.COLOR_BGR2RGB)
+    return Image.fromarray(rgb)
 
 
 def generate_heatmap_gif(
@@ -113,8 +169,6 @@ def generate_heatmap_gif(
     Divides *results* into *num_frames* temporal buckets, progressively
     accumulates heatmap data, and writes frames as an animated GIF.
     """
-    from PIL import Image
-
     if not results:
         return None
 
@@ -123,7 +177,7 @@ def generate_heatmap_gif(
         return None
 
     acc_h, acc_w = height, width
-    if heatmap_type == "flow":
+    if heatmap_type in ("flow", "change"):
         acc_h = acc_w = 256
 
     # First pass: compute global max for consistent normalization
@@ -149,20 +203,82 @@ def generate_heatmap_gif(
         for r_idx in range(start_idx, end_idx):
             _accumulate_heatmap_result(accumulator, results[r_idx], heatmap_type)
 
-        normalized = (accumulator / global_max * 255).astype(np.uint8)
-        normalized = cv2.GaussianBlur(normalized, (15, 15), 0)
-        colored = cv2.applyColorMap(normalized, cv2.COLORMAP_JET)
-
-        if heatmap_type == "flow":
-            colored = cv2.resize(
-                colored, (width, height), interpolation=cv2.INTER_LINEAR
-            )
-
-        rgb = cv2.cvtColor(colored, cv2.COLOR_BGR2RGB)
-        frames.append(Image.fromarray(rgb))
+        frames.append(
+            _heatmap_frame_image(accumulator, global_max, heatmap_type, width, height)
+        )
 
     if not frames:
         return None
+
+    frames[0].save(
+        output_path,
+        save_all=True,
+        append_images=frames[1:],
+        duration=frame_duration_ms,
+        loop=0,
+    )
+    return output_path
+
+
+def generate_rolling_heatmap_gif(
+    results: list[dict[str, Any]],
+    width: int,
+    height: int,
+    output_path: str,
+    heatmap_type: str = "template",
+    num_frames: int = 24,
+    window_frames: int = 6,
+    frame_duration_ms: int = 120,
+) -> str | None:
+    """Generate an animated GIF showing a sliding-window heatmap over time.
+
+    Like :func:`generate_heatmap_gif`, but each frame accumulates only the
+    *window_frames* most recent buckets instead of everything seen so far, so
+    older heat fades out as the window advances ("rolling window"). Brightness
+    is normalized against the densest window for stable frame-to-frame contrast.
+    """
+    if not results:
+        return None
+
+    num_frames = min(num_frames, len(results))
+    if num_frames < 2:
+        return None
+
+    window_frames = max(1, window_frames)
+    acc_h, acc_w = height, width
+    if heatmap_type in ("flow", "change"):
+        acc_h = acc_w = 256
+    bucket_size = max(1, len(results) // num_frames)
+
+    def _accumulate_window(frame_idx: int) -> np.ndarray:
+        acc = np.zeros((acc_h, acc_w), dtype=np.float32)
+        win_start = max(0, frame_idx - window_frames + 1)
+        for bucket in range(win_start, frame_idx + 1):
+            start_idx = bucket * bucket_size
+            end_idx = (
+                len(results)
+                if bucket == num_frames - 1
+                else min((bucket + 1) * bucket_size, len(results))
+            )
+            for r_idx in range(start_idx, end_idx):
+                _accumulate_heatmap_result(acc, results[r_idx], heatmap_type)
+        return acc
+
+    # First pass: densest window sets the shared normalization ceiling.
+    global_max = 0.0
+    for frame_idx in range(num_frames):
+        global_max = max(global_max, float(_accumulate_window(frame_idx).max()))
+    if global_max == 0:
+        return None
+
+    # Second pass: render each window as a frame.
+    frames: list[Image.Image] = []
+    for frame_idx in range(num_frames):
+        frames.append(
+            _heatmap_frame_image(
+                _accumulate_window(frame_idx), global_max, heatmap_type, width, height
+            )
+        )
 
     frames[0].save(
         output_path,

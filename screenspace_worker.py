@@ -21,8 +21,10 @@ import utils
 import video
 from screenspace_tools import TOOLS
 from screenspace_heatmap import (
+    generate_change_heatmap,
     generate_flow_heatmap,
     generate_heatmap_gif,
+    generate_rolling_heatmap_gif,
     generate_template_heatmap,
 )
 from screenspace_manifest import (
@@ -38,6 +40,28 @@ from screenspace_manifest import (
 )
 from screenspace_multitool import _multitool_has_offset
 from screenspace_frames import _probe_video_meta
+
+
+def _copy_task_for_read(task: dict[str, Any]) -> dict[str, Any]:
+    """Deep-copy a task for external reads, omitting server-only ``change_grid``.
+
+    ``change_grid`` is large per-frame data consumed once by heatmap generation
+    and never sent to the client (unlike ``flow_grid``, which the flow overlay
+    needs). Excluding it before the deep copy keeps progress-driven SSE reads
+    (~every 0.5s on long Change scans) from repeatedly duplicating per-frame
+    grids that are immediately discarded by the API layer.
+    """
+    slim = dict(task)
+    for key in ("result", "_raw_results"):
+        seq = task.get(key)
+        if isinstance(seq, list) and seq:
+            slim[key] = [
+                {k: v for k, v in r.items() if k != "change_grid"}
+                if isinstance(r, dict)
+                else r
+                for r in seq
+            ]
+    return copy.deepcopy(slim)
 
 
 class ScreenspaceWorker:
@@ -111,7 +135,7 @@ class ScreenspaceWorker:
             task = self._tasks.get(task_id)
             if task is None:
                 return None
-            return copy.deepcopy(task)
+            return _copy_task_for_read(task)
 
     def get_all_tasks(self) -> list[dict[str, Any]]:
         """Return all tasks (thread-safe copies).
@@ -122,7 +146,7 @@ class ScreenspaceWorker:
         """
         with self._lock:
             return [
-                copy.deepcopy(t)
+                _copy_task_for_read(t)
                 for t in self._tasks.values()
                 if not t.get("_remove_on_finish")
             ]
@@ -261,46 +285,81 @@ class ScreenspaceWorker:
     ) -> list[dict[str, Any]]:
         return generate_events_from_results(task, raw_results)
 
+    def _write_heatmap_gifs(
+        self,
+        task: dict[str, Any],
+        results: list[dict[str, Any]],
+        width: int,
+        height: int,
+        heatmap_type: str,
+        *,
+        rolling: bool,
+    ) -> None:
+        """Write the cumulative (and optionally rolling-window) heatmap GIFs."""
+        out_dir = Path(utils.get_effective_output_dir())
+        task_id = task["id"]
+        gp = generate_heatmap_gif(
+            results,
+            width,
+            height,
+            str(out_dir / f"heatmap_{task_id}.gif"),
+            heatmap_type=heatmap_type,
+        )
+        if gp:
+            task["heatmap_gif"] = Path(gp).name
+        if rolling:
+            rp = generate_rolling_heatmap_gif(
+                results,
+                width,
+                height,
+                str(out_dir / f"heatmap_rolling_{task_id}.gif"),
+                heatmap_type=heatmap_type,
+                window_frames=config.SCREENSPACE_HEATMAP_ROLLING_WINDOW,
+            )
+            if rp:
+                task["heatmap_rolling_gif"] = Path(rp).name
+
     def _generate_heatmap(
         self, task: dict[str, Any], results: list[dict[str, Any]]
     ) -> None:
-        """Generate a heatmap PNG for template or flow tasks."""
+        """Generate heatmap artifacts for template, flow, or change tasks.
+
+        Honors the per-tool ``SCREENSPACE_GENERATE_*_HEATMAP`` settings: when a
+        tool's heatmaps are disabled, nothing is generated for that task.
+        """
         task_type = task.get("type", "")
+        heatmap_enabled = {
+            "template": config.SCREENSPACE_GENERATE_TEMPLATE_HEATMAP,
+            "flow": config.SCREENSPACE_GENERATE_FLOW_HEATMAP,
+            "change": config.SCREENSPACE_GENERATE_CHANGE_HEATMAP,
+        }
+        if not heatmap_enabled.get(task_type, False):
+            return
         task_id = task["id"]
+        heatmap_path = str(
+            Path(utils.get_effective_output_dir()) / f"heatmap_{task_id}.png"
+        )
         if task_type == "template":
-            heatmap_path = str(
-                Path(utils.get_effective_output_dir()) / f"heatmap_{task_id}.png"
-            )
             props = video.probe_video_properties(task["video_paths"][0])
             fw = props.get("width", 1920) if props else 1920
             fh = props.get("height", 1080) if props else 1080
             hp = generate_template_heatmap(results, fw, fh, heatmap_path)
             if hp:
                 task["heatmap"] = Path(hp).name
-            gif_path = str(
-                Path(utils.get_effective_output_dir()) / f"heatmap_{task_id}.gif"
-            )
-            gp = generate_heatmap_gif(
-                results, fw, fh, gif_path, heatmap_type="template"
-            )
-            if gp:
-                task["heatmap_gif"] = Path(gp).name
-        elif task_type == "flow":
-            heatmap_path = str(
-                Path(utils.get_effective_output_dir()) / f"heatmap_{task_id}.png"
-            )
+            self._write_heatmap_gifs(task, results, fw, fh, "template", rolling=True)
+        elif task_type in ("flow", "change"):
             rc = task.get("region_coords", {})
             rw = rc.get("w", 256)
             rh = rc.get("h", 256)
-            hp = generate_flow_heatmap(results, rw, rh, heatmap_path)
+            if task_type == "flow":
+                hp = generate_flow_heatmap(results, rw, rh, heatmap_path)
+            else:
+                hp = generate_change_heatmap(results, rw, rh, heatmap_path)
             if hp:
                 task["heatmap"] = Path(hp).name
-            gif_path = str(
-                Path(utils.get_effective_output_dir()) / f"heatmap_{task_id}.gif"
+            self._write_heatmap_gifs(
+                task, results, rw, rh, task_type, rolling=task_type == "change"
             )
-            gp = generate_heatmap_gif(results, rw, rh, gif_path, heatmap_type="flow")
-            if gp:
-                task["heatmap_gif"] = Path(gp).name
 
     def _run(self) -> None:
         """Worker loop with concurrent task execution via ThreadPoolExecutor."""
@@ -459,6 +518,12 @@ class ScreenspaceWorker:
                         )
                         if isinstance(result, list) and result:
                             self._generate_heatmap(t, result)
+                            # change_grid is consumed only by heatmap generation;
+                            # drop it so completed tasks don't retain per-frame
+                            # grids in memory until dismissal.
+                            for r in result:
+                                if isinstance(r, dict):
+                                    r.pop("change_grid", None)
                     t["completed_at"] = datetime.now(timezone.utc).isoformat()
         except Exception as exc:
             with self._lock:

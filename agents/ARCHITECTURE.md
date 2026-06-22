@@ -26,7 +26,7 @@
 | [screenspace_ocr.py](screenspace_ocr.py) | Cached EasyOCR readers, region preprocessing, glyph confusion-folding, numeric comparison helpers/allowlists, region reading/scoring, and `run_calibration_ocr`. Imports primitives |
 | [screenspace_frames.py](screenspace_frames.py) | ffmpeg-pipe frame extraction (`scan_video_frames`/`scan_video_full_frames`, `_ffmpeg_pipe_frames`), timelapse command builder, ffprobe metadata. Imports primitives |
 | [screenspace_scans.py](screenspace_scans.py) | The eleven per-tool scan workflows (`scan_color`…`scan_boundaries`, `generate_timelapse`); scans never call each other. Imports primitives, ocr, frames |
-| [screenspace_heatmap.py](screenspace_heatmap.py) | Template/flow heatmap PNG + animated-GIF generation. Pure cv2/PIL leaf, no sibling-module deps |
+| [screenspace_heatmap.py](screenspace_heatmap.py) | Template/flow/change heatmap PNG + animated-GIF generation (cumulative + rolling-window). Pure cv2/PIL leaf, no sibling-module deps |
 | [screenspace_tools.py](screenspace_tools.py) | `AnalysisTool` base + twelve tool subclasses, the `TOOLS` registry, and per-frame dispatch (`check_frame_for_tool`, `score_frame_for_tool`). Imports primitives, ocr, scans; one function-local import of `scan_multitool` in `MultitoolTool.scan` breaks the tools↔multitool cycle |
 | [screenspace_multitool.py](screenspace_multitool.py) | Multitool chaining + time-offset window joining (`scan_multitool`, `score_multitool_frame`). Imports tools + frames |
 | [screenspace_manifest.py](screenspace_manifest.py) | Task-status constants, `create_task`, manifest load/save, result-time offsetting, and event generation. Imports tools (`_extract_confidence`) |
