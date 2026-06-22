@@ -2199,6 +2199,13 @@ def _apply_settings_payload(data: dict[str, Any]) -> tuple[dict[str, Any], str |
             setattr(config, name, cleaned)
             applied[name] = cleaned
             continue
+        if meta.get("type") == "card_picker":
+            cleaned = _coerce_card_image(value, str(meta.get("kind", "title")))
+            if cleaned is None:
+                return {}, f"Invalid {name} payload"
+            setattr(config, name, cleaned)
+            applied[name] = cleaned
+            continue
         expected_type = type(default) if default is not None else str
         try:
             if expected_type is bool:
@@ -2257,6 +2264,32 @@ def _list_uploaded_titlecards() -> list[str]:
         if p.is_file() and p.suffix.lower() in _ALLOWED_CARD_EXTS
     ]
     return sorted(names, key=str.lower)
+
+
+def _coerce_card_image(value: Any, kind: str) -> str | None:
+    """Validate a card-picker selection against the upload pool.
+
+    Returns the cleaned selection id, or None when the value is invalid. Accepts
+    the sentinel ids (empty = bundled default, CARD_IMAGE_COLOR = solid color,
+    and — for endcards only — CARD_IMAGE_NONE) or the basename of an existing
+    uploaded image. Rejects path separators / traversal so a setting can never
+    point outside the titlecard_images pool (see titlecards.resolve_card_background).
+    """
+    if not isinstance(value, str):
+        return None
+    if value in ("", config.CARD_IMAGE_COLOR):
+        return value
+    if kind == "end" and value == config.CARD_IMAGE_NONE:
+        return value
+    # Otherwise it must be a real uploaded file inside the pool: a bare basename
+    # with an allowed extension that exists on disk.
+    if Path(value).name != value:
+        return None
+    if Path(value).suffix.lower() not in _ALLOWED_CARD_EXTS:
+        return None
+    if not (_titlecard_images_dir() / value).is_file():
+        return None
+    return value
 
 
 def _card_picker_payload(kind: str) -> dict[str, Any]:

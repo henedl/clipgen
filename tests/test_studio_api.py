@@ -211,6 +211,66 @@ def test_settings_put_persists_card_color(client, tmp_path, monkeypatch):
     assert server.config.TITLECARD_COLOR == "#ff8800"
 
 
+def test_settings_put_rejects_card_image_traversal(client, tmp_path, monkeypatch):
+    """A card image setting that escapes the upload pool is rejected, not stored."""
+    monkeypatch.setattr(server.config, "OUTPUT_DIR", str(tmp_path))
+    monkeypatch.setattr(server.config, "TITLECARD_IMAGE", "")
+    resp = client.put(
+        "/studio/api/settings",
+        json={"settings": {"TITLECARD_IMAGE": "../secret.png"}},
+    )
+    assert resp.status_code == 400
+    assert resp.get_json()["ok"] is False
+    assert server.config.TITLECARD_IMAGE == ""
+
+
+def test_settings_put_endcard_accepts_none_title_rejects_none(
+    client, tmp_path, monkeypatch
+):
+    """`__none__` is valid only for endcards; titlecards always render."""
+    monkeypatch.setattr(server.config, "OUTPUT_DIR", str(tmp_path))
+    monkeypatch.setattr(server.config, "ENDCARD_IMAGE", "")
+    monkeypatch.setattr(server.config, "TITLECARD_IMAGE", "")
+
+    ok = client.put(
+        "/studio/api/settings",
+        json={"settings": {"ENDCARD_IMAGE": server.config.CARD_IMAGE_NONE}},
+    )
+    assert ok.status_code == 200
+    assert server.config.ENDCARD_IMAGE == server.config.CARD_IMAGE_NONE
+
+    bad = client.put(
+        "/studio/api/settings",
+        json={"settings": {"TITLECARD_IMAGE": server.config.CARD_IMAGE_NONE}},
+    )
+    assert bad.status_code == 400
+    assert server.config.TITLECARD_IMAGE == ""
+
+
+def test_settings_put_card_image_validates_against_pool(client, tmp_path, monkeypatch):
+    """An existing uploaded basename is accepted; a missing one is rejected."""
+    monkeypatch.setattr(server.config, "OUTPUT_DIR", str(tmp_path))
+    monkeypatch.setattr(server.config, "TITLECARD_IMAGE", "")
+    images = tmp_path / server.config.TITLECARD_IMAGES_DIRNAME
+    images.mkdir()
+    (images / "card.png").write_bytes(b"x")
+
+    ok = client.put(
+        "/studio/api/settings",
+        json={"settings": {"TITLECARD_IMAGE": "card.png"}},
+    )
+    assert ok.status_code == 200
+    assert server.config.TITLECARD_IMAGE == "card.png"
+
+    missing = client.put(
+        "/studio/api/settings",
+        json={"settings": {"TITLECARD_IMAGE": "ghost.png"}},
+    )
+    assert missing.status_code == 400
+    # A rejected value must not overwrite the prior good selection.
+    assert server.config.TITLECARD_IMAGE == "card.png"
+
+
 def test_api_sheet_baseline_returns_empty_when_no_sheet(client):
     resp = client.get("/studio/api/sheet/baseline")
     assert resp.status_code == 200

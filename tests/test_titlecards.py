@@ -338,6 +338,17 @@ def test_resolve_card_background_upload_missing_falls_back(monkeypatch, tmp_path
     assert skip is False
 
 
+def test_resolve_card_background_rejects_traversal(monkeypatch, tmp_path):
+    """A '../' value must fall back to the default, not resolve outside the pool."""
+    monkeypatch.setattr(config, "OUTPUT_DIR", str(tmp_path))
+    # Plant a real file one level above the pool that a traversal value targets.
+    (tmp_path / "outside.png").write_bytes(b"x")
+    monkeypatch.setattr(config, "TITLECARD_IMAGE", "../outside.png")
+    path, _allow_color, skip, _fill = titlecards.resolve_card_background("title")
+    assert path == utils.get_bundled_assets_root() / "assets" / "titlecard.png"
+    assert skip is False
+
+
 def test_build_titlecard_frame_uses_configured_solid_color(monkeypatch, make_clip):
     """An explicit solid-color titlecard fills with the configured color."""
     clip = make_clip(desc="Colored")
