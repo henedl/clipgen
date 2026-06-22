@@ -58,6 +58,26 @@ def _resolve_titlecard_options(
     return enabled, duration
 
 
+def _resolve_titlecard_images(cards_enabled: bool) -> tuple[str, str]:
+    """Return the selected (titlecard, endcard) image identities when enabled.
+
+    Image selection is config-global (no per-request override). Returns empty
+    strings when cards are disabled so artifact records and the Studio cache-skip
+    comparison agree on a single canonical value. When a card is set to a solid
+    color, the fill color is baked into the identity (e.g. "__color__#ff0000")
+    so changing the color invalidates cached clips just like changing the image.
+    """
+    if not cards_enabled:
+        return "", ""
+    title = config.TITLECARD_IMAGE
+    end = config.ENDCARD_IMAGE
+    if title == config.CARD_IMAGE_COLOR:
+        title = title + config.TITLECARD_COLOR
+    if end == config.CARD_IMAGE_COLOR:
+        end = end + config.ENDCARD_COLOR
+    return title, end
+
+
 def is_excel_worksheet(worksheet: Any) -> bool:
     """Return True if worksheet is the Excel adapter (local file, no URL)."""
     spread = getattr(worksheet, "spreadsheet", None)
@@ -1156,6 +1176,7 @@ def process_clips(
         if generated_count < len(clip["times"]):
             outputs_skipped += len(clip["times"]) - generated_count
         if segment_details:
+            title_img, end_img = _resolve_titlecard_images(cards_enabled)
             clip_artifacts = viewer.build_artifact_records_for_clip(
                 clip,
                 base_video,
@@ -1163,6 +1184,8 @@ def process_clips(
                 output_format,
                 titlecards=cards_enabled,
                 titlecard_duration=card_duration,
+                titlecard_image=title_img,
+                endcard_image=end_img,
             )
             _embed_transcript_on_artifacts(
                 clip,
@@ -1495,6 +1518,7 @@ def process_reel(
         titlecards_enabled, titlecard_duration_seconds
     )
     reel_id = compute_reel_id(components)
+    title_img, end_img = _resolve_titlecard_images(cards_enabled)
     reel_record: dict[str, Any] = {
         "id": reel_id,
         "file": Path(output_file).name,
@@ -1503,6 +1527,8 @@ def process_reel(
         "components": components,
         "titlecards": cards_enabled,
         "titlecardDuration": card_duration if cards_enabled else 0,
+        "titlecardImage": title_img,
+        "endcardImage": end_img,
     }
 
     reel_transcript = _build_reel_transcript(

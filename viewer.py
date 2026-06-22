@@ -50,6 +50,8 @@ def build_artifact_records_for_clip(
     *,
     titlecards: bool = False,
     titlecard_duration: int = 0,
+    titlecard_image: str = "",
+    endcard_image: str = "",
 ) -> list[dict[str, Any]]:
     """Build artifact metadata records from a processed clip's successful outputs.
 
@@ -63,6 +65,8 @@ def build_artifact_records_for_clip(
             only; lets the Studio skip logic and manifest regeneration detect a
             mismatch with the requested titlecard setting).
         titlecard_duration: Titlecard duration in seconds (clip artifacts only).
+        titlecard_image: Selected titlecard background id (clip artifacts only).
+        endcard_image: Selected endcard background id (clip artifacts only).
 
     Returns:
         List of artifact dicts ready for JSON serialization
@@ -87,6 +91,8 @@ def build_artifact_records_for_clip(
         for record in records:
             record["titlecards"] = titlecards
             record["titlecardDuration"] = titlecard_duration
+            record["titlecardImage"] = titlecard_image
+            record["endcardImage"] = endcard_image
     return records
 
 

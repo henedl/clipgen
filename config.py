@@ -35,6 +35,17 @@ FILMSTRIP_ENABLED: bool = False  # use --filmstrip / --no-filmstrip to override 
 TITLECARD_DURATION_SECONDS: int = (
     2  # duration in seconds; falls back to color fill when no source frame available
 )
+# Selected card backgrounds (Studio picker). Empty = bundled default asset; the
+# sentinels below select a solid-color fill or (endcard only) no card; any other
+# value is an uploaded filename under <output>/TITLECARD_IMAGES_DIRNAME.
+TITLECARD_IMAGE: str = ""
+ENDCARD_IMAGE: str = ""
+CARD_IMAGE_COLOR: str = "__color__"  # solid color fill, no background image
+CARD_IMAGE_NONE: str = "__none__"  # endcard only: append no endcard
+TITLECARD_IMAGES_DIRNAME: str = "titlecard_images"  # upload pool under the output dir
+# Fill colors (#rrggbb) used when the corresponding card is set to a solid color.
+TITLECARD_COLOR: str = "#000000"
+ENDCARD_COLOR: str = "#000000"
 WORKSHEET_PRIORITY: list[str] = [  # tried in order before falling back to first sheet
     "Sheet1",
     "Data",
@@ -386,6 +397,10 @@ SETTINGS_DESCRIPTIONS: dict[str, str] = {
     "RICH_PROGRESS": "Display progress bars during batch and reel processing.",
     "TITLECARDS_ENABLED": "Prepend a generated titlecard to each video clip.",
     "TITLECARD_DURATION_SECONDS": "Duration in seconds for the intro titlecard frame.",
+    "TITLECARD_IMAGE": "Background for the intro titlecard. Pick the default, a solid color, or upload your own image. The clip description is overlaid as text.",
+    "ENDCARD_IMAGE": "Background for the outro endcard. Pick the default, no endcard, a solid color, or upload your own image.",
+    "TITLECARD_COLOR": "Fill color used when the titlecard is set to a solid color.",
+    "ENDCARD_COLOR": "Fill color used when the endcard is set to a solid color.",
     "TRANSCRIBE_ENABLED": "Generate transcripts alongside clips using faster-whisper.",
     "TRANSCRIBE_MODEL": "Whisper model size: tiny, base, small, medium, large-v3.",
     "TRANSCRIBE_FORMAT": "Transcript output format: md (Markdown), srt, or vtt.",
@@ -500,6 +515,30 @@ STUDIO_SETTINGS: dict[str, dict[str, Any]] = {
         "type": "int",
         "min": 1,
         "step": 1,
+    },
+    "TITLECARD_IMAGE": {
+        "tab": "Video & Clips",
+        "group": "Titlecards",
+        "type": "card_picker",
+        "kind": "title",
+    },
+    "ENDCARD_IMAGE": {
+        "tab": "Video & Clips",
+        "group": "Titlecards",
+        "type": "card_picker",
+        "kind": "end",
+    },
+    # Persisted + sent to the frontend, but not rendered as their own rows —
+    # the card_picker widget edits them via its inline color box.
+    "TITLECARD_COLOR": {
+        "tab": "Video & Clips",
+        "group": "Titlecards",
+        "type": "hidden",
+    },
+    "ENDCARD_COLOR": {
+        "tab": "Video & Clips",
+        "group": "Titlecards",
+        "type": "hidden",
     },
     "HIGHLIGHTS_REEL_DURATION_SECONDS": {
         "tab": "Video & Clips",
