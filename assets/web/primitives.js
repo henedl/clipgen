@@ -161,7 +161,19 @@
         bar.className = "density-timeline-bar";
         var hue = resolveHue(e.label, e.hue);
         var alpha = Math.min(1, 0.35 + 0.6 * ((e.count || 1) / max));
-        bar.style.left = "calc(" + (e.t * 100) + "% - 3px)";
+        // Span from start to end so bar width reflects clip length; `min-width`
+        // in CSS keeps short spans visible and clickable. Zero-span events (e.g.
+        // unpadded transcript bookmarks) have no positive width, so center the
+        // min-width marker on the timestamp like createSwimLane — but via a left
+        // offset (half the 4px min-width) rather than translateX, so the
+        // class-based hover scaleY transform is left intact.
+        var widthPct = typeof e.tEnd === "number" && e.tEnd > e.t ? (e.tEnd - e.t) * 100 : 0;
+        if (widthPct > 0) {
+          bar.style.left = e.t * 100 + "%";
+          bar.style.width = widthPct + "%";
+        } else {
+          bar.style.left = "calc(" + e.t * 100 + "% - 2px)";
+        }
         // `e.color` (CSS color string) overrides the oklch(hue) path so
         // detector bars can pin to the canonical `--color-task-*` tokens.
         bar.style.background = e.color
