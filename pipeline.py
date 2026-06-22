@@ -1439,15 +1439,14 @@ def process_reel(
         components.extend(clip_components)
     if not clip_paths:
         utils.warning_print("No clips were generated for the reel.")
+        # Reclaim a caller-supplied output reservation we'll never fill.
+        files.release_reservation(output_file)
         return (0, [])
 
-    reserved_output = False
     if output_file is None and study_name:
         output_file = files.get_unique_filename(f"{study_name}_reel{config.FILEFORMAT}")
-        reserved_output = True
     elif output_file is None:
         output_file = files.get_unique_filename(f"reel{config.FILEFORMAT}")
-        reserved_output = True
 
     # Check cancel flag before starting concatenation
     if cancel_flag and cancel_flag():
@@ -1456,6 +1455,7 @@ def process_reel(
                 Path(path).unlink(missing_ok=True)
             except OSError:
                 pass
+        files.release_reservation(output_file)
         return (0, [])
 
     # Throttle concat progress events to ~5 Hz; ffmpeg's default -progress
@@ -1510,8 +1510,9 @@ def process_reel(
             )
 
     if not ok:
-        if reserved_output:
-            files.release_reservation(output_file)
+        # Concatenation failed; the output is empty or partial and useless —
+        # drop it whether we or the caller reserved the name.
+        files.release_reservation(output_file)
         return (0, [])
 
     cards_enabled, card_duration = _resolve_titlecard_options(

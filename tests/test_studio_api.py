@@ -141,6 +141,27 @@ def test_api_titlecard_delete_resets_selection(client, tmp_path, monkeypatch):
     assert server.config.TITLECARD_IMAGE == ""
 
 
+def test_process_intake_item_releases_reservation_on_cut_exception(
+    tmp_path, monkeypatch
+):
+    """An exception from cut_global_range must not leave a 0-byte intake placeholder."""
+    monkeypatch.setattr(server.config, "OUTPUT_DIR", str(tmp_path))
+    monkeypatch.setattr(
+        server, "_resolve_intake_video_paths", lambda *a, **k: ["v.mp4"]
+    )
+    monkeypatch.setattr(server.video, "timeline_or_none", lambda *a, **k: None)
+
+    def boom(*_a, **_k):
+        raise RuntimeError("ffmpeg blew up")
+
+    monkeypatch.setattr(server.pipeline, "cut_global_range", boom)
+
+    item = {"participant": "P01", "start": 0.0, "end": 5.0}
+    with pytest.raises(RuntimeError):
+        server._process_intake_item(item, "clip", "study")
+    assert list(tmp_path.glob("*.mp4")) == []
+
+
 def test_settings_records_include_card_pickers(client):
     data = client.get("/studio/api/settings").get_json()
     by_name = {s["name"]: s for s in data["settings"]}

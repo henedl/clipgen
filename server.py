@@ -872,15 +872,21 @@ def _process_intake_item(
 
     # Map the global span into the participant's source video(s) (stitching across
     # a recording boundary for multi-video participants); single-video is a plain cut.
-    source_fields = pipeline.cut_global_range(
-        timeline,
-        video_paths[0],
-        start,
-        end,
-        out_path,
-        reencode=config.REENCODING,
-        cancel_flag=cancel_flag,
-    )
+    # Release the reserved placeholder on any failure — a None return *or* an
+    # exception — so we never leave a 0-byte file behind.
+    try:
+        source_fields = pipeline.cut_global_range(
+            timeline,
+            video_paths[0],
+            start,
+            end,
+            out_path,
+            reencode=config.REENCODING,
+            cancel_flag=cancel_flag,
+        )
+    except Exception:
+        files.release_reservation(out_path)
+        raise
 
     if source_fields is None:
         files.release_reservation(out_path)
