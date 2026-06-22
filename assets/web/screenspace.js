@@ -6250,11 +6250,20 @@
 
   // ---- SSE (Server-Sent Events) with polling fallback ----
 
+  // Heatmap PNG/GIF filenames are attached after a task is marked completed
+  // (they're generated outside the worker lock), so a task can surface as
+  // "completed" before they exist. Signature lets us detect their late arrival.
+  function _heatmapSig(t) {
+    if (!t) return "";
+    return (t.heatmap || "") + "|" + (t.heatmap_gif || "") + "|" + (t.heatmap_rolling_gif || "");
+  }
+
   function handleTaskData(data) {
     if (!data.ok) return;
     var oldSelected = state.selectedTaskId;
     var oldTask = oldSelected ? findTask(oldSelected) : null;
     var wasRunning = oldTask && (oldTask.status === "queued" || oldTask.status === "running");
+    var oldHeatmapSig = _heatmapSig(oldTask);
     state.tasks = data.tasks;
     // Only rebuild the pause/play icon when the queue state actually flips —
     // handleTaskData runs on every SSE push (≈2/s while a task streams
@@ -6263,8 +6272,10 @@
       state.queuePaused = data.paused;
       updatePauseButton();
     }
+    // Heatmap fields are part of the fingerprint so a push that only attaches
+    // them (status/progress unchanged at completed:1) still refreshes the list.
     var fp = JSON.stringify(data.tasks.map(function (t) {
-      return t.id + ":" + t.status + ":" + t.progress;
+      return t.id + ":" + t.status + ":" + t.progress + ":" + _heatmapSig(t);
     }));
     var changed = fp !== _lastPollFingerprint;
     _lastPollFingerprint = fp;
@@ -6285,6 +6296,14 @@
       var newTask = findTask(oldSelected);
       if (newTask && newTask.status === "completed") {
         loadAndShowResults(oldSelected);
+      }
+    } else if (oldSelected) {
+      // Late heatmap arrival on an already-completed selected task: re-render
+      // so the heatmap section appears without a page reload.
+      var curTask = findTask(oldSelected);
+      if (curTask && curTask.status === "completed" && _heatmapSig(curTask) !== oldHeatmapSig) {
+        if (state.selectedTaskResults) renderResults();
+        else loadAndShowResults(oldSelected);
       }
     }
     ensureEtaTicker();

@@ -566,6 +566,13 @@ class ScreenspaceWorker:
                     t = self._tasks.get(task_id)
                     if t is not None:
                         t.update(attachments)
+                # The task was already marked completed before these heatmap
+                # filenames were attached, so emit an SSE update now — otherwise
+                # the frontend (which may already have seen the completed task via
+                # another worker's progress push) never re-renders the heatmap
+                # section until a page reload.
+                if attachments and self.on_progress_update:
+                    self.on_progress_update()
         except Exception as exc:
             with self._lock:
                 t = self._tasks.get(task_id)
