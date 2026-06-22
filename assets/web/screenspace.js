@@ -3036,7 +3036,7 @@
       ctx.globalAlpha = 0.5;
       if (hm.type === "template") {
         ctx.drawImage(hm._img, 0, 0, canvas.width, canvas.height);
-      } else if (hm.type === "flow") {
+      } else if (hm.type === "flow" || hm.type === "change") {
         var rPx = hm.region_coords;
         if (rPx && rPx.w) {
           ctx.drawImage(hm._img, rPx.x, rPx.y, rPx.w, rPx.h);
@@ -6721,12 +6721,21 @@
     countEl.textContent = "(" + results.length + ")";
     container.innerHTML = "";
 
-    // Heatmap artifact display (template, flow)
-    if (task.heatmap && (task.type === "template" || task.type === "flow")) {
+    // Heatmap artifact display (template, flow, change)
+    if (task.heatmap && (task.type === "template" || task.type === "flow" || task.type === "change")) {
       var heatmapSection = el("div", "heatmap-result");
       var heatmapLabel = el("div", "heatmap-label");
-      heatmapLabel.appendChild(document.createTextNode("Detection Heatmap"));
-      var overlayBtn = el("button", "ss-btn ss-btn-sm", state.heatmapOverlay ? "Hide Overlay" : "Overlay on Frame");
+      // Clickable title collapses the section to cut visual noise (state persists
+      // across results re-renders via state.heatmapCollapsed).
+      var collapseToggle = el("button", "heatmap-collapse-toggle");
+      collapseToggle.appendChild(el("span", "heatmap-collapse-chevron"));
+      collapseToggle.appendChild(document.createTextNode("Detection Heatmap"));
+      collapseToggle.addEventListener("click", function () {
+        state.heatmapCollapsed = !state.heatmapCollapsed;
+        heatmapSection.classList.toggle("collapsed", !!state.heatmapCollapsed);
+      });
+      heatmapLabel.appendChild(collapseToggle);
+      var overlayBtn = el("button", "btn btn-small", state.heatmapOverlay ? "Hide Overlay" : "Overlay on Frame");
       overlayBtn.addEventListener("click", function () {
         if (state.heatmapOverlay) {
           _heatmapOverlayRequestVersion += 1;
@@ -6734,6 +6743,7 @@
           overlayBtn.textContent = "Overlay on Frame";
           renderOverlay();
         } else {
+          // Overlay always uses the static heatmap image, never the animations.
           var overlaySrc = "media/" + task.heatmap;
           var overlayRequestVersion = ++_heatmapOverlayRequestVersion;
           state.heatmapOverlay = {
@@ -6757,32 +6767,75 @@
         }
       });
       heatmapLabel.appendChild(overlayBtn);
-
-      if (task.heatmap_gif) {
-        var animBtn = el("button", "ss-btn ss-btn-sm", "Show Animation");
-        var showingGif = false;
-        animBtn.addEventListener("click", function () {
-          showingGif = !showingGif;
-          heatmapStaticImg.classList.toggle("hidden", showingGif);
-          heatmapGifImg.classList.toggle("hidden", !showingGif);
-          animBtn.textContent = showingGif ? "Show Static" : "Show Animation";
-        });
-        heatmapLabel.appendChild(animBtn);
-      }
-
       heatmapSection.appendChild(heatmapLabel);
-      var heatmapStaticImg = document.createElement("img");
-      heatmapStaticImg.src = "media/" + task.heatmap;
-      heatmapStaticImg.alt = "Detection heatmap";
-      heatmapSection.appendChild(heatmapStaticImg);
 
+      // Show every generated mode side by side as a small thumbnail strip.
+      var heatmapViews = [
+        { label: "Static", src: task.heatmap, alt: "Detection heatmap", animated: false },
+      ];
       if (task.heatmap_gif) {
-        var heatmapGifImg = document.createElement("img");
-        heatmapGifImg.src = "media/" + task.heatmap_gif;
-        heatmapGifImg.alt = "Heatmap accumulation animation";
-        heatmapGifImg.className = "hidden";
-        heatmapSection.appendChild(heatmapGifImg);
+        heatmapViews.push({
+          label: "Accumulation",
+          src: task.heatmap_gif,
+          alt: "Heatmap accumulation animation",
+          animated: true,
+        });
       }
+      if (task.heatmap_rolling_gif) {
+        heatmapViews.push({
+          label: "Rolling Window",
+          src: task.heatmap_rolling_gif,
+          alt: "Rolling-window heatmap animation",
+          animated: true,
+        });
+      }
+
+      var heatmapStrip = el("div", "heatmap-strip");
+      heatmapViews.forEach(function (view) {
+        var thumb = el("div", "heatmap-thumb");
+        var media = el("div", "heatmap-thumb-media");
+        var img = document.createElement("img");
+        img.src = "media/" + view.src;
+        img.alt = view.alt;
+        media.appendChild(img);
+        if (view.animated) {
+          // GIFs can't be paused natively: freeze the current frame onto a
+          // canvas to pause, restore the gif src to resume from the start.
+          media.classList.add("heatmap-thumb-animated");
+          media.appendChild(el("span", "heatmap-thumb-glyph"));
+          var gifSrc = "media/" + view.src;
+          var frozen = null;
+          media.addEventListener("click", function () {
+            if (!frozen) {
+              var canvas = el("canvas", "heatmap-thumb-frozen");
+              canvas.width = img.naturalWidth || img.clientWidth || 1;
+              canvas.height = img.naturalHeight || img.clientHeight || 1;
+              try {
+                canvas.getContext("2d").drawImage(img, 0, 0, canvas.width, canvas.height);
+              } catch (e) {
+                return; // frame not ready yet — leave it playing
+              }
+              img.classList.add("hidden");
+              media.insertBefore(canvas, img);
+              frozen = canvas;
+              media.classList.add("paused");
+            } else {
+              media.removeChild(frozen);
+              frozen = null;
+              img.classList.remove("hidden");
+              img.src = gifSrc; // restart the animation
+              media.classList.remove("paused");
+            }
+          });
+        }
+        thumb.appendChild(media);
+        thumb.appendChild(el("div", "heatmap-thumb-label", view.label));
+        heatmapStrip.appendChild(thumb);
+      });
+      heatmapSection.appendChild(heatmapStrip);
+
+      // Restore persisted collapsed state for this render.
+      heatmapSection.classList.toggle("collapsed", !!state.heatmapCollapsed);
 
       container.appendChild(heatmapSection);
     }

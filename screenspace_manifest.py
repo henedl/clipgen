@@ -122,10 +122,12 @@ def save_screenspace_manifest(
                     {k: v for k, v in s.items() if k not in _step_strip_keys}
                     for s in ct["parameters"]["steps"]
                 ]
-        # Strip flow_grid from results (large per-frame data, not needed on disk)
+        # Strip large per-frame heatmap grids from results (not needed on disk)
         if isinstance(ct.get("result"), list):
+            _grid_keys = ("flow_grid", "change_grid")
             ct["result"] = [
-                {k: v for k, v in r.items() if k != "flow_grid"} for r in ct["result"]
+                {k: v for k, v in r.items() if k not in _grid_keys}
+                for r in ct["result"]
             ]
         clean_tasks.append(ct)
     if pins is None:
