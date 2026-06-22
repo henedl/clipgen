@@ -58,6 +58,47 @@ def _resolve_titlecard_options(
     return enabled, duration
 
 
+def _card_image_identity(kind: str) -> str:
+    """Cache identity for one card kind, matching what will actually be rendered.
+
+    Derived from titlecards.resolve_card_background() — the same resolution the
+    encoder uses — so the recorded identity never drifts from the rendered card:
+      - solid color: the color is baked in (e.g. "__color__#ff0000") so changing
+        it invalidates cached clips;
+      - "none" endcard: the no-card sentinel;
+      - a resolved upload: its filename;
+      - the bundled default — including the silent fallback when a selected upload
+        is missing on disk: the empty-string default. Collapsing the missing-upload
+        case to "" (rather than recording the absent filename) means a clip rendered
+        with the fallback regenerates once the file later appears, instead of cache-
+        matching on a filename it was never actually rendered with.
+    """
+    background_path, _allow_color, skip, fill_color = (
+        titlecards.resolve_card_background(kind)
+    )
+    if skip:
+        return config.CARD_IMAGE_NONE
+    if background_path is None:
+        return config.CARD_IMAGE_COLOR + fill_color
+    images_dir = utils.get_effective_output_dir() / config.TITLECARD_IMAGES_DIRNAME
+    if background_path.parent == images_dir:
+        return background_path.name
+    return ""
+
+
+def _resolve_titlecard_images(cards_enabled: bool) -> tuple[str, str]:
+    """Return the selected (titlecard, endcard) image identities when enabled.
+
+    Image selection is config-global (no per-request override). Returns empty
+    strings when cards are disabled so artifact records and the Studio cache-skip
+    comparison agree on a single canonical value. Each identity reflects the
+    background that will actually be rendered (see _card_image_identity).
+    """
+    if not cards_enabled:
+        return "", ""
+    return _card_image_identity("title"), _card_image_identity("end")
+
+
 def is_excel_worksheet(worksheet: Any) -> bool:
     """Return True if worksheet is the Excel adapter (local file, no URL)."""
     spread = getattr(worksheet, "spreadsheet", None)
@@ -1156,6 +1197,7 @@ def process_clips(
         if generated_count < len(clip["times"]):
             outputs_skipped += len(clip["times"]) - generated_count
         if segment_details:
+            title_img, end_img = _resolve_titlecard_images(cards_enabled)
             clip_artifacts = viewer.build_artifact_records_for_clip(
                 clip,
                 base_video,
@@ -1163,6 +1205,8 @@ def process_clips(
                 output_format,
                 titlecards=cards_enabled,
                 titlecard_duration=card_duration,
+                titlecard_image=title_img,
+                endcard_image=end_img,
             )
             _embed_transcript_on_artifacts(
                 clip,
@@ -1416,15 +1460,14 @@ def process_reel(
         components.extend(clip_components)
     if not clip_paths:
         utils.warning_print("No clips were generated for the reel.")
+        # Reclaim a caller-supplied output reservation we'll never fill.
+        files.release_reservation(output_file)
         return (0, [])
 
-    reserved_output = False
     if output_file is None and study_name:
         output_file = files.get_unique_filename(f"{study_name}_reel{config.FILEFORMAT}")
-        reserved_output = True
     elif output_file is None:
         output_file = files.get_unique_filename(f"reel{config.FILEFORMAT}")
-        reserved_output = True
 
     # Check cancel flag before starting concatenation
     if cancel_flag and cancel_flag():
@@ -1433,6 +1476,7 @@ def process_reel(
                 Path(path).unlink(missing_ok=True)
             except OSError:
                 pass
+        files.release_reservation(output_file)
         return (0, [])
 
     # Throttle concat progress events to ~5 Hz; ffmpeg's default -progress
@@ -1487,14 +1531,16 @@ def process_reel(
             )
 
     if not ok:
-        if reserved_output:
-            files.release_reservation(output_file)
+        # Concatenation failed; the output is empty or partial and useless —
+        # drop it whether we or the caller reserved the name.
+        files.release_reservation(output_file)
         return (0, [])
 
     cards_enabled, card_duration = _resolve_titlecard_options(
         titlecards_enabled, titlecard_duration_seconds
     )
     reel_id = compute_reel_id(components)
+    title_img, end_img = _resolve_titlecard_images(cards_enabled)
     reel_record: dict[str, Any] = {
         "id": reel_id,
         "file": Path(output_file).name,
@@ -1503,6 +1549,8 @@ def process_reel(
         "components": components,
         "titlecards": cards_enabled,
         "titlecardDuration": card_duration if cards_enabled else 0,
+        "titlecardImage": title_img,
+        "endcardImage": end_img,
     }
 
     reel_transcript = _build_reel_transcript(

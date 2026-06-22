@@ -562,6 +562,29 @@ def test_process_reel_releases_reservation_on_concat_failure(
     assert list(output_dir.iterdir()) == []
 
 
+def test_process_reel_releases_caller_reserved_output_when_no_clips(
+    monkeypatch, make_clip, tmp_path
+):
+    """A caller-supplied output reservation (e.g. a chronologic reel) must be
+    reclaimed when no clips are generated, not left as a 0-byte placeholder."""
+    output_dir = tmp_path / "out"
+    output_dir.mkdir()
+    monkeypatch.setattr(config, "OUTPUT_DIR", str(output_dir), raising=False)
+    monkeypatch.setattr(
+        pipeline, "_run_clip_pipeline", lambda clips_list, **kwargs: ([], set())
+    )
+    monkeypatch.setattr(pipeline.utils, "use_progress", lambda: False)
+
+    reserved = pipeline.files.get_unique_filename("study_P01_chronologic.mp4")
+    assert pipeline.Path(reserved).is_file()  # 0-byte placeholder created
+
+    result, records = clipgen.process_reel([make_clip()], output_file=reserved)
+    assert result == 0
+    assert records == []
+    assert not pipeline.Path(reserved).is_file()  # placeholder reclaimed
+    assert list(output_dir.iterdir()) == []
+
+
 def test_regenerate_reel_releases_reservation_on_ffmpeg_failure(monkeypatch, tmp_path):
     """A reel part whose ffmpeg encode fails must not leave a 0-byte placeholder
     behind from get_unique_filename's atomic reservation."""

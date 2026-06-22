@@ -58,6 +58,8 @@ from flask import (
     jsonify,
     redirect,
     request,
+    send_file,
+    send_from_directory,
 )
 from flask.json.provider import DefaultJSONProvider
 from werkzeug.serving import WSGIRequestHandler
@@ -870,15 +872,21 @@ def _process_intake_item(
 
     # Map the global span into the participant's source video(s) (stitching across
     # a recording boundary for multi-video participants); single-video is a plain cut.
-    source_fields = pipeline.cut_global_range(
-        timeline,
-        video_paths[0],
-        start,
-        end,
-        out_path,
-        reencode=config.REENCODING,
-        cancel_flag=cancel_flag,
-    )
+    # Release the reserved placeholder on any failure — a None return *or* an
+    # exception — so we never leave a 0-byte file behind.
+    try:
+        source_fields = pipeline.cut_global_range(
+            timeline,
+            video_paths[0],
+            start,
+            end,
+            out_path,
+            reencode=config.REENCODING,
+            cancel_flag=cancel_flag,
+        )
+    except Exception:
+        files.release_reservation(out_path)
+        raise
 
     if source_fields is None:
         files.release_reservation(out_path)
@@ -1270,6 +1278,7 @@ def api_generate() -> FlaskResponse:
         req_cards, req_dur = pipeline._resolve_titlecard_options(
             titlecards_enabled, titlecard_duration_seconds
         )
+        req_title_img, req_end_img = pipeline._resolve_titlecard_images(req_cards)
 
         # Pass 1: yield already-existing artifacts, collect clips that need generation
         to_generate: list[tuple[Any, str]] = []
@@ -1300,7 +1309,14 @@ def api_generate() -> FlaskResponse:
                     output_format != "clip"
                     or (
                         bool(a.get("titlecards", False)) == req_cards
-                        and (not req_cards or a.get("titlecardDuration") == req_dur)
+                        and (
+                            not req_cards
+                            or (
+                                a.get("titlecardDuration") == req_dur
+                                and a.get("titlecardImage", "") == req_title_img
+                                and a.get("endcardImage", "") == req_end_img
+                            )
+                        )
                     )
                 )
                 (fresh if matches else stale).append(a)
@@ -1588,6 +1604,9 @@ def api_reel() -> FlaskResponse:
                 req_cards, req_dur = pipeline._resolve_titlecard_options(
                     titlecards_enabled, titlecard_duration_seconds
                 )
+                req_title_img, req_end_img = pipeline._resolve_titlecard_images(
+                    req_cards
+                )
                 if components:
                     expected_id = pipeline.compute_reel_id(components)
                     with _generated_output_lock:
@@ -1599,7 +1618,12 @@ def api_reel() -> FlaskResponse:
                         if not reel_path.is_file():
                             continue
                         matches = bool(reel.get("titlecards", False)) == req_cards and (
-                            not req_cards or reel.get("titlecardDuration") == req_dur
+                            not req_cards
+                            or (
+                                reel.get("titlecardDuration") == req_dur
+                                and reel.get("titlecardImage", "") == req_title_img
+                                and reel.get("endcardImage", "") == req_end_img
+                            )
                         )
                         if matches:
                             yield (
@@ -2081,6 +2105,7 @@ def _settings_records() -> list[dict[str, Any]]:
                 "max": meta.get("max"),
                 "step": meta.get("step"),
                 "provider": meta.get("provider"),
+                "kind": meta.get("kind"),
             }
         )
     return records
@@ -2208,6 +2233,180 @@ def api_settings_put() -> FlaskResponse:
     if error is not None:
         return jsonify({"ok": False, "error": error}), 400
     return jsonify({"ok": True, "applied": applied})
+
+
+# ── Titlecard / endcard background picker ────────────────────────────────
+_ALLOWED_CARD_EXTS: set[str] = {".png", ".jpg", ".jpeg", ".webp"}
+_MAX_CARD_UPLOAD_BYTES: int = 10 * 1024 * 1024  # 10 MB
+
+
+def _titlecard_images_dir() -> Path:
+    """Directory holding user-uploaded card backgrounds (shared by both cards)."""
+    return Path(utils.get_effective_output_dir()) / config.TITLECARD_IMAGES_DIRNAME
+
+
+def _list_uploaded_titlecards() -> list[str]:
+    """Return uploaded card filenames (sorted, case-insensitive)."""
+    images_dir = _titlecard_images_dir()
+    if not images_dir.is_dir():
+        return []
+    names = [
+        p.name
+        for p in images_dir.iterdir()
+        if p.is_file() and p.suffix.lower() in _ALLOWED_CARD_EXTS
+    ]
+    return sorted(names, key=str.lower)
+
+
+def _card_picker_payload(kind: str) -> dict[str, Any]:
+    """Build the {selected, items} payload for one card kind ('title' or 'end')."""
+    selected = config.TITLECARD_IMAGE if kind == "title" else config.ENDCARD_IMAGE
+    items: list[dict[str, Any]] = [
+        {
+            "id": "",
+            "label": "Default",
+            "kind": "default",
+            "url": f"/api/titlecards/default/{kind}",
+            "deletable": False,
+        }
+    ]
+    if kind == "end":
+        items.append(
+            {
+                "id": config.CARD_IMAGE_NONE,
+                "label": "None",
+                "kind": "none",
+                "url": None,
+                "deletable": False,
+            }
+        )
+    items.append(
+        {
+            "id": config.CARD_IMAGE_COLOR,
+            "label": "Solid color",
+            "kind": "color",
+            "url": None,
+            "deletable": False,
+        }
+    )
+    for name in _list_uploaded_titlecards():
+        items.append(
+            {
+                "id": name,
+                "label": name,
+                "kind": "upload",
+                "url": f"/api/titlecards/image/{name}",
+                "deletable": True,
+            }
+        )
+    return {"selected": selected, "items": items}
+
+
+@studio_bp.route("/api/titlecards", methods=["GET"])
+def api_titlecards_list() -> FlaskResponse:
+    """List background choices (default, color, none, uploads) for both cards."""
+    return jsonify(
+        {
+            "ok": True,
+            "title": _card_picker_payload("title"),
+            "end": _card_picker_payload("end"),
+        }
+    )
+
+
+@studio_bp.route("/api/titlecards/default/<kind>", methods=["GET"])
+def api_titlecard_default(kind: str) -> FlaskResponse:
+    """Serve the bundled default titlecard/endcard image for previews."""
+    if kind not in ("title", "end"):
+        return jsonify({"ok": False, "error": "Invalid kind"}), 400
+    asset = "titlecard.png" if kind == "title" else "endcard.png"
+    path = utils.get_bundled_assets_root() / "assets" / asset
+    if not path.is_file():
+        return jsonify({"ok": False, "error": "No default image"}), 404
+    return send_file(str(path))
+
+
+@studio_bp.route("/api/titlecards/image/<path:name>", methods=["GET"])
+def api_titlecard_image(name: str) -> FlaskResponse:
+    """Serve an uploaded card background by filename (used for previews)."""
+    safe = Path(name).name
+    if safe != name or Path(safe).suffix.lower() not in _ALLOWED_CARD_EXTS:
+        return jsonify({"ok": False, "error": "Invalid filename"}), 400
+    if not (_titlecard_images_dir() / safe).is_file():
+        return jsonify({"ok": False, "error": "Not found"}), 404
+    return send_from_directory(str(_titlecard_images_dir()), safe)
+
+
+@studio_bp.route("/api/titlecards/upload", methods=["POST"])
+def api_titlecard_upload() -> FlaskResponse:
+    """Accept a card background image upload (PNG/JPG/WebP) into the upload pool."""
+    file = request.files.get("file")
+    filename = file.filename if file is not None else None
+    if file is None or not filename:
+        return jsonify({"ok": False, "error": "No file provided"}), 400
+    ext = Path(filename).suffix.lower()
+    if ext not in _ALLOWED_CARD_EXTS:
+        return jsonify(
+            {
+                "ok": False,
+                "error": f"Unsupported file type '{ext}'. Use PNG, JPG, or WebP.",
+            }
+        ), 400
+    file.seek(0, os.SEEK_END)
+    size = file.tell()
+    file.seek(0)
+    if size > _MAX_CARD_UPLOAD_BYTES:
+        return jsonify({"ok": False, "error": "File too large (max 10 MB)."}), 400
+
+    # sanitize_filename strips the dot from extensions, so clean the stem only.
+    stem = utils.sanitize_filename(Path(filename).stem).strip() or "titlecard"
+    images_dir = _titlecard_images_dir()
+    images_dir.mkdir(parents=True, exist_ok=True)
+    candidate = f"{stem}{ext}"
+    counter = 2
+    while (images_dir / candidate).exists():
+        candidate = f"{stem}_{counter}{ext}"
+        counter += 1
+    try:
+        file.save(str(images_dir / candidate))
+    except OSError as error:
+        return jsonify({"ok": False, "error": str(error)}), 500
+    return jsonify(
+        {
+            "ok": True,
+            "item": {
+                "id": candidate,
+                "label": candidate,
+                "kind": "upload",
+                "url": f"/api/titlecards/image/{candidate}",
+                "deletable": True,
+            },
+        }
+    )
+
+
+@studio_bp.route("/api/titlecards/image/<path:name>", methods=["DELETE"])
+def api_titlecard_delete(name: str) -> FlaskResponse:
+    """Delete an uploaded card background; reset any selection that used it."""
+    safe = Path(name).name
+    if safe != name:
+        return jsonify({"ok": False, "error": "Invalid filename"}), 400
+    target = _titlecard_images_dir() / safe
+    if not target.is_file():
+        return jsonify({"ok": False, "error": "Not found"}), 404
+    try:
+        target.unlink()
+    except OSError as error:
+        return jsonify({"ok": False, "error": str(error)}), 500
+    reset: dict[str, str] = {}
+    for setting in ("TITLECARD_IMAGE", "ENDCARD_IMAGE"):
+        if getattr(config, setting, "") == safe:
+            setattr(config, setting, "")
+            reset[setting] = ""
+    if reset:
+        merged = {n: getattr(config, n) for n in config.STUDIO_SETTINGS.keys()}
+        _save_studio_settings(merged)
+    return jsonify({"ok": True, "reset": reset})
 
 
 # ---- Screenspace Intake ----
@@ -2502,6 +2701,9 @@ def api_reel_direct() -> FlaskResponse:
                     concat_ok = False
 
                 if concat_ok:
+                    direct_title_img, direct_end_img = (
+                        pipeline._resolve_titlecard_images(cards_enabled)
+                    )
                     reel_record: dict[str, Any] = {
                         "id": f"reel_intake_{hashlib.md5(reel_name.encode()).hexdigest()[:8]}",
                         "file": Path(reel_name).name,
@@ -2509,6 +2711,8 @@ def api_reel_direct() -> FlaskResponse:
                         "description": f"Intake reel ({len(clip_paths)} segments)",
                         "titlecards": cards_enabled,
                         "titlecardDuration": card_duration if cards_enabled else 0,
+                        "titlecardImage": direct_title_img,
+                        "endcardImage": direct_end_img,
                     }
                     _append_generated_reel(reel_record)
                     _save_manifest_quiet()
@@ -3254,6 +3458,33 @@ def build_combined_app(
         if error is not None:
             return jsonify({"ok": False, "error": error}), 400
         return jsonify({"ok": True, "applied": applied})
+
+    # ---- Titlecard / endcard background picker (shared settings modal) ----
+    combined.add_url_rule(
+        "/api/titlecards", "combined_titlecards_list", api_titlecards_list
+    )
+    combined.add_url_rule(
+        "/api/titlecards/default/<kind>",
+        "combined_titlecard_default",
+        api_titlecard_default,
+    )
+    combined.add_url_rule(
+        "/api/titlecards/image/<path:name>",
+        "combined_titlecard_image",
+        api_titlecard_image,
+    )
+    combined.add_url_rule(
+        "/api/titlecards/upload",
+        "combined_titlecard_upload",
+        api_titlecard_upload,
+        methods=["POST"],
+    )
+    combined.add_url_rule(
+        "/api/titlecards/image/<path:name>",
+        "combined_titlecard_delete",
+        api_titlecard_delete,
+        methods=["DELETE"],
+    )
 
     # ---- Model discovery ----
 

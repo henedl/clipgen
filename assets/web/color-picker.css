@@ -1,0 +1,118 @@
+/* clipgen reusable color picker — color-picker.css
+ * Popover styling for color-picker.js. Floats above modals at --z-toast.
+ * Gradient/indicator colors are intrinsic to color science, not the UI theme,
+ * so they stay literal. */
+
+.cgcp-popover {
+  position: fixed;
+  z-index: var(--z-toast);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  width: 12rem;
+  padding: var(--space-2);
+  border: 1px solid var(--color-panel-border);
+  border-radius: var(--radius);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-pop);
+  user-select: none;
+}
+
+.cgcp-area {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.cgcp-sv {
+  position: relative;
+  flex: 1;
+  height: 8rem;
+  border-radius: calc(var(--radius) - 2px);
+  /* White (left → transparent) over black (bottom → transparent); the hue base
+     color is set inline by JS and shows through. */
+  background-image:
+    linear-gradient(to top, #000, rgba(0, 0, 0, 0)),
+    linear-gradient(to right, #fff, rgba(255, 255, 255, 0));
+  cursor: crosshair;
+  touch-action: none;
+}
+
+.cgcp-hue {
+  position: relative;
+  width: 0.85rem;
+  height: 8rem;
+  border-radius: var(--radius-full);
+  background: linear-gradient(
+    to bottom,
+    #f00 0%, #ff0 17%, #0f0 33%, #0ff 50%, #00f 67%, #f0f 83%, #f00 100%
+  );
+  cursor: ns-resize;
+  touch-action: none;
+}
+
+.cgcp-sv-thumb {
+  position: absolute;
+  width: 0.75rem;
+  height: 0.75rem;
+  border: 2px solid #fff;
+  border-radius: var(--radius-full);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.5);
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+}
+
+.cgcp-hue-thumb {
+  position: absolute;
+  left: 50%;
+  width: 1.1rem;
+  height: 0.35rem;
+  border: 1px solid rgba(0, 0, 0, 0.5);
+  border-radius: var(--radius-sm);
+  background: #fff;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+}
+
+.cgcp-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.cgcp-preview {
+  flex-shrink: 0;
+  width: 1.5rem;
+  height: 1.5rem;
+  border: 1px solid var(--color-border);
+  border-radius: calc(var(--radius) - 2px);
+}
+
+.cgcp-hex {
+  flex: 1;
+  min-width: 0;
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--color-border);
+  border-radius: calc(var(--radius) - 2px);
+  background: var(--color-surface);
+  color: var(--color-text);
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+}
+
+.cgcp-swatches {
+  display: grid;
+  grid-template-columns: repeat(10, 1fr);
+  gap: var(--space-1);
+}
+
+.cgcp-swatch {
+  aspect-ratio: 1;
+  padding: 0;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.cgcp-swatch:hover {
+  border-color: var(--color-accent);
+}
