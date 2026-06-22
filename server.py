@@ -1871,14 +1871,21 @@ def api_gallery() -> FlaskResponse:
             source_name = sources[0].name
         else:
             artifacts = []
-            for part_path, _dur, cumulative in timeline:
+            for part_path, dur, cumulative in timeline:
                 if _gallery_cancel_event.is_set():
                     break
+                # Align each part's local grid to the global interval so spacing
+                # stays even across part boundaries; a part whose duration isn't
+                # a multiple of the interval would otherwise shift the next
+                # part's grid off the global cadence.
+                first = (interval - cumulative % interval) % interval
+                local_ts = list(range(first, dur, interval))
                 part_artifacts = video.generate_interval_captures(
                     part_path,
                     interval_seconds=interval,
                     output_format=output_format,
                     gif_duration_seconds=config.GALLERY_GIF_DURATION_SECONDS,
+                    timestamps=local_ts,
                     cancel_flag=_gallery_cancel_event.is_set,
                 )
                 for a in part_artifacts:

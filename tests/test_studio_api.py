@@ -1635,6 +1635,69 @@ def test_api_gallery_multi_video_captures_all_parts_with_global_times(
     assert captured["duration"] == 200  # total timeline duration
 
 
+def test_api_gallery_multi_video_intervals_globally_aligned(
+    client, monkeypatch, tmp_path
+):
+    """A part boundary keeps the global capture grid evenly spaced.
+
+    A first part whose duration isn't a multiple of the interval must not push
+    the next part's grid off the global cadence (the pre-fix behavior restarted
+    each part's timestamps at 0 then shifted by the cumulative start).
+    """
+    import video
+    import viewer
+
+    a = tmp_path / "a.mp4"
+    b = tmp_path / "b.mp4"
+    a.write_bytes(b"x")
+    b.write_bytes(b"x")
+    monkeypatch.setattr(server, "_sheet_context", object())
+    monkeypatch.setattr(server, "_resolve_participant_sources", lambda p: [a, b])
+    # Part 1 is 95s (not a multiple of the 10s interval); part 2 starts at 95.
+    monkeypatch.setattr(
+        video,
+        "timeline_or_none",
+        lambda paths: [(str(a), 95, 0), (str(b), 120, 95)],
+    )
+
+    requested: dict[str, list[int]] = {}
+
+    def fake_captures(path, *, timestamps=None, **kw):
+        requested[path] = list(timestamps or [])
+        return [
+            {"file": f"{path}-{ts}.png", "timestamp": float(ts), "type": "screen"}
+            for ts in (timestamps or [])
+        ]
+
+    monkeypatch.setattr(video, "generate_interval_captures", fake_captures)
+
+    captured = {}
+
+    def fake_finalize(artifacts, **kw):
+        captured["artifacts"] = artifacts
+        return {"meta": {}}
+
+    monkeypatch.setattr(viewer, "finalize_gallery_data", fake_finalize)
+    monkeypatch.setattr(
+        viewer, "generate_gallery_viewer", lambda *a, **kw: "/out/gallery.html"
+    )
+
+    server._gallery_cancel_event.clear()
+    resp = client.post(
+        "/studio/api/gallery",
+        json={"participant": "P01", "format": "screen", "interval": 10},
+    )
+
+    assert resp.status_code == 200
+    # Each part is asked for an interval-aligned local grid.
+    assert requested[str(a)] == list(range(0, 95, 10))  # 0,10,...,90
+    assert requested[str(b)] == list(range(5, 120, 10))  # 5,15,...,115
+    # Global timestamps are evenly spaced by the interval across the boundary.
+    globals_ = sorted(art["timestamp"] for art in captured["artifacts"])
+    diffs = {round(hi - lo, 6) for lo, hi in zip(globals_, globals_[1:])}
+    assert diffs == {10.0}
+
+
 def test_api_timeline_viewer_returns_409_when_busy(client, monkeypatch):
     """A second timeline-viewer build is rejected while one holds the slot, so
     the two builds can't clobber the shared cancel event."""
