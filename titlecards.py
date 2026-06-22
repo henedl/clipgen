@@ -32,6 +32,25 @@ _endcard_cache: dict[str, str] = {}
 _endcard_lock = threading.Lock()
 
 
+def _x264_video_args() -> list[str]:
+    """Shared libx264 output args for card generation and the card wrap.
+
+    A fast preset + explicit CRF: the wrap re-encodes the whole clip body, so the
+    preset is the main lever on titlecard generation time. Tuned via
+    config.TITLECARD_ENCODE_PRESET / TITLECARD_ENCODE_CRF.
+    """
+    return [
+        "-c:v",
+        "libx264",
+        "-preset",
+        config.TITLECARD_ENCODE_PRESET,
+        "-crf",
+        str(config.TITLECARD_ENCODE_CRF),
+        "-pix_fmt",
+        "yuv420p",
+    ]
+
+
 def _build_drawtext_filter(text: str) -> str:
     safe_text = (text or "").strip()
     # The description has already been sanitized for filenames, but escape colons and backslashes just in case.
@@ -49,20 +68,31 @@ def _build_drawtext_filter(text: str) -> str:
     ).format(safe_text)
 
 
+def _ffmpeg_color(value: str) -> str:
+    """Convert a #rrggbb value to ffmpeg's 0xRRGGBB; pass named colors through."""
+    v = (value or "").strip()
+    if v.startswith("#") and len(v) == 7:
+        return "0x" + v[1:]
+    return v or "black"
+
+
 def _build_card_frame(
     *,
     resolution: str,
-    background_path: Path,
+    background_path: Path | None,
     label: str,
     drawtext_filter: str | None = None,
     allow_color_fallback: bool = False,
+    fill_color: str = "black",
     cancel_flag: Callable[[], bool] | None = None,
     card_duration_seconds: int | None = None,
 ) -> str | None:
     """Generate a short title/end card video segment.
 
     Shared implementation for titlecard and endcard frame generation.
-    Returns the path to the generated card video, or None on failure.
+    Returns the path to the generated card video, or None on failure. A None
+    *background_path* (or a path that doesn't exist) renders a solid-color card
+    when *allow_color_fallback* is set, otherwise returns None.
     """
     if not resolution:
         return None
@@ -73,7 +103,7 @@ def _build_card_frame(
         else card_duration_seconds
     )
 
-    use_image_background = background_path.is_file()
+    use_image_background = background_path is not None and background_path.is_file()
     if not use_image_background and not allow_color_fallback:
         return None
 
@@ -113,6 +143,7 @@ def _build_card_frame(
         vf_with_scale += f",{drawtext_filter}"
 
     if use_image_background:
+        assert background_path is not None  # guaranteed by use_image_background
         ffmpeg_command = [
             "ffmpeg",
             "-y",
@@ -126,10 +157,7 @@ def _build_card_frame(
             str(background_path),
             "-vf",
             vf_with_scale,
-            "-c:v",
-            "libx264",
-            "-pix_fmt",
-            "yuv420p",
+            *_x264_video_args(),
             card_path,
         ]
         input_label = str(background_path)
@@ -142,13 +170,10 @@ def _build_card_frame(
             "-f",
             "lavfi",
             "-i",
-            f"color=c=black:s={resolution}:d={duration}",
+            f"color=c={_ffmpeg_color(fill_color)}:s={resolution}:d={duration}",
             "-vf",
             vf_with_scale,
-            "-c:v",
-            "libx264",
-            "-pix_fmt",
-            "yuv420p",
+            *_x264_video_args(),
             card_path,
         ]
         input_label = "lavfi:color"
@@ -183,6 +208,53 @@ def _build_card_frame(
     return card_path
 
 
+def resolve_card_background(kind: str) -> tuple[Path | None, bool, bool, str]:
+    """Resolve the configured background for a card from config.
+
+    *kind* is "title" or "end". Returns (background_path, allow_color, skip, fill_color):
+      - background_path: image to use, or None for a solid-color card.
+      - allow_color: whether to fall back to a color fill when no image is present.
+      - skip: True when no card should be produced at all (endcard "none").
+      - fill_color: the color used for the fill (the configured solid color when
+        the card is set to a solid color, otherwise "black" for the
+        missing-image fallback).
+
+    Selection ids (config.TITLECARD_IMAGE / config.ENDCARD_IMAGE): empty = bundled
+    default asset; CARD_IMAGE_COLOR = solid color; CARD_IMAGE_NONE = no endcard;
+    any other value is an uploaded filename under TITLECARD_IMAGES_DIRNAME (falling
+    back to the bundled default when the file is missing). Title cards always render
+    (their text is the point), so they never skip.
+    """
+    if kind == "end":
+        value = config.ENDCARD_IMAGE
+        default_asset = "endcard.png"
+        # Endcards historically only render when an image exists (no color fill).
+        default_allow_color = False
+        solid_color = config.ENDCARD_COLOR
+    else:
+        value = config.TITLECARD_IMAGE
+        default_asset = "titlecard.png"
+        default_allow_color = True
+        solid_color = config.TITLECARD_COLOR
+
+    if kind == "end" and value == config.CARD_IMAGE_NONE:
+        return (None, False, True, "black")
+    if value == config.CARD_IMAGE_COLOR:
+        return (None, True, False, solid_color)
+
+    default_path = utils.get_bundled_assets_root() / "assets" / default_asset
+    if not value:
+        return (default_path, default_allow_color, False, "black")
+
+    upload_path = (
+        utils.get_effective_output_dir() / config.TITLECARD_IMAGES_DIRNAME / value
+    )
+    if upload_path.is_file():
+        return (upload_path, default_allow_color, False, "black")
+    # Selected upload is missing — fall back to the bundled default.
+    return (default_path, default_allow_color, False, "black")
+
+
 def build_titlecard_frame(
     clip: ClipRecord,
     resolution: str,
@@ -191,12 +263,16 @@ def build_titlecard_frame(
     card_duration_seconds: int | None = None,
 ) -> str | None:
     """Generate a short titlecard video segment for a clip."""
+    background_path, allow_color, skip, fill_color = resolve_card_background("title")
+    if skip:
+        return None
     return _build_card_frame(
         resolution=resolution,
-        background_path=utils.get_bundled_assets_root() / "assets" / "titlecard.png",
+        background_path=background_path,
         label="titlecard",
         drawtext_filter=_build_drawtext_filter(str(clip.get("desc", ""))),
-        allow_color_fallback=True,
+        allow_color_fallback=allow_color,
+        fill_color=fill_color,
         cancel_flag=cancel_flag,
         card_duration_seconds=card_duration_seconds,
     )
@@ -208,11 +284,16 @@ def build_endcard_frame(
     cancel_flag: Callable[[], bool] | None = None,
     card_duration_seconds: int | None = None,
 ) -> str | None:
-    """Generate a short endcard video segment if assets/endcard.png exists."""
+    """Generate a short endcard video segment for the configured background."""
+    background_path, allow_color, skip, fill_color = resolve_card_background("end")
+    if skip:
+        return None
     return _build_card_frame(
         resolution=resolution,
-        background_path=utils.get_bundled_assets_root() / "assets" / "endcard.png",
+        background_path=background_path,
         label="endcard",
+        allow_color_fallback=allow_color,
+        fill_color=fill_color,
         cancel_flag=cancel_flag,
         card_duration_seconds=card_duration_seconds,
     )
@@ -230,7 +311,12 @@ def get_or_build_endcard(
         if card_duration_seconds is None
         else card_duration_seconds
     )
-    cache_key = f"{resolution}:{duration}"
+    # Key by the selected endcard so switching the background (or, for a solid
+    # color, the color itself) doesn't reuse a stale cached file.
+    endcard_id = config.ENDCARD_IMAGE or "__default__"
+    if config.ENDCARD_IMAGE == config.CARD_IMAGE_COLOR:
+        endcard_id = endcard_id + config.ENDCARD_COLOR
+    cache_key = f"{resolution}:{duration}:{endcard_id}"
     with _endcard_lock:
         cached = _endcard_cache.get(cache_key)
         if cached and Path(cached).is_file():
@@ -463,10 +549,7 @@ def wrap_clip_with_cards(
             "-filter_complex",
             filter_complex,
             *map_args,
-            "-c:v",
-            "libx264",
-            "-pix_fmt",
-            "yuv420p",
+            *_x264_video_args(),
         ]
         if has_clip_audio:
             ffmpeg_command.extend(["-c:a", "aac"])

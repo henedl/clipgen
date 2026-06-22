@@ -207,6 +207,46 @@ def test_build_artifact_records_for_clip_and_finalize_timeline_data(
     assert data["timeline"]["duration"] > artifacts[0]["end"]
 
 
+def test_build_artifact_records_for_clip_stores_card_image_fields(
+    tmp_path, monkeypatch
+):
+    monkeypatch.chdir(tmp_path)
+    clip: ClipRecord = {
+        "cell": type("Cell", (), {"row": 4, "col": 2})(),
+        "study": "study",
+        "participant": "P01",
+        "category": "CatA",
+        "desc": "Obs one",
+        "times": [("00:10", "00:20")],
+    }
+
+    artifacts = viewer.build_artifact_records_for_clip(
+        clip,
+        "study_P01.mp4",
+        [("out_1.mp4", 0)],
+        output_format="clip",
+        titlecards=True,
+        titlecard_duration=3,
+        titlecard_image="hero.png",
+        endcard_image="__color__",
+    )
+    a = artifacts[0]
+    assert a["titlecards"] is True
+    assert a["titlecardImage"] == "hero.png"
+    assert a["endcardImage"] == "__color__"
+
+    # Non-clip outputs never carry titlecard metadata.
+    screens = viewer.build_artifact_records_for_clip(
+        clip,
+        "study_P01.mp4",
+        [("shot.png", 0)],
+        output_format="screen",
+        titlecards=True,
+        titlecard_image="hero.png",
+    )
+    assert "titlecardImage" not in screens[0]
+
+
 def test_build_artifact_record_raises_when_cell_missing():
     """Refuse cells without row/col so future callers cannot silently mint
     colliding ids of the form ``a0c0s{seg_idx}``. Two such records would

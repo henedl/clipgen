@@ -1,3 +1,4 @@
+import io
 import json
 from collections import OrderedDict
 
@@ -72,6 +73,117 @@ def test_api_sheet_returns_empty_placeholder_when_no_sheet(client):
     assert data["sheet_loaded"] is False
     assert data["rows"] == []
     assert data["participants"] == []
+
+
+# ── Titlecard / endcard background picker endpoints ──────────────────────
+
+
+def test_api_titlecards_list_synthetic_items(client, tmp_path, monkeypatch):
+    monkeypatch.setattr(server.config, "OUTPUT_DIR", str(tmp_path))
+    data = client.get("/studio/api/titlecards").get_json()
+    assert data["ok"] is True
+    title_kinds = [it["kind"] for it in data["title"]["items"]]
+    assert "default" in title_kinds
+    assert "color" in title_kinds
+    assert "none" not in title_kinds  # titlecards always render text
+    end_kinds = [it["kind"] for it in data["end"]["items"]]
+    assert "default" in end_kinds
+    assert "none" in end_kinds
+    assert "color" in end_kinds
+
+
+def test_api_titlecard_upload_rejects_bad_extension(client, tmp_path, monkeypatch):
+    monkeypatch.setattr(server.config, "OUTPUT_DIR", str(tmp_path))
+    resp = client.post(
+        "/studio/api/titlecards/upload",
+        data={"file": (io.BytesIO(b"hello"), "notes.txt")},
+        content_type="multipart/form-data",
+    )
+    assert resp.status_code == 400
+    assert resp.get_json()["ok"] is False
+
+
+def test_api_titlecard_upload_list_and_serve(client, tmp_path, monkeypatch):
+    monkeypatch.setattr(server.config, "OUTPUT_DIR", str(tmp_path))
+    resp = client.post(
+        "/studio/api/titlecards/upload",
+        data={"file": (io.BytesIO(b"\x89PNG fake"), "card.png")},
+        content_type="multipart/form-data",
+    )
+    assert resp.status_code == 200
+    item = resp.get_json()["item"]
+    assert item["kind"] == "upload"
+    name = item["id"]
+    assert name == "card.png"
+
+    listing = client.get("/studio/api/titlecards").get_json()
+    upload_ids = [
+        it["id"] for it in listing["title"]["items"] if it["kind"] == "upload"
+    ]
+    assert name in upload_ids
+
+    served = client.get("/studio/api/titlecards/image/" + name)
+    assert served.status_code == 200
+    assert served.data == b"\x89PNG fake"
+
+
+def test_api_titlecard_delete_resets_selection(client, tmp_path, monkeypatch):
+    monkeypatch.setattr(server.config, "OUTPUT_DIR", str(tmp_path))
+    images = tmp_path / server.config.TITLECARD_IMAGES_DIRNAME
+    images.mkdir()
+    (images / "card.png").write_bytes(b"data")
+    monkeypatch.setattr(server.config, "TITLECARD_IMAGE", "card.png")
+
+    body = client.delete("/studio/api/titlecards/image/card.png").get_json()
+    assert body["ok"] is True
+    assert body["reset"].get("TITLECARD_IMAGE") == ""
+    assert not (images / "card.png").exists()
+    assert server.config.TITLECARD_IMAGE == ""
+
+
+def test_process_intake_item_releases_reservation_on_cut_exception(
+    tmp_path, monkeypatch
+):
+    """An exception from cut_global_range must not leave a 0-byte intake placeholder."""
+    monkeypatch.setattr(server.config, "OUTPUT_DIR", str(tmp_path))
+    monkeypatch.setattr(
+        server, "_resolve_intake_video_paths", lambda *a, **k: ["v.mp4"]
+    )
+    monkeypatch.setattr(server.video, "timeline_or_none", lambda *a, **k: None)
+
+    def boom(*_a, **_k):
+        raise RuntimeError("ffmpeg blew up")
+
+    monkeypatch.setattr(server.pipeline, "cut_global_range", boom)
+
+    item = {"participant": "P01", "start": 0.0, "end": 5.0}
+    with pytest.raises(RuntimeError):
+        server._process_intake_item(item, "clip", "study")
+    assert list(tmp_path.glob("*.mp4")) == []
+
+
+def test_settings_records_include_card_pickers(client):
+    data = client.get("/studio/api/settings").get_json()
+    by_name = {s["name"]: s for s in data["settings"]}
+    assert by_name["TITLECARD_IMAGE"]["type"] == "card_picker"
+    assert by_name["TITLECARD_IMAGE"]["kind"] == "title"
+    assert by_name["ENDCARD_IMAGE"]["kind"] == "end"
+    # Solid-color fills are hidden settings (edited via the picker's swatch).
+    assert by_name["TITLECARD_COLOR"]["type"] == "hidden"
+    assert by_name["ENDCARD_COLOR"]["type"] == "hidden"
+
+
+def test_settings_put_persists_card_color(client, tmp_path, monkeypatch):
+    monkeypatch.setattr(server.config, "OUTPUT_DIR", str(tmp_path))
+    # Baseline via monkeypatch so the PUT's direct setattr is restored on teardown.
+    monkeypatch.setattr(server.config, "TITLECARD_COLOR", "#000000")
+    resp = client.put(
+        "/studio/api/settings",
+        json={"settings": {"TITLECARD_COLOR": "#ff8800"}},
+    )
+    assert resp.status_code == 200
+    assert resp.get_json()["ok"] is True
+    assert server.config.TITLECARD_COLOR == "#ff8800"
 
 
 def test_api_sheet_baseline_returns_empty_when_no_sheet(client):

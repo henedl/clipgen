@@ -36,6 +36,11 @@
   var _modelsCache = null;
   var _modelsCachePromise = null;
   var _closeTimer = null;
+  // Titlecard/endcard picker state (shared by the title + end pickers).
+  var _cardsCache = null;
+  var _cardsCachePromise = null;
+  var _cardPickers = [];
+  var _SAMPLE_TITLE_TEXT = "Sample description";
 
   function _getApiRoot() {
     // Each page is served under a different prefix (/studio/, /transcripts/,
@@ -183,6 +188,9 @@
 
   function _close() {
     if (!_root || _root.classList.contains("hidden")) return;
+    // Dismiss the inline color popover; it lives on document.body at --z-toast
+    // and would otherwise outlive the modal.
+    if (window.ClipgenColorPicker) window.ClipgenColorPicker.close();
     var panel = _root.querySelector(".settings-panel");
     if (panel) panel.classList.remove("is-in");
     _root.style.setProperty("--host-blur", "0px");
@@ -196,6 +204,11 @@
 
   function _load() {
     _panelsEl.textContent = "Loading settings\u2026";
+    // Dismiss any stale color popover and refetch the card list each time the
+    // modal opens so externally added or removed uploads show up.
+    if (window.ClipgenColorPicker) window.ClipgenColorPicker.close();
+    _cardsCache = null;
+    _cardsCachePromise = null;
     fetch(_getApiRoot() + "/settings")
       .then(function (r) { return r.json(); })
       .then(function (data) {
@@ -425,6 +438,11 @@
     } else if (s.type === "mark_categories") {
       row.classList.add("settings-row-stacked");
       _renderMarkCategoriesEditor(controlDiv, settingName);
+    } else if (s.type === "card_picker") {
+      row.classList.add("settings-row-stacked");
+      var kind = s.kind === "end" ? "end" : "title";
+      _cardPickers.push({ container: controlDiv, settingName: settingName, kind: kind });
+      _renderCardPicker(controlDiv, settingName, kind);
     } else {
       var input = document.createElement("input");
       input.type = "number";
@@ -561,9 +579,251 @@
     container.appendChild(editor);
   }
 
+  // ── Titlecard / endcard background picker ──────────────────────────────
+
+  function _fetchCards(force) {
+    if (force) {
+      _cardsCache = null;
+      _cardsCachePromise = null;
+    }
+    if (_cardsCache) return Promise.resolve(_cardsCache);
+    if (_cardsCachePromise) return _cardsCachePromise;
+    _cardsCachePromise = fetch(_getApiRoot() + "/titlecards")
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        _cardsCachePromise = null;
+        if (data && data.ok) _cardsCache = data;
+        return data;
+      })
+      .catch(function () {
+        _cardsCachePromise = null;
+        return null;
+      });
+    return _cardsCachePromise;
+  }
+
+  function _refreshAllCardPickers() {
+    _fetchCards(true).then(function () {
+      for (var i = 0; i < _cardPickers.length; i++) {
+        var p = _cardPickers[i];
+        if (document.body.contains(p.container)) {
+          _renderCardPicker(p.container, p.settingName, p.kind);
+        }
+      }
+    });
+  }
+
+  function _cardColorSettingName(kind) {
+    return kind === "end" ? "ENDCARD_COLOR" : "TITLECARD_COLOR";
+  }
+
+  function _cardCurrentColor(kind) {
+    var s = _findSetting(_cardColorSettingName(kind));
+    return s && s.value ? s.value : "#000000";
+  }
+
+  function _cardTile(item, settingName, kind, selectedId) {
+    var tile = el("div", "card-tile");
+    tile.setAttribute("data-card-id", item.id);
+    if (item.id === selectedId) tile.classList.add("is-selected");
+
+    var preview = el("div", "card-tile-preview card-tile-preview--" + item.kind);
+    if (item.url) {
+      var img = document.createElement("img");
+      img.src = item.url;
+      img.alt = item.label;
+      img.loading = "lazy";
+      preview.appendChild(img);
+    } else if (item.kind === "none") {
+      preview.appendChild(el("span", "card-tile-placeholder", "No endcard"));
+    } else if (item.kind === "color") {
+      preview.style.background = _cardCurrentColor(kind);
+    }
+    // Approximate the ffmpeg drawtext overlay on titlecards: centered sample
+    // text over the chosen background. Endcards carry no text.
+    if (kind === "title" && item.kind !== "none") {
+      preview.appendChild(el("span", "card-tile-text-overlay", _SAMPLE_TITLE_TEXT));
+    }
+    tile.appendChild(preview);
+
+    function selectTile() {
+      var s = _findSetting(settingName);
+      if (!s) return;
+      s.value = item.id;
+      _updateChanged(settingName);
+      var siblings = tile.parentNode.querySelectorAll(".card-tile");
+      for (var t = 0; t < siblings.length; t++) {
+        siblings[t].classList.remove("is-selected");
+      }
+      tile.classList.add("is-selected");
+      _scheduleSave();
+    }
+    tile.addEventListener("click", selectTile);
+
+    if (item.kind === "color") {
+      // Label row carries an inline swatch that opens the color picker.
+      var labelRow = el("div", "card-tile-label-row");
+      labelRow.appendChild(el("span", "card-tile-label", item.label));
+      var box = el("button", "card-tile-color-box");
+      box.type = "button";
+      box.title = "Pick color";
+      box.setAttribute("aria-label", "Pick solid color");
+      box.style.background = _cardCurrentColor(kind);
+      box.addEventListener("click", function (ev) {
+        ev.stopPropagation();
+        selectTile();
+        _openCardColorPicker(box, preview, kind);
+      });
+      labelRow.appendChild(box);
+      tile.appendChild(labelRow);
+    } else {
+      tile.appendChild(el("span", "card-tile-label", item.label));
+    }
+
+    if (item.deletable) {
+      var del = el("button", "card-tile-delete", "×");
+      del.type = "button";
+      del.title = "Delete";
+      del.setAttribute("aria-label", "Delete " + item.label);
+      del.addEventListener("click", function (ev) {
+        ev.stopPropagation();
+        _deleteCard(item.id);
+      });
+      tile.appendChild(del);
+    }
+    return tile;
+  }
+
+  function _openCardColorPicker(box, preview, kind) {
+    if (!window.ClipgenColorPicker) return;
+    var colorSettingName = _cardColorSettingName(kind);
+    window.ClipgenColorPicker.open({
+      anchor: box,
+      value: _cardCurrentColor(kind),
+      onInput: function (hex) {
+        box.style.background = hex;
+        preview.style.background = hex;
+        var s = _findSetting(colorSettingName);
+        if (s) s.value = hex;
+      },
+      onChange: function (hex) {
+        var s = _findSetting(colorSettingName);
+        if (s) {
+          s.value = hex;
+          _updateChanged(colorSettingName);
+        }
+        _scheduleSave();
+      },
+    });
+  }
+
+  function _cardUploadTile(settingName) {
+    var tile = el("div", "card-tile card-tile--upload");
+    tile.appendChild(el("span", "card-tile-upload-icon", "+"));
+    tile.appendChild(el("span", "card-tile-label", "Upload"));
+
+    var input = document.createElement("input");
+    input.type = "file";
+    input.accept = "image/png,image/jpeg,image/webp";
+    input.style.display = "none";
+    input.addEventListener("change", function () {
+      var file = input.files && input.files[0];
+      if (file) _uploadCard(file, settingName);
+      input.value = "";
+    });
+    tile.appendChild(input);
+    tile.addEventListener("click", function () { input.click(); });
+    return tile;
+  }
+
+  function _renderCardPicker(container, settingName, kind) {
+    container.innerHTML = "";
+    var grid = el("div", "settings-card-picker");
+    grid.appendChild(el("div", "card-tile card-tile--loading", "Loading…"));
+    container.appendChild(grid);
+
+    _fetchCards(false).then(function (data) {
+      grid.innerHTML = "";
+      if (!data || !data.ok || !data[kind]) {
+        grid.appendChild(el("div", "card-tile card-tile--loading", "Failed to load"));
+        return;
+      }
+      var setting = _findSetting(settingName);
+      var selectedId = setting ? setting.value : data[kind].selected;
+      var items = data[kind].items || [];
+      var frag = document.createDocumentFragment();
+      for (var i = 0; i < items.length; i++) {
+        frag.appendChild(_cardTile(items[i], settingName, kind, selectedId));
+      }
+      frag.appendChild(_cardUploadTile(settingName));
+      grid.appendChild(frag);
+    });
+  }
+
+  function _uploadCard(file, settingName) {
+    if (_statusEl) _statusEl.textContent = "Uploading…";
+    var form = new FormData();
+    form.append("file", file);
+    fetch(_getApiRoot() + "/titlecards/upload", { method: "POST", body: form })
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        if (!data || !data.ok) {
+          if (_statusEl) {
+            _statusEl.textContent = data && data.error ? data.error : "Upload failed";
+          }
+          return;
+        }
+        if (_statusEl) _statusEl.textContent = "Uploaded";
+        // Auto-select the new image for the picker that triggered the upload.
+        var s = _findSetting(settingName);
+        if (s && data.item) {
+          s.value = data.item.id;
+          _updateChanged(settingName);
+          _scheduleSave();
+        }
+        _refreshAllCardPickers();
+      })
+      .catch(function () {
+        if (_statusEl) _statusEl.textContent = "Upload failed";
+      });
+  }
+
+  function _deleteCard(name) {
+    if (_statusEl) _statusEl.textContent = "Deleting…";
+    fetch(_getApiRoot() + "/titlecards/image/" + encodeURIComponent(name), {
+      method: "DELETE",
+    })
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        if (!data || !data.ok) {
+          if (_statusEl) {
+            _statusEl.textContent = data && data.error ? data.error : "Delete failed";
+          }
+          return;
+        }
+        if (_statusEl) _statusEl.textContent = "Deleted";
+        // The server resets any selection that pointed at the deleted file;
+        // mirror that into the in-memory settings so the UI stays in sync.
+        if (data.reset) {
+          for (var key in data.reset) {
+            var s = _findSetting(key);
+            if (s) {
+              s.value = data.reset[key];
+              _updateChanged(key);
+            }
+          }
+        }
+        _refreshAllCardPickers();
+      })
+      .catch(function () {
+        if (_statusEl) _statusEl.textContent = "Delete failed";
+      });
+  }
+
   function _render() {
     _tabsEl.innerHTML = "";
     _panelsEl.innerHTML = "";
+    _cardPickers = [];
 
     // Partition settings by tab, preserving insertion order from the API.
     var byTab = {};
@@ -611,6 +871,9 @@
       var groupOrder = [];
       for (var gi = 0; gi < items.length; gi++) {
         var it = items[gi];
+        // Hidden settings are persisted + sent to the client but have no row of
+        // their own (e.g. the card colors edited via the card picker's swatch).
+        if (it.type === "hidden") continue;
         var g = it.group || "";
         if (!groups[g]) {
           groups[g] = [];

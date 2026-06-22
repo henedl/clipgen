@@ -1,7 +1,9 @@
 import subprocess
 
 
+import config
 import titlecards
+import utils
 import video
 
 
@@ -269,6 +271,269 @@ def test_wrap_clip_with_cards_no_cards_is_noop(monkeypatch, make_clip):
     ok = titlecards.wrap_clip_with_cards(clip, "clip.mp4")
     assert ok is True
     assert ffmpeg_calls == []
+
+
+def test_resolve_card_background_title_default(monkeypatch):
+    monkeypatch.setattr(config, "TITLECARD_IMAGE", "")
+    path, allow_color, skip, fill_color = titlecards.resolve_card_background("title")
+    assert path == utils.get_bundled_assets_root() / "assets" / "titlecard.png"
+    assert allow_color is True
+    assert skip is False
+    assert fill_color == "black"  # missing-image fallback stays black
+
+
+def test_resolve_card_background_title_color(monkeypatch):
+    monkeypatch.setattr(config, "TITLECARD_IMAGE", config.CARD_IMAGE_COLOR)
+    monkeypatch.setattr(config, "TITLECARD_COLOR", "#ff8800")
+    path, allow_color, skip, fill_color = titlecards.resolve_card_background("title")
+    assert path is None
+    assert allow_color is True
+    assert skip is False
+    assert fill_color == "#ff8800"
+
+
+def test_resolve_card_background_end_default_no_color(monkeypatch):
+    monkeypatch.setattr(config, "ENDCARD_IMAGE", "")
+    path, allow_color, skip, _fill = titlecards.resolve_card_background("end")
+    assert path == utils.get_bundled_assets_root() / "assets" / "endcard.png"
+    # Endcards keep historical behavior: render only when an image is present.
+    assert allow_color is False
+    assert skip is False
+
+
+def test_resolve_card_background_end_none_skips(monkeypatch):
+    monkeypatch.setattr(config, "ENDCARD_IMAGE", config.CARD_IMAGE_NONE)
+    path, _allow_color, skip, _fill = titlecards.resolve_card_background("end")
+    assert path is None
+    assert skip is True
+
+
+def test_resolve_card_background_end_color(monkeypatch):
+    monkeypatch.setattr(config, "ENDCARD_IMAGE", config.CARD_IMAGE_COLOR)
+    monkeypatch.setattr(config, "ENDCARD_COLOR", "#123456")
+    path, allow_color, skip, fill_color = titlecards.resolve_card_background("end")
+    assert path is None
+    assert allow_color is True
+    assert skip is False
+    assert fill_color == "#123456"
+
+
+def test_resolve_card_background_upload_existing(monkeypatch, tmp_path):
+    monkeypatch.setattr(config, "OUTPUT_DIR", str(tmp_path))
+    images = tmp_path / config.TITLECARD_IMAGES_DIRNAME
+    images.mkdir()
+    (images / "mycard.png").write_bytes(b"x")
+    monkeypatch.setattr(config, "TITLECARD_IMAGE", "mycard.png")
+    path, allow_color, skip, _fill = titlecards.resolve_card_background("title")
+    assert path == images / "mycard.png"
+    assert allow_color is True
+    assert skip is False
+
+
+def test_resolve_card_background_upload_missing_falls_back(monkeypatch, tmp_path):
+    monkeypatch.setattr(config, "OUTPUT_DIR", str(tmp_path))
+    monkeypatch.setattr(config, "TITLECARD_IMAGE", "ghost.png")
+    path, _allow_color, skip, _fill = titlecards.resolve_card_background("title")
+    assert path == utils.get_bundled_assets_root() / "assets" / "titlecard.png"
+    assert skip is False
+
+
+def test_build_titlecard_frame_uses_configured_solid_color(monkeypatch, make_clip):
+    """An explicit solid-color titlecard fills with the configured color."""
+    clip = make_clip(desc="Colored")
+    monkeypatch.setattr(config, "TITLECARD_IMAGE", config.CARD_IMAGE_COLOR)
+    monkeypatch.setattr(config, "TITLECARD_COLOR", "#ff8800")
+
+    commands = []
+    monkeypatch.setattr(
+        video,
+        "run_ffmpeg_process",
+        lambda cmd, **_k: (
+            commands.append(cmd)
+            or subprocess.CompletedProcess(args=cmd, returncode=0, stderr="")
+        ),
+    )
+    monkeypatch.setattr(video, "verify_output_file", lambda *_a, **_k: True)
+
+    path = titlecards.build_titlecard_frame(clip, "1280x720")
+    assert path is not None
+    joined = " ".join(commands[0])
+    # #rrggbb is converted to ffmpeg's 0xRRGGBB.
+    assert "color=c=0xff8800:s=1280x720" in joined
+    assert "drawtext=text='Colored'" in joined
+
+
+def test_resolve_titlecard_images_bakes_color_into_identity(monkeypatch):
+    import pipeline
+
+    monkeypatch.setattr(
+        pipeline.config, "TITLECARD_IMAGE", pipeline.config.CARD_IMAGE_COLOR
+    )
+    monkeypatch.setattr(pipeline.config, "TITLECARD_COLOR", "#ff0000")
+    monkeypatch.setattr(pipeline.config, "ENDCARD_IMAGE", "")
+    title, end = pipeline._resolve_titlecard_images(True)
+    assert title == pipeline.config.CARD_IMAGE_COLOR + "#ff0000"
+    assert end == ""
+
+
+def test_get_or_build_endcard_cache_keyed_by_selection(monkeypatch):
+    titlecards.clear_endcard_cache()
+    builds = []
+
+    def fake_build(_resolution, *, cancel_flag=None, card_duration_seconds=None):
+        path = f"endcard_{config.ENDCARD_IMAGE or 'default'}.mp4"
+        builds.append(path)
+        return path
+
+    monkeypatch.setattr(titlecards, "build_endcard_frame", fake_build)
+    monkeypatch.setattr(titlecards.Path, "is_file", lambda self: True)
+
+    monkeypatch.setattr(config, "ENDCARD_IMAGE", "")
+    first = titlecards.get_or_build_endcard("1280x720")
+    again = titlecards.get_or_build_endcard("1280x720")  # cached, no rebuild
+    monkeypatch.setattr(config, "ENDCARD_IMAGE", "custom.png")
+    second = titlecards.get_or_build_endcard("1280x720")  # new key, rebuild
+
+    assert first == "endcard_default.mp4"
+    assert again == first
+    assert second == "endcard_custom.png.mp4"
+    assert builds == ["endcard_default.mp4", "endcard_custom.png.mp4"]
+    titlecards.clear_endcard_cache()
+
+
+def test_resolve_titlecard_images(monkeypatch, tmp_path):
+    import pipeline
+
+    # Uploads must exist on disk to be recorded by their filename.
+    monkeypatch.setattr(pipeline.config, "OUTPUT_DIR", str(tmp_path))
+    images = tmp_path / pipeline.config.TITLECARD_IMAGES_DIRNAME
+    images.mkdir()
+    (images / "a.png").write_bytes(b"x")
+    (images / "b.png").write_bytes(b"x")
+    monkeypatch.setattr(pipeline.config, "TITLECARD_IMAGE", "a.png")
+    monkeypatch.setattr(pipeline.config, "ENDCARD_IMAGE", "b.png")
+    assert pipeline._resolve_titlecard_images(True) == ("a.png", "b.png")
+    assert pipeline._resolve_titlecard_images(False) == ("", "")
+
+
+def test_resolve_titlecard_images_missing_upload_collapses_to_default(
+    monkeypatch, tmp_path
+):
+    """A selected upload missing on disk records the default identity (""), so a
+    clip rendered with the silent fallback regenerates once the file appears —
+    rather than cache-matching on a filename it was never rendered with."""
+    import pipeline
+
+    monkeypatch.setattr(pipeline.config, "OUTPUT_DIR", str(tmp_path))
+    monkeypatch.setattr(pipeline.config, "TITLECARD_IMAGE", "ghost.png")
+    monkeypatch.setattr(pipeline.config, "ENDCARD_IMAGE", "")
+    title, _end = pipeline._resolve_titlecard_images(True)
+    assert title == ""  # not "ghost.png"
+
+    # Once the file appears, the identity changes -> cache miss -> regenerate.
+    images = tmp_path / pipeline.config.TITLECARD_IMAGES_DIRNAME
+    images.mkdir()
+    (images / "ghost.png").write_bytes(b"x")
+    title2, _ = pipeline._resolve_titlecard_images(True)
+    assert title2 == "ghost.png"
+
+
+def test_get_or_build_endcard_cache_keyed_by_color(monkeypatch):
+    titlecards.clear_endcard_cache()
+    builds = []
+
+    def fake_build(_resolution, *, cancel_flag=None, card_duration_seconds=None):
+        path = f"endcard_{config.ENDCARD_COLOR}.mp4"
+        builds.append(path)
+        return path
+
+    monkeypatch.setattr(titlecards, "build_endcard_frame", fake_build)
+    monkeypatch.setattr(titlecards.Path, "is_file", lambda self: True)
+    monkeypatch.setattr(config, "ENDCARD_IMAGE", config.CARD_IMAGE_COLOR)
+
+    monkeypatch.setattr(config, "ENDCARD_COLOR", "#111111")
+    first = titlecards.get_or_build_endcard("1280x720")
+    monkeypatch.setattr(config, "ENDCARD_COLOR", "#222222")
+    second = titlecards.get_or_build_endcard("1280x720")
+
+    assert first == "endcard_#111111.mp4"
+    assert second == "endcard_#222222.mp4"
+    assert len(builds) == 2
+    titlecards.clear_endcard_cache()
+
+
+def test_card_encode_uses_fast_preset(monkeypatch, make_clip):
+    """Card generation encodes with the configured fast preset + CRF."""
+    clip = make_clip(desc="Fast")
+    monkeypatch.setattr(config, "TITLECARD_IMAGE", "")
+    monkeypatch.setattr(config, "TITLECARD_ENCODE_PRESET", "veryfast")
+    monkeypatch.setattr(config, "TITLECARD_ENCODE_CRF", 20)
+    monkeypatch.setattr(titlecards.Path, "is_file", lambda self: True)
+
+    commands = []
+    monkeypatch.setattr(
+        video,
+        "run_ffmpeg_process",
+        lambda cmd, **_k: (
+            commands.append(cmd)
+            or subprocess.CompletedProcess(args=cmd, returncode=0, stderr="")
+        ),
+    )
+    monkeypatch.setattr(video, "verify_output_file", lambda *_a, **_k: True)
+
+    path = titlecards.build_titlecard_frame(clip, "1280x720")
+    assert path is not None
+    joined = " ".join(commands[0])
+    assert "-preset veryfast" in joined
+    assert "-crf 20" in joined
+
+
+def test_wrap_reencode_uses_fast_preset(monkeypatch, make_clip):
+    """The clip-body wrap re-encode honors the fast preset + CRF."""
+    clip = make_clip()
+    monkeypatch.setattr(titlecards.config, "TITLECARDS_ENABLED", True)
+    monkeypatch.setattr(titlecards.config, "TITLECARD_ENCODE_PRESET", "veryfast")
+    monkeypatch.setattr(titlecards.config, "TITLECARD_ENCODE_CRF", 20)
+    monkeypatch.setattr(titlecards.Path, "is_file", lambda self: True)
+    monkeypatch.setattr(
+        video,
+        "probe_video_properties",
+        lambda _p: {
+            "width": 1280,
+            "height": 720,
+            "video_codec": "h264",
+            "audio_codec": "aac",
+            "fps": 30.0,
+            "duration": 12.0,
+            "nb_frames": 360,
+        },
+    )
+    monkeypatch.setattr(
+        titlecards, "build_titlecard_frame", lambda *_a, **_k: "titlecard.mp4"
+    )
+    monkeypatch.setattr(
+        titlecards, "get_or_build_endcard", lambda *_a, **_k: "endcard.mp4"
+    )
+    monkeypatch.setattr(video, "verify_output_file", lambda *_a, **_k: True)
+
+    commands = []
+    monkeypatch.setattr(
+        video,
+        "run_ffmpeg_process",
+        lambda cmd, **_k: (
+            commands.append(cmd)
+            or subprocess.CompletedProcess(args=cmd, returncode=0, stderr="")
+        ),
+    )
+    monkeypatch.setattr(titlecards.os, "replace", lambda src, dst: None)
+
+    ok = titlecards.wrap_clip_with_cards(clip, "clip.mp4")
+    assert ok is True
+    joined = " ".join(commands[0])
+    assert "-preset veryfast" in joined
+    assert "-crf 20" in joined
+    # Still a single encode that preserves audio.
+    assert "-c:a aac" in joined
 
 
 def test_pipeline_skips_per_output_probe(monkeypatch, make_clip):
