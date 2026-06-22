@@ -2,6 +2,7 @@
 
 import numpy as np
 
+import config
 import screenspace
 import screenspace_scans
 from _ss_helpers import _make_icon, _make_icon_frame
@@ -180,3 +181,52 @@ class TestGenerateTemplateHeatmap:
         results = [{"timestamp": 1.0, "matches": []}]
         out = str(tmp_path / "heatmap.png")
         assert screenspace.generate_template_heatmap(results, 200, 200, out) is None
+
+
+class TestGenerateRollingHeatmapGif:
+    def _matches(self, n):
+        return [
+            {
+                "timestamp": float(i),
+                "matches": [{"x": 10 + i, "y": 10, "w": 30, "h": 30, "score": 0.9}],
+            }
+            for i in range(n)
+        ]
+
+    def test_basic_rolling_gif(self, tmp_path):
+        out = str(tmp_path / "rolling.gif")
+        path = screenspace.generate_rolling_heatmap_gif(self._matches(8), 200, 200, out)
+        assert path == out
+        assert (tmp_path / "rolling.gif").is_file()
+        assert (tmp_path / "rolling.gif").stat().st_size > 0
+
+    def test_empty_returns_none(self, tmp_path):
+        out = str(tmp_path / "rolling.gif")
+        assert screenspace.generate_rolling_heatmap_gif([], 200, 200, out) is None
+
+    def test_single_result_returns_none(self, tmp_path):
+        out = str(tmp_path / "rolling.gif")
+        assert (
+            screenspace.generate_rolling_heatmap_gif(self._matches(1), 200, 200, out)
+            is None
+        )
+
+    def test_change_type_rolling_gif(self, tmp_path):
+        results = [
+            {"timestamp": float(i), "change_grid": [{"x": 0.5, "y": 0.5, "mag": 0.7}]}
+            for i in range(8)
+        ]
+        out = str(tmp_path / "rolling_change.gif")
+        path = screenspace.generate_rolling_heatmap_gif(
+            results, 200, 150, out, heatmap_type="change"
+        )
+        assert path == out
+        assert (tmp_path / "rolling_change.gif").stat().st_size > 0
+
+
+class TestHeatmapConfigConstants:
+    def test_rolling_window_and_change_grid_present(self):
+        assert isinstance(config.SCREENSPACE_HEATMAP_ROLLING_WINDOW, int)
+        assert config.SCREENSPACE_HEATMAP_ROLLING_WINDOW >= 1
+        assert isinstance(config.SCREENSPACE_CHANGE_HEATMAP_GRID, int)
+        assert config.SCREENSPACE_CHANGE_HEATMAP_GRID >= 2

@@ -360,6 +360,12 @@ class ChangeTool(AnalysisTool):
 
 
 class SimilarityTool(AnalysisTool):
+    # A spatial Similarity heatmap is feasible but deferred: this tool computes
+    # only a scalar SSIM via ``regions_are_similar``. A heatmap would need the
+    # per-pixel map from ``structural_similarity(..., full=True)``, which adds
+    # per-frame CPU/memory; if added later, gate it behind the phash pre-filter
+    # so the full map is only computed on candidate frames. (See Change/Template
+    # heatmaps in screenspace_heatmap.py for the accumulation pattern.)
     name = "similarity"
     fast_scan_region_dim = 128
     score_key = "score"

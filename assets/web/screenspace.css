@@ -3659,14 +3659,8 @@ body.panel-dragging #bottomPanel {
 /* Heatmap result */
 
 .heatmap-result {
-  padding: var(--space-2);
+  padding: var(--space-3);
   border-bottom: 1px solid var(--color-border);
-}
-
-.heatmap-result img {
-  max-width: 100%;
-  border-radius: var(--radius);
-  margin-top: var(--space-1);
 }
 
 .heatmap-label {
@@ -3675,6 +3669,116 @@ body.panel-dragging #bottomPanel {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  margin-bottom: var(--space-3);
+}
+
+.heatmap-collapse-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 0;
+  border: none;
+  background: none;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+
+.heatmap-collapse-toggle:hover {
+  color: var(--color-text);
+}
+
+.heatmap-collapse-chevron {
+  width: var(--icon-size-xs);
+  height: var(--icon-size-xs);
+  background-color: currentColor;
+  mask-image: url(icons/chevron-down.svg);
+  -webkit-mask-image: url(icons/chevron-down.svg);
+  mask-size: contain;
+  mask-repeat: no-repeat;
+  mask-position: center;
+  -webkit-mask-size: contain;
+  -webkit-mask-repeat: no-repeat;
+  -webkit-mask-position: center;
+  transition: transform var(--duration-fast);
+}
+
+.heatmap-result.collapsed .heatmap-collapse-chevron {
+  transform: rotate(-90deg);
+}
+
+.heatmap-result.collapsed .heatmap-label {
+  margin-bottom: 0;
+}
+
+.heatmap-result.collapsed .heatmap-strip {
+  display: none;
+}
+
+.heatmap-strip {
+  display: flex;
+  gap: var(--space-3);
+}
+
+.heatmap-thumb {
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.heatmap-thumb-media {
+  position: relative;
+  line-height: 0;
+}
+
+.heatmap-thumb-media img,
+.heatmap-thumb-frozen {
+  width: 100%;
+  border-radius: var(--radius);
+  display: block;
+}
+
+.heatmap-thumb-animated {
+  cursor: pointer;
+}
+
+.heatmap-thumb-glyph {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: var(--icon-size-xl);
+  height: var(--icon-size-xl);
+  transform: translate(-50%, -50%);
+  background-color: var(--accent-fg);
+  filter: drop-shadow(var(--shadow-sm));
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--duration-fast);
+  mask-image: url(icons/pause.svg);
+  -webkit-mask-image: url(icons/pause.svg);
+  mask-size: contain;
+  mask-repeat: no-repeat;
+  mask-position: center;
+  -webkit-mask-size: contain;
+  -webkit-mask-repeat: no-repeat;
+  -webkit-mask-position: center;
+}
+
+.heatmap-thumb-animated:hover .heatmap-thumb-glyph {
+  opacity: 0.95;
+}
+
+.heatmap-thumb-media.paused .heatmap-thumb-glyph {
+  mask-image: url(icons/play.svg);
+  -webkit-mask-image: url(icons/play.svg);
+}
+
+.heatmap-thumb-label {
+  font-size: var(--text-xs);
+  color: var(--color-text-dim);
+  text-align: center;
 }
 
 /* Modal */
