@@ -4669,10 +4669,17 @@
     _trModelsCachePromise = fetch("/api/models")
       .then(function (r) { return r.json(); })
       .then(function (data) {
-        if (data && data.ok) _trModelsCache = data;
+        // Don't pin a result where Ollama wasn't reachable — otherwise the
+        // agent gate and pickers stay blind to installed models for the whole
+        // session. Reset so the next call re-fetches once the server is up.
+        if (data && data.ok && !(data.ollama && data.ollama.available === false)) {
+          _trModelsCache = data;
+        } else {
+          _trModelsCachePromise = null;
+        }
         return data;
       })
-      .catch(function () { return null; });
+      .catch(function () { _trModelsCachePromise = null; return null; });
     return _trModelsCachePromise;
   }
 

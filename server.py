@@ -2106,6 +2106,7 @@ def _settings_records() -> list[dict[str, Any]]:
                 "step": meta.get("step"),
                 "provider": meta.get("provider"),
                 "kind": meta.get("kind"),
+                "emptyLabel": meta.get("emptyLabel"),
             }
         )
     return records

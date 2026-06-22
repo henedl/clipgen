@@ -60,14 +60,21 @@
     _modelsCachePromise = fetch(_getApiRoot() + "/models")
       .then(function (r) { return r.json(); })
       .then(function (data) {
-        if (data && data.ok) _modelsCache = data;
+        // Only pin a result that actually discovered Ollama. If the server
+        // wasn't reachable yet, don't cache the empty list for the session —
+        // reset so a later open re-fetches and picks up installed models.
+        if (data && data.ok && !(data.ollama && data.ollama.available === false)) {
+          _modelsCache = data;
+        } else {
+          _modelsCachePromise = null;
+        }
         return data;
       })
-      .catch(function () { return null; });
+      .catch(function () { _modelsCachePromise = null; return null; });
     return _modelsCachePromise;
   }
 
-  function _loadModelsForSelect(sel, provider, currentValue) {
+  function _loadModelsForSelect(sel, provider, currentValue, emptyLabel) {
     _fetchModels().then(function (data) {
       if (!data || !data.ok) { sel.disabled = false; return; }
 
@@ -79,6 +86,15 @@
       }
 
       sel.innerHTML = "";
+      // Optional "inherit" choice (e.g. friction → same as summary model),
+      // represented by a blank value.
+      if (emptyLabel) {
+        var inheritOpt = document.createElement("option");
+        inheritOpt.value = "";
+        inheritOpt.textContent = emptyLabel;
+        if (!currentValue) inheritOpt.selected = true;
+        sel.appendChild(inheritOpt);
+      }
       var hasCurrentValue = false;
       for (var i = 0; i < models.length; i++) {
         var m = models[i];
@@ -399,7 +415,9 @@
       msel.className = "settings-model-dropdown";
       var curOpt = document.createElement("option");
       curOpt.value = s.value;
-      curOpt.textContent = s.value;
+      // Show the inherit label up front for a blank value (avoids an empty
+      // placeholder flashing before the model list loads).
+      curOpt.textContent = (!s.value && s.emptyLabel) ? s.emptyLabel : s.value;
       curOpt.selected = true;
       msel.appendChild(curOpt);
       msel.disabled = true;
@@ -410,7 +428,7 @@
         _scheduleSave();
       });
       controlDiv.appendChild(msel);
-      _loadModelsForSelect(msel, s.provider, s.value);
+      _loadModelsForSelect(msel, s.provider, s.value, s.emptyLabel);
     } else if (s.type === "str") {
       var txtInput = document.createElement("input");
       txtInput.type = "text";
