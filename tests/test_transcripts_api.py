@@ -163,6 +163,50 @@ def test_warmup_already_loaded_in_debugging(tr_client, monkeypatch):
     assert data.get("already_loaded") is True
 
 
+def test_warmup_confirms_before_downloading_uncached_model(tr_client, monkeypatch):
+    """Prewarm must never download silently — skip with model_not_cached."""
+    monkeypatch.setattr(config, "DEBUGGING", False)
+    monkeypatch.setattr(config, "TRANSCRIBE_PREWARM", "queue_open")
+    monkeypatch.setattr(config, "TRANSCRIBE_MODEL", "medium")
+    monkeypatch.setattr(transcripts, "is_transcription_model_loaded", lambda: False)
+    monkeypatch.setattr(transcripts, "is_whisper_model_cached", lambda n=None: False)
+
+    resp = tr_client.post("/transcripts/api/transcribe/warmup", json={})
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["ok"] is True
+    assert data["skipped"] is True
+    assert data["reason"] == "model_not_cached"
+    assert data["model"] == "medium"
+    assert data["size_mb"] == 1500
+
+
+def test_warmup_force_downloads_uncached_model(tr_client, monkeypatch):
+    """With force=true, prewarm proceeds even when the model isn't cached."""
+    monkeypatch.setattr(config, "DEBUGGING", False)
+    monkeypatch.setattr(config, "TRANSCRIBE_PREWARM", "queue_open")
+    monkeypatch.setattr(transcripts, "is_transcription_model_loaded", lambda: False)
+    monkeypatch.setattr(transcripts, "is_whisper_model_cached", lambda n=None: False)
+    monkeypatch.setattr(transcripts, "warmup_transcription_model", lambda: True)
+
+    resp = tr_client.post("/transcripts/api/transcribe/warmup", json={"force": True})
+    assert resp.status_code == 200
+    assert resp.get_json().get("started") is True
+
+
+def test_warmup_proceeds_when_model_cached(tr_client, monkeypatch):
+    """A cached model warms without any download confirmation."""
+    monkeypatch.setattr(config, "DEBUGGING", False)
+    monkeypatch.setattr(config, "TRANSCRIBE_PREWARM", "queue_open")
+    monkeypatch.setattr(transcripts, "is_transcription_model_loaded", lambda: False)
+    monkeypatch.setattr(transcripts, "is_whisper_model_cached", lambda n=None: True)
+    monkeypatch.setattr(transcripts, "warmup_transcription_model", lambda: True)
+
+    resp = tr_client.post("/transcripts/api/transcribe/warmup", json={})
+    assert resp.status_code == 200
+    assert resp.get_json().get("started") is True
+
+
 def test_transcribe_applies_per_participant_overrides(tr_client, monkeypatch):
     """POST /api/transcribe threads {model, language} overrides onto the task."""
 
@@ -971,3 +1015,117 @@ def test_on_task_complete_registers_summary_before_disk_write(
     finally:
         release.set()
         _join_orchestrator_threads(transcripts_server._orchestrator)
+
+
+# ---------------------------------------------------------------------------
+# Local-model install gating: Ollama pull endpoints + /api/models surface
+# ---------------------------------------------------------------------------
+
+
+def test_ollama_pull_requires_model(tr_client):
+    resp = tr_client.post("/transcripts/api/models/ollama/pull", json={})
+    assert resp.status_code == 400
+    assert resp.get_json()["ok"] is False
+
+
+def test_ollama_pull_status_unknown_model(tr_client):
+    resp = tr_client.get("/transcripts/api/models/ollama/pull-status?model=ghost:1b")
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["ok"] is True
+    assert data["found"] is False
+
+
+def test_ollama_pull_starts_and_reports_success(tr_client, monkeypatch):
+    import time
+
+    import ollama_client
+
+    def _fake_pull(model, on_progress=None):
+        if on_progress:
+            on_progress({"status": "downloading", "total": 10, "completed": 5})
+        return True
+
+    monkeypatch.setattr(ollama_client, "pull_model", _fake_pull)
+    transcripts_server._ollama_pull_status.clear()
+
+    resp = tr_client.post(
+        "/transcripts/api/models/ollama/pull", json={"model": "tiny:1b"}
+    )
+    assert resp.status_code == 200
+    assert resp.get_json()["started"] is True
+
+    # The pull runs in a daemon thread; poll until it reports done.
+    status = {}
+    for _ in range(100):
+        status = tr_client.get(
+            "/transcripts/api/models/ollama/pull-status?model=tiny:1b"
+        ).get_json()
+        if status.get("found") and status.get("done"):
+            break
+        time.sleep(0.02)
+    assert status["found"] is True
+    assert status["done"] is True
+    assert status["succeeded"] is True
+
+
+def test_ollama_pull_reports_failure(tr_client, monkeypatch):
+    import time
+
+    import ollama_client
+
+    monkeypatch.setattr(
+        ollama_client, "pull_model", lambda model, on_progress=None: False
+    )
+    transcripts_server._ollama_pull_status.clear()
+
+    tr_client.post("/transcripts/api/models/ollama/pull", json={"model": "bad:1b"})
+    status = {}
+    for _ in range(100):
+        status = tr_client.get(
+            "/transcripts/api/models/ollama/pull-status?model=bad:1b"
+        ).get_json()
+        if status.get("found") and status.get("done"):
+            break
+        time.sleep(0.02)
+    assert status["done"] is True
+    assert status["succeeded"] is False
+    assert status["error"]
+
+
+def test_api_models_includes_cached_and_agents(monkeypatch):
+    import ollama_client
+    import server as server_mod
+
+    monkeypatch.setattr(
+        transcripts, "is_whisper_model_cached", lambda n=None: n == "base"
+    )
+    monkeypatch.setattr(
+        ollama_client,
+        "list_models",
+        lambda: [
+            {
+                "name": "qwen3.5:9b",
+                "size_bytes": 0,
+                "parameter_size": "",
+                "family": "",
+            }
+        ],
+    )
+
+    app = server_mod.build_combined_app()
+    with app.test_client() as c:
+        data = c.get("/api/models").get_json()
+
+    assert data["ok"] is True
+    whisper = data["whisper"]["models"]
+    assert all("cached" in m for m in whisper)
+    base = next(m for m in whisper if m["name"] == "base")
+    assert base["cached"] is True
+    tiny = next(m for m in whisper if m["name"] == "tiny")
+    assert tiny["cached"] is False
+
+    agents = data["ollama"]["agents"]
+    assert {a["key"] for a in agents} == {"summary", "citations", "friction"}
+    # The configured summary/friction model is present in the faked install list.
+    assert all(a["installed"] for a in agents)

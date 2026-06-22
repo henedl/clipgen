@@ -182,6 +182,24 @@
     </div>
   </div>
 
+  <!-- Model install/download confirmation (whisper download + ollama pull) -->
+  <div id="modelInstallModal" class="modal hidden">
+    <div class="modal-content model-install-modal">
+      <div class="modal-header">
+        <h3 id="modelInstallTitle">Download model?</h3>
+      </div>
+      <p id="modelInstallMessage" class="model-install-message"></p>
+      <div id="modelInstallProgress" class="model-install-progress hidden">
+        <div class="model-install-bar"><div id="modelInstallBarFill" class="model-install-bar-fill"></div></div>
+        <p id="modelInstallProgressText" class="model-install-progress-text"></p>
+      </div>
+      <div class="model-install-actions">
+        <button id="modelInstallCancel" type="button" class="btn btn-small">Cancel</button>
+        <button id="modelInstallConfirm" type="button" class="btn btn-small btn-primary">Install</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Mark popover (shared, repositioned per use) -->
   <div id="markPopover" class="mark-popover hidden">
     <div class="mark-popover-categories"></div>

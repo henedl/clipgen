@@ -173,6 +173,31 @@ def test_settings_records_include_card_pickers(client):
     assert by_name["ENDCARD_COLOR"]["type"] == "hidden"
 
 
+def test_settings_records_include_ollama_model_pickers(client):
+    data = client.get("/studio/api/settings").get_json()
+    by_name = {s["name"]: s for s in data["settings"]}
+    # Summary and friction models are dynamic pickers populated from installed
+    # Ollama models (gemma/llama/qwen/...), not a fixed list.
+    assert by_name["OLLAMA_SUMMARY_MODEL"]["type"] == "model_select"
+    assert by_name["OLLAMA_SUMMARY_MODEL"]["provider"] == "ollama"
+    assert by_name["OLLAMA_FRICTION_MODEL"]["type"] == "model_select"
+    assert by_name["OLLAMA_FRICTION_MODEL"]["provider"] == "ollama"
+    # Friction inherits the summary model via a blank value, shown as a label.
+    assert by_name["OLLAMA_FRICTION_MODEL"]["emptyLabel"]
+
+
+def test_settings_put_persists_friction_model(client, tmp_path, monkeypatch):
+    monkeypatch.setattr(server.config, "OUTPUT_DIR", str(tmp_path))
+    monkeypatch.setattr(server.config, "OLLAMA_FRICTION_MODEL", "")
+    resp = client.put(
+        "/studio/api/settings",
+        json={"settings": {"OLLAMA_FRICTION_MODEL": "gemma4:latest"}},
+    )
+    assert resp.status_code == 200
+    assert resp.get_json()["ok"] is True
+    assert server.config.OLLAMA_FRICTION_MODEL == "gemma4:latest"
+
+
 def test_settings_put_persists_card_color(client, tmp_path, monkeypatch):
     monkeypatch.setattr(server.config, "OUTPUT_DIR", str(tmp_path))
     # Baseline via monkeypatch so the PUT's direct setattr is restored on teardown.

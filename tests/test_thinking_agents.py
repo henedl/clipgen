@@ -57,6 +57,26 @@ class TestRegistry:
         assert "summary" in keys
         assert "citations" in keys
 
+    def test_resolve_model_uses_agent_model(self, monkeypatch):
+        import config
+
+        monkeypatch.setattr(config, "OLLAMA_SUMMARY_MODEL", "qwen3.5:9b")
+        monkeypatch.setattr(config, "OLLAMA_FRICTION_MODEL", "gemma4:latest")
+        summary = thinking_agents.get_agent("summary")
+        friction = thinking_agents.get_agent("friction")
+        assert summary is not None and friction is not None
+        assert thinking_agents.resolve_model(summary) == "qwen3.5:9b"
+        assert thinking_agents.resolve_model(friction) == "gemma4:latest"
+
+    def test_resolve_model_blank_friction_inherits_summary(self, monkeypatch):
+        import config
+
+        monkeypatch.setattr(config, "OLLAMA_SUMMARY_MODEL", "llama3.1:8b")
+        monkeypatch.setattr(config, "OLLAMA_FRICTION_MODEL", "")
+        friction = thinking_agents.get_agent("friction")
+        assert friction is not None
+        assert thinking_agents.resolve_model(friction) == "llama3.1:8b"
+
 
 class TestSummarizeTranscript:
     def test_returns_none_for_empty_segments(self):
