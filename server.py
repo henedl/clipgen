@@ -3491,6 +3491,7 @@ def build_combined_app(
     @combined.route("/api/models")
     def api_models() -> Response:
         import ollama_client
+        import thinking_agents
         import transcripts
 
         whisper_models = [
@@ -3499,6 +3500,7 @@ def build_combined_app(
                 "size_mb": m["size_mb"],
                 "description": m["description"],
                 "selected": m["name"] == config.TRANSCRIBE_MODEL,
+                "cached": transcripts.is_whisper_model_cached(m["name"]),
             }
             for m in transcripts.WHISPER_MODELS
         ]
@@ -3519,6 +3521,19 @@ def build_combined_app(
                     }
                 )
 
+        # Per thinking-agent model + install status, so the Transcripts UI can
+        # confirm a download before running an agent against a missing model.
+        ollama_agents = []
+        for a in thinking_agents.AGENTS:
+            model = thinking_agents.resolve_model(a)
+            ollama_agents.append(
+                {
+                    "key": a["key"],
+                    "model": model,
+                    "installed": ollama_client.is_model_installed(model, raw or []),
+                }
+            )
+
         return jsonify(
             {
                 "ok": True,
@@ -3526,6 +3541,7 @@ def build_combined_app(
                 "ollama": {
                     "available": ollama_available,
                     "models": ollama_models,
+                    "agents": ollama_agents,
                     "base_url": config.OLLAMA_BASE_URL,
                 },
             }

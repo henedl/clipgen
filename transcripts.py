@@ -114,6 +114,32 @@ def is_transcription_model_loaded() -> bool:
     return _cached_model is not None and _cached_model_name == model_name
 
 
+def is_whisper_model_cached(model_name: str | None = None) -> bool:
+    """Return True if *model_name* is already downloaded to the local HF cache.
+
+    Used to gate silent downloads: a non-cached model requires explicit user
+    confirmation before transcription pulls it (40 MB-2.9 GB). Resolves the
+    cache path via faster-whisper's ``download_model(local_files_only=True)``,
+    which only inspects the cache — it does **not** load model weights.
+    """
+    if config.DEBUGGING:
+        return True
+    model_name = model_name or config.TRANSCRIBE_MODEL
+    if _cached_model is not None and _cached_model_name == model_name:
+        return True
+    try:
+        from faster_whisper.utils import download_model
+    except ImportError:
+        return False
+    try:
+        download_model(model_name, local_files_only=True)
+        return True
+    except Exception:
+        # huggingface_hub raises (LocalEntryNotFoundError/FileNotFoundError)
+        # when the snapshot is absent or incomplete in the cache.
+        return False
+
+
 def warmup_transcription_model() -> bool:
     """Ensure the Whisper model is loaded into the module cache.
 

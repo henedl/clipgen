@@ -262,16 +262,27 @@
     })
       .then(function (r) { return r.json(); })
       .then(function (data) {
-        if (_statusEl) {
-          if (data.ok) {
-            _statusEl.textContent = "Saved";
-            setTimeout(function () { if (_statusEl) _statusEl.textContent = ""; }, 2000);
-          } else {
+        if (!data.ok) {
+          if (_statusEl) {
             _statusEl.textContent = data.error ? "Save failed: " + data.error : "Save failed";
           }
+          return;
         }
-        if (data.ok && typeof _opts.onSave === "function") {
-          _opts.onSave(data.applied || {}, _settings.slice());
+        if (_statusEl) {
+          _statusEl.textContent = "Saved";
+          setTimeout(function () { if (_statusEl) _statusEl.textContent = ""; }, 2000);
+        }
+        // The save succeeded server-side. Run the post-save hook in isolation
+        // so a UI-refresh error can't bubble into the catch below and mislabel
+        // a persisted save as "Save failed".
+        if (typeof _opts.onSave === "function") {
+          try {
+            _opts.onSave(data.applied || {}, _settings.slice());
+          } catch (err) {
+            if (window.console && console.error) {
+              console.error("settings onSave hook failed:", err);
+            }
+          }
         }
       })
       .catch(function () {

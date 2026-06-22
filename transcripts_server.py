@@ -32,8 +32,10 @@ API endpoints (all under /transcripts/):
   POST /api/transcribe                            - enqueue participant(s) for transcription
   GET  /api/transcribe/status                     - poll transcription task status
   DELETE /api/transcribe/<task_id>                 - cancel or dismiss a transcription task
-  POST /api/transcribe/warmup                     - background-load Whisper when prewarm is enabled
+  POST /api/transcribe/warmup                     - background-load Whisper when prewarm is enabled (confirms before downloading a non-cached model; force=true to proceed)
   GET  /api/transcribe/model-status               - whether the Whisper model is loaded or warming
+  POST /api/models/ollama/pull                     - download (install) an Ollama model in the background
+  GET  /api/models/ollama/pull-status              - poll progress of an in-flight Ollama model pull
 """
 
 import os
@@ -80,6 +82,13 @@ _orchestrator: "AgentOrchestrator"
 _pending_model_unloads: dict[str, threading.Timer] = {}
 _pending_model_unloads_lock = threading.Lock()
 
+# Progress tracking for in-flight Ollama model pulls, keyed by model name.
+# Each entry: {status, completed, total, done, succeeded, error}. The UI polls
+# /api/models/ollama/pull-status after kicking off /api/models/ollama/pull so a
+# new local model is only installed after explicit user confirmation.
+_ollama_pull_status: dict[str, dict[str, Any]] = {}
+_ollama_pull_lock = threading.Lock()
+
 
 def _schedule_model_unload(model: str) -> None:
     """Schedule an Ollama model unload after ``config.OLLAMA_UNLOAD_DELAY_SECONDS``.
@@ -124,10 +133,7 @@ def _agent_model(agent_key: str) -> str | None:
     agent = thinking_agents.get_agent(agent_key)
     if agent is None:
         return None
-    model = getattr(config, agent["model_config_key"], None)
-    if not model:
-        model = getattr(config, "OLLAMA_SUMMARY_MODEL", None)
-    return model
+    return thinking_agents.resolve_model(agent)
 
 
 def _step_state_transcription(entry: dict[str, Any]) -> str:
@@ -1131,7 +1137,13 @@ def api_search() -> FlaskResponse:
 
 @transcripts_bp.route("/api/transcribe/warmup", methods=["POST"])
 def api_transcribe_warmup() -> FlaskResponse:
-    """Background-load the Whisper model when automatic prewarm is not ``off``."""
+    """Background-load the Whisper model when automatic prewarm is not ``off``.
+
+    Never downloads a model silently: if the configured model isn't cached yet,
+    skips with ``reason: model_not_cached`` (plus ``model``/``size_mb``) so the
+    frontend can confirm the download. Re-post with ``{"force": true}`` to
+    proceed after the user agrees.
+    """
     if _transcribe_prewarm_setting() == "off":
         return jsonify(
             {
@@ -1143,6 +1155,27 @@ def api_transcribe_warmup() -> FlaskResponse:
 
     if transcripts.is_transcription_model_loaded():
         return jsonify({"ok": True, "already_loaded": True})
+
+    # Never download a model silently during prewarm. When the configured model
+    # isn't cached yet, skip and report it so the frontend can confirm the
+    # download with the user; a re-post with {"force": true} then proceeds.
+    data = request.get_json(silent=True) or {}
+    force = bool(data.get("force"))
+    model = config.TRANSCRIBE_MODEL
+    if not force and not transcripts.is_whisper_model_cached(model):
+        size_mb = next(
+            (m["size_mb"] for m in transcripts.WHISPER_MODELS if m["name"] == model),
+            None,
+        )
+        return jsonify(
+            {
+                "ok": True,
+                "skipped": True,
+                "reason": "model_not_cached",
+                "model": model,
+                "size_mb": size_mb,
+            }
+        )
 
     global _transcript_model_warming  # noqa: PLW0603
 
@@ -1181,6 +1214,81 @@ def api_transcribe_model_status() -> FlaskResponse:
             "prewarm": _transcribe_prewarm_setting(),
         }
     )
+
+
+@transcripts_bp.route("/api/models/ollama/pull", methods=["POST"])
+def api_ollama_pull() -> FlaskResponse:
+    """Download (install) an Ollama model in the background, tracking progress.
+
+    The frontend calls this only after the user confirms the install, then
+    polls /api/models/ollama/pull-status for progress.
+    """
+    data = request.get_json(silent=True) or {}
+    model = (data.get("model") or "").strip()
+    if not model:
+        return jsonify({"ok": False, "error": "Missing model"}), 400
+
+    with _ollama_pull_lock:
+        existing = _ollama_pull_status.get(model)
+        if existing is not None and not existing.get("done"):
+            return jsonify({"ok": True, "already_pulling": True})
+        _ollama_pull_status[model] = {
+            "status": "starting",
+            "completed": 0,
+            "total": 0,
+            "done": False,
+            "succeeded": False,
+            "error": None,
+        }
+
+    def _on_progress(chunk: dict[str, Any]) -> None:
+        with _ollama_pull_lock:
+            st = _ollama_pull_status.get(model)
+            if st is None:
+                return
+            status = chunk.get("status")
+            if status:
+                st["status"] = status
+            total = chunk.get("total")
+            completed = chunk.get("completed")
+            if isinstance(total, (int, float)):
+                st["total"] = int(total)
+            if isinstance(completed, (int, float)):
+                st["completed"] = int(completed)
+
+    def _run_pull() -> None:
+        succeeded = False
+        try:
+            succeeded = ollama_client.pull_model(model, on_progress=_on_progress)
+        finally:
+            with _ollama_pull_lock:
+                st = _ollama_pull_status.get(model)
+                if st is not None:
+                    st["done"] = True
+                    st["succeeded"] = succeeded
+                    if succeeded:
+                        st["status"] = "success"
+                    elif not st.get("error"):
+                        st["error"] = "Pull failed"
+
+    threading.Thread(target=_run_pull, daemon=True, name=f"ollama-pull-{model}").start()
+    return jsonify({"ok": True, "started": True})
+
+
+@transcripts_bp.route("/api/models/ollama/pull-status")
+def api_ollama_pull_status() -> FlaskResponse:
+    """Report progress for a model pull started via /api/models/ollama/pull."""
+    model = (request.args.get("model") or "").strip()
+    if not model:
+        return jsonify({"ok": False, "error": "Missing model"}), 400
+    with _ollama_pull_lock:
+        st = _ollama_pull_status.get(model)
+        snapshot = dict(st) if st is not None else None
+    if snapshot is None:
+        return jsonify({"ok": True, "found": False})
+    snapshot["ok"] = True
+    snapshot["found"] = True
+    return jsonify(snapshot)
 
 
 @transcripts_bp.route("/api/transcribe", methods=["POST"])
