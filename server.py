@@ -2593,9 +2593,6 @@ def api_reel_direct() -> FlaskResponse:
             output_dir = Path(utils.get_effective_output_dir())
             clip_paths: list[str] = []
             temp_clips: list[str] = []
-            # Cache (w x h) per source video so wrap_clip_with_cards doesn't
-            # re-probe per segment. Same source can appear many times.
-            resolution_cache: dict[str, str | None] = {}
             # Throttle concat progress emissions to ~5 Hz, same as before.
             concat_last_emit = [0.0]
 
@@ -2674,21 +2671,16 @@ def api_reel_direct() -> FlaskResponse:
                         is not None
                     )
                     if ok and cards_enabled:
-                        res_key = video_paths[0]
-                        if res_key not in resolution_cache:
-                            probed = video.probe_video_properties(res_key)
-                            resolution_cache[res_key] = (
-                                f"{probed['width']}x{probed['height']}"
-                                if probed
-                                else None
-                            )
+                        # Wrap at the cut clip's own resolution (probed inside
+                        # wrap_clip_with_cards). A global span may be cut from a
+                        # later source part whose resolution differs from the
+                        # first; trusting the clip avoids a concat mismatch.
                         wrap_clip: utils.ClipRecord = {
                             "desc": seg.get("event_type") or seg.get("desc") or "",
                         }
                         ok = titlecards.wrap_clip_with_cards(
                             wrap_clip,
                             tmp_path,
-                            resolution=resolution_cache[res_key],
                             cancel_flag=_reel_cancel_event.is_set,
                             titlecards_enabled=cards_enabled,
                             titlecard_duration_seconds=card_duration,

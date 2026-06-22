@@ -535,14 +535,6 @@ def _process_single_clip_segments(
     # path (unchanged behavior, no probing).
     timeline = clip.get("source_timeline")
 
-    # Probe the source video once so wrap_clip_with_cards doesn't need to re-probe
-    # each generated output; stream-copy cuts preserve source resolution.
-    source_resolution: str | None = None
-    if output_format == "clip" and cards_enabled:
-        props = video.probe_video_properties(base_video)
-        if props:
-            source_resolution = f"{props['width']}x{props['height']}"
-
     for time_idx, (start_time, end_time) in enumerate(clip["times"]):
         if cancel_flag and cancel_flag():
             break
@@ -598,10 +590,13 @@ def _process_single_clip_segments(
                     cancel_flag=cancel_flag,
                 )
             if ok and cards_enabled:
+                # Wrap at the generated clip's own resolution (probed inside
+                # wrap_clip_with_cards). For multi-video participants a clip may
+                # be cut from a later part whose resolution differs from the
+                # first source, so trusting the clip avoids a concat mismatch.
                 ok = titlecards.wrap_clip_with_cards(
                     clip,
                     out_name,
-                    resolution=source_resolution,
                     cancel_flag=cancel_flag,
                     titlecards_enabled=cards_enabled,
                     titlecard_duration_seconds=card_duration,

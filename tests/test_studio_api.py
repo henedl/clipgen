@@ -3693,10 +3693,6 @@ def test_api_reel_direct_wraps_segments_when_titlecards_enabled(
     monkeypatch.setattr(
         "files.get_unique_filename", lambda name, file_format=None: name
     )
-    monkeypatch.setattr(
-        "video.probe_video_properties",
-        lambda path: {"width": 1280, "height": 720, "audio_codec": "aac"},
-    )
 
     wrap_calls: list[dict] = []
 
@@ -3740,7 +3736,9 @@ def test_api_reel_direct_wraps_segments_when_titlecards_enabled(
     assert len(wrap_calls) == 2
     assert wrap_calls[0]["duration"] == 3
     assert wrap_calls[0]["enabled"] is True
-    assert wrap_calls[0]["resolution"] == "1280x720"
+    # No forced resolution: wrap_clip_with_cards probes the cut clip itself, so a
+    # span cut from a later source part is wrapped at that part's resolution.
+    assert wrap_calls[0]["resolution"] is None
     assert wrap_calls[0]["desc"] == "first"
     assert wrap_calls[1]["desc"] == "second"
 

@@ -547,8 +547,14 @@ def test_wrap_reencode_uses_fast_preset(monkeypatch, make_clip):
     assert "-c:a aac" in joined
 
 
-def test_pipeline_skips_per_output_probe(monkeypatch, make_clip):
-    """Regression: pipeline should probe the source video, not each generated output."""
+def test_pipeline_wraps_clip_without_forcing_source_resolution(monkeypatch, make_clip):
+    """Pipeline lets wrap_clip_with_cards probe each generated clip itself.
+
+    Previously the pipeline probed the first source video once and forced that
+    resolution onto every wrap, which broke multi-video clips cut from a part
+    with a different resolution. Now the pipeline does no source probe and wrap
+    is called with resolution unset so it uses the actual clip's dimensions.
+    """
     import pipeline
 
     clip = make_clip(value="00:10-00:20")
@@ -594,9 +600,10 @@ def test_pipeline_skips_per_output_probe(monkeypatch, make_clip):
     )
 
     assert generated == 2
-    # Source is probed once for two segments; outputs are not probed separately.
-    assert probe_calls == ["source.mp4"]
+    # The pipeline no longer probes the source; each clip's resolution is
+    # determined by wrap_clip_with_cards itself (resolution left as None).
+    assert probe_calls == []
     assert wrap_calls == [
-        ("out1.mp4", "1280x720"),
-        ("out2.mp4", "1280x720"),
+        ("out1.mp4", None),
+        ("out2.mp4", None),
     ]
