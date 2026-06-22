@@ -5023,7 +5023,11 @@
     }
     var duration = Math.max(maxEnd * 1.05, 60);
     var events = filtered.map(function (c) {
-      var event = { t: duration > 0 ? c.start / duration : 0, count: cfg.barCount(c) };
+      var event = {
+        t: duration > 0 ? c.start / duration : 0,
+        tEnd: duration > 0 ? c.end / duration : 0,
+        count: cfg.barCount(c),
+      };
       var color = cfg.barColor(c);
       for (var key in color) {
         if (Object.prototype.hasOwnProperty.call(color, key)) event[key] = color[key];

@@ -145,7 +145,7 @@
   position: absolute;
   top: 4px;
   bottom: 4px;
-  width: 6px;
+  min-width: 4px;
   border-radius: 1px;
   cursor: pointer;
   transition: opacity var(--duration-instant) ease-out, box-shadow var(--duration-instant) ease-out, transform var(--duration-instant) ease-out;
