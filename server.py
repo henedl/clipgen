@@ -2246,6 +2246,12 @@ def api_settings_put() -> FlaskResponse:
 # ── Titlecard / endcard background picker ────────────────────────────────
 _ALLOWED_CARD_EXTS: set[str] = {".png", ".jpg", ".jpeg", ".webp"}
 _MAX_CARD_UPLOAD_BYTES: int = 10 * 1024 * 1024  # 10 MB
+# URL-reserved / unsafe ASCII characters that sanitize_filename leaves intact.
+# Card images are served at /api/titlecards/image/<name>, so a stem containing
+# e.g. '#' would have its tail dropped by the browser as a URL fragment. These
+# are replaced with '_' at upload time; unicode is preserved (only these ASCII
+# characters are touched, matching sanitize_filename's unicode policy).
+_URL_UNSAFE_CARD_CHARS: str = "#%&+=;@$,!*()[]{}^~` "
 
 
 def _titlecard_images_dir() -> Path:
@@ -2392,8 +2398,12 @@ def api_titlecard_upload() -> FlaskResponse:
     if size > _MAX_CARD_UPLOAD_BYTES:
         return jsonify({"ok": False, "error": "File too large (max 10 MB)."}), 400
 
-    # sanitize_filename strips the dot from extensions, so clean the stem only.
-    stem = utils.sanitize_filename(Path(filename).stem).strip() or "titlecard"
+    # sanitize_filename strips the dot from extensions, so clean the stem only,
+    # then replace URL-reserved chars so the served image URL isn't truncated.
+    stem = utils.sanitize_filename(Path(filename).stem).strip()
+    for ch in _URL_UNSAFE_CARD_CHARS:
+        stem = stem.replace(ch, "_")
+    stem = stem.strip("_") or "titlecard"
     images_dir = _titlecard_images_dir()
     images_dir.mkdir(parents=True, exist_ok=True)
     candidate = f"{stem}{ext}"

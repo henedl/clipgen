@@ -127,6 +127,28 @@ def test_api_titlecard_upload_list_and_serve(client, tmp_path, monkeypatch):
     assert served.data == b"\x89PNG fake"
 
 
+def test_api_titlecard_upload_makes_filename_url_safe(client, tmp_path, monkeypatch):
+    """A filename with URL-reserved chars is sanitized so its served URL works."""
+    monkeypatch.setattr(server.config, "OUTPUT_DIR", str(tmp_path))
+    resp = client.post(
+        "/studio/api/titlecards/upload",
+        data={"file": (io.BytesIO(b"\x89PNG fake"), "my #1.png")},
+        content_type="multipart/form-data",
+    )
+    assert resp.status_code == 200
+    item = resp.get_json()["item"]
+    name = item["id"]
+    # No URL-reserved character survives into the stored name, id, or URL.
+    for bad in ("#", " ", "%", "&"):
+        assert bad not in name
+        assert bad not in item["url"]
+    assert item["url"] == "/api/titlecards/image/" + name
+
+    served = client.get("/studio/api/titlecards/image/" + name)
+    assert served.status_code == 200
+    assert served.data == b"\x89PNG fake"
+
+
 def test_api_titlecard_delete_resets_selection(client, tmp_path, monkeypatch):
     monkeypatch.setattr(server.config, "OUTPUT_DIR", str(tmp_path))
     images = tmp_path / server.config.TITLECARD_IMAGES_DIRNAME
