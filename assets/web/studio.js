@@ -2841,10 +2841,13 @@
   }
 
   // Collect per-cell time overrides for spreadsheet clips the user trimmed on
-  // the duration badge. The backend replaces a cell's whole time list, so for
-  // any cell with at least one edited segment we send every queued segment
-  // (segIdx-ordered) as [startSec, endSec] pairs. Returns {} when nothing was
-  // edited. Intake items carry their own start/end and are skipped here.
+  // the duration badge or pruned from the queue. The backend replaces a cell's
+  // whole time list, so whenever a cell has an edited segment OR has had cards
+  // removed (fewer queued segments than its original segTotal) we send every
+  // remaining segment (segIdx-ordered) as [startSec, endSec] pairs — that
+  // becomes the cell's complete output. Returns {} when a cell is untouched
+  // (no edits, no removals) so artifact caching still applies. Intake items
+  // carry their own start/end and are skipped here.
   function buildCellOverrides(items) {
     var byCell = {};
     for (var i = 0; i < items.length; i++) {
@@ -2864,7 +2867,9 @@
           break;
         }
       }
-      if (!anyEdited) return;
+      var segTotal = segs[0].segTotal || segs.length;
+      var removed = segs.length < segTotal;
+      if (!anyEdited && !removed) return;
       segs.sort(function (a, b) {
         return (a.segIdx || 0) - (b.segIdx || 0);
       });
