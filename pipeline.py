@@ -1313,8 +1313,16 @@ def _build_reel_transcript(
     cards_enabled, titlecard_duration = _resolve_titlecard_options(
         titlecards_enabled, titlecard_duration_seconds
     )
+    # Each wrapped clip is titlecard + clip body + endcard (wrap_clip_with_cards),
+    # so the per-component span the next component starts after is
+    # titlecard + clip + endcard. The endcard is skipped only when ENDCARD_IMAGE
+    # is the "none" sentinel; mirror that decision via resolve_card_background.
+    endcard_duration = 0
     if not cards_enabled:
         titlecard_duration = 0
+    else:
+        _bg, _allow, skip_end, _color = titlecards.resolve_card_background("end")
+        endcard_duration = 0 if skip_end else titlecard_duration
 
     for comp in components:
         participant = comp.get("participant", "")
@@ -1349,7 +1357,7 @@ def _build_reel_transcript(
                 )
                 seg_counter += 1
 
-        cumulative_offset += comp_duration + titlecard_duration
+        cumulative_offset += comp_duration + titlecard_duration + endcard_duration
 
     return merged_segments
 

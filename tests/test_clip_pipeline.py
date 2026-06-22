@@ -515,6 +515,83 @@ def test_build_reel_transcript_uses_request_titlecard_duration(monkeypatch):
     assert merged[0]["end"] == 9.0
 
 
+def _mock_two_component_transcript(monkeypatch):
+    """Two participants, one segment each at local 1.0–2.0; passthrough filters."""
+    monkeypatch.setattr(
+        pipeline.transcripts,
+        "load_transcripts_manifest",
+        lambda: {
+            "source_transcripts": {
+                "P01": {"segments": [{"start": 1.0, "end": 2.0, "text": "a"}]},
+                "P02": {"segments": [{"start": 1.0, "end": 2.0, "text": "b"}]},
+            },
+            "corrections": [],
+        },
+    )
+    monkeypatch.setattr(
+        pipeline.transcripts,
+        "apply_corrections",
+        lambda segments, _corrections: segments,
+    )
+    monkeypatch.setattr(
+        pipeline.transcripts,
+        "filter_segments",
+        lambda full, start, end, offset_to_zero=True: {
+            "segments": [{"start": 1.0, "end": 2.0, "text": "seg"}]
+        },
+    )
+
+
+def test_build_reel_transcript_advances_offset_by_endcard(monkeypatch):
+    """The second component starts after clip + titlecard + endcard of the first."""
+    _mock_two_component_transcript(monkeypatch)
+    # Endcard renders (skip=False) → cumulative offset includes its duration.
+    monkeypatch.setattr(
+        pipeline.titlecards,
+        "resolve_card_background",
+        lambda kind: (None, True, False, "black"),
+    )
+    components = [
+        {"participant": "P01", "start": 0.0, "end": 10.0},
+        {"participant": "P02", "start": 0.0, "end": 8.0},
+    ]
+
+    merged = pipeline._build_reel_transcript(
+        components, titlecards_enabled=True, titlecard_duration_seconds=7
+    )
+
+    # comp1 segment: 1.0 + offset(0) + titlecard(7)
+    assert merged[0]["start"] == 8.0
+    # offset after comp1 = clip(10) + titlecard(7) + endcard(7) = 24
+    # comp2 segment: 1.0 + offset(24) + titlecard(7) = 32
+    assert merged[1]["start"] == 32.0
+    assert merged[1]["end"] == 33.0
+
+
+def test_build_reel_transcript_skips_endcard_when_none(monkeypatch):
+    """A 'none' endcard adds no outro duration to the cumulative offset."""
+    _mock_two_component_transcript(monkeypatch)
+    # Endcard skipped (skip=True) → cumulative offset omits its duration.
+    monkeypatch.setattr(
+        pipeline.titlecards,
+        "resolve_card_background",
+        lambda kind: (None, False, True, "black"),
+    )
+    components = [
+        {"participant": "P01", "start": 0.0, "end": 10.0},
+        {"participant": "P02", "start": 0.0, "end": 8.0},
+    ]
+
+    merged = pipeline._build_reel_transcript(
+        components, titlecards_enabled=True, titlecard_duration_seconds=7
+    )
+
+    # offset after comp1 = clip(10) + titlecard(7) + endcard(0) = 17
+    # comp2 segment: 1.0 + offset(17) + titlecard(7) = 25
+    assert merged[1]["start"] == 25.0
+    assert merged[1]["end"] == 26.0
+
+
 def test_process_single_clip_segments_releases_reservation_on_ffmpeg_failure(
     monkeypatch, make_clip, tmp_path
 ):
