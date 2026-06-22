@@ -1040,6 +1040,16 @@ def _load_studio_settings() -> dict[str, Any]:
             setattr(config, name, cleaned)
             applied[name] = cleaned
             continue
+        if meta.get("type") == "card_picker":
+            # Validate persisted selections too, so a stale studio_settings.json
+            # (traversal, a deleted upload, or __none__ on a titlecard) doesn't
+            # apply a value the PUT path would reject; leave config at its default.
+            cleaned = _coerce_card_image(value, str(meta.get("kind", "title")))
+            if cleaned is None:
+                continue
+            setattr(config, name, cleaned)
+            applied[name] = cleaned
+            continue
         expected_type = type(default) if default is not None else str
         try:
             if expected_type is bool:

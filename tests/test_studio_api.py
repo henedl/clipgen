@@ -2530,6 +2530,34 @@ def test_load_studio_settings_missing_file(monkeypatch, tmp_path):
     assert applied == {}
 
 
+def test_load_studio_settings_skips_invalid_card_image(monkeypatch, tmp_path):
+    """A persisted card image that PUT would reject is not applied on load."""
+    monkeypatch.setattr("config.OUTPUT_DIR", str(tmp_path))
+    monkeypatch.setattr(server.config, "TITLECARD_IMAGE", "")
+    monkeypatch.setattr(server.config, "ENDCARD_IMAGE", "")
+
+    images = tmp_path / server.config.TITLECARD_IMAGES_DIRNAME
+    images.mkdir()
+    (images / "good.png").write_bytes(b"x")
+
+    settings_file = tmp_path / server.config.STUDIO_SETTINGS_FILENAME
+    settings_file.write_text(
+        json.dumps(
+            {
+                "TITLECARD_IMAGE": "../escape.png",  # traversal → rejected
+                "ENDCARD_IMAGE": "good.png",  # real upload → applied
+            }
+        )
+    )
+
+    applied = server._load_studio_settings()
+    # The bad value is skipped (config stays at default); the good one applies.
+    assert "TITLECARD_IMAGE" not in applied
+    assert server.config.TITLECARD_IMAGE == ""
+    assert applied["ENDCARD_IMAGE"] == "good.png"
+    assert server.config.ENDCARD_IMAGE == "good.png"
+
+
 def test_save_studio_settings_non_defaults_only(monkeypatch, tmp_path):
     """Only non-default values are written; all-defaults deletes the file."""
     import config
