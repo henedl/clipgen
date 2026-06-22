@@ -4,6 +4,7 @@ import numpy as np
 
 import config
 import screenspace
+import screenspace_heatmap
 import screenspace_scans
 from _ss_helpers import _make_icon, _make_icon_frame
 
@@ -222,6 +223,43 @@ class TestGenerateRollingHeatmapGif:
         )
         assert path == out
         assert (tmp_path / "rolling_change.gif").stat().st_size > 0
+
+    def test_large_count_rolling_gif(self, tmp_path):
+        # 47 results / 24 frames: the old floor-division bucketing dumped the
+        # remainder onto the final frame; this just guards it still renders.
+        out = str(tmp_path / "rolling_large.gif")
+        path = screenspace.generate_rolling_heatmap_gif(
+            self._matches(47), 200, 200, out
+        )
+        assert path == out
+        assert (tmp_path / "rolling_large.gif").stat().st_size > 0
+
+
+class TestFrameBucketBounds:
+    """_frame_bucket_bounds spreads results evenly, no remainder on the last frame."""
+
+    def _buckets(self, total, num_frames):
+        return [
+            screenspace_heatmap._frame_bucket_bounds(i, total, num_frames)
+            for i in range(num_frames)
+        ]
+
+    def test_exact_multiple(self):
+        buckets = self._buckets(48, 24)
+        assert all(end - start == 2 for start, end in buckets)
+
+    def test_non_multiple_counts_are_even(self):
+        for total in (25, 47, 100):
+            num_frames = 24
+            buckets = self._buckets(total, num_frames)
+            sizes = [end - start for start, end in buckets]
+            # Contiguous, fully covering [0, total), adjacent sizes differ by ≤ 1.
+            assert buckets[0][0] == 0
+            assert buckets[-1][1] == total
+            for i in range(num_frames - 1):
+                assert buckets[i][1] == buckets[i + 1][0]
+            assert max(sizes) - min(sizes) <= 1
+            assert sum(sizes) == total
 
 
 class TestHeatmapConfigConstants:

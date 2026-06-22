@@ -155,6 +155,20 @@ def _heatmap_frame_image(
     return Image.fromarray(rgb)
 
 
+def _frame_bucket_bounds(
+    frame_idx: int, total: int, num_frames: int
+) -> tuple[int, int]:
+    """Return the ``[start, end)`` result indices for one GIF frame.
+
+    Proportional split (``floor(i*total/n) .. floor((i+1)*total/n)``) so results
+    spread evenly across frames — adjacent bucket sizes differ by at most one.
+    Floor division of ``total // num_frames`` instead piles every remainder onto
+    the final frame (e.g. 47 results / 24 frames → 23 frames of 1, last of 24).
+    The last frame's end is exactly ``total``.
+    """
+    return (frame_idx * total) // num_frames, ((frame_idx + 1) * total) // num_frames
+
+
 def generate_heatmap_gif(
     results: list[dict[str, Any]],
     width: int,
@@ -191,15 +205,9 @@ def generate_heatmap_gif(
     # Second pass: build progressive frames
     accumulator = np.zeros((acc_h, acc_w), dtype=np.float32)
     frames: list[Image.Image] = []
-    bucket_size = max(1, len(results) // num_frames)
 
     for frame_idx in range(num_frames):
-        start_idx = frame_idx * bucket_size
-        end_idx = (
-            len(results)
-            if frame_idx == num_frames - 1
-            else min((frame_idx + 1) * bucket_size, len(results))
-        )
+        start_idx, end_idx = _frame_bucket_bounds(frame_idx, len(results), num_frames)
         for r_idx in range(start_idx, end_idx):
             _accumulate_heatmap_result(accumulator, results[r_idx], heatmap_type)
 
@@ -248,18 +256,12 @@ def generate_rolling_heatmap_gif(
     acc_h, acc_w = height, width
     if heatmap_type in ("flow", "change"):
         acc_h = acc_w = 256
-    bucket_size = max(1, len(results) // num_frames)
 
     def _accumulate_window(frame_idx: int) -> np.ndarray:
         acc = np.zeros((acc_h, acc_w), dtype=np.float32)
         win_start = max(0, frame_idx - window_frames + 1)
         for bucket in range(win_start, frame_idx + 1):
-            start_idx = bucket * bucket_size
-            end_idx = (
-                len(results)
-                if bucket == num_frames - 1
-                else min((bucket + 1) * bucket_size, len(results))
-            )
+            start_idx, end_idx = _frame_bucket_bounds(bucket, len(results), num_frames)
             for r_idx in range(start_idx, end_idx):
                 _accumulate_heatmap_result(acc, results[r_idx], heatmap_type)
         return acc
