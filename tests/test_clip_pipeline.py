@@ -592,6 +592,22 @@ def test_build_reel_transcript_skips_endcard_when_none(monkeypatch):
     assert merged[1]["end"] == 26.0
 
 
+def test_process_reel_clears_endcard_cache():
+    """process_reel purges the shared per-process endcard temp cache on exit.
+
+    Covers the CLI, interactive, and Studio /api/reel paths, which all route
+    through process_reel; previously only process_clips and /api/reel-direct
+    cleared it, so sheet/CLI reels leaked cached endcards.
+    """
+    pipeline.titlecards._endcard_cache["k"] = "/tmp/nonexistent_endcard.mp4"
+    try:
+        # An empty clip list returns early but still runs the wrapper's finally.
+        assert pipeline.process_reel([]) == (0, [])
+        assert pipeline.titlecards._endcard_cache == {}
+    finally:
+        pipeline.titlecards._endcard_cache.clear()
+
+
 def test_process_single_clip_segments_releases_reservation_on_ffmpeg_failure(
     monkeypatch, make_clip, tmp_path
 ):

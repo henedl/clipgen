@@ -1387,6 +1387,32 @@ def process_reel(
         Each reel record contains an ``id``, ``file``, ``study``, ``description``,
         and an ordered ``components`` list with per-segment metadata for regeneration.
     """
+    try:
+        return _process_reel(
+            clips_list,
+            output_file,
+            cancel_flag=cancel_flag,
+            progress_cb=progress_cb,
+            titlecards_enabled=titlecards_enabled,
+            titlecard_duration_seconds=titlecard_duration_seconds,
+        )
+    finally:
+        # Endcard temp files are cached per-process across every wrap call;
+        # purge them so per-request cards don't leak between reel builds. The
+        # CLI, interactive, and Studio /api/reel paths all route through here,
+        # mirroring the cleanup process_clips and /api/reel-direct already do.
+        titlecards.clear_endcard_cache()
+
+
+def _process_reel(
+    clips_list: list[ClipRecord],
+    output_file: str | None = None,
+    cancel_flag: Callable[[], bool] | None = None,
+    progress_cb: Callable[[dict[str, Any]], None] | None = None,
+    titlecards_enabled: bool | None = None,
+    titlecard_duration_seconds: int | None = None,
+) -> tuple[int, list[dict[str, Any]]]:
+    """Reel build implementation; see process_reel for the public contract."""
     if not clips_list:
         utils.warning_print(
             "No clips to process for reel. No timestamps were found or selected."
