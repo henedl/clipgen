@@ -788,6 +788,11 @@
       if (ver !== _participantReqVer) return;
       if (data.ok && data.summary) {
         _stopSummaryPoll();
+        // Clear any citation state carried over from a previous participant
+        // before rendering — renderSummary() reapplies state.summaryCitations,
+        // so stale superscripts would otherwise leak onto this summary.
+        state.summaryCitations = null;
+        state.citationsGenerating = false;
         renderSummary(data.summary);
         // Handle citations
         if (data.citations && data.citations.length > 0) {
@@ -829,6 +834,9 @@
         if (ver !== _participantReqVer) return;
         if (data.ok && data.summary) {
           _stopSummaryPoll();
+          // Clear stale citation state before render (see loadSummary).
+          state.summaryCitations = null;
+          state.citationsGenerating = false;
           renderSummary(data.summary);
           // Summary just arrived — check citation status
           if (data.citations && data.citations.length > 0) {
