@@ -233,6 +233,56 @@ def test_settings_partial_put_preserves_other_settings(client, tmp_path, monkeyp
     assert saved.get("TITLECARD_DURATION_SECONDS") == 5
 
 
+def test_settings_rejects_card_image_path_traversal(client, tmp_path, monkeypatch):
+    """A crafted card image name that escapes the upload dir is rejected."""
+    monkeypatch.setattr(server.config, "OUTPUT_DIR", str(tmp_path))
+    monkeypatch.setattr(server.config, "TITLECARD_IMAGE", "")
+    resp = client.put(
+        "/studio/api/settings",
+        json={"settings": {"TITLECARD_IMAGE": "../secret.png"}},
+    )
+    assert resp.status_code == 400
+    assert resp.get_json()["ok"] is False
+    assert server.config.TITLECARD_IMAGE == ""  # unchanged
+
+
+def test_settings_rejects_non_hex_card_color(client, tmp_path, monkeypatch):
+    """Card colors feed ffmpeg's lavfi color input — only #rrggbb is accepted."""
+    monkeypatch.setattr(server.config, "OUTPUT_DIR", str(tmp_path))
+    monkeypatch.setattr(server.config, "TITLECARD_COLOR", "#000000")
+    resp = client.put(
+        "/studio/api/settings",
+        json={"settings": {"TITLECARD_COLOR": "red; drawbox"}},
+    )
+    assert resp.status_code == 400
+    assert resp.get_json()["ok"] is False
+    assert server.config.TITLECARD_COLOR == "#000000"  # unchanged
+
+
+def test_settings_accepts_valid_card_image(client, tmp_path, monkeypatch):
+    """A bare uploaded filename with an allowed extension is accepted."""
+    monkeypatch.setattr(server.config, "OUTPUT_DIR", str(tmp_path))
+    monkeypatch.setattr(server.config, "TITLECARD_IMAGE", "")
+    resp = client.put(
+        "/studio/api/settings",
+        json={"settings": {"TITLECARD_IMAGE": "card.png"}},
+    )
+    assert resp.status_code == 200
+    assert resp.get_json()["ok"] is True
+    assert server.config.TITLECARD_IMAGE == "card.png"
+
+
+def test_load_studio_settings_drops_tampered_card_image(client, tmp_path, monkeypatch):
+    """A tampered settings file with a traversal card image is ignored on load."""
+    monkeypatch.setattr(server.config, "OUTPUT_DIR", str(tmp_path))
+    monkeypatch.setattr(server.config, "TITLECARD_IMAGE", "")
+    (tmp_path / server.config.STUDIO_SETTINGS_FILENAME).write_text(
+        json.dumps({"TITLECARD_IMAGE": "../../evil.png"})
+    )
+    server._load_studio_settings()
+    assert server.config.TITLECARD_IMAGE == ""  # kept default, not the tampered value
+
+
 def test_api_sheet_baseline_returns_empty_when_no_sheet(client):
     resp = client.get("/studio/api/sheet/baseline")
     assert resp.status_code == 200

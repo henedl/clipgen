@@ -178,6 +178,25 @@ _HEX_COLOR_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
 _MARK_KEY_RE = re.compile(r"^[a-z0-9_]+$")
 
 
+def _validate_card_image(value: str) -> str | None:
+    """Return a safe card-image setting value, or None to reject it.
+
+    Card image settings become path components under the titlecard_images
+    upload dir (see titlecards.resolve_card_background), so only accept the
+    known sentinels (default/empty, solid color, no-endcard) or a bare uploaded
+    filename with an allowed image extension — never a value that could traverse
+    out of the upload pool (e.g. ``../secret.png``). ``_ALLOWED_CARD_EXTS`` is
+    the same allowlist the upload route enforces.
+    """
+    if value in ("", config.CARD_IMAGE_COLOR, config.CARD_IMAGE_NONE):
+        return value
+    if Path(value).name != value:  # rejects separators, traversal, absolute paths
+        return None
+    if Path(value).suffix.lower() not in _ALLOWED_CARD_EXTS:
+        return None
+    return value
+
+
 def _coerce_mark_categories(value: Any) -> dict[str, dict[str, str]] | None:
     """Validate and normalize a mark_categories payload.
 
@@ -1039,6 +1058,20 @@ def _load_studio_settings() -> dict[str, Any]:
                 continue
             setattr(config, name, cleaned)
             applied[name] = cleaned
+            continue
+        if meta.get("type") == "card_picker":
+            validated = _validate_card_image(str(value))
+            if validated is None:
+                continue  # ignore a tampered/invalid value, keep the default
+            setattr(config, name, validated)
+            applied[name] = validated
+            continue
+        if name in ("TITLECARD_COLOR", "ENDCARD_COLOR"):
+            color = str(value)
+            if not _HEX_COLOR_RE.match(color):
+                continue
+            setattr(config, name, color)
+            applied[name] = color
             continue
         expected_type = type(default) if default is not None else str
         try:
@@ -2198,6 +2231,20 @@ def _apply_settings_payload(data: dict[str, Any]) -> tuple[dict[str, Any], str |
                 return {}, f"Invalid {name} payload"
             setattr(config, name, cleaned)
             applied[name] = cleaned
+            continue
+        if meta.get("type") == "card_picker":
+            validated = _validate_card_image(str(value))
+            if validated is None:
+                return {}, f"Invalid {name}: not an uploaded card image or preset"
+            setattr(config, name, validated)
+            applied[name] = validated
+            continue
+        if name in ("TITLECARD_COLOR", "ENDCARD_COLOR"):
+            color = str(value)
+            if not _HEX_COLOR_RE.match(color):
+                return {}, f"Invalid {name}: expected a #rrggbb hex color"
+            setattr(config, name, color)
+            applied[name] = color
             continue
         expected_type = type(default) if default is not None else str
         try:
