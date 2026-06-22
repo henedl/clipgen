@@ -211,6 +211,28 @@ def test_settings_put_persists_card_color(client, tmp_path, monkeypatch):
     assert server.config.TITLECARD_COLOR == "#ff8800"
 
 
+def test_settings_partial_put_preserves_other_settings(client, tmp_path, monkeypatch):
+    """A partial PUT must not drop unrelated non-default settings already saved."""
+    monkeypatch.setattr(server.config, "OUTPUT_DIR", str(tmp_path))
+    # A previously-selected card image (non-default) is live on config.
+    monkeypatch.setattr(server.config, "TITLECARD_IMAGE", "card.png")
+
+    # Submit only an inline titlecard key (mirrors the studio.js partial PUT;
+    # duration has no ffmpeg-support gate so the test stays dependency-free).
+    resp = client.put(
+        "/studio/api/settings",
+        json={"settings": {"TITLECARD_DURATION_SECONDS": 5}},
+    )
+    assert resp.status_code == 200
+    assert resp.get_json()["ok"] is True
+
+    saved = server.utils.load_json_manifest(
+        server.config.STUDIO_SETTINGS_FILENAME, default={}
+    )
+    assert saved.get("TITLECARD_IMAGE") == "card.png"  # preserved, not dropped
+    assert saved.get("TITLECARD_DURATION_SECONDS") == 5
+
+
 def test_api_sheet_baseline_returns_empty_when_no_sheet(client):
     resp = client.get("/studio/api/sheet/baseline")
     assert resp.status_code == 200

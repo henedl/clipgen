@@ -2218,7 +2218,13 @@ def _apply_settings_payload(data: dict[str, Any]) -> tuple[dict[str, Any], str |
         setattr(config, name, coerced)
         applied[name] = coerced
 
-    _save_studio_settings(applied)
+    # Persist the full current settings state, not just the submitted keys: a
+    # partial PUT (e.g. only the inline titlecard toggle) must not drop other
+    # non-default settings already on disk. Every submitted key is now on
+    # config, so snapshot all of STUDIO_SETTINGS and let _save_studio_settings
+    # drop the ones equal to their default. Mirrors the reset path above.
+    merged = {name: getattr(config, name) for name in config.STUDIO_SETTINGS}
+    _save_studio_settings(merged)
     return applied, None
 
 
