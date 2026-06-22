@@ -1135,6 +1135,14 @@ def api_search() -> FlaskResponse:
 # ---- Transcription queue ----
 
 
+def _whisper_model_size_mb(model: str) -> int | None:
+    """Download size (MB) for a Whisper model name, or None if unknown."""
+    return next(
+        (m["size_mb"] for m in transcripts.WHISPER_MODELS if m["name"] == model),
+        None,
+    )
+
+
 @transcripts_bp.route("/api/transcribe/warmup", methods=["POST"])
 def api_transcribe_warmup() -> FlaskResponse:
     """Background-load the Whisper model when automatic prewarm is not ``off``.
@@ -1163,17 +1171,13 @@ def api_transcribe_warmup() -> FlaskResponse:
     force = bool(data.get("force"))
     model = config.TRANSCRIBE_MODEL
     if not force and not transcripts.is_whisper_model_cached(model):
-        size_mb = next(
-            (m["size_mb"] for m in transcripts.WHISPER_MODELS if m["name"] == model),
-            None,
-        )
         return jsonify(
             {
                 "ok": True,
                 "skipped": True,
                 "reason": "model_not_cached",
                 "model": model,
-                "size_mb": size_mb,
+                "size_mb": _whisper_model_size_mb(model),
             }
         )
 
@@ -1301,6 +1305,7 @@ def api_transcribe() -> FlaskResponse:
     participant_ids = data.get("participants", [])
     force = data.get("force", False)
     overrides = data.get("overrides") or {}
+    allow_download = bool(data.get("allow_download"))
 
     if not participant_ids:
         return jsonify({"ok": False, "error": "No participants specified"}), 400
@@ -1311,6 +1316,10 @@ def api_transcribe() -> FlaskResponse:
 
     with _manifest_lock:
         src = _manifest.get("source_transcripts", {})
+
+        # Resolve the participants that would actually be enqueued, with the
+        # effective Whisper model for each (per-participant override → default).
+        eligible: list[tuple[dict[str, Any], str | None, str | None, str]] = []
         for pid in participant_ids:
             p = available.get(pid)
             if not p or not p.get("has_video"):
@@ -1323,8 +1332,35 @@ def api_transcribe() -> FlaskResponse:
             o = overrides.get(pid) or {}
             model_override = o.get("model") or None
             language_override = o.get("language") or None
+            effective_model = model_override or config.TRANSCRIBE_MODEL
+            eligible.append((p, model_override, language_override, effective_model))
+
+        # Authoritative download gate: never let a worker silently pull an
+        # uncached faster-whisper model. The browser confirmation is advisory;
+        # this enforces it for direct API calls and the /api/models fallback.
+        if not allow_download:
+            uncached: list[str] = []
+            for _p, _mo, _lo, effective_model in eligible:
+                if (
+                    effective_model not in uncached
+                    and not transcripts.is_whisper_model_cached(effective_model)
+                ):
+                    uncached.append(effective_model)
+            if uncached:
+                return jsonify(
+                    {
+                        "ok": False,
+                        "reason": "model_not_cached",
+                        "uncached": [
+                            {"model": m, "size_mb": _whisper_model_size_mb(m)}
+                            for m in uncached
+                        ],
+                    }
+                )
+
+        for p, model_override, language_override, _effective_model in eligible:
             task = transcripts.create_transcript_task(
-                pid,
+                p["id"],
                 p["video_paths"],
                 model=model_override,
                 language=language_override,
@@ -1334,7 +1370,7 @@ def api_transcribe() -> FlaskResponse:
             enqueued.append(
                 {
                     "id": task["id"],
-                    "participant": pid,
+                    "participant": p["id"],
                     "status": task["status"],
                 }
             )

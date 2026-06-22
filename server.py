@@ -1050,6 +1050,13 @@ def _load_studio_settings() -> dict[str, Any]:
             setattr(config, name, cleaned)
             applied[name] = cleaned
             continue
+        if name in ("TITLECARD_COLOR", "ENDCARD_COLOR"):
+            color = str(value)
+            if not _HEX_COLOR_RE.match(color):
+                continue  # ignore a tampered/invalid value, keep the default
+            setattr(config, name, color)
+            applied[name] = color
+            continue
         expected_type = type(default) if default is not None else str
         try:
             if expected_type is bool:
@@ -2223,6 +2230,13 @@ def _apply_settings_payload(data: dict[str, Any]) -> tuple[dict[str, Any], str |
             setattr(config, name, cleaned)
             applied[name] = cleaned
             continue
+        if name in ("TITLECARD_COLOR", "ENDCARD_COLOR"):
+            color = str(value)
+            if not _HEX_COLOR_RE.match(color):
+                return {}, f"Invalid {name}: expected a #rrggbb hex color"
+            setattr(config, name, color)
+            applied[name] = color
+            continue
         expected_type = type(default) if default is not None else str
         try:
             if expected_type is bool:
@@ -2242,7 +2256,13 @@ def _apply_settings_payload(data: dict[str, Any]) -> tuple[dict[str, Any], str |
         setattr(config, name, coerced)
         applied[name] = coerced
 
-    _save_studio_settings(applied)
+    # Persist the full current settings state, not just the submitted keys: a
+    # partial PUT (e.g. only the inline titlecard toggle) must not drop other
+    # non-default settings already on disk. Every submitted key is now on
+    # config, so snapshot all of STUDIO_SETTINGS and let _save_studio_settings
+    # drop the ones equal to their default. Mirrors the reset path above.
+    merged = {name: getattr(config, name) for name in config.STUDIO_SETTINGS}
+    _save_studio_settings(merged)
     return applied, None
 
 

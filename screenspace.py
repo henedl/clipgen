@@ -74,8 +74,13 @@ from screenspace_ocr import (
     _score_text_readings,
     run_calibration_ocr,
 )
+
+# Re-exporting a name here only rebinds it on the facade — it does NOT propagate
+# to siblings that imported it (e.g. ``screenspace_scans._probe_video_meta``). To
+# stub a seam in a test, patch the owning module, not the facade.
 from screenspace_frames import (
     _ffmpeg_pipe_frames,
+    _probe_video_meta,
     _scan_via_ffmpeg_pipe,
     build_timelapse_command,
     scan_video_frames,
