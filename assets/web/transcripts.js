@@ -4292,20 +4292,52 @@
   }
 
   function transcribeParticipants(pids, force, overrides) {
-    ensureWhisperModelsForPids(pids, overrides).then(function (ok) {
-      if (!ok) return;
-      var body = { participants: pids, force: force };
-      if (overrides && Object.keys(overrides).length > 0) body.overrides = overrides;
-      apiPost("api/transcribe", body).then(function (data) {
-        if (!data.ok) {
-          showToast("Failed to enqueue transcription");
+    _postTranscribe(pids, force, overrides, false);
+  }
+
+  // POST to the transcribe endpoint. The server is the authority on whether a
+  // Whisper model is cached: when it rejects with reason "model_not_cached", we
+  // confirm each uncached download with the user and retry with allow_download.
+  function _postTranscribe(pids, force, overrides, allowDownload) {
+    var body = { participants: pids, force: force };
+    if (overrides && Object.keys(overrides).length > 0) body.overrides = overrides;
+    if (allowDownload) body.allow_download = true;
+    apiPost("api/transcribe", body).then(function (data) {
+      if (!data.ok) {
+        if (data.reason === "model_not_cached" && data.uncached && data.uncached.length) {
+          _confirmUncachedWhisperModels(data.uncached).then(function (ok) {
+            if (ok) _postTranscribe(pids, force, overrides, true);
+          });
           return;
         }
-        showToast("Enqueued " + clipgenPluralUnit(data.tasks.length, "transcription", "transcriptions"));
-        startPolling();
-        pollTaskStatus();
-      });
+        showToast("Failed to enqueue transcription");
+        return;
+      }
+      showToast("Enqueued " + clipgenPluralUnit(data.tasks.length, "transcription", "transcriptions"));
+      startPolling();
+      pollTaskStatus();
     });
+  }
+
+  // Confirm each distinct non-cached Whisper model in turn; any cancel aborts.
+  function _confirmUncachedWhisperModels(uncached) {
+    return uncached.reduce(function (chain, m) {
+      return chain.then(function (okSoFar) {
+        if (!okSoFar) return false;
+        return confirmModelInstall({
+          kind: "whisper",
+          model: m.model,
+          sizeMb: m.size_mb,
+        }).then(function (ok) {
+          if (ok) {
+            _whisperDownloadConfirmed[m.model] = true;
+            _trModelsCache = null;
+            _trModelsCachePromise = null;
+          }
+          return ok;
+        });
+      });
+    }, Promise.resolve(true));
   }
 
   // ---- Task polling ----
@@ -4852,50 +4884,6 @@
       }
       if (!info || info.installed || !info.model) return true;
       return confirmModelInstall({ kind: "ollama", agentKey: agentKey, model: info.model });
-    }).catch(function () { return true; });
-  }
-
-  // Gate transcription on every resolved whisper model being downloaded.
-  // Resolves true to proceed, false if the user cancels any required download.
-  function ensureWhisperModelsForPids(pids, overrides) {
-    return _trFetchModels().then(function (data) {
-      var models = (data && data.whisper && data.whisper.models) || [];
-      if (!models.length) return true;
-      var byName = {};
-      var defaultName = "";
-      models.forEach(function (m) {
-        byName[m.name] = m;
-        if (m.selected) defaultName = m.name;
-      });
-      var needed = {};
-      (pids || []).forEach(function (pid) {
-        var ov = (overrides && overrides[pid]) || {};
-        var name = ov.model || defaultName;
-        var m = name && byName[name];
-        if (m && m.cached === false && !_whisperDownloadConfirmed[name]) needed[name] = m;
-      });
-      var names = Object.keys(needed);
-      if (!names.length) return true;
-      // Confirm each distinct non-cached model in turn; any cancel aborts.
-      return names.reduce(function (chain, name) {
-        return chain.then(function (okSoFar) {
-          if (!okSoFar) return false;
-          return confirmModelInstall({
-            kind: "whisper",
-            model: name,
-            sizeMb: needed[name].size_mb,
-          }).then(function (ok) {
-            // Remember the agreement so we don't re-prompt before the
-            // background download has finished (the cached flag lags).
-            if (ok) {
-              _whisperDownloadConfirmed[name] = true;
-              _trModelsCache = null;
-              _trModelsCachePromise = null;
-            }
-            return ok;
-          });
-        });
-      }, Promise.resolve(true));
     }).catch(function () { return true; });
   }
 
