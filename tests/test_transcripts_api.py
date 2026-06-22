@@ -220,6 +220,7 @@ def test_transcribe_applies_per_participant_overrides(tr_client, monkeypatch):
         {"id": "P01", "video_paths": ["/tmp/P01.mp4"], "has_video": True}
     ]
     transcripts_server._worker = cast("transcripts.TranscriptWorker", _StubWorker())
+    monkeypatch.setattr(transcripts, "is_whisper_model_cached", lambda n=None: True)
 
     resp = tr_client.post(
         "/transcripts/api/transcribe",
@@ -237,7 +238,7 @@ def test_transcribe_applies_per_participant_overrides(tr_client, monkeypatch):
     assert captured[0]["language"] == "sv"
 
 
-def test_transcribe_without_overrides_defaults_to_none(tr_client):
+def test_transcribe_without_overrides_defaults_to_none(tr_client, monkeypatch):
     """Missing overrides → task uses None (worker falls back to config defaults)."""
 
     captured: list[dict] = []
@@ -250,6 +251,7 @@ def test_transcribe_without_overrides_defaults_to_none(tr_client):
         {"id": "P01", "video_paths": ["/tmp/P01.mp4"], "has_video": True}
     ]
     transcripts_server._worker = cast("transcripts.TranscriptWorker", _StubWorker())
+    monkeypatch.setattr(transcripts, "is_whisper_model_cached", lambda n=None: True)
 
     resp = tr_client.post(
         "/transcripts/api/transcribe",
@@ -259,6 +261,68 @@ def test_transcribe_without_overrides_defaults_to_none(tr_client):
     assert len(captured) == 1
     assert captured[0]["model"] is None
     assert captured[0]["language"] is None
+
+
+def test_transcribe_rejects_uncached_model(tr_client, monkeypatch):
+    """An uncached Whisper model is gated: no enqueue, model_not_cached reason."""
+
+    captured: list[dict] = []
+
+    class _StubWorker:
+        def enqueue(self, task):
+            captured.append(task)
+
+    transcripts_server._participants = [
+        {"id": "P01", "video_paths": ["/tmp/P01.mp4"], "has_video": True}
+    ]
+    transcripts_server._worker = cast("transcripts.TranscriptWorker", _StubWorker())
+    monkeypatch.setattr(transcripts, "is_whisper_model_cached", lambda n=None: False)
+
+    resp = tr_client.post(
+        "/transcripts/api/transcribe",
+        json={
+            "participants": ["P01"],
+            "force": True,
+            "overrides": {"P01": {"model": "large-v3"}},
+        },
+    )
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["ok"] is False
+    assert data["reason"] == "model_not_cached"
+    assert [u["model"] for u in data["uncached"]] == ["large-v3"]
+    assert captured == []  # nothing enqueued
+
+
+def test_transcribe_allows_uncached_with_allow_download(tr_client, monkeypatch):
+    """allow_download bypasses the cache gate and enqueues normally."""
+
+    captured: list[dict] = []
+
+    class _StubWorker:
+        def enqueue(self, task):
+            captured.append(task)
+
+    transcripts_server._participants = [
+        {"id": "P01", "video_paths": ["/tmp/P01.mp4"], "has_video": True}
+    ]
+    transcripts_server._worker = cast("transcripts.TranscriptWorker", _StubWorker())
+    monkeypatch.setattr(transcripts, "is_whisper_model_cached", lambda n=None: False)
+
+    resp = tr_client.post(
+        "/transcripts/api/transcribe",
+        json={
+            "participants": ["P01"],
+            "force": True,
+            "overrides": {"P01": {"model": "large-v3"}},
+            "allow_download": True,
+        },
+    )
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["ok"] is True
+    assert len(captured) == 1
+    assert captured[0]["model"] == "large-v3"
 
 
 # ---- Thinking-agent stop endpoints ----

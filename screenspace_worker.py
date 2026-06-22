@@ -287,17 +287,20 @@ class ScreenspaceWorker:
 
     def _write_heatmap_gifs(
         self,
-        task: dict[str, Any],
+        task_id: str,
         results: list[dict[str, Any]],
         width: int,
         height: int,
         heatmap_type: str,
         *,
         rolling: bool,
-    ) -> None:
-        """Write the cumulative (and optionally rolling-window) heatmap GIFs."""
+    ) -> dict[str, str]:
+        """Write the cumulative (and optionally rolling-window) heatmap GIFs.
+
+        Returns the generated GIF filenames keyed by attachment name.
+        """
         out_dir = Path(utils.get_effective_output_dir())
-        task_id = task["id"]
+        attachments: dict[str, str] = {}
         gp = generate_heatmap_gif(
             results,
             width,
@@ -306,7 +309,7 @@ class ScreenspaceWorker:
             heatmap_type=heatmap_type,
         )
         if gp:
-            task["heatmap_gif"] = Path(gp).name
+            attachments["heatmap_gif"] = Path(gp).name
         if rolling:
             rp = generate_rolling_heatmap_gif(
                 results,
@@ -317,49 +320,63 @@ class ScreenspaceWorker:
                 window_frames=config.SCREENSPACE_HEATMAP_ROLLING_WINDOW,
             )
             if rp:
-                task["heatmap_rolling_gif"] = Path(rp).name
+                attachments["heatmap_rolling_gif"] = Path(rp).name
+        return attachments
 
     def _generate_heatmap(
-        self, task: dict[str, Any], results: list[dict[str, Any]]
-    ) -> None:
+        self,
+        task_type: str,
+        task_id: str,
+        video_paths: list[str],
+        region_coords: dict[str, Any],
+        results: list[dict[str, Any]],
+    ) -> dict[str, str]:
         """Generate heatmap artifacts for template, flow, or change tasks.
 
-        Honors the per-tool ``SCREENSPACE_GENERATE_*_HEATMAP`` settings: when a
-        tool's heatmaps are disabled, nothing is generated for that task.
+        Pure compute + file I/O — takes primitives instead of the task dict and
+        returns the generated filenames keyed by attachment name, so it can run
+        *outside* the worker lock (it touches no shared task state). Honors the
+        per-tool ``SCREENSPACE_GENERATE_*_HEATMAP`` settings: when a tool's
+        heatmaps are disabled, returns ``{}``.
         """
-        task_type = task.get("type", "")
         heatmap_enabled = {
             "template": config.SCREENSPACE_GENERATE_TEMPLATE_HEATMAP,
             "flow": config.SCREENSPACE_GENERATE_FLOW_HEATMAP,
             "change": config.SCREENSPACE_GENERATE_CHANGE_HEATMAP,
         }
         if not heatmap_enabled.get(task_type, False):
-            return
-        task_id = task["id"]
+            return {}
+        attachments: dict[str, str] = {}
         heatmap_path = str(
             Path(utils.get_effective_output_dir()) / f"heatmap_{task_id}.png"
         )
         if task_type == "template":
-            props = video.probe_video_properties(task["video_paths"][0])
+            props = video.probe_video_properties(video_paths[0])
             fw = props.get("width", 1920) if props else 1920
             fh = props.get("height", 1080) if props else 1080
             hp = generate_template_heatmap(results, fw, fh, heatmap_path)
             if hp:
-                task["heatmap"] = Path(hp).name
-            self._write_heatmap_gifs(task, results, fw, fh, "template", rolling=True)
+                attachments["heatmap"] = Path(hp).name
+            attachments.update(
+                self._write_heatmap_gifs(
+                    task_id, results, fw, fh, "template", rolling=True
+                )
+            )
         elif task_type in ("flow", "change"):
-            rc = task.get("region_coords", {})
-            rw = rc.get("w", 256)
-            rh = rc.get("h", 256)
+            rw = region_coords.get("w", 256)
+            rh = region_coords.get("h", 256)
             if task_type == "flow":
                 hp = generate_flow_heatmap(results, rw, rh, heatmap_path)
             else:
                 hp = generate_change_heatmap(results, rw, rh, heatmap_path)
             if hp:
-                task["heatmap"] = Path(hp).name
-            self._write_heatmap_gifs(
-                task, results, rw, rh, task_type, rolling=task_type == "change"
+                attachments["heatmap"] = Path(hp).name
+            attachments.update(
+                self._write_heatmap_gifs(
+                    task_id, results, rw, rh, task_type, rolling=task_type == "change"
+                )
             )
+        return attachments
 
     def _run(self) -> None:
         """Worker loop with concurrent task execution via ThreadPoolExecutor."""
@@ -492,6 +509,9 @@ class ScreenspaceWorker:
 
         try:
             result = self._dispatch(task, _on_progress, _cancel_flag, _on_result)
+            # Inputs for deferred (lock-free) heatmap generation, captured under
+            # the lock and consumed after it's released.
+            heatmap_inputs: tuple[str, list[str], dict[str, Any]] | None = None
             with self._lock:
                 t = self._tasks.get(task_id)
                 if t:
@@ -517,14 +537,42 @@ class ScreenspaceWorker:
                             t, raw
                         )
                         if isinstance(result, list) and result:
-                            self._generate_heatmap(t, result)
-                            # change_grid is consumed only by heatmap generation;
-                            # drop it so completed tasks don't retain per-frame
-                            # grids in memory until dismissal.
-                            for r in result:
-                                if isinstance(r, dict):
-                                    r.pop("change_grid", None)
+                            # Defer heatmap/GIF generation to outside the lock —
+                            # it's heavy I/O (PNG + cumulative/rolling GIFs) that
+                            # would otherwise block status reads, cancellation,
+                            # dismissal, and SSE snapshots after scan completion.
+                            heatmap_inputs = (
+                                t.get("type", ""),
+                                list(t.get("video_paths", [])),
+                                dict(t.get("region_coords", {})),
+                            )
                     t["completed_at"] = datetime.now(timezone.utc).isoformat()
+
+            # Generate heatmaps without holding the lock, then briefly reacquire
+            # it to attach the filenames. Safe because the scan has finished
+            # (no more _on_result appends) and nothing else mutates `result`.
+            if heatmap_inputs is not None and isinstance(result, list) and result:
+                task_type, video_paths, region_coords = heatmap_inputs
+                attachments = self._generate_heatmap(
+                    task_type, task_id, video_paths, region_coords, result
+                )
+                # change_grid is consumed only by heatmap generation; drop it so
+                # completed tasks don't retain per-frame grids in memory until
+                # dismissal.
+                for r in result:
+                    if isinstance(r, dict):
+                        r.pop("change_grid", None)
+                with self._lock:
+                    t = self._tasks.get(task_id)
+                    if t is not None:
+                        t.update(attachments)
+                # The task was already marked completed before these heatmap
+                # filenames were attached, so emit an SSE update now — otherwise
+                # the frontend (which may already have seen the completed task via
+                # another worker's progress push) never re-renders the heatmap
+                # section until a page reload.
+                if attachments and self.on_progress_update:
+                    self.on_progress_update()
         except Exception as exc:
             with self._lock:
                 t = self._tasks.get(task_id)

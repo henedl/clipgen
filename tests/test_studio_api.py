@@ -233,6 +233,28 @@ def test_settings_put_persists_card_color(client, tmp_path, monkeypatch):
     assert server.config.TITLECARD_COLOR == "#ff8800"
 
 
+def test_settings_partial_put_preserves_other_settings(client, tmp_path, monkeypatch):
+    """A partial PUT must not drop unrelated non-default settings already saved."""
+    monkeypatch.setattr(server.config, "OUTPUT_DIR", str(tmp_path))
+    # A previously-selected card image (non-default) is live on config.
+    monkeypatch.setattr(server.config, "TITLECARD_IMAGE", "card.png")
+
+    # Submit only an inline titlecard key (mirrors the studio.js partial PUT;
+    # duration has no ffmpeg-support gate so the test stays dependency-free).
+    resp = client.put(
+        "/studio/api/settings",
+        json={"settings": {"TITLECARD_DURATION_SECONDS": 5}},
+    )
+    assert resp.status_code == 200
+    assert resp.get_json()["ok"] is True
+
+    saved = server.utils.load_json_manifest(
+        server.config.STUDIO_SETTINGS_FILENAME, default={}
+    )
+    assert saved.get("TITLECARD_IMAGE") == "card.png"  # preserved, not dropped
+    assert saved.get("TITLECARD_DURATION_SECONDS") == 5
+
+
 def test_settings_put_rejects_card_image_traversal(client, tmp_path, monkeypatch):
     """A card image setting that escapes the upload pool is rejected, not stored."""
     monkeypatch.setattr(server.config, "OUTPUT_DIR", str(tmp_path))
@@ -244,6 +266,19 @@ def test_settings_put_rejects_card_image_traversal(client, tmp_path, monkeypatch
     assert resp.status_code == 400
     assert resp.get_json()["ok"] is False
     assert server.config.TITLECARD_IMAGE == ""
+
+
+def test_settings_rejects_non_hex_card_color(client, tmp_path, monkeypatch):
+    """Card colors feed ffmpeg's lavfi color input — only #rrggbb is accepted."""
+    monkeypatch.setattr(server.config, "OUTPUT_DIR", str(tmp_path))
+    monkeypatch.setattr(server.config, "TITLECARD_COLOR", "#000000")
+    resp = client.put(
+        "/studio/api/settings",
+        json={"settings": {"TITLECARD_COLOR": "red; drawbox"}},
+    )
+    assert resp.status_code == 400
+    assert resp.get_json()["ok"] is False
+    assert server.config.TITLECARD_COLOR == "#000000"  # unchanged
 
 
 def test_settings_put_endcard_accepts_none_title_rejects_none(
