@@ -96,6 +96,14 @@ _thumbnail_cache: "OrderedDict[tuple, bytes]" = OrderedDict()
 # Guards every thumbnail cache access (get / move_to_end / insert / evict);
 # api_thumbnail is served concurrently by Flask's threaded dev server.
 _thumbnail_cache_lock = threading.Lock()
+# Card-scrubber assets (opt-in hover preview). Sprite sheets are small JPEGs;
+# audio segments are PCM WAV (~1 MB per short clip), so cap audio far lower.
+_SPRITE_CACHE_MAX = 256
+_sprite_cache: "OrderedDict[tuple, bytes]" = OrderedDict()
+_sprite_cache_lock = threading.Lock()
+_AUDIO_CACHE_MAX = 32
+_audio_cache: "OrderedDict[tuple, bytes]" = OrderedDict()
+_audio_cache_lock = threading.Lock()
 # A second concurrent /api/generate or /api/reel call would clobber the
 # shared cancel event; reject with 409 instead while one is in flight.
 _reel_cancel_event = threading.Event()
@@ -208,6 +216,22 @@ def _thumbnail_cache_put(key: tuple, value: bytes) -> None:
         _thumbnail_cache[key] = value
         while len(_thumbnail_cache) > _THUMBNAIL_CACHE_MAX:
             _thumbnail_cache.popitem(last=False)
+
+
+def _sprite_cache_put(key: tuple, value: bytes) -> None:
+    """Insert into the sprite-sheet cache with simple LRU eviction."""
+    with _sprite_cache_lock:
+        _sprite_cache[key] = value
+        while len(_sprite_cache) > _SPRITE_CACHE_MAX:
+            _sprite_cache.popitem(last=False)
+
+
+def _audio_cache_put(key: tuple, value: bytes) -> None:
+    """Insert into the clip-audio cache with simple LRU eviction."""
+    with _audio_cache_lock:
+        _audio_cache[key] = value
+        while len(_audio_cache) > _AUDIO_CACHE_MAX:
+            _audio_cache.popitem(last=False)
 
 
 def _try_claim_busy(slot: str) -> bool:
@@ -525,6 +549,152 @@ def api_thumbnail(participant: str, start_seconds: str) -> FlaskResponse:
     )
 
 
+def _parse_clip_window() -> tuple[float, float] | None:
+    """Parse + validate the ``?start=&end=`` seconds shared by the scrubber
+    media routes. Returns ``(start_seconds, duration_seconds)`` or ``None`` when
+    the params are missing/non-numeric or the range is empty."""
+    try:
+        start_sec = max(0.0, float(request.args.get("start", "")))
+        end_sec = float(request.args.get("end", ""))
+    except (ValueError, TypeError):
+        return None
+    duration = end_sec - start_sec
+    if duration <= 0:
+        return None
+    return start_sec, duration
+
+
+def _resolve_clip_media_source(
+    participant: str, start_sec: float
+) -> tuple[Path, float] | None:
+    """Resolve ``(video_path, local_start_seconds)`` for a participant timestamp.
+
+    Mirrors api_thumbnail's source resolution: maps a global second into the
+    owning sub-video for multi-video participants. Returns ``None`` when no
+    source video exists or the timestamp is beyond the recording.
+    """
+    sources = _resolve_participant_sources(participant)
+    if not sources or not sources[0].is_file():
+        return None
+    if len(sources) >= 2:
+        timeline = video.build_source_timeline([str(p) for p in sources])
+        if timeline is None:
+            return None
+        mapped = utils.resolve_timeline_segment(timeline, int(start_sec))
+        if mapped is None:
+            return None
+        return Path(mapped[0]), float(mapped[1])
+    return sources[0], max(0.0, start_sec)
+
+
+@studio_bp.route("/api/sprite/<participant>")
+def api_sprite(participant: str) -> FlaskResponse:
+    """Tiled JPEG sprite sheet of a clip for the opt-in hover card scrubber.
+
+    A clip straddling a multi-video boundary maps its *start* into the owning
+    sub-video and the sprite samples that file's tail (hover preview only).
+    """
+    if _sheet_context is None:
+        return jsonify({"ok": False, "error": "No spreadsheet loaded"}), 404
+    window = _parse_clip_window()
+    if window is None:
+        return jsonify({"ok": False, "error": "Invalid clip range"}), 400
+    start_sec, duration = window
+
+    resolved = _resolve_clip_media_source(participant, start_sec)
+    if resolved is None:
+        return jsonify({"ok": False, "error": "Source video not found"}), 404
+    video_path, local_start = resolved
+    cols = config.STUDIO_SCRUBBER_SPRITE_COLS
+    rows = config.STUDIO_SCRUBBER_SPRITE_ROWS
+
+    try:
+        mtime = video_path.stat().st_mtime
+    except OSError:
+        mtime = 0.0
+    cache_key = (
+        str(video_path),
+        round(local_start, 3),
+        round(duration, 3),
+        cols,
+        rows,
+        mtime,
+    )
+    with _sprite_cache_lock:
+        cached = _sprite_cache.get(cache_key)
+        if cached is not None:
+            _sprite_cache.move_to_end(cache_key)
+    if cached is not None:
+        return Response(
+            cached,
+            mimetype="image/jpeg",
+            headers={"Cache-Control": "public, max-age=86400"},
+        )
+
+    sprite_bytes = video.extract_sprite_sheet_bytes(
+        str(video_path), local_start, duration, cols, rows
+    )
+    if sprite_bytes is None:
+        return jsonify({"ok": False, "error": "Sprite extraction failed"}), 404
+
+    _sprite_cache_put(cache_key, sprite_bytes)
+    return Response(
+        sprite_bytes,
+        mimetype="image/jpeg",
+        headers={"Cache-Control": "public, max-age=86400"},
+    )
+
+
+@studio_bp.route("/api/clip-audio/<participant>")
+def api_clip_audio(participant: str) -> FlaskResponse:
+    """Mono WAV of a clip's audio for the opt-in hover card scrubber.
+
+    PCM WAV (not the source's compressed audio) so the browser's WebAudio
+    ``decodeAudioData`` decodes it reliably. Boundary-straddling clips map their
+    *start* into the owning sub-video (hover preview only).
+    """
+    if _sheet_context is None:
+        return jsonify({"ok": False, "error": "No spreadsheet loaded"}), 404
+    window = _parse_clip_window()
+    if window is None:
+        return jsonify({"ok": False, "error": "Invalid clip range"}), 400
+    start_sec, duration = window
+
+    resolved = _resolve_clip_media_source(participant, start_sec)
+    if resolved is None:
+        return jsonify({"ok": False, "error": "Source video not found"}), 404
+    video_path, local_start = resolved
+
+    try:
+        mtime = video_path.stat().st_mtime
+    except OSError:
+        mtime = 0.0
+    cache_key = (str(video_path), round(local_start, 3), round(duration, 3), mtime)
+    with _audio_cache_lock:
+        cached = _audio_cache.get(cache_key)
+        if cached is not None:
+            _audio_cache.move_to_end(cache_key)
+    if cached is not None:
+        return Response(
+            cached,
+            mimetype="audio/wav",
+            headers={"Cache-Control": "public, max-age=86400"},
+        )
+
+    wav_bytes = video.extract_audio_segment_bytes(
+        str(video_path), local_start, duration
+    )
+    if wav_bytes is None:
+        return jsonify({"ok": False, "error": "Audio extraction failed"}), 404
+
+    _audio_cache_put(cache_key, wav_bytes)
+    return Response(
+        wav_bytes,
+        mimetype="audio/wav",
+        headers={"Cache-Control": "public, max-age=86400"},
+    )
+
+
 @studio_bp.route("/api/sheet")
 def api_sheet() -> FlaskResponse:
     if _sheet_context is None:
@@ -538,6 +708,7 @@ def api_sheet() -> FlaskResponse:
                 "titlecardsEnabled": config.TITLECARDS_ENABLED,
                 "titlecardDuration": config.TITLECARD_DURATION_SECONDS,
                 "cellExpandHover": config.STUDIO_CELL_EXPAND_HOVER,
+                "cardScrubberEnabled": config.STUDIO_CARD_SCRUBBER,
                 "config": utils.get_frontend_config(),
                 "participants": [],
                 "rows": [],
@@ -611,6 +782,7 @@ def api_sheet() -> FlaskResponse:
             "titlecardsEnabled": config.TITLECARDS_ENABLED,
             "titlecardDuration": config.TITLECARD_DURATION_SECONDS,
             "cellExpandHover": config.STUDIO_CELL_EXPAND_HOVER,
+            "cardScrubberEnabled": config.STUDIO_CARD_SCRUBBER,
             "defaultDuration": config.DEFAULT_DURATION_SECONDS,
             "config": utils.get_frontend_config(),
             "participants": participants,
@@ -2924,7 +3096,9 @@ def _init_studio_state(worksheet: Any) -> None:
         _sheet_context, \
         _generated_artifacts, \
         _generated_reels, \
-        _thumbnail_cache
+        _thumbnail_cache, \
+        _sprite_cache, \
+        _audio_cache
 
     _load_studio_settings()
     _worksheet = worksheet
@@ -2942,6 +3116,10 @@ def _init_studio_state(worksheet: Any) -> None:
         _rebuild_artifact_index()
     with _thumbnail_cache_lock:
         _thumbnail_cache = OrderedDict()
+    with _sprite_cache_lock:
+        _sprite_cache = OrderedDict()
+    with _audio_cache_lock:
+        _audio_cache = OrderedDict()
 
 
 # ---- Entry point ----

@@ -55,6 +55,8 @@ var CLIPGEN_CONFIG = {
   frictionColorToken: "--color-friction",
   frictionMomentLimit: 5,
   convergenceSources: ["sheet", "screenspace", "transcript"],
+  cardScrubberSpriteCols: 5,
+  cardScrubberSpriteRows: 5,
 };
 
 var clipgenApplyConfig = function (payload) {
@@ -91,6 +93,12 @@ var clipgenApplyConfig = function (payload) {
   }
   if (Array.isArray(payload.convergenceSources)) {
     CLIPGEN_CONFIG.convergenceSources = payload.convergenceSources;
+  }
+  if (typeof payload.cardScrubberSpriteCols === "number") {
+    CLIPGEN_CONFIG.cardScrubberSpriteCols = payload.cardScrubberSpriteCols;
+  }
+  if (typeof payload.cardScrubberSpriteRows === "number") {
+    CLIPGEN_CONFIG.cardScrubberSpriteRows = payload.cardScrubberSpriteRows;
   }
 };
 

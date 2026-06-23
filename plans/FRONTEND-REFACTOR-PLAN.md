@@ -263,7 +263,7 @@ Use this when executing waves; check items in PR descriptions.
 ### Wave 2
 
 - [x] A5 CSS include audit (Transcripts/Screenspace) — toast moved to `topnav.css`; `primitives.css` dropped from both
-- [ ] A6 Card-scrubber: integrate or remove — deferred, left parked (unused; re-hook when filmstrip thumbnails return)
+- [x] A6 Card-scrubber: **integrated** (opt-in). Studio settings toggle (`STUDIO_CARD_SCRUBBER`) + `/api/sprite`/`/api/clip-audio` routes; timeline-viewer header toggle layering audio/waveform onto the existing `<video>`-seek scrub (inlined by `viewer.py`)
 - [x] B1 `video-controls.js` — shared `nextSpeed`/`applyPlaybackRate`
 - [x] B2 `intake-cluster.js` — `window.ClipgenIntakeCluster`; drops `window._studioCluster*`
 
@@ -277,7 +277,7 @@ Use this when executing waves; check items in PR descriptions.
 
 - [x] A3 finish — `createPoller` adopted in Screenspace + Transcripts (and Studio job-status); only the Ollama model-pull loop stays raw `setInterval`
 - [ ] C6 server-injected `<head>` partial (live pages; exports stay self-contained)
-- [ ] A6 card-scrubber — delete (module + inline `viewer.js` dup) **or** keep parked with pointer
+- [x] A6 card-scrubber — **integrated** (opt-in, default off) on Studio + the timeline viewer; the viewer keeps its `<video>`-seek visual scrub and adds the module's audio + waveform. Note: the inline `viewer.js` scrubber and `card-scrubber.js` were never true duplicates (video-seek vs sprite-sheet), so the viewer-dup line in the duplication map is moot
 - [x] C4 SVG → mask — closed: `studio.js`/`studio.html`/`start-overlay.html` audited; remaining inline `<svg>` are documented intentional exceptions (animations, brand/file-type glyphs, decorative artworks), `viewer.css` data-URIs kept
 - [x] C5 token sweep — done: full pass across all five page CSS files; 4 new tokens (`--text-2xs`, `--radius-xs`, `--space-1-5`, `--space-2-5`)
 - [ ] B5 `.btn` vs `.cg-btn` — reconcile or document (defer unless touched)

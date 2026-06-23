@@ -1457,6 +1457,17 @@ body.dragging #sheetMain {
   display: block;
 }
 
+/* Card scrubber (opt-in): the sprite sheet is painted as the thumb's
+   background-image once loaded; hide the resting <img> on hover so the
+   scrubbed frame underneath shows through (no black flash before load). */
+.queue-card-thumb.card-scrub-ready {
+  background-repeat: no-repeat;
+}
+
+.queue-card-thumb.card-scrub-ready:hover img {
+  opacity: 0;
+}
+
 .queue-card-duration {
   position: absolute;
   bottom: 3px;

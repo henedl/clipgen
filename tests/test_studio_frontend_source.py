@@ -4,6 +4,7 @@ from pathlib import Path
 
 STUDIO_JS = Path(__file__).resolve().parent.parent / "assets" / "web" / "studio.js"
 STUDIO_CSS = Path(__file__).resolve().parent.parent / "assets" / "web" / "studio.css"
+STUDIO_HTML = Path(__file__).resolve().parent.parent / "assets" / "web" / "studio.html"
 
 
 def _studio_js() -> str:
@@ -204,3 +205,33 @@ def test_intake_drop_targets_route_through_add_to_queue():
     assert body.count("if (isIntakeSource(info.source))") == 2
     assert body.count("addToQueue(state.artifactQueue, info, renderArtifactQueue)") >= 1
     assert body.count("addToQueue(state.reelQueue, info, renderReelQueue)") >= 2
+
+
+def test_studio_card_scrubber_wiring():
+    """Opt-in card scrubber: state flag, attach hook, settings re-read, assets."""
+    src = _studio_js()
+    assert "cardScrubberEnabled: false" in src
+    assert "function attachQueueScrubbers(listEl)" in src
+    assert "window.clipgenCardScrubber.attach(thumb" in src
+    assert "window.clipgenCardScrubber.detachStale()" in src
+    assert "CLIPGEN_CONFIG.cardScrubberSpriteCols" in src
+    assert '_findSetting("STUDIO_CARD_SCRUBBER")' in src
+
+    html = STUDIO_HTML.read_text(encoding="utf-8")
+    assert '<link rel="stylesheet" href="card-scrubber.css">' in html
+    assert '<script src="card-scrubber.js"></script>' in html
+
+
+def test_studio_card_scrubber_gates_on_thumbnail_and_prefetches():
+    """Scrubber only wires cards with a real thumbnail frame (invalid-timestamp
+    cards 404), and warms sprite sheets in a throttled background queue."""
+    src = _studio_js()
+    # Gate: activate only when the thumbnail <img> actually loaded a frame.
+    assert "function wireCardScrubber(thumb, cols, rows, frameCount)" in src
+    assert "img.complete && img.naturalWidth > 0" in src
+    assert "if (img.naturalWidth > 0) activate();" in src
+    # Eager, throttled prefetch of sprite sheets.
+    assert "function enqueueSpritePrefetch(thumb)" in src
+    assert "function processSpritePrefetch()" in src
+    assert "function loadCardSprite(thumb, done)" in src
+    assert "SPRITE_PREFETCH_CONCURRENCY" in src

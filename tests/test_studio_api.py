@@ -3978,3 +3978,70 @@ def test_api_reel_direct_clears_endcard_cache(client, monkeypatch, tmp_path):
     _drain_ndjson(resp)
     assert _poll_until(lambda: server._reel_in_progress is False)
     assert len(clear_calls) == 1
+
+
+# ── Card scrubber media endpoints (opt-in hover scrub) ──────────────────────
+
+
+def test_card_scrubber_flag_in_sheet_payload(client):
+    """/api/sheet exposes the card-scrubber flag for the frontend toggle."""
+    data = client.get("/studio/api/sheet").get_json()
+    assert data["cardScrubberEnabled"] is False
+
+
+@pytest.mark.parametrize(
+    "path", ["/studio/api/sprite/P01", "/studio/api/clip-audio/P01"]
+)
+def test_scrubber_media_404_when_no_sheet(client, path):
+    resp = client.get(path + "?start=0&end=5")
+    assert resp.status_code == 404
+    data = resp.get_json()
+    assert data["ok"] is False
+    assert "No spreadsheet loaded" in data["error"]
+
+
+@pytest.mark.parametrize(
+    "path", ["/studio/api/sprite/P01", "/studio/api/clip-audio/P01"]
+)
+@pytest.mark.parametrize(
+    "query", ["", "?start=5&end=5", "?start=5&end=2", "?start=abc&end=9"]
+)
+def test_scrubber_media_400_on_bad_window(client, monkeypatch, path, query):
+    monkeypatch.setattr(server, "_sheet_context", object())
+    resp = client.get(path + query)
+    assert resp.status_code == 400
+    assert resp.get_json()["ok"] is False
+
+
+def test_api_sprite_happy_path(client, monkeypatch):
+    from pathlib import Path
+
+    monkeypatch.setattr(server, "_sheet_context", object())
+    monkeypatch.setattr(
+        server, "_resolve_clip_media_source", lambda p, s: (Path("/nope.mp4"), 0.0)
+    )
+    monkeypatch.setattr(
+        server.video, "extract_sprite_sheet_bytes", lambda *a, **k: b"JPEGDATA"
+    )
+    resp = client.get("/studio/api/sprite/P01?start=0&end=5")
+    assert resp.status_code == 200
+    assert resp.mimetype == "image/jpeg"
+    assert resp.headers["Cache-Control"] == "public, max-age=86400"
+    assert resp.data == b"JPEGDATA"
+
+
+def test_api_clip_audio_happy_path(client, monkeypatch):
+    from pathlib import Path
+
+    monkeypatch.setattr(server, "_sheet_context", object())
+    monkeypatch.setattr(
+        server, "_resolve_clip_media_source", lambda p, s: (Path("/nope.mp4"), 0.0)
+    )
+    monkeypatch.setattr(
+        server.video, "extract_audio_segment_bytes", lambda *a, **k: b"WAVDATA"
+    )
+    resp = client.get("/studio/api/clip-audio/P01?start=0&end=5")
+    assert resp.status_code == 200
+    assert resp.mimetype == "audio/wav"
+    assert resp.headers["Cache-Control"] == "public, max-age=86400"
+    assert resp.data == b"WAVDATA"

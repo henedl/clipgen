@@ -852,6 +852,130 @@ def extract_thumbnail_bytes(
     return result.stdout
 
 
+def extract_sprite_sheet_bytes(
+    input_file: str,
+    start_seconds: float,
+    duration_seconds: float,
+    cols: int,
+    rows: int,
+    *,
+    frame_width: int = 160,
+) -> bytes | None:
+    """Extract a single tiled JPEG sprite sheet for hover scrubbing.
+
+    Samples ``cols * rows`` frames evenly across ``[start, start + duration]``
+    and lays them out left-to-right, top-to-bottom into one image. Frame ``i``
+    corresponds to source time ``start + i * (duration / (cols * rows))`` — the
+    frontend card scrubber maps cursor position to a frame and shifts
+    ``background-position`` accordingly. Returns JPEG bytes or ``None`` on
+    failure.
+    """
+    if config.DEBUGGING:
+        ic(input_file, start_seconds, duration_seconds, cols, rows)
+        return None
+
+    if not Path(input_file).is_file():
+        return None
+
+    frame_count = max(1, cols * rows)
+    duration = max(0.1, duration_seconds)
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-loglevel",
+        config.FFMPEG_LOGLEVEL,
+        "-ss",
+        str(max(0.0, start_seconds)),
+        "-t",
+        str(duration),
+        "-i",
+        input_file,
+        "-frames:v",
+        "1",
+        "-vf",
+        f"fps={frame_count}/{duration},scale={frame_width}:-1,tile={cols}x{rows}",
+        "-f",
+        "image2pipe",
+        "-vcodec",
+        "mjpeg",
+        "-q:v",
+        "5",
+        "pipe:1",
+    ]
+
+    try:
+        result = subprocess.run(cmd, capture_output=True, timeout=20)
+    except (FileNotFoundError, OSError, subprocess.TimeoutExpired):
+        return None
+
+    if result.returncode != 0 or not result.stdout:
+        return None
+    return result.stdout
+
+
+def extract_audio_segment_bytes(
+    input_file: str,
+    start_seconds: float,
+    duration_seconds: float,
+    *,
+    sample_rate: int = 22050,
+) -> bytes | None:
+    """Extract ``[start, start + duration]`` as mono 16-bit PCM WAV bytes.
+
+    Downsampled to *sample_rate* and written to a temp file (not a pipe) so the
+    WAV header carries a correct data-chunk size — a non-seekable pipe leaves
+    that size unwritten, which some browsers' WebAudio ``decodeAudioData``
+    reject. PCM WAV decodes reliably across browsers, unlike compressed audio in
+    a video container. Returns WAV bytes or ``None`` on failure.
+    """
+    if config.DEBUGGING:
+        ic(input_file, start_seconds, duration_seconds, sample_rate)
+        return None
+
+    if not Path(input_file).is_file():
+        return None
+
+    duration = max(0.05, duration_seconds)
+    tmp_fd, tmp_path = tempfile.mkstemp(suffix=".wav")
+    os.close(tmp_fd)
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-loglevel",
+        config.FFMPEG_LOGLEVEL,
+        "-ss",
+        str(max(0.0, start_seconds)),
+        "-t",
+        str(duration),
+        "-i",
+        input_file,
+        "-vn",
+        "-ac",
+        "1",
+        "-ar",
+        str(sample_rate),
+        "-acodec",
+        "pcm_s16le",
+        "-f",
+        "wav",
+        tmp_path,
+    ]
+
+    try:
+        result = subprocess.run(cmd, capture_output=True, timeout=20)
+        if result.returncode != 0:
+            return None
+        data = Path(tmp_path).read_bytes()
+        return data or None
+    except (FileNotFoundError, OSError, subprocess.TimeoutExpired):
+        return None
+    finally:
+        try:
+            os.remove(tmp_path)
+        except OSError:
+            pass
+
+
 def extract_gif(
     input_file: str,
     output_file: str,

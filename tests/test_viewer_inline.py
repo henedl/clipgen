@@ -19,6 +19,12 @@ def test_generate_timeline_viewer_inlines_css_and_js(tmp_path, monkeypatch):
     assert '<script src="viewer.js" defer></script>' not in html
     assert '<script src="utils.js" defer></script>' not in html
 
+    # The card-scrubber module is inlined too (external tags stripped).
+    assert '<link rel="stylesheet" href="card-scrubber.css">' not in html
+    assert '<script src="card-scrubber.js" defer></script>' not in html
+    assert "clipgenCardScrubber" in html
+    assert ".waveform-canvas" in html
+
     # Inlined blocks present, with the data payload bound.
     assert "<style>" in html
     assert "<script defer>" in html

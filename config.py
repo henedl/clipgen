@@ -153,6 +153,14 @@ GOOGLE_API_MAX_RETRIES: int = 3  # Retries for transient Google API errors (429,
 
 STUDIO_THUMBNAIL_WIDTH: int = 200
 
+# Card scrubber: hover a queue card to scrub frames (sprite sheet) + hear audio
+# with a waveform overlay. Opt-in. The sprite grid dims are mirrored to the
+# frontend via utils.get_frontend_config() (the scrubber computes frameCount /
+# per-frame interval from them), so they must not be hardcoded in JS.
+STUDIO_CARD_SCRUBBER: bool = False
+STUDIO_SCRUBBER_SPRITE_COLS: int = 5
+STUDIO_SCRUBBER_SPRITE_ROWS: int = 5
+
 # ── Screenspace ──────────────────────────────────────────────────────
 SCREENSPACE_MANIFEST_FILENAME: str = "screenspace_manifest.json"
 TRANSCRIPTS_MANIFEST_FILENAME: str = "transcripts_manifest.json"
@@ -436,6 +444,7 @@ SETTINGS_DESCRIPTIONS: dict[str, str] = {
     "HIGHLIGHTS_REEL_DURATION_SECONDS": "Maximum duration in seconds for the highlights reel time budget.",
     "MANIFEST_ENABLED": "Write a manifest JSON file alongside generated artifacts for session tracking.",
     "STUDIO_CELL_EXPAND_HOVER": "Expand overflowing timestamp cells on hover in the Sheet Preview.",
+    "STUDIO_CARD_SCRUBBER": "Hover a queue card's thumbnail to scrub through frames, hear the clip's audio, and see a waveform overlay.",
     "FILMSTRIP_ENABLED": "Show thumbnail images on timeline markers instead of solid colors (in the HTML viewer).",
     "GALLERY_BUNDLE_ENABLED": "Embed gallery images as base64 data URIs in the HTML file, making it fully self-contained.",
     "CLIP_PARALLEL_WORKERS": "Number of concurrent ffmpeg processes for clip generation. 0 = auto, 1 = sequential.",
@@ -472,6 +481,11 @@ STUDIO_SETTINGS: dict[str, dict[str, Any]] = {
         "step": 1,
     },
     "STUDIO_CELL_EXPAND_HOVER": {
+        "tab": "General",
+        "group": "Sheet Preview",
+        "type": "bool",
+    },
+    "STUDIO_CARD_SCRUBBER": {
         "tab": "General",
         "group": "Sheet Preview",
         "type": "bool",

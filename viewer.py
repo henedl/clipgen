@@ -285,6 +285,28 @@ def _generate_viewer_html(
         except OSError:
             pass
 
+    # Inline the card-scrubber module into viewers that reference it (timeline,
+    # not gallery). Its CSS/JS join the shared bundles so the export stays
+    # self-contained; the external tags are stripped below.
+    cs_css_tag = '<link rel="stylesheet" href="card-scrubber.css">'
+    cs_js_tag = '<script src="card-scrubber.js" defer></script>'
+    if cs_css_tag in template_html:
+        cs_css_path = assets_dir / "card-scrubber.css"
+        if cs_css_path.is_file():
+            try:
+                css_text = css_text + "\n" + _read_bundled_asset(str(cs_css_path))
+            except OSError:
+                pass
+        template_html = template_html.replace(cs_css_tag, "")
+    if cs_js_tag in template_html:
+        cs_js_path = assets_dir / "card-scrubber.js"
+        if cs_js_path.is_file():
+            try:
+                js_text = _read_bundled_asset(str(cs_js_path)) + "\n" + js_text
+            except OSError:
+                pass
+        template_html = template_html.replace(cs_js_tag, "")
+
     # Prepend shared utilities so standalone viewers have them
     utils_js_path = assets_dir / "utils.js"
     if utils_js_path.is_file():
