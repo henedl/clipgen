@@ -1110,8 +1110,8 @@ def _boundaries_from_periods(
     ``periods[0]`` is the initial period (video start, no entering boundary); a
     boundary exists at the start of every period after it. Each result carries
     the span it opens as ``period_start``/``period_end`` and the label of the
-    scene it enters as ``scene_label`` (``scene_index`` set by the labeler;
-    falls back to position order when absent).
+    scene it enters as ``scene_label`` (set by the labeler; falls back to a
+    sequential label by position when absent).
     """
     results: list[dict[str, Any]] = []
     for k in range(1, len(periods)):
@@ -1128,7 +1128,7 @@ def _boundaries_from_periods(
                 "_confidence": round(p["entry_conf"], 4),
                 "period_start": p["start_ts"],
                 "period_end": period_end,
-                "scene_label": _scene_label(p.get("scene_index", k)),
+                "scene_label": p.get("scene_label") or _scene_label(k),
             }
         )
     return results
@@ -1142,6 +1142,7 @@ def _consolidate_boundary_periods(
     short_period_seconds: float,
     relative_prune_enabled: bool,
     relative_prune_factor: float,
+    type_threshold: float = 1.0,
     min_boundaries_for_prune: int = 4,
 ) -> list[dict[str, Any]]:
     """Post-run sanity pass over the scene/hybrid period list.
@@ -1213,22 +1214,51 @@ def _consolidate_boundary_periods(
         # adjacent; re-run the merge passes to collapse the duplicate boundary.
         periods = _run_merge_passes(periods)
 
-    # Recurrence-aware scene labels: greedily group periods whose fingerprints
-    # are within merge_threshold, so a revisited scene (back to the menu) reuses
-    # its label instead of getting a fresh one. Reusing merge_threshold means the
-    # one Settings knob also controls how readily scenes are considered "the
-    # same" for labeling.
-    cluster_reps: list[dict[str, Any]] = []
+    # Hierarchical scene labels (Scene A1, A2, B1, …): the letter is the *type*
+    # (similar scenes grouped at the looser type_threshold), the number is the
+    # distinct *scene* within that type (exact recurrence at merge_threshold). A
+    # revisited scene reuses its full label; a similar-but-distinct scene shares
+    # the letter with a new number.
+    #
+    # 1. Tight clustering → a distinct scene id per period (exact recurrence).
+    scene_reps: list[dict[str, Any]] = []
     for p in periods:
-        scene_index = None
-        for ci, rep in enumerate(cluster_reps):
+        scene_id = None
+        for ci, rep in enumerate(scene_reps):
             if 1.0 - compare_scene_fingerprints(_fp(p), rep) < merge_threshold:
-                scene_index = ci
+                scene_id = ci
                 break
-        if scene_index is None:
-            scene_index = len(cluster_reps)
-            cluster_reps.append(_fp(p))
-        p["scene_index"] = scene_index
+        if scene_id is None:
+            scene_id = len(scene_reps)
+            scene_reps.append(_fp(p))
+        p["_scene_id"] = scene_id
+
+    # 2. Loose clustering over the scene representatives → a type id per scene,
+    #    so every period of one scene shares a type.
+    type_of_scene: list[int] = []
+    type_reps: list[dict[str, Any]] = []
+    for rep in scene_reps:
+        type_id = None
+        for ci, trep in enumerate(type_reps):
+            if 1.0 - compare_scene_fingerprints(rep, trep) < type_threshold:
+                type_id = ci
+                break
+        if type_id is None:
+            type_id = len(type_reps)
+            type_reps.append(rep)
+        type_of_scene.append(type_id)
+
+    # 3. Number the distinct scenes within each type, in first-appearance order.
+    type_scenes: dict[int, list[int]] = {}
+    for sid in range(len(scene_reps)):
+        type_scenes.setdefault(type_of_scene[sid], []).append(sid)
+
+    # 4. Label: Scene <type letter><scene number within type>.
+    for p in periods:
+        sid = p["_scene_id"]
+        tid = type_of_scene[sid]
+        scene_num = type_scenes[tid].index(sid) + 1
+        p["scene_label"] = f"Scene {utils.index_to_letter(tid)}{scene_num}"
 
     return _boundaries_from_periods(periods, end_seconds)
 
@@ -1464,6 +1494,7 @@ def scan_boundaries(
         short_period_seconds=config.SCREENSPACE_BOUNDARY_SHORT_PERIOD_SECONDS,
         relative_prune_enabled=config.SCREENSPACE_BOUNDARY_RELATIVE_PRUNE_ENABLED,
         relative_prune_factor=config.SCREENSPACE_BOUNDARY_RELATIVE_PRUNE_FACTOR,
+        type_threshold=config.SCREENSPACE_BOUNDARY_TYPE_THRESHOLD,
     )
     for rd in final:
         results.append(rd)

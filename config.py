@@ -236,6 +236,7 @@ SCREENSPACE_BOUNDARY_SCENE_THRESHOLD: float = 0.25  # fingerprint distance (1 �
 SCREENSPACE_BOUNDARY_CONFIRM_WINDOW: int = 2  # samples a scene shift must persist before it counts (suppresses one-frame blips)
 SCREENSPACE_BOUNDARY_SCENE_HASH_DIM: int = 128  # pipe downscale for fingerprinting (coarser 64px phash dim is too sparse for the HSV histogram)
 SCREENSPACE_BOUNDARY_MERGE_THRESHOLD: float = 0.15  # post-run: merge adjacent periods whose fingerprints are at least this similar (below firing threshold)
+SCREENSPACE_BOUNDARY_TYPE_THRESHOLD: float = 0.35  # scene labeling: group distinct scenes this close into one "type" (Scene A1/A2); looser than merge
 SCREENSPACE_BOUNDARY_SHORT_PERIOD_SECONDS: float = (
     3.0  # post-run: only periods shorter than this are transient-dissolve candidates
 )
@@ -456,6 +457,7 @@ SETTINGS_DESCRIPTIONS: dict[str, str] = {
     "SCREENSPACE_GENERATE_FLOW_HEATMAP": "Generate motion heatmaps (static image plus accumulation animation) for Flow tasks. Disable to skip heatmap generation when you don't need it.",
     "SCREENSPACE_GENERATE_CHANGE_HEATMAP": "Generate change heatmaps (static image plus accumulation and rolling-window animations) for Change tasks. Disable to skip heatmap generation when you don't need it — useful on long videos where it adds processing time.",
     "SCREENSPACE_BOUNDARY_MERGE_THRESHOLD": "Boundary post-processing (Scene/Hybrid metrics): merge two periods whose content is at least this similar, removing the boundary between them. Higher = merge more aggressively (fewer boundaries); lower = keep more. Below the firing sensitivity by design.",
+    "SCREENSPACE_BOUNDARY_TYPE_THRESHOLD": "Boundary scene labeling (Scene/Hybrid metrics): distinct scenes closer than this are grouped into one 'type', labeled Scene A1, A2, … (same letter, different number). Looser than the merge threshold. Higher = group more scenes per type; lower = more distinct type letters.",
     "SCREENSPACE_BOUNDARY_RELATIVE_PRUNE_ENABLED": "Boundary post-processing (Scene/Hybrid metrics): after merging, drop boundaries far weaker than the session's typical scene change. Adapts to each recording instead of a fixed threshold; disable to keep every detected boundary.",
 }
 
@@ -712,6 +714,14 @@ STUDIO_SETTINGS: dict[str, dict[str, Any]] = {
         "type": "bool",
     },
     "SCREENSPACE_BOUNDARY_MERGE_THRESHOLD": {
+        "tab": "Screenspace",
+        "group": "Boundaries",
+        "type": "float",
+        "min": 0.0,
+        "max": 1.0,
+        "step": 0.01,
+    },
+    "SCREENSPACE_BOUNDARY_TYPE_THRESHOLD": {
         "tab": "Screenspace",
         "group": "Boundaries",
         "type": "float",

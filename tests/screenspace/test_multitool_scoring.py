@@ -429,6 +429,7 @@ class TestConsolidateBoundaryPeriods:
         short_period_seconds=3.0,
         relative_prune_enabled=False,
         relative_prune_factor=0.5,
+        type_threshold=0.35,
     ):
         return screenspace_scans._consolidate_boundary_periods(
             periods,
@@ -437,6 +438,7 @@ class TestConsolidateBoundaryPeriods:
             short_period_seconds=short_period_seconds,
             relative_prune_enabled=relative_prune_enabled,
             relative_prune_factor=relative_prune_factor,
+            type_threshold=type_threshold,
         )
 
     def test_adjacent_merge_drops_spurious_boundary(self, monkeypatch):
@@ -507,8 +509,9 @@ class TestConsolidateBoundaryPeriods:
 
     def test_recurrence_labels_reuse_for_same_scene(self, monkeypatch):
         self._patch(monkeypatch)
-        # Scenes 1 → 2 → back to 1 → 3: the revisit to scene 1 reuses "Scene A"
-        # (the initial period's label); distinct scenes get fresh letters.
+        # Scenes 1 → 2 → back to 1 → 3: the revisit to scene 1 reuses its label.
+        # With the binary metric every distinct scene is its own type, so labels
+        # are <type letter>1 and the revisit reuses "Scene A1".
         periods = [
             self._period(0, 1, 0),
             self._period(10, 2, 80),
@@ -517,9 +520,36 @@ class TestConsolidateBoundaryPeriods:
         ]
         results = self._consolidate(periods)
         assert [r["scene_label"] for r in results] == [
-            "Scene B",
-            "Scene A",
-            "Scene C",
+            "Scene B1",
+            "Scene A1",
+            "Scene C1",
+        ]
+
+    def test_similar_scenes_share_type_letter(self, monkeypatch):
+        # Graded metric: distance grows with |Δtag|*0.2. Tags 1 & 2 are similar
+        # (distinct scenes, same type → A1/A2); tag 5 is a different type (B1);
+        # revisiting tag 1 reuses A1.
+        monkeypatch.setattr(
+            screenspace_scans,
+            "compute_scene_fingerprint",
+            lambda f: {"tag": int(f[0, 0, 0])},
+        )
+        monkeypatch.setattr(
+            screenspace_scans,
+            "compare_scene_fingerprints",
+            lambda a, b: max(0.0, 1.0 - min(1.0, abs(a["tag"] - b["tag"]) * 0.2)),
+        )
+        periods = [
+            self._period(0, 1, 0),
+            self._period(10, 2, 80),
+            self._period(20, 5, 80),
+            self._period(30, 1, 80),
+        ]
+        results = self._consolidate(periods)
+        assert [r["scene_label"] for r in results] == [
+            "Scene A2",
+            "Scene B1",
+            "Scene A1",
         ]
 
     def test_prune_then_remerge_collapses_duplicate_boundary(self, monkeypatch):
@@ -536,7 +566,7 @@ class TestConsolidateBoundaryPeriods:
         ]
         results = self._consolidate(periods, relative_prune_enabled=True)
         assert [r["timestamp"] for r in results] == [10.0, 40.0]
-        assert [r["scene_label"] for r in results] == ["Scene B", "Scene C"]
+        assert [r["scene_label"] for r in results] == ["Scene B1", "Scene C1"]
 
 
 class TestScanBoundariesSceneHybrid:

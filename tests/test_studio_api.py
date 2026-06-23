@@ -213,6 +213,7 @@ def test_settings_records_include_boundary_post_processing(client):
     by_name = {s["name"]: s for s in data["settings"]}
     assert by_name["SCREENSPACE_BOUNDARY_MERGE_THRESHOLD"]["type"] == "float"
     assert by_name["SCREENSPACE_BOUNDARY_MERGE_THRESHOLD"]["tab"] == "Screenspace"
+    assert by_name["SCREENSPACE_BOUNDARY_TYPE_THRESHOLD"]["type"] == "float"
     assert by_name["SCREENSPACE_BOUNDARY_RELATIVE_PRUNE_ENABLED"]["type"] == "bool"
 
 

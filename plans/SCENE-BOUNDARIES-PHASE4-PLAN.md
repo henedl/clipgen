@@ -3,7 +3,14 @@
 > Detail for the Phase 4 stub in [SCENE-BOUNDARIES-PLAN.md](SCENE-BOUNDARIES-PLAN.md).
 > **Status: ✅ implemented.** Default metric `hybrid`; period-reference model + confirm window;
 > post-run merge/round-trip/relative-prune pass; settled-frame retention; period-span metadata;
-> metric selector UI; two tunable knobs in the Screenspace settings tab.
+> metric selector UI; tunable knobs in the Screenspace settings tab.
+>
+> **Follow-on enhancement (shipped):** hierarchical recurrence-aware scene labels — `Scene A1`,
+> `A2`, `B1` where the letter is the *type* (similar scenes grouped at `SCREENSPACE_BOUNDARY_TYPE_THRESHOLD`)
+> and the number is the distinct *scene* within that type (exact recurrence at the merge threshold).
+> Surfaced in the Screenspace results list + tooltips, the Timeline Viewer tooltip, and the Studio
+> convergence preview; carried in event metadata (and `--export`). Two review fixes also landed:
+> intake no longer pads navigational ticks ±5s, and the post-run pass re-merges after the prune.
 
 ## Context / problem
 
