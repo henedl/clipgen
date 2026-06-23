@@ -1843,6 +1843,24 @@ def discover_participant_videos(study_name: str = "") -> list[dict[str, Any]]:
 
 # ---- Flask blueprint helpers ----
 
+# Live index pages embed this marker where the shared favicon + Google-fonts
+# block belongs; render_index_html() expands it from assets/web/_head.html so
+# the block lives in one place. Exported viewers don't use it (self-contained).
+_HEAD_MARKER = "<!-- CLIPGEN_HEAD_HERE -->"
+
+
+def render_index_html(assets_dir: Path, index_html: str) -> str:
+    """Read an index page, expanding the shared ``<head>`` marker if present.
+
+    Pages without the marker are returned unchanged, so this stays safe for any
+    current or future index page.
+    """
+    html = (assets_dir / index_html).read_text(encoding="utf-8")
+    if _HEAD_MARKER in html:
+        head = (assets_dir / "_head.html").read_text(encoding="utf-8").rstrip("\n")
+        html = html.replace(_HEAD_MARKER, head)
+    return html
+
 
 def register_static_routes(
     bp: Any,
@@ -1876,7 +1894,7 @@ def register_static_routes(
 
     @bp.route("/")
     def serve_index() -> Response:
-        return send_from_directory(assets_dir, index_html)
+        return Response(render_index_html(assets_dir, index_html), mimetype="text/html")
 
     @bp.route("/<path:filename>")
     def serve_static(filename: str) -> Response:
