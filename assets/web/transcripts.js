@@ -7,9 +7,9 @@
  *   - Transcription warmup: a single `tryPostTranscriptionWarmup()` post that
  *     asks the backend to preload the Whisper model. `_transcriptionWarmupPosted`
  *     guards it so we never double-post per page load.
- *   - Summary / citations: Ollama-generated; `_summaryPollTimer` and
- *     `_citationsPollTimer` poll the backend until the result lands or the
- *     user navigates away.
+ *   - Summary / citations: Ollama-generated; `_summaryPoller` and
+ *     `_citationsPoller` (createPoller handles) poll the backend until the
+ *     result lands or the user navigates away.
  */
 
 (function () {
@@ -31,7 +31,7 @@
     searchResults: null,
     activeSegmentIndex: -1,
     editingTextEl: null,
-    pollTimer: null,
+    pollPoller: null,
     lastMarkCategory: "bookmark",
     streamingParticipant: null,
     ssEvents: [],
@@ -39,7 +39,7 @@
     sheetRows: [],
     sheetParticipants: [],
     sheetLoaded: false,
-    xrefPollTimer: null,
+    xrefPoller: null,
     xrefEligible: false,
     xrefIndex: { eventsByParticipant: {}, sheetByParticipant: {} },
     tooltipsEnabled: true,
@@ -81,7 +81,7 @@
   // Last-known TRANSCRIBE_MODEL, so a settings change can reset the prewarm
   // guards for the new model. Seeded once from the model-status hint.
   var _lastTranscribeModel = null;
-  var _modelHintPollTimer = null;
+  var _modelHintPoller = null;
   var _hadActiveTranscriptionLastPoll = false;
   var MODEL_FAIL_GRACE_MS = 10000;
 
@@ -112,15 +112,17 @@
   // ---- Cross-reference data ----
 
   function startXrefPolling() {
-    if (!state.xrefEligible || state.xrefPollTimer) return;
-    loadCrossRefData();
-    state.xrefPollTimer = setInterval(loadCrossRefData, 30000);
+    if (!state.xrefEligible || state.xrefPoller) return;
+    // createPoller runs loadCrossRefData once immediately (runImmediately default),
+    // then every 30s — matching the old explicit call + setInterval.
+    state.xrefPoller = createPoller(loadCrossRefData, 30000);
+    state.xrefPoller.start();
   }
 
   function stopXrefPolling() {
-    if (state.xrefPollTimer) {
-      clearInterval(state.xrefPollTimer);
-      state.xrefPollTimer = null;
+    if (state.xrefPoller) {
+      state.xrefPoller.stop();
+      state.xrefPoller = null;
     }
   }
 
@@ -412,9 +414,9 @@
   }
 
   function stopModelHintPoll() {
-    if (_modelHintPollTimer) {
-      clearInterval(_modelHintPollTimer);
-      _modelHintPollTimer = null;
+    if (_modelHintPoller) {
+      _modelHintPoller.stop();
+      _modelHintPoller = null;
     }
   }
 
@@ -456,8 +458,10 @@
         })
         .catch(function () {});
     };
-    poll();
-    _modelHintPollTimer = setInterval(poll, 1500);
+    // createPoller runs poll() once immediately (runImmediately default), then
+    // every 1.5s — matching the old explicit poll() + setInterval.
+    _modelHintPoller = createPoller(poll, 1500);
+    _modelHintPoller.start();
   }
 
   function maybeWarmOnPillHover(p, s) {
@@ -760,17 +764,17 @@
 
   // ---- AI Summary ----
   //
-  // Two cooperating pollers:
-  //   _summaryPollTimer   — runs while the backend is still generating the
-  //                         summary. Stops as soon as a summary lands, or
-  //                         when the user switches participant.
-  //   _citationsPollTimer — runs after the summary arrives if citations are
-  //                         still being computed (citations depend on summary).
-  // Both are cleared by their own _stop*Poll() helpers; either also stops if
-  // `state.selectedParticipant` no longer matches the participant the timer
+  // Two cooperating pollers (createPoller handles):
+  //   _summaryPoller   — runs while the backend is still generating the
+  //                      summary. Stops as soon as a summary lands, or
+  //                      when the user switches participant.
+  //   _citationsPoller — runs after the summary arrives if citations are
+  //                      still being computed (citations depend on summary).
+  // Both are stopped by their own _stop*Poll() helpers; either also stops if
+  // `state.selectedParticipant` no longer matches the participant the poll
   // was started for.
 
-  var _summaryPollTimer = null;
+  var _summaryPoller = null;
 
   function loadSummary(pid) {
     var ver = _participantReqVer;
@@ -825,7 +829,8 @@
   function _startSummaryPoll(pid) {
     _stopSummaryPoll();
     var ver = _participantReqVer;
-    _summaryPollTimer = setInterval(function () {
+    // runImmediately is false to match the previous setInterval (first poll after 3s).
+    _summaryPoller = createPoller(function () {
       if (ver !== _participantReqVer || state.selectedParticipant !== pid) {
         _stopSummaryPoll();
         return;
@@ -861,13 +866,14 @@
         _stopSummaryPoll();
         renderSummaryEmpty();
       });
-    }, 3000);
+    }, 3000, { runImmediately: false });
+    _summaryPoller.start();
   }
 
   function _stopSummaryPoll() {
-    if (_summaryPollTimer) {
-      clearInterval(_summaryPollTimer);
-      _summaryPollTimer = null;
+    if (_summaryPoller) {
+      _summaryPoller.stop();
+      _summaryPoller = null;
     }
   }
 
@@ -1027,7 +1033,7 @@
 
   // ---- Citation rendering (Pass 2) ----
 
-  var _citationsPollTimer = null;
+  var _citationsPoller = null;
 
   function renderCitations() {
     // Remove any existing status text
@@ -1111,7 +1117,8 @@
     _stopCitationsPoll();
     var started = Date.now();
     var ver = _participantReqVer;
-    _citationsPollTimer = setInterval(function () {
+    // runImmediately is false to match the previous setInterval (first poll after 3s).
+    _citationsPoller = createPoller(function () {
       if (ver !== _participantReqVer ||
           state.selectedParticipant !== pid ||
           Date.now() - started > _CITATIONS_POLL_TIMEOUT) {
@@ -1141,16 +1148,17 @@
         var status = qs("#summaryContent .citations-status");
         if (status) status.remove();
       });
-    }, 3000);
+    }, 3000, { runImmediately: false });
+    _citationsPoller.start();
   }
 
-  // Timer teardown only — does NOT reset _citationsEtaTracker (renderCitationsStatus
+  // Poller teardown only — does NOT reset _citationsEtaTracker (renderCitationsStatus
   // resets-then-seeds), mirroring _stopSummaryPoll / _stopFrictionPoll. Resetting
-  // here would wipe the seed when _startCitationsPoll restarts the poll timer.
+  // here would wipe the seed when _startCitationsPoll restarts the poll.
   function _stopCitationsPoll() {
-    if (_citationsPollTimer) {
-      clearInterval(_citationsPollTimer);
-      _citationsPollTimer = null;
+    if (_citationsPoller) {
+      _citationsPoller.stop();
+      _citationsPoller = null;
     }
   }
 
@@ -1310,7 +1318,7 @@
   // scores. Generation mirrors summary/citations (poll until done; manual
   // run/cancel bypass the global flag).
 
-  var _frictionPollTimer = null;
+  var _frictionPoller = null;
 
   function _currentParticipant() {
     var pid = state.selectedParticipant;
@@ -1511,7 +1519,8 @@
     _stopFrictionPoll();
     var started = Date.now();
     var ver = _participantReqVer;
-    _frictionPollTimer = setInterval(function () {
+    // runImmediately is false to match the previous setInterval (first poll after 3s).
+    _frictionPoller = createPoller(function () {
       if (ver !== _participantReqVer ||
           state.selectedParticipant !== pid ||
           Date.now() - started > _CITATIONS_POLL_TIMEOUT) {
@@ -1536,13 +1545,14 @@
         state.frictionGenerating = false;
         renderFrictionEmpty();
       });
-    }, 3000);
+    }, 3000, { runImmediately: false });
+    _frictionPoller.start();
   }
 
   function _stopFrictionPoll() {
-    if (_frictionPollTimer) {
-      clearInterval(_frictionPollTimer);
-      _frictionPollTimer = null;
+    if (_frictionPoller) {
+      _frictionPoller.stop();
+      _frictionPoller = null;
     }
   }
 
@@ -4349,18 +4359,20 @@
   }
 
   // ---- Task polling ----
-  // state.pollTimer → pollTaskStatus for Whisper jobs; summary/citations use
-  // separate timers (see file header).
+  // state.pollPoller → pollTaskStatus for Whisper jobs; summary/citations use
+  // separate pollers (see file header).
 
   function startPolling() {
-    if (state.pollTimer) return;
-    state.pollTimer = setInterval(pollTaskStatus, POLL_INTERVAL);
+    if (state.pollPoller) return;
+    // runImmediately is false to match the previous setInterval (first poll after POLL_INTERVAL).
+    state.pollPoller = createPoller(pollTaskStatus, POLL_INTERVAL, { runImmediately: false });
+    state.pollPoller.start();
   }
 
   function stopPolling() {
-    if (state.pollTimer) {
-      clearInterval(state.pollTimer);
-      state.pollTimer = null;
+    if (state.pollPoller) {
+      state.pollPoller.stop();
+      state.pollPoller = null;
     }
   }
 
@@ -4394,7 +4406,7 @@
     if (!pid) return;
     var p = _currentParticipant();
     var summaryRunning = !!(p && p.agents && p.agents.summary === "running");
-    if (summaryRunning && !_summaryPollTimer && !state.summaryText) loadSummary(pid);
+    if (summaryRunning && !_summaryPoller && !state.summaryText) loadSummary(pid);
     if (!state.frictionData && !state.frictionGenerating && _frictionDepMet()) loadFriction(pid);
   }
 

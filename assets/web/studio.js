@@ -1327,14 +1327,16 @@
   }
 
   function startJobStatusPoll() {
-    if (state.jobStatusTimer) return;
-    state.jobStatusTimer = setInterval(pollJobStatus, 1000);
+    if (state.jobStatusPoller) return;
+    // runImmediately is false to match the previous setInterval (first poll after 1s).
+    state.jobStatusPoller = createPoller(pollJobStatus, 1000, { runImmediately: false });
+    state.jobStatusPoller.start();
   }
 
   function stopJobStatusPoll() {
-    if (state.jobStatusTimer) {
-      clearInterval(state.jobStatusTimer);
-      state.jobStatusTimer = null;
+    if (state.jobStatusPoller) {
+      state.jobStatusPoller.stop();
+      state.jobStatusPoller = null;
     }
   }
 
@@ -3466,6 +3468,7 @@
 
   function createPulserOverlay() {
     var overlay = el("div", "card-gen-overlay");
+    // Intentional inline SVG (icon convention exception): a three-dot "generating" pulse animation, not an icon.
     overlay.innerHTML =
       '<svg width="26" height="10" viewBox="0 0 26 10">' +
       '<circle cx="5" cy="7" r="3"/>' +
