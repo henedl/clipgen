@@ -1327,14 +1327,16 @@
   }
 
   function startJobStatusPoll() {
-    if (state.jobStatusTimer) return;
-    state.jobStatusTimer = setInterval(pollJobStatus, 1000);
+    if (state.jobStatusPoller) return;
+    // runImmediately is false to match the previous setInterval (first poll after 1s).
+    state.jobStatusPoller = createPoller(pollJobStatus, 1000, { runImmediately: false });
+    state.jobStatusPoller.start();
   }
 
   function stopJobStatusPoll() {
-    if (state.jobStatusTimer) {
-      clearInterval(state.jobStatusTimer);
-      state.jobStatusTimer = null;
+    if (state.jobStatusPoller) {
+      state.jobStatusPoller.stop();
+      state.jobStatusPoller = null;
     }
   }
 

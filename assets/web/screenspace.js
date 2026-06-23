@@ -219,7 +219,7 @@
     selectedTaskId: null,
     hoveredTaskId: null,
     selectedTaskResults: null,
-    pollTimer: null,
+    poller: null,
     eventSource: null,
     queuePaused: false,
     timelineDragging: false,
@@ -6331,15 +6331,18 @@
   // ---- Polling (fallback) ----
 
   function startPolling() {
-    if (state.pollTimer) return;
-    if (document.hidden) return;
-    state.pollTimer = setInterval(pollTasks, POLL_INTERVAL);
+    if (state.poller) return;
+    // createPoller pauses while the tab is hidden and resumes on return, so the
+    // old `if (document.hidden) return` guard is no longer needed. runImmediately
+    // is false to match the previous setInterval (first poll after POLL_INTERVAL).
+    state.poller = createPoller(pollTasks, POLL_INTERVAL, { runImmediately: false });
+    state.poller.start();
   }
 
   function stopPolling() {
-    if (state.pollTimer) {
-      clearInterval(state.pollTimer);
-      state.pollTimer = null;
+    if (state.poller) {
+      state.poller.stop();
+      state.poller = null;
     }
   }
 

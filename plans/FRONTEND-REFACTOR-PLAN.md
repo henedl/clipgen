@@ -28,7 +28,7 @@ The frontend is a **vanilla JS/CSS stack** (~50k lines in 43 files under `assets
 **Main pain points (still open):**
 
 1. **Four separate `renderTimeline()` implementations** (screenspace / transcripts / viewer / convergence; only amplitude bands shared)
-2. **Polling only half-unified:** `createPoller` adopted in Studio, but Screenspace + Transcripts still run ~8 raw `setInterval` pollers
+2. ~~**Polling only half-unified**~~ ✅ Resolved: `createPoller` now drives every periodic poller (Studio, Screenspace, Transcripts); only the Ollama model-pull loop (Promise-based, custom cancel/miss-count) stays a raw `setInterval`
 3. **Convention debt:** inline SVG in HTML/JS (Screenspace toolbar done, rest pending), ~770 raw `px` in the three page CSS files, dual button systems (`.cg-btn` vs `.btn`)
 4. **Page monoliths persist:** `screenspace.js` 7.5k (partially carved), `studio.js` 5.8k (state hub), `transcripts.js` 5.2k (untouched, no satellites)
 5. **Dead / partial assets:** `card-scrubber.js` parked **and** duplicated inline in `viewer.js`; `<head>` favicon/fonts copy-pasted across 7 HTML files
@@ -109,7 +109,7 @@ The frontend is a **vanilla JS/CSS stack** (~50k lines in 43 files under `assets
 | Icon masks | ✅ RESOLVED | Unified `iconMask*` helpers in `utils.js`; old APIs collapsed onto them |
 | Canvas theme colors | ✅ RESOLVED | `getCanvasThemeColors()` in `utils.js`; Screenspace + Transcripts |
 | Intake clustering | ✅ RESOLVED | `intake-cluster.js` (`window.ClipgenIntakeCluster`); `_studioCluster*` gone |
-| Polling | ◐ PARTIAL | `createPoller` adopted in Studio; Screenspace (1) + Transcripts (~7) still raw `setInterval` |
+| Polling | ✅ RESOLVED | `createPoller` adopted across Studio, Screenspace, Transcripts (8 pollers converted 2026-06-23); only the Ollama model-pull loop stays a raw `setInterval` (Promise-based, custom cancel/miss-count) |
 | `renderTimeline()` | ❌ STILL PRESENT | Four implementations: screenspace, transcripts, viewer, convergence |
 | Card scrubber | ❌ STILL PRESENT | `card-scrubber.js` parked (unloaded) **and** dup'd inline in `viewer.js` |
 | HTML `<head>` | ❌ STILL PRESENT | Favicon + fonts copy-pasted across 7 HTML files; no shared/injected partial |
@@ -199,7 +199,7 @@ Globals stay on `window` namespaces; script order in HTML documents dependencies
 
 | Wave | Items | Status |
 |------|-------|--------|
-| **1** | A1, A2, A3, A4 | ✅ Shipped (PR #366) — except A3 polling adoption (Studio only) |
+| **1** | A1, A2, A3, A4 | ✅ Shipped (PR #366); A3 polling adoption completed 2026-06-23 (Screenspace + Transcripts) |
 | **2** | A5, A6, B1, B2 | ✅ Shipped (PR #385) — except A6 card-scrubber (still parked) |
 | **3** | B3, C4 (incremental), C5 (opportunistic) | ✅ B3 shipped (PR #388); C4 closed (documented exceptions); C5 full sweep done (2026-06-23) |
 | **4** | C1, C2, C3 | ⬜ Not started (Screenspace partially carved on a different axis) |
@@ -207,7 +207,7 @@ Globals stay on `window` namespaces; script order in HTML documents dependencies
 ## Remaining work — re-prioritized (as of 2026-06-23)
 
 1. **Finish half-done (now, low risk):**
-   - **A3** — adopt `createPoller` in Screenspace (1 poller) + Transcripts (~7 pollers); retires ~8 raw `setInterval` bug surfaces.
+   - ~~**A3** — adopt `createPoller` in Screenspace + Transcripts~~ ✅ Done (2026-06-23): 8 pollers converted (Screenspace ×1, Transcripts ×6, Studio job-status ×1); Ollama model-pull loop left as a raw `setInterval` (Promise-based, custom cancel/miss-count).
    - **C6** — server-injected `<head>` partial (favicon + fonts) for the three live pages; leave exported viewers self-contained.
 2. **Decide & close:**
    - **A6** — card-scrubber: **delete** the parked module + the inline `viewer.js` dup, or keep parked with a one-line pointer. Parked across two ARCHITECTURE.md notes — make the call.
@@ -257,7 +257,7 @@ Use this when executing waves; check items in PR descriptions.
 
 - [x] A1 `export-actions.js` + TopNav wiring on all three surfaces
 - [x] A2 Shared toast CSS + consistent hide behavior
-- [~] A3 `createPoller` in `utils.js` — **PARTIAL**: adopted in Studio only; Screenspace (1) + Transcripts (~7) still raw `setInterval` (see Remaining work §1)
+- [x] A3 `createPoller` in `utils.js` — adopted across Studio, Screenspace, Transcripts (8 pollers, 2026-06-23); Ollama model-pull loop intentionally left as raw `setInterval`
 - [x] A4 `getCanvasThemeColors` in `utils.js`; Screenspace + Transcripts canvases
 
 ### Wave 2
@@ -275,7 +275,7 @@ Use this when executing waves; check items in PR descriptions.
 
 ### Remaining (re-prioritized)
 
-- [ ] A3 finish — adopt `createPoller` in Screenspace + Transcripts pollers
+- [x] A3 finish — `createPoller` adopted in Screenspace + Transcripts (and Studio job-status); only the Ollama model-pull loop stays raw `setInterval`
 - [ ] C6 server-injected `<head>` partial (live pages; exports stay self-contained)
 - [ ] A6 card-scrubber — delete (module + inline `viewer.js` dup) **or** keep parked with pointer
 - [x] C4 SVG → mask — closed: `studio.js`/`studio.html`/`start-overlay.html` audited; remaining inline `<svg>` are documented intentional exceptions (animations, brand/file-type glyphs, decorative artworks), `viewer.css` data-URIs kept
@@ -295,3 +295,4 @@ Use this when executing waves; check items in PR descriptions.
 |------|--------|
 | 2026-05-19 | Initial plan from frontend refactor investigation (plan-only session) |
 | 2026-06-23 | Refreshed inventory/counts to current reality (43 files); repointed archived cross-links; reconciled Screenspace C1 to the actual hub+satellite axis; marked Waves 1–3 shipped + A3 partial; re-prioritized remaining work (Transcripts split first) |
+| 2026-06-23 | Closed C4 (icon gap — documented intentional inline-SVG exceptions), C5 (full 181-`px`→token sweep + 4 new tokens), and A3 (`createPoller` across all 8 remaining pollers). Verified A1/A2/A4/A5 already shipped. |
