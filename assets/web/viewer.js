@@ -2063,6 +2063,9 @@
         !cur ||
         ev.participant !== cur.participant ||
         ev.eventType !== cur.eventType ||
+        // Boundary ticks are individual points — never merge them, or a cluster
+        // would render only its first tick and hide later boundaries.
+        ev.navigational ||
         ev.timeIn - cur.end > 5
       ) {
         if (cur) clusters.push(cur);

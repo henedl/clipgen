@@ -34,6 +34,10 @@
         !cur ||
         ev.participant !== cur.participant ||
         ev.event_type !== cur.event_type ||
+        // Navigational (boundary) events render as individual point ticks, so
+        // never merge them — a merged cluster would draw only its first tick and
+        // hide the rest. Each boundary gets its own cluster.
+        ev.navigational ||
         ev.time_in - cur.end > thresholdSec
       ) {
         if (cur) clusters.push(cur);
