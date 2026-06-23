@@ -15,7 +15,7 @@
 /* Page-specific variables — shared tokens are in tokens.css */
 
 html {
-  font-size: 16px;
+  font-size: var(--text-md);
 }
 
 body {
@@ -1797,7 +1797,7 @@ body[data-frontend="screenspace"] {
   border: 1px solid var(--color-border);
   border-radius: var(--radius-sm);
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--text-2xs);
   line-height: 1.4;
 }
 
@@ -3502,7 +3502,7 @@ body.panel-dragging #bottomPanel {
   appearance: none;
   height: 4px;
   background: var(--color-border);
-  border-radius: 2px;
+  border-radius: var(--radius-xs);
   cursor: pointer;
   outline: none;
 }
@@ -3584,13 +3584,13 @@ body.panel-dragging #bottomPanel {
   min-width: 80px;
   height: 4px;
   background: var(--bg-input);
-  border-radius: 2px;
+  border-radius: var(--radius-xs);
   overflow: hidden;
 }
 
 .result-bar-fill {
   height: 100%;
-  border-radius: 2px;
+  border-radius: var(--radius-xs);
 }
 
 #resultsActions {

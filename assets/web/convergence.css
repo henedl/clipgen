@@ -16,7 +16,7 @@
   display: flex;
   align-items: center;
   gap: 14px;
-  padding: 10px var(--space-3) 8px;
+  padding: var(--space-2-5) var(--space-3) var(--space-2);
   border-bottom: 1px solid var(--hairline);
   flex-wrap: wrap;
 }
@@ -24,22 +24,22 @@
 .cv-control-label {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  font-size: 12px;
+  gap: var(--space-1-5);
+  font-size: var(--text-xs);
   color: var(--fg-muted);
 }
 
 .cv-control-input {
   font-family: var(--font-mono);
   font-feature-settings: "tnum";
-  font-size: 11px;
+  font-size: var(--text-2xs);
   height: 22px;
   width: 36px;
-  padding: 0 6px;
+  padding: 0 var(--space-1-5);
   background: var(--bg-input);
   color: var(--fg);
   border: 1px solid var(--border);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   outline: none;
   -moz-appearance: textfield;
 }
@@ -50,19 +50,19 @@
 }
 
 .cv-control-suffix {
-  font-size: 11px;
+  font-size: var(--text-2xs);
   color: var(--fg-faint);
 }
 
 .cv-control-select {
   font-family: inherit;
-  font-size: 12px;
+  font-size: var(--text-xs);
   height: 24px;
-  padding: 0 6px;
+  padding: 0 var(--space-1-5);
   background: var(--bg-input);
   color: var(--fg);
   border: 1px solid var(--border);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   cursor: pointer;
 }
 
@@ -71,21 +71,21 @@
 .convergence-filters {
   display: flex;
   align-items: center;
-  padding: 8px var(--space-3);
+  padding: var(--space-2) var(--space-3);
   border-bottom: 1px solid var(--hairline);
 }
 
 .cv-stream-row {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-2);
   flex-wrap: wrap;
   width: 100%;
 }
 
 .cv-stream-btn {
-  padding: 4px 12px;
-  border-radius: 999px;
+  padding: var(--space-1) var(--space-3);
+  border-radius: var(--radius-full);
   font-size: 11.5px;
   font-weight: 500;
   background: transparent;
@@ -109,13 +109,13 @@
   width: 1px;
   height: 16px;
   background: var(--border);
-  margin: 0 4px;
+  margin: 0 var(--space-1);
   flex: 0 0 auto;
 }
 
 .cv-event-type-row {
   display: flex;
-  gap: 6px;
+  gap: var(--space-1-5);
   flex-wrap: wrap;
   align-items: center;
 }
@@ -145,17 +145,17 @@
   justify-content: center;
   height: 120px;
   color: var(--fg-muted);
-  font-size: 13px;
+  font-size: var(--text-sm);
   text-align: center;
   padding: var(--space-3);
 }
 
 .cv-no-convergence {
   padding: var(--space-2) var(--space-3);
-  font-size: 12px;
+  font-size: var(--text-xs);
   color: var(--fg-muted);
   text-align: center;
-  margin-bottom: 8px;
+  margin-bottom: var(--space-2);
 }
 
 /* ---- Refresh button (toolbar, right-aligned) ---- */
@@ -179,18 +179,18 @@
 /* ---- Cluster callouts (below swim-lane) ---- */
 
 .cv-cluster-callouts {
-  margin-top: 12px;
+  margin-top: var(--space-3);
   display: flex;
-  gap: 8px;
+  gap: var(--space-2);
   flex-wrap: wrap;
 }
 
 .cv-callout {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
-  padding: 6px 10px;
-  border-radius: 4px;
+  gap: var(--space-2);
+  padding: var(--space-1-5) var(--space-2-5);
+  border-radius: var(--radius-sm);
   border: 1px solid;
   font-size: 11.5px;
   cursor: pointer;
@@ -216,14 +216,14 @@
 /* ---- Detail panel (inline) ---- */
 
 .cv-detail-inline {
-  margin: 12px var(--space-3) 0;
+  margin: var(--space-3) var(--space-3) 0;
   background: var(--bg-elevated);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
-  padding: 12px 14px;
+  padding: var(--space-3) 14px;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: var(--space-2-5);
 }
 .cv-detail-inline.hidden { display: none; }
 
@@ -231,8 +231,8 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
-  padding-bottom: 8px;
+  gap: var(--space-2);
+  padding-bottom: var(--space-2);
   border-bottom: 1px solid var(--hairline);
 }
 
@@ -246,17 +246,17 @@
 
 .cv-detail-actions {
   display: flex;
-  gap: 6px;
+  gap: var(--space-1-5);
 }
 
 .cv-detail-participants {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: var(--space-2);
 }
 
 .cv-detail-participant {
-  padding: 6px 0;
+  padding: var(--space-1-5) 0;
 }
 .cv-detail-participant + .cv-detail-participant {
   border-top: 1px solid var(--hairline);
@@ -265,12 +265,12 @@
 .cv-detail-pid-row {
   display: flex;
   align-items: center;
-  gap: 6px;
-  margin-bottom: 4px;
+  gap: var(--space-1-5);
+  margin-bottom: var(--space-1);
 }
 
 .cv-detail-pid-count {
-  font-size: 11px;
+  font-size: var(--text-2xs);
   color: var(--fg-faint);
 }
 
@@ -283,9 +283,9 @@
 .cv-detail-event {
   display: flex;
   align-items: center;
-  gap: 8px;
-  font-size: 12px;
-  padding: 3px 4px;
+  gap: var(--space-2);
+  font-size: var(--text-xs);
+  padding: 3px var(--space-1);
   border-radius: var(--radius-sm);
 }
 .cv-detail-event:hover {
@@ -335,7 +335,7 @@
 
 .cv-detail-event-actions {
   display: flex;
-  gap: 4px;
+  gap: var(--space-1);
   margin-left: auto;
   flex-shrink: 0;
 }

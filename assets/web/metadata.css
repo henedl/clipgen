@@ -96,7 +96,7 @@
 
 .md-kpi-strip {
   display: flex;
-  gap: 10px;
+  gap: var(--space-2-5);
   padding: 14px var(--space-3);
 }
 
@@ -107,18 +107,18 @@
   background: var(--bg-elevated);
   border: 1px solid var(--border);
   border-radius: 6px;
-  padding: 14px 16px;
+  padding: 14px var(--space-4);
 }
 
 .md-activity-head {
   display: flex;
   justify-content: space-between;
   align-items: baseline;
-  margin-bottom: 8px;
+  margin-bottom: var(--space-2);
 }
 
 .md-activity-title {
-  font-size: 11px;
+  font-size: var(--text-2xs);
   font-weight: 500;
   text-transform: uppercase;
   letter-spacing: 0.07em;
@@ -126,7 +126,7 @@
 }
 
 .md-activity-range {
-  font-size: 11px;
+  font-size: var(--text-2xs);
   color: var(--fg-faint);
 }
 
@@ -139,7 +139,7 @@
   justify-content: space-between;
   font-size: 10px;
   color: var(--fg-faint);
-  margin-top: 4px;
+  margin-top: var(--space-1);
 }
 
 /* ---- Details expander ---- */
@@ -151,9 +151,9 @@
 .md-details-head {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-2);
   width: 100%;
-  padding: 10px 14px;
+  padding: var(--space-2-5) 14px;
   background: var(--bg-elevated);
   border: 1px solid var(--border);
   border-radius: 6px;
@@ -199,13 +199,13 @@
 }
 
 .md-details-count {
-  font-size: 11px;
+  font-size: var(--text-2xs);
   color: var(--fg-faint);
 }
 
 .md-details-body {
   display: none;
-  margin-top: 10px;
+  margin-top: var(--space-2-5);
   border: 1px solid var(--border);
   border-radius: 6px;
   overflow: hidden;
@@ -508,7 +508,7 @@
   flex: 1;
   height: 14px;
   background: var(--hairline);
-  border-radius: 2px;
+  border-radius: var(--radius-xs);
   overflow: hidden;
 }
 
@@ -516,7 +516,7 @@
   height: 100%;
   background: var(--color-accent);
   opacity: 0.6;
-  border-radius: 2px;
+  border-radius: var(--radius-xs);
   transition: width var(--duration-fast);
 }
 
@@ -574,7 +574,7 @@
 
 .md-sm-bar {
   height: 6px;
-  border-radius: 2px;
+  border-radius: var(--radius-xs);
   transition: width var(--duration-fast);
 }
 
@@ -705,7 +705,7 @@
 
 .md-collision-bar {
   height: 5px;
-  border-radius: 2px;
+  border-radius: var(--radius-xs);
   transition: width var(--duration-fast);
 }
 

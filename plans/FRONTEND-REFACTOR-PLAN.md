@@ -126,7 +126,7 @@ The frontend is a **vanilla JS/CSS stack** (~50k lines in 43 files under `assets
 | Rule | Gap |
 |------|-----|
 | Icons via `mask-image` from `assets/icons/` | ✅ Closed (with documented exceptions): all functional icons use `mask-image`. Remaining inline `<svg>` are intentional exceptions — loading/pulse animations (`studio.html` spinners, `studio.js` `createPulserOverlay`), brand/file-type glyphs (start-overlay Google/Excel tabs), start-overlay decorative artworks, and `viewer.css` data-URIs (exported/offline). Each carries an inline comment; see AGENTS.md "Standing exceptions". |
-| Tokens for spacing/type in new/touched CSS | ~770 raw `px` across `screenspace.css`/`studio.css`/`transcripts.css` (plus new `metadata.css`/`convergence.css`) |
+| Tokens for spacing/type in new/touched CSS | ✅ Swept (2026-06-23): 181 raw-`px` → tokens across all five page CSS files (`font-size`→`--text-*`, `margin`/`padding`/`gap`→`--space-*`, `border-radius`→`--radius-*`). Added 4 tokens: `--text-2xs` (11px), `--radius-xs` (2px), `--space-1-5` (6px), `--space-2-5` (10px). Intentionally left raw: `1px`/hairline borders, computed constants (`92px` chrome), widths/heights/shadows, and one-off magic numbers (fractional fonts, transform nudges, slider tracks). |
 | No duplicate Python/JS constants | Intentional mirrors in `utils.js` + tests — maintenance surface only |
 | `primitives.js` only where factories needed | ✅ Resolved: `primitives.css` now linked by `studio.html` only (dropped from Screenspace/Transcripts) |
 
@@ -201,7 +201,7 @@ Globals stay on `window` namespaces; script order in HTML documents dependencies
 |------|-------|--------|
 | **1** | A1, A2, A3, A4 | ✅ Shipped (PR #366) — except A3 polling adoption (Studio only) |
 | **2** | A5, A6, B1, B2 | ✅ Shipped (PR #385) — except A6 card-scrubber (still parked) |
-| **3** | B3, C4 (incremental), C5 (opportunistic) | ✅ B3 shipped (PR #388); C4/C5 partial |
+| **3** | B3, C4 (incremental), C5 (opportunistic) | ✅ B3 shipped (PR #388); C4 closed (documented exceptions); C5 full sweep done (2026-06-23) |
 | **4** | C1, C2, C3 | ⬜ Not started (Screenspace partially carved on a different axis) |
 
 ## Remaining work — re-prioritized (as of 2026-06-23)
@@ -212,8 +212,8 @@ Globals stay on `window` namespaces; script order in HTML documents dependencies
 2. **Decide & close:**
    - **A6** — card-scrubber: **delete** the parked module + the inline `viewer.js` dup, or keep parked with a one-line pointer. Parked across two ARCHITECTURE.md notes — make the call.
 3. **Opportunistic (touched files only):**
-   - **C4** — remaining inline SVG → `mask-image` (`studio.js`/`studio.html`/`start-overlay.html`; keep `viewer.css` data-URIs).
-   - **C5** — token sweep on touched CSS (now also `metadata.css`/`convergence.css`).
+   - ~~**C4** — remaining inline SVG → `mask-image`~~ ✅ Closed: audited `studio.js`/`studio.html`/`start-overlay.html`; remaining inline `<svg>` are documented intentional exceptions, `viewer.css` data-URIs kept.
+   - ~~**C5** — token sweep on touched CSS~~ ✅ Done: full 181-`px`→token sweep across all five page CSS files + 4 new tokens.
    - **B5** — `.btn` vs `.cg-btn`: reconcile or document the dual system (still **defer** unless touched).
 4. **Structural (largest remaining value, when there's appetite):**
    - **C1** — per the split-order section above: **Transcripts first**, then continue Screenspace/Studio carve-outs on the hub+satellite axis.
@@ -271,7 +271,7 @@ Use this when executing waves; check items in PR descriptions.
 
 - [x] B3 Unified icon helper — `iconMaskUrl`/`iconMaskStyle`/`applyIconMask`/`iconMaskSpan`/`applyIconMasksIn` in `utils.js`; `svgMask`, `iconSpan`, `xrefBadgeIcon`, `applyDataIconMasks`, `applyIcons`, and inline calls collapse onto them
 - [x] C4 SVG → mask — **Closed (with documented exceptions).** Screenspace toolbar converted (11 `.wf-tab` + info + Run reuse the `.ss-task-icon` family); audited `studio.js`/`studio.html`/`start-overlay.html` — no plain functional icons remain. Remaining inline `<svg>` are intentional exceptions (animations, brand/file-type glyphs, decorative artworks) with inline comments; `viewer.css` data-URIs stay (offline exports). See AGENTS.md "Standing exceptions".
-- [~] C5 Token sweep — opportunistic on touched file only: `.wf-tab` icon size `12px` → `var(--icon-size-xs)` in `screenspace.css`
+- [x] C5 Token sweep — full pass: 181 raw `px` → tokens across all five page CSS files; 4 new tokens added to `tokens.css` (`--text-2xs`, `--radius-xs`, `--space-1-5`, `--space-2-5`)
 
 ### Remaining (re-prioritized)
 
@@ -279,7 +279,7 @@ Use this when executing waves; check items in PR descriptions.
 - [ ] C6 server-injected `<head>` partial (live pages; exports stay self-contained)
 - [ ] A6 card-scrubber — delete (module + inline `viewer.js` dup) **or** keep parked with pointer
 - [x] C4 SVG → mask — closed: `studio.js`/`studio.html`/`start-overlay.html` audited; remaining inline `<svg>` are documented intentional exceptions (animations, brand/file-type glyphs, decorative artworks), `viewer.css` data-URIs kept
-- [~] C5 token sweep — opportunistic on touched CSS (incl. `metadata.css`/`convergence.css`)
+- [x] C5 token sweep — done: full pass across all five page CSS files; 4 new tokens (`--text-2xs`, `--radius-xs`, `--space-1-5`, `--space-2-5`)
 - [ ] B5 `.btn` vs `.cg-btn` — reconcile or document (defer unless touched)
 - [ ] C1 `transcripts.js` split first (untouched monolith, no satellites) — hub+satellite axis
 - [ ] C1 `screenspace.js` — continue hub carve-outs (satellites already on `window.ClipgenScreenspace`)
