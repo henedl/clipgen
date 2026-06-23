@@ -522,6 +522,22 @@ class TestConsolidateBoundaryPeriods:
             "Scene C",
         ]
 
+    def test_prune_then_remerge_collapses_duplicate_boundary(self, monkeypatch):
+        self._patch(monkeypatch)
+        # A B A B C with a weak revisit to A. Pruning the weak A@20 leaves two
+        # adjacent B periods (same scene); the post-prune merge must collapse
+        # them into a single boundary rather than emitting a duplicate.
+        periods = [
+            self._period(0, 1, 0),
+            self._period(10, 2, 50),
+            self._period(20, 1, 5),  # weak revisit → pruned
+            self._period(30, 2, 50),
+            self._period(40, 3, 50),
+        ]
+        results = self._consolidate(periods, relative_prune_enabled=True)
+        assert [r["timestamp"] for r in results] == [10.0, 40.0]
+        assert [r["scene_label"] for r in results] == ["Scene B", "Scene C"]
+
 
 class TestScanBoundariesSceneHybrid:
     """The scene/hybrid period-reference detector (metric != phash)."""

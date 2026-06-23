@@ -5291,7 +5291,12 @@
       row.appendChild(el("span", "queue-card-participant", c.participant));
       row.appendChild(el("span", "queue-card-type", cfg.typeText(c)));
       meta.appendChild(row);
-      meta.appendChild(el("span", "queue-card-time", formatDuration(c.start) + "–" + formatDuration(c.end)));
+      // Navigational boundaries are points (unpadded) — show a single time
+      // rather than a "0:12–0:12" range.
+      var timeText = (c.navigational && c.start === c.end)
+        ? formatDuration(c.start)
+        : formatDuration(c.start) + "–" + formatDuration(c.end);
+      meta.appendChild(el("span", "queue-card-time", timeText));
       if (cfg.snippet) {
         var snippet = cfg.snippet(c);
         if (snippet) {
@@ -5355,10 +5360,18 @@
   }
 
   function screenspaceClusterToItem(cluster) {
+    var start = cluster.start;
+    var end = cluster.end;
+    // Navigational boundaries are points (no intake padding), so a clip would be
+    // zero-length. Give one a forward default-duration window so "Add to
+    // Artifacts/Reel" still produces a real clip starting at the boundary.
+    if (cluster.navigational && start === end) {
+      end = start + (CLIPGEN_CONFIG.defaultDuration || 5);
+    }
     return {
       participant: cluster.participant,
-      start: cluster.start,
-      end: cluster.end,
+      start: start,
+      end: end,
       desc: cluster.event_type,
       source: "screenspace",
       event_type: cluster.event_type,

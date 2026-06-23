@@ -63,7 +63,11 @@
     if (cur) clusters.push(cur);
     for (var k = 0; k < clusters.length; k++) {
       var c = clusters[k];
-      if (c.start === c.end) {
+      // Navigational (boundary) events are precise instants — leave them at the
+      // real time so the density timeline, card ranges, and clip windows don't
+      // sit ±5s off (Viewer and Convergence undo this padding the same way; the
+      // clip window for a navigational point is set in screenspaceClusterToItem).
+      if (!c.navigational && c.start === c.end) {
         c.start = Math.max(0, c.start - 5);
         c.end = c.end + 5;
       }

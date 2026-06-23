@@ -1171,30 +1171,34 @@ def _consolidate_boundary_periods(
     def _scene_dist(a: dict[str, Any], b: dict[str, Any]) -> float:
         return 1.0 - compare_scene_fingerprints(_fp(a), _fp(b))
 
-    changed = True
-    while changed and len(periods) > 1:
-        changed = False
-        # Rule B: adjacent-merge — same scene on both sides → spurious boundary.
-        i = 1
-        while i < len(periods):
-            if _scene_dist(periods[i - 1], periods[i]) < merge_threshold:
-                del periods[i]  # boundary i removed; period i absorbed into i-1
-                changed = True
-            else:
-                i += 1
-        # Rule A: round-trip — a short transient bracketed by the same scene.
-        i = 1
-        while i < len(periods) - 1:
-            duration = periods[i + 1]["start_ts"] - periods[i]["start_ts"]
-            if (
-                duration < short_period_seconds
-                and _scene_dist(periods[i - 1], periods[i + 1]) < merge_threshold
-            ):
-                del periods[i + 1]  # drop both boundaries bracketing the transient
-                del periods[i]
-                changed = True
-            else:
-                i += 1
+    def _run_merge_passes(plist: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        changed = True
+        while changed and len(plist) > 1:
+            changed = False
+            # Rule B: adjacent-merge — same scene on both sides → spurious boundary.
+            i = 1
+            while i < len(plist):
+                if _scene_dist(plist[i - 1], plist[i]) < merge_threshold:
+                    del plist[i]  # boundary i removed; period i absorbed into i-1
+                    changed = True
+                else:
+                    i += 1
+            # Rule A: round-trip — a short transient bracketed by the same scene.
+            i = 1
+            while i < len(plist) - 1:
+                duration = plist[i + 1]["start_ts"] - plist[i]["start_ts"]
+                if (
+                    duration < short_period_seconds
+                    and _scene_dist(plist[i - 1], plist[i + 1]) < merge_threshold
+                ):
+                    del plist[i + 1]  # drop both boundaries bracketing the transient
+                    del plist[i]
+                    changed = True
+                else:
+                    i += 1
+        return plist
+
+    periods = _run_merge_passes(periods)
 
     # Session-relative prune: drop boundaries far below the median strength.
     if relative_prune_enabled and (len(periods) - 1) >= min_boundaries_for_prune:
@@ -1205,6 +1209,9 @@ def _consolidate_boundary_periods(
         periods = [periods[0]] + [
             p for p in periods[1:] if float(p["entry_dist"]) >= cutoff
         ]
+        # Dropping a weak middle period can leave two same-scene neighbors
+        # adjacent; re-run the merge passes to collapse the duplicate boundary.
+        periods = _run_merge_passes(periods)
 
     # Recurrence-aware scene labels: greedily group periods whose fingerprints
     # are within merge_threshold, so a revisited scene (back to the menu) reuses
