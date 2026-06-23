@@ -420,11 +420,14 @@
         var top = rowTop + (subH - markerH) / 2;
         var leftPct = Math.max(0, Math.min(1, e.t)) * 100;
         var widthPct = 0;
-        if (typeof e.tEnd === "number" && e.tEnd > e.t) {
+        // Navigational events (boundaries) always render as a thin point tick —
+        // orientation scaffolding, not a span — even if the cluster carries one.
+        if (!e.navigational && typeof e.tEnd === "number" && e.tEnd > e.t) {
           widthPct = Math.min(1, e.tEnd - e.t) * 100;
         }
         var marker = document.createElement("div");
         marker.className = "cg-swim-event";
+        if (e.navigational) marker.classList.add("cg-swim-event--navigational");
         marker.style.left = leftPct + "%";
         marker.style.top = top + "px";
         marker.style.height = markerH + "px";
@@ -434,7 +437,7 @@
           marker.style.transform = "none";
           marker.classList.add("has-duration");
         } else {
-          marker.style.width = "10px";
+          marker.style.width = e.navigational ? "2px" : "10px";
           marker.style.transform = "translateX(-50%)";
         }
         marker.style.background = "oklch(0.78 0.14 " + hue + ")";

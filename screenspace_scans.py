@@ -1079,6 +1079,190 @@ def scan_inactivity(
     return results
 
 
+def _boundary_rep_pixels(pixels: np.ndarray) -> np.ndarray:
+    """Downscale a settled frame to a small period representative (max 64 px).
+
+    Retaining the frame (≈12 KB) rather than its HSV histogram (≈1 MB) keeps the
+    per-period memory tiny; the post-run pass recomputes fingerprints on demand.
+    """
+    h, w = pixels.shape[:2]
+    longest = max(h, w)
+    if longest > 64:
+        scale = 64.0 / longest
+        return cv2.resize(
+            pixels,
+            (max(1, int(w * scale)), max(1, int(h * scale))),
+            interpolation=cv2.INTER_AREA,
+        )
+    return pixels.copy()
+
+
+def _scene_label(index: int) -> str:
+    """Human-readable scene label for a period's cluster index (0 → 'Scene A')."""
+    return f"Scene {utils.index_to_letter(index)}"
+
+
+def _boundaries_from_periods(
+    periods: list[dict[str, Any]], end_seconds: float
+) -> list[dict[str, Any]]:
+    """Turn a consolidated period list into boundary result dicts.
+
+    ``periods[0]`` is the initial period (video start, no entering boundary); a
+    boundary exists at the start of every period after it. Each result carries
+    the span it opens as ``period_start``/``period_end`` and the label of the
+    scene it enters as ``scene_label`` (set by the labeler; falls back to a
+    sequential label by position when absent).
+    """
+    results: list[dict[str, Any]] = []
+    for k in range(1, len(periods)):
+        p = periods[k]
+        period_end = (
+            periods[k + 1]["start_ts"]
+            if k + 1 < len(periods)
+            else round(end_seconds, 2)
+        )
+        results.append(
+            {
+                "timestamp": p["start_ts"],
+                "distance": p["entry_dist"],
+                "_confidence": round(p["entry_conf"], 4),
+                "period_start": p["start_ts"],
+                "period_end": period_end,
+                "scene_label": p.get("scene_label") or _scene_label(k),
+            }
+        )
+    return results
+
+
+def _consolidate_boundary_periods(
+    periods: list[dict[str, Any]],
+    *,
+    end_seconds: float,
+    merge_threshold: float,
+    short_period_seconds: float,
+    relative_prune_enabled: bool,
+    relative_prune_factor: float,
+    type_threshold: float = 1.0,
+    min_boundaries_for_prune: int = 4,
+) -> list[dict[str, Any]]:
+    """Post-run sanity pass over the scene/hybrid period list.
+
+    Principle: *merge periods that aren't really different, and dissolve
+    transient interruptions.* A forward-only scan can't know that the scene a
+    few seconds ahead is identical to the one before a boundary; this global
+    pass can. Each period carries a settled-frame ``pixels`` representative;
+    fingerprints are computed lazily here and cached on the period dict.
+
+    Steps: (1) a fixed-point merge loop — drop a boundary when the two periods
+    it separates are the same scene (rule B), or dissolve a *short* transient
+    period bracketed by identical scenes (rule A); (2) a session-relative prune
+    that drops boundaries far weaker than the median (gated).
+    """
+    periods = [dict(p) for p in periods]
+    if len(periods) <= 1:
+        return _boundaries_from_periods(periods, end_seconds)
+
+    def _fp(p: dict[str, Any]) -> dict[str, Any]:
+        fp = p.get("_fp")
+        if fp is None:
+            fp = compute_scene_fingerprint(p["pixels"])
+            p["_fp"] = fp
+        return fp
+
+    def _scene_dist(a: dict[str, Any], b: dict[str, Any]) -> float:
+        return 1.0 - compare_scene_fingerprints(_fp(a), _fp(b))
+
+    def _run_merge_passes(plist: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        changed = True
+        while changed and len(plist) > 1:
+            changed = False
+            # Rule B: adjacent-merge — same scene on both sides → spurious boundary.
+            i = 1
+            while i < len(plist):
+                if _scene_dist(plist[i - 1], plist[i]) < merge_threshold:
+                    del plist[i]  # boundary i removed; period i absorbed into i-1
+                    changed = True
+                else:
+                    i += 1
+            # Rule A: round-trip — a short transient bracketed by the same scene.
+            i = 1
+            while i < len(plist) - 1:
+                duration = plist[i + 1]["start_ts"] - plist[i]["start_ts"]
+                if (
+                    duration < short_period_seconds
+                    and _scene_dist(plist[i - 1], plist[i + 1]) < merge_threshold
+                ):
+                    del plist[i + 1]  # drop both boundaries bracketing the transient
+                    del plist[i]
+                    changed = True
+                else:
+                    i += 1
+        return plist
+
+    periods = _run_merge_passes(periods)
+
+    # Session-relative prune: drop boundaries far below the median strength.
+    if relative_prune_enabled and (len(periods) - 1) >= min_boundaries_for_prune:
+        dists = sorted(float(p["entry_dist"]) for p in periods[1:])
+        n = len(dists)
+        median = dists[n // 2] if n % 2 else (dists[n // 2 - 1] + dists[n // 2]) / 2.0
+        cutoff = relative_prune_factor * median
+        periods = [periods[0]] + [
+            p for p in periods[1:] if float(p["entry_dist"]) >= cutoff
+        ]
+        # Dropping a weak middle period can leave two same-scene neighbors
+        # adjacent; re-run the merge passes to collapse the duplicate boundary.
+        periods = _run_merge_passes(periods)
+
+    # Hierarchical scene labels (Scene A1, A2, B1, …): the letter is the *type*
+    # (similar scenes grouped at the looser type_threshold), the number is the
+    # distinct *scene* within that type (exact recurrence at merge_threshold). A
+    # revisited scene reuses its full label; a similar-but-distinct scene shares
+    # the letter with a new number.
+    #
+    # 1. Tight clustering → a distinct scene id per period (exact recurrence).
+    scene_reps: list[dict[str, Any]] = []
+    for p in periods:
+        scene_id = None
+        for ci, rep in enumerate(scene_reps):
+            if 1.0 - compare_scene_fingerprints(_fp(p), rep) < merge_threshold:
+                scene_id = ci
+                break
+        if scene_id is None:
+            scene_id = len(scene_reps)
+            scene_reps.append(_fp(p))
+        p["_scene_id"] = scene_id
+
+    # 2. Loose clustering over the scene representatives → a type id per scene,
+    #    so every period of one scene shares a type.
+    type_of_scene: list[int] = []
+    type_reps: list[dict[str, Any]] = []
+    for rep in scene_reps:
+        type_id = None
+        for ci, trep in enumerate(type_reps):
+            if 1.0 - compare_scene_fingerprints(rep, trep) < type_threshold:
+                type_id = ci
+                break
+        if type_id is None:
+            type_id = len(type_reps)
+            type_reps.append(rep)
+        type_of_scene.append(type_id)
+
+    # 3. Number the distinct scenes within each type, in first-appearance order.
+    type_scenes: dict[int, list[int]] = {}
+    for sid in range(len(scene_reps)):
+        type_scenes.setdefault(type_of_scene[sid], []).append(sid)
+
+    # 4. Label: Scene <type letter><scene number within type>.
+    for p in periods:
+        sid = p["_scene_id"]
+        tid = type_of_scene[sid]
+        scene_num = type_scenes[tid].index(sid) + 1
+        p["scene_label"] = f"Scene {utils.index_to_letter(tid)}{scene_num}"
+
+    return _boundaries_from_periods(periods, end_seconds)
+
+
 def scan_boundaries(
     video_path: str,
     region: dict[str, int] | None = None,
@@ -1086,6 +1270,7 @@ def scan_boundaries(
     min_gap: float = 0.0,
     interval_seconds: float = 0.0,
     *,
+    metric: str = "phash",
     start_seconds: float = 0.0,
     end_seconds: float | None = None,
     on_progress: Callable[[float], None] | None = None,
@@ -1093,18 +1278,32 @@ def scan_boundaries(
     on_result: Callable[[dict[str, Any]], None] | None = None,
     fast_opts: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
-    """Scan the full frame for scene boundaries (large frame-to-frame jumps).
+    """Scan the full frame for scene boundaries.
 
-    The inverse of :func:`scan_inactivity`: where inactivity looks for phash
-    *plateaus*, boundaries look for *spikes*.  A boundary fires when the
-    perceptual-hash Hamming distance to the previous sampled frame is at least
-    *threshold*, debounced so that no two boundaries land within *min_gap*
-    seconds (the first spike of a sustained high-distance run is the boundary,
-    which keeps camera-heavy action sequences from becoming boundary storms).
+    Three metrics (``metric``):
+
+    - ``"phash"`` (v1): a boundary fires when the perceptual-hash Hamming
+      distance to the *previous* sampled frame is ≥ *threshold*, debounced by
+      *min_gap* seconds. Streams each boundary live via *on_result*.
+    - ``"scene"``: each sample's content fingerprint is measured against the
+      *current period's* reference (not the previous frame); a boundary fires
+      only when the fingerprint distance crosses
+      ``SCREENSPACE_BOUNDARY_SCENE_THRESHOLD`` and *holds* for
+      ``SCREENSPACE_BOUNDARY_CONFIRM_WINDOW`` samples. Robust to motion.
+    - ``"hybrid"``: a confirmed scene shift that is *also* corroborated by a
+      phash spike — catches hard cuts and rejects both motion (phash spikes
+      that don't sustain) and slow fades (drift with no spike).
+
+    ``scene``/``hybrid`` run a post-run consolidation pass
+    (:func:`_consolidate_boundary_periods`) and emit ``on_result`` only for the
+    *final* boundaries (the worker derives events from the stream), so the
+    progress bar advances live but ticks appear together at completion. The
+    function param defaults to ``"phash"``; the tool layer applies the policy
+    default (``config.SCREENSPACE_BOUNDARY_METRIC``).
 
     Region is ignored (full-frame only); the parameter exists for signature
-    parity with the other scanners.  Returns a list of
-    ``{timestamp, distance, _confidence}`` dicts.
+    parity. Returns ``{timestamp, distance, _confidence}`` dicts (scene/hybrid
+    also carry ``period_start``/``period_end``).
     """
     if threshold <= 0:
         threshold = config.SCREENSPACE_BOUNDARY_PHASH_THRESHOLD
@@ -1112,6 +1311,11 @@ def scan_boundaries(
         min_gap = config.SCREENSPACE_BOUNDARY_MIN_GAP_SECONDS
     if interval_seconds <= 0:
         interval_seconds = config.SCREENSPACE_BOUNDARY_INTERVAL
+    metric = (metric or "phash").strip().lower()
+    if metric not in ("phash", "scene", "hybrid"):
+        metric = "phash"
+    use_scene = metric in ("scene", "hybrid")
+    is_hybrid = metric == "hybrid"
 
     vid_fps, vid_duration = _probe_video_meta(video_path)
     if vid_fps <= 0:
@@ -1121,11 +1325,17 @@ def scan_boundaries(
         end_seconds = vid_duration
     total_range = end_seconds - start_seconds
 
-    # Downscale frames at the ffmpeg pipe for cheap hashing. We pass only
-    # ``max_region_dim`` (no ``phash_skip``) so the pipe downsizes without
-    # dropping frames — this scanner runs its own phash on every sample.
+    # Downscale frames at the ffmpeg pipe. Scene/hybrid fingerprinting needs more
+    # detail than the coarse phash dim (the HSV histogram is too sparse at 64 px).
+    # We pass only ``max_region_dim`` (no ``phash_skip``) so the pipe downsizes
+    # without dropping frames — this scanner samples every interval itself.
     boundary_opts = dict(fast_opts or {})
-    boundary_opts.setdefault("max_region_dim", config.SCREENSPACE_BOUNDARY_HASH_DIM)
+    boundary_opts.setdefault(
+        "max_region_dim",
+        config.SCREENSPACE_BOUNDARY_SCENE_HASH_DIM
+        if use_scene
+        else config.SCREENSPACE_BOUNDARY_HASH_DIM,
+    )
     boundary_opts.pop("phash_skip", None)
 
     results: list[dict[str, Any]] = []
@@ -1133,29 +1343,134 @@ def scan_boundaries(
     last_boundary_ts: list[float | None] = [None]
     eps = config.SCREENSPACE_BOUNDARY_CONFIDENCE_EPSILON
 
-    def _cb(ts: float, pixels: np.ndarray) -> bool | None:
+    if not use_scene:
+        # ---- v1 phash path: consecutive-frame spike, streamed live ----
+        def _cb_phash(ts: float, pixels: np.ndarray) -> bool | None:
+            if cancel_flag and cancel_flag():
+                return False
+            curr_hash = compute_phash(pixels)
+            if prev_hash[0] is not None:
+                dist = int(curr_hash - prev_hash[0])
+                within_gap = (
+                    last_boundary_ts[0] is not None
+                    and ts - last_boundary_ts[0] < min_gap
+                )
+                if dist >= threshold and not within_gap:
+                    conf = (
+                        1.0 if threshold <= 0 else (dist - threshold) / float(threshold)
+                    )
+                    conf = max(eps, min(conf, 1.0))
+                    rd = {
+                        "timestamp": round(ts, 2),
+                        "distance": dist,
+                        "_confidence": round(conf, 4),
+                        # phash has no fingerprints to cluster, so labels are
+                        # sequential: the Nth boundary opens the (N+1)th segment.
+                        "scene_label": _scene_label(len(results) + 1),
+                    }
+                    results.append(rd)
+                    if on_result:
+                        on_result(rd)
+                    last_boundary_ts[0] = ts
+            prev_hash[0] = curr_hash
+            if on_progress and total_range > 0:
+                on_progress((ts - start_seconds) / total_range)
+            return None
+
+        scan_video_full_frames(
+            video_path,
+            interval_seconds,
+            _cb_phash,
+            start_seconds=start_seconds,
+            end_seconds=end_seconds,
+            fps=vid_fps,
+            duration=vid_duration,
+            fast_opts=boundary_opts,
+        )
+        if on_progress:
+            on_progress(1.0)
+        return results
+
+    # ---- scene / hybrid path: period-reference model + post-run pass ----
+    scene_threshold = config.SCREENSPACE_BOUNDARY_SCENE_THRESHOLD
+    confirm_window = max(1, config.SCREENSPACE_BOUNDARY_CONFIRM_WINDOW)
+    ref_fp: list[dict[str, Any] | None] = [None]
+    periods: list[dict[str, Any]] = []
+    # Pending run of consecutive samples above threshold vs the period reference.
+    pending: dict[str, Any] = {"count": 0, "start_ts": 0.0, "phash_seen": False}
+
+    def _reset_pending() -> None:
+        pending["count"] = 0
+        pending["start_ts"] = 0.0
+        pending["phash_seen"] = False
+
+    def _cb_scene(ts: float, pixels: np.ndarray) -> bool | None:
         if cancel_flag and cancel_flag():
             return False
 
-        curr_hash = compute_phash(pixels)
-        if prev_hash[0] is not None:
-            dist = int(curr_hash - prev_hash[0])
-            within_gap = (
-                last_boundary_ts[0] is not None and ts - last_boundary_ts[0] < min_gap
-            )
-            if dist >= threshold and not within_gap:
-                conf = 1.0 if threshold <= 0 else (dist - threshold) / float(threshold)
-                conf = max(eps, min(conf, 1.0))
-                rd = {
-                    "timestamp": round(ts, 2),
-                    "distance": dist,
-                    "_confidence": round(conf, 4),
+        fp = compute_scene_fingerprint(pixels)
+        phash_spike = False
+        if is_hybrid:
+            curr_hash = compute_phash(pixels)
+            if prev_hash[0] is not None:
+                phash_spike = int(curr_hash - prev_hash[0]) >= threshold
+            prev_hash[0] = curr_hash
+
+        ref = ref_fp[0]
+        if ref is None:
+            # First sample seeds the initial period (video start, no boundary).
+            ref_fp[0] = fp
+            periods.append(
+                {
+                    "start_ts": round(start_seconds, 2),
+                    "pixels": _boundary_rep_pixels(pixels),
+                    "entry_dist": 0,
+                    "entry_conf": 0.0,
                 }
-                results.append(rd)
-                if on_result:
-                    on_result(rd)
-                last_boundary_ts[0] = ts
-        prev_hash[0] = curr_hash
+            )
+        else:
+            dist_raw = 1.0 - compare_scene_fingerprints(fp, ref)
+            if dist_raw >= scene_threshold:
+                if pending["count"] == 0:
+                    pending["start_ts"] = ts
+                    pending["phash_seen"] = False
+                pending["count"] += 1
+                if phash_spike:
+                    pending["phash_seen"] = True
+                if pending["count"] >= confirm_window:
+                    # A sustained shift — we have entered a new scene. Advance the
+                    # period reference NOW, regardless of whether we emit a
+                    # boundary: min_gap (and hybrid's phash gate) only suppress the
+                    # boundary *event*, not the fact that the content moved on.
+                    # Tying reference advancement to emission would leave ref_fp
+                    # stuck on the old scene for the rest of the clip when a
+                    # transition lands within min_gap, silently dropping every
+                    # later boundary.
+                    within_gap = (
+                        last_boundary_ts[0] is not None
+                        and pending["start_ts"] - last_boundary_ts[0] < min_gap
+                    )
+                    hybrid_ok = (not is_hybrid) or pending["phash_seen"]
+                    if not within_gap and hybrid_ok:
+                        conf = (
+                            1.0
+                            if scene_threshold <= 0
+                            else (dist_raw - scene_threshold) / scene_threshold
+                        )
+                        conf = max(eps, min(conf, 1.0))
+                        periods.append(
+                            {
+                                "start_ts": round(pending["start_ts"], 2),
+                                "pixels": _boundary_rep_pixels(pixels),
+                                "entry_dist": int(round(dist_raw * 100)),
+                                "entry_conf": conf,
+                            }
+                        )
+                        last_boundary_ts[0] = pending["start_ts"]
+                    ref_fp[0] = fp  # settled reference = the confirming frame
+                    _reset_pending()
+            else:
+                _reset_pending()
 
         if on_progress and total_range > 0:
             on_progress((ts - start_seconds) / total_range)
@@ -1164,7 +1479,7 @@ def scan_boundaries(
     scan_video_full_frames(
         video_path,
         interval_seconds,
-        _cb,
+        _cb_scene,
         start_seconds=start_seconds,
         end_seconds=end_seconds,
         fps=vid_fps,
@@ -1172,6 +1487,19 @@ def scan_boundaries(
         fast_opts=boundary_opts,
     )
 
+    final = _consolidate_boundary_periods(
+        periods,
+        end_seconds=end_seconds,
+        merge_threshold=config.SCREENSPACE_BOUNDARY_MERGE_THRESHOLD,
+        short_period_seconds=config.SCREENSPACE_BOUNDARY_SHORT_PERIOD_SECONDS,
+        relative_prune_enabled=config.SCREENSPACE_BOUNDARY_RELATIVE_PRUNE_ENABLED,
+        relative_prune_factor=config.SCREENSPACE_BOUNDARY_RELATIVE_PRUNE_FACTOR,
+        type_threshold=config.SCREENSPACE_BOUNDARY_TYPE_THRESHOLD,
+    )
+    for rd in final:
+        results.append(rd)
+        if on_result:
+            on_result(rd)
     if on_progress:
         on_progress(1.0)
     return results

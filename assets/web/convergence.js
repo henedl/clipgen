@@ -144,7 +144,14 @@
         });
     }
 
-    lbl.textContent = event.participant + " · " + formatTime(event.rawStart);
+    // Boundary (navigational) events carry a recurrence-aware scene label.
+    var sceneLabel = "";
+    if (event.navigational && event.rawData && event.rawData.events && event.rawData.events[0]) {
+      var md = event.rawData.events[0].metadata;
+      if (md && md.scene_label) sceneLabel = md.scene_label;
+    }
+    lbl.textContent = event.participant + " · " + formatTime(event.rawStart)
+      + (sceneLabel ? " · " + sceneLabel : "");
     preview.classList.remove("hidden");
     positionTooltipAnchored(preview, markerEl.getBoundingClientRect());
   }
@@ -239,7 +246,15 @@
     for (var i = 0; i < ssClusters.length; i++) {
       var cl = ssClusters[i];
       var clCount = cl.events ? cl.events.length : 1;
-      var tSs = applyOffset(cl.participant, "screenspace", cl.start, cl.end);
+      // Navigational ticks must sit at the real boundary time, not the cluster's
+      // padded clip window (clusterIntakeEvents widens point events by ±5s).
+      var sStart = cl.start;
+      var sEnd = cl.end;
+      if (cl.navigational && cl.events && cl.events.length) {
+        sStart = cl.events[0].time_in;
+        sEnd = cl.events[cl.events.length - 1].time_out;
+      }
+      var tSs = applyOffset(cl.participant, "screenspace", sStart, sEnd);
       events.push({
         participant: cl.participant,
         start: tSs.start,
@@ -253,6 +268,7 @@
         id: "ss_cl_" + i,
         rawData: cl,
         clusterCount: clCount,
+        navigational: !!cl.navigational,
       });
       participantSet[cl.participant] = true;
     }
@@ -427,8 +443,11 @@
     }
 
     cvState.filteredEvents = filtered;
+    // Navigational (boundary) events are orientation scaffolding, not findings:
+    // they still render as thin ticks in the swimlane (via filteredEvents) but
+    // must not seed or merge into convergence zones.
     cvState.convergenceZones = computeConvergenceZones(
-      filtered,
+      filtered.filter(function (e) { return !e.navigational; }),
       cvState.filters.windowSec,
       cvState.filters.minParticipants
     );
@@ -729,6 +748,7 @@
         t: e.start / duration,
         tEnd: e.end / duration,
         label: e.eventType,
+        navigational: !!e.navigational,
         _ref: e,
       };
     });

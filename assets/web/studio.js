@@ -70,6 +70,7 @@
     intakeFilterText: "",
     intakeFilterDetector: "",
     intakeFilterNew: false,
+    intakeShowNavigational: false,
     intakeFilterParticipants: [],
     intakeHoveredIdx: -1,
     activePreviewTab: "sheet",
@@ -4859,6 +4860,50 @@
     });
   }
 
+  // Events fed into the intake clustering surface. Navigational (boundary)
+  // events are orientation scaffolding, not clip candidates — hidden by
+  // default so they don't flood the curation queue. state.intakeEvents still
+  // holds ALL events (Metadata's boundary count reads from it).
+  function intakeClusterSource() {
+    if (state.intakeShowNavigational) return state.intakeEvents;
+    return state.intakeEvents.filter(function (ev) { return !ev.navigational; });
+  }
+
+  function reclusterIntake() {
+    var threshold = parseInt((qs("#intakeClusterThreshold") || {}).value) || 10;
+    state.intakeClusters = clusterIntakeEvents(intakeClusterSource(), threshold);
+    renderIntake(false);
+  }
+
+  // One-click boundary detection: enqueue a full-frame boundary task per
+  // participant that has a source video. Progress surfaces through the existing
+  // task poll (intake tab dot) and new boundary events arrive via pollIntakeEvents.
+  function intakeDetectBoundaries(btn) {
+    var labelEl = btn ? btn.querySelector("span") : null;
+    var origLabel = labelEl ? labelEl.textContent : "";
+    function restore() {
+      if (btn) btn.disabled = false;
+      if (labelEl) labelEl.textContent = origLabel;
+    }
+    apiGet("../screenspace/api/participants")
+      .then(function (data) {
+        if (!data.ok) return restore();
+        var withVideo = (data.participants || []).filter(function (p) { return p.has_video; });
+        if (!withVideo.length) {
+          if (labelEl) labelEl.textContent = "No videos";
+          setTimeout(restore, 1500);
+          return;
+        }
+        if (btn) btn.disabled = true;
+        if (labelEl) labelEl.textContent = "Queued " + withVideo.length + "…";
+        return Promise.all(withVideo.map(function (p) {
+          return apiPost("../screenspace/api/tasks", { type: "boundary", participant: p.id })
+            .catch(function () { return null; });
+        })).then(restore);
+      })
+      .catch(restore);
+  }
+
   function pollIntakeEvents() {
     apiGet("../screenspace/api/events?excluded=false")
       .then(function (data) {
@@ -4876,7 +4921,7 @@
         });
         state.intakeEvents = events;
         var threshold = parseInt((qs("#intakeClusterThreshold") || {}).value) || 10;
-        state.intakeClusters = clusterIntakeEvents(events, threshold);
+        state.intakeClusters = clusterIntakeEvents(intakeClusterSource(), threshold);
         renderIntake(hasNew);
         checkConvergenceTabVisibility();
         refreshMetadataIfActive();
@@ -5119,7 +5164,7 @@
     addToReel: intakeAddToReel,
     onDismiss: intakeDismissCluster,
     onThresholdChange: function (threshold) {
-      state.intakeClusters = clusterIntakeEvents(state.intakeEvents, threshold);
+      state.intakeClusters = clusterIntakeEvents(intakeClusterSource(), threshold);
       renderIntake(false);
     },
     onCardHover: function (card) {
@@ -5127,11 +5172,27 @@
     },
     extraControl: function (cfg) {
       var newToggle = qs("#intakeFilterNew");
-      if (!newToggle) return;
-      newToggle.addEventListener("change", function () {
-        state.intakeFilterNew = this.checked;
-        cfg.rerender();
-      });
+      if (newToggle) {
+        newToggle.addEventListener("change", function () {
+          state.intakeFilterNew = this.checked;
+          cfg.rerender();
+        });
+      }
+      var navToggle = qs("#intakeShowNavigational");
+      if (navToggle) {
+        navToggle.addEventListener("change", function () {
+          state.intakeShowNavigational = this.checked;
+          // Navigational events change the clustering input, so re-cluster
+          // rather than just re-render the existing clusters.
+          reclusterIntake();
+        });
+      }
+      var detectBtn = qs("#intakeDetectBoundariesBtn");
+      if (detectBtn) {
+        detectBtn.addEventListener("click", function () {
+          intakeDetectBoundaries(detectBtn);
+        });
+      }
     },
   };
   var TR_INTAKE = {
@@ -5233,7 +5294,12 @@
       row.appendChild(el("span", "queue-card-participant", c.participant));
       row.appendChild(el("span", "queue-card-type", cfg.typeText(c)));
       meta.appendChild(row);
-      meta.appendChild(el("span", "queue-card-time", formatDuration(c.start) + "–" + formatDuration(c.end)));
+      // Navigational boundaries are points (unpadded) — show a single time
+      // rather than a "0:12–0:12" range.
+      var timeText = (c.navigational && c.start === c.end)
+        ? formatDuration(c.start)
+        : formatDuration(c.start) + "–" + formatDuration(c.end);
+      meta.appendChild(el("span", "queue-card-time", timeText));
       if (cfg.snippet) {
         var snippet = cfg.snippet(c);
         if (snippet) {
@@ -5297,10 +5363,18 @@
   }
 
   function screenspaceClusterToItem(cluster) {
+    var start = cluster.start;
+    var end = cluster.end;
+    // Navigational boundaries are points (no intake padding), so a clip would be
+    // zero-length. Give one a forward default-duration window so "Add to
+    // Artifacts/Reel" still produces a real clip starting at the boundary.
+    if (cluster.navigational && start === end) {
+      end = start + (CLIPGEN_CONFIG.defaultDuration || 5);
+    }
     return {
       participant: cluster.participant,
-      start: cluster.start,
-      end: cluster.end,
+      start: start,
+      end: end,
       desc: cluster.event_type,
       source: "screenspace",
       event_type: cluster.event_type,

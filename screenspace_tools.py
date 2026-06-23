@@ -797,6 +797,10 @@ class BoundaryTool(AnalysisTool):
             threshold=params.get("threshold", 0),
             min_gap=params.get("min_gap", 0.0),
             interval_seconds=params.get("interval", 0),
+            # Policy default lives here, not in the scan primitive: a task with
+            # no metric (UI "Auto") gets the configured default; the primitive's
+            # own default stays "phash" for direct callers/tests.
+            metric=params.get("metric") or config.SCREENSPACE_BOUNDARY_METRIC,
             start_seconds=params.get("start_seconds", 0.0),
             end_seconds=params.get("end_seconds"),
             on_progress=on_progress,

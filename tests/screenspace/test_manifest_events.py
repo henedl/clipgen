@@ -310,12 +310,25 @@ class TestGenerateEventsFromResults:
 
     def test_boundary_events(self):
         worker, task = self._make_worker_and_task("boundary")
-        raw = [{"timestamp": 12.0, "distance": 22, "_confidence": 0.5714}]
+        raw = [
+            {
+                "timestamp": 12.0,
+                "distance": 22,
+                "_confidence": 0.5714,
+                "period_start": 12.0,
+                "period_end": 30.0,
+                "scene_label": "Scene B",
+            }
+        ]
         events = worker._generate_events_from_results(task, raw)
         assert len(events) == 1
         assert events[0]["time_in"] == 12.0
         assert events[0]["time_out"] == 12.0
         assert events[0]["metadata"]["distance"] == 22
+        # Scene/hybrid period spans and the recurrence-aware label reach metadata.
+        assert events[0]["metadata"]["period_start"] == 12.0
+        assert events[0]["metadata"]["period_end"] == 30.0
+        assert events[0]["metadata"]["scene_label"] == "Scene B"
         # Boundaries are orientation markers; Studio intake hides them by default.
         assert events[0]["navigational"] is True
         # confidence is carried through from the per-frame _confidence scalar.
@@ -354,6 +367,32 @@ class TestManifestWithEvents:
         screenspace.save_screenspace_manifest({}, [])
         loaded = screenspace.load_screenspace_manifest()
         assert loaded["events"] == []
+
+    def test_roundtrip_preserves_navigational(self, tmp_path, monkeypatch):
+        # Boundary events carry navigational so Studio intake can hide them and
+        # timelines can render them distinctly — it must survive save → load.
+        monkeypatch.setattr(config, "OUTPUT_DIR", str(tmp_path))
+        events = [
+            {
+                "id": "ev_boundary1",
+                "source_video": "study_P01.mp4",
+                "participant": "P01",
+                "detector": "boundary",
+                "event_type": "boundary",
+                "time_in": 12.0,
+                "time_out": 12.0,
+                "confidence": 0.57,
+                "metadata": {"distance": 22},
+                "excluded": False,
+                "navigational": True,
+                "task_id": "ss_bnd00001",
+                "region": "full_frame",
+            }
+        ]
+        screenspace.save_screenspace_manifest({}, [], events)
+        loaded = screenspace.load_screenspace_manifest()
+        assert loaded["events"][0]["navigational"] is True
+        assert loaded["events"][0]["metadata"]["distance"] == 22
 
 
 class TestBackfillMissingEvents:

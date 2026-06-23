@@ -372,6 +372,318 @@ class TestScanBoundaries:
         )
         assert len(results) <= 1
 
+    def test_scene_labels_are_sequential_for_phash(self, monkeypatch):
+        # phash has no fingerprints, so labels are sequential: B, C, ...
+        frames = [(0.0, 0), (1.0, 0), (2.0, 40), (3.0, 40), (4.0, 0)]
+        self._setup(monkeypatch, frames)
+        results = screenspace.scan_boundaries(
+            "/fake.mp4", threshold=14, min_gap=1.0, interval_seconds=1.0
+        )
+        assert [r["scene_label"] for r in results] == ["Scene B", "Scene C"]
+
+
+def _tag_frame(tag: int, phash: int = 0) -> np.ndarray:
+    """8×8 frame encoding a scene tag at [0,0,0] and a phash value at [0,1,0].
+
+    Lets the scene/hybrid boundary tests drive the content fingerprint and the
+    phash spike independently, deterministically, without real CV.
+    """
+    f = np.zeros((8, 8, 3), dtype=np.uint8)
+    f[0, 0, 0] = tag
+    f[0, 1, 0] = phash
+    return f
+
+
+class TestConsolidateBoundaryPeriods:
+    """The post-run sanity pass over the scene/hybrid period list."""
+
+    @staticmethod
+    def _patch(monkeypatch):
+        # Identical tags = same scene (distance 0); different tags fully differ
+        # (distance 1). Isolates the merge/prune logic from real fingerprints.
+        monkeypatch.setattr(
+            screenspace_scans,
+            "compute_scene_fingerprint",
+            lambda f: {"tag": int(f[0, 0, 0])},
+        )
+        monkeypatch.setattr(
+            screenspace_scans,
+            "compare_scene_fingerprints",
+            lambda a, b: 1.0 if a["tag"] == b["tag"] else 0.0,
+        )
+
+    @staticmethod
+    def _period(start_ts, tag, entry_dist):
+        return {
+            "start_ts": float(start_ts),
+            "pixels": _tag_frame(tag),
+            "entry_dist": entry_dist,
+            "entry_conf": 0.9,
+        }
+
+    def _consolidate(
+        self,
+        periods,
+        *,
+        merge_threshold=0.15,
+        short_period_seconds=3.0,
+        relative_prune_enabled=False,
+        relative_prune_factor=0.5,
+        type_threshold=0.35,
+    ):
+        return screenspace_scans._consolidate_boundary_periods(
+            periods,
+            end_seconds=1000.0,
+            merge_threshold=merge_threshold,
+            short_period_seconds=short_period_seconds,
+            relative_prune_enabled=relative_prune_enabled,
+            relative_prune_factor=relative_prune_factor,
+            type_threshold=type_threshold,
+        )
+
+    def test_adjacent_merge_drops_spurious_boundary(self, monkeypatch):
+        self._patch(monkeypatch)
+        # Two periods, same scene → the boundary between them is spurious.
+        periods = [self._period(0, 1, 0), self._period(10, 1, 80)]
+        assert self._consolidate(periods) == []
+
+    def test_real_change_kept_with_span(self, monkeypatch):
+        self._patch(monkeypatch)
+        periods = [self._period(0, 1, 0), self._period(10, 2, 80)]
+        results = self._consolidate(periods)
+        assert [r["timestamp"] for r in results] == [10.0]
+        assert results[0]["period_start"] == 10.0
+        assert results[0]["period_end"] == 1000.0  # last period runs to end
+
+    def test_roundtrip_transient_dissolved(self, monkeypatch):
+        self._patch(monkeypatch)
+        # Short period (tag 2) bracketed by the same scene (tag 1) → dissolve both.
+        periods = [
+            self._period(0, 1, 0),
+            self._period(10, 2, 80),
+            self._period(11, 1, 80),
+        ]
+        assert self._consolidate(periods) == []
+
+    def test_distinct_short_period_kept(self, monkeypatch):
+        self._patch(monkeypatch)
+        # Short period (tag 3) differs from both neighbors → a real loading screen.
+        periods = [
+            self._period(0, 1, 0),
+            self._period(10, 3, 80),
+            self._period(11, 2, 80),
+        ]
+        results = self._consolidate(periods)
+        assert [r["timestamp"] for r in results] == [10.0, 11.0]
+        # period_end chains to the next boundary, then to end_seconds.
+        assert results[0]["period_end"] == 11.0
+        assert results[1]["period_end"] == 1000.0
+
+    def test_relative_prune_drops_weak_boundary(self, monkeypatch):
+        self._patch(monkeypatch)
+        # Four distinct, well-spaced scenes; one boundary far below the median.
+        periods = [
+            self._period(0, 0, 0),
+            self._period(10, 1, 50),
+            self._period(20, 2, 48),
+            self._period(30, 3, 52),
+            self._period(40, 4, 5),  # weak: median≈49, cutoff 0.5×49=24.5
+        ]
+        kept = self._consolidate(periods, relative_prune_enabled=True)
+        assert [r["timestamp"] for r in kept] == [10.0, 20.0, 30.0]
+        # With the prune off, the weak boundary survives.
+        all_b = self._consolidate(periods, relative_prune_enabled=False)
+        assert [r["timestamp"] for r in all_b] == [10.0, 20.0, 30.0, 40.0]
+
+    def test_relative_prune_guard_skips_when_few_boundaries(self, monkeypatch):
+        self._patch(monkeypatch)
+        # Only three boundaries (< min count) → prune is skipped even when enabled.
+        periods = [
+            self._period(0, 0, 0),
+            self._period(10, 1, 50),
+            self._period(20, 2, 48),
+            self._period(30, 3, 5),  # weak, but guard protects it
+        ]
+        kept = self._consolidate(periods, relative_prune_enabled=True)
+        assert [r["timestamp"] for r in kept] == [10.0, 20.0, 30.0]
+
+    def test_recurrence_labels_reuse_for_same_scene(self, monkeypatch):
+        self._patch(monkeypatch)
+        # Scenes 1 → 2 → back to 1 → 3: the revisit to scene 1 reuses its label.
+        # With the binary metric every distinct scene is its own type, so labels
+        # are <type letter>1 and the revisit reuses "Scene A1".
+        periods = [
+            self._period(0, 1, 0),
+            self._period(10, 2, 80),
+            self._period(20, 1, 80),
+            self._period(30, 3, 80),
+        ]
+        results = self._consolidate(periods)
+        assert [r["scene_label"] for r in results] == [
+            "Scene B1",
+            "Scene A1",
+            "Scene C1",
+        ]
+
+    def test_similar_scenes_share_type_letter(self, monkeypatch):
+        # Graded metric: distance grows with |Δtag|*0.2. Tags 1 & 2 are similar
+        # (distinct scenes, same type → A1/A2); tag 5 is a different type (B1);
+        # revisiting tag 1 reuses A1.
+        monkeypatch.setattr(
+            screenspace_scans,
+            "compute_scene_fingerprint",
+            lambda f: {"tag": int(f[0, 0, 0])},
+        )
+        monkeypatch.setattr(
+            screenspace_scans,
+            "compare_scene_fingerprints",
+            lambda a, b: max(0.0, 1.0 - min(1.0, abs(a["tag"] - b["tag"]) * 0.2)),
+        )
+        periods = [
+            self._period(0, 1, 0),
+            self._period(10, 2, 80),
+            self._period(20, 5, 80),
+            self._period(30, 1, 80),
+        ]
+        results = self._consolidate(periods)
+        assert [r["scene_label"] for r in results] == [
+            "Scene A2",
+            "Scene B1",
+            "Scene A1",
+        ]
+
+    def test_prune_then_remerge_collapses_duplicate_boundary(self, monkeypatch):
+        self._patch(monkeypatch)
+        # A B A B C with a weak revisit to A. Pruning the weak A@20 leaves two
+        # adjacent B periods (same scene); the post-prune merge must collapse
+        # them into a single boundary rather than emitting a duplicate.
+        periods = [
+            self._period(0, 1, 0),
+            self._period(10, 2, 50),
+            self._period(20, 1, 5),  # weak revisit → pruned
+            self._period(30, 2, 50),
+            self._period(40, 3, 50),
+        ]
+        results = self._consolidate(periods, relative_prune_enabled=True)
+        assert [r["timestamp"] for r in results] == [10.0, 40.0]
+        assert [r["scene_label"] for r in results] == ["Scene B1", "Scene C1"]
+
+
+class TestScanBoundariesSceneHybrid:
+    """The scene/hybrid period-reference detector (metric != phash)."""
+
+    @staticmethod
+    def _setup(monkeypatch, frames):
+        # frames: list of (ts, scene_tag, phash_val)
+        monkeypatch.setattr(
+            screenspace_scans,
+            "_probe_video_meta",
+            lambda _p: (30.0, float(len(frames) + 1)),
+        )
+        monkeypatch.setattr(
+            screenspace_scans,
+            "compute_scene_fingerprint",
+            lambda f: {"tag": int(f[0, 0, 0])},
+        )
+        monkeypatch.setattr(
+            screenspace_scans,
+            "compare_scene_fingerprints",
+            lambda a, b: 1.0 if a["tag"] == b["tag"] else 0.0,
+        )
+        monkeypatch.setattr(
+            screenspace_scans, "compute_phash", lambda f: _FakeHash(int(f[0, 1, 0]))
+        )
+
+        def fake_scan(video_path, interval_seconds, callback, **kwargs):
+            for ts, tag, ph in frames:
+                if callback(ts, _tag_frame(tag, ph)) is False:
+                    break
+
+        monkeypatch.setattr(screenspace_scans, "scan_video_full_frames", fake_scan)
+
+    def test_motion_within_period_no_boundary(self, monkeypatch):
+        # Same scene throughout; phash jumps around (motion) — scene metric ignores it.
+        frames = [(float(i), 5, (i * 70) % 256) for i in range(8)]
+        self._setup(monkeypatch, frames)
+        results = screenspace.scan_boundaries(
+            "/fake.mp4", metric="scene", interval_seconds=1.0
+        )
+        assert results == []
+
+    def test_scene_change_fires_once_at_transition_start(self, monkeypatch):
+        # tag 1 → tag 2 sustained: one boundary at the first tag-2 frame.
+        frames = [
+            (0.0, 1, 0),
+            (1.0, 1, 0),
+            (2.0, 1, 0),
+            (3.0, 2, 0),
+            (4.0, 2, 0),
+            (5.0, 2, 0),
+        ]
+        self._setup(monkeypatch, frames)
+        results = screenspace.scan_boundaries(
+            "/fake.mp4", metric="scene", interval_seconds=1.0
+        )
+        assert [r["timestamp"] for r in results] == [3.0]
+        assert results[0]["period_start"] == 3.0
+
+    def test_confirm_window_suppresses_single_sample_blip(self, monkeypatch):
+        # One-sample blip (tag 9) then back to tag 1 → never confirmed.
+        frames = [(0.0, 1, 0), (1.0, 1, 0), (2.0, 9, 0), (3.0, 1, 0), (4.0, 1, 0)]
+        self._setup(monkeypatch, frames)
+        results = screenspace.scan_boundaries(
+            "/fake.mp4", metric="scene", interval_seconds=1.0
+        )
+        assert results == []
+
+    def test_hybrid_requires_phash_corroboration(self, monkeypatch):
+        # Sustained scene shift but NO phash spike → hybrid does not fire.
+        frames = [(0.0, 1, 10), (1.0, 1, 10), (2.0, 2, 10), (3.0, 2, 10), (4.0, 2, 10)]
+        self._setup(monkeypatch, frames)
+        results = screenspace.scan_boundaries(
+            "/fake.mp4", metric="hybrid", threshold=14, interval_seconds=1.0
+        )
+        assert results == []
+
+    def test_hybrid_fires_when_phash_spike_coincides(self, monkeypatch):
+        # Sustained scene shift WITH a phash spike at the transition → fires once.
+        frames = [
+            (0.0, 1, 10),
+            (1.0, 1, 10),
+            (2.0, 2, 200),
+            (3.0, 2, 200),
+            (4.0, 2, 200),
+        ]
+        self._setup(monkeypatch, frames)
+        results = screenspace.scan_boundaries(
+            "/fake.mp4", metric="hybrid", threshold=14, interval_seconds=1.0
+        )
+        assert [r["timestamp"] for r in results] == [2.0]
+
+    def test_min_gap_does_not_stick_period_reference(self, monkeypatch):
+        # Regression: a transition within min_gap of the previous boundary has its
+        # boundary suppressed, but the period reference must still advance — else
+        # ref_fp sticks on the old scene and every later transition is lost.
+        # Boundary at t2 (1→2); 2→3 at t4 is within min_gap (suppressed); the
+        # genuine 3→4 at t8 (beyond the gap) must still be detected.
+        frames = [
+            (0.0, 1, 0),
+            (1.0, 1, 0),
+            (2.0, 2, 0),
+            (3.0, 2, 0),
+            (4.0, 3, 0),
+            (5.0, 3, 0),
+            (6.0, 3, 0),
+            (7.0, 3, 0),
+            (8.0, 4, 0),
+            (9.0, 4, 0),
+        ]
+        self._setup(monkeypatch, frames)
+        results = screenspace.scan_boundaries(
+            "/fake.mp4", metric="scene", min_gap=3.0, interval_seconds=1.0
+        )
+        assert [r["timestamp"] for r in results] == [2.0, 8.0]
+
 
 class TestScanMultitool:
     def test_requires_min_2_steps(self):

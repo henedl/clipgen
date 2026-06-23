@@ -44,6 +44,7 @@ SCREENSPACE_EVENT_COLUMNS: tuple[str, ...] = (
     "duration",
     "confidence",
     "excluded",
+    "navigational",
     "task_id",
 )
 
@@ -179,6 +180,7 @@ def build_screenspace_events(
             "duration": utils.sanitize_floats(round(duration, 4)),
             "confidence": utils.sanitize_floats(ev.get("confidence", 0.0)),
             "excluded": bool(ev.get("excluded", False)),
+            "navigational": bool(ev.get("navigational", False)),
             "task_id": ev.get("task_id", ""),
         }
         metadata = ev.get("metadata", {}) or {}

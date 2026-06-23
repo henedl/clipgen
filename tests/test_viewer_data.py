@@ -283,3 +283,44 @@ def test_load_screenspace_events_for_viewer_caches_by_mtime(tmp_path, monkeypatc
     third = viewer.load_screenspace_events_for_viewer()
     assert [e["id"] for e in third] == ["ev_new"]
     assert len(load_calls) == 2
+
+
+def test_load_screenspace_events_for_viewer_includes_navigational(
+    tmp_path, monkeypatch
+):
+    import config
+    import screenspace
+
+    monkeypatch.setattr(config, "OUTPUT_DIR", str(tmp_path))
+    viewer._reset_screenspace_events_cache()
+
+    screenspace.save_screenspace_manifest(
+        {},
+        [],
+        [
+            {
+                "id": "ev_boundary",
+                "detector": "boundary",
+                "participant": "P01",
+                "time_in": 12.0,
+                "time_out": 12.0,
+                "excluded": False,
+                "navigational": True,
+                "metadata": {"distance": 22},
+            },
+            {
+                "id": "ev_change",
+                "detector": "change",
+                "participant": "P01",
+                "time_in": 5.0,
+                "time_out": 5.0,
+                "excluded": False,
+            },
+        ],
+    )
+
+    events = {e["id"]: e for e in viewer.load_screenspace_events_for_viewer()}
+    # Boundary events carry navigational so the viewer can render thin ticks.
+    assert events["ev_boundary"]["navigational"] is True
+    # Non-navigational detectors default to False (absent in the source dict).
+    assert events["ev_change"]["navigational"] is False

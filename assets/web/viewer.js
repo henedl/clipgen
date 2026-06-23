@@ -1769,13 +1769,25 @@
     tip.appendChild(header);
 
     var time = el("span", "tooltip-time");
-    time.textContent = formatTime(c.start) + " \u2013 " + formatTime(c.end);
+    // A boundary is a single instant; padded/range display would misstate when
+    // it occurred. Show one time for a point boundary, a span for a run.
+    if (c.navigational && c.start === c.end) {
+      time.textContent = formatTime(c.start);
+    } else {
+      time.textContent = formatTime(c.start) + " \u2013 " + formatTime(c.end);
+    }
     tip.appendChild(time);
 
     var details = el("div", "ss-tooltip-details");
     details.appendChild(el("span", "", "Region: " + c.region));
     details.appendChild(el("span", "", "Participant: " + c.participant));
     details.appendChild(el("span", "", "Confidence: " + Math.round(avgConf * 100) + "%"));
+    if (c.navigational && c.sceneLabel) {
+      details.appendChild(el("span", "", "Enters: " + c.sceneLabel));
+    }
+    if (c.navigational && typeof c.distance === "number") {
+      details.appendChild(el("span", "", "Distance: " + Math.round(c.distance)));
+    }
     if (c.count > 1) details.appendChild(el("span", "", "Events: " + c.count));
     tip.appendChild(details);
 
@@ -2051,6 +2063,9 @@
         !cur ||
         ev.participant !== cur.participant ||
         ev.eventType !== cur.eventType ||
+        // Boundary ticks are individual points — never merge them, or a cluster
+        // would render only its first tick and hide later boundaries.
+        ev.navigational ||
         ev.timeIn - cur.end > 5
       ) {
         if (cur) clusters.push(cur);
@@ -2061,6 +2076,9 @@
           eventType: ev.eventType,
           type: ev.type,
           region: ev.region,
+          navigational: !!ev.navigational,
+          distance: (ev.metadata && ev.metadata.distance) || 0,
+          sceneLabel: (ev.metadata && ev.metadata.scene_label) || "",
           count: 1,
           confSum: ev.confidence,
         };
@@ -2068,12 +2086,17 @@
         cur.end = Math.max(cur.end, ev.timeOut);
         cur.count++;
         cur.confSum += ev.confidence;
+        var d = (ev.metadata && ev.metadata.distance) || 0;
+        if (d > cur.distance) cur.distance = d;
       }
     }
     if (cur) clusters.push(cur);
 
     for (var j = 0; j < clusters.length; j++) {
-      if (clusters[j].start === clusters[j].end) {
+      // Navigational (boundary) ticks must sit at the real boundary time — keep
+      // their exact instant. Other point detections get a ±2s window so their
+      // hover/clip context is usable.
+      if (!clusters[j].navigational && clusters[j].start === clusters[j].end) {
         clusters[j].start = Math.max(0, clusters[j].start - 2);
         clusters[j].end = Math.min(timelineDuration, clusters[j].end + 2);
       }
@@ -2092,8 +2115,11 @@
       var width = Math.max(((clampedEnd - clampedStart) / timelineDuration) * 100, 0.4);
       var marker = document.createElement("div");
       marker.className = "screenspace-marker ss-type-" + c.type;
+      // Navigational (boundary) events are orientation scaffolding — draw them
+      // as thin, lighter ticks rather than findings spans.
+      if (c.navigational) marker.className += " screenspace-marker--navigational";
       marker.style.left = left + "%";
-      marker.style.width = width + "%";
+      marker.style.width = c.navigational ? "1px" : (width + "%");
       marker.style.background = "var(--color-task-" + c.type + ", #888)";
       marker.addEventListener("mouseenter", function (cluster) {
         return function (ev) { showTooltipForScreenspaceCluster(cluster, ev); };

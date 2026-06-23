@@ -34,6 +34,10 @@
         !cur ||
         ev.participant !== cur.participant ||
         ev.event_type !== cur.event_type ||
+        // Navigational (boundary) events render as individual point ticks, so
+        // never merge them — a merged cluster would draw only its first tick and
+        // hide the rest. Each boundary gets its own cluster.
+        ev.navigational ||
         ev.time_in - cur.end > thresholdSec
       ) {
         if (cur) clusters.push(cur);
@@ -45,6 +49,10 @@
           event_type: ev.event_type,
           detector: ev.detector,
           region: ev.region,
+          // Clusters group by participant + event_type, so a boundary
+          // cluster's events are uniformly navigational. Carry the flag so
+          // timelines can render them distinctly and exclude them from zones.
+          navigational: !!ev.navigational,
           events: [ev],
           confidence_avg: ev.confidence,
         };
@@ -59,7 +67,11 @@
     if (cur) clusters.push(cur);
     for (var k = 0; k < clusters.length; k++) {
       var c = clusters[k];
-      if (c.start === c.end) {
+      // Navigational (boundary) events are precise instants — leave them at the
+      // real time so the density timeline, card ranges, and clip windows don't
+      // sit ±5s off (Viewer and Convergence undo this padding the same way; the
+      // clip window for a navigational point is set in screenspaceClusterToItem).
+      if (!c.navigational && c.start === c.end) {
         c.start = Math.max(0, c.start - 5);
         c.end = c.end + 5;
       }

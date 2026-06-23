@@ -421,6 +421,12 @@
 .cg-swim-event.is-dim {
   opacity: 0.2;
 }
+/* Navigational (boundary) ticks: thin + lighter so they read as session
+   scaffolding, not findings (mirrors the Screenspace timeline treatment). */
+.cg-swim-event--navigational {
+  opacity: 0.55;
+  border-radius: 0;
+}
 
 .cg-swim-labels {
   position: absolute;
