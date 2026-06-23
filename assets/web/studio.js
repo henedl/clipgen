@@ -3466,6 +3466,7 @@
 
   function createPulserOverlay() {
     var overlay = el("div", "card-gen-overlay");
+    // Intentional inline SVG (icon convention exception): a three-dot "generating" pulse animation, not an icon.
     overlay.innerHTML =
       '<svg width="26" height="10" viewBox="0 0 26 10">' +
       '<circle cx="5" cy="7" r="3"/>' +

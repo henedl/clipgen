@@ -125,12 +125,12 @@ The frontend is a **vanilla JS/CSS stack** (~50k lines in 43 files under `assets
 
 | Rule | Gap |
 |------|-----|
-| Icons via `mask-image` from `assets/icons/` | Screenspace toolbar converted (PR #388); inline `<svg>` still in `studio.js`/`studio.html`/`start-overlay.html`; data-URI SVG in `viewer.css` is **intentional** (exported/offline) |
+| Icons via `mask-image` from `assets/icons/` | ✅ Closed (with documented exceptions): all functional icons use `mask-image`. Remaining inline `<svg>` are intentional exceptions — loading/pulse animations (`studio.html` spinners, `studio.js` `createPulserOverlay`), brand/file-type glyphs (start-overlay Google/Excel tabs), start-overlay decorative artworks, and `viewer.css` data-URIs (exported/offline). Each carries an inline comment; see AGENTS.md "Standing exceptions". |
 | Tokens for spacing/type in new/touched CSS | ~770 raw `px` across `screenspace.css`/`studio.css`/`transcripts.css` (plus new `metadata.css`/`convergence.css`) |
 | No duplicate Python/JS constants | Intentional mirrors in `utils.js` + tests — maintenance surface only |
 | `primitives.js` only where factories needed | ✅ Resolved: `primitives.css` now linked by `studio.html` only (dropped from Screenspace/Transcripts) |
 
-Decorative SVG in `start-overlay.html` may remain an explicit exception after icon pass.
+Decorative SVG in `start-overlay.html` remains an explicit, documented exception (the tool-tile artworks + brand/file-type tab glyphs); see AGENTS.md "Standing exceptions".
 
 ---
 
@@ -270,7 +270,7 @@ Use this when executing waves; check items in PR descriptions.
 ### Wave 3
 
 - [x] B3 Unified icon helper — `iconMaskUrl`/`iconMaskStyle`/`applyIconMask`/`iconMaskSpan`/`applyIconMasksIn` in `utils.js`; `svgMask`, `iconSpan`, `xrefBadgeIcon`, `applyDataIconMasks`, `applyIcons`, and inline calls collapse onto them
-- [~] C4 SVG → mask — **Screenspace toolbar done** (11 `.wf-tab` + info + Run now reuse the `.ss-task-icon` family); **viewer deferred** (exported viewer's inline SVG / data-URI are intentional offline fallbacks — no `/icons/` route in exports)
+- [x] C4 SVG → mask — **Closed (with documented exceptions).** Screenspace toolbar converted (11 `.wf-tab` + info + Run reuse the `.ss-task-icon` family); audited `studio.js`/`studio.html`/`start-overlay.html` — no plain functional icons remain. Remaining inline `<svg>` are intentional exceptions (animations, brand/file-type glyphs, decorative artworks) with inline comments; `viewer.css` data-URIs stay (offline exports). See AGENTS.md "Standing exceptions".
 - [~] C5 Token sweep — opportunistic on touched file only: `.wf-tab` icon size `12px` → `var(--icon-size-xs)` in `screenspace.css`
 
 ### Remaining (re-prioritized)
@@ -278,7 +278,7 @@ Use this when executing waves; check items in PR descriptions.
 - [ ] A3 finish — adopt `createPoller` in Screenspace + Transcripts pollers
 - [ ] C6 server-injected `<head>` partial (live pages; exports stay self-contained)
 - [ ] A6 card-scrubber — delete (module + inline `viewer.js` dup) **or** keep parked with pointer
-- [~] C4 SVG → mask — Screenspace toolbar done; remaining: `studio.js`/`studio.html`/`start-overlay.html` (opportunistic)
+- [x] C4 SVG → mask — closed: `studio.js`/`studio.html`/`start-overlay.html` audited; remaining inline `<svg>` are documented intentional exceptions (animations, brand/file-type glyphs, decorative artworks), `viewer.css` data-URIs kept
 - [~] C5 token sweep — opportunistic on touched CSS (incl. `metadata.css`/`convergence.css`)
 - [ ] B5 `.btn` vs `.cg-btn` — reconcile or document (defer unless touched)
 - [ ] C1 `transcripts.js` split first (untouched monolith, no satellites) — hub+satellite axis
