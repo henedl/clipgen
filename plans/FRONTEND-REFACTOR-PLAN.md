@@ -29,7 +29,7 @@ The frontend is a **vanilla JS/CSS stack** (~50k lines in 43 files under `assets
 
 1. **Four separate `renderTimeline()` implementations** (screenspace / transcripts / viewer / convergence; only amplitude bands shared)
 2. ~~**Polling only half-unified**~~ ✅ Resolved: `createPoller` now drives every periodic poller (Studio, Screenspace, Transcripts); only the Ollama model-pull loop (Promise-based, custom cancel/miss-count) stays a raw `setInterval`
-3. **Convention debt:** inline SVG in HTML/JS (Screenspace toolbar done, rest pending), ~770 raw `px` in the three page CSS files, dual button systems (`.cg-btn` vs `.btn`)
+3. **Convention debt:** inline SVG ✅ closed (documented intentional exceptions) and raw `px` ✅ swept to tokens (2026-06-23) — remaining only the dual button systems (`.cg-btn` vs `.btn`, B5, deferred)
 4. **Page monoliths persist:** `screenspace.js` 7.5k (partially carved), `studio.js` 5.8k (state hub), `transcripts.js` 5.2k (untouched, no satellites)
 5. **Dead / partial assets:** `card-scrubber.js` parked **and** duplicated inline in `viewer.js`; `<head>` favicon/fonts copy-pasted across 7 HTML files
 
