@@ -144,7 +144,14 @@
         });
     }
 
-    lbl.textContent = event.participant + " · " + formatTime(event.rawStart);
+    // Boundary (navigational) events carry a recurrence-aware scene label.
+    var sceneLabel = "";
+    if (event.navigational && event.rawData && event.rawData.events && event.rawData.events[0]) {
+      var md = event.rawData.events[0].metadata;
+      if (md && md.scene_label) sceneLabel = md.scene_label;
+    }
+    lbl.textContent = event.participant + " · " + formatTime(event.rawStart)
+      + (sceneLabel ? " · " + sceneLabel : "");
     preview.classList.remove("hidden");
     positionTooltipAnchored(preview, markerEl.getBoundingClientRect());
   }

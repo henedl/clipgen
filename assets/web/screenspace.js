@@ -3611,6 +3611,9 @@
     } else if (hit.task.type === "scene" && r.scene_name) {
       details.appendChild(el("span", "", "Scene: " + r.scene_name));
       if (r.score !== undefined) details.appendChild(el("span", "", "Score: " + (r.score * 100).toFixed(1) + "%"));
+    } else if (hit.task.type === "boundary") {
+      if (r.scene_label) details.appendChild(el("span", "", "Enters: " + r.scene_label));
+      if (r.distance !== undefined) details.appendChild(el("span", "", "Distance: " + r.distance));
     }
     tip.appendChild(details);
 
@@ -6965,6 +6968,8 @@
         row.appendChild(el("span", "result-timestamp", formatTime(r.timestamp, { decimals: 1 })));
         row.appendChild(buildConfBar(r._confidence !== undefined ? r._confidence : 0, task.type));
         row.appendChild(el("span", "result-score", "d:" + (r.distance !== undefined ? r.distance : "?")));
+        // Scene label (Scene A/B/… — recurrence-aware for scene/hybrid metrics).
+        if (r.scene_label) row.appendChild(el("span", "result-scene", r.scene_label));
       } else if (task.type === "multitool") {
         row.dataset.timestamp = r.timestamp;
         row.appendChild(el("span", "result-timestamp", formatTime(r.timestamp, { decimals: 1 })));

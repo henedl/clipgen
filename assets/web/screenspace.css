@@ -3579,6 +3579,16 @@ body.panel-dragging #bottomPanel {
   flex-shrink: 0;
 }
 
+/* Scene label chip on boundary result rows (Scene A/B/…). */
+.result-scene {
+  font-size: var(--text-xs);
+  color: var(--color-task-boundary);
+  border: 1px solid var(--color-task-boundary);
+  border-radius: var(--radius-sm);
+  padding: 0 var(--space-1);
+  flex-shrink: 0;
+}
+
 .result-bar {
   flex: 1;
   min-width: 80px;

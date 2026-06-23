@@ -1782,6 +1782,9 @@
     details.appendChild(el("span", "", "Region: " + c.region));
     details.appendChild(el("span", "", "Participant: " + c.participant));
     details.appendChild(el("span", "", "Confidence: " + Math.round(avgConf * 100) + "%"));
+    if (c.navigational && c.sceneLabel) {
+      details.appendChild(el("span", "", "Enters: " + c.sceneLabel));
+    }
     if (c.navigational && typeof c.distance === "number") {
       details.appendChild(el("span", "", "Distance: " + Math.round(c.distance)));
     }
@@ -2072,6 +2075,7 @@
           region: ev.region,
           navigational: !!ev.navigational,
           distance: (ev.metadata && ev.metadata.distance) || 0,
+          sceneLabel: (ev.metadata && ev.metadata.scene_label) || "",
           count: 1,
           confSum: ev.confidence,
         };

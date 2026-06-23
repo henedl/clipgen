@@ -213,6 +213,8 @@ def generate_events_from_results(
                 metadata["period_start"] = r.get("period_start")
             if "period_end" in r:
                 metadata["period_end"] = r.get("period_end")
+            if "scene_label" in r:
+                metadata["scene_label"] = r.get("scene_label")
         ev = create_event(task, ts, confidence, metadata)
         # Multi-video scans tag each result with the sub-video it came from.
         source_override = r.get("_source_video")

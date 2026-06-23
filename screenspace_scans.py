@@ -1097,6 +1097,11 @@ def _boundary_rep_pixels(pixels: np.ndarray) -> np.ndarray:
     return pixels.copy()
 
 
+def _scene_label(index: int) -> str:
+    """Human-readable scene label for a period's cluster index (0 → 'Scene A')."""
+    return f"Scene {utils.index_to_letter(index)}"
+
+
 def _boundaries_from_periods(
     periods: list[dict[str, Any]], end_seconds: float
 ) -> list[dict[str, Any]]:
@@ -1104,7 +1109,9 @@ def _boundaries_from_periods(
 
     ``periods[0]`` is the initial period (video start, no entering boundary); a
     boundary exists at the start of every period after it. Each result carries
-    the span it opens as ``period_start``/``period_end``.
+    the span it opens as ``period_start``/``period_end`` and the label of the
+    scene it enters as ``scene_label`` (``scene_index`` set by the labeler;
+    falls back to position order when absent).
     """
     results: list[dict[str, Any]] = []
     for k in range(1, len(periods)):
@@ -1121,6 +1128,7 @@ def _boundaries_from_periods(
                 "_confidence": round(p["entry_conf"], 4),
                 "period_start": p["start_ts"],
                 "period_end": period_end,
+                "scene_label": _scene_label(p.get("scene_index", k)),
             }
         )
     return results
@@ -1197,6 +1205,23 @@ def _consolidate_boundary_periods(
         periods = [periods[0]] + [
             p for p in periods[1:] if float(p["entry_dist"]) >= cutoff
         ]
+
+    # Recurrence-aware scene labels: greedily group periods whose fingerprints
+    # are within merge_threshold, so a revisited scene (back to the menu) reuses
+    # its label instead of getting a fresh one. Reusing merge_threshold means the
+    # one Settings knob also controls how readily scenes are considered "the
+    # same" for labeling.
+    cluster_reps: list[dict[str, Any]] = []
+    for p in periods:
+        scene_index = None
+        for ci, rep in enumerate(cluster_reps):
+            if 1.0 - compare_scene_fingerprints(_fp(p), rep) < merge_threshold:
+                scene_index = ci
+                break
+        if scene_index is None:
+            scene_index = len(cluster_reps)
+            cluster_reps.append(_fp(p))
+        p["scene_index"] = scene_index
 
     return _boundaries_from_periods(periods, end_seconds)
 
@@ -1302,6 +1327,9 @@ def scan_boundaries(
                         "timestamp": round(ts, 2),
                         "distance": dist,
                         "_confidence": round(conf, 4),
+                        # phash has no fingerprints to cluster, so labels are
+                        # sequential: the Nth boundary opens the (N+1)th segment.
+                        "scene_label": _scene_label(len(results) + 1),
                     }
                     results.append(rd)
                     if on_result:
@@ -1372,28 +1400,37 @@ def scan_boundaries(
                 pending["count"] += 1
                 if phash_spike:
                     pending["phash_seen"] = True
-                within_gap = (
-                    last_boundary_ts[0] is not None
-                    and pending["start_ts"] - last_boundary_ts[0] < min_gap
-                )
-                hybrid_ok = (not is_hybrid) or pending["phash_seen"]
-                if pending["count"] >= confirm_window and not within_gap and hybrid_ok:
-                    conf = (
-                        1.0
-                        if scene_threshold <= 0
-                        else (dist_raw - scene_threshold) / scene_threshold
+                if pending["count"] >= confirm_window:
+                    # A sustained shift — we have entered a new scene. Advance the
+                    # period reference NOW, regardless of whether we emit a
+                    # boundary: min_gap (and hybrid's phash gate) only suppress the
+                    # boundary *event*, not the fact that the content moved on.
+                    # Tying reference advancement to emission would leave ref_fp
+                    # stuck on the old scene for the rest of the clip when a
+                    # transition lands within min_gap, silently dropping every
+                    # later boundary.
+                    within_gap = (
+                        last_boundary_ts[0] is not None
+                        and pending["start_ts"] - last_boundary_ts[0] < min_gap
                     )
-                    conf = max(eps, min(conf, 1.0))
-                    periods.append(
-                        {
-                            "start_ts": round(pending["start_ts"], 2),
-                            "pixels": _boundary_rep_pixels(pixels),
-                            "entry_dist": int(round(dist_raw * 100)),
-                            "entry_conf": conf,
-                        }
-                    )
+                    hybrid_ok = (not is_hybrid) or pending["phash_seen"]
+                    if not within_gap and hybrid_ok:
+                        conf = (
+                            1.0
+                            if scene_threshold <= 0
+                            else (dist_raw - scene_threshold) / scene_threshold
+                        )
+                        conf = max(eps, min(conf, 1.0))
+                        periods.append(
+                            {
+                                "start_ts": round(pending["start_ts"], 2),
+                                "pixels": _boundary_rep_pixels(pixels),
+                                "entry_dist": int(round(dist_raw * 100)),
+                                "entry_conf": conf,
+                            }
+                        )
+                        last_boundary_ts[0] = pending["start_ts"]
                     ref_fp[0] = fp  # settled reference = the confirming frame
-                    last_boundary_ts[0] = pending["start_ts"]
                     _reset_pending()
             else:
                 _reset_pending()

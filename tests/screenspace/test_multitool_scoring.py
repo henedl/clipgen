@@ -372,6 +372,15 @@ class TestScanBoundaries:
         )
         assert len(results) <= 1
 
+    def test_scene_labels_are_sequential_for_phash(self, monkeypatch):
+        # phash has no fingerprints, so labels are sequential: B, C, ...
+        frames = [(0.0, 0), (1.0, 0), (2.0, 40), (3.0, 40), (4.0, 0)]
+        self._setup(monkeypatch, frames)
+        results = screenspace.scan_boundaries(
+            "/fake.mp4", threshold=14, min_gap=1.0, interval_seconds=1.0
+        )
+        assert [r["scene_label"] for r in results] == ["Scene B", "Scene C"]
+
 
 def _tag_frame(tag: int, phash: int = 0) -> np.ndarray:
     """8×8 frame encoding a scene tag at [0,0,0] and a phash value at [0,1,0].
@@ -496,6 +505,23 @@ class TestConsolidateBoundaryPeriods:
         kept = self._consolidate(periods, relative_prune_enabled=True)
         assert [r["timestamp"] for r in kept] == [10.0, 20.0, 30.0]
 
+    def test_recurrence_labels_reuse_for_same_scene(self, monkeypatch):
+        self._patch(monkeypatch)
+        # Scenes 1 → 2 → back to 1 → 3: the revisit to scene 1 reuses "Scene A"
+        # (the initial period's label); distinct scenes get fresh letters.
+        periods = [
+            self._period(0, 1, 0),
+            self._period(10, 2, 80),
+            self._period(20, 1, 80),
+            self._period(30, 3, 80),
+        ]
+        results = self._consolidate(periods)
+        assert [r["scene_label"] for r in results] == [
+            "Scene B",
+            "Scene A",
+            "Scene C",
+        ]
+
 
 class TestScanBoundariesSceneHybrid:
     """The scene/hybrid period-reference detector (metric != phash)."""
@@ -587,6 +613,30 @@ class TestScanBoundariesSceneHybrid:
             "/fake.mp4", metric="hybrid", threshold=14, interval_seconds=1.0
         )
         assert [r["timestamp"] for r in results] == [2.0]
+
+    def test_min_gap_does_not_stick_period_reference(self, monkeypatch):
+        # Regression: a transition within min_gap of the previous boundary has its
+        # boundary suppressed, but the period reference must still advance — else
+        # ref_fp sticks on the old scene and every later transition is lost.
+        # Boundary at t2 (1→2); 2→3 at t4 is within min_gap (suppressed); the
+        # genuine 3→4 at t8 (beyond the gap) must still be detected.
+        frames = [
+            (0.0, 1, 0),
+            (1.0, 1, 0),
+            (2.0, 2, 0),
+            (3.0, 2, 0),
+            (4.0, 3, 0),
+            (5.0, 3, 0),
+            (6.0, 3, 0),
+            (7.0, 3, 0),
+            (8.0, 4, 0),
+            (9.0, 4, 0),
+        ]
+        self._setup(monkeypatch, frames)
+        results = screenspace.scan_boundaries(
+            "/fake.mp4", metric="scene", min_gap=3.0, interval_seconds=1.0
+        )
+        assert [r["timestamp"] for r in results] == [2.0, 8.0]
 
 
 class TestScanMultitool:
