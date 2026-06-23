@@ -165,12 +165,14 @@
       if (existingScrim) existingScrim.style.display = "";
       return existing;
     }
+    var rect = mediaEl.getBoundingClientRect();
+    // A not-yet-laid-out element would cache a 0x0 canvas; skip until it has size.
+    if (rect.width < 1 || rect.height < 1) return null;
     var scrim = document.createElement("div");
     scrim.className = "waveform-scrim";
     mediaEl.appendChild(scrim);
     var canvas = document.createElement("canvas");
     canvas.className = "waveform-canvas";
-    var rect = mediaEl.getBoundingClientRect();
     canvas.width = Math.round(rect.width);
     canvas.height = Math.round(rect.height * 0.28);
     mediaEl.appendChild(canvas);
@@ -195,6 +197,15 @@
     ctx.fillRect(x - 1, 0, 2, h);
   }
 
+  // Hide (but keep cached) the waveform canvas + scrim on an element.
+  function clearWaveform(mediaEl) {
+    if (!mediaEl) return;
+    var canvas = mediaEl.querySelector(".waveform-canvas");
+    if (canvas) canvas.style.display = "none";
+    var scrim = mediaEl.querySelector(".waveform-scrim");
+    if (scrim) scrim.style.display = "none";
+  }
+
   // ---- Public API ----
 
   // Attach scrubbing to a media element. The consumer is responsible for
@@ -212,7 +223,13 @@
     var sd = opts.spriteData;
     var audioFile = opts.audioFile || null;
     var audioBaseUrl = opts.audioBaseUrl || "media/";
-    var audioUrl = audioFile ? (audioBaseUrl + encodeURIComponent(audioFile)) : null;
+    // Consumers with a query-string audio endpoint pass an explicit audioUrl so we
+    // don't encodeURIComponent the whole URL (which would corrupt "?start=&end=").
+    var audioUrl = opts.audioUrl
+      ? opts.audioUrl
+      : audioFile
+        ? audioBaseUrl + encodeURIComponent(audioFile)
+        : null;
 
     mediaEl.style.backgroundSize = (sd.cols * 100) + "% " + (sd.rows * 100) + "%";
     mediaEl.style.backgroundPosition = "0% 0%";
@@ -234,18 +251,18 @@
         if (audioFile && audioUrl) {
           audioScrubAt(audioFile, audioUrl, frameIndex * sd.interval);
           var waveform = extractWaveform(audioFile);
-          if (waveform) drawWaveform(getOrCreateWaveformCanvas(mediaEl), waveform, frac);
+          if (waveform) {
+            var wfCanvas = getOrCreateWaveformCanvas(mediaEl);
+            if (wfCanvas) drawWaveform(wfCanvas, waveform, frac);
+          }
         }
       });
     }
 
     function onLeave() {
-      mediaEl.style.backgroundPosition = "0% 0%";
+      if (sd) mediaEl.style.backgroundPosition = "0% 0%";
       audioScrubStop();
-      var canvas = mediaEl.querySelector(".waveform-canvas");
-      if (canvas) canvas.style.display = "none";
-      var scrim = mediaEl.querySelector(".waveform-scrim");
-      if (scrim) scrim.style.display = "none";
+      clearWaveform(mediaEl);
     }
 
     mediaEl.addEventListener("mousemove", onMove);
@@ -283,6 +300,20 @@
     audioScrubStop();
   }
 
+  // Detach only attachments whose element has left the DOM. Consumers that
+  // rebuild a card list (e.g. Studio re-rendering a queue's innerHTML) call this
+  // before re-attaching so the _attached array doesn't leak stale entries.
+  function detachStale() {
+    for (var i = _attached.length - 1; i >= 0; i--) {
+      var entry = _attached[i];
+      if (!entry.el.isConnected) {
+        entry.el.removeEventListener("mousemove", entry.onMove);
+        entry.el.removeEventListener("mouseleave", entry.onLeave);
+        _attached.splice(i, 1);
+      }
+    }
+  }
+
   // Stop in-flight audio without detaching. Useful on transient UI events
   // (sidebar resize, modal open) that should silence playback but keep cards
   // wired up.
@@ -293,6 +324,16 @@
   window.clipgenCardScrubber = {
     attach: attach,
     detachAll: detachAll,
+    detachStale: detachStale,
     stopAll: stopAll,
+    // Primitives — let a consumer with its own hover handler (e.g. the viewer's
+    // <video>-seek scrub) drive audio + waveform without a second attach().
+    loadAudioBuffer: loadAudioBuffer,
+    audioScrubAt: audioScrubAt,
+    audioScrubStop: audioScrubStop,
+    extractWaveform: extractWaveform,
+    getOrCreateWaveformCanvas: getOrCreateWaveformCanvas,
+    drawWaveform: drawWaveform,
+    clearWaveform: clearWaveform,
   };
 })();

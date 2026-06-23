@@ -898,6 +898,59 @@ def test_extract_thumbnail_bytes_preserves_float_timestamp(monkeypatch, tmp_path
     assert "-ss" in cmd[i_idx + 2 :]
 
 
+# ---- card-scrubber media helpers (sprite sheet + audio segment) ----
+
+
+def test_extract_sprite_sheet_bytes_debug_mode(monkeypatch):
+    monkeypatch.setattr(video.config, "DEBUGGING", True)
+    assert video.extract_sprite_sheet_bytes("x.mp4", 0.0, 5.0, 5, 5) is None
+
+
+def test_extract_sprite_sheet_bytes_missing_file(monkeypatch):
+    monkeypatch.setattr(video.config, "DEBUGGING", False)
+    assert video.extract_sprite_sheet_bytes("/nope.mp4", 0.0, 5.0, 5, 5) is None
+
+
+def test_extract_sprite_sheet_bytes_builds_tile_command(monkeypatch, tmp_path):
+    monkeypatch.setattr(video.config, "DEBUGGING", False)
+    fake = tmp_path / "v.mp4"
+    fake.write_bytes(b"x")
+    captured: dict = {}
+    monkeypatch.setattr(video.subprocess, "run", _captured_run(captured))
+
+    video.extract_sprite_sheet_bytes(str(fake), 2.0, 5.0, 4, 3)
+    cmd = captured["cmd"]
+    vf = cmd[cmd.index("-vf") + 1]
+    assert "tile=4x3" in vf  # cols x rows grid
+    assert "fps=12/5.0" in vf  # cols*rows frames over the duration
+
+
+def test_extract_audio_segment_bytes_debug_mode(monkeypatch):
+    monkeypatch.setattr(video.config, "DEBUGGING", True)
+    assert video.extract_audio_segment_bytes("x.mp4", 0.0, 5.0) is None
+
+
+def test_extract_audio_segment_bytes_missing_file(monkeypatch):
+    monkeypatch.setattr(video.config, "DEBUGGING", False)
+    assert video.extract_audio_segment_bytes("/nope.mp4", 0.0, 5.0) is None
+
+
+def test_extract_audio_segment_bytes_builds_wav_command(monkeypatch, tmp_path):
+    monkeypatch.setattr(video.config, "DEBUGGING", False)
+    fake = tmp_path / "v.mp4"
+    fake.write_bytes(b"x")
+    captured: dict = {}
+    monkeypatch.setattr(video.subprocess, "run", _captured_run(captured))
+
+    video.extract_audio_segment_bytes(str(fake), 1.0, 4.0, sample_rate=16000)
+    cmd = captured["cmd"]
+    assert "-vn" in cmd
+    assert cmd[cmd.index("-ac") + 1] == "1"
+    assert cmd[cmd.index("-ar") + 1] == "16000"
+    assert "pcm_s16le" in cmd
+    assert cmd[cmd.index("-f") + 1] == "wav"
+
+
 # -- cancel_flag forwarding --
 
 

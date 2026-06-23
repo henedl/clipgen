@@ -799,6 +799,8 @@ def get_frontend_config() -> dict[str, Any]:
         "frictionColorToken": "--color-friction",
         "frictionMomentLimit": config.FRICTION_MOMENT_LIMIT,
         "convergenceSources": list(config.CONVERGENCE_SOURCES),
+        "cardScrubberSpriteCols": config.STUDIO_SCRUBBER_SPRITE_COLS,
+        "cardScrubberSpriteRows": config.STUDIO_SCRUBBER_SPRITE_ROWS,
     }
 
 

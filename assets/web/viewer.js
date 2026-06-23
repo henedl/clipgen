@@ -45,7 +45,14 @@
   var FILMSTRIP_CONCURRENCY = 4;
   var FILMSTRIP_STORAGE_KEY = "clipgen-viewer-filmstrip";
 
-  var _cardScrub = null; // { mediaEl, videoEl, raf }
+  var _cardScrub = null; // { mediaEl, videoEl, raf, audioKey, audioUrl }
+
+  // Opt-in: layer the shared card-scrubber's audio snippets + waveform overlay
+  // onto the existing <video>-seek scrub. Audio is decoded in-browser from the
+  // clip file (no server, no extra exported assets); degrades to silent if the
+  // browser can't decode that codec.
+  var _scrubAudioEnabled = false;
+  var SCRUBAUDIO_STORAGE_KEY = "clipgen-viewer-scrubaudio";
 
   var _screenspaceVisible = true;
   var SCREENSPACE_STORAGE_KEY = "clipgen-viewer-screenspace";
@@ -223,7 +230,10 @@
       mediaEl.appendChild(bar);
     }
 
-    _cardScrub = { mediaEl: mediaEl, videoEl: vid, raf: 0 };
+    _cardScrub = { mediaEl: mediaEl, videoEl: vid, raf: 0, audioKey: id, audioUrl: artifact.file };
+    if (_scrubAudioEnabled && window.clipgenCardScrubber) {
+      window.clipgenCardScrubber.loadAudioBuffer(artifact.file, id);
+    }
 
     var rect = mediaEl.getBoundingClientRect();
     var frac = Math.max(0, Math.min(1, (ev.clientX - rect.left) / rect.width));
@@ -256,6 +266,16 @@
 
       var fill = mediaEl.querySelector(".scrub-progress-fill");
       if (fill) fill.style.width = (frac * 100).toFixed(1) + "%";
+
+      if (_scrubAudioEnabled && window.clipgenCardScrubber && _cardScrub) {
+        var cs = window.clipgenCardScrubber;
+        cs.audioScrubAt(_cardScrub.audioKey, _cardScrub.audioUrl, vid.duration * frac);
+        var wf = cs.extractWaveform(_cardScrub.audioKey);
+        if (wf) {
+          var canvas = cs.getOrCreateWaveformCanvas(mediaEl);
+          if (canvas) cs.drawWaveform(canvas, wf, frac);
+        }
+      }
     });
   }
 
@@ -275,6 +295,11 @@
 
     var fill = mediaEl.querySelector(".scrub-progress-fill");
     if (fill) fill.style.width = "0%";
+
+    if (window.clipgenCardScrubber) {
+      window.clipgenCardScrubber.audioScrubStop();
+      window.clipgenCardScrubber.clearWaveform(mediaEl);
+    }
 
     _cardScrub = null;
   }
@@ -605,6 +630,33 @@
     }
   }
 
+  // ---- Scrub-audio toggle (opt-in; default off) ----
+
+  function initScrubAudioToggle() {
+    var btn = qs("#scrubAudioToggle");
+    if (!btn) return;
+    var stored = null;
+    try { stored = window.localStorage.getItem(SCRUBAUDIO_STORAGE_KEY); } catch (_) {}
+    _scrubAudioEnabled = stored === "true";
+    btn.addEventListener("click", toggleScrubAudio);
+    updateScrubAudioButton();
+  }
+
+  function updateScrubAudioButton() {
+    var btn = qs("#scrubAudioToggle");
+    if (btn) btn.setAttribute("aria-pressed", _scrubAudioEnabled ? "true" : "false");
+  }
+
+  function toggleScrubAudio() {
+    _scrubAudioEnabled = !_scrubAudioEnabled;
+    try { window.localStorage.setItem(SCRUBAUDIO_STORAGE_KEY, _scrubAudioEnabled ? "true" : "false"); } catch (_) {}
+    updateScrubAudioButton();
+    if (!_scrubAudioEnabled && window.clipgenCardScrubber) {
+      window.clipgenCardScrubber.audioScrubStop();
+      if (_cardScrub) window.clipgenCardScrubber.clearWaveform(_cardScrub.mediaEl);
+    }
+  }
+
   // ---- Initialization ----
 
   document.addEventListener("DOMContentLoaded", function () {
@@ -653,6 +705,7 @@
     }
 
     initFilmstripToggle();
+    initScrubAudioToggle();
     if (_filmstripEnabled) applyFilmstripMode();
   });
 
