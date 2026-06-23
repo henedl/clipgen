@@ -67,10 +67,25 @@
     for (var i = 0; i < state.intakeEvents.length; i++) {
       var ev = state.intakeEvents[i];
       if (ev.excluded) continue;
+      // Navigational (boundary) events are orientation scaffolding, not
+      // findings — keep them out of coverage / event-type / convergence stats.
+      // They're tallied separately by getBoundaryCounts().
+      if (ev.navigational) continue;
       if (participants.length && participants.indexOf(ev.participant) === -1) continue;
       events.push(ev);
     }
     return events;
+  }
+
+  function getBoundaryCounts(participants) {
+    var counts = {};
+    for (var i = 0; i < state.intakeEvents.length; i++) {
+      var ev = state.intakeEvents[i];
+      if (!ev.navigational || ev.excluded) continue;
+      if (participants.length && participants.indexOf(ev.participant) === -1) continue;
+      counts[ev.participant] = (counts[ev.participant] || 0) + 1;
+    }
+    return counts;
   }
 
   function getFilteredMarks(participants) {
@@ -311,7 +326,8 @@
     return result;
   }
 
-  function computeSessionSummary(participants, rows, events, marks) {
+  function computeSessionSummary(participants, rows, events, marks, boundaryCounts) {
+    boundaryCounts = boundaryCounts || {};
     var summary = [];
     for (var i = 0; i < participants.length; i++) {
       var pid = participants[i];
@@ -348,6 +364,7 @@
         sheet_timestamps: sheetTs,
         ss_events: ssEvents,
         ss_event_types: Object.keys(ssTypes).length,
+        boundaries: boundaryCounts[pid] || 0,
         tr_marks: trMarks,
         tr_by_category: trByCat,
         outlier_flags: [],
@@ -533,6 +550,7 @@
     var allP = getAllParticipants();
     var activeP = participants.length ? participants : allP;
     var events = getFilteredEvents(participants);
+    var boundaryCounts = getBoundaryCounts(participants);
     var marks = getFilteredMarks(participants);
     var allRows = state.sheetData ? state.sheetData.rows : [];
     // Filter out empty rows (no participant has text) for stats
@@ -553,7 +571,7 @@
       observationStats: computeObservationStats(rows, activeP),
       severityDist: computeSeverityDistribution(rows),
       categoryBreakdown: computeCategoryBreakdown(rows, activeP),
-      sessionSummary: computeSessionSummary(activeP, rows, events, marks),
+      sessionSummary: computeSessionSummary(activeP, rows, events, marks, boundaryCounts),
       histogramData: computeHistogramData(activeP, rows, events, marks),
       collisionStats: computeCollisions(activeP, rows, events, marks, mdState.collisionWindow),
     };
@@ -1372,10 +1390,12 @@
     var container = el("div", "md-small-multiples" + (compact ? " md-compact" : ""));
     // Find max across all participants for shared scale
     var maxVal = 0;
+    var hasBoundaries = false;
     for (var i = 0; i < data.length; i++) {
       if (data[i].sheet_timestamps > maxVal) maxVal = data[i].sheet_timestamps;
       if (data[i].ss_events > maxVal) maxVal = data[i].ss_events;
       if (data[i].tr_marks > maxVal) maxVal = data[i].tr_marks;
+      if (data[i].boundaries > 0) hasBoundaries = true;
     }
 
     for (var j = 0; j < data.length; j++) {
@@ -1393,8 +1413,14 @@
       row.appendChild(bars);
 
       if (!compact) {
-        var counts = el("span", "md-sm-counts",
-          d.sheet_timestamps + " / " + d.ss_events + " / " + d.tr_marks);
+        var countsText = d.sheet_timestamps + " / " + d.ss_events + " / " + d.tr_marks;
+        // ⚑ scene boundaries — orientation scaffolding, shown apart from the
+        // sheet/screenspace/transcript findings counts. Column kept stable
+        // across rows so participants line up when any have boundaries.
+        if (hasBoundaries) countsText += "  ⚑" + d.boundaries;
+        var counts = el("span", "md-sm-counts", countsText);
+        counts.title = "sheet / screenspace / transcript"
+          + (hasBoundaries ? " · ⚑ scene boundaries" : "");
         row.appendChild(counts);
       }
 
@@ -1550,14 +1576,14 @@
     if (cache.sessionSummary.length) {
       var cats = ["pain_point", "delight", "quote", "insight", "task", "bookmark"];
       var sesHeader = ["participant", "spreadsheet_valid_cells", "spreadsheet_timestamps",
-        "screenspace_events", "screenspace_event_types", "transcript_marks"];
+        "screenspace_events", "screenspace_event_types", "screenspace_boundaries", "transcript_marks"];
       for (var c = 0; c < cats.length; c++) sesHeader.push("transcript_" + cats[c] + "s");
       sesHeader.push("outlier");
       var sesLines = [csvRow(sesHeader)];
       for (var j = 0; j < cache.sessionSummary.length; j++) {
         var s = cache.sessionSummary[j];
         var row = [s.participant, s.sheet_valid_cells, s.sheet_timestamps,
-          s.ss_events, s.ss_event_types, s.tr_marks];
+          s.ss_events, s.ss_event_types, s.boundaries, s.tr_marks];
         for (var k = 0; k < cats.length; k++) row.push(s.tr_by_category[cats[k]] || 0);
         row.push(s.outlier_flags.length > 0 ? "true" : "false");
         sesLines.push(csvRow(row));

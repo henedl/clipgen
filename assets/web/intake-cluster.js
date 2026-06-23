@@ -45,6 +45,10 @@
           event_type: ev.event_type,
           detector: ev.detector,
           region: ev.region,
+          // Clusters group by participant + event_type, so a boundary
+          // cluster's events are uniformly navigational. Carry the flag so
+          // timelines can render them distinctly and exclude them from zones.
+          navigational: !!ev.navigational,
           events: [ev],
           confidence_avg: ev.confidence,
         };

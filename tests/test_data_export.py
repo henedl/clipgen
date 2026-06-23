@@ -186,6 +186,23 @@ def test_screenspace_events_duration_computed(screenspace_manifest):
     assert inactivity["duration"] == pytest.approx(15.5, abs=1e-6)
 
 
+def test_screenspace_events_includes_navigational():
+    manifest = {
+        "events": [
+            _ss_event(
+                "boundary", id="ev_bnd", navigational=True, metadata={"distance": 22}
+            ),
+            _ss_event("change", id="ev_chg", metadata={"magnitude": 0.42}),
+        ]
+    }
+    rows = {r["id"]: r for r in data_export.build_screenspace_events(manifest)}
+    # Boundary rows expose navigational; other detectors default to False.
+    assert rows["ev_bnd"]["navigational"] is True
+    assert rows["ev_chg"]["navigational"] is False
+    # And the column is part of the canonical CSV ordering.
+    assert "navigational" in data_export.SCREENSPACE_EVENT_COLUMNS
+
+
 def test_screenspace_events_handles_nonfinite_floats():
     manifest = {
         "events": [

@@ -1440,6 +1440,15 @@ html[data-theme="dark"] .artifact-marker.selected {
   opacity: 1;
 }
 
+/* Navigational (boundary) ticks: thin + lighter session scaffolding, not
+   findings (mirrors the Screenspace timeline treatment). Min-width keeps the
+   1px tick hoverable. */
+.screenspace-marker--navigational {
+  opacity: 0.55;
+  border-radius: 0;
+  min-width: 1px;
+}
+
 #screenspaceLegend {
   display: flex;
   gap: var(--space-3);

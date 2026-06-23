@@ -355,6 +355,32 @@ class TestManifestWithEvents:
         loaded = screenspace.load_screenspace_manifest()
         assert loaded["events"] == []
 
+    def test_roundtrip_preserves_navigational(self, tmp_path, monkeypatch):
+        # Boundary events carry navigational so Studio intake can hide them and
+        # timelines can render them distinctly — it must survive save → load.
+        monkeypatch.setattr(config, "OUTPUT_DIR", str(tmp_path))
+        events = [
+            {
+                "id": "ev_boundary1",
+                "source_video": "study_P01.mp4",
+                "participant": "P01",
+                "detector": "boundary",
+                "event_type": "boundary",
+                "time_in": 12.0,
+                "time_out": 12.0,
+                "confidence": 0.57,
+                "metadata": {"distance": 22},
+                "excluded": False,
+                "navigational": True,
+                "task_id": "ss_bnd00001",
+                "region": "full_frame",
+            }
+        ]
+        screenspace.save_screenspace_manifest({}, [], events)
+        loaded = screenspace.load_screenspace_manifest()
+        assert loaded["events"][0]["navigational"] is True
+        assert loaded["events"][0]["metadata"]["distance"] == 22
+
 
 class TestBackfillMissingEvents:
     def _completed_template_task(self):

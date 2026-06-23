@@ -39,7 +39,7 @@ Parameters exposed in the workflow panel: interval, sensitivity (threshold), min
 
 - **Phase 1 (Detector)** — ✅ Done. Commits `92669eb` (feat), `9e02a7f` (post-review hardening).
 - **Phase 2 (Screenspace UI)** — ✅ Done. Commits `92669eb`, `12d8129` (slider widened to 0–64), `57216a6` (tab color).
-- **Phase 3 (Studio + Viewer)** — ⬜ Not started. Deferred until boundary detection is validated on real footage (per the agreed Phase 1+2 → validate → Phase 3 sequencing). `navigational: true` is already emitted on events, so the data is ready; only consumption is pending.
+- **Phase 3 (Studio + Viewer)** — ✅ Done. Studio intake hides navigational events behind a default-off "Show navigational" toggle; a one-click "Detect boundaries" action (Intake header) enqueues a full-frame boundary task per video-bearing participant; the Convergence swimlane and Timeline Viewer render boundary events as thin/lighter ticks (excluded from convergence-zone math), with a distance tooltip; Metadata gained a per-participant boundary count. `navigational` now flows through the viewer payload and `--export`.
 - **Phase 4 (Scene-aware period segmentation)** — ⬜ Proposed (new; see below). Motivated by real-footage feedback that pure phash spikes are noisy even at high sensitivity.
 
 Post-landing fix outside the original scope: dismissing a *running* boundary task didn't cancel its worker thread (pinned CPU + SSE/icon spam) — fixed in `a7b289e` (`remove_task` keeps a running task alive until its cancel lands).
@@ -62,13 +62,14 @@ Post-landing fix outside the original scope: dismissing a *running* boundary tas
 - [x] Tool info text for the info tooltip; shared detector maps updated (`utils.js` `_DETECTOR_TYPES`/`_DETECTOR_FALLBACK`, `CATEGORY_HUES`, `TOOL_INFO`, `TOOL_LABELS`, icon-name map)
 - [ ] Open follow-up: bake the validated sensitivity default into `SCREENSPACE_BOUNDARY_PHASH_THRESHOLD` + the slider's starting value once the researcher confirms the sweet spot (still 14)
 
-## Phase 3: Studio and Viewer integration — ⬜ Not started (deferred until detection is validated)
+## Phase 3: Studio and Viewer integration — ✅ Done
 
-- [ ] Event model: `navigational` field (absent = false) flows through manifest save/load and the events API
-- [ ] Studio intake: navigational events excluded from clustering and "Add all" by default; "Show navigational" toggle in the intake header includes them (a researcher *can* clip around a boundary deliberately)
-- [ ] Studio "Detect boundaries" action (participant list or Metadata tab header): enqueues one boundary task per participant with defaults via `POST /screenspace/api/tasks`; progress visible through existing task polling
-- [ ] Studio timeline + Timeline Viewer: boundary ticks on the Screenspace track with distinct rendering; legend entry; tooltip shows distance
-- [ ] Viewer data contract: events pass through `screenspaceEvents` unchanged; `navigational` included so the viewer can style ticks differently
+- [x] Event model: `navigational` (absent = false) round-trips through manifest save/load and the events API (already true); added to the viewer payload (`viewer.load_screenspace_events_for_viewer`) and `--export` (`data_export.build_screenspace_events` + `SCREENSPACE_EVENT_COLUMNS`)
+- [x] Studio intake: navigational events excluded from clustering and "Add all" by default (`intakeClusterSource()`); a "Show navigational" toggle in the intake header includes them
+- [x] Studio "Detect boundaries" action — placed in the **Intake header** (decision); enqueues one full-frame boundary task per video-bearing participant via `GET /screenspace/api/participants` → `POST /screenspace/api/tasks`; progress via existing task/event polling
+- [x] Studio timeline (Convergence swimlane) + Timeline Viewer: boundary ticks render thin + lighter (~0.55 alpha) on the Screenspace track; legend entry auto-included; tooltip shows distance. **Navigational events are excluded from convergence-zone computation** (orientation scaffolding, not findings) but still rendered
+- [x] Viewer data contract: `navigational` flows through `screenspaceEvents`; the viewer styles boundary ticks via `.screenspace-marker--navigational`
+- [x] **Metadata: per-participant boundary count** (new, per decision) — boundaries are tallied separately and excluded from the `ss_events` findings count so coverage/outlier stats stay meaningful; surfaced in the session-summary rows and the sessions CSV (`screenspace_boundaries`)
 
 ## Phase 4: Scene-aware period segmentation — ⬜ Proposed
 

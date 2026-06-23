@@ -70,6 +70,7 @@
     intakeFilterText: "",
     intakeFilterDetector: "",
     intakeFilterNew: false,
+    intakeShowNavigational: false,
     intakeFilterParticipants: [],
     intakeHoveredIdx: -1,
     activePreviewTab: "sheet",
@@ -4856,6 +4857,50 @@
     });
   }
 
+  // Events fed into the intake clustering surface. Navigational (boundary)
+  // events are orientation scaffolding, not clip candidates — hidden by
+  // default so they don't flood the curation queue. state.intakeEvents still
+  // holds ALL events (Metadata's boundary count reads from it).
+  function intakeClusterSource() {
+    if (state.intakeShowNavigational) return state.intakeEvents;
+    return state.intakeEvents.filter(function (ev) { return !ev.navigational; });
+  }
+
+  function reclusterIntake() {
+    var threshold = parseInt((qs("#intakeClusterThreshold") || {}).value) || 10;
+    state.intakeClusters = clusterIntakeEvents(intakeClusterSource(), threshold);
+    renderIntake(false);
+  }
+
+  // One-click boundary detection: enqueue a full-frame boundary task per
+  // participant that has a source video. Progress surfaces through the existing
+  // task poll (intake tab dot) and new boundary events arrive via pollIntakeEvents.
+  function intakeDetectBoundaries(btn) {
+    var labelEl = btn ? btn.querySelector("span") : null;
+    var origLabel = labelEl ? labelEl.textContent : "";
+    function restore() {
+      if (btn) btn.disabled = false;
+      if (labelEl) labelEl.textContent = origLabel;
+    }
+    apiGet("../screenspace/api/participants")
+      .then(function (data) {
+        if (!data.ok) return restore();
+        var withVideo = (data.participants || []).filter(function (p) { return p.has_video; });
+        if (!withVideo.length) {
+          if (labelEl) labelEl.textContent = "No videos";
+          setTimeout(restore, 1500);
+          return;
+        }
+        if (btn) btn.disabled = true;
+        if (labelEl) labelEl.textContent = "Queued " + withVideo.length + "…";
+        return Promise.all(withVideo.map(function (p) {
+          return apiPost("../screenspace/api/tasks", { type: "boundary", participant: p.id })
+            .catch(function () { return null; });
+        })).then(restore);
+      })
+      .catch(restore);
+  }
+
   function pollIntakeEvents() {
     apiGet("../screenspace/api/events?excluded=false")
       .then(function (data) {
@@ -4873,7 +4918,7 @@
         });
         state.intakeEvents = events;
         var threshold = parseInt((qs("#intakeClusterThreshold") || {}).value) || 10;
-        state.intakeClusters = clusterIntakeEvents(events, threshold);
+        state.intakeClusters = clusterIntakeEvents(intakeClusterSource(), threshold);
         renderIntake(hasNew);
         checkConvergenceTabVisibility();
         refreshMetadataIfActive();
@@ -5116,7 +5161,7 @@
     addToReel: intakeAddToReel,
     onDismiss: intakeDismissCluster,
     onThresholdChange: function (threshold) {
-      state.intakeClusters = clusterIntakeEvents(state.intakeEvents, threshold);
+      state.intakeClusters = clusterIntakeEvents(intakeClusterSource(), threshold);
       renderIntake(false);
     },
     onCardHover: function (card) {
@@ -5124,11 +5169,27 @@
     },
     extraControl: function (cfg) {
       var newToggle = qs("#intakeFilterNew");
-      if (!newToggle) return;
-      newToggle.addEventListener("change", function () {
-        state.intakeFilterNew = this.checked;
-        cfg.rerender();
-      });
+      if (newToggle) {
+        newToggle.addEventListener("change", function () {
+          state.intakeFilterNew = this.checked;
+          cfg.rerender();
+        });
+      }
+      var navToggle = qs("#intakeShowNavigational");
+      if (navToggle) {
+        navToggle.addEventListener("change", function () {
+          state.intakeShowNavigational = this.checked;
+          // Navigational events change the clustering input, so re-cluster
+          // rather than just re-render the existing clusters.
+          reclusterIntake();
+        });
+      }
+      var detectBtn = qs("#intakeDetectBoundariesBtn");
+      if (detectBtn) {
+        detectBtn.addEventListener("click", function () {
+          intakeDetectBoundaries(detectBtn);
+        });
+      }
     },
   };
   var TR_INTAKE = {

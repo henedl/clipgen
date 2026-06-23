@@ -208,6 +208,7 @@ def load_screenspace_events_for_viewer() -> list[dict[str, Any]]:
             "timeOut": e.get("time_out", 0.0),
             "confidence": _sanitize_event_metadata(e.get("confidence", 0.0)),
             "region": e.get("region", ""),
+            "navigational": bool(e.get("navigational", False)),
             "metadata": _sanitize_event_metadata(e.get("metadata", {})),
         }
         for e in manifest.get("events", [])
