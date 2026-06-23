@@ -15,7 +15,10 @@
 /* Page-specific variables — shared tokens are in tokens.css */
 
 html {
-  font-size: var(--text-md);
+  /* Root rem anchor — must stay a concrete px. A rem-based token (--text-md
+     is 1rem) would resolve against the browser's default font size, scaling
+     every rem-based --space-* token. */
+  font-size: 16px;
 }
 
 body {
