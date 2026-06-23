@@ -206,6 +206,13 @@ def generate_events_from_results(
             metadata["avg_distance"] = r.get("avg_distance", 0.0)
         elif task_type == "boundary":
             metadata["distance"] = r.get("distance", 0.0)
+            # Scene/hybrid metrics emit the period each boundary opens; absent
+            # for the phash metric. Carried so Studio/Viewer can later render
+            # segments instead of bare ticks.
+            if "period_start" in r:
+                metadata["period_start"] = r.get("period_start")
+            if "period_end" in r:
+                metadata["period_end"] = r.get("period_end")
         ev = create_event(task, ts, confidence, metadata)
         # Multi-video scans tag each result with the sub-video it came from.
         source_override = r.get("_source_video")

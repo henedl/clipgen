@@ -3651,7 +3651,7 @@
     flow: "Detects movement inside your region — a character running, an animation playing, activity in one corner. Raise the strength threshold to ignore small or slow motion. Unlike Change (which fires on any pixel difference, including flicker) Flow responds only to real movement, so it stays steadier on noisy footage.",
     scene: "Capture and label several reference screens, then this tags each frame with whichever one it most resembles — building a timeline of which screen is showing (title, map, level, pause menu…). It tolerates lighting and minor changes better than Similarity, and handles many screens at once where Similarity matches just one. Lower the Threshold if frames go untagged.",
     inactivity: "Finds stretches where your region barely changes for a while — loading screens, frozen states, or a player standing idle. It's the opposite of Change: it fires when nothing happens, not when something does. Set the minimum duration so brief pauses are ignored and only real stalls are reported.",
-    boundary: "Scans the whole screen for cuts — points where the picture shifts substantially from a moment earlier (menu → gameplay, a level loading, a loading screen ending). Nothing to set up: raise Sensitivity for only the biggest jumps, and use Min gap to avoid a cluster of markers during fast action. These are orientation markers to help you navigate, not clip candidates. Unlike Scene, it doesn't label the screens — it only marks where they change."
+    boundary: "Scans the whole screen for period transitions — menu → gameplay, a level loading, a loading screen ending. Metric: Auto (recommended) uses a content fingerprint and only marks a change that holds for a moment and is backed by a hard cut, so camera motion and brief overlays don't fragment one continuous period; pHash is the simpler 'any big frame-to-frame jump' detector. Sensitivity tunes the hard-cut threshold; Min gap avoids clustered markers during fast action. After scanning, near-identical periods are merged and transient blips dissolved. These are orientation markers, not clip candidates; unlike Scene it doesn't label the screens — only marks where they change."
   };
 
   var _toolInfoPinned = false;
@@ -4291,8 +4291,20 @@
       renderIntervalSlot("paramInactInterval", 0.5, 60, 1.0, 0.5);
     }
     else if (type === "boundary") {
+      // Metric: Auto sends nothing (server applies its configured default,
+      // currently Hybrid). Scene/Hybrid use a content fingerprint + period
+      // model; pHash is the v1 consecutive-frame spike detector.
+      var metricSel = document.createElement("select");
+      metricSel.id = "paramBoundaryMetric";
+      [["", "Auto"], ["scene", "Scene"], ["phash", "pHash"], ["hybrid", "Hybrid"]].forEach(function (pair) {
+        var opt = el("option", null, pair[1]);
+        opt.value = pair[0];
+        metricSel.appendChild(opt);
+      });
+      addParamRow(container, "Metric", metricSel);
       // Range is the full phash Hamming span (8x8 hash → 0..64); higher values
       // fire only on near-total frame changes, which cuts noise on busy footage.
+      // Drives the phash threshold (pHash metric, and Hybrid's spike check).
       addParamRow(container, "Sensitivity", rangeInput("paramBoundaryThresh", 0, 64, 14, 1), "paramBoundaryThreshVal");
       addParamRow(container, "Min gap (s)", numberInput("paramBoundaryMinGap", 0.5, 60, 3.0, 0.5));
       renderIntervalSlot("paramBoundaryInterval", 0.5, 60, 1.0, 0.5);
@@ -4372,7 +4384,7 @@
     flow: "Prev + current gray frames with dense optical-flow vectors.",
     scene: "Region (≤128 px), Canny edges, and 8-bin hue histogram.",
     inactivity: "Region and pHash bit grid (white = 1, black = 0).",
-    boundary: "Full-frame pHash; distance to the previous sample drives boundaries.",
+    boundary: "Full frame; Auto/Scene/Hybrid use a content fingerprint vs. the current period, pHash compares consecutive samples.",
     multitool: "Preview of the first tool step.",
   };
 
@@ -5302,6 +5314,9 @@
       params.threshold = intOrDefault((qs("#paramBoundaryThresh") || {}).value, 14);
       params.min_gap = numberOrDefault((qs("#paramBoundaryMinGap") || {}).value, 3.0);
       params.interval = numberOrDefault((qs("#paramBoundaryInterval") || {}).value, 1.0);
+      // Auto ("") omits metric so the server applies its configured default.
+      var boundaryMetric = (qs("#paramBoundaryMetric") || {}).value || "";
+      if (boundaryMetric) params.metric = boundaryMetric;
     }
     var labelEl = qs("#paramEventLabel");
     if (labelEl && labelEl.value.trim()) {
@@ -5961,6 +5976,7 @@
       setInputValue("#paramInactMinDur", numberOrDefault(params.min_duration, 2.0));
       setInputValue("#paramInactInterval", numberOrDefault(params.interval, 1.0));
     } else if (task.type === "boundary") {
+      setInputValue("#paramBoundaryMetric", params.metric || "");
       setInputValue("#paramBoundaryThresh", intOrDefault(params.threshold, 14));
       setInputValue("#paramBoundaryMinGap", numberOrDefault(params.min_gap, 3.0));
       setInputValue("#paramBoundaryInterval", numberOrDefault(params.interval, 1.0));

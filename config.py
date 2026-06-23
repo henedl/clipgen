@@ -228,6 +228,19 @@ SCREENSPACE_BOUNDARY_HASH_DIM: int = (
 SCREENSPACE_BOUNDARY_CONFIDENCE_EPSILON: float = (
     0.05  # confidence floor for a boundary that just crosses threshold
 )
+# Phase 4: scene-aware period segmentation. "phash" is the v1 consecutive-frame
+# spike detector; "scene" measures a content fingerprint against the current
+# period's reference (robust to motion); "hybrid" fires only when both agree.
+SCREENSPACE_BOUNDARY_METRIC: str = "hybrid"
+SCREENSPACE_BOUNDARY_SCENE_THRESHOLD: float = 0.25  # fingerprint distance (1 − similarity) to call a scene shift; mirrors scene's 0.75 sim
+SCREENSPACE_BOUNDARY_CONFIRM_WINDOW: int = 2  # samples a scene shift must persist before it counts (suppresses one-frame blips)
+SCREENSPACE_BOUNDARY_SCENE_HASH_DIM: int = 128  # pipe downscale for fingerprinting (coarser 64px phash dim is too sparse for the HSV histogram)
+SCREENSPACE_BOUNDARY_MERGE_THRESHOLD: float = 0.15  # post-run: merge adjacent periods whose fingerprints are at least this similar (below firing threshold)
+SCREENSPACE_BOUNDARY_SHORT_PERIOD_SECONDS: float = (
+    3.0  # post-run: only periods shorter than this are transient-dissolve candidates
+)
+SCREENSPACE_BOUNDARY_RELATIVE_PRUNE_ENABLED: bool = True  # post-run: drop boundaries far below the session-median strength (threshold-portability mitigation)
+SCREENSPACE_BOUNDARY_RELATIVE_PRUNE_FACTOR: float = 0.5  # prune boundaries with entry distance below this fraction of the session median
 SCREENSPACE_CV_RESOLUTION_SCALE: float = (
     1.0  # multiplier applied to extracted region frames before CV analysis
     # (1.0 = no change; >1 sharper but slower and more memory; <1 faster but coarser)
@@ -442,6 +455,8 @@ SETTINGS_DESCRIPTIONS: dict[str, str] = {
     "SCREENSPACE_GENERATE_TEMPLATE_HEATMAP": "Generate detection heatmaps (static image plus accumulation and rolling-window animations) for Template tasks. Disable to skip heatmap generation when you don't need it — useful on long videos where it adds processing time.",
     "SCREENSPACE_GENERATE_FLOW_HEATMAP": "Generate motion heatmaps (static image plus accumulation animation) for Flow tasks. Disable to skip heatmap generation when you don't need it.",
     "SCREENSPACE_GENERATE_CHANGE_HEATMAP": "Generate change heatmaps (static image plus accumulation and rolling-window animations) for Change tasks. Disable to skip heatmap generation when you don't need it — useful on long videos where it adds processing time.",
+    "SCREENSPACE_BOUNDARY_MERGE_THRESHOLD": "Boundary post-processing (Scene/Hybrid metrics): merge two periods whose content is at least this similar, removing the boundary between them. Higher = merge more aggressively (fewer boundaries); lower = keep more. Below the firing sensitivity by design.",
+    "SCREENSPACE_BOUNDARY_RELATIVE_PRUNE_ENABLED": "Boundary post-processing (Scene/Hybrid metrics): after merging, drop boundaries far weaker than the session's typical scene change. Adapts to each recording instead of a fixed threshold; disable to keep every detected boundary.",
 }
 
 # Studio-exposed settings with UI metadata (tab, group, type, constraints).
@@ -694,6 +709,19 @@ STUDIO_SETTINGS: dict[str, dict[str, Any]] = {
     "SCREENSPACE_GENERATE_CHANGE_HEATMAP": {
         "tab": "Screenspace",
         "group": "Heatmaps",
+        "type": "bool",
+    },
+    "SCREENSPACE_BOUNDARY_MERGE_THRESHOLD": {
+        "tab": "Screenspace",
+        "group": "Boundaries",
+        "type": "float",
+        "min": 0.0,
+        "max": 1.0,
+        "step": 0.01,
+    },
+    "SCREENSPACE_BOUNDARY_RELATIVE_PRUNE_ENABLED": {
+        "tab": "Screenspace",
+        "group": "Boundaries",
         "type": "bool",
     },
     "RICH_COLORS": {"tab": "CLI", "group": "Terminal Output", "type": "bool"},

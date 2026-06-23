@@ -208,6 +208,31 @@ def test_settings_records_include_ollama_model_pickers(client):
     assert by_name["OLLAMA_FRICTION_MODEL"]["emptyLabel"]
 
 
+def test_settings_records_include_boundary_post_processing(client):
+    data = client.get("/studio/api/settings").get_json()
+    by_name = {s["name"]: s for s in data["settings"]}
+    assert by_name["SCREENSPACE_BOUNDARY_MERGE_THRESHOLD"]["type"] == "float"
+    assert by_name["SCREENSPACE_BOUNDARY_MERGE_THRESHOLD"]["tab"] == "Screenspace"
+    assert by_name["SCREENSPACE_BOUNDARY_RELATIVE_PRUNE_ENABLED"]["type"] == "bool"
+
+
+def test_settings_put_persists_boundary_knobs(client, tmp_path, monkeypatch):
+    monkeypatch.setattr(server.config, "OUTPUT_DIR", str(tmp_path))
+    resp = client.put(
+        "/studio/api/settings",
+        json={
+            "settings": {
+                "SCREENSPACE_BOUNDARY_MERGE_THRESHOLD": 0.3,
+                "SCREENSPACE_BOUNDARY_RELATIVE_PRUNE_ENABLED": False,
+            }
+        },
+    )
+    assert resp.status_code == 200
+    assert resp.get_json()["ok"] is True
+    assert server.config.SCREENSPACE_BOUNDARY_MERGE_THRESHOLD == 0.3
+    assert server.config.SCREENSPACE_BOUNDARY_RELATIVE_PRUNE_ENABLED is False
+
+
 def test_settings_put_persists_friction_model(client, tmp_path, monkeypatch):
     monkeypatch.setattr(server.config, "OUTPUT_DIR", str(tmp_path))
     monkeypatch.setattr(server.config, "OLLAMA_FRICTION_MODEL", "")

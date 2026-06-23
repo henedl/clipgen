@@ -913,6 +913,22 @@ def test_create_boundary_task_no_region_accepted(client):
     assert "video" in data["error"].lower()
 
 
+def test_create_boundary_task_accepts_metric_param(client):
+    """A scene/hybrid metric rides through `parameters` untouched by validation
+    (no per-metric server branch), so it passes to the same video check."""
+    resp = client.post(
+        "/screenspace/api/tasks",
+        json={
+            "type": "boundary",
+            "participant": "P01",
+            "parameters": {"metric": "scene"},
+        },
+    )
+    data = resp.get_json()
+    assert resp.status_code == 400
+    assert "video" in data["error"].lower()
+
+
 def test_create_boundary_task_overrides_named_region(client, monkeypatch):
     """Boundary always scans the full frame: a caller-supplied named region is
     forced to full_frame so events/metadata are never mislabeled with a region
