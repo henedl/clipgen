@@ -558,9 +558,50 @@ html[data-theme="light"] .cg-logo {
    still blocks click regardless of pointer-events. */
 button[data-tooltip]:disabled { pointer-events: auto; cursor: not-allowed; }
 
-/* Primary CTA button — shared across Studio / Screenspace / Transcripts.
- * Page CSS still defines the base .btn (size, padding, border-radius) so visual
- * weight stays page-specific; only the primary variant's color treatment is shared. */
+/* Base button — shared across Studio / Screenspace / Transcripts. (Was copy-pasted
+ * verbatim into all three page CSS files; consolidated here.) `.cg-btn`
+ * (primitives.css, Studio-only) is a deliberately separate, richer button language
+ * (compact ghost/solid/bare + sm/md/lg + a createBtn() factory). The two coexist on
+ * purpose; pages migrate from `.btn` onto `.cg-btn` button-by-button over time, not
+ * all at once. Page-specific `.btn` extras (e.g. studio `.btn-cancel`, screenspace
+ * `.btn-icon .ss-task-icon`) stay in their own files. */
+.btn {
+  padding: var(--space-2) var(--space-4);
+  border: 1px solid var(--color-border);
+  border-radius: calc(var(--radius) - 2px);
+  background: var(--color-surface);
+  color: var(--color-text);
+  font-size: var(--text-sm);
+  font-weight: 500;
+  cursor: pointer;
+  transition: background-color var(--duration-fast), border-color var(--duration-fast), color var(--duration-fast);
+}
+.btn:hover {
+  border-color: var(--color-accent);
+  color: var(--color-accent);
+}
+.btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.btn:disabled:hover {
+  border-color: var(--color-border);
+  color: var(--color-text);
+}
+.btn-small {
+  padding: var(--space-1) var(--space-3);
+  font-size: var(--text-xs);
+}
+.btn-icon {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.btn-icon svg {
+  flex-shrink: 0;
+}
+
+/* Primary CTA variant — the accent color treatment layered on the shared base. */
 .btn.btn-primary {
   background: var(--color-accent);
   color: var(--accent-fg);
