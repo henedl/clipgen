@@ -79,6 +79,7 @@
   // ---- Palette → canvas (HTML5 drag-drop) ----
 
   function onDragOver(e) {
+    if (!state.ready) return;
     if (typesHas(e.dataTransfer && e.dataTransfer.types, "application/x-wf-node-type")) {
       e.preventDefault();
       e.dataTransfer.dropEffect = "copy";
@@ -86,6 +87,7 @@
   }
 
   function onDrop(e) {
+    if (!state.ready) return;
     var type = e.dataTransfer.getData("application/x-wf-node-type");
     if (!type) return;
     e.preventDefault();
@@ -116,6 +118,7 @@
   // ---- Pointer gestures on the canvas ----
 
   function onCanvasMouseDown(e) {
+    if (!state.ready) return;
     if (e.button !== 0) return;
     var card = e.target.closest ? e.target.closest(".wf-node") : null;
     if (card) {
@@ -271,6 +274,7 @@
   // ---- Zoom ----
 
   function onWheel(e) {
+    if (!state.ready) return;
     e.preventDefault();
     var canvas = qs("#wfCanvas");
     var rect = canvas.getBoundingClientRect();
@@ -292,6 +296,7 @@
   // ---- Keyboard ----
 
   function onKeyDown(e) {
+    if (!state.ready) return;
     if (e.key !== "Delete" && e.key !== "Backspace") return;
     var t = e.target;
     if (

@@ -82,6 +82,25 @@ def test_page_loads_satellites_after_hub_with_toolbar():
     assert 'autocomplete="off"' in html
 
 
+def test_canvas_is_gated_until_a_blueprint_is_active():
+    """Edits must not be possible (or silently lost) before a blueprint loads,
+    and a load failure must surface a persistent, retryable error — not a canvas
+    that looks editable but never saves."""
+    html = WORKFLOWS_HTML.read_text(encoding="utf-8")
+    assert 'id="wfCanvasOverlay"' in html
+    assert 'id="wfOverlayRetry"' in html
+    # The blueprint toolbar starts disabled (no active blueprint yet).
+    assert html.count("disabled") >= 4
+
+    src = _workflows_js()
+    # Readiness is the authoritative gate: interaction handlers no-op until
+    # ready, the hub flips it only after a blueprint opens, and a failed load
+    # shows the error state.
+    assert "if (!state.ready) return" in src
+    assert 'setCanvasState("ready")' in src
+    assert 'setCanvasState("error")' in src
+
+
 def test_hub_and_satellites_publish_canvas_hooks():
     src = _workflows_js()
     # Hub-owned orchestration.

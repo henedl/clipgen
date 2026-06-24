@@ -338,3 +338,28 @@ body[data-frontend="workflows"] {
   font-size: var(--text-sm);
   color: var(--fg-faint);
 }
+
+/* ---- Load gate (loading / error) ---- */
+
+.wf-canvas-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: var(--z-overlay);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-3);
+  text-align: center;
+  padding: var(--space-6);
+  /* Opaque so a half-rendered / unready canvas is never shown beneath, and so
+     the overlay intercepts pointer events while not ready. */
+  background: var(--bg);
+}
+
+.wf-overlay-msg {
+  margin: 0;
+  max-width: 28rem;
+  font-size: var(--text-base);
+  color: var(--fg-muted);
+}

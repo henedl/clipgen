@@ -30,11 +30,11 @@
     <section id="wfCanvasWrap" aria-label="Workflow canvas">
       <header id="wfToolbar">
         <label class="wf-toolbar-label" for="wfBlueprintSelect">Blueprint</label>
-        <select id="wfBlueprintSelect" aria-label="Active blueprint"></select>
+        <select id="wfBlueprintSelect" aria-label="Active blueprint" disabled></select>
         <input id="wfBlueprintName" type="text" autocomplete="off"
-               aria-label="Blueprint name" placeholder="Untitled" />
-        <button id="wfNewBlueprint" class="btn btn-small" type="button">New</button>
-        <button id="wfDeleteBlueprint" class="btn btn-small" type="button">Delete</button>
+               aria-label="Blueprint name" placeholder="Untitled" disabled />
+        <button id="wfNewBlueprint" class="btn btn-small" type="button" disabled>New</button>
+        <button id="wfDeleteBlueprint" class="btn btn-small" type="button" disabled>Delete</button>
       </header>
       <div id="wfCanvas" class="wf-canvas">
         <div id="wfWorld" class="wf-world"></div>
@@ -42,6 +42,14 @@
           <h1>Workflows</h1>
           <p>Drag nodes from the palette to chain clip, Screenspace, and transcript actions.</p>
           <p class="wf-empty-sub">Pan by dragging the canvas, zoom with the scroll wheel.</p>
+        </div>
+        <!-- Gate: covers the canvas (and disables the toolbar) until a blueprint
+             is active, so edits can't be dropped into a void before load — and a
+             load failure shows a persistent, retryable error rather than a canvas
+             that looks editable but never saves. -->
+        <div id="wfCanvasOverlay" class="wf-canvas-overlay">
+          <p id="wfOverlayMsg" class="wf-overlay-msg">Loading workflows…</p>
+          <button id="wfOverlayRetry" class="btn btn-small hidden" type="button">Retry</button>
         </div>
       </div>
     </section>

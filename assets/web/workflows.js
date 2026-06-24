@@ -27,24 +27,24 @@
     viewport: { x: 0, y: 0, zoom: 1 }, // pan/zoom of the active blueprint
     selection: [], // selected node ids (transient — not persisted)
     activeBlueprintId: null,
+    ready: false, // false until a blueprint is active; gates canvas edits
   };
 
   // ---- Catalog + palette ----------------------------------------------------
 
+  // Note: loadCatalog / loadBlueprints deliberately let rejections propagate;
+  // loadWorkspace turns a failure into the persistent error gate (a swallowed
+  // toast would leave a canvas that looks editable but never saves).
   function loadCatalog() {
-    return apiGet("api/catalog")
-      .then(function (res) {
-        state.catalog = (res && res.catalog) || [];
-        state.context = (res && res.context) || { sheet: false, videoDir: false };
-        state.catalogById = {};
-        state.catalog.forEach(function (n) {
-          state.catalogById[n.id] = n;
-        });
-        renderPalette();
-      })
-      .catch(function () {
-        showToast("Failed to load node catalog");
+    return apiGet("api/catalog").then(function (res) {
+      state.catalog = (res && res.catalog) || [];
+      state.context = (res && res.context) || { sheet: false, videoDir: false };
+      state.catalogById = {};
+      state.catalog.forEach(function (n) {
+        state.catalogById[n.id] = n;
       });
+      renderPalette();
+    });
   }
 
   // True when every `requires` entry is satisfied by the launch context.
@@ -63,6 +63,10 @@
       item.draggable = true;
       item.dataset.nodeType = node.id;
       item.addEventListener("dragstart", function (e) {
+        if (!state.ready) {
+          e.preventDefault(); // don't start a drag the canvas can't accept yet
+          return;
+        }
         e.dataTransfer.setData("application/x-wf-node-type", node.id);
         e.dataTransfer.setData("text/plain", node.id);
         e.dataTransfer.effectAllowed = "copy";
@@ -148,24 +152,20 @@
   }
 
   function loadBlueprints() {
-    return apiGet("api/blueprints")
-      .then(function (res) {
-        var list = (res && res.blueprints) || [];
-        if (!list.length) {
-          // Fresh launch — auto-create one so the canvas is immediately usable.
-          return apiPost("api/blueprints", { name: "Untitled" }).then(function (r) {
-            state.blueprints = [r.blueprint];
-            populateSelect();
-            openBlueprint(r.blueprint);
-          });
-        }
-        state.blueprints = list;
-        populateSelect();
-        openBlueprint(list[0]);
-      })
-      .catch(function () {
-        showToast("Failed to load blueprints");
-      });
+    return apiGet("api/blueprints").then(function (res) {
+      var list = (res && res.blueprints) || [];
+      if (!list.length) {
+        // Fresh launch — auto-create one so the canvas is immediately usable.
+        return apiPost("api/blueprints", { name: "Untitled" }).then(function (r) {
+          state.blueprints = [r.blueprint];
+          populateSelect();
+          openBlueprint(r.blueprint);
+        });
+      }
+      state.blueprints = list;
+      populateSelect();
+      openBlueprint(list[0]);
+    });
   }
 
   function createBlueprint() {
@@ -264,6 +264,50 @@
     });
   }
 
+  // ---- Load gate ------------------------------------------------------------
+
+  // Load the catalog + blueprints, then mark the canvas ready. Until a blueprint
+  // is active the canvas is gated (overlay + disabled toolbar + interaction
+  // handlers that no-op on !state.ready), so edits can't land in a void and a
+  // load failure shows a persistent, retryable error instead of a canvas that
+  // looks editable but silently never saves.
+  function loadWorkspace() {
+    setCanvasState("loading");
+    return loadCatalog()
+      .then(loadBlueprints) // catalog first so cards can resolve labels
+      .then(function () {
+        setCanvasState("ready");
+      })
+      .catch(function () {
+        setCanvasState("error");
+      });
+  }
+
+  function setCanvasState(mode) {
+    state.ready = mode === "ready";
+    var overlay = qs("#wfCanvasOverlay");
+    if (overlay) overlay.classList.toggle("hidden", state.ready);
+    var msg = qs("#wfOverlayMsg");
+    if (msg) {
+      msg.textContent =
+        mode === "error"
+          ? "Couldn't load workflows. Check the server, then retry."
+          : "Loading workflows…";
+    }
+    var retry = qs("#wfOverlayRetry");
+    if (retry) retry.classList.toggle("hidden", mode !== "error");
+    setToolbarDisabled(!state.ready);
+  }
+
+  function setToolbarDisabled(disabled) {
+    ["#wfBlueprintSelect", "#wfBlueprintName", "#wfNewBlueprint", "#wfDeleteBlueprint"].forEach(
+      function (sel) {
+        var node = qs(sel);
+        if (node) node.disabled = disabled;
+      }
+    );
+  }
+
   // ---- Boot -----------------------------------------------------------------
 
   function boot() {
@@ -303,10 +347,13 @@
       });
     }
 
-    // Bind canvas interactions, then load the catalog before the blueprints so
-    // placed cards can resolve their node-type labels on first render.
+    var retryBtn = qs("#wfOverlayRetry");
+    if (retryBtn) retryBtn.addEventListener("click", loadWorkspace);
+
+    // Bind canvas interactions (handlers no-op until state.ready), then load the
+    // workspace, which flips the gate once a blueprint is active.
     if (WF.initCanvas) WF.initCanvas();
-    loadCatalog().then(loadBlueprints);
+    loadWorkspace();
   }
 
   // ---- Satellite interface (window.ClipgenWorkflows) ----
