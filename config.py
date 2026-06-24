@@ -143,6 +143,9 @@ SERVER_PORT: int = (
 STASHES_MANIFEST_FILENAME: str = "reel_stashes.json"
 ARTIFACT_STASHES_MANIFEST_FILENAME: str = "artifact_stashes.json"
 STUDIO_SETTINGS_FILENAME: str = "studio_settings.json"
+WORKFLOWS_MANIFEST_FILENAME: str = (
+    "workflows_manifest.json"  # node-canvas blueprints, stashes, run history
+)
 CONVERGENCE_OFFSETS_FILENAME: str = "convergence_offsets.json"
 # Data-source lanes shown (in order) per participant in the Convergence Browser.
 # Mirrored to the frontend via utils.get_frontend_config() so the swim-lane

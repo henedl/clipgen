@@ -42,7 +42,9 @@
     if (status && status.sheet_loaded) return false;
     var path = (window.location.pathname || "").toLowerCase();
     var isVideoTool =
-      path.indexOf("/screenspace/") === 0 || path.indexOf("/transcripts/") === 0;
+      path.indexOf("/screenspace/") === 0 ||
+      path.indexOf("/transcripts/") === 0 ||
+      path.indexOf("/workflows/") === 0;
     if (isVideoTool && status && (status.videos_in_input || 0) > 0) return false;
     return true;
   }

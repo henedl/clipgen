@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>clipgen Workflows</title>
+  <!-- CLIPGEN_HEAD_HERE -->
+  <link rel="stylesheet" href="tokens.css">
+  <link rel="stylesheet" href="topnav.css">
+  <link rel="stylesheet" href="workflows.css">
+  <link rel="stylesheet" href="settings-modal.css">
+  <link rel="stylesheet" href="color-picker.css">
+  <link rel="stylesheet" href="start-overlay.css">
+</head>
+<body data-frontend="workflows">
+  <!-- Shared chrome: TopNav + start overlay -->
+  <topnav-mount data-frontend="workflows"></topnav-mount>
+  <start-overlay-mount></start-overlay-mount>
+
+  <!-- Three-pane scaffold: node palette · canvas · run/results panel.
+       M0 ships the structure + empty states; the canvas, wires, catalog,
+       and run engine land in milestones M1-M5 (see plans/WORKFLOWS-PLAN.md). -->
+  <main id="wfShell">
+    <aside id="wfSidebar" aria-label="Node palette">
+      <div class="wf-sidebar-header">Nodes</div>
+      <div id="wfPalette" class="wf-palette">
+        <p class="wf-empty-hint">Node palette arrives in M1.</p>
+      </div>
+    </aside>
+
+    <section id="wfCanvasWrap" aria-label="Workflow canvas">
+      <div id="wfCanvas" class="wf-canvas">
+        <div id="wfCanvasEmpty" class="wf-canvas-empty">
+          <h1>Workflows</h1>
+          <p>Chain clip, Screenspace, and transcript actions on a node canvas.</p>
+          <p class="wf-empty-sub">The canvas is under construction — drag-and-drop blueprint cards land in the next milestone.</p>
+        </div>
+      </div>
+    </section>
+
+    <aside id="wfRunPanel" aria-label="Run and results">
+      <div class="wf-sidebar-header">Runs</div>
+      <div id="wfRuns" class="wf-runs">
+        <p class="wf-empty-hint">Run history appears here once the run engine ships (M4).</p>
+      </div>
+    </aside>
+  </main>
+
+  <div id="toast" class="toast hidden"></div>
+
+  <!-- Deps order: utils → chrome → settings → page hub → workflows-*.js satellites -->
+  <script src="utils.js"></script>
+  <script src="export-actions.js"></script>
+  <script src="topnav.js"></script>
+  <script src="start-overlay.js"></script>
+  <script src="dev-token-tweak.js" data-dev-only></script>
+  <script src="color-picker.js"></script>
+  <script src="settings-modal.js"></script>
+  <script src="workflows.js"></script>
+</body>
+</html>

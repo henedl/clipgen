@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
-"""Combined Flask server for clipgen Studio, Screenspace, and Transcripts.
+"""Combined Flask server for clipgen Studio, Screenspace, Transcripts, and Workflows.
 
 Entry point: start_combined_server(worksheet, port, default_page) registers
-Studio, Screenspace, and Transcripts blueprints on one app at config.SERVER_PORT (8089).
+Studio, Screenspace, Transcripts, and Workflows blueprints on one app at config.SERVER_PORT (8089).
 Module-level state: _worksheet, _sheet_context, _generated_artifacts, _generated_reels
 (initialized by _init_studio_state()).
 
@@ -3237,7 +3237,7 @@ def build_combined_app(
     default_page: str = "studio",
     gspread_client: Any = None,
 ) -> Flask:
-    """Build the combined Studio + Screenspace + Transcripts Flask app.
+    """Build the combined Studio + Screenspace + Transcripts + Workflows Flask app.
 
     Same setup as :func:`start_combined_server` but stops short of
     ``app.run`` so tests (and any embedding caller) can hold the live
@@ -3246,6 +3246,7 @@ def build_combined_app(
     import screenspace_server
     import start_settings
     import transcripts_server
+    import workflows_server
 
     combined = Flask(__name__, static_folder=None)
     # Preserve insertion order in JSON responses. Flask defaults to sorting object
@@ -3286,6 +3287,12 @@ def build_combined_app(
         transcripts_server.transcripts_bp, url_prefix="/transcripts"
     )
 
+    workflows_server._init_workflows_state(
+        sheet_context=_sheet_context,
+        participant_list=_resolve_participants(),
+    )
+    combined.register_blueprint(workflows_server.workflows_bp, url_prefix="/workflows")
+
     @combined.after_request
     def _set_cache_headers(response):
         # Skip if a route already set Cache-Control (e.g. thumbnails)
@@ -3312,6 +3319,7 @@ def build_combined_app(
                 "studio": True,
                 "screenspace": True,
                 "transcripts": True,
+                "workflows": True,
                 "sheet_loaded": _worksheet is not None,
                 "spreadsheet_label": _spreadsheet_label(),
                 "spreadsheet_type": (meta or {}).get("type", ""),
