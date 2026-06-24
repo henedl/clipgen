@@ -2,13 +2,19 @@
 
 from pathlib import Path
 
-STUDIO_JS = Path(__file__).resolve().parent.parent / "assets" / "web" / "studio.js"
-STUDIO_CSS = Path(__file__).resolve().parent.parent / "assets" / "web" / "studio.css"
-STUDIO_HTML = Path(__file__).resolve().parent.parent / "assets" / "web" / "studio.html"
+_WEB = Path(__file__).resolve().parent.parent / "assets" / "web"
+STUDIO_CSS = _WEB / "studio.css"
+STUDIO_HTML = _WEB / "studio.html"
 
 
 def _studio_js() -> str:
-    return STUDIO_JS.read_text(encoding="utf-8")
+    # Studio is a hub (studio.js) + feature satellites (studio-*.js). Concatenate
+    # all of them so assertions stay valid wherever a function lives. Satellites
+    # sort before the hub ("-" < "."), so each src.index(a)..src.index(b) slice
+    # below still resolves within the single file that owns both anchors.
+    return "".join(
+        p.read_text(encoding="utf-8") for p in sorted(_WEB.glob("studio*.js"))
+    )
 
 
 def test_studio_selection_requires_valid_timestamp_cells():
