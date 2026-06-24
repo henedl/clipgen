@@ -24,6 +24,7 @@ def tr_client(tmp_path, monkeypatch):
         "corrections": [],
         "marks": [],
     }
+    transcripts_server._corrected_cache.clear()
     transcripts_server._participants = [
         {
             "id": "P01",
@@ -972,6 +973,43 @@ def test_marks_add_debounces_persist_until_flush(tr_client, monkeypatch):
     transcripts_server._flush_pending_persist()
     assert saved["count"] == 1
     assert transcripts_server._persist_dirty is False
+
+
+def test_corrected_segments_cached_and_invalidated_on_correction(
+    tr_client, monkeypatch
+):
+    """api_transcript memoizes corrected segments and recomputes only after a
+    corrections mutation bumps the version."""
+    calls = {"n": 0}
+    real_apply = transcripts.apply_corrections
+
+    def _counting_apply(segments, corrections):
+        calls["n"] += 1
+        return real_apply(segments, corrections)
+
+    monkeypatch.setattr(transcripts, "apply_corrections", _counting_apply)
+    monkeypatch.setattr(transcripts_server, "_schedule_persist", lambda: None)
+    transcripts_server._manifest["source_transcripts"]["P01"] = {
+        "segments": [{"id": "P01:0", "start": 0.0, "end": 1.0, "text": "teh cat"}],
+    }
+
+    # First read computes + caches; second read hits the cache (no recompute).
+    assert tr_client.get("/transcripts/api/transcript/P01").status_code == 200
+    assert calls["n"] == 1
+    tr_client.get("/transcripts/api/transcript/P01")
+    assert calls["n"] == 1
+
+    # Adding a correction invalidates the cache, so the next read recomputes.
+    resp = tr_client.post(
+        "/transcripts/api/corrections", json={"from": "teh", "to": "the"}
+    )
+    assert resp.status_code == 200
+    r3 = tr_client.get("/transcripts/api/transcript/P01")
+    assert r3.status_code == 200
+    assert calls["n"] == 2
+    seg = r3.get_json()["segments"][0]
+    assert seg["text"] == "the cat"
+    assert seg["corrected"] is True
 
 
 def test_participants_includes_friction_step_state(tr_client):

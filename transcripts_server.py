@@ -290,6 +290,47 @@ def api_participants() -> FlaskResponse:
 # ---- Transcript data ----
 
 
+# ---- Corrected-segments cache ----
+#
+# apply_corrections() is pure given (segments, corrections) but was re-run on
+# every read — api_transcript per request, api_search across *all* participants
+# per query. Corrections change rarely and segments are static post-transcription,
+# so memoize the corrected list per participant, invalidated by a version counter
+# bumped whenever corrections or a participant's segments change. Own lock so both
+# the lock-holding caller (api_search) and the lock-free one (api_transcript) are
+# safe; lock order is always _manifest_lock -> _corrected_cache_lock.
+_corrected_cache: dict[str, tuple[int, list[Any]]] = {}
+_corrected_cache_lock = threading.Lock()
+_corrections_version = 0
+
+
+def _bump_corrections_version() -> None:
+    """Invalidate the corrected-segments cache (corrections or segments changed)."""
+    global _corrections_version  # noqa: PLW0603
+    with _corrected_cache_lock:
+        _corrections_version += 1
+        _corrected_cache.clear()
+
+
+def _corrected_segments(
+    participant: str,
+    raw_segments: list[Any],
+    corrections: list[Any],
+) -> list[Any]:
+    """apply_corrections() for *participant*, memoized by corrections version."""
+    with _corrected_cache_lock:
+        version = _corrections_version
+        cached = _corrected_cache.get(participant)
+        if cached is not None and cached[0] == version:
+            return cached[1]
+    corrected = transcripts.apply_corrections(raw_segments, corrections)
+    with _corrected_cache_lock:
+        # Skip the store if a concurrent mutation bumped the version mid-compute.
+        if _corrections_version == version:
+            _corrected_cache[participant] = (version, corrected)
+    return corrected
+
+
 @transcripts_bp.route("/api/transcript/<participant>")
 def api_transcript(participant: str) -> FlaskResponse:
     """Return full transcript segments for a participant (corrections applied)."""
@@ -302,8 +343,8 @@ def api_transcript(participant: str) -> FlaskResponse:
     raw_segments = entry["segments"]
     corrections = _manifest.get("corrections", [])
 
-    # Apply corrections to get corrected text
-    corrected_segments = transcripts.apply_corrections(raw_segments, corrections)
+    # Apply corrections to get corrected text (memoized per participant)
+    corrected_segments = _corrected_segments(participant, raw_segments, corrections)
 
     # Build marks-by-segment-id lookup
     marks_by_seg: dict[str, list[dict[str, Any]]] = {}
@@ -376,6 +417,7 @@ def api_edit_segment(participant: str) -> FlaskResponse:
             "created": datetime.now(timezone.utc).isoformat(),
         }
         _manifest.setdefault("corrections", []).append(correction)
+        _bump_corrections_version()  # new correction invalidates corrected cache
         _mark_friction_stale(entry)  # edited segment text invalidates friction scores
 
     _schedule_persist()
@@ -809,6 +851,7 @@ def api_corrections_add() -> FlaskResponse:
         if chained:
             if chained["from"].lower() == to_text.lower():
                 corrections.remove(chained)
+                _bump_corrections_version()
                 _schedule_persist()
                 return jsonify(
                     {"ok": True, "correction": None, "removed": chained["id"]}
@@ -824,6 +867,7 @@ def api_corrections_add() -> FlaskResponse:
             }
             corrections.append(correction)
 
+        _bump_corrections_version()  # add/update invalidates corrected cache
     _schedule_persist()
     return jsonify({"ok": True, "correction": correction})
 
@@ -838,6 +882,8 @@ def api_corrections_delete(correction_id: str) -> FlaskResponse:
             c for c in corrections if c.get("id") != correction_id
         ]
         removed = before - len(_manifest["corrections"])
+        if removed:
+            _bump_corrections_version()  # deletion invalidates corrected cache
 
     if removed == 0:
         return jsonify({"ok": False, "error": "Correction not found"}), 404
@@ -1101,7 +1147,7 @@ def api_search() -> FlaskResponse:
             raw_segments = entry.get("segments", [])
             if not raw_segments:
                 continue
-            corrected = transcripts.apply_corrections(raw_segments, corrections)
+            corrected = _corrected_segments(pid, raw_segments, corrections)
             participant_count = 0
             for raw, seg in zip(raw_segments, corrected):
                 text_lower = seg["text"].lower()
@@ -1449,14 +1495,24 @@ def _merge_completed_results_locked() -> None:
     """
     if not _worker:
         return
+    segments_changed = False
     for task in _worker.get_all_tasks():
         if task["status"] == transcripts.TASK_STATUS_COMPLETED and task.get("result"):
             pid = task["participant"]
             src = _manifest.setdefault("source_transcripts", {})
             existing = src.get(pid, {})
-            existing.update(task["result"])
+            result = task["result"]
+            # Identity check: only the first merge of a completed task (or a
+            # re-transcription) swaps in a different segments list. Re-merging an
+            # already-merged task re-applies the same object, so the corrected
+            # cache stays valid and is not cleared on every persist.
+            if result.get("segments") is not existing.get("segments"):
+                segments_changed = True
+            existing.update(result)
             src[pid] = existing
     _manifest["tasks"] = _worker.get_all_tasks()
+    if segments_changed:
+        _bump_corrections_version()
 
 
 def _do_persist() -> None:
