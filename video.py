@@ -1182,7 +1182,9 @@ def get_file_duration(filepath: str) -> int | None:
         return None
     cached_dur = _file_duration_cache.get(key)
     if cached_dur is not None:
-        return cached_dur
+        # -1 is a sentinel recording a prior probe that couldn't determine the
+        # duration, so repeat calls skip re-running the full probe chain.
+        return cached_dur if cached_dur >= 0 else None
 
     cached_props = _video_properties_cache.get(key)
     if cached_props is not None:
@@ -1201,8 +1203,7 @@ def get_file_duration(filepath: str) -> int | None:
             return rounded
 
     dur = _probe_duration_seconds_ffprobe_format(filepath)
-    if dur is not None:
-        _file_duration_cache[key] = dur
+    _file_duration_cache[key] = dur if dur is not None else -1
     return dur
 
 
@@ -1772,7 +1773,13 @@ def _build_filter_complex_concat(
             if props is not None and props.get("audio_codec") is not None:
                 filter_parts.append(f"[{i}:a]aresample=44100[a{i}]")
             else:
-                dur = get_file_duration(clip_paths[i]) or 1
+                # Reuse the duration already probed into props_list (by
+                # _detect_clip_mismatches) rather than a redundant lookup; fall
+                # back to a fresh probe only for an unprobed clip.
+                if props is not None and props.get("duration"):
+                    dur = props["duration"]
+                else:
+                    dur = get_file_duration(clip_paths[i]) or 1
                 filter_parts.append(
                     f"anullsrc=r=44100:cl=stereo[sil{i}];"
                     f"[sil{i}]atrim=duration={dur}[a{i}]"
