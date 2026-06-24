@@ -17,7 +17,10 @@ from pathlib import Path
 
 _WEB = Path(__file__).resolve().parent.parent / "assets" / "web"
 _HTML = (_WEB / "transcripts.html").read_text("utf-8")
-_JS = (_WEB / "transcripts.js").read_text("utf-8")
+# The page script is a hub (transcripts.js) plus feature satellites
+# (transcripts-{corrections,search,video,pills,agents}.js); the friction/summary
+# element IDs live in the agents satellite, so read all of them together.
+_JS = "".join(p.read_text("utf-8") for p in sorted(_WEB.glob("transcripts*.js")))
 
 # Static element IDs the page script references via qs("#...") that must be
 # present in transcripts.html. Dynamically-created nodes are intentionally
