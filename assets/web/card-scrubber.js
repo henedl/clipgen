@@ -179,20 +179,50 @@
     return canvas;
   }
 
-  function drawWaveform(canvas, waveformData, frac) {
-    var ctx = canvas.getContext("2d");
+  // Render the static bars into an offscreen canvas once, cached on the target
+  // <canvas> via expando props. The bars never change with the playhead, so this
+  // turns a per-frame 200-bar fill loop into a single drawImage() blit.
+  function getBarsLayer(canvas, waveformData) {
     var w = canvas.width;
     var h = canvas.height;
-    ctx.clearRect(0, 0, w, h);
+    var cached = canvas._barsLayer;
+    if (
+      cached &&
+      cached.width === w &&
+      cached.height === h &&
+      canvas._barsWave === waveformData
+    ) {
+      return cached;
+    }
+    var off = document.createElement("canvas");
+    off.width = w;
+    off.height = h;
+    var octx = off.getContext("2d");
     var barCount = waveformData.length;
     var barW = w / barCount;
-    ctx.fillStyle = "rgba(255, 255, 255, 0.75)";
+    octx.fillStyle = "rgba(255, 255, 255, 0.75)";
     for (var i = 0; i < barCount; i++) {
       var barH = waveformData[i] * h * 0.9;
       if (barH < 1) barH = 1;
-      ctx.fillRect(i * barW, h - barH, Math.max(barW - 0.5, 0.5), barH);
+      octx.fillRect(i * barW, h - barH, Math.max(barW - 0.5, 0.5), barH);
     }
+    canvas._barsLayer = off;
+    canvas._barsWave = waveformData;
+    return off;
+  }
+
+  function drawWaveform(canvas, waveformData, frac) {
+    var w = canvas.width;
+    var h = canvas.height;
     var x = Math.round(frac * w);
+    var bars = getBarsLayer(canvas, waveformData);
+    // Nothing moved (playhead pixel + bars unchanged) — skip the redraw.
+    if (canvas._lastWaveX === x && canvas._lastWaveBars === bars) return;
+    canvas._lastWaveX = x;
+    canvas._lastWaveBars = bars;
+    var ctx = canvas.getContext("2d");
+    ctx.clearRect(0, 0, w, h);
+    ctx.drawImage(bars, 0, 0);
     ctx.fillStyle = "rgba(255, 255, 255, 0.9)";
     ctx.fillRect(x - 1, 0, 2, h);
   }
