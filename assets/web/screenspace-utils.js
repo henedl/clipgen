@@ -98,3 +98,58 @@ function sizeCanvasToDisplay(canvas) {
   }
   return { w: w, h: h, dpr: dpr };
 }
+
+// ---- Geometry ----
+
+// Normalize a drawn rectangle (two corner points, any order) to a
+// top-left-origin { x, y, w, h } box.
+function normalizeRect(x1, y1, x2, y2) {
+  return {
+    x: Math.min(x1, x2),
+    y: Math.min(y1, y2),
+    w: Math.abs(x2 - x1),
+    h: Math.abs(y2 - y1),
+  };
+}
+
+// ---- Formatting ----
+
+// One-line summary of a multitool step's distinguishing parameter(s), shown on
+// step chips and restored-task rows (e.g. "H120° S200 V255 · presence", "≥80%").
+function formatMultitoolStepParams(step) {
+  if (!step) return "";
+  var t = step.type;
+  if (t === "color") {
+    var tc = step.target_color || {};
+    var swatch = "H" + (tc.h || 0) + "° S" + (tc.s || 0) + " V" + (tc.v || 0);
+    return step.color_mode === "presence" ? swatch + " · presence" : swatch;
+  }
+  if (t === "change") return ">" + ((step.threshold || 0) * 100).toFixed(0) + "%";
+  if (t === "similarity") return "≥" + ((step.threshold || 0) * 100).toFixed(0) + "%";
+  if (t === "text") return "“" + (step.search_string || "") + "”";
+  if (t === "numbers") {
+    var opSym = { gt: ">", lt: "<", eq: "=", gte: "≥", lte: "≤" }[step.operator] || step.operator || "";
+    return (opSym + " " + step.target_value).trim();
+  }
+  if (t === "template") return "≥" + ((step.threshold || 0) * 100).toFixed(0) + "%";
+  if (t === "flow") return ">" + (step.magnitude_threshold || 0).toFixed(1);
+  if (t === "scene") {
+    var refs = step.scene_references || [];
+    if (refs.length === 1) return refs[0].name || "1 ref";
+    return refs.length + " refs";
+  }
+  if (t === "inactivity") return "≥" + (step.threshold || 0) + "s";
+  return "";
+}
+
+// Readout for a color tool's presence min-area control: percentage plus an
+// approximate pixel count when the analysed region's area is known.
+function _formatMinAreaReadout(pct, area) {
+  if (!(pct > 0)) return "Any presence — no minimum size";
+  var txt = pct + "%";
+  if (area && area > 0) {
+    var px = Math.max(1, Math.round((pct / 100) * area));
+    txt += " · ~" + px.toLocaleString() + " px";
+  }
+  return txt;
+}
