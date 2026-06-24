@@ -339,6 +339,11 @@ Note: Non-interactive mode (using -b, -l, -r, -C, -c, -p, -k, -S, -M, -R, or -T)
         help="Launch the Transcript workspace for viewing, editing, and managing transcriptions",
     )
     viewer_manifest.add_argument(
+        "--workflows",
+        action="store_true",
+        help="Launch the Workflows node-canvas for chaining clip, Screenspace, and transcript actions",
+    )
+    viewer_manifest.add_argument(
         "--gallery",
         type=str,
         nargs="?",
@@ -3104,6 +3109,34 @@ _EXCLUSIVE_MODES: tuple[_ModeSpec, ...] = (
         blocks_modes=("timeline_viewer", "studio", "screenspace", "export"),
     ),
     _ModeSpec(
+        key="workflows",
+        truthy=lambda a: bool(getattr(a, "workflows", False)),
+        error="--workflows cannot be combined with mode, format, or other web/CLI mode flags.",
+        hint="Only -s (spreadsheet), -i/-o (directories), and -v (verbose) may be used alongside --workflows.",
+        # Self-contained: list every other exclusive mode so --workflows conflicts
+        # with all of them regardless of declaration order.
+        blocks_modes=(
+            "timeline_viewer",
+            "studio",
+            "screenspace",
+            "transcripts",
+            "gallery",
+            "pre_transcribe",
+            "export",
+            "ss_task",
+            "ss_run_task",
+            "ss_list_regions",
+            "ss_list_stashes",
+            "ss_list_tasks",
+            "summarize",
+            "citations",
+            "ss_clips",
+            "transcript_clips",
+            "transcript_mark",
+            "regenerate",
+        ),
+    ),
+    _ModeSpec(
         key="gallery",
         # `gallery` carries an optional VIDEO arg, so use `is not None` to detect it.
         truthy=lambda a: getattr(a, "gallery", None) is not None,
@@ -3561,6 +3594,8 @@ def _dispatch_standalone_mode(
         if getattr(args, "screenspace", False)
         else "transcripts"
         if getattr(args, "transcripts", False)
+        else "workflows"
+        if getattr(args, "workflows", False)
         else None
     )
     if web_mode is not None and not args.spreadsheet:
@@ -3788,6 +3823,16 @@ def main() -> None:
                 server.start_combined_server(
                     worksheet=worksheet,
                     default_page="transcripts",
+                    gspread_client=gspread_client,
+                )
+                sys.exit(0)
+
+            if getattr(args, "workflows", False):
+                import server
+
+                server.start_combined_server(
+                    worksheet=worksheet,
+                    default_page="workflows",
                     gspread_client=gspread_client,
                 )
                 sys.exit(0)

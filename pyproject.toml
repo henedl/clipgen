@@ -29,6 +29,7 @@ py-modules = [
     "screenspace_server", "screenspace_tools", "screenspace_worker", "server",
     "spreadsheet", "start_settings", "thinking_agents", "titlecards",
     "transcripts", "transcripts_server", "utils", "video", "viewer",
+    "workflows", "workflows_server",
 ]
 
 [tool.uv]

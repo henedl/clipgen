@@ -21,6 +21,7 @@
     { id: "studio", label: "Studio", href: "/studio/" },
     { id: "screenspace", label: "Screenspace", href: "/screenspace/" },
     { id: "transcripts", label: "Transcripts", href: "/transcripts/" },
+    { id: "workflows", label: "Workflows", href: "/workflows/" },
   ];
 
   var state = {
@@ -174,7 +175,7 @@
       right.appendChild(tooltipBtn);
     }
 
-    // Theme toggle — replaces the prototype's avatar slot per locked decision.
+    // Theme toggle.
     // Keeps the existing #themeToggle id + .theme-toggle-icon class names so
     // initThemeToggle() in utils.js continues to work without changes.
     var themeBtn = document.createElement("button");
