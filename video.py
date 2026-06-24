@@ -405,11 +405,24 @@ def _add_ffmpeg_stderr(
 
 
 def verify_output_file(output_file: str, operation_label: str) -> bool:
-    """Return True when an expected ffmpeg output file exists, otherwise log an error."""
-    if Path(output_file).is_file():
-        return True
+    """Return True when an ffmpeg output file exists and is non-empty.
+
+    Callers reserve the output path up front via ``files.get_unique_filename()``,
+    which pre-creates a zero-byte placeholder. An existence-only check therefore
+    always passed once reservations landed — so an ffmpeg run that exited 0 but
+    wrote nothing (e.g. a degenerate span) left the empty placeholder on disk,
+    counted as a successful artifact and never released. Require a non-empty file
+    so callers route the empty-output case into their normal failure path (which
+    releases the reservation / unlinks the placeholder).
+    """
+    try:
+        if Path(output_file).stat().st_size > 0:
+            return True
+    except OSError:
+        pass  # missing (FileNotFoundError) or unstattable → treat as failure
     utils.error_print(
-        f"{operation_label} completed but output file was not created: '{output_file}'"
+        f"{operation_label} completed but produced an empty or missing output "
+        f"file: '{output_file}'"
     )
     return False
 

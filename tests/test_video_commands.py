@@ -464,6 +464,22 @@ def test_get_file_duration_error_paths(monkeypatch):
     assert video.get_file_duration("video.mp4") is None
 
 
+def test_verify_output_file_rejects_empty_placeholder(tmp_path):
+    """A zero-byte reservation placeholder (ffmpeg exited 0 but wrote nothing)
+    must fail verification so the caller releases it instead of registering a
+    bogus zero-byte artifact."""
+    empty = tmp_path / "out.mp4"
+    empty.write_bytes(b"")  # what get_unique_filename leaves on disk
+    assert video.verify_output_file(str(empty), "ffmpeg") is False
+
+    missing = tmp_path / "nope.mp4"
+    assert video.verify_output_file(str(missing), "ffmpeg") is False
+
+    real = tmp_path / "real.mp4"
+    real.write_bytes(b"\x00\x01\x02")
+    assert video.verify_output_file(str(real), "ffmpeg") is True
+
+
 def test_check_ffmpeg_tools_available_missing(monkeypatch):
     monkeypatch.setattr(video.shutil, "which", lambda _tool: None)
     ok = video.check_ffmpeg_tools_available()
