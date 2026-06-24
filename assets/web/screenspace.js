@@ -5212,6 +5212,8 @@
   function updateResultsCrumb() { return SS.updateResultsCrumb && SS.updateResultsCrumb(); }
   function initRightPaneTabs() { return SS.initRightPaneTabs && SS.initRightPaneTabs(); }
   function initPauseButton() { return SS.initPauseButton && SS.initPauseButton(); }
+  function initTaskQueue() { return SS.initTaskQueue && SS.initTaskQueue(); }
+  function initTaskFilters() { return SS.initTaskFilters && SS.initTaskFilters(); }
 
   // ---- Results (impl in screenspace-results.js) ----
   // The Results panel lives in screenspace-results.js. These thin delegators

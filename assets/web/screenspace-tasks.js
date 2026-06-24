@@ -1142,6 +1142,8 @@
   SS.updateResultsCrumb = updateResultsCrumb;
   SS.initRightPaneTabs = initRightPaneTabs;
   SS.initPauseButton = initPauseButton;
+  SS.initTaskQueue = initTaskQueue;
+  SS.initTaskFilters = initTaskFilters;
   SS.restoreTaskToWorkflow = restoreTaskToWorkflow;
   SS.setInputValue = setInputValue;
   SS.syncValueDisplays = syncValueDisplays;
