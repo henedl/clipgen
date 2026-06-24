@@ -1110,6 +1110,11 @@
   // ---- Segment list event delegation ----
 
   var _segmentListDelegated = false;
+  // Coalesces the segment-list mousemove (hot-segment friction tooltip) the same
+  // way the timeline canvas does. Lives here with its only user — the delegation
+  // handler below — even though the tooltip render itself is in the agents
+  // satellite (reached via TS._show/_hideFrictionTooltip).
+  var _segTooltipRaf = 0;
 
   function _ensureSegmentListDelegation() {
     if (_segmentListDelegated) return;

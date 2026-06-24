@@ -1119,10 +1119,9 @@
   // Friction tooltip on hot segments (reuses the shared #trTooltip element).
   // state.frictionTooltipShown lets the video satellite's hideTimelineTooltip
   // yield while a friction tooltip owns #trTooltip (mirror of
-  // _hideFrictionTooltip's TS.hasTimelineHover() guard); _segTooltipRaf coalesces
-  // the segment-list mousemove like the canvas.
-  var _segTooltipRaf = 0;
-
+  // _hideFrictionTooltip's TS.hasTimelineHover() guard). The segment-list
+  // mousemove that calls _showFrictionTooltip — and its coalescing _segTooltipRaf
+  // — live in the hub's segment-list delegation, not here.
   function _showFrictionTooltip(frow, clientX, clientY) {
     var tip = qs("#trTooltip");
     if (!tip) return;
