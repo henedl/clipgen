@@ -27,9 +27,9 @@ The frontend is a **vanilla JS/CSS stack** (~50k lines in 43 files under `assets
 
 **Main pain points (still open):**
 
-1. **Four separate `renderTimeline()` implementations** (screenspace / transcripts / viewer / convergence; only amplitude bands shared)
+1. ~~**Four separate `renderTimeline()` implementations**~~ 🟡 Ruler core shared (B4, 2026-06-24): the two canvas surfaces (screenspace / transcripts) share `niceTimeInterval`/`drawTimelineRuler` in `utils.js`; markers/bands/playhead stay per-surface, and the two DOM rulers (viewer / convergence) remain a separate model
 2. ~~**Polling only half-unified**~~ ✅ Resolved: `createPoller` now drives every periodic poller (Studio, Screenspace, Transcripts); only the Ollama model-pull loop (Promise-based, custom cancel/miss-count) stays a raw `setInterval`
-3. **Convention debt:** inline SVG ✅ closed (documented intentional exceptions) and raw `px` ✅ swept to tokens (2026-06-23) — remaining only the dual button systems (`.cg-btn` vs `.btn`, B5, deferred)
+3. **Convention debt:** inline SVG ✅ closed (documented intentional exceptions) and raw `px` ✅ swept to tokens (2026-06-23); dual button systems (`.cg-btn` vs `.btn`) ✅ de-duplicated + documented as intentional (B5, 2026-06-24 — shared `.btn` base now in `tokens.css`; full merge onto `.cg-btn` is incremental)
 4. **Page monoliths persist:** `screenspace.js` 7.5k (partially carved), `studio.js` 5.8k (state hub), `transcripts.js` 5.2k (untouched, no satellites)
 5. **Dead / partial assets:** `card-scrubber.js` parked **and** duplicated inline in `viewer.js` (~~`<head>` favicon/fonts copy-paste~~ ✅ resolved 2026-06-23 — live pages now inject a shared `_head.html` partial)
 
@@ -110,7 +110,7 @@ The frontend is a **vanilla JS/CSS stack** (~50k lines in 43 files under `assets
 | Canvas theme colors | ✅ RESOLVED | `getCanvasThemeColors()` in `utils.js`; Screenspace + Transcripts |
 | Intake clustering | ✅ RESOLVED | `intake-cluster.js` (`window.ClipgenIntakeCluster`); `_studioCluster*` gone |
 | Polling | ✅ RESOLVED | `createPoller` adopted across Studio, Screenspace, Transcripts (8 pollers converted 2026-06-23); only the Ollama model-pull loop stays a raw `setInterval` (Promise-based, custom cancel/miss-count) |
-| `renderTimeline()` | ❌ STILL PRESENT | Four implementations: screenspace, transcripts, viewer, convergence |
+| `renderTimeline()` | 🟡 PARTIAL | Ruler core (`niceTimeInterval`/`drawTimelineRuler` in `utils.js`) now drives the two **canvas** surfaces (screenspace + transcripts). Markers/bands/playhead stay per-surface; the two **DOM** rulers (viewer fixed-8, convergence fixed-11) are a different model and untouched. |
 | Card scrubber | ❌ STILL PRESENT | `card-scrubber.js` parked (unloaded) **and** dup'd inline in `viewer.js` |
 | HTML `<head>` | ✅ RESOLVED | Live pages (Studio/Screenspace/Transcripts) embed `<!-- CLIPGEN_HEAD_HERE -->`, expanded server-side from `assets/web/_head.html` by `utils.render_index_html()`. Exported viewers keep their self-contained inline `data:` favicons. |
 
@@ -214,10 +214,10 @@ Globals stay on `window` namespaces; script order in HTML documents dependencies
 3. **Opportunistic (touched files only):**
    - ~~**C4** — remaining inline SVG → `mask-image`~~ ✅ Closed: audited `studio.js`/`studio.html`/`start-overlay.html`; remaining inline `<svg>` are documented intentional exceptions, `viewer.css` data-URIs kept.
    - ~~**C5** — token sweep on touched CSS~~ ✅ Done: full 181-`px`→token sweep across all five page CSS files + 4 new tokens.
-   - **B5** — `.btn` vs `.cg-btn`: reconcile or document the dual system (still **defer** unless touched).
+   - ~~**B5** — `.btn` vs `.cg-btn`~~ ✅ Done (2026-06-24): shared `.btn` base consolidated into `tokens.css`; dual system documented as intentional in AGENTS.md; full merge onto `.cg-btn` left to per-button commits.
 4. **Structural (largest remaining value, when there's appetite):**
    - **C1** — per the split-order section above: **Transcripts first**, then continue Screenspace/Studio carve-outs on the hub+satellite axis.
-   - **B4** — shared timeline core: still **deferred** unless timeline bugs force it (four impls remain).
+   - ~~**B4** — shared timeline ruler core~~ ✅ Done (2026-06-24): `niceTimeInterval`/`drawTimelineRuler` in `utils.js` shared by the two canvas surfaces; DOM rulers (viewer/convergence) left as a separate model. Full marker-level abstraction still deferred.
 5. **Verify / relink before scheduling:**
    - **C2 / C3** — reconcile against `archive/PERFORMANCE-PLAN.md` + `archive/PERFORMANCE-PLAN-2.md`; confirm what perf work already shipped before treating Studio-grid / NDJSON-intake as pending.
 
@@ -280,11 +280,11 @@ Use this when executing waves; check items in PR descriptions.
 - [x] A6 card-scrubber — **integrated** (opt-in, default off) on Studio + the timeline viewer; the viewer keeps its `<video>`-seek visual scrub and adds the module's audio + waveform. Note: the inline `viewer.js` scrubber and `card-scrubber.js` were never true duplicates (video-seek vs sprite-sheet), so the viewer-dup line in the duplication map is moot
 - [x] C4 SVG → mask — closed: `studio.js`/`studio.html`/`start-overlay.html` audited; remaining inline `<svg>` are documented intentional exceptions (animations, brand/file-type glyphs, decorative artworks), `viewer.css` data-URIs kept
 - [x] C5 token sweep — done: full pass across all five page CSS files; 4 new tokens (`--text-2xs`, `--radius-xs`, `--space-1-5`, `--space-2-5`)
-- [ ] B5 `.btn` vs `.cg-btn` — reconcile or document (defer unless touched)
+- [x] B5 `.btn` base consolidated into `tokens.css` (2026-06-24) — was copy-pasted verbatim across studio/screenspace/transcripts CSS; zero visual change. Dual `.btn`/`.cg-btn` system documented as intentional (AGENTS.md); full merge onto `.cg-btn` left to per-button commits
 - [ ] C1 `transcripts.js` split first (untouched monolith, no satellites) — hub+satellite axis
 - [ ] C1 `screenspace.js` — continue hub carve-outs (satellites already on `window.ClipgenScreenspace`)
 - [ ] C1 `studio.js` — shrink `window._studioState` surface (intake/metadata/convergence already split)
-- [ ] B4 shared timeline core — deferred unless timeline bugs force it (four impls remain)
+- [x] B4 shared timeline **ruler** core (2026-06-24) — `niceTimeInterval`/`drawTimelineRuler` in `utils.js`, adopted by the two canvas surfaces (screenspace + transcripts); markers/bands/playhead stay per-surface. The two DOM rulers (viewer fixed-8, convergence fixed-11) left as-is — different model. Full marker-level abstraction still out of scope
 - [ ] C2 / C3 — **first** reconcile against `archive/PERFORMANCE-PLAN*.md` (confirm what shipped), then Studio grid profile + NDJSON intake if still pending
 
 ---
@@ -297,3 +297,4 @@ Use this when executing waves; check items in PR descriptions.
 | 2026-06-23 | Refreshed inventory/counts to current reality (43 files); repointed archived cross-links; reconciled Screenspace C1 to the actual hub+satellite axis; marked Waves 1–3 shipped + A3 partial; re-prioritized remaining work (Transcripts split first) |
 | 2026-06-23 | Closed C4 (icon gap — documented intentional inline-SVG exceptions), C5 (full 181-`px`→token sweep + 4 new tokens), and A3 (`createPoller` across all 8 remaining pollers). Verified A1/A2/A4/A5 already shipped. |
 | 2026-06-23 | Closed C6: shared `assets/web/_head.html` favicon/fonts partial injected into the three live index pages via `<!-- CLIPGEN_HEAD_HERE -->` + `utils.render_index_html()`; exported viewers left self-contained. "Finish half-done" bucket now empty — next up is C1 (Transcripts split). |
+| 2026-06-24 | B4 (ruler core): extracted `niceTimeInterval`/`drawTimelineRuler` into `utils.js`, adopted by the two canvas surfaces (screenspace + transcripts); DOM rulers (viewer/convergence) left as a separate model; markers/bands/playhead stay per-surface. B5 (`.btn` de-dup): consolidated the verbatim-triplicated `.btn` base into `tokens.css` (zero visual change; also gave Studio the missing `.btn:disabled:hover` guard), documented the intentional `.btn`/`.cg-btn` duality in AGENTS.md, and deferred the full merge onto `.cg-btn` to per-button commits. |

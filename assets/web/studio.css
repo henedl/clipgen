@@ -1989,33 +1989,6 @@ html[data-theme="dark"] .queue-card-error .queue-card-thumb {
   pointer-events: none;
 }
 
-.btn {
-  padding: var(--space-2) var(--space-4);
-  border: 1px solid var(--color-border);
-  border-radius: calc(var(--radius) - 2px);
-  background: var(--color-surface);
-  color: var(--color-text);
-  font-size: var(--text-sm);
-  font-weight: 500;
-  cursor: pointer;
-  transition: background-color var(--duration-fast), border-color var(--duration-fast), color var(--duration-fast);
-}
-
-.btn:hover {
-  border-color: var(--color-accent);
-  color: var(--color-accent);
-}
-
-.btn:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-.btn-small {
-  padding: var(--space-1) var(--space-3);
-  font-size: var(--text-xs);
-}
-
 .btn-cancel {
   color: var(--sev-critical);
   border-color: var(--sev-critical);
@@ -2025,10 +1998,6 @@ html[data-theme="dark"] .queue-card-error .queue-card-thumb {
   background: rgba(220, 38, 38, 0.1);
 }
 
-.btn-icon svg {
-  flex-shrink: 0;
-}
-
 /* Highlights button group (inside reel header) */
 
 .highlights-group {
@@ -2036,12 +2005,6 @@ html[data-theme="dark"] .queue-card-error .queue-card-thumb {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-}
-
-.btn-icon {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-2);
 }
 
 .sparkles-icon {

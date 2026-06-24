@@ -2512,15 +2512,6 @@
     });
   }
 
-  function computeTickInterval(visLen) {
-    var candidates = [1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600];
-    var target = visLen / 8;
-    for (var i = 0; i < candidates.length; i++) {
-      if (candidates[i] >= target) return candidates[i];
-    }
-    return candidates[candidates.length - 1];
-  }
-
   function getMarkForSegment(seg) {
     if (seg.marks && seg.marks.length > 0) return seg.marks[0];
     var streaming = _streamingMarks[seg.id];
@@ -2555,22 +2546,16 @@
 
     function timeToX(t) { return (t / dur) * cssW; }
 
-    var tickInterval = computeTickInterval(dur);
-    var firstTick = Math.ceil(0 / tickInterval) * tickInterval;
-    ctx.strokeStyle = theme.border;
-    ctx.fillStyle = theme.textDim;
-    ctx.font = "10px " + theme.fontMono;
-    ctx.textAlign = "center";
-    ctx.lineWidth = 1;
-    for (var t = firstTick; t <= dur; t += tickInterval) {
-      var x = timeToX(t);
-      ctx.beginPath();
-      ctx.moveTo(x, 0);
-      ctx.lineTo(x, 6);
-      ctx.stroke();
-      ctx.fillText(formatTime(t), x, 16);
-    }
-    ctx.textAlign = "start";
+    drawTimelineRuler(ctx, {
+      visStart: 0,
+      visEnd: dur,
+      interval: niceTimeInterval(dur, { targetTicks: 8 }),
+      timeToX: timeToX,
+      colors: { border: theme.border, textDim: theme.textDim, fontMono: theme.fontMono },
+      tickHeight: 6,
+      labelY: 16,
+      format: formatTime,
+    });
 
     var markerY = 22;
     var markerH = cssH - markerY - 4;

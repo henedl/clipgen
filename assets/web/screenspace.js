@@ -3328,22 +3328,16 @@
     }
 
     // Time ruler ticks
-    var tickInterval = computeTickInterval(visLen);
-    var firstTick = Math.ceil(visStart / tickInterval) * tickInterval;
-    ctx.strokeStyle = tc.border;
-    ctx.fillStyle = tc.textDim;
-    ctx.font = "10px " + tc.fontMono;
-    ctx.textAlign = "center";
-    ctx.lineWidth = 1;
-    for (var t = firstTick; t <= visEnd; t += tickInterval) {
-      var x = timeToX(t);
-      ctx.beginPath();
-      ctx.moveTo(x, 0);
-      ctx.lineTo(x, 8);
-      ctx.stroke();
-      ctx.fillText(formatDuration(t), x, 18);
-    }
-    ctx.textAlign = "start";
+    drawTimelineRuler(ctx, {
+      visStart: visStart,
+      visEnd: visEnd,
+      interval: niceTimeInterval(visLen, { maxTicks: 20 }),
+      timeToX: timeToX,
+      colors: { border: tc.border, textDim: tc.textDim, fontMono: tc.fontMono },
+      tickHeight: 8,
+      labelY: 18,
+      format: formatDuration,
+    });
 
     // In/Out marker shading — scrim "outside" the active range against the
     // timeline's surfaceAlt background. fg works in both themes (fg is white in
@@ -3710,14 +3704,6 @@
     _toolInfoPinned = false;
     var tip = qs("#toolInfoTooltip");
     if (tip) tip.classList.add("hidden");
-  }
-
-  function computeTickInterval(visibleSeconds) {
-    var candidates = [1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600];
-    for (var i = 0; i < candidates.length; i++) {
-      if (visibleSeconds / candidates[i] <= 20) return candidates[i];
-    }
-    return 3600;
   }
 
   function renderTimelineLegend() {

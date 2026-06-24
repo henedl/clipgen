@@ -1355,6 +1355,75 @@ var drawAmplitudeBands = function (ctx, opts) {
   }
 };
 
+// ---- Timeline ruler core (shared by canvas timeline surfaces) ----
+
+// "Nice" tick intervals (seconds) for a timeline ruler, coarse → fine.
+var TIMELINE_TICK_STEPS = [1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600];
+
+// Pick a tick interval (seconds) for a ruler spanning `visibleSeconds`. Two
+// strategies, matching the two canvas surfaces' historical behavior:
+//   { maxTicks: N }    largest step that keeps the tick count at/under N
+//                      (Screenspace's zoomable ruler — was `<= 20`).
+//   { targetTicks: N } smallest step giving roughly N ticks, i.e. step >=
+//                      visibleSeconds / N (Transcripts' fixed-extent ruler — was N=8).
+// Falls back to the coarsest step (3600s) when nothing fits.
+var niceTimeInterval = function (visibleSeconds, opts) {
+  opts = opts || {};
+  var steps = TIMELINE_TICK_STEPS;
+  var i;
+  if (opts.maxTicks) {
+    for (i = 0; i < steps.length; i++) {
+      if (visibleSeconds / steps[i] <= opts.maxTicks) return steps[i];
+    }
+    return steps[steps.length - 1];
+  }
+  var target = visibleSeconds / (opts.targetTicks || 8);
+  for (i = 0; i < steps.length; i++) {
+    if (steps[i] >= target) return steps[i];
+  }
+  return steps[steps.length - 1];
+};
+
+// Draw the tick marks + time labels of a timeline ruler onto a 2D canvas.
+// Markers, bands, playheads, and shading stay per-surface; this is only the ruler.
+//
+// opts:
+//   visStart, visEnd   visible time window (seconds); ticks are drawn from the
+//                      first multiple of `interval` at/after visStart up to visEnd
+//   interval           tick spacing in seconds (see niceTimeInterval)
+//   timeToX            fn(seconds) -> x pixel
+//   colors             { border, textDim, fontMono }
+//   tickHeight         tick line length in px (default 6)
+//   labelY             baseline y for the label text (default 16)
+//   format             fn(seconds) -> label string (default formatTime)
+var drawTimelineRuler = function (ctx, opts) {
+  var interval = opts.interval;
+  if (!(interval > 0)) return;
+  var visStart = opts.visStart;
+  var visEnd = opts.visEnd;
+  var timeToX = opts.timeToX;
+  var fmt = opts.format || formatTime;
+  var tickH = opts.tickHeight != null ? opts.tickHeight : 6;
+  var labelY = opts.labelY != null ? opts.labelY : 16;
+  var c = opts.colors || {};
+
+  ctx.strokeStyle = c.border;
+  ctx.fillStyle = c.textDim;
+  ctx.font = "10px " + (c.fontMono || "monospace");
+  ctx.textAlign = "center";
+  ctx.lineWidth = 1;
+  var firstTick = Math.ceil(visStart / interval) * interval;
+  for (var t = firstTick; t <= visEnd; t += interval) {
+    var x = timeToX(t);
+    ctx.beginPath();
+    ctx.moveTo(x, 0);
+    ctx.lineTo(x, tickH);
+    ctx.stroke();
+    ctx.fillText(fmt(t), x, labelY);
+  }
+  ctx.textAlign = "start";
+};
+
 // ---- Video helpers ----
 
 // Bridge the "paused <video> goes blank when the tab is hidden" gap.
