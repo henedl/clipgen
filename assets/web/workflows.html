@@ -18,22 +18,38 @@
   <start-overlay-mount></start-overlay-mount>
 
   <!-- Three-pane scaffold: node palette · canvas · run/results panel.
-       M0 ships the structure + empty states; the canvas, wires, catalog,
-       and run engine land in milestones M1-M5 (see plans/WORKFLOWS-PLAN.md). -->
+       M1 ships the catalog-driven palette, the pan/zoom canvas (drag cards,
+       select/move, persist), and the blueprint switcher. Wires (M2) and the
+       run engine (M4) land later — see plans/WORKFLOWS-PLAN.md. -->
   <main id="wfShell">
     <aside id="wfSidebar" aria-label="Node palette">
       <div class="wf-sidebar-header">Nodes</div>
-      <div id="wfPalette" class="wf-palette">
-        <p class="wf-empty-hint">Node palette arrives in M1.</p>
-      </div>
+      <div id="wfPalette" class="wf-palette"></div>
     </aside>
 
     <section id="wfCanvasWrap" aria-label="Workflow canvas">
+      <header id="wfToolbar">
+        <label class="wf-toolbar-label" for="wfBlueprintSelect">Blueprint</label>
+        <select id="wfBlueprintSelect" aria-label="Active blueprint" disabled></select>
+        <input id="wfBlueprintName" type="text" autocomplete="off"
+               aria-label="Blueprint name" placeholder="Untitled" disabled />
+        <button id="wfNewBlueprint" class="btn btn-small" type="button" disabled>New</button>
+        <button id="wfDeleteBlueprint" class="btn btn-small" type="button" disabled>Delete</button>
+      </header>
       <div id="wfCanvas" class="wf-canvas">
+        <div id="wfWorld" class="wf-world"></div>
         <div id="wfCanvasEmpty" class="wf-canvas-empty">
           <h1>Workflows</h1>
-          <p>Chain clip, Screenspace, and transcript actions on a node canvas.</p>
-          <p class="wf-empty-sub">The canvas is under construction — drag-and-drop blueprint cards land in the next milestone.</p>
+          <p>Drag nodes from the palette to chain clip, Screenspace, and transcript actions.</p>
+          <p class="wf-empty-sub">Pan by dragging the canvas, zoom with the scroll wheel.</p>
+        </div>
+        <!-- Gate: covers the canvas (and disables the toolbar) until a blueprint
+             is active, so edits can't be dropped into a void before load — and a
+             load failure shows a persistent, retryable error rather than a canvas
+             that looks editable but never saves. -->
+        <div id="wfCanvasOverlay" class="wf-canvas-overlay">
+          <p id="wfOverlayMsg" class="wf-overlay-msg">Loading workflows…</p>
+          <button id="wfOverlayRetry" class="btn btn-small hidden" type="button">Retry</button>
         </div>
       </div>
     </section>
@@ -48,7 +64,9 @@
 
   <div id="toast" class="toast hidden"></div>
 
-  <!-- Deps order: utils → chrome → settings → page hub → workflows-*.js satellites -->
+  <!-- Deps order: utils → chrome → settings → page hub → workflows-*.js satellites.
+       Satellites load after the hub; -nodes before -canvas (the canvas reaches
+       the nodes renderer via WF.* late-binding either way). -->
   <script src="utils.js"></script>
   <script src="export-actions.js"></script>
   <script src="topnav.js"></script>
@@ -57,5 +75,7 @@
   <script src="color-picker.js"></script>
   <script src="settings-modal.js"></script>
   <script src="workflows.js"></script>
+  <script src="workflows-nodes.js"></script>
+  <script src="workflows-canvas.js"></script>
 </body>
 </html>

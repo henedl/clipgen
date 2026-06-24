@@ -226,14 +226,20 @@ the scan branch when duration ≤ N.
 
 ## Milestones (each independently committable)
 
-- [ ] **M0 — Mode scaffold.** `--workflows` flag + dispatch (`cli.py`), blueprint registration
+- [x] **M0 — Mode scaffold.** `--workflows` flag + dispatch (`cli.py`), blueprint registration
       (`server.py`), topnav entry, `pyproject.toml` py-modules, empty `workflows.html/css/js`,
       packaging + CLI-mode smoke tests. Ships an empty, reachable Workflows tab.
-- [ ] **M1 — Canvas core.** Pan/zoom, sidebar palette, drag cards onto canvas, select/move,
+- [x] **M1 — Canvas core.** Pan/zoom, sidebar palette, drag cards onto canvas, select/move,
       persist positions + viewport, blueprint save/load (`workflows_manifest.json`). No wires yet.
-- [ ] **M2 — Typed ports + wires.** Catalog endpoint, generic card rendering from `NodeType`,
-      SVG connectors with drag-to-connect + type validation, param editors by `ParamSpec`, context
-      grey-out (`requires`).
+      **Pulled forward from M2** (scope decision): the real `NODE_TYPES` registry +
+      `GET /api/catalog` endpoint, generic card rendering from `NodeType` (label, domain accent,
+      static port markers), and palette grey-out by `requires`. Also ships a **multi-blueprint
+      switcher** (create/name/switch/delete). `NODE_TYPES` is declarative-only here (each node's
+      `execute` lands in M3).
+- [ ] **M2 — Typed ports + wires.** SVG connectors with drag-to-connect + **type validation**,
+      interactive **param editors** by `ParamSpec`, and on-canvas node grey-out/validation. (The
+      catalog endpoint + NodeType card rendering shipped in M1; M1 renders ports as non-interactive
+      anchors with `data-*` hooks so M2 only adds connector behavior.)
 - [ ] **M3 — Node catalog + executors.** `NODE_TYPES` + executors wrapping existing functions;
       `files.build_clip_records` + refactor `cli.py` paths onto it; `ADAPTERS` table.
 - [ ] **M4 — Run engine.** `WorkflowRunner` (toposort, ready-set, per-node state, cancel), SSE +
