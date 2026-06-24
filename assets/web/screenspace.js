@@ -380,32 +380,6 @@
   // Compact one-liner describing a multitool step's criteria, used in result rows.
   // Mirrors the keys gathered by gatherMultitoolStepParams so the displayed values
   // match what the user configured at task-create time.
-  function formatMultitoolStepParams(step) {
-    if (!step) return "";
-    var t = step.type;
-    if (t === "color") {
-      var tc = step.target_color || {};
-      var swatch = "H" + (tc.h || 0) + "° S" + (tc.s || 0) + " V" + (tc.v || 0);
-      return step.color_mode === "presence" ? swatch + " · presence" : swatch;
-    }
-    if (t === "change") return ">" + ((step.threshold || 0) * 100).toFixed(0) + "%";
-    if (t === "similarity") return "≥" + ((step.threshold || 0) * 100).toFixed(0) + "%";
-    if (t === "text") return "“" + (step.search_string || "") + "”";
-    if (t === "numbers") {
-      var opSym = { gt: ">", lt: "<", eq: "=", gte: "≥", lte: "≤" }[step.operator] || step.operator || "";
-      return (opSym + " " + step.target_value).trim();
-    }
-    if (t === "template") return "≥" + ((step.threshold || 0) * 100).toFixed(0) + "%";
-    if (t === "flow") return ">" + (step.magnitude_threshold || 0).toFixed(1);
-    if (t === "scene") {
-      var refs = step.scene_references || [];
-      if (refs.length === 1) return refs[0].name || "1 ref";
-      return refs.length + " refs";
-    }
-    if (t === "inactivity") return "≥" + (step.threshold || 0) + "s";
-    return "";
-  }
-
   // Confidence bar mirrors the prototype's ConfBar: 4 px tall, hue-tinted fill,
   // opacity ramps from 0.4 (low) to 1.0 (full) so high-confidence rows feel
   // saturated while low ones recede.
@@ -1846,15 +1820,6 @@
       _overlayRaf = 0;
     }
     renderOverlay();
-  }
-
-  function normalizeRect(x1, y1, x2, y2) {
-    return {
-      x: Math.min(x1, x2),
-      y: Math.min(y1, y2),
-      w: Math.abs(x2 - x1),
-      h: Math.abs(y2 - y1),
-    };
   }
 
   function computeLabelRect(r, name, ctx, s) {
@@ -4664,16 +4629,6 @@
   // Readout shown beside the "Min area %" slider: percentage plus the
   // approximate matching-pixel count for the current region, or an explicit
   // "any presence" note at 0% (no minimum size).
-  function _formatMinAreaReadout(pct, area) {
-    if (!(pct > 0)) return "Any presence — no minimum size";
-    var txt = pct + "%";
-    if (area && area > 0) {
-      var px = Math.max(1, Math.round((pct / 100) * area));
-      txt += " · ~" + px.toLocaleString() + " px";
-    }
-    return txt;
-  }
-
   function _updateMinAreaReadout(sfx) {
     sfx = sfx || "";
     var slider = qs("#paramColorMinArea" + sfx);
