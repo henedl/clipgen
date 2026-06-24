@@ -57,3 +57,44 @@ def test_start_overlay_treats_workflows_as_video_tool():
     when videos are already present (parity with Screenspace/Transcripts)."""
     overlay = (_WEB / "start-overlay.js").read_text(encoding="utf-8")
     assert 'path.indexOf("/workflows/") === 0' in overlay
+
+
+def test_satellites_read_shared_state_through_wf():
+    """The carve gotcha: satellites must read `WF.state`, not redeclare a
+    divergent `var state = {`. Only the hub owns the literal state object."""
+    for name in ("workflows-nodes.js", "workflows-canvas.js"):
+        src = (_WEB / name).read_text(encoding="utf-8")
+        assert "var state = WF.state" in src, name
+        assert "var state = {" not in src, name
+
+
+def test_page_loads_satellites_after_hub_with_toolbar():
+    html = WORKFLOWS_HTML.read_text(encoding="utf-8")
+    # Satellites load after the hub (load-order contract).
+    assert html.index("workflows.js") < html.index("workflows-nodes.js")
+    assert html.index("workflows.js") < html.index("workflows-canvas.js")
+    # Canvas + blueprint-switcher structure the M1 hub/satellites target.
+    assert 'id="wfWorld"' in html
+    assert 'id="wfToolbar"' in html
+    assert 'id="wfBlueprintSelect"' in html
+    # Per code-review rule: text inputs need autocomplete off.
+    assert 'id="wfBlueprintName"' in html
+    assert 'autocomplete="off"' in html
+
+
+def test_hub_and_satellites_publish_canvas_hooks():
+    src = _workflows_js()
+    # Hub-owned orchestration.
+    for fn in ("WF.scheduleSave", "WF.renderPalette", "WF.openBlueprint"):
+        assert fn in src, fn
+    # Satellite-owned rendering / interaction attached back onto WF.
+    for fn in (
+        "WF.renderAllNodes",
+        "WF.renderNode",
+        "WF.initCanvas",
+        "WF.applyViewport",
+    ):
+        assert fn in src, fn
+    # The catalog is fetched (not hardcoded), and the world layer is transformed.
+    assert "api/catalog" in src
+    assert "scale(" in src and "translate(" in src

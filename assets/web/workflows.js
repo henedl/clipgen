@@ -1,35 +1,276 @@
 /* Workflows hub — the node-canvas frontend (4th top-level surface).
  *
  * Establishes the window.ClipgenWorkflows (WF) namespace that satellite files
- * (workflows-canvas / -wires / -nodes / -runs / -stashes) will share state and
- * functions through — mirroring screenspace.js + window.ClipgenScreenspace and
- * transcripts.js + window.ClipgenTranscripts.
+ * (workflows-nodes, workflows-canvas) share state and functions through —
+ * mirroring screenspace.js + window.ClipgenScreenspace and transcripts.js +
+ * window.ClipgenTranscripts.
  *
- * M0 (scaffold) only boots the page and publishes `state`. The canvas, typed
- * ports/wires, node catalog, run engine, and stashes arrive in milestones
- * M1-M5 — see plans/WORKFLOWS-PLAN.md. Vanilla JS, ES5-style (no build step).
+ * The hub owns: WF.state, boot, the node catalog fetch + palette, the
+ * blueprint switcher (create/name/switch/delete), and the debounced autosave.
+ * The canvas interaction layer and card rendering live in the satellites, which
+ * attach their functions back onto WF. Vanilla JS, ES5-style (no build step).
  */
 
 (function () {
   "use strict";
 
-  // Shared mutable state. Routed through WF.state (not bare `var`s) so future
+  // Shared mutable state. Routed through WF.state (not bare `var`s) so the
   // satellites read/write the same object without cross-file ReferenceErrors —
   // the carve gotcha that bit Screenspace and Transcripts.
   var state = {
-    catalog: null, // node-type registry, fetched from /api/catalog (M2)
-    nodes: [], // placed cards: {id, type, params, position:{x,y}}
-    edges: [], // wires: {from, fromPort, to, toPort}
-    viewport: { x: 0, y: 0, zoom: 1 }, // pan/zoom (M1)
-    selection: [], // selected node ids
+    catalog: null, // ordered node-type array from /api/catalog
+    catalogById: {}, // id -> node type (built once for card lookups)
+    context: { sheet: false, videoDir: false }, // launch context for grey-out
+    blueprints: [], // all saved blueprints (full objects)
+    nodes: [], // placed cards of the active blueprint: {id, type, params, position}
+    edges: [], // wires (M2): {from, fromPort, to, toPort}
+    viewport: { x: 0, y: 0, zoom: 1 }, // pan/zoom of the active blueprint
+    selection: [], // selected node ids (transient — not persisted)
     activeBlueprintId: null,
   };
+
+  // ---- Catalog + palette ----------------------------------------------------
+
+  function loadCatalog() {
+    return apiGet("api/catalog")
+      .then(function (res) {
+        state.catalog = (res && res.catalog) || [];
+        state.context = (res && res.context) || { sheet: false, videoDir: false };
+        state.catalogById = {};
+        state.catalog.forEach(function (n) {
+          state.catalogById[n.id] = n;
+        });
+        renderPalette();
+      })
+      .catch(function () {
+        showToast("Failed to load node catalog");
+      });
+  }
+
+  // True when every `requires` entry is satisfied by the launch context.
+  function nodeContextMet(node) {
+    var reqs = (node && node.requires) || [];
+    for (var i = 0; i < reqs.length; i++) {
+      if (!state.context || !state.context[reqs[i]]) return false;
+    }
+    return true;
+  }
+
+  function buildPaletteItem(node) {
+    var item = el("div", "wf-palette-item", node.label);
+    item.setAttribute("data-domain", node.domain || "");
+    if (nodeContextMet(node)) {
+      item.draggable = true;
+      item.dataset.nodeType = node.id;
+      item.addEventListener("dragstart", function (e) {
+        e.dataTransfer.setData("application/x-wf-node-type", node.id);
+        e.dataTransfer.setData("text/plain", node.id);
+        e.dataTransfer.effectAllowed = "copy";
+      });
+    } else {
+      item.classList.add("disabled");
+      item.title = "Requires " + ((node.requires || []).join(", ") || "context");
+    }
+    return item;
+  }
+
+  function renderPalette() {
+    var palette = qs("#wfPalette");
+    if (!palette || !state.catalog) return;
+    palette.innerHTML = "";
+    // Group by category, preserving catalog order (per the perf rule, build a
+    // DocumentFragment and append once).
+    var order = [];
+    var byCat = {};
+    state.catalog.forEach(function (node) {
+      var cat = node.category || "Other";
+      if (!byCat[cat]) {
+        byCat[cat] = [];
+        order.push(cat);
+      }
+      byCat[cat].push(node);
+    });
+    var frag = document.createDocumentFragment();
+    order.forEach(function (cat) {
+      frag.appendChild(el("div", "wf-palette-group-label", cat));
+      byCat[cat].forEach(function (node) {
+        frag.appendChild(buildPaletteItem(node));
+      });
+    });
+    palette.appendChild(frag);
+  }
+
+  // ---- Blueprint switcher ---------------------------------------------------
+
+  function findBlueprint(id) {
+    for (var i = 0; i < state.blueprints.length; i++) {
+      if (state.blueprints[i].id === id) return state.blueprints[i];
+    }
+    return null;
+  }
+
+  function populateSelect() {
+    var sel = qs("#wfBlueprintSelect");
+    if (!sel) return;
+    sel.innerHTML = "";
+    var frag = document.createDocumentFragment();
+    state.blueprints.forEach(function (bp) {
+      var opt = el("option");
+      opt.value = bp.id;
+      opt.textContent = bp.name || "Untitled";
+      frag.appendChild(opt);
+    });
+    sel.appendChild(frag);
+    if (state.activeBlueprintId) sel.value = state.activeBlueprintId;
+  }
+
+  function syncToolbar() {
+    var sel = qs("#wfBlueprintSelect");
+    var nameInput = qs("#wfBlueprintName");
+    var bp = findBlueprint(state.activeBlueprintId);
+    if (sel && state.activeBlueprintId) sel.value = state.activeBlueprintId;
+    if (nameInput) nameInput.value = (bp && bp.name) || "";
+  }
+
+  // Make `bp` the active canvas. Flushes the outgoing blueprint's pending save
+  // first so a debounced edit is never lost or mis-attributed on switch.
+  function openBlueprint(bp) {
+    if (!bp) return;
+    flushSave();
+    state.activeBlueprintId = bp.id;
+    state.nodes = bp.nodes || (bp.nodes = []);
+    state.edges = bp.edges || (bp.edges = []);
+    state.viewport = bp.viewport || (bp.viewport = { x: 0, y: 0, zoom: 1 });
+    state.selection = [];
+    syncToolbar();
+    if (WF.renderAllNodes) WF.renderAllNodes();
+    if (WF.applyViewport) WF.applyViewport();
+  }
+
+  function loadBlueprints() {
+    return apiGet("api/blueprints")
+      .then(function (res) {
+        var list = (res && res.blueprints) || [];
+        if (!list.length) {
+          // Fresh launch — auto-create one so the canvas is immediately usable.
+          return apiPost("api/blueprints", { name: "Untitled" }).then(function (r) {
+            state.blueprints = [r.blueprint];
+            populateSelect();
+            openBlueprint(r.blueprint);
+          });
+        }
+        state.blueprints = list;
+        populateSelect();
+        openBlueprint(list[0]);
+      })
+      .catch(function () {
+        showToast("Failed to load blueprints");
+      });
+  }
+
+  function createBlueprint() {
+    apiPost("api/blueprints", { name: "Untitled" })
+      .then(function (res) {
+        if (!res || !res.ok) {
+          showToast("Failed to create blueprint");
+          return;
+        }
+        state.blueprints.push(res.blueprint);
+        populateSelect();
+        openBlueprint(res.blueprint);
+      })
+      .catch(function () {
+        showToast("Failed to create blueprint");
+      });
+  }
+
+  function deleteBlueprint(id) {
+    if (!id) return;
+    cancelSave(); // don't resurrect the row we're about to delete
+    apiDelete("api/blueprints/" + encodeURIComponent(id))
+      .then(function (res) {
+        if (!res || !res.ok) {
+          showToast("Failed to delete blueprint");
+          return;
+        }
+        state.blueprints = state.blueprints.filter(function (b) {
+          return b.id !== id;
+        });
+        state.activeBlueprintId = null; // so the next open's flushSave is a no-op
+        if (state.blueprints.length) {
+          populateSelect();
+          openBlueprint(state.blueprints[0]);
+        } else {
+          createBlueprint();
+        }
+      })
+      .catch(function () {
+        showToast("Failed to delete blueprint");
+      });
+  }
+
+  function renameActive(name) {
+    var bp = findBlueprint(state.activeBlueprintId);
+    if (!bp) return;
+    bp.name = name;
+    var sel = qs("#wfBlueprintSelect");
+    if (sel) {
+      var opts = sel.options;
+      for (var i = 0; i < opts.length; i++) {
+        if (opts[i].value === bp.id) {
+          opts[i].textContent = name || "Untitled";
+          break;
+        }
+      }
+    }
+    scheduleSave();
+  }
+
+  // ---- Debounced autosave ---------------------------------------------------
+
+  var _saveTimer = null;
+
+  function cancelSave() {
+    if (_saveTimer) {
+      clearTimeout(_saveTimer);
+      _saveTimer = null;
+    }
+  }
+
+  function scheduleSave() {
+    cancelSave();
+    _saveTimer = setTimeout(flushSave, 600);
+  }
+
+  // Persist the active blueprint now (also syncs working state back into the
+  // in-memory blueprint so switching without a refetch stays correct).
+  function flushSave() {
+    cancelSave();
+    var id = state.activeBlueprintId;
+    if (!id) return;
+    var bp = findBlueprint(id);
+    if (bp) {
+      bp.nodes = state.nodes;
+      bp.edges = state.edges;
+      bp.viewport = state.viewport;
+    }
+    apiPut("api/blueprints/" + encodeURIComponent(id), {
+      name: bp ? bp.name : undefined,
+      nodes: state.nodes,
+      edges: state.edges,
+      viewport: state.viewport,
+    }).catch(function () {
+      showToast("Failed to save blueprint");
+    });
+  }
+
+  // ---- Boot -----------------------------------------------------------------
 
   function boot() {
     // TopNav renders the theme toggle (#themeToggle) and Settings (#settingsBtn)
     // buttons synchronously before this hub loads, so wire them here as the
-    // other surfaces do. M0 has no page-specific settings, so Settings just
-    // opens the shared modal; page-scoped onSave/onReset land with later config.
+    // other surfaces do. M1 has no page-specific settings, so Settings just
+    // opens the shared modal.
     if (typeof initThemeToggle === "function") {
       initThemeToggle();
     }
@@ -39,14 +280,45 @@
         window.openSettingsModal({});
       });
     }
+
+    // Blueprint switcher toolbar.
+    var sel = qs("#wfBlueprintSelect");
+    if (sel) {
+      sel.addEventListener("change", function () {
+        openBlueprint(findBlueprint(sel.value));
+      });
+    }
+    var nameInput = qs("#wfBlueprintName");
+    if (nameInput) {
+      nameInput.addEventListener("input", function () {
+        renameActive(nameInput.value);
+      });
+    }
+    var newBtn = qs("#wfNewBlueprint");
+    if (newBtn) newBtn.addEventListener("click", createBlueprint);
+    var delBtn = qs("#wfDeleteBlueprint");
+    if (delBtn) {
+      delBtn.addEventListener("click", function () {
+        deleteBlueprint(state.activeBlueprintId);
+      });
+    }
+
+    // Bind canvas interactions, then load the catalog before the blueprints so
+    // placed cards can resolve their node-type labels on first render.
+    if (WF.initCanvas) WF.initCanvas();
+    loadCatalog().then(loadBlueprints);
   }
 
   // ---- Satellite interface (window.ClipgenWorkflows) ----
-  // The hub publishes `state` (and, in later milestones, shared helpers) onto
-  // this namespace; satellites attach their own functions back onto it.
+  // The hub publishes `state` + shared helpers onto this namespace; the
+  // satellites (workflows-nodes, workflows-canvas) attach their own functions
+  // (renderNode, renderAllNodes, initCanvas, applyViewport) back onto it.
   var WF = (window.ClipgenWorkflows = window.ClipgenWorkflows || {});
   WF.state = state;
   WF.boot = boot;
+  WF.scheduleSave = scheduleSave;
+  WF.renderPalette = renderPalette;
+  WF.openBlueprint = openBlueprint;
 
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", boot);
