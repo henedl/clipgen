@@ -33,7 +33,8 @@
     _summaryEtaTracker = TS._summaryEtaTracker,
     _citationsEtaTracker = TS._citationsEtaTracker,
     _frictionEtaTracker = TS._frictionEtaTracker,
-    _updateAgentElapsed = TS._updateAgentElapsed;
+    _updateAgentElapsed = TS._updateAgentElapsed,
+    _currentParticipantHasTranscript = TS._currentParticipantHasTranscript;
 
   // ---- AI Summary ----
   //

@@ -2398,5 +2398,6 @@
   TS._citationsEtaTracker = _citationsEtaTracker; // agents
   TS._frictionEtaTracker = _frictionEtaTracker; // agents
   TS._updateAgentElapsed = _updateAgentElapsed; // agents
+  TS._currentParticipantHasTranscript = _currentParticipantHasTranscript; // agents (panel-visible guard) + hub topnav
 
 })();
