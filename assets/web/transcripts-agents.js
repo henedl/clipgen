@@ -172,6 +172,10 @@
     _summaryEtaTracker.start(startedAtMs || undefined);
     _updateAgentElapsed("summaryElapsed", _summaryEtaTracker);
     _txEtaTicker.ensure();
+    // Summary is (re)generating → its dependents' gate is momentarily unmet;
+    // refresh the friction header so Re-run disables now and re-enables in
+    // renderSummary() once the summary lands.
+    _renderFrictionHeader();
   }
 
   function renderSummaryEmpty() {
@@ -247,6 +251,11 @@
     if (state.summaryCitations) {
       renderCitations();
     }
+    // The friction Re-run button is gated on the summary dependency. The summary
+    // just landed (dep now met), so refresh the friction header even when friction
+    // data already exists — loadFriction is skipped in that case, so otherwise the
+    // Re-run button stays disabled/unclickable until a page reload.
+    _renderFrictionHeader();
   }
 
   function clearSummary() {
@@ -605,6 +614,11 @@
   function _frictionDepMet() {
     var p = _currentParticipant();
     if (!p) return false;
+    // Trust the client-side summary too: renderSummary sets state.summaryText for
+    // the selected participant the moment a summary lands, before /api/participants
+    // catches up to summary === "done". Without this the Re-run gate lags a poll
+    // (or never updates until reload) after a summary regenerate completes.
+    if (state.summaryText) return true;
     if (p.has_summary) return true;
     return !!(p.agents && p.agents.summary === "done");
   }
