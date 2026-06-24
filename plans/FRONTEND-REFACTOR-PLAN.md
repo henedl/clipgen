@@ -30,7 +30,7 @@ The frontend is a **vanilla JS/CSS stack** (~50k lines in 43 files under `assets
 1. ~~**Four separate `renderTimeline()` implementations**~~ 🟡 Ruler core shared (B4, 2026-06-24): the two canvas surfaces (screenspace / transcripts) share `niceTimeInterval`/`drawTimelineRuler` in `utils.js`; markers/bands/playhead stay per-surface, and the two DOM rulers (viewer / convergence) remain a separate model
 2. ~~**Polling only half-unified**~~ ✅ Resolved: `createPoller` now drives every periodic poller (Studio, Screenspace, Transcripts); only the Ollama model-pull loop (Promise-based, custom cancel/miss-count) stays a raw `setInterval`
 3. **Convention debt:** inline SVG ✅ closed (documented intentional exceptions) and raw `px` ✅ swept to tokens (2026-06-23); dual button systems (`.cg-btn` vs `.btn`) ✅ de-duplicated + documented as intentional (B5, 2026-06-24 — shared `.btn` base now in `tokens.css`; full merge onto `.cg-btn` is incremental)
-4. **Page monoliths persist:** `screenspace.js` 7.5k (partially carved), `studio.js` 5.8k (state hub); `transcripts.js` ✅ carved (2026-06-24) into a ~2.4k hub + 5 `transcripts-*.js` satellites behind `window.ClipgenTranscripts`
+4. **Page monoliths persist:** `screenspace.js` 7.5k (partially carved); `studio.js` ~6k 🟡 intake carved (2026-06-24) into `studio-intake.js` behind `window.ClipgenStudio` — hub ~5.1k, generate/trim/stash/scrubber still in-hub; `transcripts.js` ✅ carved (2026-06-24) into a ~2.4k hub + 5 `transcripts-*.js` satellites behind `window.ClipgenTranscripts`
 5. **Dead / partial assets:** `card-scrubber.js` parked **and** duplicated inline in `viewer.js` (~~`<head>` favicon/fonts copy-paste~~ ✅ resolved 2026-06-23 — live pages now inject a shared `_head.html` partial)
 
 **Stack constraints (do not violate):**
@@ -48,7 +48,8 @@ The frontend is a **vanilla JS/CSS stack** (~50k lines in 43 files under `assets
 | File | Lines | Role |
 |------|------:|------|
 | `screenspace.js` | 7,498 | Hub: canvas, tasks, timeline, regions (+ satellites below) |
-| `studio.js` | 5,813 | Sheet, queues, intake; state hub (`window._studioState`) for sub-tabs |
+| `studio.js` | ~5,114 | Hub: sheet, queues, generate/trim/stash/scrubber; state hub (`window._studioState`) for sub-tabs + `window.ClipgenStudio` for satellites |
+| `studio-intake.js` | ~1,013 | Satellite: Screenspace + Transcript intake panels (poll/cluster/render/filters); behind `window.ClipgenStudio` (STUDIO) |
 | `transcripts.js` | ~2,396 | Hub: `state`, xref index, `selectParticipant`, segments+marks editor, task poller, model-install (+ satellites below; `window.ClipgenTranscripts`/TS) |
 | `transcripts-agents.js` | ~1,188 | Satellite: summary + citations + friction + panel tabs + heatmap toggle |
 | `transcripts-video.js` | ~760 | Satellite: player + timeline canvas + seek + sync + PiP + `_drawFrictionBand` |
@@ -198,9 +199,13 @@ Current state and next targets:
    already carved via `window.ClipgenScreenspace`/`SS`) → continue extracting cohesive feature
    surfaces (tasks/queue UI, timeline, region CRUD) off the hub. Audit hub refs to satellite
    `var`s when carving (see AGENTS.md gotcha — `node --check` won't catch `ReferenceError`s).
-3. **`studio.js`** (5.8k state hub) → `intake-cluster.js` + `metadata.js`/`convergence.js`
-   already split out; remaining win is reducing the `window._studioState` surface, not more
-   file splits.
+3. **`studio.js`** (~6k state hub) → `intake-cluster.js` + `metadata.js`/`convergence.js`
+   already split out; **intake carved 2026-06-24** into `studio-intake.js` (Screenspace +
+   Transcript intake) behind `window.ClipgenStudio` (STUDIO), the first satellite on the new
+   namespace (legacy `window._studio*` globals kept for metadata/convergence). Remaining feature
+   surfaces — generate (~700), trim (~354), stash (~289), scrubber (~277) — are follow-up carves
+   on the same axis (recommended order trim→scrubber→stash→generate); reducing the
+   `window._studioState` surface is the longer-term win.
 
 Globals stay on `window` namespaces; script order in HTML documents dependencies.
 
@@ -294,7 +299,7 @@ Use this when executing waves; check items in PR descriptions.
 - [x] B5 `.btn` base consolidated into `tokens.css` (2026-06-24) — was copy-pasted verbatim across studio/screenspace/transcripts CSS; zero visual change. Dual `.btn`/`.cg-btn` system documented as intentional (AGENTS.md); full merge onto `.cg-btn` left to per-button commits
 - [x] C1 `transcripts.js` split first (2026-06-24) — hub + 5 `transcripts-*.js` satellites behind `window.ClipgenTranscripts`; one PR. No `transcripts-utils.js` (no shared pure-helper cluster); cross-file state routed through `state` + `TS.*` accessors; fixed a latent `accent` ReferenceError in `renderPlayhead`
 - [ ] C1 `screenspace.js` — continue hub carve-outs (satellites already on `window.ClipgenScreenspace`)
-- [ ] C1 `studio.js` — shrink `window._studioState` surface (intake/metadata/convergence already split)
+- [~] C1 `studio.js` — intake carved (2026-06-24): `studio-intake.js` satellite (Screenspace + Transcript intake) behind `window.ClipgenStudio` (STUDIO), one PR (proof-of-pattern). Hub keeps grid/queues/data-loading + the `buildXrefBadges` and `ss*Thumb*` clusters (kept in hub because they're consumed pre-satellite-load / by hub queue cards); legacy `window._studio*` globals untouched for metadata/convergence. The two boot `initIntakePanel(SS_INTAKE/TR_INTAKE)` calls folded into a satellite `initIntake()`; `tests/test_studio_frontend_source.py` now globs `studio*.js`. **Still open:** remaining studio satellites (generate/trim/stash/scrubber, recommended order trim→scrubber→stash→generate) + shrinking the `_studioState` surface.
 - [x] B4 shared timeline **ruler** core (2026-06-24) — `niceTimeInterval`/`drawTimelineRuler` in `utils.js`, adopted by the two canvas surfaces (screenspace + transcripts); markers/bands/playhead stay per-surface. The two DOM rulers (viewer fixed-8, convergence fixed-11) left as-is — different model. Full marker-level abstraction still out of scope
 - [ ] C2 / C3 — **first** reconcile against `archive/PERFORMANCE-PLAN*.md` (confirm what shipped), then Studio grid profile + NDJSON intake if still pending
 
@@ -309,4 +314,5 @@ Use this when executing waves; check items in PR descriptions.
 | 2026-06-23 | Closed C4 (icon gap — documented intentional inline-SVG exceptions), C5 (full 181-`px`→token sweep + 4 new tokens), and A3 (`createPoller` across all 8 remaining pollers). Verified A1/A2/A4/A5 already shipped. |
 | 2026-06-23 | Closed C6: shared `assets/web/_head.html` favicon/fonts partial injected into the three live index pages via `<!-- CLIPGEN_HEAD_HERE -->` + `utils.render_index_html()`; exported viewers left self-contained. "Finish half-done" bucket now empty — next up is C1 (Transcripts split). |
 | 2026-06-24 | B4 (ruler core): extracted `niceTimeInterval`/`drawTimelineRuler` into `utils.js`, adopted by the two canvas surfaces (screenspace + transcripts); DOM rulers (viewer/convergence) left as a separate model; markers/bands/playhead stay per-surface. B5 (`.btn` de-dup): consolidated the verbatim-triplicated `.btn` base into `tokens.css` (zero visual change; also gave Studio the missing `.btn:disabled:hover` guard), documented the intentional `.btn`/`.cg-btn` duality in AGENTS.md, and deferred the full merge onto `.cg-btn` to per-button commits. |
+| 2026-06-24 | C1 (Studio intake split, proof-of-pattern): carved the intake panels (~1k lines) out of `studio.js` into `studio-intake.js` behind `window.ClipgenStudio` (STUDIO), one PR. Hub publishes `state` + 13 helpers; satellite publishes 9 entry points reached via same-named guarded delegators. Kept in hub: `buildXrefBadges` (legacy `_studioBuildXrefBadges` assigned pre-satellite-load) and the `ss*Thumb*` cluster (shared with hub queue cards). Boot's two `initIntakePanel(SS_INTAKE/TR_INTAKE)` folded into satellite `initIntake()`. `tests/test_studio_frontend_source.py` now globs `studio*.js`; legacy `window._studio*` globals (metadata/convergence) untouched. Remaining studio satellites (generate/trim/stash/scrubber) deferred. `node --check` + full pytest green; browser pass pending. |
 | 2026-06-24 | C1 (Transcripts split): carved `transcripts.js` (5.2k monolith) into a ~2.4k hub + 5 satellites (`transcripts-{corrections,search,video,pills,agents}.js`) behind `window.ClipgenTranscripts` (TS), one PR. Hub keeps `state`, xref index, `selectParticipant`, segments+marks editor, the task poller, and model-install; satellite fns reached via same-named guarded delegators. No `transcripts-utils.js` (no shared pure-helper cluster; `showToast` stayed hub-local). Routed cross-file mutable state through `state` (`participantReqVer`/`cachedSegmentRows`/`frictionTooltipShown`) + accessors (`TS.isSummaryPolling`/`TS.hasTimelineHover`); fixed a latent `accent` ReferenceError in `renderPlayhead`. `node --check` + a vm load/boot smoke harness + dom-wiring test (now globs `transcripts*.js`); browser pass pending. |
