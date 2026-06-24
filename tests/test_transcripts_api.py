@@ -1012,6 +1012,39 @@ def test_corrected_segments_cached_and_invalidated_on_correction(
     assert seg["corrected"] is True
 
 
+def test_persist_keeps_corrected_cache_for_unchanged_transcription(
+    tr_client, monkeypatch
+):
+    """A persist must not invalidate the corrected cache just because
+    get_all_tasks() hands back fresh deepcopies — only a changed transcription
+    (different transcribed_at) should bump the version."""
+    import copy as _copy
+
+    completed = {
+        "id": "t1",
+        "participant": "P01",
+        "status": transcripts.TASK_STATUS_COMPLETED,
+        "result": {
+            "segments": [{"id": "P01:0", "start": 0.0, "end": 1.0, "text": "hi"}],
+            "transcribed_at": "2026-06-25T00:00:00+00:00",
+        },
+    }
+
+    class _FakeWorker:
+        def get_all_tasks(self):
+            return [_copy.deepcopy(completed)]  # mirror the real deepcopy contract
+
+    monkeypatch.setattr(transcripts_server, "_worker", _FakeWorker())
+    monkeypatch.setattr(transcripts, "save_transcripts_manifest", lambda *a, **k: None)
+
+    # First persist merges the transcription (one expected invalidation).
+    transcripts_server._persist_manifest()
+    v1 = transcripts_server._corrections_version
+    # A second persist with the same completed task must NOT bump again.
+    transcripts_server._persist_manifest()
+    assert transcripts_server._corrections_version == v1
+
+
 def test_participants_includes_friction_step_state(tr_client):
     transcripts_server._manifest["source_transcripts"]["P01"] = {
         "segments": [{"id": "P01:0", "start": 0.0, "end": 1.0, "text": "x"}],

@@ -836,6 +836,7 @@ def api_corrections_add() -> FlaskResponse:
     if not from_text or not to_text:
         return jsonify({"ok": False, "error": "'from' and 'to' required"}), 400
 
+    removed_id = None
     with _manifest_lock:
         corrections = _manifest.setdefault("corrections", [])
 
@@ -851,13 +852,11 @@ def api_corrections_add() -> FlaskResponse:
         if chained:
             if chained["from"].lower() == to_text.lower():
                 corrections.remove(chained)
-                _bump_corrections_version()
-                _schedule_persist()
-                return jsonify(
-                    {"ok": True, "correction": None, "removed": chained["id"]}
-                )
-            chained["to"] = to_text
-            correction = chained
+                removed_id = chained["id"]
+                correction = None
+            else:
+                chained["to"] = to_text
+                correction = chained
         else:
             correction = {
                 "id": f"c_{uuid.uuid4().hex[:8]}",
@@ -867,8 +866,12 @@ def api_corrections_add() -> FlaskResponse:
             }
             corrections.append(correction)
 
-        _bump_corrections_version()  # add/update invalidates corrected cache
+        _bump_corrections_version()  # add/update/remove invalidates corrected cache
+    # Schedule the debounced write OUTSIDE _manifest_lock, like the other edit
+    # routes, so we never nest _manifest_lock -> _persist_timer_lock.
     _schedule_persist()
+    if removed_id is not None:
+        return jsonify({"ok": True, "correction": None, "removed": removed_id})
     return jsonify({"ok": True, "correction": correction})
 
 
@@ -1502,11 +1505,13 @@ def _merge_completed_results_locked() -> None:
             src = _manifest.setdefault("source_transcripts", {})
             existing = src.get(pid, {})
             result = task["result"]
-            # Identity check: only the first merge of a completed task (or a
-            # re-transcription) swaps in a different segments list. Re-merging an
-            # already-merged task re-applies the same object, so the corrected
-            # cache stays valid and is not cleared on every persist.
-            if result.get("segments") is not existing.get("segments"):
+            # get_all_tasks() returns deepcopies, so the segments list identity
+            # differs on every merge — an identity check would always trip.
+            # Compare the stable per-transcription transcribed_at timestamp
+            # instead: it only changes when a new/redone transcription replaces
+            # the segments, so the corrected cache is cleared then, not on every
+            # persist of an already-merged task.
+            if result.get("transcribed_at") != existing.get("transcribed_at"):
                 segments_changed = True
             existing.update(result)
             src[pid] = existing
