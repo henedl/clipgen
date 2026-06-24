@@ -26,10 +26,18 @@
   };
 
   function boot() {
-    // M0: nothing to wire yet beyond the shared chrome (TopNav + start overlay,
-    // which self-mount). The empty-state markup lives in workflows.html.
-    if (window.console && console.debug) {
-      console.debug("clipgen Workflows: scaffold loaded");
+    // TopNav renders the theme toggle (#themeToggle) and Settings (#settingsBtn)
+    // buttons synchronously before this hub loads, so wire them here as the
+    // other surfaces do. M0 has no page-specific settings, so Settings just
+    // opens the shared modal; page-scoped onSave/onReset land with later config.
+    if (typeof initThemeToggle === "function") {
+      initThemeToggle();
+    }
+    var settingsBtn = qs("#settingsBtn");
+    if (settingsBtn && typeof window.openSettingsModal === "function") {
+      settingsBtn.addEventListener("click", function () {
+        window.openSettingsModal({});
+      });
     }
   }
 

@@ -41,3 +41,19 @@ def test_css_uses_shared_tokens_not_hardcoded_surfaces():
     # Layout should lean on design tokens for surfaces/spacing.
     assert "var(--bg)" in css
     assert "var(--space-4)" in css
+
+
+def test_hub_wires_topnav_chrome():
+    """TopNav renders theme toggle + Settings on every page; the hub must wire
+    them (they appear but do nothing otherwise)."""
+    src = _workflows_js()
+    assert "initThemeToggle(" in src
+    assert "#settingsBtn" in src
+    assert "openSettingsModal(" in src
+
+
+def test_start_overlay_treats_workflows_as_video_tool():
+    """Video-only --workflows launches must not auto-open the Start overlay
+    when videos are already present (parity with Screenspace/Transcripts)."""
+    overlay = (_WEB / "start-overlay.js").read_text(encoding="utf-8")
+    assert 'path.indexOf("/workflows/") === 0' in overlay
