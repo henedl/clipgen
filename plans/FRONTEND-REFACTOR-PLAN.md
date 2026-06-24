@@ -30,7 +30,7 @@ The frontend is a **vanilla JS/CSS stack** (~50k lines in 43 files under `assets
 1. ~~**Four separate `renderTimeline()` implementations**~~ 🟡 Ruler core shared (B4, 2026-06-24): the two canvas surfaces (screenspace / transcripts) share `niceTimeInterval`/`drawTimelineRuler` in `utils.js`; markers/bands/playhead stay per-surface, and the two DOM rulers (viewer / convergence) remain a separate model
 2. ~~**Polling only half-unified**~~ ✅ Resolved: `createPoller` now drives every periodic poller (Studio, Screenspace, Transcripts); only the Ollama model-pull loop (Promise-based, custom cancel/miss-count) stays a raw `setInterval`
 3. **Convention debt:** inline SVG ✅ closed (documented intentional exceptions) and raw `px` ✅ swept to tokens (2026-06-23); dual button systems (`.cg-btn` vs `.btn`) ✅ de-duplicated + documented as intentional (B5, 2026-06-24 — shared `.btn` base now in `tokens.css`; full merge onto `.cg-btn` is incremental)
-4. **Page monoliths persist:** `screenspace.js` 7.5k (partially carved), `studio.js` 5.8k (state hub); `transcripts.js` ✅ carved (2026-06-24) into a ~2.4k hub + 5 `transcripts-*.js` satellites behind `window.ClipgenTranscripts`
+4. **Page monoliths persist:** `screenspace.js` ~5.7k (down from 7.5k — `tasks`/`results` carved 2026-06-24 + earlier `multitool-params`/`calibration`/`color`/`utils`), `studio.js` 5.8k (state hub); `transcripts.js` ✅ carved (2026-06-24) into a ~2.4k hub + 5 `transcripts-*.js` satellites behind `window.ClipgenTranscripts`
 5. **Dead / partial assets:** `card-scrubber.js` parked **and** duplicated inline in `viewer.js` (~~`<head>` favicon/fonts copy-paste~~ ✅ resolved 2026-06-23 — live pages now inject a shared `_head.html` partial)
 
 **Stack constraints (do not violate):**
@@ -47,7 +47,7 @@ The frontend is a **vanilla JS/CSS stack** (~50k lines in 43 files under `assets
 
 | File | Lines | Role |
 |------|------:|------|
-| `screenspace.js` | 7,498 | Hub: canvas, tasks, timeline, regions (+ satellites below) |
+| `screenspace.js` | ~5,738 | Hub: canvas, frame/video, regions, timeline, params, model-view (+ satellites below; `window.ClipgenScreenspace`/SS) |
 | `studio.js` | 5,813 | Sheet, queues, intake; state hub (`window._studioState`) for sub-tabs |
 | `transcripts.js` | ~2,396 | Hub: `state`, xref index, `selectParticipant`, segments+marks editor, task poller, model-install (+ satellites below; `window.ClipgenTranscripts`/TS) |
 | `transcripts-agents.js` | ~1,188 | Satellite: summary + citations + friction + panel tabs + heatmap toggle |
@@ -60,10 +60,12 @@ The frontend is a **vanilla JS/CSS stack** (~50k lines in 43 files under `assets
 | `metadata.js` | 1,714 | Studio Metadata tab |
 | `utils.js` | 1,499 | Shared globals + helpers (poller, icon masks, canvas colors) |
 | `start-overlay.js` | 1,211 | Folder / spreadsheet picker |
+| `screenspace-tasks.js` | ~1,148 | Screenspace satellite: task queue, right-pane tabs, SSE/polling, ETA |
 | `settings-modal.js` | 966 | Shared tabbed settings modal (`openSettingsModal`) |
 | `screenspace-multitool-params.js` | 882 | Screenspace satellite: multitool step/param UI |
 | `primitives.js` | 763 | DOM factories (Studio only) |
 | `dev-token-tweak.js` | 748 | Dev-only live token-tweak widget (gated; stripped from exports) |
+| `screenspace-results.js` | ~704 | Screenspace satellite: results panel (histogram, rows, heatmap overlay) |
 | `screenspace-calibration.js` | 688 | Screenspace satellite: calibration strip |
 | `topnav.js` | 343 | Shared top nav |
 | `card-scrubber.js` | 298 | **Parked** (unloaded; dup'd inline in `viewer.js`) |
@@ -71,7 +73,7 @@ The frontend is a **vanilla JS/CSS stack** (~50k lines in 43 files under `assets
 | `gallery.js` | 214 | Gallery viewer |
 | `screenspace-color.js` | 179 | Screenspace satellite: HSV color picker |
 | `intake-cluster.js` | 106 | `window.ClipgenIntakeCluster` — Studio intake clustering |
-| `screenspace-utils.js` | 100 | Screenspace satellite: pure, state-free helpers |
+| `screenspace-utils.js` | ~165 | Screenspace satellite: pure, state-free helpers |
 | `export-actions.js` | 63 | `window.ClipgenExportActions` — shared export quick action |
 | `video-controls.js` | 36 | `window.ClipgenVideoControls` — shared speed cycle |
 
@@ -194,10 +196,14 @@ Current state and next targets:
    `state` (`participantReqVer`, `cachedSegmentRows`, `frictionTooltipShown`) and accessors
    (`TS.isSummaryPolling`/`TS.hasTimelineHover`); fixed a latent `accent` ReferenceError in
    `renderPlayhead` while moving it.
-2. **`screenspace.js`** (7.5k hub; satellites `multitool-params`/`calibration`/`color`/`utils`
-   already carved via `window.ClipgenScreenspace`/`SS`) → continue extracting cohesive feature
-   surfaces (tasks/queue UI, timeline, region CRUD) off the hub. Audit hub refs to satellite
-   `var`s when carving (see AGENTS.md gotcha — `node --check` won't catch `ReferenceError`s).
+2. **`screenspace.js`** (~5.7k hub, down from 7.5k; satellites `tasks`/`results`/`multitool-params`/
+   `calibration`/`color`/`utils` carved via `window.ClipgenScreenspace`/`SS`) → **tasks + results
+   done (2026-06-24):** `screenspace-tasks.js` (task queue + SSE/polling + ETA, loads right after
+   the hub so the others can destructure its `findTask`/`restoreTaskToWorkflow`/`setInputValue`/
+   `syncValueDisplays`) and `screenspace-results.js` (results panel, loads last). Remaining cohesive
+   surfaces: timeline (`initTimeline`/`renderTimeline`), per-tool params, pins, info panel, keyboard/
+   UI polish. Audit hub refs to satellite `var`s when carving (AGENTS.md gotcha — `node --check`
+   won't catch `ReferenceError`s); route hub↔satellite shared mutable state through `state.*`.
 3. **`studio.js`** (5.8k state hub) → `intake-cluster.js` + `metadata.js`/`convergence.js`
    already split out; remaining win is reducing the `window._studioState` surface, not more
    file splits.
@@ -293,7 +299,7 @@ Use this when executing waves; check items in PR descriptions.
 - [x] C5 token sweep — done: full pass across all five page CSS files; 4 new tokens (`--text-2xs`, `--radius-xs`, `--space-1-5`, `--space-2-5`)
 - [x] B5 `.btn` base consolidated into `tokens.css` (2026-06-24) — was copy-pasted verbatim across studio/screenspace/transcripts CSS; zero visual change. Dual `.btn`/`.cg-btn` system documented as intentional (AGENTS.md); full merge onto `.cg-btn` left to per-button commits
 - [x] C1 `transcripts.js` split first (2026-06-24) — hub + 5 `transcripts-*.js` satellites behind `window.ClipgenTranscripts`; one PR. No `transcripts-utils.js` (no shared pure-helper cluster); cross-file state routed through `state` + `TS.*` accessors; fixed a latent `accent` ReferenceError in `renderPlayhead`
-- [ ] C1 `screenspace.js` — continue hub carve-outs (satellites already on `window.ClipgenScreenspace`)
+- [~] C1 `screenspace.js` — **tasks + results carved (2026-06-24):** `screenspace-tasks.js` (~1.1k: queue/SSE/polling/ETA) + `screenspace-results.js` (~0.7k: histogram/rows/heatmap) + a pure-helper sweep into `screenspace-utils.js`; hub 7.5k → ~5.7k, one PR (commit-per-change). Shared mutable state (`resultsRequestVersion`/`suppressCalibrationRefresh`/`heatmapOverlayRequestVersion`) routed through `state.*`; load order is a contract (tasks right after the hub, results last). **Remaining surfaces:** timeline, per-tool params, pins, info panel, keyboard/UI polish
 - [ ] C1 `studio.js` — shrink `window._studioState` surface (intake/metadata/convergence already split)
 - [x] B4 shared timeline **ruler** core (2026-06-24) — `niceTimeInterval`/`drawTimelineRuler` in `utils.js`, adopted by the two canvas surfaces (screenspace + transcripts); markers/bands/playhead stay per-surface. The two DOM rulers (viewer fixed-8, convergence fixed-11) left as-is — different model. Full marker-level abstraction still out of scope
 - [ ] C2 / C3 — **first** reconcile against `archive/PERFORMANCE-PLAN*.md` (confirm what shipped), then Studio grid profile + NDJSON intake if still pending
@@ -310,3 +316,4 @@ Use this when executing waves; check items in PR descriptions.
 | 2026-06-23 | Closed C6: shared `assets/web/_head.html` favicon/fonts partial injected into the three live index pages via `<!-- CLIPGEN_HEAD_HERE -->` + `utils.render_index_html()`; exported viewers left self-contained. "Finish half-done" bucket now empty — next up is C1 (Transcripts split). |
 | 2026-06-24 | B4 (ruler core): extracted `niceTimeInterval`/`drawTimelineRuler` into `utils.js`, adopted by the two canvas surfaces (screenspace + transcripts); DOM rulers (viewer/convergence) left as a separate model; markers/bands/playhead stay per-surface. B5 (`.btn` de-dup): consolidated the verbatim-triplicated `.btn` base into `tokens.css` (zero visual change; also gave Studio the missing `.btn:disabled:hover` guard), documented the intentional `.btn`/`.cg-btn` duality in AGENTS.md, and deferred the full merge onto `.cg-btn` to per-button commits. |
 | 2026-06-24 | C1 (Transcripts split): carved `transcripts.js` (5.2k monolith) into a ~2.4k hub + 5 satellites (`transcripts-{corrections,search,video,pills,agents}.js`) behind `window.ClipgenTranscripts` (TS), one PR. Hub keeps `state`, xref index, `selectParticipant`, segments+marks editor, the task poller, and model-install; satellite fns reached via same-named guarded delegators. No `transcripts-utils.js` (no shared pure-helper cluster; `showToast` stayed hub-local). Routed cross-file mutable state through `state` (`participantReqVer`/`cachedSegmentRows`/`frictionTooltipShown`) + accessors (`TS.isSummaryPolling`/`TS.hasTimelineHover`); fixed a latent `accent` ReferenceError in `renderPlayhead`. `node --check` + a vm load/boot smoke harness + dom-wiring test (now globs `transcripts*.js`); browser pass pending. |
+| 2026-06-24 | C1 (Screenspace, partial): carved the two biggest clean surfaces off the `screenspace.js` hub (7.5k → ~5.7k), one PR, commit-per-change. (1) helper sweep — moved `formatMultitoolStepParams`/`normalizeRect`/`_formatMinAreaReadout` into `screenspace-utils.js` (already-reused `utils.js` helpers were *not* duplicated). (2) `screenspace-tasks.js` (~1.1k): task queue, right-pane tabs + results switcher, draggable list, task→workflow restore, pause, SSE/polling, ETA — loads right after the hub so the other satellites can destructure its `findTask`/`restoreTaskToWorkflow`/`setInputValue`/`syncValueDisplays`. (3) `screenspace-results.js` (~0.7k): histogram + rows + heatmap overlay — loads last, destructures the tasks satellite's published fns. Shared mutable state routed through `state.*` (`resultsRequestVersion`/`suppressCalibrationRefresh`/`heatmapOverlayRequestVersion`); cross-satellite calls to later-loading owners late-bound via `SS.fn()` (tasks→`renderResults`/`loadAndShowResults`, `setTargetColor`). `node --check` on all 7 screenspace JS files + static ReferenceError/publish audits; browser pass pending. Remaining surfaces: timeline, per-tool params, pins, info panel, keyboard/UI polish. |
