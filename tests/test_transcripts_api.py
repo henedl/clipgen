@@ -39,6 +39,9 @@ def tr_client(tmp_path, monkeypatch):
 
     with app.test_client() as c:
         yield c
+    # Cancel any debounced manifest write armed during the test so a stray Timer
+    # doesn't fire _do_persist into torn-down state after the fixture exits.
+    transcripts_server._cancel_pending_persist_timer()
 
 
 def test_participants_includes_transcribe_prewarm(tr_client):
@@ -917,7 +920,7 @@ def test_friction_force_eligible_regardless_of_flag(
 
 
 def test_segment_edit_marks_friction_stale(tr_client, _agent_state_clean, monkeypatch):
-    monkeypatch.setattr(transcripts_server, "_persist_manifest", lambda: None)
+    monkeypatch.setattr(transcripts_server, "_schedule_persist", lambda: None)
     _seed_friction_entry(friction={"stale": False, "moments": []})
     resp = tr_client.put(
         "/transcripts/api/transcript/P01/segment",
@@ -929,7 +932,7 @@ def test_segment_edit_marks_friction_stale(tr_client, _agent_state_clean, monkey
 
 
 def test_summary_put_marks_friction_stale(tr_client, _agent_state_clean, monkeypatch):
-    monkeypatch.setattr(transcripts_server, "_persist_manifest", lambda: None)
+    monkeypatch.setattr(transcripts_server, "_schedule_persist", lambda: None)
     _seed_friction_entry(
         citations=[{"sentence": "s", "refs": []}],
         friction={"stale": False},
@@ -941,6 +944,34 @@ def test_summary_put_marks_friction_stale(tr_client, _agent_state_clean, monkeyp
     entry = transcripts_server._manifest["source_transcripts"]["P01"]
     assert entry["friction"]["stale"] is True
     assert "citations" not in entry  # citations invalidated alongside friction
+
+
+def test_marks_add_debounces_persist_until_flush(tr_client, monkeypatch):
+    """Rapid mark edits schedule a debounced write rather than blocking each
+    request on disk; _flush_pending_persist forces the pending write to land
+    exactly once."""
+    saved = {"count": 0}
+
+    def _spy_save(*args, **kwargs):
+        saved["count"] += 1
+
+    monkeypatch.setattr(transcripts, "save_transcripts_manifest", _spy_save)
+    transcripts_server._manifest["source_transcripts"]["P01"] = {
+        "segments": [{"id": "P01:0", "start": 0.0, "end": 1.0, "text": "x"}],
+    }
+
+    resp = tr_client.post(
+        "/transcripts/api/marks",
+        json={"segment_ids": ["P01:0"], "category": "friction"},
+    )
+    assert resp.status_code == 200
+    # Debounced: the route armed a timer but has not written to disk yet.
+    assert saved["count"] == 0
+    assert transcripts_server._persist_dirty is True
+    # Flushing collapses the pending write into a single save.
+    transcripts_server._flush_pending_persist()
+    assert saved["count"] == 1
+    assert transcripts_server._persist_dirty is False
 
 
 def test_participants_includes_friction_step_state(tr_client):

@@ -38,6 +38,7 @@ API endpoints (all under /transcripts/):
   GET  /api/models/ollama/pull-status              - poll progress of an in-flight Ollama model pull
 """
 
+import atexit
 import os
 import tempfile
 import threading
@@ -377,7 +378,7 @@ def api_edit_segment(participant: str) -> FlaskResponse:
         _manifest.setdefault("corrections", []).append(correction)
         _mark_friction_stale(entry)  # edited segment text invalidates friction scores
 
-    _persist_manifest()
+    _schedule_persist()
     return jsonify({"ok": True, "correction": correction})
 
 
@@ -641,7 +642,7 @@ def api_summary_save(participant: str) -> FlaskResponse:
         entry["summary"] = data["summary"].strip()
         entry.pop("citations", None)  # invalidate citations on edit
         _mark_friction_stale(entry)  # summary text feeds the friction prompt
-    _persist_manifest()
+    _schedule_persist()
     return jsonify({"ok": True})
 
 
@@ -808,7 +809,7 @@ def api_corrections_add() -> FlaskResponse:
         if chained:
             if chained["from"].lower() == to_text.lower():
                 corrections.remove(chained)
-                _persist_manifest()
+                _schedule_persist()
                 return jsonify(
                     {"ok": True, "correction": None, "removed": chained["id"]}
                 )
@@ -823,7 +824,7 @@ def api_corrections_add() -> FlaskResponse:
             }
             corrections.append(correction)
 
-    _persist_manifest()
+    _schedule_persist()
     return jsonify({"ok": True, "correction": correction})
 
 
@@ -841,7 +842,7 @@ def api_corrections_delete(correction_id: str) -> FlaskResponse:
     if removed == 0:
         return jsonify({"ok": False, "error": "Correction not found"}), 404
 
-    _persist_manifest()
+    _schedule_persist()
     return jsonify({"ok": True})
 
 
@@ -1014,7 +1015,7 @@ def api_marks_add() -> FlaskResponse:
                 existing_by_seg[sid] = m
                 created.append(m)
 
-    _persist_manifest()
+    _schedule_persist()
     return jsonify({"ok": True, "marks": created})
 
 
@@ -1040,7 +1041,7 @@ def api_marks_update(mark_id: str) -> FlaskResponse:
         if "label" in data:
             target["label"] = data["label"] or None
 
-    _persist_manifest()
+    _schedule_persist()
     return jsonify({"ok": True, "mark": target})
 
 
@@ -1066,7 +1067,7 @@ def api_marks_delete(mark_id: str) -> FlaskResponse:
     if removed == 0:
         return jsonify({"ok": False, "error": "Mark not found"}), 404
 
-    _persist_manifest()
+    _schedule_persist()
     return jsonify({"ok": True, "removed": removed})
 
 
@@ -1428,7 +1429,12 @@ def api_transcribe_cancel(task_id: str) -> FlaskResponse:
 
 
 def _persist_manifest() -> None:
-    """Persist the current manifest state through a single synchronized path."""
+    """Persist the current manifest state through a single synchronized path.
+
+    Synchronous callers (task completion, atexit flush) supersede any pending
+    debounced write — cancel the timer here so we don't double-flush.
+    """
+    _cancel_pending_persist_timer()
     with _manifest_lock:
         _do_persist()
 
@@ -1461,6 +1467,69 @@ def _do_persist() -> None:
         _manifest.get("corrections", []),
         marks=_manifest.get("marks"),
     )
+
+
+# Manifest-write debounce: rapid UI edits (adding marks/corrections, segment and
+# summary edits) coalesce into one disk write after a short quiet period instead
+# of blocking each request on a full save_transcripts_manifest() of every
+# participant's segments. In-session reads are unaffected — they read the
+# in-memory _manifest under _manifest_lock, never disk. atexit fires the pending
+# flush on normal exit / SIGINT / SIGTERM, but not on SIGKILL or hard power-loss
+# — accepted because the transcripts manifest is recreatable (re-transcribe) and
+# a sub-2s window of edits is cheap to redo. Mirrors screenspace_server.py.
+_PERSIST_DEBOUNCE_SECONDS = 2.0
+_persist_timer: threading.Timer | None = None
+_persist_timer_lock = threading.Lock()
+_persist_dirty = False
+
+
+def _cancel_pending_persist_timer() -> bool:
+    """Cancel the debounce timer and clear the dirty flag. Returns prior dirty state."""
+    global _persist_timer, _persist_dirty  # noqa: PLW0603
+    with _persist_timer_lock:
+        timer = _persist_timer
+        _persist_timer = None
+        was_dirty = _persist_dirty
+        _persist_dirty = False
+    if timer is not None:
+        timer.cancel()
+    return was_dirty
+
+
+def _on_persist_timer() -> None:
+    global _persist_timer, _persist_dirty  # noqa: PLW0603
+    with _persist_timer_lock:
+        _persist_timer = None
+        if not _persist_dirty:
+            return
+        _persist_dirty = False
+    with _manifest_lock:
+        _do_persist()
+
+
+def _schedule_persist() -> None:
+    """Mark the manifest dirty and (re)arm the debounce timer.
+
+    Used by rapid UI-edit routes so a burst of edits coalesces into one write.
+    """
+    global _persist_timer, _persist_dirty  # noqa: PLW0603
+    with _persist_timer_lock:
+        _persist_dirty = True
+        if _persist_timer is not None:
+            _persist_timer.cancel()
+        _persist_timer = threading.Timer(_PERSIST_DEBOUNCE_SECONDS, _on_persist_timer)
+        _persist_timer.daemon = True
+        _persist_timer.start()
+
+
+def _flush_pending_persist() -> None:
+    """Cancel any pending debounced write and persist immediately if dirty."""
+    if _cancel_pending_persist_timer():
+        with _manifest_lock:
+            _do_persist()
+
+
+atexit.register(_flush_pending_persist)
 
 
 # ---- Thinking-agent orchestration ----
