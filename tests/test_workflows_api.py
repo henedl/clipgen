@@ -83,9 +83,11 @@ def test_catalog_returns_serializable_node_types(wf_client):
     assert {"transcribe", "ss_scan", "make_clips", "gate"} <= ids
     # The serialized catalog must carry no `execute` callable (JSON-safe).
     assert all("execute" not in node for node in catalog)
-    # Launch-context flags drive palette grey-out.
-    assert set(data["context"]) == {"sheet", "videoDir"}
+    # Launch-context flags drive palette grey-out; participants populate the
+    # Video-Source dropdown (reusing the videoDir discovery call).
+    assert set(data["context"]) == {"sheet", "videoDir", "participants"}
     assert data["context"]["sheet"] is False  # fixture sets _sheet_context=None
+    assert isinstance(data["context"]["participants"], list)
 
 
 def test_serialize_catalog_is_json_safe():

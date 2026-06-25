@@ -52,17 +52,22 @@
     _vpRaf = requestAnimationFrame(function () {
       _vpRaf = 0;
       var world = qs("#wfWorld");
+      var wires = qs("#wfWires");
       var canvas = qs("#wfCanvas");
       var vp = state.viewport;
-      if (world) {
-        world.style.transform =
-          "translate(" + vp.x + "px," + vp.y + "px) scale(" + vp.zoom + ")";
-      }
+      // Same transform for cards and the wire layer so wires pan/zoom in lockstep
+      // (no per-path recompute needed on pan/zoom — only on node move).
+      var t = "translate(" + vp.x + "px," + vp.y + "px) scale(" + vp.zoom + ")";
+      if (world) world.style.transform = t;
+      if (wires) wires.style.transform = t;
       if (canvas) {
         var g = _gridBase * vp.zoom;
         canvas.style.backgroundSize = g + "px " + g + "px";
         canvas.style.backgroundPosition = vp.x + "px " + vp.y + "px";
       }
+      // The wire-delete button is screen-positioned, so reposition it when the
+      // viewport changes (wires themselves move with the SVG transform).
+      if (WF.refreshWireDelete) WF.refreshWireDelete();
     });
   }
 
@@ -120,7 +125,38 @@
   function onCanvasMouseDown(e) {
     if (!state.ready) return;
     if (e.button !== 0) return;
-    var card = e.target.closest ? e.target.closest(".wf-node") : null;
+    var t = e.target;
+    if (!t || !t.closest) {
+      startPan(e);
+      return;
+    }
+    // The floating wire-delete button handles its own click — don't let the
+    // mousedown fall through to startPan (which hides the button + arms a pan,
+    // so a slight drag pans instead of deleting).
+    if (t.closest("#wfWireDelete")) return;
+    // 1. Port dot → start a typed wire drag (wires satellite owns the gesture).
+    var dot = t.closest(".wf-port-dot");
+    if (dot) {
+      if (WF.startWireDrag) WF.startWireDrag(e, dot);
+      return;
+    }
+    // 2. Wire hit-target → select that edge (Delete-key / × button can remove it).
+    var wireGroup = t.closest(".wf-wire-group");
+    if (wireGroup) {
+      if (WF.selectEdge) WF.selectEdge(wireGroup.getAttribute("data-edge-id"));
+      return;
+    }
+    // 3. A param control → let it focus natively; do not drag/select/re-render,
+    //    so typing into a card input isn't interrupted by a card rebuild.
+    if (
+      t.tagName === "INPUT" ||
+      t.tagName === "SELECT" ||
+      t.tagName === "TEXTAREA" ||
+      t.closest(".wf-node-params")
+    ) {
+      return;
+    }
+    var card = t.closest(".wf-node");
     if (card) {
       startNodeDrag(e, card);
     } else if (e.shiftKey) {
@@ -131,10 +167,18 @@
   }
 
   function startPan(e) {
+    // Clicking empty canvas clears any node/edge selection (re-render once;
+    // renderAllNodes' tail also refreshes the wire layer).
+    var changed = false;
     if (state.selection.length) {
       state.selection = [];
-      if (WF.renderAllNodes) WF.renderAllNodes();
+      changed = true;
     }
+    if (state.selectedEdge) {
+      state.selectedEdge = null;
+      changed = true;
+    }
+    if (changed && WF.renderAllNodes) WF.renderAllNodes();
     var canvas = qs("#wfCanvas");
     canvas.classList.add("panning");
     var startX = e.clientX;
@@ -160,6 +204,9 @@
 
   function startNodeDrag(e, card) {
     var id = card.getAttribute("data-node-id");
+    // Selecting a node clears any wire selection (mirror selectEdge clearing the
+    // node selection), so Delete targets the node, not the previously-picked wire.
+    state.selectedEdge = null;
     // Update selection on mousedown so a plain drag moves what you grabbed.
     if (e.shiftKey) {
       var at = state.selection.indexOf(id);
@@ -217,6 +264,9 @@
           card.style.top = (n.position.y || 0) + "px";
         }
       });
+      // Wires read live node.position (offsets stay cached — card internals are
+      // unchanged), so a moved node's wires track it without a full re-render.
+      if (WF.renderWires) WF.renderWires();
     });
   }
 
@@ -267,6 +317,7 @@
         if (sel.indexOf(id) < 0) sel.push(id);
       }
     }
+    state.selectedEdge = null; // node selection wins over a wire selection
     state.selection = sel;
     if (WF.renderAllNodes) WF.renderAllNodes();
   }
@@ -308,6 +359,13 @@
     ) {
       return;
     }
+    // A selected wire takes priority over node selection (wires satellite owns
+    // single-edge removal, shared with the floating × button).
+    if (state.selectedEdge) {
+      e.preventDefault();
+      if (WF.removeEdge) WF.removeEdge(state.selectedEdge);
+      return;
+    }
     if (!state.selection.length) return;
     e.preventDefault();
     var drop = {};
@@ -317,8 +375,73 @@
     state.nodes = state.nodes.filter(function (n) {
       return !drop[n.id];
     });
+    // Drop any wire touching a deleted node so no dangling edge survives.
+    state.edges = state.edges.filter(function (ed) {
+      return !drop[ed.from] && !drop[ed.to];
+    });
     state.selection = [];
     if (WF.renderAllNodes) WF.renderAllNodes();
+    WF.scheduleSave();
+  }
+
+  // ---- Auto-arrange ("Clean up") ----
+
+  // Lay the graph out left→right in dependency layers: a node sits one column
+  // right of its deepest upstream node, stacked by current vertical order within
+  // the column. Bounded relaxation keeps it cycle-safe (M2 doesn't reject cycles
+  // yet). Resets the viewport so the tidied graph is visible from the origin.
+  function autoArrange() {
+    if (!state.ready) return;
+    var nodes = state.nodes || [];
+    if (!nodes.length) return;
+    // Re-layout rebuilds every card and moves the source node, so cancel any
+    // in-flight wire gesture rather than leave it armed with a stale highlight.
+    if (WF.cancelConnect) WF.cancelConnect();
+    var edges = state.edges || [];
+
+    var layer = {};
+    nodes.forEach(function (n) {
+      layer[n.id] = 0;
+    });
+    // Longest-path layering; capped at node count so a cycle can't loop forever.
+    for (var iter = 0; iter < nodes.length; iter++) {
+      var changed = false;
+      edges.forEach(function (e) {
+        if (layer[e.from] === undefined || layer[e.to] === undefined) return;
+        if (layer[e.to] < layer[e.from] + 1) {
+          layer[e.to] = layer[e.from] + 1;
+          changed = true;
+        }
+      });
+      if (!changed) break;
+    }
+
+    var byLayer = {};
+    nodes.forEach(function (n) {
+      var L = layer[n.id] || 0;
+      (byLayer[L] = byLayer[L] || []).push(n);
+    });
+
+    var COL = 280;
+    var ROW = 180;
+    Object.keys(byLayer).forEach(function (key) {
+      var col = byLayer[key];
+      // Preserve current top-to-bottom order so the tidy feels stable.
+      col.sort(function (a, b) {
+        return (a.position.y || 0) - (b.position.y || 0);
+      });
+      var L = parseInt(key, 10);
+      col.forEach(function (n, idx) {
+        n.position.x = L * COL;
+        n.position.y = idx * ROW;
+      });
+    });
+
+    state.viewport = { x: 40, y: 40, zoom: 1 };
+    state.selection = [];
+    state.selectedEdge = null;
+    if (WF.renderAllNodes) WF.renderAllNodes();
+    if (WF.applyViewport) WF.applyViewport();
     WF.scheduleSave();
   }
 
@@ -345,4 +468,9 @@
 
   WF.initCanvas = initCanvas;
   WF.applyViewport = applyViewport;
+  WF.autoArrange = autoArrange;
+  // Consumed by the wires satellite (cursor→world for the in-flight wire; node
+  // lookup for port endpoints).
+  WF.clientToWorld = clientToWorld;
+  WF.findNode = findNode;
 })();

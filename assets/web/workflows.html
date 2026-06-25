@@ -19,8 +19,9 @@
 
   <!-- Three-pane scaffold: node palette · canvas · run/results panel.
        M1 ships the catalog-driven palette, the pan/zoom canvas (drag cards,
-       select/move, persist), and the blueprint switcher. Wires (M2) and the
-       run engine (M4) land later — see plans/WORKFLOWS-PLAN.md. -->
+       select/move, persist), and the blueprint switcher; M2 adds typed-port
+       wires + param editors. The run engine (M4) lands later — see
+       plans/WORKFLOWS-PLAN.md. -->
   <main id="wfShell">
     <aside id="wfSidebar" aria-label="Node palette">
       <div class="wf-sidebar-header">Nodes</div>
@@ -35,9 +36,21 @@
                aria-label="Blueprint name" placeholder="Untitled" disabled />
         <button id="wfNewBlueprint" class="btn btn-small" type="button" disabled>New</button>
         <button id="wfDeleteBlueprint" class="btn btn-small" type="button" disabled>Delete</button>
+        <button id="wfCleanUp" class="btn btn-small" type="button" disabled
+                title="Auto-arrange the nodes">Clean up</button>
       </header>
       <div id="wfCanvas" class="wf-canvas">
+        <!-- Wire layer: transformed in lockstep with #wfWorld (same translate/scale),
+             painted behind the cards. Paths carry pointer-events; the SVG itself
+             doesn't, so empty areas still pan the canvas. -->
+        <svg id="wfWires" class="wf-wires"></svg>
         <div id="wfWorld" class="wf-world"></div>
+        <!-- Floating delete control: shown at a wire's midpoint on hover / when a
+             wire is selected (screen-positioned, so it stays crisp under zoom). -->
+        <button id="wfWireDelete" class="wf-wire-delete-btn hidden" type="button"
+                aria-label="Delete wire">
+          <span class="wf-wire-delete-icon"></span>
+        </button>
         <div id="wfCanvasEmpty" class="wf-canvas-empty">
           <h1>Workflows</h1>
           <p>Drag nodes from the palette to chain clip, Screenspace, and transcript actions.</p>
@@ -77,5 +90,6 @@
   <script src="workflows.js"></script>
   <script src="workflows-nodes.js"></script>
   <script src="workflows-canvas.js"></script>
+  <script src="workflows-wires.js"></script>
 </body>
 </html>

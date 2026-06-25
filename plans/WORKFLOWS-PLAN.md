@@ -236,10 +236,14 @@ the scan branch when duration ≤ N.
       static port markers), and palette grey-out by `requires`. Also ships a **multi-blueprint
       switcher** (create/name/switch/delete). `NODE_TYPES` is declarative-only here (each node's
       `execute` lands in M3).
-- [ ] **M2 — Typed ports + wires.** SVG connectors with drag-to-connect + **type validation**,
+- [x] **M2 — Typed ports + wires.** SVG connectors with drag-to-connect + **type validation**,
       interactive **param editors** by `ParamSpec`, and on-canvas node grey-out/validation. (The
       catalog endpoint + NodeType card rendering shipped in M1; M1 renders ports as non-interactive
-      anchors with `data-*` hooks so M2 only adds connector behavior.)
+      anchors with `data-*` hooks so M2 only adds connector behavior.) New `workflows-wires.js`
+      satellite (SVG layer transformed in lockstep with `#wfWorld`, drag-to-connect, exact-type
+      `canConnect()` seam for M3 adapters, wire select + Delete-key + floating × button); param
+      editors (number/enum/bool/participant-dropdown/string) on cards; `.disabled`/`.invalid`
+      validation cues. One backend touch: `GET /api/catalog` `context.participants`.
 - [ ] **M3 — Node catalog + executors.** `NODE_TYPES` + executors wrapping existing functions;
       `files.build_clip_records` + refactor `cli.py` paths onto it; `ADAPTERS` table.
 - [ ] **M4 — Run engine.** `WorkflowRunner` (toposort, ready-set, per-node state, cancel), SSE +

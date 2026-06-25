@@ -1,10 +1,10 @@
 /* Workflows page — node-canvas frontend.
  *
  * The three-pane shell (palette · canvas · runs), the pan/zoom canvas, node
- * cards with typed-port markers, the blueprint switcher toolbar, and marquee
- * selection. Shared design values come from tokens.css; page-specific values
- * live here as page-local --wf-* vars (per the tokens rule). SVG wires + param
- * editors land in M2.
+ * cards with typed-port markers + param editors, the SVG wire layer, the
+ * blueprint switcher toolbar, and marquee selection. Shared design values come
+ * from tokens.css; page-specific values live here as page-local --wf-* vars
+ * (per the tokens rule).
  */
 
 :root {
@@ -244,14 +244,25 @@ body[data-frontend="workflows"] {
   flex-direction: row-reverse;
 }
 
-/* Anchor dot — non-interactive in M1; M2 hooks wire drag onto it. */
+/* Connector anchor — drag from a dot to another dot to wire a typed edge. */
 .wf-port-dot {
   flex: 0 0 auto;
-  width: 0.55rem;
-  height: 0.55rem;
+  width: 0.6rem;
+  height: 0.6rem;
   border-radius: var(--radius-full);
   background: var(--bg-hover);
   border: 1px solid var(--border);
+  cursor: crosshair;
+  transition:
+    transform var(--duration-fast),
+    background var(--duration-fast),
+    border-color var(--duration-fast);
+}
+
+.wf-port-dot:hover {
+  transform: scale(1.35);
+  background: var(--accent);
+  border-color: var(--accent);
 }
 
 .wf-port.optional .wf-port-dot {
@@ -362,4 +373,166 @@ body[data-frontend="workflows"] {
   max-width: 28rem;
   font-size: var(--text-base);
   color: var(--fg-muted);
+}
+
+/* ---- Param editors (on the card, below the domain line) ---- */
+
+.wf-node-params {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin-top: var(--space-2);
+}
+
+.wf-param {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.wf-param-label {
+  flex: 0 0 auto;
+  font-size: var(--text-xs);
+  color: var(--fg-muted);
+}
+
+.wf-param-input {
+  flex: 1;
+  min-width: 0;
+  background: var(--bg-input);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: var(--space-1) var(--space-2);
+  font-size: var(--text-xs);
+  font-family: inherit;
+}
+
+.wf-param-input[type="checkbox"] {
+  flex: 0 0 auto;
+  width: auto;
+}
+
+/* ---- SVG wire layer ---- */
+
+/* Transformed in lockstep with #wfWorld; zero-size + overflow:visible so paths
+   drawn in world coords render outside the nominal viewBox. Only the paths take
+   pointer events (set per-path below), so empty canvas still pans. */
+.wf-wires {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 0;
+  height: 0;
+  overflow: visible;
+  transform-origin: 0 0;
+  pointer-events: none;
+  will-change: transform;
+}
+
+.wf-wire {
+  fill: none;
+  stroke: var(--border);
+  stroke-width: 2;
+  /* Constant on-screen width regardless of canvas zoom. */
+  vector-effect: non-scaling-stroke;
+  pointer-events: none;
+  transition: stroke var(--duration-fast);
+}
+
+.wf-wire-group:hover .wf-wire,
+.wf-wire.selected {
+  stroke: var(--accent);
+  stroke-width: 2.5;
+}
+
+.wf-wire-temp {
+  stroke-dasharray: 5 4;
+}
+
+/* Fat invisible click/hover target so thin wires are easy to grab. */
+.wf-wire-hit {
+  fill: none;
+  stroke: transparent;
+  stroke-width: 12;
+  vector-effect: non-scaling-stroke;
+  pointer-events: stroke;
+  cursor: pointer;
+}
+
+/* ---- Floating wire-delete button (screen-positioned at the wire midpoint) ---- */
+
+.wf-wire-delete-btn {
+  position: absolute;
+  z-index: var(--z-float);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.25rem;
+  height: 1.25rem;
+  padding: 0;
+  /* JS sets left/top; offset back by half so it centres on the midpoint. */
+  transform: translate(-50%, -50%);
+  background: var(--bg-elevated);
+  color: var(--fg-muted);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  box-shadow: var(--shadow-md);
+  cursor: pointer;
+  transition:
+    color var(--duration-fast),
+    border-color var(--duration-fast);
+}
+
+.wf-wire-delete-btn:hover {
+  color: var(--severity-high);
+  border-color: var(--severity-high);
+}
+
+.wf-wire-delete-icon {
+  width: 0.85rem;
+  height: 0.85rem;
+  background-color: currentColor;
+  mask-image: url("icons/x-mark.svg");
+  -webkit-mask-image: url("icons/x-mark.svg");
+  mask-repeat: no-repeat;
+  -webkit-mask-repeat: no-repeat;
+  mask-position: center;
+  -webkit-mask-position: center;
+  mask-size: contain;
+  -webkit-mask-size: contain;
+}
+
+/* ---- On-canvas node validation ---- */
+
+/* Placed node whose launch-context requirement is unmet (e.g. a sheet node in a
+   video-only launch). Greyed but still selectable/deletable. */
+.wf-node.disabled {
+  opacity: 0.5;
+}
+
+/* Context met, but a required input port is unwired — a soft "needs wiring" cue
+   (distinct from the hard error red, so it reads as guidance not failure). */
+.wf-node.invalid {
+  border-left-style: dashed;
+  border-left-color: var(--severity-medium);
+}
+
+/* ---- Connect mode: highlight compatible targets, dim the rest ----
+   Applied to canvas cards and palette rows while a wire is being made. */
+.wf-node.wf-compatible {
+  border-color: var(--accent);
+  box-shadow:
+    0 0 0 2px var(--accent),
+    0 0 14px var(--color-accent-highlight);
+}
+
+.wf-palette-item.wf-compatible {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--color-accent-highlight);
+}
+
+.wf-node.wf-dim,
+.wf-palette-item.wf-dim {
+  opacity: 0.35;
 }

@@ -1,9 +1,11 @@
 /* Workflows — node card rendering (satellite of workflows.js).
  *
  * Renders a placed node generically from its catalog NodeType: title, domain
- * accent, and static input/output port markers (M2 makes the markers wire
- * connectors; param editors also land in M2). Reads shared state through
- * WF.state — never re-`var`s a divergent `state` (the carve gotcha).
+ * accent, ParamSpec-driven param editors, the typed input/output port markers
+ * (the wires satellite hooks drag-to-connect onto them), and validation cues
+ * (greyed when the launch context is unmet; warned when a required input is
+ * unwired). Reads shared state through WF.state — never re-`var`s a divergent
+ * `state` (the carve gotcha).
  */
 
 (function () {
@@ -29,12 +31,111 @@
     return col;
   }
 
+  // One ParamSpec editor (number / enum / bool / participant / string), each
+  // writing back to node.params on change and autosaving. No re-render on edit,
+  // so focus/caret survive typing (the mousedown router also leaves param
+  // controls alone for the same reason).
+  function buildParamControl(node, spec) {
+    var value = node.params ? node.params[spec.name] : spec.default;
+    var input;
+    if (spec.type === "number") {
+      input = el("input", "wf-param-input");
+      input.type = "number";
+      if (spec.min !== undefined) input.min = spec.min;
+      if (spec.max !== undefined) input.max = spec.max;
+      input.value = value != null ? value : "";
+      input.addEventListener("input", function () {
+        var n = parseFloat(input.value);
+        node.params[spec.name] = isNaN(n) ? null : n;
+        WF.scheduleSave();
+      });
+    } else if (spec.type === "enum") {
+      input = el("select", "wf-param-input");
+      (spec.choices || []).forEach(function (choice) {
+        var opt = el("option");
+        opt.value = choice;
+        opt.textContent = choice;
+        if (choice === value) opt.selected = true;
+        input.appendChild(opt);
+      });
+      input.addEventListener("change", function () {
+        node.params[spec.name] = input.value;
+        WF.scheduleSave();
+      });
+    } else if (spec.type === "bool") {
+      input = el("input", "wf-param-input");
+      input.type = "checkbox";
+      input.checked = !!value;
+      input.addEventListener("change", function () {
+        node.params[spec.name] = input.checked;
+        WF.scheduleSave();
+      });
+    } else if (spec.type === "participant") {
+      input = el("select", "wf-param-input");
+      var participants = (state.context && state.context.participants) || [];
+      var options = participants.slice();
+      // Keep a stored id that isn't in the discovered list (launched without it).
+      if (value && options.indexOf(value) < 0) options.unshift(value);
+      var blank = el("option");
+      blank.value = "";
+      blank.textContent = "—";
+      input.appendChild(blank);
+      options.forEach(function (pid) {
+        var opt = el("option");
+        opt.value = pid;
+        opt.textContent = pid;
+        if (pid === value) opt.selected = true;
+        input.appendChild(opt);
+      });
+      input.addEventListener("change", function () {
+        node.params[spec.name] = input.value;
+        WF.scheduleSave();
+      });
+    } else {
+      input = el("input", "wf-param-input");
+      input.type = "text";
+      input.autocomplete = "off";
+      input.value = value != null ? value : "";
+      input.addEventListener("input", function () {
+        node.params[spec.name] = input.value;
+        WF.scheduleSave();
+      });
+    }
+    return input;
+  }
+
+  function buildParamEditors(node, type) {
+    var wrap = el("div", "wf-node-params");
+    type.params.forEach(function (spec) {
+      var row = el("div", "wf-param");
+      row.appendChild(el("label", "wf-param-label", spec.label || spec.name));
+      row.appendChild(buildParamControl(node, spec));
+      wrap.appendChild(row);
+    });
+    return wrap;
+  }
+
+  // True unless some non-optional input port has no incoming edge.
+  function requiredInputsSatisfied(node, type) {
+    var inputs = type.inputs || [];
+    for (var i = 0; i < inputs.length; i++) {
+      var port = inputs[i];
+      if (port.optional) continue;
+      var wired = (state.edges || []).some(function (e) {
+        return e.to === node.id && e.toPort === port.name;
+      });
+      if (!wired) return false;
+    }
+    return true;
+  }
+
   function renderNode(node) {
     var type = state.catalogById[node.type] || {
       label: node.type,
       domain: "",
       inputs: [],
       outputs: [],
+      params: [],
     };
     var pos = node.position || { x: 0, y: 0 };
 
@@ -46,9 +147,22 @@
     if (state.selection && state.selection.indexOf(node.id) >= 0) {
       card.classList.add("selected");
     }
+    // Validation cue: greyed when the launch context can't satisfy `requires`;
+    // otherwise warned when a required input is still unwired.
+    if (WF.nodeContextMet && !WF.nodeContextMet(type)) {
+      card.classList.add("disabled");
+    } else if (!requiredInputsSatisfied(node, type)) {
+      card.classList.add("invalid");
+      card.title = "Connect required inputs";
+    }
 
     card.appendChild(el("div", "wf-node-title", type.label || node.type));
     card.appendChild(el("div", "wf-node-domain", type.domain || ""));
+
+    if (type.params && type.params.length) {
+      if (!node.params) node.params = {};
+      card.appendChild(buildParamEditors(node, type));
+    }
 
     var hasPorts =
       (type.inputs && type.inputs.length) || (type.outputs && type.outputs.length);
@@ -75,6 +189,10 @@
 
     var empty = qs("#wfCanvasEmpty");
     if (empty) empty.classList.toggle("hidden", (state.nodes || []).length > 0);
+
+    // Port DOM was rebuilt → drop the wires' cached port offsets, then redraw.
+    if (WF.clearPortCache) WF.clearPortCache();
+    if (WF.renderWires) WF.renderWires();
   }
 
   WF.renderNode = renderNode;
