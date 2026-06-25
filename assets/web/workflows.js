@@ -29,6 +29,10 @@
     selectedEdge: null, // selected wire id (transient — not persisted)
     activeBlueprintId: null,
     ready: false, // false until a blueprint is active; gates canvas edits
+    // ---- Run state (M4; owned by the workflows-runs satellite) ----
+    runs: [], // recent run snapshots (newest first)
+    activeRunId: null, // the run currently streamed/polled, or null
+    nodeRunStatus: {}, // node id -> {status, progress} for canvas tinting
   };
 
   // ---- Catalog + palette ----------------------------------------------------
@@ -42,10 +46,30 @@
       state.context = (res && res.context) || { sheet: false, videoDir: false };
       state.catalogById = {};
       state.catalog.forEach(function (n) {
+        injectControlPort(n);
         state.catalogById[n.id] = n;
       });
       renderPalette();
     });
+  }
+
+  // Every node gets a universal optional `control` input (`__gate__`): a Gate's
+  // `control`-typed `pass` output wires here (exact-match) to gate the node, so a
+  // false gate skips the whole downstream branch. It carries no data — the runner
+  // excludes control edges from a node's inputs (see workflows.py _gather_inputs).
+  function injectControlPort(node) {
+    node.inputs = node.inputs || [];
+    var has = node.inputs.some(function (p) {
+      return p.name === "__gate__";
+    });
+    if (!has) {
+      node.inputs.unshift({
+        name: "__gate__",
+        type: "control",
+        optional: true,
+        control: true,
+      });
+    }
   }
 
   // True when every `requires` entry is satisfied by the launch context.
@@ -155,6 +179,9 @@
     syncToolbar();
     if (WF.renderAllNodes) WF.renderAllNodes();
     if (WF.applyViewport) WF.applyViewport();
+    // Refresh the run panel for the newly-active blueprint (reattaches to an
+    // in-flight run if one survived a reload).
+    if (WF.refreshRuns) WF.refreshRuns();
   }
 
   function loadBlueprints() {
@@ -247,18 +274,20 @@
   }
 
   // Persist the active blueprint now (also syncs working state back into the
-  // in-memory blueprint so switching without a refetch stays correct).
+  // in-memory blueprint so switching without a refetch stays correct). Returns
+  // the PUT promise so callers that need the server up to date (e.g. starting a
+  // run) can await it; a resolved promise when there's nothing to save.
   function flushSave() {
     cancelSave();
     var id = state.activeBlueprintId;
-    if (!id) return;
+    if (!id) return Promise.resolve();
     var bp = findBlueprint(id);
     if (bp) {
       bp.nodes = state.nodes;
       bp.edges = state.edges;
       bp.viewport = state.viewport;
     }
-    apiPut("api/blueprints/" + encodeURIComponent(id), {
+    return apiPut("api/blueprints/" + encodeURIComponent(id), {
       name: bp ? bp.name : undefined,
       nodes: state.nodes,
       edges: state.edges,
@@ -310,6 +339,7 @@
       "#wfNewBlueprint",
       "#wfDeleteBlueprint",
       "#wfCleanUp",
+      "#wfRunBtn",
     ].forEach(function (sel) {
       var node = qs(sel);
       if (node) node.disabled = disabled;
@@ -360,6 +390,18 @@
         if (WF.autoArrange) WF.autoArrange();
       });
     }
+    var runBtn = qs("#wfRunBtn");
+    if (runBtn) {
+      runBtn.addEventListener("click", function () {
+        if (WF.startRun) WF.startRun();
+      });
+    }
+    var stopBtn = qs("#wfStopBtn");
+    if (stopBtn) {
+      stopBtn.addEventListener("click", function () {
+        if (WF.stopRun) WF.stopRun();
+      });
+    }
 
     var retryBtn = qs("#wfOverlayRetry");
     if (retryBtn) retryBtn.addEventListener("click", loadWorkspace);
@@ -368,6 +410,7 @@
     // load the workspace, which flips the gate once a blueprint is active.
     if (WF.initCanvas) WF.initCanvas();
     if (WF.initWires) WF.initWires();
+    if (WF.initRuns) WF.initRuns();
     loadWorkspace();
   }
 
@@ -379,6 +422,7 @@
   WF.state = state;
   WF.boot = boot;
   WF.scheduleSave = scheduleSave;
+  WF.flushSave = flushSave; // runs satellite awaits this before POSTing a run
   WF.renderPalette = renderPalette;
   WF.openBlueprint = openBlueprint;
   // Published for the nodes satellite (palette grey-out logic shared, not duped).

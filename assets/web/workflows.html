@@ -18,9 +18,9 @@
   <start-overlay-mount></start-overlay-mount>
 
   <!-- Three-pane scaffold: node palette · canvas · run/results panel.
-       M1 ships the catalog-driven palette, the pan/zoom canvas (drag cards,
-       select/move, persist), and the blueprint switcher; M2 adds typed-port
-       wires + param editors. The run engine (M4) lands later — see
+       M1 ships the catalog-driven palette, the pan/zoom canvas, and the
+       blueprint switcher; M2 adds typed-port wires + param editors; M4 adds the
+       Run button + the live run/results panel (workflows-runs.js). See
        plans/WORKFLOWS-PLAN.md. -->
   <main id="wfShell">
     <aside id="wfSidebar" aria-label="Node palette">
@@ -38,6 +38,10 @@
         <button id="wfDeleteBlueprint" class="btn btn-small" type="button" disabled>Delete</button>
         <button id="wfCleanUp" class="btn btn-small" type="button" disabled
                 title="Auto-arrange the nodes">Clean up</button>
+        <button id="wfRunBtn" class="btn btn-small btn-primary" type="button" disabled
+                title="Run this workflow">Run</button>
+        <button id="wfStopBtn" class="btn btn-small hidden" type="button"
+                title="Cancel the running workflow">Stop</button>
       </header>
       <div id="wfCanvas" class="wf-canvas">
         <!-- Wire layer: transformed in lockstep with #wfWorld (same translate/scale),
@@ -70,7 +74,8 @@
     <aside id="wfRunPanel" aria-label="Run and results">
       <div class="wf-sidebar-header">Runs</div>
       <div id="wfRuns" class="wf-runs">
-        <p class="wf-empty-hint">Run history appears here once the run engine ships (M4).</p>
+        <p class="wf-empty-hint">Press Run to execute this workflow. Per-node progress
+          and results appear here.</p>
       </div>
     </aside>
   </main>
@@ -91,5 +96,6 @@
   <script src="workflows-nodes.js"></script>
   <script src="workflows-canvas.js"></script>
   <script src="workflows-wires.js"></script>
+  <script src="workflows-runs.js"></script>
 </body>
 </html>

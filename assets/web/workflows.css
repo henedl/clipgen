@@ -536,3 +536,155 @@ body[data-frontend="workflows"] {
 .wf-palette-item.wf-dim {
   opacity: 0.35;
 }
+
+/* ---- Universal control port (`__gate__`) ----
+   The muted anchor a Gate's `pass` output wires into to gate a node. Distinct
+   from data ports (dashed, faint) so it doesn't read as another typed socket. */
+.wf-port.wf-port-control {
+  color: var(--fg-faint);
+}
+
+.wf-port-control .wf-port-dot {
+  background: transparent;
+  border-style: dashed;
+  border-color: var(--wf-domain-control);
+}
+
+/* ---- Run toolbar buttons ---- */
+
+#wfRunBtn {
+  margin-left: var(--space-2);
+}
+
+/* ---- Per-node run status (canvas tinting + progress) ---- */
+
+.wf-node.run-running {
+  box-shadow: 0 0 0 2px var(--accent);
+}
+
+.wf-node.run-completed {
+  border-left-color: var(--severity-positive);
+}
+
+.wf-node.run-failed {
+  box-shadow: 0 0 0 2px var(--severity-high);
+}
+
+.wf-node.run-skipped {
+  opacity: 0.55;
+}
+
+.wf-node-progress {
+  margin-top: var(--space-2);
+  height: 3px;
+  background: var(--bg-hover);
+  border-radius: var(--radius-full);
+  overflow: hidden;
+}
+
+.wf-node-progress-fill {
+  height: 100%;
+  width: 0;
+  background: var(--accent);
+  transition: width var(--duration-fast);
+}
+
+/* ---- Run/results panel ---- */
+
+.wf-run-card {
+  margin-bottom: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.wf-run-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.wf-run-status {
+  font-size: var(--text-xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.wf-run-status-running {
+  color: var(--accent);
+}
+.wf-run-status-completed {
+  color: var(--severity-positive);
+}
+.wf-run-status-failed {
+  color: var(--severity-high);
+}
+.wf-run-status-cancelled,
+.wf-run-status-queued {
+  color: var(--fg-faint);
+}
+
+.wf-run-meta {
+  font-size: var(--text-xs);
+  color: var(--fg-muted);
+}
+
+.wf-run-nodes {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin-top: var(--space-2);
+}
+
+.wf-run-node {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  font-size: var(--text-xs);
+  padding-left: var(--space-2);
+  border-left: 2px solid var(--border);
+}
+
+.wf-run-node-running {
+  border-left-color: var(--accent);
+}
+.wf-run-node-completed {
+  border-left-color: var(--severity-positive);
+}
+.wf-run-node-failed {
+  border-left-color: var(--severity-high);
+}
+.wf-run-node-skipped {
+  border-left-color: var(--fg-faint);
+  color: var(--fg-faint);
+}
+
+.wf-run-node-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wf-run-node-detail {
+  flex: 0 0 auto;
+  color: var(--fg-muted);
+}
+
+.wf-run-results {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  margin-top: var(--space-2);
+}
+
+.wf-run-chip {
+  font-size: var(--text-xs);
+  padding: 0 var(--space-2);
+  background: var(--bg-hover);
+  border-radius: var(--radius-full);
+  color: var(--fg-muted);
+}

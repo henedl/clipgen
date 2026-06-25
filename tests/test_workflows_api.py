@@ -1,11 +1,13 @@
 """Smoke tests for the Workflows Flask blueprint.
 
-Verifies the page serves, the node catalog endpoint, and blueprint CRUD (the
-canvas autosave target), mirroring tests/test_transcripts_api.py. Run endpoints
-get their own tests when that milestone (M4) lands.
+Verifies the page serves, the node catalog endpoint, blueprint CRUD (the canvas
+autosave target), and the M4 run lifecycle (create/list/cancel/SSE), mirroring
+tests/test_transcripts_api.py. The engine itself is covered in
+tests/test_workflows_runner.py; here we exercise the HTTP surface.
 """
 
 import json
+import time
 
 import pytest
 
@@ -24,11 +26,34 @@ def wf_client(tmp_path, monkeypatch):
     workflows_server._manifest = workflows.empty_workflows_manifest()
     workflows_server._input_dir = str(tmp_path)
     workflows_server._sheet_context = None
+    workflows_server._worksheet = None
+    # Reset run state so runners/SSE clients never leak across tests.
+    workflows_server._runs = {}
+    workflows_server._sse_clients = []
     # Sandbox save_workflows_manifest's write into tmp (it targets the output dir).
     monkeypatch.setattr(config, "OUTPUT_DIR", str(tmp_path), raising=False)
 
     with app.test_client() as c:
         yield c
+
+
+def _make_blueprint(client, nodes, edges=None):
+    bp = client.post("/workflows/api/blueprints", json={}).get_json()["blueprint"]
+    client.put(
+        f"/workflows/api/blueprints/{bp['id']}",
+        json={"nodes": nodes, "edges": edges or []},
+    )
+    return bp["id"]
+
+
+def _wait_terminal(client, run_id, timeout=5.0):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        run = client.get(f"/workflows/api/runs/{run_id}").get_json()["run"]
+        if run["status"] in ("completed", "failed", "cancelled"):
+            return run
+        time.sleep(0.02)
+    raise AssertionError(f"run {run_id} did not finish within {timeout}s")
 
 
 def test_page_serves(wf_client):
@@ -170,3 +195,116 @@ def test_blueprint_update_and_delete_404_on_missing(wf_client):
         == 404
     )
     assert wf_client.delete("/workflows/api/blueprints/bp_missing").status_code == 404
+
+
+# ---- Run lifecycle (M4) ----
+
+
+def test_run_executes_small_dag(wf_client, monkeypatch):
+    # No real media/Whisper/Ollama: empty video paths short-circuit transcribe to
+    # a stub, and Ollama is forced unavailable so summarize returns "".
+    monkeypatch.setattr(config, "DEBUGGING", True, raising=False)
+    import ollama_client
+
+    monkeypatch.setattr(ollama_client, "is_available", lambda: False)
+
+    bp_id = _make_blueprint(
+        wf_client,
+        nodes=[
+            {"id": "v", "type": "video_source", "params": {"participant": "P01"}},
+            {"id": "t", "type": "transcribe", "params": {}},
+            {"id": "s", "type": "summarize", "params": {}},
+        ],
+        edges=[
+            {"from": "v", "fromPort": "video", "to": "t", "toPort": "video"},
+            {"from": "t", "fromPort": "transcript", "to": "s", "toPort": "transcript"},
+        ],
+    )
+    created = wf_client.post("/workflows/api/runs", json={"blueprintId": bp_id})
+    assert created.status_code == 200
+    run = created.get_json()["run"]
+    assert run["id"].startswith("run_")
+    assert run["blueprintId"] == bp_id
+
+    final = _wait_terminal(wf_client, run["id"])
+    assert final["status"] == "completed"
+    assert {n["status"] for n in final["nodeStates"].values()} == {"completed"}
+
+
+def test_run_rejects_cycle_with_400(wf_client):
+    bp_id = _make_blueprint(
+        wf_client,
+        nodes=[
+            {"id": "a", "type": "gate", "params": {}},
+            {"id": "b", "type": "gate", "params": {}},
+        ],
+        edges=[
+            {"from": "a", "fromPort": "pass", "to": "b", "toPort": "value"},
+            {"from": "b", "fromPort": "pass", "to": "a", "toPort": "value"},
+        ],
+    )
+    resp = wf_client.post("/workflows/api/runs", json={"blueprintId": bp_id})
+    assert resp.status_code == 400
+    assert resp.get_json()["ok"] is False
+
+
+def test_run_missing_blueprint_404(wf_client):
+    resp = wf_client.post("/workflows/api/runs", json={"blueprintId": "bp_nope"})
+    assert resp.status_code == 404
+
+
+def test_runs_list_and_filter(wf_client):
+    bp_id = _make_blueprint(
+        wf_client, nodes=[{"id": "g", "type": "gate", "params": {}}]
+    )
+    run = wf_client.post("/workflows/api/runs", json={"blueprintId": bp_id}).get_json()[
+        "run"
+    ]
+    _wait_terminal(wf_client, run["id"])
+
+    listed = wf_client.get("/workflows/api/runs").get_json()["runs"]
+    assert any(r["id"] == run["id"] for r in listed)
+    filtered = wf_client.get(f"/workflows/api/runs?blueprintId={bp_id}").get_json()[
+        "runs"
+    ]
+    assert filtered and all(r["blueprintId"] == bp_id for r in filtered)
+    # An unrelated blueprint filter excludes it.
+    assert (
+        wf_client.get("/workflows/api/runs?blueprintId=bp_other").get_json()["runs"]
+        == []
+    )
+
+
+def test_run_get_404_when_unknown(wf_client):
+    assert wf_client.get("/workflows/api/runs/run_nope").status_code == 404
+
+
+def test_run_cancel_404_when_finished(wf_client):
+    bp_id = _make_blueprint(
+        wf_client, nodes=[{"id": "g", "type": "gate", "params": {}}]
+    )
+    run = wf_client.post("/workflows/api/runs", json={"blueprintId": bp_id}).get_json()[
+        "run"
+    ]
+    _wait_terminal(wf_client, run["id"])
+    # Still cancellable while the runner lives in _runs (no-op on a finished run),
+    # but an unknown id 404s.
+    assert wf_client.post("/workflows/api/runs/run_nope/cancel").status_code == 404
+
+
+def test_run_stream_is_event_stream(wf_client):
+    bp_id = _make_blueprint(
+        wf_client, nodes=[{"id": "g", "type": "gate", "params": {}}]
+    )
+    run = wf_client.post("/workflows/api/runs", json={"blueprintId": bp_id}).get_json()[
+        "run"
+    ]
+    _wait_terminal(wf_client, run["id"])
+    resp = wf_client.get(f"/workflows/api/runs/{run['id']}/stream")
+    assert resp.mimetype == "text/event-stream"
+    # Pull only the immediate first payload (the loop then blocks on keepalive).
+    first = next(iter(resp.response))
+    text = first.decode() if isinstance(first, bytes) else first
+    assert text.startswith("data:")
+    assert run["id"] in text
+    resp.close()

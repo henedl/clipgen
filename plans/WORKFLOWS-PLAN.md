@@ -254,8 +254,17 @@ the scan branch when duration ≤ N.
       and shared by `ss_scan` so multi-part participants work. `sheet_selection` reuses the pure
       `spreadsheet.generate_list` headless path. Executors are validated by direct invocation
       (`tests/test_workflows_executors.py`); the `WorkflowRunner` + run endpoints stay M4.
-- [ ] **M4 — Run engine.** `WorkflowRunner` (toposort, ready-set, per-node state, cancel), SSE +
-      polling, run/results panel, run history in manifest.
+- [x] **M4 — Run engine.** `WorkflowRunner` (Kahn toposort + cycle rejection, sequential ready-set,
+      per-node state, run-wide `cancel_event`, throttled progress, JSON-safe snapshot) in
+      `workflows.py`; run lifecycle in `workflows_server.py` (`POST /api/runs` validates the DAG and
+      spawns a daemon runner; `GET /api/runs(+/<id>)`, `POST /api/runs/<id>/cancel`,
+      `GET /api/runs/<id>/stream` per-run SSE mirroring `screenspace_server`; live runners in
+      `_runs`, manifest written at create + terminal only). Frontend `workflows-runs.js` satellite
+      (EventSource + `createPoller` fallback, run-history list + per-node rows, canvas status
+      tinting + progress bars) with Run/Stop in the toolbar. The **Gate** gates via a `control`
+      output + a universal optional `__gate__` input (exact-match wiring), skip-propagating a false
+      gate through the branch without feeding data. Tests: `test_workflows_runner.py` (engine),
+      `test_workflows_api.py` (run lifecycle), `test_workflows_frontend_source.py` (satellite wiring).
 - [ ] **M5 — Stashes.** Save selected sub-graph as named stash; stash palette; instantiate onto
       canvas.
 - [ ] **Phase 2 (out of scope here):** full node catalog; triggers + condition monitoring.
