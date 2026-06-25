@@ -497,7 +497,10 @@ def api_thumbnail(participant: str, start_seconds: str) -> FlaskResponse:
         return jsonify({"ok": False, "error": "No spreadsheet loaded"}), 404
 
     try:
-        start_sec = max(0, int(start_seconds))
+        # Parse via float so a fractional second (thumbnails are second-granular,
+        # so floor it) does not 400 the way bare int("12.5") would; matches the
+        # float-tolerant parsing the project's other media routes use.
+        start_sec = max(0, int(float(start_seconds)))
     except (ValueError, TypeError):
         return jsonify({"ok": False, "error": "Invalid timestamp"}), 400
     sources = _resolve_participant_sources(participant)

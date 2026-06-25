@@ -235,17 +235,33 @@ def _ffmpeg_pipe_frames(
     # Daemon thread drains stderr so the OS buffer never blocks ffmpeg, and
     # forwards every `pts_time:` line to the read loop as a float (seconds
     # since the seek point).
+    stop_drain = threading.Event()
+
     def _drain_stderr() -> None:
         assert proc.stderr is not None
         for line in proc.stderr:
+            if stop_drain.is_set():
+                break
             m = pts_re.search(line)
-            if m:
+            if not m:
+                continue
+            try:
+                value = float(m.group(1))
+            except ValueError:
+                continue
+            # Bounded put: when the consumer stops early (break below), the
+            # queue fills and an unbounded put() would wedge this thread
+            # forever. Time out and re-check stop_drain so the thread exits
+            # instead of leaking once we tear the subprocess down.
+            while not stop_drain.is_set():
                 try:
-                    pts_q.put(float(m.group(1)))
-                except ValueError:
-                    pass
+                    pts_q.put(value, timeout=0.2)
+                    break
+                except queue.Full:
+                    continue
 
-    threading.Thread(target=_drain_stderr, daemon=True).start()
+    drain_thread = threading.Thread(target=_drain_stderr, daemon=True)
+    drain_thread.start()
 
     try:
         while True:
@@ -266,9 +282,11 @@ def _ffmpeg_pipe_frames(
                 break
             yield (actual_ts, frame)
     finally:
+        stop_drain.set()
         if proc.stdout:
             proc.stdout.close()
         utils.terminate_subprocess(proc)
+        drain_thread.join(timeout=1.0)
 
 
 def _scan_via_ffmpeg_pipe(

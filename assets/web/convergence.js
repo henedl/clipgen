@@ -1106,7 +1106,7 @@
       var cellValue = (rawRow.cells && rawRow.cells[event.participant])
         ? rawRow.cells[event.participant].value : "";
       var parts = event.id.split("_");
-      var segIdx = parseInt(parts[parts.length - 1]) || 0;
+      var segIdx = parseInt(parts[parts.length - 1], 10) || 0;
       var baselineOffset2 = (cvState.baselines && cvState.baselines[event.participant]) || 0;
       var segs = parseClipSegmentsForCell(cellValue, baselineOffset2, CLIPGEN_CONFIG.defaultDuration);
       item.row = rawRow.rowNum;

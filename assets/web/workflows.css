@@ -1,16 +1,26 @@
 /* Workflows page — node-canvas frontend.
  *
- * M0 ships the three-pane shell (palette · canvas · runs) and empty states.
- * Shared design values come from tokens.css; page-specific structural widths
- * live here as page-local --wf-* vars (per the tokens rule: shared tokens stay
- * in tokens.css, page-locals stay in the page file). The canvas, cards, and
- * SVG wires get their own rules in later milestones.
+ * The three-pane shell (palette · canvas · runs), the pan/zoom canvas, node
+ * cards with typed-port markers, the blueprint switcher toolbar, and marquee
+ * selection. Shared design values come from tokens.css; page-specific values
+ * live here as page-local --wf-* vars (per the tokens rule). SVG wires + param
+ * editors land in M2.
  */
 
 :root {
   /* Page-local structural dimensions (not shared design tokens). */
   --wf-topnav-height: 48px; /* matches the fixed .topnav height */
   --wf-panel-width: 16rem;
+  --wf-grid-size: 24px; /* dot-grid cell at zoom 1; JS scales it with zoom */
+  --wf-node-width: 11rem;
+
+  /* Per-domain accent stripe colours — mapped onto the theme-aware task tokens
+     so cards stay legible in both themes (page-local: not shared design tokens). */
+  --wf-domain-artifact: var(--color-task-multitool);
+  --wf-domain-screenspace: var(--color-task-similarity);
+  --wf-domain-transcript: var(--color-task-color);
+  --wf-domain-thinking: var(--color-task-text);
+  --wf-domain-control: var(--color-task-change);
 }
 
 body[data-frontend="workflows"] {
@@ -69,21 +79,234 @@ body[data-frontend="workflows"] {
   line-height: 1.5;
 }
 
+.hidden {
+  display: none !important;
+}
+
+/* ---- Canvas pane: toolbar + pannable canvas ---- */
+
 #wfCanvasWrap {
   flex: 1;
   min-width: 0;
-  position: relative;
-  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+#wfToolbar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  background: var(--bg-elevated);
+  border-bottom: 1px solid var(--border);
+}
+
+.wf-toolbar-label {
+  font-size: var(--text-xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--fg-muted);
+}
+
+#wfBlueprintSelect,
+#wfBlueprintName {
+  background: var(--bg-input);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: var(--space-1) var(--space-2);
+  font-size: var(--text-sm);
+  font-family: inherit;
+}
+
+#wfBlueprintName {
+  flex: 1;
+  min-width: 4rem;
+}
+
+#wfDeleteBlueprint {
+  margin-left: var(--space-1);
 }
 
 .wf-canvas {
-  position: absolute;
-  inset: 0;
-  /* Subtle dot grid so the canvas reads as a workspace even when empty. */
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  cursor: grab;
+  /* Subtle dot grid so the canvas reads as a workspace even when empty. JS
+     drives background-position/size inline to pan/scale the grid with the
+     viewport; the values here are the zoom-1, no-pan defaults. */
   background-color: var(--bg);
   background-image: radial-gradient(var(--border) 1px, transparent 1px);
-  background-size: 24px 24px;
+  background-size: var(--wf-grid-size) var(--wf-grid-size);
 }
+
+.wf-canvas.panning {
+  cursor: grabbing;
+}
+
+/* The transformed "world" layer: a zero-size anchor whose translate()/scale()
+   moves and scales every absolutely-positioned card child together. */
+.wf-world {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 0;
+  height: 0;
+  transform-origin: 0 0;
+  will-change: transform;
+}
+
+/* ---- Node cards ---- */
+
+.wf-node {
+  position: absolute;
+  width: var(--wf-node-width);
+  box-sizing: border-box;
+  padding: var(--space-3);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-md);
+  font-size: var(--text-sm);
+  cursor: grab;
+  user-select: none;
+}
+
+.wf-node.selected {
+  border-color: var(--accent);
+  box-shadow: var(--shadow-focus);
+}
+
+.wf-node-title {
+  font-weight: 600;
+}
+
+.wf-node-domain {
+  font-size: var(--text-xs);
+  color: var(--fg-muted);
+  text-transform: capitalize;
+}
+
+/* Per-domain accent stripe, shared by palette rows and placed cards. */
+.wf-node[data-domain="artifact"],
+.wf-palette-item[data-domain="artifact"] {
+  border-left-color: var(--wf-domain-artifact);
+}
+.wf-node[data-domain="screenspace"],
+.wf-palette-item[data-domain="screenspace"] {
+  border-left-color: var(--wf-domain-screenspace);
+}
+.wf-node[data-domain="transcript"],
+.wf-palette-item[data-domain="transcript"] {
+  border-left-color: var(--wf-domain-transcript);
+}
+.wf-node[data-domain="thinking"],
+.wf-palette-item[data-domain="thinking"] {
+  border-left-color: var(--wf-domain-thinking);
+}
+.wf-node[data-domain="control"],
+.wf-palette-item[data-domain="control"] {
+  border-left-color: var(--wf-domain-control);
+}
+
+.wf-node-ports {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+
+.wf-port-col {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.wf-port-col.outputs {
+  text-align: right;
+}
+
+.wf-port {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: var(--text-xs);
+  color: var(--fg-muted);
+}
+
+.wf-port-col.outputs .wf-port {
+  flex-direction: row-reverse;
+}
+
+/* Anchor dot — non-interactive in M1; M2 hooks wire drag onto it. */
+.wf-port-dot {
+  flex: 0 0 auto;
+  width: 0.55rem;
+  height: 0.55rem;
+  border-radius: var(--radius-full);
+  background: var(--bg-hover);
+  border: 1px solid var(--border);
+}
+
+.wf-port.optional .wf-port-dot {
+  background: transparent;
+}
+
+/* ---- Marquee selection (drawn in canvas/screen coords) ---- */
+
+.wf-marquee {
+  position: absolute;
+  border: 1px dashed var(--accent);
+  background: var(--color-accent-highlight);
+  z-index: var(--z-float);
+  pointer-events: none;
+}
+
+/* ---- Palette ---- */
+
+.wf-palette-group-label {
+  margin: var(--space-3) 0 var(--space-1);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--fg-faint);
+}
+
+.wf-palette-group-label:first-child {
+  margin-top: 0;
+}
+
+.wf-palette-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-bottom: var(--space-1);
+  padding: var(--space-2);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-size: var(--text-sm);
+  cursor: grab;
+}
+
+.wf-palette-item:hover {
+  background: var(--bg-hover);
+}
+
+.wf-palette-item.disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/* ---- Canvas empty-state ---- */
 
 .wf-canvas-empty {
   position: absolute;
@@ -114,4 +337,29 @@ body[data-frontend="workflows"] {
 .wf-canvas-empty .wf-empty-sub {
   font-size: var(--text-sm);
   color: var(--fg-faint);
+}
+
+/* ---- Load gate (loading / error) ---- */
+
+.wf-canvas-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: var(--z-overlay);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-3);
+  text-align: center;
+  padding: var(--space-6);
+  /* Opaque so a half-rendered / unready canvas is never shown beneath, and so
+     the overlay intercepts pointer events while not ready. */
+  background: var(--bg);
+}
+
+.wf-overlay-msg {
+  margin: 0;
+  max-width: 28rem;
+  font-size: var(--text-base);
+  color: var(--fg-muted);
 }

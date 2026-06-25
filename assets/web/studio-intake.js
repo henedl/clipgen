@@ -117,7 +117,7 @@
   }
 
   function reclusterIntake() {
-    var threshold = parseInt((qs("#intakeClusterThreshold") || {}).value) || 10;
+    var threshold = parseInt((qs("#intakeClusterThreshold") || {}).value, 10) || 10;
     state.intakeClusters = clusterIntakeEvents(intakeClusterSource(), threshold);
     renderIntake(false);
   }
@@ -167,7 +167,7 @@
           }
         });
         state.intakeEvents = events;
-        var threshold = parseInt((qs("#intakeClusterThreshold") || {}).value) || 10;
+        var threshold = parseInt((qs("#intakeClusterThreshold") || {}).value, 10) || 10;
         state.intakeClusters = clusterIntakeEvents(intakeClusterSource(), threshold);
         renderIntake(hasNew);
         checkConvergenceTabVisibility();
@@ -674,7 +674,7 @@
     cards.addEventListener("click", function (e) {
       var card = e.target.closest(cfg.cardSel);
       if (!card) return;
-      var cluster = cfg.filtered()[parseInt(card.dataset[cfg.idxAttr])];
+      var cluster = cfg.filtered()[parseInt(card.dataset[cfg.idxAttr], 10)];
       if (!cluster) return;
       if (e.shiftKey) cfg.toggleReel(cluster);
       else cfg.toggleArtifacts(cluster);
@@ -685,7 +685,7 @@
       var card = e.target.closest(cfg.cardSel);
       if (!card) return;
       e.preventDefault();
-      var cluster = cfg.filtered()[parseInt(card.dataset[cfg.idxAttr])];
+      var cluster = cfg.filtered()[parseInt(card.dataset[cfg.idxAttr], 10)];
       if (cluster) cfg.onDismiss(cluster);
     });
 
@@ -693,7 +693,7 @@
     cards.addEventListener("mouseover", function (e) {
       var card = e.target.closest(cfg.cardSel);
       if (!card) return;
-      var idx = parseInt(card.dataset[cfg.idxAttr]);
+      var idx = parseInt(card.dataset[cfg.idxAttr], 10);
       if (state[cfg.hoveredIdxKey] !== idx) {
         state[cfg.hoveredIdxKey] = idx;
         cfg.highlightCard(idx);
@@ -738,7 +738,7 @@
     var thresholdInput = qs(cfg.thresholdSel);
     if (thresholdInput) {
       thresholdInput.addEventListener("change", function () {
-        cfg.onThresholdChange(parseInt(this.value) || 5);
+        cfg.onThresholdChange(parseInt(this.value, 10) || 5);
       });
     }
 
@@ -788,7 +788,7 @@
     apiGet("../transcripts/api/marks")
       .then(function (data) {
         if (!data.ok) return;
-        var threshold = parseInt((qs("#trIntakeClusterThreshold") || {}).value) || 10;
+        var threshold = parseInt((qs("#trIntakeClusterThreshold") || {}).value, 10) || 10;
         if (!state.trIntakeShowAll) {
           var fp =
             String(threshold) +

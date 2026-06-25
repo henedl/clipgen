@@ -19,22 +19,35 @@ def tr_client(tmp_path, monkeypatch):
     app = Flask(__name__)
     app.register_blueprint(transcripts_server.transcripts_bp, url_prefix="/transcripts")
 
-    transcripts_server._manifest = {
-        "source_transcripts": {},
-        "corrections": [],
-        "marks": [],
-    }
-    transcripts_server._corrected_cache.clear()
-    transcripts_server._participants = [
+    # Seed module globals via monkeypatch so they auto-restore on teardown —
+    # otherwise a later test that reads these globals without the fixture would
+    # inherit this test's state (matters under random ordering).
+    monkeypatch.setattr(
+        transcripts_server,
+        "_manifest",
         {
-            "id": "P01",
-            "video_paths": [str(tmp_path / "study_P01.mp4")],
-            "has_video": False,
-        }
-    ]
-    transcripts_server._worker = None
-    transcripts_server._input_dir = str(tmp_path)
-    transcripts_server._transcript_model_warming = False
+            "source_transcripts": {},
+            "corrections": [],
+            "marks": [],
+        },
+    )
+    monkeypatch.setattr(
+        transcripts_server,
+        "_participants",
+        [
+            {
+                "id": "P01",
+                "video_paths": [str(tmp_path / "study_P01.mp4")],
+                "has_video": False,
+            }
+        ],
+    )
+    monkeypatch.setattr(transcripts_server, "_worker", None)
+    monkeypatch.setattr(transcripts_server, "_input_dir", str(tmp_path))
+    monkeypatch.setattr(transcripts_server, "_transcript_model_warming", False)
+    # Fresh corrected-segments cache + merged-task set per test (auto-restored).
+    monkeypatch.setattr(transcripts_server, "_corrected_cache", {})
+    monkeypatch.setattr(transcripts_server, "_merged_task_ids", set())
 
     monkeypatch.setattr(viewer, "load_manifest_artifacts", lambda: [])
 
@@ -1015,9 +1028,9 @@ def test_corrected_segments_cached_and_invalidated_on_correction(
 def test_persist_keeps_corrected_cache_for_unchanged_transcription(
     tr_client, monkeypatch
 ):
-    """A persist must not invalidate the corrected cache just because
-    get_all_tasks() hands back fresh deepcopies — only a changed transcription
-    (different transcribed_at) should bump the version."""
+    """The corrected cache is bumped when a task's segments are first merged,
+    but a later persist of the same (already-merged) task must not bump it
+    again — otherwise the memoization would clear on every debounced write."""
     import copy as _copy
 
     completed = {
@@ -1295,3 +1308,144 @@ def test_api_models_includes_cached_and_agents(monkeypatch):
     assert {a["key"] for a in agents} == {"summary", "citations", "friction"}
     # The configured summary/friction model is present in the faked install list.
     assert all(a["installed"] for a in agents)
+
+
+# ---- Completed-task merge semantics ----
+
+
+class _CompletedTasksWorker:
+    """Minimal worker stub exposing get_all_tasks for merge tests."""
+
+    def __init__(self, tasks):
+        self._tasks = tasks
+
+    def get_all_tasks(self):
+        return self._tasks
+
+
+def test_merge_completed_results_does_not_clobber_edited_segments(monkeypatch):
+    """A completed task's frozen result is merged exactly once. A later persist
+    must not re-apply its original segments over in-memory edits."""
+    pid = "P01"
+    task = {
+        "id": "tr_abc123",
+        "participant": pid,
+        "status": transcripts.TASK_STATUS_COMPLETED,
+        "result": {
+            "segments": [{"id": "s0", "text": "original"}],
+            "language": "en",
+        },
+    }
+    monkeypatch.setattr(
+        transcripts_server, "_manifest", {"source_transcripts": {}}, raising=False
+    )
+    monkeypatch.setattr(
+        transcripts_server,
+        "_worker",
+        cast("transcripts.TranscriptWorker", _CompletedTasksWorker([task])),
+        raising=False,
+    )
+    transcripts_server._merged_task_ids.clear()
+
+    transcripts_server._merge_completed_results_locked()
+    src = transcripts_server._manifest["source_transcripts"]
+    assert src[pid]["segments"][0]["text"] == "original"
+    assert "tr_abc123" in transcripts_server._merged_task_ids
+
+    # Simulate an in-memory edit to the segments, then persist again.
+    src[pid]["segments"][0]["text"] = "edited"
+    transcripts_server._merge_completed_results_locked()
+
+    # The edit survives — the task is not re-merged.
+    assert src[pid]["segments"][0]["text"] == "edited"
+
+
+def test_merge_completed_results_new_task_wins(monkeypatch):
+    """Re-transcription mints a new task id, so its fresh segments merge once
+    and overwrite the previous result."""
+    pid = "P01"
+    old = {
+        "id": "tr_old",
+        "participant": pid,
+        "status": transcripts.TASK_STATUS_COMPLETED,
+        "result": {"segments": [{"id": "s0", "text": "old"}]},
+    }
+    monkeypatch.setattr(
+        transcripts_server, "_manifest", {"source_transcripts": {}}, raising=False
+    )
+    monkeypatch.setattr(
+        transcripts_server,
+        "_worker",
+        cast("transcripts.TranscriptWorker", _CompletedTasksWorker([old])),
+        raising=False,
+    )
+    transcripts_server._merged_task_ids.clear()
+    transcripts_server._merge_completed_results_locked()
+
+    new = {
+        "id": "tr_new",
+        "participant": pid,
+        "status": transcripts.TASK_STATUS_COMPLETED,
+        "result": {"segments": [{"id": "s0", "text": "new"}]},
+    }
+    transcripts_server._worker = cast(
+        "transcripts.TranscriptWorker", _CompletedTasksWorker([old, new])
+    )
+    transcripts_server._merge_completed_results_locked()
+
+    assert (
+        transcripts_server._manifest["source_transcripts"][pid]["segments"][0]["text"]
+        == "new"
+    )
+
+
+def test_on_task_complete_refreshes_agents_on_retranscription(monkeypatch):
+    """A re-transcription (new task id) for a participant who already has AI
+    outputs must clear those outputs and re-run the agent chain, not leave
+    them stale against the old transcript."""
+    pid = "P01"
+    # Participant already has a full set of AI outputs from a prior run.
+    monkeypatch.setattr(
+        transcripts_server,
+        "_manifest",
+        {
+            "source_transcripts": {
+                pid: {
+                    "segments": [{"id": "s0", "text": "old"}],
+                    "summary": {"paragraph": "stale"},
+                    "citations": {"claims": []},
+                    "friction": {"moments": []},
+                }
+            }
+        },
+        raising=False,
+    )
+    new_task = {
+        "id": "tr_new",
+        "participant": pid,
+        "status": transcripts.TASK_STATUS_COMPLETED,
+        "result": {"segments": [{"id": "s0", "text": "fresh"}]},
+    }
+    monkeypatch.setattr(
+        transcripts_server,
+        "_worker",
+        cast("transcripts.TranscriptWorker", _CompletedTasksWorker([new_task])),
+        raising=False,
+    )
+    transcripts_server._merged_task_ids.clear()
+
+    chained: list[str] = []
+    monkeypatch.setattr(
+        transcripts_server._orchestrator, "run_chain", lambda p: chained.append(p)
+    )
+    monkeypatch.setattr(transcripts, "save_transcripts_manifest", lambda *a, **k: None)
+
+    transcripts_server._on_task_complete()
+
+    entry = transcripts_server._manifest["source_transcripts"][pid]
+    # New segments merged; stale agent outputs cleared.
+    assert entry["segments"][0]["text"] == "fresh"
+    for agent in thinking_agents.AGENTS:
+        assert agent["manifest_field"] not in entry
+    # Chain re-run for the participant.
+    assert chained == [pid]

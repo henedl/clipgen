@@ -32,6 +32,34 @@ def test_timestamp_to_seconds_valid_and_invalid():
     assert utils.timestamp_to_seconds("not-a-time") is None
 
 
+def test_timestamp_to_seconds_allows_minutes_over_59_in_mmss():
+    # MM:SS with minutes >= 60 is a valid way to write a long-session offset
+    # without an hours component; it must parse rather than be dropped.
+    assert utils.timestamp_to_seconds("75:00") == 4500.0
+    assert utils.timestamp_to_seconds("90:30") == 5430.0
+    # Single MM:SS over 59 minutes also flows through parse_timestamps.
+    assert utils.parse_timestamps("75:00") == [("75:00", utils.add_duration("75:00"))]
+    # Seconds field still bounded to < 60, and minutes in HH:MM:SS to < 60.
+    assert utils.timestamp_to_seconds("10:60") is None
+    assert utils.timestamp_to_seconds("01:60:00") is None
+    assert utils.timestamp_to_seconds("1:2:3:4") is None
+
+
+def test_seconds_to_timestamp_handles_float_input():
+    # Shared helper: a float arg must not crash the int format specs.
+    assert utils.seconds_to_timestamp(75.9) == "1:15"
+    assert utils.seconds_to_timestamp(3723.0, force_hours=True) == "1:02:03"
+    assert utils.seconds_to_timestamp(-5) == "0:00"
+
+
+def test_format_filesize_promotes_at_exact_power_of_1024():
+    # >= boundary: an exact KiB/MiB must promote to the next unit.
+    assert utils.format_filesize(1024) == "1.00KB"
+    assert utils.format_filesize(1024 * 1024) == "1.00MB"
+    assert utils.format_filesize(512) == "512.00B"
+    assert utils.format_filesize(1536) == "1.50KB"
+
+
 def test_convert_clock_pairs_to_relative_uses_baseline_and_skips_invalid():
     pairs = [("22:02:12", "22:02:45"), ("22:01:00", "22:01:30")]
     baseline = "22:00"  # HH:MM = 22:00:00

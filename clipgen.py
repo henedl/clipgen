@@ -607,7 +607,7 @@ def _run_reel_mode_interactive(
             f"  ... and {len(clips_list) - config.REEL_PREVIEW_CLIP_COUNT} more"
         )
     yn = utils.read_user_input("\nGenerate reel? [y/n]\n>> ")
-    if yn != "y":
+    if yn.strip().lower() != "y":
         return ([], False, None)
 
     study_name = clips_list[0].get("study", "").strip() if clips_list else ""
@@ -1190,7 +1190,7 @@ def run_interactive_mode(worksheet: Any, gspread_client: Any = None) -> None:
                 yn = utils.read_user_input(
                     "Continue working (y) or quit the program (n)? [y/n]\n>> "
                 )
-                if yn == "n":
+                if yn.strip().lower() == "n":
                     break
                 continue
             if is_reel:
@@ -1234,7 +1234,7 @@ def run_interactive_mode(worksheet: Any, gspread_client: Any = None) -> None:
             yn = utils.read_user_input(
                 "Continue working (y) or quit the program (n)? [y/n]\n>> "
             )
-            if yn == "n":
+            if yn.strip().lower() == "n":
                 break
         except gspread.exceptions.GSpreadException as e:
             utils.error_print(f"Google Sheets API error: {e}")

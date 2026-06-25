@@ -122,7 +122,11 @@ def test_process_reel_concatenates_and_cleans_temp_parts(monkeypatch, make_clip)
     assert result == 1
     concat.assert_called_once()
     concat_args = concat.call_args.args[0]
-    assert concat_args == generated_parts
+    # process_reel generates segments via a ThreadPoolExecutor, so the order in
+    # which unique_name() appends to generated_parts is nondeterministic. Compare
+    # as a set: the parts-in-segment-order contract is covered by the cellRow
+    # assertions on reel["components"] below.
+    assert sorted(concat_args) == sorted(generated_parts)
     assert unlink.call_count == len(generated_parts)
 
     assert len(reel_records) == 1
@@ -903,3 +907,97 @@ def test_regenerate_single_artifact_applies_titlecards_from_manifest(monkeypatch
     without_cards["titlecards"] = False
     assert pipeline._regenerate_single_artifact(without_cards, set()) is True
     assert wrap_calls == []
+
+
+# ---- pure helpers ----
+
+
+def test_is_excel_worksheet_true_for_local(make_clip):
+    from types import SimpleNamespace
+
+    excel = SimpleNamespace(spreadsheet=SimpleNamespace(url=None))
+    assert pipeline.is_excel_worksheet(excel) is True
+
+
+def test_is_excel_worksheet_false_for_gsheet_and_missing(make_clip):
+    from types import SimpleNamespace
+
+    gsheet = SimpleNamespace(spreadsheet=SimpleNamespace(url="https://x"))
+    assert pipeline.is_excel_worksheet(gsheet) is False
+    assert pipeline.is_excel_worksheet(SimpleNamespace()) is False
+
+
+def test_resolve_clip_workers_explicit_and_auto(monkeypatch):
+    monkeypatch.setattr(config, "CLIP_PARALLEL_WORKERS", 7)
+    assert pipeline._resolve_clip_workers() == 7
+
+    monkeypatch.setattr(config, "CLIP_PARALLEL_WORKERS", 0)
+    monkeypatch.setattr(pipeline.os, "cpu_count", lambda: 16)
+    assert pipeline._resolve_clip_workers() == 4  # capped at 4
+
+    monkeypatch.setattr(pipeline.os, "cpu_count", lambda: 2)
+    assert pipeline._resolve_clip_workers() == 2  # below cap -> cpu count
+
+
+def test_resolve_titlecard_options_defaults_and_overrides(monkeypatch):
+    monkeypatch.setattr(config, "TITLECARDS_ENABLED", True)
+    monkeypatch.setattr(config, "TITLECARD_DURATION_SECONDS", 3)
+    # None -> fall back to config.
+    assert pipeline._resolve_titlecard_options(None, None) == (True, 3)
+    # Explicit values win over the config defaults.
+    assert pipeline._resolve_titlecard_options(False, 5) == (False, 5)
+
+
+def test_compute_reel_id_is_deterministic_and_order_independent():
+    a = {"cellRow": 3, "cellCol": 2, "start": "0", "end": "10"}
+    b = {"cellRow": 4, "cellCol": 2, "start": "5", "end": "15"}
+    id_ab = pipeline.compute_reel_id([a, b])
+    id_ba = pipeline.compute_reel_id([b, a])
+    assert id_ab == id_ba  # sorted internally
+    assert id_ab.startswith("reel_")
+    # A different component set yields a different id.
+    c = {"cellRow": 9, "cellCol": 9, "start": "0", "end": "1"}
+    assert pipeline.compute_reel_id([a, c]) != id_ab
+
+
+def test_run_clip_pipeline_cancel_captures_started_clip_results(monkeypatch):
+    """On cancel, results from futures that already started running must not be
+    dropped — otherwise the files they produced (e.g. reel _reel_part_* segments)
+    are orphaned because the caller's cancel cleanup never sees their paths."""
+    import threading
+    import time
+
+    monkeypatch.setattr(pipeline, "_resolve_clip_workers", lambda: 2)
+
+    ran: list[int] = []
+    ran_lock = threading.Lock()
+
+    def per_clip(clip, _missing):
+        with ran_lock:
+            ran.append(clip["id"])
+        time.sleep(0.1)  # keep the future running across the cancel
+        return ([(f"/tmp/_reel_part_{clip['id']}.mp4", 0)], [])
+
+    def cancel_flag():
+        # Cancel as soon as at least one clip has begun executing.
+        with ran_lock:
+            return len(ran) >= 1
+
+    clips = [{"id": i, "desc": f"c{i}", "participant": "P01"} for i in range(6)]
+    results, _missing = pipeline._run_clip_pipeline(
+        clips,
+        empty_warning="",
+        intro_message="",
+        task_label="t",
+        per_clip_fn=per_clip,
+        parallel=True,
+        cancel_flag=cancel_flag,
+    )
+
+    # Every clip that started running is represented in the results (none
+    # orphaned); clips cancelled before starting are absent.
+    assert len(results) == len(ran)
+    assert all(r is not None for r in results)
+    # Each captured result is the proper (segment_paths, components) tuple shape.
+    for segment_paths, components in results:
+        assert isinstance(segment_paths, list)

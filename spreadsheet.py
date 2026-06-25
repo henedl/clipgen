@@ -1125,6 +1125,10 @@ def generate_range_timestamps(
     """
     clips = []
     for i in range(start_line - 1, end_line):
+        # Skip the Filename override row like every other generator; its cells
+        # hold per-column source-video names, not timestamps.
+        if ctx.filename_row_idx is not None and i == ctx.filename_row_idx:
+            continue
         utils.debug_print(f"Batching on line {i}")
         clips.extend(get_line_timestamps(ctx, i))
     return clips

@@ -10,6 +10,15 @@ import screenspace_primitives
 import screenspace_scans
 
 
+class _FakeReader:
+    """Default OCR reader stub: detects nothing. Lets tests exercise scan
+    plumbing without loading the real EasyOCR model. Tests needing specific
+    detections define their own local _FakeReader."""
+
+    def readtext(self, _pixels, **_kwargs):
+        return []
+
+
 class TestOcrPreprocess:
     def test_small_roi_upscaled(self):
         """Crops shorter than the min height are upscaled, preserving aspect."""
@@ -445,7 +454,13 @@ class TestScanNumbers:
                 target_value=100,
             )
 
-    def test_valid_operators_accepted(self):
+    def test_valid_operators_accepted(self, monkeypatch):
+        # scan_numbers builds the OCR reader before opening the video, so a
+        # missing-video test would otherwise download/load the real EasyOCR
+        # model. Stub it out to stay fast and offline.
+        monkeypatch.setattr(
+            screenspace_scans, "_get_ocr_reader", lambda _langs: _FakeReader()
+        )
         for op in ("eq", "gt", "lt", "gte", "lte", "range"):
             # Should not raise ValueError -- returns [] because video doesn't exist
             result = screenspace.scan_numbers(
@@ -458,7 +473,11 @@ class TestScanNumbers:
             )
             assert result == []
 
-    def test_dispatch_routes_numbers(self):
+    def test_dispatch_routes_numbers(self, monkeypatch):
+        # Same reason as test_valid_operators_accepted: avoid loading real OCR.
+        monkeypatch.setattr(
+            screenspace_scans, "_get_ocr_reader", lambda _langs: _FakeReader()
+        )
         worker = screenspace.ScreenspaceWorker()
         task = screenspace.create_task(
             "numbers",

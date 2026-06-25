@@ -692,6 +692,27 @@ def _run_clip_pipeline(
         if on_clip_complete is not None:
             on_clip_complete(completed_count, total_clips)
 
+    def _drain_ran_futures(
+        future_to_idx: dict[concurrent.futures.Future[Any], int],
+        results: list[Any],
+    ) -> None:
+        """Capture results from futures that ran to completion but were not
+        collected because the as_completed loop broke on cancel.
+
+        The pool's ``__exit__`` waits for already-running futures, so by the
+        time this runs every started future is done. Collecting their results
+        keeps any files they produced tracked (e.g. reel ``_reel_part_*``
+        segments) so the caller's cancel cleanup can remove them instead of
+        orphaning them. Futures cancelled before starting stay ``None`` and are
+        filtered out by the caller.
+        """
+        for fut, idx in future_to_idx.items():
+            if results[idx] is None and fut.done() and not fut.cancelled():
+                try:
+                    results[idx] = fut.result()
+                except Exception:
+                    results[idx] = None
+
     if use_parallel:
         results: list[Any] = [None] * total_clips
         progress = utils.create_progress_bar()
@@ -725,6 +746,7 @@ def _run_clip_pipeline(
                             results[idx] = []
                         progress.update(task, advance=1)
                         _notify_clip_done()
+                _drain_ran_futures(future_to_idx, results)
             _active_progress = None
             _active_secondary_task = None
         else:
@@ -752,6 +774,7 @@ def _run_clip_pipeline(
                         )
                         results[idx] = []
                     _notify_clip_done()
+            _drain_ran_futures(future_to_idx, results)
     else:
         results = []
         progress = utils.create_progress_bar()
