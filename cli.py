@@ -2407,47 +2407,6 @@ def _build_clusters_from_transcript_segments(
     return out
 
 
-def _make_synthetic_clip_record(
-    *,
-    cluster_idx: int,
-    cell_col: int,
-    study: str,
-    participant: str,
-    desc: str,
-    category: str,
-    severity: str,
-    start_seconds: float,
-    end_seconds: float,
-    source_filename: str,
-) -> ClipRecord:
-    """Build a ClipRecord with synthetic cell + pre-filled times.
-
-    Uses negative cell rows (unreachable for real spreadsheets) and a per-mode
-    column to namespace artifact ids. The pre-filled ``times`` triggers the
-    fast path in :func:`files.prepare_clip` so the cell value is never read.
-    """
-    from types import SimpleNamespace
-
-    start_ts = utils.seconds_to_timestamp(int(start_seconds), force_hours=True)
-    end_ts = utils.seconds_to_timestamp(
-        max(int(end_seconds), int(start_seconds) + 1), force_hours=True
-    )
-    cell = SimpleNamespace(value="", row=-(cluster_idx + 1), col=cell_col)
-    record: ClipRecord = {
-        "cell": cell,
-        "desc": desc,
-        "study": study,
-        "participant": participant,
-        "category": category,
-        "severity": severity,
-        "times": [(start_ts, end_ts)],
-        "source_filename": source_filename,
-        "cell_annotations": [],
-        "segment_annotations": {},
-    }
-    return record
-
-
 def _truncate_for_filename(text: str, *, limit: int = 60) -> str:
     """Trim a text snippet for use in a clip description (filename-safe upstream)."""
     text = " ".join(text.split())
@@ -2512,18 +2471,16 @@ def _run_ss_clips(args: argparse.Namespace) -> None:
             desc_parts.append(region)
         desc = " ".join(p for p in desc_parts if p).strip() or "event"
         category = f"screenspace-{detector}" if detector else "screenspace"
-        clips_list.append(
-            _make_synthetic_clip_record(
-                cluster_idx=idx,
-                cell_col=_SS_CLIPS_CELL_COL,
-                study=study,
+        clips_list.extend(
+            files.build_clip_records(
                 participant=participant,
-                desc=desc,
-                category=category,
-                severity="",
-                start_seconds=cluster["start"],
-                end_seconds=cluster["end"],
                 source_filename=source_video,
+                time_ranges=[(cluster["start"], cluster["end"])],
+                description=desc,
+                category=category,
+                study=study,
+                cell_col=_SS_CLIPS_CELL_COL,
+                cell_row_base=idx,
             )
         )
         last_study = study or last_study
@@ -2601,18 +2558,16 @@ def _run_transcript_clips(args: argparse.Namespace) -> None:
             category = f"mark-{primary}"
         else:
             category = "transcript"
-        clips_list.append(
-            _make_synthetic_clip_record(
-                cluster_idx=idx,
-                cell_col=_TRANSCRIPT_CLIPS_CELL_COL,
-                study=study,
+        clips_list.extend(
+            files.build_clip_records(
                 participant=participant,
-                desc=desc,
-                category=category,
-                severity="",
-                start_seconds=cluster["start"],
-                end_seconds=cluster["end"],
                 source_filename=source_video,
+                time_ranges=[(cluster["start"], cluster["end"])],
+                description=desc,
+                category=category,
+                study=study,
+                cell_col=_TRANSCRIPT_CLIPS_CELL_COL,
+                cell_row_base=idx,
             )
         )
         last_study = study or last_study
