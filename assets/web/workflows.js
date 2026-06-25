@@ -187,16 +187,14 @@
   function deleteBlueprint(id) {
     if (!id) return;
     cancelSave(); // don't resurrect the row we're about to delete
+    // Clear the active id up front so any autosave PUT already in flight for it
+    // is a no-op (flushSave bails on a falsy id), not after the DELETE resolves.
+    state.activeBlueprintId = null;
     apiDelete("api/blueprints/" + encodeURIComponent(id))
-      .then(function (res) {
-        if (!res || !res.ok) {
-          showToast("Failed to delete blueprint");
-          return;
-        }
+      .then(function () {
         state.blueprints = state.blueprints.filter(function (b) {
           return b.id !== id;
         });
-        state.activeBlueprintId = null; // so the next open's flushSave is a no-op
         if (state.blueprints.length) {
           populateSelect();
           openBlueprint(state.blueprints[0]);
