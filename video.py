@@ -405,11 +405,24 @@ def _add_ffmpeg_stderr(
 
 
 def verify_output_file(output_file: str, operation_label: str) -> bool:
-    """Return True when an expected ffmpeg output file exists, otherwise log an error."""
-    if Path(output_file).is_file():
-        return True
+    """Return True when an ffmpeg output file exists and is non-empty.
+
+    Callers reserve the output path up front via ``files.get_unique_filename()``,
+    which pre-creates a zero-byte placeholder. An existence-only check therefore
+    always passed once reservations landed — so an ffmpeg run that exited 0 but
+    wrote nothing (e.g. a degenerate span) left the empty placeholder on disk,
+    counted as a successful artifact and never released. Require a non-empty file
+    so callers route the empty-output case into their normal failure path (which
+    releases the reservation / unlinks the placeholder).
+    """
+    try:
+        if Path(output_file).stat().st_size > 0:
+            return True
+    except OSError:
+        pass  # missing (FileNotFoundError) or unstattable → treat as failure
     utils.error_print(
-        f"{operation_label} completed but output file was not created: '{output_file}'"
+        f"{operation_label} completed but produced an empty or missing output "
+        f"file: '{output_file}'"
     )
     return False
 
@@ -1182,7 +1195,9 @@ def get_file_duration(filepath: str) -> int | None:
         return None
     cached_dur = _file_duration_cache.get(key)
     if cached_dur is not None:
-        return cached_dur
+        # -1 is a sentinel recording a prior probe that couldn't determine the
+        # duration, so repeat calls skip re-running the full probe chain.
+        return cached_dur if cached_dur >= 0 else None
 
     cached_props = _video_properties_cache.get(key)
     if cached_props is not None:
@@ -1201,8 +1216,7 @@ def get_file_duration(filepath: str) -> int | None:
             return rounded
 
     dur = _probe_duration_seconds_ffprobe_format(filepath)
-    if dur is not None:
-        _file_duration_cache[key] = dur
+    _file_duration_cache[key] = dur if dur is not None else -1
     return dur
 
 
@@ -1772,7 +1786,13 @@ def _build_filter_complex_concat(
             if props is not None and props.get("audio_codec") is not None:
                 filter_parts.append(f"[{i}:a]aresample=44100[a{i}]")
             else:
-                dur = get_file_duration(clip_paths[i]) or 1
+                # Reuse the duration already probed into props_list (by
+                # _detect_clip_mismatches) rather than a redundant lookup; fall
+                # back to a fresh probe only for an unprobed clip.
+                if props is not None and props.get("duration"):
+                    dur = props["duration"]
+                else:
+                    dur = get_file_duration(clip_paths[i]) or 1
                 filter_parts.append(
                     f"anullsrc=r=44100:cl=stereo[sil{i}];"
                     f"[sil{i}]atrim=duration={dur}[a{i}]"

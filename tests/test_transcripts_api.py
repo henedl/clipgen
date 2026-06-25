@@ -45,11 +45,17 @@ def tr_client(tmp_path, monkeypatch):
     monkeypatch.setattr(transcripts_server, "_worker", None)
     monkeypatch.setattr(transcripts_server, "_input_dir", str(tmp_path))
     monkeypatch.setattr(transcripts_server, "_transcript_model_warming", False)
+    # Fresh corrected-segments cache + merged-task set per test (auto-restored).
+    monkeypatch.setattr(transcripts_server, "_corrected_cache", {})
+    monkeypatch.setattr(transcripts_server, "_merged_task_ids", set())
 
     monkeypatch.setattr(viewer, "load_manifest_artifacts", lambda: [])
 
     with app.test_client() as c:
         yield c
+    # Cancel any debounced manifest write armed during the test so a stray Timer
+    # doesn't fire _do_persist into torn-down state after the fixture exits.
+    transcripts_server._cancel_pending_persist_timer()
 
 
 def test_participants_includes_transcribe_prewarm(tr_client):
@@ -928,7 +934,7 @@ def test_friction_force_eligible_regardless_of_flag(
 
 
 def test_segment_edit_marks_friction_stale(tr_client, _agent_state_clean, monkeypatch):
-    monkeypatch.setattr(transcripts_server, "_persist_manifest", lambda: None)
+    monkeypatch.setattr(transcripts_server, "_schedule_persist", lambda: None)
     _seed_friction_entry(friction={"stale": False, "moments": []})
     resp = tr_client.put(
         "/transcripts/api/transcript/P01/segment",
@@ -940,7 +946,7 @@ def test_segment_edit_marks_friction_stale(tr_client, _agent_state_clean, monkey
 
 
 def test_summary_put_marks_friction_stale(tr_client, _agent_state_clean, monkeypatch):
-    monkeypatch.setattr(transcripts_server, "_persist_manifest", lambda: None)
+    monkeypatch.setattr(transcripts_server, "_schedule_persist", lambda: None)
     _seed_friction_entry(
         citations=[{"sentence": "s", "refs": []}],
         friction={"stale": False},
@@ -952,6 +958,104 @@ def test_summary_put_marks_friction_stale(tr_client, _agent_state_clean, monkeyp
     entry = transcripts_server._manifest["source_transcripts"]["P01"]
     assert entry["friction"]["stale"] is True
     assert "citations" not in entry  # citations invalidated alongside friction
+
+
+def test_marks_add_debounces_persist_until_flush(tr_client, monkeypatch):
+    """Rapid mark edits schedule a debounced write rather than blocking each
+    request on disk; _flush_pending_persist forces the pending write to land
+    exactly once."""
+    saved = {"count": 0}
+
+    def _spy_save(*args, **kwargs):
+        saved["count"] += 1
+
+    monkeypatch.setattr(transcripts, "save_transcripts_manifest", _spy_save)
+    transcripts_server._manifest["source_transcripts"]["P01"] = {
+        "segments": [{"id": "P01:0", "start": 0.0, "end": 1.0, "text": "x"}],
+    }
+
+    resp = tr_client.post(
+        "/transcripts/api/marks",
+        json={"segment_ids": ["P01:0"], "category": "friction"},
+    )
+    assert resp.status_code == 200
+    # Debounced: the route armed a timer but has not written to disk yet.
+    assert saved["count"] == 0
+    assert transcripts_server._persist_dirty is True
+    # Flushing collapses the pending write into a single save.
+    transcripts_server._flush_pending_persist()
+    assert saved["count"] == 1
+    assert transcripts_server._persist_dirty is False
+
+
+def test_corrected_segments_cached_and_invalidated_on_correction(
+    tr_client, monkeypatch
+):
+    """api_transcript memoizes corrected segments and recomputes only after a
+    corrections mutation bumps the version."""
+    calls = {"n": 0}
+    real_apply = transcripts.apply_corrections
+
+    def _counting_apply(segments, corrections):
+        calls["n"] += 1
+        return real_apply(segments, corrections)
+
+    monkeypatch.setattr(transcripts, "apply_corrections", _counting_apply)
+    monkeypatch.setattr(transcripts_server, "_schedule_persist", lambda: None)
+    transcripts_server._manifest["source_transcripts"]["P01"] = {
+        "segments": [{"id": "P01:0", "start": 0.0, "end": 1.0, "text": "teh cat"}],
+    }
+
+    # First read computes + caches; second read hits the cache (no recompute).
+    assert tr_client.get("/transcripts/api/transcript/P01").status_code == 200
+    assert calls["n"] == 1
+    tr_client.get("/transcripts/api/transcript/P01")
+    assert calls["n"] == 1
+
+    # Adding a correction invalidates the cache, so the next read recomputes.
+    resp = tr_client.post(
+        "/transcripts/api/corrections", json={"from": "teh", "to": "the"}
+    )
+    assert resp.status_code == 200
+    r3 = tr_client.get("/transcripts/api/transcript/P01")
+    assert r3.status_code == 200
+    assert calls["n"] == 2
+    seg = r3.get_json()["segments"][0]
+    assert seg["text"] == "the cat"
+    assert seg["corrected"] is True
+
+
+def test_persist_keeps_corrected_cache_for_unchanged_transcription(
+    tr_client, monkeypatch
+):
+    """The corrected cache is bumped when a task's segments are first merged,
+    but a later persist of the same (already-merged) task must not bump it
+    again — otherwise the memoization would clear on every debounced write."""
+    import copy as _copy
+
+    completed = {
+        "id": "t1",
+        "participant": "P01",
+        "status": transcripts.TASK_STATUS_COMPLETED,
+        "result": {
+            "segments": [{"id": "P01:0", "start": 0.0, "end": 1.0, "text": "hi"}],
+            "transcribed_at": "2026-06-25T00:00:00+00:00",
+        },
+    }
+
+    class _FakeWorker:
+        def get_all_tasks(self):
+            return [_copy.deepcopy(completed)]  # mirror the real deepcopy contract
+
+    monkeypatch.setattr(transcripts_server, "_worker", _FakeWorker())
+    monkeypatch.setattr(transcripts, "save_transcripts_manifest", lambda *a, **k: None)
+
+    # First persist merges the transcription (one expected invalidation).
+    transcripts_server._persist_manifest()
+    v1 = transcripts_server._corrections_version
+    # A second persist with the same completed task must NOT bump again.
+    transcripts_server._persist_manifest()
+    assert transcripts_server._corrections_version == v1
 
 
 def test_participants_includes_friction_step_state(tr_client):
