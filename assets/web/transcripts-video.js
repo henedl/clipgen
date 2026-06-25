@@ -345,7 +345,7 @@
     var y = clientY - tipRect.height - 12;
     if (x + tipRect.width > window.innerWidth - 8) x = window.innerWidth - tipRect.width - 8;
     if (y < 8) y = clientY + 16;
-    if (y + tipRect.height > window.innerHeight - 8) y = window.innerHeight - tipRect.height - 8;
+    if (y + tipRect.height > window.innerHeight - 8) y = Math.max(8, window.innerHeight - tipRect.height - 8);
     tip.style.left = x + "px";
     tip.style.top = y + "px";
   }
