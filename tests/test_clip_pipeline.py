@@ -122,7 +122,11 @@ def test_process_reel_concatenates_and_cleans_temp_parts(monkeypatch, make_clip)
     assert result == 1
     concat.assert_called_once()
     concat_args = concat.call_args.args[0]
-    assert concat_args == generated_parts
+    # process_reel generates segments via a ThreadPoolExecutor, so the order in
+    # which unique_name() appends to generated_parts is nondeterministic. Compare
+    # as a set: the parts-in-segment-order contract is covered by the cellRow
+    # assertions on reel["components"] below.
+    assert sorted(concat_args) == sorted(generated_parts)
     assert unlink.call_count == len(generated_parts)
 
     assert len(reel_records) == 1
@@ -903,6 +907,57 @@ def test_regenerate_single_artifact_applies_titlecards_from_manifest(monkeypatch
     without_cards["titlecards"] = False
     assert pipeline._regenerate_single_artifact(without_cards, set()) is True
     assert wrap_calls == []
+
+
+# ---- pure helpers ----
+
+
+def test_is_excel_worksheet_true_for_local(make_clip):
+    from types import SimpleNamespace
+
+    excel = SimpleNamespace(spreadsheet=SimpleNamespace(url=None))
+    assert pipeline.is_excel_worksheet(excel) is True
+
+
+def test_is_excel_worksheet_false_for_gsheet_and_missing(make_clip):
+    from types import SimpleNamespace
+
+    gsheet = SimpleNamespace(spreadsheet=SimpleNamespace(url="https://x"))
+    assert pipeline.is_excel_worksheet(gsheet) is False
+    assert pipeline.is_excel_worksheet(SimpleNamespace()) is False
+
+
+def test_resolve_clip_workers_explicit_and_auto(monkeypatch):
+    monkeypatch.setattr(config, "CLIP_PARALLEL_WORKERS", 7)
+    assert pipeline._resolve_clip_workers() == 7
+
+    monkeypatch.setattr(config, "CLIP_PARALLEL_WORKERS", 0)
+    monkeypatch.setattr(pipeline.os, "cpu_count", lambda: 16)
+    assert pipeline._resolve_clip_workers() == 4  # capped at 4
+
+    monkeypatch.setattr(pipeline.os, "cpu_count", lambda: 2)
+    assert pipeline._resolve_clip_workers() == 2  # below cap -> cpu count
+
+
+def test_resolve_titlecard_options_defaults_and_overrides(monkeypatch):
+    monkeypatch.setattr(config, "TITLECARDS_ENABLED", True)
+    monkeypatch.setattr(config, "TITLECARD_DURATION_SECONDS", 3)
+    # None -> fall back to config.
+    assert pipeline._resolve_titlecard_options(None, None) == (True, 3)
+    # Explicit values win over the config defaults.
+    assert pipeline._resolve_titlecard_options(False, 5) == (False, 5)
+
+
+def test_compute_reel_id_is_deterministic_and_order_independent():
+    a = {"cellRow": 3, "cellCol": 2, "start": "0", "end": "10"}
+    b = {"cellRow": 4, "cellCol": 2, "start": "5", "end": "15"}
+    id_ab = pipeline.compute_reel_id([a, b])
+    id_ba = pipeline.compute_reel_id([b, a])
+    assert id_ab == id_ba  # sorted internally
+    assert id_ab.startswith("reel_")
+    # A different component set yields a different id.
+    c = {"cellRow": 9, "cellCol": 9, "start": "0", "end": "1"}
+    assert pipeline.compute_reel_id([a, c]) != id_ab
 
 
 def test_run_clip_pipeline_cancel_captures_started_clip_results(monkeypatch):

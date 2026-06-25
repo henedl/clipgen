@@ -19,21 +19,32 @@ def tr_client(tmp_path, monkeypatch):
     app = Flask(__name__)
     app.register_blueprint(transcripts_server.transcripts_bp, url_prefix="/transcripts")
 
-    transcripts_server._manifest = {
-        "source_transcripts": {},
-        "corrections": [],
-        "marks": [],
-    }
-    transcripts_server._participants = [
+    # Seed module globals via monkeypatch so they auto-restore on teardown —
+    # otherwise a later test that reads these globals without the fixture would
+    # inherit this test's state (matters under random ordering).
+    monkeypatch.setattr(
+        transcripts_server,
+        "_manifest",
         {
-            "id": "P01",
-            "video_paths": [str(tmp_path / "study_P01.mp4")],
-            "has_video": False,
-        }
-    ]
-    transcripts_server._worker = None
-    transcripts_server._input_dir = str(tmp_path)
-    transcripts_server._transcript_model_warming = False
+            "source_transcripts": {},
+            "corrections": [],
+            "marks": [],
+        },
+    )
+    monkeypatch.setattr(
+        transcripts_server,
+        "_participants",
+        [
+            {
+                "id": "P01",
+                "video_paths": [str(tmp_path / "study_P01.mp4")],
+                "has_video": False,
+            }
+        ],
+    )
+    monkeypatch.setattr(transcripts_server, "_worker", None)
+    monkeypatch.setattr(transcripts_server, "_input_dir", str(tmp_path))
+    monkeypatch.setattr(transcripts_server, "_transcript_model_warming", False)
 
     monkeypatch.setattr(viewer, "load_manifest_artifacts", lambda: [])
 

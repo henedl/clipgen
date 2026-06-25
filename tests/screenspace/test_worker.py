@@ -93,7 +93,7 @@ class TestScreenspaceWorker:
                 t = worker.get_task(task["id"])
                 if t and t["status"] in ("completed", "failed"):
                     break
-                time.sleep(0.1)
+                time.sleep(0.05)
             t = worker.get_task(task["id"])
             assert t is not None
             assert t["status"] in ("completed", "failed")
@@ -130,7 +130,7 @@ class TestScreenspaceWorker:
                 t = worker.get_task(t1["id"])
                 if t and t["status"] in ("completed", "failed"):
                     break
-                time.sleep(0.1)
+                time.sleep(0.05)
 
             # Second task should still process even though first callback raised
             t2 = screenspace.create_task(
@@ -150,17 +150,17 @@ class TestScreenspaceWorker:
                 t = worker.get_task(t2["id"])
                 if t and t["status"] in ("completed", "failed"):
                     break
-                time.sleep(0.1)
+                time.sleep(0.05)
             t = worker.get_task(t2["id"])
             assert t is not None
             assert t["status"] in ("completed", "failed")
             # on_task_complete fires in the _run loop after the future is
             # collected, which may lag behind the task status change.
             # Wait for the callback to actually fire for task 2.
-            for _ in range(20):
+            for _ in range(40):
                 if call_count["n"] >= 2:
                     break
-                time.sleep(0.1)
+                time.sleep(0.05)
             assert call_count["n"] >= 2
         finally:
             worker.stop()

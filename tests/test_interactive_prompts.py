@@ -307,3 +307,89 @@ def test_browse_spreadsheet_returns_early_on_missing_headers(monkeypatch):
     monkeypatch.setattr(utils, "use_progress", lambda: False)
     _scripted(monkeypatch, [])  # loop must not be reached
     interactive.browse_spreadsheet(_FakeSheet())
+
+
+def _browse_sheet(url=None):
+    class _FakeSheet:
+        def get_all_values(self):
+            return _sheet_data()
+
+        spreadsheet = SimpleNamespace(title="study", url=url)
+
+    return _FakeSheet()
+
+
+def _browse_env(monkeypatch):
+    """Common patches so browse mode runs headless (no tty, no rich, no API)."""
+    monkeypatch.setattr(google_api, "get_sheet_values", lambda s: s.get_all_values())
+    monkeypatch.setattr(utils, "use_progress", lambda: False)
+    monkeypatch.setattr(utils, "_use_rich", lambda: False)
+
+
+def test_browse_spreadsheet_navigation_commands(monkeypatch):
+    """down/up/page/jump all drive _handle_navigation and re-render cleanly."""
+    _browse_env(monkeypatch)
+    _scripted(
+        monkeypatch,
+        ["down", "up", "pagedown", "pageup", "jump 4", "jump 99", "jump x", "quit"],
+    )
+    interactive.browse_spreadsheet(_browse_sheet())
+
+
+def test_browse_spreadsheet_search_exact_then_no_match(monkeypatch):
+    """A query hitting a description jumps to it; a miss reports no rows."""
+    _browse_env(monkeypatch)
+    # "Obs one" matches row 3 exactly; "zzzzz" matches nothing (even fuzzy).
+    _scripted(monkeypatch, ["Obs one", "zzzzz", "quit"])
+    interactive.browse_spreadsheet(_browse_sheet())
+
+
+def test_browse_spreadsheet_search_fuzzy_fallback(monkeypatch):
+    """No exact match falls back to the fuzzy SequenceMatcher path."""
+    _browse_env(monkeypatch)
+    _scripted(monkeypatch, ["Obz one", "quit"])  # near-miss of "Obs one"
+    interactive.browse_spreadsheet(_browse_sheet())
+
+
+def test_browse_spreadsheet_open_local_excel_unavailable(monkeypatch):
+    """`open` on a sheet with no URL hits the not-available branch."""
+    _browse_env(monkeypatch)
+    _scripted(monkeypatch, ["open", "quit"])
+    interactive.browse_spreadsheet(_browse_sheet(url=None))
+
+
+def test_browse_spreadsheet_generate_via_selector(monkeypatch):
+    """With process_fn set, a format switch + line selector generates clips."""
+    _browse_env(monkeypatch)
+    monkeypatch.setattr(
+        "spreadsheet.generate_list",
+        lambda sheet, mode, *, reel_input=None, **k: [
+            {"participant": "P01", "cell": SimpleNamespace(row=3, col=2)}
+        ],
+    )
+    calls = []
+
+    def fake_process(clips, fmt):
+        calls.append((list(clips), fmt))
+        return (len(clips), [])
+
+    # Switch to GIF mode, generate from line selector "3", then quit.
+    _scripted(monkeypatch, ["gif", "3", "quit"])
+    interactive.browse_spreadsheet(_browse_sheet(), process_fn=fake_process)
+    assert calls and calls[0][1] == "gif"
+
+
+def test_browse_spreadsheet_selector_no_clips(monkeypatch):
+    """A selector that resolves to zero clips reports none and never calls
+    process_fn."""
+    _browse_env(monkeypatch)
+    monkeypatch.setattr(
+        "spreadsheet.generate_list",
+        lambda sheet, mode, *, reel_input=None, **k: [],
+    )
+    calls = []
+    _scripted(monkeypatch, ["3", "quit"])
+    interactive.browse_spreadsheet(
+        _browse_sheet(), process_fn=lambda clips, fmt: calls.append(1) or (0, [])
+    )
+    assert calls == []
