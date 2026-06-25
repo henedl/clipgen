@@ -67,15 +67,19 @@ def api_catalog() -> Any:
     """Serialized node-type catalog + launch-context flags (for palette grey-out).
 
     ``context.sheet`` / ``context.videoDir`` tell the frontend which nodes'
-    ``requires`` are satisfiable in this launch, so it can disable the rest.
+    ``requires`` are satisfiable in this launch, so it can disable the rest;
+    ``context.participants`` populates the Video-Source participant dropdown
+    (reusing the one discovery call ``videoDir`` already needs — no extra route).
     """
+    videos = utils.discover_participant_videos()
     return jsonify(
         {
             "ok": True,
             "catalog": workflows.serialize_catalog(),
             "context": {
                 "sheet": _sheet_context is not None,
-                "videoDir": bool(utils.discover_participant_videos()),
+                "videoDir": bool(videos),
+                "participants": [v["id"] for v in videos],
             },
         }
     )

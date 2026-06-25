@@ -26,6 +26,7 @@
     edges: [], // wires (M2): {from, fromPort, to, toPort}
     viewport: { x: 0, y: 0, zoom: 1 }, // pan/zoom of the active blueprint
     selection: [], // selected node ids (transient — not persisted)
+    selectedEdge: null, // selected wire id (transient — not persisted)
     activeBlueprintId: null,
     ready: false, // false until a blueprint is active; gates canvas edits
   };
@@ -140,12 +141,17 @@
   // first so a debounced edit is never lost or mis-attributed on switch.
   function openBlueprint(bp) {
     if (!bp) return;
+    // Drop any in-flight wire gesture before swapping context — otherwise its
+    // armed listeners survive and the next click could persist an edge that
+    // references a node from the old blueprint.
+    if (WF.cancelConnect) WF.cancelConnect();
     flushSave();
     state.activeBlueprintId = bp.id;
     state.nodes = bp.nodes || (bp.nodes = []);
     state.edges = bp.edges || (bp.edges = []);
     state.viewport = bp.viewport || (bp.viewport = { x: 0, y: 0, zoom: 1 });
     state.selection = [];
+    state.selectedEdge = null;
     syncToolbar();
     if (WF.renderAllNodes) WF.renderAllNodes();
     if (WF.applyViewport) WF.applyViewport();
@@ -298,12 +304,16 @@
   }
 
   function setToolbarDisabled(disabled) {
-    ["#wfBlueprintSelect", "#wfBlueprintName", "#wfNewBlueprint", "#wfDeleteBlueprint"].forEach(
-      function (sel) {
-        var node = qs(sel);
-        if (node) node.disabled = disabled;
-      }
-    );
+    [
+      "#wfBlueprintSelect",
+      "#wfBlueprintName",
+      "#wfNewBlueprint",
+      "#wfDeleteBlueprint",
+      "#wfCleanUp",
+    ].forEach(function (sel) {
+      var node = qs(sel);
+      if (node) node.disabled = disabled;
+    });
   }
 
   // ---- Boot -----------------------------------------------------------------
@@ -344,13 +354,20 @@
         deleteBlueprint(state.activeBlueprintId);
       });
     }
+    var cleanBtn = qs("#wfCleanUp");
+    if (cleanBtn) {
+      cleanBtn.addEventListener("click", function () {
+        if (WF.autoArrange) WF.autoArrange();
+      });
+    }
 
     var retryBtn = qs("#wfOverlayRetry");
     if (retryBtn) retryBtn.addEventListener("click", loadWorkspace);
 
-    // Bind canvas interactions (handlers no-op until state.ready), then load the
-    // workspace, which flips the gate once a blueprint is active.
+    // Bind canvas + wire interactions (handlers no-op until state.ready), then
+    // load the workspace, which flips the gate once a blueprint is active.
     if (WF.initCanvas) WF.initCanvas();
+    if (WF.initWires) WF.initWires();
     loadWorkspace();
   }
 
@@ -364,6 +381,8 @@
   WF.scheduleSave = scheduleSave;
   WF.renderPalette = renderPalette;
   WF.openBlueprint = openBlueprint;
+  // Published for the nodes satellite (palette grey-out logic shared, not duped).
+  WF.nodeContextMet = nodeContextMet;
 
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", boot);
