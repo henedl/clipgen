@@ -11,6 +11,8 @@ Skill procedures for development workflows and CLI usage. Each skill is also ava
 - @agents/skills/new-screenspace-tool/SKILL.md — checklist for adding a Screenspace tool
 - @agents/skills/new-thinking-agent/SKILL.md — checklist for adding an Ollama thinking agent
 - @agents/skills/sync-constants/SKILL.md — audit Python ↔ JS constant mirroring
+- @agents/skills/carve-satellite/SKILL.md — carve a JS hub into hub + satellite without ReferenceErrors
+- @agents/skills/split-module/SKILL.md — split a Python god-file into facade + siblings
 
 ## Using clipgen
 
