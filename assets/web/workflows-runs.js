@@ -144,15 +144,20 @@
             break;
           }
         }
+        // The active run drives both the canvas tint and the expanded card.
+        // Point at the in-flight run if one survived (and subscribe to it), else
+        // the most recent run for an at-a-glance view of the last outcome.
+        state.activeRunId = live
+          ? live.id
+          : (state.runs[0] && state.runs[0].id) || null;
         if (live) {
-          state.activeRunId = live.id;
           setRunningUI(true);
           subscribeRun(live.id);
         } else {
           setRunningUI(false);
         }
         renderRuns();
-        annotateCanvas(state.runs[0] || null);
+        annotateCanvas(findRun(state.activeRunId));
       })
       .catch(function () {});
   }
@@ -345,9 +350,11 @@
       return;
     }
     var frag = document.createDocumentFragment();
-    // The newest (or active) run shows full per-node detail; the rest are compact.
-    state.runs.forEach(function (run, idx) {
-      frag.appendChild(buildRunCard(run, idx === 0));
+    // The active run (in-flight, or the most recent — see refreshRuns) shows full
+    // per-node detail; the rest are compact. Keyed by id, not list position, so a
+    // newer completed run can't steal the expansion from an older in-flight one.
+    state.runs.forEach(function (run) {
+      frag.appendChild(buildRunCard(run, run.id === state.activeRunId));
     });
     container.appendChild(frag);
   }
