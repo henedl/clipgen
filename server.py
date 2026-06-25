@@ -3293,6 +3293,7 @@ def build_combined_app(
     workflows_server._init_workflows_state(
         sheet_context=_sheet_context,
         participant_list=_resolve_participants(),
+        worksheet=_worksheet,
     )
     combined.register_blueprint(workflows_server.workflows_bp, url_prefix="/workflows")
 
