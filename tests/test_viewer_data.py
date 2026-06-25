@@ -285,6 +285,46 @@ def test_load_screenspace_events_for_viewer_caches_by_mtime(tmp_path, monkeypatc
     assert len(load_calls) == 2
 
 
+def test_load_screenspace_events_for_viewer_sanitizes_nonfinite_times(monkeypatch):
+    import math
+
+    import screenspace
+
+    viewer._reset_screenspace_events_cache()
+    # A non-finite time (as cv2/numpy can produce) embedded via json.dumps with
+    # allow_nan=True emits bare NaN/Infinity, which JSON.parse rejects — blanking
+    # the whole exported viewer. The transform must neutralize it to None.
+    monkeypatch.setattr(
+        screenspace,
+        "load_screenspace_manifest",
+        lambda: {
+            "events": [
+                {
+                    "id": "ev_bad",
+                    "detector": "change",
+                    "participant": "P01",
+                    "time_in": float("inf"),
+                    "time_out": float("nan"),
+                    "excluded": False,
+                }
+            ]
+        },
+    )
+    # Force a cache miss regardless of any on-disk manifest mtime state.
+    viewer._reset_screenspace_events_cache()
+    events = {e["id"]: e for e in viewer.load_screenspace_events_for_viewer()}
+    assert events["ev_bad"]["timeIn"] is None
+    assert events["ev_bad"]["timeOut"] is None
+    # And the payload is now strict-JSON serializable (no NaN/Infinity tokens).
+    import json
+
+    json.dumps(events, allow_nan=False)
+    assert not any(
+        isinstance(v, float) and not math.isfinite(v)
+        for v in (events["ev_bad"]["timeIn"], events["ev_bad"]["timeOut"])
+    )
+
+
 def test_load_screenspace_events_for_viewer_includes_navigational(
     tmp_path, monkeypatch
 ):

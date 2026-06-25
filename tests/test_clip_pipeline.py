@@ -958,3 +958,46 @@ def test_compute_reel_id_is_deterministic_and_order_independent():
     # A different component set yields a different id.
     c = {"cellRow": 9, "cellCol": 9, "start": "0", "end": "1"}
     assert pipeline.compute_reel_id([a, c]) != id_ab
+
+
+def test_run_clip_pipeline_cancel_captures_started_clip_results(monkeypatch):
+    """On cancel, results from futures that already started running must not be
+    dropped — otherwise the files they produced (e.g. reel _reel_part_* segments)
+    are orphaned because the caller's cancel cleanup never sees their paths."""
+    import threading
+    import time
+
+    monkeypatch.setattr(pipeline, "_resolve_clip_workers", lambda: 2)
+
+    ran: list[int] = []
+    ran_lock = threading.Lock()
+
+    def per_clip(clip, _missing):
+        with ran_lock:
+            ran.append(clip["id"])
+        time.sleep(0.1)  # keep the future running across the cancel
+        return ([(f"/tmp/_reel_part_{clip['id']}.mp4", 0)], [])
+
+    def cancel_flag():
+        # Cancel as soon as at least one clip has begun executing.
+        with ran_lock:
+            return len(ran) >= 1
+
+    clips = [{"id": i, "desc": f"c{i}", "participant": "P01"} for i in range(6)]
+    results, _missing = pipeline._run_clip_pipeline(
+        clips,
+        empty_warning="",
+        intro_message="",
+        task_label="t",
+        per_clip_fn=per_clip,
+        parallel=True,
+        cancel_flag=cancel_flag,
+    )
+
+    # Every clip that started running is represented in the results (none
+    # orphaned); clips cancelled before starting are absent.
+    assert len(results) == len(ran)
+    assert all(r is not None for r in results)
+    # Each captured result is the proper (segment_paths, components) tuple shape.
+    for segment_paths, components in results:
+        assert isinstance(segment_paths, list)

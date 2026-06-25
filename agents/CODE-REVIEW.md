@@ -12,6 +12,7 @@ Patterns distilled from recurring post-review and post-merge fixes across the pr
 - **Canvas/rendering performance**: RAF-throttle canvas draws and mouse-tracking renders. Cache `getBoundingClientRect()` results instead of calling in loops. Pause polling when the tab is hidden (`document.hidden`).
 - **Flex layout**: Elements inside flex containers need explicit `flex: 1` or `min-width: 0` to avoid zero-width collapse. Verify new elements are visible after adding them to flex parents.
 - **Autocomplete off on text inputs**: Every `<input type="text">` (static or dynamic) must have `autocomplete="off"` to prevent browser autofill (e.g. contact names). For static HTML use the attribute directly; for JS-created inputs set `.autocomplete = "off"` after creation.
+- **Polling + render gates**: A control gated on poll-driven state must re-render when *any* input to the gate changes. Watch both the immediately-rendered source (e.g. `state.summaryText`) **and** the poll-lagged source (e.g. `state.participants[].agents.summary`) — reading only the lagged one leaves the control stuck until reload (the friction Re-run gate, `5683a96`).
 
 ## Backend (Python / Flask)
 
@@ -39,3 +40,10 @@ Patterns distilled from recurring post-review and post-merge fixes across the pr
 - **New flags in mode detection**: When adding a CLI flag, verify it appears in the mode-detection logic (`cli.py`), not just in argparse definition. See [agents/skills/new-mode/SKILL.md](skills/new-mode/SKILL.md) for the full checklist.
 - **Bundled/frozen paths**: Use `utils.get_bundled_assets_root()` for asset resolution, never raw `Path(__file__).parent`. Test that asset paths resolve in both source and PyInstaller environments.
 - **No duplicated constants between Python and JS.** Any value that lives in `config.py` (or a Python helper) and that the frontend also needs — severity labels, default clip duration, annotation keyphrases (`!key`), ignored timestamp tokens (`x`) — must flow through `utils.get_frontend_config()`, not be hardcoded in JS. Procedure for adding a new mirrored constant: [agents/skills/sync-constants/SKILL.md](skills/sync-constants/SKILL.md).
+
+## Refactors (carve / split)
+
+The two most error-prone refactors in this repo each have a dedicated skill and an automated guard. Apply these whenever a diff moves code between modules.
+
+- **JS hub→satellite carve completeness**: Each page script is its own IIFE scope, so a bare cross-file function call throws `ReferenceError` at runtime (invisible to `node --check`) — shipped 3× (`e4f67b2`, `8c7f347`). Every hub-called function defined in a satellite needs a same-named hub delegator (or a late-bound `SS.fn(...)` call); every moved `var` must route through `state.`/the namespace, never a bare cross-file read. Guarded by `tests/test_frontend_satellite_wiring.py`. Procedure: [agents/skills/carve-satellite/SKILL.md](skills/carve-satellite/SKILL.md).
+- **Python god-file split**: New modules must be listed in `pyproject.toml [tool.setuptools] py-modules` (guarded by `tests/test_packaging.py`); the facade must re-export every public **and test-touched private** name; and test `mock.patch` targets must point at the owning sibling, not the facade (re-export only rebinds — `5683a96`). Procedure: [agents/skills/split-module/SKILL.md](skills/split-module/SKILL.md).

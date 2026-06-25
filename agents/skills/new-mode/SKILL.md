@@ -24,5 +24,8 @@ Missing mode-detection is the most common integration bug when adding new flags.
    - Add at least one smoke test in `tests/test_cli_modes.py` (or a new test file for larger modes)
    - Test that the flag is accepted, dispatches correctly, and that incompatible flag combinations raise errors
 
-6. **Version bump**
+6. **New top-level modules** (if any)
+   - If the mode adds a new root `*.py` module, list it in `pyproject.toml [tool.setuptools] py-modules` — source-tree imports mask the omission but `uv pip install .` breaks. Guarded by `tests/test_packaging.py`. See [agents/skills/split-module/SKILL.md](../split-module/SKILL.md).
+
+7. **Version bump**
    - Increment patch in `build/VERSION` (see [agents/skills/bump/SKILL.md](../bump/SKILL.md))

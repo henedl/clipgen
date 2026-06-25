@@ -260,6 +260,29 @@ def test_generate_line_and_range_timestamps_cli_paths():
     assert {clip["desc"] for clip in range_clips} == {"Obs one", "Obs two"}
 
 
+def test_generate_range_timestamps_skips_filename_row():
+    # A Filename override row holds per-column source-video names, not
+    # timestamps. A range spanning it must not parse those cells as clips.
+    sheet_data = [
+        ["Study"],
+        ["ID", "P01", "P02", "Observation", "Category"],
+        ["Filename", "morning.mp4", "afternoon.mp4", "", ""],
+        ["1", "00:10-00:20", "", "Obs one", "CatA"],
+        ["2", "", "00:30-00:40", "Obs two", "CatB"],
+    ]
+    # Filename row is sheet row 3 -> 0-based index 2.
+    ctx = _make_context(sheet_data=sheet_data, filename_row_idx=2)
+
+    # Range covering rows 3-5 (1-based) spans the Filename row.
+    range_clips = spreadsheet.generate_range_timestamps(ctx, 3, 5)
+
+    descs = {clip["desc"] for clip in range_clips}
+    assert descs == {"Obs one", "Obs two"}
+    # The filename override strings must never become timestamps.
+    for clip in range_clips:
+        assert ".mp4" not in clip["cell"].value
+
+
 def test_baseline_and_relative_timestamps_integration(monkeypatch):
     # Sheet layout with a clock baseline row for P01 only.
     # Row 0: Study

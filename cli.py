@@ -1146,7 +1146,12 @@ def _run_gallery_cli(args: argparse.Namespace) -> None:
         return
 
     output_format = "gif" if getattr(args, "gif", False) else "screen"
-    interval = getattr(args, "interval", None) or config.GALLERY_INTERVAL_SECONDS
+    # Mirror the interactive gallery guard: a missing, zero, or negative
+    # interval falls back to the default (a bare ``or`` would let a negative
+    # value through since it is truthy).
+    interval = getattr(args, "interval", None)
+    if interval is None or interval <= 0:
+        interval = config.GALLERY_INTERVAL_SECONDS
     bundle = getattr(args, "bundle", False) or config.GALLERY_BUNDLE_ENABLED
 
     artifacts = video.generate_interval_captures(
