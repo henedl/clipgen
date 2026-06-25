@@ -1209,15 +1209,27 @@ def timestamp_to_seconds(ts_str: str) -> float | None:
     if not ts:
         return None
 
-    fmt = "%H:%M:%S" if ts.count(":") == 2 else "%M:%S"
-    try:
-        parsed = datetime.strptime(ts, fmt)
-    except ValueError:
+    parts = ts.split(":")
+    if len(parts) not in (2, 3) or not all(p.isdigit() for p in parts):
+        return None
+    nums = [int(p) for p in parts]
+
+    if len(parts) == 3:
+        hours, minutes, seconds = nums
+    else:
+        # MM:SS — minutes may exceed 59 (e.g. "75:00" for a long session
+        # written without an hours component), matching how the range form
+        # "75:00-80:00" already flows through to ffmpeg.
+        hours = 0
+        minutes, seconds = nums
+
+    minutes_per_hour = config.SECONDS_PER_HOUR // config.SECONDS_PER_MINUTE
+    if seconds >= config.SECONDS_PER_MINUTE:
+        return None
+    if len(parts) == 3 and minutes >= minutes_per_hour:
         return None
     return float(
-        parsed.hour * config.SECONDS_PER_HOUR
-        + parsed.minute * config.SECONDS_PER_MINUTE
-        + parsed.second
+        hours * config.SECONDS_PER_HOUR + minutes * config.SECONDS_PER_MINUTE + seconds
     )
 
 
