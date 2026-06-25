@@ -1346,10 +1346,12 @@ def _clock_to_seconds(ts: str) -> int | None:
     return None
 
 
-def seconds_to_timestamp(total_seconds: int, *, force_hours: bool = False) -> str:
-    """Format a non-negative number of seconds as H:MM:SS or M:SS."""
-    # Coerce to int so a float arg (e.g. a clamped end time) can't crash the
-    # ``:d``/``:02d`` format specs; matches the int-typed contract.
+def seconds_to_timestamp(total_seconds: float, *, force_hours: bool = False) -> str:
+    """Format a non-negative number of seconds as H:MM:SS or M:SS.
+
+    Accepts an int or float; a float (e.g. a clamped end time) is truncated to
+    whole seconds so the ``:d``/``:02d`` format specs can't crash.
+    """
     total_seconds = int(total_seconds)
     if total_seconds < 0:
         total_seconds = 0
