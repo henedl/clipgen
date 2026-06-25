@@ -1282,3 +1282,55 @@ def test_merge_completed_results_new_task_wins(monkeypatch):
         transcripts_server._manifest["source_transcripts"][pid]["segments"][0]["text"]
         == "new"
     )
+
+
+def test_on_task_complete_refreshes_agents_on_retranscription(monkeypatch):
+    """A re-transcription (new task id) for a participant who already has AI
+    outputs must clear those outputs and re-run the agent chain, not leave
+    them stale against the old transcript."""
+    pid = "P01"
+    # Participant already has a full set of AI outputs from a prior run.
+    monkeypatch.setattr(
+        transcripts_server,
+        "_manifest",
+        {
+            "source_transcripts": {
+                pid: {
+                    "segments": [{"id": "s0", "text": "old"}],
+                    "summary": {"paragraph": "stale"},
+                    "citations": {"claims": []},
+                    "friction": {"moments": []},
+                }
+            }
+        },
+        raising=False,
+    )
+    new_task = {
+        "id": "tr_new",
+        "participant": pid,
+        "status": transcripts.TASK_STATUS_COMPLETED,
+        "result": {"segments": [{"id": "s0", "text": "fresh"}]},
+    }
+    monkeypatch.setattr(
+        transcripts_server,
+        "_worker",
+        cast("transcripts.TranscriptWorker", _CompletedTasksWorker([new_task])),
+        raising=False,
+    )
+    transcripts_server._merged_task_ids.clear()
+
+    chained: list[str] = []
+    monkeypatch.setattr(
+        transcripts_server._orchestrator, "run_chain", lambda p: chained.append(p)
+    )
+    monkeypatch.setattr(transcripts, "save_transcripts_manifest", lambda *a, **k: None)
+
+    transcripts_server._on_task_complete()
+
+    entry = transcripts_server._manifest["source_transcripts"][pid]
+    # New segments merged; stale agent outputs cleared.
+    assert entry["segments"][0]["text"] == "fresh"
+    for agent in thinking_agents.AGENTS:
+        assert agent["manifest_field"] not in entry
+    # Chain re-run for the participant.
+    assert chained == [pid]

@@ -1438,16 +1438,21 @@ def _persist_manifest() -> None:
         _do_persist()
 
 
-def _merge_completed_results_locked() -> None:
+def _merge_completed_results_locked() -> list[str]:
     """Merge completed task results into the in-memory manifest.
 
     Caller must hold _manifest_lock. Merges (not replaces) so that extra keys
     like "summary" added by other threads are preserved. Kept separate from the
     disk write so callers can register the thinking-agent chain off the freshly
     merged segments *before* the (slower) persist.
+
+    Each task is merged exactly once (tracked in ``_merged_task_ids``). Returns
+    the participant ids whose segments were freshly merged on this call, in
+    completion order, so the completion handler can refresh their agent outputs.
     """
     if not _worker:
-        return
+        return []
+    merged_pids: list[str] = []
     for task in _worker.get_all_tasks():
         if (
             task["status"] == transcripts.TASK_STATUS_COMPLETED
@@ -1460,7 +1465,9 @@ def _merge_completed_results_locked() -> None:
             existing.update(task["result"])
             src[pid] = existing
             _merged_task_ids.add(task["id"])
+            merged_pids.append(pid)
     _manifest["tasks"] = _worker.get_all_tasks()
+    return merged_pids
 
 
 def _do_persist() -> None:
@@ -1484,23 +1491,25 @@ def _on_task_complete() -> None:
     drives the UI's "generating" state) *before* the slow disk write, shrinking
     the window where a task reads as completed but no agent reads as running.
     """
-    newly_completed: list[str] = []
     with _manifest_lock:
         # Merge first so next_eligible() sees the freshly completed segments.
-        _merge_completed_results_locked()
+        # merged_pids are the participants with a *new* transcript this call —
+        # both first transcription and re-transcription (a new task id).
+        merged_pids = _merge_completed_results_locked()
         src = _manifest.get("source_transcripts", {})
-        if _worker:
-            for task in _worker.get_all_tasks():
-                if task["status"] == transcripts.TASK_STATUS_COMPLETED and task.get(
-                    "result"
-                ):
-                    pid = task["participant"]
-                    if not src.get(pid, {}).get("summary"):
-                        newly_completed.append(pid)
+        for pid in merged_pids:
+            entry = src.get(pid)
+            if not entry:
+                continue
+            # A fresh transcript invalidates any prior AI outputs; clear every
+            # agent's field so the chain regenerates them against the new
+            # segments instead of leaving stale results from the old transcript.
+            for agent in thinking_agents.AGENTS:
+                entry.pop(agent["manifest_field"], None)
 
     # run_chain -> next_eligible/run_agent re-acquire _manifest_lock, so this
     # must run OUTSIDE the block above (the lock is non-reentrant).
-    for pid in dict.fromkeys(newly_completed):
+    for pid in dict.fromkeys(merged_pids):
         _orchestrator.run_chain(pid)
 
     _persist_manifest()
