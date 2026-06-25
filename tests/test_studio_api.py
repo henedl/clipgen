@@ -370,6 +370,32 @@ def test_api_thumbnail_returns_404_when_no_sheet(client):
     assert data["ok"] is False
 
 
+def test_api_thumbnail_accepts_fractional_timestamp(client, monkeypatch, tmp_path):
+    """A fractional second must not 400 (bare int('12.5') would); it floors to
+    the second-granular thumbnail."""
+    import types
+
+    import video
+
+    monkeypatch.setattr(server, "_sheet_context", types.SimpleNamespace())
+    source = tmp_path / "study_P01.mp4"
+    source.write_bytes(b"x")
+    monkeypatch.setattr(server, "_resolve_participant_sources", lambda _p: [source])
+
+    captured = {}
+
+    def fake_extract(path, cut_sec, *, width):
+        captured["cut_sec"] = cut_sec
+        return b"jpegbytes"
+
+    monkeypatch.setattr(video, "extract_thumbnail_bytes", fake_extract)
+
+    resp = client.get("/studio/api/thumbnail/P01/12.5")
+    assert resp.status_code == 200
+    assert resp.mimetype == "image/jpeg"
+    assert captured["cut_sec"] == 12
+
+
 @pytest.mark.parametrize(
     "path,payload,context_attr,expected_err",
     [
